@@ -21,9 +21,10 @@ const CACHE_TTL_MS = 30_000;
 // leak into client bundles. Sync getFlag() + `process.env.NODE_ENV !== "development"`
 // literals are what SWC/Terser need to eliminate the panel.
 //
-// team-workspace-invite and byok-delegations were historically ENV (per-org
-// allowlist gate) and migrated to RUNTIME_FLAGS in PR #4469 (umbrella #4456)
-// under dual-control (Flagsmith boolean + env-allowlist as defense-in-depth).
+// team-workspace-invite and byok-delegations are RUNTIME_FLAGS under Flagsmith
+// with per-org targeting via the `org-targeted` segment (ADR-043). The segment's
+// `orgId IN [...]` rule is the sole per-org gate. FLAG_* env vars remain as
+// the Flagsmith outage fallback (env-fallback mirror).
 //
 // New flags: if the call-site needs DCE elimination → ENV. Otherwise → RUNTIME.
 // See ADR-038 + ADR-043.
@@ -142,55 +143,13 @@ export async function getFeatureFlags(
   return { ...envFlags, ...runtime };
 }
 
-// Cache keyed on the raw env-var string. Production sees `process.env`
-// fixed at boot, so the cache hits on every subsequent call. Tests that
-// mutate `TEAM_WORKSPACE_ALLOWLIST_ORG_IDS` re-parse without needing a
-// test-only reset hook.
-let cachedAllowlist: { raw: string; set: ReadonlySet<string> } | null = null;
-
-export function getTeamWorkspaceAllowlist(): ReadonlySet<string> {
-  const raw = process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS ?? "";
-  if (cachedAllowlist && cachedAllowlist.raw === raw) return cachedAllowlist.set;
-  const set = new Set(
-    raw
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean),
-  );
-  cachedAllowlist = { raw, set };
-  return set;
-}
-
 export async function isTeamWorkspaceInviteEnabled(orgId: string, identity: Identity): Promise<boolean> {
   if (!orgId) return false;
-  if (!getTeamWorkspaceAllowlist().has(orgId)) return false;
   return getRuntimeFlag("team-workspace-invite", identity);
-}
-
-// BYOK Delegations PR-A (#4232). Two-key gate mirrors the team-workspace-
-// invite shape: FLAG_BYOK_DELEGATIONS=1 AND orgId present in
-// BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS. Both must hold. orgId-absent path
-// is a hard FALSE — the resolver fast-paths to direct lease when off.
-let cachedByokDelegationsAllowlist: { raw: string; set: ReadonlySet<string> } | null = null;
-
-export function getByokDelegationsAllowlist(): ReadonlySet<string> {
-  const raw = process.env.BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS ?? "";
-  if (cachedByokDelegationsAllowlist && cachedByokDelegationsAllowlist.raw === raw) {
-    return cachedByokDelegationsAllowlist.set;
-  }
-  const set = new Set(
-    raw
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean),
-  );
-  cachedByokDelegationsAllowlist = { raw, set };
-  return set;
 }
 
 export async function isByokDelegationsEnabled(orgId: string | null | undefined, identity: Identity): Promise<boolean> {
   if (!orgId) return false;
-  if (!getByokDelegationsAllowlist().has(orgId)) return false;
   return getRuntimeFlag("byok-delegations", identity);
 }
 
@@ -198,6 +157,4 @@ export function __resetFeatureFlagsForTests(): void {
   _client = null;
   const maxEntries = parseInt(process.env.FLAGSMITH_CACHE_MAX_ENTRIES || "1000");
   _roleCache = new LRUCache<string, RuntimeSnapshot>(maxEntries, CACHE_TTL_MS);
-  cachedAllowlist = null;
-  cachedByokDelegationsAllowlist = null;
 }

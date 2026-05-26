@@ -46,7 +46,7 @@ Replace the `Map<Role, ...>` (max 2 entries) with an LRU cache keyed on `${role}
 
 ## Consequences
 
-- **Dual-control preserved:** Flagsmith boolean AND env-allowlist must both hold (defense-in-depth)
+- **Single-control:** Flagsmith segment rule is the sole per-org gate; env-allowlist removed. FLAG_* env vars remain as Flagsmith outage fallback
 - **Data minimization:** `transient: true` prevents Flagsmith from persisting any identity data server-side
 - **Cache bounded:** LRU(1000) prevents unbounded memory growth from org diversity
 - **WORM audit trail:** Every flag flip (via skill) appends to `flag_flip_audit` table (migration 071)
