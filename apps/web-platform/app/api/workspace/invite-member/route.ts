@@ -26,7 +26,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  // 2-key gate — resolveTeamMembershipPageData handles flag + allowlist check.
+  // Flag gate — resolveTeamMembershipPageData handles the Flagsmith check.
   // We reuse its result so the membership page and this endpoint cannot
   // diverge on whether the user has team-workspace access.
   const service = createServiceClient();

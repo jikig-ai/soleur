@@ -20,7 +20,7 @@ const STATIC_SETTINGS_TABS: readonly SettingsTab[] = [
 
 // AC-A: when the team-workspace-invite flag is OFF, `membersTab` is null and
 // the Members link href is not constructed here. The server layout evaluates
-// the 2-key gate and decides what to pass.
+// the flag gate and decides what to pass.
 export function SettingsShell({
   children,
   membersTab = null,
