@@ -201,6 +201,7 @@ const SIZE_CAP_BYTES =
 
 export interface EnqueueExportInput {
   userId: string;
+  workspaceId: string;
   sessionId: string;
   reauthEventId: string;
   requesterIp: string;
@@ -1232,6 +1233,29 @@ export async function exportSqlTable(
     });
   }
 
+  // -- byok_delegation_acceptances (migration 074, #4232 PR-B) ------------
+  if (DSAR_TABLE_ALLOWLIST.byok_delegation_acceptances) {
+    const { data: acceptRows, error: acceptErr } = await service
+      .from("byok_delegation_acceptances")
+      .select("*")
+      .eq("user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (acceptErr)
+      throw new Error(
+        `byok_delegation_acceptances read failed: ${acceptErr.message}`,
+      );
+    assertReadScope(
+      (acceptRows ?? []) as Record<string, unknown>[],
+      expectedUserId,
+      "byok_delegation_acceptances",
+    );
+    results.push({
+      table: "byok_delegation_acceptances",
+      spec: DSAR_TABLE_ALLOWLIST.byok_delegation_acceptances,
+      rows: (acceptRows ?? []) as Record<string, unknown>[],
+    });
+  }
+
   return results;
 }
 
@@ -1787,6 +1811,9 @@ async function uploadToStorage(
 export async function enqueueExport(
   input: EnqueueExportInput,
 ): Promise<EnqueueExportResult> {
+  if (!input.workspaceId) {
+    throw new Error("enqueueExport: workspaceId is required");
+  }
   const service = createServiceClient();
 
   // Application-layer idempotency aligned to the partial unique index:
@@ -1819,6 +1846,7 @@ export async function enqueueExport(
     .from("dsar_export_jobs")
     .insert({
       user_id: input.userId,
+      workspace_id: input.workspaceId,
       owner_session_id: input.sessionId,
       reauth_event_id: input.reauthEventId,
       status: "pending",

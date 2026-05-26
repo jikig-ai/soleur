@@ -707,6 +707,15 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
             });
           }
 
+          if (msg.errorCode?.startsWith("delegation_")) {
+            setLastError({
+              code: msg.errorCode,
+              message: msg.message,
+              action: { label: "View settings", href: "/dashboard/settings/team" },
+            });
+            return;
+          }
+
           // Route gateId-targeted errors to the review gate message
           if (msg.gateId) {
             dispatch({ type: "gate_error", gateId: msg.gateId, message: msg.message });

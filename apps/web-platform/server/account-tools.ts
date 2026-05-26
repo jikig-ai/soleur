@@ -41,6 +41,7 @@ export function buildAccountTools(opts: BuildAccountToolsOpts) {
           try {
             const result = await enqueueExport({
               userId,
+              workspaceId: userId,
               sessionId,
               reauthEventId: input.reauthEventId,
               requesterIp: input.requesterIp,

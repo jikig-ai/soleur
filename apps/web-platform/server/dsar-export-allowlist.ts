@@ -136,6 +136,14 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
     article: "15+20",
   },
 
+  // Delegation Consent Side Letter acceptance ledger (migration 074,
+  // BYOK Delegations PR-B #4232). Art. 15+20: the grantee's own consent
+  // record — they accepted the Side Letter. Single ownerField since
+  // only the grantee (user_id) is a data subject on this table.
+  // The WORM trigger + anonymise_byok_delegation_acceptances RPC handle
+  // erasure separately (Art. 17 cascade in account-delete.ts step 5.11).
+  byok_delegation_acceptances: { ownerField: "user_id", article: "15+20" },
+
   // GitHub App installation-token use audit (migration 052, PR-H #3244).
   // Art. 15: controller-collected, not user-provided. RLS owner-select
   // already exposes these rows to the founder via the dashboard; the
