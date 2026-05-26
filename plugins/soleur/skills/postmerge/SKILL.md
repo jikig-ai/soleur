@@ -96,6 +96,35 @@ curl -sf --max-time 10 "<production-url>/api/health" | jq .
 WARNING: No production health check available. Skipping deployment verification.
 ```
 
+## Phase 3.5: Sentry Cron Monitor Health
+
+Verify scheduled functions are healthy post-deploy by querying Sentry cron monitors.
+
+**Prerequisites:** `SENTRY_AUTH_TOKEN` (or `SENTRY_API_TOKEN` fallback) must be available. If missing, warn and skip:
+
+```text
+WARNING: SENTRY_AUTH_TOKEN not set. Skipping Sentry health verification.
+```
+
+Query cron monitors:
+
+```bash
+SENTRY_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN -p soleur -c prd --plain 2>/dev/null || \
+  doppler secrets get SENTRY_API_TOKEN -p soleur -c prd --plain)
+SENTRY_ORG=$(doppler secrets get SENTRY_ORG -p soleur -c prd --plain 2>/dev/null || echo "jikigai")
+API_HOST="${SENTRY_ORG}.sentry.io"
+
+curl -sS -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "https://${API_HOST}/api/0/organizations/${SENTRY_ORG}/monitors/" \
+  | jq '[.[] | {slug: .slug, status: .status}] | map(select(.status != "ok" and .status != "active"))'
+```
+
+- If all monitors report `ok` or `active`: "Sentry cron monitors: all healthy"
+- If any monitor reports `error` or `missed`: flag with monitor name and status. This is a WARNING, not a blocker — the monitor may have been unhealthy before this deploy.
+- If Sentry API is unreachable or returns non-200: warn and skip (do not block on Sentry outages).
+
+**Graceful degradation:** This check is advisory. A Sentry API failure does not block the postmerge pipeline.
+
 ## Phase 4: Verify File Freshness
 
 Read key files from the merged commit to verify they match expectations -- NOT from the bare repo filesystem which may contain stale content.
@@ -141,6 +170,7 @@ gh issue comment <issue-number> --body "Post-merge verification complete for PR 
 
 - CI on main: PASSED
 - Production health: <PASSED/SKIPPED/FAILED>
+- Sentry monitors: <HEALTHY/WARNING/SKIPPED>
 - File freshness: <PASSED/N files checked>
 - Browser verification: <PASSED/SKIPPED>
 "
@@ -163,6 +193,7 @@ PR: #<number>
 Merge commit: <sha>
 CI on main: PASSED
 Production health: <PASSED/SKIPPED/FAILED>
+Sentry monitors: <HEALTHY/WARNING/SKIPPED>
 File freshness: <N files verified>
 Browser verification: <PASSED/SKIPPED>
 ```
@@ -172,6 +203,8 @@ Browser verification: <PASSED/SKIPPED>
 | Missing Prerequisite | Behavior |
 |---------------------|----------|
 | No production URL | Skip health check with warning |
+| No `SENTRY_AUTH_TOKEN` | Skip Sentry cron monitor check with warning |
+| Sentry API unreachable | Skip Sentry cron monitor check with warning |
 | Playwright MCP unavailable | Skip browser verification with warning |
 | CI run not found | Poll up to 5 minutes, then warn and proceed |
 | No UI files in diff | Skip browser verification entirely |

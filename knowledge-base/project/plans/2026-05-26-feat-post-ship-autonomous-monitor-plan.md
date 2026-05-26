@@ -180,13 +180,13 @@ None.
 
 ### Pre-merge (PR)
 
-- [ ] AC1: Ship SKILL.md Phase 7 CI failure handler delegates to `test-fix-loop` (1 attempt, then escalate)
-- [ ] AC2: Ship SKILL.md Phase 7 CI failure handler distinguishes required-check-failure exit (PR OPEN) from CLOSED exit — no `gh pr reopen` needed for the primary path
-- [ ] AC3: Ship SKILL.md Phase 7 contains `skill: soleur:postmerge` invocation after release workflow verification passes
-- [ ] AC4: Postmerge SKILL.md contains Phase 3.5 with Sentry cron monitor health check using `SENTRY_AUTH_TOKEN` (with `SENTRY_API_TOKEN` fallback)
-- [ ] AC5: Postmerge Phase 7 report and Phase 6 issue comment include Sentry monitor results
-- [ ] AC6: Phase 7 poll block mirror note (`merge-pr/SKILL.md §5.2`) is NOT affected (CI auto-fix is outside the poll block)
-- [ ] AC7: Sentry check is advisory (warn, don't block) with graceful degradation on API failure
+- [x] AC1: Ship SKILL.md Phase 7 CI failure handler delegates to `test-fix-loop` (1 attempt, then escalate)
+- [x] AC2: Ship SKILL.md Phase 7 CI failure handler distinguishes required-check-failure exit (PR OPEN) from CLOSED exit — no `gh pr reopen` needed for the primary path
+- [x] AC3: Ship SKILL.md Phase 7 contains `skill: soleur:postmerge` invocation after release workflow verification passes
+- [x] AC4: Postmerge SKILL.md contains Phase 3.5 with Sentry cron monitor health check using `SENTRY_AUTH_TOKEN` (with `SENTRY_API_TOKEN` fallback)
+- [x] AC5: Postmerge Phase 7 report and Phase 6 issue comment include Sentry monitor results
+- [x] AC6: Phase 7 poll block mirror note (`merge-pr/SKILL.md §5.2`) is NOT affected (CI auto-fix is outside the poll block)
+- [x] AC7: Sentry check is advisory (warn, don't block) with graceful degradation on API failure
 
 ### Post-merge (operator)
 
