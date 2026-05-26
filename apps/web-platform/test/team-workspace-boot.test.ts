@@ -19,15 +19,15 @@ vi.mock("@sentry/nextjs", () => ({
 }));
 
 import { emitTeamWorkspaceInviteBootBreadcrumb } from "../server/team-workspace-boot";
+import { __resetFeatureFlagsForTests } from "@/lib/feature-flags/server";
 
 const ORIGINAL_ENV = process.env;
-// @types/node 22+ types NODE_ENV as readonly. Tests assign through a writable
-// view; vitest's vi.stubEnv is reserved for non-NODE_ENV vars (see learning
-// 2026-05-20-vitest-unstub-does-not-clear-process-inherited-env-vars).
 const mutableEnv = process.env as Record<string, string | undefined>;
 
 beforeEach(() => {
   process.env = { ...ORIGINAL_ENV };
+  delete process.env.FLAGSMITH_ENVIRONMENT_KEY;
+  __resetFeatureFlagsForTests();
   addBreadcrumbSpy.mockClear();
   captureMessageSpy.mockClear();
 });
@@ -37,35 +37,35 @@ afterEach(() => {
 });
 
 describe("emitTeamWorkspaceInviteBootBreadcrumb (#4229 Phase 4 AC-F)", () => {
-  it("no-op when NODE_ENV != production (even if both keys ON)", () => {
+  it("no-op when NODE_ENV != production (even if both keys ON)", async () => {
     mutableEnv.NODE_ENV = "development";
     process.env.FLAG_TEAM_WORKSPACE_INVITE = "1";
     process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-jikigai";
-    emitTeamWorkspaceInviteBootBreadcrumb();
+    await emitTeamWorkspaceInviteBootBreadcrumb();
     expect(addBreadcrumbSpy).not.toHaveBeenCalled();
   });
 
-  it("no-op in production when flag OFF", () => {
+  it("no-op in production when flag OFF", async () => {
     mutableEnv.NODE_ENV = "production";
     delete process.env.FLAG_TEAM_WORKSPACE_INVITE;
     process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-jikigai";
-    emitTeamWorkspaceInviteBootBreadcrumb();
+    await emitTeamWorkspaceInviteBootBreadcrumb();
     expect(addBreadcrumbSpy).not.toHaveBeenCalled();
   });
 
-  it("no-op in production when flag ON but allowlist empty", () => {
+  it("no-op in production when flag ON but allowlist empty", async () => {
     mutableEnv.NODE_ENV = "production";
     process.env.FLAG_TEAM_WORKSPACE_INVITE = "1";
     delete process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS;
-    emitTeamWorkspaceInviteBootBreadcrumb();
+    await emitTeamWorkspaceInviteBootBreadcrumb();
     expect(addBreadcrumbSpy).not.toHaveBeenCalled();
   });
 
-  it("emits breadcrumb in production when both keys evaluate true", () => {
+  it("emits breadcrumb in production when both keys evaluate true", async () => {
     mutableEnv.NODE_ENV = "production";
     process.env.FLAG_TEAM_WORKSPACE_INVITE = "1";
     process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-jikigai,org-other";
-    emitTeamWorkspaceInviteBootBreadcrumb();
+    await emitTeamWorkspaceInviteBootBreadcrumb();
     expect(addBreadcrumbSpy).toHaveBeenCalledTimes(1);
     const [crumb] = addBreadcrumbSpy.mock.calls[0]!;
     expect(crumb).toMatchObject({

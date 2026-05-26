@@ -1,30 +1,19 @@
 # Scheduled health probe for feat-team-workspace-multi-user (Phase 8.3).
 #
-# Hits the `/api/health/team-membership` endpoint hourly. Fires a P0
-# Sentry issue if:
+# Queries /api/flags?role=prd to determine whether team-workspace-invite is
+# ON in production, then probes the health endpoint if so.
 #
-#   (1) `FLAG_TEAM_WORKSPACE_INVITE=1` in the env under test, AND
-#   (2) the endpoint reports `status=degraded` OR returns non-2xx.
+# Single source of truth: the Flagsmith-backed /api/flags endpoint (NOT
+# vars.FLAG_* GitHub Actions variables — those are legacy per umbrella #4456).
 #
-# Stays silent under flag-OFF — the workspace tables are dormant until
-# the invite surface flips on. Per `hr-no-dashboard-eyeball-pull-data-yourself`
-# the workflow auto-pages via `gh issue create` rather than an operator
-# eyeball mailbox.
-#
-# All untrusted values (probe payload, status fields) flow through env
-# vars + sanitization before any echo into ::error::/issue body, so the
-# log-injection class flagged by .github/security_reminder_hook is
-# closed. No github.event.* inputs consumed.
-#
-# Tracks #4229. See app/api/health/team-membership/route.ts for the
-# probe implementation and knowledge-base/project/specs/
-# feat-team-workspace-multi-user/spec.md failure_modes #1-5.
+# All untrusted values flow through strip_log_injection before any echo
+# into ::error::/issue body. No github.event.* inputs consumed.
 
 name: "Scheduled: Team-Membership Health"
 
 on:
   schedule:
-    - cron: '17 * * * *'   # hourly at :17 (offset from generic :00 cron storms)
+    - cron: '17 * * * *'
   workflow_dispatch: {}
 
 concurrency:
@@ -40,23 +29,41 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
+      FLAGS_URL: "https://soleur.ai/api/flags?role=prd"
       HEALTH_URL: ${{ vars.SOLEUR_HEALTH_TEAM_MEMBERSHIP_URL || 'https://soleur.ai/api/health/team-membership' }}
-      FLAG_ON: ${{ vars.FLAG_TEAM_WORKSPACE_INVITE || '0' }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
+      - name: Resolve flag state from Flagsmith
+        id: flags
+        run: |
+          set -euo pipefail
+          strip_log_injection() { printf '%s' "$1" | tr -d '\000-\037' | head -c 500; }
+          flag_resp=$(curl --max-time 5 -sf "$FLAGS_URL" 2>/dev/null || echo "")
+          if [ -z "$flag_resp" ]; then
+            echo "flag_on=false" | tee -a "$GITHUB_OUTPUT"
+            echo "::warning::Failed to reach $FLAGS_URL — fail-closed-to-OFF (no page)"
+            exit 0
+          fi
+          flag_val=$(printf '%s' "$flag_resp" | jq -r '.["team-workspace-invite"] // false')
+          if [ "$flag_val" = "true" ]; then
+            echo "flag_on=true" | tee -a "$GITHUB_OUTPUT"
+          else
+            echo "flag_on=false" | tee -a "$GITHUB_OUTPUT"
+          fi
+
       - name: Probe health endpoint
+        if: steps.flags.outputs.flag_on == 'true'
         id: probe
         run: |
           set -euo pipefail
+          strip_log_injection() { printf '%s' "$1" | tr -d '\000-\037' | head -c 500; }
           status_code=$(curl -sS -o /tmp/health.json -w '%{http_code}' "$HEALTH_URL" || echo "000")
           payload=$(cat /tmp/health.json 2>/dev/null || echo "{}")
           health_status=$(printf '%s' "$payload" | grep -oE '"status"[[:space:]]*:[[:space:]]*"[a-z]+"' | head -1 | grep -oE '"[a-z]+"$' | tr -d '"' || echo "unknown")
           reason=$(printf '%s' "$payload" | grep -oE '"reason"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | sed -E 's/.*"reason"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || true)
-          # Sanitize reason for log + downstream output. Newlines and
-          # control chars cannot tamper with the issue body.
-          safe_reason=$(printf '%s' "${reason:-}" | tr -d '\000-\037' | head -c 500)
+          safe_reason=$(strip_log_injection "${reason:-}")
           {
             echo "status_code=$status_code"
             echo "health_status=$health_status"
@@ -64,6 +71,7 @@ jobs:
           } | tee -a "$GITHUB_OUTPUT"
 
       - name: Decide whether to page
+        if: steps.flags.outputs.flag_on == 'true'
         id: decide
         env:
           STATUS_CODE: ${{ steps.probe.outputs.status_code }}
@@ -71,10 +79,8 @@ jobs:
         run: |
           set -euo pipefail
           should_page="false"
-          if [ "$FLAG_ON" = "1" ]; then
-            if [ "$STATUS_CODE" != "200" ] || [ "$HEALTH_STATUS" != "ok" ]; then
-              should_page="true"
-            fi
+          if [ "$STATUS_CODE" != "200" ] || [ "$HEALTH_STATUS" != "ok" ]; then
+            should_page="true"
           fi
           echo "should_page=$should_page" | tee -a "$GITHUB_OUTPUT"
 
@@ -96,10 +102,10 @@ jobs:
           - Health status: \`${HEALTH_STATUS}\`
           - Reason: \`${REASON:-(none)}\`
           - Endpoint: \`${HEALTH_URL}\`
-          - Flag-state: \`FLAG_TEAM_WORKSPACE_INVITE=${FLAG_ON}\`
+          - Flag source: \`${FLAGS_URL}\` (Flagsmith-backed)
 
           ## Likely failure classes
-          (1) Migrations 053-057 not applied to prd.
+          (1) Migrations 053-071 not applied to prd.
           (2) RLS policy regression on workspace_members /
               workspace_member_attestations.
           (3) PostgREST schema cache stale post-migration apply.

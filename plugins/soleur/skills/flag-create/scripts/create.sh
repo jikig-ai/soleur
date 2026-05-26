@@ -77,6 +77,17 @@ fi
 read -p "Proceed? Type 'yes': " ACK
 [[ "$ACK" == "yes" ]] || { echo "aborted" >&2; exit 0; }
 
+# --- audit append (WORM) ---------------------------------------------------
+ACTOR=$(doppler secrets get OPERATOR_EMAIL -p soleur -c cli_ops --plain 2>/dev/null | tr '[:upper:]' '[:lower:]')
+[[ -z "$ACTOR" ]] && { echo "FATAL: OPERATOR_EMAIL not in Doppler soleur/cli_ops" >&2; exit 4; }
+
+DB_URL=$(doppler secrets get DATABASE_URL_POOLER -p soleur -c dev --plain 2>/dev/null)
+[[ -z "$DB_URL" ]] && { echo "FATAL: DATABASE_URL_POOLER not in Doppler soleur/dev" >&2; exit 4; }
+
+AUDIT_ID=$(psql "${DB_URL/6543/5432}" -tAc "SELECT public.audit_flag_flip('$NAME', 'dev', 'global', 'create', NULL, NULL, '$ACTOR');" 2>&1) \
+  || { echo "FATAL: audit append failed: $AUDIT_ID" >&2; exit 4; }
+echo "  audit_id=$AUDIT_ID"
+
 # --- create feature --------------------------------------------------------
 echo "→ Creating Flagsmith feature '$NAME'…"
 RESP=$(fs_api -X POST "${FLAGSMITH_API}/projects/${FLAGSMITH_PROJECT_ID}/features/" \

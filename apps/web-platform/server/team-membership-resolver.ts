@@ -1,4 +1,4 @@
-import { isTeamWorkspaceInviteEnabled } from "@/lib/feature-flags/server";
+import { isTeamWorkspaceInviteEnabled, type Identity } from "@/lib/feature-flags/server";
 import { getCurrentOrganizationId } from "@/server/workspace-resolver";
 
 // Server-only resolver for the /dashboard/settings/team membership page.
@@ -65,9 +65,8 @@ export async function resolveTeamMembershipPageData(
   });
   if (!orgId) return { ok: false, reason: "no-org" };
 
-  // 2-key gate per AC-F. When false, surface as not-found so the page calls
-  // notFound() → HTTP 404 (AC-A: never 403, never empty 200).
-  if (!isTeamWorkspaceInviteEnabled(orgId)) {
+  const identity: Identity = { userId: user.id, role: "prd", orgId };
+  if (!(await isTeamWorkspaceInviteEnabled(orgId, identity))) {
     return { ok: false, reason: "not-found" };
   }
 

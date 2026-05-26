@@ -30,6 +30,12 @@ vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
 }));
 
+vi.mock("@/lib/supabase/service", () => ({
+  createServiceClient: () => ({
+    from: () => ({ select: () => ({ eq: () => ({ limit: () => ({ single: () => Promise.resolve({ data: null, error: null }) }), maybeSingle: () => Promise.resolve({ data: null, error: null }) }) }) }),
+  }),
+}));
+
 vi.mock("@/server/inngest/client", () => ({
   inngest: {
     createFunction: () => ({ id: "github-on-event-stub" }),
