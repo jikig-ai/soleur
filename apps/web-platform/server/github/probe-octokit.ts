@@ -67,3 +67,34 @@ export async function createProbeOctokit() {
 
   return app.getInstallationOctokit(installation.id);
 }
+
+/**
+ * TR9 PR-4 (#4235, AC4) — App-level JWT Octokit for `/app` + `/app/installations`.
+ *
+ * Mints an app-level JWT Octokit for surfaces requiring app-level
+ * authentication (the drift-guard's `GET /app` and `GET /app/installations`
+ * calls). Returns `{ octokit }`: an `app.octokit` (app-level, NOT installation-
+ * scoped) so callers can hit `/app` directly.
+ *
+ * CRITICAL: Deliberately omits the audit-writer hook (`audit_github_token_use`).
+ * The drift-guard is platform-owned synthetic traffic; writing audit rows
+ * would pollute the Article 30 PA-16 founder-activity ledger. Mirror of
+ * `createProbeOctokit()`'s same rationale.
+ *
+ * NOTE: Previously returned `{ octokit, appJwt }` so the JWT string could be
+ * passed through the leak tripwire. The handler never actually consumed
+ * `appJwt`, so the shape was simplified to just `{ octokit }` to remove a
+ * dead-store + reduce the leak surface (the JWT is never materialized into a
+ * caller-visible string).
+ *
+ * @throws if GITHUB_APP_ID or GITHUB_APP_PRIVATE_KEY is missing.
+ */
+export async function createAppJwtOctokit(): Promise<{
+  octokit: InstanceType<typeof App>["octokit"];
+}> {
+  const app = new App({
+    appId: readEnv(APP_ID_ENV),
+    privateKey: readEnv(PRIVATE_KEY_ENV),
+  });
+  return { octokit: app.octokit };
+}

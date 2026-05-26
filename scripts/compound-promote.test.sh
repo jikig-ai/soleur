@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Runtime contract has moved to apps/web-platform/server/inngest/functions/cron-compound-promote.ts
+# (TR9 PR-11). This test script covers the retained hand-testing script only; it does NOT
+# test the Inngest handler runtime contract (see test/server/inngest/cron-compound-promote.test.ts).
+#
 # Tests for scripts/compound-promote.sh.
 #
 # Covers Phase 2 of the compound-promotion-loop plan

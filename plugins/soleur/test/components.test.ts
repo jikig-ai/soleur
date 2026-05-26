@@ -12,7 +12,7 @@ import {
 
 const VALID_MODELS = ["inherit", "haiku", "sonnet", "opus"];
 const KEBAB_CASE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-const SKILL_DESCRIPTION_WORD_BUDGET = 1850; // see #618; bumped +50 for #2725 incident skill (PR was at 1798/1800 baseline, no headroom for new skills)
+const SKILL_DESCRIPTION_WORD_BUDGET = 1950; // see #618; bumped +50 for #2725, bumped +100 for #4341 (3 Flagsmith operator skills landed against a 1906/1850 baseline; trimmed mine to minimum, restored ~40-word headroom)
 const SKILL_DESCRIPTION_CHAR_LIMIT = 1024;
 
 // ---------------------------------------------------------------------------

@@ -52,9 +52,22 @@ vi.mock("@/lib/supabase/tenant", () => ({
   getFreshTenantClient: getFreshTenantClientSpy,
 }));
 
+vi.mock("@/lib/supabase/service", () => ({
+  createServiceClient: () => ({
+    from: () => ({ select: () => ({ eq: () => ({ limit: () => ({ single: () => Promise.resolve({ data: null, error: null }) }), maybeSingle: () => Promise.resolve({ data: null, error: null }) }) }) }),
+  }),
+}));
+
 const runWithByokLeaseSpy = vi.fn(
-  async <T,>(_userId: string, fn: (lease: unknown) => Promise<T>) => {
-    return fn({ getApiKey: () => "fake-api-key" });
+  async <T,>(
+    args: { workspaceContextUserId: string; keyOwnerUserId: string },
+    fn: (lease: unknown) => Promise<T>,
+  ) => {
+    return fn({
+      workspaceContextUserId: args.workspaceContextUserId,
+      keyOwnerUserId: args.keyOwnerUserId,
+      getApiKey: () => "fake-api-key",
+    });
   },
 );
 vi.mock("@/server/byok-lease", () => ({
@@ -234,7 +247,10 @@ describe("cfo-on-payment-failed — draft + persist (R1, RV16)", () => {
     await handler({ event: makeEvent("1"), step, logger });
 
     expect(runWithByokLeaseSpy).toHaveBeenCalledTimes(1);
-    expect(runWithByokLeaseSpy.mock.calls[0][0]).toBe("founder-123");
+    expect(runWithByokLeaseSpy.mock.calls[0][0]).toEqual({
+      workspaceContextUserId: "founder-123",
+      keyOwnerUserId: "founder-123",
+    });
 
     // persist-draft fired with the CHECK-constraint-compatible shape.
     expect(insertSpy).toHaveBeenCalledTimes(1);
@@ -292,14 +308,15 @@ describe("cfo-on-payment-failed — structural invariants (source-grep)", () => 
 
   it("I1 — runWithByokLease is called from inside a step.run callback (per-step lease)", () => {
     const src = readFileSync(srcPath, "utf8");
-    // Both tokens must be present, and runWithByokLease must NOT appear at
-    // top-level (outside any step.run). We approximate "inside a step.run"
-    // by requiring that the FIRST step.run( occurs BEFORE the FIRST
-    // runWithByokLease( in source order. This is sufficient for the single
-    // SDK-calling step shipped by PR-F; PR-G adds a positional gate when a
-    // 2nd SDK step lands.
+    // Both tokens must be present, and the lease entry-point must NOT
+    // appear at top-level (outside any step.run). We approximate "inside
+    // a step.run" by requiring that the FIRST step.run( occurs BEFORE
+    // the FIRST lease entry-point in source order. BYOK delegations
+    // (#4232) replaces the direct `runWithByokLease` call site with the
+    // `resolveKeyOwnerThenLease` wrapper which opens the lease scope
+    // internally — either token satisfies the structural invariant.
     const stepRunIdx = src.search(/step\.run\(/);
-    const leaseIdx = src.search(/runWithByokLease\(/);
+    const leaseIdx = src.search(/(?:runWithByokLease|resolveKeyOwnerThenLease)\(/);
     expect(stepRunIdx).toBeGreaterThan(-1);
     expect(leaseIdx).toBeGreaterThan(-1);
     expect(leaseIdx).toBeGreaterThan(stepRunIdx);

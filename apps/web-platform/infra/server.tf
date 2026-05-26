@@ -36,6 +36,7 @@ resource "hcloud_server" "web" {
     resource_monitor_script_b64          = base64encode(file("${path.module}/resource-monitor.sh"))
     fail2ban_sshd_local_b64              = base64encode(file("${path.module}/fail2ban-sshd.local"))
     hooks_json_b64                       = base64encode(local.hooks_json)
+    infra_config_apply_script_b64        = base64encode(file("${path.module}/infra-config-apply.sh"))
     tunnel_token                         = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
     webhook_deploy_secret                = var.webhook_deploy_secret
     doppler_token                        = var.doppler_token
@@ -221,6 +222,11 @@ resource "terraform_data" "deploy_pipeline_fix" {
   # to the existing server. This resource is the sole path for pushing ci-deploy.sh,
   # webhook.service, cat-deploy-state.sh, canary-bundle-claim-check.sh, and
   # hooks.json updates to production (#2185, #3033).
+  # Sentinel string at the end forces re-recreation when the inline
+  # remote-exec list itself changes (terraform_data doesn't auto-detect
+  # provisioner-block content drift; only triggers_replace is consulted).
+  # Bump the sentinel suffix in lockstep with any inline edit so the
+  # remote host re-receives + re-runs the updated commands.
   triggers_replace = sha256(join(",", [
     file("${path.module}/ci-deploy.sh"),
     file("${path.module}/ci-deploy-wrapper.sh"),
@@ -228,86 +234,30 @@ resource "terraform_data" "deploy_pipeline_fix" {
     file("${path.module}/cat-deploy-state.sh"),
     file("${path.module}/canary-bundle-claim-check.sh"),
     file("${path.module}/deploy-inngest-bootstrap.sudoers"),
+    file("${path.module}/infra-config-apply.sh"),
+    file("${path.module}/push-infra-config.sh"),
     local.hooks_json,
   ]))
 
-  connection {
-    type  = "ssh"
-    host  = hcloud_server.web.ipv4_address
-    user  = "root"
-    agent = true
-  }
+  # #3756 — replaced SSH provisioners (connection + file + remote-exec) with
+  # an HTTPS POST through the existing CF Tunnel. push-infra-config.sh sends
+  # base64-encoded file payloads to /hooks/infra-config; the webhook handler
+  # (infra-config-apply.sh) writes them atomically on the host.
+  #
+  # Sensitive values are passed via the environment {} block (Terraform >=1.0
+  # accepts sensitive values here but refuses to interpolate them into the
+  # command string).
+  provisioner "local-exec" {
+    command = "${path.module}/push-infra-config.sh"
 
-  provisioner "file" {
-    source      = "${path.module}/ci-deploy.sh"
-    destination = "/usr/local/bin/ci-deploy.sh"
-  }
-
-  provisioner "file" {
-    source      = "${path.module}/ci-deploy-wrapper.sh"
-    destination = "/usr/local/bin/ci-deploy-wrapper.sh"
-  }
-
-  provisioner "file" {
-    source      = "${path.module}/webhook.service"
-    destination = "/etc/systemd/system/webhook.service"
-  }
-
-  provisioner "file" {
-    source      = "${path.module}/cat-deploy-state.sh"
-    destination = "/usr/local/bin/cat-deploy-state.sh"
-  }
-
-  provisioner "file" {
-    source      = "${path.module}/canary-bundle-claim-check.sh"
-    destination = "/usr/local/bin/canary-bundle-claim-check.sh"
-  }
-
-  provisioner "file" {
-    content     = local.hooks_json
-    destination = "/etc/webhook/hooks.json"
-  }
-
-  # #4144 — sudoers entry for ci-deploy.sh → inngest-bootstrap.sh as root.
-  # Mirrors cloud-init.yml write_files for the same path; this resource
-  # keeps already-running hosts in sync (hcloud_server.web has
-  # ignore_changes=[user_data], so cloud-init never re-applies).
-  # Stage to /tmp first; remote-exec validates with visudo -cf, then
-  # `install` atomically moves into /etc/sudoers.d/ only on validation
-  # success. Sudo loads everything in sudoers.d on next invocation
-  # regardless of visudo exit, so direct-write would risk lockout on a
-  # malformed file. The staged path is in /tmp because root owns this
-  # SSH session and /tmp is the conventional pre-install staging area.
-  provisioner "file" {
-    source      = "${path.module}/deploy-inngest-bootstrap.sudoers"
-    destination = "/tmp/deploy-inngest-bootstrap.sudoers.staged"
-  }
-
-  provisioner "remote-exec" {
-    inline = [
-      "chmod +x /usr/local/bin/ci-deploy.sh",
-      "chmod +x /usr/local/bin/ci-deploy-wrapper.sh",
-      "chmod +x /usr/local/bin/cat-deploy-state.sh",
-      "chmod +x /usr/local/bin/canary-bundle-claim-check.sh",
-      # hooks.json must be readable by the webhook (deploy group) but not world-readable --
-      # it contains the HMAC secret. Provisioner "file" uploads as root:root by default.
-      "chown root:deploy /etc/webhook/hooks.json",
-      "chmod 640 /etc/webhook/hooks.json",
-      # #4144 — validate staged sudoers BEFORE installing into /etc/sudoers.d/.
-      # visudo -cf exit != 0 → leave the staged file, do NOT install; install
-      # uses --mode/--owner/--group atomically so a partial write can't load.
-      "visudo -cf /tmp/deploy-inngest-bootstrap.sudoers.staged && install --mode=0440 --owner=root --group=root /tmp/deploy-inngest-bootstrap.sudoers.staged /etc/sudoers.d/deploy-inngest-bootstrap",
-      "rm -f /tmp/deploy-inngest-bootstrap.sudoers.staged",
-      # Append DOPPLER_CONFIG_DIR and DOPPLER_ENABLE_VERSION_CHECK to webhook-deploy env file.
-      # Redirects Doppler CLI config to /tmp (writable under PrivateTmp) instead of ~/.doppler
-      # (blocked by ProtectHome=read-only). grep guard makes this idempotent.
-      "grep -q DOPPLER_CONFIG_DIR /etc/default/webhook-deploy || printf 'DOPPLER_CONFIG_DIR=/tmp/.doppler\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' >> /etc/default/webhook-deploy",
-      "systemctl daemon-reload",
-      "systemctl restart webhook",
-      # One-time cleanup: delete stale .env so deploys fail loudly if Doppler is unavailable.
-      # rm -f is idempotent -- safe to re-run if this resource is tainted and re-created.
-      "rm -f /mnt/data/.env",
-    ]
+    environment = {
+      WEBHOOK_SECRET   = var.webhook_deploy_secret
+      CF_ACCESS_ID     = var.cf_access_client_id
+      CF_ACCESS_SECRET = var.cf_access_client_secret
+      APP_DOMAIN_BASE  = var.app_domain_base
+      INFRA_DIR        = path.module
+      HOOKS_JSON_B64   = base64encode(local.hooks_json)
+    }
   }
 }
 

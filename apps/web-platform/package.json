@@ -16,7 +16,9 @@
     "test:ci": "vitest run",
     "test:e2e": "npx playwright test",
     "typecheck": "tsc --noEmit",
-    "hash-user-id": "bun scripts/hash-user-id.ts"
+    "hash-user-id": "bun scripts/hash-user-id.ts",
+    "byok-grant": "bun scripts/byok-grant.ts",
+    "byok-revoke": "bun scripts/byok-revoke.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.2.85",
@@ -27,6 +29,7 @@
     "@supabase/ssr": "^0.6.0",
     "@supabase/supabase-js": "^2.49.0",
     "archiver": "^8.0.0",
+    "flagsmith-nodejs": "^8.1.0",
     "gray-matter": "^4.0.3",
     "inngest": "^3.54.2",
     "lucide-react": "^1.8.0",
@@ -40,7 +43,7 @@
     "react-resizable-panels": "^4.10.0",
     "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.1",
-    "resend": "^6.10.0",
+    "resend": "^6.12.3",
     "stripe": "^17.7.0",
     "web-push": "^3.6.7",
     "ws": "^8.20.1",
@@ -79,6 +82,7 @@
   "overrides": {
     "vite": "^7.3.2",
     "brace-expansion": "^5.0.6",
-    "ws": "^8.20.1"
+    "ws": "^8.20.1",
+    "qs": "^6.15.2"
   }
 }

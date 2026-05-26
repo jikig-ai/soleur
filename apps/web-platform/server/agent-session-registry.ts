@@ -32,6 +32,18 @@ import { SessionAbortError, type AbortKind } from "./abort-classifier";
 
 const activeSessions = new Map<string, AgentSession>();
 
+// Sidecar map for workspace association (feat-team-workspace-multi-user
+// Phase 5.5 / Kieran C5). Keyed by userId (not sessionKey) because a single
+// WS connection's current_organization_id is invariant for the connection
+// lifetime — Phase 5.4's `supabase.auth.refreshSession()` on org-switch
+// produces a fresh JWT which, in practice, drives a reconnect rather than
+// repurposing the open socket. Multi-tab races covered by AC-FLOW3.
+//
+// abortAllWorkspaceMemberSessions matches `userId AND workspaceId` so that
+// removing Harry from jikigai does NOT abort his sessions in his personal
+// workspace (Kieran C5 correction).
+const userWorkspaces = new Map<string, string>();
+
 /** Compose the registry key for a session. Multi-leader dispatch uses
  *  the 3-segment form so per-leader cancellation is possible without
  *  killing sibling leaders. */
@@ -142,6 +154,67 @@ export function abortAllUserSessions(userId: string): void {
   }
 }
 
+/**
+ * Associate a userId with a current workspaceId (Phase 5.5 / Kieran C5).
+ *
+ * Called from ws-handler at session-open time (after the JWT current_organization_id
+ * is resolved). The association is process-local and survives reconnects (the
+ * sidecar map persists across socket close until explicitly cleared via
+ * `clearUserWorkspace` on the FINAL disconnect path or until the entry is
+ * overwritten by a fresh association on the next connection).
+ *
+ * Setting to undefined / empty is a no-op. Callers MUST resolve a real
+ * workspaceId before invoking. Solo users carry workspaceId === userId per
+ * the N2 invariant (migration 053 §1.1.7 backfill).
+ */
+export function setUserWorkspace(
+  userId: string,
+  workspaceId: string,
+): void {
+  if (!workspaceId) return;
+  userWorkspaces.set(userId, workspaceId);
+}
+
+/** Remove a userId → workspaceId binding. Called on WS close. */
+export function clearUserWorkspace(userId: string): void {
+  userWorkspaces.delete(userId);
+}
+
+/** Inspect the current workspace binding for a user. Returns undefined when
+ *  unbound (pre-Phase 5.5 sessions, or post-WS-close). */
+export function getUserWorkspace(userId: string): string | undefined {
+  return userWorkspaces.get(userId);
+}
+
+/**
+ * Abort every session for a user whose current workspace binding equals
+ * `workspaceId`. Called from `workspace-membership.ts:removeWorkspaceMember`
+ * after the SQL RPC completes successfully (AC-FLOW2).
+ *
+ * Kieran C5: using `abortAllUserSessions(userId)` would over-kill — Harry
+ * being removed from jikigai must NOT abort his sessions running against
+ * his personal workspace. The membership check happens inside the SQL RPC
+ * (atomic with the membership delete); this function fires only the
+ * client-side SIGTERM equivalent. Sessions whose workspace binding does
+ * not match the target workspaceId are left untouched.
+ *
+ * The cost-row for the partial run writes with `status='interrupted'` via
+ * the for-await abort branch in `agent-runner.ts` reading the
+ * `workspace_membership_revoked` `AbortKind` (see abort-classifier.ts).
+ */
+export function abortAllWorkspaceMemberSessions(
+  workspaceId: string,
+  userId: string,
+): void {
+  if (userWorkspaces.get(userId) !== workspaceId) return;
+  const prefix = `${userId}:`;
+  for (const [key, session] of activeSessions) {
+    if (key.startsWith(prefix)) {
+      session.abort.abort(new SessionAbortError("workspace_membership_revoked"));
+    }
+  }
+}
+
 /** Abort every session in the process. Called during server shutdown. */
 export function abortAllSessions(): void {
   for (const [, session] of activeSessions) {
@@ -157,6 +230,10 @@ export function abortAllSessions(): void {
  * and stay grep-discoverable.
  */
 export const __test_only__ = {
-  clear: () => activeSessions.clear(),
+  clear: () => {
+    activeSessions.clear();
+    userWorkspaces.clear();
+  },
   size: () => activeSessions.size,
+  workspaceSize: () => userWorkspaces.size,
 };

@@ -92,7 +92,7 @@ describe("MarkdownRenderer — table column widths (shared-doc readability)", ()
     expect(cells.length).toBeGreaterThan(0);
     cells.forEach((td) => {
       expect(td.className).toContain("min-w-[8ch]");
-      expect(td.className).toContain("max-w-[40ch]");
+      expect(td.className).toContain("max-w-[45ch]");
       expect(td.className).toContain("align-top");
       // Regression guard: td must not silently re-acquire w-full (would override the band).
       expect(td.className).not.toMatch(/(^|\s)w-full(\s|$)/);

@@ -57,6 +57,23 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # depth>1 so git diff origin/main...HEAD populates for the
+          # FK-precondition lint (Delta 2 of issue 4325 hardening).
+          fetch-depth: 2
+
+      # FK-precondition lint (Delta 2 of issue 4325 hardening). Static
+      # PR-diff check: every new/modified migration with a cross-file
+      # REFERENCES public.<table> must include a to_regclass precondition
+      # per the schema-vs-ledger drift learning. Runs early (no Doppler /
+      # DB needed) so a malformed migration short-circuits before the
+      # costly dev apply. Pairs with MIGRATION_SCHEMA_PRECONDITION_PROBE
+      # (default-on per Delta 4) — PR-time prevention vs apply-time defense.
+      # No untrusted github.event.* inputs interpolated; safe per
+      # GitHub Actions injection guidance.
+      - name: Lint migration FK preconditions
+        working-directory: apps/web-platform
+        run: bash scripts/lint-migration-fk-preconditions.sh --from-pr-diff
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
@@ -114,6 +131,35 @@ jobs:
           fi
           echo "Doppler config dev_scheduled -> environment=dev (verified)."
 
+      # Drift probe (#4241) — composite action shared with scheduled cron at
+      # `.github/workflows/scheduled-dev-migration-drift.yml`. Surfaces
+      # `_schema_migrations` rows on dev whose file is missing from
+      # origin/main OR whose content_sha drifts (caught by migration 054).
+      # Severity is `::warning::` by design: the apply-time gate in
+      # `apps/web-platform/scripts/run-migrations.sh` (#4241 Phase 3.1) is
+      # the enforcement layer, this probe is the visibility layer.
+      - name: Detect dev-vs-main migration drift
+        uses: ./.github/actions/dev-migration-drift-probe
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+
+      # Preflight: schema-vs-ledger consistency check (#4338). Logic
+      # lives in apps/web-platform/scripts/preflight-schema-vs-ledger.sh
+      # so the workflow surface stays free of inline run: shell with
+      # interpolated bash variables. Orthogonal to the drift probe above:
+      # the drift probe checks ledger-vs-origin/main (filename + content
+      # _sha drift class, #4241); this preflight checks ledger-vs-live-
+      # schema (the #4338 drift class). Both passing is the necessary-
+      # and-sufficient condition for a safe apply.
+      - name: Preflight schema-vs-ledger consistency check
+        working-directory: apps/web-platform
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c dev_scheduled -- \
+            bash scripts/preflight-schema-vs-ledger.sh
+
       # Apply migrations to dev before running tests. Without this step,
       # tenant-integration tests run against whatever schema dev happens to
       # have, which can lag behind the PR's migration files — producing
@@ -137,10 +183,44 @@ jobs:
       # is correct for dev (which has a populated tracking table;
       # bootstrap-auto's 001-010 sentinel-row seed is meant for the
       # legacy prd-first apply path, not dev).
+      # Seed bot fixtures before migrations — migrations like
+      # 071_ux_audit_artifacts_bucket.sql reference auth.users rows
+      # that bot-fixture.ts creates. Without this, the migration
+      # degrades gracefully (NOTICE, not EXCEPTION) but the RLS
+      # policy is deferred until a post-seed re-apply.
+      - name: Seed bot fixtures (pre-migration)
+        working-directory: apps/web-platform
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c dev_scheduled -- \
+            bun plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts seed \
+            || echo "::warning::bot-fixture.ts seed failed — migrations will degrade gracefully"
+
       - name: Apply migrations to dev
         working-directory: apps/web-platform
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+          # The unmerged-apply gate (#4241) blocks files not on origin/main
+          # unless this env is set. The workflow IS the legitimate apply path
+          # for this PR's own in-flight migrations — PR review (mandatory for
+          # merge) is the gate for content; this env flag is the gate for the
+          # apply path. Direct-`psql` applies outside CI still require explicit
+          # operator ack via the same flag. The drift probe above surfaces any
+          # leave-behind state on every run, so a maliciously-shipped migration
+          # cannot stay invisible. See learning file for full discussion.
+          ALLOW_UNMERGED_DEV_APPLY: "1"
+          # Schema-presence probe (#4338): before applying each migration,
+          # confirm the cross-file tables it REFERENCES exist in the live
+          # schema. Catches schema-vs-ledger drift one migration earlier
+          # than the FK parser, with a self-describing error that names
+          # the missing relation. Composes with the workflow-level
+          # preflight above: preflight runs once at workflow-time;
+          # this runner-level probe fires per-migration so dynamic-
+          # produced dependencies (caught later in the apply sequence)
+          # still get a named-relation error.
+          MIGRATION_SCHEMA_PRECONDITION_PROBE: "1"
         run: |
           set -uo pipefail
           doppler run -p soleur -c dev_scheduled -- \

@@ -34,6 +34,30 @@ pwd
 
 **Branch safety check (defense-in-depth):** If the branch from the command above is `main` or `master`, abort immediately with: "Error: ship cannot run on main/master. Checkout a feature branch first." This is defense-in-depth alongside PreToolUse hooks -- it fires even if hooks are unavailable (e.g., in CI).
 
+**Trailer-parse verification gate (defense-in-depth for [hr-always-read-a-file-before-editing-it]).** For every commit on this branch since `origin/main`, parse any `Key: value`-shaped lines in the body and confirm `git interpret-trailers` recognises each as a trailer. The modal failure is a blank line between an `Allowlist-Widened-By:`/`Reviewed-by:`/`Signed-off-by:` line and `Co-Authored-By:`, which silently demotes the upstream trailer into body prose and breaks downstream consumers parsing via `git log --format='%(trailers:key=NAME,valueonly)'`:
+
+```bash
+RC=0
+for sha in $(git rev-list origin/main..HEAD); do
+  BODY=$(git log -1 --format=%B "$sha")
+  declare -a CANDIDATES=()
+  while IFS= read -r line; do
+    [[ "$line" =~ ^([A-Z][A-Za-z-]+):[[:space:]] ]] && CANDIDATES+=("${BASH_REMATCH[1]}")
+  done <<< "$BODY"
+  for key in "${CANDIDATES[@]}"; do
+    val=$(git log -1 --format="%(trailers:key=${key},valueonly)" "$sha")
+    if [[ -z "$val" ]]; then
+      echo "[FAIL] ${sha:0:8}: '${key}:' is in the body but does not parse as a trailer." >&2
+      echo "       Fix: git rebase -i, reword the commit to make the final paragraph a contiguous Key: value block." >&2
+      RC=1
+    fi
+  done
+done
+exit $RC
+```
+
+If the gate fails, do NOT proceed — reword the offending commit(s) via `git rebase -i` (or `git commit --amend` if the failing commit is HEAD AND has not been pushed) so the final paragraph is a pure contiguous `Key: value` block. See `knowledge-base/project/learnings/2026-05-16-git-trailer-parser-requires-contiguous-key-value-block.md` and PR #4106.
+
 Load project conventions:
 
 ```bash
@@ -308,7 +332,6 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
   "Review findings default to fix-inline on the PR bra"
 ```
 
-
 **Detection:** Resolve the current PR number, then query for open, unresolved
 review-origin issues that cross-reference this PR via body regex
 `(Ref|Closes|Fixes) #<N>\b` — NOT `gh search`'s loose substring matcher
@@ -373,6 +396,80 @@ Issues:
 findings were filed but never resolved before ship. This gate enforces the
 fix-inline default at the merge boundary. See rule
 `rf-review-finding-default-fix-inline`.
+
+### Net-Issue-Flow Surfacing (advisory)
+
+Before queueing auto-merge, compute and display the per-PR net-issue-flow:
+how many issues this PR **closes** vs. how many `deferred-scope-out` issues
+it **files**. The display is advisory — it does NOT block merge — but it
+makes the backlog math visible at the last moment when the operator can
+still pivot a filed issue back to inline.
+
+**Why this surface exists.** PR #4452 introduced the cost-of-filing
+auto-flip and concrete-trigger rules; this metric is the observability
+layer that catches regressions in those rules. PRs #4418 and #4440 were on
+track to file 6 deferred-scope-out issues combined; the operator manually
+walked them back to 1 — but only because the math was visible during
+synthesis. Once outside review synthesis, the per-PR delta becomes
+invisible and the backlog accretes silently.
+
+**Detection:**
+
+```bash
+PR_NUMBER=$(gh pr view --json number --jq .number)
+[[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || { echo "Error: PR_NUMBER is not a positive integer: $PR_NUMBER"; exit 1; }
+
+# N: issues this PR closes via `Closes #X` / `Fixes #X` / `Resolves #X`.
+# Body-keyword detection matches /ship Phase 6 issue detection conventions.
+PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq .body)
+CLOSING=$(printf '%s\n' "$PR_BODY" \
+  | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?) #[0-9]+' \
+  | grep -oE '#[0-9]+' \
+  | sort -u \
+  | wc -l)
+
+# M: deferred-scope-out issues opened AFTER the PR was created that cross-reference
+# this PR via `Ref|Closes|Fixes #<N>` in the body. The `created:>=<PR-opened-date>`
+# filter scopes the count to issues filed during THIS PR cycle (not pre-existing
+# scope-outs that merely cross-reference the PR for context). Matches Phase 5.5
+# detection regex.
+PR_CREATED_AT=$(gh pr view "$PR_NUMBER" --json createdAt --jq .createdAt | cut -c1-10)
+FILED=$(gh issue list \
+  --label deferred-scope-out \
+  --state open \
+  --search "created:>=${PR_CREATED_AT}" \
+  --json number,body \
+  --jq '[.[] | select((.body // "") | test("(^|\\s)(Ref|Closes|Fixes) #'"$PR_NUMBER"'(\\s|$|[^0-9])"))] | length')
+
+NET=$(( FILED - CLOSING ))
+```
+
+**Display (always emit, never block):**
+
+```text
+PR net-issue-flow:
+  Closing: <CLOSING> (extracted from `Closes #X` keywords in body)
+  Filing:  <FILED> (count of deferred-scope-out issues created during this PR cycle that Ref #<PR>)
+  Net:     <signed NET> (positive = backlog growth)
+```
+
+**If `NET > 0`** (net-positive backlog growth), print a warning ABOVE the
+PR body in the ship checklist:
+
+```text
+⚠ Net-positive backlog flow: this PR adds +<NET> issues to the deferred-scope-out queue.
+  Before merging, consider whether any of the <FILED> filed issues could be done inline instead.
+  Cost-of-filing gate: ≤30 lines AND ≤2 files → auto-flip to fix-inline (see
+  plugins/soleur/skills/review/SKILL.md "Mechanical pre-CONCUR auto-flip").
+```
+
+The warning is advisory — it does NOT block auto-merge. The pipeline
+continues into Phase 6 immediately after emitting the warning. The point
+is to surface the math at the moment when the operator can still pivot,
+not to add a new merge-blocker (the Review-Findings Exit Gate above
+already covers the "unjustified filing" case).
+
+**Why advisory (not blocking).** Advisory only — legitimate architectural-pivot deferrals can be net-positive and correct.
 
 ### Pre-Ship Domain Review (conditional)
 
@@ -497,8 +594,10 @@ DEPLOY_PIPELINE_FIX_TRIGGERS=(
   "apps/web-platform/infra/canary-bundle-claim-check.sh"
   "apps/web-platform/infra/hooks.json.tmpl"
   "apps/web-platform/infra/deploy-inngest-bootstrap.sudoers"
+  "apps/web-platform/infra/infra-config-apply.sh"
+  "apps/web-platform/infra/push-infra-config.sh"
 )
-DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers)$'
+DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|push-infra-config\.sh)$'
 
 git diff --name-only origin/main...HEAD | grep -E "$DPF_REGEX"
 ```
@@ -966,11 +1065,35 @@ Do NOT use `gh pr checks --watch` -- it exits immediately with "no checks report
 
 After auto-merge is queued, poll until the PR is merged. Do NOT ask "merge now or later?" -- auto-merge handles it. Do NOT use foreground `sleep` — Claude Code blocks `sleep` >= 2s in foreground Bash calls.
 
-Use the **Monitor tool** with this shell loop (state-change + heartbeat, max 15 iterations = 15 minutes). The `BEHIND` handler auto-syncs main into the branch when the queued auto-merge is stuck because origin/main moved ahead — see "Auto-sync on BEHIND" below:
+Use the **Monitor tool** with this shell loop (state-change + heartbeat, max 15 iterations = 15 minutes). The loop covers three structurally-unmergeable states in addition to the terminal MERGED/CLOSED exits: **required-check failure** (exit at first failing required check, name it in stderr), **BEHIND** (auto-sync main into the branch up to 6 attempts, then emit a structured "main moving faster than CI" warning at the inflection point), and **DIRTY** (server-side merge conflict — exit and surface). See "Auto-sync on BEHIND" and "Required-check failure exit" below:
 
 ```bash
-prev=""; i=0; behind_syncs=0; MAX_BEHIND_SYNCS=3
+# <!-- phase-7-poll-block:start --> (do NOT edit without updating the
+# mirror in plugins/soleur/skills/merge-pr/SKILL.md §5.2 and the fixture
+# at plugins/soleur/test/ship-phase-7-poll-fixtures.sh; the fixture's awk
+# extractor anchors on this fence + the variable-set fingerprint below.)
+prev=""; i=0; behind_syncs=0; MAX_BEHIND_SYNCS=6; behind_warned=0
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
+# Worktree precondition: the BEHIND auto-sync calls `git merge origin/main`
+# + `git push` which require a checked-out work tree. Bare-repo invocation
+# would silently corrupt state or fail mid-sync. /soleur:ship always runs
+# from a worktree (Step 0b creates one); the guard is defense-in-depth.
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "[ship.phase7.precondition] not inside a worktree — BEHIND auto-sync disabled" >&2
+fi
+# Required-check name set — fetched ONCE at loop entry (branch-protection
+# rules change only via operator action; per-tick fetches cost rate-limit
+# headroom for no value). Fail-open by design: if the API call fails (no
+# auth, no ruleset, archived repo, 5xx), REQUIRED_CHECKS is empty and the
+# per-tick failure scan becomes a no-op. The existing CLOSED-on-CI-failure
+# fallback below still catches the terminal case. Do NOT "harden" to
+# fail-closed — that breaks the loop for repos without branch protection.
+# Read into an array so check names with whitespace (e.g. "skill-security-scan
+# PR gate") survive iteration intact — a `for r in $REQUIRED_CHECKS` would
+# word-split on spaces and silently miss multi-word required checks.
+mapfile -t REQUIRED_CHECKS < <(gh api 'repos/{owner}/{repo}/rules/branches/main' \
+  --jq '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | .[]' \
+  2>/dev/null || true)
 while true; do
   i=$((i+1))
   s=$(gh pr view <number> --json state,mergeStateStatus \
@@ -982,11 +1105,48 @@ while true; do
   fi
   echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break
 
+  # Required-check failure scan: if a required check has transitioned to
+  # bucket == "fail", exit immediately with the failing check name instead
+  # of heartbeating to the 15-minute cap. Tolerates absent checks (CI not
+  # yet registered) — only bucket="fail" produces an intersection match.
+  # Same fail-open rationale as the once-fetch above: transient `gh pr
+  # checks` 5xx → empty failure set → no-op for this tick.
+  if (( ${#REQUIRED_CHECKS[@]} > 0 )); then
+    mapfile -t failed_names < <(gh pr checks <number> --json name,bucket \
+      --jq '.[] | select(.bucket == "fail") | .name' 2>/dev/null || true)
+    if (( ${#failed_names[@]} > 0 )); then
+      required_failed=""
+      for n in "${failed_names[@]}"; do
+        for r in "${REQUIRED_CHECKS[@]}"; do
+          [[ "$n" == "$r" ]] && { required_failed="$n"; break 2; }
+        done
+      done
+      if [[ -n "$required_failed" ]]; then
+        echo "$(date +%H:%M:%S) [${i}/15] [ship.phase7.required_failed] check='${required_failed}' — exiting poll" >&2
+        echo "Inspect: gh pr checks <number> ; gh run view --log-failed (pick the failing workflow run)" >&2
+        break
+      fi
+    fi
+  fi
+
+  # DIRTY exit (server-side merge conflict): GitHub computed a conflict that
+  # may or may not be local to this worktree. Exit and surface — looping
+  # produces no progress; the operator must resolve. Glob `*DIRTY*` (not
+  # `*" DIRTY"`) tolerates leading-whitespace and trailing-whitespace variants
+  # that future `--jq` template tweaks could introduce.
+  if [[ "$s" == *DIRTY* ]]; then
+    echo "$(date +%H:%M:%S) [${i}/15] [ship.phase7.dirty] PR is DIRTY (merge conflict) — exiting poll" >&2
+    echo "Conflicted paths (local view; may be empty for server-side conflicts):" >&2
+    git diff --name-only --diff-filter=U >&2 || true
+    echo "Server-side conflicts may not appear locally. Run: git fetch origin && git merge origin/main" >&2
+    break
+  fi
+
   # Auto-sync on BEHIND: GitHub auto-merge will not fire while the head
   # ref is behind base. Merge origin/main into the branch and push so the
   # queued auto-merge can re-evaluate. Capped at MAX_BEHIND_SYNCS so a
   # pathological merge-loop (every sync produces a fresh BEHIND) does not
-  # consume the whole poll budget — fall through to timeout instead.
+  # consume the whole poll budget — fall through to a structured warning.
   if [[ "$s" == "OPEN BEHIND" && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
     behind_syncs=$((behind_syncs+1))
     echo "$(date +%H:%M:%S) [${i}/15] BEHIND detected — auto-sync attempt ${behind_syncs}/${MAX_BEHIND_SYNCS}"
@@ -1003,7 +1163,23 @@ while true; do
       break
     else
       echo "$(date +%H:%M:%S) [${i}/15] auto-sync ${behind_syncs} pushed — auto-merge will re-evaluate"
+      # Re-fetch state immediately after a successful sync. GitHub may
+      # have already cleared OPEN BEHIND → OPEN CLEAN → MERGED in the time
+      # the sync took (~5-30s); without this re-fetch, we'd burn a 60s
+      # `sleep` waiting on state we already know has progressed.
+      s=$(gh pr view <number> --json state,mergeStateStatus \
+          --jq '"\(.state) \(.mergeStateStatus)"' 2>&1) \
+        || s="fetch-error: $s"
+      echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break
     fi
+  elif [[ "$s" == "OPEN BEHIND" && "$behind_syncs" -ge "$MAX_BEHIND_SYNCS" && "$behind_warned" -eq 0 ]]; then
+    # BEHIND cap exhausted: emit structured operator signal exactly once at
+    # the inflection point (sync #${MAX_BEHIND_SYNCS}+1), then fall through
+    # to heartbeat. PR may still merge if main calms down — but the
+    # operator now has the diagnosis without log-archaeology.
+    elapsed=$((i * 60))
+    echo "$(date +%H:%M:%S) [${i}/15] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s. origin/main is moving faster than this PR's CI cycle. Recommendation: stop ship pipeline; merge during a quieter window." >&2
+    behind_warned=1
   fi
 
   if [ "$i" -ge 15 ]; then
@@ -1012,6 +1188,7 @@ while true; do
   fi
   sleep 60
 done
+# <!-- phase-7-poll-block:end -->
 ```
 
 Each meaningful event (first iteration, every state change, heartbeat every 3rd poll ~3 min) arrives as a Monitor notification — quiet while nothing changes, loud when it matters. React to the final state (the last non-heartbeat event). `fetch-error:` appears if `gh` hits a transient API failure; chronic errors break the loop so the caller can surface the outage instead of polling silently. If the loop exits via timeout, report the timeout and investigate why the PR has not merged.
@@ -1022,9 +1199,14 @@ Each meaningful event (first iteration, every state change, heartbeat every 3rd 
 2. Merging origin/main into the branch with `--no-edit`. If conflicts arise (`--diff-filter=U` returns paths), the loop aborts the merge and stops polling — manual resolution is required and continuing would mask the conflict.
 3. Pushing the merge commit. This bumps the PR head ref, GitHub re-evaluates the queued auto-merge, and (assuming CI passes) the merge fires.
 
-The sync is capped at `MAX_BEHIND_SYNCS=3` per poll invocation. A pathological case — every sync triggers a new commit on main (parallel-active-repo class) — would otherwise consume the full 15-minute budget on BEHIND→BEHIND→BEHIND with no progress. After 3 syncs, fall through to the heartbeat path; the timeout warning will surface that the operator needs to investigate (likely: main is moving faster than this PR's CI can keep up; merge into a quiet window).
+The sync is capped at `MAX_BEHIND_SYNCS=6` per poll invocation. A pathological case — every sync triggers a new commit on main (parallel-active-repo class) — would otherwise consume the full 15-minute budget on BEHIND→BEHIND→BEHIND with no progress. After 6 syncs, the loop emits a structured `BEHIND budget exhausted` warning naming the elapsed time and recommendation to merge during a quieter window, then falls through to heartbeat — the PR may still merge if main calms down, but the operator now has the diagnosis at the inflection point instead of at the 15-minute timeout.
+
+**Required-check failure exit.** Each tick, the loop intersects `gh pr checks --json name,bucket` failures (`bucket == "fail"`) with the repo's required-check name set (fetched once at loop entry via `gh api 'repos/{owner}/{repo}/rules/branches/main'`). On the first intersection, the loop exits and prints the failing check name + a pointer to `gh pr checks <number>` / `gh run view --log-failed`. This replaces the silent 15-minute heartbeat that occurs when a required check fails mid-poll but auto-merge sits queued waiting for a state transition that will never come. If the required-check fetch fails (no auth, no ruleset, archived repo), the scan is a no-op and the existing CLOSED-on-CI-failure fallback below still catches the terminal case — fail-open is deliberate, do NOT "harden" to fail-closed.
+
+**DIRTY exit (server-side merge conflict).** When `mergeStateStatus == DIRTY`, GitHub has computed a merge conflict that may or may not be visible locally (operator may not have fetched the conflicting push). The loop exits, runs `git diff --name-only --diff-filter=U` for the local conflict view (often empty for server-side conflicts), and prints a `git fetch origin && git merge origin/main` recovery pointer. The operator must resolve before re-queueing auto-merge.
 
 Two failure paths exit early instead of looping:
+
 - **Merge conflicts** — `git diff --name-only --diff-filter=U` lists conflicted paths and the operator must resolve. Looping with `--abort` only buys time on a fundamentally non-automatic resolution.
 - **Push failure** — usually means a concurrent push raced this one (force-push, branch protection, or a sibling session). Stop and surface; the operator decides whether to fetch + retry.
 
@@ -1209,9 +1391,9 @@ This complements the PreToolUse hook [`.claude/hooks/pre-merge-rebase.sh`](../..
    3. The byte count of the GitHub App's Callback URL textarea contents (e.g., `wc -c <<<"$contents"`) — forensic anchor for future drift comparisons.
 
    A close attempt without all three fields is workflow non-compliance per `wg-when-fixing-a-workflow-gates-detection` (the gap that allowed #1784 to recur). When closing the issue manually, verify the closing comment contains:
-   - Each registered callback URL listed verbatim (substring grep against the comment body).
-   - A run-URL of the form `actions/runs/[0-9]+` whose conclusion is `success` (verify via `gh run view <id> --json conclusion --jq .conclusion`).
-   - A byte-count line matching `bytes:\s*[0-9]+`.
+  - Each registered callback URL listed verbatim (substring grep against the comment body).
+  - A run-URL of the form `actions/runs/[0-9]+` whose conclusion is `success` (verify via `gh run view <id> --json conclusion --jq .conclusion`).
+  - A byte-count line matching `bytes:\s*[0-9]+`.
 
    If any field is missing, comment on the issue requesting it and leave the issue open. Do NOT close.
 
@@ -1351,6 +1533,27 @@ This complements the PreToolUse hook [`.claude/hooks/pre-merge-rebase.sh`](../..
    YAML and rotted open for ~24h until #4186 retrofitted it. The precondition gate
    is the cheapest forward defense; the contract is asserted at PR time by
    `plugins/soleur/test/ship-followthrough-directive.test.sh`.
+
+   **Mechanical backstop** (defense-in-depth on top of this honor-system gate):
+   the PreToolUse hook [`.claude/hooks/follow-through-directive-gate.sh`](../../../../.claude/hooks/follow-through-directive-gate.sh)
+   intercepts every `gh issue create --label follow-through` call at the Bash-tool
+   boundary and re-runs the same awk parser against the resolved `--body-file` or
+   inline `--body`. The agent step above MUST still run — the hook is the second
+   net, not the first. The hook denies the tool call with a structured error if the
+   directive is absent, malformed, or references a missing/non-executable script.
+   See `.claude/hooks/follow-through-directive-gate.test.sh` for the cases the hook
+   enforces.
+
+   **Step 3.5.E.2 — Post-create re-validation.** After `gh issue create` succeeds,
+   re-fetch the just-created issue body via `gh issue view <N> --json body --jq .body`
+   and re-run the same awk parser against it. The on-create body MUST extract the
+   same `script`/`earliest` tokens as the proposed body. This catches the rare class
+   where GitHub's API silently truncates or mangles a body whose markdown collides
+   with one of GitHub's own template processors (the `<!-- ... -->` shape is
+   markdown-suppressed but mishandled by some legacy edit-path-validators). If the
+   post-create parse diverges from the proposed parse, fail the step: the issue
+   exists on GitHub but is sweeper-invisible — close it with a comment naming the
+   divergence and retry the create.
 
    **Step 3.5.F — Operator-only ack.** When the chosen pattern is operator-confirmed
    (Step 3.5.B), append a `## Operator instructions` block to the issue body explaining

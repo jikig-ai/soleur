@@ -30,6 +30,12 @@ vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
 }));
 
+vi.mock("@/lib/supabase/service", () => ({
+  createServiceClient: () => ({
+    from: () => ({ select: () => ({ eq: () => ({ limit: () => ({ single: () => Promise.resolve({ data: null, error: null }) }), maybeSingle: () => Promise.resolve({ data: null, error: null }) }) }) }),
+  }),
+}));
+
 vi.mock("@/server/inngest/client", () => ({
   inngest: {
     createFunction: () => ({ id: "github-on-event-stub" }),
@@ -208,8 +214,10 @@ describe("github-on-event handler", () => {
     it("runWithByokLease invoked exactly once per event", async () => {
       await githubOnEventHandler(makeArgs({}) as never);
       expect(mockRunWithByokLease).toHaveBeenCalledTimes(1);
+      // Phase 3 #4229 — runWithByokLease takes {workspaceContextUserId,
+      // keyOwnerUserId}. Solo (N2): both equal founderId.
       expect(mockRunWithByokLease).toHaveBeenCalledWith(
-        "founder-1",
+        { workspaceContextUserId: "founder-1", keyOwnerUserId: "founder-1" },
         expect.any(Function),
       );
     });

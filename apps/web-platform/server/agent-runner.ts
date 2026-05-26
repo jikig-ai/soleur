@@ -5,13 +5,28 @@ import { readFile } from "node:fs/promises";
 import path from "path";
 
 import { createServiceClient } from "@/lib/supabase/service";
-import { getFreshTenantClient } from "@/lib/supabase/tenant";
+import {
+  getFreshTenantClient,
+  RuntimeAuthError,
+} from "@/lib/supabase/tenant";
+import { tryEmitRevocationNotice } from "./revocation-emit";
 import { ROUTABLE_DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { routeMessage } from "./domain-router";
 import { KeyInvalidError, type AttachmentRef, type Conversation } from "@/lib/types";
 import { persistAndDownloadAttachments } from "./attachment-pipeline";
 import { decryptKey, decryptKeyLegacy, encryptKey } from "./byok";
-import { runWithByokLease, ByokLeaseError, mapByokLeaseCauseToErrorCode } from "./byok-lease";
+import {
+  ByokLeaseError,
+  MissingByokKeyError,
+  reportMissingByokKey,
+  mapByokLeaseCauseToErrorCode,
+} from "./byok-lease";
+// BYOK Delegations PR-A (#4232): the 5 prod sentinel sites wrap with
+// resolveKeyOwnerThenLease so the resolver can route to a grantor's
+// key when the caller has no own api_keys row. The N2 invariant
+// (workspaceContextUserId === keyOwnerUserId for solo) is preserved
+// inside the resolver's flag-OFF fast path.
+import { resolveKeyOwnerThenLease } from "./byok-resolver";
 import { sendToClient } from "./ws-handler";
 import { notifyOfflineUser, type NotificationPayload } from "./notifications";
 import * as Sentry from "@sentry/nextjs";
@@ -35,6 +50,8 @@ import { MAX_BINARY_SIZE } from "./kb-limits";
 import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
 import { buildKbShareTools } from "./kb-share-tools";
 import { buildConversationsTools } from "./conversations-tools";
+import { buildAuthStatusTools } from "./auth-status-tools";
+import { buildAccountTools } from "./account-tools";
 import { getCurrentRepoUrl } from "./current-repo-url";
 import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
@@ -77,9 +94,16 @@ function supabase() { return _supabase ??= createServiceClient(); }
  * future widening of `ByokLeaseError.cause` is a TS build break here
  * via the helper's `: never` rail.
  */
-function resolveSessionErrorCode(err: unknown): "key_invalid" | undefined {
+function resolveSessionErrorCode(
+  err: unknown,
+): "key_invalid" | "byok_key_missing" | undefined {
   if (err instanceof KeyInvalidError) return "key_invalid";
   if (err instanceof ByokLeaseError) return mapByokLeaseCauseToErrorCode(err.cause);
+  // Phase 3.2 AC-D: MissingByokKeyError carries its own client-facing
+  // signal so the UI can render the configure-banner rather than the
+  // key-prompt. `reportMissingByokKey` is fired at the catch site, not
+  // here — this function maps to a stable WS errorCode only.
+  if (err instanceof MissingByokKeyError) return "byok_key_missing";
   return undefined;
 }
 
@@ -546,6 +570,13 @@ async function loadConversationHistory(
   // we mirror DB errors and return [] on any fetch error per the prior
   // contract.
   const tenant = await getFreshTenantClient(userId);
+  // mig 068 #4318 service-role-sweep AC13: metadata-only today (filename,
+  // content_type, size_bytes). If this transition to a byte-fetch path
+  // (e.g., embed image bytes for LLM replay), insert an explicit
+  // assertReaderMayAccessAttachment(...) call before the fetch — same
+  // shape as the url-route Phase 3 widening (conv lookup → is_workspace_
+  // member → reportSilentFallback on cutover-deny). Tenant-scope alone
+  // is insufficient as defense-in-depth for byte reads.
   const { data, error } = await tenant
     .from("messages")
     .select("role, content, created_at, message_attachments(filename, content_type, size_bytes)")
@@ -860,7 +891,19 @@ export async function startAgentSession(
     // The implicit JWT mint at session start (per §1.5.4) is the first
     // `getFreshTenantClient(userId)` call inside the lease body — surfaces
     // RuntimeAuthError synchronously rather than mid-tool-call.
-    await runWithByokLease(userId, async (lease) => {
+    // Phase 3 (feat-team-workspace-multi-user): split userId into
+    // workspaceContextUserId (whose workspace the agent acts upon) vs
+    // keyOwnerUserId (whose api_keys row backs the BYOK key). For solo
+    // workspaces both equal `userId` (N2 invariant — workspaces.id =
+    // owner_user_id for backfilled solo); team workspaces will diverge
+    // when Phase 4 invite flow ships.
+    // Sentinel sweep site #1 (#4232 PR-A). callerUserId = userId (server-
+    // derived per agent-runner JWT contract; provenance enumerated in PR
+    // body). N2 solo invariant kept: callerUserId === workspaceContextUserId.
+    await resolveKeyOwnerThenLease(
+      userId,
+      userId,
+      async (lease) => {
     // Get user's decrypted API key and service tokens
     const [apiKey, serviceTokens] = await Promise.all([
       lease.getApiKey(),
@@ -883,7 +926,7 @@ export async function startAgentSession(
     const sessionTenant = await getFreshTenantClient(userId);
     const { data: user } = await sessionTenant
       .from("users")
-      .select("workspace_path, repo_status, github_installation_id")
+      .select("workspace_path, repo_status, github_installation_id, email")
       .eq("id", userId)
       .single();
 
@@ -1368,6 +1411,28 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
     const conversationsTools = buildConversationsTools({ userId });
     platformTools.push(...conversationsTools);
     platformToolNames.push("mcp__soleur_platform__conversations_lookup");
+
+    // Auth revocation status tool (#4440 follow-up to #4418): registered
+    // unconditionally — agents need self-diagnosis on every authenticated
+    // session, not just those with a connected repo or service tokens.
+    // Wraps `getMyRevocationStatus(userId)` from `lib/supabase/tenant.ts`
+    // (founder-readable `my_revocation_status()` RPC, fail-open). Auto-
+    // approve tier per `tool-tiers.ts` — read-only, no side effects.
+    const authStatusTools = buildAuthStatusTools({ userId });
+    platformTools.push(...authStatusTools);
+    platformToolNames.push("mcp__soleur_platform__auth_revocation_status");
+
+    // Account lifecycle tools (#4454): DSAR export + account deletion.
+    // Registered unconditionally — agent-user parity requires these on
+    // every authenticated session. account_delete_initiate is gated by
+    // explicit ack + email confirmation per hr-menu-option-ack-not-prod-write-auth.
+    const accountTools = buildAccountTools({
+      userId,
+      userEmail: user.email ?? "",
+      sessionId: conversationId,
+    });
+    platformTools.push(...accountTools.tools);
+    platformToolNames.push(...accountTools.toolNames);
 
     // Build MCP server if any platform tools are registered
     if (platformTools.length > 0) {
@@ -1873,15 +1938,38 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           // side-effects: atomic RPC v2 (5 deltas), forensic
           // `write_byok_audit` row, widened `usage_update` WS event,
           // Sentry mirror per `cq-silent-fallback-must-mirror-to-sentry`.
-          persistTurnCost(userId, conversationId, streamLeaderId, {
-            totalCostUsd: costDelta,
-            usage: {
-              input_tokens: inputDelta,
-              output_tokens: outputDelta,
-              cache_read_input_tokens: cacheReadDelta,
-              cache_creation_input_tokens: cacheCreationDelta,
+          // Phase 3 (feat-team-workspace-multi-user) — workspaceId is
+          // sourced from `userId` under the N2 invariant (workspaces.id
+          // = owner_user_id for backfilled solo workspaces; see migration
+          // 053 §1.1.7). Future non-solo callers will resolve via
+          // `workspace-resolver.getDefaultWorkspaceForUser`.
+          // BYOK Delegations PR-A (#4232). When `lease.delegationId` is
+          // set (resolver routed to a grantor's key), thread the
+          // delegation context so the audit RPC routes to the merged
+          // atomic check_and_record_byok_delegation_use. Solo + flag-
+          // OFF cases leave `delegation` undefined and the cost-writer
+          // takes the legacy write_byok_audit branch unchanged.
+          persistTurnCost(
+            userId,
+            conversationId,
+            streamLeaderId,
+            userId,
+            {
+              totalCostUsd: costDelta,
+              usage: {
+                input_tokens: inputDelta,
+                output_tokens: outputDelta,
+                cache_read_input_tokens: cacheReadDelta,
+                cache_creation_input_tokens: cacheCreationDelta,
+              },
             },
-          });
+            lease.delegationId
+              ? {
+                  delegationId: lease.delegationId,
+                  callerUserId: lease.workspaceContextUserId,
+                }
+              : undefined,
+          );
 
           // Sync: push changes to remote after session (connected repos only)
           if (user.repo_status === "ready") {
@@ -2141,6 +2229,14 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           op: "sdk-startup",
           extra: { userId, conversationId, leaderId },
         });
+      } else if (err instanceof MissingByokKeyError) {
+        // Phase 3.2 AC-D (Kieran N4): info-level breadcrumb with the
+        // workspace context. Does not replace the generic
+        // captureException; the breadcrumb adorns the trail so the
+        // first hard error in the same Sentry transaction carries the
+        // workspace context.
+        reportMissingByokKey(err);
+        Sentry.captureException(err);
       } else {
         Sentry.captureException(err);
       }
@@ -2319,12 +2415,32 @@ export async function sendUserMessage(
   const activeSession = getSession(userId, conversationId);
   const resumeSessionId = activeSession?.sessionId ?? conv.session_id ?? undefined;
 
-  const handleSessionError = (err: unknown) => {
+  const handleSessionError = async (err: unknown): Promise<void> => {
+    // Phase 3.2 AC-D: MissingByokKeyError fires the info-level breadcrumb
+    // BEFORE the generic captureException so the workspace context lands
+    // on the trail. Returns; we still surface the WS error event below.
+    if (err instanceof MissingByokKeyError) reportMissingByokKey(err);
     Sentry.captureException(err);
     log.error(
       { err, userId, conversationId },
       "sendUserMessage session error",
     );
+    // #4440 follow-up to #4418 — JWT-deny propagation. Detect a
+    // mid-session `RuntimeAuthError("denied_jti")` BEFORE the generic
+    // error frame fires so agents/API consumers receive the same
+    // discriminated `revocation_notice` frame the ws-handler.tenantFor
+    // path emits at handshake time. AWAIT the helper so the
+    // revocation_notice lands before the generic error frame — the
+    // prior fire-and-forget IIFE raced with the synchronous error-frame
+    // emit below and could deliver the frames out of order. The helper
+    // is fail-open (returns null on RPC error, Sentry-mirrors per
+    // cq-silent-fallback-must-mirror-to-sentry) so awaiting it does
+    // not introduce a new throw surface.
+    if (err instanceof RuntimeAuthError && err.cause === "denied_jti") {
+      await tryEmitRevocationNotice(userId, (frame) =>
+        sendToClient(userId, frame),
+      );
+    }
     const message = sanitizeErrorForClient(err);
     sendToClient(userId, {
       type: "error",
@@ -2360,7 +2476,12 @@ export async function sendUserMessage(
   // bounds the in-process heap window for that call too.
   if (!conv.domain_leader) {
     try {
-      await runWithByokLease(userId, async (lease) => {
+      // Sentinel sweep site #2 (#4232 PR-A). Routing-side BYOK fetch;
+      // same N2 solo invariant + server-derived `userId` provenance.
+      await resolveKeyOwnerThenLease(
+        userId,
+        userId,
+        async (lease) => {
         const apiKey = await lease.getApiKey();
 
         // tenant-scoped read of team_names. RLS enforces auth.uid() = user_id.
@@ -2386,7 +2507,7 @@ export async function sendUserMessage(
           .catch(handleSessionError);
       });
     } catch (err) {
-      handleSessionError(err);
+      await handleSessionError(err);
     }
     return;
   }

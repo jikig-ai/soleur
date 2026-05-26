@@ -131,6 +131,8 @@ Wire a domain to GitHub Pages. This recipe handles the Cloudflare side via MCP a
 
 **Detailed workflow:** For the complete autonomous sequence including common blockers, see `knowledge-base/project/learnings/integration-issues/2026-02-16-github-pages-cloudflare-wiring-workflow.md`.
 
+**Cert renewal (NOT just initial provisioning):** Every time GH Pages re-issues the LE cert (60-day cycle, auto-renewal), the proxy-vs-unproxied gymnastics from initial wiring repeats. GH Pages' domain-config validator is a public-DNS dig expecting `185.199.108-111.153`; CF proxy returns anycast IPs and the check fails forever. Workaround: temporarily flip the 5 records (apex A x4 + www CNAME) to `proxied = false` for the duration of the renewal window (10-20 min), then re-enable. The CF edge cert is independent and stays valid throughout. See `knowledge-base/project/learnings/integration-issues/2026-05-18-cloudflare-proxy-hides-origin-ip-from-gh-pages-domain-check.md` and the 2026-05-18 PIR for the outage this caused when the initial setup did not account for renewal-time proxy-state drift.
+
 ## Scope
 
 This agent handles live Cloudflare configuration and security auditing:

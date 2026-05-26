@@ -58,18 +58,17 @@ jobs:
             printf 'tag=%s\n' "$stripped" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Read pinned inngest-cli version + SHA from inngest.tf
+      - name: Read pinned inngest-cli + vector versions + SHAs from *.tf
         id: pin
+        # Reads only from tracked files (no untrusted github.event.* input).
         run: |
           set -euo pipefail
-          # Source of truth: apps/web-platform/infra/inngest.tf locals block.
           version=$(grep -E '^\s*inngest_cli_version\s*=' apps/web-platform/infra/inngest.tf | sed -E 's/.*"([^"]+)".*/\1/')
           sha=$(grep -E '^\s*inngest_cli_sha256\s*=' apps/web-platform/infra/inngest.tf | sed -E 's/.*"([^"]+)".*/\1/')
           if [[ -z "$version" || -z "$sha" ]]; then
             echo "ERROR: failed to extract inngest_cli_version or inngest_cli_sha256 from inngest.tf"
             exit 1
           fi
-          # Defense-in-depth: validate shapes before they reach the build step.
           if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "ERROR: inngest_cli_version '$version' is not vX.Y.Z"; exit 1
           fi
@@ -78,6 +77,20 @@ jobs:
           fi
           printf 'inngest_version=%s\n' "$version" >> "$GITHUB_OUTPUT"
           printf 'inngest_sha256=%s\n' "$sha" >> "$GITHUB_OUTPUT"
+
+          # Vector observability shipper (TR9 PR-5). Optional — empty values
+          # cause the bootstrap script's vector-install block to skip
+          # gracefully (warn-log only).
+          v_version=$(grep -E '^\s*vector_version\s*=' apps/web-platform/infra/vector.tf | sed -E 's/.*"([^"]+)".*/\1/' || true)
+          v_sha=$(grep -E '^\s*vector_sha256\s*=' apps/web-platform/infra/vector.tf | sed -E 's/.*"([^"]+)".*/\1/' || true)
+          if [[ -n "$v_version" && ! "$v_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: vector_version '$v_version' is not X.Y.Z (no 'v' prefix per packages.timber.io)"; exit 1
+          fi
+          if [[ -n "$v_sha" && ! "$v_sha" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "ERROR: vector_sha256 is not a 64-hex-char SHA256"; exit 1
+          fi
+          printf 'vector_version=%s\n' "$v_version" >> "$GITHUB_OUTPUT"
+          printf 'vector_sha256=%s\n' "$v_sha" >> "$GITHUB_OUTPUT"
 
       - name: Login to GHCR
         uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
@@ -92,6 +105,8 @@ jobs:
           TAG: ${{ steps.tag.outputs.tag }}
           INNGEST_VERSION: ${{ steps.pin.outputs.inngest_version }}
           INNGEST_SHA256: ${{ steps.pin.outputs.inngest_sha256 }}
+          VECTOR_VERSION: ${{ steps.pin.outputs.vector_version }}
+          VECTOR_SHA256: ${{ steps.pin.outputs.vector_sha256 }}
         run: |
           set -euo pipefail
           BUILD_DIR=$(mktemp -d)
@@ -107,17 +122,27 @@ jobs:
           fi
           echo "Build-time SHA256 verified: $actual"
 
-          # Stage bootstrap script with version + SHA baked in at build time.
+          # Stage bootstrap script + Vector config with version + SHA baked
+          # in at build time.
           cp apps/web-platform/infra/inngest-bootstrap.sh "$BUILD_DIR/inngest-bootstrap.sh"
+          cp apps/web-platform/infra/vector.toml "$BUILD_DIR/vector.toml"
 
+          # Conditional Vector env block — empty pin values produce empty
+          # ENV lines, which the bootstrap script's `${VECTOR_CLI_VERSION:-}`
+          # guard treats as "skip Vector install".
           cat > "$BUILD_DIR/Dockerfile" <<DOCKERFILE
           FROM alpine:3.20
           RUN apk add --no-cache bash curl tar coreutils
           ENV INNGEST_CLI_VERSION=${INNGEST_VERSION}
           ENV INNGEST_CLI_SHA256=${INNGEST_SHA256}
+          ENV VECTOR_CLI_VERSION=${VECTOR_VERSION}
+          ENV VECTOR_CLI_SHA256=${VECTOR_SHA256}
           COPY inngest-bootstrap.sh /inngest-bootstrap.sh
+          COPY vector.toml /vector.toml
           RUN chmod +x /inngest-bootstrap.sh
-          ENTRYPOINT ["/inngest-bootstrap.sh"]
+          # The bootstrap script reads /tmp/vector.toml at install time;
+          # stage the OCI-bundled config there at entrypoint invocation.
+          ENTRYPOINT ["/bin/bash", "-c", "cp /vector.toml /tmp/vector.toml && /inngest-bootstrap.sh"]
           DOCKERFILE
 
           docker build -t "$IMAGE:$TAG" "$BUILD_DIR"

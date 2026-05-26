@@ -28,6 +28,17 @@ export interface DsarTableSpec {
    */
   ownerField: string;
   /**
+   * Additional columns that also identify the data subject (OR-
+   * semantics — a row is "owned" by the user when ANY listed column
+   * equals their id). Used by audit-class tables whose rows have
+   * multiple actor positions (e.g. `workspace_member_actions` has
+   * actor_user_id OR target_user_id). The worker reads each column
+   * via a separate `.eq()` chain and merges/dedupes by row id; the
+   * per-row-where lint accepts `.eq("<col>", ...)` on either the
+   * canonical `ownerField` or any column listed here.
+   */
+  additionalOwnerFields?: string[];
+  /**
    * GDPR article(s) under which the rows are exported. `15` is the
    * right-of-access baseline; `15+20` adds portability (machine-
    * readable + reusable) which applies to data the subject themselves
@@ -105,6 +116,26 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
   // trigger + anonymise_scope_grants RPC handle erasure separately.
   scope_grants: { ownerField: "founder_id", article: "15+20" },
 
+  // BYOK delegations ledger (migration 064, PR-A #4232).
+  // Art. 15+20: the grantor explicitly authorised a workspace member
+  // (the grantee) to fund their BYOK runs under a per-day/per-month
+  // cap. The row is the grantor's consent record under Art. 7; the
+  // grantee also has access because they are the data subject on the
+  // other side of the funding contract. additionalOwnerFields handles
+  // the OR-semantics (grantor OR grantee OR created_by OR revoked_by
+  // OR cap_updated_by). The WORM trigger + art_17_anonymise RPC
+  // handle erasure separately.
+  byok_delegations: {
+    ownerField: "grantor_user_id",
+    additionalOwnerFields: [
+      "grantee_user_id",
+      "created_by_user_id",
+      "revoked_by_user_id",
+      "cap_updated_by_user_id",
+    ],
+    article: "15+20",
+  },
+
   // GitHub App installation-token use audit (migration 052, PR-H #3244).
   // Art. 15: controller-collected, not user-provided. RLS owner-select
   // already exposes these rows to the founder via the dashboard; the
@@ -140,6 +171,80 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
   // cascade in account-delete.ts between anonymise_action_sends and
   // anonymise_scope_grants).
   template_authorizations: { ownerField: "founder_id", article: "15+20" },
+
+  // feat-team-workspace-multi-user (migration 053) — organizations the
+  // user owns. ownerField = owner_user_id (direct). Art. 15 only:
+  // backfill-shaped solo organizations have name=NULL; the user did not
+  // "provide" the row, the trigger created it on signup. Post-flag-flip
+  // orgs created by an explicit invite-flow may carry user-provided name
+  // — they remain Art. 15 (the entity-of-record) rather than Art. 20
+  // because the value identifies the corporate context, not the user.
+  organizations: { ownerField: "owner_user_id", article: "15" },
+
+  // feat-team-workspace-multi-user (migration 053) — workspaces the user
+  // is a member of. No direct user_id column — joined via
+  // workspace_members.workspace_id. Art. 15: workspace metadata (name)
+  // identifies the shared context but is not user-provided content.
+  workspaces: {
+    ownerField: "user_id",
+    article: "15",
+    joinVia: {
+      parentTable: "workspace_members",
+      parentJoinColumn: "id", // workspaces.id matches workspace_members.workspace_id
+    },
+  },
+
+  // feat-team-workspace-multi-user (migration 053) — every workspace
+  // membership row the user holds. ownerField = user_id (direct). Art.
+  // 15+20: by accepting an invite (or owning the workspace at signup)
+  // the user provided the membership relation; they retain portability.
+  workspace_members: { ownerField: "user_id", article: "15+20" },
+
+  // feat-team-workspace-multi-user (migration 058) — invite consent
+  // attestations the user accepted. ownerField = invitee_user_id (the
+  // primary owner column tracked here for allowlist-completeness lint).
+  // The export pipeline at dsar-export.ts uses a `.or()` filter on BOTH
+  // invitee_user_id AND inviter_user_id so a departed member's INVITER-
+  // side rows are recovered too (Kieran P1-1 / #4230). assertReadScope
+  // there is two-arm-aware (validates EITHER column matches). Art. 15:
+  // WORM consent record, analogous to tc_acceptances. The Art. 17
+  // anonymise RPC handles erasure separately.
+  workspace_member_attestations: {
+    ownerField: "invitee_user_id",
+    article: "15",
+  },
+
+  // feat-dsar-departed-member-coverage (migration 062, #4230) — WORM
+  // ledger of workspace-member removal events. ownerField =
+  // removed_user_id; rows describe (workspace_id, removed_user_id,
+  // removed_by_user_id, removed_at). The actor (removed_by_user_id) is
+  // co-member audit metadata — when the actor files their own DSAR they
+  // see the removals they performed via the
+  // anonymise_workspace_member_removals Art. 17 cascade NULLing both
+  // PII columns. Art. 15 only: the user did not "provide" this row, the
+  // remove_workspace_member RPC wrote it on the actor's click.
+  // 36-month retention deviates from 24-mo PA-PII envelope; rationale
+  // in ADR-039.
+  workspace_member_removals: {
+    ownerField: "removed_user_id",
+    article: "15",
+  },
+
+  // feat-workspace-member-actions-audit (migration 063, #4231) — append-
+  // only audit log of workspace membership mutations. The user can be
+  // either the actor (an owner who added/removed/role-changed someone)
+  // or the target (the affected member). OR-semantics via
+  // `additionalOwnerFields`: each column gets its own .eq() read chain
+  // in dsar-export.ts; results are merged and deduped by id. Art. 15
+  // only — audit rows are controller-generated evidence, not user-
+  // provided content. WORM trigger + anonymise_workspace_member_actions
+  // RPC handle Art. 17 cascade separately (account-delete.ts step 3.93).
+  // PA-20 of the Article 30 register.
+  workspace_member_actions: {
+    ownerField: "actor_user_id",
+    additionalOwnerFields: ["target_user_id"],
+    article: "15",
+  },
 };
 
 /**
@@ -186,6 +291,19 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "No user-provided content; user_id is the only column and is already " +
     "in the DSAR's auth.users export. Per spec FR8 not enumerated as " +
     "Art. 15 personal data.",
+  // feat-team-workspace-multi-user — `user_session_state` remains
+  // excluded after Phase 7 promotion of organizations + workspaces +
+  // workspace_members + workspace_member_attestations. The single row's
+  // `current_organization_id` is duplicated into the JWT custom claim
+  // `app_metadata.current_organization_id` which is already part of the
+  // auth.users export. No user-provided content; transient UX
+  // preference. ON DELETE CASCADE from auth.users handles Art. 17.
+  user_session_state:
+    "Per-user UX preference (current_organization_id) duplicated in JWT " +
+    "custom claim app_metadata.current_organization_id which is already " +
+    "part of the auth.users export. No user-provided content. ON DELETE " +
+    "CASCADE from auth.users handles Art. 17 erasure.",
+
   tenant_deploy_audit:
     "Multi-tenant deploy substrate orchestration-plane meta-audit log " +
     "(migration 043, ADR-030, plan #3723). v1 single-tenant scope " +

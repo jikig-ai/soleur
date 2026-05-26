@@ -1,6 +1,6 @@
 ---
 name: test-fix-loop
-description: "This skill should be used when autonomously iterating on test failures until all tests pass. It runs the test suite, diagnoses failures, applies minimal fixes, and re-runs in a loop with checkpoint commit isolation."
+description: "This skill should be used when autonomously iterating on test failures: runs the suite, diagnoses, applies minimal fixes, re-runs with checkpoint commit isolation until all tests pass."
 ---
 
 # Test-Fix Loop

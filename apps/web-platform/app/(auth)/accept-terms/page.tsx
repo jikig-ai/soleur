@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { TC_BUMP_METADATA } from "@/lib/legal/tc-version";
 
 export default function AcceptTermsPage() {
   const router = useRouter();
@@ -62,6 +63,34 @@ export default function AcceptTermsPage() {
             {outageBanner}
           </div>
         )}
+
+        {/* Art. 13(3) GDPR — informs returning users of the substantive */}
+        {/* change introduced in TC_VERSION 2.2.0 before re-acceptance.   */}
+        {/* Rendered unconditionally because /accept-terms is only        */}
+        {/* reached when the middleware detected a version mismatch       */}
+        {/* (server side, via Supabase tc_accepted_version SELECT).       */}
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="tc-version-update-banner"
+          className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-3 text-sm text-soleur-text-secondary"
+        >
+          <p className="font-medium text-soleur-text-primary">
+            Updated {TC_BUMP_METADATA.lastUpdated}
+          </p>
+          <p className="mt-1">
+            <strong>{TC_BUMP_METADATA.substantiveChange}.</strong>{" "}
+            <a
+              href={TC_BUMP_METADATA.fullTermsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-soleur-text-link underline-offset-2 hover:underline"
+            >
+              Read the full Terms
+            </a>
+            .
+          </p>
+        </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <label className="flex items-start gap-3 text-sm text-soleur-text-secondary">

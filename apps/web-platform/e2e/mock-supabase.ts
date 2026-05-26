@@ -25,11 +25,40 @@ export const MOCK_USER = {
   updated_at: "2024-01-01T00:00:00Z",
 };
 
+/**
+ * Mint a synthetic JWT-shaped string with a real `iat` claim. The
+ * middleware's revocation gate (#4307) decodes the JWT payload to extract
+ * `iat` and fail-CLOSES the session if it can't. A literal string token
+ * (the prior shape) made every authenticated e2e route redirect to
+ * `/login?revoked=session-error`. The signature is intentionally inert —
+ * the edge decoder is `Unsafe` (no signature check); the test mock
+ * trusts itself.
+ */
+function mintMockJwt(nowSeconds: number): string {
+  const b64url = (obj: object) =>
+    Buffer.from(JSON.stringify(obj))
+      .toString("base64")
+      .replace(/=/g, "")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_");
+  const header = b64url({ alg: "none", typ: "JWT" });
+  const payload = b64url({
+    sub: MOCK_USER.id,
+    aud: "authenticated",
+    role: "authenticated",
+    iat: nowSeconds,
+    exp: nowSeconds + 86400,
+  });
+  return `${header}.${payload}.mock-signature`;
+}
+
+const MOCK_NOW_SECONDS = Math.floor(Date.now() / 1000);
+
 export const MOCK_SESSION = {
-  access_token: "test-access-token",
+  access_token: mintMockJwt(MOCK_NOW_SECONDS),
   token_type: "bearer",
   expires_in: 86400,
-  expires_at: Math.floor(Date.now() / 1000) + 86400,
+  expires_at: MOCK_NOW_SECONDS + 86400,
   refresh_token: "test-refresh-token",
   user: MOCK_USER,
 };
@@ -149,6 +178,22 @@ export function startMockSupabase(port: number): Promise<http.Server> {
       if (url.pathname === "/rest/v1/messages") {
         res.writeHead(200);
         res.end(JSON.stringify([]));
+        return;
+      }
+
+      // ---- RPC endpoints ----
+
+      // #4307 revocation gate: middleware calls this on every authenticated
+      // request and fail-CLOSES with 503 on any error. Return a not-revoked
+      // row so the gate passes for the synthetic e2e user. The RPC's real
+      // SECURITY DEFINER body lives in mig 067_workspace_member_revocation_lookup.
+      if (url.pathname === "/rest/v1/rpc/check_my_revocation") {
+        res.writeHead(200);
+        res.end(
+          JSON.stringify([
+            { revoked: false, workspace_id: null, reason: null },
+          ]),
+        );
         return;
       }
 

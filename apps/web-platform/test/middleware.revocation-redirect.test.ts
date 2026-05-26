@@ -1,0 +1,228 @@
+import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
+import { NextRequest } from "next/server";
+
+// #4307 plan §2.5 / AC1+AC2+AC3+AC8. Verifies the middleware revocation
+// gate: on `check_my_revocation` returning revoked=true, redirects to
+// /login?revoked=<reason> with cleared sb-* cookies (dual-shape, F8) and
+// Cache-Control: no-store. RPC error fails CLOSED (503). Malformed JWT
+// fails CLOSED (302 to /login). PUBLIC_PATHS (/login) skip the gate.
+
+const {
+  mockGetUser,
+  mockGetSession,
+  mockRpc,
+  mockFrom,
+  mockReportEdgeSilentFallback,
+} = vi.hoisted(() => ({
+  mockGetUser: vi.fn(),
+  mockGetSession: vi.fn(),
+  mockRpc: vi.fn(),
+  mockFrom: vi.fn(),
+  mockReportEdgeSilentFallback: vi.fn(),
+}));
+
+vi.mock("@supabase/ssr", () => ({
+  createServerClient: vi.fn(() => ({
+    auth: { getUser: mockGetUser, getSession: mockGetSession },
+    rpc: mockRpc,
+    from: mockFrom,
+  })),
+}));
+
+vi.mock("@/lib/observability-edge", () => ({
+  reportEdgeSilentFallback: mockReportEdgeSilentFallback,
+}));
+
+import { middleware } from "@/middleware";
+
+const SUPABASE_URL = "https://example.supabase.co";
+const SUPABASE_ANON_KEY = "anon-key";
+const USER_ID = "00000000-0000-0000-0000-000000000001";
+
+function makeJwt(iatSeconds: number): string {
+  const header = btoa(JSON.stringify({ alg: "ES256", typ: "JWT" }))
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+  const payload = btoa(
+    JSON.stringify({ iat: iatSeconds, sub: USER_ID, aud: "authenticated" }),
+  )
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+  return `${header}.${payload}.signature`;
+}
+
+function makeRequest(pathname: string, cookies: Record<string, string> = {}): NextRequest {
+  const req = new NextRequest(new URL(`https://app.soleur.ai${pathname}`), {
+    headers: { host: "app.soleur.ai" },
+  });
+  for (const [name, value] of Object.entries(cookies)) {
+    req.cookies.set(name, value);
+  }
+  return req;
+}
+
+function mockTcSelectOk() {
+  // For non-revoked / passthrough cases, the downstream T&C SELECT runs.
+  // Default it to a valid row so the request can return 200 (or T&C redirect).
+  const single = vi.fn().mockResolvedValue({
+    data: { tc_accepted_version: "v0", subscription_status: "active" },
+    error: null,
+  });
+  const eq = vi.fn().mockReturnValue({ single });
+  const select = vi.fn().mockReturnValue({ eq });
+  mockFrom.mockReturnValue({ select });
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.stubEnv("NODE_ENV", "production");
+  vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", SUPABASE_URL);
+  vi.stubEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", SUPABASE_ANON_KEY);
+
+  mockGetUser.mockResolvedValue({
+    data: { user: { id: USER_ID, email: "u@example.com" } },
+    error: null,
+  });
+  const iat = Math.floor(Date.now() / 1000) - 60;
+  mockGetSession.mockResolvedValue({
+    data: { session: { access_token: makeJwt(iat) } },
+    error: null,
+  });
+  // Default: not revoked.
+  mockRpc.mockResolvedValue({
+    data: [{ revoked: false, workspace_id: null, reason: null }],
+    error: null,
+  });
+  mockTcSelectOk();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+describe("middleware #4307 revocation gate", () => {
+  test("revoked=removed → 302 /login?revoked=removed with no-store + cleared sb-* cookies", async () => {
+    mockRpc.mockResolvedValue({
+      data: [
+        {
+          revoked: true,
+          workspace_id: "11111111-1111-1111-1111-111111111111",
+          reason: "removed",
+        },
+      ],
+      error: null,
+    });
+
+    const req = makeRequest("/dashboard", {
+      "sb-access-token": "old.access.tok",
+      "sb-refresh-token": "old.refresh",
+    });
+    const res = await middleware(req);
+
+    expect(res.status).toBe(302);
+    const location = res.headers.get("location");
+    expect(location).toContain("/login");
+    expect(location).toContain("revoked=removed");
+    expect(res.headers.get("cache-control")).toMatch(/no-store/);
+    // Both cookies cleared (maxAge=0 ⇒ Max-Age=0 in serialized set-cookie).
+    const setCookies = res.headers.getSetCookie();
+    expect(setCookies.some((c) => c.startsWith("sb-access-token=") && /Max-Age=0/.test(c))).toBe(true);
+    expect(setCookies.some((c) => c.startsWith("sb-refresh-token=") && /Max-Age=0/.test(c))).toBe(true);
+  });
+
+  test("revoked=role-changed → /login?revoked=role-changed", async () => {
+    mockRpc.mockResolvedValue({
+      data: [
+        {
+          revoked: true,
+          workspace_id: "11111111-1111-1111-1111-111111111111",
+          reason: "role-changed",
+        },
+      ],
+      error: null,
+    });
+    const res = await middleware(makeRequest("/dashboard"));
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toContain("revoked=role-changed");
+  });
+
+  test("F8 dual-shape cookie clear: NEXT_PUBLIC_COOKIE_DOMAIN set → both Domain-less AND Domain= cookie clears", async () => {
+    vi.stubEnv("NEXT_PUBLIC_COOKIE_DOMAIN", ".soleur.ai");
+    mockRpc.mockResolvedValue({
+      data: [{ revoked: true, workspace_id: null, reason: "removed" }],
+      error: null,
+    });
+    const req = makeRequest("/dashboard", { "sb-access-token": "tok" });
+    const res = await middleware(req);
+    const setCookies = res.headers.getSetCookie();
+    const accessTokenClears = setCookies.filter((c) => c.startsWith("sb-access-token=") && /Max-Age=0/.test(c));
+    expect(accessTokenClears.length).toBe(2);
+    expect(accessTokenClears.some((c) => /Domain=\.soleur\.ai/i.test(c))).toBe(true);
+    expect(accessTokenClears.some((c) => !/Domain=/i.test(c))).toBe(true);
+  });
+
+  test("check_my_revocation RPC error → 503 (fail-CLOSED)", async () => {
+    mockRpc.mockResolvedValue({
+      data: null,
+      error: { message: "ECONNRESET", code: "53000" },
+    });
+    const res = await middleware(makeRequest("/dashboard"));
+    expect(res.status).toBe(503);
+    expect(mockReportEdgeSilentFallback).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "ECONNRESET" }),
+      expect.objectContaining({ op: "revocation_gate.db_error" }),
+    );
+  });
+
+  test("malformed JWT (no iat) → 302 /login?revoked=session-error + Sentry mirror", async () => {
+    const header = btoa(JSON.stringify({ alg: "ES256" })).replace(/=/g, "");
+    const payload = btoa(JSON.stringify({ sub: USER_ID })).replace(/=/g, "");
+    mockGetSession.mockResolvedValue({
+      data: { session: { access_token: `${header}.${payload}.sig` } },
+      error: null,
+    });
+    const res = await middleware(makeRequest("/dashboard"));
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toContain("/login");
+    // Neutral copy — not user-hostile "owner removed you" attribution.
+    expect(res.headers.get("location")).toContain("revoked=session-error");
+    expect(mockReportEdgeSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "revocation_gate.no_iat" }),
+    );
+  });
+
+  test("malformed JWT (only 2 segments) → 302 /login?revoked=session-error + malformed_jwt mirror", async () => {
+    mockGetSession.mockResolvedValue({
+      data: { session: { access_token: "only.twoparts" } },
+      error: null,
+    });
+    const res = await middleware(makeRequest("/dashboard"));
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toContain("/login");
+    expect(res.headers.get("location")).toContain("revoked=session-error");
+    expect(mockReportEdgeSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "revocation_gate.malformed_jwt" }),
+    );
+  });
+
+  test("not revoked → revocation gate falls through to T&C check (NOT redirected to /login)", async () => {
+    const res = await middleware(makeRequest("/dashboard"));
+    // T&C SELECT default returns v0/active; current TC_VERSION is unlikely
+    // to be "v0", so the middleware redirects to /accept-terms. The key
+    // assertion is that it does NOT 302 to /login?revoked=...
+    const location = res.headers.get("location") ?? "";
+    expect(location).not.toContain("revoked=");
+  });
+
+  test("/login is in PUBLIC_PATHS — revocation gate skipped, mockRpc never called", async () => {
+    const res = await middleware(makeRequest("/login"));
+    // Public paths short-circuit before getUser/RPC.
+    expect(mockRpc).not.toHaveBeenCalled();
+    // Should NOT be a 302 to /login (already there).
+    expect(res.status).not.toBe(302);
+  });
+});

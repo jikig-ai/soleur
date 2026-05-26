@@ -27,11 +27,15 @@
 // `record_failure` call sites so the existing runbook and tracking issues
 // keep working without remapping. See switch in `probeOauth()` below.
 
-import { promises as dnsPromises } from "node:dns";
 import { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import { createProbeOctokit } from "@/server/github/probe-octokit";
+import {
+  postSentryHeartbeat,
+  type HandlerArgs,
+} from "./_cron-shared";
+import { resolveSupabaseRef } from "@/lib/supabase/resolve-ref";
 import {
   GITHUB_REDIRECT_URI_ERROR_SENTINEL,
   GITHUB_APP_SUSPENDED_SENTINEL,
@@ -42,22 +46,10 @@ const SENTRY_MONITOR_SLUG = "scheduled-oauth-probe";
 
 // Per-fetch timeout matching the GHA `curl --max-time 10`.
 const FETCH_TIMEOUT_MS = 10_000;
-// Sentry heartbeat is a single end-of-job POST; uses the same timeout as
-// the heartbeat in cron-daily-triage.ts:357.
-const SENTRY_HEARTBEAT_TIMEOUT_MS = 10_000;
-
 // Default host fallbacks match the GHA workflow envs verbatim. Doppler
 // `prd` MAY override via APP_HOST / API_HOST.
 const DEFAULT_APP_HOST = "app.soleur.ai";
 const DEFAULT_API_HOST = "api.soleur.ai";
-
-// Validators for env-var-sourced Sentry URL components — identical to
-// cron-daily-triage.ts. A typo in Doppler (e.g., SENTRY_INGEST_DOMAIN
-// containing a query string) would otherwise partially attacker-control
-// the heartbeat URL.
-const SENTRY_DOMAIN_RE = /^[a-z0-9.-]+\.sentry\.io$/i;
-const SENTRY_PROJECT_RE = /^\d+$/;
-const SENTRY_PUBLIC_KEY_RE = /^[a-f0-9]{32}$/;
 
 const ISSUE_TITLE = "[ci/auth-broken] Synthetic OAuth probe failed";
 
@@ -274,20 +266,6 @@ async function checkRedirect(
   return null;
 }
 
-// resolveCname — mimics `dig +short CNAME <host>` head -1 with the
-// trailing `.supabase.co.?` stripped. Used to cross-check the static
-// SUPABASE_PROJECT_REF env var against the live custom-domain CNAME.
-async function resolveSupabaseRefFromCname(apiHost: string): Promise<string | null> {
-  try {
-    const cnames = await dnsPromises.resolveCname(apiHost);
-    if (!cnames.length) return null;
-    const first = cnames[0]!;
-    return first.replace(/\.supabase\.co\.?$/, "");
-  } catch {
-    return null;
-  }
-}
-
 // Main probe — translates the deleted scheduled-oauth-probe GHA workflow
 // (lines 71-422) to TS.
 // Returns the first failure encountered (matching the bash workflow's
@@ -348,7 +326,11 @@ async function probeOauth(): Promise<ProbeResult> {
 
   // 3c. SUPABASE_PROJECT_REF integrity (CNAME deref vs. stored secret).
   // CNAME deref failure → fall back to the secret (better than no probe).
-  const cnameRef = (await resolveSupabaseRefFromCname(apiHost)) ?? supabaseProjectRef;
+  // resolveSupabaseRef is the canonical resolver (bash + TS parity); it
+  // expects the URL form `https://<host>` so the fast-path canonical regex
+  // can apply when API_HOST is already canonical.
+  const cnameRef =
+    (await resolveSupabaseRef(`https://${apiHost}`)) ?? supabaseProjectRef;
   if (cnameRef !== supabaseProjectRef) {
     return {
       failureMode: "supabase_project_ref_drift",
@@ -598,15 +580,6 @@ async function notifyOpsEmail(result: ProbeResult, runUrl: string): Promise<void
   });
 }
 
-interface HandlerArgs {
-  step: { run<T>(name: string, cb: () => Promise<T>): Promise<T> };
-  logger: {
-    info: (...a: unknown[]) => void;
-    warn: (...a: unknown[]) => void;
-    error: (...a: unknown[]) => void;
-  };
-}
-
 export async function cronOauthProbeHandler({
   step,
   logger,
@@ -688,47 +661,12 @@ export async function cronOauthProbeHandler({
   // Step 4: sentry-heartbeat — single end-of-job POST. Shape matches
   // cron-daily-triage.ts:329-371 for monitor-resource continuity.
   await step.run("sentry-heartbeat", async () => {
-    const domain = process.env.SENTRY_INGEST_DOMAIN;
-    const projectId = process.env.SENTRY_PROJECT_ID;
-    const publicKey = process.env.SENTRY_PUBLIC_KEY;
-    if (!domain || !projectId || !publicKey) {
-      logger.info(
-        { fn: "cron-oauth-probe" },
-        "Sentry env unset — skipping heartbeat",
-      );
-      return;
-    }
-    if (
-      !SENTRY_DOMAIN_RE.test(domain) ||
-      !SENTRY_PROJECT_RE.test(projectId) ||
-      !SENTRY_PUBLIC_KEY_RE.test(publicKey)
-    ) {
-      logger.warn(
-        { fn: "cron-oauth-probe" },
-        "Sentry env malformed — skipping heartbeat",
-      );
-      return;
-    }
-    const status = result.failureMode === "" ? "ok" : "error";
-    const url = `https://${domain}/api/${projectId}/cron/${SENTRY_MONITOR_SLUG}/${publicKey}/?status=${status}`;
-    try {
-      await fetch(url, {
-        method: "POST",
-        signal: AbortSignal.timeout(SENTRY_HEARTBEAT_TIMEOUT_MS),
-      });
-    } catch (err) {
-      const e = err as Error;
-      reportSilentFallback(e, {
-        feature: "cron-sentry-heartbeat",
-        op: "fetch",
-        message: "Sentry Crons heartbeat POST failed",
-        extra: {
-          fn: "cron-oauth-probe",
-          status,
-          aborted: e.name === "TimeoutError",
-        },
-      });
-    }
+    await postSentryHeartbeat({
+      ok: result.failureMode === "",
+      sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+      cronName: "cron-oauth-probe",
+      logger,
+    });
   });
 
   return { failureMode: result.failureMode };
@@ -764,7 +702,6 @@ export const __TESTING__ = {
   checkRedirect,
   classifyGithubAuthorizeBody,
   stripLogInjection,
-  resolveSupabaseRefFromCname,
   buildIssueBody,
   handleTrackingIssue,
   notifyOpsEmail,

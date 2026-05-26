@@ -32,11 +32,12 @@ Adopt **Option D — rename-at-boundary via pino `formatters.log()`**.
 
 ### Architectural shape
 
-A single shared helper (`apps/web-platform/server/userid-pseudonymize.ts`) exports `renameUserIdToHash(obj)` and `hashUserIdValue(rawValue): string`. Three consumers depend on it:
+A single shared helper (`apps/web-platform/server/userid-pseudonymize.ts`) exports `renameUserIdToHash(obj)` and `hashUserIdValue(rawValue): string`. Four consumers depend on it (three TS, one VRL):
 
 1. **`observability.ts:hashExtraUserId`** — delegates to the shared helper. Pre-existing per-call helper for `extras` payload sites that go through `reportSilentFallback`/`warnSilentFallback`/`mirrorP0Deduped`.
 2. **`logger.ts:formatters.log`** — wraps the shared helper in a try/catch fail-safe; wired into pino factory. Covers ALL `logger.{error,warn,info,debug}` emissions across the server-side code.
 3. **`sentry-scrub.ts:scrubRecursive`** — adds a `userId`/`user_id` rename special-case before the `SENSITIVE_LOWER.has()` branch. **Deferred to PR-B** (Sentry-side symmetric coverage); architectural contract established here for that PR to follow.
+4. **Vector VRL (`apps/web-platform/infra/vector.toml` `pii_scrub_structured` transform; PR #4293)** — defensive backstop at the journald → Better Stack Logs boundary. Top-level `userId`/`user_id` only (matches the TS scope byte-for-byte per §I2). Reuses `SENTRY_USERID_PEPPER` via VRL `get_env_var("SENTRY_USERID_PEPPER")` and computes `encode_base16(hmac(value, pepper, algorithm: "SHA-256"))` to match TS `crypto.createHmac("sha256", pepper).update(userId).digest("hex")` bit-for-bit (asserted in `apps/web-platform/test/infra/vector-pii-scrub.test.sh` AC4 — openssl + TS `hashUserId` import). Fail-safe: pepper-unset leaves the raw line and tags `+skipped_pepper_unset` (operator-detectable via Better Stack saved query); null userId emits the `pepper_unset_null` sentinel mirroring TS `hashUserIdValue`.
 
 ### Invariants
 

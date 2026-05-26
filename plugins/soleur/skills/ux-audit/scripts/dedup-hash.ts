@@ -23,6 +23,7 @@ export const FINDING_CATEGORIES = [
   "consistency",
   "responsive",
   "comprehension",
+  "anti-slop",
 ] as const;
 
 export type FindingCategory = (typeof FINDING_CATEGORIES)[number];

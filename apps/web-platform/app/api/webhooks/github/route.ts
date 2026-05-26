@@ -16,7 +16,7 @@
 //   Step 5: resolve founderId via github_installation_id mapping; 404
 //           if no founder owns this installation.
 //   Step 6: isGranted(supabase, founderId, actionClass) — fail-closed
-//           on no-grant OR DB-error (log + Sentry + 200 without dispatch).
+//           on no-grant (log + 200) OR DB-error (Sentry via isGranted + 200).
 //   Step 7: inngest.send({ id: github-<deliveryId>, name, v: '1', data }).
 //   Step 8: ON ANY ERROR in steps 5-7 AFTER step 3 INSERT succeeded:
 //           DELETE processed_github_events row (releaseDedupRow mirror)
@@ -38,6 +38,7 @@ import {
   WORKSPACE_RECONCILE_REQUESTED_EVENT,
   WORKSPACE_RECONCILE_SCHEMA_V,
 } from "@/server/session-sync";
+import { sendInngestWithRetry } from "@/server/inngest/send-with-retry";
 
 // Map x-github-event header to the action_class registered in
 // scope_grants. `repository_advisory` and `secret_scanning_alert` both
@@ -282,20 +283,24 @@ export async function POST(request: Request) {
     }
     try {
       const { inngest } = await import("@/server/inngest/client");
-      await inngest.send({
-        id: `github-${deliveryId}`,
-        name: WORKSPACE_RECONCILE_REQUESTED_EVENT,
-        v: WORKSPACE_RECONCILE_SCHEMA_V,
-        data: {
-          founderId,
-          installationId,
-          deliveryId,
-          defaultBranch: reconcilable.defaultBranch,
-          headSha: reconcilable.headSha,
-          beforeSha: reconcilable.beforeSha,
-          pushReceivedAt: Date.now(),
-        },
-      });
+      await sendInngestWithRetry(
+        () =>
+          inngest.send({
+            id: `github-${deliveryId}`,
+            name: WORKSPACE_RECONCILE_REQUESTED_EVENT,
+            v: WORKSPACE_RECONCILE_SCHEMA_V,
+            data: {
+              founderId,
+              installationId,
+              deliveryId,
+              defaultBranch: reconcilable.defaultBranch,
+              headSha: reconcilable.headSha,
+              beforeSha: reconcilable.beforeSha,
+              pushReceivedAt: Date.now(),
+            },
+          }),
+        { feature: "github-webhook", deliveryId },
+      );
     } catch (err) {
       logger.error(
         { err, deliveryId },
@@ -327,15 +332,10 @@ export async function POST(request: Request) {
 
   const grant = await isGranted(supabase, founderId, actionClass);
   if (!grant) {
-    logger.warn(
+    logger.info(
       { founderId, actionClass, deliveryId },
       "GitHub webhook: no active scope_grant — skip inngest.send (fail-closed)",
     );
-    Sentry.captureMessage("GitHub webhook: no active scope_grant", {
-      level: "warning",
-      tags: { feature: "github-webhook", op: "no-grant", actionClass },
-      extra: { founderId, deliveryId },
-    });
     return NextResponse.json({ received: true });
   }
 
@@ -352,20 +352,24 @@ export async function POST(request: Request) {
     // with the INSERT-time redaction in github-on-event.ts.
     const { redactGithubSourcedText } = await import("@/lib/safety/redaction-allowlist");
     const redactedRawBody = redactGithubSourcedText(rawBody);
-    await inngest.send({
-      id: `github-${deliveryId}`,
-      name: actionClass,
-      v: "1",
-      data: {
-        founderId,
-        installationId,
-        deliveryId,
-        githubEvent,
-        action: body.action ?? null,
-        tier: grant.tier,
-        rawBody: redactedRawBody,
-      },
-    });
+    await sendInngestWithRetry(
+      () =>
+        inngest.send({
+          id: `github-${deliveryId}`,
+          name: actionClass,
+          v: "1",
+          data: {
+            founderId,
+            installationId,
+            deliveryId,
+            githubEvent,
+            action: body.action ?? null,
+            tier: grant.tier,
+            rawBody: redactedRawBody,
+          },
+        }),
+      { feature: "github-webhook", deliveryId },
+    );
   } catch (err) {
     logger.error(
       { err, deliveryId, actionClass },

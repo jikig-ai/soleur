@@ -5,15 +5,32 @@ import { usePathname } from "next/navigation";
 import { useEffect } from "react";
 import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse";
 
-const SETTINGS_TABS = [
+interface SettingsTab {
+  href: string;
+  label: string;
+}
+
+const STATIC_SETTINGS_TABS: readonly SettingsTab[] = [
   { href: "/dashboard/settings", label: "General" },
-  { href: "/dashboard/settings/team", label: "Team" },
+  { href: "/dashboard/settings/conversation-names", label: "Conversation names" },
   { href: "/dashboard/settings/services", label: "Integrations" },
   { href: "/dashboard/settings/scope-grants", label: "Scope Grants" },
   { href: "/dashboard/settings/billing", label: "Billing" },
 ] as const;
 
-export function SettingsShell({ children }: { children: React.ReactNode }) {
+// AC-A: when the team-workspace-invite flag is OFF, `membersTab` is null and
+// the Members link href is not constructed here. The server layout evaluates
+// the flag gate and decides what to pass.
+export function SettingsShell({
+  children,
+  membersTab = null,
+}: {
+  children: React.ReactNode;
+  membersTab?: SettingsTab | null;
+}) {
+  const SETTINGS_TABS: readonly SettingsTab[] = membersTab
+    ? [...STATIC_SETTINGS_TABS, membersTab]
+    : STATIC_SETTINGS_TABS;
   const pathname = usePathname();
   const [settingsCollapsed, toggleSettingsCollapsed] = useSidebarCollapse("soleur:sidebar.settings.collapsed");
 

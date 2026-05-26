@@ -1,0 +1,44 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "resource_changes": [
+    {
+      "address": "cloudflare_zero_trust_tunnel_cloudflared_config.web",
+      "mode": "managed",
+      "type": "cloudflare_zero_trust_tunnel_cloudflared_config",
+      "name": "web",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "tunnel_id": "tunnel-uuid",
+          "account_id": "acct-id",
+          "config": [
+            {
+              "ingress_rule": [
+                {"hostname": "deploy.soleur.ai", "service": "ssh://127.0.0.1:22"},
+                {"hostname": "ssh.soleur.ai", "service": "ssh://127.0.0.1:22"},
+                {"service": "http_status:404"}
+              ]
+            }
+          ]
+        },
+        "after": {
+          "tunnel_id": "tunnel-uuid",
+          "account_id": "acct-id",
+          "config": [
+            {
+              "ingress_rule": [
+                {"hostname": "deploy.soleur.ai", "service": "ssh://127.0.0.1:22"},
+                {"service": "http_status:404"}
+              ]
+            }
+          ]
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    }
+  ]
+}

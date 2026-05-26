@@ -75,14 +75,21 @@ the shared `soleur-terraform-state` bucket.
 
 ### Authentication
 
-Fine-grained PAT named `terraform-infra-github-rulesets`, scoped to the
-single repo `jikig-ai/soleur` with `Administration: Read+Write` only.
-Stored in Doppler `prd_terraform/GH_RULESET_PAT` (NOT `GITHUB_TOKEN` —
-that name collides with the magic variable Actions populates). At apply
-time, `doppler run --name-transformer tf-var --` rewrites the env to
-`TF_VAR_gh_token`, which the provider consumes via the sensitive
-`gh_token` variable. The provider marks `token` sensitive, so the value
-never lands in state plaintext.
+**Revised 2026-05-25 (PR #4384):** migrated from PAT auth to App-installation
+auth per `hr-github-app-auth-not-pat`. The current model uses the `soleur-ai`
+App (id `3261325`, installation `122213433`) — see §"Required-check
+inventory" below and `infra/github/main.tf`.
+
+The original PAT framing (kept for audit):
+
+> Fine-grained PAT named `terraform-infra-github-rulesets`, scoped to the
+> single repo `jikig-ai/soleur` with `Administration: Read+Write` only.
+> Was stored in Doppler `prd_terraform/GH_RULESET_PAT` (NOT `GITHUB_TOKEN` —
+> that name collides with the magic variable Actions populates). At apply
+> time, `doppler run --name-transformer tf-var --` rewrote the env to
+> `TF_VAR_gh_token`, which the provider consumed via the sensitive
+> `gh_token` variable. The provider marked `token` sensitive, so the value
+> never landed in state plaintext.
 
 ### Apply discipline
 
@@ -187,6 +194,27 @@ merge commit message to bypass the auto-apply for that merge.
   manual mint + Doppler rotation step. Calendar reminder at +75 days.
   A `scheduled-gh-token-expiry-check.yml` sibling to
   `scheduled-cf-token-expiry-check.yml` is a Tier-3 follow-up.
+  **Superseded 2026-05-25 (PR #4384):** the PAT auth model was migrated
+  to `app_auth` (`soleur-ai` App id `3261325`, installation `122213433`)
+  per active `hr-github-app-auth-not-pat`. App credentials do not rotate
+  operator-side — the rotation-cadence negative is closed. Re-introducing
+  any `var.gh_token`-shape PAT variable is a regression.
+
+### Required-check inventory (Tier 3 — added 2026-05-25 via PR #4384)
+
+| Tier | Context | Workflow | jobs.\<name\> | integration_id |
+| --- | --- | --- | --- | --- |
+| 3 | `enforce` | `.github/workflows/legal-doc-cross-document-gate.yml` | `enforce` | 15368 (Actions) |
+
+The `enforce` job posts on every PR (the `paths:` trigger filter was
+removed in PR #4384 atomically with the required-status promotion); the
+existing `surface_hit=false` short-circuit in the job body keeps non-DSAR
+PRs at O(seconds). Bot PRs created via `GITHUB_TOKEN` (no workflow
+re-trigger) carry the required `enforce` check via the
+`bot-pr-with-synthetic-checks` composite action's `CHECK_NAMES` array
+AND the two inline-synthetic workflows (`scheduled-content-publisher.yml`,
+`scheduled-compound-promote.yml`); `scripts/lint-bot-synthetic-completeness.sh`
+fails closed if a future inline-synthetic workflow omits `enforce`.
 
 ## Escape hatches
 
@@ -227,6 +255,27 @@ This ADR is validated by:
 - **AC16 (post-apply):**
   `gh api repos/jikig-ai/soleur/rulesets/14145388 | jq '.rules[0].parameters.required_status_checks | length'`
   returns `14`.
+
+## Sharp Edges (added 2026-05-25 via PR #4384)
+
+1. **Job-rename without paired Terraform edit silently un-requires the
+   gate.** The `enforce` `context` string in `infra/github/ruleset-ci-required.tf`
+   is the LITERAL `jobs.enforce:` job name at
+   `.github/workflows/legal-doc-cross-document-gate.yml:36`, NOT the
+   workflow display name (`Legal-doc cross-document gate`). A future
+   rename of `jobs.enforce:` MUST include a paired Terraform edit in
+   the SAME PR; same contract as the Tier-1 / Tier-2 entries documented
+   in §Negative — Job-name fragility.
+2. **PAT-auth supersession (`hr-github-app-auth-not-pat`).**
+   `infra/github/main.tf` migrated from PAT auth (the eliminated
+   `var.gh_token`) to `app_auth` in PR #4384 per the active hard rule.
+   Re-introducing any `var.gh_token`-shape variable in any future PR is
+   a regression. Sibling `apps/web-platform/infra/main.tf:72-79` is the
+   reference pattern. The corresponding workflow change
+   (`.github/workflows/apply-github-infra.yml` fetches `GITHUB_APP_ID +
+   GITHUB_APP_PRIVATE_KEY` from Doppler `prd_terraform`, not the
+   deprecated `GH_RULESET_PAT`) MUST stay aligned with the provider
+   block — drift means apply-time `401 Unauthorized`.
 
 ## DHH dissent (kept for re-evaluation)
 

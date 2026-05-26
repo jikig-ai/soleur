@@ -26,7 +26,8 @@ export type AbortKind =
   | "superseded"
   | "user_requested_stop"
   | "account_deleted"
-  | "server_shutdown";
+  | "server_shutdown"
+  | "workspace_membership_revoked";
 
 const ABORT_KINDS: ReadonlySet<AbortKind> = new Set([
   "disconnected",
@@ -34,6 +35,7 @@ const ABORT_KINDS: ReadonlySet<AbortKind> = new Set([
   "user_requested_stop",
   "account_deleted",
   "server_shutdown",
+  "workspace_membership_revoked",
 ]);
 
 /** Custom Error subclass carrying a typed `kind` discriminator. The

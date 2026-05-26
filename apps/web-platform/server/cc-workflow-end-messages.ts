@@ -1,7 +1,7 @@
 // User-facing copy for runner `WorkflowEnd` statuses.
 // Type source is `./soleur-go-runner` — the runner is canonical post-ADR-031
 // amendment (2026-05-15, #3827). The wire-protocol mirror in `@/lib/types`
-// (`WORKFLOW_END_STATUSES`) is now kept in lockstep at 7 statuses via the
+// (`WORKFLOW_END_STATUSES`) is now kept in lockstep at 8 statuses via the
 // bidirectional `_AssertWorkflowEndStatusMatches` rail in `soleur-go-runner.ts`.
 
 import type { WorkflowEnd } from "./soleur-go-runner";
@@ -36,6 +36,12 @@ export const WORKFLOW_END_USER_MESSAGES: Record<WorkflowEndStatus, string> = {
   plugin_load_failure:
     "The agent could not start because a plugin failed to load. Try again shortly.",
   internal_error: "Something went wrong on our side. Try sending the message again.",
+  // #4440 follow-up to #4418 — surfaced to agents/API consumers via
+  // session_ended (terminal family). Human-readable copy points to
+  // operator contact because the deny-list reason is opaque from the
+  // founder's perspective without context.
+  session_revoked:
+    "Your session was revoked by an operator. Contact support to restore access.",
 };
 
 // Compile-time exhaustiveness rail. If a new variant lands in

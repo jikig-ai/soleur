@@ -39,6 +39,27 @@ set -euo pipefail
 : "${SENTRY_ORG:=jikigai}"
 SENTRY_PROJECT="${SENTRY_PROJECT:-}"
 
+# Retry wrapper for Sentry API calls — the org-subdomain intermittently
+# returns 500/timeout on GET /organizations/{org}/ and POST /releases/.
+# Three attempts with 5s/10s backoff covers the transient 500 pattern
+# observed since 2026-05-19. Returns the last attempt's output.
+curl_retry() {
+  local max_attempts=3
+  local attempt=1
+  local backoff=5
+  local result=""
+  while (( attempt <= max_attempts )); do
+    result=$(curl "$@" 2>/dev/null) && break
+    if (( attempt < max_attempts )); then
+      echo "::warning::Sentry API attempt $attempt/$max_attempts failed — retrying in ${backoff}s" >&2
+      sleep "$backoff"
+      backoff=$(( backoff * 2 ))
+    fi
+    attempt=$(( attempt + 1 ))
+  done
+  printf '%s' "$result"
+}
+
 # --- Region detection (skipped if SENTRY_API_HOST is set) -----------------
 # Probe order (PR-β §10.2 widened from `de.sentry.io sentry.io` baseline):
 #   1. ${SENTRY_ORG}.sentry.io — org-subdomain is the ONLY host that works
@@ -84,9 +105,9 @@ fi
 # fixture-of-fixtures complexity.
 if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
   # Gate 1: audit_destination_admin_controllable (org GET returns 200)
-  gate1_body=$(curl -s --max-time 10 \
+  gate1_body=$(curl_retry -s --max-time 10 \
     -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-    "https://${api_host}/api/0/organizations/${SENTRY_ORG}/" 2>/dev/null || echo '')
+    "https://${api_host}/api/0/organizations/${SENTRY_ORG}/")
   if ! jq -e '.id' <<<"$gate1_body" >/dev/null 2>&1; then
     echo "ERROR: Gate 1 (audit_destination_admin_controllable) failed — org ${SENTRY_ORG} not reachable at ${api_host}. Token may lack org:read scope, OR the host rewrites slugs ending in '-eu' (use the org-subdomain ${SENTRY_ORG}.sentry.io as SENTRY_API_HOST instead — see learning 2026-05-17-sentry-eu-region-host-rewrites-slugs-with-eu-suffix.md). Refs #3861." >&2
     exit 1
@@ -94,9 +115,9 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
 
   # Gate 2: audit_project_scope (project GET returns 200) — skipped if no project set
   if [[ -n "$SENTRY_PROJECT" ]]; then
-    gate2_http=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
+    gate2_http=$(curl_retry -s --max-time 10 -o /dev/null -w '%{http_code}' \
       -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-      "https://${api_host}/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/" 2>/dev/null || echo 000)
+      "https://${api_host}/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/")
     if [[ "$gate2_http" != "200" ]]; then
       echo "ERROR: Gate 2 (audit_project_scope) failed — project ${SENTRY_ORG}/${SENTRY_PROJECT} returned HTTP ${gate2_http}. Token may lack project:read scope. Refs #3861." >&2
       exit 1
@@ -106,12 +127,12 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
   # Gate 3: audit_write_probe (POST release, expect 201 only — Kieran P1-4
   # dropped the 208 branch). Cleans up via DELETE on best-effort.
   probe_ver="audit-probe-$(date +%s)-$$"
-  gate3_http=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
+  gate3_http=$(curl_retry -s --max-time 10 -o /dev/null -w '%{http_code}' \
     -X POST \
     -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
     -H "Content-Type: application/json" \
     -d "{\"version\":\"${probe_ver}\",\"projects\":[\"${SENTRY_PROJECT:-web-platform}\"]}" \
-    "https://${api_host}/api/0/organizations/${SENTRY_ORG}/releases/" 2>/dev/null || echo 000)
+    "https://${api_host}/api/0/organizations/${SENTRY_ORG}/releases/")
   if [[ "$gate3_http" != "201" ]]; then
     echo "ERROR: Gate 3 (audit_write_probe) failed — POST release returned HTTP ${gate3_http}, expected 201 (208 branch dropped per Kieran P1-4). Token may lack project:releases scope (Admin level required). Refs #3861." >&2
     exit 1

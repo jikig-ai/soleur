@@ -175,9 +175,11 @@ describe("agent-runner cost capture", () => {
 
     await startAgentSession("user-1", "conv-1", "cpo");
 
+    // Phase 3 (#4229) — usage_update widened with workspaceId.
     expect(mockSendToClient).toHaveBeenCalledWith("user-1", {
       type: "usage_update",
       conversationId: "conv-1",
+      workspaceId: "user-1",
       totalCostUsd: 0.0123,
       inputTokens: 500,
       outputTokens: 150,
@@ -249,9 +251,13 @@ describe("agent-runner cost capture", () => {
       cache_read_delta: 14_000,
       cache_creation_delta: 800,
     });
+    // Phase 3 (#4229) — usage_update widened with workspaceId for
+    // workspace-grain attribution at the client. Under N2 invariant
+    // workspaceId === userId for solo callers.
     expect(mockSendToClient).toHaveBeenCalledWith("user-1", {
       type: "usage_update",
       conversationId: "conv-1",
+      workspaceId: "user-1",
       totalCostUsd: 0.012,
       inputTokens: 521,
       outputTokens: 88,
