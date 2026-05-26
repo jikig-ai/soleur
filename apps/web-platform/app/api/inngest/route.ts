@@ -28,6 +28,7 @@ import { cronDailyTriage } from "@/server/inngest/functions/cron-daily-triage";
 import { cronFollowThroughMonitor } from "@/server/inngest/functions/cron-follow-through-monitor";
 import { cronGithubAppDriftGuard } from "@/server/inngest/functions/cron-github-app-drift-guard";
 import { cronLegalAudit } from "@/server/inngest/functions/cron-legal-audit";
+import { cronUxAudit } from "@/server/inngest/functions/cron-ux-audit";
 import { cronOauthProbe } from "@/server/inngest/functions/cron-oauth-probe";
 import { cronRoadmapReview } from "@/server/inngest/functions/cron-roadmap-review";
 import { cronStaleDeferredScopeOuts } from "@/server/inngest/functions/cron-stale-deferred-scope-outs";
@@ -64,6 +65,7 @@ export const { GET, POST, PUT } = serve({
     cronRoadmapReview,
     cronStaleDeferredScopeOuts,
     cronStrategyReview,
+    cronUxAudit,
     githubOnEvent,
     oneshotGdprGate50dEval,
     workspaceReconcileOnPush,
