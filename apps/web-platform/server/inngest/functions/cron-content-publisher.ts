@@ -171,6 +171,7 @@ export function buildPublisherEnv(ghToken: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
+    NODE_ENV: process.env.NODE_ENV,
     GH_TOKEN: ghToken,
     X_ALLOW_POST: "true",
     LINKEDIN_ALLOW_POST: "true",

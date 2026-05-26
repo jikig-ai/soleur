@@ -331,6 +331,7 @@ export async function cronContentVendorDriftHandler({
 
       const env: NodeJS.ProcessEnv = {
         PATH: process.env.PATH,
+      NODE_ENV: process.env.NODE_ENV,
         HOME: process.env.HOME,
         GH_TOKEN: installationToken,
       };

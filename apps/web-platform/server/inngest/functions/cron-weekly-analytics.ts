@@ -165,6 +165,7 @@ export async function cronWeeklyAnalyticsHandler({
           cwd: repoRoot,
           env: {
             PATH: process.env.PATH ?? "",
+            NODE_ENV: process.env.NODE_ENV ?? "",
             HOME: process.env.HOME ?? "",
             PLAUSIBLE_API_KEY: plausibleApiKey,
             PLAUSIBLE_SITE_ID: plausibleSiteId,
@@ -241,6 +242,7 @@ export async function cronWeeklyAnalyticsHandler({
         env: {
           PATH: process.env.PATH,
           HOME: process.env.HOME,
+          NODE_ENV: process.env.NODE_ENV,
           GH_TOKEN: installationToken,
         },
       });

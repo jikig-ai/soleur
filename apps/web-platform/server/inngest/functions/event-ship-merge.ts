@@ -167,6 +167,7 @@ export async function eventShipMergeHandler({
           env: {
             PATH: process.env.PATH,
             HOME: process.env.HOME,
+            NODE_ENV: process.env.NODE_ENV,
             GH_TOKEN: installationToken,
           },
         },
@@ -276,7 +277,9 @@ export async function eventShipMergeHandler({
       );
     }
 
-    return { ok: spawnResult.ok, pr_number: prNumber };
+    return spawnResult.ok
+      ? { ok: true as const, pr_number: prNumber }
+      : { ok: false as const, reason: "claude-eval-failed" };
   } catch (err) {
     const e = err as Error;
     const redactedMsg = redactToken(e.message ?? "", installationToken);

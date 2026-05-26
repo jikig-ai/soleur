@@ -211,7 +211,7 @@ export async function oneshotF2DeferGateReviewHandler({
       );
     }
 
-    return { ok: spawnResult.ok };
+    return spawnResult.ok ? { ok: true } : { ok: false, reason: "claude-eval-failed" };
   } catch (err) {
     const e = err as Error;
     const redactedMsg = redactToken(e.message ?? "", installationToken);
