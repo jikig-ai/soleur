@@ -228,4 +228,28 @@ describe("POST /api/webhooks/github — push dispatch (#4224)", () => {
     expect(res.status).toBe(500);
     expect(mockDeleteEq).toHaveBeenCalledWith("delivery_id", "delivery-push-1");
   });
+
+  it("retries on transient fetch error and succeeds on push path", async () => {
+    mockInngestSend
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(undefined);
+    const req = makePushRequest({});
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    expect(mockInngestSend).toHaveBeenCalledTimes(2);
+    expect(mockDeleteEq).not.toHaveBeenCalled();
+  });
+
+  it("releases dedup row after all retries exhausted on push path", async () => {
+    const fetchError = new TypeError("fetch failed");
+    mockInngestSend
+      .mockRejectedValueOnce(fetchError)
+      .mockRejectedValueOnce(fetchError)
+      .mockRejectedValueOnce(fetchError);
+    const req = makePushRequest({});
+    const res = await POST(req);
+    expect(res.status).toBe(500);
+    expect(mockInngestSend).toHaveBeenCalledTimes(3);
+    expect(mockDeleteEq).toHaveBeenCalledWith("delivery_id", "delivery-push-1");
+  });
 });
