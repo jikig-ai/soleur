@@ -512,6 +512,59 @@ export async function deleteAccount(
     return { success: false, error: "Account deletion failed. Please try again." };
   }
 
+  // 3.9015 Purge Storage objects for co-member uploads in conversations
+  //        owned by the departing user (#4444). The wide purge at step 3.5
+  //        covers {departingUserId}/... but NOT {coMemberUserId}/{convId}/...
+  //        paths. Non-fatal: identity linkage is already severed at 3.901;
+  //        orphaned bytes are a resource leak, not a compliance violation.
+  try {
+    const { data: ownedConvs } = await service
+      .from("conversations")
+      .select("id")
+      .eq("user_id", userId);
+    const ownedConvIds = (ownedConvs ?? []).map((r) => r.id).filter(Boolean);
+    if (ownedConvIds.length > 0) {
+      let coMemberMsgIds: string[] = [];
+      for (let i = 0; i < ownedConvIds.length; i += 500) {
+        const convBatch = ownedConvIds.slice(i, i + 500);
+        const { data: coMemberMsgs } = await service
+          .from("messages")
+          .select("id")
+          .in("conversation_id", convBatch)
+          .neq("user_id", userId)
+          .not("user_id", "is", null);
+        coMemberMsgIds = coMemberMsgIds.concat(
+          (coMemberMsgs ?? []).map((r) => r.id).filter(Boolean),
+        );
+      }
+      if (coMemberMsgIds.length > 0) {
+        let storagePaths: string[] = [];
+        for (let i = 0; i < coMemberMsgIds.length; i += 500) {
+          const msgBatch = coMemberMsgIds.slice(i, i + 500);
+          const { data: attachRows } = await service
+            .from("message_attachments")
+            .select("storage_path")
+            .in("message_id", msgBatch);
+          storagePaths = storagePaths.concat(
+            (attachRows ?? []).map((r) => r.storage_path).filter(Boolean),
+          );
+        }
+        for (let i = 0; i < storagePaths.length; i += 1000) {
+          const batch = storagePaths.slice(i, i + 1000);
+          await service.storage.from("chat-attachments").remove(batch);
+        }
+      }
+    }
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "purge-shared-conv-attachments",
+      extra: { userId },
+      message:
+        "step 3.9015 co-member Storage purge failed (non-fatal — identity already severed at 3.901)",
+    });
+  }
+
   // 3.905 Anonymise workspace_member_removals (migration 063, #4230).
   //      NULLs removed_user_id + removed_by_user_id for every removal
   //      row where the deleted user appears on either side. Mirrors

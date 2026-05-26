@@ -247,7 +247,8 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // Must not throw. The Approach A + B + .or() changes ensure
       // pipeline traversal succeeds even though Harry no longer has a
       // workspace_members row.
-      const tables = await exportSqlTable(harry.userId, controller.signal);
+      const { randomBytes } = await import("node:crypto");
+      const tables = await exportSqlTable(harry.userId, randomBytes(32), controller.signal);
       expect(tables.length).toBeGreaterThan(0);
     }, 60_000);
 
@@ -255,7 +256,8 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       if (SCHEMA_CACHE_READY === false) return;
       const { exportSqlTable } = await import("@/server/dsar-export");
       const controller = new AbortController();
-      const tables = await exportSqlTable(harry.userId, controller.signal);
+      const { randomBytes } = await import("node:crypto");
+      const tables = await exportSqlTable(harry.userId, randomBytes(32), controller.signal);
       const removals = tables.find((t) => t.table === "workspace_member_removals");
       expect(removals).toBeDefined();
       expect(removals!.rows.length).toBeGreaterThanOrEqual(1);
@@ -274,7 +276,8 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       if (SCHEMA_CACHE_READY === false) return;
       const { exportSqlTable } = await import("@/server/dsar-export");
       const controller = new AbortController();
-      const tables = await exportSqlTable(harry.userId, controller.signal);
+      const { randomBytes } = await import("node:crypto");
+      const tables = await exportSqlTable(harry.userId, randomBytes(32), controller.signal);
       const workspaces = tables.find((t) => t.table === "workspaces");
       expect(workspaces).toBeDefined();
       const left = workspaces!.rows.find(
@@ -287,7 +290,8 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       if (SCHEMA_CACHE_READY === false) return;
       const { exportSqlTable } = await import("@/server/dsar-export");
       const controller = new AbortController();
-      const tables = await exportSqlTable(harry.userId, controller.signal);
+      const { randomBytes } = await import("node:crypto");
+      const tables = await exportSqlTable(harry.userId, randomBytes(32), controller.signal);
       const attestations = tables.find(
         (t) => t.table === "workspace_member_attestations",
       );
