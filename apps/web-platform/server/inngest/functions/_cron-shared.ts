@@ -50,6 +50,20 @@ export async function postSentryHeartbeat(args: {
   logger: HandlerArgs["logger"];
 }): Promise<void> {
   const { ok, sentryMonitorSlug, cronName, logger } = args;
+
+  if (ok) {
+    try {
+      const dir = "/var/lib/inngest/cron-fires";
+      const { mkdir, writeFile } = await import("node:fs/promises");
+      await mkdir(dir, { recursive: true });
+      await writeFile(
+        `${dir}/${sentryMonitorSlug}.json`,
+        JSON.stringify({ last_ok_at: new Date().toISOString(), slug: sentryMonitorSlug }),
+      );
+    } catch {
+      // Best-effort; do not block heartbeat on file-write failure
+    }
+  }
   const domain = process.env.SENTRY_INGEST_DOMAIN;
   const projectId = process.env.SENTRY_PROJECT_ID;
   const publicKey = process.env.SENTRY_PUBLIC_KEY;
