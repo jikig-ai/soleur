@@ -46,11 +46,11 @@ VALUE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --dry-run)    DRY_RUN=1; shift ;;
-    --confirmed) CONFIRMED=1; shift ;;
-    --target)    TARGET_TYPE="$2"; shift 2 ;;
-    --org)       TARGET_ORG="$2"; shift 2 ;;
-    --*)         echo "unknown flag: $1" >&2; exit 2 ;;
+    --dry-run)     DRY_RUN=1; shift ;;
+    --confirmed)   CONFIRMED=1; shift ;;
+    --target)      TARGET_TYPE="$2"; shift 2 ;;
+    --org)         TARGET_ORG="$2"; shift 2 ;;
+    --*)           echo "unknown flag: $1" >&2; exit 2 ;;
     *)
       if [[ -z "$FLAG" ]]; then FLAG="$1"
       elif [[ -z "$ROLE" ]]; then ROLE="$1"

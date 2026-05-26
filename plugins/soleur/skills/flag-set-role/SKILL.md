@@ -54,7 +54,7 @@ bash plugins/soleur/skills/flag-set-role/scripts/flip.sh <flag> <role> <on|off> 
 3. On confirmation, re-run with `--confirmed` (skips the `read -p` prompt, proceeds to write).
 4. On cancel, abort.
 
-**Important:** The agent must NOT run the script without both `--dry-run` and `--confirmed` — running without either flag hits the interactive `read -p` prompt and hangs the agent shell.
+**Important:** The agent must always pass `--dry-run` (for preview) or `--confirmed` (for apply) — never invoke without one of these flags, or the interactive prompt will hang the agent shell.
 
 The script (full procedure in [scripts/flip.sh](./scripts/flip.sh)):
 
