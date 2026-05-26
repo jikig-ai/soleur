@@ -1212,16 +1212,43 @@ Two failure paths exit early instead of looping:
 
 This complements the PreToolUse hook [`.claude/hooks/pre-merge-rebase.sh`](../../../../.claude/hooks/pre-merge-rebase.sh) which fires on certain Bash invocations during the ship flow (commit, push, merge). The hook handles the pre-merge case (branch is behind when auto-merge is FIRST queued); this loop handles the post-merge-queue case (branch becomes behind WHILE the queued auto-merge is waiting on CI). The two surfaces don't overlap — the hook fires on operator-triggered git/gh commands; the poll loop fires on a fixed 60-second cadence regardless of operator activity.
 
-**If state becomes `CLOSED` (not `MERGED`):** Auto-merge was cancelled due to a CI failure.
+**If the poll loop exits due to a required-check failure (PR still OPEN) or CLOSED state:**
+
+First, check the PR state. If CLOSED (merge queue rejection or manual close), skip directly to escalation — auto-fix cannot proceed on a closed PR. The autonomous fix path below applies only when the PR is still OPEN (the primary required-check-failure case).
+
+The agent maintains a `fix_attempt_count` counter (agent-level state, not a bash variable — each Monitor invocation is a fresh shell).
 
 1. Read the failure details:
 
    ```bash
-   gh pr checks --json name,state,description | jq '.[] | select(.state != "SUCCESS")'
+   gh pr checks <number> --json name,state,description,detailsUrl \
+     | jq '.[] | select(.state != "SUCCESS")'
    ```
 
-2. If the failure is in tests: investigate the failing test, fix locally, commit, push, re-queue auto-merge.
-3. If the failure is in a flaky or unrelated check: **Headless mode:** abort the pipeline with a clear error message (do not auto-proceed past failed checks). **Interactive mode:** warn the user and ask whether to proceed or wait for a re-run.
+2. Identify the failing workflow run and read its logs:
+
+   ```bash
+   gh run list --branch <branch> --limit 5 --json databaseId,status,conclusion,workflowName \
+     | jq '.[] | select(.conclusion == "failure")'
+   gh run view <failing-run-id> --log-failed 2>&1 | tail -80
+   ```
+
+3. **If `fix_attempt_count >= 1`:** Escalate to the operator. **Headless mode:** abort with structured error naming the failing check. **Interactive mode:** present failure details and ask whether to investigate manually or abort.
+
+4. **If `fix_attempt_count == 0`:** Increment `fix_attempt_count`. Attempt autonomous fix:
+
+   a. If the failure is in tests or lint: invoke `skill: soleur:test-fix-loop` to diagnose, fix, and commit. After test-fix-loop completes, push and re-queue auto-merge:
+      ```bash
+      git push
+      gh pr merge <number> --squash --auto
+      ```
+      Note: `gh pr reopen` is NOT needed — when auto-merge is cancelled due to CI failure, the PR remains OPEN. Re-queuing auto-merge is sufficient.
+
+   b. If the failure is in a flaky or unrelated check (not reproducible locally): **Headless mode:** abort. **Interactive mode:** ask whether to wait for a re-run or abort.
+
+5. After re-queuing auto-merge, re-invoke the Phase 7 Monitor poll loop from the beginning. The agent carries `fix_attempt_count` across poll invocations.
+
+Note: The DIRTY (merge conflict) exit is already handled inside the poll block — do not duplicate merge conflict resolution here. The CI auto-fix logic is OUTSIDE the Phase 7 poll block (`<!-- phase-7-poll-block:start/end -->` markers) and does NOT affect the mirror in `merge-pr/SKILL.md §5.2`.
 
 **CRITICAL: Do NOT use `--delete-branch` on merge.** The guardrails hook blocks `--delete-branch` whenever ANY worktree exists in the repo -- not just the one for the branch being merged -- so the restriction applies unconditionally during parallel development. Merge with `--squash` only, then `cleanup-merged` handles branch deletion after removing the worktree.
 
@@ -1622,6 +1649,14 @@ This complements the PreToolUse hook [`.claude/hooks/pre-merge-rebase.sh`](../..
    If no matches, skip to Step 4.
 
    **Step 3:** Display the warning and ask: "Run `terraform apply` now, or defer with justification?" If deferred, record the justification in the PR body.
+
+3.8. **Chain to postmerge verification.** After release workflows pass and migration verification completes, invoke `/soleur:postmerge` to verify production health, Sentry cron monitors, and file freshness:
+
+   ```
+   skill: soleur:postmerge <PR-number>
+   ```
+
+   If postmerge reports any FAILED phase (production health, Sentry warning, browser regression), display the failures prominently but do NOT block cleanup — the deploy has already happened; the signal is for immediate operator attention, not rollback.
 
 4. Clean up worktree and local branch:
 
