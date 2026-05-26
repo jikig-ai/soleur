@@ -35,7 +35,17 @@ if ! [[ "$SLUG" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
   exit 1
 fi
 
-PROVISIONING_DIR="provisioning/${SLUG}"
+if ! [[ "$TENANT_ORG" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$ ]]; then
+  echo "Error: tenant-org must be a valid GitHub org name (alphanumerics and hyphens)." >&2
+  exit 1
+fi
+
+if ! [[ "$REVIEWER" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$ ]]; then
+  echo "Error: reviewer must be a valid GitHub username (alphanumerics and hyphens)." >&2
+  exit 1
+fi
+
+PROVISIONING_DIR="provisioning/${SLUG}/github"
 CREATED_RESOURCES=()
 
 cleanup() {
@@ -67,7 +77,7 @@ command -v terraform >/dev/null 2>&1 || { echo "Error: 'terraform' not found." >
 
 DPA_FILE="knowledge-base/legal/tenant-dpa-register.md"
 [[ -f "$DPA_FILE" ]] || { echo "DPA register not found at $DPA_FILE. Run from Soleur monorepo root." >&2; exit 3; }
-awk -F'|' -v slug="$SLUG" '/^\|/ && $2 ~ slug && $7 ~ /dpa-signed|provisioning-in-progress/' "$DPA_FILE" | grep -q . \
+awk -F'|' -v slug="$SLUG" '/^\|/ { gsub(/^ +| +$/, "", $2); if ($2 == slug && $8 ~ /^ *(dpa-signed|provisioning-in-progress) *$/) found=1 } END { exit !found }' "$DPA_FILE" \
   || { echo "No active DPA row for '$SLUG'. Sign DPA (Step 0) first." >&2; exit 3; }
 
 # --- Idempotency check ---
@@ -98,11 +108,11 @@ mkdir -p "$PROVISIONING_DIR"
 
 cat > "${PROVISIONING_DIR}/github.tf" <<TFEOF
 terraform {
-  required_version = ">= 1.5"
+  required_version = ">= 1.6"
 
   backend "s3" {
     bucket                      = "soleur-terraform-state"
-    key                         = "tenants/${SLUG}/provisioning.tfstate"
+    key                         = "tenants/${SLUG}/github.tfstate"
     region                      = "auto"
     endpoints                   = { s3 = "https://4d5ba6f096b2686fbdd404167dd4e125.r2.cloudflarestorage.com" }
     skip_credentials_validation = true
@@ -185,7 +195,7 @@ if $DRY_RUN; then
   echo "--- Copy-pasteable TF apply command ---"
   echo "read -rs -p 'GitHub PAT: ' TF_VAR_github_token && \\"
   echo "  export TF_VAR_github_token && \\"
-  echo "  cd ${PROVISIONING_DIR} && terraform init && terraform apply && \\"
+  echo "  (cd ${PROVISIONING_DIR} && terraform init && terraform apply); \\"
   echo "  unset TF_VAR_github_token"
   echo ""
   echo "--- App install URL (human consent gate, per ToS B.3) ---"
@@ -222,7 +232,7 @@ echo "Run this command in a separate terminal:"
 echo ""
 echo "  read -rs -p 'GitHub PAT: ' TF_VAR_github_token && \\"
 echo "    export TF_VAR_github_token && \\"
-echo "    cd ${PROVISIONING_DIR} && terraform init && terraform apply && \\"
+echo "    (cd ${PROVISIONING_DIR} && terraform init && terraform apply); \\"
 echo "    unset TF_VAR_github_token"
 echo ""
 
@@ -266,11 +276,20 @@ read -p "App installed? Type 'yes': " ACK
 
 # --- Verify App install ---
 
-INSTALL_CHECK=$(gh api "/repos/${TENANT_ORG}/${SLUG}/installation" --jq '.permissions.actions' 2>/dev/null) || true
+INSTALL_JSON=$(gh api "/repos/${TENANT_ORG}/${SLUG}/installation" 2>/dev/null) || true
+INSTALL_CHECK=$(echo "$INSTALL_JSON" | grep -o '"actions":"[^"]*"' | head -1 | cut -d'"' -f4)
+REPO_SELECTION=$(echo "$INSTALL_JSON" | grep -o '"repository_selection":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+if [[ "$REPO_SELECTION" == "all" ]]; then
+  echo "ERROR: App installed org-wide (repository_selection=all). Must be 'selected' (single repo)." >&2
+  echo "Reconfigure: Settings → Integrations → Soleur → Repository access → Only select repositories" >&2
+  exit 1
+fi
+
 if [[ "$INSTALL_CHECK" == "write" ]]; then
-  INSTALL_ID=$(gh api "/repos/${TENANT_ORG}/${SLUG}/installation" --jq '.id' 2>/dev/null)
+  INSTALL_ID=$(echo "$INSTALL_JSON" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
   CREATED_RESOURCES+=("gh api -X DELETE /app/installations/${INSTALL_ID}")
-  echo "Verified: Soleur App installed with actions:write permission."
+  echo "Verified: Soleur App installed with actions:write permission (repository_selection=${REPO_SELECTION:-selected})."
 else
   echo "Warning: Could not verify App installation or permissions." >&2
   echo "Expected permissions.actions = 'write'. Got: '${INSTALL_CHECK:-empty}'" >&2

@@ -35,7 +35,17 @@ if ! [[ "$SLUG" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
   exit 1
 fi
 
-PROVISIONING_DIR="provisioning/${SLUG}"
+if ! [[ "$TENANT_ORG" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$ ]]; then
+  echo "Error: tenant-org must be a valid GitHub org name (alphanumerics and hyphens)." >&2
+  exit 1
+fi
+
+if ! [[ "$TENANT_REPO" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+  echo "Error: tenant-repo must be a valid GitHub repo name." >&2
+  exit 1
+fi
+
+PROVISIONING_DIR="provisioning/${SLUG}/doppler"
 CREATED_RESOURCES=()
 
 cleanup() {
@@ -65,7 +75,7 @@ command -v terraform >/dev/null 2>&1 || { echo "Error: 'terraform' not found." >
 
 DPA_FILE="knowledge-base/legal/tenant-dpa-register.md"
 [[ -f "$DPA_FILE" ]] || { echo "DPA register not found at $DPA_FILE. Run from Soleur monorepo root." >&2; exit 3; }
-awk -F'|' -v slug="$SLUG" '/^\|/ && $2 ~ slug && $7 ~ /dpa-signed|provisioning-in-progress/' "$DPA_FILE" | grep -q . \
+awk -F'|' -v slug="$SLUG" '/^\|/ { gsub(/^ +| +$/, "", $2); if ($2 == slug && $8 ~ /^ *(dpa-signed|provisioning-in-progress) *$/) found=1 } END { exit !found }' "$DPA_FILE" \
   || { echo "No active DPA row for '$SLUG'. Sign DPA (Step 0) first." >&2; exit 3; }
 
 # --- Idempotency check ---
@@ -80,16 +90,13 @@ fi
 
 mkdir -p "$PROVISIONING_DIR"
 
-cat > "${PROVISIONING_DIR}/doppler.tf" <<'TFEOF'
+cat > "${PROVISIONING_DIR}/doppler.tf" <<TFEOF
 terraform {
-  required_version = ">= 1.5"
+  required_version = ">= 1.6"
 
   backend "s3" {
-TFEOF
-
-cat >> "${PROVISIONING_DIR}/doppler.tf" <<TFEOF
     bucket                      = "soleur-terraform-state"
-    key                         = "tenants/${SLUG}/provisioning.tfstate"
+    key                         = "tenants/${SLUG}/doppler.tfstate"
     region                      = "auto"
     endpoints                   = { s3 = "https://4d5ba6f096b2686fbdd404167dd4e125.r2.cloudflarestorage.com" }
     skip_credentials_validation = true
@@ -133,36 +140,6 @@ TFEOF
 
 echo "Generated ${PROVISIONING_DIR}/doppler.tf"
 
-# --- OIDC API commands ---
-
-OIDC_CREATE_CMD="curl -sS -X POST 'https://api.doppler.com/v3/workplace/service_accounts' \\
-  -H 'Authorization: Bearer \$DOPPLER_TOKEN' \\
-  -H 'Content-Type: application/json' \\
-  -d '{\"name\": \"${SLUG}-deploy\", \"workplace_role\": {\"identifier\": \"viewer\"}}'"
-
-OIDC_TRUST_CMD="# After creating the service account, configure OIDC trust:
-# 1. Get the service account slug from the response above
-# 2. Add OIDC identity with two-claim binding:
-curl -sS -X POST 'https://api.doppler.com/v3/workplace/service_accounts/\$SA_SLUG/identity' \\
-  -H 'Authorization: Bearer \$DOPPLER_TOKEN' \\
-  -H 'Content-Type: application/json' \\
-  -d '{
-    \"type\": \"oidc\",
-    \"oidc_identity\": {
-      \"issuer\": \"https://token.actions.githubusercontent.com\",
-      \"subject_claims\": {
-        \"repository_owner\": \"${TENANT_ORG}\",
-        \"environment\": \"production\"
-      }
-    }
-  }'"
-
-OIDC_GRANT_CMD="# Grant the service account access to the tenant project:
-curl -sS -X POST 'https://api.doppler.com/v3/workplace/service_accounts/\$SA_SLUG/projects' \\
-  -H 'Authorization: Bearer \$DOPPLER_TOKEN' \\
-  -H 'Content-Type: application/json' \\
-  -d '{\"project\": \"${SLUG}\", \"role\": \"viewer\"}'"
-
 # --- Dry-run output ---
 
 if $DRY_RUN; then
@@ -175,15 +152,16 @@ if $DRY_RUN; then
   echo "--- Copy-pasteable TF apply command ---"
   echo "read -rs -p 'Doppler token: ' TF_VAR_doppler_bootstrap_token && \\"
   echo "  export TF_VAR_doppler_bootstrap_token && \\"
-  echo "  cd ${PROVISIONING_DIR} && terraform init && terraform apply && \\"
+  echo "  (cd ${PROVISIONING_DIR} && terraform init && terraform apply); \\"
   echo "  unset TF_VAR_doppler_bootstrap_token"
   echo ""
   echo "--- OIDC service-account commands (run after TF apply) ---"
-  echo "$OIDC_CREATE_CMD"
+  echo "curl -sS -X POST 'https://api.doppler.com/v3/workplace/service_accounts' \\"
+  echo "  -H 'Authorization: Bearer \$DOPPLER_TOKEN' \\"
+  echo "  -H 'Content-Type: application/json' \\"
+  echo "  -d '{\"name\": \"${SLUG}-deploy\", \"workplace_role\": {\"identifier\": \"viewer\"}}'"
   echo ""
-  echo "$OIDC_TRUST_CMD"
-  echo ""
-  echo "$OIDC_GRANT_CMD"
+  echo "# Then configure OIDC trust with two-claim binding + grant project access"
   echo ""
   echo "--- Smoke-test ---"
   echo "curl -sS -H 'Authorization: Bearer \$DOPPLER_TOKEN' 'https://api.doppler.com/v3/workplace/service_accounts' | jq '.service_accounts[] | select(.name == \"${SLUG}-deploy\")'"
@@ -214,7 +192,7 @@ echo "Run this command in a separate terminal:"
 echo ""
 echo "  read -rs -p 'Doppler token: ' TF_VAR_doppler_bootstrap_token && \\"
 echo "    export TF_VAR_doppler_bootstrap_token && \\"
-echo "    cd ${PROVISIONING_DIR} && terraform init && terraform apply && \\"
+echo "    (cd ${PROVISIONING_DIR} && terraform init && terraform apply); \\"
 echo "    unset TF_VAR_doppler_bootstrap_token"
 echo ""
 
@@ -231,7 +209,7 @@ fi
 CREATED_RESOURCES+=("doppler projects delete '${SLUG}' --yes")
 echo "Verified: Doppler project '$SLUG' exists."
 
-# --- Step 2: OIDC service-account via API ---
+# --- Step 2: OIDC service-account via API (in subshell for credential quarantine) ---
 
 echo ""
 echo "--- Step 2: OIDC service-account ---"
@@ -240,84 +218,89 @@ echo "Accepting Doppler personal token for API calls (same token used for TF app
 read -rs -p "Doppler personal token: " DOPPLER_TOKEN
 echo ""
 
-SA_RESPONSE=$(
-  curl -sS -X POST "https://api.doppler.com/v3/workplace/service_accounts" \
-    -H "Authorization: Bearer $DOPPLER_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{\"name\": \"${SLUG}-deploy\", \"workplace_role\": {\"identifier\": \"viewer\"}}"
-)
+(
+  export DOPPLER_TOKEN
 
-SA_SLUG=$(echo "$SA_RESPONSE" | grep -o '"slug":"[^"]*"' | head -1 | cut -d'"' -f4)
-if [[ -z "$SA_SLUG" ]]; then
-  echo "Error: Failed to create service account. Response:" >&2
-  echo "$SA_RESPONSE" >&2
-  unset DOPPLER_TOKEN
-  exit 1
-fi
+  SA_RESPONSE=$(
+    curl -sS -X POST "https://api.doppler.com/v3/workplace/service_accounts" \
+      -H "Authorization: Bearer $DOPPLER_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "{\"name\": \"${SLUG}-deploy\", \"workplace_role\": {\"identifier\": \"viewer\"}}"
+  )
 
-CREATED_RESOURCES+=("# Revoke service account: Settings → Service Accounts → ${SLUG}-deploy → Revoke")
-echo "Created service account: ${SLUG}-deploy (slug: $SA_SLUG)"
+  SA_SLUG=$(echo "$SA_RESPONSE" | grep -o '"slug":"[^"]*"' | head -1 | cut -d'"' -f4)
+  if [[ -z "$SA_SLUG" ]]; then
+    echo "Error: Failed to create service account. Response:" >&2
+    echo "$SA_RESPONSE" >&2
+    exit 1
+  fi
 
-# --- Configure OIDC trust binding ---
+  echo "Created service account: ${SLUG}-deploy (slug: $SA_SLUG)"
 
-TRUST_RESPONSE=$(
-  curl -sS -X POST "https://api.doppler.com/v3/workplace/service_accounts/${SA_SLUG}/identity" \
-    -H "Authorization: Bearer $DOPPLER_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{
-      \"type\": \"oidc\",
-      \"oidc_identity\": {
-        \"issuer\": \"https://token.actions.githubusercontent.com\",
-        \"subject_claims\": {
-          \"repository_owner\": \"${TENANT_ORG}\",
-          \"environment\": \"production\"
+  # --- Configure OIDC trust binding ---
+
+  TRUST_RESPONSE=$(
+    curl -sS -X POST "https://api.doppler.com/v3/workplace/service_accounts/${SA_SLUG}/identity" \
+      -H "Authorization: Bearer $DOPPLER_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "{
+        \"type\": \"oidc\",
+        \"oidc_identity\": {
+          \"issuer\": \"https://token.actions.githubusercontent.com\",
+          \"subject_claims\": {
+            \"repository_owner\": \"${TENANT_ORG}\",
+            \"repository\": \"${TENANT_ORG}/${TENANT_REPO}\",
+            \"environment\": \"production\"
+          }
         }
-      }
-    }"
-)
+      }"
+  )
 
-if echo "$TRUST_RESPONSE" | grep -q '"success"'; then
-  echo "Configured OIDC trust: repository_owner=${TENANT_ORG}, environment=production"
-else
-  echo "Warning: OIDC trust binding response:" >&2
-  echo "$TRUST_RESPONSE" >&2
-  echo "Verify manually in Doppler dashboard." >&2
-fi
+  if echo "$TRUST_RESPONSE" | grep -q '"success"'; then
+    echo "Configured OIDC trust: repository=${TENANT_ORG}/${TENANT_REPO}, environment=production"
+  else
+    echo "Warning: OIDC trust binding response:" >&2
+    echo "$TRUST_RESPONSE" >&2
+    echo "Verify manually in Doppler dashboard." >&2
+  fi
 
-# --- Grant project access ---
+  # --- Grant project access ---
 
-GRANT_RESPONSE=$(
-  curl -sS -X POST "https://api.doppler.com/v3/workplace/service_accounts/${SA_SLUG}/projects" \
-    -H "Authorization: Bearer $DOPPLER_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{\"project\": \"${SLUG}\", \"role\": \"viewer\"}"
-)
+  GRANT_RESPONSE=$(
+    curl -sS -X POST "https://api.doppler.com/v3/workplace/service_accounts/${SA_SLUG}/projects" \
+      -H "Authorization: Bearer $DOPPLER_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "{\"project\": \"${SLUG}\", \"role\": \"viewer\"}"
+  )
 
-if echo "$GRANT_RESPONSE" | grep -q '"success"'; then
-  echo "Granted service account access to project '${SLUG}'"
-else
-  echo "Warning: Project grant response:" >&2
-  echo "$GRANT_RESPONSE" >&2
-fi
+  if echo "$GRANT_RESPONSE" | grep -q '"success"'; then
+    echo "Granted service account access to project '${SLUG}'"
+  else
+    echo "Warning: Project grant response:" >&2
+    echo "$GRANT_RESPONSE" >&2
+  fi
 
-# --- Smoke-test ---
+  # --- Smoke-test ---
 
-echo ""
-echo "--- Smoke-test ---"
+  echo ""
+  echo "--- Smoke-test ---"
 
-SA_CHECK=$(
-  curl -sS -H "Authorization: Bearer $DOPPLER_TOKEN" \
-    "https://api.doppler.com/v3/workplace/service_accounts" \
-  | grep -o "\"name\":\"${SLUG}-deploy\""
+  SA_CHECK=$(
+    curl -sS -H "Authorization: Bearer $DOPPLER_TOKEN" \
+      "https://api.doppler.com/v3/workplace/service_accounts" \
+    | grep -o "\"name\":\"${SLUG}-deploy\""
+  )
+
+  if [[ -n "$SA_CHECK" ]]; then
+    echo "Smoke-test passed: service account '${SLUG}-deploy' exists."
+  else
+    echo "Warning: Could not verify service account '${SLUG}-deploy'. Check Doppler dashboard." >&2
+  fi
 )
 
 unset DOPPLER_TOKEN
 
-if [[ -n "$SA_CHECK" ]]; then
-  echo "Smoke-test passed: service account '${SLUG}-deploy' exists."
-else
-  echo "Warning: Could not verify service account '${SLUG}-deploy'. Check Doppler dashboard." >&2
-fi
+CREATED_RESOURCES+=("# Revoke service account: Settings → Service Accounts → ${SLUG}-deploy → Revoke")
 
 echo ""
 echo "NOTE: OIDC trust binding cannot be fully verified locally."

@@ -45,7 +45,7 @@ if ! [[ "$CF_ACCOUNT_ID" =~ ^[a-f0-9]{32}$ ]]; then
   exit 1
 fi
 
-PROVISIONING_DIR="provisioning/${SLUG}"
+PROVISIONING_DIR="provisioning/${SLUG}/cloudflare"
 CREATED_RESOURCES=()
 
 cleanup() {
@@ -74,7 +74,7 @@ command -v terraform >/dev/null 2>&1 || { echo "Error: 'terraform' not found." >
 
 DPA_FILE="knowledge-base/legal/tenant-dpa-register.md"
 [[ -f "$DPA_FILE" ]] || { echo "DPA register not found at $DPA_FILE. Run from Soleur monorepo root." >&2; exit 3; }
-awk -F'|' -v slug="$SLUG" '/^\|/ && $2 ~ slug && $7 ~ /dpa-signed|provisioning-in-progress/' "$DPA_FILE" | grep -q . \
+awk -F'|' -v slug="$SLUG" '/^\|/ { gsub(/^ +| +$/, "", $2); if ($2 == slug && $8 ~ /^ *(dpa-signed|provisioning-in-progress) *$/) found=1 } END { exit !found }' "$DPA_FILE" \
   || { echo "No active DPA row for '$SLUG'. Sign DPA (Step 0) first." >&2; exit 3; }
 
 # --- Idempotency check ---
@@ -91,11 +91,11 @@ mkdir -p "$PROVISIONING_DIR"
 
 cat > "${PROVISIONING_DIR}/cloudflare.tf" <<TFEOF
 terraform {
-  required_version = ">= 1.5"
+  required_version = ">= 1.6"
 
   backend "s3" {
     bucket                      = "soleur-terraform-state"
-    key                         = "tenants/${SLUG}/provisioning.tfstate"
+    key                         = "tenants/${SLUG}/cloudflare.tfstate"
     region                      = "auto"
     endpoints                   = { s3 = "https://4d5ba6f096b2686fbdd404167dd4e125.r2.cloudflarestorage.com" }
     skip_credentials_validation = true
@@ -171,7 +171,7 @@ if $DRY_RUN; then
   echo "--- Copy-pasteable TF apply command ---"
   echo "read -rs -p 'Cloudflare API token: ' TF_VAR_cf_bootstrap_token && \\"
   echo "  export TF_VAR_cf_bootstrap_token && \\"
-  echo "  cd ${PROVISIONING_DIR} && terraform init && terraform apply && \\"
+  echo "  (cd ${PROVISIONING_DIR} && terraform init && terraform apply); \\"
   echo "  unset TF_VAR_cf_bootstrap_token"
   echo ""
   echo "--- Smoke-test (run after TF apply) ---"
@@ -207,7 +207,7 @@ echo "Run this command in a separate terminal:"
 echo ""
 echo "  read -rs -p 'Cloudflare API token: ' TF_VAR_cf_bootstrap_token && \\"
 echo "    export TF_VAR_cf_bootstrap_token && \\"
-echo "    cd ${PROVISIONING_DIR} && terraform init && terraform apply && \\"
+echo "    (cd ${PROVISIONING_DIR} && terraform init && terraform apply); \\"
 echo "    unset TF_VAR_cf_bootstrap_token"
 echo ""
 
@@ -219,13 +219,13 @@ read -p "TF apply complete? Type 'yes': " ACK
 echo ""
 echo "--- Smoke-test: verifying scoped token ---"
 
-cd "$PROVISIONING_DIR"
-VERIFY_RESULT=$(terraform output -raw cf_deploy_token | (
-  read -r TOKEN
-  curl -sS -H "Authorization: Bearer $TOKEN" \
-    https://api.cloudflare.com/client/v4/user/tokens/verify
-))
-cd - >/dev/null
+VERIFY_RESULT=$(
+  cd "$PROVISIONING_DIR" && terraform output -raw cf_deploy_token | (
+    read -r TOKEN
+    curl -sS -H "Authorization: Bearer $TOKEN" \
+      https://api.cloudflare.com/client/v4/user/tokens/verify
+  )
+)
 
 CREATED_RESOURCES+=("cd ${PROVISIONING_DIR} && terraform destroy")
 
@@ -235,19 +235,6 @@ if [[ "$TOKEN_STATUS" == "active" ]]; then
 else
   echo "Warning: Token verify returned status '${TOKEN_STATUS:-unknown}'. Full response:" >&2
   echo "$VERIFY_RESULT" >&2
-fi
-
-# --- Wrangler fallback ---
-
-if command -v wrangler >/dev/null 2>&1; then
-  echo ""
-  echo "Wrangler verify (bonus):"
-  cd "$PROVISIONING_DIR"
-  terraform output -raw cf_deploy_token | (
-    read -r T
-    CLOUDFLARE_API_TOKEN="$T" wrangler whoami 2>&1 || true
-  )
-  cd - >/dev/null
 fi
 
 echo ""
