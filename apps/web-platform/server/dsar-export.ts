@@ -1233,6 +1233,29 @@ export async function exportSqlTable(
     });
   }
 
+  // -- byok_delegation_acceptances (migration 074, #4232 PR-B) ------------
+  if (DSAR_TABLE_ALLOWLIST.byok_delegation_acceptances) {
+    const { data: acceptRows, error: acceptErr } = await service
+      .from("byok_delegation_acceptances")
+      .select("*")
+      .eq("user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (acceptErr)
+      throw new Error(
+        `byok_delegation_acceptances read failed: ${acceptErr.message}`,
+      );
+    assertReadScope(
+      (acceptRows ?? []) as Record<string, unknown>[],
+      expectedUserId,
+      "byok_delegation_acceptances",
+    );
+    results.push({
+      table: "byok_delegation_acceptances",
+      spec: DSAR_TABLE_ALLOWLIST.byok_delegation_acceptances,
+      rows: (acceptRows ?? []) as Record<string, unknown>[],
+    });
+  }
+
   return results;
 }
 

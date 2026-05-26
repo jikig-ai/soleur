@@ -38,6 +38,18 @@ apps/web-platform/lib/supabase/tenant.ts
 # (`mintFounderJwt` chain). Lease never bypasses RLS for tenant data.
 apps/web-platform/server/byok-lease.ts
 
+# BYOK delegation UI resolver — reads byok_delegations + users + audit_byok_use
+# cross-user via service client for grantor/grantee spend aggregation.
+# RLS on byok_delegations is grantor/grantee-scoped; the resolver needs
+# cross-user reads for the funded-pane (grantor sees all grantees' spend).
+apps/web-platform/server/byok-delegation-ui-resolver.ts
+
+# Delegation API routes — service client for workspace membership check,
+# delegation RPC calls (grant/revoke), and delegation lookup in accept route.
+# Accept route uses authenticated client for the INSERT (RLS-enforced).
+apps/web-platform/app/api/workspace/delegations/route.ts
+apps/web-platform/app/api/workspace/delegations/accept/route.ts
+
 # Bulk sweeps in agent-runner.ts at `cleanupOrphanedConversations`
 # and `startInactivityTimer`. Both are staleness-keyed
 # (`last_active < cutoff`) — no per-tenant key, no userId in scope.

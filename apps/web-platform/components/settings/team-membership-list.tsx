@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { TeamMembershipRow } from "@/server/team-membership-resolver";
+import { DelegationToggle } from "@/components/settings/delegation-toggle";
 
 function formatRelative(iso: string): string {
   try {
@@ -27,16 +28,21 @@ export function TeamMembershipList({
   members,
   currentUserId,
   workspaceId,
+  isOwner,
+  byokDelegationsEnabled,
 }: {
   members: readonly TeamMembershipRow[];
   currentUserId: string;
   workspaceId: string;
+  isOwner: boolean;
+  byokDelegationsEnabled: boolean;
 }) {
   return (
     <div>
-      <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-4 border-b border-soleur-border-default px-6 py-2 text-xs font-medium uppercase tracking-wider text-soleur-text-muted">
+      <div className={`grid ${byokDelegationsEnabled ? "grid-cols-[1fr_auto_auto_auto_auto]" : "grid-cols-[1fr_auto_auto_auto]"} items-center gap-4 border-b border-soleur-border-default px-6 py-2 text-xs font-medium uppercase tracking-wider text-soleur-text-muted`}>
         <span>Member</span>
         <span className="text-center">Role</span>
+        {byokDelegationsEnabled && <span className="text-center">Funded</span>}
         <span className="text-right">Added</span>
         <span aria-hidden="true" className="w-6" />
       </div>
@@ -46,6 +52,8 @@ export function TeamMembershipList({
           member={m}
           isCurrentUser={m.userId === currentUserId}
           workspaceId={workspaceId}
+          isOwner={isOwner}
+          byokDelegationsEnabled={byokDelegationsEnabled}
         />
       ))}
     </div>
@@ -56,10 +64,14 @@ function MemberRow({
   member,
   isCurrentUser,
   workspaceId,
+  isOwner,
+  byokDelegationsEnabled,
 }: {
   member: TeamMembershipRow;
   isCurrentUser: boolean;
   workspaceId: string;
+  isOwner: boolean;
+  byokDelegationsEnabled: boolean;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -102,7 +114,7 @@ function MemberRow({
   const showActions = !isCurrentUser;
 
   return (
-    <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-4 border-b border-soleur-border-default px-6 py-4 last:border-b-0">
+    <div className={`grid ${byokDelegationsEnabled ? "grid-cols-[1fr_auto_auto_auto_auto]" : "grid-cols-[1fr_auto_auto_auto]"} items-center gap-4 border-b border-soleur-border-default px-6 py-4 last:border-b-0`}>
       <div className="flex items-center gap-3">
         <div className="h-9 w-9 shrink-0 rounded-full bg-soleur-bg-surface-2" aria-hidden="true" />
         <div className="min-w-0">
@@ -121,6 +133,18 @@ function MemberRow({
       >
         {member.role === "owner" ? "Owner" : "Member"}
       </span>
+      {byokDelegationsEnabled && (
+        <DelegationToggle
+          memberUserId={member.userId}
+          memberEmail={member.email}
+          workspaceId={workspaceId}
+          isOwner={isOwner}
+          delegation={member.delegationFromMe}
+          delegationToMe={member.delegationToMe}
+          isSelf={isCurrentUser}
+          flagEnabled={byokDelegationsEnabled}
+        />
+      )}
       <span className="text-right text-xs text-soleur-text-muted">
         {isCurrentUser ? "— (you)" : formatRelative(member.addedAt)}
       </span>

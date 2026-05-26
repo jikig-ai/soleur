@@ -448,6 +448,22 @@ ADR-038 (`knowledge-base/engineering/architecture/decisions/ADR-038-workspace-me
 
 ---
 
+## Processing Activity 23 — BYOK delegation consent and cost telemetry (PR-B #4508 / #4232)
+
+(PR-B of feat-byok-delegations. PA-23 covers the consent-capture and cost-telemetry surfaces introduced by `byok_delegation_acceptances` (migration 074) and the UI resolver's spend queries over `audit_byok_use.delegation_id`. Sibling to the delegation substrate itself (covered by the DPD Section 2.3(w) disclosure — delegation rows in PA are already covered by the `byok_delegations` DSAR allowlist entry from PR-A). **Brand-survival threshold: single-user incident.** One wrong-workspace delegation row exposing cross-tenant spend data IS brand-survival territory.)
+
+| Art. 30(1) limb | Entry |
+|---|---|
+| **(a) Purpose** | Owner-funded BYOK delegation within shared workspace: Grantor funds Grantee's AI agent runs via delegated API key access with per-day + per-hour USD cap |
+| **(b) Categories of data subjects** | Workspace co-members: Grantor (API key owner) + Grantee (funded co-member) |
+| **(c) Categories of personal data** | Delegation rows (grantor_user_id, grantee_user_id, workspace_id, caps, timestamps, actor IDs); acceptance rows (user_id, delegation_id, accepted_at, side_letter_version, ip_hash, user_agent); cost telemetry via audit_byok_use.delegation_id (token count, cost, agent role) |
+| **(d) Recipients** | Anthropic PBC (processor under Grantor's DPA); Supabase Inc (infrastructure processor — existing sub-processor) |
+| **(e) Transfers** | Existing Anthropic transfer mechanism (DPF + SCCs). No new third-country transfer introduced |
+| **(f) Retention** | 7 years (financial audit trail, matching tc_acceptances). Art. 17 cascade via `anonymise_byok_delegations` (step 5.10) + `anonymise_byok_delegation_acceptances` (step 5.11) in `server/account-delete.ts` |
+| **(g) TOMs** | (1) WORM trigger on `byok_delegation_acceptances` (append-only, `session_replication_role=replica` bypass for Art. 17 only); (2) same-workspace CHECK constraint on `byok_delegations`; (3) RLS: authenticated users SELECT + INSERT own acceptance rows via `auth.uid()`; (4) SECURITY DEFINER RPCs with `search_path = public, pg_temp`; (5) daily + hourly USD cap enforcement; (6) 60s grace window on revocation; (7) feature flag gate (`BYOK_DELEGATIONS_ENABLED`, default OFF) |
+
+---
+
 ## Register Maintenance
 
 - **Review cadence:** Quarterly + event-driven (new processing activity, new sub-processor, new third-country transfer, new technology, new lawful basis, supervisory-authority engagement).

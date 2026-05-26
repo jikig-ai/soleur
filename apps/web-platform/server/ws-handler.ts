@@ -4,7 +4,8 @@ import { parse } from "url";
 import { randomUUID } from "crypto";
 import { basename as pathBasename } from "path";
 
-import { KeyInvalidError, WS_CLOSE_CODES, type PlanTier, type WSMessage, type Conversation } from "@/lib/types";
+import { KeyInvalidError, WS_CLOSE_CODES, type PlanTier, type WSMessage, type Conversation, type WSErrorCode } from "@/lib/types";
+import { ByokDelegationError } from "@/server/byok-resolver";
 import type { ConversationContext } from "@/lib/types";
 import { validateConversationContext } from "./context-validation";
 import { createServiceClient } from "@/lib/supabase/service";
@@ -1776,10 +1777,15 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
               (err) => {
                 Sentry.captureException(err);
                 log.error({ userId, err }, "startAgentSession error");
+                const errorCode: WSErrorCode | undefined = err instanceof KeyInvalidError
+                  ? "key_invalid"
+                  : err instanceof ByokDelegationError
+                    ? `delegation_${err.reason}` as WSErrorCode
+                    : undefined;
                 sendToClient(userId, {
                   type: "error",
                   message: sanitizeErrorForClient(err),
-                  errorCode: err instanceof KeyInvalidError ? "key_invalid" : undefined,
+                  errorCode,
                 });
               },
             );
@@ -1796,7 +1802,14 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         } catch (err) {
           Sentry.captureException(err);
           log.error({ userId, err }, "chat error (deferred creation)");
-          sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
+          const deferredErrorCode: WSErrorCode | undefined = err instanceof ByokDelegationError
+            ? `delegation_${err.reason}` as WSErrorCode
+            : undefined;
+          sendToClient(userId, {
+            type: "error",
+            message: sanitizeErrorForClient(err),
+            errorCode: deferredErrorCode,
+          });
         }
         break;
       }
