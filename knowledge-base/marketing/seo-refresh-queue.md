@@ -105,7 +105,7 @@ Pages that do not exist but should, based on keyword research and competitive po
 
 | Page | Target Keywords | Search Intent | Priority | Status |
 |------|----------------|---------------|----------|--------|
-| **Soleur vs. Anthropic Cowork** | soleur vs cowork, AI agent platform comparison | Commercial | P1 | **PUBLISHED** (2026-03-16). FAQ JSON-LD present. |
+| **Soleur vs. Anthropic Cowork** | soleur vs cowork, AI agent platform comparison | Commercial | P1 | **PUBLISHED** (2026-03-16). FAQ JSON-LD present. generated_date: 2026-05-21 |
 | **Soleur vs. Notion Custom Agents** | soleur vs notion ai, company as a service vs notion | Commercial | P1 | **PUBLISHED** (2026-03-17). |
 | **Soleur vs. Cursor** | soleur vs cursor, cursor automations vs soleur | Commercial | P1 | **PUBLISHED** (2026-03-19). Addresses Automations + Marketplace. |
 | **Soleur vs. Polsia** | soleur vs polsia, autonomous AI company, autopilot vs decision-maker | Commercial | P1 | **PUBLISHED** (2026-03-26). FAQ JSON-LD present. generated_date: 2026-03-26 |

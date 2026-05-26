@@ -1,8 +1,10 @@
 ---
 title: "Soleur vs. Anthropic Cowork: Which AI Agent Platform Is Right for Solo Founders?"
-seoTitle: "Soleur vs. Anthropic Cowork: AI Agent Platform Comparison"
+seoTitle: "Soleur vs. Anthropic Cowork: AI Agent Platform Comparison 2026"
 date: 2026-03-16
+updated: 2026-05-21
 description: "Soleur and Anthropic Cowork both deploy multi-domain AI agents. A comparison of knowledge architecture, workflow depth, cross-domain coherence, and pricing."
+ogImage: "blog/og-soleur-vs-anthropic-cowork.png"
 tags:
   - comparison
   - anthropic-cowork
@@ -16,9 +18,9 @@ This article examines both platforms on the dimensions that matter: knowledge ar
 
 ## What Each Platform Is
 
-**Anthropic Cowork** is [Anthropic's AI work product](https://techcrunch.com/2026/02/24/anthropic-launches-new-push-for-enterprise-agents-with-plugins-for-finance-engineering-and-design/), offering 10 department-specific plugin categories built into the Claude interface: HR, Design, Engineering, Operations, Financial Analysis, Investment Banking, Equity Research, Private Equity, Wealth Management, and Brand Voice. Enterprise connectors include Google Workspace, DocuSign, Apollo, FactSet, LegalZoom, Harvey, Slack, and others. Cowork is included with every Claude subscription — Pro, Team, and Enterprise.
+**Anthropic Cowork** is [Anthropic's AI work product](https://techcrunch.com/2026/02/24/anthropic-launches-new-push-for-enterprise-agents-with-plugins-for-finance-engineering-and-design/), offering 10 department-specific plugin categories built into the Claude interface: HR, Design, Engineering, Operations, Financial Analysis, Investment Banking, Equity Research, Private Equity, Wealth Management, and Brand Voice. Enterprise connectors include Google Workspace, DocuSign, Apollo, FactSet, LegalZoom, Harvey, Slack, and others — 15+ in total. Cowork is included with every Claude subscription — Pro, Team, and Enterprise.
 
-In March 2026, Anthropic's Cowork technology expanded into Microsoft 365. [Microsoft launched Copilot Cowork on March 9, 2026](https://the-decoder.com/microsoft-brings-anthropics-claude-cowork-into-copilot-to-run-tasks-across-outlook-teams-and-excel/), in close collaboration with Anthropic, bringing Claude's Cowork capabilities into Outlook, Teams, and Excel. It is currently in Research Preview, with broader availability planned for late March through the Microsoft Frontier program.
+In March 2026, Anthropic's Cowork technology expanded into Microsoft 365. [Microsoft launched Copilot Cowork on March 9, 2026](https://the-decoder.com/microsoft-brings-anthropics-claude-cowork-into-copilot-to-run-tasks-across-outlook-teams-and-excel/), in close collaboration with Anthropic, bringing Claude's Cowork capabilities into Outlook, Teams, and Excel. The Microsoft 365 E7 bundle — which packages Copilot, Entra Suite, and Agent 365 — became available in May 2026 at $99/user/month.
 
 **Soleur** is an open-source [Company-as-a-Service]({{ site.url }}/company-as-a-service/) platform. It deploys {{ stats.agents }} agents across {{ stats.departments }} business departments — engineering, marketing, legal, finance, operations, product, sales, and support — with a compounding knowledge base that accumulates institutional memory across every session and every domain.
 
@@ -48,7 +50,9 @@ The difference between a collection of specialists and an organization is coordi
 
 Cowork executes individual tasks. Invoke a plugin, provide context, receive output. Multi-step workflows require manual chaining — copy findings from one plugin, provide them as context to the next, maintain consistency yourself across the chain.
 
-Soleur orchestrates complete business processes through structured lifecycle workflows. The brainstorm-plan-implement-review-compound lifecycle runs across every domain. An engineering feature moves through specification, architecture review, implementation, security review, and knowledge capture — in sequence, with full domain context at each stage. A marketing campaign runs through the same structured lifecycle with marketing-domain agents at each step.
+Soleur orchestrates complete business processes through structured lifecycle workflows. The brainstorm → plan → implement → review → compound lifecycle runs across every domain. An engineering feature moves through specification, architecture review, implementation, security review, and knowledge capture — in sequence, with full domain context at each stage, and with artifacts produced at each handoff. A marketing campaign runs through the same structured lifecycle with marketing-domain agents at each step.
+
+What happens *between* the agents matters as much as the agents themselves. Enforced stage handoffs, artifact production per phase, and compounding learnings captured on completion — this is what running a company looks like versus executing a series of tasks.
 
 Microsoft Copilot Cowork adds multi-step plan execution within M365 — users describe intent, Cowork builds a plan and executes it across Outlook, Teams, and Excel. That is a genuine capability advance. The scope remains M365 workflows. The lifecycle management, cross-domain orchestration, and compounding memory that define Soleur's approach do not have an analog in Cowork's current architecture.
 
@@ -75,13 +79,13 @@ Soleur is Apache-2.0 open source. The full codebase is public. Every agent's ins
 | Dimension | Anthropic Cowork | Microsoft Copilot Cowork | Soleur |
 |-----------|-----------------|--------------------------|--------|
 | **Cross-domain knowledge base** | None. Plugins are siloed. | Work IQ: workspace context from emails, files, chats. | Compounding. Grows across every session and every domain. |
-| **Domains covered** | 10 categories: HR, Design, Engineering, Ops, Finance (IB, ER, PE, WM), Brand Voice | Microsoft 365 applications: Outlook, Teams, Excel | 8 departments: Engineering, Marketing, Legal, Finance, Operations, Product, Sales, Support |
-| **Workflow orchestration** | Individual task invocation | Multi-step M365 task execution | Lifecycle workflows (brainstorm → plan → implement → review → compound) |
-| **Pricing** | Included with Claude Pro ($20/mo), Team ($25/seat/mo annual) | $30/user/month add-on; M365 E7 bundle $99/user/month | Free (open source). Paid tier planned. |
+| **Domains covered** | 10 categories: HR, Design, Engineering, Ops, Finance (IB, ER, PE, WM), Brand Voice | Microsoft 365 applications: Outlook, Teams, Excel | {{ stats.departments }} departments: Engineering, Marketing, Legal, Finance, Operations, Product, Sales, Support |
+| **Workflow orchestration** | Individual task invocation | Multi-step M365 task execution | Lifecycle workflows (brainstorm → plan → implement → review → compound) with artifacts at each stage |
+| **Pricing** | Included with Claude Pro ($20/mo), Team ($25/seat/mo annual) | $30/user/month add-on; M365 E7 bundle $99/user/month (available May 2026) | Free (open source). Paid tier planned. |
 | **Open source** | Proprietary | Proprietary | Apache-2.0. Full source code. |
 | **Terminal / Claude Code integration** | Not applicable — web/desktop interface | Not applicable — Microsoft 365 surface | Native — runs inside Claude Code terminal workflow |
-| **Enterprise connectors** | Google Workspace, DocuSign, Apollo, FactSet, LegalZoom, Harvey, Slack | Microsoft 365 native (Outlook, Teams, Excel, SharePoint) | MCP ecosystem via Claude Code |
-| **Current availability** | Live (Pro, Team, Enterprise plans) | Research Preview (late March 2026 Frontier program) | Live (open source) |
+| **Enterprise connectors** | Google Workspace, DocuSign, Apollo, FactSet, LegalZoom, Harvey, Slack (15+) | Microsoft 365 native (Outlook, Teams, Excel, SharePoint) | MCP ecosystem via Claude Code |
+| **Current availability** | Live (Pro, Team, Enterprise plans) | Live (M365 E7 bundle, May 2026) | Live (open source) |
 
 ---
 
@@ -164,7 +168,7 @@ No. Cowork's 10 plugin categories are siloed — the engineering plugin does not
 <details>
 <summary>What is Microsoft Copilot Cowork?</summary>
 
-[Microsoft Copilot Cowork](https://the-decoder.com/microsoft-brings-anthropics-claude-cowork-into-copilot-to-run-tasks-across-outlook-teams-and-excel/) is a collaboration between Microsoft and Anthropic that brings Claude's Cowork capabilities into Microsoft 365 — Outlook, Teams, and Excel. Launched in Research Preview on March 9, 2026, it enables multi-step background task execution within M365 applications. Broader availability is planned for late March 2026 through the Microsoft Frontier program.
+[Microsoft Copilot Cowork](https://the-decoder.com/microsoft-brings-anthropics-claude-cowork-into-copilot-to-run-tasks-across-outlook-teams-and-excel/) is a collaboration between Microsoft and Anthropic that brings Claude's Cowork capabilities into Microsoft 365 — Outlook, Teams, and Excel. Launched in March 2026, it enables multi-step background task execution within M365 applications. The M365 E7 bundle that packages Copilot, Entra Suite, and Agent 365 became available in May 2026 at $99/user/month.
 
 </details>
 
@@ -172,6 +176,13 @@ No. Cowork's 10 plugin categories are siloed — the engineering plugin does not
 <summary>Does Soleur integrate with Microsoft 365?</summary>
 
 Soleur is a terminal-first platform running inside Claude Code. It does not integrate directly with Microsoft 365 applications. If your workflow centers on M365, Microsoft Copilot Cowork is the right choice for that surface. If your workflow centers on the terminal and Claude Code, Soleur provides the cross-domain depth and compounding knowledge that M365 integration does not offer.
+
+</details>
+
+<details>
+<summary>What is the difference between Cowork's workflow and Soleur's lifecycle?</summary>
+
+Cowork executes individual tasks per plugin invocation. You provide context, receive output, then manually carry findings to the next plugin. Soleur's brainstorm → plan → implement → review → compound lifecycle orchestrates multi-step workflows across domains, producing artifacts at each stage and capturing learnings automatically. The lifecycle enforces handoffs and compounds what the system knows from every completed cycle.
 
 </details>
 
@@ -209,7 +220,7 @@ Soleur is a terminal-first platform running inside Claude Code. It does not inte
       "name": "What is Microsoft Copilot Cowork?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Microsoft Copilot Cowork is a collaboration between Microsoft and Anthropic that brings Claude's Cowork capabilities into Microsoft 365 — Outlook, Teams, and Excel. Launched in Research Preview on March 9, 2026, it enables multi-step background task execution within M365 applications."
+        "text": "Microsoft Copilot Cowork is a collaboration between Microsoft and Anthropic that brings Claude's Cowork capabilities into Microsoft 365 — Outlook, Teams, and Excel. Launched in March 2026, it enables multi-step background task execution within M365 applications. The M365 E7 bundle became available in May 2026 at $99/user/month."
       }
     },
     {
@@ -218,6 +229,14 @@ Soleur is a terminal-first platform running inside Claude Code. It does not inte
       "acceptedAnswer": {
         "@type": "Answer",
         "text": "Soleur is a terminal-first platform running inside Claude Code. It does not integrate directly with Microsoft 365 applications. If your workflow centers on M365, Microsoft Copilot Cowork is the better choice for that surface."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What is the difference between Cowork's workflow and Soleur's lifecycle?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Cowork executes individual tasks per plugin invocation. You provide context, receive output, then manually carry findings to the next plugin. Soleur's brainstorm → plan → implement → review → compound lifecycle orchestrates multi-step workflows across domains, producing artifacts at each stage and capturing learnings automatically."
       }
     }
   ]
