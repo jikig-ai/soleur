@@ -223,9 +223,9 @@ fi
 echo "::notice::All ${#REQUIRED[@]} required NEXT_PUBLIC_* secrets present in Doppler prd"
 
 # --- env-fallback mirror invariant (ADR-038 §Fallback semantics) -----------
-# Every RUNTIME_FLAG that uses dual-control MUST have a corresponding env var
-# in Doppler that mirrors the prd-segment Flagsmith state. Without it, the
-# fallback path (Flagsmith outage → env) is broken.
+# Every RUNTIME_FLAG MUST have a corresponding env var in Doppler that mirrors
+# the prd-segment Flagsmith state. Without it, the fallback path (Flagsmith
+# outage → env) is broken.
 MIRROR_FLAGS=("FLAG_TEAM_WORKSPACE_INVITE" "FLAG_BYOK_DELEGATIONS")
 mirror_missing=0
 for flag in "${MIRROR_FLAGS[@]}"; do
