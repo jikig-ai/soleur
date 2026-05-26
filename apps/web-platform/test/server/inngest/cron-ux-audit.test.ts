@@ -1,0 +1,74 @@
+// TR9 PR-11/2 (#4464) — cron-ux-audit handler unit tests.
+//
+// Same shape as cron-legal-audit.test.ts:
+//   1. Registration shape smoke (import loads without throwing).
+//   2. Prompt-canary anchors from the GHA scheduled-ux-audit.yml prompt.
+//   3. Timing constants exported for substrate-extraction parity.
+
+import { describe, expect, it, vi } from "vitest";
+
+vi.hoisted(() => {
+  process.env.NEXT_PHASE = "phase-production-build";
+});
+
+import {
+  cronUxAudit,
+  KILL_ESCALATION_MS,
+  MAX_TURN_DURATION_MS,
+} from "@/server/inngest/functions/cron-ux-audit";
+
+describe("cronUxAudit — registration shape (import-time smoke)", () => {
+  it("loads without throwing (handler + client startup pass)", () => {
+    expect(cronUxAudit).toBeDefined();
+    expect(typeof cronUxAudit).toBe("object");
+  });
+});
+
+describe("cronUxAudit — exported timing constants", () => {
+  it("MAX_TURN_DURATION_MS is 50 minutes (matches sibling claude-eval crons)", () => {
+    expect(MAX_TURN_DURATION_MS).toBe(50 * 60 * 1000);
+  });
+
+  it("KILL_ESCALATION_MS is 5 seconds (SIGTERM → SIGKILL grace)", () => {
+    expect(KILL_ESCALATION_MS).toBe(5_000);
+  });
+});
+
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const SUT_SOURCE = readFileSync(
+  resolve(
+    __dirname,
+    "../../../server/inngest/functions/cron-ux-audit.ts",
+  ),
+  "utf-8",
+);
+
+describe("registration source-shape anchors", () => {
+  it.each([
+    ['id: "cron-ux-audit"', "canonical function id"],
+    ['cron: "0 9 1 * *"', "monthly 1st @ 09:00 UTC schedule"],
+    ['event: "cron/ux-audit.manual-trigger"', "operator manual trigger"],
+    ['scope: "fn"', "fn-scoped serialization"],
+    ['scope: "account"', "account-shared lane (cron-platform)"],
+    ['key: \'"cron-platform"\'', "cross-handler concurrency lane"],
+    ["retries: 1", "no retry storm on agent-loop failure"],
+  ])("source contains %s (%s)", (anchor) => {
+    expect(SUT_SOURCE).toContain(anchor);
+  });
+});
+
+describe("UX_AUDIT_PROMPT — anchor strings (regression-detection)", () => {
+  it.each([
+    ["Run /soleur:ux-audit", "skill-invocation directive"],
+    ["MILESTONE RULE", "rule keyword"],
+    ["CAP_OPEN_ISSUES = 20", "open-issue cap enforcement"],
+    ["CAP_PER_RUN     = 5", "per-run severity-ranked cap"],
+    ["Injection safety:", "agent-output interpolation guard"],
+    ["UX_AUDIT_DRY_RUN", "dry-run env var reference"],
+    ["route-list.yaml", "route list reference"],
+  ])("contains %s (%s)", (anchor) => {
+    expect(SUT_SOURCE).toContain(anchor);
+  });
+});

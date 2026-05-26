@@ -397,6 +397,80 @@ findings were filed but never resolved before ship. This gate enforces the
 fix-inline default at the merge boundary. See rule
 `rf-review-finding-default-fix-inline`.
 
+### Net-Issue-Flow Surfacing (advisory)
+
+Before queueing auto-merge, compute and display the per-PR net-issue-flow:
+how many issues this PR **closes** vs. how many `deferred-scope-out` issues
+it **files**. The display is advisory — it does NOT block merge — but it
+makes the backlog math visible at the last moment when the operator can
+still pivot a filed issue back to inline.
+
+**Why this surface exists.** PR #4452 introduced the cost-of-filing
+auto-flip and concrete-trigger rules; this metric is the observability
+layer that catches regressions in those rules. PRs #4418 and #4440 were on
+track to file 6 deferred-scope-out issues combined; the operator manually
+walked them back to 1 — but only because the math was visible during
+synthesis. Once outside review synthesis, the per-PR delta becomes
+invisible and the backlog accretes silently.
+
+**Detection:**
+
+```bash
+PR_NUMBER=$(gh pr view --json number --jq .number)
+[[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || { echo "Error: PR_NUMBER is not a positive integer: $PR_NUMBER"; exit 1; }
+
+# N: issues this PR closes via `Closes #X` / `Fixes #X` / `Resolves #X`.
+# Body-keyword detection matches /ship Phase 6 issue detection conventions.
+PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq .body)
+CLOSING=$(printf '%s\n' "$PR_BODY" \
+  | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?) #[0-9]+' \
+  | grep -oE '#[0-9]+' \
+  | sort -u \
+  | wc -l)
+
+# M: deferred-scope-out issues opened AFTER the PR was created that cross-reference
+# this PR via `Ref|Closes|Fixes #<N>` in the body. The `created:>=<PR-opened-date>`
+# filter scopes the count to issues filed during THIS PR cycle (not pre-existing
+# scope-outs that merely cross-reference the PR for context). Matches Phase 5.5
+# detection regex.
+PR_CREATED_AT=$(gh pr view "$PR_NUMBER" --json createdAt --jq .createdAt | cut -c1-10)
+FILED=$(gh issue list \
+  --label deferred-scope-out \
+  --state open \
+  --search "created:>=${PR_CREATED_AT}" \
+  --json number,body \
+  --jq '[.[] | select((.body // "") | test("(^|\\s)(Ref|Closes|Fixes) #'"$PR_NUMBER"'(\\s|$|[^0-9])"))] | length')
+
+NET=$(( FILED - CLOSING ))
+```
+
+**Display (always emit, never block):**
+
+```text
+PR net-issue-flow:
+  Closing: <CLOSING> (extracted from `Closes #X` keywords in body)
+  Filing:  <FILED> (count of deferred-scope-out issues created during this PR cycle that Ref #<PR>)
+  Net:     <signed NET> (positive = backlog growth)
+```
+
+**If `NET > 0`** (net-positive backlog growth), print a warning ABOVE the
+PR body in the ship checklist:
+
+```text
+⚠ Net-positive backlog flow: this PR adds +<NET> issues to the deferred-scope-out queue.
+  Before merging, consider whether any of the <FILED> filed issues could be done inline instead.
+  Cost-of-filing gate: ≤30 lines AND ≤2 files → auto-flip to fix-inline (see
+  plugins/soleur/skills/review/SKILL.md "Mechanical pre-CONCUR auto-flip").
+```
+
+The warning is advisory — it does NOT block auto-merge. The pipeline
+continues into Phase 6 immediately after emitting the warning. The point
+is to surface the math at the moment when the operator can still pivot,
+not to add a new merge-blocker (the Review-Findings Exit Gate above
+already covers the "unjustified filing" case).
+
+**Why advisory (not blocking).** Advisory only — legitimate architectural-pivot deferrals can be net-positive and correct.
+
 ### Pre-Ship Domain Review (conditional)
 
 Domain leaders are consulted at brainstorm time but not at ship time. The actual deliverables may have implications the brainstorm couldn't predict. This phase runs three conditional gates in parallel.
@@ -520,8 +594,10 @@ DEPLOY_PIPELINE_FIX_TRIGGERS=(
   "apps/web-platform/infra/canary-bundle-claim-check.sh"
   "apps/web-platform/infra/hooks.json.tmpl"
   "apps/web-platform/infra/deploy-inngest-bootstrap.sudoers"
+  "apps/web-platform/infra/infra-config-apply.sh"
+  "apps/web-platform/infra/push-infra-config.sh"
 )
-DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers)$'
+DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|push-infra-config\.sh)$'
 
 git diff --name-only origin/main...HEAD | grep -E "$DPF_REGEX"
 ```
@@ -1136,16 +1212,43 @@ Two failure paths exit early instead of looping:
 
 This complements the PreToolUse hook [`.claude/hooks/pre-merge-rebase.sh`](../../../../.claude/hooks/pre-merge-rebase.sh) which fires on certain Bash invocations during the ship flow (commit, push, merge). The hook handles the pre-merge case (branch is behind when auto-merge is FIRST queued); this loop handles the post-merge-queue case (branch becomes behind WHILE the queued auto-merge is waiting on CI). The two surfaces don't overlap — the hook fires on operator-triggered git/gh commands; the poll loop fires on a fixed 60-second cadence regardless of operator activity.
 
-**If state becomes `CLOSED` (not `MERGED`):** Auto-merge was cancelled due to a CI failure.
+**If the poll loop exits due to a required-check failure (PR still OPEN) or CLOSED state:**
+
+First, check the PR state. If CLOSED (merge queue rejection or manual close), skip directly to escalation — auto-fix cannot proceed on a closed PR. The autonomous fix path below applies only when the PR is still OPEN (the primary required-check-failure case).
+
+The agent maintains a `fix_attempt_count` counter (agent-level state, not a bash variable — each Monitor invocation is a fresh shell).
 
 1. Read the failure details:
 
    ```bash
-   gh pr checks --json name,state,description | jq '.[] | select(.state != "SUCCESS")'
+   gh pr checks <number> --json name,state,description,detailsUrl \
+     | jq '.[] | select(.state != "SUCCESS")'
    ```
 
-2. If the failure is in tests: investigate the failing test, fix locally, commit, push, re-queue auto-merge.
-3. If the failure is in a flaky or unrelated check: **Headless mode:** abort the pipeline with a clear error message (do not auto-proceed past failed checks). **Interactive mode:** warn the user and ask whether to proceed or wait for a re-run.
+2. Identify the failing workflow run and read its logs:
+
+   ```bash
+   gh run list --branch <branch> --limit 5 --json databaseId,status,conclusion,workflowName \
+     | jq '.[] | select(.conclusion == "failure")'
+   gh run view <failing-run-id> --log-failed 2>&1 | tail -80
+   ```
+
+3. **If `fix_attempt_count >= 1`:** Escalate to the operator. **Headless mode:** abort with structured error naming the failing check. **Interactive mode:** present failure details and ask whether to investigate manually or abort.
+
+4. **If `fix_attempt_count == 0`:** Increment `fix_attempt_count`. Attempt autonomous fix:
+
+   a. If the failure is in tests or lint: invoke `skill: soleur:test-fix-loop` to diagnose, fix, and commit. After test-fix-loop completes, push and re-queue auto-merge:
+      ```bash
+      git push
+      gh pr merge <number> --squash --auto
+      ```
+      Note: `gh pr reopen` is NOT needed — when auto-merge is cancelled due to CI failure, the PR remains OPEN. Re-queuing auto-merge is sufficient.
+
+   b. If the failure is in a flaky or unrelated check (not reproducible locally): **Headless mode:** abort. **Interactive mode:** ask whether to wait for a re-run or abort.
+
+5. After re-queuing auto-merge, re-invoke the Phase 7 Monitor poll loop from the beginning. The agent carries `fix_attempt_count` across poll invocations.
+
+Note: The DIRTY (merge conflict) exit is already handled inside the poll block — do not duplicate merge conflict resolution here. The CI auto-fix logic is OUTSIDE the Phase 7 poll block (`<!-- phase-7-poll-block:start/end -->` markers) and does NOT affect the mirror in `merge-pr/SKILL.md §5.2`.
 
 **CRITICAL: Do NOT use `--delete-branch` on merge.** The guardrails hook blocks `--delete-branch` whenever ANY worktree exists in the repo -- not just the one for the branch being merged -- so the restriction applies unconditionally during parallel development. Merge with `--squash` only, then `cleanup-merged` handles branch deletion after removing the worktree.
 
@@ -1546,6 +1649,14 @@ This complements the PreToolUse hook [`.claude/hooks/pre-merge-rebase.sh`](../..
    If no matches, skip to Step 4.
 
    **Step 3:** Display the warning and ask: "Run `terraform apply` now, or defer with justification?" If deferred, record the justification in the PR body.
+
+3.8. **Chain to postmerge verification.** After release workflows pass and migration verification completes, invoke `/soleur:postmerge` to verify production health, Sentry cron monitors, and file freshness:
+
+   ```
+   skill: soleur:postmerge <PR-number>
+   ```
+
+   If postmerge reports any FAILED phase (production health, Sentry warning, browser regression), display the failures prominently but do NOT block cleanup — the deploy has already happened; the signal is for immediate operator attention, not rollback.
 
 4. Clean up worktree and local branch:
 

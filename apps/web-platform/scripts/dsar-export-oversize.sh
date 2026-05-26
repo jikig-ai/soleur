@@ -127,10 +127,15 @@ fi
 echo "[4/4] Writing manifest + SHA-256 inventory…"
 {
   echo "{"
-  echo '  "schema_version": "1.0.0",'
+  echo '  "schema_version": "1.2.0",'
   echo "  \"generated_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\","
   echo "  \"user_id\": \"${USER_ID}\","
   echo '  "fulfilment_channel": "operator-fallback: dsar-export-oversize.sh",'
+  # #4319 — Art. 15(4) author-only redaction. The operator-fallback path
+  # does NOT apply the per-row predicate (it rsyncs files only). Empty
+  # array here is structural — operator must review manually for any
+  # foreign-author content before delivering the bundle.
+  echo '  "redactions": [],'
   echo '  "serialization": {'
   echo '    "timestamp_format": "ISO 8601 with UTC offset (Z)",'
   echo '    "bytea_encoding": "base64",'

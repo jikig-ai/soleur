@@ -25,6 +25,21 @@ export const WORKFLOW_END_STATUSES = [
   "plugin_load_failure",
   "runner_runaway",
   "internal_error",
+  // #4440 follow-up to #4418 — cross-process JWT-deny propagation to
+  // agent-driven workflows. Emitted when soleur-go-runner / cc-dispatcher
+  // / agent-runner catch a `RuntimeAuthError` with `cause === "denied_jti"`
+  // mid-run. Today only the human WS client receives the discriminated
+  // `revocation_notice` frame (`ws-handler.tenantFor` catch path); agents
+  // running long workflows received a generic `internal_error`, which
+  // is indistinguishable from a transient SDK failure. Adding this
+  // terminal status lets the runner surface the same operator-supplied
+  // `reason` to API/agent consumers and gives them a deterministic
+  // discriminator on which to invalidate cached JWT material before
+  // any retry attempt. Recoverable from the agent's perspective only
+  // in the sense that the underlying session is gone — pairing in
+  // `cc-dispatcher.onWorkflowEnded` routes it to the terminal
+  // `session_ended` family (see TERMINAL_WORKFLOW_END_STATUSES).
+  "session_revoked",
 ] as const;
 export type WorkflowEndStatus = typeof WORKFLOW_END_STATUSES[number];
 
@@ -131,7 +146,12 @@ export type WSErrorCode =
   // SDK CLI's text-editor markers leaked into `text/plain` paste data;
   // image bytes were never attached. Client renders a non-blocking
   // banner asking the user to re-attach the image directly.
-  | "image_paste_lost";
+  | "image_paste_lost"
+  | "delegation_revoked_post_grace"
+  | "delegation_expired"
+  | "delegation_hourly_cap_exceeded"
+  | "delegation_daily_cap_exceeded"
+  | "delegation_cross_tenant";
 
 // Shared WebSocket close codes — single source of truth for server, client, and tests.
 // See: https://developer.mozilla.org/en-US/docs/Web/API/CloseEvent/code (4000-4999 = application-reserved)
@@ -346,6 +366,18 @@ export type WSMessage =
       runnerRunawayReason?: "idle_window" | "max_turn_duration";
       runnerRunawayLastBlockKind?: "text" | "tool_use" | null;
       runnerRunawayLastBlockToolName?: string | null;
+    }
+  // #3930 — cross-process JWT revocation discriminator. Emitted when
+  // ws-handler's `tenantFor` catch site sees a RuntimeAuthError with
+  // cause='denied_jti' AND the founder-side `my_revocation_status()`
+  // confirms a deny-list row. Replaces the generic
+  // "Authentication unavailable; retry shortly" toast with a discriminated
+  // message so the founder understands WHY the session ended.
+  // `reason` is the operator-supplied free-text from `denied_jti.reason`.
+  | {
+      type: "revocation_notice";
+      reason: string | null;
+      deniedAt: string | null;
     };
 
 /**

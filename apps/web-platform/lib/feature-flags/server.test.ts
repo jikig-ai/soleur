@@ -18,15 +18,17 @@ import {
   getFlag,
   getRuntimeFlag,
   getFeatureFlags,
-  getTeamWorkspaceAllowlist,
   isTeamWorkspaceInviteEnabled,
+  isByokDelegationsEnabled,
   ANON_IDENTITY,
   __resetFeatureFlagsForTests,
   type Identity,
 } from "./server";
 
-const PRD_USER: Identity = { userId: "user-prd-1", role: "prd" };
-const DEV_USER: Identity = { userId: "user-dev-1", role: "dev" };
+const PRD_USER: Identity = { userId: "user-prd-1", role: "prd", orgId: null };
+const DEV_USER: Identity = { userId: "user-dev-1", role: "dev", orgId: null };
+const ORG_USER: Identity = { userId: "user-org-1", role: "prd", orgId: "org-123" };
+const ORG_DEV: Identity = { userId: "user-dev-2", role: "dev", orgId: "org-456" };
 
 const ORIGINAL_ENV = process.env;
 
@@ -54,15 +56,10 @@ describe("getFlag (env-only, sync)", () => {
       expect(getFlag("dev-signin")).toBe(false);
     }
   });
-
-  it("includes team-workspace-invite as a registered env flag", () => {
-    process.env.FLAG_TEAM_WORKSPACE_INVITE = "1";
-    expect(getFlag("team-workspace-invite")).toBe(true);
-  });
 });
 
 describe("getRuntimeFlag — identity-aware", () => {
-  it("passes role-prefixed identifier and role trait to Flagsmith (no userId leakage)", async () => {
+  it("passes role-prefixed identifier and role trait to Flagsmith with transient=true", async () => {
     process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
     mockGetIdentityFlags.mockResolvedValueOnce({
       isFeatureEnabled: () => true,
@@ -70,7 +67,7 @@ describe("getRuntimeFlag — identity-aware", () => {
 
     await getRuntimeFlag("kb-chat-sidebar", DEV_USER);
 
-    expect(mockGetIdentityFlags).toHaveBeenCalledWith("role:dev", { role: "dev" });
+    expect(mockGetIdentityFlags).toHaveBeenCalledWith("role:dev", { role: "dev" }, true);
   });
 
   it("returns role-specific values for same flag", async () => {
@@ -84,7 +81,7 @@ describe("getRuntimeFlag — identity-aware", () => {
     await expect(getRuntimeFlag("kb-chat-sidebar", PRD_USER)).resolves.toBe(false);
   });
 
-  it("caches per-role: two prd calls = 1 SDK hit; one prd + one dev = 2", async () => {
+  it("caches per (role,orgId): two same-key calls = 1 SDK hit; different key = 2", async () => {
     process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
     mockGetIdentityFlags.mockResolvedValue({ isFeatureEnabled: () => true });
 
@@ -96,13 +93,13 @@ describe("getRuntimeFlag — identity-aware", () => {
     expect(mockGetIdentityFlags).toHaveBeenCalledTimes(2);
   });
 
-  it("anonymous identity is forwarded with role=prd", async () => {
+  it("anonymous identity is forwarded with role=prd and transient=true", async () => {
     process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
     mockGetIdentityFlags.mockResolvedValueOnce({ isFeatureEnabled: () => true });
 
     await getRuntimeFlag("kb-chat-sidebar", ANON_IDENTITY);
 
-    expect(mockGetIdentityFlags).toHaveBeenCalledWith("role:prd", { role: "prd" });
+    expect(mockGetIdentityFlags).toHaveBeenCalledWith("role:prd", { role: "prd" }, true);
   });
 
   it("anonymous calls share the prd cache bucket (no second SDK hit)", async () => {
@@ -144,8 +141,6 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
   it("merges env-flag values with identity-resolved runtime-flag values", async () => {
     process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
     process.env.FLAG_DEV_SIGNIN = "1";
-    process.env.FLAG_TEAM_WORKSPACE_INVITE = "0";
-    process.env.FLAG_KB_CHAT_SIDEBAR = "0";
     mockGetIdentityFlags.mockResolvedValueOnce({
       isFeatureEnabled: (name: string) => name === "kb-chat-sidebar",
     });
@@ -162,15 +157,16 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
   it("anonymous returns prd snapshot + env-only flags", async () => {
     delete process.env.FLAGSMITH_ENVIRONMENT_KEY;
     process.env.FLAG_DEV_SIGNIN = "0";
-    process.env.FLAG_TEAM_WORKSPACE_INVITE = "0";
     process.env.FLAG_KB_CHAT_SIDEBAR = "1";
+    process.env.FLAG_TEAM_WORKSPACE_INVITE = "1";
+    process.env.FLAG_BYOK_DELEGATIONS = "1";
 
     const flags = await getFeatureFlags(ANON_IDENTITY);
     expect(flags).toEqual({
       "dev-signin": false,
-      "team-workspace-invite": false,
+      "team-workspace-invite": true,
       "kb-chat-sidebar": true,
-      "byok-delegations": false,
+      "byok-delegations": true,
     });
   });
 
@@ -179,6 +175,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
     delete process.env.FLAG_KB_CHAT_SIDEBAR;
     delete process.env.FLAG_DEV_SIGNIN;
     delete process.env.FLAG_TEAM_WORKSPACE_INVITE;
+    delete process.env.FLAG_BYOK_DELEGATIONS;
 
     const flags = await getFeatureFlags(ANON_IDENTITY);
     expect(flags).toEqual({
@@ -190,78 +187,124 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
   });
 });
 
-describe("getTeamWorkspaceAllowlist", () => {
-  it("returns empty set when env var unset", () => {
-    delete process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS;
-    expect(getTeamWorkspaceAllowlist().size).toBe(0);
+describe("isTeamWorkspaceInviteEnabled (async, single-control)", () => {
+  it("returns true when Flagsmith=ON", async () => {
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+    mockGetIdentityFlags.mockResolvedValue({
+      isFeatureEnabled: (n: string) => n === "team-workspace-invite",
+    });
+    await expect(isTeamWorkspaceInviteEnabled("org-jikigai", ORG_USER)).resolves.toBe(true);
   });
 
-  it("returns empty set when env var is empty string", () => {
-    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "";
-    expect(getTeamWorkspaceAllowlist().size).toBe(0);
+  it("returns false when Flagsmith=OFF", async () => {
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+    mockGetIdentityFlags.mockResolvedValue({
+      isFeatureEnabled: () => false,
+    });
+    await expect(isTeamWorkspaceInviteEnabled("org-jikigai", ORG_USER)).resolves.toBe(false);
   });
 
-  it("parses a single org id", () => {
-    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-1";
-    const set = getTeamWorkspaceAllowlist();
-    expect(set.has("org-1")).toBe(true);
-    expect(set.size).toBe(1);
+  it("returns false when orgId is empty", async () => {
+    await expect(isTeamWorkspaceInviteEnabled("", ORG_USER)).resolves.toBe(false);
   });
 
-  it("parses comma-separated org ids and trims whitespace", () => {
-    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-1, org-2 ,  org-3";
-    const set = getTeamWorkspaceAllowlist();
-    expect(set.has("org-1")).toBe(true);
-    expect(set.has("org-2")).toBe(true);
-    expect(set.has("org-3")).toBe(true);
-    expect(set.size).toBe(3);
-  });
-
-  it("filters out empty segments from doubled commas", () => {
-    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-1,,org-2,";
-    const set = getTeamWorkspaceAllowlist();
-    expect(set.size).toBe(2);
-    expect(set.has("")).toBe(false);
-  });
-
-  it("re-parses when the env var value changes (cache keyed on raw value)", () => {
-    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-1";
-    expect(getTeamWorkspaceAllowlist().has("org-1")).toBe(true);
-    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-2";
-    const set = getTeamWorkspaceAllowlist();
-    expect(set.has("org-2")).toBe(true);
-    expect(set.has("org-1")).toBe(false);
+  it("Flagsmith outage → env-fallback", async () => {
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+    process.env.FLAG_TEAM_WORKSPACE_INVITE = "1";
+    mockGetIdentityFlags.mockRejectedValue(new Error("outage"));
+    await expect(isTeamWorkspaceInviteEnabled("org-jikigai", ORG_USER)).resolves.toBe(true);
   });
 });
 
-describe("isTeamWorkspaceInviteEnabled", () => {
-  it("returns false when flag is OFF (even if org is allowlisted) — AC-F", () => {
-    delete process.env.FLAG_TEAM_WORKSPACE_INVITE;
-    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-jikigai";
-    expect(isTeamWorkspaceInviteEnabled("org-jikigai")).toBe(false);
+describe("isByokDelegationsEnabled (async, single-control)", () => {
+  it("returns true when Flagsmith=ON", async () => {
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+    mockGetIdentityFlags.mockResolvedValue({
+      isFeatureEnabled: (n: string) => n === "byok-delegations",
+    });
+    await expect(isByokDelegationsEnabled("org-123", ORG_USER)).resolves.toBe(true);
   });
 
-  it("returns false when flag is ON but allowlist empty — AC-F", () => {
-    process.env.FLAG_TEAM_WORKSPACE_INVITE = "1";
-    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "";
-    expect(isTeamWorkspaceInviteEnabled("org-jikigai")).toBe(false);
+  it("returns false when Flagsmith=OFF", async () => {
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+    mockGetIdentityFlags.mockResolvedValue({
+      isFeatureEnabled: () => false,
+    });
+    await expect(isByokDelegationsEnabled("org-123", ORG_USER)).resolves.toBe(false);
   });
 
-  it("returns false when flag is ON but orgId not in allowlist — AC-F", () => {
-    process.env.FLAG_TEAM_WORKSPACE_INVITE = "1";
-    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-jikigai,org-other";
-    expect(isTeamWorkspaceInviteEnabled("org-not-listed")).toBe(false);
+  it("returns false when orgId is null", async () => {
+    await expect(isByokDelegationsEnabled(null, PRD_USER)).resolves.toBe(false);
   });
 
-  it("returns true only when BOTH keys evaluate true — AC-F", () => {
-    process.env.FLAG_TEAM_WORKSPACE_INVITE = "1";
-    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-jikigai";
-    expect(isTeamWorkspaceInviteEnabled("org-jikigai")).toBe(true);
+  it("Flagsmith outage → env-fallback", async () => {
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+    process.env.FLAG_BYOK_DELEGATIONS = "1";
+    mockGetIdentityFlags.mockRejectedValue(new Error("outage"));
+    await expect(isByokDelegationsEnabled("org-123", ORG_USER)).resolves.toBe(true);
+  });
+});
+
+describe("getRuntimeFlag — orgId trait forwarding + LRU", () => {
+  it("passes orgId in traits and transient=true when orgId present", async () => {
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+    mockGetIdentityFlags.mockResolvedValue({ isFeatureEnabled: () => true });
+
+    await getRuntimeFlag("team-workspace-invite", ORG_USER);
+
+    expect(mockGetIdentityFlags).toHaveBeenCalledWith(
+      "org:org-123:prd",
+      { role: "prd", orgId: "org-123" },
+      true,
+    );
   });
 
-  it("returns false for empty orgId argument", () => {
-    process.env.FLAG_TEAM_WORKSPACE_INVITE = "1";
-    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-jikigai";
-    expect(isTeamWorkspaceInviteEnabled("")).toBe(false);
+  it("uses role-only identifier when orgId is null", async () => {
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+    mockGetIdentityFlags.mockResolvedValue({ isFeatureEnabled: () => true });
+
+    await getRuntimeFlag("team-workspace-invite", PRD_USER);
+
+    expect(mockGetIdentityFlags).toHaveBeenCalledWith(
+      "role:prd",
+      { role: "prd" },
+      true,
+    );
+  });
+
+  it("LRU cache key is (role,orgId) — same pair = cache hit, different orgId = miss", async () => {
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+    mockGetIdentityFlags.mockResolvedValue({ isFeatureEnabled: () => true });
+
+    const user1: Identity = { userId: "u1", role: "prd", orgId: "org-A" };
+    const user2: Identity = { userId: "u2", role: "prd", orgId: "org-A" };
+    const user3: Identity = { userId: "u3", role: "prd", orgId: "org-B" };
+
+    await getRuntimeFlag("team-workspace-invite", user1);
+    await getRuntimeFlag("team-workspace-invite", user2);
+    expect(mockGetIdentityFlags).toHaveBeenCalledTimes(1);
+
+    await getRuntimeFlag("team-workspace-invite", user3);
+    expect(mockGetIdentityFlags).toHaveBeenCalledTimes(2);
+  });
+
+  it("LRU eviction at FLAGSMITH_CACHE_MAX_ENTRIES=3", async () => {
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+    process.env.FLAGSMITH_CACHE_MAX_ENTRIES = "3";
+    __resetFeatureFlagsForTests();
+    mockGetIdentityFlags.mockResolvedValue({ isFeatureEnabled: () => true });
+
+    const ids: Identity[] = [
+      { userId: "u1", role: "prd", orgId: "org-1" },
+      { userId: "u2", role: "prd", orgId: "org-2" },
+      { userId: "u3", role: "prd", orgId: "org-3" },
+      { userId: "u4", role: "prd", orgId: "org-4" },
+    ];
+
+    for (const id of ids) await getRuntimeFlag("team-workspace-invite", id);
+    expect(mockGetIdentityFlags).toHaveBeenCalledTimes(4);
+
+    await getRuntimeFlag("team-workspace-invite", ids[0]!);
+    expect(mockGetIdentityFlags).toHaveBeenCalledTimes(5);
   });
 });

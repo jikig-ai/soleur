@@ -73,6 +73,7 @@ export async function POST(request: Request) {
   try {
     const { jobId, acknowledgedAt } = await enqueueExport({
       userId: reauthSession.userId,
+      workspaceId: reauthSession.userId,
       sessionId: reauthSession.sessionId,
       reauthEventId: reauthSession.eventId,
       requesterIp: extractClientIpFromHeaders(request.headers),

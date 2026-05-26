@@ -470,6 +470,126 @@ describe("cc-dispatcher singletons + orchestration", () => {
     }
   });
 
+  it("#4440: denied_jti RuntimeAuthError → revocation_notice + session_ended frames (no generic error)", async () => {
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
+
+    // Stage the revocation status helper to return a populated row so
+    // the dispatch catch can forward reason + deniedAt verbatim. The
+    // harness wires `getMyRevocationStatus` as a default-null stub;
+    // override per case via dynamic mock retrieval.
+    const tenantMod = await import("@/lib/supabase/tenant");
+    const getMyRevocationStatusSpy = vi
+      .spyOn(tenantMod, "getMyRevocationStatus")
+      .mockResolvedValue({
+        revoked: true,
+        deniedAt: "2026-05-25T10:00:00.000Z",
+        reason: "operator-revoked-stolen-jwt",
+      });
+
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+    __setCcRunnerForTests({
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+      dispatch: vi.fn(async () => {
+        throw new tenantMod.RuntimeAuthError(
+          "denied_jti",
+          "JWT jti denied at runtime",
+        );
+      }),
+      hasActiveQuery: () => false,
+      activeQueriesSize: () => 0,
+      reapIdle: () => 0,
+      closeConversation: () => {},
+      respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any);
+
+    await dispatchSoleurGo({
+      userId: "u-revoked",
+      conversationId: "conv-revoked",
+      userMessage: "hi",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow,
+    });
+
+    // Two frames: revocation_notice (operator reason) + session_ended
+    // (terminal flag so the client clears streamState).
+    const revocationCalls = sendToClient.mock.calls.filter(
+      ([, m]) => (m as { type?: string }).type === "revocation_notice",
+    );
+    expect(revocationCalls).toHaveLength(1);
+    expect(revocationCalls[0][1]).toEqual({
+      type: "revocation_notice",
+      reason: "operator-revoked-stolen-jwt",
+      deniedAt: "2026-05-25T10:00:00.000Z",
+    });
+
+    const sessionEndedCalls = sendToClient.mock.calls.filter(
+      ([, m]) => (m as { type?: string }).type === "session_ended",
+    );
+    expect(sessionEndedCalls).toHaveLength(1);
+    expect(sessionEndedCalls[0][1]).toEqual({
+      type: "session_ended",
+      reason: "session_revoked",
+      conversationId: "conv-revoked",
+    });
+
+    // No generic `type: "error"` frame — the discriminated pair
+    // replaces it entirely.
+    const errorCalls = sendToClient.mock.calls.filter(
+      ([, m]) => (m as { type?: string }).type === "error",
+    );
+    expect(errorCalls).toHaveLength(0);
+
+    getMyRevocationStatusSpy.mockRestore();
+  });
+
+  it("#4440: non-denied_jti RuntimeAuthError still surfaces generic error", async () => {
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
+    const tenantMod = await import("@/lib/supabase/tenant");
+
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+    __setCcRunnerForTests({
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+      dispatch: vi.fn(async () => {
+        throw new tenantMod.RuntimeAuthError(
+          "jwt_mint",
+          "precheck rate-limit",
+        );
+      }),
+      hasActiveQuery: () => false,
+      activeQueriesSize: () => 0,
+      reapIdle: () => 0,
+      closeConversation: () => {},
+      respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any);
+
+    await dispatchSoleurGo({
+      userId: "u-mint-fail",
+      conversationId: "conv-mint",
+      userMessage: "hi",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow,
+    });
+
+    const revocationCalls = sendToClient.mock.calls.filter(
+      ([, m]) => (m as { type?: string }).type === "revocation_notice",
+    );
+    expect(revocationCalls).toHaveLength(0);
+    const errorCalls = sendToClient.mock.calls.filter(
+      ([, m]) => (m as { type?: string }).type === "error",
+    );
+    // Generic error preserved; the dispatcher's catch falls through to
+    // the legacy `Dashboard router is unavailable` branch.
+    expect(errorCalls.length).toBeGreaterThan(0);
+  });
+
   it("Sentry mirror debounces independently for distinct (userId, errorClass) keys", async () => {
     const sendToClient = vi.fn().mockReturnValue(true);
     const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);

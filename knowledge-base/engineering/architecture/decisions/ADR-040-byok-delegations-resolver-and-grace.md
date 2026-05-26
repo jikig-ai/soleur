@@ -32,7 +32,7 @@ CPO + CLO + CTO sign-offs carried forward from the brainstorm; the `user-impact-
 
 ## Decision
 
-PR-A introduces a single migration (`064_byok_delegations.sql`), a thin TS resolver (`server/byok-resolver.ts`), a sentinel sweep across 5 prod `runWithByokLease` invocations, a widening of `persistTurnCost` to route cap-aware audit writes, an account-delete cascade phase, two CLI scripts, and a two-key feature flag. Twelve sub-decisions land in v3 (post-3-agent-review + 3-agent-deepen-plan); the table below enumerates them with their forcing function.
+PR-A introduces a single migration (`064_byok_delegations.sql`), a thin TS resolver (`server/byok-resolver.ts`), a sentinel sweep across 5 prod `runWithByokLease` invocations, a widening of `persistTurnCost` to route cap-aware audit writes, an account-delete cascade phase, two CLI scripts, and a two-key feature flag [Updated 2026-05-26: env-allowlist removed; Flagsmith segment is now the sole per-org gate. See ADR-043.]. Twelve sub-decisions land in v3 (post-3-agent-review + 3-agent-deepen-plan); the table below enumerates them with their forcing function.
 
 | # | Decision | Forcing function | Alternatives weighed |
 |---|---|---|---|

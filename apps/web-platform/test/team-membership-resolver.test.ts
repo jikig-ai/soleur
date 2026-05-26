@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { resolveTeamMembershipPageData } from "@/server/team-membership-resolver";
+import { __resetFeatureFlagsForTests } from "@/lib/feature-flags/server";
 
-// Mock the 2-key gate (FLAG_TEAM_WORKSPACE_INVITE + TEAM_WORKSPACE_ALLOWLIST_ORG_IDS).
-// Tests stub via env vars so resolver exercises the real gate logic.
+// Flagsmith single-control gate. Tests stub via env vars so resolver exercises
+// the real gate logic (env-fallback path when FLAGSMITH_ENVIRONMENT_KEY unset).
 
 const ORG_ID = "00000000-0000-0000-0000-000000000aaa";
 const USER_ID = "00000000-0000-0000-0000-000000000111";
@@ -25,8 +26,6 @@ function mockSupabaseClients(opts: ResolveOpts) {
   const userResp = { data: { user: opts.user }, error: null };
   const fromMock = vi.fn((table: string) => {
     if (table === "workspaces") {
-      // Resolver queries: .select("id").eq("organization_id", orgId)
-      // Returns first workspace_id matching the org.
       const wsId = opts.members[0]?.workspace_id ?? WORKSPACE_ID;
       return {
         select: () => ({
@@ -76,32 +75,12 @@ describe("resolveTeamMembershipPageData", () => {
   beforeEach(() => {
     vi.unstubAllEnvs();
     vi.stubEnv("FLAG_TEAM_WORKSPACE_INVITE", "");
-    vi.stubEnv("TEAM_WORKSPACE_ALLOWLIST_ORG_IDS", "");
+    vi.stubEnv("FLAGSMITH_ENVIRONMENT_KEY", "");
+    __resetFeatureFlagsForTests();
   });
 
   it("AC-A: returns not-found when feature flag is OFF", async () => {
     vi.stubEnv("FLAG_TEAM_WORKSPACE_INVITE", "");
-    vi.stubEnv("TEAM_WORKSPACE_ALLOWLIST_ORG_IDS", ORG_ID);
-    const { supabase, service } = mockSupabaseClients({
-      user: {
-        id: USER_ID,
-        email: "jean@jikigai.com",
-        app_metadata: { current_organization_id: ORG_ID },
-      },
-      members: [],
-      emails: {},
-    });
-    const result = await resolveTeamMembershipPageData(
-      supabase as never,
-      service as never,
-    );
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toBe("not-found");
-  });
-
-  it("AC-A: returns not-found when org NOT in allowlist", async () => {
-    vi.stubEnv("FLAG_TEAM_WORKSPACE_INVITE", "1");
-    vi.stubEnv("TEAM_WORKSPACE_ALLOWLIST_ORG_IDS", "ffffffff-ffff-ffff-ffff-ffffffffffff");
     const { supabase, service } = mockSupabaseClients({
       user: {
         id: USER_ID,
@@ -121,7 +100,6 @@ describe("resolveTeamMembershipPageData", () => {
 
   it("returns not-found when no current org claim", async () => {
     vi.stubEnv("FLAG_TEAM_WORKSPACE_INVITE", "1");
-    vi.stubEnv("TEAM_WORKSPACE_ALLOWLIST_ORG_IDS", ORG_ID);
     const { supabase, service } = mockSupabaseClients({
       user: { id: USER_ID, email: "jean@jikigai.com", app_metadata: {} },
       members: [],
@@ -134,9 +112,8 @@ describe("resolveTeamMembershipPageData", () => {
     expect(result.ok).toBe(false);
   });
 
-  it("returns ok with members + current-user when flag ON and in allowlist", async () => {
+  it("returns ok with members + current-user when flag ON", async () => {
     vi.stubEnv("FLAG_TEAM_WORKSPACE_INVITE", "1");
-    vi.stubEnv("TEAM_WORKSPACE_ALLOWLIST_ORG_IDS", ORG_ID);
     const otherUser = "00000000-0000-0000-0000-000000000222";
     const { supabase, service } = mockSupabaseClients({
       user: {
@@ -179,7 +156,6 @@ describe("resolveTeamMembershipPageData", () => {
 
   it("AC-FLOW4 surface: returns owner role for self so UI can disable remove-self", async () => {
     vi.stubEnv("FLAG_TEAM_WORKSPACE_INVITE", "1");
-    vi.stubEnv("TEAM_WORKSPACE_ALLOWLIST_ORG_IDS", ORG_ID);
     const { supabase, service } = mockSupabaseClients({
       user: {
         id: USER_ID,

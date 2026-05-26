@@ -51,6 +51,12 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
   // cc-router (#2909): Tier 1 candidate (Phase 2 via #3722)
   "mcp__soleur_platform__kb_share_preview": "auto-approve",
 
+  // Auth revocation status (#4440 follow-up to #4418): read-only RPC
+  // (`my_revocation_status()`) — auto-approve. Agents call this on auth
+  // errors to discriminate JWT-deny from transient failures. No side
+  // effects, no founder-confirmation surface needed.
+  "mcp__soleur_platform__auth_revocation_status": "auto-approve",
+
   // NOTE (#2909 review): `mcp__soleur_platform__conversations_lookup` is
   // registered at `agent-runner.ts:1372` but DELIBERATELY omitted from this
   // map — the legacy `startAgentSession` path relies on `getToolTier()`'s

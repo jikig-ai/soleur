@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/service";
 import { abortAllUserSessions } from "@/server/agent-runner";
 import { deleteWorkspace } from "@/server/workspace";
 import { createChildLogger } from "./logger";
@@ -93,6 +93,12 @@ export interface DeleteAccountResult {
  *                             all REFERENCES users(id) ON DELETE RESTRICT —
  *                             without this step the auth-delete cascade
  *                             would abort.
+ *   5.11 anonymise-byok-delegation-acceptances —
+ *                             anonymise_byok_delegation_acceptances RPC
+ *                             (migration 074, BYOK Delegations PR-B #4232).
+ *                             Nulls user_id + ip_hash + user_agent on the
+ *                             consent ledger. Required: acceptances.user_id
+ *                             REFERENCES users(id) ON DELETE RESTRICT.
  *   6. auth             — auth.admin.deleteUser(); FK cascade handles
  *                         public.users and all children atomically.
  *
@@ -171,6 +177,17 @@ export async function deleteAccount(
   // Plan rev-2 AC25 extends the storage-purge step to cover
   // dsar-exports/<userId>/ so a half-completed export bundle does not
   // outlive the user account.
+  //
+  // NOTE (mig 068 #4318): a more surgical owned-conv-only purge using
+  // message_attachments ⨝ conversations.user_id was considered (would
+  // preserve the user's uploads in shared-workspace conversations under
+  // an Art. 17 controller's-legitimate-interest carve-out, with uploader
+  // identity already nulled by step 3.901). Deferred to a follow-up
+  // because the wide-purge regression tests at test/account-delete.test.ts
+  // would need a substantial rewrite. Today: bytes AND identity both
+  // wiped on full account-delete; co-members see broken thumbnails for
+  // departed-user files in shared convs. Acceptable Art. 17 compliance;
+  // the carve-out is a UX optimization to revisit when the flag flips.
   try {
     const folders = await listAllStorageObjects(service.storage, "chat-attachments", userId);
 
@@ -430,6 +447,130 @@ export async function deleteAccount(
     return { success: false, error: "Account deletion failed. Please try again." };
   }
 
+  // 3.901 Cascade-pseudonymise messages.user_id on shared-workspace
+  //       conversations the departing user authored attachments in
+  //       (migration 068, #4318). Sets messages.user_id = NULL on
+  //       authored-with-attachments rows in conversations the
+  //       departing user does NOT own — preserves the message body
+  //       for surviving co-members while severing PII linkage. Runs
+  //       BEFORE 3.905 (workspace_member_removals anonymise) so the
+  //       cascade RPC iterates workspaces while membership rows are
+  //       still resolvable. Runs BEFORE 3.91 (workspace_members
+  //       DELETE) so is_workspace_member predicates inside the RPC
+  //       still return true. Phase 0 emergent finding E-1: pseudonym
+  //       is NULL (not 'member_<hex>') because messages.user_id has
+  //       an FK to auth.users(id) ON DELETE CASCADE.
+  //
+  //       Runtime ordering guard (architecture P1-3): if no
+  //       workspace_members row exists for this user at invocation
+  //       time, a sibling step already ran out-of-order and the
+  //       cascade would silently skip. Sentry-warn but do not abort.
+  try {
+    const { count: memberCount, error: memberCountErr } = await service
+      .from("workspace_members")
+      .select("workspace_id", { count: "exact", head: true })
+      .eq("user_id", userId);
+    if (memberCountErr) {
+      reportSilentFallback(memberCountErr, {
+        feature: "account-delete",
+        op: "anonymise-authored-messages-shared-workspaces",
+        extra: { userId },
+        message: "ordering-guard probe failed — proceeding to RPC",
+      });
+    } else if ((memberCount ?? 0) === 0) {
+      // Cascade-order regression detector: a sibling step already
+      // emptied workspace_members. The RPC will return 0 affected
+      // rows; Sentry-warn at structured P1.
+      reportSilentFallback(null, {
+        feature: "account-delete",
+        op: "anonymise-authored-messages-shared-workspaces",
+        extra: { userId },
+        message:
+          "ordering-guard tripped: workspace_members empty before cascade — sibling step ran out of order",
+      });
+    }
+    const { data: anonCount, error: anonErr } = await service.rpc(
+      "anonymise_departed_user_across_workspaces",
+      { p_departing_user: userId },
+    );
+    if (anonErr) {
+      reportSilentFallback(anonErr, {
+        feature: "account-delete",
+        op: "anonymise-authored-messages-shared-workspaces",
+        extra: { userId },
+        message:
+          "anonymise_departed_user_across_workspaces failed — aborting deletion",
+      });
+      return { success: false, error: "Account deletion failed. Please try again." };
+    }
+    log.info(
+      { userId, anonymisedMessageCount: anonCount ?? 0 },
+      "anonymise_departed_user_across_workspaces completed",
+    );
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-authored-messages-shared-workspaces",
+      extra: { userId },
+      message:
+        "anonymise_departed_user_across_workspaces threw — aborting deletion",
+    });
+    return { success: false, error: "Account deletion failed. Please try again." };
+  }
+
+  // 3.9015 Purge Storage objects for co-member uploads in conversations
+  //        owned by the departing user (#4444). The wide purge at step 3.5
+  //        covers {departingUserId}/... but NOT {coMemberUserId}/{convId}/...
+  //        paths. Non-fatal: identity linkage is already severed at 3.901;
+  //        orphaned bytes are a resource leak, not a compliance violation.
+  try {
+    const { data: ownedConvs } = await service
+      .from("conversations")
+      .select("id")
+      .eq("user_id", userId);
+    const ownedConvIds = (ownedConvs ?? []).map((r) => r.id).filter(Boolean);
+    if (ownedConvIds.length > 0) {
+      let coMemberMsgIds: string[] = [];
+      for (let i = 0; i < ownedConvIds.length; i += 500) {
+        const convBatch = ownedConvIds.slice(i, i + 500);
+        const { data: coMemberMsgs } = await service
+          .from("messages")
+          .select("id")
+          .in("conversation_id", convBatch)
+          .neq("user_id", userId)
+          .not("user_id", "is", null);
+        coMemberMsgIds = coMemberMsgIds.concat(
+          (coMemberMsgs ?? []).map((r) => r.id).filter(Boolean),
+        );
+      }
+      if (coMemberMsgIds.length > 0) {
+        let storagePaths: string[] = [];
+        for (let i = 0; i < coMemberMsgIds.length; i += 500) {
+          const msgBatch = coMemberMsgIds.slice(i, i + 500);
+          const { data: attachRows } = await service
+            .from("message_attachments")
+            .select("storage_path")
+            .in("message_id", msgBatch);
+          storagePaths = storagePaths.concat(
+            (attachRows ?? []).map((r) => r.storage_path).filter(Boolean),
+          );
+        }
+        for (let i = 0; i < storagePaths.length; i += 1000) {
+          const batch = storagePaths.slice(i, i + 1000);
+          await service.storage.from("chat-attachments").remove(batch);
+        }
+      }
+    }
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "purge-shared-conv-attachments",
+      extra: { userId },
+      message:
+        "step 3.9015 co-member Storage purge failed (non-fatal — identity already severed at 3.901)",
+    });
+  }
+
   // 3.905 Anonymise workspace_member_removals (migration 063, #4230).
   //      NULLs removed_user_id + removed_by_user_id for every removal
   //      row where the deleted user appears on either side. Mirrors
@@ -617,6 +758,31 @@ export async function deleteAccount(
     log.error(
       { userId, err },
       "anonymise_byok_delegations threw — aborting deletion to avoid FK-block",
+    );
+    return { success: false, error: "Account deletion failed. Please try again." };
+  }
+
+  // 3.95 Anonymise byok_delegation_acceptances (migration 074, #4232 PR-B).
+  //      byok_delegation_acceptances.user_id references users(id) ON DELETE
+  //      RESTRICT — without this step the auth-delete cascade would abort
+  //      with FK 23503. The RPC nulls user_id + ip_hash + user_agent via
+  //      session_replication_role='replica' WORM bypass. Idempotent.
+  try {
+    const { error: anonAcceptErr } = await service.rpc(
+      "anonymise_byok_delegation_acceptances",
+      { p_user_id: userId },
+    );
+    if (anonAcceptErr) {
+      log.error(
+        { userId, err: anonAcceptErr },
+        "anonymise_byok_delegation_acceptances failed — aborting deletion to avoid FK-block",
+      );
+      return { success: false, error: "Account deletion failed. Please try again." };
+    }
+  } catch (err) {
+    log.error(
+      { userId, err },
+      "anonymise_byok_delegation_acceptances threw — aborting deletion to avoid FK-block",
     );
     return { success: false, error: "Account deletion failed. Please try again." };
   }

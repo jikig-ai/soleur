@@ -1,4 +1,4 @@
-import { isTeamWorkspaceInviteEnabled } from "@/lib/feature-flags/server";
+import { isTeamWorkspaceInviteEnabled, isByokDelegationsEnabled, type Identity } from "@/lib/feature-flags/server";
 import { getCurrentOrganizationId } from "@/server/workspace-resolver";
 
 // Server-only resolver for the /dashboard/settings/team membership page.
@@ -11,6 +11,18 @@ export interface TeamMembershipRow {
   role: "owner" | "member";
   addedAt: string; // membership.created_at
   isSelf: boolean;
+  delegationFromMe?: {
+    id: string;
+    dailyCapCents: number;
+    todaySpentCents: number;
+    active: boolean;
+  };
+  delegationToMe?: {
+    id: string;
+    grantorDisplayName: string;
+    dailyCapCents: number;
+    todaySpentCents: number;
+  };
 }
 
 export interface TeamMembershipPageData {
@@ -18,6 +30,7 @@ export interface TeamMembershipPageData {
   workspaceId: string;
   currentUserId: string;
   members: TeamMembershipRow[];
+  byokDelegationsEnabled: boolean;
 }
 
 export type TeamMembershipPageResult =
@@ -65,9 +78,8 @@ export async function resolveTeamMembershipPageData(
   });
   if (!orgId) return { ok: false, reason: "no-org" };
 
-  // 2-key gate per AC-F. When false, surface as not-found so the page calls
-  // notFound() → HTTP 404 (AC-A: never 403, never empty 200).
-  if (!isTeamWorkspaceInviteEnabled(orgId)) {
+  const identity: Identity = { userId: user.id, role: "prd", orgId };
+  if (!(await isTeamWorkspaceInviteEnabled(orgId, identity))) {
     return { ok: false, reason: "not-found" };
   }
 
@@ -131,13 +143,62 @@ export async function resolveTeamMembershipPageData(
     if (row.email) emailByUserId.set(row.id, row.email);
   }
 
-  const members: TeamMembershipRow[] = rows.map((r) => ({
-    userId: r.user_id,
-    email: emailByUserId.get(r.user_id) ?? "",
-    role: r.role,
-    addedAt: r.created_at,
-    isSelf: r.user_id === user.id,
-  }));
+  const byokEnabled = await isByokDelegationsEnabled(orgId, identity);
+
+  let delegationsByGrantor = new Map<string, { id: string; grantee_user_id: string; daily_cap_cents: number }>();
+  let delegationsByGrantee = new Map<string, { id: string; grantor_user_id: string; daily_cap_cents: number }>();
+
+  if (byokEnabled) {
+    const delegChain = service.from("byok_delegations") as {
+      select: (cols: string) => {
+        eq: (col: string, val: string) => {
+          is: (col: string, val: null) => Promise<{ data: Array<{ id: string; grantor_user_id: string; grantee_user_id: string; daily_cap_cents: number }> | null; error: unknown }>;
+        };
+      };
+    };
+    const delegResp = await delegChain
+      .select("id, grantor_user_id, grantee_user_id, daily_cap_cents")
+      .eq("workspace_id", workspaceId)
+      .is("revoked_at", null);
+    for (const d of delegResp.data ?? []) {
+      delegationsByGrantor.set(`${d.grantor_user_id}:${d.grantee_user_id}`, d);
+      delegationsByGrantee.set(d.grantee_user_id, d);
+    }
+  }
+
+  const members: TeamMembershipRow[] = rows.map((r) => {
+    const row: TeamMembershipRow = {
+      userId: r.user_id,
+      email: emailByUserId.get(r.user_id) ?? "",
+      role: r.role,
+      addedAt: r.created_at,
+      isSelf: r.user_id === user.id,
+    };
+
+    if (byokEnabled) {
+      const fromMe = delegationsByGrantor.get(`${user.id}:${r.user_id}`);
+      if (fromMe) {
+        row.delegationFromMe = {
+          id: fromMe.id,
+          dailyCapCents: fromMe.daily_cap_cents,
+          todaySpentCents: 0,
+          active: true,
+        };
+      }
+      const toMe = r.user_id === user.id ? delegationsByGrantee.get(user.id) : undefined;
+      if (toMe) {
+        const grantorEmail = emailByUserId.get(toMe.grantor_user_id) ?? "Unknown";
+        row.delegationToMe = {
+          id: toMe.id,
+          grantorDisplayName: grantorEmail.split("@")[0],
+          dailyCapCents: toMe.daily_cap_cents,
+          todaySpentCents: 0,
+        };
+      }
+    }
+
+    return row;
+  });
 
   return {
     ok: true,
@@ -146,6 +207,7 @@ export async function resolveTeamMembershipPageData(
       workspaceId,
       currentUserId: user.id,
       members,
+      byokDelegationsEnabled: byokEnabled,
     },
   };
 }

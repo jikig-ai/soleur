@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
-import { isTeamWorkspaceInviteEnabled } from "@/lib/feature-flags/server";
+import { isTeamWorkspaceInviteEnabled, type Identity } from "@/lib/feature-flags/server";
 import { resolveTeamMembershipPageData } from "@/server/team-membership-resolver";
 import { removeWorkspaceMember } from "@/server/workspace-membership";
 
@@ -27,7 +27,8 @@ export async function POST(request: Request) {
   if (!pageData.ok) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
-  if (!isTeamWorkspaceInviteEnabled(pageData.data.organizationId)) {
+  const identity: Identity = { userId: user.id, role: "prd", orgId: pageData.data.organizationId };
+  if (!(await isTeamWorkspaceInviteEnabled(pageData.data.organizationId, identity))) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
 

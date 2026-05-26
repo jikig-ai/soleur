@@ -32,6 +32,7 @@
     "flagsmith-nodejs": "^8.1.0",
     "gray-matter": "^4.0.3",
     "inngest": "^3.54.2",
+    "ipaddr.js": "^2.4.0",
     "lucide-react": "^1.8.0",
     "next": "^15.5.18",
     "pdfjs-dist": "^5.4.296",
@@ -82,6 +83,7 @@
   "overrides": {
     "vite": "^7.3.2",
     "brace-expansion": "^5.0.6",
-    "ws": "^8.20.1"
+    "ws": "^8.20.1",
+    "qs": "^6.15.2"
   }
 }

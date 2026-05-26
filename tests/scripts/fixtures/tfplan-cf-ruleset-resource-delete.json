@@ -1,0 +1,31 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "resource_changes": [
+    {
+      "address": "cloudflare_ruleset.allowlist_ai_crawlers",
+      "mode": "managed",
+      "type": "cloudflare_ruleset",
+      "name": "allowlist_ai_crawlers",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": ["delete"],
+        "before": {
+          "id": "ruleset-allowlist-id",
+          "name": "soleur_allowlist_ai_crawlers",
+          "kind": "zone",
+          "phase": "http_request_firewall_custom",
+          "rules": [
+            {"id": "ai1", "expression": "(http.user_agent contains \"GPTBot\")", "action": "skip", "enabled": true},
+            {"id": "ai2", "expression": "(http.user_agent contains \"ClaudeBot\")", "action": "skip", "enabled": true},
+            {"id": "ai3", "expression": "(http.user_agent contains \"PerplexityBot\")", "action": "skip", "enabled": true}
+          ]
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    }
+  ]
+}

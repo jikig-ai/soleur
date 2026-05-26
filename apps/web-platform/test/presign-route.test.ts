@@ -5,9 +5,10 @@ import { mockQueryChain } from "./helpers/mock-supabase";
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
 // ---------------------------------------------------------------------------
 
-const { mockGetUser, mockFrom, mockCreateSignedUploadUrl } = vi.hoisted(() => ({
+const { mockGetUser, mockFrom, mockCreateSignedUploadUrl, mockRpc } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockFrom: vi.fn(),
+  mockRpc: vi.fn(),
   mockCreateSignedUploadUrl: vi.fn(),
 }));
 
@@ -17,6 +18,7 @@ vi.mock("@/lib/supabase/server", () => ({
   })),
   createServiceClient: vi.fn(() => ({
     from: mockFrom,
+    rpc: mockRpc,
     storage: {
       from: vi.fn(() => ({
         createSignedUploadUrl: mockCreateSignedUploadUrl,
@@ -75,12 +77,26 @@ function setupAuthenticatedUser() {
 }
 
 function setupConversationOwnership(owned: boolean) {
+  // mig 068 #4318: route now also reads user_id + workspace_id and falls
+  // back to is_workspace_member RPC when conv.user_id !== caller. Set the
+  // owned-conv shape so the RPC is NOT invoked (own-folder branch).
   mockFrom.mockImplementation((table: string) => {
     if (table === "conversations") {
-      return mockQueryChain(owned ? { id: TEST_CONVERSATION_ID } : null);
+      return mockQueryChain(
+        owned
+          ? {
+              id: TEST_CONVERSATION_ID,
+              user_id: TEST_USER_ID,
+              workspace_id: TEST_USER_ID,
+            }
+          : null,
+      );
     }
     return {};
   });
+  // Default is_workspace_member to false; tests covering the co-member
+  // branch can override per-test via mockRpc.mockResolvedValueOnce.
+  mockRpc.mockResolvedValue({ data: false, error: null });
 }
 
 // ---------------------------------------------------------------------------

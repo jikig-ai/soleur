@@ -22,6 +22,9 @@
 // reasons documented in `app-client.ts`.
 
 import { App } from "@octokit/app";
+import { createChildLogger } from "../logger";
+
+const log = createChildLogger("probe-octokit");
 
 const APP_ID_ENV = "GITHUB_APP_ID";
 const PRIVATE_KEY_ENV = "GITHUB_APP_PRIVATE_KEY";
@@ -52,20 +55,27 @@ function readEnv(name: string): string {
  * `createGitHubAppClient`. See file header for rationale.
  */
 export async function createProbeOctokit() {
-  const app = new App({
-    appId: readEnv(APP_ID_ENV),
-    privateKey: readEnv(PRIVATE_KEY_ENV),
-  });
+  async function attempt() {
+    const app = new App({
+      appId: readEnv(APP_ID_ENV),
+      privateKey: readEnv(PRIVATE_KEY_ENV),
+    });
+    const { data: installation } = await app.octokit.request(
+      "GET /repos/{owner}/{repo}/installation",
+      { owner: PROBE_ISSUE_OWNER, repo: PROBE_ISSUE_REPO },
+    );
+    return app.getInstallationOctokit(installation.id);
+  }
 
-  // App-level JWT can hit /repos/{owner}/{repo}/installation to discover
-  // which installation backs a repo. Returned object has `.id` — the
-  // installation id we need for installation-scoped Octokit minting.
-  const { data: installation } = await app.octokit.request(
-    "GET /repos/{owner}/{repo}/installation",
-    { owner: PROBE_ISSUE_OWNER, repo: PROBE_ISSUE_REPO },
-  );
-
-  return app.getInstallationOctokit(installation.id);
+  try {
+    return await attempt();
+  } catch (err) {
+    const status = (err as { status?: number }).status;
+    if (status !== 401) throw err;
+    log.warn("401 on App JWT installation discovery — retrying once after 1s");
+    await new Promise((r) => setTimeout(r, 1_000));
+    return await attempt();
+  }
 }
 
 /**

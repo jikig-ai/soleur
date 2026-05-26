@@ -5,6 +5,7 @@ import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { useWebSocket } from "@/lib/ws-client";
 import type { ConversationContext, AttachmentRef } from "@/lib/types";
 import { ErrorCard } from "@/components/ui/error-card";
+import { DelegationErrorCard, isDelegationError } from "@/components/chat/delegation-error-card";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { ChatInput } from "@/components/chat/chat-input";
 import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
@@ -560,14 +561,18 @@ export function ChatSurface({
             className={`mb-4 ${widthWrapper}`}
             data-rate-limit-exceeded={lastError.code === "rate_limited" ? "" : undefined}
           >
-            <ErrorCard
-              title={lastError.code === "key_invalid" ? "Invalid API Key" : lastError.code === "rate_limited" ? "Rate Limited" : "Connection Error"}
-              message={lastError.message}
-              onRetry={lastError.code !== "key_invalid" ? reconnect : undefined}
-              retryLabel="Reconnect"
-              action={lastError.action}
-              onDismiss={() => setDismissedErrorKey(activeErrorKey)}
-            />
+            {isDelegationError(lastError.code) ? (
+              <DelegationErrorCard errorCode={lastError.code} message={lastError.message} />
+            ) : (
+              <ErrorCard
+                title={lastError.code === "key_invalid" ? "Invalid API Key" : lastError.code === "rate_limited" ? "Rate Limited" : "Connection Error"}
+                message={lastError.message}
+                onRetry={lastError.code !== "key_invalid" ? reconnect : undefined}
+                retryLabel="Reconnect"
+                action={lastError.action}
+                onDismiss={() => setDismissedErrorKey(activeErrorKey)}
+              />
+            )}
           </div>
         )}
 

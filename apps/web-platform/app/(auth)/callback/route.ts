@@ -11,7 +11,10 @@ import { TC_VERSION } from "@/lib/legal/tc-version";
 import { NextResponse, type NextRequest } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 import logger from "@/server/logger";
-import { reportSilentFallback } from "@/server/observability";
+import {
+  reportSilentFallback,
+  warnSilentFallback,
+} from "@/server/observability";
 import { hashUserIdValue } from "@/server/userid-pseudonymize";
 
 // Matches both the canonical verifier cookie and the hypothetical chunked
@@ -79,7 +82,7 @@ export async function GET(request: NextRequest) {
     const providerErrorCode = isKnownProviderErrorCode(rawErrorCode)
       ? rawErrorCode
       : "unknown";
-    reportSilentFallback(null, {
+    warnSilentFallback(null, {
       feature: "auth",
       op: "callback_provider_error",
       message: `OAuth provider returned error=${providerErrorCode}`,

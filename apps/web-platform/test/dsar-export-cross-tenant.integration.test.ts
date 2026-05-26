@@ -105,10 +105,16 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         // Seed a conversation + message that contains the user's
         // distinctive phrase. The bundle assertions look for this
         // phrase fragment by fragment.
+        //
+        // mig 059 (#4225) made conversations.workspace_id + messages.
+        // workspace_id NOT NULL. handle_new_user (mig 053) creates a
+        // workspace with id = users.id per ADR-038 N2, so the user's
+        // workspace_id is reachable as u.id without an extra lookup.
         const { data: conv } = await service
           .from("conversations")
           .insert({
             user_id: u.id,
+            workspace_id: u.id,
             domain_leader: "cto",
             status: "active",
           })
@@ -118,6 +124,12 @@ describe.skipIf(!INTEGRATION_ENABLED)(
 
         await service.from("messages").insert({
           conversation_id: conv.id,
+          workspace_id: u.id,
+          // #4319 fail-closed default `LEGACY_NULL_IS_SUBJECT = false`
+          // redacts any `user_id IS NULL` row in the messages predicate.
+          // The author MUST be explicit for the per-row content
+          // assertions below to find the distinctive phrase.
+          user_id: u.id,
           role: "user",
           content: `Hello ${u.phrase}`,
           // PR-I (#4078, migration 053_template_authorizations.sql) added
@@ -151,8 +163,9 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       "A's worker reads contain ZERO rows attributable to B (per-row WHERE + assertReadScope)",
       async () => {
         const { exportSqlTable } = await import("../server/dsar-export");
+        const { randomBytes } = await import("node:crypto");
         const controller = new AbortController();
-        const tables = await exportSqlTable.call(null, userA.id, controller.signal);
+        const tables = await exportSqlTable.call(null, userA.id, randomBytes(32), controller.signal);
 
         // Per-row invariant: every row's owner field matches userA.id.
         for (const t of tables) {
@@ -203,11 +216,12 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     );
 
     test(
-      "service-role re-check after enqueueExport: in-flight row's user_id matches the requester",
+      "service-role re-check after enqueueExport: in-flight row's user_id and workspace_id match the requester (#4396)",
       async () => {
         const { enqueueExport } = await import("../server/dsar-export");
         const { jobId } = await enqueueExport({
           userId: userA.id,
+          workspaceId: userA.id,
           sessionId: userA.id, // dummy session id for the binding test
           reauthEventId: "00000000-0000-0000-0000-000000000000",
           requesterIp: "127.0.0.1",
@@ -217,10 +231,11 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         // Service-role re-check: the inserted row is owned by userA.
         const { data: rows } = await service
           .from("dsar_export_jobs")
-          .select("user_id")
+          .select("user_id, workspace_id")
           .eq("id", jobId);
         expect(rows).toHaveLength(1);
         expect((rows![0] as { user_id: string }).user_id).toBe(userA.id);
+        expect((rows![0] as { workspace_id: string }).workspace_id).toBe(userA.id);
 
         // Cleanup the test job so the user can re-run the test.
         await service.from("dsar_export_jobs").delete().eq("id", jobId);

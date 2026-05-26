@@ -45,21 +45,24 @@
 // fires >1× in 30 days, raise to 22.5 min (Risk #4 re-evaluation
 // criterion in the plan).
 //
-// SSRF defense-in-depth (DUAL, not triple — plan v2 correction):
+// SSRF defense-in-depth (TRIPLE — #4068 hardening):
 //   Layer 1 (load-bearing): in-prompt HTTPS-and-non-RFC1918 guard,
 //     verbatim from .github/workflows/scheduled-follow-through.yml:96-101.
 //   Layer 2 (mechanical): buildSpawnEnv() allowlist — only PATH, HOME,
 //     NODE_ENV, ANTHROPIC_API_KEY, GH_TOKEN reach the subprocess.
+//   Layer 3 (server-side, #4068): _predicate-validator.ts validates
+//     predicate URLs BEFORE the agent runs — ALLOWED_PREDICATE_HOSTS
+//     Set.has() exact match + ipaddr.js public-IP verification + fetch
+//     with redirect:"error". Bash(curl:*) and Bash(dig:*) removed from
+//     the agent's allowedTools.
 // (Inngest fn-concurrency=1 is blast-rate cap, NOT SSRF defense.)
-// Set.has() exact-match allowlist is the planned third-leg hardening,
-// deferred via #4068 (deferred-scope-out).
 //
 // PR-2 SPECIFIC — DO NOT copy to PR-3..N without re-derivation
 // (see plan §Pattern Boundaries):
 //   MAX_TURN_DURATION_MS = 15min       ← bound by predicate wallclock
 //   --max-turns 30                      ← bound by follow-through corpus size
 //   Guards A/B/C                        ← bound by 3 state transitions
-//   Bash(curl:*),Bash(dig:*)            ← OMIT if no network-verb need
+//   Bash(curl:*),Bash(dig:*)            ← REMOVED in #4068 (Layer 3 SSRF hardening)
 //   cron: "0 9 * * 1-5"                 ← bound by follow-through SLA semantic
 //
 // Account-scope concurrency key "cron-platform" (global, shared with
@@ -68,40 +71,25 @@
 // Re-evaluate keying scheme if cron-* count grows past 3 functions.
 // See ADR-033 [Refined 2026-05-19 post PR-2 plan review] for details.
 
-import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { spawn, execFileSync } from "node:child_process";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
-
-// Resolve the `claude` binary lazily inside the spawning step.run (NOT at
-// module load) so a missing/corrupt @anthropic-ai/claude-code install fails
-// at spawn time → reportSilentFallback → Sentry status=error, instead of
-// throwing at /api/inngest route registration which would silently disable
-// the entire Inngest worker with no operator-visible Sentry signal.
-//
-// IMPLEMENTATION NOTE (#4017): the original `createRequire(import.meta.url)
-// + require.resolve(...)` shape works in dev but produces `TypeError: path
-// argument must be of type string (received number 32798)` in the Next.js
-// standalone bundle — webpack rewrites `require.resolve()` to module-id
-// integers. Use filesystem `existsSync` checks against known paths instead.
-function resolveClaudeBin(): string {
-  const override = process.env.CLAUDE_BIN;
-  if (override && existsSync(override)) return override;
-
-  const candidates = [
-    "/app/node_modules/.bin/claude",
-    join(process.cwd(), "node_modules/.bin/claude"),
-    join(process.cwd(), "apps/web-platform/node_modules/.bin/claude"),
-  ];
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
-  }
-  throw new Error(
-    `claude binary not found in any known location: ${candidates.join(", ")}. ` +
-      "Set CLAUDE_BIN env var to override.",
-  );
-}
+import {
+  postSentryHeartbeat,
+  type HandlerArgs,
+} from "./_cron-shared";
+import {
+  resolveClaudeBin,
+  type SpawnResult,
+  KILL_ESCALATION_MS,
+} from "./_cron-claude-eval-substrate";
+import {
+  validateAndExecutePredicates,
+  formatPredicateResults,
+  type IssueData,
+} from "./_predicate-validator";
+// Re-export for test parity (cron-follow-through-monitor.test.ts imports via this module).
+export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 
 // Inlined verbatim from .github/workflows/scheduled-follow-through.yml lines
 // 73-145, with three idempotency guards (A/B/C) added for Inngest replay
@@ -134,14 +122,11 @@ predicates and SLA status.
 
    c. Run the predicate check based on type:
       - ${"`"}manual${"`"}: No automated check. Only track SLA.
-      - ${"`"}http-200${"`"}: ${"`"}curl -s -o /dev/null -w "%{http_code}" "<url>"${"`"}
-        Pass if result is "200". Only request HTTPS URLs. Do not request
-        localhost, 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12,
-        192.168.0.0/16, or 169.254.0.0/16.
-      - ${"`"}dns-txt${"`"}: ${"`"}dig +short TXT "<domain>"${"`"}
-        Pass if output contains the ${"`"}expected${"`"} value.
-      - ${"`"}dns-a${"`"}: ${"`"}dig +short A "<domain>"${"`"}
-        Pass if output contains the ${"`"}expected${"`"} IP.
+      - ${"`"}http-200${"`"}, ${"`"}dns-txt${"`"}, ${"`"}dns-a${"`"}: These predicates have been
+        pre-validated and executed server-side. Check the
+        "Pre-Validated Predicate Results" section below for the results.
+        Do NOT re-execute any network requests. Use the pre-computed
+        PASSED/FAILED/BLOCKED status directly.
 
    d. Take action based on result. ONLY comment on STATE TRANSITIONS
       (do NOT add daily "still pending" comments). For EACH state transition,
@@ -226,8 +211,9 @@ predicates and SLA status.
 - If the YAML block is missing, malformed, or contains an unrecognized
   ${"`"}type${"`"}, treat the issue as ${"`"}type: manual${"`"} and continue.
 - If ${"`"}gh${"`"} commands fail for an issue, skip it and continue with the rest.
-- If ${"`"}dig${"`"} or ${"`"}curl${"`"} are unavailable, comment: "Predicate check
-  unavailable in this environment" and continue.
+- NEVER execute curl, dig, wget, or any network request tool. All
+  network predicates are pre-validated server-side. Use the results
+  from the "Pre-Validated Predicate Results" section.
 - Check if ${"`"}needs-attention${"`"} label already exists on an issue before
   adding it (avoid duplicate label-add API calls).
 `;
@@ -236,9 +222,10 @@ predicates and SLA status.
 // needs. Closes the permissive-tools / restrictive-prompt silent-agent-
 // failure shape: even on prompt injection, Bash cannot reach `wget`,
 // `git push`, `rm`, or arbitrary shell — the agent is mechanically
-// constrained to its monitor role. Network verbs (`curl`, `dig`) widen
-// the surface vs PR-1; the in-prompt HTTPS-and-non-RFC1918 guard at step
-// 3c above is the load-bearing SSRF mitigation (Layer 1 of dual defense).
+// constrained to its monitor role. Network verbs (`curl`, `dig`) REMOVED
+// in #4068 — predicates are now validated + executed server-side by
+// _predicate-validator.ts (Layer 3). The agent no longer needs network
+// access; pre-validated results are injected into the prompt.
 // The trailing `--` is load-bearing — see cron-daily-triage.ts:CLAUDE_CODE_FLAGS
 // for the explanation. claude 2.x's --allowedTools is variadic and consumes
 // the prompt as a tool name without the end-of-options marker. #4017 bug 8/8.
@@ -247,7 +234,7 @@ const CLAUDE_CODE_FLAGS = [
   "--model", "claude-sonnet-4-6",
   "--max-turns", "30",
   "--allowedTools",
-  "Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh issue close:*),Bash(gh label create:*),Bash(curl:*),Bash(dig:*),Read,Glob,Grep",
+  "Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh issue close:*),Bash(gh label create:*),Read,Glob,Grep",
   "--",
 ];
 
@@ -255,16 +242,10 @@ const CLAUDE_CODE_FLAGS = [
 // test parity (cron-follow-through-monitor.test.ts imports to avoid
 // hard-coded timing drift).
 export const MAX_TURN_DURATION_MS = 15 * 60 * 1000;
-export const KILL_ESCALATION_MS = 5_000;
 
 // Sentry slug — NEW resource added in apps/web-platform/infra/sentry/cron-monitors.tf
 // at this PR. Function id and slug naming match (no continuity rename hazard).
 const SENTRY_MONITOR_SLUG = "scheduled-follow-through";
-
-// Validators for env-var-sourced URL components — reused verbatim from PR-1.
-const SENTRY_DOMAIN_RE = /^[a-z0-9.-]+\.sentry\.io$/i;
-const SENTRY_PROJECT_RE = /^\d+$/;
-const SENTRY_PUBLIC_KEY_RE = /^[a-f0-9]{32}$/;
 
 // Spawn-env allowlist. Same shape as PR-1: only PATH, HOME, NODE_ENV,
 // ANTHROPIC_API_KEY, GH_TOKEN reach the subprocess. Caps SSRF + secret-
@@ -277,23 +258,6 @@ function buildSpawnEnv(): NodeJS.ProcessEnv {
     NODE_ENV: process.env.NODE_ENV,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     GH_TOKEN: process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN,
-  };
-}
-
-interface SpawnResult {
-  ok: boolean;
-  exitCode: number | null;
-  signal: NodeJS.Signals | null;
-  abortedByTimeout: boolean;
-  durationMs: number;
-}
-
-interface HandlerArgs {
-  step: { run<T>(name: string, cb: () => Promise<T>): Promise<T> };
-  logger: {
-    info: (...a: unknown[]) => void;
-    warn: (...a: unknown[]) => void;
-    error: (...a: unknown[]) => void;
   };
 }
 
@@ -431,7 +395,47 @@ export async function cronFollowThroughMonitorHandler({
     }
   });
 
-  // Step 2: claude-eval (mirror PR-1 cron-daily-triage's claude-eval shape).
+  // Step 2: validate-predicates — Layer 3 SSRF hardening (#4068).
+  // Fetches open follow-through issues, parses predicate YAML, validates
+  // URLs against ALLOWED_PREDICATE_HOSTS allowlist + public-IP check,
+  // and executes http-200/dns predicates server-side. Results are injected
+  // into the agent prompt so the agent never needs network verbs.
+  const predicateResultsMarkdown = await step.run(
+    "validate-predicates",
+    async (): Promise<string> => {
+      try {
+        // execFileSync (NOT execSync) — no shell, immune to injection.
+        // The args are fully hardcoded; no user input reaches this call.
+        const stdout = execFileSync(
+          "gh",
+          ["issue", "list", "--label", "follow-through", "--state", "open",
+           "--json", "number,title,body", "--limit", "100"],
+          { env: buildSpawnEnv(), timeout: 30_000 },
+        ).toString("utf-8");
+        const issues: IssueData[] = JSON.parse(stdout || "[]");
+
+        if (issues.length === 0) {
+          return "No open follow-through issues found.";
+        }
+
+        const results = await validateAndExecutePredicates(issues);
+        return formatPredicateResults(results);
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "cron-validate-predicates",
+          op: "validate-predicates",
+          message: "Predicate validation step failed",
+          extra: { fn: "cron-follow-through-monitor" },
+        });
+        return "## Pre-Validated Predicate Results\n\nPredicate validation unavailable — agent should proceed with SLA tracking only.";
+      }
+    },
+  );
+
+  // Step 3: claude-eval (mirror PR-1 cron-daily-triage's claude-eval shape).
+  // Inject pre-validated predicate results into the prompt so the agent
+  // uses server-side results instead of executing network requests.
+  const promptWithPredicates = FOLLOW_THROUGH_PROMPT + "\n\n" + predicateResultsMarkdown;
   const result = await step.run("claude-eval", async (): Promise<SpawnResult> => {
     const claudeBin = resolveClaudeBin();
     const ac = new AbortController();
@@ -445,7 +449,7 @@ export async function cronFollowThroughMonitorHandler({
       return await new Promise<SpawnResult>((resolve) => {
         const child = spawn(
           claudeBin,
-          [...CLAUDE_CODE_FLAGS, FOLLOW_THROUGH_PROMPT],
+          [...CLAUDE_CODE_FLAGS, promptWithPredicates],
           {
             detached: true, // own process group so SIGTERM propagates to grandchildren
             stdio: ["ignore", "inherit", "inherit"],
@@ -513,51 +517,16 @@ export async function cronFollowThroughMonitorHandler({
     }
   });
 
-  // Step 3: sentry-heartbeat — single end-of-job POST per
+  // Step 4: sentry-heartbeat — single end-of-job POST per
   // 2026-05-18-vendor-cron-heartbeat-silent-fail-pattern.md. Sentry slug
   // matches the new monitor resource (Phase 4).
   await step.run("sentry-heartbeat", async () => {
-    const domain = process.env.SENTRY_INGEST_DOMAIN;
-    const projectId = process.env.SENTRY_PROJECT_ID;
-    const publicKey = process.env.SENTRY_PUBLIC_KEY;
-    if (!domain || !projectId || !publicKey) {
-      logger.info(
-        { fn: "cron-follow-through-monitor" },
-        "Sentry env unset — skipping heartbeat",
-      );
-      return;
-    }
-    if (
-      !SENTRY_DOMAIN_RE.test(domain) ||
-      !SENTRY_PROJECT_RE.test(projectId) ||
-      !SENTRY_PUBLIC_KEY_RE.test(publicKey)
-    ) {
-      logger.warn(
-        { fn: "cron-follow-through-monitor" },
-        "Sentry env malformed — skipping heartbeat",
-      );
-      return;
-    }
-    const status = result.ok ? "ok" : "error";
-    const url = `https://${domain}/api/${projectId}/cron/${SENTRY_MONITOR_SLUG}/${publicKey}/?status=${status}`;
-    try {
-      await fetch(url, {
-        method: "POST",
-        signal: AbortSignal.timeout(10_000),
-      });
-    } catch (err) {
-      const e = err as Error;
-      reportSilentFallback(e, {
-        feature: "cron-sentry-heartbeat",
-        op: "fetch",
-        message: "Sentry Crons heartbeat POST failed",
-        extra: {
-          fn: "cron-follow-through-monitor",
-          status,
-          aborted: e.name === "TimeoutError",
-        },
-      });
-    }
+    await postSentryHeartbeat({
+      ok: result.ok,
+      sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+      cronName: "cron-follow-through-monitor",
+      logger,
+    });
   });
 
   return {

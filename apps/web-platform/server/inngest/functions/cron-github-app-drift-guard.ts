@@ -46,19 +46,17 @@ import {
   PROBE_ISSUE_REPO,
 } from "@/server/github/probe-octokit";
 import {
+  postSentryHeartbeat,
+  type HandlerArgs,
+} from "./_cron-shared";
+import {
   diffGithubAppManifest,
   type AppManifest,
   type ManifestDiffResult,
 } from "@/server/github/manifest-diff";
 
 const SENTRY_MONITOR_SLUG = "scheduled-github-app-drift-guard";
-const SENTRY_HEARTBEAT_TIMEOUT_MS = 10_000;
 const RESEND_TIMEOUT_MS = 10_000;
-
-// Validators (identical to cron-oauth-probe).
-const SENTRY_DOMAIN_RE = /^[a-z0-9.-]+\.sentry\.io$/i;
-const SENTRY_PROJECT_RE = /^\d+$/;
-const SENTRY_PUBLIC_KEY_RE = /^[a-f0-9]{32}$/;
 
 // Issue titles — match workflow lines 603, 606, 577 verbatim.
 const ISSUE_TITLE_AUTH_BROKEN = "[ci/auth-broken] GitHub App drift-guard fired";
@@ -699,15 +697,6 @@ async function notifyOpsEmail(args: {
 // Handler entry point
 // =============================================================================
 
-interface HandlerArgs {
-  step: { run<T>(name: string, cb: () => Promise<T>): Promise<T> };
-  logger: {
-    info: (...a: unknown[]) => void;
-    warn: (...a: unknown[]) => void;
-    error: (...a: unknown[]) => void;
-  };
-}
-
 export async function cronGithubAppDriftGuardHandler({
   step,
   logger,
@@ -836,48 +825,12 @@ export async function cronGithubAppDriftGuardHandler({
 
   // Step 4: sentry-heartbeat — single end-of-job POST.
   await step.run("sentry-heartbeat", async () => {
-    const domain = process.env.SENTRY_INGEST_DOMAIN;
-    const projectId = process.env.SENTRY_PROJECT_ID;
-    const publicKey = process.env.SENTRY_PUBLIC_KEY;
-    if (!domain || !projectId || !publicKey) {
-      logger.info(
-        { fn: "cron-github-app-drift-guard" },
-        "Sentry env unset — skipping heartbeat",
-      );
-      return;
-    }
-    if (
-      !SENTRY_DOMAIN_RE.test(domain) ||
-      !SENTRY_PROJECT_RE.test(projectId) ||
-      !SENTRY_PUBLIC_KEY_RE.test(publicKey)
-    ) {
-      logger.warn(
-        { fn: "cron-github-app-drift-guard" },
-        "Sentry env malformed — skipping heartbeat",
-      );
-      return;
-    }
-    // Status routing: ok only when no failure AND no leak.
-    const status =
-      result.failureMode === "" && !leakDetected ? "ok" : "error";
-    const url = `https://${domain}/api/${projectId}/cron/${SENTRY_MONITOR_SLUG}/${publicKey}/?status=${status}`;
-    try {
-      await fetch(url, {
-        method: "POST",
-        signal: AbortSignal.timeout(SENTRY_HEARTBEAT_TIMEOUT_MS),
-      });
-    } catch (err) {
-      reportSilentFallback(redactedError(err), {
-        feature: "cron-sentry-heartbeat",
-        op: "fetch",
-        message: "Sentry Crons heartbeat POST failed",
-        extra: {
-          fn: "cron-github-app-drift-guard",
-          status,
-          aborted: (err as Error).name === "TimeoutError",
-        },
-      });
-    }
+    await postSentryHeartbeat({
+      ok: result.failureMode === "" && !leakDetected,
+      sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+      cronName: "cron-github-app-drift-guard",
+      logger,
+    });
   });
 
   return {

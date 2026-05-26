@@ -2,7 +2,7 @@
 title: "Compound Promotion Loop — operator runbook"
 type: runbook
 issue: "#2720"
-last_updated: 2026-05-11
+last_updated: 2026-05-26
 ---
 
 # Compound Promotion Loop — operator runbook
@@ -10,13 +10,18 @@ last_updated: 2026-05-11
 ## What it does
 
 The Compound Promotion Loop is Layer 2 of the self-healing-workflow design.
-A weekly GitHub Actions cron (Sunday 00:00 UTC) reads
-`knowledge-base/project/learnings/`, runs a deterministic GDPR + retired-rule
-shell pre-pass over the corpus, then calls the Anthropic API to cluster
+A weekly Inngest cron function (Sunday 00:00 UTC) at
+`apps/web-platform/server/inngest/functions/cron-compound-promote.ts`
+reads `knowledge-base/project/learnings/`, runs a deterministic GDPR +
+retired-rule pre-pass over the corpus, then calls the Anthropic API to cluster
 learnings by problem/root-cause. When a cluster reaches >=5 source learnings
 the loop opens up to **2 draft PRs per week**, each proposing a skill-instruction
 edit or an `AGENTS.core.md` rule addition. The loop **never auto-merges** —
 an operator confirms each proposal via normal PR review.
+
+**Handler:** `apps/web-platform/server/inngest/functions/cron-compound-promote.ts`
+**Inngest function ID:** `cron-compound-promote`
+**Sentry monitor:** `scheduled-compound-promote`
 
 The capability is **default OFF**. Enabling sends summaries (path + first 10
 lines per file) of your learnings corpus to Anthropic.
@@ -38,7 +43,9 @@ git commit -m "chore: enable compound-promotion-loop"
 # ... open a PR and merge after review ...
 
 # 3. Confirm the next scheduled run will fire (Sunday 00:00 UTC) or trigger now:
-gh workflow run scheduled-compound-promote.yml
+curl -s -X POST https://soleur.ai/api/inngest \
+  -H "content-type: application/json" \
+  -d '{"name":"cron/compound-promote.manual-trigger","data":{}}'
 ```
 
 > **Note.** `promotion-config.yml.example` is documentation only — it shows

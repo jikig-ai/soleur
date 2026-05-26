@@ -45,10 +45,28 @@ service_journal_tail() {
   fi
 }
 
+# Per-cron last-fire timestamps written by postSentryHeartbeat (#4131).
+# Glob is best-effort; empty dir or missing path produces "{}".
+inngest_crons_json() {
+  local dir="/var/lib/inngest/cron-fires"
+  if [[ ! -d "$dir" ]]; then echo "{}"; return; fi
+  local result="{}"
+  for f in "$dir"/*.json; do
+    [[ -f "$f" ]] || continue
+    local slug last_ok
+    slug=$(jq -r '.slug // empty' "$f" 2>/dev/null) || continue
+    last_ok=$(jq -r '.last_ok_at // empty' "$f" 2>/dev/null) || continue
+    [[ -n "$slug" && -n "$last_ok" ]] || continue
+    result=$(echo "$result" | jq --arg s "$slug" --arg t "$last_ok" '. + {($s): {last_ok_at: $t}}')
+  done
+  echo "$result"
+}
+
 HEARTBEAT_STATUS="$(service_status inngest-heartbeat.service)"
 INNGEST_SERVER_STATUS="$(service_status inngest-server.service)"
 VECTOR_STATUS="$(service_status vector.service)"
 VECTOR_JOURNAL_TAIL="$(service_journal_tail vector.service)"
+INNGEST_CRONS="$(inngest_crons_json)"
 
 STATE_FILE="${CI_DEPLOY_STATE:-/var/lock/ci-deploy.state}"
 
@@ -67,9 +85,11 @@ jq -nc \
   --arg is "$INNGEST_SERVER_STATUS" \
   --arg vs "$VECTOR_STATUS" \
   --arg vj "$VECTOR_JOURNAL_TAIL" \
+  --argjson ic "$INNGEST_CRONS" \
   '$base + {services: (($base.services // {}) + {
     inngest_heartbeat: $hb,
     inngest_server: $is,
     vector: $vs,
-    vector_journal_tail: $vj
+    vector_journal_tail: $vj,
+    inngest_crons: $ic
   })}'
