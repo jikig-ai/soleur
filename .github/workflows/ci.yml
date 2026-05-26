@@ -433,9 +433,7 @@ jobs:
       # as root by default — that is the supported path for actions/checkout
       # (see https://github.com/actions/checkout/issues/956). Do NOT add
       # `options: --user 1001` — it triggers UID-mismatch permission errors
-      # against /__w/_temp. Image ships Node 24; setup-node pins 22 below
-      # because Next.js's `next/headers` export lacks the `.js` extension
-      # that Node 24's strict ESM resolver requires (ERR_MODULE_NOT_FOUND).
+      # against /__w/_temp. Image ships Node 24 (no actions/setup-node needed).
       image: mcr.microsoft.com/playwright:v1.58.2-jammy@sha256:4698a73749c5848d3f5fcd42a2174d172fcad2b2283e087843b115424303a565
     defaults:
       run:
@@ -444,11 +442,6 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-
-      - name: Pin Node 22 (Next.js ESM compat)
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: 22
 
       - name: Install unzip (required by setup-bun)
         # The Playwright Jammy image does not include unzip, which oven-sh/setup-bun
