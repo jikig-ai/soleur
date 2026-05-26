@@ -20,6 +20,22 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/dashboard/chat/conv-1",
 }));
 
+vi.mock("@/lib/supabase/server", () => ({
+  createClient: vi.fn().mockResolvedValue({
+    auth: { getUser: vi.fn().mockResolvedValue({ data: { user: null }, error: null }) },
+  }),
+}));
+vi.mock("@/lib/feature-flags/server", () => ({
+  isByokDelegationsEnabled: vi.fn().mockResolvedValue(false),
+}));
+vi.mock("@/server/workspace-resolver", () => ({
+  getCurrentOrganizationId: vi.fn().mockReturnValue(null),
+}));
+vi.mock("@/server/byok-delegation-ui-resolver", () => ({
+  resolveGranteeDelegation: vi.fn().mockResolvedValue(null),
+  resolveGranteeAcceptanceStatus: vi.fn().mockResolvedValue({ accepted: false, acceptedAt: null, sideLetterVersion: null }),
+}));
+
 // useConversations is mocked to control the row set the rail receives.
 const { useConversationsMock } = vi.hoisted(() => ({
   useConversationsMock: vi.fn(),
