@@ -459,19 +459,82 @@ export async function exportSqlTable(
     });
   }
 
-  // -- conversations -----------------------------------------------------
-  let conversationIds: string[] = [];
+  // -- workspace ID prefetch (for conversations UNION, #4358) -----------
+  // Lightweight prefetch of workspace_ids the subject is a member of,
+  // used to widen the conversations query below. The full
+  // workspace_members export (`select("*")`) still runs in its own
+  // section later; this prefetch only pulls the FK column needed for
+  // the PostgREST `.or()` predicate.
+  let prefetchWorkspaceIds: string[] = [];
   {
     const { data, error } = await service
-      .from("conversations")
-      .select("*")
+      .from("workspace_members")
+      .select("workspace_id")
       .eq("user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error)
+      throw new Error(
+        `workspace_members (conversations prefetch) read failed: ${error.message}`,
+      );
+    prefetchWorkspaceIds = ((data ?? []) as { workspace_id?: unknown }[])
+      .map((r) => r.workspace_id)
+      .filter((v): v is string => typeof v === "string");
+  }
+
+  // -- conversations -----------------------------------------------------
+  // Art. 15 completeness (#4358): UNION of subject-owned conversations
+  // (user_id = expectedUserId) AND conversations the subject participates
+  // in via workspace membership (workspace_id IN prefetchWorkspaceIds).
+  // This captures messages the subject authored in co-member-owned
+  // conversations within shared workspaces. When prefetchWorkspaceIds is
+  // empty (no workspace memberships), falls back to the direct-owner
+  // predicate only.
+  let conversationIds: string[] = [];
+  {
+    // Per-row WHERE lint (AC30) requires the predicate (`.or()` or
+    // `.eq()`) to appear in the same chain as the `.from()` call. The
+    // ternary below keeps both paths in the single statement the lint
+    // parses.
+    const { data, error } =
+      prefetchWorkspaceIds.length > 0
+        ? await service
+            .from("conversations")
+            .select("*")
+            .or(
+              `user_id.eq.${expectedUserId},workspace_id.in.(${prefetchWorkspaceIds.join(",")})`,
+            )
+        : await service
+            .from("conversations")
+            .select("*")
+            .eq("user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
     if (error) throw new Error(`conversations read failed: ${error.message}`);
     const rows = (data ?? []) as Record<string, unknown>[];
-    assertReadScope(rows, expectedUserId, "conversations", {
-      ownerField: "user_id",
-    });
+    // Two-arm cross-tenant assertion (#4358): every returned row MUST
+    // satisfy (user_id = expectedUserId) OR (workspace_id is in the
+    // subject's prefetched workspace set). Fail-closed via
+    // CrossTenantViolation if neither arm holds.
+    const wsSet = new Set(prefetchWorkspaceIds);
+    for (const row of rows) {
+      const isOwned =
+        typeof row.user_id === "string" && row.user_id === expectedUserId;
+      const isParticipated =
+        typeof row.workspace_id === "string" && wsSet.has(row.workspace_id);
+      if (!isOwned && !isParticipated) {
+        const err = new CrossTenantViolation(
+          "conversations",
+          expectedUserId,
+          typeof row.user_id === "string" ? row.user_id : null,
+        );
+        mirrorCrossTenantViolation(
+          typeof row.user_id === "string" ? row.user_id : null,
+          expectedUserId,
+          "conversations",
+          err,
+        );
+        throw err;
+      }
+    }
     conversationIds = rows
       .map((r) => r.id)
       .filter((v): v is string => typeof v === "string");
@@ -484,11 +547,13 @@ export async function exportSqlTable(
 
   // -- messages (joinVia conversations) ----------------------------------
   // Per-row Art. 15(4) redaction predicate (#4319): messages authored
-  // by a non-subject within a subject-owned conversation are returned
+  // by a non-subject within a subject-accessible conversation are returned
   // as structural shells (content + namespace columns nulled, raw
   // user_id replaced with a per-bundle salt-scoped pseudonym).
   // CrossTenantViolation runs BEFORE the redaction predicate (TR3
   // invariant) so the violation surface is unchanged.
+  // #4358: conversationIds now includes both subject-owned AND
+  // workspace-participated conversations (via the UNION above).
   let messageIds: string[] = [];
   // Allowlist (#4319): IDs of messages authored by the subject. The
   // attachments block redacts any attachment whose message_id is NOT
@@ -503,12 +568,13 @@ export async function exportSqlTable(
     if (error) throw new Error(`messages read failed: ${error.message}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     // No direct owner_id; verify every message's conversation_id is in
-    // the set we already proved is owner-scoped. If a service-role
-    // glitch returned a row whose conversation_id is NOT in our owner-
-    // scoped set, raise CrossTenantViolation.
-    const ownedConvSet = new Set(conversationIds);
+    // the set we already proved is scope-verified (owned OR workspace-
+    // participated, #4358). If a service-role glitch returned a row
+    // whose conversation_id is NOT in our scope-verified set, raise
+    // CrossTenantViolation.
+    const scopedConvSet = new Set(conversationIds);
     for (const row of rows) {
-      if (typeof row.conversation_id !== "string" || !ownedConvSet.has(row.conversation_id)) {
+      if (typeof row.conversation_id !== "string" || !scopedConvSet.has(row.conversation_id)) {
         const err = new CrossTenantViolation(
           "messages",
           expectedUserId,
