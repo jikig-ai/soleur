@@ -229,7 +229,10 @@ describe("POST /api/webhooks/github — inngest.send retry on transient fetch fa
 
   it("releases dedup row after all retries exhausted", async () => {
     const fetchError = new TypeError("fetch failed");
-    mockInngestSend.mockRejectedValue(fetchError);
+    mockInngestSend
+      .mockRejectedValueOnce(fetchError)
+      .mockRejectedValueOnce(fetchError)
+      .mockRejectedValueOnce(fetchError);
     const req = makeRequest({ body: { installation: { id: 42 } } });
     const res = await POST(req);
     expect(res.status).toBe(500);

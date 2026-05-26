@@ -47,6 +47,20 @@ describe("isTransientFetchError", () => {
     expect(isTransientFetchError(err)).toBe(true);
   });
 
+  it("returns true for ENOTFOUND", () => {
+    const err = Object.assign(new Error("getaddrinfo ENOTFOUND"), {
+      code: "ENOTFOUND",
+    });
+    expect(isTransientFetchError(err)).toBe(true);
+  });
+
+  it("returns true for ENETDOWN", () => {
+    const err = Object.assign(new Error("network is down"), {
+      code: "ENETDOWN",
+    });
+    expect(isTransientFetchError(err)).toBe(true);
+  });
+
   it("returns false for generic Error", () => {
     expect(isTransientFetchError(new Error("something else"))).toBe(false);
   });
@@ -104,10 +118,11 @@ describe("sendInngestWithRetry", () => {
     expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({
         attempt: 1,
+        maxAttempts: 3,
         feature: "github-webhook",
         deliveryId: "d-123",
       }),
-      expect.stringContaining("github-webhook"),
+      expect.stringContaining("1/3"),
     );
   });
 });

@@ -1,7 +1,7 @@
 import logger from "@/server/logger";
 
 const MAX_RETRIES = 2;
-const BASE_DELAY_MS = 200;
+const BASE_DELAY_MS = 500;
 
 export function isTransientFetchError(err: unknown): boolean {
   if (err instanceof TypeError && err.message === "fetch failed") return true;
@@ -17,6 +17,8 @@ export function isTransientFetchError(err: unknown): boolean {
       "UND_ERR_SOCKET",
       "ECONNRESET",
       "ECONNREFUSED",
+      "ENOTFOUND",
+      "ENETDOWN",
     ].includes(code);
   }
   return false;
@@ -35,8 +37,8 @@ export async function sendInngestWithRetry(
     } catch (err) {
       if (attempt < MAX_RETRIES && isTransientFetchError(err)) {
         logger.warn(
-          { attempt: attempt + 1, ...context, err },
-          `${context.feature}: inngest.send transient failure — retrying`,
+          { attempt: attempt + 1, maxAttempts: MAX_RETRIES + 1, ...context, err },
+          `${context.feature}: inngest.send transient failure — retrying (${attempt + 1}/${MAX_RETRIES + 1})`,
         );
         await new Promise((r) => setTimeout(r, BASE_DELAY_MS * 2 ** attempt));
         continue;
