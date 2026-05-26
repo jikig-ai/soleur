@@ -169,17 +169,14 @@ describe("POST /api/webhooks/github — dedup (AC1)", () => {
 });
 
 describe("POST /api/webhooks/github — scope-grant gate (AC2)", () => {
-  it("returns 200 WITHOUT inngest.send when no active grant; logs + Sentry fire", async () => {
+  it("returns 200 WITHOUT inngest.send when no active grant; logs at info level; no Sentry emission", async () => {
     mockIsGranted.mockResolvedValueOnce(null);
     const req = makeRequest({ body: { installation: { id: 42 } } });
     const res = await POST(req);
     expect(res.status).toBe(200);
     expect(mockInngestSend).not.toHaveBeenCalled();
-    expect(mockLogger.warn).toHaveBeenCalled();
-    expect(mockSentryCaptureMessage).toHaveBeenCalledWith(
-      expect.stringContaining("no active scope_grant"),
-      expect.any(Object),
-    );
+    expect(mockLogger.info).toHaveBeenCalled();
+    expect(mockSentryCaptureMessage).not.toHaveBeenCalled();
   });
 
   it("returns 404 when no founder owns the installation", async () => {

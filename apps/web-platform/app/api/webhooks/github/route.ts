@@ -327,15 +327,10 @@ export async function POST(request: Request) {
 
   const grant = await isGranted(supabase, founderId, actionClass);
   if (!grant) {
-    logger.warn(
+    logger.info(
       { founderId, actionClass, deliveryId },
       "GitHub webhook: no active scope_grant — skip inngest.send (fail-closed)",
     );
-    Sentry.captureMessage("GitHub webhook: no active scope_grant", {
-      level: "warning",
-      tags: { feature: "github-webhook", op: "no-grant", actionClass },
-      extra: { founderId, deliveryId },
-    });
     return NextResponse.json({ received: true });
   }
 

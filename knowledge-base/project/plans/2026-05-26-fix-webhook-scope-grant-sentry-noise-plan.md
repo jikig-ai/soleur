@@ -89,12 +89,12 @@ None.
 
 ## Acceptance Criteria
 
-- [ ] **AC1:** `grep -c "Sentry.captureMessage" apps/web-platform/app/api/webhooks/github/route.ts` returns 2 (secret-unset + signature-failed; the no-grant captureMessage is removed).
-- [ ] **AC2:** `grep -n "logger.info" apps/web-platform/app/api/webhooks/github/route.ts | grep "no active scope_grant"` returns exactly 1 match (the downgraded log line).
-- [ ] **AC3:** `grep -c "Sentry.captureException" apps/web-platform/app/api/webhooks/github/route.ts` returns 5 (unchanged -- dedup-insert, dedup-release, founder-lookup, inngest-send-push, inngest-send).
-- [ ] **AC4:** The `return NextResponse.json({ received: true })` immediately after the no-grant block is preserved.
-- [ ] **AC5:** TypeScript compiles without errors: `npx tsc --noEmit --project apps/web-platform/tsconfig.json`.
-- [ ] **AC6:** Test passes: the scope-grant gate test at `github-route.test.ts:172` asserts `mockLogger.info` (not `.warn`) and `expect(mockSentryCaptureMessage).not.toHaveBeenCalled()`.
+- [x] **AC1:** `grep -c "Sentry.captureMessage" apps/web-platform/app/api/webhooks/github/route.ts` returns 2 (secret-unset + signature-failed; the no-grant captureMessage is removed).
+- [x] **AC2:** `grep -n "logger.info" apps/web-platform/app/api/webhooks/github/route.ts | grep "no active scope_grant"` returns exactly 1 match (the downgraded log line).
+- [x] **AC3:** `grep -c "Sentry.captureException" apps/web-platform/app/api/webhooks/github/route.ts` returns 5 (unchanged -- dedup-insert, dedup-release, founder-lookup, inngest-send-push, inngest-send).
+- [x] **AC4:** The `return NextResponse.json({ received: true })` immediately after the no-grant block is preserved.
+- [x] **AC5:** TypeScript compiles without errors: `npx tsc --noEmit --project apps/web-platform/tsconfig.json`.
+- [x] **AC6:** Test passes: the scope-grant gate test at `github-route.test.ts:172` asserts `mockLogger.info` (not `.warn`) and `expect(mockSentryCaptureMessage).not.toHaveBeenCalled()`.
 
 ## Test Scenarios
 
