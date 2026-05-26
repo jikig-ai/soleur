@@ -95,14 +95,17 @@ function getAppId(): string {
   return appId;
 }
 
+let pemShapeWarned = false;
+
 function getPrivateKey(): string {
   const raw = process.env.GITHUB_APP_PRIVATE_KEY;
   if (!raw) throw new Error("GITHUB_APP_PRIVATE_KEY is not set");
   // Handle escaped newlines from env vars (common in Docker/Doppler)
   const pem = raw.replace(/\\n/g, "\n");
-  if (!/^-----BEGIN (RSA )?PRIVATE KEY-----/.test(pem)) {
+  if (!pemShapeWarned && !/^-----BEGIN (RSA )?PRIVATE KEY-----/.test(pem)) {
+    pemShapeWarned = true;
     log.warn(
-      { prefix: pem.slice(0, 30) },
+      { rawLength: pem.length, hasBeginMarker: pem.includes("-----BEGIN") },
       "PEM does not start with expected header — key may be corrupted",
     );
   }
@@ -470,41 +473,30 @@ export async function generateInstallationToken(
     tokenCache.delete(installationId);
   }
 
-  let jwt = createAppJwt();
+  const pem = getPrivateKey();
+  const pemFingerprint = createHash("sha256").update(pem).digest("hex").slice(0, 8);
 
-  let response = await githubFetch(
-    `${GITHUB_API}/app/installations/${installationId}/access_tokens`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${jwt}`,
-      },
-    },
-  );
+  function mintAndExchange() {
+    const jwt = createAppJwt();
+    return githubFetch(
+      `${GITHUB_API}/app/installations/${installationId}/access_tokens`,
+      { method: "POST", headers: { Authorization: `Bearer ${jwt}` } },
+    );
+  }
 
-  // Retry once on 401 — mirrors @octokit/auth-app's
-  // sendRequestWithRetries for GitHub token replication delay.
+  let response = await mintAndExchange();
+
+  // Retry once on 401 — defensive against transient GitHub
+  // replication delay on the JWT-authenticated token exchange.
   if (response.status === 401) {
     log.warn({ installationId }, "401 on installation token — retrying once after 1s");
+    await response.text().catch(() => {});
     await new Promise((r) => setTimeout(r, 1_000));
-    jwt = createAppJwt();
-    response = await githubFetch(
-      `${GITHUB_API}/app/installations/${installationId}/access_tokens`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${jwt}`,
-        },
-      },
-    );
+    response = await mintAndExchange();
   }
 
   if (!response.ok) {
     const body = await response.text();
-    const pemFingerprint = createHash("sha256")
-      .update(getPrivateKey())
-      .digest("hex")
-      .slice(0, 8);
     log.error(
       {
         status: response.status,
@@ -512,7 +504,6 @@ export async function generateInstallationToken(
         installationId,
         appId: getAppId(),
         pemFingerprint,
-        serverTimestamp: new Date().toISOString(),
       },
       "Failed to generate installation token",
     );

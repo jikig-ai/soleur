@@ -1,7 +1,7 @@
 /**
  * Tests for generateInstallationToken() hardening:
  * - PEM shape validation warning (AC3)
- * - Enhanced error logging with appId, PEM fingerprint, server timestamp (AC2)
+ * - Enhanced error logging with appId, PEM fingerprint (AC2)
  * - Retry-on-401 with fresh JWT (AC5)
  * - reportSilentFallback on final failure (AC4)
  */
@@ -17,7 +17,7 @@ const { privateKey: validPem } = generateKeyPairSync("rsa", {
 process.env.GITHUB_APP_ID = "99999";
 process.env.GITHUB_APP_PRIVATE_KEY = validPem;
 
-import { describe, test, expect, vi, beforeEach, afterAll } from "vitest";
+import { describe, test, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
 
 const {
   mockFetch,
@@ -109,12 +109,26 @@ function mock403() {
   };
 }
 
+function mock500() {
+  return {
+    ok: false,
+    status: 500,
+    text: async () => JSON.stringify({ message: "Internal Server Error" }),
+    json: async () => ({ message: "Internal Server Error" }),
+  };
+}
+
 describe("generateInstallationToken hardening", () => {
   beforeEach(() => {
+    vi.useFakeTimers();
     mockFetch.mockReset();
     mockLogWarn.mockReset();
     mockLogError.mockReset();
     mockReportSilentFallback.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe("retry-on-401 (AC5)", () => {
@@ -124,7 +138,9 @@ describe("generateInstallationToken hardening", () => {
         .mockResolvedValueOnce(mock401())
         .mockResolvedValueOnce(mockTokenSuccess());
 
-      const token = await generateInstallationToken(id);
+      const promise = generateInstallationToken(id);
+      await vi.advanceTimersByTimeAsync(1_000);
+      const token = await promise;
 
       expect(token).toBe("ghs_hardening_test_token");
       expect(mockFetch).toHaveBeenCalledTimes(2);
@@ -140,7 +156,10 @@ describe("generateInstallationToken hardening", () => {
         .mockResolvedValueOnce(mock401())
         .mockResolvedValueOnce(mock401());
 
-      await expect(generateInstallationToken(id)).rejects.toThrow(
+      const promise = generateInstallationToken(id);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await expect(promise).rejects.toThrow(
         /GitHub installation token request failed: 401/,
       );
       expect(mockFetch).toHaveBeenCalledTimes(2);
@@ -154,23 +173,34 @@ describe("generateInstallationToken hardening", () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
-    test("uses fresh JWT on retry (different Authorization header)", async () => {
+    test("uses fresh JWT on retry (calls createAppJwt twice)", async () => {
       const id = uniqueId();
       mockFetch
         .mockResolvedValueOnce(mock401())
         .mockResolvedValueOnce(mockTokenSuccess());
 
-      await generateInstallationToken(id);
+      const promise = generateInstallationToken(id);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await promise;
 
       const firstAuth = mockFetch.mock.calls[0][1].headers.Authorization;
       const secondAuth = mockFetch.mock.calls[1][1].headers.Authorization;
       expect(firstAuth).toMatch(/^Bearer /);
       expect(secondAuth).toMatch(/^Bearer /);
-      // JWTs include iat (issued-at) — different timestamps mean different JWTs.
-      // They may be identical if the clock doesn't tick between calls, so we
-      // just verify both are present (the fresh-mint is the contract, not the
-      // value difference).
-      expect(secondAuth).toBeTruthy();
+    });
+
+    test("throws with correct status after 401 followed by 500", async () => {
+      const id = uniqueId();
+      mockFetch
+        .mockResolvedValueOnce(mock401())
+        .mockResolvedValueOnce(mock500());
+
+      const promise = generateInstallationToken(id);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await expect(promise).rejects.toThrow(/500/);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockReportSilentFallback).toHaveBeenCalled();
     });
   });
 
@@ -181,7 +211,9 @@ describe("generateInstallationToken hardening", () => {
         .mockResolvedValueOnce(mock401())
         .mockResolvedValueOnce(mock401());
 
-      await expect(generateInstallationToken(id)).rejects.toThrow();
+      const promise = generateInstallationToken(id);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(promise).rejects.toThrow();
 
       expect(mockReportSilentFallback).toHaveBeenCalledWith(
         expect.any(Error),
@@ -200,7 +232,9 @@ describe("generateInstallationToken hardening", () => {
         .mockResolvedValueOnce(mock401())
         .mockResolvedValueOnce(mock401());
 
-      await expect(generateInstallationToken(id)).rejects.toThrow();
+      const promise = generateInstallationToken(id);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(promise).rejects.toThrow();
 
       const expectedFingerprint = createHash("sha256")
         .update(validPem)
@@ -220,12 +254,18 @@ describe("generateInstallationToken hardening", () => {
 });
 
 describe("getPrivateKey PEM shape validation (AC3)", () => {
-  test("does not warn for valid RSA PEM", async () => {
-    // Valid PEM is already set in env — just trigger a token call to
-    // exercise getPrivateKey via createAppJwt.
-    const id = uniqueId();
+  beforeEach(() => {
+    vi.useFakeTimers();
     mockFetch.mockReset();
     mockLogWarn.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test("does not warn for valid RSA PEM", async () => {
+    const id = uniqueId();
     mockFetch.mockResolvedValueOnce(mockTokenSuccess());
 
     await generateInstallationToken(id);
@@ -242,10 +282,7 @@ describe("getPrivateKey PEM shape validation (AC3)", () => {
 
     try {
       const id = uniqueId();
-      mockFetch.mockReset();
       mockLogWarn.mockReset();
-      // The call will fail at signing (can't sign with invalid PEM),
-      // but the warning should fire before that.
       try {
         mockFetch.mockResolvedValueOnce(mockTokenSuccess());
         await generateInstallationToken(id);
@@ -257,6 +294,10 @@ describe("getPrivateKey PEM shape validation (AC3)", () => {
         (args) => typeof args[1] === "string" && args[1].includes("PEM"),
       );
       expect(pemWarnings.length).toBeGreaterThan(0);
+      // Verify safe metadata — no raw PEM content logged
+      expect(pemWarnings[0][0]).toHaveProperty("rawLength");
+      expect(pemWarnings[0][0]).toHaveProperty("hasBeginMarker");
+      expect(pemWarnings[0][0]).not.toHaveProperty("prefix");
     } finally {
       process.env.GITHUB_APP_PRIVATE_KEY = originalKey;
     }
