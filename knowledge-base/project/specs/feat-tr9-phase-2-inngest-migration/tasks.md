@@ -2,15 +2,15 @@
 
 ## 0. Prerequisites
 
-- [ ] 0.1 ADR-033 amendment: document schedule staggering strategy, update re-evaluation criterion ("if Monday drain >4h or any function waits >120min, split pools"), document `event-` file prefix convention. Closes #4381.
-- [ ] 0.2 Wait for #4472 (substrate extraction) to merge — blocks C1-C5 only
-- [ ] 0.3 Extend BYOK sweep glob in `cron-no-byok-lease-sweep.test.ts` from `{cron,oneshot}-*.ts` to `{cron,oneshot,event}-*.ts`
+- [x] 0.1 ADR-033 amendment: document schedule staggering strategy, update re-evaluation criterion ("if Monday drain >4h or any function waits >120min, split pools"), document `event-` file prefix convention. Closes #4381.
+- [x] 0.2 Wait for #4472 (substrate extraction) to merge — blocks C1-C5 only. **Merged as f30dbbae.**
+- [x] 0.3 Extend BYOK sweep glob in `cron-no-byok-lease-sweep.test.ts` from `{cron,oneshot}-*.ts` to `{cron,oneshot,event}-*.ts`
 - [ ] 0.4 Verify Sentry alert rules include email delivery to ops@jikigai.com for cron monitor missed check-ins
 
 ## 1. DELETEs
 
-- [ ] D1 DELETE `scheduled-dogfood-3155.yml`
-- [ ] D2 DELETE `scheduled-gdpr-gate-preflight-eval-50d.yml`
+- [x] D1 DELETE `scheduled-dogfood-3155.yml`
+- [x] D2 DELETE `scheduled-gdpr-gate-preflight-eval-50d.yml` — already deleted on main (cleanup from PR-G #4461)
 
 ## 2. Oneshot / Event Conversions (no Sentry cron monitor)
 
