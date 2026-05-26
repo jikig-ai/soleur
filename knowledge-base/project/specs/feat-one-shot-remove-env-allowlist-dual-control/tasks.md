@@ -44,16 +44,24 @@ lane: single-domain
 
 - [ ] 6.1 Remove `TEAM_WORKSPACE_ALLOWLIST_ORG_IDS` from `agent-env-allowlist.test.ts` KEYS_TO_VERIFY + dedicated test case
 
-## Phase 7: Followthrough script
+## Phase 7: Followthrough script deletion
 
-- [ ] 7.1 Check #4277 status; delete or update `team-workspace-flag-flip-4284.sh`
+- [ ] 7.1 Delete `scripts/followthroughs/team-workspace-flag-flip-4284.sh` (issue #4284 is CLOSED)
 
 ## Phase 8: ADR-043 update
 
 - [ ] 8.1 Update Consequences section: dual-control -> single-control
 
-## Phase 9: Final verification
+## Phase 9: ADR-038 update (deepen-pass discovery)
 
-- [ ] 9.1 Run full test suite: `./node_modules/.bin/vitest run`
-- [ ] 9.2 Run TypeScript check: `npx tsc --noEmit`
-- [ ] 9.3 Verify no stale allowlist references: `grep -rn "TEAM_WORKSPACE_ALLOWLIST_ORG_IDS\|BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS\|getTeamWorkspaceAllowlist\|getByokDelegationsAllowlist\|cachedAllowlist\|cachedByokDelegationsAllowlist" apps/web-platform/lib/ apps/web-platform/server/ --include="*.ts" --include="*.tsx"`
+- [ ] 9.1 Update line 42 Decision summary with `[Updated 2026-05-26]` note
+- [ ] 9.2 Update lines 134-140 Feature-flag section heading + body
+- [ ] 9.3 Update line 158 Alternatives Considered rejection note
+
+## Phase 10: Final verification
+
+- [ ] 10.1 Run full test suite: `./node_modules/.bin/vitest run`
+- [ ] 10.2 Run TypeScript check: `npx tsc --noEmit`
+- [ ] 10.3 Verify no stale allowlist references in lib/server: `grep -rn "TEAM_WORKSPACE_ALLOWLIST_ORG_IDS\|BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS\|getTeamWorkspaceAllowlist\|getByokDelegationsAllowlist\|cachedAllowlist\|cachedByokDelegationsAllowlist" apps/web-platform/lib/ apps/web-platform/server/ --include="*.ts" --include="*.tsx"`
+- [ ] 10.4 Verify no stale allowlist references in test: `grep -rn "TEAM_WORKSPACE_ALLOWLIST_ORG_IDS\|BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS" apps/web-platform/test/ --include="*.ts"`
+- [ ] 10.5 Verify followthrough script deleted: `test ! -f scripts/followthroughs/team-workspace-flag-flip-4284.sh`

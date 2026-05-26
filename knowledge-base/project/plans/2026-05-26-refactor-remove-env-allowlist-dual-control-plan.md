@@ -4,9 +4,27 @@ type: refactor
 date: 2026-05-26
 lane: single-domain
 requires_cpo_signoff: false
+deepened: 2026-05-26
 ---
 
 # refactor: Remove env-allowlist dual-control gate from team-workspace-invite and byok-delegations
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-26
+**Sections enhanced:** 5
+
+### Key Improvements
+1. Added ADR-038 to Files-to-Edit (deepen-pass discovered dual-control references at lines 42, 134-140, 158 that the initial plan missed)
+2. Resolved followthrough script decision: issue #4284 is CLOSED -- delete the script unconditionally
+3. Added compliance-posture.md and Vendor DPA table post-merge documentation updates
+4. Verified all negative security claims via grep (orgId needed for Identity, .env.example clean, verify-required-secrets.sh clean)
+5. Strengthened AC4 grep scope to also cover `apps/web-platform/test/` directory
+
+### Research Insights
+- `orgId` parameter confirmed load-bearing for Flagsmith identity construction: `server.ts:100-101` uses `orgId` to build `org:<orgId>:<role>` identifier and `{ role, orgId }` traits
+- Consumer call-site signatures confirmed unchanged: all 5 consumers call `isTeamWorkspaceInviteEnabled(orgId, identity)` or `isByokDelegationsEnabled(orgId, identity)` -- no signature change needed
+- ADR-038 (`knowledge-base/engineering/architecture/decisions/ADR-038-team-workspace-multi-user-organizations-and-workspace-members.md`) contains a "Feature-flag two-key gate" section and "Alternatives Considered" rejection of single-key, both referencing the dual-control architecture that this PR supersedes
 
 ## Overview
 
@@ -187,18 +205,13 @@ The `KEYS_TO_VERIFY` array (line 19-22) currently lists `TEAM_WORKSPACE_ALLOWLIS
 
 The script's env-fallback mirror invariant (lines 225-240) checks `FLAG_TEAM_WORKSPACE_INVITE` and `FLAG_BYOK_DELEGATIONS` in Doppler. These are the FLAG_* env-fallback vars, NOT the allowlist vars. The allowlist vars (`TEAM_WORKSPACE_ALLOWLIST_ORG_IDS`, `BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS`) do not appear in this script at all. No changes needed.
 
-### Phase 9: Followthrough script update
+### Phase 9: Followthrough script deletion
 
-**Files to edit:**
+**Files to delete:**
 
 - `scripts/followthroughs/team-workspace-flag-flip-4284.sh`
 
-**Changes:** This script checks 3 preconditions, the third being the allowlist. After this PR, the third check is obsolete. Two options:
-
-- **Option A:** Delete the script entirely if the follow-through issue #4277 is already resolved.
-- **Option B:** Remove precondition (3) and update exit messaging.
-
-Decision: Check `gh issue view 4277 --json state` at work time. If closed, delete the file. If open, remove the allowlist precondition.
+**Changes:** Delete the script. Issue #4284 (`follow-through: FLAG_TEAM_WORKSPACE_INVITE=1 in prd post-legal-PR`) is CLOSED (verified 2026-05-26 via `gh issue view 4284 --json state`). The script's 3 preconditions are all satisfied and the sweeper has already auto-closed the issue. The third precondition (allowlist check) is the one being removed by this PR. No reason to keep the script.
 
 ### Phase 10: ADR-043 update
 
@@ -207,7 +220,21 @@ Decision: Check `gh issue view 4277 --json state` at work time. If closed, delet
 - `knowledge-base/engineering/architecture/decisions/ADR-043-flagsmith-per-org-targeting.md`
 
 **Changes:** Update the Consequences section (line 49):
-- Change "Dual-control preserved: Flagsmith boolean AND env-allowlist must both hold (defense-in-depth)" to "Single-control: Flagsmith segment rule is the sole per-org gate; env-allowlist removed. FLAG_* env vars remain as Flagsmith outage fallback."
+- Change "Dual-control preserved: Flagsmith boolean AND env-allowlist must both hold (defense-in-depth)" to "Single-control: Flagsmith segment rule is the sole per-org gate; env-allowlist removed (this PR). FLAG_* env vars remain as Flagsmith outage fallback."
+
+### Phase 11: ADR-038 update (deepen-pass discovery)
+
+**Files to edit:**
+
+- `knowledge-base/engineering/architecture/decisions/ADR-038-team-workspace-multi-user-organizations-and-workspace-members.md`
+
+**Changes:** ADR-038 contains dual-control references at three locations discovered during deepen-pass:
+
+1. **Line 42** (Decision summary): "The feature flag is a two-key gate (env var AND org allowlist) OFF by default in production until the legal-PR merges." -- Append a note: "[Updated 2026-05-26: env-allowlist removed; Flagsmith segment is now the sole per-org gate. See ADR-043.]"
+
+2. **Lines 134-140** (Feature-flag two-key gate section heading + body): Update the heading to "Feature-flag gate (Phase 4)" and add a note that the `TEAM_WORKSPACE_ALLOWLIST_ORG_IDS` env var and the dual-control architecture were removed in this PR.
+
+3. **Line 158** (Alternatives Considered rejection): The rejection of single-key was based on CPO conditions about accidental env-var flip. Add a note that this was superseded by ADR-043's Flagsmith segment-rule architecture which provides per-org control without the env-var surface.
 
 ## Domain Review
 
@@ -217,10 +244,11 @@ No cross-domain implications detected -- infrastructure/tooling simplification r
 
 ## Sharp Edges
 
-- **Do NOT remove `FLAG_TEAM_WORKSPACE_INVITE` / `FLAG_BYOK_DELEGATIONS` env vars.** These are the Flagsmith outage fallback (env-fallback mirror per ADR-038), not the allowlist.
-- **`orgId` parameter stays on both gate functions.** It is needed for Identity construction (passed to `getRuntimeFlag` via the identity object for Flagsmith per-org segment evaluation).
+- **Do NOT remove `FLAG_TEAM_WORKSPACE_INVITE` / `FLAG_BYOK_DELEGATIONS` env vars.** These are the Flagsmith outage fallback (env-fallback mirror per ADR-038), not the allowlist. Verified: `server.ts:85-91` `runtimeEnvFallback()` reads these via `envIsOn(envVar)` when Flagsmith is unreachable. `verify-required-secrets.sh:229` checks their presence in Doppler prd.
+- **`orgId` parameter stays on both gate functions.** Verified at `server.ts:100-101`: `getRuntimeFlag` passes `orgId` through to `fetchRuntimeFlagsFromFlagsmith(role, orgId)` which builds `org:<orgId>:<role>` identifier + `{ role, orgId }` traits for the Flagsmith SDK. Removing `orgId` from the function signature would break per-org segment evaluation.
 - **Post-merge Doppler cleanup.** After merge, `TEAM_WORKSPACE_ALLOWLIST_ORG_IDS` and `BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS` become orphaned secrets in Doppler. Clean up via `doppler secrets delete TEAM_WORKSPACE_ALLOWLIST_ORG_IDS BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS -p soleur -c prd`. This is a post-merge operator action, not automatable via MCP (Doppler MCP does not support secret deletion). Automation: not feasible because Doppler MCP does not expose a delete-secret capability.
-- **The followthrough script `team-workspace-flag-flip-4284.sh` may need deletion.** Check issue #4277 status at work time.
+- **Post-merge compliance-posture.md update.** After the Doppler secrets are deleted, update `knowledge-base/legal/compliance-posture.md`: (a) line 105 Active Items row references `TEAM_WORKSPACE_ALLOWLIST_ORG_IDS=<jikigai-org-id> in prd` as a remaining precondition -- update to reflect the allowlist was removed and the row can be closed; (b) line 65 Vendor DPA Status Flagsmith row says "Dual-control gating: every flag flip is the AND of Flagsmith boolean AND server-side env-allowlist" -- add an inline `[Updated YYYY-MM-DD: env-allowlist removed; single-control via Flagsmith segment]` annotation. These are compliance documentation updates that should happen post-merge alongside the Doppler cleanup.
+- **Historical knowledge-base references NOT modified.** Plans, brainstorms, specs, and legal audit files under `knowledge-base/project/` that mention the dual-control architecture are historical records of past decisions. They describe the state at the time they were written and should NOT be retroactively edited.
 
 ## Files to Edit
 
@@ -236,8 +264,9 @@ No cross-domain implications detected -- infrastructure/tooling simplification r
 | `apps/web-platform/app/api/workspace/invite-member/route.ts` | Comment update only |
 | `apps/web-platform/app/(dashboard)/dashboard/settings/team/page.tsx` | Comment update only |
 | `apps/web-platform/e2e/team-membership.e2e.ts` | Comment update only |
-| `scripts/followthroughs/team-workspace-flag-flip-4284.sh` | Remove or delete (depends on #4277 state) |
+| `scripts/followthroughs/team-workspace-flag-flip-4284.sh` | Delete (issue #4284 CLOSED) |
 | `knowledge-base/engineering/architecture/decisions/ADR-043-flagsmith-per-org-targeting.md` | Update dual-control -> single-control |
+| `knowledge-base/engineering/architecture/decisions/ADR-038-team-workspace-multi-user-organizations-and-workspace-members.md` | Update dual-control references at lines 42, 134-140, 158 |
 
 ## Files to Create
 
@@ -255,10 +284,14 @@ None.
 - [ ] AC6: All vitest tests pass: `./node_modules/.bin/vitest run apps/web-platform/lib/feature-flags/server.test.ts apps/web-platform/test/team-workspace-boot.test.ts apps/web-platform/test/team-membership-resolver.test.ts apps/web-platform/test/server/agent-env-allowlist.test.ts`.
 - [ ] AC7: ADR-043 Consequences section documents single-control decision.
 - [ ] AC8: No TypeScript errors: `npx tsc --noEmit --project apps/web-platform/tsconfig.json` (or equivalent).
+- [ ] AC9: ADR-038 dual-control references updated at lines 42, 134-140, 158 with `[Updated 2026-05-26]` annotations.
+- [ ] AC10: `scripts/followthroughs/team-workspace-flag-flip-4284.sh` deleted (issue #4284 CLOSED). Verify: `test ! -f scripts/followthroughs/team-workspace-flag-flip-4284.sh`.
+- [ ] AC11: No stale allowlist references in test files. Verify: `grep -rn "TEAM_WORKSPACE_ALLOWLIST_ORG_IDS\|BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS" apps/web-platform/test/ --include="*.ts"` returns empty.
 
 ### Post-merge (operator)
 
-- [ ] AC9: Delete orphaned Doppler secrets: `doppler secrets delete TEAM_WORKSPACE_ALLOWLIST_ORG_IDS BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS -p soleur -c prd`. Automation: not feasible because Doppler MCP does not expose a delete-secret capability.
+- [ ] AC12: Delete orphaned Doppler secrets: `doppler secrets delete TEAM_WORKSPACE_ALLOWLIST_ORG_IDS BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS -p soleur -c prd`. Automation: not feasible because Doppler MCP does not expose a delete-secret capability.
+- [ ] AC13: Update `knowledge-base/legal/compliance-posture.md` line 105 active item and line 65 Vendor DPA row to reflect single-control architecture. Automation: not feasible because this is a prose-level compliance documentation update requiring human judgment on phrasing.
 
 ## Test Scenarios
 
