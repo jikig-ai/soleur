@@ -118,6 +118,20 @@ jobs:
           GITHUB_BASE_REF: ${{ github.base_ref }}
         run: bash apps/web-platform/scripts/check-tc-document-sha.sh
 
+  # ADR ordinal + required-content sentinel (PR-B #4379 ADR-040 + ADR-041).
+  # Catches: (a) NEW ordinal collisions in knowledge-base/engineering/
+  # architecture/decisions/ (pre-existing collisions on main allowlisted in
+  # the script); (b) PR-B-required ADR-040 / ADR-041 missing or empty;
+  # (c) ADR file missing ## Status / ## Context / ## Decision /
+  # ## Consequences headings. See AC18 in 2026-05-25-feat-anthropic-leader-
+  # loop-pr-b-plan.md. No user-controlled inputs; static script call.
+  adr-ordinals:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Check ADR ordinals + content completeness
+        run: bash scripts/check-adr-ordinals.sh
+
   rule-metrics-shape:
     runs-on: ubuntu-latest
     steps:

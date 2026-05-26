@@ -1,0 +1,177 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "resource_changes": [
+    {
+      "address": "github_repository.legacy",
+      "mode": "managed",
+      "type": "github_repository",
+      "name": "legacy",
+      "provider_name": "registry.terraform.io/integrations/github",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {
+          "id": 1234,
+          "name": "legacy-repo"
+        },
+        "after": null
+      }
+    },
+    {
+      "address": "github_repository_ruleset.ci_required",
+      "mode": "managed",
+      "type": "github_repository_ruleset",
+      "name": "ci_required",
+      "provider_name": "registry.terraform.io/integrations/github",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "id": 14145388,
+          "rules": [
+            {
+              "required_status_checks": [
+                {
+                  "required_check": [
+                    {
+                      "context": "check-0",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-1",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-2",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-3",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-4",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-5",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-6",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-7",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-8",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-9",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-10",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-11",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-12",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-13",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-14",
+                      "integration_id": 15368
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "after": {
+          "id": 14145388,
+          "rules": [
+            {
+              "required_status_checks": [
+                {
+                  "required_check": [
+                    {
+                      "context": "check-0",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-1",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-2",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-3",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-4",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-5",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-6",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-7",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-8",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-9",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-10",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-11",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-12",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "check-13",
+                      "integration_id": 15368
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

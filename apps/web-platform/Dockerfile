@@ -58,6 +58,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git bubblewrap socat qpdf \
     && rm -rf /var/lib/apt/lists/*
 
+# Playwright Chromium system deps + browser binary (TR9 PR-11).
+# Baked at image-build time — bwrap sandbox blocks apt at handler runtime.
+# Version pinned to apps/web-platform/package.json @playwright/test devDep.
+# The @playwright/test package itself is a devDep (omitted from runner's
+# npm ci --omit=dev); only the browser binary + system libs persist.
+RUN npx playwright@1.58.2 install --with-deps chromium
+
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000

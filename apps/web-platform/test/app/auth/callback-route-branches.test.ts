@@ -5,15 +5,21 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // vitest hoists vi.mock() to the top of the file before any const/let runs.
 // ---------------------------------------------------------------------------
 
-const { mockReportSilentFallback, mockExchangeCodeForSession, mockGetUser } =
-  vi.hoisted(() => ({
-    mockReportSilentFallback: vi.fn(),
-    mockExchangeCodeForSession: vi.fn(),
-    mockGetUser: vi.fn(),
-  }));
+const {
+  mockReportSilentFallback,
+  mockWarnSilentFallback,
+  mockExchangeCodeForSession,
+  mockGetUser,
+} = vi.hoisted(() => ({
+  mockReportSilentFallback: vi.fn(),
+  mockWarnSilentFallback: vi.fn(),
+  mockExchangeCodeForSession: vi.fn(),
+  mockGetUser: vi.fn(),
+}));
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
+  warnSilentFallback: mockWarnSilentFallback,
   APP_URL_FALLBACK: "https://app.soleur.ai",
 }));
 
@@ -111,8 +117,8 @@ describe("GET /callback — no-code branches", () => {
       );
       expect(res.headers.get("cache-control")).toBe("no-store");
 
-      expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
-      const [, opts] = mockReportSilentFallback.mock.calls[0];
+      expect(mockWarnSilentFallback).toHaveBeenCalledTimes(1);
+      const [, opts] = mockWarnSilentFallback.mock.calls[0];
       expect(opts.feature).toBe("auth");
       expect(opts.op).toBe("callback_provider_error");
       expect(opts.extra.providerErrorCode).toBe(expectedRawCode);
@@ -133,7 +139,7 @@ describe("GET /callback — no-code branches", () => {
       "https://app.soleur.ai/login?error=oauth_failed",
     );
 
-    const [, opts] = mockReportSilentFallback.mock.calls[0];
+    const [, opts] = mockWarnSilentFallback.mock.calls[0];
     expect(opts.extra.providerErrorCode).toBe("unknown");
   });
 
@@ -184,7 +190,7 @@ describe("GET /callback — no-code branches", () => {
     );
 
     expect(res.status).toBe(307);
-    const [, opts] = mockReportSilentFallback.mock.calls[0];
+    const [, opts] = mockWarnSilentFallback.mock.calls[0];
     expect(opts.extra.refererHost).toBe("accounts.google.com");
     // Lock down: no port, no path, no query.
     expect(opts.extra.refererHost).not.toContain(":");

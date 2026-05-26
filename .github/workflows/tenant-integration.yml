@@ -183,6 +183,21 @@ jobs:
       # is correct for dev (which has a populated tracking table;
       # bootstrap-auto's 001-010 sentinel-row seed is meant for the
       # legacy prd-first apply path, not dev).
+      # Seed bot fixtures before migrations — migrations like
+      # 071_ux_audit_artifacts_bucket.sql reference auth.users rows
+      # that bot-fixture.ts creates. Without this, the migration
+      # degrades gracefully (NOTICE, not EXCEPTION) but the RLS
+      # policy is deferred until a post-seed re-apply.
+      - name: Seed bot fixtures (pre-migration)
+        working-directory: apps/web-platform
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c dev_scheduled -- \
+            bun plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts seed \
+            || echo "::warning::bot-fixture.ts seed failed — migrations will degrade gracefully"
+
       - name: Apply migrations to dev
         working-directory: apps/web-platform
         env:

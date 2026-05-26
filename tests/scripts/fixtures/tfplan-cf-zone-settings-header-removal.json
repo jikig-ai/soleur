@@ -1,0 +1,41 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "resource_changes": [
+    {
+      "address": "cloudflare_zone_settings_override.soleur_ai",
+      "mode": "managed",
+      "type": "cloudflare_zone_settings_override",
+      "name": "soleur_ai",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "zone_id": "zone-uuid",
+          "settings": [
+            {
+              "always_use_https": "on",
+              "min_tls_version": "1.2",
+              "security_header": [
+                {"enabled": true, "include_subdomains": true, "max_age": 31536000, "preload": false, "nosniff": true}
+              ]
+            }
+          ]
+        },
+        "after": {
+          "zone_id": "zone-uuid",
+          "settings": [
+            {
+              "always_use_https": "on",
+              "min_tls_version": "1.2",
+              "security_header": []
+            }
+          ]
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    }
+  ]
+}

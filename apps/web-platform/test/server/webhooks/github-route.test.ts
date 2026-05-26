@@ -169,17 +169,14 @@ describe("POST /api/webhooks/github — dedup (AC1)", () => {
 });
 
 describe("POST /api/webhooks/github — scope-grant gate (AC2)", () => {
-  it("returns 200 WITHOUT inngest.send when no active grant; logs + Sentry fire", async () => {
+  it("returns 200 WITHOUT inngest.send when no active grant; logs at info level; no Sentry emission", async () => {
     mockIsGranted.mockResolvedValueOnce(null);
     const req = makeRequest({ body: { installation: { id: 42 } } });
     const res = await POST(req);
     expect(res.status).toBe(200);
     expect(mockInngestSend).not.toHaveBeenCalled();
-    expect(mockLogger.warn).toHaveBeenCalled();
-    expect(mockSentryCaptureMessage).toHaveBeenCalledWith(
-      expect.stringContaining("no active scope_grant"),
-      expect.any(Object),
-    );
+    expect(mockLogger.info).toHaveBeenCalled();
+    expect(mockSentryCaptureMessage).not.toHaveBeenCalled();
   });
 
   it("returns 404 when no founder owns the installation", async () => {
@@ -215,6 +212,40 @@ describe("POST /api/webhooks/github — release-on-error (AC13)", () => {
     const second = await POST(makeRequest({ body: { installation: { id: 42 } } }));
     expect(second.status).toBe(200);
     expect(mockInngestSend).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("POST /api/webhooks/github — inngest.send retry on transient fetch failure", () => {
+  it("retries on TypeError: fetch failed and succeeds on second attempt", async () => {
+    mockInngestSend
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(undefined);
+    const req = makeRequest({ body: { installation: { id: 42 } } });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    expect(mockInngestSend).toHaveBeenCalledTimes(2);
+    expect(mockDeleteEq).not.toHaveBeenCalled();
+  });
+
+  it("releases dedup row after all retries exhausted", async () => {
+    const fetchError = new TypeError("fetch failed");
+    mockInngestSend
+      .mockRejectedValueOnce(fetchError)
+      .mockRejectedValueOnce(fetchError)
+      .mockRejectedValueOnce(fetchError);
+    const req = makeRequest({ body: { installation: { id: 42 } } });
+    const res = await POST(req);
+    expect(res.status).toBe(500);
+    expect(mockInngestSend).toHaveBeenCalledTimes(3);
+    expect(mockDeleteEq).toHaveBeenCalledWith("delivery_id", "delivery-abc-123");
+  });
+
+  it("does not retry on non-transient errors", async () => {
+    mockInngestSend.mockRejectedValueOnce(new Error("inngest auth failed"));
+    const req = makeRequest({ body: { installation: { id: 42 } } });
+    const res = await POST(req);
+    expect(res.status).toBe(500);
+    expect(mockInngestSend).toHaveBeenCalledTimes(1);
   });
 });
 

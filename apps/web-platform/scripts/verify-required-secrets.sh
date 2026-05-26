@@ -221,3 +221,20 @@ if [[ "$forbidden_present" -gt 0 ]]; then
 fi
 
 echo "::notice::All ${#REQUIRED[@]} required NEXT_PUBLIC_* secrets present in Doppler prd"
+
+# --- env-fallback mirror invariant (ADR-038 §Fallback semantics) -----------
+# Every RUNTIME_FLAG MUST have a corresponding env var in Doppler that mirrors
+# the prd-segment Flagsmith state. Without it, the fallback path (Flagsmith
+# outage → env) is broken.
+MIRROR_FLAGS=("FLAG_TEAM_WORKSPACE_INVITE" "FLAG_BYOK_DELEGATIONS")
+mirror_missing=0
+for flag in "${MIRROR_FLAGS[@]}"; do
+  val=$(doppler secrets get "$flag" -p soleur -c prd --plain 2>/dev/null || echo "")
+  if [[ -z "$val" ]]; then
+    echo "::error::env-fallback mirror: $flag must be defined in Doppler soleur/prd to mirror Flagsmith prd-segment state"
+    mirror_missing=$((mirror_missing + 1))
+  fi
+done
+if [[ "$mirror_missing" -gt 0 ]]; then
+  exit 1
+fi

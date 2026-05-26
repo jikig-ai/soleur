@@ -1,0 +1,59 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "resource_changes": [
+    {
+      "address": "cloudflare_record.www",
+      "mode": "managed",
+      "type": "cloudflare_record",
+      "name": "www",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": ["delete"],
+        "before": {
+          "name": "www",
+          "type": "CNAME",
+          "value": "soleur.ai",
+          "proxied": true,
+          "zone_id": "zone-uuid"
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    },
+    {
+      "address": "cloudflare_ruleset.cache_shared_binaries",
+      "mode": "managed",
+      "type": "cloudflare_ruleset",
+      "name": "cache_shared_binaries",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "id": "ruleset-cache-id",
+          "name": "soleur_cache_shared_binaries",
+          "kind": "zone",
+          "phase": "http_request_cache_settings",
+          "rules": [
+            {"id": "c1", "expression": "(http.request.uri.path matches \"^/dist/.*$\")", "action": "set_cache_settings", "enabled": true},
+            {"id": "c2", "expression": "(http.request.uri.path matches \"^/assets/.*$\")", "action": "set_cache_settings", "enabled": true}
+          ]
+        },
+        "after": {
+          "id": "ruleset-cache-id",
+          "name": "soleur_cache_shared_binaries",
+          "kind": "zone",
+          "phase": "http_request_cache_settings",
+          "rules": [
+            {"id": "c1", "expression": "(http.request.uri.path matches \"^/dist/.*$\")", "action": "set_cache_settings", "enabled": true}
+          ]
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    }
+  ]
+}

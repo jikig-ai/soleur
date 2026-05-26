@@ -16,6 +16,8 @@
 
 import { useState, useTransition } from "react";
 
+import { AcknowledgedPill } from "@/components/dashboard/acknowledged-pill";
+import { LeaderLoopStatus } from "@/components/dashboard/leader-loop-status";
 import { TypedConfirmModal } from "@/components/ui/typed-confirm-modal";
 import { useActionSend } from "@/hooks/use-action-send";
 import { humanTitle } from "@/lib/messages/action-class-copy";
@@ -154,7 +156,9 @@ function KbDriftCard({
       ) : null}
       <div className="flex flex-wrap gap-2">
         {acknowledged ? (
-          <AcknowledgedPill artifactUrl={artifactUrl} degraded={degraded} />
+          degraded ? (
+            <AcknowledgedPill artifactUrl={artifactUrl} degraded={degraded} />
+          ) : null
         ) : (
           <button
             type="button"
@@ -168,6 +172,9 @@ function KbDriftCard({
           </button>
         )}
       </div>
+      {acknowledged && !degraded ? (
+        <LeaderLoopStatus messageId={id} initialArtifactUrl={artifactUrl} />
+      ) : null}
     </article>
   );
 }
@@ -244,7 +251,9 @@ function GitHubCard({
 
       <div className="flex flex-wrap gap-2">
         {acknowledged ? (
-          <AcknowledgedPill artifactUrl={artifactUrl} degraded={degraded} />
+          degraded ? (
+            <AcknowledgedPill artifactUrl={artifactUrl} degraded={degraded} />
+          ) : null
         ) : (
           <button
             type="button"
@@ -259,6 +268,10 @@ function GitHubCard({
           </button>
         )}
       </div>
+
+      {acknowledged && !degraded ? (
+        <LeaderLoopStatus messageId={id} initialArtifactUrl={artifactUrl} />
+      ) : null}
 
       <TypedConfirmModal
         open={confirming !== null}
@@ -422,77 +435,3 @@ function StripeCard({
   );
 }
 
-interface AcknowledgedPillProps {
-  artifactUrl: string;
-  degraded: "enqueue_failed" | "no_artifact_in_pr_a" | undefined;
-}
-
-type PillState = "ack" | "pending" | "queued" | "no_artifact";
-
-function derivePillState(
-  artifactUrl: string,
-  degraded: AcknowledgedPillProps["degraded"],
-): PillState {
-  // Pure derivation. Precedence: no_artifact_in_pr_a > enqueue_failed >
-  // artifactUrl-present > artifactUrl-absent. Each branch is exclusive.
-  // The pure shape lets the component test matrix all four states
-  // without rendering, and prevents the latent bug where a future
-  // "degraded WITH partial artifact" shape silently drops the link.
-  if (degraded === "no_artifact_in_pr_a") return "no_artifact";
-  if (degraded === "enqueue_failed") return "queued";
-  if (artifactUrl) return "ack";
-  return "pending";
-}
-
-function AcknowledgedPill({ artifactUrl, degraded }: AcknowledgedPillProps) {
-  // PR-A — optimistic acknowledgment pill rendered on the 200 response
-  // from /send. The Inngest function emits the actual GitHub artifact
-  // within ~60s (happy path); operator follows the link to verify.
-  const state = derivePillState(artifactUrl, degraded);
-
-  if (state === "no_artifact") {
-    return (
-      <span
-        data-testid="acknowledged-pill"
-        data-pill-state="no_artifact"
-        className="inline-flex items-center gap-2 rounded-full bg-slate-700/40 px-3 py-1 text-xs font-medium text-slate-100"
-      >
-        Acknowledged — full handling lands in PR-B (#4360)
-      </span>
-    );
-  }
-  if (state === "queued") {
-    return (
-      <span
-        data-testid="acknowledged-pill"
-        data-pill-state="queued"
-        className="inline-flex items-center gap-2 rounded-full bg-amber-700/30 px-3 py-1 text-xs font-medium text-amber-100"
-      >
-        Acknowledged (queued — retry from a fresh card if no artifact appears within a minute)
-      </span>
-    );
-  }
-  if (state === "pending") {
-    return (
-      <span
-        data-testid="acknowledged-pill"
-        data-pill-state="pending"
-        className="inline-flex items-center gap-2 rounded-full bg-green-700/30 px-3 py-1 text-xs font-medium text-green-100"
-      >
-        Acknowledged (pending artifact)
-      </span>
-    );
-  }
-  return (
-    <a
-      href={artifactUrl}
-      target="_blank"
-      rel="noopener noreferrer"
-      data-testid="acknowledged-pill"
-      data-pill-state="ack"
-      className="inline-flex items-center gap-2 rounded-full bg-green-700/30 px-3 py-1 text-xs font-medium text-green-100 hover:bg-green-700/40"
-    >
-      Acknowledged — View on GitHub
-    </a>
-  );
-}

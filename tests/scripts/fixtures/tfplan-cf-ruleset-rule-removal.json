@@ -1,0 +1,60 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "resource_changes": [
+    {
+      "address": "cloudflare_ruleset.seo_page_redirects",
+      "mode": "managed",
+      "type": "cloudflare_ruleset",
+      "name": "seo_page_redirects",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "id": "ruleset-id-redirects",
+          "name": "soleur_seo_page_redirects",
+          "kind": "zone",
+          "phase": "http_request_dynamic_redirect",
+          "rules": [
+            {"id": "r1", "expression": "http.request.uri.path eq \"/old1\"", "action": "redirect", "enabled": true},
+            {"id": "r2", "expression": "http.request.uri.path eq \"/old2\"", "action": "redirect", "enabled": true},
+            {"id": "r3", "expression": "http.request.uri.path eq \"/old3\"", "action": "redirect", "enabled": true},
+            {"id": "r4", "expression": "http.request.uri.path eq \"/old4\"", "action": "redirect", "enabled": true},
+            {"id": "r5", "expression": "http.request.uri.path eq \"/old5\"", "action": "redirect", "enabled": true},
+            {"id": "r6", "expression": "http.request.uri.path eq \"/old6\"", "action": "redirect", "enabled": true},
+            {"id": "r7", "expression": "http.request.uri.path eq \"/old7\"", "action": "redirect", "enabled": true},
+            {"id": "r8", "expression": "http.request.uri.path eq \"/old8\"", "action": "redirect", "enabled": true},
+            {"id": "r9", "expression": "http.request.uri.path eq \"/old9\"", "action": "redirect", "enabled": true},
+            {"id": "r10", "expression": "http.request.uri.path eq \"/old10\"", "action": "redirect", "enabled": true},
+            {"id": "r11_acme", "expression": "(not ssl) and not (http.request.uri.path matches \"^/\\.well-known/acme-challenge/.*\")", "action": "redirect", "enabled": true},
+            {"id": "r12", "expression": "http.request.uri.path eq \"/old12\"", "action": "redirect", "enabled": true},
+            {"id": "r13", "expression": "http.request.uri.path eq \"/old13\"", "action": "redirect", "enabled": true}
+          ]
+        },
+        "after": {
+          "id": "ruleset-id-redirects",
+          "name": "soleur_seo_page_redirects",
+          "kind": "zone",
+          "phase": "http_request_dynamic_redirect",
+          "rules": [
+            {"id": "r1", "expression": "http.request.uri.path eq \"/old1\"", "action": "redirect", "enabled": true},
+            {"id": "r2", "expression": "http.request.uri.path eq \"/old2\"", "action": "redirect", "enabled": true},
+            {"id": "r3", "expression": "http.request.uri.path eq \"/old3\"", "action": "redirect", "enabled": true},
+            {"id": "r4", "expression": "http.request.uri.path eq \"/old4\"", "action": "redirect", "enabled": true},
+            {"id": "r5", "expression": "http.request.uri.path eq \"/old5\"", "action": "redirect", "enabled": true},
+            {"id": "r6", "expression": "http.request.uri.path eq \"/old6\"", "action": "redirect", "enabled": true},
+            {"id": "r7", "expression": "http.request.uri.path eq \"/old7\"", "action": "redirect", "enabled": true},
+            {"id": "r8", "expression": "http.request.uri.path eq \"/old8\"", "action": "redirect", "enabled": true},
+            {"id": "r9", "expression": "http.request.uri.path eq \"/old9\"", "action": "redirect", "enabled": true},
+            {"id": "r10", "expression": "http.request.uri.path eq \"/old10\"", "action": "redirect", "enabled": true},
+            {"id": "r12", "expression": "http.request.uri.path eq \"/old12\"", "action": "redirect", "enabled": true},
+            {"id": "r13", "expression": "http.request.uri.path eq \"/old13\"", "action": "redirect", "enabled": true}
+          ]
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    }
+  ]
+}

@@ -31,7 +31,7 @@ import {
 } from "./byok-lease";
 import { createServiceClient } from "@/lib/supabase/service";
 import { createChildLogger } from "@/server/logger";
-import { isByokDelegationsEnabled } from "@/lib/feature-flags/server";
+import { isByokDelegationsEnabled, ANON_IDENTITY, type Identity } from "@/lib/feature-flags/server";
 import { getDefaultWorkspaceForUser } from "./workspace-resolver";
 
 const log = createChildLogger("byok-resolver");
@@ -119,20 +119,6 @@ export async function resolveKeyOwnerThenLease<T>(
   workspaceContextUserId: string,
   fn: (lease: ByokLease) => Promise<T>,
 ): Promise<T> {
-  // Phase 1 of the flag check: env-only fast path. If FLAG_BYOK_-
-  // DELEGATIONS is 0/unset, skip the workspace + allowlist resolution
-  // entirely. The cost-writer's solo path takes over from here.
-  if (!envOnly("byok-delegations")) {
-    return runWithByokLease(
-      { workspaceContextUserId, keyOwnerUserId: callerUserId },
-      fn,
-    );
-  }
-
-  // Phase 2 of the flag check: derive workspace_id + organization_id,
-  // then consult the allowlist. Failing either side is a soft fall-
-  // through to the direct lease (the resolver is best-effort under the
-  // flag; the lease body still fail-closes on missing key).
   const supabase = createServiceClient();
 
   let workspaceId: string;
@@ -147,7 +133,8 @@ export async function resolveKeyOwnerThenLease<T>(
   }
 
   const orgId = await resolveOrgIdForWorkspace(workspaceId);
-  if (!isByokDelegationsEnabled(orgId)) {
+  const identity: Identity = { userId: callerUserId, role: "prd", orgId };
+  if (!(await isByokDelegationsEnabled(orgId, identity))) {
     return runWithByokLease(
       { workspaceContextUserId, keyOwnerUserId: callerUserId },
       fn,
@@ -195,14 +182,6 @@ export async function resolveKeyOwnerThenLease<T>(
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
-// Sync env-only flag probe. Avoids importing `getFlag` from
-// feature-flags/server because that path expects an EnvFlagName
-// literal (here we lean on the same env var name). Keeps the fast
-// path one process.env read.
-function envOnly(name: "byok-delegations"): boolean {
-  if (name !== "byok-delegations") return false;
-  return process.env.FLAG_BYOK_DELEGATIONS === "1";
-}
 
 async function resolveOrgIdForWorkspace(workspaceId: string): Promise<string | null> {
   const supabase = createServiceClient();

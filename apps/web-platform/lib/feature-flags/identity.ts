@@ -2,14 +2,6 @@ import { cache } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ANON_IDENTITY, type Identity, type Role } from "./server";
 
-// Resolve the calling user's flag identity from a server-side Supabase
-// client. Wrapped in React.cache so the underlying auth.getUser() + users.role
-// select is amortised across all server components in the same request tree.
-//
-// Fail-safe direction: anonymous + auth failure → ANON_IDENTITY (anon prd).
-// Authenticated-with-missing-row or unrecognised role value → preserves userId
-// but defaults role to "prd". Either way the role can never escalate to "dev"
-// on error (never dark-launch).
 export const resolveIdentity = cache(async (
   supabase: SupabaseClient,
 ): Promise<Identity> => {
@@ -22,9 +14,19 @@ export const resolveIdentity = cache(async (
     .select("role")
     .eq("id", userId)
     .single<{ role: unknown }>();
-  if (error || !data) return { userId, role: "prd" };
 
-  return { userId, role: normaliseRole(data.role) };
+  const role = error || !data ? "prd" as Role : normaliseRole(data.role);
+
+  const { data: memberData } = await supabase
+    .from("workspace_members")
+    .select("organization_id")
+    .eq("user_id", userId)
+    .limit(1)
+    .single<{ organization_id: string }>();
+
+  const orgId = memberData?.organization_id ?? null;
+
+  return { userId, role, orgId };
 });
 
 function normaliseRole(value: unknown): Role {

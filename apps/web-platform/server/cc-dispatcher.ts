@@ -81,7 +81,11 @@ import {
 } from "./byok-lease";
 // BYOK Delegations PR-A (#4232): see note at agent-runner.ts.
 import { resolveKeyOwnerThenLease } from "./byok-resolver";
-import { getFreshTenantClient } from "@/lib/supabase/tenant";
+import {
+  getFreshTenantClient,
+  RuntimeAuthError,
+} from "@/lib/supabase/tenant";
+import { tryEmitRevocationNotice } from "./revocation-emit";
 import {
   fetchUserWorkspacePath,
   resolveConciergeDocumentContext,
@@ -228,6 +232,11 @@ const TERMINAL_WORKFLOW_END_STATUSES: ReadonlySet<WorkflowEndStatus> = new Set<
   "idle_timeout",
   "plugin_load_failure",
   "internal_error",
+  // #4440 follow-up to #4418 — JWT-deny is terminal: the session is
+  // gone, retry is impossible without a fresh login. Routes to the
+  // terminal `session_ended` WS event via the same branch as the
+  // other terminal statuses below.
+  "session_revoked",
 ]);
 
 // #3603 W2 — statuses that trigger the assistant-text abort flush. Mirrors
@@ -247,6 +256,10 @@ const ABORT_FLUSH_STATUSES: ReadonlySet<WorkflowEndStatus> = new Set<
   "idle_timeout",
   "plugin_load_failure",
   "internal_error",
+  // #4440 follow-up to #4418 — flush any partial assistant text as
+  // `aborted` BEFORE the terminal session_ended emit. Matches the
+  // semantic of every other non-completed terminal status.
+  "session_revoked",
 ]);
 
 // Compile-time exhaustiveness rail for `ABORT_FLUSH_STATUSES`.
@@ -260,6 +273,7 @@ const _abortFlushExhaustive: Record<AbortFlushStatus, true> = {
   idle_timeout: true,
   plugin_load_failure: true,
   internal_error: true,
+  session_revoked: true,
 };
 void _abortFlushExhaustive;
 
@@ -1831,7 +1845,36 @@ export async function dispatchSoleurGo(
     // errorCode: "key_invalid" branch in agent-runner.ts
     // handleSessionError. All other failures fall back to the generic
     // router-unavailable message without an errorCode.
-    if (err instanceof MissingByokKeyError) {
+    if (
+      err instanceof RuntimeAuthError &&
+      err.cause === "denied_jti"
+    ) {
+      // #4440 follow-up to #4418 — JWT-deny propagation. A persistUserMessage
+      // mint or any other tenant-RPC inside the dispatch surfaced
+      // `RuntimeAuthError("denied_jti")` before the runner emitted its
+      // own WorkflowEnd. Synthesize a `session_revoked` WS frame so
+      // agents/API consumers observing this turn receive the same
+      // terminal discriminator the runner-level catch would have emitted
+      // for a mid-stream throw.
+      //
+      // Routes through `tryEmitRevocationNotice` (server/revocation-emit.ts)
+      // so the lookup+sanitize logic stays shared with agent-runner and
+      // soleur-go-runner. Helper returns the looked-up status if a caller
+      // needs the raw fields; this site only needs the emit side effect.
+      await tryEmitRevocationNotice(userId, (frame) =>
+        sendToClient(userId, frame),
+      );
+      // Pair with the terminal session_ended frame so the client
+      // reducer clears streamState (`clear_streams` in ws-client.ts).
+      // Disambiguator `conversationId` lets multi-tab clients route
+      // this to the correct tab; matches the pre-existing
+      // session_ended emit-site shape elsewhere in this dispatcher.
+      sendToClient(userId, {
+        type: "session_ended",
+        reason: "session_revoked",
+        conversationId,
+      });
+    } else if (err instanceof MissingByokKeyError) {
       // Phase 3.2 AC-D (Kieran N4): fail-closed when member has no BYOK
       // key. Info-level breadcrumb captures workspace context;
       // `byok_key_missing` errorCode tells the client to render the

@@ -4,7 +4,7 @@
 # Contract: SKILL.md in the parent directory. ADR-038 v2 §"Fallback semantics"
 # documents the env-var mirror invariant this script enforces.
 #
-# Usage: bash flip.sh <flag> <prd|dev> <on|off> [--dry-run]
+# Usage: bash flip.sh <flag> <prd|dev> <on|off> [--confirmed] [--dry-run]
 #
 # Exit codes:
 #   0 — success / dry-run clean
@@ -31,18 +31,37 @@ readonly FLAGSMITH_API="https://api.flagsmith.com/api/v1"
 # apps/web-platform/lib/feature-flags/server.ts RUNTIME_FLAGS.
 declare -A FLAG_ENV_VARS=(
   ["kb-chat-sidebar"]="FLAG_KB_CHAT_SIDEBAR"
+  ["team-workspace-invite"]="FLAG_TEAM_WORKSPACE_INVITE"
+  ["byok-delegations"]="FLAG_BYOK_DELEGATIONS"
 )
 
 # --- arg parsing ------------------------------------------------------------
 DRY_RUN=0
-if [[ "${4:-}" == "--dry-run" ]]; then DRY_RUN=1; fi
+CONFIRMED=0
+TARGET_TYPE="role"
+TARGET_ORG=""
+FLAG=""
+ROLE=""
+VALUE=""
 
-FLAG="${1:-}"
-ROLE="${2:-}"
-VALUE="${3:-}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run)     DRY_RUN=1; shift ;;
+    --confirmed)   CONFIRMED=1; shift ;;
+    --target)      TARGET_TYPE="$2"; shift 2 ;;
+    --org)         TARGET_ORG="$2"; shift 2 ;;
+    --*)           echo "unknown flag: $1" >&2; exit 2 ;;
+    *)
+      if [[ -z "$FLAG" ]]; then FLAG="$1"
+      elif [[ -z "$ROLE" ]]; then ROLE="$1"
+      elif [[ -z "$VALUE" ]]; then VALUE="$1"
+      fi
+      shift ;;
+  esac
+done
 
 usage() {
-  echo "Usage: flip.sh <flag> <prd|dev> <on|off> [--dry-run]" >&2
+  echo "Usage: flip.sh <flag> <prd|dev> <on|off> [--confirmed] [--target role|org] [--org <orgId>] [--dry-run]" >&2
   echo "Known flags: ${!FLAG_ENV_VARS[*]}" >&2
   exit 2
 }
@@ -51,6 +70,8 @@ usage() {
 [[ -z "${FLAG_ENV_VARS[$FLAG]:-}" ]] && { echo "unknown flag: $FLAG" >&2; usage; }
 [[ "$ROLE" != "prd" && "$ROLE" != "dev" ]] && { echo "role must be prd|dev (got: $ROLE)" >&2; usage; }
 [[ "$VALUE" != "on" && "$VALUE" != "off" ]] && { echo "value must be on|off (got: $VALUE)" >&2; usage; }
+[[ "$TARGET_TYPE" != "role" && "$TARGET_TYPE" != "org" ]] && { echo "target must be role|org (got: $TARGET_TYPE)" >&2; usage; }
+[[ "$TARGET_TYPE" == "org" && -z "$TARGET_ORG" ]] && { echo "--target org requires --org <orgId>" >&2; usage; }
 
 ENV_VAR="${FLAG_ENV_VARS[$FLAG]}"
 PROPOSED_ENABLED=$([[ "$VALUE" == "on" ]] && echo true || echo false)
@@ -228,9 +249,28 @@ if [[ $DRY_RUN -eq 1 ]]; then
 fi
 
 # --- operator ack ----------------------------------------------------------
-echo
-read -p "Proceed? Type 'yes' to apply: " ACK
-[[ "$ACK" == "yes" ]] || { echo "aborted (ack was '$ACK')" >&2; exit 0; }
+if [[ $CONFIRMED -eq 0 ]]; then
+  echo
+  read -p "Proceed? Type 'yes' to apply: " ACK
+  [[ "$ACK" == "yes" ]] || { echo "aborted (ack was '$ACK')" >&2; exit 0; }
+else
+  echo "(--confirmed: skipping interactive prompt)"
+fi
+
+# --- audit append (WORM) ---------------------------------------------------
+ACTOR=$(doppler secrets get OPERATOR_EMAIL -p soleur -c cli_ops --plain 2>/dev/null | tr '[:upper:]' '[:lower:]')
+[[ -z "$ACTOR" ]] && { echo "FATAL: OPERATOR_EMAIL not in Doppler soleur/cli_ops" >&2; exit 4; }
+
+DB_URL=$(doppler secrets get DATABASE_URL_POOLER -p soleur -c dev --plain 2>/dev/null)
+[[ -z "$DB_URL" ]] && { echo "FATAL: DATABASE_URL_POOLER not in Doppler soleur/dev" >&2; exit 4; }
+
+AUDIT_TARGET=$([[ "$TARGET_TYPE" == "org" ]] && echo "org:$TARGET_ORG" || echo "role:$ROLE")
+BEFORE_BOOL=$([[ "$VALUE" == "on" ]] && echo "false" || echo "true")
+AFTER_BOOL=$([[ "$VALUE" == "on" ]] && echo "true" || echo "false")
+
+AUDIT_ID=$(psql "${DB_URL/6543/5432}" -tAc "SELECT public.audit_flag_flip('$FLAG', '$ROLE', '$AUDIT_TARGET', '$VALUE', $BEFORE_BOOL, $AFTER_BOOL, '$ACTOR');" 2>&1) \
+  || { echo "FATAL: audit append failed: $AUDIT_ID" >&2; exit 4; }
+echo "  audit_id=$AUDIT_ID"
 
 # --- write Flagsmith (both envs) -------------------------------------------
 echo "→ Writing Flagsmith dev env…"

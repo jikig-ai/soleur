@@ -4,10 +4,10 @@ import { resolveTeamMembershipPageData } from "@/server/team-membership-resolver
 import { TeamMembershipList } from "@/components/settings/team-membership-list";
 import { InviteMemberAction } from "@/components/settings/invite-member-action";
 
-// AC-A: flag OFF → HTTP 404 via notFound(). Two-key gate (FLAG_TEAM_WORKSPACE_INVITE
-// + TEAM_WORKSPACE_ALLOWLIST_ORG_IDS) lives inside resolveTeamMembershipPageData.
-// The "/dashboard/settings/team" href is not present in the client bundle when
-// the gate is OFF because the layout never injects the Members tab.
+// AC-A: flag OFF → HTTP 404 via notFound(). Flagsmith single-control gate
+// lives inside resolveTeamMembershipPageData. The "/dashboard/settings/team"
+// href is not present in the client bundle when the gate is OFF because the
+// layout never injects the Members tab.
 export default async function TeamMembershipPage() {
   const supabase = await createClient();
   const {

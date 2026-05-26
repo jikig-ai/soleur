@@ -1,20 +1,19 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
-import { isTeamWorkspaceInviteEnabled } from "@/lib/feature-flags/server";
+import { isTeamWorkspaceInviteEnabled, type Identity } from "@/lib/feature-flags/server";
 import { resolveTeamMembershipPageData } from "@/server/team-membership-resolver";
 import { inviteWorkspaceMember } from "@/server/workspace-membership";
 
 // POST /api/workspace/invite-member
 // Body: { workspaceId, identifier, role: "owner"|"member", attestationText }
 //
-// 2-key flag gate (AC-A + AC-F): the route is only reachable when both
-// FLAG_TEAM_WORKSPACE_INVITE=1 AND the caller's current organization is in
-// TEAM_WORKSPACE_ALLOWLIST_ORG_IDS. Returns 404 otherwise so the surface is
-// indistinguishable from "route does not exist."
+// Flag gate (AC-A + AC-F): the route is only reachable when
+// isTeamWorkspaceInviteEnabled returns true (Flagsmith single-control gate).
+// Returns 404 otherwise so the surface is indistinguishable from "route does
+// not exist."
 //
-// CSRF: validateOrigin gated. AC-RATE-LIMIT: scope-out — see plan #4229
-// follow-up; jikigai-only allowlist bounds exposure in this PR.
+// CSRF: validateOrigin gated.
 export async function POST(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
   if (!originValid) return rejectCsrf("api/workspace/invite-member", origin);
@@ -27,7 +26,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  // 2-key gate — resolveTeamMembershipPageData handles flag + allowlist check.
+  // Flag gate — resolveTeamMembershipPageData handles the Flagsmith check.
   // We reuse its result so the membership page and this endpoint cannot
   // diverge on whether the user has team-workspace access.
   const service = createServiceClient();
@@ -35,9 +34,8 @@ export async function POST(request: Request) {
   if (!pageData.ok) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
-  // Belt-and-suspenders: re-check flag against the resolved org. The
-  // resolver already short-circuits on flag-off but explicit is better here.
-  if (!isTeamWorkspaceInviteEnabled(pageData.data.organizationId)) {
+  const identity: Identity = { userId: user.id, role: "prd", orgId: pageData.data.organizationId };
+  if (!(await isTeamWorkspaceInviteEnabled(pageData.data.organizationId, identity))) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
 

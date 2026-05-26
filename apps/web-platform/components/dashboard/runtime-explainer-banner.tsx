@@ -15,7 +15,7 @@
 // 049). Dismiss persists via useOnboarding.dismissRuntimeExplainer.
 
 import Link from "next/link";
-import { RUNTIME_COST_DISCLOSURE } from "@/lib/legal/disclosures";
+import { RUNTIME_COST_DISCLOSURE, RUNTIME_AI_DISCLOSURE } from "@/lib/legal/disclosures";
 import {
   ACTION_CLASS_COPY,
   ACTION_CLASSES_BY_CATEGORY,
@@ -72,6 +72,7 @@ export function RuntimeExplainerBanner({ onDismiss }: Props) {
             . Nothing runs until you authorize.
           </p>
           <p className="text-soleur-text-muted">{RUNTIME_COST_DISCLOSURE}</p>
+          <p className="text-soleur-text-muted">{RUNTIME_AI_DISCLOSURE}</p>
         </div>
         <button
           type="button"
