@@ -11,6 +11,27 @@ parent_issue: 3948
 
 # chore(ops): Mirror community-monitor secrets prd_scheduled -> prd Doppler
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-26
+**Sections enhanced:** 3 (IaC justification, Acceptance Criteria, Risks)
+**Gates passed:** Phase 4.6 (User-Brand Impact), Phase 4.7 (Observability — skip: pure-docs), Phase 4.8 (PAT halt — no match)
+
+### Key Improvements
+1. Verified `DOPPLER_TOKEN_WRITE` is scoped to `prd_terraform` only — cannot write to `prd`; AC3 automation-infeasibility justification confirmed
+2. Verified all 7 secrets consumed at `cron-community-monitor.ts:261-267` via `buildSpawnEnv` allowlist; runtime injection confirmed at `inngest-bootstrap.sh:147`
+3. Confirmed IaC-routing-ack is correct — vendor-minted credentials do not fit `doppler_secret` + `random_id` TF pattern
+
+### Deepen-Plan Verification Results
+- PR #4460: MERGED — title matches (community-monitor Inngest migration)
+- Issue #3948: OPEN — title matches (TR9 group-(c) agent-loop crons)
+- Issue #4466: OPEN — title matches (mirror secrets follow-up)
+- Labels `semver:patch`, `priority/p1-high`, `domain/operations`: all exist
+- Code refs `cron-community-monitor.ts:261-267`, `inngest-bootstrap.sh:147`: verified at HEAD
+- Learning refs: both files exist at cited paths
+- No AGENTS.md rule IDs cited (none to verify)
+- No PAT-shaped variables detected
+
 ## Overview
 
 TR9 PR-11 (#4460) migrated `scheduled-community-monitor` from GitHub Actions to the
@@ -157,6 +178,17 @@ No cross-domain implications detected — infrastructure/tooling operational rem
 | `prd_scheduled` secrets were rotated/expired since original storage | Low | Medium — platforms fail auth | Verify each platform after mirror: Discord webhook ping, Bluesky login probe, LinkedIn token introspect |
 | CI deploy restarts Inngest unit before secrets are mirrored | Low | Low — same accepted failure mode (FAILED issue) | Mirror secrets BEFORE the next `ci-deploy.sh` run, or accept one more FAILED issue |
 | `doppler secrets set` stdin form mangles special chars | Very Low | Medium — silent auth failure | Issue recipe uses `printf '%s'` (no trailing newline) and `--plain` (raw value); round-trip diff in AC5 catches mangling |
+
+## Research Insights
+
+**Doppler CLI stdin form verification:**
+- The `printf '%s' "$V" | doppler secrets set "$K"` stdin form is the correct pattern for preserving special characters. The `--plain` flag on `doppler secrets get` outputs the raw value without JSON encoding. Per `knowledge-base/project/learnings/2026-03-25-doppler-secret-audit-before-creation.md`, always audit all configs before declaring secrets missing — the issue already did this (verified `prd_scheduled` has all 7).
+
+**DOPPLER_TOKEN_WRITE scope verification:**
+- `apps/web-platform/infra/doppler-write-token.tf:42` shows `config = "prd_terraform"` — the CI write token is scoped to `prd_terraform` only, confirming that no automated pipeline can perform the cross-config copy from `prd_scheduled` to `prd`. The operator's personal Doppler CLI session (workplace-scope auth) is required.
+
+**Inngest restart semantics:**
+- Per `inngest-bootstrap.sh:147`, the Inngest systemd unit uses `doppler run --project soleur --config prd` which materializes secrets at process start. After mirroring, the next CI deploy (`ci-deploy.sh`) restarts the unit and picks up new secrets. No manual restart is required — the next deploy or the next cron fire (whichever comes first) will consume the mirrored secrets.
 
 ## References
 
