@@ -39,7 +39,7 @@ Brand-survival threshold: **single-user incident.** If `is_workspace_member()` o
 
 ## Decision
 
-**Introduce four new Postgres primitives keyed by stable UUIDs, and a single `SECURITY DEFINER plpgsql` membership helper as the substrate for all rewritten RLS predicates. `workspaces.id` is permanently equal to `owner_user_id` for backfilled solo workspaces; new workspaces created post-flag-flip use `gen_random_uuid()`. BYOK keys stay per-user (HKDF unchanged); cost attribution shifts to workspace_id grain via an additive column on `audit_byok_use` plus a workspace-aggregate view. The bwrap mount becomes `/workspaces/<workspace_id>/` with backward-compat symlinks. The feature flag is a two-key gate (env var AND org allowlist) OFF by default in production until the legal-PR merges.**
+**Introduce four new Postgres primitives keyed by stable UUIDs, and a single `SECURITY DEFINER plpgsql` membership helper as the substrate for all rewritten RLS predicates. `workspaces.id` is permanently equal to `owner_user_id` for backfilled solo workspaces; new workspaces created post-flag-flip use `gen_random_uuid()`. BYOK keys stay per-user (HKDF unchanged); cost attribution shifts to workspace_id grain via an additive column on `audit_byok_use` plus a workspace-aggregate view. The bwrap mount becomes `/workspaces/<workspace_id>/` with backward-compat symlinks. The feature flag is a two-key gate (env var AND org allowlist) OFF by default in production until the legal-PR merges. [Updated 2026-05-26: env-allowlist removed; Flagsmith segment is now the sole per-org gate. See ADR-043.]**
 
 ### Schema (migrations 053+058-060)
 
@@ -131,13 +131,11 @@ bwrap mount in `apps/web-platform/server/agent-runner-sandbox-config.ts` changes
 - **WebSocket-resident.** `ws-handler.ts` reads the claim from the connection JWT; no per-message lookup.
 - **Multi-tab race resolution (AC-FLOW3).** Per-session semantics: switching org in tab A invalidates tab B's session via the standard JWT-refresh path; tab B sees the WebSocket close with code `MEMBERSHIP_REVOKED` and re-resolves.
 
-### Feature-flag two-key gate (Phase 4)
+### Feature-flag gate (Phase 4)
 
-`isOrgFlagEnabled(orgId)` AND's:
-- `FLAG_TEAM_WORKSPACE_INVITE` boolean env var (Doppler-managed)
-- `TEAM_WORKSPACE_ALLOWLIST_ORG_IDS` comma-separated UUID list (parsed once at boot, cached)
+`isTeamWorkspaceInviteEnabled(orgId, identity)` delegates to Flagsmith's `org-targeted` segment via `getRuntimeFlag`. The `orgId` is passed as a trait for per-org segment evaluation. [Updated 2026-05-26: `TEAM_WORKSPACE_ALLOWLIST_ORG_IDS` env var and the dual-control (AND) architecture were removed; Flagsmith segment is the sole per-org gate. `FLAG_TEAM_WORKSPACE_INVITE` env var remains as the Flagsmith outage fallback.]
 
-Boot-time Sentry breadcrumb fires when both keys evaluate true in `NODE_ENV=production`. Defense-in-depth against an env-var flip without org-allowlist update accidentally granting access to ALL orgs.
+Boot-time Sentry breadcrumb fires when the flag evaluates true in `NODE_ENV=production`.
 
 ### Permanent invariant: `workspaces.id = owner_user_id` for backfilled solo workspaces (Kieran N2)
 
@@ -155,7 +153,7 @@ The cost: a small amount of "is this a backfilled solo workspace or a real one?"
 - **Per-org BYOK key (shared across members).** Requires re-key-on-add, re-key-on-remove, plus a key-escrow story for the org-owner-leaves case. Rejected: per-user keys preserve the HKDF invariant, BYOK delegation (#4232) is the future story.
 - **`workspaces.id = gen_random_uuid()` for ALL workspaces (no special case for backfill).** Rejected per N2 above (re-runnability, DSAR ergonomics, filesystem symlink ergonomics).
 - **Resolve current_organization_id from a middleware DB read on every request.** Adds a Postgres round-trip to every request. Rejected: JWT custom-claim hook has zero per-request cost and Supabase already supports the hook surface (precedent in migration 047).
-- **Single-key feature flag (`FLAG_TEAM_WORKSPACE_INVITE` only).** Rejected per CPO conditions (AC-F): no defense-in-depth against accidental env-var flip exposing all orgs. Two-key gate adds explicit org-allowlist as the second factor.
+- **Single-key feature flag (`FLAG_TEAM_WORKSPACE_INVITE` only).** Originally rejected per CPO conditions (AC-F): no defense-in-depth against accidental env-var flip exposing all orgs. [Updated 2026-05-26: superseded by ADR-043's Flagsmith segment-rule architecture which provides per-org control via the `org-targeted` segment without the env-var surface. The env-allowlist was removed.]
 - **Drop legacy `/workspaces/<userId>/` path immediately (no symlink).** Breaks in-flight DSAR export jobs, in-progress agent runs, any cron walker holding a stale path. Symlink-with-compat for one release cycle is the rolling-deploy-safe shape.
 - **Pre-create the second workspace per organization at backfill.** Rejected — solo users have one workspace; multi-workspace organizations are not in scope for this PR. The workspaces table allows future expansion without re-architecting.
 
