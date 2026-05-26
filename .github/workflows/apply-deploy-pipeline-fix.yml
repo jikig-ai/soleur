@@ -226,12 +226,14 @@ jobs:
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REASON: ${{ inputs.reason }}
+          EVENT_NAME: ${{ github.event_name }}
+          MERGE_SHA: ${{ github.sha }}
         run: |
           {
             echo "## Apply deploy-pipeline-fix"
             echo ""
-            echo "**Trigger:** push"
-            echo "**Merge SHA:** $(git rev-parse HEAD)"
+            echo "**Trigger:** ${EVENT_NAME}"
+            echo "**Merge SHA:** ${MERGE_SHA}"
             echo "**Reason (manual only):** ${REASON:-n/a}"
             echo "**Status:** ${{ job.status }}"
             echo "**Run:** ${RUN_URL}"
