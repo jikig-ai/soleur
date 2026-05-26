@@ -178,13 +178,13 @@ The cron-bug-fixer Inngest function (`apps/web-platform/server/inngest/functions
 
 - **Event:** `cron/bug-fixer.manual-trigger`
 - **Payload:** `{ "issue_number": <positive integer> }` (optional)
-- **Validation:** If `issue_number` is present, it must be a positive integer (`typeof === "number"`, `Number.isInteger()`, `> 0`). Invalid values are rejected with a Sentry fallback report and the function returns `ok: false` without selecting any issue.
+- **Validation:** If `issue_number` is present, it must be a positive integer. Invalid values are rejected with a Sentry fallback report and the function returns `ok: false` without selecting any issue.
 
 When `issue_number` is omitted, the function falls through to the priority cascade (see Override semantics).
 
 ### Override semantics
 
-- **Without override:** The handler runs the priority cascade, selecting the first qualifying issue in order: `priority/p3-low` → `priority/p2-medium` → `priority/p1-high`. Issues matching the title skip-regex (`/^\[Content Publisher\]|flaky|flake|test-flake|test/i`) or carrying skip-labels (`bot-fix/attempted`, `ux-audit`, `synthetic-test`) are excluded.
+- **Without override:** The handler runs the priority cascade, selecting the first qualifying issue in order: `priority/p3-low` → `priority/p2-medium` → `priority/p1-high`. Issues matching the title skip-regex (`/^(\[Content Publisher\]|flaky|flake|test-flake|test)[: [(]/i`) or carrying skip-labels (`bot-fix/attempted`, `ux-audit`, `synthetic-test`) are excluded.
 - **With override:** The `issue_number` bypasses the cascade entirely. The operator owns ensuring the target issue is fix-issue-compatible (has `type/bug` label, is open, is not in the skip-list). The handler does not re-validate these constraints on override.
 
 ### Concurrency
@@ -213,7 +213,7 @@ inngest send '{"name":"cron/bug-fixer.manual-trigger","data":{}}'
 
 1. **Sentry cron monitor:** `scheduled-bug-fixer` — shows `ok` / `error` heartbeat status per run.
 2. **GitHub PRs:** Filter by `bot-fix/*` branch prefix — `gh pr list --search "head:bot-fix/"`.
-3. **Inngest dashboard:** Run history for `cron-bug-fixer` shows step-by-step execution (mint-installation-token → precreate-labels → select-issue → setup-workspace → claude-eval → detect-pr → auto-merge-gate → sentry-heartbeat).
+3. **Inngest dashboard:** Run history for `cron-bug-fixer` shows step-by-step execution (mint-installation-token → precreate-labels → select-issue → setup-workspace → claude-eval → detect-pr → auto-merge-gate → notify-ops-email → sentry-heartbeat).
 
 ### Common failure modes
 
