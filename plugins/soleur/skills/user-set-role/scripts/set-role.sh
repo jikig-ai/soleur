@@ -97,6 +97,18 @@ print("  updated:", d[0]["email"], "role →", d[0]["role"])
 ' || exit 4
 fi
 
+# --- audit append (WORM) ---------------------------------------------------
+ACTOR=$(doppler secrets get OPERATOR_EMAIL -p soleur -c cli_ops --plain 2>/dev/null | tr '[:upper:]' '[:lower:]')
+[[ -z "$ACTOR" ]] && { echo "FATAL: OPERATOR_EMAIL not in Doppler soleur/cli_ops" >&2; exit 4; }
+
+DB_URL=$(doppler secrets get DATABASE_URL_POOLER -p soleur -c dev --plain 2>/dev/null)
+[[ -z "$DB_URL" ]] && { echo "FATAL: DATABASE_URL_POOLER not in Doppler soleur/dev" >&2; exit 4; }
+
+AUDIT_ACTION=$([[ "$CUR_ROLE" == "$TARGET" ]] && echo "on" || echo "on")
+AUDIT_ID=$(psql "${DB_URL/6543/5432}" -tAc "SELECT public.audit_flag_flip('user-role', 'prd', 'user:$USER_ID', '$AUDIT_ACTION', NULL, NULL, '$ACTOR');" 2>&1) \
+  || { echo "FATAL: audit append failed: $AUDIT_ID" >&2; exit 4; }
+echo "  audit_id=$AUDIT_ID"
+
 # --- update Flagsmith identity trait (both envs) --------------------------
 for ENV_PAIR in "dev:$FLAGSMITH_ENV_DEV_ID" "prd:$FLAGSMITH_ENV_PRD_ID"; do
   ENV_NAME=${ENV_PAIR%:*}

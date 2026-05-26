@@ -1,20 +1,20 @@
 import * as Sentry from "@sentry/nextjs";
 import {
   getRuntimeFlag,
-  getTeamWorkspaceAllowlist,
+  getByokDelegationsAllowlist,
   ANON_IDENTITY,
 } from "@/lib/feature-flags/server";
 
-export async function emitTeamWorkspaceInviteBootBreadcrumb(): Promise<void> {
+export async function emitByokDelegationsBootBreadcrumb(): Promise<void> {
   if (process.env.NODE_ENV !== "production") return;
-  const flagOn = await getRuntimeFlag("team-workspace-invite", ANON_IDENTITY);
+  const flagOn = await getRuntimeFlag("byok-delegations", ANON_IDENTITY);
   if (!flagOn) return;
-  const allowlist = getTeamWorkspaceAllowlist();
+  const allowlist = getByokDelegationsAllowlist();
   if (allowlist.size === 0) return;
   Sentry.addBreadcrumb({
     category: "feature-flag",
     level: "info",
-    message: "team-workspace-invite two-key gate ON in production",
+    message: "byok-delegations two-key gate ON in production",
     data: {
       allowlistSize: allowlist.size,
     },

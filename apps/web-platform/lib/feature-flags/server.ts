@@ -5,6 +5,7 @@
 
 import { Flagsmith } from "flagsmith-nodejs";
 import { reportSilentFallback } from "@/server/observability";
+import { LRUCache } from "./lru-cache";
 
 const DEFAULT_FLAGSMITH_API_URL = "https://edge.api.flagsmith.com/api/v1/";
 const REQUEST_TIMEOUT_SECONDS = 0.2; // 200ms ceiling — never block request path on Flagsmith.
@@ -28,12 +29,12 @@ const CACHE_TTL_MS = 30_000;
 // See ADR-038 + ADR-043.
 const ENV_FLAGS = {
   "dev-signin": "FLAG_DEV_SIGNIN",
-  "team-workspace-invite": "FLAG_TEAM_WORKSPACE_INVITE",
-  "byok-delegations": "FLAG_BYOK_DELEGATIONS",
 } as const;
 
 const RUNTIME_FLAGS = {
   "kb-chat-sidebar": "FLAG_KB_CHAT_SIDEBAR",
+  "team-workspace-invite": "FLAG_TEAM_WORKSPACE_INVITE",
+  "byok-delegations": "FLAG_BYOK_DELEGATIONS",
 } as const;
 
 export type EnvFlagName = keyof typeof ENV_FLAGS;
@@ -45,9 +46,10 @@ export type Role = "prd" | "dev";
 export type Identity = {
   userId: string | null;
   role: Role;
+  orgId: string | null;
 };
 
-export const ANON_IDENTITY: Identity = { userId: null, role: "prd" };
+export const ANON_IDENTITY: Identity = { userId: null, role: "prd", orgId: null };
 
 function envIsOn(name: string): boolean {
   return process.env[name] === "1";
@@ -76,11 +78,9 @@ function client(): Flagsmith | null {
 }
 
 type RuntimeSnapshot = Record<RuntimeFlagName, boolean>;
-// Max 2 entries by Role enum — no bounded eviction needed.
-// V1 ignores per-identity Flagsmith overrides by design; every flag flows
-// through a segment. The Flagsmith identifier is `role:<role>` so identity-
-// level overrides on real UUIDs cannot bleed into this bucket.
-const _roleCache = new Map<Role, { at: number; flags: RuntimeSnapshot }>();
+
+const CACHE_MAX_ENTRIES = parseInt(process.env.FLAGSMITH_CACHE_MAX_ENTRIES || "1000");
+let _roleCache = new LRUCache<string, RuntimeSnapshot>(CACHE_MAX_ENTRIES, CACHE_TTL_MS);
 
 function runtimeEnvFallback(): RuntimeSnapshot {
   const out = {} as RuntimeSnapshot;
@@ -92,11 +92,14 @@ function runtimeEnvFallback(): RuntimeSnapshot {
 
 async function fetchRuntimeFlagsFromFlagsmith(
   role: Role,
+  orgId: string | null,
 ): Promise<RuntimeSnapshot | null> {
   const c = client();
   if (!c) return null;
   try {
-    const flags = await c.getIdentityFlags(`role:${role}`, { role });
+    const identifier = orgId ? `org:${orgId}:${role}` : `role:${role}`;
+    const traits: Record<string, string> = { role, ...(orgId ? { orgId } : {}) };
+    const flags = await c.getIdentityFlags(identifier, traits, true);
     const out = {} as RuntimeSnapshot;
     for (const name of Object.keys(RUNTIME_FLAGS) as RuntimeFlagName[]) {
       out[name] = flags.isFeatureEnabled(name);
@@ -106,18 +109,18 @@ async function fetchRuntimeFlagsFromFlagsmith(
     reportSilentFallback(err, {
       feature: "feature-flags",
       op: "flagsmith.getIdentityFlags",
-      extra: { role },
+      extra: { role, orgId },
     });
     return null;
   }
 }
 
-async function getRuntimeSnapshot(role: Role): Promise<RuntimeSnapshot> {
-  const now = Date.now();
-  const hit = _roleCache.get(role);
-  if (hit && now - hit.at < CACHE_TTL_MS) return hit.flags;
-  const flags = (await fetchRuntimeFlagsFromFlagsmith(role)) ?? runtimeEnvFallback();
-  _roleCache.set(role, { at: now, flags });
+async function getRuntimeSnapshot(role: Role, orgId: string | null): Promise<RuntimeSnapshot> {
+  const cacheKey = `${role}:${orgId ?? "__anon__"}`;
+  const hit = _roleCache.get(cacheKey);
+  if (hit) return hit;
+  const flags = (await fetchRuntimeFlagsFromFlagsmith(role, orgId)) ?? runtimeEnvFallback();
+  _roleCache.set(cacheKey, flags);
   return flags;
 }
 
@@ -125,13 +128,13 @@ export async function getRuntimeFlag(
   name: RuntimeFlagName,
   identity: Identity,
 ): Promise<boolean> {
-  return (await getRuntimeSnapshot(identity.role))[name];
+  return (await getRuntimeSnapshot(identity.role, identity.orgId))[name];
 }
 
 export async function getFeatureFlags(
   identity: Identity,
 ): Promise<Record<FlagName, boolean>> {
-  const runtime = await getRuntimeSnapshot(identity.role);
+  const runtime = await getRuntimeSnapshot(identity.role, identity.orgId);
   const envFlags = {} as Record<EnvFlagName, boolean>;
   for (const [name, envVar] of Object.entries(ENV_FLAGS) as [EnvFlagName, string][]) {
     envFlags[name] = envIsOn(envVar);
@@ -158,14 +161,10 @@ export function getTeamWorkspaceAllowlist(): ReadonlySet<string> {
   return set;
 }
 
-/**
- * Two-key gate per AC-F: `FLAG_TEAM_WORKSPACE_INVITE=1` AND `orgId`
- * present in `TEAM_WORKSPACE_ALLOWLIST_ORG_IDS`. Both must hold.
- */
-export function isTeamWorkspaceInviteEnabled(orgId: string): boolean {
-  if (!getFlag("team-workspace-invite")) return false;
+export async function isTeamWorkspaceInviteEnabled(orgId: string, identity: Identity): Promise<boolean> {
   if (!orgId) return false;
-  return getTeamWorkspaceAllowlist().has(orgId);
+  if (!getTeamWorkspaceAllowlist().has(orgId)) return false;
+  return getRuntimeFlag("team-workspace-invite", identity);
 }
 
 // BYOK Delegations PR-A (#4232). Two-key gate mirrors the team-workspace-
@@ -189,15 +188,16 @@ export function getByokDelegationsAllowlist(): ReadonlySet<string> {
   return set;
 }
 
-export function isByokDelegationsEnabled(orgId: string | null | undefined): boolean {
-  if (!getFlag("byok-delegations")) return false;
+export async function isByokDelegationsEnabled(orgId: string | null | undefined, identity: Identity): Promise<boolean> {
   if (!orgId) return false;
-  return getByokDelegationsAllowlist().has(orgId);
+  if (!getByokDelegationsAllowlist().has(orgId)) return false;
+  return getRuntimeFlag("byok-delegations", identity);
 }
 
 export function __resetFeatureFlagsForTests(): void {
   _client = null;
-  _roleCache.clear();
+  const maxEntries = parseInt(process.env.FLAGSMITH_CACHE_MAX_ENTRIES || "1000");
+  _roleCache = new LRUCache<string, RuntimeSnapshot>(maxEntries, CACHE_TTL_MS);
   cachedAllowlist = null;
   cachedByokDelegationsAllowlist = null;
 }
