@@ -1,7 +1,6 @@
 import * as Sentry from "@sentry/nextjs";
 import {
   getRuntimeFlag,
-  getTeamWorkspaceAllowlist,
   ANON_IDENTITY,
 } from "@/lib/feature-flags/server";
 
@@ -9,14 +8,9 @@ export async function emitTeamWorkspaceInviteBootBreadcrumb(): Promise<void> {
   if (process.env.NODE_ENV !== "production") return;
   const flagOn = await getRuntimeFlag("team-workspace-invite", ANON_IDENTITY);
   if (!flagOn) return;
-  const allowlist = getTeamWorkspaceAllowlist();
-  if (allowlist.size === 0) return;
   Sentry.addBreadcrumb({
     category: "feature-flag",
     level: "info",
-    message: "team-workspace-invite two-key gate ON in production",
-    data: {
-      allowlistSize: allowlist.size,
-    },
+    message: "team-workspace-invite single-control gate ON in production",
   });
 }

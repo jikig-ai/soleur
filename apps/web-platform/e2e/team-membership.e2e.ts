@@ -3,13 +3,12 @@ import { test, expect } from "@playwright/test";
 /**
  * feat-team-workspace-multi-user — Phase 8.2.6 e2e coverage.
  *
- * The team-membership feature is wired behind a two-key gate (AC-F):
- * `FLAG_TEAM_WORKSPACE_INVITE=1` AND `TEAM_WORKSPACE_ALLOWLIST_ORG_IDS`
- * containing the current org. The default-config `dev` Playwright
- * project has BOTH unset, so /dashboard/settings/team should return a
- * 404 (Next.js `notFound()` from the resolver). That's AC-A — the most
- * load-bearing flag-off case and the only one the public-project test
- * server can exercise without auth.
+ * The team-membership feature is wired behind a Flagsmith single-control
+ * gate (AC-F): `isTeamWorkspaceInviteEnabled` must return true. The
+ * default-config `dev` Playwright project has the flag unset, so
+ * /dashboard/settings/team should return a 404 (Next.js `notFound()`
+ * from the resolver). That's AC-A — the most load-bearing flag-off case
+ * and the only one the public-project test server can exercise without auth.
  *
  * The richer interactive flows (owner invites Member via UI; AC-C
  * org-switcher hidden for solo; AC-FLOW3 multi-tab race; AC-FLOW4
