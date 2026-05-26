@@ -1,0 +1,48 @@
+-- 073_rls_audit_kb_files_runtime_cost_state.sql
+-- Closes #4305 (kb_files RLS) and #4301 (runtime_cost_state RLS audit).
+--
+-- AUDIT FINDING: both issues were raised by identity-rbac-reviewer (#4233)
+-- based on stale premises. No DDL changes are required.
+--
+-- 1. kb_files (#4305):
+--    The table public.kb_files does NOT exist. Zero migrations create it;
+--    zero TS/SQL references in the codebase. The actual KB surface is:
+--      - public.kb_share_links (already workspace-keyed by mig 059, policy
+--        kb_share_links_workspace_member_all using is_workspace_member()).
+--      - public.users.kb_sync_history (JSONB column on public.users,
+--        inherits users RLS: auth.uid() = id).
+--    Legal docs (DPD, DPA template) reference "kb_files" and "kb_chunks"
+--    as colloquial names for the workspace KB tree (filesystem-backed);
+--    they are not Postgres tables. If a future migration (e.g.,
+--    feat-adr-embeddings-kb-retrieval-4206) introduces kb_files/kb_chunks
+--    tables, the RLS predicate MUST land in the SAME migration that
+--    creates the tables, following the mig 059 workspace-keyed pattern.
+--
+-- 2. runtime_cost_state (#4301):
+--    There is no table named runtime_cost_state. Migration 046
+--    (046_runtime_cost_state.sql) adds two COLUMNS to public.users:
+--      - runtime_paused_at   timestamptz
+--      - runtime_cost_cap_cents int NOT NULL DEFAULT 2000
+--    These columns inherit the existing per-user RLS on public.users
+--    (policy "Users can read own profile": auth.uid() = id). They are
+--    intentionally per-user, not workspace-scoped, because:
+--      (a) runtime_cost_cap_cents is the individual user's hourly BYOK
+--          spend ceiling — a personal safety control.
+--      (b) runtime_paused_at is the individual user's kill-switch state,
+--          flipped by record_byok_use_and_check_cap() when that user's
+--          1-hour cumulative cost exceeds their cap.
+--    The workspace-scoped cost surface is audit_byok_use.workspace_id
+--    (added by mig 059, policy audit_byok_use_workspace_member_select),
+--    which correctly uses is_workspace_member(). The per-user columns
+--    on public.users do NOT need workspace-keyed RLS.
+--
+-- Prior art:
+--   - Brainstorm: knowledge-base/project/brainstorms/2026-05-22-rls-known-gaps-4233-bundle-brainstorm.md
+--   - Key Decision #7: paper-close #4304, #4305, #4306 with premise-reverification.
+--   - Premise findings 1+2 in the brainstorm confirm both issues are stale.
+--
+-- This migration is intentionally a no-op. It exists so the migration
+-- chain records the audit decision and grep for "#4305" or "#4301" in
+-- migrations/ lands here.
+
+SELECT 1; -- no-op; Supabase requires at least one statement.
