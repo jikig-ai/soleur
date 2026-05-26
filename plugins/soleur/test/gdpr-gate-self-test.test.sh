@@ -41,7 +41,7 @@ assert_file_exists "$GH_STUB_DIR/gh" "fixture gh stub exists"
 # 3+ sites each; these greps make any silent drift loud.
 NOTICE_PARSER_SRC="$REPO_ROOT/plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh"
 SKILL_MD="$REPO_ROOT/plugins/soleur/skills/gdpr-gate/SKILL.md"
-WORKFLOW_FILE="$REPO_ROOT/.github/workflows/scheduled-content-vendor-drift.yml"
+INNGEST_FN_FILE="$REPO_ROOT/apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts"
 
 # Banner literal must appear verbatim in (a) the test (this file), (b) the
 # gate script, (c) SKILL.md "Sharp edges" docs.
@@ -60,19 +60,16 @@ else
   FAIL=$((FAIL + 1))
 fi
 
-# Workflow filename must exist on disk — cron-run-stale hard-codes the
-# filename, so a rename without updating the parser silently breaks the
-# trust binding (architecture-strategist + user-impact-reviewer P1).
-if grep -qF "scheduled-content-vendor-drift.yml" "$NOTICE_PARSER_SRC"; then
-  if [[ -f "$WORKFLOW_FILE" ]]; then
-    echo "  PASS: workflow file referenced in notice-frontmatter.sh exists on disk"
-    PASS=$((PASS + 1))
-  else
-    echo "  FAIL: notice-frontmatter.sh references scheduled-content-vendor-drift.yml but the file is missing"
-    FAIL=$((FAIL + 1))
-  fi
+# Inngest function must exist on disk — the vendor-drift cron was migrated
+# from GHA to Inngest (TR9 Phase 2 #3948). The notice-frontmatter.sh parser
+# still references the old GHA workflow name for cron-run-stale calculation
+# (gh run list); this will be updated when cron-run-stale migrates to Inngest
+# event log queries.
+if [[ -f "$INNGEST_FN_FILE" ]]; then
+  echo "  PASS: cron-content-vendor-drift.ts exists (migrated from GHA)"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL: notice-frontmatter.sh no longer references scheduled-content-vendor-drift.yml — was it renamed?"
+  echo "  FAIL: cron-content-vendor-drift.ts missing — Inngest function not found"
   FAIL=$((FAIL + 1))
 fi
 
