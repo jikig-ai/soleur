@@ -28,6 +28,7 @@ Required positional args: `<flag-name> <role> <on|off>`.
 - `<on|off>`: target enablement.
 
 Flag `--dry-run` runs detect/diff/validate steps (no writes).
+Flag `--confirmed` skips the interactive `read -p` prompt (for agent-driven use; the agent must obtain operator ack via AskUserQuestion before passing this flag).
 
 ## Prerequisites
 
@@ -40,8 +41,20 @@ Flag `--dry-run` runs detect/diff/validate steps (no writes).
 Invoke the script:
 
 ```bash
-bash plugins/soleur/skills/flag-set-role/scripts/flip.sh <flag> <role> <on|off> [--dry-run]
+# Dry-run to see the matrix:
+bash plugins/soleur/skills/flag-set-role/scripts/flip.sh <flag> <role> <on|off> --dry-run
+# After AskUserQuestion confirmation:
+bash plugins/soleur/skills/flag-set-role/scripts/flip.sh <flag> <role> <on|off> --confirmed
 ```
+
+**Agent-driven flow (recommended):**
+
+1. Run with `--dry-run` to get the pre/post matrix (exits 0, no writes, no prompt).
+2. Present the matrix output to the operator via **AskUserQuestion** with options: "Yes, apply" / "Cancel".
+3. On confirmation, re-run with `--confirmed` (skips the `read -p` prompt, proceeds to write).
+4. On cancel, abort.
+
+**Important:** The agent must NOT run the script without both `--dry-run` and `--confirmed` — running without either flag hits the interactive `read -p` prompt and hangs the agent shell.
 
 The script (full procedure in [scripts/flip.sh](./scripts/flip.sh)):
 
@@ -50,7 +63,7 @@ The script (full procedure in [scripts/flip.sh](./scripts/flip.sh)):
 3. **Read current state.** For each env (dev `90722`, prd `90721`), fetch the live version's feature-states + per-segment override.
 4. **Apply fallback-fidelity rule.** If proposed = `dev off` AND current `prd on` in either env, abort with exit 1 + clear message. (See ADR-038 v2 §"Fallback semantics" — the env-var fallback can only mirror one state; `dev off / prd on` cannot be represented and would silently re-enable the dev cohort on outage.)
 5. **Print pre/post matrix.** Show current (env × segment) enablement table and the proposed delta.
-6. **Operator ack.** Wait for literal `yes` (per `hr-menu-option-ack-not-prod-write-auth`). Anything else aborts.
+6. **Operator ack.** If `--confirmed` is passed, skip (the agent already obtained ack via AskUserQuestion). Otherwise, wait for literal `yes` at the terminal prompt (per `hr-menu-option-ack-not-prod-write-auth`). Anything else aborts.
 7. **Flip Flagsmith.** For each env, POST to `/api/v1/environments/{env_id}/features/{feature_id}/versions/` with `feature_states_to_create` (first-time) OR `feature_states_to_update` (subsequent), `publish_immediately: true`.
 8. **Mirror Doppler (only on `role=prd` flip).** Run `doppler secrets set FLAG_<X>=<0|1> -p soleur -c dev` AND `-c prd` via stdin-piped 0600 temp file (no CLI-arg leak).
 9. **Re-verify.** Re-fetch state in both envs and assert matches proposed.

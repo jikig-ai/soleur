@@ -8,22 +8,22 @@ branch: feat-one-shot-4503-flag-set-role-ask-user-question
 
 ## Phase 1: Add `--confirmed` flag to `flip.sh`
 
-- [ ] 1.1 Initialize `CONFIRMED=0` alongside `DRY_RUN=0` (line 39)
-- [ ] 1.2 Add `--confirmed) CONFIRMED=1; shift ;;` case before `--*)` catch-all (line 51)
-- [ ] 1.3 Replace interactive prompt block (lines 249-252) with `CONFIRMED` guard
-- [ ] 1.4 Update `usage()` function to include `--confirmed`
-- [ ] 1.5 Update script header comment (line 7) to document `--confirmed`
+- [x] 1.1 Initialize `CONFIRMED=0` alongside `DRY_RUN=0` (line 39)
+- [x] 1.2 Add `--confirmed) CONFIRMED=1; shift ;;` case before `--*)` catch-all (line 51)
+- [x] 1.3 Replace interactive prompt block (lines 249-252) with `CONFIRMED` guard
+- [x] 1.4 Update `usage()` function to include `--confirmed`
+- [x] 1.5 Update script header comment (line 7) to document `--confirmed`
 
 ## Phase 2: Update SKILL.md
 
-- [ ] 2.1 Add `--confirmed` to Arguments section (line 30)
-- [ ] 2.2 Update Procedure section Step 6 with agent-driven flow (dry-run, AskUserQuestion, --confirmed)
-- [ ] 2.3 Update Procedure code block to show both `--dry-run` and `--confirmed` forms
+- [x] 2.1 Add `--confirmed` to Arguments section (line 30)
+- [x] 2.2 Update Procedure section Step 6 with agent-driven flow (dry-run, AskUserQuestion, --confirmed)
+- [x] 2.3 Update Procedure code block to show both `--dry-run` and `--confirmed` forms
 
 ## Verification
 
-- [ ] 3.1 AC1: `grep -c 'read -p' flip.sh` returns 1
-- [ ] 3.2 AC2: `grep -A2 'CONFIRMED -eq 0' flip.sh | grep -c 'read -p'` returns 1
-- [ ] 3.3 AC3: `grep -n 'CONFIRMED' flip.sh` shows exactly 3 occurrences
-- [ ] 3.4 AC4: `grep -c 'AskUserQuestion' SKILL.md` returns >= 1
-- [ ] 3.5 AC5: `grep -c '\-\-confirmed' SKILL.md` returns >= 2
+- [x] 3.1 AC1: `grep -c 'read -p' flip.sh` returns 1
+- [x] 3.2 AC2: `grep -A2 'CONFIRMED -eq 0' flip.sh | grep -c 'read -p'` returns 1
+- [x] 3.3 AC3: `grep -n 'CONFIRMED' flip.sh` shows exactly 3 occurrences
+- [x] 3.4 AC4: `grep -c 'AskUserQuestion' SKILL.md` returns >= 1
+- [x] 3.5 AC5: `grep -c '\-\-confirmed' SKILL.md` returns >= 2
