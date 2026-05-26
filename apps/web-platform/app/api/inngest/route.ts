@@ -25,10 +25,10 @@ import { cronCampaignCalendar } from "@/server/inngest/functions/cron-campaign-c
 import { cronCloudTaskHeartbeat } from "@/server/inngest/functions/cron-cloud-task-heartbeat";
 import { cronCommunityMonitor } from "@/server/inngest/functions/cron-community-monitor";
 import { cronCompetitiveAnalysis } from "@/server/inngest/functions/cron-competitive-analysis";
+import { cronCompoundPromote } from "@/server/inngest/functions/cron-compound-promote";
 import { cronContentGenerator } from "@/server/inngest/functions/cron-content-generator";
 import { cronContentPublisher } from "@/server/inngest/functions/cron-content-publisher";
 import { cronContentVendorDrift } from "@/server/inngest/functions/cron-content-vendor-drift";
-import { cronCompoundPromote } from "@/server/inngest/functions/cron-compound-promote";
 import { cronDailyTriage } from "@/server/inngest/functions/cron-daily-triage";
 import { cronFollowThroughMonitor } from "@/server/inngest/functions/cron-follow-through-monitor";
 import { cronGhPagesCertState } from "@/server/inngest/functions/cron-gh-pages-cert-state";
@@ -39,16 +39,16 @@ import { cronLegalAudit } from "@/server/inngest/functions/cron-legal-audit";
 import { cronLinkedinTokenCheck } from "@/server/inngest/functions/cron-linkedin-token-check";
 import { cronMembershipHealth } from "@/server/inngest/functions/cron-membership-health";
 import { cronNag4216Readiness } from "@/server/inngest/functions/cron-nag-4216-readiness";
-import { cronUxAudit } from "@/server/inngest/functions/cron-ux-audit";
 import { cronOauthProbe } from "@/server/inngest/functions/cron-oauth-probe";
 import { cronPlausibleGoals } from "@/server/inngest/functions/cron-plausible-goals";
 import { cronRoadmapReview } from "@/server/inngest/functions/cron-roadmap-review";
 import { cronRulePrune } from "@/server/inngest/functions/cron-rule-prune";
 import { cronRulesetBypassAudit } from "@/server/inngest/functions/cron-ruleset-bypass-audit";
-import { cronSkillFreshness } from "@/server/inngest/functions/cron-skill-freshness";
 import { cronSeoAeoAudit } from "@/server/inngest/functions/cron-seo-aeo-audit";
+import { cronSkillFreshness } from "@/server/inngest/functions/cron-skill-freshness";
 import { cronStaleDeferredScopeOuts } from "@/server/inngest/functions/cron-stale-deferred-scope-outs";
 import { cronStrategyReview } from "@/server/inngest/functions/cron-strategy-review";
+import { cronUxAudit } from "@/server/inngest/functions/cron-ux-audit";
 import { cronWeeklyAnalytics } from "@/server/inngest/functions/cron-weekly-analytics";
 import { eventCfTokenExpiryCheck } from "@/server/inngest/functions/event-cf-token-expiry-check";
 import { eventShipMerge } from "@/server/inngest/functions/event-ship-merge";
@@ -81,8 +81,8 @@ export const { GET, POST, PUT } = serve({
     cronCompetitiveAnalysis,
     cronContentGenerator,
     cronContentPublisher,
-    cronContentVendorDrift,
     cronCompoundPromote,
+    cronContentVendorDrift,
     cronDailyTriage,
     cronFollowThroughMonitor,
     cronGhPagesCertState,

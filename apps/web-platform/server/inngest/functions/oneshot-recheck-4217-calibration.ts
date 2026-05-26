@@ -74,6 +74,18 @@ export async function oneshotRecheck4217CalibrationHandler({
   const { data } = event;
 
   // --- D3 date guard ---------------------------------------------------------
+  if (data.date_override !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(data.date_override)) {
+    reportSilentFallback(
+      new Error(`Invalid date_override format: ${JSON.stringify(data.date_override)}`),
+      {
+        feature: FUNCTION_NAME,
+        op: "date-override-validation",
+        message: "date_override must be YYYY-MM-DD",
+        extra: { fn: FUNCTION_NAME, raw: String(data.date_override).slice(0, 20) },
+      },
+    );
+    return { ok: false, reason: "invalid-date-override" };
+  }
   const today = data.date_override ?? new Date().toISOString().slice(0, 10);
   if (today !== data.expected_date) {
     reportSilentFallback(

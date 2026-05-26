@@ -238,7 +238,11 @@ export async function cronWeeklyAnalyticsHandler({
       await spawnGitChecked(["commit", "-m", "ci: weekly analytics snapshot"], { cwd: repoRoot });
       await spawnGitChecked(["push", "-u", "origin", branchName], {
         cwd: repoRoot,
-        env: { ...process.env, GH_TOKEN: installationToken },
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          GH_TOKEN: installationToken,
+        },
       });
 
       const { data: pr } = await octokit.request("POST /repos/{owner}/{repo}/pulls", {

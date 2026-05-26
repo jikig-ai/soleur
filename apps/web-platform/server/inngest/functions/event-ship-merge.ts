@@ -164,7 +164,11 @@ export async function eventShipMergeHandler({
         ["pr", "checkout", String(prNumber)],
         {
           cwd: workspace.spawnCwd,
-          env: { ...process.env, GH_TOKEN: installationToken },
+          env: {
+            PATH: process.env.PATH,
+            HOME: process.env.HOME,
+            GH_TOKEN: installationToken,
+          },
         },
       );
       if (checkoutResult.exitCode !== 0) {

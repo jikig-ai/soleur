@@ -319,7 +319,7 @@ export async function cronContentPublisherHandler({
         );
       } else if (result.exitCode !== 0 && result.exitCode !== null) {
         throw new Error(
-          `content-publisher.sh failed (exit ${result.exitCode}): ${result.stderr.slice(0, 500)}`,
+          `content-publisher.sh failed (exit ${result.exitCode})`,
         );
       }
 
