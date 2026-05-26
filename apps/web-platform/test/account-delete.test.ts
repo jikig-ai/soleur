@@ -162,6 +162,7 @@ describe("deleteAccount", () => {
       }
       return {
         delete: () => ({ eq: () => Promise.resolve({ error: null }) }),
+        // mig 068 #4318 step 3.901 ordering-guard probe on workspace_members.
         select: () => ({
           eq: () => Promise.resolve({ count: 1, data: [], error: null }),
         }),
