@@ -4,6 +4,7 @@ date: 2026-03-03
 category: technical-debt
 tags: [plugin-structure, skills, community]
 severity: low
+status: open
 ---
 
 # Community Skill Missing SKILL.md

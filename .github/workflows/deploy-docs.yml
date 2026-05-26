@@ -3,6 +3,10 @@ name: Deploy Documentation to GitHub Pages
 on:
   push:
     branches: [main]
+    # Keep this list in sync with the path-filter regex in
+    # .github/workflows/ci.yml's detect-changes job — both gate the same
+    # docs/Eleventy surface (critical-css-gate pre-merge, this workflow
+    # post-merge). See #3624.
     paths:
       - 'plugins/soleur/docs/**'
       - 'plugins/soleur/agents/**'
@@ -30,15 +34,34 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+    # Runs inside the official Playwright container so the screenshot-gate step
+    # (below) has Chromium + OS deps pre-installed at the matching Playwright
+    # version. Container tag, digest, and the playwright@X.Y.Z npm pin below
+    # MUST stay in lockstep with .github/workflows/ci.yml's critical-css-gate —
+    # both gates assert the same FOUC contract via the same screenshot-gate.mjs
+    # script (see AGENTS.md cq-eleventy-critical-css-screenshot-gate). Future
+    # Playwright bumps: update tag, digest, AND the `playwright@<X.Y.Z>` npm
+    # pin below, in BOTH this workflow and ci.yml — 4 places total, atomically.
+    container:
+      # Pinned by both tag (greppable version) AND digest (vendor-pin discipline,
+      # per AGENTS.md hr-mcp-tools-playwright-etc-resolve-paths). The Playwright
+      # image runs as root by default — that is the supported path for
+      # actions/checkout (see https://github.com/actions/checkout/issues/956).
+      # Do NOT add `options: --user 1001` — it triggers UID-mismatch permission
+      # errors against /__w/_temp. Image ships Node 24 (no actions/setup-node
+      # needed). Pages-deploy actions (configure-pages, upload-pages-artifact,
+      # deploy-pages) work inside container jobs — the OIDC token is env-injected
+      # by the runner, not filesystem-dependent.
+      image: mcr.microsoft.com/playwright:v1.60.0-jammy@sha256:e1529a04087193966ea15d4a1617345bdaa0791690a24ab2c42b65f9ce5b2cdc
+    defaults:
+      run:
+        # GitHub Actions container `run:` steps default to /bin/sh (dash on
+        # Jammy). Explicit bash matches existing step shapes (`|| true`,
+        # `2>/dev/null`, `if [ "$UP" -ne 1 ]`).
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-
-      - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: 20
-          cache: npm
 
       - name: Install dependencies
         run: npm ci
@@ -50,6 +73,21 @@ jobs:
 
       - name: Validate SEO
         run: bash plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh _site
+
+      - name: Apex-host canonical gate
+        # Catches stray https://soleur.ai/... (apex) interpolations leaking
+        # into rendered HTML/XML. Canonical host is https://www.soleur.ai
+        # (apex 301s to www at the edge). Regex covers EVERY non-host-
+        # continuation suffix: `/`, `?`, `#`, `"`, `'`, `<`, ` `, EOL, etc.
+        # Negative class `[^a-zA-Z0-9.-]` rejects only `soleur.ai-org` /
+        # `soleur.aitech.com` style same-prefix-different-domain matches.
+        # See #3297. No untrusted input — pattern is literal.
+        run: |
+          if grep -rEn 'https://soleur\.ai($|[^a-zA-Z0-9.-])' _site/; then
+            echo "FAIL: rendered output contains apex-host references"
+            exit 1
+          fi
+          echo "PASS: no apex-host leaks in rendered output"
 
       - name: Validate CSP
         run: bash plugins/soleur/skills/seo-aeo/scripts/validate-csp.sh _site
@@ -74,9 +112,16 @@ jobs:
         run: node plugins/soleur/docs/scripts/check-critical-css-coverage.mjs
 
       - name: Install Playwright (Chromium only) for screenshot gate
-        run: |
-          npm install --no-save playwright@1 http-server@14
-          npx playwright install --with-deps chromium
+        # Container provides the Chromium binary + OS deps; the npm package
+        # (used by `import { chromium } from "playwright"` in screenshot-gate.mjs)
+        # must match the container's Playwright version EXACTLY — browser-binary
+        # lookup is exact-revision (see learning
+        # 2026-03-20-playwright-shared-cache-version-coupling.md). Use exact
+        # `X.Y.Z` — no `^`, no `~`, no `playwright@1` floating tag — or the
+        # npm package drifts off the container's Chromium revision. Keep this
+        # pin in sync with the container image tag above and with ci.yml's
+        # critical-css-gate matching step.
+        run: npm install --no-save playwright@1.60.0 http-server@14
 
       - name: Screenshot gate (FOUC) + stylesheet-swap regression gate
         run: |

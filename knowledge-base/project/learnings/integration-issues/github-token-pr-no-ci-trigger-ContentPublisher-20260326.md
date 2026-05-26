@@ -1,16 +1,15 @@
 ---
-module: Content Publisher
+title: GITHUB_TOKEN-created PRs never trigger CI workflows
 date: 2026-03-26
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "Bot PRs created by GITHUB_TOKEN have empty statusCheckRollup"
-  - "Auto-merge permanently blocked — CI Required and CLA Required rulesets never satisfied"
-  - "Stale content Discord warnings fire daily because status update PRs never merge"
-root_cause: config_error
-resolution_type: config_change
-severity: high
+category: ci-cd
 tags: [github-actions, github-token, check-runs, auto-merge, content-publisher]
+symptoms: [Bot PRs created by GITHUB_TOKEN have empty statusCheckRollup, Auto-merge permanently blocked — CI Required and CLA Required rulesets never satisfied, Stale content Discord warnings fire daily because status update PRs never merge]
+module: Content Publisher
+component: tooling
+problem_type: integration_issue
+resolution_type: config_change
+root_cause: config_error
+severity: high
 ---
 
 # Learning: GITHUB_TOKEN-created PRs never trigger CI workflows

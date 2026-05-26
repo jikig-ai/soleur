@@ -1,5 +1,5 @@
 name: 'Anthropic Preflight'
-description: 'Probe the Anthropic Messages API with a 1-token request before an expensive claude-code-action step. Sets ok=false if the monthly spend cap is exhausted; exits non-zero on unexpected failures.'
+description: 'Probe the Anthropic Messages API with a 1-token request before an expensive claude-code-action step. Sets ok=false if the API is unavailable for billing reasons (spend cap exhausted or credit balance too low) or transient (5xx/network); exits non-zero on unexpected failures.'
 
 inputs:
   anthropic-api-key:
@@ -8,7 +8,7 @@ inputs:
 
 outputs:
   ok:
-    description: 'true if the API is usable; false if the monthly cap is exhausted. Step fails (exit 1) for unexpected errors.'
+    description: 'true if the API is usable; false if the API is unavailable for billing reasons (spend cap exhausted or credit balance too low) or transient (5xx/network). Step fails (exit 1) for unexpected errors.'
     value: ${{ steps.check.outputs.ok }}
 
 runs:
@@ -38,14 +38,17 @@ runs:
         # of GitHub's native secret masking before echoing to the run log.
         BODY=$(head -c 500 "$BODY_FILE" 2>/dev/null | tr -d '\r' \
           | sed -E 's/sk-[A-Za-z0-9_-]{20,}/[REDACTED]/g' || echo "")
-        # Verbatim error body from Anthropic API on cap-exhausted —
-        # source: issue #2715 (2026-04-21), string "specified API usage limits"
+        # Verbatim error bodies from Anthropic API when API is unavailable for
+        # billing reasons — source: #2715 (2026-04-21, "specified API usage limits")
+        # and #3605 (2026-05-11, "credit balance is too low"). Both are
+        # operationally identical class (API unreachable, not a payload bug) so
+        # both soft-skip via the same branch.
         if [[ "$HTTP_CODE" == "200" ]]; then
           echo "ok=true" >> "$GITHUB_OUTPUT"
           echo "Anthropic preflight: OK"
-        elif [[ "$HTTP_CODE" == "400" ]] && grep -q "specified API usage limits" "$BODY_FILE"; then
+        elif [[ "$HTTP_CODE" == "400" ]] && grep -qE "(specified API usage limits|credit balance is too low)" "$BODY_FILE"; then
           echo "ok=false" >> "$GITHUB_OUTPUT"
-          echo "::warning::Anthropic spend cap exhausted — skipping Claude steps. Body: $BODY"
+          echo "::warning::Anthropic API unavailable (spend cap or credit balance) — skipping Claude steps. Body: $BODY"
         elif [[ "$HTTP_CODE" =~ ^(5[0-9]{2}|000)$ ]]; then
           # Transient: Anthropic incident, network blip, or gateway error.
           # Soft-skip so the workflow concludes success instead of going red

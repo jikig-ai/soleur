@@ -248,9 +248,12 @@ Body text target ≥ 4.5:1, large text & UI components ≥ 3:1. All ratios sRGB-
 
 ### Typography
 
+Scope-aware typography: the **marketing surface** (Eleventy site at `plugins/soleur/docs/**`, X/LinkedIn banners, landing pages) leads with Cormorant Garamond headlines; the **web-platform dashboard** (`apps/web-platform/**`) uses Inter app-wide for headlines and body to match the operator-tool reading. The serif is a marketing differentiator, not a dashboard requirement (#3556).
+
 | Role | Font | Weight | Notes |
 |------|------|--------|-------|
-| Headlines | Cormorant Garamond | 500 | Serif -- deliberately distinguishes from every dev tool |
+| Headlines (marketing site, banners, landing) | Cormorant Garamond | 500 | Serif -- deliberately distinguishes from every dev tool |
+| Headlines (web-platform dashboard) | Inter | 500-600 | Operator surface; sans-only by design (#3556) |
 | UI / Body | Inter | 400-600 | Clean, legible, industry standard |
 | Data / Code | JetBrains Mono | 400 | Monospace for technical content |
 | Section Labels | Inter | 600 | 12px, letterSpacing 3, gold color, ALL CAPS |

@@ -1,16 +1,15 @@
 ---
-module: Knowledge Base
+title: Negative-Space Tests Must Follow Extracted Enforcement Logic
 date: 2026-04-15
-problem_type: best_practice
-component: testing_framework
-symptoms:
-  - "Pattern-match tests in kb-security.test.ts and csrf-coverage.test.ts failed after auth logic moved into shared helper"
-  - "Three review agents flagged the initial test loosening (substring match on helper name) as too weak"
-  - "Substring gate accepted dead imports, comment-only mentions, and routes that ignored the helper's {ok: false} result"
-root_cause: missing_validation
-resolution_type: test_fix
-severity: medium
+category: engineering
 tags: [testing, negative-space, security-gates, helper-extraction, kb, code-review]
+symptoms: [Pattern-match tests in kb-security.test.ts and csrf-coverage.test.ts failed after auth logic moved into shared helper, Three review agents flagged the initial test loosening (substring match on helper name) as too weak, Substring gate accepted dead imports, comment-only mentions, and routes that ignored the helper's {ok: false} result]
+module: Knowledge Base
+component: testing_framework
+problem_type: best_practice
+resolution_type: test_fix
+root_cause: missing_validation
+severity: medium
 ---
 
 # Negative-Space Tests Must Follow Extracted Enforcement Logic

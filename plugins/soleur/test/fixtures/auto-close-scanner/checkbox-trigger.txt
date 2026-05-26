@@ -1,0 +1,4 @@
+## Test plan
+
+- [ ] Post-merge: close #3185 with a final comment.
+- [ ] Verify scanner picks this up.

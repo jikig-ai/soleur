@@ -22,7 +22,11 @@ vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
 }));
 
-import { applyPrefillGuard } from "@/server/agent-prefill-guard";
+import {
+  applyPrefillGuard,
+  CONTEXT_RESET_NOTICE_GENERIC,
+  CONTEXT_RESET_NOTICE_TOOL_USE_ORPHAN,
+} from "@/server/agent-prefill-guard";
 
 const WORKSPACE_PATH = "/tmp/cc-test-workspace";
 const COMMON_ARGS = {
@@ -180,5 +184,171 @@ describe("applyPrefillGuard", () => {
     expect(mockWarnSilentFallback.mock.calls[0][1].feature).toBe(
       "agent-runner",
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // #3269 — context-reset notice + reason discriminator. The helper now
+  // returns a single-turn `contextResetNotice` (system-prompt append) and a
+  // `reason` discriminator the dispatcher uses to emit the WS event.
+  // -------------------------------------------------------------------------
+
+  describe("contextResetNotice + reason (#3269)", () => {
+    it("returns generic notice + reason 'prefill-guard' when last message is plain assistant (content: string)", async () => {
+      mockGetSessionMessages.mockResolvedValueOnce([
+        { type: "user", uuid: "u1", session_id: "s", message: {}, parent_tool_use_id: null },
+        {
+          type: "assistant",
+          uuid: "a1",
+          session_id: "s",
+          message: { content: "all done" },
+          parent_tool_use_id: null,
+        },
+      ]);
+
+      const result = await applyPrefillGuard({
+        ...COMMON_ARGS,
+        resumeSessionId: "s",
+        feature: "cc-concierge",
+      });
+
+      expect(result.safeResumeSessionId).toBeUndefined();
+      expect(result.contextResetNotice).toBe(CONTEXT_RESET_NOTICE_GENERIC);
+      expect(result.reason).toBe("prefill-guard");
+    });
+
+    it("returns tool-aware notice + reason 'tool_use_orphan' when last assistant message has a tool_use content block", async () => {
+      mockGetSessionMessages.mockResolvedValueOnce([
+        { type: "user", uuid: "u1", session_id: "s", message: {}, parent_tool_use_id: null },
+        {
+          type: "assistant",
+          uuid: "a1",
+          session_id: "s",
+          message: {
+            content: [
+              { type: "text", text: "let me run a command" },
+              { type: "tool_use", id: "tu1", name: "Bash", input: { command: "ls" } },
+            ],
+          },
+          parent_tool_use_id: null,
+        },
+      ]);
+
+      const result = await applyPrefillGuard({
+        ...COMMON_ARGS,
+        resumeSessionId: "s",
+        feature: "cc-concierge",
+      });
+
+      expect(result.safeResumeSessionId).toBeUndefined();
+      expect(result.reason).toBe("tool_use_orphan");
+      expect(result.contextResetNotice).toBe(
+        CONTEXT_RESET_NOTICE_TOOL_USE_ORPHAN,
+      );
+    });
+
+    it("returns generic notice (not tool-aware) when last assistant message has content: string (tool_use never appears in string form)", async () => {
+      mockGetSessionMessages.mockResolvedValueOnce([
+        {
+          type: "assistant",
+          uuid: "a1",
+          session_id: "s",
+          message: { content: "type: tool_use is just text here" },
+          parent_tool_use_id: null,
+        },
+      ]);
+
+      const result = await applyPrefillGuard({
+        ...COMMON_ARGS,
+        resumeSessionId: "s",
+        feature: "cc-concierge",
+      });
+
+      expect(result.reason).toBe("prefill-guard");
+      expect(result.contextResetNotice).toContain(
+        "Treat the user's next message as standalone",
+      );
+      expect(result.contextResetNotice).not.toContain("tool action");
+    });
+
+    it("returns generic notice (no crash) when message is null, undefined, or non-object", async () => {
+      const shapes = [
+        null,
+        undefined,
+        "not-an-object",
+        42,
+        { /* no content key */ },
+        { content: { type: "tool_use" } /* not array, not string */ },
+        { content: [{ type: "text", text: "hi" }, "not-an-object", null] },
+      ];
+
+      for (const message of shapes) {
+        mockGetSessionMessages.mockResolvedValueOnce([
+          {
+            type: "assistant",
+            uuid: "a1",
+            session_id: "s",
+            message,
+            parent_tool_use_id: null,
+          },
+        ]);
+
+        const result = await applyPrefillGuard({
+          ...COMMON_ARGS,
+          resumeSessionId: "s",
+          feature: "cc-concierge",
+        });
+
+        expect(result.safeResumeSessionId).toBeUndefined();
+        expect(result.reason).toBe("prefill-guard");
+        expect(result.contextResetNotice).toContain(
+          "Treat the user's next message as standalone",
+        );
+      }
+    });
+
+    it("returns contextResetNotice undefined and reason undefined on cold start, user-final, empty history, probe failure", async () => {
+      // Cold start (no resumeSessionId)
+      let result = await applyPrefillGuard({
+        ...COMMON_ARGS,
+        resumeSessionId: undefined,
+        feature: "cc-concierge",
+      });
+      expect(result.contextResetNotice).toBeUndefined();
+      expect(result.reason).toBeUndefined();
+
+      // User-final
+      mockGetSessionMessages.mockResolvedValueOnce([
+        { type: "user", uuid: "u1", session_id: "s", message: {}, parent_tool_use_id: null },
+        { type: "assistant", uuid: "a1", session_id: "s", message: {}, parent_tool_use_id: null },
+        { type: "user", uuid: "u2", session_id: "s", message: {}, parent_tool_use_id: null },
+      ]);
+      result = await applyPrefillGuard({
+        ...COMMON_ARGS,
+        resumeSessionId: "s",
+        feature: "cc-concierge",
+      });
+      expect(result.contextResetNotice).toBeUndefined();
+      expect(result.reason).toBeUndefined();
+
+      // Empty history
+      mockGetSessionMessages.mockResolvedValueOnce([]);
+      result = await applyPrefillGuard({
+        ...COMMON_ARGS,
+        resumeSessionId: "s",
+        feature: "cc-concierge",
+      });
+      expect(result.contextResetNotice).toBeUndefined();
+      expect(result.reason).toBeUndefined();
+
+      // Probe failure
+      mockGetSessionMessages.mockRejectedValueOnce(new Error("ENOENT"));
+      result = await applyPrefillGuard({
+        ...COMMON_ARGS,
+        resumeSessionId: "s",
+        feature: "cc-concierge",
+      });
+      expect(result.contextResetNotice).toBeUndefined();
+      expect(result.reason).toBeUndefined();
+    });
   });
 });

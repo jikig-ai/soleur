@@ -1,0 +1,9 @@
+{
+  "_comment": "Playwright MCP config — pins headed mode explicitly so a future @playwright/mcp regression (cf. 0.0.75 silent-headless bug; learning 2026-05-16-brainstorm-premise-cascade-and-playwright-handoff-discipline.md §2 + W4) cannot break the credential-handoff workflow. Wire via --config in .mcp.json.",
+  "browser": {
+    "launchOptions": {
+      "headless": false
+    },
+    "isolated": false
+  }
+}

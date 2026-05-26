@@ -10,6 +10,7 @@ root_cause: [missing_association|missing_include|missing_index|wrong_api|scope_i
 rails_version: [7.1.2 - optional]
 resolution_type: [code_fix|migration|config_change|test_fix|dependency_update|environment_setup]
 severity: [critical|high|medium|low]
+status: open  # defaults to open — close via /soleur:resolve-debt
 tags: [keyword1, keyword2, keyword3]
 ---
 

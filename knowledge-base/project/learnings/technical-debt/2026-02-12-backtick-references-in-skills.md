@@ -1,10 +1,13 @@
 ---
-module: plugins/soleur
+title: Several Skills Use Backtick References Instead of Markdown Links
 date: 2026-02-12
-problem_type: best_practice
-component: skills
+category: plugin-architecture
 tags: [skills, markdown-links, backtick, convention-violation]
+module: plugins/soleur
+component: skills
+problem_type: best_practice
 severity: medium
+status: open
 ---
 
 # Several Skills Use Backtick References Instead of Markdown Links

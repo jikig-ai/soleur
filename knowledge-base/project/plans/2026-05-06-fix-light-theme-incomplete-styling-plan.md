@@ -60,7 +60,7 @@ This plan tokenizes the remaining 64 user-visible files using the same pattern P
 **If this leaks, the user's [data / workflow / money] is exposed via:** Not applicable — this is a pure visual/styling change. No new code paths handle credentials, payments, or user data.
 **Brand-survival threshold:** none
 
-This change carries no data-exposure or single-user-incident risk. It is a visual quality bar enforcement against a feature already shipped publicly.
+This change carries no data-exposure or single-user incident risk. It is a visual quality bar enforcement against a feature already shipped publicly.
 
 ## Research Insights
 

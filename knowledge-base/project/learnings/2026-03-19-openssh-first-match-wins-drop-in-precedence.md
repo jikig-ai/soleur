@@ -1,3 +1,10 @@
+---
+title: OpenSSH first-match-wins and sshd_config.d drop-in precedence
+date: 2026-03-19
+category: engineering
+tags: [integration-issues, infrastructure]
+---
+
 # Learning: OpenSSH first-match-wins and sshd_config.d drop-in precedence
 
 ## Problem

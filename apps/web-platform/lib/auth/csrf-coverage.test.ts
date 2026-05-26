@@ -14,6 +14,14 @@ import { resolve, join } from "path";
 const EXEMPT_ROUTES = new Set([
   // Stripe webhook uses signature verification, not cookies
   "app/api/webhooks/stripe/route.ts",
+  // PR-H (#3244) — GitHub App webhook uses X-Hub-Signature-256 HMAC
+  // verification (constant-time timingSafeEqual), not cookies. Routes
+  // called by GitHub.com (no browser session). See ADR-034.
+  "app/api/webhooks/github/route.ts",
+  // PR-H (#3244) — KB-drift ingest is called by the nightly GH Actions
+  // cron job ONLY, authenticated via HMAC-SHA256 against
+  // KB_DRIFT_INGEST_SIGNING_KEY. No cookies; not browser-reachable.
+  "app/api/internal/kb-drift-ingest/route.ts",
 ]);
 
 describe("CSRF coverage", () => {

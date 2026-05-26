@@ -1,21 +1,17 @@
 ---
-module: rule-metrics-aggregate workflow
+title: 'rule-metrics aggregator: PR pattern + session gotchas'
 date: 2026-04-15
-problem_type: integration_issue
+category: workflow-patterns
+tags: [github-actions, rulesets, bot-pr, synthetic-check-runs, pipeline-gotchas]
+symptoms: [rule-metrics-aggregate.yml first run 24444855398 failed at git push, remote: 3 of 3 required status checks are expected, remote: Required status check cla-check is expected]
+module: rule-metrics-aggregate workflow
 component: github_actions
-symptoms:
-  - "rule-metrics-aggregate.yml first run 24444855398 failed at git push"
-  - "remote: 3 of 3 required status checks are expected"
-  - "remote: Required status check cla-check is expected"
+issues: [#2258, #2264]
+pr: '#2270'
+problem_type: integration_issue
+related: [2026-03-19-content-publisher-cla-ruleset-push-rejection.md, 2026-03-23-skip-ci-blocks-auto-merge-on-scheduled-prs.md, 2026-03-19-github-actions-bypass-actor-not-feasible.md]
 root_cause: direct_push_blocked_by_rulesets
 severity: high
-tags: [github-actions, rulesets, bot-pr, synthetic-check-runs, pipeline-gotchas]
-related:
-  - 2026-03-19-content-publisher-cla-ruleset-push-rejection.md
-  - 2026-03-23-skip-ci-blocks-auto-merge-on-scheduled-prs.md
-  - 2026-03-19-github-actions-bypass-actor-not-feasible.md
-issues: ["#2258", "#2264"]
-pr: "#2270"
 ---
 
 # rule-metrics aggregator: PR pattern + session gotchas

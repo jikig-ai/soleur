@@ -51,6 +51,13 @@ skills/
 └── <skill-name>/          # All skills at root level (flat)
 ```
 
+**Note:** Files at the repo root matching `AGENTS.*.md` (e.g.
+`AGENTS.core.md`, `AGENTS.docs.md`, `AGENTS.rest.md`) are the change-class
+sidecars introduced by #3493. They are *not* plugin components — the plugin
+loader scans `plugins/soleur/{commands,skills,agents}/` only. Edits to the
+sidecars route through the `cq-agents-md-tier-gate` placement gate and the
+`session-rules-loader.sh` SessionStart hook.
+
 ### Adding a New Domain
 
 To add a new domain (e.g., product, growth):
@@ -84,6 +91,12 @@ The 6 workflow stages are now **skills** under `skills/`:
 **Why skills?** Skills are discoverable by agents and invocable via the Skill tool. Commands are invisible to agents. Workflow stages benefit from agent discoverability and Skill tool invocation (e.g., `/soleur:go` routes to skills, one-shot sequences plan then work via the Skill tool).
 
 **Prefix source:** Both commands and skills get their `soleur:` prefix automatically from the plugin namespace. The `name:` field in frontmatter should NOT include the `soleur:` prefix. Commands live flat in `commands/` (not in a subdirectory) to avoid double-namespacing.
+
+### Primitive Choice: /goal vs. Soleur Skills
+
+Claude Code's `/goal` primitive (v2.1.139+) is a session-scoped completion-condition Stop hook with a Haiku evaluator that reads only the conversation transcript. It is the right tool for **ad-hoc autonomous work outside dedicated Soleur skills** — operator-typed conditions, headless CI, one-off loops not worth building a skill for.
+
+Do NOT propose `/goal` retrofits into existing autonomous Soleur skills (`one-shot`, `test-fix-loop`, `drain-labeled-backlog`, `resolve-todo-parallel`, `resolve-pr-parallel`, `work`). Each already uses a stricter, structurally-verifiable completion mechanism (exit codes, the `<promise>DONE</promise>` marker via `plugins/soleur/hooks/stop-hook.sh`, CLI-output checks). A transcript-only evaluator on top of those would duplicate at higher cost and reintroduce the pseudo-handoff failure class codified by hard rule `hr-when-a-workflow-concludes-with-an`. Operator-facing docs: `/goal-primitive/`.
 
 ## Agent Compliance Checklist
 

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# gh stub for the gdpr-gate-self-test workflow (issue #3536).
+#
+# Provides a deterministic `gh run list` response so Case B of the
+# self-test can assert that the operator-attested-mode banner is
+# SUPPRESSED when the cron-run binding has a parseable timestamp.
+# Any other gh invocation exits 1 so the stub cannot accidentally mask
+# unrelated gh usage in the test harness.
+
+if [[ "$1 $2" == "run list" ]]; then
+  printf '2026-02-01T00:00:00Z\n'
+  exit 0
+fi
+echo "gh stub: unhandled subcommand '$*'" >&2
+exit 1

@@ -1,8 +1,11 @@
 ---
-name: JSON-LD `| dump` is not enough — `</script>` breakout requires a dedicated filter
-description: Why `{{ x | dump | safe }}` inside `<script type="application/ld+json">` is insecure when a value can contain `</script>`, U+2028, or U+2029, and how a `jsonLdSafe` Eleventy filter closes the gap.
+title: 'JSON-LD `| dump` is not enough — `</script>` breakout requires a dedicated filter'
+date: 2026-04-19
 category: security-issues
+tags: [security-issues, docs/eleventy-templates, 2609, eleventy, nunjucks, json-ld, schema.org, xss]
 module: docs/eleventy-templates
+description: 'Why `{{ x | dump | safe }}` inside `<script type="application/ld+json">` is insecure when a value can contain `</script>`, U+2028, or U+2029, and how a `jsonLdSafe` Eleventy filter closes the gap.'
+name: 'JSON-LD `| dump` is not enough — `</script>` breakout requires a dedicated filter'
 ---
 
 # JSON-LD `| dump` is not enough — `</script>` breakout requires a dedicated filter

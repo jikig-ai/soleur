@@ -1,18 +1,15 @@
 ---
-module: System
+title: Cross-Runner Test Compatibility (vitest + bun test)
 date: 2026-04-02
-problem_type: integration_issue
-component: testing_framework
-symptoms:
-  - "vi.stubGlobal is not a function in bun test"
-  - "vi.importActual is not a function in bun test"
-  - "Cannot find module bun:test in vitest/tsc"
-  - "Attempted to assign to readonly property when monkey-patching crypto"
-  - "TypeScript overload error for generateKeyPairSync without publicKeyEncoding"
-root_cause: test_isolation
-resolution_type: code_fix
-severity: medium
+category: engineering
 tags: [vitest, bun-test, cross-runner, mocking, crypto, rsa]
+symptoms: [vi.stubGlobal is not a function in bun test, vi.importActual is not a function in bun test, Cannot find module bun:test in vitest/tsc, Attempted to assign to readonly property when monkey-patching crypto, TypeScript overload error for generateKeyPairSync without publicKeyEncoding]
+module: System
+component: testing_framework
+problem_type: integration_issue
+resolution_type: code_fix
+root_cause: test_isolation
+severity: medium
 ---
 
 # Learning: Cross-Runner Test Compatibility (vitest + bun test)

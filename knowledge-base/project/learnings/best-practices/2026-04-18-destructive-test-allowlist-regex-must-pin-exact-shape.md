@@ -1,9 +1,12 @@
 ---
+title: Destructive-test allowlist regex must pin the exact synthetic-identifier shape
+date: 2026-04-18
 category: best-practices
 tags: [testing, security, destructive-tests, allowlist, regex, runbook]
-date: 2026-04-18
+related_issues:
+  - 1448
+  - 2597
 related_rule: cq-destructive-prod-tests-allowlist
-related_issues: [1448, 2597]
 ---
 
 # Destructive-test allowlist regex must pin the exact synthetic-identifier shape
@@ -21,7 +24,7 @@ const SYNTH_EMAIL_RE =
 
 Security review flagged this as too wide. The synthetic emails are always
 `mu1-integration-<v4-uuid>@soleur-test.invalid`, but `[0-9a-f-]+` accepts
-`mu1-integration-a@soleur-test.invalid` — any hex-ish blob of any length.
+`mu1-integration-a@example.com` — any hex-ish blob of any length.
 
 The risk was theoretical for the test file alone (it constructs emails
 with `randomUUID()`), but the same regex was copy-pasted into the

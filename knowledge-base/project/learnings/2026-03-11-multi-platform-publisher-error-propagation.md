@@ -1,3 +1,10 @@
+---
+title: Multi-platform publisher error propagation
+date: 2026-03-11
+category: engineering
+tags: [integration-issues, ci-workflows, content-publisher]
+---
+
 # Learning: Multi-platform publisher error propagation
 
 ## Problem

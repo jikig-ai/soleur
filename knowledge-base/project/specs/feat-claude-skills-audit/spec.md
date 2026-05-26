@@ -54,16 +54,9 @@ When `compound` captures a learning, it records an occurrence count. When the sa
 
 Operationalizes `wg-every-session-error-must-produce-either` so a workflow gap that has caused ≥N incidents cannot remain un-codified.
 
-### FR4: Named orchestration lanes in brainstorm + work
+### FR4: Named orchestration lanes in brainstorm (single-axis)
 
-Both skills expose four named lanes mapped from the external repo's orchestration protocol:
-
-- **Solo Sprint** (one persona rotating across phases).
-- **Domain Deep-Dive** (one persona stacking multiple skills within a phase).
-- **Multi-Agent Handoff** (sequential persona review of each other's output).
-- **Skill Chain** (procedural skills without a persona wrapper).
-
-Each brainstorm/work session's plan explicitly selects a lane — domain-leader routing uses the lane choice to scope which specialist agents to invoke.
+Three lanes describe Phase 0.5 domain-leader breadth: `single-domain`, `cross-domain` (fail-closed default), `procedural`. Full vocabulary and carry-forward contract: `knowledge-base/project/specs/feat-orchestration-lanes/spec.md` and `knowledge-base/project/brainstorms/2026-05-12-orchestration-lanes-brainstorm.md`. (Amended 2026-05-12: collapsed from four lanes to three under single-axis lock.)
 
 ### FR5: Five targeted new skills/agents, each with its own brainstorm
 
@@ -121,4 +114,4 @@ The FR1 `peer-plugin-audit` sub-mode is listed in `competitive-analysis`'s SKILL
 
 ### TR7: Backwards-compatibility guarantee for existing skills
 
-None of the three meta-pattern extractions (FR2, FR3, FR4) break existing workflows. Security scan defaults active but skippable for already-installed skills (scan-on-demand). Promotion loop is additive to `compound`, not a replacement. Named orchestration lanes default to auto-detection of an appropriate lane when no explicit choice is made — existing brainstorm/work invocations behave unchanged.
+None of the three meta-pattern extractions (FR2, FR3, FR4) break existing workflows. Security scan defaults active but skippable for already-installed skills (scan-on-demand). Promotion loop is additive to `compound`, not a replacement. Named orchestration lanes default to auto-detection of an appropriate lane when no explicit choice is made — existing brainstorm/work invocations behave unchanged. Named orchestration lanes auto-detect at brainstorm Phase 0.4 and fail closed to `cross-domain` on ambiguity; existing brainstorm invocations behave unchanged in shape (one new Phase 0.4 question prompt, skipped when USER_BRAND_CRITICAL=true).

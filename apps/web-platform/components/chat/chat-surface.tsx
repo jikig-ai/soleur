@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { useWebSocket } from "@/lib/ws-client";
 import type { ConversationContext, AttachmentRef } from "@/lib/types";
@@ -21,13 +21,14 @@ import { InteractivePromptCard } from "@/components/chat/interactive-prompt-card
 import { WorkflowLifecycleBar } from "@/components/chat/workflow-lifecycle-bar";
 import { ToolUseChip } from "@/components/chat/tool-use-chip";
 import { RoutedLeadersStrip } from "@/components/chat/routed-leaders-strip";
-import { LeaderAvatar } from "@/components/leader-avatar";
+import { CohortMissingReplyMarker } from "@/components/chat/cohort-missing-reply-marker";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 import type {
   InteractivePromptResponsePayload,
   InteractivePromptPayload,
 } from "@/lib/types";
 import type { ChatInteractivePromptMessage } from "@/lib/chat-state-machine";
+import { CONTEXT_RESET_COPY } from "@/components/chat/chat-copy";
 
 export type ChatSurfaceVariant = "full" | "sidebar";
 
@@ -204,7 +205,10 @@ export function ChatSurface({
     resumedFrom,
     workflow,
     workflowEndedAt,
+    conversationCreatedAt,
     historyLoading,
+    streamState,
+    abort,
   } = useWebSocket(conversationId);
 
   const { names: customNames, getDisplayName, getIconPath, loading: teamNamesLoading } = useTeamNames();
@@ -212,6 +216,30 @@ export function ChatSurface({
   const [sessionStarted, setSessionStarted] = useState(false);
   const [initialMsgSent, setInitialMsgSent] = useState(false);
   const [sessionStartTimeout, setSessionStartTimeout] = useState(false);
+  const [dismissedErrorKey, setDismissedErrorKey] = useState<string | null>(null);
+  const [sessionTimeoutDismissed, setSessionTimeoutDismissed] = useState(false);
+  const prevSessionTimeoutRef = useRef(false);
+
+  const activeErrorKey = useMemo(
+    () => (lastError ? `${lastError.code}::${lastError.message}` : null),
+    [lastError],
+  );
+
+  // Edge-triggered: re-show the timeout card when sessionStartTimeout flips false -> true.
+  useEffect(() => {
+    if (!prevSessionTimeoutRef.current && sessionStartTimeout) {
+      setSessionTimeoutDismissed(false);
+    }
+    prevSessionTimeoutRef.current = sessionStartTimeout;
+  }, [sessionStartTimeout]);
+
+  // Reset dismissedErrorKey whenever lastError clears so an identical re-fire
+  // (same code+message after a reconnect that nulled lastError) is shown again.
+  useEffect(() => {
+    if (!lastError) {
+      setDismissedErrorKey(null);
+    }
+  }, [lastError]);
   const [atQuery, setAtQuery] = useState("");
   const [atVisible, setAtVisible] = useState(false);
   const [atPosition, setAtPosition] = useState(0);
@@ -299,6 +327,58 @@ export function ChatSurface({
       setSessionStarted(false);
     }
   }, [status]);
+
+  // #3448 PR2 — Esc keyboard shortcut with focus guard.
+  //
+  // Mounts a `document`-level keydown listener only while a turn is in
+  // flight (`streaming`) or already aborting (`stopping`, so a quick second
+  // Esc is harmlessly ignored by `abort()`'s own no-op-while-stopping
+  // guard rather than racing the Stop button into a stale state).
+  //
+  // Esc-while-typing guard (plan §"Plan-time additions from SpecFlow"):
+  // when the user is mid-sentence in the chat textarea, Esc must NOT
+  // abort — the textarea's native Esc handling (clear autocomplete, blur)
+  // is the more frequent intent. We treat "focused on a textarea with
+  // content" as the suppressing condition; an empty textarea, an unfocused
+  // textarea, or focus on any other element falls through to abort.
+  //
+  // Per AGENTS.md `cq-ref-removal-sweep-cleanup-closures`, the effect's
+  // cleanup MUST return removeEventListener — orphaned listeners survive
+  // unmount and would re-fire abort on a freshly-mounted bubble's first
+  // Esc. The test `task 5.7` is the regression gate for this.
+  useEffect(() => {
+    if (streamState !== "streaming" && streamState !== "stopping") return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const target = document.activeElement;
+      // Review fix (security): the original guard only suppressed Esc on
+      // a non-empty <textarea>. That left native UA Esc semantics (close
+      // autocomplete, clear, blur, dismiss dialog) shadowed for:
+      //   - <input type="text"> and friends (KB filename input, search box,
+      //     dialog text inputs),
+      //   - any [contenteditable] element (rich-text widgets),
+      //   - elements inside an open Radix/Headless `[role="dialog"]`
+      //     where Esc is the established close gesture.
+      // For all three, Esc-mid-stream now defers to the local handler:
+      // user closes the dialog / clears the input WITHOUT also burning
+      // their billable turn. Stop via the on-screen button still works.
+      if (target instanceof HTMLElement) {
+        if (target.closest('[role="dialog"]')) return;
+        if (target.isContentEditable) return;
+        const hasContent =
+          (target instanceof HTMLInputElement &&
+            target.type !== "checkbox" &&
+            target.type !== "radio" &&
+            target.value.length > 0) ||
+          (target instanceof HTMLTextAreaElement && target.value.length > 0);
+        if (hasContent) return;
+      }
+      e.preventDefault();
+      abort();
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [streamState, abort]);
 
   useEffect(() => {
     if (sessionConfirmed && msgParam && !initialMsgSent) {
@@ -453,32 +533,52 @@ export function ChatSurface({
 
       {/* Review F15: WorkflowLifecycleBar is sticky context above the
           scroll region — moving it OUTSIDE the `overflow-y-auto` container
-          keeps it pinned regardless of message-list scroll position. */}
+          keeps it pinned regardless of message-list scroll position.
+
+          #3774: thread the accumulated cost from `usageData` (driven by the
+          legacy `usage_update` setState at `ws-client.ts:791-806`) into the
+          active lifecycle slice so the bar can render the running total.
+          The reducer's `cumulativeCostUsd` field exists on the type but is
+          never written by any arm — this prop-time merge is the minimum
+          fix to expose the existing data without introducing a second
+          source of truth. */}
       <WorkflowLifecycleBar
-        lifecycle={workflow}
+        lifecycle={
+          workflow.state === "active" && usageData
+            ? { ...workflow, cumulativeCostUsd: usageData.totalCostUsd }
+            : workflow
+        }
         onStartNewConversation={() => router.push("/dashboard")}
       />
 
       <div className={`min-w-0 flex-1 overflow-y-auto px-4 py-4 ${isFull ? "md:px-6" : ""}`}>
-        {lastError && (
-          <div className={`mb-4 ${widthWrapper}`}>
+        {lastError && activeErrorKey !== dismissedErrorKey && (
+          // `data-rate-limit-exceeded` is a load-bearing canary attribute —
+          // see e2e/cc-soleur-go-security.e2e.ts FR3.4 (Stage 6 PR-C #2939).
+          // Pattern mirrors `data-error-boundary` at error-boundary-view.tsx.
+          <div
+            className={`mb-4 ${widthWrapper}`}
+            data-rate-limit-exceeded={lastError.code === "rate_limited" ? "" : undefined}
+          >
             <ErrorCard
               title={lastError.code === "key_invalid" ? "Invalid API Key" : lastError.code === "rate_limited" ? "Rate Limited" : "Connection Error"}
               message={lastError.message}
               onRetry={lastError.code !== "key_invalid" ? reconnect : undefined}
               retryLabel="Reconnect"
               action={lastError.action}
+              onDismiss={() => setDismissedErrorKey(activeErrorKey)}
             />
           </div>
         )}
 
-        {sessionStartTimeout && !sessionConfirmed && (
+        {sessionStartTimeout && !sessionConfirmed && !sessionTimeoutDismissed && (
           <div className={`mb-4 ${widthWrapper}`}>
             <ErrorCard
               title="Session Failed to Start"
               message="The server did not confirm the session within 10 seconds. Please try again."
               onRetry={reconnect}
               retryLabel="Reconnect"
+              onDismiss={() => setSessionTimeoutDismissed(true)}
             />
           </div>
         )}
@@ -518,6 +618,8 @@ export function ChatSurface({
                       getIconPath={getIconPath}
                       attachments={msg.attachments}
                       variant={variant}
+                      status={msg.status}
+                      usage={msg.usage}
                     />
                   );
                   break;
@@ -597,6 +699,21 @@ export function ChatSurface({
                     />
                   );
                   break;
+                case "context_reset":
+                  // #3269 — inline lifecycle notice mirroring `workflow_ended`
+                  // shape. Copy is read from `CONTEXT_RESET_COPY[msg.reason]`
+                  // (single source of truth shared with the RTL test).
+                  body = (
+                    <div
+                      data-message-type="context_reset"
+                      className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/40 px-4 py-3"
+                    >
+                      <p className="text-sm text-soleur-text-primary">
+                        {CONTEXT_RESET_COPY[msg.reason]}
+                      </p>
+                    </div>
+                  );
+                  break;
                 default: {
                   const _exhaustive: never = msg;
                   void _exhaustive;
@@ -613,18 +730,37 @@ export function ChatSurface({
           })()}
 
           {isClassifying && (
+            // Reuses MessageBubble's tool_use treatment (active border + Working
+            // badge + ToolStatusChip) so the routing chip matches every
+            // subsequent in-flight assistant turn rather than rendering a
+            // distinct flat row. Outer wrapper preserves the routing-chip
+            // testid for existing presence/absence assertions.
             <div className="flex justify-start" data-testid="routing-chip">
-              <div className="flex items-center gap-2 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3">
-                <LeaderAvatar leaderId={CC_ROUTER_LEADER_ID} size="sm" />
-                <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" />
-                <span className="text-sm text-soleur-text-secondary">
-                  Soleur Concierge is routing to the right experts...
-                </span>
-              </div>
+              <MessageBubble
+                role="assistant"
+                content=""
+                leaderId={CC_ROUTER_LEADER_ID}
+                messageState="tool_use"
+                toolLabel="Routing to the right experts..."
+                getDisplayName={getDisplayName}
+                getIconPath={getIconPath}
+                variant={variant}
+              />
             </div>
           )}
 
           <NotificationPrompt visible={showNotificationPrompt} />
+          {/* PR-B (#3603) — per-thread transparency marker for the
+              row-absence cohort. Component self-gates on the cohort window,
+              sunset date, message shape, and streaming state; rendering an
+              empty pass when any gate fails. Mounted before
+              `messagesEndRef` so scroll-into-view still lands on the
+              composer anchor, not the marker. */}
+          <CohortMissingReplyMarker
+            createdAt={conversationCreatedAt}
+            messages={messages}
+            isTurnInFlight={streamState !== "idle"}
+          />
           <div ref={messagesEndRef} />
         </div>
       </div>
@@ -683,6 +819,8 @@ export function ChatSurface({
             quoteRef={quoteRef}
             focusRef={focusRef}
             draftKey={draftKey}
+            streamState={streamState}
+            onStop={abort}
           />
         </div>
         {!isFull && usageData && usageData.totalCostUsd > 0 && (

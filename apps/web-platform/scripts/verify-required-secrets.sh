@@ -178,6 +178,33 @@ if [[ -n "$gh_app_pem_b64" && -z "${SOLEUR_SKIP_GH_APP_DRIFTGUARD_PEM_SHAPE:-}" 
   fi
 fi
 
+# Forbidden-in-prd assertion for dev-only sign-in panel (R3).
+# These keys gate the developer multi-account QA panel and seeded test
+# users. Their presence in Doppler `prd` is a hard invariant violation:
+#   - FLAG_DEV_SIGNIN=1 in prd would render the panel server-side and
+#     enable POST /api/auth/dev-signin against the prd Supabase project
+#     (auth bypass). The panel and route also have build-time NODE_ENV
+#     guards, but those defenses are belt-and-suspenders to this preflight.
+#   - DEV_USER_*_PASSWORD in prd would only matter if dev-N users were
+#     also seeded into the prd Supabase project (see hr-dev-prd-distinct-
+#     supabase-projects); their absence here is the canary.
+# Detection runs in the same prd-secret enumeration the rest of this
+# script does — if any are exported by `doppler run -c prd`, fail.
+FORBIDDEN_IN_PRD=(
+  FLAG_DEV_SIGNIN
+  DEV_USER_1_PASSWORD
+  DEV_USER_2_PASSWORD
+  DEV_USER_3_PASSWORD
+)
+forbidden_present=0
+for key in "${FORBIDDEN_IN_PRD[@]}"; do
+  value="${!key:-}"
+  if [[ -n "$value" ]]; then
+    echo "::error::Dev-only secret leaked into Doppler prd: $key"
+    forbidden_present=$((forbidden_present + 1))
+  fi
+done
+
 if [[ "$missing" -gt 0 ]]; then
   echo "::error::$missing required NEXT_PUBLIC_* secret(s) missing from Doppler prd"
   exit 1
@@ -188,4 +215,26 @@ if [[ "$shape_violations" -gt 0 ]]; then
   exit 1
 fi
 
+if [[ "$forbidden_present" -gt 0 ]]; then
+  echo "::error::$forbidden_present dev-only secret(s) present in Doppler prd (must be unset)"
+  exit 1
+fi
+
 echo "::notice::All ${#REQUIRED[@]} required NEXT_PUBLIC_* secrets present in Doppler prd"
+
+# --- env-fallback mirror invariant (ADR-038 §Fallback semantics) -----------
+# Every RUNTIME_FLAG MUST have a corresponding env var in Doppler that mirrors
+# the prd-segment Flagsmith state. Without it, the fallback path (Flagsmith
+# outage → env) is broken.
+MIRROR_FLAGS=("FLAG_TEAM_WORKSPACE_INVITE" "FLAG_BYOK_DELEGATIONS")
+mirror_missing=0
+for flag in "${MIRROR_FLAGS[@]}"; do
+  val=$(doppler secrets get "$flag" -p soleur -c prd --plain 2>/dev/null || echo "")
+  if [[ -z "$val" ]]; then
+    echo "::error::env-fallback mirror: $flag must be defined in Doppler soleur/prd to mirror Flagsmith prd-segment state"
+    mirror_missing=$((mirror_missing + 1))
+  fi
+done
+if [[ "$mirror_missing" -gt 0 ]]; then
+  exit 1
+fi

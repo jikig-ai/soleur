@@ -4,11 +4,13 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { usePanelRef } from "react-resizable-panels";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { useFeatureFlag } from "@/components/feature-flags/provider";
 import type { KbContextValue } from "@/components/kb/kb-context";
 import type { KbChatContextValue } from "@/components/kb/kb-chat-context";
 import { safeSession } from "@/lib/safe-session";
 import { getAncestorPaths } from "@/components/kb/get-ancestor-paths";
 import type { TreeNode } from "@/server/kb-reader";
+import type { KbSyncHistoryRow } from "@/components/kb/kb-sync-status";
 
 const KB_SIDEBAR_OPEN_KEY = "kb.chat.sidebarOpen";
 
@@ -32,17 +34,16 @@ export interface UseKbLayoutStateResult {
   error: KbContextValue["error"];
   hasTreeContent: boolean;
   kbCollapsed: boolean;
-  setKbCollapsed: React.Dispatch<React.SetStateAction<boolean>>;
   toggleKbCollapsed: () => void;
   // Chat state
   contextPath: string | null;
   showChat: boolean;
   openSidebar: () => void;
   closeSidebar: () => void;
-  // Panel refs (desktop only — but owned here so the toggle + resize closures
-  // share identity with the render side). Typed via ReturnType to avoid
-  // depending on the non-exported PanelImperativeHandle name.
-  sidebarPanelRef: ReturnType<typeof usePanelRef>;
+  // Chat panel ref — owned here so the toggle + resize closures share
+  // identity with the render side. The file-tree sidebar is no longer a
+  // Panel (it's a CSS-transitioning <aside>), so only the chat panel
+  // needs an imperative handle.
   chatPanelRef: ReturnType<typeof usePanelRef>;
 }
 
@@ -50,24 +51,17 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
   const pathname = usePathname();
   const router = useRouter();
   const isDesktop = useMediaQuery("(min-width: 768px)");
-  const sidebarPanelRef = usePanelRef();
   const chatPanelRef = usePanelRef();
   const [kbCollapsed, setKbCollapsed] = useState(false);
   const [tree, setTree] = useState<TreeNode | null>(null);
+  const [lastSync, setLastSync] = useState<KbSyncHistoryRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<KbContextValue["error"]>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  // Runtime feature flag — fetched from /api/flags (not build-time NEXT_PUBLIC_*)
-  const [kbChatFlag, setKbChatFlag] = useState(false);
-  useEffect(() => {
-    fetch("/api/flags")
-      .then((r) => r.json())
-      .then((flags: Record<string, boolean>) => {
-        setKbChatFlag(flags["kb-chat-sidebar"] ?? false);
-      })
-      .catch(() => {}); // flags stay off if fetch fails
-  }, []);
+  // Runtime feature flag — hydrated server-side via FeatureFlagProvider in
+  // app/layout.tsx (ADR-038 v2). No client fetch round-trip.
+  const kbChatFlag = useFeatureFlag("kb-chat-sidebar");
 
   const fetchTree = useCallback(
     async (signal?: AbortSignal) => {
@@ -95,6 +89,10 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
         }
         const data = await res.json();
         setTree(data.tree);
+        // #4224 — server tucks the latest kb_sync_history row alongside.
+        // Cached on the layout state; refetched on KbSyncStatus's Sync-now
+        // resolution via refreshTree (the same fetchTree callback).
+        setLastSync((data.lastSync as KbSyncHistoryRow | null) ?? null);
         setLoading(false);
       } catch {
         if (!signal?.aborted) {
@@ -151,16 +149,8 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
   }, [pathname]);
 
   const toggleKbCollapsed = useCallback(() => {
-    if (isDesktop) {
-      if (sidebarPanelRef.current?.isCollapsed()) {
-        sidebarPanelRef.current.expand();
-      } else {
-        sidebarPanelRef.current?.collapse();
-      }
-    } else {
-      setKbCollapsed((prev) => !prev);
-    }
-  }, [isDesktop, sidebarPanelRef]);
+    setKbCollapsed((prev) => !prev);
+  }, []);
 
   // Cmd+B / Ctrl+B toggles KB file tree sidebar (only on KB routes, not in inputs)
   useEffect(() => {
@@ -188,8 +178,9 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
       expanded,
       toggleExpanded,
       refreshTree: fetchTree,
+      lastSync,
     }),
-    [tree, loading, error, expanded, toggleExpanded, fetchTree],
+    [tree, lastSync, loading, error, expanded, toggleExpanded, fetchTree],
   );
 
   // --- Chat sidebar state -------------------------------------------------
@@ -296,13 +287,11 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
     error,
     hasTreeContent,
     kbCollapsed,
-    setKbCollapsed,
     toggleKbCollapsed,
     contextPath,
     showChat,
     openSidebar,
     closeSidebar,
-    sidebarPanelRef,
     chatPanelRef,
   };
 }

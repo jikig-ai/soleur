@@ -18,6 +18,8 @@ import {
 import { handleConversationMessages } from "./api-messages";
 import { createChildLogger } from "./logger";
 import { verifyPluginMountOnce } from "./plugin-mount-check";
+import { assertSingleReplicaInvariant } from "./single-replica-assertion";
+import { emitTeamWorkspaceInviteBootBreadcrumb } from "./team-workspace-boot";
 import {
   buildHealthResponse,
   buildInternalMetricsResponse,
@@ -44,7 +46,9 @@ const app = next({ dev });
 const handle = app.getRequestHandler();
 
 app.prepare().then(() => {
+  assertSingleReplicaInvariant();
   verifyPluginMountOnce();
+  emitTeamWorkspaceInviteBootBreadcrumb();
 
   const server = createServer(async (req, res) => {
     const parsedUrl = parse(req.url!, true);

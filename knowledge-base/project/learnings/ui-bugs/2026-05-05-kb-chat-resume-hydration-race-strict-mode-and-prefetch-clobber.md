@@ -1,18 +1,16 @@
 ---
-module: KB Chat
+title: KB chat resume hydration race — three failure modes share one fetch path
 date: 2026-05-05
-problem_type: ui_bug
-component: react_hook
-symptoms:
-  - "KB doc-chat sidebar 'Continuing from <ts>' banner fires but message list renders empty"
-  - "Trigger button stays on 'Ask about this document' even when prior thread exists"
-  - "Command Center conversation pane shows 'Untitled · In progress' but body is blank"
-  - "console.warn on history-fetch failure invisible in Sentry, no production observability"
-root_cause: async_timing
-resolution_type: code_fix
-severity: high
+category: engineering
 tags: [useeffect, react-hooks, abortcontroller, strict-mode, history-fetch, sentry, silent-fallback, kb-chat, command-center]
+symptoms: [KB doc-chat sidebar 'Continuing from <ts>' banner fires but message list renders empty, Trigger button stays on 'Ask about this document' even when prior thread exists, Command Center conversation pane shows 'Untitled · In progress' but body is blank, console.warn on history-fetch failure invisible in Sentry, no production observability]
+module: KB Chat
 synced_to: []
+component: react_hook
+problem_type: ui_bug
+resolution_type: code_fix
+root_cause: async_timing
+severity: high
 ---
 
 # Learning: KB chat resume hydration race — three failure modes share one fetch path

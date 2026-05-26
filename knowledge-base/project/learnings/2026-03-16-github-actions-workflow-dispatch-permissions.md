@@ -1,3 +1,10 @@
+---
+title: GitHub Actions workflow_dispatch permissions with GITHUB_TOKEN
+date: 2026-03-16
+category: ci-cd
+tags: [integration-issues, github-actions]
+---
+
 # Learning: GitHub Actions workflow_dispatch permissions with GITHUB_TOKEN
 
 ## Problem

@@ -1,16 +1,16 @@
 ---
-module: System
+title: 'GIT_* env vars leak from lefthook into test subshells, breaking bare repo detection'
 date: 2026-04-03
-problem_type: test_failure
-component: testing_framework
-symptoms:
-  - "resolve-git-root.test.sh Test 2 fails with 'Error: Not inside a git repository'"
-  - "Pre-commit hook bun-test exits 1, blocking all commits touching .ts/.tsx files"
-root_cause: test_isolation
-resolution_type: code_fix
-severity: high
+category: workflow-patterns
 tags: [git-env-vars, lefthook, pre-commit, test-isolation, bare-repo]
+symptoms: [resolve-git-root.test.sh Test 2 fails with 'Error: Not inside a git repository', Pre-commit hook bun-test exits 1, blocking all commits touching .ts/.tsx files]
+module: System
 synced_to: []
+component: testing_framework
+problem_type: test_failure
+resolution_type: code_fix
+root_cause: test_isolation
+severity: high
 ---
 
 # Learning: GIT_* env vars leak from lefthook into test subshells, breaking bare repo detection

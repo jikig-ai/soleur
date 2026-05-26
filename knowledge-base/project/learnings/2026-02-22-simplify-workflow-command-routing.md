@@ -1,9 +1,10 @@
 ---
+title: Simplify Workflow - Command Routing Architecture
+date: 2026-02-22
 category: architecture-decisions
-module: plugins/soleur/commands
 tags: [workflow-patterns, command-routing, intent-classification, plugin-loader, refactoring]
 symptoms: [over-engineered initial design, command-to-skill migration risk analysis, reduced intent scope after plan review]
-date: 2026-02-22
+module: plugins/soleur/commands
 ---
 
 # Learning: Simplify Workflow - Command Routing Architecture

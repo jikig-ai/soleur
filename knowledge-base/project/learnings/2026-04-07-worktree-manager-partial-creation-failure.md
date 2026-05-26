@@ -1,3 +1,10 @@
+---
+title: worktree-manager.sh can create directory without proper git worktree
+date: 2026-04-07
+category: workflow-patterns
+tags: [integration-issues, plugins/soleur/skills/git-worktree]
+---
+
 # Learning: worktree-manager.sh can create directory without proper git worktree
 
 ## Problem

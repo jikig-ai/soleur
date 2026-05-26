@@ -14,6 +14,11 @@ import subprocess
 import sys
 import yaml
 
+# Shared helpers — keep frontmatter parsing/serialization in a single source
+# of truth so callers don't fork a copy. See PR #3645 review.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from frontmatter_lib import parse_frontmatter, serialize_frontmatter, format_field  # noqa: E402
+
 LEARNINGS_DIR = "knowledge-base/project/learnings"
 
 # --- Statistics ---
@@ -74,6 +79,23 @@ def extract_inline_date(content):
     return match.group(1) if match else ""
 
 
+def _reject_yaml_block_noise(tags):
+    """Drop bullet-list noise from `## Tags` extraction; scoped to that branch.
+
+    The `category-*` / `module-*` / `--<digits>` collisions emerge from the
+    normalize_tags fallback path (commit 82584251 cleanup): `key: value`
+    rows merged into the comma-split token via `\\s+` → `-` substitution.
+    The structured-kv path emits VALUES, so this filter only catches `--`
+    prefixes and >50-char absorbed prose there (defense-in-depth).
+    The `**Tags:**` comma-form is untouched — legitimate tags like
+    `module-level-state` and `category-design` arrive via that branch.
+    """
+    return [
+        t for t in tags
+        if not t.startswith(("--", "category-", "module-")) and len(t) <= 50
+    ]
+
+
 def extract_inline_tags(content):
     """Extract tags from **Tags:** or ## Tags section."""
     # Check **Tags:** inline format (comma-separated)
@@ -88,11 +110,11 @@ def extract_inline_tags(content):
         raw = match.group(1).strip()
         if raw:
             # Detect key: value format (CORA-style inline metadata)
-            lines = raw.strip().split("\n")
-            if all(":" in line for line in lines if line.strip()):
+            lines_in_section = raw.strip().split("\n")
+            if all(":" in line for line in lines_in_section if line.strip()):
                 # Extract values as tags, split comma-separated values
                 tags = []
-                for line in lines:
+                for line in lines_in_section:
                     if ":" not in line:
                         continue
                     val = line.split(":", 1)[1].strip()
@@ -103,8 +125,8 @@ def extract_inline_tags(content):
                         part = re.sub(r"[#\[\]{}()$\"']", "", part).strip()
                         if part:
                             tags.append(part)
-                return tags
-            return normalize_tags(raw)
+                return _reject_yaml_block_noise(tags)
+            return _reject_yaml_block_noise(normalize_tags(raw))
 
     return []
 
@@ -132,104 +154,8 @@ def tags_from_slug(filename):
     return [p for p in parts if len(p) > 1 and p not in stopwords]
 
 
-# --- Frontmatter Parsing ---
-
-def parse_frontmatter(content):
-    """Parse YAML frontmatter from content. Returns (frontmatter_dict, body, raw_fm_text)."""
-    if not content.startswith("---\n"):
-        return None, content, ""
-
-    # Find closing ---
-    # Must be within first 30 lines to avoid matching horizontal rules
-    lines = content.split("\n")
-    end_idx = None
-    for i in range(1, min(len(lines), 30)):
-        if lines[i].strip() == "---":
-            end_idx = i
-            break
-
-    if end_idx is None:
-        return None, content, ""
-
-    fm_text = "\n".join(lines[1:end_idx])
-    body = "\n".join(lines[end_idx + 1:])
-
-    try:
-        fm = yaml.safe_load(fm_text)
-        if not isinstance(fm, dict):
-            return None, content, ""
-        return fm, body, fm_text
-    except yaml.YAMLError:
-        # Fallback: parse line-by-line for files with broken YAML (e.g., nested quotes)
-        fm = {}
-        for line in fm_text.split("\n"):
-            if ":" in line and not line.startswith("  "):
-                key, _, val = line.partition(":")
-                key = key.strip()
-                val = val.strip()
-                # Strip outer quotes
-                if val.startswith('"') and val.endswith('"'):
-                    val = val[1:-1]
-                elif val.startswith("'") and val.endswith("'"):
-                    val = val[1:-1]
-                # Parse inline arrays [a, b, c]
-                if val.startswith("[") and val.endswith("]"):
-                    items = [v.strip().strip('"').strip("'") for v in val[1:-1].split(",")]
-                    fm[key] = [i for i in items if i]
-                else:
-                    fm[key] = val
-        if fm:
-            return fm, body, fm_text
-        return None, content, ""
-
-
-def serialize_frontmatter(fm):
-    """Serialize frontmatter dict to YAML string between --- delimiters."""
-    # Custom ordering: required fields first, then optional
-    required_order = ["title", "date", "category", "tags"]
-    optional_order = ["symptoms", "module", "synced_to"]
-
-    lines = ["---"]
-    seen = set()
-
-    for key in required_order:
-        if key in fm:
-            lines.append(format_field(key, fm[key]))
-            seen.add(key)
-
-    for key in optional_order:
-        if key in fm:
-            lines.append(format_field(key, fm[key]))
-            seen.add(key)
-
-    # Any remaining fields (CORA-specific, etc.)
-    for key in sorted(fm.keys()):
-        if key not in seen:
-            lines.append(format_field(key, fm[key]))
-
-    lines.append("---")
-    return "\n".join(lines)
-
-
-def format_field(key, value):
-    """Format a single YAML field."""
-    if isinstance(value, list):
-        if all(isinstance(v, str) for v in value):
-            formatted = ", ".join(value)
-            return f"{key}: [{formatted}]"
-        # Multi-line array
-        lines = [f"{key}:"]
-        for item in value:
-            lines.append(f"  - {item}")
-        return "\n".join(lines)
-    if isinstance(value, str):
-        needs_quoting = any(c in value for c in ':[]{}#&*!|>\'"@`')
-        if needs_quoting:
-            # Use single quotes to avoid double-quote escaping issues
-            escaped = value.replace("'", "''")
-            return f"{key}: '{escaped}'"
-        return f"{key}: {value}"
-    return f"{key}: {value}"
+# --- Frontmatter parsing/serialization moved to scripts/frontmatter_lib.py ---
+# parse_frontmatter, serialize_frontmatter, format_field imported at module top.
 
 
 # --- Processing ---
@@ -345,8 +271,26 @@ def process_file_with_frontmatter(filepath, filename):
     stats["augmented"] += 1
 
 
+def iter_learning_files(root=LEARNINGS_DIR):
+    """Yield filepath for every .md file under root, recursively.
+
+    Skips README.md (case-insensitive). Archive subdirs are included by design.
+    """
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for filename in sorted(filenames):
+            if not filename.endswith(".md"):
+                continue
+            if filename.lower() == "readme.md":
+                continue
+            yield os.path.join(dirpath, filename)
+
+
 def rename_dateless_file():
-    """Rename agent-prompt-sharp-edges-only.md with date prefix from git history."""
+    """Rename agent-prompt-sharp-edges-only.md with date prefix from git history.
+
+    Top-level-only by design: the dateless-file scenario is a one-shot
+    historical artifact, not a recurring class. No recursion needed.
+    """
     dateless = os.path.join(LEARNINGS_DIR, "agent-prompt-sharp-edges-only.md")
     if not os.path.exists(dateless):
         return None
@@ -379,14 +323,10 @@ def main():
     # Step 1: Rename dateless file
     renamed = rename_dateless_file()
 
-    # Step 2: Process all files
-    files = sorted(os.listdir(LEARNINGS_DIR))
-    for filename in files:
-        if not filename.endswith(".md"):
-            continue
-
-        filepath = os.path.join(LEARNINGS_DIR, filename)
+    # Step 2: Process all files (recurse into taxonomy subdirs)
+    for filepath in iter_learning_files():
         stats["processed"] += 1
+        filename = os.path.basename(filepath)
 
         with open(filepath) as f:
             first_line = f.readline().strip()
@@ -401,12 +341,9 @@ def main():
           f"Augmented: {stats['augmented']} | Skipped: {stats['skipped']} | "
           f"Errors: {stats['errors']}")
 
-    # Verify all files have frontmatter
+    # Verify all files have frontmatter (recurse into taxonomy subdirs)
     failed = []
-    for filename in sorted(os.listdir(LEARNINGS_DIR)):
-        if not filename.endswith(".md"):
-            continue
-        filepath = os.path.join(LEARNINGS_DIR, filename)
+    for filepath in iter_learning_files():
         with open(filepath) as f:
             if f.readline().strip() != "---":
                 failed.append(filepath)
@@ -419,13 +356,11 @@ def main():
 
     # Verify all required fields present
     missing_fields = []
-    for filename in sorted(os.listdir(LEARNINGS_DIR)):
-        if not filename.endswith(".md"):
-            continue
-        filepath = os.path.join(LEARNINGS_DIR, filename)
+    for filepath in iter_learning_files():
         with open(filepath) as f:
             content = f.read()
         fm, _, _ = parse_frontmatter(content)
+        filename = os.path.basename(filepath)
         if fm is None:
             missing_fields.append((filename, ["all"]))
             continue
@@ -441,10 +376,7 @@ def main():
 
     # Category distribution
     categories = {}
-    for filename in sorted(os.listdir(LEARNINGS_DIR)):
-        if not filename.endswith(".md"):
-            continue
-        filepath = os.path.join(LEARNINGS_DIR, filename)
+    for filepath in iter_learning_files():
         with open(filepath) as f:
             content = f.read()
         fm, _, _ = parse_frontmatter(content)

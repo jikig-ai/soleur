@@ -68,3 +68,7 @@ describe("isNoAccountError", () => {
     expect(isNoAccountError({ message: "" })).toBe(false);
   });
 });
+
+// PR-B §1.7.1 — runtime typed-error mapper. Discriminates on `error.name`
+// (string) rather than `instanceof` so the mapper does not pull
+// `byok-lease.ts` (server) or `tenant.ts` into client bundles.

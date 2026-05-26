@@ -1,18 +1,15 @@
 ---
-title: "Copywriter agent fabricates URLs and report stats without WebFetch verification"
+title: Copywriter agent fabricates URLs and report stats without WebFetch verification
 date: 2026-04-22
+category: engineering
+tags: [copywriter, citations, fact-checker, docs-trust, hallucination]
+symptoms: [Cited URL resolves to the wrong article (e.g., Entrepreneur 492010 → Gen Z recruiting instead of Amodei), Cited URL returns 404 (e.g., pymnts.com/.../2025/anthropic-ceo-predicts-one-person-...), Cited report URL points to wrong domain (e.g., anthropic.com/news/... instead of resources.anthropic.com/...), Cited stat is not present in the cited source (fabricated from adjacent framing)]
 module: copywriter
-problem_type: integration_issue
+synced_to: [copywriter]
 component: agent
-symptoms:
-  - "Cited URL resolves to the wrong article (e.g., Entrepreneur 492010 → Gen Z recruiting instead of Amodei)"
-  - "Cited URL returns 404 (e.g., pymnts.com/.../2025/anthropic-ceo-predicts-one-person-...)"
-  - "Cited report URL points to wrong domain (e.g., anthropic.com/news/... instead of resources.anthropic.com/...)"
-  - "Cited stat is not present in the cited source (fabricated from adjacent framing)"
+problem_type: integration_issue
 root_cause: missing_verification_step
 severity: high
-tags: [copywriter, citations, fact-checker, docs-trust, hallucination]
-synced_to: [copywriter]
 ---
 
 # Copywriter agent fabricates URLs and report stats without a WebFetch verification gate

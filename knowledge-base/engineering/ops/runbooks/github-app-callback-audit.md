@@ -4,7 +4,7 @@ date: 2026-05-04
 owners: engineering/ops
 applies_to:
   - https://github.com/organizations/jikig-ai/settings/apps/soleur-ai
-  - .github/workflows/scheduled-oauth-probe.yml
+  - apps/web-platform/server/inngest/functions/cron-oauth-probe.ts
   - apps/web-platform/test/oauth-probe-contract.test.ts
 related_issues: [1784, 3183]
 related_prs: [3181]
@@ -31,9 +31,10 @@ flow with a GitHub-rendered error page:
 > The `redirect_uri` is not associated with this application.
 
 Both healthy and failing states return HTTP 200 — only the response body
-distinguishes them. The `scheduled-oauth-probe.yml` workflow greps for
-`redirect_uri is not associated` against every registered URL every 15
-minutes; this runbook is the operator-side companion to that probe.
+distinguishes them. The Inngest cron `cron-oauth-probe`
+(`apps/web-platform/server/inngest/functions/cron-oauth-probe.ts`) greps
+for `redirect_uri is not associated` against every registered URL every
+hour; this runbook is the operator-side companion to that probe.
 
 ## Required callback URLs (production)
 
@@ -80,17 +81,15 @@ along with the byte count: `wc -c <<<"$contents"`.
 The byte count is the forensic anchor — future drift comparisons use it
 to detect whitespace/case-only changes that visual review would miss.
 
-### Required workflow secrets (Probe + audit dependencies)
+### Required Doppler prd secrets (Probe + audit dependencies)
 
-The `scheduled-oauth-probe.yml` workflow requires two secrets to exercise
-the GitHub App callback list. The `OAUTH_PROBE_` prefix on the first
-secret is intentional: GitHub rejects repo secrets starting with `GITHUB_`
-(HTTP 422 from the secrets API).
+Since TR9 PR-3 (#4211) migrated the probe to the Inngest substrate, these
+inputs are sourced from Doppler `prd` (not GitHub workflow secrets):
 
-| Workflow secret | Sourced from | Set via |
+| Doppler secret | Sourced from | Set via |
 |---|---|---|
-| `OAUTH_PROBE_GITHUB_CLIENT_ID` | Doppler `prd.GITHUB_CLIENT_ID` | `doppler secrets get GITHUB_CLIENT_ID -p soleur -c prd --plain \| gh secret set OAUTH_PROBE_GITHUB_CLIENT_ID` |
-| `SUPABASE_PROJECT_REF` | CNAME of `api.soleur.ai` (canonical 20-char ref) | `dig +short +time=3 +tries=2 CNAME api.soleur.ai \| sed -E 's/\.supabase\.co\.?$//' \| head -1 \| gh secret set SUPABASE_PROJECT_REF` |
+| `OAUTH_PROBE_GITHUB_CLIENT_ID` | Doppler `prd.GITHUB_CLIENT_ID` | `doppler secrets get GITHUB_CLIENT_ID -p soleur -c prd --plain \| doppler secrets set OAUTH_PROBE_GITHUB_CLIENT_ID -p soleur -c prd --no-interactive` |
+| `SUPABASE_PROJECT_REF` | CNAME of `api.soleur.ai` (canonical 20-char ref) | `dig +short +time=3 +tries=2 CNAME api.soleur.ai \| sed -E 's/\.supabase\.co\.?$//' \| head -1 \| doppler secrets set SUPABASE_PROJECT_REF -p soleur -c prd --no-interactive` |
 
 Use direct pipe (no `printf '%s' "$(...)"` wrapper) so the value never
 appears in `/proc/<pid>/cmdline` or shell history.
@@ -115,18 +114,20 @@ authorization (OAuth) during installation" is checked. Click **Update**
 ### 4. Verify via probe
 
 ```bash
-gh workflow run scheduled-oauth-probe.yml
-sleep 5
-RUN_ID=$(gh run list --workflow=scheduled-oauth-probe.yml --limit 1 \
-  --json databaseId --jq '.[0].databaseId')
-# Poll until completed; should be ~30s
-gh run view "$RUN_ID" --json status,conclusion --jq '"\(.status) \(.conclusion)"'
+# Trigger the Inngest manual-retry event.
+inngest send cron/oauth-probe.manual-trigger
+
+# Watch the Sentry monitor for the resulting heartbeat (≤2 min).
+curl -s -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+  "https://de.sentry.io/api/0/organizations/jikigai-eu/monitors/scheduled-oauth-probe/checkins/?limit=2" \
+  | jq -r '.[] | "\(.dateCreated) \(.status)"'
 ```
 
-Conclusion must be `success`. If it's `failure`, the probe issue body
-will name the specific URL still failing — re-open the dashboard and
-double-check that line for invisible characters (Unicode hyphens, NBSP,
-zero-width joiners — common when copy-pasting from chat).
+The most-recent check-in status must be `ok`. If it's `error`, the
+`[ci/auth-broken] Synthetic OAuth probe failed` tracking issue body will
+name the specific URL still failing — re-open the dashboard and double-
+check that line for invisible characters (Unicode hyphens, NBSP, zero-
+width joiners — common when copy-pasting from chat).
 
 ### 5. Close the tracking issue
 

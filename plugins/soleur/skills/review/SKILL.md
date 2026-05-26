@@ -64,16 +64,71 @@ Ensure that the code is ready for analysis (either in worktree or on current bra
 
 Before spawning review agents, classify the PR to avoid spawning agents whose expertise is irrelevant to the change.
 
-1. Run `git diff --name-only origin/main...HEAD | head -n 200` to get the list of changed files.
+1. Run `git diff --name-only origin/main...HEAD | head -n 200` to get the list of changed files. Also capture status letters and line counts. Use `git rev-parse --git-dir` to resolve a writable tmp path that works in both regular checkouts and worktrees: in a worktree `.git` is a file (gitdir pointer), not a directory, so `> .git/review-*.txt` fails with `Not a directory (os error 20)`. The resolver returns the worktree's actual gitdir (e.g., `<bare>/worktrees/<name>/`):
+
+   ```bash
+   REVIEW_TMP="$(git rev-parse --git-dir)"
+   git diff --name-only origin/main...HEAD > "$REVIEW_TMP/review-changed.txt"
+   git diff --name-status origin/main...HEAD > "$REVIEW_TMP/review-status.txt"
+   git diff --numstat origin/main...HEAD > "$REVIEW_TMP/review-numstat.txt"
+   ```
+
+   All downstream `cat .git/review-*.txt` references in the predicates below must use `"$REVIEW_TMP/review-*.txt"` instead. The pre-existing `.git/...` literals work in non-worktree checkouts but silently break in worktrees (where every PR review increasingly happens by default).
+
 2. Check for override: scan `$ARGUMENTS` for "deep review" or "full review". Also run `gh pr view --json body,title --jq '.body + " " + .title'` and check for the same phrases. If override detected, skip classification and spawn all 8 agents.
-3. Apply a single judgment on the file list: **Does this PR contain source code files?** Source code includes: `.ts`, `.js`, `.jsx`, `.tsx`, `.rb`, `.py`, `.go`, `.rs`, `.swift`, `.kt`, `.java`, `.c`, `.cpp`, `.cs`, `.php`, `.sh`, `.bash`, `.zsh` — any file that contains executable logic. Non-code includes: `.md`, `.txt`, `.yml`, `.yaml`, `.toml`, `.json`, `.css`, `.html`, `.njk`, `.svg`, `.png`, `.jpg`, `.gif`, `.pen`, `LICENSE`, `CHANGELOG*`, `.github/**` workflow files, and plugin/agent/skill definition files (`plugins/**/*.md`, `agents/**/*.md`).
+3. Apply the four-class decision tree below in order; **first match wins** (override always trumps):
+
+   ```text
+   If $ARGUMENTS or PR body/title contains "deep review" / "full review":
+     class = code (full override) → 8 agents
+   Else if every changed file matches the lockfile glob OR
+          (lockfile glob + optional knowledge-base/** or *.md edit)
+          AND zero source-code extensions are present:
+     class = lockfile-only → 2 agents (git-history-analyzer + security-sentinel)
+   Else if total_files > 0 AND total_lines > 0 AND
+          (deleted_files * 100 / total_files) >= 80 AND
+          (deleted_lines * 100 / total_lines) >= 80 AND
+          zero source-code extensions are present in the diff:
+     class = deletion-dominated → 2 agents (git-history-analyzer + security-sentinel)
+   Else if any changed file has a source-code extension:
+     class = code → 8 agents
+   Else:
+     class = non-code → 4 agents
+   ```
+
+   The "zero source-code extensions" guard on `deletion-dominated` closes a piggyback class: a 1000-line cleanup PR that adds a 50-line `.ts` file would otherwise route to 2 agents and bypass pattern-recognition / code-quality / architecture / data-integrity / performance / agent-native review on the new source file. Mirroring `lockfile-only`'s `$has_source` empty requirement keeps the savings on legitimate orphan-cleanup PRs while routing any deletion-dominated PR with new source code through the full 8-agent path.
+
+   Source-code extensions: `.ts`, `.tsx`, `.js`, `.jsx`, `.rb`, `.py`, `.go`, `.rs`, `.swift`, `.kt`, `.java`, `.c`, `.cpp`, `.cs`, `.php`, `.sh`, `.bash`, `.zsh`, `.mjs`, `.cjs` — any file containing executable logic. Non-code: `.md`, `.txt`, `.yml`, `.yaml`, `.toml`, `.json`, `.css`, `.html`, `.njk`, `.svg`, `.png`, `.jpg`, `.gif`, `.pen`, `LICENSE`, `CHANGELOG*`, `.github/**` workflow files, and plugin/agent/skill definition files (`plugins/**/*.md`, `agents/**/*.md`).
+
+   Compute the predicates inline (`set -uo pipefail` — drop the `e` so legitimately-empty greps don't abort):
+
+   ```bash
+   total_files=$(wc -l < "$REVIEW_TMP/review-changed.txt")
+   deleted_files=$(grep -cE '^D' "$REVIEW_TMP/review-status.txt" || true)
+   added_lines=$(awk 'BEGIN{s=0} {if ($1 != "-") s += $1} END{print s}' "$REVIEW_TMP/review-numstat.txt")
+   deleted_lines=$(awk 'BEGIN{s=0} {if ($2 != "-") s += $2} END{print s}' "$REVIEW_TMP/review-numstat.txt")
+   total_lines=$((added_lines + deleted_lines))
+
+   LOCKFILE_RE='(^|/)(package-lock\.json|bun\.lock|yarn\.lock|Cargo\.lock|go\.sum|Gemfile\.lock|poetry\.lock|uv\.lock)$'
+   ALLOWED_NONLOCK_RE='^(knowledge-base/|.*\.md$)'
+   SOURCE_RE='\.(ts|tsx|js|jsx|rb|py|go|rs|swift|kt|java|c|cpp|cs|php|sh|bash|zsh|mjs|cjs)$'
+
+   non_lock_files=$(grep -vE "$LOCKFILE_RE" "$REVIEW_TMP/review-changed.txt" || true)
+   non_lock_non_doc=$(printf '%s\n' "$non_lock_files" | grep -vE "$ALLOWED_NONLOCK_RE" | grep -v '^$' || true)
+   has_source=$(grep -E "$SOURCE_RE" "$REVIEW_TMP/review-changed.txt" | head -1 || true)
+   any_lockfile=$(grep -E "$LOCKFILE_RE" "$REVIEW_TMP/review-changed.txt" | head -1 || true)
+   ```
+
+   - `lockfile-only` matches when `$non_lock_non_doc` is empty AND `$any_lockfile` is non-empty AND `$has_source` is empty.
+   - `deletion-dominated` matches when `total_files > 0` AND `total_lines > 0` AND `(deleted_files * 100 / total_files) >= 80` AND `(deleted_lines * 100 / total_lines) >= 80` AND `$has_source` is empty. Bash arithmetic evaluates left-to-right; multiply-first avoids the integer-truncation-to-zero trap. Note: `git diff --name-only` does not distinguish added/deleted paths, so `$has_source` may match a path that is itself a deletion — this is intentionally conservative (we want zero source-file activity in either direction) and prevents a piggyback attack where a backdoor `.ts` file rides along on a bulk-deletion cleanup PR.
+
 4. Announce the classification result before spawning agents.
 
 #### Parallel Agents to review the PR:
 
 <parallel_tasks>
 
-**If the PR contains source code files (or override detected), spawn all 8 agents:**
+**If override is detected (`deep review` / `full review`), spawn all 8 agents regardless of class:**
 
 1. Task git-history-analyzer(PR content)
 2. Task pattern-recognition-specialist(PR content)
@@ -84,7 +139,9 @@ Before spawning review agents, classify the PR to avoid spawning agents whose ex
 7. Task agent-native-reviewer(PR content) - Verify new features are agent-accessible
 8. Task code-quality-analyst(PR content) - Detect code smells and produce refactoring roadmap
 
-**If the PR contains NO source code files (non-code only), spawn 4 agents:**
+**Else if class is `code` (any source-code extension and not `deletion-dominated`/`lockfile-only`), spawn all 8 agents (existing behavior).**
+
+**Else if class is `non-code` (no source files, not `lockfile-only` or `deletion-dominated`), spawn 4 agents:**
 
 1. Task git-history-analyzer(PR content)
 2. Task pattern-recognition-specialist(PR content)
@@ -93,7 +150,14 @@ Before spawning review agents, classify the PR to avoid spawning agents whose ex
 
 Skipped for non-code PRs: architecture-strategist, performance-oracle, data-integrity-guardian, agent-native-reviewer. These agents analyze source code structure, runtime performance, database integrity, and agent accessibility — none are relevant to documentation, configuration, or CI changes.
 
-Announce: "Change classified as **[code/non-code]**. Spawning [N]/8 review agents. [If non-code: Skipped: architecture-strategist, performance-oracle, data-integrity-guardian, agent-native-reviewer — not relevant to non-code changes. Use 'deep review' to force full pipeline.]"
+**Else if class is `lockfile-only` or `deletion-dominated` (and override not detected), spawn 2 agents:**
+
+1. Task git-history-analyzer(PR content) - Verify deletion/bump rationale matches cited PRs and issues
+2. Task security-sentinel(PR content) - Lockfile bumps and bulk deletions can introduce supply-chain or removal-related risk
+
+Skipped for `lockfile-only` / `deletion-dominated` PRs: pattern-recognition-specialist, code-quality-analyst, architecture-strategist, performance-oracle, data-integrity-guardian, agent-native-reviewer. Lockfile diffs and bulk deletions do not contain semantic patterns or quality regressions for the pattern/quality agents to find; architecture/perf/integrity/agent-native agents have no source code to analyze. Use `deep review` to force full pipeline.
+
+Announce: "Change classified as **[code/non-code/deletion-dominated/lockfile-only]**. Spawning [N]/8 review agents. [If skipped agents: Skipped: <list> — not relevant to <class> changes. Use 'deep review' to force full pipeline.]"
 
 </parallel_tasks>
 
@@ -138,6 +202,7 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 - `data-migration-expert`: Verifies hard-coded mappings match production reality (prevents swapped IDs), checks for orphaned associations, validates dual-write patterns
 - `deployment-verification-agent`: Produces executable pre/post-deploy checklists with SQL queries, rollback procedures, and monitoring plans
+- **Runbook-obligation caller-site sweep:** When a migration adds an `ON DELETE RESTRICT` FK AND a same-PR RPC documented in the migration COMMENT as the cascade pre-step (pattern: `MUST call <rpc_name>` or `runbook MUST call`), the reviewer MUST run `git grep -n '<rpc_name>'` and require at least one match outside `supabase/migrations/`, `knowledge-base/`, and the plan file. The migration's own prose is the STATEMENT of the obligation, not evidence the obligation is satisfied. See [[2026-05-16-migration-mandates-must-have-wired-call-sites-in-same-pr]] (PR #3853 surfaced this via five concurring agent findings).
 
 **If PR contains test files:**
 
@@ -164,6 +229,7 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 - PR modifies source code files (*.py,*.js, *.ts,*.rb, *.go,*.java, *.rs,*.swift, *.kt, etc.)
 - Not needed for documentation-only or config-only changes
+- **Bash-only PRs (all `.sh`/`.bash`/`.zsh`, no other source extensions):** OSS semgrep's tree-sitter bash parser cannot analyze bash files end-to-end (parses ~100% of lines but matches 0 rules — vacuous "0 findings"). Skip semgrep-sast and substitute `shellcheck` as the deterministic gate. See `knowledge-base/project/learnings/2026-05-19-cache-llm-outputs-flag-for-rerunnable-benches.md` for the bench-pattern session that surfaced this. **Why:** PR #4045 — semgrep-sast on a 1336-line bash diagnostic returned vacuous output that could mislead future readers; shellcheck is the bash-native equivalent.
 
 **Bootstrap (mandatory before spawning the agent):** Run [ensure-semgrep.sh](./scripts/ensure-semgrep.sh) from the repo root. The script checks PATH first, then auto-installs via brew → pipx → `pip --user` in that order. Exits 0 when semgrep is reachable. Exit 1 means an install was attempted and failed; exit 2 means no install path was available (no brew, pipx, or python3 with pip). On non-zero exit, print the script's stderr to the user and abort the review. Do NOT silently skip — the deterministic SAST pass is what catches CodeQL-equivalent patterns like `js/file-system-race` before push.
 
@@ -186,6 +252,49 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 **What this agent checks:**
 
 - `user-impact-reviewer`: Enumerates concrete user-facing artifacts exposed by the change (`user.email`, `workspace.name`, `api_key.token`, `conversation.id`, `message.body`, `billing.amount`, `oauth.installation_id`, etc.) AND a concrete exposure vector per artifact (cross-tenant read, RLS bypass, credential leak in logs, data loss on rollback, double-charge on retry, silent drop on degraded fallback). Rejects generic boilerplate (e.g., "users experience a bug", "error state", `TBD`/`TODO` placeholders). Coexists with security-sentinel — security-sentinel handles OWASP/CWE scanning across all PRs; user-impact-reviewer handles user-facing-outcome enumeration when the plan declares the brand-survival threshold as `single-user incident`.
+
+**If the diff matches `hr-gdpr-gate-on-regulated-data-surfaces`:**
+
+16. Skill gdpr-gate(diff + plan path) — Audit regulated-data design at review time, in addition to plan-phase and work-phase invocations. Self-invokes the same skill so reviewers see findings in PR review context.
+
+**When to run gdpr-gate at review time:**
+
+- `git diff main...HEAD --name-only | grep -E "$CANONICAL_REGEX"` returns at least one match (mirrored regex source: `plugins/soleur/skills/gdpr-gate/SKILL.md` §"Path globs (canonical)").
+
+**What this agent checks:**
+
+- `gdpr-gate`: Deterministic Art. 9 / RoPA / lawful-basis pattern checks. Output is advisory-only; Critical findings (Art. 9) escalate to operator-acknowledged write to `compliance-posture.md` Active Items + GitHub issue with label `compliance/critical`.
+
+#### Boundary disambiguation — gdpr-gate vs. data-integrity-guardian vs. security-sentinel {#boundaries}
+
+Use `gdpr-gate` for deterministic Art. 9 / RoPA / lawful-basis pattern checks; use `data-integrity-guardian` for migration safety and judgment-based PII review; use `security-sentinel` for OWASP/CWE security-of-processing flaws AND multi-org / workspace boundary integrity (the R1–R6 checklist — RLS routing through `is_workspace_member()`, JWT `current_organization_id` consumption, attestation owner-checks, SECURITY DEFINER `search_path` pinning, write-boundary sentinel on workspace_id-bearing tables). The three reviewers complement each other and may all fire on the same migration PR — each owns a distinct lens. This is the **canonical disambiguation prose**; sibling agent files reference back here as the single source of truth.
+
+### Anti-slop Scanner Hook
+
+**If the diff touches `apps/web-platform/(app|components)/.*\.(tsx|jsx|css)$` OR `plugins/soleur/docs/.*\.(njk|css)$`:**
+
+17. Run the `soleur:frontend-anti-slop` Tier 1 scanner inline (no separate agent spawn — v1 simplification per plan PR #4265). Scope covers both the Next.js platform and the Eleventy marketing site so AI-assisted edits to landing pages or blog posts get the same audit as React component changes.
+
+    ```bash
+    # NUL-delimited path collection + quoted argv expansion — prevents the
+    # shell-metacharacter / newline-in-filename injection class. Never
+    # expand `$CHANGED_FILES` unquoted; never assume git filenames are
+    # whitespace-free.
+    mapfile -d '' -t CHANGED_FILES < <(
+      git diff --name-only -z origin/main...HEAD |
+        grep -zE '(apps/web-platform/(app|components)/.*\.(tsx|jsx|css)|plugins/soleur/docs/.*\.(njk|css))$' || true
+    )
+    if (( ${#CHANGED_FILES[@]} > 0 )); then
+      bun run plugins/soleur/skills/frontend-anti-slop/scripts/tier1-scan.ts \
+        --paths "${CHANGED_FILES[@]}" --json
+    fi
+    ```
+
+**What this hook checks:**
+
+- 15 deterministic Tier 1 gates adapted from [Nutlope/hallmark](https://github.com/Nutlope/hallmark) (MIT) — gradient-fill headlines, generic display fonts, purple→blue gradients, `transition-all`, uniform `hover:scale-105`, placeholder names, zero-chroma neutrals, off-scale spacing, prose-width out of range, two-icon-library imports, etc. See [slop-rules.md](../frontend-anti-slop/references/slop-rules.md).
+- Output is **advisory and non-blocking** in v1 (calibration mode). Findings surface in the review output for operator triage; no auto-file to GitHub issues. Promotion to auto-file gates on ≤ 10% FP rate over ≥ 20 findings ≥ 2 weeks (per `soleur:frontend-anti-slop` SKILL.md §"Calibration mode").
+- Findings conform to `finding.schema.json` with `category: "anti-slop"`, `selector: "<file-path>#<RULE-ID>"`. Pretty-print the JSON array directly into the review output as a fenced code block; the reviewing agent narrates which findings look like true positives.
 
 </conditional_agents>
 
@@ -322,6 +431,37 @@ Flag any unverified CLI invocation as **P1 (docs-trust)** — NOT P3 polish. A
 fabricated CLI command on a high-intent landing page breaks first-touch
 trust (#1810/#2550).
 
+**Workspaces-flag precondition:** When the diff documents an `npm run -w <workspace> <script>` invocation, grep the repo-root `package.json` for `"workspaces"` and refuse the documented form if the field is absent. Without a root `workspaces:` declaration, `npm` aborts with "No workspaces found". The grep is one line; the false-negative cost is an operator runbook that returns the error on first use. **Why:** PR #3751 — see `knowledge-base/project/learnings/2026-05-13-npm-workspaces-flag-fails-without-root-workspaces-declaration.md`.
+
+### 4.6. Build-step Gate Claim Verification
+
+When a review agent claims that a build-step CI gate (e.g., post-Eleventy
+`grep -rEn ... _site/`, post-Webpack chunk regex, post-`tsc` output scan)
+will fail on rendered output, **rebuild the artifact directory BEFORE
+running the gate locally**. Never run the gate against an existing
+`_site/`, `dist/`, `build/`, or `.next/` from a prior session — those
+predate the source change under review and return false-pass (zero
+matches) even when the rendered output post-rebuild contains the flagged
+strings.
+
+The verification command order is non-negotiable:
+
+```bash
+<rebuild command> && <literal CI gate command>
+```
+
+Examples:
+
+- Eleventy: `npx @11ty/eleventy --quiet && grep -rEn '<regex>' _site/`
+- Next.js: `bun run build && grep -rEn '<regex>' .next/`
+
+If the rebuild step is unfamiliar, read the corresponding `.github/workflows/`
+job to find the exact build command the gate runs against — match it, do
+not invent one. A stale-artifact false-pass is the most common dismissal
+class for build-output gates (PR #3296 → #3347 hotfix). Treat any agent
+finding of the form "rendered/built artifact X contains Y" as a
+fresh-build-required claim by default.
+
 ### 5. Findings Synthesis and GitHub Issue Creation
 
 <critical_requirement>
@@ -329,8 +469,49 @@ Each finding's default action is to FIX IT INLINE on the PR branch: make the edi
 commit with a message `review: <summary> (P<N>)`, and push. Apply to P1, P2, P3
 equally.
 
-Filing a GitHub issue instead of fixing is allowed ONLY when the finding meets
-one of these four scope-out criteria:
+**Cost-of-filing gate (FIRST FILTER — apply BEFORE invoking the CONCUR
+second-reviewer gate AND BEFORE evaluating the four scope-out criteria below):**
+If the fix is ≤30 lines of code AND touches ≤2 files AND no reviewer agent
+independently dissents on technical grounds (e.g., contested-design with named
+alternatives), fix inline. The bookkeeping cost of `gh issue create + scope-out
+justification + future triage + closure + follow-up PR` averages ~30 minutes of
+cumulative human attention; a ≤30-line code edit averages ~5 minutes. Filing
+the issue is NET-NEGATIVE work for the team. This gate is load-bearing: a PR
+that opens more issues than it closes is a workflow failure, not a normal
+review outcome.
+
+**Mechanical pre-CONCUR auto-flip:**
+
+Before invoking `code-simplicity-reviewer`, self-assess fix size. If ≤30 lines AND ≤2 files, BYPASS the CONCUR gate — the disposition is auto-flipped to fix-inline. Apply the fix; do not file.
+
+If the fix size cannot be confidently bounded without writing it, write a 5-minute spike. If the spike exceeds 30 lines, run CONCUR; if it doesn't, commit the spike. Do NOT run CONCUR on a fix you've already written and verified to be small.
+
+The gate fails (fix-inline is required) when:
+
+- Fix is ≤30 lines AND ≤2 files, regardless of "feels like a follow-up" framing.
+- The only objection to fixing inline is bookkeeping/scope discipline (vs. a
+    concrete technical contest the agent named).
+- The finding is `pr-introduced` (per Step 1 provenance triage) — these always
+    fix inline.
+- The finding is "X is missing from sibling artifact Y" AND this PR's diff is the
+    surface that introduces `X` into the sibling set for the first time — the
+    asymmetry is `pr-introduced` regardless of when X's underlying capability
+    shipped. Mechanical test: `git diff origin/main --name-only | xargs grep -l
+    "<X>"` against the sibling set on `main`. If `main` had zero `X` mentions
+    across {A, B, C} and this PR adds `X` to A only, the asymmetry between
+    A-present and (B, C)-silent is created by this PR. The `pre-existing-unrelated`
+    scope-out criterion fails; fix inline. **Why:** PR #3755 (#3708) tried to file
+    gdpr-policy/privacy-policy Sentry-gap as `pre-existing-unrelated`;
+    `code-simplicity-reviewer` DISSENTed precisely on this rule. See
+    `knowledge-base/project/learnings/2026-05-14-discrete-enumeration-relockstep-and-pr-introduced-asymmetry.md`.
+
+The gate may pass (proceed to evaluate the four scope-out criteria) when:
+
+- Fix is >30 lines OR touches >2 files, AND
+- The fix demonstrably matches at least one of the four criteria below.
+
+Filing a GitHub issue instead of fixing is allowed ONLY when both the cost-of-
+filing gate above AND one of these four scope-out criteria are satisfied:
 
   1. **cross-cutting-refactor** — fix requires touching **≥3 files** that are
      **materially unrelated to this PR's core change**, where **core change =
@@ -371,9 +552,19 @@ Everything else (magic numbers, duplicated helpers, small refactors, missing
 tests for PR-introduced code, polish, naming, a11y on PR-introduced surfaces,
 performance issues introduced by the PR) MUST be fixed inline.
 
+**Bundle scope-outs by trigger.** Before filing, group candidates by trigger-equality (same date OR same counter threshold OR same `#N` dependency OR same human-review gate). File ONE issue per group with a sub-task checklist of the bundled items. CONCUR runs once per group, not per item. See `plugins/soleur/skills/review/references/review-todo-structure.md` §Bundling example.
+
+The bundling check is operator-side because `code-simplicity-reviewer` only
+sees one finding at a time and cannot recognize trigger-sharing across the
+batch. Run the check on the synthesized candidate list before any CONCUR
+invocation. If the operator misses a bundling opportunity and CONCUR is
+invoked on items that obviously share a trigger, `code-simplicity-reviewer`
+SHOULD DISSENT with `DISSENT: bundle with #<sibling-finding>` so the
+operator collapses the filings.
+
 **Second-reviewer confirmation gate:** Before creating a scope-out issue under
-any criterion, invoke `code-simplicity-reviewer` via Task. The prompt MUST
-include:
+any criterion (including a bundled issue), invoke `code-simplicity-reviewer`
+via Task. The prompt MUST include:
 
 1. The finding (location, description).
 2. The proposed fix.
@@ -383,12 +574,18 @@ include:
    unrelated). Do not rely on the agent's prior knowledge of the criteria —
    pass the definitions literally.
 4. The criterion being claimed and a 1-3-sentence rationale.
-5. This instruction: "Default to rejecting the scope-out filing. Only co-sign
+5. The proposed **re-evaluation trigger** in one of the four concrete trigger shapes (see plugins/soleur/skills/review/references/review-todo-structure.md §Re-evaluation Trigger). Human-review gates route through the dependency trigger shape (file a reminder issue assigned to the human, then dep-trigger on that issue).
+6. This instruction: "Default to rejecting the scope-out filing. Only co-sign
    when the claimed criterion is concretely and obviously correct against the
-   four definitions above. Reply with a single line as the first line of your
-   output: `CONCUR` (to co-sign the filing) or `DISSENT: <one-sentence
-   reason>` (to flip to fix-inline). Everything after the first line is
-   advisory context."
+   four definitions above AND the proposed re-evaluation trigger matches one
+   of the four concrete forms (date / counter / event-grep / dependency).
+   DISSENT on any vague re-eval trigger ('when it feels right', 'when we have
+   more users', 'post-MVP', 'later', 'when this is a problem'). Reply with a
+   single line as the first line of your output: `CONCUR` (to co-sign the
+   filing) or `DISSENT: <one-sentence reason>` (to flip to fix-inline).
+   Everything after the first line is advisory context."
+
+**Concrete re-evaluation triggers.** Every scope-out filing's `Re-eval by:` field MUST take exactly one of four shapes: date / counter / event-grep / dependency (the last subsumes human-review gates via a reminder issue). The canonical definitions, examples, and rejected phrasings live in `plugins/soleur/skills/review/references/review-todo-structure.md` §Re-evaluation Trigger — `code-simplicity-reviewer` MUST DISSENT on any filing whose trigger does not match one of those four shapes.
 
 If the first line of the agent's reply begins with `DISSENT`, the disposition
 flips to fix-inline — do not file the issue. If the first line is `CONCUR`,
@@ -450,11 +647,13 @@ Remove duplicates, prioritize by severity and impact.
     1. **Fix inline** — small, load-bearing, cheap to include. Default for
        sub-20-line fixes on files the PR already touches.
     2. **File as scope-out** — legitimately needs its own cycle. MUST carry
-       the `pre-existing-unrelated` criterion AND a re-evaluation deadline
-       (a target phase milestone such as `Phase 4`, or a concrete trigger
-       condition such as "revisit when syncWorkspace lands in #2244").
-       Open-ended scope-outs with no deadline are NOT permitted — they become
-       the backlog this rule exists to drain.
+       the `pre-existing-unrelated` criterion AND a concrete re-evaluation
+       trigger in one of the four forms (date / counter / event-grep /
+       dependency — see "Concrete re-evaluation triggers" below and
+       [review-todo-structure.md](./references/review-todo-structure.md)). Vague phrasings ("post-MVP",
+       "later", "when ready", bare phase labels with no linked
+       phase-completion issue) are NOT permitted — they become the backlog
+       this rule exists to drain.
     3. **Close as wontfix** — polish-only, low-value noise, or concern already
        covered by existing code. Close immediately (do not file) with a
        1-sentence rationale in the summary report.
@@ -475,7 +674,47 @@ this really cross-cutting?") for findings the PR itself introduced.
 
 #### Step 3: Summary Report
 
-After creating all GitHub issues, present comprehensive summary:
+**Pipeline detection (run BEFORE writing the summary):** Scan the conversation for `skill: soleur:work` or `skill: soleur:one-shot` output. If either is present, you are in **pipeline mode** — the calling orchestrator owns the lifecycle and is waiting on you to return so it can run step 5 / Phase 4. Emit the **compact progress marker** below instead of the verbose summary, then return immediately. Do NOT use the heading `## Code Review Complete`, do NOT include a `### Next Steps` section, and do NOT write a wrap-up sentence — those framings cause one-shot to mistake the summary for a turn boundary and stop mid-pipeline.
+
+**Pre-emission cost-of-filing pass (run BEFORE the marker):** Build the
+candidate "Filed as scope-out" list from your synthesis. For each candidate,
+re-apply the cost-of-filing gate from §5:
+
+- Is the fix ≤30 lines AND ≤2 files? → Remove from the scope-out list; fix
+    inline and add to "Fixed inline" instead.
+- Is the only objection bookkeeping ("feels like a follow-up", "not core to
+    this PR") rather than a concrete technical contest? → Remove; fix inline.
+- Did `code-simplicity-reviewer` actually CONCUR on this specific item (not
+    just on the batch)? Required even in pipeline mode. → If no CONCUR, fix
+    inline.
+
+Only items that survive ALL three checks appear in "Filed as scope-out". This
+loop prevents the failure mode where pipeline mode rationalizes filing
+≤30-line cleanup items because the marker template makes filing look like a
+first-class option. **Target: the marker frequently shows "Filed as scope-out:
+0".** A PR that nets +N issues from review is a workflow failure.
+
+**Compact progress marker (pipeline mode):**
+
+```markdown
+## Review Phase Complete
+
+- **Findings:** N total — N1 P1 / N2 P2 / N3 P3
+- **Fixed inline:** N (commits: <sha>, <sha>, …)
+- **Filed as scope-out:** N (#NNN, #NNN — criteria listed below)
+- **Agents run:** <comma-separated list>
+
+[Optional 1-line table of scope-out issues with criteria, if any.]
+```
+
+**Self-audit:** if the "Filed as scope-out" count exceeds 1 on a PR <500
+lines, re-run the cost-of-filing pass above with a stricter posture before
+emitting. The target is fewer-issues-opened than issues-closed, measured
+across the team's PR throughput.
+
+After emitting the marker, the calling skill's continuation gate takes over — control returns to one-shot step 5 / work Phase 4 in the SAME response.
+
+**Direct invocation summary (interactive mode only — no `soleur:work` or `soleur:one-shot` in conversation):** Use the verbose summary template below.
 
 ````markdown
 ## Code Review Complete
@@ -567,7 +806,7 @@ After creating all GitHub issues, present comprehensive summary:
 
 ### 6. Exit Gate
 
-**Pipeline detection:** If the conversation contains `skill: soleur:work` output earlier (indicating review was invoked by work's Phase 4 chain) or `soleur:one-shot` output (indicating review was invoked by one-shot step 4), skip the exit gate. The calling pipeline handles compound, commit, and lifecycle progression. When review is invoked by work or one-shot, do not duplicate these steps.
+**Pipeline detection:** If the conversation contains `skill: soleur:work` output earlier (indicating review was invoked by work's Phase 4 chain) or `soleur:one-shot` output (indicating review was invoked by one-shot step 4), skip the exit gate. The calling pipeline handles compound, commit, and lifecycle progression. When review is invoked by work or one-shot, do not duplicate these steps **and do not output the verbose `## Code Review Complete` block from Step 3** — the compact `## Review Phase Complete` marker (Step 3, pipeline mode) is the only output and the orchestrator's continuation gate handles progression. The verbose summary's `### Next Steps` block is the failure mode that causes orchestrators to mistake the report for a turn-ending deliverable.
 
 **If invoked directly by the user** (no work or one-shot orchestrator in the conversation):
 
@@ -601,8 +840,25 @@ Multi-agent parallel review has been shown to catch bugs in shipped, green-CI co
 - **Validator scope on sibling message fields** — new top-level fields added to a schema whose existing validator covers only one field. Security-sentinel asks "what if the client sends X?" for every permutation without waiting for the test author to imagine it.
 - **DB partial-index predicate drift** — the application's query filter (`.is("archived_at", null)`) no longer matches the index's `WHERE` clause. Data-integrity-guardian reads both files and compares WHERE clauses symbolically; the bug stays silent until a user archives a row.
 - **Feature-wiring composition bugs** — module A is correct in isolation, module B is correct in isolation, but A+B together violate a constraint that lives in module C (downstream consumer, scheduler, taxonomy). Examples: `leaderId: "system"` reusing an internal taxonomy value whose UI semantics collide with router output; a `registry.reap()` method with no scheduler outside tests (tsc is silent on "never called in prod"); a nullable callback parameter the caller contract forbids but the implementer maps to a value that breaks invariants. Review prompts must enumerate the downstream consumer / scheduler / invariant explicitly for agents to reach it. See `knowledge-base/project/learnings/best-practices/2026-04-24-multi-agent-review-catches-feature-wiring-bugs.md`.
-- **Runtime-content tamper between authoring and execution** — when a workflow fetches content (issue comment, file at remote URL, external service response) at fire/run time and acts on it, the gap between fetch-time integrity and execution-time mutability is a single-user-incident-class vector. "No inline prompts" prevents leak-via-committed-YAML; it does NOT prevent attacker-edits-the-source-between-create-and-fire. `user-impact-reviewer`'s "name artifact + name vector" mandate reliably surfaces this where simplicity-biased peer review at plan time does not. PR #3067 added D5 (commenter-author-pin + immutability-pin) after the 11-agent review caught the gap that 3-reviewer plan-time review missed. See `knowledge-base/project/learnings/2026-05-03-user-impact-reviewer-catches-runtime-content-tamper-vectors.md`.
+- **Runtime-content tamper between authoring and execution** — when a workflow fetches content (issue comment, file at remote URL, external service response) at fire/run time and acts on it, the gap between fetch-time integrity and execution-time mutability is a single-user incident-class vector. "No inline prompts" prevents leak-via-committed-YAML; it does NOT prevent attacker-edits-the-source-between-create-and-fire. `user-impact-reviewer`'s "name artifact + name vector" mandate reliably surfaces this where simplicity-biased peer review at plan time does not. PR #3067 added D5 (commenter-author-pin + immutability-pin) after the 11-agent review caught the gap that 3-reviewer plan-time review missed. See `knowledge-base/project/learnings/2026-05-03-user-impact-reviewer-catches-runtime-content-tamper-vectors.md`.
 - **Cross-stream format-contract drift in telemetry joins** — when a feature joins two telemetry streams (a producer and a consumer that look up by name), test fixtures that use a simplified shared format on both sides hide bugs where the producers actually emit different shapes (namespaced `"plugin:name"` vs bare `"name"`, dotted IDs vs slashed IDs, hashed keys vs raw keys). Review agents and unit tests both miss this because each side's tests look internally consistent. The defect surfaces only via a derived-metric counter (orphan rate, miss rate, fall-through rate) whose surprising value points back at the contract. PR #3124 surfaced a `soleur:plan` (hook) vs `plan` (inventory) mismatch only after the orphan-skill counter — added as polish — reported a non-zero count in production data. See `knowledge-base/project/learnings/2026-05-04-telemetry-join-format-mismatch-caught-by-orphan-counter.md`. Reviewer takeaway: when a PR adds a join across two streams, ask whether at least one fixture per side uses each producer's actual emission format, not a normalized placeholder.
+- **Handshake schema drift between producer (skill) and consumer (file)** — when a skill instructs an operator to write a row/entry to a knowledge-base file, the producer's instruction template and the consumer's documented schema can drift in the same PR. Same column count + different semantics = silent table-corruption when followed verbatim. `data-integrity-guardian` catches this by reading both sides and comparing column-by-column. Reviewer takeaway: when a PR adds an instruction "write a row to file Y" alongside a schema documented in Y, grep Y's schema and assert the producer's row template matches column-by-column. Prefer reference-and-defer (instruction says "use the schema in Y") over embed-and-pray. PR #3501 shipped `gdpr-gate` with this exact drift; data-integrity-guardian flagged it as P1 pre-merge. See `knowledge-base/project/learnings/2026-05-10-handshake-schema-drift-and-stale-precondition-budgets.md`.
+- **Replicated literals across ≥2 source files without parity test** — canonical regexes, schema strings, taxonomy IDs replicated across SKILL.md prose, hook scripts, test files, and config globs drift independently. Three reviewers in PR #3501 independently flagged a path-regex stored in 4 places. Reviewer takeaway: when a PR adds the same literal across ≥2 source files, expect a parity test (`expect(scriptContent.match(/^FOO='([^']+)'/)![1]).toBe(SOURCE_LITERAL)`). If absent, file as P2 inline-fix. Same learning file as above.
+- **Self-claimed cross-artifact contract drift** — when a code/config file carries a comment, README line, or docstring claiming fidelity to another artifact (e.g., `globals.css: "Token names mirror brand-guide.md exactly"`, `schema.sql: "matches the TypeScript types in lib/types.ts"`), edits to either side can silently break the contract. Pattern-recognition, architecture, and code-quality reviewers approve the diff in isolation because each reads only the LOCAL file. Only an agent that reads BOTH files surfaces the contradiction. Reviewer takeaway: when the PR touches a file containing a "mirrors X" / "matches X" / "kept in sync with X" / "tracks X" self-claim comment, include in the review prompt: *"Read the named artifact X and verify the claim still holds post-diff."* Cheapest gate: `git diff origin/main...HEAD --name-only | xargs rg -l "(mirror|matches|kept in sync|tracks|reflects) (the )?(knowledge-base/|docs/|spec/)"` — every hit demands cross-artifact verification. PR #3556 (font normalization) shipped with the dashboard typography diverging from brand-guide.md; only git-history-analyzer caught it pre-merge. PR #3596 (Anthropic DPA row) confirmed an **implicit sub-pattern**: the grep above returns zero hits (no self-claim comment exists), but `compliance-posture.md`'s vendor-row framing still contradicted `docs/legal/gdpr-policy.md`'s public disclosure for the same vendor — only security-sentinel caught it. **Domain-specific gate:** for any diff under `knowledge-base/legal/`, the review prompt MUST instruct an agent to read `docs/legal/{gdpr,privacy}-policy.md` for the vendor name(s) in the diff and verify the diff's framing of vendor role / data flow / transfer mechanism agrees with the public disclosure. See `knowledge-base/project/learnings/2026-05-11-multi-agent-review-catches-cross-artifact-contract-drift.md`.
+- **Vendor-pipeline trust-contract gaps (auto-PR-of-untrusted-bytes / tautological integrity / exit-code-as-result)** — when a PR establishes a new vendored-content pipeline (pinned upstream blob SHAs + scheduled drift workflow + integrity gate + severity classifier), four trust-model classes compose badly across the pipeline's boundary contracts: (1) auto-PR routing across security-relevant drift classes converts a detection signal into a write primitive (compromised upstream → bot-authored PR → review fatigue); (2) self-consistency integrity check (working-tree hash + frontmatter SHA both PR-author-mutable) is tautological — ask "what other thing must move to bypass this?"; (3) classifier that emits ONE exit-code result silently under-labels co-occurring categories (e.g., security + license drift in one upstream commit); (4) inline-Python/awk parsers with non-greedy or fragile tokenization can no-op silently when YAML formatting drifts. `user-impact-reviewer` names the adversary model; `data-integrity-guardian` runs the regex against the real input and produces the falsifying case. PR #3521 shipped all four; multi-agent review caught them pre-merge. Reviewer takeaway: for PRs establishing trust contracts, require (a) integrity check has at least one cross-domain anchor (CI-side `gh api` upstream verification, signed-commit, CODEOWNERS), (b) classifier emits multi-category stdout AND exit code, (c) auto-PR routing restricted to lowest-risk class only, (d) post-condition assertions on regex/awk substitutions (`subn` count == expected). See `knowledge-base/project/learnings/2026-05-11-multi-agent-review-vendor-pipeline-trust-model.md`.
+- **Single-literal gate over a multi-member union/enum** — when a TypeScript predicate gates behavior on `X === <literal>` (or `!isFoo`, `status === "completed"`) and `X` is a union/enum with ≥ 3 members, the gate is correct only by coincidence unless every union member has been classified include/exclude in the originating FR. `user-impact-reviewer` and `pattern-recognition-specialist` reliably catch this **only when the review-spawn prompt explicitly enumerates the union members** — without the prompt, agents echo the plan's single-value framing as a false-pass. Reviewer takeaway: the review-spawn prompt MUST enumerate the union members literally — without that, agents echo the plan's single-value framing as a false-pass. Concretely: when reviewing a gate conditioned on `X === <literal>` where `X` is a TypeScript union/enum, grep the type's declaration (`rg "type X =" <module>` or `grep -nE "X = .*\|"`) and pass the resulting member list verbatim into the spawn prompt, then ask "is the gate correct for each value?" Single-literal gates against multi-member unions are a known defect class. **Why:** PR #3653 — plan §FR2 conditioned on `!isStreamingAssistant`; /work bound the gate to `streamState === "streaming"` while `StreamState = "idle" | "streaming" | "stopping"` (`ws-client.ts:47`). `"stopping"` is a distinct in-flight substate that mid-aborts traverse; a Stop click could have flashed the marker during that window. Caught only because the spawn prompt explicitly named the 3-value enum. See `knowledge-base/project/learnings/2026-05-12-plan-precondition-and-3-value-enum-gate-drift.md`.
+
+- **Plan-time empirical-probe assumptions vs. actual caller surfaces** — when an ADR captures a plan-time probe that validated a discriminator field (e.g., "the hook event carries `authentication_method='otp'` ONLY on the runtime path"), the probe ran against ONE caller. The assumption may not hold for other callers in the codebase that hit the same upstream API differently (e.g., user-facing dashboard auth that ALSO triggers `authentication_method='otp'` via a different SDK shape). `security-sentinel` should grep the codebase for non-canonical caller patterns whenever the diff includes a SECURITY DEFINER function or auth-issuance hook that gates on a probe-validated field. Reviewer takeaway: when reviewing a PR that adds an auth-event-gated function, the spawn prompt MUST instruct security-sentinel to enumerate every caller-side surface that hits the same upstream API and confirm the gate's assumption holds for each. **Why:** PR #3983 — ADR-033 §0.4 pre-committed `authentication_method='otp'` as the runtime/dashboard discriminator (probe-validated for runtime); user-facing dashboard uses `signInWithOtp` which produces the same `authentication_method='otp'` → every dashboard JWT was being hook-rewritten with `aud=soleur-runtime`, `exp=600s` (10-min auto-logout). Marker-table pivot landed as migrations 049/050. See `knowledge-base/project/learnings/2026-05-18-supabase-custom-access-token-hook-discriminator.md`.
+
+- **Parser-consumer invariant seam bypass** — multi-layer pipelines (`awk` emits per-token → `bash read` loop assigns last-wins; JSON-parser emits per-array-element → consumer overwrites by key; regex-extract → `Map.set` last-write-wins) where the parser-side enforced invariant (first-wins, deduplicated, unique-by-key) is silently violated at the consumer boundary. Plan-time review of the parser fix in isolation misses this because the bypass lives in the seam BETWEEN layers. Multi-agent review reliably catches it when the spawn prompt explicitly instructs *"trace the data flow from raw input through every transformation layer and assert the claimed invariant holds at every consumer boundary"*. Reviewer takeaway: when a PR's plan claims a parser-side invariant (e.g., "first directive wins," "deduplicated by key"), enumerate every consumer layer the parsed output crosses and require at least one test that injects N>1 matching tokens of the SAME key per record. PR #4200 — security-sentinel surfaced multi-`script=` last-wins WITHIN a single directive after the plan's Gap-2 fix closed multi-DIRECTIVE first-wins; the awk for-NF-loop emits one line per matching token and the bash `case "$key" in script) script=$val` was still last-wins. See `knowledge-base/project/learnings/2026-05-20-parser-emits-per-token-bash-read-loop-last-wins-within-directive.md`.
+
+- **Legal-disclosure prose hallucinated against the actual migration body** — when a docs-only PR discloses a database substrate landed by a prior PR (legal docs, privacy policy, vendor DPAs, transparency reports), the disclosure prose is typically authored from the plan's conceptual narrative rather than from the migration body; the writer hallucinates plausible-sounding column names, RPC signatures, trigger bypass mechanisms, and DSAR allowlist semantics. The plan-time loop and per-AC grep gates do NOT catch this because none cross-grep the prose against the implementing files. Reviewer takeaway: when the diff touches `docs/legal/`, `plugins/soleur/docs/pages/legal/`, or `knowledge-base/legal/` AND cites an implementing PR/migration, the spawn prompt for `security-sentinel` AND `code-quality-analyst` MUST instruct: "Cross-check every implementation-detail claim in the new prose (column names, RPC signatures, trigger bypass mechanism, cascade step numbers, DSAR allowlist entry, ON DELETE behavior) against the migration body, the RPC body, and the consuming TypeScript file; produce a column-by-column drift table." **Why:** PR #4353 — two independent agents (security-sentinel + code-quality-analyst) caught 4+ fabricated identifiers (`organization_id`, `user_id` vs actual `removed_user_id`, `removed_user_email_hash`, `removal_reason`, `SET LOCAL session_replication_role`) that the plan's deepen-pass + 11 AC grep gates all missed. See `knowledge-base/project/learnings/2026-05-23-legal-disclosure-prose-must-be-grep-validated-against-actual-migration.md`.
+
+- **Stale plan-time RLS-policy enumeration drift** — when a PR sweeps RLS policies across "all" tenant tables based on a plan-time grep, the table list decays as sibling PRs land between plan-write and PR-merge. Multi-agent review reliably catches this when the spawn prompt for `data-integrity-guardian` AND `security-sentinel` instructs: "Re-derive the canonical authenticated-policied table list at review time via `grep -rnE 'POLICY.*ON public\.[a-z_]+ .*TO authenticated' apps/web-platform/supabase/migrations/*.sql` and assert every match has the new RESTRICTIVE policy." PR #4418 — both agents independently caught 2 missed tables (`organizations`, `workspace_member_removals`) the plan's enumerated "19 tables" list missed; verify sentinel widened to per-table intersection. See `knowledge-base/project/learnings/2026-05-25-multi-agent-review-catches-stale-precedent-grep-and-unreachable-ux-toast.md`.
+
+- **Closed privacy-field-list classified at column-NAME instead of column-VALUE-SHAPE** — when a PR introduces a closed denylist of "fields to null on rows belonging to a third party" (Art. 15(4) author redaction, DSAR allowlist, log scrub field set, response-redaction filter), plan-time review reliably approves the list at column-name level ("`tier` is an enum, looks structural") without cracking open the migration COMMENT body to read the actual value shape. The asymmetry is dangerous: one too many preserved column = single-user privacy leak (brand-survival); one too many redacted column = a structural-shell row the subject can still see. Two ORTHOGONAL post-implementation agents (one reading migration COMMENTs for namespace patterns, one reading COLUMN TYPES + ROPA prose) reliably catch this where plan-time review misses it. Reviewer takeaway: when reviewing a PR that defines a closed field-list over a database table, the spawn prompt for `security-sentinel` AND `data-integrity-guardian` MUST instruct: "For each column NOT in the redact list, read the migration ADD COLUMN line AND its COMMENT body. Classify as (a) free-text → REDACT, (b) namespace-identifier shape `<prefix>-<org>:<value>` or email-shaped → REDACT, (c) signal-about-third-party (even closed enum like `tier='external_brand_critical'`) → REDACT, (d) UUID/integer/timestamp/known-bounded numeric → preserve. Produce a column-by-column classification table." Also require a CI sentinel test that parses migrations for `ALTER TABLE <table> ADD COLUMN` and asserts every observed column is classified in REDACT or ALLOWLIST. **Why:** PR #4351 — security-sentinel + data-integrity-guardian independently flagged that `source_ref` / `owning_domain` / `urgency` / `leader_id` / `template_id` / `tier` / `source` / `trust_tier` (8 columns the plan classified as "structural preserve") carry free-text business semantics that leak third-party content; user-impact-reviewer silently approved the original 5-field list at column-name level. Sentinel test added at `apps/web-platform/test/dsar-message-redact-fields-sweep.test.ts`. See `knowledge-base/project/learnings/2026-05-25-closed-field-list-must-classify-at-value-shape-not-column-name.md`.
+
+- **Temporal-qualifier gap on sequenced legal-then-code rollouts** — when PR-1 of a multi-PR sequence lands disclosure prose for behavior that PR-N+1 will implement (the "land legal before code" Art. 13(1)(e) prior-disclosure pattern), present-tense disclosure claims ("`transient: true` MANDATORY", "data egresses to vendor X") misrepresent the current code state. Plan-time review optimizes for "is the disclosure accurate post-PR-N+1?" (yes) and misses "is the disclosure accurate at PR-1 merge?" (no). Multi-agent review at PR-1 time reliably catches this only when the spawn prompt for `legal-compliance-auditor` AND `security-sentinel` instructs: "For each forward-looking claim in the new disclosure (verbs like `MANDATORY`, `MUST pass`, `always`, `every call`, `egresses`), identify the PR that lands the code-side enforcement, then grep the current codebase to confirm the claim is or is not live. Each claim must be either backed by current code OR qualified with a temporal marker ('effective on PR-N merge', 'will pass', 'once PR-N merges')." Article 13(3) prior-disclosure is the legal precedent. **Why:** PR #4455 (umbrella #4456 PR-1) — Flagsmith sub-processor disclosure landed asserting `transient: true` MANDATORY + `orgId` egress as present-state facts; actual code at `apps/web-platform/lib/feature-flags/server.ts:86` called `getIdentityFlags(\`role:${role}\`, { role })` (PR-2 lands those). 3 agents independently surfaced; fixed with Art. 13(3) qualifiers + explicit "Current code-side state at PR-1 merge" subsection. See `knowledge-base/project/learnings/2026-05-25-pr1-of-sequenced-legal-disclosures-needs-temporal-qualifiers.md`.
 
 See `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs-tests-miss.md` for the full pattern catalogue.
 
@@ -614,9 +870,15 @@ When a reviewer prescribes `--arg` for jq injection defense in a `gh ... --jq` c
 
 Generalizing the rule above: whenever a review agent prescribes a CLI flag or subcommand as a fix (e.g., `gh issue create --json number`, `gh issue close --body-file`, `<tool> <subcommand> --<flag>`), verify the flag exists on that exact subcommand via `<tool> <subcommand> --help` BEFORE applying. Agents hallucinate flags by generalizing from sibling subcommands (`gh issue list` has `--json`, `gh issue create` does not). Cost of verification: one `--help` call. Cost of applying a non-existent flag: revert + rework + commit pollution. If the prescribed flag is absent, fall back to a verified pattern (split into two verified commands, parse output with `awk -F/`, etc.) and note the substitution in the disposition table. See `knowledge-base/project/learnings/best-practices/2026-04-19-verify-reviewer-prescribed-cli-flags-before-applying.md`.
 
+When a single agent rates a finding P1/HIGH but no orthogonal agent independently surfaces the same harm, downgrade to advisory or skip. Single-agent HIGH against two-or-more silent or contradicting agents is the modal false-positive pattern. Cross-reconcile triad before applying: a **semantic-quality** agent (code-quality, pattern-recognition), an **orthogonal runtime** agent (performance-oracle for cache/sweep/eviction; data-integrity-guardian for type widening; security-sentinel for trust-surface claims), and **git-history-analyzer** for documented-intent context. Two-of-three concur on "non-issue" → skip with a one-line disposition. The HIGH rating is a hypothesis, not a verdict, and applying a "fix" for a non-issue often re-introduces the complexity the PR was designed to eliminate. See `knowledge-base/project/learnings/2026-05-12-multi-agent-review-cross-reconcile-catches-false-positive-high-findings.md` (PR #3670 — code-quality flagged a sweep-cutoff change as HIGH "doubles Sentry events"; performance-oracle + git-history-analyzer + dedup-trace independently falsified the claim; the proposed `staleTtlMs` parameter would have re-introduced the per-cache asymmetry the F3 extraction was designed to eliminate).
+
 Parallel review batches can stall silently — spawning 12 review agents at once has been observed to produce completion notifications for only 6, with the remaining agents' transcripts frozen ~15s after spawn and no completion event emitted. When more than 30% of spawned agents stop producing output for >2 minutes after launch, proactively announce "N of M agents stalled" rather than silently waiting. Proceed with synthesis from the agents that returned — the Rate Limit Fallback gate already permits partial coverage. See `knowledge-base/project/learnings/2026-04-17-postgrest-aggregate-disabled-forces-rpc-option.md`.
 
+When `code-simplifier` returns DISSENT on a bundled scope-out filing, do NOT argue back — read the dissent for the specific finding it cites, flip ONLY that finding inline, and re-run the CONCUR gate on the residual bundle. The gate exists precisely to catch bundling pathology where a single criterion (cross-cutting-refactor, contested-design) gets satisfied by the bundle as a whole while individual items inside it cross the ≤30-line/≤2-file cost-of-filing threshold. Filing the entire bundle inline (out of frustration with the dissent) is also wrong — the residual findings may legitimately scope out. Per-finding triage, not per-bundle. See `knowledge-base/project/learnings/2026-05-11-scope-out-bundling-hides-cheap-inline-fixes.md`.
+
 Before reporting a broken link or missing file, reviewer agents MUST verify via Glob or Read. Unverified "broken link" claims waste reviewer-response cycles — the file may exist at the exact path. **Why:** PR #2226 pattern-recognition-specialist false-positive on a `runtime-errors/2026-02-13-...` learning file that did exist.
+
+When a PR matches ALL of (a) plan reviewed by ≥3 agents at plan time, (b) implementation is verbatim plan execution (no scope creep), (c) diff is dominated by markdown/skill-prose with optional bash marker tests, and (d) no production code paths touched, operator MAY apply a focused 3-agent slice (`pattern-recognition-specialist`, `security-sentinel`, `code-simplicity-reviewer`) instead of the prescribed 8 with explicit deviation rationale in the classification announcement. The 4-class decision tree treats any source extension as `code`, but verbatim prose-plan PRs land in a sub-class where post-implementation review is mostly confirmation — design churn was absorbed at plan time. When in doubt, run the full 8. See `knowledge-base/project/learnings/2026-05-12-post-impl-review-value-asymmetry-for-verbatim-prose-plan-prs.md`.
 
 When reviewing a Nunjucks/Eleventy page that pairs a visible HTML answer with a `FAPage`/`FAQPage` JSON-LD `acceptedAnswer.text`, compare the two surfaces character-for-character per Question. Google's FAQ rich-result parity check compares codepoints — flag (a) `{{ ... }}` interpolation in HTML paired with a hardcoded value in JSON-LD, and (b) HTML entities (`&rsquo;`, `&amp;`, etc.) in one surface and ASCII or `\uXXXX` in the other. See `knowledge-base/project/learnings/2026-04-18-faq-html-jsonld-parity.md`.
 
@@ -628,7 +890,17 @@ When a review agent recommends ADDING a field, header, or schema element to a se
 
 ADRs documenting an *already-chosen-and-shipping* architecture fail `architectural-pivot` — the criterion requires the *fix itself* to change a cross-codebase pattern, and an ADR for the path you're already shipping is documentation work, not pattern-changing work. Inline-absorb ADRs of this shape (~1 markdown file under `knowledge-base/engineering/architecture/decisions/`) rather than scoping them out. Symmetric rule: when `code-simplicity-reviewer` DISSENTs by naming a *different* criterion that fits, re-file under that criterion (fresh concur cycle) rather than absorbing inline — the dissent is on the label, not on the underlying deferral. See `knowledge-base/project/learnings/2026-05-06-scope-out-criterion-misclassification-adr-not-architectural-pivot.md`.
 
+When `code-simplicity-reviewer` DISSENTs by naming a same-PR inline fix that contradicts an invariant declared in an ADR landed in the same PR, the right disposition is **apply the inline fix AND amend the ADR's invariant in the same commit** — not file the contradiction as a follow-up. Plan-time invariants ("workspace_id immutable", "X is append-only") are hypotheses, not facts; post-implementation review can surface valid carve-outs the plan-reviewer missed (e.g., a downstream cascade DELETE blocked by a new ON DELETE RESTRICT FK). The amendment paragraph in the ADR must cite the DISSENT + the interaction that justifies the carve-out so future readers can trace the why. **Why:** PR #4294 — ADR-039's `workspace_id immutable` declaration would have blocked `anonymise_organization_membership` orphan-cleanup; the DISSENT-flip from scope-out to inline-fix amended the invariant to admit `ON DELETE SET NULL` carve-out. See `knowledge-base/project/learnings/2026-05-22-post-implementation-review-can-amend-plan-time-invariants.md`.
+
 When a reviewer prescribes ADDING a defensive wrapper (try/catch around an SDK call, a typeof guard, a validation step, a retry envelope) citing a single in-tree precedent, grep the same file/module for ≥3 sibling unwrapped invocations of the same primitive BEFORE applying. If precedent is consistent and the new code mirrors it, the wrapper recommendation is precedent-contradicting — reject with a one-line disposition citing the unwrapped sites. The cited precedent may be helper-internal (boot-path safety) and not generalize to call-site code. Cost of verification: one grep. Cost of applying a precedent-contradicting wrapper: a commit that future reviewers will roll back when they apply the same heuristic. See `knowledge-base/project/learnings/2026-05-05-phase-1-instrumentation-when-prior-fix-visibly-missed.md` (#3287 review's false-positive P1 on a `Sentry.addBreadcrumb` call that mirrored 5 in-file precedents).
+
+When a PR introduces a shell wrapper (`with_lock`, `with_lease`, `flock --`, etc.) around a command intercepted by a PreToolUse hook, MUST verify the hook's command-detection regex matches the wrapped form before approving. Cheapest gate: extract the literal `matcher` regex from each `.claude/hooks/*.sh` for the wrapped command, then `echo "$WRAPPED_FORM" | grep -qE "$REGEX" || echo BYPASS`. Hooks anchored to `^|&&|\|\||;` (start-of-line / chain operators) silently bypass when the wrapped form puts the command after a `--` separator inside another argv. The bypass is INVISIBLE in normal review flow because the hook still runs (it just exits 0 without firing) and the wrapped command executes normally. **Why:** PR #3689 — `bash session-state.sh with_lock merge-main 600 -- gh pr merge --squash --auto` silently bypassed `pre-merge-rebase.sh`'s review-evidence gate AND auto-sync, caught only by 11-agent post-implementation review. See `knowledge-base/project/learnings/2026-05-12-cross-session-lock-lease-bash-primitives.md` (SE1).
+
+When reviewing a Dockerfile + `--entrypoint` invocation pair where the entrypoint script invokes host-management commands (`systemctl`, `journalctl`, `dbus-send`, `mount`, `mkfs`, `apparmor_parser`, `useradd`, etc.), cross-check the base-image package manifest against the script's command invocations. The script's `command -v <cmd>` set OR hard-coded paths (`/usr/bin/systemctl`, etc.) must each appear in either (a) the base image's default package set, (b) an explicit `apk add` / `apt-get install` line in the Dockerfile, OR (c) a bind-mount entry in the container's `docker run` flags. Alpine's `bash curl tar coreutils` baseline does NOT include `systemctl` — it uses OpenRC. A bind-mount of the host's systemd unit directory (etc/systemd/system) to the container DOES NOT install `systemctl` either; only the host's filesystem gets touched, and the script fails at the binary lookup. If the script needs systemd tooling, the canonical fix is content-carrier-only: pull the image, `docker create + docker cp` the script + read pinned ENV via `docker inspect`, `docker rm`, then `sudo -E env ... bash <script>` ON THE HOST. **Why:** PR #3973 — Alpine 3.20 OCI image bundled `inngest-bootstrap.sh`; running it in-container would have failed at `systemctl daemon-reload`. Caught at multi-agent review post-implementation. Full pattern + recovery flow at [`2026-05-18-vendor-token-mint-and-oci-image-content-carrier-patterns.md`](../../../../knowledge-base/project/learnings/2026-05-18-vendor-token-mint-and-oci-image-content-carrier-patterns.md).
+
+When invoking the `cross-cutting-refactor` scope-out CONCUR gate, quote the criterion's literal text and demonstrate that the proposed filing matches it word-for-word. The criterion is **directory-scoped** (`core change = files named in the PR's linked issue, OR files in the same top-level directory ... as the primary changed file`), not feature-surface-scoped. Three files under `apps/web-platform/e2e/` are RELATED by the criterion's own definition, regardless of whether they cover different user-facing features (onboarding vs. conversations-rail vs. bubble net). Code-simplicity-reviewer reliably DISSENTs on feature-surface framings, but cheaper to catch in the filing pass — quote the directory anchor explicitly, count files per anchor, and either justify "materially unrelated" with a concrete out-of-directory file list or fix inline. **Why:** PR #3743 PR-A — proposed scope-out filing for a 3-file e2e helper extraction framed unrelatedness as feature-surface (cc-soleur-go vs start-fresh); DISSENT flipped to fix-inline (-184 lines duplicated, +60 lines helper, landed in same PR). See `knowledge-base/project/learnings/2026-05-14-plan-prescribed-runtime-shapes-must-be-grepped-against-installed-version.md` §Session Errors.
+
+**Pipeline-mode rationalization trap.** When all signals appear to align (criterion documented in plan, both reviewers recommend scope-out, finding clearly predates the PR), the temptation to skip the `code-simplicity-reviewer` CONCUR and file directly is exactly the rationalization the gate was designed to prevent. The gate is a hard precondition, not a confidence check — invoke `code-simplicity-reviewer` BEFORE `gh issue create --label deferred-scope-out` regardless of how obvious the criterion seems. See `knowledge-base/project/learnings/2026-05-06-scope-out-second-reviewer-gate-must-precede-filing.md`.
 
 ### Important: P1 Findings Block Merge
 

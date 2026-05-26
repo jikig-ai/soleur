@@ -1,3 +1,10 @@
+---
+title: Scheduled Content Generation — Soleur vs. Polsia
+date: 2026-03-26
+category: engineering
+tags: [content-generation, content-writer, social-distribute, seo-queue]
+---
+
 # Learning: Scheduled Content Generation — Soleur vs. Polsia
 
 ## Problem

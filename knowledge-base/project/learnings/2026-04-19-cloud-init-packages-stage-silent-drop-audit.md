@@ -1,14 +1,14 @@
 ---
-name: Cloud-init packages: stage silent-drop audit pattern
-description: Cloud-init records package-install failures in the boot log but does not fail the run by default. A runcmd audit that dpkg -s's each declared package converts silent drops into loud failures that operators can diagnose.
-type: integration-issue
+title: 'Cloud-init `packages:` stage silent-drop audit pattern'
+date: 2026-04-19
+category: engineering
 tags: cloud-init, terraform, hcloud, fail2ban, apt, infrastructure
-related:
-  - 2026-04-03-doppler-not-installed-env-fallback-outage.md
-  - 2026-04-06-terraform-data-connection-block-no-auto-replace.md
-  - 2026-04-03-terraform-data-remote-exec-drift-encrypted-ssh-key.md
+description: 'Cloud-init records package-install failures in the boot log but does not fail the run by default. A runcmd audit that dpkg -s''s each declared package converts silent drops into loud failures that operators can diagnose.'
 issue: 2680
+name: 'Cloud-init packages: stage silent-drop audit pattern'
 pr: 2682
+related: 
+type: integration-issue
 ---
 
 # Cloud-init `packages:` stage silent-drop audit pattern

@@ -1,16 +1,15 @@
 ---
-module: Legal Compliance
+title: DPA Sub-Processor Objection Window Expired Before Vendor Response
 date: 2026-03-29
-problem_type: workflow_issue
-component: documentation
-symptoms:
-  - "DPA contractual objection window (5 days) expired before vendor responded to compliance questions"
-  - "Conflicting notice periods: DPA Section 6.5 says 5 days, vendor email stated 30 days"
-  - "No defined escalation process for DPA sub-processor objection deadlines"
-root_cause: missing_workflow_step
-resolution_type: workflow_improvement
-severity: high
+category: legal
 tags: [dpa, gdpr, supabase, objection-window, sub-processor, compliance]
+symptoms: [DPA contractual objection window (5 days) expired before vendor responded to compliance questions, Conflicting notice periods: DPA Section 6.5 says 5 days, vendor email stated 30 days, No defined escalation process for DPA sub-processor objection deadlines]
+module: Legal Compliance
+component: documentation
+problem_type: workflow_issue
+resolution_type: workflow_improvement
+root_cause: missing_workflow_step
+severity: high
 ---
 
 # Troubleshooting: DPA Sub-Processor Objection Window Expired Before Vendor Response
@@ -50,7 +49,7 @@ CLO assessment determined the position is defensible despite the expired contrac
 2. **Estoppel argument:** Vendor's own email stated 30 days; under Irish law (DPA governing law), the vendor cannot enforce the shorter contractual deadline when their communication created a reasonable expectation of the longer period
 3. **Unanswered threshold questions:** Acceptance cannot be inferred when the controller's lawfulness questions remain open
 
-**Action taken:** Follow-up email sent 2026-03-29 to `privacy@supabase.io` that:
+**Action taken:** Follow-up email sent 2026-03-29 to `privacy@example.com` that:
 
 - Referenced the March 23 notification and its stated 30-day period
 - Formally reserved objection rights under Section 6.5 until questions are answered

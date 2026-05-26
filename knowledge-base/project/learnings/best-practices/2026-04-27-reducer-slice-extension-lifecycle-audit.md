@@ -1,23 +1,17 @@
 ---
+title: Reducer slice extension requires lifecycle-boundary audit
 date: 2026-04-27
-problem_type: integration_issue
-component: state_machine
+category: engineering
+tags: [state-machine, reducer, multi-agent-review, feature-wiring, discriminated-union, chat-ui]
+symptoms: [stale workflow lifecycle bar persists after key_invalid / session_ended remount, subagent status badges silently fail to render after history-fetch landing, interactive_prompt cards duplicate on event re-emit (React duplicate-key warning), tool_use chip reappears after leader bubble exists (cycle leak), WorkflowLifecycleState.routing variant tested but unreachable from any reducer case]
 module: web-platform/chat
-symptoms:
-  - "stale workflow lifecycle bar persists after key_invalid / session_ended remount"
-  - "subagent status badges silently fail to render after history-fetch landing"
-  - "interactive_prompt cards duplicate on event re-emit (React duplicate-key warning)"
-  - "tool_use chip reappears after leader bubble exists (cycle leak)"
-  - "WorkflowLifecycleState.routing variant tested but unreachable from any reducer case"
+synced_to: []
+component: state_machine
+issues: [#2886, #2925]
+problem_type: integration_issue
+related: [knowledge-base/project/learnings/best-practices/2026-04-24-multi-agent-review-catches-feature-wiring-bugs.md, knowledge-base/project/learnings/integration-issues/discriminated-union-exhaustive-switch-miss-20260410.md, knowledge-base/project/learnings/best-practices/2026-04-14-pure-reducer-extraction-requires-companion-state-migration.md]
 root_cause: reducer_slice_extension_skipped_lifecycle_audit
 severity: high
-tags: [state-machine, reducer, multi-agent-review, feature-wiring, discriminated-union, chat-ui]
-synced_to: []
-related:
-  - knowledge-base/project/learnings/best-practices/2026-04-24-multi-agent-review-catches-feature-wiring-bugs.md
-  - knowledge-base/project/learnings/integration-issues/discriminated-union-exhaustive-switch-miss-20260410.md
-  - knowledge-base/project/learnings/best-practices/2026-04-14-pure-reducer-extraction-requires-companion-state-migration.md
-issues: ["#2886", "#2925"]
 ---
 
 # Learning: Reducer slice extension requires lifecycle-boundary audit

@@ -1,3 +1,10 @@
+---
+title: Next.js NEXT_PUBLIC_ vars require Docker build args
+date: 2026-03-17
+category: engineering
+tags: [build-errors, web-platform]
+---
+
 # Learning: Next.js NEXT_PUBLIC_ vars require Docker build args
 
 ## Problem

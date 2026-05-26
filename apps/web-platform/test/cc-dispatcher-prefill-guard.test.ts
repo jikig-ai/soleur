@@ -74,11 +74,56 @@ vi.mock("@/server/permission-callback", () => ({
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
   warnSilentFallback: vi.fn(),
+  // #3369: mirrorWithDebounce extracted to observability.
+  // These dispatcher tests do not exercise the debounce TTL, so
+  // the stub forwards every call straight through to the spy.
+  mirrorWithDebounce: mockReportSilentFallback,
+  __resetMirrorDebounceForTests: vi.fn(),
+  MIRROR_DEBOUNCE_MS: 5 * 60 * 1000,
 }));
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({ from: mockSupabaseFrom })),
 }));
+
+// PR-C §2.4 / §2.10 / §2.11 (#3244): conversation-writer + agent-runner
+// + cc-dispatcher (BYOK lease wrap) now import from
+// `@/lib/supabase/tenant`. Mock so the test does not pull the real
+// `mintFounderJwt` chain.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: mockSupabaseFrom })),
+  mintFounderJwt: vi.fn(),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
+}));
+
+// PR-C §2.11 (#3244): cc-dispatcher.ts now wraps `realSdkQueryFactory`
+// body in `runWithByokLease(args.userId, body)`. Short-circuit the lease
+// so the test does not pull the real `fetchAndDecryptIntoSlot` chain
+// (which would need a fully-shaped `api_keys.select.eq.eq.eq.limit.single`
+// terminal); `body` is invoked with a fake `lease.getApiKey() = "fake-key"`.
+vi.mock("@/server/byok-lease", async () => {
+  const actual = await vi.importActual<typeof import("@/server/byok-lease")>(
+    "@/server/byok-lease",
+  );
+  return {
+    ...actual,
+    runWithByokLease: vi.fn(
+      async <T>(
+        args: { workspaceContextUserId: string; keyOwnerUserId: string },
+        body: (lease: {
+          workspaceContextUserId: string;
+          keyOwnerUserId: string;
+          getApiKey: () => string;
+        }) => Promise<T>,
+      ) =>
+        body({
+          workspaceContextUserId: args.workspaceContextUserId,
+          keyOwnerUserId: args.keyOwnerUserId,
+          getApiKey: () => "fake-byok-key",
+        }),
+    ),
+  };
+});
 
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
 
@@ -234,5 +279,146 @@ describe("realSdkQueryFactory — prefill-guard integration (#3250)", () => {
     expect(mockApplyPrefillGuard.mock.calls[0][0].resumeSessionId).toBeUndefined();
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.resume).toBeUndefined();
+  });
+});
+
+// -------------------------------------------------------------------------
+// #3269 — context-reset notice + WS event integration. The helper's
+// semantic contract is pinned in `agent-prefill-guard.test.ts`. This block
+// verifies the dispatcher wiring: notice appended to systemPrompt iff
+// guard fires; WS `context_reset` emitted exactly once per fire; both
+// reason variants thread through; non-firing branches do not emit/mutate.
+// -------------------------------------------------------------------------
+
+describe("realSdkQueryFactory — context_reset signal (#3269)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetUserApiKey.mockResolvedValue("sk-test");
+    mockGetUserServiceTokens.mockResolvedValue({});
+    mockBuildAgentEnv.mockReturnValue({ ANTHROPIC_API_KEY: "sk-test" });
+    mockBuildAgentSandboxConfig.mockReturnValue({
+      enabled: true,
+      failIfUnavailable: true,
+      autoAllowBashIfSandboxed: true,
+      allowUnsandboxedCommands: false,
+      enableWeakerNestedSandbox: true,
+      network: { allowedDomains: [], allowManagedDomainsOnly: true },
+      filesystem: {
+        allowWrite: [WORKSPACE_PATH],
+        denyRead: ["/workspaces", "/proc"],
+      },
+    });
+    mockQuery.mockReturnValue(makeFakeQuery());
+    setupSupabaseMockReturning(WORKSPACE_PATH);
+    mockApplyPrefillGuard.mockImplementation(async ({ resumeSessionId }) => ({
+      safeResumeSessionId: resumeSessionId,
+    }));
+  });
+
+  it("appends contextResetNotice to systemPrompt exactly when guard fires", async () => {
+    mockApplyPrefillGuard.mockResolvedValueOnce({
+      safeResumeSessionId: undefined,
+      contextResetNotice: "RESET-NOTICE-MARKER",
+      reason: "prefill-guard",
+    });
+
+    await realSdkQueryFactory(
+      makeArgs({ resumeSessionId: "s", systemPrompt: "BASE" }),
+    );
+
+    const opts = mockQuery.mock.calls[0][0].options;
+    expect(opts.systemPrompt).toContain("BASE");
+    expect(opts.systemPrompt).toContain("RESET-NOTICE-MARKER");
+  });
+
+  it("does NOT mutate systemPrompt when guard does not fire", async () => {
+    mockApplyPrefillGuard.mockResolvedValueOnce({
+      safeResumeSessionId: "s",
+    });
+
+    await realSdkQueryFactory(
+      makeArgs({ resumeSessionId: "s", systemPrompt: "BASE" }),
+    );
+
+    const opts = mockQuery.mock.calls[0][0].options;
+    expect(opts.systemPrompt).toBe("BASE");
+  });
+
+  it("emits one context_reset WS event per guard fire with reason 'prefill-guard'", async () => {
+    mockApplyPrefillGuard.mockResolvedValueOnce({
+      safeResumeSessionId: undefined,
+      contextResetNotice: "notice text",
+      reason: "prefill-guard",
+    });
+
+    await realSdkQueryFactory(makeArgs({ resumeSessionId: "s" }));
+
+    const contextResetCalls = mockSendToClient.mock.calls.filter(
+      (call) => call[1]?.type === "context_reset",
+    );
+    expect(contextResetCalls).toHaveLength(1);
+    expect(contextResetCalls[0][0]).toBe("user-1");
+    expect(contextResetCalls[0][1]).toEqual({
+      type: "context_reset",
+      reason: "prefill-guard",
+      conversationId: "conv-1",
+    });
+  });
+
+  it("emits reason 'tool_use_orphan' when trailing message had a tool_use content block", async () => {
+    mockApplyPrefillGuard.mockResolvedValueOnce({
+      safeResumeSessionId: undefined,
+      contextResetNotice: "tool-aware",
+      reason: "tool_use_orphan",
+    });
+
+    await realSdkQueryFactory(makeArgs({ resumeSessionId: "s" }));
+
+    const contextResetCalls = mockSendToClient.mock.calls.filter(
+      (call) => call[1]?.type === "context_reset",
+    );
+    expect(contextResetCalls).toHaveLength(1);
+    expect(contextResetCalls[0][1].reason).toBe("tool_use_orphan");
+  });
+
+  it("does NOT emit context_reset when guard returns no notice (probe failure / empty history / user-final)", async () => {
+    // probe-failed pass-through (helper returns safeResumeSessionId unchanged
+    // and does not populate notice fields)
+    mockApplyPrefillGuard.mockResolvedValueOnce({
+      safeResumeSessionId: "s",
+    });
+    await realSdkQueryFactory(makeArgs({ resumeSessionId: "s" }));
+
+    const contextResetCalls = mockSendToClient.mock.calls.filter(
+      (call) => call[1]?.type === "context_reset",
+    );
+    expect(contextResetCalls).toHaveLength(0);
+  });
+
+  it("does NOT carry the notice forward across calls when the guard does not fire on the second call (multi-turn non-accumulation, AC6b)", async () => {
+    // First call: guard fires
+    mockApplyPrefillGuard.mockResolvedValueOnce({
+      safeResumeSessionId: undefined,
+      contextResetNotice: "FIRST-CALL-NOTICE",
+      reason: "prefill-guard",
+    });
+    await realSdkQueryFactory(
+      makeArgs({ resumeSessionId: "s", systemPrompt: "BASE" }),
+    );
+
+    const firstOpts = mockQuery.mock.calls[0][0].options;
+    expect(firstOpts.systemPrompt).toContain("FIRST-CALL-NOTICE");
+
+    // Second call: guard does not fire (e.g., user-final history)
+    mockApplyPrefillGuard.mockResolvedValueOnce({
+      safeResumeSessionId: "s",
+    });
+    await realSdkQueryFactory(
+      makeArgs({ resumeSessionId: "s", systemPrompt: "BASE" }),
+    );
+
+    const secondOpts = mockQuery.mock.calls[1][0].options;
+    expect(secondOpts.systemPrompt).toBe("BASE");
+    expect(secondOpts.systemPrompt).not.toContain("FIRST-CALL-NOTICE");
   });
 });

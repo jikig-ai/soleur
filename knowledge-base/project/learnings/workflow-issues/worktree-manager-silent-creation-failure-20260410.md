@@ -1,15 +1,15 @@
 ---
-module: System
+title: worktree-manager.sh Reports Success but Worktree Not Created
 date: 2026-04-10
-problem_type: workflow_issue
-component: tooling
-symptoms:
-  - "worktree-manager.sh reported success but directory did not exist"
-  - "Had to fall back to manual git worktree add command"
-root_cause: missing_validation
-resolution_type: workflow_improvement
-severity: medium
+category: workflow-patterns
 tags: [worktree-manager, git-worktree, silent-failure, bare-repo]
+symptoms: [worktree-manager.sh reported success but directory did not exist, Had to fall back to manual git worktree add command]
+module: System
+component: tooling
+problem_type: workflow_issue
+resolution_type: workflow_improvement
+root_cause: missing_validation
+severity: medium
 ---
 
 # Troubleshooting: worktree-manager.sh Reports Success but Worktree Not Created

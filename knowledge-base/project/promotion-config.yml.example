@@ -1,0 +1,16 @@
+# Compound Promotion Loop — opt-in config (TEMPLATE).
+#
+# DATA FLOW (read before opting in):
+# - Enabling sends summaries (path + first 10 lines) of your
+#   knowledge-base/project/learnings/ files to Anthropic for clustering.
+# - The pre-promotion GDPR shell pre-pass excludes any learning matching
+#   the canonical PII regex (email, IPv4, IBAN) BEFORE the Anthropic call.
+# - Opens public draft PRs whose bodies quote source-learning paths and the
+#   proposed diff. PR bodies are world-readable on the public repo.
+# - Kill switch: set `enabled: false` and commit; next cron tick exits no-op.
+#
+# Copy this file to `knowledge-base/project/promotion-config.yml` (gitignored)
+# and set `enabled: true`. See
+# `knowledge-base/engineering/ops/runbooks/compound-promote-runbook.md`.
+# Default: OFF. Issue: #2720.
+enabled: false

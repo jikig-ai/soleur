@@ -237,6 +237,39 @@ fi
 TOTAL=$((TOTAL+1))
 rm -rf "$INC_ROOT_13"
 
+# --- case-14: Python emit_incident triggers shared rotator (#3508) -------
+# Pre-fill .rule-incidents.jsonl just over a 1 KB threshold; verify a
+# workflow-injection deny path triggers rotation via the shell-out to the
+# bash log-rotation helper.
+INC_ROOT_14=$(mktemp -d)
+mkdir -p "$INC_ROOT_14/.claude/hooks/lib"
+# Wire helper into the fixture root — symlink to the real helper so we
+# exercise the production code path under a controlled REPO_ROOT.
+ln -sf "$SCRIPT_DIR/lib/log-rotation.sh" "$INC_ROOT_14/.claude/hooks/lib/log-rotation.sh"
+# Pre-fill > 1 KB
+for i in $(seq 1 30); do
+  printf '{"schema":1,"timestamp":"2026-01-01T00:00:00Z","rule_id":"hr-pre-%d","event_type":"deny","rule_text_prefix":"x","command_snippet":""}\n' "$i"
+done > "$INC_ROOT_14/.claude/.rule-incidents.jsonl"
+PRE_SIZE=$(wc -c < "$INC_ROOT_14/.claude/.rule-incidents.jsonl")
+
+PAYLOAD_14='{"tool_name":"Edit","tool_input":{"file_path":".github/workflows/ci.yml","old_string":"jobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo \"safe\"","new_string":"jobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo \"${{ github.event.issue.title }}\""}}'
+LOG_ROTATION_SIZE_BYTES=1024 INCIDENTS_REPO_ROOT="$INC_ROOT_14" \
+  printf '%s' "$PAYLOAD_14" | LOG_ROTATION_SIZE_BYTES=1024 INCIDENTS_REPO_ROOT="$INC_ROOT_14" "$HOOK" >/dev/null 2>&1 || true
+POST_SIZE=$(wc -c < "$INC_ROOT_14/.claude/.rule-incidents.jsonl")
+ARCHIVE_COUNT=$(compgen -G "$INC_ROOT_14/.claude/.rule-incidents-*.jsonl.gz" | wc -l)
+
+if [[ "$ARCHIVE_COUNT" -ne 1 ]]; then
+  echo "FAIL: case-14 expected 1 archive, got $ARCHIVE_COUNT (pre=$PRE_SIZE, post=$POST_SIZE)"
+  FAIL=$((FAIL+1))
+elif [[ "$POST_SIZE" -ge "$PRE_SIZE" ]]; then
+  echo "FAIL: case-14 active not truncated (pre=$PRE_SIZE, post=$POST_SIZE)"
+  FAIL=$((FAIL+1))
+else
+  echo "PASS: case-14 Python emit_incident triggers shared rotator"; PASS=$((PASS+1))
+fi
+TOTAL=$((TOTAL+1))
+rm -rf "$INC_ROOT_14"
+
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 [[ $FAIL -eq 0 ]] || exit 1

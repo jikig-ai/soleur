@@ -15,7 +15,7 @@ export default function (eleventyConfig) {
       language: "en",
       title: "Soleur Blog",
       subtitle: "Insights on agentic engineering and company-as-a-service",
-      base: "https://soleur.ai/",
+      base: "https://www.soleur.ai/",
       author: {
         name: "Soleur",
       },

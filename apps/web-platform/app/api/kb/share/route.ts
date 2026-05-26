@@ -30,8 +30,11 @@ export async function POST(request: Request) {
     );
   }
 
+  // PR-C §2.8 (#3244): resolveUserKbRoot now mints its own tenant
+  // client internally. createShare still takes a service-role client
+  // (kb_shares writer is allowlisted PERMANENT for now — see PR-D scope).
   const serviceClient = createServiceClient();
-  const workspace = await resolveUserKbRoot(serviceClient, user.id);
+  const workspace = await resolveUserKbRoot(user.id);
   if (!workspace.ok) return workspace.response;
 
   const result = await createShare(

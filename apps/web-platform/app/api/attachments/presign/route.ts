@@ -2,11 +2,14 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import logger from "@/server/logger";
+import { reportSilentFallback } from "@/server/observability";
 import * as Sentry from "@sentry/nextjs";
 import { randomUUID } from "crypto";
 import {
   ALLOWED_ATTACHMENT_TYPES,
+  MAX_AGENT_READABLE_PDF_SIZE,
   MAX_ATTACHMENT_SIZE,
+  isPdfAttachment,
 } from "@/lib/attachment-constants";
 
 function getExtension(contentType: string): string {
@@ -54,21 +57,53 @@ export async function POST(request: Request) {
   }
 
   // Validate file size
-  if (sizeBytes <= 0 || sizeBytes > MAX_ATTACHMENT_SIZE) {
+  // Closes #3332: PDFs are bounded by the agent-readable cap (24 MB raw)
+  // alongside the generic 20 MB attachment cap. Note that an unsupported
+  // Content-Type is already rejected above, but isPdfAttachment branches on
+  // filename extension too — this hardens the cap if ALLOWED_ATTACHMENT_TYPES
+  // is later widened to include octet-stream-with-extension.
+  // Number.isFinite catches NaN/Infinity from a coerced sizeBytes.
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+    return NextResponse.json({ error: "file_too_large" }, { status: 400 });
+  }
+  const isPdf = isPdfAttachment({ contentType, filename });
+  if (isPdf && sizeBytes > MAX_AGENT_READABLE_PDF_SIZE) {
+    return NextResponse.json({ error: "file_too_large" }, { status: 400 });
+  }
+  if (sizeBytes > MAX_ATTACHMENT_SIZE) {
     return NextResponse.json({ error: "file_too_large" }, { status: 400 });
   }
 
-  // Verify conversation ownership
+  // Verify conversation read-eligibility (own OR workspace co-member).
+  // Mirrors mig 068 storage.objects SELECT policy: own-folder branch OR
+  // is_attachment_path_workspace_member via conversations.workspace_id.
+  // Inline lookup (no shared TS helper file — DHH P0-2 + code-simplicity
+  // P0-1 + architecture P1-1 convergence per plan §Phase 3).
   const service = createServiceClient();
   const { data: conversation } = await service
     .from("conversations")
-    .select("id")
+    .select("id, user_id, workspace_id")
     .eq("id", conversationId)
-    .eq("user_id", user.id)
     .single();
 
   if (!conversation) {
     return NextResponse.json({ error: "conversation_not_found" }, { status: 404 });
+  }
+
+  if (conversation.user_id !== user.id) {
+    const { data: isMember, error: memberErr } = await service.rpc("is_workspace_member", {
+      p_workspace_id: conversation.workspace_id,
+      p_user_id: user.id,
+    });
+    if (memberErr || !isMember) {
+      reportSilentFallback(memberErr ?? null, {
+        feature: "attachments",
+        op: "presign-route",
+        message: "workspace_cutover_deny",
+        extra: { userId: user.id, conversationId, workspaceId: conversation.workspace_id },
+      });
+      return NextResponse.json({ error: "not_a_workspace_member" }, { status: 403 });
+    }
   }
 
   // Generate storage path

@@ -97,7 +97,7 @@ Everything above extends Claude Code for a specific capability — better docume
 
 There is a different class of extension that does not improve one job. It replaces the eight jobs a solo founder does in a week. Not just coding: marketing, legal, competitive intelligence, financial planning, operations, product strategy, customer support. All of it, with a shared knowledge layer across domains so that every agent knows what every other agent decided.
 
-That is what [Soleur](https://soleur.ai) is. Not a plugin in the same category as Playwright or Figma — a Company-as-a-Service platform that runs as a Claude Code extension. 60+ agents across eight business departments. 60+ skills that run the full engineering lifecycle from brainstorm to production. A compounding knowledge base that makes each task inform every task that follows.
+That is what [Soleur](https://www.soleur.ai) is. Not a plugin in the same category as Playwright or Figma — a Company-as-a-Service platform that runs as a Claude Code extension. 60+ agents across eight business departments. 60+ skills that run the full engineering lifecycle from brainstorm to production. A compounding knowledge base that makes each task inform every task that follows.
 
 The distinction is not subtle: the plugins above make you better at the things you are already doing. Soleur changes the scope of what you can do alone.
 
@@ -152,7 +152,7 @@ Yes — skill definitions and agent instructions load into the context window at
 
 ### What is the best Claude Code plugin for solo founders?
 
-For founders managing both engineering and business operations, [Soleur](https://soleur.ai) covers the most ground — 60+ agents across eight departments (engineering, marketing, legal, finance, operations, product, sales, support) with a cross-domain knowledge base that compounds with every task. For pure engineering workflows, context7 and code-review earn their install fastest.
+For founders managing both engineering and business operations, [Soleur](https://www.soleur.ai) covers the most ground — 60+ agents across eight departments (engineering, marketing, legal, finance, operations, product, sales, support) with a cross-domain knowledge base that compounds with every task. For pure engineering workflows, context7 and code-review earn their install fastest.
 
 <script type="application/ld+json">
 {
@@ -196,7 +196,7 @@ For founders managing both engineering and business operations, [Soleur](https:/
       "name": "What is the best Claude Code plugin for solo founders?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "For founders managing both engineering and business operations, Soleur (https://soleur.ai) covers the most ground — 60+ agents across eight departments (engineering, marketing, legal, finance, operations, product, sales, support) with a cross-domain knowledge base that compounds with every task. For pure engineering workflows, context7 and code-review earn their install fastest."
+        "text": "For founders managing both engineering and business operations, Soleur (https://www.soleur.ai) covers the most ground — 60+ agents across eight departments (engineering, marketing, legal, finance, operations, product, sales, support) with a cross-domain knowledge base that compounds with every task. For pure engineering workflows, context7 and code-review earn their install fastest."
       }
     }
   ]

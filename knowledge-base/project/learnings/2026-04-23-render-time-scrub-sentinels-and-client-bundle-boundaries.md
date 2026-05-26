@@ -1,18 +1,16 @@
 ---
-module: apps/web-platform
+title: 'Render-time scrub sentinels + client/server observability boundary (feat #2861)'
 date: 2026-04-23
-problem_type: security_issue
+category: engineering
+tags: [command-center, render-scrub, tokenize-restore, client-bundle, pino, observability, discriminated-union-widening, fake-timers]
+symptoms: [Tokenize-scrub-restore scheme used a guessable ` PRESERVED_N ` placeholder; prose containing the literal could be rewritten or silently deleted, Client `"use client"` component imports `@/server/observability` transitively pulled `pino` into the browser bundle, Debounce default sentinel `0` combined with `vi.useFakeTimers({ now: 0 })` produced first-heartbeat `0 - 0 >= 5000` = false, starving the client watchdog, Broadening a canonical regex invalidated the negative-space RED tests (test still passed but no longer asserted the fallthrough)]
+module: apps/web-platform
+synced_to: [work]
 component: client_render_pipeline
-symptoms:
-  - "Tokenize-scrub-restore scheme used a guessable ` PRESERVED_N ` placeholder; prose containing the literal could be rewritten or silently deleted"
-  - "Client `\"use client\"` component imports `@/server/observability` transitively pulled `pino` into the browser bundle"
-  - "Debounce default sentinel `0` combined with `vi.useFakeTimers({ now: 0 })` produced first-heartbeat `0 - 0 >= 5000` = false, starving the client watchdog"
-  - "Broadening a canonical regex invalidated the negative-space RED tests (test still passed but no longer asserted the fallthrough)"
+problem_type: security_issue
+related_issues: [#2861, #2860]
 root_cause: predictable_placeholder_and_boundary_crossing_imports
 severity: high
-tags: [command-center, render-scrub, tokenize-restore, client-bundle, pino, observability, discriminated-union-widening, fake-timers]
-related_issues: ["#2861", "#2860"]
-synced_to: [work]
 ---
 
 # Render-time scrub sentinels + client/server observability boundary (feat #2861)

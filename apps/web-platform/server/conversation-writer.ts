@@ -1,4 +1,7 @@
-import { createServiceClient } from "@/lib/supabase/service";
+import {
+  getFreshTenantClient,
+  RuntimeAuthError,
+} from "@/lib/supabase/tenant";
 import { reportSilentFallback } from "@/server/observability";
 import type { Conversation } from "@/lib/types";
 
@@ -25,15 +28,13 @@ import type { Conversation } from "@/lib/types";
  * concurrent-close race), not an attacker probing a foreign id.
  */
 
-// Module-scoped lazy singleton mirroring `agent-runner.ts` and
-// `ws-handler.ts`. Tests that need to drive the wrapper without hitting a
-// real client mock at the module boundary via
-// `vi.mock("@supabase/supabase-js", () => ({ createClient: ... }))`.
-let _supabase: ReturnType<typeof createServiceClient> | null = null;
-function supabase() {
-  if (!_supabase) _supabase = createServiceClient();
-  return _supabase;
-}
+// PR-C §2.4 (#3244): the single `.from("conversations").update(...)` site
+// below migrates to a per-call tenant client. RLS on `conversations`
+// enforces `auth.uid() = user_id`, layered on top of the composite-key
+// `.eq("id", conversationId).eq("user_id", userId)` invariant the
+// wrapper enforces. The module-level lazy `supabase()` singleton is
+// retired; `getFreshTenantClient(userId)` has its own TTL cache so
+// per-call mint cost is bounded.
 
 /**
  * Per-(feature, op, kind) Sentry-mirror dedup window. Caps the
@@ -112,6 +113,24 @@ export interface UpdateConversationOptions {
    * baseline contract.
    */
   expectMatch?: boolean;
+  /**
+   * Status-column guard: when provided, the wrapper appends
+   * `.in("status", onlyIfStatusIn)` to the composite-key UPDATE. A row
+   * whose current `status` is not in the set is left untouched and the
+   * call returns 0-rows-affected.
+   *
+   * Pair with `expectMatch: false` (the default) for race-window
+   * narrowing: e.g., the abort branch's `failed`-write must not stomp a
+   * row already at `waiting_for_user` written by a concurrent result
+   * branch (#3463). For those sites a 0-rows outcome IS the success
+   * case and must NOT mirror to Sentry — the existing `expectMatch:
+   * false` semantics already do the right thing.
+   *
+   * `expectMatch: true` together with `onlyIfStatusIn` keeps the strict
+   * "row must match" contract: a row excluded by the guard surfaces as
+   * failure (mirrored to Sentry) just like a missing composite key.
+   */
+  onlyIfStatusIn?: ReadonlyArray<Conversation["status"]>;
 }
 
 export interface UpdateConversationResult {
@@ -135,15 +154,46 @@ export async function updateConversationFor(
   patch: ConversationPatch,
   options: UpdateConversationOptions = {},
 ): Promise<UpdateConversationResult> {
-  const baseQuery = supabase()
+  // PR-C §2.4 (#3244): tenant client. Auth probe is IMPLICIT in
+  // `getFreshTenantClient` — the `precheck_jwt_mint` RPC throws
+  // `RuntimeAuthError` on rate-limit, RPC error, or missing secret.
+  // Per `agent-runner.ts:188` precedent we do NOT layer an additional
+  // SELECT probe: the subsequent UPDATE is itself RLS-filtered to
+  // `auth.uid()`, and the wrapper's `expectMatch:false` default treats
+  // 0-rows-affected as silent-success — adding a probe would change
+  // the silent-success semantics for a transient JWT blip.
+  let tenant;
+  try {
+    tenant = await getFreshTenantClient(userId);
+  } catch (err) {
+    if (err instanceof RuntimeAuthError) {
+      const feature = options.feature ?? "conversation-writer";
+      const op = options.op ?? "update";
+      if (shouldReportToSentry(feature, op, "tenant-mint")) {
+        reportSilentFallback(err, {
+          feature,
+          op: `${op}.tenant-mint`,
+          extra: { userId, conversationId, ...options.extra },
+        });
+      }
+      return { ok: false, error: err };
+    }
+    throw err;
+  }
+
+  const baseQuery = tenant
     .from("conversations")
     .update(patch)
     .eq("id", conversationId)
     .eq("user_id", userId);
 
+  const guardedQuery = options.onlyIfStatusIn
+    ? baseQuery.in("status", options.onlyIfStatusIn as readonly string[])
+    : baseQuery;
+
   const result = options.expectMatch
-    ? await baseQuery.select("id")
-    : await baseQuery;
+    ? await guardedQuery.select("id")
+    : await guardedQuery;
   const error = result.error;
   const data = options.expectMatch
     ? (result as { data: { id: string }[] | null }).data

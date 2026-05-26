@@ -225,10 +225,16 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     // Wait for history to load AND usageData to be seeded
     await waitFor(() => {
       expect(result.current.messages.length).toBe(3);
+      // Cache token fields default to 0 when the history response
+      // omits them (pre-2026-05-12 conversations). New conversations
+      // surface non-zero values; resume of those is exercised by
+      // `chat-page-resume.test.tsx`.
       expect(result.current.usageData).toEqual({
         totalCostUsd: 0.0042,
         inputTokens: 1200,
         outputTokens: 300,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
       });
     });
   });

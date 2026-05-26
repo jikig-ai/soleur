@@ -1,10 +1,11 @@
 ---
-title: "Slot lifecycle invariants must live at the DB layer when multiple writers bypass the application path"
+title: Slot lifecycle invariants must live at the DB layer when multiple writers bypass the application path
 date: 2026-05-04
-type: bug-fix
-related_pr: 3217
-related_migration: 036_release_slot_on_archive.sql
+category: ci-cd
 tags: [supabase, postgres-trigger, concurrency, command-center]
+related_migration: 036_release_slot_on_archive.sql
+related_pr: 3217
+type: bug-fix
 ---
 
 # Slot lifecycle invariants must live at the DB layer when multiple writers bypass the application path
@@ -130,7 +131,7 @@ declared but doesn't actually fire." That's the integration test's job.
 
 ## Detection footprint
 
-A user-blocking, single-user-incident bug in a path the user follows on
+A user-blocking, single-user incident bug in a path the user follows on
 literally every "I'm done with this conversation" workflow. The 4010 close
 + "Concurrent-conversation limit reached" banner is loud at the surface,
 but the root cause (slot held by an archived conversation) was invisible

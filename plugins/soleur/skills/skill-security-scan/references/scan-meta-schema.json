@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://soleur.ai/schemas/skill-security-scan/scan-meta.json",
+  "title": "Skill Security Scan Meta",
+  "description": "Per-scan metadata persisted as .scan-meta.json next to the scanned file. Captures rule-pack SHA at scan time so rule updates do NOT retroactively re-classify previously-scanned skills (CTO Decision 13).",
+  "type": "object",
+  "required": [
+    "scanner_version",
+    "rule_pack_version",
+    "rule_pack_sha256",
+    "verdict",
+    "timestamp",
+    "findings_summary"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "scanner_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "rule_pack_version": {
+      "type": "string"
+    },
+    "rule_pack_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["LOW-RISK", "REVIEW", "HIGH-RISK"]
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "findings_summary": {
+      "type": "object",
+      "description": "Per-category result map. PII redacted (email/IP/IBAN) before persistence per GDPR-DataMin-1.",
+      "patternProperties": {
+        "^(code-execution|prompt-injection|supply-chain|filesystem-boundary|telemetry-surface)$": {
+          "type": "object",
+          "required": ["verdict", "findings"],
+          "properties": {
+            "verdict": { "type": "string", "enum": ["LOW-RISK", "REVIEW", "HIGH-RISK"] },
+            "findings": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["rule_id", "severity", "line", "snippet"],
+                "properties": {
+                  "rule_id": { "type": "string" },
+                  "severity": { "type": "string", "enum": ["LOW-RISK", "REVIEW", "HIGH-RISK", "WARN"] },
+                  "line": { "type": "integer", "minimum": 0 },
+                  "snippet": { "type": "string" }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

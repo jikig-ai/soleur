@@ -13,13 +13,29 @@ import { describe, test, expect, vi, beforeEach } from "vitest";
 //   - Different userIds: independent counters (per-user isolation).
 //   - Different feature strings: independent counters (per-feature isolation).
 //
+// Scope isolation (#3710 PR-B) is exercised in `sentry-scope-isolation.test.ts`.
+// Here we only stub `Sentry.withIsolationScope` (transparent pass-through) and
+// `Sentry.getCurrentScope().setUser` (no-op) so the wrapper's existing
+// contract assertions continue to hold under the new wrap.
+//
 // The rate-limiter module is mocked so `startPruneInterval` is a no-op
 // (prevents setInterval leaks across tests) while `SlidingWindowCounter`
 // stays real (its behavior is the system-under-test's contract dependency).
 
+vi.hoisted(() => {
+  process.env.SENTRY_USERID_PEPPER = "test-pepper";
+});
+
 const { mockGetUser, mockLogRateLimitRejection } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockLogRateLimitRejection: vi.fn(),
+}));
+
+vi.mock("@sentry/nextjs", () => ({
+  withIsolationScope: vi.fn(<T>(fn: () => T): T => fn()),
+  getCurrentScope: vi.fn(() => ({ setUser: vi.fn() })),
+  captureException: vi.fn(),
+  captureMessage: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({

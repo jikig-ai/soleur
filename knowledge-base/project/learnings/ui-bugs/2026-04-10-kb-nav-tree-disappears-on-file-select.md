@@ -1,15 +1,15 @@
 ---
-module: KB Viewer
+title: KB Navigation Tree Disappears on File Select
 date: 2026-04-10
-problem_type: ui_bug
-component: frontend_stimulus
-symptoms:
-  - "Navigation tree disappears when clicking a file in Knowledge Base"
-  - "Sidebar renders empty when navigating to /dashboard/kb/[...path]"
-root_cause: logic_error
-resolution_type: code_fix
-severity: high
+category: engineering
 tags: [nextjs-app-router, layout-children, sidebar-persistence, file-tree]
+symptoms: [Navigation tree disappears when clicking a file in Knowledge Base, Sidebar renders empty when navigating to /dashboard/kb/[...path]]
+module: KB Viewer
+component: frontend_stimulus
+problem_type: ui_bug
+resolution_type: code_fix
+root_cause: logic_error
+severity: high
 ---
 
 # KB Navigation Tree Disappears on File Select

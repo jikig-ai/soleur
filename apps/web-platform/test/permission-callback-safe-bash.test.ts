@@ -76,10 +76,13 @@ vi.mock("../server/observability", () => ({
 
 import {
   createCanUseTool,
-  isBashCommandSafe,
-  SAFE_BASH_PATTERNS,
   type CanUseToolContext,
 } from "../server/permission-callback";
+import { isBashCommandSafe, SAFE_BASH_PATTERNS } from "../server/safe-bash";
+// Re-export verification: existing downstream consumers importing
+// `isBashCommandSafe` / `SAFE_BASH_PATTERNS` from `permission-callback`
+// must continue to work after the extraction.
+import * as permissionCallbackReexport from "../server/permission-callback";
 
 // ---------------------------------------------------------------------------
 // Test harness
@@ -200,6 +203,14 @@ describe("TS1 — safe-bash allowlist auto-approve (positive)", () => {
     for (const pat of SAFE_BASH_PATTERNS) {
       expect(pat).toBeInstanceOf(RegExp);
     }
+  });
+
+  test("permission-callback re-exports isBashCommandSafe + SAFE_BASH_PATTERNS (#3040 Finding 1)", () => {
+    // After the safe-bash.ts extraction, downstream consumers that still
+    // import from permission-callback (e.g., permission-callback-bash-batch
+    // tests, soleur-go-runner) must keep working without import churn.
+    expect(permissionCallbackReexport.isBashCommandSafe).toBe(isBashCommandSafe);
+    expect(permissionCallbackReexport.SAFE_BASH_PATTERNS).toBe(SAFE_BASH_PATTERNS);
   });
 });
 

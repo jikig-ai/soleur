@@ -1,11 +1,12 @@
 ---
 title: KB restructure grep scope must include product docs
 date: 2026-03-13
-problem_type: logic_error
-severity: low
+category: shell-scripting
+tags: [refactoring, grep, path-references, knowledge-base]
 module: knowledge-base
 component: path-references
-tags: [refactoring, grep, path-references, knowledge-base]
+problem_type: logic_error
+severity: low
 ---
 
 # KB Restructure Grep Scope Must Include Product Docs

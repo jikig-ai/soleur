@@ -1,16 +1,15 @@
 ---
-module: KB Viewer / Type System
+title: Widening discriminated unions must audit if-ladders, not just switches; config/classifier pairs need a parity test
 date: 2026-04-18
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "Variant added to SharedContentKind; file-preview + classify-response switches updated, shared page if-ladder silently accepts new variant without handler"
-  - "CONTENT_TYPE_MAP and classifyByContentType drift silently when one is extended without the other — nothing but a jsdoc comment enforces parity"
-  - "TextPreview HEAD-first fetch broke 2 tests that mocked global.fetch with a single-response factory"
-root_cause: incomplete_setup
-resolution_type: code_fix
-severity: medium
+category: engineering
 tags: [typescript, discriminated-union, if-ladder, exhaustive-switch, config-parity, test-mocks, refactor, multi-agent-review]
+symptoms: [Variant added to SharedContentKind; file-preview + classify-response switches updated, shared page if-ladder silently accepts new variant without handler, CONTENT_TYPE_MAP and classifyByContentType drift silently when one is extended without the other — nothing but a jsdoc comment enforces parity, TextPreview HEAD-first fetch broke 2 tests that mocked global.fetch with a single-response factory]
+module: KB Viewer / Type System
+component: tooling
+problem_type: integration_issue
+resolution_type: code_fix
+root_cause: incomplete_setup
+severity: medium
 ---
 
 # Learning: Widening discriminated unions must audit if-ladders, not just switches; config/classifier pairs need a parity test

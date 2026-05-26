@@ -8,6 +8,16 @@ packages:
 groups:
   - docker
 
+# CI SSH key for the apply-deploy-pipeline-fix.yml file/remote-exec
+# provisioner chain. Mirrors terraform_data.root_authorized_keys
+# (see ci-ssh-key.tf) for fresh-host parity — on a brand-new host this
+# block lands the key before the terraform_data resource fires, then the
+# resource's `grep -qxF` no-ops on the subsequent apply. Top-level
+# placement applies the key to the default user (root on Hetzner
+# ubuntu-24.04 cloud images).
+ssh_authorized_keys:
+  - ${ci_ssh_public_key_openssh}
+
 users:
   - default
   - name: deploy
@@ -33,6 +43,25 @@ write_files:
   - path: /etc/sudoers.d/deploy-chown
     content: |
       deploy ALL=(root) NOPASSWD: /usr/bin/chown 1001\:1001 /mnt/data/workspaces
+    owner: root:root
+    permissions: '0440'
+
+  # #4144 — permits ci-deploy.sh to invoke inngest-bootstrap.sh as root
+  # from the fixed path /tmp/inngest-extract/ (no wildcards, sudo-rs safe).
+  # env_keep preserves INNGEST_CLI_VERSION + SHA across the sudo boundary.
+  # Mirrored in apps/web-platform/infra/deploy-inngest-bootstrap.sudoers
+  # so terraform_data.deploy_pipeline_fix can refresh existing hosts.
+  - path: /etc/sudoers.d/deploy-inngest-bootstrap
+    content: |
+      Cmnd_Alias INNGEST_BOOTSTRAP = /usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh
+      Defaults!INNGEST_BOOTSTRAP env_keep += "INNGEST_CLI_VERSION INNGEST_CLI_SHA256 VECTOR_CLI_VERSION VECTOR_CLI_SHA256"
+      deploy ALL=(root) NOPASSWD: INNGEST_BOOTSTRAP
+
+      # #3756 — permits infra-config-apply.sh to schedule a delayed webhook restart
+      # via systemd-run. The handler runs as the deploy user inside webhook.service's
+      # mount namespace; systemctl restart requires root.
+      Cmnd_Alias WEBHOOK_SELF_RESTART = /usr/bin/systemd-run --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook
+      deploy ALL=(root) NOPASSWD: WEBHOOK_SELF_RESTART
     owner: root:root
     permissions: '0440'
 
@@ -134,6 +163,17 @@ write_files:
     owner: root:root
     permissions: '0755'
 
+  # Wall-clock cap wrapper that exec's ci-deploy.sh with `timeout 900s` so a
+  # wedged deploy releases flock and the workflow polling step sees a
+  # terminal state instead of perpetual "running" (#3704, #2207). hooks.json
+  # routes /hooks/deploy through this wrapper, not ci-deploy.sh directly.
+  # Keep in sync with terraform_data.deploy_pipeline_fix in server.tf.
+  - path: /usr/local/bin/ci-deploy-wrapper.sh
+    encoding: b64
+    content: ${ci_deploy_wrapper_script_b64}
+    owner: root:root
+    permissions: '0755'
+
   # Deploy state reporter for /hooks/deploy-status (#2185).
   # Content injected from cat-deploy-state.sh via Terraform base64encode(file()).
   # Keep in sync with terraform_data.deploy_pipeline_fix in server.tf (#2205).
@@ -151,6 +191,16 @@ write_files:
   - path: /usr/local/bin/canary-bundle-claim-check.sh
     encoding: b64
     content: ${canary_bundle_claim_check_script_b64}
+    owner: root:root
+    permissions: '0755'
+
+  # Infra-config webhook handler — receives base64-encoded file payloads via
+  # /hooks/infra-config and writes them atomically to their hardcoded
+  # destinations (#3756). Replaces the SSH provisioner code path.
+  # Keep in sync with terraform_data.deploy_pipeline_fix in server.tf.
+  - path: /usr/local/bin/infra-config-apply.sh
+    encoding: b64
+    content: ${infra_config_apply_script_b64}
     owner: root:root
     permissions: '0755'
 
@@ -187,8 +237,14 @@ write_files:
       ProtectSystem=strict
       ProtectHome=read-only
       PrivateTmp=true
-      ReadWritePaths=/mnt/data /var/lock
-      ReadOnlyPaths=/etc/webhook /usr/local/bin /etc/default/webhook-deploy
+      # Bootstrap path (inngest-bootstrap.sh + future deploy <component>
+      # handlers) installs systemd units + binaries + env files via sudo.
+      # ProtectSystem=strict is namespace-scoped — sudo elevates UID but does
+      # NOT escape the mount namespace, so without these explicit
+      # ReadWritePaths the inngest bootstrap fails with cryptic chown error
+      # messages. See #4017 substrate audit (2026-05-19).
+      ReadWritePaths=/mnt/data /var/lock /etc/systemd/system /etc/default /etc/sudoers.d /etc/webhook /var/lib/inngest -/var/lib/vector -/etc/vector /usr/local/bin
+      ReadOnlyPaths=/etc/default/webhook-deploy
       TimeoutStopSec=180
 
       [Install]
@@ -380,6 +436,36 @@ runcmd:
     printf '%s\n' "seeded $(date -u +%Y-%m-%dT%H:%M:%SZ) tag=cloud-init" \
       > /mnt/data/plugins/soleur/.seed-complete
 
+  # Bootstrap Inngest server on first boot (#4118, Tier 1).
+  # Pinned image tag tracks apps/web-platform/infra/inngest.tf:locals.inngest_cli_version
+  # (image tag = bootstrap-script version; inngest-cli version is sourced from
+  # the image's Config.Env at run time). Upgrades go through the deploy webhook
+  # path (push vinngest-vX.Y.Z tag); cloud-init installs only on fresh hosts.
+  - |
+    set -e
+    docker pull ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.0.0
+    EXTRACT_DIR=$(mktemp -d)
+    cleanup() { docker rm -f soleur-inngest-bootstrap-extract >/dev/null 2>&1 || true; rm -rf "$EXTRACT_DIR"; }
+    trap cleanup EXIT
+    docker create --name soleur-inngest-bootstrap-extract ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.0.0
+    docker cp soleur-inngest-bootstrap-extract:/inngest-bootstrap.sh "$EXTRACT_DIR/inngest-bootstrap.sh"
+    docker cp soleur-inngest-bootstrap-extract:/vector.toml /tmp/vector.toml 2>/dev/null || true
+    image_env=$(docker inspect ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.0.0 -f '{{range .Config.Env}}{{println .}}{{end}}')
+    chmod +x "$EXTRACT_DIR/inngest-bootstrap.sh"
+    INNGEST_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_VERSION=' | head -1 | cut -d= -f2-)
+    INNGEST_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_SHA256=' | head -1 | cut -d= -f2-)
+    # `|| true` for symmetry with ci-deploy.sh's hotfix (which runs under
+    # `set -o pipefail` — this block doesn't, but defense-in-depth costs
+    # nothing). Bootstrap script's bash `:-`-default guard on VECTOR_CLI_VERSION
+    # skips Vector install gracefully on empty values. (Comment intentionally
+    # avoids the literal $${ } shell-expansion syntax — this YAML is rendered
+    # by terraform `templatefile()` which would interpret it as TF interpolation.)
+    VECTOR_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_VERSION=' | head -1 | cut -d= -f2- || true)
+    VECTOR_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_SHA256=' | head -1 | cut -d= -f2- || true)
+    env "INNGEST_CLI_VERSION=$INNGEST_CLI_VERSION" "INNGEST_CLI_SHA256=$INNGEST_CLI_SHA256" \
+        "VECTOR_CLI_VERSION=$VECTOR_CLI_VERSION" "VECTOR_CLI_SHA256=$VECTOR_CLI_SHA256" \
+      bash "$EXTRACT_DIR/inngest-bootstrap.sh"
+
   - |
     set -e
     # Source token from the restricted env file (avoids exposing it in /proc/<pid>/cmdline)
@@ -403,6 +489,8 @@ runcmd:
       --restart unless-stopped \
       --tmpfs /tmp:rw,nosuid,nodev,size=256m \
       --env-file "$TMPENV" \
+      --add-host host.docker.internal:host-gateway \
+      -e INNGEST_BASE_URL=http://host.docker.internal:8288 \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
       -p 0.0.0.0:80:3000 \

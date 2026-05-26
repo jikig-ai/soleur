@@ -66,7 +66,7 @@ variable "cf_api_token_zone_settings" {
 }
 
 variable "cf_api_token_rulesets" {
-  description = "Cloudflare API token narrowed to Cache Rules:Edit + Zone WAF:Edit on soleur.ai (cloudflare_ruleset resources across http_request_cache_settings and http_request_firewall_custom phases; see cache.tf and bot-allowlist.tf)"
+  description = "Cloudflare API token narrowed to Cache Rules:Edit + Zone WAF:Edit + Single Redirect Rules:Edit + Transform Rules:Edit on soleur.ai (cloudflare_ruleset resources across http_request_cache_settings, http_request_firewall_custom, http_request_dynamic_redirect, and http_response_headers_transform phases; see cache.tf, bot-allowlist.tf, and seo-rulesets.tf)"
   type        = string
   sensitive   = true
 }
@@ -88,12 +88,6 @@ variable "app_domain" {
   default     = "app.soleur.ai"
 }
 
-variable "deploy_ssh_public_key" {
-  description = "SSH public key for the deploy user (legacy, kept for migration period)"
-  type        = string
-  default     = ""
-}
-
 variable "cf_account_id" {
   description = "Cloudflare account ID (required for Zero Trust tunnel resources)"
   type        = string
@@ -101,6 +95,18 @@ variable "cf_account_id" {
 
 variable "webhook_deploy_secret" {
   description = "HMAC shared secret for webhook deploy authentication"
+  type        = string
+  sensitive   = true
+}
+
+variable "cf_access_client_id" {
+  description = "CF Access service-token client ID for the deploy webhook endpoint"
+  type        = string
+  sensitive   = true
+}
+
+variable "cf_access_client_secret" {
+  description = "CF Access service-token client secret for the deploy webhook endpoint"
   type        = string
   sensitive   = true
 }
@@ -124,6 +130,49 @@ variable "cf_notification_email" {
 
 variable "resend_api_key" {
   description = "Resend API key for infrastructure alert emails to ops@jikigai.com"
+  type        = string
+  sensitive   = true
+}
+
+# --- Inngest IaC (PR-F follow-up, #3960) -------------------------------------
+# 3 new variables (down from plan's 7). Inngest signing/event keys are
+# TF-generated via random_id (see inngest.tf); no operator mint required.
+# CTO two-alias intent met via resource naming + explicit `config = "..."`.
+
+variable "doppler_token_tf" {
+  description = "Doppler workplace-scope personal token used by the doppler provider to write to both `prd` and `dev` configs. Operator-minted at dashboard.doppler.com/workplace/<ID>/tokens/personal."
+  type        = string
+  sensitive   = true
+}
+
+variable "betterstack_api_token" {
+  description = "Better Stack global API token (Read & write) for the betteruptime provider. Operator-minted at betterstack.com/settings/global-api-tokens."
+  type        = string
+  sensitive   = true
+}
+
+variable "betterstack_paid_tier" {
+  description = "When true, provision a betteruptime_policy with escalation steps. Free tier defaults to false (heartbeat + email only)."
+  type        = bool
+  default     = false
+}
+
+# --- PR-H (#3244) — GitHub App + KB-drift -----------------------------------
+# Post-#4150: client_id / client_secret / github_actions_token /
+# doppler_token_kb_drift variables were deleted. See plan
+# knowledge-base/project/plans/2026-05-20-fix-apply-web-platform-infra-tf-autonomy-4150-plan.md
+# Provider switched to App-installation auth (main.tf); kb-drift Doppler
+# token now minted in-band by `doppler_service_token` resource (kb-drift.tf).
+# autonomy-considered: provider-mint-applied (App auth + doppler_service_token).
+
+variable "github_app_id" {
+  description = "GitHub App ID for Soleur-Concierge. Mirrored from `prd` to `prd_terraform` so the App-auth `provider \"github\"` block can resolve it (see main.tf)."
+  type        = string
+  sensitive   = true
+}
+
+variable "github_app_private_key" {
+  description = "PEM-encoded RSA private key for the GitHub App. Mirrored from `prd` to `prd_terraform` for the App-auth provider. One-shot download at App creation; cannot be re-downloaded."
   type        = string
   sensitive   = true
 }

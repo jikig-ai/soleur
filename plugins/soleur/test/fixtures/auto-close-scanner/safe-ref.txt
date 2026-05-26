@@ -1,0 +1,6 @@
+Ref #999 — this PR is a follow-up to a prior bundle.
+
+Discussion of Closes-style auto-close should be fine when no number follows.
+The word Closes by itself should not trigger.
+
+Closes-#1 with a hyphen instead of a space should not trigger either.

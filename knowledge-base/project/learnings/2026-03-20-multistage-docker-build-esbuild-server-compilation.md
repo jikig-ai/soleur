@@ -1,3 +1,10 @@
+---
+title: Multi-stage Docker build with esbuild server compilation
+date: 2026-03-20
+category: engineering
+tags: [build-errors, web-platform]
+---
+
 # Learning: Multi-stage Docker build with esbuild server compilation
 
 ## Problem

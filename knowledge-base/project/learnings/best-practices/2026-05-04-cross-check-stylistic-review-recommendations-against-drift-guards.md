@@ -1,16 +1,15 @@
 ---
-module: review skill
+title: Cross-check stylistic review recommendations against existing drift-guard tests
 date: 2026-05-04
-problem_type: process_issue
+category: engineering
+tags: [code-review, drift-guard, sentry, naming-discipline]
+symptoms: [Architecture-review proposed cosmetic op-name rename, Partial-suite vitest passed, full-suite failed on drift-guard test, Required revert + re-commit]
+module: review skill
+synced_to: []
 component: review-pipeline
-symptoms:
-  - "Architecture-review proposed cosmetic op-name rename"
-  - "Partial-suite vitest passed, full-suite failed on drift-guard test"
-  - "Required revert + re-commit"
+problem_type: process_issue
 root_cause: missing-pre-apply-validation
 severity: medium
-tags: [code-review, drift-guard, sentry, naming-discipline]
-synced_to: []
 ---
 
 # Cross-check stylistic review recommendations against existing drift-guard tests

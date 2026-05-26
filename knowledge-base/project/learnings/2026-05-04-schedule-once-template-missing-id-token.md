@@ -4,8 +4,17 @@ date: 2026-05-04
 category: integration-issues
 problem_type: integration_issue
 component: plugins/soleur/skills/schedule
-tags: [github-actions, claude-code-action, oidc, schedule-skill, --once, template-bug]
-related_issues: [3094, 3115, 3134]
+tags:
+- integration-issues
+- github-actions
+- claude-code-action
+- oidc
+- schedule-skill
+- template-bug
+related_issues:
+- 3094
+- 3115
+- 3134
 ---
 
 # Learning: `--once` template OIDC permission omission

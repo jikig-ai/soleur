@@ -1,6 +1,6 @@
 ---
 name: changelog
-description: "This skill should be used when creating changelogs for recent merges to main. It analyzes PR labels, issues, and descriptions to generate formatted summaries with breaking changes, new features, bug fixes, and contributor shoutouts."
+description: "This skill should be used when creating changelogs for recent merges. Analyzes PR labels, issues, and descriptions to generate formatted summaries."
 ---
 
 # Changelog Generator

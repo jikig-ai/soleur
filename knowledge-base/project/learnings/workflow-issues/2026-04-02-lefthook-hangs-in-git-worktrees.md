@@ -1,17 +1,15 @@
 ---
-title: "Lefthook pre-commit hooks hang in git worktrees"
+title: Lefthook pre-commit hooks hang in git worktrees
 date: 2026-04-02
-module: System
-problem_type: workflow_issue
-component: development_workflow
-symptoms:
-  - "lefthook run pre-commit hangs indefinitely on web-platform-typecheck"
-  - "Same tsc command completes in <30s when run directly"
-  - "Multiple stalled lefthook processes accumulate"
-root_cause: config_error
-resolution_type: workflow_improvement
-severity: medium
+category: workflow-patterns
 tags: [lefthook, worktree, typecheck, pre-commit, git]
+symptoms: [lefthook run pre-commit hangs indefinitely on web-platform-typecheck, Same tsc command completes in <30s when run directly, Multiple stalled lefthook processes accumulate]
+module: System
+component: development_workflow
+problem_type: workflow_issue
+resolution_type: workflow_improvement
+root_cause: config_error
+severity: medium
 ---
 
 # Lefthook Pre-Commit Hooks Hang in Git Worktrees

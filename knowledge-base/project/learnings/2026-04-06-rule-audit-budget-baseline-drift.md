@@ -1,8 +1,9 @@
 ---
-category: logic-errors
-module: governance
-tags: [rule-audit, context-budget, agents-md, constitution-md]
+title: Rule audit budget baselines drift between measurement and action
 date: 2026-04-06
+category: logic-errors
+tags: [rule-audit, context-budget, agents-md, constitution-md]
+module: governance
 ---
 
 # Learning: Rule audit budget baselines drift between measurement and action

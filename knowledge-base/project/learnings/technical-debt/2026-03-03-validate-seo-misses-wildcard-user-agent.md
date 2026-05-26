@@ -5,6 +5,7 @@ category: technical-debt
 tags: [seo, robots-txt, validation]
 severity: low
 synced_to: [seo-aeo]
+status: open
 ---
 
 # validate-seo.sh Misses Wildcard User-agent Blocks

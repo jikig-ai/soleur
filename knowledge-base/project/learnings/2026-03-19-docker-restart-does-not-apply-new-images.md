@@ -1,3 +1,10 @@
+---
+title: docker restart does NOT apply newly pulled images
+date: 2026-03-19
+category: engineering
+tags: [runtime-errors, deploy, docker, critical]
+---
+
 # Learning: docker restart does NOT apply newly pulled images
 
 ## Problem

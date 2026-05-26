@@ -1,3 +1,10 @@
+---
+title: CI lockfile sync check prevents dual-lockfile desync
+date: 2026-04-03
+category: ci-cd
+tags: [integration-issues, ci]
+---
+
 # Learning: CI lockfile sync check prevents dual-lockfile desync
 
 ## Problem
@@ -9,6 +16,8 @@ Projects using dual lockfiles (`bun.lock` for dev/CI, `package-lock.json` for Do
 Added a `lockfile-sync` CI job that runs `npm install --package-lock-only` (regenerates lockfile without writing `node_modules`) then checks `git diff --exit-code` on the lockfile. If the regenerated lockfile differs from the committed one, the job fails with a clear remediation message.
 
 Key technical detail: `npm install --package-lock-only` uses the same Arborist resolver as `npm ci`, ensuring detection parity. No `.npmrc` or version skew concerns when both CI and Docker use the same Node version.
+
+**Update 2026-05-22** (PR #4337): wrong on the "no version skew" claim. Same Node major (22) does not imply same npm version — `actions/setup-node@v4.4.0` ships npm 10.9.x with Node 22, while operator-local installs on Node 23+ or `bun add`-driven hotfix flows produce npm 11 lockfiles. The shape diverges on `"dev": true` for optional transitive packages (e.g., `@emnapi/runtime`, `@img/sharp-*`, `fsevents`). The gate now pins npm with `npm install -g npm@11` in the `lockfile-sync` job. See [2026-05-22-npm-version-pin-required-for-lockfile-sync-gate.md](2026-05-22-npm-version-pin-required-for-lockfile-sync-gate.md).
 
 ## Key Insight
 

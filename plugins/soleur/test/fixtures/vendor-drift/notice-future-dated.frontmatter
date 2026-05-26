@@ -1,0 +1,18 @@
+---
+upstream: github.com/goSprinto/compliance-skills
+pinned-commit: 7b58d68461cb1fc033a063e34cc9de63d0b4144b
+last-verified: 2099-01-01
+registry: knowledge-base/engineering/policies/content-vendoring.md
+lifted-files:
+  - path: references/fields.md
+    upstream-path: pii-detector/patterns/fields.md
+    upstream-blob-sha: c1bb748fe00a53b283efe66ec937fa39437d2efc
+    local-blob-sha: 68675dd747fcbc74bb84c99eaa14983c9c5a6b24
+    status: active-eu-extended
+---
+
+# NOTICE (synthetic test fixture — future-dated `last-verified`)
+
+Used by `notice-frontmatter.test.sh` TS8 and `gdpr-gate.test.ts` staleness
+cases to assert that a future date resolves to `days_stale=999` (treat as
+stale immediately) rather than a negative integer.

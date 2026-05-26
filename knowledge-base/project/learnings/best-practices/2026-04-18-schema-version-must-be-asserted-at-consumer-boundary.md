@@ -1,26 +1,15 @@
 ---
-module: rule-metrics-telemetry
+title: Schema versioning is only load-bearing when asserted at the consumer boundary
 date: 2026-04-18
-problem_type: integration_issue
+category: engineering
+tags: [schema-versioning, shell-scripting, flock, regex-parity, telemetry, drift-prevention]
+symptoms: [SCHEMA_VERSION constant defined but not load-bearing at consumer boundary, Bash ERE vs Python re regex drift risk protected only by prose comments, flock subshell variable assignments silently escape outer scope]
+module: rule-metrics-telemetry
+synced_to: [one-shot, work, review, compound]
 component: shell_script
-symptoms:
-  - "SCHEMA_VERSION constant defined but not load-bearing at consumer boundary"
-  - "Bash ERE vs Python re regex drift risk protected only by prose comments"
-  - "flock subshell variable assignments silently escape outer scope"
+problem_type: integration_issue
 root_cause: missing_consumer_side_contract_assertion
 severity: medium
-tags:
-  - schema-versioning
-  - shell-scripting
-  - flock
-  - regex-parity
-  - telemetry
-  - drift-prevention
-synced_to:
-  - one-shot
-  - work
-  - review
-  - compound
 ---
 
 # Learning: Schema versioning is only load-bearing when asserted at the consumer boundary

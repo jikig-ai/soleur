@@ -1,10 +1,13 @@
 ---
+title: 'Agent-produced scorecards drift when the template isn''t pinned'
 date: 2026-04-22
 category: integration-issues
 tags: [agents, scheduled-audits, determinism, prompt-engineering, aeo, growth-strategist]
-issue: 2679
-related_issues: [2615, 2596]
 module: growth-strategist
+issue: 2679
+related_issues:
+  - 2615
+  - 2596
 ---
 
 # Learning: Agent-produced scorecards drift when the template isn't pinned

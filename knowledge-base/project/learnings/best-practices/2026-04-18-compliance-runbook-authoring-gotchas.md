@@ -1,20 +1,22 @@
 ---
-module: knowledge-base
+title: Compliance-runbook authoring gotchas (Plausible PII erasure + dashboard filter audit)
 date: 2026-04-18
-problem_type: best_practice
-component: documentation
-symptoms:
-  - "markdownlint --fix corrupted regex content inside inline-code within pipe-delimited markdown table cell"
-  - "Table-cell \\| escapes copied verbatim into a non-table replacement format"
-  - "jq 'del(.results[].path)' recommended for PII redaction without confirming JSON schema — breakdown dimension value IS the result key"
-  - "Merge timestamp drift: plan quoted 19:16:02Z, actual commit is 19:16:01Z"
-  - "gh api pulls/<N> returned null SHAs; local git log worked"
-root_cause: inadequate_documentation
-resolution_type: code_fix
-severity: medium
+category: engineering
 tags: [compliance, runbook, markdown, markdownlint, pii, redaction, plausible, gdpr, jq, timestamps]
-related_prs: [2577]
-related_issues: [2507, 2508, 2462, 2503]
+symptoms: [markdownlint --fix corrupted regex content inside inline-code within pipe-delimited markdown table cell, Table-cell \| escapes copied verbatim into a non-table replacement format, jq 'del(.results[].path)' recommended for PII redaction without confirming JSON schema — breakdown dimension value IS the result key, Merge timestamp drift: plan quoted 19:16:02Z, actual commit is 19:16:01Z, gh api pulls/<N> returned null SHAs; local git log worked]
+module: knowledge-base
+component: documentation
+problem_type: best_practice
+related_issues:
+  - 2507
+  - 2508
+  - 2462
+  - 2503
+related_prs:
+  - 2577
+resolution_type: code_fix
+root_cause: inadequate_documentation
+severity: medium
 ---
 
 # Compliance-runbook authoring gotchas (Plausible PII erasure + dashboard filter audit)

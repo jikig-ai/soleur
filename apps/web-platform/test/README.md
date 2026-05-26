@@ -28,3 +28,7 @@ CI without the env flag runs the suite with `it.skipIf(...)` short-circuiting th
 ### Synthetic email allowlist
 
 Both integration tests use a per-suite synthetic email pattern (e.g. `conv-rail-cross-tenant-[a-f0-9]{16}@soleur.test`). Hard rule `hr-destructive-prod-tests-allowlist` forbids these tests from touching any non-synthetic account.
+
+## Engine-floor guard (pdfjs-dist)
+
+Three suites — `pdf-text-extract.test.ts`, `pdf-text-extract.bundled-server.test.ts`, and `kb-preview-metadata.bundled-server.test.ts` — use the shared helper `helpers/engines-floor.ts` to short-circuit on Node <22.3 (the pdfjs-dist@5 floor enforced by `process.getBuiltinModule`). Dev path: `describe.skipIf(BELOW_PDFJS_ENGINES_FLOOR)` + a single stderr diagnostic per file (yellow skip, never silent). CI path: the helper throws at module init when `process.env.CI` is set, so a misconfigured runner cannot ship a vacuous green. The lazy_import_failed test sits OUTSIDE the skipIf block — `vi.doMock` short-circuits the real pdfjs import so it runs on all Node versions.

@@ -1,3 +1,10 @@
+---
+title: Static CSP Security Headers via Pure Function in Next.js Config
+date: 2026-03-20
+category: security
+tags: [security, apps/web-platform]
+---
+
 # Learning: Static CSP Security Headers via Pure Function in Next.js Config
 
 ## Problem

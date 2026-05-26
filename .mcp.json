@@ -2,7 +2,11 @@
   "mcpServers": {
     "playwright": {
       "command": "npx",
-      "args": ["@playwright/mcp@latest", "--isolated"]
+      "args": [
+        "@playwright/mcp@latest",
+        "--user-data-dir=/home/jean/.cache/playwright-mcp-profile",
+        "--config=.claude/playwright-mcp.config.json"
+      ]
     }
   }
 }

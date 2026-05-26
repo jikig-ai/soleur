@@ -1,17 +1,16 @@
 ---
-module: System
+title: CPO Domain Leader Operates on Stale Milestone Data
 date: 2026-04-10
-problem_type: workflow_issue
-component: tooling
-symptoms:
-  - "CPO domain leader asserted Phase 1 had 7 unfinished P1 items when Phase 1 was already closed"
-  - "CPO operated on frozen roadmap.md Current State snapshot instead of live milestone data"
-  - "Roadmap Current State section was 2+ weeks out of date after milestones closed"
-root_cause: missing_workflow_step
-resolution_type: workflow_improvement
-severity: high
+category: engineering
 tags: [cpo, domain-leader, stale-data, milestones, roadmap, api-first]
+symptoms: [CPO domain leader asserted Phase 1 had 7 unfinished P1 items when Phase 1 was already closed, CPO operated on frozen roadmap.md Current State snapshot instead of live milestone data, Roadmap Current State section was 2+ weeks out of date after milestones closed]
+module: System
 synced_to: []
+component: tooling
+problem_type: workflow_issue
+resolution_type: workflow_improvement
+root_cause: missing_workflow_step
+severity: high
 ---
 
 # Troubleshooting: CPO Domain Leader Operates on Stale Milestone Data

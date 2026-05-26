@@ -144,15 +144,24 @@ describe("scrubSentryEvent (beforeSend hook)", () => {
   });
 
   it("preserves non-sensitive fields (negative-space guard)", () => {
+    // `userId` is no longer in this fixture: the sentry-scrub rename
+    // special-case (#3710 PR-B) rewrites `userId` → `userIdHash` at the
+    // scrubbing boundary, so a literal `user-123` survival assertion would
+    // be inconsistent with the documented pseudonymisation contract.
+    // Rename coverage lives in `test/sentry-scrub.test.ts`.
     const event = {
       contexts: { app: { app_name: "soleur", app_version: "1.0" } },
-      extra: { userId: "user-123", count: 42 },
+      extra: { requestId: "req-123", count: 42 },
     };
     const out = scrubSentryEvent(event);
     const json = JSON.stringify(out);
-    expect(json).toContain("user-123");
+    expect(json).toContain("req-123");
     expect(json).toContain("soleur");
     expect(json).toContain("42");
+    // Lock the rename rule: a future contributor reintroducing `userId` to
+    // this fixture would silently regress the negative-space guard.
+    expect(json).not.toContain("userId");
+    expect(json).not.toContain("user_id");
   });
 
   it("returns the event so it can be passed through Sentry's hook contract", () => {
@@ -227,5 +236,33 @@ describe("SENTRY_SENSITIVE_KEYS export", () => {
     ]) {
       expect(lower).toContain(k);
     }
+  });
+
+  it("includes dev-only sign-in password env-var keys (R3)", () => {
+    const lower = SENTRY_SENSITIVE_KEYS.map((k) => k.toLowerCase());
+    for (const k of [
+      "dev_user_1_password",
+      "dev_user_2_password",
+      "dev_user_3_password",
+    ]) {
+      expect(lower).toContain(k);
+    }
+  });
+
+  it("redacts DEV_USER_*_PASSWORD env-var-shaped keys at any depth", () => {
+    const event = {
+      extra: {
+        env: {
+          DEV_USER_1_PASSWORD: "super-secret-dev-1",
+          DEV_USER_2_PASSWORD: "super-secret-dev-2",
+          DEV_USER_3_PASSWORD: "super-secret-dev-3",
+        },
+      },
+    };
+    const json = JSON.stringify(scrubSentryEvent(event));
+    expect(json).not.toContain("super-secret-dev-1");
+    expect(json).not.toContain("super-secret-dev-2");
+    expect(json).not.toContain("super-secret-dev-3");
+    expect(json).toContain("[Redacted]");
   });
 });

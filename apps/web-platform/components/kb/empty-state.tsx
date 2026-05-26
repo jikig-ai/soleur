@@ -7,7 +7,7 @@ export function EmptyState() {
         <p className="mb-4 text-xs font-semibold uppercase tracking-widest text-amber-500/80">
           Knowledge Base
         </p>
-        <h1 className="mb-3 font-serif text-2xl font-medium text-soleur-text-primary">
+        <h1 className="mb-3 text-2xl font-medium text-soleur-text-primary">
           Nothing Here Yet.{" "}
           <span className="text-soleur-text-secondary">One Message Changes That.</span>
         </h1>

@@ -1,11 +1,13 @@
 ---
-name: action-completion-workflow-gap
-description: Agent stopped at "next action" text instead of executing the automatable step (opening subscription page)
-type: workflow-deviation
-category: integration-issues
-module: brainstorm, workflow
-severity: medium
+title: Action Completion Workflow Gap
 date: 2026-03-23
+category: integration-issues
+tags: [integration-issues, brainstorm, workflow]
+module: brainstorm, workflow
+description: 'Agent stopped at "next action" text instead of executing the automatable step (opening subscription page)'
+name: action-completion-workflow-gap
+severity: medium
+type: workflow-deviation
 ---
 
 # Learning: Action Completion Workflow Gap

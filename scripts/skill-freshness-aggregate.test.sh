@@ -203,6 +203,66 @@ fi
 rm -rf "$ROOT"
 
 # ------------------------------------------------------------------------
+# Test 7: archive-spanning input (#3508)
+# Per-write rotation moves data into `.skill-invocations-YYYY-MM*.jsonl.gz`.
+# The aggregator must merge active + archives so older invocations still
+# count toward last_invoked + invocation_count.
+# ------------------------------------------------------------------------
+echo "Test 7: archive-spanning input"
+ROOT=$(make_fake_repo); ROOTS+=("$ROOT")
+# Active file: a recent invocation for alpha
+printf '{"schema":1,"ts":"%s","skill":"alpha"}\n' "$(ts_days_ago 5)" \
+  > "$ROOT/.claude/.skill-invocations.jsonl"
+# Archive .gz: an older invocation for alpha that was rotated out
+ARCH="$ROOT/.claude/.skill-invocations-2026-04.jsonl"
+printf '{"schema":1,"ts":"%s","skill":"alpha"}\n' "$(ts_days_ago 60)" > "$ARCH"
+gzip -f "$ARCH"
+
+OUT=$(SKILL_FRESHNESS_REPO_ROOT="$ROOT" bash "$AGGREGATOR" --dry-run)
+ALPHA_COUNT=$(echo "$OUT" | jq -r '.skills[] | select(.name == "alpha") | .invocation_count')
+if [[ "$ALPHA_COUNT" -ne 2 ]]; then
+  fail "expected 2 invocations (active + archive), got $ALPHA_COUNT"
+else
+  pass "archived invocations counted alongside active"
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
+# Test 8: telemetry-drop sentinels (issue #3509)
+# Sentinels carry `error` but no `skill`. The existing `.skill != null`
+# filter already excludes them from the data path; this test confirms it
+# AND that drops_<class>_count surfaces in summary.
+# ------------------------------------------------------------------------
+echo "Test 8: telemetry-drop sentinel handling"
+ROOT=$(make_fake_repo); ROOTS+=("$ROOT")
+{
+  printf '{"schema":1,"ts":"%s","skill":"alpha"}\n' "$(ts_days_ago 1)"
+  # Two sentinels (jq_fail + rotation_fail) — must NOT appear in skills[].
+  printf '{"schema":1,"hook_event":"PreToolUse","error":"jq_fail","ts":"2026-04-25T10:00:00Z"}\n'
+  printf '{"schema":1,"hook_event":"PreToolUse","error":"rotation_fail","ts":"2026-04-25T11:00:00Z"}\n'
+} > "$ROOT/.claude/.skill-invocations.jsonl"
+OUT=$(SKILL_FRESHNESS_REPO_ROOT="$ROOT" bash "$AGGREGATOR" --dry-run 2>/dev/null)
+ALPHA_STATUS=$(echo "$OUT" | jq -r '.skills[] | select(.name == "alpha") | .status')
+NULL_SKILL_ROWS=$(echo "$OUT" | jq -r '.skills | map(select(.name == null or .name == "null")) | length')
+DROPS_JQ=$(echo "$OUT" | jq -r '.summary.drops_jq_fail_count')
+DROPS_ROT=$(echo "$OUT" | jq -r '.summary.drops_rotation_fail_count')
+ORPHANS=$(echo "$OUT" | jq -r '.summary.orphan_skills | length')
+if [[ "$ALPHA_STATUS" != "fresh" ]]; then
+  fail "alpha invocation lost: $ALPHA_STATUS"
+elif [[ "$NULL_SKILL_ROWS" -ne 0 ]]; then
+  fail "null skill row in skills[]: $NULL_SKILL_ROWS"
+elif [[ "$DROPS_JQ" != "1" ]]; then
+  fail "drops_jq_fail_count expected 1, got $DROPS_JQ"
+elif [[ "$DROPS_ROT" != "1" ]]; then
+  fail "drops_rotation_fail_count expected 1, got $DROPS_ROT"
+elif [[ "$ORPHANS" -ne 0 ]]; then
+  fail "sentinels surfaced as orphan_skills: $ORPHANS"
+else
+  pass "sentinels excluded from skills[], drop counts populated"
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

@@ -337,16 +337,11 @@ Route **two categories** of insights to each target:
 
 This dual-routing ensures session errors feed back into the definitions that caused them, not just the learning archive.
 
-#### 8.4 Confirm
+#### 8.4 Apply
 
-**Headless mode:** If `HEADLESS_MODE=true`, do not apply the edit directly. Instead, create a GitHub issue to track the proposed edit. Write the issue body to a temporary file, then create the issue:
+Apply the proposed edit to the definition file. Filing a GitHub issue is NOT an option in either mode -- the backlog-growth pressure that produced 22 stale `compound: route-to-definition proposal` issues by 2026-05 is the original problem this step exists to avoid. If Step 8.3 produced a draft, it has already cleared the "skip if no suitable section / insight is general knowledge" gate; that gate is the only safety hatch.
 
-1. Write the body to `/tmp/compound-rtd-body.md` containing: the proposed edit text (as a fenced code block), the target file path, and the source learning file path
-2. Run: `gh issue create --title "compound: route-to-definition proposal for <target-basename>" --body-file /tmp/compound-rtd-body.md --milestone "Post-MVP / Later"`
-3. If `gh issue create` fails (network error, auth failure), log the error and continue to the decision menu -- do not block the pipeline on issue creation failure
-4. If successful, log the created issue URL
-5. Update the learning file's `synced_to` frontmatter with the bare `<definition-name>` (same format as interactive mode) to prevent `/soleur:sync` from re-proposing this pair
-6. Proceed to the decision menu
+**Headless mode (`HEADLESS_MODE=true`):** Before writing, assert the resolved target path is prefixed by `plugins/soleur/skills/`, `plugins/soleur/agents/`, or `plugins/soleur/commands/` — refuse otherwise. Then write the edit to the target file directly without prompting. The prefix check enforces `hr-write-boundary-sentinel-sweep-all-write-sites` for this new write surface; the Step 8.1 path map is the implicit allowlist, this assertion makes it explicit.
 
 **Interactive mode:** Use **AskUserQuestion** with options:
 
@@ -354,7 +349,7 @@ This dual-routing ensures session errors feed back into the definitions that cau
 - **Skip** -- Do not modify the definition; the learning is still captured in knowledge-base/project/learnings/
 - **Edit** -- Modify the bullet text, then re-display for confirmation
 
-If accepted, write the edit to the definition file. Then update the learning file's `synced_to` frontmatter to prevent `/soleur:sync` from re-proposing this pair:
+In both modes, after writing the edit, update the learning file's `synced_to` frontmatter to prevent `/soleur:sync` from re-proposing this pair:
 
 - If `synced_to` array exists in frontmatter: append the definition name
 - If frontmatter exists but `synced_to` is absent: add `synced_to: [definition-name]`

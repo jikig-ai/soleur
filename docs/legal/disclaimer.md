@@ -181,6 +181,24 @@ If you are a consumer in the EU/EEA, nothing in this Disclaimer affects your rig
 
 ---
 
+## 8b. Automated Tooling — Advisory Static Analysis
+
+Soleur skills may include automated static-analysis tools (such as the
+`skill-security-scan` advisory gate at `plugins/soleur/skills/skill-security-scan/`)
+that emit advisory verdicts (e.g., `LOW-RISK`, `REVIEW`, `HIGH-RISK`) on
+third-party content prior to installation. **These verdicts are advisory only
+and do not constitute a security audit, certification, or warranty of safety.**
+A `LOW-RISK` verdict does not imply that content is free from malicious code,
+prompt-injection attempts, supply-chain vulnerabilities, filesystem-boundary
+violations, or third-party telemetry. Users remain solely responsible for
+reviewing third-party content before installation and execution. We make no
+warranty that the static-analysis output detects all classes of risk; the
+detection rule pack is a heuristic and may produce false-positives or
+false-negatives. Use of automated tooling does not transfer or limit the
+"as-is" disclaimer above.
+
+---
+
 ## 9. Changes to This Disclaimer
 
 We reserve the right to modify this Disclaimer at any time. Changes will be posted to our GitHub repository at [github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur) and on our website at [soleur.ai](https://soleur.ai). Your continued use of the Platform after the posting of changes constitutes your acceptance of such changes. We encourage you to review this Disclaimer periodically.

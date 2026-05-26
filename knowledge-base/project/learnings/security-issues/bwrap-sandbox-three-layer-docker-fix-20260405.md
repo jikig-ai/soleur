@@ -1,17 +1,16 @@
 ---
-module: web-platform
+title: bwrap sandbox non-functional in Docker container (three-layer fix)
 date: 2026-04-05
-problem_type: security_issue
-component: tooling
-symptoms:
-  - "bwrap: No permissions to create new namespace"
-  - "bwrap: Failed to make / slave: Permission denied"
-  - "bwrap: Can't mount proc on /newroot/proc: Operation not permitted"
-root_cause: config_error
-resolution_type: config_change
-severity: critical
+category: engineering
 tags: [bwrap, bubblewrap, seccomp, apparmor, docker, user-namespaces, sandbox, clone-newuser]
+symptoms: [bwrap: No permissions to create new namespace, bwrap: Failed to make / slave: Permission denied, bwrap: Can't mount proc on /newroot/proc: Operation not permitted]
+module: web-platform
 synced_to: [work]
+component: tooling
+problem_type: security_issue
+resolution_type: config_change
+root_cause: config_error
+severity: critical
 ---
 
 # Troubleshooting: bwrap sandbox non-functional in Docker container (three-layer fix)

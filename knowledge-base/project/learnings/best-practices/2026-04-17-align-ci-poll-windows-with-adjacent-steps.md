@@ -1,15 +1,15 @@
 ---
-module: System
+title: Align CI Poll Windows with Adjacent Steps in the Same Workflow
 date: 2026-04-17
-problem_type: best_practice
-component: development_workflow
-symptoms:
-  - "Verify deploy script completion step timed out at 120s while deploy was healthy"
-  - "gh run rerun --failed POSTed a second deploy that hit flock lock_contention"
-root_cause: config_error
-resolution_type: config_change
-severity: medium
+category: ci-cd
 tags: [ci, deploy, polling, timeout, web-platform-release, alignment]
+symptoms: [Verify deploy script completion step timed out at 120s while deploy was healthy, gh run rerun --failed POSTed a second deploy that hit flock lock_contention]
+module: System
+component: development_workflow
+problem_type: best_practice
+resolution_type: config_change
+root_cause: config_error
+severity: medium
 ---
 
 # Align CI Poll Windows with Adjacent Steps in the Same Workflow
@@ -74,6 +74,10 @@ Tighten the hook to only fire when the diff actually adds or modifies a `run:` b
 containing `${{ github.event.*.title }}`, `${{ github.event.*.body }}`, or similar
 untrusted-input interpolations. Filed as GitHub issue for hook improvement.
 
+## 2026-05-07 update
+
+300s outgrew the realistic deploy window (#3398). Recurrence pattern + script-side phase-addition prevention checklist live in `2026-05-07-deploy-poll-ceiling-must-track-realistic-deploy-window.md`. Original 300s reasoning above preserved as historical record.
+
 ## See Also
 
 - `knowledge-base/project/learnings/2026-03-21-async-webhook-deploy-cloudflare-timeout.md`
@@ -81,4 +85,6 @@ untrusted-input interpolations. Filed as GitHub issue for hook improvement.
   accommodates)
 - `knowledge-base/project/learnings/bug-fixes/2026-04-15-signed-get-verify-step-tolerate-non-json-bodies.md`
   (prior fix to the same verify-completion step — non-JSON body guard)
-- Issue #2519, PR #2523
+- `knowledge-base/project/learnings/best-practices/2026-05-07-deploy-poll-ceiling-must-track-realistic-deploy-window.md`
+  (recurrence pattern + script-side phase-addition prevention checklist)
+- Issue #2519, PR #2523, Issue #3398

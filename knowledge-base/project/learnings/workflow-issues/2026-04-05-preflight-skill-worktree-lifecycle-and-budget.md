@@ -1,17 +1,15 @@
 ---
-module: System
+title: Preflight Skill -- Worktree Lifecycle and Budget Constraints
 date: 2026-04-05
-problem_type: workflow_issue
-component: development_workflow
-symptoms:
-  - "Worktree created by brainstorm disappeared when one-shot started"
-  - "Skill description budget exceeded at 1806/1800 requiring two trim iterations"
-  - "draft-pr script reported bare repo despite CWD showing worktree"
-  - "Eleventy docs build fails on main with dateToShort filter error"
-root_cause: missing_workflow_step
-resolution_type: workflow_improvement
-severity: medium
+category: workflow-patterns
 tags: [worktree, skill-budget, preflight, docs-build, one-shot]
+symptoms: [Worktree created by brainstorm disappeared when one-shot started, Skill description budget exceeded at 1806/1800 requiring two trim iterations, draft-pr script reported bare repo despite CWD showing worktree, Eleventy docs build fails on main with dateToShort filter error]
+module: System
+component: development_workflow
+problem_type: workflow_issue
+resolution_type: workflow_improvement
+root_cause: missing_workflow_step
+severity: medium
 ---
 
 # Learning: Preflight Skill -- Worktree Lifecycle and Budget Constraints

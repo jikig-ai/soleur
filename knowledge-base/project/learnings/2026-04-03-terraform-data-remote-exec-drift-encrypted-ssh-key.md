@@ -1,17 +1,16 @@
 ---
-module: Web Platform Infrastructure
+title: terraform_data remote-exec Drift and Encrypted SSH Key Incompatibility
 date: 2026-04-03
-problem_type: infrastructure_drift
-component: terraform
-symptoms:
-  - "terraform plan shows terraform_data.doppler_install needs replacement"
-  - "drift detection workflow fails with non-zero exit"
-  - "ssh: parse error in message type 0 on terraform apply"
-root_cause: post_merge_gap
-resolution_type: manual_apply
-severity: medium
+category: infrastructure
 tags: [terraform, drift, remote-exec, ssh, encrypted-key, doppler, provisioner]
+symptoms: [terraform plan shows terraform_data.doppler_install needs replacement, drift detection workflow fails with non-zero exit, ssh: parse error in message type 0 on terraform apply]
+module: Web Platform Infrastructure
 synced_to: []
+component: terraform
+problem_type: infrastructure_drift
+resolution_type: manual_apply
+root_cause: post_merge_gap
+severity: medium
 ---
 
 # terraform_data remote-exec Drift and Encrypted SSH Key Incompatibility

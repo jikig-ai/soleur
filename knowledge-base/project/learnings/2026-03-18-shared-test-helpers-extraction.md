@@ -1,3 +1,10 @@
+---
+title: Extract shared bash test helpers to prevent implementation drift
+date: 2026-03-18
+category: engineering
+tags: [test-failures, plugins/soleur/test]
+---
+
 # Learning: Extract shared bash test helpers to prevent implementation drift
 
 ## Problem

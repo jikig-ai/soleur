@@ -253,5 +253,96 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // Slot still held.
       expect(await slotCount()).toBe(1);
     }, 30_000);
+
+    // -------------------------------------------------------------------
+    // Stale-heartbeat boundary tests (May-6 #3354 — pin the SQL predicate
+    // that backs Phase 1's application-layer sync-reap. The application
+    // layer detects `last_heartbeat_at < now() - 120s` and reaps; the
+    // lazy sweep in `acquire_conversation_slot` (migration 029 line ~131)
+    // uses the IDENTICAL predicate. These tests verify the predicate's
+    // boundary behavior end-to-end: a slot just past 120s is reaped on
+    // next acquire (allowing a stuck row to resolve), and a slot under
+    // 120s is preserved (cap_hit fires for a genuinely-active session).
+    // -------------------------------------------------------------------
+
+    async function backdateSlotHeartbeat(
+      conversationId: string,
+      ageSeconds: number,
+    ): Promise<void> {
+      const cutoff = new Date(Date.now() - ageSeconds * 1000).toISOString();
+      const { error } = await service
+        .from("user_concurrency_slots")
+        .update({ last_heartbeat_at: cutoff })
+        .eq("user_id", user.id)
+        .eq("conversation_id", conversationId);
+      expect(
+        error,
+        `backdate slot heartbeat failed: ${error?.message}`,
+      ).toBeNull();
+    }
+
+    test("stale-heartbeat slot (200 s old) is reaped by lazy sweep on next acquire — closes 120-180 s dead-end window", async () => {
+      // Reproduces the May-6 dead-end at the SQL boundary:
+      // user has a stuck conversation whose slot's heartbeat lapsed past
+      // 120 s. A new conversation must be able to acquire a slot under
+      // cap=1 because the lazy sweep reaps the stale row. Pre-fix this
+      // worked through the lazy sweep alone; the application-layer
+      // reap (Phase 1) uses the identical SQL predicate so this test
+      // also pins the contract the new code depends on.
+      const repoUrl = `https://github.com/synthetic/${randomBytes(4).toString("hex")}`;
+      const stuckConv = await insertConversation(repoUrl);
+
+      // First acquire establishes the slot.
+      expect((await acquireSlot(stuckConv, 1)).status).toBe("ok");
+      expect(await slotCount()).toBe(1);
+
+      // Backdate the slot's heartbeat past the 120 s threshold to
+      // simulate a wedged conversation whose old WS has died and is no
+      // longer refreshing the heartbeat.
+      await backdateSlotHeartbeat(stuckConv, 200);
+
+      // A new acquire under cap=1 must succeed: the lazy sweep deletes
+      // the stale slot before counting, so count=1 (the new slot) and
+      // cap=1 → ok.
+      const newConv = await insertConversation(repoUrl);
+      const acquireNew = await acquireSlot(newConv, 1);
+      expect(acquireNew.status).toBe("ok");
+      expect(acquireNew.active_count).toBe(1);
+
+      // The stuck conversation's slot is gone; only the new one remains.
+      const { data: slotRows, error: slotErr } = await service
+        .from("user_concurrency_slots")
+        .select("conversation_id")
+        .eq("user_id", user.id);
+      expect(slotErr).toBeNull();
+      expect(slotRows?.map((r) => r.conversation_id)).toEqual([newConv]);
+    }, 30_000);
+
+    test("fresh-heartbeat slot (60 s old) is NOT reaped — genuine cap_hit fires", async () => {
+      // Negative gate: a slot whose heartbeat is fresh (under the 120 s
+      // threshold) represents a still-live session. The lazy sweep MUST
+      // NOT reap it; cap_hit must fire so a genuinely-overcap user is
+      // rejected. This pins the lower bound of the predicate and
+      // guards against a future loosening of the threshold that would
+      // allow a determined attacker to free their own active slots
+      // faster than the heartbeat cadence.
+      const repoUrl = `https://github.com/synthetic/${randomBytes(4).toString("hex")}`;
+      const liveConv = await insertConversation(repoUrl);
+
+      expect((await acquireSlot(liveConv, 1)).status).toBe("ok");
+      expect(await slotCount()).toBe(1);
+
+      // Backdate to 60 s — well within the 120 s threshold.
+      await backdateSlotHeartbeat(liveConv, 60);
+
+      const newConv = await insertConversation(repoUrl);
+      const acquireNew = await acquireSlot(newConv, 1);
+      expect(acquireNew.status).toBe("cap_hit");
+      // active_count after rejecting the new slot: still just the fresh
+      // one. The new conversation's slot was sweep-deleted by the
+      // cap_hit branch so it doesn't leak.
+      expect(acquireNew.active_count).toBe(1);
+      expect(await slotCount()).toBe(1);
+    }, 30_000);
   },
 );

@@ -1,16 +1,16 @@
 ---
-module: Brainstorm Skill
+title: Stale Roadmap Data Causes Incorrect Domain Leader Assessments
 date: 2026-04-10
-problem_type: workflow_issue
-component: development_workflow
-symptoms:
-  - "CPO domain assessment advised deferring KB sharing because 'KB API and viewer are not started'"
-  - "Roadmap Phase 3 status columns showed 'Not started' for items CLOSED on GitHub for weeks"
-root_cause: missing_workflow_step
-resolution_type: workflow_improvement
-severity: high
+category: engineering
 tags: [roadmap, stale-data, domain-assessment, brainstorm, cpo]
+symptoms: [CPO domain assessment advised deferring KB sharing because 'KB API and viewer are not started', Roadmap Phase 3 status columns showed 'Not started' for items CLOSED on GitHub for weeks]
+module: Brainstorm Skill
 synced_to: [brainstorm]
+component: development_workflow
+problem_type: workflow_issue
+resolution_type: workflow_improvement
+root_cause: missing_workflow_step
+severity: high
 ---
 
 # Troubleshooting: Stale Roadmap Data Causes Incorrect Domain Leader Assessments

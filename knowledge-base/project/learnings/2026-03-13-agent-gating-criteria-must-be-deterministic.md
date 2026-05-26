@@ -1,3 +1,10 @@
+---
+title: Agent gating criteria must be deterministic
+date: 2026-03-13
+category: agent-design
+tags: [agent-prompts, community-manager]
+---
+
 # Learning: Agent gating criteria must be deterministic
 
 ## Problem

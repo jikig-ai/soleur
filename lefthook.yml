@@ -41,17 +41,26 @@ pre-commit:
         - "apps/web-platform/test/__goldens__/**"
         - "**/__goldens__/**"
         - "**/*.snap"
+        # #3322 — cover learning files so future `gitleaks:allow` waivers
+        # there carry the `issue:#NNN <reason>` trailer. Dual-glob mirrors
+        # kb-structure-guard (gobwas `**` requires intermediate dirs;
+        # see learning 2026-03-21-lefthook-gobwas-glob-double-star.md).
+        - "knowledge-base/project/learnings/*.md"
+        - "knowledge-base/project/learnings/**/*.md"
       run: node apps/web-platform/scripts/lint-fixture-content.mjs {staged_files}
     rule-id-lint:
       priority: 4
-      # Run target is pinned to AGENTS.md (not `{staged_files}`) because the
-      # linter needs BOTH AGENTS.md and retired-rule-ids.txt. When only
-      # retired-rule-ids.txt is staged, `{staged_files}` would pass it as the
-      # AGENTS.md positional and the section parser would fail.
+      # Run target is pinned to the full index+sidecar set, not `{staged_files}`:
+      # the cross-file linter (--index-file mode, #3493) needs the union to
+      # validate pointer↔body 1:1, and when only retired-rule-ids.txt is
+      # staged the positional path resolution would otherwise break.
       glob:
         - "AGENTS.md"
+        - "AGENTS.core.md"
+        - "AGENTS.docs.md"
+        - "AGENTS.rest.md"
         - "scripts/retired-rule-ids.txt"
-      run: python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt AGENTS.md
+      run: python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt --index-file AGENTS.md AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
     agents-compound-sync:
       priority: 4
       glob:
@@ -62,8 +71,39 @@ pre-commit:
       priority: 5
       glob:
         - "AGENTS.md"
+        - "AGENTS.core.md"
+        - "AGENTS.docs.md"
+        - "AGENTS.rest.md"
         - "scripts/lint-agents-enforcement-tags.py"
-      run: python3 scripts/lint-agents-enforcement-tags.py AGENTS.md
+      # Post-#3493 sidecar split: enforcement tags now live in sidecars.
+      # Anchor-parity extension landed in #3684.
+      run: python3 scripts/lint-agents-enforcement-tags.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
+    rule-budget-lint:
+      priority: 5
+      # Mirrors rule-id-lint's glob shape. Self-glob includes the linter
+      # script and the test harness so test-only edits re-run the linter
+      # (lint-scheduled-show-full-output convention). The shared SECTIONS
+      # module is also globbed because a section-list edit should re-run
+      # both lint-rule-ids.py and lint-agents-rule-budget.py.
+      glob:
+        - "AGENTS.md"
+        - "AGENTS.core.md"
+        - "AGENTS.docs.md"
+        - "AGENTS.rest.md"
+        - "scripts/lint-agents-rule-budget.py"
+        - "scripts/lint-agents-rule-budget.test.sh"
+        - "scripts/_agents_md_sections.py"
+      run: python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
+    scheduled-show-full-output-lint:
+      priority: 5
+      # Forbid show_full_output: true in recurring scheduled workflows. Only
+      # `--once` workflows (name starts with "Scheduled (once):") may set it
+      # because their prompt + tool surface are bound at create time. See
+      # scripts/lint-scheduled-show-full-output.sh and #3404 + #3411 review.
+      glob:
+        - ".github/workflows/scheduled-*.yml"
+        - "scripts/lint-scheduled-show-full-output.sh"
+      run: bash scripts/lint-scheduled-show-full-output.sh {staged_files}
     web-platform-typecheck:
       priority: 5
       glob:
@@ -81,6 +121,69 @@ pre-commit:
         - "apps/web-platform/server/**/*.ts"
         - "scripts/lint-conversations-update-callsites.sh"
       run: bash scripts/lint-conversations-update-callsites.sh
+    # gdpr-gate advisory hook (per AGENTS.md hr-gdpr-gate-on-regulated-data-surfaces).
+    # ALWAYS exits 0 — prints a one-line stderr breadcrumb when staged paths
+    # match the canonical regulated-data regex. Glob list is in path-array
+    # form to avoid gobwas `**` semantics
+    # (see 2026-03-21-lefthook-gobwas-glob-double-star.md). Mirrors the
+    # canonical regex in plugins/soleur/skills/gdpr-gate/SKILL.md and
+    # scripts/gdpr-gate.sh.
+    #
+    # CI self-test: .github/workflows/gdpr-gate-self-test.yml is the
+    # load-bearing gate for regressions in
+    # plugins/soleur/skills/gdpr-gate/scripts/** (issue #3536). The glob
+    # below intentionally does NOT cover scripts/ because pre-commit
+    # fixture runs are slow and flaky; CI carries the assertion instead.
+    gdpr-gate-advisory:
+      priority: 6
+      glob:
+        - "apps/web-platform/supabase/migrations/*.sql"
+        - "apps/web-platform/lib/auth/*.ts"
+        - "apps/web-platform/lib/auth/**/*.ts"
+        - "apps/web-platform/lib/auth/*.tsx"
+        - "apps/web-platform/lib/auth/**/*.tsx"
+        - "apps/web-platform/lib/auth/*.js"
+        - "apps/web-platform/lib/auth/**/*.js"
+        - "apps/web-platform/server/*auth*.ts"
+        - "apps/web-platform/server/*auth*.tsx"
+        - "apps/web-platform/server/*auth*.js"
+        - "apps/web-platform/app/api/*.ts"
+        - "apps/web-platform/app/api/**/*.ts"
+        - "apps/web-platform/app/api/*.tsx"
+        - "apps/web-platform/app/api/**/*.tsx"
+        - "*.sql"
+      run: bash plugins/soleur/skills/gdpr-gate/scripts/gdpr-gate.sh {staged_files}
+    # vendor-pin-integrity (FR5): verifies the staged contents of every
+    # NOTICE-tracked lifted file match the blob SHAs pinned in NOTICE
+    # frontmatter. Detects silent local edits to upstream-vendored content
+    # and silent additions of files outside the registry. The integrity
+    # script reads its registry from NOTICE at runtime, so the glob
+    # intentionally covers the whole `references/` subtree (plus NOTICE
+    # itself) — any new file added under `references/` triggers the script,
+    # which then rejects it via the "staged but not in NOTICE" branch.
+    # Narrow per-file globs would let a re-vendor land a 6th file without
+    # the integrity gate ever firing on it.
+    vendor-pin-integrity:
+      priority: 6
+      glob:
+        - "plugins/soleur/skills/gdpr-gate/references/*.md"
+        - "plugins/soleur/skills/gdpr-gate/references/layers/*.md"
+        - "plugins/soleur/skills/gdpr-gate/NOTICE"
+      run: bash plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh {staged_files}
+    # skill-security-scan advisory hook (#2719).
+    # ALWAYS exits 0 — prints a one-line stderr breadcrumb on HIGH-RISK
+    # without override artifact. Belt-and-suspenders for IDE / manual
+    # `git commit` paths that bypass the Claude Code PreToolUse hook.
+    # Glob list is in array form per gobwas `**` semantics
+    # (2026-03-21-lefthook-gobwas-glob-double-star.md).
+    skill-security-scan-advisory:
+      priority: 7
+      glob:
+        - "plugins/soleur/skills/**/SKILL.md"
+        - ".claude/skills/**/SKILL.md"
+        - ".claude/agents/**/*.md"
+        - "plugins/soleur/agents/**/*.md"
+      run: bash .claude/hooks/skill-security-scan.sh {staged_files}
     bun-test:
       priority: 6
       glob: "*.{ts,tsx,js,jsx}"

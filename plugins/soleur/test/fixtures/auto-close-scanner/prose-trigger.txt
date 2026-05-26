@@ -1,0 +1,1 @@
+This change improves the deploy script. This will fix #1234 once the upstream PR lands.

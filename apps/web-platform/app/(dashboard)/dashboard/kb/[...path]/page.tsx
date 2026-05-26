@@ -8,6 +8,7 @@ import { safeDecode } from "@/components/kb/kb-breadcrumb";
 import { FilePreview } from "@/components/kb/file-preview";
 import { KbContentHeader } from "@/components/kb/kb-content-header";
 import { KbContentSkeleton } from "@/components/kb/kb-content-skeleton";
+import { KbContext } from "@/components/kb/kb-context";
 import { KbChatContext } from "@/components/kb/kb-chat-context";
 import { KbChatQuoteBridgeContext } from "@/components/kb/kb-chat-quote-bridge";
 import { SelectionToolbar } from "@/components/kb/selection-toolbar";
@@ -31,6 +32,12 @@ export default function KbContentPage({
   const articleRef = useRef<HTMLElement>(null);
   const kbChat = useContext(KbChatContext);
   const quoteBridge = useContext(KbChatQuoteBridgeContext);
+  // #4224 — KB layout publishes the latest sync row + a refresh hook.
+  // Use the raw context (not the gated `useKb()` hook) so the page also
+  // renders in test surfaces that exercise it without KbLayout wrap.
+  const kbCtx = useContext(KbContext);
+  const lastSync = kbCtx?.lastSync ?? undefined;
+  const refreshTree = kbCtx?.refreshTree;
 
   useEffect(() => {
     // Non-markdown files are rendered by FilePreview — no fetch needed
@@ -128,6 +135,8 @@ export default function KbContentPage({
           joinedPath={joinedPath}
           chatUrl={chatUrl}
           download={{ href: contentUrl, filename }}
+          lastSync={lastSync}
+          onSynced={refreshTree}
         />
         <div className="min-h-0 flex-1">
           <FilePreview
@@ -142,7 +151,12 @@ export default function KbContentPage({
 
   return (
     <div className="flex h-full flex-col">
-      <KbContentHeader joinedPath={joinedPath} chatUrl={chatUrl} />
+      <KbContentHeader
+        joinedPath={joinedPath}
+        chatUrl={chatUrl}
+        lastSync={lastSync}
+        onSynced={refreshTree}
+      />
 
       {/* Rendered markdown content */}
       <article

@@ -45,22 +45,49 @@ vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(),
 }));
 
-vi.mock("@/lib/supabase/service", () => ({
-  createServiceClient: vi.fn(() => ({
-    from: vi.fn(() => ({
-      select: vi.fn(() => ({
-        eq: vi.fn(() => ({
-          single: vi.fn(async () => ({
-            data: { github_installation_id: 1234, kb_sync_history: [] },
-            error: null,
-          })),
-        })),
-      })),
-      update: vi.fn(() => ({
-        eq: vi.fn(async () => ({ error: null })),
-      })),
+// PR-C §2.1 (#3244): session-sync.ts now imports `getFreshTenantClient`
+// + `RuntimeAuthError` from `@/lib/supabase/tenant` instead of
+// `createServiceClient` from `@/lib/supabase/service`. Recursive mock
+// chain so any combination of `.select().eq().single() / .maybeSingle()`
+// or `.update().eq()` resolves to the same shape — both the auth probe
+// (`.maybeSingle()`) and the 4 migrated sites (`.single()`/`.eq()`).
+// `vi.hoisted` is required for the class — `vi.mock` factories run
+// BEFORE top-level `class`/`const` declarations execute.
+const { FakeRuntimeAuthError } = vi.hoisted(() => ({
+  FakeRuntimeAuthError: class FakeRuntimeAuthError extends Error {},
+}));
+vi.mock("@/lib/supabase/tenant", () => {
+  const eqChain: {
+    maybeSingle: () => Promise<{ data: { id: string } | null; error: null }>;
+    single: () => Promise<{
+      data: { github_installation_id: number; kb_sync_history: never[] };
+      error: null;
+    }>;
+    then: (resolve: (v: { error: null }) => unknown) => unknown;
+  } = {
+    maybeSingle: async () => ({ data: { id: "user-1" }, error: null }),
+    single: async () => ({
+      data: { github_installation_id: 1234, kb_sync_history: [] },
+      error: null,
+    }),
+    // `.update().eq()` returns a thenable; consumer `await`s it directly.
+    then: (resolve: (v: { error: null }) => unknown) =>
+      resolve({ error: null }),
+  };
+  const fromChain = {
+    select: () => ({ eq: () => eqChain }),
+    update: () => ({ eq: () => eqChain }),
+  };
+  return {
+    getFreshTenantClient: vi.fn(async () => ({
+      from: () => fromChain,
     })),
-  })),
+    RuntimeAuthError: FakeRuntimeAuthError,
+  };
+});
+
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: vi.fn(),
 }));
 
 vi.mock("../server/git-auth", () => ({

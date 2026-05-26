@@ -1,3 +1,10 @@
+---
+title: appleboy/ssh-action negotiates ECDSA, not ED25519, on Hetzner Ubuntu servers
+date: 2026-03-20
+category: engineering
+tags: [integration-issues, ci/cd release workflows]
+---
+
 # Learning: appleboy/ssh-action negotiates ECDSA, not ED25519, on Hetzner Ubuntu servers
 
 ## Problem

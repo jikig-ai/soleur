@@ -1,15 +1,15 @@
 ---
-module: KB Upload API
+title: KB Upload Workspace Sync Fails Due to Missing Git Credential Helper
 date: 2026-04-13
-problem_type: integration_issue
-component: authentication
-symptoms:
-  - "File committed to GitHub but workspace sync failed. Try refreshing."
-  - "git pull --ff-only fails on private repos without credential helper"
-root_cause: incomplete_setup
-resolution_type: code_fix
-severity: high
+category: engineering
 tags: [credential-helper, git-pull, github-app, workspace-sync]
+symptoms: [File committed to GitHub but workspace sync failed. Try refreshing., git pull --ff-only fails on private repos without credential helper]
+module: KB Upload API
+component: authentication
+problem_type: integration_issue
+resolution_type: code_fix
+root_cause: incomplete_setup
+severity: high
 ---
 
 # Troubleshooting: KB Upload Workspace Sync Fails Due to Missing Git Credential Helper

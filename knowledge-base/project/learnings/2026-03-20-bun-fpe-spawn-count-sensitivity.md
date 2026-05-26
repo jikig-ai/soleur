@@ -61,3 +61,17 @@ Two-layer fix plus CI DRY improvement:
 When Bun's test runner discovers files via directory traversal, it runs them in the same process with shared GC state. Tests that individually pass can crash together because their combined spawn count exceeds the GC's accounting threshold. Sequential isolation (separate `bun test` invocations per suite) keeps each run's spawn count below the crash threshold, providing defense-in-depth even after the version upgrade.
 
 **Rule of thumb:** When a Bun test runner crash correlates with RSS or subprocess count, suspect a GC bug and check if a newer Bun version fixes it before adding workarounds.
+
+## 2026-05-13 probe: 1.3.14 clean
+
+Bumped `.bun-version` 1.3.11 → 1.3.14 in PR #3709. All 5 `test-bun` shard invocations green on GitHub-hosted `ubuntu-latest` runner (CI run [25791178419](https://github.com/jikig-ai/soleur/actions/runs/25791178419), `test-bun` job [75756842167](https://github.com/jikig-ai/soleur/actions/runs/25791178419/job/75756842167), 51s wall-clock):
+
+- `bun test test/content-publisher.test.ts` — green
+- `bun test test/x-community.test.ts` — green
+- `bun test test/pre-merge-rebase.test.ts` — green
+- `bun test plugins/soleur/` — green (25 `.test.ts` files in one bun process)
+- `bash scripts/validate-blog-links.sh` — green
+
+FPE-class grep on the test-bun job log (`SIGFPE|panic:|Floating point (error|exception)|oh no:`) returned **0 matches**. Sequential test runner in `scripts/test-all.sh` retained as defense-in-depth — one green probe is necessary but not sufficient to prove class elimination for combined-suite execution.
+
+Next probe target: next minor Bun bump (1.4.x stable).

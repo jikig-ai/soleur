@@ -1,3 +1,10 @@
+---
+title: CodeQL alert triage and automated issue creation
+date: 2026-04-13
+category: engineering
+tags: [security-issues, ci/github-actions]
+---
+
 # Learning: CodeQL alert triage and automated issue creation
 
 ## Problem

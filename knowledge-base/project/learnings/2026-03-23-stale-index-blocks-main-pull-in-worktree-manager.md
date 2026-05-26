@@ -1,3 +1,10 @@
+---
+title: Stale git index on main checkout blocks worktree-manager pull
+date: 2026-03-23
+category: workflow-patterns
+tags: [ci-issues, worktree-manager, medium, git-index, cleanup-merged, stale-state, self-reinforcing-failure]
+---
+
 # Learning: Stale git index on main checkout blocks worktree-manager pull
 
 ## Problem

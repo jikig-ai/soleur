@@ -1,17 +1,15 @@
 ---
-module: Web Platform
+title: 'Production Observability: Sentry, Pino, Health Endpoint, Better Stack'
 date: 2026-03-28
-problem_type: integration_issue
+category: engineering
+tags: [sentry, pino, observability, health-endpoint, better-stack, csp-report-uri, deploy-verification]
+symptoms: [Client-side JS exceptions invisible — CSP nonce bug (#1213) went undetected, No structured logging — console.* with ad-hoc tags, Docker log rotation at 30MB, No uptime monitoring — server outages are silent, No deploy verification — docker restart doesn't apply new images]
+module: Web Platform
 component: tooling
-symptoms:
-  - "Client-side JS exceptions invisible — CSP nonce bug (#1213) went undetected"
-  - "No structured logging — console.* with ad-hoc tags, Docker log rotation at 30MB"
-  - "No uptime monitoring — server outages are silent"
-  - "No deploy verification — docker restart doesn't apply new images"
+problem_type: integration_issue
 resolution_type: tooling_addition
 root_cause: incomplete_setup
 severity: high
-tags: [sentry, pino, observability, health-endpoint, better-stack, csp-report-uri, deploy-verification]
 ---
 
 # Production Observability: Sentry, Pino, Health Endpoint, Better Stack

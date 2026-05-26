@@ -4,7 +4,6 @@ import { Badge } from "@/components/ui/badge";
 import { GoldButton } from "@/components/ui/gold-button";
 import { OutlinedButton } from "@/components/ui/outlined-button";
 import { Card } from "@/components/ui/card";
-import { serif } from "./fonts";
 
 interface GitHubResolveStateProps {
   onContinue: () => void;
@@ -16,7 +15,7 @@ export function GitHubResolveState({ onContinue, onBack }: GitHubResolveStatePro
     <div className="mx-auto max-w-lg space-y-8">
       <div className="space-y-4 text-center">
         <Badge>QUICK SETUP</Badge>
-        <h1 className={`${serif.className} text-4xl font-semibold`}>
+        <h1 className="text-4xl font-semibold">
           Connect to GitHub
         </h1>
         <p className="text-base text-soleur-text-secondary">

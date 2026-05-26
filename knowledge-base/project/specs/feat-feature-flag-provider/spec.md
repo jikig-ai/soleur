@@ -2,7 +2,7 @@
 
 **Issue:** #2409
 **Branch:** `feat-feature-flag-provider`
-**Status:** Draft
+**Status:** Phase 1-3 shipped (PR #2408, env-var only). Phase 4 (Flagsmith) splits across two PRs per `knowledge-base/project/plans/2026-05-22-feat-flagsmith-adoption-plan-v2.md` + ADR-038 v2. PR #1 (2026-05-22) ships the identity-aware resolution path, `users.role` column, and the deferred `FeatureFlagProvider` + `useFeatureFlag` hook from G2. PR #2 (follow-on) ships the three Soleur skills (`flag-create`, `flag-set-role`, `user-set-role`) and the segment-bootstrap script. The v1 plan (`2026-05-21-feat-flagsmith-adoption-plan.md`) was superseded mid-implementation when the per-role targeting requirement surfaced.
 **Brainstorm:** `knowledge-base/project/brainstorms/2026-04-16-runtime-feature-flags-brainstorm.md`
 
 ## Problem Statement

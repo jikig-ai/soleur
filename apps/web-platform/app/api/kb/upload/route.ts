@@ -11,6 +11,10 @@ import path from "path";
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
 import { KB_UPLOAD_EXTENSIONS } from "@/lib/kb-constants";
+import {
+  MAX_AGENT_READABLE_PDF_SIZE,
+  isPdfAttachment,
+} from "@/lib/attachment-constants";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -31,6 +35,23 @@ export async function POST(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
   if (!originValid) return rejectCsrf("api/kb/upload", origin);
 
+  // Content-Length precheck: reject obviously oversized requests in O(1)
+  // before buffering the body via formData(). Defense-in-depth — the value
+  // is spoofable, but the formData parser still caps actual bytes consumed
+  // when the declared size is honest. Slack covers multipart envelope
+  // overhead. A PDF declared above the agent-readable cap is rejected first.
+  const declaredLength = Number(request.headers.get("content-length"));
+  const SLACK_BYTES = 1024 * 1024; // 1 MB for multipart framing/headers
+  if (
+    Number.isFinite(declaredLength) &&
+    declaredLength > MAX_AGENT_READABLE_PDF_SIZE + SLACK_BYTES
+  ) {
+    return NextResponse.json(
+      { error: "Request body too large" },
+      { status: 413 },
+    );
+  }
+
   // Authentication
   const supabase = await createClient();
   const {
@@ -43,8 +64,11 @@ export async function POST(request: Request) {
   // Fetch workspace data. resolveUserKbRoot centralizes the "user row
   // → kbRoot + extras" pattern shared with /api/kb/share and
   // /api/kb/file/*.
+  // PR-C §2.8 (#3244): tenant client minted internally by
+  // resolveUserKbRoot. createServiceClient still constructed below for
+  // downstream consumers (storage / GH installation).
   const serviceClient = createServiceClient();
-  const workspace = await resolveUserKbRoot(serviceClient, user.id, {
+  const workspace = await resolveUserKbRoot(user.id, {
     extras: ["repo_url", "github_installation_id"] as const,
   });
   if (!workspace.ok) return workspace.response;
@@ -103,6 +127,21 @@ export async function POST(request: Request) {
   }
 
   // Validate file size
+  // Closes #3332: PDFs are bounded by the agent-readable cap (24 MB raw),
+  // sized to fit Anthropic's 32 MB encoded request payload after base64
+  // inflation. Defense-in-depth — under current MAX_FILE_SIZE = 20 MB the
+  // generic gate fires first; this branch future-proofs a raise.
+  if (
+    isPdfAttachment({ contentType: file.type, filename: sanitizedName }) &&
+    file.size > MAX_AGENT_READABLE_PDF_SIZE
+  ) {
+    return NextResponse.json(
+      {
+        error: `PDF exceeds the ${Math.round(MAX_AGENT_READABLE_PDF_SIZE / 1024 / 1024)} MB ceiling for the Anthropic API request payload (after base64 encoding)`,
+      },
+      { status: 413 },
+    );
+  }
   if (file.size > MAX_FILE_SIZE) {
     return NextResponse.json(
       { error: `File exceeds maximum size of ${MAX_FILE_SIZE / 1024 / 1024}MB` },

@@ -1,11 +1,12 @@
 ---
+title: Brand mockup export and routing — four traps in the headless Pencil pipeline
 date: 2026-05-05
 category: best-practices
-module: brand-workshop, pencil-setup, ux-design-lead
 tags: [pencil-mcp, headless, brand-workshop, gitignore, image-export, founder-review]
-related_pr: 3233
+module: brand-workshop, pencil-setup, ux-design-lead
 related_branch: feat-brand-guide-light
 related_issue: 3232
+related_pr: 3233
 ---
 
 # Learning: Brand mockup export and routing — four traps in the headless Pencil pipeline

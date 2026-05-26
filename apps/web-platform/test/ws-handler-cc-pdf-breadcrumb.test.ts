@@ -33,6 +33,27 @@ vi.mock("@/lib/supabase/service", () => ({
   serverUrl: "https://test.supabase.co",
 }));
 
+// PR-C §2.7 (#3244): kb-document-resolver now reads via tenant client.
+// Add a thin tenant mock so its `.from("users").select.eq.single` path
+// resolves without touching the real client. workspace_path is not
+// consumed by this test's assertions (the test exercises the
+// breadcrumb-emit path) so a stub-shape is sufficient.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: async () => ({
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          single: async () => ({
+            data: { workspace_path: "/tmp/test-workspace" },
+            error: null,
+          }),
+        }),
+      }),
+    }),
+  }),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
+}));
+
 vi.mock("../server/agent-runner", () => ({
   startAgentSession: vi.fn(),
   sendUserMessage: vi.fn(),

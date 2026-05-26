@@ -23,6 +23,7 @@ import {
   WORKFLOW_END_STATUSES,
   SUBAGENT_COMPLETE_STATUSES,
   INTERACTIVE_PROMPT_KINDS,
+  CONTEXT_RESET_REASONS,
 } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
@@ -217,6 +218,14 @@ const reviewGateResponseSchema = z.strictObject({
   gateId: z.string(),
   selection: z.string(),
 });
+// `abort_turn` (feat-abort-conversation-web PR1, plan §1.2): user-initiated
+// Stop. `userId` is intentionally NOT a wire field — strictObject + the
+// minimum-length conversationId reject forged userIds and empty IDs at the
+// boundary. See plan §"User-Brand Impact" / TR4 cross-user invariant.
+const abortTurnSchema = z.strictObject({
+  type: z.literal("abort_turn"),
+  conversationId: conversationIdSchema,
+});
 const streamSchema = z.strictObject({
   type: z.literal("stream"),
   content: z.string(),
@@ -262,8 +271,17 @@ const sessionStartedSchema = z.strictObject({
   // `interactive_prompt.kind` values this server build can emit. Absent =
   // legacy server, treat as the default 6-kind set. Lets external agents
   // skip a feature-detection round-trip.
+  //
+  // #3464 — `incomingTypes` advertises the curated client→server message
+  // types this server build accepts as stable agent primitives (today:
+  // `["abort_turn"]`). Required-for-protocol and feature-internal
+  // variants are intentionally not advertised. Source of truth:
+  // `apps/web-platform/lib/ws-capabilities.ts`.
   capabilities: z
-    .strictObject({ promptKinds: z.array(z.string()).readonly() })
+    .strictObject({
+      promptKinds: z.array(z.string()).readonly(),
+      incomingTypes: z.array(z.string()).readonly().optional(),
+    })
     .optional(),
 });
 const sessionResumedSchema = z.strictObject({
@@ -275,26 +293,66 @@ const sessionResumedSchema = z.strictObject({
 const sessionEndedSchema = z.strictObject({
   type: z.literal("session_ended"),
   reason: z.string(),
+  // Optional disambiguator for multi-tab clients (feat-abort-conversation-web
+  // PR1). Existing emitters that omit it remain wire-compatible.
+  conversationId: z.string().optional(),
 });
 const usageUpdateSchema = z.strictObject({
   type: z.literal("usage_update"),
   conversationId: z.string(),
+  // Phase 3 (feat-team-workspace-multi-user) — workspace_id for client-side
+  // workspace-grain attribution. Optional for one release cycle so a
+  // rolling prd deploy doesn't drop frames between an old server (without
+  // the field) and a new client. Tighten in a follow-up.
+  workspaceId: z.string().optional(),
   totalCostUsd: z.number(),
   inputTokens: z.number(),
   outputTokens: z.number(),
+  // Cache tokens — widened 2026-05-12 to close the dashboard
+  // cross-check gap vs the Anthropic Console for cached prompts.
+  // `0` when prompt caching is not engaged. `.optional()` for one
+  // release cycle so a rolling prd deploy doesn't drop frames between
+  // an old server (emitting the legacy 3-field shape) and a new client.
+  // Tighten to required in a follow-up after the old build ages out.
+  cacheReadInputTokens: z.number().optional(),
+  cacheCreationInputTokens: z.number().optional(),
 });
 const fanoutTruncatedSchema = z.strictObject({
   type: z.literal("fanout_truncated"),
   dispatched: z.number(),
   dropped: z.number(),
 });
+// #3269 — context-reset lifecycle notice (prefill-guard fire / tool_use orphan).
+// Mirrors the `fanoutTruncatedSchema` shape (z.strictObject with a literal
+// type discriminator) so the WS lifecycle-notice family stays homogeneous
+// per ADR-025. `reason` derives from `CONTEXT_RESET_REASONS` so the Zod
+// schema, helper return shape, reducer variant, and render-side copy map
+// all share a single source of truth.
+const contextResetSchema = z.strictObject({
+  type: z.literal("context_reset"),
+  reason: z.enum(CONTEXT_RESET_REASONS),
+  conversationId: z.string(),
+});
 const upgradePendingSchema = z.strictObject({ type: z.literal("upgrade_pending") });
+// #3930 — cross-process JWT-deny discriminator. See lib/types.ts WSMessage
+// revocation_notice variant for the full prose. `reason` and `deniedAt` are
+// nullable because the underlying `my_revocation_status()` RPC returns NULL
+// columns when the deny row pre-dates the schema columns (legacy paths).
+const revocationNoticeSchema = z.strictObject({
+  type: z.literal("revocation_notice"),
+  reason: z.string().nullable(),
+  deniedAt: z.string().nullable(),
+});
 const errorSchema = z.strictObject({
   type: z.literal("error"),
   message: z.string(),
   errorCode: z
     .enum([
       "key_invalid",
+      // Phase 3.2 AC-D (#4229) — fail-closed when keyOwnerUserId has no
+      // api_keys row. Distinct from key_invalid (which means key exists
+      // but is unusable).
+      "byok_key_missing",
       "session_expired",
       "session_resumed",
       "rate_limited",
@@ -418,6 +476,7 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   resumeSessionSchema,
   closeConversationSchema,
   reviewGateResponseSchema,
+  abortTurnSchema,
   streamSchema,
   streamStartSchema,
   streamEndSchema,
@@ -429,8 +488,10 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   sessionEndedSchema,
   usageUpdateSchema,
   fanoutTruncatedSchema,
+  contextResetSchema,
   upgradePendingSchema,
   errorSchema,
+  revocationNoticeSchema,
   subagentSpawnSchema,
   subagentCompleteSchema,
   workflowStartedSchema,

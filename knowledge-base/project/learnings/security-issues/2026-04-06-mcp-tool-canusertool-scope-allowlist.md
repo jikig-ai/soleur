@@ -1,15 +1,15 @@
 ---
-module: web-platform/agent-runner
+title: Scope canUseTool MCP tool allow to registered tool names, not prefix
 date: 2026-04-06
-problem_type: security_issue
+category: infrastructure
+tags: [canUseTool, mcp, security, defense-in-depth, agent-sdk]
+symptoms: [canUseTool blanket mcp__ prefix allow auto-approves all MCP tools, Future MCP servers would be auto-allowed without explicit review]
+module: web-platform/agent-runner
+synced_to: []
 component: canUseTool
-symptoms:
-  - "canUseTool blanket mcp__ prefix allow auto-approves all MCP tools"
-  - "Future MCP servers would be auto-allowed without explicit review"
+problem_type: security_issue
 root_cause: overly_broad_allow_rule
 severity: medium
-tags: [canUseTool, mcp, security, defense-in-depth, agent-sdk]
-synced_to: []
 ---
 
 # Learning: Scope canUseTool MCP tool allow to registered tool names, not prefix

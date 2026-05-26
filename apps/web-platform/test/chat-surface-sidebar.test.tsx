@@ -94,7 +94,13 @@ describe("ChatSurface variant=\"sidebar\"", () => {
   });
 
   it("renders cost estimate when usageData.totalCostUsd > 0", async () => {
-    wsReturn.usageData = { totalCostUsd: 0.0123, inputTokens: 0, outputTokens: 0 };
+    wsReturn.usageData = {
+      totalCostUsd: 0.0123,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+    };
     await renderSidebar();
     expect(screen.getByText(/~\$0\.0123/)).toBeInTheDocument();
   });

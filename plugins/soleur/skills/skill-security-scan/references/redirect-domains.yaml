@@ -1,0 +1,27 @@
+# Vendor redirect/tracking domain list for category 5.
+#
+# Hosts in this list, when present in install-time SKILL.md/agent content,
+# emit HIGH-RISK regardless of utm tags. Matched on parsed URL host segment.
+
+redirect_hosts:
+  - bit.ly
+  - lnkd.in
+  - t.co
+  - tinyurl.com
+  - goo.gl
+  - ow.ly
+  - buff.ly
+  - is.gd
+  - cutt.ly
+  - rebrand.ly
+  - shorturl.at
+
+# Tracking subdomain prefixes — match if URL host starts with one of these.
+tracking_host_prefixes:
+  - trk.
+  - track.
+  - r.
+  - links.
+  - email.
+  - click.
+  - pixel.

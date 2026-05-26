@@ -6,7 +6,6 @@ import { ArrowLeftIcon, SearchIcon, SpinnerIcon, ChevronDownIcon, RefreshIcon } 
 import { Badge } from "@/components/ui/badge";
 import { GoldButton } from "@/components/ui/gold-button";
 import { relativeTime } from "@/lib/relative-time";
-import { serif } from "./fonts";
 import type { Repo } from "./types";
 
 interface SelectProjectStateProps {
@@ -61,7 +60,7 @@ export function SelectProjectState({ repos, loading, onSelect, onBack, onRefresh
       </div>
 
       <div className="space-y-2">
-        <h1 className={`${serif.className} text-3xl font-semibold`}>
+        <h1 className="text-3xl font-semibold">
           Select a Project
         </h1>
         <p className="text-sm text-soleur-text-secondary">

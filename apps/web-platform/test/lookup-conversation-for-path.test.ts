@@ -14,13 +14,33 @@ import { describe, test, expect, vi, beforeEach } from "vitest";
 //   `LookupConversationResult` no longer includes `"count_failed"` — the
 //   single call collapses both error sources into `"lookup_failed"`.
 
-const { mockFrom, mockReportSilentFallback } = vi.hoisted(() => ({
-  mockFrom: vi.fn(),
-  mockReportSilentFallback: vi.fn(),
-}));
+const { mockFrom, mockReportSilentFallback, FakeRuntimeAuthError } = vi.hoisted(
+  () => ({
+    mockFrom: vi.fn(),
+    mockReportSilentFallback: vi.fn(),
+    FakeRuntimeAuthError: class FakeRuntimeAuthError extends Error {},
+  }),
+);
 
-vi.mock("@/lib/supabase/service", () => ({
-  createServiceClient: vi.fn(() => ({ from: mockFrom })),
+// PR-C §2.5 (#3244): lookup-conversation-for-path.ts now imports from
+// `@/lib/supabase/tenant`. Route `users` (auth probe) → OK; the
+// existing `mockFrom` consumers set up `conversations` chains per-test.
+function probeOkChain() {
+  return {
+    select: () => ({
+      eq: () => ({
+        maybeSingle: async () => ({ data: { id: "ok" }, error: null }),
+      }),
+    }),
+  };
+}
+
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({
+    from: (table: string) =>
+      table === "users" ? probeOkChain() : mockFrom(table),
+  })),
+  RuntimeAuthError: FakeRuntimeAuthError,
 }));
 
 vi.mock("@/server/observability", () => ({

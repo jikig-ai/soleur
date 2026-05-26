@@ -1,3 +1,10 @@
+---
+title: Docker --start-period for slow-initializing containers
+date: 2026-03-19
+category: engineering
+tags: [integration-issues, telegram-bridge]
+---
+
 # Learning: Docker --start-period for slow-initializing containers
 
 ## Problem

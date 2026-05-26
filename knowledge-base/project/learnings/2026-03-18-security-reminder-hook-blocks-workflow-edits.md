@@ -1,3 +1,10 @@
+---
+title: security_reminder_hook blocks workflow file edits and writes
+date: 2026-03-18
+category: security
+tags: [integration-issues, hooks]
+---
+
 # Learning: security_reminder_hook blocks workflow file edits and writes
 
 ## Problem

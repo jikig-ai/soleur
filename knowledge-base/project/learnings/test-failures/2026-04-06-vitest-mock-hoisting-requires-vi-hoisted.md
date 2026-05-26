@@ -1,16 +1,16 @@
 ---
-module: System
+title: vitest vi.mock() factory requires vi.hoisted() for shared mock references
 date: 2026-04-06
-problem_type: test_failure
-component: testing_framework
-symptoms:
-  - "ReferenceError: Cannot access 'mockDeleteWorkspace' before initialization"
-  - "vi.mock factory references variables declared with const before vi.mock"
-root_cause: test_isolation
-resolution_type: code_fix
-severity: medium
+category: engineering
 tags: [vitest, vi-mock, vi-hoisted, mock-hoisting, testing]
+symptoms: [ReferenceError: Cannot access 'mockDeleteWorkspace' before initialization, vi.mock factory references variables declared with const before vi.mock]
+module: System
 synced_to: [work]
+component: testing_framework
+problem_type: test_failure
+resolution_type: code_fix
+root_cause: test_isolation
+severity: medium
 ---
 
 # Learning: vitest vi.mock() factory requires vi.hoisted() for shared mock references

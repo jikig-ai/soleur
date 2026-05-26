@@ -28,6 +28,12 @@ vi.mock("@/server/notifications", () => ({ notifyOfflineUser: vi.fn() }));
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
   warnSilentFallback: vi.fn(),
+  // #3369: mirrorWithDebounce extracted to observability.
+  // These dispatcher tests do not exercise the debounce TTL, so
+  // the stub forwards every call straight through to the spy.
+  mirrorWithDebounce: vi.fn(),
+  __resetMirrorDebounceForTests: vi.fn(),
+  MIRROR_DEBOUNCE_MS: 5 * 60 * 1000,
 }));
 vi.mock("@/server/logger", () => ({
   default: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },

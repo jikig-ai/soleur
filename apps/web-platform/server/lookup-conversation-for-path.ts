@@ -1,8 +1,11 @@
-// Import from the standalone service module, NOT from @/lib/supabase/server
-// — the latter pulls in `next/headers` at module load, which breaks the
+// Import from `@/lib/supabase/tenant`, NOT from `@/lib/supabase/server` —
+// the latter pulls in `next/headers` at module load, which breaks the
 // non-Next dev-server bundle (esbuild-built server/index.ts → ws-handler
 // → agent-runner → conversations-tools → this module).
-import { createServiceClient } from "@/lib/supabase/service";
+import {
+  getFreshTenantClient,
+  RuntimeAuthError,
+} from "@/lib/supabase/tenant";
 import { reportSilentFallback } from "@/server/observability";
 
 /**
@@ -22,8 +25,12 @@ import { reportSilentFallback } from "@/server/observability";
  *   - `{ ok: true, row: ConversationRow }` — hit
  *   - `{ ok: false, error: "lookup_failed" }` — Supabase error. Caller decides.
  *
- * Internally uses the service client (RLS bypassed) because callers have
- * already authenticated the user and validated the path.
+ * PR-C §2.5 (#3244): migrated to `getFreshTenantClient(userId)` —
+ * RLS on `conversations` enforces `auth.uid() = user_id` underneath
+ * the explicit `.eq("user_id", userId)` filter. The embedded
+ * `messages(count)` aggregate is RLS-filtered through the FK-join,
+ * so a cross-tenant lookup returns `{ row: null }` (the maybeSingle
+ * result of a 0-row SELECT is null) without leaking any state.
  */
 export interface ConversationRow {
   id: string;
@@ -46,8 +53,36 @@ export async function lookupConversationForPath(
   // repo cannot leak back into a freshly-connected project.
   if (!repoUrl) return { ok: true, row: null };
 
-  const service = createServiceClient();
-  const { data, error } = await service
+  // PR-C §2.5 (#3244): tenant client + per-handler auth probe.
+  let tenant;
+  try {
+    tenant = await getFreshTenantClient(userId);
+    const { error: probeErr } = await tenant
+      .from("users")
+      .select("id")
+      .eq("id", userId)
+      .maybeSingle();
+    if (probeErr) {
+      reportSilentFallback(probeErr, {
+        feature: "kb-chat",
+        op: "conversation-lookup.auth-probe",
+        extra: { contextPath, userId },
+      });
+      return { ok: false, error: "lookup_failed" };
+    }
+  } catch (err) {
+    if (err instanceof RuntimeAuthError) {
+      reportSilentFallback(err, {
+        feature: "kb-chat",
+        op: "conversation-lookup.auth-probe",
+        extra: { contextPath, userId },
+      });
+      return { ok: false, error: "lookup_failed" };
+    }
+    throw err;
+  }
+
+  const { data, error } = await tenant
     .from("conversations")
     .select("id, context_path, last_active, messages(count)")
     .eq("user_id", userId)

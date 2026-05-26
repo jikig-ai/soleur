@@ -94,6 +94,58 @@ describe("validate-seo.sh", () => {
     expect(stdout).toContain("missing lastmod");
   });
 
+  // Canonical-host gate (#3297) — guards the GSC `Page with redirect` cluster
+  // root cause where sitemap declared apex while live infra 301'd apex→www.
+
+  test("fails when sitemap mixes multiple canonical hosts", async () => {
+    setupSite();
+    writeFileSync(
+      `${TMP_DIR}/sitemap.xml`,
+      '<urlset><url><loc>https://example.com/</loc><lastmod>2026-01-01</lastmod></url><url><loc>https://www.example.com/about/</loc><lastmod>2026-01-01</lastmod></url></urlset>',
+    );
+    const proc = Bun.spawn(["bash", SCRIPT, TMP_DIR], { stdout: "pipe", stderr: "pipe" });
+    const exitCode = await proc.exited;
+    const stdout = await new Response(proc.stdout).text();
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("sitemap.xml mixes multiple hosts");
+  });
+
+  test("fails when sitemap host disagrees with robots.txt Sitemap line", async () => {
+    setupSite({
+      robotsContent: "User-agent: *\nAllow: /\nSitemap: https://www.example.com/sitemap.xml\n",
+    });
+    // Default fixture sitemap uses https://example.com/ which does NOT match the www variant above.
+    const proc = Bun.spawn(["bash", SCRIPT, TMP_DIR], { stdout: "pipe", stderr: "pipe" });
+    const exitCode = await proc.exited;
+    const stdout = await new Response(proc.stdout).text();
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("does not match robots.txt Sitemap line");
+  });
+
+  test("fails when sitemap has zero <loc> entries", async () => {
+    setupSite();
+    writeFileSync(
+      `${TMP_DIR}/sitemap.xml`,
+      '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>',
+    );
+    const proc = Bun.spawn(["bash", SCRIPT, TMP_DIR], { stdout: "pipe", stderr: "pipe" });
+    const exitCode = await proc.exited;
+    const stdout = await new Response(proc.stdout).text();
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("sitemap.xml has no <loc> entries");
+  });
+
+  test("passes when sitemap host matches robots.txt Sitemap line", async () => {
+    setupSite({
+      robotsContent: "User-agent: *\nAllow: /\nSitemap: https://example.com/sitemap.xml\n",
+    });
+    const proc = Bun.spawn(["bash", SCRIPT, TMP_DIR], { stdout: "pipe", stderr: "pipe" });
+    const exitCode = await proc.exited;
+    const stdout = await new Response(proc.stdout).text();
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("sitemap host matches robots.txt Sitemap line");
+  });
+
   test("fails when robots.txt is missing", async () => {
     setupSite({ skipRobots: true });
     const proc = Bun.spawn(["bash", SCRIPT, TMP_DIR], { stdout: "pipe", stderr: "pipe" });

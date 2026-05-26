@@ -1,12 +1,38 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
+import { createHmac } from "node:crypto";
 
-const { mockCaptureException, mockCaptureMessage, mockLoggerError, mockLoggerWarn } =
-  vi.hoisted(() => ({
-    mockCaptureException: vi.fn(),
-    mockCaptureMessage: vi.fn(),
-    mockLoggerError: vi.fn(),
-    mockLoggerWarn: vi.fn(),
-  }));
+// Pepper must be set BEFORE the SUT module loads (module-init reads
+// `process.env.SENTRY_USERID_PEPPER` at top level). vi.hoisted runs above
+// the top-level imports. Pepper-unset (fail-closed) coverage lives in the
+// sibling `observability-pepper-unset.test.ts` file so vitest worker isolation
+// keeps the env clean.
+vi.hoisted(() => {
+  process.env.SENTRY_USERID_PEPPER = "test-pepper";
+});
+
+const TEST_PEPPER = "test-pepper";
+const expectedHashFor = (userId: string) =>
+  createHmac("sha256", TEST_PEPPER).update(userId).digest("hex");
+
+// Frozen golden vector — decouples the test's "did we hash correctly" check
+// from the SUT's formula. If `hashUserId` ever silently switches primitives
+// (scrypt, blake2, truncation), this constant fails before the per-call
+// `expectedHashFor` helpers (which would silently track the new formula).
+// Generated once via `node -e "console.log(require('crypto').createHmac('sha256','test-pepper').update('u1').digest('hex'))"`.
+const GOLDEN_U1_HASH =
+  "d23f7650f3a2d1b52a83870a6412528cb373d6baf3353cba3fd1b421a9c5d7ac";
+
+const {
+  mockCaptureException,
+  mockCaptureMessage,
+  mockLoggerError,
+  mockLoggerWarn,
+} = vi.hoisted(() => ({
+  mockCaptureException: vi.fn(),
+  mockCaptureMessage: vi.fn(),
+  mockLoggerError: vi.fn(),
+  mockLoggerWarn: vi.fn(),
+}));
 
 vi.mock("@sentry/nextjs", () => ({
   captureException: mockCaptureException,
@@ -17,17 +43,69 @@ vi.mock("@/server/logger", () => ({
   default: { error: mockLoggerError, warn: mockLoggerWarn, info: vi.fn(), debug: vi.fn() },
 }));
 
-import { reportSilentFallback, warnSilentFallback } from "../server/observability";
+import {
+  reportSilentFallback,
+  warnSilentFallback,
+  mirrorP0Deduped,
+  hashUserId,
+  __resetMirrorP0DedupForTests,
+} from "../server/observability";
 
 beforeEach(() => {
   mockCaptureException.mockReset();
   mockCaptureMessage.mockReset();
   mockLoggerError.mockReset();
   mockLoggerWarn.mockReset();
+  __resetMirrorP0DedupForTests();
 });
 
-describe("reportSilentFallback", () => {
-  it("routes Error instances to Sentry.captureException with tags and extra", () => {
+describe("hashUserId", () => {
+  it("matches the frozen golden vector for ('u1', 'test-pepper')", () => {
+    // Falsifying primitive drift (e.g., scrypt swap, truncation) — the
+    // per-call expectedHashFor helpers would track such drift silently;
+    // this assertion catches it.
+    expect(hashUserId("u1")).toBe(GOLDEN_U1_HASH);
+  });
+
+  it("is deterministic for a fixed pepper + input", () => {
+    const a = hashUserId("user-abc");
+    const b = hashUserId("user-abc");
+    expect(a).toBe(b);
+    expect(a).toBe(expectedHashFor("user-abc"));
+  });
+
+  it("emits a 64-char hex digest (HMAC-SHA256)", () => {
+    const h = hashUserId("user-abc");
+    expect(h).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("distinct inputs produce distinct hashes", () => {
+    // Birthday-bound collision prob for SHA-256 over 3 inputs is ~10^-77.
+    // Replaces a prior 1000-iteration smoke that added CI runtime without
+    // strengthening the contract beyond the determinism + 64-hex shape
+    // tests above.
+    const hashes = new Set([
+      hashUserId("user-a"),
+      hashUserId("user-b"),
+      hashUserId("user-c"),
+    ]);
+    expect(hashes.size).toBe(3);
+  });
+
+  it("uses the optional pepper arg when provided (prior-pepper lookup contract)", () => {
+    const priorPepper = "prior-pepper";
+    const got = hashUserId("user-abc", priorPepper);
+    const expected = createHmac("sha256", priorPepper)
+      .update("user-abc")
+      .digest("hex");
+    expect(got).toBe(expected);
+    // And the explicit pepper differs from the env-default hash:
+    expect(got).not.toBe(hashUserId("user-abc"));
+  });
+});
+
+describe("reportSilentFallback — userIdHash pseudonymization", () => {
+  it("hashes userId on the Error → captureException path; emits userIdHash, never raw userId", () => {
     const err = new Error("connection refused");
     reportSilentFallback(err, {
       feature: "kb-share",
@@ -36,15 +114,28 @@ describe("reportSilentFallback", () => {
     });
 
     expect(mockCaptureException).toHaveBeenCalledTimes(1);
-    expect(mockCaptureException).toHaveBeenCalledWith(err, {
-      tags: { feature: "kb-share", op: "create" },
-      extra: { userId: "u1", documentPath: "overview/doc.md" },
+    const [errArg, payload] = mockCaptureException.mock.calls[0];
+    expect(errArg).toBe(err);
+    expect(payload.tags).toEqual({ feature: "kb-share", op: "create" });
+    expect(payload.extra).toEqual({
+      userIdHash: expectedHashFor("u1"),
+      documentPath: "overview/doc.md",
     });
+    expect(payload.extra).not.toHaveProperty("userId");
     expect(mockCaptureMessage).not.toHaveBeenCalled();
-    expect(mockLoggerError).toHaveBeenCalledTimes(1);
+
+    // pino mirror also receives userIdHash, not userId.
+    const [ctx] = mockLoggerError.mock.calls[0];
+    expect(ctx).toMatchObject({
+      feature: "kb-share",
+      op: "create",
+      userIdHash: expectedHashFor("u1"),
+      documentPath: "overview/doc.md",
+    });
+    expect(ctx).not.toHaveProperty("userId");
   });
 
-  it("routes non-Error values (string, null, DB error object) to Sentry.captureMessage", () => {
+  it("hashes userId on the non-Error → captureMessage path", () => {
     const pgError = { message: "duplicate key", code: "23505" };
     reportSilentFallback(pgError, {
       feature: "kb-share",
@@ -54,17 +145,18 @@ describe("reportSilentFallback", () => {
 
     expect(mockCaptureException).not.toHaveBeenCalled();
     expect(mockCaptureMessage).toHaveBeenCalledTimes(1);
-    expect(mockCaptureMessage).toHaveBeenCalledWith(
-      "kb-share silent fallback",
-      expect.objectContaining({
-        level: "error",
-        tags: { feature: "kb-share", op: "create" },
-        extra: expect.objectContaining({ err: pgError, userId: "u1" }),
-      }),
-    );
+    const [msg, payload] = mockCaptureMessage.mock.calls[0];
+    expect(msg).toBe("kb-share silent fallback");
+    expect(payload.level).toBe("error");
+    expect(payload.tags).toEqual({ feature: "kb-share", op: "create" });
+    expect(payload.extra).toEqual({
+      err: pgError,
+      userIdHash: expectedHashFor("u1"),
+    });
+    expect(payload.extra).not.toHaveProperty("userId");
   });
 
-  it("uses a custom message when provided (and routes to captureMessage for null err)", () => {
+  it("uses a custom message and hashes userId (null err)", () => {
     reportSilentFallback(null, {
       feature: "accept-terms",
       op: "record",
@@ -72,52 +164,172 @@ describe("reportSilentFallback", () => {
       extra: { userId: "u1" },
     });
 
-    expect(mockCaptureMessage).toHaveBeenCalledWith(
-      "User row not found",
-      expect.objectContaining({
-        level: "error",
-        tags: { feature: "accept-terms", op: "record" },
-      }),
-    );
+    const [msg, payload] = mockCaptureMessage.mock.calls[0];
+    expect(msg).toBe("User row not found");
+    expect(payload.level).toBe("error");
+    expect(payload.tags).toEqual({ feature: "accept-terms", op: "record" });
+    expect(payload.extra.userIdHash).toBe(expectedHashFor("u1"));
+    expect(payload.extra).not.toHaveProperty("userId");
   });
 
   it("does not emit tags.op when op is omitted", () => {
     const err = new Error("boom");
     reportSilentFallback(err, { feature: "shared-token", extra: { token: "abc" } });
 
-    expect(mockCaptureException).toHaveBeenCalledWith(err, {
-      tags: { feature: "shared-token" },
-      extra: { token: "abc" },
-    });
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      err,
+      expect.objectContaining({ tags: { feature: "shared-token" } }),
+    );
   });
 
-  it("always emits a pino logger.error for structured log aggregation", () => {
+  it("passes through extra unchanged when no userId key is present", () => {
+    const err = new Error("boom");
+    reportSilentFallback(err, { feature: "shared-token", extra: { token: "abc" } });
+
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      err,
+      expect.objectContaining({ extra: { token: "abc" } }),
+    );
+  });
+
+  it("hashes a null userId to the 'pepper_unset_null' sentinel (avoids empty-string collision)", () => {
+    const err = new Error("boom");
+    reportSilentFallback(err, {
+      feature: "nullable",
+      extra: { userId: null, other: "value" },
+    });
+    const [, payload] = mockCaptureException.mock.calls[0];
+    expect(payload.extra).toEqual({ userIdHash: "pepper_unset_null", other: "value" });
+    expect(payload.extra).not.toHaveProperty("userId");
+  });
+
+  it("emits a pino logger.error with userIdHash instead of userId", () => {
     const err = new Error("x");
-    reportSilentFallback(err, { feature: "services", op: "delete", extra: { userId: "u2" } });
+    reportSilentFallback(err, {
+      feature: "services",
+      op: "delete",
+      extra: { userId: "u2" },
+    });
 
     expect(mockLoggerError).toHaveBeenCalledTimes(1);
     const [ctx, msg] = mockLoggerError.mock.calls[0];
-    expect(ctx).toMatchObject({ err, feature: "services", op: "delete", userId: "u2" });
+    expect(ctx).toMatchObject({
+      err,
+      feature: "services",
+      op: "delete",
+      userIdHash: expectedHashFor("u2"),
+    });
+    expect(ctx).not.toHaveProperty("userId");
     expect(msg).toBe("services silent fallback");
   });
 });
 
-describe("warnSilentFallback", () => {
-  it("emits at level=warning for both Error and non-Error inputs", () => {
+describe("warnSilentFallback — userIdHash pseudonymization", () => {
+  it("hashes userId on the Error → captureException(level=warning) path", () => {
     const err = new Error("timeout");
-    warnSilentFallback(err, { feature: "stripe-webhook", op: "retry" });
+    warnSilentFallback(err, {
+      feature: "stripe-webhook",
+      op: "retry",
+      extra: { userId: "u3" },
+    });
 
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+    const [errArg, payload] = mockCaptureException.mock.calls[0];
+    expect(errArg).toBe(err);
+    expect(payload.level).toBe("warning");
+    expect(payload.tags).toEqual({ feature: "stripe-webhook", op: "retry" });
+    expect(payload.extra).toEqual({ userIdHash: expectedHashFor("u3") });
+    expect(payload.extra).not.toHaveProperty("userId");
+
+    const [pinoCtx] = mockLoggerWarn.mock.calls[0];
+    expect(pinoCtx).toMatchObject({
+      feature: "stripe-webhook",
+      op: "retry",
+      userIdHash: expectedHashFor("u3"),
+    });
+    expect(pinoCtx).not.toHaveProperty("userId");
+  });
+
+  it("hashes userId on the non-Error → captureMessage(level=warning) path", () => {
+    warnSilentFallback("string-error", {
+      feature: "foo",
+      extra: { userId: "u4" },
+    });
+
+    expect(mockCaptureMessage).toHaveBeenCalledTimes(1);
+    const [msg, payload] = mockCaptureMessage.mock.calls[0];
+    expect(msg).toBe("foo silent fallback");
+    expect(payload.level).toBe("warning");
+    expect(payload.extra.userIdHash).toBe(expectedHashFor("u4"));
+    expect(payload.extra).not.toHaveProperty("userId");
+  });
+
+  it("passes through extra unchanged when no userId key is present", () => {
+    const err = new Error("boom");
+    warnSilentFallback(err, {
+      feature: "noop",
+      extra: { other: "value" },
+    });
     expect(mockCaptureException).toHaveBeenCalledWith(err, {
       level: "warning",
-      tags: { feature: "stripe-webhook", op: "retry" },
-      extra: undefined,
+      tags: { feature: "noop" },
+      extra: { other: "value" },
     });
-    expect(mockLoggerWarn).toHaveBeenCalledTimes(1);
+  });
+});
 
-    warnSilentFallback("string-error", { feature: "foo" });
-    expect(mockCaptureMessage).toHaveBeenCalledWith(
-      "foo silent fallback",
-      expect.objectContaining({ level: "warning" }),
-    );
+describe("mirrorP0Deduped — userIdHash pseudonymization", () => {
+  it("emits userIdHash in Sentry tags + extra; never raw userId; pino receives userIdHash", () => {
+    const err = new Error("write-boundary violation");
+    mirrorP0Deduped(err, {
+      op: "cc.write-boundary",
+      userId: "user-7",
+      conversationId: "conv-9",
+    });
+
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+    const [errArg, payload] = mockCaptureException.mock.calls[0];
+    expect(errArg).toBe(err);
+    expect(payload.level).toBe("fatal");
+    expect(payload.tags).toEqual({
+      op: "cc.write-boundary",
+      scope: "p0_deduped",
+      userIdHash: expectedHashFor("user-7"),
+    });
+    expect(payload.tags).not.toHaveProperty("userId");
+    expect(payload.extra).toMatchObject({
+      op: "cc.write-boundary",
+      userIdHash: expectedHashFor("user-7"),
+      conversationId: "conv-9",
+      severity: "breach_attempt",
+    });
+    expect(payload.extra).not.toHaveProperty("userId");
+    expect(typeof payload.extra.first_seen_at).toBe("string");
+
+    // pino mirror
+    const [pinoCtx, pinoMsg] = mockLoggerError.mock.calls[0];
+    expect(pinoCtx).toMatchObject({
+      err,
+      op: "cc.write-boundary",
+      userIdHash: expectedHashFor("user-7"),
+      conversationId: "conv-9",
+    });
+    expect(pinoCtx).not.toHaveProperty("userId");
+    expect(pinoMsg).toBe("p0 deduped mirror: cc.write-boundary");
+  });
+
+  it("dedupes the second call within TTL for same (userId, op, conversationId)", () => {
+    const err = new Error("x");
+    mirrorP0Deduped(err, { op: "o", userId: "u", conversationId: "c" });
+    mirrorP0Deduped(err, { op: "o", userId: "u", conversationId: "c" });
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+    expect(mockLoggerError).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT dedupe when conversationId differs (cross-conversation breach)", () => {
+    const err = new Error("x");
+    mirrorP0Deduped(err, { op: "o", userId: "u", conversationId: "c1" });
+    mirrorP0Deduped(err, { op: "o", userId: "u", conversationId: "c2" });
+    expect(mockCaptureException).toHaveBeenCalledTimes(2);
   });
 });

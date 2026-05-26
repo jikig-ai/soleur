@@ -44,6 +44,15 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({ from: mockFrom, rpc: mockRpc })),
 }));
+
+// PR-C §2.4 (#3244): conversation-writer now mints tenant clients via
+// `getFreshTenantClient`. Reuse `mockFrom` so existing per-table chains
+// drive the new code path.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom, rpc: mockRpc })),
+  mintFounderJwt: vi.fn(),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
+}));
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn(), addBreadcrumb: vi.fn() }));
 vi.mock("../server/ws-handler", () => ({ sendToClient: vi.fn() }));
 vi.mock("../server/logger", () => ({
@@ -178,6 +187,14 @@ function setupSupabaseMockForReaper(args: {
               if (col === "user_id") capturedUserId = val;
               return chain;
             }),
+            // #3463: reaper now appends `.in("status", ["active"])` so a
+            // healthy result-branch flip in the candidate-fetch-to-update
+            // window doesn't get stomped. The mock returns the same
+            // chain so the wrapper's `await guardedQuery` resolves
+            // through `.then` above (silent success on the no-op path
+            // is the contract; this mock simulates the row-matched
+            // path so the test continues to exercise the reap flow).
+            in: vi.fn(() => chain),
             select: vi.fn(() => {
               recordWrite();
               return Promise.resolve({

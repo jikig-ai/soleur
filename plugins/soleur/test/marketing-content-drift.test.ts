@@ -59,6 +59,9 @@ let buildAttempted = false;
 let buildOk = false;
 let buildStderr = "";
 
+// 30_000 ms: full Eleventy build measures 5-10s cold; default 5s bun hook
+// timeout flakes. NOTE: bun reports this as `beforeEach/afterEach hook
+// timed out` even for `beforeAll` — grep both when debugging.
 beforeAll(async () => {
   // Build the Eleventy site once for tests 3-5. Argv array (no shell metacharacters).
   buildAttempted = true;
@@ -74,7 +77,7 @@ beforeAll(async () => {
   } else {
     buildOk = true;
   }
-});
+}, 30_000);
 
 describe("marketing-content-drift", () => {
   test("Test 1: prose uses soft floors, not stale exact counts", () => {
@@ -165,10 +168,10 @@ describe("marketing-content-drift", () => {
     }
     expect(orgs.length).toBeGreaterThanOrEqual(1);
     const org = orgs[0];
-    expect(org["@id"]).toBe("https://soleur.ai/#organization");
+    expect(org["@id"]).toBe("https://www.soleur.ai/#organization");
     // founder is a cross-page @id reference (PR #2973); the canonical Person
     // node with name/sameAs/jobTitle lives on /about/.
-    expect(org.founder?.["@id"]).toBe("https://soleur.ai/about/#jean-deruelle");
+    expect(org.founder?.["@id"]).toBe("https://www.soleur.ai/about/#jean-deruelle");
     expect(org.foundingDate).toMatch(/^\d{4}(-\d{2}(-\d{2})?)?$/);
   });
 

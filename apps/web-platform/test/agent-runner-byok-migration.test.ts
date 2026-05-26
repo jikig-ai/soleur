@@ -35,6 +35,30 @@ vi.mock("@/lib/supabase/service", () => ({
     from: mockSupabaseFrom,
     rpc: mockSupabaseRpc,
   }),
+  getServiceClient: () => ({
+    from: mockSupabaseFrom,
+    rpc: mockSupabaseRpc,
+  }),
+  serverUrl: () => "https://test.supabase.co",
+}));
+
+// PR-B (#3244 §1.5.1): getFreshTenantClient routes user-scoped reads
+// through a tenant JWT. Stub it onto the same mockFrom/mockRpc chain
+// the test already wires so the existing assertions still apply.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({
+    from: mockSupabaseFrom,
+    rpc: mockSupabaseRpc,
+  })),
+  mintFounderJwt: vi.fn(),
+  RuntimeAuthError: class RuntimeAuthError extends Error {
+    cause: string;
+    constructor(cause: string, msg: string) {
+      super(msg);
+      this.name = "RuntimeAuthError";
+      this.cause = cause;
+    }
+  },
 }));
 
 vi.mock("@/server/byok", () => ({
@@ -85,7 +109,11 @@ function setupSelectChain(rows: Record<string, unknown>[]) {
   (chain as any).eq = () => chain;
   // biome-ignore lint/suspicious/noExplicitAny: dynamic chain object
   (chain as any).limit = () => ({
+    // Phase 3 #4229 — both single() and maybeSingle() supported; lease
+    // switched to maybeSingle so the no-row branch returns
+    // (null, null) → MissingByokKeyError, not an Error.
     single: () => ({ data: rows[0] ?? null, error: rows[0] ? null : new Error("not found") }),
+    maybeSingle: () => ({ data: rows[0] ?? null, error: null }),
   });
   // biome-ignore lint/suspicious/noExplicitAny: thenable for `await select().eq().eq()`
   (chain as any).then = (resolve: (v: unknown) => void) =>

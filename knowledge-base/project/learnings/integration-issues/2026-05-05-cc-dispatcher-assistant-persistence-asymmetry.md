@@ -1,17 +1,16 @@
 ---
-module: cc-chat / cc-dispatcher
+title: Persistence asymmetry between parallel runner paths surfaces as UI-only bug on resume
 date: 2026-05-05
-problem_type: integration_issue
+category: engineering
+tags: [cc-chat, persistence-asymmetry, parallel-runner-paths, supabase-messages, isClassifying-gate]
+symptoms: [Continue thread on KB doc shows routing chip ("Soleur Concierge is routing to the right experts...") instead of the prior assistant reply, Resumed cc-chat thread returns user-only message history, isClassifying flips true on already-answered conversations]
+module: cc-chat / cc-dispatcher
+synced_to: [work]
 component: nextjs_route
-symptoms:
-  - 'Continue thread on KB doc shows routing chip ("Soleur Concierge is routing to the right experts...") instead of the prior assistant reply'
-  - "Resumed cc-chat thread returns user-only message history"
-  - "isClassifying flips true on already-answered conversations"
+problem_type: integration_issue
+related_prs: [#3286, #3251, #3276, #3263, #3267, #3237, #3254]
 root_cause: missing_persistence_in_parallel_runner_path
 severity: high
-tags: [cc-chat, persistence-asymmetry, parallel-runner-paths, supabase-messages, isClassifying-gate]
-related_prs: ["#3286", "#3251", "#3276", "#3263", "#3267", "#3237", "#3254"]
-synced_to: [work]
 ---
 
 # Persistence asymmetry between parallel runner paths surfaces as UI-only bug on resume

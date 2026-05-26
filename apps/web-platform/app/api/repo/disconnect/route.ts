@@ -93,7 +93,9 @@ export async function DELETE(request: Request) {
   }
 
   // Best-effort workspace cleanup — deleteWorkspace derives path from
-  // getWorkspacesRoot() + userId, handles non-existent directories.
+  // getWorkspacesRoot() + the workspace identifier, handles non-existent
+  // directories. For a solo user, `user.id` is the workspace_id (N2
+  // invariant — migration 053 §1.1.7).
   try {
     await deleteWorkspace(user.id);
   } catch (err) {

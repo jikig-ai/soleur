@@ -1,3 +1,10 @@
+---
+title: Testing next/dynamic components in vitest with happy-dom
+date: 2026-04-14
+category: engineering
+tags: [test-failures, apps/web-platform]
+---
+
 # Learning: Testing next/dynamic components in vitest with happy-dom
 
 ## Problem

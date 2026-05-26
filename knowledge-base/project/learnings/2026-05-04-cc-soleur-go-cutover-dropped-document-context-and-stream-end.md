@@ -1,9 +1,13 @@
 ---
+title: cc-soleur-go cutover dropped legacy document-context injection and per-turn stream_end
 date: 2026-05-04
 category: integration-issues
 tags: [cc-soleur-go, kb-concierge, regression, sdk-router, streaming-input]
 pr: 3213
-related-prs: [2901, 2923, 2954]
+related-prs:
+  - 2901
+  - 2923
+  - 2954
 ---
 
 # Learning: cc-soleur-go cutover dropped legacy document-context injection and per-turn stream_end

@@ -1,18 +1,15 @@
 ---
-module: System
+title: Bare repo config bleed breaks all git worktrees
 date: 2026-04-02
-problem_type: configuration
-component: git-worktree
-symptoms:
-  - "git rev-parse --is-bare-repository returns true inside worktrees"
-  - "git rev-parse --is-inside-work-tree returns false inside worktrees"
-  - "git commit fails with 'fatal: this operation must be run in a work tree'"
-  - "git push fails from worktree"
-  - "worktree-manager.sh commands fail or produce wrong output"
-root_cause: repositoryformatversion_mismatch
-resolution_type: config_fix
-severity: critical
+category: workflow-patterns
 tags: [git, bare-repo, worktree, extensions.worktreeConfig, repositoryformatversion]
+symptoms: [git rev-parse --is-bare-repository returns true inside worktrees, git rev-parse --is-inside-work-tree returns false inside worktrees, git commit fails with 'fatal: this operation must be run in a work tree', git push fails from worktree, worktree-manager.sh commands fail or produce wrong output]
+module: System
+component: git-worktree
+problem_type: configuration
+resolution_type: config_fix
+root_cause: repositoryformatversion_mismatch
+severity: critical
 ---
 
 # Learning: Bare repo config bleed breaks all git worktrees

@@ -112,14 +112,14 @@ Pages that do not exist but should, based on keyword research and competitive po
 | **Soleur vs. Paperclip** | soleur vs paperclip, AI company orchestration, zero-human company, company orchestration open source | Commercial | **P2** (new) | Paperclip at 14.6k GitHub stars. Infrastructure-layer orchestration vs. domain intelligence. Complementary positioning opportunity. Clipmart upcoming. generated_date: 2026-03-31 |
 | **Soleur vs. Devin** | soleur vs devin, AI software engineer vs AI organization, autonomous coding comparison | Commercial | P2 | Devin at $20/month is the price anchor for autonomous agents. Differentiation: engineering-only vs. 8-domain organization. generated_date: 2026-04-21 |
 | **Soleur vs. Tanka** | soleur vs tanka, AI co-founder comparison, memory AI platform comparison | Commercial | P3 | Tanka claims memory compounding. Need to differentiate: communication-scoped memory vs. cross-domain business memory. generated_date: 2026-05-05 |
-| **Soleur vs. CrewAI** | soleur vs crewai, AI agent framework vs AI organization, multi-agent comparison | Commercial | P3 | Different categories (framework vs. product) but searchers compare them. Honest positioning: CrewAI is for building custom agents, Soleur is a ready-made organization. |
+| **Soleur vs. CrewAI** | soleur vs crewai, AI agent framework vs AI organization, multi-agent comparison | Commercial | P3 | Different categories (framework vs. product) but searchers compare them. Honest positioning: CrewAI is for building custom agents, Soleur is a ready-made organization. generated_date: 2026-05-07 |
 | **Best Claude Code Plugins 2026** | best claude code plugins, top claude code plugins 2026, claude code extensions | Commercial | P2 | High-intent keyword cluster. Soleur should either appear in or create the definitive list. generated_date: 2026-04-30 |
 
 ### 2.2 Pillar Content Pages
 
 | Page | Target Keywords | Search Intent | Priority | Status |
 |------|----------------|---------------|----------|--------|
-| **What Is Company-as-a-Service?** | company as a service, CaaS platform | Informational | P1 | **PUBLISHED** (SAP 5.0/5.0) |
+| **What Is Company-as-a-Service?** | company as a service, CaaS platform | Informational | P1 | **PUBLISHED** (SAP 5.0/5.0) generated_date: 2026-05-12 |
 | **Why Most Agentic Tools Plateau** | agentic engineering, compound knowledge | Informational | P1 | **PUBLISHED** (SAP 4.8/5.0) |
 | **Vibe Coding vs Agentic Engineering** | vibe coding vs agentic engineering, agentic coding | Informational | P1 | Month 1. Audit P2-1, score 18/20. generated_date: 2026-03-24 |
 | **AI Agents for Solo Founders: The Definitive Guide** | AI agents for solo founders, solopreneur AI tools 2026 | Commercial | P1 | Month 1-2. Audit P2-2, score 18/20. generated_date: 2026-03-24 |
@@ -213,3 +213,11 @@ Based on competitive intelligence scan of 2026-03-12, the following comparison p
 ---
 
 _Updated: 2026-04-01. Sources: content-audit.md (2026-03-17), aeo-audit.md (2026-03-17), seo-audit.md (2026-03-17), content-plan.md (2026-03-17), competitive-intelligence.md (2026-03-12). Priority 1 items completed in biweekly growth execution 2026-04-01._
+
+## Auto-Discovered Topics
+
+Topics discovered via `/soleur:growth plan` when the queue was exhausted.
+
+| Topic | Keywords | Source | Generated Date |
+|-------|----------|--------|----------------|
+| How to Run Every Business Department with AI Agents: A Solo Founder's Playbook | how to run company with AI agents, AI agents for every department, solo founder AI agents, delegate to AI agents, AI organization platform, context engineering solo founder | growth plan (auto-discovered) | 2026-05-14 |

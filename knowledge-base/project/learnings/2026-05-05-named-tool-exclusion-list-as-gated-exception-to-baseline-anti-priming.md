@@ -1,24 +1,14 @@
 ---
+title: Named-tool exclusion list as a gated exception to the baseline anti-priming guard (Phase 2 closure of cc-pdf cascade)
 date: 2026-05-05
-problem_type: integration_issue
-component: system_prompt_builder
-severity: high
-tags:
-  - prompt-engineering
-  - cc-pdf
-  - cc-soleur-go
-  - anti-priming
-  - shared-factory
-related_issues:
-  - "#3287"
-  - "#3288"
-  - "#3292"
-  - "#3293"
-  - "#3294"
-related_learnings:
-  - 2026-05-05-baseline-prompt-must-declare-capabilities-or-model-fabricates-missing-tools.md
-  - 2026-05-05-phase-1-instrumentation-when-prior-fix-visibly-missed.md
+category: engineering
+tags: [prompt-engineering, cc-pdf, cc-soleur-go, anti-priming, shared-factory]
 synced_to: []
+component: system_prompt_builder
+problem_type: integration_issue
+related_issues: [#3287, #3288, #3292, #3293, #3294]
+related_learnings: [2026-05-05-baseline-prompt-must-declare-capabilities-or-model-fabricates-missing-tools.md, 2026-05-05-phase-1-instrumentation-when-prior-fix-visibly-missed.md]
+severity: high
 ---
 
 # Learning: Named-tool exclusion list as a gated exception to the baseline anti-priming guard (Phase 2 closure of cc-pdf cascade)
@@ -31,7 +21,7 @@ PR #3253 (the original `READ_TOOL_PDF_CAPABILITY_DIRECTIVE` baseline directive) 
 
 ## Root Cause (two co-confirmed failure modes)
 
-Phase 1 instrumentation (PR #3288) added a Sentry breadcrumb at the cc-soleur-go cold-Query construction site (`apps/web-platform/server/ws-handler.ts:583-613`, `emitConciergeDocumentResolutionBreadcrumb`). The first user reproduction on `web-v0.64.9` (conversationId `73a6ede4-a955-407a-9fbc-2768ea7e1385`, 2026-05-05 18:50:43–18:51:21Z) emitted 6 cold-Query breadcrumbs, all carrying the same payload shape:
+Phase 1 instrumentation (PR #3288) added a Sentry breadcrumb at the cc-soleur-go cold-Query construction site (`apps/web-platform/server/ws-handler.ts:583-613`, `emitConciergeDocumentResolutionBreadcrumb`). The first user reproduction on `web-v0.64.9` (conversationId `deadbeef-dead-beef-dead-beefdeadbeef`, 2026-05-05 18:50:43–18:51:21Z) emitted 6 cold-Query breadcrumbs, all carrying the same payload shape:
 
 ```json
 {

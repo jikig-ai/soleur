@@ -2,10 +2,10 @@
 title: Module-load throw in a client-bundle module collapses every authenticated route
 date: 2026-04-28
 category: runtime-errors
-related_pr: 3014
+tags: [module, load, throw, collapses, auth, surface]
+related_commits: [7d556531]
 related_issue: TBD
-related_commits:
-  - 7d556531  # PR #3007 — JWT-claims guardrails for NEXT_PUBLIC_SUPABASE_ANON_KEY
+related_pr: 3014
 ---
 
 # Module-load throw collapses the entire auth-required surface
@@ -160,7 +160,7 @@ deferred to in-scope.
 
 ## See also
 
-- `knowledge-base/engineering/ops/runbooks/dashboard-error-postmortem.md` — the operator-facing diagnosis + hot-fix runbook
+- `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md` — the operator-facing diagnosis + hot-fix runbook
 - `knowledge-base/engineering/ops/runbooks/canary-probe-set.md` — the canary contract
 - `apps/web-platform/lib/supabase/client.ts` — wrapped validator call site
 - `apps/web-platform/app/error.tsx`, `apps/web-platform/app/(dashboard)/error.tsx` — observability-migrated error boundaries

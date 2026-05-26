@@ -3,10 +3,11 @@
 // per-process PendingPromptRegistry, StartSessionRateLimiter, and
 // SoleurGoRunner instances.
 //
-// Stage 2.12 — bind real-SDK `query()` from `@anthropic-ai/claude-agent-sdk`
-// inside `realSdkQueryFactory`. Behind FLAG_CC_SOLEUR_GO=0 in prod
-// (default) this code path is unreachable; in dev (FLAG_CC_SOLEUR_GO=1)
-// the runner actually invokes the SDK end-to-end. See plan
+// `realSdkQueryFactory` binds the real-SDK `query()` from
+// `@anthropic-ai/claude-agent-sdk` — this is the always-on production
+// cc-soleur-go runner. Originally gated behind FLAG_CC_SOLEUR_GO=1; the
+// flag was retired in #3270 once the soak window (ADR-022) confirmed the
+// new path. See plan
 // `2026-04-27-feat-stage-2-12-real-sdk-query-factory-binding-plan.md`.
 //
 // V2 follow-ups tracked in #2853 backlog (V2-13: tier-classify in-process
@@ -31,7 +32,6 @@ import { persistAndDownloadAttachments } from "./attachment-pipeline";
  * map flows through automatically.
  */
 const CONVERSATION_STATUS_VALUES = new Set(Object.keys(STATUS_LABELS));
-import { createServiceClient } from "@/lib/supabase/service";
 import {
   createSoleurGoRunner,
   type SoleurGoRunner,
@@ -41,6 +41,8 @@ import {
   type WorkflowEnd,
 } from "./soleur-go-runner";
 import { readCcCostCaps } from "./cc-cost-caps";
+import { WORKFLOW_END_USER_MESSAGES } from "./cc-workflow-end-messages";
+import { persistTurnCost } from "./cost-writer";
 import { PendingPromptRegistry } from "./pending-prompt-registry";
 import {
   createStartSessionRateLimiter,
@@ -57,18 +59,40 @@ import {
   type ConversationRouting,
   type WorkflowName,
 } from "./conversation-routing";
-import { reportSilentFallback } from "./observability";
+import {
+  reportSilentFallback,
+  mirrorWithDebounce,
+  mirrorP0Deduped,
+  __resetMirrorDebounceForTests,
+} from "./observability";
+import { CC_ROUTER_TIER3_DENYLIST } from "./tool-tiers";
 import { updateConversationFor } from "./conversation-writer";
 import {
-  getUserApiKey,
   getUserServiceTokens,
   patchWorkspacePermissions,
 } from "./agent-runner";
+// PR-C §2.11 (#3244): BYOK lease wrap on realSdkQueryFactory — the
+// plaintext API key fetch surface moves from `getUserApiKey(userId)`
+// (which returns a bare string) to `lease.getApiKey()` inside
+// `runWithByokLease`. Closes #3392 (cc-dispatcher BYOK item).
+import {
+  MissingByokKeyError,
+  reportMissingByokKey,
+} from "./byok-lease";
+// BYOK Delegations PR-A (#4232): see note at agent-runner.ts.
+import { resolveKeyOwnerThenLease } from "./byok-resolver";
+import {
+  getFreshTenantClient,
+  RuntimeAuthError,
+} from "@/lib/supabase/tenant";
+import { tryEmitRevocationNotice } from "./revocation-emit";
 import {
   fetchUserWorkspacePath,
   resolveConciergeDocumentContext,
   _resetWorkspacePathCacheForTests,
 } from "./kb-document-resolver";
+import type { DocumentExtractMeta } from "./kb-document-resolver";
+import type { PdfExtractErrorClass } from "./pdf-text-extract";
 
 // Re-export so existing call sites keep working.
 export { resolveConciergeDocumentContext } from "./kb-document-resolver";
@@ -100,18 +124,102 @@ const log = createChildLogger("cc-dispatcher");
 export { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 
-// ---------------------------------------------------------------------------
-// Sentry mirror debounce — per (userId, errorClass) 5-minute TTL.
-// Prevents a misconfigured prod (1 QPS = 86k events/day per failure
-// mode) from flooding Sentry when `realSdkQueryFactory` or
-// `dispatchSoleurGo` catch repeatedly mirrors the same class for one
-// user. First report mirrors; subsequent reports within the window are
-// dropped. The error still propagates to the client unchanged — only
-// the Sentry write is debounced.
-// ---------------------------------------------------------------------------
+// Sentry mirror debounce (`mirrorWithDebounce`) lives in `./observability`
+// (#3369). Per-(userId, errorClass) 5-minute TTL prevents a misconfigured
+// prod (1 QPS = 86k events/day per failure mode) from flooding Sentry.
 
-const MIRROR_DEBOUNCE_MS = 5 * 60 * 1000;
-const _mirrorLastReportedAt = new Map<string, number>();
+/**
+ * Read CC_MCP_ALLOWLIST and return the cc-router's mcpServers config (#2909).
+ *
+ * Phase 1 deny-by-default scaffolding (this PR): returns `{}` for empty /
+ * unset / whitespace-only env. Throws plain Error if any short-name in the
+ * env resolves to a member of `CC_ROUTER_TIER3_DENYLIST` (the 3 Plausible
+ * tools — cross-tenant credentials by construction). Phase 1 does NOT yet
+ * build a populated `soleur_platform` server even when valid non-denylist
+ * names are present — promotion is Phase 2 (#3722).
+ *
+ * Denylist-check-first ordering is pinned: a mixed env value like
+ * `"foo,plausible_create_site"` throws with the Plausible name in the
+ * message regardless of position. Future unknown-name validation (Phase 2)
+ * will fail-closed AFTER the denylist check.
+ *
+ * Exported for unit testability (`test/cc-mcp-tier-allowlist.test.ts`).
+ *
+ * @param env defaults to `process.env`; tests pass a synthetic record.
+ */
+export function readCcMcpAllowlist(
+  env: Record<string, string | undefined> = process.env,
+): Record<string, unknown> {
+  const raw = env.CC_MCP_ALLOWLIST;
+  if (raw === undefined || raw.trim() === "") return {};
+  const names = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  for (const name of names) {
+    const fqn = `mcp__soleur_platform__${name}`;
+    if (CC_ROUTER_TIER3_DENYLIST.has(fqn)) {
+      throw new Error(
+        `CC_MCP_ALLOWLIST contains permanent Tier 3 denylist tool "${name}" — see CC_ROUTER_TIER3_DENYLIST in tool-tiers.ts`,
+      );
+    }
+  }
+  // Phase 1: even with valid non-denylist names present, return {} —
+  // building the populated soleur_platform server lives in Phase 2 (#3722).
+  return {};
+}
+
+/**
+ * Return true when the cc-router iterator observes a `tool_use` block
+ * referencing a `mcp__soleur_platform__*` tool that is NOT in the registered
+ * platform-tool list (#2909 FR2 — Candidate B per Kieran SDK-source read).
+ *
+ * Background: when `mcpServers` is empty (Phase 1 default), the Claude
+ * Agent SDK rejects unknown `mcp__soleur_platform__*` calls at
+ * model-validation time and `canUseTool` is NEVER invoked. The SDK
+ * returns a `tool_result` error to the model with no Sentry signal — a
+ * silent-failure surface that violates `cq-silent-fallback-must-mirror-to-sentry`.
+ * The router's SDK iterator hook (`onToolUse`) is the only observable
+ * surface; this helper is the predicate.
+ *
+ * Exported for unit testability.
+ */
+export function shouldMirrorUnregisteredPlatformToolUse(
+  toolName: string,
+  registeredPlatformToolNames: readonly string[],
+): boolean {
+  if (!toolName.startsWith("mcp__soleur_platform__")) return false;
+  return !registeredPlatformToolNames.includes(toolName);
+}
+
+/**
+ * Registered platform tool names for the cc-router (#2909 FR2 + Phase 2 #3722
+ * promotion hook). Phase 1: empty — `mcpServers === {}` via `readCcMcpAllowlist()`.
+ * Phase 2: populated from `CC_MCP_ALLOWLIST` allowlist outcome. Module-level
+ * constant so the iterator hook's `shouldMirrorUnregisteredPlatformToolUse`
+ * predicate has a single named place to read, preventing drift between the
+ * allowlist source and the mirror predicate at Phase 2 promotion time.
+ */
+const CC_REGISTERED_PLATFORM_TOOL_NAMES: readonly string[] = [];
+
+// Max length cap for `block.name` before passing to Sentry/pino. Defense-in-
+// depth against future model regressions that might emit pathologically long
+// tool names; the SDK validation gate constrains names to the registered
+// catalog today, so this is bounded but not impossible.
+const MAX_TOOL_NAME_LEN_FOR_LOG = 128;
+
+/**
+ * Sanitize a tool name for log emission (#2909 FR2): strip control chars +
+ * Unicode line/paragraph separators (CWE-117 log injection defense-in-depth),
+ * and length-cap. Pino's JSON serialization is the primary defense; this is
+ * a belt-and-suspenders pass per the log-injection-unicode-line-separators
+ * learning.
+ */
+function sanitizeToolNameForLog(name: string): string {
+  return name
+    .replace(/[\x00-\x1f\x7f\u2028\u2029]/g, "?")
+    .slice(0, MAX_TOOL_NAME_LEN_FOR_LOG);
+}
 
 // Hoisted module-level sets (avoid per-call construction in
 // `dispatchSoleurGo` / `handleInteractivePromptResponseCase`).
@@ -124,44 +232,364 @@ const TERMINAL_WORKFLOW_END_STATUSES: ReadonlySet<WorkflowEndStatus> = new Set<
   "idle_timeout",
   "plugin_load_failure",
   "internal_error",
+  // #4440 follow-up to #4418 — JWT-deny is terminal: the session is
+  // gone, retry is impossible without a fresh login. Routes to the
+  // terminal `session_ended` WS event via the same branch as the
+  // other terminal statuses below.
+  "session_revoked",
 ]);
 
-/**
- * User-facing copy for each `WorkflowEndStatus`. Replaces the previous
- * ad-hoc `"Workflow ended (${status}) — retry to continue."` template
- * which leaked an internal status enum to the user.
- *
- * Type-level exhaustiveness: `Record<WorkflowEndStatus, string>` forces
- * every union variant to have an entry — adding a new status to the
- * runner without updating this map is a TS error here. The
- * `_exhaustive: never` rail below is belt-and-suspenders for the rare
- * case where the union is widened via an intersection.
- *
- * Empty string for `"completed"` — that branch is handled via the
- * terminal `session_ended` WS event and never produces a user-visible
- * error message; the empty string is intentional and asserted by the
- * snapshot test.
- */
-export const WORKFLOW_END_USER_MESSAGES: Record<WorkflowEndStatus, string> = {
-  completed: "",
-  cost_ceiling:
-    "This conversation reached the per-workflow cost cap. Start a new conversation to continue.",
-  runner_runaway:
-    "The agent went idle without finishing. Try sending another message to nudge it forward.",
-  user_aborted: "Conversation stopped at your request.",
-  idle_timeout:
-    "This conversation was idle for too long and was closed. Start a new conversation to continue.",
-  plugin_load_failure:
-    "The agent could not start because a plugin failed to load. Try again shortly.",
-  internal_error: "Something went wrong on our side. Try sending the message again.",
-};
+// #3603 W2 — statuses that trigger the assistant-text abort flush. Mirrors
+// the legacy contract at `agent-runner.ts:2044-2055` (writes any non-completed
+// terminal status as `status: "aborted"`). Co-located with
+// `TERMINAL_WORKFLOW_END_STATUSES` so the file has one canonical
+// exhaustiveness rail per status-set. The `_abortFlushExhaustive` rail below
+// is the type-level proof that this set covers every non-`completed`
+// variant — adding a new `WorkflowEnd` variant without listing it here is a
+// TS error.
+const ABORT_FLUSH_STATUSES: ReadonlySet<WorkflowEndStatus> = new Set<
+  WorkflowEndStatus
+>([
+  "cost_ceiling",
+  "runner_runaway",
+  "user_aborted",
+  "idle_timeout",
+  "plugin_load_failure",
+  "internal_error",
+  // #4440 follow-up to #4418 — flush any partial assistant text as
+  // `aborted` BEFORE the terminal session_ended emit. Matches the
+  // semantic of every other non-completed terminal status.
+  "session_revoked",
+]);
 
-// Compile-time exhaustiveness rail. If a new variant lands in
-// `WorkflowEnd["status"]` without an entry above, this assertion will
-// fail (the type narrows to `never` for the missing key).
-const _workflowEndExhaustive: Record<WorkflowEndStatus, string> =
-  WORKFLOW_END_USER_MESSAGES;
-void _workflowEndExhaustive;
+// Compile-time exhaustiveness rail for `ABORT_FLUSH_STATUSES`.
+// `Exclude<WorkflowEndStatus, "completed">` is exactly the set of non-completed
+// statuses; this type assignment forces the keys above to cover that set.
+type AbortFlushStatus = Exclude<WorkflowEndStatus, "completed">;
+const _abortFlushExhaustive: Record<AbortFlushStatus, true> = {
+  cost_ceiling: true,
+  runner_runaway: true,
+  user_aborted: true,
+  idle_timeout: true,
+  plugin_load_failure: true,
+  internal_error: true,
+  session_revoked: true,
+};
+void _abortFlushExhaustive;
+
+// #3642 F7 — Single source of truth for `op` slugs emitted via
+// `reportSilentFallback` / `mirrorWithDebounce` / `mirrorP0Deduped` from
+// this file. Hoisting these literals prevents drift between the production
+// emit site and the test-suite assertions (e.g., an `op` rename in code
+// would silently pass the test if the test still hard-codes the old
+// literal). Test-file imports re-use this constant via the same module
+// path. Registry of slugs is documented in `observability.ts:161-170`.
+export const CC_OP_SLUGS = {
+  saveAssistant: "save-assistant-message-failed",
+  saveAssistantAborted: "save-assistant-message-aborted-failed",
+  usageOrphanDropped: "usage_orphan_dropped",
+  ccPersistUsageOn: "cc-persist-usage-on",
+  persistUserMessage: "persist-user-message",
+} as const;
+
+// #3640 F2 — Discriminated `PersistMode` replaces the per-dispatch
+// `AssistantPersistMode` string literal + `AssistantPersistOpts` interface
+// pair. Module-scope so #3641 type-rail move is a no-op (the type already
+// lives outside the `dispatchSoleurGo` closure). The `usage` field is
+// keyed inside each variant so a future `aborted` variant can drop the
+// `usage` field entirely without an `undefined`-vs-`null` ambiguity.
+export type PersistMode =
+  | { kind: "complete"; usage: { costUsd: number } | null }
+  | { kind: "aborted"; usage: { costUsd: number } | null };
+
+// #3639 F1 — Encapsulates the four mutable per-turn cells previously
+// held as `let` bindings inside `dispatchSoleurGo` (the
+// `latestAssistantText` accumulator, the `assistantTurnPersisted` abort
+// flag, the `currentTurnIndex` counter, and the `pendingTurnUsage`
+// cost-capture). One class owns reset-symmetry as a class invariant —
+// `reset()` is the only path that clears all four; every mutator method
+// is paired with the field it mutates so a future change that touches
+// only 3 of 4 fields is caught at code-review time.
+//
+// Method contracts (call sites in `dispatchSoleurGo` events block):
+// - `setText(text)` — `onText` writes the latest streamed text (REPLACE
+//   semantic per chat-state-machine.ts:477 + W8). Named `setText` rather
+//   than `appendText` since the semantic is a complete-replace, not an
+//   append (review #3670 — naming clarity).
+// - `captureUsage(turnIdx, costUsd)` — `onResult` stages cost telemetry
+//   tagged with `turnIdx`. A stale `onResult` tagged against a previous
+//   turn is dropped at consume time by `consumeMatchedUsage`.
+// - `consumeForComplete()` — `onTextTurnEnd` happy path: snapshot text +
+//   matched usage, clear both cells, bump turn index. Snapshot happens
+//   SYNCHRONOUSLY before `saveAssistantMessage` yields the microtask so
+//   a turn-N+1 `onResult` arriving on the same iterator yield cannot
+//   overwrite turn N's snapshot. Returns `null` when the turn is already
+//   aborted — the abort branch is the single authoritative writer once
+//   `_aborted` flips true.
+// - `consumeForAbort()` — `onWorkflowEnded` abort branch: returns text +
+//   matched usage and marks the turn as persisted (so a late
+//   `onTextTurnEnd` is a no-op) when text is present; returns
+//   `{ kind: "orphan" }` when text is absent but usage was captured (W4
+//   orphan); returns `{ kind: "none" }` when neither is present.
+// - `currentTurnIndex()` — read of `_currentTurnIndex` for `onResult`
+//   to tag `captureUsage` with the active turn.
+// - `reset()` — test seam; clears all four fields. Reset-symmetry is a
+//   class invariant (production never resets — per-`dispatchSoleurGo`
+//   instances are GC'd at dispatch end). Kept for `__getStateForTests`-
+//   style override paths and to document the "cells move together"
+//   invariant in code rather than prose.
+export class TurnPersistenceState {
+  private _latestAssistantText = "";
+  private _aborted = false;
+  private _currentTurnIndex = 0;
+  private _pendingTurnUsage: { turnIndex: number; costUsd: number } | null =
+    null;
+
+  /** `onText` — REPLACE the accumulator (W8 invariant). Named `setText`
+   *  rather than `appendText` because the semantic is a complete-replace
+   *  per chat-state-machine.ts:477 — review #3670 (naming clarity). */
+  setText(text: string): void {
+    this._latestAssistantText = text;
+  }
+
+  /** `onResult` — stage per-turn cost tagged with the active turn. */
+  captureUsage(turnIdx: number, costUsd: number): void {
+    this._pendingTurnUsage = { turnIndex: turnIdx, costUsd };
+  }
+
+  /** Active turn index (for `onResult` to tag `captureUsage`). */
+  currentTurnIndex(): number {
+    return this._currentTurnIndex;
+  }
+
+  /**
+   * `onTextTurnEnd` happy path. Snapshots text + matched usage,
+   * synchronously clears the accumulator + pendingUsage, and bumps the
+   * turn index. Returns `null` when there's nothing to persist.
+   */
+  consumeForComplete(): { text: string; usage: { costUsd: number } | null } | null {
+    if (this._aborted) return null;
+    const turnSnapshot = this._currentTurnIndex;
+    const turnUsage =
+      this._pendingTurnUsage?.turnIndex === turnSnapshot
+        ? this._pendingTurnUsage
+        : null;
+    const text = this._latestAssistantText;
+    this._latestAssistantText = "";
+    this._pendingTurnUsage = null;
+    this._currentTurnIndex = turnSnapshot + 1;
+    return {
+      text,
+      usage: turnUsage ? { costUsd: turnUsage.costUsd } : null,
+    };
+  }
+
+  /**
+   * `onWorkflowEnded` abort branch. Three outcomes:
+   * - `{ kind: "text"; text; usage }` — text present, abort row should
+   *   be written. Marks turn as persisted (suppresses late onTextTurnEnd).
+   * - `{ kind: "orphan" }` — text absent but usage was captured (W4
+   *   orphan). Caller fires `mirrorP0Deduped`. Clears pendingUsage.
+   * - `{ kind: "none" }` — neither text nor usage; no-op.
+   */
+  consumeForAbort():
+    | { kind: "text"; text: string; usage: { costUsd: number } | null }
+    | { kind: "orphan" }
+    | { kind: "none" } {
+    if (this._latestAssistantText.length > 0) {
+      const turnUsage =
+        this._pendingTurnUsage?.turnIndex === this._currentTurnIndex
+          ? this._pendingTurnUsage
+          : null;
+      const text = this._latestAssistantText;
+      this._latestAssistantText = "";
+      this._pendingTurnUsage = null;
+      this._aborted = true;
+      return {
+        kind: "text",
+        text,
+        usage: turnUsage ? { costUsd: turnUsage.costUsd } : null,
+      };
+    }
+    if (this._pendingTurnUsage) {
+      this._pendingTurnUsage = null;
+      return { kind: "orphan" };
+    }
+    return { kind: "none" };
+  }
+
+  /** Reset-symmetry invariant: clears ALL four fields. */
+  reset(): void {
+    this._latestAssistantText = "";
+    this._aborted = false;
+    this._currentTurnIndex = 0;
+    this._pendingTurnUsage = null;
+  }
+}
+
+// #3640 F4 — Build the `messages` INSERT row from a `PersistMode`. Module-
+// scope helper keeps `saveAssistantMessage`'s body ≤ 20 LoC; pure function
+// (no I/O), so the assistant-row schema can evolve in one place.
+function buildRow(
+  mode: PersistMode,
+  text: string,
+  conversationId: string,
+): Record<string, unknown> {
+  // #3603 W4 — gated single-read site for `CC_PERSIST_USAGE`. The hot-path
+  // env read is intentional: enables runtime rollback flip without a
+  // process restart, load-bearing for a GDPR-rollback scenario after PR-C.
+  // Exact-match `"true"` only — any other truthy string keeps the flag
+  // off (defense-in-depth against a half-set Doppler value). Default-off
+  // at merge per AC9/AC11.
+  const flagOn = process.env.CC_PERSIST_USAGE === "true";
+  if (flagOn) _observeCcPersistUsageFirstTrue();
+  const usageColumn =
+    flagOn && mode.usage ? { cost_usd: mode.usage.costUsd } : null;
+
+  const row: Record<string, unknown> = {
+    id: randomUUID(),
+    conversation_id: conversationId,
+    role: "assistant",
+    content: text,
+    tool_calls: null,
+    leader_id: CC_ROUTER_LEADER_ID,
+    usage: usageColumn,
+  };
+  // Omit `status` for the normal completion path — migration 040's
+  // DEFAULT of `'complete'` applies. Only the abort branch writes
+  // `status: "aborted"` explicitly.
+  switch (mode.kind) {
+    case "complete":
+      break;
+    case "aborted":
+      row.status = "aborted";
+      break;
+    default: {
+      const _exhaustive: never = mode;
+      void _exhaustive;
+    }
+  }
+  return row;
+}
+
+// #3640 F4 — Mirror a `messages` INSERT failure through `mirrorWithDebounce`.
+// The op-slug is picked by `mode.kind` so the `op` + `errorClass` (dedupe
+// key) match — drift between them would silently split the Sentry stream.
+function mirrorInsertError(
+  error: unknown,
+  mode: PersistMode,
+  userId: string,
+  conversationId: string,
+  fullText: string,
+): void {
+  // Symmetric with `buildRow`'s exhaustiveness rail (review #3670): assign
+  // to a `never`-typed local and use a sentinel return so the compile
+  // error fires at the switch, not at the (never-reached) IIFE return.
+  let opSlug: string;
+  switch (mode.kind) {
+    case "complete":
+      opSlug = CC_OP_SLUGS.saveAssistant;
+      break;
+    case "aborted":
+      opSlug = CC_OP_SLUGS.saveAssistantAborted;
+      break;
+    default: {
+      const _exhaustive: never = mode;
+      void _exhaustive;
+      opSlug = CC_OP_SLUGS.saveAssistant; // unreachable; compile error if PersistMode gains a variant
+    }
+  }
+  // Route through `mirrorWithDebounce` (per-(userId, errorClass) 5-min TTL)
+  // — a misconfigured Supabase RLS for one user could otherwise emit one
+  // Sentry event per assistant turn (10 turns/conv × 100 active convs =
+  // 1000 events/hr).
+  mirrorWithDebounce(
+    error,
+    {
+      feature: "cc-dispatcher",
+      op: opSlug,
+      extra: { userId, conversationId, length: fullText.length },
+    },
+    userId,
+    opSlug,
+  );
+}
+
+// #3603 W1 — Write-boundary tenant-isolation sentinel.
+//
+// Post-PR-C, cc-dispatcher.ts writes via tenant-scoped clients
+// (`getFreshTenantClient(userId)`). RLS on `messages` enforces the FK-join
+// through `conversations.user_id`, but a bug routing user A's dispatch with
+// user B's `conversation_id` could still produce a structurally-legal write
+// (A's JWT, A-owned `conversation_id`) that misroutes payload. This helper
+// is the single sentinel call site that every assistant-row write runs
+// through.
+//
+// At HEAD the SDK callback shape (`DispatchEvents` in `soleur-go-runner.ts`)
+// does NOT carry payload-derived `user_id` / `conversation_id`, so the
+// dispatch closure is the only source of truth — the sentinel returns `true`
+// unconditionally and is essentially a placeholder. Its load-bearing role is
+// **forward**: when a future SDK callback exposes payload identifiers, the
+// helper signature gains those params and a mismatch check + `mirrorP0Deduped`
+// call goes inside this function — a single edit point.
+//
+// Returns `boolean` rather than throwing: the call sites are
+// `void saveAssistantMessage(...)` (fire-and-forget at lines ~1129 and ~1163);
+// throwing across the `void` boundary turns into an unhandled promise rejection.
+// Halt is `if (!assertWriteScope(...)) return;`.
+function assertWriteScope(
+  dispatchUserId: string,
+  dispatchConversationId: string,
+): boolean {
+  if (_assertWriteScopeOverride) {
+    return _assertWriteScopeOverride(dispatchUserId, dispatchConversationId);
+  }
+  // Sentinel: no payload source exists today, so the dispatch closure
+  // identity IS the write scope. Always-true.
+  return true;
+}
+
+// Test seam — never use in production. The sentinel returns `true`
+// unconditionally; tests force `false` via this hook to prove every
+// assistant-row write call site runs through the helper. The exported
+// setter/resetter functions (#3641 — relocated) live in the bottom-of-
+// file test-seam block alongside `__resetDispatcherForTests` and
+// `__setCcRunnerForTests` so all test-only exports cluster in one place.
+let _assertWriteScopeOverride:
+  | ((u: string, c: string) => boolean)
+  | null = null;
+
+// #3603 PR-A2 review H4 — `CC_PERSIST_USAGE=true` is the trigger for a new
+// GDPR-regulated persisted category (Art. 13(3) prior-disclosure surface).
+// Mirror the FIRST observation per process via `reportSilentFallback` so
+// post-hoc Art. 33 evidence ("when did this process start writing
+// messages.usage?") doesn't depend on Doppler audit-log correlation. The
+// pino + Sentry payload from `reportSilentFallback` carries a server-side
+// timestamp + `feature` tag; aggregation by `op: CC_OP_SLUGS.ccPersistUsageOn`
+// gives the operator a per-process flip timeline.
+let _ccPersistUsageFirstTrueObserved = false;
+function _observeCcPersistUsageFirstTrue(): void {
+  if (_ccPersistUsageFirstTrueObserved) return;
+  _ccPersistUsageFirstTrueObserved = true;
+  reportSilentFallback(null, {
+    feature: "cc-dispatcher",
+    op: CC_OP_SLUGS.ccPersistUsageOn,
+    message:
+      "CC_PERSIST_USAGE=true observed for first time in this process — messages.usage writes are now active",
+    extra: {
+      // Anchors the 72h Art. 33 clock to a server-side timestamp the
+      // operator can correlate against Doppler change events.
+      first_observed_at: new Date().toISOString(),
+    },
+  });
+}
+
+// Test seam — reset the once-observed flag so multiple unit tests can
+// exercise the breadcrumb path without cross-test bleed. Never call from
+// production code.
+export function __resetCcPersistUsageObservationForTests(): void {
+  _ccPersistUsageFirstTrueObserved = false;
+}
 
 type InteractivePromptResponseError =
   | "invalid_payload"
@@ -177,22 +605,6 @@ const MIRROR_INTERACTIVE_RESPONSE_ERRORS: ReadonlySet<
   "kind_mismatch",
 ]);
 
-function mirrorWithDebounce(
-  err: unknown,
-  ctx: Parameters<typeof reportSilentFallback>[1],
-  userId: string,
-  errorClass: string,
-): void {
-  const key = `${userId}:${errorClass}`;
-  const now = Date.now();
-  const last = _mirrorLastReportedAt.get(key);
-  if (last !== undefined && now - last < MIRROR_DEBOUNCE_MS) {
-    return;
-  }
-  _mirrorLastReportedAt.set(key, now);
-  reportSilentFallback(err, ctx);
-}
-
 // ---------------------------------------------------------------------------
 // Singletons
 // ---------------------------------------------------------------------------
@@ -200,6 +612,71 @@ function mirrorWithDebounce(
 let _registry: PendingPromptRegistry | null = null;
 let _reaperInterval: ReturnType<typeof setInterval> | null = null;
 const REAPER_INTERVAL_MS = 5 * 60 * 1000;
+
+/**
+ * Tool-surface configuration for the cc-soleur-go router.
+ *
+ * Two SDK options govern tool surface, with DIFFERENT semantics
+ * (sdk.d.ts:855-892):
+ *   - `allowedTools`: AUTO-APPROVE list — pre-approves without canUseTool.
+ *   - `disallowedTools`: HARD-BLOCK list — removes from model context entirely.
+ *   - `tools`: closed allowlist of available built-ins (alternative to
+ *     disallowedTools).
+ *
+ * The cc-router's primary job is to dispatch via the Skill tool to a routed
+ * sub-skill; it never needs Edit or Write itself, so those stay hard-blocked.
+ *
+ * Bash routing (#3338 → #3344). Bash was originally hard-blocked alongside
+ * Edit/Write because it triggered a `find . -name "*.pdf"` / `apt-get install
+ * poppler-utils` modal cascade when the agent tried to summarize a large PDF
+ * (review-gate modals popping in the end-user Concierge surface). Two
+ * structural mitigations have since landed and made the hard-block over-broad:
+ *
+ *   - #3338 PDF Read 24 MB ceiling — large PDFs route through the gated
+ *     directive instead of the inline-Read path that triggered the cascade.
+ *   - #3430 page-count gate on the PDF soft-route — large PDFs are
+ *     classified before the agent attempts inline read.
+ *
+ * Bash now routes through `canUseTool` and shares the legacy path's
+ * `safe-bash` allowlist (`apps/web-platform/server/safe-bash.ts`). Read-only
+ * KB-exploration verbs (`pwd`, `ls`, `cat`, `head`, `tail`, `wc`, `git
+ * status/log/diff/show/branch/rev-parse`, `echo`, etc.) auto-approve with no
+ * modal; verbs NOT in the allowlist (including `find`/`grep`/`rg`/`apt-get` —
+ * intentionally omitted per the omission rationale at the top of
+ * `safe-bash.ts` because they accept `-exec` and
+ * could shell out) still route to `review_gate`. The structural mitigations
+ * above prevent the cascade triggers, and the allowlist covers the verbs the
+ * cc-router actually emits during KB exploration. See Closes #3344.
+ *
+ * The auto-approve list (`CC_PATH_ALLOWED_TOOLS`) is kept as a separate
+ * concern: it eliminates a `canUseTool` round-trip for read-only tools
+ * (Read, Glob, Grep, LS, NotebookRead, TodoWrite, ExitPlanMode) the cc-router
+ * legitimately uses on its own. This is auto-approve, not restriction.
+ *
+ * Routed sub-skills load their own toolset via the soleur plugin and the
+ * legacy domain-leader path (`agent-runner.ts startAgentSession`), so the
+ * Edit/Write narrowing is scoped to the cc-router only — exploration within
+ * routed workflows is unaffected.
+ */
+const CC_PATH_ALLOWED_TOOLS: readonly string[] = [
+  "Read",
+  "Glob",
+  "Grep",
+  "LS",
+  "NotebookRead",
+  "TodoWrite",
+  "ExitPlanMode",
+];
+
+/**
+ * Tools removed from the cc-router's surface entirely. Adds to the
+ * canonical `[WebSearch, WebFetch]` shared with the legacy path.
+ *
+ * Bash was removed from this list in #3344 — see the routing rationale on
+ * the doc-comment block above. Bash now routes through `canUseTool` and
+ * shares the legacy path's `safe-bash` allowlist + review_gate fallback.
+ */
+const CC_PATH_DISALLOWED_TOOLS: readonly string[] = ["Edit", "Write"];
 
 export function getPendingPromptRegistry(): PendingPromptRegistry {
   if (_registry) return _registry;
@@ -371,8 +848,7 @@ export function cleanupCcBashGatesForConversation(
 }
 
 // ---------------------------------------------------------------------------
-// realSdkQueryFactory — Stage 2.12 binding (replaces the prior stub
-// that throw-mirrored to Sentry under FLAG_CC_SOLEUR_GO).
+// realSdkQueryFactory — Stage 2.12 binding (unconditional since #3270).
 //
 // Builds a real `Query` per cold conversation. Mirrors
 // `agent-runner.ts startAgentSession` `query({ options })` shape with
@@ -395,12 +871,6 @@ export function cleanupCcBashGatesForConversation(
 // the factory once per cold conversation; reused dispatches skip.
 // ---------------------------------------------------------------------------
 
-let _supabase: ReturnType<typeof createServiceClient> | null = null;
-function supabase() {
-  if (!_supabase) _supabase = createServiceClient();
-  return _supabase;
-}
-
 // `fetchUserWorkspacePath`, `resolveConciergeDocumentContext`, and the
 // per-process workspace memo were extracted to `./kb-document-resolver`
 // so this orchestration module no longer owns filesystem responsibilities
@@ -421,11 +891,50 @@ function supabase() {
 export const realSdkQueryFactory: QueryFactory = async (
   args: QueryFactoryArgs,
 ): Promise<Query> => {
-  const [workspacePath, apiKey, serviceTokens] = await Promise.all([
-    fetchUserWorkspacePath(args.userId),
-    getUserApiKey(args.userId),
-    getUserServiceTokens(args.userId),
-  ]);
+  // PR-C §2.11 (#3244): wrap body in `runWithByokLease` so the plaintext
+  // Anthropic key is zeroized on exit and captured-leak attempts throw
+  // `ByokLeaseError{cause:"escape"}`. Mirrors agent-runner.ts's
+  // startAgentSession pattern at :863 + sendUserMessage routing at
+  // :2360. By the time this body returns the Query AsyncGenerator,
+  // `sdkQuery({apiKey, ...})` below has already passed the key into the
+  // SDK's internal state — the lease's finally-zeroize fires after the
+  // SDK has captured what it needs.
+  // Phase 3 (feat-team-workspace-multi-user): N2 invariant pins
+  // workspaceContextUserId === keyOwnerUserId for solo workspaces;
+  // team workspaces will diverge when Phase 4 invite flow ships.
+  // Sentinel sweep site #3 (#4232 PR-A). callerUserId = args.userId
+  // (server-derived per cc-dispatcher contract; provenance in PR body).
+  // N2 solo invariant kept: callerUserId === workspaceContextUserId.
+  return resolveKeyOwnerThenLease(
+    args.userId,
+    args.userId,
+    async (lease): Promise<Query> => {
+    // BYOK Delegations PR-A (#4232) closure-capture: publish the lease
+    // context to the dispatcher before the lease scope closes. The
+    // Query iterator is consumed by the runner ASYNC AFTER this factory
+    // returns — by then `slot.alive = false` and `lease.delegationId`
+    // is unreachable. The dispatcher's onResult callback reads from
+    // the closure variable that the sink writes here.
+    args.setDelegationContext?.(
+      lease.delegationId !== undefined
+        ? {
+            delegationId: lease.delegationId,
+            callerUserId: lease.workspaceContextUserId,
+          }
+        : undefined,
+    );
+
+    // Plan §2.11 canonical pattern (mirrors agent-runner.ts:2361):
+    // hoist `await lease.getApiKey()` OUT of `Promise.all` so the
+    // `string | Promise<string>` union in `getApiKey`'s return type
+    // does not surface awkwardly through `Promise.all`'s array element
+    // inference. `buildAgentQueryOptions.apiKey: string` consumes the
+    // unwrapped value.
+    const apiKey = await lease.getApiKey();
+    const [workspacePath, serviceTokens] = await Promise.all([
+      fetchUserWorkspacePath(args.userId),
+      getUserServiceTokens(args.userId),
+    ]);
 
   // Workspace-permissions patch and the #3250 prefill-guard probe both
   // depend on `workspacePath` but not on each other — parallelize so the
@@ -442,7 +951,28 @@ export const realSdkQueryFactory: QueryFactory = async (
       leaderId: CC_ROUTER_LEADER_ID,
     }),
   ]);
-  const safeResumeSessionId = prefillGuardResult.safeResumeSessionId;
+  const {
+    safeResumeSessionId,
+    contextResetNotice,
+    reason: contextResetReason,
+  } = prefillGuardResult;
+
+  // #3269 — context-reset signal. The notice is appended to systemPrompt
+  // for THIS SDK call only (single-turn; not persisted across turns).
+  // The WS event is the user-side signal; emitted exactly once per guard
+  // fire. SDK retries are internal to the returned Query AsyncGenerator
+  // (sdk.d.ts:1678-1681) and re-enter `query()`, not the factory — so
+  // `applyPrefillGuard` is naturally per-fire and a single emit suffices.
+  if (contextResetReason) {
+    defaultSendToClient(args.userId, {
+      type: "context_reset",
+      reason: contextResetReason,
+      conversationId: args.conversationId,
+    });
+  }
+  const effectiveSystemPrompt = contextResetNotice
+    ? `${args.systemPrompt}\n\n${contextResetNotice}`
+    : args.systemPrompt;
 
   const pluginPath = path.join(workspacePath, "plugins", "soleur");
 
@@ -541,9 +1071,11 @@ export const realSdkQueryFactory: QueryFactory = async (
     // `agent-runner.ts startAgentSession` is guarded by
     // `agent-runner-query-options.test.ts`.
     //
-    // V1 — empty MCP allowlist. V2-13 (#2909) tracks
-    // tier-classification of `kb_share_*`, `conversations_*`,
-    // `github_*`, `plausible_*` for this path before widening.
+    // V2-13 Phase 1 (#2909): `readCcMcpAllowlist()` reads CC_MCP_ALLOWLIST
+    // and returns `{}` for empty/unset (current behavior preserved bit-for-bit),
+    // throws on Tier 3 denylist short-names (3 Plausible tools — permanent,
+    // shared service-token cross-tenant credentials). Promotion of non-denylist
+    // tools is Phase 2 (#3722, blocked-by Stage 6 #2939).
     return sdkQuery({
       prompt: args.prompt,
       options: buildAgentQueryOptions({
@@ -551,9 +1083,17 @@ export const realSdkQueryFactory: QueryFactory = async (
         pluginPath,
         apiKey,
         serviceTokens,
-        systemPrompt: args.systemPrompt,
+        systemPrompt: effectiveSystemPrompt,
         resumeSessionId: safeResumeSessionId,
-        mcpServers: {},
+        mcpServers: readCcMcpAllowlist(),
+        // #3338 — auto-approve the cc-router's read-only tool surface so they
+        // don't pay a canUseTool round-trip per call. This is auto-approve,
+        // not restriction — see CC_PATH_ALLOWED_TOOLS doc comment.
+        allowedTools: [...CC_PATH_ALLOWED_TOOLS],
+        // #3338 — HARD-BLOCK Bash/Edit/Write at the SDK level so the model
+        // cannot emit them (no review_gate modal can appear). Merged with
+        // the canonical [WebSearch, WebFetch] disallowed list.
+        extraDisallowedTools: CC_PATH_DISALLOWED_TOOLS,
         // SubagentStart sanitizer override: cc strips control chars +
         // U+2028/U+2029 (per learning
         // 2026-04-17-log-injection-unicode-line-separators.md) and
@@ -609,6 +1149,7 @@ export const realSdkQueryFactory: QueryFactory = async (
     }
     throw err;
   }
+  }); // end runWithByokLease
 };
 
 let _runner: SoleurGoRunner | null = null;
@@ -696,6 +1237,32 @@ export interface DispatchSoleurGoArgs {
   documentKind?: "pdf" | "text";
   documentContent?: string;
   /**
+   * 2026-05-06 follow-up to #3338. Set by `resolveConciergeDocumentContext`
+   * when the in-process PDF extractor surfaced a typed failure class. The
+   * runner emits `buildPdfUnreadableDirective` (content-grounded reply)
+   * instead of `buildPdfGatedDirective` (apt-get-cascade-prone Read path).
+   */
+  documentExtractError?: PdfExtractErrorClass;
+  /**
+   * 2026-05-07 follow-up to #3429. Per-failure metadata. Currently only
+   * `numPages` (interpolated by `buildPdfTooLongDirective` for the
+   * page-count gate's "I see {N} pages" copy). Without plumbing through
+   * here, the runner reads `?? 0` and the user sees "I see 0 pages" on
+   * every triggering case. Caught by the user-impact-reviewer review of
+   * PR #3430.
+   */
+  documentExtractMeta?: DocumentExtractMeta;
+  /**
+   * 2026-05-06 follow-up — Bug A1 fix. Resolved workspace path threaded
+   * from the ws-handler through `runner.dispatch` →
+   * `buildSoleurGoSystemPrompt` so PDF gated + text-too-large directives
+   * can inject workspace-absolute Read paths. Required by the SDK Read
+   * tool's `file_path` "absolute path" contract; passing relative paths
+   * triggered the sandbox-deny path that produced the user-facing
+   * "outside my workspace boundary" reply (#3376).
+   */
+  workspacePath?: string;
+  /**
    * Attachment refs uploaded via the chat-input paperclip flow. When
    * non-empty, `dispatchSoleurGo` (a) inserts a `messages` row to
    * satisfy the `message_attachments.message_id` FK, (b) calls the
@@ -706,6 +1273,85 @@ export interface DispatchSoleurGoArgs {
    * `agent-runner.ts:sendUserMessage` flow exactly. See #3254.
    */
   attachments?: AttachmentRef[];
+  /**
+   * #3266 — fire-and-forget hook that the dispatcher invokes after a
+   * successful `persistCcSessionId` and after a `clearCcSessionId`. The
+   * ws-handler uses it to mutate the in-process `ClientSession.sessionId`
+   * cache so a subsequent chat-case warm-cache turn forwards the
+   * just-persisted value (instead of the stale `null` seeded on
+   * materialization). Without this, runner-reap-during-live-WS scenarios
+   * use `args.sessionId = null` on the next cold-Query construction,
+   * defeating the prefill guard's history-probe branch. Receives `null`
+   * on the stale-clear path.
+   */
+  onSessionIdPersisted?: (sessionId: string | null) => void;
+}
+
+/**
+ * #3266 — persist the SDK-emitted `session_id` back to
+ * `conversations.session_id` so the next cold-Query construction (server
+ * restart, idle reap, container restart) seeds `args.sessionId` and the
+ * runner can `resume:` the SDK session. The write is fire-and-forget
+ * because the user's current turn does NOT depend on it landing; failures
+ * mirror to Sentry via `updateConversationFor` and the next turn's
+ * in-memory `state.sessionId` covers the warm-Query case.
+ */
+async function persistCcSessionId(args: {
+  userId: string;
+  conversationId: string;
+  sessionId: string;
+}): Promise<void> {
+  const { ok, error } = await updateConversationFor(
+    args.userId,
+    args.conversationId,
+    { session_id: args.sessionId },
+    {
+      feature: "cc-dispatcher",
+      op: "persist-session-id",
+      expectMatch: true,
+    },
+  );
+  if (!ok) {
+    // updateConversationFor already mirrors to Sentry; log here only for
+    // cross-debugging with legacy `agent-runner.ts` parity.
+    log.error(
+      { conversationId: args.conversationId, err: error },
+      "cc-dispatcher: failed to persist session_id",
+    );
+  }
+}
+
+/**
+ * #3266 R7 — clear a stale `conversations.session_id` after the SDK
+ * rejects `resume:` for a non-KeyInvalidError reason (missing session
+ * file, schema drift). Without this, the next cold-Query retries the
+ * same bad session_id indefinitely. Mirrors the legacy
+ * `agent-runner.ts` stale-clear behavior.
+ */
+async function clearCcSessionId(args: {
+  userId: string;
+  conversationId: string;
+}): Promise<void> {
+  // Default `expectMatch: false` — a concurrent close/archive race
+  // (legitimate 0-rows outcome) is silent success here, matching legacy
+  // `agent-runner.ts` stale-clear parity. The composite-key invariant
+  // (`.eq("id", ...).eq("user_id", ...)`) is enforced inside the wrapper
+  // regardless. Real DB errors still mirror to Sentry.
+  const { ok, error } = await updateConversationFor(
+    args.userId,
+    args.conversationId,
+    { session_id: null },
+    {
+      feature: "cc-dispatcher",
+      op: "clear-stale-session-id",
+    },
+  );
+  if (!ok) {
+    log.error(
+      { conversationId: args.conversationId, err: error },
+      "cc-dispatcher: failed to clear stale session_id",
+    );
+  }
 }
 
 /**
@@ -729,7 +1375,11 @@ export async function dispatchSoleurGo(
     artifactPath,
     documentKind,
     documentContent,
+    documentExtractError,
+    documentExtractMeta,
+    workspacePath: callerWorkspacePath,
     attachments,
+    onSessionIdPersisted,
   } = args;
 
   // Verify conversation ownership AND bump `last_active` in a single
@@ -759,8 +1409,40 @@ export async function dispatchSoleurGo(
   // The SDK's session-id resume mechanism still owns transcript replay
   // for the agent — these rows are for attachment metadata durability and
   // for `api-messages.ts` history hydration on tab reload.
+  //
+  // #3603 W1 — same write-boundary sentinel as `saveAssistantMessage`.
+  // User-content rows carry PII; a misrouted dispatch persisting User A's
+  // text into User B's conversation is the same Art. 33/34 surface as the
+  // assistant row. Throws (rather than the assistant path's `return`)
+  // because this insert is awaited and a halt here cleanly aborts the
+  // dispatch via the existing user-INSERT-failure path below.
+  if (!assertWriteScope(userId, conversationId)) {
+    throw new Error(
+      "cc-dispatcher: assertWriteScope halted user-message persistence",
+    );
+  }
+  // PR-C §2.11 (#3244): tenant-scoped message INSERTs. RLS on `messages`
+  // enforces FK-join to `conversations.user_id`; the `assertWriteScope`
+  // sentinel above is the defense-in-depth layer. The implicit JWT mint
+  // is the auth probe — see ws-handler `tenantFor` doc-comment.
+  //
+  // Wrap mint in try/catch so a transient RuntimeAuthError gets a
+  // structured Sentry mirror before the throw bubbles into the outer
+  // dispatch pipeline (the dispatch's existing user-INSERT-failure path
+  // produces an unstructured generic error otherwise).
+  let tenant: Awaited<ReturnType<typeof getFreshTenantClient>>;
+  try {
+    tenant = await getFreshTenantClient(userId);
+  } catch (mintErr) {
+    reportSilentFallback(mintErr, {
+      feature: "cc-dispatcher",
+      op: "tenant-mint.persistUserMessage",
+      extra: { userId, conversationId },
+    });
+    throw mintErr;
+  }
   const messageId = randomUUID();
-  const { error: insertErr } = await supabase().from("messages").insert({
+  const { error: insertErr } = await tenant.from("messages").insert({
     id: messageId,
     conversation_id: conversationId,
     role: "user",
@@ -771,7 +1453,7 @@ export async function dispatchSoleurGo(
   if (insertErr) {
     reportSilentFallback(insertErr, {
       feature: "cc-dispatcher",
-      op: "persist-user-message",
+      op: CC_OP_SLUGS.persistUserMessage,
       extra: { userId, conversationId },
     });
     throw new Error(`Failed to save user message: ${insertErr.message}`);
@@ -785,10 +1467,16 @@ export async function dispatchSoleurGo(
   // dispatch catch, which mirrors via `mirrorWithDebounce` (no inner
   // try/catch — that would double-mirror and bypass the dispatch
   // debounce, flooding Sentry on a misconfigured Storage URL).
+  // PR-D §3 (#3244 §4): tenant-scoped attachments. Reuse the `tenant` mint
+  // from the persistUserMessage block above (same userId, same turn — minting
+  // a second client would add an unnecessary RTT per Kieran P2-2). Storage
+  // RLS in migration 019 (SELECT) + 045 (INSERT/UPDATE/DELETE) is now
+  // load-bearing; the path-prefix check at attachment-pipeline.ts:83-86 is
+  // defense-in-depth.
   let userMessage = rawUserMessage;
   if (attachments && attachments.length > 0) {
     const { attachmentContext } = await persistAndDownloadAttachments({
-      supabase: supabase(),
+      supabase: tenant,
       userId,
       conversationId,
       messageId,
@@ -824,52 +1512,71 @@ export async function dispatchSoleurGo(
       });
     });
 
-  // Per-turn assistant text accumulator. Reset to "" inside
-  // `saveAssistantMessage` after each turn boundary, so a turn that ends in
-  // `result` with zero text correctly skips the insert without consuming the
-  // previous turn's data. Mirrors the pattern at `agent-runner.ts:1079` so
-  // `api-messages.ts` returns BOTH user and assistant rows on resume —
-  // without this the cc path's history is user-only and the resumed thread
-  // re-renders the routing chip as if the question were unanswered.
-  let accumulatedAssistantText = "";
+  // #3639 F1 — Per-dispatch per-turn state cell. Wraps the four mutable
+  // cells (text accumulator, abort flag, turn index, pending usage) so
+  // reset-symmetry is a class invariant rather than four parallel
+  // `let` declarations. Mirrors the REPLACE semantic at
+  // `chat-state-machine.ts:477` (W8). See class doc-comment for the
+  // method contract.
+  const state = new TurnPersistenceState();
 
-  async function saveAssistantMessage(): Promise<void> {
-    // Snapshot-then-reset must precede `await` so a turn N+1 `onText` cannot
-    // mutate `fullText` while this insert is in flight (single async loop
-    // serializes onText/onTextTurnEnd, but the await yields the microtask).
-    const fullText = accumulatedAssistantText;
-    accumulatedAssistantText = "";
-    if (!fullText) return;
+  // BYOK Delegations PR-A (#4232) closure-capture. The lease opens
+  // inside realSdkQueryFactory and closes before onResult fires.
+  // realSdkQueryFactory writes to this variable via the
+  // `setDelegationContext` sink threaded through DispatchArgs →
+  // QueryFactoryArgs; onResult reads it to route persistTurnCost
+  // through the merged atomic RPC when a delegation is active.
+  let leaseDelegationCtx:
+    | { delegationId: string; callerUserId: string }
+    | undefined;
+  const setDelegationContext = (
+    ctx: { delegationId: string; callerUserId: string } | undefined,
+  ): void => {
+    leaseDelegationCtx = ctx;
+  };
 
-    const { error } = await supabase().from("messages").insert({
-      id: randomUUID(),
-      conversation_id: conversationId,
-      role: "assistant",
-      content: fullText,
-      tool_calls: null,
-      leader_id: CC_ROUTER_LEADER_ID,
-    });
+  // #3603 W4 — cc-path narrows the type-wide `Message.usage` shape to
+  // cost-only on `'complete'` turns (Art. 5(1)(c) data-minimization). The
+  // legacy agent-runner path emits the full `UsageSnapshot` (input_tokens,
+  // output_tokens, cost_usd, completed_actions[]) on `'aborted'` turns —
+  // see `Message.usage` doc-comment in `lib/types.ts`. `PersistMode` is
+  // declared at module scope above (#3640 F2 + #3641 type-rail).
+  async function saveAssistantMessage(
+    mode: PersistMode,
+    text: string,
+  ): Promise<void> {
+    // #3603 W1 — Cross-tenant write-boundary sentinel. Post-PR-C/PR-D,
+    // cc-path writes via tenant-scoped clients (RLS enforces FK-join to
+    // conversations.user_id). This guard catches the residual case where
+    // the dispatch closure's userId/conversationId disagree with a future
+    // SDK-payload-derived identifier — RLS cannot, since the JWT is A's
+    // and the row's conversation_id is A-owned. Returns `false` only via
+    // the test seam today (sentinel placeholder); load-bearing call site
+    // for that future identifier comparison. See `assertWriteScope`
+    // module-level doc.
+    if (!assertWriteScope(userId, conversationId)) return;
+
+    // Empty-drop contract (PR-A1): an empty-text turn produces no row.
+    // The state-class's `consumeForComplete` / `consumeForAbort` callers
+    // already short-circuit on empty text, but guard here defensively so a
+    // future caller can't silently produce an empty assistant row.
+    if (!text) return;
+
+    const row = buildRow(mode, text, conversationId);
+    // PR-C §2.11 (#3244): tenant-scoped assistant-row INSERT. Reuses
+    // the `tenant` minted at function entry (above the user-row INSERT).
+    const { error } = await tenant.from("messages").insert(row);
     if (error) {
-      // Route through `mirrorWithDebounce` (per-(userId, errorClass) 5-min TTL)
-      // — a misconfigured Supabase RLS for one user could otherwise emit one
-      // Sentry event per assistant turn (10 turns/conv × 100 active convs =
-      // 1000 events/hr).
-      mirrorWithDebounce(
-        error,
-        {
-          feature: "cc-dispatcher",
-          op: "save-assistant-message-failed",
-          extra: { userId, conversationId, length: fullText.length },
-        },
-        userId,
-        "save-assistant-message-failed",
-      );
+      mirrorInsertError(error, mode, userId, conversationId, text);
     }
   }
 
   const events: DispatchEvents = {
     onText: (text) => {
-      accumulatedAssistantText += text;
+      // #3603 W8 — replace, not append. Mirrors chat-state-machine REPLACE
+      // semantic so persisted content matches the UI's live render.
+      // See `TurnPersistenceState.setText` for invariant + AC11 source.
+      state.setText(text);
       sendToClient(userId, {
         type: "stream",
         content: text,
@@ -878,6 +1585,38 @@ export async function dispatchSoleurGo(
       });
     },
     onToolUse: (block) => {
+      // #2909 FR2 — silent-failure mirror for unregistered platform tools.
+      // When `mcpServers === {}` (Phase 1 default), the Claude Agent SDK
+      // rejects `mcp__soleur_platform__*` calls at model-validation time
+      // and `canUseTool` is NEVER invoked. The model gets a `tool_result`
+      // error with no Sentry signal — a silent-failure surface that violates
+      // `cq-silent-fallback-must-mirror-to-sentry`. Mirror via
+      // `mirrorWithDebounce` (per-(userId, errorClass) 5-min TTL) so a
+      // misconfigured leader skill that loops on the same unregistered tool
+      // cannot flood Sentry. Intrinsically scoped to cc-router because this
+      // callback only fires from `dispatchSoleurGo` (legacy
+      // `startAgentSession` is a separate path).
+      if (shouldMirrorUnregisteredPlatformToolUse(block.name, CC_REGISTERED_PLATFORM_TOOL_NAMES)) {
+        const safeToolName = sanitizeToolNameForLog(block.name);
+        mirrorWithDebounce(
+          null,
+          {
+            feature: "cc-mcp-tier",
+            op: "unregistered-tool-invoked",
+            message: `cc-router skill attempted unregistered platform tool ${safeToolName}`,
+            extra: {
+              toolName: safeToolName,
+              toolUseId: block.toolUseId,
+              userId,
+              conversationId,
+              leaderId: CC_ROUTER_LEADER_ID,
+              mcpAllowlistConfigured: Boolean(process.env.CC_MCP_ALLOWLIST?.trim()),
+            },
+          },
+          userId,
+          "cc-mcp-tier:unregistered-tool",
+        );
+      }
       // `buildToolUseWSMessage` pins the #2138 invariant: the raw SDK tool
       // name is NOT placed on the wire (information-disclosure mitigation,
       // see PR #2115). Shared with `agent-runner.ts` so a future schema
@@ -893,8 +1632,19 @@ export async function dispatchSoleurGo(
       );
     },
     onTextTurnEnd: () => {
+      // #3603 W2 + W4 — `consumeForComplete` returns `null` if the turn was
+      // already persisted via the abort path (silent no-op so a late
+      // `onTextTurnEnd` cannot double-write or overwrite the aborted row).
+      // Otherwise it snapshot-clear-bumps SYNCHRONOUSLY so a turn-N+1
+      // `onResult` arriving on the same iterator yield cannot overwrite
+      // turn N's snapshot.
+      const consumed = state.consumeForComplete();
+      if (consumed === null) return;
       // Fire-and-forget — user already saw the streamed text; helper mirrors on failure.
-      void saveAssistantMessage();
+      void saveAssistantMessage(
+        { kind: "complete", usage: consumed.usage },
+        consumed.text,
+      );
       // Per-turn boundary → terminal stream event for the cc_router bubble.
       // Without this, the client reducer keeps the bubble in
       // `state: "streaming"` (raw `whitespace-pre-wrap`), so markdown
@@ -914,6 +1664,48 @@ export async function dispatchSoleurGo(
       // single source of truth.
     },
     onWorkflowEnded: (end: WorkflowEnd) => {
+      // #3603 W2 — flush partial assistant text as an `status: "aborted"` row
+      // BEFORE the existing user-visible routing below. Mirrors the legacy
+      // abort contract at `agent-runner.ts:2044-2055`. Skips on
+      // `status: "completed"` because the normal `onTextTurnEnd` path
+      // already wrote (or will write) the row. The `assistantTurnPersisted` flag
+      // suppresses a late `onTextTurnEnd` arriving after this flush.
+      // Use the typed `ABORT_FLUSH_STATUSES` set (exhaustively type-checked
+      // via `_abortFlushExhaustive`) rather than a bare `!== "completed"` so
+      // a future `WorkflowEnd` variant cannot silently route through abort
+      // without a deliberate listing here.
+      if (ABORT_FLUSH_STATUSES.has(end.status)) {
+        const outcome = state.consumeForAbort();
+        switch (outcome.kind) {
+          case "text":
+            // #3603 W4 text-present abort: state-class snapshot-clear-marks
+            // SYNCHRONOUSLY so a late onTextTurnEnd cannot race the await.
+            void saveAssistantMessage(
+              { kind: "aborted", usage: outcome.usage },
+              outcome.text,
+            );
+            break;
+          case "orphan":
+            // #3603 W4 orphan — usage captured but model produced ZERO text
+            // (tool-only turn that then aborted). The empty-text path drops
+            // the row (PR-A1 contract at `saveAssistantMessage` empty-drop);
+            // P0-mirror the orphaned cost so operators can detect a runner
+            // misconfiguration that strands cost telemetry. Dedup keyed on
+            // `(userId, op, conversationId)` with 1h TTL.
+            mirrorP0Deduped(new Error(CC_OP_SLUGS.usageOrphanDropped), {
+              op: CC_OP_SLUGS.usageOrphanDropped,
+              userId,
+              conversationId,
+            });
+            break;
+          case "none":
+            break;
+          default: {
+            const _exhaustive: never = outcome;
+            void _exhaustive;
+          }
+        }
+      }
       // Architecture-F4: `session_ended` is terminal in `ws-client.ts`
       // (clears streams, disables input). Emitting it for RECOVERABLE
       // runner states (cost_ceiling, runner_runaway) would break
@@ -951,9 +1743,58 @@ export async function dispatchSoleurGo(
       // which fires from `emitWorkflowEnded`/`reapIdle`/
       // `closeConversation`. No direct call needed here.
     },
-    onResult: (_result) => {
-      // Usage totals bubble via `usage_update`; wire in Stage 3 when
-      // the aggregate conversation cost reader lands.
+    onResult: (result) => {
+      // #3603 W4 — capture per-turn cost telemetry for attachment to the
+      // assistant row that `onTextTurnEnd` writes. `totalCostUsd` is a
+      // per-turn delta (`soleur-go-runner.ts` `handleResultMessage` —
+      // `delta = msg.total_cost_usd ?? 0`), not a cumulative running total,
+      // so the value is safe to attach verbatim. The `turnIndex` tag pins
+      // capture to the active turn so a stale callback arriving after the
+      // bump cannot misattribute to a later row.
+      state.captureUsage(state.currentTurnIndex(), result.totalCostUsd);
+
+      // Fire-and-forget per-turn cost write to the aggregation surface
+      // (separate from messages.usage). Closes the cc-soleur-go path's
+      // 60-90% under-count vs the Anthropic Console (#3626). The legacy
+      // agent-runner.ts path uses the same helper. Turn termination must
+      // not block on DB writes — `persistTurnCost` chains `.then()` for
+      // error mirroring rather than awaiting; soleur-go-runner's onResult
+      // try/catch covers the residual synchronous-throw surface.
+      // Phase 3 (feat-team-workspace-multi-user) — workspaceId from
+      // userId under N2 invariant; see agent-runner.ts:1884 comment.
+      //
+      // BYOK Delegations PR-A (#4232) closure-capture: read the
+      // delegationContext that realSdkQueryFactory wrote inside its
+      // lease body. The lease scope is closed by the time this
+      // callback fires; the value here was captured before scope-close
+      // via the `setDelegationContext` sink. Undefined under
+      // flag-OFF / solo callers / resolver fall-through; routes the
+      // audit through the merged atomic RPC under flag-ON +
+      // delegated runs.
+      persistTurnCost(
+        userId,
+        conversationId,
+        CC_ROUTER_LEADER_ID,
+        userId,
+        result,
+        leaseDelegationCtx,
+      );
+    },
+    onSessionIdCaptured: (capturedSessionId) => {
+      // #3266 — fire-and-forget DB persist + synchronous in-process cache
+      // update. The cache update is load-bearing for the
+      // runner-reap-but-WS-alive scenario: on the next chat-case turn the
+      // ws-handler's warm-cache branch forwards `session.sessionId` to
+      // `dispatchSoleurGo`, and a stale `null` would defeat the prefill
+      // guard's history-probe activation. Fires synchronously BEFORE the
+      // async DB write commits so the next turn can read the value even
+      // if the user fires a follow-up before persistence lands.
+      onSessionIdPersisted?.(capturedSessionId);
+      void persistCcSessionId({
+        userId,
+        conversationId,
+        sessionId: capturedSessionId,
+      });
     },
   };
 
@@ -969,6 +1810,18 @@ export async function dispatchSoleurGo(
       artifactPath,
       documentKind,
       documentContent,
+      documentExtractError,
+      documentExtractMeta,
+      // BYOK Delegations PR-A (#4232) closure-capture: bridge the
+      // lease body in realSdkQueryFactory to this dispatchSoleurGo
+      // scope so onResult can read leaseDelegationCtx and route
+      // persistTurnCost through the merged atomic RPC.
+      setDelegationContext,
+      // 2026-05-06 Bug A1 fix — thread workspacePath through so the
+      // runner builds the system prompt with workspace-absolute Read
+      // instructions. Falls back to the locally-resolved value (set by
+      // the `.then` above) when the caller didn't pre-resolve it.
+      workspacePath: callerWorkspacePath ?? workspacePath,
     });
   } catch (err) {
     const errorClass =
@@ -992,13 +1845,74 @@ export async function dispatchSoleurGo(
     // errorCode: "key_invalid" branch in agent-runner.ts
     // handleSessionError. All other failures fall back to the generic
     // router-unavailable message without an errorCode.
-    if (err instanceof KeyInvalidError) {
+    if (
+      err instanceof RuntimeAuthError &&
+      err.cause === "denied_jti"
+    ) {
+      // #4440 follow-up to #4418 — JWT-deny propagation. A persistUserMessage
+      // mint or any other tenant-RPC inside the dispatch surfaced
+      // `RuntimeAuthError("denied_jti")` before the runner emitted its
+      // own WorkflowEnd. Synthesize a `session_revoked` WS frame so
+      // agents/API consumers observing this turn receive the same
+      // terminal discriminator the runner-level catch would have emitted
+      // for a mid-stream throw.
+      //
+      // Routes through `tryEmitRevocationNotice` (server/revocation-emit.ts)
+      // so the lookup+sanitize logic stays shared with agent-runner and
+      // soleur-go-runner. Helper returns the looked-up status if a caller
+      // needs the raw fields; this site only needs the emit side effect.
+      await tryEmitRevocationNotice(userId, (frame) =>
+        sendToClient(userId, frame),
+      );
+      // Pair with the terminal session_ended frame so the client
+      // reducer clears streamState (`clear_streams` in ws-client.ts).
+      // Disambiguator `conversationId` lets multi-tab clients route
+      // this to the correct tab; matches the pre-existing
+      // session_ended emit-site shape elsewhere in this dispatcher.
+      sendToClient(userId, {
+        type: "session_ended",
+        reason: "session_revoked",
+        conversationId,
+      });
+    } else if (err instanceof MissingByokKeyError) {
+      // Phase 3.2 AC-D (Kieran N4): fail-closed when member has no BYOK
+      // key. Info-level breadcrumb captures workspace context;
+      // `byok_key_missing` errorCode tells the client to render the
+      // configure-banner linking to /dashboard/settings/byok rather
+      // than the key-invalid prompt.
+      reportMissingByokKey(err);
+      sendToClient(userId, {
+        type: "error",
+        message:
+          "Configure your BYOK key to run agents in this workspace.",
+        errorCode: "byok_key_missing",
+      });
+    } else if (err instanceof KeyInvalidError) {
       sendToClient(userId, {
         type: "error",
         message: "Your API key is invalid — set up a fresh key to continue.",
         errorCode: "key_invalid",
       });
     } else {
+      // #3266 R7 — stale-resume cleanup. The dispatch was attempted with
+      // a persisted session_id but the runner rejected for a reason
+      // other than KeyInvalidError. Plan §R7 documents this trade-off:
+      // the predicate is broad ("any non-KeyInvalidError"), which means
+      // a transient backend error (network blip, BYOK fetch failure,
+      // workspace patch failure) will also clear a legitimate session_id
+      // and force a cold-start on the next turn. Acceptable cost: the
+      // SDK rebuilds from the persisted `messages` rows on next dispatch
+      // and the prefill guard's history-probe handles assistant-
+      // terminated threads — at most one turn of degraded latency.
+      // Narrowing to typed SDK error classes is tracked separately and
+      // is out of scope for the activation PR. Fire-and-forget; the
+      // user-facing generic-error message lands either way. Update the
+      // in-process cache alongside the DB write so the next chat-case
+      // warm-cache turn does not forward the now-stale value.
+      if (sessionId) {
+        onSessionIdPersisted?.(null);
+        void clearCcSessionId({ userId, conversationId });
+      }
       sendToClient(userId, {
         type: "error",
         message: "Dashboard router is unavailable — try again shortly.",
@@ -1093,7 +2007,7 @@ export function __resetDispatcherForTests(): void {
   _runner = null;
   _runnerSendToClient = null;
   _ccBashGates.clear();
-  _mirrorLastReportedAt.clear();
+  __resetMirrorDebounceForTests();
   // The bash batched-approval cache lives in a sibling module
   // (`permission-callback-bash-batch.ts`) and is keyed by
   // `${userId}:${conversationId}`. Without draining it here, a granted
@@ -1104,4 +2018,43 @@ export function __resetDispatcherForTests(): void {
   // tests is observable. Lives in `kb-document-resolver.ts` for the same
   // reason as the bash cache: shared across files, drained centrally.
   _resetWorkspacePathCacheForTests();
+}
+
+/**
+ * #3603 W1 invariant-7 — install a stub that lets tests force the
+ * write-boundary sentinel to return `false` at specific call sites,
+ * proving every assistant-row write runs through `assertWriteScope`.
+ * #3641 — relocated from the inline declaration adjacent to
+ * `assertWriteScope` to this bottom-of-file test-seam block so all
+ * test-only exports cluster in one place.
+ */
+export function __setAssertWriteScopeForTests(
+  fn: (u: string, c: string) => boolean,
+): void {
+  // Defense-in-depth (PR-A2 security review H3): refuse to install the
+  // override outside a test environment. Without this guard a malicious /
+  // accidentally-imported call site in a prod-bundle code path could neutralize
+  // the sentinel for the process lifetime — module-singleton state with no
+  // caller authentication. Vitest sets `NODE_ENV=test`; production sets `production`.
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "__setAssertWriteScopeForTests is not callable in production builds",
+    );
+  }
+  _assertWriteScopeOverride = fn;
+}
+
+export function __resetAssertWriteScopeForTests(): void {
+  // Defense-in-depth (review #3670): symmetric with the setter's
+  // production-refusal guard. Today reset is harmless (null → null), but
+  // the sentinel is anticipated to become load-bearing when SDK callbacks
+  // expose payload identifiers — an unguarded resetter could then be
+  // called from an accidental prod-bundle import path to neutralize an
+  // installed override that does real cross-tenant comparison.
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "__resetAssertWriteScopeForTests is not callable in production builds",
+    );
+  }
+  _assertWriteScopeOverride = null;
 }

@@ -9,9 +9,13 @@ export type { WorkflowName } from "@/server/conversation-routing";
 export type { SpawnId, PromptId, ConversationId } from "@/lib/branded-ids";
 
 /**
- * Terminal states a `/soleur:go` workflow run can end in (#2885 Stage 3).
- * The tuple is the single source of truth — both the TS union below and the
- * Zod schema in `lib/ws-zod-schemas.ts` derive from it.
+ * Terminal states a `/soleur:go` workflow run can end in. The runner's
+ * `WorkflowEnd["status"]` union in `server/soleur-go-runner.ts` is the
+ * canonical source; this tuple mirrors it (enforced by
+ * `_AssertWorkflowEndStatusMatches` in `soleur-go-runner.ts` — adding to
+ * either side without the other is a TS error there). Both the Zod
+ * schema in `lib/ws-zod-schemas.ts` and the TS union below derive from
+ * this tuple. #3827 + ADR-031 amendment 2026-05-15.
  */
 export const WORKFLOW_END_STATUSES = [
   "completed",
@@ -19,10 +23,23 @@ export const WORKFLOW_END_STATUSES = [
   "cost_ceiling",
   "idle_timeout",
   "plugin_load_failure",
-  "sandbox_denial",
-  "runner_crash",
   "runner_runaway",
   "internal_error",
+  // #4440 follow-up to #4418 — cross-process JWT-deny propagation to
+  // agent-driven workflows. Emitted when soleur-go-runner / cc-dispatcher
+  // / agent-runner catch a `RuntimeAuthError` with `cause === "denied_jti"`
+  // mid-run. Today only the human WS client receives the discriminated
+  // `revocation_notice` frame (`ws-handler.tenantFor` catch path); agents
+  // running long workflows received a generic `internal_error`, which
+  // is indistinguishable from a transient SDK failure. Adding this
+  // terminal status lets the runner surface the same operator-supplied
+  // `reason` to API/agent consumers and gives them a deterministic
+  // discriminator on which to invalidate cached JWT material before
+  // any retry attempt. Recoverable from the agent's perspective only
+  // in the sense that the underlying session is gone — pairing in
+  // `cc-dispatcher.onWorkflowEnded` routes it to the terminal
+  // `session_ended` family (see TERMINAL_WORKFLOW_END_STATUSES).
+  "session_revoked",
 ] as const;
 export type WorkflowEndStatus = typeof WORKFLOW_END_STATUSES[number];
 
@@ -32,6 +49,16 @@ export type WorkflowEndStatus = typeof WORKFLOW_END_STATUSES[number];
  */
 export const SUBAGENT_COMPLETE_STATUSES = ["success", "error", "timeout"] as const;
 export type SubagentCompleteStatus = typeof SUBAGENT_COMPLETE_STATUSES[number];
+
+/**
+ * `context_reset.reason` allowed values (#3269). Tuple-as-source — the
+ * Zod schema, the helper return shape (`agent-prefill-guard.ts`), the
+ * `ChatContextResetMessage` reducer variant, and the `CONTEXT_RESET_COPY`
+ * render-side const all derive from this union to prevent silent drift
+ * when the family widens. ADR-025 documents the lifecycle-notice family.
+ */
+export const CONTEXT_RESET_REASONS = ["prefill-guard", "tool_use_orphan"] as const;
+export type ContextResetReason = typeof CONTEXT_RESET_REASONS[number];
 
 /**
  * `interactive_prompt.kind` allowed values. Tuple is shared with
@@ -102,6 +129,10 @@ void _exhaustiveResponseKindCheck;
 // Typed error codes for structured error handling over WebSocket
 export type WSErrorCode =
   | "key_invalid"
+  // Phase 3.2 AC-D (feat-team-workspace-multi-user) — member-without-BYOK
+  // fail-closed path. Client renders the configure-banner linking to
+  // /dashboard/settings/byok rather than the `key_invalid` key-prompt.
+  | "byok_key_missing"
   | "session_expired"
   | "session_resumed"
   | "rate_limited"
@@ -130,6 +161,10 @@ export const WS_CLOSE_CODES = {
   IDLE_TIMEOUT: 4009,
   CONCURRENCY_CAP: 4010,
   TIER_CHANGED: 4011,
+  /** AC-FLOW2 — workspace owner removed this user's membership. The server
+   *  sends a `workspace_removed` preamble (with `organizationName`) before
+   *  closing so the client can render the terminal screen. */
+  MEMBERSHIP_REVOKED: 4012,
   SERVER_GOING_AWAY: 1001,
 } as const;
 
@@ -158,7 +193,23 @@ export interface TierChangedPreamble {
   newTier?: PlanTier;
 }
 
-export type ClosePreamble = ConcurrencyCapHitPreamble | TierChangedPreamble;
+/**
+ * Preamble written before `ws.close(4012)` when a workspace owner removes
+ * this user's membership. The client renders a terminal screen using
+ * `organizationName` so the user understands which workspace they were
+ * removed from.
+ */
+export interface MembershipRevokedPreamble {
+  type: "membership_revoked";
+  organizationName: string | null;
+  /** Optional workspace_id for client-side reconciliation / audit. */
+  workspaceId?: string;
+}
+
+export type ClosePreamble =
+  | ConcurrencyCapHitPreamble
+  | TierChangedPreamble
+  | MembershipRevokedPreamble;
 
 export class KeyInvalidError extends Error {
   constructor() {
@@ -194,6 +245,13 @@ export type WSMessage =
   | { type: "resume_session"; conversationId: string }
   | { type: "close_conversation" }
   | { type: "review_gate_response"; gateId: string; selection: string }
+  // Client → server: user-initiated Stop. The server resolves `userId`
+  // from the authenticated socket session — `userId` is intentionally
+  // NOT part of the wire shape (TR4 cross-user invariant; see
+  // `feat-abort-conversation-web` plan §"User-Brand Impact"). The
+  // strictObject zod schema in `lib/ws-zod-schemas.ts` rejects extra
+  // fields so a forged `userId` cannot land here from a network peer.
+  | { type: "abort_turn"; conversationId: string }
   | {
       type: "stream";
       content: string;
@@ -222,10 +280,55 @@ export type WSMessage =
       elapsedSeconds: number;
     }
   | { type: "review_gate"; gateId: string; question: string; header?: string; options: string[]; descriptions?: Record<string, string | undefined>; stepProgress?: { current: number; total: number } }
-  | { type: "session_started"; conversationId: string; capabilities?: { promptKinds: readonly string[] } }
+  | { type: "session_started"; conversationId: string; capabilities?: { promptKinds: readonly string[]; incomingTypes?: readonly string[] } }
   | { type: "session_resumed"; conversationId: string; resumedFromTimestamp: string; messageCount: number }
-  | { type: "session_ended"; reason: string }
-  | { type: "usage_update"; conversationId: string; totalCostUsd: number; inputTokens: number; outputTokens: number }
+  | {
+      type: "session_ended";
+      reason: string;
+      /** Disambiguator for multi-tab clients: when a user has two open
+       *  tabs on different conversations, a `session_ended` frame
+       *  without `conversationId` would race the wrong tab's reducer
+       *  into a `stopping`/`idle` transition. Optional so the existing
+       *  emitters that don't yet pass it remain protocol-compatible.
+       *  feat-abort-conversation-web PR1 emits it for `user_aborted`
+       *  reasons. */
+      conversationId?: string;
+    }
+  // #3269 — context-reset lifecycle notice. Emitted exactly once per
+  // prefill-guard fire (assistant-terminated history → SDK 400 prevention
+  // path drops `resume:` and the model loses prior-turn context). The
+  // `reason` discriminator drives copywriter-approved render variants in
+  // chat-surface.tsx; `prefill-guard` is the generic branch and
+  // `tool_use_orphan` is the narrower branch where the trailing assistant
+  // message contained a `tool_use` content block. ADR-025 establishes the
+  // WS lifecycle-notice family invariants for forward-compat.
+  | {
+      type: "context_reset";
+      reason: ContextResetReason;
+      conversationId: string;
+    }
+  | {
+      type: "usage_update";
+      conversationId: string;
+      /**
+       * Phase 3 (feat-team-workspace-multi-user) — workspace_id for
+       * workspace-grain cost attribution at the client. Optional for
+       * one release cycle to absorb rolling prd deploys; tighten in a
+       * follow-up after the old build ages out.
+       */
+      workspaceId?: string;
+      totalCostUsd: number;
+      inputTokens: number;
+      outputTokens: number;
+      // Cache tokens — `0` when prompt caching is not engaged. Widened
+      // 2026-05-12 to close the dashboard cross-check gap vs the
+      // Anthropic Console for cached prompts (plan §Risks R8).
+      // Optional for one release cycle so rolling prd deploys don't
+      // drop frames between mismatched server/client shapes; coerce
+      // `?? 0` at every consumer. Tighten in a follow-up.
+      cacheReadInputTokens?: number;
+      cacheCreationInputTokens?: number;
+    }
   | { type: "fanout_truncated"; dispatched: number; dropped: number }
   | { type: "upgrade_pending" }
   // Stage 3 (#2885) — Command Center soleur-go router protocol with
@@ -258,6 +361,18 @@ export type WSMessage =
       runnerRunawayReason?: "idle_window" | "max_turn_duration";
       runnerRunawayLastBlockKind?: "text" | "tool_use" | null;
       runnerRunawayLastBlockToolName?: string | null;
+    }
+  // #3930 — cross-process JWT revocation discriminator. Emitted when
+  // ws-handler's `tenantFor` catch site sees a RuntimeAuthError with
+  // cause='denied_jti' AND the founder-side `my_revocation_status()`
+  // confirms a deny-list row. Replaces the generic
+  // "Authentication unavailable; retry shortly" toast with a discriminated
+  // message so the founder understands WHY the session ended.
+  // `reason` is the operator-supplied free-text from `denied_jti.reason`.
+  | {
+      type: "revocation_notice";
+      reason: string | null;
+      deniedAt: string | null;
     };
 
 /**
@@ -363,4 +478,48 @@ export interface Message {
   leader_id: DomainLeaderId | null;
   attachments?: MessageAttachment[];
   created_at: string;
+  /** Added in migration 040. `'aborted'` rows carry partial assistant
+   *  text and a `usage` snapshot from a user-initiated Stop or a
+   *  tab-close abort. PR2's chat reload renders the abort marker via
+   *  this discriminator. Optional in the type so existing
+   *  fixtures/snapshots don't churn; runtime persistence always sets
+   *  it (DB default is `'complete'`). */
+  status?: "complete" | "aborted";
+  /** #3640 F6 — discriminates the `usage` shape. **The discriminator
+   *  lives on the nested `usage` object, NOT at the Message top level**
+   *  (review #3670 — the top-level field was declared but unread; readers
+   *  uniformly consult `usage?.variant`). The reader-side types
+   *  (`AbortMarkerUsage` in `message-bubble.tsx`, `ChatTextMessage.usage`
+   *  in `chat-state-machine.ts`) each carry their own `variant?` field;
+   *  the hydration site in `lib/ws-client.ts:1010-1024` derives it from
+   *  `leader_id === CC_ROUTER_LEADER_ID`. There is no `variant` column on
+   *  the `messages` table — this is a TypeScript-only widening.
+   *
+   *  - **Legacy `agent-runner` path** (default — nested `variant` absent
+   *    or `"legacy"`, `leader_id` ∈ domain leaders): full `UsageSnapshot`
+   *    on `status === 'aborted'` turns — `{ input_tokens, output_tokens,
+   *    cost_usd?, completed_actions[] }`. Shape documented in
+   *    `UsageSnapshot` in `agent-runner.ts` and migration 040.
+   *
+   *  - **cc-router path** (nested `variant === "cc"`, `leader_id ===
+   *    'cc_router'`, PR #3603 W4): cc-narrowed `{ cost_usd: number }`
+   *    only — Art. 5(1)(c) data minimization. Persisted on `'complete'`
+   *    turns when `CC_PERSIST_USAGE === "true"` (default off until PR-C
+   *    Privacy Policy refresh ships); also attached to `'aborted'` rows
+   *    when captured by `onResult` before the abort fired.
+   *
+   *  Optional in the type so existing fixtures don't churn. Readers
+   *  should branch on `usage?.variant` (post-#3640 F6) rather than on
+   *  field presence — see `renderAbortedAssistant` in `message-bubble.tsx`.
+   */
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cost_usd?: number | null;
+    completed_actions?: Array<{
+      tool_name: string;
+      input_summary: string;
+      result_summary: string;
+    }>;
+  } | null;
 }

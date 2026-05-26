@@ -1,3 +1,10 @@
+---
+title: Case study three-location citation consistency
+date: 2026-03-26
+category: engineering
+tags: [content-structure, marketing]
+---
+
 # Learning: Case study three-location citation consistency
 
 ## Problem

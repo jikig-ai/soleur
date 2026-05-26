@@ -1,0 +1,9 @@
+diff --git a/pii-detector/patterns/fields.md b/pii-detector/patterns/fields.md
+index c1bb748..2345678 100644
+--- a/pii-detector/patterns/fields.md
++++ b/pii-detector/patterns/fields.md
+@@ -1,3 +1,3 @@
+ # PII Detection Fields
+
+-The fields below are common patterns refered to in PII detection.
++The fields below are common patterns referred to in PII detection.

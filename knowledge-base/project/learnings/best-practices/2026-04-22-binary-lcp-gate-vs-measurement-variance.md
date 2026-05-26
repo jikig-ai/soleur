@@ -1,10 +1,14 @@
 ---
+title: Binary plan gates become unreliable when measurement variance exceeds the gate margin
 date: 2026-04-22
 category: best-practices
 tags: [lighthouse, performance, plan-gates, measurement, lcp]
 problem_type: planning
-related_prs: [2829]
-related_issues: [2809, 2831]
+related_issues:
+  - 2809
+  - 2831
+related_prs:
+  - 2829
 ---
 
 # Binary plan gates become unreliable when measurement variance exceeds the gate margin

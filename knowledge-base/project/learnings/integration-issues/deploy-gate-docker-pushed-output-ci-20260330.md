@@ -1,16 +1,15 @@
 ---
-module: CI/CD
+title: Gate deploy job on Docker build success via dedicated output
 date: 2026-03-30
-problem_type: integration_issue
-component: development_workflow
-symptoms:
-  - "Deploy job fires when Docker build fails"
-  - "Version output is available before Docker build completes"
-  - "Spurious deploy webhooks trigger canary rollback on non-existent images"
-root_cause: logic_error
-resolution_type: config_change
-severity: high
+category: ci-cd
 tags: [ci-cd, github-actions, deploy-gate, docker, always-function]
+symptoms: [Deploy job fires when Docker build fails, Version output is available before Docker build completes, Spurious deploy webhooks trigger canary rollback on non-existent images]
+module: CI/CD
+component: development_workflow
+problem_type: integration_issue
+resolution_type: config_change
+root_cause: logic_error
+severity: high
 ---
 
 # Learning: Gate deploy job on Docker build success via dedicated output

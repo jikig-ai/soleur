@@ -1,12 +1,15 @@
 ---
+title: Leak Tripwires Must Filter Their Own Mask Registrations Before Scanning
 date: 2026-05-05
 category: best-practices
-problem_type: workflow_self_leak_false_positive
-component: github_actions_workflow + leak_tripwire
-related_issues: [3187]
-related_prs: [3224]
 tags: [github-actions, leak-detection, add-mask, tee, step-output, self-leak, guard-itself-dark]
 synced_to: []
+component: github_actions_workflow + leak_tripwire
+problem_type: workflow_self_leak_false_positive
+related_issues:
+  - 3187
+related_prs:
+  - 3224
 ---
 
 # Leak Tripwires Must Filter Their Own Mask Registrations Before Scanning
@@ -47,7 +50,7 @@ replaces matched values in the displayed log with `***`. They are NOT
 log content.
 
 But `tee -a step-output.log` runs BEFORE the runner consumes the
-directives. The runner sees `::add-mask::-----BEGIN RSA PRIVATE KEY-----`
+directives. The runner sees `::add-mask::-----BEGIN RSA PRIVATE KEY-----` <!-- gitleaks:allow # issue:#3268 documentation example, not a real key -->
 on stdout, registers the mask, and removes the line from displayed
 output. `tee` already wrote the raw bytes to the file. So
 `step-output.log` ends up containing:

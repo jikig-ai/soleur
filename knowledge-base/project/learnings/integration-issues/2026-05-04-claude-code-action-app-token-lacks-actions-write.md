@@ -1,9 +1,10 @@
 ---
-title: claude-code-action App installation token caps `actions:*` at READ — workflow-level `actions: write` is cosmetic
+title: 'claude-code-action App installation token caps `actions:*` at READ — workflow-level `actions: write` is cosmetic'
 date: 2026-05-04
-pr: "#3155"
-issue: "#3153"
+category: ci-cd
 tags: [github-actions, claude-code-action, permissions, schedule-skill]
+issue: '#3153'
+pr: '#3155'
 ---
 
 ## Problem

@@ -1,11 +1,13 @@
 ---
+title: 'Pencil MCP: agents must use the headless CLI, not the IDE/Desktop registration'
 date: 2026-05-05
 category: best-practices
 tags: [pencil-mcp, brand-workshop, ux-design-lead, headless-cli, ide-mode, agent-tool-selection]
-related-prs: [3233]
-related-issues: [3232]
-related-learnings:
-  - knowledge-base/project/learnings/best-practices/2026-05-05-brand-workshop-needs-ux-mockup-gate.md
+related-issues:
+  - 3232
+related-learnings: [knowledge-base/project/learnings/best-practices/2026-05-05-brand-workshop-needs-ux-mockup-gate.md]
+related-prs:
+  - 3233
 ---
 
 # Pencil MCP: agents must use the headless CLI, not the IDE/Desktop registration

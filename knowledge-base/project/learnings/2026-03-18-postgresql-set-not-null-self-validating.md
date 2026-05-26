@@ -1,3 +1,10 @@
+---
+title: PostgreSQL SET NOT NULL is self-validating
+date: 2026-03-18
+category: engineering
+tags: [database-issues, web-platform]
+---
+
 # Learning: PostgreSQL SET NOT NULL is self-validating
 
 ## Problem

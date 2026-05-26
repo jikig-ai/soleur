@@ -1,10 +1,13 @@
 ---
-module: knowledge-base
+title: Overview Documentation Becomes Stale After Major Restructures
 date: 2026-02-12
-problem_type: best_practice
-component: documentation
+category: documentation
 tags: [documentation, overview, component-counts, restructure]
+module: knowledge-base
+component: documentation
+problem_type: best_practice
 severity: high
+status: open
 ---
 
 # Overview Documentation Becomes Stale After Major Restructures

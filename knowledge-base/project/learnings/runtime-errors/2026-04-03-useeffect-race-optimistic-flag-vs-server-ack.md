@@ -1,17 +1,16 @@
 ---
-module: Web Platform
+title: React useEffect race condition — optimistic client flag vs server acknowledgment
 date: 2026-04-03
-problem_type: runtime_error
-component: frontend_stimulus
-symptoms:
-  - "Error: No active session. Send start_session first."
-  - "CPO leader chip appears below error, indicating domain routing works but initial message was rejected"
-  - "Only occurs when navigating to /dashboard/chat/new?msg=<text> with an initial message"
-root_cause: async_timing
-resolution_type: code_fix
-severity: high
+category: engineering
 tags: [react, useeffect, race-condition, websocket, optimistic-state, server-acknowledgment]
+symptoms: [Error: No active session. Send start_session first., CPO leader chip appears below error, indicating domain routing works but initial message was rejected, Only occurs when navigating to /dashboard/chat/new?msg=<text> with an initial message]
+module: Web Platform
 synced_to: []
+component: frontend_stimulus
+problem_type: runtime_error
+resolution_type: code_fix
+root_cause: async_timing
+severity: high
 ---
 
 # Learning: React useEffect race condition — optimistic client flag vs server acknowledgment

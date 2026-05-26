@@ -35,6 +35,7 @@ async function checkSupabase(): Promise<boolean> {
 export interface HealthResponse {
   status: string;
   version: string;
+  build_sha: string;
   supabase: string;
   sentry: string;
   uptime: number;
@@ -93,6 +94,7 @@ export async function buildHealthResponse(): Promise<HealthResponse> {
   return {
     status: "ok",
     version: process.env.BUILD_VERSION || "dev",
+    build_sha: process.env.BUILD_SHA || "dev",
     supabase: supabaseOk ? "connected" : "error",
     sentry: process.env.SENTRY_DSN ? "configured" : "not-configured",
     uptime: Math.floor(process.uptime()),

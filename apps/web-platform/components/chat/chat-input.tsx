@@ -5,6 +5,7 @@ import { useState, useRef, useCallback, useEffect, useLayoutEffect as reactUseLa
 const useIsomorphicLayoutEffect =
   typeof window !== "undefined" ? reactUseLayoutEffect : useEffect;
 import type { AttachmentRef } from "@/lib/types";
+import type { StreamState } from "@/lib/ws-client";
 import { validateFiles } from "@/lib/validate-files";
 import { uploadWithProgress } from "@/lib/upload-with-progress";
 import { safeSession } from "@/lib/safe-session";
@@ -45,6 +46,17 @@ interface ChatInputProps {
    *  Per `cq-jsdom-no-layout-gated-assertions`, the test hook is the
    *  textarea's `placeholder` attribute, which is structural. */
   workflowEnded?: boolean;
+  /** #3448 PR2: per-turn stream lifecycle. When `"streaming"` or
+   *  `"stopping"`, the Send button is replaced by a Stop button that
+   *  invokes `onStop`. While `"stopping"`, the Stop button is disabled and
+   *  labeled "Stopping…" until `session_ended` lands and the parent flips
+   *  this back to `"idle"`. Defaults to `"idle"` for callers that do not
+   *  yet thread the lifecycle (chat-input is reused outside the chat
+   *  surface — e.g. the KB sidebar passes the value directly). */
+  streamState?: StreamState;
+  /** #3448 PR2: invoked when the user clicks Stop. Wired to
+   *  `useWebSocket.abort()` by ChatSurface. */
+  onStop?: () => void;
 }
 
 export function ChatInput({
@@ -60,7 +72,30 @@ export function ChatInput({
   draftKey,
   atMentionVisible = false,
   workflowEnded = false,
+  streamState = "idle",
+  onStop,
 }: ChatInputProps) {
+  // #3448 PR2 (review fix): exhaustive narrowing on the StreamState union
+  // per AGENTS.md `cq-union-widening-grep-three-patterns`. A future widening
+  // (e.g., adding `"queued"`) fails build here instead of silently flowing
+  // into the Send branch.
+  const buttonMode: "send" | "stop" | "stopping" = (() => {
+    switch (streamState) {
+      case "idle":
+        return "send";
+      case "streaming":
+        return "stop";
+      case "stopping":
+        return "stopping";
+      default: {
+        const _exhaustive: never = streamState;
+        void _exhaustive;
+        return "send";
+      }
+    }
+  })();
+  const showStop = buttonMode !== "send";
+  const isStopping = buttonMode === "stopping";
   const disabled = rawDisabled || workflowEnded;
   const placeholder = workflowEnded
     ? "This conversation has ended"
@@ -613,25 +648,45 @@ export function ChatInput({
             <span className="text-sm font-medium">@</span>
           </button>
         </div>
-        <button
-          type="button"
-          onClick={handleSubmit}
-          disabled={disabled || isUploading || (!value.trim() && attachments.length === 0)}
-          className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl bg-amber-600 text-soleur-text-on-accent transition-colors hover:bg-amber-500 disabled:opacity-50 disabled:hover:bg-amber-600"
-          aria-label="Send message"
-        >
-          {isUploading ? (
-            <svg width="18" height="18" viewBox="0 0 24 24" className="animate-spin" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="10" strokeOpacity="0.25" />
-              <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" />
-            </svg>
-          ) : (
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="12" y1="19" x2="12" y2="5" />
-              <polyline points="5 12 12 5 19 12" />
-            </svg>
-          )}
-        </button>
+        {showStop ? (
+          // #3448 PR2: Stop button replaces Send while a turn is in flight
+          // (`streaming`) and stays mounted but disabled while waiting for
+          // the server's `session_ended` ack (`stopping`). The accessible
+          // name + visible label both transition to "Stopping…" so the
+          // user has a single source of truth on the Stop affordance.
+          <button
+            type="button"
+            onClick={onStop}
+            disabled={isStopping || onStop === undefined}
+            className="flex h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl border border-amber-700/50 bg-soleur-bg-surface-2 px-3 text-soleur-text-primary transition-colors hover:border-amber-600 hover:bg-soleur-bg-surface-1 disabled:opacity-60"
+            aria-label={isStopping ? "Stopping" : "Stop"}
+            data-testid="chat-stop-button"
+          >
+            <span className="text-xs font-medium">
+              {isStopping ? "Stopping…" : "Stop"}
+            </span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={disabled || isUploading || (!value.trim() && attachments.length === 0)}
+            className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl bg-amber-600 text-soleur-text-on-accent transition-colors hover:bg-amber-500 disabled:opacity-50 disabled:hover:bg-amber-600"
+            aria-label="Send message"
+          >
+            {isUploading ? (
+              <svg width="18" height="18" viewBox="0 0 24 24" className="animate-spin" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10" strokeOpacity="0.25" />
+                <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" />
+              </svg>
+            ) : (
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="12" y1="19" x2="12" y2="5" />
+                <polyline points="5 12 12 5 19 12" />
+              </svg>
+            )}
+          </button>
+        )}
       </div>
     </div>
   );

@@ -1,13 +1,17 @@
 ---
-date: 2026-04-27
 title: Predicate-locked migration RPCs, atomic-write mutex, and drift-guard via canonical builder — six-issue cc/soleur-go cleanup
+date: 2026-04-27
+category: engineering
 tags: [security, race-conditions, supabase-rpc, search-path-pinning, atomic-write, drift-guard, bash-approval, esbuild, regex, silent-fallback]
-issues: [2918, 2919, 2920, 2921, 2922, 2923, 2954]
-related-learnings:
-  - 2026-03-18-stop-hook-toctou-race-fix.md
-  - 2026-03-20-websocket-first-message-auth-toctou-race.md
-  - 2026-04-15-gh-jq-does-not-forward-arg-to-jq.md
-  - 2026-04-17-postgrest-aggregate-disabled-forces-rpc-option.md
+issues:
+  - 2918
+  - 2919
+  - 2920
+  - 2921
+  - 2922
+  - 2923
+  - 2954
+related-learnings: [2026-03-18-stop-hook-toctou-race-fix.md, 2026-03-20-websocket-first-message-auth-toctou-race.md, 2026-04-15-gh-jq-does-not-forward-arg-to-jq.md, 2026-04-17-postgrest-aggregate-disabled-forces-rpc-option.md]
 ---
 
 # Predicate-Locked Migration RPCs, Atomic-Write Mutex, and Drift-Guard via Canonical Builder

@@ -1,16 +1,15 @@
 ---
-module: ConnectRepo
+title: On-Click Fetch Pattern for GitHub App Installation Detection
 date: 2026-04-06
-problem_type: ui_bug
-component: frontend_stimulus
-symptoms:
-  - "Users redirected to GitHub even when the app is already installed"
-  - "setup_action=update callback silently ignored, stranding users"
-  - "No way to refresh repo list without full page reload"
-root_cause: logic_error
-resolution_type: code_fix
-severity: medium
+category: engineering
 tags: [github-app, connect-repo, state-machine, on-click-fetch, visibilitychange]
+symptoms: [Users redirected to GitHub even when the app is already installed, setup_action=update callback silently ignored, stranding users, No way to refresh repo list without full page reload]
+module: ConnectRepo
+component: frontend_stimulus
+problem_type: ui_bug
+resolution_type: code_fix
+root_cause: logic_error
+severity: medium
 ---
 
 # Learning: On-Click Fetch Pattern for GitHub App Installation Detection

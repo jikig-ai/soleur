@@ -1,14 +1,34 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import { mockQueryChain, mockRpcResult } from "./helpers/mock-supabase";
 
-const { mockFrom, mockRpc } = vi.hoisted(() => ({
-  mockFrom: vi.fn(),
-  mockRpc: vi.fn(),
-}));
+const { mockFrom, mockRpc, mockTenantFrom, FakeRuntimeAuthError } = vi.hoisted(
+  () => ({
+    mockFrom: vi.fn(),
+    mockRpc: vi.fn(),
+    mockTenantFrom: vi.fn(),
+    FakeRuntimeAuthError: class FakeRuntimeAuthError extends Error {},
+  }),
+);
 
 vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: vi.fn(() => ({ from: mockFrom, rpc: mockRpc })),
 }));
+
+// PR-C §2.3 (#3244): conversations SELECT moved to tenant client.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: mockTenantFrom })),
+  RuntimeAuthError: FakeRuntimeAuthError,
+}));
+
+function probeOk() {
+  return {
+    select: () => ({
+      eq: () => ({
+        maybeSingle: () => Promise.resolve({ data: { id: "ok" }, error: null }),
+      }),
+    }),
+  };
+}
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
@@ -38,6 +58,9 @@ describe("api-usage parity: client reduce vs. server RPC total (AC1)", () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-17T12:00:00Z"));
+    mockTenantFrom.mockImplementation((table: string) =>
+      table === "users" ? probeOk() : mockQueryChain([], null),
+    );
   });
 
   afterEach(() => {
@@ -75,8 +98,10 @@ describe("api-usage parity: client reduce vs. server RPC total (AC1)", () => {
     const serverSum = Number(serverSumString);
     expect(serverSum).toBe(100); // no drift
 
-    mockFrom.mockImplementationOnce(() =>
-      mockQueryChain(driftyRows.slice(0, 50), null),
+    mockTenantFrom.mockImplementation((table: string) =>
+      table === "users"
+        ? probeOk()
+        : mockQueryChain(driftyRows.slice(0, 50), null),
     );
     mockRpc.mockReturnValueOnce(
       mockRpcResult([{ total: serverSumString, n: rowCount }]),
@@ -121,8 +146,10 @@ describe("api-usage parity: client reduce vs. server RPC total (AC1)", () => {
     // direction; the server SUM is always exact.
     expect(Math.abs(clientReduce - serverSum)).toBeGreaterThan(0);
 
-    mockFrom.mockImplementationOnce(() =>
-      mockQueryChain(listRows.slice(0, 50), null),
+    mockTenantFrom.mockImplementation((table: string) =>
+      table === "users"
+        ? probeOk()
+        : mockQueryChain(listRows.slice(0, 50), null),
     );
     mockRpc.mockReturnValueOnce(
       mockRpcResult([{ total: serverSumString, n: rowCount }]),

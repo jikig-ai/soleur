@@ -12,8 +12,46 @@ const devPort = process.env.PORT || "3000";
 const nextConfig: NextConfig = {
   // Custom server handles HTTP — disable standalone output
   output: undefined,
+  // Bake BUILD_VERSION / BUILD_SHA into both client and server bundles so
+  // Sentry's `release` field links every event (client OR server) to the
+  // deployed image. Build-arg flow: Dockerfile ARG → ENV → next.config env
+  // → webpack inline-substitution. Falls back to "dev" sentinel when
+  // missing (matches Dockerfile ARG defaults) so local dev / vitest don't
+  // collide events under a phantom release.
+  env: {
+    BUILD_VERSION: process.env.BUILD_VERSION ?? "dev",
+    BUILD_SHA: process.env.BUILD_SHA ?? "dev",
+  },
   // Allow WebSocket upgrade on the same port
-  serverExternalPackages: ["@anthropic-ai/claude-agent-sdk", "ws"],
+  // NOTE: `pdfjs-dist` is intentionally NOT in this list, despite the
+  // bundling-reorder bug it causes in the custom server (Sentry
+  // e8225a569fcd4b07a460b5b1bb2a5ee7 — fixed via esbuild
+  // `--external:pdfjs-dist` in `package.json:scripts.build:server`).
+  // Adding it here breaks `components/kb/pdf-preview.tsx`'s client-side
+  // `new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url)`
+  // worker reference at `next build` time. If a Sentry event surfaces
+  // from the Next.js Route Handler path (`app/api/kb/share/route.ts` →
+  // `kb-share.ts` → `readPdfMetadata`), revisit with a different
+  // mechanism (`transpilePackages`, restructure the worker URL, etc.).
+  //
+  // `pino` + `pino-pretty` MUST stay external: `server/logger.ts` enables
+  // pino-pretty transport whenever `NODE_ENV !== "production"` (i.e. dev,
+  // test, and CI's e2e job). The transport spawns a worker_thread that
+  // loads `pino/lib/worker.js` + the `pino-pretty` entry by resolving from
+  // `node_modules`. If Next.js bundles them into `.next/server/vendor-
+  // chunks/`, the runtime `new Worker(workerUrl)` call hits
+  // `MODULE_NOT_FOUND: /.next/server/vendor-chunks/lib/worker.js` and the
+  // worker thread exits, cascading uncaught exceptions through every
+  // server route that calls `logger.error` (e.g. `app/(auth)/callback/
+  // route.ts` → `reportSilentFallback`). All pino consumers are
+  // server-only (`server/**`), so externalizing has no client-bundle
+  // cost.
+  serverExternalPackages: [
+    "@anthropic-ai/claude-agent-sdk",
+    "ws",
+    "pino",
+    "pino-pretty",
+  ],
   experimental: {
     // SECURITY: restrict Server Action origins for defense-in-depth
     serverActions: {
@@ -46,6 +84,10 @@ export default withSentryConfig(nextConfig, {
   org: process.env.SENTRY_ORG,
   project: process.env.SENTRY_PROJECT,
   authToken: process.env.SENTRY_AUTH_TOKEN,
+  // sentry-cli base URL — falls back to org-subdomain for the new DE org.
+  // `eu.sentry.io` is NOT correct (rewrites slugs ending in `-eu`, per learning
+  // `2026-05-17-sentry-eu-region-host-rewrites-slugs-with-eu-suffix.md`).
+  sentryUrl: process.env.SENTRY_URL,
   // Upload source maps for all client chunks
   widenClientFileUpload: true,
   // Delete source maps after upload — don't ship to users

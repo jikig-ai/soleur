@@ -16,6 +16,7 @@ vi.mock("@sentry/nextjs", () => ({
 
 // The module under test — does not exist yet (RED).
 import { uploadPendingFiles } from "@/lib/upload-attachments";
+import { validateFiles } from "@/lib/validate-files";
 
 function fakePresignOk(file: File) {
   return {
@@ -185,5 +186,46 @@ describe("uploadPendingFiles", () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+});
+
+describe("validateFiles — PDF size cap (#3332)", () => {
+  it("rejects 25 MB application/pdf with a 24 MB-keyed message", () => {
+    const big = new File([new Uint8Array(25 * 1024 * 1024)], "big.pdf", {
+      type: "application/pdf",
+    });
+    const { valid, error } = validateFiles([big], 0);
+    expect(valid).toHaveLength(0);
+    expect(error).toBeDefined();
+    expect(error).toContain("24 MB");
+  });
+
+  it("accepts a 19 MB application/pdf (below both PDF cap and chat-attachment cap)", () => {
+    const ok = new File([new Uint8Array(19 * 1024 * 1024)], "ok.pdf", {
+      type: "application/pdf",
+    });
+    const { valid, error } = validateFiles([ok], 0);
+    expect(valid).toHaveLength(1);
+    expect(error).toBeUndefined();
+  });
+
+  it("rejects a 21 MB image/png with the canonical 20 MB message (PDF-specific gating)", () => {
+    const big = new File([new Uint8Array(21 * 1024 * 1024)], "big.png", {
+      type: "image/png",
+    });
+    const { valid, error } = validateFiles([big], 0);
+    expect(valid).toHaveLength(0);
+    expect(error).toBeDefined();
+    expect(error).toContain("20 MB");
+    expect(error).not.toContain("24 MB");
+  });
+
+  it("accepts a 19 MB image/png", () => {
+    const ok = new File([new Uint8Array(19 * 1024 * 1024)], "ok.png", {
+      type: "image/png",
+    });
+    const { valid, error } = validateFiles([ok], 0);
+    expect(valid).toHaveLength(1);
+    expect(error).toBeUndefined();
   });
 });

@@ -24,15 +24,33 @@ set -eo pipefail
 # shellcheck source=lib/incidents.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh"
 
+# shellcheck source=lib/session-state.sh
+# headless_or_stderr routes warns to a log file under $GIT_COMMON_DIR/
+# soleur-session-state/logs/$PPID.log when stderr is not a TTY and
+# CLAUDECODE is set (running under `claude --bg`). Otherwise echoes to
+# stderr as before. Tolerate missing helper for legacy worktrees.
+_SS_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/session-state.sh"
+if [[ -f "$_SS_LIB" ]]; then
+  # shellcheck source=/dev/null
+  source "$_SS_LIB"
+else
+  headless_or_stderr() { echo "[$1] $2" >&2; }
+fi
+export SOLEUR_HOOK_NAME="pre-merge-rebase"
+
 INPUT=$(cat)
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
 
 # Early exit: only intercept gh pr merge commands.
 # Word boundary (\s|$) prevents false positives on hypothetical merge-* subcommands.
 # Chain operator pattern from guardrails.sh catches chained commands.
-if ! echo "$CMD" | grep -qE '(^|&&|\|\||;)\s*gh\s+pr\s+merge(\s|$)'; then
+if ! echo "$CMD" | grep -qE '(^|&&|\|\||;|\s--\s)\s*gh\s+pr\s+merge(\s|$)'; then
   exit 0
 fi
+# Note: the `\s--\s` alternative catches the with_lock wrapped form
+# (`bash session-state.sh with_lock merge-main 600 -- gh pr merge ...`)
+# so the wrapped form does NOT bypass the review-evidence gate, the
+# uncommitted-changes check, or the origin/main auto-sync.
 
 # Determine working directory from hook input (.cwd is authoritative).
 WORK_DIR=$(echo "$INPUT" | jq -r '.cwd // ""')
@@ -107,7 +125,7 @@ fi
 
 # Check for detached HEAD -- auto-sync needs a branch to push
 if [[ "$CURRENT_BRANCH" == "HEAD" ]]; then
-  echo "Warning: Detached HEAD state. Skipping auto-sync." >&2
+  headless_or_stderr warn "Detached HEAD state. Skipping auto-sync."
   exit 0
 fi
 
@@ -134,7 +152,7 @@ fi
 
 # Fetch latest main -- fail open on network error
 if ! git -C "$WORK_DIR" fetch origin main >/dev/null 2>&1; then
-  echo "Warning: Could not fetch origin/main (network error). Proceeding with merge." >&2
+  headless_or_stderr warn "Could not fetch origin/main (network error). Proceeding with merge."
   exit 0
 fi
 
@@ -144,15 +162,24 @@ REMOTE_MAIN=$(git -C "$WORK_DIR" rev-parse origin/main 2>/dev/null) || true
 
 if [[ -z "$MERGE_BASE" ]] || [[ -z "$REMOTE_MAIN" ]]; then
   # Could not determine relationship -- fail open
-  echo "Warning: Could not determine branch relationship with main. Proceeding with merge." >&2
+  headless_or_stderr warn "Could not determine branch relationship with main. Proceeding with merge."
   exit 0
 fi
 
 if [[ "$MERGE_BASE" == "$REMOTE_MAIN" ]]; then
   # Already up-to-date, no sync needed
-  echo "[ok] Branch already up-to-date with origin/main." >&2
+  headless_or_stderr info "Branch already up-to-date with origin/main."
   exit 0
 fi
+
+# Serialize against concurrent main-sync attempts (sibling sessions
+# pre-flighting `gh pr merge --auto` from a different worktree). Lock name
+# is `rebase-main` per plan §Implementation Phases for the hook surface,
+# even though the strategy here is `git merge` (see top-of-file comment on
+# the historical filename).
+acquire_lock rebase-main 60 || headless_or_stderr warn "rebase-main lock contended; proceeding without serialization"
+# Release on any exit path below (merge failure, push failure, success).
+trap 'release_lock rebase-main 2>/dev/null || true' EXIT
 
 # Attempt merge
 if ! git -C "$WORK_DIR" merge origin/main >/dev/null 2>&1; then

@@ -1,6 +1,6 @@
 ---
 name: skill-creator
-description: "This skill should be used when creating, refining, or auditing Claude Code Skills. It provides expert guidance on SKILL.md structure, creating new skills from scratch, improving existing skills, packaging for distribution, and skill best practices."
+description: "This skill should be used when creating, refining, or auditing Claude Code Skills, including SKILL.md structure, scaffolding, packaging, and best practices."
 license: Complete terms in LICENSE.txt
 ---
 
@@ -202,6 +202,30 @@ The packaging script will:
 
 If validation fails, the script will report the errors and exit without creating a package. Fix any validation errors and run the packaging command again.
 
+### Step 5b: Security scan (cooperative-fast-path)
+
+After `package_skill.py` validates the structure but BEFORE the zip is
+distributed, invoke the `skill-security-scan` advisory gate against the
+newly-scaffolded SKILL.md:
+
+```bash
+bash plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh < <skill-folder>/SKILL.md
+```
+
+Operator handling:
+
+- **`LOW-RISK`** — proceed with packaging.
+- **`REVIEW`** — present findings as informational; ask operator to confirm
+  before packaging.
+- **`HIGH-RISK`** — present findings + override instructions referencing
+  [skill-security-scan/references/override-mechanism.md](../skill-security-scan/references/override-mechanism.md).
+  Block packaging until either (a) the SKILL.md is revised, or (b) a valid
+  override artifact is committed under `knowledge-base/security/skill-overrides/`.
+
+The PreToolUse hook on `Write` (`.claude/hooks/skill-security-scan-write.sh`)
+is the load-bearing gate at the tool layer — this Step 5b is the
+operator-friendly cooperative-fast-path that surfaces findings early.
+
 ### Step 6: Iterate
 
 After testing the skill, users may request improvements. Often this happens right after using the skill, with fresh context of how the skill performed.
@@ -212,6 +236,10 @@ After testing the skill, users may request improvements. Often this happens righ
 2. Notice struggles or inefficiencies
 3. Identify how SKILL.md or bundled resources should be updated
 4. Implement changes and test again
+
+### Sharp Edges
+
+- When a SKILL.md prose fence documents shell-active patterns by design (e.g., `bash -c "$VAR"`, process substitution, an eval-style invocation), label the fence ` ```text ` instead of ` ```bash ` and document the load-bearing mitigations (timeout, reject-regex, env scrub, trust source) in a per-skill Sharp Edges section. Otherwise the `skill-security-scan` calibration suite fails the first-party SKILL.md with HIGH-RISK on `code-execution` — there is no per-finding override mechanism for first-party legitimate uses. The fence is documentation; the orchestrator still dispatches via the Bash tool when it reads the prose, so runtime behavior is unchanged. See `knowledge-base/project/learnings/2026-05-20-skill-md-shell-active-prose-calibration-carve-out.md`.
 
 ## Auditing Existing Skills
 
@@ -234,6 +262,7 @@ For detailed guidance on skill authoring, see:
 - [iteration-and-testing.md](./references/iteration-and-testing.md) - Iteration and testing guidance
 - [workflows-and-validation.md](./references/workflows-and-validation.md) - Workflow and validation patterns
 - [api-security.md](./references/api-security.md) - API security considerations
+- [fail-closed redaction pattern](../../../../knowledge-base/project/learnings/2026-05-15-fail-closed-redaction-enables-committed-default-output.md) - Designing output paths for skills that generate user-derived artifacts intended for external sharing
 
 ## Workflows
 

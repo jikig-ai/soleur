@@ -1,12 +1,16 @@
 ---
-name: Image placeholder leak + cc-soleur-go attachment drop
-description: Two coupled bugs surfaced together — claude-agent-sdk text-editor placeholders leaked into chat output, and the cc-soleur-go path silently dropped msg.attachments
+title: '`[Image #N]` placeholder leak + cc-soleur-go attachment drop'
 date: 2026-05-05
 category: integration-issues
-module: apps/web-platform
 tags: [command-center, websockets, attachments, claude-agent-sdk, prompt-injection]
+module: apps/web-platform
+description: Two coupled bugs surfaced together — claude-agent-sdk text-editor placeholders leaked into chat output, and the cc-soleur-go path silently dropped msg.attachments
+name: Image placeholder leak + cc-soleur-go attachment drop
+related_issues:
+  - 3258
+  - 3259
+  - 3260
 related_pr: 3254
-related_issues: [3258, 3259, 3260]
 ---
 
 # Learning: `[Image #N]` placeholder leak + cc-soleur-go attachment drop

@@ -25,6 +25,22 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({ from: mockFrom, rpc: mockRpc })),
 }));
+
+// PR-B (#3244 §1.5.1): tenant-client factory; route through the same
+// mockFrom/mockRpc chain so existing assertions still apply.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom, rpc: mockRpc })),
+  mintFounderJwt: vi.fn(),
+  RuntimeAuthError: class RuntimeAuthError extends Error {
+    cause: string;
+    constructor(cause: string, msg: string) {
+      super(msg);
+      this.name = "RuntimeAuthError";
+      this.cause = cause;
+    }
+  },
+}));
+
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
 vi.mock("../server/ws-handler", () => ({ sendToClient: mockSendToClient }));
 vi.mock("../server/logger", () => ({
@@ -35,8 +51,10 @@ vi.mock("../server/logger", () => ({
   }),
 }));
 vi.mock("../server/byok", () => ({
-  decryptKey: vi.fn(() => "sk-test-key"),
-  decryptKeyLegacy: vi.fn(),
+  // PR-B (#3244 §1.4.2): decryptKey* now return Buffer (zeroize-on-finally).
+  decryptKey: vi.fn(() => Buffer.from("sk-test-key", "utf8")),
+  decryptKeyLegacy: vi.fn(() => Buffer.from("sk-test-key", "utf8")),
+  zeroize: vi.fn(),
   encryptKey: vi.fn(),
 }));
 vi.mock("../server/error-sanitizer", () => ({

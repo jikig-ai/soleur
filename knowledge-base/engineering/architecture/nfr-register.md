@@ -400,13 +400,13 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 
 ### NFR-019: Auto-Scaling
 
-**Category:** Scaling & Recovery | **Scope:** Container | **System-Level Status:** N/A
+**Category:** Scaling & Recovery | **Scope:** Container | **System-Level Status:** N/A (by ADR-027)
 
 | Container/Link | Status | Enforced By | Evidence |
 |----------------|--------|-------------|----------|
-| Dashboard | N/A | — | Single Hetzner VPS; not applicable at current scale |
-| API Routes | N/A | — | Single Hetzner VPS |
-| Agent Runtime | N/A | — | Single Hetzner VPS |
+| Dashboard | N/A | ADR-027 | Process-local session/approval state; replicas=1 invariant |
+| API Routes | N/A | ADR-027 | Process-local session/approval state; replicas=1 invariant |
+| Agent Runtime | N/A | ADR-027 | Process-local session/approval state; replicas=1 invariant |
 | Compute | N/A | — | No orchestrator for auto-scaling |
 
 ### NFR-020: Auto-Healing

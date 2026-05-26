@@ -203,7 +203,92 @@ jobs:
     concurrency:
       group: deploy-web-platform
       cancel-in-progress: false
+    # Job-level poll-window constants. All three windows MUST agree per
+    # cq-align-ci-poll-windows-with-adjacent-steps:
+    #   STATUS_POLL_MAX_ATTEMPTS * STATUS_POLL_INTERVAL_S  (Verify deploy script completion)
+    #     == HEALTH_POLL_MAX_ATTEMPTS * HEALTH_POLL_INTERVAL_S  (Verify deploy health and version)
+    #     == IN_FLIGHT_CEILING_S  (Pre-rerun lock probe)
+    # The Pre-rerun lock probe step asserts this at runtime, so a future PR
+    # that adjusts one constant without the others fails CI rather than
+    # silently producing stale-state false positives or premature rerun
+    # blocks. See #2205, #2519, #3398, #3408. Sizing rationale + rerun-
+    # during-flight unsafety:
+    # knowledge-base/project/learnings/best-practices/2026-05-07-deploy-poll-ceiling-must-track-realistic-deploy-window.md
+    # Runbook: plugins/soleur/skills/postmerge/references/deploy-status-debugging.md
+    env:
+      STATUS_POLL_MAX_ATTEMPTS: 180
+      STATUS_POLL_INTERVAL_S: 5
+      HEALTH_POLL_MAX_ATTEMPTS: 90
+      HEALTH_POLL_INTERVAL_S: 10
+      # IN_FLIGHT_CEILING_S MUST equal the wall-clock cap in
+      # apps/web-platform/infra/ci-deploy-wrapper.sh (timeout ... 900s ...)
+      # so the server-side hard-kill fires exactly when the workflow gives
+      # up polling (#3704). Drift produces either a perpetual "running"
+      # state (workflow gives up before kill) or wasted polling cycles
+      # (kill fires before workflow times out).
+      IN_FLIGHT_CEILING_S: 900
     steps:
+      - name: Pre-rerun lock probe
+        # #3408: short-circuit if the prior deploy is still in flight, so a
+        # `gh run rerun --failed` doesn't cascade into a flock-rejected POST
+        # that masks the original deploy's actual fate. GET-only / read-only;
+        # the load-bearing safety net is still ci-deploy.sh's `flock -n`.
+        env:
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          # Drift assertion: fail CI rather than silently let one constant
+          # outpace its siblings (the original #3398 recurrence pattern).
+          STATUS_WINDOW=$((STATUS_POLL_MAX_ATTEMPTS * STATUS_POLL_INTERVAL_S))
+          HEALTH_WINDOW=$((HEALTH_POLL_MAX_ATTEMPTS * HEALTH_POLL_INTERVAL_S))
+          if [ "$STATUS_WINDOW" -ne "$IN_FLIGHT_CEILING_S" ] || [ "$HEALTH_WINDOW" -ne "$IN_FLIGHT_CEILING_S" ]; then
+            echo "::error::Poll-window drift: STATUS=${STATUS_WINDOW}s HEALTH=${HEALTH_WINDOW}s IN_FLIGHT_CEILING=${IN_FLIGHT_CEILING_S}s — all three must agree."
+            exit 1
+          fi
+          SIGNATURE=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+          HTTP_CODE=$(curl -s --max-time 10 \
+            -o /tmp/preflight-body \
+            -w '%{http_code}' \
+            -X GET \
+            -H "X-Signature-256: sha256=$SIGNATURE" \
+            -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+            -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+            "https://deploy.soleur.ai/hooks/deploy-status" || echo "000")
+          BODY=$(cat /tmp/preflight-body 2>/dev/null || echo "")
+          # Degraded-permissive: any non-JSON / empty / HTTP-error response
+          # falls through to the deploy step. flock is the load-bearing gate;
+          # this probe is a fast-path UX improvement, not a new safety net.
+          if [ -z "$BODY" ] || ! echo "$BODY" | jq -e . >/dev/null 2>&1; then
+            echo "Pre-rerun probe: non-JSON or empty body (HTTP $HTTP_CODE) — proceeding (degraded-permissive)"
+            exit 0
+          fi
+          PRIOR_EXIT=$(echo "$BODY" | jq -r '.exit_code // -99')
+          if [ "$PRIOR_EXIT" != "-1" ]; then
+            echo "Pre-rerun probe: no in-flight deploy (exit_code=$PRIOR_EXIT) — proceeding"
+            exit 0
+          fi
+          PRIOR_TAG=$(echo "$BODY" | jq -r '.tag // "?"')
+          # Strict-numeric guard on start_ts: distinguish absent/corrupt state
+          # from a real "elapsed exceeded ceiling" stale-state read. Without
+          # this, a missing field aliases to elapsed≈now and falls through to
+          # "proceed (stale)" — masking corrupt-state cases the operator
+          # should know about. The 1700000000 floor is the unix epoch for
+          # 2023-11-15 (well before this codebase was deployed), so any
+          # parseable older value is corrupt-by-construction.
+          PRIOR_START=$(echo "$BODY" | jq -r '.start_ts // empty')
+          if ! [[ "$PRIOR_START" =~ ^[0-9]+$ ]] || [ "$PRIOR_START" -lt 1700000000 ]; then
+            echo "Pre-rerun probe: prior deploy in-flight but start_ts absent/invalid (got '$PRIOR_START') — proceeding (state corrupt; flock will catch concurrent POSTs)"
+            exit 0
+          fi
+          ELAPSED=$(($(date +%s) - PRIOR_START))
+          if [ "$ELAPSED" -gt "$IN_FLIGHT_CEILING_S" ]; then
+            echo "Pre-rerun probe: prior deploy of $PRIOR_TAG marked running but elapsed=${ELAPSED}s exceeds ${IN_FLIGHT_CEILING_S}s ceiling — proceeding (state likely stale)"
+            exit 0
+          fi
+          echo "::error::Prior deploy of $PRIOR_TAG still running (elapsed=${ELAPSED}s). Wait for completion or cancel manually before re-running."
+          exit 1
+
       - name: Deploy via webhook
         env:
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
@@ -229,19 +314,13 @@ jobs:
           echo "Deploy initiated (HTTP 202), polling health endpoint..."
 
       - name: Verify deploy script completion
+        # STATUS_POLL_MAX_ATTEMPTS / STATUS_POLL_INTERVAL_S inherited from
+        # job-level env (see top of `deploy:` job for the alignment rationale).
         env:
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           VERSION: ${{ needs.release.outputs.version }}
-          # Named poll bounds (#2205, #2519). Total window = MAX_ATTEMPTS * INTERVAL_S.
-          # Raised from 24 (120s) to 60 (300s) after run 24583922171 hit a
-          # false-negative timeout during a healthy v0.43.0 deploy. Aligns with
-          # the downstream Verify-deploy-health step's 300s ceiling (HEALTH_POLL_*).
-          # Kept INTERVAL_S=5 to preserve fail-fast on early non-zero exits
-          # (e.g., insufficient_disk_space, unhandled traps).
-          STATUS_POLL_MAX_ATTEMPTS: 60
-          STATUS_POLL_INTERVAL_S: 5
         run: |
           # /hooks/deploy-status is GET (read-only, idempotent). adnanh/webhook's
           # payload-hmac-sha256 rule verifies the signature over the request body;
@@ -283,7 +362,10 @@ jobs:
                 echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: last deploy was for $TAG (want v$VERSION)"
                 ;;
               -1)
-                echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: ci-deploy.sh still running (reason=$REASON)"
+                # Elapsed-since-running annotation (#3398): surfaces ceiling drift in the log.
+                STARTED=$(echo "$BODY" | jq -r '.start_ts // 0')
+                ELAPSED=$(($(date +%s) - STARTED))
+                echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: ci-deploy.sh still running (reason=$REASON, elapsed=${ELAPSED}s)"
                 ;;
               -2)
                 echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: no prior deploy recorded"
@@ -305,11 +387,15 @@ jobs:
           exit 1
 
       - name: Verify deploy health and version
+        # HEALTH_POLL_MAX_ATTEMPTS / HEALTH_POLL_INTERVAL_S inherited from
+        # job-level env (see top of `deploy:` job for the alignment rationale).
         env:
           VERSION: ${{ needs.release.outputs.version }}
-          # Named poll bounds (#2205). Total window = MAX_ATTEMPTS * INTERVAL_S.
-          HEALTH_POLL_MAX_ATTEMPTS: 30
-          HEALTH_POLL_INTERVAL_S: 10
+          # #3409: assert the running image was built from this workflow's
+          # commit SHA. Defense-in-depth against a bad tag→image association
+          # (right semver, wrong source tree). github.sha is the same SHA the
+          # docker-build step at reusable-release.yml tagged the image with.
+          EXPECTED_SHA: ${{ github.sha }}
         run: |
           for i in $(seq 1 "$HEALTH_POLL_MAX_ATTEMPTS"); do
             HEALTH=$(curl -sf "https://app.soleur.ai/health" 2>/dev/null || echo "")
@@ -334,9 +420,21 @@ jobs:
                   if [ "$SUPABASE_STATUS" != "connected" ]; then
                     echo "Attempt $i/$HEALTH_POLL_MAX_ATTEMPTS: version $VERSION deployed but supabase not connected (status=${SUPABASE_STATUS:-missing})"
                   else
-                    echo "Deploy verified: version $VERSION running, supabase connected"
-                    echo "$HEALTH" | jq .
-                    exit 0
+                    # #3409 build_sha gate. Three outcomes:
+                    #   missing/dev → mid-swap (old image still answering LB), retry
+                    #   mismatch → bad-tag→image association, fail-fast (non-retryable)
+                    #   match → deploy verified
+                    DEPLOYED_SHA=$(echo "$HEALTH" | jq -r '.build_sha // empty')
+                    if [ -z "$DEPLOYED_SHA" ] || [ "$DEPLOYED_SHA" = "dev" ]; then
+                      echo "Attempt $i/$HEALTH_POLL_MAX_ATTEMPTS: version $VERSION + supabase ok, but build_sha is missing/dev — possibly mid-swap, retrying"
+                    elif [ "$DEPLOYED_SHA" != "$EXPECTED_SHA" ]; then
+                      echo "::error::version=$VERSION supabase=connected but build_sha=$DEPLOYED_SHA (expected $EXPECTED_SHA) — wrong image tagged with right version"
+                      exit 1
+                    else
+                      echo "Deploy verified: version $VERSION running, supabase connected, build_sha=$DEPLOYED_SHA"
+                      echo "$HEALTH" | jq .
+                      exit 0
+                    fi
                   fi
                 else
                   UPTIME=$(echo "$HEALTH" | jq -r '.uptime // "unknown"')

@@ -115,13 +115,16 @@ describe("Settings sidebar collapse", () => {
   // Main nav header at apps/web-platform/app/(dashboard)/layout.tsx uses py-5;
   // the settings <nav> must match so both <` chevrons land on the same y-row.
   describe("collapse button alignment with main nav chevron (expanded state)", () => {
-    it("nav wrapper uses py-5 to align chevron y-origin with main nav header", () => {
+    it("inner wrapper uses py-5 to align chevron y-origin with main nav header", () => {
       render(<SettingsShell><div>content</div></SettingsShell>);
       const collapseBtn = screen.getByLabelText("Collapse settings nav");
-      const navEl = collapseBtn.closest("nav");
-      expect(navEl).not.toBeNull();
-      expect(navEl).toHaveClass("py-5");
-      expect(navEl?.className).not.toMatch(/\bpy-10\b/);
+      // The padding lives on the inner fixed-width wrapper, NOT the <nav> itself,
+      // so the nav can collapse to md:w-0 without the padding forcing a 32px sliver.
+      // The wrapper is `collapseBtn.parentElement.parentElement` (button → header div → wrapper).
+      const wrapperEl = collapseBtn.parentElement?.parentElement;
+      expect(wrapperEl).not.toBeNull();
+      expect(wrapperEl).toHaveClass("py-5");
+      expect(wrapperEl?.className).not.toMatch(/\bpy-10\b/);
     });
 
     it("collapse button keeps h-6 w-6 geometry matching main nav toggle", () => {
@@ -131,6 +134,65 @@ describe("Settings sidebar collapse", () => {
       expect(btn.className).not.toMatch(/\bborder(-|\s|$)/);
       const svg = btn.querySelector("svg");
       expect(svg).toHaveClass("h-4", "w-4");
+    });
+
+    it("settings header row matches main sidebar brand row height (min-h-7)", () => {
+      render(<SettingsShell><div>content</div></SettingsShell>);
+      const collapseBtn = screen.getByLabelText("Collapse settings nav");
+      const headerRow = collapseBtn.parentElement;
+      expect(headerRow).not.toBeNull();
+      expect(headerRow).toHaveClass("min-h-7");
+      expect(headerRow).toHaveClass("flex", "items-center", "justify-between");
+    });
+  });
+
+  describe("content area collapses cleanly when sidebar is closed", () => {
+    it("collapsed nav has zero rendered width contribution (no border, no width, overflow hidden)", async () => {
+      render(<SettingsShell><div>content</div></SettingsShell>);
+      await userEvent.click(screen.getByLabelText("Collapse settings nav"));
+      const navEl = document.querySelector("nav");
+      expect(navEl).not.toBeNull();
+      expect(navEl?.className).toMatch(/\bmd:w-0\b/);
+      expect(navEl?.className).toMatch(/\bmd:overflow-hidden\b/);
+      expect(navEl?.className).toMatch(/\bmd:border-r-0\b/);
+    });
+
+    it("nav has NO padding (so md:w-0 collapses fully) and inner wrapper has fixed w-48 px-4 py-5 so content position is stable", async () => {
+      render(<SettingsShell><div>content</div></SettingsShell>);
+      const navEl = document.querySelector("nav");
+      expect(navEl).not.toBeNull();
+      // Nav itself MUST NOT carry px-4/py-5 — with box-border + md:w-0, padding would
+      // force the box to a min visible width of 32px (a sliver of letters showing).
+      expect(navEl?.className).not.toMatch(/\bpx-4\b/);
+      expect(navEl?.className).not.toMatch(/\bpy-5\b/);
+      // The inner content wrapper holds the padding AND a fixed w-48 so the SETTINGS
+      // header + nav items stay at (16, 20) the whole transition; overflow-hidden on
+      // the nav clips the wrapper right-to-left as the nav width animates to 0.
+      const wrapperEl = navEl?.firstElementChild as HTMLElement | null;
+      expect(wrapperEl).not.toBeNull();
+      expect(wrapperEl).toHaveClass("w-48", "px-4", "py-5");
+    });
+
+    it("collapsed content area pl matches sidebar-width + open-padding to keep centered text stationary", async () => {
+      render(<SettingsShell><div>content</div></SettingsShell>);
+      await userEvent.click(screen.getByLabelText("Collapse settings nav"));
+      const expandBtn = screen.getByLabelText("Expand settings nav");
+      const contentArea = expandBtn.parentElement;
+      expect(contentArea).not.toBeNull();
+      // Sidebar = w-48 (12rem) + open pad = md:px-10 (2.5rem) → collapsed pl must equal 14.5rem
+      // so the `mx-auto max-w-2xl` inner content's screen-x position is identical in both states.
+      expect(contentArea?.className).toMatch(/(?:^|\s)md:pl-\[14\.5rem\](?:\s|$)/);
+    });
+
+    it("content area transitions padding in sync with sidebar width (200ms ease-out)", async () => {
+      render(<SettingsShell><div>content</div></SettingsShell>);
+      await userEvent.click(screen.getByLabelText("Collapse settings nav"));
+      const expandBtn = screen.getByLabelText("Expand settings nav");
+      const contentArea = expandBtn.parentElement;
+      expect(contentArea).not.toBeNull();
+      expect(contentArea?.className).toMatch(/(?:^|\s)md:transition-\[padding\](?:\s|$)/);
+      expect(contentArea?.className).toMatch(/\bmd:duration-200\b/);
+      expect(contentArea?.className).toMatch(/\bmd:ease-out\b/);
     });
   });
 });

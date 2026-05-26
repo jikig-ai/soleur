@@ -13,6 +13,7 @@ import { describe, test, expect } from "vitest";
 import {
   getToolTier,
   buildGateMessage,
+  CC_ROUTER_TIER3_DENYLIST,
 } from "../server/tool-tiers";
 
 describe("getToolTier", () => {
@@ -93,5 +94,35 @@ describe("buildGateMessage", () => {
       {},
     );
     expect(msg).toContain("some_new_tool");
+  });
+});
+
+describe("CC_ROUTER_TIER3_DENYLIST (#2909)", () => {
+  test("contains exactly 3 entries", () => {
+    expect(CC_ROUTER_TIER3_DENYLIST.size).toBe(3);
+  });
+
+  test("contains all three Plausible tool FQNs", () => {
+    expect(
+      CC_ROUTER_TIER3_DENYLIST.has("mcp__soleur_platform__plausible_create_site"),
+    ).toBe(true);
+    expect(
+      CC_ROUTER_TIER3_DENYLIST.has("mcp__soleur_platform__plausible_add_goal"),
+    ).toBe(true);
+    expect(
+      CC_ROUTER_TIER3_DENYLIST.has("mcp__soleur_platform__plausible_get_stats"),
+    ).toBe(true);
+  });
+
+  test("does not contain non-Plausible tools (no Tier 3 creep)", () => {
+    expect(
+      CC_ROUTER_TIER3_DENYLIST.has("mcp__soleur_platform__kb_share_create"),
+    ).toBe(false);
+    expect(
+      CC_ROUTER_TIER3_DENYLIST.has("mcp__soleur_platform__github_push_branch"),
+    ).toBe(false);
+    expect(
+      CC_ROUTER_TIER3_DENYLIST.has("mcp__soleur_platform__conversations_lookup"),
+    ).toBe(false);
   });
 });

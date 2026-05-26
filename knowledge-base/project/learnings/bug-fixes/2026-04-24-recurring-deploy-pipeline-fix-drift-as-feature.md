@@ -1,16 +1,11 @@
 ---
+title: 'Recurring `terraform_data.deploy_pipeline_fix` drift is a feature, not a bug'
 date: 2026-04-24
 category: bug-fixes
 tags: [terraform, infra-drift, ci-deploy, recurring-pattern, ops-remediation]
-related_issues: ["#2873", "#2874", "#2618", "#2234", "#1899", "#1505", "#1412", "#994", "#988", "#2881"]
-related_prs: ["#2842"]
-related_files:
-  - apps/web-platform/infra/server.tf
-  - apps/web-platform/infra/ci-deploy.sh
-  - apps/web-platform/infra/webhook.service
-  - apps/web-platform/infra/cat-deploy-state.sh
-  - apps/web-platform/infra/hooks.json.tmpl
-  - .github/workflows/scheduled-terraform-drift.yml
+related_files: [apps/web-platform/infra/server.tf, apps/web-platform/infra/ci-deploy.sh, apps/web-platform/infra/webhook.service, apps/web-platform/infra/cat-deploy-state.sh, apps/web-platform/infra/hooks.json.tmpl, .github/workflows/scheduled-terraform-drift.yml]
+related_issues: [#2873, #2874, #2618, #2234, #1899, #1505, #1412, #994, #988, #2881]
+related_prs: [#2842]
 ---
 
 # Recurring `terraform_data.deploy_pipeline_fix` drift is a feature, not a bug
@@ -85,6 +80,11 @@ Tracked in #2881 — not implemented in this PR. Implementation requires:
 3. A retry/resume path for when the operator can't schedule the apply immediately.
 
 **Resolved:** 2026-04-29 — `/ship` Phase 5.5 "Deploy Pipeline Fix Drift Gate" landed alongside the file+systemd verification contract from #3034. See plan `knowledge-base/project/plans/2026-04-29-fix-deploy-pipeline-fix-ship-gate-and-postapply-contract-plan.md`.
+
+## Observed sub-states and invocation gotchas
+
+- **Tainted-mid-cycle sub-state** (first seen 2026-05-13 #3620 cycle 11+): when `apply-deploy-pipeline-fix.yml` auto-apply fails between cron ticks (typically `dial tcp <prod-ip>:22: i/o timeout` from the GH Actions runner egress-IP miss), the next cron tick reports `# (1 unchanged attribute hidden)` and the resource id changes (e.g., `967667d8-…` → `6bb222f8-…`) instead of the canonical `~ triggers_replace = (sensitive value) # forces replacement`. Same drift class — resolves via the same operator-manual apply ritual; the destroy+create cycle re-runs all provisioners regardless of which sub-state forced replacement.
+- **`doppler run --name-transformer tf-var` clobbers R2 backend AWS creds.** The transformer lowercases and prefixes EVERY env var with `TF_VAR_`, so `AWS_ACCESS_KEY_ID` becomes `TF_VAR_aws_access_key_id` and the S3-compatible backend fails with `No valid credential sources found`. Canonical pattern (per `scheduled-terraform-drift.yml` workflow): extract AWS creds via `doppler secrets get AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY --plain` into the shell env BEFORE the `doppler run --name-transformer tf-var -- terraform plan|apply` invocation, never both together.
 
 ## Deep-dive references
 

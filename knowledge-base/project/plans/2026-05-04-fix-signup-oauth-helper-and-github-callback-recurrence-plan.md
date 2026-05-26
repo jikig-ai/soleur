@@ -306,7 +306,7 @@ None. (Queried via `gh issue list --label code-review --state open --json number
 - Runbook: `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` — failure-mode-keyed triage.
 - Code: `apps/web-platform/components/auth/oauth-buttons.tsx:107` — `disabled` prop already correctly wired.
 - Code: `apps/web-platform/app/api/auth/github-resolve/route.ts` — Flow B redirect_uri construction (`${appUrl}/api/auth/github-resolve/callback`).
-- AGENTS.md rules touched: `hr-weigh-every-decision-against-target-user-impact` (single-user-incident threshold), `wg-when-fixing-a-workflow-gates-detection` (retroactive remediation of #3183), `hr-never-label-any-step-as-manual-without` (Playwright-MCP-first audit), `hr-dev-prd-distinct-supabase-projects` (verified — dev has no GitHub OAuth secret-binding to the prd App).
+- AGENTS.md rules touched: `hr-weigh-every-decision-against-target-user-impact` (single-user incident threshold), `wg-when-fixing-a-workflow-gates-detection` (retroactive remediation of #3183), `hr-never-label-any-step-as-manual-without` (Playwright-MCP-first audit), `hr-dev-prd-distinct-supabase-projects` (verified — dev has no GitHub OAuth secret-binding to the prd App).
 
 ## Research Insights
 

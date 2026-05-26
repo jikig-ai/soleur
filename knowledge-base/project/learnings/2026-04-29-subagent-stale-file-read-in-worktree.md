@@ -1,3 +1,10 @@
+---
+title: Subagents launched from a worktree can read stale files even when the parent agent reads correctly
+date: 2026-04-29
+category: workflow-patterns
+tags: [integration-issues, subagents, 2026-03-13-bare-repo-stale-files-and-working-tree-guards.md, 2026-03-18-worktree-manager-bare-repo-false-positive.md]
+---
+
 # Learning: Subagents launched from a worktree can read stale files even when the parent agent reads correctly
 
 ## Problem

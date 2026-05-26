@@ -164,6 +164,120 @@ fi
 rm -rf "$ROOT"
 
 # ------------------------------------------------------------------------
+# Test 7: rotation engages when file exceeds size threshold
+# ------------------------------------------------------------------------
+echo "Test 7: per-write rotation engages on size threshold"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+LOG=$(logfile_for "$ROOT")
+# Pre-fill the log to just over 1 KB; set threshold to 1 KB so the next
+# write triggers rotation. Pre-content is JSON-shaped so it survives the
+# aggregator's `fromjson?` parse tolerance.
+for i in $(seq 1 50); do
+  printf '{"schema":1,"ts":"2026-01-01T00:00:00Z","skill":"pre-%d","session_id":"x","hook_event":"PreToolUse"}\n' "$i" >> "$LOG"
+done
+PRE_SIZE=$(wc -c < "$LOG")
+echo '{"tool_name":"Skill","tool_input":{"skill":"soleur:rotate-trigger"}}' \
+  | LOG_ROTATION_SIZE_BYTES=1024 SKILL_LOGGER_REPO_ROOT="$ROOT" bash "$HOOK"
+POST_SIZE=$(wc -c < "$LOG")
+ARCHIVE_COUNT=$(compgen -G "$ROOT/.claude/.skill-invocations-*.jsonl.gz" | wc -l)
+if [[ "$ARCHIVE_COUNT" -ne 1 ]]; then
+  fail "expected 1 archive, got $ARCHIVE_COUNT (pre-size=$PRE_SIZE)"
+elif [[ "$POST_SIZE" -ge "$PRE_SIZE" ]]; then
+  fail "active file not truncated by rotation (pre=$PRE_SIZE, post=$POST_SIZE)"
+elif ! jq -e '.skill == "soleur:rotate-trigger"' "$LOG" >/dev/null 2>&1; then
+  fail "post-rotation write did not land in active file"
+else
+  pass "rotation triggered, archive created, post-rotate write landed"
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
+# Test 8: rotation respects LOG_ROTATION_DISABLE kill-switch
+# ------------------------------------------------------------------------
+echo "Test 8: rotation kill-switch suppresses rotation"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+LOG=$(logfile_for "$ROOT")
+for i in $(seq 1 50); do
+  printf '{"schema":1,"ts":"2026-01-01T00:00:00Z","skill":"pre-%d","session_id":"x","hook_event":"PreToolUse"}\n' "$i" >> "$LOG"
+done
+echo '{"tool_name":"Skill","tool_input":{"skill":"soleur:no-rotate"}}' \
+  | LOG_ROTATION_SIZE_BYTES=1024 LOG_ROTATION_DISABLE=1 SKILL_LOGGER_REPO_ROOT="$ROOT" bash "$HOOK"
+ARCHIVE_COUNT=$(compgen -G "$ROOT/.claude/.skill-invocations-*.jsonl.gz" | wc -l || true)
+if [[ "$ARCHIVE_COUNT" -ne 0 ]]; then
+  fail "rotation triggered despite LOG_ROTATION_DISABLE=1 ($ARCHIVE_COUNT archives)"
+else
+  pass "no rotation when LOG_ROTATION_DISABLE=1"
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
+# Test 9: jq_fail drop emits sentinel + same exit (issue #3509)
+# ------------------------------------------------------------------------
+# Override jq with a wrapper that fails on the line-build call (`jq -nc ...`)
+# but delegates everything else to real jq. Same induction technique as the
+# agent-token-tee.sh tests — a natural-data fixture for this hook can't
+# trip the line-build pass since every arg is `--arg` (string-typed).
+echo "Test 9: jq_fail drop sentinel"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+LOG=$(logfile_for "$ROOT")
+FAKE_BIN=$(mktemp -d); ROOTS+=("$FAKE_BIN")
+REAL_JQ=$(command -v jq)
+cat > "$FAKE_BIN/jq" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do
+  case "\$a" in
+    -n|-nc|-cn|--null-input) exit 1 ;;
+  esac
+done
+exec "$REAL_JQ" "\$@"
+EOF
+chmod +x "$FAKE_BIN/jq"
+echo '{"tool_name":"Skill","tool_input":{"skill":"soleur:test"},"session_id":"sess-jq"}' \
+  | PATH="$FAKE_BIN:$PATH" SKILL_LOGGER_REPO_ROOT="$ROOT" bash "$HOOK"
+if [[ ! -f "$LOG" ]]; then
+  fail "no log file (expected sentinel-only line)"
+elif ! jq -e 'select(.error == "jq_fail" and .hook_event == "PreToolUse" and .schema == 1)' "$LOG" >/dev/null 2>&1; then
+  fail "expected jq_fail sentinel; got: $(cat "$LOG")"
+elif jq -e 'select(.skill == "soleur:test")' "$LOG" >/dev/null 2>&1; then
+  fail "data line written despite jq_fail (should be sentinel-only): $(cat "$LOG")"
+else
+  pass "jq_fail sentinel emitted, no data line"
+fi
+rm -rf "$ROOT" "$FAKE_BIN"
+
+# ------------------------------------------------------------------------
+# Test 10: rotation_fail drop emits sentinel + active preserved (issue #3509)
+# ------------------------------------------------------------------------
+echo "Test 10: rotation_fail drop sentinel"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+LOG=$(logfile_for "$ROOT")
+for i in $(seq 1 50); do
+  printf '{"schema":1,"ts":"2026-01-01T00:00:00Z","skill":"pre-%d","session_id":"x","hook_event":"PreToolUse"}\n' "$i" >> "$LOG"
+done
+PRE_LINES=$(wc -l < "$LOG")
+if [[ $(id -u) -eq 0 ]]; then
+  pass "skipped under root (chmod 0500 ineffective)"
+else
+  rm -f "/tmp/log-rotation-warned-$$" 2>/dev/null || true
+  chmod 0500 "$ROOT/.claude"
+  echo '{"tool_name":"Skill","tool_input":{"skill":"soleur:rotfail"},"session_id":"sess-rotfail"}' \
+    | LOG_ROTATION_SIZE_BYTES=1024 SKILL_LOGGER_REPO_ROOT="$ROOT" bash "$HOOK" 2>/dev/null
+  chmod 0700 "$ROOT/.claude"
+  POST_LINES=$(wc -l < "$LOG")
+  if ! jq -e 'select(.error == "rotation_fail" and .hook_event == "PreToolUse")' "$LOG" >/dev/null 2>&1; then
+    fail "no rotation_fail sentinel; log=$(cat "$LOG")"
+  elif (( POST_LINES <= PRE_LINES )); then
+    fail "active not preserved (pre=$PRE_LINES post=$POST_LINES)"
+  elif compgen -G "$ROOT/.claude/.skill-invocations-*.jsonl.gz" >/dev/null; then
+    fail "archive created despite chmod"
+  else
+    pass "rotation_fail sentinel emitted, active preserved, no archive"
+  fi
+  rm -f "/tmp/log-rotation-warned-$$" 2>/dev/null || true
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

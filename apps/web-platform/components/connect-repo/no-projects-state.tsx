@@ -5,7 +5,6 @@ import { Badge } from "@/components/ui/badge";
 import { GoldButton } from "@/components/ui/gold-button";
 import { OutlinedButton } from "@/components/ui/outlined-button";
 import { Card } from "@/components/ui/card";
-import { serif } from "./fonts";
 
 interface NoProjectsStateProps {
   onUpdateAccess: () => void;
@@ -21,7 +20,7 @@ export function NoProjectsState({ onUpdateAccess, onBack, onRefresh }: NoProject
       </div>
 
       <div className="space-y-2">
-        <h1 className={`${serif.className} text-3xl font-semibold`}>
+        <h1 className="text-3xl font-semibold">
           Select a Project
         </h1>
       </div>

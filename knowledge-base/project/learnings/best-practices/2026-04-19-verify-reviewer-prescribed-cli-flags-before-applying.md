@@ -1,11 +1,13 @@
 ---
-name: Verify reviewer-prescribed CLI flags before applying as fixes
-description: Multi-agent reviewers can prescribe CLI flags or subcommands that don't exist; verify via --help before committing to the fix. Generalizes the gh-jq rule.
-type: best-practice
-category: review
+title: Verify reviewer-prescribed CLI flags before applying as fixes
 date: 2026-04-19
-pr: 2647
+category: review
+tags: [verify, reviewer, prescribed, cli, flags, before, applying]
+description: 'Multi-agent reviewers can prescribe CLI flags or subcommands that don''t exist; verify via --help before committing to the fix. Generalizes the gh-jq rule.'
 issue: 2615
+name: Verify reviewer-prescribed CLI flags before applying as fixes
+pr: 2647
+type: best-practice
 ---
 
 # Verify reviewer-prescribed CLI flags before applying as fixes

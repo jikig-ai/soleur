@@ -1,16 +1,15 @@
 ---
-module: Deploy Pipeline
+title: Doppler CLI stderr warning contaminates Docker env file
 date: 2026-04-06
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "docker: invalid env file (/tmp/doppler-env.XXX): variable 'Using DOPPLER_CONFIG_DIR from the environment' contains whitespaces"
-  - "DEPLOY_ERROR: ci-deploy.sh failed at line 140 (exit 125)"
-  - "Health check version mismatch after 120s polling (expected new version, got old)"
-root_cause: config_error
-resolution_type: code_fix
-severity: critical
+category: engineering
 tags: [doppler, docker, stderr, env-file, deploy-pipeline, ci-deploy]
+symptoms: [docker: invalid env file (/tmp/doppler-env.XXX): variable 'Using DOPPLER_CONFIG_DIR from the environment' contains whitespaces, DEPLOY_ERROR: ci-deploy.sh failed at line 140 (exit 125), Health check version mismatch after 120s polling (expected new version, got old)]
+module: Deploy Pipeline
+component: tooling
+problem_type: integration_issue
+resolution_type: code_fix
+root_cause: config_error
+severity: critical
 ---
 
 # Learning: Doppler CLI stderr warning contaminates Docker env file

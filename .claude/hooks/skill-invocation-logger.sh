@@ -58,14 +58,44 @@ ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 mkdir -p "$(dirname "$file")" 2>/dev/null || exit 0
 [[ -f "$file" ]] || : > "$file" 2>/dev/null || exit 0
 
-# Build line via jq -nc (single-line JSON), fail-soft.
+# Source the sentinel helper for drop-class telemetry (issue #3509).
+# shellcheck source=/dev/null
+_incidents="$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh"
+if [[ -f "$_incidents" ]]; then
+  # shellcheck source=/dev/null
+  source "$_incidents" 2>/dev/null || true
+fi
+unset _incidents
+declare -F _emit_drop_sentinel >/dev/null 2>&1 || _emit_drop_sentinel() { :; }
+
+# Rotate before writing. Source the helper fail-soft; on archive-write
+# failure (return 1) emit a rotation_fail sentinel and proceed.
+# shellcheck source=/dev/null
+_rotator="$(dirname "${BASH_SOURCE[0]}")/lib/log-rotation.sh"
+if [[ -f "$_rotator" ]]; then
+  # shellcheck source=/dev/null
+  source "$_rotator" 2>/dev/null || true
+  if declare -F rotate_if_needed >/dev/null 2>&1; then
+    if ! rotate_if_needed "$file" 2>/dev/null; then
+      _emit_drop_sentinel "$file" "PreToolUse" "rotation_fail"
+    fi
+  fi
+fi
+unset _rotator
+
+# Build line via jq -nc (single-line JSON), fail-soft. On line-build
+# failure emit a jq_fail sentinel and exit silently — never block tool
+# dispatch. No flock_timeout site here: indefinite `flock -x` per plan-review.
 line="$(jq -nc \
   --arg ts "$ts" \
   --arg s "$SKILL" \
   --arg sid "$SESSION_ID" \
   --argjson schema 1 \
   '{schema:$schema, ts:$ts, skill:$s, session_id:$sid, hook_event:"PreToolUse"}' \
-  2>/dev/null)" || exit 0
+  2>/dev/null)" || {
+    _emit_drop_sentinel "$file" "PreToolUse" "jq_fail"
+    exit 0
+  }
 
 # Append under flock so concurrent worktrees / sub-agents do not interleave.
 (

@@ -4,7 +4,6 @@ import { AlertTriangleIcon } from "@/components/icons";
 import { GoldButton } from "@/components/ui/gold-button";
 import { OutlinedButton } from "@/components/ui/outlined-button";
 import { Card } from "@/components/ui/card";
-import { serif } from "./fonts";
 
 interface InterruptedStateProps {
   onResume: () => void;
@@ -19,7 +18,7 @@ export function InterruptedState({ onResume, onStartOver }: InterruptedStateProp
       </div>
 
       <div className="space-y-3">
-        <h1 className={`${serif.className} text-4xl font-semibold`}>
+        <h1 className="text-4xl font-semibold">
           Setup Was Interrupted
         </h1>
         <p className="text-base text-soleur-text-secondary">

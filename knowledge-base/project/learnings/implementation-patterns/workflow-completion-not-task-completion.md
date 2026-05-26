@@ -1,14 +1,11 @@
 ---
-module: Workflow
+title: Workflow Completion is Not Task Completion
 date: 2026-02-06
-problem_type: process_improvement
+category: engineering
+tags: [workflow, shipping, pr-creation, compound, definition-of-done]
+module: Workflow
 component: soleur-workflow
-tags:
-  - workflow
-  - shipping
-  - pr-creation
-  - compound
-  - definition-of-done
+problem_type: process_improvement
 severity: medium
 ---
 

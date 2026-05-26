@@ -193,7 +193,23 @@ jobs:
           BUMP_TYPE: ${{ steps.bump.outputs.type }}
           TAG_PREFIX: ${{ inputs.tag_prefix }}
         run: |
-          LATEST_TAG=$(git tag --list "${TAG_PREFIX}*" --sort=-version:refname | head -1)
+          # Escape regex metacharacters in the caller-supplied prefix so the
+          # anchored post-filter below stays correct if a future caller passes
+          # a prefix containing `.`, `+`, `*`, `(`, etc. Today's callers pass
+          # `v`, `web-v`, `telegram-v` (metachar-free); the escape is defense
+          # in depth.
+          TAG_PREFIX_RE=$(printf '%s' "$TAG_PREFIX" | sed 's/[][\\.^$*+?(){}|/]/\\&/g')
+
+          # Glob is fnmatch-style (cheap pre-filter); anchored regex enforces
+          # strict ${TAG_PREFIX}X.Y.Z shape so collisions like `vinngest-v1.0.0`
+          # under the bare `v` prefix are rejected (#4082). `grep -m1` over
+          # `head -1` avoids SIGPIPE if the corpus ever exceeds the kernel pipe
+          # buffer. `|| [ $? -eq 1 ]` lets the existing empty-fallback below
+          # fire on no-match (grep exit 1, bootstrap of a new prefix) WITHOUT
+          # masking grep exit 2 (regex syntax error — would surface a latent
+          # escaping bug instead of silently falling back to 0.0.0).
+          LATEST_TAG=$(git tag --list "${TAG_PREFIX}*" --sort=-version:refname \
+            | { grep -m1 -E "^${TAG_PREFIX_RE}[0-9]+\.[0-9]+\.[0-9]+$" || [ $? -eq 1 ]; })
 
           if [ -z "$LATEST_TAG" ]; then
             CURRENT="0.0.0"
@@ -256,19 +272,110 @@ jobs:
 
           echo "$CHANGELOG" > "$RELEASE_NOTES_FILE"
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release (as draft)
         if: steps.check_changed.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'
         id: create_release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
           RELEASE_NOTES_FILE: ${{ steps.tmpfiles.outputs.release_notes }}
+        # `--draft` is load-bearing: GitHub now creates published releases as
+        # IMMUTABLE by default, which causes `gh release upload` to fail with
+        # HTTP 422 ("Cannot upload assets to an immutable release"). Drafts
+        # remain mutable, so we create as draft, let the audit step upload its
+        # asset, then `gh release edit --draft=false` flips it to a published
+        # (and now-immutable) release in the finalise-release step below.
+        # Refs #3849 AC16 / run 26156985840 (web-v0.99.1 upload failure).
         run: |
           gh release create "$TAG" \
             --title "$TAG" \
-            --notes-file "$RELEASE_NOTES_FILE"
+            --notes-file "$RELEASE_NOTES_FILE" \
+            --draft
           printf 'released=%s\n' "true" >> "$GITHUB_OUTPUT"
-          echo "Created release $TAG"
+          echo "Created draft release $TAG"
+
+      # Sentry Monitors/Alerts migration audit (Phase 2.2 of #3814).
+      # Re-runs the audit after each release and uploads the dated Markdown
+      # report as a release asset. Provides an evergreen Article 30 §5(2)
+      # accountability evidence trail co-located with release notes.
+      #
+      # NON-BLOCKING: this step is telemetry and MUST NOT fail the release
+      # pipeline. `continue-on-error: true` + an inner non-set-e shell with
+      # explicit exit-0 conversion ensures a Sentry-side transient (token
+      # scope mismatch, region-probe failure, API outage) cannot block the
+      # Docker build/push that follows. Initial #3811 ship hit this failure
+      # mode: the CI SENTRY_AUTH_TOKEN lacked the `/users/me/` scope the
+      # region probe requires, the audit script exited 1, and BOTH the
+      # plugin release AND the web-platform release skipped Docker push
+      # while the GitHub Release tags landed — production stayed stale.
+      #
+      # SENTRY_API_HOST bypasses the audit script's `/users/me/` region
+      # probe (which requires `member:read` scope — a scope that personal
+      # tokens minted for CI commonly lack even after the post-#3849 token
+      # rotation). Mirrors the escape hatch added to
+      # `configure-sentry-alerts.sh` in #3858. Falls back to `sentry.io`
+      # (US ingest — the empirically-verified host the operator's
+      # 2026-05-15 baseline audit ran against per the committed artifact
+      # at `knowledge-base/legal/audits/sentry-migration-audit-2026-05-15.md`).
+      # Override via the `SENTRY_API_HOST` repo secret if Sentry residency
+      # changes (e.g., migration to `de.sentry.io`).
+      #
+      # Skips silently when SENTRY_AUTH_TOKEN is unavailable (e.g. component
+      # release where the secret isn't required).
+      - name: Sentry Monitors/Alerts migration audit
+        if: steps.create_release.outputs.released == 'true'
+        continue-on-error: true
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+          # Branch-C correction (2026-05-17): default is now the org-subdomain,
+          # NOT `de.sentry.io` (ingest-only, no `/api/0/`) or `eu.sentry.io`
+          # (silently rewrites slugs ending in `-eu` per learning
+          # `2026-05-17-sentry-eu-region-host-rewrites-slugs-with-eu-suffix.md`).
+          # Fail-loud if SENTRY_API_HOST secret is not set — the audit script
+          # MUST hit the right host for slug-scoped probes to work.
+          SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
+          SENTRY_URL: ${{ secrets.SENTRY_URL }}
+          # Required for Gate 4 (audit_dsn_org_id_matches_token_org_id) — the
+          # split-state detector that catches an audit token authenticating
+          # against a different org than the runtime DSN points at. Without
+          # the DSN env, gate 4 cannot run and the residency check is silently
+          # downgraded. The script tolerates empty NEXT_PUBLIC_SENTRY_DSN (the
+          # `|| true` brace on the o<id> extraction protects pipefail), but
+          # passing it makes the gate meaningful at release time.
+          NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          # No `set -e` — every audit failure path must exit 0 so the
+          # release pipeline continues. The `continue-on-error: true`
+          # marker above is belt; this is suspenders.
+          set -uo pipefail
+          if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then
+            echo "::notice::SENTRY_AUTH_TOKEN unavailable; skipping migration audit (no Article 30 evidence uploaded for this release)."
+            exit 0
+          fi
+          if [[ ! -x apps/web-platform/scripts/sentry-monitors-audit.sh ]]; then
+            echo "::notice::Audit script not present in this checkout; skipping."
+            exit 0
+          fi
+          set +e
+          AUDIT_OUT_DIR="${RUNNER_TEMP}/sentry-audit" \
+            bash apps/web-platform/scripts/sentry-monitors-audit.sh
+          script_rc=$?
+          set -e
+          if [[ "$script_rc" -ne 0 ]]; then
+            echo "::warning::Sentry migration audit script exited ${script_rc} — no Article 30 evidence uploaded for this release. If the script output reads 'Sentry token not valid against either US or EU ingest', verify SENTRY_API_HOST is reaching the script (defaults to 'de.sentry.io'; override via repo secret if residency changed). If the token is rejected past the probe, rotate per ADR-031 §Authentication."
+            exit 0
+          fi
+          report=$(ls "${RUNNER_TEMP}/sentry-audit"/sentry-migration-audit-*.md 2>/dev/null | head -1 || true)
+          if [[ -z "$report" ]]; then
+            echo "::warning::Audit produced no report file."
+            exit 0
+          fi
+          gh release upload "$TAG" "$report" --clobber
+          echo "Uploaded $(basename "$report") to release $TAG."
 
       - name: Count plugin components
         id: plugin_stats
@@ -373,20 +480,19 @@ jobs:
               exit 1
               ;;
           esac
-          host=$(printf '%s' "$SUPABASE_URL" | sed -E 's#^https://##; s#/.*$##')
-          if [[ "$host" =~ ^[a-z0-9]{20}\.supabase\.co$ ]]; then
-            expected_ref="${host%%.*}"
-          else
-            # Bound DNS wall-clock on resolver flake: 3s timeout, 2 tries (max ~6s).
-            cname=$(dig +short +time=3 +tries=2 CNAME "$host" | sed 's/\.$//' | head -1)
-            if [[ "$cname" =~ ^([a-z0-9]{20})\.supabase\.co$ ]]; then
-              expected_ref="${BASH_REMATCH[1]}"
-            else
-              cname_safe="${cname//[$'\n\r']/}"
-              host_safe="${host//[$'\n\r']/}"
-              echo "::error::Cannot resolve canonical ref from URL host $host_safe (CNAME=$cname_safe)"
-              exit 1
-            fi
+          # Derive the canonical 20-char ref from $SUPABASE_URL via the
+          # single-sourced resolver (handles both canonical *.supabase.co
+          # URLs AND custom-domain CNAME fallback, with the subdomain-bypass
+          # anchored regex). Future tuning of the regex / DNS timeout lives
+          # in one place. DNS wall-clock widens from ~6s (was +time=3 +tries=2)
+          # to ~10s (helper-pinned +time=5 +tries=2) — deliberate, per #4323
+          # AC11.
+          # shellcheck source=apps/web-platform/scripts/lib/supabase-ref-resolver.sh
+          . apps/web-platform/scripts/lib/supabase-ref-resolver.sh
+          if ! expected_ref=$(resolve_supabase_ref "$SUPABASE_URL" 2>&1); then
+            expected_ref_safe="${expected_ref//[$'\n\r']/}"
+            echo "::error::${expected_ref_safe}"
+            exit 1
           fi
           if [[ "$ref" != "$expected_ref" ]]; then
             echo "::error::JWT ref=\"$ref_safe\" does not match URL canonical ref=\"$expected_ref\""
@@ -445,16 +551,37 @@ jobs:
             NEXT_PUBLIC_SENTRY_DSN=${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
             NEXT_PUBLIC_GITHUB_APP_SLUG=${{ secrets.NEXT_PUBLIC_GITHUB_APP_SLUG }}
             NEXT_PUBLIC_VAPID_PUBLIC_KEY=${{ secrets.NEXT_PUBLIC_VAPID_PUBLIC_KEY }}
-            SENTRY_AUTH_TOKEN=${{ secrets.SENTRY_AUTH_TOKEN }}
+            SENTRY_AUTH_TOKEN=${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
             SENTRY_ORG=${{ secrets.SENTRY_ORG }}
             SENTRY_PROJECT=${{ secrets.SENTRY_PROJECT }}
             BUILD_VERSION=${{ steps.version.outputs.next }}
+            BUILD_SHA=${{ github.sha }}
             NEXT_PUBLIC_AGENT_COUNT=${{ steps.plugin_stats.outputs.agent_count }}
 
       - name: Set docker_pushed output
         id: docker_pushed
         if: steps.docker_build.outcome == 'success'
         run: printf 'pushed=%s\n' "true" >> "$GITHUB_OUTPUT"
+
+      # Publish the draft release once Docker has pushed AND the audit
+      # asset has uploaded. GitHub now publishes releases as IMMUTABLE —
+      # once a release is out of draft state, `gh release upload` returns
+      # HTTP 422. So the `create_release` step creates as `--draft`; this
+      # step flips it live after all post-creation uploads complete.
+      # Failure semantics preserved: if Docker push fails, this step
+      # doesn't run and the release stays a draft (invisible to ops) —
+      # operator manually publishes once Docker is recovered. Email/
+      # Discord notify steps below fire after this, so they always link
+      # to a visible release URL. Refs #3849 AC16 / run 26156985840
+      # (web-v0.99.1 upload-to-immutable HTTP 422).
+      - name: Finalise release (publish draft)
+        if: steps.create_release.outputs.released == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release edit "$TAG" --draft=false
+          echo "Published release $TAG"
 
       - name: Email notification (release)
         if: steps.create_release.outputs.released == 'true'

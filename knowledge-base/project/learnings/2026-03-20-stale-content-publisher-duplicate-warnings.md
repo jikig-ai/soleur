@@ -1,3 +1,10 @@
+---
+title: Stale content publisher sends duplicate Discord warnings daily
+date: 2026-03-20
+category: engineering
+tags: [logic-errors, content-publisher, missing-state-transition, medium, content-publisher, discord, cron, stale-detection, duplicate-notifications, idempotency]
+---
+
 # Learning: Stale content publisher sends duplicate Discord warnings daily
 
 ## Problem

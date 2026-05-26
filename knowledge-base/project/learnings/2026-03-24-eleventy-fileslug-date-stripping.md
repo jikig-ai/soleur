@@ -1,3 +1,10 @@
+---
+title: 'Eleventy `page.fileSlug` strips date prefixes from filenames'
+date: 2026-03-24
+category: engineering
+tags: [build-errors, blog, social-distribute]
+---
+
 # Learning: Eleventy `page.fileSlug` strips date prefixes from filenames
 
 ## Problem

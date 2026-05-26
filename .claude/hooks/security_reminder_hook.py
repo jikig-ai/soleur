@@ -20,6 +20,7 @@
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from fnmatch import fnmatch
@@ -65,6 +66,23 @@ def emit_incident(rule_id: str, event_type: str, prefix: str, cmd: str = "") -> 
         repo_root = _incidents_repo_root()
         path = os.path.join(repo_root, ".claude", ".rule-incidents.jsonl")
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        # Rotate before writing — shell out to the shared bash helper so the
+        # rotation policy stays single-source-of-truth. Suppressed via
+        # DEVNULL to keep stderr clean; failure leaves the file unrotated and
+        # the next call retries. Skipped silently if the helper is missing
+        # (e.g., partial checkout) or bash is unavailable.
+        rotator = os.path.join(repo_root, ".claude", "hooks", "lib", "log-rotation.sh")
+        if os.path.isfile(path) and os.path.isfile(rotator):
+            try:
+                subprocess.run(
+                    ["bash", "-c", f'source "$1" && rotate_if_needed "$2"', "_", rotator, path],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                )
+            except (OSError, subprocess.SubprocessError):
+                pass
         record = {
             "schema": SCHEMA_VERSION,
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),

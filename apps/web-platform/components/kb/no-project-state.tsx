@@ -9,7 +9,7 @@ export function NoProjectState() {
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2Z" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </div>
-        <h1 className="mb-2 font-serif text-lg font-medium text-soleur-text-primary">
+        <h1 className="mb-2 text-lg font-medium text-soleur-text-primary">
           No Project Connected
         </h1>
         <p className="mb-6 text-sm leading-relaxed text-soleur-text-secondary">

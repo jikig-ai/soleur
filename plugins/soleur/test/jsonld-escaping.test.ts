@@ -17,6 +17,10 @@ let outputDir: string;
 let homepageHtml: string;
 let blogPostHtml: string;
 
+// 30_000 ms: `npx @11ty/eleventy` cold-start measures 3-7s under bun-test;
+// default 5s bun hook timeout flakes. NOTE: bun reports this as
+// `beforeEach/afterEach hook timed out` even for `beforeAll` — grep both
+// when debugging.
 beforeAll(() => {
   outputDir = mkdtempSync(join(tmpdir(), "jsonld-test-"));
   const proc = Bun.spawnSync(
@@ -30,7 +34,7 @@ beforeAll(() => {
   }
   homepageHtml = readFileSync(join(outputDir, "index.html"), "utf8");
   blogPostHtml = readFileSync(join(outputDir, "blog", "test-post", "index.html"), "utf8");
-});
+}, 30_000);
 
 afterAll(() => {
   rmSync(outputDir, { recursive: true, force: true });

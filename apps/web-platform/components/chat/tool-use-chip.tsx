@@ -42,10 +42,6 @@ export function ToolUseChip({ toolName, toolLabel, leaderId }: ToolUseChipProps)
       data-tool-chip-id={`${leaderId}-${toolName}-${toolLabel}`}
       className={`inline-flex items-center gap-2 rounded-full bg-soleur-bg-surface-1/60 px-3 py-1 ${colorClass}`}
     >
-      <span
-        className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500"
-        aria-hidden="true"
-      />
       <span className="text-xs text-soleur-text-secondary">{toolLabel}</span>
     </div>
   );

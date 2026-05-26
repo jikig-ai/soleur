@@ -233,6 +233,7 @@ Structure your findings as:
 - Prioritize high-severity and critical patterns
 - Extract actionable insights, not just summaries
 - Note when no relevant learnings exist (this is valuable information too)
+- Verify with `ls -la` or `test -f` before asserting a learning file is absent — a grep/find miss can mean wrong scope (bare-repo path or worktree confusion), not absence
 
 **DON'T:**
 - Read frontmatter of ALL files (use Grep to pre-filter first)

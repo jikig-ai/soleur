@@ -1,3 +1,10 @@
+---
+title: Review agent rate-limit fallback requires inline review
+date: 2026-03-30
+category: agent-design
+tags: [integration-issues, review-pipeline]
+---
+
 # Learning: Review agent rate-limit fallback requires inline review
 
 ## Problem

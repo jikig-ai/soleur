@@ -41,6 +41,21 @@ vi.mock("fs", async (importOriginal) => {
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({ from: mockFrom })),
 }));
+
+// PR-B (#3244 §1.5.1): tenant-client factory; route through the same
+// mock chain so existing assertions still apply.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom, rpc: vi.fn() })),
+  mintFounderJwt: vi.fn(),
+  RuntimeAuthError: class RuntimeAuthError extends Error {
+    cause: string;
+    constructor(cause: string, msg: string) {
+      super(msg);
+      this.name = "RuntimeAuthError";
+      this.cause = cause;
+    }
+  },
+}));
 vi.mock("@sentry/nextjs", () => ({
   captureException: mockCaptureException,
 }));
@@ -55,8 +70,10 @@ vi.mock("../server/logger", () => ({
   }),
 }));
 vi.mock("../server/byok", () => ({
-  decryptKey: vi.fn(() => "sk-test-key"),
-  decryptKeyLegacy: vi.fn(),
+  // PR-B (#3244 §1.4.2): decryptKey* now return Buffer (zeroize-on-finally).
+  decryptKey: vi.fn(() => Buffer.from("sk-test-key", "utf8")),
+  decryptKeyLegacy: vi.fn(() => Buffer.from("sk-test-key", "utf8")),
+  zeroize: vi.fn(),
   encryptKey: vi.fn(),
 }));
 vi.mock("../server/error-sanitizer", () => ({
@@ -136,7 +153,12 @@ function createApiKeysMock(rows: Record<string, unknown>[] = [DEFAULT_API_KEY_RO
     data: rows,
     error: null,
     eq: () => createChain(),
-    limit: () => ({ single: () => ({ data: rows[0] ?? null, error: null }) }),
+    // Phase 3 #4229 — byok-lease switched to maybeSingle. Both shapes
+    // supported here for breadth.
+    limit: () => ({
+      single: () => ({ data: rows[0] ?? null, error: null }),
+      maybeSingle: () => ({ data: rows[0] ?? null, error: null }),
+    }),
     then: (resolve: (v: unknown) => void) => resolve({ data: rows, error: null }),
   });
   return { select: () => createChain() };

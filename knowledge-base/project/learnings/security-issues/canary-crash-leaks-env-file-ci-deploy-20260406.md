@@ -1,16 +1,16 @@
 ---
-module: ci-deploy
+title: Canary crash leaks temp secrets file on disk
 date: 2026-04-06
-problem_type: security_issue
-component: tooling
-symptoms:
-  - "Temp env file /tmp/doppler-env.XXXXXX with production secrets persists on disk after canary docker run crash"
-  - "cleanup_env_file not called on set -e exit path"
-root_cause: missing_workflow_step
-resolution_type: code_fix
-severity: high
+category: ci-cd
 tags: [secrets-leak, trap-cleanup, shell-script, canary-deploy, exit-trap]
+symptoms: [Temp env file /tmp/doppler-env.XXXXXX with production secrets persists on disk after canary docker run crash, cleanup_env_file not called on set -e exit path]
+module: ci-deploy
 synced_to: [work]
+component: tooling
+problem_type: security_issue
+resolution_type: code_fix
+root_cause: missing_workflow_step
+severity: high
 ---
 
 # Troubleshooting: Canary crash leaks temp secrets file on disk

@@ -6,6 +6,7 @@ set -euo pipefail
 
 PASS=0
 FAIL=0
+SKIPPED=0
 
 assert_eq() {
   local expected="$1"
@@ -65,15 +66,58 @@ assert_file_not_exists() {
   fi
 }
 
+make_gh_stub() {
+  # Creates a `gh` stub at "$stub_dir/gh" that handles `gh run list ...`.
+  # The first arg is the stub directory (prepend to PATH); the second is the
+  # literal stdout for `gh run list`. Subcommands other than `run list` exit 1.
+  local stub_dir="$1" output="$2"
+  mkdir -p "$stub_dir"
+  cat > "$stub_dir/gh" <<EOF
+#!/usr/bin/env bash
+if [[ "\$1 \$2" == "run list" ]]; then
+  printf '%s\n' "$output"
+  exit 0
+fi
+echo "gh stub: unhandled subcommand '\$@'" >&2
+exit 1
+EOF
+  chmod +x "$stub_dir/gh"
+}
+
+make_gh_stub_sleep() {
+  # gh stub that sleeps to exercise the parser's timeout wrapper.
+  local stub_dir="$1" seconds="$2"
+  mkdir -p "$stub_dir"
+  cat > "$stub_dir/gh" <<EOF
+#!/usr/bin/env bash
+if [[ "\$1 \$2" == "run list" ]]; then
+  sleep $seconds
+  printf '2026-02-01T00:00:00Z\n'
+  exit 0
+fi
+exit 1
+EOF
+  chmod +x "$stub_dir/gh"
+}
+
 print_results() {
   echo "=== Results ==="
   echo "Passed: $PASS"
   echo "Failed: $FAIL"
+  if (( SKIPPED > 0 )); then
+    echo "Skipped: $SKIPPED"
+  fi
   echo ""
 
   if [[ $FAIL -gt 0 ]]; then
     echo "SOME TESTS FAILED"
     exit 1
+  elif (( SKIPPED > 0 )); then
+    # Honest summary: not "ALL TESTS PASSED" when timing invariants weren't
+    # actually enforced. Reviewer P2 — closes silent-green-on-skipped-tests
+    # footgun on PRs that conditionally gate timing tests behind CI=true.
+    echo "ALL EXECUTED TESTS PASSED ($SKIPPED skipped)"
+    exit 0
   else
     echo "ALL TESTS PASSED"
     exit 0

@@ -1,3 +1,10 @@
+---
+title: Content Generator Pipeline — Skill Invocation and Blog Date Formats
+date: 2026-03-24
+category: engineering
+tags: [pipeline, content-generator, skills, eleventy]
+---
+
 # Learning: Content Generator Pipeline — Skill Invocation and Blog Date Formats
 
 ## Problem

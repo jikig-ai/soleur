@@ -1,3 +1,10 @@
+---
+title: DPD sub-processor section contradiction fix
+date: 2026-03-18
+category: engineering
+tags: [legal-compliance, data-protection-disclosure]
+---
+
 # Learning: DPD sub-processor section contradiction fix
 
 ## Problem

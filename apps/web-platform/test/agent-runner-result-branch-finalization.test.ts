@@ -55,6 +55,18 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({ from: mockFrom, rpc: mockRpc })),
 }));
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom, rpc: mockRpc })),
+  mintFounderJwt: vi.fn(),
+  RuntimeAuthError: class RuntimeAuthError extends Error {
+    cause: string;
+    constructor(cause: string, msg: string) {
+      super(msg);
+      this.name = "RuntimeAuthError";
+      this.cause = cause;
+    }
+  },
+}));
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn(), addBreadcrumb: vi.fn() }));
 vi.mock("../server/ws-handler", () => ({ sendToClient: mockSendToClient }));
 vi.mock("../server/logger", () => ({
@@ -66,9 +78,10 @@ vi.mock("../server/logger", () => ({
   }),
 }));
 vi.mock("../server/byok", () => ({
-  decryptKey: vi.fn(() => "sk-test-key"),
-  decryptKeyLegacy: vi.fn(),
+  decryptKey: vi.fn(() => Buffer.from("sk-test-key")),
+  decryptKeyLegacy: vi.fn(() => Buffer.from("sk-test-key")),
   encryptKey: vi.fn(),
+  zeroize: vi.fn(),
 }));
 vi.mock("../server/error-sanitizer", () => ({
   sanitizeErrorForClient: vi.fn(() => "error"),
@@ -164,6 +177,12 @@ function buildSdkIterator(args: {
 interface UpdateRecord {
   patchKeys: string[];
   patch: Record<string, unknown>;
+  /** `.in("status", values)` predicates appended to this UPDATE. The
+   *  abort/result-branch cascade-to-`failed` writes appended the
+   *  `onlyIfStatusIn: ["active"]` guard added by #3463; the primary
+   *  `waiting_for_user` write does not. Tests can sort by patch.status
+   *  to map an UpdateRecord back to its site. */
+  ins: Array<{ column: string; values: unknown[] }>;
 }
 
 function setupSupabaseMockWithStatusCapture(opts: {
@@ -189,7 +208,11 @@ function setupSupabaseMockWithStatusCapture(opts: {
         data: [row],
         error: null,
         eq: () => createChain(),
-        limit: () => ({ single: () => ({ data: row, error: null }) }),
+        // Phase 3 #4229 — byok-lease switched to maybeSingle.
+        limit: () => ({
+          single: () => ({ data: row, error: null }),
+          maybeSingle: () => ({ data: row, error: null }),
+        }),
         then: (resolve: (v: unknown) => void) =>
           resolve({ data: [row], error: null }),
       });
@@ -216,10 +239,24 @@ function setupSupabaseMockWithStatusCapture(opts: {
         update: vi.fn((patch: Record<string, unknown>) => {
           conversationsUpdateCallCount += 1;
           const callIndex = conversationsUpdateCallCount;
-          updates.push({ patchKeys: Object.keys(patch), patch });
+          const updateRecord: UpdateRecord = {
+            patchKeys: Object.keys(patch),
+            patch,
+            ins: [],
+          };
+          updates.push(updateRecord);
           const chain: Record<string, unknown> = {
             error: null,
             eq: vi.fn(),
+            // #3463: `updateConversationStatusIfActive` appends
+            // `.in("status", ["active"])` to the chain. The mock returns
+            // the same chain so the wrapper's `await guardedQuery`
+            // resolves to `{ error: null }` (silent success — matches
+            // the conversation-writer's no-expectMatch contract).
+            in: vi.fn((column: string, values: unknown[]) => {
+              updateRecord.ins.push({ column, values: [...values] });
+              return chain;
+            }),
             select: vi.fn(() => {
               if (
                 opts.failStatusWriteOnCall !== undefined &&
@@ -235,8 +272,16 @@ function setupSupabaseMockWithStatusCapture(opts: {
                 error: null,
               });
             }),
+            // Thenable so `await guardedQuery` (no-expectMatch path)
+            // resolves with a plain `{ error: null }` without going
+            // through `.select()`.
+            then: (resolve: (v: unknown) => void) =>
+              resolve({ error: null }),
           };
           (chain.eq as ReturnType<typeof vi.fn>).mockReturnValue(chain);
+          // chain.in is set up via mockImplementation above so the
+          // captured call lands in updateRecord.ins. mockReturnValue
+          // would shadow that capture.
           return chain;
         }),
       };
@@ -318,6 +363,58 @@ describe("agent-runner result-branch finalization (AC1/AC6)", () => {
     // depending on whether the result-branch catch landed.
     expect(mockReleaseSlot).toHaveBeenCalledWith("user-1", "conv-1");
     expect(mockReleaseSlot.mock.calls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("clean result → primary waiting_for_user write does NOT thread onlyIfStatusIn (#3463 win-the-race contract)", async () => {
+    // The result branch's primary `waiting_for_user` flip MUST stay
+    // strict — `expectMatch: true`, no status guard. If we guarded it,
+    // a row that legitimately reached terminus (concurrent close,
+    // archive trigger) would silently fail to flip and the UI would
+    // desync. The disconnect-after-result race is fixed at the
+    // ABORT branch's write, not by neutering the result branch.
+    const { updates } = setupSupabaseMockWithStatusCapture();
+    mockQuery.mockReturnValue(buildSdkIterator() as never);
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const waitingWrite = updates.find(
+      (u) => u.patch.status === "waiting_for_user",
+    );
+    expect(waitingWrite).toBeDefined();
+    expect(waitingWrite?.ins).toEqual([]);
+  });
+
+  test("result-branch fallback failed-cascade threads onlyIfStatusIn=['active'] (#3463 cascade guard)", async () => {
+    // Force the waiting_for_user flip to throw (call #2 = the result
+    // branch's primary status write). The catch then runs the cascade
+    // — first re-tries `waiting_for_user`, then on failure cascades to
+    // `failed`. The cascade `failed` write goes through
+    // `updateConversationStatusIfActive`, which appends
+    // `.in("status", ["active"])` so a row that reached a terminal
+    // state via a concurrent writer is left untouched.
+    const { updates } = setupSupabaseMockWithStatusCapture({
+      failStatusWriteOnCall: 2,
+      failWithError: { message: "expectMatch row miss" },
+    });
+    mockQuery.mockReturnValue(buildSdkIterator() as never);
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    // Find a `failed` write — the cascade target. There may be more
+    // than one (defense-in-depth between result-branch catch and outer
+    // catch); at least one must carry the `.in("status", ["active"])`
+    // guard.
+    const failedWrites = updates.filter((u) => u.patch.status === "failed");
+    expect(failedWrites.length).toBeGreaterThanOrEqual(1);
+    const guardedFailedWrite = failedWrites.find((u) =>
+      u.ins.some(
+        (entry) =>
+          entry.column === "status" &&
+          entry.values.length === 1 &&
+          entry.values[0] === "active",
+      ),
+    );
+    expect(guardedFailedWrite).toBeDefined();
   });
 
   test("updateConversationStatus throws (0-row, expectMatch) → releaseSlot still called (best-effort)", async () => {

@@ -1,10 +1,13 @@
 ---
-module: plugins/soleur
+title: Plugin Markdown Components Have No Automated Tests
 date: 2026-02-12
-problem_type: best_practice
-component: testing
+category: plugin-architecture
 tags: [testing, plugin, markdown, validation, coverage-gap]
+module: plugins/soleur
+component: testing
+problem_type: best_practice
 severity: medium
+status: open
 ---
 
 # Plugin Markdown Components Have No Automated Tests

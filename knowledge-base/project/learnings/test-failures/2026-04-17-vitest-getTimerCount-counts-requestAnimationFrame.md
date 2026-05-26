@@ -1,7 +1,8 @@
 ---
+title: 'vitest `vi.getTimerCount()` counts rAFs, not just `setTimeout`'
+date: 2026-04-17
 category: test-failures
 tags: [vitest, fake-timers, requestAnimationFrame, react, timer-leak]
-date: 2026-04-17
 ---
 
 # Learning: vitest `vi.getTimerCount()` counts rAFs, not just `setTimeout`

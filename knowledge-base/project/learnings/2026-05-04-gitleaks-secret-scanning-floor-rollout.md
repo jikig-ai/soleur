@@ -1,17 +1,12 @@
 ---
-title: Gitleaks secret-scanning floor — rollout learnings (#3121 PR1)
+title: 'Gitleaks secret-scanning floor — rollout learnings (#3121 PR1)'
 date: 2026-05-04
-issue: https://github.com/jikig-ai/soleur/issues/3121
+category: security
+tags: [security, secret-scanning, gitleaks, ci, github-push-protection]
+follow_up: 'https://github.com/jikig-ai/soleur/issues/3160'
+issue: 'https://github.com/jikig-ai/soleur/issues/3121'
 pr: behavior-harness-uplift (PR1)
-follow_up: https://github.com/jikig-ai/soleur/issues/3160
-tags:
-  - security
-  - secret-scanning
-  - gitleaks
-  - ci
-  - github-push-protection
-related:
-  - knowledge-base/engineering/operations/secret-scanning.md
+related: [knowledge-base/engineering/operations/secret-scanning.md]
 ---
 
 # Gitleaks secret-scanning floor — rollout learnings
@@ -99,14 +94,14 @@ source path.
 
 Worth re-checking on every gitleaks bump — fix may land upstream.
 
-### (d) Native `# gitleaks:allow` waivers bypass our trailer discipline
+### (d) Native `gitleaks:allow` waivers bypass our trailer discipline
 
-Native gitleaks `# gitleaks:allow` is honored on **any line in any file**
+Native gitleaks `gitleaks:allow` is honored on **any line in any file**
 with no trailer enforcement. Our companion `lint-fixture-content.mjs`
-linter requires `# gitleaks:allow # issue:#NNN <reason>` but is glob-scoped
+linter requires `gitleaks:allow # issue:#NNN <reason>` but is glob-scoped
 to fixture/golden/snapshot directories only. A developer could waive a
 real `whsec_` or `sk-ant-` token in a server-path file with bare
-`# gitleaks:allow` and gitleaks would honor it.
+`gitleaks:allow` and gitleaks would honor it.
 
 **Closed via:** a dedicated `waiver-discipline` CI job that greps every
 PR-added line containing `gitleaks:allow` and rejects any without an

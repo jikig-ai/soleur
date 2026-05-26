@@ -1,0 +1,35 @@
+name: vendor-pin-verify
+
+# PR-time integrity gate (review #3521): verifies every NOTICE
+# `upstream-blob-sha` resolves to a real fetchable blob on the upstream
+# repository. Closes the NOTICE co-edit bypass — a PR that edits both a
+# lifted file AND its NOTICE local-blob-sha would otherwise pass the
+# lefthook self-consistency check. With this gate, an attacker would also
+# need a matching real upstream blob, which the upstream's commit history
+# constrains.
+
+on:
+  pull_request:
+    paths:
+      - "plugins/soleur/skills/gdpr-gate/NOTICE"
+      - "plugins/soleur/skills/gdpr-gate/references/**"
+      - "plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh"
+      - "plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh"
+      - ".github/workflows/vendor-pin-verify.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-upstream-blobs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+
+      - name: Verify NOTICE upstream-blob-sha values
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh --verify-upstream

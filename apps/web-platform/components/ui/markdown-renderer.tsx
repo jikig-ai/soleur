@@ -49,11 +49,11 @@ function buildComponents({ linkRel, preWrap }: BuildOptions): Components {
         {children}
       </th>
     ),
-    // 8ch keeps single-token / empty cells visible; 40ch caps prose cells to a
-    // readable line so a single long-paragraph cell doesn't blow out the table.
-    // Header may exceed 40ch (whitespace-nowrap on th wins) by design.
+    // 8ch keeps single-token / empty cells visible; 45ch caps prose cells to the
+    // bottom of the readable measure so a single long-paragraph cell doesn't blow
+    // out the table. Header may exceed (whitespace-nowrap on th wins) by design.
     td: ({ children }) => (
-      <td className="min-w-[8ch] max-w-[40ch] border border-soleur-border-default px-3 py-1.5 align-top text-soleur-text-secondary">{children}</td>
+      <td className="min-w-[8ch] max-w-[45ch] border border-soleur-border-default px-3 py-1.5 align-top text-soleur-text-secondary">{children}</td>
     ),
     pre: ({ children }) => (
       <pre

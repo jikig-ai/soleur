@@ -172,10 +172,188 @@ if [[ ! -f "$LIB" ]]; then
   exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# T5: _emit_drop_sentinel writes a fixed-string JSON line, set -u clean,
+# uses non-blocking flock that fails open under contention.
+# ---------------------------------------------------------------------------
+t_emit_drop_sentinel_basic() {
+  local tmp; tmp=$(_with_fake_repo)
+  local sink="$tmp/.claude/.session-tokens.jsonl"
+  : > "$sink"
+  (
+    set -u   # mirror agent-token-tee.sh's invariant
+    cd "$tmp"
+    # shellcheck source=/dev/null
+    source "$tmp/.claude/hooks/lib/incidents.sh"
+    _emit_drop_sentinel "$sink" "PostToolUse" "jq_fail"
+  )
+  if [[ ! -s "$sink" ]]; then
+    _report "_emit_drop_sentinel writes a sentinel" fail "file empty"
+    rm -rf "$tmp"; return
+  fi
+  if ! jq -e '.schema == 1 and .hook_event == "PostToolUse" and .error == "jq_fail" and (.ts | type) == "string"' "$sink" >/dev/null 2>&1; then
+    _report "_emit_drop_sentinel writes a sentinel" fail "got=$(cat "$sink")"
+    rm -rf "$tmp"; return
+  fi
+  # Discriminator invariant: sentinel must NOT carry `rule_id` or `event_type`
+  # (so consumer-side `select(.rule_id != null)` / `select(.event_type=="deny")`
+  # filters exclude it). The aggregator filter contract depends on this.
+  if jq -e '.rule_id // .event_type' "$sink" >/dev/null 2>&1; then
+    _report "sentinel has no rule_id / event_type" fail "got=$(cat "$sink")"
+    rm -rf "$tmp"; return
+  fi
+  _report "_emit_drop_sentinel writes a sentinel" ok
+  rm -rf "$tmp"
+}
+
+# Non-blocking flock fallback: when a sibling holds the lock on the sink,
+# the helper must NOT hang and must NOT corrupt the file. Drop is silent.
+t_emit_drop_sentinel_flock_nonblocking() {
+  local tmp; tmp=$(_with_fake_repo)
+  local sink="$tmp/.claude/.session-tokens.jsonl"
+  : > "$sink"
+  # Hold an exclusive lock on the sink in a background subshell for ~3s.
+  (
+    flock -x 9
+    sleep 3
+  ) 9>>"$sink" &
+  local holder_pid=$!
+  # Wait until the holder has acquired the lock so the test is deterministic.
+  sleep 0.3
+  local start_epoch end_epoch
+  start_epoch=$(date +%s)
+  (
+    set -u
+    cd "$tmp"
+    # shellcheck source=/dev/null
+    source "$tmp/.claude/hooks/lib/incidents.sh"
+    _emit_drop_sentinel "$sink" "PostToolUse" "flock_timeout"
+  )
+  end_epoch=$(date +%s)
+  local elapsed=$(( end_epoch - start_epoch ))
+  # Don't leave the holder running.
+  kill "$holder_pid" 2>/dev/null || true
+  wait "$holder_pid" 2>/dev/null || true
+  if (( elapsed >= 2 )); then
+    _report "_emit_drop_sentinel non-blocking flock" fail "blocked $elapsed seconds (expected <1s)"
+    rm -rf "$tmp"; return
+  fi
+  # The drop is silent; the sink may be empty or still locked — either way,
+  # no torn writes. Once the lock releases (kill above), the file is jq-clean
+  # if anything landed. We assert no partial bytes (file ends with \n or empty).
+  if [[ -s "$sink" ]] && ! jq empty "$sink" >/dev/null 2>&1; then
+    _report "_emit_drop_sentinel non-blocking flock" fail "torn write: $(cat "$sink")"
+    rm -rf "$tmp"; return
+  fi
+  _report "_emit_drop_sentinel non-blocking flock" ok
+  rm -rf "$tmp"
+}
+
+# set -u clean: missing args must NOT error out under `set -u`.
+t_emit_drop_sentinel_setu_clean() {
+  local tmp; tmp=$(_with_fake_repo)
+  local rc
+  set +e
+  (
+    set -u
+    cd "$tmp"
+    # shellcheck source=/dev/null
+    source "$tmp/.claude/hooks/lib/incidents.sh"
+    _emit_drop_sentinel "" "" ""
+    _emit_drop_sentinel
+  )
+  rc=$?
+  set -e
+  if [[ "$rc" -ne 0 ]]; then
+    _report "_emit_drop_sentinel set -u clean on missing args" fail "rc=$rc"
+    rm -rf "$tmp"; return
+  fi
+  _report "_emit_drop_sentinel set -u clean on missing args" ok
+  rm -rf "$tmp"
+}
+
+# ---------------------------------------------------------------------------
+# T6: emit_incident on jq_fail emits a sentinel via _emit_drop_sentinel
+# ---------------------------------------------------------------------------
+# Override jq with a wrapper that fails on the line-build pass (`jq -nc ...`)
+# but delegates everything else to real jq.
+t_emit_incident_jq_fail() {
+  local tmp; tmp=$(_with_fake_repo)
+  local fake_bin; fake_bin=$(mktemp -d)
+  local real_jq; real_jq=$(command -v jq)
+  cat > "$fake_bin/jq" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do
+  case "\$a" in
+    -n|-nc|-cn|--null-input) exit 1 ;;
+  esac
+done
+exec "$real_jq" "\$@"
+EOF
+  chmod +x "$fake_bin/jq"
+  (
+    cd "$tmp"
+    PATH="$fake_bin:$PATH"
+    # shellcheck source=/dev/null
+    source "$tmp/.claude/hooks/lib/incidents.sh"
+    emit_incident "hr-test-rule" "deny" "x" ""
+  )
+  local file="$tmp/.claude/.rule-incidents.jsonl"
+  if [[ ! -f "$file" ]] || ! jq -e 'select(.error == "jq_fail")' "$file" >/dev/null 2>&1; then
+    _report "emit_incident emits jq_fail sentinel" fail "got=$(cat "$file" 2>/dev/null)"
+  elif jq -e 'select(.event_type == "deny")' "$file" >/dev/null 2>&1; then
+    _report "emit_incident emits jq_fail sentinel" fail "data line written: $(cat "$file")"
+  else
+    _report "emit_incident emits jq_fail sentinel" ok
+  fi
+  rm -rf "$tmp" "$fake_bin"
+}
+
+# ---------------------------------------------------------------------------
+# T7: emit_incident on rotation_fail emits a sentinel + writes data line
+# ---------------------------------------------------------------------------
+# Pre-fill the jsonl past the rotation threshold + chmod 0500 the parent so
+# the rotator's archive write fails. The data line should still land (we
+# only chmod the parent dir, not the file itself).
+t_emit_incident_rotation_fail() {
+  if [[ $(id -u) -eq 0 ]]; then
+    _report "emit_incident emits rotation_fail sentinel (skipped under root)" ok
+    return
+  fi
+  local tmp; tmp=$(_with_fake_repo)
+  local file="$tmp/.claude/.rule-incidents.jsonl"
+  for i in $(seq 1 30); do
+    printf '{"schema":1,"timestamp":"2026-01-01T00:00:00Z","rule_id":"hr-pre","event_type":"deny","rule_text_prefix":"x","command_snippet":""}\n' >> "$file"
+  done
+  rm -f "/tmp/log-rotation-warned-$$" 2>/dev/null || true
+  chmod 0500 "$tmp/.claude"
+  (
+    cd "$tmp"
+    # shellcheck source=/dev/null
+    source "$tmp/.claude/hooks/lib/incidents.sh"
+    LOG_ROTATION_SIZE_BYTES=1024 emit_incident "hr-test-rule" "deny" "x" "" 2>/dev/null
+  )
+  chmod 0700 "$tmp/.claude"
+  if ! jq -e 'select(.error == "rotation_fail" and .hook_event == "PreToolUse")' "$file" >/dev/null 2>&1; then
+    _report "emit_incident emits rotation_fail sentinel" fail "no sentinel: $(cat "$file" | tail -3)"
+  elif ! jq -e 'select(.rule_id == "hr-test-rule")' "$file" >/dev/null 2>&1; then
+    _report "emit_incident emits rotation_fail sentinel" fail "data line missing: $(cat "$file" | tail -3)"
+  else
+    _report "emit_incident emits rotation_fail sentinel" ok
+  fi
+  rm -f "/tmp/log-rotation-warned-$$" 2>/dev/null || true
+  rm -rf "$tmp"
+}
+
 t_emit_valid_json
 t_concurrency
 t_bash_source_resolution
 t_detect_bypass
+t_emit_drop_sentinel_basic
+t_emit_drop_sentinel_flock_nonblocking
+t_emit_drop_sentinel_setu_clean
+t_emit_incident_jq_fail
+t_emit_incident_rotation_fail
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

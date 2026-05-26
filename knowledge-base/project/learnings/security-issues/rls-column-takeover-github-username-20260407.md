@@ -1,15 +1,15 @@
 ---
-module: web-platform/auth
+title: 'RLS Column-Level Security: New Columns Inherit Permissive UPDATE Policy'
 date: 2026-04-07
-problem_type: security_issue
-component: database
-symptoms:
-  - "New column writable by authenticated users via Supabase client SDK"
-  - "Permissive RLS UPDATE policy applies to all columns including sensitive ones"
-root_cause: missing_permission
-resolution_type: migration
-severity: critical
+category: engineering
 tags: [rls, supabase, security, installation-takeover, column-level-security]
+symptoms: [New column writable by authenticated users via Supabase client SDK, Permissive RLS UPDATE policy applies to all columns including sensitive ones]
+module: web-platform/auth
+component: database
+problem_type: security_issue
+resolution_type: migration
+root_cause: missing_permission
+severity: critical
 ---
 
 # RLS Column-Level Security: New Columns Inherit Permissive UPDATE Policy

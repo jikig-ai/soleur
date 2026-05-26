@@ -1,14 +1,11 @@
 ---
-module: Knowledge Base
+title: Project Overview Documentation System
 date: 2026-02-06
-problem_type: implementation_pattern
+category: engineering
+tags: [knowledge-base, documentation, project-overview, sync-command, onboarding]
+module: Knowledge Base
 component: documentation
-tags:
-  - knowledge-base
-  - documentation
-  - project-overview
-  - sync-command
-  - onboarding
+problem_type: implementation_pattern
 severity: info
 ---
 

@@ -31,6 +31,22 @@ vi.mock("@/lib/supabase/server", () => ({
   })),
 }));
 
+// PR-C §2.8 (#3244): kb-route-helpers now imports `getFreshTenantClient`
+// from `@/lib/supabase/tenant`. Mock to the same `mockFrom` so the
+// existing per-table setup (`setupUserData`) drives both legacy
+// service-role and the new tenant path without per-test duplication.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom })),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
+}));
+
+const { mockReportSilentFallback } = vi.hoisted(() => ({
+  mockReportSilentFallback: vi.fn(),
+}));
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: mockReportSilentFallback,
+}));
+
 vi.mock("@/lib/auth/validate-origin", () => ({
   validateOrigin: mockValidateOrigin,
   rejectCsrf: mockRejectCsrf,
@@ -384,6 +400,34 @@ describe("syncWorkspace", () => {
     expect(errSpy).toHaveBeenCalledWith(
       expect.objectContaining({ userId: TEST_USER_ID, op: "upload" }),
       expect.stringContaining("upload"),
+    );
+  });
+
+  // #4224 Phase 3 — Sentry-mirror sweep (cq-silent-fallback-must-mirror-to-sentry).
+  test("on git pull failure, mirrors to Sentry via reportSilentFallback with feature:kb-route-helpers and op:workspace-sync-${op}", async () => {
+    const pullErr = new Error("non-fast-forward");
+    mockGitWithAuth.mockRejectedValue(pullErr);
+    mockReportSilentFallback.mockClear();
+
+    await syncWorkspace(TEST_INSTALLATION_ID, TEST_WORKSPACE_PATH, fakeLogger, {
+      userId: TEST_USER_ID,
+      op: "delete",
+    });
+
+    expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      pullErr,
+      expect.objectContaining({
+        feature: "kb-route-helpers",
+        op: "workspace-sync-delete",
+        message: expect.stringMatching(/workspace sync failed/i),
+        // workspacePath intentionally NOT in extras — it embeds raw userId
+        // (workspacePath = `<root>/<userId>`), which bypasses the
+        // hashExtraUserId top-level rename (Recital 26).
+        extra: expect.objectContaining({
+          userId: TEST_USER_ID,
+        }),
+      }),
     );
   });
 });

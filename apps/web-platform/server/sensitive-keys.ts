@@ -48,6 +48,28 @@ export const SENSITIVE_KEY_NAMES = [
   "client_secret",
   "private_key",
   "secret",
+  // Note (#3363 Resolution C): The PR-B-era allowlist entries
+  // `jwt_secret` + `supabase_jwt_secret` were removed when the HS256
+  // substrate was retired — Node no longer holds a signing key. The
+  // exact-name `secret` match above still covers any residual leak
+  // shape (e.g., `service_role_secret`). Supabase's asymmetric private
+  // keys never leave Supabase, so no replacement allowlist entry is
+  // needed for the signing material itself.
+  // Dev-only sign-in passwords (R3 / feat-dev-signin-bypass). Exact-name
+  // match on `password` does NOT cover the per-slot env-var key names
+  // that may appear in error reports or config-snapshot dumps. These
+  // keys must never reach Sentry even though they are dev-only — a
+  // leak of the dev passwords is a vector to authenticate as the
+  // seeded test users in the dev Supabase project.
+  "DEV_USER_1_PASSWORD",
+  "DEV_USER_2_PASSWORD",
+  "DEV_USER_3_PASSWORD",
+  // Sentry userId pseudonymization pepper (#3638). Held in Doppler, read
+  // once at module init in `server/observability.ts`. Listed here so a
+  // future env-block dump or config-snapshot log cannot leak the pepper —
+  // the value is what the helper's confidentiality leans on (Recital 26).
+  "SENTRY_USERID_PEPPER",
+  "pepper",
   // HTTP transport
   "cookie",
   "x-nonce",
