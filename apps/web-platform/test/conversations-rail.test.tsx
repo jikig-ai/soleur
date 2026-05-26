@@ -108,11 +108,8 @@ describe("ChatLayout (server component shell)", () => {
       "@/app/(dashboard)/dashboard/chat/layout"
     );
 
-    render(
-      <ChatLayout>
-        <div data-testid="chat-page">child</div>
-      </ChatLayout>,
-    );
+    const children = <div data-testid="chat-page">child</div>;
+    render(await ChatLayout({ children }));
 
     // Both the rail and the page child render in the layout.
     expect(screen.getByTestId("conversations-rail")).toBeInTheDocument();
