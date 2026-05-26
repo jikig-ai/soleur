@@ -41,6 +41,9 @@ for entry in "${FILE_MAP[@]}"; do
 done
 
 # --- Write each file atomically ---
+TMPFILES=()
+trap 'rm -f "${TMPFILES[@]}"' EXIT
+
 for entry in "${FILE_MAP[@]}"; do
   IFS='|' read -r env_var dest_path mode owner <<< "$entry"
   dest="${DESTDIR}${dest_path}"
@@ -48,7 +51,7 @@ for entry in "${FILE_MAP[@]}"; do
 
   # Decode to a temp file in the same directory (same filesystem for mv atomicity)
   tmpfile=$(mktemp "${dest_dir}/tmp.infra-config.XXXXXX")
-  trap 'rm -f "$tmpfile"' EXIT
+  TMPFILES+=("$tmpfile")
 
   echo "${!env_var}" | base64 -d > "$tmpfile"
 
@@ -74,7 +77,7 @@ if [[ -z "${INFRA_CONFIG_TEST_MODE:-}" ]]; then
   systemctl daemon-reload
   # Self-restart: schedule a delayed restart so the HTTP 202 response
   # completes before the webhook binary is killed.
-  sudo systemd-run --on-active=3s --unit=webhook-self-restart systemctl restart webhook
+  sudo /usr/bin/systemd-run --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook
 fi
 
 exit 0
