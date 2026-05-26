@@ -157,6 +157,8 @@ describe("generateInstallationToken hardening", () => {
         .mockResolvedValueOnce(mock401());
 
       const promise = generateInstallationToken(id);
+      // Suppress unhandled rejection — assertion below still catches the error
+      promise.catch(() => {});
       await vi.advanceTimersByTimeAsync(1_000);
 
       await expect(promise).rejects.toThrow(
@@ -196,6 +198,8 @@ describe("generateInstallationToken hardening", () => {
         .mockResolvedValueOnce(mock500());
 
       const promise = generateInstallationToken(id);
+      // Suppress unhandled rejection — assertion below still catches the error
+      promise.catch(() => {});
       await vi.advanceTimersByTimeAsync(1_000);
 
       await expect(promise).rejects.toThrow(/500/);
@@ -212,6 +216,8 @@ describe("generateInstallationToken hardening", () => {
         .mockResolvedValueOnce(mock401());
 
       const promise = generateInstallationToken(id);
+      // Suppress unhandled rejection — assertion below still catches the error
+      promise.catch(() => {});
       await vi.advanceTimersByTimeAsync(1_000);
       await expect(promise).rejects.toThrow();
 
@@ -233,6 +239,8 @@ describe("generateInstallationToken hardening", () => {
         .mockResolvedValueOnce(mock401());
 
       const promise = generateInstallationToken(id);
+      // Suppress unhandled rejection — assertion below still catches the error
+      promise.catch(() => {});
       await vi.advanceTimersByTimeAsync(1_000);
       await expect(promise).rejects.toThrow();
 
