@@ -37,7 +37,7 @@ PrivateTmp=true
 # the mount namespace (which on prior PR #4257 took webhook.service down
 # entirely until the dirs were created). Once inngest-bootstrap.sh creates
 # them on first v1.1.x deploy, they become real ReadWritePaths.
-ReadWritePaths=/mnt/data /var/lock /etc/systemd/system /etc/default /var/lib/inngest -/var/lib/vector -/etc/vector /usr/local/bin
+ReadWritePaths=/mnt/data /var/lock /etc/systemd/system /etc/default /etc/sudoers.d /var/lib/inngest -/var/lib/vector -/etc/vector /usr/local/bin
 ReadOnlyPaths=/etc/webhook /etc/default/webhook-deploy
 TimeoutStopSec=180
 
