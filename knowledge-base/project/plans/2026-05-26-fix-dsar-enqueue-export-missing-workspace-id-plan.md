@@ -76,16 +76,16 @@ discoverability_test:
 
 ### Pre-merge (PR)
 
-- [ ] **AC1:** `EnqueueExportInput` in `apps/web-platform/server/dsar-export.ts` includes `workspaceId: string`
-- [ ] **AC2:** `enqueueExport` inserts `workspace_id: input.workspaceId` in the `dsar_export_jobs` INSERT at line ~1820
-- [ ] **AC3:** `enqueueExport` throws before the INSERT if `input.workspaceId` is falsy (fail-loud assertion: `if (!input.workspaceId) throw new Error(...)`)
-- [ ] **AC4:** `app/api/account/export/route.ts` resolves `workspaceId` from `reauthSession.userId` using the ADR-038 N2 solo-workspace default (`workspaceId = reauthSession.userId`) and passes it to `enqueueExport`
-- [ ] **AC4b:** `server/account-tools.ts` passes `workspaceId: userId` to `enqueueExport` in the `account_export_enqueue` MCP tool -- verified by `grep -c 'workspaceId' apps/web-platform/server/account-tools.ts` returning >= 1
-- [ ] **AC5:** `test/dsar-export-cross-tenant.integration.test.ts:222` `test.skip` is changed back to `test` (the skipped test is re-enabled) -- verified by `grep -c 'test.skip' test/dsar-export-cross-tenant.integration.test.ts` returning 0
-- [ ] **AC6:** The re-enabled integration test passes when run with `SUPABASE_DEV_INTEGRATION=1` (verified by the test itself asserting `enqueueExport` succeeds and the inserted row has the correct `user_id`)
-- [ ] **AC7:** `test/dsar-export-route.test.ts` mock calls to `enqueueExportMock` are updated to pass the `workspaceId` field -- verified by `grep -c 'workspaceId' test/dsar-export-route.test.ts` returning >= 1
-- [ ] **AC8:** `tsc --noEmit` clean (no type errors from the interface change)
-- [ ] **AC9:** `./node_modules/.bin/vitest run test/dsar-export-route.test.ts` passes
+- [x] **AC1:** `EnqueueExportInput` in `apps/web-platform/server/dsar-export.ts` includes `workspaceId: string`
+- [x] **AC2:** `enqueueExport` inserts `workspace_id: input.workspaceId` in the `dsar_export_jobs` INSERT at line ~1820
+- [x] **AC3:** `enqueueExport` throws before the INSERT if `input.workspaceId` is falsy (fail-loud assertion: `if (!input.workspaceId) throw new Error(...)`)
+- [x] **AC4:** `app/api/account/export/route.ts` resolves `workspaceId` from `reauthSession.userId` using the ADR-038 N2 solo-workspace default (`workspaceId = reauthSession.userId`) and passes it to `enqueueExport`
+- [x] **AC4b:** `server/account-tools.ts` passes `workspaceId: userId` to `enqueueExport` in the `account_export_enqueue` MCP tool -- verified by `grep -c 'workspaceId' apps/web-platform/server/account-tools.ts` returning >= 1
+- [x] **AC5:** `test/dsar-export-cross-tenant.integration.test.ts:222` `test.skip` is changed back to `test` (the skipped test is re-enabled) -- verified by `grep -c 'test.skip' test/dsar-export-cross-tenant.integration.test.ts` returning 0
+- [x] **AC6:** The re-enabled integration test passes when run with `SUPABASE_DEV_INTEGRATION=1` (verified by the test itself asserting `enqueueExport` succeeds and the inserted row has the correct `user_id`)
+- [x] **AC7:** `test/dsar-export-route.test.ts` mock calls to `enqueueExportMock` are updated to pass the `workspaceId` field -- verified by `grep -c 'workspaceId' test/dsar-export-route.test.ts` returning >= 1
+- [x] **AC8:** `tsc --noEmit` clean (no type errors from the interface change)
+- [x] **AC9:** `./node_modules/.bin/vitest run test/dsar-export-route.test.ts` passes
 
 ### Post-merge (operator)
 
