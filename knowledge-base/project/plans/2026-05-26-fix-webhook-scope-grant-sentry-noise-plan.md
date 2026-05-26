@@ -8,6 +8,25 @@ brand_survival_threshold: none
 
 # fix: Remove Sentry.captureMessage from no-grant path in GitHub webhook handler
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-26
+**Sections enhanced:** 1 (plan review finding applied)
+**Research agents used:** DHH, Kieran, Code Simplicity (3-agent panel; brand-survival threshold `none`)
+
+### Key Improvements
+1. Added test file (`github-route.test.ts`) to Files to Edit -- plan review (Kieran P0) caught that the existing test asserts `mockLogger.warn` and `mockSentryCaptureMessage` positive, both of which must be updated.
+2. Added AC6 for test verification.
+3. Added Phase 1.5 for test file update.
+
+### Deepen-Plan Gates
+- Phase 4.6 (User-Brand Impact): PASS -- section present, threshold `none`, no sensitive paths.
+- Phase 4.7 (Observability): SKIP -- deletion-only change (removes 5 lines, changes 1 word); no new code/infra surface per plan Phase 2.9 skip condition.
+- Phase 4.8 (PAT halt): PASS -- no PAT-shaped variables.
+- Phase 4.4 (Precedent-diff): N/A -- no pattern-bound behaviors prescribed.
+- Phase 4.5 (Network-outage): N/A -- no trigger patterns matched.
+- AGENTS.md rule ID verification: `cq-silent-fallback-must-mirror-to-sentry` confirmed active.
+
 ## Overview
 
 The GitHub webhook handler at `apps/web-platform/app/api/webhooks/github/route.ts` fires
