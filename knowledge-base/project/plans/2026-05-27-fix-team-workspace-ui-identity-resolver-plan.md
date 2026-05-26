@@ -9,6 +9,23 @@ lane: single-domain
 
 # fix: team workspace UI not showing due to broken identity resolver query
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-27
+**Sections enhanced:** 3 (Implementation, Risks, Sharp Edges)
+**Research agents used:** architecture-strategist, spec-flow-analyzer, code-simplicity-reviewer, DHH-reviewer, Kieran-reviewer
+
+### Key Improvements
+1. Confirmed PostgREST `!inner` join syntax is production-proven with installed supabase-js v2.99.2 (same pattern at `workspace-resolver.ts:102,161`)
+2. Identified second caller (`app/api/flags/route.ts`) missed in initial plan -- fix benefits both paths
+3. Verified RLS policy composition: `members_select_peers` (migration 053:173) + `workspaces_select_for_members` (053:169) compose correctly for the embedded-resource join -- no cross-tenant risk
+4. Documented JWT claim propagation dependency as pre-existing flow gap (settings layout requires both DB query AND JWT claim to succeed)
+
+### Deepen-Plan Gates Passed
+- Phase 4.6 (User-Brand Impact): threshold `single-user incident` -- valid, non-placeholder
+- Phase 4.7 (Observability): all 5 fields present, no SSH in discoverability_test
+- Phase 4.8 (PAT-shaped variables): no matches
+
 ## Overview
 
 The team workspace feature (`FLAG_TEAM_WORKSPACE_INVITE`) was enabled on the jikigai org but the Settings page does not show the "Members" tab or any team/workspace UI. Tested with `ops@jikigai.com` -- the Settings page shows Account, Project, API Key, and Privacy sections only.
@@ -133,6 +150,16 @@ None -- no open code-review issues touch `apps/web-platform/lib/feature-flags/id
    const orgId = memberData?.workspaces?.organization_id ?? null;
    ```
 3. This matches the established PostgREST embedded-resource join pattern used in `apps/web-platform/server/workspace-resolver.ts` line 161.
+
+### Research Insights (Phase 1)
+
+**PostgREST embedded-resource join verification:**
+- supabase-js v2.99.2 (installed) supports `!inner` join syntax -- confirmed by 3 production call sites in `workspace-resolver.ts`
+- PostgREST FK relationship `workspace_members.workspace_id → workspaces.id` is many-to-one, so the join returns a **single object** (not array) for the embedded resource. The `.single()` on the outer query ensures exactly one row.
+- RLS composition verified: `workspace_members` has `members_select_peers` policy (migration 053:173-175) gated on `is_workspace_member(workspace_id, auth.uid())`. `workspaces` has `workspaces_select_for_members` policy (053:169-171) gated on the same helper. Both policies use the same SECURITY DEFINER helper, so the join resolves correctly under the authenticated user's RLS context. A user can only see their own workspace memberships and the workspaces they belong to -- the join **cannot** return another organization's ID.
+
+**Determinism note (P2, pre-existing):**
+- For multi-org users, `.limit(1).single()` without `ORDER BY` returns a non-deterministic workspace. The existing broken query had the same behavior. `getDefaultWorkspaceForUser` at `workspace-resolver.ts:104` uses `.order("created_at", { ascending: true })` for determinism. Adding ORDER BY to `resolveIdentity` would improve determinism but is out of scope for this bug fix (would be a follow-up enhancement, not a regression).
 
 ### Phase 2: Update the test (identity.test.ts)
 
