@@ -199,7 +199,7 @@ describe("cronLinkedinTokenCheckHandler — expired token (401)", () => {
 
     // Should have filed issues for both expired tokens
     const issueCreates = octokitRequestSpy.mock.calls.filter(
-      ([route]: [string]) => route === "POST /repos/{owner}/{repo}/issues",
+      ([route]: any[]) => route === "POST /repos/{owner}/{repo}/issues",
     );
     expect(issueCreates.length).toBe(2);
     expect(issueCreates[0]![1]).toMatchObject({
@@ -231,11 +231,11 @@ describe("cronLinkedinTokenCheckHandler — expired token (401)", () => {
     await cronLinkedinTokenCheckHandler({ step, logger });
 
     const comments = octokitRequestSpy.mock.calls.filter(
-      ([route]: [string]) =>
+      ([route]: any[]) =>
         route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
     );
     const creates = octokitRequestSpy.mock.calls.filter(
-      ([route]: [string]) => route === "POST /repos/{owner}/{repo}/issues",
+      ([route]: any[]) => route === "POST /repos/{owner}/{repo}/issues",
     );
     expect(comments.length).toBeGreaterThanOrEqual(2);
     expect(creates.length).toBe(0);
@@ -267,7 +267,7 @@ describe("cronLinkedinTokenCheckHandler — stale issue closure on recovery", ()
     await cronLinkedinTokenCheckHandler({ step, logger });
 
     const patches = octokitRequestSpy.mock.calls.filter(
-      ([route]: [string]) =>
+      ([route]: any[]) =>
         route === "PATCH /repos/{owner}/{repo}/issues/{issue_number}",
     );
     expect(patches.length).toBeGreaterThanOrEqual(1);

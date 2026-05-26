@@ -144,7 +144,7 @@ describe("cronNag4216ReadinessHandler — issue is OPEN", () => {
 
     // Verify comment was posted
     const comments = octokitRequestSpy.mock.calls.filter(
-      ([route]: [string]) =>
+      ([route]: any[]) =>
         route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
     );
     expect(comments.length).toBe(1);
@@ -199,7 +199,7 @@ describe("cronNag4216ReadinessHandler — issue is CLOSED", () => {
 
     // No comment posted
     const comments = octokitRequestSpy.mock.calls.filter(
-      ([route]: [string]) =>
+      ([route]: any[]) =>
         route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
     );
     expect(comments.length).toBe(0);

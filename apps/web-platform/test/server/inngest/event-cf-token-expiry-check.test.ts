@@ -181,7 +181,7 @@ describe("eventCfTokenExpiryCheckHandler — token expiring soon", () => {
     expect(out.daysRemaining).toBeLessThanOrEqual(WARN_DAYS);
 
     const issueCreates = octokitRequestSpy.mock.calls.filter(
-      ([route]: [string]) => route === "POST /repos/{owner}/{repo}/issues",
+      ([route]: any[]) => route === "POST /repos/{owner}/{repo}/issues",
     );
     expect(issueCreates.length).toBe(1);
     expect(issueCreates[0]![1]).toMatchObject({
@@ -212,11 +212,11 @@ describe("eventCfTokenExpiryCheckHandler — token expiring soon", () => {
     await eventCfTokenExpiryCheckHandler({ step, logger });
 
     const comments = octokitRequestSpy.mock.calls.filter(
-      ([route]: [string]) =>
+      ([route]: any[]) =>
         route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
     );
     const creates = octokitRequestSpy.mock.calls.filter(
-      ([route]: [string]) => route === "POST /repos/{owner}/{repo}/issues",
+      ([route]: any[]) => route === "POST /repos/{owner}/{repo}/issues",
     );
     expect(comments.length).toBe(1);
     expect(comments[0]![1]).toMatchObject({ issue_number: 8888 });
@@ -245,7 +245,7 @@ describe("eventCfTokenExpiryCheckHandler — stale issue closure", () => {
     await eventCfTokenExpiryCheckHandler({ step, logger });
 
     const patches = octokitRequestSpy.mock.calls.filter(
-      ([route]: [string]) =>
+      ([route]: any[]) =>
         route === "PATCH /repos/{owner}/{repo}/issues/{issue_number}",
     );
     expect(patches.length).toBe(1);
