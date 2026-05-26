@@ -224,7 +224,8 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       async () => {
         const { exportSqlTable } = await import("../server/dsar-export");
         const controller = new AbortController();
-        const tables = await exportSqlTable.call(null, alice.id, controller.signal);
+        const { randomBytes } = await import("node:crypto");
+        const tables = await exportSqlTable.call(null, alice.id, randomBytes(32), controller.signal);
 
         const messagesTable = tables.find((t) => t.table === "messages");
         expect(messagesTable, "messages block must be present").toBeDefined();
@@ -309,7 +310,8 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       async () => {
         const { exportSqlTable } = await import("../server/dsar-export");
         const controller = new AbortController();
-        const tables = await exportSqlTable.call(null, alice.id, controller.signal);
+        const { randomBytes } = await import("node:crypto");
+        const tables = await exportSqlTable.call(null, alice.id, randomBytes(32), controller.signal);
 
         const attTable = tables.find((t) => t.table === "message_attachments");
         expect(attTable, "message_attachments block present").toBeDefined();
@@ -354,18 +356,21 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           "../server/dsar-export"
         );
         const controller = new AbortController();
-        const tables = await exportSqlTable.call(null, alice.id, controller.signal);
+        const { randomBytes } = await import("node:crypto");
+        const salt = randomBytes(32);
+        const tables = await exportSqlTable.call(null, alice.id, salt, controller.signal);
         const jobId = `test-${randomBytes(8).toString("hex")}`;
         const { manifest, localPath } = await buildArchiveToDisk(
           jobId,
           alice.id,
           tables,
           null,
+          salt,
           controller.signal,
         );
 
         try {
-          expect(manifest.schema_version).toBe("1.1.0");
+          expect(manifest.schema_version).toBe("1.2.0");
           expect(Array.isArray(manifest.redactions)).toBe(true);
 
           const byPath = new Map(
@@ -428,13 +433,16 @@ describe.skipIf(!INTEGRATION_ENABLED)(
             "../server/dsar-export"
           );
           const controller = new AbortController();
-          const tables = await exportSqlTable.call(null, alice.id, controller.signal);
+          const { randomBytes } = await import("node:crypto");
+          const salt = randomBytes(32);
+          const tables = await exportSqlTable.call(null, alice.id, salt, controller.signal);
           const jobId = `test-${randomBytes(8).toString("hex")}`;
           const { localPath } = await buildArchiveToDisk(
             jobId,
             alice.id,
             tables,
             null,
+            salt,
             controller.signal,
           );
 
@@ -487,7 +495,8 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           "../server/dsar-export"
         );
         const controller = new AbortController();
-        const tablesForBob = await exportSqlTable.call(null, bob.id, controller.signal);
+        const { randomBytes } = await import("node:crypto");
+        const tablesForBob = await exportSqlTable.call(null, bob.id, randomBytes(32), controller.signal);
         // Bob's own messages block should NOT pseudonymise Bob's user_id
         // (he's the subject) — sanity check that the predicate is
         // scoped-correct, not over-applied.
