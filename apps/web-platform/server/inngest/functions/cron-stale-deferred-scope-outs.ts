@@ -40,6 +40,10 @@ import {
   PROBE_ISSUE_OWNER,
   PROBE_ISSUE_REPO,
 } from "@/server/github/probe-octokit";
+import {
+  postSentryHeartbeat,
+  type HandlerArgs,
+} from "./_cron-shared";
 
 // 90 days, expressed in ms — matches `date -u -d '90 days ago'` from the
 // original bash workflow.
@@ -62,10 +66,6 @@ const SEARCH_MAX_RESULTS = 200;
 // Slug matches the Terraform sentry_cron_monitor.scheduled_stale_deferred_scope_outs
 // resource `name` field for historical/check-in continuity.
 const SENTRY_MONITOR_SLUG = "scheduled-stale-deferred-scope-outs";
-const SENTRY_HEARTBEAT_TIMEOUT_MS = 10_000;
-const SENTRY_DOMAIN_RE = /^[a-z0-9.-]+\.sentry\.io$/i;
-const SENTRY_PROJECT_RE = /^\d+$/;
-const SENTRY_PUBLIC_KEY_RE = /^[a-f0-9]{32}$/;
 
 /**
  * Auto-close comment body — heredoc verbatim from the GHA workflow. Refers
@@ -272,18 +272,6 @@ export async function sweepStaleScopeOuts(args: {
 // Handler entry point
 // =============================================================================
 
-interface HandlerArgs {
-  step: { run<T>(name: string, cb: () => Promise<T>): Promise<T> };
-  logger: {
-    info: (...a: unknown[]) => void;
-    warn: (...a: unknown[]) => void;
-    error: (...a: unknown[]) => void;
-  };
-  event?: {
-    data?: { dry_run?: unknown };
-  };
-}
-
 export async function cronStaleDeferredScopeOutsHandler({
   step,
   logger,
@@ -329,46 +317,12 @@ export async function cronStaleDeferredScopeOutsHandler({
   // Env-unset / malformed → graceful skip (heartbeat is OPTIONAL second-net;
   // missing it must not stop the function from completing).
   await step.run("sentry-heartbeat", async () => {
-    const domain = process.env.SENTRY_INGEST_DOMAIN;
-    const projectId = process.env.SENTRY_PROJECT_ID;
-    const publicKey = process.env.SENTRY_PUBLIC_KEY;
-    if (!domain || !projectId || !publicKey) {
-      logger.info(
-        { fn: "cron-stale-deferred-scope-outs" },
-        "Sentry env unset — skipping heartbeat",
-      );
-      return;
-    }
-    if (
-      !SENTRY_DOMAIN_RE.test(domain) ||
-      !SENTRY_PROJECT_RE.test(projectId) ||
-      !SENTRY_PUBLIC_KEY_RE.test(publicKey)
-    ) {
-      logger.warn(
-        { fn: "cron-stale-deferred-scope-outs" },
-        "Sentry env malformed — skipping heartbeat",
-      );
-      return;
-    }
-    const status = sweepFailed ? "error" : "ok";
-    const url = `https://${domain}/api/${projectId}/cron/${SENTRY_MONITOR_SLUG}/${publicKey}/?status=${status}`;
-    try {
-      await fetch(url, {
-        method: "POST",
-        signal: AbortSignal.timeout(SENTRY_HEARTBEAT_TIMEOUT_MS),
-      });
-    } catch (err) {
-      reportSilentFallback(err as Error, {
-        feature: "cron-sentry-heartbeat",
-        op: "fetch",
-        message: "Sentry Crons heartbeat POST failed",
-        extra: {
-          fn: "cron-stale-deferred-scope-outs",
-          status,
-          aborted: (err as Error).name === "TimeoutError",
-        },
-      });
-    }
+    await postSentryHeartbeat({
+      ok: !sweepFailed,
+      sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+      cronName: "cron-stale-deferred-scope-outs",
+      logger,
+    });
   });
 
   if (sweepFailed) {

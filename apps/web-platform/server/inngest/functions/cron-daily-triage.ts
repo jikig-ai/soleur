@@ -35,48 +35,19 @@
 // (deleted in the same commit).
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
-
-// Resolve the `claude` binary lazily inside the spawning step.run (NOT at
-// module load) so a missing/corrupt @anthropic-ai/claude-code install fails
-// at spawn time → reportSilentFallback → Sentry status=error, instead of
-// throwing at /api/inngest route registration which would silently disable
-// the entire Inngest worker with no operator-visible Sentry signal.
-//
-// The `claude` binary lives at `node_modules/.bin/claude` (npm bin shim →
-// `@anthropic-ai/claude-code/bin/claude.exe`). The original implementation
-// used `createRequire(import.meta.url) + require.resolve(...)` which works
-// in dev mode but produces `TypeError: path argument must be of type string
-// (received number 32798)` in the Next.js standalone bundle — webpack
-// statically replaces `require.resolve()` calls with module-id integers
-// (#4017 substrate audit, 2026-05-19). Switched to filesystem checks against
-// the two known install paths instead; webpack can't see these strings, so
-// they pass through verbatim. The CLAUDE_BIN env var is the override hatch
-// for fresh-host bootstraps that put the binary outside node_modules.
-function resolveClaudeBin(): string {
-  const override = process.env.CLAUDE_BIN;
-  if (override && existsSync(override)) return override;
-
-  // Standalone Next.js bundle layout: /app/node_modules/.bin/claude.
-  // Dev/test layout: <repo>/apps/web-platform/node_modules/.bin/claude.
-  // The bin symlink is the canonical entry — npm regenerates it on every
-  // install, so it survives package version bumps.
-  const candidates = [
-    "/app/node_modules/.bin/claude",
-    join(process.cwd(), "node_modules/.bin/claude"),
-    join(process.cwd(), "apps/web-platform/node_modules/.bin/claude"),
-  ];
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
-  }
-  throw new Error(
-    `claude binary not found in any known location: ${candidates.join(", ")}. ` +
-      "Set CLAUDE_BIN env var to override.",
-  );
-}
+import {
+  postSentryHeartbeat,
+  type HandlerArgs,
+} from "./_cron-shared";
+import {
+  resolveClaudeBin,
+  type SpawnResult,
+  KILL_ESCALATION_MS,
+} from "./_cron-claude-eval-substrate";
+// Re-export for test parity (cron-daily-triage.test.ts imports via this module).
+export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 
 // Inlined verbatim from .github/workflows/scheduled-daily-triage.yml lines
 // 86-140, with one diff at step 3d: prompt enforces IDEMPOTENT search-before-
@@ -175,20 +146,11 @@ const CLAUDE_CODE_FLAGS = [
 // floor → partial-run silent-failure shape). Exported for test parity
 // (cron-daily-triage.test.ts imports to avoid hard-coded timing drift).
 export const MAX_TURN_DURATION_MS = 60 * 60 * 1000;
-export const KILL_ESCALATION_MS = 5_000;
 
 // Sentry slug stays "scheduled-daily-triage" for continuity (NOT renamed
 // to cron-daily-triage). The function file name follows the cron-* TR9
 // convention; the Sentry monitor slug carries forward from PR-F.
 const SENTRY_MONITOR_SLUG = "scheduled-daily-triage";
-
-// Validators for env-var-sourced URL components. A typo in Doppler
-// (e.g., SENTRY_INGEST_DOMAIN="ingest.sentry.io/x?leak=") would otherwise
-// produce a partially-attacker-controllable URL since the components are
-// interpolated raw into the heartbeat fetch.
-const SENTRY_DOMAIN_RE = /^[a-z0-9.-]+\.sentry\.io$/i;
-const SENTRY_PROJECT_RE = /^\d+$/;
-const SENTRY_PUBLIC_KEY_RE = /^[a-f0-9]{32}$/;
 
 // Spawn-env allowlist. Passing `{ ...process.env }` to the claude
 // subprocess leaks every Doppler secret (SUPABASE_JWT_SECRET, BYOK keys,
@@ -204,23 +166,6 @@ function buildSpawnEnv(): NodeJS.ProcessEnv {
     NODE_ENV: process.env.NODE_ENV,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     GH_TOKEN: process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN,
-  };
-}
-
-interface SpawnResult {
-  ok: boolean;
-  exitCode: number | null;
-  signal: NodeJS.Signals | null;
-  abortedByTimeout: boolean;
-  durationMs: number;
-}
-
-interface HandlerArgs {
-  step: { run<T>(name: string, cb: () => Promise<T>): Promise<T> };
-  logger: {
-    info: (...a: unknown[]) => void;
-    warn: (...a: unknown[]) => void;
-    error: (...a: unknown[]) => void;
   };
 }
 
@@ -327,48 +272,12 @@ export async function cronDailyTriageHandler({
   // matches the existing monitor resource (continuity preserved across the
   // GHA → Inngest migration).
   await step.run("sentry-heartbeat", async () => {
-    const domain = process.env.SENTRY_INGEST_DOMAIN;
-    const projectId = process.env.SENTRY_PROJECT_ID;
-    const publicKey = process.env.SENTRY_PUBLIC_KEY;
-    if (!domain || !projectId || !publicKey) {
-      // Dev/local: silent skip. Production Doppler always carries all three.
-      logger.info({ fn: "cron-daily-triage" }, "Sentry env unset — skipping heartbeat");
-      return;
-    }
-    // Validate env-derived URL components before interpolation. A typo'd
-    // SENTRY_INGEST_DOMAIN (e.g., `ingest.sentry.io/x?leak=`) would
-    // otherwise route the heartbeat to an attacker-controllable URL.
-    if (
-      !SENTRY_DOMAIN_RE.test(domain) ||
-      !SENTRY_PROJECT_RE.test(projectId) ||
-      !SENTRY_PUBLIC_KEY_RE.test(publicKey)
-    ) {
-      logger.warn(
-        { fn: "cron-daily-triage" },
-        "Sentry env malformed — skipping heartbeat",
-      );
-      return;
-    }
-    const status = result.ok ? "ok" : "error";
-    const url = `https://${domain}/api/${projectId}/cron/${SENTRY_MONITOR_SLUG}/${publicKey}/?status=${status}`;
-    try {
-      await fetch(url, {
-        method: "POST",
-        signal: AbortSignal.timeout(10_000),
-      });
-    } catch (err) {
-      const e = err as Error;
-      reportSilentFallback(e, {
-        feature: "cron-sentry-heartbeat",
-        op: "fetch",
-        message: "Sentry Crons heartbeat POST failed",
-        extra: {
-          fn: "cron-daily-triage",
-          status,
-          aborted: e.name === "TimeoutError",
-        },
-      });
-    }
+    await postSentryHeartbeat({
+      ok: result.ok,
+      sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+      cronName: "cron-daily-triage",
+      logger,
+    });
   });
 
   return {

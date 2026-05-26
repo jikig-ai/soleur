@@ -16,7 +16,7 @@
 //   Step 5: resolve founderId via github_installation_id mapping; 404
 //           if no founder owns this installation.
 //   Step 6: isGranted(supabase, founderId, actionClass) — fail-closed
-//           on no-grant OR DB-error (log + Sentry + 200 without dispatch).
+//           on no-grant (log + 200) OR DB-error (Sentry via isGranted + 200).
 //   Step 7: inngest.send({ id: github-<deliveryId>, name, v: '1', data }).
 //   Step 8: ON ANY ERROR in steps 5-7 AFTER step 3 INSERT succeeded:
 //           DELETE processed_github_events row (releaseDedupRow mirror)
@@ -327,15 +327,10 @@ export async function POST(request: Request) {
 
   const grant = await isGranted(supabase, founderId, actionClass);
   if (!grant) {
-    logger.warn(
+    logger.info(
       { founderId, actionClass, deliveryId },
       "GitHub webhook: no active scope_grant — skip inngest.send (fail-closed)",
     );
-    Sentry.captureMessage("GitHub webhook: no active scope_grant", {
-      level: "warning",
-      tags: { feature: "github-webhook", op: "no-grant", actionClass },
-      extra: { founderId, deliveryId },
-    });
     return NextResponse.json({ received: true });
   }
 
