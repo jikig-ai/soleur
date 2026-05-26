@@ -46,11 +46,13 @@ export default async function () {
 
   const version = releases[0]?.tag_name?.replace(/^v/, "") ?? null;
 
+  const APEX_RE = /https:\/\/soleur\.ai(?=$|[^a-zA-Z0-9.-])/g;
   const changelogMd = releases
     .map((r) => {
       const date = r.published_at?.slice(0, 10) ?? "";
       const tag = r.tag_name ?? "";
-      return `## ${tag} — ${date}\n\n${r.body ?? ""}`;
+      const body = (r.body ?? "").replace(APEX_RE, "https://www.soleur.ai");
+      return `## ${tag} — ${date}\n\n${body}`;
     })
     .join("\n\n");
 
