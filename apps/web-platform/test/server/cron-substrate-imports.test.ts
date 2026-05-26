@@ -15,6 +15,8 @@ const EVAL_SUBSTRATE_IMPORT_RE =
 const FORBIDDEN_LOCAL_DEFS = [
   /\bfunction\s+redactToken\b/,
   /\bfunction\s+buildAuthenticatedCloneUrl\b/,
+  /\bfunction\s+mintInstallationToken\b/,
+  /\bfunction\s+postSentryHeartbeat\b/,
   /\bconst\s+SENTRY_DOMAIN_RE\s*=/,
   /\bconst\s+SENTRY_PROJECT_RE\s*=/,
   /\bconst\s+SENTRY_PUBLIC_KEY_RE\s*=/,
@@ -25,6 +27,7 @@ const FORBIDDEN_LOCAL_DEFS = [
 const FORBIDDEN_EVAL_LOCAL_DEFS = [
   /\bfunction\s+resolveClaudeBin\b/,
   /\bfunction\s+spawnSimple\b/,
+  /\bfunction\s+spawnClaudeEval\b/,
 ];
 
 function getCronFiles(): string[] {
@@ -83,6 +86,18 @@ describe("cron-substrate-imports guard", () => {
   }
 });
 
+describe("substrate module guards", () => {
+  it("shared modules do not export buildSpawnEnv", () => {
+    for (const mod of ["_cron-shared.ts", "_cron-claude-eval-substrate.ts"]) {
+      const src = readFileSync(join(FUNCTIONS_DIR, mod), "utf-8");
+      expect(
+        /\bexport\b.*\bbuildSpawnEnv\b/.test(src),
+        `${mod} must NOT export buildSpawnEnv (per-handler security boundary)`,
+      ).toBe(false);
+    }
+  });
+});
+
 describe("fixture proofs", () => {
   it("positive: a compliant handler source passes", () => {
     const src = `
@@ -112,7 +127,7 @@ import { type HandlerArgs } from "./_cron-shared";
 const SENTRY_DOMAIN_RE = /^[a-z0-9.-]+\\.sentry\\.io$/i;
 `;
     const stripped = stripComments(src);
-    expect(FORBIDDEN_LOCAL_DEFS[2].test(stripped)).toBe(true);
+    expect(FORBIDDEN_LOCAL_DEFS[4].test(stripped)).toBe(true);
   });
 
   it("negative: a handler with local REPO_OWNER is caught", () => {
@@ -121,7 +136,7 @@ import { type HandlerArgs } from "./_cron-shared";
 const REPO_OWNER = "jikig-ai";
 `;
     const stripped = stripComments(src);
-    expect(FORBIDDEN_LOCAL_DEFS[5].test(stripped)).toBe(true);
+    expect(FORBIDDEN_LOCAL_DEFS[7].test(stripped)).toBe(true);
   });
 
   it("negative: a handler with local resolveClaudeBin importing from eval substrate is caught", () => {
