@@ -127,7 +127,7 @@ fi
 echo "[4/4] Writing manifest + SHA-256 inventory…"
 {
   echo "{"
-  echo '  "schema_version": "1.1.0",'
+  echo '  "schema_version": "1.2.0",'
   echo "  \"generated_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\","
   echo "  \"user_id\": \"${USER_ID}\","
   echo '  "fulfilment_channel": "operator-fallback: dsar-export-oversize.sh",'
