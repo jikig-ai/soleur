@@ -28,6 +28,12 @@ When migrating from SSH provisioners to in-service webhook handlers, audit every
 
 4. **Sudoers path mismatch P1 caught at review** — the bare `systemctl` vs `/usr/bin/systemctl` mismatch was invisible in the test suite (which mocks sudo). Prevention: when writing sudoers entries with pinned arguments, copy the exact argument list into the handler script — never retype it.
 
+5. **`triggers_replace` changed without updating drift guard test** — adding `infra-config-apply.sh` and `push-infra-config.sh` to `server.tf`'s `triggers_replace` without updating `ship-deploy-pipeline-fix-gate.test.ts`'s `TRIGGER_FILES` array caused CI `test-bun` to fail post-merge. Recovery: hotfix PR #4493. Prevention: when editing `triggers_replace` in `server.tf`, grep for `TRIGGER_FILES` and `DEPLOY_PIPELINE_FIX_TRIGGERS` and update all three locations in the same commit. The drift guard test exists precisely to catch this — but only post-merge if the test wasn't run pre-merge.
+
+6. **Terraform write-only provider attribute used in `environment {}` block** — `cloudflare_zero_trust_access_service_token.deploy.client_secret` is write-only in the Cloudflare provider (available at creation, empty on subsequent `terraform refresh`). The `local-exec` provisioner's `environment {}` block referenced this state attribute, producing an empty `CF_ACCESS_SECRET`. Recovery: added Terraform variables sourced from Doppler (#4494). Prevention: when referencing provider-managed credentials in Terraform, check the provider docs for write-only attributes. If the attribute is sensitive and the provider is cloud-hosted, assume write-only until verified — use Doppler/vault variables instead.
+
+7. **curl `-d` strips newlines, breaking HMAC** — the push script used `curl -d @file` to send the payload, but `-d` strips newlines from the file content. The HMAC was computed over the raw file (with newlines from the heredoc), but the server received the stripped version and computed a different HMAC → 500. Recovery: switched to `--data-binary @file` (#4495). Prevention: always use `--data-binary` (not `-d`) when the payload has been HMAC-signed over the raw bytes. `-d` is for form data; `--data-binary` preserves byte-for-byte fidelity.
+
 ## Tags
 category: infrastructure
 module: apps/web-platform/infra
