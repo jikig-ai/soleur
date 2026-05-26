@@ -28,19 +28,19 @@
 
 ## 4. Pure-TS Port Crons (independent of #4472)
 
-- [ ] T1 `cron-membership-health.ts` ← `scheduled-membership-health.yml` (hourly :17)
+- [x] T1 `cron-membership-health.ts` ← `scheduled-membership-health.yml` (hourly :17)
 - [ ] T2 `cron-weekly-analytics.ts` ← `scheduled-weekly-analytics.yml` (Mon 06:00) **— AFTER C2, C4, C5.** Convert cascade to `inngest.send()`.
-- [ ] T3 `cron-ruleset-bypass-audit.ts` ← `scheduled-ruleset-bypass-audit.yml` (daily 06:13). GH App auth.
-- [ ] T4 `cron-gh-pages-cert-state.ts` ← `scheduled-gh-pages-cert-state.yml` (daily 03:00). Tighten Sentry margin 240→30.
-- [ ] T5 `cron-cloud-task-heartbeat.ts` ← `scheduled-cloud-task-heartbeat.yml` (daily 09:30)
-- [ ] T6 `cron-content-publisher.ts` ← `scheduled-content-publisher.yml` (daily 14:00). **High complexity** — 12 social API secrets. Doppler first.
-- [ ] T7 `cron-content-vendor-drift.ts` ← `scheduled-content-vendor-drift.yml` (Mon 11:17). Uses `bot-pr-with-synthetic-checks` pattern.
-- [ ] T8 `cron-linkedin-token-check.ts` ← `scheduled-linkedin-token-check.yml` (Mon 11:00, staggered from 09:00)
-- [ ] T9 `cron-nag-4216-readiness.ts` ← `scheduled-nag-4216-readiness.yml` (Mon 14:00)
-- [ ] T10 `event-cf-token-expiry-check.ts` ← `scheduled-cf-token-expiry-check.yml` (manual dispatch). No Sentry cron monitor.
-- [ ] T11 `cron-plausible-goals.ts` ← `scheduled-plausible-goals.yml` (monthly 1st 07:00)
-- [ ] T12 `cron-rule-prune.ts` ← `scheduled-rule-prune.yml` (quarterly). Uses `bot-pr-with-synthetic-checks` pattern.
-- [ ] T13 `cron-skill-freshness.ts` ← `scheduled-skill-freshness.yml` (monthly 1st 02:00)
+- [x] T3 `cron-ruleset-bypass-audit.ts` ← `scheduled-ruleset-bypass-audit.yml` (daily 06:13). GH App auth.
+- [x] T4 `cron-gh-pages-cert-state.ts` ← `scheduled-gh-pages-cert-state.yml` (daily 03:00). Tighten Sentry margin 240→30.
+- [x] T5 `cron-cloud-task-heartbeat.ts` ← `scheduled-cloud-task-heartbeat.yml` (daily 09:30)
+- [x] T6 `cron-content-publisher.ts` ← `scheduled-content-publisher.yml` (daily 14:00). 12 social API secrets via `buildPublisherEnv()`.
+- [x] T7 `cron-content-vendor-drift.ts` ← `scheduled-content-vendor-drift.yml` (Mon 11:17). Bot-PR with synthetic checks.
+- [x] T8 `cron-linkedin-token-check.ts` ← `scheduled-linkedin-token-check.yml` (Mon 11:00, staggered from 09:00)
+- [x] T9 `cron-nag-4216-readiness.ts` ← `scheduled-nag-4216-readiness.yml` (Mon 14:00)
+- [x] T10 `event-cf-token-expiry-check.ts` ← `scheduled-cf-token-expiry-check.yml` (manual dispatch). No Sentry cron monitor.
+- [x] T11 `cron-plausible-goals.ts` ← `scheduled-plausible-goals.yml` (monthly 1st 07:00)
+- [x] T12 `cron-rule-prune.ts` ← `scheduled-rule-prune.yml` (quarterly). Bot-PR with synthetic checks.
+- [x] T13 `cron-skill-freshness.ts` ← `scheduled-skill-freshness.yml` (monthly 1st 02:00)
 
 ## 5. Cleanup
 
