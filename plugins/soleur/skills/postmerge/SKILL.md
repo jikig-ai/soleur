@@ -114,8 +114,8 @@ SENTRY_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN -p soleur -c prd --plain 2>
 SENTRY_ORG=$(doppler secrets get SENTRY_ORG -p soleur -c prd --plain 2>/dev/null || echo "jikigai")
 API_HOST="${SENTRY_ORG}.sentry.io"
 
-curl -sS -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "https://${API_HOST}/api/0/organizations/${SENTRY_ORG}/monitors/" \
+curl -sfS -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "https://${API_HOST}/api/0/organizations/${SENTRY_ORG}/monitors/?per_page=100" \
   | jq '[.[] | {slug: .slug, status: .status}] | map(select(.status != "ok" and .status != "active"))'
 ```
 

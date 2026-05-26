@@ -10,9 +10,9 @@ End-to-end autonomous post-ship pipeline: from auto-merge queue through producti
 
 Three changes close the gap:
 
-1. **CI failure auto-fix in ship Phase 7**: When a required check fails during the merge poll, attempt diagnosis and fix (run failing tests, commit fix, push, re-queue auto-merge). Cap at 2 attempts before escalating.
+1. **CI failure auto-fix in ship Phase 7**: When a required check fails during the merge poll, attempt diagnosis and fix (run failing tests, commit fix, push, re-queue auto-merge). Cap at 1 attempt before escalating (reduced from 2 per plan review).
 2. **Auto-chain to postmerge**: After ship Phase 7 confirms merge + release workflows pass, invoke `/soleur:postmerge` automatically with the PR number.
-3. **Sentry regression check in postmerge**: New phase — (a) verify Sentry cron monitors report `ok` post-deploy, (b) compare error count 15-min post-deploy vs 15-min pre-deploy, flag >2x spike.
+3. **Sentry cron monitor check in postmerge**: New phase — verify Sentry cron monitors report `ok` or `active` post-deploy.
 
 ## Why This Approach
 

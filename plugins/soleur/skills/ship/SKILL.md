@@ -1214,6 +1214,8 @@ This complements the PreToolUse hook [`.claude/hooks/pre-merge-rebase.sh`](../..
 
 **If the poll loop exits due to a required-check failure (PR still OPEN) or CLOSED state:**
 
+First, check the PR state. If CLOSED (merge queue rejection or manual close), skip directly to escalation — auto-fix cannot proceed on a closed PR. The autonomous fix path below applies only when the PR is still OPEN (the primary required-check-failure case).
+
 The agent maintains a `fix_attempt_count` counter (agent-level state, not a bash variable — each Monitor invocation is a fresh shell).
 
 1. Read the failure details:
