@@ -193,6 +193,9 @@ describe("POST /api/account/export — CSRF + auth + rate-limit", () => {
     const body = await res.json();
     expect(body.job_id).toBe(JOB_ID);
     expect(body.acknowledged_at).toBe("2026-05-12T10:00:00Z");
+    expect(hoisted.enqueueExportMock).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: uid }),
+    );
   });
 
   it("returns 429 when the user retries within 60 seconds", async () => {
