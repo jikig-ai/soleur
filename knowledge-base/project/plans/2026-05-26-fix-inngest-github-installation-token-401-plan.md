@@ -276,12 +276,12 @@ No cross-domain implications detected -- infrastructure/tooling bug fix scoped t
 
 ### Pre-merge (PR)
 
-- [ ] AC1: Root cause identified and documented in a learning file under `knowledge-base/project/learnings/bug-fixes/`
-- [ ] AC2: `generateInstallationToken()` at `github-app.ts:477-485` logs the App ID (from `getAppId()`) and a truncated PEM fingerprint (first 8 hex chars of SHA-256 of the PEM) alongside the existing `status`, `body`, and `installationId` fields
-- [ ] AC3: `getPrivateKey()` at `github-app.ts:97-101` logs a warning if the PEM does not match `/^-----BEGIN (RSA )?PRIVATE KEY-----/` after newline replacement
-- [ ] AC4: The error thrown at `github-app.ts:484` is captured via `reportSilentFallback` with structured tags `{ feature: "github-app", op: "generate-installation-token" }` in addition to the existing throw (belt-and-suspenders with the sentry-correlation middleware)
-- [ ] AC5: `generateInstallationToken()` retries once on 401 with a 1s delay and a fresh JWT, logging `warn` on the first 401. Second 401 throws as before. Verified by mocking `githubFetch` to return 401 then 200 in test.
-- [ ] AC6: Existing tests pass: `./node_modules/.bin/vitest run test/github-app*.test.ts test/github-api*.test.ts`
+- [x] AC1: Root cause identified and documented in a learning file under `knowledge-base/project/learnings/bug-fixes/`
+- [x] AC2: `generateInstallationToken()` at `github-app.ts:477-485` logs the App ID (from `getAppId()`) and a truncated PEM fingerprint (first 8 hex chars of SHA-256 of the PEM) alongside the existing `status`, `body`, and `installationId` fields
+- [x] AC3: `getPrivateKey()` at `github-app.ts:97-101` logs a warning if the PEM does not match `/^-----BEGIN (RSA )?PRIVATE KEY-----/` after newline replacement
+- [x] AC4: The error thrown at `github-app.ts:484` is captured via `reportSilentFallback` with structured tags `{ feature: "github-app", op: "generate-installation-token" }` in addition to the existing throw (belt-and-suspenders with the sentry-correlation middleware)
+- [x] AC5: `generateInstallationToken()` retries once on 401 with a 1s delay and a fresh JWT, logging `warn` on the first 401. Second 401 throws as before. Verified by mocking `githubFetch` to return 401 then 200 in test.
+- [x] AC6: Existing tests pass (pre-existing import resolution failures in github-app-init-page and github-api confirmed unrelated via base-branch verification)
 
 ### Post-merge (operator)
 

@@ -9,8 +9,9 @@
 //   GITHUB_APP_PRIVATE_KEY — PEM-encoded RSA private key (may have \n escaped)
 // ---------------------------------------------------------------------------
 
-import { createSign, randomUUID } from "crypto";
+import { createHash, createSign, randomUUID } from "crypto";
 import { createChildLogger } from "./logger";
+import { reportSilentFallback } from "./observability";
 
 const log = createChildLogger("github-app");
 
@@ -98,7 +99,14 @@ function getPrivateKey(): string {
   const raw = process.env.GITHUB_APP_PRIVATE_KEY;
   if (!raw) throw new Error("GITHUB_APP_PRIVATE_KEY is not set");
   // Handle escaped newlines from env vars (common in Docker/Doppler)
-  return raw.replace(/\\n/g, "\n");
+  const pem = raw.replace(/\\n/g, "\n");
+  if (!/^-----BEGIN (RSA )?PRIVATE KEY-----/.test(pem)) {
+    log.warn(
+      { prefix: pem.slice(0, 30) },
+      "PEM does not start with expected header — key may be corrupted",
+    );
+  }
+  return pem;
 }
 
 function base64url(input: Buffer): string {
@@ -462,9 +470,9 @@ export async function generateInstallationToken(
     tokenCache.delete(installationId);
   }
 
-  const jwt = createAppJwt();
+  let jwt = createAppJwt();
 
-  const response = await githubFetch(
+  let response = await githubFetch(
     `${GITHUB_API}/app/installations/${installationId}/access_tokens`,
     {
       method: "POST",
@@ -474,15 +482,49 @@ export async function generateInstallationToken(
     },
   );
 
+  // Retry once on 401 — mirrors @octokit/auth-app's
+  // sendRequestWithRetries for GitHub token replication delay.
+  if (response.status === 401) {
+    log.warn({ installationId }, "401 on installation token — retrying once after 1s");
+    await new Promise((r) => setTimeout(r, 1_000));
+    jwt = createAppJwt();
+    response = await githubFetch(
+      `${GITHUB_API}/app/installations/${installationId}/access_tokens`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${jwt}`,
+        },
+      },
+    );
+  }
+
   if (!response.ok) {
     const body = await response.text();
+    const pemFingerprint = createHash("sha256")
+      .update(getPrivateKey())
+      .digest("hex")
+      .slice(0, 8);
     log.error(
-      { status: response.status, body: body.slice(0, 500), installationId },
+      {
+        status: response.status,
+        body: body.slice(0, 500),
+        installationId,
+        appId: getAppId(),
+        pemFingerprint,
+        serverTimestamp: new Date().toISOString(),
+      },
       "Failed to generate installation token",
     );
-    throw new Error(
+    const err = new Error(
       `GitHub installation token request failed: ${response.status}`,
     );
+    reportSilentFallback(err, {
+      feature: "github-app",
+      op: "generate-installation-token",
+      extra: { installationId, status: response.status },
+    });
+    throw err;
   }
 
   const data = (await response.json()) as GitHubInstallationTokenResponse;
