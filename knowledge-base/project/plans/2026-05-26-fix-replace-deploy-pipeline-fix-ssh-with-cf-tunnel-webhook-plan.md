@@ -118,7 +118,7 @@ discoverability_test:
 - [ ] AC5: `cloud-init.yml` provisions `infra-config-apply.sh` to `/usr/local/bin/infra-config-apply.sh` for fresh-server parity.
 - [ ] AC6: `webhook.service` ReadWritePaths includes `/etc/sudoers.d` (currently missing -- required for the visudo-validate-then-install pattern which runs INSIDE the service's mount namespace). All other paths written by the handler (`/usr/local/bin`, `/etc/systemd/system`, `/etc/webhook`, `/etc/default`) are already in ReadWritePaths or ReadOnlyPaths. The cloud-init inline copy of webhook.service must be updated in sync.
 - [ ] AC7: `apply-deploy-pipeline-fix.yml` removes all cloudflared SSH bridge infrastructure (cloudflared install, CF Access SSH token extraction, bridge startup, iptables NAT, host-key seeding, teardown step). SSH-agent setup and DEPLOY_SSH_PRIVATE_KEY extraction are also removed.
-- [ ] AC8: Post-apply verification in `apply-deploy-pipeline-fix.yml` asserts: (a) terraform apply exit code 0, (b) after 5s wait, GET `/hooks/deploy-status` returns JSON with `webhook: active`. File-content-level verification is deferred to the drift cron (runs every 12h; if files diverge, a new drift issue is auto-filed).
+- [ ] AC8: Post-apply verification in `apply-deploy-pipeline-fix.yml` asserts: (a) terraform apply exit code 0, (b) polls GET `/hooks/deploy-status` up to 3 times at 5s intervals (15s total window), accepting on first HTTP 200 response with valid JSON body (proving the webhook binary is alive and serving after the self-restart). Note: `cat-deploy-state.sh` currently reports `inngest_heartbeat`, `inngest_server`, `vector` status but NOT `webhook` itself. A successful HTTP 200 response from the webhook endpoint IS the liveness proof -- no need for a separate `webhook: active` field. File-content-level verification is deferred to the drift cron (runs every 12h; if files diverge, a new drift issue is auto-filed).
 - [ ] AC9: `triggers_replace` hash in `terraform_data.deploy_pipeline_fix` continues to include all current trigger files (ci-deploy.sh, ci-deploy-wrapper.sh, webhook.service, cat-deploy-state.sh, canary-bundle-claim-check.sh, deploy-inngest-bootstrap.sudoers, hooks_json, infra-config-apply.sh, push-infra-config.sh) so drift detection remains functional.
 - [ ] AC10: `terraform validate` passes in `apps/web-platform/infra/`.
 - [ ] AC11: The `infra-config-apply.sh` handler script has a test file (`infra-config-apply.test.sh`) with at least: (a) happy-path file write + permission set to a tmpdir, (b) missing/empty env var rejection, (c) visudo validation failure halts install of sudoers file, (d) atomic write (no partial file visible at destination).
@@ -144,7 +144,7 @@ Hardcoded handler script (no generic JSON parsing, no jq dependency). The webhoo
 - For each known file: decode the corresponding env var via `base64 -d`, write to mktemp, set hardcoded mode/owner, mv atomically to the known destination path.
 - Hardcoded file map (path + mode + owner for each of the 7 managed files -- same as the current provisioner "file" blocks).
 - Runs the fixed post-write sequence: `chmod +x` for scripts, `chown root:deploy /etc/webhook/hooks.json`, `chmod 640 /etc/webhook/hooks.json`, visudo-validate-then-install for sudoers (same pattern as current remote-exec), `systemctl daemon-reload`.
-- Schedules self-restart: `systemd-run --on-active=3s --unit=webhook-self-restart systemctl restart webhook`.
+- Schedules self-restart: `sudo systemd-run --on-active=3s --unit=webhook-self-restart systemctl restart webhook`. Requires a sudoers entry for the `deploy` user (see deepen-plan finding #2).
 - Exit 0.
 
 **Create `apps/web-platform/infra/infra-config-apply.test.sh`:**
@@ -163,6 +163,9 @@ Hardcoded handler script (no generic JSON parsing, no jq dependency). The webhoo
 **Edit `apps/web-platform/infra/webhook.service`** (and the cloud-init inline copy):
 - Add `/etc/sudoers.d` to `ReadWritePaths` (currently missing -- required because the handler runs inside the service's mount namespace and must `install` the sudoers file to that path).
 
+**Add sudoers entry for webhook self-restart:**
+- Add a sudoers entry allowing the `deploy` user to run `systemd-run` for the webhook restart timer. Either extend `deploy-inngest-bootstrap.sudoers` or create a new `deploy-webhook-restart.sudoers` with: `deploy ALL=(root) NOPASSWD: /usr/bin/systemd-run --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook`. This is required because the webhook.service runs as `User=deploy` and `systemctl restart` requires root.
+
 **Edit `apps/web-platform/infra/cloud-init.yml`:**
 - Add `infra-config-apply.sh` to `write_files` section (base64-encoded, same pattern as ci-deploy.sh).
 - The new `hooks.json` entry is already handled because `hooks.json.tmpl` is rendered at plan time and injected into cloud-init via `hooks_json_b64`.
@@ -176,10 +179,11 @@ Hardcoded handler script (no generic JSON parsing, no jq dependency). The webhoo
 
 Standalone push script invoked by the local-exec provisioner. Receives sensitive values as environment variables (set by the provisioner's `environment {}` block). The script:
 
-1. Constructs the JSON payload with base64-encoded file contents (reads files from `$INFRA_DIR`).
-2. Computes HMAC-SHA256 signature: `echo -n "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -binary | xxd -p -c 256`.
-3. `curl -s -o /tmp/infra-config-response.txt -w '%{http_code}' --max-time 30 -X POST -H "Content-Type: application/json" -H "X-Signature-256: sha256=$HMAC" -H "CF-Access-Client-Id: $CF_ACCESS_ID" -H "CF-Access-Client-Secret: $CF_ACCESS_SECRET" -d "$BODY" "https://deploy.${APP_DOMAIN_BASE}/hooks/infra-config"`.
+1. Constructs the JSON payload with base64-encoded file contents (reads files from `$INFRA_DIR`), writes to a tmpfile (`mktemp`). The tmpfile avoids shell variable expansion issues with large base64 payloads (> 10KB).
+2. Computes HMAC-SHA256 signature using file-based piping (matching the existing `web-platform-release.yml` pattern): `HMAC=$(openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" < "$PAYLOAD_FILE" | sed 's/.*= //')`.
+3. `curl -s -o /tmp/infra-config-response.txt -w '%{http_code}' --max-time 30 -X POST -H "Content-Type: application/json" -H "X-Signature-256: sha256=$HMAC" -H "CF-Access-Client-Id: $CF_ACCESS_ID" -H "CF-Access-Client-Secret: $CF_ACCESS_SECRET" -d @"$PAYLOAD_FILE" "https://deploy.${APP_DOMAIN_BASE}/hooks/infra-config"`.
 4. Asserts HTTP 202; exits non-zero otherwise (fails the terraform apply).
+5. Cleans up tmpfile on EXIT trap.
 
 **Edit `apps/web-platform/infra/server.tf`:**
 - Remove `connection {}` block from `terraform_data.deploy_pipeline_fix`.
@@ -198,7 +202,7 @@ Standalone push script invoked by the local-exec provisioner. Receives sensitive
 - Remove: `CLOUDFLARED_VERSION`, `CLOUDFLARED_SHA256` env vars.
 - Remove: "Capture local hashes (pre-apply)" step and "Verify server-side file hashes match local" step (both use SSH).
 - Keep: Terraform init, plan, apply steps (the local-exec provisioner inside the TF resource does the curl -- transparent to the workflow).
-- Add: post-apply verification step that waits 5s (for self-restart), then GETs `/hooks/deploy-status` via curl with CF Access headers and asserts `webhook: active` in the JSON response. The existing `WEBHOOK_DEPLOY_SECRET` + `CF_ACCESS_CLIENT_ID` + `CF_ACCESS_CLIENT_SECRET` GitHub secrets are reused.
+- Add: post-apply verification step that polls `/hooks/deploy-status` up to 3 times with 5s intervals (15s total window), accepting on first `webhook: active` response. Uses curl with HMAC + CF Access headers (same pattern as `web-platform-release.yml`'s pre-rerun lock probe). The 15s window covers the 3s `systemd-run` delay + webhook binary initialization + a margin for on-failure restart cycles (`RestartSec=5` in the service unit). The existing `WEBHOOK_DEPLOY_SECRET` + `CF_ACCESS_CLIENT_ID` + `CF_ACCESS_CLIENT_SECRET` GitHub secrets are reused.
 - Keep: "Auto-close any open drift issues" step (unchanged).
 
 ### Phase 4: Documentation + learning
@@ -285,9 +289,28 @@ No cross-domain implications detected -- infrastructure/tooling change with no u
 - **Chicken-and-egg bootstrap**: The first apply after this PR merges must use the OLD SSH path (operator-local apply) to push the new handler script + hooks.json to the host. This uses operator-local SSH (operator IP is in `admin_ips`, always available). After that one-time bootstrap, all subsequent applies use the webhook path. This is explicitly noted in AC13 and must be documented in the PR body as a "Post-merge (operator)" step.
 - **webhook.service ReadWritePaths**: [RESOLVED in plan] `/etc/sudoers.d` added to AC6. The handler runs inside the webhook service's mount namespace (`ProtectSystem=strict`). The SSH provisioner wrote to `/tmp/` first (outside the namespace) then `install`'d; the handler runs inside, so `/etc/sudoers.d` must be explicitly listed.
 - **Terraform sensitive values in local-exec**: [RESOLVED in plan] `var.webhook_deploy_secret` and CF Access token outputs are `sensitive = true`. Terraform >= 1.0 refuses to interpolate sensitive values into `local-exec` command strings. The push script receives them via the provisioner's `environment {}` block (which does accept sensitive values).
-- **HMAC computation in push script**: The push script (`push-infra-config.sh`) computes `HMAC-SHA256(secret, body)` using `echo -n "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -binary | xxd -p -c 256`. The `openssl` and `xxd` commands are available on Ubuntu runner images and macOS operator machines.
+- **HMAC computation in push script**: The push script writes the JSON body to a tmpfile and computes `HMAC=$(openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" < "$PAYLOAD_FILE" | sed 's/.*= //')` -- matching the exact form used in `web-platform-release.yml:249`. Avoids `echo -n "$BODY" | ...` which is fragile for large payloads (> 10KB) and may misbehave with shell special characters in base64 content. The tmpfile is cleaned up on EXIT trap.
 - **Payload passing to handler**: The handler uses `pass-environment-to-command` (same pattern as the existing deploy hook), not stdin or argument passing. Each base64-encoded file content is a separate env var. This avoids the need for JSON parsing or jq on the host.
 - **A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6. Fill it before requesting deepen-plan or `/work`.**
+
+## Enhancement Summary (deepen-plan)
+
+**Deepened on:** 2026-05-26
+**Sections enhanced:** Proposed Solution, Implementation Phases, Risks
+**Research focus:** adnanh/webhook env-var passing limits, systemd-run under ProtectSystem=strict, Terraform sensitive-value plumbing, HMAC computation over large bodies
+
+### Key Improvements
+
+1. **HMAC computation must use file-based piping, not shell variable expansion.** The push script should write the JSON body to a tmpfile and pipe it: `openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -binary < /tmp/infra-config-body.json | xxd -p -c 256` -- not `echo -n "$BODY" | openssl ...`. Base64 content can contain `+`, `/`, `=` and very long lines; shell variable expansion is fragile for payloads > 10KB. The tmpfile is created with `mktemp` and removed on EXIT trap.
+2. **`systemd-run --on-active=3s` runs as the service user (deploy), not root.** The webhook.service runs as `User=deploy`. The `systemd-run` invocation inherits the calling user. `systemctl restart webhook` requires root or polkit authorization. The handler script must use `sudo systemd-run --on-active=3s --unit=webhook-self-restart systemctl restart webhook` -- and the `deploy` user must have a sudoers entry for `systemctl restart webhook` (or for `systemd-run`). **Alternatively**, the existing sudoers file (`deploy-inngest-bootstrap.sudoers`) already grants the deploy user specific sudo permissions -- verify whether `systemctl restart webhook` is covered, or add a new entry.
+3. **adnanh/webhook `pass-environment-to-command` has no documented per-field size limit**, but the total request body is limited by the Go HTTP server's `MaxBytesReader` (default 1MB in webhook 2.8.2). With 7 files totaling ~67KB base64, this is well within limits. Each field is extracted from the parsed JSON payload by the webhook binary and set as an environment variable before execing the handler script.
+4. **Terraform `local-exec` provisioner `environment {}` block with sensitive outputs.** Verified: Terraform >= 1.0 passes sensitive values to the `environment {}` block as-is. The values appear in the child process's environment but are NOT logged to Terraform's stdout (they show as `(sensitive value)` in plan output). The `cloudflare_zero_trust_access_service_token.deploy.client_id` output is `sensitive = true` in `tunnel.tf:140`; referencing it in `environment {}` is the correct pattern.
+
+### New Considerations Discovered
+
+- **Sudoers entry for webhook self-restart.** The handler runs as `deploy` user inside the webhook.service sandbox. `systemctl restart webhook` requires privilege. The existing `deploy-inngest-bootstrap.sudoers` file grants `deploy ALL=(root) NOPASSWD: /usr/local/bin/inngest-bootstrap.sh`. A new entry is needed: `deploy ALL=(root) NOPASSWD: /usr/bin/systemd-run --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook` (or a broader `systemctl restart webhook` entry). This should be added to the existing sudoers file or as a new `deploy-webhook-restart.sudoers` file. **Update Phase 1 and AC accordingly.**
+- **HMAC signature format.** The existing deploy hook sends `X-Signature-256: sha256=<hex>`. The adnanh/webhook's `payload-hmac-sha256` trigger-rule expects the HMAC over the raw request body as a hex string prefixed with `sha256=` in the header value. The push script must match this exactly. The existing `web-platform-release.yml` uses `openssl dgst -sha256 -hmac "$SECRET" | sed 's/.*= //'` for the hex value -- the push script should use the same form (not the `-binary | xxd` form, which is functionally equivalent but differs in invocation).
+- **Post-apply verification timing.** The 5s wait after terraform apply may be insufficient if the `systemd-run --on-active=3s` timer fires but the webhook binary takes additional time to initialize. The existing webhook.service has `RestartSec=5` (on-failure restart delay). If the self-restart triggers a failure that leads to an on-failure restart cycle, the verification could hit a window where webhook is down. A more robust pattern: poll `/hooks/deploy-status` up to 3 times with 5s intervals (15s total window), accept on first `webhook: active` response.
 
 ## Plan Review Applied
 
