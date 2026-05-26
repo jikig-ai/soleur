@@ -1,6 +1,8 @@
 ---
-last_updated: 2026-05-25
+last_updated: 2026-05-26
 ---
+
+<!-- 2026-05-26: PR #4491 (#4358) — extended DSAR conversations fetch to include participated workspace conversations for Art. 15 completeness; subject-authored messages in co-member-owned conversations now included in the bundle. Legal docs updated in lockstep (privacy-policy.md, gdpr-policy.md, data-protection-disclosure.md, compliance-posture.md, Eleventy mirrors). -->
 
 <!-- 2026-05-25: PR-1 of umbrella #4456 (feat-audit-env-flags-flagsmith-policy / PR #4455) — Flagsmith sub-processor disclosure landed across 8 legal artifacts in lockstep ahead of PR-2's code-side `orgId` identity-trait egress. New DPA snapshot at `knowledge-base/legal/data-processing-agreements/flagsmith.md`. Bullet Train Limited row added to Vendor DPA Status table (AUTO via Flagsmith ToS Data Processor Appendix; UK IDTA + EU SCCs M2+3; UK controller → AWS-hosted global edge `edge.api.flagsmith.com`; region not pinned on managed-SaaS tier). Bullet Train Ltd added to data-processing-agreement-template.md Schedule 2 + §11.2 SCCs classification, article-30-register.md PA-1 + PA-2 Recipients + Vendor Mapping, privacy-policy.md §5.15, data-protection-disclosure.md §4.2 (root + Eleventy mirror diff zero), gdpr-policy.md §2.2. AUP §10 sub-processor list does NOT exist; AUP grep at PR-1 time returns zero hits (no lockstep update required). tenant-dpa-register.md Re-evaluation triggers extended to document the §6.1 30-day clock state baseline (zero customer DPAs today → clock NOT triggered). `transient: true` MANDATORY on every `getIdentityFlags(...)` call (data-min lever — opts out of Flagsmith server-side identity persistence; verified against SDK signature `flagsmith-nodejs/build/cjs/sdk/index.d.ts:89`). Single-control gating (updated 2026-05-26, PR #4481): Flagsmith segment rule is the sole per-org gate; env-allowlist removed. Brand-survival threshold: `single-user incident`; CPO sign-off operator-attested in PR body. Blocks: PR-2 (combined per-org capability + WORM audit + both flag migrations) cannot land until this PR is merged. -->
 
@@ -35,12 +37,12 @@ Living status document for vendor DPAs, legal documents, and compliance action i
 | Document | Location | Last Updated | Status |
 |----------|----------|-------------|--------|
 | Terms & Conditions | `docs/legal/terms-and-conditions.md` | 2026-03-20 | Active |
-| Privacy Policy | `docs/legal/privacy-policy.md` | 2026-05-19 | Active |
+| Privacy Policy | `docs/legal/privacy-policy.md` | 2026-05-26 | Active |
 | Article 30 Register (RoPA) | `knowledge-base/legal/article-30-register.md` | 2026-05-19 | Draft (counsel review pending) |
 | Cookie Policy | `docs/legal/cookie-policy.md` | 2026-03-20 | Active |
-| GDPR Policy | `docs/legal/gdpr-policy.md` | 2026-05-12 | Active |
+| GDPR Policy | `docs/legal/gdpr-policy.md` | 2026-05-26 | Active |
 | Acceptable Use Policy | `docs/legal/acceptable-use-policy.md` | 2026-05-18 | Active |
-| Data Protection Disclosure | `docs/legal/data-protection-disclosure.md` | 2026-05-19 | Active |
+| Data Protection Disclosure | `docs/legal/data-protection-disclosure.md` | 2026-05-26 | Active |
 | LinkedIn Page LIA | `knowledge-base/legal/legitimate-interest-assessments/2026-05-19-linkedin-org-page-lia.md` | 2026-05-19 | Draft (counsel review pending) |
 | Disclaimer | `docs/legal/disclaimer.md` | 2026-03-20 | Active |
 | Individual CLA | `docs/legal/individual-cla.md` | 2026-03-20 | Active |
