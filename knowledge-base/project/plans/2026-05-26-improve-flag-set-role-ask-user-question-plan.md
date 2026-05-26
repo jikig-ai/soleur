@@ -7,6 +7,18 @@ lane: single-domain
 
 # improve: flag-set-role should use AskUserQuestion for operator ack
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-26
+**Sections enhanced:** 3 (Implementation Phase 1, Observability, Risks & Mitigations)
+**Research methods:** precedent-diff (worktree-manager.sh `--yes`, deploy SKILL.md AskUserQuestion), line-number verification against source, sibling-script scope validation, AGENTS.md rule-ID verification
+
+### Key Improvements
+1. Added `## Observability` section (required by `hr-observability-as-plan-quality-gate`)
+2. Verified precedent alignment — `--yes`/`YES_FLAG` in worktree-manager.sh:54-55 confirms identical implementation shape
+3. Documented `--confirmed` + `--dry-run` edge case (no-op, correct behavior — no defensive code needed)
+4. Confirmed sibling scripts (`flag-create/scripts/create.sh:77`, `user-set-role/scripts/set-role.sh:82`) have same `read -p` pattern, validating out-of-scope boundary
+
 ## Overview
 
 `flag-set-role/scripts/flip.sh` uses a raw `read -p` terminal prompt for operator acknowledgment (line 251). This breaks the agent-driven UX: the agent cannot pipe input into the prompt, forcing it to either expose raw CLI commands to the operator or bypass the script entirely (as happened during the 2026-05-26 TEAM_WORKSPACE_INVITE_ENABLED flag-flip session). The fix adds a `--confirmed` flag to `flip.sh` that skips the `read -p` prompt, and updates SKILL.md to instruct the agent to use `AskUserQuestion` before passing `--confirmed`. All precondition checks (fallback-fidelity, segment resolution, arg validation) remain unchanged.
@@ -20,6 +32,16 @@ lane: single-domain
 - **If this lands broken, the user experiences:** flag flip silently runs without operator confirmation (the `--confirmed` flag bypasses the ack gate)
 - **If this leaks, the user's workflow is exposed via:** N/A -- no data exposure; the change is UX-only on operator-side tooling
 - **Brand-survival threshold:** `none`
+
+## Observability
+
+- liveness_signal: operator-side CLI script invoked on-demand — no persistent process; liveness verified by exit code 0 on each invocation
+- error_reporting: script exits non-zero with diagnostic on stderr (exit 1: fidelity rule, 2: prerequisite, 3: Flagsmith API, 4: Doppler write); no Sentry integration (operator-local CLI context)
+- failure_modes: (1) --confirmed passed without prior AskUserQuestion — mitigated by SKILL.md agent instruction; (2) Flagsmith API unreachable — exit 3 with curl error; (3) Doppler partial write — exit 4 with reconciliation message
+- logs: stdout prints resolve/state/delta/audit/write trace per invocation; no persistent log sink (operator terminal only)
+- discoverability_test:
+  command: bash plugins/soleur/skills/flag-set-role/scripts/flip.sh kb-chat-sidebar dev on --dry-run
+  expected: exit 0, pre/post matrix printed to stdout
 
 ## Files to Edit
 
@@ -78,6 +100,16 @@ None.
    ```
 
 **Key invariant:** All precondition checks (prerequisite validation, fallback-fidelity rule, segment resolution, Doppler token fetch) still run regardless of `--confirmed`. The flag skips ONLY the `read -p` prompt.
+
+### Precedent Verification
+
+**`--yes` in worktree-manager.sh (line 54-55):** `YES_FLAG=false` default, `--yes` sets to true, skips all interactive prompts. Identical shape — boolean init + arg-parse case + conditional guard around `read`. Confirmed via `grep -n '\-\-yes' plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`.
+
+**AskUserQuestion in deploy SKILL.md (line 40):** The deploy skill presents a confirmation question via AskUserQuestion before running `deploy.sh`. Same agent-mediated-ack pattern this plan prescribes. Confirmed via `grep -n 'AskUserQuestion' plugins/soleur/skills/deploy/SKILL.md`.
+
+### Edge Case: `--confirmed` + `--dry-run`
+
+When both flags are passed, `--dry-run` exits at line 244 (before the operator-ack block at line 249), so `--confirmed` is a no-op. This is correct — dry-run should exit cleanly regardless of `--confirmed`. No defensive code needed.
 
 ### Phase 2: Update SKILL.md
 
