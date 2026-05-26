@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Runtime contract has moved to apps/web-platform/server/inngest/functions/cron-compound-promote.ts
+# (TR9 PR-11). This script remains on disk for operator-local hand-testing only.
+#
 # Driver for the compound-promotion-loop weekly cron (Issue: #2720).
 #
 # Pipeline (5 stages, fail-soft):

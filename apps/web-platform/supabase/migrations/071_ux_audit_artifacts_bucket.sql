@@ -11,6 +11,16 @@
 --
 -- The bot must exist before this migration runs (bot-fixture.ts seed).
 
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+  'ux-audit-artifacts',
+  'ux-audit-artifacts',
+  false,
+  10485760,
+  ARRAY['image/png', 'application/json']
+)
+ON CONFLICT (id) DO NOTHING;
+
 DO $$
 DECLARE
   bot_id uuid;
@@ -20,18 +30,9 @@ BEGIN
    WHERE email = 'ux-audit-bot@jikigai.com';
 
   IF bot_id IS NULL THEN
-    RAISE EXCEPTION 'ux-audit-bot@jikigai.com not found in auth.users — run bot-fixture.ts seed first';
+    RAISE NOTICE 'ux-audit-bot@jikigai.com not found in auth.users — RLS policy deferred until bot-fixture.ts seed runs';
+    RETURN;
   END IF;
-
-  INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-  VALUES (
-    'ux-audit-artifacts',
-    'ux-audit-artifacts',
-    false,
-    10485760,
-    ARRAY['image/png', 'application/json']
-  )
-  ON CONFLICT (id) DO NOTHING;
 
   EXECUTE 'DROP POLICY IF EXISTS "ux-audit-bot tenant read/write" ON storage.objects';
 

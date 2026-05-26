@@ -142,15 +142,15 @@ if [[ -n "${AUDIT_ENUMERATE_ONLY:-}" ]]; then
   exit 0
 fi
 
-# Sanity floor (deferred until after enumeration): require >= 7 workflows.
-# Floor lowered from 8 → 7 after intentional deletion of the fired one-time
-# `scheduled-disk-io-7d-recheck.yml` (PR #3734). The floor exists to catch
-# accidental mass-deletion of bot workflows; advance it deliberately when a
-# deletion is intentional rather than padding it with a known-dead entry.
+# Sanity floor (deferred until after enumeration): require >= 6 workflows.
+# Floor lowered from 7 → 6 after intentional deletion of
+# `scheduled-compound-promote.yml` (TR9 PR-11, #4463 — migrated to Inngest
+# cron substrate). The floor exists to catch accidental mass-deletion of bot
+# workflows; advance it deliberately when a deletion is intentional.
 WORKFLOWS=$(enumerate_workflows)
 COUNT=$(printf '%s\n' "$WORKFLOWS" | grep -v '^$' | wc -l)
-if [[ -z "$WORKFLOWS_OVERRIDE" && "$COUNT" -lt 7 ]]; then
-  echo "::error::bot-workflow inventory shrank — verify before proceeding (got $COUNT, expect >=7)" >&2
+if [[ -z "$WORKFLOWS_OVERRIDE" && "$COUNT" -lt 6 ]]; then
+  echo "::error::bot-workflow inventory shrank — verify before proceeding (got $COUNT, expect >=6)" >&2
   exit 1
 fi
 # When --workflows override is used, --workflows is allowed to specify <7 (testing path)
