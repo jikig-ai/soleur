@@ -10,9 +10,9 @@ brand_survival_threshold: single-user incident
 estimate_days: "2-3"
 ---
 
-# Tasks: BYOK Delegations PR-B (v1)
+# Tasks: BYOK Delegations PR-B (v2)
 
-Derived from `2026-05-26-feat-byok-delegations-pr-b-ui-legal-plan.md` v1. 7 phases; TDD per phase (RED -> GREEN -> REFACTOR).
+Derived from `2026-05-26-feat-byok-delegations-pr-b-ui-legal-plan.md` v2 (post-deepen-plan). 7 phases; TDD per phase (RED -> GREEN -> REFACTOR).
 
 ## Phase 0 — Preconditions
 
@@ -34,7 +34,7 @@ Derived from `2026-05-26-feat-byok-delegations-pr-b-ui-legal-plan.md` v1. 7 phas
 - [ ] 1.2 Create 074_byok_delegation_acceptances.sql: table + WORM trigger + RLS + index + anonymise RPC
 - [ ] 1.3 Create down migration
 - [ ] 1.4 GREEN: apply + down + re-apply passes
-- [ ] 1.5 Update account-delete.ts: phase 5.95 anonymise_byok_delegation_acceptances
+- [ ] 1.5 Update account-delete.ts: step 5.11 (after 5.10 anonymise_byok_delegations at :740, before auth.admin.deleteUser at :766) — anonymise_byok_delegation_acceptances + update docstring header
 - [ ] 1.6 Update dsar-export-allowlist.ts: add acceptance table entry
 - [ ] 1.7 `bun run typecheck` exits 0
 
@@ -69,13 +69,13 @@ Derived from `2026-05-26-feat-byok-delegations-pr-b-ui-legal-plan.md` v1. 7 phas
 
 - [ ] 3.11 RED: banner test skeleton
 - [ ] 3.12 Create delegation-banner.tsx: persistent banner with grantor name + spend/cap
-- [ ] 3.13 Update chat/layout.tsx: mount DelegationBanner
+- [ ] 3.13 Update chat/layout.tsx: convert to async RSC, resolve delegation data server-side, mount DelegationBanner with props
 - [ ] 3.14 GREEN: banner tests pass
 
 ### 3.D — Error Cards
 
 - [ ] 3.15 RED: error card test skeleton
-- [ ] 3.16 Extend ws-handler.ts: map ByokDelegationError to error codes
+- [ ] 3.16 Extend ws-handler.ts: import ByokDelegationError from byok-resolver; map to error codes in BOTH catch sites (:1782 + :1796-1800)
 - [ ] 3.17 Extend ws-client.ts: handle delegation error codes
 - [ ] 3.18 Create delegation-error-card.tsx: styled error with CTA
 - [ ] 3.19 Update chat-surface.tsx: render DelegationErrorCard

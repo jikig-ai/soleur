@@ -18,6 +18,27 @@ estimate_days: "2-3"
 
 # Plan: BYOK Delegations PR-B — UI Surfaces + Legal Docs + Flag Flip (#4232)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-26
+**Sections enhanced:** 8 (Phases 1-5, Risks, Acceptance Criteria, Sharp Edges)
+**Research agents used:** precedent-diff (account-delete cascade), verify-the-negative (ws-handler error propagation), code-grep (DPD/AUP insertion points, flag-gate signature, WORM bypass patterns)
+
+### Key Improvements
+1. **Account-delete cascade numbering corrected:** "step 5.11" changed to "step 5.11" matching the actual `account-delete.ts` numbering scheme (delegations is step 5.10, not 5.9).
+2. **ws-handler error mapping expanded:** TWO catch sites identified (`:1782` for `startAgentSession`, `:1796-1800` for `sendUserMessage`); both need `ByokDelegationError` import and mapping. Inngest function paths (cfo-on-payment-failed, github-on-event) don't reach ws-handler -- their errors surface via Sentry only.
+3. **Server-component banner pattern prescribed:** `DelegationBanner` must be an RSC wrapper fetching delegation state server-side, passing data down to a thin client component. Prevents layout shift and avoids exposing the delegation API to the client bundle.
+4. **AC verification commands hardened:** grep commands exclude the plan file itself to prevent self-match (per learning `2026-05-22-ac-self-grep-hazard`).
+5. **WORM bypass safety confirmed:** `session_replication_role = 'replica'` in the acceptance anonymise RPC is safe because it runs via service_role from `account-delete.ts`, NOT via PostgREST routing. The `2026-05-18` learning applies only to PostgREST-routed mutations.
+6. **Missing risk added:** R6 covers acceptance modal bypass (grantee uses the delegation API directly to skip the acceptance gate).
+7. **Phase ordering dependency documented:** Phase 1 (migration) must land before Phase 2 (resolvers) which must land before Phase 3 (UI) -- each phase produces types/APIs the next consumes.
+
+### New Considerations Discovered
+- ws-handler `:1796-1800` catch site (deferred-creation path) also needs delegation error mapping
+- API route files must comply with `cq-nextjs-route-files-http-only-exports` (export only GET/POST/DELETE, no helper functions)
+- The DPD section 2.3 currently ends at (v) with no (w) -- confirmed insertion point is safe
+- `isByokDelegationsEnabled` requires `(orgId, identity)` -- RSC pages must derive both from the authenticated user before calling flag gate
+
 ## Overview
 
 PR-A (#4290, merged) shipped the schema-and-enforcement layer: migration 064 (`byok_delegations` table + WORM trigger + same-workspace constraint + RLS + RPCs), the SQL resolver, TS `byok-resolver.ts` with abstract error hierarchy, 5-site sentinel sweep, cost-writer integration, account-delete cascade, CLI grant/revoke, feature flag gate, and ADR.
@@ -111,7 +132,7 @@ PR-B delivers the remaining three pillars before the flag flips ON:
   - `REVOKE ALL FROM PUBLIC, anon, authenticated; GRANT EXECUTE TO service_role`
 - [ ] 1.4 Write `074_byok_delegation_acceptances.down.sql` in reverse
 - [ ] 1.5 GREEN: migration test apply + down + re-apply cycle passes
-- [ ] 1.6 Update `apps/web-platform/server/account-delete.ts`: add phase 5.95 (BETWEEN phase 5.9 `anonymise_byok_delegations` and phase 6 `auth.admin.deleteUser`) calling `anonymise_byok_delegation_acceptances`
+- [ ] 1.6 Update `apps/web-platform/server/account-delete.ts`: add step 5.11 AFTER step 5.10 (`anonymise_byok_delegations` at `:740`) and BEFORE step 6 (`auth.admin.deleteUser` at `:766`). Insert `anonymise_byok_delegation_acceptances` RPC call with the sibling error-handling shape (try/catch, `reportSilentFallback`, abort-on-error). Update the docstring header (`:70-96`) to add step 5.11 documentation
 - [ ] 1.7 Update `apps/web-platform/server/dsar-export-allowlist.ts`: add `byok_delegation_acceptances: { ownerField: "user_id", article: "15+20" }`
 - [ ] 1.8 `bun run typecheck` exits 0
 
@@ -130,9 +151,13 @@ PR-B delivers the remaining three pillars before the flag flips ON:
   - POST: creates delegation via `grant_byok_delegation` RPC (for the member-row toggle)
   - DELETE: revokes delegation via `revoke_byok_delegation` RPC (for the member-row kill-switch)
   - All endpoints: auth guard + flag gate + workspace membership check
+  - Per `cq-nextjs-route-files-http-only-exports`: export ONLY `GET`, `POST`, `DELETE` handler functions; all helper logic lives in `byok-delegation-ui-resolver.ts`
+  - Validate `workspaceId` param against the authenticated user's workspace membership before any RPC call
 - [ ] 2.4 Create `apps/web-platform/app/api/workspace/delegations/accept/route.ts`:
-  - POST: grantee accepts delegation (inserts `byok_delegation_acceptances` row)
-  - Auth guard + flag gate + delegation exists + grantee is the authenticated user
+  - POST: grantee accepts delegation (inserts `byok_delegation_acceptances` row via authenticated Supabase client — NOT service client, so RLS `user_id = auth.uid()` enforces)
+  - Auth guard + flag gate + delegation exists + delegation is active (not revoked/expired) + grantee is the authenticated user
+  - Capture `ip_hash` (SHA-256 of `request.headers.get("x-forwarded-for")`) + `user_agent` (from request headers) + `side_letter_version` (from request body) per Art. 7 consent evidence requirements
+  - Per `cq-nextjs-route-files-http-only-exports`: export only `POST`
 - [ ] 2.5 GREEN: resolver + route tests pass
 - [ ] 2.6 `bun run typecheck` exits 0
 
@@ -175,13 +200,13 @@ PR-B delivers the remaining three pillars before the flag flips ON:
   - Links to cap details in billing settings
   - Visible only when an active delegation exists for the current user in the current workspace
   - Style: `bg-soleur-accent-gold-fill/10 text-soleur-accent-gold-fg` matching brand accent
-- [ ] 3.13 Update `apps/web-platform/app/(dashboard)/dashboard/chat/layout.tsx`: render `DelegationBanner` above the `<main>` content. Banner fetches its data via RSC (server component wrapper) or a lightweight client-side fetch on mount.
+- [ ] 3.13 Update `apps/web-platform/app/(dashboard)/dashboard/chat/layout.tsx`: make the layout `async` (RSC), call `createClient()` + `getUser()` + `getCurrentOrganizationId()` + `isByokDelegationsEnabled()` + `resolveGranteeDelegation()` at the server level, then pass the resolved delegation data (or `null`) as props to a thin client `DelegationBanner`. This avoids layout shift, keeps the delegation API off the client bundle, and follows the team page's RSC pattern. Render the banner above the `<main>` content, inside the flex layout.
 - [ ] 3.14 GREEN: banner tests pass
 
 #### 3.D — Error Cards: Delegation Failure Modes
 
 - [ ] 3.15 RED: create `apps/web-platform/test/delegation-error-cards.test.tsx`
-- [ ] 3.16 Extend `apps/web-platform/server/ws-handler.ts`: in the catch site at `:1782` (and equivalent paths), add `instanceof ByokDelegationError` cases mapping to new error codes:
+- [ ] 3.16 Extend `apps/web-platform/server/ws-handler.ts`: import `ByokDelegationError` from `@/server/byok-resolver`; in BOTH catch sites (`:1782` for `startAgentSession` AND `:1796-1800` for `sendUserMessage` deferred-creation path), add `instanceof ByokDelegationError` cases mapping to new error codes:
   - `delegation_revoked` -> "Your funded access has been revoked. Ask [owner] to re-enable."
   - `delegation_expired` -> "Your funded access has expired. Ask [owner] to renew."
   - `delegation_hourly_cap_exceeded` -> "Hourly cap reached ($X/$CAP). Ask [owner] to raise the cap."
@@ -288,10 +313,10 @@ PR-B delivers the remaining three pillars before the flag flips ON:
 - [ ] AC7. Chat banner never displays key prefix, last-4, or any key residue
 - [ ] AC8. Error cards: all 5 failure modes (no delegation, expired, revoked, hourly cap, daily cap) display correct CTA
 - [ ] AC9. Delegation Consent Side Letter template created at `knowledge-base/legal/delegation-consent-side-letter-template.md`
-- [ ] AC10. DPD section 2.3(w) added: `grep -c '2\.3(w)' docs/legal/data-protection-disclosure.md` returns >= 1
-- [ ] AC11. AUP section 5.6 added: `grep -c '5\.6' docs/legal/acceptable-use-policy.md` returns >= 1
-- [ ] AC12. Article 30 PA-23 added: `grep -c 'Processing Activity 23' knowledge-base/legal/article-30-register.md` returns >= 1
-- [ ] AC13. Account-delete cascade: phase 5.95 calls `anonymise_byok_delegation_acceptances`
+- [ ] AC10. DPD section 2.3(w) added: `grep -cE '^\s*-\s*\*\*\(w\)\*\*' docs/legal/data-protection-disclosure.md` returns >= 1
+- [ ] AC11. AUP section 5.6 added: `grep -cE '^### 5\.6' docs/legal/acceptable-use-policy.md` returns >= 1
+- [ ] AC12. Article 30 PA-23 added: `grep -cE '^## Processing Activity 23' knowledge-base/legal/article-30-register.md` returns >= 1
+- [ ] AC13. Account-delete cascade: step 5.11 calls `anonymise_byok_delegation_acceptances`
 - [ ] AC14. DSAR allowlist: `byok_delegation_acceptances` entry present
 - [ ] AC15. All new UI components render nothing when `BYOK_DELEGATIONS_ENABLED=OFF`
 - [ ] AC16. `bun run typecheck` exits 0; `bun test` exits 0
@@ -299,6 +324,8 @@ PR-B delivers the remaining three pillars before the flag flips ON:
 - [ ] AC18. PR body uses `Ref #4232` (NOT `Closes`) — issue stays open until flag flip confirmed
 - [ ] AC19. Compliance-posture changelog entry added
 - [ ] AC20. Roadmap listing for #4232 present
+- [ ] AC21. ws-handler maps `ByokDelegationError` in BOTH catch sites: `grep -cE 'ByokDelegationError' apps/web-platform/server/ws-handler.ts` returns >= 2
+- [ ] AC22. Acceptance route uses authenticated client (NOT service client) for INSERT: `grep -cE 'createClient\b' apps/web-platform/app/api/workspace/delegations/accept/route.ts` returns >= 1 AND `grep -cE 'createServiceClient' apps/web-platform/app/api/workspace/delegations/accept/route.ts` returns 0
 
 ### Post-merge (operator)
 
@@ -317,7 +344,7 @@ PR-B delivers the remaining three pillars before the flag flips ON:
 |---|---|
 | `apps/web-platform/supabase/migrations/074_byok_delegation_acceptances.sql` | **Create** — acceptance consent table |
 | `apps/web-platform/supabase/migrations/074_byok_delegation_acceptances.down.sql` | **Create** — down migration |
-| `apps/web-platform/server/account-delete.ts` | **Edit** — add phase 5.95 anonymise |
+| `apps/web-platform/server/account-delete.ts` | **Edit** — add step 5.11 anonymise |
 | `apps/web-platform/server/dsar-export-allowlist.ts` | **Edit** — add acceptance table entry |
 | `apps/web-platform/server/byok-delegation-ui-resolver.ts` | **Create** — server resolver for UI data |
 | `apps/web-platform/server/team-membership-resolver.ts` | **Edit** — extend TeamMembershipRow type + delegation join |
@@ -433,6 +460,8 @@ CPO brainstorm assessment: bidirectional cost visibility is mandatory v1. USD/da
 - **R3 (Medium).** Flag flipped ON before Side Letter signed → delegation active without consent. Mitigation: operator checklist ordering PM2 before PM4; acceptance modal gates delegation activation in-app.
 - **R4 (Low).** Cap edit race: Jean edits cap while Harry is mid-conversation → momentary inconsistency. Mitigation: WORM Shape 3 cap-update in PR-A; UI refresh on cap change.
 - **R5 (Low).** Acceptance table migration 074 fails to apply in prd. Mitigation: standard migration pipeline via `web-platform-release.yml#migrate`; down migration provided.
+- **R6 (Medium).** Acceptance modal bypass: grantee calls `/api/workspace/delegations/accept` directly without reading the Side Letter. Mitigation: the POST handler must verify `delegation.grantee_user_id === auth.uid()` AND the delegation is active AND the grantee is a workspace member; the acceptance row itself is the Art. 7 consent evidence (stored with `side_letter_version`, `ip_hash`, `user_agent`); the resolver only activates delegations WITH an acceptance row. Even if bypassed, the grantee still had to be explicitly granted by the grantor.
+- **R7 (Low).** Funded-pane or banner shows stale spend data (cached delegation status). Mitigation: RSC fetches on every page load (no client-side caching); spend is computed from `audit_byok_use` at query time. The funded-pane uses `router.refresh()` pattern (same as billing page) to force RSC re-render after cap changes.
 
 ## Alternative Approaches Considered
 
@@ -451,6 +480,11 @@ CPO brainstorm assessment: bidirectional cost visibility is mandatory v1. USD/da
 - The funded-pane spend query joins `audit_byok_use` filtered on `delegation_id IS NOT NULL` with a rolling 24h window — this matches the daily cap accounting (rolling 24h, not UTC midnight) per PR-A deepen-plan decision.
 - When wiring the acceptance POST route, the endpoint must verify both: (a) the authenticated user IS the grantee_user_id on the delegation, and (b) the delegation is active (not revoked/expired). Missing either check is a security regression.
 - Legal doc edits to `docs/legal/acceptable-use-policy.md` and `docs/legal/data-protection-disclosure.md` must update the "Last Updated" date in the frontmatter/header.
+- The ws-handler has TWO distinct catch sites for BYOK errors: `:1782` (inside `startAgentSession.catch`) and `:1796-1800` (inside the outer `try/catch` for `sendUserMessage`). Both must map `ByokDelegationError` subtypes. Missing the second catch site means deferred-creation-path errors show as generic "Server error" instead of the proper delegation CTA.
+- The chat layout becomes an async RSC when the banner mounts. This is a breaking change if any existing client-only hook was relied upon in the layout. Verify no `"use client"` directives exist at the layout level.
+- The acceptance INSERT uses the authenticated Supabase client (NOT service client) so RLS enforces `user_id = auth.uid()`. A service-client insert would bypass the ownership check and allow one user to forge another's acceptance.
+- The `resolveGrantorDelegations` spend query MUST use `clock_timestamp()` (not `now()`) for the rolling 24h window to match PR-A's cap accounting (which uses `clock_timestamp()` in `check_and_record_byok_delegation_use`). Using `now()` would show stale spend within the same transaction.
+- The AUP "Last Updated" header at `:15` is a prose paragraph, not YAML frontmatter. Parse carefully -- do NOT add a second "Last Updated" line; prepend to the existing comma-separated changelog.
 
 ## Test Strategy
 
