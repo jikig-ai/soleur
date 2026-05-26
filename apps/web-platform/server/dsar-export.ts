@@ -68,6 +68,7 @@ import {
   DSAR_TABLE_ALLOWLIST,
   type DsarTableSpec,
 } from "./dsar-export-allowlist";
+import { enumerateCoUploaderAttachments } from "./dsar-export-co-uploader";
 
 const log = createChildLogger("dsar-export");
 
@@ -190,7 +191,7 @@ const STORAGE_BUCKET = "dsar-exports";
 // Bumped to 1.1.0 by #4319 — adds top-level `redactions[]` field
 // disclosing Art. 15(4) author-only redactions to the subject (EDPB
 // Guidelines 01/2022 §176). Paired bump in dsar-export-oversize.sh:130.
-const MANIFEST_SCHEMA_VERSION = "1.1.0";
+const MANIFEST_SCHEMA_VERSION = "1.2.0";
 const SIZE_CAP_BYTES =
   (Number(process.env.DSAR_EXPORT_SIZE_CAP_MB) || 1024) * 1024 * 1024;
 
@@ -220,6 +221,9 @@ interface ManifestFileEntry {
   sha256?: string;
   bytes?: number;
   reason?: string;
+  redacted?: boolean;
+  redaction_reason?: string;
+  uploader_pseudonym?: string;
 }
 
 interface ManifestRoot {
@@ -417,15 +421,11 @@ export async function exportSqlTable(
   // site. The worker enumerates each allowlisted table EXPLICITLY
   // below so the lint can pattern-match.
   expectedUserId: string,
+  pseudonymSalt: Buffer,
   signal: AbortSignal,
 ): Promise<TableExportResult[]> {
   const service = createServiceClient();
   const results: TableExportResult[] = [];
-
-  // Per-bundle salt for Art. 15(4) author pseudonymisation (#4319).
-  // Memory-only, closure-scoped — NEVER passed to manifest, audit, or
-  // log emission. AC5 enforces salt isolation via grep.
-  const pseudonymSalt = randomBytes(32);
 
   // -- users -------------------------------------------------------------
   {
@@ -1464,6 +1464,7 @@ export async function buildArchiveToDisk(
   userId: string,
   tables: TableExportResult[],
   workspacePath: string | null,
+  pseudonymSalt: Buffer,
   signal: AbortSignal,
 ): Promise<BuildArchiveResult> {
   const tmpRoot = join(tmpdir(), "dsar-exports");
@@ -1529,6 +1530,18 @@ export async function buildArchiveToDisk(
     });
   }
 
+  // Co-uploader attachments (#4445 Art. 15 completeness). Manifest-only
+  // metadata entries (bytes NOT included in ZIP). Same pseudonymSalt as
+  // exportSqlTable so cross-table pseudonym consistency is maintained.
+  const coUploaderEntries = await enumerateCoUploaderAttachments(
+    userId,
+    pseudonymSalt,
+    signal,
+  );
+  for (const entry of coUploaderEntries) {
+    files.push(entry);
+  }
+
   // Workspace files (`/workspaces/<userId>/*`). O_NOFOLLOW + fstat ino
   // verify per AC17 + AC18. Per-file errors land in `excluded_files[]`
   // per AC26.
@@ -1578,6 +1591,14 @@ export async function buildArchiveToDisk(
       path: "tables/message_attachments.json",
       reason: REDACTION_REASON,
       count: attachmentsTable.redactionCount!,
+    });
+  }
+
+  if (coUploaderEntries.length > 0) {
+    redactions.push({
+      path: "attachments/co-uploader/",
+      reason: "art-15-co-uploader",
+      count: coUploaderEntries.length,
     });
   }
 
@@ -1780,7 +1801,8 @@ async function runExport(job: {
   let localPath: string | null = null;
 
   try {
-    const tables = await exportSqlTable(expectedUserId, controller.signal);
+    const pseudonymSalt = randomBytes(32);
+    const tables = await exportSqlTable(expectedUserId, pseudonymSalt, controller.signal);
     // Locate the user's workspace path for the workspace-files
     // enumerator. Pulled from the `users` row already fetched by
     // exportSqlTable — single source of truth.
@@ -1796,6 +1818,7 @@ async function runExport(job: {
       expectedUserId,
       tables,
       workspacePath,
+      pseudonymSalt,
       controller.signal,
     );
     localPath = archive.localPath;
