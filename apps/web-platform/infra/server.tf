@@ -252,8 +252,8 @@ resource "terraform_data" "deploy_pipeline_fix" {
 
     environment = {
       WEBHOOK_SECRET   = var.webhook_deploy_secret
-      CF_ACCESS_ID     = cloudflare_zero_trust_access_service_token.deploy.client_id
-      CF_ACCESS_SECRET = cloudflare_zero_trust_access_service_token.deploy.client_secret
+      CF_ACCESS_ID     = var.cf_access_client_id
+      CF_ACCESS_SECRET = var.cf_access_client_secret
       APP_DOMAIN_BASE  = var.app_domain_base
       INFRA_DIR        = path.module
       HOOKS_JSON_B64   = base64encode(local.hooks_json)

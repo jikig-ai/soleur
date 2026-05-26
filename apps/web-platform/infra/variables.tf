@@ -99,6 +99,18 @@ variable "webhook_deploy_secret" {
   sensitive   = true
 }
 
+variable "cf_access_client_id" {
+  description = "CF Access service-token client ID for the deploy webhook endpoint"
+  type        = string
+  sensitive   = true
+}
+
+variable "cf_access_client_secret" {
+  description = "CF Access service-token client secret for the deploy webhook endpoint"
+  type        = string
+  sensitive   = true
+}
+
 variable "app_domain_base" {
   description = "Base domain for the application (e.g., soleur.ai)"
   type        = string
