@@ -24,7 +24,11 @@ branch: feat-one-shot-fix-inngest-github-token-401
 - [ ] 2.1 Enhance error logging in `generateInstallationToken()` at `apps/web-platform/server/github-app.ts:477-485`: add App ID, PEM fingerprint (first 8 hex chars SHA-256), server timestamp
 - [ ] 2.2 Add PEM shape validation warning in `getPrivateKey()` at `apps/web-platform/server/github-app.ts:97-101`
 - [ ] 2.3 Add `reportSilentFallback` call with structured tags before the throw at `github-app.ts:484`
-- [ ] 2.4 Run existing tests: `./node_modules/.bin/vitest run test/github-app*.test.ts test/github-api*.test.ts`
+- [ ] 2.4 Add retry-on-401 (1 retry, 1s delay, fresh JWT) to `generateInstallationToken()` to close the resilience gap with `@octokit/auth-app@8.2.0`'s built-in `sendRequestWithRetries`
+- [ ] 2.5 Run existing tests: `./node_modules/.bin/vitest run test/github-app*.test.ts test/github-api*.test.ts`
+- [ ] 2.6 Add test: mock `githubFetch` to return 401 then 200 -- verify retry succeeds and warn is logged
+- [ ] 2.7 Add test: mock `githubFetch` to return 401 twice -- verify throws with `reportSilentFallback`
+- [ ] 2.8 Add test: mock `githubFetch` to return 403 -- verify no retry attempted
 
 ## Phase 3: Documentation
 
