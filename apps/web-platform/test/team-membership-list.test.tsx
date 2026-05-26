@@ -29,6 +29,8 @@ describe("TeamMembershipList", () => {
         members={[OWNER, MEMBER]}
         currentUserId="user-owner"
         workspaceId="ws-1"
+        isOwner={true}
+        byokDelegationsEnabled={false}
       />,
     );
     expect(screen.getByText("jean@jikigai.com")).toBeInTheDocument();
@@ -48,6 +50,8 @@ describe("TeamMembershipList", () => {
         members={[OWNER, MEMBER]}
         currentUserId="user-owner"
         workspaceId="ws-1"
+        isOwner={true}
+        byokDelegationsEnabled={false}
       />,
     );
     expect(screen.getByText(/—\s*\(you\)/)).toBeInTheDocument();
@@ -59,6 +63,8 @@ describe("TeamMembershipList", () => {
         members={[OWNER]}
         currentUserId="user-owner"
         workspaceId="ws-1"
+        isOwner={true}
+        byokDelegationsEnabled={false}
       />,
     );
     expect(screen.queryByLabelText(/row actions/i)).not.toBeInTheDocument();
@@ -70,6 +76,8 @@ describe("TeamMembershipList", () => {
         members={[OWNER, MEMBER]}
         currentUserId="user-owner"
         workspaceId="ws-1"
+        isOwner={true}
+        byokDelegationsEnabled={false}
       />,
     );
     const kebabs = screen.getAllByLabelText(/row actions/i);
@@ -84,6 +92,8 @@ describe("TeamMembershipList", () => {
         members={[OWNER]}
         currentUserId="user-owner"
         workspaceId="ws-1"
+        isOwner={true}
+        byokDelegationsEnabled={false}
       />,
     );
     // Solo state — the page handles the "Solo for now" hint; the list itself

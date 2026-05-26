@@ -2,6 +2,9 @@ import { redirect } from "next/navigation";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { BillingSection } from "@/components/settings/billing-section";
 import { ApiUsageSection } from "@/components/settings/api-usage-section";
+import { DelegationFundedPane } from "@/components/settings/delegation-funded-pane";
+import { isByokDelegationsEnabled, type Identity } from "@/lib/feature-flags/server";
+import { getCurrentOrganizationId } from "@/server/workspace-resolver";
 
 // Dynamic rendering is already forced by the cookies()/getUser() call in
 // createClient() below, so no explicit `export const dynamic` is required.
@@ -19,6 +22,12 @@ export default async function BillingPage() {
   }
 
   const service = createServiceClient();
+
+  const orgId = getCurrentOrganizationId({ user: { id: user.id, app_metadata: user.app_metadata as Record<string, unknown> } });
+  const identity: Identity = { userId: user.id, role: "prd", orgId: orgId ?? "" };
+  const byokEnabled = orgId ? await isByokDelegationsEnabled(orgId, identity) : false;
+
+  const workspaceId = user.id;
 
   const [{ data: userData }, { count: conversationCount }, { count: serviceTokenCount }] =
     await Promise.all([
@@ -49,6 +58,7 @@ export default async function BillingPage() {
         serviceTokenCount={serviceTokenCount ?? 0}
         createdAt={userData?.created_at ?? new Date().toISOString()}
       />
+      <DelegationFundedPane workspaceId={workspaceId} flagEnabled={byokEnabled} />
       <ApiUsageSection userId={user.id} />
     </>
   );

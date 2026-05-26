@@ -156,12 +156,19 @@ describe("createPullRequest", () => {
 
   test("propagates token generation failure", async () => {
     const installationId = uniqueInstallationId();
-    // Token request fails
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 401,
-      text: async () => "Unauthorized",
-    });
+    // Token request fails — generateInstallationToken retries once on 401,
+    // so we need TWO 401 responses to trigger the final throw.
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        text: async () => "Unauthorized",
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        text: async () => "Unauthorized",
+      });
 
     await expect(
       createPullRequest(installationId, "alice", "my-repo", "feat-branch", "main", "title"),

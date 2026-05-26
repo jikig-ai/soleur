@@ -93,6 +93,12 @@ export interface DeleteAccountResult {
  *                             all REFERENCES users(id) ON DELETE RESTRICT —
  *                             without this step the auth-delete cascade
  *                             would abort.
+ *   5.11 anonymise-byok-delegation-acceptances —
+ *                             anonymise_byok_delegation_acceptances RPC
+ *                             (migration 074, BYOK Delegations PR-B #4232).
+ *                             Nulls user_id + ip_hash + user_agent on the
+ *                             consent ledger. Required: acceptances.user_id
+ *                             REFERENCES users(id) ON DELETE RESTRICT.
  *   6. auth             — auth.admin.deleteUser(); FK cascade handles
  *                         public.users and all children atomically.
  *
@@ -752,6 +758,31 @@ export async function deleteAccount(
     log.error(
       { userId, err },
       "anonymise_byok_delegations threw — aborting deletion to avoid FK-block",
+    );
+    return { success: false, error: "Account deletion failed. Please try again." };
+  }
+
+  // 3.95 Anonymise byok_delegation_acceptances (migration 074, #4232 PR-B).
+  //      byok_delegation_acceptances.user_id references users(id) ON DELETE
+  //      RESTRICT — without this step the auth-delete cascade would abort
+  //      with FK 23503. The RPC nulls user_id + ip_hash + user_agent via
+  //      session_replication_role='replica' WORM bypass. Idempotent.
+  try {
+    const { error: anonAcceptErr } = await service.rpc(
+      "anonymise_byok_delegation_acceptances",
+      { p_user_id: userId },
+    );
+    if (anonAcceptErr) {
+      log.error(
+        { userId, err: anonAcceptErr },
+        "anonymise_byok_delegation_acceptances failed — aborting deletion to avoid FK-block",
+      );
+      return { success: false, error: "Account deletion failed. Please try again." };
+    }
+  } catch (err) {
+    log.error(
+      { userId, err },
+      "anonymise_byok_delegation_acceptances threw — aborting deletion to avoid FK-block",
     );
     return { success: false, error: "Account deletion failed. Please try again." };
   }

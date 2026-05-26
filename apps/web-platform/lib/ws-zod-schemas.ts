@@ -363,6 +363,11 @@ const errorSchema = z.strictObject({
       "too_many_files",
       "interactive_prompt_rejected",
       "image_paste_lost",
+      "delegation_revoked_post_grace",
+      "delegation_expired",
+      "delegation_hourly_cap_exceeded",
+      "delegation_daily_cap_exceeded",
+      "delegation_cross_tenant",
     ])
     .optional(),
   gateId: z.string().optional(),

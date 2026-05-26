@@ -215,16 +215,13 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       10_000,
     );
 
-    // SKIPPED: `enqueueExport` is missing workspace_id (NOT NULL post-mig
-    // 059) — pre-existing production bug surfaced during #4319 Phase 7
-    // regression run. Tracked at #4396. Re-enable when the enqueue path
-    // accepts and writes workspace_id.
-    test.skip(
-      "service-role re-check after enqueueExport: in-flight row's user_id matches the requester (#4396)",
+    test(
+      "service-role re-check after enqueueExport: in-flight row's user_id and workspace_id match the requester (#4396)",
       async () => {
         const { enqueueExport } = await import("../server/dsar-export");
         const { jobId } = await enqueueExport({
           userId: userA.id,
+          workspaceId: userA.id,
           sessionId: userA.id, // dummy session id for the binding test
           reauthEventId: "00000000-0000-0000-0000-000000000000",
           requesterIp: "127.0.0.1",
@@ -234,10 +231,11 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         // Service-role re-check: the inserted row is owned by userA.
         const { data: rows } = await service
           .from("dsar_export_jobs")
-          .select("user_id")
+          .select("user_id, workspace_id")
           .eq("id", jobId);
         expect(rows).toHaveLength(1);
         expect((rows![0] as { user_id: string }).user_id).toBe(userA.id);
+        expect((rows![0] as { workspace_id: string }).workspace_id).toBe(userA.id);
 
         // Cleanup the test job so the user can re-run the test.
         await service.from("dsar_export_jobs").delete().eq("id", jobId);
