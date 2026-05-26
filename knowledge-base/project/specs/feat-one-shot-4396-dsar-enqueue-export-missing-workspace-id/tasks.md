@@ -14,10 +14,11 @@ lane: single-domain
 - [ ] 1.3 Add `workspace_id: input.workspaceId` to the `.insert({...})` call in `enqueueExport`
 - [ ] 1.4 Run `tsc --noEmit` -- expect type errors in route.ts and tests (workspaceId now required but not yet provided)
 
-## Phase 2: Route Handler — Resolve workspaceId
+## Phase 2: Callers — Resolve workspaceId in BOTH callers
 
 - [ ] 2.1 In `apps/web-platform/app/api/account/export/route.ts`, add `workspaceId: reauthSession.userId` to the `enqueueExport({...})` call
-- [ ] 2.2 Run `tsc --noEmit` -- expect type errors in test files only (route now passes workspaceId)
+- [ ] 2.2 In `apps/web-platform/server/account-tools.ts`, add `workspaceId: userId` to the `enqueueExport({...})` call (userId is already available from `BuildAccountToolsOpts`)
+- [ ] 2.3 Run `tsc --noEmit` -- expect type errors in test files only (both callers now pass workspaceId)
 
 ## Phase 3: Test Updates
 
