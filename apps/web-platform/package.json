@@ -32,6 +32,7 @@
     "flagsmith-nodejs": "^8.1.0",
     "gray-matter": "^4.0.3",
     "inngest": "^3.54.2",
+    "ipaddr.js": "^2.4.0",
     "lucide-react": "^1.8.0",
     "next": "^15.5.18",
     "pdfjs-dist": "^5.4.296",
