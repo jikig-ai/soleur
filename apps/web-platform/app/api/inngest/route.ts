@@ -33,8 +33,11 @@ import { cronOauthProbe } from "@/server/inngest/functions/cron-oauth-probe";
 import { cronRoadmapReview } from "@/server/inngest/functions/cron-roadmap-review";
 import { cronStaleDeferredScopeOuts } from "@/server/inngest/functions/cron-stale-deferred-scope-outs";
 import { cronStrategyReview } from "@/server/inngest/functions/cron-strategy-review";
+import { eventShipMerge } from "@/server/inngest/functions/event-ship-merge";
 import { githubOnEvent } from "@/server/inngest/functions/github-on-event";
+import { oneshotF2DeferGateReview } from "@/server/inngest/functions/oneshot-f2-defer-gate-review";
 import { oneshotGdprGate50dEval } from "@/server/inngest/functions/oneshot-gdpr-gate-50d-eval";
+import { oneshotRecheck4217Calibration } from "@/server/inngest/functions/oneshot-recheck-4217-calibration";
 import { workspaceReconcileOnPush } from "@/server/inngest/functions/workspace-reconcile-on-push";
 
 const SIGNING_KEY = process.env.INNGEST_SIGNING_KEY;
@@ -66,8 +69,11 @@ export const { GET, POST, PUT } = serve({
     cronStaleDeferredScopeOuts,
     cronStrategyReview,
     cronUxAudit,
+    eventShipMerge,
     githubOnEvent,
+    oneshotF2DeferGateReview,
     oneshotGdprGate50dEval,
+    oneshotRecheck4217Calibration,
     workspaceReconcileOnPush,
   ],
   signingKey: SIGNING_KEY ?? "build-phase-placeholder",
