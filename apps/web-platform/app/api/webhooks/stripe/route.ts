@@ -16,6 +16,7 @@ import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
 import { reportSilentFallback } from "@/server/observability";
 import { hashUserIdValue } from "@/server/userid-pseudonymize";
+import { sendInngestWithRetry } from "@/server/inngest/send-with-retry";
 
 // Map Stripe subscription statuses to the CHECK constraint values.
 // Stripe sends: active, canceled, incomplete, incomplete_expired, past_due, trialing, unpaid, paused.
@@ -493,22 +494,26 @@ export async function POST(request: Request) {
           };
           try {
             const { inngest } = await import("@/server/inngest/client");
-            await inngest.send({
-              id: `stripe-${event.id}`,
-              name: "finance.payment_failed",
-              v: "1",
-              data: {
-                founderId,
-                domain: "finance",
-                event: "finance.payment_failed",
-                // PR-G: pin grant-tier-at-time-of-event so the CFO function
-                // writes messages.trust_tier from the grant active at the
-                // moment the webhook fired (a revoke or re-grant racing
-                // the event MUST NOT change the recorded tier).
-                tier: grant.tier,
-                payload,
-              },
-            });
+            await sendInngestWithRetry(
+              () =>
+                inngest.send({
+                  id: `stripe-${event.id}`,
+                  name: "finance.payment_failed",
+                  v: "1",
+                  data: {
+                    founderId,
+                    domain: "finance",
+                    event: "finance.payment_failed",
+                    // PR-G: pin grant-tier-at-time-of-event so the CFO function
+                    // writes messages.trust_tier from the grant active at the
+                    // moment the webhook fired (a revoke or re-grant racing
+                    // the event MUST NOT change the recorded tier).
+                    tier: grant.tier,
+                    payload,
+                  },
+                }),
+              { feature: "stripe-webhook", eventId: event.id },
+            );
           } catch (err) {
             reportSilentFallback(err, {
               feature: "inngest-emit",

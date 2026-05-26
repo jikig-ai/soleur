@@ -163,8 +163,9 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       "A's worker reads contain ZERO rows attributable to B (per-row WHERE + assertReadScope)",
       async () => {
         const { exportSqlTable } = await import("../server/dsar-export");
+        const { randomBytes } = await import("node:crypto");
         const controller = new AbortController();
-        const tables = await exportSqlTable.call(null, userA.id, controller.signal);
+        const tables = await exportSqlTable.call(null, userA.id, randomBytes(32), controller.signal);
 
         // Per-row invariant: every row's owner field matches userA.id.
         for (const t of tables) {

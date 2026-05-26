@@ -297,6 +297,34 @@ describe("Stripe invoice.payment_failed → Inngest bridge (FR5)", () => {
     expect(mockInngestSend).not.toHaveBeenCalled();
   });
 
+  test("Inngest transient failure → retries exhaust, then reportSilentFallback fires after 3 attempts", async () => {
+    process.env.SOLEUR_FR5_ENABLED = "true";
+    mockConstructEvent.mockReturnValue(makePaymentFailedEvent());
+    const fetchError = new TypeError("fetch failed");
+    mockInngestSend
+      .mockRejectedValueOnce(fetchError)
+      .mockRejectedValueOnce(fetchError)
+      .mockRejectedValueOnce(fetchError);
+
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+    expect(mockInngestSend).toHaveBeenCalledTimes(3);
+    expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
+  });
+
+  test("Inngest transient failure → retries and succeeds on second attempt", async () => {
+    process.env.SOLEUR_FR5_ENABLED = "true";
+    mockConstructEvent.mockReturnValue(makePaymentFailedEvent());
+    mockInngestSend
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(undefined);
+
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+    expect(mockInngestSend).toHaveBeenCalledTimes(2);
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
+  });
+
   // TR5b: grant-path with tier pass-through. inngest.send envelope MUST
   // carry data.tier = grant.tier so the CFO function pins
   // grant-tier-at-time-of-event into messages.trust_tier.

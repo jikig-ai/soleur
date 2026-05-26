@@ -215,6 +215,40 @@ describe("POST /api/webhooks/github — release-on-error (AC13)", () => {
   });
 });
 
+describe("POST /api/webhooks/github — inngest.send retry on transient fetch failure", () => {
+  it("retries on TypeError: fetch failed and succeeds on second attempt", async () => {
+    mockInngestSend
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(undefined);
+    const req = makeRequest({ body: { installation: { id: 42 } } });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    expect(mockInngestSend).toHaveBeenCalledTimes(2);
+    expect(mockDeleteEq).not.toHaveBeenCalled();
+  });
+
+  it("releases dedup row after all retries exhausted", async () => {
+    const fetchError = new TypeError("fetch failed");
+    mockInngestSend
+      .mockRejectedValueOnce(fetchError)
+      .mockRejectedValueOnce(fetchError)
+      .mockRejectedValueOnce(fetchError);
+    const req = makeRequest({ body: { installation: { id: 42 } } });
+    const res = await POST(req);
+    expect(res.status).toBe(500);
+    expect(mockInngestSend).toHaveBeenCalledTimes(3);
+    expect(mockDeleteEq).toHaveBeenCalledWith("delivery_id", "delivery-abc-123");
+  });
+
+  it("does not retry on non-transient errors", async () => {
+    mockInngestSend.mockRejectedValueOnce(new Error("inngest auth failed"));
+    const req = makeRequest({ body: { installation: { id: 42 } } });
+    const res = await POST(req);
+    expect(res.status).toBe(500);
+    expect(mockInngestSend).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("POST /api/webhooks/github — payload & routing", () => {
   it("forwards rawBody + founderId + tier in inngest.send envelope", async () => {
     const payload = { installation: { id: 42 }, action: "opened", pull_request: { number: 7 } };

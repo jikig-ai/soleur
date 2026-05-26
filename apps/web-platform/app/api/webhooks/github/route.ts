@@ -38,6 +38,7 @@ import {
   WORKSPACE_RECONCILE_REQUESTED_EVENT,
   WORKSPACE_RECONCILE_SCHEMA_V,
 } from "@/server/session-sync";
+import { sendInngestWithRetry } from "@/server/inngest/send-with-retry";
 
 // Map x-github-event header to the action_class registered in
 // scope_grants. `repository_advisory` and `secret_scanning_alert` both
@@ -282,20 +283,24 @@ export async function POST(request: Request) {
     }
     try {
       const { inngest } = await import("@/server/inngest/client");
-      await inngest.send({
-        id: `github-${deliveryId}`,
-        name: WORKSPACE_RECONCILE_REQUESTED_EVENT,
-        v: WORKSPACE_RECONCILE_SCHEMA_V,
-        data: {
-          founderId,
-          installationId,
-          deliveryId,
-          defaultBranch: reconcilable.defaultBranch,
-          headSha: reconcilable.headSha,
-          beforeSha: reconcilable.beforeSha,
-          pushReceivedAt: Date.now(),
-        },
-      });
+      await sendInngestWithRetry(
+        () =>
+          inngest.send({
+            id: `github-${deliveryId}`,
+            name: WORKSPACE_RECONCILE_REQUESTED_EVENT,
+            v: WORKSPACE_RECONCILE_SCHEMA_V,
+            data: {
+              founderId,
+              installationId,
+              deliveryId,
+              defaultBranch: reconcilable.defaultBranch,
+              headSha: reconcilable.headSha,
+              beforeSha: reconcilable.beforeSha,
+              pushReceivedAt: Date.now(),
+            },
+          }),
+        { feature: "github-webhook", deliveryId },
+      );
     } catch (err) {
       logger.error(
         { err, deliveryId },
@@ -347,20 +352,24 @@ export async function POST(request: Request) {
     // with the INSERT-time redaction in github-on-event.ts.
     const { redactGithubSourcedText } = await import("@/lib/safety/redaction-allowlist");
     const redactedRawBody = redactGithubSourcedText(rawBody);
-    await inngest.send({
-      id: `github-${deliveryId}`,
-      name: actionClass,
-      v: "1",
-      data: {
-        founderId,
-        installationId,
-        deliveryId,
-        githubEvent,
-        action: body.action ?? null,
-        tier: grant.tier,
-        rawBody: redactedRawBody,
-      },
-    });
+    await sendInngestWithRetry(
+      () =>
+        inngest.send({
+          id: `github-${deliveryId}`,
+          name: actionClass,
+          v: "1",
+          data: {
+            founderId,
+            installationId,
+            deliveryId,
+            githubEvent,
+            action: body.action ?? null,
+            tier: grant.tier,
+            rawBody: redactedRawBody,
+          },
+        }),
+      { feature: "github-webhook", deliveryId },
+    );
   } catch (err) {
     logger.error(
       { err, deliveryId, actionClass },

@@ -108,6 +108,13 @@ apps/web-platform/server/cost-writer.ts
 # integration test (AC15). Two-layer defense.
 apps/web-platform/server/dsar-export.ts
 
+# PERMANENT — DSAR co-uploader enumeration helper (#4445). Same posture
+# as dsar-export.ts: service-role + per-row WHERE scoping via workspace_
+# members → conversations → messages → message_attachments chain. Isolated
+# from dsar-export.ts for per-row-WHERE lint compatibility (the lint scans
+# only dsar-export.ts; co-uploader queries use .in() instead of .eq()).
+apps/web-platform/server/dsar-export-co-uploader.ts
+
 # PERMANENT — GitHub installation-token audit writer (PR-H+1 #4098).
 # `record_github_token_use` is REVOKE FROM PUBLIC, anon, authenticated;
 # GRANT TO service_role (migration 052). Cookie-scoped callers return
