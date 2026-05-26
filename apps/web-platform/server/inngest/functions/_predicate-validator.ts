@@ -118,6 +118,7 @@ export async function executeHttpPredicate(
       redirect: "error",
       signal: AbortSignal.timeout(10_000),
     });
+    await response.body?.cancel();
     return {
       passed: response.status === 200,
       statusCode: response.status,
@@ -152,23 +153,19 @@ export async function executeDnsPredicate(
   expected: string,
 ): Promise<DnsPredicateResult> {
   try {
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), DNS_TIMEOUT_MS);
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("DNS resolution timed out")), DNS_TIMEOUT_MS),
+    );
 
-    try {
-      if (type === "dns-txt") {
-        const records = await dnsPromises.resolveTxt(domain);
-        // resolveTxt returns string[][] — each record is an array of chunks
-        const flat = records.map((chunks) => chunks.join(""));
-        const passed = flat.some((r) => r.includes(expected));
-        return { passed, result: flat };
-      } else {
-        const addresses = await dnsPromises.resolve4(domain);
-        const passed = addresses.includes(expected);
-        return { passed, result: addresses };
-      }
-    } finally {
-      clearTimeout(timer);
+    if (type === "dns-txt") {
+      const records = await Promise.race([dnsPromises.resolveTxt(domain), timeout]);
+      const flat = records.map((chunks) => chunks.join(""));
+      const passed = flat.some((r) => r.includes(expected));
+      return { passed, result: flat };
+    } else {
+      const addresses = await Promise.race([dnsPromises.resolve4(domain), timeout]);
+      const passed = addresses.includes(expected);
+      return { passed, result: addresses };
     }
   } catch (err) {
     return {
@@ -355,6 +352,18 @@ export async function validateAndExecutePredicates(
           type: parsed.type,
           skipped: true,
           skipReason: `${parsed.type} predicate missing domain or expected field`,
+        });
+        continue;
+      }
+
+      const domainLower = parsed.domain.toLowerCase();
+      if (!ALLOWED_PREDICATE_HOSTS.has(domainLower)) {
+        results.push({
+          issueNumber: parsed.issueNumber,
+          issueTitle: parsed.issueTitle,
+          type: parsed.type,
+          skipped: true,
+          skipReason: `domain not in allowlist: ${domainLower}`,
         });
         continue;
       }

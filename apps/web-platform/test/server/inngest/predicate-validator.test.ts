@@ -474,9 +474,9 @@ describe("validateAndExecutePredicates", () => {
     expect(results[0].skipReason).toContain("No predicate block");
   });
 
-  it("handles dns-a predicate", async () => {
+  it("handles dns-a predicate with allowed domain", async () => {
     const { validateAndExecutePredicates } = await importModule();
-    mockResolve4(["93.184.216.34"]);
+    mockResolve4(["140.82.121.6"]);
 
     const results = await validateAndExecutePredicates([
       {
@@ -484,8 +484,8 @@ describe("validateAndExecutePredicates", () => {
         title: "DNS A check",
         body: `<!-- soleur:followthrough
 type: dns-a
-domain: example.com
-expected: 93.184.216.34
+domain: api.github.com
+expected: 140.82.121.6
 -->`,
       },
     ]);
@@ -493,6 +493,26 @@ expected: 93.184.216.34
     expect(results).toHaveLength(1);
     expect(results[0].type).toBe("dns-a");
     expect((results[0].executionResult as { passed: boolean }).passed).toBe(true);
+  });
+
+  it("rejects dns-a predicate with non-allowlisted domain", async () => {
+    const { validateAndExecutePredicates } = await importModule();
+
+    const results = await validateAndExecutePredicates([
+      {
+        number: 47,
+        title: "DNS A blocked",
+        body: `<!-- soleur:followthrough
+type: dns-a
+domain: internal.corp.local
+expected: 10.0.0.1
+-->`,
+      },
+    ]);
+
+    expect(results).toHaveLength(1);
+    expect(results[0].skipped).toBe(true);
+    expect(results[0].skipReason).toContain("not in allowlist");
   });
 });
 
