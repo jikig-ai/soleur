@@ -17,12 +17,12 @@ date: 2026-05-26
 
 ## Goals
 
-- G1: Zero GHA `scheduled-*.yml` files requiring cron-based scheduling (2 documented exceptions remain for execution-only).
-- G2: All scheduling consolidated on Inngest (self-hosted Hetzner).
-- G3: Each migrated function has a Sentry cron monitor.
+- G1: Zero GHA `scheduled-*.yml` files requiring cron-based scheduling (4 documented exceptions remain: terraform-drift, followthrough-sweeper, realtime-probe, dev-migration-drift).
+- G2: All scheduling consolidated on Inngest (self-hosted Hetzner) except 4 GHA exceptions.
+- G3: Each migrated cron function has a Sentry cron monitor. Oneshots/event-triggered use error alerting only.
 - G4: No dual-fire window for any workflow during migration.
-- G5: `cron-no-byok-lease-sweep.test.ts` passes with the expanded function set.
-- G6: Dual concurrency pools prevent Monday 09:00 queue pile-up.
+- G5: `cron-no-byok-lease-sweep.test.ts` passes with extended `{cron,oneshot,event}-*.ts` glob.
+- G6: Monday schedule staggering prevents queue pile-up (≥90min between heavy functions).
 
 ## Non-Goals
 
@@ -57,8 +57,8 @@ date: 2026-05-26
 
 ## Success Criteria
 
-- SC1: Zero GHA `scheduled-*.yml` files with active `schedule:` triggers (terraform-drift and followthrough-sweeper have `schedule:` but are documented exceptions).
-- SC2: `ls .github/workflows/scheduled-*.yml | wc -l` returns exactly 2 (the exceptions).
+- SC1: Zero GHA `scheduled-*.yml` files with active `schedule:` triggers beyond 4 documented exceptions (terraform-drift, followthrough-sweeper, realtime-probe, dev-migration-drift).
+- SC2: `ls .github/workflows/scheduled-*.yml | wc -l` returns exactly 4.
 - SC3: All Inngest cron monitors show successful heartbeats in Sentry.
 - SC4: Monday 09:00 UTC peak: no function waits >30 minutes in the concurrency queue.
 - SC5: `cron-no-byok-lease-sweep.test.ts` passes.
