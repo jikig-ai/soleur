@@ -57,7 +57,12 @@
         "@id": {{ (site.url + "/#organization") | jsonLdSafe | safe }},
         "name": {{ site.name | jsonLdSafe | safe }},
         "url": {{ site.url | jsonLdSafe | safe }},
-        "logo": {{ (site.url + "/images/logo-mark-512.png") | jsonLdSafe | safe }},
+        "logo": {
+          "@type": "ImageObject",
+          "url": {{ (site.url + "/images/logo-mark-512.png") | jsonLdSafe | safe }},
+          "width": 512,
+          "height": 512
+        },
         "founder": { "@id": {{ (site.url + "/about/#jean-deruelle") | jsonLdSafe | safe }} },
         "foundingDate": "2026",
         "sameAs": [
