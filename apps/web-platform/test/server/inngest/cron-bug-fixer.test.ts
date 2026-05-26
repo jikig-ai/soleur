@@ -241,6 +241,119 @@ function wireSpawn(claudeExitCode: number | null = 0): FakeChild {
   return claudeChild;
 }
 
+// ---------------------------------------------------------------------------
+// wireOctokit — parameterized factory that replaces ~15 inline
+// octokitRequestSpy.mockImplementation blocks across the test suite.
+//
+// Every parameter is optional; sensible defaults produce the minimal
+// "installation + empty issues + empty pulls" shape used by most tests.
+// ---------------------------------------------------------------------------
+interface WireOctokitOpts {
+  /** Issues returned when the request label filter includes "priority/p3-low". */
+  p3Issues?: Array<Record<string, unknown>>;
+  /** Issues returned when the request label filter includes "priority/p2-medium". */
+  p2Issues?: Array<Record<string, unknown>>;
+  /** Issues returned when the request label filter includes "priority/p1-high". */
+  p1Issues?: Array<Record<string, unknown>>;
+  /**
+   * PRs returned on the FIRST /pulls call (skip-list build).
+   * Defaults to [].
+   */
+  skipListPRs?: Array<Record<string, unknown>>;
+  /**
+   * PR returned on the SECOND /pulls call (detect-pr after claude-eval).
+   * When undefined, the second /pulls call also returns [].
+   */
+  detectedPR?: Array<Record<string, unknown>>;
+  /** Author login returned by GET /pulls/:pull_number. Default: "app/claude". */
+  prAuthor?: string;
+  /** Labels on the detected PR (by issue_number = PR number). */
+  prLabels?: Array<{ name: string }>;
+  /** Files changed in the detected PR. */
+  prFiles?: Array<{ filename: string }>;
+  /** Labels on the source issue (by issue_number matching the source). */
+  issuePriorityLabels?: Array<{ name: string }>;
+  /**
+   * Source issue number used to distinguish label lookups between the PR
+   * and its source issue. Only needed when prLabels or issuePriorityLabels
+   * are specified; defaults to undefined (label route returns []).
+   */
+  sourceIssueNumber?: number;
+  /** PR number used for label/files lookups. Defaults to undefined. */
+  prNumber?: number;
+}
+
+function wireOctokit(opts: WireOctokitOpts = {}): void {
+  const {
+    p3Issues = [],
+    p2Issues = [],
+    p1Issues = [],
+    skipListPRs = [],
+    detectedPR,
+    prAuthor = "app/claude",
+    prLabels,
+    prFiles,
+    issuePriorityLabels,
+    sourceIssueNumber,
+    prNumber,
+  } = opts;
+
+  let pullsCallCount = 0;
+
+  octokitRequestSpy.mockImplementation(
+    async (
+      route: string,
+      params: {
+        labels?: string;
+        pull_number?: number;
+        issue_number?: number;
+        name?: string;
+      },
+    ) => {
+      if (route === "GET /repos/{owner}/{repo}/installation") {
+        return { data: { id: 12345 } };
+      }
+
+      if (route === "GET /repos/{owner}/{repo}/pulls") {
+        pullsCallCount++;
+        if (pullsCallCount === 1) return { data: skipListPRs };
+        return { data: detectedPR ?? [] };
+      }
+
+      if (route === "GET /repos/{owner}/{repo}/issues") {
+        if (params.labels?.includes("priority/p3-low")) return { data: p3Issues };
+        if (params.labels?.includes("priority/p2-medium")) return { data: p2Issues };
+        if (params.labels?.includes("priority/p1-high")) return { data: p1Issues };
+        return { data: [] };
+      }
+
+      if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") {
+        return { data: { user: { login: prAuthor } } };
+      }
+
+      if (route === "GET /repos/{owner}/{repo}/issues/{issue_number}/labels") {
+        if (issuePriorityLabels && params.issue_number === sourceIssueNumber) {
+          return { data: issuePriorityLabels };
+        }
+        if (prLabels && params.issue_number === prNumber) {
+          return { data: prLabels };
+        }
+        return { data: [] };
+      }
+
+      if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}/files") {
+        return { data: prFiles ?? [] };
+      }
+
+      if (route === "POST /repos/{owner}/{repo}/labels") {
+        return { data: { name: params.name } };
+      }
+
+      return { data: {} };
+    },
+  );
+}
+
 // ===========================================================================
 // (a) Issue-selection cascade
 // ===========================================================================
@@ -255,15 +368,7 @@ describe("cron-bug-fixer — (a) issue-selection cascade", () => {
         created_at: "2026-05-01T00:00:00Z",
       },
     ];
-    octokitRequestSpy.mockImplementation(async (route: string, params: { labels?: string }) => {
-      if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 12345 } };
-      if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [] };
-      if (route === "GET /repos/{owner}/{repo}/issues") {
-        if (params.labels?.includes("priority/p3-low")) return { data: p3Issues };
-        return { data: [] };
-      }
-      return { data: {} };
-    });
+    wireOctokit({ p3Issues });
 
     wireSpawn(0);
     const { cronBugFixerHandler } = await importHandler();
@@ -282,15 +387,7 @@ describe("cron-bug-fixer — (a) issue-selection cascade", () => {
         created_at: "2026-05-01T00:00:00Z",
       },
     ];
-    octokitRequestSpy.mockImplementation(async (route: string, params: { labels?: string }) => {
-      if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 12345 } };
-      if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [] };
-      if (route === "GET /repos/{owner}/{repo}/issues") {
-        if (params.labels?.includes("priority/p2-medium")) return { data: p2Issues };
-        return { data: [] };
-      }
-      return { data: {} };
-    });
+    wireOctokit({ p2Issues });
 
     wireSpawn(0);
     const { cronBugFixerHandler } = await importHandler();
@@ -315,41 +412,24 @@ describe("cron-bug-fixer — (a) issue-selection cascade", () => {
         created_at: "2026-05-02T00:00:00Z",
       },
     ];
-    let pullsCallCount = 0;
-    octokitRequestSpy.mockImplementation(async (route: string, params: { labels?: string }) => {
-      if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 12345 } };
-      if (route === "GET /repos/{owner}/{repo}/pulls") {
-        pullsCallCount++;
-        // First call (skip-list build): return open bot-fix PR for #300
-        if (pullsCallCount === 1) {
-          return {
-            data: [
-              {
-                number: 999,
-                node_id: "PR_existing",
-                head: { ref: "bot-fix/300-slug" },
-                created_at: "2026-05-01T01:00:00Z",
-              },
-            ],
-          };
-        }
-        // detect-pr call after claude-eval: return the bot-fix PR for 301
-        return {
-          data: [
-            {
-              number: 1000,
-              node_id: "PR_new",
-              head: { ref: "bot-fix/301-fix" },
-              created_at: "2026-05-02T01:00:00Z",
-            },
-          ],
-        };
-      }
-      if (route === "GET /repos/{owner}/{repo}/issues") {
-        if (params.labels?.includes("priority/p3-low")) return { data: p3Issues };
-        return { data: [] };
-      }
-      return { data: {} };
+    wireOctokit({
+      p3Issues,
+      skipListPRs: [
+        {
+          number: 999,
+          node_id: "PR_existing",
+          head: { ref: "bot-fix/300-slug" },
+          created_at: "2026-05-01T01:00:00Z",
+        },
+      ],
+      detectedPR: [
+        {
+          number: 1000,
+          node_id: "PR_new",
+          head: { ref: "bot-fix/301-fix" },
+          created_at: "2026-05-02T01:00:00Z",
+        },
+      ],
     });
 
     wireSpawn(0);
@@ -381,15 +461,7 @@ describe("cron-bug-fixer — (a) issue-selection cascade", () => {
         created_at: "2026-05-03T00:00:00Z",
       },
     ];
-    octokitRequestSpy.mockImplementation(async (route: string, params: { labels?: string }) => {
-      if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 12345 } };
-      if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [] };
-      if (route === "GET /repos/{owner}/{repo}/issues") {
-        if (params.labels?.includes("priority/p3-low")) return { data: p3Issues };
-        return { data: [] };
-      }
-      return { data: {} };
-    });
+    wireOctokit({ p3Issues });
 
     wireSpawn(0);
     const { cronBugFixerHandler } = await importHandler();
@@ -400,12 +472,7 @@ describe("cron-bug-fixer — (a) issue-selection cascade", () => {
   });
 
   it("returns null and emits ?status=ok heartbeat when no qualifying issue at any priority", async () => {
-    octokitRequestSpy.mockImplementation(async (route: string) => {
-      if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 12345 } };
-      if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [] };
-      if (route === "GET /repos/{owner}/{repo}/issues") return { data: [] };
-      return { data: {} };
-    });
+    wireOctokit();
 
     const { cronBugFixerHandler } = await importHandler();
     const step = makeStep();
@@ -437,15 +504,7 @@ describe("cron-bug-fixer — (b) ephemeral workspace + sentinel", () => {
         created_at: "2026-05-01T00:00:00Z",
       },
     ];
-    octokitRequestSpy.mockImplementation(async (route: string, params: { labels?: string }) => {
-      if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 12345 } };
-      if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [] };
-      if (route === "GET /repos/{owner}/{repo}/issues") {
-        if (params.labels?.includes("priority/p3-low")) return { data: p3Issues };
-        return { data: [] };
-      }
-      return { data: {} };
-    });
+    wireOctokit({ p3Issues });
 
     wireSpawn(0);
     const { cronBugFixerHandler } = await importHandler();
@@ -490,15 +549,7 @@ describe("cron-bug-fixer — (b) ephemeral workspace + sentinel", () => {
         created_at: "2026-05-01T00:00:00Z",
       },
     ];
-    octokitRequestSpy.mockImplementation(async (route: string, params: { labels?: string }) => {
-      if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 12345 } };
-      if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [] };
-      if (route === "GET /repos/{owner}/{repo}/issues") {
-        if (params.labels?.includes("priority/p3-low")) return { data: p3Issues };
-        return { data: [] };
-      }
-      return { data: {} };
-    });
+    wireOctokit({ p3Issues });
 
     // Sentinel fails: plugin.json does NOT exist on disk after symlink.
     existsSyncSpy.mockImplementation((p: string) => {
@@ -541,15 +592,7 @@ describe("cron-bug-fixer — (c) spawn argv shape", () => {
         created_at: "2026-05-01T00:00:00Z",
       },
     ];
-    octokitRequestSpy.mockImplementation(async (route: string, params: { labels?: string }) => {
-      if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 12345 } };
-      if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [] };
-      if (route === "GET /repos/{owner}/{repo}/issues") {
-        if (params.labels?.includes("priority/p3-low")) return { data: p3Issues };
-        return { data: [] };
-      }
-      return { data: {} };
-    });
+    wireOctokit({ p3Issues });
 
     wireSpawn(0);
     const { cronBugFixerHandler } = await importHandler();
@@ -612,50 +655,29 @@ describe("cron-bug-fixer — (d) auto-merge gate safety nets", () => {
       issuePriorityLabels = ["priority/p3-low"],
     } = opts;
 
-    const p3Issue = {
-      number: SOURCE_ISSUE,
-      title: "fix: gate test",
-      labels: [{ name: "priority/p3-low" }, { name: "type/bug" }],
-      created_at: "2026-05-01T00:00:00Z",
-    };
-    let pullsCallCount = 0;
-    octokitRequestSpy.mockImplementation(async (route: string, params: { labels?: string; pull_number?: number; issue_number?: number }) => {
-      if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 12345 } };
-      if (route === "GET /repos/{owner}/{repo}/pulls") {
-        pullsCallCount++;
-        if (pullsCallCount === 1) return { data: [] }; // skip-list build → empty
-        // detect-pr call: return the bot-fix PR
-        return {
-          data: [
-            {
-              number: PR_NUMBER,
-              node_id: PR_NODE_ID,
-              head: { ref: `bot-fix/${SOURCE_ISSUE}-slug` },
-              created_at: "2026-05-01T02:00:00Z",
-            },
-          ],
-        };
-      }
-      if (route === "GET /repos/{owner}/{repo}/issues") {
-        if (params.labels?.includes("priority/p3-low")) return { data: [p3Issue] };
-        return { data: [] };
-      }
-      if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") {
-        return { data: { user: { login: prAuthor } } };
-      }
-      if (route === "GET /repos/{owner}/{repo}/issues/{issue_number}/labels") {
-        if (params.issue_number === SOURCE_ISSUE) {
-          return { data: issuePriorityLabels.map((name) => ({ name })) };
-        }
-        if (params.issue_number === PR_NUMBER) {
-          return { data: prLabels.map((name) => ({ name })) };
-        }
-        return { data: [] };
-      }
-      if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}/files") {
-        return { data: prFiles };
-      }
-      return { data: {} };
+    wireOctokit({
+      p3Issues: [
+        {
+          number: SOURCE_ISSUE,
+          title: "fix: gate test",
+          labels: [{ name: "priority/p3-low" }, { name: "type/bug" }],
+          created_at: "2026-05-01T00:00:00Z",
+        },
+      ],
+      detectedPR: [
+        {
+          number: PR_NUMBER,
+          node_id: PR_NODE_ID,
+          head: { ref: `bot-fix/${SOURCE_ISSUE}-slug` },
+          created_at: "2026-05-01T02:00:00Z",
+        },
+      ],
+      prAuthor,
+      prLabels: prLabels.map((name) => ({ name })),
+      prFiles,
+      issuePriorityLabels: issuePriorityLabels.map((name) => ({ name })),
+      sourceIssueNumber: SOURCE_ISSUE,
+      prNumber: PR_NUMBER,
     });
   }
 
@@ -746,37 +768,22 @@ describe("cron-bug-fixer — (e) Sentry heartbeat URL shape", () => {
         created_at: "2026-05-01T00:00:00Z",
       },
     ];
-    let pullsCallCount = 0;
-    octokitRequestSpy.mockImplementation(async (route: string, params: { labels?: string }) => {
-      if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 12345 } };
-      if (route === "GET /repos/{owner}/{repo}/pulls") {
-        pullsCallCount++;
-        if (pullsCallCount === 1) return { data: [] };
-        return {
-          data: [
-            {
-              number: 901,
-              node_id: "PR_n1",
-              head: { ref: "bot-fix/900-fix" },
-              created_at: "2026-05-01T01:00:00Z",
-            },
-          ],
-        };
-      }
-      if (route === "GET /repos/{owner}/{repo}/issues") {
-        if (params.labels?.includes("priority/p3-low")) return { data: p3Issues };
-        return { data: [] };
-      }
-      if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") {
-        return { data: { user: { login: "app/claude" } } };
-      }
-      if (route === "GET /repos/{owner}/{repo}/issues/{issue_number}/labels") {
-        return { data: [{ name: "priority/p3-low" }, { name: "bot-fix/auto-merge-eligible" }] };
-      }
-      if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}/files") {
-        return { data: [{ filename: "fix.ts" }] };
-      }
-      return { data: {} };
+    wireOctokit({
+      p3Issues,
+      detectedPR: [
+        {
+          number: 901,
+          node_id: "PR_n1",
+          head: { ref: "bot-fix/900-fix" },
+          created_at: "2026-05-01T01:00:00Z",
+        },
+      ],
+      prAuthor: "app/claude",
+      prLabels: [{ name: "priority/p3-low" }, { name: "bot-fix/auto-merge-eligible" }],
+      prFiles: [{ filename: "fix.ts" }],
+      issuePriorityLabels: [{ name: "priority/p3-low" }, { name: "bot-fix/auto-merge-eligible" }],
+      sourceIssueNumber: 900,
+      prNumber: 901,
     });
 
     wireSpawn(0);
@@ -805,15 +812,7 @@ describe("cron-bug-fixer — (e) Sentry heartbeat URL shape", () => {
         created_at: "2026-05-01T00:00:00Z",
       },
     ];
-    octokitRequestSpy.mockImplementation(async (route: string, params: { labels?: string }) => {
-      if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 12345 } };
-      if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [] };
-      if (route === "GET /repos/{owner}/{repo}/issues") {
-        if (params.labels?.includes("priority/p3-low")) return { data: p3Issues };
-        return { data: [] };
-      }
-      return { data: {} };
-    });
+    wireOctokit({ p3Issues });
 
     wireSpawn(1); // non-zero exit
     const { cronBugFixerHandler } = await importHandler();
@@ -831,12 +830,7 @@ describe("cron-bug-fixer — (e) Sentry heartbeat URL shape", () => {
 
   it("validates SENTRY_DOMAIN, project, public key — malformed env skips heartbeat", async () => {
     process.env.SENTRY_INGEST_DOMAIN = "ingest.sentry.io/x?leak="; // malformed
-    octokitRequestSpy.mockImplementation(async (route: string) => {
-      if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 12345 } };
-      if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [] };
-      if (route === "GET /repos/{owner}/{repo}/issues") return { data: [] };
-      return { data: {} };
-    });
+    wireOctokit();
 
     const { cronBugFixerHandler } = await importHandler();
     const step = makeStep();
@@ -901,14 +895,12 @@ describe("cron-bug-fixer — manual-trigger override validation", () => {
 
   it("accepts a positive integer override + bypasses cascade", async () => {
     let issuesCallCount = 0;
-    octokitRequestSpy.mockImplementation(async (route: string) => {
-      if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 12345 } };
-      if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [] };
-      if (route === "GET /repos/{owner}/{repo}/issues") {
-        issuesCallCount++;
-        return { data: [] };
-      }
-      return { data: {} };
+    wireOctokit();
+    // Layer a secondary spy on top to count issues calls for assertion.
+    const baseImpl = octokitRequestSpy.getMockImplementation()!;
+    octokitRequestSpy.mockImplementation(async (route: string, params: Record<string, unknown>) => {
+      if (route === "GET /repos/{owner}/{repo}/issues") issuesCallCount++;
+      return baseImpl(route, params);
     });
 
     wireSpawn(0);
@@ -960,15 +952,7 @@ describe("cron-bug-fixer — token-redaction sentinel sweep", () => {
         created_at: "2026-05-01T00:00:00Z",
       },
     ];
-    octokitRequestSpy.mockImplementation(async (route: string, params: { labels?: string }) => {
-      if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 12345 } };
-      if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [] };
-      if (route === "GET /repos/{owner}/{repo}/issues") {
-        if (params.labels?.includes("priority/p3-low")) return { data: p3Issues };
-        return { data: [] };
-      }
-      return { data: {} };
-    });
+    wireOctokit({ p3Issues });
 
     wireSpawn(0);
     const { cronBugFixerHandler } = await importHandler();
@@ -987,15 +971,7 @@ describe("cron-bug-fixer — token-redaction sentinel sweep", () => {
         created_at: "2026-05-01T00:00:00Z",
       },
     ];
-    octokitRequestSpy.mockImplementation(async (route: string, params: { labels?: string }) => {
-      if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 12345 } };
-      if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [] };
-      if (route === "GET /repos/{owner}/{repo}/issues") {
-        if (params.labels?.includes("priority/p3-low")) return { data: p3Issues };
-        return { data: [] };
-      }
-      return { data: {} };
-    });
+    wireOctokit({ p3Issues });
 
     // Force git clone to exit non-zero — the resulting Error.message MUST
     // NOT include the token-bearing clone URL.
@@ -1031,15 +1007,7 @@ describe("cron-bug-fixer — workspace cleanup (try/finally)", () => {
         created_at: "2026-05-01T00:00:00Z",
       },
     ];
-    octokitRequestSpy.mockImplementation(async (route: string, params: { labels?: string }) => {
-      if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 12345 } };
-      if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [] };
-      if (route === "GET /repos/{owner}/{repo}/issues") {
-        if (params.labels?.includes("priority/p3-low")) return { data: p3Issues };
-        return { data: [] };
-      }
-      return { data: {} };
-    });
+    wireOctokit({ p3Issues });
 
     wireSpawn(0);
     const { cronBugFixerHandler } = await importHandler();
@@ -1071,15 +1039,7 @@ describe("cron-bug-fixer — workspace cleanup (try/finally)", () => {
         created_at: "2026-05-01T00:00:00Z",
       },
     ];
-    octokitRequestSpy.mockImplementation(async (route: string, params: { labels?: string }) => {
-      if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 12345 } };
-      if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [] };
-      if (route === "GET /repos/{owner}/{repo}/issues") {
-        if (params.labels?.includes("priority/p3-low")) return { data: p3Issues };
-        return { data: [] };
-      }
-      return { data: {} };
-    });
+    wireOctokit({ p3Issues });
 
     wireSpawn(1); // claude exits non-zero
     const { cronBugFixerHandler } = await importHandler();
