@@ -51,7 +51,7 @@ The decision lands with PR-1 of #3948 (proof-of-pattern `scheduled-daily-triage`
 
 - Migration cost per workflow drops to "translate the YAML to a 50-line TS file" — agent prompts move as-is from inline-YAML to `*.prompt.md` files co-located with the function.
 - Replay safety is in scope of the existing Inngest contract — every cron-* function inherits the same `step.run` memoization story without per-function reasoning.
-- The `AbortSignal` + 55-min ceiling gives a single consistent cost-runaway primitive across all 11 migrations (where GitHub Actions had 11 different `timeout-minutes` values to reason about).
+- The `AbortSignal` + 60-min ceiling gives a single consistent cost-runaway primitive across all 11 migrations (where GitHub Actions had 11 different `timeout-minutes` values to reason about).
 - Single point of CLI upgrade across all 11 workflows (Hetzner cloud-init), instead of bumping `claude-code-action` version across 11 YAML files.
 - Future workflow additions are mechanical: drop a new `cron-*.ts` file and a new `*.prompt.md`, register in `inngest.createFunction({cron: "..."}, ...)` — no GitHub Actions YAML at all.
 
@@ -70,7 +70,32 @@ PR-2 (`cron-follow-through-monitor`) shares the `account`-scope `"cron-platform"
 - Manual-trigger latency upper bound under global keying = `max(MAX_TURN_DURATION_MS)` across all cron-* = 60 min (PR-1's daily-triage). Acceptable at PR-2 scale.
 - Hetzner OOM protection that motivated the global slot at PR-1 remains correct: per-function-class keying would shift sizing budget from `max` to `Σ` and require Hetzner node up-sizing as the cron-* fan-out grows.
 
-**Re-evaluation criterion:** if the cron-* count grows past 3 functions OR if any future cron-* requires a `MAX_TURN_DURATION_MS` > 60 min, revisit. Switching to per-function-class keying (`{scope: "account", key: '"cron-platform-${fn.id}"', limit: 1}`) is mechanically simple but requires concurrent Hetzner sizing review.
+**Re-evaluation criterion:** if Monday drain time exceeds 4 hours OR any single function waits >120 minutes in the queue, split to dual pools. Switching to per-function-class keying (`{scope: "account", key: '"cron-platform-${fn.id}"', limit: 1}`) is mechanically simple (30-min find-and-replace) but requires concurrent Hetzner sizing review. `[Updated 2026-05-26 — original "past 3 functions" threshold replaced with empirical drain-time threshold; see Phase 2 refinement below.]`
+
+**[Refined 2026-05-26 post TR9 Phase 2 plan review — schedule staggering + file prefix conventions]**
+
+Phase 2 (#3948) migrates 21 additional functions to the single `cron-platform` pool (limit: 1), bringing the total to ~35 registered Inngest functions. The 5-agent plan review (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow-analyzer) converged: dual pools are premature optimization; schedule staggering solves the real problem (Monday collision) at zero prerequisite cost.
+
+**Schedule staggering strategy:**
+
+- Monday is the heaviest day: 6+ cron functions fire between 06:00-16:00 UTC.
+- Stagger Monday-scheduled functions by ≥90 minutes so queue depth never exceeds 2.
+- Applied stagger offsets (vs original schedules):
+  - `cron-growth-audit`: 09:00→07:00 UTC
+  - `cron-seo-aeo-audit`: 10:00→11:00 UTC
+  - `cron-linkedin-token-check`: 09:00→11:00 UTC (runs in parallel with seo-aeo-audit since both are <5 min pure-TS)
+- Synthetic Sentry monitor `cron-platform-monday-drain` expects heartbeat by 18:00 Monday — if queue hasn't drained, missed check-in fires alert.
+
+**File prefix conventions for `server/inngest/functions/`:**
+
+| Prefix | Schedule | Sentry cron monitor | Example |
+|--------|----------|--------------------|---------|
+| `cron-` | Recurring (Inngest `cron:` field) | Yes — `sentry_cron_monitor` resource + `-target=` | `cron-daily-triage.ts` |
+| `oneshot-` | One-time fire, no recurring schedule | No — error alerting only via `reportSilentFallback` | `oneshot-gdpr-gate-50d-eval.ts` |
+| `event-` | Triggered by `inngest.send()` (manual or cascade) | No — no recurring schedule to monitor | `event-ship-merge.ts` |
+| `_` (underscore) | N/A — shared helper, not a function | N/A | `_cron-shared.ts` |
+
+Oneshots and event-triggered functions do NOT get `sentry_cron_monitor` resources. Sentry cron monitors would permanently false-alert on missed check-ins for functions that have no recurring schedule.
 
 ## Cost Impacts
 
@@ -119,7 +144,7 @@ Rel(inngest_worker, cron_fn, "fires on schedule", "cron")
 Rel(cron_fn, step_jitter, "step 1")
 Rel(step_jitter, ledger, "read + UPSERT", "SQL")
 Rel(cron_fn, step_eval, "step 2 (if not jitter-guarded)")
-Rel(step_eval, spawn, "child_process.spawn", "stdio + 55-min AbortSignal")
+Rel(step_eval, spawn, "child_process.spawn", "stdio + 60-min AbortSignal")
 Rel(spawn, anthropic, "tool-use loop", "HTTPS")
 Rel(spawn, github, "label / comment writes", "HTTPS")
 Rel(cron_fn, step_heartbeat, "step 3 (always)")
