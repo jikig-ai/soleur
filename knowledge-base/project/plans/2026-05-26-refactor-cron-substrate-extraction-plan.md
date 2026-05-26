@@ -230,8 +230,8 @@ None. No open code-review issues touch the files this plan intends to modify.
 
 ### Phase 0: Preconditions
 
-- [ ] Verify all 14 cron-\*.ts files exist and compile: `cd apps/web-platform && npx tsc --noEmit`
-- [ ] Run existing test suite: `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/cron-no-byok-lease-sweep.test.ts`
+- [x] Verify all 14 cron-\*.ts files exist and compile: `cd apps/web-platform && npx tsc --noEmit`
+- [x] Run existing test suite: `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/cron-no-byok-lease-sweep.test.ts`
 
 ### Phase 1: Create `_cron-shared.ts`
 
@@ -320,29 +320,29 @@ Via Octokit `PATCH /repos/{owner}/{repo}/issues/{issue_number}` to update the bo
 
 ### Phase 9: Verify
 
-- [ ] `cd apps/web-platform && npx tsc --noEmit` passes
-- [ ] `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/cron-no-byok-lease-sweep.test.ts` passes
-- [ ] `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/cron-substrate-imports.test.ts` passes
-- [ ] `.github/workflows/scheduled-gdpr-gate-preflight-eval-50d.yml` is deleted
-- [ ] LoC delta is net negative (estimated ~-1400 lines)
+- [x] `cd apps/web-platform && npx tsc --noEmit` passes
+- [x] `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/cron-no-byok-lease-sweep.test.ts` passes
+- [x] `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/cron-substrate-imports.test.ts` passes
+- [x] `.github/workflows/scheduled-gdpr-gate-preflight-eval-50d.yml` is deleted
+- [x] LoC delta is net negative (actual: -2784 lines)
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-- [ ] AC1: `_cron-shared.ts` exports: `REPO_OWNER`, `REPO_NAME`, 3 Sentry regexes, `redactToken`, `buildAuthenticatedCloneUrl`, `mintInstallationToken`, `postSentryHeartbeat`, `HandlerArgs`.
-- [ ] AC2: `_cron-claude-eval-substrate.ts` exports: `resolveClaudeBin`, `spawnSimple`, `setupEphemeralWorkspace`, `teardownEphemeralWorkspace`, `spawnClaudeEval`, `SpawnResult`, `KILL_ESCALATION_MS`. Does NOT re-export from `_cron-shared.ts`.
-- [ ] AC3: All 14 cron-\*.ts files import from `_cron-shared.ts` or `_cron-claude-eval-substrate.ts` (verified by guard test).
-- [ ] AC4: No cron-\*.ts file locally redefines any extracted symbol (verified by guard test).
-- [ ] AC5: `npx tsc --noEmit` passes with zero errors.
-- [ ] AC6: `vitest run test/server/cron-no-byok-lease-sweep.test.ts` passes (existing guard).
-- [ ] AC7: `vitest run test/server/cron-substrate-imports.test.ts` passes (new guard).
-- [ ] AC8: `.github/workflows/scheduled-gdpr-gate-preflight-eval-50d.yml` does not exist in the tree.
-- [ ] AC9: Net LoC delta is negative (git diff --stat shows more deletions than insertions).
-- [ ] AC10: No behavior change -- each handler's `SENTRY_MONITOR_SLUG`, `CLAUDE_CODE_FLAGS`, prompt, `MAX_TURN_DURATION_MS`, `buildSpawnEnv`, and business logic remain per-handler.
-- [ ] AC11: `buildSpawnEnv` is NOT extracted (security: per-handler env-var allowlist must remain explicit and auditable per handler).
+- [x] AC1: `_cron-shared.ts` exports: `REPO_OWNER`, `REPO_NAME`, 3 Sentry regexes, `redactToken`, `buildAuthenticatedCloneUrl`, `mintInstallationToken`, `postSentryHeartbeat`, `HandlerArgs`.
+- [x] AC2: `_cron-claude-eval-substrate.ts` exports: `resolveClaudeBin`, `spawnSimple`, `setupEphemeralWorkspace`, `teardownEphemeralWorkspace`, `spawnClaudeEval`, `SpawnResult`, `KILL_ESCALATION_MS`. Does NOT re-export from `_cron-shared.ts`.
+- [x] AC3: All 14 cron-\*.ts files import from `_cron-shared.ts` or `_cron-claude-eval-substrate.ts` (verified by guard test).
+- [x] AC4: No cron-\*.ts file locally redefines any extracted symbol (verified by guard test).
+- [x] AC5: `npx tsc --noEmit` passes with zero errors.
+- [x] AC6: `vitest run test/server/cron-no-byok-lease-sweep.test.ts` passes (existing guard).
+- [x] AC7: `vitest run test/server/cron-substrate-imports.test.ts` passes (new guard).
+- [x] AC8: `.github/workflows/scheduled-gdpr-gate-preflight-eval-50d.yml` does not exist in the tree.
+- [x] AC9: Net LoC delta is negative (actual: -2784 lines).
+- [x] AC10: No behavior change -- each handler's `SENTRY_MONITOR_SLUG`, `CLAUDE_CODE_FLAGS`, prompt, `MAX_TURN_DURATION_MS`, `buildSpawnEnv`, and business logic remain per-handler.
+- [x] AC11: `buildSpawnEnv` is NOT extracted (security: per-handler env-var allowlist must remain explicit and auditable per handler).
 
-- [ ] AC12: Umbrella #3948 community-monitor and gdpr-gate checkboxes are ticked (Phase 8, pre-merge via `gh api`).
+- [x] AC12: Umbrella #3948 community-monitor and gdpr-gate checkboxes are ticked (Phase 8, pre-merge via `gh api`).
 
 ## Files to Create
 
