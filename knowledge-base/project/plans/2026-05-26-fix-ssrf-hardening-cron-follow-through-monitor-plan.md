@@ -5,9 +5,29 @@ date: 2026-05-26
 lane: single-domain
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
+deepened: 2026-05-26
 ---
 
 # fix: SSRF hardening for cron-follow-through-monitor via Set.has() allowlist
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-26
+**Sections enhanced:** 7
+**Research agents used:** ipaddr.js API analysis, URL parser edge-case probing, DNS API verification, follow-through corpus analysis, precedent-diff (validate-origin.ts)
+
+### Key Improvements
+
+1. **IPv4-mapped IPv6 handling** -- use `ipaddr.process()` (not `ipaddr.parse()`) to automatically unwrap `::ffff:x.x.x.x` to its IPv4 equivalent before range classification, eliminating a class of bypass.
+2. **URL parser normalization** -- `new URL()` already normalizes numeric IP forms (`0x7f000001` -> `127.0.0.1`, `2130706433` -> `127.0.0.1`), so the allowlist check on `url.hostname` catches these without additional code.
+3. **Predicate type coverage gap** -- production follow-through corpus includes `api-curl`, `http-headers`, `cli`, `auto` types beyond the plan's `http-200`/`dns-txt`/`dns-a`. These must be treated as `manual` (no server-side execution) in the validator.
+4. **YAML parser reuse** -- `js-yaml` and `yaml` are both available transitively in `apps/web-platform/node_modules`; no new YAML dependency needed.
+5. **IPv6 hostname bracket stripping** -- `new URL("https://[::1]/").hostname` returns `[::1]` (with brackets); `ipaddr.parse()` requires the un-bracketed form `::1`.
+
+### New Considerations Discovered
+
+- The `ipaddr.js` range taxonomy has 10 IPv4 range names and 20 IPv6 range names; only `"unicast"` is public/routable. The `isPublicIp()` function should allowlist `"unicast"` rather than denylist the ~28 other ranges.
+- `dns.lookup()` uses the OS resolver (getaddrinfo), which matches Node.js `fetch()` resolution behavior -- this is the correct choice for TOCTOU mitigation (both resolve through the same path). `dns.resolve4()` uses DNS protocol directly and would create a resolution mismatch.
 
 ## Overview
 
@@ -69,12 +89,30 @@ no network verbs in its allowlist.
 ### Key Design Decisions
 
 1. **`ipaddr.js` for IP range classification** (new dependency, zero deps,
-   MIT, 37 versions, well-maintained). `node:net.isIP()` identifies address
-   family but cannot classify ranges (loopback, private, link-local, etc.).
-   `ipaddr.js` provides `.range()` which returns `"loopback"`, `"private"`,
-   `"linkLocal"`, `"unicast"` etc. -- exactly what the validation needs.
-   Rolling our own IP-range classifier would be error-prone and missing
-   edge cases (IPv4-mapped IPv6, 6to4, Teredo, etc.).
+   MIT, 37 versions, well-maintained, v2.4.0). `node:net.isIP()` identifies
+   address family but cannot classify ranges (loopback, private, link-local,
+   etc.). `ipaddr.js` provides `.range()` which returns a classification
+   string. The complete taxonomy (verified from source):
+   - **IPv4 ranges:** `unspecified`, `broadcast`, `multicast`, `linkLocal`,
+     `loopback`, `carrierGradeNat`, `private`, `reserved`, `as112`, `amt`,
+     and `unicast` (the default/public range).
+   - **IPv6 ranges:** `unspecified`, `linkLocal`, `multicast`, `loopback`,
+     `uniqueLocal`, `ipv4Mapped`, `deprecatedSiteLocal`, `discard`,
+     `rfc6145`, `rfc6052`, `6to4`, `teredo`, `benchmarking`, `amt`,
+     `as112v6`, `deprecatedOrchid`, `orchid2`,
+     `droneRemoteIdProtocolEntityTags`, `segmentRouting`, `reserved`,
+     and `unicast` (the default/public range).
+   The `isPublicIp()` function should **allowlist `"unicast"` only** rather
+   than denylist the ~28 non-public ranges -- this is fail-closed against
+   any future range additions to ipaddr.js.
+
+   **Critical: use `ipaddr.process()` instead of `ipaddr.parse()`** to
+   automatically unwrap IPv4-mapped IPv6 addresses (`::ffff:10.0.0.1` ->
+   `10.0.0.1`) before range classification. Without `process()`,
+   `ipaddr.parse("::ffff:10.0.0.1").range()` returns `"ipv4Mapped"` (an
+   IPv6 range name, not `"private"`), which the allowlist-`"unicast"` check
+   would correctly reject -- but `process()` is more explicit and produces
+   the correct IPv4 range name (`"private"`) for logging/debugging.
 
 2. **Hardcoded `Set<string>` of permitted hosts** -- not regex, not substring,
    not configurable at runtime. Adding a new host requires a code change +
@@ -85,12 +123,16 @@ no network verbs in its allowlist.
    - `api.github.com` (ruleset / workflow-run checks)
    - `api.doppler.com` (secret-presence checks)
 
-3. **DNS resolution at validation time** -- `dns.lookup()` resolves the
-   hostname and the resolved IP is checked against `ipaddr.js`. This
-   catches DNS rebinding attacks at the validation boundary (not at curl
-   execution time when the DNS may have changed). For `dns-txt`/`dns-a`
-   predicates, the domain is validated against the allowlist without
-   IP resolution (dig runs against the authoritative DNS, not the host).
+3. **DNS resolution at validation time via `dns.lookup()`** -- uses the OS
+   resolver (getaddrinfo), which is the SAME resolution path Node.js
+   `fetch()` uses internally. This minimizes the TOCTOU window: the IP
+   validated by `isPublicIp()` is the same IP `fetch()` will connect to
+   (absent DNS rebinding with sub-second TTL between the two calls).
+   `dns.resolve4()` would use DNS protocol directly and create a resolution
+   mismatch -- the OS resolver honors `/etc/hosts` and nsswitch.conf, while
+   `dns.resolve4()` bypasses them. For `dns-txt`/`dns-a` predicates, the
+   domain is validated against the allowlist without IP resolution (the
+   server-side `dns.resolveTxt()`/`dns.resolve4()` calls replace `dig`).
 
 4. **Server-side `fetch()` for http-200 predicates** -- replaces `curl`.
    Uses `AbortSignal.timeout(10_000)` to bound request duration. Only
@@ -104,6 +146,73 @@ no network verbs in its allowlist.
 6. **Prompt restructuring** -- the agent prompt drops the `curl`/`dig`
    instructions (step 3c) and receives a `## Pre-Validated Predicate Results`
    block injected at runtime. The agent acts on state transitions only.
+
+### Research Insights (Deepen-Plan)
+
+**URL Parser Normalization (verified empirically):**
+
+`new URL()` normalizes several bypass vectors that the plan must NOT
+re-implement:
+
+- Numeric IPv4 forms: `https://0x7f000001/` -> `hostname: "127.0.0.1"`
+- Decimal IPv4 forms: `https://2130706433/` -> `hostname: "127.0.0.1"`
+- IPv6 bracket wrapping: `https://[::1]/` -> `hostname: "[::1]"` (brackets
+  preserved -- must strip before `ipaddr.parse()`)
+- Userinfo extraction: `https://10.0.0.1@host/` -> `username: "10.0.0.1"`
+  (hostname is `host`, NOT `10.0.0.1`)
+
+The validator should: (a) reject any URL where `url.username !== ""` or
+`url.password !== ""` (userinfo abuse), (b) strip brackets from
+`url.hostname` for IPv6 before passing to `ipaddr`, (c) rely on the URL
+parser's numeric-to-dotted normalization rather than re-implementing it.
+
+**YAML Parsing (no new dependency needed):**
+
+Both `js-yaml` (CommonJS) and `yaml` (ESM) are available transitively in
+`apps/web-platform/node_modules`. The YAML blocks in follow-through issues
+are trivially simple (3-4 key-value pairs, no nested structures), so either
+library works. Prefer `yaml` (ESM, newer, maintained by the YAML WG) over
+`js-yaml` (CommonJS, legacy). Alternative: regex-based extraction for the
+3 fields (`type`, `url`/`domain`, `expected`/`sla_business_days`) would
+avoid the import entirely -- acceptable given the fixed schema.
+
+**Predicate Type Coverage (corpus analysis):**
+
+Production follow-through corpus (200 issues scanned):
+
+| Type | Count | Server-side execution? |
+|------|-------|----------------------|
+| `manual` | 162 | No (SLA tracking only) |
+| `http-200` | 5 | Yes (fetch + status check) |
+| `api-curl` | 3 | No -- requires auth headers from Doppler |
+| `http-headers` | 1 | No -- complex header matching |
+| `cli` | 1 | No -- arbitrary command execution |
+| `auto` | 1 | No -- ambiguous semantics |
+
+Only `http-200`, `dns-txt`, and `dns-a` types are candidates for
+server-side execution. All other types (`manual`, `api-curl`,
+`http-headers`, `cli`, `auto`) MUST be treated as manual (no URL
+validation, no server-side execution, SLA tracking only). The
+`_predicate-validator.ts` module must handle these gracefully by
+returning `{ type: "manual", skipped: true }`.
+
+**`api-curl` type (deferred scope):** `api-curl` predicates carry
+`headers_from_doppler: { Authorization: <DOPPLER_KEY> }` fields that
+require Doppler secret resolution at runtime. Server-side execution of
+`api-curl` is a separate scope (requires Doppler client integration in
+the Inngest function). Defer to a follow-up issue if demand grows beyond
+3 active `api-curl` predicates.
+
+**Precedent: `validate-origin.ts` Set Pattern (verified at
+`apps/web-platform/lib/auth/validate-origin.ts:9`):**
+
+```typescript
+const PRODUCTION_ORIGINS = new Set(["https://app.soleur.ai"]);
+```
+
+The codebase precedent uses `new Set([...])` with inline string literals,
+`.has()` with `.toLowerCase()` normalization, and a fail-closed default.
+The `_predicate-validator.ts` module should follow this exact pattern.
 
 ## User-Brand Impact
 
@@ -195,9 +304,11 @@ discoverability_test:
   `api.github.com`, `api.doppler.com`. Verified by:
   `grep -c "ALLOWED_PREDICATE_HOSTS" apps/web-platform/server/inngest/functions/_predicate-validator.ts`
   returns 1 (exported const definition).
-- [ ] AC3: `validatePredicateUrls()` rejects URLs whose resolved IP falls in
-  any non-unicast range (loopback, private, linkLocal, uniqueLocal, reserved,
-  unspecified, broadcast, carrierGradeNat, as classified by `ipaddr.js`).
+- [ ] AC3: `isPublicIp()` uses `ipaddr.process(ip).range() === "unicast"` --
+  allowlisting the single public range rather than denylisting ~28 non-public
+  ranges. `ipaddr.process()` unwraps IPv4-mapped IPv6 before classification.
+  Verified by test: `isPublicIp("8.8.8.8")` -> true,
+  `isPublicIp("10.0.0.1")` -> false, `isPublicIp("::ffff:127.0.0.1")` -> false.
 - [ ] AC4: `validatePredicateUrls()` rejects URLs whose hostname is not in
   `ALLOWED_PREDICATE_HOSTS` (Set.has exact-match, case-insensitive via
   `.toLowerCase()`).
@@ -231,11 +342,20 @@ discoverability_test:
   `apps/web-platform/test/server/inngest/cron-follow-through-monitor.test.ts`
   updated: T1 spawn call no longer includes `Bash(curl:*)` or `Bash(dig:*)`
   in args; new assertion that step.calls includes `"validate-predicates"`.
-- [ ] AC13: `npm test` passes in `apps/web-platform/` (vitest, not bun test).
+- [ ] AC13: `_predicate-validator.ts` handles all predicate types from the
+  production corpus: `http-200` (validate + execute), `dns-txt` (validate +
+  execute), `dns-a` (validate + execute), and `manual`/`api-curl`/
+  `http-headers`/`cli`/`auto`/unknown (pass through as manual). Verified by
+  test: `parsePredicateYaml()` on a `type: api-curl` block returns
+  `{ type: "api-curl", ... }` and `validateAndExecutePredicates()` treats
+  it as `{ skipped: true, reason: "unsupported type" }`.
+- [ ] AC14: `npm test` passes in `apps/web-platform/` (vitest, not bun test).
+  Note: `bunfig.toml` blocks bun test discovery (`pathIgnorePatterns = ["**"]`
+  per #1469); use `cd apps/web-platform && ./node_modules/.bin/vitest run`.
 
 ### Post-merge (operator)
 
-- [ ] AC14: After first weekday 09:00 UTC cron fire post-deploy, verify
+- [ ] AC15: After first weekday 09:00 UTC cron fire post-deploy, verify
   Sentry monitor `scheduled-follow-through` received a heartbeat.
   `Automation: inngest send cron/follow-through-monitor.manual-trigger`
   can trigger a manual run for verification.
@@ -273,12 +393,19 @@ discoverability_test:
 
 ### Phase 0: Preconditions
 
-- [ ] Verify `ipaddr.js` API: install locally and run
-  `node -e "const ip = require('ipaddr.js'); console.log(ip.parse('127.0.0.1').range())"`.
-  Expected: `"loopback"`.
-- [ ] Verify `node:dns/promises` is available:
-  `node -e "const dns = require('dns/promises'); dns.resolve4('app.soleur.ai').then(r => console.log(r))"`.
-- [ ] Verify `new URL()` correctly rejects userinfo: `new URL('https://user:pass@host/').username`.
+- [ ] Verify `ipaddr.js` API after Phase 1 install: run
+  `cd apps/web-platform && node -e "const ip = require('ipaddr.js'); console.log(ip.process('::ffff:10.0.0.1').range())"`.
+  Expected: `"private"` (process() unwraps IPv4-mapped, then range() classifies).
+  Also verify: `ip.process('8.8.8.8').range()` -> `"unicast"`.
+- [ ] Verify `node:dns/promises` is available (verified 2026-05-26):
+  `dns.lookup("app.soleur.ai")` returns `{address: "<IP>", family: 4}`.
+  `dns.resolve4`, `dns.resolveTxt` both available.
+- [ ] Verify `new URL()` edge cases (verified 2026-05-26):
+  - `new URL("https://user:pass@host/").username` -> `"user"` (detect userinfo)
+  - `new URL("https://0x7f000001/").hostname` -> `"127.0.0.1"` (numeric normalized)
+  - `new URL("https://[::1]/").hostname` -> `"[::1]"` (brackets preserved)
+- [ ] Verify YAML parser availability: `require("yaml")` in
+  `apps/web-platform/node_modules` (available transitively, no new dep needed).
 
 ### Phase 1: Add `ipaddr.js` dependency
 
@@ -291,14 +418,97 @@ New file: `apps/web-platform/server/inngest/functions/_predicate-validator.ts`
 
 Exports:
 - `ALLOWED_PREDICATE_HOSTS: Set<string>` -- the hardcoded allowlist
-- `isPublicIp(ip: string): boolean` -- uses `ipaddr.js` to classify
+- `isPublicIp(ip: string): boolean` -- uses `ipaddr.process()` + `.range() === "unicast"`
 - `validatePredicateUrl(url: string): Promise<{ valid: boolean; reason?: string }>`
 - `executeHttpPredicate(url: string): Promise<{ passed: boolean; statusCode: number | null; error?: string }>`
 - `executeDnsPredicate(type: "dns-txt" | "dns-a", domain: string, expected: string): Promise<{ passed: boolean; result?: string; error?: string }>`
+- `parsePredicateYaml(issueBody: string): ParsedPredicate | null`
+- `formatPredicateResults(results: ValidatedPredicate[]): string`
 - `validateAndExecutePredicates(issues: ParsedFollowThroughIssue[]): Promise<ValidatedPredicate[]>`
 
 The module follows the `resolve-origin.ts` pattern: pure functions with no
 framework dependencies, testable with vitest directly.
+
+#### Research Insights: `isPublicIp()` Implementation
+
+```typescript
+import ipaddr from "ipaddr.js";
+
+// Allowlist "unicast" only -- fail-closed against future ipaddr.js range additions.
+// ipaddr.process() unwraps IPv4-mapped IPv6 (::ffff:x.x.x.x -> x.x.x.x)
+// BEFORE range classification, producing the correct IPv4 range name.
+export function isPublicIp(ip: string): boolean {
+  try {
+    const addr = ipaddr.process(ip);
+    return addr.range() === "unicast";
+  } catch {
+    return false; // unparseable IP is never public
+  }
+}
+```
+
+#### Research Insights: `validatePredicateUrl()` Implementation
+
+```typescript
+import { lookup } from "node:dns/promises";
+
+export async function validatePredicateUrl(
+  rawUrl: string,
+): Promise<{ valid: boolean; reason?: string }> {
+  // 1. Parse URL (catches malformed URLs, normalizes numeric IPs)
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return { valid: false, reason: "malformed URL" };
+  }
+
+  // 2. HTTPS-only
+  if (parsed.protocol !== "https:") {
+    return { valid: false, reason: `non-HTTPS scheme: ${parsed.protocol}` };
+  }
+
+  // 3. Reject userinfo (URL-userinfo abuse vector)
+  if (parsed.username || parsed.password) {
+    return { valid: false, reason: "URL contains userinfo" };
+  }
+
+  // 4. Strip IPv6 brackets for hostname comparison + ipaddr parsing
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+
+  // 5. Host allowlist (Set.has exact-match)
+  if (!ALLOWED_PREDICATE_HOSTS.has(hostname)) {
+    return { valid: false, reason: `host not in allowlist: ${hostname}` };
+  }
+
+  // 6. DNS resolution + IP range check
+  try {
+    const { address } = await lookup(hostname);
+    if (!isPublicIp(address)) {
+      return { valid: false, reason: `resolved to non-public IP: ${address}` };
+    }
+  } catch (err) {
+    return { valid: false, reason: `DNS lookup failed: ${(err as Error).message}` };
+  }
+
+  return { valid: true };
+}
+```
+
+#### Research Insights: Predicate Type Handling
+
+The `parsePredicateYaml()` function must handle the following types from
+the production corpus:
+
+- `http-200` -> validate URL, execute via `fetch()`, return status
+- `dns-txt` -> validate domain, execute via `dns.resolveTxt()`, check expected
+- `dns-a` -> validate domain, execute via `dns.resolve4()`, check expected
+- `manual` -> pass through (SLA tracking only, no URL to validate)
+- `api-curl` -> treat as manual (requires Doppler auth headers, deferred)
+- `http-headers` -> treat as manual (complex header matching, deferred)
+- `cli` -> treat as manual (arbitrary command, never server-side)
+- `auto` -> treat as manual (ambiguous semantics)
+- Unknown/missing -> treat as manual (fail-safe per existing prompt behavior)
 
 ### Phase 3: Update `cron-follow-through-monitor.ts`
 
@@ -362,11 +572,14 @@ None
 
 | Risk | Mitigation |
 |------|-----------|
-| `ipaddr.js` adds a new dependency | Zero transitive deps, MIT, 37 versions, well-maintained. Alternative (rolling our own IPv6 range classifier) is error-prone per #4068 issue body. |
-| DNS resolution at validation time may differ from curl execution time (TOCTOU) | Acceptable: validation happens seconds before agent runs. DNS rebinding with sub-second TTL is theoretical at follow-through corpus scale (~8 issues). The alternative (no resolution) leaves IPv6 and numeric IP forms unaddressed. |
+| `ipaddr.js` adds a new dependency | Zero transitive deps, MIT, 37 versions, well-maintained (v2.4.0). Alternative (rolling our own IPv6 range classifier for 10 IPv4 + 20 IPv6 named ranges) is error-prone per #4068 issue body. |
+| DNS resolution at validation time may differ from fetch execution time (TOCTOU) | Minimized: both `dns.lookup()` and `fetch()` use the OS resolver (getaddrinfo). DNS rebinding with sub-second TTL between the two calls is theoretical at follow-through corpus scale (~8 issues). The alternative (no resolution) leaves IPv6 and numeric IP forms unaddressed. |
 | Legitimate follow-through host not in allowlist | Fail-safe: issue stays open past SLA, Guard B fires needs-attention label, operator adds host to allowlist in a code change. Better than fail-open (SSRF). |
 | Server-side fetch may behave differently from curl (redirects, TLS, SNI) | `redirect: "error"` matches the monitoring intent (status check, not content fetch). TLS/SNI handled by Node.js built-in. |
 | Removing curl/dig from agent breaks manual-type predicates | Manual-type predicates have no automated check (prompt step 3c already says "No automated check. Only track SLA."). No curl/dig needed. |
+| `api-curl` predicates (3 in corpus) not server-side executed | These require Doppler auth headers -- server-side execution would need Doppler client integration. Treated as manual; deferred to follow-up if demand grows. Guard B SLA tracking still applies. |
+| `ipaddr.process()` on non-IP hostnames throws | Hostnames are resolved via `dns.lookup()` first; only the resolved IP string (always valid IPv4/IPv6) is passed to `ipaddr.process()`. Hostnames never reach ipaddr directly. |
+| IPv6 brackets in `url.hostname` break `ipaddr.parse()` | `url.hostname` returns `[::1]` for IPv6 -- strip brackets before ipaddr: `hostname.replace(/^\[|\]$/g, "")`. Covered by test case. |
 
 ## Alternative Approaches Considered
 
@@ -423,14 +636,32 @@ hardening.
   If a new host is needed, the operator will see the follow-through issue
   stay open past SLA, Guard B will fire needs-attention, and the operator
   adds the host in a code PR.
-- A plan whose `## User-Brand Impact` section is empty, contains only
-  `TBD`/`TODO`/placeholder text, or omits the threshold will fail
-  `deepen-plan` Phase 4.6. Fill it before requesting deepen-plan or `/work`.
 - The `validate-predicates` step.run executes BEFORE `claude-eval`. If it
   fails (DNS timeout, gh CLI error), the function should still proceed to
   `claude-eval` with an empty validated set -- the agent will skip automated
   checks and treat all predicates as manual. This preserves the SLA-tracking
   behavior even when validation is degraded.
-- When `ipaddr.js` encounters an IPv4-mapped IPv6 address (`::ffff:10.0.0.1`),
-  it must be detected as private. Verify via test that `ipaddr.parse("::ffff:10.0.0.1").range()`
-  returns `"private"` or that the IPv4-mapped form is unwrapped before range check.
+- Use `ipaddr.process()` NOT `ipaddr.parse()` for IP classification. The
+  difference: `ipaddr.parse("::ffff:10.0.0.1").range()` returns `"ipv4Mapped"`
+  (an IPv6 range, technically correct but unhelpful for logging); while
+  `ipaddr.process("::ffff:10.0.0.1").range()` returns `"private"` (the IPv4
+  classification after unwrapping). Both are rejected by the
+  `range() === "unicast"` check, but `process()` produces correct IPv4
+  range names for debugging/Sentry context.
+- `new URL("https://[::1]/").hostname` returns `"[::1]"` (with brackets).
+  The brackets must be stripped before passing to `ipaddr.process()` or
+  `ALLOWED_PREDICATE_HOSTS.has()`. Use `hostname.replace(/^\[|\]$/g, "")`.
+- The `isPublicIp()` function MUST allowlist `"unicast"` (the single public
+  range) rather than denylist the ~28 non-public ranges. If ipaddr.js adds
+  a new range in a future release, the denylist approach would silently
+  allow the new range; the allowlist approach fails closed.
+- `api-curl` predicates (3 in production corpus) require Doppler-sourced
+  auth headers (`Authorization: <DOPPLER_KEY>`) and cannot be executed
+  server-side without Doppler client integration. These are treated as
+  `manual` -- the agent cannot verify them either since curl is removed
+  from allowedTools. If an `api-curl` follow-through issue stays open past
+  SLA, Guard B fires and the operator verifies manually.
+- The `gh issue list` spawn in `validate-predicates` step.run uses the same
+  `buildSpawnEnv()` as `ensure-labels` -- it needs `GH_TOKEN` to read issue
+  bodies. The `--json` flag returns structured JSON; parse with
+  `JSON.parse()` on collected stdout (same pattern as the test mock).

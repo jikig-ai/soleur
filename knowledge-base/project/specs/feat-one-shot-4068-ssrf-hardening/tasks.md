@@ -9,9 +9,10 @@ lane: single-domain
 
 ## Phase 0: Preconditions
 
-- [ ] 0.1 Verify `ipaddr.js` API works as expected (`.range()` returns classification strings)
-- [ ] 0.2 Verify `node:dns/promises` is available and `dns.resolve4()` works
-- [ ] 0.3 Verify `new URL()` correctly exposes `.username` for userinfo detection
+- [ ] 0.1 Verify `ipaddr.js` API (after Phase 1 install): `ipaddr.process("::ffff:10.0.0.1").range()` -> `"private"`, `ipaddr.process("8.8.8.8").range()` -> `"unicast"`
+- [ ] 0.2 Verify `node:dns/promises` is available: `dns.lookup()`, `dns.resolve4()`, `dns.resolveTxt()` (verified 2026-05-26)
+- [ ] 0.3 Verify `new URL()` edge cases (verified 2026-05-26): `.username` for userinfo, `[::1]` brackets in `.hostname`, numeric IP normalization (`0x7f000001` -> `127.0.0.1`)
+- [ ] 0.4 Verify YAML parser available transitively: `require("yaml")` from `apps/web-platform/node_modules`
 
 ## Phase 1: Add dependency
 
@@ -22,11 +23,11 @@ lane: single-domain
 
 - [ ] 2.1 Create `apps/web-platform/server/inngest/functions/_predicate-validator.ts`
   - [ ] 2.1.1 Export `ALLOWED_PREDICATE_HOSTS: Set<string>` with `app.soleur.ai`, `api.github.com`, `api.doppler.com`
-  - [ ] 2.1.2 Export `isPublicIp(ip: string): boolean` using `ipaddr.js` `.range()` classification
-  - [ ] 2.1.3 Export `validatePredicateUrl(rawUrl: string): Promise<ValidationResult>` with scheme check, userinfo check, host allowlist, DNS resolution, IP range check
+  - [ ] 2.1.2 Export `isPublicIp(ip: string): boolean` using `ipaddr.process(ip).range() === "unicast"` (allowlist unicast, not denylist non-public)
+  - [ ] 2.1.3 Export `validatePredicateUrl(rawUrl: string): Promise<ValidationResult>` with: (a) URL parse, (b) HTTPS-only check, (c) userinfo rejection (`url.username || url.password`), (d) IPv6 bracket strip from `url.hostname`, (e) host allowlist (`Set.has(hostname.toLowerCase())`), (f) `dns.lookup()` resolution (NOT `dns.resolve4()`), (g) `isPublicIp()` on resolved IP
   - [ ] 2.1.4 Export `executeHttpPredicate(url: string): Promise<HttpPredicateResult>` using `fetch()` with `redirect: "error"` and `AbortSignal.timeout(10_000)`
   - [ ] 2.1.5 Export `executeDnsPredicate(type, domain, expected): Promise<DnsPredicateResult>` using `dns/promises` with 10s timeout
-  - [ ] 2.1.6 Export `validateAndExecutePredicates(issues): Promise<ValidatedPredicate[]>` that orchestrates per-issue validation + execution
+  - [ ] 2.1.6 Export `validateAndExecutePredicates(issues): Promise<ValidatedPredicate[]>` that orchestrates per-issue validation + execution. Handle all predicate types: `http-200` (validate + execute), `dns-txt`/`dns-a` (validate + execute), `manual`/`api-curl`/`http-headers`/`cli`/`auto`/unknown (skip as manual with `{ skipped: true }`)
   - [ ] 2.1.7 Export `parsePredicateYaml(issueBody: string): ParsedPredicate | null` that extracts YAML from `## Verification` heading
   - [ ] 2.1.8 Export `formatPredicateResults(results): string` that generates the `## Pre-Validated Predicate Results` markdown block
 
@@ -79,9 +80,14 @@ lane: single-domain
   - [ ] 5.4.1 Test `executeDnsPredicate`: dns-txt expected found -> passed
   - [ ] 5.4.2 Test `executeDnsPredicate`: dns-a expected found -> passed
   - [ ] 5.4.3 Test `executeDnsPredicate`: expected not found -> not passed
-  - [ ] 5.5.1 Test `parsePredicateYaml`: valid YAML extraction
+  - [ ] 5.5.1 Test `parsePredicateYaml`: valid YAML extraction (type: http-200 with url)
   - [ ] 5.5.2 Test `parsePredicateYaml`: malformed YAML -> null
   - [ ] 5.5.3 Test `parsePredicateYaml`: missing Verification heading -> null
+  - [ ] 5.5.4 Test `parsePredicateYaml`: type: api-curl -> parsed but treated as manual
+  - [ ] 5.5.5 Test `parsePredicateYaml`: type: manual -> parsed, no URL validation needed
+  - [ ] 5.6.1 Test `validatePredicateUrl`: numeric IP `https://0x7f000001/` -> invalid (URL parser normalizes to 127.0.0.1, loopback)
+  - [ ] 5.6.2 Test `validatePredicateUrl`: IPv6 bracketed `https://[::1]/` -> invalid (bracket stripped, loopback)
+  - [ ] 5.6.3 Test `isPublicIp`: unparseable string -> false (fail-closed)
 
 ## Phase 6: Final verification
 
