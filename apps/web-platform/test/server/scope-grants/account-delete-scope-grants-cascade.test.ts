@@ -60,7 +60,7 @@ const {
   };
 });
 
-vi.mock("@/lib/supabase/server", () => ({
+vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => ({
     auth: {
       admin: {
