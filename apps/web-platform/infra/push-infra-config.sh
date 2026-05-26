@@ -15,6 +15,13 @@
 #                      is NOT the right source)
 set -euo pipefail
 
+for var in WEBHOOK_SECRET CF_ACCESS_ID CF_ACCESS_SECRET APP_DOMAIN_BASE INFRA_DIR HOOKS_JSON_B64; do
+  if [[ -z "${!var:-}" ]]; then
+    echo "ERROR: required env var $var is missing or empty" >&2
+    exit 1
+  fi
+done
+
 PAYLOAD_FILE=$(mktemp /tmp/infra-config-payload.XXXXXX)
 trap 'rm -f "$PAYLOAD_FILE"' EXIT
 

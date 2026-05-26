@@ -243,8 +243,8 @@ write_files:
       # NOT escape the mount namespace, so without these explicit
       # ReadWritePaths the inngest bootstrap fails with cryptic chown error
       # messages. See #4017 substrate audit (2026-05-19).
-      ReadWritePaths=/mnt/data /var/lock /etc/systemd/system /etc/default /etc/sudoers.d /var/lib/inngest -/var/lib/vector -/etc/vector /usr/local/bin
-      ReadOnlyPaths=/etc/webhook /etc/default/webhook-deploy
+      ReadWritePaths=/mnt/data /var/lock /etc/systemd/system /etc/default /etc/sudoers.d /etc/webhook /var/lib/inngest -/var/lib/vector -/etc/vector /usr/local/bin
+      ReadOnlyPaths=/etc/default/webhook-deploy
       TimeoutStopSec=180
 
       [Install]

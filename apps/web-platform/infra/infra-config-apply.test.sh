@@ -61,26 +61,6 @@ assert_file_exists() {
   fi
 }
 
-assert_file_content() {
-  local desc="$1" path="$2" expected="$3"
-  if [[ -f "$path" ]]; then
-    local actual
-    actual=$(cat "$path")
-    if [[ "$expected" == "$actual" ]]; then
-      echo "  PASS: $desc"
-      PASS=$((PASS + 1))
-    else
-      echo "  FAIL: $desc — content mismatch"
-      echo "    expected: $expected"
-      echo "    actual:   $actual"
-      FAIL=$((FAIL + 1))
-    fi
-  else
-    echo "  FAIL: $desc — file not found: $path"
-    FAIL=$((FAIL + 1))
-  fi
-}
-
 assert_file_mode() {
   local desc="$1" path="$2" expected_mode="$3"
   local actual_mode
