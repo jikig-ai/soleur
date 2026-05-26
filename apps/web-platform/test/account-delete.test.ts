@@ -17,7 +17,7 @@ const mockStorageList = vi.fn();
 const mockStorageRemove = vi.fn();
 const mockStorageFrom = vi.fn();
 
-vi.mock("@/lib/supabase/server", () => ({
+vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => ({
     from: mockFrom,
     rpc: mockRpc,

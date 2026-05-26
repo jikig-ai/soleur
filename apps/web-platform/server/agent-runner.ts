@@ -51,6 +51,7 @@ import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
 import { buildKbShareTools } from "./kb-share-tools";
 import { buildConversationsTools } from "./conversations-tools";
 import { buildAuthStatusTools } from "./auth-status-tools";
+import { buildAccountTools } from "./account-tools";
 import { getCurrentRepoUrl } from "./current-repo-url";
 import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
@@ -925,7 +926,7 @@ export async function startAgentSession(
     const sessionTenant = await getFreshTenantClient(userId);
     const { data: user } = await sessionTenant
       .from("users")
-      .select("workspace_path, repo_status, github_installation_id")
+      .select("workspace_path, repo_status, github_installation_id, email")
       .eq("id", userId)
       .single();
 
@@ -1420,6 +1421,18 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
     const authStatusTools = buildAuthStatusTools({ userId });
     platformTools.push(...authStatusTools);
     platformToolNames.push("mcp__soleur_platform__auth_revocation_status");
+
+    // Account lifecycle tools (#4454): DSAR export + account deletion.
+    // Registered unconditionally — agent-user parity requires these on
+    // every authenticated session. account_delete_initiate is gated by
+    // explicit ack + email confirmation per hr-menu-option-ack-not-prod-write-auth.
+    const accountTools = buildAccountTools({
+      userId,
+      userEmail: user.email ?? "",
+      sessionId: conversationId,
+    });
+    platformTools.push(...accountTools.tools);
+    platformToolNames.push(...accountTools.toolNames);
 
     // Build MCP server if any platform tools are registered
     if (platformTools.length > 0) {
