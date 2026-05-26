@@ -1,7 +1,7 @@
 // TR9 PR-2 (#4063) — cron-follow-through-monitor handler unit tests.
 //
-// Mocks: node:child_process.spawn (eager-factory race-safe via
-// mockImplementation per cq-write-failing-tests-before guidance),
+// Mocks: node:child_process.spawn + execFileSync (eager-factory race-safe
+// via mockImplementation per cq-write-failing-tests-before guidance),
 // node:process.kill, fetch, observability. Drives the handler directly
 // with a fake `step` whose run() executes callbacks eagerly — same shape
 // as cron-daily-triage.test.ts (PR-1 #3985, the structural template).
@@ -11,7 +11,12 @@
 //   - Cron: 0 9 * * 1-5 (weekday-only)
 //   - Event: cron/follow-through-monitor.manual-trigger
 //   - MAX_TURN_DURATION_MS = 15 min (vs PR-1's 60 min)
-//   - 3 step.run steps (ensure-labels added vs PR-1's 2)
+//   - 4 step.run steps (#4068: validate-predicates added before claude-eval)
+//
+// #4068 SSRF hardening deltas:
+//   - Bash(curl:*) and Bash(dig:*) removed from --allowedTools
+//   - validate-predicates step added before claude-eval
+//   - execFileSync mock for `gh issue list` in validate-predicates step
 
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,8 +29,21 @@ interface FakeChild extends EventEmitter {
 }
 
 const spawnSpy = vi.fn();
+// execFileSync mock — used by validate-predicates step to run `gh issue list`.
+// Returns empty JSON array by default; tests can override via mockReturnValue.
+const execFileSyncSpy = vi.fn(() => Buffer.from("[]"));
 vi.mock("node:child_process", () => ({
   spawn: spawnSpy,
+  execFileSync: execFileSyncSpy,
+}));
+
+// Mock _predicate-validator to avoid DNS/fetch side effects in handler tests.
+// The predicate-validator has its own dedicated test suite.
+const validateAndExecutePredicatesSpy = vi.fn(async () => []);
+const formatPredicateResultsSpy = vi.fn(() => "## Pre-Validated Predicate Results\n\nNo predicates.");
+vi.mock("@/server/inngest/functions/_predicate-validator", () => ({
+  validateAndExecutePredicates: validateAndExecutePredicatesSpy,
+  formatPredicateResults: formatPredicateResultsSpy,
 }));
 
 const reportSilentFallbackSpy = vi.fn();
@@ -97,6 +115,12 @@ function restoreEnv(key: keyof typeof ORIGINAL_ENV) {
 beforeEach(() => {
   vi.resetModules();
   spawnSpy.mockReset();
+  execFileSyncSpy.mockReset();
+  execFileSyncSpy.mockReturnValue(Buffer.from("[]"));
+  validateAndExecutePredicatesSpy.mockReset();
+  validateAndExecutePredicatesSpy.mockResolvedValue([]);
+  formatPredicateResultsSpy.mockReset();
+  formatPredicateResultsSpy.mockReturnValue("## Pre-Validated Predicate Results\n\nNo predicates.");
   reportSilentFallbackSpy.mockReset();
   logger.info.mockReset();
   logger.warn.mockReset();
@@ -130,7 +154,7 @@ async function importHandler() {
 }
 
 describe("cron-follow-through-monitor — T1 happy path", () => {
-  it("spawn exits 0 → result.ok, Sentry POST status=ok, three step.run steps", async () => {
+  it("spawn exits 0 → result.ok, Sentry POST status=ok, four step.run steps", async () => {
     const child = makeChild();
     spawnSpy.mockImplementation(
       withEnsureLabelsAutoExit(() => {
@@ -144,6 +168,7 @@ describe("cron-follow-through-monitor — T1 happy path", () => {
     const result = await handler({ step, logger });
 
     // 3 ensure-labels gh calls + 1 claude call = 4 total spawn invocations.
+    // (validate-predicates uses execFileSync, not spawn)
     expect(spawnSpy).toHaveBeenCalledTimes(4);
     const claudeCalls = spawnSpy.mock.calls.filter((c) => c[0] !== "gh");
     expect(claudeCalls).toHaveLength(1);
@@ -158,6 +183,21 @@ describe("cron-follow-through-monitor — T1 happy path", () => {
     expect(claudeArgs[lastIdx - 1]).toBe("--");
     expect(claudeArgs[lastIdx]).toMatch(/follow-through/i); // prompt sanity check
 
+    // #4068 SSRF hardening: Bash(curl:*) and Bash(dig:*) MUST be absent
+    // from --allowedTools. The agent should not have network verb access.
+    const allowedToolsIdx = claudeArgs.indexOf("--allowedTools");
+    expect(allowedToolsIdx).toBeGreaterThan(-1);
+    const allowedToolsValue = claudeArgs[allowedToolsIdx + 1];
+    expect(allowedToolsValue).not.toContain("Bash(curl:");
+    expect(allowedToolsValue).not.toContain("Bash(dig:");
+    // Verify gh verbs are still present
+    expect(allowedToolsValue).toContain("Bash(gh issue list:");
+    expect(allowedToolsValue).toContain("Bash(gh issue view:");
+
+    // #4068: prompt should contain pre-validated predicate results
+    const prompt = claudeArgs[lastIdx];
+    expect(prompt).toContain("Pre-Validated Predicate Results");
+
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const url = fetchMock.mock.calls[0][0] as string;
@@ -166,13 +206,13 @@ describe("cron-follow-through-monitor — T1 happy path", () => {
     expect(url).toContain("status=ok");
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
 
-    // PR-2 has THREE step.run steps: ensure-labels precedes claude-eval +
-    // sentry-heartbeat. The ensure-labels step is the workflow-specific
-    // delta vs PR-1 (carries the GHA `Ensure labels exist` step's intent
-    // into the Inngest function so the labels exist before the agent
-    // touches them).
+    // #4068: FOUR step.run steps: ensure-labels → validate-predicates →
+    // claude-eval → sentry-heartbeat. validate-predicates is the Layer 3
+    // SSRF hardening step that executes predicates server-side before the
+    // agent runs.
     expect(step.calls.map((c) => c.name)).toEqual([
       "ensure-labels",
+      "validate-predicates",
       "claude-eval",
       "sentry-heartbeat",
     ]);
@@ -299,5 +339,68 @@ describe("cron-follow-through-monitor — T5 dual-trigger registration", () => {
         }),
       ]),
     );
+  });
+});
+
+describe("cron-follow-through-monitor — T6 SSRF hardening (#4068)", () => {
+  it("validate-predicates step runs before claude-eval and feeds results into prompt", async () => {
+    const child = makeChild();
+    spawnSpy.mockImplementation(
+      withEnsureLabelsAutoExit(() => {
+        queueMicrotask(() => child.emit("exit", 0, null));
+        return child;
+      }),
+    );
+
+    const handler = await importHandler();
+    const step = makeStep();
+    await handler({ step, logger });
+
+    // validate-predicates MUST come before claude-eval in step order
+    const stepNames = step.calls.map((c) => c.name);
+    const vpIdx = stepNames.indexOf("validate-predicates");
+    const ceIdx = stepNames.indexOf("claude-eval");
+    expect(vpIdx).toBeGreaterThan(-1);
+    expect(ceIdx).toBeGreaterThan(-1);
+    expect(vpIdx).toBeLessThan(ceIdx);
+
+    // execFileSync should have been called for `gh issue list`
+    expect(execFileSyncSpy).toHaveBeenCalledWith(
+      "gh",
+      expect.arrayContaining(["issue", "list", "--label", "follow-through"]),
+      expect.objectContaining({ timeout: 30_000 }),
+    );
+  });
+
+  it("Bash(curl:*) and Bash(dig:*) are absent from --allowedTools", async () => {
+    const child = makeChild();
+    spawnSpy.mockImplementation(
+      withEnsureLabelsAutoExit(() => {
+        queueMicrotask(() => child.emit("exit", 0, null));
+        return child;
+      }),
+    );
+
+    const handler = await importHandler();
+    const step = makeStep();
+    await handler({ step, logger });
+
+    // Find the claude spawn call (not gh)
+    const claudeCalls = spawnSpy.mock.calls.filter((c) => c[0] !== "gh");
+    expect(claudeCalls).toHaveLength(1);
+    const claudeArgs = claudeCalls[0][1] as string[];
+
+    const allowedToolsIdx = claudeArgs.indexOf("--allowedTools");
+    expect(allowedToolsIdx).toBeGreaterThan(-1);
+    const allowedToolsValue = claudeArgs[allowedToolsIdx + 1];
+
+    // SSRF-critical: these MUST be absent
+    expect(allowedToolsValue).not.toContain("curl");
+    expect(allowedToolsValue).not.toContain("dig");
+
+    // But gh verbs MUST still be present (agent needs them for comments/labels)
+    expect(allowedToolsValue).toContain("Bash(gh issue list:");
+    expect(allowedToolsValue).toContain("Bash(gh issue comment:");
+    expect(allowedToolsValue).toContain("Bash(gh issue close:");
   });
 });

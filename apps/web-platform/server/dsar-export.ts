@@ -201,6 +201,7 @@ const SIZE_CAP_BYTES =
 
 export interface EnqueueExportInput {
   userId: string;
+  workspaceId: string;
   sessionId: string;
   reauthEventId: string;
   requesterIp: string;
@@ -1787,6 +1788,9 @@ async function uploadToStorage(
 export async function enqueueExport(
   input: EnqueueExportInput,
 ): Promise<EnqueueExportResult> {
+  if (!input.workspaceId) {
+    throw new Error("enqueueExport: workspaceId is required");
+  }
   const service = createServiceClient();
 
   // Application-layer idempotency aligned to the partial unique index:
@@ -1819,6 +1823,7 @@ export async function enqueueExport(
     .from("dsar_export_jobs")
     .insert({
       user_id: input.userId,
+      workspace_id: input.workspaceId,
       owner_session_id: input.sessionId,
       reauth_event_id: input.reauthEventId,
       status: "pending",
