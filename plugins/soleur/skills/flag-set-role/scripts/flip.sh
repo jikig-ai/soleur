@@ -4,7 +4,7 @@
 # Contract: SKILL.md in the parent directory. ADR-038 v2 §"Fallback semantics"
 # documents the env-var mirror invariant this script enforces.
 #
-# Usage: bash flip.sh <flag> <prd|dev> <on|off> [--dry-run]
+# Usage: bash flip.sh <flag> <prd|dev> <on|off> [--confirmed] [--dry-run]
 #
 # Exit codes:
 #   0 — success / dry-run clean
@@ -37,6 +37,7 @@ declare -A FLAG_ENV_VARS=(
 
 # --- arg parsing ------------------------------------------------------------
 DRY_RUN=0
+CONFIRMED=0
 TARGET_TYPE="role"
 TARGET_ORG=""
 FLAG=""
@@ -45,10 +46,11 @@ VALUE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --dry-run) DRY_RUN=1; shift ;;
-    --target)  TARGET_TYPE="$2"; shift 2 ;;
-    --org)     TARGET_ORG="$2"; shift 2 ;;
-    --*)       echo "unknown flag: $1" >&2; exit 2 ;;
+    --dry-run)     DRY_RUN=1; shift ;;
+    --confirmed)   CONFIRMED=1; shift ;;
+    --target)      TARGET_TYPE="$2"; shift 2 ;;
+    --org)         TARGET_ORG="$2"; shift 2 ;;
+    --*)           echo "unknown flag: $1" >&2; exit 2 ;;
     *)
       if [[ -z "$FLAG" ]]; then FLAG="$1"
       elif [[ -z "$ROLE" ]]; then ROLE="$1"
@@ -59,7 +61,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 usage() {
-  echo "Usage: flip.sh <flag> <prd|dev> <on|off> [--target role|org] [--org <orgId>] [--dry-run]" >&2
+  echo "Usage: flip.sh <flag> <prd|dev> <on|off> [--confirmed] [--target role|org] [--org <orgId>] [--dry-run]" >&2
   echo "Known flags: ${!FLAG_ENV_VARS[*]}" >&2
   exit 2
 }
@@ -247,9 +249,13 @@ if [[ $DRY_RUN -eq 1 ]]; then
 fi
 
 # --- operator ack ----------------------------------------------------------
-echo
-read -p "Proceed? Type 'yes' to apply: " ACK
-[[ "$ACK" == "yes" ]] || { echo "aborted (ack was '$ACK')" >&2; exit 0; }
+if [[ $CONFIRMED -eq 0 ]]; then
+  echo
+  read -p "Proceed? Type 'yes' to apply: " ACK
+  [[ "$ACK" == "yes" ]] || { echo "aborted (ack was '$ACK')" >&2; exit 0; }
+else
+  echo "(--confirmed: skipping interactive prompt)"
+fi
 
 # --- audit append (WORM) ---------------------------------------------------
 ACTOR=$(doppler secrets get OPERATOR_EMAIL -p soleur -c cli_ops --plain 2>/dev/null | tr '[:upper:]' '[:lower:]')
