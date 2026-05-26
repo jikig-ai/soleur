@@ -85,8 +85,8 @@ The Doppler CLI mirror approach is the correct IaC-compliant pattern for this cl
 
 ### Pre-merge (PR)
 
-- [ ] AC1: PR body contains `Ref #4466` (not `Closes` — issue closure is post-merge after verification)
-- [ ] AC2: This plan file is committed on the feature branch
+- [x] AC1: PR body contains `Ref #4466` (not `Closes` — issue closure is post-merge after verification)
+- [x] AC2: This plan file is committed on the feature branch
 
 ### Post-merge (operator)
 

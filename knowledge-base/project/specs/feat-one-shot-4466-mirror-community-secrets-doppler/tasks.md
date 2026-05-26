@@ -8,9 +8,9 @@ lane: procedural
 
 ## Phase 1: Create plan + PR (code change)
 
-- [ ] 1.1 Commit plan file to feature branch
-- [ ] 1.2 Open PR with `Ref #4466` in body
-- [ ] 1.3 Add labels: `semver:patch`, `priority/p1-high`, `domain/operations`
+- [x] 1.1 Commit plan file to feature branch
+- [x] 1.2 Open PR with `Ref #4466` in body
+- [x] 1.3 Add labels: `semver:patch`, `priority/p1-high`, `domain/operations`
 - [ ] 1.4 Mark PR ready for review
 
 ## Phase 2: Post-merge operator action (Doppler CLI)
