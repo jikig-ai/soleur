@@ -48,7 +48,7 @@ for entry in "${FILE_MAP[@]}"; do
 
   # Decode to a temp file in the same directory (same filesystem for mv atomicity)
   tmpfile=$(mktemp "${dest_dir}/tmp.infra-config.XXXXXX")
-  trap "rm -f '$tmpfile'" EXIT
+  trap 'rm -f "$tmpfile"' EXIT
 
   echo "${!env_var}" | base64 -d > "$tmpfile"
 
