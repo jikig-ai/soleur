@@ -44,6 +44,9 @@ PAYLOAD
 # Compute HMAC-SHA256 over the raw payload file (same pattern as web-platform-release.yml).
 HMAC=$(openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" < "$PAYLOAD_FILE" | sed 's/.*= //')
 
+# --data-binary preserves the exact payload bytes (including newlines from
+# the heredoc). curl's -d strips newlines, creating an HMAC mismatch between
+# what openssl hashed and what the server receives.
 HTTP_CODE=$(curl -s -o /tmp/infra-config-response.txt -w '%{http_code}' \
   --max-time 30 \
   -X POST \
@@ -51,7 +54,7 @@ HTTP_CODE=$(curl -s -o /tmp/infra-config-response.txt -w '%{http_code}' \
   -H "X-Signature-256: sha256=${HMAC}" \
   -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
   -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
-  -d @"$PAYLOAD_FILE" \
+  --data-binary @"$PAYLOAD_FILE" \
   "https://deploy.${APP_DOMAIN_BASE}/hooks/infra-config")
 
 if [[ "$HTTP_CODE" != "202" ]]; then
