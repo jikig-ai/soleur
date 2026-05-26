@@ -213,6 +213,37 @@ export async function cronWeeklyAnalyticsHandler({
           { name: "cron/content-generator.manual-trigger", data: { source: "weekly-analytics-kpi-miss" } },
         ]);
       });
+
+      await step.run("notify-kpi-miss-discord", async () => {
+        const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
+        if (!webhookUrl) {
+          reportSilentFallback(
+            new Error("DISCORD_WEBHOOK_URL not set"),
+            { feature: FUNCTION_NAME, op: "notify-kpi-miss", message: "Discord webhook URL missing" },
+          );
+          return;
+        }
+        const body = JSON.stringify({
+          content: [
+            `**KPI miss detected** — weekly analytics (${new Date().toISOString().slice(0, 10)})`,
+            `Phase: ${scriptResult.kpiPhase}`,
+            `Target: ${scriptResult.kpiTarget} | Actual: ${scriptResult.kpiActual}`,
+            `Visitors: ${scriptResult.kpiVisitors}`,
+            `Cascade dispatched: seo-aeo-audit, growth-execution, content-generator`,
+          ].join("\n"),
+        });
+        const resp = await fetch(webhookUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+        });
+        if (!resp.ok) {
+          reportSilentFallback(
+            new Error(`Discord webhook returned ${resp.status}`),
+            { feature: FUNCTION_NAME, op: "notify-kpi-miss", message: "Discord notification failed" },
+          );
+        }
+      });
     }
 
     // --- Step 4: create bot-PR with snapshot ----------------------------------
