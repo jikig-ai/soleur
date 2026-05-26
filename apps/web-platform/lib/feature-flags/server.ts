@@ -22,7 +22,7 @@ const CACHE_TTL_MS = 30_000;
 // literals are what SWC/Terser need to eliminate the panel.
 //
 // team-workspace-invite and byok-delegations were historically ENV (per-org
-// allowlist gate) and migrated to RUNTIME_FLAGS in PR #TBD (umbrella #4456)
+// allowlist gate) and migrated to RUNTIME_FLAGS in PR #4469 (umbrella #4456)
 // under dual-control (Flagsmith boolean + env-allowlist as defense-in-depth).
 //
 // New flags: if the call-site needs DCE elimination → ENV. Otherwise → RUNTIME.
