@@ -45,9 +45,9 @@
 ## 5. Cleanup
 
 - [x] 5.1 Verify `ls .github/workflows/scheduled-*.yml | wc -l` returns exactly 4 ✓
-- [ ] 5.2 GHA secret audit: list remaining secrets vs remaining workflow consumers, file pruning issue for orphaned secrets
-- [ ] 5.3 File follow-up issue: KPI-miss alerting replacement (Discord webhook or Sentry custom metric)
-- [ ] 5.4 Update #3948 issue body with completion status. Promote milestone.
+- [x] 5.2 GHA secret audit: 16 orphaned secrets identified, pruning issue filed as #4488
+- [x] 5.3 File follow-up issue: KPI-miss alerting replacement → #4489
+- [x] 5.4 Update #3948 issue body with completion status
 - [ ] 5.5 Run `/soleur:compound` to capture Phase 2 learnings
 
 ## Dependencies
