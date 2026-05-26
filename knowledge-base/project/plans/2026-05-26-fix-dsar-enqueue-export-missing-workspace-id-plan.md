@@ -28,7 +28,7 @@ requires_cpo_signoff: true
 
 ## Overview
 
-`enqueueExport` in `apps/web-platform/server/dsar-export.ts:1818-1825` inserts a `dsar_export_jobs` row without `workspace_id`. Migration 059 (`059_workspace_keyed_rls_sweep.sql:288-306`) added `workspace_id uuid NOT NULL` to `dsar_export_jobs`. Every self-serve DSAR export has 500'd since PR #4287 merged 2026-05-21.
+`enqueueExport` in `apps/web-platform/server/dsar-export.ts:1818-1825` inserts a `dsar_export_jobs` row without `workspace_id`. Migration 059 (`059_workspace_keyed_rls_sweep.sql:288-306`) added `workspace_id uuid NOT NULL` to `dsar_export_jobs`. Every self-serve DSAR export has 500'd since PR #4225 merged 2026-05-21.
 
 The fix is surgical: add `workspaceId` to `EnqueueExportInput`, resolve it in the route handler using the ADR-038 N2 solo-workspace invariant (`workspaces.id = users.id`), pass it through to the INSERT, and add a fail-loud runtime assertion.
 
