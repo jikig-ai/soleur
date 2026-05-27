@@ -253,6 +253,7 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
     additionalOwnerFields: ["target_user_id"],
     article: "15",
   },
+
 };
 
 /**
@@ -328,6 +329,22 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "handled separately via the `anonymise_tenant_deploy_audit` RPC " +
     "called BEFORE `auth.admin.deleteUser()` per the ON DELETE " +
     "RESTRICT FK ordering.",
+
+  // PR-B (#4521): activity feed. Promote to DSAR_TABLE_ALLOWLIST when
+  // dsar-export.ts chain is wired (PR-B Phase 4). Art. 17 cascade via
+  // anonymise_workspace_activity RPC. actor_user_id NULLABLE + SET NULL.
+  workspace_activity:
+    "Migration 076 table; DSAR export chain wired in PR-B Phase 4 " +
+    "(#4521). Art. 17: anonymise_workspace_activity. 90-day pg_cron " +
+    "purge limits data retention. Promote to allowlist with export chain.",
+
+  // PR-C (#4521): KB file metadata. Promote to DSAR_TABLE_ALLOWLIST when
+  // dsar-export.ts chain is wired (PR-C Phase 4). Art. 17 cascade via
+  // anonymise_kb_files. user_id NULLABLE + SET NULL.
+  kb_files:
+    "Migration 077 table; DSAR export chain wired in PR-C Phase 4 " +
+    "(#4521). Art. 17: anonymise_kb_files. Promote to allowlist with " +
+    "export chain.",
 };
 
 /**

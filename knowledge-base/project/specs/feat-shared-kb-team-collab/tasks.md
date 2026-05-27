@@ -52,13 +52,13 @@ generated_from: knowledge-base/project/plans/2026-05-27-feat-shared-kb-team-coll
 ## PR-B: Team Activity Feed
 
 ### Phase 1: Migration 076
-- [ ] 1.1 Create `workspace_activity` table (INSERT-only, 8 event types)
-- [ ] 1.2 RLS: workspace-member SELECT only
-- [ ] 1.3 SECURITY DEFINER writer RPC: `record_workspace_activity`
-- [ ] 1.4 Indexes: (workspace_id, created_at DESC) + (actor_user_id)
-- [ ] 1.5 pg_cron: 90-day retention purge
-- [ ] 1.6 `anonymise_workspace_activity` RPC for Art-17 cascade
-- [ ] 1.7 Down migration
+- [x] 1.1 Create `workspace_activity` table (INSERT-only, 3 MVP event types)
+- [x] 1.2 RLS: workspace-member SELECT only + JTI deny
+- [x] 1.3 SECURITY DEFINER writer RPC: `record_workspace_activity` (service_role only)
+- [x] 1.4 Indexes: (workspace_id, created_at DESC) + (actor_user_id)
+- [x] 1.5 pg_cron: 90-day retention purge
+- [x] 1.6 `anonymise_workspace_activity` RPC for Art-17 cascade
+- [x] 1.7 Down migration
 
 ### Phase 2: Server-side event emitters
 - [ ] 2.1 workspace-membership.ts — member_join, member_leave events
@@ -88,12 +88,12 @@ generated_from: knowledge-base/project/plans/2026-05-27-feat-shared-kb-team-coll
 ## PR-C: KB Files Metadata Table
 
 ### Phase 1: Migration 077
-- [ ] 1.1 Create `kb_files` table with workspace_id, user_id, visibility
-- [ ] 1.2 RLS: owner + workspace-member dual-predicate SELECT
-- [ ] 1.3 RESTRICTIVE policy on workspace_id/visibility
-- [ ] 1.4 SECURITY DEFINER RPC: `set_kb_file_visibility`
-- [ ] 1.5 Indexes
-- [ ] 1.6 Down migration
+- [x] 1.1 Create `kb_files` table with workspace_id, user_id, visibility
+- [x] 1.2 RLS: owner + workspace-member dual-predicate SELECT + INSERT + JTI deny
+- [x] 1.3 Column-level REVOKE on visibility/workspace_id
+- [x] 1.4 SECURITY DEFINER RPC: `set_kb_file_visibility`
+- [x] 1.5 Indexes + updated_at trigger
+- [x] 1.6 Down migration
 
 ### Phase 2: Server-side sync
 - [ ] 2.1 kb-reader.ts — on tree read, upsert kb_files rows from filesystem
