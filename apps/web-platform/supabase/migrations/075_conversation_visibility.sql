@@ -48,12 +48,17 @@ DROP POLICY IF EXISTS conversations_workspace_member_all ON public.conversations
 -- SELECT: owner OR workspace-shared (dual-predicate).
 -- INSERT: owner only (user_id = auth.uid()) — prevents impersonation.
 -- UPDATE/DELETE: owner only — workspace members can READ but not MUTATE.
-CREATE POLICY conversations_owner_or_shared_select ON public.conversations
+-- Two separate PERMISSIVE policies instead of a single OR-predicate.
+-- Postgres ORs PERMISSIVE policies together, enabling BitmapOr of two
+-- independent index scans. This avoids calling is_workspace_member()
+-- per-row for owned conversations (the hot path).
+CREATE POLICY conversations_owner_select ON public.conversations
   FOR SELECT TO authenticated
-  USING (
-    user_id = auth.uid()
-    OR (visibility = 'workspace' AND public.is_workspace_member(workspace_id, auth.uid()))
-  );
+  USING (user_id = auth.uid());
+
+CREATE POLICY conversations_shared_select ON public.conversations
+  FOR SELECT TO authenticated
+  USING (visibility = 'workspace' AND public.is_workspace_member(workspace_id, auth.uid()));
 
 CREATE POLICY conversations_owner_insert ON public.conversations
   FOR INSERT TO authenticated

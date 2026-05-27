@@ -50,6 +50,17 @@ CREATE POLICY kb_files_member_insert ON public.kb_files
     AND public.is_workspace_member(workspace_id, auth.uid())
   );
 
+-- Owner-only UPDATE (non-REVOKE'd columns like file_path, filename).
+CREATE POLICY kb_files_owner_update ON public.kb_files
+  FOR UPDATE TO authenticated
+  USING (user_id = auth.uid())
+  WITH CHECK (user_id = auth.uid());
+
+-- Owner-only DELETE (allows cleanup of orphaned metadata rows).
+CREATE POLICY kb_files_owner_delete ON public.kb_files
+  FOR DELETE TO authenticated
+  USING (user_id = auth.uid());
+
 -- JTI deny RESTRICTIVE policy (per mig 068 pattern — Kieran H1).
 CREATE POLICY kb_files_jti_not_denied ON public.kb_files
   AS RESTRICTIVE FOR ALL TO authenticated

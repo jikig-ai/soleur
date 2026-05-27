@@ -30,25 +30,33 @@ export function useWorkspaceActivity(): UseWorkspaceActivityResult {
   const [hasMore, setHasMore] = useState(true);
   const offsetRef = useRef(0);
   const workspaceIdRef = useRef<string | null>(null);
+  const userIdRef = useRef<string | null>(null);
+  const fetchingRef = useRef(false);
 
   const fetchEvents = useCallback(async (append = false) => {
+    if (fetchingRef.current) return;
+    fetchingRef.current = true;
     if (!append) setLoading(true);
     setError(null);
 
     try {
       const supabase = createClient();
-      const { data: authData } = await supabase.auth.getUser();
-      if (!authData.user) {
-        setError("Authentication required");
-        setLoading(false);
-        return;
+
+      if (!userIdRef.current) {
+        const { data: authData } = await supabase.auth.getUser();
+        if (!authData.user) {
+          setError("Authentication required");
+          setLoading(false);
+          return;
+        }
+        userIdRef.current = authData.user.id;
       }
 
       if (!workspaceIdRef.current) {
         const { data: memberRow } = await supabase
           .from("workspace_members")
           .select("workspace_id")
-          .eq("user_id", authData.user.id)
+          .eq("user_id", userIdRef.current)
           .maybeSingle();
         workspaceIdRef.current = (memberRow?.workspace_id as string) ?? null;
       }
@@ -68,7 +76,7 @@ export function useWorkspaceActivity(): UseWorkspaceActivityResult {
         .range(offset, offset + PAGE_SIZE - 1);
 
       if (fetchErr) {
-        setError(fetchErr.message);
+        setError("Failed to load activity");
         setLoading(false);
         return;
       }
@@ -84,14 +92,27 @@ export function useWorkspaceActivity(): UseWorkspaceActivityResult {
         offsetRef.current = rows.length;
       }
     } finally {
+      fetchingRef.current = false;
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     fetchEvents();
-    const timer = setInterval(() => fetchEvents(), POLL_INTERVAL_MS);
-    return () => clearInterval(timer);
+
+    let timer: ReturnType<typeof setTimeout>;
+    const scheduleNext = () => {
+      timer = setTimeout(() => {
+        if (document.visibilityState === "visible") {
+          fetchEvents().then(scheduleNext);
+        } else {
+          scheduleNext();
+        }
+      }, POLL_INTERVAL_MS);
+    };
+    scheduleNext();
+
+    return () => clearTimeout(timer);
   }, [fetchEvents]);
 
   const loadMore = useCallback(() => {
