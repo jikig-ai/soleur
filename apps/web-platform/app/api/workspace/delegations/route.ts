@@ -116,11 +116,27 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: "missing_delegation_id" }, { status: 400 });
   }
 
+  const allowedReasons = ["grantor_revoke", "grantee_decline"] as const;
+  const reason = body.reason ?? "grantor_revoke";
+  if (!allowedReasons.includes(reason as typeof allowedReasons[number])) {
+    return NextResponse.json({ error: "invalid_reason" }, { status: 400 });
+  }
+
   const service = createServiceClient();
+
+  const { data: delegation } = await service
+    .from("byok_delegations")
+    .select("grantor_user_id, grantee_user_id")
+    .eq("id", body.delegationId)
+    .maybeSingle();
+  if (!delegation || (delegation.grantor_user_id !== user.id && delegation.grantee_user_id !== user.id)) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
+
   const { error } = await service.rpc("revoke_byok_delegation", {
     p_delegation_id: body.delegationId,
     p_revoked_by_user_id: user.id,
-    p_revocation_reason: body.reason ?? "grantor_revoke",
+    p_revocation_reason: reason,
   });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
