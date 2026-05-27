@@ -154,19 +154,19 @@ discoverability_test:
 
 ### Pre-merge (PR)
 
-- [ ] **AC1:** Investigate root cause via Inngest server logs and function registry. Document which hypothesis (A-E) was confirmed, or if a new root cause was discovered. Key distinguishing test: if `curl -s http://127.0.0.1:8288/v1/functions | jq '.[] | select(.slug == "cron-community-monitor")'` returns the function WITH cron trigger but no recent runs exist, Hypothesis E (scheduler re-planning failure); if the function is absent entirely, Hypothesis A (desync).
-- [ ] **AC2:** If Hypothesis A confirmed (Inngest desync): trigger a manual re-sync of the Inngest function registry by restarting the web-platform container (which re-POSTs the function list to Inngest) AND restarting `inngest-server.service` if needed.
-- [ ] **AC3:** If Hypothesis B confirmed (concurrency starvation): add schedule stagger to community-monitor (e.g., move from `0 8` to `30 8` or `0 8` with explicit queue priority) to avoid collision with hourly probes.
-- [ ] **AC4:** If Hypothesis C confirmed (OOM): raise `MemoryMax` for `inngest-server.service` in `apps/web-platform/infra/inngest-bootstrap.sh:155` from `512M` to `768M` (Hetzner cx33 has 8GB RAM).
-- [ ] **AC5:** If Hypothesis D confirmed (env vars): verify `SENTRY_INGEST_DOMAIN`, `SENTRY_PROJECT_ID`, `SENTRY_PUBLIC_KEY` present in Doppler `prd` and accessible to the running web-platform process.
-- [ ] **AC6:** Add a preventive guard: after the massive TR9 Phase 2 migration, add a smoke test that verifies Inngest function count matches expected count after deploy. File path: `apps/web-platform/test/server/inngest/function-registry-count.test.ts`.
-- [ ] **AC7:** Update `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` with a new hypothesis H9 covering "Inngest server desync after deploy churn" if that is the confirmed root cause.
+- [ ] **AC1:** Investigate root cause via Inngest server logs and function registry. Document which hypothesis (A-E) was confirmed, or if a new root cause was discovered. **Deferred: Tracks #4533 (requires Hetzner SSH).**
+- [ ] **AC2:** If Hypothesis A confirmed (Inngest desync): trigger a manual re-sync. **Deferred: Tracks #4533.**
+- [ ] **AC3:** If Hypothesis B confirmed (concurrency starvation): add schedule stagger. **Deferred: Tracks #4533.**
+- [ ] **AC4:** If Hypothesis C confirmed (OOM): raise `MemoryMax`. **Deferred: Tracks #4533.**
+- [x] **AC5:** If Hypothesis D confirmed (env vars): verify `SENTRY_INGEST_DOMAIN`, `SENTRY_PROJECT_ID`, `SENTRY_PUBLIC_KEY` present in Doppler `prd` and accessible to the running web-platform process. **DONE: All 3 present in Doppler prd — Hypothesis D eliminated.**
+- [x] **AC6:** Add a preventive guard: after the massive TR9 Phase 2 migration, add a smoke test that verifies Inngest function count matches expected count after deploy. File path: `apps/web-platform/test/server/inngest/function-registry-count.test.ts`. **DONE: 5 assertions (count, import parity, array parity, slug→tf parity, tf→slug parity).**
+- [x] **AC7:** Update `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` with a new hypothesis H9 covering "Inngest server desync after deploy churn" if that is the confirmed root cause. **DONE: H9 added with H9a/H9b sub-modes.**
 
 ### Post-merge (operator)
 
-- [ ] **AC8:** Trigger a manual community-monitor fire via Inngest event: `curl -X POST http://127.0.0.1:8288/e/cron%2Fcommunity-monitor.manual-trigger -H "Content-Type: application/json" -d '{"name":"cron/community-monitor.manual-trigger","data":{}}' -H "Authorization: Bearer ${INNGEST_EVENT_KEY}"`. Automation: not feasible because the command targets the Hetzner-local loopback (127.0.0.1:8288), not a public endpoint.
-- [ ] **AC9:** Verify Sentry cron monitor `scheduled-community-monitor` shows a successful check-in after the manual trigger. Verification via: `curl -sH "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" "https://sentry.io/api/0/organizations/jikigai/monitors/scheduled-community-monitor/checkins/?limit=3" | jq '.[0].status'` -- expect `"ok"`.
-- [ ] **AC10:** Wait for the next natural 08:00 UTC fire on the day after merge. Verify issue `[Scheduled] Community Monitor - YYYY-MM-DD` is created with label `scheduled-community-monitor`. Verification via: `gh issue list --label scheduled-community-monitor --state all --limit 1 --json number,title,createdAt`.
+- [ ] **AC8:** Trigger a manual community-monitor fire. **Deferred: Tracks #4533 (Hetzner loopback).**
+- [ ] **AC9:** Verify Sentry check-in shows `ok`. **Deferred: Tracks #4533.**
+- [ ] **AC10:** Wait for next natural 08:00 UTC fire. **Deferred: Tracks #4533.**
 
 ## Implementation Phases
 
