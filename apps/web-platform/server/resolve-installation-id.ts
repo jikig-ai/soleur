@@ -4,6 +4,11 @@ import {
 } from "@/lib/supabase/tenant";
 import { reportSilentFallback } from "@/server/observability";
 
+export function extractGitHubOwner(repoUrl: string): string | null {
+  const match = repoUrl.match(/^https:\/\/github\.com\/([^/]+)\//);
+  return match?.[1] ?? null;
+}
+
 /**
  * Resolve a GitHub App installation ID for a user. Tries the user's own
  * `github_installation_id` first; falls back to a workspace-sibling lookup
@@ -13,9 +18,9 @@ import { reportSilentFallback } from "@/server/observability";
  * pulling @/lib/supabase/service (which reads SUPABASE_URL at module scope)
  * into test bundles that don't set the env var.
  *
- * The sibling lookup also verifies the resolved installation belongs to a
- * user whose `repo_url` matches the caller's, preventing cross-repo token
- * leakage in a future multi-workspace scenario.
+ * The sibling lookup matches on GitHub org (owner) via `.ilike()` rather
+ * than exact `repo_url`, since GitHub App installations are org-level and
+ * cover all repos under the same owner.
  */
 export async function resolveInstallationId(
   userId: string,
@@ -76,7 +81,10 @@ export async function resolveInstallationId(
     .limit(1);
 
   if (callerRepoUrl) {
-    query = query.eq("repo_url", callerRepoUrl);
+    const owner = extractGitHubOwner(callerRepoUrl);
+    if (owner) {
+      query = query.ilike("repo_url", `https://github.com/${owner}/%`);
+    }
   }
 
   const { data: userRow } = await query.maybeSingle();

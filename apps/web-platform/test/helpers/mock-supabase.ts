@@ -6,8 +6,11 @@ export interface MockQueryChain {
   select: Mock;
   eq: Mock;
   neq: Mock;
+  not: Mock;
   in: Mock;
   is: Mock;
+  like: Mock;
+  ilike: Mock;
   gt: Mock;
   gte: Mock;
   lt: Mock;
@@ -63,8 +66,11 @@ export function mockQueryChain<T>(
     "select",
     "eq",
     "neq",
+    "not",
     "in",
     "is",
+    "like",
+    "ilike",
     "gt",
     "gte",
     "lt",
