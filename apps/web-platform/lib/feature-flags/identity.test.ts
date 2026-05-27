@@ -2,7 +2,6 @@ import { describe, it, expect, vi } from "vitest";
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
-  observability: { logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } },
 }));
 
 import { resolveIdentity } from "./identity";
