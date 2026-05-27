@@ -801,6 +801,8 @@ Run `bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` from the rep
   - End-to-end UI flow → Playwright MCP (`mcp__playwright__*`)
   - Cloudflare DNS / WAF / Workers / Zero Trust → `mcp__plugin_soleur_cloudflare__*`
   - Stripe live-state read / customer / subscription → `mcp__plugin_soleur_stripe__*`
+  - Server-side state (deploy status, service health, cron-fire timestamps) → deploy webhook at `deploy.soleur.ai/hooks/deploy-status` (HMAC + CF Access auth via Doppler `prd_terraform`)
+  - Container restart / function sync → the `web-platform-release.yml` pipeline already restarts the Docker container on every merge to main that touches `apps/web-platform/**` (path-filtered `on.push`); for those changes a PR merge IS the remediation for container-state issues — never prescribe a separate "operator restarts container" step
 
   If the step is automatable, the plan MUST bake it into the workflow rather than punt to the operator. Three valid placements:
   1. **Inline in a /work phase** (typical for migration apply, integration smoke, single-call MCP/CLI verifications).
