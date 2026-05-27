@@ -1,4 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
+
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: vi.fn(),
+}));
+
 import { resolveIdentity } from "./identity";
 import { ANON_IDENTITY } from "./server";
 import { mockQueryChain } from "@/test/helpers/mock-supabase";
@@ -12,14 +17,14 @@ function fakeSupabase(
     error: null,
   },
   authError: { message: string } | null = null,
-  workspaceMembersResult: { data: { organization_id: string } | null; error: { message: string } | null } = {
+  workspaceMembersResult: { data: { workspace_id: string; workspaces: { organization_id: string } } | null; error: { message: string } | null } = {
     data: null,
     error: null,
   },
 ) {
   const from = vi.fn().mockImplementation((table: string) => {
     if (table === "workspace_members") {
-      return mockQueryChain<{ organization_id: string } | null>(
+      return mockQueryChain<{ workspace_id: string; workspaces: { organization_id: string } } | null>(
         workspaceMembersResult.data,
         workspaceMembersResult.error,
       );
@@ -73,7 +78,7 @@ describe("resolveIdentity", () => {
           { id: "abc" },
           { data: { role: "dev" }, error: null },
           null,
-          { data: { organization_id: "org-123" }, error: null },
+          { data: { workspace_id: "ws-123", workspaces: { organization_id: "org-123" } }, error: null },
         ),
       ),
     ).resolves.toEqual({ userId: "abc", role: "dev", orgId: "org-123" });
