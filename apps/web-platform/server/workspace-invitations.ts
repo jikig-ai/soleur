@@ -93,7 +93,7 @@ export async function getPendingInvitesForUser(
   ]);
 
   if (byUserId.error) {
-    log.error({ userId, err: byUserId.error.message }, "Failed to query pending invites by userId");
+    log.error({ err: byUserId.error.message }, "Failed to query pending invites by userId");
     reportSilentFallback(null, {
       feature: "workspace-invitations",
       op: "get-pending-by-userid",
@@ -101,7 +101,7 @@ export async function getPendingInvitesForUser(
     });
   }
   if (byEmail.error) {
-    log.error({ userId, err: byEmail.error.message }, "Failed to query pending invites by email");
+    log.error({ err: byEmail.error.message }, "Failed to query pending invites by email");
     reportSilentFallback(null, {
       feature: "workspace-invitations",
       op: "get-pending-by-email",

@@ -15,6 +15,22 @@
 -- SET search_path = public, pg_temp.
 
 -- =====================================================================
+-- 0. FK precondition guards (cross-file references)
+-- =====================================================================
+
+DO $$ BEGIN
+  IF to_regclass('public.users') IS NULL THEN
+    RAISE EXCEPTION 'Precondition failed: public.users must exist before 075';
+  END IF;
+  IF to_regclass('public.workspaces') IS NULL THEN
+    RAISE EXCEPTION 'Precondition failed: public.workspaces must exist before 075';
+  END IF;
+  IF to_regclass('public.workspace_member_attestations') IS NULL THEN
+    RAISE EXCEPTION 'Precondition failed: public.workspace_member_attestations must exist before 075';
+  END IF;
+END $$;
+
+-- =====================================================================
 -- 1. workspace_invitations table
 -- =====================================================================
 
