@@ -4,28 +4,44 @@ type: fix
 date: 2026-05-27
 lane: single-domain
 brand_survival_threshold: none
+deepened: 2026-05-27
 ---
 
 # fix: add retry-on-401 to createAppJwtOctokit()
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-27
+**Sections enhanced:** 4 (Proposed Solution, Implementation Phases, Test details, Risks)
+**Research agents used:** SDK source inspection, precedent-diff, caller-site grep
+
+### Key Improvements
+1. Corrected the fix location: retry belongs in `cron-github-app-drift-guard.ts` (call site), NOT in `probe-octokit.ts` (`createAppJwtOctokit()` itself). The `App` constructor is synchronous; the 401 fires later during `probeDriftGuard()`'s `octokit.request("GET /app")` call, which is caught internally and returned as `failureMode: "github_app_401"` -- never thrown.
+2. Fixed the log call: `logger.warn(...)` (handler's Inngest logger, in closure scope) instead of `log.warn(...)` (module-scoped logger from `probe-octokit.ts`, not importable from the handler file).
+3. Added concrete test implementation details: stateful `octokitRequestSpy` mock using call-count tracking, plus impact analysis on the existing "github_app_401" test (now sees TWO 401 throws, not one).
+
+### New Considerations Discovered
+- The `@octokit/app` `App` constructor is synchronous (verified against installed `node_modules/@octokit/app/dist-src/index.js:52`). JWT minting is lazy via `createAppAuth` auth strategy -- fires only on first `octokit.request()`.
+- `createAppJwtOctokit()` is called from exactly 1 production site (`cron-github-app-drift-guard.ts:715`). No other callers need similar treatment.
+- The test mock returns the same `octokitRequestSpy` for both first and retry `createAppJwtOctokit()` calls, so the transient 401 test must use call-count-based stateful mock logic.
+
 ## Overview
 
-PR #4498 hardened `createProbeOctokit()` and `generateInstallationToken()` in `apps/web-platform/server/github/` with retry-on-401 to handle transient GitHub JWT verification failures ("A JSON web token could not be decoded"). The same file's `createAppJwtOctokit()` was missed -- it creates a bare `@octokit/app` `App` instance and returns `app.octokit` without any retry wrapper. The drift-guard cron (`cron-github-app-drift-guard.ts`) calls `createAppJwtOctokit()` in its "drift-check" step; when the JWT 401 fires, the error propagates to the outer catch which records `github_api_network` and does NOT retry. Sentry error at `2026-05-27T00:00:01Z` confirms this path fired in production.
+PR #4498 hardened `createProbeOctokit()` and `generateInstallationToken()` in `apps/web-platform/server/github/` with retry-on-401 to handle transient GitHub JWT verification failures ("A JSON web token could not be decoded"). The same file's `createAppJwtOctokit()` was missed -- it creates a bare `@octokit/app` `App` instance and returns `app.octokit` without any retry wrapper. The drift-guard cron (`cron-github-app-drift-guard.ts`) calls `createAppJwtOctokit()` in its "drift-check" step; when the JWT 401 fires, `probeDriftGuard()` catches it and returns `failureMode: "github_app_401"` -- but the handler does NOT retry. The failure is recorded, a `ci/guard-broken` issue is filed, and the operator is paged for a self-healing condition. Sentry error at `2026-05-27T00:00:01Z` confirms this path fired in production.
 
 ## Problem Statement / Motivation
 
-`@octokit/auth-app` does NOT internally retry JWT decode 401 errors. GitHub occasionally returns "A JSON web token could not be decoded" on valid JWTs due to replication delay or transient verification issues. The retry pattern (wait 1s, mint a fresh `App` instance, try again) is already proven in two sibling functions in the same file. The gap in `createAppJwtOctokit()` means the drift-guard cron fails with `github_api_network` on these transient errors, filing a `ci/guard-broken` issue and paging the operator for a self-healing condition.
+`@octokit/auth-app` does NOT internally retry JWT decode 401 errors. GitHub occasionally returns "A JSON web token could not be decoded" on valid JWTs due to replication delay or transient verification issues. The retry pattern (wait 1s, mint a fresh `App` instance, try again) is already proven in two sibling functions in the same file. The gap means the drift-guard cron's `step.run("drift-check")` returns `github_app_401` on transient errors, filing a `ci/guard-broken` issue and paging the operator for a condition that would self-heal on next hourly tick.
 
 ## Proposed Solution
 
-Add the same retry-on-401 wrapper to `createAppJwtOctokit()` that `createProbeOctokit()` already uses:
+Add retry-on-401 logic in the drift-guard handler's `step.run("drift-check")` callback. When `probeDriftGuard()` returns `failureMode === "github_app_401"`, retry once after 1s with a fresh `createAppJwtOctokit()` call (fresh JWT). This is the correct location because:
 
-1. Extract the current body into an inner `attempt()` async function
-2. Call `attempt()` in a try/catch
-3. On 401, log a warning, sleep 1s, retry with a fresh `App` instance via a second `attempt()` call
-4. On non-401 errors, rethrow
+1. `createAppJwtOctokit()` itself is synchronous -- the `App` constructor does not make any network calls (verified against installed `@octokit/app/dist-src/index.js:52`). JWT minting is lazy via `createAppAuth` and fires only on first `octokit.request()`.
+2. `probeDriftGuard()` catches the 401 internally (line 339) and returns `makeFailure("github_app_401", ...)` -- it does NOT throw.
+3. The retry must check the returned `failureMode`, not catch an exception.
 
-This matches `createProbeOctokit()` lines 57-79 exactly.
+This matches the 1s-delay pattern from `createProbeOctokit()` and `generateInstallationToken()`.
 
 ## User-Brand Impact
 
@@ -69,8 +85,8 @@ discoverability_test:
 
 | File | Change |
 |------|--------|
-| `apps/web-platform/server/github/probe-octokit.ts` | Add retry-on-401 wrapper to `createAppJwtOctokit()` matching `createProbeOctokit()` pattern |
-| `apps/web-platform/test/server/inngest/cron-github-app-drift-guard.test.ts` | Add test: `createAppJwtOctokit` 401 on first call retries and succeeds on second; add test: persistent 401 still propagates |
+| `apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts` | Add retry-on-`github_app_401` logic inside `step.run("drift-check")` callback (lines 714-719): check `firstResult.failureMode`, retry with fresh `createAppJwtOctokit()` after 1s delay |
+| `apps/web-platform/test/server/inngest/cron-github-app-drift-guard.test.ts` | Add test: transient 401 (first `GET /app` call 401, second healthy) results in `failureMode: ""`; verify existing persistent-401 test still passes |
 
 ## Files to Create
 
@@ -82,70 +98,16 @@ None.
 
 ## Implementation Phases
 
-### Phase 1: Add retry-on-401 to createAppJwtOctokit()
+### Phase 1: Add retry-on-`github_app_401` in drift-check step
 
-**File:** `apps/web-platform/server/github/probe-octokit.ts`
+**File:** `apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts`
 
-Refactor `createAppJwtOctokit()` (lines 102-110) from:
+**Why the retry belongs HERE, not in `createAppJwtOctokit()`:**
+- The `@octokit/app` `App` constructor is synchronous (verified: `node_modules/@octokit/app/dist-src/index.js:52` -- `this.octokit = new Octokit(octokitOptions)`). JWT minting is lazy via `createAppAuth` auth strategy and fires only on first `octokit.request()`.
+- `probeDriftGuard()` catches the 401 from `GET /app` internally (line 339: `if (e.status === 401)`) and returns `makeFailure("github_app_401", ...)` -- it does NOT throw.
+- Therefore, the retry must check the returned `failureMode`, not catch an exception.
 
-```typescript
-export async function createAppJwtOctokit(): Promise<{
-  octokit: InstanceType<typeof App>["octokit"];
-}> {
-  const app = new App({
-    appId: readEnv(APP_ID_ENV),
-    privateKey: readEnv(PRIVATE_KEY_ENV),
-  });
-  return { octokit: app.octokit };
-}
-```
-
-To the retry-on-401 pattern matching `createProbeOctokit()` (lines 57-79):
-
-```typescript
-export async function createAppJwtOctokit(): Promise<{
-  octokit: InstanceType<typeof App>["octokit"];
-}> {
-  function attempt() {
-    const app = new App({
-      appId: readEnv(APP_ID_ENV),
-      privateKey: readEnv(PRIVATE_KEY_ENV),
-    });
-    return { octokit: app.octokit };
-  }
-
-  try {
-    return attempt();
-  } catch (err) {
-    const status = (err as { status?: number }).status;
-    if (status !== 401) throw err;
-    log.warn("401 on App JWT auth — retrying once after 1s");
-    await new Promise((r) => setTimeout(r, 1_000));
-    return attempt();
-  }
-}
-```
-
-**Key difference from `createProbeOctokit()`:** `createAppJwtOctokit()` does NOT make any API requests itself -- the `App` constructor and `app.octokit` property access are synchronous. The 401 error fires later when the CALLER uses `app.octokit.request(...)` (e.g., `GET /app` inside `probeDriftGuard()`). Therefore, the retry must happen at the call site in `cron-github-app-drift-guard.ts`, NOT inside `createAppJwtOctokit()` itself.
-
-**Revised approach:** The retry belongs in `cronGithubAppDriftGuardHandler()` at the `step.run("drift-check", ...)` call site (lines 714-718), wrapping the `createAppJwtOctokit()` + `probeDriftGuard()` sequence. Specifically:
-
-1. When `probeDriftGuard()` throws with `.status === 401`, retry the entire drift-check step body (fresh `createAppJwtOctokit()` + fresh `probeDriftGuard()` call) after a 1s delay.
-2. This mirrors the effective behavior: a fresh `App` instance mints a fresh JWT, and the retry gives GitHub's JWT verification pipeline time to propagate.
-
-However, examining the existing code more carefully:
-
-- `probeDriftGuard()` already catches 401 from `GET /app` internally (lines 338-345) and returns `makeFailure("github_app_401", ...)` rather than throwing.
-- The outer catch in `cronGithubAppDriftGuardHandler()` (lines 721-737) catches exceptions that escape `probeDriftGuard()` -- these are NOT the 401 from `GET /app`.
-- The Sentry error "A JSON web token could not be decoded" fires during the `App` constructor's internal JWT minting OR during the first `app.octokit.request()` call.
-
-**Root cause re-analysis:** The `@octokit/auth-app` `App` instance lazily mints the JWT when `app.octokit` is first used for a request. The 401 "A JSON web token could not be decoded" fires when `octokit.request("GET /app")` is called inside `probeDriftGuard()`. This is caught by `probeDriftGuard()`'s own try/catch (line 337) which returns `github_app_401` -- it does NOT throw. So the outer handler correctly records the failure mode.
-
-The issue is: `probeDriftGuard()` records the failure but does NOT retry. The fix should be: **add retry-on-401 inside `createAppJwtOctokit()` that makes a test request to verify the JWT works**, or **add retry logic around the `probeDriftGuard()` call in the handler when the result is `github_app_401`**.
-
-**Final approach (simplest, matching the ticket description):** Wrap the `createAppJwtOctokit()` + `probeDriftGuard()` call in the "drift-check" step with a retry when the result is `github_app_401`:
-
-In `cron-github-app-drift-guard.ts` lines 714-718, change:
+In `cron-github-app-drift-guard.ts` lines 714-719, change:
 
 ```typescript
 result = await step.run("drift-check", async (): Promise<DriftResult> => {
@@ -169,7 +131,10 @@ result = await step.run("drift-check", async (): Promise<DriftResult> => {
   if (firstResult.failureMode !== "github_app_401") return firstResult;
 
   // Retry once on transient JWT 401 — fresh App instance mints a new JWT.
-  log.warn("github_app_401 on drift-check — retrying once after 1s");
+  logger.warn(
+    { fn: "cron-github-app-drift-guard" },
+    "github_app_401 on drift-check — retrying once after 1s",
+  );
   await new Promise((r) => setTimeout(r, 1_000));
   const { octokit: retryOctokit } = await createAppJwtOctokit();
   return await probeDriftGuard({
@@ -179,23 +144,72 @@ result = await step.run("drift-check", async (): Promise<DriftResult> => {
 });
 ```
 
-This is the correct fix because:
-1. The 401 is caught and classified by `probeDriftGuard()` as `github_app_401` -- it never throws
-2. The retry creates a fresh `App` instance (fresh JWT) and re-runs the full probe
-3. If the retry also 401s, the persistent failure is correctly reported
-4. Matches the 1s-delay pattern from `createProbeOctokit()` and `generateInstallationToken()`
+**Critical detail -- `logger.warn()` not `log.warn()`:** The handler's `logger` parameter (Inngest logger, destructured at line 702) is in closure scope inside `step.run()`. The module-scoped `log` from `probe-octokit.ts` is not exported and not importable from the handler file. Use `logger.warn({ fn: "cron-github-app-drift-guard" }, "...")` to match the convention used at line 402 for the suppression warning.
+
+**Inngest step.run() safety:** The entire callback runs as one atomic unit. Inngest memoizes step results via deterministic replay; if the step already ran, Inngest replays the result without re-executing. The retry (1s sleep + second probe) all happens within a single step execution, well within the 30s default step timeout.
 
 ### Phase 2: Add tests
 
 **File:** `apps/web-platform/test/server/inngest/cron-github-app-drift-guard.test.ts`
 
-Add two test cases:
+#### Test 1: Transient 401 retries and self-heals
 
-1. **Transient 401 retries and self-heals:** Mock `octokitRequestSpy` to return 401 on first `GET /app` call, then healthy on second. Assert `failureMode === ""` (success) and heartbeat `?status=ok`.
+**Mock strategy:** The test infrastructure uses a shared `octokitRequestSpy` returned by both `createAppJwtOctokitSpy` and used inside `probeDriftGuard()`. Both the first and retry `createAppJwtOctokit()` calls return the same spy. For transient 401, the mock must be stateful: throw 401 on the first `GET /app` call, return healthy on the second.
 
-2. **Persistent 401 still reports failure:** Mock `octokitRequestSpy` to always return 401 on `GET /app`. Assert `failureMode === "github_app_401"` and heartbeat `?status=error`. This is already covered by the existing "github_app_401 -> ci/auth-broken label" test, but verify it still passes after the retry logic is added (the existing test should now report after TWO 401s, not one).
+```typescript
+it("transient github_app_401 retries once and self-heals", async () => {
+  let getAppCallCount = 0;
+  octokitRequestSpy.mockImplementation(async (route: string) => {
+    if (route === "GET /app") {
+      getAppCallCount++;
+      if (getAppCallCount === 1) {
+        const err = new Error("A JSON web token could not be decoded") as Error & { status?: number };
+        err.status = 401;
+        throw err;
+      }
+      return { status: 200, data: healthyAppResponse, headers: {} };
+    }
+    if (route === "GET /app/installations") {
+      return {
+        status: 200,
+        data: healthyInstallationsResponse.data,
+        headers: healthyInstallationsResponse.headers,
+      };
+    }
+    if (route === "GET /search/issues") {
+      return { data: { items: [] } };
+    }
+    return { data: {} };
+  });
+  const { cronGithubAppDriftGuardHandler } = await importHandler();
+  const step = makeStep();
+  const out = await cronGithubAppDriftGuardHandler({ step, logger });
+  expect(out.failureMode).toBe("");
+  expect(out.leakDetected).toBe(false);
+  // Retry warning was logged
+  expect(logger.warn).toHaveBeenCalledWith(
+    expect.objectContaining({ fn: "cron-github-app-drift-guard" }),
+    expect.stringContaining("github_app_401"),
+  );
+  // Sentry heartbeat is OK (transient healed)
+  const fetchSpy = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+  expect(findHeartbeatStatus(fetchSpy)).toBe("ok");
+});
+```
 
-**Note on import for `log`:** The `cron-github-app-drift-guard.ts` handler file needs access to the `log` logger from `probe-octokit.ts`. Since `log` is module-scoped and not exported, the retry log line should use the handler's own `logger` argument instead. This keeps the change self-contained.
+#### Test 2: Persistent 401 still reports failure after retry
+
+The existing "github_app_401 -> ci/auth-broken label" test (line 285) already mocks ALL `GET /app` calls to throw 401. After the retry logic is added, this test should still pass -- `probeDriftGuard()` returns `github_app_401` on both attempts, and the handler reports the second result. Verify the existing test continues to pass unchanged.
+
+#### Impact on existing test (line 285)
+
+The existing test mocks `octokitRequestSpy` to always throw 401 on `GET /app`. With the retry logic, the handler will:
+1. First probe: `probeDriftGuard()` catches 401, returns `github_app_401`
+2. Handler detects `github_app_401`, logs warning, sleeps 1s, retries
+3. Second probe: `probeDriftGuard()` catches 401 again, returns `github_app_401`
+4. Handler returns `github_app_401` / `ci/auth-broken`
+
+The test assertion `expect(out.failureMode).toBe("github_app_401")` still passes. The 1s sleep adds latency to this test but is acceptable for correctness.
 
 ## Acceptance Criteria
 
@@ -234,10 +248,26 @@ No cross-domain implications detected -- infrastructure/tooling change to operat
 | Retry adds 1s latency to every transient 401 | Acceptable: cron runs hourly, 1s is negligible vs. the false-alarm cost |
 | Inngest step timeout on the retry | `step.run()` timeout is 30s default; 1s delay + second probe is well within budget |
 | Retry masks a genuine credential rotation | After retry, a persistent 401 is still reported as `github_app_401` / `ci/auth-broken` |
+| Existing 401 test slowed by 1s | The persistent-401 test now triggers the retry path (1s sleep). Acceptable for test correctness |
+
+### Precedent-Diff
+
+Two sibling retry-on-401 patterns exist in the codebase:
+
+| Location | Mechanism | Delay |
+|----------|-----------|-------|
+| `probe-octokit.ts:70-78` (`createProbeOctokit`) | try/catch on `attempt()`, check `.status === 401`, retry | 1s |
+| `github-app.ts:489-496` (`generateInstallationToken`) | Check `response.status === 401`, retry `mintAndExchange()` | 1s |
+
+Both create a FRESH auth context on retry (new `App` instance or new `createAppJwt()` call). The proposed fix mirrors this: fresh `createAppJwtOctokit()` on retry, same 1s delay. No novel pattern.
+
+**Structural difference:** The two sibling patterns catch/check at the point of the API call. This fix checks the RETURNED `failureMode` from `probeDriftGuard()` because the 401 is caught internally and surfaced as a classified result, not an exception. This is architecturally consistent -- the retry logic lives at the level that understands the result semantics.
 
 ## References
 
-- PR #4498: `fix(auth): harden GitHub App JWT auth with retry-on-401 across both token paths` (merged 2026-05-26)
+- PR #4498: `fix(auth): harden GitHub App JWT auth with retry-on-401 across both token paths` (merged 2026-05-26, verified via `gh pr view 4498 --json state,mergedAt`)
 - `apps/web-platform/server/github/probe-octokit.ts:57-79`: existing `createProbeOctokit()` retry pattern
 - `apps/web-platform/server/github-app.ts:489-496`: existing `generateInstallationToken()` retry pattern
+- `apps/web-platform/node_modules/@octokit/app/dist-src/index.js:52`: `App` constructor synchronous (lazy auth via `createAppAuth` strategy)
 - Sentry error: `HttpError: A JSON web token could not be decoded` at `2026-05-27T00:00:01Z`
+- `createAppJwtOctokit()` caller audit: exactly 1 production site at `cron-github-app-drift-guard.ts:715` (verified via `grep -rn "createAppJwtOctokit" apps/web-platform/ --include="*.ts"`)
