@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-debug-release-failure-076-workspace-activity/knowledge-base/project/plans/2026-05-27-debug-release-failure-076-workspace-activity-plan.md
+- Plan file: knowledge-base/project/plans/2026-05-27-debug-release-failure-076-workspace-activity-plan.md
 - Status: complete
 
 ### Errors
