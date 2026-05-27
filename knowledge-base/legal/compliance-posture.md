@@ -39,12 +39,12 @@ Living status document for vendor DPAs, legal documents, and compliance action i
 | Document | Location | Last Updated | Status |
 |----------|----------|-------------|--------|
 | Terms & Conditions | `docs/legal/terms-and-conditions.md` | 2026-03-20 | Active |
-| Privacy Policy | `docs/legal/privacy-policy.md` | 2026-05-26 | Active |
+| Privacy Policy | `docs/legal/privacy-policy.md` | 2026-05-27 | Active |
 | Article 30 Register (RoPA) | `knowledge-base/legal/article-30-register.md` | 2026-05-19 | Draft (counsel review pending) |
 | Cookie Policy | `docs/legal/cookie-policy.md` | 2026-03-20 | Active |
-| GDPR Policy | `docs/legal/gdpr-policy.md` | 2026-05-26 | Active |
+| GDPR Policy | `docs/legal/gdpr-policy.md` | 2026-05-27 | Active |
 | Acceptable Use Policy | `docs/legal/acceptable-use-policy.md` | 2026-05-18 | Active |
-| Data Protection Disclosure | `docs/legal/data-protection-disclosure.md` | 2026-05-26 | Active |
+| Data Protection Disclosure | `docs/legal/data-protection-disclosure.md` | 2026-05-27 | Active |
 | LinkedIn Page LIA | `knowledge-base/legal/legitimate-interest-assessments/2026-05-19-linkedin-org-page-lia.md` | 2026-05-19 | Draft (counsel review pending) |
 | Disclaimer | `docs/legal/disclaimer.md` | 2026-03-20 | Active |
 | Individual CLA | `docs/legal/individual-cla.md` | 2026-03-20 | Active |
