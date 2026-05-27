@@ -18,6 +18,6 @@ plan: knowledge-base/project/plans/2026-05-27-fix-gh-enoent-cron-follow-through-
 
 ## Phase 2: Verification
 
-- [ ] 2.1 Verify `docker build` succeeds with the updated Dockerfile
-- [ ] 2.2 Verify `docker run <image> gh --version` returns a valid version string
+- [ ] 2.1 Run lightweight QA verification via `docker run --rm node:22-slim bash -c '...'` (see plan Research Insights for exact command)
+- [ ] 2.2 Verify `gh --version` returns a valid version string in the isolated test
 - [ ] 2.3 Verify no other files are modified beyond the Dockerfile

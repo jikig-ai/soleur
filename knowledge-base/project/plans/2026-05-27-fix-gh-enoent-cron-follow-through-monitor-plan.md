@@ -3,9 +3,21 @@ title: "fix: add gh CLI to production Docker image for cron-follow-through-monit
 type: fix
 date: 2026-05-27
 lane: single-domain
+deepened: 2026-05-27
 ---
 
 # fix: add gh CLI to production Docker image for cron-follow-through-monitor
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-27
+**Sections enhanced:** 2 (Implementation Phases, Acceptance Criteria)
+**Research agents used:** Kieran correctness review, DHH simplicity review, Code Simplicity review, Docker base-image verification
+
+### Key Improvements
+1. Verified exact installation commands against `node:22-slim` (Debian Bookworm) -- `gh --version` returns `2.92.0`
+2. Added `chmod go+r` on GPG keyring per official GitHub CLI docs (missed in initial plan)
+3. Added lightweight QA verification path per learning `2026-05-07-dockerfile-assertion-qa-via-docker-run-not-docker-build.md`
 
 ## Overview
 
@@ -114,15 +126,48 @@ None.
 
 ### Phase 1: Add gh CLI to Dockerfile
 
-Add the GitHub CLI apt repository and install `gh` in the runner stage. The canonical installation for Debian follows this pattern:
+Add the GitHub CLI apt repository and install `gh` in the runner stage. The base image is `node:22-slim` (Debian 12 Bookworm). The following exact sequence was verified against the base image on 2026-05-27 (produces `gh version 2.92.0`):
 
-1. Install `curl` as a transient dependency (needed to fetch the keyring; can be removed after if desired, but keeping it is simpler and it is ~1 MB)
-2. Add the GitHub CLI GPG keyring: `curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /usr/share/keyrings/githubcli-archive-keyring.gpg`
-3. Add the apt source: `echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list`
-4. `apt-get update && apt-get install -y gh`
-5. Clean up: `rm -rf /var/lib/apt/lists/*`
+**Verified Dockerfile block (insert as a new `RUN` immediately before the existing `apt-get install` block at line 57):**
 
-This should be a single `RUN` block placed immediately before or combined with the existing `apt-get install` block at Dockerfile line 57.
+```dockerfile
+# GitHub CLI (needed by cron-follow-through-monitor gh label/issue commands
+# and event-ship-merge gh pr checkout). Not in default Debian repos.
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+       -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+       > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/*
+```
+
+**Implementation notes:**
+- `curl` is added as a build-time dependency to fetch the GPG keyring. It remains installed (~1 MB) -- removing it would require `apt-get purge curl && apt-get autoremove` which adds complexity for negligible savings.
+- `chmod go+r` on the keyring is required per official GitHub CLI docs so non-root processes can verify package signatures.
+- The `--no-install-recommends` flag is consistent with the existing apt-get pattern at line 57.
+- This is a separate `RUN` block rather than merged into the existing one because the existing block does not need the GitHub apt source list, and separating concerns keeps the Dockerfile readable.
+
+### Research Insights
+
+**QA verification (per learning `2026-05-07-dockerfile-assertion-qa-via-docker-run-not-docker-build.md`):**
+
+A full `docker build` requires CI-only build context (`_plugin-vendored/`, Sentry tokens, NEXT_PUBLIC_* args) and takes ~5-10 min. For local verification, test the `gh` installation in isolation:
+
+```bash
+docker run --rm node:22-slim bash -c '
+  apt-get update -qq && apt-get install -y -qq --no-install-recommends curl >/dev/null 2>&1 &&
+  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    -o /usr/share/keyrings/githubcli-archive-keyring.gpg &&
+  chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg &&
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    > /etc/apt/sources.list.d/github-cli.list &&
+  apt-get update -qq && apt-get install -y -qq --no-install-recommends gh >/dev/null 2>&1 &&
+  gh --version'
+```
+
+Expected output: `gh version 2.92.0` (or later). This takes ~30s vs ~10 min for a full build.
 
 ## Alternative Approaches Considered
 
