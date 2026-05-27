@@ -61,56 +61,82 @@ export async function getPendingInvitesForUser(
   email: string,
 ): Promise<PendingInvite[]> {
   const service = createServiceClient();
+  const now = new Date().toISOString();
+  const selectFields = `
+    id,
+    workspace_id,
+    role,
+    expires_at,
+    created_at,
+    workspaces!inner(name),
+    inviter:users!workspace_invitations_inviter_user_id_fkey(
+      email,
+      raw_user_meta_data
+    )
+  `;
 
-  const { data, error } = await service
-    .from("workspace_invitations")
-    .select(`
-      id,
-      workspace_id,
-      role,
-      expires_at,
-      created_at,
-      workspaces!inner(name),
-      inviter:users!workspace_invitations_inviter_user_id_fkey(
-        email,
-        raw_user_meta_data
-      )
-    `)
-    .or(`invitee_user_id.eq.${userId},invitee_email.eq.${email.toLowerCase()}`)
-    .is("accepted_at", null)
-    .is("declined_at", null)
-    .gt("expires_at", new Date().toISOString());
+  const [byUserId, byEmail] = await Promise.all([
+    service
+      .from("workspace_invitations")
+      .select(selectFields)
+      .eq("invitee_user_id", userId)
+      .is("accepted_at", null)
+      .is("declined_at", null)
+      .gt("expires_at", now),
+    service
+      .from("workspace_invitations")
+      .select(selectFields)
+      .eq("invitee_email", email.toLowerCase())
+      .is("accepted_at", null)
+      .is("declined_at", null)
+      .gt("expires_at", now),
+  ]);
 
-  if (error) {
-    log.error({ userId, err: error.message }, "Failed to query pending invites");
+  if (byUserId.error) {
+    log.error({ userId, err: byUserId.error.message }, "Failed to query pending invites by userId");
     reportSilentFallback(null, {
       feature: "workspace-invitations",
-      op: "get-pending",
-      message: `Failed to query pending invites: ${error.message}`,
+      op: "get-pending-by-userid",
+      message: `Failed to query pending invites: ${byUserId.error.message}`,
     });
-    return [];
+  }
+  if (byEmail.error) {
+    log.error({ userId, err: byEmail.error.message }, "Failed to query pending invites by email");
+    reportSilentFallback(null, {
+      feature: "workspace-invitations",
+      op: "get-pending-by-email",
+      message: `Failed to query pending invites: ${byEmail.error.message}`,
+    });
   }
 
-  if (!data) return [];
+  const allRows = [...(byUserId.data ?? []), ...(byEmail.data ?? [])];
+  const seen = new Set<string>();
 
-  return data.map((row: Record<string, unknown>) => {
-    const workspace = row.workspaces as { name: string } | null;
-    const inviter = row.inviter as {
-      email: string | null;
-      raw_user_meta_data: { full_name?: string } | null;
-    } | null;
+  return allRows
+    .filter((row: Record<string, unknown>) => {
+      const id = row.id as string;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    })
+    .map((row: Record<string, unknown>) => {
+      const workspace = row.workspaces as { name: string } | null;
+      const inviter = row.inviter as {
+        email: string | null;
+        raw_user_meta_data: { full_name?: string } | null;
+      } | null;
 
-    return {
-      id: row.id as string,
-      workspace_id: row.workspace_id as string,
-      workspace_name: workspace?.name ?? "Workspace",
-      inviter_name:
-        inviter?.raw_user_meta_data?.full_name ?? inviter?.email ?? "A team member",
-      role: row.role as string,
-      expires_at: row.expires_at as string,
-      created_at: row.created_at as string,
-    };
-  });
+      return {
+        id: row.id as string,
+        workspace_id: row.workspace_id as string,
+        workspace_name: workspace?.name ?? "Workspace",
+        inviter_name:
+          inviter?.raw_user_meta_data?.full_name ?? inviter?.email ?? "A team member",
+        role: row.role as string,
+        expires_at: row.expires_at as string,
+        created_at: row.created_at as string,
+      };
+    });
 }
 
 export interface CreateInvitationArgs {

@@ -18,6 +18,7 @@ export const PUBLIC_PATHS = [
   "/manifest.webmanifest",
   "/shared",
   "/api/shared",
+  "/invite",
 ];
 
 /** Auth required, but T&C check skipped (user must reach these to accept terms) */
