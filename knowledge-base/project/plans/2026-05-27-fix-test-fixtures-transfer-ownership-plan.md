@@ -125,12 +125,12 @@ Vitest runs tests within a `describe` block sequentially by default. The test or
 
 ## Acceptance Criteria
 
-- [ ] AC1: `workspace-member-revocation.tenant-isolation.test.ts` test 3.2.4 calls `transfer_workspace_ownership` instead of `update_workspace_member_role` when promoting a member to owner. Verification: `rg 'transfer_workspace_ownership' apps/web-platform/test/server/workspace-member-revocation.tenant-isolation.test.ts` returns at least 1 match.
-- [ ] AC2: Test 3.2.4 revocation assertion queries `removed_user_id = ownerA.userId` (not `dId`) with `revocation_reason = 'ownership-transferred'` (not `'role-changed'`). The `workspace_member_actions` assertion includes `new_role = 'owner'` for the D-targeted row.
-- [ ] AC3: `rg "update_workspace_member_role" apps/web-platform/test/server/workspace-member-revocation.tenant-isolation.test.ts` returns zero matches (the old RPC call is fully removed from this file).
-- [ ] AC4: `account-delete.cascade.integration.test.ts` and `attachments-workspace-shared-cascade.integration.test.ts` investigated -- either confirmed passing (no change needed) or root cause diagnosed and fixed.
-- [ ] AC5: Verification: `rg "p_new_role.*owner\|update_workspace_member_role.*owner" apps/web-platform/test/server/` returns zero matches (no remaining calls that promote to owner via the old RPC across all tenant-isolation test files).
-- [ ] AC6: No production code changes -- only files under `apps/web-platform/test/` are modified.
+- [x] AC1: `workspace-member-revocation.tenant-isolation.test.ts` test 3.2.4 calls `transfer_workspace_ownership` instead of `update_workspace_member_role` when promoting a member to owner. Verification: `rg 'transfer_workspace_ownership' apps/web-platform/test/server/workspace-member-revocation.tenant-isolation.test.ts` returns at least 1 match.
+- [x] AC2: Test 3.2.4 revocation assertion queries `removed_user_id = ownerA.userId` (not `dId`) with `revocation_reason = 'ownership-transferred'` (not `'role-changed'`). The `workspace_member_actions` assertion includes `new_role = 'owner'` for the D-targeted row.
+- [x] AC3: `rg "update_workspace_member_role" apps/web-platform/test/server/workspace-member-revocation.tenant-isolation.test.ts` returns zero matches (the old RPC call is fully removed from this file).
+- [x] AC4: `account-delete.cascade.integration.test.ts` and `attachments-workspace-shared-cascade.integration.test.ts` investigated -- either confirmed passing (no change needed) or root cause diagnosed and fixed.
+- [x] AC5: Verification: `rg "p_new_role.*owner\|update_workspace_member_role.*owner" apps/web-platform/test/server/` returns zero matches (no remaining calls that promote to owner via the old RPC across all tenant-isolation test files).
+- [x] AC6: No production code changes -- only files under `apps/web-platform/test/` are modified.
 
 ## Test Scenarios
 
