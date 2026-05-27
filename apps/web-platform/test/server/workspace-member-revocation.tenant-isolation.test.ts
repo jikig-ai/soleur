@@ -257,7 +257,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(denied).toBe(true);
     }, 30_000);
 
-    test("3.2.4 role-change writes workspace_member_actions with actor (F2)", async () => {
+    test("3.2.4 ownership-transfer writes workspace_member_actions with actor (F2)", async () => {
       // Add a fresh member D to workspace X so we can demote them
       // (B is already removed). D = new synthetic user.
       const dEmail = `workspace-fixture-${randomBytes(8).toString("hex")}@soleur.test`;
@@ -278,15 +278,18 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       const aJwt = await mintUserJwt(url, serviceKey, ownerA.email);
       const aClient = clientWithJwt(url, anonKey, aJwt);
 
-      // Demote attempt — D is already member; role-change to member is
-      // a no-op semantically but exercises the audit writer. Use 'owner'
-      // → role actually changes.
-      const { error: roleErr } = await aClient.rpc("update_workspace_member_role", {
-        p_workspace_id: fixtureX.workspaceId,
-        p_user_id: dId,
-        p_new_role: "owner",
-      });
-      expect(roleErr).toBeNull();
+      // Transfer ownership from A to D — exercises the audit writer and
+      // the mig 075 transfer_workspace_ownership path.
+      const { data: attestationId, error: transferErr } = await aClient.rpc(
+        "transfer_workspace_ownership",
+        {
+          p_workspace_id: fixtureX.workspaceId,
+          p_new_owner_user_id: dId,
+          p_attestation_text: "test-ownership-transfer-3.2.4-fixture",
+        },
+      );
+      expect(transferErr, `transfer_workspace_ownership failed: ${transferErr?.message}`).toBeNull();
+      expect(attestationId).toBeTruthy();
 
       // Verify workspace_member_actions row has actor_user_id = A.id (F2).
       const { data: actionRows } = await service
@@ -299,15 +302,17 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(actionRows).toHaveLength(1);
       expect(actionRows![0].actor_user_id).toBe(ownerA.userId);
       expect(actionRows![0].action_type).toBe("role_changed");
+      expect(actionRows![0].new_role).toBe("owner");
 
-      // Verify revocation row was written with revocation_reason='role-changed'.
+      // Transfer writes a revocation row for A (demoted owner), not D.
       const { data: revRows } = await service
         .from("workspace_member_removals")
-        .select("revocation_reason")
-        .eq("removed_user_id", dId)
-        .eq("workspace_id", fixtureX.workspaceId);
+        .select("revocation_reason, removed_by_user_id")
+        .eq("removed_user_id", ownerA.userId)
+        .eq("workspace_id", fixtureX.workspaceId)
+        .eq("revocation_reason", "ownership-transferred");
       expect(revRows).toHaveLength(1);
-      expect(revRows![0].revocation_reason).toBe("role-changed");
+      expect(revRows![0].removed_by_user_id).toBe(ownerA.userId);
 
       // Cleanup D.
       try {

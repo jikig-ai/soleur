@@ -67,6 +67,10 @@ bun update <pkg>
 bun update
 ```
 
+## Sharp Edges
+
+- **npm rewrites lockfile `name` in worktrees.** When `package.json` has no `name` field, `npm update` infers it from the directory name. In a worktree (`.worktrees/feat-xyz/`), this rewrites `package-lock.json`'s `"name"` to the worktree directory name. After any `npm update` in a worktree, verify: `git show origin/main:package-lock.json | head -3` and fix if the `name` field drifted. Source: `knowledge-base/project/learnings/2026-05-27-npm-update-rewrites-lockfile-name-in-worktrees.md`.
+
 ## Related
 
 - AGENTS.md `cq-before-pushing-package-json-changes` triggers on
