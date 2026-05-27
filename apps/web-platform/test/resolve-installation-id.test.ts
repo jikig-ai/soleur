@@ -272,4 +272,36 @@ describe("resolveInstallationId", () => {
     expect(result).toBe(999);
     expect(usersChain.ilike).not.toHaveBeenCalled();
   });
+
+  it("returns null and reports fallback on RuntimeAuthError", async () => {
+    const { RuntimeAuthError } = await import("@/lib/supabase/tenant");
+    const { reportSilentFallback } = await import("@/server/observability");
+
+    mockTenantFrom.mockImplementation(() => {
+      throw new RuntimeAuthError("token expired");
+    });
+
+    const { resolveInstallationId } = await import(
+      "@/server/resolve-installation-id"
+    );
+    const result = await resolveInstallationId("user-1");
+    expect(result).toBeNull();
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      expect.any(RuntimeAuthError),
+      expect.objectContaining({ feature: "resolve-installation-id" }),
+    );
+  });
+
+  it("re-throws non-RuntimeAuthError errors", async () => {
+    mockTenantFrom.mockImplementation(() => {
+      throw new Error("unexpected failure");
+    });
+
+    const { resolveInstallationId } = await import(
+      "@/server/resolve-installation-id"
+    );
+    await expect(resolveInstallationId("user-1")).rejects.toThrow(
+      "unexpected failure",
+    );
+  });
 });
