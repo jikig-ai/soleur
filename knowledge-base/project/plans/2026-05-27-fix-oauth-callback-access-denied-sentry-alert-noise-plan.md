@@ -8,6 +8,20 @@ brand_survival_threshold: none
 
 # fix: Stop Sentry alerts from firing on expected OAuth access_denied callbacks
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-27
+**Sections enhanced:** Implementation Phases (mock wiring precision), Acceptance Criteria (refined grep counts), Risks (added R4 logger.info context-shape)
+**Research agents used:** repo-research (callback route, test mock structure, observability module), PR-citation verifier, AGENTS.md rule-ID verifier
+
+### Key Improvements
+
+1. **Verified test mock wiring pattern.** The logger mock at `callback-route-branches.test.ts:26-28` creates `info: vi.fn()` inline but does NOT expose it as a named mock. Phase 2 now prescribes adding `mockLoggerInfo` to the `vi.hoisted` block (matching the pattern for `mockReportSilentFallback` / `mockWarnSilentFallback`) and wiring it through the `vi.mock("@/server/logger")` factory.
+2. **Verified all PR citations.** PR #4487 (MERGED: "fix(auth): downgrade OAuth callback provider-error from error to warning"), PR #4485 (MERGED: "fix(webhook): remove Sentry noise from expected no-grant path"), #3739 (OPEN: "review: extract reportSilentFallbackWithUser helper") -- all confirmed via `gh pr view`/`gh issue view`.
+3. **Verified AGENTS.md rule ID.** `cq-silent-fallback-must-mirror-to-sentry` is active in AGENTS.md (confirmed via grep).
+4. **Refined AC2 grep count.** After the fix, `grep -c "warnSilentFallback"` on the callback route should return 2 (import line + provider-error-non-cancelled call), not the current 2 (import + the single call that will be split).
+5. **Added logger.info context-shape verification.** The `logger.info` call must include the same structured context fields (`feature`, `op`, `providerErrorCode`, `bucket`, `urlPath`, `refererHost`, `origin`) as the former `warnSilentFallback` call, so pino/Better Stack log aggregator queries are not disrupted.
+
 ## Overview
 
 The OAuth callback route at `apps/web-platform/app/(auth)/callback/route.ts` still triggers Sentry issue alerts (`auth-exchange-code-burst`, `auth-callback-no-code-burst`, and `auth-per-user-loop`) when a user denies OAuth consent (`?error=access_denied`), despite PR #4487 (commit `c38699c6`) downgrading the emission from `reportSilentFallback` (error level) to `warnSilentFallback` (warning level).
@@ -171,21 +185,48 @@ if (providerErrorBucket === "oauth_cancelled") {
 
 **File:** `apps/web-platform/test/app/auth/callback-route-branches.test.ts`
 
-1. **Add `mockLoggerInfo`** to the `vi.hoisted` block and wire it into the logger mock.
+1. **Add `mockLoggerInfo` to `vi.hoisted` block** (line 8-18). The current `vi.hoisted` returns `mockReportSilentFallback`, `mockWarnSilentFallback`, `mockExchangeCodeForSession`, `mockGetUser`. Add `mockLoggerInfo: vi.fn()` to the returned object:
 
-2. **Split the `test.each` block** (currently lines 104-129):
-   - Separate `access_denied` into its own test case that asserts:
-     - `mockWarnSilentFallback` NOT called (`.not.toHaveBeenCalled()`)
-     - `mockReportSilentFallback` NOT called
-     - `mockLoggerInfo` called with `op: "callback_provider_error"` context
-     - Redirect still goes to `/login?error=oauth_cancelled`
-   - Keep `server_error`, `temporarily_unavailable`, `invalid_scope` in a `test.each` that asserts `mockWarnSilentFallback` IS called.
+   ```typescript
+   const {
+     mockReportSilentFallback,
+     mockWarnSilentFallback,
+     mockLoggerInfo,
+     mockExchangeCodeForSession,
+     mockGetUser,
+   } = vi.hoisted(() => ({
+     mockReportSilentFallback: vi.fn(),
+     mockWarnSilentFallback: vi.fn(),
+     mockLoggerInfo: vi.fn(),
+     mockExchangeCodeForSession: vi.fn(),
+     mockGetUser: vi.fn(),
+   }));
+   ```
 
-3. **Update "refererHost" test** (line 182): This test uses `?error=access_denied`. Change its assertion from `mockWarnSilentFallback` to `mockLoggerInfo` for the refererHost check.
+2. **Wire `mockLoggerInfo` into the logger mock** (line 26-28). Replace the inline `info: vi.fn()` with the hoisted reference:
 
-4. **Verify "searchParamKeys" test** (line 202): This tests the bare-`/callback` path (no `error=` param), which correctly uses `reportSilentFallback`. This test must remain unchanged.
+   ```typescript
+   vi.mock("@/server/logger", () => ({
+     default: { warn: vi.fn(), error: vi.fn(), info: mockLoggerInfo },
+   }));
+   ```
 
-5. **Verify "unrecognized `?error=`" test** (line 132): This sends `?error=user@example.com`, which `classifyProviderError` maps to `"oauth_failed"` (not `"oauth_cancelled"`). This should assert `mockWarnSilentFallback` IS called (unknown errors are provider-side, not user-cancel). Update if needed.
+3. **Split the `test.each` block** (currently lines 104-129):
+   - Extract `access_denied` into its own test case that asserts:
+     - `mockWarnSilentFallback.not.toHaveBeenCalled()`
+     - `mockReportSilentFallback.not.toHaveBeenCalled()`
+     - `mockLoggerInfo` called once with context including `op: "callback_provider_error"`, `providerErrorCode: "access_denied"`, `bucket: "oauth_cancelled"`
+     - Redirect to `/login?error=oauth_cancelled`
+     - `Cache-Control: no-store`
+   - Keep `server_error`, `temporarily_unavailable`, `invalid_scope` in a `test.each` that asserts `mockWarnSilentFallback` IS called with `op: "callback_provider_error"` and `mockLoggerInfo` is NOT called (the logger.info path is only for user-cancel; `warnSilentFallback` already calls `logger.warn` internally for provider errors).
+
+   **Important edge case:** For the provider-error `test.each` rows, assert `mockLoggerInfo.not.toHaveBeenCalled()` to confirm no `logger.info` is emitted for provider-side errors. The `warnSilentFallback` helper internally calls `logger.warn` (not `logger.info`), which is tested by the helper's own unit tests.
+
+4. **Update "refererHost" test** (line 182): This test uses `?error=access_denied`. Change assertions from `mockWarnSilentFallback` to `mockLoggerInfo` for the refererHost extraction check. The test should verify `mockLoggerInfo` was called and that the first call's args object contains `refererHost: "accounts.google.com"` (hostname only, no port/path/query).
+
+5. **Verify "searchParamKeys" test** (line 202): This tests the bare-`/callback` path (no `error=` param), which correctly uses `reportSilentFallback`. This test must remain unchanged.
+
+6. **Verify "unrecognized `?error=`" test** (line 132): This sends `?error=user@example.com`, which `classifyProviderError` maps to `"oauth_failed"` (not `"oauth_cancelled"`). This should assert `mockWarnSilentFallback` IS called (unknown errors are provider-side, not user-cancel). Verify the existing assertion is correct.
 
 ### Phase 3: Verify
 
@@ -200,6 +241,7 @@ if (providerErrorBucket === "oauth_cancelled") {
 | Loss of `access_denied` spike visibility | Low | Low | `logger.info` preserves the structured log in pino/Better Stack. An operator can query for `op:callback_provider_error` + `bucket:oauth_cancelled` in logs. A spike in user cancellations is more likely a UX or consent-screen issue, not a system failure. |
 | Provider outage signal diluted by remaining alert noise | Low | Low | Provider errors (`server_error`, etc.) still emit `warnSilentFallback` to Sentry. The `auth-per-user-loop` rule will still fire on genuine provider outages. |
 | Test refactor introduces false negatives | Low | Medium | The split test structure makes assertions more explicit. Each branch has its own test with dedicated mock assertions. |
+| `logger.info` context shape drifts from `warnSilentFallback` `extra` shape | Low | Medium | The `logger.info` call in the implementation sketch explicitly includes all 5 context fields (`providerErrorCode`, `bucket`, `urlPath`, `refererHost`, `origin`) plus `feature` and `op`. The `access_denied` test must assert these fields are present in the `mockLoggerInfo` call args. |
 
 ## Domain Review
 
