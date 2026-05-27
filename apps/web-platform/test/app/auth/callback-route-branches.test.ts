@@ -8,11 +8,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const {
   mockReportSilentFallback,
   mockWarnSilentFallback,
+  mockLoggerInfo,
   mockExchangeCodeForSession,
   mockGetUser,
 } = vi.hoisted(() => ({
   mockReportSilentFallback: vi.fn(),
   mockWarnSilentFallback: vi.fn(),
+  mockLoggerInfo: vi.fn(),
   mockExchangeCodeForSession: vi.fn(),
   mockGetUser: vi.fn(),
 }));
@@ -24,7 +26,7 @@ vi.mock("@/server/observability", () => ({
 }));
 
 vi.mock("@/server/logger", () => ({
-  default: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
+  default: { warn: vi.fn(), error: vi.fn(), info: mockLoggerInfo },
 }));
 
 vi.mock("@/lib/auth/resolve-origin", () => ({
@@ -101,13 +103,42 @@ describe("GET /callback — no-code branches", () => {
     vi.clearAllMocks();
   });
 
+  it("?error=access_denied → /login?error=oauth_cancelled with logger.info only (no Sentry)", async () => {
+    const res = await GET(makeRequest("?error=access_denied"));
+
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toBe(
+      "https://app.soleur.ai/login?error=oauth_cancelled",
+    );
+    expect(res.headers.get("cache-control")).toBe("no-store");
+
+    expect(mockWarnSilentFallback).not.toHaveBeenCalled();
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
+
+    expect(mockLoggerInfo).toHaveBeenCalledTimes(1);
+    const [context, message] = mockLoggerInfo.mock.calls[0];
+    expect(context.feature).toBe("auth");
+    expect(context.op).toBe("callback_provider_error");
+    expect(context.providerErrorCode).toBe("access_denied");
+    expect(context.bucket).toBe("oauth_cancelled");
+    expect(message).toBe("OAuth provider returned error=access_denied");
+    expect(Object.keys(context).sort()).toEqual([
+      "bucket",
+      "feature",
+      "op",
+      "origin",
+      "providerErrorCode",
+      "refererHost",
+      "urlPath",
+    ]);
+  });
+
   it.each([
-    ["?error=access_denied", "access_denied", "oauth_cancelled"],
     ["?error=server_error", "server_error", "oauth_failed"],
     ["?error=temporarily_unavailable", "temporarily_unavailable", "oauth_failed"],
     ["?error=invalid_scope", "invalid_scope", "oauth_failed"],
   ])(
-    "%s → /login?error=%s with op callback_provider_error",
+    "%s → /login?error=%s with warnSilentFallback (Sentry visibility)",
     async (query, expectedRawCode, expectedBucket) => {
       const res = await GET(makeRequest(query));
 
@@ -118,13 +149,12 @@ describe("GET /callback — no-code branches", () => {
       expect(res.headers.get("cache-control")).toBe("no-store");
 
       expect(mockWarnSilentFallback).toHaveBeenCalledTimes(1);
+      expect(mockLoggerInfo).not.toHaveBeenCalled();
       const [, opts] = mockWarnSilentFallback.mock.calls[0];
       expect(opts.feature).toBe("auth");
       expect(opts.op).toBe("callback_provider_error");
       expect(opts.extra.providerErrorCode).toBe(expectedRawCode);
       expect(opts.extra.bucket).toBe(expectedBucket);
-      // Closed-set assertion — fails the day someone adds error_description,
-      // url, or any other PII-bearing key.
       expect(Object.keys(opts.extra).sort()).toEqual(PROVIDER_ERROR_EXTRA_KEYS);
     },
   );
@@ -190,13 +220,13 @@ describe("GET /callback — no-code branches", () => {
     );
 
     expect(res.status).toBe(307);
-    const [, opts] = mockWarnSilentFallback.mock.calls[0];
-    expect(opts.extra.refererHost).toBe("accounts.google.com");
+    const [context] = mockLoggerInfo.mock.calls[0];
+    expect(context.refererHost).toBe("accounts.google.com");
     // Lock down: no port, no path, no query.
-    expect(opts.extra.refererHost).not.toContain(":");
-    expect(opts.extra.refererHost).not.toContain("/");
-    expect(opts.extra.refererHost).not.toContain("?");
-    expect(opts.extra.refererHost).not.toContain("email");
+    expect(context.refererHost).not.toContain(":");
+    expect(context.refererHost).not.toContain("/");
+    expect(context.refererHost).not.toContain("?");
+    expect(context.refererHost).not.toContain("email");
   });
 
   it("searchParamKeys is capped, shape-filtered, and keys-only", async () => {
