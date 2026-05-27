@@ -278,7 +278,7 @@ describe("resolveInstallationId", () => {
     const { reportSilentFallback } = await import("@/server/observability");
 
     mockTenantFrom.mockImplementation(() => {
-      throw new RuntimeAuthError("token expired");
+      throw new RuntimeAuthError("jwt_mint", "token expired");
     });
 
     const { resolveInstallationId } = await import(
