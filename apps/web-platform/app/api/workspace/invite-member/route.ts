@@ -3,17 +3,11 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isTeamWorkspaceInviteEnabled, type Identity } from "@/lib/feature-flags/server";
 import { resolveTeamMembershipPageData } from "@/server/team-membership-resolver";
-import { inviteWorkspaceMember } from "@/server/workspace-membership";
+import { createWorkspaceInvitation } from "@/server/workspace-invitations";
+import { sendInviteEmail } from "@/server/notifications";
 
 // POST /api/workspace/invite-member
-// Body: { workspaceId, identifier, role: "owner"|"member", attestationText }
-//
-// Flag gate (AC-A + AC-F): the route is only reachable when
-// isTeamWorkspaceInviteEnabled returns true (Flagsmith single-control gate).
-// Returns 404 otherwise so the surface is indistinguishable from "route does
-// not exist."
-//
-// CSRF: validateOrigin gated.
+// Body: { workspaceId, email, role: "owner"|"member", attestationText }
 export async function POST(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
   if (!originValid) return rejectCsrf("api/workspace/invite-member", origin);
@@ -26,9 +20,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  // Flag gate — resolveTeamMembershipPageData handles the Flagsmith check.
-  // We reuse its result so the membership page and this endpoint cannot
-  // diverge on whether the user has team-workspace access.
   const service = createServiceClient();
   const pageData = await resolveTeamMembershipPageData(supabase, service);
   if (!pageData.ok) {
@@ -41,7 +32,7 @@ export async function POST(request: Request) {
 
   let body: {
     workspaceId?: unknown;
-    identifier?: unknown;
+    email?: unknown;
     role?: unknown;
     attestationText?: unknown;
   };
@@ -51,12 +42,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
   }
   const workspaceId = body.workspaceId;
-  const identifier = body.identifier;
+  const email = body.email;
   const role = body.role;
   const attestationText = body.attestationText;
   if (
     typeof workspaceId !== "string" ||
-    typeof identifier !== "string" ||
+    typeof email !== "string" ||
+    !email.includes("@") ||
     (role !== "owner" && role !== "member") ||
     typeof attestationText !== "string" ||
     attestationText.length < 10
@@ -64,45 +56,54 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "invalid_body" }, { status: 400 });
   }
 
-  // Defense: ensure the requested workspaceId matches the caller's current
-  // workspace. We don't want a malicious member of org-A to use this endpoint
-  // to invite into org-B by passing org-B's workspace_id.
   if (workspaceId !== pageData.data.workspaceId) {
     return NextResponse.json({ error: "workspace_mismatch" }, { status: 403 });
   }
 
-  // Verify the caller is an owner. We could rely on the RPC's check, but
-  // surfacing 403 here is cleaner than waiting for the RPC's RAISE.
   const callerRow = pageData.data.members.find((m) => m.userId === user.id);
   if (!callerRow || callerRow.role !== "owner") {
     return NextResponse.json({ error: "not_owner" }, { status: 403 });
   }
 
-  const identifierTrimmed = identifier.trim();
-  const isEmail = identifierTrimmed.includes("@");
-  const result = await inviteWorkspaceMember({
+  const result = await createWorkspaceInvitation({
     callerUserId: user.id,
     workspaceId,
-    invitee: isEmail
-      ? { email: identifierTrimmed }
-      : { userId: identifierTrimmed },
-    role,
+    inviteeEmail: email.trim(),
+    role: role as "owner" | "member",
     attestationText,
   });
 
   if (!result.ok) {
     const status =
-      result.reason === "invitee_not_found"
-        ? 404
-        : result.reason === "invitee_already_member"
+      result.reason === "invitee_already_member"
+        ? 409
+        : result.reason === "duplicate_pending_invite"
           ? 409
           : result.reason === "caller_not_owner"
             ? 403
             : 500;
-    return NextResponse.json(
-      { error: result.reason, detail: result.detail },
-      { status },
-    );
+    return NextResponse.json({ error: result.reason }, { status });
   }
-  return NextResponse.json({ ok: true, attestationId: result.attestationId });
+
+  const inviterName =
+    user.user_metadata?.full_name ?? user.email ?? "A team member";
+
+  const { data: wsRow } = await service
+    .from("workspaces")
+    .select("name")
+    .eq("id", workspaceId)
+    .single();
+
+  sendInviteEmail(
+    email.trim(),
+    inviterName,
+    wsRow?.name ?? "Workspace",
+    result.token,
+  ).catch(() => {});
+
+  return NextResponse.json({
+    ok: true,
+    invitationId: result.invitationId,
+    attestationId: result.attestationId,
+  });
 }

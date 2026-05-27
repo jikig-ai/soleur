@@ -345,6 +345,83 @@ export async function sendDsarExportFailedEmail(
 }
 
 // ---------------------------------------------------------------------------
+// Workspace invite notifications
+// ---------------------------------------------------------------------------
+
+export async function sendInviteEmail(
+  inviteeEmail: string,
+  inviterName: string,
+  workspaceName: string,
+  token: string,
+): Promise<boolean> {
+  const resend = getResend();
+  const inviteUrl = `${appUrl()}/invite/${token}`;
+
+  const { error } = await resend.emails.send({
+    from: "Soleur <notifications@soleur.ai>",
+    to: [inviteeEmail],
+    subject: `You've been invited to join ${escapeHtml(workspaceName)} on Soleur`,
+    html: `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
+        <h2 style="margin: 0 0 16px; font-size: 18px; color: #1a1a1a;">You've been invited to join ${escapeHtml(workspaceName)}</h2>
+        <p style="margin: 0 0 16px; color: #4a4a4a; line-height: 1.5;">${escapeHtml(inviterName)} has invited you to join the <strong>${escapeHtml(workspaceName)}</strong> workspace on Soleur.</p>
+        <a href="${inviteUrl}" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 500;">Accept invitation</a>
+        <p style="margin: 24px 0 0; font-size: 12px; color: #9a9a9a;">This invitation expires in 7 days. If you weren't expecting this, you can ignore this email.</p>
+      </div>
+    `,
+  });
+
+  if (error) {
+    log.error({ inviteeEmail, err: error }, "Failed to send invite email");
+    reportSilentFallback(null, {
+      feature: "workspace-invitations",
+      op: "send-invite-email",
+      message: `Failed to send invite email to ${inviteeEmail}: ${error.message}`,
+    });
+    return false;
+  }
+  log.info({ inviteeEmail, workspaceName }, "Invite email sent");
+  return true;
+}
+
+export async function sendInviteAcceptedEmail(
+  inviterUserId: string,
+  accepterName: string,
+  workspaceName: string,
+): Promise<boolean> {
+  const email = await lookupUserEmail(inviterUserId);
+  if (!email) return false;
+
+  const resend = getResend();
+  const teamUrl = `${appUrl()}/dashboard/settings/team`;
+
+  const { error } = await resend.emails.send({
+    from: "Soleur <notifications@soleur.ai>",
+    to: [email],
+    subject: `${escapeHtml(accepterName)} has joined ${escapeHtml(workspaceName)}`,
+    html: `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
+        <h2 style="margin: 0 0 16px; font-size: 18px; color: #1a1a1a;">${escapeHtml(accepterName)} has joined ${escapeHtml(workspaceName)}</h2>
+        <p style="margin: 0 0 16px; color: #4a4a4a; line-height: 1.5;">Your invitation was accepted. ${escapeHtml(accepterName)} is now a member of <strong>${escapeHtml(workspaceName)}</strong>.</p>
+        <a href="${teamUrl}" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 500;">View team</a>
+      </div>
+    `,
+  });
+
+  if (error) {
+    log.error({ inviterUserId, err: error }, "Failed to send invite accepted email");
+    reportSilentFallback(null, {
+      feature: "workspace-invitations",
+      op: "send-accepted-email",
+      message: `Failed to send acceptance confirmation: ${error.message}`,
+    });
+    return false;
+  }
+  log.info({ inviterUserId, accepterName, workspaceName }, "Invite accepted email sent");
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

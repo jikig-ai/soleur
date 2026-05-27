@@ -3,6 +3,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { resolveTeamMembershipPageData } from "@/server/team-membership-resolver";
 import { TeamMembershipList } from "@/components/settings/team-membership-list";
 import { InviteMemberAction } from "@/components/settings/invite-member-action";
+import { PendingInvitesList } from "@/components/settings/pending-invites-list";
 
 // AC-A: flag OFF → HTTP 404 via notFound(). Flagsmith single-control gate
 // lives inside resolveTeamMembershipPageData. The "/dashboard/settings/team"
@@ -30,6 +31,20 @@ export default async function TeamMembershipPage() {
 
   const { data } = result;
   const memberCount = data.members.length;
+
+  const pendingInvites = await (async () => {
+    const { data: rows, error } = await service
+      .from("workspace_invitations")
+      .select("id, invitee_email, role, expires_at, created_at")
+      .eq("workspace_id", data.workspaceId)
+      .is("accepted_at", null)
+      .is("declined_at", null)
+      .gt("expires_at", new Date().toISOString())
+      .order("created_at", { ascending: false });
+    if (error || !rows) return [];
+    return rows;
+  })();
+
   return (
     <div>
       <h1 className="mb-2 text-2xl font-semibold text-soleur-text-primary">Team</h1>
@@ -59,7 +74,12 @@ export default async function TeamMembershipPage() {
         />
       </div>
 
-      {memberCount === 1 && (
+      <PendingInvitesList
+        invites={pendingInvites}
+        workspaceId={data.workspaceId}
+      />
+
+      {memberCount === 1 && pendingInvites.length === 0 && (
         <p className="mt-6 text-sm text-soleur-text-secondary">
           <span className="font-medium text-soleur-accent-gold-fg">Solo for now.</span>{" "}
           Invite a teammate to share this workspace&apos;s agents, knowledge, and billing.

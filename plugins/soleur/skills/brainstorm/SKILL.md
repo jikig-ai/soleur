@@ -393,6 +393,25 @@ If domain leaders reported capability gaps in their assessments, include a `## C
 
 Ensure the brainstorms directory exists before writing.
 
+### Phase 3.55: Visual Design (if feature has UI surfaces)
+
+**Skip if** the brainstorm scope has no user-facing UI (e.g., pure infrastructure, CI, legal-only). Detect by scanning Key Decisions for terms: `UI`, `page`, `modal`, `banner`, `component`, `tab`, `form`, `email template`, `landing page`, `public route`.
+
+**If UI surfaces exist**, spawn the ux-design-lead agent via the **Agent tool** to create wireframes in `.pen` files. The agent owns the output path convention (`knowledge-base/product/design/{domain}/`) — do NOT supply output paths in the spawn prompt.
+
+**Agent prompt construction:** Build the prompt from brainstorm decisions:
+
+1. List every UI surface from Key Decisions (pages, modals, banners, email templates)
+2. Include design system context: existing component patterns, color tokens, layout conventions discovered during Phase 1.1 research
+3. Reference the closest existing UI patterns identified by research agents (e.g., "delegation-acceptance-modal.tsx is the template for accept/decline flows")
+4. Include brand-critical constraints if `USER_BRAND_CRITICAL=true` (security-sensitive surfaces need explicit callouts)
+
+**After the agent completes**, reference the wireframe paths in the brainstorm document's Key Decisions table (add a "Visual design" row) and in the spec's Functional Requirements (link each FR to its wireframe). Commit wireframes alongside other brainstorm artifacts in Phase 3.6 step 6.
+
+**Pipeline/headless mode:** If `HEADLESS_MODE=true`, skip visual design (wireframes require interactive Pencil MCP). Echo: `Phase 3.55: skipped (headless mode — no Pencil MCP available)`.
+
+**Pencil MCP unavailable:** If Pencil tools (`mcp__pencil__batch_design`) are not available, skip with: `Phase 3.55: skipped (Pencil MCP not connected). Run /soleur:pencil-setup to configure, then re-run brainstorm with visual design.`
+
 ### Phase 3.6: Create Spec and Issue (if worktree exists)
 
 **If worktree was created:**
@@ -524,9 +543,8 @@ Use **AskUserQuestion tool** to present next steps:
 **Options:**
 
 1. **Proceed to planning** - Use `skill: soleur:plan` (will auto-detect this brainstorm)
-2. **Create visual designs** - Run ux-design-lead agent for .pen file design (requires Pencil extension). The agent auto-opens the screenshots folder for founder review after completion. **Do NOT supply output paths in the spawn prompt** — the agent owns the path convention (`knowledge-base/product/design/{domain}/`). Passing app-tree paths (e.g., `apps/web-platform/design/`) breaks `/soleur:ux-audit` discoverability and is silently gitignored by app-level rules. The agent's output-path guard will override invoker-supplied paths and announce the override.
-3. **Refine design further** - Continue exploring
-4. **Done for now** - Return later
+2. **Refine design further** - Continue exploring
+3. **Done for now** - Return later
 
 ## Output Summary
 
