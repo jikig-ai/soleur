@@ -108,8 +108,27 @@ discoverability_test:
       -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
       -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
       "https://deploy.${APP_DOMAIN_BASE}/hooks/infra-config-status" | jq .
-  expected_output: '{"exit_code":0,"files_written":7,"files_failed":0,"files":[...]}'
+  expected_output: '{"exit_code":0,"files_written":8,"files_failed":0,"files":[...]}'
 ```
+
+## Deepen-Plan Enhancement Summary
+
+**Deepened on:** 2026-05-28
+**Sections enhanced:** Research Insights, Phase 1, Phase 2, Acceptance Criteria, Sharp Edges, Files to Edit
+**Research passes:** precedent-diff (EXIT trap, atomic write, state file), strict-mode interaction analysis, drift-guard test sync, hooks.json env-var passthrough
+
+### Key Improvements from Deepen
+1. **Drift guard test must be updated** -- `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` has a `TRIGGER_FILES` array that must include the new `cat-infra-config-state.sh` when added to `triggers_replace` in `server.tf`. Learning: `2026-05-26-ssh-to-webhook-provisioner-migration-mount-namespace-traps.md` Session Error #5.
+2. **`base64 -d` exits non-zero on invalid input under `set -euo pipefail`** -- the current script has no per-file error handling; `base64 -d` failure on line 56 aborts the entire script. The plan must restructure the write loop to catch decode failures per-file without aborting (wrap in subshell or use `|| { ... ; continue; }`).
+3. **EXIT trap redesign required** -- current trap (line 45) only cleans tmpfiles. New trap must: (a) write unhandled state if no final state was written, (b) clean tmpfiles. Follows `ci-deploy.sh:111` sentinel pattern.
+4. **`hooks.json.tmpl` needs env-var passthrough** -- the `infra-config` hook's `pass-environment-to-command` block must include `CAT_INFRA_CONFIG_STATE_SH_B64` so the handler receives it.
+5. **`apply-deploy-pipeline-fix.yml` paths filter** needs `cat-infra-config-state.sh` added so merges touching only the state reporter trigger auto-apply.
+6. **File count changes to 8** -- adding `cat-infra-config-state.sh` to FILE_MAP means the expected `files_written` count in the Observability `expected_output` and test assertions is 8, not 7.
+
+### New Considerations Discovered
+- The `cat-infra-config-state.sh` script's `if/elif` pattern (copied from `cat-deploy-state.sh`) relies on `jq -c .` printing the valid JSON to stdout as its success path -- there is no explicit `else` branch because jq's stdout IS the output. This is correct but non-obvious; add a comment.
+- `ci-deploy.sh` uses `final_write_state()` with a `.final` sentinel to prevent the EXIT trap from overwriting explicit failure reasons. `infra-config-apply.sh` is simpler (no long-running sub-processes, no TERM/INT traps needed), so a lighter pattern suffices: write state, touch `.final`, let EXIT trap check for `.final` before writing `"unhandled"`.
+- `sync` is not used by any sibling script (`ci-deploy.sh`, `inngest-bootstrap.sh`). The `mv` on the same filesystem is already atomic at the VFS level. `sync` adds disk flush guarantees but is not strictly necessary for the race fix -- the restart timer fires in 3s, which is orders of magnitude longer than any pending dirty-page flush. Keep `sync` for defense-in-depth but do not treat it as load-bearing.
 
 ## Technical Approach
 
@@ -163,6 +182,44 @@ All changes to `infra-config-apply.sh` in one pass: logging, state file, SHA ver
 
 **Important: no jq in infra-config-apply.sh.** The current script has zero jq dependency. State file JSON is built via printf (same pattern as `ci-deploy.sh:72-75`). The per-file array is the only complexity -- build it by appending comma-separated JSON objects to a shell variable during the write loop.
 
+**Critical: `base64 -d` failure handling under `set -euo pipefail`.**
+`base64 -d` exits non-zero on invalid input (verified: exit code 1). Under `set -e`, this aborts the entire script. The current script has no per-file error handling -- a single corrupt env var kills all writes. To support partial-failure state reporting, the decode+write sequence must be wrapped in a per-file error handler:
+
+```bash
+for entry in "${FILE_MAP[@]}"; do
+  IFS='|' read -r env_var dest_path mode owner <<< "$entry"
+  dest="${DESTDIR}${dest_path}"
+  # ... (existing mktemp logic)
+  if ! echo "${!env_var}" | base64 -d > "$tmpfile" 2>/dev/null; then
+    logger -t "$LOG_TAG" "FAILED: $dest_path reason=base64_decode"
+    FILES_JSON+=("{\"file\":\"$dest_path\",\"sha256\":\"\",\"status\":\"failed\",\"reason\":\"base64_decode\"}")
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    rm -f "$tmpfile"
+    continue
+  fi
+  # ... (rest of write logic)
+done
+```
+
+This preserves `set -e` globally while allowing individual file failures to be recorded and continued past.
+
+**EXIT trap redesign (precedent: `ci-deploy.sh:105-111`).**
+The current trap (line 45) is `trap 'rm -f "${TMPFILES[@]}"' EXIT`. The new trap must:
+1. Clear stale `.final` sentinel from prior run: `rm -f "${STATE_FILE}.final"`
+2. On non-zero exit without `.final` sentinel, write `{"exit_code":$rc,"reason":"unhandled"}` to state file
+3. Clean tmpfiles
+4. Remove `.final` sentinel
+
+```bash
+rm -f "${STATE_FILE}.final"
+trap 'rc=$?; if [ "$rc" -ne 0 ] && [ ! -f "${STATE_FILE}.final" ]; then
+  printf "{\"start_ts\":%d,\"end_ts\":%d,\"exit_code\":%d,\"reason\":\"unhandled\",\"files_written\":0,\"files_failed\":0,\"files\":[]}\n" \
+    "$START_TS" "$(date +%s)" "$rc" > "$STATE_FILE" 2>/dev/null || true
+fi; rm -f "${TMPFILES[@]}" "${STATE_FILE}.final"' EXIT
+```
+
+At script completion, touch `.final` before writing the success state (same sentinel-first pattern as `ci-deploy.sh:96-97`).
+
 #### Phase 2: Add /hooks/infra-config-status endpoint + wiring
 
 Add the status endpoint and wire it into Terraform, cloud-init, and CI.
@@ -193,7 +250,17 @@ fi
 - `apps/web-platform/infra/push-infra-config.sh` -- add the new file to the JSON payload: `"cat_infra_config_state_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/cat-infra-config-state.sh")"`
 - `.github/workflows/apply-deploy-pipeline-fix.yml` -- add "Verify infra-config apply succeeded" step after "Verify webhook is alive post-apply", polling `/hooks/infra-config-status` and asserting `exit_code == 0`
 
-**Dependency chain for self-update (AC15):** When `push-infra-config.sh` sends the payload, it must include `cat_infra_config_state_sh_b64`. The webhook handler passes this to `infra-config-apply.sh` as env var `CAT_INFRA_CONFIG_STATE_SH_B64`. The handler writes it to `/usr/local/bin/cat-infra-config-state.sh`. On subsequent applies, the script is self-updated via this path.
+**Dependency chain for self-update (AC13):** When `push-infra-config.sh` sends the payload, it must include `cat_infra_config_state_sh_b64`. The `infra-config` hook in `hooks.json.tmpl` must include a new `pass-environment-to-command` entry mapping `cat_infra_config_state_sh_b64` -> `CAT_INFRA_CONFIG_STATE_SH_B64`. The handler writes it to `/usr/local/bin/cat-infra-config-state.sh`. On subsequent applies, the script is self-updated via this path.
+
+**hooks.json.tmpl env-var passthrough (deepen-plan finding).** The `infra-config` hook's `pass-environment-to-command` array (lines 39-46) must include:
+```json
+{ "source": "payload", "name": "cat_infra_config_state_sh_b64", "envname": "CAT_INFRA_CONFIG_STATE_SH_B64" }
+```
+Without this, the handler receives the env var as empty and the env-var validation loop rejects it.
+
+**Drift guard test update (deepen-plan finding).** `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` has a `TRIGGER_FILES` array (lines 32-42) that must stay in sync with `server.tf`'s `triggers_replace`. Add `"apps/web-platform/infra/cat-infra-config-state.sh"` to the array. Without this update, the test fails post-merge (same failure class as learning `2026-05-26-ssh-to-webhook-provisioner-migration-mount-namespace-traps.md` Session Error #5).
+
+**apply-deploy-pipeline-fix.yml paths filter (deepen-plan finding).** Add `"apps/web-platform/infra/cat-infra-config-state.sh"` to the `paths:` list (near line 49) so merges that touch only the state reporter trigger auto-apply.
 
 #### Phase 3: Tests
 
@@ -230,13 +297,14 @@ New test cases for `cat-infra-config-state.test.sh`:
 
 ## Files to Edit
 
-- `apps/web-platform/infra/infra-config-apply.sh` -- add logging, state file, SHA verification, restart reordering, FILE_MAP entry for new script
-- `apps/web-platform/infra/hooks.json.tmpl` -- add `infra-config-status` hook entry
-- `apps/web-platform/infra/server.tf` -- add `cat_infra_config_state_script_b64` to cloud-init vars and `triggers_replace`
+- `apps/web-platform/infra/infra-config-apply.sh` -- add logging, state file, SHA verification, restart reordering, FILE_MAP entry for new script, per-file error handling for base64 decode, EXIT trap redesign
+- `apps/web-platform/infra/hooks.json.tmpl` -- add `infra-config-status` hook entry AND `cat_infra_config_state_sh_b64` env-var passthrough to the `infra-config` hook
+- `apps/web-platform/infra/server.tf` -- add `cat_infra_config_state_script_b64` to cloud-init templatefile vars and `triggers_replace`
 - `apps/web-platform/infra/cloud-init.yml` -- add `write_files` entry for state reporter script
 - `apps/web-platform/infra/push-infra-config.sh` -- add `cat_infra_config_state_sh_b64` to JSON payload (NOT polling -- just the file encoding for self-update)
-- `.github/workflows/apply-deploy-pipeline-fix.yml` -- add infra-config-status verification step
+- `.github/workflows/apply-deploy-pipeline-fix.yml` -- add infra-config-status verification step AND `cat-infra-config-state.sh` to paths filter
 - `apps/web-platform/infra/infra-config-apply.test.sh` -- add tests for logging, state file, SHA, restart ordering
+- `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` -- add `cat-infra-config-state.sh` to `TRIGGER_FILES` array (drift guard sync)
 
 ## Files to Create
 
@@ -265,17 +333,22 @@ None -- no open `code-review`-labeled issues touch the files in scope.
 - [ ] AC12: `cloud-init.yml` includes `write_files` entry for `cat-infra-config-state.sh`
 - [ ] AC13: `infra-config-apply.sh` FILE_MAP includes entry for `CAT_INFRA_CONFIG_STATE_SH_B64|/usr/local/bin/cat-infra-config-state.sh|755|root:root`
 - [ ] AC14: `push-infra-config.sh` JSON payload includes `cat_infra_config_state_sh_b64` field (file encoding for self-update delivery)
+- [ ] AC15: `hooks.json.tmpl` `infra-config` hook's `pass-environment-to-command` includes `CAT_INFRA_CONFIG_STATE_SH_B64` mapping
+- [ ] AC16: `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` `TRIGGER_FILES` array includes `cat-infra-config-state.sh`
+- [ ] AC17: `apply-deploy-pipeline-fix.yml` `paths:` filter includes `cat-infra-config-state.sh`
+- [ ] AC18: Per-file `base64 -d` failure is caught without aborting the script (partial-failure support under `set -euo pipefail`)
+- [ ] AC19: EXIT trap writes `{"exit_code":N,"reason":"unhandled"}` on non-zero exit when no `.final` sentinel exists
 
 ### Post-merge (operator)
 
-- [ ] AC16: After merge, `apply-deploy-pipeline-fix.yml` triggers automatically and `terraform apply -target=terraform_data.deploy_pipeline_fix` succeeds
+- [ ] AC20: After merge, `apply-deploy-pipeline-fix.yml` triggers automatically and `terraform apply -target=terraform_data.deploy_pipeline_fix` succeeds
   - Automation: handled by existing workflow on push to main with path filter
-- [ ] AC17: `/hooks/infra-config-status` returns valid JSON when polled post-apply
+- [ ] AC21: `/hooks/infra-config-status` returns valid JSON when polled post-apply
   - Automation: verified by the new CI step in `apply-deploy-pipeline-fix.yml`
 
 ## Test Scenarios
 
-- Given all env vars are set correctly, when infra-config-apply.sh runs, then all 7+ files are written and the state file shows `exit_code: 0, files_failed: 0`
+- Given all env vars are set correctly, when infra-config-apply.sh runs, then all 8 files are written and the state file shows `exit_code: 0, files_failed: 0`
 - Given one env var has invalid base64 content, when infra-config-apply.sh runs, then the affected file shows `status: failed` in state and other files still succeed
 - Given visudo validation fails for the sudoers file, when infra-config-apply.sh runs, then the sudoers entry shows `status: skipped, reason: visudo_validation_failed` and other files succeed
 - Given the script crashes mid-write (EXIT trap fires), when cat-infra-config-state.sh reads the state, then `exit_code` is non-zero with reason `unhandled`
