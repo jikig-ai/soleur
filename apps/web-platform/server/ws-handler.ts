@@ -43,6 +43,7 @@ import { validateContextPath } from "./validate-context-path";
 import {
   setUserWorkspace,
   clearUserWorkspace,
+  getUserWorkspace,
 } from "./agent-session-registry";
 import {
   getCurrentOrganizationId,
@@ -803,9 +804,17 @@ async function createConversation(
     );
   }
 
+  const wsId = getUserWorkspace(userId);
+  if (!wsId) {
+    throw new Error(
+      "No workspace binding for user — conversation insert aborted.",
+    );
+  }
+
   const { error } = await tenant.from("conversations").insert({
     id,
     user_id: userId,
+    workspace_id: wsId,
     repo_url: repoUrl,
     domain_leader: leaderId ?? null,
     status: "active" as Conversation["status"],
