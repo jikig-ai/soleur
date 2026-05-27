@@ -188,6 +188,46 @@ resolve_env_file() {
   return 0
 }
 
+# Verify inngest-server is healthy and has registered functions (#4538).
+# Returns 0 if healthy with >= 1 function.
+# Returns 1 if server never became reachable (health failure).
+# Returns 2 if server is reachable but has 0 registered functions.
+# Uses `|| true` after curl instead of set +e/-e toggle — toggling set -e
+# inside a function re-enables it globally and causes the caller's non-zero
+# capture (`VERIFY_RC=$?`) to never execute.
+verify_inngest_functions() {
+  local max_attempts="${1:-10}"
+  local interval="${2:-3}"
+  local server_reached=false
+  local count=0
+  local response=""
+
+  for i in $(seq 1 "$max_attempts"); do
+    response=$(curl -sf --max-time 5 http://127.0.0.1:8288/v1/functions 2>/dev/null) || true
+
+    if [[ -z "$response" ]]; then
+      logger -t "$LOG_TAG" "INNGEST_HEALTH: attempt $i/$max_attempts — connection failed or empty response"
+      sleep "$interval"
+      continue
+    fi
+
+    server_reached=true
+    count=$(printf '%s' "$response" | jq 'if type == "array" then length else 0 end' 2>/dev/null || echo "0")
+    if [[ "$count" -ge 1 ]]; then
+      logger -t "$LOG_TAG" "INNGEST_VERIFY: healthy=true count=$count"
+      return 0
+    fi
+    logger -t "$LOG_TAG" "INNGEST_HEALTH: attempt $i/$max_attempts — server up but 0 functions"
+    sleep "$interval"
+  done
+
+  logger -t "$LOG_TAG" "INNGEST_VERIFY: healthy=false server_reached=$server_reached count=$count"
+  if [[ "$server_reached" == "true" ]]; then
+    return 2
+  fi
+  return 1
+}
+
 # Exact allowlist of valid images per component (not prefix match -- prevents suffix injection).
 declare -A ALLOWED_IMAGES=(
   [web-platform]="ghcr.io/jikig-ai/soleur-web-platform"
@@ -217,38 +257,51 @@ fi
 read -r ACTION COMPONENT IMAGE TAG <<< "$SSH_ORIGINAL_COMMAND"
 
 # Validate action
-if [[ "$ACTION" != "deploy" ]]; then
+if [[ "$ACTION" != "deploy" ]] && [[ "$ACTION" != "restart" ]]; then
   logger -t "$LOG_TAG" "REJECTED: unknown action '$ACTION'"
   echo "Error: unknown action '$ACTION'" >&2
   final_write_state 1 "action_unknown"
   exit 1
 fi
 
-# Validate component exists in allowlist
-if [[ -z "${ALLOWED_IMAGES[$COMPONENT]+x}" ]]; then
-  logger -t "$LOG_TAG" "REJECTED: unknown component '$COMPONENT'"
-  echo "Error: unknown component '$COMPONENT'" >&2
-  final_write_state 1 "component_unknown"
-  exit 1
-fi
+if [[ "$ACTION" == "restart" ]]; then
+  # restart inngest _ latest — lightweight systemctl restart (#4538).
+  # Only inngest is restartable; web-platform restart is docker-level.
+  if [[ "$COMPONENT" != "inngest" ]]; then
+    logger -t "$LOG_TAG" "REJECTED: component '$COMPONENT' is not restartable"
+    echo "Error: component '$COMPONENT' is not restartable" >&2
+    final_write_state 1 "component_not_restartable"
+    exit 1
+  fi
+  logger -t "$LOG_TAG" "ACCEPTED: restart $COMPONENT"
+else
+  # deploy action — validate image and tag
+  # Validate component exists in allowlist
+  if [[ -z "${ALLOWED_IMAGES[$COMPONENT]+x}" ]]; then
+    logger -t "$LOG_TAG" "REJECTED: unknown component '$COMPONENT'"
+    echo "Error: unknown component '$COMPONENT'" >&2
+    final_write_state 1 "component_unknown"
+    exit 1
+  fi
 
-# Validate image matches exact expected value for this component
-if [[ "$IMAGE" != "${ALLOWED_IMAGES[$COMPONENT]}" ]]; then
-  logger -t "$LOG_TAG" "REJECTED: invalid image '$IMAGE' for component '$COMPONENT'"
-  echo "Error: invalid image" >&2
-  final_write_state 1 "image_mismatch"
-  exit 1
-fi
+  # Validate image matches exact expected value for this component
+  if [[ "$IMAGE" != "${ALLOWED_IMAGES[$COMPONENT]}" ]]; then
+    logger -t "$LOG_TAG" "REJECTED: invalid image '$IMAGE' for component '$COMPONENT'"
+    echo "Error: invalid image" >&2
+    final_write_state 1 "image_mismatch"
+    exit 1
+  fi
 
-# Validate tag format (vX.Y.Z)
-if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  logger -t "$LOG_TAG" "REJECTED: invalid tag '$TAG'"
-  echo "Error: invalid tag format" >&2
-  final_write_state 1 "tag_malformed"
-  exit 1
-fi
+  # Validate tag format (vX.Y.Z)
+  if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    logger -t "$LOG_TAG" "REJECTED: invalid tag '$TAG'"
+    echo "Error: invalid tag format" >&2
+    final_write_state 1 "tag_malformed"
+    exit 1
+  fi
 
-logger -t "$LOG_TAG" "ACCEPTED: deploy $COMPONENT $IMAGE:$TAG"
+  logger -t "$LOG_TAG" "ACCEPTED: deploy $COMPONENT $IMAGE:$TAG"
+fi
 
 # Serialize concurrent deploys (webhook may invoke ci-deploy.sh simultaneously).
 # CI_DEPLOY_LOCK is overridable for testing; production uses /var/lock/ci-deploy.lock.
@@ -276,6 +329,33 @@ flock -n 200 || {
 # Writing earlier produced an empty-tag "running" state, and a loser that failed
 # flock -n would write "lock_contention" over the winner's in-progress state.
 write_state "$EXIT_RUNNING" "running"
+
+# --- Restart action handler (#4538) ---
+# Lightweight systemctl restart; no image pull, no disk space check needed.
+if [[ "$ACTION" == "restart" ]]; then
+  echo "Restarting inngest-server.service..."
+  if ! sudo systemctl restart inngest-server.service; then
+    logger -t "$LOG_TAG" "FAILED: systemctl restart inngest-server.service"
+    final_write_state 1 "inngest_restart_failed"
+    exit 1
+  fi
+
+  set +e
+  verify_inngest_functions
+  VERIFY_RC=$?
+  set -e
+  if [[ "$VERIFY_RC" -eq 0 ]]; then
+    logger -t "$LOG_TAG" "SUCCESS: restart $COMPONENT"
+    final_write_state 0 "success"
+    exit 0
+  elif [[ "$VERIFY_RC" -eq 2 ]]; then
+    final_write_state 1 "inngest_no_functions"
+    exit 1
+  else
+    final_write_state 1 "inngest_health_failed"
+    exit 1
+  fi
+fi
 
 # Check available disk space (minimum 5GB required for image pull + extraction)
 AVAIL_KB=$(df --output=avail / | tail -1 | tr -d ' ')
@@ -531,6 +611,20 @@ case "$COMPONENT" in
         "$IMAGE:$TAG"; then
         { docker stop soleur-web-platform-canary 2>/dev/null || true; }
         { docker rm soleur-web-platform-canary 2>/dev/null || true; }
+
+        # Inngest function registry sanity check (informational, #4538).
+        # Non-blocking: does NOT gate deploy success.
+        sleep 5
+        set +e
+        inngest_count=$(curl -sf --max-time 5 http://127.0.0.1:8288/v1/functions 2>/dev/null \
+          | jq 'if type == "array" then length else 0 end' 2>/dev/null)
+        set -e
+        inngest_count="${inngest_count:-0}"
+        logger -t "$LOG_TAG" "INNGEST_FUNCTION_COUNT: ${inngest_count}"
+        if [[ "$inngest_count" -eq 0 ]]; then
+          logger -t "$LOG_TAG" "INNGEST_WARN: zero functions registered after deploy — consider running restart-inngest-server.yml workflow"
+        fi
+
         echo "Deploy succeeded"
         final_write_state 0 "ok"
         exit 0

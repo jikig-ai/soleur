@@ -78,6 +78,17 @@ MOCK
   chmod +x "$1/flock"
 }
 
+create_mock_systemctl() {
+  cat > "$1/systemctl" << 'MOCK'
+#!/bin/bash
+if [[ "${MOCK_SYSTEMCTL_FAIL:-}" == "1" ]]; then
+  exit 1
+fi
+exit 0
+MOCK
+  chmod +x "$1/systemctl"
+}
+
 create_mock_df() {
   cat > "$1/df" << 'MOCK'
 #!/bin/bash
@@ -279,6 +290,17 @@ case "$URL" in
     if [[ "$WANT_HTTP_CODE" == "1" ]]; then echo "307"; fi
     exit 0
     ;;
+  *"/v1/functions"*)
+    if [[ "${MOCK_CURL_INNGEST_HEALTH_FAIL:-}" == "1" ]]; then
+      exit 1
+    fi
+    if [[ "${MOCK_CURL_INNGEST_ZERO_FUNCTIONS:-}" == "1" ]]; then
+      write_body "[]"
+      exit 0
+    fi
+    write_body '[{"id":"fn-1","name":"test-fn-1"},{"id":"fn-2","name":"test-fn-2"}]'
+    exit 0
+    ;;
 esac
 
 # Fallback for unmatched URLs (legacy callers without an URL arg).
@@ -315,6 +337,7 @@ create_base_mocks() {
   create_mock_chown "$mock_dir"
   create_mock_seq "$mock_dir"
   create_mock_flock "$mock_dir"
+  create_mock_systemctl "$mock_dir"
   create_mock_df "$mock_dir"
   create_mock_doppler "$mock_dir"
   create_mock_layer3 "$mock_dir"
@@ -1813,6 +1836,113 @@ REPRO
 }
 
 assert_trap_writes_timeout_state_in_isolation
+
+# --- Restart action tests (#4538) ---
+echo ""
+echo "--- Restart action ---"
+
+# Helper: run ci-deploy.sh with restart-specific mock overrides.
+# Accepts env-var overrides as optional second arg (eval'd before run).
+run_restart() {
+  local cmd="${1:-}"
+  local env_overrides="${2:-}"
+  (
+    export SSH_ORIGINAL_COMMAND="$cmd"
+    MOCK_DIR=$(mktemp -d)
+    trap 'rm -rf "$MOCK_DIR"' EXIT
+    export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
+    create_base_mocks "$MOCK_DIR"
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
+    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
+    export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
+    if [[ -n "$env_overrides" ]]; then
+      eval "$env_overrides"
+    fi
+    bash "$DEPLOY_SCRIPT" 2>&1
+  )
+}
+
+assert_restart_state() {
+  local description="$1"
+  local expected_reason="$2"
+  local expected_exit="$3"
+  local cmd="$4"
+  local env_overrides="${5:-}"
+
+  TOTAL=$((TOTAL + 1))
+
+  local output actual_exit
+  output=$(
+    export SSH_ORIGINAL_COMMAND="$cmd"
+    MOCK_DIR=$(mktemp -d)
+    trap 'rm -rf "$MOCK_DIR"' EXIT
+    export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
+    create_base_mocks "$MOCK_DIR"
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
+    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
+    export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
+    if [[ -n "$env_overrides" ]]; then
+      eval "$env_overrides"
+    fi
+    bash "$DEPLOY_SCRIPT" 2>&1
+    echo "___STATE___"
+    cat "$CI_DEPLOY_STATE" 2>/dev/null || echo "{}"
+  ) && actual_exit=0 || actual_exit=$?
+
+  local state_json
+  state_json=$(printf '%s' "$output" | sed -n '/___STATE___/{n;p;}')
+  local actual_reason actual_exit_code
+  if command -v jq >/dev/null 2>&1; then
+    actual_reason=$(printf '%s' "$state_json" | jq -r '.reason // ""' 2>/dev/null || echo "")
+    actual_exit_code=$(printf '%s' "$state_json" | jq -r '.exit_code // ""' 2>/dev/null || echo "")
+  else
+    actual_reason=$(printf '%s' "$state_json" | grep -oE '"reason":"[^"]*"' | sed 's/.*:"\(.*\)"/\1/')
+    actual_exit_code=$(printf '%s' "$state_json" | grep -oE '"exit_code":-?[0-9]+' | sed 's/.*://')
+  fi
+
+  if [[ "$actual_reason" == "$expected_reason" ]] && [[ "$actual_exit_code" == "$expected_exit" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $description"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description"
+    echo "        expected: reason=$expected_reason exit_code=$expected_exit"
+    echo "        actual:   reason=$actual_reason exit_code=$actual_exit_code"
+    echo "        output:   $(printf '%s' "$output" | head -5)"
+  fi
+}
+
+# AC1: restart inngest succeeds with healthy server + registered functions
+assert_restart_state "restart inngest succeeds" \
+  "success" "0" \
+  "restart inngest _ latest"
+
+# AC2: restart of non-inngest component rejected
+assert_restart_state "restart web-platform rejected" \
+  "component_not_restartable" "1" \
+  "restart web-platform _ latest"
+
+# AC5(b): restart with inngest health check failure
+assert_restart_state "restart inngest health failure" \
+  "inngest_health_failed" "1" \
+  "restart inngest _ latest" \
+  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1"
+
+# AC5(d): restart with zero functions
+assert_restart_state "restart inngest zero functions" \
+  "inngest_no_functions" "1" \
+  "restart inngest _ latest" \
+  "export MOCK_CURL_INNGEST_ZERO_FUNCTIONS=1"
+
+# Existing deploy validation still rejects `deploy inngest restart latest`
+# (image mismatch since "restart" != expected image)
+assert_state_contains "deploy inngest restart latest rejected as image_mismatch" \
+  "image_mismatch" "1" \
+  "deploy inngest restart latest"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
