@@ -319,25 +319,25 @@ None -- no open `code-review`-labeled issues touch the files in scope.
 
 ### Pre-merge (PR)
 
-- [ ] AC1: `infra-config-apply.sh` uses `readonly LOG_TAG="infra-config-apply"` and `logger -t "$LOG_TAG"` for all operations (env validation, per-file write, completion summary)
-- [ ] AC2: Per-file write status logged with filename + SHA256 + success/fail/skipped status
-- [ ] AC3: State file written to `/var/lock/infra-config-apply.state` with JSON structure: `exit_code`, `files_written`, `files_failed`, per-file array with `file`, `sha256`, `status`, `reason`. JSON built via printf (no jq dependency in the handler)
-- [ ] AC4: `cat-infra-config-state.sh` exists and returns state file JSON (or sentinels for missing/corrupt). Script is minimal -- no service status merging, no journal tails
-- [ ] AC5: `hooks.json.tmpl` contains `infra-config-status` hook entry (GET, `include-command-output-in-response: true`)
-- [ ] AC6: Self-restart (`systemd-run`) is called AFTER all file writes complete AND state file is persisted AND `sync` has flushed buffers. Ordering: write loop -> state file -> sync -> daemon-reload -> systemd-run
-- [ ] AC7: All existing tests pass (`bash apps/web-platform/infra/infra-config-apply.test.sh`)
-- [ ] AC8: New tests cover: state file happy path, partial failure state, logger output, self-restart ordering
-- [ ] AC9: `cat-infra-config-state.test.sh` covers: missing state, corrupt state, valid state
-- [ ] AC10: `apply-deploy-pipeline-fix.yml` includes "Verify infra-config apply succeeded" step
-- [ ] AC11: `server.tf` `triggers_replace` includes the new `cat-infra-config-state.sh`
-- [ ] AC12: `cloud-init.yml` includes `write_files` entry for `cat-infra-config-state.sh`
-- [ ] AC13: `infra-config-apply.sh` FILE_MAP includes entry for `CAT_INFRA_CONFIG_STATE_SH_B64|/usr/local/bin/cat-infra-config-state.sh|755|root:root`
-- [ ] AC14: `push-infra-config.sh` JSON payload includes `cat_infra_config_state_sh_b64` field (file encoding for self-update delivery)
-- [ ] AC15: `hooks.json.tmpl` `infra-config` hook's `pass-environment-to-command` includes `CAT_INFRA_CONFIG_STATE_SH_B64` mapping
-- [ ] AC16: `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` `TRIGGER_FILES` array includes `cat-infra-config-state.sh`
-- [ ] AC17: `apply-deploy-pipeline-fix.yml` `paths:` filter includes `cat-infra-config-state.sh`
-- [ ] AC18: Per-file `base64 -d` failure is caught without aborting the script (partial-failure support under `set -euo pipefail`)
-- [ ] AC19: EXIT trap writes `{"exit_code":N,"reason":"unhandled"}` on non-zero exit when no `.final` sentinel exists
+- [x] AC1: `infra-config-apply.sh` uses `readonly LOG_TAG="infra-config-apply"` and `logger -t "$LOG_TAG"` for all operations (env validation, per-file write, completion summary)
+- [x] AC2: Per-file write status logged with filename + SHA256 + success/fail/skipped status
+- [x] AC3: State file written to `/var/lock/infra-config-apply.state` with JSON structure: `exit_code`, `files_written`, `files_failed`, per-file array with `file`, `sha256`, `status`, `reason`. JSON built via printf (no jq dependency in the handler)
+- [x] AC4: `cat-infra-config-state.sh` exists and returns state file JSON (or sentinels for missing/corrupt). Script is minimal -- no service status merging, no journal tails
+- [x] AC5: `hooks.json.tmpl` contains `infra-config-status` hook entry (GET, `include-command-output-in-response: true`)
+- [x] AC6: Self-restart (`systemd-run`) is called AFTER all file writes complete AND state file is persisted AND `sync` has flushed buffers. Ordering: write loop -> state file -> sync -> daemon-reload -> systemd-run
+- [x] AC7: All existing tests pass (`bash apps/web-platform/infra/infra-config-apply.test.sh`)
+- [x] AC8: New tests cover: state file happy path, partial failure state, logger output, self-restart ordering
+- [x] AC9: `cat-infra-config-state.test.sh` covers: missing state, corrupt state, valid state
+- [x] AC10: `apply-deploy-pipeline-fix.yml` includes "Verify infra-config apply succeeded" step
+- [x] AC11: `server.tf` `triggers_replace` includes the new `cat-infra-config-state.sh`
+- [x] AC12: `cloud-init.yml` includes `write_files` entry for `cat-infra-config-state.sh`
+- [x] AC13: `infra-config-apply.sh` FILE_MAP includes entry for `CAT_INFRA_CONFIG_STATE_SH_B64|/usr/local/bin/cat-infra-config-state.sh|755|root:root`
+- [x] AC14: `push-infra-config.sh` JSON payload includes `cat_infra_config_state_sh_b64` field (file encoding for self-update delivery)
+- [x] AC15: `hooks.json.tmpl` `infra-config` hook's `pass-environment-to-command` includes `CAT_INFRA_CONFIG_STATE_SH_B64` mapping
+- [x] AC16: `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` `TRIGGER_FILES` array includes `cat-infra-config-state.sh`
+- [x] AC17: `apply-deploy-pipeline-fix.yml` `paths:` filter includes `cat-infra-config-state.sh`
+- [x] AC18: Per-file `base64 -d` failure is caught without aborting the script (partial-failure support under `set -euo pipefail`)
+- [x] AC19: EXIT trap writes `{"exit_code":N,"reason":"unhandled"}` on non-zero exit when no `.final` sentinel exists
 
 ### Post-merge (operator)
 
