@@ -46,7 +46,18 @@ MOCK
 create_mock_sudo() {
   cat > "$1/sudo" << 'MOCK'
 #!/bin/bash
-exec "$@"
+# Skip sudo flags (--preserve-env=..., -E, etc.)
+while [[ "${1:-}" == -* ]]; do shift; done
+cmd="$1"; shift
+# Resolve absolute paths via PATH so mocks shadow system binaries.
+if [[ "$cmd" == /* ]]; then
+  base=$(basename "$cmd")
+  resolved=$(type -P "$base" 2>/dev/null || true)
+  if [[ -n "$resolved" ]]; then
+    exec "$resolved" "$@"
+  fi
+fi
+exec "$cmd" "$@"
 MOCK
   chmod +x "$1/sudo"
 }
@@ -76,6 +87,17 @@ fi
 exit 0
 MOCK
   chmod +x "$1/flock"
+}
+
+create_mock_systemctl() {
+  cat > "$1/systemctl" << 'MOCK'
+#!/bin/bash
+if [[ "${MOCK_SYSTEMCTL_FAIL:-}" == "1" ]]; then
+  exit 1
+fi
+exit 0
+MOCK
+  chmod +x "$1/systemctl"
 }
 
 create_mock_df() {
@@ -279,6 +301,17 @@ case "$URL" in
     if [[ "$WANT_HTTP_CODE" == "1" ]]; then echo "307"; fi
     exit 0
     ;;
+  *"/v1/functions"*)
+    if [[ "${MOCK_CURL_INNGEST_HEALTH_FAIL:-}" == "1" ]]; then
+      exit 1
+    fi
+    if [[ "${MOCK_CURL_INNGEST_ZERO_FUNCTIONS:-}" == "1" ]]; then
+      write_body "[]"
+      exit 0
+    fi
+    write_body '[{"id":"fn-1","name":"test-fn-1"},{"id":"fn-2","name":"test-fn-2"}]'
+    exit 0
+    ;;
 esac
 
 # Fallback for unmatched URLs (legacy callers without an URL arg).
@@ -315,6 +348,7 @@ create_base_mocks() {
   create_mock_chown "$mock_dir"
   create_mock_seq "$mock_dir"
   create_mock_flock "$mock_dir"
+  create_mock_systemctl "$mock_dir"
   create_mock_df "$mock_dir"
   create_mock_doppler "$mock_dir"
   create_mock_layer3 "$mock_dir"
@@ -1813,6 +1847,44 @@ REPRO
 }
 
 assert_trap_writes_timeout_state_in_isolation
+
+# --- Restart action tests (#4538) ---
+echo ""
+echo "--- Restart action ---"
+
+# AC1: restart inngest succeeds with healthy server + registered functions
+assert_state_contains "restart inngest succeeds" \
+  "success" "0" \
+  "restart inngest _ latest"
+
+# AC2: restart of non-inngest component rejected
+assert_state_contains "restart web-platform rejected" \
+  "component_not_restartable" "1" \
+  "restart web-platform _ latest"
+
+# AC5(a): systemctl restart failure
+assert_state_contains "restart inngest systemctl failure" \
+  "inngest_restart_failed" "1" \
+  "restart inngest _ latest" \
+  "export MOCK_SYSTEMCTL_FAIL=1"
+
+# AC5(b): restart with inngest health check failure
+assert_state_contains "restart inngest health failure" \
+  "inngest_health_failed" "1" \
+  "restart inngest _ latest" \
+  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1"
+
+# AC5(d): restart with zero functions
+assert_state_contains "restart inngest zero functions" \
+  "inngest_no_functions" "1" \
+  "restart inngest _ latest" \
+  "export MOCK_CURL_INNGEST_ZERO_FUNCTIONS=1"
+
+# Existing deploy validation still rejects `deploy inngest restart latest`
+# (image mismatch since "restart" != expected image)
+assert_state_contains "deploy inngest restart latest rejected as image_mismatch" \
+  "image_mismatch" "1" \
+  "deploy inngest restart latest"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
