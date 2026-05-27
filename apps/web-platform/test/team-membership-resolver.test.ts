@@ -21,6 +21,7 @@ interface ResolveOpts {
   members: MockRow[];
   emails: Record<string, { email: string; created_at: string }>;
   sessionOrgId?: string | null;
+  orgName?: string | null;
 }
 
 function mockSupabaseClients(opts: ResolveOpts) {
@@ -60,6 +61,19 @@ function mockSupabaseClients(opts: ResolveOpts) {
               })),
               error: null,
             }),
+        }),
+      };
+    }
+    if (table === "organizations") {
+      return {
+        select: () => ({
+          eq: () => ({
+            single: () =>
+              Promise.resolve({
+                data: { name: opts.orgName ?? null },
+                error: null,
+              }),
+          }),
         }),
       };
     }
