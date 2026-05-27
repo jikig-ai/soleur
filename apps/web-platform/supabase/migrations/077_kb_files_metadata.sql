@@ -42,10 +42,13 @@ CREATE POLICY kb_files_owner_or_shared ON public.kb_files
     OR (visibility = 'workspace' AND public.is_workspace_member(workspace_id, auth.uid()))
   );
 
--- Workspace members can INSERT (upload) files.
+-- Workspace members can INSERT (upload) files — owner-binding prevents attribution spoofing.
 CREATE POLICY kb_files_member_insert ON public.kb_files
   FOR INSERT TO authenticated
-  WITH CHECK (public.is_workspace_member(workspace_id, auth.uid()));
+  WITH CHECK (
+    user_id = auth.uid()
+    AND public.is_workspace_member(workspace_id, auth.uid())
+  );
 
 -- JTI deny RESTRICTIVE policy (per mig 068 pattern — Kieran H1).
 CREATE POLICY kb_files_jti_not_denied ON public.kb_files
