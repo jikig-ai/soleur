@@ -690,7 +690,8 @@ export async function deleteAccount(
         extra: { userId },
         message: "anonymise_organization_membership failed — aborting deletion",
       });
-      return { success: false, error: "Account deletion failed at anonymise-organization-membership. Please try again." };
+      const detail = typeof anonOrgErr === "object" && anonOrgErr !== null && "message" in anonOrgErr ? (anonOrgErr as { message: string }).message : String(anonOrgErr);
+      return { success: false, error: `Account deletion failed at anonymise-organization-membership: ${detail}` };
     }
     // Surface the reassign count + count of soon-to-be-orphan orgs so a
     // janitor / dashboard can detect runaway null-owner growth.
