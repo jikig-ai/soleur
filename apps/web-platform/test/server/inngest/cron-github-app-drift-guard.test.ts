@@ -282,6 +282,43 @@ describe("cronGithubAppDriftGuardHandler — failure modes", () => {
     expect(out.failureLabel).toBe("ci/guard-broken");
   });
 
+  it("transient github_app_401 retries once and self-heals", async () => {
+    let getAppCallCount = 0;
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route === "GET /app") {
+        getAppCallCount++;
+        if (getAppCallCount === 1) {
+          const err = new Error("A JSON web token could not be decoded") as Error & { status?: number };
+          err.status = 401;
+          throw err;
+        }
+        return { status: 200, data: healthyAppResponse, headers: {} };
+      }
+      if (route === "GET /app/installations") {
+        return {
+          status: 200,
+          data: healthyInstallationsResponse.data,
+          headers: healthyInstallationsResponse.headers,
+        };
+      }
+      if (route === "GET /search/issues") {
+        return { data: { items: [] } };
+      }
+      return { data: {} };
+    });
+    const { cronGithubAppDriftGuardHandler } = await importHandler();
+    const step = makeStep();
+    const out = await cronGithubAppDriftGuardHandler({ step, logger });
+    expect(out.failureMode).toBe("");
+    expect(out.leakDetected).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ fn: "cron-github-app-drift-guard" }),
+      expect.stringContaining("github_app_401"),
+    );
+    const fetchSpy = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    expect(findHeartbeatStatus(fetchSpy)).toBe("ok");
+  });
+
   it("github_app_401 → ci/auth-broken label", async () => {
     octokitRequestSpy.mockImplementation(async (route: string) => {
       if (route === "GET /app") {

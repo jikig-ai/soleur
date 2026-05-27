@@ -713,8 +713,20 @@ export async function cronGithubAppDriftGuardHandler({
   try {
     result = await step.run("drift-check", async (): Promise<DriftResult> => {
       const { octokit } = await createAppJwtOctokit();
-      return await probeDriftGuard({
+      const firstResult = await probeDriftGuard({
         octokit: octokit as unknown as Octokit,
+        logger,
+      });
+      if (firstResult.failureMode !== "github_app_401") return firstResult;
+
+      logger.warn(
+        { fn: "cron-github-app-drift-guard" },
+        "github_app_401 on drift-check — retrying once after 1s",
+      );
+      await new Promise((r) => setTimeout(r, 1_000));
+      const { octokit: retryOctokit } = await createAppJwtOctokit();
+      return await probeDriftGuard({
+        octokit: retryOctokit as unknown as Octokit,
         logger,
       });
     });
