@@ -46,12 +46,14 @@ BEGIN
       USING ERRCODE = '28000';
   END IF;
 
-  -- 2. Caller must be owner
+  -- 2. Caller must be owner (FOR UPDATE prevents concurrent transfers
+  -- from both reading the caller as owner under READ COMMITTED)
   SELECT EXISTS (
     SELECT 1 FROM public.workspace_members
     WHERE workspace_id = p_workspace_id
       AND user_id      = v_caller_user_id
       AND role         = 'owner'
+    FOR UPDATE
   ) INTO v_is_owner;
 
   IF NOT v_is_owner THEN
@@ -309,7 +311,8 @@ BEGIN
       -- (invite, remove, update-role, transfer) continue working.
       IF v_replacement_user_id IS NOT NULL THEN
         UPDATE public.workspace_members m
-           SET role = 'owner'
+           SET role = 'owner',
+               attestation_id = NULL
          WHERE m.user_id = v_replacement_user_id
            AND m.workspace_id IN (
              SELECT w.id FROM public.workspaces w

@@ -20,7 +20,6 @@ export function TransferOwnershipDialog({
   const [confirmation, setConfirmation] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const dialogRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const matches = confirmation.trim().toLowerCase() === confirmationTarget.toLowerCase();
@@ -90,7 +89,6 @@ export function TransferOwnershipDialog({
       aria-labelledby="transfer-ownership-title"
     >
       <div
-        ref={dialogRef}
         className="w-full max-w-md rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-6 shadow-xl"
       >
         <h2

@@ -5,6 +5,11 @@ import { isTeamWorkspaceInviteEnabled, type Identity } from "@/lib/feature-flags
 import { resolveTeamMembershipPageData } from "@/server/team-membership-resolver";
 import { transferWorkspaceOwnership } from "@/server/workspace-membership";
 
+// POST /api/workspace/transfer-ownership
+// Body: { workspaceId, newOwnerUserId, attestationText }
+//
+// Flag gate: reuses isTeamWorkspaceInviteEnabled (Flagsmith single-control).
+// Returns 404 when disabled. CSRF: validateOrigin gated.
 export async function POST(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
   if (!originValid) return rejectCsrf("api/workspace/transfer-ownership", origin);
@@ -44,7 +49,7 @@ export async function POST(request: Request) {
     typeof workspaceId !== "string" ||
     typeof newOwnerUserId !== "string" ||
     typeof attestationText !== "string" ||
-    attestationText.length < 10
+    attestationText.length < 16
   ) {
     return NextResponse.json({ error: "invalid_body" }, { status: 400 });
   }
