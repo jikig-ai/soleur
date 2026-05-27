@@ -103,11 +103,11 @@ None.
 
 ### Pre-merge (PR)
 
-- [ ] AC1: `apps/web-platform/Dockerfile` runner stage installs `gh` from the official GitHub CLI apt repository
-- [ ] AC2: The `apt-get install` block adds the GitHub apt keyring and source list before installing `gh`
-- [ ] AC3: `docker build` succeeds locally with the updated Dockerfile (verified: `docker build -f apps/web-platform/Dockerfile apps/web-platform/ --target runner`)
-- [ ] AC4: `docker run <image> gh --version` returns a valid version string
-- [ ] AC5: No other files are modified beyond the Dockerfile
+- [x] AC1: `apps/web-platform/Dockerfile` runner stage installs `gh` from the official GitHub CLI apt repository
+- [x] AC2: The `apt-get install` block adds the GitHub apt keyring and source list before installing `gh`
+- [ ] AC3: `docker build` succeeds locally with the updated Dockerfile (verified: `docker build -f apps/web-platform/Dockerfile apps/web-platform/ --target runner`) — deferred to CI (full build requires CI-only context)
+- [x] AC4: `docker run <image> gh --version` returns `gh version 2.92.0` — verified via isolated `docker run node:22-slim` test
+- [x] AC5: No other files are modified beyond the Dockerfile
 - [ ] AC6: PR body contains `Ref #<sentry-issue-number>` (not `Closes` -- the Sentry issue is external)
 - [ ] AC7: PR has `semver:patch` label and `bug` label
 
