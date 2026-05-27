@@ -26,15 +26,34 @@ setup() {
   printf '#!/bin/sh\nexit 0\n' > "$TMPDIR_ROOT/bin/systemd-run"
   printf '#!/bin/sh\nexit 0\n' > "$TMPDIR_ROOT/bin/systemctl"
   printf '#!/bin/sh\nexit 0\n' > "$TMPDIR_ROOT/bin/sudo"
-  chmod +x "$TMPDIR_ROOT/bin/systemd-run" "$TMPDIR_ROOT/bin/systemctl" "$TMPDIR_ROOT/bin/sudo"
+  # Mock sync (no-op in test)
+  printf '#!/bin/sh\nexit 0\n' > "$TMPDIR_ROOT/bin/sync"
+  chmod +x "$TMPDIR_ROOT/bin/systemd-run" "$TMPDIR_ROOT/bin/systemctl" "$TMPDIR_ROOT/bin/sudo" "$TMPDIR_ROOT/bin/sync"
+  # Mock logger that captures calls to a file
+  LOGGER_LOG="${TMPDIR_ROOT}/logger.log"
+  printf '#!/bin/sh\necho "$@" >> "%s"\n' "$LOGGER_LOG" > "$TMPDIR_ROOT/bin/logger"
+  chmod +x "$TMPDIR_ROOT/bin/logger"
   export PATH="$TMPDIR_ROOT/bin:$PATH"
+  # Redirect state file to sandbox
+  export INFRA_CONFIG_STATE="${TMPDIR_ROOT}/infra-config-apply.state"
   # Stub out daemon-reload and self-restart for test mode
   export INFRA_CONFIG_TEST_MODE=1
 }
 
 teardown() {
   rm -rf "$TMPDIR_ROOT"
-  unset TEST_DESTDIR INFRA_CONFIG_TEST_MODE
+  unset TEST_DESTDIR INFRA_CONFIG_TEST_MODE INFRA_CONFIG_STATE
+}
+
+export_valid_env_vars() {
+  export CI_DEPLOY_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
+  export CI_DEPLOY_WRAPPER_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
+  export WEBHOOK_SERVICE_B64=$(echo -n "[Unit]" | base64 -w0)
+  export CAT_DEPLOY_STATE_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
+  export CANARY_BUNDLE_CLAIM_CHECK_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
+  export DEPLOY_INNGEST_BOOTSTRAP_SUDOERS_B64=$(echo -n "deploy ALL=(root) NOPASSWD: /usr/bin/bash" | base64 -w0)
+  export HOOKS_JSON_B64=$(echo -n '{}' | base64 -w0)
+  export CAT_INFRA_CONFIG_STATE_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
 }
 
 assert_eq() {
@@ -81,13 +100,7 @@ test_happy_path() {
   echo "TEST: happy path — all managed files written"
   setup
 
-  export CI_DEPLOY_SH_B64=$(echo -n "#!/bin/bash\necho deploy" | base64 -w0)
-  export CI_DEPLOY_WRAPPER_SH_B64=$(echo -n "#!/bin/bash\necho wrapper" | base64 -w0)
-  export WEBHOOK_SERVICE_B64=$(echo -n "[Unit]\nDescription=test" | base64 -w0)
-  export CAT_DEPLOY_STATE_SH_B64=$(echo -n "#!/bin/bash\necho state" | base64 -w0)
-  export CANARY_BUNDLE_CLAIM_CHECK_SH_B64=$(echo -n "#!/bin/bash\necho canary" | base64 -w0)
-  export DEPLOY_INNGEST_BOOTSTRAP_SUDOERS_B64=$(echo -n "deploy ALL=(root) NOPASSWD: /usr/bin/bash" | base64 -w0)
-  export HOOKS_JSON_B64=$(echo -n '{"id":"deploy"}' | base64 -w0)
+  export_valid_env_vars
 
   bash "$HANDLER"
   local rc=$?
@@ -100,6 +113,7 @@ test_happy_path() {
   assert_file_exists "canary-bundle-claim-check.sh written" "$TEST_DESTDIR/usr/local/bin/canary-bundle-claim-check.sh"
   assert_file_exists "sudoers written" "$TEST_DESTDIR/etc/sudoers.d/deploy-inngest-bootstrap"
   assert_file_exists "hooks.json written" "$TEST_DESTDIR/etc/webhook/hooks.json"
+  assert_file_exists "cat-infra-config-state.sh written" "$TEST_DESTDIR/usr/local/bin/cat-infra-config-state.sh"
 
   assert_file_mode "ci-deploy.sh is executable" "$TEST_DESTDIR/usr/local/bin/ci-deploy.sh" "755"
   assert_file_mode "hooks.json is 640" "$TEST_DESTDIR/etc/webhook/hooks.json" "640"
@@ -113,12 +127,7 @@ test_missing_env_var() {
   setup
 
   # Set all but one required var
-  export CI_DEPLOY_SH_B64=$(echo -n "test" | base64 -w0)
-  export CI_DEPLOY_WRAPPER_SH_B64=$(echo -n "test" | base64 -w0)
-  export WEBHOOK_SERVICE_B64=$(echo -n "test" | base64 -w0)
-  export CAT_DEPLOY_STATE_SH_B64=$(echo -n "test" | base64 -w0)
-  export CANARY_BUNDLE_CLAIM_CHECK_SH_B64=$(echo -n "test" | base64 -w0)
-  export DEPLOY_INNGEST_BOOTSTRAP_SUDOERS_B64=$(echo -n "test" | base64 -w0)
+  export_valid_env_vars
   unset HOOKS_JSON_B64  # missing
 
   if bash "$HANDLER" 2>/dev/null; then
@@ -137,13 +146,8 @@ test_empty_env_var() {
   echo "TEST: empty env var — handler rejects"
   setup
 
+  export_valid_env_vars
   export CI_DEPLOY_SH_B64=""
-  export CI_DEPLOY_WRAPPER_SH_B64=$(echo -n "test" | base64 -w0)
-  export WEBHOOK_SERVICE_B64=$(echo -n "test" | base64 -w0)
-  export CAT_DEPLOY_STATE_SH_B64=$(echo -n "test" | base64 -w0)
-  export CANARY_BUNDLE_CLAIM_CHECK_SH_B64=$(echo -n "test" | base64 -w0)
-  export DEPLOY_INNGEST_BOOTSTRAP_SUDOERS_B64=$(echo -n "test" | base64 -w0)
-  export HOOKS_JSON_B64=$(echo -n "test" | base64 -w0)
 
   if bash "$HANDLER" 2>/dev/null; then
     echo "  FAIL: handler should have failed with empty CI_DEPLOY_SH_B64"
@@ -165,13 +169,8 @@ test_visudo_failure() {
   printf '#!/bin/sh\nexit 1\n' > "$TMPDIR_ROOT/bin/visudo"
   chmod +x "$TMPDIR_ROOT/bin/visudo"
 
-  export CI_DEPLOY_SH_B64=$(echo -n "test" | base64 -w0)
-  export CI_DEPLOY_WRAPPER_SH_B64=$(echo -n "test" | base64 -w0)
-  export WEBHOOK_SERVICE_B64=$(echo -n "test" | base64 -w0)
-  export CAT_DEPLOY_STATE_SH_B64=$(echo -n "test" | base64 -w0)
-  export CANARY_BUNDLE_CLAIM_CHECK_SH_B64=$(echo -n "test" | base64 -w0)
+  export_valid_env_vars
   export DEPLOY_INNGEST_BOOTSTRAP_SUDOERS_B64=$(echo -n "bad sudoers" | base64 -w0)
-  export HOOKS_JSON_B64=$(echo -n '{}' | base64 -w0)
 
   # Handler should still succeed (other files written) but sudoers must NOT be installed
   bash "$HANDLER" 2>/dev/null || true
@@ -197,13 +196,8 @@ test_atomic_write() {
   setup
 
   local content="line1\nline2\nline3\nthis is the end"
+  export_valid_env_vars
   export CI_DEPLOY_SH_B64=$(echo -n "$content" | base64 -w0)
-  export CI_DEPLOY_WRAPPER_SH_B64=$(echo -n "test" | base64 -w0)
-  export WEBHOOK_SERVICE_B64=$(echo -n "test" | base64 -w0)
-  export CAT_DEPLOY_STATE_SH_B64=$(echo -n "test" | base64 -w0)
-  export CANARY_BUNDLE_CLAIM_CHECK_SH_B64=$(echo -n "test" | base64 -w0)
-  export DEPLOY_INNGEST_BOOTSTRAP_SUDOERS_B64=$(echo -n "test" | base64 -w0)
-  export HOOKS_JSON_B64=$(echo -n "test" | base64 -w0)
 
   bash "$HANDLER"
 
@@ -219,6 +213,206 @@ test_atomic_write() {
   teardown
 }
 
+# --- Test 6: State file happy path — all files succeed ---
+test_state_file_happy_path() {
+  echo "TEST: state file — happy path with per-file SHA and status ok"
+  setup
+  export_valid_env_vars
+
+  bash "$HANDLER" 2>/dev/null
+
+  assert_file_exists "state file written" "$INFRA_CONFIG_STATE"
+
+  local exit_code files_written files_failed
+  exit_code=$(jq -r '.exit_code' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  files_written=$(jq -r '.files_written' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  files_failed=$(jq -r '.files_failed' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  assert_eq "exit_code is 0" "0" "$exit_code"
+  assert_eq "files_written is 8" "8" "$files_written"
+  assert_eq "files_failed is 0" "0" "$files_failed"
+
+  local first_file_status first_file_sha
+  first_file_status=$(jq -r '.files[0].status' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  first_file_sha=$(jq -r '.files[0].sha256' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  assert_eq "first file status is ok" "ok" "$first_file_status"
+  if [[ "$first_file_sha" =~ ^[a-f0-9]{64}$ ]]; then
+    echo "  PASS: first file has valid SHA256"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: first file SHA256 invalid: $first_file_sha"
+    FAIL=$((FAIL + 1))
+  fi
+
+  local start_ts end_ts
+  start_ts=$(jq -r '.start_ts' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  end_ts=$(jq -r '.end_ts' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  if [[ "$start_ts" =~ ^[0-9]+$ ]] && [[ "$end_ts" =~ ^[0-9]+$ ]]; then
+    echo "  PASS: timestamps are numeric"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: timestamps not numeric (start=$start_ts, end=$end_ts)"
+    FAIL=$((FAIL + 1))
+  fi
+
+  teardown
+}
+
+# --- Test 7: State file partial failure — bad base64 ---
+test_state_file_partial_failure() {
+  echo "TEST: state file — partial failure with bad base64"
+  setup
+  export_valid_env_vars
+  # Inject invalid base64 for one file
+  export CI_DEPLOY_SH_B64="!!!not-valid-base64!!!"
+
+  bash "$HANDLER" 2>/dev/null || true
+
+  assert_file_exists "state file written on partial failure" "$INFRA_CONFIG_STATE"
+
+  local exit_code files_failed
+  exit_code=$(jq -r '.exit_code' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  files_failed=$(jq -r '.files_failed' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  assert_eq "exit_code is non-zero" "1" "$exit_code"
+  if [[ "$files_failed" =~ ^[0-9]+$ ]] && [[ "$files_failed" -gt 0 ]]; then
+    echo "  PASS: files_failed > 0"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: files_failed should be > 0, got $files_failed"
+    FAIL=$((FAIL + 1))
+  fi
+
+  local failed_file_status
+  failed_file_status=$(jq -r '.files[] | select(.file == "/usr/local/bin/ci-deploy.sh") | .status' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  assert_eq "failed file status" "failed" "$failed_file_status"
+
+  local ok_count
+  ok_count=$(jq '[.files[] | select(.status == "ok")] | length' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "0")
+  if [[ "$ok_count" =~ ^[0-9]+$ ]] && [[ "$ok_count" -gt 0 ]]; then
+    echo "  PASS: other files still succeeded ($ok_count ok)"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: no files succeeded despite only 1 bad input"
+    FAIL=$((FAIL + 1))
+  fi
+
+  teardown
+}
+
+# --- Test 8: State file visudo skip ---
+test_state_file_visudo_skip() {
+  echo "TEST: state file — visudo failure shows skipped status"
+  setup
+  export_valid_env_vars
+
+  printf '#!/bin/sh\nexit 1\n' > "$TMPDIR_ROOT/bin/visudo"
+  chmod +x "$TMPDIR_ROOT/bin/visudo"
+
+  bash "$HANDLER" 2>/dev/null || true
+
+  assert_file_exists "state file written" "$INFRA_CONFIG_STATE"
+
+  local sudoers_status sudoers_reason
+  sudoers_status=$(jq -r '.files[] | select(.file == "/etc/sudoers.d/deploy-inngest-bootstrap") | .status' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  sudoers_reason=$(jq -r '.files[] | select(.file == "/etc/sudoers.d/deploy-inngest-bootstrap") | .reason' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  assert_eq "sudoers status is skipped" "skipped" "$sudoers_status"
+  assert_eq "sudoers reason" "visudo_validation_failed" "$sudoers_reason"
+
+  teardown
+}
+
+# --- Test 9: Logger output uses correct tag ---
+test_logger_tag() {
+  echo "TEST: logger — output uses infra-config-apply tag"
+  setup
+  export_valid_env_vars
+
+  bash "$HANDLER" 2>/dev/null
+
+  if [[ -f "$LOGGER_LOG" ]] && grep -q "infra-config-apply" "$LOGGER_LOG"; then
+    echo "  PASS: logger called with correct tag"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: no logger calls with tag infra-config-apply"
+    FAIL=$((FAIL + 1))
+  fi
+
+  if grep -q "starting:" "$LOGGER_LOG" 2>/dev/null; then
+    echo "  PASS: logger start message present"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: no logger start message"
+    FAIL=$((FAIL + 1))
+  fi
+
+  if grep -q "complete:" "$LOGGER_LOG" 2>/dev/null; then
+    echo "  PASS: logger completion message present"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: no logger completion message"
+    FAIL=$((FAIL + 1))
+  fi
+
+  teardown
+}
+
+# --- Test 10: Self-restart ordering — state file before systemd-run ---
+test_restart_ordering() {
+  echo "TEST: restart ordering — state file written before systemd-run"
+  setup
+  export_valid_env_vars
+  unset INFRA_CONFIG_TEST_MODE
+
+  local order_log="${TMPDIR_ROOT}/order.log"
+  # Replace systemd-run mock to record call time relative to state file
+  cat > "$TMPDIR_ROOT/bin/sudo" <<MOCK
+#!/bin/sh
+if echo "\$@" | grep -q "systemd-run"; then
+  if [ -f "$INFRA_CONFIG_STATE" ]; then
+    echo "systemd-run: state_file_exists=true" >> "$order_log"
+  else
+    echo "systemd-run: state_file_exists=false" >> "$order_log"
+  fi
+fi
+exit 0
+MOCK
+  chmod +x "$TMPDIR_ROOT/bin/sudo"
+
+  bash "$HANDLER" 2>/dev/null
+
+  if [[ -f "$order_log" ]] && grep -q "state_file_exists=true" "$order_log"; then
+    echo "  PASS: state file exists when systemd-run is called"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: state file should exist before systemd-run"
+    FAIL=$((FAIL + 1))
+  fi
+
+  teardown
+}
+
+# --- Test 11: EXIT trap writes unhandled state on crash ---
+test_exit_trap_unhandled() {
+  echo "TEST: EXIT trap — writes unhandled state on non-zero exit"
+  setup
+  export_valid_env_vars
+  # Make first dest dir read-only so mv fails, triggering set -e abort and EXIT trap
+  chmod 000 "$TEST_DESTDIR/usr/local/bin"
+
+  bash "$HANDLER" 2>/dev/null || true
+
+  if [[ -f "$INFRA_CONFIG_STATE" ]]; then
+    local reason
+    reason=$(jq -r '.reason' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+    assert_eq "exit trap writes unhandled reason" "unhandled" "$reason"
+  else
+    echo "  FAIL: no state file written by EXIT trap"
+    FAIL=$((FAIL + 1))
+  fi
+
+  chmod 755 "$TEST_DESTDIR/usr/local/bin"
+  teardown
+}
+
 # --- Run all tests ---
 echo "=== infra-config-apply.sh test suite ==="
 test_happy_path
@@ -226,6 +420,12 @@ test_missing_env_var
 test_empty_env_var
 test_visudo_failure
 test_atomic_write
+test_state_file_happy_path
+test_state_file_partial_failure
+test_state_file_visudo_skip
+test_logger_tag
+test_restart_ordering
+test_exit_trap_unhandled
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then

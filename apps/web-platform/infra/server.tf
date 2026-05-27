@@ -37,6 +37,7 @@ resource "hcloud_server" "web" {
     fail2ban_sshd_local_b64              = base64encode(file("${path.module}/fail2ban-sshd.local"))
     hooks_json_b64                       = base64encode(local.hooks_json)
     infra_config_apply_script_b64        = base64encode(file("${path.module}/infra-config-apply.sh"))
+    cat_infra_config_state_script_b64    = base64encode(file("${path.module}/cat-infra-config-state.sh"))
     tunnel_token                         = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
     webhook_deploy_secret                = var.webhook_deploy_secret
     doppler_token                        = var.doppler_token
@@ -236,6 +237,7 @@ resource "terraform_data" "deploy_pipeline_fix" {
     file("${path.module}/deploy-inngest-bootstrap.sudoers"),
     file("${path.module}/infra-config-apply.sh"),
     file("${path.module}/push-infra-config.sh"),
+    file("${path.module}/cat-infra-config-state.sh"),
     local.hooks_json,
   ]))
 

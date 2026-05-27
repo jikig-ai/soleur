@@ -1,0 +1,84 @@
+---
+title: "fix(infra): add structured logging + error surfacing to infra-config-apply.sh"
+type: fix
+date: 2026-05-28
+lane: single-domain
+issue: 4554
+---
+
+# Tasks: fix(infra) infra-config-apply logging + error surfacing
+
+## Phase 1: Core -- logging + state file + restart reordering
+
+### 1.1 Add structured logging to infra-config-apply.sh
+- [x] Add `readonly LOG_TAG="infra-config-apply"` after `set -euo pipefail`
+- [x] Add `logger -t "$LOG_TAG"` calls for: env var validation failures, per-file write start/success/failure, visudo skip, completion summary
+- [x] Ensure `echo ... >&2` error messages are ALSO sent via `logger -t` (dual output for backward compat)
+
+### 1.2 Restructure write loop for per-file error handling
+- [x] Wrap `base64 -d` in per-file error handler (`if ! ... 2>/dev/null; then ... continue; fi`) so decode failures are recorded without aborting under `set -euo pipefail`
+- [x] Track per-file results in shell variables during write loop (no jq dependency)
+- [x] After each successful mv, compute SHA256: `sha256sum "$dest" | awk '{print $1}'`
+- [x] On failure: log via `logger -t`, record failed status, increment fail counter, continue
+
+### 1.3 Add persistent state file
+- [x] Add `STATE_FILE="${INFRA_CONFIG_STATE:-/var/lock/infra-config-apply.state}"` (test-overridable)
+- [x] Add `START_TS=$(date +%s)` at script start
+- [x] After write loop, build JSON via printf and write atomically via mktemp+mv
+- [x] Redesign EXIT trap: clear stale `.final` sentinel, write `"unhandled"` state on non-zero exit without sentinel, clean tmpfiles (precedent: `ci-deploy.sh:105-111`)
+- [x] At normal completion: touch `.final` sentinel BEFORE writing success state (precedent: `ci-deploy.sh:96-97`)
+
+### 1.4 Reorder self-restart
+- [x] Insert state file write + `sync` between write loop and `systemd-run` call
+- [x] Final ordering: write loop -> state file write -> sync -> daemon-reload -> systemd-run
+- [x] Add `logger -t "$LOG_TAG" "scheduling self-restart in 3s"` before restart
+
+### 1.5 Add FILE_MAP entry for cat-infra-config-state.sh
+- [x] Add `"CAT_INFRA_CONFIG_STATE_SH_B64|/usr/local/bin/cat-infra-config-state.sh|755|root:root"` to FILE_MAP array
+
+## Phase 2: Endpoint + wiring
+
+### 2.1 Create cat-infra-config-state.sh
+- [x] Create minimal state reporter script (read JSON file, return sentinels for missing/corrupt)
+- [x] No service status merging, no journal tails -- just the state file
+- [x] Add comment explaining that `jq -c .` printing to stdout IS the success path (no explicit else needed)
+
+### 2.2 Wire into hooks.json.tmpl
+- [x] Add `infra-config-status` hook entry (GET, `include-command-output-in-response: true`, same HMAC auth)
+- [x] Add `CAT_INFRA_CONFIG_STATE_SH_B64` to `infra-config` hook's `pass-environment-to-command` array
+
+### 2.3 Wire into server.tf
+- [x] Add `cat_infra_config_state_script_b64 = base64encode(file("${path.module}/cat-infra-config-state.sh"))` to templatefile vars
+- [x] Add `file("${path.module}/cat-infra-config-state.sh")` to `triggers_replace` list
+
+### 2.4 Wire into cloud-init.yml
+- [x] Add `write_files` entry for `/usr/local/bin/cat-infra-config-state.sh` (755, root:root)
+
+### 2.5 Update push-infra-config.sh payload
+- [x] Add `"cat_infra_config_state_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/cat-infra-config-state.sh")"` to JSON payload
+
+### 2.6 Add CI verification step
+- [x] Add "Verify infra-config apply succeeded" step to `apply-deploy-pipeline-fix.yml`
+- [x] Poll `/hooks/infra-config-status` post-apply
+- [x] Tolerate HTTP 404 on first apply (warn, do not fail)
+
+### 2.7 Update workflow paths filter
+- [x] Add `"apps/web-platform/infra/cat-infra-config-state.sh"` to `apply-deploy-pipeline-fix.yml` `paths:` list
+
+### 2.8 Update drift guard test
+- [x] Add `"apps/web-platform/infra/cat-infra-config-state.sh"` to `TRIGGER_FILES` array in `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts`
+
+## Phase 3: Tests
+
+### 3.1 Extend infra-config-apply.test.sh
+- [x] Test: happy path -- state file written with correct per-file SHA and `status: ok` for all 8 files
+- [x] Test: partial failure -- bad base64 produces `status: failed` in state, other files still succeed
+- [x] Test: visudo failure -- `status: skipped, reason: visudo_validation_failed`
+- [x] Test: logger output -- mock logger captures correct tag
+- [x] Test: restart ordering -- mock systemd-run records call order relative to state file
+- [x] Test: EXIT trap writes unhandled state on crash (simulate with early exit)
+
+### 3.2 Create cat-infra-config-state.test.sh
+- [x] Test: no state file -- returns `{"exit_code":-2,"reason":"no_prior_apply"}`
+- [x] Test: corrupt state file -- returns `{"exit_code":-3,"reason":"corrupt_state"}`
+- [x] Test: valid state file -- returns JSON verbatim
