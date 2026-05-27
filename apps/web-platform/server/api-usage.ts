@@ -137,6 +137,7 @@ export async function loadApiUsageForUser(
   const monthStartIso = computeMonthStartIso();
 
   const [listRes, monthRes] = await Promise.all([
+    // visibility-sweep-audit: owner-scoped — BYOK cost aggregation is per-user
     tenant
       .from("conversations")
       .select(

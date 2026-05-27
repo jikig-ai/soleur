@@ -464,6 +464,34 @@ ADR-038 (`knowledge-base/engineering/architecture/decisions/ADR-038-workspace-me
 
 ---
 
+## Processing Activity 24 — Team activity feed (PR-B #4521)
+
+| Art. 30(1) limb | Entry |
+|---|---|
+| **(a) Purpose** | Workspace activity timeline: records member join/leave events and conversation-sharing events for team awareness within a shared workspace |
+| **(b) Categories of data subjects** | Workspace co-members (actors whose join/leave/share events are recorded) |
+| **(c) Categories of personal data** | `workspace_activity` rows: workspace_id, actor_user_id (NULLable — ON DELETE SET NULL), event_type (member_join, member_leave, conversation_shared), metadata (JSONB — conversation_id for shared events), created_at |
+| **(d) Recipients** | Co-members of the same workspace (via RLS `workspace_activity_member_select` policy + `is_workspace_member()` helper); Supabase Inc (infrastructure processor — existing sub-processor) |
+| **(e) Transfers** | No new third-country transfer introduced |
+| **(f) Retention** | 90 days. Automated purge via pg_cron `workspace_activity_purge` (daily at 03:00 UTC, `DELETE WHERE created_at < now() - interval '90 days'`). Art. 17 cascade: `anonymise_workspace_activity(p_user_id)` sets `actor_user_id = NULL`, `metadata = '{}'` at `server/account-delete.ts` step 3.935 |
+| **(g) TOMs** | (1) RLS: workspace-member SELECT only (no client INSERT/UPDATE/DELETE); (2) JTI deny RESTRICTIVE policy (`workspace_activity_jti_not_denied`); (3) SECURITY DEFINER `record_workspace_activity` RPC with `search_path = public, pg_temp`, GRANT to `service_role` only; (4) event_type validation in RPC body (allowlist: member_join, member_leave, conversation_shared); (5) NOT added to Realtime publication (polling only, 60s interval); (6) feature flag gate (`FLAG_TEAM_WORKSPACE_INVITE`, default OFF) |
+
+---
+
+## Processing Activity 25 — Knowledge-base file metadata (PR-C #4521)
+
+| Art. 30(1) limb | Entry |
+|---|---|
+| **(a) Purpose** | Uploader attribution and visibility controls for files in the shared knowledge base: records who uploaded each file and whether it is visible to the workspace or private to the uploader |
+| **(b) Categories of data subjects** | Workspace co-members who upload files to the shared knowledge base |
+| **(c) Categories of personal data** | `kb_files` rows: workspace_id, user_id (NULLable — ON DELETE SET NULL, the uploader), file_path, filename, visibility (private/workspace), uploaded_at, updated_at |
+| **(d) Recipients** | Co-members of the same workspace for `visibility = 'workspace'` files (via RLS `kb_files_owner_or_shared` policy); uploader-only for `visibility = 'private'` files; Supabase Inc (infrastructure processor — existing sub-processor) |
+| **(e) Transfers** | No new third-country transfer introduced |
+| **(f) Retention** | Lifetime of the workspace. No automated purge (files managed manually by workspace owner). Art. 17 cascade: `user_id` SET NULL via FK `ON DELETE SET NULL` on `auth.admin.deleteUser` |
+| **(g) TOMs** | (1) RLS: dual-predicate SELECT (owner OR workspace-shared via `is_workspace_member()`); INSERT for workspace members; (2) JTI deny RESTRICTIVE policy (`kb_files_jti_not_denied`); (3) column-level REVOKE on `visibility` and `workspace_id` columns — mutations only via SECURITY DEFINER `set_kb_file_visibility` RPC (owner-only, `search_path = public, pg_temp`); (4) UNIQUE constraint on `(workspace_id, file_path)` — prevents duplicate metadata rows; (5) `updated_at` auto-trigger on UPDATE; (6) feature flag gate (`FLAG_TEAM_WORKSPACE_INVITE`, default OFF) |
+
+---
+
 ## Register Maintenance
 
 - **Review cadence:** Quarterly + event-driven (new processing activity, new sub-processor, new third-country transfer, new technology, new lawful basis, supervisory-authority engagement).

@@ -181,6 +181,7 @@ export async function updateConversationFor(
     throw err;
   }
 
+  // visibility-sweep-audit: owner-scoped — conversation metadata updates are owner-only
   const baseQuery = tenant
     .from("conversations")
     .update(patch)

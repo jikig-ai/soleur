@@ -39,6 +39,7 @@ export async function enumerateCoUploaderAttachments(
   let allConvIds: string[] = [];
   for (let i = 0; i < workspaceIds.length; i += IN_BATCH_SIZE) {
     const batch = workspaceIds.slice(i, i + IN_BATCH_SIZE);
+    // visibility-sweep-audit: co-uploader DSAR — workspace-scoped by design (finds other users' conversations)
     const { data: convRows } = await service
       .from("conversations")
       .select("id")

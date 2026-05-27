@@ -18,6 +18,8 @@ export type KbContentHeaderProps = {
   lastSync?: KbSyncHistoryRow | null;
   /** Refetch hook invoked after a successful manual /api/kb/sync POST. */
   onSynced?: () => void;
+  /** Uploader attribution label (e.g. user email prefix). Null for pre-existing files. */
+  uploaderLabel?: string | null;
 };
 
 export function KbContentHeader({
@@ -26,6 +28,7 @@ export function KbContentHeader({
   download,
   lastSync,
   onSynced,
+  uploaderLabel,
 }: KbContentHeaderProps) {
   return (
     <header className="flex shrink-0 items-center justify-between border-b border-soleur-border-default px-4 py-3 md:px-6">
@@ -49,6 +52,14 @@ export function KbContentHeader({
           </svg>
         </Link>
         <KbBreadcrumb path={joinedPath} />
+        {uploaderLabel && (
+          <span className="hidden items-center gap-1 text-xs text-soleur-text-muted md:inline-flex">
+            <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-soleur-bg-surface-2 text-[10px] font-medium">
+              {uploaderLabel.slice(0, 2).toUpperCase()}
+            </span>
+            {uploaderLabel}
+          </span>
+        )}
       </div>
       <div className="flex items-center gap-2">
         {download && (

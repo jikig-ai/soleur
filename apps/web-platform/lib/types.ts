@@ -455,6 +455,8 @@ export interface Conversation {
   // server/conversation-routing.ts (Stage 2). NULL = legacy router.
   active_workflow?: string | null;
   workflow_ended_at?: string | null;
+  workspace_id?: string;
+  visibility?: "private" | "workspace";
 }
 
 export type ConversationStatus = Conversation["status"];

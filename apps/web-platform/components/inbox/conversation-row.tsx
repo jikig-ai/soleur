@@ -174,6 +174,11 @@ export function ConversationRow({ conversation, onArchive, onUnarchive, onStatus
                 KB
               </span>
             )}
+            {conversation.visibility === "workspace" && (
+              <span className="inline-flex items-center rounded-full bg-blue-500/15 px-2 py-0.5 text-[10px] font-medium text-blue-400">
+                Workspace
+              </span>
+            )}
             {isArchived && (
               <span className="inline-flex items-center rounded-full bg-soleur-bg-surface-2 px-2 py-0.5 text-[10px] font-medium text-soleur-text-secondary">
                 Archived
@@ -214,6 +219,11 @@ export function ConversationRow({ conversation, onArchive, onUnarchive, onStatus
         {conversation.context_path && (
           <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-400">
             KB
+          </span>
+        )}
+        {conversation.visibility === "workspace" && (
+          <span className="inline-flex items-center rounded-full bg-blue-500/15 px-2 py-0.5 text-[10px] font-medium text-blue-400">
+            Workspace
           </span>
         )}
         {isArchived && (
