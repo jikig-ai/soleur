@@ -98,7 +98,15 @@ async function handleSync(userId: string): Promise<Response> {
     );
   }
 
-  if (!userData.workspace_path || !userData.github_installation_id) {
+  let installationId = userData.github_installation_id;
+  if (!installationId) {
+    const { resolveInstallationId } = await import(
+      "@/server/resolve-installation-id"
+    );
+    installationId = await resolveInstallationId(userId);
+  }
+
+  if (!userData.workspace_path || !installationId) {
     return NextResponse.json(
       { error: "Workspace not connected" },
       { status: 409 },
@@ -106,7 +114,7 @@ async function handleSync(userId: string): Promise<Response> {
   }
 
   const syncResult = await syncWorkspace(
-    userData.github_installation_id,
+    installationId,
     userData.workspace_path,
     logger,
     { userId, op: "manual" },
