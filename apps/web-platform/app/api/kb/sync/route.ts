@@ -13,7 +13,6 @@ import { createClient } from "@/lib/supabase/server";
 import { getFreshTenantClient, RuntimeAuthError } from "@/lib/supabase/tenant";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { syncWorkspace } from "@/server/kb-route-helpers";
-import { resolveInstallationId } from "@/server/resolve-installation-id";
 import {
   appendKbSyncRow,
   ERROR_CLASS_SYNC_FAILED,
@@ -99,9 +98,13 @@ async function handleSync(userId: string): Promise<Response> {
     );
   }
 
-  const installationId =
-    userData.github_installation_id ??
-    (await resolveInstallationId(userId));
+  let installationId = userData.github_installation_id;
+  if (!installationId) {
+    const { resolveInstallationId } = await import(
+      "@/server/resolve-installation-id"
+    );
+    installationId = await resolveInstallationId(userId);
+  }
 
   if (!userData.workspace_path || !installationId) {
     return NextResponse.json(

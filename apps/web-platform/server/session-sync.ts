@@ -14,7 +14,6 @@ import {
   RuntimeAuthError,
 } from "@/lib/supabase/tenant";
 import { hashUserId, reportSilentFallback } from "@/server/observability";
-import { resolveInstallationId } from "@/server/resolve-installation-id";
 import { gitWithInstallationAuth } from "./git-auth";
 import { createChildLogger } from "./logger";
 
@@ -223,6 +222,9 @@ function hasLocalCommits(workspacePath: string): boolean {
 }
 
 async function getInstallationId(userId: string): Promise<number | null> {
+  const { resolveInstallationId } = await import(
+    "@/server/resolve-installation-id"
+  );
   return resolveInstallationId(userId);
 }
 
