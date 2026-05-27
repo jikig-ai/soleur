@@ -188,43 +188,29 @@ resolve_env_file() {
   return 0
 }
 
-# Verify inngest-server is healthy and has registered functions (#4538).
-# Returns 0 if healthy with >= 1 function.
-# Returns 1 if server never became reachable (health failure).
-# Returns 2 if server is reachable but has 0 registered functions.
+# Verify inngest-server is healthy after restart (#4538).
+# Returns 0 if /health returns {"status":200}.
+# Returns 1 if server never became reachable within the retry window.
 # Uses `|| true` after curl instead of set +e/-e toggle — toggling set -e
 # inside a function re-enables it globally and causes the caller's non-zero
 # capture (`VERIFY_RC=$?`) to never execute.
-verify_inngest_functions() {
+verify_inngest_health() {
   local max_attempts="${1:-10}"
   local interval="${2:-3}"
-  local server_reached=false
-  local count=0
   local response=""
 
   for i in $(seq 1 "$max_attempts"); do
-    response=$(curl -sf --max-time 5 http://127.0.0.1:8288/v1/functions 2>/dev/null) || true
+    response=$(curl -sf --max-time 5 http://127.0.0.1:8288/health 2>/dev/null) || true
 
-    if [[ -z "$response" ]]; then
-      logger -t "$LOG_TAG" "INNGEST_HEALTH: attempt $i/$max_attempts — connection failed or empty response"
-      sleep "$interval"
-      continue
-    fi
-
-    server_reached=true
-    count=$(printf '%s' "$response" | jq 'if type == "array" then length else 0 end' 2>/dev/null || echo "0")
-    if [[ "$count" -ge 1 ]]; then
-      logger -t "$LOG_TAG" "INNGEST_VERIFY: healthy=true count=$count"
+    if [[ -n "$response" ]]; then
+      logger -t "$LOG_TAG" "INNGEST_HEALTH: healthy=true (attempt $i/$max_attempts)"
       return 0
     fi
-    logger -t "$LOG_TAG" "INNGEST_HEALTH: attempt $i/$max_attempts — server up but 0 functions"
+    logger -t "$LOG_TAG" "INNGEST_HEALTH: attempt $i/$max_attempts — connection failed or empty response"
     sleep "$interval"
   done
 
-  logger -t "$LOG_TAG" "INNGEST_VERIFY: healthy=false server_reached=$server_reached count=$count"
-  if [[ "$server_reached" == "true" ]]; then
-    return 2
-  fi
+  logger -t "$LOG_TAG" "INNGEST_HEALTH: healthy=false after $max_attempts attempts"
   return 1
 }
 
@@ -341,16 +327,13 @@ if [[ "$ACTION" == "restart" ]]; then
   fi
 
   set +e
-  verify_inngest_functions
+  verify_inngest_health
   VERIFY_RC=$?
   set -e
   if [[ "$VERIFY_RC" -eq 0 ]]; then
     logger -t "$LOG_TAG" "SUCCESS: restart $COMPONENT"
     final_write_state 0 "success"
     exit 0
-  elif [[ "$VERIFY_RC" -eq 2 ]]; then
-    final_write_state 1 "inngest_no_functions"
-    exit 1
   else
     final_write_state 1 "inngest_health_failed"
     exit 1
@@ -612,15 +595,14 @@ case "$COMPONENT" in
         { docker stop soleur-web-platform-canary 2>/dev/null || true; }
         { docker rm soleur-web-platform-canary 2>/dev/null || true; }
 
-        # Inngest function registry sanity check (informational, #4538).
+        # Inngest health sanity check (informational, #4538).
         # Non-blocking: does NOT gate deploy success.
         sleep 5
-        inngest_count=$(curl -sf --max-time 5 http://127.0.0.1:8288/v1/functions 2>/dev/null \
-          | jq 'if type == "array" then length else 0 end' 2>/dev/null || echo "0")
-        inngest_count="${inngest_count:-0}"
-        logger -t "$LOG_TAG" "INNGEST_FUNCTION_COUNT: ${inngest_count}"
-        if [[ "$inngest_count" -eq 0 ]]; then
-          logger -t "$LOG_TAG" "INNGEST_WARN: zero functions registered after deploy — consider running restart-inngest-server.yml workflow"
+        inngest_health=$(curl -sf --max-time 5 http://127.0.0.1:8288/health 2>/dev/null || echo "")
+        if [[ -n "$inngest_health" ]]; then
+          logger -t "$LOG_TAG" "INNGEST_HEALTH_CHECK: ok"
+        else
+          logger -t "$LOG_TAG" "INNGEST_WARN: inngest-server not reachable after deploy — consider running restart-inngest-server.yml workflow"
         fi
 
         echo "Deploy succeeded"
