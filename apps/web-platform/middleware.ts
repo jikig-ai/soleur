@@ -263,7 +263,9 @@ export async function middleware(request: NextRequest) {
       const row = Array.isArray(revokeData) ? revokeData[0] : revokeData;
       if (row && row.revoked === true) {
         const reason =
-          row.reason === "role-changed" ? "role-changed" : "removed";
+          row.reason === "ownership-transferred"
+            ? "ownership-transferred"
+            : row.reason === "role-changed" ? "role-changed" : "removed";
         const params = new URLSearchParams({ revoked: reason });
         return clearSessionAndRedirect(request, cspValue, "/login", params);
       }

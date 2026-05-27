@@ -27,6 +27,7 @@ export interface TeamMembershipRow {
 
 export interface TeamMembershipPageData {
   organizationId: string;
+  organizationName: string | null;
   workspaceId: string;
   currentUserId: string;
   members: TeamMembershipRow[];
@@ -75,6 +76,15 @@ export async function resolveTeamMembershipPageData(
 
   const orgId = await resolveCurrentOrganizationId(user.id, service);
   if (!orgId) return { ok: false, reason: "no-org" };
+
+  const orgNameResp = await (service.from("organizations") as {
+    select: (cols: string) => {
+      eq: (col: string, val: string) => {
+        single: () => Promise<{ data: { name: string | null } | null; error: unknown }>;
+      };
+    };
+  }).select("name").eq("id", orgId).single();
+  const organizationName: string | null = orgNameResp.data?.name ?? null;
 
   const identity: Identity = { userId: user.id, role: "prd", orgId };
   if (!(await isTeamWorkspaceInviteEnabled(orgId, identity))) {
@@ -202,6 +212,7 @@ export async function resolveTeamMembershipPageData(
     ok: true,
     data: {
       organizationId: orgId,
+      organizationName,
       workspaceId,
       currentUserId: user.id,
       members,
