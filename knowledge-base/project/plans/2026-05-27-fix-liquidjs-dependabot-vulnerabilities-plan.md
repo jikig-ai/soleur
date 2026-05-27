@@ -35,10 +35,10 @@ liquidjs is a transitive dependency of `@11ty/eleventy@3.1.5` (devDependency in 
 
 ### Pre-merge (PR)
 
-- [ ] AC1: `npm ls liquidjs` shows `liquidjs@10.27.0` (or latest available within `^10.25.0` that is >= 10.26.0)
-- [ ] AC2: `npm audit --audit-level=moderate` exits 0 (no moderate+ vulnerabilities remain)
-- [ ] AC3: Docs build succeeds: `npm run docs:build` exits 0
-- [ ] AC4: Only `package-lock.json` is modified: `git diff --name-only` returns only `package-lock.json`
+- [x] AC1: `npm ls liquidjs` shows `liquidjs@10.27.0` (or latest available within `^10.25.0` that is >= 10.26.0)
+- [x] AC2: `npm audit --audit-level=moderate` exits 0 (no moderate+ vulnerabilities remain)
+- [x] AC3: Docs build succeeds: `npm run docs:build` exits 0
+- [x] AC4: Only `package-lock.json` is modified: `git diff --name-only` returns only `package-lock.json`
 
 ## Test Scenarios
 
