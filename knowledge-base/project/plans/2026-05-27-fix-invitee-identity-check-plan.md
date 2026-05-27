@@ -122,19 +122,19 @@ discoverability_test:
 
 ### Pre-merge (PR)
 
-- [ ] AC1: New migration `076_invitation_invitee_identity_check.sql` exists under `apps/web-platform/supabase/migrations/` and replaces both `accept_workspace_invitation` and `decline_workspace_invitation` functions with identity-binding logic.
-- [ ] AC2: `accept_workspace_invitation` returns `{ok: false, reason: 'not_intended_invitee'}` when `p_accepter_user_id` does not match `invitee_user_id` (when set) or `invitee_email` (when `invitee_user_id` is NULL).
-- [ ] AC3: `decline_workspace_invitation` returns `{ok: false, reason: 'not_intended_invitee'}` when `p_decliner_user_id` does not match `invitee_user_id` (when set) or `invitee_email` (when `invitee_user_id` is NULL).
-- [ ] AC4: `accept-invite/route.ts` returns HTTP 403 with `{error: 'not_intended_invitee'}` when the authenticated user does not match the invitation's invitee, BEFORE calling the RPC.
-- [ ] AC5: `decline-invite/route.ts` returns HTTP 403 with `{error: 'not_intended_invitee'}` when the authenticated user does not match the invitation's invitee, BEFORE calling the RPC.
-- [ ] AC6: `accept-invite/route.ts` service client SELECT includes `invitee_user_id, invitee_email` fields (widened from current query that only selects `inviter_user_id, workspace_id, workspaces!inner(name)`).
-- [ ] AC7: Migration pins `SET search_path = public, pg_temp` per `cq-pg-security-definer-search-path-pin-pg-temp`.
-- [ ] AC8: Down migration `076_invitation_invitee_identity_check.down.sql` restores the original function bodies (without identity checks).
-- [ ] AC9: Unit test verifies that an unauthorized user (different user ID and email) receives `not_intended_invitee` when attempting to accept an invitation via the route handler.
-- [ ] AC10: Unit test verifies that an unauthorized user receives `not_intended_invitee` when attempting to decline an invitation via the route handler.
-- [ ] AC11: Unit test verifies that the legitimate invitee (matching `invitee_user_id`) can still accept successfully.
-- [ ] AC12: Unit test verifies that the legitimate invitee (matching `invitee_email` when `invitee_user_id` is NULL) can still accept successfully.
-- [ ] AC13: `grep -cE 'not_intended_invitee' apps/web-platform/supabase/migrations/076_invitation_invitee_identity_check.sql` returns >= 4 (2 per RPC, accept + decline).
+- [x] AC1: New migration `076_invitation_invitee_identity_check.sql` exists under `apps/web-platform/supabase/migrations/` and replaces both `accept_workspace_invitation` and `decline_workspace_invitation` functions with identity-binding logic.
+- [x] AC2: `accept_workspace_invitation` returns `{ok: false, reason: 'not_intended_invitee'}` when `p_accepter_user_id` does not match `invitee_user_id` (when set) or `invitee_email` (when `invitee_user_id` is NULL).
+- [x] AC3: `decline_workspace_invitation` returns `{ok: false, reason: 'not_intended_invitee'}` when `p_decliner_user_id` does not match `invitee_user_id` (when set) or `invitee_email` (when `invitee_user_id` is NULL).
+- [x] AC4: `accept-invite/route.ts` returns HTTP 403 with `{error: 'not_intended_invitee'}` when the authenticated user does not match the invitation's invitee, BEFORE calling the RPC.
+- [x] AC5: `decline-invite/route.ts` returns HTTP 403 with `{error: 'not_intended_invitee'}` when the authenticated user does not match the invitation's invitee, BEFORE calling the RPC.
+- [x] AC6: `accept-invite/route.ts` service client SELECT includes `invitee_user_id, invitee_email` fields (widened from current query that only selects `inviter_user_id, workspace_id, workspaces!inner(name)`).
+- [x] AC7: Migration pins `SET search_path = public, pg_temp` per `cq-pg-security-definer-search-path-pin-pg-temp`.
+- [x] AC8: Down migration `076_invitation_invitee_identity_check.down.sql` restores the original function bodies (without identity checks).
+- [x] AC9: Unit test verifies that an unauthorized user (different user ID and email) receives `not_intended_invitee` when attempting to accept an invitation via the route handler.
+- [x] AC10: Unit test verifies that an unauthorized user receives `not_intended_invitee` when attempting to decline an invitation via the route handler.
+- [x] AC11: Unit test verifies that the legitimate invitee (matching `invitee_user_id`) can still accept successfully.
+- [x] AC12: Unit test verifies that the legitimate invitee (matching `invitee_email` when `invitee_user_id` is NULL) can still accept successfully.
+- [x] AC13: `grep -cE 'not_intended_invitee' apps/web-platform/supabase/migrations/076_invitation_invitee_identity_check.sql` returns >= 4 (2 per RPC, accept + decline).
 
 ### Post-merge (operator)
 
