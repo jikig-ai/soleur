@@ -6,6 +6,14 @@ name: Restart Inngest Server
 
 on:
   workflow_dispatch: {}
+  # push trigger scoped to this file forces GitHub to register the workflow
+  # in the Actions UI. Without a non-dispatch trigger, workflow_dispatch-only
+  # workflows can take 30+ minutes to appear. The path filter ensures this
+  # trigger only fires when the workflow file itself is edited.
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/restart-inngest-server.yml'
 
 permissions:
   contents: read
