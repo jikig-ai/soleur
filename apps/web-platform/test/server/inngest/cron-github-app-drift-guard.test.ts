@@ -311,6 +311,7 @@ describe("cronGithubAppDriftGuardHandler — failure modes", () => {
     const out = await cronGithubAppDriftGuardHandler({ step, logger });
     expect(out.failureMode).toBe("");
     expect(out.leakDetected).toBe(false);
+    expect(getAppCallCount).toBe(2);
     expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ fn: "cron-github-app-drift-guard" }),
       expect.stringContaining("github_app_401"),
