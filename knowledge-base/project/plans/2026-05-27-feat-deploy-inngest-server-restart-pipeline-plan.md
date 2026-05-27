@@ -363,20 +363,20 @@ discoverability_test:
 
 ### Pre-merge (PR)
 
-- [ ] AC1: `ci-deploy.sh` accepts `restart inngest _ latest` and dispatches to the restart handler (verified via ci-deploy.test.sh mock test)
-- [ ] AC2: `ci-deploy.sh` rejects `restart web-platform _ latest` with `component_not_restartable` reason (only inngest is restartable)
-- [ ] AC3: `verify_inngest_functions()` helper function exists and checks `count >= 1` (not exact match). Called from restart handler. Web-platform handler logs count informally (single curl, no helper call needed).
-- [ ] AC4: web-platform handler logs inngest function count BEFORE `final_write_state 0 "ok"` (placement verified by grep: `logger.*INNGEST_FUNCTION_COUNT` appears before `final_write_state 0` in the web-platform case branch)
-- [ ] AC5: ci-deploy.test.sh has test cases for: (a) successful restart with health check pass, (b) inngest health check failure after restart, (c) restart of non-inngest component rejected, (d) inngest restart with zero functions returns non-zero
-- [ ] AC6: `deploy-inngest-bootstrap.sudoers` includes `INNGEST_RESTART` Cmnd_Alias for `systemctl restart inngest-server.service`
-- [ ] AC7: `restart-inngest-server.yml` workflow exists with `workflow_dispatch` trigger, sends `restart inngest _ latest` to the deploy webhook with CF Access headers, and polls deploy-status for completion
-- [ ] AC8: H9 Restore section in `cloud-scheduled-tasks.md` references `gh workflow run restart-inngest-server.yml` as the primary restore path
-- [ ] AC9: cloud-init.yml template includes the updated sudoers content (fresh-host parity with deploy_pipeline_fix)
+- [x] AC1: `ci-deploy.sh` accepts `restart inngest _ latest` and dispatches to the restart handler (verified via ci-deploy.test.sh mock test)
+- [x] AC2: `ci-deploy.sh` rejects `restart web-platform _ latest` with `component_not_restartable` reason (only inngest is restartable)
+- [x] AC3: `verify_inngest_functions()` helper function exists and checks `count >= 1` (not exact match). Called from restart handler. Web-platform handler logs count informally (single curl, no helper call needed).
+- [x] AC4: web-platform handler logs inngest function count BEFORE `final_write_state 0 "ok"` (placement verified by grep: `logger.*INNGEST_FUNCTION_COUNT` appears before `final_write_state 0` in the web-platform case branch)
+- [x] AC5: ci-deploy.test.sh has test cases for: (a) successful restart with health check pass, (b) inngest health check failure after restart, (c) restart of non-inngest component rejected, (d) inngest restart with zero functions returns non-zero
+- [x] AC6: `deploy-inngest-bootstrap.sudoers` includes `INNGEST_RESTART` Cmnd_Alias for `systemctl restart inngest-server.service`
+- [x] AC7: `restart-inngest-server.yml` workflow exists with `workflow_dispatch` trigger, sends `restart inngest _ latest` to the deploy webhook with CF Access headers, and polls deploy-status for completion
+- [x] AC8: H9 Restore section in `cloud-scheduled-tasks.md` references `gh workflow run restart-inngest-server.yml` as the primary restore path
+- [x] AC9: cloud-init.yml template includes the updated sudoers content (fresh-host parity with deploy_pipeline_fix)
 
 ### Post-merge (operator)
 
-- [ ] AC10: `terraform apply` pushes updated sudoers to the host (verified via deploy-status endpoint showing successful infra-config push). Automation: `doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform apply -target=terraform_data.deploy_pipeline_fix` via the canonical Terraform invocation triplet (export AWS creds separately for R2 backend).
-- [ ] AC11: `gh workflow run restart-inngest-server.yml` successfully restarts inngest-server and reports function count. Automation: `gh workflow run restart-inngest-server.yml` from any machine with `gh` auth.
+- [x] AC10: `terraform apply` pushes updated sudoers to the host (verified via deploy-status endpoint showing successful infra-config push). Automation: `doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform apply -target=terraform_data.deploy_pipeline_fix` via the canonical Terraform invocation triplet (export AWS creds separately for R2 backend).
+- [x] AC11: `gh workflow run restart-inngest-server.yml` successfully restarts inngest-server and reports function count. Automation: `gh workflow run restart-inngest-server.yml` from any machine with `gh` auth.
 
 ## Test Scenarios
 
