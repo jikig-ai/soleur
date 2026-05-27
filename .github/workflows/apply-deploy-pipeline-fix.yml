@@ -47,6 +47,7 @@ on:
       - "apps/web-platform/infra/deploy-inngest-bootstrap.sudoers"
       - "apps/web-platform/infra/infra-config-apply.sh"
       - "apps/web-platform/infra/push-infra-config.sh"
+      - "apps/web-platform/infra/cat-infra-config-state.sh"
       - "apps/web-platform/infra/server.tf"
   workflow_dispatch:
     inputs:
@@ -203,6 +204,64 @@ jobs:
             echo "::error::Webhook did not respond with HTTP 200 after 3 attempts (15s window)."
             cat /tmp/deploy-status-response.txt >&2 2>/dev/null || true
             exit 1
+          fi
+
+      - name: Verify infra-config apply succeeded
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+          WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain)
+          CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain)
+          CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain)
+
+          # Initial delay: the async script + state write + sync + restart
+          # scheduling takes ~5-8s; polling immediately wastes attempt 1.
+          sleep 8
+
+          EXIT_CODE=""
+          for attempt in 1 2 3; do
+            HMAC=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+            HTTP_CODE=$(curl -s -o /tmp/infra-config-status-response.txt -w '%{http_code}' \
+              --max-time 10 \
+              -H "X-Signature-256: sha256=${HMAC}" \
+              -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
+              -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
+              "https://deploy.${APP_DOMAIN_BASE}/hooks/infra-config-status" 2>/dev/null || echo "000")
+
+            if [[ "$HTTP_CODE" == "200" ]]; then
+              EXIT_CODE=$(jq -r '.exit_code' /tmp/infra-config-status-response.txt 2>/dev/null || echo "MISSING")
+              if [[ "$EXIT_CODE" == "0" ]]; then
+                echo "Infra-config apply succeeded (exit_code=0 on attempt $attempt)"
+                cat /tmp/infra-config-status-response.txt
+                break
+              fi
+              echo "Attempt $attempt: endpoint returned exit_code=$EXIT_CODE (retrying in 5s...)"
+            elif [[ "$HTTP_CODE" == "404" ]]; then
+              echo "::warning::infra-config-status endpoint not found (HTTP 404) — host may predate this feature. Skipping."
+              break
+            else
+              echo "Attempt $attempt: HTTP $HTTP_CODE (retrying in 5s...)"
+            fi
+
+            if [[ "$attempt" -lt 3 ]]; then
+              sleep 5
+            fi
+          done
+
+          if [[ "$HTTP_CODE" == "404" ]]; then
+            echo "Tolerating missing endpoint on first apply"
+          elif [[ "$HTTP_CODE" == "200" ]] && [[ "${EXIT_CODE:-}" != "0" ]]; then
+            echo "::error::infra-config-apply reported exit_code=$EXIT_CODE (partial failure)."
+            cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+            exit 1
+          elif [[ "$HTTP_CODE" != "200" ]]; then
+            echo "::warning::infra-config-status did not respond with HTTP 200 after 3 attempts."
+            cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
           fi
 
       - name: Auto-close any open drift issues for this stack
