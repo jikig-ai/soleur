@@ -7,7 +7,6 @@ import {
   RuntimeAuthError,
 } from "@/lib/supabase/tenant";
 import { reportSilentFallback } from "@/server/observability";
-import { resolveInstallationId } from "@/server/resolve-installation-id";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isPathInWorkspace } from "@/server/sandbox";
 import type { Logger } from "pino";
@@ -98,6 +97,12 @@ export async function authenticateAndResolveKbPath(
   if (!userData?.workspace_path || userData.workspace_status !== "ready") {
     return err(503, "Workspace not ready");
   }
+  // Lazy import — resolve-installation-id pulls @/lib/supabase/service
+  // which reads SUPABASE_URL at module level; top-level import breaks
+  // test bundles that don't set the env var (same pattern as git-auth).
+  const { resolveInstallationId } = await import(
+    "@/server/resolve-installation-id"
+  );
   const installationId =
     userData.github_installation_id ??
     (await resolveInstallationId(user.id));
