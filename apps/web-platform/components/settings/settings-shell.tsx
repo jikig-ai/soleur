@@ -24,13 +24,17 @@ const STATIC_SETTINGS_TABS: readonly SettingsTab[] = [
 export function SettingsShell({
   children,
   membersTab = null,
+  activityTab = null,
 }: {
   children: React.ReactNode;
   membersTab?: SettingsTab | null;
+  activityTab?: SettingsTab | null;
 }) {
-  const SETTINGS_TABS: readonly SettingsTab[] = membersTab
-    ? [...STATIC_SETTINGS_TABS, membersTab]
-    : STATIC_SETTINGS_TABS;
+  const SETTINGS_TABS: readonly SettingsTab[] = [
+    ...STATIC_SETTINGS_TABS,
+    ...(membersTab ? [membersTab] : []),
+    ...(activityTab ? [activityTab] : []),
+  ];
   const pathname = usePathname();
   const [settingsCollapsed, toggleSettingsCollapsed] = useSidebarCollapse("soleur:sidebar.settings.collapsed");
 

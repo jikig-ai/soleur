@@ -87,6 +87,7 @@ export function useConversations(
   const [error, setError] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [repoUrl, setRepoUrl] = useState<string | null>(null);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   // Ref mirror of repoUrl so Realtime callbacks read the latest value
   // without forcing the subscription effect to re-subscribe on every
   // repo change (see review F1). Both channels read from this ref.
@@ -117,11 +118,19 @@ export function useConversations(
       // stay attached to their repo_url and are hidden until the user
       // reconnects that exact URL. See plan
       // 2026-04-22-fix-command-center-stale-conversations-after-repo-swap-plan.md.
-      const { data: userRow } = await supabase
-        .from("users")
-        .select("repo_url")
-        .eq("id", currentUserId)
-        .maybeSingle();
+      const [{ data: userRow }, { data: memberRow }] = await Promise.all([
+        supabase
+          .from("users")
+          .select("repo_url")
+          .eq("id", currentUserId)
+          .maybeSingle(),
+        supabase
+          .from("workspace_members")
+          .select("workspace_id")
+          .eq("user_id", currentUserId)
+          .maybeSingle(),
+      ]);
+      setWorkspaceId((memberRow?.workspace_id as string) ?? null);
       // Normalize on read — defense-in-depth for pre-backfill rows and
       // any future direct-DB insert that bypasses `/api/repo/setup`.
       // Post-backfill this is a no-op on at-rest data.
@@ -137,13 +146,11 @@ export function useConversations(
         return;
       }
 
-      // Query 1: Fetch conversations (explicit user_id + repo_url filter).
-      // `currentRepoUrl` is already normalized via `normalizeRepoUrl` above —
-      // do NOT double-normalize here (would be a no-op but noisy).
+      // visibility-sweep: RLS conversations_owner_or_shared returns own +
+      // workspace-shared conversations; no app-level user_id filter needed.
       let query = supabase
         .from("conversations")
         .select("*")
-        .eq("user_id", currentUserId)
         .eq("repo_url", currentRepoUrl)
         .order("last_active", { ascending: false })
         .order("created_at", { ascending: false });
@@ -228,60 +235,64 @@ export function useConversations(
     if (!userId) return;
 
     const supabase = createClient();
-    const channel = supabase
-      .channel("command-center")
+
+    const handleConversationUpdate = (payload: { new: unknown }) => {
+      const updated = payload.new as Conversation;
+      const currentRepoUrl = repoUrlRef.current;
+      if ((updated.repo_url ?? null) !== currentRepoUrl) return;
+
+      setConversations((prev) => {
+        const isArchivedNow = updated.archived_at !== null;
+        const showingArchived = archiveFilter === "archived";
+
+        if (isArchivedNow !== showingArchived) {
+          return prev.filter((c) => c.id !== updated.id);
+        }
+
+        return prev.map((c) =>
+          c.id === updated.id
+            ? { ...c, status: updated.status, last_active: updated.last_active, domain_leader: updated.domain_leader, archived_at: updated.archived_at, visibility: updated.visibility }
+            : c,
+        );
+      });
+    };
+
+    // Channel 1 (user_id): own conversations — always subscribed when
+    // userId is available, regardless of workspace membership.
+    const ownChannel = supabase
+      .channel("command-center-own")
       .on(
         "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "conversations",
-          filter: `user_id=eq.${userId}`,
-        },
-        (payload) => {
-          const updated = payload.new as Conversation;
-          // Defensive: DELETE events bypass RLS by Postgres design. REPLICA
-          // IDENTITY FULL (migration 015) populates payload.old.user_id so a
-          // future DELETE handler can reuse this drop pattern. Do not remove.
-          // See plan 2026-04-29-feat-command-center-conversation-nav-plan.md
-          // Phase 1.7 for full archaeology.
-          if (updated.user_id !== userId) return;
-          // Client-side repo_url check: Realtime can't express the second
-          // equality, so drop payloads whose repo_url doesn't match the
-          // current scope. Strict equality catches the disconnected case
-          // (repoUrlRef=null, payload.repo_url=<something>) too — when
-          // disconnected, conversations list is empty so the update
-          // would find no matching row anyway, but this guards against
-          // rendering the first cross-repo row if a future refactor
-          // decouples list-empty from disconnect.
-          const currentRepoUrl = repoUrlRef.current;
-          if ((updated.repo_url ?? null) !== currentRepoUrl) return;
-
-          setConversations((prev) => {
-            // Check if the conversation's archive state matches the current filter
-            const isArchivedNow = updated.archived_at !== null;
-            const showingArchived = archiveFilter === "archived";
-
-            // If archive state doesn't match current view, remove from list
-            if (isArchivedNow !== showingArchived) {
-              return prev.filter((c) => c.id !== updated.id);
-            }
-
-            // Otherwise, update the conversation in place
-            return prev.map((c) =>
-              c.id === updated.id
-                ? { ...c, status: updated.status, last_active: updated.last_active, domain_leader: updated.domain_leader, archived_at: updated.archived_at }
-                : c,
-            );
-          });
-        },
+        { event: "UPDATE", schema: "public", table: "conversations", filter: `user_id=eq.${userId}` },
+        handleConversationUpdate,
       )
       .subscribe();
 
+    // Channel 2 (workspace_id): workspace-shared updates — additive,
+    // only when workspaceId is available. Private conversation metadata
+    // transits the WebSocket (WAL filter is workspace_id, not visibility)
+    // but the client-side guard below drops non-shared payloads.
+    let sharedChannel: ReturnType<typeof supabase.channel> | null = null;
+    if (workspaceId) {
+      sharedChannel = supabase
+        .channel("command-center-shared")
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "conversations", filter: `workspace_id=eq.${workspaceId}` },
+          (payload) => {
+            const updated = payload.new as Conversation;
+            if (updated.visibility !== "workspace") return;
+            handleConversationUpdate(payload);
+          },
+        )
+        .subscribe();
+    }
+
     return () => {
-      supabase.removeChannel(channel);
+      supabase.removeChannel(ownChannel);
+      if (sharedChannel) supabase.removeChannel(sharedChannel);
     };
-  }, [userId, archiveFilter]);
+  }, [userId, workspaceId, archiveFilter]);
 
   // Cross-tab disconnect/reconnect awareness (race R-C): another tab may
   // swap the user's repo_url while this hook is mounted. Subscribe to

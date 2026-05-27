@@ -251,6 +251,35 @@ export async function POST(request: Request) {
       );
     }
 
+    // PR-C (#4521): record kb_files metadata for uploader attribution.
+    // Best-effort — the file is already committed to GitHub; a failed
+    // INSERT doesn't warrant failing the upload response.
+    try {
+      const { data: memberRow } = await serviceClient
+        .from("workspace_members")
+        .select("workspace_id")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      const wsId = memberRow?.workspace_id as string | undefined;
+      if (wsId) {
+        await serviceClient.from("kb_files").upsert(
+          {
+            workspace_id: wsId,
+            user_id: user.id,
+            file_path: filePath,
+            filename: sanitizedName,
+            visibility: "workspace",
+          },
+          { onConflict: "workspace_id,file_path" },
+        );
+      }
+    } catch (kbFilesErr) {
+      logger.warn(
+        { err: kbFilesErr, userId: user.id, path: filePath },
+        "kb/upload: kb_files INSERT failed (non-fatal)",
+      );
+    }
+
     logger.info(
       { event: "kb_upload", userId: user.id, path: filePath },
       "kb/upload: file uploaded successfully",
