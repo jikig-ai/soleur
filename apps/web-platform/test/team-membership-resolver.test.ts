@@ -62,6 +62,21 @@ function mockSupabaseClients(opts: ResolveOpts) {
         }),
       };
     }
+    if (table === "user_session_state") {
+      return {
+        select: () => ({
+          eq: () => ({
+            maybeSingle: () =>
+              Promise.resolve({
+                data: opts.user
+                  ? { current_organization_id: opts.user.app_metadata?.current_organization_id ?? null }
+                  : null,
+                error: null,
+              }),
+          }),
+        }),
+      };
+    }
     throw new Error(`unmocked table: ${table}`);
   });
   const supabase = {

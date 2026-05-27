@@ -45,7 +45,7 @@ import {
   clearUserWorkspace,
 } from "./agent-session-registry";
 import {
-  getCurrentOrganizationId,
+  resolveCurrentOrganizationId,
   getDefaultWorkspaceForUser,
   getWorkspaceForUserInOrganization,
 } from "./workspace-resolver";
@@ -2248,12 +2248,10 @@ export function setupWebSocket(server: HTTPServer) {
         // claim `current_organization_id` (migration 060) is the source of
         // truth; the lookup translates org_id → workspace_id once at WS open.
         try {
-          const orgId = getCurrentOrganizationId({
-            user: {
-              id: user.id,
-              app_metadata: user.app_metadata as never,
-            },
-          });
+          const orgId = await resolveCurrentOrganizationId(
+            user.id,
+            tenantBootstrap as never,
+          );
           let workspaceId: string | null = null;
           if (orgId) {
             workspaceId = await getWorkspaceForUserInOrganization(

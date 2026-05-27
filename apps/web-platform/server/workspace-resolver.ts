@@ -2,13 +2,13 @@ import { join } from "path";
 
 // Resolver for user → current/default workspace mapping (feat-team-workspace-multi-user).
 //
-// Two distinct lookups:
-//   1. getCurrentOrganizationId(session) — reads the Supabase Auth JWT custom
-//      claim `app_metadata.current_organization_id` populated by migration 060's
-//      access-token hook. Synchronous, no DB call. Returns null when the claim
-//      is absent (single-membership users) or the session is anonymous; callers
-//      then fall back to getDefaultWorkspaceForUser.
-//   2. getDefaultWorkspaceForUser(userId, supabase) — DB query against
+// Three lookups:
+//   1. resolveCurrentOrganizationId(userId, supabase) — queries
+//      user_session_state directly. Preferred over getCurrentOrganizationId.
+//   2. getCurrentOrganizationId(session) — DEPRECATED. Reads
+//      getUser().app_metadata which returns stored raw_app_meta_data, not
+//      the JWT hook's injected claims.
+//   3. getDefaultWorkspaceForUser(userId, supabase) — DB query against
 //      workspace_members joined to workspaces. Returns the MIN(created_at)
 //      workspace_id. For solo users this collapses to the N2 invariant
 //      (workspaces.id === user.id; see migration 053 §1.1.7 backfill).
@@ -33,17 +33,47 @@ interface SessionLike {
 }
 
 /**
- * Returns the `app_metadata.current_organization_id` JWT custom claim
- * populated by migration 060's `custom_access_token` hook, or null.
- *
- * Phase 5.4 dependency: the org-switcher writes user_session_state then
- * calls `supabase.auth.refreshSession()` to force a token refresh so the
- * new claim propagates to all tabs.
+ * @deprecated Reads from `getUser().app_metadata` which returns the stored
+ * `raw_app_meta_data` — the JWT hook's `current_organization_id` claim is
+ * NOT persisted there. Use `resolveCurrentOrganizationId` instead.
  */
 export function getCurrentOrganizationId(
   session: SessionLike | null | undefined,
 ): string | null {
   return session?.user?.app_metadata?.current_organization_id ?? null;
+}
+
+/**
+ * Queries `user_session_state` directly for the user's current org.
+ *
+ * The JWT hook (migration 060) injects `current_organization_id` into token
+ * claims at mint time, but `supabase.auth.getUser()` returns the stored
+ * `auth.users.raw_app_meta_data` which never includes hook modifications.
+ * This function bypasses the JWT entirely and reads the source of truth.
+ *
+ * RLS: `user_session_state_owner_select` allows `auth.uid() = user_id`.
+ */
+export async function resolveCurrentOrganizationId(
+  userId: string,
+  supabase: SupabaseLike,
+): Promise<string | null> {
+  type ChainShape = {
+    select: (cols: string) => ChainShape;
+    eq: (col: string, val: string) => ChainShape;
+    maybeSingle: () => ChainShape;
+  } & PromiseLike<{
+    data: { current_organization_id: string | null } | null;
+    error: unknown;
+  }>;
+
+  const chain = supabase.from("user_session_state") as ChainShape;
+  const result = await awaitChain<{
+    data: { current_organization_id: string | null } | null;
+    error: unknown;
+  }>(chain.select("current_organization_id").eq("user_id", userId).maybeSingle());
+
+  if (result.error || !result.data) return null;
+  return result.data.current_organization_id;
 }
 
 // Minimal structural type for the test-injected supabase client. We only need

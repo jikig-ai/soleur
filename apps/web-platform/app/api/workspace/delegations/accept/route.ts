@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isByokDelegationsEnabled, type Identity } from "@/lib/feature-flags/server";
-import { getCurrentOrganizationId } from "@/server/workspace-resolver";
+import { resolveCurrentOrganizationId } from "@/server/workspace-resolver";
 import { createHash } from "node:crypto";
 
 export async function POST(request: Request) {
@@ -13,7 +13,7 @@ export async function POST(request: Request) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
-  const orgId = getCurrentOrganizationId({ user: { id: user.id, app_metadata: user.app_metadata as Record<string, unknown> } });
+  const orgId = await resolveCurrentOrganizationId(user.id, supabase);
   if (!orgId) return NextResponse.json({ error: "no_org" }, { status: 403 });
 
   const identity: Identity = { userId: user.id, role: "prd", orgId };

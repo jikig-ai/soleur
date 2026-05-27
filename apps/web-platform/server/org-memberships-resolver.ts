@@ -1,4 +1,4 @@
-import { getCurrentOrganizationId } from "@/server/workspace-resolver";
+import { resolveCurrentOrganizationId } from "@/server/workspace-resolver";
 
 // Returns the user's full list of organization memberships with role + member
 // count. Powers the dashboard OrgSwitcher (Phase 5.3) which hides itself when
@@ -59,9 +59,7 @@ export async function resolveOrgMemberships(
   const user = userResp.data?.user;
   if (!user) return [];
 
-  const currentOrgId = getCurrentOrganizationId({
-    user: { id: user.id, app_metadata: user.app_metadata as never },
-  });
+  const currentOrgId = await resolveCurrentOrganizationId(user.id, service);
 
   // 1. user's memberships → workspace_ids + role
   type MembershipsChain = {
