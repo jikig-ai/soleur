@@ -20,6 +20,7 @@ interface ResolveOpts {
   user: { id: string; email: string; app_metadata: Record<string, unknown> } | null;
   members: MockRow[];
   emails: Record<string, { email: string; created_at: string }>;
+  sessionOrgId?: string | null;
 }
 
 function mockSupabaseClients(opts: ResolveOpts) {
@@ -63,13 +64,14 @@ function mockSupabaseClients(opts: ResolveOpts) {
       };
     }
     if (table === "user_session_state") {
+      const orgId = opts.sessionOrgId !== undefined ? opts.sessionOrgId : null;
       return {
         select: () => ({
           eq: () => ({
             maybeSingle: () =>
               Promise.resolve({
-                data: opts.user
-                  ? { current_organization_id: opts.user.app_metadata?.current_organization_id ?? null }
+                data: orgId !== null
+                  ? { current_organization_id: orgId }
                   : null,
                 error: null,
               }),
@@ -100,8 +102,9 @@ describe("resolveTeamMembershipPageData", () => {
       user: {
         id: USER_ID,
         email: "jean@jikigai.com",
-        app_metadata: { current_organization_id: ORG_ID },
+        app_metadata: {},
       },
+      sessionOrgId: ORG_ID,
       members: [],
       emails: {},
     });
@@ -134,8 +137,9 @@ describe("resolveTeamMembershipPageData", () => {
       user: {
         id: USER_ID,
         email: "jean@jikigai.com",
-        app_metadata: { current_organization_id: ORG_ID },
+        app_metadata: {},
       },
+      sessionOrgId: ORG_ID,
       members: [
         {
           workspace_id: WORKSPACE_ID,
@@ -175,8 +179,9 @@ describe("resolveTeamMembershipPageData", () => {
       user: {
         id: USER_ID,
         email: "jean@jikigai.com",
-        app_metadata: { current_organization_id: ORG_ID },
+        app_metadata: {},
       },
+      sessionOrgId: ORG_ID,
       members: [
         {
           workspace_id: WORKSPACE_ID,

@@ -2244,9 +2244,9 @@ export function setupWebSocket(server: HTTPServer) {
         // Phase 5.5 / Kieran C5: bind userId → current workspace_id so
         // workspace-membership.ts:removeWorkspaceMember can SIGTERM only the
         // sessions running against the workspace being revoked (and not
-        // sibling sessions in the user's other workspaces). The JWT custom
-        // claim `current_organization_id` (migration 060) is the source of
-        // truth; the lookup translates org_id → workspace_id once at WS open.
+        // sibling sessions in the user's other workspaces). user_session_state
+        // (migration 060) is the source of truth; the lookup translates
+        // org_id → workspace_id once at WS open.
         try {
           const orgId = await resolveCurrentOrganizationId(
             user.id,
@@ -2352,8 +2352,8 @@ export function setupWebSocket(server: HTTPServer) {
           }
           sessions.delete(userId);
           // Phase 5.5: drop the workspace binding so a future reconnect
-          // re-resolves from the JWT (handles the org-switch + reconnect
-          // sequence cleanly — see AC-FLOW3 multi-tab race coverage).
+          // re-resolves from user_session_state (handles the org-switch +
+          // reconnect sequence cleanly — see AC-FLOW3 multi-tab race coverage).
           clearUserWorkspace(userId);
           // Grace period: defer abort to allow reconnection
           if (current.conversationId) {

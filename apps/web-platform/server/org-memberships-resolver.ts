@@ -155,7 +155,7 @@ export async function resolveOrgMemberships(
     })
     .filter((s): s is OrgMembershipSummary => s !== null);
 
-  // If the JWT claim is absent (single-membership users; AC-FLOW1 default),
+  // If user_session_state has no row (single-membership users; AC-FLOW1),
   // mark the first membership as current so the UI has a stable anchor.
   if (!summaries.some((s) => s.isCurrent) && summaries.length > 0) {
     summaries[0] = { ...summaries[0], isCurrent: true };

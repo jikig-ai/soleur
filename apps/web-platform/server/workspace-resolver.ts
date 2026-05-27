@@ -1,4 +1,5 @@
 import { join } from "path";
+import { reportSilentFallback } from "@/server/observability";
 
 // Resolver for user → current/default workspace mapping (feat-team-workspace-multi-user).
 //
@@ -72,7 +73,15 @@ export async function resolveCurrentOrganizationId(
     error: unknown;
   }>(chain.select("current_organization_id").eq("user_id", userId).maybeSingle());
 
-  if (result.error || !result.data) return null;
+  if (result.error) {
+    reportSilentFallback(result.error, {
+      feature: "workspace-resolver",
+      op: "resolveCurrentOrganizationId",
+      extra: { userId },
+    });
+    return null;
+  }
+  if (!result.data) return null;
   return result.data.current_organization_id;
 }
 
