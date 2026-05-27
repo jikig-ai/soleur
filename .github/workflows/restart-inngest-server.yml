@@ -1,0 +1,94 @@
+# Standalone inngest-server restart via deploy webhook (#4538).
+# Sends `restart inngest _ latest` to ci-deploy.sh and polls deploy-status
+# for completion. Use when inngest-server desyncs after rapid deploy churn
+# (H9 in cloud-scheduled-tasks.md runbook).
+name: Restart Inngest Server
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  restart:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-inngest-restart
+      cancel-in-progress: false
+    steps:
+      - name: Trigger restart via webhook
+        env:
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          PAYLOAD='{"command":"restart inngest _ latest"}'
+          SIGNATURE=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+            --max-time 30 \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-Signature-256: sha256=$SIGNATURE" \
+            -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+            -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+            -d "$PAYLOAD" \
+            "https://deploy.soleur.ai/hooks/deploy")
+          if [[ "$HTTP_CODE" != "202" ]]; then
+            echo "::error::Restart webhook rejected (HTTP $HTTP_CODE)"
+            exit 1
+          fi
+          echo "Restart initiated (HTTP 202), polling status..."
+
+      - name: Verify restart completion
+        env:
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          SIGNATURE=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+          for i in $(seq 1 30); do
+            HTTP_CODE=$(curl -s --max-time 10 \
+              -o /tmp/status-body \
+              -w '%{http_code}' \
+              -X GET \
+              -H "X-Signature-256: sha256=$SIGNATURE" \
+              -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+              -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+              "https://deploy.soleur.ai/hooks/deploy-status" || echo "000")
+            BODY=$(cat /tmp/status-body 2>/dev/null || echo "")
+            if [ -z "$BODY" ] || ! echo "$BODY" | jq -e . >/dev/null 2>&1; then
+              echo "Attempt $i/30: non-JSON or empty body — retrying"
+              sleep 5
+              continue
+            fi
+            EXIT_CODE=$(echo "$BODY" | jq -r '.exit_code // -99')
+            REASON=$(echo "$BODY" | jq -r '.reason // "unknown"')
+            COMPONENT=$(echo "$BODY" | jq -r '.component // "unknown"')
+            case "$EXIT_CODE" in
+              0)
+                if [ "$COMPONENT" = "inngest" ]; then
+                  echo "::notice::Inngest restart completed successfully (reason=$REASON)"
+                  echo "$BODY" | jq .
+                  exit 0
+                fi
+                echo "Attempt $i/30: last operation was for $COMPONENT, not inngest"
+                ;;
+              -1)
+                echo "Attempt $i/30: restart still running (reason=$REASON)"
+                ;;
+              *)
+                if [ "$COMPONENT" = "inngest" ]; then
+                  echo "::error::Restart failed (exit_code=$EXIT_CODE, reason=$REASON)"
+                  echo "$BODY" | jq .
+                  exit 1
+                fi
+                echo "Attempt $i/30: last state is for $COMPONENT (exit_code=$EXIT_CODE), waiting for inngest"
+                ;;
+            esac
+            sleep 5
+          done
+          echo "::error::Restart did not complete within 150s"
+          exit 1
