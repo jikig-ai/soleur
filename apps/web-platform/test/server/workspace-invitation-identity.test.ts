@@ -193,6 +193,20 @@ describe("decline-invite identity check", () => {
     expect(body.error).toBe("not_intended_invitee");
   });
 
+  it("returns 403 when authenticated user email does not match invitee_email (invitee_user_id null)", async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: ATTACKER_USER_ID, email: ATTACKER_EMAIL } },
+    });
+    mockServiceFrom.mockReturnValue(chainableMock(INVITATION_ROW_EMAIL_ONLY));
+    mockDeclineInvitation.mockResolvedValue({ ok: true });
+
+    const res = await declinePOST(makeRequest({ invitationId: INVITATION_ID }));
+    expect(res.status).toBe(403);
+
+    const body = await res.json();
+    expect(body.error).toBe("not_intended_invitee");
+  });
+
   it("proceeds to RPC when authenticated user matches invitee_user_id", async () => {
     mockGetUser.mockResolvedValue({
       data: { user: { id: INVITEE_USER_ID, email: INVITEE_EMAIL } },
@@ -203,5 +217,17 @@ describe("decline-invite identity check", () => {
     const res = await declinePOST(makeRequest({ invitationId: INVITATION_ID }));
     expect(res.status).toBe(200);
     expect(mockDeclineInvitation).toHaveBeenCalledWith(INVITATION_ID, INVITEE_USER_ID);
+  });
+
+  it("falls through to RPC when invitation not found (invRow null)", async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: ATTACKER_USER_ID, email: ATTACKER_EMAIL } },
+    });
+    mockServiceFrom.mockReturnValue(chainableMock(null));
+    mockDeclineInvitation.mockResolvedValue({ ok: false, reason: "invitation_not_found" });
+
+    const res = await declinePOST(makeRequest({ invitationId: INVITATION_ID }));
+    expect(res.status).toBe(404);
+    expect(mockDeclineInvitation).toHaveBeenCalled();
   });
 });
