@@ -16,6 +16,8 @@
 # path (operator IP is in admin_ips). All subsequent applies use webhook.
 set -euo pipefail
 
+readonly LOG_TAG="infra-config-apply"
+
 # --- File map (hardcoded — no generic JSON, no jq) ---
 # Each entry: ENV_VAR_NAME | DEST_PATH | MODE | OWNER
 FILE_MAP=(
@@ -26,39 +28,74 @@ FILE_MAP=(
   "CANARY_BUNDLE_CLAIM_CHECK_SH_B64|/usr/local/bin/canary-bundle-claim-check.sh|755|root:root"
   "DEPLOY_INNGEST_BOOTSTRAP_SUDOERS_B64|/etc/sudoers.d/deploy-inngest-bootstrap|440|root:root"
   "HOOKS_JSON_B64|/etc/webhook/hooks.json|640|root:deploy"
+  "CAT_INFRA_CONFIG_STATE_SH_B64|/usr/local/bin/cat-infra-config-state.sh|755|root:root"
 )
 
 # TEST_DESTDIR allows tests to redirect writes to a sandbox
 DESTDIR="${TEST_DESTDIR:-}"
 
+# State file for observability (#4554). Queryable via /hooks/infra-config-status.
+STATE_FILE="${INFRA_CONFIG_STATE:-/var/lock/infra-config-apply.state}"
+START_TS=$(date +%s)
+
+# Clear stale sentinel from prior run (same pattern as ci-deploy.sh:105)
+rm -f "${STATE_FILE}.final"
+
+# EXIT trap: on non-zero exit without a .final sentinel, write "unhandled" state.
+# Also cleans up temp files and the sentinel.
+TMPFILES=()
+trap 'rc=$?; if [ "$rc" -ne 0 ] && [ ! -f "${STATE_FILE}.final" ]; then
+  printf "{\"start_ts\":%d,\"end_ts\":%d,\"exit_code\":%d,\"reason\":\"unhandled\",\"files_written\":0,\"files_failed\":0,\"files\":[]}\n" \
+    "$START_TS" "$(date +%s)" "$rc" > "$STATE_FILE" 2>/dev/null || true
+fi; rm -f "${TMPFILES[@]}" "${STATE_FILE}.final"' EXIT
+
 # --- Validate all required env vars upfront ---
 for entry in "${FILE_MAP[@]}"; do
   IFS='|' read -r env_var _ _ _ <<< "$entry"
   if [[ -z "${!env_var:-}" ]]; then
+    logger -t "$LOG_TAG" "FATAL: required env var $env_var is missing or empty"
     echo "ERROR: required env var $env_var is missing or empty" >&2
     exit 1
   fi
 done
 
+TOTAL_COUNT=${#FILE_MAP[@]}
+logger -t "$LOG_TAG" "starting: $TOTAL_COUNT files to write"
+
 # --- Write each file atomically ---
-TMPFILES=()
-trap 'rm -f "${TMPFILES[@]}"' EXIT
+WRITTEN_COUNT=0
+FAIL_COUNT=0
+FILES_JSON=""
 
 for entry in "${FILE_MAP[@]}"; do
   IFS='|' read -r env_var dest_path mode owner <<< "$entry"
   dest="${DESTDIR}${dest_path}"
   dest_dir=$(dirname "$dest")
 
+  logger -t "$LOG_TAG" "writing: $dest_path"
+
   # Decode to a temp file in the same directory (same filesystem for mv atomicity)
   tmpfile=$(mktemp "${dest_dir}/tmp.infra-config.XXXXXX")
   TMPFILES+=("$tmpfile")
 
-  echo "${!env_var}" | base64 -d > "$tmpfile"
+  if ! echo "${!env_var}" | base64 -d > "$tmpfile" 2>/dev/null; then
+    logger -t "$LOG_TAG" "FAILED: $dest_path reason=base64_decode"
+    echo "ERROR: base64 decode failed for $dest_path" >&2
+    [[ -n "$FILES_JSON" ]] && FILES_JSON+=","
+    FILES_JSON+="{\"file\":\"$dest_path\",\"sha256\":\"\",\"status\":\"failed\",\"reason\":\"base64_decode\"}"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    rm -f "$tmpfile"
+    continue
+  fi
 
   # Sudoers files get visudo validation before install
   if [[ "$dest_path" == /etc/sudoers.d/* ]]; then
     if ! visudo -cf "$tmpfile" 2>/dev/null; then
+      logger -t "$LOG_TAG" "SKIPPED: $dest_path reason=visudo_validation_failed"
       echo "WARNING: visudo validation failed for $dest_path — skipping install" >&2
+      [[ -n "$FILES_JSON" ]] && FILES_JSON+=","
+      FILES_JSON+="{\"file\":\"$dest_path\",\"sha256\":\"\",\"status\":\"skipped\",\"reason\":\"visudo_validation_failed\"}"
+      FAIL_COUNT=$((FAIL_COUNT + 1))
       rm -f "$tmpfile"
       continue
     fi
@@ -70,14 +107,40 @@ for entry in "${FILE_MAP[@]}"; do
     chown "$owner" "$tmpfile"
   fi
   mv -f "$tmpfile" "$dest"
+
+  local_sha=$(sha256sum "$dest" | awk '{print $1}')
+  logger -t "$LOG_TAG" "wrote: $dest_path sha256=$local_sha"
+  [[ -n "$FILES_JSON" ]] && FILES_JSON+=","
+  FILES_JSON+="{\"file\":\"$dest_path\",\"sha256\":\"$local_sha\",\"status\":\"ok\"}"
+  WRITTEN_COUNT=$((WRITTEN_COUNT + 1))
 done
+
+logger -t "$LOG_TAG" "complete: $WRITTEN_COUNT/$TOTAL_COUNT files written, $FAIL_COUNT failed"
+
+# --- Write state file (before self-restart) ---
+END_TS=$(date +%s)
+EXIT_CODE=0
+if [[ "$FAIL_COUNT" -gt 0 ]]; then
+  EXIT_CODE=1
+fi
+
+touch "${STATE_FILE}.final"
+state_tmp=$(mktemp "${STATE_FILE}.XXXXXX" 2>/dev/null) || true
+if [[ -n "${state_tmp:-}" ]]; then
+  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"files_written":%d,"files_failed":%d,"files":[%s]}\n' \
+    "$START_TS" "$END_TS" "$EXIT_CODE" "$WRITTEN_COUNT" "$FAIL_COUNT" "$FILES_JSON" \
+    > "$state_tmp"
+  mv "$state_tmp" "$STATE_FILE"
+fi
 
 # --- Post-write commands (skip in test mode) ---
 if [[ -z "${INFRA_CONFIG_TEST_MODE:-}" ]]; then
+  sync
   systemctl daemon-reload
+  logger -t "$LOG_TAG" "scheduling self-restart in 3s"
   # Self-restart: schedule a delayed restart so the HTTP 202 response
   # completes before the webhook binary is killed.
   sudo /usr/bin/systemd-run --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook
 fi
 
-exit 0
+exit "$EXIT_CODE"
