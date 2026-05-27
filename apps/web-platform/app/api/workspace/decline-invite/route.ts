@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/service";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { declineWorkspaceInvitation } from "@/server/workspace-invitations";
 
@@ -26,15 +27,38 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "invalid_body" }, { status: 400 });
   }
 
+  const service = createServiceClient();
+  const { data: invRow } = await service
+    .from("workspace_invitations")
+    .select("invitee_user_id, invitee_email")
+    .eq("id", body.invitationId)
+    .single();
+
+  if (invRow) {
+    const isInvitee =
+      invRow.invitee_user_id === user.id ||
+      (!invRow.invitee_user_id &&
+        invRow.invitee_email?.toLowerCase() === user.email?.toLowerCase());
+
+    if (!isInvitee) {
+      return NextResponse.json(
+        { error: "not_intended_invitee" },
+        { status: 403 },
+      );
+    }
+  }
+
   const result = await declineWorkspaceInvitation(body.invitationId, user.id);
 
   if (!result.ok) {
     const status =
       result.reason === "invitation_not_found"
         ? 404
-        : result.reason === "already_accepted" || result.reason === "already_declined"
-          ? 409
-          : 500;
+        : result.reason === "not_intended_invitee"
+          ? 403
+          : result.reason === "already_accepted" || result.reason === "already_declined"
+            ? 409
+            : 500;
     return NextResponse.json({ error: result.reason }, { status });
   }
 
