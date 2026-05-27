@@ -197,16 +197,16 @@ Inline unit tests for the helper:
 
 ## Acceptance Criteria
 
-- [ ] AC1: `extractGitHubOwner("https://github.com/jikig-ai/soleur")` returns `"jikig-ai"`
-- [ ] AC2: `extractGitHubOwner("https://github.com/jikig-ai/chatte")` returns `"jikig-ai"`
-- [ ] AC3: The sibling query uses `.ilike("repo_url", "https://github.com/jikig-ai/%")` instead of `.eq("repo_url", "https://github.com/jikig-ai/soleur")` when the caller's repo_url is `https://github.com/jikig-ai/soleur`. Verified via `grep -n 'ilike' apps/web-platform/server/resolve-installation-id.ts` returning at least 1 match.
-- [ ] AC4: A sibling with `repo_url = https://github.com/other-org/repo` does NOT match when the caller is under `jikig-ai`
-- [ ] AC5: When `callerRepoUrl` is null, no `.ilike()` filter is applied (query runs unfiltered against sibling IDs, scoped by workspace)
-- [ ] AC6: When `extractGitHubOwner` returns null (non-GitHub URL), no `.ilike()` filter is applied
-- [ ] AC7: `extractGitHubOwner` is exported from `resolve-installation-id.ts`. Verified via `grep -n 'export.*extractGitHubOwner' apps/web-platform/server/resolve-installation-id.ts`.
-- [ ] AC8: No remaining `.eq("repo_url"` in `resolve-installation-id.ts`. Verified via `grep -c 'eq("repo_url"' apps/web-platform/server/resolve-installation-id.ts` returns 0.
-- [ ] AC9: All tests pass: `cd apps/web-platform && ./node_modules/.bin/vitest run test/resolve-installation-id.test.ts`
-- [ ] AC10: Existing tests pass: `cd apps/web-platform && ./node_modules/.bin/vitest run`
+- [x] AC1: `extractGitHubOwner("https://github.com/jikig-ai/soleur")` returns `"jikig-ai"`
+- [x] AC2: `extractGitHubOwner("https://github.com/jikig-ai/chatte")` returns `"jikig-ai"`
+- [x] AC3: The sibling query uses `.ilike("repo_url", "https://github.com/jikig-ai/%")` instead of `.eq("repo_url", "https://github.com/jikig-ai/soleur")` when the caller's repo_url is `https://github.com/jikig-ai/soleur`. Verified via `grep -n 'ilike' apps/web-platform/server/resolve-installation-id.ts` returning at least 1 match.
+- [x] AC4: A sibling with `repo_url = https://github.com/other-org/repo` does NOT match when the caller is under `jikig-ai`
+- [x] AC5: When `callerRepoUrl` is null, no `.ilike()` filter is applied (query runs unfiltered against sibling IDs, scoped by workspace)
+- [x] AC6: When `extractGitHubOwner` returns null (non-GitHub URL), no `.ilike()` filter is applied
+- [x] AC7: `extractGitHubOwner` is exported from `resolve-installation-id.ts`. Verified via `grep -n 'export.*extractGitHubOwner' apps/web-platform/server/resolve-installation-id.ts`.
+- [x] AC8: No remaining `.eq("repo_url"` in `resolve-installation-id.ts`. Verified via `grep -c 'eq("repo_url"' apps/web-platform/server/resolve-installation-id.ts` returns 0.
+- [x] AC9: All tests pass: `cd apps/web-platform && ./node_modules/.bin/vitest run test/resolve-installation-id.test.ts`
+- [x] AC10: Existing tests pass: `cd apps/web-platform && ./node_modules/.bin/vitest run`
 
 ## Test Scenarios
 
