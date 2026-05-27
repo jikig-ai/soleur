@@ -60,25 +60,32 @@ const KNOWN_UNMONITORED_SLUGS = new Set([
   "scheduled-weekly-analytics",
 ]);
 
+const GHA_ONLY_MONITORS = new Set([
+  "scheduled-terraform-drift",
+  "scheduled-realtime-probe",
+]);
+
 describe("Inngest function registry — drift guards", () => {
   const routeEntries = extractRouteArrayEntries();
   const cronFiles = listCronFiles();
   const slugMap = extractSentryMonitorSlugs();
   const tfMonitors = extractTfMonitorNames();
 
+  // Vacuous-pass guards: if regex extraction returns 0, downstream
+  // subset/containment assertions pass trivially.
+  it("extraction sanity: helpers return non-empty results", () => {
+    expect(routeEntries.length).toBeGreaterThan(0);
+    expect(cronFiles.length).toBeGreaterThan(0);
+    expect(slugMap.size).toBeGreaterThan(0);
+    expect(tfMonitors.size).toBeGreaterThan(0);
+  });
+
+  // UPDATE this number when adding/removing Inngest functions.
   it("(a) route.ts functions array has expected count", () => {
     expect(routeEntries.length).toBe(40);
   });
 
-  it("(b) every cron-*.ts file has a corresponding route.ts import", () => {
-    const routeImports = [...routeSrc.matchAll(/from\s+"@\/server\/inngest\/functions\/([\w-]+)"/g)]
-      .map((m) => m[1]);
-
-    const missing = cronFiles.filter((f) => !routeImports.includes(f));
-    expect(missing).toEqual([]);
-  });
-
-  it("(b2) every cron-*.ts file has its export in the functions array", () => {
+  it("(b) every cron-*.ts file is registered in route.ts functions array", () => {
     const routeSet = new Set(routeEntries.map((e) => e.toLowerCase()));
 
     const missing: string[] = [];
@@ -103,12 +110,6 @@ describe("Inngest function registry — drift guards", () => {
   });
 
   it("(c2) every cron-monitors.tf resource name maps to a registered cron function or GHA workflow", () => {
-    const GHA_ONLY_MONITORS = new Set([
-      "scheduled-terraform-drift",
-      "scheduled-realtime-probe",
-      "scheduled-gh-pages-cert-state",
-    ]);
-
     const slugValues = new Set(slugMap.values());
     const phantom: string[] = [];
     for (const name of tfMonitors) {
@@ -117,5 +118,11 @@ describe("Inngest function registry — drift guards", () => {
       }
     }
     expect(phantom).toEqual([]);
+  });
+
+  it("(d) KNOWN_UNMONITORED_SLUGS contains no stale entries", () => {
+    const actualSlugs = new Set(slugMap.values());
+    const stale = [...KNOWN_UNMONITORED_SLUGS].filter((s) => !actualSlugs.has(s));
+    expect(stale).toEqual([]);
   });
 });
