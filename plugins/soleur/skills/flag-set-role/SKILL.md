@@ -102,7 +102,7 @@ No Doppler mirror runs for org-targeting (segment membership is not reflected in
 - Doppler mirror writes (Step 8) happen sequentially: dev first, then prd. If dev write fails, prd is not attempted (avoids cross-config divergence). Exit code 4.
 - The `org-targeted` segment is project-level in Flagsmith, not environment-level. A rule change affects all environments (dev + prd). This is by design (ADR-043: "Single-control — Flagsmith segment rule is the sole per-org gate").
 - No Doppler mirror runs for `--org` operations — org segment membership is not reflected in env vars.
-- The `IN` operator uses comma-separated values with no spaces and case-sensitive matching. The script preserves this format.
+- The segment uses `EQUAL` conditions (one per org) inside an `ANY` rule, not a single `IN` condition. Matching is case-sensitive.
 - `resolve_segment_id` uses `GET /segments/` without pagination. Safe with 3 segments; may need pagination if segment count exceeds 10.
 
 ## Cross-references

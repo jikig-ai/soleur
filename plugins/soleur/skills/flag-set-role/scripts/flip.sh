@@ -217,7 +217,7 @@ doppler_mirror() {
 
 # --- org-targeting branch --------------------------------------------------
 # When --org is provided, modify the org-targeted segment's rule definition
-# directly (add/remove orgId from the IN condition), then exit. No Doppler
+# directly (add/remove EQUAL orgId conditions in the ANY rule), then exit. No Doppler
 # mirror — org segment membership is not reflected in env vars (ADR-038
 # fallback mirrors prd-segment override state, not segment rule definitions).
 if [[ "$TARGET_TYPE" == "org" ]]; then
