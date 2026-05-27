@@ -229,6 +229,7 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
   // inviter, but the invitation record is a data-subject-linkable artifact.
   workspace_invitations: {
     ownerField: "invitee_user_id",
+    additionalOwnerFields: ["inviter_user_id"],
     article: "15+20",
   },
 
