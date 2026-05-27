@@ -1045,6 +1045,60 @@ export async function exportSqlTable(
     });
   }
 
+  // -- workspace_invitations (migration 075, #4519) ----------------------
+  // Art. 15+20: pending and resolved invitations where the user is
+  // invitee or inviter. Two-arm scope check mirrors attestations.
+  {
+    const [byInvitee, byInviter] = await Promise.all([
+      service
+        .from("workspace_invitations")
+        .select("*")
+        .eq("invitee_user_id", expectedUserId),
+      service
+        .from("workspace_invitations")
+        .select("*")
+        .eq("inviter_user_id", expectedUserId),
+    ]);
+    if (signal.aborted) throw new Error("aborted");
+    if (byInvitee.error)
+      throw new Error(
+        `workspace_invitations (invitee) read failed: ${byInvitee.error.message}`,
+      );
+    if (byInviter.error)
+      throw new Error(
+        `workspace_invitations (inviter) read failed: ${byInviter.error.message}`,
+      );
+    const allRows = [...(byInvitee.data ?? []), ...(byInviter.data ?? [])] as Record<string, unknown>[];
+    const seen = new Set<string>();
+    const rows = allRows.filter((r) => {
+      const id = r.id as string;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+    for (const row of rows) {
+      const inv = (row as { invitee_user_id?: unknown }).invitee_user_id;
+      const inr = (row as { inviter_user_id?: unknown }).inviter_user_id;
+      const ok = inv === expectedUserId || inr === expectedUserId;
+      if (!ok) {
+        const offending =
+          typeof inv === "string" ? inv : typeof inr === "string" ? inr : null;
+        const err = new CrossTenantViolation(
+          "workspace_invitations",
+          expectedUserId,
+          offending,
+        );
+        mirrorCrossTenantViolation(offending, expectedUserId, "workspace_invitations", err);
+        throw err;
+      }
+    }
+    results.push({
+      table: "workspace_invitations",
+      spec: DSAR_TABLE_ALLOWLIST.workspace_invitations,
+      rows,
+    });
+  }
+
   // -- workspace_member_removals (migration 062, #4230) -----------------
   // Art. 15: WORM ledger of removal events. ownerField =
   // removed_user_id; assertReadScope single-arm because the row's

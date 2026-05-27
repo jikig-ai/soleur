@@ -219,3 +219,10 @@ apps/web-platform/server/byok-cap-rpc.ts
 # the SS F3 invariant in byok-resolver.ts; user-controlled input is
 # never accepted into this path.
 apps/web-platform/server/byok-resolver.ts
+# workspace-invitations.ts: service-role for workspace_invitations CRUD
+# via SECURITY DEFINER RPCs (create, accept, decline, anonymise, lookup).
+# All mutations enforce caller-is-owner or caller-is-invitee via RPC-
+# internal checks; service-role lift is to bypass the REVOKE INSERT/
+# UPDATE/DELETE posture on workspace_invitations (same pattern as
+# workspace_member_attestations, migration 058 line 133).
+apps/web-platform/server/workspace-invitations.ts
