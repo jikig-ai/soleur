@@ -153,6 +153,18 @@ function setupUserData(overrides: Record<string, unknown> = {}) {
     if (table === "users") {
       return { select: mockSelect };
     }
+    if (table === "workspace_members") {
+      const wChain: Record<string, unknown> = {};
+      Object.assign(wChain, {
+        select: vi.fn(() => wChain),
+        eq: vi.fn(() => wChain),
+        maybeSingle: vi.fn(() => Promise.resolve({ data: { workspace_id: "ws-1" }, error: null })),
+      });
+      return wChain;
+    }
+    if (table === "kb_files") {
+      return { upsert: vi.fn(() => Promise.resolve({ error: null })) };
+    }
     return {};
   });
 }

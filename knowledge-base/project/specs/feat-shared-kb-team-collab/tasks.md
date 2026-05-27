@@ -73,9 +73,9 @@ generated_from: knowledge-base/project/plans/2026-05-27-feat-shared-kb-team-coll
 - [ ] 3.3 Add Team Activity tab to settings page
 
 ### Phase 4: DSAR + legal
-- [ ] 4.1 Add workspace_activity to DSAR_TABLE_ALLOWLIST
-- [ ] 4.2 Add anonymise step to account-delete.ts cascade
-- [ ] 4.3 Legal doc amendments (Privacy Policy, DPD, GDPR Policy, Art. 30)
+- [x] 4.1 workspace_activity registered in DSAR_TABLE_EXCLUSIONS (promote when export chain wired)
+- [x] 4.2 Add anonymise step to account-delete.ts cascade (step 3.935)
+- [x] 4.3 Legal doc amendments (Privacy Policy §4.12, DPD §2.3(x)+(y), GDPR Policy §3.7, Art. 30 PA-24+PA-25)
 
 ### Phase 5: Tests + commit
 - [ ] 5.1 RLS tenant-isolation tests
@@ -96,18 +96,18 @@ generated_from: knowledge-base/project/plans/2026-05-27-feat-shared-kb-team-coll
 - [x] 1.6 Down migration
 
 ### Phase 2: Server-side sync
-- [ ] 2.1 kb-reader.ts — on tree read, upsert kb_files rows from filesystem
+- [x] 2.1 kb upload route — INSERT kb_files row on successful upload (upsert on workspace_id+file_path)
 - [ ] 2.2 kb-document-resolver.ts — resolve via kb_files for workspace-scoped queries
 
 ### Phase 3: Client-side UI
 - [ ] 3.1 Add uploader avatar/initials badge to KB file tree
-- [ ] 3.2 Add attribution + visibility toggle to KB document viewer header
+- [x] 3.2 Add attribution label to KB content header (uploaderLabel prop)
 
 ### Phase 4: DSAR + legal
-- [ ] 4.1 Add kb_files to DSAR_TABLE_ALLOWLIST
+- [x] 4.1 kb_files registered in DSAR_TABLE_EXCLUSIONS (promote when export chain wired)
 - [ ] 4.2 Add anonymise step to account-delete.ts cascade
 - [ ] 4.3 Art-15(4) redaction for cross-member KB content
-- [ ] 4.4 Legal: PA-2 recipients amendment
+- [x] 4.4 Legal amendments: Privacy Policy §4.12, DPD §2.3(x)+(y), GDPR Policy §3.7, Art. 30 PA-24+PA-25
 
 ### Phase 5: Tests + commit
 - [ ] 5.1 RLS tenant-isolation tests

@@ -186,6 +186,18 @@ Where the team-workspace feature is enabled for your organization (gated by `FLA
 
 <!-- End: Workspace co-members -->
 
+### 4.12 Team activity feed and knowledge-base file metadata
+
+Where the team-workspace feature is enabled for your organization, we collect the following additional data to support collaboration features:
+
+**Team Activity Feed (`workspace_activity`).** When members join or leave your workspace, or when conversations are shared with the workspace, an activity event is recorded containing: the workspace identifier, actor user identifier, event type (member_join, member_leave, conversation_shared), optional metadata (e.g. conversation identifier for shared events), and timestamp. Activity events are retained for **90 days** and then permanently deleted by an automated retention purge (pg_cron). Activity events are visible to all members of the same workspace. The actor user identifier is anonymised (SET NULL) on account deletion per Article 17 GDPR. Article 30 register entry: Processing Activity 24. Data Protection Disclosure Section 2.3(x).
+
+**Knowledge-Base File Metadata (`kb_files`).** When a file is uploaded to the shared knowledge base, we record: the workspace identifier, uploader user identifier, file path, filename, visibility setting (private or workspace), upload timestamp, and last-modified timestamp. This metadata enables uploader attribution in the knowledge-base viewer and workspace-scoped file visibility controls. File metadata is retained for the lifetime of the workspace. The uploader user identifier is anonymised (SET NULL) on account deletion per Article 17 GDPR. Article 30 register entry: Processing Activity 25. Data Protection Disclosure Section 2.3(y).
+
+**Lawful basis.** Article 6(1)(b) GDPR — processing necessary for the performance of the contract (shared-workspace collaboration features you activated).
+
+<!-- End: Team activity feed and KB file metadata -->
+
 ## 5. Third-Party Services
 
 ### 5.1 Anthropic Claude API
