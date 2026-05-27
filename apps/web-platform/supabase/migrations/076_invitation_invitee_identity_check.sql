@@ -98,6 +98,9 @@ BEGIN
 END;
 $$;
 
+REVOKE ALL ON FUNCTION public.accept_workspace_invitation(uuid, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.accept_workspace_invitation(uuid, uuid) TO service_role;
+
 -- =====================================================================
 -- 2. decline_workspace_invitation — add identity binding
 -- =====================================================================
@@ -151,3 +154,6 @@ BEGIN
   RETURN jsonb_build_object('ok', true);
 END;
 $$;
+
+REVOKE ALL ON FUNCTION public.decline_workspace_invitation(uuid, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.decline_workspace_invitation(uuid, uuid) TO service_role;
