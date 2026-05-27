@@ -98,17 +98,14 @@ export async function handleConversationMessages(
   // surface can hydrate its `workflowEnded` flag on reload of an already-
   // ended conversation. Without this, the in-memory lifecycle slice
   // initializes to `idle` and the input renders enabled.
-  // PR-C §2.2 (#3244): tenant-scoped read. Explicit `.eq("user_id",
-  // user.id)` filter retained as belt-and-suspenders — RLS already
-  // enforces ownership, but the filter narrows the scan and documents
-  // the ownership invariant at the call site.
+  // visibility-sweep: RLS conversations_owner_or_shared returns own +
+  // workspace-shared conversations; no app-level user_id filter needed.
   const { data: conv, error: convErr } = await tenant
     .from("conversations")
     .select(
       "id, total_cost_usd, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, workflow_ended_at, created_at",
     )
     .eq("id", conversationId)
-    .eq("user_id", user.id)
     .single();
 
   if (convErr || !conv) {

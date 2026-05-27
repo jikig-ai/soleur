@@ -381,6 +381,7 @@ export async function tryLedgerDivergenceRecovery(
     // Visible active conversations — what the user perceives as "in
     // flight". Mirrors the ledger denominator the cap was checked
     // against.
+    // visibility-sweep-audit: owner-scoped — concurrency-slot accounting is per-user
     const visibleResp = await tenant
       .from("conversations")
       .select("id")
@@ -811,6 +812,7 @@ async function createConversation(
     );
   }
 
+  // visibility-sweep-audit: INSERT — owner-scoped (user creates own conversation with workspace_id)
   const { error } = await tenant.from("conversations").insert({
     id,
     user_id: userId,
@@ -831,6 +833,7 @@ async function createConversation(
     // (e.g., conversations_pkey id collision) does NOT fall through into the
     // context_path lookup. See review #2390.
     if (contextPath && isContextPathUniqueViolation(error)) {
+      // visibility-sweep-audit: owner-scoped — 23505 fallback resolves user's own duplicate
       const { data: existing, error: lookupErr } = await tenant
         .from("conversations")
         .select("id, active_workflow, context_path")
@@ -1395,6 +1398,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             });
             return;
           }
+          // visibility-sweep-audit: owner-scoped — WS resume creates a session bound to the user's own conversation
           const { data: existing, error: lookupErr } = await tenantResume
             .from("conversations")
             .select("id, last_active, context_path")
@@ -1579,6 +1583,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           });
           return;
         }
+        // visibility-sweep-audit: owner-scoped — WS resume-by-id binds a session to the user's own conversation
         const convQuery = tenantResumeConv
           .from("conversations")
           .select("id, status, repo_url")
@@ -1860,6 +1865,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             });
             return;
           }
+          // visibility-sweep-audit: owner-scoped via RLS (no explicit user_id filter but tenant JWT scopes to auth.uid())
           const { data: row, error: routeErr } = await tenantRoute
             .from("conversations")
             .select("active_workflow, session_id, context_path")

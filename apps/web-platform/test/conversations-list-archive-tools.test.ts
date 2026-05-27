@@ -179,10 +179,10 @@ describe("conversations_list MCP tool", () => {
     const payload = JSON.parse(res.content[0].text);
     expect(payload).toHaveLength(1);
     expect(payload[0].id).toBe("conv-1");
-    // Verify three-column scope applied.
+    // Verify repo_url scope applied (user_id filter removed — RLS handles access).
     const byCol = Object.fromEntries(predicates.map((p) => [p.col, p.val]));
-    expect(byCol["user_id"]).toBe("u1");
     expect(byCol["repo_url"]).toBe("https://github.com/acme/repo");
+    expect(byCol["user_id"]).toBeUndefined();
   });
 
   test("disconnected user short-circuits with typed error (not empty list)", async () => {
@@ -210,8 +210,13 @@ describe("conversations_list MCP tool", () => {
     );
     const toolB = await getTool("conversations_list", "user-b");
     await toolB.handler({});
-    expect(predicates.some((p) => p.col === "user_id" && p.val === "user-a")).toBe(true);
-    expect(predicatesB.some((p) => p.col === "user_id" && p.val === "user-b")).toBe(true);
+    // After visibility-sweep: user_id filter removed — RLS handles user scoping.
+    // Verify both calls produce predicates (repo_url at minimum).
+    expect(predicates.some((p) => p.col === "repo_url")).toBe(true);
+    expect(predicatesB.some((p) => p.col === "repo_url")).toBe(true);
+    // Neither should include a user_id predicate.
+    expect(predicates.some((p) => p.col === "user_id")).toBe(false);
+    expect(predicatesB.some((p) => p.col === "user_id")).toBe(false);
   });
 
   test("honors default limit=50", async () => {
@@ -259,11 +264,11 @@ describe("conversation_archive MCP tool", () => {
       expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
     );
     expect(payload.id).toBe("conv-1");
-    // Three-column WHERE backstop fired.
+    // Two-column WHERE backstop + RLS (user_id removed — visibility-sweep).
     const byCol = Object.fromEntries(predicates.map((p) => [p.col, p.val]));
     expect(byCol["id"]).toBe("conv-1");
-    expect(byCol["user_id"]).toBe("u1");
     expect(byCol["repo_url"]).toBe("https://github.com/acme/repo");
+    expect(byCol["user_id"]).toBeUndefined();
     // UPDATE payload sets archived_at to a non-null ISO string.
     expect(updatePayload.current?.archived_at).toEqual(
       expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
@@ -331,7 +336,7 @@ describe("conversation_unarchive MCP tool", () => {
     expect(updatePayload.current?.archived_at).toBe(null);
   });
 
-  test("three-column WHERE backstop", async () => {
+  test("two-column WHERE backstop + RLS", async () => {
     const predicates: Predicate[] = [];
     mockServiceClient.mockReturnValue(
       setupSupabaseMock({
@@ -343,8 +348,8 @@ describe("conversation_unarchive MCP tool", () => {
     await t.handler({ conversationId: "conv-1" });
     const byCol = Object.fromEntries(predicates.map((p) => [p.col, p.val]));
     expect(byCol["id"]).toBe("conv-1");
-    expect(byCol["user_id"]).toBe("u1");
     expect(byCol["repo_url"]).toBe("https://github.com/acme/repo");
+    expect(byCol["user_id"]).toBeUndefined();
   });
 });
 
@@ -378,7 +383,7 @@ describe("conversation_update_status MCP tool", () => {
     expect(updatePayload.current?.status).toBe("completed");
   });
 
-  test("three-column WHERE backstop (cross-repo fail closed)", async () => {
+  test("two-column WHERE backstop + RLS (cross-repo fail closed)", async () => {
     const predicates: Predicate[] = [];
     mockServiceClient.mockReturnValue(
       setupSupabaseMock({
@@ -390,8 +395,8 @@ describe("conversation_update_status MCP tool", () => {
     await t.handler({ conversationId: "conv-1", status: "active" });
     const byCol = Object.fromEntries(predicates.map((p) => [p.col, p.val]));
     expect(byCol["id"]).toBe("conv-1");
-    expect(byCol["user_id"]).toBe("u1");
     expect(byCol["repo_url"]).toBe("https://github.com/acme/repo");
+    expect(byCol["user_id"]).toBeUndefined();
   });
 
   test("0 rows returns not_found (cross-repo cached id)", async () => {

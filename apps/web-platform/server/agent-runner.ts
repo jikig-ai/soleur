@@ -628,6 +628,7 @@ export async function cleanupOrphanedConversations(): Promise<void> {
   // not data ownership. No userId in scope; getFreshTenantClient(userId)
   // is structurally inapplicable (per type-design F2 + architecture F1).
   // Allowlisted in apps/web-platform/.service-role-allowlist.
+  // visibility-sweep-audit: service-role bulk sweep — not user-scoped
   // allow-direct-conversation-update: bulk status sweep — no per-user composite key
   const { error } = await supabase()
     .from("conversations")
@@ -653,6 +654,7 @@ export function startInactivityTimer(): void {
     // not data ownership. The selected `user_id` rows are then used to
     // abort in-memory sessions; no per-tenant write is performed here.
     // Allowlisted in apps/web-platform/.service-role-allowlist.
+    // visibility-sweep-audit: service-role bulk sweep — not user-scoped
     // allow-direct-conversation-update: bulk timeout sweep — no per-user composite key
     const { data, error } = await supabase()
       .from("conversations")
@@ -2368,12 +2370,13 @@ export async function sendUserMessage(
   // historical-grep stability. A cross-founder probe under tenant JWT
   // returns zero rows (silent RLS filter); the JWT-mint failure
   // upstream surfaces as RuntimeAuthError before this query.
+  // visibility-sweep: RLS conversations_owner_or_shared gates access
+  // to own + workspace-shared conversations; no app-level user_id filter.
   const sendTenant = await getFreshTenantClient(userId);
   const { data: conv, error: convErr } = await sendTenant
     .from("conversations")
     .select("domain_leader, session_id")
     .eq("id", conversationId)
-    .eq("user_id", userId)
     .single();
 
   if (convErr || !conv) throw new Error(ERR_CONVERSATION_NOT_FOUND);

@@ -524,6 +524,7 @@ export async function deleteAccount(
   //        paths. Non-fatal: identity linkage is already severed at 3.901;
   //        orphaned bytes are a resource leak, not a compliance violation.
   try {
+    // visibility-sweep-audit: owner-scoped — deletion cascade is per-user
     const { data: ownedConvs } = await service
       .from("conversations")
       .select("id")

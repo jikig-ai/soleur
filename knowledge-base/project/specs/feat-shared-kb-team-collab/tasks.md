@@ -23,30 +23,30 @@ generated_from: knowledge-base/project/plans/2026-05-27-feat-shared-kb-team-coll
 - [ ] 1.7 Write down migration (075_conversation_visibility.down.sql)
 
 ### Phase 2: Server-side call-site sweep (25 sites)
-- [ ] 2.1 ws-handler.ts — fix INSERT (workspace_id) + audit 5 remaining sites
-- [ ] 2.2 conversations-tools.ts — widen 4 MCP tool sites for shared visibility
-- [ ] 2.3 agent-runner.ts — audit 3 sites for workspace-scoped access
-- [ ] 2.4 api-messages.ts — widen for shared conversation message access
-- [ ] 2.5 lookup-conversation-for-path.ts — widen for shared context paths
-- [ ] 2.6 Remaining sites (dsar-export, account-delete, api-usage, conversation-writer, dsar-export-co-uploader) — verify owner-scoped semantics are correct
+- [x] 2.1 ws-handler.ts — fix INSERT (workspace_id) + audit 5 remaining sites
+- [x] 2.2 conversations-tools.ts — widen 4 MCP tool sites for shared visibility
+- [x] 2.3 agent-runner.ts — audit 3 sites for workspace-scoped access
+- [x] 2.4 api-messages.ts — widen for shared conversation message access
+- [x] 2.5 lookup-conversation-for-path.ts — widen for shared context paths
+- [x] 2.6 Remaining sites (dsar-export, account-delete, api-usage, conversation-writer, dsar-export-co-uploader) — verify owner-scoped semantics are correct
 
 ### Phase 3: Client-side UI
-- [ ] 3.1 Create visibility-toggle.tsx component (Private | Workspace segmented control)
-- [ ] 3.2 Add toggle to conversation-header.tsx
+- [x] 3.1 Create visibility-toggle.tsx component (Private | Workspace segmented control)
+- [x] 3.2 Add toggle to conversation-header.tsx
 - [ ] 3.3 Update use-conversations.ts: widen Realtime filter from user_id to workspace_id
 - [ ] 3.4 Add WORKSPACE badge + creator avatar to conversation list items
 
 ### Phase 4: Tests
-- [ ] 4.1 RLS deny test: workspace member cannot see private conversations of others
-- [ ] 4.2 RLS allow test: workspace member can see shared conversations
-- [ ] 4.3 Cross-workspace deny test
-- [ ] 4.4 RESTRICTIVE policy test: client UPDATE on visibility rejected
-- [ ] 4.5 RPC test: owner can toggle, non-owner gets exception
-- [ ] 4.6 Workspace_id INSERT regression test
+- [x] 4.1 RLS deny test: workspace member cannot see private conversations of others
+- [x] 4.2 RLS allow test: workspace member can see shared conversations
+- [x] 4.3 Cross-workspace deny test
+- [x] 4.4 RESTRICTIVE policy test: client UPDATE on visibility rejected
+- [x] 4.5 RPC test: owner can toggle, non-owner gets exception
+- [x] 4.6 Workspace_id INSERT regression test
 
 ### Phase 5: Verify + commit PR-A
-- [ ] 5.1 `tsc --noEmit` passes
-- [ ] 5.2 vitest run passes
+- [x] 5.1 `tsc --noEmit` passes
+- [x] 5.2 vitest run passes
 - [ ] 5.3 Commit and push PR-A changes
 
 ## PR-B: Team Activity Feed

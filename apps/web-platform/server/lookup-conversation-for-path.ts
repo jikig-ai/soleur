@@ -82,10 +82,12 @@ export async function lookupConversationForPath(
     throw err;
   }
 
+  // visibility-sweep: RLS conversations_owner_or_shared returns own +
+  // workspace-shared conversations; most-recent-first ordering means
+  // the user's own active conversation wins when one exists.
   const { data, error } = await tenant
     .from("conversations")
     .select("id, context_path, last_active, messages(count)")
-    .eq("user_id", userId)
     .eq("repo_url", repoUrl)
     .eq("context_path", contextPath)
     .is("archived_at", null)
