@@ -31,9 +31,23 @@ export async function POST(request: Request) {
   const service = createServiceClient();
   const { data: invRow } = await service
     .from("workspace_invitations")
-    .select("inviter_user_id, workspace_id, workspaces!inner(name)")
+    .select("inviter_user_id, invitee_user_id, invitee_email, workspace_id, workspaces!inner(name)")
     .eq("id", body.invitationId)
     .single();
+
+  if (invRow) {
+    const isInvitee =
+      invRow.invitee_user_id === user.id ||
+      (!invRow.invitee_user_id &&
+        invRow.invitee_email?.toLowerCase() === user.email?.toLowerCase());
+
+    if (!isInvitee) {
+      return NextResponse.json(
+        { error: "not_intended_invitee" },
+        { status: 403 },
+      );
+    }
+  }
 
   const result = await acceptWorkspaceInvitation(body.invitationId, user.id);
 
@@ -41,9 +55,11 @@ export async function POST(request: Request) {
     const status =
       result.reason === "invitation_not_found" || result.reason === "expired"
         ? 404
-        : result.reason === "already_accepted" || result.reason === "already_declined" || result.reason === "already_member"
-          ? 409
-          : 500;
+        : result.reason === "not_intended_invitee"
+          ? 403
+          : result.reason === "already_accepted" || result.reason === "already_declined" || result.reason === "already_member"
+            ? 409
+            : 500;
     return NextResponse.json({ error: result.reason }, { status });
   }
 
