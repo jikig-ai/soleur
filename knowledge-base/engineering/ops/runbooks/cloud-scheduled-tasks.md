@@ -308,6 +308,22 @@ curl -s http://127.0.0.1:8288/v1/functions | \
 
 **Restore (H9):**
 
+**Automated (preferred):** Run the restart workflow from any machine with `gh` auth:
+
+```bash
+gh workflow run restart-inngest-server.yml
+```
+
+This sends `restart inngest _ latest` to `ci-deploy.sh`, which restarts `inngest-server.service`, waits for health at `127.0.0.1:8288`, and verifies function count >= 1. The workflow polls deploy-status for completion and reports success/failure via GHA annotations. After the workflow completes, restart the web-platform container to force a fresh function manifest sync:
+
+```bash
+# Trigger a no-op web-platform deploy to force SDK sync, or use the
+# existing release workflow if a new version is pending.
+docker restart soleur-web-platform
+```
+
+**Manual fallback (SSH required):**
+
 1. Restart `inngest-server.service`: `sudo systemctl restart inngest-server.service`
 2. Wait 30s for SQLite reinitialisation
 3. Restart web-platform container: `docker restart soleur-web-platform` (forces fresh function manifest sync)
