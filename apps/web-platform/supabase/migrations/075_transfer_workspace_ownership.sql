@@ -288,8 +288,12 @@ BEGIN
     WHERE w.organization_id = v_org_rec.org_id;
 
     IF v_remaining = 0 THEN
-      DELETE FROM public.workspaces WHERE organization_id = v_org_rec.org_id;
-      DELETE FROM public.organizations WHERE id = v_org_rec.org_id;
+      -- Orphan org: no members remain. Do NOT delete the workspace or org
+      -- here — many tables (conversations, messages, scope_grants, etc.)
+      -- reference workspaces(id) ON DELETE RESTRICT and would block.
+      -- Instead, rely on the SET NULL cascade from auth.users delete
+      -- (mig 065 Part 1: organizations.owner_user_id ON DELETE SET NULL)
+      -- to orphan the org. This matches mig 065's original design.
       v_orgs_deleted := v_orgs_deleted + 1;
     ELSE
       -- Find the oldest remaining member (excluding the departing owner)

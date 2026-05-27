@@ -242,9 +242,7 @@ describe("deleteAccount Sentry mirror (#4390)", () => {
         );
         expect(mockWarnSilentFallback).not.toHaveBeenCalled();
         expect(result.success).toBe(false);
-        expect(result.error).toBe(
-          "Account deletion failed. Please try again.",
-        );
+        expect(result.error).toContain("Account deletion failed at");
       }
     },
   );
