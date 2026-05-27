@@ -1065,6 +1065,8 @@ Do NOT use `gh pr checks --watch` -- it exits immediately with "no checks report
 
 After auto-merge is queued, poll until the PR is merged. Do NOT ask "merge now or later?" -- auto-merge handles it. Do NOT use foreground `sleep` — Claude Code blocks `sleep` >= 2s in foreground Bash calls.
 
+**HARD GATE: Use the Monitor tool, NEVER Bash `run_in_background`.** The Monitor tool streams each stdout line as a real-time notification (state-change visibility). Bash `run_in_background` is opaque until completion — the agent and operator see nothing until the entire loop finishes or fails, which defeats the purpose of heartbeat polling. If you catch yourself reaching for `Bash` with `run_in_background: true` for a polling loop, stop — that is the failure mode this gate exists to block. **Why:** PR #4512 — the agent used `Bash run_in_background` for release monitoring; the background task failed silently with exit code 1, producing zero visibility into the release state. The Monitor tool would have surfaced every state transition as it happened.
+
 Use the **Monitor tool** with this shell loop (state-change + heartbeat, max 15 iterations = 15 minutes). The loop covers three structurally-unmergeable states in addition to the terminal MERGED/CLOSED exits: **required-check failure** (exit at first failing required check, name it in stderr), **BEHIND** (auto-sync main into the branch up to 6 attempts, then emit a structured "main moving faster than CI" warning at the inflection point), and **DIRTY** (server-side merge conflict — exit and surface). See "Auto-sync on BEHIND" and "Required-check failure exit" below:
 
 ```bash
@@ -1291,7 +1293,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    - If total runs > 0 and pending = 0: all runs completed. Proceed to Step 4.
    - If total runs = 0: workflows have not registered yet. Wait 15 seconds and re-query. Retry up to 3 times (45 seconds total). If still 0 after 3 retries, treat as "no workflows triggered" and skip verification (the PR only touched files outside all path filters).
 
-   **Step 3:** For each run that is not yet `completed`, use the **Monitor tool** with a state-change + heartbeat loop:
+   **Step 3:** For each run that is not yet `completed`, use the **Monitor tool** (NEVER Bash `run_in_background` — see Phase 7 HARD GATE) with a state-change + heartbeat loop:
 
    ```bash
    prev=""; i=0
@@ -1650,13 +1652,15 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
 
    **Step 3:** Display the warning and ask: "Run `terraform apply` now, or defer with justification?" If deferred, record the justification in the PR body.
 
-3.8. **Chain to postmerge verification.** After release workflows pass and migration verification completes, invoke `/soleur:postmerge` to verify production health, Sentry cron monitors, and file freshness:
+3.8. **Chain to postmerge verification (CONTINUATION GATE — MUST complete before Step 4).** After release workflows pass and migration verification completes, invoke `/soleur:postmerge` to verify production health, Sentry cron monitors, and file freshness:
 
    ```
    skill: soleur:postmerge <PR-number>
    ```
 
    If postmerge reports any FAILED phase (production health, Sentry warning, browser regression), display the failures prominently but do NOT block cleanup — the deploy has already happened; the signal is for immediate operator attention, not rollback.
+
+   **Do NOT skip this step.** Do NOT proceed to Step 4 (cleanup) without invoking postmerge. The rationalization "the PR merged, we're done" is exactly the failure mode this gate prevents — a merged PR is not a deployed PR, and a deployed PR is not a healthy deployment. **Why:** PR #4512 — the agent jumped from merge confirmation directly to cleanup, skipping release workflow monitoring (Step 2) and postmerge verification (Step 3.8). The release was still in progress and could have failed silently.
 
 4. Clean up worktree and local branch:
 
