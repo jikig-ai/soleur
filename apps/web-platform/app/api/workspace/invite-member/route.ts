@@ -88,10 +88,16 @@ export async function POST(request: Request) {
   const inviterName =
     user.user_metadata?.full_name ?? user.email ?? "A team member";
 
+  const { data: wsRow } = await service
+    .from("workspaces")
+    .select("name")
+    .eq("id", workspaceId)
+    .single();
+
   sendInviteEmail(
     email.trim(),
     inviterName,
-    pageData.data.workspaceName ?? "Workspace",
+    wsRow?.name ?? "Workspace",
     result.token,
   ).catch(() => {});
 

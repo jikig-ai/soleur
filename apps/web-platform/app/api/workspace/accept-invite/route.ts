@@ -49,7 +49,8 @@ export async function POST(request: Request) {
 
   if (invRow?.inviter_user_id) {
     const accepterName = user.user_metadata?.full_name ?? user.email ?? "A user";
-    const workspaceName = (invRow.workspaces as { name: string } | null)?.name ?? "Workspace";
+    const workspaceArr = invRow.workspaces as unknown as Array<{ name: string }> | null;
+    const workspaceName = workspaceArr?.[0]?.name ?? "Workspace";
     sendInviteAcceptedEmail(invRow.inviter_user_id, accepterName, workspaceName).catch(() => {});
   }
 
