@@ -8,33 +8,48 @@ branch: feat-one-shot-fix-test-fixtures-transfer-ownership
 
 ## Phase 1: Fix confirmed call site
 
-### 1.1 Rewrite test 3.2.4 in workspace-member-revocation.tenant-isolation.test.ts
-- [ ] Replace `update_workspace_member_role` call (line 284) with `transfer_workspace_ownership` RPC
-- [ ] Provide valid `p_attestation_text` (>= 16 chars)
-- [ ] Update comment at line 281-283 to reflect transfer semantics instead of "demote attempt"
-- [ ] Update `workspace_member_actions` assertion: verify action for D with new_role='owner'
-- [ ] Update `workspace_member_removals` assertion: revocation row is now for owner A (demoted), reason='ownership-transferred'
-- [ ] Update D cleanup: D is now owner -- service-role `auth.admin.deleteUser(dId)` still works (bypasses RLS)
+### 1.1 Replace RPC call in test 3.2.4
+- [ ] Replace `update_workspace_member_role` call (line 284-288) with `transfer_workspace_ownership` RPC
+- [ ] Use parameters: `p_workspace_id: fixtureX.workspaceId`, `p_new_owner_user_id: dId`, `p_attestation_text: "test-ownership-transfer-3.2.4-fixture"` (42 chars, above 16-char minimum)
+- [ ] Assert `transferErr` is null AND `attestationId` is truthy (RPC returns uuid)
+- [ ] Update comment at line 281-283 to reflect transfer semantics ("Transfer ownership from A to D" instead of "Demote attempt")
+- [ ] Update test name at line 260 to "3.2.4 ownership-transfer writes workspace_member_actions with actor (F2)"
 
-### 1.2 Verify test ordering safety
-- [ ] Confirm test 3.2.4 does not break tests 3.2.1-3.2.5 or AC15 F6 by demoting A
-- [ ] If ordering issue exists, isolate test 3.2.4 with its own fixture or restore A's owner role in cleanup
+### 1.2 Update workspace_member_actions assertion (lines 291-301)
+- [ ] Keep existing query filtering on `target_user_id = dId` (still correct for D-promote row)
+- [ ] Keep `action_type = 'role_changed'` assertion (audit trigger fires `role_changed` for the UPDATE)
+- [ ] Add `new_role = 'owner'` assertion for completeness
+- [ ] Keep `actor_user_id = ownerA.userId` assertion (GUC set at mig 075:94)
+
+### 1.3 Update workspace_member_removals assertion (lines 303-310)
+- [ ] Change query from `removed_user_id = dId` to `removed_user_id = ownerA.userId`
+- [ ] Add `.eq("revocation_reason", "ownership-transferred")` to distinguish from test 3.2.1's removal row (reason='removed')
+- [ ] Change expected reason from `'role-changed'` to `'ownership-transferred'`
+- [ ] Add assertion: `removed_by_user_id = ownerA.userId` (voluntary transfer)
+
+### 1.4 Verify cleanup (lines 312-316)
+- [ ] Confirm existing cleanup shape (`service.from("workspace_members").delete().eq("user_id", dId)` then `service.auth.admin.deleteUser(dId)`) works for D-as-owner -- service-role bypasses RLS
+
+### 1.5 Verify test ordering
+- [ ] Confirm tests 3.2.1, 3.2.2, 3.2.3, 3.2.5, AC15 F6 run before 3.2.4 and do not depend on A's role post-transfer
+- [ ] Confirm afterAll cleanup uses service-role operations (no owner-check dependency)
 
 ## Phase 2: Investigate other test files
 
 ### 2.1 Run account-delete.cascade.integration.test.ts
-- [ ] Execute with `TENANT_INTEGRATION_TEST=1` to confirm pass/fail
-- [ ] If fails: diagnose root cause (mig 075 `anonymise_organization_membership` rewrite or other)
-- [ ] If fails: apply targeted fix
+- [ ] No `update_workspace_member_role` call exists in this file -- if it fails, root cause is different from issue description
+- [ ] If fails: check `anonymise_organization_membership` rewrite (mig 075 section 3) or `handle_new_user` trigger interaction
+- [ ] If passes: scope out (no change needed)
 
 ### 2.2 Run attachments-workspace-shared-cascade.integration.test.ts
-- [ ] Execute with `TENANT_INTEGRATION_TEST=1` to confirm pass/fail
-- [ ] If fails: diagnose root cause
-- [ ] If fails: apply targeted fix
+- [ ] No `update_workspace_member_role` call exists in this file -- same investigation pattern as 2.1
+- [ ] If fails: diagnose root cause from error message
+- [ ] If passes: scope out (no change needed)
 
 ## Phase 3: Verification
 
 ### 3.1 Full suite verification
-- [ ] Run: `rg 'update_workspace_member_role.*owner' apps/web-platform/test/server/` returns 0 matches
-- [ ] Run all three test files with `TENANT_INTEGRATION_TEST=1` and confirm green
-- [ ] Confirm no production code changes (only test files modified)
+- [ ] Run: `rg "update_workspace_member_role" apps/web-platform/test/server/workspace-member-revocation.tenant-isolation.test.ts` returns 0 matches
+- [ ] Run: `rg "p_new_role.*owner" apps/web-platform/test/server/` returns 0 matches
+- [ ] Run: `rg "transfer_workspace_ownership" apps/web-platform/test/server/workspace-member-revocation.tenant-isolation.test.ts` returns at least 1 match
+- [ ] Confirm no files outside `apps/web-platform/test/` were modified
