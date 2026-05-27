@@ -215,6 +215,34 @@ doppler_mirror() {
   printf '%s' "$value" | doppler secrets set "${ENV_VAR}" -p soleur -c "$config" --silent || return 4
 }
 
+gate_or_confirm() {
+  if [[ $DRY_RUN -eq 1 ]]; then
+    echo "(dry-run — exiting 0 without mutation)"
+    exit 0
+  fi
+  if [[ $CONFIRMED -eq 0 ]]; then
+    echo
+    read -p "Proceed? Type 'yes' to apply: " ACK
+    [[ "$ACK" == "yes" ]] || { echo "aborted (ack was '$ACK')" >&2; exit 0; }
+  else
+    echo "(--confirmed: skipping interactive prompt)"
+  fi
+}
+
+audit_append() {
+  local audit_target="$1"
+  local actor db_url before_bool after_bool audit_id
+  actor=$(doppler secrets get OPERATOR_EMAIL -p soleur -c cli_ops --plain 2>/dev/null | tr '[:upper:]' '[:lower:]')
+  [[ -z "$actor" ]] && { echo "FATAL: OPERATOR_EMAIL not in Doppler soleur/cli_ops" >&2; exit 4; }
+  db_url=$(doppler secrets get DATABASE_URL_POOLER -p soleur -c dev --plain 2>/dev/null)
+  [[ -z "$db_url" ]] && { echo "FATAL: DATABASE_URL_POOLER not in Doppler soleur/dev" >&2; exit 4; }
+  before_bool=$([[ "$VALUE" == "on" ]] && echo "false" || echo "true")
+  after_bool=$([[ "$VALUE" == "on" ]] && echo "true" || echo "false")
+  audit_id=$(psql "${db_url/6543/5432}" -tAc "SELECT public.audit_flag_flip('$FLAG', '$ROLE', '$audit_target', '$VALUE', $before_bool, $after_bool, '$actor');" 2>&1) \
+    || { echo "FATAL: audit append failed: $audit_id" >&2; exit 4; }
+  echo "  audit_id=$audit_id"
+}
+
 # --- org-targeting branch --------------------------------------------------
 # When --org is provided, modify the org-targeted segment's rule definition
 # directly (add/remove EQUAL orgId conditions in the ANY rule), then exit. No Doppler
@@ -246,11 +274,11 @@ print(','.join(orgs) if orgs else '')
 
   CURRENT_ORGS="$PARSED"
 
-  RESULT=$(python3 -c "
-import sys
-current = '$CURRENT_ORGS'
-target = '$TARGET_ORG'
-action = '$VALUE'
+  RESULT=$(CURRENT_ORGS="$CURRENT_ORGS" TARGET_ORG="$TARGET_ORG" VALUE="$VALUE" python3 -c "
+import os, sys
+current = os.environ['CURRENT_ORGS']
+target = os.environ['TARGET_ORG']
+action = os.environ['VALUE']
 orgs = [x for x in current.split(',') if x] if current else []
 
 if action == 'on':
@@ -288,39 +316,14 @@ else:
   echo "→ New membership:"
   echo "$NEW_ORGS" | tr ',' '\n' | sed 's/^/  /'
 
-  if [[ $DRY_RUN -eq 1 ]]; then
-    echo "(dry-run — exiting 0 without mutation)"
-    exit 0
-  fi
-
-  if [[ $CONFIRMED -eq 0 ]]; then
-    echo
-    read -p "Proceed? Type 'yes' to apply: " ACK
-    [[ "$ACK" == "yes" ]] || { echo "aborted (ack was '$ACK')" >&2; exit 0; }
-  else
-    echo "(--confirmed: skipping interactive prompt)"
-  fi
-
-  # Audit trail (before Flagsmith write — if audit fails, no mutation happens).
-  ACTOR=$(doppler secrets get OPERATOR_EMAIL -p soleur -c cli_ops --plain 2>/dev/null | tr '[:upper:]' '[:lower:]')
-  [[ -z "$ACTOR" ]] && { echo "FATAL: OPERATOR_EMAIL not in Doppler soleur/cli_ops" >&2; exit 4; }
-
-  DB_URL=$(doppler secrets get DATABASE_URL_POOLER -p soleur -c dev --plain 2>/dev/null)
-  [[ -z "$DB_URL" ]] && { echo "FATAL: DATABASE_URL_POOLER not in Doppler soleur/dev" >&2; exit 4; }
-
-  AUDIT_TARGET="org:$TARGET_ORG"
-  BEFORE_BOOL=$([[ "$VALUE" == "on" ]] && echo "false" || echo "true")
-  AFTER_BOOL=$([[ "$VALUE" == "on" ]] && echo "true" || echo "false")
-
-  AUDIT_ID=$(psql "${DB_URL/6543/5432}" -tAc "SELECT public.audit_flag_flip('$FLAG', '$ROLE', '$AUDIT_TARGET', '$VALUE', $BEFORE_BOOL, $AFTER_BOOL, '$ACTOR');" 2>&1) \
-    || { echo "FATAL: audit append failed: $AUDIT_ID" >&2; exit 4; }
-  echo "  audit_id=$AUDIT_ID"
+  gate_or_confirm
+  audit_append "org:$TARGET_ORG"
 
   echo "→ Writing updated segment to Flagsmith…"
-  UPDATED_JSON=$(echo "$SEG_JSON" | python3 -c "
-import json, sys
+  UPDATED_JSON=$(echo "$SEG_JSON" | NEW_ORGS="$NEW_ORGS" python3 -c "
+import json, os, sys
 seg = json.load(sys.stdin)
-new_orgs = '$NEW_ORGS'
+new_orgs = os.environ['NEW_ORGS']
 orgs = [x for x in new_orgs.split(',') if x] if new_orgs else []
 seg['rules'][0]['rules'][0]['conditions'] = [
     {'operator': 'EQUAL', 'property': 'orgId', 'value': o} for o in orgs
@@ -398,34 +401,10 @@ if [[ "$ROLE" == "prd" ]]; then
   echo "    (replacing $(doppler secrets get $ENV_VAR -p soleur -c prd --plain 2>/dev/null || echo unset) / $(doppler secrets get $ENV_VAR -p soleur -c dev --plain 2>/dev/null || echo unset))"
 fi
 
-if [[ $DRY_RUN -eq 1 ]]; then
-  echo "(dry-run — exiting 0 without mutation)"
-  exit 0
-fi
-
-# --- operator ack ----------------------------------------------------------
-if [[ $CONFIRMED -eq 0 ]]; then
-  echo
-  read -p "Proceed? Type 'yes' to apply: " ACK
-  [[ "$ACK" == "yes" ]] || { echo "aborted (ack was '$ACK')" >&2; exit 0; }
-else
-  echo "(--confirmed: skipping interactive prompt)"
-fi
+gate_or_confirm
 
 # --- audit append (WORM) ---------------------------------------------------
-ACTOR=$(doppler secrets get OPERATOR_EMAIL -p soleur -c cli_ops --plain 2>/dev/null | tr '[:upper:]' '[:lower:]')
-[[ -z "$ACTOR" ]] && { echo "FATAL: OPERATOR_EMAIL not in Doppler soleur/cli_ops" >&2; exit 4; }
-
-DB_URL=$(doppler secrets get DATABASE_URL_POOLER -p soleur -c dev --plain 2>/dev/null)
-[[ -z "$DB_URL" ]] && { echo "FATAL: DATABASE_URL_POOLER not in Doppler soleur/dev" >&2; exit 4; }
-
-AUDIT_TARGET=$([[ "$TARGET_TYPE" == "org" ]] && echo "org:$TARGET_ORG" || echo "role:$ROLE")
-BEFORE_BOOL=$([[ "$VALUE" == "on" ]] && echo "false" || echo "true")
-AFTER_BOOL=$([[ "$VALUE" == "on" ]] && echo "true" || echo "false")
-
-AUDIT_ID=$(psql "${DB_URL/6543/5432}" -tAc "SELECT public.audit_flag_flip('$FLAG', '$ROLE', '$AUDIT_TARGET', '$VALUE', $BEFORE_BOOL, $AFTER_BOOL, '$ACTOR');" 2>&1) \
-  || { echo "FATAL: audit append failed: $AUDIT_ID" >&2; exit 4; }
-echo "  audit_id=$AUDIT_ID"
+audit_append "role:$ROLE"
 
 # --- write Flagsmith (both envs) -------------------------------------------
 echo "→ Writing Flagsmith dev env…"
