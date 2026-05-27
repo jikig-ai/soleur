@@ -12,8 +12,8 @@
 --     (REVOKED FROM authenticated, service_role only).
 --   * revoke_jti is NOT granted to authenticated (service-role-only).
 --   * my_revocation_status is granted TO authenticated.
---   * Exactly 21 RESTRICTIVE policies named *_jti_not_denied exist.
---   * Each of the 21 tenant tables has its own policy.
+--   * Exactly 23 RESTRICTIVE policies named *_jti_not_denied exist.
+--   * Each of the 23 tenant tables has its own policy.
 
 -- (1) revoke_jti present + SECURITY DEFINER
 SELECT 'revoke_jti_fn_present' AS check_name,
@@ -69,9 +69,9 @@ SELECT 'my_revocation_status_authenticated_grant_present',
               'EXECUTE'
             ) THEN 0 ELSE 1 END::int
 UNION ALL
--- (7) Exactly 21 RESTRICTIVE jti_not_denied policies
-SELECT 'jti_deny_policies_count_21',
-       CASE WHEN count(*) = 21 THEN 0 ELSE 1 END::int
+-- (7) Exactly 23 RESTRICTIVE jti_not_denied policies (21 base + workspace_activity + kb_files from mig 076/077)
+SELECT 'jti_deny_policies_count_23',
+       CASE WHEN count(*) = 23 THEN 0 ELSE 1 END::int
   FROM pg_policies
  WHERE schemaname = 'public'
    AND policyname LIKE '%_jti_not_denied'
