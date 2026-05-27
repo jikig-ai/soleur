@@ -259,9 +259,16 @@ write_body() {
   if [[ -n "$OUTPUT_FILE" ]]; then printf '%s' "$1" > "$OUTPUT_FILE"; else printf '%s' "$1"; fi
 }
 
-# Per-route mock behavior. Order matters: /health must short-circuit first
+# Per-route mock behavior. Order matters: 8288 must match before generic /health
 # because the canary loop's curl -sf for /health does NOT pass -w.
 case "$URL" in
+  *"8288/health"*)
+    if [[ "${MOCK_CURL_INNGEST_HEALTH_FAIL:-}" == "1" ]]; then
+      exit 1
+    fi
+    write_body '{"status":200,"message":"OK"}'
+    exit 0
+    ;;
   *"/health"*)
     write_body "OK"
     if [[ "$WANT_HTTP_CODE" == "1" ]]; then echo "200"; fi
@@ -299,17 +306,6 @@ case "$URL" in
     # Default: middleware-redirected unauthenticated request.
     write_body ""
     if [[ "$WANT_HTTP_CODE" == "1" ]]; then echo "307"; fi
-    exit 0
-    ;;
-  *"/v1/functions"*)
-    if [[ "${MOCK_CURL_INNGEST_HEALTH_FAIL:-}" == "1" ]]; then
-      exit 1
-    fi
-    if [[ "${MOCK_CURL_INNGEST_ZERO_FUNCTIONS:-}" == "1" ]]; then
-      write_body "[]"
-      exit 0
-    fi
-    write_body '[{"id":"fn-1","name":"test-fn-1"},{"id":"fn-2","name":"test-fn-2"}]'
     exit 0
     ;;
 esac
@@ -1873,12 +1869,6 @@ assert_state_contains "restart inngest health failure" \
   "inngest_health_failed" "1" \
   "restart inngest _ latest" \
   "export MOCK_CURL_INNGEST_HEALTH_FAIL=1"
-
-# AC5(d): restart with zero functions
-assert_state_contains "restart inngest zero functions" \
-  "inngest_no_functions" "1" \
-  "restart inngest _ latest" \
-  "export MOCK_CURL_INNGEST_ZERO_FUNCTIONS=1"
 
 # Existing deploy validation still rejects `deploy inngest restart latest`
 # (image mismatch since "restart" != expected image)
