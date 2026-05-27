@@ -82,18 +82,36 @@ export async function GET(request: NextRequest) {
     const providerErrorCode = isKnownProviderErrorCode(rawErrorCode)
       ? rawErrorCode
       : "unknown";
-    warnSilentFallback(null, {
-      feature: "auth",
-      op: "callback_provider_error",
-      message: `OAuth provider returned error=${providerErrorCode}`,
-      extra: {
-        providerErrorCode,
-        bucket: providerErrorBucket,
-        urlPath: pathname,
-        refererHost,
-        origin,
-      },
-    });
+    if (providerErrorBucket === "oauth_cancelled") {
+      // User clicked Cancel — expected per RFC 6749 §4.1.2.1; structured log
+      // only. Sentry alert rules count ALL captureMessage events regardless of
+      // level, so even warning-level emission triggers auth-per-user-loop.
+      logger.info(
+        {
+          feature: "auth",
+          op: "callback_provider_error",
+          providerErrorCode,
+          bucket: providerErrorBucket,
+          urlPath: pathname,
+          refererHost,
+          origin,
+        },
+        `OAuth provider returned error=${providerErrorCode}`,
+      );
+    } else {
+      warnSilentFallback(null, {
+        feature: "auth",
+        op: "callback_provider_error",
+        message: `OAuth provider returned error=${providerErrorCode}`,
+        extra: {
+          providerErrorCode,
+          bucket: providerErrorBucket,
+          urlPath: pathname,
+          refererHost,
+          origin,
+        },
+      });
+    }
     // Verifier cookies are intentionally NOT cleared on this branch — no
     // `exchangeCodeForSession` was attempted, so the verifier in the cookie
     // jar is still valid for a retry.

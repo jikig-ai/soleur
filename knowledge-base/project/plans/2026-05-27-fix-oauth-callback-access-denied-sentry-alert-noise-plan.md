@@ -120,13 +120,13 @@ None.
 
 ### Pre-merge (PR)
 
-- [ ] **AC1:** `grep -n "logger.info" apps/web-platform/app/\(auth\)/callback/route.ts` shows a `logger.info` call on the `access_denied` / `oauth_cancelled` branch with `op: "callback_provider_error"` context.
-- [ ] **AC2:** `grep -n "warnSilentFallback" apps/web-platform/app/\(auth\)/callback/route.ts` still shows a `warnSilentFallback` call for the non-`oauth_cancelled` provider error branch.
-- [ ] **AC3:** The `access_denied` test case in `callback-route-branches.test.ts` asserts that `mockWarnSilentFallback` was NOT called (`.not.toHaveBeenCalled()` or `.toHaveBeenCalledTimes(0)`).
-- [ ] **AC4:** The `server_error`, `temporarily_unavailable`, and `invalid_scope` test cases assert `mockWarnSilentFallback` IS called with `op: "callback_provider_error"`.
-- [ ] **AC5:** The bare-`/callback` test still asserts `mockReportSilentFallback` with `op: "callback_no_code"` (unchanged).
-- [ ] **AC6:** Tests pass: `apps/web-platform/node_modules/.bin/vitest run apps/web-platform/test/app/auth/callback-route-branches.test.ts apps/web-platform/test/lib/auth/callback-error-mapping.test.ts apps/web-platform/test/lib/auth/callback-route-no-substring-match.test.ts apps/web-platform/test/lib/auth/provider-error-classifier.test.ts apps/web-platform/test/lib/auth/provider-error-classifier-no-substring-match.test.ts`.
-- [ ] **AC7:** TypeScript compiles: `npx tsc --noEmit --project apps/web-platform/tsconfig.json`.
+- [x] **AC1:** `grep -n "logger.info" apps/web-platform/app/\(auth\)/callback/route.ts` shows a `logger.info` call on the `access_denied` / `oauth_cancelled` branch with `op: "callback_provider_error"` context.
+- [x] **AC2:** `grep -n "warnSilentFallback" apps/web-platform/app/\(auth\)/callback/route.ts` still shows a `warnSilentFallback` call for the non-`oauth_cancelled` provider error branch.
+- [x] **AC3:** The `access_denied` test case in `callback-route-branches.test.ts` asserts that `mockWarnSilentFallback` was NOT called (`.not.toHaveBeenCalled()` or `.toHaveBeenCalledTimes(0)`).
+- [x] **AC4:** The `server_error`, `temporarily_unavailable`, and `invalid_scope` test cases assert `mockWarnSilentFallback` IS called with `op: "callback_provider_error"`.
+- [x] **AC5:** The bare-`/callback` test still asserts `mockReportSilentFallback` with `op: "callback_no_code"` (unchanged).
+- [x] **AC6:** Tests pass: `apps/web-platform/node_modules/.bin/vitest run apps/web-platform/test/app/auth/callback-route-branches.test.ts apps/web-platform/test/lib/auth/callback-error-mapping.test.ts apps/web-platform/test/lib/auth/callback-route-no-substring-match.test.ts apps/web-platform/test/lib/auth/provider-error-classifier.test.ts apps/web-platform/test/lib/auth/provider-error-classifier-no-substring-match.test.ts`.
+- [x] **AC7:** TypeScript compiles: `npx tsc --noEmit --project apps/web-platform/tsconfig.json`.
 
 ## Test Scenarios
 
