@@ -66,7 +66,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
        > /etc/apt/sources.list.d/github-cli.list \
-    && apt-get update && apt-get install -y --no-install-recommends gh \
+    && apt-get update && apt-get install -y --no-install-recommends gh=2.92.0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Playwright Chromium system deps + browser binary (TR9 PR-11).
@@ -131,7 +131,7 @@ RUN git config --global user.name "Soleur" && git config --global user.email "so
 
 EXPOSE 3000
 
-# Health check (uses Node.js fetch -- curl is not available in node:22-slim)
+# Health check (uses Node.js fetch -- no additional binary needed)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD node -e "fetch('http://localhost:3000/health',{signal:AbortSignal.timeout(4_000)}).then(r=>{if(!r.ok)process.exit(1)}).catch(e=>{console.error(e.message);process.exit(1)})"
 
