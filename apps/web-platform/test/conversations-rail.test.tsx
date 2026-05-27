@@ -29,7 +29,7 @@ vi.mock("@/lib/feature-flags/server", () => ({
   isByokDelegationsEnabled: vi.fn().mockResolvedValue(false),
 }));
 vi.mock("@/server/workspace-resolver", () => ({
-  getCurrentOrganizationId: vi.fn().mockReturnValue(null),
+  resolveCurrentOrganizationId: vi.fn().mockResolvedValue(null),
 }));
 vi.mock("@/server/byok-delegation-ui-resolver", () => ({
   resolveGranteeDelegation: vi.fn().mockResolvedValue(null),

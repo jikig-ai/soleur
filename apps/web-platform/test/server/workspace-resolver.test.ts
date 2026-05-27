@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "crypto";
 import {
   getCurrentOrganizationId,
+  resolveCurrentOrganizationId,
   getDefaultWorkspaceForUser,
   resolveWorkspacePathForUser,
 } from "@/server/workspace-resolver";
@@ -34,6 +35,30 @@ describe("workspace-resolver: getCurrentOrganizationId", () => {
   it("returns null for an empty/anonymous session", () => {
     expect(getCurrentOrganizationId(null)).toBeNull();
     expect(getCurrentOrganizationId(undefined)).toBeNull();
+  });
+});
+
+describe("workspace-resolver: resolveCurrentOrganizationId", () => {
+  it("returns current_organization_id from user_session_state", async () => {
+    const userId = randomUUID();
+    const orgId = randomUUID();
+    const chain = mockQueryChain({ current_organization_id: orgId });
+    const supabase = supabaseFor(chain);
+
+    const result = await resolveCurrentOrganizationId(userId, supabase);
+
+    expect(result).toBe(orgId);
+    expect(supabase.from).toHaveBeenCalledWith("user_session_state");
+  });
+
+  it("returns null when no user_session_state row exists", async () => {
+    const userId = randomUUID();
+    const chain = mockQueryChain(null);
+    const supabase = supabaseFor(chain);
+
+    const result = await resolveCurrentOrganizationId(userId, supabase);
+
+    expect(result).toBeNull();
   });
 });
 

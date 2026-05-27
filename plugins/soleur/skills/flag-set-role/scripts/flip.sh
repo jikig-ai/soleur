@@ -4,7 +4,7 @@
 # Contract: SKILL.md in the parent directory. ADR-038 v2 §"Fallback semantics"
 # documents the env-var mirror invariant this script enforces.
 #
-# Usage: bash flip.sh <flag> <prd|dev> <on|off> [--confirmed] [--dry-run]
+# Usage: bash flip.sh <flag> <prd|dev> <on|off> [--confirmed] [--org <orgId>] [--dry-run]
 #
 # Exit codes:
 #   0 — success / dry-run clean
@@ -61,10 +61,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 usage() {
-  echo "Usage: flip.sh <flag> <prd|dev> <on|off> [--confirmed] [--target role|org] [--org <orgId>] [--dry-run]" >&2
+  echo "Usage: flip.sh <flag> <prd|dev> <on|off> [--confirmed] [--org <orgId>] [--dry-run]" >&2
   echo "Known flags: ${!FLAG_ENV_VARS[*]}" >&2
   exit 2
 }
+
+# Infer TARGET_TYPE=org when --org is provided (no need for explicit --target org).
+[[ -n "$TARGET_ORG" ]] && TARGET_TYPE="org"
 
 [[ -z "$FLAG" || -z "$ROLE" || -z "$VALUE" ]] && usage
 [[ -z "${FLAG_ENV_VARS[$FLAG]:-}" ]] && { echo "unknown flag: $FLAG" >&2; usage; }
@@ -72,6 +75,11 @@ usage() {
 [[ "$VALUE" != "on" && "$VALUE" != "off" ]] && { echo "value must be on|off (got: $VALUE)" >&2; usage; }
 [[ "$TARGET_TYPE" != "role" && "$TARGET_TYPE" != "org" ]] && { echo "target must be role|org (got: $TARGET_TYPE)" >&2; usage; }
 [[ "$TARGET_TYPE" == "org" && -z "$TARGET_ORG" ]] && { echo "--target org requires --org <orgId>" >&2; usage; }
+
+if [[ "$TARGET_TYPE" == "org" ]]; then
+  [[ "$TARGET_ORG" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
+    || { echo "invalid orgId format (expected UUID): $TARGET_ORG" >&2; exit 2; }
+fi
 
 ENV_VAR="${FLAG_ENV_VARS[$FLAG]}"
 PROPOSED_ENABLED=$([[ "$VALUE" == "on" ]] && echo true || echo false)
@@ -207,6 +215,156 @@ doppler_mirror() {
   printf '%s' "$value" | doppler secrets set "${ENV_VAR}" -p soleur -c "$config" --silent || return 4
 }
 
+gate_or_confirm() {
+  if [[ $DRY_RUN -eq 1 ]]; then
+    echo "(dry-run — exiting 0 without mutation)"
+    exit 0
+  fi
+  if [[ $CONFIRMED -eq 0 ]]; then
+    echo
+    read -p "Proceed? Type 'yes' to apply: " ACK
+    [[ "$ACK" == "yes" ]] || { echo "aborted (ack was '$ACK')" >&2; exit 0; }
+  else
+    echo "(--confirmed: skipping interactive prompt)"
+  fi
+}
+
+audit_append() {
+  local audit_target="$1"
+  local actor db_url before_bool after_bool audit_id
+  actor=$(doppler secrets get OPERATOR_EMAIL -p soleur -c cli_ops --plain 2>/dev/null | tr '[:upper:]' '[:lower:]')
+  [[ -z "$actor" ]] && { echo "FATAL: OPERATOR_EMAIL not in Doppler soleur/cli_ops" >&2; exit 4; }
+  db_url=$(doppler secrets get DATABASE_URL_POOLER -p soleur -c dev --plain 2>/dev/null)
+  [[ -z "$db_url" ]] && { echo "FATAL: DATABASE_URL_POOLER not in Doppler soleur/dev" >&2; exit 4; }
+  before_bool=$([[ "$VALUE" == "on" ]] && echo "false" || echo "true")
+  after_bool=$([[ "$VALUE" == "on" ]] && echo "true" || echo "false")
+  audit_id=$(psql "${db_url/6543/5432}" -tAc "SELECT public.audit_flag_flip('$FLAG', '$ROLE', '$audit_target', '$VALUE', $before_bool, $after_bool, '$actor');" 2>&1) \
+    || { echo "FATAL: audit append failed: $audit_id" >&2; exit 4; }
+  echo "  audit_id=$audit_id"
+}
+
+# --- org-targeting branch --------------------------------------------------
+# When --org is provided, modify the org-targeted segment's rule definition
+# directly (add/remove EQUAL orgId conditions in the ANY rule), then exit. No Doppler
+# mirror — org segment membership is not reflected in env vars (ADR-038
+# fallback mirrors prd-segment override state, not segment rule definitions).
+if [[ "$TARGET_TYPE" == "org" ]]; then
+  echo "→ Resolving org-targeted segment…"
+  ORG_SEG_ID=$(resolve_segment_id "org-targeted") || { echo "segment 'org-targeted' not found in Flagsmith" >&2; exit 3; }
+  echo "  org-targeted segment_id=$ORG_SEG_ID"
+
+  echo "→ Reading segment rules…"
+  SEG_JSON=$(fs_api "${FLAGSMITH_API}/projects/${FLAGSMITH_PROJECT_ID}/segments/${ORG_SEG_ID}/") \
+    || { echo "failed to read segment $ORG_SEG_ID" >&2; exit 3; }
+
+  # The org-targeted segment uses ANY(EQUAL orgId <uuid>, EQUAL orgId <uuid>, ...)
+  # — one condition per org, not a single IN condition with comma-separated values.
+  PARSED=$(echo "$SEG_JSON" | python3 -c "
+import json, sys
+seg = json.load(sys.stdin)
+conditions = seg['rules'][0]['rules'][0]['conditions']
+orgs = []
+for c in conditions:
+    if c.get('operator') != 'EQUAL' or c.get('property') != 'orgId':
+        print(f\"unexpected condition: operator={c.get('operator')} property={c.get('property')}\", file=sys.stderr)
+        sys.exit(3)
+    orgs.append(c['value'])
+print(','.join(orgs) if orgs else '')
+") || { echo "failed to parse segment rules (unexpected structure)" >&2; exit 3; }
+
+  CURRENT_ORGS="$PARSED"
+
+  RESULT=$(CURRENT_ORGS="$CURRENT_ORGS" TARGET_ORG="$TARGET_ORG" VALUE="$VALUE" python3 -c "
+import os, sys
+current = os.environ['CURRENT_ORGS']
+target = os.environ['TARGET_ORG']
+action = os.environ['VALUE']
+orgs = [x for x in current.split(',') if x] if current else []
+
+if action == 'on':
+    if target in orgs:
+        print('IDEMPOTENT:already present')
+    else:
+        orgs.append(target)
+        print(','.join(orgs))
+else:
+    if target not in orgs:
+        print('IDEMPOTENT:not present')
+    else:
+        orgs.remove(target)
+        print(','.join(orgs))
+") || exit 3
+
+  if [[ "$RESULT" == "IDEMPOTENT:already present" ]]; then
+    echo "  orgId $TARGET_ORG is already in the org-targeted segment — no change needed."
+    exit 0
+  fi
+  if [[ "$RESULT" == "IDEMPOTENT:not present" ]]; then
+    echo "  orgId $TARGET_ORG is not in the org-targeted segment — no change needed."
+    exit 0
+  fi
+
+  NEW_ORGS="$RESULT"
+
+  echo "→ Current membership:"
+  if [[ -z "$CURRENT_ORGS" ]]; then
+    echo "  (empty)"
+  else
+    echo "$CURRENT_ORGS" | tr ',' '\n' | sed 's/^/  /'
+  fi
+  echo "→ Proposed: $VALUE orgId $TARGET_ORG"
+  echo "→ New membership:"
+  echo "$NEW_ORGS" | tr ',' '\n' | sed 's/^/  /'
+
+  gate_or_confirm
+  audit_append "org:$TARGET_ORG"
+
+  echo "→ Writing updated segment to Flagsmith…"
+  UPDATED_JSON=$(echo "$SEG_JSON" | NEW_ORGS="$NEW_ORGS" python3 -c "
+import json, os, sys
+seg = json.load(sys.stdin)
+new_orgs = os.environ['NEW_ORGS']
+orgs = [x for x in new_orgs.split(',') if x] if new_orgs else []
+seg['rules'][0]['rules'][0]['conditions'] = [
+    {'operator': 'EQUAL', 'property': 'orgId', 'value': o} for o in orgs
+]
+json.dump(seg, sys.stdout)
+") || { echo "failed to build updated segment JSON" >&2; exit 3; }
+
+  RESP=$(echo "$UPDATED_JSON" | fs_api -X PUT "${FLAGSMITH_API}/projects/${FLAGSMITH_PROJECT_ID}/segments/${ORG_SEG_ID}/" -d @-) \
+    || { echo "PUT segment failed" >&2; exit 3; }
+
+  echo "$RESP" | python3 -c "
+import json, sys
+seg = json.load(sys.stdin)
+if 'id' not in seg:
+    print(json.dumps(seg), file=sys.stderr)
+    sys.exit(3)
+print('  updated segment id=' + str(seg['id']))
+" || exit 3
+
+  echo "→ Re-verifying…"
+  VERIFY_VALUE=$(fs_api "${FLAGSMITH_API}/projects/${FLAGSMITH_PROJECT_ID}/segments/${ORG_SEG_ID}/" \
+    | python3 -c "
+import json, sys
+seg = json.load(sys.stdin)
+conditions = seg['rules'][0]['rules'][0]['conditions']
+orgs = sorted(c['value'] for c in conditions if c.get('property') == 'orgId')
+print(','.join(orgs))
+") || { echo "re-verification read failed" >&2; exit 3; }
+
+  EXPECT_ORGS=$(echo "$NEW_ORGS" | tr ',' '\n' | sort | paste -sd,)
+  if [[ "$VERIFY_VALUE" != "$EXPECT_ORGS" ]]; then
+    echo "VERIFICATION FAILED: expected [$EXPECT_ORGS] but got [$VERIFY_VALUE]" >&2
+    exit 3
+  fi
+  echo "  ✓ verified: orgId $TARGET_ORG is $([[ "$VALUE" == "on" ]] && echo 'present' || echo 'absent') in org-targeted segment."
+
+  echo
+  echo "✓ Done. Segment rule change is immediate — no cache TTL applies to segment definitions."
+  exit 0
+fi
+
 # --- resolve ---------------------------------------------------------------
 echo "→ Resolving feature '$FLAG' + segment '$SEGMENT_NAME' in Flagsmith…"
 FEATURE_ID=$(resolve_feature_id "$FLAG") || { echo "feature '$FLAG' not found in Flagsmith" >&2; exit 3; }
@@ -243,34 +401,10 @@ if [[ "$ROLE" == "prd" ]]; then
   echo "    (replacing $(doppler secrets get $ENV_VAR -p soleur -c prd --plain 2>/dev/null || echo unset) / $(doppler secrets get $ENV_VAR -p soleur -c dev --plain 2>/dev/null || echo unset))"
 fi
 
-if [[ $DRY_RUN -eq 1 ]]; then
-  echo "(dry-run — exiting 0 without mutation)"
-  exit 0
-fi
-
-# --- operator ack ----------------------------------------------------------
-if [[ $CONFIRMED -eq 0 ]]; then
-  echo
-  read -p "Proceed? Type 'yes' to apply: " ACK
-  [[ "$ACK" == "yes" ]] || { echo "aborted (ack was '$ACK')" >&2; exit 0; }
-else
-  echo "(--confirmed: skipping interactive prompt)"
-fi
+gate_or_confirm
 
 # --- audit append (WORM) ---------------------------------------------------
-ACTOR=$(doppler secrets get OPERATOR_EMAIL -p soleur -c cli_ops --plain 2>/dev/null | tr '[:upper:]' '[:lower:]')
-[[ -z "$ACTOR" ]] && { echo "FATAL: OPERATOR_EMAIL not in Doppler soleur/cli_ops" >&2; exit 4; }
-
-DB_URL=$(doppler secrets get DATABASE_URL_POOLER -p soleur -c dev --plain 2>/dev/null)
-[[ -z "$DB_URL" ]] && { echo "FATAL: DATABASE_URL_POOLER not in Doppler soleur/dev" >&2; exit 4; }
-
-AUDIT_TARGET=$([[ "$TARGET_TYPE" == "org" ]] && echo "org:$TARGET_ORG" || echo "role:$ROLE")
-BEFORE_BOOL=$([[ "$VALUE" == "on" ]] && echo "false" || echo "true")
-AFTER_BOOL=$([[ "$VALUE" == "on" ]] && echo "true" || echo "false")
-
-AUDIT_ID=$(psql "${DB_URL/6543/5432}" -tAc "SELECT public.audit_flag_flip('$FLAG', '$ROLE', '$AUDIT_TARGET', '$VALUE', $BEFORE_BOOL, $AFTER_BOOL, '$ACTOR');" 2>&1) \
-  || { echo "FATAL: audit append failed: $AUDIT_ID" >&2; exit 4; }
-echo "  audit_id=$AUDIT_ID"
+audit_append "role:$ROLE"
 
 # --- write Flagsmith (both envs) -------------------------------------------
 echo "→ Writing Flagsmith dev env…"

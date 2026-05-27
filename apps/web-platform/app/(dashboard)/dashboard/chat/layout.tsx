@@ -4,7 +4,7 @@ import { DelegationBanner } from "@/components/chat/delegation-banner";
 import { PendingInviteBanner } from "@/components/dashboard/pending-invite-banner";
 import { createClient } from "@/lib/supabase/server";
 import { isByokDelegationsEnabled, type Identity } from "@/lib/feature-flags/server";
-import { getCurrentOrganizationId } from "@/server/workspace-resolver";
+import { resolveCurrentOrganizationId } from "@/server/workspace-resolver";
 import { resolveGranteeDelegation, resolveGranteeAcceptanceStatus } from "@/server/byok-delegation-ui-resolver";
 import { getPendingInvitesForUser } from "@/server/workspace-invitations";
 
@@ -26,9 +26,7 @@ export default async function ChatLayout({ children }: { children: ReactNode }) 
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
-      const orgId = getCurrentOrganizationId({
-        user: { id: user.id, app_metadata: user.app_metadata as Record<string, unknown> },
-      });
+      const orgId = await resolveCurrentOrganizationId(user.id, supabase);
       if (orgId) {
         const identity: Identity = { userId: user.id, role: "prd", orgId };
         if (await isByokDelegationsEnabled(orgId, identity)) {

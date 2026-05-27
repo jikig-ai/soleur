@@ -1,5 +1,5 @@
 import { isTeamWorkspaceInviteEnabled, isByokDelegationsEnabled, type Identity } from "@/lib/feature-flags/server";
-import { getCurrentOrganizationId } from "@/server/workspace-resolver";
+import { resolveCurrentOrganizationId } from "@/server/workspace-resolver";
 
 // Server-only resolver for the /dashboard/settings/team membership page.
 // Factored out of the page component so AC-A's flag-OFF → notFound() behavior
@@ -73,9 +73,7 @@ export async function resolveTeamMembershipPageData(
   const user = userResp.data?.user;
   if (!user) return { ok: false, reason: "not-found" };
 
-  const orgId = getCurrentOrganizationId({
-    user: { id: user.id, app_metadata: user.app_metadata as never },
-  });
+  const orgId = await resolveCurrentOrganizationId(user.id, service);
   if (!orgId) return { ok: false, reason: "no-org" };
 
   const identity: Identity = { userId: user.id, role: "prd", orgId };
