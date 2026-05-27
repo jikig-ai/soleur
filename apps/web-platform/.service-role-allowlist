@@ -226,3 +226,8 @@ apps/web-platform/server/byok-resolver.ts
 # UPDATE/DELETE posture on workspace_invitations (same pattern as
 # workspace_member_attestations, migration 058 line 133).
 apps/web-platform/server/workspace-invitations.ts
+
+# #4543 — resolve installation ID via workspace-sibling lookup when the
+# user's own github_installation_id is NULL. Service-role bypasses the
+# users-table RLS (auth.uid() = id) to read sibling user rows.
+apps/web-platform/server/resolve-installation-id.ts

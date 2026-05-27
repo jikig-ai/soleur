@@ -222,19 +222,10 @@ function hasLocalCommits(workspacePath: string): boolean {
 }
 
 async function getInstallationId(userId: string): Promise<number | null> {
-  // PR-C §2.1 (#3244): tenant-scoped; RLS `auth.uid() = id` on `users`.
-  const tenant = await getFreshTenantClient(userId);
-  const { data, error } = await tenant
-    .from("users")
-    .select("github_installation_id")
-    .eq("id", userId)
-    .single();
-
-  if (error || !data?.github_installation_id) {
-    return null;
-  }
-
-  return data.github_installation_id;
+  const { resolveInstallationId } = await import(
+    "@/server/resolve-installation-id"
+  );
+  return resolveInstallationId(userId);
 }
 
 /**

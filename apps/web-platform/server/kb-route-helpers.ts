@@ -97,9 +97,20 @@ export async function authenticateAndResolveKbPath(
   if (!userData?.workspace_path || userData.workspace_status !== "ready") {
     return err(503, "Workspace not ready");
   }
-  if (!userData.repo_url || !userData.github_installation_id) {
+  // Fallback to workspace-sibling installation only when the user has a
+  // repo but no installation ID (#4543). Skip the fallback when repo_url
+  // is also null ("no repository connected" — nothing to resolve for).
+  let installationId = userData.github_installation_id;
+  if (!installationId && userData.repo_url) {
+    const { resolveInstallationId } = await import(
+      "@/server/resolve-installation-id"
+    );
+    installationId = await resolveInstallationId(user.id);
+  }
+  if (!userData.repo_url || !installationId) {
     return err(400, "No repository connected");
   }
+  userData.github_installation_id = installationId;
 
   // Path
   const { path: pathSegments } = await params;
