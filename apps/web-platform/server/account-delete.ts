@@ -451,25 +451,30 @@ export async function deleteAccount(
   //       RPC NULLs PII columns (inviter_user_id, invitee_email,
   //       invitee_user_id) for invitations where the departing user was
   //       either the inviter or the invitee. Migration 075.
+  //       Graceful degradation: if the RPC doesn't exist yet (migration
+  //       not applied), skip silently — the table has no rows to anonymise.
   try {
     const { error: anonInvErr } = await service.rpc(
       "anonymise_workspace_invitations",
       { p_user_id: userId },
     );
     if (anonInvErr) {
-      reportSilentFallback(anonInvErr, {
-        feature: "account-delete",
-        op: "anonymise-workspace-invitations",
-        extra: { userId },
-        message: "anonymise_workspace_invitations failed — aborting deletion",
-      });
-      return { success: false, error: "Account deletion failed. Please try again." };
+      const msg = anonInvErr.message ?? "";
+      if (msg.includes("function") && msg.includes("does not exist")) {
+        // Migration 075 not yet applied — table has no rows; skip.
+      } else {
+        reportSilentFallback(anonInvErr, {
+          feature: "account-delete",
+          op: "anonymise-workspace-invitations",
+          message: "anonymise_workspace_invitations failed — aborting deletion",
+        });
+        return { success: false, error: "Account deletion failed. Please try again." };
+      }
     }
   } catch (err) {
     reportSilentFallback(err, {
       feature: "account-delete",
       op: "anonymise-workspace-invitations",
-      extra: { userId },
       message: "anonymise_workspace_invitations threw — aborting deletion",
     });
     return { success: false, error: "Account deletion failed. Please try again." };
