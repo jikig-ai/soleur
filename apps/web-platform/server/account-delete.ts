@@ -271,7 +271,7 @@ export async function deleteAccount(
         extra: { userId },
         message: "anonymise_action_sends failed — aborting deletion to avoid FK-block",
       });
-      return { success: false, error: "Account deletion failed. Please try again." };
+      return { success: false, error: "Account deletion failed at anonymise-action-sends. Please try again." };
     }
   } catch (err) {
     reportSilentFallback(err, {
@@ -280,7 +280,7 @@ export async function deleteAccount(
       extra: { userId },
       message: "anonymise_action_sends threw — aborting deletion to avoid FK-block",
     });
-    return { success: false, error: "Account deletion failed. Please try again." };
+    return { success: false, error: "Account deletion failed at anonymise-action-sends. Please try again." };
   }
 
   // 3.83 Anonymise template_authorizations rows for this user BETWEEN
@@ -308,7 +308,7 @@ export async function deleteAccount(
       });
       return {
         success: false,
-        error: "Account deletion failed. Please try again.",
+        error: "Account deletion failed at anonymise-template-authorizations. Please try again.",
       };
     }
   } catch (err) {
@@ -320,7 +320,7 @@ export async function deleteAccount(
     });
     return {
       success: false,
-      error: "Account deletion failed. Please try again.",
+      error: "Account deletion failed at anonymise-template-authorizations. Please try again.",
     };
   }
 
@@ -343,7 +343,7 @@ export async function deleteAccount(
         extra: { userId },
         message: "anonymise_scope_grants failed — aborting deletion to avoid FK-block",
       });
-      return { success: false, error: "Account deletion failed. Please try again." };
+      return { success: false, error: "Account deletion failed at anonymise-scope-grants. Please try again." };
     }
   } catch (err) {
     reportSilentFallback(err, {
@@ -352,7 +352,7 @@ export async function deleteAccount(
       extra: { userId },
       message: "anonymise_scope_grants threw — aborting deletion to avoid FK-block",
     });
-    return { success: false, error: "Account deletion failed. Please try again." };
+    return { success: false, error: "Account deletion failed at anonymise-scope-grants. Please try again." };
   }
 
   // 3.85 Anonymise tc_acceptances rows for this user BEFORE auth-delete
@@ -373,7 +373,7 @@ export async function deleteAccount(
         extra: { userId },
         message: "anonymise_tc_acceptances failed — aborting deletion to avoid FK-block",
       });
-      return { success: false, error: "Account deletion failed. Please try again." };
+      return { success: false, error: "Account deletion failed at anonymise-tc-acceptances. Please try again." };
     }
   } catch (err) {
     reportSilentFallback(err, {
@@ -382,7 +382,7 @@ export async function deleteAccount(
       extra: { userId },
       message: "anonymise_tc_acceptances threw — aborting deletion to avoid FK-block",
     });
-    return { success: false, error: "Account deletion failed. Please try again." };
+    return { success: false, error: "Account deletion failed at anonymise-tc-acceptances. Please try again." };
   }
 
   // 3.86 Anonymise audit_github_token_use rows for this user BEFORE
@@ -435,7 +435,7 @@ export async function deleteAccount(
         extra: { userId },
         message: "anonymise_workspace_member_attestations failed — aborting deletion",
       });
-      return { success: false, error: "Account deletion failed. Please try again." };
+      return { success: false, error: "Account deletion failed at anonymise-workspace-member-attestations. Please try again." };
     }
   } catch (err) {
     reportSilentFallback(err, {
@@ -444,7 +444,7 @@ export async function deleteAccount(
       extra: { userId },
       message: "anonymise_workspace_member_attestations threw — aborting deletion",
     });
-    return { success: false, error: "Account deletion failed. Please try again." };
+    return { success: false, error: "Account deletion failed at anonymise-workspace-member-attestations. Please try again." };
   }
 
   // 3.802 anonymise-workspace-invitations — anonymise_workspace_invitations
@@ -468,7 +468,7 @@ export async function deleteAccount(
           op: "anonymise-workspace-invitations",
           message: "anonymise_workspace_invitations failed — aborting deletion",
         });
-        return { success: false, error: "Account deletion failed. Please try again." };
+        return { success: false, error: "Account deletion failed at anonymise-workspace-invitations. Please try again." };
       }
     }
   } catch (err) {
@@ -477,7 +477,7 @@ export async function deleteAccount(
       op: "anonymise-workspace-invitations",
       message: "anonymise_workspace_invitations threw — aborting deletion",
     });
-    return { success: false, error: "Account deletion failed. Please try again." };
+    return { success: false, error: "Account deletion failed at anonymise-workspace-invitations. Please try again." };
   }
 
   // 3.901 Cascade-pseudonymise messages.user_id on shared-workspace
@@ -534,7 +534,7 @@ export async function deleteAccount(
         message:
           "anonymise_departed_user_across_workspaces failed — aborting deletion",
       });
-      return { success: false, error: "Account deletion failed. Please try again." };
+      return { success: false, error: "Account deletion failed at anonymise-authored-messages-shared-workspaces. Please try again." };
     }
     log.info(
       { userId, anonymisedMessageCount: anonCount ?? 0 },
@@ -548,7 +548,7 @@ export async function deleteAccount(
       message:
         "anonymise_departed_user_across_workspaces threw — aborting deletion",
     });
-    return { success: false, error: "Account deletion failed. Please try again." };
+    return { success: false, error: "Account deletion failed at anonymise-authored-messages-shared-workspaces. Please try again." };
   }
 
   // 3.9015 Purge Storage objects for co-member uploads in conversations
@@ -627,7 +627,7 @@ export async function deleteAccount(
         extra: { userId },
         message: "anonymise_workspace_member_removals failed — aborting deletion",
       });
-      return { success: false, error: "Account deletion failed. Please try again." };
+      return { success: false, error: "Account deletion failed at anonymise-workspace-member-removals. Please try again." };
     }
   } catch (err) {
     reportSilentFallback(err, {
@@ -636,7 +636,7 @@ export async function deleteAccount(
       extra: { userId },
       message: "anonymise_workspace_member_removals threw — aborting deletion",
     });
-    return { success: false, error: "Account deletion failed. Please try again." };
+    return { success: false, error: "Account deletion failed at anonymise-workspace-member-removals. Please try again." };
   }
 
   // 3.91 Anonymise workspace_members rows (migration 058). DELETEs every
@@ -657,7 +657,7 @@ export async function deleteAccount(
         extra: { userId },
         message: "anonymise_workspace_members failed — aborting deletion",
       });
-      return { success: false, error: "Account deletion failed. Please try again." };
+      return { success: false, error: "Account deletion failed at anonymise-workspace-members. Please try again." };
     }
   } catch (err) {
     reportSilentFallback(err, {
@@ -666,7 +666,7 @@ export async function deleteAccount(
       extra: { userId },
       message: "anonymise_workspace_members threw — aborting deletion",
     });
-    return { success: false, error: "Account deletion failed. Please try again." };
+    return { success: false, error: "Account deletion failed at anonymise-workspace-members. Please try again." };
   }
 
   // 3.92 Anonymise organization membership (migration 058, simplified by
@@ -690,7 +690,7 @@ export async function deleteAccount(
         extra: { userId },
         message: "anonymise_organization_membership failed — aborting deletion",
       });
-      return { success: false, error: "Account deletion failed. Please try again." };
+      return { success: false, error: "Account deletion failed at anonymise-organization-membership. Please try again." };
     }
     // Surface the reassign count + count of soon-to-be-orphan orgs so a
     // janitor / dashboard can detect runaway null-owner growth.
@@ -727,7 +727,7 @@ export async function deleteAccount(
       extra: { userId },
       message: "anonymise_organization_membership threw — aborting deletion",
     });
-    return { success: false, error: "Account deletion failed. Please try again." };
+    return { success: false, error: "Account deletion failed at anonymise-organization-membership. Please try again." };
   }
 
   // 3.93 Anonymise workspace_member_actions audit rows (migration 063, #4231).
@@ -753,7 +753,7 @@ export async function deleteAccount(
         extra: { userId },
         message: "anonymise_workspace_member_actions failed — aborting deletion",
       });
-      return { success: false, error: "Account deletion failed. Please try again." };
+      return { success: false, error: "Account deletion failed at anonymise-workspace-member-actions. Please try again." };
     }
   } catch (err) {
     reportSilentFallback(err, {
@@ -762,7 +762,7 @@ export async function deleteAccount(
       extra: { userId },
       message: "anonymise_workspace_member_actions threw — aborting deletion",
     });
-    return { success: false, error: "Account deletion failed. Please try again." };
+    return { success: false, error: "Account deletion failed at anonymise-workspace-member-actions. Please try again." };
   }
 
   // 3.935 Anonymise workspace_activity rows (migration 076, #4521 PR-B).
@@ -812,14 +812,14 @@ export async function deleteAccount(
         { userId, err: anonByokErr },
         "anonymise_byok_delegations failed — aborting deletion to avoid FK-block",
       );
-      return { success: false, error: "Account deletion failed. Please try again." };
+      return { success: false, error: "Account deletion failed at unknown. Please try again." };
     }
   } catch (err) {
     log.error(
       { userId, err },
       "anonymise_byok_delegations threw — aborting deletion to avoid FK-block",
     );
-    return { success: false, error: "Account deletion failed. Please try again." };
+    return { success: false, error: "Account deletion failed at unknown. Please try again." };
   }
 
   // 3.95 Anonymise byok_delegation_acceptances (migration 074, #4232 PR-B).
@@ -837,14 +837,14 @@ export async function deleteAccount(
         { userId, err: anonAcceptErr },
         "anonymise_byok_delegation_acceptances failed — aborting deletion to avoid FK-block",
       );
-      return { success: false, error: "Account deletion failed. Please try again." };
+      return { success: false, error: "Account deletion failed at unknown. Please try again." };
     }
   } catch (err) {
     log.error(
       { userId, err },
       "anonymise_byok_delegation_acceptances threw — aborting deletion to avoid FK-block",
     );
-    return { success: false, error: "Account deletion failed. Please try again." };
+    return { success: false, error: "Account deletion failed at unknown. Please try again." };
   }
 
   // 4. Delete auth record — FK cascade handles public.users and all children
@@ -863,7 +863,7 @@ export async function deleteAccount(
       extra: { userId },
       message: "Failed to delete auth record",
     });
-    return { success: false, error: "Account deletion failed. Please try again." };
+    return { success: false, error: "Account deletion failed at auth-delete. Please try again." };
   }
 
   log.info({ userId }, "Account deleted successfully (GDPR Art. 17)");
