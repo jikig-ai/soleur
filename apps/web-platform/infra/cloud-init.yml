@@ -62,6 +62,11 @@ write_files:
       # mount namespace; systemctl restart requires root.
       Cmnd_Alias WEBHOOK_SELF_RESTART = /usr/bin/systemd-run --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook
       deploy ALL=(root) NOPASSWD: WEBHOOK_SELF_RESTART
+
+      # #4538 — permits ci-deploy.sh to restart inngest-server.service via the
+      # `restart inngest _ latest` command.
+      Cmnd_Alias INNGEST_RESTART = /usr/bin/systemctl restart inngest-server.service
+      deploy ALL=(root) NOPASSWD: INNGEST_RESTART
     owner: root:root
     permissions: '0440'
 
