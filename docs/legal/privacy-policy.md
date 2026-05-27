@@ -268,8 +268,8 @@ The Web Platform at `app.soleur.ai` uses **Cloudflare** ([cloudflare.com](https:
 
 We use **Resend** ([resend.com](https://resend.com)) to send transactional email notifications from the Web Platform. Resend Inc acts as a data processor on our behalf.
 
-- **Data processed:** Recipient email address, email subject, and email body content (review gate notification summaries).
-- **Purpose:** Sending email notifications when an AI agent requires user input and the user has no active push notification subscriptions.
+- **Data processed:** Recipient email address, email subject, and email body content (review gate notification summaries, workspace invite notifications, invite acceptance confirmations, DSAR export notifications).
+- **Purpose:** Sending transactional email notifications — agent review gate alerts, workspace invitation emails (invitee email, workspace name, inviter name), invite acceptance confirmations to inviters, and DSAR export readiness notifications.
 - **DPA:** [Resend Data Processing Agreement](https://resend.com/legal/dpa) (incorporated into the Terms of Service, Section 7: Data Processing, automatically applicable).
 - Resend is a US-based service. International data transfers are covered by the EU-US Data Privacy Framework (DPF) and Standard Contractual Clauses (SCCs).
 - **Legal basis:** Legitimate interest (Article 6(1)(f) GDPR) -- transactional notifications are necessary to inform users of pending decisions that block AI agent progress, which is core to the service functionality.

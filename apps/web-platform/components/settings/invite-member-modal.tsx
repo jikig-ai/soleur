@@ -18,28 +18,30 @@ export function InviteMemberModal({
   workspaceId: string;
   onClose: () => void;
 }) {
-  const [identifier, setIdentifier] = useState("");
+  const [email, setEmail] = useState("");
   const [role, setRole] = useState<"member" | "owner">("member");
   const [attested, setAttested] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
 
   // Reset form whenever the modal toggles open. Closes a leaky-state hazard
   // when an operator cancels then reopens for a different invitee.
   useEffect(() => {
     if (!open) {
-      setIdentifier("");
+      setEmail("");
       setRole("member");
       setAttested(false);
       setSubmitting(false);
       setError(null);
+      setSuccess(false);
     }
   }, [open]);
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
-      if (!attested || !identifier.trim() || submitting) return;
+      if (!attested || !email.trim() || !email.includes("@") || submitting) return;
       setSubmitting(true);
       setError(null);
       try {
@@ -48,7 +50,7 @@ export function InviteMemberModal({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             workspaceId,
-            identifier: identifier.trim(),
+            email: email.trim(),
             role,
             attestationText: ATTESTATION_TEXT,
           }),
@@ -57,19 +59,27 @@ export function InviteMemberModal({
           const body = (await res.json().catch(() => ({}))) as {
             error?: string;
           };
-          setError(body.error || `Invite failed (${res.status})`);
+          const msg =
+            body.error === "duplicate_pending_invite"
+              ? "An invite is already pending for this email."
+              : body.error === "invitee_already_member"
+                ? "This person is already a workspace member."
+                : body.error || `Invite failed (${res.status})`;
+          setError(msg);
           setSubmitting(false);
           return;
         }
-        onClose();
-        // Refresh so the new member appears in the list.
-        window.location.reload();
+        setSuccess(true);
+        setTimeout(() => {
+          onClose();
+          window.location.reload();
+        }, 1500);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unknown error");
         setSubmitting(false);
       }
     },
-    [identifier, role, attested, submitting, workspaceId, onClose],
+    [email, role, attested, submitting, workspaceId, onClose],
   );
 
   if (!open) return null;
@@ -94,8 +104,8 @@ export function InviteMemberModal({
               Invite member
             </h2>
             <p className="mt-1 text-xs text-soleur-text-muted">
-              They must already have a Soleur account. Email-based invites will
-              arrive in a later release.
+              An invite email with a join link will be sent. They don&apos;t need
+              an existing account.
             </p>
           </div>
           <button
@@ -108,20 +118,23 @@ export function InviteMemberModal({
           </button>
         </div>
 
+        {success && (
+          <div className="mb-4 rounded-md bg-green-500/10 px-3 py-2 text-sm text-green-400">
+            Invite sent! They&apos;ll receive an email with a join link.
+          </div>
+        )}
+
         <label className="mb-4 block">
           <span className="mb-1 block text-sm font-medium text-soleur-text-primary">
-            User ID or email of existing Soleur user
+            Email address
           </span>
           <input
-            type="text"
-            value={identifier}
-            onChange={(e) => setIdentifier(e.target.value)}
-            placeholder="e.g. harry@jikigai.com or usr_abc123"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="colleague@company.com"
             className="w-full rounded-md border border-soleur-border-default bg-soleur-bg-surface-2/50 px-3 py-2 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted outline-none focus:border-soleur-border-emphasized"
           />
-          <p className="mt-1 text-xs text-soleur-text-muted">
-            Lookup is exact-match. The user must already exist in Soleur.
-          </p>
         </label>
 
         <fieldset className="mb-4">
@@ -211,10 +224,10 @@ export function InviteMemberModal({
           </button>
           <button
             type="submit"
-            disabled={!attested || !identifier.trim() || submitting}
+            disabled={!attested || !email.trim() || !email.includes("@") || submitting}
             className="rounded-md bg-soleur-accent-gold-fg px-4 py-2 text-sm font-medium text-soleur-bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50 hover:opacity-90"
           >
-            {submitting ? "Adding..." : "Add member"}
+            {submitting ? "Sending..." : "Send invite"}
           </button>
         </div>
       </form>

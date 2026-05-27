@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { SettingsShell } from "@/components/settings/settings-shell";
 import { isTeamWorkspaceInviteEnabled, type Identity } from "@/lib/feature-flags/server";
-import { getCurrentOrganizationId } from "@/server/workspace-resolver";
+import { resolveCurrentOrganizationId } from "@/server/workspace-resolver";
 
 // Server-side flag evaluation. AC-A requires the "Members" link href
 // (`/dashboard/settings/team`) NOT appear in the client bundle when the flag is
@@ -14,9 +14,7 @@ async function resolveMembersTab(): Promise<{ href: string; label: string } | nu
   } = await supabase.auth.getUser();
   if (!user) return null;
 
-  // JWT custom-claim (migration 060). Synchronous; no DB call.
-  const session = { user: { id: user.id, app_metadata: user.app_metadata } };
-  const orgId = getCurrentOrganizationId(session);
+  const orgId = await resolveCurrentOrganizationId(user.id, supabase);
   if (!orgId) return null;
 
   const identity: Identity = { userId: user.id, role: "prd", orgId };

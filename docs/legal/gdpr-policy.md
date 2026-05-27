@@ -166,6 +166,7 @@ The following data may be processed by third-party services when users interact 
 | Customer email, subscription metadata | Stripe (via Web Platform Checkout) | Payment processing (card data handled by Stripe, never reaches Jikigai) |
 | User workspaces, encrypted API keys | Hetzner (via Web Platform hosting) | Infrastructure hosting for workspace environments |
 | IP addresses, request headers | Cloudflare (via `app.soleur.ai` proxy) | CDN/proxy and DDoS protection |
+| Invitee email address, workspace name, inviter name | Resend (via Web Platform workspace invites) | Sending workspace invitation emails and acceptance confirmations. Legal basis: contract performance (Article 6(1)(b)) for existing-user invites; legitimate interest (Article 6(1)(f)) for non-user invitees |
 
 Users are responsible for reviewing the privacy policies of these third-party services.
 

@@ -44,9 +44,11 @@ export function LoginForm() {
       ? "A workspace owner removed you. Sign in below to continue with your other workspaces."
       : revokedReason === "role-changed"
         ? "Your role was updated. Sign in again to apply the new permissions."
-        : revokedReason === "session-error"
-          ? "Your session ended unexpectedly. Please sign in again."
-          : null;
+        : revokedReason === "ownership-transferred"
+          ? "You transferred ownership of this workspace. Sign in again to continue as a member."
+          : revokedReason === "session-error"
+            ? "Your session ended unexpectedly. Please sign in again."
+            : null;
 
   async function handleSendOtp(e: React.FormEvent) {
     e.preventDefault();

@@ -21,6 +21,7 @@ export const resolveIdentity = cache(async (
     .from("workspace_members")
     .select("workspace_id, workspaces!inner(organization_id)")
     .eq("user_id", userId)
+    .order("created_at", { ascending: true })
     .limit(1)
     .single<{ workspace_id: string; workspaces: { organization_id: string } }>();
 

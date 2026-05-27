@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { TeamMembershipRow } from "@/server/team-membership-resolver";
 import { DelegationToggle } from "@/components/settings/delegation-toggle";
+import { TransferOwnershipDialog } from "@/components/settings/transfer-ownership-dialog";
 
 function formatRelative(iso: string): string {
   try {
@@ -30,12 +31,14 @@ export function TeamMembershipList({
   workspaceId,
   isOwner,
   byokDelegationsEnabled,
+  organizationName,
 }: {
   members: readonly TeamMembershipRow[];
   currentUserId: string;
   workspaceId: string;
   isOwner: boolean;
   byokDelegationsEnabled: boolean;
+  organizationName: string | null;
 }) {
   return (
     <div>
@@ -54,6 +57,7 @@ export function TeamMembershipList({
           workspaceId={workspaceId}
           isOwner={isOwner}
           byokDelegationsEnabled={byokDelegationsEnabled}
+          organizationName={organizationName}
         />
       ))}
     </div>
@@ -66,14 +70,17 @@ function MemberRow({
   workspaceId,
   isOwner,
   byokDelegationsEnabled,
+  organizationName,
 }: {
   member: TeamMembershipRow;
   isCurrentUser: boolean;
   workspaceId: string;
   isOwner: boolean;
   byokDelegationsEnabled: boolean;
+  organizationName: string | null;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [transferDialogOpen, setTransferDialogOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Close menu on outside click
@@ -160,7 +167,19 @@ function MemberRow({
               <span aria-hidden="true">⋯</span>
             </button>
             {menuOpen && (
-              <div className="absolute right-0 top-7 z-10 w-44 rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 py-1 shadow-lg">
+              <div className="absolute right-0 top-7 z-10 w-52 rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 py-1 shadow-lg">
+                {isOwner && member.role !== "owner" && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setTransferDialogOpen(true);
+                    }}
+                    className="block w-full px-3 py-2 text-left text-sm text-soleur-text-secondary hover:bg-soleur-bg-surface-2"
+                  >
+                    Transfer ownership
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={handleRemove}
@@ -173,6 +192,16 @@ function MemberRow({
           </>
         )}
       </div>
+      {transferDialogOpen && (
+        <TransferOwnershipDialog
+          targetEmail={member.email}
+          confirmationTarget={organizationName || member.email}
+          workspaceId={workspaceId}
+          targetUserId={member.userId}
+          onClose={() => setTransferDialogOpen(false)}
+          onSuccess={() => window.location.reload()}
+        />
+      )}
     </div>
   );
 }

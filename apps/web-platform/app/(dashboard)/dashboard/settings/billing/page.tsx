@@ -4,7 +4,7 @@ import { BillingSection } from "@/components/settings/billing-section";
 import { ApiUsageSection } from "@/components/settings/api-usage-section";
 import { DelegationFundedPane } from "@/components/settings/delegation-funded-pane";
 import { isByokDelegationsEnabled, type Identity } from "@/lib/feature-flags/server";
-import { getCurrentOrganizationId } from "@/server/workspace-resolver";
+import { resolveCurrentOrganizationId } from "@/server/workspace-resolver";
 
 // Dynamic rendering is already forced by the cookies()/getUser() call in
 // createClient() below, so no explicit `export const dynamic` is required.
@@ -23,7 +23,7 @@ export default async function BillingPage() {
 
   const service = createServiceClient();
 
-  const orgId = getCurrentOrganizationId({ user: { id: user.id, app_metadata: user.app_metadata as Record<string, unknown> } });
+  const orgId = await resolveCurrentOrganizationId(user.id, supabase);
   const identity: Identity = { userId: user.id, role: "prd", orgId: orgId ?? "" };
   const byokEnabled = orgId ? await isByokDelegationsEnabled(orgId, identity) : false;
 
