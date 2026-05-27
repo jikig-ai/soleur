@@ -13,21 +13,28 @@ import { reportSilentFallback } from "@/server/observability";
  * The sibling fallback uses a service-role client because the `users`
  * RLS policy restricts SELECT to `auth.uid() = id` — the tenant client
  * can't read sibling user rows directly.
+ *
+ * The sibling lookup also verifies the resolved installation belongs to a
+ * user whose `repo_url` matches the caller's, preventing cross-repo token
+ * leakage in a future multi-workspace scenario.
  */
 export async function resolveInstallationId(
   userId: string,
 ): Promise<number | null> {
+  let callerRepoUrl: string | null = null;
+
   try {
     const tenant = await getFreshTenantClient(userId);
     const { data } = await tenant
       .from("users")
-      .select("github_installation_id")
+      .select("github_installation_id, repo_url")
       .eq("id", userId)
       .single();
 
     if (data?.github_installation_id) {
       return data.github_installation_id;
     }
+    callerRepoUrl = data?.repo_url ?? null;
   } catch (err) {
     if (!(err instanceof RuntimeAuthError)) throw err;
     reportSilentFallback(err, {
@@ -38,13 +45,17 @@ export async function resolveInstallationId(
     return null;
   }
 
-  // Fallback: find a workspace sibling with a non-null installation ID.
-  // Service-role bypasses users RLS to read sibling rows.
+  // Fallback: find a workspace sibling with a non-null installation ID
+  // whose repo_url matches the caller's. Service-role bypasses users RLS.
   const service = createServiceClient();
+
+  // Use .limit(1) explicitly — each user belongs to exactly one workspace
+  // today, but this is defensive for a future multi-workspace scenario.
   const { data: memberRow } = await service
     .from("workspace_members")
     .select("workspace_id")
     .eq("user_id", userId)
+    .limit(1)
     .maybeSingle();
 
   if (!memberRow?.workspace_id) return null;
@@ -58,13 +69,19 @@ export async function resolveInstallationId(
   if (!siblingRows?.length) return null;
 
   const siblingIds = siblingRows.map((r) => r.user_id);
-  const { data: userRow } = await service
+
+  // Resolve from a sibling whose repo_url matches the caller's.
+  let query = service
     .from("users")
     .select("github_installation_id")
     .in("id", siblingIds)
     .not("github_installation_id", "is", null)
-    .limit(1)
-    .maybeSingle();
+    .limit(1);
 
+  if (callerRepoUrl) {
+    query = query.eq("repo_url", callerRepoUrl);
+  }
+
+  const { data: userRow } = await query.maybeSingle();
   return userRow?.github_installation_id ?? null;
 }
