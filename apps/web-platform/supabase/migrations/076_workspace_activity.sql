@@ -125,3 +125,46 @@ REVOKE ALL ON FUNCTION public.anonymise_workspace_activity(uuid)
   FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.anonymise_workspace_activity(uuid)
   TO service_role;
+
+-- =====================================================================
+-- 7. Update set_conversation_visibility to emit conversation_shared event
+-- =====================================================================
+-- SECURITY DEFINER runs as function owner — can INSERT into workspace_activity.
+
+CREATE OR REPLACE FUNCTION public.set_conversation_visibility(
+  p_conversation_id uuid,
+  p_visibility text
+) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_workspace_id uuid;
+BEGIN
+  IF p_visibility NOT IN ('private', 'workspace') THEN
+    RAISE EXCEPTION 'Invalid visibility value: %', p_visibility
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  UPDATE public.conversations
+     SET visibility = p_visibility
+   WHERE id = p_conversation_id
+     AND user_id = auth.uid()
+  RETURNING workspace_id INTO v_workspace_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Conversation not found or not owned by caller'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
+  IF p_visibility = 'workspace' AND v_workspace_id IS NOT NULL THEN
+    INSERT INTO public.workspace_activity (workspace_id, actor_user_id, event_type, metadata)
+    VALUES (v_workspace_id, auth.uid(), 'conversation_shared', jsonb_build_object('conversation_id', p_conversation_id));
+  END IF;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.set_conversation_visibility(uuid, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.set_conversation_visibility(uuid, text)
+  TO authenticated;

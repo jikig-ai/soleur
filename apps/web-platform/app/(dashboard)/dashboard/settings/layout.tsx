@@ -30,5 +30,8 @@ export default async function SettingsLayout({
   children: React.ReactNode;
 }) {
   const membersTab = await resolveMembersTab();
-  return <SettingsShell membersTab={membersTab}>{children}</SettingsShell>;
+  const activityTab = membersTab
+    ? { href: "/dashboard/settings/team-activity", label: "Team Activity" }
+    : null;
+  return <SettingsShell membersTab={membersTab} activityTab={activityTab}>{children}</SettingsShell>;
 }

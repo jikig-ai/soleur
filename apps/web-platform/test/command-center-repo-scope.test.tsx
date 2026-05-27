@@ -127,6 +127,16 @@ vi.mock("@/lib/supabase/client", () => ({
       if (table === "conversations") return buildConversationsBuilder();
       if (table === "messages") return buildMessagesBuilder();
       if (table === "users") return buildUsersBuilder();
+      if (table === "workspace_members") {
+        const b: Record<string, unknown> = {
+          select: vi.fn(() => b),
+          eq: vi.fn(() => b),
+          maybeSingle: vi.fn(() =>
+            Promise.resolve({ data: { workspace_id: "ws-1" }, error: null }),
+          ),
+        };
+        return b;
+      }
       return buildConversationsBuilder();
     },
     channel: mockChannel,

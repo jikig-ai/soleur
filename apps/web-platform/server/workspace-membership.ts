@@ -107,6 +107,16 @@ export async function inviteWorkspaceMember(
     return { ok: false, reason: "rpc_failed", detail: msg };
   }
 
+  // Emit activity feed event (best-effort — don't fail invite on event error).
+  try {
+    await service.rpc("record_workspace_activity", {
+      p_workspace_id: args.workspaceId,
+      p_actor_user_id: inviteeUserId,
+      p_event_type: "member_join",
+      p_metadata: {},
+    });
+  } catch {}
+
   return { ok: true, attestationId: String(data) };
 }
 
@@ -300,6 +310,16 @@ export async function removeWorkspaceMember(
       extra: { workspaceId: args.workspaceId, inviteeUserId: args.inviteeUserId },
     });
   }
+
+  // Emit activity feed event (best-effort — don't fail removal on event error).
+  try {
+    await service.rpc("record_workspace_activity", {
+      p_workspace_id: args.workspaceId,
+      p_actor_user_id: args.inviteeUserId,
+      p_event_type: "member_leave",
+      p_metadata: {},
+    });
+  } catch {}
 
   return { ok: true };
 }
