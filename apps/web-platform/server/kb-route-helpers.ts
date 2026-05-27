@@ -97,15 +97,16 @@ export async function authenticateAndResolveKbPath(
   if (!userData?.workspace_path || userData.workspace_status !== "ready") {
     return err(503, "Workspace not ready");
   }
-  // Lazy import — resolve-installation-id pulls @/lib/supabase/service
-  // which reads SUPABASE_URL at module level; top-level import breaks
-  // test bundles that don't set the env var (same pattern as git-auth).
-  const { resolveInstallationId } = await import(
-    "@/server/resolve-installation-id"
-  );
-  const installationId =
-    userData.github_installation_id ??
-    (await resolveInstallationId(user.id));
+  // Fallback to workspace-sibling installation only when the user has a
+  // repo but no installation ID (#4543). Skip the fallback when repo_url
+  // is also null ("no repository connected" — nothing to resolve for).
+  let installationId = userData.github_installation_id;
+  if (!installationId && userData.repo_url) {
+    const { resolveInstallationId } = await import(
+      "@/server/resolve-installation-id"
+    );
+    installationId = await resolveInstallationId(user.id);
+  }
   if (!userData.repo_url || !installationId) {
     return err(400, "No repository connected");
   }
