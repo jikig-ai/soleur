@@ -13,8 +13,8 @@ date: 2026-05-28
 After PR #4546 added a workspace-sibling fallback for resolving `github_installation_id` when a user's own row has NULL, the security review added an exact `repo_url` match filter (`.eq("repo_url", callerRepoUrl)`) to prevent cross-repo token leakage. This broke the fallback for the production case where two users in the same workspace are connected to different repos under the same GitHub org.
 
 Production state:
-- `ops@jikigai.com`: `repo_url = "https://github.com/jikig-ai/soleur"`, `github_installation_id = NULL`
-- `jean.deruelle@jikigai.com`: `repo_url = "https://github.com/jikig-ai/chatte"`, `github_installation_id = "122213433"`
+- `ops@example.com`: `repo_url = "https://github.com/acme/repo-a"`, `github_installation_id = NULL`
+- `admin@example.com`: `repo_url = "https://github.com/acme/repo-b"`, `github_installation_id = "122213433"`
 
 The sibling lookup failed because `soleur != chatte`, even though installation `122213433` covers both repos in the `jikig-ai` org.
 
