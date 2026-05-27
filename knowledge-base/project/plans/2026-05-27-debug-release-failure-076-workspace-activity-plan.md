@@ -114,10 +114,10 @@ No cross-domain implications detected -- post-incident investigation producing a
 
 ### Pre-merge (PR)
 
-- [ ] AC1: Learning document created at `knowledge-base/project/learnings/bug-fixes/2026-05-27-release-failure-076-workspace-activity-dollar-quote-and-jti-sentinel.md` with YAML frontmatter (`title`, `date`, `category: bug-fixes`, `tags`)
-- [ ] AC2: Learning captures both root causes (dollar-quote collision + JTI sentinel drift) and the timeline
-- [ ] AC3: Learning documents the prevention patterns: (a) use distinct dollar-quote tags in pg_cron DO blocks, (b) grep verify files for sentinel counts when adding new JTI policies
-- [ ] AC4: Learning mentions the migration-number collision as a contributing factor (not a root cause) and links to the runner's existing `::warning::` collision detection
+- [x] AC1: Learning document created at `knowledge-base/project/learnings/bug-fixes/2026-05-27-release-failure-076-workspace-activity-dollar-quote-and-jti-sentinel.md` with YAML frontmatter (`title`, `date`, `category: bug-fixes`, `tags`)
+- [x] AC2: Learning captures both root causes (dollar-quote collision + JTI sentinel drift) and the timeline
+- [x] AC3: Learning documents the prevention patterns: (a) use distinct dollar-quote tags in pg_cron DO blocks, (b) grep verify files for sentinel counts when adding new JTI policies
+- [x] AC4: Learning mentions the migration-number collision as a contributing factor (not a root cause) and links to the runner's existing `::warning::` collision detection
 
 ### Post-merge (operator)
 
