@@ -261,6 +261,71 @@ parser carried the FS-based form forward from PR #2974. Fixed in
 PR #2995 (closes #2987); duplicates closed as duplicate-of-bug
 post-merge per `wg-when-fixing-a-workflow-gates-detection`.
 
+### H9 — Inngest server desync after rapid deploy churn (Inngest-fired crons only)
+
+When the web-platform container is redeployed 10+ times in a short window
+(e.g., merging a large TR9 batch), each restart triggers an Inngest SDK
+function sync via PUT to `/api/inngest`. The self-hosted Inngest server
+(`inngest-server.service`, SQLite storage at `/var/lib/inngest/`) reconciles
+its cron scheduler state on each sync. Two failure sub-modes exist:
+
+**H9a — Function deregistered (full desync).** A transient loopback HTTP
+failure during the Next.js container restart causes the sync response to
+be empty or incomplete. The Inngest server drops the affected function(s)
+from its registry entirely. Result: cron trigger never fires.
+
+**H9b — Cron scheduler re-planning failure (partial desync).** The function
+IS registered (appears in `/v1/functions`) but the cron trigger was not
+re-planned in the scheduler's plan table. This happens when the function
+registry write succeeds but the scheduler plan write fails silently (e.g.,
+SQLite write lock contention during a rapid sync burst). Result: function
+is registered, but cron never fires — only event-triggered invocations work.
+
+**Distinguishing H9a from H9b:**
+
+```bash
+# If this returns empty → H9a (function missing from registry)
+# If this returns the function with triggers → H9b (registered but not scheduled)
+curl -s http://127.0.0.1:8288/v1/functions | \
+  jq '.[] | select(.slug == "<function-slug>") | {slug, triggers}'
+```
+
+**Signature:**
+
+- Sentry cron monitor reports missed check-in
+- The affected function is Inngest-fired (not GHA-fired)
+- Other Inngest-fired crons (daily-triage, bug-fixer, oauth-probe) may
+  or may not be affected — check all cron-fire timestamps
+- Recent deploy burst visible in `gh run list --workflow=web-platform-release.yml`
+  (10+ deploys in the 48h preceding the miss)
+- Sentry heartbeat env vars are present (eliminates H3/Hypothesis D)
+
+**Verify:**
+
+1. Cross-cron health: `cat /var/lib/inngest/cron-fires/scheduled-*.json | jq .last_ok_at`
+2. Function registry: `curl -s http://127.0.0.1:8288/v1/functions | jq length` (expect 40)
+3. Server health: `journalctl -u inngest-server.service --since "48h ago" | grep -iE "oom|kill|restart|error|sync"`
+
+**Restore (H9):**
+
+1. Restart `inngest-server.service`: `sudo systemctl restart inngest-server.service`
+2. Wait 30s for SQLite reinitialisation
+3. Restart web-platform container: `docker restart soleur-web-platform` (forces fresh function manifest sync)
+4. Verify function registry: `curl -s http://127.0.0.1:8288/v1/functions | jq '[.[] | .slug] | sort | length'` (expect 40)
+5. Manual trigger to confirm end-to-end: `curl -X POST http://127.0.0.1:8288/e/<event-name> -H "Content-Type: application/json" -d '{"name":"<event-name>","data":{}}' -H "Authorization: Bearer ${INNGEST_EVENT_KEY}"`
+6. Verify Sentry check-in: wait for the next natural fire or check manually via Sentry API
+
+**Reference incident:** 2026-05-27 `scheduled-community-monitor` missed
+check-in (Sentry incident #5010688). Last successful check-in
+2026-05-25T11:56:14Z. Preceded by 15+ web-platform deploys in a 24h window
+(TR9 Phase 2 merge burst) and a function-count jump from ~18 to 40. Sentry
+alert triggered by `auth-callback-no-code-burst` was coincidental (unrelated
+issue alert type).
+
+**Preventive guard:** `function-registry-count.test.ts` asserts route.ts
+function count, cron-file ↔ route.ts parity, and SENTRY_MONITOR_SLUG ↔
+cron-monitors.tf parity at CI time.
+
 ## Restore Procedure (generalized)
 
 Based on the diagnosed H\* above:
