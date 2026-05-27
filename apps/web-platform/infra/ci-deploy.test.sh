@@ -46,7 +46,18 @@ MOCK
 create_mock_sudo() {
   cat > "$1/sudo" << 'MOCK'
 #!/bin/bash
-exec "$@"
+# Skip sudo flags (--preserve-env=..., -E, etc.)
+while [[ "${1:-}" == -* ]]; do shift; done
+cmd="$1"; shift
+# Resolve absolute paths via PATH so mocks shadow system binaries.
+if [[ "$cmd" == /* ]]; then
+  base=$(basename "$cmd")
+  resolved=$(type -P "$base" 2>/dev/null || true)
+  if [[ -n "$resolved" ]]; then
+    exec "$resolved" "$@"
+  fi
+fi
+exec "$cmd" "$@"
 MOCK
   chmod +x "$1/sudo"
 }
@@ -1841,99 +1852,30 @@ assert_trap_writes_timeout_state_in_isolation
 echo ""
 echo "--- Restart action ---"
 
-# Helper: run ci-deploy.sh with restart-specific mock overrides.
-# Accepts env-var overrides as optional second arg (eval'd before run).
-run_restart() {
-  local cmd="${1:-}"
-  local env_overrides="${2:-}"
-  (
-    export SSH_ORIGINAL_COMMAND="$cmd"
-    MOCK_DIR=$(mktemp -d)
-    trap 'rm -rf "$MOCK_DIR"' EXIT
-    export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
-    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
-    export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
-    create_base_mocks "$MOCK_DIR"
-    export DOPPLER_TOKEN="dp.st.prd.mock-token"
-    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
-    export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
-    if [[ -n "$env_overrides" ]]; then
-      eval "$env_overrides"
-    fi
-    bash "$DEPLOY_SCRIPT" 2>&1
-  )
-}
-
-assert_restart_state() {
-  local description="$1"
-  local expected_reason="$2"
-  local expected_exit="$3"
-  local cmd="$4"
-  local env_overrides="${5:-}"
-
-  TOTAL=$((TOTAL + 1))
-
-  local output actual_exit
-  output=$(
-    export SSH_ORIGINAL_COMMAND="$cmd"
-    MOCK_DIR=$(mktemp -d)
-    trap 'rm -rf "$MOCK_DIR"' EXIT
-    export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
-    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
-    export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
-    create_base_mocks "$MOCK_DIR"
-    export DOPPLER_TOKEN="dp.st.prd.mock-token"
-    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
-    export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
-    if [[ -n "$env_overrides" ]]; then
-      eval "$env_overrides"
-    fi
-    bash "$DEPLOY_SCRIPT" 2>&1
-    echo "___STATE___"
-    cat "$CI_DEPLOY_STATE" 2>/dev/null || echo "{}"
-  ) && actual_exit=0 || actual_exit=$?
-
-  local state_json
-  state_json=$(printf '%s' "$output" | sed -n '/___STATE___/{n;p;}')
-  local actual_reason actual_exit_code
-  if command -v jq >/dev/null 2>&1; then
-    actual_reason=$(printf '%s' "$state_json" | jq -r '.reason // ""' 2>/dev/null || echo "")
-    actual_exit_code=$(printf '%s' "$state_json" | jq -r '.exit_code // ""' 2>/dev/null || echo "")
-  else
-    actual_reason=$(printf '%s' "$state_json" | grep -oE '"reason":"[^"]*"' | sed 's/.*:"\(.*\)"/\1/')
-    actual_exit_code=$(printf '%s' "$state_json" | grep -oE '"exit_code":-?[0-9]+' | sed 's/.*://')
-  fi
-
-  if [[ "$actual_reason" == "$expected_reason" ]] && [[ "$actual_exit_code" == "$expected_exit" ]]; then
-    PASS=$((PASS + 1))
-    echo "  PASS: $description"
-  else
-    FAIL=$((FAIL + 1))
-    echo "  FAIL: $description"
-    echo "        expected: reason=$expected_reason exit_code=$expected_exit"
-    echo "        actual:   reason=$actual_reason exit_code=$actual_exit_code"
-    echo "        output:   $(printf '%s' "$output" | head -5)"
-  fi
-}
-
 # AC1: restart inngest succeeds with healthy server + registered functions
-assert_restart_state "restart inngest succeeds" \
+assert_state_contains "restart inngest succeeds" \
   "success" "0" \
   "restart inngest _ latest"
 
 # AC2: restart of non-inngest component rejected
-assert_restart_state "restart web-platform rejected" \
+assert_state_contains "restart web-platform rejected" \
   "component_not_restartable" "1" \
   "restart web-platform _ latest"
 
+# AC5(a): systemctl restart failure
+assert_state_contains "restart inngest systemctl failure" \
+  "inngest_restart_failed" "1" \
+  "restart inngest _ latest" \
+  "export MOCK_SYSTEMCTL_FAIL=1"
+
 # AC5(b): restart with inngest health check failure
-assert_restart_state "restart inngest health failure" \
+assert_state_contains "restart inngest health failure" \
   "inngest_health_failed" "1" \
   "restart inngest _ latest" \
   "export MOCK_CURL_INNGEST_HEALTH_FAIL=1"
 
 # AC5(d): restart with zero functions
-assert_restart_state "restart inngest zero functions" \
+assert_state_contains "restart inngest zero functions" \
   "inngest_no_functions" "1" \
   "restart inngest _ latest" \
   "export MOCK_CURL_INNGEST_ZERO_FUNCTIONS=1"

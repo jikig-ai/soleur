@@ -79,6 +79,12 @@ jobs:
               -1)
                 echo "Attempt $i/30: restart still running (reason=$REASON)"
                 ;;
+              -2)
+                echo "Attempt $i/30: no prior deploy/restart recorded"
+                ;;
+              -3)
+                echo "Attempt $i/30: corrupt state read, retrying"
+                ;;
               *)
                 if [ "$COMPONENT" = "inngest" ]; then
                   echo "::error::Restart failed (exit_code=$EXIT_CODE, reason=$REASON)"

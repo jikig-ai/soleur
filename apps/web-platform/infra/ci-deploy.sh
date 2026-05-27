@@ -334,7 +334,7 @@ write_state "$EXIT_RUNNING" "running"
 # Lightweight systemctl restart; no image pull, no disk space check needed.
 if [[ "$ACTION" == "restart" ]]; then
   echo "Restarting inngest-server.service..."
-  if ! sudo systemctl restart inngest-server.service; then
+  if ! sudo /usr/bin/systemctl restart inngest-server.service; then
     logger -t "$LOG_TAG" "FAILED: systemctl restart inngest-server.service"
     final_write_state 1 "inngest_restart_failed"
     exit 1
@@ -615,10 +615,8 @@ case "$COMPONENT" in
         # Inngest function registry sanity check (informational, #4538).
         # Non-blocking: does NOT gate deploy success.
         sleep 5
-        set +e
         inngest_count=$(curl -sf --max-time 5 http://127.0.0.1:8288/v1/functions 2>/dev/null \
-          | jq 'if type == "array" then length else 0 end' 2>/dev/null)
-        set -e
+          | jq 'if type == "array" then length else 0 end' 2>/dev/null || echo "0")
         inngest_count="${inngest_count:-0}"
         logger -t "$LOG_TAG" "INNGEST_FUNCTION_COUNT: ${inngest_count}"
         if [[ "$inngest_count" -eq 0 ]]; then
