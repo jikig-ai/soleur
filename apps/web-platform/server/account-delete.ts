@@ -447,6 +447,34 @@ export async function deleteAccount(
     return { success: false, error: "Account deletion failed. Please try again." };
   }
 
+  // 3.802 anonymise-workspace-invitations — anonymise_workspace_invitations
+  //       RPC NULLs PII columns (inviter_user_id, invitee_email,
+  //       invitee_user_id) for invitations where the departing user was
+  //       either the inviter or the invitee. Migration 075.
+  try {
+    const { error: anonInvErr } = await service.rpc(
+      "anonymise_workspace_invitations",
+      { p_user_id: userId },
+    );
+    if (anonInvErr) {
+      reportSilentFallback(anonInvErr, {
+        feature: "account-delete",
+        op: "anonymise-workspace-invitations",
+        extra: { userId },
+        message: "anonymise_workspace_invitations failed — aborting deletion",
+      });
+      return { success: false, error: "Account deletion failed. Please try again." };
+    }
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-workspace-invitations",
+      extra: { userId },
+      message: "anonymise_workspace_invitations threw — aborting deletion",
+    });
+    return { success: false, error: "Account deletion failed. Please try again." };
+  }
+
   // 3.901 Cascade-pseudonymise messages.user_id on shared-workspace
   //       conversations the departing user authored attachments in
   //       (migration 068, #4318). Sets messages.user_id = NULL on

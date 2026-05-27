@@ -222,6 +222,16 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
     article: "15",
   },
 
+  // feat-workspace-invite-acceptance (migration 075, #4519) — pending
+  // and resolved workspace invitations. ownerField = invitee_user_id
+  // (primary); export pipeline also returns inviter-side rows via
+  // inviter_user_id. Art. 15+20: the invitee email was provided by the
+  // inviter, but the invitation record is a data-subject-linkable artifact.
+  workspace_invitations: {
+    ownerField: "invitee_user_id",
+    article: "15+20",
+  },
+
   // feat-dsar-departed-member-coverage (migration 062, #4230) — WORM
   // ledger of workspace-member removal events. ownerField =
   // removed_user_id; rows describe (workspace_id, removed_user_id,
