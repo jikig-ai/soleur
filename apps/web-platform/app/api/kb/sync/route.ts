@@ -13,6 +13,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getFreshTenantClient, RuntimeAuthError } from "@/lib/supabase/tenant";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { syncWorkspace } from "@/server/kb-route-helpers";
+import { resolveInstallationId } from "@/server/resolve-installation-id";
 import {
   appendKbSyncRow,
   ERROR_CLASS_SYNC_FAILED,
@@ -98,7 +99,11 @@ async function handleSync(userId: string): Promise<Response> {
     );
   }
 
-  if (!userData.workspace_path || !userData.github_installation_id) {
+  const installationId =
+    userData.github_installation_id ??
+    (await resolveInstallationId(userId));
+
+  if (!userData.workspace_path || !installationId) {
     return NextResponse.json(
       { error: "Workspace not connected" },
       { status: 409 },
@@ -106,7 +111,7 @@ async function handleSync(userId: string): Promise<Response> {
   }
 
   const syncResult = await syncWorkspace(
-    userData.github_installation_id,
+    installationId,
     userData.workspace_path,
     logger,
     { userId, op: "manual" },

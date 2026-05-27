@@ -14,6 +14,7 @@ import {
   RuntimeAuthError,
 } from "@/lib/supabase/tenant";
 import { hashUserId, reportSilentFallback } from "@/server/observability";
+import { resolveInstallationId } from "@/server/resolve-installation-id";
 import { gitWithInstallationAuth } from "./git-auth";
 import { createChildLogger } from "./logger";
 
@@ -222,19 +223,7 @@ function hasLocalCommits(workspacePath: string): boolean {
 }
 
 async function getInstallationId(userId: string): Promise<number | null> {
-  // PR-C §2.1 (#3244): tenant-scoped; RLS `auth.uid() = id` on `users`.
-  const tenant = await getFreshTenantClient(userId);
-  const { data, error } = await tenant
-    .from("users")
-    .select("github_installation_id")
-    .eq("id", userId)
-    .single();
-
-  if (error || !data?.github_installation_id) {
-    return null;
-  }
-
-  return data.github_installation_id;
+  return resolveInstallationId(userId);
 }
 
 /**

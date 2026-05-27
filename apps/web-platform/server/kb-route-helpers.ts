@@ -7,6 +7,7 @@ import {
   RuntimeAuthError,
 } from "@/lib/supabase/tenant";
 import { reportSilentFallback } from "@/server/observability";
+import { resolveInstallationId } from "@/server/resolve-installation-id";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isPathInWorkspace } from "@/server/sandbox";
 import type { Logger } from "pino";
@@ -97,9 +98,13 @@ export async function authenticateAndResolveKbPath(
   if (!userData?.workspace_path || userData.workspace_status !== "ready") {
     return err(503, "Workspace not ready");
   }
-  if (!userData.repo_url || !userData.github_installation_id) {
+  const installationId =
+    userData.github_installation_id ??
+    (await resolveInstallationId(user.id));
+  if (!userData.repo_url || !installationId) {
     return err(400, "No repository connected");
   }
+  userData.github_installation_id = installationId;
 
   // Path
   const { path: pathSegments } = await params;

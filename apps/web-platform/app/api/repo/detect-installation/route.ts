@@ -132,14 +132,27 @@ export async function POST(request: Request) {
     .eq("id", user.id);
 
   if (updateError) {
-    logger.error(
-      { err: updateError, userId: user.id },
-      "Failed to store detected installation ID",
-    );
-    return NextResponse.json(
-      { error: "Failed to store installation" },
-      { status: 500 },
-    );
+    const isUniqueViolation =
+      typeof updateError === "object" &&
+      updateError !== null &&
+      "code" in updateError &&
+      (updateError as { code: string }).code === "23505";
+
+    if (isUniqueViolation) {
+      logger.info(
+        { userId: user.id, installationId, githubLogin },
+        "Installation already owned by workspace sibling — sharing via workspace membership",
+      );
+    } else {
+      logger.error(
+        { err: updateError, userId: user.id },
+        "Failed to store detected installation ID",
+      );
+      return NextResponse.json(
+        { error: "Failed to store installation" },
+        { status: 500 },
+      );
+    }
   }
 
   logger.info(
