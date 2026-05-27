@@ -11,6 +11,7 @@ lane: single-domain
 - [ ] 0.1 Verify Flagsmith Management API key accessible from Doppler cli_ops
 - [ ] 0.2 Verify `org-targeted` segment exists in Flagsmith (resolve by name)
 - [ ] 0.3 Verify segment rule structure: `rules[0].rules[0].conditions[0]` has `operator: "IN"`, `property: "orgId"`, comma-separated UUID value
+- [ ] 0.4 Verify PUT endpoint with no-op round-trip: GET segment, PUT back unchanged, GET and diff (deepen-plan finding)
 
 ## Phase 1: Script -- org-targeting branch in flip.sh
 

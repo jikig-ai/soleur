@@ -10,6 +10,23 @@ brand_survival_threshold: none
 
 # feat: add per-org flag targeting to soleur:flag-set-role skill
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-27
+**Sections enhanced:** 5 (Phases, Risks, Sharp Edges, Acceptance Criteria, Implementation Details)
+**Research sources:** Flagsmith Management API docs (Context7), codebase precedent analysis, ADR-038/ADR-043
+
+### Key Improvements
+1. Added Observability section with 5-field schema for operator CLI tool pattern
+2. Identified pre-existing `psql` prerequisite gap -- script uses `psql` (line 271) without listing it in SKILL.md prerequisites or validating via `command -v`
+3. Verified segment rules structure matches bootstrap precedent (`rules[0].rules[0].conditions[0]` pattern from `flag-bootstrap/SETUP.md`)
+4. Confirmed Flagsmith `IN` operator uses comma-separated values with case-sensitive matching (Context7 docs)
+5. Added audit-before-write ordering detail to Observability failure modes
+
+### Pre-existing Issues Surfaced
+- `psql` not in SKILL.md prerequisites (pre-existing, not introduced by this PR)
+- `resolve_segment_id` has no pagination support (pre-existing, safe with 3 segments)
+
 ## Overview
 
 Extend `soleur:flag-set-role` to manage the `org-targeted` segment's membership list via the Flagsmith Management API. Currently, the skill only handles per-role segment overrides (`role-prd` / `role-dev`). Per-org targeting (ADR-043) requires modifying the segment's rule definition to add/remove orgIds from the `orgId IN [...]` condition. During the PR #4512 investigation, the jikigai org's orgId was missing from the `org-targeted` segment and had to be added manually via curl -- this skill extension eliminates that manual path.
@@ -70,6 +87,33 @@ None. Checked `plugins/soleur/skills/flag-set-role/scripts/flip.sh` and `plugins
 - [ ] Verify Flagsmith Management API key is accessible: `doppler secrets get FLAGSMITH_MANAGEMENT_API_KEY -p soleur -c cli_ops --plain`
 - [ ] Verify `org-targeted` segment exists: `curl -sS -H "Authorization: Api-Key $TOKEN" "https://api.flagsmith.com/api/v1/projects/39082/segments/" | python3 -c "import json,sys; [print(s['id'], s['name']) for s in json.load(sys.stdin)['results']]"` -- expect `1130454 org-targeted` in output
 - [ ] Verify segment rule structure: `curl -sS -H "Authorization: Api-Key $TOKEN" "https://api.flagsmith.com/api/v1/projects/39082/segments/1130454/" | python3 -m json.tool | head -40` -- confirm `rules[0].rules[0].conditions[0]` has `operator: "IN"`, `property: "orgId"`, and `value` is a comma-separated UUID list
+- [ ] **Verify PUT endpoint accepts full segment body** -- test with a no-op round-trip: GET the segment, PUT it back unchanged, GET again and diff. This confirms the API verb and body shape before implementing the mutation logic. Precedent: bootstrap creates segments via POST (`flag-bootstrap/SETUP.md:66-74`) with body shape `{"name":"...","project":39082,"description":"...","rules":[{"type":"ALL","rules":[{"type":"ANY","rules":[],"conditions":[{"operator":"...","property":"...","value":"..."}]}],"conditions":[]}]}`. The PUT body should match this structure with the segment `id` included.
+
+#### Research Insights (Phase 0)
+
+**Flagsmith segment rule structure** (verified from `flag-bootstrap/SETUP.md` precedent):
+```json
+{
+  "name": "org-targeted",
+  "project": 39082,
+  "description": "...",
+  "rules": [{
+    "type": "ALL",
+    "rules": [{
+      "type": "ANY",
+      "rules": [],
+      "conditions": [{
+        "operator": "IN",
+        "property": "orgId",
+        "value": "uuid1,uuid2,uuid3"
+      }]
+    }],
+    "conditions": []
+  }]
+}
+```
+
+**Flagsmith `IN` operator** (from Context7 docs, verified): comma-separated values with no spaces. Case-sensitive matching. Example rule value: `"21,682,8345"` matches trait value `682` but not `683` or `834`.
 
 ### Phase 1: Script -- org-targeting branch in flip.sh
 
@@ -97,6 +141,28 @@ When `TARGET_TYPE=org`, branch early (before the role-targeting resolve/read/fal
 
 Skip the fallback-fidelity check and Doppler mirror sections entirely for `TARGET_TYPE=org` (both are role-targeting-specific).
 
+#### Research Insights (Phase 1)
+
+**Precedent-diff analysis:**
+- Audit function: `audit_flag_flip` (migration 071) uses `SECURITY DEFINER SET search_path = public, pg_temp` -- matches the canonical pattern from `write_byok_audit` (migration 037). No changes needed to the audit function for org-targeting.
+- Read-modify-write on Flagsmith segment rules: **novel pattern** -- no precedent in this codebase. The closest analogy is the segment creation in `flag-bootstrap/SETUP.md` which uses POST with the full body. The update (PUT) should follow the same body shape.
+
+**Implementation sketch for the python3 inline segment-rule modifier:**
+```python
+import json, sys
+seg = json.load(sys.stdin)
+cond = seg['rules'][0]['rules'][0]['conditions'][0]
+assert cond['operator'] == 'IN' and cond['property'] == 'orgId', \
+    f"unexpected condition: {cond}"
+current = [x for x in cond['value'].split(',') if x] if cond['value'] else []
+# Add/remove TARGET_ORG, rebuild comma-separated value
+# ... (action-specific logic)
+cond['value'] = ','.join(new_list)
+json.dump(seg, sys.stdout)
+```
+
+**Pre-existing prerequisite gap:** The script uses `psql` (line 271) for audit trail writes but does not list `psql` in SKILL.md prerequisites and does not validate it with `command -v psql`. This is pre-existing (not introduced by this PR) but should be noted for a follow-up fix. The `command -v` check should be added alongside curl/doppler/python3 at line 81-83.
+
 ### Phase 2: SKILL.md documentation update
 
 1. Update the **Arguments** section to document `--org <orgId>` usage (drop `--target` from docs).
@@ -110,6 +176,39 @@ Skip the fallback-fidelity check and Doppler mirror sections entirely for `TARGE
 1. Dry-run: `bash plugins/soleur/skills/flag-set-role/scripts/flip.sh team-workspace-invite prd on --org <test-orgId> --dry-run`
 2. Verify output shows current membership and proposed change.
 3. Run `bun test plugins/soleur/test/components.test.ts` to verify skill description budget.
+
+## Observability
+
+```yaml
+liveness_signal:
+  what: "Operator-invoked CLI script (not a long-running service)"
+  cadence: "on-demand (manual invocation only)"
+  alert_target: "operator terminal output (exit code + stderr)"
+  configured_in: "plugins/soleur/skills/flag-set-role/scripts/flip.sh"
+
+error_reporting:
+  destination: "stderr + exit code (2=prereq, 3=Flagsmith API, 4=audit/Doppler)"
+  fail_loud: "non-zero exit code + descriptive error on stderr"
+
+failure_modes:
+  - mode: "Flagsmith Management API unreachable or returns non-200"
+    detection: "curl -sS returns error; python3 parser raises; exit 3"
+    alert_route: "operator sees exit 3 + stderr message immediately"
+  - mode: "Segment rule structure changed (Flagsmith update)"
+    detection: "python3 KeyError/IndexError when navigating rules tree"
+    alert_route: "operator sees exit 3 + traceback on stderr"
+  - mode: "WORM audit insert fails (DB unreachable or CHECK violation)"
+    detection: "psql returns non-zero; exit 4"
+    alert_route: "operator sees exit 4 + FATAL message; Flagsmith NOT yet written (audit-before-write ordering)"
+
+logs:
+  where: "operator terminal stdout/stderr (no persistent log aggregation -- CLI tool)"
+  retention: "conversation history (agent-driven) or terminal scrollback (manual)"
+
+discoverability_test:
+  command: "bash plugins/soleur/skills/flag-set-role/scripts/flip.sh team-workspace-invite prd on --org 00000000-0000-0000-0000-000000000000 --dry-run 2>&1; echo exit=$?"
+  expected_output: "exit=0 with current membership list printed (or exit=3 if API key not configured)"
+```
 
 ## Acceptance Criteria
 
@@ -145,6 +244,8 @@ Skip the fallback-fidelity check and Doppler mirror sections entirely for `TARGE
 | Concurrent modifications to the segment (two operators running simultaneously) | Unlikely given single-operator model (ADR-038: "Claude is the only operator"). The read-modify-write is not atomic, but the operational risk is minimal. |
 | orgId format validation | UUIDs are 36-character strings with hyphens. Add a regex check: `[[ "$TARGET_ORG" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]` before proceeding. |
 | Segment rule structure changes in Flagsmith updates | The script navigates `rules[0].rules[0].conditions[0]` -- if Flagsmith changes the nesting, the python3 parser will fail loudly (KeyError/IndexError) rather than silently corrupt. |
+| PUT vs PATCH API verb uncertainty | Phase 0 includes a no-op round-trip test (GET → PUT unchanged → GET → diff) to confirm the correct verb before implementing mutations. Context7 Flagsmith docs show segment creation via POST; update verb must be verified live. |
+| Audit-before-write ordering matters | The script must write the audit trail BEFORE the Flagsmith PUT. If the PUT fails, the audit entry records the intent (operator accountability). If audit fails, the PUT is skipped (exit 4 before Flagsmith write). This ordering is already established in the role-targeting path (lines 260-278 in flip.sh: audit at 271, Flagsmith write at 277). |
 
 ## Alternative Approaches Considered
 
