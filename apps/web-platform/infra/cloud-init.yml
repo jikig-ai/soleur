@@ -209,6 +209,15 @@ write_files:
     owner: root:root
     permissions: '0755'
 
+  # Infra-config state reporter for /hooks/infra-config-status (#4554).
+  # Returns the JSON written by infra-config-apply.sh, with sentinels for
+  # missing/corrupt state. Keep in sync with terraform_data.deploy_pipeline_fix.
+  - path: /usr/local/bin/cat-infra-config-state.sh
+    encoding: b64
+    content: ${cat_infra_config_state_script_b64}
+    owner: root:root
+    permissions: '0755'
+
   # Webhook configuration for adnanh/webhook.
   # Validates HMAC-SHA256 signature, sets SSH_ORIGINAL_COMMAND from payload,
   # and invokes ci-deploy.sh asynchronously (#968).
