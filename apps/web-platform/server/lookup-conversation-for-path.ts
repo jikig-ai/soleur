@@ -82,12 +82,15 @@ export async function lookupConversationForPath(
     throw err;
   }
 
-  // visibility-sweep: RLS conversations_owner_or_shared returns own +
-  // workspace-shared conversations; most-recent-first ordering means
-  // the user's own active conversation wins when one exists.
+  // Prefer the caller's own conversation for this context path. The RLS
+  // policy (conversations_owner_or_shared_select) also returns workspace-
+  // shared conversations, but this function is used for routing (resume/
+  // create), not browsing — binding the caller to someone else's shared
+  // conversation would fail at sendMessage (owner-only guard).
   const { data, error } = await tenant
     .from("conversations")
     .select("id, context_path, last_active, messages(count)")
+    .eq("user_id", userId)
     .eq("repo_url", repoUrl)
     .eq("context_path", contextPath)
     .is("archived_at", null)

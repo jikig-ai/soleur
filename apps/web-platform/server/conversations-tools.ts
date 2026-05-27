@@ -224,7 +224,7 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
         // Slot release on archive is handled by the AFTER UPDATE OF archived_at trigger in
         // supabase/migrations/036_release_slot_on_archive.sql (fires public.release_conversation_slot).
         // Do NOT add an explicit releaseSlot call here — it would double-release.
-        // visibility-sweep: RLS WITH CHECK gates UPDATE to own + workspace-shared.
+        // visibility-sweep: RLS conversations_owner_update gates UPDATE to owner only (user_id = auth.uid()).
         // allow-direct-conversation-update: 2-column key (id, repo_url) + RLS — beyond updateConversationFor's R8 contract
         const { data, error } = await tenant
           .from("conversations")
@@ -266,7 +266,7 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
         // reads users via tenant + handles RuntimeAuthError) — a
         // separate probe here would re-mint the same JWT for no gain.
         const tenant = await getFreshTenantClient(userId);
-        // visibility-sweep: RLS WITH CHECK gates UPDATE to own + workspace-shared.
+        // visibility-sweep: RLS conversations_owner_update gates UPDATE to owner only (user_id = auth.uid()).
         // allow-direct-conversation-update: 2-column key (id, repo_url) + RLS — beyond updateConversationFor's R8 contract
         const { data, error } = await tenant
           .from("conversations")
@@ -314,7 +314,7 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
         // reads users via tenant + handles RuntimeAuthError) — a
         // separate probe here would re-mint the same JWT for no gain.
         const tenant = await getFreshTenantClient(userId);
-        // visibility-sweep: RLS WITH CHECK gates UPDATE to own + workspace-shared.
+        // visibility-sweep: RLS conversations_owner_update gates UPDATE to owner only (user_id = auth.uid()).
         // allow-direct-conversation-update: 2-column key (id, repo_url) + RLS — beyond updateConversationFor's R8 contract
         const { data, error } = await tenant
           .from("conversations")

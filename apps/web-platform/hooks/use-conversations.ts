@@ -232,16 +232,10 @@ export function useConversations(
   // the `user_id` filter stays server-side; cross-repo payloads are dropped
   // client-side in the callback below (same pattern as `archived_at`).
   useEffect(() => {
-    if (!userId || !workspaceId) return;
+    if (!userId) return;
 
     const supabase = createClient();
 
-    // P1 fix: dual-channel approach prevents Realtime metadata leak.
-    // Channel 1 (user_id): own conversations — Realtime only sends payloads
-    // matching the WAL filter, so private conversations from other users
-    // never transit the WebSocket.
-    // Channel 2 (workspace_id): workspace-shared updates — only processes
-    // events where visibility='workspace', so no private data leaks.
     const handleConversationUpdate = (payload: { new: unknown }) => {
       const updated = payload.new as Conversation;
       const currentRepoUrl = repoUrlRef.current;
@@ -263,6 +257,8 @@ export function useConversations(
       });
     };
 
+    // Channel 1 (user_id): own conversations — always subscribed when
+    // userId is available, regardless of workspace membership.
     const ownChannel = supabase
       .channel("command-center-own")
       .on(
@@ -272,22 +268,29 @@ export function useConversations(
       )
       .subscribe();
 
-    const sharedChannel = supabase
-      .channel("command-center-shared")
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "conversations", filter: `workspace_id=eq.${workspaceId}` },
-        (payload) => {
-          const updated = payload.new as Conversation;
-          if (updated.visibility !== "workspace") return;
-          handleConversationUpdate(payload);
-        },
-      )
-      .subscribe();
+    // Channel 2 (workspace_id): workspace-shared updates — additive,
+    // only when workspaceId is available. Private conversation metadata
+    // transits the WebSocket (WAL filter is workspace_id, not visibility)
+    // but the client-side guard below drops non-shared payloads.
+    let sharedChannel: ReturnType<typeof supabase.channel> | null = null;
+    if (workspaceId) {
+      sharedChannel = supabase
+        .channel("command-center-shared")
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "conversations", filter: `workspace_id=eq.${workspaceId}` },
+          (payload) => {
+            const updated = payload.new as Conversation;
+            if (updated.visibility !== "workspace") return;
+            handleConversationUpdate(payload);
+          },
+        )
+        .subscribe();
+    }
 
     return () => {
       supabase.removeChannel(ownChannel);
-      supabase.removeChannel(sharedChannel);
+      if (sharedChannel) supabase.removeChannel(sharedChannel);
     };
   }, [userId, workspaceId, archiveFilter]);
 

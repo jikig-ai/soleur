@@ -4,7 +4,10 @@ DROP INDEX IF EXISTS conversations_visibility_workspace_idx;
 
 DROP FUNCTION IF EXISTS public.set_conversation_visibility(uuid, text);
 
-DROP POLICY IF EXISTS conversations_owner_or_shared ON public.conversations;
+DROP POLICY IF EXISTS conversations_owner_or_shared_select ON public.conversations;
+DROP POLICY IF EXISTS conversations_owner_insert ON public.conversations;
+DROP POLICY IF EXISTS conversations_owner_update ON public.conversations;
+DROP POLICY IF EXISTS conversations_owner_delete ON public.conversations;
 
 -- Restore the original workspace-wide policy from mig 059.
 CREATE POLICY conversations_workspace_member_all ON public.conversations
