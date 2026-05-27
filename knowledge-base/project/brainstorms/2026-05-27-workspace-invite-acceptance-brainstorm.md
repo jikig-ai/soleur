@@ -120,6 +120,20 @@ Bundling both pieces avoids shipping a Members tab with a synchronous-only invit
 - **Public page template**: `app/shared/[token]/page.tsx`
 - **Auth callback**: `app/(auth)/callback/route.ts` — PKCE code exchange
 
+## Visual Design
+
+Wireframes created via ux-design-lead (Phase 3.55):
+
+- **Design file:** `knowledge-base/product/design/command-center/workspace-invite-acceptance.pen`
+- **Screenshots:** `knowledge-base/product/design/command-center/screenshots/`
+  - `12-settings-sidebar-team-link.png` — Settings sidebar with Team link
+  - `13-team-members-page.png` — Team Members page with member list + pending invites
+  - `14-invite-member-modal.png` — Invite modal with email, role, attestation
+  - `15-dashboard-pending-invite-banner.png` — Pending invite banner on dashboard
+  - `16-invite-landing-authenticated.png` — /invite/[token] for authenticated users
+  - `17-invite-landing-unauthenticated.png` — /invite/[token] for unauthenticated users
+  - `18-invite-email-template.png` — HTML invite email template
+
 ## Session Errors
 
 1. **CPO false negative on invite code existence.** CPO agent reported "no such code was found in the codebase" for `inviteWorkspaceMember()` and `invite-member/route.ts`. Both exist on main at `apps/web-platform/server/workspace-membership.ts` and `apps/web-platform/app/api/workspace/invite-member/route.ts`. Agent likely had a CWD/search-scope issue.
