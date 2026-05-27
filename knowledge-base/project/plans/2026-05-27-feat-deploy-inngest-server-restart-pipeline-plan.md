@@ -9,6 +9,23 @@ brand_survival_threshold: aggregate pattern
 
 # feat(deploy): add inngest-server restart to deploy pipeline
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-27
+**Sections enhanced:** 4 (Implementation Phases, Technical Considerations, Test Scenarios, Sharp Edges)
+**Research agents used:** learnings-researcher, repo-research-analyst, precedent-diff-checker
+
+### Key Improvements
+1. Added concrete `verify_inngest_functions()` implementation sketch with `set +e` guard for curl under `set -euo pipefail`
+2. Identified that Phase 3 curl must use `|| true` pattern since `127.0.0.1:8288` may be unreachable during container swap window (inngest-server is not restarted during a web-platform deploy)
+3. Verified `deploy_pipeline_fix` uses HTTPS-only provisioner (no SSH trigger for Phase 4.5 network-outage gate)
+4. Added Inngest SDK sync timing insight from `2026-05-27-sentry-cron-community-monitor-missed-checkin.md` -- function sync happens on container startup via PUT to `/api/inngest`, not on a timer
+
+### New Considerations Discovered
+- The web-platform container sends a function sync PUT to the Inngest server on startup. The 5s wait in Phase 3 should account for Next.js cold-start time (~3-8s on the cx33 host) before the sync fires.
+- The `jq length` command returns `null` (not 0) if the Inngest API returns non-array JSON (e.g., error response). The helper must guard against this with `jq 'if type == "array" then length else 0 end'`.
+- The restart workflow must not use `continue-on-error: true` on the webhook step -- if the HMAC signature is wrong (key rotated), the workflow should fail immediately, not proceed to poll a stale state.
+
 ## Overview
 
 Add a lightweight inngest-server restart capability to the deploy pipeline, closing the H9 runbook gap identified in PR #4531. The current deploy pipeline can only perform full inngest bootstrap deploys (image pull + binary install + systemd unit write). When inngest-server.service desyncs after rapid web-platform deploy churn (H9 hypothesis in `cloud-scheduled-tasks.md`), the only recovery path is SSH + manual `systemctl restart` -- a non-automatable barrier for a solo-founder product.
@@ -87,6 +104,67 @@ Widen the command parser to accept `restart` as a valid action alongside `deploy
    - Returns 0 if count >= 1 (functions registered), 1 if count == 0 (H9a full desync)
    - Logs the actual count for operator visibility
 
+**Implementation sketch for `verify_inngest_functions()`:**
+
+```bash
+# Shared helper — called from restart handler and (informally) from web-platform post-deploy.
+# Returns 0 if Inngest server is healthy AND has >= 1 registered function.
+# Returns 1 on health failure or zero functions.
+# Logs the actual count for operator visibility.
+verify_inngest_functions() {
+  local max_attempts="${1:-10}"
+  local interval="${2:-3}"
+  local healthy=false
+  local count=0
+
+  for i in $(seq 1 "$max_attempts"); do
+    # set +e is load-bearing: curl returns non-zero on connection refused
+    # (inngest-server not yet listening after restart). Under set -euo pipefail,
+    # this would abort the script before the retry loop can react.
+    set +e
+    local response
+    response=$(curl -sf --max-time 5 http://127.0.0.1:8288/v1/functions 2>/dev/null)
+    local curl_rc=$?
+    set -e
+
+    if [[ "$curl_rc" -ne 0 ]]; then
+      logger -t "$LOG_TAG" "INNGEST_HEALTH: attempt $i/$max_attempts — connection failed (rc=$curl_rc)"
+      sleep "$interval"
+      continue
+    fi
+
+    # Guard against non-array responses (error JSON, empty body).
+    count=$(printf '%s' "$response" | jq 'if type == "array" then length else 0 end' 2>/dev/null || echo "0")
+    if [[ "$count" -ge 1 ]]; then
+      healthy=true
+      break
+    fi
+    logger -t "$LOG_TAG" "INNGEST_HEALTH: attempt $i/$max_attempts — server up but 0 functions"
+    sleep "$interval"
+  done
+
+  logger -t "$LOG_TAG" "INNGEST_VERIFY: healthy=$healthy count=$count"
+  if [[ "$healthy" == "true" ]]; then
+    return 0
+  fi
+  return 1
+}
+```
+
+### Research Insights (Phase 2)
+
+**Best Practices:**
+- The `set +e` / `set -e` toggle around curl is the canonical pattern in this codebase. See the Layer 3 canary probe at ci-deploy.sh lines 460-464 (`set +o pipefail` / `set -o pipefail` for the same class of problem).
+- `jq 'if type == "array" then length else 0 end'` guards against the Inngest server returning an error object instead of an array. The bare `jq length` on an object returns the number of keys (not 0), which would false-pass the floor check.
+
+**Edge Cases:**
+- Inngest server restart takes ~2-5s on the cx33 host (SQLite WAL replay + loopback bind). The 30s window (10 x 3s) provides adequate margin.
+- If the Inngest server binary is corrupt or missing, `systemctl restart` returns non-zero immediately. The health check loop will time out and report `inngest_health_failed`.
+
+**Precedent (from repo):**
+- The canary health check loop at ci-deploy.sh lines 393-474 is the structural precedent for the Inngest health check. Same pattern: retry loop, curl with `--max-time`, structured failure reasons.
+- The `CANARY_FAIL_REASON` variable pattern maps to the restart handler's reason field in `final_write_state`.
+
 **Files to edit:**
 - `apps/web-platform/infra/ci-deploy.sh`
 
@@ -101,6 +179,30 @@ BEFORE the `final_write_state 0 "ok"` / `exit 0` at the end of the successful we
 4. If count == 0, emit a `logger -t "$LOG_TAG" "INNGEST_WARN: zero functions registered after deploy — consider running restart-inngest-server.yml workflow"`
 5. This is strictly informational. Deploy success is NOT gated on inngest function count. No auto-restart. The standalone restart workflow (Phase 4) is the operator-initiated recovery path.
 
+### Research Insights (Phase 3)
+
+**Timing consideration:** The Inngest SDK sync happens when the Next.js server starts and serves the first request to `/api/inngest`. The new web-platform container takes ~3-8s to cold-start on the cx33 host (Next.js build-time ISR + module init). The 5s wait may need adjustment -- but since this is log-only and non-blocking, a single-attempt check that misses the window is acceptable. The operator will see either the count or a "connection refused" log and can investigate via the restart workflow.
+
+**`set +e` guard required:** The curl to `127.0.0.1:8288` can fail if the inngest-server is mid-restart (e.g., from a concurrent inngest deploy). Under `set -euo pipefail`, this would abort the entire web-platform deploy script AFTER the canary had already been promoted. The `|| true` pattern (or `set +e` toggle) is mandatory.
+
+**Implementation sketch:**
+
+```bash
+    # --- Inngest function registry sanity check (informational) ---
+    # Non-blocking: does NOT gate deploy success. Logs the function count
+    # for operator visibility. If 0, suggests the restart workflow.
+    sleep 5  # wait for Next.js cold-start + SDK sync PUT
+    set +e
+    inngest_count=$(curl -sf --max-time 5 http://127.0.0.1:8288/v1/functions 2>/dev/null \
+      | jq 'if type == "array" then length else 0 end' 2>/dev/null)
+    set -e
+    inngest_count="${inngest_count:-0}"
+    logger -t "$LOG_TAG" "INNGEST_FUNCTION_COUNT: ${inngest_count}"
+    if [[ "$inngest_count" -eq 0 ]]; then
+      logger -t "$LOG_TAG" "INNGEST_WARN: zero functions registered after deploy — consider running restart-inngest-server.yml workflow"
+    fi
+```
+
 **Files to edit:**
 - `apps/web-platform/infra/ci-deploy.sh` (web-platform case branch, before final_write_state)
 
@@ -111,6 +213,100 @@ Create a `workflow_dispatch`-triggered workflow that:
 2. Includes CF Access headers (`CF-Access-Client-Id`, `CF-Access-Client-Secret`) -- required because the webhook endpoint is behind Cloudflare Access (same pattern as web-platform-release.yml lines 292-313)
 3. Polls the deploy-status endpoint until `exit_code != -1` (mirrors the web-platform-release.yml "Verify deploy script completion" step pattern at lines 316-387, but simpler -- no version matching, just wait for terminal state)
 4. Reports success/failure via `::notice::` / `::error::` annotations
+
+### Research Insights (Phase 4)
+
+**Workflow structure (derived from web-platform-release.yml precedent):**
+
+```yaml
+name: Restart Inngest Server
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  restart:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-inngest-restart
+      cancel-in-progress: false
+    steps:
+      - name: Trigger restart via webhook
+        env:
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          PAYLOAD='{"command":"restart inngest _ latest"}'
+          SIGNATURE=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+            --max-time 30 \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-Signature-256: sha256=$SIGNATURE" \
+            -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+            -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+            -d "$PAYLOAD" \
+            "https://deploy.soleur.ai/hooks/deploy")
+          if [[ "$HTTP_CODE" != "202" ]]; then
+            echo "::error::Restart webhook rejected (HTTP $HTTP_CODE)"
+            exit 1
+          fi
+          echo "Restart initiated (HTTP 202), polling status..."
+
+      - name: Verify restart completion
+        env:
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          SIGNATURE=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+          for i in $(seq 1 30); do
+            HTTP_CODE=$(curl -s --max-time 10 \
+              -o /tmp/status-body \
+              -w '%{http_code}' \
+              -X GET \
+              -H "X-Signature-256: sha256=$SIGNATURE" \
+              -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+              -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+              "https://deploy.soleur.ai/hooks/deploy-status" || echo "000")
+            BODY=$(cat /tmp/status-body 2>/dev/null || echo "")
+            if [ -z "$BODY" ] || ! echo "$BODY" | jq -e . >/dev/null 2>&1; then
+              echo "Attempt $i/30: non-JSON or empty body — retrying"
+              sleep 5
+              continue
+            fi
+            EXIT_CODE=$(echo "$BODY" | jq -r '.exit_code // -99')
+            REASON=$(echo "$BODY" | jq -r '.reason // "unknown"')
+            COMPONENT=$(echo "$BODY" | jq -r '.component // "unknown"')
+            case "$EXIT_CODE" in
+              0)
+                if [ "$COMPONENT" = "inngest" ]; then
+                  echo "::notice::Inngest restart completed successfully (reason=$REASON)"
+                  echo "$BODY" | jq .
+                  exit 0
+                fi
+                echo "Attempt $i/30: last operation was for $COMPONENT, not inngest"
+                ;;
+              -1) echo "Attempt $i/30: restart still running (reason=$REASON)" ;;
+              *) echo "::error::Restart failed (exit_code=$EXIT_CODE, reason=$REASON)"; echo "$BODY" | jq .; exit 1 ;;
+            esac
+            sleep 5
+          done
+          echo "::error::Restart did not complete within 150s"
+          exit 1
+```
+
+**Edge cases in the workflow:**
+- The `concurrency` group prevents parallel restart dispatches from racing.
+- The status poll checks `component == "inngest"` to avoid reading stale web-platform deploy state.
+- No `continue-on-error` on the webhook step -- if the HMAC key is wrong, fail immediately.
+- Poll timeout is 150s (30 x 5s) -- generous for a restart that takes ~5-10s.
 
 **Files to create:**
 - `.github/workflows/restart-inngest-server.yml`

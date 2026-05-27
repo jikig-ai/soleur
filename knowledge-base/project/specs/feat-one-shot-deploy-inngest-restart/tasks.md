@@ -14,9 +14,10 @@ Issue: #4538
 
 - [ ] 2.1 Widen action validation to accept `restart` alongside `deploy`
 - [ ] 2.2 Add `restart` action validation: component must be `inngest`, reject others with `component_not_restartable`
-- [ ] 2.3 Add `verify_inngest_functions()` helper function
+- [ ] 2.3 Add `verify_inngest_functions()` helper function (implementation sketch in plan Phase 2)
   - Health check loop: 10 attempts x 3s at `127.0.0.1:8288`
-  - Function count: `curl -s http://127.0.0.1:8288/v1/functions | jq length`
+  - Function count: `curl -sf ... | jq 'if type == "array" then length else 0 end'` (guard against non-array response)
+  - `set +e` / `set -e` toggle around curl (mandatory under `set -euo pipefail`)
   - Floor check: count >= 1 (not exact match)
   - Returns 0 on success, 1 on health failure or zero functions
 - [ ] 2.4 Add `restart inngest` case handler
@@ -26,9 +27,10 @@ Issue: #4538
 
 ## Phase 3: Post-deploy inngest function log
 
-- [ ] 3.1 Add lightweight function count log to web-platform handler
-  - Placement: BEFORE `final_write_state 0 "ok"` / `exit 0`
-  - Wait 5s, single curl to `/v1/functions | jq length`
+- [ ] 3.1 Add lightweight function count log to web-platform handler (implementation sketch in plan Phase 3)
+  - Placement: BEFORE `final_write_state 0 "ok"` / `exit 0` (between canary cleanup and final state write)
+  - Wait 5s (Next.js cold-start + SDK sync PUT timing)
+  - Single curl with `set +e` guard: `curl -sf ... | jq 'if type == "array" then length else 0 end'`
   - Log count via `logger -t "$LOG_TAG" "INNGEST_FUNCTION_COUNT: $count"`
   - If count == 0, log warning suggesting restart workflow
   - Strictly informational, no state writes, no auto-restart
