@@ -492,6 +492,7 @@ export async function exportSqlTable(
   // predicate only.
   let conversationIds: string[] = [];
   {
+    // visibility-sweep-audit: owner-scoped — DSAR exports are per-user per Art. 15
     // Per-row WHERE lint (AC30) requires the predicate (`.or()` or
     // `.eq()`) to appear in the same chain as the `.from()` call. The
     // ternary below keeps both paths in the single statement the lint

@@ -92,9 +92,11 @@ describe("handleConversationMessages", () => {
       error: null,
     });
 
-    // First from("conversations") call — ownership check returns cost fields
+    // First from("conversations") call — ownership check returns cost fields.
+    // user_id must match USER_ID for the isOwner gate (cost fields zero'd for non-owners).
     const convChain = mockQueryChain({
       id: CONV_ID,
+      user_id: USER_ID,
       total_cost_usd: "0.004200",  // NUMERIC(12,6) returns string
       input_tokens: 1200,
       output_tokens: 300,

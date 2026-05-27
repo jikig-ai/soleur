@@ -98,17 +98,14 @@ export async function handleConversationMessages(
   // surface can hydrate its `workflowEnded` flag on reload of an already-
   // ended conversation. Without this, the in-memory lifecycle slice
   // initializes to `idle` and the input renders enabled.
-  // PR-C §2.2 (#3244): tenant-scoped read. Explicit `.eq("user_id",
-  // user.id)` filter retained as belt-and-suspenders — RLS already
-  // enforces ownership, but the filter narrows the scan and documents
-  // the ownership invariant at the call site.
+  // visibility-sweep: RLS returns own + workspace-shared conversations.
+  // Also fetch user_id to gate cost columns for non-owners below.
   const { data: conv, error: convErr } = await tenant
     .from("conversations")
     .select(
-      "id, total_cost_usd, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, workflow_ended_at, created_at",
+      "id, user_id, total_cost_usd, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, workflow_ended_at, created_at",
     )
     .eq("id", conversationId)
-    .eq("user_id", user.id)
     .single();
 
   if (convErr || !conv) {
@@ -171,22 +168,26 @@ export async function handleConversationMessages(
     });
   }
 
+  const isOwner = (conv as { user_id?: string }).user_id === user.id;
+
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({
     messages: messages ?? [],
-    totalCostUsd: Number(conv.total_cost_usd ?? 0),
-    inputTokens: conv.input_tokens ?? 0,
-    outputTokens: conv.output_tokens ?? 0,
+    totalCostUsd: isOwner ? Number(conv.total_cost_usd ?? 0) : 0,
+    inputTokens: isOwner ? (conv.input_tokens ?? 0) : 0,
+    outputTokens: isOwner ? (conv.output_tokens ?? 0) : 0,
     // Migration 041 — cache tokens persisted per-conversation. Surface
     // them in the resume response so the chat-surface cost badge can
     // render `(input + cache_read + cache_creation)` instead of
     // showing the uncached-input subset only (plan §Risks R8).
-    cacheReadInputTokens:
-      (conv as { cache_read_input_tokens?: number | null })
-        .cache_read_input_tokens ?? 0,
-    cacheCreationInputTokens:
-      (conv as { cache_creation_input_tokens?: number | null })
-        .cache_creation_input_tokens ?? 0,
+    cacheReadInputTokens: isOwner
+      ? ((conv as { cache_read_input_tokens?: number | null })
+          .cache_read_input_tokens ?? 0)
+      : 0,
+    cacheCreationInputTokens: isOwner
+      ? ((conv as { cache_creation_input_tokens?: number | null })
+          .cache_creation_input_tokens ?? 0)
+      : 0,
     workflowEndedAt: conv.workflow_ended_at ?? null,
     // PR-B (#3603) — surface conversation start time so the chat surface can
     // gate the cohort-missing-reply marker on the row-absence cohort window.

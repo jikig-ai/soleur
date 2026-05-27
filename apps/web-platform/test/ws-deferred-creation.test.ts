@@ -64,17 +64,15 @@ vi.mock("@/lib/supabase/service", () => ({
         };
         return chain;
       }
-      return {
+      const convChain: Record<string, unknown> = {
         insert: mockInsert,
         update: mockUpdate,
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            eq: vi.fn().mockReturnValue({
-              single: mockSelectSingle,
-            }),
-          }),
-        }),
       };
+      const eqChain: Record<string, unknown> = {};
+      eqChain.eq = vi.fn(() => eqChain);
+      eqChain.single = mockSelectSingle;
+      convChain.select = vi.fn(() => eqChain);
+      return convChain;
     },
     auth: {
       getUser: vi.fn().mockResolvedValue({
@@ -104,17 +102,15 @@ vi.mock("@/lib/supabase/tenant", () => ({
         };
         return chain;
       }
-      return {
+      const convChain: Record<string, unknown> = {
         insert: mockInsert,
         update: mockUpdate,
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            eq: vi.fn().mockReturnValue({
-              single: mockSelectSingle,
-            }),
-          }),
-        }),
       };
+      const eqChain: Record<string, unknown> = {};
+      eqChain.eq = vi.fn(() => eqChain);
+      eqChain.single = mockSelectSingle;
+      convChain.select = vi.fn(() => eqChain);
+      return convChain;
     },
     rpc: mockRpc,
   })),
@@ -156,6 +152,14 @@ vi.mock("./rate-limiter", () => ({
 vi.mock("./context-validation", () => ({
   validateConversationContext: (ctx: unknown) => ctx,
 }));
+
+vi.mock("@/server/agent-session-registry", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    getUserWorkspace: vi.fn(() => "ws-mock-workspace-1"),
+  };
+});
 
 import { handleMessage, sessions, type ClientSession } from "@/server/ws-handler";
 

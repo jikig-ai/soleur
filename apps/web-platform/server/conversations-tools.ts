@@ -157,12 +157,14 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
         // reads users via tenant + handles RuntimeAuthError) — a
         // separate probe here would re-mint the same JWT for no gain.
         const tenant = await getFreshTenantClient(userId);
+        // visibility-sweep: RLS policy conversations_owner_or_shared
+        // returns own + workspace-shared conversations; no app-level
+        // user_id filter needed.
         let query = tenant
           .from("conversations")
           .select(
-            "id, status, domain_leader, last_active, created_at, archived_at",
+            "id, status, domain_leader, last_active, created_at, archived_at, visibility, user_id",
           )
-          .eq("user_id", userId)
           .eq("repo_url", repoUrl);
 
         if (args.archived) {
@@ -222,12 +224,12 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
         // Slot release on archive is handled by the AFTER UPDATE OF archived_at trigger in
         // supabase/migrations/036_release_slot_on_archive.sql (fires public.release_conversation_slot).
         // Do NOT add an explicit releaseSlot call here — it would double-release.
-        // allow-direct-conversation-update: stronger 3-column composite key (id, user_id, repo_url) + select for not_found semantics — beyond updateConversationFor's R8 contract
+        // visibility-sweep: RLS conversations_owner_update gates UPDATE to owner only (user_id = auth.uid()).
+        // allow-direct-conversation-update: 2-column key (id, repo_url) + RLS — beyond updateConversationFor's R8 contract
         const { data, error } = await tenant
           .from("conversations")
           .update({ archived_at: nowIso })
           .eq("id", args.conversationId)
-          .eq("user_id", userId)
           .eq("repo_url", repoUrl)
           .select("id, archived_at");
 
@@ -264,12 +266,12 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
         // reads users via tenant + handles RuntimeAuthError) — a
         // separate probe here would re-mint the same JWT for no gain.
         const tenant = await getFreshTenantClient(userId);
-        // allow-direct-conversation-update: stronger 3-column composite key (id, user_id, repo_url) + select for not_found semantics — beyond updateConversationFor's R8 contract
+        // visibility-sweep: RLS conversations_owner_update gates UPDATE to owner only (user_id = auth.uid()).
+        // allow-direct-conversation-update: 2-column key (id, repo_url) + RLS — beyond updateConversationFor's R8 contract
         const { data, error } = await tenant
           .from("conversations")
           .update({ archived_at: null })
           .eq("id", args.conversationId)
-          .eq("user_id", userId)
           .eq("repo_url", repoUrl)
           .select("id, archived_at");
 
@@ -312,12 +314,12 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
         // reads users via tenant + handles RuntimeAuthError) — a
         // separate probe here would re-mint the same JWT for no gain.
         const tenant = await getFreshTenantClient(userId);
-        // allow-direct-conversation-update: stronger 3-column composite key (id, user_id, repo_url) + select for not_found semantics — beyond updateConversationFor's R8 contract
+        // visibility-sweep: RLS conversations_owner_update gates UPDATE to owner only (user_id = auth.uid()).
+        // allow-direct-conversation-update: 2-column key (id, repo_url) + RLS — beyond updateConversationFor's R8 contract
         const { data, error } = await tenant
           .from("conversations")
           .update({ status: args.status })
           .eq("id", args.conversationId)
-          .eq("user_id", userId)
           .eq("repo_url", repoUrl)
           .select("id, status");
 

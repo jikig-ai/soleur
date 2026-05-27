@@ -70,6 +70,21 @@ function buildMessagesChain() {
   return chain;
 }
 
+function buildWorkspaceMembersChain() {
+  const chain: Record<string, unknown> = {};
+  Object.assign(chain, {
+    select: vi.fn(() => chain),
+    eq: vi.fn(() => chain),
+    maybeSingle: vi.fn(() =>
+      Promise.resolve({
+        data: { workspace_id: "ws-1" },
+        error: null,
+      }),
+    ),
+  });
+  return chain;
+}
+
 function buildSupabaseClient(rows: ReturnType<typeof buildConversationRows>) {
   return {
     auth: {
@@ -79,6 +94,7 @@ function buildSupabaseClient(rows: ReturnType<typeof buildConversationRows>) {
     },
     from: vi.fn((table: string) => {
       if (table === "users") return buildUsersChain();
+      if (table === "workspace_members") return buildWorkspaceMembersChain();
       if (table === "conversations") return buildConversationsChain(rows);
       if (table === "messages") return buildMessagesChain();
       throw new Error(`unexpected table: ${table}`);

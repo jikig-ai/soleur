@@ -557,6 +557,7 @@ export async function deleteAccount(
   //        paths. Non-fatal: identity linkage is already severed at 3.901;
   //        orphaned bytes are a resource leak, not a compliance violation.
   try {
+    // visibility-sweep-audit: owner-scoped — deletion cascade is per-user
     const { data: ownedConvs } = await service
       .from("conversations")
       .select("id")
@@ -762,6 +763,32 @@ export async function deleteAccount(
       message: "anonymise_workspace_member_actions threw — aborting deletion",
     });
     return { success: false, error: "Account deletion failed. Please try again." };
+  }
+
+  // 3.935 Anonymise workspace_activity rows (migration 076, #4521 PR-B).
+  //       NULL-sets actor_user_id + empties metadata for every row
+  //       referencing the departing user. Best-effort — activity feed
+  //       events are ephemeral (90-day pg_cron purge) and the SET NULL FK
+  //       handles the auth cascade; this step is defense-in-depth for
+  //       metadata scrubbing.
+  try {
+    const { error: anonActivityErr } = await service.rpc(
+      "anonymise_workspace_activity",
+      { p_user_id: userId },
+    );
+    if (anonActivityErr) {
+      reportSilentFallback(anonActivityErr, {
+        feature: "account-delete",
+        op: "anonymise-workspace-activity",
+        extra: { userId },
+      });
+    }
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-workspace-activity",
+      extra: { userId },
+    });
   }
 
   // 3.94 Anonymise byok_delegations (migration 064, #4232 PR-A).
