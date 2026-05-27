@@ -90,7 +90,7 @@ CREATE INDEX workspace_activity_actor_idx
 -- 5. pg_cron 90-day retention purge (idempotent per Kieran H3)
 -- =====================================================================
 
-DO $$
+DO $cron_block$
 BEGIN
   IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'workspace_activity_purge') THEN
     PERFORM cron.unschedule('workspace_activity_purge');
@@ -101,7 +101,7 @@ BEGIN
     $$DELETE FROM public.workspace_activity WHERE created_at < now() - interval '90 days'$$
   );
 EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
+END $cron_block$;
 
 -- =====================================================================
 -- 6. Art-17 anonymisation RPC (follows mig 063 pattern)
