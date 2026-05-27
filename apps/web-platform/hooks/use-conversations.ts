@@ -235,56 +235,59 @@ export function useConversations(
     if (!userId || !workspaceId) return;
 
     const supabase = createClient();
-    const channel = supabase
-      .channel("command-center")
+
+    // P1 fix: dual-channel approach prevents Realtime metadata leak.
+    // Channel 1 (user_id): own conversations — Realtime only sends payloads
+    // matching the WAL filter, so private conversations from other users
+    // never transit the WebSocket.
+    // Channel 2 (workspace_id): workspace-shared updates — only processes
+    // events where visibility='workspace', so no private data leaks.
+    const handleConversationUpdate = (payload: { new: unknown }) => {
+      const updated = payload.new as Conversation;
+      const currentRepoUrl = repoUrlRef.current;
+      if ((updated.repo_url ?? null) !== currentRepoUrl) return;
+
+      setConversations((prev) => {
+        const isArchivedNow = updated.archived_at !== null;
+        const showingArchived = archiveFilter === "archived";
+
+        if (isArchivedNow !== showingArchived) {
+          return prev.filter((c) => c.id !== updated.id);
+        }
+
+        return prev.map((c) =>
+          c.id === updated.id
+            ? { ...c, status: updated.status, last_active: updated.last_active, domain_leader: updated.domain_leader, archived_at: updated.archived_at, visibility: updated.visibility }
+            : c,
+        );
+      });
+    };
+
+    const ownChannel = supabase
+      .channel("command-center-own")
       .on(
         "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "conversations",
-          filter: `workspace_id=eq.${workspaceId}`,
-        },
+        { event: "UPDATE", schema: "public", table: "conversations", filter: `user_id=eq.${userId}` },
+        handleConversationUpdate,
+      )
+      .subscribe();
+
+    const sharedChannel = supabase
+      .channel("command-center-shared")
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "conversations", filter: `workspace_id=eq.${workspaceId}` },
         (payload) => {
           const updated = payload.new as Conversation;
-          // visibility-sweep: filter widened from user_id to workspace_id.
-          // Client-side drop for private conversations from other users —
-          // Realtime sends all workspace events; RLS only applies to reads.
-          if (updated.user_id !== userId && updated.visibility !== "workspace") return;
-          // Client-side repo_url check: Realtime can't express the second
-          // equality, so drop payloads whose repo_url doesn't match the
-          // current scope. Strict equality catches the disconnected case
-          // (repoUrlRef=null, payload.repo_url=<something>) too — when
-          // disconnected, conversations list is empty so the update
-          // would find no matching row anyway, but this guards against
-          // rendering the first cross-repo row if a future refactor
-          // decouples list-empty from disconnect.
-          const currentRepoUrl = repoUrlRef.current;
-          if ((updated.repo_url ?? null) !== currentRepoUrl) return;
-
-          setConversations((prev) => {
-            // Check if the conversation's archive state matches the current filter
-            const isArchivedNow = updated.archived_at !== null;
-            const showingArchived = archiveFilter === "archived";
-
-            // If archive state doesn't match current view, remove from list
-            if (isArchivedNow !== showingArchived) {
-              return prev.filter((c) => c.id !== updated.id);
-            }
-
-            // Otherwise, update the conversation in place
-            return prev.map((c) =>
-              c.id === updated.id
-                ? { ...c, status: updated.status, last_active: updated.last_active, domain_leader: updated.domain_leader, archived_at: updated.archived_at }
-                : c,
-            );
-          });
+          if (updated.visibility !== "workspace") return;
+          handleConversationUpdate(payload);
         },
       )
       .subscribe();
 
     return () => {
-      supabase.removeChannel(channel);
+      supabase.removeChannel(ownChannel);
+      supabase.removeChannel(sharedChannel);
     };
   }, [userId, workspaceId, archiveFilter]);
 

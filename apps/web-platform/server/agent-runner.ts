@@ -2370,13 +2370,15 @@ export async function sendUserMessage(
   // historical-grep stability. A cross-founder probe under tenant JWT
   // returns zero rows (silent RLS filter); the JWT-mint failure
   // upstream surfaces as RuntimeAuthError before this query.
-  // visibility-sweep: RLS conversations_owner_or_shared gates access
-  // to own + workspace-shared conversations; no app-level user_id filter.
+  // P1 review fix: restore user_id filter for sendMessage — only the
+  // conversation owner should drive agent sessions. Workspace members
+  // can READ shared conversations but not inject messages into them.
   const sendTenant = await getFreshTenantClient(userId);
   const { data: conv, error: convErr } = await sendTenant
     .from("conversations")
     .select("domain_leader, session_id")
     .eq("id", conversationId)
+    .eq("user_id", userId)
     .single();
 
   if (convErr || !conv) throw new Error(ERR_CONVERSATION_NOT_FOUND);

@@ -343,8 +343,9 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
   // anonymise_kb_files. user_id NULLABLE + SET NULL.
   kb_files:
     "Migration 077 table; DSAR export chain wired in PR-C Phase 4 " +
-    "(#4521). Art. 17: anonymise_kb_files. Promote to allowlist with " +
-    "export chain.",
+    "(#4521). Art. 17: user_id SET NULL via FK ON DELETE SET NULL " +
+    "(no dedicated anonymise RPC — FK cascade sufficient). Promote " +
+    "to allowlist with export chain.",
 };
 
 /**

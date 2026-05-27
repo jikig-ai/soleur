@@ -115,7 +115,13 @@ export async function inviteWorkspaceMember(
       p_event_type: "member_join",
       p_metadata: {},
     });
-  } catch {}
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "workspace-membership",
+      op: "emit-member-join-activity",
+      extra: { workspaceId: args.workspaceId, inviteeUserId },
+    });
+  }
 
   return { ok: true, attestationId: String(data) };
 }
@@ -319,7 +325,13 @@ export async function removeWorkspaceMember(
       p_event_type: "member_leave",
       p_metadata: {},
     });
-  } catch {}
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "workspace-membership",
+      op: "emit-member-leave-activity",
+      extra: { workspaceId: args.workspaceId, inviteeUserId: args.inviteeUserId },
+    });
+  }
 
   return { ok: true };
 }

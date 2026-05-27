@@ -43,20 +43,30 @@ REVOKE UPDATE(visibility) ON public.conversations FROM authenticated;
 
 DROP POLICY IF EXISTS conversations_workspace_member_all ON public.conversations;
 
--- Owner can always see their own conversations.
--- Workspace members can see conversations with visibility = 'workspace'.
--- FOR ALL covers SELECT, INSERT, UPDATE, DELETE.
--- INSERT WITH CHECK: workspace member can create conversations in shared workspace (Kieran M3: intentional).
-CREATE POLICY conversations_owner_or_shared ON public.conversations
-  FOR ALL TO authenticated
+-- P1 review fix: split into per-operation policies to prevent workspace
+-- members from mutating (UPDATE/DELETE) other users' shared conversations.
+-- SELECT: owner OR workspace-shared (dual-predicate).
+-- INSERT: owner only (user_id = auth.uid()) — prevents impersonation.
+-- UPDATE/DELETE: owner only — workspace members can READ but not MUTATE.
+CREATE POLICY conversations_owner_or_shared_select ON public.conversations
+  FOR SELECT TO authenticated
   USING (
     user_id = auth.uid()
     OR (visibility = 'workspace' AND public.is_workspace_member(workspace_id, auth.uid()))
-  )
-  WITH CHECK (
-    user_id = auth.uid()
-    OR (visibility = 'workspace' AND public.is_workspace_member(workspace_id, auth.uid()))
   );
+
+CREATE POLICY conversations_owner_insert ON public.conversations
+  FOR INSERT TO authenticated
+  WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY conversations_owner_update ON public.conversations
+  FOR UPDATE TO authenticated
+  USING (user_id = auth.uid())
+  WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY conversations_owner_delete ON public.conversations
+  FOR DELETE TO authenticated
+  USING (user_id = auth.uid());
 
 -- =====================================================================
 -- 4. SECURITY DEFINER RPC for visibility changes (owner-only)
