@@ -70,6 +70,7 @@ export default async function TeamMembershipPage() {
           workspaceId={data.workspaceId}
           isOwner={data.members.some((m) => m.userId === data.currentUserId && m.role === "owner")}
           byokDelegationsEnabled={data.byokDelegationsEnabled}
+          organizationName={data.organizationName}
         />
       </div>
 

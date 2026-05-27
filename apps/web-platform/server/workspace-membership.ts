@@ -303,3 +303,83 @@ export async function removeWorkspaceMember(
 
   return { ok: true };
 }
+
+export interface TransferWorkspaceOwnershipArgs {
+  callerUserId: string;
+  workspaceId: string;
+  newOwnerUserId: string;
+  attestationText: string;
+  organizationName?: string | null;
+}
+
+export type TransferResult =
+  | { ok: true; attestationId: string }
+  | { ok: false; reason: TransferFailureReason; detail?: string };
+
+export type TransferFailureReason =
+  | "self_transfer"
+  | "caller_not_owner"
+  | "target_not_member"
+  | "target_already_owner"
+  | "rpc_failed";
+
+export async function transferWorkspaceOwnership(
+  args: TransferWorkspaceOwnershipArgs,
+): Promise<TransferResult> {
+  if (args.callerUserId === args.newOwnerUserId) {
+    return { ok: false, reason: "self_transfer" };
+  }
+
+  const service = createServiceClient();
+  const { data, error } = await service.rpc("transfer_workspace_ownership", {
+    p_workspace_id: args.workspaceId,
+    p_new_owner_user_id: args.newOwnerUserId,
+    p_attestation_text: args.attestationText,
+  });
+
+  if (error) {
+    const msg = error.message ?? "";
+    if (msg.includes("cannot transfer ownership to self")) {
+      return { ok: false, reason: "self_transfer" };
+    }
+    if (msg.includes("caller is not an owner")) {
+      return { ok: false, reason: "caller_not_owner" };
+    }
+    if (msg.includes("target user is not a member")) {
+      return { ok: false, reason: "target_not_member" };
+    }
+    if (msg.includes("target user is already the owner")) {
+      return { ok: false, reason: "target_already_owner" };
+    }
+    return { ok: false, reason: "rpc_failed", detail: msg };
+  }
+
+  try {
+    abortAllWorkspaceMemberSessions(args.workspaceId, args.callerUserId);
+  } catch (abortErr) {
+    reportSilentFallback(abortErr, {
+      feature: "workspace-membership",
+      op: "abort-transferred-owner-sessions",
+      extra: { workspaceId: args.workspaceId, callerUserId: args.callerUserId },
+    });
+  }
+
+  try {
+    const session = sessions.get(args.callerUserId);
+    if (session) {
+      closeWithPreamble(session.ws, WS_CLOSE_CODES.MEMBERSHIP_REVOKED, {
+        type: "membership_revoked",
+        organizationName: args.organizationName ?? null,
+        workspaceId: args.workspaceId,
+      });
+    }
+  } catch (closeErr) {
+    reportSilentFallback(closeErr, {
+      feature: "workspace-membership",
+      op: "close-transferred-owner-socket",
+      extra: { workspaceId: args.workspaceId, callerUserId: args.callerUserId },
+    });
+  }
+
+  return { ok: true, attestationId: String(data) };
+}
