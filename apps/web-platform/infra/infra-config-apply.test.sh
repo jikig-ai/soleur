@@ -395,17 +395,7 @@ test_exit_trap_unhandled() {
   echo "TEST: EXIT trap — writes unhandled state on non-zero exit"
   setup
   export_valid_env_vars
-  # Force exit mid-script by making base64 unavailable after env validation
-  # Use a wrapper script that exits 1 after env validation passes
-  local wrapper="${TMPDIR_ROOT}/crash-wrapper.sh"
-  cat > "$wrapper" <<'WRAPPER'
-#!/usr/bin/env bash
-# Source handler in a subshell, inject an exit after env validation
-# by poisoning the PATH mid-script (remove base64 after first use)
-export CRASH_AFTER_VALIDATION=1
-WRAPPER
-  # Instead, directly test: set a required env var to valid base64 but make
-  # the dest dir read-only so mv fails, triggering a non-zero exit
+  # Make first dest dir read-only so mv fails, triggering set -e abort and EXIT trap
   chmod 000 "$TEST_DESTDIR/usr/local/bin"
 
   bash "$HANDLER" 2>/dev/null || true

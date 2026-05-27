@@ -125,12 +125,24 @@ if [[ "$FAIL_COUNT" -gt 0 ]]; then
 fi
 
 touch "${STATE_FILE}.final"
-state_tmp=$(mktemp "${STATE_FILE}.XXXXXX" 2>/dev/null) || true
+state_tmp=$(mktemp "${STATE_FILE}.XXXXXX" 2>/dev/null) || {
+  logger -t "$LOG_TAG" "write_state: mktemp failed for STATE_FILE=$STATE_FILE"
+  state_tmp=""
+}
 if [[ -n "${state_tmp:-}" ]]; then
   printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"files_written":%d,"files_failed":%d,"files":[%s]}\n' \
     "$START_TS" "$END_TS" "$EXIT_CODE" "$WRITTEN_COUNT" "$FAIL_COUNT" "$FILES_JSON" \
-    > "$state_tmp"
-  mv "$state_tmp" "$STATE_FILE"
+    > "$state_tmp" 2>/dev/null || {
+    logger -t "$LOG_TAG" "write_state: printf/redirect failed"
+    rm -f "$state_tmp"
+    state_tmp=""
+  }
+fi
+if [[ -n "${state_tmp:-}" ]]; then
+  mv "$state_tmp" "$STATE_FILE" 2>/dev/null || {
+    logger -t "$LOG_TAG" "write_state: mv failed"
+    rm -f "$state_tmp"
+  }
 fi
 
 # --- Post-write commands (skip in test mode) ---

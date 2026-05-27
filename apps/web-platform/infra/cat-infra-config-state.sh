@@ -11,7 +11,8 @@ STATE_FILE="${INFRA_CONFIG_STATE:-/var/lock/infra-config-apply.state}"
 
 if [[ ! -f "$STATE_FILE" ]]; then
   echo '{"exit_code":-2,"reason":"no_prior_apply"}'
-# jq -c . prints valid JSON to stdout — that IS the success path
-elif ! jq -c . "$STATE_FILE" 2>/dev/null; then
+elif output=$(jq -c . "$STATE_FILE" 2>/dev/null); then
+  printf '%s\n' "$output"
+else
   echo '{"exit_code":-3,"reason":"corrupt_state"}'
 fi
