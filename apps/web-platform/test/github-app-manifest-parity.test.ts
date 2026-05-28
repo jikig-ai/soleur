@@ -45,16 +45,22 @@ const EXPECTED_TF_SECRETS = [
 // live App already had but #4115 plan-time snapshot missed). Extended again
 // after PR #4226 AC9 enablement granted `issues`, `repository_advisories`,
 // and `secret_scanning_alerts` at `read` so PR-H #3244's `triage.p0p1_issue`
-// and `security.cve_alert` event routes can deliver. The drift-guard cron is
-// the runtime signal for divergence; this test catches an in-band manifest
-// mutation that adds an unexpected permission via a malicious or sloppy PR.
+// and `security.cve_alert` event routes can deliver. Updated again for #4189:
+// `issues` bumped read→write (restores the cron issue-filing trail — the
+// drift-guard + oauth-probe + stale-scope-out + community-monitor crons write
+// issues via the installation-scoped App token and 403'd silently under
+// `issues:read`), and `members` dropped (provably unused — workspace
+// membership reads Supabase `workspace_members`, not GitHub org membership;
+// the unused scope was the `installation_permission_drift` keeping #4189 open).
+// The drift-guard cron is the runtime signal for divergence; this test catches
+// an in-band manifest mutation that adds an unexpected permission via a
+// malicious or sloppy PR.
 const EXPECTED_PERMISSION_KEYS = [
   "actions",
   "administration",
   "checks",
   "contents",
   "issues",
-  "members",
   "metadata",
   "pull_requests",
   "repository_advisories",

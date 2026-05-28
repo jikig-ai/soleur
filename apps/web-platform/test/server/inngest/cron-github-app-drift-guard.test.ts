@@ -531,6 +531,78 @@ describe("cronGithubAppDriftGuardHandler — issue-filing branch", () => {
 });
 
 // ---------------------------------------------------------------------------
+// (d2) issue-write 403 discriminator — #4189
+// ---------------------------------------------------------------------------
+
+describe("cronGithubAppDriftGuardHandler — issue-write 403 discriminator", () => {
+  it("403 on POST /issues → reportSilentFallback op=issue_write_403, heartbeat still ?status=error", async () => {
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route === "GET /app") {
+        // app_id_mismatch → ci/auth-broken drift → handleFailureIssue runs.
+        return {
+          status: 200,
+          data: { id: 99999, client_id: "Iv23li9p88M5ZxYv1b7V" },
+          headers: {},
+        };
+      }
+      if (route === "GET /search/issues") return { data: { items: [] } };
+      if (route === "POST /repos/{owner}/{repo}/issues") {
+        const err = new Error(
+          "Resource not accessible by integration",
+        ) as Error & { status?: number };
+        err.status = 403;
+        throw err;
+      }
+      return { data: {} };
+    });
+    const { cronGithubAppDriftGuardHandler } = await importHandler();
+    const step = makeStep();
+    const out = await cronGithubAppDriftGuardHandler({ step, logger });
+    // The drift result still drives the heartbeat; the issue-write failure is
+    // isolated in its own step and does not change the heartbeat status.
+    expect(out.failureMode).toBe("app_id_mismatch");
+    const fetchSpy = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    expect(findHeartbeatStatus(fetchSpy)).toBe("error");
+    // The 403 is surfaced with the discriminating op so the operator can
+    // alert-route on the missing issues:write grant (#4189), and the operator
+    // dashboard message string is preserved verbatim.
+    const call = reportSilentFallbackSpy.mock.calls.find(
+      ([, ctx]) => (ctx as { op?: string })?.op === "issue_write_403",
+    );
+    expect(call).toBeDefined();
+    expect((call![1] as { message: string }).message).toBe(
+      "GitHub tracking-issue file/comment/close failed",
+    );
+  });
+
+  it("non-403 issue-write error preserves op=handleIssue", async () => {
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route === "GET /app") {
+        return {
+          status: 200,
+          data: { id: 99999, client_id: "Iv23li9p88M5ZxYv1b7V" },
+          headers: {},
+        };
+      }
+      if (route === "GET /search/issues") return { data: { items: [] } };
+      if (route === "POST /repos/{owner}/{repo}/issues") {
+        const err = new Error("Server error") as Error & { status?: number };
+        err.status = 500;
+        throw err;
+      }
+      return { data: {} };
+    });
+    const { cronGithubAppDriftGuardHandler } = await importHandler();
+    const step = makeStep();
+    await cronGithubAppDriftGuardHandler({ step, logger });
+    const call = reportSilentFallbackSpy.mock.calls.find(
+      ([, ctx]) => (ctx as { op?: string })?.op === "handleIssue",
+    );
+    expect(call).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // (e) Leak tripwire
 // ---------------------------------------------------------------------------
 

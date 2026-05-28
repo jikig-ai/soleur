@@ -76,7 +76,12 @@ integration` on any endpoint the new permission gates (e.g.,
 
 Procedure:
 
-1. Navigate to `https://github.com/organizations/jikig-ai/settings/installations/122213433`
+1. Navigate to `https://github.com/organizations/jikig-ai/settings/installations/130018654`
+   (the App was reinstalled; the current installation ID is `130018654`, was
+   `122213433`). Note: the #4189 fix widened `issues: read → write` — that
+   single re-consent click ALSO clears the dropped-`members:read` drift (a
+   manifest-LOWERED permission needs no re-grant; only manifest-RAISED
+   permissions like `issues:write` surface the banner).
 2. GitHub renders a "Soleur AI is requesting an update to its permissions"
    banner with a "Review request" link when any declared permission exceeds
    the installation's current grants. Click **Review request** then

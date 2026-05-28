@@ -423,6 +423,75 @@ describe("cronOauthProbeHandler — issue-filing branch", () => {
     expect(creates.length).toBe(0);
   });
 
+  it("403 on POST /issues → reportSilentFallback op=issue_write_403 (#4189)", async () => {
+    // Same blind spot as the drift-guard: createProbeOctokit() is
+    // installation-scoped and 403s on issue writes when the App lacks
+    // issues:write. The catch must discriminate the 403 so the operator can
+    // alert-route on the missing grant.
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route === "GET /search/issues") return { data: { items: [] } };
+      if (route === "POST /repos/{owner}/{repo}/issues") {
+        const err = new Error(
+          "Resource not accessible by integration",
+        ) as Error & { status?: number };
+        err.status = 403;
+        throw err;
+      }
+      return { data: {} };
+    });
+    // Trigger a failure (login_unreachable) so the issue-filing path runs.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : (input as URL).toString();
+        if (url === "https://app.soleur.ai/login")
+          return Promise.resolve(new Response("down", { status: 503 }));
+        return defaultFetch(input);
+      }),
+    );
+    const { cronOauthProbeHandler } = await importHandler();
+    const step = makeStep();
+    const out = await cronOauthProbeHandler({ step, logger });
+    expect(out.failureMode).toBe("login_unreachable");
+    const fetchSpy = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    expect(findHeartbeatStatus(fetchSpy)).toBe("error");
+    const call = reportSilentFallbackSpy.mock.calls.find(
+      ([, ctx]) => (ctx as { op?: string })?.op === "issue_write_403",
+    );
+    expect(call).toBeDefined();
+    expect((call![1] as { message: string }).message).toBe(
+      "GitHub tracking-issue file/comment/close failed",
+    );
+  });
+
+  it("non-403 issue-write error preserves op=handleTrackingIssue", async () => {
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route === "GET /search/issues") return { data: { items: [] } };
+      if (route === "POST /repos/{owner}/{repo}/issues") {
+        const err = new Error("Server error") as Error & { status?: number };
+        err.status = 500;
+        throw err;
+      }
+      return { data: {} };
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : (input as URL).toString();
+        if (url === "https://app.soleur.ai/login")
+          return Promise.resolve(new Response("down", { status: 503 }));
+        return defaultFetch(input);
+      }),
+    );
+    const { cronOauthProbeHandler } = await importHandler();
+    const step = makeStep();
+    await cronOauthProbeHandler({ step, logger });
+    const call = reportSilentFallbackSpy.mock.calls.find(
+      ([, ctx]) => (ctx as { op?: string })?.op === "handleTrackingIssue",
+    );
+    expect(call).toBeDefined();
+  });
+
   it("closes the stale tracking issue on probe-green recovery", async () => {
     octokitRequestSpy.mockImplementation(async (route: string) => {
       if (route === "GET /search/issues")

@@ -632,9 +632,17 @@ export async function cronOauthProbeHandler({
       });
     } catch (err) {
       const e = err as Error;
+      // Discriminate the issues:write-missing 403 so the operator can
+      // alert-route on it directly (see #4189). Same blind spot as the
+      // drift-guard: createProbeOctokit() is installation-scoped and 403s
+      // on issue writes when the App lacks issues:write.
+      const op =
+        (err as { status?: number }).status === 403
+          ? "issue_write_403"
+          : "handleTrackingIssue";
       reportSilentFallback(e, {
         feature: "cron-oauth-probe",
-        op: "handleTrackingIssue",
+        op,
         message: "GitHub tracking-issue file/comment/close failed",
         extra: { fn: "cron-oauth-probe", failureMode: result.failureMode },
       });

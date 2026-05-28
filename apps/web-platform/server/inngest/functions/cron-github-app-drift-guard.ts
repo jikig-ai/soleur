@@ -798,9 +798,18 @@ export async function cronGithubAppDriftGuardHandler({
         }
       }
     } catch (err) {
+      // Discriminate the issues:write-missing 403 so the operator can
+      // alert-route on it directly (see #4189). Read `.status` off the
+      // ORIGINAL octokit error BEFORE redactedError(err) — redactedError
+      // returns a fresh Error WITHOUT `.status` when the message matches the
+      // leak regex, which would silently defeat the discriminator.
+      const op =
+        (err as { status?: number }).status === 403
+          ? "issue_write_403"
+          : "handleIssue";
       reportSilentFallback(redactedError(err), {
         feature: "cron-github-app-drift-guard",
-        op: "handleIssue",
+        op,
         message: "GitHub tracking-issue file/comment/close failed",
         extra: {
           fn: "cron-github-app-drift-guard",
