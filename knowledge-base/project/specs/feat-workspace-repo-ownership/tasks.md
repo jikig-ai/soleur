@@ -90,7 +90,7 @@ plan: knowledge-base/project/plans/2026-05-28-feat-workspace-repo-ownership-plan
 
 - [x] 5.1 RLS tests DONE: `test/supabase-migrations/079-workspace-rls-isolation.test.ts` — 6 non-skipped shape tests pin (a) the 053 `workspaces_select_for_members` row policy + 079 not weakening it, and (b) the 079 column-level `REVOKE SELECT`/non-credential re-GRANT (github_installation_id excluded) + resolve RPC as the sole membership-checked reader (deny→NULL). Behavioral (a)/(b) assertions live in a `describe.skip` block (TENANT_INTEGRATION_TEST=1 + live DATABASE_URL_POOLER on a dedicated dev project; never shared dev). Column-exclusion assertion verified non-vacuous via negative probe (AC2/AC5)
 - [x] 5.2 Full suite green (575 files passed / 37 skipped; 7123 tests passed / 213 skipped / 1 todo; exit 0) + `tsc --noEmit` clean
-- [ ] 5.3 `/soleur:review` + QA before merge
+- [x] 5.3 `/soleur:review` (8 agents + semgrep + anti-slop + gdpr) + user-impact-reviewer (single-user-incident) DONE — findings fixed inline: (P2) disconnect credential-clear now fails closed on mirror failure (data-integrity + user-impact concurred); (P1 docs) Art-30 register prose drift D1 (no-op REVOKE literal) + D2 (081 mislabeled as read-cutover) corrected; drift gate extended to `github_installation_id`. 0 scope-out issues. `/soleur:qa`: Test Scenarios are integration-level prose (no executable Browser:/API steps) → covered by green vitest suite; authenticated J4/J5/J6 dashboard walkthrough NOT runnable autonomously (operator OAuth/OTP + migrations not on shared dev) — NOT claimed UI-verified, surfaced in ship summary.
 
 ## Phase 6: Decommission (separate PR, after prod soak — NOT this PR)
 
