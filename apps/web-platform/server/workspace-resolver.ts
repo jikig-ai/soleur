@@ -1,6 +1,14 @@
 import { join } from "path";
 import { reportSilentFallback } from "@/server/observability";
 
+// Pure JWT-claim readers live in the client-safe `@/lib/session-claims` module
+// (so "use client" components can read the active-workspace claim without
+// bundling pino). Re-exported here for server callers' import-site stability.
+export {
+  getCurrentOrganizationId,
+  getCurrentWorkspaceId,
+} from "@/lib/session-claims";
+
 // Resolver for user → current/default workspace mapping (feat-team-workspace-multi-user).
 //
 // Three lookups:
@@ -21,41 +29,6 @@ const WORKSPACES_ROOT_DEFAULT = "/workspaces";
 
 function getWorkspacesRoot(): string {
   return process.env.WORKSPACES_ROOT || WORKSPACES_ROOT_DEFAULT;
-}
-
-interface SessionLike {
-  user?: {
-    id?: string;
-    app_metadata?: {
-      current_organization_id?: string;
-      current_workspace_id?: string;
-    } & Record<string, unknown>;
-  };
-}
-
-/**
- * @deprecated Reads from `getUser().app_metadata` which returns the stored
- * `raw_app_meta_data` — the JWT hook's `current_organization_id` claim is
- * NOT persisted there. Use `resolveCurrentOrganizationId` instead.
- */
-export function getCurrentOrganizationId(
-  session: SessionLike | null | undefined,
-): string | null {
-  return session?.user?.app_metadata?.current_organization_id ?? null;
-}
-
-/**
- * Reads the JWT hook's `current_workspace_id` claim from a session ACCESS
- * TOKEN (ADR-044, migration 079). Unlike `getUser().app_metadata`
- * (`raw_app_meta_data`, no hook claims), the decoded access-token claims DO
- * carry hook injections — so the switcher reads the claim from the session
- * JWT, not `getUser()` (AC9). Returns null when the claim is absent (the
- * caller then falls back to the solo workspace via `resolveCurrentWorkspaceId`).
- */
-export function getCurrentWorkspaceId(
-  session: SessionLike | null | undefined,
-): string | null {
-  return session?.user?.app_metadata?.current_workspace_id ?? null;
 }
 
 /**
