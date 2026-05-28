@@ -43,7 +43,14 @@ plan: knowledge-base/project/plans/2026-05-28-feat-workspace-repo-ownership-plan
 
 > **RESUME POINT (2026-05-28, rev 2).** DB layer (079/080), resolver guard, AND the core read-cutover are done, tested, committed, pushed. Full web-platform suite GREEN (7083 passed). Design decision (operator-confirmed): read paths use INTERNAL active-workspace resolution from `user_session_state` (via new `resolveCurrentWorkspaceId`), NOT claim-threading through 18 sites — server-derived, satisfies AC5 IDOR intent, far lower blast radius. `getCurrentRepoUrl` + `resolveInstallationId` now read `workspaces` for the active workspace.
 >
-> REMAINING, in order:
+> **rev 3 (2026-05-28): push-path fan-out (item 1) + anonymise cascade (3.14) DONE & green.** Migrations 079/080/081 + resolver + read-cutover + push-path fan-out all committed/pushed; full suite green (7085+). Backend/DB/sync re-architecture core COMPLETE. Remaining is UI + connect-write-path sweep + legal + ship:
+> - **AC5 write-path sweep (3.5 cont.):** 10 direct `users.github_installation_id` reads remain. Triage: `repo/create:51` + `repo/setup:59` are CONNECT WRITE flows — post-cutover they must WRITE repo_url/installation to the active `workspaces` row (via a definer RPC or service write), not `users`. `repo/detect-installation:48`, `repo/repos:25`, `dashboard/today/.../undo:163`, `agent-runner:931`, `agent-on-spawn-requested:219`, `kb/sync:79` — route through `resolveInstallationId`/RPC. (users cols still authoritative until decommission, so these are not divergent — AC5→0 is the goal, not a correctness blocker.)
+> - **3.4 run-time 404 fail-loud (AC9):** sync entry path must fail loud on GitHub 404 / App-lost-access (getCurrentRepoUrl already re-reads workspaces fresh per call).
+> - **3.10 switcher write-path / 3.11 live-repo-badge.tsx / 3.13 J5 interstitial:** UI — needs browser testing (dev server). Use `getCurrentWorkspaceId(session)` (added) to read the claim; `set_current_workspace_id` RPC + refreshSession() (both shipped in 079). Wireframe badge/confirm delta first (.pen assets exist per Domain Review).
+> - **Phase 4 legal (4.1-4.3) + Phase 5 verification/review/ship.**
+>
+> --- superseded earlier steps (DONE) ---
+> REMAINING (historical, in order):
 > 1. **Push-path fan-out re-architecture (HIGHEST RISK — the #4543 sync path). MUST land atomically in ONE commit.** Operator decision (2026-05-28): readiness guard = **filesystem-existence check** (drop the `users.workspace_status` dependency entirely). Concrete steps:
 >    - (a) `isReconcilablePush` (`server/webhook-push-reconcilable.ts`): add `full_name?` to `ReconcilablePushBody.repository`; return `{ ok:false, reason:"missing-full-name" }` when absent (**fail-closed P0-2**); include `fullName` in the ok result. Update its test.
 >    - (b) `session-sync.ts:301` bump `WORKSPACE_RECONCILE_SCHEMA_V` `"1"→"2"`.
@@ -70,7 +77,7 @@ plan: knowledge-base/project/plans/2026-05-28-feat-workspace-repo-ownership-plan
 - [ ] 3.11 `live-repo-badge.tsx`: poll-on-mount "Working on: owner/repo"; renders J6 default landing
 - [ ] 3.12 Workspace-path resolution → active-workspace-relative (`workspace-resolver.ts`, `agent-runner.ts`)
 - [ ] 3.13 J5: revocation interstitial + `current_workspace_id` fallback to personal workspace
-- [ ] 3.14 Cascade: `anonymise_organization_membership` (or sibling) nulls `workspaces.github_installation_id`; `.down.sql` tested (AC11)
+- [x] 3.14 Cascade: migration **081** CREATE OR REPLACEs `anonymise_organization_membership` to null `workspaces.github_installation_id` (+ repo_status='not_connected', repo_last_synced_at=NULL) per owned org; preserves 078 owner-transfer; `.down.sql` reverts to 078 body; shape test + grants lint green (AC11, Art-17)
 
 ## Phase 4: Legal (parallel; TR8)
 
