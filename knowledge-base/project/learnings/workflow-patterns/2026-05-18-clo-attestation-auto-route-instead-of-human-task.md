@@ -49,7 +49,7 @@ Two coupled gaps:
 
 ## Resolution
 
-Two complementary changes (filed for follow-up — not landed in this session because the user prioritized shipping the in-flight §4.8 amendment first):
+> **UPDATE 2026-05-28 (PR for branch `legal-signoff-clo-routing`):** the operator hit this SAME class a third time on the #4558/#4564 counsel-review (a `single-user incident` legal-doc PR whose DRAFT-marker sign-off was framed as "a genuine human CLO/CPO step"). Root cause of the recurrence: Change 1 (below) covered the *post-merge follow-through* routing (`/soleur:go #N` → `clo` agent), but there was no *pre-merge* gate making the `clo` agent attest a legal-doc PR before merge — so it defaulted to human sign-off. **Now closed:** Change 1 is landed (`commands/go.md` `clo-attestation` row + `clo_routable`), AND a new **ship Phase 5.5 *Counsel-Review CLO-Attestation Gate*** invokes the `clo` agent inline for `single-user incident` legal-doc PRs (CLO attests + optional operator veto; external counsel reserved for re-evaluation triggers). The `clo` agent spec (`agents/legal/clo.md` Sharp Edges) now names it as the v1 attestation authority. The original two changes follow for history:
 
 ### Change 1: `/soleur:go` classification table
 
