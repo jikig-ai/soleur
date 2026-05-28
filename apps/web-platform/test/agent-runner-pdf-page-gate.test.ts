@@ -19,9 +19,10 @@ import { vi, describe, test, expect, beforeEach } from "vitest";
 process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
 process.env.NEXT_PUBLIC_APP_URL ??= "https://app.soleur.ai";
 
-const { mockFrom, mockQuery, mockReadFileSync, resolveLeaderDocumentContextSpy } = vi.hoisted(
+const { mockFrom, mockRpc, mockQuery, mockReadFileSync, resolveLeaderDocumentContextSpy } = vi.hoisted(
   () => ({
     mockFrom: vi.fn(),
+    mockRpc: vi.fn(),
     mockQuery: vi.fn(),
     mockReadFileSync: vi.fn(),
     resolveLeaderDocumentContextSpy: vi.fn(),
@@ -53,7 +54,7 @@ vi.mock("@supabase/supabase-js", () => ({
 }));
 
 vi.mock("@/lib/supabase/tenant", () => ({
-  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom, rpc: vi.fn() })),
+  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom, rpc: mockRpc })),
   mintFounderJwt: vi.fn(),
   RuntimeAuthError: class RuntimeAuthError extends Error {
     cause: string;
@@ -148,7 +149,7 @@ const BASE_USER_DATA = {
 };
 
 function setupSupabaseMock() {
-  createSupabaseMockImpl(mockFrom, { userData: BASE_USER_DATA });
+  createSupabaseMockImpl(mockFrom, { userData: BASE_USER_DATA, mockRpc });
 }
 
 function setupQueryMock() {

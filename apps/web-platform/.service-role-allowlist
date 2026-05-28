@@ -227,7 +227,20 @@ apps/web-platform/server/byok-resolver.ts
 # workspace_member_attestations, migration 058 line 133).
 apps/web-platform/server/workspace-invitations.ts
 
-# #4543 — resolve installation ID via workspace-sibling lookup when the
-# user's own github_installation_id is NULL. Service-role bypasses the
-# users-table RLS (auth.uid() = id) to read sibling user rows.
-apps/web-platform/server/resolve-installation-id.ts
+# #4558 (ADR-044) — workspace-reconcile-on-push.ts fans a GitHub push
+# webhook out to EVERY workspace matching (github_installation_id,
+# normalizeRepoUrl(full_name)) and writes owner-attributed kb_sync_history
+# rows. The fan-out is inherently cross-tenant (one shared repo/fork
+# legitimately reconciles into multiple connected workspaces), so a per-user
+# tenant client is structurally inapplicable — the Inngest event is signed by
+# INNGEST_SIGNING_KEY with no user JWT in scope, and the match set spans
+# tenants by design. Match precision is enforced by the (installation_id,
+# repo_url) AND-filter plus the TS<->SQL normalizeRepoUrl parity gate (the
+# sole cross-tenant matching contract per ADR-044, hard merge gate AC7).
+apps/web-platform/server/inngest/functions/workspace-reconcile-on-push.ts
+
+# resolve-installation-id.ts was REMOVED from this allowlist in PR #4559
+# (#4558): the #4543 workspace-sibling lookup + the .ilike("repo_url") LIKE
+# fallback were deleted; it now reads the credential ONLY via the membership-
+# checked resolve_workspace_installation_id SECURITY DEFINER RPC through a
+# tenant client (getFreshTenantClient), so it no longer imports service-role.

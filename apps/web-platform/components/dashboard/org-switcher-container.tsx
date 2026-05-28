@@ -3,21 +3,33 @@
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { OrgSwitcher } from "@/components/dashboard/org-switcher";
+import { getCurrentWorkspaceId } from "@/lib/session-claims";
 import type { OrgMembershipSummary } from "@/server/org-memberships-resolver";
 
-// Container pairs OrgSwitcher (pure UI) with the runtime data plumbing:
-//   - on mount: GET /api/workspace/list-memberships
-//   - on switch: POST /api/workspace/set-current-organization, then call
-//     supabase.auth.refreshSession() so the JWT custom claim (migration 060)
-//     re-mints with the new app_metadata.current_organization_id, then reload
-//     so server components re-render against the new claim.
+// Container pairs OrgSwitcher (pure UI) with the runtime data plumbing.
+//
+// ADR-044 (#4543): the switch is now WORKSPACE-grain. Confirming a switch calls
+// the membership-checked `set_current_workspace_id` RPC (migration 079), which
+// writes BOTH current_workspace_id and current_organization_id to
+// user_session_state, then `refreshSession()` re-mints the JWT so the hook
+// claims propagate, then reload so server components re-render against the new
+// active workspace's repo.
+//
+// The claim is read back from the SESSION JWT via getCurrentWorkspaceId(session)
+// — NOT getUser(), whose raw_app_meta_data omits hook-injected claims
+// (2026-05-27 learning). The confirm + status chain (switching → syncing →
+// failed/retry) is inlined here, not split into a separate component (DHH).
 //
 // AC-C is enforced by OrgSwitcher itself (returns null when count <= 1). Until
 // the fetch resolves we render null too — no spinner — so the chip never
 // "flashes in then out" for solo users.
 
+type SwitchStatus = "idle" | "switching" | "syncing" | "failed";
+
 export function OrgSwitcherContainer() {
   const [memberships, setMemberships] = useState<OrgMembershipSummary[] | null>(null);
+  const [pending, setPending] = useState<OrgMembershipSummary | null>(null);
+  const [status, setStatus] = useState<SwitchStatus>("idle");
 
   useEffect(() => {
     let cancelled = false;
@@ -27,9 +39,8 @@ export function OrgSwitcherContainer() {
         if (!cancelled) setMemberships(json.memberships);
       })
       .catch(() => {
-        // Silent failure — the chip stays hidden. Sentry-side breadcrumb is
-        // not added here because a transient 5xx from the API would otherwise
-        // alarm on every page load for solo users.
+        // Silent failure — the chip stays hidden. No Sentry breadcrumb: a
+        // transient 5xx would otherwise alarm on every page load for solo users.
         if (!cancelled) setMemberships([]);
       });
     return () => {
@@ -37,26 +48,59 @@ export function OrgSwitcherContainer() {
     };
   }, []);
 
-  const handleSwitch = useCallback(async (organizationId: string) => {
-    const res = await fetch("/api/workspace/set-current-organization", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ organizationId }),
+  // Step 1: a row click arms the confirm step (confirm-then-switch). The target
+  // is resolved to a full membership so we have the workspaceId for the RPC.
+  const handleSelect = useCallback(
+    (organizationId: string) => {
+      const target = memberships?.find((m) => m.organizationId === organizationId);
+      if (!target || target.isCurrent) return;
+      setPending(target);
+      setStatus("idle");
+    },
+    [memberships],
+  );
+
+  // Step 2: confirm executes the workspace switch + JWT refresh, then reloads.
+  const executeSwitch = useCallback(async (target: OrgMembershipSummary) => {
+    setStatus("switching");
+    const supabase = createClient();
+    const { error } = await supabase.rpc("set_current_workspace_id", {
+      p_workspace_id: target.workspaceId,
     });
-    if (!res.ok) {
-      console.error("[org-switcher] set-current-organization failed:", res.status);
-      window.alert("Failed to switch workspace. Please try again.");
+    if (error) {
+      console.error("[workspace-switch] set_current_workspace_id failed:", error);
+      setStatus("failed");
       return;
     }
-    // Force JWT custom-claim refresh so all tabs pick up the new
-    // app_metadata.current_organization_id within ~1s (AC-FLOW3).
+    setStatus("syncing");
     try {
-      const supabase = createClient();
-      await supabase.auth.refreshSession();
+      const { data } = await supabase.auth.refreshSession();
+      // AC9: verify the active-workspace claim from the SESSION JWT (hook
+      // claims live in the decoded access token, not getUser()'s
+      // raw_app_meta_data). A mismatch is logged but non-fatal — the source of
+      // truth (user_session_state) is already written, and the reload re-reads
+      // it server-side.
+      const claimed = getCurrentWorkspaceId(data.session);
+      if (claimed !== target.workspaceId) {
+        console.warn(
+          "[workspace-switch] claim not yet propagated to JWT; reloading anyway",
+        );
+      }
     } catch (err) {
-      console.error("[org-switcher] refreshSession failed:", err);
+      console.error("[workspace-switch] refreshSession failed:", err);
+      setStatus("failed");
+      return;
     }
     window.location.reload();
+  }, []);
+
+  const handleConfirm = useCallback(() => {
+    if (pending) void executeSwitch(pending);
+  }, [pending, executeSwitch]);
+
+  const handleCancel = useCallback(() => {
+    setPending(null);
+    setStatus("idle");
   }, []);
 
   if (memberships === null) return null;
@@ -64,9 +108,78 @@ export function OrgSwitcherContainer() {
   // padding — so the dashboard chrome is indistinguishable from before
   // multi-tenant support landed.
   if (memberships.length <= 1) return null;
+
   return (
     <div className="border-b border-soleur-border-default px-3 py-3">
-      <OrgSwitcher memberships={memberships} onSwitch={handleSwitch} />
+      <OrgSwitcher memberships={memberships} onSwitch={handleSelect} />
+
+      {pending && (
+        <div
+          data-testid="workspace-switch-confirm"
+          role="dialog"
+          aria-label="Confirm workspace switch"
+          className="mt-3 rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 p-3 text-sm"
+        >
+          {status === "failed" ? (
+            <>
+              <p className="text-soleur-text-primary">
+                Couldn&apos;t switch to{" "}
+                <span className="font-medium">{pending.organizationName}</span>.
+                Please try again.
+              </p>
+              <div className="mt-3 flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleConfirm}
+                  className="rounded-md bg-soleur-accent-gold-fg/80 px-3 py-1.5 font-medium text-soleur-text-primary hover:bg-soleur-accent-gold-fg"
+                >
+                  Retry
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCancel}
+                  className="rounded-md border border-soleur-border-default px-3 py-1.5 text-soleur-text-muted hover:text-soleur-text-primary"
+                >
+                  Cancel
+                </button>
+              </div>
+            </>
+          ) : status === "switching" || status === "syncing" ? (
+            <p
+              data-testid="workspace-switch-status"
+              className="text-soleur-text-muted"
+            >
+              {status === "switching"
+                ? `Switching to ${pending.organizationName}…`
+                : `Syncing ${pending.organizationName}…`}
+            </p>
+          ) : (
+            <>
+              <p className="text-soleur-text-primary">
+                Switch to{" "}
+                <span className="font-medium">{pending.organizationName}</span>?
+                Your agents will run against that workspace&apos;s repo.
+              </p>
+              <div className="mt-3 flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleConfirm}
+                  className="rounded-md bg-soleur-accent-gold-fg/80 px-3 py-1.5 font-medium text-soleur-text-primary hover:bg-soleur-accent-gold-fg"
+                >
+                  Confirm
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCancel}
+                  className="rounded-md border border-soleur-border-default px-3 py-1.5 text-soleur-text-muted hover:text-soleur-text-primary"
+                >
+                  Cancel
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

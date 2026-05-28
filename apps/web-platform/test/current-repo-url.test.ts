@@ -1,0 +1,98 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { mockQueryChain } from "./helpers/mock-supabase";
+
+// ADR-044 read-cutover: getCurrentRepoUrl now reads workspaces.repo_url for
+// the caller's ACTIVE workspace (resolved internally from
+// user_session_state, fallback solo = userId), NOT users.repo_url. Reads
+// come from `workspaces` only — no users fallback (dual-ownership trap).
+
+const { mockFrom } = vi.hoisted(() => ({ mockFrom: vi.fn() }));
+
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom })),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
+}));
+
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: vi.fn(),
+}));
+
+const { mockResolveWs } = vi.hoisted(() => ({ mockResolveWs: vi.fn() }));
+vi.mock("@/server/workspace-resolver", () => ({
+  resolveCurrentWorkspaceId: mockResolveWs,
+}));
+
+describe("getCurrentRepoUrl (workspace read-cutover)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveWs.mockImplementation(async (userId: string) => userId);
+  });
+
+  it("reads workspaces.repo_url for the internally-resolved active workspace", async () => {
+    mockResolveWs.mockResolvedValueOnce("ws-active");
+    const chain = mockQueryChain({ repo_url: "https://github.com/foo/bar" });
+    mockFrom.mockReturnValue(chain);
+
+    const { getCurrentRepoUrl } = await import("@/server/current-repo-url");
+    const result = await getCurrentRepoUrl("user-1");
+
+    expect(result).toBe("https://github.com/foo/bar");
+    expect(mockFrom).toHaveBeenCalledWith("workspaces");
+    expect(chain.eq).toHaveBeenCalledWith("id", "ws-active");
+  });
+
+  it("normalizes the stored repo_url on return", async () => {
+    const chain = mockQueryChain({ repo_url: "HTTPS://GitHub.com/Foo/Bar.git/" });
+    mockFrom.mockReturnValue(chain);
+
+    const { getCurrentRepoUrl } = await import("@/server/current-repo-url");
+    expect(await getCurrentRepoUrl("user-1")).toBe("https://github.com/Foo/Bar");
+  });
+
+  it("an explicit workspaceId override bypasses internal resolution", async () => {
+    const chain = mockQueryChain({ repo_url: "https://github.com/x/y" });
+    mockFrom.mockReturnValue(chain);
+
+    const { getCurrentRepoUrl } = await import("@/server/current-repo-url");
+    await getCurrentRepoUrl("user-1", "ws-explicit");
+
+    expect(mockResolveWs).not.toHaveBeenCalled();
+    expect(chain.eq).toHaveBeenCalledWith("id", "ws-explicit");
+  });
+
+  it("returns null when the active workspace has no repo", async () => {
+    mockFrom.mockReturnValue(mockQueryChain({ repo_url: null }));
+    const { getCurrentRepoUrl } = await import("@/server/current-repo-url");
+    expect(await getCurrentRepoUrl("user-1")).toBeNull();
+  });
+
+  it("returns null and reports fallback on a transient DB error", async () => {
+    const { reportSilentFallback } = await import("@/server/observability");
+    mockFrom.mockReturnValue(mockQueryChain(null, { message: "boom" }));
+
+    const { getCurrentRepoUrl } = await import("@/server/current-repo-url");
+    expect(await getCurrentRepoUrl("user-1")).toBeNull();
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ feature: "repo-scope" }),
+    );
+  });
+
+  it("returns null on RuntimeAuthError from tenant mint", async () => {
+    const { RuntimeAuthError, getFreshTenantClient } = await import(
+      "@/lib/supabase/tenant"
+    );
+    vi.mocked(getFreshTenantClient).mockRejectedValueOnce(
+      new RuntimeAuthError("jwt_mint", "expired"),
+    );
+    const { getCurrentRepoUrl } = await import("@/server/current-repo-url");
+    expect(await getCurrentRepoUrl("user-1")).toBeNull();
+  });
+
+  it("never reads the users table (no dual-ownership fallback)", async () => {
+    mockFrom.mockReturnValue(mockQueryChain({ repo_url: "https://github.com/a/b" }));
+    const { getCurrentRepoUrl } = await import("@/server/current-repo-url");
+    await getCurrentRepoUrl("user-1");
+    expect(mockFrom).not.toHaveBeenCalledWith("users");
+  });
+});

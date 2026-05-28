@@ -197,7 +197,7 @@ export async function POST(request: Request) {
     ref?: string;
     before?: string;
     after?: string;
-    repository?: { default_branch?: string };
+    repository?: { default_branch?: string; full_name?: string };
   };
   try {
     body = JSON.parse(rawBody);
@@ -296,6 +296,10 @@ export async function POST(request: Request) {
               defaultBranch: reconcilable.defaultBranch,
               headSha: reconcilable.headSha,
               beforeSha: reconcilable.beforeSha,
+              // ADR-044: bare owner/repo slug. The reconcile composes
+              // https://github.com/<fullName> and matches workspaces by
+              // normalized repo_url (fan-out). v=2 (SCHEMA_V).
+              fullName: reconcilable.fullName,
               pushReceivedAt: Date.now(),
             },
           }),

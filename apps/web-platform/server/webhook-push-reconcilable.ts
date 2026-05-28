@@ -12,11 +12,17 @@ export type ReconcilablePushBody = {
   ref?: string;
   before?: string;
   after?: string;
-  repository?: { default_branch?: string };
+  repository?: { default_branch?: string; full_name?: string };
 };
 
 export type ReconcilablePushResult =
-  | { ok: true; defaultBranch: string; headSha: string; beforeSha: string }
+  | {
+      ok: true;
+      defaultBranch: string;
+      headSha: string;
+      beforeSha: string;
+      fullName: string;
+    }
   | { ok: false; reason: string };
 
 export function isReconcilablePush(
@@ -38,6 +44,14 @@ export function isReconcilablePush(
   if (typeof after !== "string" || after === SHA_ZEROS) {
     return { ok: false, reason: "branch-deletion-or-missing-after" };
   }
+  // Fail-closed (ADR-044 P0-2): repository.full_name is the bare owner/repo
+  // slug the reconcile composes into a URL to match workspaces by repo.
+  // Absent → skip; NEVER fall back to an installation-id-only match (which
+  // would mis-route a 1:N installation across distinct workspaces).
+  const fullName = body.repository?.full_name;
+  if (typeof fullName !== "string" || fullName.length === 0) {
+    return { ok: false, reason: "missing-full-name" };
+  }
   const before = typeof body.before === "string" ? body.before : SHA_ZEROS;
-  return { ok: true, defaultBranch, headSha: after, beforeSha: before };
+  return { ok: true, defaultBranch, headSha: after, beforeSha: before, fullName };
 }

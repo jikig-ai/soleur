@@ -73,8 +73,14 @@ function setupUserMocks(opts: {
   repoStatus?: string;
   selectError?: { message: string } | null;
   updateError?: { message: string } | null;
+  mirrorError?: { message: string } | null;
 }) {
-  const { repoStatus = "ready", selectError = null, updateError = null } = opts;
+  const {
+    repoStatus = "ready",
+    selectError = null,
+    updateError = null,
+    mirrorError = null,
+  } = opts;
 
   const selectChain = mockQueryChain(
     selectError ? null : { repo_status: repoStatus },
@@ -87,6 +93,10 @@ function setupUserMocks(opts: {
   mockFrom.mockImplementation((table: string) => {
     if (table === "users") {
       return { select: selectChain.select, update: mockUpdate };
+    }
+    // ADR-044: workspaces mirror write (mirrorRepoColsToSoloWorkspace).
+    if (table === "workspaces") {
+      return { update: () => ({ eq: async () => ({ error: mirrorError }) }) };
     }
     return {};
   });
@@ -204,6 +214,21 @@ describe("DELETE /api/repo/disconnect", () => {
   test("returns 500 when database update fails", async () => {
     mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
     setupUserMocks({ repoStatus: "ready", updateError: { message: "constraint violation" } });
+
+    const res = await DELETE(makeRequest());
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error).toMatch(/failed to disconnect/i);
+  });
+
+  test("returns 500 when the workspaces mirror fails (credential-clear fails closed, ADR-044)", async () => {
+    // The read path is workspaces-only; a silently-failed disconnect mirror
+    // would leave github_installation_id + repo_url live. Disconnect must fail
+    // closed so the (idempotent) operation is retried rather than reporting a
+    // disconnect that left the credential readable.
+    mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
+    setupUserMocks({ repoStatus: "ready", mirrorError: { message: "mirror write failed" } });
+    mockDeleteWorkspace.mockResolvedValue(undefined);
 
     const res = await DELETE(makeRequest());
     expect(res.status).toBe(500);

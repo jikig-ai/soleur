@@ -3,11 +3,15 @@
 import { useCallback, useEffect, useState } from "react";
 
 const ATTESTATION_TEXT =
-  "I confirm this member is my employee or contractor under written agreement.";
+  "I confirm this member is my employee or contractor under written agreement, and I consent to them accessing this workspace's connected repository and knowledge-base.";
 
 // AC-LEGAL-FLIP gate: the wireframe attestation text is the dogfood-acceptable
 // shape. CLO recommended a softer revision pre-external-team — tracked on the
-// parallel legal PR (feat-team-workspace-legal-scaffolding).
+// parallel legal PR (feat-team-workspace-legal-scaffolding). The repo/KB-access
+// consent clause is the Art. 6(1)(a) lawful basis for a Co-Member's access to
+// the workspace owner's connected repository + derived KB post-ADR-044 (#4558);
+// it is the migration-058 workspace_member_attestations consent of record.
+// DRAFT consent copy — pending CLO/counsel review per #4558.
 
 export function InviteMemberModal({
   open,

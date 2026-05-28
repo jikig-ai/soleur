@@ -11,6 +11,7 @@ import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { SignOutConfirmModal } from "@/components/auth/sign-out-confirm-modal";
 import { useSignOut } from "@/components/auth/use-sign-out";
 import { OrgSwitcherContainer } from "@/components/dashboard/org-switcher-container";
+import { LiveRepoBadge } from "@/components/dashboard/live-repo-badge";
 import { MembershipRevokedScreen } from "@/components/dashboard/membership-revoked-screen";
 
 const BANNER_DISMISS_KEY = "soleur:past_due_banner_dismissed";
@@ -276,6 +277,15 @@ export default function DashboardLayout({
             collapsed (the chip's value is the workspace name; truncating to
             an icon defeats the purpose). */}
         {!collapsed && <OrgSwitcherContainer />}
+
+        {/* Live-repo badge — "Working on: owner/repo" for the ACTIVE workspace
+            (ADR-044, #4543). Poll-on-mount/focus; surfaces the J5 revocation
+            interstitial when access is lost. Hidden when collapsed. */}
+        {!collapsed && (
+          <div className="border-b border-soleur-border-default px-3 py-2">
+            <LiveRepoBadge />
+          </div>
+        )}
 
         {/* Navigation */}
         <nav className={`flex-1 space-y-1 pt-3 ${collapsed ? "px-1" : "px-3"}`}>

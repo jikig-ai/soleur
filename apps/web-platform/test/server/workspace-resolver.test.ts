@@ -2,11 +2,17 @@ import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "crypto";
 import {
   getCurrentOrganizationId,
+  getCurrentWorkspaceId,
   resolveCurrentOrganizationId,
+  resolveCurrentWorkspaceId,
   getDefaultWorkspaceForUser,
   resolveWorkspacePathForUser,
 } from "@/server/workspace-resolver";
 import { mockQueryChain } from "../helpers/mock-supabase";
+
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: vi.fn(),
+}));
 
 // Build a minimal supabase-shape stub that returns `chain` for every `.from(table)` call.
 function supabaseFor(chain: unknown) {
@@ -59,6 +65,56 @@ describe("workspace-resolver: resolveCurrentOrganizationId", () => {
     const result = await resolveCurrentOrganizationId(userId, supabase);
 
     expect(result).toBeNull();
+  });
+});
+
+describe("workspace-resolver: getCurrentWorkspaceId (AC9 — read claim from session JWT)", () => {
+  it("returns app_metadata.current_workspace_id from the session access token", () => {
+    const wsId = randomUUID();
+    const session = {
+      user: { id: randomUUID(), app_metadata: { current_workspace_id: wsId } },
+    };
+    expect(getCurrentWorkspaceId(session)).toBe(wsId);
+  });
+
+  it("returns null when the claim is absent (caller falls back to solo)", () => {
+    expect(getCurrentWorkspaceId({ user: { id: randomUUID(), app_metadata: {} } })).toBeNull();
+    expect(getCurrentWorkspaceId(null)).toBeNull();
+    expect(getCurrentWorkspaceId(undefined)).toBeNull();
+  });
+});
+
+describe("workspace-resolver: resolveCurrentWorkspaceId (solo fallback, never sibling)", () => {
+  it("returns current_workspace_id from user_session_state", async () => {
+    const userId = randomUUID();
+    const wsId = randomUUID();
+    const supabase = supabaseFor(mockQueryChain({ current_workspace_id: wsId }));
+
+    const result = await resolveCurrentWorkspaceId(userId, supabase);
+
+    expect(result).toBe(wsId);
+    expect(supabase.from).toHaveBeenCalledWith("user_session_state");
+  });
+
+  it("falls back to the SOLO workspace (= userId) when the claim is null", async () => {
+    const userId = randomUUID();
+    const supabase = supabaseFor(mockQueryChain({ current_workspace_id: null }));
+
+    expect(await resolveCurrentWorkspaceId(userId, supabase)).toBe(userId);
+  });
+
+  it("falls back to the SOLO workspace when no session_state row exists", async () => {
+    const userId = randomUUID();
+    const supabase = supabaseFor(mockQueryChain(null));
+
+    expect(await resolveCurrentWorkspaceId(userId, supabase)).toBe(userId);
+  });
+
+  it("falls back to the SOLO workspace on transient error (never a sibling)", async () => {
+    const userId = randomUUID();
+    const supabase = supabaseFor(mockQueryChain(null, { message: "boom" }));
+
+    expect(await resolveCurrentWorkspaceId(userId, supabase)).toBe(userId);
   });
 });
 

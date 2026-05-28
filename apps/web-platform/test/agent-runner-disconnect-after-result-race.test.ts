@@ -230,6 +230,28 @@ function setupSupabaseMock(): { updates: UpdateRecord[] } {
         }),
       };
     }
+    if (table === "workspaces") {
+      // ADR-044 read-cutover: getCurrentRepoUrl reads workspaces.repo_url.
+      return {
+        select: () => ({
+          eq: () => ({
+            single: () => ({ data: { repo_url: null }, error: null }),
+            maybeSingle: () => ({ data: { repo_url: null }, error: null }),
+          }),
+        }),
+      };
+    }
+    if (table === "user_session_state") {
+      // resolveCurrentWorkspaceId: null claim → solo workspace fallback.
+      return {
+        select: () => ({
+          eq: () => ({
+            single: () => ({ data: { current_workspace_id: null }, error: null }),
+            maybeSingle: () => ({ data: { current_workspace_id: null }, error: null }),
+          }),
+        }),
+      };
+    }
     if (table === "conversations") {
       return {
         update: vi.fn((patch: Record<string, unknown>) => {

@@ -1,6 +1,14 @@
 import { join } from "path";
 import { reportSilentFallback } from "@/server/observability";
 
+// Pure JWT-claim readers live in the client-safe `@/lib/session-claims` module
+// (so "use client" components can read the active-workspace claim without
+// bundling pino). Re-exported here for server callers' import-site stability.
+export {
+  getCurrentOrganizationId,
+  getCurrentWorkspaceId,
+} from "@/lib/session-claims";
+
 // Resolver for user → current/default workspace mapping (feat-team-workspace-multi-user).
 //
 // Three lookups:
@@ -21,27 +29,6 @@ const WORKSPACES_ROOT_DEFAULT = "/workspaces";
 
 function getWorkspacesRoot(): string {
   return process.env.WORKSPACES_ROOT || WORKSPACES_ROOT_DEFAULT;
-}
-
-interface SessionLike {
-  user?: {
-    id?: string;
-    app_metadata?: { current_organization_id?: string } & Record<
-      string,
-      unknown
-    >;
-  };
-}
-
-/**
- * @deprecated Reads from `getUser().app_metadata` which returns the stored
- * `raw_app_meta_data` — the JWT hook's `current_organization_id` claim is
- * NOT persisted there. Use `resolveCurrentOrganizationId` instead.
- */
-export function getCurrentOrganizationId(
-  session: SessionLike | null | undefined,
-): string | null {
-  return session?.user?.app_metadata?.current_organization_id ?? null;
 }
 
 /**
@@ -90,6 +77,48 @@ export async function resolveCurrentOrganizationId(
 // full `SupabaseClient<Database>` generic into the resolver signature.
 interface SupabaseLike {
   from: (table: string) => unknown;
+}
+
+/**
+ * Resolve the user's CURRENT workspace id from `user_session_state`
+ * (ADR-044). Source-of-truth read (preferred over the JWT claim, which can
+ * be stale on an un-refreshed session). Falls back to the user's SOLO
+ * workspace (`= userId` per ADR-038 N2) when the claim is null/absent or on
+ * transient error — NEVER an arbitrary sibling workspace (the cross-tenant
+ * read this whole feature is designed to prevent). Always returns a
+ * workspace id; never null.
+ *
+ * RLS: `user_session_state_owner_select` allows `auth.uid() = user_id`, so a
+ * tenant client reads only its own row.
+ */
+export async function resolveCurrentWorkspaceId(
+  userId: string,
+  supabase: SupabaseLike,
+): Promise<string> {
+  type ChainShape = {
+    select: (cols: string) => ChainShape;
+    eq: (col: string, val: string) => ChainShape;
+    maybeSingle: () => ChainShape;
+  } & PromiseLike<{
+    data: { current_workspace_id: string | null } | null;
+    error: unknown;
+  }>;
+
+  const chain = supabase.from("user_session_state") as ChainShape;
+  const result = await awaitChain<{
+    data: { current_workspace_id: string | null } | null;
+    error: unknown;
+  }>(chain.select("current_workspace_id").eq("user_id", userId).maybeSingle());
+
+  if (result.error) {
+    reportSilentFallback(result.error, {
+      feature: "workspace-resolver",
+      op: "resolveCurrentWorkspaceId",
+      extra: { userId },
+    });
+    return userId; // fail to solo workspace, never a sibling
+  }
+  return result.data?.current_workspace_id ?? userId;
 }
 
 interface WorkspaceMemberRow {
@@ -223,5 +252,16 @@ export async function resolveWorkspacePathForUser(
   supabase: SupabaseLike,
 ): Promise<string> {
   const workspaceId = await getDefaultWorkspaceForUser(userId, supabase);
+  return join(getWorkspacesRoot(), workspaceId);
+}
+
+/**
+ * Filesystem path for a workspace id: `<WORKSPACES_ROOT>/<workspace_id>`
+ * (ADR-038 bwrap mount). Used by the push-reconcile fan-out (ADR-044) to
+ * locate each matching workspace's directory directly from its id — no
+ * `users.workspace_path` lookup. For backfilled solo workspaces this equals
+ * the legacy `<WORKSPACES_ROOT>/<user_id>` path (N2: workspace_id == user_id).
+ */
+export function workspacePathForWorkspaceId(workspaceId: string): string {
   return join(getWorkspacesRoot(), workspaceId);
 }

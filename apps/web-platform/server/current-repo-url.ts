@@ -4,32 +4,32 @@ import {
 } from "@/lib/supabase/tenant";
 import { normalizeRepoUrl } from "@/lib/repo-url";
 import { reportSilentFallback } from "@/server/observability";
+import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 
 /**
- * Read the authenticated user's CURRENT `users.repo_url`.
+ * Read the repo URL of the authenticated user's CURRENT (active) workspace.
  *
- * Collapses the pattern that otherwise repeats across every caller of
- * `lookupConversationForPath` + `ws-handler.createConversation` +
- * Command Center consumers. Centralizing the read keeps three things
- * consistent:
+ * Post-ADR-044 read-cutover: the source of truth is `workspaces.repo_url`,
+ * NOT `users.repo_url`. The active workspace is resolved INTERNALLY from
+ * `user_session_state.current_workspace_id` (server-derived from the
+ * authenticated user — never from `req.body`/`req.query`, so no IDOR), and
+ * an explicit `workspaceId` may be passed to override (e.g. by callers that
+ * already hold a verified workspace context). A null/absent claim falls
+ * back to the caller's SOLO workspace (`= userId`), never a sibling. Reads
+ * come from `workspaces` ONLY — no `users.repo_url` fallback — to avoid the
+ * dual-ownership divergence trap.
  *
- *   - Error handling: transient DB errors are mirrored to Sentry via
- *     `reportSilentFallback` (rule `cq-silent-fallback-must-mirror-to-sentry`)
- *     rather than silently degrading to "disconnected".
- *   - Coercion: Postgrest's nullable-row return is flattened to
- *     `string | null` with no `as` casts at call sites.
- *   - Single seam for future URL normalization or `projects.id` migration.
+ * `repo_url` is a non-credential column (it stays in the `authenticated`
+ * grant; only `github_installation_id` is revoked), and RLS
+ * (`workspaces_select_for_members`) gates row visibility to members.
  *
- * Returns `null` when the user is disconnected OR on transient error —
+ * Returns `null` when the workspace has no repo OR on transient error —
  * callers treat both identically (disconnect semantics fail-closed).
  */
-export async function getCurrentRepoUrl(userId: string): Promise<string | null> {
-  // PR-C §2.6 (#3244): tenant client. RLS on `users` enforces
-  // `auth.uid() = id`. Auth probe is the `.maybeSingle()` SELECT itself
-  // — this function reads ONLY the caller's own row, no other table is
-  // touched, so a separate probe would be redundant. RuntimeAuthError
-  // from `getFreshTenantClient` is the load-bearing distinction
-  // between "no row" and "JWT-mint failed."
+export async function getCurrentRepoUrl(
+  userId: string,
+  workspaceId?: string | null,
+): Promise<string | null> {
   let tenant;
   try {
     tenant = await getFreshTenantClient(userId);
@@ -45,26 +45,28 @@ export async function getCurrentRepoUrl(userId: string): Promise<string | null> 
     throw err;
   }
 
+  const targetWorkspaceId =
+    workspaceId ?? (await resolveCurrentWorkspaceId(userId, tenant));
+
   const { data, error } = await tenant
-    .from("users")
+    .from("workspaces")
     .select("repo_url")
-    .eq("id", userId)
+    .eq("id", targetWorkspaceId)
     .maybeSingle();
 
   if (error) {
     reportSilentFallback(error, {
       feature: "repo-scope",
       op: "read-current-repo-url",
-      extra: { userId },
+      extra: { userId, workspaceId: targetWorkspaceId },
     });
     return null;
   }
 
   // Normalize on return — the choke point for every server consumer
   // (MCP tools, WS handler, agent-runner, lookup helper). Post-backfill
-  // this is a no-op on at-rest data; pre-backfill it's the safety net
-  // for any row the migration couldn't normalize (or a future direct-DB
-  // insert that bypasses `/api/repo/setup`).
+  // this is a no-op on at-rest data; the safety net for any row the
+  // migration couldn't normalize.
   const raw = (data?.repo_url as string | null | undefined) ?? null;
   const normalized = normalizeRepoUrl(raw);
   return normalized.length > 0 ? normalized : null;

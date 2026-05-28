@@ -92,6 +92,38 @@ export async function DELETE(request: Request) {
     );
   }
 
+  // ADR-044: mirror the moved repo cols to the solo workspace so the
+  // workspaces-only read path reflects the disconnect. Fail CLOSED here
+  // (unlike connect): the read path is workspaces-only, so a silently-failed
+  // mirror would leave the credential (github_installation_id) + repo_url
+  // live — the user appears connected and the agent could still act under the
+  // revoked GitHub grant. Surface a 500 so the (idempotent) disconnect retries.
+  const { mirrorRepoColsToSoloWorkspace } = await import(
+    "@/server/workspace-repo-mirror"
+  );
+  try {
+    await mirrorRepoColsToSoloWorkspace(
+      serviceClient,
+      user.id,
+      {
+        github_installation_id: null,
+        repo_url: null,
+        repo_status: "not_connected",
+        repo_last_synced_at: null,
+      },
+      { throwOnError: true },
+    );
+  } catch (mirrorErr) {
+    logger.error(
+      { err: mirrorErr, userId: user.id },
+      "Failed to mirror repo disconnect to workspaces (credential may persist on the read path)",
+    );
+    return NextResponse.json(
+      { error: "Failed to disconnect repository" },
+      { status: 500 },
+    );
+  }
+
   // Best-effort workspace cleanup — deleteWorkspace derives path from
   // getWorkspacesRoot() + the workspace identifier, handles non-existent
   // directories. For a solo user, `user.id` is the workspace_id (N2

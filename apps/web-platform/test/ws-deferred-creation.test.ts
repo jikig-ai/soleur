@@ -102,6 +102,30 @@ vi.mock("@/lib/supabase/tenant", () => ({
         };
         return chain;
       }
+      if (table === "workspaces") {
+        // ADR-044 read-cutover: getCurrentRepoUrl reads workspaces.repo_url.
+        const chain: { select: unknown; eq: unknown; maybeSingle: unknown } = {
+          select: vi.fn(() => chain),
+          eq: vi.fn(() => chain),
+          maybeSingle: vi.fn(async () => ({
+            data: { repo_url: mockUserRepoUrl },
+            error: null,
+          })),
+        };
+        return chain;
+      }
+      if (table === "user_session_state") {
+        // resolveCurrentWorkspaceId: null claim → solo workspace fallback.
+        const chain: { select: unknown; eq: unknown; maybeSingle: unknown } = {
+          select: vi.fn(() => chain),
+          eq: vi.fn(() => chain),
+          maybeSingle: vi.fn(async () => ({
+            data: { current_workspace_id: null },
+            error: null,
+          })),
+        };
+        return chain;
+      }
       const convChain: Record<string, unknown> = {
         insert: mockInsert,
         update: mockUpdate,
