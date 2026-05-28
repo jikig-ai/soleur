@@ -124,12 +124,20 @@ describe("createProbeOctokit retry-on-401", () => {
     mockGetInstallationOctokit.mockResolvedValueOnce(fakeOctokit);
 
     const promise = createProbeOctokit();
-    // Backoff schedule: 1s, then 2s (BASE_DELAY_MS * 2 ** attempt).
-    await vi.advanceTimersByTimeAsync(1_000);
-    await vi.advanceTimersByTimeAsync(2_000);
+    // Pin the EXACT backoff schedule (1s, then 2s = BASE_DELAY_MS * 2 ** i),
+    // not just total elapsed time. Asserting attempt counts at the boundaries
+    // catches a regression in PROBE_JWT_BASE_DELAY_MS or the exponent that a
+    // coarse advance(3_000) would silently pass.
+    await vi.advanceTimersByTimeAsync(999);
+    expect(mockRequest).toHaveBeenCalledTimes(1); // 1s timer not yet fired
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mockRequest).toHaveBeenCalledTimes(2); // second attempt at exactly 1s
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(mockRequest).toHaveBeenCalledTimes(2); // 2s timer not yet fired
+    await vi.advanceTimersByTimeAsync(1);
     const result = await promise;
 
-    expect(result).toBe(fakeOctokit);
+    expect(result).toBe(fakeOctokit); // third attempt at exactly +2s
     // Three App instances — fresh JWT per attempt.
     expect(MockApp).toHaveBeenCalledTimes(3);
     expect(mockRequest).toHaveBeenCalledTimes(3);
@@ -222,8 +230,11 @@ describe("createProbeOctokit retry-on-401", () => {
     );
   });
 
-  test("captured body is CR/LF-stripped and sliced to <=500 chars", async () => {
-    const oversized = "A".repeat(400) + "\nLINE2\r\n" + "B".repeat(400);
+  test("captured body strips control chars + Unicode separators and slices to <=500", async () => {
+    // Include CR/LF AND Unicode line/paragraph separators (/) +
+    // a control char — the canonical log-injection class, not just \r\n.
+    const oversized =
+      "A".repeat(400) + "\nLINE2\r\n\u2028\u2029\x07" + "B".repeat(400);
     const err500 = httpErrorWithResponse("Server Error", 500, {
       date: new Date().toUTCString(),
       requestId: "REQ-body",
@@ -236,7 +247,8 @@ describe("createProbeOctokit retry-on-401", () => {
     const call = warnSilentFallback.mock.calls.at(-1);
     const ghBody = (call?.[1] as { extra: { ghBody: string } }).extra.ghBody;
     expect(ghBody.length).toBeLessThanOrEqual(500);
-    expect(ghBody).not.toMatch(/[\r\n]/);
+    // No control chars, DEL, or Unicode line/paragraph separators survive.
+    expect(ghBody).not.toMatch(/[\x00-\x1f\x7f\u2028\u2029]/);
   });
 
   test("does NOT retry on 404", async () => {

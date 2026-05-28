@@ -72,7 +72,12 @@ function extractGitHubErrorDiag(err: unknown): GitHubErrorDiag {
     rawBody === undefined || rawBody === null
       ? undefined
       : (typeof rawBody === "string" ? rawBody : JSON.stringify(rawBody))
-          .replace(/[\r\n]/g, " ")
+          // Codebase-canonical log-injection strip (control chars + DEL +
+          // Unicode line/paragraph separators), NOT bare /[\r\n]/ — GitHub
+          // error bodies can echo client-influenced content (422/OAuth
+          // error_description) that pino/Sentry viewers render as line breaks.
+          // \uXXXX escapes required (cq-regex-unicode-separators-escape-only).
+          .replace(/[\x00-\x1f\x7f\u2028\u2029]/g, " ")
           .slice(0, 500);
   return {
     ghStatus: status,
