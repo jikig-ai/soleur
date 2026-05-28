@@ -126,9 +126,22 @@ code. Two require correction.
 - **Backoff sizing.** 3 attempts with 1s + 2s = 3s max added latency on a fully
   failing mint. `@octokit/auth-app`'s `sendRequestWithRetries` retries downstream
   authenticated requests for up to ~5s; 3s on the exchange layer is within the
-  same order and well under `GITHUB_FETCH_TIMEOUT_MS` (15s) per attempt. The
-  exchange is not on a hot user-interactive path (cron/reconcile), so the added
-  worst-case latency is acceptable.
+  same order and well under `GITHUB_FETCH_TIMEOUT_MS` (15s) per attempt.
+- **Interactive callers exist (corrected at PR-review by `user-impact-reviewer`).**
+  `generateInstallationToken` is reached synchronously from HTTP routes
+  `POST /api/kb/upload` (via `github-api.ts` then `git-auth.ts`), `POST /api/kb/sync`,
+  and the agent `pushBranch` tool — not only cron/reconcile. The added backoff is
+  still acceptable: (a) **zero added latency on the happy path** (mint succeeds
+  first try → 0 retries); (b) the added latency only occurs in the degraded 401
+  window, where the retry converts a likely *failure* into a likely *success* —
+  strictly better UX than the prior fail-after-1s; (c) the per-installation
+  `tokenCache` collapses a single request's repeated calls (kb/upload's
+  `githubApiPost` + `gitWithInstallationAuth`) to **one** real mint (the second
+  hits cache), so worst-case added latency per request is ~3s, not ~6s; (d) a
+  mint that exhausts all 3 attempts fails as a 500 in ~3s, well under the routes'
+  30s `maxDuration`, and an unmintable token fails the downstream git op
+  regardless. No interactive-caller retry cap is added — those callers benefit
+  most from riding through a transient 401.
 
 ## User-Brand Impact
 
@@ -381,7 +394,7 @@ PREDICATE differs by design. No novel pattern is introduced.
 
 | Risk | Mitigation |
 |---|---|
-| Backoff adds latency to a genuinely-broken mint (3s worst case) | Exchange is on cron/reconcile paths, not hot user-interactive. 3s ≪ per-attempt 15s timeout; within octokit's own ~5s retry envelope. |
+| Backoff adds latency to a genuinely-broken mint (3s worst case) on interactive routes (kb/upload, kb/sync, pushBranch — corrected at review) | Added latency is zero on the happy path; only the degraded-401 window pays it, where the retry converts failure→success. `tokenCache` collapses a request's repeated mints to one (~3s, not ~6s), well under the routes' 30s `maxDuration`; an unmintable token fails the request regardless. 3s ≪ per-attempt 15s timeout; within octokit's own ~5s retry envelope. |
 | Retry loop drops the body-drain and leaks sockets | AC + explicit Phase 3 constraint: `response.text().catch(()=>{})` before each sleep (preserves `:493`). |
 | `exp` reduced too far breaks slow exchanges | 540s is 9 min — the token exchange round-trips in <1s typically and is timeout-bounded at 15s; 540s is ample. octokit uses an even tighter 570s-from-`now` with a 30s past-skew on `iat`. |
 | Scope creep into the octokit path | Out of scope by Research Reconciliation; octokit's `exp = now + 570` is already safe. AC6 asserts `probe-octokit.ts` untouched. |

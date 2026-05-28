@@ -207,6 +207,17 @@ describe("generateInstallationToken hardening", () => {
       const secondAuth = mockFetch.mock.calls[1][1].headers.Authorization;
       expect(firstAuth).toMatch(/^Bearer /);
       expect(secondAuth).toMatch(/^Bearer /);
+      // A fresh JWT is minted per attempt: the 1s backoff advanced the (fake)
+      // clock, so the retry's iat must be strictly later than the first — a
+      // re-used/cached JWT would fail this. This is the property that makes
+      // retrying a clock-skew-rejected JWT meaningful.
+      const decodeIat = (auth: string) =>
+        (
+          JSON.parse(
+            Buffer.from(auth.slice("Bearer ".length).split(".")[1], "base64url").toString(),
+          ) as { iat: number }
+        ).iat;
+      expect(decodeIat(secondAuth)).toBeGreaterThan(decodeIat(firstAuth));
     });
 
     test("throws with correct status after 401 followed by 500", async () => {
@@ -362,8 +373,10 @@ describe("JWT exp margin (clock-skew tolerance, #122537945)", () => {
     // positive server-clock skew (the root cause of Sentry issue 122537945).
     expect(payload.exp - nowSeconds).toBeLessThanOrEqual(540);
     expect(payload.exp - nowSeconds).toBeGreaterThan(0);
-    // total JWT lifetime (exp - iat) must not exceed GitHub's 600s maximum.
-    expect(payload.exp - payload.iat).toBeLessThanOrEqual(600);
+    // total JWT lifetime (exp - iat) is exactly 600s (iat now-60, exp now+540)
+    // — pins both directions: too-long would re-trip GitHub's 600s ceiling, and
+    // a too-short window would starve slow exchanges.
+    expect(payload.exp - payload.iat).toBe(600);
     // iat is backdated (negative skew preserved).
     expect(payload.iat).toBeLessThanOrEqual(nowSeconds);
   });
