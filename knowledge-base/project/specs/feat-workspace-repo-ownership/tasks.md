@@ -22,14 +22,14 @@ plan: knowledge-base/project/plans/2026-05-28-feat-workspace-repo-ownership-plan
 
 ## Phase 1: Schema + session plumbing — migration 079 (additive, reversible)
 
-- [ ] 1.1 (RED) Tests: `workspaces` has 5 repo cols; **non-unique** `(github_installation_id, repo_url)` + `repo_url` indexes, **NO UNIQUE on repo_url** (AC1); non-owner member denied `SELECT github_installation_id` (AC2)
-- [ ] 1.2 Write `079_workspace_repo_ownership_schema.sql` with `-- LAWFUL_BASIS:` header; add repo cols (mirror 011) + non-unique indexes; `REVOKE SELECT (github_installation_id) ON workspaces FROM authenticated` (column-level credential protection)
-- [ ] 1.3 Add SECURITY DEFINER RPC `resolve_workspace_installation_id(p_workspace_id) RETURNS bigint`: `is_workspace_member` check (deny→NULL), then SELECT the credential; search_path pin; 4-role REVOKE + GRANT authenticated
-- [ ] 1.4 Add `current_workspace_id` to `user_session_state` (FK ON DELETE SET NULL) + idempotent backfill from solo workspace (col ADD before hook CREATE OR REPLACE)
-- [ ] 1.5 Extend `runtime_jwt_mint_hook` to inject `current_workspace_id`, **preserving the org-injection (060:131-135) + OTP precheck (060:139-148) blocks verbatim**; hook grant stays `GRANT EXECUTE TO supabase_auth_admin` (NOT authenticated)
-- [ ] 1.6 Add `set_current_workspace_id(p_workspace_id uuid)` RPC: 28000 + 22004 + 42501 guards; `is_workspace_member`; `SELECT organization_id INTO v_org_id` + **`IF v_org_id IS NULL THEN RAISE`** (FK-race); set both claims; SECURITY DEFINER + search_path pin; **4-role REVOKE** (PUBLIC, anon, authenticated, service_role) + GRANT authenticated (precedent 060:175-218)
-- [ ] 1.7 Write `079_*.down.sql` (drop both RPCs, revert hook to exact 060 body, drop column + indexes + repo cols, restore column GRANT)
-- [ ] 1.8 (GREEN) Migration applies on a dedicated dev Supabase branch; RPC guard tests pass (AC8); OTP path carries BOTH org_id AND workspace_id claim (AC10); column-denial test (AC2)
+- [x] 1.1 (RED→GREEN) Shape tests in `test/supabase-migrations/079-workspace-repo-ownership-schema.test.ts`: 5 repo cols, non-unique indexes, NO UNIQUE on repo_url (AC1), column-level credential split (AC2). RED confirmed (ENOENT), now GREEN (28 passed)
+- [x] 1.2 Wrote `079_workspace_repo_ownership_schema.sql` with `-- LAWFUL_BASIS:` header; repo cols mirror 011 + non-unique indexes. **Plan correction:** column-level credential protection requires `REVOKE SELECT ON workspaces FROM authenticated` + `GRANT SELECT (non-credential cols)` — the plan's literal `REVOKE SELECT (github_installation_id)` is a no-op while Supabase's table-level grant exists
+- [x] 1.3 `resolve_workspace_installation_id(p_workspace_id) RETURNS bigint`: is_workspace_member check (deny→RETURN NULL), search_path pin, 4-role REVOKE + GRANT authenticated
+- [x] 1.4 Added `current_workspace_id` to `user_session_state` (FK ON DELETE SET NULL) + idempotent solo-workspace backfill (col ADD precedes hook CREATE OR REPLACE — asserted by test)
+- [x] 1.5 Extended `runtime_jwt_mint_hook` to inject `current_workspace_id`; org-injection + OTP precheck preserved; hook grant stays `supabase_auth_admin`. (Combined the two user_session_state reads into one SELECT — org injection IF-block + OTP block unchanged)
+- [x] 1.6 `set_current_workspace_id` RPC: 28000/22004/42501 guards; is_workspace_member; org_id lookup + FK-race RAISE (23503); sets both claims; 4-role REVOKE + GRANT authenticated
+- [x] 1.7 Wrote `079_*.down.sql` (drop both RPCs, revert hook to exact 060 body, drop column + indexes + repo cols, restore table GRANT)
+- [~] 1.8 (GREEN-apply) Behavioral integration tests (AC8/AC10/AC2 + round-trip) live in the `describe.skip` block, activate with `TENANT_INTEGRATION_TEST=1` + live `DATABASE_URL_POOLER` at apply time on a DEDICATED dev project — NOT applied to shared dev pre-merge per `hr-dev-prd-distinct-supabase-projects`. `migration-rpc-grants.test.ts` lint passes for both new RPCs
 
 ## Phase 2: Idempotent solo-only backfill — migration 080
 
