@@ -34,14 +34,26 @@ interface ServiceClientLike {
  *
  * Service-role write: members cannot UPDATE `workspaces` directly (no
  * UPDATE RLS policy) and `github_installation_id` is REVOKE'd from the
- * `authenticated` grant; the caller passes a service client. Best-effort —
- * failure is Sentry-mirrored but does not throw (the `users` write remains
- * the authoritative record until the decommission migration).
+ * `authenticated` grant; the caller passes a service client.
+ *
+ * Best-effort by default — failure is Sentry-mirrored but does not throw,
+ * because on a CONNECT the `users` write stays authoritative and a missed
+ * mirror only makes the workspaces-only read path show "not connected" (a
+ * safe-fail the next connect/sync re-mirrors).
+ *
+ * Pass `{ throwOnError: true }` on the DISCONNECT / credential-clear path:
+ * there the read path is workspaces-only, so a silently-failed mirror would
+ * leave `github_installation_id` (a live GitHub App grant) and `repo_url`
+ * readable AFTER the user "disconnected" — the agent could still act under
+ * the supposedly-revoked grant, and the `repo_url && installationId === null`
+ * revalidation guard cannot catch it (both stay non-null). Failing closed
+ * lets the route surface a 500 so the (idempotent) disconnect is retried.
  */
 export async function mirrorRepoColsToSoloWorkspace(
   service: ServiceClientLike,
   userId: string,
   patch: MirroredRepoCols,
+  opts?: { throwOnError?: boolean },
 ): Promise<void> {
   const { error } = await service.from("workspaces").update(patch).eq("id", userId);
   if (error) {
@@ -51,5 +63,8 @@ export async function mirrorRepoColsToSoloWorkspace(
       extra: { userId, cols: Object.keys(patch) },
       message: "Failed to mirror repo columns to the solo workspace",
     });
+    if (opts?.throwOnError) {
+      throw error instanceof Error ? error : new Error(String(error));
+    }
   }
 }

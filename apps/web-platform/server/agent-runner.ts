@@ -1265,6 +1265,16 @@ resuming an existing thread preserves context for the user.`;
     // Canonical read — normalizes via `normalizeRepoUrl`, mirrors DB errors
     // to Sentry via `reportSilentFallback`. Replaces the prior inline
     // `user.repo_url` cast per "audit every query" learning.
+    //
+    // NOTE: these two reads resolve the active workspace claim independently
+    // (each mints its own tenant client and reads current_workspace_id). A
+    // concurrent set_current_workspace_id switch landing between them could
+    // pair workspace A's installation with workspace B's repo_url — both
+    // workspaces the SAME user belongs to (not cross-tenant). The window is
+    // sub-ms and the switcher reloads the page (restarting this context), so
+    // it is not fixed here; when #4560 makes mid-run switches plausible,
+    // resolve the workspace ONCE and thread it into both via their existing
+    // `workspaceId` override params so installation + repo share one snapshot.
     const repoUrl = await getCurrentRepoUrl(userId);
 
     // Fail loud when the active workspace has a repo connected but the

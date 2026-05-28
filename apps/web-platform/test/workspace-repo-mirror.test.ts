@@ -59,4 +59,33 @@ describe("mirrorRepoColsToSoloWorkspace", () => {
       expect.objectContaining({ feature: "workspace-repo-mirror" }),
     );
   });
+
+  it("with throwOnError, rethrows on error AND still Sentry-mirrors (disconnect credential-clear fails closed)", async () => {
+    const { reportSilentFallback } = await import("@/server/observability");
+    const svc = makeService({ message: "boom" });
+    await expect(
+      mirrorRepoColsToSoloWorkspace(
+        svc.client,
+        "user-1",
+        { github_installation_id: null, repo_url: null, repo_status: "not_connected" },
+        { throwOnError: true },
+      ),
+    ).rejects.toThrow();
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ feature: "workspace-repo-mirror" }),
+    );
+  });
+
+  it("with throwOnError, does NOT throw on success", async () => {
+    const svc = makeService();
+    await expect(
+      mirrorRepoColsToSoloWorkspace(
+        svc.client,
+        "user-1",
+        { github_installation_id: null, repo_url: null, repo_status: "not_connected" },
+        { throwOnError: true },
+      ),
+    ).resolves.toBeUndefined();
+  });
 });
