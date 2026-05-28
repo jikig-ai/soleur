@@ -43,7 +43,7 @@ if [[ -d "$WORKTREE_DIR" ]] && [[ -n "$(ls -A "$WORKTREE_DIR" 2>/dev/null)" ]]; 
   emit_incident "guardrails-worktree-write-guard" "deny" "Never edit main when a worktree is active" "$FILE_PATH"
   jq -n --arg names "$WORKTREE_NAMES" --arg path "$GIT_ROOT/.worktrees/<name>/$RELATIVE_PATH" '{
     hookSpecificOutput: {
-      permissionDecision: "deny",
+      hookEventName: "PreToolUse",      permissionDecision: "deny",
       permissionDecisionReason: ("BLOCKED: Writing to main repo checkout while worktrees exist (" + $names + "). Write to the worktree path instead: " + $path)
     }
   }'

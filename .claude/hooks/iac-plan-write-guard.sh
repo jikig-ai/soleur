@@ -10,7 +10,7 @@
 # section in the plan output.
 #
 # Hook stdin: JSON payload from Claude Code with tool_name + tool_input.
-# Hook stdout: JSON {hookSpecificOutput: {permissionDecision, permissionDecisionReason}}.
+# Hook stdout: JSON {hookSpecificOutput: {hookEventName, permissionDecision, permissionDecisionReason}}.
 # Hook exit code: 0 always (JSON output controls the gate).
 
 set -euo pipefail
@@ -24,7 +24,7 @@ fi
 emit() { command -v emit_incident >/dev/null 2>&1 && emit_incident "$@" || true; }
 
 allow() {
-  echo '{"hookSpecificOutput":{"permissionDecision":"allow"}}'
+  echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
   exit 0
 }
 
@@ -33,7 +33,7 @@ deny() {
   emit hr-all-infrastructure-provisioning-servers deny "iac-plan-write-guard: $reason"
   # jq -n -c keeps the JSON on a single line; --arg escapes safely.
   jq -nc --arg r "$reason" \
-    '{hookSpecificOutput: {permissionDecision: "deny", permissionDecisionReason: $r}}'
+    '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
   exit 0
 }
 
