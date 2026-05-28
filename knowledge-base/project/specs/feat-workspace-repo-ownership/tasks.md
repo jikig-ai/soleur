@@ -106,4 +106,4 @@ plan: knowledge-base/project/plans/2026-05-28-feat-workspace-repo-ownership-plan
 
 - [ ] P.1 Apply 079 → 080 → 081 to prd via `web-platform-release.yml#migrate`; verify columns + backfill counts via Supabase MCP (read-only) (AC14)
 - [ ] P.2 Verify GitHub App install `122213433` grants `jikig-ai/soleur` via App-JWT `gh api /installation/repositories`; if absent, install App on `soleur` (AC16, Open Q1)
-- [ ] P.3 **Before any decommission migration (Phase 6):** drift reconciliation query returns 0 (re-backfill mid-migration connects first) (AC15)
+- [ ] P.3 **Before any decommission migration (Phase 6):** drift reconciliation query returns 0 (re-backfill mid-migration connects first) (AC15). Query covers BOTH `repo_url` AND `github_installation_id` divergence (the credential is the security-relevant case — see ADR-044 §Consequences "Pre-decommission drift gate").
