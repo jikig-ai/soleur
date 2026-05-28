@@ -4,89 +4,60 @@ import {
 } from "@/lib/supabase/tenant";
 import { reportSilentFallback } from "@/server/observability";
 
-export function extractGitHubOwner(repoUrl: string): string | null {
-  const match = repoUrl.match(/^https:\/\/github\.com\/([^/]+)\//);
-  return match?.[1] ?? null;
-}
-
 /**
- * Resolve a GitHub App installation ID for a user. Tries the user's own
- * `github_installation_id` first; falls back to a workspace-sibling lookup
- * via `workspace_members` when the user's row is NULL.
+ * Resolve the GitHub App installation ID for a user's ACTIVE workspace.
  *
- * The sibling fallback lazy-imports the service-role client to avoid
- * pulling @/lib/supabase/service (which reads SUPABASE_URL at module scope)
- * into test bundles that don't set the env var.
+ * `workspaceId` MUST be derived from the caller's JWT `current_workspace_id`
+ * claim — NEVER from `req.body`/`req.query` (IDOR). When the claim is
+ * undefined/null (un-refreshed session after migration 079, or the
+ * workspace was deleted → `ON DELETE SET NULL` nulled the claim), we
+ * default to the caller's SOLO workspace (`= userId` per ADR-038 N2),
+ * never an arbitrary sibling workspace.
  *
- * The sibling lookup matches on GitHub org (owner) via `.ilike()` rather
- * than exact `repo_url`, since GitHub App installations are org-level and
- * cover all repos under the same owner.
+ * The credential is read ONLY via the membership-checked
+ * `resolve_workspace_installation_id` SECURITY DEFINER RPC (ADR-044). The
+ * `workspaces.github_installation_id` column is revoked from the
+ * `authenticated` table grant, so a direct tenant SELECT cannot read it.
+ * The RPC returns NULL for non-members (its deny path), which surfaces
+ * here as `null` — indistinguishable from "no installation connected".
+ *
+ * The pre-existing `.ilike("repo_url", …)` sibling fallback (LIKE-injection
+ * surface) and the unscoped `workspace_members … LIMIT 1` sibling lookup
+ * (cross-tenant read) are DELETED — a null/undefined claim must resolve the
+ * caller's own solo workspace, never a sibling.
  */
 export async function resolveInstallationId(
   userId: string,
+  workspaceId?: string | null,
 ): Promise<number | null> {
-  let callerRepoUrl: string | null = null;
+  // Undefined/null claim → caller's solo workspace (= userId). Never a sibling.
+  const targetWorkspaceId = workspaceId ?? userId;
 
   try {
     const tenant = await getFreshTenantClient(userId);
-    const { data } = await tenant
-      .from("users")
-      .select("github_installation_id, repo_url")
-      .eq("id", userId)
-      .single();
+    const { data, error } = await tenant.rpc(
+      "resolve_workspace_installation_id",
+      { p_workspace_id: targetWorkspaceId },
+    );
 
-    if (data?.github_installation_id) {
-      return data.github_installation_id;
+    if (error) {
+      reportSilentFallback(error, {
+        feature: "resolve-installation-id",
+        op: "rpc-read",
+        extra: { userId, workspaceId: targetWorkspaceId },
+        message: "resolve_workspace_installation_id RPC failed",
+      });
+      return null;
     }
-    callerRepoUrl = data?.repo_url ?? null;
+
+    return (data as number | null) ?? null;
   } catch (err) {
     if (!(err instanceof RuntimeAuthError)) throw err;
     reportSilentFallback(err, {
       feature: "resolve-installation-id",
       op: "tenant-read",
-      extra: { userId },
+      extra: { userId, workspaceId: targetWorkspaceId },
     });
     return null;
   }
-
-  // Fallback: find a workspace sibling with a non-null installation ID
-  // whose repo_url matches the caller's. Service-role bypasses users RLS.
-  const { createServiceClient } = await import("@/lib/supabase/service");
-  const service = createServiceClient();
-
-  const { data: memberRow } = await service
-    .from("workspace_members")
-    .select("workspace_id")
-    .eq("user_id", userId)
-    .limit(1)
-    .maybeSingle();
-
-  if (!memberRow?.workspace_id) return null;
-
-  const { data: siblingRows } = await service
-    .from("workspace_members")
-    .select("user_id")
-    .eq("workspace_id", memberRow.workspace_id)
-    .neq("user_id", userId);
-
-  if (!siblingRows?.length) return null;
-
-  const siblingIds = siblingRows.map((r) => r.user_id);
-
-  let query = service
-    .from("users")
-    .select("github_installation_id")
-    .in("id", siblingIds)
-    .not("github_installation_id", "is", null)
-    .limit(1);
-
-  if (callerRepoUrl) {
-    const owner = extractGitHubOwner(callerRepoUrl);
-    if (owner) {
-      query = query.ilike("repo_url", `https://github.com/${owner}/%`);
-    }
-  }
-
-  const { data: userRow } = await query.maybeSingle();
-  return userRow?.github_installation_id ?? null;
 }
