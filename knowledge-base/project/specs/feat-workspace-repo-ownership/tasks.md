@@ -88,8 +88,8 @@ plan: knowledge-base/project/plans/2026-05-28-feat-workspace-repo-ownership-plan
 
 ## Phase 5: Verification
 
-- [ ] 5.1 RLS tests: (a) member cannot SELECT another workspace's row; (b) member cannot SELECT `github_installation_id` of their OWN workspace (column-level) — only via `resolve_workspace_installation_id` (AC2)
-- [ ] 5.2 Full suite green; tsc clean (signature breaks caught)
+- [x] 5.1 RLS tests DONE: `test/supabase-migrations/079-workspace-rls-isolation.test.ts` — 6 non-skipped shape tests pin (a) the 053 `workspaces_select_for_members` row policy + 079 not weakening it, and (b) the 079 column-level `REVOKE SELECT`/non-credential re-GRANT (github_installation_id excluded) + resolve RPC as the sole membership-checked reader (deny→NULL). Behavioral (a)/(b) assertions live in a `describe.skip` block (TENANT_INTEGRATION_TEST=1 + live DATABASE_URL_POOLER on a dedicated dev project; never shared dev). Column-exclusion assertion verified non-vacuous via negative probe (AC2/AC5)
+- [x] 5.2 Full suite green (575 files passed / 37 skipped; 7123 tests passed / 213 skipped / 1 todo; exit 0) + `tsc --noEmit` clean
 - [ ] 5.3 `/soleur:review` + QA before merge
 
 ## Phase 6: Decommission (separate PR, after prod soak — NOT this PR)
