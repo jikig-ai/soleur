@@ -12,13 +12,13 @@ plan: knowledge-base/project/plans/2026-05-28-feat-workspace-repo-ownership-plan
 
 ## Phase 0: Preconditions (re-verify at /work)
 
-- [ ] 0.1 Re-grep call sites (counts drift): `git grep -nE '\.(eq|select)\([^)]*github_installation_id|\.from\("users"\)[^;]*repo_url' apps/web-platform/server apps/web-platform/app`
-- [ ] 0.2 Confirm migration ceiling still 078 (no parallel branch claimed 079); `ls apps/web-platform/supabase/migrations/ | sort | tail`
-- [ ] 0.3 Read `webhooks/github/route.ts:193-316` + `workspace-reconcile-on-push.ts:97-128` to confirm the P0-1 push-path shape before editing
-- [ ] 0.4 Confirm vitest runner via `package.json`; check `apps/web-platform/bunfig.toml` for `pathIgnorePatterns`
-- [ ] 0.5 Reconcile with open #2244 (kb-route-helpers `syncWorkspace`) if still open — adapt the upload call-shape sweep
-- [ ] 0.6 `/soleur:architecture create` — new ADR amending ADR-038 (repo ownership user→workspace; uniqueness guarantee → normalizeRepoUrl contract); `amends: [ADR-038]`
-- [ ] 0.7 Confirm `is_workspace_member` pins `search_path = public, pg_temp` (053:120) before the new definer RPCs call it
+- [x] 0.1 Re-grep call sites (counts drift): broader than plan's known list — also `repo/create:51`, `repo/setup:59`, `repo/detect-installation:48`, `repo/repos:25`, `dashboard/today/[id]/undo:163`, `agent-on-spawn-requested:219` (all select `github_installation_id`; resolve users-vs-workspaces at sweep)
+- [x] 0.2 Migration ceiling confirmed **078** (no parallel branch claimed 079)
+- [ ] 0.3 Read `webhooks/github/route.ts:193-316` + `workspace-reconcile-on-push.ts:97-128` to confirm the P0-1 push-path shape before editing (deferred to Phase 3 start — not needed for migrations)
+- [x] 0.4 Runner confirmed **vitest** (`test: "vitest"`); `bunfig.toml [test] pathIgnorePatterns = ["**"]` blocks bun test
+- [x] 0.5 #2244 (kb-route-helpers `syncWorkspace`) still **OPEN** — thread `workspaceId` through current call shape; reconcile if it merges before this PR
+- [x] 0.6 ADR-044 created (`amends: [ADR-038]`); ADR-038 back-referenced via `amended_by: [ADR-044]`
+- [x] 0.7 Confirmed `is_workspace_member` pins `search_path = public, pg_temp` (053:120)
 
 ## Phase 1: Schema + session plumbing — migration 079 (additive, reversible)
 

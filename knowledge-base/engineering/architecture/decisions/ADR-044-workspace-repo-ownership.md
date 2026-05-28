@@ -1,0 +1,65 @@
+---
+adr: ADR-044
+title: Relocate repo-connection state from users to workspaces; uniqueness guarantee moves from DB constraint to normalizeRepoUrl contract
+status: active
+date: 2026-05-28
+amends: [ADR-038]
+related_adrs: [ADR-038, ADR-023]
+related: [4558, 4559, 4543]
+related_plans:
+  - knowledge-base/project/plans/2026-05-28-feat-workspace-repo-ownership-plan.md
+related_specs:
+  - knowledge-base/project/specs/feat-workspace-repo-ownership/spec.md
+brand_survival_threshold: single-user incident
+---
+
+# ADR-044: Workspace repo ownership (amends ADR-038)
+
+## Context
+
+ADR-038 decoupled the workspace from `userId` (organizations + workspaces + workspace_members) but **deliberately left GitHub repo-connection state on `users`** — the 9-table workspace-keyed RLS sweep (migration 059) enumerated `conversations`, `messages`, `kb_share_links`, `push_subscriptions`, `concurrency_slots`, `audit_byok_use`, `dsar_export_jobs`, `scope_grants`, `multi_source_dedup`, and explicitly excluded the repo columns (`repo_url`, `repo_provider`, `github_installation_id`, `repo_status`, `repo_last_synced_at`, migration 011). At the time, repo connection was a per-user concern and no co-member shared a repo.
+
+This produces a brand-survival defect (#4543): a user who **joins another user's workspace** cannot sync **that workspace's** repo, because every repo read keys on `auth.uid()` = the joiner's own `users.id`, which has no repo. The KB-sync path silently points at the joiner's (empty) repo. Band-aids #4546/#4557 were inert — they matched siblings by GitHub org/installation rather than fixing the ownership grain.
+
+A second force: migration 052 enforces a **partial-UNIQUE index on `users.github_installation_id`**, which the GitHub webhook relies on to resolve `installation_id → founder` via `.maybeSingle()`. Moving the installation id to `workspaces` cannot carry that UNIQUE forward: two users may each legitimately connect the **same public repo/fork** to their own personal workspace, so a global UNIQUE on `workspaces.repo_url` would throw `23505` at the second user mid-connect. Webhook determinism must come from somewhere else.
+
+Brand-survival threshold: **single-user incident** — the columns being relocated are credentials (`github_installation_id` is a GitHub App token grant) and the change spans cross-tenant repo access + a data backfill.
+
+## Considered Options
+
+- **Option A: Relocate repo state to `workspaces`; webhook determinism via fan-out reconcile + `normalizeRepoUrl` contract (chosen).** Add the 5 repo columns to `workspaces`; no global UNIQUE on `repo_url`. The push-reconcile fans out to **every** workspace matching `(github_installation_id, normalized repo_url)` — correct because a push to a shared repo legitimately affects all connected workspaces. Pros: fixes #4543 at the ownership grain; supports two-users-same-fork; reconcile semantics match real-world push fan-out. Cons: relocates the uniqueness *guarantee* from a DB constraint (compiler/DB-enforced) to the `normalizeRepoUrl` TS↔SQL parity *contract* (test-enforced) — the parity test becomes the sole load-bearing cross-tenant matching guard and therefore a hard merge gate.
+- **Option B: Keep repo state on `users`, resolve the joiner→owner repo at read time.** A read-time fallback ("if the active workspace has no repo, read the owner's `users.repo_url`"). Pros: no schema change. Cons: re-introduces two-sources-of-truth divergence (`2026-05-27-workspace-dual-ownership-source-of-truth.md`); the joiner would read the owner's *credential* across a tenant boundary with no membership-scoped gate; does not generalize to N members.
+- **Option C: Relocate to `workspaces` AND add a global UNIQUE on `repo_url`.** Pros: preserves a DB-enforced uniqueness guarantee; webhook keeps a `.maybeSingle()` resolve. Cons: breaks the legitimate two-users-same-fork case (second connect throws `23505`); conflates "this repo is connected once globally" (false) with "a push reconciles deterministically" (true via fan-out). Rejected.
+
+## Decision
+
+Adopt **Option A**. Move `repo_url`, `repo_provider`, `github_installation_id`, `repo_status`, `repo_last_synced_at` from `users` to `workspaces` (additive migration 079; idempotent solo-only backfill 080; TS read-cutover 081-equivalent; later decommission of the `users` columns + the 052 UNIQUE index after a prod soak). Repo reads come from `workspaces` **only** during and after soak — no `users` read-time fallback.
+
+Three guarantees change grain:
+
+1. **Uniqueness guarantee → `normalizeRepoUrl` contract.** No `UNIQUE` on `workspaces.repo_url`. Webhook/push determinism comes from **fan-out** over `(installation_id, normalize("https://github.com/" + repository.full_name))`. The TS (`lib/repo-url.ts`) ↔ SQL (migration 031) `normalizeRepoUrl` parity test is the **sole** matching contract and is a **hard merge gate**.
+2. **Credential read → membership-scoped SECURITY DEFINER RPC.** Postgres RLS has no column scoping, so the existing row-level `workspaces_select_for_members` policy would expose `github_installation_id` (a token grant) to any member. Close it with a **column-level** `REVOKE SELECT (github_installation_id) ON public.workspaces FROM authenticated`; the value is readable only via the new `resolve_workspace_installation_id(p_workspace_id)` definer RPC (membership-checked, deny → returns NULL).
+3. **Active-workspace context → `current_workspace_id` JWT claim.** Mirror the migration-060 `current_organization_id` pattern: add `current_workspace_id` to `user_session_state`, inject it via the single `runtime_jwt_mint_hook` slot (preserving the existing org-injection + OTP blocks verbatim), and write it via a membership-checked `set_current_workspace_id` RPC. `workspaceId` is **claim-derived at every call site — never from `req.body`/`req.query`** (IDOR). An `undefined` claim (un-refreshed session, or workspace deleted via `ON DELETE SET NULL`) defaults to the caller's solo workspace (`= users.id`), never an unscoped sibling.
+
+## Consequences
+
+- **Fixes #4543 durably.** Joined-workspace members sync that workspace's repo at the ownership grain, not via installation-id heuristics.
+- **The `normalizeRepoUrl` TS↔SQL parity test is now load-bearing for cross-tenant correctness.** Before, a parity drift was a cosmetic backfill bug; now a drift makes the reconcile match zero (or wrong) workspaces. Mitigated by promoting the parity test to a hard merge gate (AC7) including bare-slug→URL fixtures — `repository.full_name` is a bare `owner/repo` slug and MUST be composed to `https://github.com/${full_name}` **before** normalizing, or the reconcile matches zero rows while a URL→URL test passes green.
+- **Inngest payload is a versioned consumer boundary.** Adding `repository.full_name` to the reconcile event requires bumping `WORKSPACE_RECONCILE_SCHEMA_V` "1"→"2"; in-flight v=1 events drain to `{ok:false}` via the existing non-throwing mismatch branch rather than passing the gate with a missing field.
+- **Rollback is not clean-by-revert while 079 is shipped.** Reverting only the read-cutover while the `current_workspace_id` claim still points a user at a joined workspace B induces the exact wrong-repo hazard (reads fall back to repo A, UI says B). Rollback MUST be all-or-nothing (revert schema + backfill + cutover together) OR include resetting every `user_session_state.current_workspace_id` to the user's solo workspace.
+- **Pre-decommission drift gate.** A user who connects a repo between the 080 backfill and the read-cutover strands on `users`. Before dropping the `users` columns, `SELECT COUNT(*) FROM users u JOIN workspaces w ON w.id=u.id WHERE u.repo_url IS NOT NULL AND w.repo_url IS DISTINCT FROM u.repo_url` MUST return 0 (re-backfill first).
+- **Backfill is solo-only by construction + guarded.** The `w.id = u.id` join is solo-only (post-flag-flip workspaces use `gen_random_uuid()`), but a solo workspace that has since invited a co-member still has `w.id = u.id`; the backfill SKIPs (and `RAISE NOTICE`s) any workspace with member count > 1, so a repo is never landed onto a co-membered workspace without owner re-consent (CLO requirement).
+
+## Cost Impacts
+
+None. No new vendor, tier, or infrastructure. Two additive migrations + a TS cutover on existing surfaces.
+
+## NFR Impacts
+
+- **NFR (tenant isolation / data confidentiality):** strengthens it — the credential column moves from row-level-RLS-exposed to membership-scoped-definer-RPC-only, and the pre-existing `.ilike("repo_url", …)` LIKE-injection fallback in `resolve-installation-id.ts` is deleted outright. No NFR tier in `nfr-register.md` regresses.
+
+## Principle Alignment
+
+- **AP — least privilege / membership-scoped access:** Aligned — credential read is gated behind a membership-checked definer RPC; column-level GRANT revoked from `authenticated`.
+- **AP — single source of truth:** Aligned — reads come from `workspaces` only; no dual-ownership read-time fallback (the divergence trap from `2026-05-27-workspace-dual-ownership-source-of-truth.md` is explicitly rejected).
+- **Deviation from ADR-038's "repo state stays on users" boundary:** Documented and justified here — the boundary was correct for solo-only repo connection and is invalidated by joined-workspace repo sync (#4543).
