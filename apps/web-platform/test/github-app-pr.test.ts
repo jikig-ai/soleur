@@ -156,9 +156,15 @@ describe("createPullRequest", () => {
 
   test("propagates token generation failure", async () => {
     const installationId = uniqueInstallationId();
-    // Token request fails — generateInstallationToken retries once on 401,
-    // so we need TWO 401 responses to trigger the final throw.
+    // Token request fails — generateInstallationToken retries on 401 with
+    // exponential backoff (3 total attempts: initial + 2 retries), so we need
+    // THREE 401 responses to trigger the final throw. See #122537945.
     mockFetch
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        text: async () => "Unauthorized",
+      })
       .mockResolvedValueOnce({
         ok: false,
         status: 401,

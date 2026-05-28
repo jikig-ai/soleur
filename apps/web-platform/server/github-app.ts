@@ -122,7 +122,10 @@ function createAppJwt(): string {
   const payload = {
     iss: getAppId(),
     iat: now - 60,
-    exp: now + 10 * 60,
+    // 540s — 60s below GitHub's 600s max JWT lifetime to absorb positive
+    // server-clock skew (GitHub rejects exp > now+600 as 401). octokit's
+    // universal-github-app-jwt uses now+570 for the same reason. #122537945.
+    exp: now + 9 * 60,
   };
 
   const headerB64 = base64url(Buffer.from(JSON.stringify(header)));
@@ -457,6 +460,13 @@ const TOKEN_SAFETY_MARGIN_MS = 5 * 60 * 1000; // Refresh 5 minutes early
  *   warm with a token whose lifetime is less than the budget remaining
  *   (TR9 PR-5 security HIGH-1).
  */
+// Installation-token mint retry budget. Mirrors the canonical backoff idiom in
+// server/github-api.ts (MAX_RETRIES=2, BASE_DELAY_MS=1_000 → 1s, 2s) but retries
+// on 401 only (the mint's transient class is JWT-replication/clock-skew, not
+// 5xx). 3 total attempts. #122537945.
+const INSTALL_TOKEN_MAX_RETRIES = 2;
+const INSTALL_TOKEN_BASE_DELAY_MS = 1_000;
+
 export async function generateInstallationToken(
   installationId: number,
   opts: { minRemainingMs?: number } = {},
@@ -486,12 +496,26 @@ export async function generateInstallationToken(
 
   let response = await mintAndExchange();
 
-  // Retry once on 401 — defensive against transient GitHub
-  // replication delay on the JWT-authenticated token exchange.
-  if (response.status === 401) {
-    log.warn({ installationId }, "401 on installation token — retrying once after 1s");
+  // Retry on 401 with exponential backoff — defensive against transient GitHub
+  // JWT-replication / clock-skew rejections of the token exchange. 401-only
+  // (any non-401 breaks immediately, preserving 403/5xx semantics); a fresh JWT
+  // is minted per attempt; the body is drained before each sleep to avoid
+  // socket leaks. Mirrors the canonical backoff idiom in server/github-api.ts.
+  // #122537945 — the single 1s retry from PR #4498 was insufficient (90 events
+  // over 14 days); 2 retries (1s, 2s) covers the observed transient window.
+  for (
+    let attempt = 0;
+    response.status === 401 && attempt < INSTALL_TOKEN_MAX_RETRIES;
+    attempt++
+  ) {
+    log.warn(
+      { installationId, attempt: attempt + 1, status: response.status },
+      "401 on installation token — retrying with backoff",
+    );
     await response.text().catch(() => {});
-    await new Promise((r) => setTimeout(r, 1_000));
+    await new Promise((r) =>
+      setTimeout(r, INSTALL_TOKEN_BASE_DELAY_MS * 2 ** attempt),
+    );
     response = await mintAndExchange();
   }
 
