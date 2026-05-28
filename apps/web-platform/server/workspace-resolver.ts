@@ -281,3 +281,14 @@ export async function resolveWorkspacePathForUser(
   const workspaceId = await getDefaultWorkspaceForUser(userId, supabase);
   return join(getWorkspacesRoot(), workspaceId);
 }
+
+/**
+ * Filesystem path for a workspace id: `<WORKSPACES_ROOT>/<workspace_id>`
+ * (ADR-038 bwrap mount). Used by the push-reconcile fan-out (ADR-044) to
+ * locate each matching workspace's directory directly from its id — no
+ * `users.workspace_path` lookup. For backfilled solo workspaces this equals
+ * the legacy `<WORKSPACES_ROOT>/<user_id>` path (N2: workspace_id == user_id).
+ */
+export function workspacePathForWorkspaceId(workspaceId: string): string {
+  return join(getWorkspacesRoot(), workspaceId);
+}

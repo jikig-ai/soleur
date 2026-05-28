@@ -1,22 +1,26 @@
-// #4224 — periodic workspace reconciliation. Inngest function on
-// `platform/workspace.reconcile.requested` (dispatched by the GitHub
-// webhook push branch in `app/api/webhooks/github/route.ts`).
+// #4224 + ADR-044 — periodic workspace reconciliation. Inngest function on
+// `platform/workspace.reconcile.requested` (dispatched by the GitHub webhook
+// push branch in `app/api/webhooks/github/route.ts`).
 //
-// Coalescing primitive is Inngest CEL concurrency keyed on installation_id
-// — `--ff-only` makes redundant pulls idempotent, so we do NOT need an
-// in-process Map (DHH + Simplicity convergence in plan-review). No throttle
-// either: CEL already serializes per-installation, and rapid pushes that
-// CEL skips re-converge at the operator's next session-boundary sync.
+// ADR-044 re-architecture: repo state moved from `users` to `workspaces`, so
+// a push fans out to EVERY workspace connected to (installation_id, repo).
+// The target repo is composed from the event's bare `fullName` slug
+// (`https://github.com/<fullName>`) then normalized — the TS↔SQL
+// normalizeRepoUrl parity (test/repo-url-sql-parity.test.ts) is the sole
+// matching contract. Workspace path is derived directly from the workspace
+// id (`<WORKSPACES_ROOT>/<workspace_id>`); readiness is a filesystem-
+// existence check (no `users.workspace_status` dependency). kb_sync_history
+// rows are attributed to each workspace's owner.
 //
-// Failure mirroring uses the canonical `reportSilentFallback` helper with
-// explicit `message:` arg (PR #3731 sharp-edge — dashboard keying breaks
-// without it). Per-failure-class `op:` tags surface in Sentry so the
-// 30-day drift analysis (TR4 / DS1 gating) can slice by class.
+// Coalescing primitive is Inngest CEL concurrency keyed on installation_id.
+// Failure mirroring uses `reportSilentFallback` with explicit `message:`.
 
+import { promises as fs } from "node:fs";
 import { inngest } from "@/server/inngest/client";
-import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import { reportSilentFallback } from "@/server/observability";
 import { syncWorkspace } from "@/server/kb-route-helpers";
+import { normalizeRepoUrl } from "@/lib/repo-url";
+import { workspacePathForWorkspaceId } from "@/server/workspace-resolver";
 import {
   WORKSPACE_RECONCILE_REQUESTED_EVENT,
   WORKSPACE_RECONCILE_SCHEMA_V,
@@ -28,23 +32,20 @@ import {
 } from "@/server/session-sync";
 import logger from "@/server/logger";
 
-interface UserRow {
-  workspace_path: string | null;
-  workspace_status: string | null;
-  github_installation_id: number | null;
-  kb_sync_history: unknown[] | null;
-}
-
 interface ReconcileEvent {
   name: string;
   v?: string;
   data: {
+    // founderId = the installation owner (webhook 404-lookup). Carried for
+    // observability; the fan-out targets workspaces by repo, not founder.
     founderId: string;
     installationId: number;
     deliveryId: string;
     defaultBranch: string;
     headSha: string;
     beforeSha: string;
+    // ADR-044: bare owner/repo slug from repository.full_name (v=2).
+    fullName: string;
     pushReceivedAt?: number;
   };
 }
@@ -61,24 +62,27 @@ interface HandlerArgs {
   };
 }
 
+async function workspaceDirExists(path: string): Promise<boolean> {
+  try {
+    const st = await fs.stat(path);
+    return st.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 export async function workspaceReconcileOnPushHandler({
   event,
   step,
   logger: stepLogger,
-}: HandlerArgs): Promise<
-  | { ok: true }
-  | { ok: false; reason: string }
-> {
-  // syncWorkspace expects a pino Logger; the Inngest `step.logger` only
-  // exposes warn/info/error. Use the module-scoped pino logger for the
-  // sync call (load-bearing for cq-silent-fallback-must-mirror-to-sentry
-  // attribution — kb-route-helpers tags its `feature` on this site).
+}: HandlerArgs): Promise<{ ok: true; synced: number } | { ok: false; reason: string }> {
   void stepLogger;
-  const { founderId, installationId, deliveryId, headSha, beforeSha, pushReceivedAt } = event.data;
+  const { installationId, deliveryId, fullName, headSha, beforeSha, pushReceivedAt } =
+    event.data;
 
-  // Schema-gate. Non-throwing — deterministic schema mismatch on a future
-  // v=2 envelope should not burn a retry. Mirrors cfo-on-payment-failed.ts
-  // RV2 + learning 2026-04-18-schema-version-must-be-asserted-at-consumer-boundary.
+  // Schema-gate. Non-throwing — an in-flight v=1 envelope (no fullName)
+  // should drain to {ok:false}, not burn a retry. The webhook now emits v=2
+  // with fullName; v=1 events persisted up to ~24h replay through here.
   const v = event.v ?? "0";
   const gate = await step.run("schema-gate", async () => {
     if (v !== WORKSPACE_RECONCILE_SCHEMA_V) {
@@ -90,144 +94,148 @@ export async function workspaceReconcileOnPushHandler({
     return { ok: false, reason: gate.reason };
   }
 
-  // Step 1: fetch user row. Defense-in-depth — the dispatcher already
-  // resolved founderId via the partial-UNIQUE github_installation_id
-  // index, but installs can be uninstalled between dispatch and Inngest
-  // pickup. Skip + Sentry-mirror without touching the filesystem.
-  const userRow = await step.run("fetch-user-row", async () => {
-    const tenant = await getFreshTenantClient(founderId);
-    const { data, error } = await tenant
-      .from("users")
-      .select("workspace_path, workspace_status, github_installation_id, kb_sync_history")
-      .eq("id", founderId)
-      .single();
-    if (error || !data) return null;
-    return data as UserRow;
+  // Compose-before-normalize (ADR-044 P0): repository.full_name is a bare
+  // `owner/repo` slug; workspaces.repo_url stores a full URL. Compose the
+  // URL FIRST or the match is zero-rows while a URL→URL parity test passes.
+  const targetRepoUrl = normalizeRepoUrl(`https://github.com/${fullName}`);
+
+  // Resolve EVERY workspace connected to (installation_id, repo). Service
+  // client: the webhook is a trusted post-signature-verification context and
+  // workspaces may be owned by different users (two-users-same-fork). The
+  // (installation_id, repo_url) filter makes the old install-mismatch
+  // defense-in-depth check structural — every match has the right install.
+  const workspaces = await step.run("resolve-workspaces", async () => {
+    const { createServiceClient } = await import("@/lib/supabase/service");
+    const service = createServiceClient();
+    const { data, error } = await service
+      .from("workspaces")
+      .select("id")
+      .eq("github_installation_id", installationId)
+      .eq("repo_url", targetRepoUrl);
+    if (error) {
+      return { rows: null as { id: string }[] | null, error };
+    }
+    return { rows: (data as { id: string }[] | null) ?? [], error: null };
   });
 
-  if (!userRow) {
-    reportSilentFallback(new Error("user row missing or unmapped"), {
+  if (workspaces.error) {
+    reportSilentFallback(workspaces.error, {
       feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
-      op: "skip-unmapped",
-      extra: { userId: founderId, installationId, deliveryId },
-      message: "Reconcile skipped — founder no longer mapped to installation",
+      op: "resolve-workspaces",
+      extra: { installationId, deliveryId, targetRepoUrl },
+      message: "Reconcile aborted — workspace resolution failed",
     });
-    return { ok: false, reason: "unmapped-founder" };
+    return { ok: false, reason: "workspace-resolve-failed" };
   }
 
-  // Defense-in-depth installation_id verification. The dispatcher binds
-  // installation_id → founder_id via the partial-UNIQUE index in migration
-  // 052, but Inngest events persist 24h + are replay-eligible, and an
-  // install can be uninstalled+reinstalled in that window (new install_id
-  // for the same operator). If the event-bound installation_id no longer
-  // matches the user's current row, skip rather than minting a token
-  // against a stale install.
-  if (
-    userRow.github_installation_id !== null &&
-    userRow.github_installation_id !== installationId
-  ) {
-    reportSilentFallback(new Error("installation_id mismatch"), {
+  const rows = workspaces.rows ?? [];
+  if (rows.length === 0) {
+    reportSilentFallback(new Error("no workspace matched (installation_id, repo)"), {
       feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
-      op: "skip-install-mismatch",
-      extra: {
-        userId: founderId,
-        installationId,
-        deliveryId,
-        rowInstallationId: userRow.github_installation_id,
-      },
-      message: "Reconcile aborted — event installation_id does not match user row",
+      op: "skip-no-workspace-match",
+      extra: { installationId, deliveryId, targetRepoUrl },
+      message: "Reconcile skipped — no workspace connected to this repo",
     });
-    return { ok: false, reason: "install-mismatch" };
+    return { ok: false, reason: "no-workspace-match" };
   }
 
-  const workspacePath = userRow.workspace_path;
-  if (!workspacePath) {
-    reportSilentFallback(new Error("workspace_path missing"), {
-      feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
-      op: "skip-no-workspace",
-      extra: { userId: founderId, installationId, deliveryId },
-      message: "Reconcile skipped — workspace_path missing",
+  // Fan out: process every matching workspace independently. A push to a
+  // shared repo legitimately affects all connected workspaces.
+  let synced = 0;
+  for (const ws of rows) {
+    const outcome = await step.run(`reconcile-${ws.id}`, async () => {
+      const { createServiceClient } = await import("@/lib/supabase/service");
+      const service = createServiceClient();
+
+      // Owner for kb_sync_history attribution (the workspace's owner row).
+      const { data: ownerRow } = await service
+        .from("workspace_members")
+        .select("user_id")
+        .eq("workspace_id", ws.id)
+        .eq("role", "owner")
+        .maybeSingle();
+      const ownerId = (ownerRow as { user_id?: string } | null)?.user_id ?? null;
+
+      const workspacePath = workspacePathForWorkspaceId(ws.id);
+
+      // Readiness = filesystem existence (ADR-044, operator decision). A
+      // not-yet-provisioned workspace dir skips without touching git.
+      if (!(await workspaceDirExists(workspacePath))) {
+        reportSilentFallback(new Error("workspace dir missing"), {
+          feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
+          op: "skip-not-ready",
+          extra: { workspaceId: ws.id, installationId, deliveryId },
+          message: "Workspace dir not provisioned — skipping reconcile",
+        });
+        if (ownerId) {
+          const skipAt = Date.now();
+          await appendKbSyncRow(ownerId, {
+            at: new Date(skipAt).toISOString(),
+            trigger: "webhook_push",
+            sha_before: beforeSha,
+            sha_after: headSha,
+            ok: false,
+            error_class: ERROR_CLASS_WORKSPACE_NOT_READY,
+            push_received_at: pushReceivedAt,
+            sync_completed_at: skipAt,
+          });
+        }
+        return { synced: false };
+      }
+
+      const syncResult = await syncWorkspace(installationId, workspacePath, logger, {
+        userId: ownerId ?? ws.id,
+        op: "push",
+      });
+
+      const completedAt = Date.now();
+      const at = new Date(completedAt).toISOString();
+
+      if (!syncResult.ok) {
+        reportSilentFallback(syncResult.error, {
+          feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
+          op: "sync",
+          extra: { workspaceId: ws.id, installationId, deliveryId },
+          message: "Workspace sync failed",
+        });
+        if (ownerId) {
+          await appendKbSyncRow(ownerId, {
+            at,
+            trigger: "webhook_push",
+            sha_before: beforeSha,
+            sha_after: headSha,
+            ok: false,
+            error_class: ERROR_CLASS_SYNC_FAILED,
+            push_received_at: pushReceivedAt,
+            sync_completed_at: completedAt,
+          });
+        }
+        return { synced: false };
+      }
+
+      if (ownerId) {
+        await appendKbSyncRow(ownerId, {
+          at,
+          trigger: "webhook_push",
+          sha_before: beforeSha,
+          sha_after: headSha,
+          ok: true,
+          push_received_at: pushReceivedAt,
+          sync_completed_at: completedAt,
+        });
+      }
+      return { synced: true };
     });
-    return { ok: false, reason: "no-workspace-path" };
+    if (outcome.synced) synced += 1;
   }
 
-  // Step 2: workspace_status guard. Only "ready" workspaces are reconciled;
-  // anything else (provisioning, etc.) skips with a kb_sync_history row.
-  if (userRow.workspace_status !== "ready") {
-    reportSilentFallback(new Error("workspace not ready"), {
-      feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
-      op: "skip-not-ready",
-      extra: {
-        userId: founderId,
-        installationId,
-        deliveryId,
-        workspaceStatus: userRow.workspace_status,
-      },
-      message: "Workspace not ready — skipping reconcile",
-    });
-    const skipCompletedAt = Date.now();
-    await appendKbSyncRow(founderId, {
-      at: new Date(skipCompletedAt).toISOString(),
-      trigger: "webhook_push",
-      sha_before: beforeSha,
-      sha_after: headSha,
-      ok: false,
-      error_class: ERROR_CLASS_WORKSPACE_NOT_READY,
-      push_received_at: pushReceivedAt,
-      sync_completed_at: skipCompletedAt,
-    });
-    return { ok: false, reason: "workspace-not-ready" };
+  if (synced === 0) {
+    return { ok: false, reason: "no-workspace-synced" };
   }
-
-  // Step 3: pull. syncWorkspace is `--ff-only`. We can't distinguish the
-  // failure class (non-fast-forward vs auth/net/IO) without parsing git
-  // stderr, so we tag failures as the generic `sync_failed` class and
-  // leave specific classification to a follow-up (#4228 telemetry will
-  // motivate the work). Anchor `at` to the same clock as
-  // sync_completed_at so manual + webhook rows have consistent semantics
-  // (sync-end, not sync-start).
-  const syncResult = await syncWorkspace(installationId, workspacePath, logger, {
-    userId: founderId,
-    op: "push",
-  });
-
-  const completedAt = Date.now();
-  const at = new Date(completedAt).toISOString();
-  if (!syncResult.ok) {
-    reportSilentFallback(syncResult.error, {
-      feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
-      op: "sync",
-      extra: { userId: founderId, installationId, deliveryId },
-      message: "Workspace sync failed",
-    });
-    await appendKbSyncRow(founderId, {
-      at,
-      trigger: "webhook_push",
-      sha_before: beforeSha,
-      sha_after: headSha,
-      ok: false,
-      error_class: ERROR_CLASS_SYNC_FAILED,
-      push_received_at: pushReceivedAt,
-      sync_completed_at: completedAt,
-    });
-    return { ok: false, reason: "sync-failed" };
-  }
-
-  await appendKbSyncRow(founderId, {
-    at,
-    trigger: "webhook_push",
-    sha_before: beforeSha,
-    sha_after: headSha,
-    ok: true,
-    push_received_at: pushReceivedAt,
-    sync_completed_at: completedAt,
-  });
-
-  return { ok: true };
+  return { ok: true, synced };
 }
 
-// Re-exported for test convenience (tests on workspace-reconcile-on-push
-// import the class literal to assert on Sentry-mirror context).
+// Re-exported for test convenience.
 export {
   ERROR_CLASS_NON_FAST_FORWARD,
   ERROR_CLASS_WORKSPACE_NOT_READY,
@@ -237,25 +245,15 @@ export {
 export const workspaceReconcileOnPush = inngest.createFunction(
   {
     id: "workspace-reconcile-on-push",
-    // CEL key per Inngest concurrency docs. The `string(...)` coercion is
-    // load-bearing — `event.data.installationId` is a `number`, and CEL's
-    // `+` operator does NOT auto-coerce string + int. Without `string(...)`,
-    // the expression rejects at runtime and concurrency silently degrades
-    // to "no limit" — defeating the per-installation serialization
-    // invariant. Peer functions (`github-on-event.ts`) only concatenate
-    // string-typed fields, so this is the first numeric CEL key in-repo.
+    // CEL key per Inngest concurrency docs. `string(...)` coercion is
+    // load-bearing — installationId is a number and CEL `+` does not
+    // auto-coerce string + int.
     concurrency: [
       { scope: "fn", key: '"wsr-" + string(event.data.installationId)', limit: 1 },
       { scope: "account", key: '"agent-runtime"', limit: 50 },
     ],
     retries: 1,
   },
-  // Use the exported constant so a future rename has one source of truth.
   { event: WORKSPACE_RECONCILE_REQUESTED_EVENT },
-  // Custom HandlerArgs interface deliberately diverges from the Inngest-
-  // generated handler type — the cast is what lets the unit test drive
-  // the handler directly with a mock step. EventSchemas registry does not
-  // yet exist in inngest/client.ts; when it does, thread this event
-  // through it and remove the cast.
   workspaceReconcileOnPushHandler as unknown as Parameters<typeof inngest.createFunction>[2],
 );

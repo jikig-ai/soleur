@@ -1,112 +1,84 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// #4224 — Inngest function on `platform/workspace.reconcile.requested`.
+// ADR-044 — Inngest reconcile on `platform/workspace.reconcile.requested`.
 //
-// Drives `workspaceReconcileOnPushHandler` directly with a mock `step` (each
-// step.run runs eagerly) so the Inngest runtime is not required for unit
-// coverage. Mirrors cfo-on-payment-failed.test.ts.
+// Re-architected from founder/users-keyed to a WORKSPACE FAN-OUT: a push
+// fans out to every workspace connected to (installation_id, repo), where
+// repo = normalizeRepoUrl("https://github.com/" + event.data.fullName).
+// Workspace path = <WORKSPACES_ROOT>/<workspace_id>; readiness = filesystem
+// existence; kb_sync_history is attributed to each workspace's owner.
 //
-// Load-bearing TOMs (Phase 2 write-scope + cross-tenant concurrent isolation)
-// are validated here — the cross-tenant concurrent test is the canonical
-// regression guard for the "syncWorkspace touched wrong workspace_path"
-// failure class flagged in §User-Brand Impact.
+// Drives the handler directly with a mock `step` (eager step.run).
 
 const ORIGINAL_ENV = {
   INNGEST_SIGNING_KEY: process.env.INNGEST_SIGNING_KEY,
   INNGEST_EVENT_KEY: process.env.INNGEST_EVENT_KEY,
   INNGEST_DEV: process.env.INNGEST_DEV,
+  WORKSPACES_ROOT: process.env.WORKSPACES_ROOT,
 };
-
 function restoreEnv(key: keyof typeof ORIGINAL_ENV) {
   if (ORIGINAL_ENV[key] === undefined) delete process.env[key];
   else process.env[key] = ORIGINAL_ENV[key];
 }
 
-// --- Module mocks (hoisted) -------------------------------------------------
+// --- workspace + membership fixtures ---------------------------------------
+// workspaces matching the (installation_id, repo_url) query.
+let WORKSPACE_ROWS: { id: string }[] = [];
+let WORKSPACE_QUERY_ERROR: { message: string } | null = null;
+// workspace_id -> owner user_id
+const OWNERS = new Map<string, string>();
+// captured (col, val) of the repo_url filter on the workspaces query
+const repoUrlFilterSpy = vi.fn();
 
-interface UserRow {
-  id: string;
-  workspace_path: string;
-  workspace_status: string;
-  github_installation_id: number | null;
-  kb_sync_history: unknown[];
-}
-
-const USER_ROWS = new Map<string, UserRow>();
-const UPDATES = new Map<string, { kb_sync_history: unknown[] }>();
-
-const tenantSelectSpy = vi.fn();
-const tenantUpdateSpy = vi.fn();
-
-const getFreshTenantClientSpy = vi.fn(async (userId: string) => {
-  return {
-    from: (table: string) => {
-      if (table !== "users") throw new Error(`unexpected table ${table}`);
-      return {
-        select: (cols: string) => {
-          tenantSelectSpy(userId, cols);
-          return {
-            eq: () => ({
-              single: async () => {
-                const row = USER_ROWS.get(userId);
-                if (!row) return { data: null, error: { code: "PGRST116" } };
-                return { data: row, error: null };
-              },
-              maybeSingle: async () => {
-                const row = USER_ROWS.get(userId);
-                return { data: row ?? null, error: null };
-              },
-            }),
-          };
-        },
-        update: (patch: { kb_sync_history?: unknown[] }) => {
-          tenantUpdateSpy(userId, patch);
-          return {
-            eq: async () => {
-              const existing = USER_ROWS.get(userId);
-              if (existing && patch.kb_sync_history) {
-                existing.kb_sync_history = patch.kb_sync_history;
-              }
-              UPDATES.set(userId, {
-                kb_sync_history: patch.kb_sync_history ?? [],
-              });
-              return { error: null };
-            },
-          };
-        },
-      };
-    },
-  };
+const serviceFrom = vi.fn((table: string) => {
+  if (table === "workspaces") {
+    const chain = {
+      select: () => chain,
+      eq: (col: string, val: unknown) => {
+        if (col === "repo_url") repoUrlFilterSpy(val);
+        return chain;
+      },
+      then: (resolve: (v: unknown) => unknown) =>
+        Promise.resolve({
+          data: WORKSPACE_QUERY_ERROR ? null : WORKSPACE_ROWS,
+          error: WORKSPACE_QUERY_ERROR,
+        }).then(resolve),
+    } as Record<string, unknown>;
+    return chain;
+  }
+  if (table === "workspace_members") {
+    let wsId = "";
+    const chain = {
+      select: () => chain,
+      eq: (col: string, val: string) => {
+        if (col === "workspace_id") wsId = val;
+        return chain;
+      },
+      maybeSingle: async () => {
+        const owner = OWNERS.get(wsId);
+        return { data: owner ? { user_id: owner } : null, error: null };
+      },
+    } as Record<string, unknown>;
+    return chain;
+  }
+  throw new Error(`unexpected service table ${table}`);
 });
 
-vi.mock("@/lib/supabase/tenant", () => ({
-  getFreshTenantClient: getFreshTenantClientSpy,
-  RuntimeAuthError: class RuntimeAuthError extends Error {},
+vi.mock("@/lib/supabase/service", () => ({
+  createServiceClient: () => ({ from: serviceFrom }),
 }));
 
 const syncWorkspaceSpy = vi.fn();
-vi.mock("@/server/kb-route-helpers", () => ({
-  syncWorkspace: syncWorkspaceSpy,
-}));
+vi.mock("@/server/kb-route-helpers", () => ({ syncWorkspace: syncWorkspaceSpy }));
 
-// session-sync exports `appendKbSyncRow` for the heterogeneous JSONB
-// write (#4224). The mock walks the same shape as the tenant-client
-// fetch/update pair below so the test asserts on UPDATES the same way.
-const appendKbSyncRowSpy = vi.fn(async (userId: string, row: unknown) => {
-  const existing = USER_ROWS.get(userId);
-  const list = existing?.kb_sync_history ?? [];
-  const updated = [...list, row];
-  if (existing) existing.kb_sync_history = updated;
-  UPDATES.set(userId, { kb_sync_history: updated });
+// kb_sync_history appends keyed by owner userId.
+const APPENDS = new Map<string, Record<string, unknown>[]>();
+const appendKbSyncRowSpy = vi.fn(async (userId: string, row: Record<string, unknown>) => {
+  APPENDS.set(userId, [...(APPENDS.get(userId) ?? []), row]);
 });
 vi.mock("@/server/session-sync", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/session-sync")>();
-  return {
-    // Preserve real constants (event name, schema version, error_class
-    // literals, feature tag) so the Inngest function's imports resolve.
-    ...actual,
-    appendKbSyncRow: appendKbSyncRowSpy,
-  };
+  return { ...actual, appendKbSyncRow: appendKbSyncRowSpy };
 });
 
 const reportSilentFallbackSpy = vi.fn();
@@ -115,308 +87,248 @@ vi.mock("@/server/observability", () => ({
   hashUserId: (s: string) => `hash-${s}`,
 }));
 
+// Filesystem existence: directories present in EXISTING_DIRS exist.
+const EXISTING_DIRS = new Set<string>();
+vi.mock("node:fs", () => ({
+  promises: {
+    stat: async (p: string) => {
+      if (EXISTING_DIRS.has(p)) return { isDirectory: () => true };
+      throw new Error("ENOENT");
+    },
+  },
+}));
+
 const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn() };
 
-// --- Helpers ----------------------------------------------------------------
-
 interface MockStep {
-  calls: { name: string; result: unknown }[];
+  calls: { name: string }[];
   run<T>(name: string, cb: () => Promise<T>): Promise<T>;
 }
-
 function makeStep(): MockStep {
-  const calls: { name: string; result: unknown }[] = [];
+  const calls: { name: string }[] = [];
   return {
     calls,
     async run<T>(name: string, cb: () => Promise<T>): Promise<T> {
       const result = await cb();
-      calls.push({ name, result });
+      calls.push({ name });
       return result;
     },
   };
 }
 
-function seedUser(row: Partial<UserRow> & { id: string }) {
-  const full: UserRow = {
-    workspace_path: `/tmp/ws-${row.id}`,
-    workspace_status: "ready",
-    github_installation_id: 42,
-    kb_sync_history: [],
-    ...row,
-  };
-  USER_ROWS.set(row.id, full);
+const ROOT = "/tmp/wsroot";
+function wsPath(id: string) {
+  return `${ROOT}/${id}`;
 }
 
-function makeEvent(overrides: Partial<{
-  founderId: string;
-  installationId: number;
-  deliveryId: string;
-  defaultBranch: string;
-  headSha: string;
-  beforeSha: string;
-  pushReceivedAt: number;
-}> = {}) {
+function makeEvent(overrides: Partial<ReturnType<typeof baseData>> = {}) {
   return {
     name: "platform/workspace.reconcile.requested" as const,
-    v: "1" as const,
-    data: {
-      founderId: "founder-A",
-      installationId: 42,
-      deliveryId: "delivery-1",
-      defaultBranch: "main",
-      headSha: "abc1234567890abcdef1234567890abcdef12345",
-      beforeSha: "def4567890abcdef1234567890abcdef12345678",
-      pushReceivedAt: 1_700_000_000_000,
-      ...overrides,
-    },
+    v: "2" as const,
+    data: { ...baseData(), ...overrides },
+  };
+}
+function baseData() {
+  return {
+    founderId: "founder-A",
+    installationId: 42,
+    deliveryId: "delivery-1",
+    defaultBranch: "main",
+    headSha: "abc1234567890abcdef1234567890abcdef12345",
+    beforeSha: "def4567890abcdef1234567890abcdef12345678",
+    fullName: "jikig-ai/soleur",
+    pushReceivedAt: 1_700_000_000_000,
   };
 }
 
 beforeEach(() => {
-  USER_ROWS.clear();
-  UPDATES.clear();
-  tenantSelectSpy.mockReset();
-  tenantUpdateSpy.mockReset();
+  WORKSPACE_ROWS = [];
+  WORKSPACE_QUERY_ERROR = null;
+  OWNERS.clear();
+  APPENDS.clear();
+  EXISTING_DIRS.clear();
+  serviceFrom.mockClear();
+  repoUrlFilterSpy.mockClear();
   syncWorkspaceSpy.mockReset();
   appendKbSyncRowSpy.mockClear();
   reportSilentFallbackSpy.mockReset();
-  logger.warn.mockReset();
-  logger.info.mockReset();
-  logger.error.mockReset();
   vi.resetModules();
   process.env.INNGEST_SIGNING_KEY = "signkey-test-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   process.env.INNGEST_EVENT_KEY = "evtkey-test-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
   process.env.INNGEST_DEV = "1";
+  process.env.WORKSPACES_ROOT = ROOT;
 });
-
 afterEach(() => {
   restoreEnv("INNGEST_SIGNING_KEY");
   restoreEnv("INNGEST_EVENT_KEY");
   restoreEnv("INNGEST_DEV");
+  restoreEnv("WORKSPACES_ROOT");
 });
 
 async function importHandler() {
-  const mod = await import(
-    "@/server/inngest/functions/workspace-reconcile-on-push"
-  );
+  const mod = await import("@/server/inngest/functions/workspace-reconcile-on-push");
   return mod.workspaceReconcileOnPushHandler;
 }
 
-describe("workspace-reconcile-on-push — happy path", () => {
-  it("calls syncWorkspace + appends rich kb_sync_history row {ok:true, trigger:webhook_push}", async () => {
-    seedUser({ id: "founder-A", workspace_path: "/ws/A", github_installation_id: 42 });
+describe("reconcile — happy path (single workspace)", () => {
+  it("syncs the matching workspace and appends {ok:true} for its owner", async () => {
+    WORKSPACE_ROWS = [{ id: "ws-A" }];
+    OWNERS.set("ws-A", "owner-A");
+    EXISTING_DIRS.add(wsPath("ws-A"));
     syncWorkspaceSpy.mockResolvedValue({ ok: true });
 
     const handler = await importHandler();
-    const step = makeStep();
-    const result = await handler({ event: makeEvent(), step, logger });
+    const result = await handler({ event: makeEvent(), step: makeStep(), logger });
 
+    expect(result).toEqual({ ok: true, synced: 1 });
     expect(syncWorkspaceSpy).toHaveBeenCalledTimes(1);
     expect(syncWorkspaceSpy).toHaveBeenCalledWith(
       42,
-      "/ws/A",
+      wsPath("ws-A"),
       expect.anything(),
-      expect.objectContaining({ userId: "founder-A", op: "push" }),
+      expect.objectContaining({ userId: "owner-A", op: "push" }),
     );
-    expect(result).toEqual(expect.objectContaining({ ok: true }));
-
-    const update = UPDATES.get("founder-A");
-    expect(update).toBeDefined();
-    const row = (update!.kb_sync_history as Array<Record<string, unknown>>).slice(-1)[0];
-    expect(row).toEqual(
-      expect.objectContaining({
-        trigger: "webhook_push",
-        ok: true,
-        sha_before: "def4567890abcdef1234567890abcdef12345678",
-        sha_after: "abc1234567890abcdef1234567890abcdef12345",
-        push_received_at: 1_700_000_000_000,
-      }),
+    const rows = APPENDS.get("owner-A")!;
+    expect(rows.at(-1)).toEqual(
+      expect.objectContaining({ trigger: "webhook_push", ok: true }),
     );
-    expect(typeof (row as { at: unknown }).at).toBe("string");
-    expect(typeof (row as { sync_completed_at: unknown }).sync_completed_at).toBe("number");
   });
 });
 
-describe("workspace-reconcile-on-push — sync failure", () => {
-  it("appends row {ok:false, error_class:sync_failed} and mirrors to Sentry", async () => {
-    seedUser({ id: "founder-A", workspace_path: "/ws/A", github_installation_id: 42 });
-    syncWorkspaceSpy.mockResolvedValue({
-      ok: false,
-      error: new Error("non-fast-forward"),
+describe("reconcile — fan-out (AC6)", () => {
+  it("syncs BOTH workspaces that share one installation_id + repo", async () => {
+    WORKSPACE_ROWS = [{ id: "ws-A" }, { id: "ws-B" }];
+    OWNERS.set("ws-A", "owner-A");
+    OWNERS.set("ws-B", "owner-B");
+    EXISTING_DIRS.add(wsPath("ws-A"));
+    EXISTING_DIRS.add(wsPath("ws-B"));
+    syncWorkspaceSpy.mockResolvedValue({ ok: true });
+
+    const handler = await importHandler();
+    const result = await handler({ event: makeEvent(), step: makeStep(), logger });
+
+    expect(result).toEqual({ ok: true, synced: 2 });
+    expect(syncWorkspaceSpy).toHaveBeenCalledTimes(2);
+    expect(syncWorkspaceSpy.mock.calls.map((c) => c[1]).sort()).toEqual(
+      [wsPath("ws-A"), wsPath("ws-B")].sort(),
+    );
+    expect(APPENDS.get("owner-A")).toHaveLength(1);
+    expect(APPENDS.get("owner-B")).toHaveLength(1);
+  });
+});
+
+describe("reconcile — slug→URL parity (AC7)", () => {
+  it("composes https://github.com/<fullName> and normalizes BEFORE the repo_url filter", async () => {
+    WORKSPACE_ROWS = [{ id: "ws-A" }];
+    OWNERS.set("ws-A", "owner-A");
+    EXISTING_DIRS.add(wsPath("ws-A"));
+    syncWorkspaceSpy.mockResolvedValue({ ok: true });
+
+    const handler = await importHandler();
+    await handler({
+      event: makeEvent({ fullName: "Jikig-AI/Soleur" }),
+      step: makeStep(),
+      logger,
     });
 
-    const handler = await importHandler();
-    const step = makeStep();
-    await handler({ event: makeEvent(), step, logger });
-
-    const row = (UPDATES.get("founder-A")!.kb_sync_history as Array<Record<string, unknown>>).slice(-1)[0];
-    expect(row).toEqual(
-      expect.objectContaining({ ok: false, error_class: "sync_failed" }),
-    );
-
-    expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
-    const ctx = reportSilentFallbackSpy.mock.calls[0][1] as {
-      feature: string;
-      op?: string;
-      message?: string;
-    };
-    expect(ctx.feature).toBe("workspace-reconcile-push");
-    expect(ctx.op).toBe("sync");
-    expect(ctx.message).toMatch(/workspace sync failed/i);
+    // The match key is the composed + normalized URL (host lowercased,
+    // path case preserved) — never the bare slug.
+    expect(repoUrlFilterSpy).toHaveBeenCalledWith("https://github.com/Jikig-AI/Soleur");
+    expect(repoUrlFilterSpy).not.toHaveBeenCalledWith("Jikig-AI/Soleur");
   });
 });
 
-describe("workspace-reconcile-on-push — schema-gate", () => {
-  it("deadletters early when event.v is unsupported (non-throwing)", async () => {
-    seedUser({ id: "founder-A", workspace_path: "/ws/A", github_installation_id: 42 });
+describe("reconcile — schema gate (v=1 drains)", () => {
+  it("deadletters a v=1 in-flight event without syncing", async () => {
+    WORKSPACE_ROWS = [{ id: "ws-A" }];
     const handler = await importHandler();
-    const step = makeStep();
     const result = (await handler({
-      event: { ...makeEvent(), v: "2" },
-      step,
+      event: { ...makeEvent(), v: "1" },
+      step: makeStep(),
       logger,
     })) as { ok: boolean; reason?: string };
 
     expect(result.ok).toBe(false);
-    expect(result.reason).toMatch(/schema_v=2/);
+    expect(result.reason).toMatch(/schema_v=1/);
     expect(syncWorkspaceSpy).not.toHaveBeenCalled();
-    expect(step.calls.some((c) => c.name === "schema-gate")).toBe(true);
   });
 });
 
-describe("workspace-reconcile-on-push — installation_id mismatch (defense-in-depth)", () => {
-  it("skips syncWorkspace + Sentry mirrors when event installationId differs from user row", async () => {
-    seedUser({
-      id: "founder-A",
-      workspace_path: "/ws/A",
-      github_installation_id: 99, // ROW says 99
-    });
-
+describe("reconcile — no workspace match", () => {
+  it("skips + Sentry-mirrors when no workspace is connected to the repo", async () => {
+    WORKSPACE_ROWS = [];
     const handler = await importHandler();
-    const step = makeStep();
-    // Event carries installationId=42 (mismatch).
-    const result = await handler({
-      event: makeEvent({ installationId: 42 }),
-      step,
-      logger,
-    });
+    const result = await handler({ event: makeEvent(), step: makeStep(), logger });
 
-    expect(result).toEqual(expect.objectContaining({ ok: false, reason: "install-mismatch" }));
+    expect(result).toEqual({ ok: false, reason: "no-workspace-match" });
     expect(syncWorkspaceSpy).not.toHaveBeenCalled();
-    expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
-    expect(reportSilentFallbackSpy.mock.calls[0][1]).toEqual(
+    expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
+      expect.anything(),
       expect.objectContaining({
         feature: "workspace-reconcile-push",
-        op: "skip-install-mismatch",
+        op: "skip-no-workspace-match",
       }),
     );
   });
 });
 
-describe("workspace-reconcile-on-push — workspace not ready", () => {
-  it("skips syncWorkspace + appends row {ok:false, error_class:workspace_not_ready} + Sentry mirror op=skip-not-ready", async () => {
-    seedUser({
-      id: "founder-A",
-      workspace_path: "/ws/A",
-      workspace_status: "cloning",
-      github_installation_id: 42,
-    });
-
+describe("reconcile — workspace dir not provisioned", () => {
+  it("skips the workspace, appends {workspace_not_ready}, returns no-workspace-synced", async () => {
+    WORKSPACE_ROWS = [{ id: "ws-A" }];
+    OWNERS.set("ws-A", "owner-A");
+    // EXISTING_DIRS intentionally empty → dir missing.
     const handler = await importHandler();
-    const step = makeStep();
-    await handler({ event: makeEvent(), step, logger });
+    const result = await handler({ event: makeEvent(), step: makeStep(), logger });
 
     expect(syncWorkspaceSpy).not.toHaveBeenCalled();
-    const row = (UPDATES.get("founder-A")!.kb_sync_history as Array<Record<string, unknown>>).slice(-1)[0];
-    expect(row).toEqual(
+    expect(result).toEqual({ ok: false, reason: "no-workspace-synced" });
+    expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
       expect.objectContaining({ ok: false, error_class: "workspace_not_ready" }),
     );
-    expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
-    expect(reportSilentFallbackSpy.mock.calls[0][1]).toEqual(
-      expect.objectContaining({ feature: "workspace-reconcile-push", op: "skip-not-ready" }),
+    expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "skip-not-ready" }),
     );
   });
 });
 
-describe("workspace-reconcile-on-push — unmapped founderId (defense-in-depth)", () => {
-  it("does NOT call syncWorkspace and mirrors to Sentry when user row is missing", async () => {
-    // Deliberately do not seed the user row.
+describe("reconcile — sync failure", () => {
+  it("appends {sync_failed} + Sentry mirror op=sync", async () => {
+    WORKSPACE_ROWS = [{ id: "ws-A" }];
+    OWNERS.set("ws-A", "owner-A");
+    EXISTING_DIRS.add(wsPath("ws-A"));
+    syncWorkspaceSpy.mockResolvedValue({ ok: false, error: new Error("non-fast-forward") });
+
     const handler = await importHandler();
-    const step = makeStep();
-    await handler({ event: makeEvent({ founderId: "ghost-founder" }), step, logger });
+    const result = await handler({ event: makeEvent(), step: makeStep(), logger });
 
-    expect(syncWorkspaceSpy).not.toHaveBeenCalled();
-    expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
-    expect(reportSilentFallbackSpy.mock.calls[0][1]).toEqual(
-      expect.objectContaining({
-        feature: "workspace-reconcile-push",
-        op: "skip-unmapped",
-      }),
+    expect(result).toEqual({ ok: false, reason: "no-workspace-synced" });
+    expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
+      expect.objectContaining({ ok: false, error_class: "sync_failed" }),
+    );
+    expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ feature: "workspace-reconcile-push", op: "sync" }),
     );
   });
 });
 
-describe("workspace-reconcile-on-push — write-scope (single tenant)", () => {
-  it("syncWorkspace receives ONLY founder A's workspace_path when event is for A", async () => {
-    seedUser({ id: "founder-A", workspace_path: "/ws/A", github_installation_id: 42 });
-    seedUser({ id: "founder-B", workspace_path: "/ws/B", github_installation_id: 99 });
+describe("reconcile — cross-tenant isolation (fan-out per workspace)", () => {
+  it("each workspace syncs ONLY its own derived path", async () => {
+    WORKSPACE_ROWS = [{ id: "ws-A" }, { id: "ws-B" }];
+    OWNERS.set("ws-A", "owner-A");
+    OWNERS.set("ws-B", "owner-B");
+    EXISTING_DIRS.add(wsPath("ws-A"));
+    EXISTING_DIRS.add(wsPath("ws-B"));
     syncWorkspaceSpy.mockResolvedValue({ ok: true });
 
     const handler = await importHandler();
-    const step = makeStep();
-    await handler({ event: makeEvent({ founderId: "founder-A", installationId: 42 }), step, logger });
+    await handler({ event: makeEvent(), step: makeStep(), logger });
 
-    expect(syncWorkspaceSpy).toHaveBeenCalledTimes(1);
-    const [calledInstallationId, calledWorkspacePath] = syncWorkspaceSpy.mock.calls[0];
-    expect(calledInstallationId).toBe(42);
-    expect(calledWorkspacePath).toBe("/ws/A");
-    expect(calledWorkspacePath).not.toBe("/ws/B");
-
-    // B's row must NOT be touched.
-    expect(UPDATES.get("founder-B")).toBeUndefined();
-  });
-});
-
-describe("workspace-reconcile-on-push — cross-tenant concurrent (Kieran #8)", () => {
-  it("two concurrent invocations isolate to their own workspace_paths (no cross-coalescing)", async () => {
-    seedUser({ id: "founder-A", workspace_path: "/ws/A", github_installation_id: 42 });
-    seedUser({ id: "founder-B", workspace_path: "/ws/B", github_installation_id: 99 });
-
-    // Resolve both calls concurrently; assert both got their own params.
-    syncWorkspaceSpy.mockImplementation(async (_installId, wsPath) => {
-      // Simulate a small async hop so the two awaits overlap.
-      await new Promise((r) => setImmediate(r));
-      return { ok: true, calledWith: wsPath };
-    });
-
-    const handler = await importHandler();
-    const stepA = makeStep();
-    const stepB = makeStep();
-    await Promise.all([
-      handler({
-        event: makeEvent({ founderId: "founder-A", installationId: 42, deliveryId: "delivery-A" }),
-        step: stepA,
-        logger,
-      }),
-      handler({
-        event: makeEvent({ founderId: "founder-B", installationId: 99, deliveryId: "delivery-B" }),
-        step: stepB,
-        logger,
-      }),
-    ]);
-
-    expect(syncWorkspaceSpy).toHaveBeenCalledTimes(2);
-    const aCall = syncWorkspaceSpy.mock.calls.find((c) => c[0] === 42)!;
-    const bCall = syncWorkspaceSpy.mock.calls.find((c) => c[0] === 99)!;
-    expect(aCall[1]).toBe("/ws/A");
-    expect(bCall[1]).toBe("/ws/B");
-
-    // Each user's row records exactly one append.
-    expect(
-      (UPDATES.get("founder-A")!.kb_sync_history as unknown[]).length,
-    ).toBe(1);
-    expect(
-      (UPDATES.get("founder-B")!.kb_sync_history as unknown[]).length,
-    ).toBe(1);
+    const aCall = syncWorkspaceSpy.mock.calls.find((c) => c[3].userId === "owner-A")!;
+    const bCall = syncWorkspaceSpy.mock.calls.find((c) => c[3].userId === "owner-B")!;
+    expect(aCall[1]).toBe(wsPath("ws-A"));
+    expect(bCall[1]).toBe(wsPath("ws-B"));
+    expect(aCall[1]).not.toBe(bCall[1]);
   });
 });
