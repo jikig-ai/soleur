@@ -22,7 +22,7 @@
 # exists, so commit-message overrides are structurally unreachable here.)
 #
 # Hook stdin: JSON payload from Claude Code with tool_name + tool_input.
-# Hook stdout: JSON {hookSpecificOutput: {permissionDecision, ...}}.
+# Hook stdout: JSON {hookSpecificOutput: {hookEventName, permissionDecision, ...}}.
 # Hook exit code: 0 always (JSON output controls the gate).
 
 set -euo pipefail
@@ -36,7 +36,7 @@ fi
 emit() { command -v emit_incident >/dev/null 2>&1 && emit_incident "$@" || true; }
 
 allow() {
-  echo '{"hookSpecificOutput":{"permissionDecision":"allow"}}'
+  echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
   exit 0
 }
 
@@ -44,7 +44,7 @@ deny() {
   local reason="$1"
   emit adr-033-inngest-cron-canonical deny "new-scheduled-cron-prefer-inngest: $reason"
   jq -nc --arg r "$reason" \
-    '{hookSpecificOutput: {permissionDecision: "deny", permissionDecisionReason: $r}}'
+    '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
   exit 0
 }
 

@@ -13,7 +13,7 @@
 #   LOW-RISK                        → permissionDecision: allow (silent)
 #
 # Hook stdin: JSON payload from Claude Code with tool_name + tool_input.
-# Hook stdout: JSON {hookSpecificOutput: {permissionDecision, permissionDecisionReason}}.
+# Hook stdout: JSON {hookSpecificOutput: {hookEventName, permissionDecision, permissionDecisionReason}}.
 # Hook exit code: 0 always (the JSON output is what controls the gate).
 
 set -euo pipefail
@@ -37,7 +37,7 @@ content="$(echo "$payload" | jq -r '.tool_input.content // empty' 2>/dev/null)"
 
 # Only fire on Write to relevant paths.
 if [ "$tool_name" != "Write" ]; then
-  echo '{"hookSpecificOutput":{"permissionDecision":"allow"}}'
+  echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
   exit 0
 fi
 
@@ -51,7 +51,7 @@ case "$file_path" in
   *.claude/skills/*SKILL.md|*plugins/soleur/skills/*SKILL.md|*.claude/agents/*.md|*plugins/soleur/agents/*.md)
     file_kind="skill" ;;
   *)
-    echo '{"hookSpecificOutput":{"permissionDecision":"allow"}}'
+    echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
     exit 0
     ;;
 esac
@@ -74,12 +74,12 @@ path_to_slug() {
 # their creation in the same way they approve the underlying HIGH-RISK skill.
 if [ "$file_kind" = "override" ]; then
   emit skill-security-scan applied "override-artifact-write"
-  jq -cn '{hookSpecificOutput: {permissionDecision: "ask", permissionDecisionReason: "skill-security-scan: override artifact write requires explicit operator confirmation. Auto-approval is not permitted (agent-native parity gate)."}}'
+  jq -cn '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: "skill-security-scan: override artifact write requires explicit operator confirmation. Auto-approval is not permitted (agent-native parity gate)."}}'
   exit 0
 fi
 
 if [ -z "$content" ]; then
-  echo '{"hookSpecificOutput":{"permissionDecision":"allow"}}'
+  echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
   exit 0
 fi
 
@@ -88,7 +88,7 @@ if [ ! -f "$SCANNER" ]; then
   # silently-removed scanner must surface for operator approval rather than
   # silently disable enforcement. (Architecture review F4.)
   emit skill-security-scan applied "scanner-missing"
-  jq -cn '{hookSpecificOutput: {permissionDecision: "ask", permissionDecisionReason: "skill-security-scan: scanner not installed; cannot evaluate. Approve only if you have manually reviewed the content."}}'
+  jq -cn '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: "skill-security-scan: scanner not installed; cannot evaluate. Approve only if you have manually reviewed the content."}}'
   exit 0
 fi
 
@@ -114,27 +114,27 @@ case "$verdict" in
     fi
     if [ "$override_ok" = "1" ]; then
       emit skill-security-scan applied "high-risk-with-override"
-      jq -cn --arg s "$slug" '{hookSpecificOutput: {permissionDecision: "allow", permissionDecisionReason: ("skill-security-scan: HIGH-RISK with valid override artifact for skill=" + $s + " (proceeding).")}}'
+      jq -cn --arg s "$slug" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: ("skill-security-scan: HIGH-RISK with valid override artifact for skill=" + $s + " (proceeding).")}}'
     else
       emit skill-security-scan applied "high-risk-no-override"
       reason="BLOCKED: skill-security-scan HIGH-RISK on $file_path (slug=$slug) without matching override artifact. Required: knowledge-base/security/skill-overrides/YYYY-MM-DD-${slug}.md with frontmatter skill: ${slug}. See plugins/soleur/skills/skill-security-scan/references/override-mechanism.md"
-      jq -cn --arg r "$reason" '{hookSpecificOutput: {permissionDecision: "deny", permissionDecisionReason: $r}}'
+      jq -cn --arg r "$reason" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
     fi
     ;;
   REVIEW)
     emit skill-security-scan applied "review"
-    jq -cn '{hookSpecificOutput: {permissionDecision: "ask", permissionDecisionReason: "skill-security-scan REVIEW finding(s); see scan output above."}}'
+    jq -cn '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: "skill-security-scan REVIEW finding(s); see scan output above."}}'
     ;;
   LOW-RISK)
     emit skill-security-scan applied "low-risk"
-    echo '{"hookSpecificOutput":{"permissionDecision":"allow"}}'
+    echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
     ;;
   *)
     # Unknown verdict → ask, not allow. At single-user incident threshold a
     # broken scanner must surface for operator review rather than silently
     # disable enforcement. (Architecture review F8.)
     emit skill-security-scan applied "unknown-verdict"
-    jq -cn '{hookSpecificOutput: {permissionDecision: "ask", permissionDecisionReason: "skill-security-scan returned UNKNOWN verdict; manual review required."}}'
+    jq -cn '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: "skill-security-scan returned UNKNOWN verdict; manual review required."}}'
     ;;
 esac
 

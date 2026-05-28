@@ -19,7 +19,7 @@
 # lefthook would have used — no rule duplication.
 #
 # Hook stdin: JSON payload from Claude Code with tool_name + tool_input.
-# Hook stdout: JSON {hookSpecificOutput: {permissionDecision, permissionDecisionReason}}.
+# Hook stdout: JSON {hookSpecificOutput: {hookEventName, permissionDecision, permissionDecisionReason}}.
 # Hook exit code: 0 always (JSON output controls the gate).
 #
 # Fail-open conditions (the hook allows the commit + emits a warn):
@@ -41,7 +41,7 @@ fi
 emit() { command -v emit_incident >/dev/null 2>&1 && emit_incident "$@" || true; }
 
 allow() {
-  echo '{"hookSpecificOutput":{"permissionDecision":"allow"}}'
+  echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
   exit 0
 }
 
@@ -49,7 +49,7 @@ deny() {
   local reason="$1"
   emit git-commit-secret-scan deny "git-commit-secret-scan: $reason"
   jq -nc --arg r "$reason" \
-    '{hookSpecificOutput: {permissionDecision: "deny", permissionDecisionReason: $r}}'
+    '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
   exit 0
 }
 

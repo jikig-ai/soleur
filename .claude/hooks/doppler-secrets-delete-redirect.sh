@@ -18,7 +18,7 @@ if printf '%s' "$CMD" | grep -qE 'doppler\s+secrets\s+(delete|set|upload)'; then
     SUBCMD=$(printf '%s' "$CMD" | grep -oE 'doppler\s+secrets\s+(delete|set|upload)' | awk '{print $3}')
     jq -n --arg subcmd "$SUBCMD" '{
       hookSpecificOutput: {
-        permissionDecision: "deny",
+        hookEventName: "PreToolUse",        permissionDecision: "deny",
         permissionDecisionReason: ("BLOCKED: `doppler secrets " + $subcmd + "` without `> /dev/null` — the CLI prints ALL remaining secrets to stdout. Add `> /dev/null` and verify with a separate `doppler secrets get` call.")
       }
     }'

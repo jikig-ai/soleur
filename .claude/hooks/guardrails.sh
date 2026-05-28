@@ -55,7 +55,7 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+commit'; then
     emit_incident "guardrails-block-commit-on-main" "deny" "Never allow agents to work directly on default branch" "$COMMAND"
     jq -n '{
       hookSpecificOutput: {
-        permissionDecision: "deny",
+        hookEventName: "PreToolUse",        permissionDecision: "deny",
         permissionDecisionReason: "BLOCKED: Committing directly to main/master is not allowed. Create a feature branch first."
       }
     }'
@@ -71,7 +71,7 @@ if echo "$COMMAND" | grep -qE 'rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[
   emit_incident "guardrails-block-rm-rf-worktrees" "deny" "Never rm -rf on a worktree path" "$COMMAND"
   jq -n '{
     hookSpecificOutput: {
-      permissionDecision: "deny",
+      hookEventName: "PreToolUse",      permissionDecision: "deny",
       permissionDecisionReason: "BLOCKED: rm -rf on worktree paths is not allowed. Use git worktree remove or worktree-manager.sh cleanup-merged instead."
     }
   }'
@@ -85,7 +85,7 @@ if echo "$COMMAND" | grep -qE 'gh\s+pr\s+merge.*--delete-branch'; then
     emit_incident "guardrails-block-delete-branch" "deny" "Never use --delete-branch with gh pr merge" "$COMMAND"
     jq -n '{
       hookSpecificOutput: {
-        permissionDecision: "deny",
+        hookEventName: "PreToolUse",        permissionDecision: "deny",
         permissionDecisionReason: "BLOCKED: --delete-branch with active worktrees will orphan them. Remove worktrees first, then merge."
       }
     }'
@@ -109,7 +109,7 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|merge
     emit_incident "guardrails-block-conflict-markers" "deny" "Resolve conflicts before committing" "$COMMAND"
     jq -n '{
       hookSpecificOutput: {
-        permissionDecision: "deny",
+        hookEventName: "PreToolUse",        permissionDecision: "deny",
         permissionDecisionReason: "BLOCKED: Staged content contains conflict markers (<<<<<<<, =======, or >>>>>>>). Resolve all conflicts before committing."
       }
     }'
@@ -123,7 +123,7 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create'; then
     emit_incident "guardrails-require-milestone" "deny" "gh issue create must include --milestone" "$COMMAND"
     jq -n '{
       hookSpecificOutput: {
-        permissionDecision: "deny",
+        hookEventName: "PreToolUse",        permissionDecision: "deny",
         permissionDecisionReason: "BLOCKED: gh issue create must include --milestone. Default to '\''Post-MVP / Later'\'' for operational issues. Read knowledge-base/product/roadmap.md for feature issues."
       }
     }'
@@ -140,7 +140,7 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+stash'; then
   emit_incident "hr-never-git-stash-in-worktrees" "deny" "Never git stash in worktrees" "$COMMAND"
   jq -n '{
     hookSpecificOutput: {
-      permissionDecision: "deny",
+      hookEventName: "PreToolUse",      permissionDecision: "deny",
       permissionDecisionReason: "BLOCKED: git stash is not allowed. Use git show <commit>:<path> to inspect old code, or commit WIP first."
     }
   }'
