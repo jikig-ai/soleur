@@ -33,6 +33,12 @@ for h in "$HOOK_DIR"/*.sh; do
   pd=$(grep -vE '^[[:space:]]*#' "$h" | grep -cE 'permissionDecision"?[[:space:]]*:' || true)
   hen=$(grep -vE '^[[:space:]]*#' "$h" | grep -c 'hookEventName' || true)
 
+  # Per-file count check (count(hookEventName) >= count(permissionDecision)),
+  # not per-emission pairing. This catches the realistic regression — a new
+  # decision block added without hookEventName bumps `pd` without `hen` and
+  # fails. It does NOT catch a contrived case of two hookEventName in one block
+  # plus zero in a sibling; that is not reachable today (every block has exactly
+  # one) and would require an AST-level parse to detect.
   if [[ "$pd" -gt 0 && "$hen" -lt "$pd" ]]; then
     echo "FAIL: $base emits $pd permissionDecision(s) but only $hen hookEventName(s)."
     echo "      Every permissionDecision output object must include hookEventName: \"PreToolUse\"."
