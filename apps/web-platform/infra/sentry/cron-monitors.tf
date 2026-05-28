@@ -154,12 +154,22 @@ resource "sentry_cron_monitor" "scheduled_follow_through" {
   timezone                = "UTC"
 }
 
+# scheduled-realtime-probe is GHA-fired (.github/workflows/scheduled-realtime-probe.yml,
+# on.schedule "0 7 * * *"), so it is subject to GitHub Actions scheduler
+# reliability gaps. On 2026-05-26 GitHub dropped the scheduled run ENTIRELY
+# (not jitter — a whole missing run), which paged a "missed check-in" on
+# 2026-05-28 even though the last actual run (05-27) passed 5/5. The 180-min
+# margin tolerated jitter but not a dropped 24h run; widen to 1440 (24h) so a
+# single dropped scheduled run does not page. A genuine realtime regression is
+# still caught loudly within any run that DOES fire (the probe's own 5x
+# SUBSCRIBED check files ci/realtime-broken); the margin only governs the
+# missed-RUN path, which is the false-alarm source. See issue #4189.
 resource "sentry_cron_monitor" "scheduled_realtime_probe" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-realtime-probe"
   schedule                = { crontab = "0 7 * * *" }
-  checkin_margin_minutes  = 180
+  checkin_margin_minutes  = 1440
   max_runtime_minutes     = 10
   failure_issue_threshold = 1
   recovery_threshold      = 1

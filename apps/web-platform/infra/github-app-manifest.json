@@ -20,7 +20,7 @@
     "administration": "write",
     "checks": "read",
     "contents": "write",
-    "issues": "read",
+    "issues": "write",
     "members": "read",
     "metadata": "read",
     "pull_requests": "write",

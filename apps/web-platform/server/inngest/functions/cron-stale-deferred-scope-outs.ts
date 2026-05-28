@@ -246,9 +246,17 @@ export async function sweepStaleScopeOuts(args: {
       );
       closed += 1;
     } catch (err) {
+      // Discriminate the issues:write-missing 403 so the operator can
+      // alert-route on it directly (see #4189). Same blind spot as the
+      // drift-guard + oauth-probe: createProbeOctokit() is installation-scoped
+      // and 403s on issue writes when the App lacks issues:write.
+      const op =
+        (err as { status?: number }).status === 403
+          ? "issue_write_403"
+          : "comment-and-close";
       reportSilentFallback(err as Error, {
         feature: "cron-stale-deferred-scope-outs",
-        op: "comment-and-close",
+        op,
         message: "comment-or-close failed for one issue; sweep continues",
         extra: {
           fn: "cron-stale-deferred-scope-outs",
