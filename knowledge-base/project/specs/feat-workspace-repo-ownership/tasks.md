@@ -33,11 +33,11 @@ plan: knowledge-base/project/plans/2026-05-28-feat-workspace-repo-ownership-plan
 
 ## Phase 2: Idempotent solo-only backfill — migration 080
 
-- [ ] 2.1 (RED) Idempotence test (2nd apply → 0 rows) + invited-solo-workspace SKIP test (AC2)
-- [ ] 2.2 Write `080_backfill_workspace_repo_from_users.sql`: copy users→workspaces repo cols joined on `w.id=u.id`, guarded by canary owner-row + `COUNT(members)=1`; `WHERE w.repo_url IS NULL`; `GET DIAGNOSTICS`/`RAISE NOTICE` audit
-- [ ] 2.3 TS/SQL `normalizeRepoUrl` parity for the backfill (users.repo_url is already a URL → URL→URL; CTE fixtures incl. `.git.git`; synthesized only). Webhook slug→URL parity is task 3.9 (AC7)
-- [ ] 2.4 Write `080_*.down.sql`
-- [ ] 2.5 (GREEN) Backfill verified against a real dev DB (not mocks); keep `users` cols intact
+- [x] 2.1 Shape test `test/supabase-migrations/080-backfill-workspace-repo-from-users.test.ts`: idempotence guard, invited-solo SKIP (COUNT>1 + NOTICE), copy shape. RED→GREEN (11 passed)
+- [x] 2.2 Wrote `080_backfill_workspace_repo_from_users.sql`: copy users→workspaces on `w.id=u.id`, canary owner-row + `COUNT(members)=1` guard, `WHERE w.repo_url IS NULL AND u.repo_url IS NOT NULL`, `GET DIAGNOSTICS`/`RAISE NOTICE` audit + separate SKIP-audit loop for co-membered
+- [x] 2.3 TS/SQL `normalizeRepoUrl` parity in `test/repo-url-sql-parity.test.ts` (JS port of 031 chain): URL→URL backfill parity (incl `.git.git`) AND slug→URL compose-before-normalize (AC7/task 3.9, since shared normalizer). 16 passed, synthesized fixtures
+- [x] 2.4 Wrote `080_*.down.sql` — scoped-forward-only (nulls only rows still `IS NOT DISTINCT FROM` source; documented forward-only for divergent rows)
+- [~] 2.5 (GREEN-apply) Real-DB backfill verification in `describe.skip` integration block (apply time, dedicated dev project). users cols kept intact (asserted by negative-space test). Plain copy — no re-normalization (031 already canonicalized)
 
 ## Phase 3: Read cutover — TS (workspaces-only reads)
 
