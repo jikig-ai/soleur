@@ -25,6 +25,24 @@
 -- wraps each migration file in a transaction (SQLSTATE 25001).
 
 -- =====================================================================
+-- 0. Preconditions — cross-file FK + dependency guard (fail fast)
+-- =====================================================================
+-- 079 alters public.workspaces + public.user_session_state and adds an FK
+-- from user_session_state.current_workspace_id -> public.workspaces(id).
+-- Assert the dependency tables exist before the transaction mutates schema,
+-- so a drifted/fresh dev project fails with a clear message instead of a
+-- mid-transaction FK error. See lint-migration-fk-preconditions.sh and
+-- knowledge-base/project/learnings/2026-05-22-schema-vs-ledger-drift-on-dev-supabase.md.
+DO $$ BEGIN
+  IF to_regclass('public.workspaces') IS NULL THEN
+    RAISE EXCEPTION 'Precondition failed: public.workspaces must exist before 079 (apply migration 053 first)';
+  END IF;
+  IF to_regclass('public.user_session_state') IS NULL THEN
+    RAISE EXCEPTION 'Precondition failed: public.user_session_state must exist before 079 (apply migration 060 first)';
+  END IF;
+END $$;
+
+-- =====================================================================
 -- 1. Repo-connection columns on public.workspaces (mirror 011 exactly)
 -- =====================================================================
 
