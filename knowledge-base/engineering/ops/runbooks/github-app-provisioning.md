@@ -78,10 +78,13 @@ Procedure:
 
 1. Navigate to `https://github.com/organizations/jikig-ai/settings/installations/130018654`
    (the App was reinstalled; the current installation ID is `130018654`, was
-   `122213433`). Note: the #4189 fix widened `issues: read → write` — that
-   single re-consent click ALSO clears the dropped-`members:read` drift (a
-   manifest-LOWERED permission needs no re-grant; only manifest-RAISED
-   permissions like `issues:write` surface the banner).
+   `122213433`). Note: the #4189 fix widened `issues: read → write`, and the
+   live install was already missing the long-declared `members: read`. Both are
+   manifest-RAISED relative to the live grant, so a SINGLE re-consent click
+   grants both — restoring the cron issue-filing trail AND clearing the
+   `installation_permission_drift {members:read}` that kept #4189 open.
+   (`members: read` is load-bearing for org-level installation ownership
+   verification in `server/github-app.ts`; it is granted, not dropped.)
 2. GitHub renders a "Soleur AI is requesting an update to its permissions"
    banner with a "Review request" link when any declared permission exceeds
    the installation's current grants. Click **Review request** then

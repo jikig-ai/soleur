@@ -46,12 +46,15 @@ const EXPECTED_TF_SECRETS = [
 // after PR #4226 AC9 enablement granted `issues`, `repository_advisories`,
 // and `secret_scanning_alerts` at `read` so PR-H #3244's `triage.p0p1_issue`
 // and `security.cve_alert` event routes can deliver. Updated again for #4189:
-// `issues` bumped read→write (restores the cron issue-filing trail — the
-// drift-guard + oauth-probe + stale-scope-out + community-monitor crons write
-// issues via the installation-scoped App token and 403'd silently under
-// `issues:read`), and `members` dropped (provably unused — workspace
-// membership reads Supabase `workspace_members`, not GitHub org membership;
-// the unused scope was the `installation_permission_drift` keeping #4189 open).
+// `issues` bumped read->write (restores the cron issue-filing trail — the
+// drift-guard, oauth-probe, and stale-deferred-scope-outs crons write issues
+// via the installation-scoped App token and 403'd silently under `issues:read`).
+// `members: read` is RETAINED — it is load-bearing for org-level installation
+// ownership verification (server/github-app.ts calls GET /orgs/{org}/members/
+// {user} via the installation token in verifyInstallationOwnership +
+// findOrgInstallationForUser). The #4189 installation_permission_drift
+// (members:read missing on the live install) is cleared by re-consenting to
+// GRANT the already-declared scope, not by dropping it.
 // The drift-guard cron is the runtime signal for divergence; this test catches
 // an in-band manifest mutation that adds an unexpected permission via a
 // malicious or sloppy PR.
@@ -61,6 +64,7 @@ const EXPECTED_PERMISSION_KEYS = [
   "checks",
   "contents",
   "issues",
+  "members",
   "metadata",
   "pull_requests",
   "repository_advisories",
@@ -105,6 +109,16 @@ describe("github-app-manifest.json symbol parity", () => {
   test("default_permissions.administration === 'write'", () => {
     const m = JSON.parse(readFileSync(MANIFEST_PATH, "utf-8")) as Manifest;
     expect(m.default_permissions?.administration).toBe("write");
+  });
+
+  test("default_permissions.issues === 'write'", () => {
+    // #4189 root-cause guard: the cron issue-filing trail (drift-guard,
+    // oauth-probe, stale-deferred-scope-outs) 403s silently if `issues`
+    // regresses to `read`. The exact-key-set test only checks keys, not
+    // values, so this dedicated value assertion prevents a silent revert
+    // that would reintroduce the dark-issue-trail outage with a green suite.
+    const m = JSON.parse(readFileSync(MANIFEST_PATH, "utf-8")) as Manifest;
+    expect(m.default_permissions?.issues).toBe("write");
   });
 
   test("public === false", () => {

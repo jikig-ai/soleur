@@ -600,6 +600,79 @@ describe("cronGithubAppDriftGuardHandler — issue-write 403 discriminator", () 
     );
     expect(call).toBeDefined();
   });
+
+  it("403 whose message matches the leak regex still yields op=issue_write_403 (ordering guard)", async () => {
+    // Locks the invariant the catch comment documents: `.status` is read off
+    // the ORIGINAL err BEFORE redactedError(err) strips it. A 403 whose
+    // message contains a PEM shape forces redactedError to return a fresh
+    // Error without `.status`; if op were computed post-redaction it would
+    // silently degrade to "handleIssue". The issue BODY (built from the
+    // app_id_mismatch detail) is PEM-free, so assertNoLeak passes and the
+    // POST is reached before the mock throws.
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route === "GET /app") {
+        return {
+          status: 200,
+          data: { id: 99999, client_id: "Iv23li9p88M5ZxYv1b7V" },
+          headers: {},
+        };
+      }
+      if (route === "GET /search/issues") return { data: { items: [] } };
+      if (route === "POST /repos/{owner}/{repo}/issues") {
+        const err = new Error(
+          "upstream 403: -----BEGIN RSA PRIVATE KEY----- leaked in error",
+        ) as Error & { status?: number };
+        err.status = 403;
+        throw err;
+      }
+      return { data: {} };
+    });
+    const { cronGithubAppDriftGuardHandler } = await importHandler();
+    const step = makeStep();
+    await cronGithubAppDriftGuardHandler({ step, logger });
+    const call = reportSilentFallbackSpy.mock.calls.find(
+      ([, ctx]) => (ctx as { op?: string })?.op === "issue_write_403",
+    );
+    expect(call).toBeDefined();
+    // And the error forwarded to Sentry is redacted (no PEM bytes leak).
+    expect((call![0] as Error).message).not.toMatch(/BEGIN .*PRIVATE KEY/);
+  });
+
+  it("403 on the COMMENT path (dedup hit) also yields op=issue_write_403", async () => {
+    // Production 403s land on the comment/close paths too (a tracking issue
+    // usually already exists). search returns an existing issue → the comment
+    // branch runs → 403 on POST comments must still discriminate.
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route === "GET /app") {
+        return {
+          status: 200,
+          data: { id: 99999, client_id: "Iv23li9p88M5ZxYv1b7V" },
+          headers: {},
+        };
+      }
+      if (route === "GET /search/issues") {
+        return { data: { items: [{ number: 4189 }] } };
+      }
+      if (
+        route ===
+        "POST /repos/{owner}/{repo}/issues/{issue_number}/comments"
+      ) {
+        const err = new Error(
+          "Resource not accessible by integration",
+        ) as Error & { status?: number };
+        err.status = 403;
+        throw err;
+      }
+      return { data: {} };
+    });
+    const { cronGithubAppDriftGuardHandler } = await importHandler();
+    const step = makeStep();
+    await cronGithubAppDriftGuardHandler({ step, logger });
+    const call = reportSilentFallbackSpy.mock.calls.find(
+      ([, ctx]) => (ctx as { op?: string })?.op === "issue_write_403",
+    );
+    expect(call).toBeDefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

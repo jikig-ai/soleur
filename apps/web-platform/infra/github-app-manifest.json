@@ -21,6 +21,7 @@
     "checks": "read",
     "contents": "write",
     "issues": "write",
+    "members": "read",
     "metadata": "read",
     "pull_requests": "write",
     "repository_advisories": "read",
