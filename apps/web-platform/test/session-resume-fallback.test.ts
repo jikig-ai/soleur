@@ -8,9 +8,10 @@ process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
 // Use vi.hoisted() for variables referenced inside vi.mock() factories.
 // ---------------------------------------------------------------------------
 
-const { mockFrom, mockQuery, mockSendToClient, mockCaptureException, mockReadFileSync } =
+const { mockFrom, mockRpc, mockQuery, mockSendToClient, mockCaptureException, mockReadFileSync } =
   vi.hoisted(() => ({
     mockFrom: vi.fn(),
+    mockRpc: vi.fn(),
     mockQuery: vi.fn(),
     mockSendToClient: vi.fn(),
     mockCaptureException: vi.fn(),
@@ -45,7 +46,7 @@ vi.mock("@supabase/supabase-js", () => ({
 // PR-B (#3244 §1.5.1): tenant-client factory; route through the same
 // mock chain so existing assertions still apply.
 vi.mock("@/lib/supabase/tenant", () => ({
-  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom, rpc: vi.fn() })),
+  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom, rpc: mockRpc })),
   mintFounderJwt: vi.fn(),
   RuntimeAuthError: class RuntimeAuthError extends Error {
     cause: string;
@@ -131,6 +132,7 @@ vi.mock("../server/observability", () => ({
 }));
 
 import { startAgentSession } from "../server/agent-runner";
+import { configureInstallationRpc } from "./helpers/agent-runner-mocks";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -227,6 +229,10 @@ function setupSupabaseMock() {
       insert: () => ({ error: null }),
     };
   });
+  // ADR-044: installationId now resolves via the
+  // resolve_workspace_installation_id RPC (active-workspace credential). This
+  // fixture has no connected repo, so it resolves null.
+  configureInstallationRpc(mockRpc, null);
 }
 
 // ---------------------------------------------------------------------------

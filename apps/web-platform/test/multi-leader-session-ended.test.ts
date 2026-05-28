@@ -44,7 +44,16 @@ vi.mock("@supabase/supabase-js", () => ({
 vi.mock("@/lib/supabase/tenant", () => ({
   getFreshTenantClient: vi.fn(async () => ({
     from: mockFrom,
-    rpc: vi.fn().mockResolvedValue({ error: null }),
+    // ADR-044: installationId resolves via resolve_workspace_installation_id
+    // (active-workspace credential). BASE_USER_DATA connects installation
+    // 12345, so the RPC mirrors it; other RPCs keep the prior {error:null}.
+    rpc: vi.fn((fnName: string) =>
+      Promise.resolve(
+        fnName === "resolve_workspace_installation_id"
+          ? { data: 12345, error: null }
+          : { error: null },
+      ),
+    ),
   })),
   mintFounderJwt: vi.fn(),
   RuntimeAuthError: class RuntimeAuthError extends Error {

@@ -23,6 +23,7 @@ process.env.NEXT_PUBLIC_APP_URL ??= "https://app.soleur.ai";
 
 const {
   mockFrom,
+  mockRpc,
   mockQuery,
   mockReadFileSync,
   mockReadFile,
@@ -32,6 +33,7 @@ const {
   sendToClientSpy,
 } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
+  mockRpc: vi.fn(),
   mockQuery: vi.fn(),
   mockReadFileSync: vi.fn(),
   mockReadFile: vi.fn(),
@@ -70,7 +72,7 @@ vi.mock("@supabase/supabase-js", () => ({
 }));
 
 vi.mock("@/lib/supabase/tenant", () => ({
-  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom, rpc: vi.fn() })),
+  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom, rpc: mockRpc })),
   mintFounderJwt: vi.fn(),
   RuntimeAuthError: class RuntimeAuthError extends Error {
     cause: string;
@@ -184,7 +186,7 @@ beforeEach(() => {
   selectChapterSpy.mockReset();
   extractPdfTextSpy.mockReset();
   mockReadFile.mockReset();
-  createSupabaseMockImpl(mockFrom, { userData: BASE_USER_DATA });
+  createSupabaseMockImpl(mockFrom, { userData: BASE_USER_DATA, mockRpc });
   createQueryMock(mockQuery);
 });
 

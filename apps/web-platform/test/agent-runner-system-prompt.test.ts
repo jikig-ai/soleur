@@ -8,8 +8,9 @@ process.env.NEXT_PUBLIC_APP_URL ??= "https://app.soleur.ai";
 // Mock all heavy dependencies (same pattern as agent-runner-tools.test.ts)
 // ---------------------------------------------------------------------------
 
-const { mockFrom, mockQuery, mockReadFileSync, resolveLeaderDocumentContextSpy } = vi.hoisted(() => ({
+const { mockFrom, mockRpc, mockQuery, mockReadFileSync, resolveLeaderDocumentContextSpy } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
+  mockRpc: vi.fn(),
   mockQuery: vi.fn(),
   mockReadFileSync: vi.fn(),
   resolveLeaderDocumentContextSpy: vi.fn(),
@@ -40,7 +41,7 @@ vi.mock("@supabase/supabase-js", () => ({
 // PR-B (#3244 §1.5.1): tenant-client factory; route through the same
 // mockFrom chain so existing assertions still apply.
 vi.mock("@/lib/supabase/tenant", () => ({
-  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom, rpc: vi.fn() })),
+  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom, rpc: mockRpc })),
   mintFounderJwt: vi.fn(),
   RuntimeAuthError: class RuntimeAuthError extends Error {
     cause: string;
@@ -148,7 +149,7 @@ function setupSupabaseMock(
   userData: Record<string, unknown>,
   serviceTokenRows?: Record<string, unknown>[],
 ) {
-  createSupabaseMockImpl(mockFrom, { userData, apiKeyRows: serviceTokenRows });
+  createSupabaseMockImpl(mockFrom, { userData, apiKeyRows: serviceTokenRows, mockRpc });
 }
 
 function setupQueryMockImmediate() {
