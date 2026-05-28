@@ -50,6 +50,19 @@ Three guarantees change grain:
 - **Pre-decommission drift gate.** A user who connects a repo between the 080 backfill and the read-cutover strands on `users`. Before dropping the `users` columns, `SELECT COUNT(*) FROM users u JOIN workspaces w ON w.id=u.id WHERE u.repo_url IS NOT NULL AND w.repo_url IS DISTINCT FROM u.repo_url` MUST return 0 (re-backfill first).
 - **Backfill is solo-only by construction + guarded.** The `w.id = u.id` join is solo-only (post-flag-flip workspaces use `gen_random_uuid()`), but a solo workspace that has since invited a co-member still has `w.id = u.id`; the backfill SKIPs (and `RAISE NOTICE`s) any workspace with member count > 1, so a repo is never landed onto a co-membered workspace without owner re-consent (CLO requirement).
 
+### `github_installation_id` is workspace-repo-credential-based, not user-identity-based (settled 2026-05-28)
+
+A GitHub App `installation_id` is fundamentally an **(account that owns the repo) → repo-access** grant — keyed to the repo's owning account, not to the Soleur user. The legacy `users.github_installation_id` scalar was a solo-era simplification that (a) cannot represent a user with installations across multiple accounts/orgs, (b) *caused* #4543 (a joined member's `users.github_installation_id` is null, so sync broke), and (c) duplicates a fact GitHub resolves on demand.
+
+Decision: the credential lives on `workspaces` only. Retaining a parallel `users.github_installation_id` permanently would re-create exactly the dual-source-of-truth drift surface this ADR forbids for `repo_url` — so the user scalar is **not** a stable end-state. It survives only as a transient onboarding-discovery artifact during the soak (dual-written via `mirrorRepoColsToSoloWorkspace`, so it does not drift while it exists).
+
+End-state (executed at the decommission migration — see tasks.md Phase 6):
+- **Connect flow** resolves the installation from the repo, not a stored user scalar: `GET /repos/{owner}/{repo}/installation` (the connect routes already call the GitHub API, so this is near-free).
+- **Onboarding "has the user connected GitHub?" gate** moves from `users.github_installation_id IS NOT NULL` to on-demand `GET /user/installations` (user token).
+- The decommission migration drops `users.github_installation_id` + the migration-052 partial-UNIQUE index; the user scalar becomes vestigial.
+
+Do not invest in making the user-level installation read permanent; fold the on-demand-GitHub-resolution swap into decommission rather than carrying the `users` column forward.
+
 ## Cost Impacts
 
 None. No new vendor, tier, or infrastructure. Two additive migrations + a TS cutover on existing surfaces.

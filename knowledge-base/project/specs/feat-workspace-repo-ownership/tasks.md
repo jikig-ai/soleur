@@ -91,8 +91,18 @@ plan: knowledge-base/project/plans/2026-05-28-feat-workspace-repo-ownership-plan
 - [ ] 5.2 Full suite green; tsc clean (signature breaks caught)
 - [ ] 5.3 `/soleur:review` + QA before merge
 
+## Phase 6: Decommission (separate PR, after prod soak — NOT this PR)
+
+> Settled 2026-05-28 (see ADR-044 §"github_installation_id is workspace-repo-credential-based"). The `users` repo columns become vestigial once the connect/onboarding reads stop depending on them. Do NOT relitigate the dual-model question — installation_id is workspace-credential-based; the user scalar is transient.
+
+- [ ] 6.1 **Connect flow → repo-derived installation.** Replace the stored-user-scalar reads (`repo/setup:59`, `repo/create:51`, `repo/repos:25`) with on-demand `GET /repos/{owner}/{repo}/installation` to resolve the installation for the picked repo; write it to the active workspace. Connect routes already call the GitHub API.
+- [ ] 6.2 **Onboarding gate → on-demand.** Replace the `users.github_installation_id IS NOT NULL` "App installed?" check (`detect-installation`, dashboard onboarding) with on-demand `GET /user/installations` (user token). No stored user scalar.
+- [ ] 6.3 **Drop the dual-write.** Remove `mirrorRepoColsToSoloWorkspace` calls (writes go straight to workspaces once users cols are gone).
+- [ ] 6.4 Decommission migration: `DROP COLUMN users.{repo_url, repo_provider, github_installation_id, repo_status, repo_last_synced_at}` + the migration-052 `users_github_installation_id_unique_idx`. Gated on P.3 drift reconciliation = 0.
+- [ ] 6.5 Update ADR-044 status note: end-state reached.
+
 ## Post-merge (operator)
 
-- [ ] P.1 Apply 079 → 080 to prd via `web-platform-release.yml#migrate`; verify columns + backfill counts via Supabase MCP (read-only) (AC14)
+- [ ] P.1 Apply 079 → 080 → 081 to prd via `web-platform-release.yml#migrate`; verify columns + backfill counts via Supabase MCP (read-only) (AC14)
 - [ ] P.2 Verify GitHub App install `122213433` grants `jikig-ai/soleur` via App-JWT `gh api /installation/repositories`; if absent, install App on `soleur` (AC16, Open Q1)
-- [ ] P.3 **Before any decommission migration:** drift reconciliation query returns 0 (re-backfill mid-migration connects first) (AC15)
+- [ ] P.3 **Before any decommission migration (Phase 6):** drift reconciliation query returns 0 (re-backfill mid-migration connects first) (AC15)
