@@ -150,21 +150,39 @@ describe("generateInstallationToken hardening", () => {
       );
     });
 
-    test("throws after two consecutive 401s", async () => {
+    test("throws after three consecutive 401s (2 retries, exp backoff)", async () => {
       const id = uniqueId();
       mockFetch
+        .mockResolvedValueOnce(mock401())
         .mockResolvedValueOnce(mock401())
         .mockResolvedValueOnce(mock401());
 
       const promise = generateInstallationToken(id);
       // Suppress unhandled rejection — assertion below still catches the error
       promise.catch(() => {});
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(1_000); // attempt 0 backoff
+      await vi.advanceTimersByTimeAsync(2_000); // attempt 1 backoff
 
       await expect(promise).rejects.toThrow(
         /GitHub installation token request failed: 401/,
       );
-      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+
+    test("succeeds on 3rd attempt (2 retries)", async () => {
+      const id = uniqueId();
+      mockFetch
+        .mockResolvedValueOnce(mock401())
+        .mockResolvedValueOnce(mock401())
+        .mockResolvedValueOnce(mockTokenSuccess());
+
+      const promise = generateInstallationToken(id);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(2_000);
+      const token = await promise;
+
+      expect(token).toBe("ghs_hardening_test_token");
+      expect(mockFetch).toHaveBeenCalledTimes(3);
     });
 
     test("does NOT retry on 403", async () => {
@@ -213,12 +231,14 @@ describe("generateInstallationToken hardening", () => {
       const id = uniqueId();
       mockFetch
         .mockResolvedValueOnce(mock401())
+        .mockResolvedValueOnce(mock401())
         .mockResolvedValueOnce(mock401());
 
       const promise = generateInstallationToken(id);
       // Suppress unhandled rejection — assertion below still catches the error
       promise.catch(() => {});
       await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(2_000);
       await expect(promise).rejects.toThrow();
 
       expect(mockReportSilentFallback).toHaveBeenCalledWith(
@@ -236,12 +256,14 @@ describe("generateInstallationToken hardening", () => {
       const id = uniqueId();
       mockFetch
         .mockResolvedValueOnce(mock401())
+        .mockResolvedValueOnce(mock401())
         .mockResolvedValueOnce(mock401());
 
       const promise = generateInstallationToken(id);
       // Suppress unhandled rejection — assertion below still catches the error
       promise.catch(() => {});
       await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(2_000);
       await expect(promise).rejects.toThrow();
 
       const expectedFingerprint = createHash("sha256")
@@ -309,5 +331,40 @@ describe("getPrivateKey PEM shape validation (AC3)", () => {
     } finally {
       process.env.GITHUB_APP_PRIVATE_KEY = originalKey;
     }
+  });
+});
+
+describe("JWT exp margin (clock-skew tolerance, #122537945)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockFetch.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test("minted JWT exp leaves margin below GitHub's 600s max", async () => {
+    const id = uniqueId();
+    mockFetch.mockResolvedValueOnce(mockTokenSuccess());
+
+    await generateInstallationToken(id);
+
+    const auth = mockFetch.mock.calls[0][1].headers.Authorization as string;
+    expect(auth).toMatch(/^Bearer /);
+    const jwt = auth.slice("Bearer ".length);
+    const payload = JSON.parse(
+      Buffer.from(jwt.split(".")[1], "base64url").toString(),
+    ) as { iat: number; exp: number };
+
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    // exp must leave >=60s margin below GitHub's 600s ceiling to absorb
+    // positive server-clock skew (the root cause of Sentry issue 122537945).
+    expect(payload.exp - nowSeconds).toBeLessThanOrEqual(540);
+    expect(payload.exp - nowSeconds).toBeGreaterThan(0);
+    // total JWT lifetime (exp - iat) must not exceed GitHub's 600s maximum.
+    expect(payload.exp - payload.iat).toBeLessThanOrEqual(600);
+    // iat is backdated (negative skew preserved).
+    expect(payload.iat).toBeLessThanOrEqual(nowSeconds);
   });
 });
