@@ -23,6 +23,13 @@ vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
 }));
 
+// Internal active-workspace resolution (default solo = userId). Tests that
+// pass an explicit workspaceId bypass this; the undefined-claim tests rely
+// on the default returning the userId (solo workspace).
+vi.mock("@/server/workspace-resolver", () => ({
+  resolveCurrentWorkspaceId: vi.fn(async (userId: string) => userId),
+}));
+
 describe("resolveInstallationId (workspace-scoped, RPC-only)", () => {
   beforeEach(() => {
     vi.clearAllMocks();

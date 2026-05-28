@@ -26,10 +26,10 @@ function getWorkspacesRoot(): string {
 interface SessionLike {
   user?: {
     id?: string;
-    app_metadata?: { current_organization_id?: string } & Record<
-      string,
-      unknown
-    >;
+    app_metadata?: {
+      current_organization_id?: string;
+      current_workspace_id?: string;
+    } & Record<string, unknown>;
   };
 }
 
@@ -42,6 +42,20 @@ export function getCurrentOrganizationId(
   session: SessionLike | null | undefined,
 ): string | null {
   return session?.user?.app_metadata?.current_organization_id ?? null;
+}
+
+/**
+ * Reads the JWT hook's `current_workspace_id` claim from a session ACCESS
+ * TOKEN (ADR-044, migration 079). Unlike `getUser().app_metadata`
+ * (`raw_app_meta_data`, no hook claims), the decoded access-token claims DO
+ * carry hook injections — so the switcher reads the claim from the session
+ * JWT, not `getUser()` (AC9). Returns null when the claim is absent (the
+ * caller then falls back to the solo workspace via `resolveCurrentWorkspaceId`).
+ */
+export function getCurrentWorkspaceId(
+  session: SessionLike | null | undefined,
+): string | null {
+  return session?.user?.app_metadata?.current_workspace_id ?? null;
 }
 
 /**
@@ -90,6 +104,48 @@ export async function resolveCurrentOrganizationId(
 // full `SupabaseClient<Database>` generic into the resolver signature.
 interface SupabaseLike {
   from: (table: string) => unknown;
+}
+
+/**
+ * Resolve the user's CURRENT workspace id from `user_session_state`
+ * (ADR-044). Source-of-truth read (preferred over the JWT claim, which can
+ * be stale on an un-refreshed session). Falls back to the user's SOLO
+ * workspace (`= userId` per ADR-038 N2) when the claim is null/absent or on
+ * transient error — NEVER an arbitrary sibling workspace (the cross-tenant
+ * read this whole feature is designed to prevent). Always returns a
+ * workspace id; never null.
+ *
+ * RLS: `user_session_state_owner_select` allows `auth.uid() = user_id`, so a
+ * tenant client reads only its own row.
+ */
+export async function resolveCurrentWorkspaceId(
+  userId: string,
+  supabase: SupabaseLike,
+): Promise<string> {
+  type ChainShape = {
+    select: (cols: string) => ChainShape;
+    eq: (col: string, val: string) => ChainShape;
+    maybeSingle: () => ChainShape;
+  } & PromiseLike<{
+    data: { current_workspace_id: string | null } | null;
+    error: unknown;
+  }>;
+
+  const chain = supabase.from("user_session_state") as ChainShape;
+  const result = await awaitChain<{
+    data: { current_workspace_id: string | null } | null;
+    error: unknown;
+  }>(chain.select("current_workspace_id").eq("user_id", userId).maybeSingle());
+
+  if (result.error) {
+    reportSilentFallback(result.error, {
+      feature: "workspace-resolver",
+      op: "resolveCurrentWorkspaceId",
+      extra: { userId },
+    });
+    return userId; // fail to solo workspace, never a sibling
+  }
+  return result.data?.current_workspace_id ?? userId;
 }
 
 interface WorkspaceMemberRow {

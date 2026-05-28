@@ -67,12 +67,37 @@ export function createSupabaseMockImpl(
     if (table === "users") {
       // Supports both call shapes agent-runner now uses:
       //   - .select("workspace_path, ...").eq("id", userId).single()  (inline read)
-      //   - .select("repo_url").eq("id", userId).maybeSingle()        (getCurrentRepoUrl)
+      //   - .select("repo_url").eq("id", userId).maybeSingle()        (legacy)
       return {
         select: () => ({
           eq: () => ({
             single: () => ({ data: userData, error: null }),
             maybeSingle: () => ({ data: userData, error: null }),
+          }),
+        }),
+      };
+    }
+    if (table === "workspaces") {
+      // ADR-044 read-cutover: getCurrentRepoUrl reads workspaces.repo_url
+      // for the active workspace. Mirror userData.repo_url so the existing
+      // repo-scope expectations hold (active ws == solo ws in unit tests).
+      return {
+        select: () => ({
+          eq: () => ({
+            single: () => ({ data: { repo_url: userData.repo_url ?? null }, error: null }),
+            maybeSingle: () => ({ data: { repo_url: userData.repo_url ?? null }, error: null }),
+          }),
+        }),
+      };
+    }
+    if (table === "user_session_state") {
+      // resolveCurrentWorkspaceId reads current_workspace_id; null → the
+      // helper falls back to the solo workspace (= userId).
+      return {
+        select: () => ({
+          eq: () => ({
+            single: () => ({ data: { current_workspace_id: null }, error: null }),
+            maybeSingle: () => ({ data: { current_workspace_id: null }, error: null }),
           }),
         }),
       };
@@ -101,7 +126,12 @@ export function createSupabaseMockImpl(
       return { insert: () => ({ error: null }) };
     }
     return {
-      select: () => ({ eq: () => ({ single: () => ({ data: null, error: null }) }) }),
+      select: () => ({
+        eq: () => ({
+          single: () => ({ data: null, error: null }),
+          maybeSingle: () => ({ data: null, error: null }),
+        }),
+      }),
       update: () => ({ eq: () => ({ error: null }) }),
       insert: () => ({ error: null }),
     };
