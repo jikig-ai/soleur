@@ -1,6 +1,9 @@
 -- 081_anonymise_null_workspace_installation.sql
 -- feat-workspace-repo-ownership (#4558) — AC11 / GDPR Art-17 cascade.
 --
+-- LAWFUL_BASIS: Art. 17 erasure — nulls the relocated GitHub App grant
+-- (github_installation_id) on every workspace the departing owner connected.
+--
 -- ADR-044 relocated the GitHub App installation grant
 -- (github_installation_id) from users to workspaces. The existing
 -- anonymise_organization_membership (mig 078) does NOT null the new column,
