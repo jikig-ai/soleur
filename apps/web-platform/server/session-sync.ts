@@ -298,7 +298,13 @@ async function recordKbSyncHistory(
 // future consumers have one source of truth.
 export const WORKSPACE_RECONCILE_REQUESTED_EVENT =
   "platform/workspace.reconcile.requested" as const;
-export const WORKSPACE_RECONCILE_SCHEMA_V = "1" as const;
+// Bumped "1"→"2" (ADR-044): the reconcile payload now carries
+// `fullName` (repository.full_name) so the consumer can fan out to all
+// workspaces matching the repo. Adding a consumer-read field is a schema-
+// boundary change; in-flight v=1 events (lacking fullName) drain to
+// {ok:false} via the non-throwing schema-gate rather than syncing with a
+// missing field. See 2026-04-18-schema-version-must-be-asserted-at-consumer-boundary.
+export const WORKSPACE_RECONCILE_SCHEMA_V = "2" as const;
 export const WORKSPACE_RECONCILE_SENTRY_FEATURE =
   "workspace-reconcile-push" as const;
 

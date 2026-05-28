@@ -5,6 +5,7 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { provisionWorkspaceWithRepo } from "@/server/workspace";
 import { scanProjectHealth } from "@/server/project-scanner";
 import { normalizeRepoUrl } from "@/lib/repo-url";
+import { mirrorRepoColsToSoloWorkspace } from "@/server/workspace-repo-mirror";
 import { GitOperationError, sanitizeGitStderr } from "@/server/git-auth";
 import logger from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
@@ -95,6 +96,14 @@ export async function POST(request: Request) {
     );
   }
 
+  // ADR-044: mirror the connecting repo + installation to the solo workspace
+  // so the workspaces-only read path sees the in-progress connection.
+  await mirrorRepoColsToSoloWorkspace(serviceClient, user.id, {
+    repo_url: repoUrl,
+    github_installation_id: userData.github_installation_id,
+    repo_status: "cloning",
+  });
+
   // Kick off clone in the background (don't await)
   const userName = user.user_metadata?.full_name ?? user.email?.split("@")[0] ?? "Soleur User";
   const userEmail = userData.email ?? user.email ?? "";
@@ -148,6 +157,12 @@ export async function POST(request: Request) {
         );
         return;
       }
+
+      // ADR-044: mirror the ready repo state to the solo workspace.
+      await mirrorRepoColsToSoloWorkspace(serviceClient, user.id, {
+        repo_status: "ready",
+        repo_last_synced_at: new Date().toISOString(),
+      });
 
       logger.info(
         { userId: user.id, repoUrl, category: healthSnapshot?.category },
@@ -232,6 +247,10 @@ export async function POST(request: Request) {
             );
           }
         });
+      // ADR-044: mirror the error status to the solo workspace.
+      await mirrorRepoColsToSoloWorkspace(serviceClient, user.id, {
+        repo_status: "error",
+      });
     });
 
   return NextResponse.json({ status: "cloning" });

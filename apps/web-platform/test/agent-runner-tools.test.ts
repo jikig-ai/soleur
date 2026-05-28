@@ -9,8 +9,9 @@ process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
 // (vitest hoists vi.mock to the top of the file before let/const execute).
 // ---------------------------------------------------------------------------
 
-const { mockFrom, mockQuery, mockReadFileSync } = vi.hoisted(() => ({
+const { mockFrom, mockRpc, mockQuery, mockReadFileSync } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
+  mockRpc: vi.fn(),
   mockQuery: vi.fn(),
   mockReadFileSync: vi.fn(),
 }));
@@ -43,7 +44,7 @@ vi.mock("@supabase/supabase-js", () => ({
 // PR-B (#3244 §1.5.1): tenant-client factory; route through the same
 // mockFrom chain so existing assertions still apply.
 vi.mock("@/lib/supabase/tenant", () => ({
-  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom, rpc: vi.fn() })),
+  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom, rpc: mockRpc })),
   mintFounderJwt: vi.fn(),
   RuntimeAuthError: class RuntimeAuthError extends Error {
     cause: string;
@@ -137,7 +138,7 @@ function setupSupabaseMock(
   userData: Record<string, unknown>,
   serviceTokenRows?: Record<string, unknown>[],
 ) {
-  createSupabaseMockImpl(mockFrom, { userData, apiKeyRows: serviceTokenRows });
+  createSupabaseMockImpl(mockFrom, { userData, apiKeyRows: serviceTokenRows, mockRpc });
 }
 
 function setupQueryMockImmediate() {

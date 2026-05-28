@@ -160,6 +160,15 @@ export async function POST(request: Request) {
     "Auto-detected and registered GitHub App installation",
   );
 
+  // ADR-044: mirror the installation grant to the solo workspace so the
+  // workspaces-only credential read sees it.
+  const { mirrorRepoColsToSoloWorkspace } = await import(
+    "@/server/workspace-repo-mirror"
+  );
+  await mirrorRepoColsToSoloWorkspace(serviceClient, user.id, {
+    github_installation_id: installationId,
+  });
+
   // Fetch and return repos
   try {
     const repos = await listInstallationRepos(installationId);

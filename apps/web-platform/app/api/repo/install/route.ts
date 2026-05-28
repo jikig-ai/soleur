@@ -131,5 +131,14 @@ export async function POST(request: Request) {
     );
   }
 
+  // ADR-044: mirror the installation grant to the solo workspace so the
+  // workspaces-only credential read (resolve_workspace_installation_id) sees it.
+  const { mirrorRepoColsToSoloWorkspace } = await import(
+    "@/server/workspace-repo-mirror"
+  );
+  await mirrorRepoColsToSoloWorkspace(serviceClient, user.id, {
+    github_installation_id: body.installationId,
+  });
+
   return NextResponse.json({ ok: true });
 }

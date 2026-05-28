@@ -53,6 +53,7 @@ import { buildConversationsTools } from "./conversations-tools";
 import { buildAuthStatusTools } from "./auth-status-tools";
 import { buildAccountTools } from "./account-tools";
 import { getCurrentRepoUrl } from "./current-repo-url";
+import { resolveInstallationId } from "./resolve-installation-id";
 import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
 import { createCanUseTool } from "./permission-callback";
@@ -925,10 +926,14 @@ export async function startAgentSession(
     // via `normalizeRepoUrl` and mirrors DB errors to Sentry. Sibling
     // inline SELECTs were a class of scoping-backdoor bug (see plan
     // 2026-04-22-refactor-drain-web-platform-code-review-2775-2776-2777-plan.md).
+    // `github_installation_id` is ALSO intentionally NOT selected — post-
+    // ADR-044 it lives on `workspaces` (credential, definer-RPC-only) and
+    // is read via `resolveInstallationId(userId)` for the ACTIVE workspace
+    // below, which fixes #4543 for joined members at run time.
     const sessionTenant = await getFreshTenantClient(userId);
     const { data: user } = await sessionTenant
       .from("users")
-      .select("workspace_path, repo_status, github_installation_id, email")
+      .select("workspace_path, repo_status, email")
       .eq("id", userId)
       .single();
 
@@ -1252,11 +1257,42 @@ resuming an existing thread preserves context for the user.`;
     // In-process MCP server for platform tools (PR creation, etc.)
     // Only available when user has a GitHub App installation with a connected repo.
     // ---------------------------------------------------------------------------
-    const installationId = user.github_installation_id as number | null;
+    // Run-time installation revalidation (ADR-044 AC9, fixes #4543): read the
+    // installation for the ACTIVE workspace via the membership-scoped definer
+    // RPC, not the joiner's own `users` row. For a joined member this resolves
+    // the workspace owner's installation; for a solo user it resolves their own.
+    const installationId = await resolveInstallationId(userId);
     // Canonical read — normalizes via `normalizeRepoUrl`, mirrors DB errors
     // to Sentry via `reportSilentFallback`. Replaces the prior inline
     // `user.repo_url` cast per "audit every query" learning.
+    //
+    // NOTE: these two reads resolve the active workspace claim independently
+    // (each mints its own tenant client and reads current_workspace_id). A
+    // concurrent set_current_workspace_id switch landing between them could
+    // pair workspace A's installation with workspace B's repo_url — both
+    // workspaces the SAME user belongs to (not cross-tenant). The window is
+    // sub-ms and the switcher reloads the page (restarting this context), so
+    // it is not fixed here; when #4560 makes mid-run switches plausible,
+    // resolve the workspace ONCE and thread it into both via their existing
+    // `workspaceId` override params so installation + repo share one snapshot.
     const repoUrl = await getCurrentRepoUrl(userId);
+
+    // Fail loud when the active workspace has a repo connected but the
+    // installation resolves null — the GitHub App was uninstalled or lost
+    // access (revoked grant), or the credential RPC denied the read. Without
+    // this the GitHub tool family silently drops (the `installationId &&
+    // repoUrl` guard below) and the agent appears repo-disconnected with no
+    // signal. Mirror to Sentry so a revocation surfaces instead of degrading.
+    if (repoUrl && installationId === null) {
+      reportSilentFallback(
+        new Error("active workspace has repo_url but null installation_id"),
+        {
+          feature: "agent-runner",
+          op: "installation-revalidation",
+          extra: { userId, repoUrl },
+        },
+      );
+    }
 
     let mcpServersOption: Record<string, ReturnType<typeof createSdkMcpServer>> | undefined;
     let platformToolNames: string[] = [];

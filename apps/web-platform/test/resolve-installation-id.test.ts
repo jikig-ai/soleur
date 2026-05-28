@@ -1,290 +1,124 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { mockQueryChain } from "./helpers/mock-supabase";
 
-const { mockTenantFrom, mockServiceFrom } = vi.hoisted(() => ({
-  mockTenantFrom: vi.fn(),
-  mockServiceFrom: vi.fn(),
-}));
+// AC4 — resolveInstallationId reads the workspace credential ONLY via the
+// membership-checked resolve_workspace_installation_id SECURITY DEFINER
+// RPC (ADR-044). The `.ilike("repo_url", …)` LIKE-injection fallback and
+// the unscoped `workspace_members … LIMIT 1` sibling lookup are DELETED.
+//
+//   (a) a member of 2 workspaces resolves the ACTIVE workspace's id,
+//       never a sibling's — the active workspaceId is passed straight to
+//       the RPC as p_workspace_id;
+//   (b) a NON-member workspaceId resolves NULL (the RPC's deny path);
+//   (c) an UNDEFINED claim resolves the caller's SOLO workspace
+//       (= userId per ADR-038 N2), never a sibling.
+
+const { mockRpc } = vi.hoisted(() => ({ mockRpc: vi.fn() }));
 
 vi.mock("@/lib/supabase/tenant", () => ({
-  getFreshTenantClient: vi.fn(async () => ({ from: mockTenantFrom })),
+  getFreshTenantClient: vi.fn(async () => ({ rpc: mockRpc })),
   RuntimeAuthError: class RuntimeAuthError extends Error {},
-}));
-
-vi.mock("@/lib/supabase/service", () => ({
-  createServiceClient: vi.fn(() => ({ from: mockServiceFrom })),
 }));
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
 }));
 
-describe("extractGitHubOwner", () => {
-  it("extracts owner from standard GitHub URL", async () => {
-    const { extractGitHubOwner } = await import(
-      "@/server/resolve-installation-id"
-    );
-    expect(extractGitHubOwner("https://github.com/jikig-ai/soleur")).toBe(
-      "jikig-ai",
-    );
-  });
+// Internal active-workspace resolution (default solo = userId). Tests that
+// pass an explicit workspaceId bypass this; the undefined-claim tests rely
+// on the default returning the userId (solo workspace).
+vi.mock("@/server/workspace-resolver", () => ({
+  resolveCurrentWorkspaceId: vi.fn(async (userId: string) => userId),
+}));
 
-  it("extracts owner from different repo under same org", async () => {
-    const { extractGitHubOwner } = await import(
-      "@/server/resolve-installation-id"
-    );
-    expect(extractGitHubOwner("https://github.com/jikig-ai/chatte")).toBe(
-      "jikig-ai",
-    );
-  });
-
-  it("returns null for URL without repo segment", async () => {
-    const { extractGitHubOwner } = await import(
-      "@/server/resolve-installation-id"
-    );
-    expect(extractGitHubOwner("https://github.com/single")).toBeNull();
-  });
-
-  it("returns null for non-GitHub URL", async () => {
-    const { extractGitHubOwner } = await import(
-      "@/server/resolve-installation-id"
-    );
-    expect(extractGitHubOwner("https://gitlab.com/jikig-ai/soleur")).toBeNull();
-  });
-
-  it("returns null for empty string", async () => {
-    const { extractGitHubOwner } = await import(
-      "@/server/resolve-installation-id"
-    );
-    expect(extractGitHubOwner("")).toBeNull();
-  });
-});
-
-describe("resolveInstallationId", () => {
+describe("resolveInstallationId (workspace-scoped, RPC-only)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("returns own installation ID when present", async () => {
-    mockTenantFrom.mockReturnValue(
-      mockQueryChain({
-        github_installation_id: 555,
-        repo_url: "https://github.com/jikig-ai/soleur",
-      }),
-    );
+  it("(a) resolves the ACTIVE workspace's installation id via the RPC, never a sibling", async () => {
+    mockRpc.mockResolvedValue({ data: 555, error: null });
 
     const { resolveInstallationId } = await import(
       "@/server/resolve-installation-id"
     );
-    const result = await resolveInstallationId("user-1");
+    const result = await resolveInstallationId("user-1", "ws-active");
     expect(result).toBe(555);
-    expect(mockServiceFrom).not.toHaveBeenCalled();
+    // The credential read goes through the definer RPC keyed on the
+    // ACTIVE workspace — not a direct table read, not a sibling scan.
+    expect(mockRpc).toHaveBeenCalledWith("resolve_workspace_installation_id", {
+      p_workspace_id: "ws-active",
+    });
+    expect(mockRpc).toHaveBeenCalledTimes(1);
   });
 
-  it("resolves from sibling with same GitHub org", async () => {
-    mockTenantFrom.mockReturnValue(
-      mockQueryChain({
-        github_installation_id: null,
-        repo_url: "https://github.com/jikig-ai/soleur",
-      }),
-    );
-
-    const memberChain = mockQueryChain({ workspace_id: "ws-1" });
-    const siblingsChain = mockQueryChain([{ user_id: "sibling-1" }]);
-    const usersChain = mockQueryChain({
-      github_installation_id: 122213433,
-    });
-
-    let serviceCallCount = 0;
-    mockServiceFrom.mockImplementation((table: string) => {
-      if (table === "workspace_members") {
-        serviceCallCount++;
-        return serviceCallCount === 1 ? memberChain : siblingsChain;
-      }
-      if (table === "users") return usersChain;
-      return mockQueryChain(null);
-    });
+  it("(b) returns null for a NON-member workspaceId (RPC deny path)", async () => {
+    // The definer RPC returns NULL when the caller is not a member.
+    mockRpc.mockResolvedValue({ data: null, error: null });
 
     const { resolveInstallationId } = await import(
       "@/server/resolve-installation-id"
     );
-    const result = await resolveInstallationId("user-1");
-    expect(result).toBe(122213433);
-
-    expect(usersChain.ilike).toHaveBeenCalledWith(
-      "repo_url",
-      "https://github.com/jikig-ai/%",
-    );
-  });
-
-  it("resolves from sibling with same org but different case", async () => {
-    mockTenantFrom.mockReturnValue(
-      mockQueryChain({
-        github_installation_id: null,
-        repo_url: "https://github.com/Jikig-AI/soleur",
-      }),
-    );
-
-    const memberChain = mockQueryChain({ workspace_id: "ws-1" });
-    const siblingsChain = mockQueryChain([{ user_id: "sibling-1" }]);
-    const usersChain = mockQueryChain({
-      github_installation_id: 122213433,
-    });
-
-    let serviceCallCount = 0;
-    mockServiceFrom.mockImplementation((table: string) => {
-      if (table === "workspace_members") {
-        serviceCallCount++;
-        return serviceCallCount === 1 ? memberChain : siblingsChain;
-      }
-      if (table === "users") return usersChain;
-      return mockQueryChain(null);
-    });
-
-    const { resolveInstallationId } = await import(
-      "@/server/resolve-installation-id"
-    );
-    const result = await resolveInstallationId("user-1");
-    expect(result).toBe(122213433);
-
-    expect(usersChain.ilike).toHaveBeenCalledWith(
-      "repo_url",
-      "https://github.com/Jikig-AI/%",
-    );
-  });
-
-  it("does not resolve from sibling with different GitHub org", async () => {
-    mockTenantFrom.mockReturnValue(
-      mockQueryChain({
-        github_installation_id: null,
-        repo_url: "https://github.com/jikig-ai/soleur",
-      }),
-    );
-
-    const memberChain = mockQueryChain({ workspace_id: "ws-1" });
-    const siblingsChain = mockQueryChain([{ user_id: "sibling-1" }]);
-    const usersChain = mockQueryChain(null);
-
-    let serviceCallCount = 0;
-    mockServiceFrom.mockImplementation((table: string) => {
-      if (table === "workspace_members") {
-        serviceCallCount++;
-        return serviceCallCount === 1 ? memberChain : siblingsChain;
-      }
-      if (table === "users") return usersChain;
-      return mockQueryChain(null);
-    });
-
-    const { resolveInstallationId } = await import(
-      "@/server/resolve-installation-id"
-    );
-    const result = await resolveInstallationId("user-1");
+    const result = await resolveInstallationId("user-1", "ws-not-mine");
     expect(result).toBeNull();
+    expect(mockRpc).toHaveBeenCalledWith("resolve_workspace_installation_id", {
+      p_workspace_id: "ws-not-mine",
+    });
   });
 
-  it("returns null when no siblings exist", async () => {
-    mockTenantFrom.mockReturnValue(
-      mockQueryChain({
-        github_installation_id: null,
-        repo_url: "https://github.com/jikig-ai/soleur",
-      }),
-    );
-
-    const memberChain = mockQueryChain({ workspace_id: "ws-1" });
-    const siblingsChain = mockQueryChain([]);
-
-    let serviceCallCount = 0;
-    mockServiceFrom.mockImplementation((table: string) => {
-      if (table === "workspace_members") {
-        serviceCallCount++;
-        return serviceCallCount === 1 ? memberChain : siblingsChain;
-      }
-      return mockQueryChain(null);
-    });
+  it("(c) undefined claim resolves the caller's SOLO workspace (= userId), never a sibling", async () => {
+    mockRpc.mockResolvedValue({ data: 777, error: null });
 
     const { resolveInstallationId } = await import(
       "@/server/resolve-installation-id"
     );
-    const result = await resolveInstallationId("user-1");
+    const result = await resolveInstallationId("user-solo");
+    expect(result).toBe(777);
+    // Defaulted p_workspace_id to the userId — the solo workspace id.
+    expect(mockRpc).toHaveBeenCalledWith("resolve_workspace_installation_id", {
+      p_workspace_id: "user-solo",
+    });
+  });
+
+  it("null claim also defaults to the solo workspace", async () => {
+    mockRpc.mockResolvedValue({ data: 777, error: null });
+
+    const { resolveInstallationId } = await import(
+      "@/server/resolve-installation-id"
+    );
+    await resolveInstallationId("user-solo", null);
+    expect(mockRpc).toHaveBeenCalledWith("resolve_workspace_installation_id", {
+      p_workspace_id: "user-solo",
+    });
+  });
+
+  it("returns null and reports fallback when the RPC errors", async () => {
+    const { reportSilentFallback } = await import("@/server/observability");
+    mockRpc.mockResolvedValue({ data: null, error: { message: "boom" } });
+
+    const { resolveInstallationId } = await import(
+      "@/server/resolve-installation-id"
+    );
+    const result = await resolveInstallationId("user-1", "ws-1");
     expect(result).toBeNull();
-  });
-
-  it("returns null when caller has no repo_url", async () => {
-    mockTenantFrom.mockReturnValue(
-      mockQueryChain({
-        github_installation_id: null,
-        repo_url: null,
-      }),
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ feature: "resolve-installation-id" }),
     );
-
-    const memberChain = mockQueryChain({ workspace_id: "ws-1" });
-    const siblingsChain = mockQueryChain([{ user_id: "sibling-1" }]);
-    const usersChain = mockQueryChain({
-      github_installation_id: 999,
-    });
-
-    let serviceCallCount = 0;
-    mockServiceFrom.mockImplementation((table: string) => {
-      if (table === "workspace_members") {
-        serviceCallCount++;
-        return serviceCallCount === 1 ? memberChain : siblingsChain;
-      }
-      if (table === "users") return usersChain;
-      return mockQueryChain(null);
-    });
-
-    const { resolveInstallationId } = await import(
-      "@/server/resolve-installation-id"
-    );
-    const result = await resolveInstallationId("user-1");
-    expect(result).toBe(999);
-    expect(usersChain.ilike).not.toHaveBeenCalled();
-  });
-
-  it("handles non-GitHub URLs gracefully", async () => {
-    mockTenantFrom.mockReturnValue(
-      mockQueryChain({
-        github_installation_id: null,
-        repo_url: "https://gitlab.com/jikig-ai/soleur",
-      }),
-    );
-
-    const memberChain = mockQueryChain({ workspace_id: "ws-1" });
-    const siblingsChain = mockQueryChain([{ user_id: "sibling-1" }]);
-    const usersChain = mockQueryChain({
-      github_installation_id: 999,
-    });
-
-    let serviceCallCount = 0;
-    mockServiceFrom.mockImplementation((table: string) => {
-      if (table === "workspace_members") {
-        serviceCallCount++;
-        return serviceCallCount === 1 ? memberChain : siblingsChain;
-      }
-      if (table === "users") return usersChain;
-      return mockQueryChain(null);
-    });
-
-    const { resolveInstallationId } = await import(
-      "@/server/resolve-installation-id"
-    );
-    const result = await resolveInstallationId("user-1");
-    expect(result).toBe(999);
-    expect(usersChain.ilike).not.toHaveBeenCalled();
   });
 
   it("returns null and reports fallback on RuntimeAuthError", async () => {
     const { RuntimeAuthError } = await import("@/lib/supabase/tenant");
+    const { getFreshTenantClient } = await import("@/lib/supabase/tenant");
     const { reportSilentFallback } = await import("@/server/observability");
 
-    mockTenantFrom.mockImplementation(() => {
+    vi.mocked(getFreshTenantClient).mockImplementationOnce(async () => {
       throw new RuntimeAuthError("jwt_mint", "token expired");
     });
 
     const { resolveInstallationId } = await import(
       "@/server/resolve-installation-id"
     );
-    const result = await resolveInstallationId("user-1");
+    const result = await resolveInstallationId("user-1", "ws-1");
     expect(result).toBeNull();
     expect(reportSilentFallback).toHaveBeenCalledWith(
       expect.any(RuntimeAuthError),
@@ -293,14 +127,15 @@ describe("resolveInstallationId", () => {
   });
 
   it("re-throws non-RuntimeAuthError errors", async () => {
-    mockTenantFrom.mockImplementation(() => {
+    const { getFreshTenantClient } = await import("@/lib/supabase/tenant");
+    vi.mocked(getFreshTenantClient).mockImplementationOnce(async () => {
       throw new Error("unexpected failure");
     });
 
     const { resolveInstallationId } = await import(
       "@/server/resolve-installation-id"
     );
-    await expect(resolveInstallationId("user-1")).rejects.toThrow(
+    await expect(resolveInstallationId("user-1", "ws-1")).rejects.toThrow(
       "unexpected failure",
     );
   });

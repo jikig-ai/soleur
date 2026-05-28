@@ -81,6 +81,9 @@ vi.mock("@/lib/supabase/tenant", () => {
   return {
     getFreshTenantClient: vi.fn(async () => ({
       from: () => fromChain,
+      // ADR-044: resolveInstallationId reads the credential via the
+      // resolve_workspace_installation_id RPC (was a users SELECT).
+      rpc: async () => ({ data: 1234, error: null }),
     })),
     RuntimeAuthError: FakeRuntimeAuthError,
   };

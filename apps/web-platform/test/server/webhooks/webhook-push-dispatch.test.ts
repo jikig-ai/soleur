@@ -87,9 +87,11 @@ function makePushRequest(opts: {
   before?: string;
   after?: string;
   defaultBranch?: string | null;
+  fullName?: string | null;
   installationId?: number | null;
   deliveryId?: string;
   omitDefaultBranchField?: boolean;
+  omitFullName?: boolean;
 }): Request {
   const body: Record<string, unknown> = {
     ref: opts.ref ?? "refs/heads/main",
@@ -97,7 +99,15 @@ function makePushRequest(opts: {
     after: opts.after ?? HEAD_SHA,
   };
   if (!opts.omitDefaultBranchField) {
-    body.repository = { default_branch: opts.defaultBranch ?? "main" };
+    const repository: Record<string, unknown> = {
+      default_branch: opts.defaultBranch ?? "main",
+    };
+    // ADR-044: repository.full_name is required for the reconcile fan-out;
+    // present by default, omittable to exercise the fail-closed path.
+    if (!opts.omitFullName) {
+      repository.full_name = opts.fullName ?? "jikig-ai/soleur";
+    }
+    body.repository = repository;
   }
   if (opts.installationId !== null) {
     body.installation = { id: opts.installationId ?? 42 };
@@ -137,6 +147,7 @@ describe("POST /api/webhooks/github — push dispatch (#4224)", () => {
       expect.objectContaining({
         id: "github-delivery-push-1",
         name: "platform/workspace.reconcile.requested",
+        v: "2",
         data: expect.objectContaining({
           founderId: "founder-push-1",
           installationId: 42,
@@ -144,11 +155,19 @@ describe("POST /api/webhooks/github — push dispatch (#4224)", () => {
           defaultBranch: "main",
           headSha: HEAD_SHA,
           beforeSha: BEFORE_SHA,
+          fullName: "jikig-ai/soleur",
         }),
       }),
     );
     // Scope-grant check must NOT fire — GitHub App install IS the consent surface.
     expect(mockIsGranted).not.toHaveBeenCalled();
+  });
+
+  it("Case 1b: reconcilable push missing repository.full_name fails closed (no dispatch, P0-2)", async () => {
+    const req = makePushRequest({ omitFullName: true });
+    const res = await POST(req);
+    expect(res.status).toBe(200); // received, but not dispatched
+    expect(mockInngestSend).not.toHaveBeenCalled();
   });
 
   it("Case 2: tag push (refs/tags/v1) is dropped without dispatch", async () => {

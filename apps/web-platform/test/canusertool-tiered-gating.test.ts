@@ -21,6 +21,7 @@ process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
 // ---------------------------------------------------------------------------
 const {
   mockFrom,
+  mockRpc,
   mockQuery,
   mockSendToClient,
   mockAbortableReviewGate,
@@ -28,6 +29,7 @@ const {
   mockReadFileSync,
 } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
+  mockRpc: vi.fn(),
   mockQuery: vi.fn(),
   mockSendToClient: vi.fn(),
   mockAbortableReviewGate: vi.fn(),
@@ -63,7 +65,7 @@ vi.mock("@supabase/supabase-js", () => ({
 // PR-B (#3244 §1.5.1): tenant-client factory; route through the same
 // mock chain so existing assertions still apply.
 vi.mock("@/lib/supabase/tenant", () => ({
-  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom, rpc: vi.fn() })),
+  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom, rpc: mockRpc })),
   mintFounderJwt: vi.fn(),
   RuntimeAuthError: class RuntimeAuthError extends Error {
     cause: string;
@@ -138,6 +140,7 @@ vi.mock("../server/observability", () => ({
 }));
 
 import { startAgentSession } from "../server/agent-runner";
+import { configureInstallationRpc } from "./helpers/agent-runner-mocks";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -196,6 +199,28 @@ function setupSupabaseMock(userData: Record<string, unknown>) {
         }),
       };
     }
+    if (table === "workspaces") {
+      // ADR-044 read-cutover: getCurrentRepoUrl reads workspaces.repo_url;
+      // mirror userData.repo_url so repo-scope expectations hold.
+      return {
+        select: () => ({
+          eq: () => ({
+            single: () => ({ data: { repo_url: userData.repo_url ?? null }, error: null }),
+            maybeSingle: () => ({ data: { repo_url: userData.repo_url ?? null }, error: null }),
+          }),
+        }),
+      };
+    }
+    if (table === "user_session_state") {
+      return {
+        select: () => ({
+          eq: () => ({
+            single: () => ({ data: { current_workspace_id: null }, error: null }),
+            maybeSingle: () => ({ data: { current_workspace_id: null }, error: null }),
+          }),
+        }),
+      };
+    }
     if (table === "conversations") {
       // Chainable .eq so updateConversationFor's
       //   .update(...).eq("id", ...).eq("user_id", ...)[.select("id")]
@@ -223,6 +248,12 @@ function setupSupabaseMock(userData: Record<string, unknown>) {
       insert: () => ({ error: null }),
     };
   });
+  // ADR-044: installationId now comes from the resolve_workspace_installation_id
+  // RPC (active-workspace credential), not users.github_installation_id.
+  configureInstallationRpc(
+    mockRpc,
+    (userData.github_installation_id as number | null) ?? null,
+  );
 }
 
 function setupQueryMockImmediate() {

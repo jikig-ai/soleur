@@ -5,6 +5,7 @@ status: accepted
 date: 2026-05-21
 related: [4229, 4225, 2972]
 related_adrs: [ADR-029, ADR-023]
+amended_by: [ADR-044]
 related_plans:
   - knowledge-base/project/plans/2026-05-21-feat-team-workspace-multi-user-plan.md
 brand_survival_threshold: single-user incident
@@ -17,6 +18,8 @@ brand_survival_threshold: single-user incident
 **Accepted** (2026-05-21, PR #4225).
 
 Lands BEFORE migration 053 in the same PR per `requires_adr: true` in the plan frontmatter.
+
+> **Amended by [ADR-044](./ADR-044-workspace-repo-ownership.md) (2026-05-28, #4558).** This ADR deliberately left GitHub repo-connection state on `users` (the migration-059 9-table sweep excludes the repo columns). ADR-044 reverses that boundary — relocating repo state to `workspaces` so joined-workspace members can sync the workspace's repo (#4543) — and moves the installation-id uniqueness guarantee from the migration-052 DB UNIQUE to the `normalizeRepoUrl` TS↔SQL parity contract.
 
 ## Context
 
