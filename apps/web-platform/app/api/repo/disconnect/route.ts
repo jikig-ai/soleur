@@ -92,6 +92,18 @@ export async function DELETE(request: Request) {
     );
   }
 
+  // ADR-044: mirror the moved repo cols to the solo workspace so the
+  // workspaces-only read path reflects the disconnect.
+  const { mirrorRepoColsToSoloWorkspace } = await import(
+    "@/server/workspace-repo-mirror"
+  );
+  await mirrorRepoColsToSoloWorkspace(serviceClient, user.id, {
+    github_installation_id: null,
+    repo_url: null,
+    repo_status: "not_connected",
+    repo_last_synced_at: null,
+  });
+
   // Best-effort workspace cleanup — deleteWorkspace derives path from
   // getWorkspacesRoot() + the workspace identifier, handles non-existent
   // directories. For a solo user, `user.id` is the workspace_id (N2

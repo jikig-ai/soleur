@@ -88,6 +88,10 @@ function setupUserMocks(opts: {
     if (table === "users") {
       return { select: selectChain.select, update: mockUpdate };
     }
+    // ADR-044: workspaces mirror write (mirrorRepoColsToSoloWorkspace).
+    if (table === "workspaces") {
+      return { update: () => ({ eq: async () => ({ error: null }) }) };
+    }
     return {};
   });
 

@@ -61,6 +61,11 @@ type TableMockConfig = Record<string, Partial<Record<TableOperation, unknown>>>;
  */
 function setupTableRoutes(config: TableMockConfig) {
   mockServiceFrom.mockImplementation((table: string) => {
+    // ADR-044: detect-installation mirrors the installation grant to the
+    // solo workspace via mirrorRepoColsToSoloWorkspace — accept the write.
+    if (table === "workspaces") {
+      return { update: () => ({ eq: async () => ({ error: null }) }) };
+    }
     const tableConfig = config[table];
     if (!tableConfig) {
       throw new Error(`Unexpected .from("${table}") call — add it to setupTableRoutes`);
