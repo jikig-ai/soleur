@@ -105,7 +105,7 @@ describe("resolveInstallationId (workspace-scoped, RPC-only)", () => {
     const { reportSilentFallback } = await import("@/server/observability");
 
     vi.mocked(getFreshTenantClient).mockImplementationOnce(async () => {
-      throw new RuntimeAuthError("token expired");
+      throw new RuntimeAuthError("jwt_mint", "token expired");
     });
 
     const { resolveInstallationId } = await import(

@@ -41,9 +41,19 @@ plan: knowledge-base/project/plans/2026-05-28-feat-workspace-repo-ownership-plan
 
 ## Phase 3: Read cutover — TS (workspaces-only reads)
 
-- [ ] 3.1 (RED) Resolver tests: (a) 2-workspace member resolves ACTIVE workspace id, never sibling; (b) **non-member** workspaceId → null; (c) **undefined** claim → solo workspace, never sibling (AC4)
-- [ ] 3.2 Rewrite `resolve-installation-id.ts`: `(userId, workspaceId?)`; read credential **only via `resolve_workspace_installation_id` RPC**; **delete** both the `.ilike("repo_url", ...)` fallback AND the unscoped `workspace_members … LIMIT 1` pattern (:57-62)
-- [ ] 3.3 Undefined/null-claim default → caller's solo workspace (`= users.id`), mirror 060:118-126 default-org fallback; never error, never sibling
+> **RESUME POINT (2026-05-28).** DB layer (079/080) + the load-bearing resolver guard are done, tested, committed. Remaining Phase 3 is an INTERLOCKING read-cutover that must land atomically (partial = dual-ownership divergence trap, plan §Risks). Next concrete steps, in order:
+> 1. `session-sync.ts:301` bump `WORKSPACE_RECONCILE_SCHEMA_V` `"1"→"2"`.
+> 2. Add `getCurrentWorkspaceId(session)` to `workspace-resolver.ts` (mirror `getCurrentOrganizationId` at :41) reading `app_metadata.current_workspace_id`.
+> 3. Webhook route (`webhooks/github/route.ts:193-316`): add `repository.full_name` to body type + dispatched Inngest payload; **fail-closed** (skip+log) when full_name absent (P0-2); emit v=2.
+> 4. **Push-path fan-out (HIGHEST RISK — the #4543 path).** `workspace-reconcile-on-push.ts`: add `fullName` to event.data; resolve workspace(s) by `(github_installation_id, normalizeRepoUrl("https://github.com/"+fullName))`, fan out. **OPEN: `workspace_path`/`workspace_status` still live on `users` (migration 001), NOT workspaces — fan-out needs per-workspace path resolution. Resolve this coupling (derive `/workspaces/<workspace_id>` vs. owner-join to users) before implementing.** v=1 in-flight drains via existing gate.
+> 5. Read-cutover sweep (claim-derived `workspaceId`, never req.body): `current-repo-url.ts` (signature break → ~15 callers: thread-info, conversations route, agent-runner:1259, conversations-tools×5, ws-handler×3), `session-sync.ts:228`, `kb-route-helpers.ts:108`, `kb/sync/route.ts:106`. AC5 grep must = 0.
+> 6. Switcher write-path (`org-switcher-container.tsx`): `set_current_workspace_id`→`refreshSession()`, read claim from JWT not getUser(); inline confirm+status (no new component).
+> 7. `live-repo-badge.tsx` (NEW), workspace-path resolution (3.12), J5 interstitial (3.13), anonymise cascade (3.14).
+> Parity gate for AC7 already shipped in `test/repo-url-sql-parity.test.ts`.
+
+- [x] 3.1 (RED→GREEN) Resolver tests in `test/resolve-installation-id.test.ts`: (a) active-workspace resolve never sibling; (b) non-member → null; (c) undefined/null claim → solo workspace. 7 passed
+- [x] 3.2 Rewrote `resolve-installation-id.ts`: `(userId, workspaceId?)`; credential read **only via `resolve_workspace_installation_id` RPC**; **deleted** the `.ilike("repo_url", ...)` fallback, the unscoped `workspace_members … LIMIT 1` sibling lookup, AND `extractGitHubOwner` (dead after fallback removal)
+- [x] 3.3 Undefined/null-claim default → caller's solo workspace (`= userId`); never error, never sibling. (Callers still pass only userId → behave as solo until the claim-threading sweep in step 5 above)
 - [ ] 3.4 Run-time repo revalidation in resolver/sync entry path (fail loud on 404/repo-change at agent-run time) — closes wrong-repo hazard (AC9)
 - [ ] 3.5 Call-site sweep: thread **claim-derived** `workspaceId` (JWT `current_workspace_id`, never `req.body`/`req.query`) through `session-sync.ts`, `current-repo-url.ts` (signature break), `kb-route-helpers.ts`, `agent-runner.ts`, `app/api/repo/status`, `kb/upload`, `kb/sync`, `kb/file/[...path]`, dashboard pages, `use-conversations.ts`; verify constrained grep = 0 + no `req.body`-sourced workspaceId (AC5) + tsc
 - [ ] 3.6 (RED) Push-path tests: 2 workspaces sharing one installation_id **both** reconciled (fan-out); `full_name` absent → fail closed; v=1 in-flight event drains to `{ok:false}` (AC6)
