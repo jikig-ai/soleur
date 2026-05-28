@@ -23,11 +23,64 @@
 
 import { App } from "@octokit/app";
 import { createChildLogger } from "../logger";
+import { warnSilentFallback } from "@/server/observability";
 
 const log = createChildLogger("probe-octokit");
 
 const APP_ID_ENV = "GITHUB_APP_ID";
 const PRIVATE_KEY_ENV = "GITHUB_APP_PRIVATE_KEY";
+
+// Mirrors the canonical backoff idiom in server/github-api.ts (MAX_RETRIES=2,
+// BASE_DELAY_MS=1_000 → 1s, 2s) and the parity fix in
+// server/github-app.ts:467-468,506-520 (PR 4565, #122537945). 401-only: a 401
+// on App-JWT installation discovery is the transient JWT-replication class; any
+// non-401 breaks immediately, preserving 404/403/5xx semantics. The sibling
+// hand-rolled path was hardened to this budget; this brings the @octokit/app
+// path to parity (PR #4498's single 1s retry was insufficient).
+const PROBE_JWT_MAX_RETRIES = 2; // 3 total attempts
+const PROBE_JWT_BASE_DELAY_MS = 1_000; // 1s, 2s
+
+// GitHub-origin diagnostics extracted from a thrown @octokit/request-error
+// `RequestError` WITHOUT materializing the App JWT or PEM. Reads only
+// `err.status` + `err.response.{headers,data}` (GitHub's public error JSON +
+// lower-cased response headers — verified in @octokit/types ResponseHeaders).
+// `clockSkewMs` is positive when the local clock is AHEAD of GitHub — the exact
+// direction that produces JWT `iat`-in-future rejections behind the opaque
+// "A JSON web token could not be decoded" error. AC5: no secret enters here.
+interface GitHubErrorDiag {
+  ghStatus?: number;
+  ghRequestId?: string;
+  ghBody?: string;
+  clockSkewMs: number | null;
+}
+
+function extractGitHubErrorDiag(err: unknown): GitHubErrorDiag {
+  if (!err || typeof err !== "object") return { clockSkewMs: null };
+  const status = (err as { status?: number }).status;
+  const resp = (err as {
+    response?: {
+      headers?: { date?: string; "x-github-request-id"?: string };
+      data?: unknown;
+    };
+  }).response;
+  const headers = resp?.headers ?? {};
+  const ghDate = headers.date;
+  const parsed = ghDate ? Date.parse(ghDate) : NaN;
+  const clockSkewMs = Number.isNaN(parsed) ? null : Date.now() - parsed;
+  const rawBody = resp?.data;
+  const ghBody =
+    rawBody === undefined || rawBody === null
+      ? undefined
+      : (typeof rawBody === "string" ? rawBody : JSON.stringify(rawBody))
+          .replace(/[\r\n]/g, " ")
+          .slice(0, 500);
+  return {
+    ghStatus: status,
+    ghRequestId: headers["x-github-request-id"],
+    ghBody,
+    clockSkewMs,
+  };
+}
 
 // Operator repo the probe files issues against. The probe is repo-scoped
 // by design — its tracking issues live where the operator looks. If the
@@ -67,15 +120,44 @@ export async function createProbeOctokit() {
     return app.getInstallationOctokit(installation.id);
   }
 
-  try {
-    return await attempt();
-  } catch (err) {
-    const status = (err as { status?: number }).status;
-    if (status !== 401) throw err;
-    log.warn("401 on App JWT installation discovery — retrying once after 1s");
-    await new Promise((r) => setTimeout(r, 1_000));
-    return await attempt();
+  // Diagnostic-capture-then-rethrow. `warnSilentFallback` (warning level, not
+  // error) is deliberate: the cron handler's `step.run("issue-handling")` catch
+  // (cron-oauth-probe.ts) already owns the terminal error-level
+  // `reportSilentFallback`, so this avoids double-counting the same failure as
+  // two error events while still surfacing the GitHub status/request-id/body/
+  // clock-skew that makes the next recurrence self-diagnosing.
+  // (cq-silent-fallback-must-mirror-to-sentry: warnSilentFallback reaches Sentry.)
+  function captureAndRethrow(err: unknown, attempts: number): never {
+    warnSilentFallback(err, {
+      feature: "cron-oauth-probe",
+      op: "create-probe-octokit:app-jwt",
+      message: "App-JWT installation discovery failed",
+      extra: { ...extractGitHubErrorDiag(err), attempts },
+    });
+    throw err;
   }
+
+  for (let i = 0; i <= PROBE_JWT_MAX_RETRIES; i++) {
+    try {
+      return await attempt();
+    } catch (err) {
+      const status = (err as { status?: number }).status;
+      // Non-401: not the transient JWT-replication class — capture + rethrow now.
+      if (status !== 401) captureAndRethrow(err, i + 1);
+      // Exhausted the 401 retry budget — capture + rethrow.
+      if (i >= PROBE_JWT_MAX_RETRIES) captureAndRethrow(err, i + 1);
+      // Otherwise back off (1s, 2s) and re-attempt with a fresh App/JWT.
+      log.warn(
+        { attempt: i + 1, status },
+        "401 on App JWT installation discovery — retrying with backoff",
+      );
+      await new Promise((r) =>
+        setTimeout(r, PROBE_JWT_BASE_DELAY_MS * 2 ** i),
+      );
+    }
+  }
+  // Unreachable: the loop either returns or captureAndRethrow throws.
+  throw new Error("createProbeOctokit: retry loop fell through");
 }
 
 /**
