@@ -82,9 +82,9 @@ plan: knowledge-base/project/plans/2026-05-28-feat-workspace-repo-ownership-plan
 
 ## Phase 4: Legal (parallel; TR8)
 
-- [ ] 4.1 `legal-document-generator`: amend PA-17 across `privacy-policy.md`, `data-protection-disclosure.md` §2.3, `gdpr-policy.md`, `article-30-register.md` for co-member repo/KB access
-- [ ] 4.2 Amend attestation (058) copy to cover repo/KB data-access consent
-- [ ] 4.3 `legal-compliance-auditor`: cross-document consistency re-audit
+- [x] 4.1 `legal-document-generator` DONE: amended PA-17 (Art. 30 register Processing Activity 17, new sub-clause (c)) + `privacy-policy.md` §4.11 + `data-protection-disclosure.md` §2.3(u) + `gdpr-policy.md` §5.3 for co-member repo/KB access. All net-new disclosure marked `[DRAFT — pending CLO/counsel review per #4558]`. Eleventy mirrors (`plugins/soleur/docs/pages/legal/*`) brought into lockstep (heading-sequence + Last-Updated-date parity gate `legal-doc-consistency.test.ts` green). `LEGAL_DOC_SHAS` literals regenerated for the 3 changed canonical docs (`legal-doc-shas-guard.test.ts` green). Non-T&C edits → no TC_VERSION bump.
+- [x] 4.2 Attestation (058) copy DONE: `ATTESTATION_TEXT` (invite-member-modal.tsx:5-6) now reads "…and I consent to them accessing this workspace's connected repository and knowledge-base." — the Art. 6(1)(a) consent of record for a Co-Member's repo/KB access.
+- [x] 4.3 `legal-compliance-auditor` DONE: cross-document re-audit — 0 blockers; 1 should-fix applied (PA-17(c)(2) lawful-basis framing aligned to the consent-for-access + 6(1)(f)-for-derived-signals split used in PP/DPD/GDPR); cross-reference ring, sub-processor framing, mirror fidelity, and DRAFT markers confirmed consistent. Nits (PP §4.11 sub-clause-precision; CLO copy-softening caveat) left for the CLO pass.
 
 ## Phase 5: Verification
 
