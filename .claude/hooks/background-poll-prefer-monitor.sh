@@ -69,13 +69,17 @@ deny() {
 command -v jq >/dev/null 2>&1 || allow
 
 payload="$(cat)"
-tool_name="$(echo "$payload" | jq -r '.tool_name // empty' 2>/dev/null)"
+# `|| true` on every jq pipeline: under `set -euo pipefail`, jq exits 5 on
+# malformed/empty stdin and would otherwise abort the script before any
+# allow/deny JSON is emitted — breaking the "exit 0 always / fail-open"
+# invariant in the header. Degrade to empty → allow instead.
+tool_name="$(echo "$payload" | jq -r '.tool_name // empty' 2>/dev/null || true)"
 [ "$tool_name" = "Bash" ] || allow
 
-bg="$(echo "$payload" | jq -r '.tool_input.run_in_background // false' 2>/dev/null)"
+bg="$(echo "$payload" | jq -r '.tool_input.run_in_background // false' 2>/dev/null || true)"
 [ "$bg" = "true" ] || allow
 
-cmd="$(echo "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)"
+cmd="$(echo "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
 [ -n "$cmd" ] || allow
 
 # Override-marker escape hatch — must appear literally in the command.

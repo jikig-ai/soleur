@@ -103,6 +103,20 @@ assert_decision "(k) override-marker allows" "allow" \
 assert_decision "(l) non-Bash tool allows" "allow" \
   "$(jq -nc '{tool_name: "Write", tool_input: {file_path: "x.md", content: "while gh run watch; do :; done"}}')"
 
+# --- Fail-open on malformed / empty stdin (P3 regression guard) ------------
+# jq exits 5 on invalid JSON; under set -euo pipefail the hook must NOT abort
+# before emitting allow JSON (header invariant: "exit 0 always / fail-open").
+assert_decision "(m) malformed JSON stdin allows (fail-open)" "allow" 'not json{'
+assert_decision "(n) empty stdin allows (fail-open)" "allow" ''
+
+# Exit-code guard: the hook must exit 0 even on malformed input.
+TOTAL=$((TOTAL + 1))
+if echo 'not json{' | bash "$HOOK" >/dev/null 2>&1; then
+  PASS=$((PASS + 1)); echo "PASS: (o) malformed stdin exits 0"
+else
+  FAIL=$((FAIL + 1)); echo "FAIL: (o) malformed stdin exit code was $?"
+fi
+
 echo
 echo "Total: $TOTAL  Pass: $PASS  Fail: $FAIL"
 [[ $FAIL -eq 0 ]] || exit 1
