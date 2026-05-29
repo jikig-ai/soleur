@@ -31,6 +31,9 @@ export default async function TeamMembershipPage() {
 
   const { data } = result;
   const memberCount = data.members.length;
+  const isOwner = data.members.some(
+    (m) => m.userId === data.currentUserId && m.role === "owner",
+  );
 
   const pendingInvites = await (async () => {
     const { data: rows, error } = await service
@@ -39,6 +42,7 @@ export default async function TeamMembershipPage() {
       .eq("workspace_id", data.workspaceId)
       .is("accepted_at", null)
       .is("declined_at", null)
+      .is("revoked_at", null)
       .gt("expires_at", new Date().toISOString())
       .order("created_at", { ascending: false });
     if (error || !rows) return [];
@@ -68,7 +72,7 @@ export default async function TeamMembershipPage() {
           members={data.members}
           currentUserId={data.currentUserId}
           workspaceId={data.workspaceId}
-          isOwner={data.members.some((m) => m.userId === data.currentUserId && m.role === "owner")}
+          isOwner={isOwner}
           byokDelegationsEnabled={data.byokDelegationsEnabled}
           organizationName={data.organizationName}
         />
@@ -77,6 +81,7 @@ export default async function TeamMembershipPage() {
       <PendingInvitesList
         invites={pendingInvites}
         workspaceId={data.workspaceId}
+        isOwner={isOwner}
       />
 
       {memberCount === 1 && pendingInvites.length === 0 && (
