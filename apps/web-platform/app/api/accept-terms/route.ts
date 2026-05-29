@@ -21,10 +21,15 @@ async function getRedirectDestination(
     .eq("is_valid", true)
     .limit(1);
 
-  // No key yet → onboarding takes precedence (the invitee re-opens the invite
-  // link post-onboarding; an authenticated re-open needs no OTP). Keyed → honor
-  // the validated next hop (e.g. /invite/<token>) instead of /dashboard.
-  if (!keys || keys.length === 0) return "/setup-key";
+  // No key yet → onboarding takes precedence, BUT thread the validated next hop
+  // through it so a brand-new invitee auto-returns to /invite/<token> AFTER
+  // onboarding (T&C recorded first, then key → repo → invite). setup-key carries
+  // it to connect-repo, which lands on it. Keyed → honor the next hop directly.
+  if (!keys || keys.length === 0) {
+    return nextHop
+      ? `/setup-key?redirectTo=${encodeURIComponent(nextHop)}`
+      : "/setup-key";
+  }
   return nextHop ?? "/dashboard";
 }
 

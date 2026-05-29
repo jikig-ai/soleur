@@ -72,11 +72,34 @@ describe("POST /api/accept-terms — redirectTo threading", () => {
     expect(json.redirect).toBe("/invite/tok123");
   });
 
-  test("no-key user → /setup-key takes precedence over redirectTo", async () => {
+  test("no-key user with redirectTo → /setup-key CARRIES the target forward (auto-return after onboarding)", async () => {
     mockApiKeysLimit.mockResolvedValue({ data: [], error: null });
     const res = await POST(makeRequest({ redirectTo: "/invite/tok123" }));
     const json = await res.json();
+    // Onboarding still takes precedence, but the invite target is threaded
+    // onto setup-key so a brand-new invitee auto-returns to /invite after
+    // key + repo setup (T&C-first ordering preserved).
+    expect(json.redirect).toBe(
+      `/setup-key?redirectTo=${encodeURIComponent("/invite/tok123")}`,
+    );
+  });
+
+  test("no-key user with no redirectTo → bare /setup-key (genuine new signup unchanged)", async () => {
+    mockApiKeysLimit.mockResolvedValue({ data: [], error: null });
+    const res = await POST(makeRequest({}));
+    const json = await res.json();
     expect(json.redirect).toBe("/setup-key");
+  });
+
+  test("no-key user with open-redirect redirectTo → bare /setup-key (rejected, not carried)", async () => {
+    mockApiKeysLimit.mockResolvedValue({ data: [], error: null });
+    const res = await POST(makeRequest({ redirectTo: "https://evil.example" }));
+    const json = await res.json();
+    expect(json.redirect).toBe("/setup-key");
+    // Distinguish "rejected" from "feature absent": the hostile value must NOT
+    // be threaded — no ?redirectTo= query, no off-origin host.
+    expect(json.redirect).not.toContain("redirectTo");
+    expect(json.redirect).not.toContain("evil.example");
   });
 
   test("keyed user with no redirectTo → /dashboard (unchanged default)", async () => {

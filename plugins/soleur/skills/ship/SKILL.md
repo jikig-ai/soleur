@@ -1060,6 +1060,7 @@ gh pr view --json mergeable,mergeStateStatus | jq '{mergeable, mergeStateStatus}
 3. Read each conflicted file and resolve. Common conflict patterns:
    - **Component counts**: Use the feature branch count (it includes the new additions)
    - **Code conflicts**: Resolve based on intent of both changes
+   - **Many files conflict with whole-function (not line-level) competing implementations**: a sibling PR may have shipped your feature mid-pipeline (the one-shot collision gate only probes at START and misses a sibling that implements the same feature under a *different* issue). Do NOT reflexively resolve to "mine." `git merge --abort`, read `origin/main`'s ACTUAL implementation (`git show origin/main:<file>`), and decide "is my PR still needed?" If main supersedes it, trace main end-to-end against the original bug for any residual gap, surface the collision + gap to the operator for a design call, then `git reset --hard origin/main` (salvage plan/spec to /tmp first — they live only on the branch) and rebuild ONLY the residual delta. **Why:** PR #4641 — #4638 shipped the same invite-redirect feature mid-one-shot; reset-and-rebuild turned a 6-file competing rewrite into a 2-file delta. See `knowledge-base/project/learnings/workflow-patterns/2026-05-29-dirty-conflict-during-ship-may-mean-sibling-shipped-your-feature.md`.
 
 4. Stage resolved files and commit the merge:
 
