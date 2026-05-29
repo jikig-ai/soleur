@@ -26,10 +26,13 @@ export function DelegationAcceptanceModal({
   const handleAccept = useCallback(async () => {
     setLoading(true);
     try {
+      // The version is server-owned; the route stamps
+      // BYOK_SIDE_LETTER_VERSION. We send only the delegationId (#4625
+      // Phase 1 / AC3). `sideLetterVersion` is a display-only prop below.
       const res = await fetch("/api/workspace/delegations/accept", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ delegationId, sideLetterVersion }),
+        body: JSON.stringify({ delegationId }),
       });
       if (res.ok) {
         onAccepted();
@@ -37,7 +40,7 @@ export function DelegationAcceptanceModal({
     } finally {
       setLoading(false);
     }
-  }, [delegationId, sideLetterVersion, onAccepted]);
+  }, [delegationId, onAccepted]);
 
   const handleDecline = useCallback(async () => {
     setLoading(true);
