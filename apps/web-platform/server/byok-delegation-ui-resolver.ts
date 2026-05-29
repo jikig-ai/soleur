@@ -1,5 +1,6 @@
 import { createServiceClient } from "@/lib/supabase/service";
 import { isByokDelegationsEnabled, type Identity } from "@/lib/feature-flags/server";
+import { BYOK_SIDE_LETTER_VERSION } from "@/server/byok-side-letter";
 
 export interface GrantorDelegation {
   id: string;
@@ -30,6 +31,13 @@ export interface AcceptanceStatus {
   accepted: boolean;
   acceptedAt: string | null;
   sideLetterVersion: string | null;
+  /** The canonical server-owned version. A `sideLetterVersion` that differs
+   * is stale and fails CLOSED at the SQL lease gate (#4625). */
+  currentVersion: string;
+  /** True when a consent withdrawal post-dates the latest acceptance
+   * (Art. 7(3)). Non-terminal: a later re-acceptance clears it. */
+  withdrawn: boolean;
+  withdrawnAt: string | null;
 }
 
 export async function resolveGrantorDelegations(
@@ -177,13 +185,42 @@ export async function resolveGranteeAcceptanceStatus(
     .eq("delegation_id", delegationId)
     .maybeSingle();
 
+  // Latest withdrawal for this (user, delegation), if any (Art. 7(3)).
+  const { data: wRow } = await service
+    .from("byok_delegation_withdrawals")
+    .select("withdrawn_at")
+    .eq("user_id", userId)
+    .eq("delegation_id", delegationId)
+    .order("withdrawn_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const withdrawnAt = (wRow?.withdrawn_at as string | undefined) ?? null;
+  const acceptedAt = (data?.accepted_at as string | undefined) ?? null;
+  // Withdrawn iff a withdrawal exists that is NOT superseded by a later
+  // (re-)acceptance — mirrors the version-agnostic resolver predicate
+  // (no acceptance ⇒ the withdrawal stands; `>=` so a same-instant
+  // withdrawal wins the tie).
+  const withdrawn =
+    withdrawnAt !== null && (acceptedAt === null || withdrawnAt >= acceptedAt);
+
   if (!data) {
-    return { accepted: false, acceptedAt: null, sideLetterVersion: null };
+    return {
+      accepted: false,
+      acceptedAt: null,
+      sideLetterVersion: null,
+      currentVersion: BYOK_SIDE_LETTER_VERSION,
+      withdrawn,
+      withdrawnAt,
+    };
   }
 
   return {
     accepted: true,
     acceptedAt: data.accepted_at as string,
     sideLetterVersion: data.side_letter_version as string,
+    currentVersion: BYOK_SIDE_LETTER_VERSION,
+    withdrawn,
+    withdrawnAt,
   };
 }
