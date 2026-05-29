@@ -18,6 +18,34 @@ brand_survival_threshold: none
 
 # 🐛 fix: KB-drift walker cron POST to ingest fails (wrong host + middleware session-gate)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-29
+**Sections enhanced:** Research Insights added (precedent-diff + verify-the-negative)
+**Gates run:** 4.4 precedent-diff, 4.45 verify-the-negative + post-edit self-audit, 4.6 User-Brand Impact (pass, threshold `none` + scope-out bullet), 4.7 Observability (pass, 5 fields, no-SSH), 4.8 PAT-shaped variable (pass, none)
+
+### Key Improvements
+
+1. Confirmed `/api/inngest` is the exact canonical precedent for the `PUBLIC_PATHS` edit (same #4017 regression class, same comment style) — pattern is NOT novel.
+2. Verified all three negative claims against the implementation (narrow path exposes nothing else; HMAC stays load-bearing; matcher rejects `/api/internal/other`).
+3. Added the canonical `threshold: none, reason:` scope-out bullet required by Phase 4.6 for sensitive-path diffs.
+
+## Research Insights (deepen-plan)
+
+**Precedent-diff (Phase 4.4) — pattern is NOT novel.** The `PUBLIC_PATHS` edit has an exact sibling precedent already in `apps/web-platform/lib/routes.ts`:
+
+- `/api/webhooks` (line 9), `/api/inngest` (line 16, with a multi-line comment documenting the HMAC-gated-no-session rationale + the #4017 regression), `/api/shared` (line 20) are all signature-authed routes that bypass the Supabase session redirect. The new `/api/internal/kb-drift-ingest` entry is the same shape: HMAC-gated by the route handler, no session cookie, middleware would 307→/login. Adopt the `/api/inngest` comment block verbatim in style (cite #4017 as the regression class).
+
+**Verify-the-negative (Phase 4.45) — all claims confirmed against implementation:**
+
+| Negative claim | Verification | Result |
+| --- | --- | --- |
+| "narrow path exposes nothing else" | `find app/api/internal -name route.ts` → only `kb-drift-ingest/route.ts` | confirms — no sibling internal route to expose |
+| "HMAC stays load-bearing post-fix" | `route.ts:97` `verifyHmac(...)` gate returns 401 (`route.ts:103`) before any DB write; independent of middleware | confirms — bypassing the session redirect does not weaken the route's own auth |
+| "matcher rejects `/api/internal/other`" | `middleware.ts:129` matcher is `pathname === p \|\| pathname.startsWith(p + "/")`; narrow path `p` = `/api/internal/kb-drift-ingest` → `/api/internal/other` is neither equal nor a `p + "/"` prefix | confirms — prefix-collision guard holds |
+
+**Post-edit self-audit (Phase 4.45):** No infrastructure was dropped/renamed by this plan; no dangling-symbol references. The only TF mutation is a single `value` literal; `ignore_changes = [value]` is preserved (no resource dropped).
+
 ## Overview
 
 The nightly `.github/workflows/kb-drift-walker.yml` cron walks the KB for broken links/anchors, HMAC-signs the JSON findings, and `POST`s them to `KB_DRIFT_INGEST_URL`. The POST is failing for **two independent reasons**, both verified live and against the codebase:
@@ -55,7 +83,9 @@ This is the exact same class of regression that #4017 caused for `/api/inngest`:
 
 **If this leaks, the user's data / workflow / money is exposed via:** the narrow path `/api/internal/kb-drift-ingest` becoming session-public. Mitigation is structural — the route's own HMAC-SHA256 gate (`KB_DRIFT_INGEST_SIGNING_KEY`, route.ts:97-104) is the load-bearing auth; making it session-public only removes the Supabase redirect, not the HMAC check. Bad/absent signature still returns 401. The narrow exact path ensures no *other* internal route inherits session-bypass.
 
-**Brand-survival threshold:** none. Internal infra-signal cron; HMAC remains load-bearing post-fix; no regulated-data surface widened (the route already exists and already writes to `messages` under the operator founder id — this PR does not change what it writes or who can reach the handler logically, only removes a redirect that prevented the legitimate caller from reaching it). The sensitive-path note: `middleware.ts` + an `/api/*` route are touched, but the change is *removing a redirect in front of an already-HMAC-gated route*, not adding a new data path. Reason: no new processing activity, no schema change, no new lawful-basis surface — the route and its writes are unchanged.
+**Brand-survival threshold:** none. Internal infra-signal cron; HMAC remains load-bearing post-fix; no regulated-data surface widened (the route already exists and already writes to `messages` under the operator founder id — this PR does not change what it writes or who can reach the handler logically, only removes a redirect that prevented the legitimate caller from reaching it). The sensitive-path note: `middleware.ts` + an `/api/*` route + `apps/web-platform/infra/` are touched, but the change is *removing a redirect in front of an already-HMAC-gated route* plus a TF string-default correction, not adding a new data path.
+
+- **threshold: none, reason:** the diff touches sensitive paths (`middleware.ts`, `app/api/internal/...`, `infra/kb-drift.tf`) but adds no new processing activity, no schema change, and no new lawful-basis surface — it removes a Supabase redirect in front of an already-HMAC-gated route (HMAC stays load-bearing) and corrects a Terraform string default.
 
 ## Files to Edit
 
