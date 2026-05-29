@@ -180,6 +180,12 @@ function KbDriftCard({
         </span>
         <span data-urgency-label={urgency}>{urgency}</span>
       </header>
+      {/* Intentional: no render-time redactGithubSourcedText here (unlike
+          GitHubCard). KB-drift previews are redacted + URL-query-stripped at
+          INSERT (insert-draft-card.ts + route.ts) and contain operator-internal
+          doc paths the operator owns — not third-party PII. The "never drop
+          render-time" contract in redaction-allowlist.ts targets github-sourced
+          third-party content; it does not apply to insert-redacted self-owned rows. */}
       <p className="mb-3 whitespace-pre-line text-sm text-soleur-text-primary">{draftPreview}</p>
       {shownError ? (
         <p className="mb-2 text-xs text-red-600" role="alert">
