@@ -7,20 +7,11 @@ import { reportSilentFallback } from "@/lib/client-observability";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
 import { EMAIL_OTP_LENGTH } from "@/lib/auth/constants";
 import {
+  type AuthErrorLike,
   mapSupabaseAuthError,
   SIGNUP_REASON_NO_ACCOUNT,
 } from "@/lib/auth/error-messages";
 import Link from "next/link";
-
-// Structured shape shared by a resolved Supabase AuthError and a transport
-// throw. Read-only inspection — `code`/`status` are enums/ints (no PII);
-// `message` is never forwarded to Sentry.
-type AuthErrorLike = {
-  code?: string;
-  status?: number;
-  name?: string;
-  message?: string;
-};
 
 export default function SignupPage() {
   return (

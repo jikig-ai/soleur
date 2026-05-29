@@ -44,6 +44,8 @@ vi.mock("@/components/auth/oauth-buttons", () => ({
 import { LoginForm } from "@/components/auth/login-form";
 
 const RATE_LIMIT_COPY = /too many attempts right now/i;
+const UNAVAILABLE_COPY = /temporarily unavailable/i;
+const CONNECTION_COPY = /couldn't reach the sign-in service/i;
 const GENERIC_COPY = /something went wrong/i;
 
 async function advanceToVerifyScreen() {
@@ -104,7 +106,39 @@ describe("LoginForm verifyOtp error mapping", () => {
     expect(alert.textContent).not.toMatch(GENERIC_COPY);
   });
 
-  it("forwards status to Sentry but never the raw error.message (PII discipline)", async () => {
+  it("renders temporarily-unavailable copy when verifyOtp resolves with a 5xx (hook/server failure)", async () => {
+    await advanceToVerifyScreen();
+    authMock.verifyOtp.mockResolvedValue({
+      error: { name: "AuthApiError", status: 500, message: "internal error" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /sign in/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(UNAVAILABLE_COPY);
+    expect(alert.textContent).not.toMatch(GENERIC_COPY);
+  });
+
+  it("renders connection-failure copy when verifyOtp REJECTS with a status-less transport error", async () => {
+    await advanceToVerifyScreen();
+    authMock.verifyOtp.mockRejectedValue({
+      name: "TypeError",
+      message: "Failed to fetch",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /sign in/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(CONNECTION_COPY);
+    expect(alert.textContent).not.toMatch(GENERIC_COPY);
+  });
+
+  it("keeps the Sentry `extra` free of the raw error.message (only enum/int fields)", async () => {
+    // NOTE: this asserts the `extra` bag is PII-free. The raw error object is
+    // still forwarded to Sentry.captureException, so the message-borne email is
+    // scrubbed at the beforeSend layer — that scrub is covered by
+    // test/sentry-client-jwt-scrub.test.ts (EMAIL_PATTERN). Here we only
+    // guarantee no PII is added to the structured extra payload.
     await advanceToVerifyScreen();
     authMock.verifyOtp.mockResolvedValue({
       error: {

@@ -37,15 +37,33 @@ export const TEMPORARILY_UNAVAILABLE_MESSAGE =
 export const CONNECTION_FAILURE_MESSAGE =
   "Couldn't reach the sign-in service. Check your connection and try again.";
 
+// Email-SEND ceiling copy (freetext `email rate limit exceeded`). Exported so
+// the divergence guard in the test suite can reference it by name rather than
+// hard-coding the literal (which would silently desync on a copy edit).
+export const EMAIL_SEND_RATE_LIMIT_MESSAGE =
+  "Too many sign-in attempts. Please wait a few minutes and try again.";
+
+/**
+ * Structural shape of a Supabase `AuthError` (or a transport throw — a bare
+ * `TypeError` / fetch reject that is NOT an `AuthError`). Read-only inspection:
+ * `code`/`status` are enums/ints (no PII); `message` is only consulted by the
+ * freetext fallback and is never forwarded to Sentry's `extra`. Canonical home
+ * for the shape consumed by {@link mapSupabaseAuthError} and the auth call
+ * sites (login-form, signup, oauth-buttons).
+ */
+export type AuthErrorLike = {
+  code?: string;
+  status?: number;
+  name?: string;
+  message?: string;
+};
+
 const SUPABASE_ERROR_PATTERNS: [RegExp, string][] = [
   [
     NO_ACCOUNT_PATTERN,
     "No Soleur account found for this email. Sign up instead.",
   ],
-  [
-    /email rate limit exceeded/i,
-    "Too many sign-in attempts. Please wait a few minutes and try again.",
-  ],
+  [/email rate limit exceeded/i, EMAIL_SEND_RATE_LIMIT_MESSAGE],
   [
     /invalid otp/i,
     "That code is incorrect or has expired. Please request a new one.",
@@ -83,10 +101,7 @@ export function mapSupabaseError(message: string): string {
  * Hook), and transport failures.
  */
 export function mapSupabaseAuthError(
-  error:
-    | { code?: string; status?: number; name?: string; message?: string }
-    | null
-    | undefined,
+  error: AuthErrorLike | null | undefined,
 ): string {
   if (!error) return DEFAULT_ERROR_MESSAGE;
 

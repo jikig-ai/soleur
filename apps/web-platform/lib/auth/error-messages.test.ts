@@ -4,6 +4,7 @@ import { describe, it, expect } from "vitest";
 import {
   CONNECTION_FAILURE_MESSAGE,
   DEFAULT_ERROR_MESSAGE,
+  EMAIL_SEND_RATE_LIMIT_MESSAGE,
   EXPIRED_CODE_MESSAGE,
   isNoAccountError,
   mapSupabaseAuthError,
@@ -67,9 +68,9 @@ describe("mapSupabaseAuthError (code/status-aware)", () => {
   it("distinguishes verify rate-limit copy from the email-send rate-limit copy", () => {
     // The new per-request ceiling copy must NOT collide with the existing
     // freetext 'email rate limit exceeded' copy — they are different limits.
-    expect(RATE_LIMIT_MESSAGE).not.toBe(
-      "Too many sign-in attempts. Please wait a few minutes and try again.",
-    );
+    // Reference the exported constant so a copy edit to either string keeps
+    // this divergence guard honest (no stale inline literal).
+    expect(RATE_LIMIT_MESSAGE).not.toBe(EMAIL_SEND_RATE_LIMIT_MESSAGE);
   });
 
   it("maps code 'otp_expired' to the expired-code copy", () => {

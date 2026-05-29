@@ -111,9 +111,10 @@ generic copy:
    correct, recoverable instruction (wait / request a new code / retry).
 2. **Observability.** The existing `reportSilentFallback` call already mirrors
    `errorCode`/`errorName` to Sentry — but only the *code*, not `status`. Add
-   `status` and the GoTrue request-id (if present) so an operator can
-   distinguish a 429-rate-limit from a 500-hook-failure without SSH or a repro.
-   This is the discoverability_test surface (see `## Observability`).
+   `status` so an operator can distinguish a 429-rate-limit from a
+   500-hook-failure without SSH or a repro. This is the discoverability_test
+   surface (see `## Observability`). (The GoTrue request-id was considered but
+   not shipped — `status` alone satisfies the 429-vs-500 triage claim.)
 
 This plan does **not** change the hook, the migrations, or the runtime-mint
 substrate — those are correct as shipped (#3363 / PR #3983). It hardens the

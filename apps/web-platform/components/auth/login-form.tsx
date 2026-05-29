@@ -7,22 +7,13 @@ import { reportSilentFallback } from "@/lib/client-observability";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
 import { EMAIL_OTP_LENGTH } from "@/lib/auth/constants";
 import {
+  type AuthErrorLike,
   CALLBACK_ERRORS,
   DEFAULT_ERROR_MESSAGE,
   isNoAccountError,
   mapSupabaseAuthError,
   SIGNUP_REASON_NO_ACCOUNT,
 } from "@/lib/auth/error-messages";
-
-// Structured shape shared by a resolved Supabase AuthError and a transport
-// throw (bare TypeError / fetch reject). Read-only inspection — `code`/`status`
-// are enums/ints (no PII); `message` is never forwarded to Sentry.
-type AuthErrorLike = {
-  code?: string;
-  status?: number;
-  name?: string;
-  message?: string;
-};
 import Link from "next/link";
 
 export function LoginForm() {
@@ -81,8 +72,11 @@ export function LoginForm() {
 
     if (error) {
       console.error("[auth] Supabase error:", error.message);
-      // Forward only typed enum/int fields — error.message embeds the email on
-      // OTP failures and Sentry is a shared project (PII / cross-tenant risk).
+      // Forward only typed enum/int fields in `extra` — error.message embeds
+      // the email on OTP failures and Sentry is a shared cross-tenant project.
+      // The raw error is still captured via Sentry.captureException, so the
+      // message-borne email is scrubbed by sentry.client.config beforeSend
+      // (EMAIL_PATTERN), not omitted here.
       reportSilentFallback(error, {
         feature: "auth",
         op: "signInWithOtp",

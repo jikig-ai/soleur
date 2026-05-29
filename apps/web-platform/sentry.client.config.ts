@@ -1,25 +1,37 @@
 import * as Sentry from "@sentry/nextjs";
 import { PII_KEY_RE } from "@/lib/client-observability";
 
-// Strip JWT-shaped substrings from any string field on the event before
-// transport. Validator throws (`lib/supabase/validate-anon-key.ts`) embed a
-// JWT preview in `error.message`; without this scrub the preview ships to
-// every Sentry-project reader.
+// Strip sensitive substrings (JWTs, email addresses) from any string field on
+// the event before transport. Two leak vectors this closes:
+//   - JWT preview: validator throws (`lib/supabase/validate-anon-key.ts`) embed
+//     a JWT preview in `error.message`.
+//   - Email: Supabase auth errors (`verifyOtp`/`signInWithOtp`) carry the user's
+//     email in `error.message`, and `reportSilentFallback` forwards the raw
+//     error object to `Sentry.captureException`, so the message lands in
+//     `event.exception.values[].value`. The structured `extra` payload is
+//     already email-free (only enum `code` / int `status`), but the captured
+//     exception value is the residual vector this scrub covers.
+// Sentry is a shared cross-tenant project — over-redacting here is the safe
+// direction (an email is never wanted in error telemetry).
 const JWT_PATTERN = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g;
 const JWT_REDACTION = "<jwt-redacted>";
+const EMAIL_PATTERN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+const EMAIL_REDACTION = "<email-redacted>";
 
-function scrubJwt(input: string | undefined): string | undefined {
+function scrubSensitive(input: string | undefined): string | undefined {
   if (!input) return input;
-  return input.replace(JWT_PATTERN, JWT_REDACTION);
+  return input
+    .replace(JWT_PATTERN, JWT_REDACTION)
+    .replace(EMAIL_PATTERN, EMAIL_REDACTION);
 }
 
 export function scrubJwtFromEvent<T extends Sentry.ErrorEvent>(event: T): T {
   if (event.message) {
-    event.message = scrubJwt(event.message);
+    event.message = scrubSensitive(event.message);
   }
   if (event.exception?.values) {
     for (const v of event.exception.values) {
-      if (v.value) v.value = scrubJwt(v.value);
+      if (v.value) v.value = scrubSensitive(v.value);
     }
   }
   return event;
