@@ -166,6 +166,8 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 5.5. Use the **Skill tool**: `skill: soleur:qa`, args: "<plan_file_path>". QA verifies features work end-to-end by executing the plan's Test Scenarios (browser flows via Playwright MCP, API verification via Doppler + curl). If QA fails, fix the issues and re-run QA before proceeding. If the plan has no Test Scenarios section, QA skips gracefully.
 6. Use the **Skill tool**: `skill: soleur:compound`
 7. Use the **Skill tool**: `skill: soleur:ship`. Ship handles compound re-check (Phase 2), documentation verification (Phase 3), tests (Phase 4), semver label assignment, push, PR creation, CI, merge, and cleanup.
+
+   **The merge/CI wait is owned by ship Phase 7 — never hand-roll it.** Do NOT do the change inline and skip invoking `soleur:ship`, and do NOT issue `gh pr merge` or poll `gh pr`/`gh run` yourself. Ship Phase 7 enforces a HARD GATE (use the **Monitor tool**, NEVER Bash `run_in_background`) for the merge and post-merge release polling; bypassing ship bypasses that gate and reintroduces the silent-background-failure mode of PR #4512 (per `hr-monitor-not-run-in-background-for-polling`, also hook-enforced by `background-poll-prefer-monitor.sh`). Even for a trivial change there is no compressed fast-path: run Steps 3-8 as written and let ship own the wait.
 8. Output `<promise>DONE</promise>` when PR is merged and release workflows pass
 
 CRITICAL RULE: If a completion promise is set, you may ONLY output it when the statement is completely and unequivocally TRUE. Do not output false promises to escape the loop.

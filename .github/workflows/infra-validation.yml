@@ -130,6 +130,9 @@ jobs:
       - name: Run canary-bundle-claim-check.sh tests
         run: bash apps/web-platform/infra/canary-bundle-claim-check.test.sh
 
+      - name: Run www-apex-canonicalizer drift-guard
+        run: bash apps/web-platform/infra/www-apex-canonicalizer.test.sh
+
   check-secrets:
     runs-on: ubuntu-24.04
     outputs:
