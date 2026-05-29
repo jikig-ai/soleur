@@ -20,34 +20,43 @@ readonly ENV_EXAMPLE="apps/web-platform/.env.example"
 DRY_RUN=0
 DEV_ON=0
 PRD_ON=0
+FLAGSMITH_ONLY=0
 DESCRIPTION=""
 NAME=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --dry-run)     DRY_RUN=1; shift ;;
-    --dev-on)      DEV_ON=1; shift ;;
-    --prd-on)      PRD_ON=1; shift ;;
-    --description) DESCRIPTION="$2"; shift 2 ;;
-    --*)           echo "unknown flag: $1" >&2; exit 1 ;;
-    *)             NAME="$1"; shift ;;
+    --dry-run)        DRY_RUN=1; shift ;;
+    --dev-on)         DEV_ON=1; shift ;;
+    --prd-on)         PRD_ON=1; shift ;;
+    --flagsmith-only) FLAGSMITH_ONLY=1; shift ;;
+    --description)    DESCRIPTION="$2"; shift 2 ;;
+    --*)              echo "unknown flag: $1" >&2; exit 1 ;;
+    *)                NAME="$1"; shift ;;
   esac
 done
 
 [[ -z "$NAME" ]] && { echo "Usage: create.sh <kebab-name> [--description ...] [--dev-on] [--prd-on] [--dry-run]" >&2; exit 1; }
 [[ ! "$NAME" =~ ^[a-z][a-z0-9-]*[a-z0-9]$ ]] && { echo "name must be lowercase kebab-case (got: $NAME)" >&2; exit 1; }
 
-[[ ! -f "$SERVER_TS" ]] && { echo "missing $SERVER_TS (run from repo root)" >&2; exit 2; }
-[[ ! -f "$ENV_EXAMPLE" ]] && { echo "missing $ENV_EXAMPLE" >&2; exit 2; }
-
 ENV_VAR="FLAG_$(echo "$NAME" | tr 'a-z-' 'A-Z_')"
 
-# Pre-check: flag name not already registered.
-if grep -qE "[\"']${NAME}[\"']" "$SERVER_TS"; then
-  echo "'$NAME' already appears in $SERVER_TS" >&2; exit 1
-fi
-if grep -qE "^${ENV_VAR}=" "$ENV_EXAMPLE"; then
-  echo "$ENV_VAR already in $ENV_EXAMPLE" >&2; exit 1
+# --flagsmith-only (gap 1, #4581 PR-2): the flag is ALREADY code-wired (in
+# RUNTIME_FLAGS + .env.example) — this run only creates the Flagsmith feature.
+# Skip the file-existence checks AND the "already appears in server.ts" exit-1
+# precheck (which would fire precisely because the flag IS already wired), plus
+# the server.ts/.env.example edits and the Doppler mirror further down.
+if [[ $FLAGSMITH_ONLY -eq 0 ]]; then
+  [[ ! -f "$SERVER_TS" ]] && { echo "missing $SERVER_TS (run from repo root)" >&2; exit 2; }
+  [[ ! -f "$ENV_EXAMPLE" ]] && { echo "missing $ENV_EXAMPLE" >&2; exit 2; }
+
+  # Pre-check: flag name not already registered.
+  if grep -qE "[\"']${NAME}[\"']" "$SERVER_TS"; then
+    echo "'$NAME' already appears in $SERVER_TS" >&2; exit 1
+  fi
+  if grep -qE "^${ENV_VAR}=" "$ENV_EXAMPLE"; then
+    echo "$ENV_VAR already in $ENV_EXAMPLE" >&2; exit 1
+  fi
 fi
 
 TOKEN=$(doppler secrets get FLAGSMITH_MANAGEMENT_API_KEY -p soleur -c cli_ops --plain 2>/dev/null || true)
@@ -69,9 +78,13 @@ echo "→ Proposed mutations:"
 echo "  1. Flagsmith: create feature '$NAME' (default_enabled=false)"
 [[ $DEV_ON -eq 1 ]] && echo "     + segment override role-dev=ON in BOTH envs"
 [[ $PRD_ON -eq 1 ]] && echo "     + segment override role-prd=ON in BOTH envs"
-echo "  2. $SERVER_TS: add \"$NAME\": \"$ENV_VAR\" to RUNTIME_FLAGS"
-echo "  3. $ENV_EXAMPLE: add $ENV_VAR=$PRD_DOPPLER_VAL"
-echo "  4. Doppler: $ENV_VAR=$PRD_DOPPLER_VAL in soleur/dev AND soleur/prd"
+if [[ $FLAGSMITH_ONLY -eq 1 ]]; then
+  echo "  (--flagsmith-only: skipping server.ts / $ENV_EXAMPLE / Doppler — flag is already code-wired)"
+else
+  echo "  2. $SERVER_TS: add \"$NAME\": \"$ENV_VAR\" to RUNTIME_FLAGS"
+  echo "  3. $ENV_EXAMPLE: add $ENV_VAR=$PRD_DOPPLER_VAL"
+  echo "  4. Doppler: $ENV_VAR=$PRD_DOPPLER_VAL in soleur/dev AND soleur/prd"
+fi
 
 if [[ $DRY_RUN -eq 1 ]]; then
   echo "(dry-run — exiting 0)"
@@ -132,6 +145,15 @@ if [[ $PRD_ON -eq 1 ]]; then
   SEG=$(resolve_segment "role-prd")
   echo "→ Applying role-prd=ON in dev env…"; apply_override "$FLAGSMITH_ENV_DEV_ID" "$SEG"
   echo "→ Applying role-prd=ON in prd env…"; apply_override "$FLAGSMITH_ENV_PRD_ID" "$SEG"
+fi
+
+# --- code-wiring + Doppler mirror (skipped under --flagsmith-only) ----------
+if [[ $FLAGSMITH_ONLY -eq 1 ]]; then
+  echo
+  echo "✓ Done (--flagsmith-only). Flagsmith feature '$NAME' created; server.ts /"
+  echo "  $ENV_EXAMPLE / Doppler left untouched (flag is already code-wired)."
+  echo "  Next: scope it per-org with soleur:flag-set-role $NAME prd on --org <orgId>."
+  exit 0
 fi
 
 # --- edit server.ts ---------------------------------------------------------

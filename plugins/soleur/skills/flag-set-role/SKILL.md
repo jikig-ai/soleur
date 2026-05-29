@@ -5,7 +5,9 @@ description: "This skill should be used to flip a flag's per-role or per-org sta
 
 # flag-set-role
 
-Flips one role-segment's enablement on a runtime feature flag in Flagsmith, or manages per-org segment membership. The skill is the **only** approved path for mutating Flagsmith segment overrides and org-targeted segment rules — direct UI/curl edits break the fallback-fidelity contract documented in ADR-038 v2 §"Fallback semantics".
+Flips one role-segment's enablement on a runtime feature flag in Flagsmith, or manages per-org segment membership. The skill is the **only** approved path for mutating Flagsmith segment overrides and per-feature org-segment rules — direct UI/curl edits break the fallback-fidelity contract documented in ADR-038 v2 §"Fallback semantics".
+
+Per-org targeting uses a **per-feature segment** `<flag>-orgs` (ADR-043 §"Per-feature segment scoping", 2026-05-29) — each org-targetable flag gets its own segment, so the org set for one flag is independent of another's. (The legacy shared `org-targeted` segment is retained until `team-workspace-invite` is migrated off it; new per-org scoping uses `<flag>-orgs`.)
 
 ## When to use
 
@@ -25,11 +27,12 @@ Flips one role-segment's enablement on a runtime feature flag in Flagsmith, or m
 <arguments> #$ARGUMENTS </arguments>
 
 Required positional args: `<flag-name> <role> <on|off>`.
-- `<flag-name>`: must be a key in `apps/web-platform/lib/feature-flags/server.ts` `RUNTIME_FLAGS` (currently `kb-chat-sidebar`).
+- `<flag-name>`: must be a key in `apps/web-platform/lib/feature-flags/server.ts` `RUNTIME_FLAGS` (and in the script's `FLAG_ENV_VARS` map).
 - `<role>`: `prd` or `dev`.
 - `<on|off>`: target enablement.
 
-Flag `--org <orgId>` switches to per-org targeting mode. When provided, the script modifies the `org-targeted` segment's rule definition (adds/removes an `EQUAL orgId <uuid>` condition in the `ANY` rule) instead of flipping a role-segment override. The orgId must be a valid UUID.
+Flag `--org <orgId>` switches to per-org targeting mode. When provided, the script provisions the feature's own `<flag>-orgs` segment (creates it + ensures an ON feature-state override in both envs) and adds/removes an `EQUAL orgId <uuid>` condition in its `ANY` rule, instead of flipping a role-segment override. The orgId must be a valid UUID.
+Flag `--control-org <orgId>` (per-org mode only) sets the control org for the eval-layer re-verify (the org asserted to be NOT enabled — proves no leak). Defaults to a synthetic non-member UUID; pass a real sibling org (e.g. one sharing the legacy `org-targeted` segment) for a stronger leak check.
 Flag `--dry-run` runs detect/diff/validate steps (no writes).
 Flag `--confirmed` skips the interactive `read -p` prompt (for agent-driven use; the agent must obtain operator ack via AskUserQuestion before passing this flag).
 
@@ -75,17 +78,16 @@ The script (full procedure in [scripts/flip.sh](./scripts/flip.sh)):
 
 **Org targeting (when `--org <orgId>` is provided):**
 
-1. **Validate args.** Same as role targeting, plus UUID format validation on the orgId.
-2. **Resolve segment.** Look up `org-targeted` segment by name via `resolve_segment_id`.
-3. **Read segment rules.** GET the full segment definition, extract all orgIds from the `rules[0].rules[0].conditions[]` array (each condition is `EQUAL orgId <uuid>` inside an `ANY` rule).
-4. **Compute new list.** Check presence. If adding and already present, exit 0 ("already present"). If removing and not present, exit 0 ("not present"). Handle empty segment (first org added).
-5. **Dry-run display.** Print current membership (one orgId per line), proposed action, and new membership list.
-6. **Operator ack.** Same as role targeting.
-7. **Audit trail.** WORM audit entry with `target: org:<orgId>` (audit-before-write ordering).
-8. **Write segment.** PUT the full segment body back with the conditions array rebuilt (one `EQUAL` condition per org).
-9. **Re-verify.** Re-read segment, confirm orgId present/absent as expected.
+1. **Validate args.** Same as role targeting, plus UUID format validation on `--org` and `--control-org` (and they must differ).
+2. **Read current membership.** Resolve the feature's own `<flag>-orgs` segment (may not exist yet → empty membership) and extract its orgIds from the `rules[0].rules[0].conditions[]` array (each condition is `EQUAL orgId <uuid>` inside an `ANY` rule).
+3. **Compute new membership + display.** Add (on) or remove (off) the target org. Print current membership, proposed action, control org, and the new membership. No "already present" early-exit — the override may still be missing, so provisioning + eval-verify always run.
+4. **Dry-run / operator ack.** `--dry-run` prints the plan and exits 0 with no writes. Otherwise wait for `yes` (or `--confirmed`).
+5. **Audit trail.** WORM audit entry with `target: org:<orgId>` BEFORE any Flagsmith mutation (append-before-flip).
+6. **Provision `<flag>-orgs`.** Idempotently create the segment (ALL→ANY/EQUAL-orgId envelope) and ensure an ON feature-state override for the flag in BOTH envs (`provision_feature_segment`).
+7. **Write membership.** Re-read the segment immediately before the PUT (shrinks the read-modify-write window), then PUT the conditions array rebuilt from the fresh read (one `EQUAL` condition per org).
+8. **Eval-layer re-verify (the load-bearing check).** Evaluate the flag for a transient identity carrying the `orgId` trait (the production `getIdentityFlags("org:<orgId>:<role>", {role, orgId}, transient)` path, against `edge.api.flagsmith.com`): assert the **target** org resolves `enabled == (on)` AND the **control** org resolves `enabled == false`. Membership-set equality alone is NOT sufficient — a missing override, or an override present in only one env, leaves the flag OFF while the org is "in" the segment. Eval propagation is polled (eventual, completes within seconds).
 
-No Doppler mirror runs for org-targeting (segment membership is not reflected in env vars per ADR-038). No fallback-fidelity check applies (org-targeting modifies segment rule definitions, not per-env overrides).
+No Doppler mirror runs for org-targeting (segment membership is not reflected in env vars per ADR-038/ADR-043 — a per-org-only flag falls back **OFF** on a Flagsmith outage). No fallback-fidelity check applies (org-targeting modifies segment rule definitions, not per-env role overrides).
 
 ## Exit codes
 
@@ -100,14 +102,15 @@ No Doppler mirror runs for org-targeting (segment membership is not reflected in
 - The cache TTL in `apps/web-platform/lib/feature-flags/server.ts` is 30s per role. After a flip, the new state propagates per replica within 30s. Skill prints this hint after a successful flip.
 - The `dev off` rejection (Step 4) catches the case where prd is currently on AND you want to remove the dev cohort's preview. The correct sequence is: flip `prd off` first (which auto-flips both segments off via env-var mirror semantics, sort of), then leave dev where you want it. The plan's `dev off / prd on` case is intentionally unreachable.
 - Doppler mirror writes (Step 8) happen sequentially: dev first, then prd. If dev write fails, prd is not attempted (avoids cross-config divergence). Exit code 4.
-- The `org-targeted` segment is project-level in Flagsmith, not environment-level. A rule change affects all environments (dev + prd). This is by design (ADR-043: "Single-control — Flagsmith segment rule is the sole per-org gate").
-- No Doppler mirror runs for `--org` operations — org segment membership is not reflected in env vars.
-- The segment uses `EQUAL` conditions (one per org) inside an `ANY` rule, not a single `IN` condition. Matching is case-sensitive.
-- `resolve_segment_id` uses `GET /segments/` without pagination. Safe with 3 segments; may need pagination if segment count exceeds 10.
+- The `<flag>-orgs` segment is project-level in Flagsmith, not environment-level. A membership (conditions) change affects all environments; the ON feature-state override is applied per-env to both. This is by design (ADR-043: the segment rule is the per-org gate, the override makes the flag ON for matched orgs).
+- No Doppler mirror runs for `--org` operations — per-org segment membership is not reflected in env vars, so a per-org-only flag falls back **OFF** on a Flagsmith outage (env-var = 0). Verify `FLAG_<X>` is `0` in prd Doppler before relying on this for a legally-sensitive flag.
+- The segment uses `EQUAL` conditions (one per org) inside an `ANY` rule, not a single `IN` condition. Matching is case-sensitive. An empty `<flag>-orgs` (last org removed) matches nobody → the flag is OFF for all via that segment.
+- Re-verify is at the **evaluation** layer (identity + orgId trait), not segment membership: a correct membership set with a missing/one-env override silently leaves the flag OFF. The control-org assertion catches a leak to a non-targeted org.
+- `resolve_segment_id` uses `GET /segments/` without pagination. Safe with a handful of segments; may need pagination as the per-feature segment count grows.
 
 ## Cross-references
 
-- ADR: `knowledge-base/engineering/architecture/decisions/ADR-038-feature-flags-flagsmith.md`
-- Plan: `knowledge-base/project/plans/2026-05-22-feat-flagsmith-operator-skills-plan.md`
+- ADR: `knowledge-base/engineering/architecture/decisions/ADR-038-feature-flags-flagsmith.md`, `ADR-043-flagsmith-per-org-targeting.md` (§"Per-feature segment scoping")
+- Plan: `knowledge-base/project/plans/2026-05-22-feat-flagsmith-operator-skills-plan.md`, `2026-05-29-feat-flag-org-scoping-plan.md`
 - Predecessor PR: #4331 (resolution path)
 - Sibling skills: `soleur:flag-create`, `soleur:user-set-role`
