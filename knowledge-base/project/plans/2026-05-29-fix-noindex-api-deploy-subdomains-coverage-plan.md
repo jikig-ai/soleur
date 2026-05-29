@@ -145,7 +145,7 @@ logs:
   where: "GitHub Actions run logs for apply-web-platform-infra.yml + infra-validation.yml (terraform plan/validate output)"
   retention: "GitHub Actions default (90 days)"
 discoverability_test:
-  command: "curl -sI -X GET --max-time 15 https://deploy.soleur.ai/ | grep -i x-robots-tag"
+  command: "curl -sI -X GET --max-time 15 https://deploy.soleur.ai/"
   expected_output: "x-robots-tag: noindex, nofollow"
 ```
 
