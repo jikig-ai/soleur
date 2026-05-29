@@ -4,7 +4,7 @@
 # Issue: #3684. Covers Phase 1 of the rule-budget pre-commit linter plan
 # (knowledge-base/project/plans/2026-05-12-chore-agents-md-pre-commit-rule-budget-plan.md):
 #   T1: current tree -> WARN tier fires (B_ALWAYS=21985 >= 20000), exit 0
-#   T2: AGENTS.core.md grown past 22 k -> exit 1 + `B_ALWAYS=... > 22000`
+#   T2: AGENTS.core.md grown past 23 k -> exit 1 + `B_ALWAYS=... > 23000`
 #   T3: one rule body > 600 B -> exit 1 + `exceeds 600 B`
 #   T4: AGENTS.core.md missing on disk -> exit 2 + `AGENTS.core.md missing`
 #   T5: per-rule cap fires across all four sidecars (not just AGENTS.core.md)
@@ -124,17 +124,17 @@ t1b_warn_synth() {
   rm -rf "$tmp"
 }
 
-# Case T2: B_ALWAYS > 22000 -> reject.
+# Case T2: B_ALWAYS > 23000 -> reject.
 t2_byte_budget_reject() {
   local tmp; tmp=$(mktemp -d)
   make_index "$tmp/AGENTS.md"
   make_core_minimal "$tmp/AGENTS.core.md"
   : > "$tmp/AGENTS.docs.md"
   : > "$tmp/AGENTS.rest.md"
-  # Pad AGENTS.core.md to drive B_ALWAYS past 22000. Padding goes in a comment
+  # Pad AGENTS.core.md to drive B_ALWAYS past 23000. Padding goes in a comment
   # block so the per-rule check does not pre-empt with an "exceeds 600 B" reject.
   printf '\n<!-- pad: ' >> "$tmp/AGENTS.core.md"
-  head -c 23000 /dev/zero | tr '\0' 'x' >> "$tmp/AGENTS.core.md"
+  head -c 24000 /dev/zero | tr '\0' 'x' >> "$tmp/AGENTS.core.md"
   printf ' -->\n' >> "$tmp/AGENTS.core.md"
 
   local out rc
@@ -147,7 +147,7 @@ t2_byte_budget_reject() {
   rc=$?
   set -e
   assert_exit "T2 byte-budget reject exit 1" "1" "$rc"
-  assert_contains "T2 B_ALWAYS > 22000 reported" "> 22000" "$out"
+  assert_contains "T2 B_ALWAYS > 23000 reported" "> 23000" "$out"
   rm -rf "$tmp"
 }
 
