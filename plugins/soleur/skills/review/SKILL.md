@@ -276,18 +276,24 @@ Use `gdpr-gate` for deterministic Art. 9 / RoPA / lawful-basis pattern checks; u
 17. Run the `soleur:frontend-anti-slop` Tier 1 scanner inline (no separate agent spawn — v1 simplification per plan PR #4265). Scope covers the Next.js platform, the server-side email/HTML templates, and the Eleventy marketing site so AI-assisted edits to landing pages, transactional emails, or blog posts get the same audit as React component changes.
 
     ```bash
-    # Convert the NUL-delimited diff to newlines BEFORE grep. The host `grep`
-    # is ugrep, where `-z` means `--decompress` (NOT GNU `--null-data`) — a
-    # `grep -z` here silently matches zero files (the #4635 false-clean). The
-    # `tr '\0' '\n'` normalisation keeps the pipeline portable; the path regex
-    # mirrors `DEFAULT_PATH_RE_SOURCE` in tier1-scan.ts (parity-tested).
+    # Keep NUL framing end-to-end. The host `grep` is ugrep, where the NUL-data
+    # flag means `--decompress` (NOT GNU `--null-data`) and silently matches
+    # zero files (the #4635 false-clean). Do NOT use grep at all in this
+    # collector: read the NUL-delimited diff with `read -r -d ''` and match each
+    # path against EXT_RE in bash, so filenames containing literal newlines
+    # survive intact. The path regex mirrors `DEFAULT_PATH_RE_SOURCE` in
+    # tier1-scan.ts (parity-tested).
     EXT_RE='(apps/web-platform/(app|components)/.*\.(tsx|jsx|css)|apps/web-platform/server/.*\.(ts|tsx)|plugins/soleur/docs/.*\.(njk|css))$'
-    RAW_DIFF=$(git diff --name-only -z origin/main...HEAD | tr '\0' '\n')
-    mapfile -t CHANGED_FILES < <(printf '%s\n' "$RAW_DIFF" | grep -E "$EXT_RE" || true)
+    CHANGED_FILES=()
+    HAS_EXT_FILE=0
+    while IFS= read -r -d '' f; do
+      [[ "$f" =~ $EXT_RE ]] && CHANGED_FILES+=("$f")
+      [[ "$f" =~ \.(tsx|jsx|ts|css|njk)$ ]] && HAS_EXT_FILE=1
+    done < <(git diff --name-only -z origin/main...HEAD)
     if (( ${#CHANGED_FILES[@]} > 0 )); then
       bun run plugins/soleur/skills/frontend-anti-slop/scripts/tier1-scan.ts \
         --paths "${CHANGED_FILES[@]}" --json
-    elif printf '%s\n' "$RAW_DIFF" | grep -qE '\.(tsx|jsx|ts|css|njk)$'; then
+    elif (( HAS_EXT_FILE == 1 )); then
       # Guard against silent false-clean: the diff DOES contain scanner-extension
       # files but none matched the scope regex (or the collector mis-fired).
       # Warn loudly instead of reporting clean — this is the #4635 failure class.

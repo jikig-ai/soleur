@@ -7,8 +7,10 @@ import {
   scanFile,
   disabledRulesInFile,
   computeExitCode,
+  expandPaths,
   DEFAULT_PATH_RE_SOURCE,
   RULES_FILE,
+  REPO_ROOT,
 } from "../../skills/frontend-anti-slop/scripts/tier1-scan";
 import type { Finding } from "../../skills/frontend-anti-slop/scripts/tier1-scan";
 import { readFileSync } from "node:fs";
@@ -370,6 +372,30 @@ describe("frontend-anti-slop tier1-scan: brand rules (pos + neg fixtures)", () =
     );
   });
 
+  test("BRAND-RAW-HEX POSITIVE: SVG fill=\"#hex\" prop flags", () => {
+    withFile(
+      "icon.tsx",
+      `<svg><path fill="#2563eb" /><circle stroke="#abc" /></svg>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("BRAND-RAW-HEX")]);
+        expect(findings).toHaveLength(1);
+        expect(findings[0].severity).toBe("high");
+      },
+    );
+  });
+
+  test("BRAND-RAW-HEX POSITIVE: React camelCase inline style flags", () => {
+    withFile(
+      "card.tsx",
+      `<div style={{ backgroundColor: "#2563eb" }} />`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("BRAND-RAW-HEX")]);
+        expect(findings).toHaveLength(1);
+        expect(findings[0].severity).toBe("high");
+      },
+    );
+  });
+
   test("BRAND-RAW-HEX NEGATIVE: wired token / theme class yields 0", () => {
     withFile(
       "card.tsx",
@@ -435,6 +461,18 @@ describe("frontend-anti-slop tier1-scan: brand rules (pos + neg fixtures)", () =
     );
   });
 
+  test("BRAND-NONZERO-CORNER POSITIVE: fractional border-radius: 0.5rem flags", () => {
+    withFile(
+      "cta.tsx",
+      `<style>{\`.z{border-radius: 0.5rem;}\`}</style>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("BRAND-NONZERO-CORNER")]);
+        expect(findings).toHaveLength(1);
+        expect(findings[0].severity).toBe("medium");
+      },
+    );
+  });
+
   test("BRAND-NONZERO-CORNER NEGATIVE: rounded-none / border-radius: 0 passes", () => {
     withFile(
       "cta.tsx",
@@ -451,7 +489,7 @@ describe("frontend-anti-slop tier1-scan: brand rules (pos + neg fixtures)", () =
   // unescape, or the row mis-splits and the regex compiles wrong.
   test("brand rule patterns round-trip the intended alternation (no \\| mis-split)", () => {
     expect(ruleById("BRAND-RAW-HEX").pattern.source).toContain(
-      "(?:background|color|border)",
+      "(?:background|color|border|fill|stroke)",
     );
     expect(ruleById("BRAND-WHITE-ON-GOLD").pattern.source).toContain(
       "(?:gold|gradient|accent",
@@ -515,6 +553,39 @@ describe("frontend-anti-slop tier1-scan: computeExitCode (blocking gate)", () =>
     ];
     expect(computeExitCode(findings, RULES)).toBe(1);
   });
+
+  test("brand+high finding whose file path contains '#' still blocks (no fail-open)", () => {
+    // Regression: the rule id is the LAST '#'-segment of the selector. A
+    // scanned path that itself contains '#' must NOT defeat the gate by
+    // capturing a path fragment as the rule id.
+    const finding: Finding = {
+      route: "",
+      selector: "apps/web-platform/app/we#ird/x.tsx#BRAND-RAW-HEX",
+      category: "anti-slop",
+      severity: "high",
+      title: "t",
+      description: "d",
+      fix_hint: "f",
+      screenshot_ref: "/tmp/anti-slop/no-screenshot.png",
+      line: 1,
+    };
+    expect(computeExitCode([finding], RULES)).toBe(1);
+  });
+
+  test("selector with no '#' → non-blocking (exit 0, no throw)", () => {
+    const finding: Finding = {
+      route: "",
+      selector: "apps/web-platform/app/x.tsx",
+      category: "anti-slop",
+      severity: "high",
+      title: "t",
+      description: "d",
+      fix_hint: "f",
+      screenshot_ref: "/tmp/anti-slop/no-screenshot.png",
+      line: 1,
+    };
+    expect(computeExitCode([finding], RULES)).toBe(0);
+  });
 });
 
 describe("frontend-anti-slop tier1-scan: path-scope regex (route-group + server)", () => {
@@ -545,24 +616,65 @@ describe("frontend-anti-slop tier1-scan: path-scope regex (route-group + server)
   });
 });
 
+describe("frontend-anti-slop tier1-scan: ReDoS line cap", () => {
+  // BRAND-WHITE-ON-GOLD's `[^"\n]*` spans can backtrack O(n²) on a single long
+  // line, and minified .css (one line, hundreds of KB) is in scope. scanFile
+  // truncates each line to MAX_SCAN_LINE before matching, bounding the work.
+  test("scanFile on a ~300KB single line completes quickly (line cap bounds work)", () => {
+    withFile("minified.css", "gold ".repeat(60000), (abs) => {
+      const start = Date.now();
+      const findings = scanFile(abs, [ruleById("BRAND-WHITE-ON-GOLD")]);
+      const elapsed = Date.now() - start;
+      expect(Array.isArray(findings)).toBe(true);
+      // The cap makes this bounded; an unbounded scan would hang. Generous
+      // ceiling to avoid CI flakiness while still catching a regression to
+      // pathological backtracking.
+      expect(elapsed).toBeLessThan(2000);
+    });
+  });
+});
+
+describe("frontend-anti-slop tier1-scan: expandPaths scope post-filter", () => {
+  // expandPaths must agree with DEFAULT_PATH_RE_SOURCE by construction — the
+  // bare extension filter admits `.ts` anywhere, but only server/ `.ts` is in
+  // scope. An out-of-scope api route.ts must be dropped even though it exists.
+  test("out-of-scope app/api route.ts → [] (scope post-filter rejects)", () => {
+    const result = expandPaths(["apps/web-platform/app/api/conversations/route.ts"]);
+    expect(result).toEqual([]);
+  });
+
+  test("in-scope server/*.ts is admitted", () => {
+    const result = expandPaths(["apps/web-platform/server/notifications.ts"]);
+    expect(result).toContain(
+      resolve(REPO_ROOT, "apps/web-platform/server/notifications.ts"),
+    );
+  });
+});
+
 describe("frontend-anti-slop tier1-scan: review/SKILL.md hook path parity", () => {
   // The review/SKILL.md anti-slop hook's shell-ERE path regex must stay in
   // lockstep with DEFAULT_PATH_RE_SOURCE (single source of truth). Assert the
   // hook block contains the same server alternation body.
-  test("review/SKILL.md hook regex contains the same server alternation as DEFAULT_PATH_RE_SOURCE", () => {
+  test("review/SKILL.md hook EXT_RE alternation body EQUALS DEFAULT_PATH_RE_SOURCE inner body", () => {
     const skillPath = resolve(
       import.meta.dir,
       "../../skills/review/SKILL.md",
     );
     const skill = readFileSync(skillPath, "utf8");
-    // The shared server alternation, identical in both the JS source and the
-    // shell ERE (the JS form escapes the dot as \\. — match the shell literal).
-    const serverAlt = "apps/web-platform/server/.*\\.(ts|tsx)";
-    expect(DEFAULT_PATH_RE_SOURCE).toContain(serverAlt);
-    expect(skill).toContain(serverAlt);
-    // and the app/components + docs alternations
-    expect(skill).toContain("apps/web-platform/(app|components)/.*\\.(tsx|jsx|css)");
-    expect(skill).toContain("plugins/soleur/docs/.*\\.(njk|css)");
+
+    // Extract the EXT_RE value from the SKILL.md hook block:
+    //   EXT_RE='(...alternation...)$'
+    const m = skill.match(/EXT_RE='([^']*)'/);
+    expect(m).not.toBeNull();
+    const extRe = m![1];
+
+    // Strip the JS `^...$` anchors from DEFAULT_PATH_RE_SOURCE and the trailing
+    // `$` from the shell EXT_RE, then compare the alternation bodies for
+    // equality. A reorder or partial drop in either side fails this — not just
+    // a dropped substring.
+    const jsBody = DEFAULT_PATH_RE_SOURCE.replace(/^\^/, "").replace(/\$$/, "");
+    const shellBody = extRe.replace(/\$$/, "");
+    expect(shellBody).toBe(jsBody);
   });
 
   test("review/SKILL.md hook no longer uses grep -z (ugrep --decompress footgun)", () => {
@@ -571,9 +683,10 @@ describe("frontend-anti-slop tier1-scan: review/SKILL.md hook path parity", () =
       "../../skills/review/SKILL.md",
     );
     const skill = readFileSync(skillPath, "utf8");
-    // Extract just the Anti-slop Scanner Hook fenced block region to avoid
-    // false hits elsewhere in the doc.
-    expect(skill).not.toContain("grep -zE");
-    expect(skill).toContain("tr '\\0' '\\n'");
+    // The collector must use the NUL-safe `read -r -d ''` loop (newline-safe,
+    // ugrep-proof) and must NOT use grep -z (ugrep `-z` is --decompress, the
+    // #4635 false-clean) anywhere.
+    expect(skill).not.toContain("grep -z");
+    expect(skill).toContain("read -r -d ''");
   });
 });
