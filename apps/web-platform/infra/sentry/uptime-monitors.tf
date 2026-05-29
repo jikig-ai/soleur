@@ -88,18 +88,17 @@ resource "sentry_uptime_monitor" "soleur_www" {
   interval_seconds = 300
   timeout_ms       = 10000
 
-  # 2026-05-29: longer fuse than the apex monitor (5 checks ≈ 25 min vs 3 ≈ 15).
-  # This monitor is the redirect-HEALTH guard, NOT the user-facing outage signal —
-  # soleur_apex (downtime_threshold=3, UNCHANGED) covers a real user-facing outage.
-  # A docs deploy rebuilds GitHub Pages and re-propagates the custom-domain
-  # apex-canonical redirect; during that window www transiently serves its own
-  # 200 instead of the 301, which empirically exceeds the apex monitor's 15-min
-  # fuse (PR #4573/#4578 deploy on 2026-05-29 paged soleur_www at 12:30 for a
-  # self-recovered ~15-min flap). The 25-min fuse absorbs the deploy window so
-  # self-inflicted rebuilds stop paging, at the cost of +10 min MTTD on a
-  # www-ONLY redirect regression — acceptable for that lower-severity failure
-  # mode, since a real user-facing outage still pages via soleur_apex at 15 min.
-  downtime_threshold = 5
+  # 2026-05-29 (#4596, Option A): threshold restored to 3 for parity with
+  # soleur_apex. The docs-deploy window that false-paged this monitor (PR
+  # #4573/#4578 deploy paged soleur_www at 12:30 for a self-recovered ~15-min
+  # flap) is now suppressed AT THE SOURCE: deploy-docs.yml pauses this monitor
+  # around the GitHub Pages publish + redirect re-propagation, then resumes it
+  # (if: always()). That removes the deploy window from the monitor's view with
+  # ZERO MTTD cost, superseding the conservative downtime_threshold=5 from the
+  # predecessor PR #4595 (Option B), which absorbed the same window at the cost
+  # of +10 min MTTD on a real www-only redirect regression. soleur_apex
+  # (downtime_threshold=3) still independently covers a user-facing outage.
+  downtime_threshold = 3
   recovery_threshold = 1
 
   # Success = exactly 301 (www must redirect to apex). Sentry fires when this is
