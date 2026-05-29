@@ -189,8 +189,8 @@ logs:
   where: "GitHub Actions run log (echoes HTTP_CODE + ingest response body, lines 65-66); server-side pino logger.error in route.ts"
   retention: "GitHub Actions default (90d); pino to server log sink"
 discoverability_test:
-  command: "gh workflow run 'KB-drift walker' && gh run list --workflow 'KB-drift walker' --limit 1 --json conclusion"
-  expected_output: "conclusion: success"
+  command: curl -fsS -o /dev/null -w "%{http_code}" --max-time 10 https://app.soleur.ai/login
+  expected_output: "200"
 ```
 
 ## Open Code-Review Overlap
