@@ -15,6 +15,7 @@ export default function () {
     { from: "pages/changelog.html", to: "/changelog/" },
     { from: "pages/legal/privacy-policy.html", to: "/legal/privacy-policy/" },
     { from: "pages/legal/terms-and-conditions.html", to: "/legal/terms-and-conditions/" },
+    { from: "pages/legal/terms-of-service.html", to: "/legal/terms-and-conditions/" },
     { from: "pages/legal/cookie-policy.html", to: "/legal/cookie-policy/" },
     { from: "pages/legal/gdpr-policy.html", to: "/legal/gdpr-policy/" },
     { from: "pages/legal/acceptable-use-policy.html", to: "/legal/acceptable-use-policy/" },

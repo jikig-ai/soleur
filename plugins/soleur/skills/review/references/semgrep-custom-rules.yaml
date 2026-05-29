@@ -72,3 +72,35 @@ rules:
       cwe: "CWE-367: Time-of-check to Time-of-use"
       mirrors: "CodeQL: js/file-system-race"
       soleur-origin: "PR #2463"
+
+  # Mirrors CodeQL js/incomplete-url-substring-sanitization.
+  # Origin: PR #4573 — a test assertion `html.includes("https://soleur.ai")`
+  # tripped CodeQL in CI (local semgrep auto/p-packs did not catch it). Checking
+  # whether a string contains a scheme-bearing URL via a substring method is the
+  # canonical incomplete-host-sanitization anti-pattern: "https://soleur.ai" can
+  # appear anywhere (e.g. https://soleur.ai.evil.com). Use URL parsing + exact
+  # host comparison in prod code, or an anchored HTML-element regex in tests.
+  - id: soleur.js-incomplete-url-substring-sanitization
+    patterns:
+      - pattern-either:
+          - pattern: $X.includes($URL)
+          - pattern: $X.startsWith($URL)
+          - pattern: $X.endsWith($URL)
+          - pattern: $X.indexOf($URL)
+      - metavariable-regex:
+          metavariable: $URL
+          regex: ^"https?://
+    message: |
+      Substring check against a scheme-bearing URL literal ($URL). A host
+      embedded in a substring test can be bypassed (the literal may appear
+      anywhere in the string). In production code, parse the URL and compare
+      .host exactly; in tests, match an anchored HTML-element regex via
+      toMatch(...) instead of .includes("https://..."). Mirrors CodeQL
+      js/incomplete-url-substring-sanitization.
+    severity: WARNING
+    languages: [javascript, typescript]
+    metadata:
+      category: security
+      cwe: "CWE-20: Improper Input Validation"
+      mirrors: "CodeQL: js/incomplete-url-substring-sanitization"
+      soleur-origin: "PR #4573"

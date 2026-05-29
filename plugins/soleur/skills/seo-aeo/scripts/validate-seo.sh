@@ -62,8 +62,10 @@ if [[ -f "$SITE_DIR/sitemap.xml" ]]; then
   # Canonical-host gate (#3297): every <loc> must use a single canonical host,
   # and that host must match the one declared in robots.txt's `Sitemap:` line
   # (only if robots.txt actually has a Sitemap line — fixtures may omit it).
-  # This catches the GSC `Page with redirect` cluster cause: sitemap on apex
-  # while live infra 301s apex→www. See the GSC indexing-fixes brainstorm.
+  # This catches the GSC `Page with redirect` cluster cause: sitemap on www
+  # while live infra 301s www→apex (the canonical host is the bare apex
+  # https://soleur.ai; GitHub Pages enforces the CNAME apex). See the GSC
+  # indexing-fixes brainstorm and the 2026-05-29 host flip.
   # `|| true` absorbs grep's exit-1 when sitemap has zero <loc> entries —
   # pipefail would otherwise short-circuit before the empty-guard below.
   SITEMAP_HOSTS=$(grep -oP '(?<=<loc>)[^<]+' "$SITE_DIR/sitemap.xml" \

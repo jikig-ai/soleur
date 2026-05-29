@@ -210,7 +210,7 @@ false-negatives. Use of automated tooling does not transfer or limit the
 
 ## 9. Changes to This Disclaimer
 
-We reserve the right to modify this Disclaimer at any time. Changes will be posted to our GitHub repository at [github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur) and on our website at [soleur.ai](https://www.soleur.ai). Your continued use of the Platform after the posting of changes constitutes your acceptance of such changes. We encourage you to review this Disclaimer periodically.
+We reserve the right to modify this Disclaimer at any time. Changes will be posted to our GitHub repository at [github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur) and on our website at [soleur.ai](https://soleur.ai). Your continued use of the Platform after the posting of changes constitutes your acceptance of such changes. We encourage you to review this Disclaimer periodically.
 
 ---
 
@@ -222,7 +222,7 @@ If you have questions about this Disclaimer, you may contact us through:
 
 - **Email:** <legal@jikigai.com>
 - **GitHub:** [github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur)
-- **Website:** [soleur.ai](https://www.soleur.ai)
+- **Website:** [soleur.ai](https://soleur.ai)
 
 ---
 
