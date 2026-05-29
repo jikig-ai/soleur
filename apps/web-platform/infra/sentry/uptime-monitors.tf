@@ -88,7 +88,18 @@ resource "sentry_uptime_monitor" "soleur_www" {
   interval_seconds = 300
   timeout_ms       = 10000
 
-  downtime_threshold = 3
+  # 2026-05-29: longer fuse than the apex monitor (5 checks ≈ 25 min vs 3 ≈ 15).
+  # This monitor is the redirect-HEALTH guard, NOT the user-facing outage signal —
+  # soleur_apex (downtime_threshold=3, UNCHANGED) covers a real user-facing outage.
+  # A docs deploy rebuilds GitHub Pages and re-propagates the custom-domain
+  # apex-canonical redirect; during that window www transiently serves its own
+  # 200 instead of the 301, which empirically exceeds the apex monitor's 15-min
+  # fuse (PR #4573/#4578 deploy on 2026-05-29 paged soleur_www at 12:30 for a
+  # self-recovered ~15-min flap). The 25-min fuse absorbs the deploy window so
+  # self-inflicted rebuilds stop paging, at the cost of +10 min MTTD on a
+  # www-ONLY redirect regression — acceptable for that lower-severity failure
+  # mode, since a real user-facing outage still pages via soleur_apex at 15 min.
+  downtime_threshold = 5
   recovery_threshold = 1
 
   # Success = exactly 301 (www must redirect to apex). Sentry fires when this is

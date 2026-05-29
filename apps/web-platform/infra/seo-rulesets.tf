@@ -13,10 +13,11 @@
 # soleur.ai across five Critical-Indexing categories. Two systemic root causes:
 #   (A) Apex/www canonical direction — the docs site is canonical at the bare
 #       apex (soleur.ai); the live edge 301s www → apex (host-preserving
-#       canonicalizer, out-of-band CF config — see #4577). These legacy
-#       /pages/*.html redirect rules therefore target the apex host and match
-#       BOTH apex and www so legacy www deep-links collapse to the clean apex
-#       URL in a SINGLE hop (the SEO rule fires before the www→apex
+#       GitHub-Pages-owned 301, enforced by docs/CNAME = apex — NOT a CF rule;
+#       see dns.tf contract block + www-apex-canonicalizer.test.sh, #4584/#4577).
+#       These legacy /pages/*.html redirect rules therefore target the apex host
+#       and match BOTH apex and www so legacy www deep-links collapse to the
+#       clean apex URL in a SINGLE hop (the SEO rule fires before the www→apex
 #       canonicalizer; verified live 2026-05-29). 2026-05-29 reconcile (#4577)
 #       flipped the rule expressions + targets apex-ward to stop the IaC
 #       contradicting the live edge — the OLD regime (apex 301→www) is gone.
@@ -326,6 +327,13 @@ resource "cloudflare_ruleset" "seo_response_headers" {
   #      (eliminates the need for an edge rule entirely), OR
   #   2. operator chooses to proxy api.soleur.ai through soleur.ai's edge.
   #
+  # #4575 (GSC coverage: api/deploy leak into sc-domain) was closed as
+  # superseded-by #3379: deploy.soleur.ai is already noindexed live by the rule
+  # below (proxied), and the api.soleur.ai half is exactly the dormant-CNAME
+  # no-op #3379 already owns — so #3379 remains the single tracker for it.
+  # `test/seo-rulesets-noindex.test.ts` is the CI regression guard added with
+  # #4575 that locks both rules into source.
+  #
   # Practical risk: low. `api.soleur.ai` returns 401/404/403 on every
   # authenticated path under Googlebot's anonymous identity — there is no
   # body content for Google to index. X-Robots-Tag was defense-in-depth
@@ -370,7 +378,8 @@ resource "cloudflare_ruleset" "seo_response_headers" {
     enabled     = true
     # 2026-05-29: flipped www → apex. The feed is canonically served at the bare
     # apex (https://soleur.ai/blog/feed.xml → 200); www/blog/feed.xml 301s to apex
-    # (out-of-band canonicalizer), so the noindex header must land on the apex
+    # (GitHub-Pages-owned canonicalizer, enforced by docs/CNAME = apex — see
+    # dns.tf), so the noindex header must land on the apex
     # response where the feed body actually lives. See issue #4577 (apex reconcile).
     expression = "(http.host eq \"soleur.ai\" and http.request.uri.path eq \"/blog/feed.xml\")"
     action_parameters {
