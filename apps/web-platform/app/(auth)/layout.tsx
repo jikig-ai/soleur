@@ -6,6 +6,10 @@ import type { Metadata } from "next";
 // to the Supabase auth domain).
 export const metadata: Metadata = {
   referrer: "strict-origin-when-cross-origin",
+  // Auth pages are logged-out funnel surfaces, not marketing content. Keep
+  // them out of the index so app.soleur.ai/login (etc.) does not surface as
+  // a "duplicate without user-selected canonical" in Search Console.
+  robots: { index: false, follow: false },
 };
 
 export default function AuthLayout({
