@@ -737,6 +737,18 @@ After resolution, re-scan; the section MUST contain zero unaccompanied operator/
 
 **Why:** PR #4227 (TR9 PR-3) shipped with a "Post-merge" section listing four operator items (Doppler secrets check, T+90 min Sentry verify, T+24h auto-resolve verify, file follow-up issue within 48h) — all four were inline-automatable; the agent had hard rules forbidding the deferral (`hr-exhaust-all-automated-options-before`, `hr-never-label-any-step-as-manual-without`, `wg-block-pr-ready-on-undeferred-operator-steps`) and still wrote the bullets. The gate existed at `/ship` Phase 5.5 but the agent reached `gh pr ready` directly. This self-audit + the hook close both halves of that bypass. See `knowledge-base/project/learnings/best-practices/2026-05-21-post-merge-section-self-audit.md`.
 
+#### Follow-up Filing Net-Flow Gate (HARD GATE)
+
+`/work` files follow-up issues HERE (Post-Merge Self-Audit, deferral tracking, discovered-bug capture) — which is BEFORE `/ship` Phase 5.5's Net-Issue-Flow Surfacing runs, and is bypassed entirely when `/ship` is hand-rolled. So the cost-of-filing + net-flow discipline (PR #4452) must ALSO fire at this filing site, not only at ship.
+
+Before issuing ANY `gh issue create` for a follow-up in this phase, run the gate:
+
+1. **Cost-of-filing, per candidate filing** (mirrors `review/SKILL.md` §CONCUR): if the deferred work is **≤30 changed lines AND ≤2 files**, do it inline (fold into THIS PR if unmerged; otherwise it is genuinely a follow-up). Only file when the work is genuinely larger, a separate work-stream/Non-Goal, an operator-only step, or a **discovered defect in a different subsystem** (the last MUST stay its own issue — never bury a possible-P1 bug in a consolidated tracker).
+2. **Consolidate deferred-FEATURE follow-ups into ONE tracker.** Multiple `deferred-scope-out` follow-ups from the same PR (ADR + future-feature + sibling-upstream …) collapse into a single "**\<feature\> (#N): post-MVP follow-ups**" issue with a checklist. Discovered bugs stay separate.
+3. **Surface the net count BEFORE filing.** Compute and print: `Closing: <count of Closes #N in PR body> / Filing: <new issues> / Net: <signed>`. If `Net > 0`, state one sentence per filing on why it could not be inlined or consolidated. Net-positive backlog growth from a single feature PR is the smell this gate exists to catch.
+
+This is the `/work`-side mirror of `/ship` Phase 5.5 Net-Issue-Flow Surfacing — together they cover both the filing site (here) and the merge boundary (ship). **Why:** PR #4580 (#4579) filed **4** follow-ups for **1** closed issue (net +3) during this self-audit; the agent hand-rolled `/ship` so Phase 5.5's surfacing never fired, and there was no filing-site gate. Three were consolidatable into one tracker (#4613); the net should have been +1. See `knowledge-base/project/learnings/workflow-patterns/2026-05-29-net-issue-flow-gate-at-filing-site-not-just-ship.md`.
+
 #### Invocation Mode
 
 **If invoked by one-shot** (the conversation contains `soleur:one-shot` skill output earlier): Output exactly `## Work Phase Complete` and then **immediately invoke** `skill: soleur:review` (step 4 of the one-shot sequence). Do NOT end your turn after outputting the marker — you ARE the orchestrator, so you must continue executing one-shot steps 4 through 10 in order. The marker is a progress signal, not a stopping point.
