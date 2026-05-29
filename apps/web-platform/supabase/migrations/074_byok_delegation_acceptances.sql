@@ -3,7 +3,22 @@
 -- Consent Side Letter. One row per (user_id, delegation_id) pair — grantee
 -- accepts the Side Letter before the delegation becomes active in the UI.
 --
--- LAWFUL_BASIS: Art. 6(1)(b) contract — grantee consents to delegation.
+-- LAWFUL_BASIS (corrected #4625 — the original "Art. 6(1)(b) contract —
+--   grantee consents" conflated a contractual-necessity basis with a
+--   consent act; the two are distinct and this table evidences the latter):
+--   * Art. 6(1)(a) consent — the grantee's recorded acceptance row IS the
+--     lawful basis for processing the grantee's prompt content under the
+--     grantor's key; this table is the Art. 7(1) demonstrability evidence
+--     of that consent (and Art. 7(3) withdrawal is recorded separately in
+--     byok_delegation_withdrawals, mig 084).
+--   * Art. 26 joint controllership — the delegation places grantor and
+--     grantee in a joint-controller arrangement; the versioned Delegation
+--     Consent Side Letter text IS the Art. 26 arrangement (responsibility
+--     allocation for DSARs, security, transparency), and the stored
+--     side_letter_version pins which version the grantee accepted.
+--   The byok_delegations row's Art. 6(1)(b) contract basis (mig 064) governs
+--   the grantor↔grantee FUNDING relationship; it does NOT substitute for the
+--   grantee's Art. 6(1)(a) consent recorded here.
 -- RETENTION: 7 years (financial audit, matching tc_acceptances).
 --
 -- Pattern precedent: 044_add_tc_acceptances_ledger.sql (WORM table +
