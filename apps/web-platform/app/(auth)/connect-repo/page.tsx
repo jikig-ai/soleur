@@ -458,7 +458,7 @@ export default function ConnectRepoPage() {
       const stored = sessionStorage.getItem("soleur_return_to");
       if (stored) {
         sessionStorage.removeItem("soleur_return_to");
-        return safeReturnTo(stored);
+        return safeReturnTo(stored) ?? "/dashboard";
       }
     } catch {
       // sessionStorage unavailable
@@ -470,7 +470,7 @@ export default function ConnectRepoPage() {
     let returnPath = consumeReturnTo();
     if (returnPath === "/dashboard") {
       // Also check URL param directly (no GitHub redirect happened)
-      returnPath = safeReturnTo(searchParams.get("return_to"));
+      returnPath = safeReturnTo(searchParams.get("return_to")) ?? "/dashboard";
     }
     router.push(returnPath);
   }
@@ -548,7 +548,9 @@ export default function ConnectRepoPage() {
     try {
       const returnTo = searchParams.get("return_to");
       const validated = safeReturnTo(returnTo);
-      if (validated !== "/dashboard") {
+      // Persist only a valid, non-default return path; safeReturnTo now
+      // returns null for rejected/absent params (was "/dashboard").
+      if (validated && validated !== "/dashboard") {
         sessionStorage.setItem("soleur_return_to", validated);
       }
     } catch {

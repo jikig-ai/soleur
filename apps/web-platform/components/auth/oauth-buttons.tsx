@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { reportSilentFallback } from "@/lib/client-observability";
+import { safeReturnTo } from "@/lib/safe-return-to";
 import {
   type AuthErrorLike,
   mapSupabaseAuthError,
@@ -64,12 +66,22 @@ const PROVIDERS: ProviderConfig[] = [
 ];
 
 export function OAuthButtons({ disabled = false }: { disabled?: boolean }) {
+  const searchParams = useSearchParams();
   const [loading, setLoading] = useState<Provider | null>(null);
   const [error, setError] = useState("");
+
+  // Thread a validated redirectTo (e.g. /invite/<token>) through the OAuth
+  // round-trip as `?next=`; the /callback route honors it as the terminal hop
+  // once the user is fully onboarded. Rejected/absent → no next param.
+  const nextParam = safeReturnTo(searchParams.get("redirectTo"));
 
   async function handleOAuth(provider: ProviderConfig) {
     setLoading(provider.id);
     setError("");
+
+    const callbackUrl = nextParam
+      ? `${window.location.origin}/callback?next=${encodeURIComponent(nextParam)}`
+      : `${window.location.origin}/callback`;
 
     const supabase = createClient();
     let error: AuthErrorLike | null = null;
@@ -77,7 +89,7 @@ export function OAuthButtons({ disabled = false }: { disabled?: boolean }) {
       ({ error } = await supabase.auth.signInWithOAuth({
         provider: provider.id,
         options: {
-          redirectTo: `${window.location.origin}/callback`,
+          redirectTo: callbackUrl,
           ...(provider.scopes && { scopes: provider.scopes }),
         },
       }));

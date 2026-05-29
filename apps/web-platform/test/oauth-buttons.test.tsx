@@ -2,6 +2,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+const { searchParamsRef } = vi.hoisted(() => ({
+  searchParamsRef: { current: new URLSearchParams() },
+}));
+
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => searchParamsRef.current,
+}));
+
 const mockSignInWithOAuth = vi.fn().mockResolvedValue({ error: null });
 
 vi.mock("@/lib/supabase/client", () => ({
@@ -17,6 +25,7 @@ import { OAuthButtons } from "@/components/auth/oauth-buttons";
 describe("OAuthButtons", () => {
   beforeEach(() => {
     mockSignInWithOAuth.mockClear();
+    searchParamsRef.current = new URLSearchParams();
   });
 
   it("renders buttons for all four providers", () => {
@@ -93,5 +102,30 @@ describe("OAuthButtons", () => {
     expect(screen.getByRole("button", { name: /apple/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /github/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /microsoft/i })).toBeDisabled();
+  });
+
+  it("threads a validated redirectTo through /callback as an encoded next param", async () => {
+    searchParamsRef.current = new URLSearchParams("redirectTo=/invite/tok123");
+    render(<OAuthButtons />);
+    await userEvent.click(screen.getByRole("button", { name: /google/i }));
+    expect(mockSignInWithOAuth).toHaveBeenCalledWith({
+      provider: "google",
+      options: {
+        redirectTo: expect.stringContaining(
+          `/callback?next=${encodeURIComponent("/invite/tok123")}`,
+        ),
+      },
+    });
+  });
+
+  it("does NOT append a next param for a rejected open-redirect redirectTo", async () => {
+    searchParamsRef.current = new URLSearchParams(
+      "redirectTo=https://evil.example",
+    );
+    render(<OAuthButtons />);
+    await userEvent.click(screen.getByRole("button", { name: /google/i }));
+    const call = mockSignInWithOAuth.mock.calls[0][0];
+    expect(call.options.redirectTo).not.toContain("next=");
+    expect(call.options.redirectTo).toContain("/callback");
   });
 });

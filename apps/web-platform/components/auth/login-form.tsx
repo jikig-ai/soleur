@@ -5,7 +5,8 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { reportSilentFallback } from "@/lib/client-observability";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
-import { EMAIL_OTP_LENGTH } from "@/lib/auth/constants";
+import { safeReturnTo } from "@/lib/safe-return-to";
+import { EMAIL_OTP_LENGTH, OTP_RESEND_COOLDOWN_MS } from "@/lib/auth/constants";
 import {
   type AuthErrorLike,
   CALLBACK_ERRORS,
@@ -19,12 +20,60 @@ import Link from "next/link";
 export function LoginForm() {
   const searchParams = useSearchParams();
   const router = useRouter();
+  // Validated same-origin relative path to land on after sign-in (e.g.
+  // /invite/<token> from the workspace invite flow); null when absent or
+  // rejected, in which case we fall back to /dashboard.
+  const redirectTo = safeReturnTo(searchParams.get("redirectTo"));
   const [email, setEmail] = useState("");
   const [otpSent, setOtpSent] = useState(false);
   const [otp, setOtp] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [cooldownSeconds, setCooldownSeconds] = useState(0);
+  // The email the active cooldown was started for. The cooldown is per-email
+  // (GoTrue's rate window is per-user), so switching to a DIFFERENT email is
+  // immediately sendable, while reverting to the same email inside the window
+  // stays blocked — closing the "Try a different email" reset bypass.
+  const [cooldownEmail, setCooldownEmail] = useState("");
   const otpRef = useRef<HTMLInputElement>(null);
+  const cooldownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // True only while a cooldown is running AND the current email matches the
+  // one it was started for.
+  const cooldownActive = cooldownSeconds > 0 && email === cooldownEmail;
+
+  function clearCooldown() {
+    if (cooldownTimerRef.current) {
+      clearInterval(cooldownTimerRef.current);
+      cooldownTimerRef.current = null;
+    }
+  }
+
+  // Disable resend for >= GoTrue's 60s per-user OTP window so the UI cannot
+  // fire a same-email re-send before GoTrue will accept it (the double-send
+  // that returns "Too many sign-in attempts").
+  function startCooldown() {
+    clearCooldown();
+    setCooldownEmail(email);
+    setCooldownSeconds(Math.ceil(OTP_RESEND_COOLDOWN_MS / 1000));
+    cooldownTimerRef.current = setInterval(() => {
+      setCooldownSeconds((s) => {
+        if (s <= 1) {
+          clearCooldown();
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+  }
+
+  // Clear the interval on unmount so the countdown can't tick into an
+  // unmounted component.
+  useEffect(() => {
+    return () => {
+      if (cooldownTimerRef.current) clearInterval(cooldownTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     const callbackError = searchParams.get("error");
@@ -51,8 +100,12 @@ export function LoginForm() {
             ? "Your session ended unexpectedly. Please sign in again."
             : null;
 
-  async function handleSendOtp(e: React.FormEvent) {
-    e.preventDefault();
+  /** Send (or resend) an OTP for the current email. Returns true on success. */
+  async function sendOtp(): Promise<boolean> {
+    // Source-level guard: refuse a same-email re-send inside the cooldown
+    // window regardless of which control invoked us (send button, resend, or
+    // a re-submit after "Try a different email" with the email unchanged).
+    if (cooldownActive) return false;
     setLoading(true);
     setError("");
 
@@ -91,14 +144,31 @@ export function LoginForm() {
           email,
           reason: SIGNUP_REASON_NO_ACCOUNT,
         });
+        // Preserve the invite target through the login→signup bounce so a
+        // no-account invitee still lands on /invite/<token> after creating.
+        if (redirectTo) params.set("redirectTo", redirectTo);
         router.replace(`/signup?${params.toString()}`);
-        return;
+        return false;
       }
       setError(mapSupabaseAuthError(error));
-    } else {
+      return false;
+    }
+
+    startCooldown();
+    return true;
+  }
+
+  async function handleSendOtp(e: React.FormEvent) {
+    e.preventDefault();
+    const ok = await sendOtp();
+    if (ok) {
       setOtpSent(true);
       setTimeout(() => otpRef.current?.focus(), 100);
     }
+  }
+
+  async function handleResendOtp() {
+    await sendOtp();
   }
 
   async function handleVerifyOtp(e: React.FormEvent) {
@@ -135,7 +205,7 @@ export function LoginForm() {
       });
       setError(mapSupabaseAuthError(error));
     } else {
-      router.push("/dashboard");
+      router.push(redirectTo ?? "/dashboard");
     }
   }
 
@@ -175,6 +245,17 @@ export function LoginForm() {
               {loading ? "Verifying..." : "Sign in"}
             </button>
           </form>
+
+          <button
+            type="button"
+            onClick={handleResendOtp}
+            disabled={loading || cooldownActive}
+            className="block w-full text-center text-sm text-soleur-text-muted hover:text-soleur-text-secondary disabled:opacity-50 disabled:hover:text-soleur-text-muted"
+          >
+            {cooldownActive
+              ? `You can request a new code in ${cooldownSeconds}s`
+              : "Resend code"}
+          </button>
 
           <button
             onClick={() => {
@@ -225,10 +306,14 @@ export function LoginForm() {
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || cooldownActive}
             className="w-full rounded-lg bg-soleur-accent-gold-fill px-4 py-3 text-sm font-medium text-soleur-text-on-accent hover:opacity-90 disabled:opacity-50"
           >
-            {loading ? "Sending..." : "Send sign-in code"}
+            {cooldownActive
+              ? `You can request a new code in ${cooldownSeconds}s`
+              : loading
+                ? "Sending..."
+                : "Send sign-in code"}
           </button>
         </form>
 

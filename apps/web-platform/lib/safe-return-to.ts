@@ -1,12 +1,53 @@
-const FALLBACK = "/dashboard";
+/**
+ * Same-origin relative paths a post-auth / post-setup redirect is allowed to
+ * land on. Add a prefix here (not a new validator) when a new internal
+ * destination needs to survive a redirect round-trip.
+ *
+ * - `/dashboard` — the original post-setup destination (connect-repo).
+ * - `/invite/`   — workspace invite acceptance; an invited user signing in or
+ *   signing up must be returned to `/invite/<token>` so they never have to
+ *   re-request an OTP (the forced double-send that trips GoTrue's 60s per-user
+ *   email rate limit — see the fix-invited-user-signin-otp-rate-limit plan).
+ */
+const ALLOWED_PREFIXES = ["/dashboard", "/invite/"] as const;
 
 /**
- * Validates a return_to param to prevent open redirect attacks.
- * Only allows relative paths starting with /dashboard.
+ * Validates a redirect/return_to param to prevent open-redirect attacks.
+ *
+ * Returns the param iff it is a same-origin relative path under an allowed
+ * prefix; otherwise `null` so each caller can pick its own fallback (login →
+ * `/dashboard`, signup → `/accept-terms`).
+ *
+ * The reject guards (`//`, `\\`, `..` substrings + a leading `/` requirement)
+ * are the verified precedent shape and are deliberately retained:
+ * - an absolute URL (`https://evil`) fails `startsWith("/")`;
+ * - a protocol-relative URL (`//evil`) fails `includes("//")`;
+ * - a backslash bypass (`/\evil`) fails `includes("\\")`;
+ * - path traversal (`/dashboard/../x`) fails `includes("..")`.
  */
-export function safeReturnTo(param: string | null): string {
-  if (!param) return FALLBACK;
-  if (!param.startsWith("/dashboard")) return FALLBACK;
-  if (param.includes("//") || param.includes("\\") || param.includes("..")) return FALLBACK;
+export function safeReturnTo(param: string | null): string | null {
+  if (!param) return null;
+
+  // Decode once and run the dangerous-substring guards on BOTH the raw and
+  // the decoded form, so a percent-encoded separator (%2F → /, %5C → \,
+  // %2E%2E → ..) can't smuggle a protocol-relative or traversal payload past
+  // the literal-substring checks (e.g. "/invite/%2F%2Fevil" → "/invite///evil").
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(param);
+  } catch {
+    return null; // malformed percent-encoding
+  }
+  for (const candidate of [param, decoded]) {
+    if (
+      !candidate.startsWith("/") ||
+      candidate.includes("//") ||
+      candidate.includes("\\") ||
+      candidate.includes("..")
+    ) {
+      return null;
+    }
+  }
+  if (!ALLOWED_PREFIXES.some((prefix) => param.startsWith(prefix))) return null;
   return param;
 }
