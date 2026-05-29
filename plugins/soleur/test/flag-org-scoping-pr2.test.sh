@@ -117,11 +117,12 @@ case "$url" in
   *"/rpc/audit_flag_flip"*)
     printf '%s\n%s' '"11111111-1111-1111-1111-111111111111"' '200'; exit 0 ;;
   *"/identities/"*)
-    # edge eval: enabled keyed on which org is in the body + the test's knobs.
+    # edge eval: emits body + '\n<http_code>' (matches curl -w). enabled keyed on
+    # which org is in the body + the test's knobs; EVAL_HTTP_CODE simulates errors.
     en="false"
     if [[ "$data" == *"$TARGET_ORG_FULL"* ]];  then en="${EVAL_TARGET_ENABLED:-false}"; fi
     if [[ "$data" == *"$CONTROL_ORG_FULL"* ]]; then en="${EVAL_CONTROL_ENABLED:-false}"; fi
-    printf '{"flags":[{"feature":{"name":"%s"},"enabled":%s}],"traits":[]}' "$FLAG_NAME" "$en"
+    printf '{"flags":[{"feature":{"name":"%s"},"enabled":%s}],"traits":[]}\n%s' "$FLAG_NAME" "$en" "${EVAL_HTTP_CODE:-200}"
     exit 0 ;;
   *"/features/?q="*)
     printf '{"results":[{"id":777,"name":"%s"}]}' "$FLAG_NAME"; exit 0 ;;
@@ -216,6 +217,17 @@ if EVAL_TARGET_ENABLED=false EVAL_CONTROL_ENABLED=false \
      run_flip "$FLAG_NAME" prd on --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" --confirmed \
      >/dev/null 2>&1; then
   echo "pr2: FAIL — on --org with target NOT enabled must fail loud (silent-leak guard)" >&2; fail=1
+fi
+
+# 2f. FAIL-OPEN guard: an edge eval HTTP error must NOT be read as "disabled" and pass
+#     the verify — the gate must fail loud (exit non-zero). Without the HTTP-2xx check,
+#     curl -sS exits 0 on a 5xx and the parser's flag-absent fall-through returns
+#     "false", silently passing the control-negative + off assertions.
+CURL_LOG="$(mktemp)"; DOPPLER_SET_LOG="$(mktemp)"
+if EVAL_TARGET_ENABLED=true EVAL_CONTROL_ENABLED=false EVAL_HTTP_CODE=500 \
+     run_flip "$FLAG_NAME" prd on --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" --confirmed \
+     >/dev/null 2>&1; then
+  echo "pr2: FAIL — edge eval HTTP 500 must fail loud (no fail-open), not exit 0" >&2; fail=1
 fi
 
 [ "$fail" -eq 0 ] || exit 1

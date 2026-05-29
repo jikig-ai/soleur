@@ -99,6 +99,10 @@ if [[ "$TARGET_TYPE" == "org" ]]; then
     || { echo "invalid control orgId format (expected UUID): $CONTROL_ORG" >&2; exit 2; }
   [[ "$CONTROL_ORG" == "$TARGET_ORG" ]] \
     && { echo "--control-org must differ from --org (got both = $TARGET_ORG)" >&2; exit 2; }
+  # The synthetic default only proves "not globally ON"; pass a real sibling org for a
+  # leak check against the shared org-targeted blast radius. [review: user-impact F4]
+  [[ "$CONTROL_ORG" == "$DEFAULT_CONTROL_ORG" ]] \
+    && echo "⚠ control-negative uses the synthetic default org ($DEFAULT_CONTROL_ORG) — pass --control-org <real-sibling-uuid> for a stronger leak assertion." >&2
 fi
 
 ENV_VAR="${FLAG_ENV_VARS[$FLAG]}"
@@ -287,7 +291,8 @@ print(json.dumps({
 }))")
     resp=$(echo "$body" | fs_api -X POST "${FLAGSMITH_API}/projects/${FLAGSMITH_PROJECT_ID}/segments/" -d @-) \
       || { echo "failed to create segment $seg_name" >&2; return 3; }
-    seg_id=$(echo "$resp" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("id",""))')
+    seg_id=$(echo "$resp" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("id",""))') \
+      || { echo "segment create response not JSON: $resp" >&2; return 3; }
     [[ -n "$seg_id" ]] || { echo "segment create returned no id: $resp" >&2; return 3; }
     echo "    created $seg_name segment_id=$seg_id" >&2
   else
@@ -305,27 +310,41 @@ print(json.dumps({
   printf '%s' "$seg_id"
 }
 
-# Evaluate <flag> for a transient identity carrying the orgId trait, exactly as the
-# production path does (getIdentityFlags("org:<org>:<role>", {role, orgId}, transient)).
-# Echoes "true"/"false". This is the FR8 load-bearing check: a correct segment
-# membership is NOT proof the flag is enabled (override missing / one-env-only leaves
-# it OFF), so re-verify reads the EVALUATED flag, not the membership set.
-eval_flag_enabled() { # $1=env_key $2=flag $3=orgId $4=role
-  local env_key="$1" flag="$2" org="$3" role="$4" body resp
+# Verification identity role trait. Deliberately a value that matches NO role
+# segment (role-prd/role-dev match role=='prd'/'dev'), so eval-verify isolates the
+# PER-ORG segment gate (`<flag>-orgs` / org-targeted match on orgId, role-independent)
+# from any role-segment rollout. Without this, a flag carrying a role-<env>=ON override
+# would evaluate enabled for EVERY identity and the control-negative assertion would
+# fire spuriously. [review: code-reviewer "Important" / user-impact F4]
+readonly FLAG_VERIFY_ROLE="__flag-verify__"
+
+# Evaluate <flag> for a transient identity carrying the orgId trait, mirroring the
+# production getIdentityFlags() path (edge.api.flagsmith.com /identities/). Echoes
+# "true"/"false" ONLY on a 2xx; returns 3 on any transport OR HTTP error so the
+# verify FAILS LOUD instead of fail-open. This is the FR8 load-bearing check: a correct
+# segment membership is NOT proof the flag is enabled (override missing / one-env-only
+# leaves it OFF) — re-verify reads the EVALUATED flag, not the membership set.
+# [review P0: do NOT treat an error body's missing flag as "disabled".]
+eval_flag_enabled() { # $1=env_key $2=flag $3=orgId
+  local env_key="$1" flag="$2" org="$3" body resp code payload
   body=$(python3 -c "
 import json
 print(json.dumps({
-  'identifier': 'org:${org}:${role}',
+  'identifier': 'org:${org}:${FLAG_VERIFY_ROLE}',
   'traits': [
-    {'trait_key':'role','trait_value':'${role}'},
+    {'trait_key':'role','trait_value':'${FLAG_VERIFY_ROLE}'},
     {'trait_key':'orgId','trait_value':'${org}'},
   ],
   'transient': True,
 }))")
-  resp=$(curl -sS -X POST "${FLAGSMITH_EDGE_API}/identities/" \
+  resp=$(curl -sS -w '\n%{http_code}' -X POST "${FLAGSMITH_EDGE_API}/identities/" \
     -H "X-Environment-Key: ${env_key}" -H "Content-Type: application/json" \
-    -d "$body") || { echo "eval request failed for org $org" >&2; return 3; }
-  echo "$resp" | FS_FLAG="$flag" python3 -c "
+    -d "$body") || { echo "eval request failed (curl transport) for org $org" >&2; return 3; }
+  code=$(printf '%s' "$resp" | tail -n1)
+  payload=$(printf '%s' "$resp" | sed '$d')
+  [[ "$code" =~ ^2[0-9][0-9]$ ]] \
+    || { echo "eval HTTP $code for org $org (treating as UNVERIFIED, not disabled): $payload" >&2; return 3; }
+  printf '%s' "$payload" | FS_FLAG="$flag" python3 -c "
 import json, os, sys
 flag = os.environ['FS_FLAG']
 try:
@@ -335,7 +354,7 @@ except Exception:
 for f in d.get('flags', []):
     if f.get('feature', {}).get('name') == flag:
         print(str(bool(f.get('enabled'))).lower()); sys.exit(0)
-print('false')  # flag absent from payload -> not enabled for this identity
+print('false')  # 2xx + flag absent -> authoritatively not enabled for this identity
 "
 }
 
@@ -343,11 +362,11 @@ print('false')  # flag absent from payload -> not enabled for this identity
 # Echoes the final observed value; returns 0 on match within budget, 1 otherwise.
 # Cadence overridable for tests (EVAL_POLL_TRIES / EVAL_POLL_SLEEP); live default
 # ~24s budget. No sleep after the final attempt.
-eval_until() { # $1=env_key $2=flag $3=org $4=role $5=expected
+eval_until() { # $1=env_key $2=flag $3=org $4=expected
   local got i tries="${EVAL_POLL_TRIES:-12}" naptime="${EVAL_POLL_SLEEP:-2}"
   for i in $(seq 1 "$tries"); do
-    got=$(eval_flag_enabled "$1" "$2" "$3" "$4") || return 3
-    [[ "$got" == "$5" ]] && { printf '%s' "$got"; return 0; }
+    got=$(eval_flag_enabled "$1" "$2" "$3") || return 3
+    [[ "$got" == "$4" ]] && { printf '%s' "$got"; return 0; }
     [[ "$i" -lt "$tries" ]] && sleep "$naptime"
   done
   printf '%s' "$got"; return 1
@@ -472,15 +491,15 @@ print('  updated segment id=' + str(seg['id']))
   #   control org -> enabled == false               [no leak to a non-targeted org]
   EXPECT_TARGET=$([[ "$VALUE" == "on" ]] && echo true || echo false)
   echo "→ Eval-verify ($ROLE env): $FLAG for target $TARGET_ORG must be enabled=$EXPECT_TARGET…"
-  GOT_TARGET=$(eval_until "$ENV_KEY" "$FLAG" "$TARGET_ORG" "$ROLE" "$EXPECT_TARGET") || {
+  GOT_TARGET=$(eval_until "$ENV_KEY" "$FLAG" "$TARGET_ORG" "$EXPECT_TARGET") || {
     echo "EVAL VERIFY FAILED: $FLAG for org $TARGET_ORG expected enabled=$EXPECT_TARGET, last observed=$GOT_TARGET" >&2
-    echo "  (segment membership was written, but the flag does not EVALUATE as expected — likely a missing/one-env override)" >&2
+    echo "  (membership was written, but the flag does not EVALUATE as expected — missing/one-env override OR the edge endpoint errored; this is UNVERIFIED, investigate before relying on it)" >&2
     exit 3
   }
   echo "  ✓ target $TARGET_ORG: enabled=$GOT_TARGET"
 
   echo "→ Eval-verify ($ROLE env): control org $CONTROL_ORG must be enabled=false (no leak)…"
-  GOT_CONTROL=$(eval_flag_enabled "$ENV_KEY" "$FLAG" "$CONTROL_ORG" "$ROLE") || { echo "control eval request failed" >&2; exit 3; }
+  GOT_CONTROL=$(eval_flag_enabled "$ENV_KEY" "$FLAG" "$CONTROL_ORG") || { echo "control eval request failed / errored — UNVERIFIED, aborting (no fail-open)" >&2; exit 3; }
   if [[ "$GOT_CONTROL" != "false" ]]; then
     echo "EVAL VERIFY FAILED (control leak): $FLAG is enabled for control org $CONTROL_ORG — the flag is reaching a non-targeted org." >&2
     exit 3
