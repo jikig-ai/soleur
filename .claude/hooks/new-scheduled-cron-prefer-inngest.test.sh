@@ -104,6 +104,23 @@ assert_decision "non-Write/Edit tool allows (Bash)" "allow" \
 assert_decision "Write new scheduled (.yaml extension) denies" "deny" \
   "$(mk_write_payload ".github/workflows/scheduled-other.yaml" "name: x\non:\n  schedule:\n    - cron: '0 0 * * *'")"
 
+# --- Fail-open on malformed / empty stdin (#4600 regression guard) ---------
+# jq exits 5 on invalid JSON; under `set -euo pipefail` the hook must NOT abort
+# before emitting allow JSON (header invariant: "exit 0 always / fail-open").
+# Mirrors background-poll-prefer-monitor.test.sh cases (m)/(n)/(o).
+assert_decision "(g) malformed JSON stdin allows (fail-open)" "allow" 'not json{'
+assert_decision "(h) empty stdin allows (fail-open)" "allow" ''
+
+# Exit-code guard: the hook must exit 0 even on malformed input.
+TOTAL=$((TOTAL + 1))
+ec=0
+echo 'not json{' | bash "$HOOK" >/dev/null 2>&1 || ec=$?
+if [[ "$ec" -eq 0 ]]; then
+  PASS=$((PASS + 1)); echo "PASS: (i) malformed stdin exits 0"
+else
+  FAIL=$((FAIL + 1)); echo "FAIL: (i) malformed stdin exit code was $ec"
+fi
+
 echo
 echo "Total: $TOTAL  Pass: $PASS  Fail: $FAIL"
 [[ $FAIL -eq 0 ]] || exit 1
