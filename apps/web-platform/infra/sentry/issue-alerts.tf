@@ -12,6 +12,31 @@
 # Lifecycle ignore_changes covers the v2 attribute set + environment +
 # frequency, all of which can recompute on import for the legacy rules per
 # the v0.15 release notes (Kieran P1, plan §5).
+#
+# ── DEPRECATION WARNING IS ACCEPTED UNTIL PROVIDER GA (#4610) ──────────────
+# `terraform validate`/`plan` emits "This resource is deprecated. Please
+# migrate to `sentry_alert`" for each block below. That warning is EXPECTED
+# and intentionally accepted until `jianyuan/sentry` ships a stable v0.15.0.
+# Do NOT migrate these to `sentry_alert` under the pinned v0.15.0-beta2:
+#   - beta2's `sentry_alert` is MONITOR-bound: `monitor_ids` (set) and
+#     `trigger_conditions` (first_seen|regression|reappeared|issue_resolved)
+#     are BOTH required, and it has no `project` attribute.
+#   - these 4 rules are PROJECT-WIDE frequency alerts (EventFrequencyCondition
+#     + TaggedEventFilter) bound to no monitor — they cannot populate the
+#     required fields without changing which event class fires.
+#   - `terraform state mv sentry_issue_alert.X sentry_alert.X` is impossible:
+#     the two schemas share only name/organization/id, so any migration would
+#     DROP + READD the live paging rules (the exact failure the "match by id,
+#     never recreate" rule above guards against).
+# The provider's deprecation pointer is forward-looking to the GA schema, not
+# a claim that beta2 supports the migration. The warning is NOT suppressible
+# while the resource type is `sentry_issue_alert` (Terraform core cannot
+# allow-list validate/plan warnings; the provider exposes no opt-out attr).
+# Re-attempt at stable v0.15.0 when `sentry_alert` supports project-wide
+# frequency alerts. Schema evidence + alternatives: ADR-031 (Decision §Defer)
+# + knowledge-base/project/plans/2026-05-29-refactor-sentry-issue-alert-to-
+# sentry-alert-migration-plan.md.
+# ──────────────────────────────────────────────────────────────────────────
 
 resource "sentry_issue_alert" "auth_exchange_code_burst" {
   organization = var.sentry_org

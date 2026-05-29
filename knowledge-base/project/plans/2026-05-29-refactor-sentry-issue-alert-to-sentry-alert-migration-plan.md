@@ -187,22 +187,22 @@ rather than closed.
 ## Implementation Phases (Option A — recommended)
 
 ### Phase 0 — Preconditions (verify before any edit)
-- [ ] Confirm provider still pinned `0.15.0-beta2` in `versions.tf` + `.terraform.lock.hcl` (re-run schema dump if the lock advanced; this whole plan is schema-version-bound).
-- [ ] Re-run `cd apps/web-platform/infra/sentry && terraform init -backend=false && terraform validate` — confirm the 4 deprecation warnings + exit 0 still reproduce.
-- [ ] Reproduce the schema dump: `terraform providers schema -json` (via dev_overrides to the installed binary if backend init is unavailable offline) and confirm `sentry_alert.monitor_ids.required == true` and `sentry_alert.trigger_conditions.required == true`.
-- [ ] **Warning-suppression feasibility probe (load-bearing):** determine whether the deprecation warning is suppressible without removing the resource. Check: (a) `-compact-warnings` only collapses output, does NOT suppress; (b) provider has no opt-out attribute for the deprecation (schema dump shows none); (c) `validate`/`plan` warnings cannot be allow-listed in Terraform core as of 1.10.5. **Expected result: the warning is NOT suppressible while the resource type is `sentry_issue_alert`.** If confirmed, Option A degrades to "document the warning as accepted-until-GA" (= Option C content, but keeps the resources in code, which is the status quo). Surface this to the user before proceeding — it likely means #4610's claim (4) "0 deprecation warnings" is unachievable under the pin, and the honest outcome is Option C.
+- [x] Confirm provider still pinned `0.15.0-beta2` in `versions.tf` + `.terraform.lock.hcl` (re-run schema dump if the lock advanced; this whole plan is schema-version-bound).
+- [x] Re-run `cd apps/web-platform/infra/sentry && terraform init -backend=false && terraform validate` — confirm the 4 deprecation warnings + exit 0 still reproduce.
+- [x] Reproduce the schema dump: `terraform providers schema -json` (via dev_overrides to the installed binary if backend init is unavailable offline) and confirm `sentry_alert.monitor_ids.required == true` and `sentry_alert.trigger_conditions.required == true`. (Confirmed in planning phase via binary schema dump.)
+- [x] **Warning-suppression feasibility probe (load-bearing):** determine whether the deprecation warning is suppressible without removing the resource. Check: (a) `-compact-warnings` only collapses output, does NOT suppress; (b) provider has no opt-out attribute for the deprecation (schema dump shows none); (c) `validate`/`plan` warnings cannot be allow-listed in Terraform core as of 1.10.5. **Expected result: the warning is NOT suppressible while the resource type is `sentry_issue_alert`.** If confirmed, Option A degrades to "document the warning as accepted-until-GA" (= Option C content, but keeps the resources in code, which is the status quo). Surface this to the user before proceeding — it likely means #4610's claim (4) "0 deprecation warnings" is unachievable under the pin, and the honest outcome is Option C.
 
 ### Phase 1 — Document the accepted-warning posture (if no suppression mechanism)
-- [ ] Edit `apps/web-platform/infra/sentry/issue-alerts.tf` header comment: add a block explaining the deprecation warning is expected and accepted until `jianyuan/sentry` GA, citing the schema-incompatibility (monitor_ids/trigger_conditions required), and pointing to ADR-031's existing defer + this plan + the GA re-evaluation issue.
-- [ ] Confirm ADR-031 "Defer migration from `sentry_issue_alert` … until provider GA" line still stands — no edit needed (it already says this); optionally add a 1-line `Amendment (2026-05-29, #4610): re-confirmed at beta2 — sentry_alert requires monitor_ids/trigger_conditions; see plan` for traceability.
-- [ ] Update `apps/web-platform/infra/sentry/README.md` only if its prose claims a migration is pending in a way that now needs the beta-blocker note (currently it does not reference `sentry_alert`; verify with grep before editing).
+- [x] Edit `apps/web-platform/infra/sentry/issue-alerts.tf` header comment: add a block explaining the deprecation warning is expected and accepted until `jianyuan/sentry` GA, citing the schema-incompatibility (monitor_ids/trigger_conditions required), and pointing to ADR-031's existing defer + this plan + the GA re-evaluation issue.
+- [x] Confirm ADR-031 "Defer migration from `sentry_issue_alert` … until provider GA" line still stands — added the 1-line `Amendment (2026-05-29, #4610)` for traceability.
+- [x] Update `apps/web-platform/infra/sentry/README.md` only if its prose claims a migration is pending — verified via grep it does NOT reference `sentry_alert`; no edit needed.
 
 ### Phase 2 — Verification (read-only; no prod write)
-- [ ] `terraform validate` → exits 0 (warning present + documented as accepted).
-- [ ] `terraform fmt -check` clean on any edited `.tf`.
-- [ ] `grep -c 'sentry_issue_alert\|sentry_alert' apps/web-platform/scripts/sentry-monitors-audit.{sh,test.sh}` → still 0 (no audit-script change required — claim 3 is a no-op).
-- [ ] `bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh` → still passes (the `-target=` allow-list is unchanged; `sentry_issue_alert` was never auto-applied and is not being added to the allow-list).
-- [ ] No prod-state mutation of any kind. State is untouched.
+- [x] `terraform validate` → exits 0 (warning present + documented as accepted).
+- [x] `terraform fmt -check` clean on any edited `.tf`.
+- [x] `grep -c 'sentry_issue_alert\|sentry_alert' apps/web-platform/scripts/sentry-monitors-audit.{sh,test.sh}` → still 0 (no audit-script change required — claim 3 is a no-op).
+- [x] `bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh` → still passes (`[ok]`; the `-target=` allow-list is unchanged).
+- [x] No prod-state mutation of any kind. State is untouched.
 
 ### Out of scope / explicitly NOT done
 - No rewrite to `sentry_alert` (blocked by required `monitor_ids`/`trigger_conditions`).
@@ -213,13 +213,13 @@ rather than closed.
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] AC1: `terraform validate` in `apps/web-platform/infra/sentry/` exits 0.
-- [ ] AC2 (Option A documented-warning): the deprecation warning is either (a) suppressed via a verified provider/core mechanism, OR (b) explicitly documented in `issue-alerts.tf` header as accepted-until-GA with a pointer to the GA re-evaluation issue. The plan's Phase 0 probe determines which. **Note: claim (4)'s "0 deprecation warnings" is achievable ONLY via recreate (forbidden); the realistic AC is "validate exits 0; warning documented".**
-- [ ] AC3: `git grep -c sentry_alert apps/web-platform/scripts/sentry-monitors-audit.sh apps/web-platform/scripts/sentry-monitors-audit.test.sh` → 0 (audit tooling unchanged — claim 3 verified no-op).
-- [ ] AC4: `bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh` → `[ok]` (allow-list unchanged).
-- [ ] AC5: `terraform fmt -check` clean on every edited `.tf`.
-- [ ] AC6: `git diff --stat` shows NO change to `*.tfstate`, no new prod-state-mutation token in any committed runbook or workflow.
-- [ ] AC7: PR body uses `Ref #4610` (NOT `Closes`) until the user confirms Option A vs C — if Option C (defer), the issue stays open with a GA re-evaluation note; if Option A documented-warning is accepted as the resolution, `Closes #4610`.
+- [x] AC1: `terraform validate` in `apps/web-platform/infra/sentry/` exits 0.
+- [x] AC2 (Option A documented-warning): the deprecation warning is explicitly documented in `issue-alerts.tf` header as accepted-until-GA with schema rationale + pointers to ADR-031 + plan. Phase 0 probe confirmed the warning is NOT suppressible while the resource type is `sentry_issue_alert`. Claim (4)'s "0 deprecation warnings" is unachievable under the pin (would require the forbidden recreate); the realized AC is "validate exits 0; warning documented".
+- [x] AC3: `git grep -c sentry_alert apps/web-platform/scripts/sentry-monitors-audit.sh apps/web-platform/scripts/sentry-monitors-audit.test.sh` → 0 (audit tooling unchanged — claim 3 verified no-op).
+- [x] AC4: `bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh` → `[ok]` (allow-list unchanged).
+- [x] AC5: `terraform fmt -check` clean on every edited `.tf`.
+- [x] AC6: `git diff --stat` shows NO change to `*.tfstate`, no new prod-state-mutation token in any committed runbook or workflow.
+- [x] AC7: User confirmed Option A as the resolution → PR body uses `Closes #4610`.
 
 ### Post-merge (operator)
 - [ ] None. This plan makes no prod write. Automation: not feasible because there is no prod-state mutation to perform — the recommended outcome is documentation + status-quo state.
