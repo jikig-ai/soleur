@@ -26,7 +26,15 @@ adding a flag that the app needs to read.
 
 Required positional: `<kebab-flag-name>`.
 Optional: `--description "<text>"`, `--dev-on` (default off), `--prd-on`
-(default off), `--dry-run`.
+(default off), `--dry-run`, `--flagsmith-only`.
+
+`--flagsmith-only` creates **only** the Flagsmith feature for a flag that is
+**already code-wired** (already in `RUNTIME_FLAGS` + `.env.example` + Doppler).
+It skips the server.ts / `.env.example` / Doppler mutations **and** the "already
+appears in server.ts" exit-1 precheck (which would otherwise fire precisely
+because the flag is already wired). Use it to back-fill the Flagsmith feature for
+a flag that shipped its code wiring in an earlier PR, before scoping it per-org
+with `soleur:flag-set-role <flag> <env> on --org <orgId>`.
 
 ## Prerequisites
 

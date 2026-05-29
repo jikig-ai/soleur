@@ -95,7 +95,14 @@ assert_order() { # $1=script $2=audit_call_regex $3=mutation_call_regex $4=label
 }
 assert_order "$CREATE"  'audit_flag_flip_rpc ' 'fs_api -X POST'                        "create.sh"
 assert_order "$SETROLE" 'audit_flag_flip_rpc ' 'supa -X PATCH|fs_api -X POST'          "set-role.sh"
-assert_order "$FLIP"    'audit_append "'        'fs_api -X PUT|flip_segment_in_env "\$' "flip.sh"
+# flip.sh has two main-flow paths; assert append-before-flip on each by its OWN audit
+# call site + first real (main-flow) mutation. The org path's provision_feature_segment
+# helper DEFINITION contains a `flip_segment_in_env "$env_id"` call, so the mutation
+# regexes are pinned to main-flow forms (`flip_segment_in_env "$FLAGSMITH_ENV…` for the
+# role path; `provision_feature_segment "$FLAG"` / `fs_api -X PUT` for the org path) to
+# avoid matching that helper-internal call (#4581 PR-2).
+assert_order "$FLIP"    'audit_append "role:'   'flip_segment_in_env "\$FLAGSMITH_ENV'  "flip.sh role path"
+assert_order "$FLIP"    'audit_append "org:'     'provision_feature_segment "\$FLAG"|fs_api -X PUT' "flip.sh org path"
 
 [ "$fail" -eq 0 ] || exit 1
 echo "audit-flag-flip: ok"

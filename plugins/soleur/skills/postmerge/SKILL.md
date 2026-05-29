@@ -125,6 +125,31 @@ curl -sfS -H "Authorization: Bearer ${SENTRY_TOKEN}" \
 
 **Graceful degradation:** This check is advisory. A Sentry API failure does not block the postmerge pipeline.
 
+## Phase 3.6: Sentry Error-Count Delta (Fix Efficacy)
+
+A merged-and-deployed fix can pass every gate above and still not work — the deploy is healthy, monitors are alive, files are fresh, but the error keeps firing because the fix addressed the wrong root cause (the KB-sync / oauth-probe failure class). Phase 3.5 proves the *monitor* is alive; this phase asks the harder question: **did the error this PR claims to fix actually stop?**
+
+**Run only when** the PR body or linked issue names a specific Sentry issue (a `*.sentry.io/issues/<id>` URL, a `SENTRY-<SHORTID>`, or a `Closes #N` whose issue references one). If no Sentry issue is identified, skip silently — there is no error to measure.
+
+**Prerequisites:** same `SENTRY_AUTH_TOKEN` resolution as Phase 3.5. If missing, warn and skip.
+
+```bash
+# ISSUE_ID = the Sentry issue short-id or numeric id from the PR/issue body.
+# Query the rolling event count; compare the window since the deploy against
+# the equivalent window before it.
+curl -sfS -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "https://${API_HOST}/api/0/organizations/${SENTRY_ORG}/issues/${ISSUE_ID}/" \
+  | jq '{shortId, status, count, lastSeen}'
+```
+
+Interpretation (all outcomes are **WARN-only — never a merge blocker**):
+
+- `lastSeen` is older than the deploy timestamp **or** `status` is `resolved`/`ignored`: "Sentry error-count delta: error appears to have stopped firing post-deploy." — the expected good outcome.
+- `lastSeen` is after the deploy timestamp: "WARNING: Sentry issue `<shortId>` is still firing after the deploy (lastSeen <ts>). The fix may be ineffective or the root cause may differ from the diagnosis — recommend re-opening for investigation rather than closing." Surface this prominently in the Phase 7 report.
+- Sentry API unreachable / issue not found / non-200: warn and skip.
+
+**Why WARN-only, not a blocker:** a true pre/post delta needs the original error to actually re-fire in the brief post-merge window. Low-frequency bugs (daily-cron failures, rare-path exceptions) legitimately show zero events for hours after a correct fix, so a hard gate here would produce noisy false negatives that erode trust in the pipeline. The signal is a prompt to *look*, not a verdict. For high-frequency errors a continued-firing signal is strong evidence the fix missed; consider a `/loop` re-check 15–30 min out before marking the linked issue resolved.
+
 ## Phase 4: Verify File Freshness
 
 Read key files from the merged commit to verify they match expectations -- NOT from the bare repo filesystem which may contain stale content.
@@ -171,6 +196,7 @@ gh issue comment <issue-number> --body "Post-merge verification complete for PR 
 - CI on main: PASSED
 - Production health: <PASSED/SKIPPED/FAILED>
 - Sentry monitors: <HEALTHY/WARNING/SKIPPED>
+- Sentry error-count delta: <STOPPED/STILL-FIRING/SKIPPED>
 - File freshness: <PASSED/N files checked>
 - Browser verification: <PASSED/SKIPPED>
 "
@@ -194,6 +220,7 @@ Merge commit: <sha>
 CI on main: PASSED
 Production health: <PASSED/SKIPPED/FAILED>
 Sentry monitors: <HEALTHY/WARNING/SKIPPED>
+Sentry error-count delta: <STOPPED/STILL-FIRING/SKIPPED>
 File freshness: <N files verified>
 Browser verification: <PASSED/SKIPPED>
 ```
@@ -203,8 +230,10 @@ Browser verification: <PASSED/SKIPPED>
 | Missing Prerequisite | Behavior |
 |---------------------|----------|
 | No production URL | Skip health check with warning |
-| No `SENTRY_AUTH_TOKEN` | Skip Sentry cron monitor check with warning |
+| No `SENTRY_AUTH_TOKEN` | Skip Sentry cron monitor check AND error-count delta with warning |
 | Sentry API unreachable | Skip Sentry cron monitor check with warning |
+| No Sentry issue identified in PR/linked issue | Skip error-count delta silently (nothing to measure) |
+| Sentry issue not found via API | Skip error-count delta with warning |
 | Playwright MCP unavailable | Skip browser verification with warning |
 | CI run not found | Poll up to 5 minutes, then warn and proceed |
 | No UI files in diff | Skip browser verification entirely |

@@ -51,8 +51,13 @@ deny() {
 command -v jq >/dev/null 2>&1 || allow
 
 payload="$(cat)"
-tool_name="$(echo "$payload" | jq -r '.tool_name // empty' 2>/dev/null)"
-file_path="$(echo "$payload" | jq -r '.tool_input.file_path // empty' 2>/dev/null)"
+# `|| true` on every jq pipeline: under `set -euo pipefail`, jq exits 5 on
+# malformed/empty stdin and would otherwise abort the script before any
+# allow/deny JSON is emitted — breaking the "exit 0 always / fail-open"
+# invariant in the header. Degrade to empty → allow instead (#4600). Mirrors
+# background-poll-prefer-monitor.sh.
+tool_name="$(echo "$payload" | jq -r '.tool_name // empty' 2>/dev/null || true)"
+file_path="$(echo "$payload" | jq -r '.tool_input.file_path // empty' 2>/dev/null || true)"
 
 case "$tool_name" in
   Write|Edit) ;;
@@ -69,7 +74,7 @@ case "$file_path" in
 esac
 
 # Extract content for the override-marker check below.
-content="$(echo "$payload" | jq -r '.tool_input.content // .tool_input.new_string // empty' 2>/dev/null)"
+content="$(echo "$payload" | jq -r '.tool_input.content // .tool_input.new_string // empty' 2>/dev/null || true)"
 
 # Override-marker escape hatch — must appear literally in the YAML body.
 if echo "$content" | grep -qF '<!-- gate-override: new-scheduled-cron-prefer-inngest -->'; then

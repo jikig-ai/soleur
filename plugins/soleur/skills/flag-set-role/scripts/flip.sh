@@ -30,6 +30,15 @@ readonly FLAGSMITH_ENV_PRD_ID=90721
 readonly FLAGSMITH_ENV_DEV_KEY="PRHE5c9eWXYuRDFFPtbFxj"
 readonly FLAGSMITH_ENV_PRD_KEY="QMEpRRzFx8kpEcY7nZmhJd"
 readonly FLAGSMITH_API="https://api.flagsmith.com/api/v1"
+# Edge SDK eval endpoint (client-side X-Environment-Key). Mirrors the production
+# resolution path: flagsmith-nodejs getIdentityFlags() against edge.api.flagsmith.com
+# (apps/web-platform/lib/feature-flags/server.ts DEFAULT_FLAGSMITH_API_URL).
+readonly FLAGSMITH_EDGE_API="https://edge.api.flagsmith.com/api/v1"
+# Synthetic non-member orgId — default control for the eval-layer control-negative
+# assertion. Guaranteed to match no segment, so the flag must eval OFF for it; if it
+# evals ON the flag is globally enabled (a real leak). Override with --control-org to
+# assert against a specific real sibling org (e.g. the org sharing org-targeted).
+readonly DEFAULT_CONTROL_ORG="00000000-0000-0000-0000-000000000000"
 
 # Map known flag-name → Doppler env-var name. Keep in sync with
 # apps/web-platform/lib/feature-flags/server.ts RUNTIME_FLAGS.
@@ -44,6 +53,7 @@ DRY_RUN=0
 CONFIRMED=0
 TARGET_TYPE="role"
 TARGET_ORG=""
+CONTROL_ORG=""
 FLAG=""
 ROLE=""
 VALUE=""
@@ -54,6 +64,7 @@ while [[ $# -gt 0 ]]; do
     --confirmed)   CONFIRMED=1; shift ;;
     --target)      TARGET_TYPE="$2"; shift 2 ;;
     --org)         TARGET_ORG="$2"; shift 2 ;;
+    --control-org) CONTROL_ORG="$2"; shift 2 ;;
     --*)           echo "unknown flag: $1" >&2; exit 2 ;;
     *)
       if [[ -z "$FLAG" ]]; then FLAG="$1"
@@ -83,6 +94,15 @@ usage() {
 if [[ "$TARGET_TYPE" == "org" ]]; then
   [[ "$TARGET_ORG" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
     || { echo "invalid orgId format (expected UUID): $TARGET_ORG" >&2; exit 2; }
+  [[ -z "$CONTROL_ORG" ]] && CONTROL_ORG="$DEFAULT_CONTROL_ORG"
+  [[ "$CONTROL_ORG" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
+    || { echo "invalid control orgId format (expected UUID): $CONTROL_ORG" >&2; exit 2; }
+  [[ "$CONTROL_ORG" == "$TARGET_ORG" ]] \
+    && { echo "--control-org must differ from --org (got both = $TARGET_ORG)" >&2; exit 2; }
+  # The synthetic default only proves "not globally ON"; pass a real sibling org for a
+  # leak check against the shared org-targeted blast radius. [review: user-impact F4]
+  [[ "$CONTROL_ORG" == "$DEFAULT_CONTROL_ORG" ]] \
+    && echo "⚠ control-negative uses the synthetic default org ($DEFAULT_CONTROL_ORG) — pass --control-org <real-sibling-uuid> for a stronger leak assertion." >&2
 fi
 
 ENV_VAR="${FLAG_ENV_VARS[$FLAG]}"
@@ -248,23 +268,129 @@ audit_append() {
   echo "  audit_id=$audit_id"
 }
 
-# --- org-targeting branch --------------------------------------------------
-# When --org is provided, modify the org-targeted segment's rule definition
-# directly (add/remove EQUAL orgId conditions in the ANY rule), then exit. No Doppler
-# mirror — org segment membership is not reflected in env vars (ADR-038
-# fallback mirrors prd-segment override state, not segment rule definitions).
+# Idempotently provision a feature's OWN org segment `<flag>-orgs` (ADR-043
+# per-feature scoping, 2026-05-29): create the segment with the ALL→ANY/EQUAL-orgId
+# envelope (zero conditions initially) if absent, then ensure an ON feature-state
+# override for the feature on that segment in BOTH envs. Echoes the segment id on
+# stdout (progress to stderr). Idempotent: re-running converges (no churn when the
+# override is already ON). The per-org gate is the segment's conditions, added later.
+provision_feature_segment() {
+  local flag="$1"
+  local seg_name="${flag}-orgs"
+  local seg_id feat_id env_id cur resp body
+  seg_id=$(resolve_segment_id "$seg_name" 2>/dev/null) || seg_id=""
+  if [[ -z "$seg_id" ]]; then
+    echo "  → creating segment '$seg_name'…" >&2
+    # Same rule envelope as org-targeted (flip.sh source-of-truth), zero conditions.
+    body=$(python3 -c "
+import json
+print(json.dumps({
+  'name': '${seg_name}',
+  'project': ${FLAGSMITH_PROJECT_ID},
+  'rules': [{'type':'ALL','rules':[{'type':'ANY','rules':[],'conditions':[]}],'conditions':[]}],
+}))")
+    resp=$(echo "$body" | fs_api -X POST "${FLAGSMITH_API}/projects/${FLAGSMITH_PROJECT_ID}/segments/" -d @-) \
+      || { echo "failed to create segment $seg_name" >&2; return 3; }
+    seg_id=$(echo "$resp" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("id",""))') \
+      || { echo "segment create response not JSON: $resp" >&2; return 3; }
+    [[ -n "$seg_id" ]] || { echo "segment create returned no id: $resp" >&2; return 3; }
+    echo "    created $seg_name segment_id=$seg_id" >&2
+  else
+    echo "  → segment '$seg_name' exists (id=$seg_id)" >&2
+  fi
+  feat_id=$(resolve_feature_id "$flag") || { echo "feature '$flag' not found in Flagsmith" >&2; return 3; }
+  # ON override in BOTH envs (idempotent: only publish when not already ON).
+  for env_id in "$FLAGSMITH_ENV_DEV_ID" "$FLAGSMITH_ENV_PRD_ID"; do
+    cur=$(read_segment_state "$env_id" "$feat_id" "$seg_id")
+    if [[ "$cur" != "true" ]]; then
+      echo "  → ON override for '$flag' on '$seg_name' (env $env_id)…" >&2
+      flip_segment_in_env "$env_id" "$feat_id" "$seg_id" true >/dev/null
+    fi
+  done
+  printf '%s' "$seg_id"
+}
+
+# Verification identity role trait. Deliberately a value that matches NO role
+# segment (role-prd/role-dev match role=='prd'/'dev'), so eval-verify isolates the
+# PER-ORG segment gate (`<flag>-orgs` / org-targeted match on orgId, role-independent)
+# from any role-segment rollout. Without this, a flag carrying a role-<env>=ON override
+# would evaluate enabled for EVERY identity and the control-negative assertion would
+# fire spuriously. [review: code-reviewer "Important" / user-impact F4]
+readonly FLAG_VERIFY_ROLE="__flag-verify__"
+
+# Evaluate <flag> for a transient identity carrying the orgId trait, mirroring the
+# production getIdentityFlags() path (edge.api.flagsmith.com /identities/). Echoes
+# "true"/"false" ONLY on a 2xx; returns 3 on any transport OR HTTP error so the
+# verify FAILS LOUD instead of fail-open. This is the FR8 load-bearing check: a correct
+# segment membership is NOT proof the flag is enabled (override missing / one-env-only
+# leaves it OFF) — re-verify reads the EVALUATED flag, not the membership set.
+# [review P0: do NOT treat an error body's missing flag as "disabled".]
+eval_flag_enabled() { # $1=env_key $2=flag $3=orgId
+  local env_key="$1" flag="$2" org="$3" body resp code payload
+  body=$(python3 -c "
+import json
+print(json.dumps({
+  'identifier': 'org:${org}:${FLAG_VERIFY_ROLE}',
+  'traits': [
+    {'trait_key':'role','trait_value':'${FLAG_VERIFY_ROLE}'},
+    {'trait_key':'orgId','trait_value':'${org}'},
+  ],
+  'transient': True,
+}))")
+  resp=$(curl -sS -w '\n%{http_code}' -X POST "${FLAGSMITH_EDGE_API}/identities/" \
+    -H "X-Environment-Key: ${env_key}" -H "Content-Type: application/json" \
+    -d "$body") || { echo "eval request failed (curl transport) for org $org" >&2; return 3; }
+  code=$(printf '%s' "$resp" | tail -n1)
+  payload=$(printf '%s' "$resp" | sed '$d')
+  [[ "$code" =~ ^2[0-9][0-9]$ ]] \
+    || { echo "eval HTTP $code for org $org (treating as UNVERIFIED, not disabled): $payload" >&2; return 3; }
+  printf '%s' "$payload" | FS_FLAG="$flag" python3 -c "
+import json, os, sys
+flag = os.environ['FS_FLAG']
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print('eval response not JSON', file=sys.stderr); sys.exit(3)
+for f in d.get('flags', []):
+    if f.get('feature', {}).get('name') == flag:
+        print(str(bool(f.get('enabled'))).lower()); sys.exit(0)
+print('false')  # 2xx + flag absent -> authoritatively not enabled for this identity
+"
+}
+
+# Poll eval until it matches the expected value (edge propagation is eventual).
+# Echoes the final observed value; returns 0 on match within budget, 1 otherwise.
+# Cadence overridable for tests (EVAL_POLL_TRIES / EVAL_POLL_SLEEP); live default
+# ~24s budget. No sleep after the final attempt.
+eval_until() { # $1=env_key $2=flag $3=org $4=expected
+  local got i tries="${EVAL_POLL_TRIES:-12}" naptime="${EVAL_POLL_SLEEP:-2}"
+  for i in $(seq 1 "$tries"); do
+    got=$(eval_flag_enabled "$1" "$2" "$3") || return 3
+    [[ "$got" == "$4" ]] && { printf '%s' "$got"; return 0; }
+    [[ "$i" -lt "$tries" ]] && sleep "$naptime"
+  done
+  printf '%s' "$got"; return 1
+}
+
+# --- org-targeting branch (ADR-043 per-feature segment scoping) -------------
+# When --org is provided, target the feature's OWN segment `<flag>-orgs` (NOT the
+# shared org-targeted segment): provision it (segment + ON override both envs), then
+# add/remove the org's EQUAL orgId condition, then re-verify by EVALUATING the flag
+# for the target org (must be enabled) and a control org (must be disabled). No Doppler
+# mirror — per-org segment membership is invisible to the FLAG_* env-var fallback
+# (ADR-038/ADR-043: a per-org-only flag falls back OFF on a Flagsmith outage).
 if [[ "$TARGET_TYPE" == "org" ]]; then
-  echo "→ Resolving org-targeted segment…"
-  ORG_SEG_ID=$(resolve_segment_id "org-targeted") || { echo "segment 'org-targeted' not found in Flagsmith" >&2; exit 3; }
-  echo "  org-targeted segment_id=$ORG_SEG_ID"
+  SEG_NAME="${FLAG}-orgs"
+  echo "→ Per-feature org segment: $SEG_NAME"
+  ENV_KEY=$([[ "$ROLE" == "prd" ]] && echo "$FLAGSMITH_ENV_PRD_KEY" || echo "$FLAGSMITH_ENV_DEV_KEY")
 
-  echo "→ Reading segment rules…"
-  SEG_JSON=$(fs_api "${FLAGSMITH_API}/projects/${FLAGSMITH_PROJECT_ID}/segments/${ORG_SEG_ID}/") \
-    || { echo "failed to read segment $ORG_SEG_ID" >&2; exit 3; }
-
-  # The org-targeted segment uses ANY(EQUAL orgId <uuid>, EQUAL orgId <uuid>, ...)
-  # — one condition per org, not a single IN condition with comma-separated values.
-  PARSED=$(echo "$SEG_JSON" | python3 -c "
+  # Read current membership (segment may not exist yet -> empty).
+  PRE_SEG_ID=$(resolve_segment_id "$SEG_NAME" 2>/dev/null) || PRE_SEG_ID=""
+  CURRENT_ORGS=""
+  if [[ -n "$PRE_SEG_ID" ]]; then
+    PRE_JSON=$(fs_api "${FLAGSMITH_API}/projects/${FLAGSMITH_PROJECT_ID}/segments/${PRE_SEG_ID}/") \
+      || { echo "failed to read segment $PRE_SEG_ID" >&2; exit 3; }
+    CURRENT_ORGS=$(echo "$PRE_JSON" | python3 -c "
 import json, sys
 seg = json.load(sys.stdin)
 conditions = seg['rules'][0]['rules'][0]['conditions']
@@ -275,98 +401,119 @@ for c in conditions:
         sys.exit(3)
     orgs.append(c['value'])
 print(','.join(orgs) if orgs else '')
-") || { echo "failed to parse segment rules (unexpected structure)" >&2; exit 3; }
+") || { echo "failed to parse $SEG_NAME rules (unexpected structure)" >&2; exit 3; }
+  fi
 
-  CURRENT_ORGS="$PARSED"
-
-  RESULT=$(CURRENT_ORGS="$CURRENT_ORGS" TARGET_ORG="$TARGET_ORG" VALUE="$VALUE" python3 -c "
-import os, sys
+  # Compute new membership (add on / remove off). No early-exit on 'already present':
+  # the override may still be missing, so we always provision + eval-verify.
+  NEW_ORGS=$(CURRENT_ORGS="$CURRENT_ORGS" TARGET_ORG="$TARGET_ORG" VALUE="$VALUE" python3 -c "
+import os
 current = os.environ['CURRENT_ORGS']
 target = os.environ['TARGET_ORG']
 action = os.environ['VALUE']
 orgs = [x for x in current.split(',') if x] if current else []
-
 if action == 'on':
-    if target in orgs:
-        print('IDEMPOTENT:already present')
-    else:
-        orgs.append(target)
-        print(','.join(orgs))
+    if target not in orgs: orgs.append(target)
 else:
-    if target not in orgs:
-        print('IDEMPOTENT:not present')
-    else:
-        orgs.remove(target)
-        print(','.join(orgs))
+    orgs = [o for o in orgs if o != target]
+print(','.join(orgs))
 ") || exit 3
 
-  if [[ "$RESULT" == "IDEMPOTENT:already present" ]]; then
-    echo "  orgId $TARGET_ORG is already in the org-targeted segment — no change needed."
-    exit 0
-  fi
-  if [[ "$RESULT" == "IDEMPOTENT:not present" ]]; then
-    echo "  orgId $TARGET_ORG is not in the org-targeted segment — no change needed."
-    exit 0
-  fi
-
-  NEW_ORGS="$RESULT"
-
-  echo "→ Current membership:"
-  if [[ -z "$CURRENT_ORGS" ]]; then
-    echo "  (empty)"
-  else
-    echo "$CURRENT_ORGS" | tr ',' '\n' | sed 's/^/  /'
-  fi
-  echo "→ Proposed: $VALUE orgId $TARGET_ORG"
+  echo "→ Current membership of $SEG_NAME:"
+  if [[ -z "$CURRENT_ORGS" ]]; then echo "  (empty)"; else echo "$CURRENT_ORGS" | tr ',' '\n' | sed 's/^/  /'; fi
+  echo "→ Proposed: $VALUE orgId $TARGET_ORG (control: $CONTROL_ORG)"
   echo "→ New membership:"
-  echo "$NEW_ORGS" | tr ',' '\n' | sed 's/^/  /'
+  if [[ -z "$NEW_ORGS" ]]; then echo "  (empty — feature OFF for all via $SEG_NAME)"; else echo "$NEW_ORGS" | tr ',' '\n' | sed 's/^/  /'; fi
 
-  gate_or_confirm
+  if [[ $DRY_RUN -eq 1 ]]; then
+    echo "(dry-run — would provision $SEG_NAME (+ON override both envs), set membership above, then eval-verify; exiting 0 without mutation)"
+    exit 0
+  fi
+  if [[ $CONFIRMED -eq 0 ]]; then
+    echo
+    read -p "Proceed? Type 'yes' to apply: " ACK
+    [[ "$ACK" == "yes" ]] || { echo "aborted (ack was '$ACK')" >&2; exit 0; }
+  else
+    echo "(--confirmed: skipping interactive prompt)"
+  fi
+
+  # Append-before-flip: WORM audit precedes the first Flagsmith mutation (provision).
   audit_append "org:$TARGET_ORG"
 
-  echo "→ Writing updated segment to Flagsmith…"
-  UPDATED_JSON=$(echo "$SEG_JSON" | NEW_ORGS="$NEW_ORGS" python3 -c "
+  echo "→ Provisioning $SEG_NAME (segment + ON override both envs)…"
+  ORG_SEG_ID=$(provision_feature_segment "$FLAG") || exit 3
+
+  # Re-read immediately before the PUT to shrink the read-modify-write window (P1-1),
+  # then rebuild the conditions from the fresh read + target delta.
+  echo "→ Reading segment rules…"
+  SEG_JSON=$(fs_api "${FLAGSMITH_API}/projects/${FLAGSMITH_PROJECT_ID}/segments/${ORG_SEG_ID}/") \
+    || { echo "failed to read segment $ORG_SEG_ID" >&2; exit 3; }
+
+  # Recompute the delta from the FRESH read (the segment may have just been created
+  # empty by provision_feature_segment). One EQUAL orgId condition per org in the ANY
+  # rule — NOT a single IN condition (org-targeted source-of-truth, flip.sh history).
+  UPDATED_JSON=$(echo "$SEG_JSON" | TARGET_ORG="$TARGET_ORG" VALUE="$VALUE" python3 -c "
 import json, os, sys
 seg = json.load(sys.stdin)
-new_orgs = os.environ['NEW_ORGS']
-orgs = [x for x in new_orgs.split(',') if x] if new_orgs else []
-seg['rules'][0]['rules'][0]['conditions'] = [
-    {'operator': 'EQUAL', 'property': 'orgId', 'value': o} for o in orgs
-]
+target = os.environ['TARGET_ORG']
+action = os.environ['VALUE']
+anyrule = seg['rules'][0]['rules'][0]
+orgs = []
+for c in anyrule['conditions']:
+    if c.get('operator') != 'EQUAL' or c.get('property') != 'orgId':
+        print(f\"unexpected condition: operator={c.get('operator')} property={c.get('property')}\", file=sys.stderr)
+        sys.exit(3)
+    orgs.append(c['value'])
+if action == 'on':
+    if target not in orgs: orgs.append(target)
+else:
+    orgs = [o for o in orgs if o != target]
+anyrule['conditions'] = [{'operator':'EQUAL','property':'orgId','value':o} for o in orgs]
 json.dump(seg, sys.stdout)
-") || { echo "failed to build updated segment JSON" >&2; exit 3; }
+") || { echo "failed to build updated $SEG_NAME JSON (unexpected structure)" >&2; exit 3; }
 
+  echo "→ Writing updated $SEG_NAME membership to Flagsmith…"
   RESP=$(echo "$UPDATED_JSON" | fs_api -X PUT "${FLAGSMITH_API}/projects/${FLAGSMITH_PROJECT_ID}/segments/${ORG_SEG_ID}/" -d @-) \
     || { echo "PUT segment failed" >&2; exit 3; }
-
   echo "$RESP" | python3 -c "
 import json, sys
 seg = json.load(sys.stdin)
 if 'id' not in seg:
-    print(json.dumps(seg), file=sys.stderr)
-    sys.exit(3)
+    print(json.dumps(seg), file=sys.stderr); sys.exit(3)
 print('  updated segment id=' + str(seg['id']))
 " || exit 3
 
-  echo "→ Re-verifying…"
-  VERIFY_VALUE=$(fs_api "${FLAGSMITH_API}/projects/${FLAGSMITH_PROJECT_ID}/segments/${ORG_SEG_ID}/" \
-    | python3 -c "
-import json, sys
-seg = json.load(sys.stdin)
-conditions = seg['rules'][0]['rules'][0]['conditions']
-orgs = sorted(c['value'] for c in conditions if c.get('property') == 'orgId')
-print(','.join(orgs))
-") || { echo "re-verification read failed" >&2; exit 3; }
-
-  EXPECT_ORGS=$(echo "$NEW_ORGS" | tr ',' '\n' | sort | paste -sd,)
-  if [[ "$VERIFY_VALUE" != "$EXPECT_ORGS" ]]; then
-    echo "VERIFICATION FAILED: expected [$EXPECT_ORGS] but got [$VERIFY_VALUE]" >&2
+  # --- eval-layer re-verify (FR8, the load-bearing fix) ---------------------
+  # Membership-set equality is NOT sufficient (override-missing / one-env-only leaves
+  # the flag OFF while the org is 'in' the segment). Evaluate the flag for a transient
+  # identity carrying the orgId trait (production getIdentityFlags path), asserting:
+  #   target org  -> enabled == (VALUE==on)         [the per-org enable actually works]
+  #   control org -> enabled == false               [no leak to a non-targeted org]
+  EXPECT_TARGET=$([[ "$VALUE" == "on" ]] && echo true || echo false)
+  echo "→ Eval-verify ($ROLE env): $FLAG for target $TARGET_ORG must be enabled=$EXPECT_TARGET…"
+  GOT_TARGET=$(eval_until "$ENV_KEY" "$FLAG" "$TARGET_ORG" "$EXPECT_TARGET") || {
+    echo "EVAL VERIFY FAILED: $FLAG for org $TARGET_ORG expected enabled=$EXPECT_TARGET, last observed=$GOT_TARGET" >&2
+    echo "  (membership was written, but the flag does not EVALUATE as expected — missing/one-env override OR the edge endpoint errored; this is UNVERIFIED, investigate before relying on it)" >&2
     exit 3
-  fi
-  echo "  ✓ verified: orgId $TARGET_ORG is $([[ "$VALUE" == "on" ]] && echo 'present' || echo 'absent') in org-targeted segment."
+  }
+  echo "  ✓ target $TARGET_ORG: enabled=$GOT_TARGET"
+
+  # Poll until the control SETTLES to disabled — same propagation tolerance as the
+  # target check. The edge environment document is eventually consistent: right after a
+  # segment+override create, a non-member org can transiently read enabled=true for one
+  # refresh window before the segment's orgId condition propagates. A single-shot read
+  # here false-positives on that window. A genuine leak never settles to false → the
+  # poll exhausts its budget and fails loud (and an HTTP error returns 3 → exit 3).
+  echo "→ Eval-verify ($ROLE env): control org $CONTROL_ORG must settle to enabled=false (no leak)…"
+  GOT_CONTROL=$(eval_until "$ENV_KEY" "$FLAG" "$CONTROL_ORG" "false") || {
+    echo "EVAL VERIFY FAILED (control leak): $FLAG did not settle to disabled for control org $CONTROL_ORG within the propagation budget (last observed=$GOT_CONTROL) — the flag is reaching a non-targeted org, OR the edge endpoint errored. UNVERIFIED." >&2
+    exit 3
+  }
+  echo "  ✓ control $CONTROL_ORG: enabled=$GOT_CONTROL"
 
   echo
-  echo "✓ Done. Segment rule change is immediate — no cache TTL applies to segment definitions."
+  echo "✓ Done. $SEG_NAME membership updated + flag eval-verified. Segment changes are"
+  echo "  immediate; edge eval propagation completes within seconds."
   exit 0
 fi
 

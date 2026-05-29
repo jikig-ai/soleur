@@ -185,6 +185,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 ### Phase 2: Execute
 
+**Output discipline (all tiers).** Long execution phases blow the response-token ceiling and truncate mid-pipeline, losing the thread. Keep inline output bounded: when a command's output is large (full diffs, build logs, test dumps), write it to a file and reference the path rather than pasting it — never echo a diff over ~200 lines inline (`git diff > /tmp/<task>.diff` then summarize). After each task or logical unit, emit a one-line `## Work Phase <N> complete` checkpoint marker so an interrupted run has a clear resume point. This complements hard rule `hr-never-run-commands-with-unbounded-output` (which forbids unbounded *commands*); this is about bounding your own *narration* of them.
+
 1. **Execution Mode Selection** (HARD GATE — must complete before executing ANY task)
 
    **Do NOT execute any task before completing this analysis.** Analyze independence first, select the execution tier, then begin. Starting sequential execution "because the first tasks feel simple" is a workflow violation — it forfeits parallelization savings on the remaining tasks.
@@ -288,7 +290,12 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - Supabase migrations + `cron.job` queries + Storage bucket
      existence + RLS spot-checks → `mcp__plugin_supabase_supabase__*`
      **with Doppler `DATABASE_URL_POOLER` fallback when MCP is
-     unavailable** — see "Supabase fallback chain" below.
+     unavailable** — see "Supabase fallback chain" below. When a
+     migration needs a SECURITY DEFINER RPC (e.g. to bypass an RLS /
+     column-grant restriction), start from
+     [`sql-security-definer-rpc-scaffold.sql`](./references/sql-security-definer-rpc-scaffold.sql)
+     — it encodes the `search_path` pin + 4-role REVOKE + `auth.uid()`
+     authorization pin that `test/migration-rpc-grants.test.ts` enforces.
    - `gh pr ready` / `gh pr merge --squash --auto` / `gh issue close`
      → Bash via `gh` CLI
    - End-to-end UI flow → Playwright MCP (`mcp__playwright__*`)
@@ -339,6 +346,12 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    first audit on dashboard navigation (correct), then discovered
    Doppler had the working `DATABASE_URL_POOLER` and applied via
    pg directly — the path it should have taken at step 1.
+   **Session stickiness:** once the MCP OAuth handoff has failed even
+   once in the current session, treat Doppler `DATABASE_URL_POOLER` as
+   the default for ALL subsequent Supabase operations this session — do
+   not re-attempt the OAuth flow per-operation. Re-probing a known-flaky
+   external auth each time is the wasted-cycle trap; the fallback is not
+   slower once you are already authenticated to Doppler.
 
    **Pre-apply collision check (always, even on first attempt).**
    Before invoking pg apply (or `supabase migration up`) against any
@@ -611,7 +624,7 @@ while (recommendations exist that haven't been applied):
    # Use linting-agent before pushing to origin
    ```
 
-   - **Run `npx tsc --noEmit` in the app package alongside the test suite.** Vitest type-checks test files lazily, so TS errors in tests pass the suite locally but fail CI. A standalone tsc pass catches them at the work-phase gate instead of deferring to review.
+   - **Run the project's pinned TypeScript binary in the app package — `cd <app-package> && ./node_modules/.bin/tsc --noEmit` (or `bun x tsc --noEmit`), never bare `npx tsc`.** `npx tsc` resolves against its own cache and can silently install a wrong/major-jumped (or typo-squatted) `typescript`, producing false type errors unrelated to your change — the same supply-chain/version-drift failure class as the pinned-`./node_modules/.bin/vitest` rule above (PR #3186). Vitest type-checks test files lazily, so TS errors in tests pass the suite locally but fail CI; a standalone pass with the *project's* compiler catches them at the work-phase gate instead of deferring to review.
    - **When extracting enforcement logic (auth, CSRF, validation) from route files into a shared helper, update negative-space tests in the same commit.** Route-level detection must prove helper invocation AND failure early-return — not just import presence. Add direct assertions on the helper file for every invariant that moved into it. See `knowledge-base/project/learnings/best-practices/2026-04-15-negative-space-tests-must-follow-extracted-logic.md`.
    - **When adding git operations that contact remotes in Next.js API routes, include the credential helper pattern from `session-sync.ts`** (search `credential.helper`). Bare `git pull`/`git push`/`git fetch` fail silently on private repos. See `knowledge-base/project/learnings/integration-issues/kb-upload-missing-credential-helper-20260413.md`.
 
@@ -723,6 +736,18 @@ After drafting the PR body and BEFORE `gh pr ready` / `gh pr merge --auto`, scan
 After resolution, re-scan; the section MUST contain zero unaccompanied operator/manual bullets. The `ship-operator-step-gate.sh` PreToolUse hook enforces this mechanically at `gh pr ready` / `gh pr merge --auto` — the gate's deny message lists each undeferred match. Override via `SOLEUR_SKIP_OPERATOR_STEP_GATE=1` is reserved for the rare attestation case.
 
 **Why:** PR #4227 (TR9 PR-3) shipped with a "Post-merge" section listing four operator items (Doppler secrets check, T+90 min Sentry verify, T+24h auto-resolve verify, file follow-up issue within 48h) — all four were inline-automatable; the agent had hard rules forbidding the deferral (`hr-exhaust-all-automated-options-before`, `hr-never-label-any-step-as-manual-without`, `wg-block-pr-ready-on-undeferred-operator-steps`) and still wrote the bullets. The gate existed at `/ship` Phase 5.5 but the agent reached `gh pr ready` directly. This self-audit + the hook close both halves of that bypass. See `knowledge-base/project/learnings/best-practices/2026-05-21-post-merge-section-self-audit.md`.
+
+#### Follow-up Filing Net-Flow Gate (HARD GATE)
+
+`/work` files follow-up issues HERE (Post-Merge Self-Audit, deferral tracking, discovered-bug capture) — which is BEFORE `/ship` Phase 5.5's Net-Issue-Flow Surfacing runs, and is bypassed entirely when `/ship` is hand-rolled. So the cost-of-filing + net-flow discipline (PR #4452) must ALSO fire at this filing site, not only at ship.
+
+Before issuing ANY `gh issue create` for a follow-up in this phase, run the gate:
+
+1. **Cost-of-filing, per candidate filing** (mirrors `review/SKILL.md` §CONCUR): if the deferred work is **≤30 changed lines AND ≤2 files**, do it inline (fold into THIS PR if unmerged; otherwise it is genuinely a follow-up). Only file when the work is genuinely larger, a separate work-stream/Non-Goal, an operator-only step, or a **discovered defect in a different subsystem** (the last MUST stay its own issue — never bury a possible-P1 bug in a consolidated tracker).
+2. **Consolidate deferred-FEATURE follow-ups into ONE tracker.** Multiple `deferred-scope-out` follow-ups from the same PR (ADR + future-feature + sibling-upstream …) collapse into a single "**\<feature\> (#N): post-MVP follow-ups**" issue with a checklist. Discovered bugs stay separate.
+3. **Surface the net count BEFORE filing.** Compute and print: `Closing: <count of Closes #N in PR body> / Filing: <new issues> / Net: <signed>`. If `Net > 0`, state one sentence per filing on why it could not be inlined or consolidated. Net-positive backlog growth from a single feature PR is the smell this gate exists to catch.
+
+This is the `/work`-side mirror of `/ship` Phase 5.5 Net-Issue-Flow Surfacing — together they cover both the filing site (here) and the merge boundary (ship). **Why:** PR #4580 (#4579) filed **4** follow-ups for **1** closed issue (net +3) during this self-audit; the agent hand-rolled `/ship` so Phase 5.5's surfacing never fired, and there was no filing-site gate. Three were consolidatable into one tracker (#4613); the net should have been +1. See `knowledge-base/project/learnings/workflow-patterns/2026-05-29-net-issue-flow-gate-at-filing-site-not-just-ship.md`.
 
 #### Invocation Mode
 
