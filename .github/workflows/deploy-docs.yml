@@ -179,6 +179,8 @@ jobs:
           # deploy. Every failure path warns + exits 0; only a successful pause
           # records monitor_id so the resume step knows to re-enable.
           set -uo pipefail
+          # This job runs in the Playwright container as root, so bare apt-get
+          # (no sudo, unlike apply-sentry-infra.yml's VM runner) is correct.
           which jq >/dev/null 2>&1 || { apt-get update && apt-get install -y jq; }
           # Uptime monitors are Sentry "detectors", NOT Crons monitors — they are
           # served by /detectors/, not /organizations/{org}/monitors/ (#4591).
@@ -188,8 +190,14 @@ jobs:
               echo "::warning::Failed to list Sentry detectors; skipping pause (deploy continues)."
               exit 0
             }
-          # Select by name (Sentry allows dup names — pick the first match).
-          id=$(jq -r '[.[] | select(.name == "soleur-ai-www")] | .[0].id // empty' <<<"$detectors" 2>/dev/null)
+          # Select by name AND uptime type. The /detectors/ list returns every
+          # detector type for the org (uptime, Crons, metric/error) and Sentry
+          # allows duplicate names, so cross-check .type to avoid pausing a
+          # non-uptime detector that happens to share the name. Substring match
+          # on "uptime" is resilient to the exact discriminator string and is
+          # fail-safe: no match → empty id → pause skipped with a warning,
+          # never a wrong-detector mutation.
+          id=$(jq -r '[.[] | select(.name == "soleur-ai-www" and ((.type // "") | test("uptime")))] | .[0].id // empty' <<<"$detectors" 2>/dev/null)
           if [[ -z "$id" ]]; then
             echo "::warning::soleur-ai-www detector not found; skipping pause (deploy continues)."
             exit 0
@@ -253,10 +261,10 @@ jobs:
           # resume runs regardless, so an under-sized cap only weakens the
           # "confirming" log line, it never strands the monitor.
           confirmed=0
-          for _ in $(seq 1 30); do
+          for attempt in $(seq 1 30); do
             code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "https://www.soleur.ai/")
             if [[ "$code" == "301" ]]; then confirmed=1; break; fi
-            sleep 30
+            if [[ "$attempt" -lt 30 ]]; then sleep 30; fi  # no trailing sleep after the last probe
           done
           if [[ "$confirmed" -eq 1 ]]; then
             echo "www→apex 301 confirmed."
@@ -268,10 +276,19 @@ jobs:
             echo "No monitor id captured at pause; nothing to resume."
             exit 0
           fi
+          # Guard GET+jq explicitly so a resume-time blip fails loud with an
+          # actionable message (not a raw jq parse error). A stranded-paused
+          # monitor is worse than a red workflow, so exit 1 on any failure.
           full=$(curl -sS --max-time 20 \
             -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-            "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/detectors/${MONITOR_ID}/")
-          body=$(jq '.enabled = true' <<<"$full")
+            "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/detectors/${MONITOR_ID}/") || {
+              echo "::error::Failed to fetch detector ${MONITOR_ID} for resume; monitor may remain paused — re-run deploy-docs.yml or re-enable manually."
+              exit 1
+            }
+          body=$(jq '.enabled = true' <<<"$full" 2>/dev/null) || {
+            echo "::error::Failed to build resume payload for detector ${MONITOR_ID}; monitor may remain paused — re-run deploy-docs.yml or re-enable manually."
+            exit 1
+          }
           http=$(curl -sS --max-time 20 -X PUT \
             -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
             -H "Content-Type: application/json" \
