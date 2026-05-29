@@ -15,23 +15,23 @@ Two PRs, portability first. Shared audit helper underpins PR-1.
 ## PR-1 — Portability (gaps 4 + 5)
 
 ### 1. Preconditions (read-only)
-- [ ] 1.1 `GET /rest/v1/flag_flip_audit?limit=1` (service_role from `-c dev`) → 2xx reachability.
-- [ ] 1.2 Verify anon/authenticated lack EXECUTE on `audit_flag_flip` via Supabase MCP `routine_privileges` (read-only; no write-probe). Pre-existing → issue if regressed.
-- [ ] 1.3 Confirm `OPERATOR_EMAIL` absent in all configs (done: absent in dev/prd/ci/cli_ops/prd_terraform).
+- [x] 1.1 `GET /rest/v1/flag_flip_audit?limit=1` (service_role from `-c dev`) → 2xx reachability.
+- [x] 1.2 Verify anon/authenticated lack EXECUTE on `audit_flag_flip` via Supabase MCP `routine_privileges` (read-only; no write-probe). Pre-existing → issue if regressed.
+- [x] 1.3 Confirm `OPERATOR_EMAIL` absent in all configs (done: absent in dev/prd/ci/cli_ops/prd_terraform).
 
 ### 2. Shared helper
-- [ ] 2.1 Create `plugins/soleur/scripts/audit-flag-flip.sh` — `audit_flag_flip_rpc <url> <srk> <flag> <env> <target> <action> <before_json> <after_json> <actor>`; `--argjson` for bool/null; HTTP-code + id-presence check → `return 4`.
-- [ ] 2.2 Helper test `plugins/soleur/test/audit-flag-flip.test.sh` — non-2xx/empty/missing-id → 4; bool args JSON-typed; forbidden-token guard (`psql`/`DATABASE_URL_POOLER`/`5432`/`6543` absent from the 3 scripts' audit paths) + helper-call-before-mutation ordering.
+- [x] 2.1 Create `plugins/soleur/scripts/audit-flag-flip.sh` — `audit_flag_flip_rpc <url> <srk> <flag> <env> <target> <action> <before_json> <after_json> <actor>`; `--argjson` for bool/null; HTTP-code + id-presence check → `return 4`.
+- [x] 2.2 Helper test `plugins/soleur/test/audit-flag-flip.test.sh` — non-2xx/empty/missing-id → 4; bool args JSON-typed; forbidden-token guard (`psql`/`DATABASE_URL_POOLER`/`5432`/`6543` absent from the 3 scripts' audit paths) + helper-call-before-mutation ordering.
 
 ### 3. Convert the three scripts (source helper + 7-arg map)
-- [ ] 3.1 `create.sh:84-88` — source helper; replace audit block + DB_URL fetch; args (`$NAME`,`dev`,`global`,`create`,null,null,`$ACTOR`); resolve dev URL+key.
-- [ ] 3.2 `flip.sh:235-242` — replace `audit_append()` body + DB_URL fetch; role args + org args per map; resolve dev URL+key.
-- [ ] 3.3 `set-role.sh:101-109` — source helper; replace audit block + DB_URL fetch; add `AUDIT_URL`/`AUDIT_SRK` from `-c dev` (distinct from prd `SUPA_URL`/`SUPA_KEY`); args (`user-role`,`prd`,`user:$USER_ID`,`$AUDIT_ACTION`,null,null,`$ACTOR`).
-- [ ] 3.4 `set-role.sh:107` tautology — out of scope; fix only if promote/demote semantics unambiguous at /work, else file follow-up.
+- [x] 3.1 `create.sh:84-88` — source helper; replace audit block + DB_URL fetch; args (`$NAME`,`dev`,`global`,`create`,null,null,`$ACTOR`); resolve dev URL+key.
+- [x] 3.2 `flip.sh:235-242` — replace `audit_append()` body + DB_URL fetch; role args + org args per map; resolve dev URL+key.
+- [x] 3.3 `set-role.sh:101-109` — source helper; replace audit block + DB_URL fetch; add `AUDIT_URL`/`AUDIT_SRK` from `-c dev` (distinct from prd `SUPA_URL`/`SUPA_KEY`); args (`user-role`,`prd`,`user:$USER_ID`,`$AUDIT_ACTION`,null,null,`$ACTOR`).
+- [x] 3.4 `set-role.sh:107` tautology — out of scope; fix only if promote/demote semantics unambiguous at /work, else file follow-up.
 
 ### 4. Seed + verify (post-merge automatable)
-- [ ] 4.1 Seed `OPERATOR_EMAIL` in `cli_ops` (stdin form).
-- [ ] 4.2 Real psql-less `flip.sh <flag> dev off` writes an audit row (verify via discoverability `GET`).
+- [x] 4.1 Seed `OPERATOR_EMAIL` in `cli_ops` (stdin form).
+- [x] 4.2 Real psql-less `flip.sh <flag> dev off` writes an audit row (verify via discoverability `GET`).
 
 ### 5. PR-1 close
 - [ ] 5.1 ACs green; PR body `Ref` (not `Closes`) #4581; gate on `user-impact-reviewer`.

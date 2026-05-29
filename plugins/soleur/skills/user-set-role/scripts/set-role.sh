@@ -6,6 +6,10 @@
 
 set -euo pipefail
 
+# Shared WORM audit-append helper (PostgREST RPC; no DB-CLI binary). See #4581 PR-1.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../../../scripts/audit-flag-flip.sh"
+
 readonly FLAGSMITH_API="https://api.flagsmith.com/api/v1"
 readonly FLAGSMITH_ENV_DEV_ID=90722
 readonly FLAGSMITH_ENV_PRD_ID=90721
@@ -101,12 +105,16 @@ fi
 ACTOR=$(doppler secrets get OPERATOR_EMAIL -p soleur -c cli_ops --plain 2>/dev/null | tr '[:upper:]' '[:lower:]')
 [[ -z "$ACTOR" ]] && { echo "FATAL: OPERATOR_EMAIL not in Doppler soleur/cli_ops" >&2; exit 4; }
 
-DB_URL=$(doppler secrets get DATABASE_URL_POOLER -p soleur -c dev --plain 2>/dev/null)
-[[ -z "$DB_URL" ]] && { echo "FATAL: DATABASE_URL_POOLER not in Doppler soleur/dev" >&2; exit 4; }
+# Audit DB target = soleur/dev (preserves the historical dev-DB audit destination);
+# distinct from the prd SUPA_URL/SUPA_KEY used for the users.role PATCH above.
+AUDIT_URL=$(doppler secrets get SUPABASE_URL -p soleur -c dev --plain 2>/dev/null)
+AUDIT_SRK=$(doppler secrets get SUPABASE_SERVICE_ROLE_KEY -p soleur -c dev --plain 2>/dev/null)
+[[ -z "$AUDIT_URL" || -z "$AUDIT_SRK" ]] && { echo "FATAL: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not in Doppler soleur/dev" >&2; exit 4; }
 
+# NOTE(#4581): AUDIT_ACTION tautology (both branches "on") is a pre-existing bug,
+# out of scope for the transport swap; see follow-up issue. Role assignment records "on".
 AUDIT_ACTION=$([[ "$CUR_ROLE" == "$TARGET" ]] && echo "on" || echo "on")
-AUDIT_ID=$(psql "${DB_URL/6543/5432}" -tAc "SELECT public.audit_flag_flip('user-role', 'prd', 'user:$USER_ID', '$AUDIT_ACTION', NULL, NULL, '$ACTOR');" 2>&1) \
-  || { echo "FATAL: audit append failed: $AUDIT_ID" >&2; exit 4; }
+AUDIT_ID=$(audit_flag_flip_rpc "$AUDIT_URL" "$AUDIT_SRK" "user-role" "prd" "user:$USER_ID" "$AUDIT_ACTION" null null "$ACTOR") || exit 4
 echo "  audit_id=$AUDIT_ID"
 
 # --- update Flagsmith identity trait (both envs) --------------------------

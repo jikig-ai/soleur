@@ -15,6 +15,10 @@
 
 set -euo pipefail
 
+# Shared WORM audit-append helper (PostgREST RPC; no DB-CLI binary). See #4581 PR-1.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../../../scripts/audit-flag-flip.sh"
+
 # --- constants (project-level, captured 2026-05-22) -------------------------
 # Note: Flagsmith Admin API is inconsistent — some endpoints want the numeric
 # env_id (e.g. /environments/{int_id}/features/{int_id}/versions/), others
@@ -231,15 +235,15 @@ gate_or_confirm() {
 
 audit_append() {
   local audit_target="$1"
-  local actor db_url before_bool after_bool audit_id
+  local actor audit_url audit_srk before_bool after_bool audit_id
   actor=$(doppler secrets get OPERATOR_EMAIL -p soleur -c cli_ops --plain 2>/dev/null | tr '[:upper:]' '[:lower:]')
   [[ -z "$actor" ]] && { echo "FATAL: OPERATOR_EMAIL not in Doppler soleur/cli_ops" >&2; exit 4; }
-  db_url=$(doppler secrets get DATABASE_URL_POOLER -p soleur -c dev --plain 2>/dev/null)
-  [[ -z "$db_url" ]] && { echo "FATAL: DATABASE_URL_POOLER not in Doppler soleur/dev" >&2; exit 4; }
+  audit_url=$(doppler secrets get SUPABASE_URL -p soleur -c dev --plain 2>/dev/null)
+  audit_srk=$(doppler secrets get SUPABASE_SERVICE_ROLE_KEY -p soleur -c dev --plain 2>/dev/null)
+  [[ -z "$audit_url" || -z "$audit_srk" ]] && { echo "FATAL: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not in Doppler soleur/dev" >&2; exit 4; }
   before_bool=$([[ "$VALUE" == "on" ]] && echo "false" || echo "true")
   after_bool=$([[ "$VALUE" == "on" ]] && echo "true" || echo "false")
-  audit_id=$(psql "${db_url/6543/5432}" -tAc "SELECT public.audit_flag_flip('$FLAG', '$ROLE', '$audit_target', '$VALUE', $before_bool, $after_bool, '$actor');" 2>&1) \
-    || { echo "FATAL: audit append failed: $audit_id" >&2; exit 4; }
+  audit_id=$(audit_flag_flip_rpc "$audit_url" "$audit_srk" "$FLAG" "$ROLE" "$audit_target" "$VALUE" "$before_bool" "$after_bool" "$actor") || exit 4
   echo "  audit_id=$audit_id"
 }
 
