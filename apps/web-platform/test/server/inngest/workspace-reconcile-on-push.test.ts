@@ -82,8 +82,10 @@ vi.mock("@/server/session-sync", async (importOriginal) => {
 });
 
 const reportSilentFallbackSpy = vi.fn();
+const warnSilentFallbackSpy = vi.fn();
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
+  warnSilentFallback: warnSilentFallbackSpy,
   hashUserId: (s: string) => `hash-${s}`,
 }));
 
@@ -152,6 +154,7 @@ beforeEach(() => {
   syncWorkspaceSpy.mockReset();
   appendKbSyncRowSpy.mockClear();
   reportSilentFallbackSpy.mockReset();
+  warnSilentFallbackSpy.mockReset();
   vi.resetModules();
   process.env.INNGEST_SIGNING_KEY = "signkey-test-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   process.env.INNGEST_EVENT_KEY = "evtkey-test-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -251,24 +254,32 @@ describe("reconcile — schema gate (v=1 drains)", () => {
     expect(result.ok).toBe(false);
     expect(result.reason).toMatch(/schema_v=1/);
     expect(syncWorkspaceSpy).not.toHaveBeenCalled();
+    // Expected drain of an in-flight v=1 envelope -> observable at warning
+    // level (previously returned silently with no Sentry mirror).
+    expect(warnSilentFallbackSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "deadletter-schema-version" }),
+    );
   });
 });
 
 describe("reconcile — no workspace match", () => {
-  it("skips + Sentry-mirrors when no workspace is connected to the repo", async () => {
+  it("skips at WARNING level (not error) when no workspace is connected to the repo", async () => {
     WORKSPACE_ROWS = [];
     const handler = await importHandler();
     const result = await handler({ event: makeEvent(), step: makeStep(), logger });
 
     expect(result).toEqual({ ok: false, reason: "no-workspace-match" });
     expect(syncWorkspaceSpy).not.toHaveBeenCalled();
-    expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
+    // Expected, benign outcome -> warning-level mirror, NOT an error-level event.
+    expect(warnSilentFallbackSpy).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         feature: "workspace-reconcile-push",
         op: "skip-no-workspace-match",
       }),
     );
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
   });
 });
 
