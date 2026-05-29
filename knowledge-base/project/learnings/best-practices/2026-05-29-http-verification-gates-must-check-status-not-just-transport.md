@@ -52,6 +52,23 @@ trait (`__flag-verify__`) that matches no role segment, so the per-org assertion
 the **per-org segment gate** specifically, decoupled from any role rollout. General lesson:
 a verification identity/fixture should activate exactly the gate under test and nothing else.
 
+## Follow-on (caught at the live cutover): tolerate propagation SYMMETRICALLY
+
+The first fix added an HTTP-status gate and an `eval_until` retry on the **target**
+assertion (poll until enabled), but left the **control-negative** as a single-shot read.
+At the real byok@jikigai cutover this false-positived: immediately after creating the
+segment + override, the eventually-consistent edge environment document briefly reported
+the *non-member* control org as enabled for one refresh window, and the single-shot
+control read aborted a correct enable (exit 3 "control leak"). Direct re-eval a moment
+later, and an idempotent re-run, both showed the correct state (target ON, control OFF).
+
+Lesson: when a verification gate reads an eventually-consistent source, **every** leg of
+the assertion must tolerate propagation the same way — poll until the value *settles*, not
+a single read. Fix: control now `eval_until … false` (polls until it settles to disabled;
+a genuine leak never settles → budget exhausts → fail loud; an HTTP error still returns
+non-zero). A one-sided retry (happy path tolerant, negative path single-shot) is itself a
+flake/false-positive vector.
+
 ## Why it matters
 
 The fail-open turned the single automated barrier between an operator command and a
