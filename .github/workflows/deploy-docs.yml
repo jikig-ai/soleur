@@ -130,7 +130,7 @@ jobs:
           npx http-server _site -p 8888 -a 127.0.0.1 -c-1 -s &
           SERVER_PID=$!
           UP=0
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if curl -sf -o /dev/null http://127.0.0.1:8888/; then UP=1; break; fi
             sleep 0.5
           done
@@ -159,6 +159,69 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      # ─── Option A (#4596): suppress soleur_www deploy-window false page ───
+      # A Pages rebuild re-propagates the apex-canonical redirect; during that
+      # window https://www.soleur.ai/ transiently serves its own 200 instead of
+      # the asserted 301, false-paging the soleur_www uptime monitor (observed
+      # 2026-05-29 ~12:30 CEST, #4573/#4578). Pausing the monitor for the publish
+      # window makes the deploy invisible to it WITHOUT lengthening its fuse, so
+      # real www→apex regressions still page at threshold=3 (parity with apex;
+      # supersedes the conservative downtime_threshold=5 from #4595). The resume
+      # step below runs `if: always()` so a failed deploy still re-enables it.
+      - name: Pause soleur_www uptime monitor (suppress deploy-window false page)
+        id: pause_www_monitor
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+          SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+        run: |
+          # Best-effort: a transient Sentry API blip must NEVER block a docs
+          # deploy. Every failure path warns + exits 0; only a successful pause
+          # records monitor_id so the resume step knows to re-enable.
+          set -uo pipefail
+          which jq >/dev/null 2>&1 || { apt-get update && apt-get install -y jq; }
+          # Uptime monitors are Sentry "detectors", NOT Crons monitors — they are
+          # served by /detectors/, not /organizations/{org}/monitors/ (#4591).
+          detectors=$(curl -sS --max-time 20 \
+            -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+            "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/detectors/") || {
+              echo "::warning::Failed to list Sentry detectors; skipping pause (deploy continues)."
+              exit 0
+            }
+          # Select by name (Sentry allows dup names — pick the first match).
+          id=$(jq -r '[.[] | select(.name == "soleur-ai-www")] | .[0].id // empty' <<<"$detectors" 2>/dev/null)
+          if [[ -z "$id" ]]; then
+            echo "::warning::soleur-ai-www detector not found; skipping pause (deploy continues)."
+            exit 0
+          fi
+          # Full-body GET-then-PUT: updateProjectMonitor requires the full
+          # ProjectMonitorRequest; a bare {"enabled":false} PUT risks a 400.
+          full=$(curl -sS --max-time 20 \
+            -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+            "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/detectors/${id}/") || {
+              echo "::warning::Failed to fetch detector ${id}; skipping pause (deploy continues)."
+              exit 0
+            }
+          body=$(jq '.enabled = false' <<<"$full" 2>/dev/null) || {
+            echo "::warning::Failed to build pause payload; skipping pause (deploy continues)."
+            exit 0
+          }
+          status=$(curl -sS --max-time 20 -X PUT \
+            -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$body" \
+            "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/detectors/${id}/" \
+            -o /dev/null -w '%{http_code}')
+          echo "pause PUT status: ${status}"
+          # Record id regardless of pause-PUT outcome so resume always re-enables
+          # (resume PUT enabled=true is idempotent if the pause never took effect).
+          echo "monitor_id=${id}" >> "$GITHUB_OUTPUT"
+          if [[ "$status" != "200" ]]; then
+            echo "::warning::Pause PUT returned ${status} (expected 200); monitor may not be paused. Deploy continues; resume still runs."
+          else
+            echo "Paused soleur-ai-www detector ${id}."
+          fi
+
       - name: Setup Pages
         uses: actions/configure-pages@1f0c5cde4bc74cd7e1254d0cb4de8d49e9068c7d # v4.0.0
 
@@ -170,3 +233,54 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
+
+      # Resume the soleur_www monitor paused above. `if: always()` so a failed
+      # deploy/probe still re-enables it (never strand the monitor paused). The
+      # probe is best-effort: wait for the apex-canonical redirect to re-propagate
+      # (~15-min window observed 2026-05-29), then resume regardless of outcome.
+      - name: Probe www→apex 301 then resume soleur_www monitor
+        if: always()
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+          SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          MONITOR_ID: ${{ steps.pause_www_monitor.outputs.monitor_id }}
+        run: |
+          set -uo pipefail
+          which jq >/dev/null 2>&1 || { apt-get update && apt-get install -y jq; }
+          # Propagation grace + confirming probe (best-effort; never block resume).
+          # Cap = 30 × 30s ≈ 15 min, matching the observed deploy-window flap; the
+          # resume runs regardless, so an under-sized cap only weakens the
+          # "confirming" log line, it never strands the monitor.
+          confirmed=0
+          for _ in $(seq 1 30); do
+            code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "https://www.soleur.ai/")
+            if [[ "$code" == "301" ]]; then confirmed=1; break; fi
+            sleep 30
+          done
+          if [[ "$confirmed" -eq 1 ]]; then
+            echo "www→apex 301 confirmed."
+          else
+            echo "::warning::www did not return 301 within probe cap; resuming monitor anyway."
+          fi
+          # Resume only if the pause step captured an id (it skips on not-found).
+          if [[ -z "${MONITOR_ID}" ]]; then
+            echo "No monitor id captured at pause; nothing to resume."
+            exit 0
+          fi
+          full=$(curl -sS --max-time 20 \
+            -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+            "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/detectors/${MONITOR_ID}/")
+          body=$(jq '.enabled = true' <<<"$full")
+          http=$(curl -sS --max-time 20 -X PUT \
+            -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$body" \
+            "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/detectors/${MONITOR_ID}/" \
+            -o /dev/null -w '%{http_code}')
+          echo "resume PUT status: ${http}"
+          if [[ "$http" != "200" ]]; then
+            echo "::error::Failed to resume soleur-ai-www monitor (HTTP ${http}). It may remain paused until manually re-enabled or a deploy-docs.yml re-run (the next apply-sentry-infra.yml run is NOT a guaranteed self-heal — enabled:null null-handling is unverified)."
+            exit 1
+          fi
+          echo "Resumed soleur-ai-www detector ${MONITOR_ID}."
