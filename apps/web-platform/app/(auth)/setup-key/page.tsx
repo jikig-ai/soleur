@@ -1,12 +1,27 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { safeReturnTo } from "@/lib/safe-return-to";
 
 type Status = "idle" | "checking" | "valid" | "invalid" | "error";
 
 export default function SetupKeyPage() {
+  return (
+    <Suspense>
+      <SetupKeyForm />
+    </Suspense>
+  );
+}
+
+function SetupKeyForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // Validated invite return target (e.g. /invite/<token>) threaded from
+  // accept-terms for a keyless invitee. connect-repo is the terminal funnel
+  // hop and consumes `return_to`, so bridge the auth-funnel `redirectTo` param
+  // to connect-repo's `return_to` on the next push. null when absent/rejected.
+  const redirectTo = safeReturnTo(searchParams.get("redirectTo"));
   const [key, setKey] = useState("");
   const [status, setStatus] = useState<Status>("idle");
   const [errorMsg, setErrorMsg] = useState("");
@@ -34,8 +49,18 @@ export default function SetupKeyPage() {
 
       if (body.valid) {
         setStatus("valid");
-        // Brief delay so the user sees the success state
-        setTimeout(() => router.push("/connect-repo"), 600);
+        // Brief delay so the user sees the success state. Carry the invite
+        // target forward as connect-repo's `return_to` so a new invitee lands
+        // back on /invite/<token> after the final onboarding hop.
+        setTimeout(
+          () =>
+            router.push(
+              redirectTo
+                ? `/connect-repo?return_to=${encodeURIComponent(redirectTo)}`
+                : "/connect-repo",
+            ),
+          600,
+        );
       } else {
         setStatus("invalid");
         setErrorMsg("Invalid API key. Please check and try again.");
