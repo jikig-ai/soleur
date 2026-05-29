@@ -13,6 +13,7 @@
  *
  * Default paths: `git diff --name-only --cached --diff-filter=AMR` filtered to
  * `apps/web-platform/(app|components)/**\*.(tsx|jsx|css)` AND
+ * `apps/web-platform/server/**\*.(ts|tsx)` AND
  * `plugins/soleur/docs/**\*.(njk|css)`.
  *
  * Output:
@@ -22,8 +23,10 @@
  *     `route: ""`.
  *
  * Exit codes:
- *   0 — scan completed (regardless of finding count; non-blocking by design).
- *   1 — bad CLI / parse error / IO error.
+ *   0 — scan completed with no blocking findings (anti-slop findings are advisory).
+ *   1 — bad CLI / parse error / IO error, OR ≥ 1 blocking finding (a finding whose
+ *       originating rule is `category === "brand" && severity === "high"`).
+ *   See `computeExitCode`. Non-brand and brand-below-high findings remain advisory.
  *
  * Per-file rule disable: `<!-- anti-slop:disable RULE_ID reason="..." -->`.
  */
@@ -229,6 +232,18 @@ function unwrapBackticks(s: string): string {
   return s;
 }
 
+/**
+ * Canonical scanner path regex SOURCE (single source of truth).
+ *
+ * Both `defaultPaths()` (JS RegExp) and the `review/SKILL.md` "Anti-slop Scanner
+ * Hook" collector (shell ERE) must contain the same alternation body (a parity
+ * test asserts it). The trailing `$` anchors the path end. Includes the
+ * `server/.*\.(ts|tsx)$` alternation so server-side email/HTML templates are in
+ * scope alongside the Next.js app/components and the Eleventy docs site.
+ */
+const DEFAULT_PATH_RE_SOURCE =
+  "^(apps/web-platform/(app|components)/.*\\.(tsx|jsx|css)|apps/web-platform/server/.*\\.(ts|tsx)|plugins/soleur/docs/.*\\.(njk|css))$";
+
 function defaultPaths(): string[] {
   try {
     const p = Bun.spawnSync(
@@ -241,11 +256,8 @@ function defaultPaths(): string[] {
       .split("\n")
       .map((p) => p.trim())
       .filter(Boolean);
-    return all.filter((p) =>
-      /^(apps\/web-platform\/(app|components)\/.*\.(tsx|jsx|css)|plugins\/soleur\/docs\/.*\.(njk|css))$/.test(
-        p,
-      ),
-    );
+    const re = new RegExp(DEFAULT_PATH_RE_SOURCE);
+    return all.filter((p) => re.test(p));
   } catch {
     return [];
   }
@@ -279,16 +291,25 @@ function expandPaths(inputs: string[]): string[] {
     if (ls.isSymbolicLink()) continue;
     const s = statSync(abs);
     if (s.isFile()) {
-      if (/\.(tsx|jsx|css|njk)$/.test(abs)) out.push(abs);
+      // `.ts` included so server-side email/HTML templates
+      // (`apps/web-platform/server/*.ts`) are scannable when passed explicitly.
+      if (/\.(ts|tsx|jsx|css|njk)$/.test(abs)) out.push(abs);
     } else if (s.isDirectory()) {
       out.push(
         ...listFilesRecursive(abs).filter((f) =>
-          /\.(tsx|jsx|css|njk)$/.test(f),
+          /\.(ts|tsx|jsx|css|njk)$/.test(f),
         ),
       );
     }
   }
-  return out;
+  // Scope post-filter: the bare extension test above is BROADER than
+  // DEFAULT_PATH_RE_SOURCE (which scopes `.ts` to apps/web-platform/server/).
+  // Without this, `--paths apps/web-platform/app/api/x/route.ts` would be
+  // scanned and could block on raw hex outside the declared scope. Post-filter
+  // the repo-relative paths through the canonical regex so expandPaths and
+  // defaultPaths agree by construction.
+  const scopeRe = new RegExp(DEFAULT_PATH_RE_SOURCE);
+  return out.filter((abs) => scopeRe.test(relative(REPO_ROOT, abs)));
 }
 
 function listFilesRecursive(dir: string): string[] {
@@ -327,6 +348,16 @@ function disabledRulesInFile(content: string): Set<string> {
   return out;
 }
 
+/**
+ * Per-line scan cap. Some rules (notably BRAND-WHITE-ON-GOLD, whose `[^"\n]*`
+ * spans can backtrack) are O(n²) on a single very long line, and minified
+ * `.css` (one line, hundreds of KB) is in scope. Testing against a bounded
+ * prefix bounds the worst-case work for ALL rules. A token that opens past
+ * 2000 chars on one physical line is not a realistic brand/slop signal we need
+ * to catch, so the truncation is safe.
+ */
+const MAX_SCAN_LINE = 2000;
+
 function scanFile(absPath: string, rules: Rule[]): Finding[] {
   let content: string;
   try {
@@ -348,7 +379,12 @@ function scanFile(absPath: string, rules: Rule[]): Finding[] {
 
     const hitLines: number[] = [];
     for (let i = 0; i < lines.length; i++) {
-      if (rule.pattern.test(lines[i])) hitLines.push(i + 1);
+      // ReDoS guard: bound each line to MAX_SCAN_LINE before matching.
+      const lineToTest =
+        lines[i].length > MAX_SCAN_LINE
+          ? lines[i].slice(0, MAX_SCAN_LINE)
+          : lines[i];
+      if (rule.pattern.test(lineToTest)) hitLines.push(i + 1);
     }
     if (hitLines.length === 0) continue;
     if (
@@ -384,6 +420,37 @@ function formatHuman(findings: Finding[]): string {
     );
   }
   return lines.join("");
+}
+
+/**
+ * Decide the process exit code from the findings and the rule set.
+ *
+ * Blocking is keyed on the originating **Rule**, not the emitted Finding (which
+ * always serializes `category: "anti-slop"` for `finding.schema.json`
+ * conformance). The rule id is recovered from the finding's `selector`
+ * (`"<file>#<RULE-ID>"`). Returns 1 iff any finding maps to a rule with
+ * `category === "brand" && severity === "high"`; else 0 (anti-slop and
+ * brand-below-high findings are advisory).
+ */
+function computeExitCode(findings: Finding[], rules: Rule[]): number {
+  const byId = new Map<string, Rule>();
+  for (const r of rules) byId.set(r.id, r);
+  for (const f of findings) {
+    // The selector is `${relPath}#${rule.id}`, so the rule id is the LAST
+    // `#`-segment. Splitting and taking `[1]` mis-captures a path fragment when
+    // a scanned file path itself contains `#`, the byId lookup misses, and the
+    // gate fails OPEN (returns 0) on a real brand/high finding. Parse from the
+    // last `#` so a `#`-bearing path can never defeat the blocking gate. If the
+    // selector has no `#`, lastIndexOf returns -1 → slice(0) yields the whole
+    // string → byId miss → non-blocking, which is acceptable for a malformed
+    // selector.
+    const ruleId = f.selector.slice(f.selector.lastIndexOf("#") + 1);
+    const rule = ruleId ? byId.get(ruleId) : undefined;
+    if (rule && rule.category === "brand" && rule.severity === "high") {
+      return 1;
+    }
+  }
+  return 0;
 }
 
 function main() {
@@ -435,7 +502,7 @@ function main() {
   } else {
     process.stdout.write(formatHuman(findings));
   }
-  process.exit(0);
+  process.exit(computeExitCode(findings, rules));
 }
 
 if (import.meta.main) {
@@ -448,7 +515,9 @@ export {
   disabledRulesInFile,
   expandPaths,
   defaultPaths,
+  computeExitCode,
   unwrapBackticks,
+  DEFAULT_PATH_RE_SOURCE,
   REPO_ROOT,
   RULES_FILE,
 };

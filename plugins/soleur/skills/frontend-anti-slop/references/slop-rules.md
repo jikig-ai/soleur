@@ -27,6 +27,15 @@ Per-file disable comment: `<!-- anti-slop:disable RULE_ID reason="..." -->` (the
 | OFF-SCALE-SPACING | 1 | visual | 26 | low | `\b(?:p\|m\|gap)-\[(?:[1-3]\|[5-9]\|1[0-9]\|2[1-9]\|3[1-9])px\]` | Arbitrary spacing value not on the 4 px scale. | Use the named scale (`--space-3xs` … `--space-5xl`, multiples of 4 px). |
 | PROSE-WIDTH-OUT-OF-RANGE | 1 | comprehension | 27 | low | `\bmax-w-\[(?:[0-9]\|[1-3][0-9]\|4[0-4]\|7[6-9]\|[89][0-9]\|1[0-9]{2})ch\]` | Prose `max-width` outside the 45–75 ch readable range. | Measure must read: under 45 ch is choppy, over 75 ch loses the eye. |
 | TWO-ICON-LIBS | 1 | visual | 32 | medium | `from\s+["'](?:lucide-react\|react-icons[^"']*\|@heroicons/react[^"']*)["']` | Multiple icon libraries imported in the same file. | Pick one library. Two icon faces on the page is the icon-set tell. |
+| BRAND-RAW-HEX | 1 | brand | 58 | high | `\[#(?:[0-9a-fA-F]{3}\|[0-9a-fA-F]{6})\]\|(?:background\|color\|border\|fill\|stroke)[A-Za-z]*\s*[:=]\s*["'{ ]*#[0-9a-fA-F]{3,8}` | raw hex in component/template — use a wired design token, not a literal color | Reference a wired design token (Tailwind theme key or `var(--token)`), never a literal `[#hex]` arbitrary value or inline `prop: #hex`. |
+| BRAND-WHITE-ON-GOLD | 1 | brand | 58 | high | `(?:gold\|gradient\|accent\|#[CcDdBb][0-9A-Fa-f]{5})[^"\n]*(?:color\s*:\s*#(?:fff\|ffffff)\b\|text-white\b)\|(?:color\s*:\s*#(?:fff\|ffffff)\b\|text-white\b)[^"\n]*(?:gold\|gradient\|accent)` | white-on-gold fails AA — use forge-ink text-on-accent | Put forge-ink (dark) text on the gold/accent surface; white-on-gold fails WCAG AA contrast. |
+| BRAND-NONZERO-CORNER | 1 | brand | 58 | medium | `border-radius\s*:\s*(?:0?\.[0-9]\|[1-9])\|\brounded(?:-(?:sm\|md\|lg\|xl\|2xl\|3xl\|full\|t\|b\|l\|r))?\b(?![\w-]*-none)` | non-zero corner — brand mandates 0px sharp corners | Use sharp `0px` corners (`rounded-none` / `border-radius: 0`); the brand identity mandates square corners. |
+
+### Brand rules (blocking)
+
+The `brand`-category rules are the only **blocking** gates in this scanner. A finding whose originating rule is `category: brand` **and** `severity: high` (BRAND-RAW-HEX, BRAND-WHITE-ON-GOLD) makes the scanner exit non-zero — a required-fix gate, not advisory triage. All non-brand `anti-slop` findings, and brand findings below `high` (BRAND-NONZERO-CORNER, `medium`), stay advisory (exit 0). The emitted Finding still serializes `category: "anti-slop"` (the `brand` discriminator lives only on the Rule, keeping `--json` output conformant to `finding.schema.json`).
+
+**Project-agnostic vs. Soleur-specific.** BRAND-RAW-HEX is fully project-agnostic — "use a wired design token, not a literal color" holds for any project. Soleur users adopting this scanner should keep BRAND-RAW-HEX as-is, but re-base BRAND-WHITE-ON-GOLD and BRAND-NONZERO-CORNER on *their own* `brand-guide.md` palette and wired token file (e.g. swap the gold/accent contrast rule and the 0px-corner mandate for whatever their brand guide specifies) rather than hardcoding the Soleur gold identity.
 
 ## Documented Tier 2 rules (deferred to v1.5 — judgment-required)
 
