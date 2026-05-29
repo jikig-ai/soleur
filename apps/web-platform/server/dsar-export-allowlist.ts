@@ -144,6 +144,16 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
   // erasure separately (Art. 17 cascade in account-delete.ts step 5.11).
   byok_delegation_acceptances: { ownerField: "user_id", article: "15+20" },
 
+  // Delegation consent-withdrawal ledger (migration 084, #4625). Art.
+  // 15+20: the grantee's own Art. 7(3) consent-withdrawal record — they
+  // created it by withdrawing. Single ownerField (only the grantee/user_id
+  // is a data subject on this table). The WORM trigger +
+  // anonymise_byok_delegation_withdrawals RPC handle erasure separately
+  // (Art. 17 cascade in account-delete.ts step 5.12). user_id NULLABLE so
+  // the anonymise-to-NULL path leaves no collision under the no-UNIQUE
+  // design.
+  byok_delegation_withdrawals: { ownerField: "user_id", article: "15+20" },
+
   // GitHub App installation-token use audit (migration 052, PR-H #3244).
   // Art. 15: controller-collected, not user-provided. RLS owner-select
   // already exposes these rows to the founder via the dashboard; the
