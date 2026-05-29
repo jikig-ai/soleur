@@ -37,8 +37,14 @@ function SignupForm() {
   const [loading, setLoading] = useState(false);
   const [tcAccepted, setTcAccepted] = useState(false);
   const [cooldownSeconds, setCooldownSeconds] = useState(0);
+  // The email the active cooldown was started for — the cooldown is per-email
+  // (see login-form.tsx for the rationale; closes the "Try a different email"
+  // reset bypass).
+  const [cooldownEmail, setCooldownEmail] = useState("");
   const otpRef = useRef<HTMLInputElement>(null);
   const cooldownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const cooldownActive = cooldownSeconds > 0 && email === cooldownEmail;
 
   function clearCooldown() {
     if (cooldownTimerRef.current) {
@@ -52,6 +58,7 @@ function SignupForm() {
   // that returns "Too many sign-in attempts").
   function startCooldown() {
     clearCooldown();
+    setCooldownEmail(email);
     setCooldownSeconds(Math.ceil(OTP_RESEND_COOLDOWN_MS / 1000));
     cooldownTimerRef.current = setInterval(() => {
       setCooldownSeconds((s) => {
@@ -62,11 +69,6 @@ function SignupForm() {
         return s - 1;
       });
     }, 1000);
-  }
-
-  function resetCooldown() {
-    clearCooldown();
-    setCooldownSeconds(0);
   }
 
   useEffect(() => {
@@ -82,6 +84,8 @@ function SignupForm() {
 
   /** Send (or resend) an OTP for the current email. Returns true on success. */
   async function sendOtp(): Promise<boolean> {
+    // Source-level guard: refuse a same-email re-send inside the cooldown.
+    if (cooldownActive) return false;
     setLoading(true);
     setError("");
 
@@ -147,12 +151,19 @@ function SignupForm() {
       });
       setError(mapSupabaseError(error.message));
     } else {
-      // Honor a validated redirectTo (e.g. /invite/<token>) so an invited user
-      // lands on the invite instead of being bounced into the post-signup
-      // funnel and forced to re-request a code. Middleware (middleware.ts)
-      // still interposes /accept-terms for an unaccepted-T&C user, so this
-      // cannot bypass the T&C gate.
-      router.push(redirectTo ?? "/accept-terms");
+      // A freshly-created account has NOT recorded T&C acceptance server-side
+      // yet, and /invite/<token> is a PUBLIC_PATH (lib/routes.ts) so middleware
+      // does NOT interpose /accept-terms there. Routing straight to /invite
+      // would let the user accept an invitation before T&C is recorded. So we
+      // always route through /accept-terms (which records T&C) and thread the
+      // validated redirectTo through it — accept-terms honors it as the
+      // terminal hop once T&C + key are satisfied. This preserves the invite
+      // target without bypassing the T&C gate.
+      router.push(
+        redirectTo
+          ? `/accept-terms?redirectTo=${encodeURIComponent(redirectTo)}`
+          : "/accept-terms",
+      );
     }
   }
 
@@ -196,10 +207,10 @@ function SignupForm() {
           <button
             type="button"
             onClick={handleResendOtp}
-            disabled={loading || cooldownSeconds > 0}
+            disabled={loading || cooldownActive}
             className="block w-full text-center text-sm text-soleur-text-muted hover:text-soleur-text-secondary disabled:opacity-50 disabled:hover:text-soleur-text-muted"
           >
-            {cooldownSeconds > 0
+            {cooldownActive
               ? `You can request a new code in ${cooldownSeconds}s`
               : "Resend code"}
           </button>
@@ -209,7 +220,6 @@ function SignupForm() {
               setOtpSent(false);
               setOtp("");
               setError("");
-              resetCooldown();
             }}
             className="block w-full text-center text-sm text-soleur-text-muted hover:text-soleur-text-secondary"
           >
@@ -244,11 +254,7 @@ function SignupForm() {
             type="email"
             required
             value={email}
-            onChange={(e) => {
-              setEmail(e.target.value);
-              // A corrected/different email should be sendable immediately.
-              resetCooldown();
-            }}
+            onChange={(e) => setEmail(e.target.value)}
             placeholder="you@example.com"
             className="w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3 text-sm placeholder:text-soleur-text-muted focus:border-soleur-border-emphasized focus:outline-none"
           />
@@ -287,10 +293,14 @@ function SignupForm() {
 
           <button
             type="submit"
-            disabled={loading || !tcAccepted}
+            disabled={loading || !tcAccepted || cooldownActive}
             className="w-full rounded-lg bg-soleur-accent-gold-fill px-4 py-3 text-sm font-medium text-soleur-text-on-accent hover:opacity-90 disabled:opacity-50"
           >
-            {loading ? "Sending..." : "Send verification code"}
+            {cooldownActive
+              ? `You can request a new code in ${cooldownSeconds}s`
+              : loading
+                ? "Sending..."
+                : "Send verification code"}
           </button>
         </form>
 

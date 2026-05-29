@@ -27,7 +27,15 @@ export default function AcceptTermsPage() {
     setError("");
 
     try {
-      const res = await fetch("/api/accept-terms", { method: "POST" });
+      // Forward a post-acceptance destination (e.g. /invite/<token> threaded
+      // from signup) so an invited user lands on the invite once T&C is
+      // recorded. The server re-validates it via safeReturnTo.
+      const redirectTo = searchParams?.get("redirectTo");
+      const res = await fetch("/api/accept-terms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(redirectTo ? { redirectTo } : {}),
+      });
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));

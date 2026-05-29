@@ -169,4 +169,36 @@ describe("LoginForm — resend cooldown (AC4, AC6)", () => {
     });
     expect(signInWithOtpMock).toHaveBeenCalledTimes(1);
   });
+
+  it("still blocks the SAME email after 'Try a different email' (reset-bypass closed)", async () => {
+    render(<LoginForm />);
+    await sendCodeFake();
+
+    // Go back to the email screen, keep the SAME email, try to re-send.
+    fireEvent.click(screen.getByRole("button", { name: /try a different email/i }));
+    const sendBtn = screen.getByRole("button", { name: /request a new code|send sign-in code/i });
+    expect(sendBtn).toBeDisabled();
+    fireEvent.click(sendBtn);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(signInWithOtpMock).toHaveBeenCalledTimes(1); // no second send
+  });
+
+  it("allows an immediate send to a DIFFERENT email during the cooldown", async () => {
+    render(<LoginForm />);
+    await sendCodeFake();
+
+    fireEvent.click(screen.getByRole("button", { name: /try a different email/i }));
+    fireEvent.change(screen.getByPlaceholderText(/you@example.com/i), {
+      target: { value: "different@example.com" },
+    });
+    const sendBtn = screen.getByRole("button", { name: /send sign-in code/i });
+    expect(sendBtn).toBeEnabled();
+    fireEvent.click(sendBtn);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
+    });
+    expect(signInWithOtpMock).toHaveBeenCalledTimes(2); // different email → allowed
+  });
 });

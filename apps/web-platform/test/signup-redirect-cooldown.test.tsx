@@ -56,22 +56,30 @@ describe("SignupPage — redirectTo on verify (AC1)", () => {
     fireEvent.click(screen.getByRole("button", { name: /create account/i }));
   }
 
-  it("routes to the sanitized redirectTo (/invite/<token>) when present", async () => {
+  it("routes THROUGH /accept-terms carrying redirectTo (T&C recorded before invite accept)", async () => {
     searchParamsRef.current = new URLSearchParams("redirectTo=/invite/tok123");
     render(<SignupPage />);
     await sendCode();
     await verify();
-    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/invite/tok123"));
+    // A fresh signup has no server-recorded T&C, and /invite is a PUBLIC_PATH
+    // (middleware does not interpose /accept-terms), so signup must route
+    // through /accept-terms — never straight to /invite — to avoid a T&C bypass.
+    await waitFor(() =>
+      expect(pushMock).toHaveBeenCalledWith(
+        `/accept-terms?redirectTo=${encodeURIComponent("/invite/tok123")}`,
+      ),
+    );
+    expect(pushMock).not.toHaveBeenCalledWith("/invite/tok123");
   });
 
-  it("routes to /accept-terms (default) when redirectTo is absent", async () => {
+  it("routes to /accept-terms (no redirectTo) when absent", async () => {
     render(<SignupPage />);
     await sendCode();
     await verify();
     await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/accept-terms"));
   });
 
-  it("falls back to /accept-terms when redirectTo is an open-redirect vector", async () => {
+  it("routes to bare /accept-terms when redirectTo is an open-redirect vector", async () => {
     searchParamsRef.current = new URLSearchParams(
       "redirectTo=https://evil.example",
     );

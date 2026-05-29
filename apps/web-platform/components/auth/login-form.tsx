@@ -29,8 +29,17 @@ export function LoginForm() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [cooldownSeconds, setCooldownSeconds] = useState(0);
+  // The email the active cooldown was started for. The cooldown is per-email
+  // (GoTrue's rate window is per-user), so switching to a DIFFERENT email is
+  // immediately sendable, while reverting to the same email inside the window
+  // stays blocked — closing the "Try a different email" reset bypass.
+  const [cooldownEmail, setCooldownEmail] = useState("");
   const otpRef = useRef<HTMLInputElement>(null);
   const cooldownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // True only while a cooldown is running AND the current email matches the
+  // one it was started for.
+  const cooldownActive = cooldownSeconds > 0 && email === cooldownEmail;
 
   function clearCooldown() {
     if (cooldownTimerRef.current) {
@@ -44,6 +53,7 @@ export function LoginForm() {
   // that returns "Too many sign-in attempts").
   function startCooldown() {
     clearCooldown();
+    setCooldownEmail(email);
     setCooldownSeconds(Math.ceil(OTP_RESEND_COOLDOWN_MS / 1000));
     cooldownTimerRef.current = setInterval(() => {
       setCooldownSeconds((s) => {
@@ -54,11 +64,6 @@ export function LoginForm() {
         return s - 1;
       });
     }, 1000);
-  }
-
-  function resetCooldown() {
-    clearCooldown();
-    setCooldownSeconds(0);
   }
 
   // Clear the interval on unmount so the countdown can't tick into an
@@ -96,6 +101,10 @@ export function LoginForm() {
 
   /** Send (or resend) an OTP for the current email. Returns true on success. */
   async function sendOtp(): Promise<boolean> {
+    // Source-level guard: refuse a same-email re-send inside the cooldown
+    // window regardless of which control invoked us (send button, resend, or
+    // a re-submit after "Try a different email" with the email unchanged).
+    if (cooldownActive) return false;
     setLoading(true);
     setError("");
 
@@ -221,10 +230,10 @@ export function LoginForm() {
           <button
             type="button"
             onClick={handleResendOtp}
-            disabled={loading || cooldownSeconds > 0}
+            disabled={loading || cooldownActive}
             className="block w-full text-center text-sm text-soleur-text-muted hover:text-soleur-text-secondary disabled:opacity-50 disabled:hover:text-soleur-text-muted"
           >
-            {cooldownSeconds > 0
+            {cooldownActive
               ? `You can request a new code in ${cooldownSeconds}s`
               : "Resend code"}
           </button>
@@ -234,7 +243,6 @@ export function LoginForm() {
               setOtpSent(false);
               setOtp("");
               setError("");
-              resetCooldown();
             }}
             className="block w-full text-center text-sm text-soleur-text-muted hover:text-soleur-text-secondary"
           >
@@ -270,11 +278,7 @@ export function LoginForm() {
             type="email"
             required
             value={email}
-            onChange={(e) => {
-              setEmail(e.target.value);
-              // A corrected/different email should be sendable immediately.
-              resetCooldown();
-            }}
+            onChange={(e) => setEmail(e.target.value)}
             placeholder="you@example.com"
             className="w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3 text-sm placeholder:text-soleur-text-muted focus:border-soleur-border-emphasized focus:outline-none"
           />
@@ -283,10 +287,14 @@ export function LoginForm() {
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || cooldownActive}
             className="w-full rounded-lg bg-soleur-accent-gold-fill px-4 py-3 text-sm font-medium text-soleur-text-on-accent hover:opacity-90 disabled:opacity-50"
           >
-            {loading ? "Sending..." : "Send sign-in code"}
+            {cooldownActive
+              ? `You can request a new code in ${cooldownSeconds}s`
+              : loading
+                ? "Sending..."
+                : "Send sign-in code"}
           </button>
         </form>
 

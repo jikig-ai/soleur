@@ -27,13 +27,26 @@ const ALLOWED_PREFIXES = ["/dashboard", "/invite/"] as const;
  */
 export function safeReturnTo(param: string | null): string | null {
   if (!param) return null;
-  if (
-    !param.startsWith("/") ||
-    param.includes("//") ||
-    param.includes("\\") ||
-    param.includes("..")
-  ) {
-    return null;
+
+  // Decode once and run the dangerous-substring guards on BOTH the raw and
+  // the decoded form, so a percent-encoded separator (%2F → /, %5C → \,
+  // %2E%2E → ..) can't smuggle a protocol-relative or traversal payload past
+  // the literal-substring checks (e.g. "/invite/%2F%2Fevil" → "/invite///evil").
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(param);
+  } catch {
+    return null; // malformed percent-encoding
+  }
+  for (const candidate of [param, decoded]) {
+    if (
+      !candidate.startsWith("/") ||
+      candidate.includes("//") ||
+      candidate.includes("\\") ||
+      candidate.includes("..")
+    ) {
+      return null;
+    }
   }
   if (!ALLOWED_PREFIXES.some((prefix) => param.startsWith(prefix))) return null;
   return param;

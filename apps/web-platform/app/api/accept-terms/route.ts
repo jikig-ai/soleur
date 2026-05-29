@@ -3,6 +3,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 import { TC_VERSION, TC_DOCUMENT_SHA } from "@/lib/legal/tc-version";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
+import { safeReturnTo } from "@/lib/safe-return-to";
 import * as Sentry from "@sentry/nextjs";
 import { reportSilentFallback } from "@/server/observability";
 import { hashUserIdValue } from "@/server/userid-pseudonymize";
@@ -10,6 +11,7 @@ import { hashUserIdValue } from "@/server/userid-pseudonymize";
 async function getRedirectDestination(
   supabase: SupabaseClient,
   userId: string,
+  nextHop: string | null,
 ): Promise<string> {
   const { data: keys } = await supabase
     .from("api_keys")
@@ -19,7 +21,11 @@ async function getRedirectDestination(
     .eq("is_valid", true)
     .limit(1);
 
-  return !keys || keys.length === 0 ? "/setup-key" : "/dashboard";
+  // No key yet → onboarding takes precedence (the invitee re-opens the invite
+  // link post-onboarding; an authenticated re-open needs no OTP). Keyed → honor
+  // the validated next hop (e.g. /invite/<token>) instead of /dashboard.
+  if (!keys || keys.length === 0) return "/setup-key";
+  return nextHop ?? "/dashboard";
 }
 
 export async function POST(request: Request) {
@@ -33,6 +39,18 @@ export async function POST(request: Request) {
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Optional post-acceptance destination, re-validated server-side against the
+  // open-redirect allowlist (never trust the client-supplied value).
+  let nextHop: string | null = null;
+  try {
+    const body = (await request.json()) as { redirectTo?: unknown };
+    if (typeof body?.redirectTo === "string") {
+      nextHop = safeReturnTo(body.redirectTo);
+    }
+  } catch {
+    // No/invalid JSON body — proceed with the default destination.
   }
 
   // Always delegate to the public.accept_terms RPC. Idempotency lives in
@@ -64,6 +82,6 @@ export async function POST(request: Request) {
     );
   }
 
-  const redirect = await getRedirectDestination(supabase, user.id);
+  const redirect = await getRedirectDestination(supabase, user.id, nextHop);
   return NextResponse.json({ ok: true, redirect });
 }

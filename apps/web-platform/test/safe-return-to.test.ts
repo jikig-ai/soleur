@@ -77,4 +77,20 @@ describe("safeReturnTo", () => {
   it("blocks path traversal out of /invite/", () => {
     expect(safeReturnTo("/invite/../dashboard")).toBe(null);
   });
+
+  it("blocks encoded-slash protocol-relative bypass under an allowed prefix (%2F%2F)", () => {
+    expect(safeReturnTo("/invite/%2F%2Fevil.example")).toBe(null);
+  });
+
+  it("blocks encoded path traversal (%2e%2e) that decodes to ..", () => {
+    expect(safeReturnTo("/dashboard/%2e%2e/logout")).toBe(null);
+  });
+
+  it("blocks encoded backslash (%5C) that decodes to \\", () => {
+    expect(safeReturnTo("/dashboard%5C%5Cevil")).toBe(null);
+  });
+
+  it("blocks malformed percent-encoding", () => {
+    expect(safeReturnTo("/invite/%zz")).toBe(null);
+  });
 });
