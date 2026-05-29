@@ -33,9 +33,9 @@
 # while the resource type is `sentry_issue_alert` (Terraform core cannot
 # allow-list validate/plan warnings; the provider exposes no opt-out attr).
 # Re-attempt at stable v0.15.0 when `sentry_alert` supports project-wide
-# frequency alerts. Schema evidence + alternatives: ADR-031 (Decision §Defer)
-# + knowledge-base/project/plans/2026-05-29-refactor-sentry-issue-alert-to-
-# sentry-alert-migration-plan.md.
+# frequency alerts. Schema evidence + alternatives:
+#   - ADR-031-sentry-as-iac.md (## Decision → "Defer migration" bullet)
+#   - knowledge-base/project/plans/2026-05-29-refactor-sentry-issue-alert-to-sentry-alert-migration-plan.md
 # ──────────────────────────────────────────────────────────────────────────
 
 resource "sentry_issue_alert" "auth_exchange_code_burst" {
