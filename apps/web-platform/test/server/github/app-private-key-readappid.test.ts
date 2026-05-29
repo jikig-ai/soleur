@@ -54,4 +54,17 @@ describe("readAppId", () => {
     // "326 1325" trims surrounding ws but the interior space makes it non-numeric.
     expect(() => readAppId(" 326 1325 ")).toThrow(/GITHUB_APP_ID/);
   });
+
+  test("AC: a leading-zero numeric value passes through verbatim (pins the contract)", () => {
+    // `^[0-9]+$` accepts leading zeros; GitHub validates the real App↔key binding
+    // downstream. Pin the pass-through so a future tightening is a deliberate choice.
+    expect(readAppId("007")).toBe("007");
+  });
+
+  test("AC: human-looks-numeric near-misses (negative, decimal) are rejected", () => {
+    // The realistic "looks numeric but isn't an App ID" shapes.
+    expect(() => readAppId("-1")).toThrow(/GITHUB_APP_ID/);
+    expect(() => readAppId("3.5")).toThrow(/GITHUB_APP_ID/);
+    expect(() => readAppId("3261325.0")).toThrow(/GITHUB_APP_ID/);
+  });
 });
