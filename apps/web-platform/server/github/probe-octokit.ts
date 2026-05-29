@@ -21,10 +21,10 @@
 // The factory is per-call (no module-scope cache) for the same threat-model
 // reasons documented in `app-client.ts`.
 
-import { createPrivateKey } from "crypto";
 import { App } from "@octokit/app";
 import { createChildLogger } from "../logger";
 import { warnSilentFallback } from "@/server/observability";
+import { normalizeAppPrivateKey } from "./app-private-key";
 
 const log = createChildLogger("probe-octokit");
 
@@ -102,22 +102,6 @@ function readEnv(name: string): string {
     );
   }
   return v;
-}
-
-// Canonicalize the GitHub App private key to a clean LF-only PKCS#8 PEM BEFORE
-// handing it to @octokit/app. universal-github-app-jwt@2.2.2's getDERfromPEM()
-// does `pem.trim().split("\n").slice(1,-1).join("")` and imports via Web-Crypto
-// importKey("pkcs8", …) — it rejects PKCS#1 and produces corrupted DER from
-// CRLF-laden PEMs, surfacing as GitHub's "A JSON web token could not be decoded"
-// (Sentry 4e6a3003…). Node's createPrivateKey().export() is whitespace/format-
-// tolerant (the same primitive server/github-app.ts trusts via createSign) and
-// emits exactly the one-header / body / one-footer LF PEM that slice(1,-1)
-// expects, regardless of input format (PKCS#1 or #8) or line endings (CRLF/LF).
-export function normalizeAppPrivateKey(raw: string): string {
-  const pem = raw.replace(/\\n/g, "\n"); // expand escaped \n (env/Doppler)
-  return createPrivateKey(pem)
-    .export({ type: "pkcs8", format: "pem" })
-    .toString();
 }
 
 /**

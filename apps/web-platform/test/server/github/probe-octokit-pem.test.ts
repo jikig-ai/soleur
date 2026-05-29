@@ -13,7 +13,7 @@
  */
 import { describe, test, expect } from "vitest";
 import { createPrivateKey, generateKeyPairSync } from "crypto";
-import { normalizeAppPrivateKey } from "@/server/github/probe-octokit";
+import { normalizeAppPrivateKey } from "@/server/github/app-private-key";
 
 // One synthesized RSA keypair for the whole file, exported in both formats.
 const { pkcs1Pem, pkcs8Pem } = (() => {
@@ -45,15 +45,17 @@ describe("normalizeAppPrivateKey", () => {
     expect(() => createPrivateKey(out)).not.toThrow();
   });
 
-  test("AC2: CRLF line endings are normalized to LF and body base64-decodes", () => {
+  test("AC2: CRLF line endings are normalized to LF and body is intact DER", () => {
     const crlf = pkcs8Pem.replace(/\n/g, "\r\n");
     const out = normalizeAppPrivateKey(crlf);
     expect(out).not.toContain("\r");
     const body = getDERBodyFromPEM(out);
-    // No stray \r in the extracted body; decodes to non-empty DER.
     expect(body).not.toContain("\r");
-    const der = Buffer.from(body, "base64");
-    expect(der.length).toBeGreaterThan(0);
+    // Prove the extracted body is VALID DER, not merely non-empty:
+    // Buffer.from(base64) is lenient and accepts garbage, so reassemble the
+    // body into a PEM and parse it. A CRLF-corrupted body would fail here.
+    const reassembled = `-----BEGIN PRIVATE KEY-----\n${body.match(/.{1,64}/g)!.join("\n")}\n-----END PRIVATE KEY-----\n`;
+    expect(() => createPrivateKey(reassembled)).not.toThrow();
   });
 
   test("AC3: escaped \\n is expanded to real newlines and parses", () => {
@@ -73,10 +75,15 @@ describe("normalizeAppPrivateKey", () => {
   });
 
   test("AC: empty value throws (does not swallow a missing/blank secret)", () => {
+    // Guard against vacuous-green: a missing/renamed export would make the call
+    // throw TypeError("not a function") and satisfy a bare toThrow() without
+    // exercising the canonicalizer at all.
+    expect(typeof normalizeAppPrivateKey).toBe("function");
     expect(() => normalizeAppPrivateKey("")).toThrow();
   });
 
   test("AC: whitespace-only value throws", () => {
+    expect(typeof normalizeAppPrivateKey).toBe("function");
     expect(() => normalizeAppPrivateKey("   \n  ")).toThrow();
   });
 });

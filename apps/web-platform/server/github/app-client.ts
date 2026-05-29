@@ -35,6 +35,7 @@ import {
   extractEndpoint,
   extractRepoFullName,
 } from "./audit-writer";
+import { normalizeAppPrivateKey } from "./app-private-key";
 
 const APP_ID_ENV = "GITHUB_APP_ID";
 const PRIVATE_KEY_ENV = "GITHUB_APP_PRIVATE_KEY";
@@ -82,7 +83,7 @@ export async function createGitHubAppClient(
 ) {
   const app = new App({
     appId: readEnv(APP_ID_ENV),
-    privateKey: readEnv(PRIVATE_KEY_ENV),
+    privateKey: normalizeAppPrivateKey(readEnv(PRIVATE_KEY_ENV)),
   });
   const octokit = await app.getInstallationOctokit(installationId);
 
