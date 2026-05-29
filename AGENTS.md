@@ -69,7 +69,7 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: wg-after-merging-a-pr-that-adds-or-modifies] → rest
 - [id: wg-plan-prescribed-skills-must-run-inline] → rest
 - [id: wg-end-of-work-emit-resume-prompt] → rest
-- [id: wg-block-pr-ready-on-undeferred-operator-steps] → rest
+- [id: wg-block-pr-ready-on-undeferred-operator-steps] → core
 - [id: wg-pm-class-followthrough-for-operator-dogfood] → rest
 
 ## Code Quality
