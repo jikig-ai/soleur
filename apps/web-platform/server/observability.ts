@@ -263,6 +263,11 @@ export function warnSilentFallback(
  * - `feature-flags` family: `flagsmith:getidentityflags-timeout` (warn-level
  *   via `mirrorWarnWithDebounce`; dedup key is the per-segment snapshot cache
  *   key `${role}:${orgId ?? "__anon__"}`, NOT a userId — see #4571).
+ * - `workspace-reconcile-push` family: `workspace-reconcile-push:no-workspace-match`
+ *   (warn-level via `mirrorWarnWithDebounce`; dedup key is
+ *   `${installationId}:${targetRepoUrl}`, an in-process token, NOT a userId —
+ *   the expected zero-workspace skip on every push to a workspace-less install,
+ *   debounced so it stops flooding the same alert family as #4571 — see #4597).
  *
  * Each feature picks a distinct `errorClass` so the per-key TTL bucket
  * cannot collide across features for the same user.
