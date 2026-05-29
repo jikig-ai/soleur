@@ -7,21 +7,31 @@
 // findings are internal infra signal; rows are owned by the operator
 // founder for routing into the `knowledge` domain).
 //
-// Idempotency: each finding carries a deterministic `source_ref` (e.g.,
-// `link-<sha256[:16]>`) so the partial-unique index
-// `messages_active_draft_dedup_idx` from migration 051 silently dedups
-// re-runs. Plain `.insert()` + catch PG_UNIQUE_VIOLATION → skip silently.
+// Digest model (#4579): a walker run inserts ONE draft card summarizing N
+// findings (not one row per finding), protecting the 7-item Today cap from
+// low-stakes flooding. `source_ref` is a full sha256 content hash over the
+// findings, so an unchanged KB produces the same ref → the partial-unique
+// index `messages_active_draft_dedup_idx` (migration 052) yields an idempotent
+// skip. The shared `insertDraftCard` helper does plain `.insert()` + maps
+// 23505 → { status: "deduped" } (never ON CONFLICT — PostgREST cannot infer it
+// against a partial index, 42P10). NOTE the index is partial on
+// `status='draft'`: once the operator DISMISSES a digest (status → archived),
+// the row leaves the index, so the next run over an unchanged KB re-inserts the
+// card. This is intentional — it re-surfaces drift the operator acknowledged
+// but never fixed.
+//
+// Cross-tenant: the helper PINS workspace_id to the operator's solo workspace
+// (NOT the session-selected workspace) and writes via the RLS-enforced tenant
+// client — closing the service-role bypass this route used to carry.
 
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, createHash, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
-import { createServiceClient } from "@/lib/supabase/server";
-import { PG_UNIQUE_VIOLATION } from "@/lib/postgres-errors";
+import { insertDraftCard } from "@/server/messages/insert-draft-card";
 import {
   MESSAGE_SOURCE_KB_DRIFT,
   MESSAGE_OWNING_DOMAIN_KNOWLEDGE,
-  MESSAGE_STATUS_DRAFT,
   MESSAGE_TIER_EXTERNAL_LOW_STAKES,
 } from "@/lib/messages/tiers";
 
@@ -129,39 +139,78 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
   }
 
-  const supabase = createServiceClient();
+  // Empty run: nothing drifted. Do not insert an empty digest card.
+  if (payload.findings.length === 0) {
+    return NextResponse.json({ received: true, inserted: 0, deduped: 0, total: 0 });
+  }
 
-  let inserted = 0;
-  let deduped = 0;
-  for (const finding of payload.findings) {
-    const { error } = await supabase.from("messages").insert({
-      user_id: operatorFounderId,
-      tier: MESSAGE_TIER_EXTERNAL_LOW_STAKES,
-      status: MESSAGE_STATUS_DRAFT,
+  // Build one digest. Content-hash source_ref over the per-finding refs so an
+  // unchanged KB → same ref → idempotent 23505 skip on re-run. Full sha256
+  // (no truncation) avoids a birthday collision masking a distinct night's
+  // findings as a false dedup.
+  const sourceRef =
+    "digest-" +
+    createHash("sha256")
+      .update(payload.findings.map((f) => f.source_ref).sort().join("\n"))
+      .digest("hex");
+
+  // Strip the URL query string from each finding target before composing the
+  // preview: a broken doc link never needs its query string for triage, and
+  // redactGithubSourcedText does NOT scrub signed-URL params (?X-Amz-Signature=,
+  // ?token=, ?sig=). The helper redacts the composed preview as the second layer.
+  const stripUrlQuery = (s: string): string =>
+    s.replace(/(\bhttps?:\/\/[^\s?#]+)[?#][^\s]*/gi, "$1");
+
+  const lines = payload.findings.map((f) => {
+    const label = f.kind === "broken-link" ? "Broken link" : "Broken anchor";
+    return `• ${label} in ${f.source_path} → ${stripUrlQuery(f.target)}`;
+  });
+  const draftPreview = `${payload.findings.length} KB-drift findings — review\n${lines.join("\n")}`;
+
+  let result;
+  try {
+    result = await insertDraftCard({
+      founderId: operatorFounderId,
       source: MESSAGE_SOURCE_KB_DRIFT,
-      source_ref: finding.source_ref,
+      source_ref: sourceRef,
       owning_domain: MESSAGE_OWNING_DOMAIN_KNOWLEDGE,
-      draft_preview: `${finding.kind === "broken-link" ? "Broken link" : "Broken anchor"} in ${finding.source_path} → ${finding.target}`,
+      draft_preview: draftPreview,
+      tier: MESSAGE_TIER_EXTERNAL_LOW_STAKES,
       urgency: "low",
       trust_tier: "internal_infra_auto",
+      // Valid action class (knowledge.kb_drift); the digest card renders a
+      // Dismiss affordance, not a send button, so the send/template-auth path is
+      // not reachable — this keeps the row valid if the UI ever regresses.
+      action_class: "knowledge.kb_drift",
     });
-    if (error) {
-      if (error.code === PG_UNIQUE_VIOLATION) {
-        deduped += 1;
-        continue;
-      }
-      logger.error(
-        { err: error, source_ref: finding.source_ref },
-        "KB-drift ingest: insert failed",
-      );
-      Sentry.captureException(error, {
-        tags: { feature: "kb-drift-ingest", op: "persist" },
-        extra: { source_ref: finding.source_ref },
-      });
-      return NextResponse.json({ error: "Persist failed" }, { status: 500 });
-    }
-    inserted += 1;
+  } catch {
+    // The helper already mirrored the error to Sentry/Better Stack
+    // (reportSilentFallback). Return 500 so the walker cron records a non-2xx
+    // (the authoritative "blind night" signal per the Observability section).
+    return NextResponse.json({ error: "Persist failed" }, { status: 500 });
   }
+
+  const deduped = result.status === "deduped" ? 1 : 0;
+  const inserted = result.status === "inserted" ? 1 : 0;
+
+  if (deduped) {
+    // Mirror the idempotent skip (was silent) — cq-silent-fallback-must-mirror.
+    Sentry.captureMessage("KB-drift digest deduped", {
+      level: "info",
+      tags: { feature: "kb-drift-ingest", op: "dedup-skip" },
+      extra: { source_ref: sourceRef, finding_count: payload.findings.length },
+    });
+  }
+
+  logger.info(
+    {
+      feature: "kb-drift-ingest",
+      workspace_id: operatorFounderId,
+      finding_count: payload.findings.length,
+      deduped: deduped === 1,
+    },
+    "KB-drift ingest: digest persisted",
+  );
 
   return NextResponse.json({
     received: true,

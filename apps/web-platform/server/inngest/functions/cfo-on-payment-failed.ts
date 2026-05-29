@@ -34,13 +34,13 @@
 
 import { inngest } from "@/server/inngest/client";
 import { getStripe } from "@/lib/stripe";
-import { getFreshTenantClient } from "@/lib/supabase/tenant";
 // BYOK Delegations PR-A (#4232): see note at agent-runner.ts.
 import { resolveKeyOwnerThenLease } from "@/server/byok-resolver";
 import { reportSilentFallback } from "@/server/observability";
+import { insertDraftCard } from "@/server/messages/insert-draft-card";
 import {
   MESSAGE_TIER_EXTERNAL_BRAND_CRITICAL,
-  MESSAGE_STATUS_DRAFT,
+  MESSAGE_SOURCE_STRIPE,
 } from "@/lib/messages/tiers";
 import {
   ACTION_CLASS_DEFAULTS,
@@ -221,25 +221,27 @@ export async function cfoHandler({
     });
   });
 
-  // I2: getFreshTenantClient called inside the persist step (per-step JWT
-  // freshness). RV16: NO runWithByokLease here — this is a tenant-client
-  // INSERT, not an SDK call.
+  // Shared insertDraftCard helper: tenant-client write + solo-pinned
+  // workspace_id + in-helper redaction + { error } handling. This FIXES the
+  // prior silent swallow — the inline insert discarded its result, so a failed
+  // persist went unnoticed; the helper mirrors to Sentry and re-throws → the
+  // throw propagates out of step.run → Inngest retry. NO source_ref: the stub
+  // does not dedup (upstream wiring deferred to PR-G). RV16: NO runWithByokLease
+  // here — tenant-client INSERT, not an SDK call.
   await step.run("persist-draft", async () => {
-    const tenant = await getFreshTenantClient(founderId);
-    await tenant.from("messages").insert({
-      user_id: founderId,
-      tier: MESSAGE_TIER_EXTERNAL_BRAND_CRITICAL, // I5 + migration 046 CHECK enforces status=draft.
-      status: MESSAGE_STATUS_DRAFT,
-      source: "stripe",
+    await insertDraftCard({
+      founderId,
+      source: MESSAGE_SOURCE_STRIPE,
       owning_domain: "cfo",
       draft_preview: "<draft text — wired in PR-G>",
+      tier: MESSAGE_TIER_EXTERNAL_BRAND_CRITICAL, // I5 + migration 046 CHECK enforces status=draft.
       urgency: "medium",
       trust_tier:
         event.data.tier ?? ACTION_CLASS_DEFAULTS["finance.payment_failed"],
-      // PR-H (#4077): producer-declared literal. Falls back to the constant
-      // for pre-PR-H envelopes where the payload omits action_class.
-      action_class:
-        payload.action_class ?? "finance.payment_failed",
+      // Resolved at the call site — a raw-null action_class would land NULL and
+      // 422 the live CFO card on send. Falls back to the constant for pre-PR-H
+      // envelopes where the payload omits action_class.
+      action_class: payload.action_class ?? "finance.payment_failed",
     });
   });
 

@@ -10,13 +10,10 @@
 // processing of different event classes for the same founder.
 
 import { inngest } from "@/server/inngest/client";
-import { getFreshTenantClient } from "@/lib/supabase/tenant";
 // BYOK Delegations PR-A (#4232): see note at agent-runner.ts.
 import { resolveKeyOwnerThenLease } from "@/server/byok-resolver";
-import { reportSilentFallback } from "@/server/observability";
-import { redactGithubSourcedText } from "@/lib/safety/redaction-allowlist";
+import { insertDraftCard } from "@/server/messages/insert-draft-card";
 import {
-  MESSAGE_STATUS_DRAFT,
   MESSAGE_SOURCE_GITHUB,
   MESSAGE_TIER_EXTERNAL_LOW_STAKES,
 } from "@/lib/messages/tiers";
@@ -24,7 +21,6 @@ import {
   ACTION_CLASS_DEFAULTS,
   type ActionClassTier,
 } from "@/server/scope-grants/action-class-map";
-import { PG_UNIQUE_VIOLATION } from "@/lib/postgres-errors";
 import {
   GITHUB_EVENT_STRATEGIES,
   resolveOwningDomain,
@@ -225,50 +221,32 @@ export async function githubOnEventHandler({
     });
   });
 
-  // I2: getFreshTenantClient + per-step JWT freshness. Redaction is
-  // INSERT-time per plan TR6-amendment (belt-and-suspenders; render-time
-  // is the load-bearing Art. 14 gate at Phase 6).
+  // I2: getFreshTenantClient + per-step JWT freshness + INSERT-time redaction
+  // all happen inside the shared insertDraftCard helper. The raw body is passed;
+  // the helper applies redactGithubSourcedText (render-time is the load-bearing
+  // Art. 14 gate at Phase 6).
   await step.run("persist-draft", async () => {
-    const tenant = await getFreshTenantClient(founderId);
-    const draftPreview = redactGithubSourcedText(_draft.rawBody, {
-      source: strategy.redactSource,
-    });
-
-    const { error } = await tenant.from("messages").insert({
-      user_id: founderId,
-      tier: MESSAGE_TIER_EXTERNAL_LOW_STAKES,
-      status: MESSAGE_STATUS_DRAFT,
+    const result = await insertDraftCard({
+      founderId,
       source: MESSAGE_SOURCE_GITHUB,
       source_ref: sourceRef,
       owning_domain: owningDomain,
-      draft_preview: draftPreview,
+      draft_preview: _draft.rawBody,
+      tier: MESSAGE_TIER_EXTERNAL_LOW_STAKES,
       urgency: strategy.urgency,
       trust_tier: event.data.tier ?? ACTION_CLASS_DEFAULTS[actionClass],
     });
-
-    if (error) {
-      // ADR-037: the partial-unique index can fire on Inngest retry
-      // (same source_ref already drafted). Treat as a non-error, no
-      // throw — Inngest retries would burn budget chasing a deterministic
-      // conflict.
-      if (error.code === PG_UNIQUE_VIOLATION) {
-        logger.info(
-          { founderId, actionClass, sourceRef, deliveryId, installationId },
-          "github-on-event: duplicate draft (partial-unique conflict) — idempotent skip",
-        );
-        return;
-      }
-      // Other DB errors surface to Sentry via reportSilentFallback;
-      // the step throw causes Inngest to retry the persist step (with
-      // the function's retries:1 cap above).
-      reportSilentFallback(error, {
-        feature: "github-on-event",
-        op: "persist-draft",
-        message: "github-on-event: persist-draft failed",
-        extra: { founderId, actionClass, sourceRef },
-      });
-      throw error;
+    if (result.status === "deduped") {
+      // ADR-037: the partial-unique index fired on Inngest retry (same
+      // source_ref already drafted) — idempotent skip, no throw.
+      logger.info(
+        { founderId, actionClass, sourceRef, deliveryId, installationId },
+        "github-on-event: duplicate draft (partial-unique conflict) — idempotent skip",
+      );
     }
+    // Non-dedup DB errors are mirrored to Sentry by the helper
+    // (reportSilentFallback) and re-thrown; the throw propagates out of
+    // step.run → Inngest retry (retries:1 cap above).
   });
 
   return { drafted: true };

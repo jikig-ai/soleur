@@ -203,9 +203,10 @@ describe("github-on-event handler", () => {
 
     it("reports + throws on non-conflict DB errors", async () => {
       mockInsert.mockResolvedValueOnce({ error: { code: "08006", message: "conn lost" } });
-      await expect(githubOnEventHandler(makeArgs({}) as never)).rejects.toMatchObject({
-        code: "08006",
-      });
+      // #4579: the insert now flows through the shared insertDraftCard helper,
+      // which reports via reportSilentFallback and re-throws a wrapped Error
+      // (the original .code is carried in the message, not as a property).
+      await expect(githubOnEventHandler(makeArgs({}) as never)).rejects.toThrow(/08006/);
       expect(mockReportSilentFallback).toHaveBeenCalled();
     });
   });
