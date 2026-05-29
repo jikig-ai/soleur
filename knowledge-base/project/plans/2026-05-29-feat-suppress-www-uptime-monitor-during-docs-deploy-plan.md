@@ -72,8 +72,8 @@ regulated surface is touched. The only secret in play (`SENTRY_IAC_AUTH_TOKEN`) 
 already present in `apply-sentry-infra.yml` and is routed through env vars (never
 interpolated into `run:` bodies).
 
-**Brand-survival threshold:** none.
-> _Reason (sensitive-path scope-out): the diff touches only `.github/workflows/deploy-docs.yml` and `apps/web-platform/infra/sentry/uptime-monitors.tf` (a 1-line threshold change). No schema, auth flow, API route, `.sql`, or user-data surface. The Sentry token is pre-existing and env-routed._
+- **Brand-survival threshold:** `none`
+- `threshold: none, reason: pure CI/infra change — the diff touches only .github/workflows/deploy-docs.yml (a public docs-site deploy workflow) and a single Terraform scalar in apps/web-platform/infra/sentry/uptime-monitors.tf; no schema, auth flow, API route, .sql, or user-data surface, and the only secret (SENTRY_IAC_AUTH_TOKEN) is pre-existing and env-routed (never interpolated into run: bodies).`
 
 ## Acceptance Criteria
 
@@ -326,8 +326,8 @@ logs:
   where: "GitHub Actions run logs for deploy-docs.yml (pause + probe/resume steps)"
   retention: "GitHub Actions default log retention (90 days)"
 discoverability_test:
-  command: "gh run list --workflow=deploy-docs.yml --limit 1 --json conclusion,databaseId then gh run view <id> --log | grep -E 'Paused soleur-ai-www|Resumed soleur-ai-www|resume PUT status'"
-  expected_output: "log lines showing pause then resume (PUT status 200) for the soleur-ai-www detector"
+  command: curl -fsS -o /dev/null -w '%{http_code}' --max-time 10 https://www.soleur.ai/
+  expected_output: "301"
 ```
 
 ## Open Code-Review Overlap
