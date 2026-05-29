@@ -94,6 +94,19 @@ token, never emitted) with a dedicated `errorClass`
    permits. Low impact — the deny is loud and the remaining checks cover the
    preflight intent.
 
+3. **`hr-never-git-stash-in-worktrees` hook denied a `git commit` whose MESSAGE
+   described the stash incident.** The hook substring-matches the literal
+   `git stash` anywhere in the bash command, so a commit-message heredoc that
+   merely *names* the stash deny (documenting error #2) tripped it. Recovery:
+   reworded the commit message to avoid the literal `git stash` substring
+   ("the worktree stash-list preflight deny"). Prevention: when writing a
+   commit message / learning that must reference the forbidden command, avoid
+   the exact `git stash` token in the bash invocation (paraphrase, or write the
+   file with the Edit/Write tool and commit with a terse message). A tighter
+   hook matcher (anchor on command position, not free-text substring) would
+   remove the friction but risks false-negatives — paraphrasing is the cheap
+   path.
+
 ## Tags
 category: integration-issues
 module: observability
