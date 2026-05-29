@@ -1,0 +1,321 @@
+-- 085_revoke_workspace_invitation.down.sql
+-- Reverses 085: drops the revoke RPC, restores the 075 bodies of the WORM
+-- trigger fn, lookup, create, and anonymise (without the revoked arms), then
+-- drops the revoked_by / revoked_at columns.
+
+DROP FUNCTION IF EXISTS public.revoke_workspace_invitation(uuid, uuid);
+
+-- Restore WORM trigger fn to the 075 body (no revoked arms).
+CREATE OR REPLACE FUNCTION public.workspace_invitations_no_mutate()
+  RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'workspace_invitations is append-only; use anonymise_workspace_invitations for Art. 17 cascade'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  IF NEW.id              IS DISTINCT FROM OLD.id
+    OR NEW.workspace_id  IS DISTINCT FROM OLD.workspace_id
+    OR NEW.token_hash    IS DISTINCT FROM OLD.token_hash
+    OR NEW.role          IS DISTINCT FROM OLD.role
+    OR NEW.created_at    IS DISTINCT FROM OLD.created_at
+  THEN
+    RAISE EXCEPTION 'workspace_invitations audit lineage is immutable'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  IF OLD.accepted_at IS NOT NULL AND NEW.accepted_at IS DISTINCT FROM OLD.accepted_at THEN
+    RAISE EXCEPTION 'workspace_invitations accepted_at is immutable once set'
+      USING ERRCODE = 'P0001';
+  END IF;
+  IF OLD.declined_at IS NOT NULL AND NEW.declined_at IS DISTINCT FROM OLD.declined_at THEN
+    RAISE EXCEPTION 'workspace_invitations declined_at is immutable once set'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  IF (OLD.inviter_user_id IS NULL AND NEW.inviter_user_id IS NOT NULL)
+    OR (OLD.inviter_user_id IS NOT NULL AND NEW.inviter_user_id IS NOT NULL AND NEW.inviter_user_id IS DISTINCT FROM OLD.inviter_user_id)
+    OR (OLD.invitee_email IS NULL AND NEW.invitee_email IS NOT NULL)
+    OR (OLD.invitee_email IS NOT NULL AND NEW.invitee_email IS NOT NULL AND NEW.invitee_email IS DISTINCT FROM OLD.invitee_email)
+    OR (OLD.invitee_user_id IS NULL AND NEW.invitee_user_id IS NOT NULL)
+    OR (OLD.invitee_user_id IS NOT NULL AND NEW.invitee_user_id IS NOT NULL AND NEW.invitee_user_id IS DISTINCT FROM OLD.invitee_user_id)
+  THEN
+    RAISE EXCEPTION 'workspace_invitations PII columns are immutable; only Art. 17 anonymise (NOT NULL → NULL) permitted'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  IF NEW.expires_at IS DISTINCT FROM OLD.expires_at THEN
+    RAISE EXCEPTION 'workspace_invitations expires_at is immutable'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  IF OLD.attestation_id IS NOT NULL AND NEW.attestation_id IS DISTINCT FROM OLD.attestation_id THEN
+    RAISE EXCEPTION 'workspace_invitations attestation_id is immutable once set'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.workspace_invitations_no_mutate() FROM PUBLIC, anon, authenticated, service_role;
+
+-- Restore lookup_invitation_by_token to the 075 body (no revoked arm).
+CREATE OR REPLACE FUNCTION public.lookup_invitation_by_token(p_token_hash text)
+  RETURNS jsonb
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_inv RECORD;
+  v_inviter_name text;
+BEGIN
+  SELECT wi.*, w.name AS workspace_name
+  INTO v_inv
+  FROM public.workspace_invitations wi
+  JOIN public.workspaces w ON w.id = wi.workspace_id
+  WHERE wi.token_hash = p_token_hash;
+
+  IF v_inv IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'not_found');
+  END IF;
+
+  IF v_inv.accepted_at IS NOT NULL THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'already_accepted');
+  END IF;
+
+  IF v_inv.declined_at IS NOT NULL THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'already_declined');
+  END IF;
+
+  IF v_inv.expires_at < now() THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'expired');
+  END IF;
+
+  SELECT COALESCE(raw_user_meta_data->>'full_name', email)
+  INTO v_inviter_name
+  FROM auth.users
+  WHERE id = v_inv.inviter_user_id;
+
+  RETURN jsonb_build_object(
+    'ok', true,
+    'invitation_id', v_inv.id,
+    'workspace_id', v_inv.workspace_id,
+    'workspace_name', v_inv.workspace_name,
+    'inviter_name', COALESCE(v_inviter_name, 'A team member'),
+    'invitee_email', v_inv.invitee_email,
+    'role', v_inv.role,
+    'expires_at', v_inv.expires_at
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.lookup_invitation_by_token(text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.lookup_invitation_by_token(text) TO service_role;
+
+-- Restore create_workspace_invitation to the 075 duplicate guard (no revoked_at IS NULL).
+CREATE OR REPLACE FUNCTION public.create_workspace_invitation(
+  p_workspace_id    uuid,
+  p_invitee_email   text,
+  p_role            text,
+  p_token_hash      text,
+  p_attestation_text text,
+  p_caller_user_id  uuid DEFAULT NULL
+)
+  RETURNS jsonb
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_caller uuid;
+  v_invitee_user_id uuid;
+  v_attestation_id uuid;
+  v_invitation_id uuid;
+BEGIN
+  v_caller := COALESCE(p_caller_user_id, auth.uid());
+  IF v_caller IS NULL THEN
+    RAISE EXCEPTION 'caller_not_authenticated'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM public.workspace_members
+    WHERE workspace_id = p_workspace_id
+      AND user_id = v_caller
+      AND role = 'owner'
+  ) THEN
+    RAISE EXCEPTION 'caller_not_owner'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  IF p_role NOT IN ('owner', 'member') THEN
+    RAISE EXCEPTION 'invalid_role'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  SELECT id INTO v_invitee_user_id
+  FROM public.users
+  WHERE LOWER(email) = LOWER(p_invitee_email)
+  LIMIT 1;
+
+  IF v_invitee_user_id IS NOT NULL AND EXISTS (
+    SELECT 1 FROM public.workspace_members
+    WHERE workspace_id = p_workspace_id
+      AND user_id = v_invitee_user_id
+  ) THEN
+    RAISE EXCEPTION 'invitee_already_member'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM public.workspace_invitations
+    WHERE workspace_id = p_workspace_id
+      AND LOWER(invitee_email) = LOWER(p_invitee_email)
+      AND accepted_at IS NULL
+      AND declined_at IS NULL
+      AND expires_at > now()
+  ) THEN
+    RAISE EXCEPTION 'duplicate_pending_invite'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  INSERT INTO public.workspace_member_attestations (
+    workspace_id, inviter_user_id, invitee_user_id, attestation_text
+  ) VALUES (
+    p_workspace_id, v_caller, v_invitee_user_id, p_attestation_text
+  ) RETURNING id INTO v_attestation_id;
+
+  INSERT INTO public.workspace_invitations (
+    workspace_id, inviter_user_id, invitee_email, invitee_user_id,
+    token_hash, role, expires_at, attestation_id
+  ) VALUES (
+    p_workspace_id, v_caller, LOWER(p_invitee_email), v_invitee_user_id,
+    p_token_hash, p_role, now() + interval '7 days', v_attestation_id
+  ) RETURNING id INTO v_invitation_id;
+
+  RETURN jsonb_build_object(
+    'ok', true,
+    'invitation_id', v_invitation_id,
+    'attestation_id', v_attestation_id,
+    'invitee_user_id', v_invitee_user_id
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.create_workspace_invitation(uuid, text, text, text, text, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.create_workspace_invitation(uuid, text, text, text, text, uuid) TO service_role;
+
+-- Restore anonymise_workspace_invitations to the 075 body (no revoked_by).
+CREATE OR REPLACE FUNCTION public.anonymise_workspace_invitations(p_user_id uuid)
+  RETURNS integer
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_count integer;
+BEGIN
+  UPDATE public.workspace_invitations
+  SET inviter_user_id = NULL,
+      invitee_email = NULL,
+      invitee_user_id = NULL
+  WHERE inviter_user_id = p_user_id
+     OR invitee_user_id = p_user_id;
+
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.anonymise_workspace_invitations(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.anonymise_workspace_invitations(uuid) TO service_role;
+
+-- Restore accept_workspace_invitation to the 075 body (no revoked arm).
+-- MUST run before the DROP COLUMN below so the restored body (which does not
+-- reference revoked_at) is in place when the column disappears.
+CREATE OR REPLACE FUNCTION public.accept_workspace_invitation(
+  p_invitation_id   uuid,
+  p_accepter_user_id uuid DEFAULT NULL
+)
+  RETURNS jsonb
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_accepter uuid;
+  v_inv RECORD;
+  v_attestation_id uuid;
+BEGIN
+  v_accepter := COALESCE(p_accepter_user_id, auth.uid());
+  IF v_accepter IS NULL THEN
+    RAISE EXCEPTION 'caller_not_authenticated'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  SELECT * INTO v_inv
+  FROM public.workspace_invitations
+  WHERE id = p_invitation_id
+  FOR UPDATE;
+
+  IF v_inv IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'invitation_not_found');
+  END IF;
+
+  IF v_inv.accepted_at IS NOT NULL THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'already_accepted');
+  END IF;
+
+  IF v_inv.declined_at IS NOT NULL THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'already_declined');
+  END IF;
+
+  IF v_inv.expires_at < now() THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'expired');
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM public.workspace_members
+    WHERE workspace_id = v_inv.workspace_id
+      AND user_id = v_accepter
+  ) THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'already_member');
+  END IF;
+
+  INSERT INTO public.workspace_member_attestations (
+    workspace_id, inviter_user_id, invitee_user_id,
+    attestation_text
+  ) VALUES (
+    v_inv.workspace_id, v_inv.inviter_user_id, v_accepter,
+    'Invite accepted by user'
+  ) RETURNING id INTO v_attestation_id;
+
+  UPDATE public.workspace_invitations
+  SET accepted_at = now(), attestation_id = v_attestation_id
+  WHERE id = p_invitation_id;
+
+  INSERT INTO public.workspace_members (
+    workspace_id, user_id, role, attestation_id
+  ) VALUES (
+    v_inv.workspace_id, v_accepter, v_inv.role, v_attestation_id
+  );
+
+  RETURN jsonb_build_object(
+    'ok', true,
+    'workspace_id', v_inv.workspace_id,
+    'attestation_id', v_attestation_id
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.accept_workspace_invitation(uuid, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.accept_workspace_invitation(uuid, uuid) TO service_role;
+
+ALTER TABLE public.workspace_invitations
+  DROP COLUMN IF EXISTS revoked_by,
+  DROP COLUMN IF EXISTS revoked_at;

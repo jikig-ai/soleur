@@ -82,6 +82,7 @@ export async function getPendingInvitesForUser(
       .eq("invitee_user_id", userId)
       .is("accepted_at", null)
       .is("declined_at", null)
+      .is("revoked_at", null)
       .gt("expires_at", now),
     service
       .from("workspace_invitations")
@@ -89,6 +90,7 @@ export async function getPendingInvitesForUser(
       .eq("invitee_email", email.toLowerCase())
       .is("accepted_at", null)
       .is("declined_at", null)
+      .is("revoked_at", null)
       .gt("expires_at", now),
   ]);
 
@@ -245,6 +247,64 @@ export async function declineWorkspaceInvitation(
   const result = data as { ok: boolean; reason?: string };
   if (!result.ok) {
     return { ok: false, reason: result.reason ?? "unknown" };
+  }
+
+  return { ok: true };
+}
+
+export type RevokeInvitationReason =
+  | "invitation_not_found"
+  | "caller_not_owner"
+  | "already_accepted"
+  | "already_declined"
+  | "already_revoked"
+  | "rpc_failed"
+  | "unknown";
+
+export type RevokeInvitationResult =
+  | { ok: true }
+  | { ok: false; reason: RevokeInvitationReason };
+
+/**
+ * Owner-side cancellation of a pending invite (feat-cancel-pending-invite,
+ * #4634). Soft revoke via the revoke_workspace_invitation RPC; the RPC
+ * re-checks the caller is a workspace owner (defense-in-depth alongside the
+ * route owner-check). Mirrors declineWorkspaceInvitation.
+ */
+export async function revokeWorkspaceInvitation(
+  invitationId: string,
+  callerUserId: string,
+): Promise<RevokeInvitationResult> {
+  const service = createServiceClient();
+  const { data, error } = await service.rpc("revoke_workspace_invitation", {
+    p_invitation_id: invitationId,
+    p_caller_user_id: callerUserId,
+  });
+
+  if (error) {
+    log.error({ err: error.message }, "revoke_workspace_invitation RPC failed");
+    reportSilentFallback(null, {
+      feature: "workspace-invitations",
+      op: "revoke",
+      message: `revoke_workspace_invitation RPC failed: ${error.message}`,
+    });
+    return { ok: false, reason: "rpc_failed" };
+  }
+
+  const result = data as { ok: boolean; reason?: RevokeInvitationReason };
+  if (!result.ok) {
+    const reason = result.reason ?? "unknown";
+    // A reasonless ok=false means the RPC contract drifted — mirror to Sentry
+    // (cq-silent-fallback-must-mirror-to-sentry) rather than 500-ing silently.
+    if (reason === "unknown") {
+      log.error("revoke_workspace_invitation returned ok=false with no reason");
+      reportSilentFallback(null, {
+        feature: "workspace-invitations",
+        op: "revoke",
+        message: "revoke_workspace_invitation returned ok=false with no reason",
+      });
+    }
+    return { ok: false, reason };
   }
 
   return { ok: true };

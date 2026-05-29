@@ -80,4 +80,9 @@ test.describe.skip("team-membership — authenticated flows (covered by componen
   test("empty-state copy on /settings/team for a solo user with flag on", () => {});
   test("AC-FLOW4: owner row has no remove-self kebab option", () => {});
   test("AC-FLOW3: multi-tab org switch race converges on the new org_id", () => {});
+  // feat-cancel-pending-invite (#4634): owner cancels a pending invite.
+  // Same mock-surface limitation — the authenticated cancel flow is covered
+  // by test/components/settings/pending-invites-list.test.tsx (FR1/FR2) and
+  // the opt-in TENANT_INTEGRATION_TEST=1 suite (FR3/FR4/FR5).
+  test("AC-CANCEL: owner cancels a pending invite and the row disappears", () => {});
 });
