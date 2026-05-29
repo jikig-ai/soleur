@@ -5,7 +5,8 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { reportSilentFallback } from "@/lib/client-observability";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
-import { EMAIL_OTP_LENGTH } from "@/lib/auth/constants";
+import { safeReturnTo } from "@/lib/safe-return-to";
+import { EMAIL_OTP_LENGTH, OTP_RESEND_COOLDOWN_MS } from "@/lib/auth/constants";
 import {
   CALLBACK_ERRORS,
   DEFAULT_ERROR_MESSAGE,
@@ -18,12 +19,55 @@ import Link from "next/link";
 export function LoginForm() {
   const searchParams = useSearchParams();
   const router = useRouter();
+  // Validated same-origin relative path to land on after sign-in (e.g.
+  // /invite/<token> from the workspace invite flow); null when absent or
+  // rejected, in which case we fall back to /dashboard.
+  const redirectTo = safeReturnTo(searchParams.get("redirectTo"));
   const [email, setEmail] = useState("");
   const [otpSent, setOtpSent] = useState(false);
   const [otp, setOtp] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [cooldownSeconds, setCooldownSeconds] = useState(0);
   const otpRef = useRef<HTMLInputElement>(null);
+  const cooldownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  function clearCooldown() {
+    if (cooldownTimerRef.current) {
+      clearInterval(cooldownTimerRef.current);
+      cooldownTimerRef.current = null;
+    }
+  }
+
+  // Disable resend for >= GoTrue's 60s per-user OTP window so the UI cannot
+  // fire a same-email re-send before GoTrue will accept it (the double-send
+  // that returns "Too many sign-in attempts").
+  function startCooldown() {
+    clearCooldown();
+    setCooldownSeconds(Math.ceil(OTP_RESEND_COOLDOWN_MS / 1000));
+    cooldownTimerRef.current = setInterval(() => {
+      setCooldownSeconds((s) => {
+        if (s <= 1) {
+          clearCooldown();
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+  }
+
+  function resetCooldown() {
+    clearCooldown();
+    setCooldownSeconds(0);
+  }
+
+  // Clear the interval on unmount so the countdown can't tick into an
+  // unmounted component.
+  useEffect(() => {
+    return () => {
+      if (cooldownTimerRef.current) clearInterval(cooldownTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     const callbackError = searchParams.get("error");
@@ -50,8 +94,8 @@ export function LoginForm() {
             ? "Your session ended unexpectedly. Please sign in again."
             : null;
 
-  async function handleSendOtp(e: React.FormEvent) {
-    e.preventDefault();
+  /** Send (or resend) an OTP for the current email. Returns true on success. */
+  async function sendOtp(): Promise<boolean> {
     setLoading(true);
     setError("");
 
@@ -81,13 +125,27 @@ export function LoginForm() {
           reason: SIGNUP_REASON_NO_ACCOUNT,
         });
         router.replace(`/signup?${params.toString()}`);
-        return;
+        return false;
       }
       setError(mapSupabaseError(error.message));
-    } else {
+      return false;
+    }
+
+    startCooldown();
+    return true;
+  }
+
+  async function handleSendOtp(e: React.FormEvent) {
+    e.preventDefault();
+    const ok = await sendOtp();
+    if (ok) {
       setOtpSent(true);
       setTimeout(() => otpRef.current?.focus(), 100);
     }
+  }
+
+  async function handleResendOtp() {
+    await sendOtp();
   }
 
   async function handleVerifyOtp(e: React.FormEvent) {
@@ -116,7 +174,7 @@ export function LoginForm() {
       });
       setError(mapSupabaseError(error.message));
     } else {
-      router.push("/dashboard");
+      router.push(redirectTo ?? "/dashboard");
     }
   }
 
@@ -158,10 +216,22 @@ export function LoginForm() {
           </form>
 
           <button
+            type="button"
+            onClick={handleResendOtp}
+            disabled={loading || cooldownSeconds > 0}
+            className="block w-full text-center text-sm text-soleur-text-muted hover:text-soleur-text-secondary disabled:opacity-50 disabled:hover:text-soleur-text-muted"
+          >
+            {cooldownSeconds > 0
+              ? `You can request a new code in ${cooldownSeconds}s`
+              : "Resend code"}
+          </button>
+
+          <button
             onClick={() => {
               setOtpSent(false);
               setOtp("");
               setError("");
+              resetCooldown();
             }}
             className="block w-full text-center text-sm text-soleur-text-muted hover:text-soleur-text-secondary"
           >
@@ -197,7 +267,11 @@ export function LoginForm() {
             type="email"
             required
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={(e) => {
+              setEmail(e.target.value);
+              // A corrected/different email should be sendable immediately.
+              resetCooldown();
+            }}
             placeholder="you@example.com"
             className="w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3 text-sm placeholder:text-soleur-text-muted focus:border-soleur-border-emphasized focus:outline-none"
           />

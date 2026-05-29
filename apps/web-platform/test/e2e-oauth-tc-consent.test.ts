@@ -114,9 +114,11 @@ import { POST as acceptTermsPOST } from "@/app/api/accept-terms/route";
 
 const USER_ID = "user-uuid-e2e";
 
-function makeCallbackRequest(code: string): NextRequest {
+function makeCallbackRequest(code: string, extraQuery = ""): NextRequest {
   return new NextRequest(
-    new URL(`https://app.soleur.ai/callback?code=${encodeURIComponent(code)}`),
+    new URL(
+      `https://app.soleur.ai/callback?code=${encodeURIComponent(code)}${extraQuery}`,
+    ),
     {
       method: "GET",
       headers: {
@@ -126,6 +128,49 @@ function makeCallbackRequest(code: string): NextRequest {
       },
     },
   );
+}
+
+/**
+ * Wire the service `users` table for the fully-onboarded path: the
+ * ensureWorkspaceProvisioned select (workspace_status, tc_accepted_version)
+ * AND the repo_status select both resolve. tcVersion drives the T&C gate;
+ * repoStatus drives connect-repo vs the terminal hop.
+ */
+function stubServiceUsersFullyOnboarded(
+  tcVersion: string | null,
+  repoStatus: string,
+): void {
+  mockServiceFrom.mockImplementation((table: string) => {
+    if (table !== "users") {
+      return { select: vi.fn(), update: vi.fn(), upsert: vi.fn() };
+    }
+    const select = vi.fn((columns: string) => {
+      if (typeof columns === "string" && columns.includes("repo_status")) {
+        const single = vi.fn().mockResolvedValue({
+          data: { repo_status: repoStatus },
+          error: null,
+        });
+        return { eq: vi.fn().mockReturnValue({ single }) };
+      }
+      const single = vi.fn().mockResolvedValue({
+        data: { workspace_status: "ready", tc_accepted_version: tcVersion },
+        error: null,
+      });
+      return { eq: vi.fn().mockReturnValue({ single }) };
+    });
+    return { select, update: vi.fn(), upsert: vi.fn() };
+  });
+}
+
+/** Wire the user-scoped api_keys SELECT to return a valid key (keyed user). */
+function stubApiKeysPresent(): void {
+  const limit = vi.fn().mockResolvedValue({ data: [{ id: "k1" }], error: null });
+  const eq3 = vi.fn().mockReturnValue({ limit });
+  const eq2 = vi.fn().mockReturnValue({ eq: eq3 });
+  const eq1 = vi.fn().mockReturnValue({ eq: eq2 });
+  mockUserFromCallback.mockReturnValue({
+    select: vi.fn().mockReturnValue({ eq: eq1 }),
+  });
 }
 
 function makeAcceptTermsRequest(): Request {
@@ -239,5 +284,53 @@ describe("E2E: OAuth → /accept-terms → RPC (AC9)", () => {
         p_doc_sha: TC_DOCUMENT_SHA,
       }),
     );
+  });
+});
+
+describe("OAuth callback: next-param terminal hop (Phase 4)", () => {
+  beforeEach(() => {
+    mockExchangeCodeForSession.mockResolvedValue({ data: null, error: null });
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: USER_ID, email: "u@example.com" } },
+    });
+  });
+
+  test("fully-onboarded user with ?next=/invite/<token> lands on the invite", async () => {
+    stubServiceUsersFullyOnboarded(TC_VERSION, "connected");
+    stubApiKeysPresent();
+
+    const res = await callbackGET(
+      makeCallbackRequest("code-1", "&next=%2Finvite%2Ftok123"),
+    );
+
+    expect([307, 308]).toContain(res.status);
+    expect(new URL(res.headers.get("location")!).pathname).toBe(
+      "/invite/tok123",
+    );
+  });
+
+  test("?next never bypasses the /accept-terms gate for an unaccepted-T&C user", async () => {
+    // null tc_accepted_version → must still route to /accept-terms even with next.
+    stubServiceUsersFullyOnboarded(null, "connected");
+    stubApiKeysPresent();
+
+    const res = await callbackGET(
+      makeCallbackRequest("code-2", "&next=%2Finvite%2Ftok123"),
+    );
+
+    expect(new URL(res.headers.get("location")!).pathname).toBe(
+      "/accept-terms",
+    );
+  });
+
+  test("an open-redirect ?next is rejected and falls back to /dashboard", async () => {
+    stubServiceUsersFullyOnboarded(TC_VERSION, "connected");
+    stubApiKeysPresent();
+
+    const res = await callbackGET(
+      makeCallbackRequest("code-3", "&next=https%3A%2F%2Fevil.example"),
+    );
+
+    expect(new URL(res.headers.get("location")!).pathname).toBe("/dashboard");
   });
 });

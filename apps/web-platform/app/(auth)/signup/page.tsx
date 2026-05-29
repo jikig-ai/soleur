@@ -1,11 +1,12 @@
 "use client";
 
-import { Suspense, useState, useRef } from "react";
+import { Suspense, useState, useRef, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { reportSilentFallback } from "@/lib/client-observability";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
-import { EMAIL_OTP_LENGTH } from "@/lib/auth/constants";
+import { safeReturnTo } from "@/lib/safe-return-to";
+import { EMAIL_OTP_LENGTH, OTP_RESEND_COOLDOWN_MS } from "@/lib/auth/constants";
 import {
   mapSupabaseError,
   SIGNUP_REASON_NO_ACCOUNT,
@@ -25,21 +26,62 @@ function SignupForm() {
   const searchParams = useSearchParams();
   const initialEmail = searchParams.get("email") ?? "";
   const reason = searchParams.get("reason");
+  // Validated same-origin relative path to land on after the account is
+  // created (e.g. /invite/<token> from the workspace invite flow); null when
+  // absent or rejected, in which case we fall back to /accept-terms.
+  const redirectTo = safeReturnTo(searchParams.get("redirectTo"));
   const [email, setEmail] = useState(initialEmail);
   const [otpSent, setOtpSent] = useState(false);
   const [otp, setOtp] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [tcAccepted, setTcAccepted] = useState(false);
+  const [cooldownSeconds, setCooldownSeconds] = useState(0);
   const otpRef = useRef<HTMLInputElement>(null);
+  const cooldownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  function clearCooldown() {
+    if (cooldownTimerRef.current) {
+      clearInterval(cooldownTimerRef.current);
+      cooldownTimerRef.current = null;
+    }
+  }
+
+  // Disable resend for >= GoTrue's 60s per-user OTP window so the UI cannot
+  // fire a same-email re-send before GoTrue will accept it (the double-send
+  // that returns "Too many sign-in attempts").
+  function startCooldown() {
+    clearCooldown();
+    setCooldownSeconds(Math.ceil(OTP_RESEND_COOLDOWN_MS / 1000));
+    cooldownTimerRef.current = setInterval(() => {
+      setCooldownSeconds((s) => {
+        if (s <= 1) {
+          clearCooldown();
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+  }
+
+  function resetCooldown() {
+    clearCooldown();
+    setCooldownSeconds(0);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (cooldownTimerRef.current) clearInterval(cooldownTimerRef.current);
+    };
+  }, []);
 
   const showNoAccountBanner =
     reason === SIGNUP_REASON_NO_ACCOUNT &&
     initialEmail.length > 0 &&
     email === initialEmail;
 
-  async function handleSendOtp(e: React.FormEvent) {
-    e.preventDefault();
+  /** Send (or resend) an OTP for the current email. Returns true on success. */
+  async function sendOtp(): Promise<boolean> {
     setLoading(true);
     setError("");
 
@@ -59,10 +101,24 @@ function SignupForm() {
         },
       });
       setError(mapSupabaseError(error.message));
-    } else {
+      return false;
+    }
+
+    startCooldown();
+    return true;
+  }
+
+  async function handleSendOtp(e: React.FormEvent) {
+    e.preventDefault();
+    const ok = await sendOtp();
+    if (ok) {
       setOtpSent(true);
       setTimeout(() => otpRef.current?.focus(), 100);
     }
+  }
+
+  async function handleResendOtp() {
+    await sendOtp();
   }
 
   async function handleVerifyOtp(e: React.FormEvent) {
@@ -91,7 +147,12 @@ function SignupForm() {
       });
       setError(mapSupabaseError(error.message));
     } else {
-      router.push("/accept-terms");
+      // Honor a validated redirectTo (e.g. /invite/<token>) so an invited user
+      // lands on the invite instead of being bounced into the post-signup
+      // funnel and forced to re-request a code. Middleware (middleware.ts)
+      // still interposes /accept-terms for an unaccepted-T&C user, so this
+      // cannot bypass the T&C gate.
+      router.push(redirectTo ?? "/accept-terms");
     }
   }
 
@@ -133,10 +194,22 @@ function SignupForm() {
           </form>
 
           <button
+            type="button"
+            onClick={handleResendOtp}
+            disabled={loading || cooldownSeconds > 0}
+            className="block w-full text-center text-sm text-soleur-text-muted hover:text-soleur-text-secondary disabled:opacity-50 disabled:hover:text-soleur-text-muted"
+          >
+            {cooldownSeconds > 0
+              ? `You can request a new code in ${cooldownSeconds}s`
+              : "Resend code"}
+          </button>
+
+          <button
             onClick={() => {
               setOtpSent(false);
               setOtp("");
               setError("");
+              resetCooldown();
             }}
             className="block w-full text-center text-sm text-soleur-text-muted hover:text-soleur-text-secondary"
           >
@@ -171,7 +244,11 @@ function SignupForm() {
             type="email"
             required
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={(e) => {
+              setEmail(e.target.value);
+              // A corrected/different email should be sendable immediately.
+              resetCooldown();
+            }}
             placeholder="you@example.com"
             className="w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3 text-sm placeholder:text-soleur-text-muted focus:border-soleur-border-emphasized focus:outline-none"
           />
