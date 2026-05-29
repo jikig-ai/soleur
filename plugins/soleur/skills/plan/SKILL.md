@@ -98,6 +98,18 @@ Refine the idea through collaborative dialogue using the **AskUserQuestion tool*
 **Skip option:** If the feature description is already detailed, offer:
 "Your description is clear. Should I proceed with research, or would you like to refine it further?"
 
+### 0.6. Pre-Research Premise Validation (Always)
+
+Run BEFORE spawning any research (Phase 1) — research and downstream phases are expensive, and building a plan atop a stale premise wastes all of it. `brainstorm` Phase 1.1 does this validation when a brainstorm precedes plan, but `plan` is frequently entered directly (including the one-shot → plan path that skips brainstorm), so the cheap probe must also live here. This is distinct from Phase 1.7 reconciliation (which checks spec claims AFTER research returns) — this gate fires before research is even dispatched.
+
+For every issue, blocker, dependency, or prior-art artifact the feature description **cites by reference**, verify it still holds:
+
+1. **Cited GitHub issues / PRs** (`#N`, `Closes #N`, "blocked by #N", "follow-up to #N"): run `gh issue view <N> --json state,title,closedByPullRequestsReferences` and `gh pr view <N> --json state,merged` where applicable. If a blocker is already `closed`/`merged`, or the issue this plan targets is already closed by a merged PR, **the premise is stale** — surface via **AskUserQuestion** ("Issue #N appears already resolved by PR #M. Re-scope, or close as done?") rather than planning against it.
+2. **Cited file/symbol/migration paths** (a function, route, component, or migration the plan assumes exists): confirm with `git show origin/main:<path>` or `git grep -n "<symbol>" origin/main`. If the cited artifact does not exist on `origin/main`, the premise ("fix the bug in X") may really be "X was never built" — flag it; the plan's shape changes from *fix* to *build*.
+3. **"UI exists but is broken" claims**: distinguish *broken behavior* from *never-built*. If the description asserts a UI/endpoint misbehaves, confirm the route/component is actually present (`git grep`) before planning a behavioral fix — a silently-absent feature needs a build plan, not a patch.
+
+Emit a one-paragraph **Premise Validation** note (what was checked, what held, what was stale) into the research-insights scratch so Phase 1.7 and the plan's "Research Reconciliation" section can carry it forward. If nothing is cited by reference, state "no external premises to validate" and proceed.
+
 ## Main Tasks
 
 ### 1. Local Research (Always Runs - Parallel)
