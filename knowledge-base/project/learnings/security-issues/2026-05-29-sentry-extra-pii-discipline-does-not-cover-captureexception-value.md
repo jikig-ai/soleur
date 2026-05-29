@@ -16,7 +16,7 @@ related:
 ## Problem
 
 The dashboard OTP verify screen rendered a dead-end `Something went wrong. Please
-try again.` for `ops@jikigai.com` after a long wait. Root cause: the client error
+try again.` for `ops@example.com` after a long wait. Root cause: the client error
 mapper (`lib/auth/error-messages.ts`) matched only four freetext message regexes
 and fell through to the generic message for every structured GoTrue failure —
 `over_request_rate_limit` (429), `otp_expired`, server 5xx (a raising Custom
@@ -28,7 +28,7 @@ careful `extra`-level PII discipline (forward only enum `code` / int `status` to
 Sentry, never `error.message`, because the message embeds the email and Sentry is
 a shared cross-tenant project). But `reportSilentFallback(err, ...)` forwards the
 **raw error object** as the first arg to `Sentry.captureException(err, ...)`, so
-`error.message` (e.g. `"rate limited for ops@jikigai.com"`) still shipped to
+`error.message` (e.g. `"rate limited for ops@example.com"`) still shipped to
 Sentry as `event.exception.values[].value`. The `extra` bag was clean; the
 exception value was not. The unit test even asserted "never forwards
 error.message" while only inspecting `extra` — papering over the real leak.
