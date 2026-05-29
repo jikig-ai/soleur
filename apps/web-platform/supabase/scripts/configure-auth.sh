@@ -19,13 +19,20 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATE_FILE="$SCRIPT_DIR/../templates/magic-link.html"
+CONFIRMATION_TEMPLATE_FILE="$SCRIPT_DIR/../templates/confirmation.html"
 
 if [[ ! -f "$TEMPLATE_FILE" ]]; then
   echo "ERROR: Email template not found at $TEMPLATE_FILE" >&2
   exit 1
 fi
 
+if [[ ! -f "$CONFIRMATION_TEMPLATE_FILE" ]]; then
+  echo "ERROR: Email template not found at $CONFIRMATION_TEMPLATE_FILE" >&2
+  exit 1
+fi
+
 MAGIC_LINK_TEMPLATE=$(cat "$TEMPLATE_FILE")
+CONFIRMATION_TEMPLATE=$(cat "$CONFIRMATION_TEMPLATE_FILE")
 
 echo "Configuring Supabase Auth for project $PROJECT_REF..."
 
@@ -35,6 +42,7 @@ RESPONSE=$(curl -s --connect-timeout 10 --max-time 30 -w "\n%{http_code}" -X PAT
   -H "Content-Type: application/json" \
   -d "$(jq -n \
     --arg template "$MAGIC_LINK_TEMPLATE" \
+    --arg confirmation "$CONFIRMATION_TEMPLATE" \
     --arg smtp_pass "$RESEND_API_KEY" \
     '{
       "site_url": "https://app.soleur.ai",
@@ -49,7 +57,9 @@ RESPONSE=$(curl -s --connect-timeout 10 --max-time 30 -w "\n%{http_code}" -X PAT
       "smtp_pass": $smtp_pass,
       "smtp_sender_name": "Soleur",
       "mailer_subjects_magic_link": "Your Soleur verification code",
-      "mailer_templates_magic_link_content": $template
+      "mailer_templates_magic_link_content": $template,
+      "mailer_subjects_confirmation": "Confirm your Soleur account",
+      "mailer_templates_confirmation_content": $confirmation
     }'
   )")
 
