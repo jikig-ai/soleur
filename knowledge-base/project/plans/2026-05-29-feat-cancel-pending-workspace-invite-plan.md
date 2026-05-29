@@ -304,8 +304,8 @@ logs:
   where: pino structured logs (createChildLogger "workspace-invitations") → Better Stack
   retention: per existing Better Stack retention (no change)
 discoverability_test:
-  command: "curl -s -X POST https://<host>/api/workspace/cancel-invite -H 'Content-Type: application/json' -d '{}' | jq .error   # expect 401/400 without auth — proves route is mounted"
-  expected_output: "an error code (unauthorized / invalid_body), NOT 404 — confirms the route exists and the auth chain fires"
+  command: curl -sS -o /dev/null -w "%{http_code}" --max-time 10 -X POST -H "content-type: application/json" -d "{}" https://app.soleur.ai/api/workspace/cancel-invite
+  expected_output: "401 or 403 or 400 (route mounted; auth/CSRF/body gate fires before any 200 — never 404)"
 ```
 
 ## Test Scenarios
