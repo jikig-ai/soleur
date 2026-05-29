@@ -498,12 +498,17 @@ print('  updated segment id=' + str(seg['id']))
   }
   echo "  ✓ target $TARGET_ORG: enabled=$GOT_TARGET"
 
-  echo "→ Eval-verify ($ROLE env): control org $CONTROL_ORG must be enabled=false (no leak)…"
-  GOT_CONTROL=$(eval_flag_enabled "$ENV_KEY" "$FLAG" "$CONTROL_ORG") || { echo "control eval request failed / errored — UNVERIFIED, aborting (no fail-open)" >&2; exit 3; }
-  if [[ "$GOT_CONTROL" != "false" ]]; then
-    echo "EVAL VERIFY FAILED (control leak): $FLAG is enabled for control org $CONTROL_ORG — the flag is reaching a non-targeted org." >&2
+  # Poll until the control SETTLES to disabled — same propagation tolerance as the
+  # target check. The edge environment document is eventually consistent: right after a
+  # segment+override create, a non-member org can transiently read enabled=true for one
+  # refresh window before the segment's orgId condition propagates. A single-shot read
+  # here false-positives on that window. A genuine leak never settles to false → the
+  # poll exhausts its budget and fails loud (and an HTTP error returns 3 → exit 3).
+  echo "→ Eval-verify ($ROLE env): control org $CONTROL_ORG must settle to enabled=false (no leak)…"
+  GOT_CONTROL=$(eval_until "$ENV_KEY" "$FLAG" "$CONTROL_ORG" "false") || {
+    echo "EVAL VERIFY FAILED (control leak): $FLAG did not settle to disabled for control org $CONTROL_ORG within the propagation budget (last observed=$GOT_CONTROL) — the flag is reaching a non-targeted org, OR the edge endpoint errored. UNVERIFIED." >&2
     exit 3
-  fi
+  }
   echo "  ✓ control $CONTROL_ORG: enabled=$GOT_CONTROL"
 
   echo
