@@ -74,7 +74,6 @@ export default async function InvitePage({ params }: Props) {
           invitationId={result.invitation_id}
           token={token}
           isAuthenticated={!!user}
-          expiresAt={result.expires_at}
           inviteeEmail={result.invitee_email ?? ""}
           isIntendedInvitee={isIntendedInvitee}
           signedInEmail={signedInEmail}

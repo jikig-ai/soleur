@@ -8,7 +8,6 @@ interface Props {
   invitationId: string;
   token: string;
   isAuthenticated: boolean;
-  expiresAt: string;
   /** Email the invitation was addressed to (lower-cased server-side). */
   inviteeEmail: string;
   /** True when the signed-in account matches the invited email. Computed in page.tsx. */
@@ -31,6 +30,10 @@ function reasonToMessage(reason: string | undefined): string {
     case "already_accepted":
     case "already_member":
       return "You've already joined this workspace.";
+    case "already_declined":
+      return "This invitation has already been declined.";
+    case "invitation_not_found":
+      return "This invitation is no longer available.";
     default:
       return reason ? "Something went wrong. Please try again." : "";
   }
@@ -40,7 +43,6 @@ export function InviteActions({
   invitationId,
   token,
   isAuthenticated,
-  expiresAt: _expiresAt,
   inviteeEmail,
   isIntendedInvitee,
   signedInEmail,
@@ -76,7 +78,7 @@ export function InviteActions({
   if (!isIntendedInvitee) {
     return (
       <div className="space-y-3">
-        <p className="text-sm text-soleur-text-secondary">
+        <p id="invite-mismatch-notice" className="text-sm text-soleur-text-secondary">
           This invitation was sent to{" "}
           <span className="font-medium text-soleur-text-primary">
             {inviteeEmail}
@@ -96,6 +98,7 @@ export function InviteActions({
         <button
           type="button"
           disabled
+          aria-describedby="invite-mismatch-notice"
           className="w-full rounded-md bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-4 py-3 font-medium text-soleur-text-on-accent opacity-50"
         >
           Accept invitation
@@ -157,7 +160,7 @@ export function InviteActions({
   return (
     <div className="space-y-3">
       {error && (
-        <p className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-400">
+        <p role="alert" className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-400">
           {error}
         </p>
       )}

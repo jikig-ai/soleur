@@ -10,7 +10,6 @@ vi.mock("next/navigation", () => ({
 const BASE = {
   invitationId: "inv-1",
   token: "tok-abc",
-  expiresAt: "2026-06-05T00:00:00.000Z",
 };
 
 describe("InviteActions — invitee-email gating", () => {
@@ -42,8 +41,26 @@ describe("InviteActions — invitee-email gating", () => {
     // The raw server reason code must never render.
     expect(screen.queryByText(/not_intended_invitee/i)).toBeNull();
 
-    // The red error box (failed-action styling) must NOT be the mismatch surface.
-    expect(document.querySelector(".bg-red-500\\/10")).toBeNull();
+    // The failed-action alert (semantic role) must NOT be the mismatch surface.
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("mismatch with no signed-in email (no-email OAuth account) → Accept still disabled, notice still shown", () => {
+    render(
+      <InviteActions
+        {...BASE}
+        isAuthenticated={true}
+        isIntendedInvitee={false}
+        inviteeEmail="intended@jikigai.com"
+        signedInEmail=""
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: /accept invitation/i }),
+    ).toBeDisabled();
+    expect(screen.getByText(/intended@jikigai\.com/i)).toBeInTheDocument();
+    // No "signed in as" clause when the account has no email.
+    expect(screen.queryByText(/signed in as/i)).toBeNull();
   });
 
   it("match: authenticated and is the intended invitee → Accept enabled, no mismatch notice", () => {
@@ -96,16 +113,22 @@ describe("InviteActions — invitee-email gating", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /accept invitation/i }));
 
+    // Assert the request contract, not just that fetch fired.
     await vi.waitFor(() => {
-      expect(mockFetch).toHaveBeenCalled();
+      expect(mockFetch).toHaveBeenCalledWith(
+        "/api/workspace/accept-invite",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ invitationId: "inv-1" }),
+        }),
+      );
     });
 
     // Raw token must not leak; a human-readable message must appear.
-    await vi.waitFor(() => {
-      expect(screen.queryByText(/not_intended_invitee/i)).toBeNull();
-      expect(
-        screen.getByText(/isn't addressed to your account/i),
-      ).toBeInTheDocument();
-    });
+    const humanCopy = await screen.findByText(
+      /isn't addressed to your account/i,
+    );
+    expect(humanCopy).toBeInTheDocument();
+    expect(screen.queryByText(/not_intended_invitee/i)).toBeNull();
   });
 });

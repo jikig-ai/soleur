@@ -89,6 +89,17 @@ identity binding). This change does not relax, move, or remove any server-side c
 it only adds a client-side disable + humanized copy on top of the existing defenses.
 No new exposure vector is introduced.
 
+**Read-exposure of `invitee_email` (accepted, token = boundary):** the mismatch notice
+renders the invited person's email to whoever opens the invite link. This is **not a new
+exposure** — `invitee_email` was already returned by the public, token-gated
+`lookup_invitation_by_token` RPC that drives this page (it already governed which copy
+rendered) and the access-control boundary is the high-entropy hashed invite token,
+unchanged here. Surfacing it is the actionable signal the invitee needs (which account
+to sign in with); the "Hide the invite screen entirely" alternative was rejected for that
+reason. Reducing link-based email disclosure would be a change to the server lookup
+(out of scope for this client-only PR). Accepted as in-scope per the `single-user incident`
+threshold: the token holder is the intended audience.
+
 **Brand-survival threshold:** single-user incident — a non-technical invitee hitting a
 raw error code on the onboarding screen is a per-user trust event. The threshold is set
 by the user-facing-broken artifact, not by a data-exposure vector (there is none here).
