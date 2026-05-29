@@ -18,6 +18,41 @@ related:
 
 # fix: OTP verification fails with generic "Something went wrong"
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-29
+**Sections enhanced:** Overview, Hypotheses, Files to Edit, Risks
+**Gates run:** 4.4 precedent-diff (PASS — in-repo precedent found), 4.45
+verify-the-negative + SDK-realism (PASS — all claims verified against installed
+SDK), 4.5 network-outage (keyword `429`/`timeout` triggered — application-layer,
+checklist N/A, telemetry emitted), 4.6 User-Brand Impact halt (PASS), 4.7
+Observability halt (PASS — 5 fields, no SSH), 4.8 PAT-shaped halt (PASS — none).
+
+### Key Improvements
+
+1. **In-repo precedent confirmed.** `lib/supabase/tenant.ts:337-360` already
+   discriminates `error.code === "over_request_rate_limit"` (structured code, not
+   `error.message`) and bounded-retries it. The client-side fix adopts the same
+   code-first discrimination pattern — not novel, mirrors a shipped precedent.
+2. **All SDK API claims verified against installed `@supabase/auth-js`** (see
+   SDK-Verification block in Overview). `error.code`, `error.status`, the six
+   mapped error codes, and `AuthRetryableFetchError` all exist in the pinned
+   version.
+3. **Network-throw branch refined.** `AuthRetryableFetchError` is thrown with
+   `status: 503` (errors.d.ts:198-200), so it is caught by the `status >= 500`
+   branch — the dedicated "no-status network" branch only catches a bare
+   `TypeError`/`fetch` rejection. Plan adjusted to map both to recoverable copy.
+
+### New Considerations Discovered
+
+- The existing `tenant.ts` retry config does NOT apply to the dashboard login
+  (`login-form.tsx`) — there is no client-side 429 retry. The fix is mapping-only
+  (give the user recoverable copy); adding a client retry is explicitly OUT OF
+  SCOPE (would re-burst against the per-IP ceiling; the runbook warns against it).
+- `mint_rate_exceeded` (the `precheck_jwt_mint` 45001 raise) reaches the user as
+  GoTrue **500** (hook propagation), NOT a 429 — so it correctly maps to the
+  "temporarily unavailable" 5xx branch, not the rate-limit branch.
+
 🐛 **Bug.** Login fails for `ops@jikigai.com`: after entering the 6-digit email
 verification code on the "Enter verification code" screen, the app spends a long
 time validating and then renders a red `Something went wrong. Please try again.`
@@ -85,6 +120,45 @@ substrate — those are correct as shipped (#3363 / PR #3983). It hardens the
 *user-facing dashboard login* error surface so a failing `verifyOtp` produces an
 accurate, recoverable message and a triage-able Sentry event instead of a silent
 dead end.
+
+### SDK-Verification (deepen pass, against installed `@supabase/auth-js`)
+
+All structured-error claims verified against the pinned SDK at deepen time:
+
+```
+errors.d.ts:20   code: ErrorCode | (string & {}) | undefined;   # AuthError.code
+errors.d.ts:22   status: number | undefined;                    # AuthError.status
+error-codes.d.ts grep → over_request_rate_limit, otp_expired,
+                        over_email_send_rate_limit, otp_disabled,
+                        session_expired, validation_failed       # all present
+errors.d.ts:198-200  AuthRetryableFetchError ... throw new
+                     AuthRetryableFetchError('Service temporarily
+                     unavailable', 503)                          # status 503
+```
+
+`mapSupabaseAuthError` may therefore safely read `error.code` and `error.status`.
+`AuthRetryableFetchError` carries `status: 503`, so the `status >= 500` branch
+catches retryable network failures; a bare `TypeError` (no `status`) is the only
+case the no-status network branch handles.
+
+### Research Insights — precedent (Phase 4.4)
+
+**In-repo precedent for code-first discrimination** (`lib/supabase/tenant.ts:337-360`):
+
+```ts
+const errCode = (verified.error as { code?: string } | null | undefined)?.code;
+if (errCode !== "over_request_rate_limit" || attempt >= retryConfig.maxRetries) break;
+```
+
+The runtime-mint path already keys off the **structured `code`**, explicitly
+noting "the precheck-ceiling raise (`mint_rate_exceeded` in `message`, no `code`)
+is NOT retried" — i.e., the codebase already treats `error.code` as the durable
+discriminator and `error.message` as untrustworthy. The client-side mapping
+adopts the identical posture. **Pattern is NOT novel** — it mirrors a shipped,
+reviewed precedent. The one divergence: the client side does NOT retry (mapping
+only), because the dashboard login has no `token_hash` regenerate step and
+re-bursting would hit the same per-IP ceiling (runbook
+`supabase-magiclink-rate-limit.md` warns against client retry).
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -154,6 +228,27 @@ believes is correct":
 The fix is **robust to all three** because it gives each a distinct, recoverable
 message and a distinguishable Sentry event — without needing to first prove
 which one `ops@jikigai.com` hit.
+
+### Network-Outage Deep-Dive (Phase 4.5 — keyword `429`/`timeout` triggered)
+
+The trigger keywords (`429`, `timeout`) appear in an **application-layer
+HTTP-status context** (a managed Supabase GoTrue endpoint over HTTPS), not an
+SSH/self-hosted-infra connectivity context. The L3/L7 firewall checklist
+(`plan-network-outage-checklist.md`) targets self-hosted hosts behind an
+allowlisted firewall; it does not apply to a managed `*.supabase.co` endpoint
+reached from the browser. Layer verdicts:
+
+- **L3 firewall allow-list:** N/A — browser→Supabase managed edge, no operator
+  firewall in path.
+- **L3 DNS/routing:** N/A — managed DNS; a DNS failure would surface as the
+  bare-`TypeError` network-throw branch (covered).
+- **L7 TLS/proxy:** managed by Supabase; a TLS/edge failure surfaces as
+  `AuthRetryableFetchError` (status 503) → `status >= 500` branch (covered).
+- **L7 application:** the actual fault domain — GoTrue 429/500 and the Custom
+  Access Token Hook. Fully addressed by the code-aware mapping + Sentry `status`.
+
+No firewall/egress-IP verification is required; this is not an
+`hr-ssh-diagnosis-verify-firewall`-class symptom.
 
 ## Files to Edit
 
