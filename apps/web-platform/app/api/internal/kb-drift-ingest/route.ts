@@ -14,7 +14,11 @@
 // index `messages_active_draft_dedup_idx` (migration 052) yields an idempotent
 // skip. The shared `insertDraftCard` helper does plain `.insert()` + maps
 // 23505 → { status: "deduped" } (never ON CONFLICT — PostgREST cannot infer it
-// against a partial index, 42P10).
+// against a partial index, 42P10). NOTE the index is partial on
+// `status='draft'`: once the operator DISMISSES a digest (status → archived),
+// the row leaves the index, so the next run over an unchanged KB re-inserts the
+// card. This is intentional — it re-surfaces drift the operator acknowledged
+// but never fixed.
 //
 // Cross-tenant: the helper PINS workspace_id to the operator's solo workspace
 // (NOT the session-selected workspace) and writes via the RLS-enforced tenant

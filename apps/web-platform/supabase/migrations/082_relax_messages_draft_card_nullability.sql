@@ -27,10 +27,14 @@ ALTER TABLE public.messages ALTER COLUMN role            DROP NOT NULL;
 ALTER TABLE public.messages ALTER COLUMN content         DROP NOT NULL;
 
 -- Discriminator: every row is EITHER a chat row OR a draft-card row.
--- The card branch intentionally EXCLUDES user_id: the GDPR Art. 17
--- anonymization cascade (migration 068) sets messages.user_id = NULL on
--- authored rows, so a user_id-anchored card branch would make an anonymized
--- card satisfy NEITHER branch (23514) and ABORT a Right-to-Erasure operation.
+-- The card branch intentionally EXCLUDES user_id (defensive, GDPR Art. 17).
+-- On founder account-delete, a conversation-less draft card is erased via
+-- `messages.user_id REFERENCES auth.users ON DELETE CASCADE` (mig 046) — NOT by
+-- 068's in-place nulling, which only matches attachment-bearing rows in a
+-- cross-user conversation and never reaches a `conversation_id IS NULL` card.
+-- Keeping the branch user_id-free means the CHECK stays satisfiable if a future
+-- migration ever converts that FK to `ON DELETE SET NULL` (the in-place-null
+-- pattern of mig 065/066), so erasure can never abort with 23514.
 -- It also excludes workspace_id/template_id (kept column-level NOT NULL,
 -- Decision A). Any FUTURE `DROP NOT NULL` on workspace_id or template_id MUST
 -- add the dropped column to this CHECK.
@@ -47,6 +51,7 @@ ALTER TABLE public.messages VALIDATE CONSTRAINT messages_row_kind_chk;
 
 COMMENT ON CONSTRAINT messages_row_kind_chk ON public.messages IS
   'Discriminator: chat row (conversation_id+role+content) OR draft card '
-  '(source+owning_domain+draft_preview). user_id excluded — Art.17 '
-  'anonymization (068) nulls it on cards. Migration 082 finishes the '
-  'mig-046 intent. See ADR-037 (canonical-by-filename; dedup design).';
+  '(source+owning_domain+draft_preview). user_id excluded (defensive): cards '
+  'erase via user_id ON DELETE CASCADE (mig 046), not 068 in-place nulling; '
+  'user_id-free keeps the CHECK satisfiable under a future FK->SET NULL. '
+  'Migration 082 finishes the mig-046 intent. See ADR-037 (dedup design).';
