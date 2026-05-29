@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import type { PendingInvite } from "@/server/workspace-invitations";
 
 function timeUntilExpiry(expiresAt: string): string {
   const diff = new Date(expiresAt).getTime() - Date.now();
@@ -12,22 +11,60 @@ function timeUntilExpiry(expiresAt: string): string {
   return `Expires in ${hours}h`;
 }
 
+type Invite = {
+  id: string;
+  invitee_email: string;
+  role: string;
+  expires_at: string;
+  created_at: string;
+};
+
 export function PendingInvitesList({
   invites: initialInvites,
   workspaceId,
+  isOwner,
 }: {
-  invites: Array<{
-    id: string;
-    invitee_email: string;
-    role: string;
-    expires_at: string;
-    created_at: string;
-  }>;
+  invites: Invite[];
   workspaceId: string;
+  isOwner: boolean;
 }) {
   const [invites, setInvites] = useState(initialInvites);
+  // Per-row state: multiple invites can be in-flight independently, so a
+  // scalar pendingId/errorId would let a second click re-enable the first
+  // row's button mid-request. Key by invite id.
+  const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
+  const [errorIds, setErrorIds] = useState<Set<string>>(new Set());
 
   if (invites.length === 0) return null;
+
+  const withoutId = (s: Set<string>, id: string) => {
+    const next = new Set(s);
+    next.delete(id);
+    return next;
+  };
+
+  async function handleCancel(invite: Invite) {
+    setPendingIds((prev) => new Set(prev).add(invite.id));
+    setErrorIds((prev) => withoutId(prev, invite.id));
+    try {
+      const res = await fetch("/api/workspace/cancel-invite", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ workspaceId, invitationId: invite.id }),
+      });
+      const body = (await res.json().catch(() => ({}))) as { ok?: boolean };
+      // Commit removal only once the server confirms — never a silent no-op.
+      if (res.ok && body?.ok === true) {
+        setInvites((prev) => prev.filter((i) => i.id !== invite.id));
+      } else {
+        setErrorIds((prev) => new Set(prev).add(invite.id));
+      }
+    } catch {
+      setErrorIds((prev) => new Set(prev).add(invite.id));
+    } finally {
+      setPendingIds((prev) => withoutId(prev, invite.id));
+    }
+  }
 
   return (
     <div className="mt-6 rounded-lg border border-soleur-border-default">
@@ -69,8 +106,24 @@ export function PendingInvitesList({
                     {timeUntilExpiry(invite.expires_at)}
                   </span>
                 </p>
+                {errorIds.has(invite.id) && (
+                  <p className="mt-1 text-xs text-red-500" role="alert">
+                    Couldn&apos;t cancel — try again.
+                  </p>
+                )}
               </div>
             </div>
+            {isOwner && (
+              <button
+                type="button"
+                onClick={() => handleCancel(invite)}
+                disabled={pendingIds.has(invite.id)}
+                aria-label={`Cancel invite for ${invite.invitee_email}`}
+                className="rounded-md border border-soleur-border-default px-3 py-1 text-xs font-medium text-soleur-text-secondary transition-colors hover:text-soleur-text-primary disabled:opacity-50"
+              >
+                {pendingIds.has(invite.id) ? "Cancelling…" : "Cancel"}
+              </button>
+            )}
           </li>
         ))}
       </ul>

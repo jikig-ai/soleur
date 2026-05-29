@@ -7,7 +7,8 @@ import { reportSilentFallback } from "@/lib/client-observability";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
 import { EMAIL_OTP_LENGTH } from "@/lib/auth/constants";
 import {
-  mapSupabaseError,
+  type AuthErrorLike,
+  mapSupabaseAuthError,
   SIGNUP_REASON_NO_ACCOUNT,
 } from "@/lib/auth/error-messages";
 import Link from "next/link";
@@ -44,7 +45,12 @@ function SignupForm() {
     setError("");
 
     const supabase = createClient();
-    const { error } = await supabase.auth.signInWithOtp({ email });
+    let error: AuthErrorLike | null = null;
+    try {
+      ({ error } = await supabase.auth.signInWithOtp({ email }));
+    } catch (thrown) {
+      error = thrown as AuthErrorLike;
+    }
 
     setLoading(false);
 
@@ -54,11 +60,12 @@ function SignupForm() {
         feature: "auth",
         op: "signInWithOtp",
         extra: {
-          errorCode: (error as { code?: string }).code,
+          errorCode: error.code,
           errorName: error.name,
+          status: error.status,
         },
       });
-      setError(mapSupabaseError(error.message));
+      setError(mapSupabaseAuthError(error));
     } else {
       setOtpSent(true);
       setTimeout(() => otpRef.current?.focus(), 100);
@@ -71,11 +78,18 @@ function SignupForm() {
     setError("");
 
     const supabase = createClient();
-    const { error } = await supabase.auth.verifyOtp({
-      email,
-      token: otp,
-      type: "email",
-    });
+    let error: AuthErrorLike | null = null;
+    try {
+      ({ error } = await supabase.auth.verifyOtp({
+        email,
+        token: otp,
+        type: "email",
+      }));
+    } catch (thrown) {
+      // verifyOtp can reject (not resolve with `error`) on a transport failure;
+      // route the thrown error through the same mapping layer.
+      error = thrown as AuthErrorLike;
+    }
 
     setLoading(false);
 
@@ -85,11 +99,12 @@ function SignupForm() {
         feature: "auth",
         op: "verifyOtp",
         extra: {
-          errorCode: (error as { code?: string }).code,
+          errorCode: error.code,
           errorName: error.name,
+          status: error.status,
         },
       });
-      setError(mapSupabaseError(error.message));
+      setError(mapSupabaseAuthError(error));
     } else {
       router.push("/accept-terms");
     }
