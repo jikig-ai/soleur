@@ -71,12 +71,16 @@ function extractResourceBody(src: string, name: string): string {
  * headers nesting is captured in full. Throws if no matching rule is found.
  */
 function extractRuleBlockForHost(resourceBody: string, host: string): string {
-  let searchFrom = 0;
-  while (true) {
-    const rulesIdx = resourceBody.indexOf("rules", searchFrom);
-    if (rulesIdx === -1) break;
-    const openBrace = resourceBody.indexOf("{", rulesIdx);
-    if (openBrace === -1) break;
+  // Anchor on the `rules {` block opener specifically — NOT the bare word
+  // "rules", which also appears in `provider = cloudflare.rulesets`, in prose
+  // ("locks both rules into source"), and in the developers.cloudflare.com/rules/
+  // URL. Matching `rules\s*{` prevents a future comment with a stray `{` before
+  // the first real rules block from desyncing the brace count and binding the
+  // wrong rule.
+  const opener = /\brules\s*\{/g;
+  let m: RegExpExecArray | null;
+  while ((m = opener.exec(resourceBody)) !== null) {
+    const openBrace = resourceBody.indexOf("{", m.index);
     let depth = 0;
     let end = -1;
     for (let i = openBrace; i < resourceBody.length; i++) {
@@ -95,7 +99,7 @@ function extractRuleBlockForHost(resourceBody: string, host: string): string {
     if (block.includes(`http.host eq \\"${host}\\"`)) {
       return block;
     }
-    searchFrom = end + 1;
+    opener.lastIndex = end + 1;
   }
   throw new Error(`no rules block matching host "${host}" found in ${RESOURCE_NAME}`);
 }
@@ -136,12 +140,18 @@ describe("seo-rulesets.tf X-Robots-Tag noindex guard (#4575)", () => {
     expect(rule).toMatch(/value\s*=\s*"noindex, nofollow"/);
   });
 
-  test("api.soleur.ai rule sets X-Robots-Tag to a noindex value", () => {
+  test("api.soleur.ai rule sets X-Robots-Tag to exactly 'noindex, nofollow'", () => {
+    // Pin the EXACT value, not just substring `noindex`. The api. rule is
+    // dormant today (DNS-only CNAME — #3379), but it is retained so a future
+    // proxy flip activates it without a code change; if it ever fires it must
+    // carry the same `noindex, nofollow` as deploy. A loose `noindex*` match
+    // would let the retained rule be silently weakened to a no-snippet-only
+    // `noindex` ahead of that flip.
     const tf = readFileSync(TF_PATH, "utf-8");
     const body = extractResourceBody(tf, RESOURCE_NAME);
     const rule = extractRuleBlockForHost(body, "api.soleur.ai");
     expect(rule).toMatch(/name\s*=\s*"X-Robots-Tag"/);
-    expect(rule).toMatch(/value\s*=\s*"noindex[^"]*"/);
+    expect(rule).toMatch(/value\s*=\s*"noindex, nofollow"/);
   });
 
   // Both rules must stay enabled — a silent `enabled = false` is as bad as a
@@ -156,10 +166,14 @@ describe("seo-rulesets.tf X-Robots-Tag noindex guard (#4575)", () => {
   });
 
   // AC3 — cross-link comments name both the existing tracker (#3379) and this
-  // issue (#4575) so the api. no-op rationale stays discoverable.
-  test("seo_response_headers references both #3379 and #4575 trackers", () => {
+  // issue (#4575) so the api. no-op rationale stays discoverable. Scope the
+  // match to the seo_response_headers resource body (not the whole file) and
+  // forbid a trailing digit so `#33790` / `#45751` can't satisfy it — the
+  // cross-link must live with the rule rationale, not anywhere in the file.
+  test("seo_response_headers comment references both #3379 and #4575 trackers", () => {
     const tf = readFileSync(TF_PATH, "utf-8");
-    expect(tf).toContain("#3379");
-    expect(tf).toContain("#4575");
+    const body = extractResourceBody(tf, RESOURCE_NAME);
+    expect(body).toMatch(/#3379(?!\d)/);
+    expect(body).toMatch(/#4575(?!\d)/);
   });
 });
