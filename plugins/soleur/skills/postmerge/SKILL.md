@@ -138,7 +138,7 @@ A merged-and-deployed fix can pass every gate above and still not work — the d
 # Query the rolling event count; compare the window since the deploy against
 # the equivalent window before it.
 curl -sfS -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "https://${API_HOST}/api/0/organizations/${SENTRY_ORG}/issues/${ISSUE_ID}/?query=" \
+  "https://${API_HOST}/api/0/organizations/${SENTRY_ORG}/issues/${ISSUE_ID}/" \
   | jq '{shortId, status, count, lastSeen}'
 ```
 
