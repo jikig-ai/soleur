@@ -202,22 +202,17 @@ jobs:
             echo "::warning::soleur-ai-www detector not found; skipping pause (deploy continues)."
             exit 0
           fi
-          # Full-body GET-then-PUT: updateProjectMonitor requires the full
-          # ProjectMonitorRequest; a bare {"enabled":false} PUT risks a 400.
-          full=$(curl -sS --max-time 20 \
-            -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-            "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/detectors/${id}/") || {
-              echo "::warning::Failed to fetch detector ${id}; skipping pause (deploy continues)."
-              exit 0
-            }
-          body=$(jq '.enabled = false' <<<"$full" 2>/dev/null) || {
-            echo "::warning::Failed to build pause payload; skipping pause (deploy continues)."
-            exit 0
-          }
+          # Toggle via a bare partial PUT {"enabled": false} (verified 200).
+          # Echoing the full GET response back instead 400s: the GET (response)
+          # shape includes nested fields (dataSources[].queryObj.url) that
+          # serialize as null on read, but the PUT (request) schema requires a
+          # non-null string — the response and request schemas differ. A bare
+          # partial body avoids the whole class. See #4596 hotfix (#4603 shipped
+          # the broken GET-then-PUT and reddened every docs deploy).
           status=$(curl -sS --max-time 20 -X PUT \
             -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
             -H "Content-Type: application/json" \
-            -d "$body" \
+            -d '{"enabled":false}' \
             "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/detectors/${id}/" \
             -o /dev/null -w '%{http_code}')
           echo "pause PUT status: ${status}"
@@ -255,7 +250,6 @@ jobs:
           MONITOR_ID: ${{ steps.pause_www_monitor.outputs.monitor_id }}
         run: |
           set -uo pipefail
-          which jq >/dev/null 2>&1 || { apt-get update && apt-get install -y jq; }
           # Propagation grace + confirming probe (best-effort; never block resume).
           # Cap = 30 × 30s ≈ 15 min, matching the observed deploy-window flap; the
           # resume runs regardless, so an under-sized cap only weakens the
@@ -276,23 +270,14 @@ jobs:
             echo "No monitor id captured at pause; nothing to resume."
             exit 0
           fi
-          # Guard GET+jq explicitly so a resume-time blip fails loud with an
-          # actionable message (not a raw jq parse error). A stranded-paused
-          # monitor is worse than a red workflow, so exit 1 on any failure.
-          full=$(curl -sS --max-time 20 \
-            -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-            "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/detectors/${MONITOR_ID}/") || {
-              echo "::error::Failed to fetch detector ${MONITOR_ID} for resume; monitor may remain paused — re-run deploy-docs.yml or re-enable manually."
-              exit 1
-            }
-          body=$(jq '.enabled = true' <<<"$full" 2>/dev/null) || {
-            echo "::error::Failed to build resume payload for detector ${MONITOR_ID}; monitor may remain paused — re-run deploy-docs.yml or re-enable manually."
-            exit 1
-          }
+          # Resume via a bare partial PUT {"enabled": true} (verified 200) — same
+          # reason as the pause step: echoing the full GET body back 400s on the
+          # null nested fields. A stranded-paused monitor is worse than a red
+          # workflow, so a non-200 exits 1 (fail-loud).
           http=$(curl -sS --max-time 20 -X PUT \
             -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
             -H "Content-Type: application/json" \
-            -d "$body" \
+            -d '{"enabled":true}' \
             "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/detectors/${MONITOR_ID}/" \
             -o /dev/null -w '%{http_code}')
           echo "resume PUT status: ${http}"
