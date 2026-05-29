@@ -77,6 +77,23 @@ describe("LoginForm — redirectTo on verify (AC2)", () => {
     await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/dashboard"));
     expect(pushMock).not.toHaveBeenCalledWith("//evil.example");
   });
+
+  it("preserves redirectTo through the no-account login→signup bounce", async () => {
+    searchParamsRef.current = new URLSearchParams("redirectTo=/invite/tok123");
+    signInWithOtpMock.mockResolvedValueOnce({
+      error: { message: "Signups not allowed for otp", code: "otp_disabled" },
+    });
+    render(<LoginForm />);
+    fireEvent.change(screen.getByPlaceholderText(/you@example.com/i), {
+      target: { value: "newuser@example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /send sign-in code/i }));
+    await waitFor(() => expect(replaceMock).toHaveBeenCalled());
+    const target = replaceMock.mock.calls[0][0] as string;
+    expect(target).toContain("/signup?");
+    expect(target).toContain("redirectTo=%2Finvite%2Ftok123");
+    expect(target).toContain("reason=no_account");
+  });
 });
 
 describe("LoginForm — resend cooldown (AC4, AC6)", () => {

@@ -124,6 +124,9 @@ export function LoginForm() {
           email,
           reason: SIGNUP_REASON_NO_ACCOUNT,
         });
+        // Preserve the invite target through the login→signup bounce so a
+        // no-account invitee still lands on /invite/<token> after creating.
+        if (redirectTo) params.set("redirectTo", redirectTo);
         router.replace(`/signup?${params.toString()}`);
         return false;
       }
