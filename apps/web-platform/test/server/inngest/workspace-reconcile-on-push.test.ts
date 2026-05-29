@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeRepoUrl } from "@/lib/repo-url";
 
 // ADR-044 — Inngest reconcile on `platform/workspace.reconcile.requested`.
 //
@@ -83,9 +84,17 @@ vi.mock("@/server/session-sync", async (importOriginal) => {
 
 const reportSilentFallbackSpy = vi.fn();
 const warnSilentFallbackSpy = vi.fn();
+// #4597 follow-up — the expected no-workspace-match skip routes through
+// `mirrorWarnWithDebounce` (warn-level, 5-min per-key TTL) so it stops
+// flooding Sentry alert rules. Spy form per the feature-flags precedent
+// (lib/feature-flags/server.test.ts): the coalescing-window semantics are
+// owned by test/observability-mirror-debounce.test.ts; here we prove the
+// call site passes the right error/ctx/key/errorClass.
+const mirrorWarnWithDebounceSpy = vi.fn();
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
   warnSilentFallback: warnSilentFallbackSpy,
+  mirrorWarnWithDebounce: mirrorWarnWithDebounceSpy,
   hashUserId: (s: string) => `hash-${s}`,
 }));
 
@@ -155,6 +164,7 @@ beforeEach(() => {
   appendKbSyncRowSpy.mockClear();
   reportSilentFallbackSpy.mockReset();
   warnSilentFallbackSpy.mockReset();
+  mirrorWarnWithDebounceSpy.mockReset();
   vi.resetModules();
   process.env.INNGEST_SIGNING_KEY = "signkey-test-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   process.env.INNGEST_EVENT_KEY = "evtkey-test-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -263,23 +273,56 @@ describe("reconcile — schema gate (v=1 drains)", () => {
   });
 });
 
-describe("reconcile — no workspace match", () => {
-  it("skips at WARNING level (not error) when no workspace is connected to the repo", async () => {
+describe("reconcile — no workspace match (#4597 follow-up: debounced warn mirror)", () => {
+  it("routes the expected skip through mirrorWarnWithDebounce with a distinct errorClass + (installationId, repoUrl) key", async () => {
     WORKSPACE_ROWS = [];
     const handler = await importHandler();
     const result = await handler({ event: makeEvent(), step: makeStep(), logger });
 
     expect(result).toEqual({ ok: false, reason: "no-workspace-match" });
     expect(syncWorkspaceSpy).not.toHaveBeenCalled();
-    // Expected, benign outcome -> warning-level mirror, NOT an error-level event.
-    expect(warnSilentFallbackSpy).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        feature: "workspace-reconcile-push",
-        op: "skip-no-workspace-match",
-      }),
-    );
+
+    // Expected, benign outcome -> DEBOUNCED warning-level mirror (≤1 per key
+    // per 5-min window), so the no-op skip cannot flood Sentry alert rules.
+    // It must NOT go through the undebounced warnSilentFallback nor the
+    // error-level reportSilentFallback.
+    expect(mirrorWarnWithDebounceSpy).toHaveBeenCalledTimes(1);
+    expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+
+    const [err, ctx, key, errorClass] = mirrorWarnWithDebounceSpy.mock.calls[0]!;
+    expect(err).toBeInstanceOf(Error);
+    expect(ctx).toMatchObject({
+      feature: "workspace-reconcile-push",
+      op: "skip-no-workspace-match",
+      extra: expect.objectContaining({
+        installationId: 42,
+        deliveryId: "delivery-1",
+      }),
+    });
+    // In-process dedup token, never emitted: (installationId, normalized repoUrl).
+    expect(key).toBe(`42:${normalizeRepoUrl("https://github.com/acme-co/widget")}`);
+    expect(errorClass).toBe("workspace-reconcile-push:no-workspace-match");
+  });
+
+  it("passes a STABLE key for the same (installation, repo) and a DISTINCT key per segment so the helper coalesces correctly", async () => {
+    WORKSPACE_ROWS = [];
+    const handler = await importHandler();
+
+    // Same install + repo twice -> identical key (helper can coalesce).
+    await handler({ event: makeEvent(), step: makeStep(), logger });
+    await handler({ event: makeEvent(), step: makeStep(), logger });
+    // Different install -> distinct key (helper must not over-coalesce).
+    await handler({
+      event: makeEvent({ installationId: 99 }),
+      step: makeStep(),
+      logger,
+    });
+
+    const keys = mirrorWarnWithDebounceSpy.mock.calls.map((c) => c[2]);
+    expect(keys[0]).toBe(keys[1]); // stable for the same segment
+    expect(keys[2]).not.toBe(keys[0]); // distinct for a different installation
+    expect(keys[2]).toBe(`99:${normalizeRepoUrl("https://github.com/acme-co/widget")}`);
   });
 });
 

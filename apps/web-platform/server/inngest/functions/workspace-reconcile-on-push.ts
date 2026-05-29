@@ -17,7 +17,11 @@
 
 import { promises as fs } from "node:fs";
 import { inngest } from "@/server/inngest/client";
-import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
+import {
+  reportSilentFallback,
+  warnSilentFallback,
+  mirrorWarnWithDebounce,
+} from "@/server/observability";
 import { syncWorkspace } from "@/server/kb-route-helpers";
 import { normalizeRepoUrl } from "@/lib/repo-url";
 import { workspacePathForWorkspaceId } from "@/server/workspace-resolver";
@@ -140,15 +144,25 @@ export async function workspaceReconcileOnPushHandler({
   if (rows.length === 0) {
     // Expected, benign outcome -- app uninstalled, repo not yet onboarded, a
     // disconnected fork, or a stale/replayed webhook. This is NOT an actionable
-    // failure, so mirror it at warning level (queryable, out of the error
-    // budget) rather than via reportSilentFallback, which surfaced a
-    // false-positive error-level Sentry event on every such push.
-    warnSilentFallback(new Error("no workspace matched (installation_id, repo)"), {
-      feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
-      op: "skip-no-workspace-match",
-      extra: { installationId, deliveryId, targetRepoUrl },
-      message: "Reconcile skipped — no workspace connected to this repo",
-    });
+    // failure. #4597 downgraded it from error to warning level; this follow-up
+    // (#4571 precedent) DEBOUNCES the warn mirror, because Sentry alert rules
+    // count events regardless of level — one reconcile event per push on a
+    // workspace-less install still floods `auth-callback-no-code-burst`-class
+    // alerts without the per-key TTL. The per-occurrence `logger.warn` stdout
+    // signal (inside warnSilentFallback) is unaffected, so the skip stays
+    // queryable in Better Stack while the Sentry mirror is capped at ≤1 per
+    // (installationId, repoUrl) per 5-min window.
+    mirrorWarnWithDebounce(
+      new Error("no workspace matched (installation_id, repo)"),
+      {
+        feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
+        op: "skip-no-workspace-match",
+        extra: { installationId, deliveryId, targetRepoUrl },
+        message: "Reconcile skipped — no workspace connected to this repo",
+      },
+      `${installationId}:${targetRepoUrl}`, // in-process dedup token, never emitted
+      "workspace-reconcile-push:no-workspace-match", // distinct errorClass (registry in observability.ts)
+    );
     return { ok: false, reason: "no-workspace-match" };
   }
 
