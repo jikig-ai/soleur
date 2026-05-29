@@ -288,6 +288,8 @@ jobs:
               -target=cloudflare_ruleset.allowlist_ai_crawlers \
               -target=random_id.kb_drift_ingest_signing_key \
               -target=doppler_secret.kb_drift_ingest_signing_key \
+              -target=doppler_secret.kb_drift_ingest_signing_key_app_runtime \
+              -target=doppler_secret.kb_drift_operator_founder_id_app_runtime \
               -target=doppler_secret.kb_drift_ingest_url \
               -target=doppler_service_token.kb_drift \
               -target=github_actions_secret.doppler_token_kb_drift \

@@ -116,9 +116,9 @@ export async function POST(request: Request) {
 
   // Resolve the operator founder. The walker output is internal infra
   // signal; we attribute every row to the configured operator founder
-  // so the rows route through the same RLS + audit primitives. The
-  // operator-founder id lives in Doppler `prd_kb_drift_walker` so the
-  // walker's blast-radius scope does not leak across configs.
+  // so the rows route through the same RLS + audit primitives. This route
+  // runs in the app runtime, so the id is read from Doppler `prd` (the
+  // app-runtime config), provisioned by apps/web-platform/infra/kb-drift.tf.
   const operatorFounderId = process.env.KB_DRIFT_OPERATOR_FOUNDER_ID;
   if (!operatorFounderId) {
     logger.error({ feature: "kb-drift-ingest" }, "KB_DRIFT_OPERATOR_FOUNDER_ID unset");
