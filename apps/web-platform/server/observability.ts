@@ -260,6 +260,9 @@ export function warnSilentFallback(
  * - `kb-document-resolver` family: PDF text-extraction failure classes
  *   (e.g., `extract-pdf:empty-text`, `extract-pdf:oversized-buffer`).
  * - `soleur-go-runner` family: `notify-awaiting-no-active-query`.
+ * - `feature-flags` family: `flagsmith:getidentityflags-timeout` (warn-level
+ *   via `mirrorWarnWithDebounce`; dedup key is the per-segment snapshot cache
+ *   key `${role}:${orgId ?? "__anon__"}`, NOT a userId — see #4571).
  *
  * Each feature picks a distinct `errorClass` so the per-key TTL bucket
  * cannot collide across features for the same user.
@@ -365,6 +368,29 @@ export function mirrorWithDebounce(
   // emit boundary; no transform needed here.
   if (!_mirrorDebounce.tryClaim(`${userId}:${errorClass}`, Date.now())) return;
   reportSilentFallback(err, ctx);
+}
+
+/**
+ * Warn-level sibling of `mirrorWithDebounce`. Same per-key 5-minute TTL on the
+ * **same** `_mirrorDebounce` instance, but emits at `level: "warning"` via
+ * `warnSilentFallback` instead of error level. Use for a recovered degraded
+ * path that is worth observing but should not page (e.g. a third-party timeout
+ * with a graceful fallback) yet could otherwise burst.
+ *
+ * `key` is an opaque in-process dedup token — never emitted (see the `userId`
+ * note above). Sharing the single `_mirrorDebounce` map means a key+errorClass
+ * claimed by either helper suppresses the other inside the window; pick a
+ * distinct `errorClass` per call site (registry above) so unrelated sites never
+ * coalesce. Introduced for the `/login` Flagsmith-timeout flood (#4571).
+ */
+export function mirrorWarnWithDebounce(
+  err: unknown,
+  ctx: SilentFallbackOptions,
+  key: string,
+  errorClass: string,
+): void {
+  if (!_mirrorDebounce.tryClaim(`${key}:${errorClass}`, Date.now())) return;
+  warnSilentFallback(err, ctx);
 }
 
 /**
