@@ -25,10 +25,10 @@ const CACHE_TTL_MS = 30_000;
 // with per-org targeting via per-feature `<flag>-orgs` segments (ADR-043
 // §"Per-feature segment scoping"): each org-targetable flag gets its own segment
 // whose `EQUAL orgId` conditions are the sole per-org gate for that flag. byok runs
-// on `byok-delegations-orgs`; team-workspace-invite is being migrated off the legacy
-// shared `org-targeted` segment onto `team-workspace-invite-orgs` (#4617). Which
-// segment carries the override is transparent to getRuntimeFlag here. FLAG_* env vars
-// remain as the Flagsmith outage fallback (env-fallback mirror).
+// on `byok-delegations-orgs`; team-workspace-invite runs on `team-workspace-invite-orgs`
+// (migrated off the legacy shared `org-targeted` segment, which was retired 2026-05-29
+// per #4617). Which segment carries the override is transparent to getRuntimeFlag here.
+// FLAG_* env vars remain as the Flagsmith outage fallback (env-fallback mirror).
 //
 // New flags: if the call-site needs DCE elimination → ENV. Otherwise → RUNTIME.
 // See ADR-038 + ADR-043.
