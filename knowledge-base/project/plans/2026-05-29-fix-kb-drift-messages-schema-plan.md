@@ -9,56 +9,61 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 brainstorm: knowledge-base/project/brainstorms/2026-05-29-kb-drift-messages-schema-brainstorm.md
 spec: knowledge-base/project/specs/feat-fix-kb-drift-messages-schema/spec.md
-status: plan-reviewed
+status: deepened
 ---
 
 # Plan: Map KB-drift findings onto the workspace-scoped `messages` model
 
 🐛 **fix** · cross-domain · brand-survival threshold = **single-user incident** (CPO sign-off required before `/work`)
 
-> Revised after 4-agent review (spec-flow + DHH + Kieran + code-simplicity). Material changes
-> folded in: the latent NOT-NULL/RLS failure is in **all three** draft-card producers (not just
-> kb-drift); the `NOT VALID`/`VALIDATE` lock rationale was wrong (single-transaction runner); the
-> digest card needed a working operator-action path (it 422'd on click and could not be
-> dismissed). Operator confirmed: fix all three producers; fold in the minimal Dismiss path.
+## Enhancement Summary
+
+**Deepened on:** 2026-05-29 · **Reviews:** 4-agent plan-review (spec-flow + DHH + Kieran + simplicity) → 6-agent deepen pass (data-integrity-guardian, data-migration-expert, security-sentinel, identity-rbac-reviewer, architecture-strategist, git-history-analyzer).
+
+**Decisive changes from the deepen pass:**
+1. **Cross-tenant fix corrected (P0, 2 agents converged).** `resolveCurrentWorkspaceId` carries *current-selection* semantics → a multi-membership operator could cross-post the digest into a team workspace, and `is_workspace_member` RLS passes **by design** (the operator IS a member). **Pin operator-internal writes to the solo workspace** (`workspace_id = founderId`, ADR-038 N2) — RLS is no longer the sole guard.
+2. **GDPR-erasure safety (P0).** The discriminator card-branch's `user_id IS NOT NULL` clause would make a future anonymization (`user_id → NULL` on a draft card) satisfy *neither* branch → `23514` aborts Right-to-Erasure. Card branch now anchors on `source + owning_domain + draft_preview` (drops `user_id`).
+3. **Redaction gap closed (HIGH).** `redactGithubSourcedText` does **not** strip signed-URL query strings (`?X-Amz-Signature=`, `?token=`) — the exact "token in broken-target URL" vector the plan names. Strip URL query strings from each finding `target` before packing.
+4. **Migration idempotency (P1).** Added `DROP CONSTRAINT IF EXISTS` + `COMMENT ON CONSTRAINT` (codebase convention `046:264`, `053:67`); guarded the destructive down for all-or-nothing rollback.
+5. **Helper hardening:** narrow `source`/`owning_domain` to the `MESSAGE_*` const unions; full-length sha256 `source_ref` (no 16-char truncation → no birthday-collision masking); `source_ref`-must-be-structured invariant.
+6. **Factual corrections:** `#4571` is a Flagsmith fix, not KB-drift (cite `#4570`/`#4572`); cite ADR by **filename** (the ADR-037 file's frontmatter `adr: 035` is stale; follow-up ADR must pick next free integer by enumerating filenames); cfo keeps `external_brand_critical` tier + resolved `action_class`.
+
+**New considerations discovered:** anonymization-cascade vs CHECK interaction; signed-URL redaction bypass; `current_workspace_id` selection-vs-identity semantics; migration-collision lexical-order hazard (triple-`053` precedent).
+
+---
 
 ## Overview
 
 The nightly **KB-drift walker** (`.github/workflows/kb-drift-walker.yml`, cron `0 3 * * *`)
 HMAC-signs its findings and POSTs them to `/api/internal/kb-drift-ingest`, which tries to
 persist each finding as a "draft action card" row in `messages`. **The insert has never once
-succeeded.** `messages` requires (NOT NULL, no default, no trigger) `conversation_id, role,
-content, template_id, workspace_id`; the draft-card insert (`route.ts:137`) supplies none of
-`conversation_id/role/content/template_id`, and — because migration 059 rewrote the RLS — the
-RLS-bypassing service client masks (but does not satisfy) the workspace-member INSERT policy.
+succeeded.** `messages` requires (NOT NULL, no default, no trigger — verified) `conversation_id,
+role, content, template_id, workspace_id`; the draft-card insert (`route.ts:137`) supplies none of
+`conversation_id/role/content/template_id`, and migration 059 rewrote the RLS so a `user_id`-only
+insert has no matching policy.
 
-**This is not a kb-drift-only bug.** The two sibling draft-card producers
-(`github-on-event:237`, `cfo-on-payment-failed:229`) insert the *same* shape and *also* omit
-`workspace_id`+`template_id`, so they have likewise never persisted (their upstreams are stubbed,
-so the failure is latent, not observed). A single shared helper + one schema relaxation fixes all
-three structurally.
+**Not a kb-drift-only bug.** The two sibling producers (`github-on-event:237`, `cfo-on-payment-failed:229`)
+insert the *same* shape and *also* omit `workspace_id`+`template_id` (verified) → they have likewise
+never persisted (upstreams stubbed → latent). cfo additionally swallows its insert error (no
+`{ error }` destructure). One shared helper + one schema relaxation fixes all three.
 
-The fix has six moving parts (two plan-time refinements decided with the operator — see Reconciliation):
+Six parts:
 
 1. **Schema relaxation (migration 082).** `DROP NOT NULL` on `conversation_id, role, content` +
-   a discriminator `CHECK messages_row_kind_chk` admitting a row as *either* a chat row *or* a
-   draft-card row. (`template_id`/`workspace_id` are **not** relaxed — Decision A.)
-2. **Shared `insertDraftCard` helper** (`server/messages/insert-draft-card.ts`) that resolves
-   `workspace_id`, supplies `template_id='default_legacy'`, redacts `draft_preview`, writes via
-   the RLS-enforced tenant client, and maps `23505`→idempotent skip (`23514`→loud throw).
-3. **Cross-tenant-safe write.** kb-drift switches `createServiceClient()` → `getFreshTenantClient(operatorFounderId)`
-   with `workspace_id = resolveCurrentWorkspaceId(operatorFounderId, tenant)`.
-4. **All three producers adopt the helper** (kb-drift, github-on-event, cfo-on-payment-failed) —
-   closing the latent NOT-NULL/RLS failure (and cfo's silent-error swallow) in each.
-5. **One digest card per walker run**, packed into the existing `draft_preview` string, dedup-keyed
-   on a content hash (unchanged KB → idempotent skip).
-6. **Working operator-action path** for the digest card: a valid `action_class` + a Dismiss
-   affordance (existing `/today/[id]/discard` route) so the operator can clear it. (Per-finding
-   drill-down deferred.)
+   a discriminator `CHECK messages_row_kind_chk` (chat row **or** draft-card row). `template_id`/
+   `workspace_id` stay NOT NULL (Decision A).
+2. **Shared `insertDraftCard` helper** (`server/messages/insert-draft-card.ts`): pins `workspace_id`,
+   supplies `template_id='default_legacy'`, redacts `draft_preview`, tenant-client insert, `23505`→skip.
+3. **Solo-pinned, cross-tenant-safe write.** kb-drift switches `createServiceClient()` →
+   `getFreshTenantClient(operatorFounderId)` with `workspace_id = operatorFounderId` (the operator's
+   **solo** workspace, ADR-038 N2 — **not** the session-selected workspace).
+4. **All three producers adopt the helper** — closing the latent NOT-NULL/RLS failure (+ cfo's silent swallow).
+5. **One digest card per run**, packed into `draft_preview`, dedup-keyed on a full sha256 content hash.
+6. **Working operator-action path:** valid `action_class` + a Dismiss affordance (existing
+   `/today/[id]/discard` route); no spawn button for digests. Per-finding drill-down deferred.
 
-This honors ADR-037 (no per-source table; `messages` stays the canonical row) and finishes the
-intent migration 046 documented but never completed ("route via `user_id` — no `conversation_id`
-required").
+Honors ADR-037 (no per-source table; `messages` stays canonical) and finishes the intent migration
+046 documented but never completed ("route via `user_id` — no `conversation_id` required").
 
 ---
 
@@ -66,184 +71,165 @@ required").
 
 | Spec / brainstorm claim | Codebase reality (grounded) | Plan response |
 |---|---|---|
-| "chat works in prod; only the draft-card inserts fail" | `agent-runner:447,2425`, `cc-dispatcher:1445` (chat) **and** `github-on-event:237`, `cfo:229` (drafts) all omit `workspace_id`+`template_id` — both NOT NULL (`059:94`, `053:65`), no default, no trigger (exhaustive grep: 0 `CREATE TRIGGER … messages`). Per migration files these inserts should fail `23502`. | **Phase 0 live-prod schema verification is a hard gate.** The relaxation of `conversation_id/role/content` is needed regardless. If prod schema = migration files, the **siblings** are latently broken too → the helper fixes all three (in scope). If chat genuinely inserts, prod schema ≠ migration files → file a follow-up; do not pour the CHECK on a shape we don't understand (DHH caveat). |
-| spec FR1: relax `template_id` NOT NULL too | shape CHECK `^[a-z][a-z0-9_]*$` (`053:71`); send route nullish-coalesces null→`default_legacy` (`today/[id]/send/route.ts:186`). Cards are ack-only (operator decision). | **Decision A (amends FR1):** do **not** relax `template_id`; helper supplies `'default_legacy'`. 3 cols relaxed, not 4 — smaller hot-table blast radius. |
-| "NOT VALID then VALIDATE defers the ACCESS-EXCLUSIVE lock" (my v1 rationale) | **Wrong here.** `run-migrations.sh` applies each file with `psql --single-transaction` (`:335`). Both `ADD CONSTRAINT … NOT VALID` and `VALIDATE` run in **one** transaction → no lock deferral. | Restate the rationale: at current single-founder scale the split is **cosmetic / forward-portable**; Phase 0.2 proves 0 violators, so a plain validated `ADD CONSTRAINT` is equally safe. (True deferral would need two migration files — declined at this scale.) |
-| FR3: `resolveCurrentWorkspaceId(operatorFounderId)` (1 arg) | **2-arg** `resolveCurrentWorkspaceId(userId, supabase)` (`workspace-resolver.ts:94`); reads `user_session_state` via the passed client; returns `userId` (solo) when absent (`:121`). | Helper calls `resolveCurrentWorkspaceId(founderId, tenant)`. |
-| brainstorm: "only a PERMISSIVE workspace-member WITH CHECK; no RESTRICTIVE" | Confirmed (`059:106-113`) **and** 059 **dropped** 046's `user_id`-based external-draft policies. A `user_id`-only insert with no `workspace_id` fails RLS INSERT (no matching policy) **in addition to** NOT NULL. | Reinforces FR3: `workspace_id` is mandatory for RLS, not just NOT NULL. Service-role bypass masked this. |
-| route comment + brainstorm: dedup index "migration 051" | Index in **`052_multi_source_dedup.sql:51`**: `UNIQUE (user_id, source, source_ref) WHERE status='draft' AND source_ref IS NOT NULL`. Partial-on-draft → archived (dismissed) rows free the slot. | Fix stale `route.ts:12` comment. Digest `source_ref` (content hash) non-null → partial index applies → `23505` skip. Dismissed-then-recur → new card (no blind spot; Phase 0.5 confirms predicate). |
-| brainstorm "ADR-035/037" | `ADR-037-messages-source-ref-composite-unique…` = dedup design of record; `ADR-035` = *separate* template-registry ADR. | Cite ADR-037 for dedup; ADR-035 only for the `default_legacy` key. |
-| spec: "the three inserters share the identical insert shape" | **Not identical.** kb-drift+github carry `source_ref`; cfo does **not** (adds `action_class`, literal `source/owning_domain`). cfo `:229` **does not destructure `{ error }`** → silent swallow (`cq-silent-fallback…` violation today). *(Agents disagree on whether github currently sets `action_class` — verify at Phase 4.)* | Helper makes `source_ref` and `action_class` **optional**. cfo refactor closes its silent swallow. |
-| FR5: redact via shared helper | `redactGithubSourcedText(s, opts={})` exists (`redaction-allowlist.ts:107`); `RedactionSource` enum has no `kb_drift`; `_opts` is **unused** → redaction is source-agnostic. | **Redact inside the helper** (single idempotent choke point — decided now, not at /work; protects cfo which redacts nothing today). Call `redactGithubSourcedText(text)` with no source. **Drop** the cosmetic enum edit. |
-| (new) digest card is actionable | `action_class` null → send route 422s (`today/[id]/send/route.ts:133` `isKnownActionClass`); `KbDriftCard` has no Dismiss button (only StripeCard does). `knowledge.kb_drift` IS valid (`action-class-map.ts:36`). | Set `action_class='knowledge.kb_drift'`; render Dismiss (→ existing `/discard`) for digest cards; no spawn button for digests. |
+| "chat works in prod; only the draft-card inserts fail" | chat (`agent-runner:447,2425`, `cc-dispatcher:1445`) **and** drafts (`github-on-event:237`, `cfo:229`) all omit `workspace_id`+`template_id`; both NOT NULL (`059:94`,`053:65`), no default, **no trigger** (verified: 0 `CREATE TRIGGER … messages`). | **Phase 0 live-prod gate is hard.** If prod = migration files, siblings are latently broken (helper fixes them, in scope) + chat is a separate latent bug (→ follow-up). If prod ≠ files, **pause** before adding the CHECK. |
+| FR3: `workspace_id = resolveCurrentWorkspaceId(operatorFounderId)` | **`resolveCurrentWorkspaceId` returns the session-SELECTED workspace** (`user_session_state.current_workspace_id`, `workspace-resolver.ts:121`), set by `set_current_workspace_id` to **any workspace the operator is a member of** (`079:256`). A multi-membership operator with a stale selection → digest lands in a **team** workspace; `is_workspace_member` RLS **passes** (legit member). | **Corrected (P0):** pin `workspace_id = operatorFounderId` (the solo workspace, ADR-038 N2 `workspaces.id = owner_user_id`). Do **not** use selection semantics for an identity-attributed headless write. RLS is defense-in-depth, **not** the cross-tenant guard. |
+| spec FR1: relax `template_id` NOT NULL too | shape CHECK `^[a-z][a-z0-9_]*$` (`053:71`); send route nullish-coalesces null→`default_legacy` (`today/[id]/send/route.ts:186`). Cards ack-only. | **Decision A (amends FR1):** keep `template_id` NOT NULL; helper supplies `'default_legacy'`. 3 cols relaxed, not 4. |
+| "NOT VALID then VALIDATE defers the lock" | `run-migrations.sh:335` uses `psql --single-transaction` — both statements run in **one** AccessExclusive-holding txn. The split defers no lock **and** there is **no concurrent-write window** (the txn holds the lock throughout). | Restate: the split is forward-portable; safety comes from (a) the single-txn lock (no concurrent violator) + (b) Phase 0.2 (no pre-existing violator). |
+| brainstorm: "RLS is the cross-tenant backstop" | `messages_workspace_member_insert` checks **membership**, not solo-ownership (`059:106`). It cannot block a write to a workspace the operator legitimately joined. | Identity-pinned solo `workspace_id` is the guard; RLS is the second layer. |
+| route comment + brainstorm: dedup index "migration 051" | Index in **`052:51`**: partial-on-draft `WHERE status='draft' AND source_ref IS NOT NULL`. Archived (dismissed) rows leave the index → recurrence re-inserts (no stale-digest blind spot). | Fix stale `route.ts:12` comment. Phase 0.5 confirms predicate; Phase 7.5 proves dismiss-then-recur. |
+| brainstorm "ADR-035/037" | dedup ADR = **filename** `ADR-037-messages-source-ref-composite-unique…` (its frontmatter `adr: 035` is **stale** — repo has two "035"s + an ADR-038 collision). `ADR-035` filename = template-registry. | **Cite by filename.** Follow-up ADR must pick next free integer by enumerating **filenames** (not frontmatter), and fix ADR-037's stale frontmatter as a drive-by. |
+| spec: "three inserters share identical shape" | **Not identical.** kb-drift+github carry `source_ref`; cfo does not (adds `action_class`, tier `external_brand_critical`). github does **not** currently set `action_class` (verified). cfo `:229` **does not destructure `{ error }`** (silent swallow). | Helper makes `source_ref`/`action_class` optional; cfo refactor closes the swallow + keeps `external_brand_critical`. |
+| FR5: redact via shared helper | `redactGithubSourcedText` strips known credential shapes only — **not** signed-URL query strings (`?X-Amz-Signature=`, `?token=`, `?sig=`); `_opts` unused (source-agnostic). | **Redact in-helper** + **strip URL query strings from each `target`** before packing (the named token-in-URL vector). Drop the cosmetic `RedactionSource` enum edit. |
+| (new) digest card actionable | `action_class` null → send route 422s; `KbDriftCard` no Dismiss button. `knowledge.kb_drift` valid (`action-class-map.ts:36`). `/discard` is action_class-agnostic (archives). | Set `action_class='knowledge.kb_drift'`; Dismiss → `/discard` for digests; no spawn button (Phase 7 regression test). |
+| IaC precondition: "PRs #4570/#4571/#4572" | **#4571 is a Flagsmith fix**, not KB-drift. #4572 provisioned signing key + operator founder id; #4570 routed ingest POST. | Cite **#4570/#4572**; drop #4571. |
 
 ---
 
 ## User-Brand Impact
 
-*(Carried forward from brainstorm; threshold drives `requires_cpo_signoff: true`.)*
+*(Carried from brainstorm; threshold drives `requires_cpo_signoff: true`.)*
 
-- **If this lands broken, the operator experiences:** the nightly walker keeps failing (`500
-  Persist failed`); knowledge-domain drift never reaches the Today queue — the operator stays
-  blind to broken docs links/anchors. *(And, per the spec-flow finding, a card that **lands but
-  422s on click and can't be dismissed** is the same blindness one step downstream.)*
-- **If this leaks, the data exposed is:** an operator-internal infra draft cross-posted into a
-  **paying tenant's** Today queue. Vector: kb-drift's current `createServiceClient()` write
-  **bypasses** `is_workspace_member(workspace_id, auth.uid())`; a mis-resolved `workspace_id` has
-  no DB guard. `draft_preview` could carry a token in a broken-target URL query string.
-- **Brand-survival threshold:** `single-user incident` (GDPR Art. 5(1)(f) + Art. 32; no statutory
-  clock unless a leak occurs).
-- **Decisive controls:** FR3 tenant-client write (membership becomes the DB backstop);
-  `workspace_id` resolved server-side from `operatorFounderId`, never request-derived (no IDOR);
-  FR5 redaction in the helper. `user-impact-reviewer` must verify FR3 + FR5 at PR review.
+- **If this lands broken, the operator experiences:** the nightly walker keeps failing
+  (`500 Persist failed`); drift never reaches the Today queue — operator blind to broken docs.
+  (A card that lands but 422s on click and can't be dismissed is the same blindness downstream.)
+- **If this leaks, the data exposed is:** an operator-internal infra draft in a **paying tenant's**
+  Today queue. **Two vectors:** (a) the old `createServiceClient()` write bypasses RLS entirely;
+  (b) `resolveCurrentWorkspaceId` could route to a *team* workspace the operator legitimately
+  joined (RLS passes by membership). `draft_preview` could carry a token in a broken-target URL.
+- **Brand-survival threshold:** `single-user incident` (GDPR Art. 5(1)(f) + Art. 32; no statutory clock unless a leak occurs).
+- **Decisive controls:** **solo-pinned `workspace_id = operatorFounderId`** (closes vector b; RLS is the second layer, not the only one); tenant-client write (closes vector a); `workspace_id` never request-derived (no IDOR); **URL-query-stripping + in-helper redaction** of `draft_preview`. `user-impact-reviewer` must verify the solo-pin + redaction at PR review.
 
 ---
 
 ## Research Insights (grounded, path:line)
 
-- **kb-drift route** `app/api/internal/kb-drift-ingest/route.ts` — insert `:137` (one row per finding loop `:136-164`); `createServiceClient()` `:132`; operator id `KB_DRIFT_OPERATOR_FOUNDER_ID` `:122`; Sentry `op:"persist"` `:157`; **silent dedup** `:149-151` (no Sentry — `cq-silent-fallback` gap); stale "migration 051" comment `:12`.
-- **Siblings:** `github-on-event.ts:237` (tenant client + `redactGithubSourcedText`; omits `workspace_id`/`template_id`); `cfo-on-payment-failed.ts:229` (stub preview, no `source_ref`, has `action_class`, **no `{ error }` destructure**).
-- **Write primitives:** `getFreshTenantClient(userId): Promise<SupabaseClient>` async, Next-free (`lib/supabase/tenant.ts:736`); `resolveCurrentWorkspaceId(userId, supabase): Promise<string>` solo→`userId` (`server/workspace-resolver.ts:94,121`); `createServiceClient()` `@deprecated`, RLS-bypass (`lib/supabase/service.ts:155`).
-- **Schema:** base `001:67-76` (`conversation_id/role/content NOT NULL`, `role CHECK in ('user','assistant')`); draft cols nullable `046:92-99` + `messages_status_check` + `messages_external_tier_status_check` `046:269`; `template_id` NOT NULL + shape CHECK `053:65,71`; `workspace_id` NOT NULL + RLS rewrite `059:94,99-122`; `messages_action_class_not_locked` (`action_class IS NULL OR action_class !~ '^(payment|legal|auth)\.'`) `051:81`; dedup index `052:51`.
-- **RLS substrate:** `is_workspace_member` plpgsql SECURITY DEFINER `SET search_path = public, pg_temp`, `GRANT EXECUTE TO authenticated` (`053_organizations_and_workspace_members.sql:116,140`); INSERT policy `FOR INSERT TO authenticated WITH CHECK is_workspace_member(workspace_id, auth.uid())` (`059:106-108`); solo `workspaces.id = owner_user_id` + backfilled `workspace_members(id,id)` (`053…:208,240-247`).
-- **Migration runner:** `web-platform-release.yml` `migrate` job → `doppler run -c prd -- bash apps/web-platform/scripts/run-migrations.sh`; applies `*.sql` forward only (`*.down.sql` skipped); **`psql --single-transaction`** (`run-migrations.sh:335`); prefix collisions emit `::warning::` only; files apply in filename-lexical order. No `CONCURRENTLY` (`046:33-35`). Next free number = **082**.
-- **Today consumer** `app/api/dashboard/today/route.ts:121` — selects `id, source, source_ref, owning_domain, draft_preview, urgency, created_at`; filters `.eq("user_id").in("tier",…).eq("status","draft")`; cap `TODAY_ITEM_CAP=7` (`:107`); **never reads role/content/conversation_id**.
-- **Chat render** `server/api-messages.ts:130-140` — conversation-scoped; never sees draft rows.
-- **Today card UI** `components/dashboard/today-card.tsx` — `draftPreview: string` (single), `KbDriftCard` renders `whitespace-pre-line` (`:151`), button "Fix link"/"Update anchor" → `useActionSend`→`/send` (`:163-172`); only `StripeCard` has a Discard button (`:347`). `/discard` route exists (`app/api/dashboard/today/[id]/discard/route.ts`).
-- **Action class** `server/scope-grants/action-class-map.ts:36` — `knowledge.kb_drift` valid (tier `draft_one_click` `:93`); send route rejects unknown via `isKnownActionClass` (`today/[id]/send/route.ts:133`).
-- **Constants** `lib/messages/tiers.ts` — `MESSAGE_TIER_EXTERNAL_LOW_STAKES`, `MESSAGE_STATUS_DRAFT`, `MESSAGE_SOURCE_KB_DRIFT`, `MESSAGE_OWNING_DOMAIN_KNOWLEDGE`; `PG_UNIQUE_VIOLATION` in `lib/postgres-errors`.
-- **Learnings:** ADR-037 (plain `.insert()` + catch `23505`, never `ON CONFLICT`); `2026-05-03-postgrest-on-conflict-cannot-infer-partial-index` (42P10); `2026-04-18-supabase-migration-concurrently-forbidden`; `2026-04-17-migration-not-null-without-backfill-and-partial-unique-index-pattern`; `2026-03-20-supabase-silent-error-return-values`; `2026-04-18-server-bundle-transitive-next-headers-leak`; `2026-04-18-discriminated-union-widening-if-ladders-and-config-map-parity`; `security-issues/2026-04-11-service-role-idor-untrusted-ws-attachments`; `security-issues/2026-04-18-rls-for-all-using-applies-to-writes`.
+- **kb-drift route** `app/api/internal/kb-drift-ingest/route.ts` — insert `:137` (per-finding loop `:136-164`); `createServiceClient()` `:132`; operator id `:122`; Sentry `op:"persist"` `:157`; **silent dedup** `:149-151`; auth/cap block `:82-104` (HMAC + 1 MiB — untouched by the refactor); stale "051" comment `:12`.
+- **Siblings:** `github-on-event.ts:237` (tenant client + `redactGithubSourcedText`; no `action_class`; omits `workspace_id`/`template_id`); `cfo-on-payment-failed.ts:229` (stub preview, no `source_ref`, tier `external_brand_critical` `:226`, has `action_class`, **no `{ error }` destructure**).
+- **Write primitives:** `getFreshTenantClient(userId): Promise<SupabaseClient>` async, Next-free (`lib/supabase/tenant.ts:736`; mints `role=authenticated, sub=founderId` via OTP hook `060:147`); `resolveCurrentWorkspaceId(userId, supabase)` = **selection semantics** (`workspace-resolver.ts:94-122`); `set_current_workspace_id` writer (`079:256`); `createServiceClient()` `@deprecated`, RLS-bypass (`service.ts:155`).
+- **Schema:** base `001:67-76`; draft cols nullable `046:92-99` + `messages_status_check` + `messages_external_tier_status_check` `046:267`; `template_id` NOT NULL + shape CHECK `053:65,71`; `workspace_id` NOT NULL + RLS rewrite `059:94,99-122`; `messages_action_class_not_locked` (`!~ '^(payment|legal|auth)\.'`) `051:81`; dedup index `052:51`; **anonymization nulls `messages.user_id`** `068:206-217`; `user_id IS NULL` is steady-state `071`.
+- **RLS substrate:** `is_workspace_member` plpgsql SECURITY DEFINER `SET search_path=public,pg_temp`, `GRANT EXECUTE TO authenticated` (`053_organizations_and_workspace_members.sql:116,140`); INSERT policy `FOR INSERT TO authenticated WITH CHECK is_workspace_member(workspace_id, auth.uid())` (`059:106`); solo `workspaces.id = owner_user_id` + backfilled `workspace_members(id,id,'owner')` (`053…:182,253-259`).
+- **Migration runner** `run-migrations.sh` — `psql --single-transaction` `:335`; skips `*.down.sql` `:175`; collision = `::warning::` only `:143`, lexical-order apply (triple-`053` precedent); idempotency convention `DROP CONSTRAINT IF EXISTS` before `ADD` (`046:264`, `053:67`); `COMMENT ON CONSTRAINT` convention (`046:121`); DROP-NOT-NULL precedent `072:44`; destructive-down precedent `072.down:39`; `_chk` discriminator precedent `032:59`. Next free = **082** (max is 081).
+- **Today consumer** `dashboard/today/route.ts:123` — selects `id, source, source_ref, owning_domain, draft_preview, urgency, created_at`; filters `.eq("user_id").in("tier",…).eq("status","draft")`; cap `TODAY_ITEM_CAP=7`; never reads role/content/conversation_id.
+- **Chat render** `api-messages.ts:130-140` — conversation-scoped; never sees draft rows.
+- **Today card UI** `today-card.tsx` — `draftPreview: string`; `KbDriftCard` `whitespace-pre-line` `:151`; only `StripeCard` has Discard `:347`. `/discard` route archives (action_class-agnostic) `:35`.
+- **Action class** `action-class-map.ts:36` — `knowledge.kb_drift` valid (tier `draft_one_click` `:93`).
+- **Constants** `lib/messages/tiers.ts` — `MESSAGE_TIER_EXTERNAL_LOW_STAKES`/`_BRAND_CRITICAL`, `MESSAGE_STATUS_DRAFT`, `MESSAGE_SOURCE_*`, `MESSAGE_OWNING_DOMAIN_KNOWLEDGE`; `PG_UNIQUE_VIOLATION` in `lib/postgres-errors`.
+- **Learnings:** ADR-037 (plain insert + catch `23505`, never `ON CONFLICT`); `2026-05-03-postgrest-on-conflict-cannot-infer-partial-index`; `2026-04-18-supabase-migration-concurrently-forbidden`; `2026-04-17-migration-not-null-without-backfill-and-partial-unique-index-pattern`; `2026-03-20-supabase-silent-error-return-values`; `2026-04-18-server-bundle-transitive-next-headers-leak`; `2026-04-18-discriminated-union-widening-if-ladders-and-config-map-parity`; `security-issues/2026-04-11-service-role-idor-untrusted-ws-attachments`; `security-issues/2026-04-18-rls-for-all-using-applies-to-writes`; `2026-05-10-plan-phase-order-load-bearing-when-contract-changes`.
 
 ---
 
 ## Open Code-Review Overlap
 
-2 open `code-review` issues mention `supabase/migrations` generically — **#3220** (postmerge verification of trigger-bearing migrations) and **#3221** (nightly cron for env-gated integration tests). **Acknowledge both:** different concern (CI verification infra); this migration adds no trigger. Not folded in. No overlap on the code files (`kb-drift-ingest`, `github-on-event`, `cfo-on-payment-failed`, helper, `today-card`, `dashboard/today`, `redaction-allowlist`, `workspace-resolver`, `tenant`).
+`#3220` + `#3221` mention `supabase/migrations` generically (CI verification infra; this migration adds no trigger) → **Acknowledge** both, not folded in. No overlap on the code files.
 
 ---
 
 ## Implementation Phases
 
-> **Phase order is load-bearing** (`2026-05-10-plan-phase-order-load-bearing-when-contract-changes`):
-> the migration (contract) precedes the helper/route (consumers). One atomic merge; sequential `/work`.
+> Phase order is load-bearing (migration → helper → route → siblings → UI). One atomic merge; sequential `/work`.
 
-### Phase 0 — Live-prod precondition gate (BLOCKING; no code; read-only)
+### Phase 0 — Live-prod precondition gate (BLOCKING; read-only)
 
-`hr-no-dashboard-eyeball-pull-data-yourself`. *(If Supabase MCP is unauthenticated at /work, run via `doppler run -c prd -- psql` per the migrations runbook, or the PostgREST OpenAPI probe the brainstorm used.)*
+`hr-no-dashboard-eyeball-pull-data-yourself`. *(Supabase MCP if authenticated, else `doppler run -c prd -- psql` per the migrations runbook.)*
 
-- **0.1 Schema truth:**
-  ```sql
-  SELECT column_name, is_nullable, column_default FROM information_schema.columns
-  WHERE table_schema='public' AND table_name='messages'
-    AND column_name IN ('conversation_id','role','content','template_id','workspace_id');
-  ```
-  If `workspace_id`/`template_id` are NOT NULL + no default → confirms the **siblings** are latently broken (in scope; the helper fixes them) and, separately, the chat-insert paths are a distinct latent bug → **file a follow-up** (do not widen this PR). If prod ≠ migration files → **pause**: re-confirm the migration 082 shape before proceeding (DHH caveat — do not pour the CHECK on an unverified shape).
-- **0.2 No discriminator violators** (so `VALIDATE` cannot fail, TR1):
-  ```sql
-  SELECT count(*) FROM public.messages WHERE NOT (
-    (conversation_id IS NOT NULL AND role IS NOT NULL AND content IS NOT NULL)
-    OR (user_id IS NOT NULL AND source IS NOT NULL AND owning_domain IS NOT NULL AND draft_preview IS NOT NULL));
-  -- expect 0
-  ```
-- **0.3 Operator membership** (FR3 RLS passes only if true):
-  ```sql
-  SELECT EXISTS(SELECT 1 FROM public.workspace_members
-    WHERE workspace_id='<operatorFounderId>' AND user_id='<operatorFounderId>');  -- expect t
-  ```
-- **0.4 Sibling-row probe** (did any sibling draft ever land?):
-  ```sql
-  SELECT source, count(*) FROM public.messages
-  WHERE source IN ('github','stripe') AND status='draft' GROUP BY 1;
-  ```
-- **0.5 Dedup predicate** (confirm partial-on-draft so dismissed rows free the slot — no stale-digest blind spot):
-  ```sql
-  SELECT indexdef FROM pg_indexes WHERE indexname='messages_active_draft_dedup_idx';
-  -- expect: … WHERE status='draft' AND source_ref IS NOT NULL
-  ```
+- **0.1 Schema truth** — `SELECT column_name, is_nullable, column_default FROM information_schema.columns WHERE table_name='messages' AND column_name IN ('conversation_id','role','content','template_id','workspace_id')`. If prod ≠ migration files → **pause**, re-confirm the 082 shape. If prod = files → siblings are in-scope; chat omission = separate follow-up.
+- **0.2 No discriminator violators** — `SELECT count(*) FROM messages WHERE NOT ((conversation_id IS NOT NULL AND role IS NOT NULL AND content IS NOT NULL) OR (source IS NOT NULL AND owning_domain IS NOT NULL AND draft_preview IS NOT NULL))` = 0.
+- **0.3 Operator solo workspace** — `SELECT id=owner_user_id AS is_solo FROM workspaces WHERE id='<operatorFounderId>'` returns one row, `is_solo = t`, owned by the operator's own org; AND `EXISTS(SELECT 1 FROM workspace_members WHERE workspace_id='<operatorFounderId>' AND user_id='<operatorFounderId>')` = t (RLS membership). Pinning `workspace_id=founderId` requires this solo workspace to exist.
+- **0.4 Sibling-row probe** — `SELECT source,count(*) FROM messages WHERE source IN ('github','stripe') AND status='draft' GROUP BY 1` (did any sibling draft ever land?).
+- **0.5 Dedup predicate** — `SELECT indexdef FROM pg_indexes WHERE indexname='messages_active_draft_dedup_idx'` contains `WHERE status='draft' AND source_ref IS NOT NULL`.
+- **0.6 Anonymization-safety probe** — `SELECT count(*) FROM messages WHERE user_id IS NULL AND conversation_id IS NULL` = 0 (proves no anonymized cardless rows exist pre-migration, so VALIDATE is safe under the user_id-free card branch).
 
 ### Phase 1 — Migration 082 (RED-first)
 
-`apps/web-platform/supabase/migrations/082_relax_messages_draft_card_nullability.sql` (+`.down.sql`).
-**Collision guard:** at `/work` and again at merge/rebase, `ls migrations/ | grep '^082'`; if any other `082_*.sql` appears, renumber to the next free integer (runner tolerates collisions with only a `::warning::` and applies in lexical order, so a colliding 082 is a real hazard).
+`082_relax_messages_draft_card_nullability.sql` (+`.down.sql`). **Collision guard:** at `/work` and at merge/rebase, assert `082` is the strict max: `ls migrations/ | grep -oE '^[0-9]+' | sort -n | tail -1` = `081` AND no `082_*.sql` exists (runner tolerates collisions with a `::warning::` and applies lexically — the triple-`053` precedent proves the hazard).
 
 ```sql
 -- 082: relax messages NOT NULL for user_id-routed draft action cards.
--- Finishes the mig-046 intent ("route via user_id — no conversation_id
--- required"). Honors ADR-037 (messages stays the canonical draft-card row).
--- run-migrations.sh uses psql --single-transaction; the NOT VALID/VALIDATE
--- split therefore defers NO lock here — it is cosmetic/forward-portable at
--- current scale, and Phase 0.2 proves 0 violators so this is safe.
+-- Finishes the mig-046 intent ("route via user_id — no conversation_id required").
+-- Honors ADR-037 (messages stays the canonical draft-card row).
+-- run-migrations.sh uses psql --single-transaction: ADD ... NOT VALID and VALIDATE
+-- run in ONE AccessExclusive-holding txn → no concurrent-write window, and the
+-- split defers no lock (forward-portable only). Phase 0.2 guards pre-existing violators.
+-- Card branch intentionally EXCLUDES user_id (anonymization sets user_id=NULL on
+-- cards — 068) and workspace_id/template_id (kept column-NOT-NULL, Decision A).
+-- Any future DROP NOT NULL on workspace_id/template_id MUST add them here.
 ALTER TABLE public.messages ALTER COLUMN conversation_id DROP NOT NULL;
 ALTER TABLE public.messages ALTER COLUMN role            DROP NOT NULL;
 ALTER TABLE public.messages ALTER COLUMN content         DROP NOT NULL;
 
+ALTER TABLE public.messages DROP CONSTRAINT IF EXISTS messages_row_kind_chk;  -- idempotent (046:264 convention)
 ALTER TABLE public.messages
   ADD CONSTRAINT messages_row_kind_chk CHECK (
-    (conversation_id IS NOT NULL AND role IS NOT NULL AND content IS NOT NULL)
+    (conversation_id IS NOT NULL AND role IS NOT NULL AND content IS NOT NULL)   -- chat row
     OR
-    (user_id IS NOT NULL AND source IS NOT NULL
-      AND owning_domain IS NOT NULL AND draft_preview IS NOT NULL)
+    (source IS NOT NULL AND owning_domain IS NOT NULL AND draft_preview IS NOT NULL)  -- draft card (user_id-free: erasure-safe)
   ) NOT VALID;
 ALTER TABLE public.messages VALIDATE CONSTRAINT messages_row_kind_chk;
-```
-Notes:
-- **Discriminator CHECK kept** (code-simplicity + Kieran concur; DHH dissents). Rationale: after removing the column-level guarantees, the CHECK is the only guardrail against an all-null "junk-drawer" row that both readers silently skip (silent data loss) — proportionate on a hot, cross-tenant table, and consistent with the codebase's explicit-constraint culture (046/053). Contingent on Phase 0.1 (do not add atop an unverified schema).
-- `role CHECK (role IN ('user','assistant'))` **passes** when `role IS NULL` (SQL CHECK semantics) → no change.
-- Coexists additively with `messages_status_check`, `messages_external_tier_status_check` (046), `messages_template_id_check` (053), `messages_action_class_not_locked` (051) — no DROP of those.
-- `template_id`/`workspace_id` stay NOT NULL (Decision A). FK on `conversation_id` (`ON DELETE CASCADE`) unaffected by dropping NOT NULL.
 
-`.down.sql` (forward-only in practice; runner never auto-applies down files):
+COMMENT ON CONSTRAINT messages_row_kind_chk ON public.messages IS
+  'Discriminator: chat row (conversation_id+role+content) OR draft card '
+  '(source+owning_domain+draft_preview). user_id excluded — anonymization (068) '
+  'nulls it on cards. Migration 082, finishes mig-046 intent. See ADR-037 (filename).';
+```
+- `role CHECK (role IN ('user','assistant'))` passes when `role IS NULL` (SQL CHECK semantics) → no change.
+- Coexists additively with `messages_status_check`, `messages_external_tier_status_check`, `messages_template_id_check`, `messages_action_class_not_locked` (verified non-contradicting).
+
+`.down.sql` (manual-only; runner skips it; guarded for all-or-nothing rollback):
 ```sql
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM public.messages WHERE conversation_id IS NULL) THEN
+    RAISE EXCEPTION 'cannot restore NOT NULL: % draft-card rows exist; purge/migrate first',
+      (SELECT count(*) FROM public.messages WHERE conversation_id IS NULL);
+  END IF;
+END $$;
 ALTER TABLE public.messages DROP CONSTRAINT IF EXISTS messages_row_kind_chk;
--- Destructive: re-adding NOT NULL FAILS if any draft-card row exists. Manual rollback only.
 ALTER TABLE public.messages ALTER COLUMN content SET NOT NULL;
 ALTER TABLE public.messages ALTER COLUMN role    SET NOT NULL;
 ALTER TABLE public.messages ALTER COLUMN conversation_id SET NOT NULL;
 ```
 
-### Phase 2 — Shared `insertDraftCard` helper (TDD: RED test first)
+### Phase 2 — Shared `insertDraftCard` helper (TDD: RED first)
 
-New `apps/web-platform/server/messages/insert-draft-card.ts`. **Import the tenant client from
-`@/lib/supabase/tenant` (Next-free)** so the Inngest/server bundle doesn't transitively pull
-`next/headers` (`2026-04-18-server-bundle-transitive-next-headers-leak`).
+New `apps/web-platform/server/messages/insert-draft-card.ts`. **File header MUST note:** "Reachable from the Inngest/WS server bundle — import the Supabase client only from `@/lib/supabase/tenant` (Next-free); never `@/lib/supabase/server` (`2026-04-18-server-bundle-transitive-next-headers-leak`)."
 
 ```ts
+// source/owning_domain narrowed to the known unions (architecture P1-2): a typo'd
+// literal would silently produce a row the Today `.in("tier",…)` filter drops.
 export interface DraftCardInput {
   founderId: string;
-  source: string;            // MESSAGE_SOURCE_*
-  owning_domain: string;     // MESSAGE_OWNING_DOMAIN_*
-  draft_preview: string;     // RAW — redacted inside the helper (FR5)
+  source: MessageSource;            // union of MESSAGE_SOURCE_* constants
+  owning_domain: MessageOwningDomain;  // union of MESSAGE_OWNING_DOMAIN_* constants
+  draft_preview: string;            // RAW — redacted inside the helper (FR5)
   tier: string;
   urgency: string;
   trust_tier: string;
-  source_ref?: string;       // optional: cfo has none → that row simply won't dedup
-  action_class?: string;     // optional: caller-set; helper does NOT pre-validate
+  source_ref?: string;              // MUST be structured/hashed, NEVER raw upstream text (not redacted)
+  action_class?: string;            // caller-set; helper does NOT pre-validate
 }
 export type DraftCardResult = { status: "inserted" | "deduped"; id?: string };
 
 export async function insertDraftCard(input: DraftCardInput): Promise<DraftCardResult> {
-  const tenant = await getFreshTenantClient(input.founderId);            // mints role=authenticated, sub=founderId
-  const workspace_id = await resolveCurrentWorkspaceId(input.founderId, tenant);
+  const tenant = await getFreshTenantClient(input.founderId);   // role=authenticated, sub=founderId
+  // SOLO-PIN (P0): operator-internal cards target the operator's solo workspace
+  // (ADR-038 N2: workspaces.id = owner_user_id). NOT resolveCurrentWorkspaceId —
+  // that returns the session-SELECTED workspace, which RLS cannot distinguish from
+  // a legitimate team membership → cross-post risk.
+  const workspace_id = input.founderId;
   const id = randomUUID();
   const { error } = await tenant.from("messages").insert({
-    id,
-    user_id: input.founderId,
-    workspace_id,
-    template_id: "default_legacy",                 // Decision A — ack-only card
+    id, user_id: input.founderId, workspace_id,
+    template_id: "default_legacy",            // Decision A — ack-only card
     status: MESSAGE_STATUS_DRAFT,
     source: input.source,
     source_ref: input.source_ref ?? null,
     owning_domain: input.owning_domain,
-    draft_preview: redactGithubSourcedText(input.draft_preview),   // FR5: single choke point
-    tier: input.tier,
-    urgency: input.urgency,
-    trust_tier: input.trust_tier,
+    draft_preview: redactGithubSourcedText(input.draft_preview),   // FR5 choke point
+    tier: input.tier, urgency: input.urgency, trust_tier: input.trust_tier,
     ...(input.action_class ? { action_class: input.action_class } : {}),
   });
   if (error) {
-    if (error.code === PG_UNIQUE_VIOLATION) return { status: "deduped" };   // 23505 → idempotent
-    // 23514 (CHECK, incl. messages_action_class_not_locked / row_kind_chk) and all others → loud:
-    Sentry.captureException(error, {
+    if (error.code === PG_UNIQUE_VIOLATION) return { status: "deduped" };  // 23505
+    Sentry.captureException(error, {              // 23514 (CHECK) + all else → loud
       tags: { feature: "insert-draft-card", op: "persist", source: input.source },
       extra: { founderId: input.founderId, workspace_id, source_ref: input.source_ref, code: error.code },
     });
@@ -252,60 +238,58 @@ export async function insertDraftCard(input: DraftCardInput): Promise<DraftCardR
   return { status: "inserted", id };
 }
 ```
-- **Always destructure `{ error }`**; branch on `error.code`. `23505`→deduped; everything else (incl. `23514`) → Sentry + throw (distinct from dedup).
-- **Never** `.upsert()`/`on_conflict` against the partial index → 42P10.
-- **`action_class` is not pre-validated** — callers must not pass `payment.*`/`legal.*`/`auth.*` (would hit `messages_action_class_not_locked` 23514, surfaced loudly).
-- **JWT role:** `getFreshTenantClient` mints `role=authenticated` (required by both the INSERT policy and the `is_workspace_member` EXECUTE grant) — asserted in Phase 7 test 3.
+- Always destructure `{ error }`; `23505`→deduped, else Sentry + throw. Never `.upsert()`/`on_conflict` (→ 42P10).
+- `action_class` not pre-validated — callers must not pass `payment.*`/`legal.*`/`auth.*` (→ `messages_action_class_not_locked` 23514, surfaced loudly).
+- *(Future non-solo caller: add an explicit `workspaceIdOverride` param — never re-introduce selection semantics for an identity-attributed write.)*
 
 ### Phase 3 — kb-drift route adopts helper + digest (FR3, FR4, action_class)
 
-Refactor `route.ts:132-171`:
-- Remove `createServiceClient()` import + call (sweep `.service-role-allowlist` for any kb-drift entry — `cq-ref-removal-sweep`).
-- `if (payload.findings.length === 0)` → 200, no insert (no empty digest card).
+Refactor `route.ts:132-171` (leave the auth/cap block `:82-104` untouched):
+- Remove `createServiceClient()` import + call (sweep `.service-role-allowlist`).
+- `if (payload.findings.length === 0)` → 200, no insert.
 - Build **one** digest:
-  - `source_ref = "digest-" + sha256(findings.map(f=>f.source_ref).sort().join("\n")).slice(0,16)` (content-hash; unchanged KB ⇒ same ref ⇒ `23505` skip — NOT a per-date key, which would mask intra-day changes / dup quiet days).
-  - `draft_preview = \`${N} KB-drift findings — review\n\` + findings.map(f => \`• ${f.kind==="broken-link"?"Broken link":"Broken anchor"} in ${f.source_path} → ${f.target}\`).join("\n")` (redaction happens in the helper).
+  - `source_ref = "digest-" + sha256(findings.map(f=>f.source_ref).sort().join("\n"))` — **full 64-hex** (no `.slice(16)`: avoids birthday-collision masking a distinct night's findings as a false dedup).
+  - For each finding, **strip the URL query string** from `target` (`target.replace(/(\bhttps?:\/\/[^\s?]+)\?[^\s]*/gi, "$1")`) before composing — a broken doc link never needs its query string for triage, and this closes the signed-URL token vector the redaction allowlist misses.
+  - `draft_preview = \`${N} KB-drift findings — review\n\` + findings.map(f => \`• ${f.kind==="broken-link"?"Broken link":"Broken anchor"} in ${f.source_path} → ${strippedTarget}\`).join("\n")` (in-helper `redactGithubSourcedText` is the second layer).
 - One `await insertDraftCard({ founderId: operatorFounderId, source: MESSAGE_SOURCE_KB_DRIFT, source_ref, owning_domain: MESSAGE_OWNING_DOMAIN_KNOWLEDGE, draft_preview, tier: MESSAGE_TIER_EXTERNAL_LOW_STAKES, urgency: "low", trust_tier: "internal_infra_auto", action_class: "knowledge.kb_drift" })`.
 - Map `deduped`→200 `{received:true,inserted:0,deduped:1,total:N}`; `inserted`→`inserted:1`.
 - Fix `:12` "migration 051"→"052".
 
 ### Phase 4 — Sibling refactors (all three; FR2)
 
-- **`github-on-event.ts:230-273`** → replace inline insert with `insertDraftCard({...})`, passing its existing `source_ref` and `action_class` **if present** (Phase-4 step 0: confirm whether github currently sets `action_class` — agents disagreed; pass it through either way). Net change small (already tenant-client + redaction). Helper redaction is idempotent against any existing pre-redaction. **Upstream wiring stays deferred** (Non-Goal).
-- **`cfo-on-payment-failed.ts:224-243`** → replace inline insert with `insertDraftCard({...})`, passing `action_class: payload.action_class ?? "finance.payment_failed"` (**resolved at the call site** — never raw `payload.action_class`, which would null→422 on the live CFO card) and **no `source_ref`** (stub; won't dedup). This refactor **fixes cfo's silent-error swallow** (the helper destructures `{ error }` + mirrors to Sentry). Upstream deferred.
+- **`github-on-event.ts`** → `insertDraftCard({...})` with its existing `source_ref`, tier `external_low_stakes`, redaction now in-helper (idempotent). Does not currently set `action_class` (verified) — omit. Upstream deferred.
+- **`cfo-on-payment-failed.ts`** → `insertDraftCard({...})` with **`tier: MESSAGE_TIER_EXTERNAL_BRAND_CRITICAL`** (do not downgrade), `action_class: payload.action_class ?? "finance.payment_failed"` (**resolved at the call site** — a raw-null pass would 422 the live CFO card), no `source_ref`. The refactor **fixes cfo's silent-error swallow** (helper destructures + mirrors to Sentry). Upstream deferred. *(R2 note: the cfo leader-loop `step.run` awaits before persist; the TOCTOU between resolve and write is closed by the tenant-client RLS WITH CHECK, not by a sentinel — documented, accepted.)*
 
 ### Phase 5 — Digest card operator-action path (UI; ADVISORY)
 
-`components/dashboard/today-card.tsx` — `KbDriftCard`:
-- Detect a digest card (`source_ref?.startsWith("digest-")`).
-- For digest cards, **render a Dismiss/Acknowledge button** (reuse `StripeCard`'s existing Discard pattern `:347`) wired to the existing `POST /today/[id]/discard` route (archives → row drops out of the Today select at `route.ts:126`). **Do not render the per-finding "Fix link"/spawn button** for digests (semantically wrong for N findings, and avoids the template-auth/send path entirely).
-- Per-finding drill-down / individual dismissal remains **deferred** (Follow-up #3).
+`today-card.tsx` — `KbDriftCard`: detect a digest (`source_ref?.startsWith("digest-")`); render a Dismiss/Acknowledge button (reuse `StripeCard`'s pattern) → existing `POST /today/[id]/discard` (archives → drops from Today). **Do not render the per-finding spawn/"Fix link" button for digests** (enforced as a Phase 7 regression test). Per-finding drill-down deferred (Follow-up #3).
 
 ### Phase 6 — Observability (TR3)
 
-- Add a Sentry mirror to the **dedup-skip** path (currently silent `route.ts:149-151`) per `cq-silent-fallback-must-mirror-to-sentry`: `Sentry.captureMessage("kb-drift digest deduped", { level:"info", tags:{feature:"kb-drift-ingest", op:"dedup-skip"} })`.
-- Add structured success-log fields: resolved `workspace_id`, `finding_count=N`, `deduped`.
-- **Atomicity note:** the digest is now one row → a persist failure means **zero** operator visibility for that night (vs. the old per-finding partial success). The authoritative "you are blind tonight" signal is the cron run conclusion (GitHub Actions) — documented in the Observability schema. All failure paths reachable from Sentry/Better Stack with **no SSH**.
+- Sentry mirror on the dedup-skip path (`route.ts:149-151`, was silent) — `op:"dedup-skip"`, level info, **include `source_ref`** in `extra` (so a true vs false dedup is distinguishable).
+- Structured success log: `workspace_id`, `finding_count=N`, `deduped`.
+- **Atomicity note:** one digest row → a persist failure = zero operator visibility that night; the cron run conclusion (GitHub Actions) is the authoritative "blind night" signal. All failure paths Sentry/Better Stack reachable, no SSH.
 
 ### Phase 7 — Tests (RED→GREEN; `cq-write-failing-tests-before`, `cq-test-fixtures-synthesized-only`)
 
-1. **Migration contract** (integration vs prod-shaped DB): a draft-card row (null `conversation_id/role/content`, draft-card cols set, `tier=external_low_stakes`, `status=draft`) **inserts** and satisfies `messages_external_tier_status_check`; a neither-branch row is **rejected** by `messages_row_kind_chk`; an existing chat row still inserts.
-2. **Helper unit** (mocked supabase): inserted→`{status:"inserted"}`; `23505`→`{status:"deduped"}` (no throw); `23514`/other→throw + Sentry; `resolveCurrentWorkspaceId` called with the tenant client (2 args); `template_id='default_legacy'`; `draft_preview` redacted; `action_class`/`source_ref` omitted from the row when absent.
-3. **Cross-tenant rejection** integration (mirrors `cc-dispatcher-cross-tenant.integration.test.ts`): a tenant-client insert claiming a foreign `workspace_id` is **rejected** by `messages_workspace_member_insert`; assert the minted JWT carries `role=authenticated` + `sub=founderId`.
-4. **Route digest:** N findings → exactly one `insertDraftCard` call; preview newline-packed; re-POST identical → `deduped:1`; empty findings → no insert; row carries `action_class='knowledge.kb_drift'`.
-5. **Dismiss-then-recur** (stale-digest guard): insert digest → archive via `/discard` → re-POST same findings → a **new** draft card inserts (not deduped against the archived row) — proves the operator is never permanently blinded.
-6. **Redaction:** a finding `target` carrying an email/token/JWT is scrubbed in `draft_preview` (one assertion; the Unicode-separator / mixed-case adversarial fixtures belong to `redactGithubSourcedText`'s own test, not re-tested here).
+1. **Migration contract:** draft-card row (null `conversation_id/role/content`; `source/owning_domain/draft_preview` set; `tier=external_low_stakes`, `status=draft`) inserts + satisfies `messages_external_tier_status_check`; a `user_id=NULL` cardless row (anonymization sim) **still passes** the CHECK (erasure-safety); neither-branch row rejected; existing chat row still inserts.
+2. **Helper unit:** inserted/`23505`-deduped/`23514`-throw+Sentry; `workspace_id === founderId` (solo-pin, **not** resolveCurrentWorkspaceId); `template_id='default_legacy'`; `draft_preview` redacted; `source`/`owning_domain` type-narrowed; brand-critical-tier case (cfo's tier passes `external_tier_status_check`).
+3. **Cross-tenant + solo-pin (security/identity P0):** (a) foreign-`workspace_id` insert rejected by RLS; minted JWT `role=authenticated`,`sub=founderId`; **(b) with `user_session_state.current_workspace_id` set to a FOREIGN workspace the operator is also a member of, the helper still writes to the SOLO workspace (`= founderId`)** — proves the cross-post is closed (RLS alone would NOT catch this).
+4. **Route digest:** N findings → one `insertDraftCard`; full-sha256 `source_ref`; re-POST identical → `deduped:1`; empty → no insert; row carries `action_class='knowledge.kb_drift'`.
+5. **Dismiss-then-recur:** insert digest → archive via `/discard` → re-POST same findings → a **new** draft card inserts (archived row freed the partial-index slot).
+6. **Redaction incl. URL-query vector:** a finding `target` of form `https://host/path?X-Amz-Signature=…&token=…` has its **query string stripped** in `draft_preview`; plus a token/email in `source_path` is scrubbed.
+7. **Digest no-spawn regression:** a digest card (`source_ref` starts `digest-`) MUST NOT render a send-capable affordance (guards Phase 5 against future regression).
 
-> **Write-boundary sweep (TR2)** is satisfied by a **documented grep** in the PR body (not a test): Today consumer filters by `user_id/tier/status` (`dashboard/today/route.ts:121`); chat render is conversation-scoped (`api-messages.ts:140`). No reader assumes non-null `role/content/conversation_id` on a query that can return draft rows.
+> **Write-boundary sweep (TR2)** = documented grep in the PR body (Today filters `user_id/tier/status`; chat render conversation-scoped). Not a test.
 
 ---
 
 ## Files to Edit
 
-- `apps/web-platform/app/api/internal/kb-drift-ingest/route.ts` — adopt helper, digest, `action_class`, dedup→200, Sentry dedup mirror, fix `:12` comment, drop service client.
+- `apps/web-platform/app/api/internal/kb-drift-ingest/route.ts` — helper, digest, URL-strip, `action_class`, dedup→200, Sentry dedup mirror, fix `:12`, drop service client; auth/cap block untouched.
 - `apps/web-platform/server/inngest/functions/github-on-event.ts` — call `insertDraftCard`.
-- `apps/web-platform/server/inngest/functions/cfo-on-payment-failed.ts` — call `insertDraftCard` (resolved `action_class` fallback; fixes silent-error swallow).
-- `apps/web-platform/components/dashboard/today-card.tsx` — `KbDriftCard` digest Dismiss affordance.
+- `apps/web-platform/server/inngest/functions/cfo-on-payment-failed.ts` — call `insertDraftCard` (brand-critical tier; resolved `action_class`; fixes silent swallow).
+- `apps/web-platform/components/dashboard/today-card.tsx` — `KbDriftCard` digest Dismiss.
 - `apps/web-platform/.service-role-allowlist` — remove any kb-drift entry if present.
 
 ## Files to Create
@@ -314,7 +298,7 @@ Refactor `route.ts:132-171`:
 - `apps/web-platform/server/messages/insert-draft-card.ts`
 - `apps/web-platform/test/server/insert-draft-card.test.ts`
 - `apps/web-platform/test/server/messages-draft-card-cross-tenant.integration.test.ts`
-- `apps/web-platform/test/api/kb-drift-ingest.test.ts` (or extend an existing route test)
+- `apps/web-platform/test/api/kb-drift-ingest.test.ts` (or extend existing)
 
 ---
 
@@ -322,64 +306,53 @@ Refactor `route.ts:132-171`:
 
 ### Pre-merge (PR)
 
-- [ ] Migration 082 applies cleanly against a prod-shaped DB; `VALIDATE CONSTRAINT messages_row_kind_chk` succeeds (Phase 0.2 = 0 violators); draft-card row (null `conversation_id/role/content`) inserts and satisfies `messages_external_tier_status_check`; neither-branch row rejected (contract test green).
-- [ ] `insertDraftCard` unit tests green: inserted / `23505`-deduped / `23514`-throw-with-Sentry; `resolveCurrentWorkspaceId(founderId, tenant)`; `template_id='default_legacy'`; `draft_preview` redacted.
-- [ ] Cross-tenant integration: foreign-`workspace_id` insert rejected; minted JWT `role=authenticated`, `sub=founderId`.
-- [ ] Route digest: N findings → one insert; re-POST identical → `deduped:1`; empty → no insert; row carries `action_class='knowledge.kb_drift'`.
-- [ ] Dismiss-then-recur test green (archived row frees the dedup slot).
-- [ ] Redaction test green.
-- [ ] All three producers route through `insertDraftCard`; cfo no longer swallows its insert error.
-- [ ] `tsc --noEmit` + `vitest run` for touched packages pass; no `createServiceClient` in kb-drift route.
-- [ ] `/soleur:gdpr-gate` run on the diff; no unresolved Critical.
+- [ ] Migration 082 applies on a prod-shaped DB; `VALIDATE` succeeds (Phase 0.2/0.6 = 0); draft-card row (incl. `user_id=NULL` anonymization sim) inserts + satisfies `external_tier_status_check`; neither-branch row rejected; re-apply is idempotent (`DROP CONSTRAINT IF EXISTS`).
+- [ ] Helper unit tests green: inserted/`23505`/`23514`; `workspace_id === founderId` (solo-pin); `template_id='default_legacy'`; redaction; type-narrowed source/owning_domain.
+- [ ] Cross-tenant + solo-pin tests green: foreign-`workspace_id` rejected; JWT `role=authenticated`,`sub=founderId`; **stale `current_workspace_id` does not redirect the write off the solo workspace**.
+- [ ] Route digest: one insert; full-sha256 `source_ref`; re-POST→`deduped:1`; empty→no insert; `action_class='knowledge.kb_drift'`.
+- [ ] Dismiss-then-recur green; redaction incl. `?X-Amz-Signature=` query-strip green; digest no-spawn regression green.
+- [ ] All three producers route through `insertDraftCard`; cfo keeps `external_brand_critical` + no longer swallows its error.
+- [ ] `tsc --noEmit` + `vitest run` (touched packages) pass; no `createServiceClient` in kb-drift route.
+- [ ] `/soleur:gdpr-gate` on the diff; no unresolved Critical (confirm redaction allowlist covers URL-query token shape).
 
-### Post-merge (operator/CI — automatable; baked into ship/CI, not manual)
+### Post-merge (operator/CI — automatable; baked into ship/CI)
 
-- [ ] `web-platform-release.yml#migrate` applies 082 on merge; `verify-migrations` job green.
-- [ ] `gh workflow run "KB-drift walker"` → `gh run list --workflow "KB-drift walker" --limit 1 --json conclusion --jq '.[0].conclusion'` = `success`. *(Bake into `/soleur:ship` post-merge.)*
-- [ ] The digest row is visible in the operator founder's knowledge-domain Today queue, scoped to the operator's own `workspace_id` (verify via read-only prd query, not dashboard eyeballing).
-- [ ] Operator can **Dismiss** the digest card; dismissed card does not reappear on next page load.
-- [ ] Re-run over unchanged KB → `deduped:1`, no duplicate card.
-- [ ] Follow-up issues filed (`Ref #N`, not `Closes`): ADR; sibling upstream wiring; digest drill-down UI; (conditional) latent chat-insert omission.
+- [ ] `web-platform-release.yml#migrate` applies 082; `verify-migrations` green.
+- [ ] `gh workflow run "KB-drift walker"` → `gh run list --workflow "KB-drift walker" --limit 1 --json conclusion --jq '.[0].conclusion'` = `success`.
+- [ ] Digest row visible in the operator's Today queue, scoped to the operator's **solo** `workspace_id` (read-only prd query, not dashboard eyeballing).
+- [ ] Operator can Dismiss the digest; dismissed card does not reappear.
+- [ ] Re-run over unchanged KB → `deduped:1`, no dup.
+- [ ] Follow-ups filed (`Ref #N`): ADR (next free integer by filename; fix ADR-037 stale frontmatter); sibling upstream wiring; digest drill-down UI; (conditional) latent chat-insert omission.
 
 ---
 
 ## Domain Review
 
-**Domains relevant:** Engineering, Product, Legal (carried forward from brainstorm `## Domain Assessments`).
+**Domains relevant:** Engineering, Product, Legal (carried from brainstorm `## Domain Assessments`).
 
 ### Engineering (CTO) — carried forward
-**Status:** reviewed (brainstorm). **Assessment:** `messages` is the deliberate draft-card home (ADR-037). `role IN (...)` blocks naive column-setting (mitigated: null role passes CHECK). Hot-table NOT-NULL relaxation needs a reader blast-radius sweep (→ TR2 / Phase 7 grep). ADR recommended (→ Follow-up).
+**Status:** reviewed. `messages` is the deliberate draft-card home (ADR-037). Hot-table NOT-NULL relaxation needs a reader blast-radius sweep (TR2/Phase 7). ADR recommended (Follow-up #1).
 
 ### Product (CPO) — carried forward + Product/UX Gate
-**Status:** reviewed (brainstorm). **Assessment:** Today consumer shipped (PR-H Phase 6) → a successful insert delivers operator value. Top risk: 7-item cap starvation → one digest card per run (FR4).
+**Status:** reviewed. Today consumer shipped → a successful insert delivers operator value. 7-cap starvation → one digest card (FR4).
 #### Product/UX Gate
-**Tier:** advisory — modifies existing Today card content (newline-packed `draft_preview`) and adds a Dismiss affordance to `KbDriftCard` reusing `StripeCard`'s existing Discard pattern + the existing `/discard` route. **No new component, page, layout, or route file** → mechanical escalation does not fire. **Decision:** auto-accepted (advisory; backend-dominant; minimal, pattern-reusing UI). Per-finding drill-down deferred (Follow-up #3).
-**Agents invoked:** spec-flow-analyzer (journey — surfaced the 422 dead-card + dismiss gap, folded in). **Skipped:** ux-design-lead (no new surface), copywriter (no persuasive copy). **Pencil:** N/A.
+**Tier:** advisory — modifies existing Today card content + adds a Dismiss affordance reusing `StripeCard`'s pattern + existing `/discard` route. No new component/page/layout/route file. **Decision:** auto-accepted (backend-dominant; minimal pattern-reusing UI). Drill-down deferred (Follow-up #3).
+**Agents invoked:** spec-flow-analyzer (surfaced the 422 dead-card + dismiss gap → folded in). **Skipped:** ux-design-lead, copywriter. **Pencil:** N/A.
 
 ### Legal (CLO) — carried forward
-**Status:** reviewed (brainstorm). **Assessment:** GATE on the cross-tenant-safe write (FR3); route `draft_preview` through redaction (FR5, now in-helper). No statutory clock; GDPR Art. 5(1)(f)/32 hygiene.
+**Status:** reviewed. GATE on the cross-tenant-safe write (now solo-pinned + RLS); redaction (FR5, in-helper + URL-query strip). No statutory clock; GDPR Art. 5(1)(f)/32. **Erasure note:** the user_id-free card branch keeps Art. 17 anonymization unblocked.
 
 ---
 
 ## GDPR / Compliance Gate (Phase 2.7)
 
-Regulated surfaces: a DB migration (`.sql`), an internal API route, a workspace-scoped write, a
-redaction transform → gate fires. Run `/soleur:gdpr-gate` on the diff at `/work`. Pre-assessed
-(advisory): the data is **operator-internal infra signal** (broken doc links), not customer
-personal data; incidental token/email in a broken URL → mitigated by FR5 (in-helper redaction).
-Cross-tenant control is FR3. No new customer-data processing activity; no Art. 30 entry
-(operator-self-scoped). Any Critical finding → operator-ack write to `compliance-posture.md` +
-`compliance/critical` issue.
+Regulated surfaces: migration (`.sql`), internal API route, workspace-scoped write, redaction. Run `/soleur:gdpr-gate` on the diff at `/work`; **confirm the redaction allowlist covers the URL-query token shape** (the named vector). Pre-assessed (advisory): operator-internal infra signal, not customer PII; incidental token in a broken URL → mitigated by URL-query strip + in-helper redaction; cross-tenant control = solo-pin. The user_id-free discriminator branch keeps Art. 17 erasure unblocked. No new customer-data processing; no Art. 30 entry. Critical → operator-ack write to `compliance-posture.md` + `compliance/critical` issue.
 
 ---
 
 ## Infrastructure (IaC) — N/A
 
-No new infrastructure (no server, systemd unit, secret, vendor account, DNS, persistent process).
-The walker workflow, HMAC signing key, and `KB_DRIFT_OPERATOR_FOUNDER_ID` already exist (PRs
-#4570/#4571/#4572). The only deploy action is the DB migration, applied by the existing
-`web-platform-release.yml#migrate` job on merge (`run-migrations.sh`, no operator SSH). IaC gate
-skipped (pure code + migration against an already-provisioned surface).
+No new infra. The walker workflow, HMAC signing key, and `KB_DRIFT_OPERATOR_FOUNDER_ID` already exist (**#4570** routed ingest POST; **#4572** provisioned signing key + operator founder id — note: #4571 is an unrelated Flagsmith fix). Only deploy action is the DB migration via `web-platform-release.yml#migrate` (`run-migrations.sh`, no operator SSH). IaC gate skipped.
 
 ---
 
@@ -387,7 +360,7 @@ skipped (pure code + migration against an already-provisioned surface).
 
 ```yaml
 liveness_signal:
-  what: nightly KB-drift walker run concludes success (signed POST → 2xx); a digest persist failure = zero operator visibility that night → cron conclusion is the authoritative blind-night signal
+  what: nightly KB-drift walker run concludes success (signed POST → 2xx); one-digest-row design means a persist failure = zero operator visibility that night → cron conclusion is the authoritative blind-night signal
   cadence: daily cron 0 3 * * * (+ workflow_dispatch)
   alert_target: GitHub Actions run conclusion != success; Sentry events for in-route failures
   configured_in: .github/workflows/kb-drift-walker.yml
@@ -398,8 +371,8 @@ failure_modes:
   - { mode: HMAC mismatch, detection: Sentry op:"signature", alert_route: Sentry }
   - { mode: signing key unset, detection: Sentry op:"secret", alert_route: Sentry }
   - { mode: operator id unset, detection: Sentry op:"operator-id", alert_route: Sentry }
-  - { mode: NOT NULL/CHECK(23514)/RLS reject on insert, detection: Sentry op:"persist" (in helper), alert_route: Sentry }
-  - { mode: idempotent dedup skip, detection: Sentry op:"dedup-skip" (NEW — was silent), alert_route: Sentry info }
+  - { mode: NOT NULL/CHECK(23514)/RLS reject on insert, detection: Sentry op:"persist" (in helper, with code), alert_route: Sentry }
+  - { mode: idempotent dedup skip, detection: Sentry op:"dedup-skip" (NEW, with source_ref), alert_route: Sentry info }
   - { mode: tenant JWT mint failure, detection: RuntimeAuthError → 500 + Sentry, alert_route: Sentry }
 logs:
   where: pino structured logs (Better Stack) + Sentry; success path logs workspace_id, finding_count, deduped
@@ -413,42 +386,40 @@ discoverability_test:
 
 ## Risks & Sharp Edges
 
-- **The schema paradox is the #1 risk.** Phase 0.1 must run first. If prod = migration files, the siblings are latently broken (helper fixes them, in scope) and chat is a separate latent bug (→ follow-up). If prod ≠ migration files, **pause and re-confirm the 082 shape** before adding the CHECK (DHH caveat).
-- **`NOT VALID`/`VALIDATE` defers no lock here** (single-transaction runner) — kept cosmetic/forward-portable; safe because Phase 0.2 = 0 violators.
-- **Down migration is destructive** (re-adding NOT NULL fails if draft rows exist) — manual-rollback-only; the runner never auto-applies `*.down.sql`.
-- **Partial-index dedup:** plain `.insert()` + catch `23505` only; **never** `.upsert()`/`on_conflict` (→ 42P10). Digest `source_ref` must be non-null. Dismissed rows are archived → leave the partial-on-draft index → recurrence re-inserts (Phase 0.5 confirms; Phase 7 test 5 proves).
-- **Server-bundle leak:** import the tenant client from `@/lib/supabase/tenant` (Next-free), never `@/lib/supabase/server`.
-- **Operator membership precondition:** FR3 RLS passes only if `KB_DRIFT_OPERATOR_FOUNDER_ID` has a `workspace_members(self,self)` row (Phase 0.3) and the minted JWT is `role=authenticated`.
-- **cfo `action_class` fallback** must be resolved at the call site (`payload.action_class ?? "finance.payment_failed"`); the helper omits a falsy `action_class` → a raw-null pass would 422 the live CFO card.
-- **`action_class` not pre-validated** in the helper — `payment.*`/`legal.*`/`auth.*` would hit `messages_action_class_not_locked` (23514, surfaced loudly, not swallowed as dedup).
-- **`Ref #N` not `Closes #N`** for the deferred-upstream follow-up.
-- **Constraint coexistence:** `messages_row_kind_chk` is additive to `messages_status_check` / `messages_external_tier_status_check` / `messages_template_id_check` / `messages_action_class_not_locked`.
+- **Cross-tenant via selection semantics (P0, fixed):** never resolve the operator-internal write via `resolveCurrentWorkspaceId`; pin `workspace_id = operatorFounderId` (solo, ADR-038 N2). RLS membership is the second layer, not the guard. Phase 7.3(b) is the proof test.
+- **Anonymization vs CHECK (P0, fixed):** card branch excludes `user_id` so `user_id → NULL` (Art. 17, `068`) keeps satisfying the discriminator. Phase 0.6 + Phase 7.1 verify.
+- **Signed-URL token leak (HIGH, fixed):** `redactGithubSourcedText` does not strip `?X-Amz-Signature=`/`?token=` — strip the URL query string from `target` before packing. Phase 7.6 verifies.
+- **Schema paradox:** Phase 0.1 first. If prod = files, siblings are in-scope + chat is a separate follow-up; if prod ≠ files, pause before the CHECK.
+- **Migration idempotency:** `DROP CONSTRAINT IF EXISTS` before `ADD` (re-apply/drift-recovery → 42710 otherwise). Down is destructive + guarded (aborts before dropping the CHECK if draft rows exist).
+- **`NOT VALID`/`VALIDATE`:** safe via single-txn lock (no concurrent violator) + Phase 0.2 (no pre-existing violator); split is forward-portable only.
+- **Partial-index dedup:** plain `.insert()` + catch `23505`; never `.upsert()`/`on_conflict` (42P10). Full-sha256 `source_ref` (no truncation collision). Dismissed (archived) rows free the slot.
+- **Server-bundle leak:** import tenant client from `@/lib/supabase/tenant` (Next-free); documented in the helper header.
+- **`source_ref` not redacted:** must be structured/hashed, never raw upstream text (helper invariant + Phase 2 note).
+- **cfo:** keep `external_brand_critical` tier; resolve `action_class` fallback at the call site (raw-null → 422 on the live CFO card). R2 TOCTOU closed by RLS WITH CHECK (documented).
+- **ADR numbering:** cite by filename (ADR-037 frontmatter `adr: 035` is stale; ADR-035/038 collisions exist). Follow-up ADR picks next free integer by enumerating filenames + fixes the stale frontmatter.
+- **`Ref #N` not `Closes #N`** for deferred-upstream follow-ups.
 
 ---
 
 ## Non-Goals
 
-- Wiring the stubbed **upstream** of `github-on-event` / `cfo-on-payment-failed` (their leader-loop; deferred to PR-G). *(Their draft-card insert path IS fixed here via the helper.)*
-- A dedicated `draft_action_cards` table (rejected by ADR-037).
-- A singleton "Knowledge drift" conversation (Option A, rejected in brainstorm).
-- Per-finding drill-down / individual dismissal for the digest card (deferred follow-up).
-- An operator-facing "last drift check: clean" liveness surface for empty/clean runs (silence is UI-only; cron conclusion is the engineer-facing signal — acceptable at this threshold; tracked follow-up if desired).
-- Relaxing `template_id`/`workspace_id` NOT NULL (Decision A keeps them).
+- Wiring the stubbed **upstream** of `github-on-event` / `cfo-on-payment-failed` (PR-G). *(Their insert path IS fixed here.)*
+- A dedicated `draft_action_cards` table (ADR-037).
+- A singleton "Knowledge drift" conversation (Option A, rejected).
+- Per-finding drill-down / individual dismissal (deferred follow-up).
+- An operator-facing "last drift check: clean" liveness surface for empty/clean runs (cron conclusion is the engineer-facing signal; tracked follow-up if desired).
+- Relaxing `template_id`/`workspace_id` NOT NULL (Decision A).
 - Reworking Today queue ranking / per-source caps.
 
-## Follow-up (file as issues during `/work`, `Ref` from this PR)
+## Follow-up (file during `/work`, `Ref` from this PR)
 
-1. **ADR** via `/soleur:architecture create`: canonical draft-card home = `messages`; 082 finishes the mig-046 intent (amends the de-facto ADR-035/037 contract).
+1. **ADR** via `/soleur:architecture create`: canonical draft-card home = `messages`; 082 finishes the mig-046 intent. Pick the next free integer by enumerating ADR **filenames** (not frontmatter — ADR-035/037/038 frontmatter is drifted); fix `ADR-037-*.md`'s stale `adr: 035` frontmatter as a drive-by. Consider an `AP-0NN` principles-register row for the messages-row-shape invariant.
 2. **Sibling upstream wiring** for `github-on-event` / `cfo-on-payment-failed` leader-loop (PR-G).
-3. **Digest drill-down UI** — structured findings payload + per-finding dismissal on `KbDriftCard`.
-4. **(conditional, from Phase 0.1)** Latent chat-insert `workspace_id`/`template_id` omission — only if prod schema confirms the columns are NOT-NULL-no-default and chat nonetheless inserts.
+3. **Digest drill-down UI** — structured findings column/payload. *(The packed `draft_preview` is NOT the drill-down data source — redaction + URL-strip are one-way; do not parse it back.)*
+4. **(conditional, Phase 0.1)** Latent chat-insert `workspace_id`/`template_id` omission — only if prod schema confirms NOT-NULL-no-default and chat nonetheless inserts.
 
 ---
 
 ## Sharp Edge (deepen-plan / ship gates)
 
-`## User-Brand Impact` is filled (carried from brainstorm) → passes `deepen-plan` Phase 4.6 +
-preflight Check 6. At `single-user incident` threshold the exit gate recommends
-`/soleur:deepen-plan` (data-integrity-guardian + security-sentinel + architecture-strategist)
-before `/work` — these catch SQL-atomicity / RLS / migration-safety substance that plan-review
-(DHH/Kieran/Simplicity) is structurally blind to.
+`## User-Brand Impact` filled (carried + corrected) → passes deepen Phase 4.6 + preflight Check 6. This plan has been through the deepen triad; the P0/HIGH findings (solo-pin, anonymization-safe CHECK, URL-query redaction) are folded in above.
