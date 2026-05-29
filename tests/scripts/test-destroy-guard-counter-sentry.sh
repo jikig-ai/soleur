@@ -24,7 +24,17 @@
 #         -target=sentry_cron_monitor.scheduled_community_monitor \
 #         -target=sentry_cron_monitor.scheduled_gh_pages_cert_state \
 #         -target=sentry_cron_monitor.scheduled_follow_through \
-#         -target=sentry_cron_monitor.scheduled_strategy_review
+#         -target=sentry_cron_monitor.scheduled_strategy_review \
+#         -target=sentry_cron_monitor.scheduled_roadmap_review \
+#         -target=sentry_cron_monitor.scheduled_legal_audit \
+#         -target=sentry_cron_monitor.scheduled_agent_native_audit \
+#         -target=sentry_cron_monitor.scheduled_competitive_analysis \
+#         -target=sentry_cron_monitor.scheduled_compound_promote \
+#         -target=sentry_cron_monitor.scheduled_stale_deferred_scope_outs \
+#         -target=sentry_uptime_monitor.soleur_apex \
+#         -target=sentry_uptime_monitor.soleur_www \
+#         -target=sentry_uptime_monitor.soleur_changelog_deep \
+#         -target=sentry_uptime_monitor.soleur_acme_probe
 #   terraform show -json /tmp/tfplan > /tmp/raw.json
 #   # MANDATORY redaction: drop .variables (TF_VAR_*-sourced Doppler tokens),
 #   # planned_values/prior_state/configuration (carry resolved provider tokens

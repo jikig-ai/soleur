@@ -1,8 +1,16 @@
 #!/usr/bin/env bash
 # Forward-looking guard: asserts apply-sentry-infra.yml's -target= allow-list
-# contains ONLY `sentry_cron_monitor.*` resources. If a future PR adds a
-# different sentry resource type (e.g. sentry_issue_alert with conditions{}
-# / actions{} array-of-blocks; sentry_uptime_monitor with check_locations{}),
+# contains ONLY resource types whose nested-block exposure the
+# destroy-guard-filter-sentry.jq has been verified to cover. Currently:
+# `sentry_cron_monitor.*` and `sentry_uptime_monitor.*` — BOTH expose ZERO
+# array-of-blocks (every attribute is scalar; `sentry_uptime_monitor`'s
+# `assertion_json` is a function-built string, not an HCL block), so the
+# filter's literal `nested_deletes: 0` remains correct for both and no
+# path-specific clause is required (uptime added in #4585; see the jq
+# filter's CURRENT SCOPE comment for the scalar-attr enumeration).
+#
+# If a future PR adds a different sentry resource type that DOES carry an
+# array-of-blocks (e.g. sentry_issue_alert with conditions{} / actions{}),
 # the destroy-guard-filter-sentry.jq must be extended with a corresponding
 # nested-clause BEFORE that resource is auto-applied.
 #
@@ -31,7 +39,7 @@ if [[ -z "$types" ]]; then
   exit 1
 fi
 
-unexpected=$(echo "$types" | grep -vxF 'sentry_cron_monitor' || true)
+unexpected=$(echo "$types" | grep -vxE 'sentry_cron_monitor|sentry_uptime_monitor' || true)
 if [[ -n "$unexpected" ]]; then
   echo "[FAIL] apply-sentry-infra.yml targets unexpected resource type(s):" >&2
   printf '  %s\n' "$unexpected" >&2
@@ -43,4 +51,4 @@ if [[ -n "$unexpected" ]]; then
   exit 1
 fi
 
-echo "[ok] apply-sentry-infra.yml targets only sentry_cron_monitor (current filter scope)"
+echo "[ok] apply-sentry-infra.yml targets only sentry_cron_monitor + sentry_uptime_monitor (current filter scope)"

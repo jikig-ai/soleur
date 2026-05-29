@@ -90,28 +90,28 @@ grep -oE '^\s+[a-z_]+\s*=' apps/web-platform/infra/sentry/uptime-monitors.tf | s
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — targets added.** `apply-sentry-infra.yml` "Terraform plan" step contains all 4 `-target=sentry_uptime_monitor.{soleur_apex,soleur_www,soleur_changelog_deep,soleur_acme_probe}` flags in addition to the 17 existing cron targets. Verify:
+- [x] **AC1 — targets added.** `apply-sentry-infra.yml` "Terraform plan" step contains all 4 `-target=sentry_uptime_monitor.{soleur_apex,soleur_www,soleur_changelog_deep,soleur_acme_probe}` flags in addition to the 17 existing cron targets. Verify:
   ```bash
   grep -cE '^\s*-target=sentry_uptime_monitor\.' .github/workflows/apply-sentry-infra.yml   # == 4
   grep -cE '^\s*-target=sentry_cron_monitor\.'   .github/workflows/apply-sentry-infra.yml   # == 17 (unchanged)
   ```
-- [ ] **AC2 — apply targets the same set.** If the apply step re-lists targets, it MUST match the plan step (it currently applies the saved `tfplan`, so adding targets to plan is sufficient — confirm the apply step still does `terraform apply ... tfplan` and was NOT changed to re-enumerate a stale subset). Verify the apply step references `tfplan` (the `-out` artifact) so the apply set == the plan set:
+- [x] **AC2 — apply targets the same set.** If the apply step re-lists targets, it MUST match the plan step (it currently applies the saved `tfplan`, so adding targets to plan is sufficient — confirm the apply step still does `terraform apply ... tfplan` and was NOT changed to re-enumerate a stale subset). Verify the apply step references `tfplan` (the `-out` artifact) so the apply set == the plan set:
   ```bash
   grep -A4 'name: Terraform apply' .github/workflows/apply-sentry-infra.yml | grep -q 'tfplan'   # exit 0
   ```
-- [ ] **AC3 — paths trigger extended.** The `paths:` block fires on `apps/web-platform/infra/sentry/uptime-monitors.tf`:
+- [x] **AC3 — paths trigger extended.** The `paths:` block fires on `apps/web-platform/infra/sentry/uptime-monitors.tf`:
   ```bash
   grep -q 'apps/web-platform/infra/sentry/uptime-monitors.tf' .github/workflows/apply-sentry-infra.yml   # exit 0
   ```
-- [ ] **AC4 — stale naming updated.** No remaining "(cron monitors only)" / "cron monitors only" claims that are now false. The `name:` field, the "Terraform plan (...)" step name, the "Terraform apply (...)" step name, and the Post-apply summary header are updated to reflect cron + uptime (e.g., "cron + uptime monitors"). Verify no false-scope literal survives:
+- [x] **AC4 — stale naming updated.** No remaining "(cron monitors only)" / "cron monitors only" claims that are now false. The `name:` field, the "Terraform plan (...)" step name, the "Terraform apply (...)" step name, and the Post-apply summary header are updated to reflect cron + uptime (e.g., "cron + uptime monitors"). Verify no false-scope literal survives:
   ```bash
   grep -nE 'cron monitors only|\(cron monitors\)' .github/workflows/apply-sentry-infra.yml   # zero matches OR only in historical-context comments explicitly scoped to the cron block
   ```
-- [ ] **AC5 — destroy-guard filter comment updated.** `tests/scripts/lib/destroy-guard-filter-sentry.jq` CURRENT SCOPE comment names `sentry_uptime_monitor.*` as in-scope and documents that uptime monitors expose zero array-of-blocks (so `nested_deletes: 0` stays correct). No change to the jq expression itself.
-- [ ] **AC6 — destroy-guard test still green.** `bash tests/scripts/test-destroy-guard-counter-sentry.sh` passes (the filter logic is unchanged; this confirms the comment edit did not break the jq parse).
-- [ ] **AC7 — workflow lints clean.** `actionlint .github/workflows/apply-sentry-infra.yml` passes; embedded `run:` shell parses (`bash -n` on each extracted `run:` snippet, NOT on the YAML file).
-- [ ] **AC8 — destroy-guard re-capture note extended.** The `test-destroy-guard-counter-sentry.sh` header's "Re-capturing baseline" command block adds the 4 `-target=sentry_uptime_monitor.*` flags so a future operator re-capture mirrors the workflow's actual target set. (Documentation accuracy; the committed fixtures themselves need no change since the filter logic is unchanged.)
-- [ ] **AC9 — full suite green.** Project test suite (`package.json scripts.test` / the repo's canonical runner) passes.
+- [x] **AC5 — destroy-guard filter comment updated.** `tests/scripts/lib/destroy-guard-filter-sentry.jq` CURRENT SCOPE comment names `sentry_uptime_monitor.*` as in-scope and documents that uptime monitors expose zero array-of-blocks (so `nested_deletes: 0` stays correct). No change to the jq expression itself.
+- [x] **AC6 — destroy-guard test still green.** `bash tests/scripts/test-destroy-guard-counter-sentry.sh` passes (the filter logic is unchanged; this confirms the comment edit did not break the jq parse).
+- [x] **AC7 — workflow lints clean.** `actionlint .github/workflows/apply-sentry-infra.yml` passes; embedded `run:` shell parses (`bash -n` on each extracted `run:` snippet, NOT on the YAML file).
+- [x] **AC8 — destroy-guard re-capture note extended.** The `test-destroy-guard-counter-sentry.sh` header's "Re-capturing baseline" command block adds the 4 `-target=sentry_uptime_monitor.*` flags so a future operator re-capture mirrors the workflow's actual target set. (Documentation accuracy; the committed fixtures themselves need no change since the filter logic is unchanged.)
+- [x] **AC9 — full suite green.** Project test suite (`package.json scripts.test` / the repo's canonical runner) passes.
 
 ### Post-merge (automated by the pipeline — no operator action)
 
@@ -243,6 +243,7 @@ Run at /work Phase 0. Record matches here with a Fold-in / Acknowledge / Defer d
 - `.github/workflows/apply-sentry-infra.yml` — add 4 `-target=sentry_uptime_monitor.*` flags to the plan step; add `uptime-monitors.tf` to `paths:`; fix "cron monitors only" naming in `name:`, two step names, summary header, file-header comments.
 - `tests/scripts/lib/destroy-guard-filter-sentry.jq` — CURRENT SCOPE comment update (name uptime monitors + zero-nested-block note). No jq-expression change.
 - `tests/scripts/test-destroy-guard-counter-sentry.sh` — re-capture-baseline command-block note: append 4 uptime `-target=` flags (documentation accuracy). No test-logic change.
+- `tests/scripts/test-destroy-guard-sentry-scope-guard.sh` — **(discovered at /work Phase 2 exit gate; not in round-1 plan)** the forward-looking scope guard asserts the workflow's `-target=` allow-list contains only resource types whose nested-block exposure the jq filter is verified to cover. Its allow-list was `sentry_cron_monitor` only; extended to also permit `sentry_uptime_monitor`, with a header note documenting uptime's zero-array-of-blocks (so no jq nested-clause is needed — same reasoning as AC5). The guard's original comment wrongly assumed `sentry_uptime_monitor` would carry `check_locations{}` blocks; corrected to match the verified scalar-only reality.
 
 ## Files to Create
 
