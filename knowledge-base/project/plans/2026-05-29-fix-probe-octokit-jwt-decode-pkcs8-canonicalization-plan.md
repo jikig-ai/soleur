@@ -144,21 +144,21 @@ surface.`)
 
 ### Phase 0 — Preconditions (verify before coding)
 
-- [ ] Confirm the installed lib versions match the analysis:
+- [x] Confirm the installed lib versions match the analysis:
       `grep -A2 '"node_modules/@octokit/app"' apps/web-platform/package-lock.json` → `16.1.2`;
       `grep -A2 '"node_modules/universal-github-app-jwt"' apps/web-platform/package-lock.json` → `2.2.2`.
       If either has drifted, re-verify the `getDERfromPEM`/`convertPrivateKey` source before proceeding
       (the fix is still correct — it just may be belt-and-suspenders if a later lib version hardened the
       extraction).
-- [ ] Confirm the secret/JWT is never read into a logged/captured variable in the changed code:
+- [x] Confirm the secret/JWT is never read into a logged/captured variable in the changed code:
       `grep -nE 'GITHUB_APP_PRIVATE_KEY|privateKey|appJwt|\bjwt\b' apps/web-platform/server/github/probe-octokit.ts`
       — the only references must be `readEnv(PRIVATE_KEY_ENV)` and the new local `const` passed to `new App()`.
-- [ ] Enumerate all callers (blast radius) so the test plan covers the shared factory, not just the probe:
+- [x] Enumerate all callers (blast radius) so the test plan covers the shared factory, not just the probe:
       `git grep -n 'createProbeOctokit\|createAppJwtOctokit' apps/web-platform --include='*.ts' | grep -v '\.test\.'`.
-- [ ] Confirm test runner: `grep '"test"' apps/web-platform/package.json` → `vitest`; `bunfig.toml [test]
+- [x] Confirm test runner: `grep '"test"' apps/web-platform/package.json` → `vitest`; `bunfig.toml [test]
       pathIgnorePatterns=["**"]` blocks bun. Run the existing suite GREEN before edits:
       `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/github/probe-octokit-retry.test.ts`.
-- [ ] Decide the helper's home: a small exported `normalizeAppPrivateKey(raw): string` in
+- [x] Decide the helper's home: a small exported `normalizeAppPrivateKey(raw): string` in
       `probe-octokit.ts` (used by both `createProbeOctokit` and `createAppJwtOctokit`, which BOTH call
       `new App({ privateKey: readEnv(PRIVATE_KEY_ENV) })` at lines 119 and 194). Single normalization
       site fixes both factories in this file.
@@ -170,31 +170,31 @@ Extend `apps/web-platform/test/server/github/probe-octokit-retry.test.ts` (or ad
 assertions awkward — decide in Phase 0). The normalization is a pure string→string function, so test it
 directly (no network, no `App` mock needed):
 
-- [ ] **Test: a PKCS#1 PEM (`-----BEGIN RSA PRIVATE KEY-----`) is converted to PKCS#8
+- [x] **Test: a PKCS#1 PEM (`-----BEGIN RSA PRIVATE KEY-----`) is converted to PKCS#8
       (`-----BEGIN PRIVATE KEY-----`).** Generate a throwaway RSA keypair in the test via
       `crypto.generateKeyPairSync("rsa", { modulusLength: 2048, … })` exporting BOTH `pkcs1` and `pkcs8`
       PEMs (synthesized fixture, per `cq-test-fixtures-synthesized-only` — never a real key). Assert
       `normalizeAppPrivateKey(pkcs1Pem)` starts with `-----BEGIN PRIVATE KEY-----`.
-- [ ] **Test: CRLF line endings are normalized to LF.** Take the synthesized PKCS#8 PEM, replace `\n`
+- [x] **Test: CRLF line endings are normalized to LF.** Take the synthesized PKCS#8 PEM, replace `\n`
       with `\r\n`, pass through `normalizeAppPrivateKey`, assert the result contains no `\r` and
       `getDERfromPEM`-style `result.trim().split("\n").slice(1,-1).join("")` round-trips to valid base64
       (assert `Buffer.from(body, "base64").length > 0` and `atob`-equivalent does not throw).
-- [ ] **Test: escaped `\\n` (literal backslash-n) is expanded to real newlines.** Pass a single-line
+- [x] **Test: escaped `\\n` (literal backslash-n) is expanded to real newlines.** Pass a single-line
       PEM with literal `\n` separators; assert the output has real line breaks and a valid header.
-- [ ] **Test: an already-clean PKCS#8 LF PEM passes through unchanged (idempotent).**
+- [x] **Test: an already-clean PKCS#8 LF PEM passes through unchanged (idempotent).**
       `normalizeAppPrivateKey(clean) === clean` (modulo a possible single trailing `\n` that
       `createPrivateKey().export()` emits — assert equality after `.trim()` on both sides if needed).
-- [ ] **Test: an empty/whitespace env value throws the existing `readEnv` error** (preserve current
+- [x] **Test: an empty/whitespace env value throws the existing `readEnv` error** (preserve current
       behavior — do not swallow a missing secret).
-- [ ] Run; confirm these FAIL (RED) against the current raw-passthrough code and the existing
+- [x] Run; confirm these FAIL (RED) against the current raw-passthrough code and the existing
       retry/diagnostics tests still pass.
 
 ### Phase 2 — GREEN: add `normalizeAppPrivateKey` and route both factories through it
 
 Edit `apps/web-platform/server/github/probe-octokit.ts`:
 
-- [ ] Add `import { createPrivateKey } from "crypto";` (matches `github-app.ts:12`'s import style).
-- [ ] Add the helper (cite the root cause + the working sibling so the lineage is greppable):
+- [x] Add `import { createPrivateKey } from "crypto";` (matches `github-app.ts:12`'s import style).
+- [x] Add the helper (cite the root cause + the working sibling so the lineage is greppable):
 
       ```ts
       // Canonicalize the GitHub App private key to a clean LF-only PKCS#8 PEM
@@ -213,22 +213,22 @@ Edit `apps/web-platform/server/github/probe-octokit.ts`:
           .toString();
       }
       ```
-- [ ] Replace BOTH `new App({ appId: readEnv(APP_ID_ENV), privateKey: readEnv(PRIVATE_KEY_ENV) })` sites
+- [x] Replace BOTH `new App({ appId: readEnv(APP_ID_ENV), privateKey: readEnv(PRIVATE_KEY_ENV) })` sites
       (the `attempt()` closure at `probe-octokit.ts:117` and `createAppJwtOctokit` at `probe-octokit.ts:192`
       — verified exact line refs) with `privateKey: normalizeAppPrivateKey(readEnv(PRIVATE_KEY_ENV))`.
-- [ ] Run suite GREEN:
+- [x] Run suite GREEN:
       `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/github/`.
 
 ### Phase 3 — REFACTOR + typecheck + scope guard
 
-- [ ] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` — confirm `createPrivateKey`'s
+- [x] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` — confirm `createPrivateKey`'s
       `KeyObject.export(...)` return is typed (it returns `string | Buffer`; the `{format:"pem"}` overload
       returns `string`, but add `.toString()` defensively as above to satisfy the union).
-- [ ] **Scope guard:** `git diff` must touch NEITHER `server/github-app.ts` `createAppJwt` margins NOR any
+- [x] **Scope guard:** `git diff` must touch NEITHER `server/github-app.ts` `createAppJwt` margins NOR any
       `exp`/`iat` constant. This PR does not re-litigate the timing path (#4565 owns that). It also does
       not remove #4568's diagnostics/retry — those stay (they are now the *fallback* signal if a
       DIFFERENT decode cause appears post-fix).
-- [ ] Re-run the full github test slice to confirm no sibling regressions:
+- [x] Re-run the full github test slice to confirm no sibling regressions:
       `./node_modules/.bin/vitest run test/server/github/`.
 
 ### Phase 4 — Runbook update (operator-facing self-diagnosis)
@@ -237,7 +237,7 @@ The runbook `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` doc
 *public-auth-surface* failure modes but has NO entry for the probe's OWN App-JWT decode failure (the
 class this PR fixes). Add one so the next operator who sees `4e6a3003…`-class events has a triage path.
 
-- [ ] Add a `### probe_app_jwt_decode` (or similarly named) subsection documenting: symptom
+- [x] Add a `### probe_app_jwt_decode` (or similarly named) subsection documenting: symptom
       (`HttpError: A JSON web token could not be decoded` from `createProbeOctokit`), root cause
       (PKCS#1/CRLF PEM + universal-github-app-jwt Web-Crypto extraction), the fix shipped here, and a
       **non-SSH** verification recipe that reads the canonicalized key shape from Doppler without printing
@@ -250,29 +250,29 @@ class this PR fixes). Add one so the next operator who sees `4e6a3003…`-class 
         | node -e 'const k=require("crypto").createPrivateKey(require("fs").readFileSync(0,"utf8").replace(/\\n/g,"\n")); console.log(k.asymmetricKeyType, k.type)'
       # Expect: rsa private  — and the app now normalizes to PKCS#8 regardless.
       ```
-- [ ] Cross-link the Sentry id `4e6a3003d19d47809616d521df3c795b` and this PR.
+- [x] Cross-link the Sentry id `4e6a3003d19d47809616d521df3c795b` and this PR.
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (PKCS#1 → PKCS#8):** `normalizeAppPrivateKey` converts a synthesized PKCS#1 PEM to a
+- [x] **AC1 (PKCS#1 → PKCS#8):** `normalizeAppPrivateKey` converts a synthesized PKCS#1 PEM to a
       `-----BEGIN PRIVATE KEY-----` PKCS#8 PEM. Phase 1 test.
-- [ ] **AC2 (CRLF → LF):** a CRLF-laden PEM round-trips to a `\r`-free PKCS#8 PEM whose body base64
+- [x] **AC2 (CRLF → LF):** a CRLF-laden PEM round-trips to a `\r`-free PKCS#8 PEM whose body base64
       decodes without error. Phase 1 test.
-- [ ] **AC3 (escaped `\\n`):** a literal-`\n` env-shaped key expands to real newlines and parses. Phase 1 test.
-- [ ] **AC4 (idempotent):** a clean PKCS#8 LF PEM passes through unchanged (modulo trailing newline). Phase 1 test.
-- [ ] **AC5 (both factories routed):** `grep -nE 'new App\(' apps/web-platform/server/github/probe-octokit.ts`
+- [x] **AC3 (escaped `\\n`):** a literal-`\n` env-shaped key expands to real newlines and parses. Phase 1 test.
+- [x] **AC4 (idempotent):** a clean PKCS#8 LF PEM passes through unchanged (modulo trailing newline). Phase 1 test.
+- [x] **AC5 (both factories routed):** `grep -nE 'new App\(' apps/web-platform/server/github/probe-octokit.ts`
       shows EVERY `privateKey:` arg wrapped in `normalizeAppPrivateKey(...)` — no raw `readEnv(PRIVATE_KEY_ENV)`
       reaches `new App()`.
-- [ ] **AC6 (no secret leak):** `normalizeAppPrivateKey`'s output is only assigned to a local `const`
+- [x] **AC6 (no secret leak):** `normalizeAppPrivateKey`'s output is only assigned to a local `const`
       passed to `new App()`; never logged or placed in any `extra`/`tags`. Manual + grep.
-- [ ] **AC7 (scope guard — no margin change):** `git diff` touches neither `server/github-app.ts`
+- [x] **AC7 (scope guard — no margin change):** `git diff` touches neither `server/github-app.ts`
       `createAppJwt` margins nor any `exp`/`iat` constant, and does NOT delete #4568's diagnostics/retry.
-- [ ] **AC8 (suite + typecheck green):**
+- [x] **AC8 (suite + typecheck green):**
       `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/github/` passes;
       `./node_modules/.bin/tsc --noEmit` clean.
-- [ ] **AC9 (runbook entry):** `oauth-probe-failure.md` contains a `probe_app_jwt_decode`-class
+- [x] **AC9 (runbook entry):** `oauth-probe-failure.md` contains a `probe_app_jwt_decode`-class
       subsection with a non-SSH verification recipe (the AC verification grep:
       `grep -c 'A JSON web token could not be decoded' knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md`
       returns ≥1).
