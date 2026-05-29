@@ -59,7 +59,7 @@ Two problems, one PR:
 
 Also: **4 core rule bodies exceed the 600-byte per-rule cap** (`PER_RULE_CAP`) and must be tightened to ≤600 B — without weakening guidance, by relocating verbose `**Why:**/**How:**` prose to the already-cited learning files (issue-number breadcrumb stays, making the detail grep-discoverable).
 
-**Decision: Path (a)** — bring the budget under and wire the gate. Path (b) (raise/retire the 22k limit) is rejected: the ceiling is a real proxy for always-loaded context bloat, and the issue explicitly prefers (a).
+**Decision: Path (a) attempted, path-b hybrid landed.** Path (a) (trim under 22000 + wire the gate) was executed in full — but the trim, after exhausting L1/L3/L2 without weakening guidance, landed at B_ALWAYS 22782 (−15%), not under 22000. The plan's modelled ~21212 over-estimated the prose fat actually available once every directive/command/threshold/tag is preserved. Going lower required either weakening always-loaded hard-rule directives or demoting `wg-*` gates that fire on single-class docs-only sessions (#3681 silent-drop). Per **operator AskUserQuestion decision** (and issue #4599's explicit path-b offer, "raise the limit if 22k is stale"), the REJECT ceiling was raised 22000→23000 (WARN stays 20000) and the linter wired into CI as a real gate. See AC1 below for the resolution detail.
 
 ### How the budget is reduced (lever selection)
 

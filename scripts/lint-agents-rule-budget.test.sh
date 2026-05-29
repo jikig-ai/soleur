@@ -3,7 +3,7 @@
 #
 # Issue: #3684. Covers Phase 1 of the rule-budget pre-commit linter plan
 # (knowledge-base/project/plans/2026-05-12-chore-agents-md-pre-commit-rule-budget-plan.md):
-#   T1: current tree -> WARN tier fires (B_ALWAYS=21985 >= 20000), exit 0
+#   T1: current tree -> WARN tier fires (B_ALWAYS >= 20000), exit 0
 #   T2: AGENTS.core.md grown past 23 k -> exit 1 + `B_ALWAYS=... > 23000`
 #   T3: one rule body > 600 B -> exit 1 + `exceeds 600 B`
 #   T4: AGENTS.core.md missing on disk -> exit 2 + `AGENTS.core.md missing`

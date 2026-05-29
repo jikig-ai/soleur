@@ -41,15 +41,11 @@ if _SCRIPTS_DIR not in sys.path:
 
 from _agents_md_sections import SECTIONS
 
-# Reject raised 22000 -> 23000 in #4599. The always-loaded payload has an
-# irreducible floor: the 89-line pointer index (AGENTS.md, ~5.4 KB of mandatory
-# slug-per-rule lines) plus the 41 hr-* / [compliance-tier] rule bodies that
-# lint-rule-ids.py PINS to AGENTS.core.md (CPO sign-off #3496 — cannot demote).
-# #4599 trimmed B_ALWAYS from 26814 -> ~22.8 KB (every per-rule cap cleared, 2
-# ship-phase wg-* gates demoted to rest); going under 22000 would require either
-# weakening directive guidance or demoting wg-* gates that fire on single-class
-# docs-only sessions (silent-drop regression, #3681). 23000 is that floor + a
-# small headroom; WARN stays 20000 as the "trim opportunistically" signal.
+# Reject raised 22000 -> 23000 in #4599. Floor: the 89-line pointer index plus
+# the 40 hr-* + 1 compliance-tier bodies that lint-rule-ids.py PINS to core
+# (#3496, cannot demote). Going under 22000 needs guidance-weakening or demoting
+# wg-* gates that fire on single-class docs-only sessions (#3681 silent-drop), so
+# 23000 = floor + small headroom; WARN 20000 = "trim opportunistically" signal.
 B_ALWAYS_WARN = 20000
 B_ALWAYS_REJECT = 23000
 PER_RULE_CAP = 600
