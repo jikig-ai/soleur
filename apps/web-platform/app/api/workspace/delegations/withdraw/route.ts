@@ -3,6 +3,9 @@ import { createClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isByokDelegationsEnabled, type Identity } from "@/lib/feature-flags/server";
 import { resolveCurrentOrganizationId } from "@/server/workspace-resolver";
+import { createChildLogger } from "@/server/logger";
+
+const log = createChildLogger("delegations-withdraw");
 
 // POST /api/workspace/delegations/withdraw — record a gate-side consent
 // withdrawal (GDPR Art. 7(3); #4625 Phase 3). The withdraw is invoked AS
@@ -47,7 +50,13 @@ export async function POST(request: Request) {
     if (error.code === "P0002") {
       return NextResponse.json({ error: "not_grantee" }, { status: 404 });
     }
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    // Log the detail server-side (Sentry-reachable via pino) but return a
+    // generic message — never leak raw Postgres error text to the client.
+    log.error(
+      { err: error, userId: user.id, delegationId: body.delegationId },
+      "withdraw_byok_delegation_consent RPC failed",
+    );
+    return NextResponse.json({ error: "withdraw_failed" }, { status: 500 });
   }
 
   return NextResponse.json({ ok: true });
