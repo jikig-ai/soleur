@@ -53,9 +53,12 @@ audit_flag_flip_rpc() {
     || { echo "FATAL: audit RPC non-2xx (HTTP $code): $body" >&2; return 4; }
 
   # RETURNS uuid -> PostgREST emits a bare JSON scalar; array branch is dead-but-safe.
-  id=$(printf '%s' "$body" | jq -r 'if type=="array" then .[0] else . end' 2>/dev/null)
-  [[ -n "$id" && "$id" != "null" ]] \
-    || { echo "FATAL: audit RPC returned no id: $body" >&2; return 4; }
+  # `|| id=""` makes the no-id path deterministic under the caller's `set -e` (a jq
+  # parse failure on garbage/empty body would otherwise abort the subshell before the
+  # guard); the uuid-shape match then rejects empty/null/non-uuid (incl. a 2xx `{}`).
+  id=$(printf '%s' "$body" | jq -r 'if type=="array" then .[0] else . end' 2>/dev/null) || id=""
+  [[ "$id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
+    || { echo "FATAL: audit RPC returned no valid uuid: $body" >&2; return 4; }
 
   printf '%s' "$id"
 }

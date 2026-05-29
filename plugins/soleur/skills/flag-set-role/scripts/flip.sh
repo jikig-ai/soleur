@@ -238,8 +238,9 @@ audit_append() {
   local actor audit_url audit_srk before_bool after_bool audit_id
   actor=$(doppler secrets get OPERATOR_EMAIL -p soleur -c cli_ops --plain 2>/dev/null | tr '[:upper:]' '[:lower:]')
   [[ -z "$actor" ]] && { echo "FATAL: OPERATOR_EMAIL not in Doppler soleur/cli_ops" >&2; exit 4; }
-  audit_url=$(doppler secrets get SUPABASE_URL -p soleur -c dev --plain 2>/dev/null)
-  audit_srk=$(doppler secrets get SUPABASE_SERVICE_ROLE_KEY -p soleur -c dev --plain 2>/dev/null)
+  # `|| true` normalizes a Doppler auth/network failure to the exit-4 contract.
+  audit_url=$(doppler secrets get SUPABASE_URL -p soleur -c dev --plain 2>/dev/null) || true
+  audit_srk=$(doppler secrets get SUPABASE_SERVICE_ROLE_KEY -p soleur -c dev --plain 2>/dev/null) || true
   [[ -z "$audit_url" || -z "$audit_srk" ]] && { echo "FATAL: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not in Doppler soleur/dev" >&2; exit 4; }
   before_bool=$([[ "$VALUE" == "on" ]] && echo "false" || echo "true")
   after_bool=$([[ "$VALUE" == "on" ]] && echo "true" || echo "false")

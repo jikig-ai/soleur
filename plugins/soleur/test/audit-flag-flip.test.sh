@@ -79,5 +79,23 @@ for s in "$CREATE" "$FLIP" "$SETROLE"; do
   grep -Fq 'audit-flag-flip.sh' "$s" || { echo "audit-flag-flip: FAIL — $(basename "$s") does not source the helper" >&2; fail=1; }
 done
 
+# --- 7. Append-before-flip ordering: audit CALL precedes first state mutation ----------
+# Regexes match CALL sites only (e.g. `audit_append "` excludes the def `audit_append() {`;
+# `flip_segment_in_env "\$` excludes the def and the `fs_api -X POST` inside it).
+assert_order() { # $1=script $2=audit_call_regex $3=mutation_call_regex $4=label
+  local af mf
+  af=$(grep -nE "$2" "$1" | head -1 | cut -d: -f1)
+  mf=$(grep -nE "$3" "$1" | head -1 | cut -d: -f1)
+  if [[ -z "$af" ]]; then
+    echo "audit-flag-flip: FAIL — no audit call found in $4" >&2; fail=1; return
+  fi
+  if [[ -n "$mf" && "$af" -ge "$mf" ]]; then
+    echo "audit-flag-flip: FAIL — $4 mutates (line $mf) before audit (line $af) — append-before-flip violated" >&2; fail=1
+  fi
+}
+assert_order "$CREATE"  'audit_flag_flip_rpc ' 'fs_api -X POST'                        "create.sh"
+assert_order "$SETROLE" 'audit_flag_flip_rpc ' 'supa -X PATCH|fs_api -X POST'          "set-role.sh"
+assert_order "$FLIP"    'audit_append "'        'fs_api -X PUT|flip_segment_in_env "\$' "flip.sh"
+
 [ "$fail" -eq 0 ] || exit 1
 echo "audit-flag-flip: ok"
