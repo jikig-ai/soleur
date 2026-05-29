@@ -55,9 +55,11 @@ error→warning does not reduce alert volume. The actual volume bound is **debou
 The fix: route the no-workspace-match skip through the existing `mirrorWarnWithDebounce`
 (`server/observability.ts:386`) — the exact primitive built for the #4571 Flagsmith-timeout flood —
 keyed on `(installationId, targetRepoUrl)` with a dedicated `errorClass`, so the same expected skip
-for the same install/repo mirrors at most once per 5-minute window. The pino `logger.warn` stdout
-signal stays on every occurrence (queryable in Better Stack / container logs), preserving
-observability while removing the Sentry-alert noise.
+for the same install/repo mirrors at most once per 5-minute window. `mirrorWarnWithDebounce` gates the
+whole `warnSilentFallback` call (the pino `logger.warn` AND the Sentry mirror), so both are capped per
+window; the first occurrence per key per window still carries the full pino + Sentry signal, so a
+genuine onboarding-drift case still surfaces (queryable in Better Stack / container logs) while the
+per-push Sentry-alert noise is removed.
 
 ## Premise Validation
 
@@ -123,8 +125,10 @@ requires registering a distinct `errorClass` so key spaces stay disjoint.
 
 **If this lands broken, the user experiences:** no user-facing change — this only tunes an
 operator-side observability mirror. A bug (e.g. a too-aggressive dedup key) would at worst *under-report*
-an expected no-op to Sentry; the per-occurrence `logger.warn` stdout signal is unaffected, so the skip
-stays queryable in Better Stack / container logs.
+an expected no-op. Note the debounce caps BOTH the pino `logger.warn` and the Sentry mirror (it gates
+the whole `warnSilentFallback`), but the first occurrence per `(installationId, repoUrl)` per 5-min
+window still emits the full pino + Sentry signal, so a genuine onboarding-drift case stays diagnosable
+in Better Stack / container logs.
 
 **If this leaks, the user's data is exposed via:** nothing new. `extra` carries `installationId`
 (numeric), `deliveryId`, and `targetRepoUrl` — already emitted by the current warn mirror; no userId is
@@ -220,10 +224,11 @@ mirrorWarnWithDebounce(
 
 ```yaml
 liveness_signal:
-  what: pino logger.warn on every no-match skip (unchanged) → container stdout / Better Stack
-  cadence: per reconcilable push on a workspace-less install
+  what: pino logger.warn on the FIRST no-match skip per (installationId, repoUrl) per 5-min window
+        (debounced together with the Sentry mirror) → container stdout / Better Stack
+  cadence: ≤1 per (installationId, repoUrl) per 5-min window (per-push repetition suppressed)
   alert_target: none (informational; the Sentry mirror is the alert surface)
-  configured_in: apps/web-platform/server/observability.ts (warnSilentFallback pino mirror)
+  configured_in: apps/web-platform/server/observability.ts (mirrorWarnWithDebounce → warnSilentFallback)
 error_reporting:
   destination: Sentry (warning level), now debounced ≤1 per (installationId, repoUrl) per 5 min
   fail_loud: false (expected no-op; intentionally debounced)

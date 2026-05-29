@@ -312,9 +312,18 @@ describe("reconcile — no workspace match (#4597 follow-up: debounced warn mirr
     // Same install + repo twice -> identical key (helper can coalesce).
     await handler({ event: makeEvent(), step: makeStep(), logger });
     await handler({ event: makeEvent(), step: makeStep(), logger });
-    // Different install -> distinct key (helper must not over-coalesce).
+    // Different install, same repo -> distinct key (must not over-coalesce).
     await handler({
       event: makeEvent({ installationId: 99 }),
+      step: makeStep(),
+      logger,
+    });
+    // Same install, DIFFERENT repo -> distinct key. This guards the repoUrl
+    // half of the key: a regression that dropped targetRepoUrl from the key
+    // (keying on installationId alone) would still pass the installation-only
+    // checks above, but fails here.
+    await handler({
+      event: makeEvent({ fullName: "acme-co/other-repo" }),
       step: makeStep(),
       logger,
     });
@@ -323,6 +332,8 @@ describe("reconcile — no workspace match (#4597 follow-up: debounced warn mirr
     expect(keys[0]).toBe(keys[1]); // stable for the same segment
     expect(keys[2]).not.toBe(keys[0]); // distinct for a different installation
     expect(keys[2]).toBe(`99:${normalizeRepoUrl("https://github.com/acme-co/widget")}`);
+    expect(keys[3]).not.toBe(keys[0]); // distinct for a different repo (same install)
+    expect(keys[3]).toBe(`42:${normalizeRepoUrl("https://github.com/acme-co/other-repo")}`);
   });
 });
 
