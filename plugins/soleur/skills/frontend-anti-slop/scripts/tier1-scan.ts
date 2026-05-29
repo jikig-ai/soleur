@@ -22,8 +22,10 @@
  *     `route: ""`.
  *
  * Exit codes:
- *   0 — scan completed (regardless of finding count; non-blocking by design).
- *   1 — bad CLI / parse error / IO error.
+ *   0 — scan completed with no blocking findings (anti-slop findings are advisory).
+ *   1 — bad CLI / parse error / IO error, OR ≥ 1 blocking finding (a finding whose
+ *       originating rule is `category === "brand" && severity === "high"`).
+ *   See `computeExitCode`. Non-brand and brand-below-high findings remain advisory.
  *
  * Per-file rule disable: `<!-- anti-slop:disable RULE_ID reason="..." -->`.
  */
@@ -229,6 +231,18 @@ function unwrapBackticks(s: string): string {
   return s;
 }
 
+/**
+ * Canonical scanner path regex SOURCE (single source of truth).
+ *
+ * Both `defaultPaths()` (JS RegExp) and the `review/SKILL.md` "Anti-slop Scanner
+ * Hook" collector (shell ERE) must match this alternation body byte-for-byte (a
+ * parity test asserts it). The trailing `$` anchors the path end. Includes the
+ * `server/.*\.(ts|tsx)$` alternation so server-side email/HTML templates are in
+ * scope alongside the Next.js app/components and the Eleventy docs site.
+ */
+const DEFAULT_PATH_RE_SOURCE =
+  "^(apps/web-platform/(app|components)/.*\\.(tsx|jsx|css)|apps/web-platform/server/.*\\.(ts|tsx)|plugins/soleur/docs/.*\\.(njk|css))$";
+
 function defaultPaths(): string[] {
   try {
     const p = Bun.spawnSync(
@@ -241,11 +255,8 @@ function defaultPaths(): string[] {
       .split("\n")
       .map((p) => p.trim())
       .filter(Boolean);
-    return all.filter((p) =>
-      /^(apps\/web-platform\/(app|components)\/.*\.(tsx|jsx|css)|plugins\/soleur\/docs\/.*\.(njk|css))$/.test(
-        p,
-      ),
-    );
+    const re = new RegExp(DEFAULT_PATH_RE_SOURCE);
+    return all.filter((p) => re.test(p));
   } catch {
     return [];
   }
@@ -279,11 +290,13 @@ function expandPaths(inputs: string[]): string[] {
     if (ls.isSymbolicLink()) continue;
     const s = statSync(abs);
     if (s.isFile()) {
-      if (/\.(tsx|jsx|css|njk)$/.test(abs)) out.push(abs);
+      // `.ts` included so server-side email/HTML templates
+      // (`apps/web-platform/server/*.ts`) are scannable when passed explicitly.
+      if (/\.(ts|tsx|jsx|css|njk)$/.test(abs)) out.push(abs);
     } else if (s.isDirectory()) {
       out.push(
         ...listFilesRecursive(abs).filter((f) =>
-          /\.(tsx|jsx|css|njk)$/.test(f),
+          /\.(ts|tsx|jsx|css|njk)$/.test(f),
         ),
       );
     }
@@ -386,6 +399,29 @@ function formatHuman(findings: Finding[]): string {
   return lines.join("");
 }
 
+/**
+ * Decide the process exit code from the findings and the rule set.
+ *
+ * Blocking is keyed on the originating **Rule**, not the emitted Finding (which
+ * always serializes `category: "anti-slop"` for `finding.schema.json`
+ * conformance). The rule id is recovered from the finding's `selector`
+ * (`"<file>#<RULE-ID>"`). Returns 1 iff any finding maps to a rule with
+ * `category === "brand" && severity === "high"`; else 0 (anti-slop and
+ * brand-below-high findings are advisory).
+ */
+function computeExitCode(findings: Finding[], rules: Rule[]): number {
+  const byId = new Map<string, Rule>();
+  for (const r of rules) byId.set(r.id, r);
+  for (const f of findings) {
+    const ruleId = f.selector.split("#")[1];
+    const rule = ruleId ? byId.get(ruleId) : undefined;
+    if (rule && rule.category === "brand" && rule.severity === "high") {
+      return 1;
+    }
+  }
+  return 0;
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
 
@@ -435,7 +471,7 @@ function main() {
   } else {
     process.stdout.write(formatHuman(findings));
   }
-  process.exit(0);
+  process.exit(computeExitCode(findings, rules));
 }
 
 if (import.meta.main) {
@@ -448,7 +484,9 @@ export {
   disabledRulesInFile,
   expandPaths,
   defaultPaths,
+  computeExitCode,
   unwrapBackticks,
+  DEFAULT_PATH_RE_SOURCE,
   REPO_ROOT,
   RULES_FILE,
 };

@@ -6,8 +6,11 @@ import {
   parseRules,
   scanFile,
   disabledRulesInFile,
+  computeExitCode,
+  DEFAULT_PATH_RE_SOURCE,
   RULES_FILE,
 } from "../../skills/frontend-anti-slop/scripts/tier1-scan";
+import type { Finding } from "../../skills/frontend-anti-slop/scripts/tier1-scan";
 import { readFileSync } from "node:fs";
 
 // tier1-scan.test.ts — frontend-anti-slop v1 scanner.
@@ -287,8 +290,8 @@ describe("frontend-anti-slop tier1-scan: calibration baseline", () => {
 });
 
 describe("frontend-anti-slop tier1-scan: rule parsing", () => {
-  test("parseRules produces exactly 15 Tier 1 rules (binding from plan)", () => {
-    expect(RULES).toHaveLength(15);
+  test("parseRules produces exactly 18 Tier 1 rules (binding from plan)", () => {
+    expect(RULES).toHaveLength(18);
   });
 
   test("every parsed rule compiles a valid RegExp", () => {
@@ -329,5 +332,248 @@ describe("frontend-anti-slop tier1-scan: file-filter scope", () => {
         expect(findings).toHaveLength(0);
       },
     );
+  });
+});
+
+describe("frontend-anti-slop tier1-scan: brand rules (pos + neg fixtures)", () => {
+  // All fixtures are SYNTHESISED inline (cq-test-fixtures-synthesized-only) —
+  // never copied from app code. They mirror the incident shapes the plan cites
+  // (Tailwind arbitrary `[#hex]`, inline `background: #hex`) without importing
+  // any real production string.
+
+  // BRAND-RAW-HEX (brand/high)
+  test("BRAND-RAW-HEX POSITIVE: Tailwind arbitrary [#hex] flags high+brand", () => {
+    withFile(
+      "card.tsx",
+      `<div className="bg-[#2563eb]/10 text-[#2563eb]">notice</div>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("BRAND-RAW-HEX")]);
+        expect(findings).toHaveLength(1);
+        expect(findings[0].selector).toMatch(/#BRAND-RAW-HEX$/);
+        expect(findings[0].category).toBe("anti-slop"); // schema-safe emit
+        expect(findings[0].severity).toBe("high");
+        // the originating rule carries the brand discriminator
+        expect(ruleById("BRAND-RAW-HEX").category).toBe("brand");
+      },
+    );
+  });
+
+  test("BRAND-RAW-HEX POSITIVE: inline style background: #hex flags", () => {
+    withFile(
+      "banner.tsx",
+      `<span style={{ background: "#2563eb" }} />\n<style>{\`.x{background: #2563eb;}\`}</style>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("BRAND-RAW-HEX")]);
+        expect(findings).toHaveLength(1);
+        expect(findings[0].severity).toBe("high");
+      },
+    );
+  });
+
+  test("BRAND-RAW-HEX NEGATIVE: wired token / theme class yields 0", () => {
+    withFile(
+      "card.tsx",
+      [
+        `<div className="bg-soleur-accent-gold-fg text-forge-ink">ok</div>`,
+        `<div style={{ color: "var(--soleur-accent)" }} />`,
+        `const ACCENT = "#C9A962"; // bare assignment, not [#..] nor prop: #..`,
+      ].join("\n"),
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("BRAND-RAW-HEX")]);
+        expect(findings).toHaveLength(0);
+      },
+    );
+  });
+
+  // BRAND-WHITE-ON-GOLD (brand/high)
+  test("BRAND-WHITE-ON-GOLD POSITIVE: white text on gold surface flags high", () => {
+    withFile(
+      "cta.tsx",
+      `<button className="bg-soleur-gold text-white">Buy</button>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("BRAND-WHITE-ON-GOLD")]);
+        expect(findings).toHaveLength(1);
+        expect(findings[0].severity).toBe("high");
+        expect(ruleById("BRAND-WHITE-ON-GOLD").category).toBe("brand");
+      },
+    );
+  });
+
+  test("BRAND-WHITE-ON-GOLD NEGATIVE: forge-ink on gold passes", () => {
+    withFile(
+      "cta.tsx",
+      `<button className="bg-soleur-gold text-forge-ink">Buy</button>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("BRAND-WHITE-ON-GOLD")]);
+        expect(findings).toHaveLength(0);
+      },
+    );
+  });
+
+  test("BRAND-WHITE-ON-GOLD does NOT fire on the blue-incident text-white (isolated from BRAND-RAW-HEX)", () => {
+    withFile(
+      "banner.tsx",
+      `<button className="bg-[#2563eb] text-white">Invite</button>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("BRAND-WHITE-ON-GOLD")]);
+        expect(findings).toHaveLength(0);
+      },
+    );
+  });
+
+  // BRAND-NONZERO-CORNER (brand/medium)
+  test("BRAND-NONZERO-CORNER POSITIVE: rounded-lg and border-radius: 8 flag medium", () => {
+    withFile(
+      "cta.tsx",
+      `<button className="rounded-lg">x</button>\n<style>{\`.y{border-radius: 8px;}\`}</style>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("BRAND-NONZERO-CORNER")]);
+        expect(findings).toHaveLength(1);
+        expect(findings[0].severity).toBe("medium");
+        expect(ruleById("BRAND-NONZERO-CORNER").category).toBe("brand");
+      },
+    );
+  });
+
+  test("BRAND-NONZERO-CORNER NEGATIVE: rounded-none / border-radius: 0 passes", () => {
+    withFile(
+      "cta.tsx",
+      `<button className="rounded-none">x</button>\n<style>{\`.y{border-radius: 0;}\`}</style>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("BRAND-NONZERO-CORNER")]);
+        expect(findings).toHaveLength(0);
+      },
+    );
+  });
+
+  // Pipe-escape / compile round-trip — the 3 brand patterns embed `|`
+  // alternations that MUST survive parseRules' `(?<!\\)\|` split + `\|`→`|`
+  // unescape, or the row mis-splits and the regex compiles wrong.
+  test("brand rule patterns round-trip the intended alternation (no \\| mis-split)", () => {
+    expect(ruleById("BRAND-RAW-HEX").pattern.source).toContain(
+      "(?:background|color|border)",
+    );
+    expect(ruleById("BRAND-WHITE-ON-GOLD").pattern.source).toContain(
+      "(?:gold|gradient|accent",
+    );
+    expect(ruleById("BRAND-NONZERO-CORNER").pattern.source).toContain(
+      "border-radius",
+    );
+    // every brand rule compiled to a real RegExp
+    for (const id of [
+      "BRAND-RAW-HEX",
+      "BRAND-WHITE-ON-GOLD",
+      "BRAND-NONZERO-CORNER",
+    ]) {
+      expect(ruleById(id).pattern).toBeInstanceOf(RegExp);
+    }
+  });
+});
+
+describe("frontend-anti-slop tier1-scan: computeExitCode (blocking gate)", () => {
+  function findingFor(ruleId: string, severity: Finding["severity"]): Finding {
+    return {
+      route: "",
+      selector: `apps/web-platform/x.tsx#${ruleId}`,
+      category: "anti-slop",
+      severity,
+      title: "t",
+      description: "d",
+      fix_hint: "f",
+      screenshot_ref: "/tmp/anti-slop/no-screenshot.png",
+      line: 1,
+    };
+  }
+
+  test("brand+high finding → exit 1", () => {
+    const findings = [findingFor("BRAND-RAW-HEX", "high")];
+    expect(computeExitCode(findings, RULES)).toBe(1);
+  });
+
+  test("anti-slop-only findings → exit 0", () => {
+    const findings = [
+      findingFor("GRADIENT-TEXT", "high"),
+      findingFor("TRANSITION-ALL", "low"),
+    ];
+    expect(computeExitCode(findings, RULES)).toBe(0);
+  });
+
+  test("brand-medium-only (BRAND-NONZERO-CORNER) → exit 0", () => {
+    const findings = [findingFor("BRAND-NONZERO-CORNER", "medium")];
+    expect(computeExitCode(findings, RULES)).toBe(0);
+  });
+
+  test("empty findings → exit 0", () => {
+    expect(computeExitCode([], RULES)).toBe(0);
+  });
+
+  test("mixed: one brand+high among advisory → exit 1", () => {
+    const findings = [
+      findingFor("TRANSITION-ALL", "low"),
+      findingFor("BRAND-WHITE-ON-GOLD", "high"),
+      findingFor("BRAND-NONZERO-CORNER", "medium"),
+    ];
+    expect(computeExitCode(findings, RULES)).toBe(1);
+  });
+});
+
+describe("frontend-anti-slop tier1-scan: path-scope regex (route-group + server)", () => {
+  const RE = new RegExp(DEFAULT_PATH_RE_SOURCE);
+
+  test("DEFAULT_PATH_RE_SOURCE matches route-group + dynamic-segment paths", () => {
+    expect(
+      RE.test("apps/web-platform/app/(public)/invite/[token]/page.tsx"),
+    ).toBe(true);
+    expect(
+      RE.test("apps/web-platform/app/(public)/invite/[token]/invite-actions.tsx"),
+    ).toBe(true);
+  });
+
+  test("DEFAULT_PATH_RE_SOURCE matches server-side .ts templates (scope extension)", () => {
+    expect(RE.test("apps/web-platform/server/notifications.ts")).toBe(true);
+    expect(RE.test("apps/web-platform/server/email/template.tsx")).toBe(true);
+  });
+
+  test("DEFAULT_PATH_RE_SOURCE still matches docs-site .njk/.css", () => {
+    expect(RE.test("plugins/soleur/docs/index.njk")).toBe(true);
+    expect(RE.test("plugins/soleur/docs/css/style.css")).toBe(true);
+  });
+
+  test("DEFAULT_PATH_RE_SOURCE rejects out-of-scope paths", () => {
+    expect(RE.test("apps/web-platform/lib/feature-flags/server.ts")).toBe(false);
+    expect(RE.test("packages/foo/bar.tsx")).toBe(false);
+  });
+});
+
+describe("frontend-anti-slop tier1-scan: review/SKILL.md hook path parity", () => {
+  // The review/SKILL.md anti-slop hook's shell-ERE path regex must stay in
+  // lockstep with DEFAULT_PATH_RE_SOURCE (single source of truth). Assert the
+  // hook block contains the same server alternation body.
+  test("review/SKILL.md hook regex contains the same server alternation as DEFAULT_PATH_RE_SOURCE", () => {
+    const skillPath = resolve(
+      import.meta.dir,
+      "../../skills/review/SKILL.md",
+    );
+    const skill = readFileSync(skillPath, "utf8");
+    // The shared server alternation, identical in both the JS source and the
+    // shell ERE (the JS form escapes the dot as \\. — match the shell literal).
+    const serverAlt = "apps/web-platform/server/.*\\.(ts|tsx)";
+    expect(DEFAULT_PATH_RE_SOURCE).toContain(serverAlt);
+    expect(skill).toContain(serverAlt);
+    // and the app/components + docs alternations
+    expect(skill).toContain("apps/web-platform/(app|components)/.*\\.(tsx|jsx|css)");
+    expect(skill).toContain("plugins/soleur/docs/.*\\.(njk|css)");
+  });
+
+  test("review/SKILL.md hook no longer uses grep -z (ugrep --decompress footgun)", () => {
+    const skillPath = resolve(
+      import.meta.dir,
+      "../../skills/review/SKILL.md",
+    );
+    const skill = readFileSync(skillPath, "utf8");
+    // Extract just the Anti-slop Scanner Hook fenced block region to avoid
+    // false hits elsewhere in the doc.
+    expect(skill).not.toContain("grep -zE");
+    expect(skill).toContain("tr '\\0' '\\n'");
   });
 });

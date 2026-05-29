@@ -6,7 +6,7 @@ version: 1.0.0
 
 # frontend-anti-slop
 
-A deterministic source-static audit for React/Next.js components that flags AI-default visual and microinteraction patterns adapted from [Nutlope/hallmark](https://github.com/Nutlope/hallmark) (MIT). v1 ships 15 Tier 1 ripgrep gates over `apps/web-platform/{app,components}/**/*.{tsx,jsx,css}`. v1.5 (post-calibration) adds a Tier 2 LLM-judgment reviewer agent for the ~12 gates regex cannot resolve.
+A deterministic source-static audit for React/Next.js components that flags AI-default visual and microinteraction patterns adapted from [Nutlope/hallmark](https://github.com/Nutlope/hallmark) (MIT). v1 ships 18 Tier 1 ripgrep gates over `apps/web-platform/{app,components}/**/*.{tsx,jsx,css}`, `apps/web-platform/server/**/*.{ts,tsx}`, and the Eleventy docs site. v1.5 (post-calibration) adds a Tier 2 LLM-judgment reviewer agent for the ~12 gates regex cannot resolve.
 
 > **Attribution.** Rule set and anti-pattern names adapted from Hallmark (Together AI, MIT). Verbatim license at [`/LICENSES/hallmark.MIT.txt`](../../../../LICENSES/hallmark.MIT.txt); upstream stanza in [`/plugins/soleur/NOTICE`](../../NOTICE).
 
@@ -44,16 +44,23 @@ Skill(skill: "soleur:frontend-anti-slop", args: "--paths apps/web-platform/compo
 | In scope (v1) | Out of scope |
 |---|---|
 | `apps/web-platform/(app|components)/**/*.{tsx,jsx,css}` | Other apps in the monorepo (`web-platform-docs`, infra apps) |
-| 15 deterministic Tier 1 gates (regex-only) | Tier 2 LLM-judgment gates (deferred to v1.5) |
+| `apps/web-platform/server/**/*.{ts,tsx}` (email/HTML templates) | App-code remediation of pre-existing findings (forward-gate only) |
+| 18 deterministic Tier 1 gates (regex-only) | Tier 2 LLM-judgment gates (deferred to v1.5) |
 | Source-static analysis | Rendered-DOM / screenshot analysis (that's [`soleur:ux-audit`](../ux-audit/SKILL.md)) |
 | JSON output matching [`finding.schema.json`](../ux-audit/references/finding.schema.json) | Auto-filing GitHub issues |
 | `<!-- anti-slop:disable RULE_ID reason="..." -->` per-file overrides | AST-based gates (CARD-IN-CARD, focus states) — v1.5 with ts-morph |
 
 ## Rule set
 
-The 15 Tier 1 gates live in [slop-rules.md](./references/slop-rules.md) as a parsed Markdown table. Each row: `id`, `tier`, `category`, `hallmark_gate`, `severity`, `pattern`, `message`, `suggested_fix`. The scanner filters to `tier === 1` and runs each `pattern` regex line-by-line over target files.
+The 18 Tier 1 gates live in [slop-rules.md](./references/slop-rules.md) as a parsed Markdown table. Each row: `id`, `tier`, `category`, `hallmark_gate`, `severity`, `pattern`, `message`, `suggested_fix`. The scanner filters to `tier === 1` and runs each `pattern` regex line-by-line over target files.
 
 React/Tailwind code examples for each rule live in [anti-patterns.md](./references/anti-patterns.md).
+
+### Brand rules (blocking)
+
+Three `brand`-category gates ship alongside the Hallmark-derived anti-slop rules: BRAND-RAW-HEX (high), BRAND-WHITE-ON-GOLD (high), BRAND-NONZERO-CORNER (medium). Unlike the advisory anti-slop findings, a finding whose originating rule is `category: brand` **and** `severity: high` makes the scanner **exit non-zero (blocking)** — it is a required-fix gate, not calibration-mode triage. Brand `medium` findings and all non-brand `anti-slop` findings stay advisory (exit 0). The emitted Finding always serializes `category: "anti-slop"`; the `brand` discriminator lives only on the Rule, so `--json` output stays conformant to `finding.schema.json`.
+
+BRAND-RAW-HEX ("use a wired design token, not a literal color") is **project-agnostic** — Soleur users adopting this scanner should keep it as-is, but re-base BRAND-WHITE-ON-GOLD / BRAND-NONZERO-CORNER on their own `brand-guide.md` palette and wired token file rather than the hardcoded Soleur gold identity.
 
 Findings emit as JSON conforming to `finding.schema.json`:
 
