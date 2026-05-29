@@ -38,6 +38,7 @@ import {
   MIRROR_DEBOUNCE_MS,
   __resetMirrorDebounceForTests,
   mirrorWithDebounce,
+  mirrorWarnWithDebounce,
 } from "../server/observability";
 
 beforeEach(() => {
@@ -83,5 +84,48 @@ describe("mirrorWithDebounce — 5-minute per-(userId, errorClass) TTL", () => {
     mirrorWithDebounce(new Error("a"), { feature: "t" }, "user-A", "klass-X");
     mirrorWithDebounce(new Error("b"), { feature: "t" }, "user-B", "klass-X");
     expect(mockCaptureException).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("mirrorWarnWithDebounce — warn-level sibling on the shared dedup map", () => {
+  test("(a) first call mirrors at warning level (captureException with level: warning)", () => {
+    mirrorWarnWithDebounce(new Error("slow"), { feature: "t" }, "key-A", "klass-X");
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ level: "warning" }),
+    );
+  });
+
+  test("(b) repeat call within 5 min for same (key, errorClass) is a no-op", () => {
+    mirrorWarnWithDebounce(new Error("slow"), { feature: "t" }, "key-A", "klass-X");
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(MIRROR_DEBOUNCE_MS - 1);
+    mirrorWarnWithDebounce(new Error("slow"), { feature: "t" }, "key-A", "klass-X");
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+  });
+
+  test("(c) call after 5 min for the same key mirrors again", () => {
+    mirrorWarnWithDebounce(new Error("slow"), { feature: "t" }, "key-A", "klass-X");
+    vi.advanceTimersByTime(MIRROR_DEBOUNCE_MS);
+    mirrorWarnWithDebounce(new Error("slow"), { feature: "t" }, "key-A", "klass-X");
+    expect(mockCaptureException).toHaveBeenCalledTimes(2);
+  });
+
+  test("(d) distinct keys for the same errorClass mirror independently", () => {
+    mirrorWarnWithDebounce(new Error("a"), { feature: "t" }, "key-A", "klass-X");
+    mirrorWarnWithDebounce(new Error("b"), { feature: "t" }, "key-B", "klass-X");
+    expect(mockCaptureException).toHaveBeenCalledTimes(2);
+  });
+
+  test("(e) shares the dedup map with mirrorWithDebounce for the same (key, errorClass)", () => {
+    // An error-class claim and a warn-class claim for the SAME key+errorClass
+    // share the single _mirrorDebounce window — the warn call is suppressed.
+    mirrorWithDebounce(new Error("first"), { feature: "t" }, "key-A", "klass-X");
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+
+    mirrorWarnWithDebounce(new Error("second"), { feature: "t" }, "key-A", "klass-X");
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
   });
 });
