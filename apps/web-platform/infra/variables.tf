@@ -59,6 +59,12 @@ variable "cf_api_token" {
   sensitive   = true
 }
 
+variable "kb_drift_operator_founder_id" {
+  description = "Operator founder Supabase users.id UUID — KB-drift ingest rows are attributed to this user. Sourced from Doppler prd_terraform (TF_VAR_kb_drift_operator_founder_id). No default: fail closed rather than mint a placeholder identity."
+  type        = string
+  sensitive   = true
+}
+
 variable "cf_api_token_zone_settings" {
   description = "Cloudflare API token narrowed to Zone Settings:Edit on soleur.ai (HSTS / security_header)"
   type        = string

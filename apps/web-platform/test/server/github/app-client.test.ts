@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { generateKeyPairSync } from "crypto";
 
 // Tests for the GitHub App per-request factory (PR-H Phase 3 + PR-H+1 #4098).
 //
@@ -41,8 +42,15 @@ vi.mock("@/server/github/audit-writer", async () => {
   };
 });
 
-const STUB_PRIVATE_KEY =
-  "-----BEGIN RSA PRIVATE KEY-----\nstubpk\n-----END RSA PRIVATE KEY-----";
+// Synthesized throwaway keypair (cq-test-fixtures-synthesized-only). Must be a
+// real, parseable PEM: createGitHubAppClient now canonicalizes the key via
+// normalizeAppPrivateKey() (crypto.createPrivateKey) before constructing the
+// mocked App, so a bogus body would throw at normalization.
+const STUB_PRIVATE_KEY = generateKeyPairSync("rsa", {
+  modulusLength: 2048,
+  publicKeyEncoding: { type: "spki", format: "pem" },
+  privateKeyEncoding: { type: "pkcs8", format: "pem" },
+}).privateKey as string;
 
 const SYNTHETIC_FOUNDER_ID = "00000000-0000-4000-8000-000000000001";
 

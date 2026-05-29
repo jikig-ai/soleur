@@ -4,6 +4,7 @@ date: 2026-04-29
 owners: engineering/ops
 applies_to:
   - apps/web-platform/server/inngest/functions/cron-oauth-probe.ts
+  - apps/web-platform/server/github/probe-octokit.ts
   - apps/web-platform/scripts/configure-sentry-alerts.sh
 related_issues: [2997, 2979, 2982, 3001, 1784, 3183]
 related_prs: [2975, 2994, 3007, 3181]
@@ -389,6 +390,66 @@ Cross-link: PR that introduced the classifier — check `git log` for
 the `provider-error-classifier.ts` add commit. The Sentry op for this
 class is `feature:auth, op:callback_provider_error` (queryable
 without re-deployment).
+
+### `probe_app_jwt_decode` (probe's OWN GitHub-auth plumbing)
+
+**Distinct from every failure mode above.** The modes above are checks the
+probe performs against the prod public auth surface. This class is the probe
+*itself* failing to authenticate to GitHub: `createProbeOctokit()` /
+`createAppJwtOctokit()` (`apps/web-platform/server/github/probe-octokit.ts`)
+throw before the probe can file, comment on, or close its `[ci/auth-broken]`
+tracking issue. Symptom — a Sentry **error** event (not a `failure_mode`-tagged
+issue) with `feature: cron-oauth-probe`, `op: create-probe-octokit:app-jwt`, and
+the message:
+
+```
+HttpError: A JSON web token could not be decoded - https://docs.github.com/rest
+```
+
+(Sentry issue `4e6a3003d19d47809616d521df3c795b`, first seen release
+`web-platform@0.101.100`.) The operator blind spot: a real prod auth outage can
+go unsurfaced because the probe's own GitHub auth is broken.
+
+**Root cause.** `@octokit/app` mints its App JWT via
+`universal-github-app-jwt`'s Web-Crypto path. That path imports the key with
+`importKey("pkcs8", …)` (rejecting PKCS#1) and extracts the DER with
+`pem.trim().split("\n").slice(1,-1).join("")` + `atob` — which corrupts the key
+when the PEM carries `\r\n` line endings or is in PKCS#1 form, producing a
+signature GitHub rejects as "could not be decoded". The sibling
+`server/github-app.ts` path is immune because it signs via Node's
+whitespace/format-tolerant `crypto.createSign`.
+
+**Fix shipped (this class).** `probe-octokit.ts` now canonicalizes the key with
+`normalizeAppPrivateKey()` —
+`crypto.createPrivateKey(pem).export({ type: "pkcs8", format: "pem" })` — before
+handing it to `new App()`, emitting a clean LF-only PKCS#8 PEM regardless of the
+stored key's format or line endings. Both factories route through it.
+
+**Verify the stored prod key (non-SSH, never prints key material).** Confirm the
+Doppler `prd` secret parses as a valid private key and report only its
+type/format:
+
+```bash
+doppler secrets get GITHUB_APP_PRIVATE_KEY -p soleur -c prd --plain \
+  | node -e 'const k=require("crypto").createPrivateKey(require("fs").readFileSync(0,"utf8").replace(/\\n/g,"\n")); console.log(k.asymmetricKeyType, k.type)'
+# Expect: rsa private — and the app now normalizes to PKCS#8 regardless of the
+# stored format. If this throws, the secret is malformed at rest (re-mint the
+# GitHub App key as PKCS#8 and re-set the Doppler prd secret).
+```
+
+**Re-run + confirm recovery (no SSH, no dashboard-watching).**
+
+```bash
+inngest send cron/oauth-probe.manual-trigger
+curl -s -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+  "https://de.sentry.io/api/0/organizations/jikigai-eu/monitors/scheduled-oauth-probe/checkins/?limit=1" \
+  | jq -r '.[0].status'   # Expect: ok
+```
+
+If the `4e6a3003…`-class issue keeps accruing events after deploy, the
+`create-probe-octokit:app-jwt` breadcrumb's `extra` (`ghStatus` / `ghRequestId`
+/ `ghBody` / `clockSkewMs`, added by PR #4568) now points at a DIFFERENT decode
+cause — file a follow-up with that evidence rather than re-applying this fix.
 
 ## Diagnostic recipes
 

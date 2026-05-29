@@ -45,6 +45,33 @@ resource "doppler_secret" "kb_drift_ingest_signing_key" {
   # NO ignore_changes — rotation is `terraform apply -replace=random_id.kb_drift_ingest_signing_key`.
 }
 
+# App-runtime copies of the two secrets the ingest ROUTE reads at request time.
+# The walker (Doppler `prd_kb_drift_walker`) SIGNS; the Next.js route running in
+# the app runtime (Doppler `prd`) VERIFIES + attributes rows — both sides must
+# share the same values or the route fails closed with HTTP 500. The walker's
+# blast-radius scope is unaffected: its read-only service token still only sees
+# `prd_kb_drift_walker`; these add the verify-side keys to the app's own config.
+resource "doppler_secret" "kb_drift_ingest_signing_key_app_runtime" {
+  project    = "soleur"
+  config     = "prd"
+  name       = "KB_DRIFT_INGEST_SIGNING_KEY"
+  value      = "kbdrift-${random_id.kb_drift_ingest_signing_key.hex}"
+  visibility = "masked"
+  # NO ignore_changes — must share rotation polarity with the prd_kb_drift_walker
+  # copy above; a `-replace=random_id.kb_drift_ingest_signing_key` rotation has to
+  # cascade to BOTH or the verifier freezes while the signer rotates → 401 storm.
+}
+
+resource "doppler_secret" "kb_drift_operator_founder_id_app_runtime" {
+  project    = "soleur"
+  config     = "prd"
+  name       = "KB_DRIFT_OPERATOR_FOUNDER_ID"
+  value      = var.kb_drift_operator_founder_id
+  visibility = "masked"
+  # NO ignore_changes — value flows from the variable; an operator update SHOULD
+  # propagate at apply. The founder UUID is a stable identity, never auto-rotated.
+}
+
 resource "doppler_secret" "kb_drift_ingest_url" {
   project = "soleur"
   config  = "prd_kb_drift_walker"
