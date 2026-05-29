@@ -11,6 +11,23 @@ status: planned
 
 # feat: Brand-palette enforcement in the frontend-anti-slop scanner (+ two defect fixes)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-29
+**Sections enhanced:** Research Insights (new), Observability (rewritten to 5-field schema), gates 4.5-4.8 cleared.
+**Verification method:** inline (subagent spawning unavailable in this environment) — all claims checked against the live tree.
+
+### Key Improvements
+
+1. Observability rewritten from a narrative paragraph to the full 5-field schema (Phase 4.7 gate would otherwise HALT; original `# NO ssh` comment tripped the word-boundary ssh reject — removed).
+2. Precedent-diff confirmed: brand-rule pipe-escaping + exit-code insertion point both match existing `slop-rules.md` / `tier1-scan.ts` precedent (pattern is NOT novel).
+3. Verify-the-negative: `finding.schema.json` enum proven (via `json.load`) to exclude `"brand"` → the keep-`anti-slop`-on-the-Finding Design Decision is mandatory, not stylistic.
+
+### New Considerations Discovered
+
+- The blocking brand gate + server-scope extension will fire on `notifications.ts` greys (app code, out of scope) — resolved via forward-gate + AC15 tracking issue.
+- Gates 4.5 (network), 4.8 (PAT), 4.4-scheduled (cron/Inngest) all correctly SKIP — no SSH/network symptom, no PAT-shaped var, no scheduled job.
+
 ## Overview
 
 Add three deterministic **brand-*** Tier-1 rules to the `soleur:frontend-anti-slop`
@@ -134,6 +151,38 @@ border-radius\s*:\s*[1-9]|\brounded(?:-(?:sm|md|lg|xl|2xl|3xl|full|t|b|l|r))?\b(
 > (Phase 6), narrow the right alternation to require a button/CTA token on the
 > same line (`(button|btn|cta)[^"\n]*rounded`), mirroring how `UNIFORM-HOVER-SCALE`
 > uses `min_occurrences`. Decision deferred to the dry-run signal, not guessed now.
+
+## Research Insights (deepen-plan 2026-05-29)
+
+Verified inline (subagent spawning unavailable in this environment; all checks run
+against the live tree):
+
+**Precedent-diff — markdown-table alternation (4.4).** Two existing Tier-1 rules
+already embed `(?:…|…)` alternation in their `pattern` cell with every literal `|`
+escaped as `\|`: `GENERIC-DISPLAY-FONT` (`(Inter\|Roboto\|Open_Sans\|Poppins\|Lato)`)
+and `PURPLE-BLUE-GRADIENT` (`from-(?:purple\|violet\|fuchsia)-…to-(?:blue\|cyan\|sky)-`).
+The 3 brand rules follow this established form verbatim — escape every `|` as `\|`.
+Pattern is NOT novel; precedent is `slop-rules.md:16-17`.
+
+**Precedent-diff — exit code.** Current success paths both `process.exit(0)`
+(`tier1-scan.ts:423` no-files, `:438` after findings). The brand-blocking branch
+replaces the `:438` exit with `computeExitCode(findings, rules)`. The `:423`
+no-files path stays `exit(0)`. The `--rule` filter (`:400-401`,
+`rules.filter(r => r.id === args.ruleFilter)`) is verified to isolate a single rule
+— AC5 uses it to assert BRAND-WHITE-ON-GOLD alone does not fire on the blue incident.
+
+**Verify-the-negative — schema enum.** `python3 json.load` on
+`finding.schema.json` confirms `category` enum =
+`[real-estate, ia, consistency, responsive, comprehension, anti-slop]`; `"brand"
+in enum → False`. The Design Decision (keep emitted `category:"anti-slop"`, carry
+brand-ness on the Rule) is REQUIRED, not optional — a `"brand"` finding would fail
+the `additionalProperties:false` + enum validation that `ux-audit/finding-schema.test.ts`
+drift-guards. `Finding.category:"anti-slop"` is hardcoded at `:83` (type) and `:364`
+(emit) — both stay unchanged.
+
+**Round-1 self-audit — no dropped-symbol references.** No infrastructure is dropped
+or renamed by this plan; the only new exported symbol is `DEFAULT_PATH_RE_SOURCE`
+(+ optional `computeExitCode`). No stale-reference sweep needed.
 
 ## Markdown-table pipe-escape constraint (load-bearing)
 
@@ -342,17 +391,37 @@ performed inline against `brand-guide.md` which was read and cited directly.)
 
 ## Observability
 
-Not applicable as a runtime surface — this is a build-time/review-time CLI gate with
-no server/infra deployment. Files-to-Edit are under `plugins/soleur/skills/**` and
-`plugins/soleur/test/**`, not `apps/*/server|src|infra` or `plugins/*/scripts` runtime
-paths; no new infrastructure (Phase 2.8 skip). The gate's own "did it run?" signal is
-the review-hook output line (and the new empty-result warn guard, AC2), which surfaces
-in `/soleur:review` output — that IS the discoverability test:
+This is a build-time / review-time CLI gate (a deterministic regex scanner), not a
+deployed runtime surface — there is no server, daemon, or infra to monitor. The
+5-field schema is filled against the gate's actual observable behaviour (its exit
+code and its review-hook output), which is what "did the gate run and what did it
+find" means for this component.
 
 ```yaml
+liveness_signal:
+  what: "the anti-slop review hook prints a findings array (or the new empty-result warn) on every /soleur:review of an in-scope diff"
+  cadence: "once per review of a diff touching the scanner path-glob"
+  alert_target: "review output read by the reviewing agent/operator"
+  configured_in: "plugins/soleur/skills/review/SKILL.md Anti-slop Scanner Hook block"
+error_reporting:
+  destination: "stderr + non-zero process exit (1) on brand+high findings; bad-CLI/parse/IO already exit 1"
+  fail_loud: "yes — brand+high findings exit non-zero (blocking); the empty-result guard warns loudly instead of silent-clean (closes the #4635 false-clean class)"
+failure_modes:
+  - mode: "collector silently matches zero files (the #4635 ugrep grep -z no-op)"
+    detection: "empty-result warn guard (AC2): diff has extension-matching files but CHANGED_FILES empty"
+    alert_route: "warning line in review output"
+  - mode: "brand rule regex mis-compiles from a mis-escaped table pipe"
+    detection: "tier1-scan.test.ts compile round-trip assertion (AC11)"
+    alert_route: "bun test failure in CI"
+  - mode: "path regex drift re-excludes route-group / server paths"
+    detection: "route-group regression test (AC3) + parity test (AC9)"
+    alert_route: "bun test failure in CI"
+logs:
+  where: "stdout (findings JSON / human format), stderr (errors/warns) — ephemeral, surfaced in review output; no persistent log store"
+  retention: "none (build-time tool; output lives in the review transcript)"
 discoverability_test:
-  command: "bun run plugins/soleur/skills/frontend-anti-slop/scripts/tier1-scan.ts --paths <file> --json; echo exit=$?"  # NO ssh
-  expected_output: "JSON findings array; exit=1 when a brand+high finding is present"
+  command: "bun run plugins/soleur/skills/frontend-anti-slop/scripts/tier1-scan.ts --paths apps/web-platform/server/notifications.ts --json; echo exit=$?"
+  expected_output: "JSON findings array containing ≥1 brand-category high finding; trailing exit=1"
 ```
 
 ## Infrastructure (IaC)
