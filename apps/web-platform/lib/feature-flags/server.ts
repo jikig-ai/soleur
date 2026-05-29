@@ -4,7 +4,7 @@
 // Env-var fallback mirrors the prd-segment Flagsmith state — see ADR §"Fallback semantics".
 
 import { Flagsmith } from "flagsmith-nodejs";
-import { reportSilentFallback } from "@/server/observability";
+import { mirrorWarnWithDebounce } from "@/server/observability";
 import { LRUCache } from "./lru-cache";
 
 const DEFAULT_FLAGSMITH_API_URL = "https://edge.api.flagsmith.com/api/v1/";
@@ -107,11 +107,22 @@ async function fetchRuntimeFlagsFromFlagsmith(
     }
     return out;
   } catch (err) {
-    reportSilentFallback(err, {
-      feature: "feature-flags",
-      op: "flagsmith.getIdentityFlags",
-      extra: { role, orgId },
-    });
+    // The page degrades gracefully via runtimeEnvFallback() below — this is a
+    // recovered path, not a user-facing failure. Report at WARNING level and
+    // debounce per-segment so a Flagsmith edge slowdown cannot burst Sentry
+    // (the bug behind alert auth-callback-no-code-burst / #4571). Dedup key is
+    // the snapshot cache key shape (role:orgId), never a userId — in-process,
+    // never emitted.
+    mirrorWarnWithDebounce(
+      err,
+      {
+        feature: "feature-flags",
+        op: "flagsmith.getIdentityFlags",
+        extra: { role, orgId },
+      },
+      `${role}:${orgId ?? "__anon__"}`,
+      "flagsmith:getidentityflags-timeout",
+    );
     return null;
   }
 }

@@ -278,27 +278,27 @@ discoverability_test:
 
 ## Acceptance Criteria
 
-- [ ] **AC1 — Severity.** On a `getIdentityFlags` rejection (timeout or any error),
+- [x] **AC1 — Severity.** On a `getIdentityFlags` rejection (timeout or any error),
       `fetchRuntimeFlagsFromFlagsmith` reports the recovered fallback at **warning** level
       (via `warnSilentFallback` / `mirrorWarnWithDebounce`), not error level. Verified by a
       vitest test asserting the warn-path helper is called and the error-path helper is not.
-- [ ] **AC2 — Graceful degradation preserved.** On rejection, `getRuntimeSnapshot` still
+- [x] **AC2 — Graceful degradation preserved.** On rejection, `getRuntimeSnapshot` still
       returns `runtimeEnvFallback()` and never throws. A vitest test makes
       `mockGetIdentityFlags` reject with a `TimeoutError`-shaped error and asserts
       `getFeatureFlags(ANON_IDENTITY)` resolves (does not reject) and returns the env-fallback
       snapshot. (Regression test for the Sentry bug.)
-- [ ] **AC3 — Debounce.** Repeated rejections for the same `(role, orgId)` within
+- [x] **AC3 — Debounce.** Repeated rejections for the same `(role, orgId)` within
       `MIRROR_DEBOUNCE_MS` produce **one** mirror emission. Vitest test: two consecutive
       cache-cold rejections for the same key → mirror helper invoked once. (Requires resetting
       the snapshot cache between calls so the second call re-enters `fetchRuntimeFlagsFromFlagsmith`.)
-- [ ] **AC4 — errorClass registry.** The new `errorClass` string is added to the registry
+- [x] **AC4 — errorClass registry.** The new `errorClass` string is added to the registry
       doc block in `observability.ts` (`mirrorWithDebounce` registry, ~`observability.ts:253`)
       so the bucket is documented and cannot silently collide.
-- [ ] **AC5 — No `defaultFlagHandler` added to the SDK config.** `client()`
+- [x] **AC5 — No `defaultFlagHandler` added to the SDK config.** `client()`
       (`server.ts:68-79`) is unchanged w.r.t. flag-handling semantics; the app-level
       catch + env fallback remains the degradation mechanism. (Guards against re-introducing
       the rejected approach.)
-- [ ] **AC6 — Lint/type/test green.** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`
+- [x] **AC6 — Lint/type/test green.** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`
       and `./node_modules/.bin/vitest run lib/feature-flags/server.test.ts` pass. (Web-platform
       runs vitest exclusively — `bunfig.toml` sets `[test] pathIgnorePatterns = ["**"]`, so
       `bun test` reports "filter did not match". Use the vitest binary directly.)

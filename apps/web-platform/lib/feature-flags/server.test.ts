@@ -12,8 +12,13 @@ vi.mock("flagsmith-nodejs", () => {
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
+  mirrorWarnWithDebounce: vi.fn(),
 }));
 
+import {
+  reportSilentFallback,
+  mirrorWarnWithDebounce,
+} from "@/server/observability";
 import {
   getFlag,
   getRuntimeFlag,
@@ -25,6 +30,9 @@ import {
   type Identity,
 } from "./server";
 
+const mockReportSilentFallback = vi.mocked(reportSilentFallback);
+const mockMirrorWarnWithDebounce = vi.mocked(mirrorWarnWithDebounce);
+
 const PRD_USER: Identity = { userId: "user-prd-1", role: "prd", orgId: null };
 const DEV_USER: Identity = { userId: "user-dev-1", role: "dev", orgId: null };
 const ORG_USER: Identity = { userId: "user-org-1", role: "prd", orgId: "org-123" };
@@ -35,6 +43,8 @@ const ORIGINAL_ENV = process.env;
 beforeEach(() => {
   process.env = { ...ORIGINAL_ENV };
   mockGetIdentityFlags.mockReset();
+  mockReportSilentFallback.mockReset();
+  mockMirrorWarnWithDebounce.mockReset();
   __resetFeatureFlagsForTests();
 });
 
@@ -306,5 +316,92 @@ describe("getRuntimeFlag — orgId trait forwarding + LRU", () => {
 
     await getRuntimeFlag("team-workspace-invite", ids[0]!);
     expect(mockGetIdentityFlags).toHaveBeenCalledTimes(5);
+  });
+});
+
+describe("getIdentityFlags timeout → warn-level debounced mirror (Sentry-bug regression)", () => {
+  // Production Sentry ID ac2d712121d94ad9ab154a16f6178fa7: a 200ms Flagsmith
+  // timeout on /login was reported at error level via reportSilentFallback,
+  // with no debounce, flooding Sentry and tripping the alert. The recovered
+  // env-fallback path must instead emit a single warn-level debounced mirror.
+  function timeoutError(): Error {
+    // Shape mirrors the SDK re-throw chain: a wrapped Error whose cause is the
+    // AbortSignal.timeout TimeoutError ("The operation was aborted due to timeout").
+    return new Error(
+      "getIdentityFlags failed and no default flag handler was provided",
+    );
+  }
+
+  it("AC1 — reports the recovered timeout via the warn-path helper, not the error-path helper", async () => {
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+    mockGetIdentityFlags.mockRejectedValueOnce(timeoutError());
+
+    await getFeatureFlags(ANON_IDENTITY);
+
+    expect(mockMirrorWarnWithDebounce).toHaveBeenCalledTimes(1);
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
+
+    const [err, ctx, key, errorClass] = mockMirrorWarnWithDebounce.mock.calls[0]!;
+    expect(err).toBeInstanceOf(Error);
+    expect(ctx).toMatchObject({
+      feature: "feature-flags",
+      op: "flagsmith.getIdentityFlags",
+      extra: { role: "prd", orgId: null },
+    });
+    // Dedup key is the per-segment snapshot cache key shape, never a userId.
+    expect(key).toBe("prd:__anon__");
+    expect(errorClass).toBe("flagsmith:getidentityflags-timeout");
+  });
+
+  it("AC2 — getFeatureFlags resolves with the env fallback snapshot and does not reject", async () => {
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+    process.env.FLAG_KB_CHAT_SIDEBAR = "1";
+    process.env.FLAG_TEAM_WORKSPACE_INVITE = "0";
+    process.env.FLAG_BYOK_DELEGATIONS = "0";
+    process.env.FLAG_DEV_SIGNIN = "0";
+    mockGetIdentityFlags.mockRejectedValueOnce(timeoutError());
+
+    const flags = await getFeatureFlags(ANON_IDENTITY);
+
+    expect(flags).toEqual({
+      "dev-signin": false,
+      "kb-chat-sidebar": true,
+      "team-workspace-invite": false,
+      "byok-delegations": false,
+    });
+  });
+
+  it("AC3 — delegates debounce with a stable per-(role,orgId) key; distinct identities get distinct keys", async () => {
+    // The actual coalescing window is owned by mirrorWarnWithDebounce and
+    // covered in test/observability-mirror-debounce.test.ts. Here we prove the
+    // call site passes a STABLE key for the same segment (so the helper can
+    // coalesce) and a DISTINCT key per segment (so it does not over-coalesce).
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+    mockGetIdentityFlags.mockRejectedValue(timeoutError());
+
+    await getFeatureFlags(ANON_IDENTITY);
+    __resetFeatureFlagsForTests(); // drop snapshot cache so the next call re-enters fetch
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+    await getFeatureFlags(ANON_IDENTITY);
+
+    const anonKeys = mockMirrorWarnWithDebounce.mock.calls.map((c) => c[2]);
+    expect(anonKeys).toEqual(["prd:__anon__", "prd:__anon__"]);
+
+    await getFeatureFlags({ userId: "u-org", role: "prd", orgId: "org-123" });
+    const lastKey = mockMirrorWarnWithDebounce.mock.calls.at(-1)![2];
+    expect(lastKey).toBe("prd:org-123");
+  });
+
+  it("AC5 — no defaultFlagHandler is configured on the SDK client", async () => {
+    // Guards against re-introducing the rejected approach: the app-level catch
+    // + env fallback remains the degradation mechanism.
+    const { Flagsmith } = await import("flagsmith-nodejs");
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+    mockGetIdentityFlags.mockResolvedValueOnce({ isFeatureEnabled: () => true });
+
+    await getRuntimeFlag("kb-chat-sidebar", ANON_IDENTITY);
+
+    const ctorArg = vi.mocked(Flagsmith).mock.calls[0]![0] as Record<string, unknown>;
+    expect(ctorArg).not.toHaveProperty("defaultFlagHandler");
   });
 });
