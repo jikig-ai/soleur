@@ -66,7 +66,7 @@ This is a behavioral fix against already-provisioned surfaces (Next.js client co
 
 **If this leaks, the user's data / workflow is exposed via:** the `redirectTo` parameter is an open-redirect / token-smuggling vector if not strictly validated. An attacker-supplied `redirectTo=https://evil.example` (or `//evil`, `/\evil`, a path with embedded credentials) appended to a `/signup` or `/login` link could bounce an authenticated session to an external page or leak the freshly-minted session via referer. The fix MUST allow only same-origin relative paths matching a strict allowlist shape.
 
-**Brand-survival threshold:** `single-user incident` — carried forward from the parent brainstorm (`USER_BRAND_CRITICAL=true`). One invited user blocked at the door is a brand-survival event for a feature whose entire purpose is multi-user onboarding; and one open-redirect on the auth path is a credential-exposure event. `requires_cpo_signoff: true`; `user-impact-reviewer` runs at review time.
+- **Brand-survival threshold:** `single-user incident` — carried forward from the parent brainstorm (`USER_BRAND_CRITICAL=true`). One invited user blocked at the door is a brand-survival event for a feature whose entire purpose is multi-user onboarding; and one open-redirect on the auth path is a credential-exposure event. `requires_cpo_signoff: true`; `user-impact-reviewer` runs at review time.
 
 ## Acceptance Criteria
 
@@ -196,8 +196,9 @@ logs:
   where: Sentry breadcrumbs (client) — no server log change
   retention: existing Sentry retention
 discoverability_test:
-  command: "cd apps/web-platform && <test-runner> test/<redirect + login-form + signup tests> (NO ssh)"
-  expected_output: all green; sanitizer rejects open-redirect vectors; verify routes to redirectTo
+  command: 'curl -fsS -o /dev/null -w "%{http_code}" --max-time 10 https://app.soleur.ai/login'
+  expected_output: "200"
+  note: "The sign-in screen renders post-deploy (no client-bundle crash). Unit/RTL coverage for the redirectTo + cooldown + accept-terms behavior runs via: cd apps/web-platform && ./node_modules/.bin/vitest run test/safe-return-to.test.ts test/login-redirect-cooldown.test.tsx test/signup-redirect-cooldown.test.tsx test/oauth-buttons.test.tsx test/e2e-oauth-tc-consent.test.ts test/accept-terms-redirect-to.test.ts (NO ssh)."
 ```
 
 ## Test Scenarios
