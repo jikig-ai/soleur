@@ -7,10 +7,11 @@ import { reportSilentFallback } from "@/lib/client-observability";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
 import { EMAIL_OTP_LENGTH } from "@/lib/auth/constants";
 import {
+  type AuthErrorLike,
   CALLBACK_ERRORS,
   DEFAULT_ERROR_MESSAGE,
   isNoAccountError,
-  mapSupabaseError,
+  mapSupabaseAuthError,
   SIGNUP_REASON_NO_ACCOUNT,
 } from "@/lib/auth/error-messages";
 import Link from "next/link";
@@ -56,26 +57,36 @@ export function LoginForm() {
     setError("");
 
     const supabase = createClient();
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: { shouldCreateUser: false },
-    });
+    let error: AuthErrorLike | null = null;
+    try {
+      ({ error } = await supabase.auth.signInWithOtp({
+        email,
+        options: { shouldCreateUser: false },
+      }));
+    } catch (thrown) {
+      // Transport failure (fetch reject) rejects rather than resolving `error`.
+      error = thrown as AuthErrorLike;
+    }
 
     setLoading(false);
 
     if (error) {
       console.error("[auth] Supabase error:", error.message);
-      // Forward only typed enum fields — error.message embeds the email on
-      // OTP failures and Sentry is a shared project (PII / cross-tenant risk).
+      // Forward only typed enum/int fields in `extra` — error.message embeds
+      // the email on OTP failures and Sentry is a shared cross-tenant project.
+      // The raw error is still captured via Sentry.captureException, so the
+      // message-borne email is scrubbed by sentry.client.config beforeSend
+      // (EMAIL_PATTERN), not omitted here.
       reportSilentFallback(error, {
         feature: "auth",
         op: "signInWithOtp",
         extra: {
-          errorCode: (error as { code?: string }).code,
+          errorCode: error.code,
           errorName: error.name,
+          status: error.status,
         },
       });
-      if (isNoAccountError(error as { code?: string; message: string })) {
+      if (isNoAccountError({ code: error.code, message: error.message ?? "" })) {
         const params = new URLSearchParams({
           email,
           reason: SIGNUP_REASON_NO_ACCOUNT,
@@ -83,7 +94,7 @@ export function LoginForm() {
         router.replace(`/signup?${params.toString()}`);
         return;
       }
-      setError(mapSupabaseError(error.message));
+      setError(mapSupabaseAuthError(error));
     } else {
       setOtpSent(true);
       setTimeout(() => otpRef.current?.focus(), 100);
@@ -96,11 +107,18 @@ export function LoginForm() {
     setError("");
 
     const supabase = createClient();
-    const { error } = await supabase.auth.verifyOtp({
-      email,
-      token: otp,
-      type: "email",
-    });
+    let error: AuthErrorLike | null = null;
+    try {
+      ({ error } = await supabase.auth.verifyOtp({
+        email,
+        token: otp,
+        type: "email",
+      }));
+    } catch (thrown) {
+      // verifyOtp can reject (not resolve with `error`) on a transport failure;
+      // route the thrown error through the same mapping layer.
+      error = thrown as AuthErrorLike;
+    }
 
     setLoading(false);
 
@@ -110,11 +128,12 @@ export function LoginForm() {
         feature: "auth",
         op: "verifyOtp",
         extra: {
-          errorCode: (error as { code?: string }).code,
+          errorCode: error.code,
           errorName: error.name,
+          status: error.status,
         },
       });
-      setError(mapSupabaseError(error.message));
+      setError(mapSupabaseAuthError(error));
     } else {
       router.push("/dashboard");
     }
