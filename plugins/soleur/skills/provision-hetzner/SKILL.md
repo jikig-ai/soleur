@@ -38,7 +38,7 @@ The script:
 
 ## Sharp Edges
 
-- Hetzner has no TF resource for project creation or token minting (Console-only).
+- Hetzner has no TF resource for project creation or token minting (Console-only). This is the one manual step in this skill; it is tracked as an automation gap with revisit criteria in **Tracks #4604** (per `hr-never-label-any-step-as-manual-without`) — do not treat it as permanently-manual.
 - The smoke-test creates a real cx11 server (~EUR 0.006/hr prorated). Trap handler cleans up.
 - If `hcloud server delete` fails, the probe server must be deleted manually via Console.
 - Read-only tokens silently succeed for reads; the write-class test (server create) is essential.
