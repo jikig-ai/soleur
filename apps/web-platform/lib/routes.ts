@@ -23,6 +23,10 @@ export const PUBLIC_PATHS = [
   "/api/internal/kb-drift-ingest",
   "/ws",
   "/manifest.webmanifest",
+  // /robots.txt: Next.js robots.ts metadata route (Disallow: /). Public-by-design,
+  // no auth/PII — must bypass Supabase middleware or crawlers get 307→/login and
+  // never see the Disallow body. Same class as /manifest.webmanifest (#4587, #4573).
+  "/robots.txt",
   "/shared",
   "/api/shared",
   "/invite",
