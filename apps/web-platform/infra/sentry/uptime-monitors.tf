@@ -18,13 +18,12 @@
 #      detailed comment on the soleur_acme_probe resource below.
 #
 # AUTO-APPLY NOTE: `.github/workflows/apply-sentry-infra.yml` auto-applies
-# `sentry_cron_monitor.*` resources ONLY (via explicit `-target=` flags).
-# `sentry_uptime_monitor.*` resources are NOT auto-applied — operator runs
-# `terraform apply` manually in this root after merge, same posture as
-# `sentry_issue_alert.*` (which uses an explicit import-then-apply flow per
-# issue-alerts.tf header). Extending auto-apply to uptime monitors is a clean
-# follow-up — see plan §Open Questions / Deferred Q2 and the follow-up issue
-# referenced in the PR body.
+# both `sentry_cron_monitor.*` and `sentry_uptime_monitor.*` resources (via
+# explicit `-target=` flags) on push-to-`main`. Uptime monitors were added to
+# the auto-apply allow-list in #4585 (previously operator-applied) — an edit
+# to this file now triggers the workflow and applies automatically. Only
+# `sentry_issue_alert.*` remains operator-applied (explicit import-then-apply
+# flow per issue-alerts.tf header).
 #
 # BETA STATUS: `sentry_uptime_monitor` is documented as beta in the provider
 # (v0.15.0-beta2 — see provider docs at
@@ -89,7 +88,18 @@ resource "sentry_uptime_monitor" "soleur_www" {
   interval_seconds = 300
   timeout_ms       = 10000
 
-  downtime_threshold = 3
+  # 2026-05-29: longer fuse than the apex monitor (5 checks ≈ 25 min vs 3 ≈ 15).
+  # This monitor is the redirect-HEALTH guard, NOT the user-facing outage signal —
+  # soleur_apex (downtime_threshold=3, UNCHANGED) covers a real user-facing outage.
+  # A docs deploy rebuilds GitHub Pages and re-propagates the custom-domain
+  # apex-canonical redirect; during that window www transiently serves its own
+  # 200 instead of the 301, which empirically exceeds the apex monitor's 15-min
+  # fuse (PR #4573/#4578 deploy on 2026-05-29 paged soleur_www at 12:30 for a
+  # self-recovered ~15-min flap). The 25-min fuse absorbs the deploy window so
+  # self-inflicted rebuilds stop paging, at the cost of +10 min MTTD on a
+  # www-ONLY redirect regression — acceptable for that lower-severity failure
+  # mode, since a real user-facing outage still pages via soleur_apex at 15 min.
+  downtime_threshold = 5
   recovery_threshold = 1
 
   # Success = exactly 301 (www must redirect to apex). Sentry fires when this is

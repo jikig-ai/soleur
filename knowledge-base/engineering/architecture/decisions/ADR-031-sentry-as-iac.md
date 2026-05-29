@@ -196,13 +196,25 @@ Sentry-residency cascade learning at
 `knowledge-base/project/learnings/2026-05-16-brainstorm-premise-cascade-and-playwright-handoff-discipline.md`
 for the failure mode this prose corrects.
 
-### Auto-apply on push-to-main (cron monitors only)
+### Auto-apply on push-to-main (cron + uptime monitors)
 
 `.github/workflows/apply-sentry-infra.yml` fires on push to `main` when
 `apps/web-platform/infra/sentry/cron-monitors.tf` changes. It runs
 `terraform apply -target=sentry_cron_monitor.* -auto-approve` so the 8
 monitors exist within ~2 minutes of merge, closing the window where check-in
 curls would 404. Issue-alert resources stay import-only post-merge per AC13.
+
+**Amendment (2026-05-29, #4585):** the auto-apply scope now also includes the
+4 `sentry_uptime_monitor.*` resources (`uptime-monitors.tf`), previously
+operator-applied. The workflow uses the **saved-plan shape**
+(`terraform plan -target=... -out=tfplan` → destroy-guard on
+`terraform show -json tfplan` → `terraform apply tfplan`), not the inline
+`-apply -target` form described above — the `-target=` allow-list lives in the
+plan step only, and apply consumes the saved `tfplan` so plan-targets ==
+apply-targets. `sentry_uptime_monitor` exposes zero array-of-blocks (all
+attrs scalar; `assertion_json` is a function-built string), so the
+destroy-guard's `nested_deletes: 0` posture stays correct without a per-type
+jq clause. `sentry_issue_alert.*` remains import-only.
 
 ## Consequences
 

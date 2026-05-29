@@ -44,6 +44,7 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: hr-no-ssh-fallback-in-runbooks] → core
 - [id: hr-observability-layer-citation] → core
 - [id: hr-github-app-auth-not-pat] → core
+- [id: hr-monitor-not-run-in-background-for-polling] → core
 
 ## Workflow Gates
 
