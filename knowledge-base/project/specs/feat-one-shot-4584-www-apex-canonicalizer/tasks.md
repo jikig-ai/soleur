@@ -45,8 +45,8 @@ lane: cross-domain
 
 ## Phase 3 — Wire test into CI
 
-- [ ] 3.1 `grep -rnE '\.test\.sh' .github/workflows/` to find how co-located infra `*.test.sh` scripts are invoked.
-- [ ] 3.2 Add the test invocation to the existing infra-test job following that exact pattern. Do NOT create a new workflow. Record the invocation pattern in the PR body.
+- [ ] 3.1 Confirm target line (`grep -n 'canary-bundle-claim-check.test.sh' .github/workflows/infra-validation.yml`) — verified 2026-05-29 at the `deploy-script-tests` job, lines ~118-131.
+- [ ] 3.2 Add a named step `run: bash apps/web-platform/infra/www-apex-canonicalizer.test.sh` to the `deploy-script-tests` job in `infra-validation.yml`, matching the existing 3 named test steps. Do NOT use the `main.test.sh` per-app hook; do NOT create a new workflow. Record the final step location in the PR body.
 
 ## Phase 4 — Close & document
 

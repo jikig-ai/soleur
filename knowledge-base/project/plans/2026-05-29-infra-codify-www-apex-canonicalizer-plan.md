@@ -23,6 +23,22 @@ brand_survival_threshold: aggregate pattern
 
 # infra: codify the www→apex canonicalizer drift-guard (it is GitHub-Pages-owned, not unmanaged CF config) ♻️
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-29
+**Sections enhanced:** Overview (premise falsification), Phase 3 (exact CI wiring), Phase 1 (test idiom precedent), Acceptance Criteria, Research Insights.
+**Research agents used:** inline verification (Task subagents unavailable in pipeline context) — live `curl` header probes, live `gh issue/pr view` resolution of all cited numbers, `grep -rlE` for CF-redirect resources, `grep`/`sed` against `infra-validation.yml` + `inngest.test.sh` + `dns.tf` + `seo-rulesets.tf` + the destroy-guard filter.
+
+### Key Improvements (deepen pass)
+1. **Premise falsification confirmed by headers, not just docs.** The www 301 response carries `via: 1.1 varnish` + `x-fastly-request-id` + `x-github-request-id` (GitHub Pages/Fastly origin), live-verified 2026-05-29. There is no `cloudflare_page_rule`/`cloudflare_list`/`http_request_redirect` anywhere in the repo (`grep -rlE` → only the comment at seo-rulesets.tf:61). The issue's "unmanaged CF dashboard config" premise is provably wrong.
+2. **Exact CI wiring pinned.** `infra-validation.yml` job `deploy-script-tests` (lines 118-131) runs named infra tests via explicit `run: bash apps/web-platform/infra/<name>.test.sh` steps. The new test wires in as a 4th step there — NOT the per-app `main.test.sh` hook (line 108, which only auto-runs a file literally named `main.test.sh`). Phase 3 updated to this concrete instruction.
+3. **Test idiom precedent located.** `inngest.test.sh` is the canonical co-located infra-test shape: `#!/usr/bin/env bash` + `set -euo pipefail` + `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"` + a PASS/FAIL `assert()` helper + non-zero exit on `FAIL>0`. Phase 1 reuses it verbatim.
+4. **All cited references resolved live (`gh`):** #4584 OPEN (issue), #4577 CLOSED, #4573 MERGED, #3297 CLOSED, #3296 MERGED, #3172 OPEN (`priority/p1-high`, "Pick canonical host apex vs www" — roadmap M48). No citation corrections needed.
+
+### New Considerations Discovered
+- The destroy-guard (`destroy-guard-filter-web-platform.jq`) counts `cloudflare_ruleset.*.rules` for delete actions. This plan touches NO ruleset rule, so the guard is not engaged — but it confirms that adding a CF redirect ruleset (the rejected approach) would have entangled with the destroy-guard surface.
+- Gates 4.6 (User-Brand Impact), 4.7 (Observability 5-field, no-SSH discoverability), and 4.8 (PAT-shaped vars) all evaluated. 4.8 surfaced `var.cf_api_token` as a regex match — this is the pre-existing **Cloudflare** API token (not a GitHub PAT), referenced only descriptively to state no new vars are added; the gate's intent (GitHub-write PAT auth) does not apply. PASS on intent.
+
 ## Overview
 
 Issue #4584 (spun out of #4577) asserts: "the live www→apex 301 (host- and path-preserving) is **unmanaged CF dashboard config**, not in `apps/web-platform/infra/` Terraform, so `scheduled-terraform-drift.yml` cannot detect drift," and proposes codifying it as a `cloudflare_ruleset` (likely via the `http_request_redirect` phase + account-scoped Bulk Redirects / `cloudflare_list`).
@@ -105,7 +121,30 @@ grep -rlE 'cloudflare_page_rule|cloudflare_list\b|http_request_redirect|cloudfla
 
 ### Phase 1 — Write the failing test first (RED)
 
-Per `cq-write-failing-tests-before`: scaffold `www-apex-canonicalizer.test.sh` with assertions A1-A4 BEFORE adding the dns.tf contract comment. A4 (the `grep -q 'GitHub-Pages-owned'` sentinel) will FAIL initially (comment not yet present) — that is the RED state. Verify A1-A3 already PASS against current tracked state (the topology is correct today). Confirm the runner: this repo's infra tests are plain executable `*.test.sh` scripts run directly (`bash <file>.test.sh`), NOT a framework — verify by reading one sibling (`apps/web-platform/infra/inngest.test.sh`) for the assertion/exit-code idiom before writing, and reuse its shape.
+Per `cq-write-failing-tests-before`: scaffold `www-apex-canonicalizer.test.sh` with assertions A1-A4 BEFORE adding the dns.tf contract comment. A4 (the `grep -q 'GitHub-Pages-owned'` sentinel) will FAIL initially (comment not yet present) — that is the RED state. Verify A1-A3 already PASS against current tracked state (the topology is correct today).
+
+**Reuse the canonical infra-test idiom verbatim** (verified against `apps/web-platform/infra/inngest.test.sh` 2026-05-29 — plain bash, NO test framework):
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"   # apps/web-platform/infra → repo root
+DNS_TF="$SCRIPT_DIR/dns.tf"
+CNAME_FILE="$REPO_ROOT/plugins/soleur/docs/CNAME"
+PASS=0; FAIL=0; TOTAL=0
+assert() { local d="$1" c="$2"; TOTAL=$((TOTAL+1)); if eval "$c"; then PASS=$((PASS+1)); echo "  PASS: $d"; else FAIL=$((FAIL+1)); echo "  FAIL: $d"; echo "        condition: $c"; fi; }
+# A1: CNAME file is the apex (catches canonical-direction inversion)
+assert "docs/CNAME is soleur.ai (apex, not www)" '[[ "$(tr -d "[:space:]" < "$CNAME_FILE")" == "soleur.ai" ]]'
+# A2: www CNAME → jikig-ai.github.io, proxied
+assert "dns.tf www record targets jikig-ai.github.io" 'grep -q "content = \"jikig-ai.github.io\"" "$DNS_TF"'
+# A3: apex A record proxied (and A4 sentinel) — see Files to Create for the full set
+# ...
+[[ "$FAIL" -eq 0 ]] || { echo "FAILED: $FAIL/$TOTAL"; exit 1; }
+echo "OK: $PASS/$TOTAL"
+```
+
+The `REPO_ROOT` resolution is load-bearing: `CNAME` lives at `plugins/soleur/docs/CNAME`, three levels up from the infra dir — derive it from `SCRIPT_DIR`, never a relative `../../../` from cwd (per `hr-when-a-plan-specifies-relative-paths-e-g`, tests run from varying cwd in CI).
 
 ### Phase 2 — Add the dns.tf contract block + correct seo-rulesets.tf comments (GREEN)
 
@@ -113,7 +152,21 @@ Add the contract-comment block to `dns.tf` (Files to Edit #1) — A4 now PASSES.
 
 ### Phase 3 — Wire the test into CI (so drift actually fails the build)
 
-Add an invocation of `www-apex-canonicalizer.test.sh` to whichever job already runs the co-located infra `*.test.sh` scripts. **Phase 0.3-equivalent verification required at /work time:** grep `.github/workflows/` for how the existing infra `*.test.sh` files are invoked (`grep -rnE 'infra/.*\.test\.sh|\.test\.sh' .github/workflows/`) and follow that exact pattern. If no workflow currently runs them as a batch (e.g., they are run individually or via a glob), match the established mechanism rather than inventing a new job. If they are genuinely not CI-wired, add the single invocation to the most appropriate existing infra-validation job (do NOT create a new workflow for one test). Record the discovered invocation pattern in the PR body.
+**Verified target (2026-05-29):** `.github/workflows/infra-validation.yml` job `deploy-script-tests` (lines 118-131) runs co-located infra tests via explicit named steps:
+
+```yaml
+      - name: Run canary-bundle-claim-check.sh tests
+        run: bash apps/web-platform/infra/canary-bundle-claim-check.test.sh
+```
+
+Add a 4th step in the same job, matching that shape exactly:
+
+```yaml
+      - name: Run www-apex-canonicalizer drift-guard
+        run: bash apps/web-platform/infra/www-apex-canonicalizer.test.sh
+```
+
+Do NOT use the per-app `main.test.sh` hook (infra-validation.yml:108) — that only auto-runs a file literally named `main.test.sh` in each matrix directory; our test has a distinct name. Do NOT create a new workflow. Re-confirm the line numbers at /work time (`grep -n 'canary-bundle-claim-check.test.sh' .github/workflows/infra-validation.yml`) before editing, since they may have shifted, and record the final step location in the PR body.
 
 ### Phase 4 — Close #4584 with the reframing
 
@@ -163,6 +216,14 @@ No Product/UX (no user-facing surface; test + comments), Marketing, Legal, Finan
 
 - No new CF rule, so the Free-tier 10-rules/phase cap (`seo-rulesets.tf:47`) is **not approached** — which is itself a reason the `cloudflare_ruleset` approach is rejected (it would force the Bulk-Redirects refactor to make room, for zero benefit over the free GitHub-Pages redirect).
 - No new Sentry/Better Stack resource; no paid-tier gate.
+
+### Research Insights (deepen pass)
+
+**Precedent-diff — co-located infra test (`*.test.sh`):** The repo has an established pattern; this is NOT novel. Precedent: `apps/web-platform/infra/inngest.test.sh`, `ci-deploy.test.sh`, `ci-deploy-wrapper.test.sh`, `canary-bundle-claim-check.test.sh` — all plain bash, `set -euo pipefail`, `SCRIPT_DIR` self-locate, PASS/FAIL `assert()` helper, non-zero exit on failure. Two CI-invocation mechanisms exist: (a) explicit named steps in `infra-validation.yml` job `deploy-script-tests` (the right one here — content-invariant tests with distinct names), and (b) the per-app `main.test.sh` auto-hook in the `terraform-validate` matrix job (used by `apps/cla-evidence/infra/main.test.sh` for content invariants `terraform validate` can't see). The new test follows pattern (a) verbatim.
+
+**Provider version cross-check:** `cloudflare/cloudflare` is pinned `~> 4.0` (lock: 4.52.7). The plan adds no provider-version-dependent resource attribute — it asserts existing `cloudflare_record` HCL via grep, not via any v4-vs-v5 attribute. The known v4→v5 rename risk (`cloudflare_record` → `cloudflare_dns_record`, per `2026-03-20-cloudflare-terraform-v4-v5-resource-names.md`) is NOT triggered: the test greps `dns.tf` source for `content = "jikig-ai.github.io"` and `proxied = true`, which are stable across the rename's attribute set. If a future v5 bump renames the resource type, A2/A3's resource-name grep would need updating — note this in the test comment so the bump PR catches it.
+
+**Runtime vs config drift — both layers covered:** `sentry_uptime_monitor.soleur_www` (uptime-monitors.tf:99) asserts `equals 301` at 300s cadence (runtime drift). This test asserts the config substrate at CI time (config drift). Neither subsumes the other: the monitor pages after a live regression; the test blocks the regressing PR before merge.
 
 ## Observability
 
