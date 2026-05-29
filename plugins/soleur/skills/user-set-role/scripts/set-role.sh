@@ -6,6 +6,10 @@
 
 set -euo pipefail
 
+# Shared WORM audit-append helper (PostgREST RPC; no DB-CLI binary). See #4581 PR-1.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../../../scripts/audit-flag-flip.sh"
+
 readonly FLAGSMITH_API="https://api.flagsmith.com/api/v1"
 readonly FLAGSMITH_ENV_DEV_ID=90722
 readonly FLAGSMITH_ENV_PRD_ID=90721
@@ -82,7 +86,27 @@ fi
 read -p "Proceed? Type 'yes': " ACK
 [[ "$ACK" == "yes" ]] || { echo "aborted" >&2; exit 0; }
 
-# --- update Supabase ------------------------------------------------------
+# --- audit append (WORM) — BEFORE the users.role mutation (append-before-flip) -------
+# A failed audit must abort the script before any prod mutation; otherwise a role
+# change could land in prd with no WORM accountability row (#4581 review FINDING 1).
+ACTOR=$(doppler secrets get OPERATOR_EMAIL -p soleur -c cli_ops --plain 2>/dev/null | tr '[:upper:]' '[:lower:]')
+[[ -z "$ACTOR" ]] && { echo "FATAL: OPERATOR_EMAIL not in Doppler soleur/cli_ops" >&2; exit 4; }
+
+# Audit DB target = soleur/dev (preserves the historical dev-DB audit destination);
+# distinct from the prd SUPA_URL/SUPA_KEY used for the users.role PATCH below.
+# `|| true` normalizes a Doppler auth/network failure to the exit-4 contract (the
+# [[ -z ]] guard) instead of letting `set -e` abort at the assignment with exit 1.
+AUDIT_URL=$(doppler secrets get SUPABASE_URL -p soleur -c dev --plain 2>/dev/null) || true
+AUDIT_SRK=$(doppler secrets get SUPABASE_SERVICE_ROLE_KEY -p soleur -c dev --plain 2>/dev/null) || true
+[[ -z "$AUDIT_URL" || -z "$AUDIT_SRK" ]] && { echo "FATAL: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not in Doppler soleur/dev" >&2; exit 4; }
+
+# NOTE(#4581): AUDIT_ACTION tautology (both branches "on") is a pre-existing bug,
+# out of scope for the transport swap; see #4593. Role assignment records "on".
+AUDIT_ACTION=$([[ "$CUR_ROLE" == "$TARGET" ]] && echo "on" || echo "on")
+AUDIT_ID=$(audit_flag_flip_rpc "$AUDIT_URL" "$AUDIT_SRK" "user-role" "prd" "user:$USER_ID" "$AUDIT_ACTION" null null "$ACTOR") || exit 4
+echo "  audit_id=$AUDIT_ID"
+
+# --- update Supabase (AFTER the audit row is committed) -------------------------------
 if [[ "$CUR_ROLE" != "$TARGET" ]]; then
   echo "→ Updating Supabase users.role…"
   RESP=$(supa -X PATCH "${SUPA_URL}/rest/v1/users?id=eq.${USER_ID}" \
@@ -96,18 +120,6 @@ if not isinstance(d, list) or not d:
 print("  updated:", d[0]["email"], "role →", d[0]["role"])
 ' || exit 4
 fi
-
-# --- audit append (WORM) ---------------------------------------------------
-ACTOR=$(doppler secrets get OPERATOR_EMAIL -p soleur -c cli_ops --plain 2>/dev/null | tr '[:upper:]' '[:lower:]')
-[[ -z "$ACTOR" ]] && { echo "FATAL: OPERATOR_EMAIL not in Doppler soleur/cli_ops" >&2; exit 4; }
-
-DB_URL=$(doppler secrets get DATABASE_URL_POOLER -p soleur -c dev --plain 2>/dev/null)
-[[ -z "$DB_URL" ]] && { echo "FATAL: DATABASE_URL_POOLER not in Doppler soleur/dev" >&2; exit 4; }
-
-AUDIT_ACTION=$([[ "$CUR_ROLE" == "$TARGET" ]] && echo "on" || echo "on")
-AUDIT_ID=$(psql "${DB_URL/6543/5432}" -tAc "SELECT public.audit_flag_flip('user-role', 'prd', 'user:$USER_ID', '$AUDIT_ACTION', NULL, NULL, '$ACTOR');" 2>&1) \
-  || { echo "FATAL: audit append failed: $AUDIT_ID" >&2; exit 4; }
-echo "  audit_id=$AUDIT_ID"
 
 # --- update Flagsmith identity trait (both envs) --------------------------
 for ENV_PAIR in "dev:$FLAGSMITH_ENV_DEV_ID" "prd:$FLAGSMITH_ENV_PRD_ID"; do
