@@ -311,50 +311,50 @@ Ordered by dependency direction (contract-before-consumer):
 
 ### Pre-merge (PR)
 
-- [ ] AC1 `grep -zE` no longer appears in `plugins/soleur/skills/review/SKILL.md`:
+- [x] AC1 `grep -zE` no longer appears in `plugins/soleur/skills/review/SKILL.md`:
       `grep -c 'grep -zE' plugins/soleur/skills/review/SKILL.md` returns `0`; the
       collector uses `tr '\0' '\n' | grep -E` and `mapfile -t` (no `-d ''`).
-- [ ] AC2 Empty-result guard present: the hook warns when the diff contains
+- [x] AC2 Empty-result guard present: the hook warns when the diff contains
       extension-matching files but `CHANGED_FILES` is empty (assert the warn string
       exists in the hook block).
-- [ ] AC3 Route-group regression test: a unit test asserts the
+- [x] AC3 Route-group regression test: a unit test asserts the
       `DEFAULT_PATH_RE_SOURCE` (and JS `defaultPaths` regex) matches
       `apps/web-platform/app/(public)/invite/[token]/invite-actions.tsx` and
       `…/page.tsx`. Test FAILS if a future regex edit excludes route-group/dynamic
       segments.
-- [ ] AC4 BRAND-RAW-HEX: fixture `bg-[#2563eb]` flags (1 finding, severity high,
+- [x] AC4 BRAND-RAW-HEX: fixture `bg-[#2563eb]` flags (1 finding, severity high,
       rule category brand); fixture inline `background: #2563eb` flags; a
       token-using fixture (`className="bg-soleur-gold"` / `style={{background: GOLD_GRADIENT}}`
       / `const C = "#C9A962"`) yields 0 findings.
-- [ ] AC5 BRAND-WHITE-ON-GOLD: white-on-gold fixture flags (high); forge-ink-on-gold
+- [x] AC5 BRAND-WHITE-ON-GOLD: white-on-gold fixture flags (high); forge-ink-on-gold
       passes; the blue-incident `bg-[#2563eb] text-white` does NOT flag this rule
       (asserted with `--rule BRAND-WHITE-ON-GOLD` so it's isolated from BRAND-RAW-HEX).
-- [ ] AC6 BRAND-NONZERO-CORNER: `border-radius: 8` / `rounded-lg` (CTA) fixture flags
+- [x] AC6 BRAND-NONZERO-CORNER: `border-radius: 8` / `rounded-lg` (CTA) fixture flags
       (medium); `rounded-none` / `border-radius: 0` passes.
-- [ ] AC7 Blocking exit: `computeExitCode` (or CLI) returns 1 when ≥1 finding is
+- [x] AC7 Blocking exit: `computeExitCode` (or CLI) returns 1 when ≥1 finding is
       brand+high; returns 0 for anti-slop-only and for brand-medium-only.
-- [ ] AC8 Scope extension: `DEFAULT_PATH_RE_SOURCE` matches
+- [x] AC8 Scope extension: `DEFAULT_PATH_RE_SOURCE` matches
       `apps/web-platform/server/notifications.ts`; `defaultPaths()` includes server
       `.ts/.tsx`.
-- [ ] AC9 Parity: a test asserts the `review/SKILL.md` hook pattern literal equals
+- [x] AC9 Parity: a test asserts the `review/SKILL.md` hook pattern literal equals
       `DEFAULT_PATH_RE_SOURCE` (the shared alternation body) byte-for-byte.
-- [ ] AC10 Count sync: `tier1-scan.test.ts` asserts `toHaveLength(18)`; `grep -rn
+- [x] AC10 Count sync: `tier1-scan.test.ts` asserts `toHaveLength(18)`; `grep -rn
       '15 ' ` across the 4 named prose sites returns no stale "15 …Tier 1/gates"
       (each now reads 18).
-- [ ] AC11 Pipe-escape integrity: `bun test plugins/soleur/test/frontend-anti-slop/tier1-scan.test.ts`
+- [x] AC11 Pipe-escape integrity: `bun test plugins/soleur/test/frontend-anti-slop/tier1-scan.test.ts`
       "every parsed rule compiles a valid RegExp" green AND each brand rule's
       compiled `.source` round-trips the intended alternation (no `\|` mis-split).
-- [ ] AC12 Full suite green: `cd plugins/soleur && bun test` (or the repo's bun-test
+- [x] AC12 Full suite green: `cd plugins/soleur && bun test` (or the repo's bun-test
       invocation for `plugins/soleur/test/`) passes — including the unchanged
       `components.test.ts` budget test (proves no `description:` edit crept in).
-- [ ] AC13 Plugin compliance: README component counts + `plugin.json` unchanged
+- [x] AC13 Plugin compliance: README component counts + `plugin.json` unchanged
       (no new skill/agent/command added — only rules/tests/docs within an existing
       skill). Confirm `bun test plugins/soleur/test/components.test.ts` green.
-- [ ] AC14 PR body uses `Closes #4635`.
+- [x] AC14 PR body uses `Closes #4635`.
 
 ### Post-merge (operator) — automation-feasibility checked
 
-- [ ] AC15 App-side remediation tracking issue exists for `notifications.ts` greys
+- [x] AC15 App-side remediation tracking issue exists for `notifications.ts` greys
       + the `pending-invite*` `#2563eb` hex (app code, out of scope here). File via
       `gh issue create` (automatable — bake into ship, not a manual step). The brand
       gate now blocks the *next* app PR that touches those files; the tracking issue
