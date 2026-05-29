@@ -117,8 +117,12 @@ grep -oE '^\s+[a-z_]+\s*=' apps/web-platform/infra/sentry/uptime-monitors.tf | s
 
 - [ ] **AC10 — first auto-apply runs.** On merge to `main`, `apply-sentry-infra.yml` fires (the merge touches `apply-sentry-infra.yml` + `uptime-monitors.tf` paths). The "Terraform plan" step now includes the 4 uptime targets; the apply applies them. Verify via the workflow run log + post-apply summary.
   - **Automation:** `gh run list --workflow=apply-sentry-infra.yml --limit 1` + `gh run view <id> --log` — feasible, bake into /soleur:ship post-merge verification.
-- [ ] **AC11 — monitors live in Sentry (API-GET, not dashboard).** Per `hr-no-dashboard-eyeball-pull-data-yourself`, confirm the 4 uptime monitors exist post-apply via the Sentry monitors API. Reuse the audit script's org-wide monitors GET (`GET /api/0/organizations/${SENTRY_ORG}/monitors/`) and grep for the 4 slugs (`soleur-ai-apex`, `soleur-ai-www`, `soleur-ai-changelog-deep`, `soleur-ai-acme-carveout-probe`).
-  - **Automation:** API-GET feasible; if run locally needs `SENTRY_IAC_AUTH_TOKEN` from the GH repo secret (not Doppler). Document as a /soleur:ship post-merge probe.
+- [ ] **AC11 — monitors present in Terraform state post-apply (not dashboard).** Per `hr-no-dashboard-eyeball-pull-data-yourself`, confirm the 4 uptime monitors landed by reading Terraform state, NOT the Sentry dashboard. **Do NOT use `GET /api/0/organizations/${SENTRY_ORG}/monitors/`** — that is the Sentry **Crons** monitors endpoint and does NOT return `sentry_uptime_monitor` resources (it returns cron monitors only), so a slug-grep against it false-fails. Authoritative check: after a green AC10 apply, `terraform state list` in `apps/web-platform/infra/sentry` contains exactly the 4 uptime addresses:
+  ```bash
+  cd apps/web-platform/infra/sentry && terraform state list | grep -cE '^sentry_uptime_monitor\.' # == 4
+  ```
+  Because the apply consumes the saved `tfplan` that targeted all 4, a successful AC10 apply (exit 0) inherently means the 4 resources are in state — AC11 is the explicit state-list confirmation of that.
+  - **Automation:** `terraform state list` is runnable in the workflow (it already has the R2 backend creds + init) or locally with `SENTRY_IAC_AUTH_TOKEN` from the GH repo secret. Feasible as a /soleur:ship post-merge probe; no dashboard, no Crons-API false-fail.
 
 ## Implementation Phases
 

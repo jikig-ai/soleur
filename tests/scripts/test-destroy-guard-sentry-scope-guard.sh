@@ -14,6 +14,15 @@
 # the destroy-guard-filter-sentry.jq must be extended with a corresponding
 # nested-clause BEFORE that resource is auto-applied.
 #
+# COMPENSATING CONTROL FOR BETA-PROVIDER DRIFT: this guard keys on resource
+# TYPE, not on live nested-block shape. `sentry_uptime_monitor` is a beta
+# resource (v0.15.0-beta2); a future provider bump could graduate it and add
+# a real array-of-blocks attribute (e.g. check_locations{}), which this
+# type-allow-list would NOT catch on its own. The compensating control is the
+# mandatory schema re-validation on every `terraform init -upgrade`, recorded
+# in the uptime-monitors.tf BETA STATUS comment — re-confirm `block_types: []`
+# there and extend the jq filter if that ever changes.
+#
 # Without this gate, a sentry-side expansion would silently bypass the
 # nested-block destroy guard (filter ships with literal `nested_deletes: 0`
 # as documented extension point). Closes #4419 review-finding user-impact F2.

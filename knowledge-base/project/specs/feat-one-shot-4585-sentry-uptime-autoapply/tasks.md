@@ -46,5 +46,5 @@ plan: knowledge-base/project/plans/2026-05-29-infra-extend-sentry-autoapply-to-u
 ## Phase 5 — Post-merge (automated by pipeline / ship — NO operator action)
 
 - [ ] 5.1 Confirm first auto-apply ran: `gh run list --workflow=apply-sentry-infra.yml --limit 1` + `gh run view <id> --log`. [AC10]
-- [ ] 5.2 API-GET probe (NOT dashboard): `GET /api/0/organizations/${SENTRY_ORG}/monitors/` greps for the 4 slugs `soleur-ai-apex`, `soleur-ai-www`, `soleur-ai-changelog-deep`, `soleur-ai-acme-carveout-probe`. (Needs `SENTRY_IAC_AUTH_TOKEN` from GH repo secret.) [AC11]
+- [ ] 5.2 Terraform-state probe (NOT dashboard; NOT the Crons `/monitors/` API — it excludes uptime monitors and would false-fail): post-apply `cd apps/web-platform/infra/sentry && terraform state list | grep -cE '^sentry_uptime_monitor\.'` == 4. (Needs `SENTRY_IAC_AUTH_TOKEN` + R2 backend creds; runnable in the workflow or locally.) [AC11]
 - [ ] 5.3 PR body: use `Ref #4585` + post-merge `gh issue close 4585` after AC11 green (the apply runs post-merge; do NOT `Closes #4585` which would auto-close at merge before the apply verifies — per `wg-use-closes-n-in-pr-body-not-title-to`).

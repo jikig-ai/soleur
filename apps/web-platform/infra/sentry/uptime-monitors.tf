@@ -18,13 +18,12 @@
 #      detailed comment on the soleur_acme_probe resource below.
 #
 # AUTO-APPLY NOTE: `.github/workflows/apply-sentry-infra.yml` auto-applies
-# `sentry_cron_monitor.*` resources ONLY (via explicit `-target=` flags).
-# `sentry_uptime_monitor.*` resources are NOT auto-applied — operator runs
-# `terraform apply` manually in this root after merge, same posture as
-# `sentry_issue_alert.*` (which uses an explicit import-then-apply flow per
-# issue-alerts.tf header). Extending auto-apply to uptime monitors is a clean
-# follow-up — see plan §Open Questions / Deferred Q2 and the follow-up issue
-# referenced in the PR body.
+# both `sentry_cron_monitor.*` and `sentry_uptime_monitor.*` resources (via
+# explicit `-target=` flags) on push-to-`main`. Uptime monitors were added to
+# the auto-apply allow-list in #4585 (previously operator-applied) — an edit
+# to this file now triggers the workflow and applies automatically. Only
+# `sentry_issue_alert.*` remains operator-applied (explicit import-then-apply
+# flow per issue-alerts.tf header).
 #
 # BETA STATUS: `sentry_uptime_monitor` is documented as beta in the provider
 # (v0.15.0-beta2 — see provider docs at

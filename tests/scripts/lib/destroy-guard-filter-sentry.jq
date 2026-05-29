@@ -13,9 +13,10 @@
 # (string). Removing schedule = removing the monitor = resource-level delete,
 # already caught by `resource_deletes`. `sentry_uptime_monitor` (added to
 # scope in #4585) ALSO exposes ZERO array-of-blocks — every attribute is
-# scalar (`url`, `interval_seconds`, `timeout_ms`, `downtime_threshold`,
-# `recovery_threshold`, and `assertion_json`, which is a string built by the
-# `provider::sentry::assertion(...)` function, NOT an HCL block). So
+# scalar (verified against the pinned provider schema: `block_types: []`).
+# Notably `assertion_json` is a string built by the
+# `provider::sentry::assertion(...)` function, NOT an HCL block, and `owner`
+# is a single-nested-attribute object, not an array-of-blocks. So
 # `nested_deletes: 0` remains correct for uptime monitors too; an
 # uptime-monitor removal is a resource-level delete caught by
 # `resource_deletes`. No `select(.type == "sentry_uptime_monitor")` clause

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for tests/scripts/lib/destroy-guard-filter-sentry.jq (used inline by
-# .github/workflows/apply-sentry-infra.yml "Terraform plan (cron monitors
-# only)" step). Closes #4419 (sibling of #4420 — the github-infra widening).
+# .github/workflows/apply-sentry-infra.yml "Terraform plan (cron + uptime
+# monitors)" step). Closes #4419 (sibling of #4420 — the github-infra widening).
 #
 # Deterministic; no network. Uses synthesized fixtures plus one captured
 # real `terraform show -json` baseline (redacted).
