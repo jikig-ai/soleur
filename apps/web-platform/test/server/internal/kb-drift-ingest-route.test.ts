@@ -2,21 +2,21 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createHmac } from "node:crypto";
 
 const {
-  mockInsert,
+  mockInsertDraftCard,
   mockLogger,
   mockSentryCaptureMessage,
   mockSentryCaptureException,
 } = vi.hoisted(() => ({
-  mockInsert: vi.fn(),
+  mockInsertDraftCard: vi.fn(),
   mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   mockSentryCaptureMessage: vi.fn(),
   mockSentryCaptureException: vi.fn(),
 }));
 
-vi.mock("@/lib/supabase/server", () => ({
-  createServiceClient: () => ({
-    from: () => ({ insert: mockInsert }),
-  }),
+// #4579: the route now writes through the shared insertDraftCard helper
+// (tenant-client, solo-pinned workspace_id) instead of createServiceClient.
+vi.mock("@/server/messages/insert-draft-card", () => ({
+  insertDraftCard: mockInsertDraftCard,
 }));
 
 vi.mock("@/server/logger", () => ({
@@ -33,7 +33,10 @@ import { POST } from "@/app/api/internal/kb-drift-ingest/route";
 
 const SECRET = "kb-drift-test-key";
 
-function makeRequest(body: object | string, opts: { signature?: string; omit?: boolean } = {}): Request {
+function makeRequest(
+  body: object | string,
+  opts: { signature?: string; omit?: boolean } = {},
+): Request {
   const raw = typeof body === "string" ? body : JSON.stringify(body);
   const headers = new Headers();
   if (!opts.omit) {
@@ -70,14 +73,14 @@ beforeEach(() => {
   vi.clearAllMocks();
   process.env.KB_DRIFT_INGEST_SIGNING_KEY = SECRET;
   process.env.KB_DRIFT_OPERATOR_FOUNDER_ID = "operator-founder-1";
-  mockInsert.mockResolvedValue({ error: null });
+  mockInsertDraftCard.mockResolvedValue({ status: "inserted", id: "row-1" });
 });
 
 describe("POST /api/internal/kb-drift-ingest — HMAC", () => {
   it("returns 401 on bad signature", async () => {
     const res = await POST(makeRequest(validPayload, { signature: "sha256=deadbeef" }));
     expect(res.status).toBe(401);
-    expect(mockInsert).not.toHaveBeenCalled();
+    expect(mockInsertDraftCard).not.toHaveBeenCalled();
   });
 
   it("returns 401 on missing signature", async () => {
@@ -119,39 +122,82 @@ describe("POST /api/internal/kb-drift-ingest — payload shape", () => {
   });
 });
 
-describe("POST /api/internal/kb-drift-ingest — dedup + insert", () => {
-  it("inserts each finding with the right shape", async () => {
+describe("POST /api/internal/kb-drift-ingest — digest + dedup", () => {
+  it("inserts ONE digest card (not one per finding) with a content-hash source_ref and action_class", async () => {
     const res = await POST(makeRequest(validPayload));
     expect(res.status).toBe(200);
-    expect(mockInsert).toHaveBeenCalledTimes(2);
-    expect(mockInsert).toHaveBeenCalledWith(
+    expect(mockInsertDraftCard).toHaveBeenCalledTimes(1);
+    const arg = mockInsertDraftCard.mock.calls[0][0];
+    expect(arg).toMatchObject({
+      founderId: "operator-founder-1",
+      source: "kb-drift",
+      owning_domain: "knowledge",
+      tier: "external_low_stakes",
+      urgency: "low",
+      trust_tier: "internal_infra_auto",
+      action_class: "knowledge.kb_drift",
+    });
+    expect(arg.source_ref).toMatch(/^digest-[0-9a-f]{64}$/); // full sha256, not truncated
+    expect(arg.draft_preview).toContain("2 KB-drift findings — review");
+    expect(arg.draft_preview).toContain("Broken link in knowledge-base/legal/foo.md");
+    const body = (await res.json()) as { inserted: number; deduped: number; total: number };
+    expect(body).toMatchObject({ inserted: 1, deduped: 0, total: 2 });
+  });
+
+  it("produces a STABLE source_ref for identical findings (idempotent dedup key)", async () => {
+    await POST(makeRequest(validPayload));
+    const ref1 = mockInsertDraftCard.mock.calls[0][0].source_ref;
+    mockInsertDraftCard.mockClear();
+    await POST(makeRequest(validPayload));
+    const ref2 = mockInsertDraftCard.mock.calls[0][0].source_ref;
+    expect(ref2).toBe(ref1);
+  });
+
+  it("maps helper dedup → deduped:1, inserted:0, and mirrors to Sentry", async () => {
+    mockInsertDraftCard.mockResolvedValueOnce({ status: "deduped" });
+    const res = await POST(makeRequest(validPayload));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { inserted: number; deduped: number; total: number };
+    expect(body).toMatchObject({ inserted: 0, deduped: 1, total: 2 });
+    expect(mockSentryCaptureMessage).toHaveBeenCalledWith(
+      "KB-drift digest deduped",
       expect.objectContaining({
-        user_id: "operator-founder-1",
-        source: "kb-drift",
-        source_ref: "link-deadbeef00000000",
-        owning_domain: "knowledge",
-        status: "draft",
-        urgency: "low",
-        trust_tier: "internal_infra_auto",
+        level: "info",
+        tags: { feature: "kb-drift-ingest", op: "dedup-skip" },
       }),
     );
   });
 
-  it("silently skips PG_UNIQUE_VIOLATION (idempotent re-runs)", async () => {
-    mockInsert
-      .mockResolvedValueOnce({ error: { code: "23505" } })
-      .mockResolvedValueOnce({ error: null });
-    const res = await POST(makeRequest(validPayload));
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { inserted: number; deduped: number; total: number };
-    expect(body.inserted).toBe(1);
-    expect(body.deduped).toBe(1);
-    expect(body.total).toBe(2);
-  });
-
-  it("returns 500 on non-conflict DB error", async () => {
-    mockInsert.mockResolvedValueOnce({ error: { code: "08006", message: "conn lost" } });
+  it("returns 500 (and does not crash) when the helper throws", async () => {
+    mockInsertDraftCard.mockRejectedValueOnce(new Error("insertDraftCard failed (08006): conn lost"));
     const res = await POST(makeRequest(validPayload));
     expect(res.status).toBe(500);
+  });
+
+  it("empty findings → no insert, 200 with all-zero counts", async () => {
+    const res = await POST(makeRequest({ findings: [], counts: { broken_link: 0, broken_anchor: 0 } }));
+    expect(res.status).toBe(200);
+    expect(mockInsertDraftCard).not.toHaveBeenCalled();
+    const body = (await res.json()) as { inserted: number; deduped: number; total: number };
+    expect(body).toMatchObject({ inserted: 0, deduped: 0, total: 0 });
+  });
+
+  it("strips the URL query string from a finding target before composing the preview", async () => {
+    const payload = {
+      findings: [
+        {
+          kind: "broken-link",
+          source_path: "docs/x.md",
+          target: "https://r2.example.com/asset.pdf?X-Amz-Signature=deadbeefcafef00ddeadbeefcafef00d&token=abc123",
+          source_ref: "link-1111111111111111",
+        },
+      ],
+      counts: { broken_link: 1, broken_anchor: 0 },
+    };
+    await POST(makeRequest(payload));
+    const arg = mockInsertDraftCard.mock.calls[0][0];
+    expect(arg.draft_preview).toContain("https://r2.example.com/asset.pdf");
+    expect(arg.draft_preview).not.toContain("X-Amz-Signature");
+    expect(arg.draft_preview).not.toContain("token=abc123");
   });
 });

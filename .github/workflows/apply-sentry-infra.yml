@@ -1,18 +1,21 @@
-# Auto-apply `sentry_cron_monitor` resources whenever a PR that touches
-# apps/web-platform/infra/sentry/cron-monitors.tf merges to main. Closes the
-# window between the per-workflow check-in steps shipping (Phase 4 of #3814)
-# and the monitors existing in Sentry. See:
+# Auto-apply `sentry_cron_monitor` and `sentry_uptime_monitor` resources
+# whenever a PR that touches apps/web-platform/infra/sentry/cron-monitors.tf
+# or apps/web-platform/infra/sentry/uptime-monitors.tf merges to main. Closes
+# the window between the per-workflow check-in steps shipping (Phase 4 of
+# #3814) and the monitors existing in Sentry. Uptime monitors were added to
+# the auto-apply allow-list in #4585 (previously operator-applied). See:
 #   knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md
 #
 # Authorization model: the PR merge IS the human authorization. Issue-alert
 # resources are excluded from this auto-apply (they are import-only per the
-# operator AC13 step in the plan); only cron-monitor changes trigger an apply.
+# operator AC13 step in the plan); only cron-monitor and uptime-monitor
+# changes trigger an apply.
 #
 # Kill switch: include `[skip-sentry-apply]` in the merge commit message to
 # skip auto-apply for that merge.
 #
 # Manual escape hatch: `workflow_dispatch` is kept for re-runs after a
-# transient failure or for ad-hoc applies (still scoped to cron monitors).
+# transient failure or for ad-hoc applies (scoped to cron + uptime monitors).
 #
 # Authentication divergence from apps/web-platform/infra/ root:
 #   - SENTRY_IAC_AUTH_TOKEN (the GitHub repo secret) is dedicated to this
@@ -30,13 +33,14 @@
 # through env vars before reaching any `run:` block. All action references
 # are SHA-pinned.
 
-name: Apply sentry infra (cron monitors)
+name: Apply sentry infra (cron + uptime monitors)
 
 on:
   push:
     branches: [main]
     paths:
       - "apps/web-platform/infra/sentry/cron-monitors.tf"
+      - "apps/web-platform/infra/sentry/uptime-monitors.tf"
       # Defense-in-depth: re-fire on filter mutations so a PR that mutates
       # the destroy-guard filter without touching infra still runs the
       # apply step against `main`'s captured baseline (#4419).
@@ -161,7 +165,7 @@ jobs:
           which jq >/dev/null 2>&1 || sudo apt-get install -y jq
           bash apps/web-platform/scripts/sentry-monitors-audit.sh
 
-      - name: Terraform plan (cron monitors only)
+      - name: Terraform plan (cron + uptime monitors)
         id: plan
         working-directory: ${{ env.INFRA_DIR }}
         env:
@@ -192,6 +196,10 @@ jobs:
             -target=sentry_cron_monitor.scheduled_competitive_analysis \
             -target=sentry_cron_monitor.scheduled_compound_promote \
             -target=sentry_cron_monitor.scheduled_stale_deferred_scope_outs \
+            -target=sentry_uptime_monitor.soleur_apex \
+            -target=sentry_uptime_monitor.soleur_www \
+            -target=sentry_uptime_monitor.soleur_changelog_deep \
+            -target=sentry_uptime_monitor.soleur_acme_probe \
             -no-color -input=false -out=tfplan
           rc=$?
           if [[ $rc -ne 0 ]]; then
@@ -236,7 +244,7 @@ jobs:
             exit 1
           fi
 
-      - name: Terraform apply (cron monitors only)
+      - name: Terraform apply (cron + uptime monitors)
         working-directory: ${{ env.INFRA_DIR }}
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
@@ -254,7 +262,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           {
-            echo "## Apply sentry infra (cron monitors)"
+            echo "## Apply sentry infra (cron + uptime monitors)"
             echo ""
             echo "**Trigger:** ${TRIGGER}"
             echo "**Merge SHA:** ${MERGE_SHA}"

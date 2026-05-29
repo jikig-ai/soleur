@@ -130,9 +130,41 @@ function KbDriftCard({
   draftPreview,
   urgency,
 }: TodayCardProps) {
+  // Digest cards (#4579) — one row summarizing N findings — are
+  // review/acknowledge only: they carry no single fixable target, so they
+  // render Dismiss (archive via the existing /discard route), never the
+  // per-finding spawn/send button. Legacy per-finding rows keep the spawn flow.
+  const isDigest = (sourceRef ?? "").startsWith("digest-");
   const label = (sourceRef ?? "").startsWith("link-") ? "Fix link" : "Update anchor";
   const { onSend, isPending, error, acknowledged, artifactUrl, degraded } =
     useActionSend({ messageId: id, denyReasonCopy: DENY_REASON_COPY });
+
+  const [archived, setArchived] = useState(false);
+  const [dismissError, setDismissError] = useState<string | null>(null);
+  const [isDismissing, startDismiss] = useTransition();
+
+  function onDismiss() {
+    setArchived(true);
+    setDismissError(null);
+    startDismiss(async () => {
+      try {
+        const res = await fetch(`/api/dashboard/today/${id}/discard`, {
+          method: "POST",
+        });
+        if (res.status !== 200) {
+          setArchived(false);
+          setDismissError(`Dismiss failed (${res.status})`);
+        }
+      } catch {
+        setArchived(false);
+        setDismissError("Dismiss failed — network error");
+      }
+    });
+  }
+
+  if (archived) return null;
+
+  const shownError = isDigest ? dismissError : error;
 
   return (
     <article
@@ -148,14 +180,31 @@ function KbDriftCard({
         </span>
         <span data-urgency-label={urgency}>{urgency}</span>
       </header>
+      {/* Intentional: no render-time redactGithubSourcedText here (unlike
+          GitHubCard). KB-drift previews are redacted + URL-query-stripped at
+          INSERT (insert-draft-card.ts + route.ts) and contain operator-internal
+          doc paths the operator owns — not third-party PII. The "never drop
+          render-time" contract in redaction-allowlist.ts targets github-sourced
+          third-party content; it does not apply to insert-redacted self-owned rows. */}
       <p className="mb-3 whitespace-pre-line text-sm text-soleur-text-primary">{draftPreview}</p>
-      {error ? (
+      {shownError ? (
         <p className="mb-2 text-xs text-red-600" role="alert">
-          {error}
+          {shownError}
         </p>
       ) : null}
       <div className="flex flex-wrap gap-2">
-        {acknowledged ? (
+        {isDigest ? (
+          <button
+            type="button"
+            onClick={onDismiss}
+            disabled={isDismissing}
+            data-action="kb-drift-dismiss"
+            className={`${BASE_BUTTON} border border-soleur-border-default bg-soleur-bg-surface-2 text-soleur-text-secondary`}
+            aria-label="Dismiss digest"
+          >
+            Dismiss
+          </button>
+        ) : acknowledged ? (
           degraded ? (
             <AcknowledgedPill artifactUrl={artifactUrl} degraded={degraded} />
           ) : null
@@ -172,7 +221,7 @@ function KbDriftCard({
           </button>
         )}
       </div>
-      {acknowledged && !degraded ? (
+      {!isDigest && acknowledged && !degraded ? (
         <LeaderLoopStatus messageId={id} initialArtifactUrl={artifactUrl} />
       ) : null}
     </article>

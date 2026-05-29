@@ -82,8 +82,10 @@ vi.mock("@/server/session-sync", async (importOriginal) => {
 });
 
 const reportSilentFallbackSpy = vi.fn();
+const warnSilentFallbackSpy = vi.fn();
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
+  warnSilentFallback: warnSilentFallbackSpy,
   hashUserId: (s: string) => `hash-${s}`,
 }));
 
@@ -136,7 +138,7 @@ function baseData() {
     defaultBranch: "main",
     headSha: "abc1234567890abcdef1234567890abcdef12345",
     beforeSha: "def4567890abcdef1234567890abcdef12345678",
-    fullName: "jikig-ai/soleur",
+    fullName: "acme-co/widget",
     pushReceivedAt: 1_700_000_000_000,
   };
 }
@@ -152,6 +154,7 @@ beforeEach(() => {
   syncWorkspaceSpy.mockReset();
   appendKbSyncRowSpy.mockClear();
   reportSilentFallbackSpy.mockReset();
+  warnSilentFallbackSpy.mockReset();
   vi.resetModules();
   process.env.INNGEST_SIGNING_KEY = "signkey-test-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   process.env.INNGEST_EVENT_KEY = "evtkey-test-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -226,15 +229,15 @@ describe("reconcile — slug→URL parity (AC7)", () => {
 
     const handler = await importHandler();
     await handler({
-      event: makeEvent({ fullName: "Jikig-AI/Soleur" }),
+      event: makeEvent({ fullName: "Acme-Co/Widget" }),
       step: makeStep(),
       logger,
     });
 
     // The match key is the composed + normalized URL (host lowercased,
     // path case preserved) — never the bare slug.
-    expect(repoUrlFilterSpy).toHaveBeenCalledWith("https://github.com/Jikig-AI/Soleur");
-    expect(repoUrlFilterSpy).not.toHaveBeenCalledWith("Jikig-AI/Soleur");
+    expect(repoUrlFilterSpy).toHaveBeenCalledWith("https://github.com/Acme-Co/Widget");
+    expect(repoUrlFilterSpy).not.toHaveBeenCalledWith("Acme-Co/Widget");
   });
 });
 
@@ -251,24 +254,32 @@ describe("reconcile — schema gate (v=1 drains)", () => {
     expect(result.ok).toBe(false);
     expect(result.reason).toMatch(/schema_v=1/);
     expect(syncWorkspaceSpy).not.toHaveBeenCalled();
+    // Expected drain of an in-flight v=1 envelope -> observable at warning
+    // level (previously returned silently with no Sentry mirror).
+    expect(warnSilentFallbackSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "deadletter-schema-version" }),
+    );
   });
 });
 
 describe("reconcile — no workspace match", () => {
-  it("skips + Sentry-mirrors when no workspace is connected to the repo", async () => {
+  it("skips at WARNING level (not error) when no workspace is connected to the repo", async () => {
     WORKSPACE_ROWS = [];
     const handler = await importHandler();
     const result = await handler({ event: makeEvent(), step: makeStep(), logger });
 
     expect(result).toEqual({ ok: false, reason: "no-workspace-match" });
     expect(syncWorkspaceSpy).not.toHaveBeenCalled();
-    expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
+    // Expected, benign outcome -> warning-level mirror, NOT an error-level event.
+    expect(warnSilentFallbackSpy).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         feature: "workspace-reconcile-push",
         op: "skip-no-workspace-match",
       }),
     );
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
   });
 });
 
