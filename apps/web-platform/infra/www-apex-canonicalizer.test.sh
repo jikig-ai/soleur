@@ -60,11 +60,18 @@ echo "www-apex-canonicalizer drift-guard"
 # A1: docs/CNAME is the apex (catches canonical-direction inversion).
 # If this flips to www.soleur.ai, GitHub Pages would 301 apex→www and invert
 # the canonical direction with zero TF drift — this is the load-bearing check.
-cname="$(tr -d '[:space:]' <"$CNAME_FILE")"
-if [[ "$cname" == "soleur.ai" ]]; then
-  pass "docs/CNAME is soleur.ai (apex, not www)"
+if [[ ! -f "$CNAME_FILE" ]]; then
+  # A missing CNAME file is itself a canonical-direction regression: without it
+  # GitHub Pages serves no custom domain and the www→apex 301 stops. Emit a
+  # clean FAIL rather than letting `set -e` abort on the redirection below.
+  fail "docs/CNAME exists at plugins/soleur/docs/CNAME"
 else
-  fail "docs/CNAME is soleur.ai (apex, not www) — got '$cname'"
+  cname="$(tr -d '[:space:]' <"$CNAME_FILE")"
+  if [[ "$cname" == "soleur.ai" ]]; then
+    pass "docs/CNAME is soleur.ai (apex, not www)"
+  else
+    fail "docs/CNAME is soleur.ai (apex, not www) — got '$cname'"
+  fi
 fi
 
 # A2: www CNAME → jikig-ai.github.io, proxied (so www traffic reaches GH Pages).
