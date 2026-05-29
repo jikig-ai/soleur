@@ -233,6 +233,157 @@ t_anchor_fragment_not_flagged() {
   rm -rf "$repo"
 }
 
+# ---- broadened colour-literal detection (review P1/P2) ----
+
+t_svg_fill_attr_blocked() {
+  local repo; repo=$(_seed_repo)
+  _stage "$repo" "apps/web-platform/components/dashboard/icon.tsx" \
+'export const I = () => <svg><path fill="#2563eb" /></svg>;'
+  local out; out=$(_run "$repo" "Bash" "git commit -m 'icon'")
+  [[ "$(_decision "$out")" == "deny" ]] \
+    && _report "T15 SVG fill=\"#hex\" attribute -> deny" ok \
+    || _report "T15 SVG fill attr -> deny" fail "$(_decision "$out")"
+  rm -rf "$repo"
+}
+
+t_svg_url_ref_not_flagged() {
+  local repo; repo=$(_seed_repo)
+  # fill="url(#gradientId)" is a paint reference, not a colour literal — even
+  # when the id is hex-shaped — and must not false-positive.
+  _stage "$repo" "apps/web-platform/components/dashboard/icon.tsx" \
+'export const I = () => <svg><path fill="url(#abc123)" /></svg>;'
+  local out; out=$(_run "$repo" "Bash" "git commit -m 'icon'")
+  [[ "$(_decision "$out")" == "allow" ]] \
+    && _report "T16 fill=\"url(#abc123)\" paint ref not flagged -> allow" ok \
+    || _report "T16 url() paint ref -> allow" fail "$(_decision "$out") / $(_reason "$out")"
+  rm -rf "$repo"
+}
+
+t_border_shorthand_hex_blocked() {
+  local repo; repo=$(_seed_repo)
+  _stage "$repo" "apps/web-platform/components/dashboard/box.tsx" \
+'export const B = () => <div style={{ border: "1px solid #2563eb" }} />;'
+  local out; out=$(_run "$repo" "Bash" "git commit -m 'box'")
+  [[ "$(_decision "$out")" == "deny" ]] \
+    && _report "T17 'border: 1px solid #hex' (hex not adjacent to colon) -> deny" ok \
+    || _report "T17 border shorthand hex -> deny" fail "$(_decision "$out")"
+  rm -rf "$repo"
+}
+
+t_gradient_offbrand_blocked() {
+  local repo; repo=$(_seed_repo)
+  _stage "$repo" "apps/web-platform/components/dashboard/hero.tsx" \
+'export const H = () => <div style={{ background: "linear-gradient(135deg, #2563eb, #1d4ed8)" }} />;'
+  local out; out=$(_run "$repo" "Bash" "git commit -m 'hero'")
+  [[ "$(_decision "$out")" == "deny" ]] \
+    && _report "T18 linear-gradient(#hex, #hex) -> deny" ok \
+    || _report "T18 gradient hex -> deny" fail "$(_decision "$out")"
+  rm -rf "$repo"
+}
+
+t_four_digit_bracket_blocked() {
+  local repo; repo=$(_seed_repo)
+  _stage "$repo" "apps/web-platform/components/dashboard/box.tsx" \
+'export const B = () => <div className="bg-[#1234]" />;'
+  local out; out=$(_run "$repo" "Bash" "git commit -m 'box'")
+  [[ "$(_decision "$out")" == "deny" ]] \
+    && _report "T19 4-digit Tailwind [#rgba] -> deny" ok \
+    || _report "T19 4-digit bracket -> deny" fail "$(_decision "$out")"
+  rm -rf "$repo"
+}
+
+# ---- diff-base selection (review P2): flag-like text in the message must not
+#      flip the base to HEAD and deny a clean-staged commit ----
+
+t_message_flaglike_text_no_false_deny() {
+  local repo; repo=$(_seed_repo)
+  # Stage a CLEAN (tokenized) component; leave an UNSTAGED off-brand edit in a
+  # different tracked file. A plain commit must only see the clean staged file.
+  ( cd "$repo"
+    mkdir -p apps/web-platform/components/dashboard
+    printf '%s\n' 'export const A = () => <div className="bg-brand-accent-gold-fill" />;' \
+      > apps/web-platform/components/dashboard/a.tsx
+    printf '%s\n' 'export const B = () => <div className="bg-brand-accent-gold-fill" />;' \
+      > apps/web-platform/components/dashboard/b.tsx
+    git add apps/web-platform/components/dashboard/a.tsx apps/web-platform/components/dashboard/b.tsx
+    git commit -q -m "seed components"
+    # now: clean staged edit to a.tsx, unstaged off-brand edit to b.tsx
+    printf '%s\n' 'export const A = () => <div className="bg-brand-accent-gold-fill p-2" />;' \
+      > apps/web-platform/components/dashboard/a.tsx
+    printf '%s\n' 'export const B = () => <div className="bg-[#2563eb]" />;' \
+      > apps/web-platform/components/dashboard/b.tsx
+    git add apps/web-platform/components/dashboard/a.tsx )
+  local out; out=$(_run "$repo" "Bash" "git commit -m 'fix -a flag handling'")
+  [[ "$(_decision "$out")" == "allow" ]] \
+    && _report "T20 '-a' inside -m message does not flip base (no false deny)" ok \
+    || _report "T20 message flag-like text -> allow" fail "$(_decision "$out") / $(_reason "$out")"
+  rm -rf "$repo"
+}
+
+t_real_dash_a_scans_unstaged() {
+  local repo; repo=$(_seed_repo)
+  ( cd "$repo"
+    mkdir -p apps/web-platform/components/dashboard
+    printf '%s\n' 'export const B = () => <div className="bg-brand-accent-gold-fill" />;' \
+      > apps/web-platform/components/dashboard/b.tsx
+    git add apps/web-platform/components/dashboard/b.tsx
+    git commit -q -m "seed"
+    # off-brand edit, NOT staged — `git commit -a` will commit it
+    printf '%s\n' 'export const B = () => <div className="bg-[#2563eb]" />;' \
+      > apps/web-platform/components/dashboard/b.tsx )
+  local out; out=$(_run "$repo" "Bash" "git commit -a -m 'tweak'")
+  [[ "$(_decision "$out")" == "deny" ]] \
+    && _report "T21 'git commit -a' scans unstaged tracked off-brand edit -> deny" ok \
+    || _report "T21 real -a scans unstaged -> deny" fail "$(_decision "$out")"
+  rm -rf "$repo"
+}
+
+# ---- palette integrity (review P1): an unstaged worktree token edit must NOT
+#      whitelist an off-brand email colour ----
+
+t_palette_poison_via_unstaged_worktree() {
+  local repo; repo=$(_seed_repo)
+  # Poison globals.css in the WORKTREE only (do not stage it), declaring the
+  # off-brand colour as a token. The email check must still use the committed
+  # palette and block the off-brand hex.
+  ( cd "$repo" && printf '  --sneaky: #2563eb;\n' >> apps/web-platform/app/globals.css )
+  _stage "$repo" "apps/web-platform/server/notifications.ts" \
+'const x = { color: "#2563eb" };'
+  local out; out=$(_run "$repo" "Bash" "git commit -m 'email'")
+  [[ "$(_decision "$out")" == "deny" ]] \
+    && _report "T22 unstaged worktree token poison does NOT whitelist email hex -> deny" ok \
+    || _report "T22 palette poison -> deny" fail "$(_decision "$out") / $(_reason "$out")"
+  rm -rf "$repo"
+}
+
+# ---- generalisation (review P3): single-line / minified token CSS still
+#      yields a palette so the email off-brand check works ----
+
+t_single_line_token_css_palette() {
+  local tmp; tmp=$(mktemp -d)
+  ( cd "$tmp"
+    git init -q -b main
+    git config user.email t@t; git config user.name t
+    mkdir -p apps/web-platform/server design
+    # Token sink is a non-globals .css on a single line (minified shape).
+    printf '%s\n' ':root { --brand-gold: #c9a962; --brand-ink: #1a1612; }' > design/theme.css
+    git add design/theme.css
+    git commit -q -m "seed minified tokens" )
+  # brand hex in email -> allow (palette discovered from single-line CSS)
+  _stage "$tmp" "apps/web-platform/server/notifications.ts" 'const a = { color: "#c9a962" };'
+  local out1; out1=$(_run "$tmp" "Bash" "git commit -m e1")
+  # off-brand hex in email -> deny
+  ( cd "$tmp" && git reset -q apps/web-platform/server/notifications.ts && rm -f apps/web-platform/server/notifications.ts )
+  _stage "$tmp" "apps/web-platform/server/notifications.ts" 'const a = { color: "#2563eb" };'
+  local out2; out2=$(_run "$tmp" "Bash" "git commit -m e2")
+  if [[ "$(_decision "$out1")" == "allow" && "$(_decision "$out2")" == "deny" ]]; then
+    _report "T23 single-line token CSS -> palette discovered (brand allow / off-brand deny)" ok
+  else
+    _report "T23 single-line token CSS palette" fail "brand=$(_decision "$out1") offbrand=$(_decision "$out2")"
+  fi
+  rm -rf "$tmp"
+}
+
 t_non_bash_tool
 t_bash_non_commit
 t_substring_not_match
@@ -247,6 +398,15 @@ t_email_offbrand_hex_blocked
 t_chained_commit_triggers
 t_amend_triggers
 t_anchor_fragment_not_flagged
+t_svg_fill_attr_blocked
+t_svg_url_ref_not_flagged
+t_border_shorthand_hex_blocked
+t_gradient_offbrand_blocked
+t_four_digit_bracket_blocked
+t_message_flaglike_text_no_false_deny
+t_real_dash_a_scans_unstaged
+t_palette_poison_via_unstaged_worktree
+t_single_line_token_css_palette
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

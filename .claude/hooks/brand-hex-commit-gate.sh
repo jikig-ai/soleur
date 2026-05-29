@@ -109,7 +109,10 @@ cd "$repo_root" || allow
 # does not match (it starts with `--` so the `-[A-Za-z]*a` short-flag form
 # cannot apply, and it is not `--all`).
 commit_args="${command#*git commit}"
-if echo "$commit_args" | grep -qE '(^|[[:space:]])(-[A-Za-z]*a[A-Za-z]*|--all)([[:space:]]|=|$)'; then
+# Strip quoted argument values (e.g. -m '… -a …') first so flag-like text inside
+# the commit message cannot flip the diff base and cause a false deny.
+flag_scan="$(printf '%s' "$commit_args" | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g")"
+if echo "$flag_scan" | grep -qE '(^|[[:space:]])(-[A-Za-z]*a[A-Za-z]*|--all)([[:space:]]|=|$)'; then
   NAME_REF="HEAD"
 else
   NAME_REF="--cached"
@@ -129,8 +132,22 @@ _file_content() {
   if [ -f "$f" ]; then cat -- "$f"; else git show ":$f" 2>/dev/null || true; fi
 }
 
+# Content of the file AS IT WILL BE COMMITTED: the index blob for a normal
+# commit (so a poisoned-but-unstaged worktree edit cannot whitelist colours),
+# the worktree for `git commit -a` (where the worktree IS what gets committed).
+_committed_content() {
+  local f="$1"
+  if [ "$NAME_REF" = "--cached" ]; then
+    git show ":$f" 2>/dev/null || true
+  else
+    if [ -f "$f" ]; then cat -- "$f"; else git show "HEAD:$f" 2>/dev/null || true; fi
+  fi
+}
+
 # A .css file is a token-definition file (exempt) if its basename is the
 # conventional token sink OR it declares custom properties with hex values.
+# The custom-property probe is intentionally NOT line-anchored so single-line /
+# minified CSS (`:root { --x: #hex; }`) is still recognised.
 is_token_def() {
   local f="$1" base; base="$(basename -- "$f")"
   case "$base" in
@@ -139,7 +156,7 @@ is_token_def() {
   esac
   case "$f" in
     *.css)
-      _file_content "$f" | grep -qE '^[[:space:]]*--[A-Za-z0-9_-]+[[:space:]]*:[[:space:]]*#[0-9a-fA-F]{3,8}' && return 0
+      _committed_content "$f" | grep -qE -- '--[A-Za-z0-9_-]+[[:space:]]*:[[:space:]]*#[0-9a-fA-F]{3,8}' && return 0
       ;;
   esac
   return 1
@@ -173,16 +190,28 @@ build_palette() {
       hex="$(norm_hex "$hex")"
       PALETTE["$hex"]=1
       [ -n "${PALETTE_NAME[$hex]:-}" ] || PALETTE_NAME["$hex"]="$name"
-    done < <(_file_content "$f" | grep -oE '^[[:space:]]*--[A-Za-z0-9_-]+[[:space:]]*:[[:space:]]*#[0-9a-fA-F]{3,8}')
+    done < <(_committed_content "$f" | grep -oE -- '--[A-Za-z0-9_-]+[[:space:]]*:[[:space:]]*#[0-9a-fA-F]{3,8}')
   done < <(git ls-files -- '*.css' 2>/dev/null)
 }
 
-# Colour-literal segments: Tailwind arbitrary value `[#hex]` OR an inline
-# style/CSS declaration `(<colour-prop>...): #hex` (optionally quoted, for JS
-# object literals). Anchoring on these two shapes avoids flagging `href="#abc"`
-# anchor fragments and non-colour hex tokens.
+# Colour-literal segments. Four shapes, all anchored on a colour-relevant
+# token so `href="#abc"` anchor fragments, `url(#gradient-id)` SVG refs, and
+# non-colour hex are NOT matched:
+#   1. Tailwind arbitrary value `[#hex]` (3-8 hex digits → covers #rgb, #rgba,
+#      #rrggbb, #rrggbbaa).
+#   2. url-SAFE colour props (color/border/outline/shadows/…) with the hex
+#      ANYWHERE in the value, bounded to the declaration (no `;{}`): catches
+#      `border: 1px solid #hex`, `box-shadow: 0 0 4px #hex`, `color: #hex`.
+#   3. url-PRONE props (background/fill/stroke/…) with the hex DIRECTLY after
+#      the `:`/`=` separator (optionally quoted): catches `fill="#hex"` and
+#      `background: #hex` but NOT `fill="url(#ref)"` / `background: url(#id)`.
+#   4. gradient functions with a hex argument: `linear-gradient(…, #hex …)`.
+# Both `:` (CSS / JS object) and `=` (JSX/SVG attribute) separators are matched.
 q="\"'"
-COLOR_RE="\\[#[0-9a-fA-F]{3}\\]|\\[#[0-9a-fA-F]{6}\\]|\\[#[0-9a-fA-F]{8}\\]|(background|color|border|fill|stroke|outline)[A-Za-z-]*[[:space:]]*:[[:space:]]*[$q]?#[0-9a-fA-F]{3,8}"
+COLOR_RE="\\[#[0-9a-fA-F]{3,8}\\]"
+COLOR_RE="$COLOR_RE|(color|border|outline|box-shadow|text-shadow|boxShadow|textShadow|caret-color|accent-color|text-decoration-color|column-rule|outlineColor|borderColor)[A-Za-z-]*[[:space:]]*[:=][^;{}]*#[0-9a-fA-F]{3,8}"
+COLOR_RE="$COLOR_RE|(background|backgroundColor|fill|stroke|flood-color|floodColor|lighting-color|stop-color|stopColor)[A-Za-z-]*[[:space:]]*[:=][[:space:]]*[$q]?#[0-9a-fA-F]{3,8}"
+COLOR_RE="$COLOR_RE|(linear-gradient|radial-gradient|conic-gradient)\\([^;{}]*#[0-9a-fA-F]{3,8}"
 
 findings=()
 
@@ -209,29 +238,32 @@ for f in "${changed_files[@]}"; do
     [ -n "$segs" ] || continue
     while IFS= read -r seg; do
       [ -n "$seg" ] || continue
-      hexraw="$(printf '%s' "$seg" | grep -oE '#[0-9a-fA-F]{3,8}' | head -1)"
-      [ -n "$hexraw" ] || continue
-      hex="$(norm_hex "$hexraw")"
-      if [ "$klass" = "email" ]; then
-        # Email exception: literal hex allowed only if it is a brand-palette
-        # colour. Fail open if no palette could be discovered.
-        if [ "${#PALETTE[@]}" -eq 0 ]; then
-          continue
-        fi
-        if [ -n "${PALETTE[$hex]:-}" ]; then
-          continue
-        fi
-        findings+=("$f:$lno (email, off-brand $hex)")
-      else
-        # Component/page/docs: literal colour is never allowed — must use a
-        # token. Name the matching brand token in the remediation if known.
-        tok="${PALETTE_NAME[$hex]:-}"
-        if [ -n "$tok" ]; then
-          findings+=("$f:$lno (component $hex; use token $tok)")
+      # A segment may carry more than one hex (e.g. a two-stop gradient);
+      # classify every hex it contains, not just the first.
+      while IFS= read -r hexraw; do
+        [ -n "$hexraw" ] || continue
+        hex="$(norm_hex "$hexraw")"
+        if [ "$klass" = "email" ]; then
+          # Email exception: literal hex allowed only if it is a brand-palette
+          # colour. Fail open if no palette could be discovered.
+          if [ "${#PALETTE[@]}" -eq 0 ]; then
+            continue
+          fi
+          if [ -n "${PALETTE[$hex]:-}" ]; then
+            continue
+          fi
+          findings+=("$f:$lno (email, off-brand $hex)")
         else
-          findings+=("$f:$lno (component $hex; use a design token)")
+          # Component/page/docs: literal colour is never allowed — must use a
+          # token. Name the matching brand token in the remediation if known.
+          tok="${PALETTE_NAME[$hex]:-}"
+          if [ -n "$tok" ]; then
+            findings+=("$f:$lno (component $hex; use token $tok)")
+          else
+            findings+=("$f:$lno (component $hex; use a design token)")
+          fi
         fi
-      fi
+      done < <(printf '%s' "$seg" | grep -oE '#[0-9a-fA-F]{3,8}')
     done <<< "$segs"
   done < <(git diff "$NAME_REF" -U0 --no-color -- "$f" 2>/dev/null | awk '
     /^@@/      { if (match($0, /\+[0-9]+/)) { ln = substr($0, RSTART+1, RLENGTH-1) + 0 } ; next }
