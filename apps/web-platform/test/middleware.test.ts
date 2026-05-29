@@ -31,6 +31,14 @@ describe("middleware path routing", () => {
       expect(isPublicPath("/api/inngest")).toBe(true);
     });
 
+    test("/api/internal/kb-drift-ingest is public (HMAC-gated by route, not Supabase)", () => {
+      // route.ts:97 verifies KB_DRIFT_INGEST_SIGNING_KEY HMAC before any DB write.
+      // The nightly KB-drift walker cron carries no session cookie, so Supabase
+      // middleware would 307→/login and the HMAC gate would never run, failing
+      // the workflow's 2xx assertion. Same regression class as #4017 (/api/inngest).
+      expect(isPublicPath("/api/internal/kb-drift-ingest")).toBe(true);
+    });
+
     test("public path sub-routes are allowed", () => {
       expect(isPublicPath("/api/webhooks/stripe")).toBe(true);
       expect(isPublicPath("/callback/")).toBe(true);
@@ -75,6 +83,10 @@ describe("middleware path routing", () => {
       expect(isPublicPath("/callback-admin")).toBe(false);
       expect(isPublicPath("/api/webhooks-internal")).toBe(false);
       expect(isPublicPath("/ws-debug")).toBe(false);
+      // The narrow /api/internal/kb-drift-ingest entry must NOT session-bypass
+      // a bare /api/internal or any sibling/future internal route (#4017 class).
+      expect(isPublicPath("/api/internal")).toBe(false);
+      expect(isPublicPath("/api/internal/other-future-route")).toBe(false);
     });
 
     test("paths that share a prefix with T&C exempt paths are NOT exempt", () => {
