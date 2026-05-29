@@ -67,9 +67,10 @@ is still gated on a paper-signature consent document.
 ## Technical Requirements
 
 - **TR1** — Gate implemented as an `AND EXISTS(...)` clause inside `resolve_byok_key_owner`
-  (`CREATE OR REPLACE`, mig 075), preserving the atomic-MVCC TOCTOU guarantee (064 Decision #8);
+  (`CREATE OR REPLACE`, mig **083**), preserving the atomic-MVCC TOCTOU guarantee (064 Decision #8);
   re-assert REVOKE/GRANT and run a `pg_default_acl` / default-privileges audit. [Decision #13]
-- **TR2** — `byok_delegation_withdrawals` WORM table with its own no-UPDATE trigger + Art. 17
+  (Plan reconciliation 2026-05-29: highest migration is 082; brainstorm's "075" superseded.)
+- **TR2** — `byok_delegation_withdrawals` WORM table (mig **084**) with its own no-UPDATE trigger + Art. 17
   anonymise RPC, mirroring 044/074; pin `search_path = public, pg_temp` on all DEFINER fns. [Decision #13]
 - **TR3** — The 5 lease call sites (agent-runner.ts:882/2401, cc-dispatcher.ts:890,
   cfo-on-payment-failed.ts:199, github-on-event.ts:208) require no change; add a sentinel-sweep
