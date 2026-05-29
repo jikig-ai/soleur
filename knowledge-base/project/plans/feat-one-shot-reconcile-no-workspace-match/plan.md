@@ -4,7 +4,7 @@ type: fix
 lane: single-domain
 brand_survival_threshold: none
 date: 2026-05-29
-related_sentry: github-c8bb0ef6-5b4b-11f1-9e36-15b1cdbe4fa2
+related_sentry: "Sentry event github-c8bb0ef6 (2026-05-29, web-platform)"
 status: implemented
 ---
 
