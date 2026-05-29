@@ -26,7 +26,7 @@ date: 2026-05-29
 ## Phase 2 — GREEN: add normalizeAppPrivateKey + route both factories
 - [ ] 2.1 Add `createPrivateKey` import.
 - [ ] 2.2 Add `normalizeAppPrivateKey(raw)` helper (expand `\n` → `createPrivateKey().export({type:"pkcs8",format:"pem"})`).
-- [ ] 2.3 Wrap BOTH `new App({ privateKey })` sites (`attempt()` + `createAppJwtOctokit`) in `normalizeAppPrivateKey(readEnv(...))`.
+- [ ] 2.3 Wrap BOTH `new App({ privateKey })` sites (`probe-octokit.ts:117` `attempt()` + `:192` `createAppJwtOctokit`) in `normalizeAppPrivateKey(readEnv(...))`.
 - [ ] 2.4 Run `vitest run test/server/github/` GREEN.
 
 ## Phase 3 — REFACTOR + typecheck + scope guard

@@ -15,6 +15,24 @@ prior_attempts:
 
 # fix: probe-octokit App-JWT decode — canonicalize PEM to PKCS#8 before @octokit/app 🐛
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-29
+**Sections enhanced:** Root Cause (primary-source library verification), Implementation Phases (exact line refs), Risks & Precedent-Diff (Phase 4.4), gate verification (4.6/4.7/4.8).
+**Hard gates passed:** 4.6 User-Brand Impact (threshold `none` + sensitive-path scope-out reason present), 4.7 Observability (5-field schema, no-SSH discoverability), 4.8 PAT-shaped variable (no matches) — all PASS.
+
+### Key Improvements
+1. **Root cause verified against the published library source**, not memory: `universal-github-app-jwt@2.2.2` `lib/get-token.js` + `lib/utils.js` + `lib/crypto-node.js` (fetched from the npm tarball; package not vendored in this worktree). The `getDERfromPEM` `slice(1,-1)`/`atob` extraction and the Web-Crypto `importKey("pkcs8", …)` PKCS#1-rejection are the two confirmed fragilities. Verbatim source quoted in Root Cause.
+2. **The framing's leading hypothesis (`\n`-normalization divergence) was falsified as the sole cause** — the lib already does `privateKey.replace(/\\n/g,'\n')` (index.js, verified). The real fix is PKCS#8-canonicalization, which subsumes `\n`-expansion.
+3. **Blast radius widened correctly:** `createProbeOctokit` feeds `cron-bug-fixer` (4 sites), `_cron-shared`, and is referenced by roadmap/strategy crons — the shared-factory fix covers all of them.
+4. **Exact line refs verified:** `new App(` at `probe-octokit.ts:117` and `:192` (plan corrected from ~118/~194).
+5. **Precedent-diff (Phase 4.4):** NO existing `createPrivateKey().export({type:"pkcs8"})` precedent in `server/` — the canonicalization pattern is NOVEL for this repo (the sibling `github-app.ts` uses `createSign` directly, never `createPrivateKey().export()`). Flagged for reviewer scrutiny.
+
+### New Considerations Discovered
+- All cited commits (`c02cd36e`/#4568, `c43da45b`/#4565) verified as ancestors of HEAD with matching titles (`gh`/`git` live).
+- Observability anchors verified live: cron `{ cron: "0 * * * *" }` at `cron-oauth-probe.ts:698`; `sentry_cron_monitor.scheduled_oauth_probe` (slug `scheduled-oauth-probe`) at `infra/sentry/cron-monitors.tf:65-68`.
+- Verify-the-negative: the "private key never logged/captured" claim CONFIRMED — `grep` of `probe-octokit.ts` shows no `log.`/`extra`/`capture` reference to `privateKey`/`PRIVATE_KEY`.
+
 ## Overview
 
 The OAuth-probe Inngest cron (`cron-oauth-probe`) fails in production with
@@ -196,8 +214,8 @@ Edit `apps/web-platform/server/github/probe-octokit.ts`:
       }
       ```
 - [ ] Replace BOTH `new App({ appId: readEnv(APP_ID_ENV), privateKey: readEnv(PRIVATE_KEY_ENV) })` sites
-      (the `attempt()` closure at ~line 118 and `createAppJwtOctokit` at ~line 194) with
-      `privateKey: normalizeAppPrivateKey(readEnv(PRIVATE_KEY_ENV))`.
+      (the `attempt()` closure at `probe-octokit.ts:117` and `createAppJwtOctokit` at `probe-octokit.ts:192`
+      — verified exact line refs) with `privateKey: normalizeAppPrivateKey(readEnv(PRIVATE_KEY_ENV))`.
 - [ ] Run suite GREEN:
       `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/github/`.
 
@@ -325,6 +343,27 @@ None — checked against the `## Files to Edit` list below (no open code-review 
 
 - (optional) `apps/web-platform/test/server/github/probe-octokit-pem.test.ts` — only if the existing
   retry file's `@octokit/app` mock harness makes pure-function key tests awkward.
+
+## Risks & Mitigations (Precedent-Diff — Phase 4.4)
+
+**Precedent status: NO repo precedent; the pattern is NOVEL.** `git grep -n "createPrivateKey" apps/web-platform/server`
+returns zero — no code in `server/` currently uses `crypto.createPrivateKey(...).export({type:"pkcs8",format:"pem"})`.
+The sibling working signer `server/github-app.ts` uses `crypto.createSign("RSA-SHA256")` with the PEM passed
+directly to `signer.sign(getPrivateKey())` — it relies on `createSign` accepting either PKCS#1 or PKCS#8 and
+never re-exports the key. So this PR introduces a new (small, stdlib-only) canonicalization primitive.
+Reviewers should scrutinize:
+
+- **Risk: `createPrivateKey` throws on a genuinely malformed key.** Mitigation: that is the *desired* behavior —
+  a malformed key should fail loudly at factory-construction time inside the existing retry/diagnostic catch
+  (#4568), not produce a silently-corrupt JWT. The Phase 1 "empty/whitespace throws" test plus the existing
+  `readEnv` guard cover the unset case; a malformed-but-present key throwing a clear `crypto` error is strictly
+  better than GitHub's opaque "could not be decoded".
+- **Risk: passphrase-protected keys.** GitHub App keys are unencrypted PKCS#1/#8; `createPrivateKey(string)`
+  handles both. If a future operator stored an encrypted key, `createPrivateKey` would throw `bad decrypt` —
+  again, loud and correct. No passphrase handling is in scope (the key has never been encrypted).
+- **Risk: lib version drift.** If `universal-github-app-jwt` is bumped past 2.2.2 and hardens `getDERfromPEM`,
+  this helper becomes belt-and-suspenders, not load-bearing — still harmless (idempotent on clean PKCS#8).
+  Phase 0.1 re-checks the pinned version.
 
 ## Non-Goals / Deferred
 
