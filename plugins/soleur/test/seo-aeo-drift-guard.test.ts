@@ -441,16 +441,24 @@ describe("GSC coverage regression guard (www→apex host flip)", () => {
     ).toEqual([]);
   });
 
-  test("changelog page renders apex links and zero www-host links (APEX_RE rewriter removed)", () => {
+  test("changelog page canonical is apex + github.js APEX_RE rewriter removed", () => {
     const html = readSite("changelog/index.html");
-    // Positive anchor first so the negative assertion is never vacuous: the
-    // page's canonical <link> always renders the apex host regardless of
-    // whether the GitHub release fetch returned content (offline/non-CI), so
-    // this holds in every environment. Matched as an HTML-element regex (not a
-    // bare URL substring) to avoid the js/incomplete-url-substring-sanitization
-    // CodeQL pattern that fires on `.includes("https://…")` host checks.
+    // Canonical <link> renders the apex host (deterministic — derives from
+    // site.url). Matched as an HTML-element regex (not a bare URL substring) to
+    // avoid the js/incomplete-url-substring-sanitization CodeQL pattern that
+    // fires on `.includes("https://…")` host checks.
     expect(html).toMatch(/rel="canonical"[^>]*href="https:\/\/soleur\.ai\//);
-    expect(html.includes("www.soleur.ai")).toBe(false);
+    // AC15: the apex→www rewriter is gone from the data loader. Asserted at the
+    // SOURCE (deterministic) — NOT against rendered changelog text. The
+    // changelog is built from LIVE GitHub release bodies fetched at build time,
+    // and a release note can legitimately contain the literal "www.soleur.ai"
+    // (e.g. the release describing this very www→apex flip), so a rendered-text
+    // absence check is non-deterministic and produces false CI failures.
+    const githubJs = readFileSync(
+      resolve(REPO_ROOT, "plugins/soleur/docs/_data/github.js"),
+      "utf8",
+    );
+    expect(githubJs).not.toMatch(/APEX_RE|www\.soleur\.ai/);
   });
 
   test("legacy terms-of-service redirect stub resolves to terms-and-conditions", () => {
