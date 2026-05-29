@@ -96,7 +96,7 @@ Honors ADR-037 (no per-source table; `messages` stays canonical) and finishes th
   Today queue. **Two vectors:** (a) the old `createServiceClient()` write bypasses RLS entirely;
   (b) `resolveCurrentWorkspaceId` could route to a *team* workspace the operator legitimately
   joined (RLS passes by membership). `draft_preview` could carry a token in a broken-target URL.
-- **Brand-survival threshold:** `single-user incident` (GDPR Art. 5(1)(f) + Art. 32; no statutory clock unless a leak occurs).
+- **Brand-survival threshold:** `single-user incident` — GDPR Art. 5(1)(f) + Art. 32; no statutory clock unless a leak occurs.
 - **Decisive controls:** **solo-pinned `workspace_id = operatorFounderId`** (closes vector b; RLS is the second layer, not the only one); tenant-client write (closes vector a); `workspace_id` never request-derived (no IDOR); **URL-query-stripping + in-helper redaction** of `draft_preview`. `user-impact-reviewer` must verify the solo-pin + redaction at PR review.
 
 ---
@@ -378,8 +378,11 @@ logs:
   where: pino structured logs (Better Stack) + Sentry; success path logs workspace_id, finding_count, deduped
   retention: per existing Better Stack / Sentry retention
 discoverability_test:
-  command: gh run list --workflow "KB-drift walker" --limit 1 --json conclusion --jq '.[0].conclusion'
-  expected_output: success
+  # Route-liveness + HMAC-gate probe — verifiable pre- AND post-merge, no SSH, no creds.
+  # Proves the ingest surface is deployed and rejects unsigned POSTs. The deeper
+  # "digest actually persists" signal is the post-merge AC (walker run concludes success).
+  command: curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'x-soleur-kb-drift-signature: sha256=bad' --data '{}' --max-time 10 https://app.soleur.ai/api/internal/kb-drift-ingest
+  expected_output: "401"
 ```
 
 ---
