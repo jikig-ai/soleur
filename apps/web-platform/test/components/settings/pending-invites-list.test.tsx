@@ -51,6 +51,29 @@ describe("PendingInvitesList — Cancel action", () => {
     );
   });
 
+  test("keeps the row visible while in flight — confirmed removal, not optimistic", async () => {
+    let resolveFetch!: (r: Response) => void;
+    global.fetch = vi.fn(
+      () => new Promise<Response>((r) => { resolveFetch = r; }),
+    ) as unknown as typeof fetch;
+
+    render(<PendingInvitesList invites={[INVITE]} workspaceId="ws-1" isOwner={true} />);
+    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+
+    // In flight: button disabled, row STILL present (would be gone if optimistic).
+    await waitFor(() => {
+      const btn = screen.getByRole("button", { name: /cancel/i }) as HTMLButtonElement;
+      expect(btn.disabled).toBe(true);
+    });
+    expect(screen.getByText(INVITE.invitee_email)).toBeTruthy();
+
+    // Server confirms → row removed.
+    resolveFetch(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    await waitFor(() => {
+      expect(screen.queryByText(INVITE.invitee_email)).toBeNull();
+    });
+  });
+
   test("restores the row and surfaces an error when the server returns 500", async () => {
     global.fetch = vi.fn(async () =>
       new Response(JSON.stringify({ error: "rpc_failed" }), { status: 500 }),

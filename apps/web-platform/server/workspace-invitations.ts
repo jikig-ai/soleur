@@ -252,9 +252,18 @@ export async function declineWorkspaceInvitation(
   return { ok: true };
 }
 
+export type RevokeInvitationReason =
+  | "invitation_not_found"
+  | "caller_not_owner"
+  | "already_accepted"
+  | "already_declined"
+  | "already_revoked"
+  | "rpc_failed"
+  | "unknown";
+
 export type RevokeInvitationResult =
   | { ok: true }
-  | { ok: false; reason: string };
+  | { ok: false; reason: RevokeInvitationReason };
 
 /**
  * Owner-side cancellation of a pending invite (feat-cancel-pending-invite,
@@ -282,9 +291,20 @@ export async function revokeWorkspaceInvitation(
     return { ok: false, reason: "rpc_failed" };
   }
 
-  const result = data as { ok: boolean; reason?: string };
+  const result = data as { ok: boolean; reason?: RevokeInvitationReason };
   if (!result.ok) {
-    return { ok: false, reason: result.reason ?? "unknown" };
+    const reason = result.reason ?? "unknown";
+    // A reasonless ok=false means the RPC contract drifted — mirror to Sentry
+    // (cq-silent-fallback-must-mirror-to-sentry) rather than 500-ing silently.
+    if (reason === "unknown") {
+      log.error("revoke_workspace_invitation returned ok=false with no reason");
+      reportSilentFallback(null, {
+        feature: "workspace-invitations",
+        op: "revoke",
+        message: "revoke_workspace_invitation returned ok=false with no reason",
+      });
+    }
+    return { ok: false, reason };
   }
 
   return { ok: true };

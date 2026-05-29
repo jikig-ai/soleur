@@ -108,11 +108,19 @@ describe.skipIf(!INTEGRATION_ENABLED)("revoke_workspace_invitation — live", ()
     expect(revokeErr).toBeNull();
     expect((revokeData as { ok: boolean }).ok).toBe(true);
 
-    // FR4: token no longer acceptable — lookup returns reason 'revoked'.
+    // FR4 (presentation gate): lookup returns reason 'revoked'.
     const { data: lookupData } = await service.rpc("lookup_invitation_by_token", {
       p_token_hash: tokenHash,
     });
     expect(lookupData).toMatchObject({ ok: false, reason: "revoked" });
+
+    // FR4 (mutation gate): the accept RPC must ALSO reject the revoked invite —
+    // a raw-token holder POSTing accept-invite directly bypasses lookup.
+    const { data: acceptData } = await service.rpc("accept_workspace_invitation", {
+      p_invitation_id: invitationId,
+      p_accepter_user_id: owner.userId,
+    });
+    expect(acceptData).toMatchObject({ ok: false, reason: "revoked" });
 
     // FR3: the owner pending query (revoked_at IS NULL) excludes it.
     const { data: pendingRows } = await service

@@ -117,6 +117,23 @@ describe("migration 085_revoke_workspace_invitation", () => {
     });
   });
 
+  describe("accept_workspace_invitation: revoked arm (FR4 — mutation gate)", () => {
+    const fn = () =>
+      executable.match(
+        /CREATE\s+OR\s+REPLACE\s+FUNCTION\s+public\.accept_workspace_invitation[\s\S]*?\$\$;/i,
+      )![0];
+    it("re-issues accept and rejects a revoked invite with reason 'revoked'", () => {
+      const body = fn();
+      expect(body).toMatch(/revoked_at\s+IS\s+NOT\s+NULL/i);
+      expect(body).toMatch(/'revoked'/);
+    });
+    it("the down migration also restores accept_workspace_invitation (before column drop)", () => {
+      expect(downExecutable).toMatch(
+        /CREATE\s+OR\s+REPLACE\s+FUNCTION\s+public\.accept_workspace_invitation[\s\S]*?DROP\s+COLUMN\s+IF\s+EXISTS\s+revoked_by/i,
+      );
+    });
+  });
+
   describe("lookup_invitation_by_token: revoked arm (TR3/FR4)", () => {
     const fn = () =>
       executable.match(

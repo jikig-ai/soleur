@@ -109,6 +109,13 @@ describe("POST /api/workspace/cancel-invite", () => {
     expect(mockRevoke).not.toHaveBeenCalled();
   });
 
+  test("404 when team-membership page-data resolution fails", async () => {
+    mockResolvePageData.mockResolvedValue({ ok: false, reason: "no-membership" });
+    const res = await POST(makeRequest({ workspaceId: WORKSPACE_ID, invitationId: INVITATION_ID }));
+    expect(res.status).toBe(404);
+    expect(mockRevoke).not.toHaveBeenCalled();
+  });
+
   test("400 when invitationId missing", async () => {
     const res = await POST(makeRequest({ workspaceId: WORKSPACE_ID }));
     expect(res.status).toBe(400);
