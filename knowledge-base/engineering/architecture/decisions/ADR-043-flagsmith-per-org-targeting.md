@@ -11,6 +11,18 @@
 > (#4581 PR-2). The Identity Strategy and Cache Key Widening sections remain in
 > force. The shared `org-targeted` segment is retained until `team-workspace-invite`
 > is migrated off it (follow-up); new per-org features use `<flag>-orgs`.
+>
+> **[Updated 2026-05-29 — #4617]** The migration tooling now exists:
+> `soleur:flag-set-role <flag> <env> on --detach-shared --org <memberId>` removes a
+> feature's override on `org-targeted` (both envs) and eval-verifies the feature still
+> resolves enabled for the member via its own `<flag>-orgs` segment. `byok-delegations`
+> already runs on `byok-delegations-orgs` (PR-2); `team-workspace-invite` is the last
+> feature on the shared segment. The shared `org-targeted` segment is **slated for
+> retirement** once `team-workspace-invite` is detached and zero features remain
+> attached. Status stays `superseded-in-part` until that live retirement completes —
+> the segment still exists in Flagsmith until the post-merge `--detach-shared` run +
+> segment DELETE land; this ADR flips to fully-superseded in a follow-up edit gated on
+> that retirement.
 
 ## Context
 
