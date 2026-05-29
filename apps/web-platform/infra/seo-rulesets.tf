@@ -327,6 +327,13 @@ resource "cloudflare_ruleset" "seo_response_headers" {
   #      (eliminates the need for an edge rule entirely), OR
   #   2. operator chooses to proxy api.soleur.ai through soleur.ai's edge.
   #
+  # #4575 (GSC coverage: api/deploy leak into sc-domain) was closed as
+  # superseded-by #3379: deploy.soleur.ai is already noindexed live by the rule
+  # below (proxied), and the api.soleur.ai half is exactly the dormant-CNAME
+  # no-op #3379 already owns — so #3379 remains the single tracker for it.
+  # `test/seo-rulesets-noindex.test.ts` is the CI regression guard added with
+  # #4575 that locks both rules into source.
+  #
   # Practical risk: low. `api.soleur.ai` returns 401/404/403 on every
   # authenticated path under Googlebot's anonymous identity — there is no
   # body content for Google to index. X-Robots-Tag was defense-in-depth
