@@ -46,10 +46,12 @@ resource "doppler_secret" "kb_drift_ingest_signing_key" {
 }
 
 resource "doppler_secret" "kb_drift_ingest_url" {
-  project    = "soleur"
-  config     = "prd_kb_drift_walker"
-  name       = "KB_DRIFT_INGEST_URL"
-  value      = "https://soleur.ai/api/internal/kb-drift-ingest"
+  project = "soleur"
+  config  = "prd_kb_drift_walker"
+  name    = "KB_DRIFT_INGEST_URL"
+  # app.soleur.ai is the canonical Next.js app host. The apex soleur.ai is the
+  # Cloudflare static marketing site and returns 405 Not Allowed for POST.
+  value      = "https://app.soleur.ai/api/internal/kb-drift-ingest"
   visibility = "masked"
 
   lifecycle {
