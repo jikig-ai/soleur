@@ -382,8 +382,8 @@ logs:
   where: Sentry events (extra.errorCode, extra.errorName, extra.status) + console.error in dev tools
   retention: Sentry project default
 discoverability_test:
-  command: "grep -n 'status' apps/web-platform/components/auth/login-form.tsx && ./node_modules/.bin/vitest run test/components/login-form-verify-error.test.tsx"
-  expected_output: "status added to reportSilentFallback extra; verify-error test asserts recoverable copy (no ssh)"
+  command: grep -c "status: error.status" apps/web-platform/components/auth/login-form.tsx
+  expected_output: "2"
 ```
 
 ## Domain Review
