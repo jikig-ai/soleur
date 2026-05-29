@@ -7,10 +7,18 @@
  * for that gap.
  */
 import { describe, test, expect, vi, beforeEach } from "vitest";
+import { generateKeyPairSync } from "crypto";
 
 process.env.GITHUB_APP_ID = "99999";
-process.env.GITHUB_APP_PRIVATE_KEY =
-  "-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----";
+// Synthesized throwaway keypair (cq-test-fixtures-synthesized-only). Must be a
+// real, parseable PEM: createProbeOctokit now canonicalizes the key via
+// crypto.createPrivateKey().export() BEFORE constructing (the mocked) App, so a
+// bogus "fake" body would throw at normalization and never reach the retry path.
+process.env.GITHUB_APP_PRIVATE_KEY = generateKeyPairSync("rsa", {
+  modulusLength: 2048,
+  publicKeyEncoding: { type: "spki", format: "pem" },
+  privateKeyEncoding: { type: "pkcs8", format: "pem" },
+}).privateKey as string;
 
 const {
   mockRequest,
