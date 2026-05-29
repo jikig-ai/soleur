@@ -138,7 +138,7 @@ function baseData() {
     defaultBranch: "main",
     headSha: "abc1234567890abcdef1234567890abcdef12345",
     beforeSha: "def4567890abcdef1234567890abcdef12345678",
-    fullName: "jikig-ai/soleur",
+    fullName: "acme-co/widget",
     pushReceivedAt: 1_700_000_000_000,
   };
 }
@@ -229,15 +229,15 @@ describe("reconcile — slug→URL parity (AC7)", () => {
 
     const handler = await importHandler();
     await handler({
-      event: makeEvent({ fullName: "Jikig-AI/Soleur" }),
+      event: makeEvent({ fullName: "Acme-Co/Widget" }),
       step: makeStep(),
       logger,
     });
 
     // The match key is the composed + normalized URL (host lowercased,
     // path case preserved) — never the bare slug.
-    expect(repoUrlFilterSpy).toHaveBeenCalledWith("https://github.com/Jikig-AI/Soleur");
-    expect(repoUrlFilterSpy).not.toHaveBeenCalledWith("Jikig-AI/Soleur");
+    expect(repoUrlFilterSpy).toHaveBeenCalledWith("https://github.com/Acme-Co/Widget");
+    expect(repoUrlFilterSpy).not.toHaveBeenCalledWith("Acme-Co/Widget");
   });
 });
 

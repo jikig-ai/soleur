@@ -243,6 +243,11 @@ export async function workspaceReconcileOnPushHandler({
   }
 
   if (synced === 0) {
+    // Intentionally silent: every path that lands here already emitted its own
+    // mirror inside the fan-out loop (reportSilentFallback op="sync" on sync
+    // failure, op="skip-not-ready" on a missing workspace dir). An aggregate
+    // mirror here would double-report the same incident. (cq-silent-fallback-
+    // must-mirror-to-sentry is satisfied by the per-workspace sites.)
     return { ok: false, reason: "no-workspace-synced" };
   }
   return { ok: true, synced };
