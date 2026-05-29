@@ -1,6 +1,6 @@
 # ADR-043: Flagsmith Per-Org Targeting via Identity Trait
 
-**Status:** superseded-in-part (see "Per-feature segment scoping (2026-05-29)" below)
+**Status:** superseded-in-part — the shared-segment "Segment Design" is **fully retired** (the `org-targeted` segment was deleted 2026-05-29, #4617); the Identity Strategy and Cache Key Widening sections remain in force. See "Per-feature segment scoping (2026-05-29)" below.
 **Date:** 2026-05-25
 **Deciders:** Jean Deruelle (CTO), Claude (engineering)
 **Related:** ADR-038 (feature-flag architecture), umbrella #4456 PR-2, #4581 PR-2 (per-feature segment scoping)
@@ -9,20 +9,20 @@
 > *single* shared `org-targeted` segment gating *all* per-org features — is
 > superseded by the per-feature-segment model documented at the end of this ADR
 > (#4581 PR-2). The Identity Strategy and Cache Key Widening sections remain in
-> force. The shared `org-targeted` segment is retained until `team-workspace-invite`
-> is migrated off it (follow-up); new per-org features use `<flag>-orgs`.
+> force. New per-org features use `<flag>-orgs`.
 >
-> **[Updated 2026-05-29 — #4617]** The migration tooling now exists:
-> `soleur:flag-set-role <flag> <env> on --detach-shared --org <memberId>` removes a
-> feature's override on `org-targeted` (both envs) and eval-verifies the feature still
-> resolves enabled for the member via its own `<flag>-orgs` segment. `byok-delegations`
-> already runs on `byok-delegations-orgs` (PR-2); `team-workspace-invite` is the last
-> feature on the shared segment. The shared `org-targeted` segment is **slated for
-> retirement** once `team-workspace-invite` is detached and zero features remain
-> attached. Status stays `superseded-in-part` until that live retirement completes —
-> the segment still exists in Flagsmith until the post-merge `--detach-shared` run +
-> segment DELETE land; this ADR flips to fully-superseded in a follow-up edit gated on
-> that retirement.
+> **[Updated 2026-05-29 — #4617, retirement COMPLETE]** The migration tooling
+> (`soleur:flag-set-role <flag> <env> on --detach-shared --org <memberId>`) shipped in
+> #4619, and the live prd migration has been executed and verified:
+> `team-workspace-invite` was provisioned onto its own `team-workspace-invite-orgs`
+> segment (both member orgs), detached from `org-targeted` in both envs, and the now-
+> orphaned `org-targeted` segment was **deleted** (Flagsmith segment id 1130454; DELETE
+> 204, 2026-05-29). Post-retirement eval confirmed both member orgs still resolve
+> `team-workspace-invite` enabled via the per-feature segment, and `byok-delegations`
+> (on `byok-delegations-orgs` since PR-2) was unaffected. **No feature references the
+> shared `org-targeted` segment anymore** — the per-(feature, org) model is the sole
+> per-org gate for all org-targetable flags. The remaining project segments are
+> `role-dev`, `role-prd`, `byok-delegations-orgs`, and `team-workspace-invite-orgs`.
 
 ## Context
 
