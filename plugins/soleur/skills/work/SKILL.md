@@ -85,7 +85,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 1. Run `git branch --show-current`. If the result is empty (detached HEAD), FAIL: "Detached HEAD state -- checkout a feature branch or create a worktree." If the result is the default branch (main or master), FAIL: "On default branch -- create a worktree before starting work. Run: `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh feature <name>`"
 2. Run `pwd`. If the path does NOT contain `.worktrees/`, WARN: "Not in a worktree directory. You can create one via `git-worktree` skill in Phase 1."
 3. Run `git status --short`. If output is non-empty, WARN: "Uncommitted changes detected. Consider committing or stashing before starting new work."
-4. Run `git stash list`. If output is non-empty, WARN: "Stashed changes found. Review stash list to avoid forgotten work."
+4. Probe for stashed changes WITHOUT invoking `git stash` (the `hr-never-git-stash-in-worktrees` hook denies even the read-only `git stash list`). Use `git rev-parse --verify --quiet refs/stash` — a zero exit means a stash exists; WARN: "Stashed changes found. Review stash list to avoid forgotten work." A non-zero exit means no stash; continue silently.
 
 **Scope checks:**
 
