@@ -74,20 +74,22 @@ jobs:
       - name: Validate SEO
         run: bash plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh _site
 
-      - name: Apex-host canonical gate
-        # Catches stray https://soleur.ai/... (apex) interpolations leaking
-        # into rendered HTML/XML. Canonical host is https://www.soleur.ai
-        # (apex 301s to www at the edge). Regex covers EVERY non-host-
-        # continuation suffix: `/`, `?`, `#`, `"`, `'`, `<`, ` `, EOL, etc.
-        # Negative class `[^a-zA-Z0-9.-]` rejects only `soleur.ai-org` /
-        # `soleur.aitech.com` style same-prefix-different-domain matches.
-        # See #3297. No untrusted input — pattern is literal.
+      - name: Canonical-host gate (no www leaks)
+        # Catches stray https://www.soleur.ai/... (www) interpolations leaking
+        # into rendered HTML/XML. Canonical host is https://soleur.ai (the bare
+        # apex); www 301s → apex at the edge (GitHub Pages enforces the CNAME
+        # apex). Any rendered www reference points at a host that redirects,
+        # which is the GSC `Page with redirect` cluster cause this gate guards
+        # against. Regex covers EVERY non-host-continuation suffix: `/`, `?`,
+        # `#`, `"`, `'`, `<`, ` `, EOL, etc. Negative class `[^a-zA-Z0-9.-]`
+        # rejects only same-prefix-different-domain matches. See #3297 and the
+        # 2026-05-29 www→apex host flip. No untrusted input — pattern is literal.
         run: |
-          if grep -rEn 'https://soleur\.ai($|[^a-zA-Z0-9.-])' _site/; then
-            echo "FAIL: rendered output contains apex-host references"
+          if grep -rEn 'https://www\.soleur\.ai($|[^a-zA-Z0-9.-])' _site/; then
+            echo "FAIL: rendered output contains www-host references (canonical is apex)"
             exit 1
           fi
-          echo "PASS: no apex-host leaks in rendered output"
+          echo "PASS: no www-host leaks in rendered output"
 
       - name: Validate CSP
         run: bash plugins/soleur/skills/seo-aeo/scripts/validate-csp.sh _site

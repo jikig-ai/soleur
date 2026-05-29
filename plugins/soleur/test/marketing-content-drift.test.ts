@@ -168,10 +168,12 @@ describe("marketing-content-drift", () => {
     }
     expect(orgs.length).toBeGreaterThanOrEqual(1);
     const org = orgs[0];
-    expect(org["@id"]).toBe("https://www.soleur.ai/#organization");
+    // @id hosts derive from site.url, which is the bare apex canonical host
+    // (https://soleur.ai) after the 2026-05-29 www→apex flip — www 301s to apex.
+    expect(org["@id"]).toBe("https://soleur.ai/#organization");
     // founder is a cross-page @id reference (PR #2973); the canonical Person
     // node with name/sameAs/jobTitle lives on /about/.
-    expect(org.founder?.["@id"]).toBe("https://www.soleur.ai/about/#jean-deruelle");
+    expect(org.founder?.["@id"]).toBe("https://soleur.ai/about/#jean-deruelle");
     expect(org.foundingDate).toMatch(/^\d{4}(-\d{2}(-\d{2})?)?$/);
   });
 

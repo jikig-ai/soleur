@@ -378,3 +378,65 @@ describe("#2708 — Next.js layout title is dashboard-scoped", () => {
     expect(src).toContain('default: "Soleur Dashboard"');
   });
 });
+
+// -- Test 9: GSC coverage regression guard (2026-05-29 www→apex host flip) --
+// Guards the Search Console "Page with redirect" / "crawled-not-indexed" /
+// "404" cluster fixed on 2026-05-29. The sitemap must list only the bare apex
+// canonical host (never the redirecting www host), must exclude legacy
+// /pages/*.html redirect stubs + /index.html + the RSS feed, the changelog
+// must not re-inject www links (APEX_RE rewriter removed from _data/github.js),
+// and the renamed terms-of-service stub must resolve. Pre-flip this guard
+// would fail: the sitemap used the www host and no terms-of-service stub
+// existed. See
+// knowledge-base/project/plans/2026-05-29-fix-gsc-coverage-indexing-host-canonical-plan.md.
+
+describe("GSC coverage regression guard (www→apex host flip)", () => {
+  test("sitemap.xml uses the apex canonical host only — no www, no legacy paths", () => {
+    const siteUrl = (JSON.parse(readFileSync(SITE_JSON, "utf8")) as { url: string })
+      .url;
+    // Source-of-truth canonical host must be the bare apex (no www.).
+    expect(siteUrl).toBe("https://soleur.ai");
+
+    const sitemap = readSite("sitemap.xml");
+    const locs = [...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]);
+    expect(locs.length).toBeGreaterThan(0);
+
+    // Every <loc> uses the apex host declared in site.json (bare apex or a
+    // path under it) — nothing off-host.
+    const offHost = locs.filter(
+      (u) => u !== siteUrl && !u.startsWith(`${siteUrl}/`),
+    );
+    expect(
+      offHost,
+      `sitemap <loc> entries off the canonical host: ${offHost.join(", ")}`,
+    ).toEqual([]);
+
+    // No www host leaks (www 301s → apex; listing it re-triggers "Page with
+    // redirect").
+    const wwwLocs = locs.filter((u) => /https:\/\/www\.soleur\.ai/.test(u));
+    expect(
+      wwwLocs,
+      `www-host <loc> entries (canonical is apex): ${wwwLocs.join(", ")}`,
+    ).toEqual([]);
+
+    // Legacy /pages/*.html redirect stubs, /index.html, and the RSS feed must
+    // NOT appear in the sitemap.
+    const legacy = locs.filter((u) =>
+      /\/pages\/|\/index\.html|feed\.xml/.test(u),
+    );
+    expect(
+      legacy,
+      `legacy/excluded entries in sitemap: ${legacy.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  test("changelog page contains no www-host links (APEX_RE rewriter removed)", () => {
+    const html = readSite("changelog/index.html");
+    expect(html.includes("www.soleur.ai")).toBe(false);
+  });
+
+  test("legacy terms-of-service redirect stub resolves to terms-and-conditions", () => {
+    const stub = readSite("pages/legal/terms-of-service.html");
+    expect(stub).toContain("/legal/terms-and-conditions/");
+  });
+});
