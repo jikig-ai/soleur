@@ -3,7 +3,10 @@
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { reportSilentFallback } from "@/lib/client-observability";
-import { mapSupabaseError } from "@/lib/auth/error-messages";
+import {
+  type AuthErrorLike,
+  mapSupabaseAuthError,
+} from "@/lib/auth/error-messages";
 
 type Provider = "google" | "apple" | "github" | "azure";
 
@@ -69,29 +72,39 @@ export function OAuthButtons({ disabled = false }: { disabled?: boolean }) {
     setError("");
 
     const supabase = createClient();
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: provider.id,
-      options: {
-        redirectTo: `${window.location.origin}/callback`,
-        ...(provider.scopes && { scopes: provider.scopes }),
-      },
-    });
+    let error: AuthErrorLike | null = null;
+    try {
+      ({ error } = await supabase.auth.signInWithOAuth({
+        provider: provider.id,
+        options: {
+          redirectTo: `${window.location.origin}/callback`,
+          ...(provider.scopes && { scopes: provider.scopes }),
+        },
+      }));
+    } catch (thrown) {
+      // Transport failure (fetch reject) before the redirect — route it
+      // through the same mapping layer for recoverable copy.
+      error = thrown as AuthErrorLike;
+    }
 
     if (error) {
       console.error("[auth] Supabase OAuth error:", error.message);
-      // Forward only typed enum fields — error.message can embed the user's
-      // email or other PII and Sentry is a shared project (cross-tenant
-      // exposure vector). Provider tag distinguishes Google/Apple/GitHub/Azure.
+      // Forward only typed enum/int fields in `extra` — error.message can embed
+      // the user's email or other PII and Sentry is a shared cross-tenant
+      // project. The raw error is captured via Sentry.captureException, so the
+      // message is scrubbed by sentry.client.config beforeSend, not omitted
+      // here. Provider tag distinguishes Google/Apple/GitHub/Azure.
       reportSilentFallback(error, {
         feature: "auth",
         op: "signInWithOAuth",
         extra: {
           provider: provider.id,
-          errorCode: (error as { code?: string }).code,
+          errorCode: error.code,
           errorName: error.name,
+          status: error.status,
         },
       });
-      setError(mapSupabaseError(error.message));
+      setError(mapSupabaseAuthError(error));
       setLoading(null);
     }
     // On success, the browser redirects — no state cleanup needed

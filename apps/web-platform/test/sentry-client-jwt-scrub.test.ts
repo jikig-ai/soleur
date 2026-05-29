@@ -43,3 +43,36 @@ describe("sentry.client.config beforeSend JWT scrub", () => {
     expect(out.exception?.values?.[0]?.value).toBe("stack frame text");
   });
 });
+
+describe("sentry.client.config beforeSend email scrub", () => {
+  // Supabase auth errors (verifyOtp/signInWithOtp) carry the user's email in
+  // error.message; reportSilentFallback forwards the raw error to
+  // captureException, so the email lands in exception.values[*].value. This is
+  // the residual PII vector the `extra`-level discipline does not cover.
+  it("scrubs email addresses from exception.values[*].value", () => {
+    const event = {
+      exception: {
+        values: [{ value: "rate limited for ops@jikigai.com" }],
+      },
+    } as never;
+    const out = scrubJwtFromEvent(event) as {
+      exception?: { values?: Array<{ value?: string }> };
+    };
+    const value = out.exception?.values?.[0]?.value;
+    expect(value).not.toContain("ops@jikigai.com");
+    expect(value).toContain("<email-redacted>");
+  });
+
+  it("scrubs email addresses from event.message", () => {
+    const event = { message: "no account for user@example.co.uk" } as never;
+    const out = scrubJwtFromEvent(event) as { message?: string };
+    expect(out.message).not.toContain("user@example.co.uk");
+    expect(out.message).toContain("<email-redacted>");
+  });
+
+  it("leaves events without email-shaped strings unchanged", () => {
+    const event = { message: "verifyOtp failed: status 429" } as never;
+    const out = scrubJwtFromEvent(event) as { message?: string };
+    expect(out.message).toBe("verifyOtp failed: status 429");
+  });
+});
