@@ -5,6 +5,7 @@
 # documents the env-var mirror invariant this script enforces.
 #
 # Usage: bash flip.sh <flag> <prd|dev> <on|off> [--confirmed] [--org <orgId>] [--dry-run]
+#        bash flip.sh <flag> <prd|dev> on --detach-shared --org <memberId> [--control-org <id>] [--confirmed]
 #
 # Exit codes:
 #   0 — success / dry-run clean
@@ -39,6 +40,10 @@ readonly FLAGSMITH_EDGE_API="https://edge.api.flagsmith.com/api/v1"
 # evals ON the flag is globally enabled (a real leak). Override with --control-org to
 # assert against a specific real sibling org (e.g. the org sharing org-targeted).
 readonly DEFAULT_CONTROL_ORG="00000000-0000-0000-0000-000000000000"
+# Legacy shared per-org segment (ADR-043 §"Segment Design", pre per-feature scoping).
+# `--detach-shared` resolves this BY NAME (never a hard-coded id) and removes the
+# feature's override on it, migrating the feature onto its own `<flag>-orgs` segment.
+readonly SHARED_SEGMENT_NAME="org-targeted"
 
 # Map known flag-name → Doppler env-var name. Keep in sync with
 # apps/web-platform/lib/feature-flags/server.ts RUNTIME_FLAGS.
@@ -54,18 +59,20 @@ CONFIRMED=0
 TARGET_TYPE="role"
 TARGET_ORG=""
 CONTROL_ORG=""
+DETACH_SHARED=0
 FLAG=""
 ROLE=""
 VALUE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --dry-run)     DRY_RUN=1; shift ;;
-    --confirmed)   CONFIRMED=1; shift ;;
-    --target)      TARGET_TYPE="$2"; shift 2 ;;
-    --org)         TARGET_ORG="$2"; shift 2 ;;
-    --control-org) CONTROL_ORG="$2"; shift 2 ;;
-    --*)           echo "unknown flag: $1" >&2; exit 2 ;;
+    --dry-run)       DRY_RUN=1; shift ;;
+    --confirmed)     CONFIRMED=1; shift ;;
+    --target)        TARGET_TYPE="$2"; shift 2 ;;
+    --org)           TARGET_ORG="$2"; shift 2 ;;
+    --control-org)   CONTROL_ORG="$2"; shift 2 ;;
+    --detach-shared) DETACH_SHARED=1; shift ;;
+    --*)             echo "unknown flag: $1" >&2; exit 2 ;;
     *)
       if [[ -z "$FLAG" ]]; then FLAG="$1"
       elif [[ -z "$ROLE" ]]; then ROLE="$1"
@@ -253,8 +260,12 @@ gate_or_confirm() {
   fi
 }
 
+# audit_append <target> [before_override] [after_override]
+# WORM append-before-flip. before/after default to the on/off semantics of $VALUE;
+# pass explicit overrides for a mutation that does NOT change enablement (e.g. a
+# --detach-shared segment-config change where the feature stays enabled=true).
 audit_append() {
-  local audit_target="$1"
+  local audit_target="$1" before_override="${2:-}" after_override="${3:-}"
   local actor audit_url audit_srk before_bool after_bool audit_id
   actor=$(doppler secrets get OPERATOR_EMAIL -p soleur -c cli_ops --plain 2>/dev/null | tr '[:upper:]' '[:lower:]')
   [[ -z "$actor" ]] && { echo "FATAL: OPERATOR_EMAIL not in Doppler soleur/cli_ops" >&2; exit 4; }
@@ -264,6 +275,8 @@ audit_append() {
   [[ -z "$audit_url" || -z "$audit_srk" ]] && { echo "FATAL: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not in Doppler soleur/dev" >&2; exit 4; }
   before_bool=$([[ "$VALUE" == "on" ]] && echo "false" || echo "true")
   after_bool=$([[ "$VALUE" == "on" ]] && echo "true" || echo "false")
+  [[ -n "$before_override" ]] && before_bool="$before_override"
+  [[ -n "$after_override" ]] && after_bool="$after_override"
   audit_id=$(audit_flag_flip_rpc "$audit_url" "$audit_srk" "$FLAG" "$ROLE" "$audit_target" "$VALUE" "$before_bool" "$after_bool" "$actor") || exit 4
   echo "  audit_id=$audit_id"
 }
@@ -371,6 +384,98 @@ eval_until() { # $1=env_key $2=flag $3=org $4=expected
   done
   printf '%s' "$got"; return 1
 }
+
+# Detach a feature's override from a SHARED segment (e.g. the legacy `org-targeted`)
+# by publishing a new version with `segment_ids_to_delete_overrides:[<shared id>]`
+# (empty create/update arrays) in BOTH envs. Idempotent: a no-op for any env where
+# no override row exists, and a clean no-op if the shared segment is already gone.
+# Echoes the resolved shared segment id (empty if absent). Progress to stderr.
+detach_from_shared() { # $1=flag $2=shared_segment_name
+  local flag="$1" shared_name="$2"
+  local feat_id shared_id env_id existing_fs_id body resp
+  feat_id=$(resolve_feature_id "$flag") || { echo "feature '$flag' not found in Flagsmith" >&2; return 3; }
+  shared_id=$(resolve_segment_id "$shared_name" 2>/dev/null) || shared_id=""
+  if [[ -z "$shared_id" ]]; then
+    echo "  → shared segment '$shared_name' not found — nothing to detach (no-op)" >&2
+    printf ''; return 0
+  fi
+  for env_id in "$FLAGSMITH_ENV_DEV_ID" "$FLAGSMITH_ENV_PRD_ID"; do
+    existing_fs_id=$(read_feature_segment_id "$env_id" "$feat_id" "$shared_id")
+    if [[ -z "$existing_fs_id" ]]; then
+      echo "  → no '$flag' override on '$shared_name' in env $env_id (already detached)" >&2
+      continue
+    fi
+    echo "  → detaching '$flag' from '$shared_name' in env $env_id…" >&2
+    body=$(printf '{"feature_states_to_create":[],"feature_states_to_update":[],"segment_ids_to_delete_overrides":[%d],"publish_immediately":true}' "$shared_id")
+    resp=$(fs_api -X POST "${FLAGSMITH_API}/environments/${env_id}/features/${feat_id}/versions/" -d "$body")
+    echo "$resp" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+if not d.get("uuid"):
+    print(json.dumps(d), file=sys.stderr); sys.exit(3)
+' || { echo "detach POST failed (env $env_id): $resp" >&2; return 3; }
+  done
+  printf '%s' "$shared_id"
+}
+
+# --- detach-from-shared branch (#4617, ADR-043 §"Per-feature segment scoping") ---
+# Migrate a feature OFF the legacy shared `org-targeted` segment. The feature must
+# already be served by its own `<flag>-orgs` segment (provision via the --org path
+# FIRST); this removes its override on the shared segment, then eval-verifies the
+# feature STILL resolves enabled=true for the member org (now via <flag>-orgs) and
+# enabled=false for a control org (no leak). No Doppler mirror (segment-config change).
+if [[ $DETACH_SHARED -eq 1 ]]; then
+  [[ "$TARGET_TYPE" != "org" || -z "$TARGET_ORG" ]] \
+    && { echo "--detach-shared requires --org <member-uuid> (the org to eval-verify stays enabled after detach)" >&2; exit 2; }
+  [[ "$VALUE" != "on" ]] \
+    && { echo "--detach-shared requires value 'on' (the feature must remain enabled for the member after detach)" >&2; exit 2; }
+  ENV_KEY=$([[ "$ROLE" == "prd" ]] && echo "$FLAGSMITH_ENV_PRD_KEY" || echo "$FLAGSMITH_ENV_DEV_KEY")
+
+  echo "→ Detach '$FLAG' from shared segment '$SHARED_SEGMENT_NAME' (both envs)"
+  echo "→ Member to eval-verify stays enabled: $TARGET_ORG (control: $CONTROL_ORG)"
+
+  if [[ $DRY_RUN -eq 1 ]]; then
+    echo "(dry-run — would detach '$FLAG' from '$SHARED_SEGMENT_NAME' in both envs, then"
+    echo "  eval-verify member enabled=true / control enabled=false; exiting 0 without mutation)"
+    exit 0
+  fi
+  if [[ $CONFIRMED -eq 0 ]]; then
+    echo
+    read -p "Proceed? Type 'yes' to apply: " ACK
+    [[ "$ACK" == "yes" ]] || { echo "aborted (ack was '$ACK')" >&2; exit 0; }
+  else
+    echo "(--confirmed: skipping interactive prompt)"
+  fi
+
+  # Append-before-flip: WORM audit precedes the first Flagsmith mutation. Enablement
+  # is UNCHANGED (the feature stays ON, now served by <flag>-orgs) → before=after=true.
+  audit_append "detach:$SHARED_SEGMENT_NAME" true true
+
+  echo "→ Detaching from '$SHARED_SEGMENT_NAME'…"
+  detach_from_shared "$FLAG" "$SHARED_SEGMENT_NAME" >/dev/null || exit 3
+
+  # Eval-layer re-verify (the load-bearing check): the feature must STILL evaluate
+  # enabled for the member (served by <flag>-orgs now) and disabled for control.
+  echo "→ Eval-verify ($ROLE env): $FLAG for member $TARGET_ORG must STILL be enabled=true…"
+  GOT_TARGET=$(eval_until "$ENV_KEY" "$FLAG" "$TARGET_ORG" "true") || {
+    echo "EVAL VERIFY FAILED: $FLAG for member $TARGET_ORG expected enabled=true after detach, last observed=$GOT_TARGET" >&2
+    echo "  (the detach dropped the member — its <flag>-orgs override is missing/one-env-only, OR the edge endpoint errored. UNVERIFIED — investigate; the member may have LOST the feature.)" >&2
+    exit 3
+  }
+  echo "  ✓ member $TARGET_ORG: enabled=$GOT_TARGET"
+
+  echo "→ Eval-verify ($ROLE env): control org $CONTROL_ORG must settle to enabled=false (no leak)…"
+  GOT_CONTROL=$(eval_until "$ENV_KEY" "$FLAG" "$CONTROL_ORG" "false") || {
+    echo "EVAL VERIFY FAILED (control leak): $FLAG did not settle to disabled for control org $CONTROL_ORG within the propagation budget (last observed=$GOT_CONTROL) — the flag is reaching a non-targeted org, OR the edge endpoint errored. UNVERIFIED." >&2
+    exit 3
+  }
+  echo "  ✓ control $CONTROL_ORG: enabled=$GOT_CONTROL"
+
+  echo
+  echo "✓ Done. '$FLAG' detached from '$SHARED_SEGMENT_NAME' + eval-verified (served by"
+  echo "  ${FLAG}-orgs now). Segment changes are immediate; edge eval propagation completes within seconds."
+  exit 0
+fi
 
 # --- org-targeting branch (ADR-043 per-feature segment scoping) -------------
 # When --org is provided, target the feature's OWN segment `<flag>-orgs` (NOT the

@@ -16,6 +16,7 @@ Per-org targeting uses a **per-feature segment** `<flag>-orgs` (ADR-043 §"Per-f
 - Enabling a feature for dev cohort only: `... <flag> dev on`.
 - Adding an org to the per-org segment: `... <flag> prd on --org <orgId>`.
 - Removing an org from the per-org segment: `... <flag> prd off --org <orgId>`.
+- Migrating a feature off the legacy shared `org-targeted` segment onto its own `<flag>-orgs` segment: `... <flag> prd on --detach-shared --org <memberId>`.
 
 ## When NOT to use
 
@@ -33,6 +34,7 @@ Required positional args: `<flag-name> <role> <on|off>`.
 
 Flag `--org <orgId>` switches to per-org targeting mode. When provided, the script provisions the feature's own `<flag>-orgs` segment (creates it + ensures an ON feature-state override in both envs) and adds/removes an `EQUAL orgId <uuid>` condition in its `ANY` rule, instead of flipping a role-segment override. The orgId must be a valid UUID.
 Flag `--control-org <orgId>` (per-org mode only) sets the control org for the eval-layer re-verify (the org asserted to be NOT enabled — proves no leak). Defaults to a synthetic non-member UUID; pass a real sibling org (e.g. one sharing the legacy `org-targeted` segment) for a stronger leak check.
+Flag `--detach-shared` (migration verb; requires `--org <memberId>` and value `on`) removes the feature's override on the legacy shared `org-targeted` segment in BOTH envs by publishing a version with `segment_ids_to_delete_overrides:[<org-targeted id>]` (resolved by name, never hard-coded), then eval-verifies the feature STILL resolves `enabled=true` for the member org (served by its own `<flag>-orgs` segment now) and `enabled=false` for the control org. Provision `<flag>-orgs` via the `--org` path FIRST — detach removes the shared override, it does not create the per-feature one. Idempotent: a no-op for any env with no override, and a clean no-op if `org-targeted` is already gone.
 Flag `--dry-run` runs detect/diff/validate steps (no writes).
 Flag `--confirmed` skips the interactive `read -p` prompt (for agent-driven use; the agent must obtain operator ack via AskUserQuestion before passing this flag).
 
@@ -89,6 +91,16 @@ The script (full procedure in [scripts/flip.sh](./scripts/flip.sh)):
 
 No Doppler mirror runs for org-targeting (segment membership is not reflected in env vars per ADR-038/ADR-043 — a per-org-only flag falls back **OFF** on a Flagsmith outage). No fallback-fidelity check applies (org-targeting modifies segment rule definitions, not per-env role overrides).
 
+**Detach from the shared segment (when `--detach-shared` is provided):**
+
+This is the migration verb (#4617), not a routine flip — it moves a feature off the legacy shared `org-targeted` segment onto its own `<flag>-orgs` segment. Ordering is load-bearing: provision `<flag>-orgs` (the `--org` path) and eval-verify the member is enabled BEFORE detaching, or the member loses the feature in the window between detach and provision.
+
+1. **Validate args.** Requires `--org <memberId>` (a member org to eval-verify stays enabled), value `on`, and UUID format on `--org`/`--control-org` (they must differ).
+2. **Dry-run / operator ack.** `--dry-run` prints the plan (which envs, member/control) and exits 0 with no writes. Otherwise wait for `yes` (or `--confirmed`).
+3. **Audit trail.** WORM audit entry with `target: detach:org-targeted` BEFORE any Flagsmith mutation (append-before-flip). Enablement is unchanged (the feature stays ON, now served by `<flag>-orgs`), so before/after are both `true`.
+4. **Detach.** Resolve `org-targeted` by name. For each env (dev `90722`, prd `90721`) where the feature has an override row on the shared segment, POST a new version with `segment_ids_to_delete_overrides:[<org-targeted id>]` and empty create/update arrays (`publish_immediately: true`). Envs with no override are skipped (idempotent).
+5. **Eval-layer re-verify.** Evaluate the flag for the member org (must STILL be `enabled=true` — served by `<flag>-orgs`) AND the control org (must settle to `enabled=false` — no leak), against `edge.api.flagsmith.com`. A dropped member or a control leak fails loud (exit 3). No Doppler mirror.
+
 ## Exit codes
 
 - `0` — success (or `--dry-run` clean).
@@ -107,10 +119,11 @@ No Doppler mirror runs for org-targeting (segment membership is not reflected in
 - The segment uses `EQUAL` conditions (one per org) inside an `ANY` rule, not a single `IN` condition. Matching is case-sensitive. An empty `<flag>-orgs` (last org removed) matches nobody → the flag is OFF for all via that segment.
 - Re-verify is at the **evaluation** layer (identity + orgId trait), not segment membership: a correct membership set with a missing/one-env override silently leaves the flag OFF. The control-org assertion catches a leak to a non-targeted org.
 - `resolve_segment_id` uses `GET /segments/` without pagination. Safe with a handful of segments; may need pagination as the per-feature segment count grows.
+- `--detach-shared` removes the shared-segment override but does NOT create the `<flag>-orgs` one — run the `--org` path first to provision + eval-verify the per-feature segment, then `--detach-shared`. Detaching before provisioning drops the feature for the member. The post-detach eval-verify (member still `enabled=true`) is what catches a wrong ordering. After every feature is detached, retire the now-orphaned `org-targeted` segment (zero attachments) and flip ADR-043 to fully-superseded.
 
 ## Cross-references
 
 - ADR: `knowledge-base/engineering/architecture/decisions/ADR-038-feature-flags-flagsmith.md`, `ADR-043-flagsmith-per-org-targeting.md` (§"Per-feature segment scoping")
-- Plan: `knowledge-base/project/plans/2026-05-22-feat-flagsmith-operator-skills-plan.md`, `2026-05-29-feat-flag-org-scoping-plan.md`
-- Predecessor PR: #4331 (resolution path)
+- Plan: `knowledge-base/project/plans/2026-05-22-feat-flagsmith-operator-skills-plan.md`, `2026-05-29-feat-flag-org-scoping-plan.md`, `2026-05-29-chore-twi-migrate-off-shared-org-targeted-plan.md` (#4617, `--detach-shared`)
+- Predecessor PR: #4331 (resolution path), #4612 (#4581 PR-2, per-feature segments)
 - Sibling skills: `soleur:flag-create`, `soleur:user-set-role`
