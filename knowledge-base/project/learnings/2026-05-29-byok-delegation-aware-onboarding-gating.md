@@ -45,6 +45,30 @@ not yet accepted" delegation state has zero effective key (resolver fail-closes)
 keyless-degraded surface must branch: pending-delegation → "accept the delegation" vs.
 truly-keyless → "add your key".
 
+## Plan-review findings (multi-agent panel, plan phase)
+
+A 6-agent panel (identity-rbac, data-integrity, security, spec-flow, simplicity) caught
+four issues a style-only review would miss:
+
+1. **A boolean wrapper around `resolve_byok_key_owner` must NOT reimplement the RPC's
+   own-key short-circuit.** That short-circuit is UNFILTERED (`EXISTS(api_keys WHERE
+   user_id=caller)`); the *lease* that actually yields a usable key filters
+   `provider='anthropic' AND is_valid=true`. A helper that checks the filtered form first
+   and then falls back to the RPC will get `true` for an invalid-key user (RPC returns
+   `(caller, null)`), contradicting its own step 1. Fix: filtered-valid-own-key first,
+   then count **only `delegation_id != null`** rows from the RPC.
+2. **Fail-open vs fail-closed is per-consumer, not per-helper.** The same effective-key
+   check feeds a *redirect gate* (fail-open: don't trap a possibly-delegated user) and a
+   *status endpoint* driving a "you're keyless" banner (fail-closed: don't hide the banner
+   and lie). Parameterize `{ onErrorReturn }` rather than baking one direction in.
+3. **A degraded-state banner gated on "no key" must branch on granted-but-not-accepted
+   delegation.** Telling a grant-holder to "buy a separate paid Anthropic account" when one
+   click accepts the grant is active misdirection — a single-user-incident-class harm.
+4. **CPO's brainstorm decision overrides a plan-time YAGNI cut.** Simplicity flagged the
+   persistent banner as redundant with the in-chat CTA; rejected because the chat CTA only
+   fires if the user opens chat — the banner is the load-bearing anti-dead-end surface a
+   product owner already ruled in. Record the dissent, don't silently drop the decision.
+
 ## Session Errors
 
 1. **First research agent (Explore) reported "no Settings page exists" (false
