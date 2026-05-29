@@ -224,7 +224,7 @@ logs:
   where: "GitHub Actions run logs for apply-sentry-infra.yml; per-run STEP_SUMMARY"
   retention: "GitHub Actions default (90 days)"
 discoverability_test:
-  command: "gh run list --workflow=apply-sentry-infra.yml --limit 1 --json conclusion --jq '.[0].conclusion // \"none\"'"
+  command: "gh run list --workflow=apply-sentry-infra.yml --limit 1 --json conclusion --jq '.[0].conclusion'"
   expected_output: "success"
 ```
 
