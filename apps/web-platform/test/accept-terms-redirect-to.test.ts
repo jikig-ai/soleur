@@ -96,6 +96,10 @@ describe("POST /api/accept-terms — redirectTo threading", () => {
     const res = await POST(makeRequest({ redirectTo: "https://evil.example" }));
     const json = await res.json();
     expect(json.redirect).toBe("/setup-key");
+    // Distinguish "rejected" from "feature absent": the hostile value must NOT
+    // be threaded — no ?redirectTo= query, no off-origin host.
+    expect(json.redirect).not.toContain("redirectTo");
+    expect(json.redirect).not.toContain("evil.example");
   });
 
   test("keyed user with no redirectTo → /dashboard (unchanged default)", async () => {
