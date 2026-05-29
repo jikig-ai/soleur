@@ -24,6 +24,7 @@
 import { App } from "@octokit/app";
 import { createChildLogger } from "../logger";
 import { warnSilentFallback } from "@/server/observability";
+import { normalizeAppPrivateKey } from "./app-private-key";
 
 const log = createChildLogger("probe-octokit");
 
@@ -116,7 +117,7 @@ export async function createProbeOctokit() {
   async function attempt() {
     const app = new App({
       appId: readEnv(APP_ID_ENV),
-      privateKey: readEnv(PRIVATE_KEY_ENV),
+      privateKey: normalizeAppPrivateKey(readEnv(PRIVATE_KEY_ENV)),
     });
     const { data: installation } = await app.octokit.request(
       "GET /repos/{owner}/{repo}/installation",
@@ -191,7 +192,7 @@ export async function createAppJwtOctokit(): Promise<{
 }> {
   const app = new App({
     appId: readEnv(APP_ID_ENV),
-    privateKey: readEnv(PRIVATE_KEY_ENV),
+    privateKey: normalizeAppPrivateKey(readEnv(PRIVATE_KEY_ENV)),
   });
   return { octokit: app.octokit };
 }
