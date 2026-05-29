@@ -237,8 +237,9 @@ logs:
   where: "CI apply log (apply-web-platform-infra.yml run on merge commit); terraform plan/apply stdout for operator Sentry apply"
   retention: "GitHub Actions default (90d); R2 state history"
 discoverability_test:
-  command: "for slug in agents skills vision community getting-started legal pricing changelog; do curl -sI --max-time 15 https://www.soleur.ai/pages/${slug}.html | grep -i '^location:'; done"
-  expected_output: "each line: location: https://soleur.ai/<slug>/ (apex host)"
+  command: curl -sS -o /dev/null -w "%{http_code}" --max-time 15 https://www.soleur.ai/
+  expected_output: "301"
+  note: "single no-SSH liveness probe of the www→apex 301 invariant the soleur_www monitor guards (runnable pre-merge). The 9-slug legacy-path curl loop is the POST-APPLY acceptance check in Phase 4a, not a pre-merge discoverability probe."
 ```
 
 ## Open Code-Review Overlap
