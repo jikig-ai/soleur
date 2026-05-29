@@ -75,7 +75,7 @@ stated explicitly in the PR body — not buried — per `hr-never-label-any-step
 - [x] `terraform fmt -check` clean; `terraform validate` Success in the sentry root.
 - [x] Change is an in-place attribute mutation (no resource replacement/destroy).
 - [x] PR body front-loads incident evidence + the apply-path note + #4585 reference.
-- [ ] Follow-up issue filed for Option A (deploy-window suppression).
+- [x] Follow-up issue filed for Option A (deploy-window suppression) — #4596.
 
 ## Test scenarios
 

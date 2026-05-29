@@ -24,7 +24,7 @@ lane: engineering
 
 ## Phase 3 — Ship
 - [x] 3.1 PR body front-loads incident evidence + apply-path note (#4585) + Option A follow-up.
-- [ ] 3.2 File follow-up issue for Option A (deploy-window suppression in deploy-docs.yml).
+- [x] 3.2 File follow-up issue for Option A (deploy-window suppression in deploy-docs.yml) — #4596.
 - [ ] 3.3 Merge; CI green.
 
 ## Acceptance gates
