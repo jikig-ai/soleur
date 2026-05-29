@@ -251,14 +251,15 @@ jobs:
         run: |
           set -uo pipefail
           # Propagation grace + confirming probe (best-effort; never block resume).
-          # Cap = 30 × 30s ≈ 15 min, matching the observed deploy-window flap; the
-          # resume runs regardless, so an under-sized cap only weakens the
-          # "confirming" log line, it never strands the monitor.
+          # Cap = 30 × 10s ≈ 5 min. The pause/resume bracket already covers the
+          # whole deploy window, so this probe only decides whether to log
+          # "301 confirmed" vs a warning before resuming — the resume runs
+          # regardless, so the cap never strands the monitor.
           confirmed=0
           for attempt in $(seq 1 30); do
             code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "https://www.soleur.ai/")
             if [[ "$code" == "301" ]]; then confirmed=1; break; fi
-            if [[ "$attempt" -lt 30 ]]; then sleep 30; fi  # no trailing sleep after the last probe
+            if [[ "$attempt" -lt 30 ]]; then sleep 10; fi  # no trailing sleep after the last probe
           done
           if [[ "$confirmed" -eq 1 ]]; then
             echo "www→apex 301 confirmed."
