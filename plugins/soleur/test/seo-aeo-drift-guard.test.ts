@@ -428,10 +428,26 @@ describe("GSC coverage regression guard (www→apex host flip)", () => {
       legacy,
       `legacy/excluded entries in sitemap: ${legacy.join(", ")}`,
     ).toEqual([]);
+
+    // Positive guard for the load-bearing exclusion mechanism: the
+    // terms-of-service redirect stub IS built on disk (asserted in a sibling
+    // test) but MUST be absent from the sitemap. This is the real failure mode
+    // the `/pages/` token above defends — it fires if page-redirects.njk loses
+    // its `eleventyExcludeFromCollections: true` and stubs leak into the sitemap.
+    const stubLocs = locs.filter((u) => u.includes("terms-of-service"));
+    expect(
+      stubLocs,
+      `redirect-stub entries leaked into sitemap: ${stubLocs.join(", ")}`,
+    ).toEqual([]);
   });
 
-  test("changelog page contains no www-host links (APEX_RE rewriter removed)", () => {
+  test("changelog page renders apex links and zero www-host links (APEX_RE rewriter removed)", () => {
     const html = readSite("changelog/index.html");
+    // Positive anchor first so the negative assertion is never vacuous: the
+    // page's canonical/og tags always render the apex host regardless of
+    // whether the GitHub release fetch returned content (offline/non-CI),
+    // so this holds in every environment.
+    expect(html.includes("https://soleur.ai")).toBe(true);
     expect(html.includes("www.soleur.ai")).toBe(false);
   });
 

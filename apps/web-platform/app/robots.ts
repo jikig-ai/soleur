@@ -1,10 +1,12 @@
 import type { MetadataRoute } from "next";
 
-// app.soleur.ai is the logged-in product surface, not a marketing site. Every
-// route is either an auth funnel page or a behind-login dashboard view, so
-// there is nothing here we want in a search index. Disallow the whole host to
-// keep app pages (e.g. /login, /signup) out of Search Console coverage — the
-// public, indexable marketing content lives on the apex docs site (soleur.ai).
+// app.soleur.ai is the product surface, not a marketing site: login-gated
+// dashboards plus token-gated invite/share routes (/invite/[token],
+// /shared/[token]) — none of which should ever enter a search index (a
+// tokenised URL is both useless and a leak surface if indexed). A host-wide
+// Disallow: / is the correct default here, not a /login,/signup carve-out
+// (that would leave /dashboard/* and the token routes crawlable). The public,
+// indexable marketing content lives on the apex docs site (soleur.ai).
 export default function robots(): MetadataRoute.Robots {
   return {
     rules: {
