@@ -84,6 +84,7 @@ done
 
 usage() {
   echo "Usage: flip.sh <flag> <prd|dev> <on|off> [--confirmed] [--org <orgId>] [--dry-run]" >&2
+  echo "       flip.sh <flag> <prd|dev> on --detach-shared --org <memberId> [--control-org <id>] [--confirmed]" >&2
   echo "Known flags: ${!FLAG_ENV_VARS[*]}" >&2
   exit 2
 }
@@ -277,6 +278,9 @@ audit_append() {
   after_bool=$([[ "$VALUE" == "on" ]] && echo "true" || echo "false")
   [[ -n "$before_override" ]] && before_bool="$before_override"
   [[ -n "$after_override" ]] && after_bool="$after_override"
+  # The WORM row is the compliance record — never append a malformed bool.
+  case "$before_bool" in true|false) ;; *) echo "FATAL: audit before_bool must be true|false (got: '$before_bool')" >&2; exit 4 ;; esac
+  case "$after_bool"  in true|false) ;; *) echo "FATAL: audit after_bool must be true|false (got: '$after_bool')" >&2; exit 4 ;; esac
   audit_id=$(audit_flag_flip_rpc "$audit_url" "$audit_srk" "$FLAG" "$ROLE" "$audit_target" "$VALUE" "$before_bool" "$after_bool" "$actor") || exit 4
   echo "  audit_id=$audit_id"
 }

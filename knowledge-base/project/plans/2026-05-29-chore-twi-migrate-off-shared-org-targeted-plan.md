@@ -208,9 +208,14 @@ Executed with the MERGED tooling. Each step gates the next on eval-verify succes
    the leak check is against a real sibling, not the synthetic default — per the flip.sh
    control-org warning.) After both: eval-verify BOTH orgs resolve twi `enabled=true`.
 2. **Detach twi from `org-targeted`** (tooled via D1-a, step 2):
-   `flip.sh team-workspace-invite ... --detach-shared --dry-run` (preview), AskUserQuestion
-   ack, then `--confirmed`. Post-detach eval-verify: BOTH member orgs STILL resolve twi
-   `enabled=true` (now served by `team-workspace-invite-orgs`), control org `enabled=false`.
+   `flip.sh team-workspace-invite prd on --detach-shared --org <member> --dry-run` (preview),
+   AskUserQuestion ack, then `--confirmed`. **A single `--detach-shared` run eval-verifies only
+   the one `--org` member.** twi has TWO member orgs, so run `--detach-shared --org <member>`
+   **once per member**: the first run performs the (one-time, both-env) detach AND eval-verifies
+   member #1; the second run (`--org <member2>`) is an idempotent no-op detach that eval-verifies
+   member #2 STILL resolves `enabled=true` (now served by `team-workspace-invite-orgs`). The
+   control org (synthetic non-member default — correct here, since both real orgs are members)
+   must settle to `enabled=false` on every run.
 3. **Retire `org-targeted`** (step 3): re-read attachments (Phase 0 read repeated); assert
    **zero** features attached to `org-targeted` in both envs; if zero → DELETE the segment via
    management API (tooled if D1-a adds a guarded retire mode, else a guarded one-off with the

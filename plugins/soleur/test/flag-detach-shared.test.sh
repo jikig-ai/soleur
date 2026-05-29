@@ -44,9 +44,11 @@ STUB
 # and every (method url) to $CURL_LOG. Knobs:
 #   FS_OVERRIDE_PRESENT  1 (default) → feature has an override row on org-targeted;
 #                        0 → no override (idempotent no-op path).
+#   FS_SHARED_ABSENT     1 → /segments/ list omits org-targeted (segment already gone).
 #   EVAL_TARGET_ENABLED  member eval result (default true — stays enabled post-detach).
 #   EVAL_CONTROL_ENABLED control eval result (default false — no leak).
 #   EVAL_HTTP_CODE       edge eval HTTP status (default 200).
+#   AUDIT_HTTP_CODE      audit RPC HTTP status (default 200; 500 → append-before-flip abort).
 make_detach_curl_stub() { # $1=dir
   cat > "$1/curl" <<'STUB'
 #!/usr/bin/env bash
@@ -59,7 +61,7 @@ done
 echo "$method $url" >> "${CURL_LOG:-/dev/null}"
 case "$url" in
   *"/rpc/audit_flag_flip"*)
-    printf '%s\n%s' '"11111111-1111-1111-1111-111111111111"' '200'; exit 0 ;;
+    printf '%s\n%s' '"11111111-1111-1111-1111-111111111111"' "${AUDIT_HTTP_CODE:-200}"; exit 0 ;;
   *"/identities/"*)
     en="false"
     if [[ "$data" == *"$TARGET_ORG_FULL"* ]];  then en="${EVAL_TARGET_ENABLED:-true}"; fi
@@ -76,7 +78,9 @@ case "$url" in
     fi
     exit 0 ;;
   *"/segments/")
-    printf '{"results":[{"id":%s,"name":"org-targeted"}]}' "$ORG_TARGETED_ID"; exit 0 ;;
+    if [[ "${FS_SHARED_ABSENT:-0}" == "1" ]]; then echo '{"results":[]}'
+    else printf '{"results":[{"id":%s,"name":"org-targeted"}]}' "$ORG_TARGETED_ID"; fi
+    exit 0 ;;
   *"/versions/"*)
     if [[ "$method" == "POST" ]]; then
       echo "$data" >> "${BODY_LOG:-/dev/null}"
@@ -118,8 +122,8 @@ if EVAL_TARGET_ENABLED=true EVAL_CONTROL_ENABLED=false \
      run_detach "$FLAG_NAME" prd on --detach-shared --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" --confirmed \
      >/dev/null 2>&1; then
   # 2a. version-POST body shape: delete-override carries org-targeted id; create/update empty.
-  grep -q '"segment_ids_to_delete_overrides":\[1130454\]' "$BODY_LOG" \
-    || { echo "detach: FAIL — version body missing segment_ids_to_delete_overrides:[1130454] (body: $(cat "$BODY_LOG"))" >&2; fail=1; }
+  grep -q "\"segment_ids_to_delete_overrides\":\[${ORG_TARGETED_ID}\]" "$BODY_LOG" \
+    || { echo "detach: FAIL — version body missing segment_ids_to_delete_overrides:[$ORG_TARGETED_ID] (body: $(cat "$BODY_LOG"))" >&2; fail=1; }
   grep -q '"feature_states_to_create":\[\]' "$BODY_LOG" \
     || { echo "detach: FAIL — version body must have empty feature_states_to_create" >&2; fail=1; }
   grep -q '"feature_states_to_update":\[\]' "$BODY_LOG" \
@@ -205,6 +209,41 @@ fi
 CURL_LOG="$(mktemp)"; DOPPLER_SET_LOG="$(mktemp)"; BODY_LOG="$(mktemp)"
 if run_detach "$FLAG_NAME" prd on --detach-shared --confirmed >/dev/null 2>&1; then
   echo "detach: FAIL — --detach-shared without --org must exit non-zero (need a member to eval-verify)" >&2; fail=1
+fi
+
+# --- 9. SHARED SEGMENT ALREADY GONE: clean no-op (no version POST), still verifies → 0 -
+# Distinct from test 6 (segment exists, no override row): here org-targeted itself
+# is absent, so detach_from_shared early-returns before touching any env.
+CURL_LOG="$(mktemp)"; DOPPLER_SET_LOG="$(mktemp)"; BODY_LOG="$(mktemp)"
+if FS_SHARED_ABSENT=1 EVAL_TARGET_ENABLED=true EVAL_CONTROL_ENABLED=false \
+     run_detach "$FLAG_NAME" prd on --detach-shared --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" --confirmed \
+     >/dev/null 2>&1; then
+  if grep -qE 'POST .*/versions/' "$CURL_LOG"; then
+    echo "detach: FAIL — org-targeted absent must not POST a version (clean no-op)" >&2; fail=1
+  fi
+  grep -q 'POST https://edge.api.flagsmith.com/api/v1/identities/' "$CURL_LOG" \
+    || { echo "detach: FAIL — eval-verify must still run when org-targeted is already gone" >&2; fail=1; }
+else
+  echo "detach: FAIL — clean no-op (org-targeted absent) should exit 0" >&2; fail=1
+fi
+
+# --- 10. AUDIT-FAILURE ABORT (append-before-flip): audit RPC non-2xx → exit 4, no mutation -
+CURL_LOG="$(mktemp)"; DOPPLER_SET_LOG="$(mktemp)"; BODY_LOG="$(mktemp)"
+if AUDIT_HTTP_CODE=500 EVAL_TARGET_ENABLED=true EVAL_CONTROL_ENABLED=false \
+     run_detach "$FLAG_NAME" prd on --detach-shared --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" --confirmed \
+     >/dev/null 2>&1; then
+  echo "detach: FAIL — audit RPC failure must abort (non-zero exit), not proceed" >&2; fail=1
+else
+  if grep -qE 'POST .*/versions/' "$CURL_LOG"; then
+    echo "detach: FAIL — audit failure must abort BEFORE any version POST (append-before-flip)" >&2; fail=1
+  fi
+fi
+
+# --- 11. value must be 'on' (off rejected: detach asserts the member stays enabled) ---
+CURL_LOG="$(mktemp)"; DOPPLER_SET_LOG="$(mktemp)"; BODY_LOG="$(mktemp)"
+if run_detach "$FLAG_NAME" prd off --detach-shared --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" --confirmed \
+     >/dev/null 2>&1; then
+  echo "detach: FAIL — --detach-shared with value 'off' must exit non-zero" >&2; fail=1
 fi
 
 [ "$fail" -eq 0 ] || exit 1
