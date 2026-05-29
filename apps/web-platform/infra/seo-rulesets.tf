@@ -11,8 +11,15 @@
 #
 # Background: Google Search Console (snapshot 2026-05-05) flagged 29 pages on
 # soleur.ai across five Critical-Indexing categories. Two systemic root causes:
-#   (A) Apex/www canonical mismatch — _data/site.json declared apex while
-#       Cloudflare 301s every apex URL to www. Fixed in Phase 1 of the plan.
+#   (A) Apex/www canonical direction — the docs site is canonical at the bare
+#       apex (soleur.ai); the live edge 301s www → apex (host-preserving
+#       canonicalizer, out-of-band CF config — see #4577). These legacy
+#       /pages/*.html redirect rules therefore target the apex host and match
+#       BOTH apex and www so legacy www deep-links collapse to the clean apex
+#       URL in a SINGLE hop (the SEO rule fires before the www→apex
+#       canonicalizer; verified live 2026-05-29). 2026-05-29 reconcile (#4577)
+#       flipped the rule expressions + targets apex-ward to stop the IaC
+#       contradicting the live edge — the OLD regime (apex 301→www) is gone.
 #   (B) Meta-refresh redirect template — Google classifies these soft signals
 #       non-deterministically across "Page with redirect", "Crawled - not
 #       indexed", and "Alternate page with proper canonical tag" buckets.
@@ -75,13 +82,13 @@ resource "cloudflare_ruleset" "seo_page_redirects" {
     action      = "redirect"
     description = "Redirect /pages/agents.html → /agents/"
     enabled     = true
-    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/agents.html\")"
+    expression  = "(http.host in {\"soleur.ai\" \"www.soleur.ai\"} and http.request.uri.path eq \"/pages/agents.html\")"
     action_parameters {
       from_value {
         status_code           = 301
         preserve_query_string = false
         target_url {
-          value = "https://www.soleur.ai/agents/"
+          value = "https://soleur.ai/agents/"
         }
       }
     }
@@ -91,13 +98,13 @@ resource "cloudflare_ruleset" "seo_page_redirects" {
     action      = "redirect"
     description = "Redirect /pages/skills.html → /skills/"
     enabled     = true
-    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/skills.html\")"
+    expression  = "(http.host in {\"soleur.ai\" \"www.soleur.ai\"} and http.request.uri.path eq \"/pages/skills.html\")"
     action_parameters {
       from_value {
         status_code           = 301
         preserve_query_string = false
         target_url {
-          value = "https://www.soleur.ai/skills/"
+          value = "https://soleur.ai/skills/"
         }
       }
     }
@@ -107,13 +114,13 @@ resource "cloudflare_ruleset" "seo_page_redirects" {
     action      = "redirect"
     description = "Redirect /pages/vision.html → /vision/"
     enabled     = true
-    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/vision.html\")"
+    expression  = "(http.host in {\"soleur.ai\" \"www.soleur.ai\"} and http.request.uri.path eq \"/pages/vision.html\")"
     action_parameters {
       from_value {
         status_code           = 301
         preserve_query_string = false
         target_url {
-          value = "https://www.soleur.ai/vision/"
+          value = "https://soleur.ai/vision/"
         }
       }
     }
@@ -123,13 +130,13 @@ resource "cloudflare_ruleset" "seo_page_redirects" {
     action      = "redirect"
     description = "Redirect /pages/community.html → /community/"
     enabled     = true
-    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/community.html\")"
+    expression  = "(http.host in {\"soleur.ai\" \"www.soleur.ai\"} and http.request.uri.path eq \"/pages/community.html\")"
     action_parameters {
       from_value {
         status_code           = 301
         preserve_query_string = false
         target_url {
-          value = "https://www.soleur.ai/community/"
+          value = "https://soleur.ai/community/"
         }
       }
     }
@@ -139,13 +146,13 @@ resource "cloudflare_ruleset" "seo_page_redirects" {
     action      = "redirect"
     description = "Redirect /pages/getting-started.html → /getting-started/"
     enabled     = true
-    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/getting-started.html\")"
+    expression  = "(http.host in {\"soleur.ai\" \"www.soleur.ai\"} and http.request.uri.path eq \"/pages/getting-started.html\")"
     action_parameters {
       from_value {
         status_code           = 301
         preserve_query_string = false
         target_url {
-          value = "https://www.soleur.ai/getting-started/"
+          value = "https://soleur.ai/getting-started/"
         }
       }
     }
@@ -155,13 +162,13 @@ resource "cloudflare_ruleset" "seo_page_redirects" {
     action      = "redirect"
     description = "Redirect /pages/legal.html → /legal/"
     enabled     = true
-    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/legal.html\")"
+    expression  = "(http.host in {\"soleur.ai\" \"www.soleur.ai\"} and http.request.uri.path eq \"/pages/legal.html\")"
     action_parameters {
       from_value {
         status_code           = 301
         preserve_query_string = false
         target_url {
-          value = "https://www.soleur.ai/legal/"
+          value = "https://soleur.ai/legal/"
         }
       }
     }
@@ -171,13 +178,13 @@ resource "cloudflare_ruleset" "seo_page_redirects" {
     action      = "redirect"
     description = "Redirect /pages/pricing.html → /pricing/"
     enabled     = true
-    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/pricing.html\")"
+    expression  = "(http.host in {\"soleur.ai\" \"www.soleur.ai\"} and http.request.uri.path eq \"/pages/pricing.html\")"
     action_parameters {
       from_value {
         status_code           = 301
         preserve_query_string = false
         target_url {
-          value = "https://www.soleur.ai/pricing/"
+          value = "https://soleur.ai/pricing/"
         }
       }
     }
@@ -187,13 +194,13 @@ resource "cloudflare_ruleset" "seo_page_redirects" {
     action      = "redirect"
     description = "Redirect /pages/changelog.html → /changelog/"
     enabled     = true
-    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/changelog.html\")"
+    expression  = "(http.host in {\"soleur.ai\" \"www.soleur.ai\"} and http.request.uri.path eq \"/pages/changelog.html\")"
     action_parameters {
       from_value {
         status_code           = 301
         preserve_query_string = false
         target_url {
-          value = "https://www.soleur.ai/changelog/"
+          value = "https://soleur.ai/changelog/"
         }
       }
     }
@@ -205,13 +212,13 @@ resource "cloudflare_ruleset" "seo_page_redirects" {
     action      = "redirect"
     description = "Redirect /pages/legal/terms-of-service.html → /legal/terms-and-conditions/ (renamed slug)"
     enabled     = true
-    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/legal/terms-of-service.html\")"
+    expression  = "(http.host in {\"soleur.ai\" \"www.soleur.ai\"} and http.request.uri.path eq \"/pages/legal/terms-of-service.html\")"
     action_parameters {
       from_value {
         status_code           = 301
         preserve_query_string = false
         target_url {
-          value = "https://www.soleur.ai/legal/terms-and-conditions/"
+          value = "https://soleur.ai/legal/terms-and-conditions/"
         }
       }
     }
@@ -237,6 +244,13 @@ resource "cloudflare_ruleset" "seo_page_redirects" {
   # `skip` action is not valid on the http_request_dynamic_redirect phase
   # (CF API error 20016, observed during PR #3974 apply attempts).
   # preserve_query_string is load-bearing for UTM campaign links.
+  #
+  # 2026-05-29 (#4577): NOT touched by the apex reconcile. The target
+  # `concat("https://", http.host, …)` is host-PRESERVING (no www/apex literal)
+  # — canonical-agnostic by design, so it upgrades each host to HTTPS without
+  # asserting a canonical direction. The only `www` literal here is inside the
+  # ACME carve-out host set `{"soleur.ai" "www.soleur.ai"}`, which MUST keep
+  # covering www so the legacy www LE HTTP-01 cert path is not broken.
   rules {
     action      = "redirect"
     description = "Force HTTPS on the soleur.ai zone (all hosts, all paths except ACME challenge on apex + www)"
@@ -259,7 +273,7 @@ resource "cloudflare_ruleset" "seo_page_redirects" {
 # Three rules, all in the http_response_headers_transform phase:
 #   1. api.soleur.ai/*  → noindex, nofollow  (Supabase REST root)
 #   2. deploy.soleur.ai/* → noindex, nofollow  (CF Access challenge surface)
-#   3. www.soleur.ai/blog/feed.xml → noindex  (RSS feed)
+#   3. soleur.ai/blog/feed.xml → noindex  (RSS feed; apex-canonical post-#4577)
 #
 # Why X-Robots-Tag and not robots.txt: a 403 is not equivalent to a noindex.
 # Google still records the URL's existence and may surface it in search
@@ -352,9 +366,13 @@ resource "cloudflare_ruleset" "seo_response_headers" {
 
   rules {
     action      = "rewrite"
-    description = "X-Robots-Tag: noindex on www.soleur.ai RSS feed"
+    description = "X-Robots-Tag: noindex on soleur.ai RSS feed"
     enabled     = true
-    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/blog/feed.xml\")"
+    # 2026-05-29: flipped www → apex. The feed is canonically served at the bare
+    # apex (https://soleur.ai/blog/feed.xml → 200); www/blog/feed.xml 301s to apex
+    # (out-of-band canonicalizer), so the noindex header must land on the apex
+    # response where the feed body actually lives. See issue #4577 (apex reconcile).
+    expression = "(http.host eq \"soleur.ai\" and http.request.uri.path eq \"/blog/feed.xml\")"
     action_parameters {
       headers {
         name      = "X-Robots-Tag"
