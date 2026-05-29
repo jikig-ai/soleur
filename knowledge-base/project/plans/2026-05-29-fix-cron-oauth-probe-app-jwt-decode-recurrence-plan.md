@@ -351,19 +351,18 @@ discoverability_test:
 
 ### Pre-merge (PR)
 
-- [ ] Phase 1 evidence pulled; the H-verdict is recorded verbatim in the PR body
-      (the `ghStatus`/`ghBody`/`clockSkewMs`/`attempts` values + the `GET /app` oracle result).
-- [ ] Exactly one Phase 2 fix branch is applied, matching the verdict; no retry-widening
-      and no PEM-format changes ship (those theories are closed — assert via diff review).
-- [ ] If a code guard ships: `readAppId()` rejects non-numeric / client-id / whitespace
-      `GITHUB_APP_ID` with a specific error, routed from all three `new App()` sites
-      (`createProbeOctokit`, `createAppJwtOctokit`, `createGitHubAppClient`); covered by
-      a synthesized-keypair unit test (RED→GREEN).
-- [ ] Runbook `probe_app_jwt_decode` section no longer claims #4569 resolved the class;
-      Phase 1 evidence recipes are appended. `grep -c "Fix shipped (this class)" runbook` == 0
-      OR the paragraph is rewritten to "insufficient".
-- [ ] `tsc --noEmit` + the package's actual test runner (check `package.json scripts.test`
-      / `bunfig.toml` — web-platform uses vitest) pass.
+- [x] Phase 1 evidence pulled; the H2 verdict is recorded verbatim in the PR body
+      (`ghStatus:401`, `clockSkewMs:345`, `attempts:3`, `release:db87c27d`; `GET /app` oracle = 401 even with trimmed App ID + normalized key).
+- [x] Exactly one Phase 2 fix branch is applied (H1/H2 code hardening); no retry-widening
+      and no PEM-format changes ship (verified via diff review — only the App-ID guard + runbook).
+- [x] `readAppId()` rejects non-numeric / client-id / whitespace-only `GITHUB_APP_ID`
+      with a specific error and strips surrounding whitespace, routed from all three
+      `new App()` sites (`createProbeOctokit`, `createAppJwtOctokit`, `createGitHubAppClient`)
+      AND the immune `github-app.ts getAppId()`; covered by a pure-string unit test (RED→GREEN).
+- [x] Runbook `probe_app_jwt_decode` section no longer claims #4569 resolved the class
+      ("necessary but insufficient — recurred on a release containing it"); Phase 1 evidence
+      recipes (STEP 1-4) appended.
+- [x] `tsc --noEmit` EXIT=0 + vitest (web-platform): 581 files, 7180 passed, 0 failed.
 
 ### Post-merge (operator)
 
