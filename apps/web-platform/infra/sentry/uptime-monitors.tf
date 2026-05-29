@@ -8,8 +8,9 @@
 # Plan: knowledge-base/project/plans/2026-05-18-feat-soleur-ai-uptime-alerting-plan.md
 #
 # WHY FOUR MONITORS:
-#   1. Apex (https://soleur.ai/) — primary; what alpha users land on.
-#   2. www (https://www.soleur.ai/) — secondary; CF-canonical post-#3974.
+#   1. Apex (https://soleur.ai/) — primary canonical; what alpha users land on.
+#   2. www (https://www.soleur.ai/) — redirect-HEALTH guard; asserts www keeps
+#      301-ing to apex (post-#4577 apex-canonical reconcile). NOT a 2xx probe.
 #   3. Deep path (https://soleur.ai/changelog/) — proves the Eleventy build
 #      didn't half-fail. Catches "root 200 but every other page 404s".
 #   4. ACME carve-out probe — LOAD-BEARING. Alerts on Rule 10 regression in
@@ -33,8 +34,10 @@
 #
 # ASSERTION SEMANTICS: the `assertion_json` argument is the SUCCESS condition.
 # Sentry creates an issue (fires the alert) when the assertion evaluates FALSE.
-# The 200-class monitors use a (>199 AND <300) assertion. The ACME probe uses
-# an `equals 404` assertion — the synthetic /probe path has no real challenge
+# The 200-class monitors (apex, changelog deep) use a (>199 AND <300) assertion.
+# The www monitor uses an `equals 301` assertion — apex is canonical, so www's
+# only healthy response is the 301 to apex (post-#4577). The ACME probe uses an
+# `equals 404` assertion — the synthetic /probe path has no real challenge
 # token, so the only "healthy" response is the 404 that proves Cloudflare did
 # NOT redirect (i.e., Rule 10's `and not (...)` ACME carve-out is still firing).
 
@@ -73,17 +76,39 @@ resource "sentry_uptime_monitor" "soleur_www" {
   name         = "soleur-ai-www"
   environment  = "production"
 
-  # Apex 301s to www post-PR #3974 (Rule 10 HTTPS catch-all in
-  # seo_page_redirects); www is the CF-canonical hostname.
+  # 2026-05-29 (#4577): apex is canonical; www 301s to apex (host-preserving
+  # out-of-band canonicalizer — live-verified GET https://www.soleur.ai/ → 301
+  # → https://soleur.ai/). The OLD 2xx assertion was ALREADY MIS-FIRING against
+  # the live 301 (an active false-page source). This monitor now guards
+  # redirect-HEALTH: it asserts www keeps returning 301, so a regression of the
+  # www→apex canonicalization (www starts 200-ing its own content again, or
+  # 5xx) pages immediately. NOT a duplicate of soleur_apex (which asserts the
+  # apex 200). The url stays www on purpose — that is the host under guard.
   url              = "https://www.soleur.ai/"
   method           = "GET"
   interval_seconds = 300
   timeout_ms       = 10000
 
-  downtime_threshold = 3
+  # 2026-05-29: longer fuse than the apex monitor (5 checks ≈ 25 min vs 3 ≈ 15).
+  # This monitor is the redirect-HEALTH guard, NOT the user-facing outage signal —
+  # soleur_apex (downtime_threshold=3, UNCHANGED) covers a real user-facing outage.
+  # A docs deploy rebuilds GitHub Pages and re-propagates the custom-domain
+  # apex-canonical redirect; during that window www transiently serves its own
+  # 200 instead of the 301, which empirically exceeds the apex monitor's 15-min
+  # fuse (PR #4573/#4578 deploy on 2026-05-29 paged soleur_www at 12:30 for a
+  # self-recovered ~15-min flap). The 25-min fuse absorbs the deploy window so
+  # self-inflicted rebuilds stop paging, at the cost of +10 min MTTD on a
+  # www-ONLY redirect regression — acceptable for that lower-severity failure
+  # mode, since a real user-facing outage still pages via soleur_apex at 15 min.
+  downtime_threshold = 5
   recovery_threshold = 1
 
-  assertion_json = local.uptime_assertion_2xx
+  # Success = exactly 301 (www must redirect to apex). Sentry fires when this is
+  # FALSE — i.e., any non-301 (200, 302, 5xx) signals the canonicalization broke.
+  # Mirrors the soleur_acme_probe equals-404 pattern below.
+  assertion_json = provider::sentry::assertion(
+    provider::sentry::op_status_code_check("equals", 301)
+  )
 }
 
 resource "sentry_uptime_monitor" "soleur_changelog_deep" {

@@ -378,3 +378,91 @@ describe("#2708 — Next.js layout title is dashboard-scoped", () => {
     expect(src).toContain('default: "Soleur Dashboard"');
   });
 });
+
+// -- Test 9: GSC coverage regression guard (2026-05-29 www→apex host flip) --
+// Guards the Search Console "Page with redirect" / "crawled-not-indexed" /
+// "404" cluster fixed on 2026-05-29. The sitemap must list only the bare apex
+// canonical host (never the redirecting www host), must exclude legacy
+// /pages/*.html redirect stubs + /index.html + the RSS feed, the changelog
+// must not re-inject www links (APEX_RE rewriter removed from _data/github.js),
+// and the renamed terms-of-service stub must resolve. Pre-flip this guard
+// would fail: the sitemap used the www host and no terms-of-service stub
+// existed. See
+// knowledge-base/project/plans/2026-05-29-fix-gsc-coverage-indexing-host-canonical-plan.md.
+
+describe("GSC coverage regression guard (www→apex host flip)", () => {
+  test("sitemap.xml uses the apex canonical host only — no www, no legacy paths", () => {
+    const siteUrl = (JSON.parse(readFileSync(SITE_JSON, "utf8")) as { url: string })
+      .url;
+    // Source-of-truth canonical host must be the bare apex (no www.).
+    expect(siteUrl).toBe("https://soleur.ai");
+
+    const sitemap = readSite("sitemap.xml");
+    const locs = [...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]);
+    expect(locs.length).toBeGreaterThan(0);
+
+    // Every <loc> uses the apex host declared in site.json (bare apex or a
+    // path under it) — nothing off-host.
+    const offHost = locs.filter(
+      (u) => u !== siteUrl && !u.startsWith(`${siteUrl}/`),
+    );
+    expect(
+      offHost,
+      `sitemap <loc> entries off the canonical host: ${offHost.join(", ")}`,
+    ).toEqual([]);
+
+    // No www host leaks (www 301s → apex; listing it re-triggers "Page with
+    // redirect").
+    const wwwLocs = locs.filter((u) => /https:\/\/www\.soleur\.ai/.test(u));
+    expect(
+      wwwLocs,
+      `www-host <loc> entries (canonical is apex): ${wwwLocs.join(", ")}`,
+    ).toEqual([]);
+
+    // Legacy /pages/*.html redirect stubs, /index.html, and the RSS feed must
+    // NOT appear in the sitemap.
+    const legacy = locs.filter((u) =>
+      /\/pages\/|\/index\.html|feed\.xml/.test(u),
+    );
+    expect(
+      legacy,
+      `legacy/excluded entries in sitemap: ${legacy.join(", ")}`,
+    ).toEqual([]);
+
+    // Positive guard for the load-bearing exclusion mechanism: the
+    // terms-of-service redirect stub IS built on disk (asserted in a sibling
+    // test) but MUST be absent from the sitemap. This is the real failure mode
+    // the `/pages/` token above defends — it fires if page-redirects.njk loses
+    // its `eleventyExcludeFromCollections: true` and stubs leak into the sitemap.
+    const stubLocs = locs.filter((u) => u.includes("terms-of-service"));
+    expect(
+      stubLocs,
+      `redirect-stub entries leaked into sitemap: ${stubLocs.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  test("changelog page canonical is apex + github.js APEX_RE rewriter removed", () => {
+    const html = readSite("changelog/index.html");
+    // Canonical <link> renders the apex host (deterministic — derives from
+    // site.url). Matched as an HTML-element regex (not a bare URL substring) to
+    // avoid the js/incomplete-url-substring-sanitization CodeQL pattern that
+    // fires on `.includes("https://…")` host checks.
+    expect(html).toMatch(/rel="canonical"[^>]*href="https:\/\/soleur\.ai\//);
+    // AC15: the apex→www rewriter is gone from the data loader. Asserted at the
+    // SOURCE (deterministic) — NOT against rendered changelog text. The
+    // changelog is built from LIVE GitHub release bodies fetched at build time,
+    // and a release note can legitimately contain the literal "www.soleur.ai"
+    // (e.g. the release describing this very www→apex flip), so a rendered-text
+    // absence check is non-deterministic and produces false CI failures.
+    const githubJs = readFileSync(
+      resolve(REPO_ROOT, "plugins/soleur/docs/_data/github.js"),
+      "utf8",
+    );
+    expect(githubJs).not.toMatch(/APEX_RE|www\.soleur\.ai/);
+  });
+
+  test("legacy terms-of-service redirect stub resolves to terms-and-conditions", () => {
+    const stub = readSite("pages/legal/terms-of-service.html");
+    expect(stub).toContain("/legal/terms-and-conditions/");
+  });
+});
