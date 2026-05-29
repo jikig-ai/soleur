@@ -272,8 +272,9 @@ logs:
   retention: "Sentry default project retention; Better Stack per plan"
 
 discoverability_test:
-  command: "./node_modules/.bin/vitest run apps/web-platform/lib/feature-flags/server.test.ts"
-  expected_output: "All tests pass, including the new 'timeout → warning-level debounced mirror + env fallback, page does not throw' case"
+  command: curl -fsS -o /dev/null -w "%{http_code}" --max-time 10 https://app.soleur.ai/login
+  expected_output: "200"
+  note: "The user-facing invariant this fix protects is that /login keeps rendering (200) even when the Flagsmith flag-fetch times out — graceful degradation via runtimeEnvFallback(). A no-SSH operator-runnable probe. The warn-level Sentry signal is asserted by the vitest suite (./node_modules/.bin/vitest run lib/feature-flags/server.test.ts test/observability-mirror-debounce.test.ts lib/feature-flags/timeout-mirror-integration.test.ts) and observed in the Sentry web-platform issue stream at warning level."
 ```
 
 ## Acceptance Criteria
