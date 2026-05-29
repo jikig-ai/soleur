@@ -54,7 +54,7 @@ The feature description was written from the GSC CSV drilldown (a snapshot of th
 
 **If this leaks, the user's data/workflow/money is exposed via:** N/A — this change touches only public marketing-site SEO metadata (host strings, redirect stubs, a `robots: index:false` flag on a login page). No personal data, auth, or money surfaces.
 
-**Brand-survival threshold:** `aggregate pattern` — discoverability decay is a slow aggregate SEO signal, not a single-user incident. No per-PR CPO sign-off required; section present per gate.
+- **Brand-survival threshold:** `aggregate pattern` — discoverability decay is a slow aggregate SEO signal, not a single-user incident. No per-PR CPO sign-off required; section present per gate.
 
 ## Acceptance Criteria
 
@@ -157,8 +157,9 @@ logs:
   where: GitHub Actions run logs for deploy-docs.yml
   retention: GitHub default (90 days)
 discoverability_test:
-  command: "npx @11ty/eleventy && bash plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh _site && curl -sI https://soleur.ai/sitemap.xml"
-  expected_output: "validate-seo.sh exits 0 reporting 'single canonical host: https://soleur.ai'; curl returns HTTP 200"
+  command: 'curl -fsS -o /dev/null -w "%{http_code}" --max-time 10 https://soleur.ai/sitemap.xml'
+  expected_output: "200"
+  note: "Single-command live-world probe (no ssh, no shell chaining) — proves the apex sitemap URL resolves and serves 200. Full local build+validate (npx @11ty/eleventy → validate-seo.sh → validate-csp.sh) is in Test Strategy + Phase 5; post-deploy content probes are AC13."
 ```
 
 ## Test Strategy
