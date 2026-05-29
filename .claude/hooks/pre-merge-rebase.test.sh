@@ -66,6 +66,30 @@ assert_deny() {
   TOTAL=$((TOTAL + 1))
 }
 
+# assert_no_intercept <name> <incidents_root> <stdout> <exit_code>
+# Inverse of assert_deny: the early-exit (no-merge-detected) path must exit 0,
+# emit NO stdout, and write NO incidents jsonl (the hook returns before any
+# emit_incident). Used by the #4600 false-positive cases and the malformed-JSON
+# fail-open case.
+assert_no_intercept() {
+  local name="$1" incidents="$2" out="$3" exit_code="$4"
+  local jsonl="$incidents/.claude/.rule-incidents.jsonl"
+  local ok=1
+  if [[ "$exit_code" -ne 0 ]]; then ok=0; fi
+  if [[ -n "$out" ]]; then ok=0; fi
+  if [[ -f "$jsonl" ]]; then ok=0; fi
+  if [[ "$ok" -eq 1 ]]; then
+    echo "PASS: $name"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL: $name"
+    echo "  exit=$exit_code stdout=${out:-<empty>} jsonl_exists=$([[ -f "$jsonl" ]] && echo yes || echo no)"
+    echo "  expected: exit=0 stdout=<empty> jsonl_exists=no"
+    FAIL=$((FAIL + 1))
+  fi
+  TOTAL=$((TOTAL + 1))
+}
+
 run_hook() {
   local incidents="$1" payload="$2"
   # Capture stdout; stderr goes to /dev/null to keep test output clean.
@@ -207,10 +231,210 @@ EOF
   rm -rf "$tmp"
 }
 
+# --- #4600 false-positive cases: gh pr merge text inside a commit message ---
+# These commits document the rule "do not hand-roll gh pr merge"; the hook must
+# NOT mistake them for a merge. Each asserts the early-exit (no-intercept) path.
+
+# T-FP1: multi-line `git commit -m` body whose body line STARTS with gh pr merge
+# (triggers the `^` anchor of the merge-detection regex against the body text).
+t_fp1_commit_body_newline() {
+  local tmp; tmp=$(mktemp -d)
+  local work="$tmp/work" incidents="$tmp/incidents"
+  mkdir -p "$work" "$incidents"
+  init_git_repo "$work"
+  git -C "$work" commit -q --allow-empty -m "init"
+  git -C "$work" checkout -q -b feat-fp1
+
+  local payload out exit_code=0
+  payload=$(make_payload "$work" 'git commit -m "do not hand-roll
+gh pr merge directly"')
+  out=$(printf '%s' "$payload" | INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
+  exit_code=${exit_code:-0}
+  assert_no_intercept "T-FP1 commit body newline-prefixed gh pr merge" "$incidents" "$out" "$exit_code"
+  rm -rf "$tmp"
+}
+
+# T-FP2: body contains a chain-operator + gh pr merge inside the quoted message.
+t_fp2_commit_body_chain_op() {
+  local tmp; tmp=$(mktemp -d)
+  local work="$tmp/work" incidents="$tmp/incidents"
+  mkdir -p "$work" "$incidents"
+  init_git_repo "$work"
+  git -C "$work" commit -q --allow-empty -m "init"
+  git -C "$work" checkout -q -b feat-fp2
+
+  local payload out exit_code=0
+  payload=$(make_payload "$work" 'git commit -m "docs: avoid && gh pr merge --auto in runbooks"')
+  out=$(printf '%s' "$payload" | INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
+  exit_code=${exit_code:-0}
+  assert_no_intercept "T-FP2 commit body chain-op gh pr merge --auto" "$incidents" "$out" "$exit_code"
+  rm -rf "$tmp"
+}
+
+# T-FP3: body contains a numbered `gh pr merge 4598` mid-line. NOTE: this case
+# already passes against the PRE-FIX hook because the anchor regex requires a
+# chain-op/anchor token (^, &&, ||, ;, " -- ") immediately before the verb, and
+# a mid-line " ... gh pr merge 4598 ..." has only a space before it. It is kept
+# as an ANCHORED-REGEX regression guard: if someone ever loosens the anchor
+# group to match the verb anywhere, this case starts failing — and it documents
+# why issue option (b) "require a PR-number arg" is insufficient as a sole fix
+# (a numbered merge in a body would still match an anchor-free regex).
+t_fp3_commit_body_numbered() {
+  local tmp; tmp=$(mktemp -d)
+  local work="$tmp/work" incidents="$tmp/incidents"
+  mkdir -p "$work" "$incidents"
+  init_git_repo "$work"
+  git -C "$work" commit -q --allow-empty -m "init"
+  git -C "$work" checkout -q -b feat-fp3
+
+  local payload out exit_code=0
+  payload=$(make_payload "$work" 'git commit -m "docs: never hand-roll gh pr merge 4598 directly"')
+  out=$(printf '%s' "$payload" | INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
+  exit_code=${exit_code:-0}
+  assert_no_intercept "T-FP3 commit body numbered gh pr merge 4598" "$incidents" "$out" "$exit_code"
+  rm -rf "$tmp"
+}
+
+# T-FP4: bare `git commit -F - <<EOF … EOF` heredoc body (NOT wrapped in quotes)
+# whose body line starts with the verb. This is the shape the branch is named
+# for; the quote-strip alone does not cover it (no surrounding quotes), so the
+# heredoc-body strip in the SCAN derivation is what makes this no-intercept.
+# True RED against the pre-fix hook (which intercepts via the ^-anchor).
+t_fp4_commit_body_heredoc() {
+  local tmp; tmp=$(mktemp -d)
+  local work="$tmp/work" incidents="$tmp/incidents"
+  mkdir -p "$work" "$incidents"
+  init_git_repo "$work"
+  git -C "$work" commit -q --allow-empty -m "init"
+  git -C "$work" checkout -q -b feat-fp4
+
+  local payload out exit_code=0
+  payload=$(make_payload "$work" 'git commit -F - <<EOF
+do not hand-roll
+gh pr merge directly
+EOF')
+  out=$(printf '%s' "$payload" | INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
+  exit_code=${exit_code:-0}
+  assert_no_intercept "T-FP4 bare heredoc commit body" "$incidents" "$out" "$exit_code"
+  rm -rf "$tmp"
+}
+
+# --- Anti-regression: real merges must STILL fire the review-evidence gate ---
+
+# T5: bare `gh pr merge 123 --squash`, no review evidence ⇒ deny (same as T1 but
+# kept as an explicit anti-regression anchor for the quote-strip change).
+t5_bare_merge_fires() {
+  local tmp; tmp=$(mktemp -d)
+  local work="$tmp/work" incidents="$tmp/incidents"
+  mkdir -p "$work" "$incidents"
+  init_git_repo "$work"
+  git -C "$work" commit -q --allow-empty -m "init"
+  git -C "$work" checkout -q -b feat-t5
+  git -C "$work" commit -q --allow-empty -m "feature work"
+
+  local payload out exit_code=0
+  payload=$(make_payload "$work" "gh pr merge 123 --squash")
+  out=$(printf '%s' "$payload" | INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
+  exit_code=${exit_code:-0}
+  assert_deny "T5 bare merge fires" "$incidents" "$out" "$exit_code" \
+    "rf-never-skip-qa-review-before-merging"
+  rm -rf "$tmp"
+}
+
+# T6: `git commit -m "wip" && gh pr merge 123 --squash` — a REAL chained merge
+# after a commit. The quote-strip must blank only "wip" and leave the chained
+# `&& gh pr merge` intact so the gate still fires. Guards the boundary the
+# rejected leading-`git commit` skip heuristic would have broken.
+t6_chained_after_commit_fires() {
+  local tmp; tmp=$(mktemp -d)
+  local work="$tmp/work" incidents="$tmp/incidents"
+  mkdir -p "$work" "$incidents"
+  init_git_repo "$work"
+  git -C "$work" commit -q --allow-empty -m "init"
+  git -C "$work" checkout -q -b feat-t6
+  git -C "$work" commit -q --allow-empty -m "feature work"
+
+  local payload out exit_code=0
+  payload=$(make_payload "$work" 'git commit -m "wip" && gh pr merge 123 --squash')
+  out=$(printf '%s' "$payload" | INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
+  exit_code=${exit_code:-0}
+  assert_deny "T6 chained-after-commit merge fires" "$incidents" "$out" "$exit_code" \
+    "rf-never-skip-qa-review-before-merging"
+  rm -rf "$tmp"
+}
+
+# T7: `with_lock`-wrapped form (`... -- gh pr merge 99 --squash`). The `\s--\s`
+# alternative must still fire after the quote-strip.
+t7_wrapped_merge_fires() {
+  local tmp; tmp=$(mktemp -d)
+  local work="$tmp/work" incidents="$tmp/incidents"
+  mkdir -p "$work" "$incidents"
+  init_git_repo "$work"
+  git -C "$work" commit -q --allow-empty -m "init"
+  git -C "$work" checkout -q -b feat-t7
+  git -C "$work" commit -q --allow-empty -m "feature work"
+
+  local payload out exit_code=0
+  payload=$(make_payload "$work" "bash session-state.sh with_lock merge-main 600 -- gh pr merge 99 --squash")
+  out=$(printf '%s' "$payload" | INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
+  exit_code=${exit_code:-0}
+  assert_deny "T7 with_lock-wrapped merge fires" "$incidents" "$out" "$exit_code" \
+    "rf-never-skip-qa-review-before-merging"
+  rm -rf "$tmp"
+}
+
+# T8: a REAL `gh pr merge` chained AFTER a heredoc terminator must still fire.
+# Guards against the heredoc-body strip over-blanking past the closing
+# delimiter (which would silently bypass the review-evidence gate).
+t8_merge_after_heredoc_fires() {
+  local tmp; tmp=$(mktemp -d)
+  local work="$tmp/work" incidents="$tmp/incidents"
+  mkdir -p "$work" "$incidents"
+  init_git_repo "$work"
+  git -C "$work" commit -q --allow-empty -m "init"
+  git -C "$work" checkout -q -b feat-t8
+  git -C "$work" commit -q --allow-empty -m "feature work"
+
+  local payload out exit_code=0
+  payload=$(make_payload "$work" 'git commit -F - <<EOF
+release notes body
+EOF
+git push && gh pr merge 8 --squash')
+  out=$(printf '%s' "$payload" | INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
+  exit_code=${exit_code:-0}
+  assert_deny "T8 merge after heredoc terminator fires" "$incidents" "$out" "$exit_code" \
+    "rf-never-skip-qa-review-before-merging"
+  rm -rf "$tmp"
+}
+
+# --- T-MJ1: malformed-JSON stdin must fail open (exit 0, no deny) -----------
+# Before the fix, jq exits 5 under `set -eo pipefail` and the hook aborts with
+# no JSON. After the fix (`|| true`), CMD="" ⇒ no merge detected ⇒ exit 0.
+t_mj1_malformed_json_failopen() {
+  local tmp; tmp=$(mktemp -d)
+  local incidents="$tmp/incidents"
+  mkdir -p "$incidents"
+
+  local out exit_code=0
+  out=$(printf 'not json' | INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
+  exit_code=${exit_code:-0}
+  assert_no_intercept "T-MJ1 malformed JSON fails open" "$incidents" "$out" "$exit_code"
+  rm -rf "$tmp"
+}
+
 t1_review_evidence_gate
 t2_uncommitted_changes
 t3_merge_conflict
 t4_push_failure
+t_fp1_commit_body_newline
+t_fp2_commit_body_chain_op
+t_fp3_commit_body_numbered
+t_fp4_commit_body_heredoc
+t5_bare_merge_fires
+t6_chained_after_commit_fires
+t7_wrapped_merge_fires
+t8_merge_after_heredoc_fires
+t_mj1_malformed_json_failopen
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"

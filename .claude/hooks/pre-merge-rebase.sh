@@ -39,12 +39,36 @@ fi
 export SOLEUR_HOOK_NAME="pre-merge-rebase"
 
 INPUT=$(cat)
-CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
+# `|| true`: under `set -eo pipefail`, jq exits 5 on malformed/empty stdin and
+# would otherwise abort the script before the fail-open guards below — breaking
+# the header's "fail-open on infrastructure errors" invariant. Degrade to "" so
+# a malformed payload yields no merge-detection and a clean exit 0 (#4600).
+CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""' || true)
+
+# Strip commit-message bodies before merge-detection so a commit whose message
+# documents "gh pr merge" (e.g. `git commit -m "do not hand-roll gh pr merge"`)
+# is not mistaken for a merge (#4600). perl -0777 slurps the whole (possibly
+# multi-line) command; the /gs substitutions blank, in order:
+#   1. heredoc bodies — `<<[-]['"]?DELIM['"]? … \nDELIM` (covers `git commit
+#      -F - <<EOF … EOF`). Only the body between the opening line and the
+#      closing delimiter is blanked; the markers and anything AFTER the closing
+#      delimiter (where a real chained `gh pr merge` could live) are preserved.
+#   2. double- and single-quoted spans (escape-aware) — covers `-m "…"` and the
+#      `-m "$(cat <<EOF … EOF)"` shape where the heredoc sits inside the quote.
+# Both leave the command structure OUTSIDE quotes/heredocs intact, where a real
+# chained `gh pr merge` lives. Sibling precedent: follow-through-directive-
+# gate.sh:72 ("sed -E can't do non-greedy across newlines" — same
+# multiline-quoted-body class). On strip-tool failure, fall back to the raw
+# $CMD so we fail TOWARD firing (over-detect), never toward a silent
+# merge-bypass.
+SCAN=$(printf '%s' "$CMD" | perl -0777 -pe \
+  's/(<<-?\s*["'\'']?)(\w+)(["'\'']?)(.*?)(\n[ \t]*\2\b)/$1$2$3$5/gs; s/"(?:[^"\\]|\\.)*"/ /gs; s/'\''(?:[^'\''\\]|\\.)*'\''/ /gs;' 2>/dev/null || printf '%s' "$CMD")
 
 # Early exit: only intercept gh pr merge commands.
 # Word boundary (\s|$) prevents false positives on hypothetical merge-* subcommands.
 # Chain operator pattern from guardrails.sh catches chained commands.
-if ! echo "$CMD" | grep -qE '(^|&&|\|\||;|\s--\s)\s*gh\s+pr\s+merge(\s|$)'; then
+# Runs against $SCAN (quote-stripped), not $CMD, per the #4600 fix above.
+if ! echo "$SCAN" | grep -qE '(^|&&|\|\||;|\s--\s)\s*gh\s+pr\s+merge(\s|$)'; then
   exit 0
 fi
 # Note: the `\s--\s` alternative catches the with_lock wrapped form
@@ -53,7 +77,8 @@ fi
 # uncommitted-changes check, or the origin/main auto-sync.
 
 # Determine working directory from hook input (.cwd is authoritative).
-WORK_DIR=$(echo "$INPUT" | jq -r '.cwd // ""')
+# `|| true` for the same fail-open reason as the CMD read above (#4600).
+WORK_DIR=$(echo "$INPUT" | jq -r '.cwd // ""' || true)
 if [[ -z "$WORK_DIR" ]] || [[ ! -d "$WORK_DIR" ]]; then
   exit 0
 fi
@@ -94,6 +119,9 @@ REVIEW_COMMIT=$(git -C "$WORK_DIR" log origin/main..HEAD --oneline 2>/dev/null \
 REVIEW_ISSUES=""
 if [[ -z "$REVIEW_TODOS" ]] && [[ -z "$REVIEW_COMMIT" ]]; then
   # Only run the network check if local signals found nothing
+  # Reads $CMD (not $SCAN) intentionally: by here the command IS a real merge
+  # (passed the SCAN filter), and the PR-number arg lives outside quotes, so
+  # the #4600 quote-strip is unnecessary for the extraction.
   PR_NUMBER=$(echo "$CMD" | grep -oE 'gh\s+pr\s+merge\s+([0-9]+)' | grep -oE '[0-9]+' || true)
   if [[ -z "$PR_NUMBER" ]]; then
     # No PR number in command args -- fall back to branch-based lookup
