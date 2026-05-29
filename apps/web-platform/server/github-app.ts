@@ -12,6 +12,7 @@
 import { createHash, createSign, randomUUID } from "crypto";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
+import { readAppId } from "./github/app-private-key";
 
 const log = createChildLogger("github-app");
 
@@ -92,7 +93,11 @@ interface GitHubRepoResponse {
 function getAppId(): string {
   const appId = process.env.GITHUB_APP_ID;
   if (!appId) throw new Error("GITHUB_APP_ID is not set");
-  return appId;
+  // Trim + numeric-validate before it becomes the JWT `iss`. The hand-rolled
+  // signer reads the same GITHUB_APP_ID as the @octokit/app paths, so the same
+  // whitespace/client-id-confusion class applies here (Sentry 00bdfdf1…: a
+  // trailing-newline App ID). Shared guard keeps every App-JWT path consistent.
+  return readAppId(appId);
 }
 
 let pemShapeWarned = false;

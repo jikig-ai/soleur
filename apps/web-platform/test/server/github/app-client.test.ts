@@ -83,13 +83,17 @@ describe("createGitHubAppClient (PR-H Phase 3 + PR-H+1 audit hook)", () => {
 
   it("reads GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY from process.env on every call", async () => {
     const mod = await import("@/server/github/app-client");
-    process.env.GITHUB_APP_ID = "first";
+    // Distinct numeric App IDs per call prove the env is re-read each time (not
+    // cached). They must be numeric: readAppId() now validates GITHUB_APP_ID
+    // before new App(), so a non-numeric placeholder ("first"/"second") would
+    // throw before the constructor is reached.
+    process.env.GITHUB_APP_ID = "1001";
     await mod.createGitHubAppClient(1, SYNTHETIC_FOUNDER_ID);
-    process.env.GITHUB_APP_ID = "second";
+    process.env.GITHUB_APP_ID = "2002";
     await mod.createGitHubAppClient(1, SYNTHETIC_FOUNDER_ID);
 
-    expect(AppCtor.mock.calls[0][0]).toMatchObject({ appId: "first" });
-    expect(AppCtor.mock.calls[1][0]).toMatchObject({ appId: "second" });
+    expect(AppCtor.mock.calls[0][0]).toMatchObject({ appId: "1001" });
+    expect(AppCtor.mock.calls[1][0]).toMatchObject({ appId: "2002" });
   });
 
   it("passes the installationId through to getInstallationOctokit", async () => {

@@ -7,7 +7,7 @@ applies_to:
   - apps/web-platform/server/github/probe-octokit.ts
   - apps/web-platform/scripts/configure-sentry-alerts.sh
 related_issues: [2997, 2979, 2982, 3001, 1784, 3183]
-related_prs: [2975, 2994, 3007, 3181]
+related_prs: [2975, 2994, 3007, 3181, 4498, 4513, 4565, 4568, 4569]
 ---
 
 # OAuth probe failure runbook
@@ -410,34 +410,104 @@ HttpError: A JSON web token could not be decoded - https://docs.github.com/rest
 `web-platform@0.101.100`.) The operator blind spot: a real prod auth outage can
 go unsurfaced because the probe's own GitHub auth is broken.
 
-**Root cause.** `@octokit/app` mints its App JWT via
-`universal-github-app-jwt`'s Web-Crypto path. That path imports the key with
-`importKey("pkcs8", …)` (rejecting PKCS#1) and extracts the DER with
-`pem.trim().split("\n").slice(1,-1).join("")` + `atob` — which corrupts the key
-when the PEM carries `\r\n` line endings or is in PKCS#1 form, producing a
-signature GitHub rejects as "could not be decoded". The sibling
-`server/github-app.ts` path is immune because it signs via Node's
-whitespace/format-tolerant `crypto.createSign`.
+**"Could not be decoded" is GitHub's GENERIC rejection — do NOT assume it means
+key format.** Empirically (verified 2026-05-29 against the prod App), GitHub
+returns this exact message for *every* JWT it cannot validate: a corrupt
+signature, a key that does not match the App, an unknown/ malformed `iss`, AND a
+mangled-PEM signature all produce the identical string. The message therefore
+tells you nothing about WHICH layer failed. The decisive signal is the
+`create-probe-octokit:app-jwt` breadcrumb `extra` (below), not the message.
 
-**Fix shipped (this class).** `probe-octokit.ts` now canonicalizes the key with
-`normalizeAppPrivateKey()` —
-`crypto.createPrivateKey(pem).export({ type: "pkcs8", format: "pem" })` — before
-handing it to `new App()`, emitting a clean LF-only PKCS#8 PEM regardless of the
-stored key's format or line endings. Both factories route through it.
+**Two distinct root-cause classes have produced this symptom:**
 
-**Verify the stored prod key (non-SSH, never prints key material).** Confirm the
-Doppler `prd` secret parses as a valid private key and report only its
-type/format:
+1. **Key FORMAT corruption (Sentry `4e6a3003…`, fixed by #4569).**
+   `universal-github-app-jwt`'s DER extraction
+   (`pem.trim().split("\n").slice(1,-1).join("")` + `atob`) corrupts the key when
+   the PEM carries `\r\n` or is PKCS#1, producing a signature GitHub rejects.
+   `normalizeAppPrivateKey()` (`crypto.createPrivateKey(pem).export({type:"pkcs8"})`)
+   fixes this; both probe factories route through it.
+
+2. **Credential CONTENT wrong — key↔App mismatch, OR malformed `iss` (Sentry
+   `00bdfdf1…`).** #4569's PKCS#8 normalization was **necessary but
+   insufficient**: issue `00bdfdf1` recurred on release `0.101.100+db87c27d`,
+   which *provably contains* #4569 (`git merge-base --is-ancestor 9da77d86
+   db87c27d` = true). A structurally-clean key is no help if its public half is
+   not registered for the App (`GITHUB_APP_ID`), or if `GITHUB_APP_ID` itself is
+   malformed. On 2026-05-29 BOTH were present in Doppler `prd`: the
+   `GITHUB_APP_PRIVATE_KEY` did not match App `soleur-ai` (`3261325`), **and**
+   `GITHUB_APP_ID` was `"3261325\n"` (correct numeric ID, trailing newline).
+   Code fix (#TBD): a shared `readAppId()` guard (`server/github/app-private-key.ts`)
+   trims the App ID and throws a self-explaining error on a non-numeric value,
+   routed from all App-JWT sites. The key mismatch is operator-only (re-mint).
+
+> **If this recurs: read the breadcrumb FIRST (recipe below) before touching the
+> signing path.** Re-applying the #4569 format fix, or widening retry-on-401, will
+> NOT help a content/`iss` problem — those theories are closed for this symptom.
+
+**STEP 1 — Pull the decisive breadcrumb (`ghStatus`/`ghBody`/`clockSkewMs`, PR
+#4568). This single read selects the fix.** Fetch the event by its ID (the 32-hex
+ID in the Sentry email is the EVENT id, not a numeric issue group — use the
+project-scoped events endpoint, NOT `/issues/<id>/`):
 
 ```bash
-doppler secrets get GITHUB_APP_PRIVATE_KEY -p soleur -c prd --plain \
-  | node -e 'const k=require("crypto").createPrivateKey(require("fs").readFileSync(0,"utf8").replace(/\\n/g,"\n")); console.log(k.asymmetricKeyType, k.type)'
-# Expect: rsa private — and the app now normalizes to PKCS#8 regardless of the
-# stored format. If this throws, the secret is malformed at rest (re-mint the
-# GitHub App key as PKCS#8 and re-set the Doppler prd secret).
+export SENTRY_API_HOST="${SENTRY_API_HOST:-de.sentry.io}"
+SENTRY_AUTH_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN -p soleur -c prd --plain)
+EVENT_ID="00bdfdf1543c472e91552d45565f1e74"   # ← the ID from the Sentry email
+curl -s -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+  "https://${SENTRY_API_HOST}/api/0/projects/jikigai-eu/web-platform/events/${EVENT_ID}/" \
+  | jq '{release: .release.version, ctx: (.context | {ghStatus, ghBody, ghRequestId, clockSkewMs, attempts})}'
 ```
 
-**Re-run + confirm recovery (no SSH, no dashboard-watching).**
+Decision rule:
+- `ghStatus: 401` (GitHub rejected a SENT JWT) + `attempts: 3` (persisted across
+  retries) ⇒ credential CONTENT class (key↔App mismatch or bad `iss`). Retry/format
+  fixes are irrelevant — go to STEP 2.
+- No `ghStatus` (error thrown BEFORE the HTTP request) ⇒ a pre-request signing
+  throw (format/DER class) — re-check #4569's normalization.
+- `clockSkewMs` large (≫ 30000) ⇒ clock skew on the Hetzner Inngest VM.
+
+**STEP 2 — Verify the App ID shape + key↔App binding (non-SSH, never prints
+secrets).** App-ID shape:
+
+```bash
+doppler secrets get GITHUB_APP_ID -p soleur -c prd --plain \
+  | node -e 'const s=require("fs").readFileSync(0,"utf8");const t=s.trim();
+    console.log(JSON.stringify({len:s.length,trimmedLen:t.length,numeric:/^[0-9]+$/.test(t),looksLikeClientId:/^Iv\d/.test(t),hasWhitespace:s!==t}))'
+# numeric:false OR looksLikeClientId:true ⇒ wrong App ID (client_id?). hasWhitespace:true ⇒ stray \n.
+```
+
+Key↔App oracle — ask GitHub to validate the exact `(appId, key)` pair via the
+immune hand-rolled signer (the cheapest credential check; use it BEFORE re-minting
+anything — re-rotating a *correct* secret only extends MTTR):
+
+```bash
+doppler run -p soleur -c prd -- node --input-type=module -e '
+  import crypto from "node:crypto";
+  const id = process.env.GITHUB_APP_ID.trim();
+  const pem = crypto.createPrivateKey(process.env.GITHUB_APP_PRIVATE_KEY.replace(/\\n/g,"\n")).export({type:"pkcs8",format:"pem"}).toString();
+  const now=Math.floor(Date.now()/1e3), b64=o=>Buffer.from(JSON.stringify(o)).toString("base64url");
+  const si=b64({alg:"RS256",typ:"JWT"})+"."+b64({iss:id,iat:now-60,exp:now+540});
+  const s=crypto.createSign("RSA-SHA256"); s.update(si); s.end();
+  const jwt=si+"."+s.sign(pem).toString("base64url");
+  const r=await fetch("https://api.github.com/app",{headers:{Authorization:`Bearer ${jwt}`,Accept:"application/vnd.github+json"}});
+  console.log("GET /app:", r.status, JSON.stringify(await r.json()).slice(0,160));'
+# 200 + {"id":3261325,...} ⇒ credentials SOUND (bug is octokit-path-specific).
+# 401 "could not be decoded" ⇒ key does NOT match the App → re-mint the key.
+```
+
+Confirm the App ID points at the right App (the true numeric ID is PUBLIC, no auth):
+
+```bash
+curl -s -H "Accept: application/vnd.github+json" https://api.github.com/apps/soleur-ai | jq '.id'   # ⇒ 3261325
+```
+
+**STEP 3 — Remediate per verdict.** Key mismatch (oracle 401): re-download a fresh
+private key from `github.com/settings/apps/soleur-ai` (consent-gated; no REST
+mutation path) and re-set Doppler `prd` `GITHUB_APP_PRIVATE_KEY` (explicit ack).
+Stray-whitespace App ID: `doppler secrets set GITHUB_APP_ID` with the trimmed
+value (the `readAppId()` guard now also strips it in code).
+
+**STEP 4 — Re-run + confirm recovery (no SSH, no dashboard-watching).**
 
 ```bash
 inngest send cron/oauth-probe.manual-trigger
@@ -445,11 +515,6 @@ curl -s -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
   "https://de.sentry.io/api/0/organizations/jikigai-eu/monitors/scheduled-oauth-probe/checkins/?limit=1" \
   | jq -r '.[0].status'   # Expect: ok
 ```
-
-If the `4e6a3003…`-class issue keeps accruing events after deploy, the
-`create-probe-octokit:app-jwt` breadcrumb's `extra` (`ghStatus` / `ghRequestId`
-/ `ghBody` / `clockSkewMs`, added by PR #4568) now points at a DIFFERENT decode
-cause — file a follow-up with that evidence rather than re-applying this fix.
 
 ## Diagnostic recipes
 
