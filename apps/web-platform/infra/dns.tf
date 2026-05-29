@@ -197,6 +197,25 @@ resource "cloudflare_record" "protonmail_dkim_3" {
 
 # GitHub Pages -- docs site (soleur.ai apex + www redirect)
 # These records were previously created via dashboard; imported to Terraform for IaC governance.
+#
+# www→apex canonicalizer contract (#4584, spun out of #4577):
+#   The live `www.soleur.ai → 301 → soleur.ai` redirect (host- and
+#   path-preserving) is GitHub-Pages-owned — it is NOT a Cloudflare Redirect
+#   Rule or Page Rule. There is no cloudflare_page_rule / cloudflare_list /
+#   http_request_redirect resource anywhere in this repo. GitHub Pages auto-301s
+#   every non-primary alias to the primary custom domain configured by the
+#   repo-tracked file `plugins/soleur/docs/CNAME = "soleur.ai"` (the apex).
+#   The www 301 response carries Fastly/GitHub origin headers
+#   (via: 1.1 varnish, x-fastly-request-id, x-github-request-id).
+#
+#   The managed substrate that makes this work is exactly two facts below:
+#     - `cloudflare_record.github_pages` — apex A-records → GitHub Pages IPs, proxied.
+#     - `cloudflare_record.www`          — www CNAME → jikig-ai.github.io, proxied.
+#   Flip `docs/CNAME` to www, or repoint either record off GitHub Pages, and the
+#   canonical direction inverts/breaks. Pure TF resource-drift sees the records
+#   but neither the CNAME file nor the semantic contract, so
+#   `www-apex-canonicalizer.test.sh` asserts all three together at CI time.
+#   Runtime drift of the 301 is guarded by sentry_uptime_monitor.soleur_www.
 resource "cloudflare_record" "github_pages" {
   for_each = toset([
     "185.199.108.153",
