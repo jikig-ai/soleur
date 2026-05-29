@@ -17,7 +17,7 @@
 
 import { promises as fs } from "node:fs";
 import { inngest } from "@/server/inngest/client";
-import { reportSilentFallback } from "@/server/observability";
+import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
 import { syncWorkspace } from "@/server/kb-route-helpers";
 import { normalizeRepoUrl } from "@/lib/repo-url";
 import { workspacePathForWorkspaceId } from "@/server/workspace-resolver";
@@ -91,6 +91,14 @@ export async function workspaceReconcileOnPushHandler({
     return { deadletter: false as const, reason: "" };
   });
   if (gate.deadletter) {
+    // Expected drain of an in-flight v=1 envelope (the webhook now emits v=2);
+    // observable at warning level rather than returning silently.
+    warnSilentFallback(new Error("reconcile event drained (schema version)"), {
+      feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
+      op: "deadletter-schema-version",
+      extra: { installationId, deliveryId, schemaV: v },
+      message: "Reconcile drained — unsupported schema version",
+    });
     return { ok: false, reason: gate.reason };
   }
 
@@ -130,7 +138,12 @@ export async function workspaceReconcileOnPushHandler({
 
   const rows = workspaces.rows ?? [];
   if (rows.length === 0) {
-    reportSilentFallback(new Error("no workspace matched (installation_id, repo)"), {
+    // Expected, benign outcome -- app uninstalled, repo not yet onboarded, a
+    // disconnected fork, or a stale/replayed webhook. This is NOT an actionable
+    // failure, so mirror it at warning level (queryable, out of the error
+    // budget) rather than via reportSilentFallback, which surfaced a
+    // false-positive error-level Sentry event on every such push.
+    warnSilentFallback(new Error("no workspace matched (installation_id, repo)"), {
       feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
       op: "skip-no-workspace-match",
       extra: { installationId, deliveryId, targetRepoUrl },
@@ -230,6 +243,11 @@ export async function workspaceReconcileOnPushHandler({
   }
 
   if (synced === 0) {
+    // Intentionally silent: every path that lands here already emitted its own
+    // mirror inside the fan-out loop (reportSilentFallback op="sync" on sync
+    // failure, op="skip-not-ready" on a missing workspace dir). An aggregate
+    // mirror here would double-report the same incident. (cq-silent-fallback-
+    // must-mirror-to-sentry is satisfied by the per-workspace sites.)
     return { ok: false, reason: "no-workspace-synced" };
   }
   return { ok: true, synced };
