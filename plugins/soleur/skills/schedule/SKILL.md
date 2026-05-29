@@ -639,11 +639,26 @@ gh workflow run scheduled-<NAME>.yml
 # Wait for the run to appear (may take a few seconds)
 sleep 5
 RUN_ID=$(gh run list --workflow=scheduled-<NAME>.yml --limit=1 --json databaseId --jq '.[0].databaseId')
+```
 
-# Poll until complete
-gh run watch "$RUN_ID"
+**Poll for completion with the Monitor tool — NEVER `gh run watch` in the foreground and NEVER Bash `run_in_background`** (`hr-monitor-not-run-in-background-for-polling`; hook-enforced by `background-poll-prefer-monitor.sh`). `gh run watch` blocks the turn opaquely; a backgrounded poll fails silently (PR #4512). Use the Monitor tool with a state-change + heartbeat loop, mirroring `plugins/soleur/skills/ship/SKILL.md` Phase 7 / Step 3:
 
-# Check conclusion
+```bash
+# Monitor command — emits each status transition, exits on a terminal state.
+prev=""; i=0
+while true; do
+  i=$((i+1))
+  s=$(gh run view "$RUN_ID" --json status,conclusion --jq '"\(.status) \(.conclusion // "-")"' 2>&1) || s="fetch-error: $s"
+  if [[ "$s" != "$prev" ]] || (( i % 6 == 1 )); then echo "$(date +%H:%M:%S) [${i}] run $RUN_ID ${s}"; prev="$s"; fi
+  echo "$s" | grep -qE "^(completed|fetch-error)" && break
+  [ "$i" -ge 40 ] && { echo "Run poll timed out after ~20m. Last: $s"; break; }
+  sleep 30
+done
+```
+
+After it reports `completed`, check the conclusion:
+
+```bash
 CONCLUSION=$(gh run view "$RUN_ID" --json conclusion --jq '.conclusion')
 if [ "$CONCLUSION" != "success" ]; then
   echo "WORKFLOW FAILED — investigate before moving on"
