@@ -84,7 +84,7 @@ grep -oE '^\s+[a-z_]+\s*=' apps/web-platform/infra/sentry/uptime-monitors.tf | s
 
 **If this leaks, the user's data is exposed via:** N/A — no PII, auth, payments, or regulated-data surface. The workflow already handles the Sentry IaC auth token (`SENTRY_IAC_AUTH_TOKEN`, GH repo secret) and R2 backend creds (Doppler `prd_terraform`); this change adds no new secret and no new credential path.
 
-**Brand-survival threshold:** aggregate pattern. (Reason: a regression degrades alerting coverage / SEO-redirect health over time; it is not a single-user data exposure. Threshold `none` would be wrong because the apex-down blind-spot has brand impact, but it is observability-of-an-aggregate, not per-user.)
+- **Brand-survival threshold:** aggregate pattern. (Reason: a regression degrades alerting coverage / SEO-redirect health over time; it is not a single-user data exposure. Threshold `none` would be wrong because the apex-down blind-spot has brand impact, but it is observability-of-an-aggregate, not per-user.)
 
 ## Acceptance Criteria
 
@@ -224,8 +224,8 @@ logs:
   where: "GitHub Actions run logs for apply-sentry-infra.yml; per-run STEP_SUMMARY"
   retention: "GitHub Actions default (90 days)"
 discoverability_test:
-  command: "gh run list --workflow=apply-sentry-infra.yml --limit 1 --json conclusion,headSha && gh api /repos/:owner/:repo/actions/workflows/apply-sentry-infra.yml/runs --jq '.workflow_runs[0].conclusion'"
-  expected_output: "most-recent run conclusion == success after a merge that touches uptime-monitors.tf"
+  command: "gh run list --workflow=apply-sentry-infra.yml --limit 1 --json conclusion --jq '.[0].conclusion // \"none\"'"
+  expected_output: "success"
 ```
 
 ## Open Code-Review Overlap
