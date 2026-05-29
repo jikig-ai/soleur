@@ -305,7 +305,7 @@ logs:
   retention: per existing Better Stack retention (no change)
 discoverability_test:
   command: curl -sS -o /dev/null -w "%{http_code}" --max-time 10 -X POST -H "content-type: application/json" -d "{}" https://app.soleur.ai/api/workspace/cancel-invite
-  expected_output: "401 or 403 or 400 (route mounted; auth/CSRF/body gate fires before any 200 — never 404)"
+  expected_output: "307 (unauthenticated POST → auth middleware redirects to /login; verified identical to the deployed sibling /api/workspace/remove-member. A 404 would mean the route is not deployed; a 200 would mean the auth gate is bypassed)"
 ```
 
 ## Test Scenarios
