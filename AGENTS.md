@@ -1,6 +1,6 @@
 # Agent Instructions — Index
 
-Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook injects the matching sidecar. Multi-class/empty diff → all sidecars (fail-closed). Spec: `knowledge-base/project/specs/feat-agents-md-change-class-loader/spec.md`.
+Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class by the SessionStart hook (multi-class/empty → all, fail-closed). Spec: `knowledge-base/project/specs/feat-agents-md-change-class-loader/spec.md`.
 
 ## Hard Rules
 
@@ -53,7 +53,7 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: wg-when-fixing-a-workflow-gates-detection] → rest
 - [id: wg-zero-agents-until-user-confirms] → core
 - [id: wg-never-bump-version-files-in-feature] → rest
-- [id: wg-after-marking-a-pr-ready-run-gh-pr-merge] → core
+- [id: wg-after-marking-a-pr-ready-run-gh-pr-merge] → rest
 - [id: wg-ship-push-before-merge] → rest
 - [id: wg-after-a-pr-merges-to-main-verify-all] → rest
 - [id: wg-at-session-start-run-bash-plugins-soleur] → core
