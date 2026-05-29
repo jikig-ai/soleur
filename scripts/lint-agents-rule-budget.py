@@ -4,7 +4,7 @@
 Two commit-blocking assertions:
 
 1. **B_ALWAYS budget.** `B_ALWAYS = len(AGENTS.md bytes) + len(AGENTS.core.md bytes)`
-   must stay <= 22000. >= 20000 warns to stderr (exit 0). > 22000 rejects (exit 1).
+   must stay <= 23000. >= 20000 warns to stderr (exit 0). > 23000 rejects (exit 1).
 2. **Per-rule body cap.** Each rule body line (`^- ` under a `## <SECTION>` whose
    stripped heading is in the shared `SECTIONS` set) must be <= 600 UTF-8 bytes.
    Pointer-index lines in AGENTS.md are short by construction and are not
@@ -41,8 +41,13 @@ if _SCRIPTS_DIR not in sys.path:
 
 from _agents_md_sections import SECTIONS
 
+# Reject raised 22000 -> 23000 in #4599. Floor: the 89-line pointer index plus
+# the 40 hr-* + 1 compliance-tier bodies that lint-rule-ids.py PINS to core
+# (#3496, cannot demote). Going under 22000 needs guidance-weakening or demoting
+# wg-* gates that fire on single-class docs-only sessions (#3681 silent-drop), so
+# 23000 = floor + small headroom; WARN 20000 = "trim opportunistically" signal.
 B_ALWAYS_WARN = 20000
-B_ALWAYS_REJECT = 22000
+B_ALWAYS_REJECT = 23000
 PER_RULE_CAP = 600
 
 ALWAYS_LOADED = ("AGENTS.md", "AGENTS.core.md")
