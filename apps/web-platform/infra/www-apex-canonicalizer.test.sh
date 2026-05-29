@@ -33,17 +33,16 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-assert() {
-  local desc="$1" cond="$2"
+pass() {
+  PASS=$((PASS + 1))
   TOTAL=$((TOTAL + 1))
-  if eval "$cond"; then
-    PASS=$((PASS + 1))
-    echo "  PASS: $desc"
-  else
-    FAIL=$((FAIL + 1))
-    echo "  FAIL: $desc"
-    echo "        condition: $cond"
-  fi
+  echo "  PASS: $1"
+}
+
+fail() {
+  FAIL=$((FAIL + 1))
+  TOTAL=$((TOTAL + 1))
+  echo "  FAIL: $1"
 }
 
 # Extract a single `resource "cloudflare_record" "<name>" { ... }` block.
@@ -61,26 +60,45 @@ echo "www-apex-canonicalizer drift-guard"
 # A1: docs/CNAME is the apex (catches canonical-direction inversion).
 # If this flips to www.soleur.ai, GitHub Pages would 301 apex→www and invert
 # the canonical direction with zero TF drift — this is the load-bearing check.
-assert "docs/CNAME is soleur.ai (apex, not www)" \
-  '[[ "$(tr -d "[:space:]" < "$CNAME_FILE")" == "soleur.ai" ]]'
+cname="$(tr -d '[:space:]' <"$CNAME_FILE")"
+if [[ "$cname" == "soleur.ai" ]]; then
+  pass "docs/CNAME is soleur.ai (apex, not www)"
+else
+  fail "docs/CNAME is soleur.ai (apex, not www) — got '$cname'"
+fi
 
 # A2: www CNAME → jikig-ai.github.io, proxied (so www traffic reaches GH Pages).
-WWW_BLOCK="$(record_block www)"
-assert "dns.tf www record targets jikig-ai.github.io" \
-  'grep -qE "content[[:space:]]*=[[:space:]]*\"jikig-ai\.github\.io\"" <<< "$WWW_BLOCK"'
-assert "dns.tf www record is a proxied CNAME" \
-  'grep -qE "type[[:space:]]*=[[:space:]]*\"CNAME\"" <<< "$WWW_BLOCK" && grep -qE "proxied[[:space:]]*=[[:space:]]*true" <<< "$WWW_BLOCK"'
+www_block="$(record_block www)"
+if grep -qE 'content[[:space:]]*=[[:space:]]*"jikig-ai\.github\.io"' <<<"$www_block"; then
+  pass "dns.tf www record targets jikig-ai.github.io"
+else
+  fail "dns.tf www record targets jikig-ai.github.io"
+fi
+if grep -qE 'type[[:space:]]*=[[:space:]]*"CNAME"' <<<"$www_block" &&
+  grep -qE 'proxied[[:space:]]*=[[:space:]]*true' <<<"$www_block"; then
+  pass "dns.tf www record is a proxied CNAME"
+else
+  fail "dns.tf www record is a proxied CNAME"
+fi
 
 # A3: apex github_pages A-record set is proxied and points at soleur.ai
 # (catches apex being repointed off GitHub Pages).
-APEX_BLOCK="$(record_block github_pages)"
-assert "dns.tf apex github_pages record is type A, name soleur.ai, proxied" \
-  'grep -qE "name[[:space:]]*=[[:space:]]*\"soleur\.ai\"" <<< "$APEX_BLOCK" && grep -qE "type[[:space:]]*=[[:space:]]*\"A\"" <<< "$APEX_BLOCK" && grep -qE "proxied[[:space:]]*=[[:space:]]*true" <<< "$APEX_BLOCK"'
+apex_block="$(record_block github_pages)"
+if grep -qE 'name[[:space:]]*=[[:space:]]*"soleur\.ai"' <<<"$apex_block" &&
+  grep -qE 'type[[:space:]]*=[[:space:]]*"A"' <<<"$apex_block" &&
+  grep -qE 'proxied[[:space:]]*=[[:space:]]*true' <<<"$apex_block"; then
+  pass "dns.tf apex github_pages record is type A, name soleur.ai, proxied"
+else
+  fail "dns.tf apex github_pages record is type A, name soleur.ai, proxied"
+fi
 
 # A4: the GitHub-Pages-owned contract comment exists in dns.tf, so the doc
 # cannot silently rot away from this test.
-assert "dns.tf carries the GitHub-Pages-owned contract comment" \
-  'grep -q "GitHub-Pages-owned" "$DNS_TF"'
+if grep -q "GitHub-Pages-owned" "$DNS_TF"; then
+  pass "dns.tf carries the GitHub-Pages-owned contract comment"
+else
+  fail "dns.tf carries the GitHub-Pages-owned contract comment"
+fi
 
 echo
 if [[ "$FAIL" -ne 0 ]]; then
