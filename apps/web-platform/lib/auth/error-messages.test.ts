@@ -1,7 +1,16 @@
 // Copy-contract tests: exact strings are intentional.
 // Copy edits MUST come with test edits — that is the contract.
 import { describe, it, expect } from "vitest";
-import { isNoAccountError, mapSupabaseError } from "./error-messages";
+import {
+  CONNECTION_FAILURE_MESSAGE,
+  DEFAULT_ERROR_MESSAGE,
+  EXPIRED_CODE_MESSAGE,
+  isNoAccountError,
+  mapSupabaseAuthError,
+  mapSupabaseError,
+  RATE_LIMIT_MESSAGE,
+  TEMPORARILY_UNAVAILABLE_MESSAGE,
+} from "./error-messages";
 
 describe("mapSupabaseError", () => {
   it("maps 'Signups not allowed for otp' to the no-account string", () => {
@@ -38,6 +47,91 @@ describe("mapSupabaseError", () => {
     expect(mapSupabaseError("some new gotrue error")).toBe(
       "Something went wrong. Please try again.",
     );
+  });
+});
+
+describe("mapSupabaseAuthError (code/status-aware)", () => {
+  it("maps code 'over_request_rate_limit' to the rate-limit copy (not generic)", () => {
+    expect(mapSupabaseAuthError({ code: "over_request_rate_limit" })).toBe(
+      RATE_LIMIT_MESSAGE,
+    );
+    expect(mapSupabaseAuthError({ code: "over_request_rate_limit" })).not.toBe(
+      DEFAULT_ERROR_MESSAGE,
+    );
+  });
+
+  it("maps HTTP status 429 to the rate-limit copy", () => {
+    expect(mapSupabaseAuthError({ status: 429 })).toBe(RATE_LIMIT_MESSAGE);
+  });
+
+  it("distinguishes verify rate-limit copy from the email-send rate-limit copy", () => {
+    // The new per-request ceiling copy must NOT collide with the existing
+    // freetext 'email rate limit exceeded' copy — they are different limits.
+    expect(RATE_LIMIT_MESSAGE).not.toBe(
+      "Too many sign-in attempts. Please wait a few minutes and try again.",
+    );
+  });
+
+  it("maps code 'otp_expired' to the expired-code copy", () => {
+    expect(mapSupabaseAuthError({ code: "otp_expired" })).toBe(
+      EXPIRED_CODE_MESSAGE,
+    );
+  });
+
+  it("maps HTTP status 500 to the temporarily-unavailable copy", () => {
+    expect(mapSupabaseAuthError({ status: 500 })).toBe(
+      TEMPORARILY_UNAVAILABLE_MESSAGE,
+    );
+  });
+
+  it("maps HTTP status 503 (AuthRetryableFetchError) to the temporarily-unavailable copy", () => {
+    expect(
+      mapSupabaseAuthError({ name: "AuthRetryableFetchError", status: 503 }),
+    ).toBe(TEMPORARILY_UNAVAILABLE_MESSAGE);
+  });
+
+  it("maps a status-less AuthRetryableFetchError throw to the connection-failure copy", () => {
+    expect(mapSupabaseAuthError({ name: "AuthRetryableFetchError" })).toBe(
+      CONNECTION_FAILURE_MESSAGE,
+    );
+  });
+
+  it("maps a bare TypeError (fetch reject, no status) to the connection-failure copy", () => {
+    expect(mapSupabaseAuthError({ name: "TypeError", message: "Failed to fetch" })).toBe(
+      CONNECTION_FAILURE_MESSAGE,
+    );
+  });
+
+  it("falls back to the freetext regexes when no code/status matches", () => {
+    expect(mapSupabaseAuthError({ message: "Invalid OTP" })).toBe(
+      "That code is incorrect or has expired. Please request a new one.",
+    );
+    expect(mapSupabaseAuthError({ message: "Token has expired" })).toBe(
+      EXPIRED_CODE_MESSAGE,
+    );
+  });
+
+  it("falls back to the generic message for an unknown error with no code/status", () => {
+    expect(mapSupabaseAuthError({ message: "some novel gotrue error" })).toBe(
+      DEFAULT_ERROR_MESSAGE,
+    );
+  });
+
+  it("returns the generic message for a null/undefined error (defensive)", () => {
+    expect(mapSupabaseAuthError(null)).toBe(DEFAULT_ERROR_MESSAGE);
+    expect(mapSupabaseAuthError(undefined)).toBe(DEFAULT_ERROR_MESSAGE);
+  });
+
+  it("prefers the structured code over a misleading freetext message", () => {
+    // A 429 whose message does NOT contain 'email rate limit exceeded' must
+    // still map to the rate-limit copy via code/status, not fall through.
+    expect(
+      mapSupabaseAuthError({
+        code: "over_request_rate_limit",
+        status: 429,
+        message: "Request rate limit reached",
+      }),
+    ).toBe(RATE_LIMIT_MESSAGE);
   });
 });
 

@@ -308,30 +308,30 @@ no open scope-outs against `error-messages.ts` or `login-form.tsx`.)
 
 ### Pre-merge (PR)
 
-- [ ] `mapSupabaseAuthError({ code: "over_request_rate_limit" })` and
+- [x] `mapSupabaseAuthError({ code: "over_request_rate_limit" })` and
   `mapSupabaseAuthError({ status: 429 })` both return the rate-limit copy (NOT
   the generic message). Asserted in `error-messages.test.ts`.
-- [ ] `mapSupabaseAuthError({ code: "otp_expired" })` returns the expired-code
+- [x] `mapSupabaseAuthError({ code: "otp_expired" })` returns the expired-code
   copy.
-- [ ] `mapSupabaseAuthError({ status: 503 })` returns the
+- [x] `mapSupabaseAuthError({ status: 503 })` returns the
   temporarily-unavailable copy.
-- [ ] A thrown network error (no `status`, `AuthRetryableFetchError`/`TypeError`)
+- [x] A thrown network error (no `status`, `AuthRetryableFetchError`/`TypeError`)
   routes to the connection-failure copy.
-- [ ] `mapSupabaseError("Invalid OTP")`, `("email rate limit exceeded")`,
+- [x] `mapSupabaseError("Invalid OTP")`, `("email rate limit exceeded")`,
   `("Token has expired")`, `("Signups not allowed for otp")` still return their
   legacy mappings (back-compat shim regression guard).
-- [ ] `login-form-verify-error.test.tsx`: a `verifyOtp` that rejects with
+- [x] `login-form-verify-error.test.tsx`: a `verifyOtp` that rejects with
   `{code:"over_request_rate_limit",status:429}` renders the recoverable
   rate-limit copy in `role="alert"`; the literal `Something went wrong` does NOT
   appear.
-- [ ] `signup/page.tsx` verifyOtp block routes through `mapSupabaseAuthError`
+- [x] `signup/page.tsx` verifyOtp block routes through `mapSupabaseAuthError`
   with the same try/catch shape (grep: both files import `mapSupabaseAuthError`).
-- [ ] `reportSilentFallback` `extra` on both verifyOtp sites includes `status`;
+- [x] `reportSilentFallback` `extra` on both verifyOtp sites includes `status`;
   it does NOT include `error.message` (PII discipline preserved — grep the diff:
   no `message:` key added to any Sentry `extra`).
-- [ ] `./node_modules/.bin/vitest run lib/auth/error-messages.test.ts test/components/login-form-verify-error.test.tsx`
+- [x] `./node_modules/.bin/vitest run lib/auth/error-messages.test.ts test/components/login-form-verify-error.test.tsx`
   passes (runner is vitest; `bunfig.toml` blocks `bun test` discovery).
-- [ ] `npx tsc --noEmit` clean.
+- [x] `npx tsc --noEmit` clean.
 
 ### Post-merge (operator)
 

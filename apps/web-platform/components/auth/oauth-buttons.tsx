@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { reportSilentFallback } from "@/lib/client-observability";
-import { mapSupabaseError } from "@/lib/auth/error-messages";
+import { mapSupabaseAuthError } from "@/lib/auth/error-messages";
 
 type Provider = "google" | "apple" | "github" | "azure";
 
@@ -89,9 +89,10 @@ export function OAuthButtons({ disabled = false }: { disabled?: boolean }) {
           provider: provider.id,
           errorCode: (error as { code?: string }).code,
           errorName: error.name,
+          status: (error as { status?: number }).status,
         },
       });
-      setError(mapSupabaseError(error.message));
+      setError(mapSupabaseAuthError(error));
       setLoading(null);
     }
     // On success, the browser redirects — no state cleanup needed
