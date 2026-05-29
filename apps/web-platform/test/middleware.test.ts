@@ -21,6 +21,7 @@ describe("middleware path routing", () => {
       expect(isPublicPath("/api/inngest")).toBe(true);
       expect(isPublicPath("/ws")).toBe(true);
       expect(isPublicPath("/manifest.webmanifest")).toBe(true);
+      expect(isPublicPath("/robots.txt")).toBe(true);
     });
 
     test("/api/inngest is public (HMAC-gated by Inngest SDK, not Supabase)", () => {
@@ -87,6 +88,10 @@ describe("middleware path routing", () => {
       // a bare /api/internal or any sibling/future internal route (#4017 class).
       expect(isPublicPath("/api/internal")).toBe(false);
       expect(isPublicPath("/api/internal/other-future-route")).toBe(false);
+      // /robots.txt is an exact-match leaf path; a sibling like /robots.txtx
+      // must NOT be session-bypassed (the startsWith(p + "/") arm only matches
+      // /robots.txt/..., not /robots.txtx). Pins #4587 AC4.
+      expect(isPublicPath("/robots.txtx")).toBe(false);
     });
 
     test("paths that share a prefix with T&C exempt paths are NOT exempt", () => {
