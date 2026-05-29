@@ -59,23 +59,34 @@ const GOLD = "#C9A962";
 const FORGE_INK = "#1A1612";
 const OFF_BRAND_BLUE = "#2563eb";
 
-/** Pull the html of the most recent resend.emails.send() call. */
-function lastHtml(): string {
+/**
+ * Pull the html of the single resend.emails.send() call. Asserts exactly one
+ * send fired to the expected recipient — guards against a sender early-returning
+ * without sending (vacuous pass) AND against a duplicate/extra send.
+ */
+function sentHtml(expectedTo: string): string {
   const calls = mockResendSend.mock.calls;
-  expect(calls.length).toBeGreaterThan(0);
-  return calls[calls.length - 1][0].html as string;
+  expect(mockResendSend).toHaveBeenCalledTimes(1);
+  expect(calls[0][0].to).toContain(expectedTo);
+  return calls[0][0].html as string;
 }
 
-function assertBrandedCta(html: string) {
-  // gold solid base + forge-ink text (case-insensitive — clients/authors vary)
-  expect(html.toLowerCase()).toContain(GOLD.toLowerCase());
-  expect(html.toLowerCase()).toContain(FORGE_INK.toLowerCase());
-  // sharp corners
-  expect(html).toMatch(/border-radius:\s*0(px)?\b/);
-  // centered CTA wrapper
-  expect(html).toMatch(/text-align:\s*center/);
-  // no off-brand blue
-  expect(html.toLowerCase()).not.toContain(OFF_BRAND_BLUE.toLowerCase());
+/**
+ * Assert the branded CTA contract on a rendered email. `ctaName` labels the
+ * failing assertion so a regression points at the specific sender + marker
+ * rather than an opaque helper line. `ctaLabel` pins the assertion to this
+ * sender's own button text so the 5 senders are not just re-testing the shared
+ * EMAIL_CTA_STYLE constant.
+ */
+function assertBrandedCta(html: string, ctaName: string, ctaLabel: string) {
+  expect(html, `${ctaName}: CTA label "${ctaLabel}" missing`).toContain(ctaLabel);
+  expect(html.toLowerCase(), `${ctaName}: gold base missing`).toContain(GOLD.toLowerCase());
+  expect(html.toLowerCase(), `${ctaName}: forge-ink text missing`).toContain(FORGE_INK.toLowerCase());
+  expect(html, `${ctaName}: corners not sharp (0px)`).toMatch(/border-radius:\s*0(px)?\b/);
+  expect(html, `${ctaName}: CTA not centered`).toMatch(/text-align:\s*center/);
+  expect(html.toLowerCase(), `${ctaName}: off-brand blue present`).not.toContain(
+    OFF_BRAND_BLUE.toLowerCase(),
+  );
 }
 
 describe("email brand compliance — notifications.ts CTAs", () => {
@@ -99,29 +110,27 @@ describe("email brand compliance — notifications.ts CTAs", () => {
       agentName: "CEO",
       question: "Approve budget?",
     });
-    assertBrandedCta(lastHtml());
+    assertBrandedCta(sentHtml("a@example.com"), "agent-needs-input", "Open conversation");
   });
 
   test("DSAR export-ready CTA is branded", async () => {
     await sendDsarExportReadyEmail("user-1", "job-1", new Date("2026-06-05T00:00:00Z"));
-    assertBrandedCta(lastHtml());
+    assertBrandedCta(sentHtml("user@example.com"), "dsar-ready", "Download my data");
   });
 
   test("DSAR export-failed CTA is branded", async () => {
     await sendDsarExportFailedEmail("user-1", "job-1", "timeout");
-    assertBrandedCta(lastHtml());
+    assertBrandedCta(sentHtml("user@example.com"), "dsar-failed", "Go to /settings/privacy");
   });
 
   test("invite CTA is branded (originally-reported case)", async () => {
     await sendInviteEmail("invitee@example.com", "Ada", "Workspace", "tok-1");
-    const html = lastHtml();
-    assertBrandedCta(html);
-    expect(html).toContain("Accept invitation");
+    assertBrandedCta(sentHtml("invitee@example.com"), "invite", "Accept invitation");
   });
 
   test("invite-accepted CTA is branded", async () => {
     await sendInviteAcceptedEmail("inviter-1", "Grace", "Workspace");
-    assertBrandedCta(lastHtml());
+    assertBrandedCta(sentHtml("user@example.com"), "invite-accepted", "View team");
   });
 });
 
