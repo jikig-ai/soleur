@@ -325,8 +325,10 @@ describe("getIdentityFlags timeout → warn-level debounced mirror (Sentry-bug r
   // with no debounce, flooding Sentry and tripping the alert. The recovered
   // env-fallback path must instead emit a single warn-level debounced mirror.
   function timeoutError(): Error {
-    // Shape mirrors the SDK re-throw chain: a wrapped Error whose cause is the
-    // AbortSignal.timeout TimeoutError ("The operation was aborted due to timeout").
+    // Message mirrors the SDK's re-thrown wrapper. The catch labels EVERY
+    // getIdentityFlags rejection with the same errorClass regardless of cause;
+    // on the 200ms-ceiling path a timeout is the dominant case (the code does
+    // not inspect the cause chain).
     return new Error(
       "getIdentityFlags failed and no default flag handler was provided",
     );
