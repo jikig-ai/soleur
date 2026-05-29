@@ -46,4 +46,4 @@ Derived from `2026-05-29-fix-gsc-coverage-indexing-host-canonical-plan.md`. Orde
 
 ## Deferred (tracking issue)
 
-- [ ] D.1 File issue: `api.soleur.ai`/`deploy.soleur.ai` subdomain coverage leakage — Cloudflare edge `X-Robots-Tag: noindex` or robots at the subdomain. Labels: `domain/engineering`, `chore`, `priority/p3-low`. Re-evaluate when subdomains carry real content
+- [x] D.1 Filed #4575: `api.soleur.ai`/`deploy.soleur.ai` subdomain coverage leakage — Cloudflare edge `X-Robots-Tag: noindex` or robots at the subdomain. Labels: `domain/engineering`, `type/chore`, `priority/p3-low`. Re-evaluate when subdomains carry real content
