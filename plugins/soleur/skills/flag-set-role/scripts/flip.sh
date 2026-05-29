@@ -341,12 +341,14 @@ print('false')  # flag absent from payload -> not enabled for this identity
 
 # Poll eval until it matches the expected value (edge propagation is eventual).
 # Echoes the final observed value; returns 0 on match within budget, 1 otherwise.
+# Cadence overridable for tests (EVAL_POLL_TRIES / EVAL_POLL_SLEEP); live default
+# ~24s budget. No sleep after the final attempt.
 eval_until() { # $1=env_key $2=flag $3=org $4=role $5=expected
-  local got i
-  for i in $(seq 1 12); do
+  local got i tries="${EVAL_POLL_TRIES:-12}" naptime="${EVAL_POLL_SLEEP:-2}"
+  for i in $(seq 1 "$tries"); do
     got=$(eval_flag_enabled "$1" "$2" "$3" "$4") || return 3
     [[ "$got" == "$5" ]] && { printf '%s' "$got"; return 0; }
-    sleep 2
+    [[ "$i" -lt "$tries" ]] && sleep "$naptime"
   done
   printf '%s' "$got"; return 1
 }

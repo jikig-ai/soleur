@@ -152,9 +152,11 @@ OLD_TRAP_DIR="$S1_STUB"
 trap 'rm -rf "$S1_STUB" "$S2_STUB"' EXIT
 
 run_flip() { # env knobs come from caller; runs from repo root (FLAG_ENV_VARS resolution)
+  # EVAL_POLL_SLEEP=0 / fewer tries keeps the no-match (silent-leak) paths fast.
   ( cd "$REPO_ROOT" \
     && PATH="$S2_STUB:$PATH" CURL_LOG="$CURL_LOG" DOPPLER_SET_LOG="$DOPPLER_SET_LOG" \
        TARGET_ORG_FULL="$TARGET_ORG_FULL" CONTROL_ORG_FULL="$CONTROL_ORG_FULL" FLAG_NAME="$FLAG_NAME" \
+       EVAL_POLL_SLEEP=0 EVAL_POLL_TRIES=2 \
        bash "$FLIP" "$@" )
 }
 
