@@ -109,6 +109,11 @@ provider, scoped to:
   schedule re-lands.
 - **Defer** migration from `sentry_issue_alert` (deprecated in v0.15-beta) to
   the new unified `sentry_alert` resource until provider GA.
+  **Amendment (2026-05-29, #4610):** re-confirmed at v0.15.0-beta2 — `sentry_alert`
+  is monitor-bound (`monitor_ids` + `trigger_conditions` both required, no `project`
+  attr), so the 4 project-wide auth frequency rules cannot migrate without dropping
+  live paging; defer stands until stable v0.15.0. Deprecation warning is documented
+  as accepted in `issue-alerts.tf`. Evidence: plan `2026-05-29-refactor-sentry-issue-alert-to-sentry-alert-migration-plan.md`.
 - **Defer** enabling new monitor classes (log-condition, custom-metric) until
   `apps/web-platform/server/sentry-scrub.ts` is extended to cover their event
   channels — enforced by Phase 6 GDPR-gate + AC9.
