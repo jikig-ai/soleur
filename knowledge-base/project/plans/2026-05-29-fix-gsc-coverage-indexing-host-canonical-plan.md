@@ -157,7 +157,7 @@ logs:
   where: GitHub Actions run logs for deploy-docs.yml
   retention: GitHub default (90 days)
 discoverability_test:
-  command: 'curl -fsS -o /dev/null -w "%{http_code}" --max-time 10 https://soleur.ai/sitemap.xml'
+  command: curl -fsS -o /dev/null -w "%{http_code}" --max-time 10 https://soleur.ai/sitemap.xml
   expected_output: "200"
   note: "Single-command live-world probe (no ssh, no shell chaining) — proves the apex sitemap URL resolves and serves 200. Full local build+validate (npx @11ty/eleventy → validate-seo.sh → validate-csp.sh) is in Test Strategy + Phase 5; post-deploy content probes are AC13."
 ```
