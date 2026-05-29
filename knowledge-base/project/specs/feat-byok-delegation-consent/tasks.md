@@ -23,14 +23,15 @@ DEFINER fn re-asserts REVOKE/GRANT + `pg_default_acl` audit.
 - [ ] 2.1 Create `083_byok_delegation_consent_gate.sql` (+`.down.sql`): `CREATE OR REPLACE resolve_byok_key_owner` + `AND EXISTS(current-version acceptance)`; re-assert REVOKE/GRANT; default-priv audit.
 - [ ] 2.2 RED→GREEN: no-acceptance → `MissingByokKeyError` (distinct from `ByokDelegationRevokedError`); stale-version → fail-closed; current-version → grantor key; own-key → unaffected.
 
-## Phase 3 — Withdrawal (mig 084 + resolver clause + route + UI)
-- [ ] 3.1 Create `084_byok_delegation_withdrawals.sql` (+`.down.sql`): WORM table mirroring 074 + `no_update`/`no_delete` triggers + `anonymise_byok_delegation_withdrawals` RPC + RLS.
-- [ ] 3.2 Create SECURITY DEFINER `withdraw_byok_delegation_consent` — INSERT withdrawal row only (NO `revoked_at` write); idempotent; grantee-only.
-- [ ] 3.3 In mig 084, `CREATE OR REPLACE resolve_byok_key_owner` adding `AND NOT EXISTS(withdrawal newer than latest current-version acceptance)`; re-assert REVOKE/GRANT; default-priv audit.
-- [ ] 3.4 Create `POST /api/workspace/delegations/withdraw` route (auth, CSRF, flag-gated, grantee-only).
-- [ ] 3.5 Edit `account-delete.ts`: anonymise withdrawals BEFORE `deleteUser` (FK ON DELETE RESTRICT).
-- [ ] 3.6 Edit `dsar-export.ts` + `dsar-export-allowlist.ts`: add `byok_delegation_withdrawals`.
-- [ ] 3.7 RED→GREEN: withdrawal blocks new leases; in-flight unaffected; re-accept reactivates; WORM enforced; cross-tenant rejected; account-delete succeeds with withdrawal row (FK-block regression).
+## Phase 3 — Withdrawal (mig 084 + resolver clause + per-turn re-gate + route + UI)
+- [ ] 3.1 Create `084_byok_delegation_withdrawals.sql` (+`.down.sql`): append-only WORM table mirroring 074 but **NO `UNIQUE(user_id, delegation_id)`** (non-terminal + Art. 17 anonymise collision); `no_update`/`no_delete` triggers; `anonymise_byok_delegation_withdrawals` RPC that sets `SET LOCAL session_replication_role='replica'` in its own body; RLS select `user_id=auth.uid()` + insert `WITH CHECK (user_id=auth.uid() AND delegation_id IN (SELECT id FROM byok_delegations WHERE grantee_user_id=auth.uid()))`.
+- [ ] 3.2 Create SECURITY DEFINER `withdraw_byok_delegation_consent(p_delegation_id)` — **NO `p_user_id`** (derive `auth.uid()`); grantee-only `RAISE EXCEPTION`; INSERT withdrawal row only (NO `revoked_at`); idempotent; `GRANT EXECUTE TO authenticated`.
+- [ ] 3.3 In mig 084, `CREATE OR REPLACE resolve_byok_key_owner` adding `AND NOT EXISTS(withdrawal ... withdrawn_at >= COALESCE(max(acceptance.accepted_at), withdrawn_at))` — version-agnostic, COALESCE, `>=`; re-assert REVOKE/GRANT; default-priv audit.
+- [ ] 3.4 In mig 084, `CREATE OR REPLACE check_and_record_byok_delegation_use` (064:665): per-turn consent re-gate (row already FOR UPDATE) — withdrawal newer than latest acceptance → raise + debit grantee with new `attribution_shift_reason` (extend enum if CHECK-constrained).
+- [ ] 3.5 Create `POST /api/workspace/delegations/withdraw` route (auth, CSRF, flag-gated; passes only delegationId).
+- [ ] 3.6 Edit `account-delete.ts`: anonymise withdrawals BEFORE `deleteUser` (FK ON DELETE RESTRICT).
+- [ ] 3.7 Edit `dsar-export.ts` + `dsar-export-allowlist.ts`: add `byok_delegation_withdrawals`.
+- [ ] 3.8 RED→GREEN: withdrawal blocks new leases AND stops in-flight billing within one turn (debits grantee); NULL-COALESCE + tie (`>=`) block; re-accept reactivates; multiple withdrawals recorded (no UNIQUE); WORM enforced; cross-tenant/forged rejected; resolver RPC-error never leases grantor key (AC12); account-delete succeeds with ≥1 withdrawal row.
 
 ## Phase 4 — Consent text + mig 074 header (legal)
 - [ ] 4.1 `legal-document-generator`: rewrite `delegation-consent-side-letter-template.md` as versioned in-app text embodying Art. 26 arrangement + Art. 6 basis; grantor bound to same version.

@@ -20,6 +20,34 @@ spec: knowledge-base/project/specs/feat-byok-delegation-consent/spec.md
 
 # Plan — BYOK Delegation Consent Enforcement
 
+## Deepen-Plan Findings (2026-05-29)
+
+**Deepened with:** data-integrity-guardian + security-sentinel + architecture-strategist (mandated at
+single-user-incident threshold). Halt gates 4.6 (User-Brand Impact) / 4.7 (Observability) / 4.8
+(PAT-shaped var) all PASS. All findings applied to the phases/ACs below.
+
+**P0 (applied):**
+1. Withdrawal predicate fixed — version-agnostic inner `max` + `COALESCE` + `>=` (closes NULL-fail-open
+   after a version bump and equal-timestamp tie-fail-open). [Phase 3, AC5]
+2. Withdrawals table carries **no `UNIQUE(user_id, delegation_id)`** — append-only event log; UNIQUE
+   broke non-terminal re-withdraw AND Art. 17 anonymise (collision → aborts `deleteUser`). [Phase 3, AC5/AC14]
+3. Resolver fail-open reconciled — Observability now states the fall-through branches are fail-CLOSED
+   for a keyless grantee; AC12 regression asserts no error path leases a grantor key. [Observability, AC12]
+
+**P1 (applied):**
+4. **Per-turn consent re-gate** added to `check_and_record_byok_delegation_use` (064:665) — a mid-run
+   withdrawal now stops in-flight billing (debits grantee); the resolver gate alone left in-flight
+   billing unbounded (ADR-040 threshold = unauthorized invoice). [Phase 3, AC5]
+5. Withdraw RPC drops `p_user_id` (SS-F3 harvest vector) → `auth.uid()`; `GRANT TO authenticated`; RLS
+   `WITH CHECK` constrains `delegation_id` to caller's grantee rows. [Phase 3, AC13]
+6. `anonymise_byok_delegation_withdrawals` sets `session_replication_role='replica'` in its own body;
+   canonical version fn → `SECURITY INVOKER`; parity test runs against dev+prd. [Phase 1, Phase 3, AC14]
+
+**Confirmed:** dual end-semantics (revoke=billing-kill vs withdraw=consent) are coherent; function-literal
+version storage is right (not a table); **ADR required as an ADR-040 sibling** stating the in-flight
+boundary decision (`/soleur:architecture create` before the gate PR merges). Remaining pre-merge gate:
+`/soleur:gdpr-gate` against the diff (TR6).
+
 ## Overview
 
 Make recorded in-app consent the source of truth that gates the BYOK key lease, add a
@@ -47,11 +75,14 @@ Core design (validated against code):
   `revoked_at` + `revoked_by_user_id` + `revocation_reason` to flip *together*, and the
   `revocation_reason` CHECK enum (064:95-99) has no `consent_withdrawn` value, so a revoked_at-only
   write aborts. Gate-side withdrawal is also **non-terminal** (re-accepting reactivates — Art. 7(3)
-  "as easy as giving") and mirrors the acceptance-EXISTS pattern. Consequence: withdrawal blocks
-  NEW leases immediately; in-flight runs complete (lawful pre-withdrawal processing, Art. 7(3));
-  grantor-revoke (existing path, with 60s grace + debit-grantee) remains the distinct in-flight-kill
-  + billing-control mechanism. The `byok_delegation_withdrawals` table is the Art. 7(3)/Art. 30
-  consent-withdrawal evidence, distinct from grantor-revoke audit.
+  "as easy as giving") and mirrors the acceptance-EXISTS pattern. Withdrawal blocks NEW leases at the
+  resolver AND **stops in-flight billing within one turn** via a per-turn consent re-gate added to
+  `check_and_record_byok_delegation_use` (064:665) — the cap RPC already locks the delegation row
+  `FOR UPDATE` each turn; the re-gate mirrors the existing grace check and debits the grantee
+  (deepen architecture P1 — without it a mid-run withdrawal has zero billing effect). Grantor-revoke
+  (60s grace) remains the separate billing kill path. The `byok_delegation_withdrawals` table is the
+  Art. 7(3)/Art. 30 consent-withdrawal evidence (append-only, no UNIQUE — Phase 3), distinct from
+  grantor-revoke audit.
 - **Server-owned canonical version.** The accept route stops trusting `body.sideLetterVersion`
   and stamps a server constant; the gate compares the stored version against the canonical one,
   so a version bump fail-closes stale acceptances (the version-specific gate; re-prompt UX
@@ -93,11 +124,12 @@ authenticated; GRANT EXECUTE ... TO service_role;` and the migration includes a 
   `BYOK_SIDE_LETTER_VERSION` constant exists.
 - **Create** TS const `BYOK_SIDE_LETTER_VERSION` in a shared server module (e.g.
   `apps/web-platform/server/byok-side-letter.ts`), value = current version string (e.g. `"1.0"`).
-- **Create** SQL `current_byok_side_letter_version()` (`IMMUTABLE`, `SET search_path = public,
-  pg_temp`) returning the same literal — the SECURITY DEFINER gate reads it via the
-  schema-qualified `public.current_byok_side_letter_version()` call (a TS const is unreadable
-  from SQL). The function is the single SQL source of truth; AC4 parity test (CI gate) prevents
-  TS/SQL split-brain drift.
+- **Create** SQL `current_byok_side_letter_version()` (`IMMUTABLE`, **`SECURITY INVOKER`** — it reads
+  no tables, so no DEFINER needed; `SET search_path = public, pg_temp`) returning the same literal —
+  the SECURITY DEFINER gate reads it via the schema-qualified `public.current_byok_side_letter_version()`
+  call (a TS const is unreadable from SQL). The function is the single SQL source of truth; the AC4
+  parity test runs as a **CI gate against dev AND prd separately** (distinct Supabase projects per
+  `hr-dev-prd-distinct-supabase-projects` — a one-sided version bump would silently diverge).
 - **Edit** `accept/route.ts` + `delegation-acceptance-modal.tsx` + the request type: **drop the
   `sideLetterVersion` field entirely** (client no longer sends it; no validate-and-400 branch).
   The route stamps `BYOK_SIDE_LETTER_VERSION` server-side; the modal reads the current version
@@ -122,42 +154,61 @@ authenticated; GRANT EXECUTE ... TO service_role;` and the migration includes a 
   (fail-closed); (c) current-version acceptance → grantor key owner returned; (d) own-key user
   unaffected (resolver short-circuits before the delegation branch).
 
-### Phase 3 — Withdrawal (mig 084 + resolver clause + route + UI)
+### Phase 3 — Withdrawal (mig 084 + resolver clause + per-turn re-gate + route + UI)
 - **Create** `084_byok_delegation_withdrawals.sql` + `.down.sql`: `byok_delegation_withdrawals`
   WORM table mirroring mig 074 (cols: `id, user_id REFERENCES users ON DELETE RESTRICT,
   delegation_id REFERENCES byok_delegations ON DELETE RESTRICT, withdrawn_at, side_letter_version,
-  ip_hash, user_agent, retention_until 7y, UNIQUE(user_id, delegation_id)`), `no_update`/`no_delete`
-  WORM triggers + `anonymise_byok_delegation_withdrawals(p_user_id)` Art. 17 RPC (copy 074 shape),
-  RLS `user_id = auth.uid()` select/insert.
-- **Create** SECURITY DEFINER `withdraw_byok_delegation_consent(p_delegation_id, p_user_id)`:
-  verify caller is grantee, INSERT the withdrawal WORM row. Does **NOT** touch `byok_delegations`
-  (no `revoked_at` write — that would require the 3-field WORM flip + a `consent_withdrawn` enum
-  value that does not exist; see plan-review P0). Idempotent (no-op if already withdrawn).
-- **Update** mig 084 also `CREATE OR REPLACE resolve_byok_key_owner` to add the second gate clause:
+  ip_hash, user_agent, retention_until 7y`). **NO `UNIQUE(user_id, delegation_id)`** — it is an
+  append-only event log; withdrawal is non-terminal (withdraw→re-accept→withdraw must record
+  multiple rows) AND a UNIQUE breaks Art. 17 anonymise (two rows collapsing to `(NULL,delegation_id)`
+  collide → abort `deleteUser`, the exact AC7 regression). `no_update`/`no_delete` WORM triggers +
+  `anonymise_byok_delegation_withdrawals(p_user_id)` Art. 17 RPC — the RPC MUST set
+  `SET LOCAL session_replication_role = 'replica'` in its own DEFINER body (per-session, not inherited
+  from the acceptances RPC) so the WORM trigger early-returns. RLS `user_id = auth.uid()` select +
+  insert `WITH CHECK (user_id = auth.uid() AND delegation_id IN (SELECT id FROM byok_delegations
+  WHERE grantee_user_id = auth.uid()))` (defense-in-depth so a non-DEFINER path cannot forge a
+  withdrawal for someone else's delegation).
+- **Create** SECURITY DEFINER `withdraw_byok_delegation_consent(p_delegation_id)` — **no `p_user_id`
+  parameter** (SS-F3 harvest vector); derive the user from `auth.uid()` internally. `SELECT ... WHERE
+  id = p_delegation_id AND grantee_user_id = auth.uid()` → `RAISE EXCEPTION` if not found (grantee-only;
+  closes cross-tenant forge). INSERT the withdrawal WORM row. Does **NOT** touch `byok_delegations`
+  (no `revoked_at` write — 3-field WORM flip + missing `consent_withdrawn` enum, plan-review P0).
+  `GRANT EXECUTE TO authenticated` (invoked as the user, like `revoke_byok_delegation` 064:572 — NOT
+  service_role). Idempotent.
+- **Update** mig 084 `CREATE OR REPLACE resolve_byok_key_owner` to add the second gate clause —
+  **version-agnostic inner max + COALESCE + `>=`** (deepen P0: a version bump leaves
+  `max(current-version accepted_at)` NULL → `> NULL` fails OPEN; a withdrawal must beat ANY
+  acceptance and win timestamp ties):
   ```sql
   AND NOT EXISTS (
     SELECT 1 FROM public.byok_delegation_withdrawals w
      WHERE w.delegation_id = bd.id
        AND w.user_id       = bd.grantee_user_id
-       AND w.withdrawn_at > (
-         SELECT max(a2.accepted_at) FROM public.byok_delegation_acceptances a2
-          WHERE a2.delegation_id = bd.id AND a2.user_id = bd.grantee_user_id
-            AND a2.side_letter_version = public.current_byok_side_letter_version()
-       )
+       AND w.withdrawn_at >= COALESCE(
+         (SELECT max(a2.accepted_at) FROM public.byok_delegation_acceptances a2
+            WHERE a2.delegation_id = bd.id AND a2.user_id = bd.grantee_user_id),
+         w.withdrawn_at)  -- no acceptance ⇒ withdrawal unconditionally newer
   )
   ```
-  Re-assert REVOKE/GRANT; default-privileges audit. (Non-terminal: a later re-acceptance whose
-  `accepted_at` post-dates the withdrawal reactivates the delegation.)
-- **Create** `POST /api/workspace/delegations/withdraw` route (auth, CSRF, flag-gated, grantee-only).
-- **Edit** account-delete cascade (`account-delete.ts`): add an explicit step calling
-  `anonymise_byok_delegation_withdrawals` **before** `auth.admin.deleteUser` (the `ON DELETE
-  RESTRICT` FK aborts `deleteUser` otherwise — mirror the existing mig-074 acceptances cascade step).
-- **Edit** DSAR (`dsar-export.ts` + `dsar-export-allowlist.ts`): add `byok_delegation_withdrawals`
-  mirroring the `byok_delegation_acceptances` allowlist entry (Art. 15).
-- RED→GREEN: withdrawal blocks new leases (resolver empty); in-flight runs unaffected (grantor-revoke
-  remains the kill path); re-acceptance after withdrawal reactivates; withdrawal row is WORM
-  (UPDATE/DELETE rejected); cross-tenant withdraw rejected; account-delete succeeds with a withdrawal
-  row present (FK-block regression).
+  Re-assert REVOKE/GRANT; default-privileges audit. (Non-terminal: a re-acceptance whose
+  `accepted_at` post-dates the withdrawal reactivates.)
+- **Update** mig 084 also `CREATE OR REPLACE check_and_record_byok_delegation_use` (064:665) — add a
+  **per-turn consent re-gate** mirroring the existing grace check (the delegation row is already
+  `FOR UPDATE` locked there): if a withdrawal exists newer than the latest acceptance, raise with a
+  new `attribution_shift_reason` (e.g. `consent_withdrawn`) and debit the **grantee** (not grantor).
+  Without this, a mid-run withdrawal has ZERO billing effect — the grantor keeps paying until the run
+  ends (deepen architecture P1; ADR-040 threshold = "unauthorized invoice"). [extend the enum if the
+  audit `attribution_shift_reason` column is CHECK-constrained]
+- **Create** `POST /api/workspace/delegations/withdraw` route (auth, CSRF, flag-gated; passes only the
+  delegationId — the RPC derives the user from the session).
+- **Edit** account-delete cascade (`account-delete.ts`): add `anonymise_byok_delegation_withdrawals`
+  **before** `auth.admin.deleteUser` (ON DELETE RESTRICT; mirror the mig-074 acceptances step at ~795-826).
+- **Edit** DSAR (`dsar-export.ts` + `dsar-export-allowlist.ts`): add `byok_delegation_withdrawals` (Art. 15).
+- RED→GREEN: withdrawal blocks new leases; **withdrawal also stops in-flight billing within one turn**
+  (per-turn re-gate, debits grantee); withdrawal with no current-version acceptance still blocks
+  (NULL-COALESCE); equal-timestamp tie blocks (`>=`); re-acceptance reactivates; multiple withdrawals
+  for one delegation are all recorded (no UNIQUE); WORM enforced; cross-tenant/forged withdraw rejected;
+  account-delete succeeds with ≥1 withdrawal row present (FK-block regression).
 
 ### Phase 4 — Consent text + mig 074 header (legal)
 - Invoke `legal-document-generator` to rewrite `delegation-consent-side-letter-template.md` as
@@ -225,7 +276,7 @@ liveness_signal:
   configured_in: apps/web-platform/server/agent-runner.ts (lease error catch)
 error_reporting:
   destination: Sentry
-  fail_loud: true (no silent fallback; resolver warn-path already mirrors per cq-silent-fallback-must-mirror-to-sentry)
+  fail_loud: "resolver fall-through branches (byok-resolver.ts:128/137/152) log.warn + fall back to keyOwnerUserId=caller — fail-CLOSED for a keyless grantee (MissingByokKeyError), NOT a silent grantor-key grant. AC12 regression test asserts no error path ever leases a grantor key."
 failure_modes:
   - {mode: no-consent lease attempt, detection: MissingByokKeyError in agent-runner, alert_route: Sentry}
   - {mode: stale-version (post-bump) lease attempt, detection: resolver returns empty + structured log, alert_route: Sentry}
@@ -286,10 +337,20 @@ None. Checked open `code-review` issues against `byok-resolver`, `064_byok_deleg
   server-side; the stored `side_letter_version` always equals the server constant regardless of body (test).
 - AC4: TS `BYOK_SIDE_LETTER_VERSION` === SQL `current_byok_side_letter_version()` — parity test wired as a
   CI gate (fails the build, not just the suite).
-- AC5: Withdrawal writes a WORM row and blocks new leases (resolver returns empty); it does NOT set
-  `revoked_at`; in-flight runs are unaffected (grantor-revoke remains the kill path); a re-acceptance whose
-  `accepted_at` post-dates the withdrawal reactivates; withdrawal row is WORM (UPDATE/DELETE rejected);
-  cross-tenant withdraw rejected.
+- AC5: Withdrawal writes a WORM row, blocks new leases (resolver empty), AND stops in-flight billing
+  within one turn (per-turn re-gate in the cap RPC debits the grantee); it does NOT set `revoked_at`;
+  re-acceptance post-dating the withdrawal reactivates; withdrawal with no current-version acceptance
+  still blocks (NULL-COALESCE); equal-timestamp tie blocks (`>=`); multiple withdrawals per delegation
+  all recorded (no UNIQUE constraint); withdrawal row is WORM (UPDATE/DELETE rejected).
+- AC12: On `resolve_byok_key_owner` RPC error (or workspace-lookup/flag fall-through), the resolver
+  NEVER leases a grantor key — `keyOwnerUserId === callerUserId` on every error branch (regression test
+  against byok-resolver.ts:128/137/152, fail-closed).
+- AC13: The withdraw RPC takes NO `p_user_id` param (derives `auth.uid()`); rejects a non-grantee caller
+  (`RAISE EXCEPTION`); `GRANT EXECUTE TO authenticated`; RLS `WITH CHECK` blocks inserting a withdrawal
+  for a delegation the caller is not the grantee of (cross-tenant/forge rejected at both RPC and RLS layers).
+- AC14: `anonymise_byok_delegation_withdrawals` sets `session_replication_role='replica'` in its own body
+  (WORM trigger early-returns); anonymising a user with ≥2 withdrawal rows for the same delegation succeeds
+  (no UNIQUE collision).
 - AC6: Own-key (solo) users are unaffected — resolver short-circuits before the delegation branch (test).
 - AC7: account-delete anonymises `byok_delegation_withdrawals` **before** `deleteUser` and succeeds with a
   withdrawal row present (FK-block regression test); DSAR export includes withdrawal events.
@@ -303,16 +364,16 @@ None. Checked open `code-review` issues against `byok-resolver`, `064_byok_deleg
 
 ## Risks & Mitigations
 
-- **Withdrawal design (resolved at plan-review):** gate-side `NOT EXISTS(withdrawal)` chosen over
-  setting `revoked_at` — the latter is a P0 (WORM 3-field flip + missing `consent_withdrawn` enum value).
-  Gate-side is non-terminal and avoids new grace logic. Consequence to confirm at deepen-plan: in-flight
-  runs are NOT killed on withdrawal (only new leases blocked); the USD/day cap + grantor-revoke bound the
-  in-flight billing exposure. Verify the `NOT EXISTS`/`max(accepted_at)` clause against the WORM/MVCC
-  semantics (data-integrity-guardian).
-- **Version bump mid-run** deactivates new leases but does not abort in-flight (grace keyed on
-  revoked_at, not version). Acceptable — version bumps are rare/deliberate; run completes, next run re-consents.
-- **Canonical version storage** (SQL function literal vs `byok_side_letter_versions` table) — leading
-  with the function+parity-test (YAGNI); deepen-plan to confirm against precedent.
+- **Withdrawal design (resolved at plan-review + deepen):** gate-side `NOT EXISTS(withdrawal)` over
+  setting `revoked_at` (the latter is a WORM/enum P0). Deepen hardened the predicate (version-agnostic
+  inner `max`, `COALESCE`, `>=` — closes the NULL-fail-open + tie-fail-open holes) AND added a per-turn
+  consent re-gate to the cap RPC so a mid-run withdrawal stops billing (architecture P1; the resolver
+  alone left in-flight billing unbounded). Withdrawals table carries NO UNIQUE (non-terminal + Art. 17).
+- **Version bump mid-run** deactivates new leases (acceptance gate fail-closed on version mismatch) but
+  does not abort an in-flight run. Acceptable — version bumps are rare/deliberate; next run re-consents.
+- **Canonical version storage** — function-literal + TS const + CI parity gate confirmed by all three
+  deepen agents over a `byok_side_letter_versions` table (a table makes the legal-version pin
+  runtime-mutable data — wrong ceremony; a function-literal forces a reviewed migration per bump).
 
 ## Non-Goals
 Re-consent re-prompt UX (#4628); multi-grantee fan-out; consent audit-export UI; new grace mechanism;
