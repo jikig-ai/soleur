@@ -444,10 +444,12 @@ describe("GSC coverage regression guard (www→apex host flip)", () => {
   test("changelog page renders apex links and zero www-host links (APEX_RE rewriter removed)", () => {
     const html = readSite("changelog/index.html");
     // Positive anchor first so the negative assertion is never vacuous: the
-    // page's canonical/og tags always render the apex host regardless of
-    // whether the GitHub release fetch returned content (offline/non-CI),
-    // so this holds in every environment.
-    expect(html.includes("https://soleur.ai")).toBe(true);
+    // page's canonical <link> always renders the apex host regardless of
+    // whether the GitHub release fetch returned content (offline/non-CI), so
+    // this holds in every environment. Matched as an HTML-element regex (not a
+    // bare URL substring) to avoid the js/incomplete-url-substring-sanitization
+    // CodeQL pattern that fires on `.includes("https://…")` host checks.
+    expect(html).toMatch(/rel="canonical"[^>]*href="https:\/\/soleur\.ai\//);
     expect(html.includes("www.soleur.ai")).toBe(false);
   });
 
