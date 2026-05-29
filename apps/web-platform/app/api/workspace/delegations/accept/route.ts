@@ -3,6 +3,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isByokDelegationsEnabled, type Identity } from "@/lib/feature-flags/server";
 import { resolveCurrentOrganizationId } from "@/server/workspace-resolver";
+import { BYOK_SIDE_LETTER_VERSION } from "@/server/byok-side-letter";
 import { createHash } from "node:crypto";
 
 export async function POST(request: Request) {
@@ -21,14 +22,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
 
-  let body: { delegationId?: string; sideLetterVersion?: string };
+  // The client no longer supplies a version. The canonical version is
+  // server-owned (BYOK_SIDE_LETTER_VERSION) and stamped below; trusting a
+  // client value let a grantee record a stale version and fail OPEN at
+  // the SQL lease gate (#4625 Phase 1 / AC3).
+  let body: { delegationId?: string };
   try {
     body = (await request.json()) as typeof body;
   } catch {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
   }
 
-  if (!body.delegationId || !body.sideLetterVersion) {
+  if (!body.delegationId) {
     return NextResponse.json({ error: "missing_fields" }, { status: 400 });
   }
 
@@ -62,7 +67,7 @@ export async function POST(request: Request) {
     .insert({
       user_id: user.id,
       delegation_id: body.delegationId,
-      side_letter_version: body.sideLetterVersion,
+      side_letter_version: BYOK_SIDE_LETTER_VERSION,
       ip_hash: ipHash,
       user_agent: userAgent,
     });

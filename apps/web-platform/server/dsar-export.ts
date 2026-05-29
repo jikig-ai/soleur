@@ -1311,6 +1311,29 @@ export async function exportSqlTable(
     });
   }
 
+  // -- byok_delegation_withdrawals (migration 084, #4625) ----------------
+  if (DSAR_TABLE_ALLOWLIST.byok_delegation_withdrawals) {
+    const { data: withdrawRows, error: withdrawErr } = await service
+      .from("byok_delegation_withdrawals")
+      .select("*")
+      .eq("user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (withdrawErr)
+      throw new Error(
+        `byok_delegation_withdrawals read failed: ${withdrawErr.message}`,
+      );
+    assertReadScope(
+      (withdrawRows ?? []) as Record<string, unknown>[],
+      expectedUserId,
+      "byok_delegation_withdrawals",
+    );
+    results.push({
+      table: "byok_delegation_withdrawals",
+      spec: DSAR_TABLE_ALLOWLIST.byok_delegation_withdrawals,
+      rows: (withdrawRows ?? []) as Record<string, unknown>[],
+    });
+  }
+
   return results;
 }
 

@@ -99,6 +99,12 @@ export interface DeleteAccountResult {
  *                             Nulls user_id + ip_hash + user_agent on the
  *                             consent ledger. Required: acceptances.user_id
  *                             REFERENCES users(id) ON DELETE RESTRICT.
+ *   5.12 anonymise-byok-delegation-withdrawals —
+ *                             anonymise_byok_delegation_withdrawals RPC
+ *                             (migration 084, #4625). Nulls user_id +
+ *                             ip_hash + user_agent on the consent-withdrawal
+ *                             ledger. Required: withdrawals.user_id
+ *                             REFERENCES users(id) ON DELETE RESTRICT.
  *   6. auth             — auth.admin.deleteUser(); FK cascade handles
  *                         public.users and all children atomically.
  *
@@ -844,6 +850,34 @@ export async function deleteAccount(
     log.error(
       { userId, err },
       "anonymise_byok_delegation_acceptances threw — aborting deletion to avoid FK-block",
+    );
+    return { success: false, error: "Account deletion failed at unknown. Please try again." };
+  }
+
+  // 3.96 Anonymise byok_delegation_withdrawals (migration 084, #4625).
+  //      byok_delegation_withdrawals.user_id references users(id) ON DELETE
+  //      RESTRICT — without this step the auth-delete cascade would abort
+  //      with FK 23503. The RPC nulls user_id + ip_hash + user_agent via
+  //      session_replication_role='replica' WORM bypass. The table has NO
+  //      UNIQUE(user_id, delegation_id), so anonymising ≥2 withdrawal rows
+  //      for the same delegation cannot collide on (NULL, delegation_id)
+  //      (AC14). Idempotent.
+  try {
+    const { error: anonWithdrawErr } = await service.rpc(
+      "anonymise_byok_delegation_withdrawals",
+      { p_user_id: userId },
+    );
+    if (anonWithdrawErr) {
+      log.error(
+        { userId, err: anonWithdrawErr },
+        "anonymise_byok_delegation_withdrawals failed — aborting deletion to avoid FK-block",
+      );
+      return { success: false, error: "Account deletion failed at unknown. Please try again." };
+    }
+  } catch (err) {
+    log.error(
+      { userId, err },
+      "anonymise_byok_delegation_withdrawals threw — aborting deletion to avoid FK-block",
     );
     return { success: false, error: "Account deletion failed at unknown. Please try again." };
   }

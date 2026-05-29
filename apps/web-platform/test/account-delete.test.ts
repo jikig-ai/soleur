@@ -187,6 +187,10 @@ describe("deleteAccount", () => {
         callOrder.push("anonymise-workspace-actions");
       } else if (name === "anonymise_byok_delegations") {
         callOrder.push("anonymise-byok-delegations");
+      } else if (name === "anonymise_byok_delegation_acceptances") {
+        callOrder.push("anonymise-byok-acceptances");
+      } else if (name === "anonymise_byok_delegation_withdrawals") {
+        callOrder.push("anonymise-byok-withdrawals");
       }
       return { data: 0, error: null };
     });
@@ -211,6 +215,8 @@ describe("deleteAccount", () => {
       "anonymise-org-membership",
       "anonymise-workspace-actions",
       "anonymise-byok-delegations",
+      "anonymise-byok-acceptances",
+      "anonymise-byok-withdrawals",
       "auth",
     ]);
   });
@@ -392,6 +398,10 @@ describe("deleteAccount", () => {
         callOrder.push("anonymise-workspace-actions");
       } else if (name === "anonymise_byok_delegations") {
         callOrder.push("anonymise-byok-delegations");
+      } else if (name === "anonymise_byok_delegation_acceptances") {
+        callOrder.push("anonymise-byok-acceptances");
+      } else if (name === "anonymise_byok_delegation_withdrawals") {
+        callOrder.push("anonymise-byok-withdrawals");
       }
       return { data: 0, error: null };
     });
@@ -423,6 +433,8 @@ describe("deleteAccount", () => {
       "anonymise-org-membership",
       "anonymise-workspace-actions",
       "anonymise-byok-delegations",
+      "anonymise-byok-acceptances",
+      "anonymise-byok-withdrawals",
       "auth",
     ]);
   });
