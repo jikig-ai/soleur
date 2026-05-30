@@ -2,7 +2,7 @@
 # Tests the Inngest bootstrap runcmd block added to cloud-init.yml in #4118.
 #
 # Asserts the structural invariants the runcmd block must satisfy:
-#   - The pinned OCI image tag is present and exactly v1.0.0 (bootstrap-script
+#   - The pinned OCI image tag is present and exactly v1.1.11 (bootstrap-script
 #     version, NOT the inngest-cli version which is sourced from Config.Env).
 #   - The block sources INNGEST_CLI_VERSION + INNGEST_CLI_SHA256 via `docker
 #     inspect ... Config.Env` (rather than hardcoding them in cloud-init.yml).
@@ -49,8 +49,8 @@ assert "cloud-init.yml exists" "[[ -f '$CLOUD_INIT' ]]"
 # --- AC1: pinned OCI image tag ---
 echo ""
 echo "--- AC1: pinned OCI image tag ---"
-assert "docker pull line for soleur-inngest-bootstrap:v1.0.0 exists" \
-  "grep -qE '^[[:space:]]+docker pull ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v1\.0\.0' '$CLOUD_INIT'"
+assert "docker pull line for soleur-inngest-bootstrap:v1.1.11 exists" \
+  "grep -qE '^[[:space:]]+docker pull ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v1\.1\.11' '$CLOUD_INIT'"
 
 # --- AC1: Config.Env sourcing ---
 echo ""
@@ -71,13 +71,17 @@ assert "Inngest block uses trap cleanup EXIT" \
 # --- AC2: drift comment ---
 echo ""
 echo "--- AC2: drift sentinel comment ---"
-assert "drift comment cites inngest.tf:locals.inngest_cli_version" \
-  "grep -qE '# Pinned image tag tracks apps/web-platform/infra/inngest\.tf:locals\.inngest_cli_version' '$CLOUD_INIT'"
+# The pin's drift-sentinel comment must clarify that the tag is the
+# bootstrap-image SHAPE version (NOT the inngest-cli version) and MUST be
+# bumped on each bootstrap-script change. (#4667 corrected the prior comment
+# which misleadingly claimed the pin "tracks ...inngest_cli_version".)
+assert "drift comment clarifies pin is bootstrap-image version, not inngest-cli version" \
+  "grep -qE 'NOT the inngest-cli version' '$CLOUD_INIT' && grep -qiE 'MUST be bumped' '$CLOUD_INIT'"
 
 # --- AC4: positional ordering ---
 echo ""
 echo "--- AC4: positioned BEFORE soleur-web-platform docker run ---"
-BOOTSTRAP_LINE=$(grep -nE '^[[:space:]]+docker pull ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v1\.0\.0' "$CLOUD_INIT" | head -1 | cut -d: -f1)
+BOOTSTRAP_LINE=$(grep -nE '^[[:space:]]+docker pull ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v1\.1\.11' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 WEBPLATFORM_LINE=$(grep -nE '^[[:space:]]+--name soleur-web-platform' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 assert "bootstrap line found in cloud-init.yml"      "[[ -n '$BOOTSTRAP_LINE' ]]"
 assert "soleur-web-platform run line found"          "[[ -n '$WEBPLATFORM_LINE' ]]"
@@ -131,14 +135,21 @@ echo ""
 echo "--- AC5: sudoers parity (deploy-inngest-bootstrap) ---"
 SUDOERS_SRC="$SCRIPT_DIR/deploy-inngest-bootstrap.sudoers"
 SUDOERS_CONTENT_ONLY=$(grep -vE '^\s*#|^\s*$' "$SUDOERS_SRC")
+# Extract the inline sudoers body (#4665 fix): exit at the NEXT write_files
+# list item (`  - path:`) AND the next mapping key (`owner:`/`permissions:`),
+# then strip comments + blank lines so the comparison is content-only on BOTH
+# sides (the source side is already filtered by the grep above). The prior awk
+# over-read past the entry (its only exit was `[a-z]+:`, which does not match
+# `  - path:`) AND compared raw-with-comments against content-only → never matched.
 CLOUD_INIT_SUDOERS=$(awk '
   /path: \/etc\/sudoers\.d\/deploy-inngest-bootstrap/ { found = 1; next }
   found && /^[[:space:]]+content:[[:space:]]*\|/      { in_body = 1; next }
+  in_body && /^[[:space:]]*-[[:space:]]/              { exit }
   in_body && /^[[:space:]]+[a-z]+:/                   { exit }
   in_body { sub(/^      /, ""); print }
-' "$CLOUD_INIT")
+' "$CLOUD_INIT" | grep -vE '^\s*#|^\s*$')
 assert "deploy-inngest-bootstrap.sudoers exists"         "[[ -s '$SUDOERS_SRC' ]]"
-assert "cloud-init inline block is non-empty"            "[[ -n '$CLOUD_INIT_SUDOERS' ]]"
+assert "cloud-init inline block is non-empty"            "[[ -n \"\$CLOUD_INIT_SUDOERS\" ]]"
 assert "sudoers source and cloud-init inline match"      "[[ \"\$SUDOERS_CONTENT_ONLY\" == \"\$CLOUD_INIT_SUDOERS\" ]]"
 assert "ci-deploy.sh invokes the sudoers-pinned path"    "grep -qE '/usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh' '$SCRIPT_DIR/ci-deploy.sh'"
 if command -v visudo >/dev/null 2>&1; then
