@@ -13,6 +13,7 @@ import { useSignOut } from "@/components/auth/use-sign-out";
 import { OrgSwitcherContainer } from "@/components/dashboard/org-switcher-container";
 import { LiveRepoBadge } from "@/components/dashboard/live-repo-badge";
 import { MembershipRevokedScreen } from "@/components/dashboard/membership-revoked-screen";
+import { NoApiKeyBanner } from "@/components/dashboard/no-api-key-banner";
 
 const BANNER_DISMISS_KEY = "soleur:past_due_banner_dismissed";
 
@@ -402,6 +403,10 @@ export default function DashboardLayout({
           </div>
         )}
         <PaymentWarningBanner subscriptionStatus={subscriptionStatus} />
+        {/* Keyless / delegated-but-keyless degraded-state banner (#4642).
+            Self-gates via /api/byok/effective-status — renders nothing for
+            users with a usable key. */}
+        <NoApiKeyBanner />
         {children}
       </main>
 
