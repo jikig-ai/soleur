@@ -31,6 +31,7 @@ import {
   ByokDelegationExpiredError,
   ByokDelegationHourlyCapError,
   ByokDelegationDailyCapError,
+  ByokDelegationCrossTenantError,
 } from "./byok-resolver";
 
 const log = createChildLogger("cost-writer");
@@ -194,6 +195,22 @@ export function persistTurnCost(
           reportSilentFallback(
             new ByokDelegationDailyCapError(delegation.delegationId),
             { feature: "byok-delegations", op: "daily-cap-exceeded", extra: baseExtra },
+          );
+        } else if (message.includes("byok_delegations:cross_tenant")) {
+          // GDPR Art. 33 breach surface: the grantee used the grantor's BYOK
+          // key from outside the grantor's workspace. Route to a DISTINCT op
+          // tagged `art_33_breach=true` so the dedicated alert rule (#4364)
+          // starts the 72h-notification clock — never the merged-rpc-failure
+          // catch-all, where it would be indistinguishable from a transient
+          // DB error. Raise string is the underscore form per mig 064 L193.
+          reportSilentFallback(
+            new ByokDelegationCrossTenantError(delegation.delegationId),
+            {
+              feature: "byok-delegations",
+              op: "cross-tenant-violation",
+              art33Breach: true,
+              extra: baseExtra,
+            },
           );
         } else {
           log.error(
