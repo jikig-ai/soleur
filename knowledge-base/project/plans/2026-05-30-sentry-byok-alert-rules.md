@@ -62,7 +62,8 @@ check changes the plan's central decision — the brief's own fallback preferenc
 
 | Brief / issue claim | Codebase reality (verified 2026-05-30) | Plan response |
 |---|---|---|
-| Emitter at `web-platform/src/lib/observability/byok-delegation-events.ts` | Call sites in `apps/web-platform/server/cost-writer.ts:169-215`; tags set by `reportSilentFallback` → `scope.setTag` in `apps/web-platform/server/observability.ts:198-200`; no `src/` tree exists | Cite the real paths; tag values read from them directly |
+| Emitter at `web-platform/src/lib/observability/byok-delegation-events.ts` | Call sites in `apps/web-platform/server/cost-writer.ts`; `{feature,op}` tags built + passed as `{ tags }` to `Sentry.captureException/captureMessage` in `apps/web-platform/server/observability.ts:169-170,190,193-197`; no `src/` tree, no `scope.setTag` | Cite the real paths; tag values read from them directly |
+| AC: emits `art_33_breach=true` + `op=cross-tenant-violation` | **NOT emitted on `origin/main`** (grep zero hits). `SilentFallbackOptions` = `{feature,op}` only; real ops are revoke-past-grace/expired/hourly-cap-exceeded/daily-cap-exceeded/merged-rpc-failure | **Substrate gap** — Rule 1's tag does not exist. Plan adds the emission as a prerequisite (Goals/Rule 1) OR re-scopes Rule 1; CPO decision gate (Open Questions) |
 | Org slug `jikigai` | Org slug is **`jikigai-eu`** (EU cluster); `variables.tf` desc + `.env.example` `SENTRY_ORG=jikigai-eu`; provider `base_url = https://de.sentry.io/api/` (`main.tf`) | Use `var.sentry_org` / `var.sentry_project` — never a hardcoded slug |
 | API host `sentry.io` | EU host `de.sentry.io` (`main.tf` provider `base_url`) | Inherited automatically via the existing provider block; no change |
 | "prefer extending existing terraform **if present**" | `apps/web-platform/infra/sentry/` **IS present**: `main.tf`, `issue-alerts.tf` (4 `sentry_issue_alert` resources), `cron-monitors.tf`, `uptime-monitors.tf`, `variables.tf`, `versions.tf`, `.terraform.lock.hcl`, R2 backend, ADR-031, README, auto-apply workflow | **Extend the terraform root.** Add 2 `sentry_issue_alert` resources to `issue-alerts.tf`. Do NOT write a TS script. |
@@ -93,13 +94,31 @@ emitter correctness, which is out of scope here.
 
 ## Goals
 
+0. **Substrate prerequisite (Phase 1 of /work):** add the missing
+   `op = "cross-tenant-violation"` + `art_33_breach = "true"` tag emission to the
+   cross-tenant raise path so Rule 1 has a real signal. Two sub-options
+   (resolve at /work Phase 0 with CPO ack — see Open Questions):
+   - **0a (preferred, smallest):** extend `SilentFallbackOptions` with an
+     optional `art33Breach?: boolean` → `tags.art_33_breach = "true"` when set
+     (observability.ts), and emit a distinct `op: "cross-tenant-violation"` +
+     `art33Breach: true` at the cross-tenant P0001 branch in cost-writer.ts
+     (currently swallowed by `op: "merged-rpc-failure"`). RED test asserts the
+     tag is set.
+   - **0b (re-scope, no app change):** if extending the emitter is out of scope,
+     Rule 1 filters on the substrate that DOES exist. But there is **no
+     cross-tenant-specific tag today** — the closest is `op=merged-rpc-failure`,
+     which also catches unknown P0001s and is NOT Art-33-specific. 0b therefore
+     does NOT satisfy AC1's intent (route the Art. 33 breach distinctly) and is
+     recorded only as the fallback if 0a is rejected.
 1. **Rule 1 (Art. 33 breach):** a `sentry_issue_alert` matching
-   `feature = byok-delegations AND art_33_breach = true` → high-urgency action
-   shape, distinct from the 4 existing auth rules and from Rule 2.
+   `feature = byok-delegations AND art_33_breach = true` (after Goal 0a) →
+   high-urgency action shape, distinct from the 4 auth rules and from Rule 2.
 2. **Rule 2 (cap-exceeded):** a `sentry_issue_alert` matching
    `feature = byok-delegations AND op IN {hourly-cap-exceeded, daily-cap-exceeded}`
-   → lower-severity action shape, distinct from Rule 1.
-3. Both as **committed terraform** in the existing IaC root, applied via the
+   → lower-severity action shape, distinct from Rule 1. **Rule 2's substrate
+   already exists** (both ops verified emitted) — it is shippable independently
+   of Goal 0.
+3. Both rules as **committed terraform** in the existing IaC root, applied via the
    existing `apply-sentry-infra.yml` auto-apply-on-push workflow — reproducible
    and drift-guarded, no bespoke imperative script.
 
@@ -320,6 +339,15 @@ alert is the operator/founder via Sentry, not an app UI).
 
 ## Open Questions
 
+- **🔴 Substrate gap (CPO decision gate, blocks Rule 1):** PR-A does NOT emit
+  `art_33_breach` / `op=cross-tenant-violation` (verified zero on origin/main).
+  Choose: **(0a)** extend the emitter (`SilentFallbackOptions.art33Breach` +
+  distinct cross-tenant `op`) in this PR so Rule 1 has a real signal — small,
+  preferred, makes AC1 satisfiable; or **(0b)** ship Rule 2 only now and file a
+  follow-up to add the emission + Rule 1. Recommendation: 0a (the brand-survival
+  threshold is the cross-tenant case — shipping the cap rule but not the Art. 33
+  rule leaves the highest-severity path unrouted, which is exactly the
+  single-user-incident window). Requires CPO ack at /work Phase 0.
 - **Action target severity:** does the `jikigai-eu` org have a Slack/PagerDuty
   integration whose action object beta2 exposes? Resolve at Phase 0 via
   `terraform providers schema` (action object list) + a one-time read of org

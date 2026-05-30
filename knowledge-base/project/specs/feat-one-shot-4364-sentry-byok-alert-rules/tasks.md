@@ -9,6 +9,24 @@ issue: "#4364"
 Derived from `2026-05-30-sentry-byok-alert-rules.md`. Extends the existing
 terraform IaC root `apps/web-platform/infra/sentry/` — do NOT write a TS script.
 
+## Phase 0a — Substrate gap (CPO decision gate, blocks Rule 1)
+
+PR-A does NOT emit `art_33_breach` / `op=cross-tenant-violation` (verified zero on
+origin/main). Rule 1's filter has no signal until this is closed.
+
+- [ ] 0a.1 CPO ack: choose 0a (add emission in this PR) vs 0b (ship Rule 2 only,
+      follow-up for Rule 1). Default recommendation: 0a.
+- [ ] 0a.2 (if 0a) RED: test in `apps/web-platform/test/server/` asserting a
+      cross-tenant P0001 raise yields a Sentry event tagged
+      `op=cross-tenant-violation` + `art_33_breach=true`.
+- [ ] 0a.3 (if 0a) Extend `SilentFallbackOptions` with `art33Breach?: boolean` →
+      `tags.art_33_breach = "true"` in `server/observability.ts` (both
+      `reportSilentFallback` and `warnSilentFallback`); add a distinct
+      cross-tenant branch in `server/cost-writer.ts` emitting
+      `op: "cross-tenant-violation", art33Breach: true` (currently swallowed by
+      `op: "merged-rpc-failure"`). GREEN.
+- [ ] 0a.4 (if 0b) Re-scope Rule 1 to a follow-up issue; ship Rule 2 only.
+
 ## Phase 0 — Schema verify (mandatory before writing any HCL)
 
 - [ ] 0.1 `cd apps/web-platform/infra/sentry && terraform init -input=false`
