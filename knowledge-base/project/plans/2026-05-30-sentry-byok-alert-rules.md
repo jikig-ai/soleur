@@ -15,42 +15,60 @@ related_issues: ["#4364", "#4232"]
 
 ## Problem Statement
 
-PR-A (#4290, MERGED) shipped `byok-delegations` observability events to Sentry.
-The call sites are in **`apps/web-platform/server/cost-writer.ts`** (the
-`check_and_record_byok_delegation_use` RPC error handler, lines 169-215 —
-verified this session; NOT `src/lib/observability/...`, which this repo has no
-`src/` tree for — both the issue body and the one-shot brief cite a wrong path).
-Each call routes through `reportSilentFallback(err, { feature, op, art_33_breach?,
-level, mirrorToSentry: true, ... })` in
-**`apps/web-platform/server/observability.ts`**, which sets the values as Sentry
-**tags** via `scope.setTag(...)` (lines 198-200):
+PR-A (#4290, MERGED) shipped `byok-delegations` observability call sites in
+**`apps/web-platform/server/cost-writer.ts`** (the
+`check_and_record_byok_delegation_use` RPC error handler — verified this session;
+NOT `src/lib/observability/...`, which this repo has no `src/` tree for — both the
+issue body and the one-shot brief cite a wrong path). Each routes through
+`reportSilentFallback(err, { feature, op, extra })` /
+`warnSilentFallback(...)` in **`apps/web-platform/server/observability.ts`**,
+which builds a Sentry **tags** map `{ feature, op }` (observability.ts:169-170,
+217) and passes it as the `{ tags }` option to `Sentry.captureException(err,
+{ tags, extra })` / `Sentry.captureMessage(..., { tags, extra })`
+(observability.ts:190, 193-197, 228, 231-235). So `feature` and `op` ARE
+top-level Sentry tags (matchable by `TaggedEventFilter`). There is **no
+`scope.setTag`** — the tags travel via the capture-call `{ tags }` option.
 
-- `feature = "byok-delegations"` — `scope.setTag("feature", …)` (observability.ts:198);
-  passed at cost-writer.ts:181,186,191,196,204
-- `op = cross-tenant-violation | revoke-past-grace | hourly-cap-exceeded |
-  daily-cap-exceeded | expired` — `scope.setTag("op", …)` (observability.ts:199)
-- `art_33_breach = "true"` (string, `String(art_33_breach)`, observability.ts:200) —
-  set ONLY on the cross-tenant path (cost-writer.ts:204-205 `art_33_breach: true`)
+**⚠ LOAD-BEARING PREMISE CORRECTION (Phase 0.6 / Phase 4.45 verify-the-negative):**
+The issue's AC assumes PR-A emits `art_33_breach = "true"` + `op =
+"cross-tenant-violation"`. **It does not.** Verified on `origin/main`:
 
-`mirrorToSentry: true` (cost-writer.ts cross-tenant + cap paths) is what makes the
-event reach Sentry at all (most silent fallbacks are pino-only). The
-`SilentFallbackOptions` docstring (observability.ts:146-154) states verbatim that
-`feature`/`op`/`art_33_breach` "Becomes a Sentry tag … so issue #4364's alert
-rule can filter on it" — confirming this plan is the designed consumer and that
-**`TaggedEventFilter` (which matches tags, not `extra`) is the correct filter
-type.**
+```
+$ git grep -n "art_33_breach\|cross-tenant-violation" origin/main \
+    -- 'apps/web-platform' | grep -v test | grep -v knowledge-base
+apps/web-platform/supabase/migrations/064_byok_delegations.sql:197:
+  -- TS layer can tag art_33_breach="true" on the Sentry event.
+```
 
-There are **no alert rules** routing those events to a human. A cross-tenant
-violation starts the GDPR Art. 33 72-hour breach-notification clock, yet today
-it lands silently in the unrouted Sentry issue stream. This is both an
+The ONLY hit is a SQL *comment* describing intent — the TS layer never
+implemented it. `SilentFallbackOptions` has only `feature` + `op`
+(observability.ts:108-109; lib/client-observability.ts:85-86); there is no
+`art_33_breach` field and no `cross-tenant-violation` op anywhere in the TS.
+The byok-delegations ops PR-A actually emits (cost-writer.ts:181-205):
+`revoke-past-grace`, `expired`, `hourly-cap-exceeded`, `daily-cap-exceeded`,
+`merged-rpc-failure`. The cross-tenant case (a `byok_delegations:cross-tenant`
+P0001 raised by the migration-064 trigger) surfaces under the catch-all
+`op: "merged-rpc-failure"` (cost-writer.ts:200-208), NOT a distinct tag.
+
+**Consequence:** AC1 as literally written (`feature=byok-delegations AND
+art_33_breach=true`) is **unsatisfiable against the shipped substrate** — the
+rule would match zero events forever. This is a never-built premise (the SQL
+comment proves the tag was *designed* but the TS emit was never wired), not a
+broken one. The plan resolves it in Goal 0 by wiring the missing tag emission as
+a /work prerequisite, so Rule 1 has a real signal. **CPO decision gate — see
+Open Questions.**
+
+There are **no alert rules** routing byok-delegations events to a human today; a
+cross-tenant violation lands silently under `merged-rpc-failure`. This is both an
 observability gap (`hr-observability-as-plan-quality-gate`) and a compliance gap
 (`hr-gdpr-gate-on-regulated-data-surfaces`).
 
 The issue's original deferral (Sentry alert actions are "UI-only" / "no Sentry
 MCP server") was **invalidated** by the maintainer comment 2026-05-30: Sentry
-issue-alerts are fully API-settable (conditions + filters + actions), which the
-existing terraform root already proves (the 4 auth `sentry_issue_alert`
-resources). The re-eval trigger (PR-B #4508 merged) is satisfied.
+issue-alerts are fully API-settable, which the existing terraform root already
+proves (4 auth `sentry_issue_alert` resources). The re-eval trigger (PR-B #4508
+merged) is satisfied — but the substrate gap above is the real blocker, not the
+API.
 
 ## Research Reconciliation — Brief vs. Codebase
 
@@ -164,7 +182,8 @@ pattern: the canonical form is `sentry_issue_alert` in this file.**
 | Provider `jianyuan/sentry` pinned `0.15.0-beta2` | `versions.tf` + `.terraform.lock.hcl` | yes |
 | Org/project via `var.sentry_org` / `data.sentry_project.web_platform.slug`; EU host | `main.tf`, `variables.tf` | yes |
 | Tag keys/values `feature`/`op`/`art_33_breach` passed at call sites | `server/cost-writer.ts:181,186,191,196,204-205` | yes |
-| Tags emitted via `scope.setTag` (→ matchable by TaggedEventFilter, NOT extra) | `server/observability.ts:198-200` + docstring `:146-154` | yes |
+| Tags `feature`/`op` passed via `{ tags }` capture option (→ TaggedEventFilter, NOT extra); no `scope.setTag` | `server/observability.ts:169-170,190,193-197,217,228` | yes |
+| `art_33_breach` tag designed in SQL comment but NEVER emitted by TS | `064_byok_delegations.sql:197` (comment only); zero TS hits | yes (gap) |
 | Create-time POST dedup keys on action-shape+frequency+match, not conditions | learning `2026-05-17-sentry-issue-alert-create-dedup-on-action-match-not-conditions.md` | yes |
 | Existing rule frequencies 60/61/62/30 (must avoid for dedup) | `issue-alerts.tf` | yes |
 | Auth token = GitHub repo secret, NOT Doppler | `infra/sentry/README.md` §Authentication | yes |
