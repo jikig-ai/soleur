@@ -374,3 +374,27 @@ no `terraform apply` path.)
 - **Redeploying running hosts** — remains the `deploy inngest …:vX.Y.Z` webhook path.
 - **Querying GHCR for published image tags** — git tags are the chosen source-of-truth.
 - **Changing the bootstrap image release/versioning scheme.**
+
+## Implementation Notes (added at /work time, 2026-05-30)
+
+**As-built location:** the real test is `apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh`
+(the pipeline-args path `apps/inngest/infra/__tests__/...` does not exist). AC6 + AC6b were
+appended to that existing bash test (now 21/21 assertions), and the test was wired into the
+`deploy-script-tests` job of `.github/workflows/infra-validation.yml` (which runs an explicit
+hardcoded list of `run:` steps — confirmed it was NOT auto-globbing the test) with
+`fetch-depth: 0` + `fetch-tags: true` added so the `vinngest-v*` tags are reachable.
+
+**Load-bearing correction to the deepen reconciliation table.** The table claimed all releases
+`v1.0.0…v1.1.11` exist as `vinngest-v*` git tags. That was FALSE — the remote topped out at
+`vinngest-v1.1.10`. `v1.1.11` was published via two `workflow_dispatch` runs on `main`
+(2026-05-30 20:27/20:28 UTC) before the #4669 pin-bump commit, so it never got a tag. A guard
+asserting `pin == semver-max tag` would have gone red on the correct deployed state. With operator
+approval, the missing annotated tag `vinngest-v1.1.11` was backfilled at commit `338ac402` (whose
+bootstrap shape inputs are byte-identical to the build-time tree, so the tag-triggered rebuild
+reproduces the same image) and pushed — also closing the latent
+`hr-tagged-build-workflow-needs-initial-tag-push` gap. Now pin == latest tag == v1.1.11 and the
+guard is green, firing only on real drift.
+
+**Hardcoded-version Sharp Edge resolved:** AC1/AC4's hardcoded `v1.1.11` regexes were softened to
+shape-match `v[0-9]+\.[0-9]+\.[0-9]+`; AC6 now owns the single exact-value check (+ AC6b catches
+partial bumps), so future releases need only a cloud-init pin bump, not a parallel test edit.

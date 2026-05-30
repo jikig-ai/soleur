@@ -119,7 +119,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      # fetch-depth: 0 + fetch-tags: true make the vinngest-v* tags reachable so
+      # the cloud-init-inngest-bootstrap drift-guard (AC6, #4675) can compare the
+      # pin against the latest published tag. Without tags the guard self-skips
+      # (visible SKIP, never false-green). detect-changes already uses
+      # fetch-depth: 0 as precedent.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Run ci-deploy.sh tests
         run: bash apps/web-platform/infra/ci-deploy.test.sh
@@ -132,6 +140,9 @@ jobs:
 
       - name: Run www-apex-canonicalizer drift-guard
         run: bash apps/web-platform/infra/www-apex-canonicalizer.test.sh
+
+      - name: Run cloud-init inngest-bootstrap pin drift-guard
+        run: bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
 
   check-secrets:
     runs-on: ubuntu-24.04
