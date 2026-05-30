@@ -84,19 +84,28 @@ vi.mock("@/server/session-sync", async (importOriginal) => {
 
 const reportSilentFallbackSpy = vi.fn();
 const warnSilentFallbackSpy = vi.fn();
-// #4597 follow-up — the expected no-workspace-match skip routes through
-// `mirrorWarnWithDebounce` (warn-level, 5-min per-key TTL) so it stops
-// flooding Sentry alert rules. Spy form per the feature-flags precedent
-// (lib/feature-flags/server.test.ts): the coalescing-window semantics are
-// owned by test/observability-mirror-debounce.test.ts; here we prove the
-// call site passes the right error/ctx/key/errorClass.
-const mirrorWarnWithDebounceSpy = vi.fn();
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
   warnSilentFallback: warnSilentFallbackSpy,
-  mirrorWarnWithDebounce: mirrorWarnWithDebounceSpy,
   hashUserId: (s: string) => `hash-${s}`,
 }));
+
+// The handler logs the benign no-workspace-match skip to pino (Better Stack
+// drain) via the module-level `@/server/logger` default export — NOT the
+// per-step logger arg. Override ONLY the default export's methods with spies;
+// preserve every named export (e.g. `createChildLogger`, which transitive
+// imports like `server/github-app.ts` and `server/git-auth.ts` call at module
+// init) via importOriginal so the module graph still loads.
+const loggerInfoSpy = vi.fn();
+const loggerWarnSpy = vi.fn();
+const loggerErrorSpy = vi.fn();
+vi.mock("@/server/logger", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/logger")>();
+  return {
+    ...actual,
+    default: { info: loggerInfoSpy, warn: loggerWarnSpy, error: loggerErrorSpy },
+  };
+});
 
 // Filesystem existence: directories present in EXISTING_DIRS exist.
 const EXISTING_DIRS = new Set<string>();
@@ -164,7 +173,9 @@ beforeEach(() => {
   appendKbSyncRowSpy.mockClear();
   reportSilentFallbackSpy.mockReset();
   warnSilentFallbackSpy.mockReset();
-  mirrorWarnWithDebounceSpy.mockReset();
+  loggerInfoSpy.mockReset();
+  loggerWarnSpy.mockReset();
+  loggerErrorSpy.mockReset();
   vi.resetModules();
   process.env.INNGEST_SIGNING_KEY = "signkey-test-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   process.env.INNGEST_EVENT_KEY = "evtkey-test-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -273,8 +284,8 @@ describe("reconcile — schema gate (v=1 drains)", () => {
   });
 });
 
-describe("reconcile — no workspace match (#4597 follow-up: debounced warn mirror)", () => {
-  it("routes the expected skip through mirrorWarnWithDebounce with a distinct errorClass + (installationId, repoUrl) key", async () => {
+describe("reconcile — no workspace match (pino-only, no Sentry)", () => {
+  it("logs the expected skip to pino (Better Stack) and does NOT mirror to Sentry", async () => {
     WORKSPACE_ROWS = [];
     const handler = await importHandler();
     const result = await handler({ event: makeEvent(), step: makeStep(), logger });
@@ -282,58 +293,61 @@ describe("reconcile — no workspace match (#4597 follow-up: debounced warn mirr
     expect(result).toEqual({ ok: false, reason: "no-workspace-match" });
     expect(syncWorkspaceSpy).not.toHaveBeenCalled();
 
-    // Expected, benign outcome -> DEBOUNCED warning-level mirror (≤1 per key
-    // per 5-min window), so the no-op skip cannot flood Sentry alert rules.
-    // It must NOT go through the undebounced warnSilentFallback nor the
-    // error-level reportSilentFallback.
-    expect(mirrorWarnWithDebounceSpy).toHaveBeenCalledTimes(1);
+    // Benign, by-design skip -> pino-only. An in-process debounce could not
+    // bound it across container churn, so it must NOT create Sentry issues:
+    // neither the warn-level warnSilentFallback nor the error-level
+    // reportSilentFallback may fire.
     expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
 
-    const [err, ctx, key, errorClass] = mirrorWarnWithDebounceSpy.mock.calls[0]!;
-    expect(err).toBeInstanceOf(Error);
+    expect(loggerInfoSpy).toHaveBeenCalledTimes(1);
+    const [ctx, message] = loggerInfoSpy.mock.calls[0]!;
     expect(ctx).toMatchObject({
       feature: "workspace-reconcile-push",
       op: "skip-no-workspace-match",
-      extra: expect.objectContaining({
-        installationId: 42,
-        deliveryId: "delivery-1",
-      }),
+      installationId: 42,
+      deliveryId: "delivery-1",
+      targetRepoUrl: normalizeRepoUrl("https://github.com/acme-co/widget"),
     });
-    // In-process dedup token, never emitted: (installationId, normalized repoUrl).
-    expect(key).toBe(`42:${normalizeRepoUrl("https://github.com/acme-co/widget")}`);
-    expect(errorClass).toBe("workspace-reconcile-push:no-workspace-match");
+    expect(message).toBe("Reconcile skipped — no workspace connected to this repo");
+  });
+});
+
+describe("reconcile — ignored internal repo (stop the source)", () => {
+  it("short-circuits the platform's own dev repo with no DB query, no log, no Sentry", async () => {
+    WORKSPACE_ROWS = [{ id: "ws-A" }]; // would match if the query ran
+    const handler = await importHandler();
+    const result = await handler({
+      event: makeEvent({ fullName: "jikig-ai/soleur" }),
+      step: makeStep(),
+      logger,
+    });
+
+    expect(result).toEqual({ ok: false, reason: "ignored-internal-repo" });
+    // Fully silent: no workspace resolution query, no sync, no log, no Sentry.
+    expect(repoUrlFilterSpy).not.toHaveBeenCalled();
+    expect(syncWorkspaceSpy).not.toHaveBeenCalled();
+    expect(loggerInfoSpy).not.toHaveBeenCalled();
+    expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
   });
 
-  it("passes a STABLE key for the same (installation, repo) and a DISTINCT key per segment so the helper coalesces correctly", async () => {
+  it("does NOT short-circuit a customer repo whose slug merely shares the ignored prefix", async () => {
+    // `jikig-ai/soleur-fork` contains `jikig-ai/soleur` as a substring; an
+    // unanchored includes() match would have silently dropped it. Exact
+    // owner/repo matching must let it through to the normal (zero-match) path.
     WORKSPACE_ROWS = [];
     const handler = await importHandler();
-
-    // Same install + repo twice -> identical key (helper can coalesce).
-    await handler({ event: makeEvent(), step: makeStep(), logger });
-    await handler({ event: makeEvent(), step: makeStep(), logger });
-    // Different install, same repo -> distinct key (must not over-coalesce).
-    await handler({
-      event: makeEvent({ installationId: 99 }),
-      step: makeStep(),
-      logger,
-    });
-    // Same install, DIFFERENT repo -> distinct key. This guards the repoUrl
-    // half of the key: a regression that dropped targetRepoUrl from the key
-    // (keying on installationId alone) would still pass the installation-only
-    // checks above, but fails here.
-    await handler({
-      event: makeEvent({ fullName: "acme-co/other-repo" }),
+    const result = await handler({
+      event: makeEvent({ fullName: "jikig-ai/soleur-fork" }),
       step: makeStep(),
       logger,
     });
 
-    const keys = mirrorWarnWithDebounceSpy.mock.calls.map((c) => c[2]);
-    expect(keys[0]).toBe(keys[1]); // stable for the same segment
-    expect(keys[2]).not.toBe(keys[0]); // distinct for a different installation
-    expect(keys[2]).toBe(`99:${normalizeRepoUrl("https://github.com/acme-co/widget")}`);
-    expect(keys[3]).not.toBe(keys[0]); // distinct for a different repo (same install)
-    expect(keys[3]).toBe(`42:${normalizeRepoUrl("https://github.com/acme-co/other-repo")}`);
+    expect(result).toEqual({ ok: false, reason: "no-workspace-match" });
+    // Took the normal path: ran the workspace query and logged the benign skip.
+    expect(repoUrlFilterSpy).toHaveBeenCalled();
+    expect(loggerInfoSpy).toHaveBeenCalledTimes(1);
   });
 });
 

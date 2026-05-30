@@ -20,7 +20,6 @@ import { inngest } from "@/server/inngest/client";
 import {
   reportSilentFallback,
   warnSilentFallback,
-  mirrorWarnWithDebounce,
 } from "@/server/observability";
 import { syncWorkspace } from "@/server/kb-route-helpers";
 import { normalizeRepoUrl } from "@/lib/repo-url";
@@ -64,6 +63,39 @@ interface HandlerArgs {
     info: (...args: unknown[]) => void;
     error: (...args: unknown[]) => void;
   };
+}
+
+// Repos the GitHub App is installed on but that are intentionally NOT customer
+// workspaces (e.g. Soleur's own dev repo `jikig-ai/soleur`). Every push there
+// matches zero workspaces, so without this short-circuit each push emits a
+// benign "no-workspace-match" skip — the dominant source of that Sentry issue
+// (verified: 100% of recent skip events were `jikig-ai/soleur`). Comma-
+// separated `owner/repo` slugs, overridable via env so a future internal repo
+// can be added without a code change.
+//
+// Matched against the EXACT `owner/repo` path segment, not as a raw substring:
+// an unanchored `includes("jikig-ai/soleur")` would also swallow a legitimate
+// customer repo like `jikig-ai/soleur-fork` and drop it silently (no DB query,
+// no log, no Sentry). Exact path-segment equality keeps the default safe and
+// makes a misconfigured env override fail loudly (no match → normal path) rather
+// than silently dropping a customer's reconcile.
+const RECONCILE_IGNORED_REPO_SLUGS = (
+  process.env.WORKSPACE_RECONCILE_IGNORE_REPOS ?? "jikig-ai/soleur"
+)
+  .split(",")
+  .map((s) => s.trim())
+  // Accept either a bare `owner/repo` slug or a full URL; reduce both to the
+  // `owner/repo` path so the comparison is shape-agnostic.
+  .map((s) => s.replace(/^https?:\/\/[^/]+\//i, "").replace(/\.git$/i, ""))
+  .filter(Boolean);
+
+function repoSlug(repoUrl: string): string {
+  return repoUrl.replace(/^https?:\/\/[^/]+\//i, "").replace(/\.git$/i, "");
+}
+
+function isIgnoredReconcileRepo(repoUrl: string): boolean {
+  const slug = repoSlug(repoUrl);
+  return RECONCILE_IGNORED_REPO_SLUGS.some((s) => s === slug);
 }
 
 async function workspaceDirExists(path: string): Promise<boolean> {
@@ -111,6 +143,13 @@ export async function workspaceReconcileOnPushHandler({
   // URL FIRST or the match is zero-rows while a URL→URL parity test passes.
   const targetRepoUrl = normalizeRepoUrl(`https://github.com/${fullName}`);
 
+  // Platform-internal repo (the GitHub App is installed on it, but it is not a
+  // customer workspace). Short-circuit BEFORE the DB query and BEFORE any
+  // log/Sentry emission — these pushes are expected and carry zero signal.
+  if (isIgnoredReconcileRepo(targetRepoUrl)) {
+    return { ok: false, reason: "ignored-internal-repo" };
+  }
+
   // Resolve EVERY workspace connected to (installation_id, repo). Service
   // client: the webhook is a trusted post-signature-verification context and
   // workspaces may be owned by different users (two-users-same-fork). The
@@ -143,29 +182,23 @@ export async function workspaceReconcileOnPushHandler({
   const rows = workspaces.rows ?? [];
   if (rows.length === 0) {
     // Expected, benign outcome -- app uninstalled, repo not yet onboarded, a
-    // disconnected fork, or a stale/replayed webhook. This is NOT an actionable
-    // failure. #4597 downgraded it from error to warning level; this follow-up
-    // (#4571 precedent) DEBOUNCES the mirror, because Sentry alert rules count
-    // events regardless of level — one reconcile event per push on a
-    // workspace-less install still floods `auth-callback-no-code-burst`-class
-    // alerts without the per-key TTL. mirrorWarnWithDebounce gates the WHOLE
-    // warnSilentFallback call (the pino `logger.warn` AND the Sentry mirror),
-    // so both are capped at ≤1 per (installationId, repoUrl) per 5-min window.
-    // The first occurrence per key per window still carries the full pino +
-    // Sentry signal, so a genuine onboarding-drift case (an install that
-    // legitimately should have a workspace) still surfaces as a fresh
-    // first-in-window event — the diagnostic is preserved, only the per-push
-    // repetition is suppressed.
-    mirrorWarnWithDebounce(
-      new Error("no workspace matched (installation_id, repo)"),
+    // disconnected fork, or a stale/replayed webhook. NOT actionable. Logged to
+    // Better Stack (pino) for the drain but deliberately NOT mirrored to Sentry:
+    // it is a by-design skip, and the prior in-process `mirrorWarnWithDebounce`
+    // could not bound it across the platform's container churn (each new worker
+    // resets the debounce map), so every push still created Sentry issues +
+    // alert emails for zero signal. Genuine resolution errors still page via the
+    // reportSilentFallback path above; the platform's own dev repo is handled
+    // earlier by the ignored-repo short-circuit.
+    logger.info(
       {
         feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
         op: "skip-no-workspace-match",
-        extra: { installationId, deliveryId, targetRepoUrl },
-        message: "Reconcile skipped — no workspace connected to this repo",
+        installationId,
+        deliveryId,
+        targetRepoUrl,
       },
-      `${installationId}:${targetRepoUrl}`, // in-process dedup token, never emitted
-      "workspace-reconcile-push:no-workspace-match", // distinct errorClass (registry in observability.ts)
+      "Reconcile skipped — no workspace connected to this repo",
     );
     return { ok: false, reason: "no-workspace-match" };
   }
