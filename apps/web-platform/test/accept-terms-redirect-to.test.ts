@@ -9,10 +9,19 @@ import { describe, test, expect, vi, beforeEach } from "vitest";
 // /setup-key takes precedence). The redirect is re-validated server-side via
 // safeReturnTo, so an open-redirect value falls back to /dashboard.
 
-const { mockGetUser, mockServiceRpc, mockApiKeysLimit } = vi.hoisted(() => ({
-  mockGetUser: vi.fn(),
-  mockServiceRpc: vi.fn(),
-  mockApiKeysLimit: vi.fn(),
+const { mockGetUser, mockServiceRpc, mockUserHasEffectiveByokKey } = vi.hoisted(
+  () => ({
+    mockGetUser: vi.fn(),
+    mockServiceRpc: vi.fn(),
+    mockUserHasEffectiveByokKey: vi.fn(),
+  }),
+);
+
+// #4642 merged the redirect gate onto the effective-key helper: "keyed user"
+// here means hasEffectiveKey=true (own valid key OR accepted delegation). The
+// skip flag is read via the session client and defaults to null (not skipped).
+vi.mock("@/server/byok-resolver", () => ({
+  userHasEffectiveByokKey: mockUserHasEffectiveByokKey,
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -20,7 +29,10 @@ vi.mock("@/lib/supabase/server", () => ({
     auth: { getUser: mockGetUser },
     from: () => ({
       select: () => ({
-        eq: () => ({ eq: () => ({ eq: () => ({ limit: mockApiKeysLimit }) }) }),
+        eq: () => ({
+          maybeSingle: () =>
+            Promise.resolve({ data: { setup_key_skipped_at: null }, error: null }),
+        }),
       }),
     }),
   })),
@@ -66,14 +78,14 @@ beforeEach(() => {
 
 describe("POST /api/accept-terms — redirectTo threading", () => {
   test("keyed user with redirectTo=/invite/<token> → lands on the invite", async () => {
-    mockApiKeysLimit.mockResolvedValue({ data: [{ id: "k1" }], error: null });
+    mockUserHasEffectiveByokKey.mockResolvedValue(true);
     const res = await POST(makeRequest({ redirectTo: "/invite/tok123" }));
     const json = await res.json();
     expect(json.redirect).toBe("/invite/tok123");
   });
 
   test("no-key user with redirectTo → /setup-key CARRIES the target forward (auto-return after onboarding)", async () => {
-    mockApiKeysLimit.mockResolvedValue({ data: [], error: null });
+    mockUserHasEffectiveByokKey.mockResolvedValue(false);
     const res = await POST(makeRequest({ redirectTo: "/invite/tok123" }));
     const json = await res.json();
     // Onboarding still takes precedence, but the invite target is threaded
@@ -85,14 +97,14 @@ describe("POST /api/accept-terms — redirectTo threading", () => {
   });
 
   test("no-key user with no redirectTo → bare /setup-key (genuine new signup unchanged)", async () => {
-    mockApiKeysLimit.mockResolvedValue({ data: [], error: null });
+    mockUserHasEffectiveByokKey.mockResolvedValue(false);
     const res = await POST(makeRequest({}));
     const json = await res.json();
     expect(json.redirect).toBe("/setup-key");
   });
 
   test("no-key user with open-redirect redirectTo → bare /setup-key (rejected, not carried)", async () => {
-    mockApiKeysLimit.mockResolvedValue({ data: [], error: null });
+    mockUserHasEffectiveByokKey.mockResolvedValue(false);
     const res = await POST(makeRequest({ redirectTo: "https://evil.example" }));
     const json = await res.json();
     expect(json.redirect).toBe("/setup-key");
@@ -103,14 +115,14 @@ describe("POST /api/accept-terms — redirectTo threading", () => {
   });
 
   test("keyed user with no redirectTo → /dashboard (unchanged default)", async () => {
-    mockApiKeysLimit.mockResolvedValue({ data: [{ id: "k1" }], error: null });
+    mockUserHasEffectiveByokKey.mockResolvedValue(true);
     const res = await POST(makeRequest({}));
     const json = await res.json();
     expect(json.redirect).toBe("/dashboard");
   });
 
   test("open-redirect redirectTo is rejected → /dashboard", async () => {
-    mockApiKeysLimit.mockResolvedValue({ data: [{ id: "k1" }], error: null });
+    mockUserHasEffectiveByokKey.mockResolvedValue(true);
     const res = await POST(makeRequest({ redirectTo: "https://evil.example" }));
     const json = await res.json();
     expect(json.redirect).toBe("/dashboard");
