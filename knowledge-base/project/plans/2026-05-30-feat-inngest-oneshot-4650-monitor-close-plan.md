@@ -11,6 +11,25 @@ adr: "ADR-046"
 
 # Plan: Inngest One-Time Scheduler — #4650 monitor-close oneshot + self-arming pattern + ADR-046
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-30. **Halt gates (4.6/4.7/4.8):** all PASS. **4.5 network-outage:** N/A (the only `ssh` token is "NO ssh" in the discoverability test). **4.4 precedent-diff:** done (see Research Insights).
+**Substance reviewers:** architecture-strategist, observability-coverage-reviewer, silent-failure-hunter.
+
+**Key improvements applied:**
+1. **Self-arm hardened** — guarded `void (async()=>{try…catch})()` IIFE routing to `reportSilentFallback(op:"self-arm-send")`, not a bare `.catch()`. Under no-monitor (ADR-033) this catch is the ONLY signal for a permanently-lost arm. (3-reviewer convergence.)
+2. **`function-registry-count.test.ts` 41→42** added to Files-to-Edit — a guaranteed-red test the plan had missed.
+3. **Past-`ts` delivery** promoted to a HARD Phase 0 gate against the running self-hosted Inngest, with an immediate-send fallback if unverified.
+4. **Registry-presence ≠ checking-in** — close-comment reworded to "cron triggers re-planned (H9a/H9b cleared)"; the planned-but-failing gap is accepted (watchdog monitor backstops).
+5. **already-closed** path re-classifies + alerts on `already-closed-unhealthy` (foreign-close masking guard).
+6. date-guard reject → warn-level; `date_override` calendar-validity check; 2 new Observability failure modes.
+
+### Research Insights — Precedent-Diff (4.4)
+- **createFunction shape:** `oneshot-recheck-4217-calibration.ts:234-247` — `concurrency:[{scope:"fn",limit:1},{scope:"account",key:'"cron-platform"',limit:1}]`, `retries:1`, event-only trigger, `as unknown as Parameters<typeof inngest.createFunction>[2]` cast. Adopt verbatim.
+- **Token+close:** `oneshot-recheck-4217-calibration.ts` uses `mintInstallationToken` (the correct template) — NOT gdpr's inline `generateInstallationToken`.
+- **No-monitor posture:** ADR-033 §table; `oneshot-gdpr-gate-50d-eval.ts` is the known deviation (declares a monitor) — do not follow it.
+- **No new credential confirmed:** `fetchRegistry` reads only `INNGEST_SIGNING_KEY` (`route.ts:62` throws at load if absent → guaranteed present); `resolveInngestHost` falls back to `host.docker.internal:8288` (no new env var).
+
 ## Overview
 
 Ship the first secret-/repo-write consumer of the Inngest one-time-scheduler pattern, and
@@ -50,9 +69,10 @@ not `step.sleepUntil` (K2); ADR-033 I1–I6 (no Sentry cron monitor for the ones
 
 ### Phase 0 — Preconditions (verify the things that can have changed / are assumed)
 - Re-check #4650 is still OPEN (`gh issue view 4650 --json state`); if already CLOSED, the oneshot is a documented example only — still ship the pattern + ADR.
-- Confirm `server/index.ts` fire-and-forget `.catch()` precedent still at ~:98 and `sendInngestWithRetry` signature (`send-with-retry.ts`).
-- **Verify, don't assume:** confirm a past-`ts` `inngest.send` delivers on the next scheduler tick (Inngest docs via context7) — the late-merge path (reconciliation row) depends on it.
-- (Already confirmed by repo-research, no re-grep needed: `classifyRegistry`/`resolveInngestHost`/`EXPECTED_CRON_FUNCTIONS`/types exported; `fetchRegistry` module-private; `mintInstallationToken` in `_cron-shared.ts`.)
+- Confirm `server/index.ts` fire-and-forget `.catch()` precedent still at ~:98 and `sendInngestWithRetry` signature (`send-with-retry.ts` — note it **re-throws after exhausting retries**, so the boot `.catch` is reachable).
+- **HARD GATE (verify, don't assume — arch P0-2):** confirm a past-`ts` `inngest.send` delivers on the next scheduler tick against the **running self-hosted Inngest version** (ADR-030), not just SDK docs (docs only describe future `ts`). If unconfirmed at /work time, **fallback:** drop `ts` and send immediately, gated solely by the on-or-after date guard (the date guard is then the only floor). Do not rely on past-`ts` semantics that aren't verified on the deployed server.
+- Note `function-registry-count.test.ts:94` asserts `routeEntries.length === 41`; registering this oneshot makes it 42 (see Files to Edit).
+- (Already confirmed by repo-research, no re-grep needed: `classifyRegistry`/`resolveInngestHost`/`EXPECTED_CRON_FUNCTIONS`/types exported; `fetchRegistry` module-private; `mintInstallationToken` in `_cron-shared.ts`. Confirm `reportSilentFallback` + its warn-level variant in `server/observability.ts`.)
 
 ### Phase 1 — Export `fetchRegistry` from the watchdog (RED→GREEN)
 - Add `export` to `fetchRegistry` only in `cron-inngest-cron-watchdog.ts`. Do NOT export `INNGEST_HOST_FALLBACK` — `resolveInngestHost()` (already exported) encapsulates the fallback (Simplicity P0-1). No behavior change; existing watchdog suites (incl. orphan/scope guards) must pass via `test-all.sh`.
@@ -61,30 +81,44 @@ not `step.sleepUntil` (K2); ADR-033 I1–I6 (no Sentry cron monitor for the ones
 - Pure-TS handler. **Token/Octokit-close template = `oneshot-recheck-4217-calibration.ts`** (it uses `mintInstallationToken` + closes via App token — the correct template; gdpr inlines `generateInstallationToken`). Borrow the **no-Sentry-monitor + event-only-trigger** structure from any oneshot: `cron-platform` concurrency, `retries:1`, the `as unknown as Parameters<typeof inngest.createFunction>[2]` cast.
 - `EventData`: `{ issue: number; expected_date: string; date_override?: string; actor?: "platform" }` (convention-consistent with existing oneshots; values fixed for this consumer).
 - Handler steps:
-  1. **D3 guard (on-or-after — explicit K5 override):** validate `date_override` regex `^\d{4}-\d{2}-\d{2}$`; compute `today`; if `today < expected_date` → `reportSilentFallback` + return `{ok:false, reason:"date-guard"}`. (Floor only — idempotency lives in step 2.)
-  2. **Idempotency / issue-state (load-bearing):** `step.run("check-issue-state")` — `mintInstallationToken`, `GET issue #4650`; if `state === "closed"` → return `{ok:true, reason:"already-closed"}` (no-op). **This is the cross-boot idempotency guarantee**, not stable-`id` dedup.
+  1. **D3 guard (on-or-after — explicit K5 override):** validate `date_override` shape `^\d{4}-\d{2}-\d{2}$` AND validity (`!Number.isNaN(Date.parse(v))` + round-trip — `"2026-13-45"` passes shape but is not a real date, sf P2-2); compute `today`; if `today < expected_date` → **warn-level** `warnSilentFallback` (NOT error — an early replay is expected/benign, sf P2-1) + return `{ok:false, reason:"date-guard"}`. (Floor only — idempotency lives in step 2.)
+  2. **Idempotency / issue-state (load-bearing):** `step.run("check-issue-state")` — `mintInstallationToken`, `GET issue #4650`; if `state === "closed"` → **still classify the registry (step 3) and if any cron is NOT OK, `reportSilentFallback(op:"already-closed-unhealthy", extra:results)`** (a foreign-close over a real de-plan must not be masked as success — sf P1-2), then return `{ok:true, reason:"already-closed"}`. **This (not stable-`id` dedup) is the cross-boot idempotency guarantee.**
   3. **Registry classify:** `step.run("classify-registry")` — `host = resolveInngestHost(process.env.INNGEST_BASE_URL)` (identical to watchdog :401); `registry = await fetchRegistry(host)`; `results = classifyRegistry(registry, ["cron-gh-pages-cert-state","cron-community-monitor","cron-inngest-cron-watchdog"])`. On fetch **throw** → `reportSilentFallback(op:"registry-fetch")` + `{ok:false, reason:"registry-fetch-failed"}` (fail-safe: do NOT close).
-  4. **Decision:** if all 3 `OK` → `step.run("close-issue")` posts the close-comment + closes #4650. If any `MISSING`/`UNPLANNED` (incl. partial/empty registry mid-resync — the most likely post-deploy state) → `reportSilentFallback(op:"not-all-healthy", extra:results)` + leave open, return `{ok:false, reason:"not-all-healthy"}`. **No status comment** (Simplicity P1-3 — noise; watchdog backstops; removes an Octokit write path).
+  4. **Decision:** if all 3 `OK` → `step.run("close-issue")` posts the close-comment + closes #4650. **Close-comment wording (arch P1-2):** "all 3 cron triggers re-planned (H9a/H9b cleared)" — NOT "monitors healthy." `classifyRegistry OK` proves the cron is *planned*, not that it is *checking in*; a planned-but-failing-every-run cron still classifies OK. Accepted gap: the watchdog's own `scheduled-inngest-cron-watchdog` monitor pages on real check-in failure, so a premature close (worst case) is bounded to a self-recovering internal issue. If any `MISSING`/`UNPLANNED` (incl. partial/empty registry mid-resync — the most likely post-deploy state) → `reportSilentFallback(op:"not-all-healthy", extra:results)` + leave open, return `{ok:false, reason:"not-all-healthy"}`. No status comment (Simplicity P1-3 — watchdog backstops).
 - Errors only via `reportSilentFallback` (ADR-033 — oneshots get no Sentry monitor).
 
 ### Phase 3 — Self-arm in `server/index.ts` boot block
-- Inside `app.prepare().then()`, add a non-awaited arm wrapped in `sendInngestWithRetry` (K6 — boot IS a deploy restart; the loopback can blip and a raw `.catch()` would silently lose the arm with no monitor):
-  `sendInngestWithRetry(() => inngest.send({ name: "oneshot/monitor-close-4650.fire", id: "oneshot-4650-close-2026-05-31-v1", ts: new Date("2026-05-31T09:00:00Z").getTime(), data: { issue: 4650, expected_date: "2026-05-31", actor: "platform" } }), { feature: "oneshot-4650-arm" }).catch(...)`.
-- Stable `id` dedups repeated arms **within Inngest's ~24h window** (best-effort); post-close the arm is a permanent no-op on every deploy (acceptable; removable in a later cleanup).
+- Inside `app.prepare().then()`, add a non-awaited, **fully-guarded** arm. The boot block is non-async (can't `await`), and `sendInngestWithRetry` re-throws after exhausting retries with **no Sentry monitor** to notice (ADR-033) — so the catch is the ONLY signal for a permanently-lost arm. Wrap the whole thing in a `void (async () => { try … catch })()` IIFE so even a synchronous throw (client import/construct) routes to Sentry instead of escaping as an unhandledRejection (sf P0-1/P0-2, obs P1-1, arch P1-3):
+  ```ts
+  void (async () => {
+    try {
+      await sendInngestWithRetry(
+        () => inngest.send({ name: "oneshot/monitor-close-4650.fire",
+          id: "oneshot-4650-close-2026-05-31-v1",
+          ts: new Date("2026-05-31T09:00:00Z").getTime(),  // see Phase 0 past-ts gate / fallback
+          data: { issue: 4650, expected_date: "2026-05-31", actor: "platform" } }),
+        { feature: "oneshot-4650-arm" });
+    } catch (err) {
+      reportSilentFallback(err, { feature: "oneshot-4650-arm", op: "self-arm-send" });
+    }
+  })();
+  ```
+- Stable `id` dedups repeated arms **within Inngest's ~24h window** (best-effort); post-close the arm is a permanent no-op on every deploy (acceptable; removable in a later cleanup). A permanent arm failure self-heals on the next deploy (boot==deploy) AND is now Sentry-visible.
 
 ### Phase 4 — Register + ADR-046
 - `app/api/inngest/route.ts`: import + add to the `serve({functions:[...]})` array (RV6 — manual, no barrel).
 - ADR-046 via `soleur:architecture` (or hand-write): `adr/title/status/date` frontmatter; Context / Considered Options / Decision (boundary + self-arming + registered-only invariants) / Consequences.
 
 ## Files to Edit
-- `apps/web-platform/server/inngest/functions/cron-inngest-cron-watchdog.ts` — export `fetchRegistry`, `INNGEST_HOST_FALLBACK`.
-- `apps/web-platform/server/index.ts` — boot-block self-arm send.
+- `apps/web-platform/server/inngest/functions/cron-inngest-cron-watchdog.ts` — export `fetchRegistry` (only).
+- `apps/web-platform/server/index.ts` — boot-block self-arm (guarded IIFE + `reportSilentFallback`).
 - `apps/web-platform/app/api/inngest/route.ts` — import + functions-array entry.
+- `apps/web-platform/test/server/inngest/function-registry-count.test.ts` — bump `routeEntries.length` assertion **41 → 42** (line ~94; the comment at ~:92 says "UPDATE this number"). Guaranteed-red otherwise (arch P0-1).
 
 ## Files to Create
 - `apps/web-platform/server/inngest/functions/oneshot-4650-monitor-close.ts`
 - `apps/web-platform/test/server/inngest/oneshot-4650-monitor-close.test.ts` (vitest — verify path against `vitest.config.ts` include globs; `test/**/*.test.ts`)
-- `knowledge-base/engineering/architecture/decisions/ADR-046-inngest-oneshot-scheduler-self-arm-and-registered-only.md` — scoped to the TWO genuinely-durable decisions: (1) **registered-functions-only** substrate boundary (K3/K21 — the security-load-bearing one; CTO-recommended) and (2) **self-arm-in-code** pattern (the novel one). Cross-link (do NOT re-decide) the GHA `--once` vs Inngest boundary, which the brainstorm already records.
+- `knowledge-base/engineering/architecture/decisions/ADR-046-inngest-oneshot-scheduler-self-arm-and-registered-only.md` — scoped to the TWO genuinely-durable decisions: (1) **registered-functions-only** substrate boundary (K3/K21 — the security-load-bearing one; CTO-recommended) and (2) **self-arm-in-code** pattern (the novel one). Cross-link (do NOT re-decide) the GHA `--once` vs Inngest boundary, which the brainstorm already records. **Frame the no-monitor posture precisely (arch P1-1):** ADR-033's §table prescribes no `sentry_cron_monitor` for oneshots; `oneshot-gdpr-gate-50d-eval.ts` is a *known deviation* (it declares a monitor) we are NOT following — do not cite it as the no-monitor example. Note AP-014 (platform/per-founder boundary) alignment in Consequences.
 
 ## User-Brand Impact
 
@@ -127,7 +161,7 @@ not `step.sleepUntil` (K2); ADR-033 I1–I6 (no Sentry cron monitor for the ones
 liveness_signal:
   what: "oneshot fires once at ts=2026-05-31T09:00Z; no recurring cadence"
   cadence: "one-shot (event-triggered, future-ts)"
-  alert_target: "none — ADR-033: oneshots get NO Sentry cron monitor (would false-alert on a non-recurring fn)"
+  alert_target: "none — ADR-033: oneshots get NO Sentry cron monitor (would false-alert on a non-recurring fn). Liveness is NOT monitored; the compensating control is the cron-inngest-cron-watchdog backstop + Sentry auto-resolve on #4650, which close the issue independently of this oneshot (obs P2-1)."
   configured_in: "server/index.ts boot-arm + app/api/inngest/route.ts registration"
 error_reporting:
   destination: "Sentry via reportSilentFallback (date-guard reject, registry-fetch fail, close-issue fail, partial-health)"
@@ -144,7 +178,13 @@ failure_modes:
     alert_route: "reportSilentFallback op=close-issue"
   - mode: "fires on wrong day (desync/replay)"
     detection: "D3 on-or-after date guard"
-    alert_route: "reportSilentFallback op=date-guard; no-op"
+    alert_route: "warnSilentFallback op=date-guard (warn-level — benign early-fire); no-op"
+  - mode: "self-arm send permanently fails (loopback down through retries)"
+    detection: "sendInngestWithRetry rejection in the boot IIFE catch"
+    alert_route: "reportSilentFallback op=self-arm-send (Sentry capture); next deploy re-arms; watchdog backstop closes #4650 independently"
+  - mode: "#4650 closed by something else while a cron is de-planned"
+    detection: "already-closed branch re-classifies registry"
+    alert_route: "reportSilentFallback op=already-closed-unhealthy (extra:results)"
 logs:
   where: "pino structured logs (Better Stack) via reportSilentFallback payloads + logger.info"
   retention: "per existing Better Stack config"
@@ -157,13 +197,13 @@ discoverability_test:
 
 ### Pre-merge (PR)
 - AC1: `oneshot-4650-monitor-close.ts` registered in `route.ts`; `tsc --noEmit` clean.
-- AC2: `fetchRegistry` exported from the watchdog (NOT `INNGEST_HOST_FALLBACK`); existing watchdog test suites (incl. orphan/scope guards) pass via `test-all.sh`.
+- AC2: `fetchRegistry` exported from the watchdog (NOT `INNGEST_HOST_FALLBACK`); `function-registry-count.test.ts` count bumped 41→42; all existing suites (incl. orphan/scope guards) pass via `test-all.sh`.
 - AC3: Handler unit tests (drive the handler directly, no LLM in path) cover: date-guard before/on/after via `date_override`; already-closed no-op; all-3-OK closes; **partial/empty registry (≥1 fnId MISSING/UNPLANNED) → leaves open, NO comment** (distinct from); **registry-fetch throws → fails-safe, no close**. (Partial-registry and fetch-throw are distinct branches — Kieran P1-2.)
 - AC4: No Sentry cron monitor added for the oneshot (no `sentry_cron_monitor` resource); errors route via `reportSilentFallback`.
 - AC5: No new secret / Doppler key / Sentry token referenced (`grep -r SENTRY_API_TOKEN` returns nothing in the diff).
 - AC6: BYOK inverse-assertion holds (oneshot does not import `runWithByokLease`; `actor:"platform"` on the event).
 - AC7: ADR-046 present with `adr/title/status/date` frontmatter + Context/Decision/Consequences.
-- AC8: Self-arm uses stable `id` and a future `ts`; fire-and-forget `.catch()` does not block `server.listen`.
+- AC8: Self-arm is a guarded IIFE (`void (async () => { try … catch })()`) whose catch calls `reportSilentFallback(op:"self-arm-send")` — NOT a bare `.catch()`/`log.error`; does not block `server.listen`; uses stable `id` + future `ts` (or the Phase 0 immediate-send fallback if past-`ts` delivery is unverified).
 
 ### Post-merge (operator — automated where feasible)
 - AC9: On deploy, `curl -s -H "Authorization: Bearer $INNGEST_SIGNING_KEY" <inngest-host>/v1/functions | jq '.[].id'` includes `oneshot-4650-monitor-close` (registry discoverability). Automatable via the deploy-status webhook / container — not an operator dashboard step.
