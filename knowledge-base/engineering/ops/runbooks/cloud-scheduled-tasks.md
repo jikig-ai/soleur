@@ -327,7 +327,7 @@ docker restart soleur-web-platform
 1. Restart `inngest-server.service`: `sudo systemctl restart inngest-server.service`
 2. Wait 30s for SQLite reinitialisation
 3. Restart web-platform container: `docker restart soleur-web-platform` (forces fresh function manifest sync)
-4. Verify function registry: `curl -s http://127.0.0.1:8288/v1/functions | jq '[.[] | .slug] | sort | length'` (expect 40)
+4. Verify function registry: `curl -s http://127.0.0.1:8288/v1/functions | jq '[.[] | .slug] | sort | length'` (expect 41)
 5. Manual trigger to confirm end-to-end: `curl -X POST http://127.0.0.1:8288/e/<event-name> -H "Content-Type: application/json" -d '{"name":"<event-name>","data":{}}' -H "Authorization: Bearer ${INNGEST_EVENT_KEY}"`
 6. Verify Sentry check-in: wait for the next natural fire or check manually via Sentry API
 
@@ -340,7 +340,55 @@ issue alert type).
 
 **Preventive guard:** `function-registry-count.test.ts` asserts route.ts
 function count, cron-file ↔ route.ts parity, and SENTRY_MONITOR_SLUG ↔
-cron-monitors.tf parity at CI time.
+cron-monitors.tf parity at CI time. This is a *build-time* source-parity check —
+it cannot detect a *runtime* desync (see the self-healing watchdog below, which
+does).
+
+### Self-healing (automated — primary path, no SSH)
+
+The CI guard above is build-time only; the manual restore is SSH-gated. The
+`cron-inngest-cron-watchdog` Inngest function
+(`apps/web-platform/server/inngest/functions/cron-inngest-cron-watchdog.ts`,
+shipped for regression #4650) closes both gaps — it runs **every 4 hours** and
+needs **no operator action**:
+
+1. **Detect.** Queries the running server's loopback `/v1/functions` (via
+   `INNGEST_BASE_URL` → `host.docker.internal:8288`, the container's existing
+   loopback bridge — no SSH) and classifies each function in its
+   `EXPECTED_CRON_FUNCTIONS` manifest as `OK`, `MISSING` (H9a), or `UNPLANNED`
+   (H9b).
+2. **Heal H9b (cron de-planned).** Fires `cron/<name>.manual-trigger` for each
+   affected function via `sendInngestWithRetry`. NOTE: a manual-trigger RUNS the
+   handler once (restores the missed check-in) but does NOT re-plan the cron
+   schedule — the de-planned trigger persists until the next container restart
+   re-syncs it. A recurring H9b therefore keeps surfacing as a recurring
+   `ok=false` heartbeat (see step 4) and should escalate to a restart.
+3. **Heal H9a (function dropped).** A dropped function genuinely needs a
+   restart to re-sync (the server runs with no `--poll-interval`). The watchdog
+   POSTs the deploy webhook `restart inngest _ latest` directly (D1-A, same HMAC
+   + CF-Access path as `restart-inngest-server.yml`). If that POST is
+   unreachable, it files a `priority/p0-critical` issue carrying the
+   `inngest-desync-restart` label, which `inngest-watchdog-restart-dispatch.yml`
+   acts on to dispatch the restart workflow (D1-B). A restart-survivable
+   cooldown (`/var/lib/inngest/cron-watchdog/restart-cooldown.json`, 6h) prevents
+   a persistent desync from restart-looping.
+4. **Surface (SSH-free read).** Posts an `ok`/`error` heartbeat to the
+   `scheduled-inngest-cron-watchdog` Sentry monitor every 4h; `ok=false` when
+   any monitored function is MISSING/UNPLANNED. Read its state via the Sentry
+   Crons API (no SSH):
+
+   ```bash
+   curl -s -H "Authorization: Bearer $SENTRY_API_TOKEN" \
+     "https://sentry.io/api/0/organizations/$SENTRY_ORG/monitors/?per_page=100" \
+     | jq '.[] | select(.slug=="scheduled-inngest-cron-watchdog") | {slug, envs: [.environments[]? | {name, status, lastCheckIn}]}'
+   ```
+
+   If the watchdog itself stops firing (a full-substrate H9a can drop the
+   watchdog too), its own monitor's missed check-in surfaces the meta-failure.
+
+The manual SSH fallback below is retained as a **last resort** only
+(`hr-no-ssh-fallback-in-runbooks`); the watchdog + restart workflow are the
+primary paths.
 
 ## Restore Procedure (generalized)
 
