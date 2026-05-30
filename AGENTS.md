@@ -39,6 +39,7 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: hr-gdpr-gate-on-regulated-data-surfaces] → core
 - [id: hr-type-widening-cross-consumer-grep] → core
 - [id: hr-write-boundary-sentinel-sweep-all-write-sites] → core
+- [id: hr-bulk-delete-per-item-live-infra-role-check] → core
 - [id: hr-no-dashboard-eyeball-pull-data-yourself] → core
 - [id: hr-observability-as-plan-quality-gate] → core
 - [id: hr-no-ssh-fallback-in-runbooks] → core
@@ -48,7 +49,7 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 
 ## Workflow Gates
 
-- [id: wg-every-feature-listed-in-a-roadmap-phase] → core
+- [id: wg-every-feature-listed-in-a-roadmap-phase] → rest
 - [id: wg-when-closing-a-phase-milestone-update] → rest
 - [id: wg-when-fixing-a-workflow-gates-detection] → rest
 - [id: wg-zero-agents-until-user-confirms] → core
@@ -69,7 +70,7 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: wg-after-merging-a-pr-that-adds-or-modifies] → rest
 - [id: wg-plan-prescribed-skills-must-run-inline] → rest
 - [id: wg-end-of-work-emit-resume-prompt] → rest
-- [id: wg-block-pr-ready-on-undeferred-operator-steps] → core
+- [id: wg-block-pr-ready-on-undeferred-operator-steps] → rest
 - [id: wg-pm-class-followthrough-for-operator-dogfood] → rest
 
 ## Code Quality
