@@ -455,7 +455,21 @@ const _p0Dedup = new TtlDedupMap<string>(
 
 export function mirrorP0Deduped(
   err: Error,
-  ctx: { op: string; userId: string; conversationId: string },
+  ctx: {
+    op: string;
+    userId: string;
+    conversationId: string;
+    // #4656 items 1+2 — the BYOK Art. 33 breach path routes through this
+    // primitive. The `byok_art_33_breach` Sentry rule (issue-alerts.tf) is
+    // `filter_match = "all"` on BOTH `feature=byok-delegations` AND
+    // `art_33_breach=true`, so BOTH tags must be present or the rule never
+    // fires. `feature` mirrors the `reportSilentFallback` tag vocabulary.
+    feature?: string;
+    art33Breach?: boolean;
+    // #4656 item 3 — cross-tenant-leak clock-anchor identifier carried into
+    // the Sentry `extra` alongside the inherited `first_seen_at`.
+    delegationId?: string;
+  },
 ): void {
   // Dedup key keeps raw `userId` — in-process map only, never emitted.
   const key = `${ctx.userId}:${ctx.op}:${ctx.conversationId}`;
@@ -471,19 +485,28 @@ export function mirrorP0Deduped(
     `p0 deduped mirror: ${ctx.op}`,
   );
 
+  const tags: Record<string, string> = {
+    op: ctx.op,
+    scope: "p0_deduped",
+    userIdHash,
+  };
+  if (ctx.feature) tags.feature = ctx.feature;
+  if (ctx.art33Breach) tags.art_33_breach = "true";
+
   // Sentry — fatal severity, bypasses `mirrorWithDebounce` 5-min window.
   // `first_seen_at` is the Art. 33(1) 72h-clock anchor.
   try {
     if (typeof Sentry.captureException === "function") {
       Sentry.captureException(err, {
         level: "fatal",
-        tags: { op: ctx.op, scope: "p0_deduped", userIdHash },
+        tags,
         extra: {
           op: ctx.op,
           userIdHash,
           conversationId: ctx.conversationId,
           severity: "breach_attempt",
           first_seen_at: new Date(now).toISOString(),
+          ...(ctx.delegationId ? { delegationId: ctx.delegationId } : {}),
         },
       });
     }

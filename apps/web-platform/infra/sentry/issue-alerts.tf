@@ -204,12 +204,30 @@ resource "sentry_issue_alert" "byok_art_33_breach" {
   organization = var.sentry_org
   project      = data.sentry_project.web_platform.slug
   name         = "byok-art-33-breach"
-  action_match = "all"
+  # action_match MUST be "any" (#4656 item 1): the 3 conditions below are
+  # mutually-exclusive event-lifecycle states (a captured event is exactly one
+  # of new / reappeared / regressed). "all" would require all three on one
+  # event — never satisfiable. Schema-grounded against jianyuan/sentry
+  # 0.15.0-beta2 (`action_match` description: "…any or all of the specified
+  # conditions happen"). NOTE: this is the only rule in this file using "any" —
+  # the 4 auth rules + byok_cap_exceeded use "all" with a single condition.
+  action_match = "any"
   filter_match = "all"
   frequency    = 5
 
+  # #4656 item 1 — recurrence firing. `first_seen_event` alone pages ONCE per
+  # Sentry issue fingerprint: a repeat cross-tenant breach (same fingerprint)
+  # folds into the open issue and never re-pages, and a breach recurring after
+  # the founder resolves the issue also never re-pages — so the Art. 33 72h
+  # clock for the recurrence never starts. Adding `reappeared_event`
+  # (issue reopened after resolve) + `regression_event` (issue regressed)
+  # re-pages on recurrence. Attribute names verified via
+  # `terraform providers schema -json` (beta2): condition types include
+  # first_seen_event, reappeared_event, regression_event.
   conditions_v2 = [
     { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
   ]
   filters_v2 = [
     {
