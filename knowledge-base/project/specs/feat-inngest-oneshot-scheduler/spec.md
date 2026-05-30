@@ -40,11 +40,22 @@ generalized scaffolding abstraction.
 
 ## Functional Requirements
 
+> **[Updated 2026-05-30 — plan-time decision]** Close-condition changed from "query the
+> Sentry Crons API" to "read the Inngest `/v1/functions` registry." #4650's root cause is
+> de-planned Inngest cron triggers; the watchdog already classifies this. Reusing
+> `classifyRegistry` over the 3 cron fnIds is root-cause-faithful, reuses existing code, and
+> needs NO new credential (uses the `INNGEST_SIGNING_KEY` already in the container). The
+> Sentry-read path would have required a net-new `SENTRY_API_TOKEN` — the credential-leak
+> vector the operator flagged. See plan §Research Reconciliation.
+
 - FR1: A pure-TS oneshot function (Octokit + `fetch`), registered on a `oneshot/*.fire`
-  event, that queries the Sentry Crons API for `scheduled-gh-pages-cert-state`,
-  `scheduled-community-monitor`, `scheduled-inngest-cron-watchdog`.
-- FR2: If all three monitors show a fresh `ok` check-in, close #4650 with an explanatory
-  comment; otherwise post status / no-op and `reportSilentFallback` on read errors.
+  event, that reads the Inngest `/v1/functions` registry and classifies the 3 cron
+  functions backing #4650's monitors: `cron-gh-pages-cert-state`, `cron-community-monitor`,
+  `cron-inngest-cron-watchdog` (reusing the watchdog's `classifyRegistry`).
+- FR2: If all 3 functions classify `OK` (present + cron-planned) AND #4650 is still OPEN,
+  close #4650 with an explanatory comment. If any classify `MISSING`/`UNPLANNED`, do NOT
+  close — post a status comment and leave open. On registry-fetch failure, `reportSilentFallback`
+  and do NOT close (fail-safe open).
 - FR3: Committed self-arming `inngest.send({ name, id: <stable>, ts: <2026-05-31T09:00Z epoch ms>, data: { expected_date, actor:"platform", ... } })` that fires once and dedups across redeploys.
 - FR4: D3 date guard (`today === expected_date`, `date_override` test hook validated `^\d{4}-\d{2}-\d{2}$`).
 - FR5: Manual import + array entry in `app/api/inngest/route.ts` (RV6 — no barrel).
@@ -52,9 +63,10 @@ generalized scaffolding abstraction.
 
 ## Technical Requirements
 
-- TR1: Net-new Sentry Crons **read** path + a Sentry auth-token env var (e.g. `SENTRY_API_TOKEN`),
-  added to Doppler `prd` read-only-to-monitors scope via doppler CLI (do NOT defer as an operator step).
-  Mirror the IO shape of `cron-inngest-cron-watchdog.ts:274-293` (bearer fetch + `AbortSignal.timeout`).
+- TR1: Reuse the watchdog's registry read. Export `fetchRegistry` + `INNGEST_HOST_FALLBACK`
+  from `cron-inngest-cron-watchdog.ts` (module-private today) and call `classifyRegistry` over
+  the 3 fnIds. Auth via the `INNGEST_SIGNING_KEY` already in the container env — **no new
+  secret, no Doppler change, no Sentry token mint.** This nullifies the prior Sentry-read TR.
 - TR2: Honor ADR-033 I1–I6; oneshots get **no** Sentry cron monitor (errors via `reportSilentFallback` only).
   Concurrency `cron-platform`, `retries:1`, `actor:"platform"` (I6).
 - TR3: Reuse `mintInstallationToken()` (has 401 retry) and `sendInngestWithRetry`; no hand-rolled token/send paths.
