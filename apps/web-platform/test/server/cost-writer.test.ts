@@ -9,7 +9,13 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const { rpcSpy, sendToClientSpy } = vi.hoisted(() => ({
   rpcSpy: vi.fn(
-    async (_name: string, _args: Record<string, unknown>) => ({ error: null }),
+    // Return type widened to the error union so per-test mockImplementation
+    // can return an RPC error (e.g. the cross-tenant P0001 path) without
+    // tripping TS2345 — the default value stays { error: null } (#4364).
+    async (
+      _name: string,
+      _args: Record<string, unknown>,
+    ): Promise<{ error: null | { message: string } }> => ({ error: null }),
   ),
   sendToClientSpy: vi.fn(
     (_userId: string, _msg: Record<string, unknown>) => true,
@@ -37,6 +43,8 @@ vi.mock("@/server/logger", () => ({
 }));
 
 import { persistTurnCost } from "@/server/cost-writer";
+import { reportSilentFallback } from "@/server/observability";
+import { ByokDelegationCrossTenantError } from "@/server/byok-resolver";
 
 const USER = "550e8400-e29b-41d4-a716-446655440000";
 const WORKSPACE = "660e8400-e29b-41d4-a716-446655440111";
@@ -117,5 +125,63 @@ describe("persistTurnCost — workspace_id wiring (Phase 3)", () => {
       conversationId: CONV,
       workspaceId: WORKSPACE,
     });
+  });
+});
+
+describe("persistTurnCost — cross-tenant Art.33 emission (#4364)", () => {
+  it("routes byok_delegations:cross-tenant to op=cross-tenant-violation with art_33_breach tag", async () => {
+    const reportMock = vi.mocked(reportSilentFallback);
+    reportMock.mockClear();
+    // The migration-064 trigger raises the HYPHEN form on the cross-tenant
+    // path. cost-writer must route it to a DISTINCT op + art33Breach so the
+    // dedicated Art.33 alert rule fires — never the merged-rpc-failure
+    // catch-all. Guards the hyphen/underscore bug caught in review.
+    rpcSpy.mockImplementation(
+      async (
+        name: string,
+        _args: Record<string, unknown>,
+      ): Promise<{ error: null | { message: string } }> => {
+        if (name === "check_and_record_byok_delegation_use") {
+          return {
+            error: {
+              message:
+                "byok_delegations:cross-tenant: grantee g-1 is not a member of workspace ws-1",
+            },
+          };
+        }
+        return { error: null };
+      },
+    );
+    persistTurnCost(
+      USER,
+      CONV,
+      "cpo",
+      WORKSPACE,
+      {
+        totalCostUsd: 0.02,
+        usage: {
+          input_tokens: 10,
+          output_tokens: 5,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
+      },
+      { delegationId: "deadbeef", callerUserId: "g-1" },
+    );
+    await new Promise((r) => setImmediate(r));
+
+    const call = reportMock.mock.calls.find(
+      (c) => (c[1] as { op?: string })?.op === "cross-tenant-violation",
+    );
+    expect(call).toBeTruthy();
+    expect(call?.[0]).toBeInstanceOf(ByokDelegationCrossTenantError);
+    expect((call?.[1] as { feature: string }).feature).toBe("byok-delegations");
+    expect((call?.[1] as { art33Breach?: boolean }).art33Breach).toBe(true);
+
+    // Must NOT also fall through to the merged-rpc-failure catch-all.
+    const fallback = reportMock.mock.calls.find(
+      (c) => (c[1] as { op?: string })?.op === "merged-rpc-failure",
+    );
+    expect(fallback).toBeFalsy();
   });
 });
