@@ -7,25 +7,38 @@ import { safeReturnTo } from "@/lib/safe-return-to";
 import * as Sentry from "@sentry/nextjs";
 import { reportSilentFallback } from "@/server/observability";
 import { hashUserIdValue } from "@/server/userid-pseudonymize";
+import { userHasEffectiveByokKey } from "@/server/byok-resolver";
+import { shouldRouteToSetupKey } from "@/lib/onboarding/setup-key-gate";
 
+// Delegation+skip-aware (#4642). Effective-key = own valid key OR accepted
+// delegation; `onErrorReturn: true` fails OPEN so a transient resolver error
+// never traps a possibly-delegated user at /setup-key (chat-time enforcement
+// is authoritative). The skip flag honors an explicit "Set up later" — read
+// via the session client (RLS owner-SELECT) so the service client stays
+// confined to the RPC consent write.
 async function getRedirectDestination(
   supabase: SupabaseClient,
   userId: string,
   nextHop: string | null,
 ): Promise<string> {
-  const { data: keys } = await supabase
-    .from("api_keys")
-    .select("id")
-    .eq("user_id", userId)
-    .eq("provider", "anthropic")
-    .eq("is_valid", true)
-    .limit(1);
+  const hasEffectiveKey = await userHasEffectiveByokKey(userId, {
+    onErrorReturn: true,
+  });
+  const { data: row } = await supabase
+    .from("users")
+    .select("setup_key_skipped_at")
+    .eq("id", userId)
+    .maybeSingle();
+  const setupKeySkippedAt =
+    (row?.setup_key_skipped_at as string | null | undefined) ?? null;
 
-  // No key yet → onboarding takes precedence, BUT thread the validated next hop
-  // through it so a brand-new invitee auto-returns to /invite/<token> AFTER
-  // onboarding (T&C recorded first, then key → repo → invite). setup-key carries
-  // it to connect-repo, which lands on it. Keyed → honor the next hop directly.
-  if (!keys || keys.length === 0) {
+  // Onboarding gate (#4642): show /setup-key only when the user has no
+  // effective key (own valid key OR accepted delegation) AND has not chosen
+  // "Set up later". Thread the validated invite next-hop through it (#4641) so
+  // a brand-new invitee auto-returns to /invite/<token> AFTER onboarding
+  // (T&C recorded first, then key → repo → invite). A keyed OR skipped user
+  // honors the next hop directly, else lands on the dashboard.
+  if (shouldRouteToSetupKey({ hasEffectiveKey, setupKeySkippedAt })) {
     return nextHop
       ? `/setup-key?redirectTo=${encodeURIComponent(nextHop)}`
       : "/setup-key";

@@ -27,6 +27,8 @@ vi.mock("@/server/observability", () => ({
 
 vi.mock("@/server/logger", () => ({
   default: { warn: vi.fn(), error: vi.fn(), info: mockLoggerInfo },
+  // byok-resolver (transitively imported by the route) pulls createChildLogger.
+  createChildLogger: () => ({ warn: vi.fn(), error: vi.fn(), info: vi.fn() }),
 }));
 
 vi.mock("@/lib/auth/resolve-origin", () => ({
