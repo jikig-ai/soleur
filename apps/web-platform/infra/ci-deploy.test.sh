@@ -1896,6 +1896,29 @@ assert_state_contains "restart inngest fails when cron plan de-planned (#4650 AC
   "restart inngest _ latest" \
   "export MOCK_CURL_INNGEST_FUNCTIONS_NOCRON=1"
 
+# #4652 AC3: the `deploy inngest` SUCCESS path must gate on verify_inngest_health
+# (the restart action already does — see the four restart tests above; the
+# deploy path did NOT before #4652). verify_inngest_health's runtime behavior
+# (healthy → success, /health-fail → inngest_health_failed, cron-deplaned →
+# inngest_health_failed) is execution-tested via those restart-action tests.
+# Driving the deploy-inngest path to its success branch would need a new
+# docker-inspect ENV mode + a sudo-bootstrap stub (the existing trace test stops
+# at inngest_image_env_missing) — out of scope here; instead assert the WIRING:
+# in the deploy-inngest branch verify_inngest_health runs BEFORE the success
+# state-write, with an inngest_health_failed branch between them.
+TOTAL=$((TOTAL + 1))
+DI_VERIFY_LINE=$(grep -nE '^[[:space:]]*verify_inngest_health[[:space:]]*$' "$DEPLOY_SCRIPT" | tail -1 | cut -d: -f1)
+DI_SUCCESS_LINE=$(grep -nE 'SUCCESS: inngest .* deployed' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1)
+DI_FAIL_LINE=$(grep -nE 'final_write_state 1 "inngest_health_failed"' "$DEPLOY_SCRIPT" | tail -1 | cut -d: -f1)
+if [[ -n "$DI_VERIFY_LINE" && -n "$DI_SUCCESS_LINE" && -n "$DI_FAIL_LINE" \
+      && "$DI_VERIFY_LINE" -lt "$DI_FAIL_LINE" && "$DI_FAIL_LINE" -lt "$DI_SUCCESS_LINE" ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: deploy inngest success path gates on verify_inngest_health (#4652 AC3 wiring)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: deploy inngest verify_inngest_health wiring (verify=$DI_VERIFY_LINE fail=$DI_FAIL_LINE success=$DI_SUCCESS_LINE)"
+fi
+
 # Existing deploy validation still rejects `deploy inngest restart latest`
 # (image mismatch since "restart" != expected image)
 assert_state_contains "deploy inngest restart latest rejected as image_mismatch" \

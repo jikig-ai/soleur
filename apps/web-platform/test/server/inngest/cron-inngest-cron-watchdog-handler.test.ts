@@ -65,7 +65,7 @@ function mockFetch(registry: unknown[], webhookStatus: number) {
   });
 }
 
-describe("cronInngestCronWatchdogHandler — restart orchestration (Fix G / AC6)", () => {
+describe("cronInngestCronWatchdogHandler — backstop restart orchestration (#4652 / AC4–AC7)", () => {
   const ORIG = { ...process.env };
 
   beforeEach(() => {
@@ -82,34 +82,68 @@ describe("cronInngestCronWatchdogHandler — restart orchestration (Fix G / AC6)
     process.env = { ...ORIG };
   });
 
-  it("H9a + webhook 202 → restartRequested, and persists last_restart_at with cleared streaks", async () => {
-    vi.stubGlobal("fetch", mockFetch(registryMissing("cron-community-monitor"), 202));
+  it("AC4: H9a single tick → NO restart, ok=false, NO deploy-webhook fetch (polling gets its grace window)", async () => {
+    // Default readFileMock throws ENOENT → no prior state → streak starts at 1
+    // < POLL_RECOVERY_GRACE_TICKS, so the demoted watchdog must NOT restart on
+    // the first defective tick (pre-#4652 this restarted immediately).
+    const fetchMock = mockFetch(registryMissing("cron-community-monitor"), 202);
+    vi.stubGlobal("fetch", fetchMock);
 
     const out = await cronInngestCronWatchdogHandler({
       step: fakeStep,
       logger: fakeLogger,
     } as never);
 
-    expect(out.ok).toBe(false); // a defect was present
-    expect(out.healed.restartRequested).toBe(true);
+    expect(out.ok).toBe(false); // defect present → ok=false heartbeat still pages (AC7 safety net intact)
+    expect(out.healed.restartRequested).toBe(false); // AC4: no restart on tick 1
+    // The load-bearing assertion: the deploy webhook was NOT POSTed this tick.
+    expect(
+      fetchMock.mock.calls.some((c) => String(c[0]).includes("deploy.soleur.ai")),
+    ).toBe(false);
+    // Streak persisted at 1; no last_restart_at written.
+    const lastWrite = writeFileMock.mock.calls.at(-1);
+    expect(lastWrite).toBeDefined();
+    const persisted = JSON.parse(String(lastWrite![1]));
+    expect(persisted.defect_streaks).toEqual({ "cron-community-monitor": 1 });
+    expect(persisted.last_restart_at).toBeUndefined();
+  });
 
-    // The state write that makes the AC6 cooldown real in production:
-    // last_restart_at set, streaks cleared (a restart re-plans everything).
+  it("AC5: H9a sustained to the grace threshold → restartRequested, webhook 202, streaks cleared", async () => {
+    // Seed a prior defect streak of (grace-1) so THIS defective tick crosses
+    // POLL_RECOVERY_GRACE_TICKS and escalates to the backstop restart.
+    readFileMock.mockResolvedValueOnce(
+      JSON.stringify({ defect_streaks: { "cron-community-monitor": 1 } }),
+    );
+    const fetchMock = mockFetch(registryMissing("cron-community-monitor"), 202);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const out = await cronInngestCronWatchdogHandler({
+      step: fakeStep,
+      logger: fakeLogger,
+    } as never);
+
+    expect(out.ok).toBe(false);
+    expect(out.healed.restartRequested).toBe(true);
+    expect(
+      fetchMock.mock.calls.some((c) => String(c[0]).includes("deploy.soleur.ai")),
+    ).toBe(true);
+    // last_restart_at set, streaks cleared (a restart re-syncs + re-plans all).
     const restartWrite = writeFileMock.mock.calls.find((c) =>
       String(c[1]).includes("last_restart_at"),
     );
     expect(restartWrite).toBeDefined();
     const persisted = JSON.parse(String(restartWrite![1]));
     expect(typeof persisted.last_restart_at).toBe("string");
-    expect(persisted.unplanned_streaks).toEqual({});
+    expect(persisted.defect_streaks).toEqual({});
   });
 
-  it("H9a + webhook non-202 → falls back to D1-B (mints token, files issue), still restartRequested", async () => {
+  it("AC5: sustained H9a + webhook non-202 → falls back to D1-B, handler does not reject", async () => {
+    // Sustained defect (seeded streak crosses the threshold this tick) so the
+    // restart path is reached; webhook returns 500 → D1-A fails → D1-B.
+    readFileMock.mockResolvedValueOnce(
+      JSON.stringify({ defect_streaks: { "cron-community-monitor": 1 } }),
+    );
     const fetchMock = mockFetch(registryMissing("cron-community-monitor"), 500);
-    // Octokit is dynamically imported inside fileRestartEscalationIssue; stub
-    // the issue search + create by intercepting its REST calls via fetch is
-    // brittle, so assert the observable contract: a restart was still requested
-    // via the escalation path and state was persisted.
     vi.stubGlobal("fetch", fetchMock);
 
     const out = await cronInngestCronWatchdogHandler({
@@ -117,19 +151,18 @@ describe("cronInngestCronWatchdogHandler — restart orchestration (Fix G / AC6)
       logger: fakeLogger,
     } as never).catch((e) => e);
 
-    // Either the D1-B path completed (restartRequested true) or Octokit threw
-    // (caught → reportSilentFallback → returns false). Both are non-throwing
-    // from the caller's perspective; assert the handler did not reject.
+    // Either D1-B completed (restartRequested true) or Octokit threw (caught →
+    // reportSilentFallback → returns false). Both are non-throwing; assert the
+    // handler did not reject AND the webhook was attempted before D1-B.
     expect(out).not.toBeInstanceOf(Error);
-    // The webhook was attempted (non-202), proving D1-A ran before D1-B.
     expect(
       fetchMock.mock.calls.some((c) => String(c[0]).includes("deploy.soleur.ai")),
     ).toBe(true);
   });
 
-  it("clean registry → no restart, ok=true, persists empty streaks (cooldown timestamp preserved)", async () => {
+  it("AC7: clean registry → no restart, ok=true, persists empty streaks (cooldown timestamp preserved)", async () => {
     readFileMock.mockResolvedValueOnce(
-      JSON.stringify({ last_restart_at: "2026-05-29T00:00:00Z", unplanned_streaks: {} }),
+      JSON.stringify({ last_restart_at: "2026-05-29T00:00:00Z", defect_streaks: {} }),
     );
     const fullRegistry = EXPECTED_CRON_FUNCTIONS.map((fnId) => ({
       slug: `soleur-runtime-${fnId}`,
@@ -144,12 +177,11 @@ describe("cronInngestCronWatchdogHandler — restart orchestration (Fix G / AC6)
 
     expect(out.ok).toBe(true);
     expect(out.healed.restartRequested).toBe(false);
-    // No webhook fetch on a clean tick.
     // State still written to persist (empty) streaks while preserving timestamp.
     const lastWrite = writeFileMock.mock.calls.at(-1);
     expect(lastWrite).toBeDefined();
     const persisted = JSON.parse(String(lastWrite![1]));
     expect(persisted.last_restart_at).toBe("2026-05-29T00:00:00Z");
-    expect(persisted.unplanned_streaks).toEqual({});
+    expect(persisted.defect_streaks).toEqual({});
   });
 });

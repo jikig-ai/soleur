@@ -115,8 +115,11 @@ assert "inngest-bootstrap.sh exists" "[[ -f '$BOOTSTRAP_SH' ]]"
 # HEARTBEAT_UNIT block (not the unrelated UNITEOF block for inngest-server).
 HEARTBEAT_BLOCK=$(awk '/cat > "\$HEARTBEAT_UNIT" <</,/^HEARTBEATEOF$/' "$BOOTSTRAP_SH")
 
+# Reference the block BY NAME ("$HEARTBEAT_BLOCK"), never by embedding its
+# value ('$HEARTBEAT_BLOCK'): the block's comments contain apostrophes
+# (e.g. "inngest-server.service's"), which break the single-quoted eval form.
 assert "heartbeat unit uses doppler run" \
-  "[[ -n '$HEARTBEAT_BLOCK' ]] && printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE 'run --project soleur --config prd'"
+  "[[ -n \"\$HEARTBEAT_BLOCK\" ]] && printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE 'run --project soleur --config prd'"
 assert "heartbeat unit ExecStart is exactly one line" \
   "[[ \$(printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -c '^ExecStart=') -eq 1 ]]"
 assert "heartbeat unit ExecStart wraps HEARTBEAT_SCRIPT under doppler" \
@@ -128,6 +131,52 @@ DOPPLER_BIN_LINE=$(grep -nE 'DOPPLER_BIN=.*command -v doppler' "$BOOTSTRAP_SH" 2
 HEARTBEAT_UNIT_LINE=$(grep -nE 'cat > "\$HEARTBEAT_UNIT"' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
 assert "DOPPLER_BIN resolved via command -v before HEARTBEAT_UNIT write" \
   "[[ -n '$DOPPLER_BIN_LINE' && -n '$HEARTBEAT_UNIT_LINE' && '$DOPPLER_BIN_LINE' -lt '$HEARTBEAT_UNIT_LINE' ]]"
+
+# --- Inngest-SERVER unit ExecStart: poll-interval + sdk-url (#4652) ---
+echo ""
+echo "--- Inngest-server unit ExecStart (#4652 poll-interval/sdk-url) ---"
+# Extract the inngest-SERVER unit's heredoc body (single-quoted 'UNITEOF'
+# marker, distinct from the heartbeat HEARTBEATEOF block). Start anchor is the
+# literal `cat > "$UNIT_FILE" <<'UNITEOF'`; end anchor is a line that is exactly
+# `UNITEOF` (no self-match — the start line ends in `<<'UNITEOF'`, not `UNITEOF`
+# alone).
+# shellcheck disable=SC2016
+SERVER_UNIT_BLOCK=$(awk '/cat > "\$UNIT_FILE" <</,/^UNITEOF$/' "$BOOTSTRAP_SH")
+# Reference BY NAME ("$SERVER_UNIT_BLOCK") — the server ExecStart contains
+# single quotes (`bash -c '...'`), so the value-embedded '$VAR' form would
+# break the eval (same fragility fixed in the heartbeat assert above).
+assert "inngest-server unit block extracted (non-empty)" \
+  "[[ -n \"\$SERVER_UNIT_BLOCK\" ]] && [[ \$(printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | wc -l) -ge 5 ]]"
+# AC1: each new flag asserted independently (flag-order-insensitive).
+assert "server ExecStart sets --poll-interval 60" \
+  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qE 'inngest start .*--poll-interval 60'"
+assert "server ExecStart sets --sdk-url loopback app route (port 3000)" \
+  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'sdk-url http://127.0.0.1:3000/api/inngest'"
+# Regression guard: the signing-key strip + event-key must survive the edit
+# (the systemd `$$` escape must not be accidentally unescaped — Sharp Edge).
+assert "server ExecStart keeps signing-key strip + event-key" \
+  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'INNGEST_SIGNING_KEY#signkey-prod-' && printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'INNGEST_EVENT_KEY'"
+
+# AC2: an ExecStart change must take effect on redeploy. Two guarantees:
+#   (a) reconcile-always — the server unit write lives OUTSIDE the
+#       SKIP_BINARY_INSTALL guard (so a same-CLI-version redeploy still
+#       rewrites the unit), matching the heartbeat/Vector precedent; and
+#   (b) explicit `systemctl restart inngest-server.service` (a running unit
+#       ignores a new ExecStart until restart — the Vector enable→restart fix).
+echo ""
+echo "--- Inngest-server unit reconcile-always + restart (#4652 AC2) ---"
+# shellcheck disable=SC2016
+GUARD_CLOSE_LINE=$(grep -nE '^fi  # end SKIP_BINARY_INSTALL guard' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
+# shellcheck disable=SC2016
+SERVER_UNIT_WRITE_LINE=$(grep -nE 'cat > "\$UNIT_FILE" <<' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
+assert "server unit write is OUTSIDE the SKIP_BINARY_INSTALL guard (reconcile-always)" \
+  "[[ -n '$GUARD_CLOSE_LINE' && -n '$SERVER_UNIT_WRITE_LINE' && '$GUARD_CLOSE_LINE' -lt '$SERVER_UNIT_WRITE_LINE' ]]"
+assert "bootstrap restarts inngest-server.service (new ExecStart loads on redeploy)" \
+  "grep -qE '^systemctl restart inngest-server.service' '$BOOTSTRAP_SH'"
+# The upgrade-drain resume must still run after the restart (R2 — restart must
+# not orphan the pause/resume pairing).
+assert "upgrade-drain resume still present (pause/resume pairing intact)" \
+  "grep -qE '\" resume \"|INSTALL_PATH\" resume|resume >/dev/null' '$BOOTSTRAP_SH' || grep -qE 'resume' '$BOOTSTRAP_SH'"
 
 # --- `terraform fmt -check` for HCL hygiene ---
 echo ""
