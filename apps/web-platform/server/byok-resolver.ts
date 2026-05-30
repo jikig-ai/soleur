@@ -231,10 +231,11 @@ export async function userHasEffectiveByokKey(
     if (keys && keys.length > 0) return true;
 
     // 2. Derive workspace → org → flag (same default workspace as the lease).
-    const workspaceId = await getDefaultWorkspaceForUser(callerUserId, supabase);
-    const orgId = await resolveOrgIdForWorkspace(workspaceId);
-    const identity: Identity = { userId: callerUserId, role: "prd", orgId };
-    if (!(await isByokDelegationsEnabled(orgId, identity))) return false;
+    const { workspaceId, flagEnabled } = await resolveByokDelegationContext(
+      callerUserId,
+      supabase,
+    );
+    if (!flagEnabled) return false;
 
     // 3. Resolver row — usable ONLY for a real delegation (delegation_id != null).
     const { data, error } = await supabase
@@ -249,6 +250,7 @@ export async function userHasEffectiveByokKey(
     reportSilentFallback(err, {
       feature: "byok-resolver",
       op: "userHasEffectiveByokKey",
+      extra: { userId: callerUserId },
     });
     return opts.onErrorReturn;
   }
@@ -268,10 +270,11 @@ export async function userHasPendingByokDelegation(
 ): Promise<boolean> {
   try {
     const supabase = createServiceClient();
-    const workspaceId = await getDefaultWorkspaceForUser(callerUserId, supabase);
-    const orgId = await resolveOrgIdForWorkspace(workspaceId);
-    const identity: Identity = { userId: callerUserId, role: "prd", orgId };
-    if (!(await isByokDelegationsEnabled(orgId, identity))) return false;
+    const { workspaceId, flagEnabled } = await resolveByokDelegationContext(
+      callerUserId,
+      supabase,
+    );
+    if (!flagEnabled) return false;
 
     const { data: delegation } = await supabase
       .from("byok_delegations")
@@ -292,12 +295,32 @@ export async function userHasPendingByokDelegation(
     reportSilentFallback(err, {
       feature: "byok-resolver",
       op: "userHasPendingByokDelegation",
+      extra: { userId: callerUserId },
     });
     return false;
   }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Resolve the BYOK delegation context for an effective-key / pending check:
+ * the default workspace (the SAME one `resolveKeyOwnerThenLease` uses) and
+ * whether the org-targeted delegations flag is on. Shared by both
+ * `userHasEffectiveByokKey` and `userHasPendingByokDelegation`. Throws on
+ * workspace/org lookup failure so each caller's own outer catch picks the fail
+ * direction (fail-open redirect gate vs fail-closed status / fail-quiet banner).
+ */
+async function resolveByokDelegationContext(
+  callerUserId: string,
+  supabase: ReturnType<typeof createServiceClient>,
+): Promise<{ workspaceId: string; flagEnabled: boolean }> {
+  const workspaceId = await getDefaultWorkspaceForUser(callerUserId, supabase);
+  const orgId = await resolveOrgIdForWorkspace(workspaceId);
+  const identity: Identity = { userId: callerUserId, role: "prd", orgId };
+  const flagEnabled = await isByokDelegationsEnabled(orgId, identity);
+  return { workspaceId, flagEnabled };
+}
 
 
 async function resolveOrgIdForWorkspace(workspaceId: string): Promise<string | null> {

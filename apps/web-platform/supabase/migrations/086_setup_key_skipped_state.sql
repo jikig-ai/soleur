@@ -1,4 +1,4 @@
--- 085_setup_key_skipped_state.sql
+-- 086_setup_key_skipped_state.sql
 -- feat-skip-api-key-onboarding (#4642; PR #4640). Persists the user's
 -- explicit "Set up later" choice on the /setup-key onboarding gate so the
 -- effective-key-aware redirect gates (callback, accept-terms) stop

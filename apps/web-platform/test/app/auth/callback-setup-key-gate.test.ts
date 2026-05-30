@@ -98,12 +98,14 @@ describe("GET /callback — setup-key gate (AC3)", () => {
     expect(pathOf(await GET(makeRequest()))).toBe("/setup-key");
   });
 
-  test("keyless but skipped → repo/dashboard path, never /setup-key", async () => {
+  test("keyless but skipped → /dashboard even when repo not connected (never /connect-repo's dead sync)", async () => {
     mockUserHasEffectiveByokKey.mockResolvedValue(false);
     stubUsersRow({
       workspace_status: "ready",
       tc_accepted_version: "2026-01-01",
-      repo_status: "connected",
+      // repo_status not_connected would route an effective-key user to
+      // /connect-repo; a keyless user must still land on /dashboard.
+      repo_status: "not_connected",
       setup_key_skipped_at: "2026-05-30T00:00:00Z",
     });
     expect(pathOf(await GET(makeRequest()))).toBe("/dashboard");

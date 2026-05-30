@@ -27,7 +27,16 @@ export function NoApiKeyBanner() {
     (async () => {
       try {
         const res = await fetch("/api/byok/effective-status");
-        if (!res.ok) return;
+        if (!res.ok) {
+          // Server-error path is a real silent fallback (a persistent 500 hides
+          // the banner from every keyless user) — mirror it, then degrade.
+          reportSilentFallback(null, {
+            feature: "no-api-key-banner",
+            op: "effective-status-non-ok",
+            extra: { status: res.status },
+          });
+          return;
+        }
         const data = (await res.json()) as Partial<EffectiveStatus>;
         // Only act on a well-formed response — a malformed payload must leave
         // the banner hidden, never render a half-populated state.
@@ -78,7 +87,7 @@ export function NoApiKeyBanner() {
           </p>
         </div>
         <Link
-          href={pending ? "/dashboard/settings/team" : "/dashboard/settings/services"}
+          href={pending ? "/dashboard/chat" : "/dashboard/settings/services"}
           className="shrink-0 rounded-lg bg-soleur-accent-gold-fill px-3 py-1.5 text-xs font-medium text-soleur-text-on-accent hover:opacity-90"
         >
           {pending ? "Accept access" : "Add your API key"}

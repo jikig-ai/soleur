@@ -6,6 +6,13 @@ import { render, screen, waitFor } from "@testing-library/react";
 // Copy branches on pendingDelegation: a grant-holder is told to accept the
 // grant (one click), not to buy a separate Anthropic account.
 
+const { mockReportSilentFallback } = vi.hoisted(() => ({
+  mockReportSilentFallback: vi.fn(),
+}));
+vi.mock("@/lib/client-observability", () => ({
+  reportSilentFallback: mockReportSilentFallback,
+}));
+
 import { NoApiKeyBanner } from "@/components/dashboard/no-api-key-banner";
 
 function mockStatus(body: { hasEffectiveKey: boolean; pendingDelegation: boolean }) {
@@ -35,11 +42,12 @@ describe("NoApiKeyBanner (AC6)", () => {
     expect(screen.getByText(/tasks are disabled/i)).toBeTruthy();
   });
 
-  it("keyless + pending grant → accept-grant copy + link to /dashboard/settings/team", async () => {
+  it("keyless + pending grant → accept-grant copy + link to /dashboard/chat (the acceptance surface)", async () => {
     mockStatus({ hasEffectiveKey: false, pendingDelegation: true });
     render(<NoApiKeyBanner />);
     const cta = await screen.findByRole("link", { name: /accept|grant|shared access/i });
-    expect(cta.getAttribute("href")).toBe("/dashboard/settings/team");
+    // /dashboard/chat mounts the DelegationBanner → accept-side-letter flow.
+    expect(cta.getAttribute("href")).toBe("/dashboard/chat");
     expect(screen.getByText(/granted shared access/i)).toBeTruthy();
   });
 
@@ -47,6 +55,17 @@ describe("NoApiKeyBanner (AC6)", () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network")));
     const { container } = render(<NoApiKeyBanner />);
     await waitFor(() => expect(fetch).toHaveBeenCalled());
+    expect(container.querySelector('[role="region"]')).toBeNull();
+  });
+
+  it("mirrors a non-ok status response to Sentry and stays hidden", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 500 }));
+    const { container } = render(<NoApiKeyBanner />);
+    await waitFor(() => expect(mockReportSilentFallback).toHaveBeenCalled());
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({ op: "effective-status-non-ok" }),
+    );
     expect(container.querySelector('[role="region"]')).toBeNull();
   });
 });

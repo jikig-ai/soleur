@@ -27,13 +27,13 @@ describe("SetupKeyPage — Set up later (AC4)", () => {
     expect(screen.getByText(/separate, paid Anthropic account/i)).toBeTruthy();
   });
 
-  it("POSTs the skip route then routes to /connect-repo on success", async () => {
+  it("POSTs the skip route then routes to /dashboard on success", async () => {
     (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
     render(<SetupKeyPage />);
 
     fireEvent.click(screen.getByRole("button", { name: /set up later/i }));
 
-    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/connect-repo"));
+    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/dashboard"));
     expect(fetch).toHaveBeenCalledWith(
       "/api/setup-key/skip",
       expect.objectContaining({ method: "POST" }),

@@ -31,10 +31,11 @@ export default function SetupKeyPage() {
         setSkipping(false);
         return;
       }
-      // connect-repo is keyless-safe (GitHub-only actions; its own Skip →
-      // dashboard). The dashboard banner + in-chat CTA cover the degraded
-      // keyless state from there.
-      router.push("/connect-repo");
+      // Route to the dashboard, where the NoApiKeyBanner + in-chat CTA cover
+      // the degraded keyless state. Deliberately NOT /connect-repo: repo setup
+      // auto-fires a headless sync agent that needs a key, which would orphan a
+      // stalled conversation behind a misleading "ready" screen (#4642 review).
+      router.push("/dashboard");
     } catch {
       setStatus("error");
       setErrorMsg("Network error. Please try again.");

@@ -251,6 +251,13 @@ export async function GET(request: NextRequest) {
 
         if (shouldRouteToSetupKey({ hasEffectiveKey, setupKeySkippedAt })) {
           redirectPath = "/setup-key";
+        } else if (!hasEffectiveKey) {
+          // Keyless but skipped: go straight to the dashboard (where the
+          // NoApiKeyBanner explains the blocked state). Do NOT route into
+          // /connect-repo — repo setup auto-fires a headless sync agent that
+          // needs a key, which would orphan a stalled "active" conversation
+          // and show a misleading "ready" screen (#4642 review).
+          redirectPath = "/dashboard";
         } else {
           redirectPath =
             !repoUser || repoUser.repo_status === "not_connected"
