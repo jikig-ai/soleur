@@ -107,6 +107,15 @@ describe("resolveTeamMembershipPageData", () => {
     vi.unstubAllEnvs();
     vi.stubEnv("FLAG_TEAM_WORKSPACE_INVITE", "");
     vi.stubEnv("FLAGSMITH_ENVIRONMENT_KEY", "");
+    // Force the byok-delegations runtime flag OFF so the resolver's
+    // `isByokDelegationsEnabled` branch (which queries the byok_delegations
+    // table — not covered by this file's mockSupabaseClients) stays dormant.
+    // Without this, `doppler run -c dev` injects FLAG_BYOK_DELEGATIONS=1 and
+    // the resolver hits the mock's `unmocked table: byok_delegations` throw.
+    // vi.unstubAllEnvs() cannot clear a process-inherited var; vi.stubEnv("")
+    // overwrites it. See #4663 and the env-leak learning
+    // 2026-05-20-vitest-unstub-does-not-clear-process-inherited-env-vars.
+    vi.stubEnv("FLAG_BYOK_DELEGATIONS", "");
     __resetFeatureFlagsForTests();
   });
 
