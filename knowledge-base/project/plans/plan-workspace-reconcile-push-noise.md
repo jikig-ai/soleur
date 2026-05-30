@@ -73,7 +73,10 @@ Operator decision: **drop the benign skip from Sentry + stop the source.**
 - All other tests (happy fan-out, slug parity, schema gate, not-ready,
   sync-failure) unchanged and passing.
 
-Verified: `tsc --noEmit` clean; vitest 10/10 passing across 3 consecutive runs.
+Verified: `tsc --noEmit` clean; vitest 11/11 passing (reconcile test file),
+exit 0. Includes an over-match guard test (`jikig-ai/soleur-fork` must NOT be
+short-circuited) since the ignored-repo match is exact `owner/repo` equality,
+not a raw substring.
 
 ## Observability
 

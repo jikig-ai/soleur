@@ -70,17 +70,32 @@ interface HandlerArgs {
 // matches zero workspaces, so without this short-circuit each push emits a
 // benign "no-workspace-match" skip — the dominant source of that Sentry issue
 // (verified: 100% of recent skip events were `jikig-ai/soleur`). Comma-
-// separated substrings, matched against the composed repo URL; overridable via
-// env so a future internal repo can be added without a code change.
-const RECONCILE_IGNORED_REPO_SUBSTRINGS = (
+// separated `owner/repo` slugs, overridable via env so a future internal repo
+// can be added without a code change.
+//
+// Matched against the EXACT `owner/repo` path segment, not as a raw substring:
+// an unanchored `includes("jikig-ai/soleur")` would also swallow a legitimate
+// customer repo like `jikig-ai/soleur-fork` and drop it silently (no DB query,
+// no log, no Sentry). Exact path-segment equality keeps the default safe and
+// makes a misconfigured env override fail loudly (no match → normal path) rather
+// than silently dropping a customer's reconcile.
+const RECONCILE_IGNORED_REPO_SLUGS = (
   process.env.WORKSPACE_RECONCILE_IGNORE_REPOS ?? "jikig-ai/soleur"
 )
   .split(",")
   .map((s) => s.trim())
+  // Accept either a bare `owner/repo` slug or a full URL; reduce both to the
+  // `owner/repo` path so the comparison is shape-agnostic.
+  .map((s) => s.replace(/^https?:\/\/[^/]+\//i, "").replace(/\.git$/i, ""))
   .filter(Boolean);
 
+function repoSlug(repoUrl: string): string {
+  return repoUrl.replace(/^https?:\/\/[^/]+\//i, "").replace(/\.git$/i, "");
+}
+
 function isIgnoredReconcileRepo(repoUrl: string): boolean {
-  return RECONCILE_IGNORED_REPO_SUBSTRINGS.some((s) => repoUrl.includes(s));
+  const slug = repoSlug(repoUrl);
+  return RECONCILE_IGNORED_REPO_SLUGS.some((s) => s === slug);
 }
 
 async function workspaceDirExists(path: string): Promise<boolean> {

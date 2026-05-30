@@ -92,13 +92,20 @@ vi.mock("@/server/observability", () => ({
 
 // The handler logs the benign no-workspace-match skip to pino (Better Stack
 // drain) via the module-level `@/server/logger` default export — NOT the
-// per-step logger arg. Mock it so we can assert the pino-only path (no Sentry).
+// per-step logger arg. Override ONLY the default export's methods with spies;
+// preserve every named export (e.g. `createChildLogger`, which transitive
+// imports like `server/github-app.ts` and `server/git-auth.ts` call at module
+// init) via importOriginal so the module graph still loads.
 const loggerInfoSpy = vi.fn();
 const loggerWarnSpy = vi.fn();
 const loggerErrorSpy = vi.fn();
-vi.mock("@/server/logger", () => ({
-  default: { info: loggerInfoSpy, warn: loggerWarnSpy, error: loggerErrorSpy },
-}));
+vi.mock("@/server/logger", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/logger")>();
+  return {
+    ...actual,
+    default: { info: loggerInfoSpy, warn: loggerWarnSpy, error: loggerErrorSpy },
+  };
+});
 
 // Filesystem existence: directories present in EXISTING_DIRS exist.
 const EXISTING_DIRS = new Set<string>();
@@ -323,6 +330,24 @@ describe("reconcile — ignored internal repo (stop the source)", () => {
     expect(loggerInfoSpy).not.toHaveBeenCalled();
     expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("does NOT short-circuit a customer repo whose slug merely shares the ignored prefix", async () => {
+    // `jikig-ai/soleur-fork` contains `jikig-ai/soleur` as a substring; an
+    // unanchored includes() match would have silently dropped it. Exact
+    // owner/repo matching must let it through to the normal (zero-match) path.
+    WORKSPACE_ROWS = [];
+    const handler = await importHandler();
+    const result = await handler({
+      event: makeEvent({ fullName: "jikig-ai/soleur-fork" }),
+      step: makeStep(),
+      logger,
+    });
+
+    expect(result).toEqual({ ok: false, reason: "no-workspace-match" });
+    // Took the normal path: ran the workspace query and logged the benign skip.
+    expect(repoUrlFilterSpy).toHaveBeenCalled();
+    expect(loggerInfoSpy).toHaveBeenCalledTimes(1);
   });
 });
 
