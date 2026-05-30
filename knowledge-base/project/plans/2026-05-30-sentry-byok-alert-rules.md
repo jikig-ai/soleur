@@ -16,23 +16,29 @@ related_issues: ["#4364", "#4232"]
 ## Problem Statement
 
 PR-A (#4290, MERGED) shipped `byok-delegations` observability events to Sentry.
-The emitter is **`emitDelegationEvent(...)` in `apps/web-platform/server/cost-writer.ts`**
-(lines 131-160 — verified this session; NOT `src/lib/observability/...` — this
-repo has no `src/` tree, and the issue body + one-shot brief both cite a wrong
-path). It emits a Sentry event on every cross-tenant / cap-exceeded path,
-carrying these **tags** (set via `scope.setTag(...)`):
+The call sites are in **`apps/web-platform/server/cost-writer.ts`** (the
+`check_and_record_byok_delegation_use` RPC error handler, lines 169-215 —
+verified this session; NOT `src/lib/observability/...`, which this repo has no
+`src/` tree for — both the issue body and the one-shot brief cite a wrong path).
+Each call routes through `reportSilentFallback(err, { feature, op, art_33_breach?,
+level, mirrorToSentry: true, ... })` in
+**`apps/web-platform/server/observability.ts`**, which sets the values as Sentry
+**tags** via `scope.setTag(...)` (lines 198-200):
 
-- `feature = "byok-delegations"` (cost-writer.ts:136, every event)
-- `op = cross-tenant-violation | hourly-cap-exceeded | daily-cap-exceeded | …`
-  (cost-writer.ts:137)
-- `art_33_breach = "true"` (string, set ONLY on `op === "cross-tenant-violation"`,
-  cost-writer.ts:140-141)
+- `feature = "byok-delegations"` — `scope.setTag("feature", …)` (observability.ts:198);
+  passed at cost-writer.ts:181,186,191,196,204
+- `op = cross-tenant-violation | revoke-past-grace | hourly-cap-exceeded |
+  daily-cap-exceeded | expired` — `scope.setTag("op", …)` (observability.ts:199)
+- `art_33_breach = "true"` (string, `String(art_33_breach)`, observability.ts:200) —
+  set ONLY on the cross-tenant path (cost-writer.ts:204-205 `art_33_breach: true`)
 
-Levels (`scope.setLevel`, cost-writer.ts:142-146): cross-tenant-violation →
-`fatal`; hourly-cap-exceeded / daily-cap-exceeded → `warning`; else → `info`.
-The function docstring (cost-writer.ts:123-130) explicitly says it is tagged
-"so the Sentry alert rules from issue #4364 can route on them" — confirming this
-plan is the intended consumer.
+`mirrorToSentry: true` (cost-writer.ts cross-tenant + cap paths) is what makes the
+event reach Sentry at all (most silent fallbacks are pino-only). The
+`SilentFallbackOptions` docstring (observability.ts:146-154) states verbatim that
+`feature`/`op`/`art_33_breach` "Becomes a Sentry tag … so issue #4364's alert
+rule can filter on it" — confirming this plan is the designed consumer and that
+**`TaggedEventFilter` (which matches tags, not `extra`) is the correct filter
+type.**
 
 There are **no alert rules** routing those events to a human. A cross-tenant
 violation starts the GDPR Art. 33 72-hour breach-notification clock, yet today
@@ -56,7 +62,7 @@ check changes the plan's central decision — the brief's own fallback preferenc
 
 | Brief / issue claim | Codebase reality (verified 2026-05-30) | Plan response |
 |---|---|---|
-| Emitter at `web-platform/src/lib/observability/byok-delegation-events.ts` | Emitter at `apps/web-platform/lib/byok/delegation-events.ts`; no `src/` tree | Cite the real path; tag values read from it directly |
+| Emitter at `web-platform/src/lib/observability/byok-delegation-events.ts` | Call sites in `apps/web-platform/server/cost-writer.ts:169-215`; tags set by `reportSilentFallback` → `scope.setTag` in `apps/web-platform/server/observability.ts:198-200`; no `src/` tree exists | Cite the real paths; tag values read from them directly |
 | Org slug `jikigai` | Org slug is **`jikigai-eu`** (EU cluster); `variables.tf` desc + `.env.example` `SENTRY_ORG=jikigai-eu`; provider `base_url = https://de.sentry.io/api/` (`main.tf`) | Use `var.sentry_org` / `var.sentry_project` — never a hardcoded slug |
 | API host `sentry.io` | EU host `de.sentry.io` (`main.tf` provider `base_url`) | Inherited automatically via the existing provider block; no change |
 | "prefer extending existing terraform **if present**" | `apps/web-platform/infra/sentry/` **IS present**: `main.tf`, `issue-alerts.tf` (4 `sentry_issue_alert` resources), `cron-monitors.tf`, `uptime-monitors.tf`, `variables.tf`, `versions.tf`, `.terraform.lock.hcl`, R2 backend, ADR-031, README, auto-apply workflow | **Extend the terraform root.** Add 2 `sentry_issue_alert` resources to `issue-alerts.tf`. Do NOT write a TS script. |
@@ -138,8 +144,8 @@ pattern: the canonical form is `sentry_issue_alert` in this file.**
 | Terraform sentry root exists; `sentry_issue_alert` is the resource type | `apps/web-platform/infra/sentry/issue-alerts.tf` | yes |
 | Provider `jianyuan/sentry` pinned `0.15.0-beta2` | `versions.tf` + `.terraform.lock.hcl` | yes |
 | Org/project via `var.sentry_org` / `data.sentry_project.web_platform.slug`; EU host | `main.tf`, `variables.tf` | yes |
-| Tag keys/values `feature`/`op`/`art_33_breach` and exact literals | `server/cost-writer.ts:136-141` | yes |
-| Tags emitted via `scope.setTag` (→ matchable by TaggedEventFilter) | `server/cost-writer.ts:136,137,141` | yes |
+| Tag keys/values `feature`/`op`/`art_33_breach` passed at call sites | `server/cost-writer.ts:181,186,191,196,204-205` | yes |
+| Tags emitted via `scope.setTag` (→ matchable by TaggedEventFilter, NOT extra) | `server/observability.ts:198-200` + docstring `:146-154` | yes |
 | Create-time POST dedup keys on action-shape+frequency+match, not conditions | learning `2026-05-17-sentry-issue-alert-create-dedup-on-action-match-not-conditions.md` | yes |
 | Existing rule frequencies 60/61/62/30 (must avoid for dedup) | `issue-alerts.tf` | yes |
 | Auth token = GitHub repo secret, NOT Doppler | `infra/sentry/README.md` §Authentication | yes |
