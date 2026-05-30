@@ -227,6 +227,17 @@ resource "sentry_issue_alert" "byok_art_33_breach" {
       }
     },
   ]
+  # ACCEPTED RISK (N=1) — recipient pinning deferred, tracked in #4656.
+  # `IssueOwners` has no ownership rule on this project, so it falls through
+  # to `ActiveMembers`. With a solo founder (the only active Sentry member
+  # today) that correctly pages the one person who must start the Art. 33
+  # 72h clock. BUT this event class carries cross-tenant-leak metadata, so
+  # at N>1 active members the fallthrough would over-disclose to every seat.
+  # MUST be revisited — pin `target_type = "Member"` + the founder's member
+  # id (or a single-member ops Team) — BEFORE the first non-founder Sentry
+  # seat is added. user-impact-reviewer P1 (single-user-incident threshold).
+  # The 4 auth rules above use the same IssueOwners/ActiveMembers pattern;
+  # this is the repo convention, not a new risk introduced here.
   actions_v2 = [
     {
       notify_email = {

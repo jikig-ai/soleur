@@ -6,10 +6,14 @@
 # the auto-apply allow-list in #4585 (previously operator-applied). See:
 #   knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md
 #
-# Authorization model: the PR merge IS the human authorization. Issue-alert
-# resources are excluded from this auto-apply (they are import-only per the
-# operator AC13 step in the plan); only cron-monitor and uptime-monitor
-# changes trigger an apply.
+# Authorization model: the PR merge IS the human authorization. The 4 AUTH
+# issue-alert resources are excluded from this auto-apply (they are
+# import-only per the operator AC13 step in the plan; a fresh apply would
+# 412). The 2 BYOK issue-alert resources (byok_art_33_breach,
+# byok_cap_exceeded, #4364) ARE included — they are apply-created (no
+# pre-existing Sentry rule to import) and named in the -target set below.
+# So: cron-monitor, uptime-monitor, and BYOK issue-alert changes trigger an
+# apply; the auth issue-alert rules never do.
 #
 # Kill switch: include `[skip-sentry-apply]` in the merge commit message to
 # skip auto-apply for that merge.
