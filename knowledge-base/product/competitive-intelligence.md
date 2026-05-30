@@ -65,6 +65,7 @@ Direct thesis-level competitors — entities claiming to run a company's non-eng
 2. **Polsia's revenue trajectory is now ambiguous.** ARR figures moved in contradictory directions across sources. Either earlier $1.5M/2,000-company claims were inflated, or revenue is churning rapidly. Worth tracking in the next scan cycle.
 3. **Paperclip + BYO-agents is the open-source path that undercuts the revenue model.** A solo founder can run `alirezarezvani/claude-skills` inside Paperclip with their own Claude API key and approximate the Soleur experience for the cost of the API. The hosted-platform revenue plan must provide meaningfully more than that combination can assemble.
 4. **The plugin distribution channel is now contested.** Soleur is no longer the only CaaS-flavored Claude Code plugin, and is not the largest skills library on the marketplace.
+5. **"Team agent vs solo agent" is the emerging enterprise wedge (Viktor).** Viktor names Claude Code — Soleur's own harness — as a solo bot that fails to scale across a team. Its four pillars expose two ICP-aligned capability gaps Soleur should close (runtime injection defense [#4671](https://github.com/jikig-ai/soleur/issues/4671), HITL approval queue [#4672](https://github.com/jikig-ai/soleur/issues/4672)) and two up-market bets to defer (business-SaaS breadth [#4673](https://github.com/jikig-ai/soleur/issues/4673), scheduled business automations [#4674](https://github.com/jikig-ai/soleur/issues/4674)), plus multi-player RBAC [#4670](https://github.com/jikig-ai/soleur/issues/4670) gated on an up-market trigger. The lesson is **not** to chase enterprise multi-player — it is to harden the solo-founder experience so a non-technical operator is protected even when not watching the terminal. Soleur already matches or beats Viktor on git-native compounding memory and Doppler/OIDC credential vaulting — differentiators to defend, not gaps.
 
 ### Peer-Plugin Audit Log (non-audit outcomes)
 
@@ -87,6 +88,7 @@ Verification log for `soleur:competitive-analysis peer-plugin-audit` invocations
 2. **`ericvtheg/solo-founder-toolkit`** — Narrow-scope solo-founder Claude Code plugin. Low product overlap but shares audience positioning language. ([GitHub](https://github.com/ericvtheg/solo-founder-toolkit))
 3. **OpenAI Codex (April 2026 major upgrade)** — Previously scoped as engineering-only; now has Computer Use + multi-agent + memory + 90+ plugins + scheduled long-running tasks. Should move from implicit Tier 5 to explicit Tier 0 in business-validation.md.
 4. **Anthropic Cowork enterprise plugin expansion** — Nine new industry-specific plugins (Feb 24) bring first-party domain coverage to 7+ of 8 Soleur domains. Tier 0 entry already exists but needs update.
+5. **Viktor** — Multi-player enterprise AI agent / "shared digital coworker" positioned explicitly against solo agents (names Claude Code). Added to Tier 3 (2026-05-30) from an AlphaSignal sponsored brief; metrics are marketing, not verified. Surfaced 5 Soleur capability gaps (#4670–#4674). Opposite ICP from Soleur — watch for down-market movement. ([brief: AlphaSignal sponsored])
 
 ---
 
@@ -112,3 +114,5 @@ Verification log for `soleur:competitive-analysis peer-plugin-audit` invocations
 ---
 
 _Report generated 2026-04-18. Next scheduled scan: 2026-05-18 (monthly cadence)._
+
+_Targeted intake 2026-05-30: added **Viktor** (multi-player enterprise AI agent) to Tier 3 from an AlphaSignal sponsored brief (metrics treated as marketing, not verified). Surfaced 5 capability gaps, filed #4670–#4674 and slotted as Post-MVP "Competitive-Parity Bets (vs Viktor)" CP1–CP5 in roadmap.md. Not a full monthly scan — single-competitor addition. Method: /soleur:competitive-analysis (manual, source-grounded)._
