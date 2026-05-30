@@ -39,6 +39,7 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: hr-gdpr-gate-on-regulated-data-surfaces] → core
 - [id: hr-type-widening-cross-consumer-grep] → core
 - [id: hr-write-boundary-sentinel-sweep-all-write-sites] → core
+- [id: hr-bulk-delete-per-item-live-infra-role-check] → core
 - [id: hr-no-dashboard-eyeball-pull-data-yourself] → core
 - [id: hr-observability-as-plan-quality-gate] → core
 - [id: hr-no-ssh-fallback-in-runbooks] → core
@@ -61,8 +62,8 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: wg-when-a-test-runner-crashes-segfault-oom] → rest
 - [id: wg-when-tests-fail-and-are-confirmed-pre] → rest
 - [id: wg-when-an-audit-identifies-pre-existing] → core
-- [id: wg-when-deferring-a-capability-create-a] → core
-- [id: wg-defer-only-after-inline-triage] → core
+- [id: wg-when-deferring-a-capability-create-a] → rest
+- [id: wg-defer-only-after-inline-triage] → rest
 - [id: wg-when-a-workflow-gap-causes-a-mistake-fix] → core
 - [id: wg-every-session-error-must-produce-either] → rest
 - [id: wg-use-closes-n-in-pr-body-not-title-to] → rest
