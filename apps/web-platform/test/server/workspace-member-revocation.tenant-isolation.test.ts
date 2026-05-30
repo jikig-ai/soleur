@@ -35,6 +35,21 @@ import {
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
+// `bIatPre` is the second-precision `iat` of B's pre-removal JWT, set by
+// Supabase GoTrue's clock. `check_my_revocation` compares it (strict `>`)
+// against `workspace_member_removals.revoked_after`, set by the Postgres
+// clock. Those are two independently-NTP'd Supabase services: under the
+// concurrent load of the full `*.tenant-isolation.test.ts` run, the Postgres
+// clock can lag GoTrue's by more than the (~1-2s) mint→remove gap, making
+// `revoked_after <= floor(iat)` and flipping the positive-control assertion
+// to `revoked: false` (green in isolation, red under the full CI run — #4660
+// merge exposed it once byok ran to completion instead of failing fast).
+// Backdating the iat the positive-control probes pass models the realistic
+// "JWT issued well before removal" case and absorbs cross-service skew up to
+// this many seconds. The strict-`>` boundary itself stays covered by 3.2.3,
+// which derives both iat probes from the DB-written revoked_after (one clock).
+const PROBE_IAT_BACKDATE_SEC = 30;
+
 function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`[wm-revocation] ${name} is required`);
@@ -173,7 +188,12 @@ describe.skipIf(!INTEGRATION_ENABLED)(
 
       // B's pre-removal JWT should now be flagged revoked.
       const bClient = clientWithJwt(url, anonKey, bJwtPre);
-      const iatIso = new Date(bIatPre * 1000).toISOString();
+      // Backdate by the skew buffer so revoked_after (Postgres clock) is
+      // reliably > the probed iat regardless of GoTrue↔Postgres skew. See
+      // PROBE_IAT_BACKDATE_SEC.
+      const iatIso = new Date(
+        (bIatPre - PROBE_IAT_BACKDATE_SEC) * 1000,
+      ).toISOString();
       const { data: revoke, error: revokeErr } = await bClient.rpc(
         "check_my_revocation",
         { p_jwt_iat: iatIso },
@@ -195,7 +215,12 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // context, regardless of current_organization_id.
       const userB = fixtureX.members[1];
       const bClient = clientWithJwt(url, anonKey, bJwtPre);
-      const iatIso = new Date(bIatPre * 1000).toISOString();
+      // Backdate by the skew buffer so revoked_after (Postgres clock) is
+      // reliably > the probed iat regardless of GoTrue↔Postgres skew. See
+      // PROBE_IAT_BACKDATE_SEC.
+      const iatIso = new Date(
+        (bIatPre - PROBE_IAT_BACKDATE_SEC) * 1000,
+      ).toISOString();
       const { data: revoke } = await bClient.rpc("check_my_revocation", {
         p_jwt_iat: iatIso,
       });
