@@ -196,7 +196,7 @@ export function persistTurnCost(
             new ByokDelegationDailyCapError(delegation.delegationId),
             { feature: "byok-delegations", op: "daily-cap-exceeded", extra: baseExtra },
           );
-        } else if (message.includes("byok_delegations:cross_tenant")) {
+        } else if (message.includes("byok_delegations:cross_tenant:")) {
           // GDPR Art. 33 breach surface: the grantee used the grantor's BYOK
           // key from outside the grantor's workspace. Route to a DISTINCT op
           // tagged `art_33_breach=true` so the dedicated alert rule (#4364)
