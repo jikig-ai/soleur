@@ -7,6 +7,7 @@ import {
   isKnownProviderErrorCode,
 } from "@/lib/auth/provider-error-classifier";
 import { provisionWorkspace } from "@/server/workspace";
+import { safeReturnTo } from "@/lib/safe-return-to";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { NextResponse, type NextRequest } from "next/server";
 import * as Sentry from "@sentry/nextjs";
@@ -55,6 +56,12 @@ function noStoreRedirect(url: string): NextResponse {
 export async function GET(request: NextRequest) {
   const { searchParams, pathname } = new URL(request.url);
   const code = searchParams.get("code");
+  // Validated same-origin relative path to land on once the user is fully
+  // onboarded (e.g. /invite/<token> threaded through the OAuth round-trip by
+  // oauth-buttons). null when absent or rejected. This NEVER skips the
+  // /accept-terms, /setup-key, or /connect-repo gates below — it only
+  // overrides the terminal /dashboard hop.
+  const nextParam = safeReturnTo(searchParams.get("next"));
   const origin = resolveOrigin(
     request.headers.get("x-forwarded-host"),
     request.headers.get("x-forwarded-proto"),
@@ -252,17 +259,18 @@ export async function GET(request: NextRequest) {
         if (shouldRouteToSetupKey({ hasEffectiveKey, setupKeySkippedAt })) {
           redirectPath = "/setup-key";
         } else if (!hasEffectiveKey) {
-          // Keyless but skipped: go straight to the dashboard (where the
-          // NoApiKeyBanner explains the blocked state). Do NOT route into
-          // /connect-repo — repo setup auto-fires a headless sync agent that
-          // needs a key, which would orphan a stalled "active" conversation
-          // and show a misleading "ready" screen (#4642 review).
-          redirectPath = "/dashboard";
+          // Keyless but skipped: terminal hop — honor the invite next-param
+          // (#4641) else the dashboard (where the NoApiKeyBanner explains the
+          // blocked state). Do NOT route into /connect-repo — repo setup
+          // auto-fires a headless sync agent that needs a key, which would
+          // orphan a stalled "active" conversation and show a misleading
+          // "ready" screen (#4642 review).
+          redirectPath = nextParam ?? "/dashboard";
         } else {
           redirectPath =
             !repoUser || repoUser.repo_status === "not_connected"
               ? "/connect-repo"
-              : "/dashboard";
+              : (nextParam ?? "/dashboard");
         }
       }
 

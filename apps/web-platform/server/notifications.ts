@@ -13,6 +13,22 @@ import { APP_URL_FALLBACK, reportSilentFallback } from "@/server/observability";
 
 const log = createChildLogger("notifications");
 
+// Solar Forge email CTA palette — literal brand hex. Email clients do not
+// resolve the soleur-* CSS custom properties (brand-guide.md:195 component
+// "never raw hex" rule explicitly excepts email), so the gold tokens are
+// inlined here as the single source for all transactional-email CTAs.
+// Forge ink on gold is the only AA-passing pair (8.00:1→6.18:1); never white
+// on gold (brand-guide.md:213). Solid background-color is the load-bearing
+// base — clients that strip the gradient fall back to it.
+const BRAND_EMAIL_COLORS = {
+  ctaBackground: "#C9A962", // solid gold base (brand-guide.md:186,226)
+  ctaGradient: "linear-gradient(135deg, #D4B36A, #B8923E)", // capable-client layer (187/188)
+  ctaText: "#1A1612", // forge ink (210/213/245)
+} as const;
+
+/** Inline style for a branded gold email CTA `<a>` (sharp 0px corners). */
+const EMAIL_CTA_STYLE = `display: inline-block; padding: 12px 24px; background-color: ${BRAND_EMAIL_COLORS.ctaBackground}; background-image: ${BRAND_EMAIL_COLORS.ctaGradient}; color: ${BRAND_EMAIL_COLORS.ctaText}; text-decoration: none; border-radius: 0; font-weight: 600;`;
+
 export interface NotificationPayload {
   type: "review_gate";
   conversationId: string;
@@ -195,7 +211,9 @@ export async function sendEmailNotification(
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
         <h2 style="margin: 0 0 16px; font-size: 18px; color: #1a1a1a;">${escapeHtml(payload.agentName)} needs your input</h2>
         <p style="margin: 0 0 16px; color: #4a4a4a; line-height: 1.5;">${escapeHtml(payload.question)}</p>
-        <a href="${deepLink}" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 500;">Open conversation</a>
+        <div style="text-align: center; margin: 8px 0 0;">
+          <a href="${deepLink}" style="${EMAIL_CTA_STYLE}">Open conversation</a>
+        </div>
         <p style="margin: 24px 0 0; font-size: 12px; color: #9a9a9a;">You received this because an agent is waiting for your decision on Soleur.</p>
       </div>
     `,
@@ -291,7 +309,9 @@ export async function sendDsarExportReadyEmail(
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
         <h2 style="margin: 0 0 16px; font-size: 18px; color: #1a1a1a;">Your Soleur data export is ready</h2>
         <p style="margin: 0 0 16px; color: #4a4a4a; line-height: 1.5;">Your data export is ready to download. The link expires in 7 days (${escapeHtml(expiresAtUtc)}). The download link is single-use and bound to the device that requested it.</p>
-        <a href="${downloadUrl}" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 500;">Download my data</a>
+        <div style="text-align: center; margin: 8px 0 0;">
+          <a href="${downloadUrl}" style="${EMAIL_CTA_STYLE}">Download my data</a>
+        </div>
         <p style="margin: 24px 0 0; font-size: 12px; color: #9a9a9a;">You requested this export from /settings/privacy on Soleur. If you did not request it, contact legal@jikigai.com.</p>
       </div>
     `,
@@ -330,7 +350,9 @@ export async function sendDsarExportFailedEmail(
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
         <h2 style="margin: 0 0 16px; font-size: 18px; color: #1a1a1a;">Your Soleur data export could not be completed</h2>
         <p style="margin: 0 0 16px; color: #4a4a4a; line-height: 1.5;">${escapeHtml(userCopy)}</p>
-        <a href="${settingsUrl}" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 500;">Go to /settings/privacy</a>
+        <div style="text-align: center; margin: 8px 0 0;">
+          <a href="${settingsUrl}" style="${EMAIL_CTA_STYLE}">Go to /settings/privacy</a>
+        </div>
         <p style="margin: 24px 0 0; font-size: 12px; color: #9a9a9a;">You requested this export from /settings/privacy on Soleur. If the problem persists, contact legal@jikigai.com.</p>
       </div>
     `,
@@ -365,7 +387,9 @@ export async function sendInviteEmail(
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
         <h2 style="margin: 0 0 16px; font-size: 18px; color: #1a1a1a;">You've been invited to join ${escapeHtml(workspaceName)}</h2>
         <p style="margin: 0 0 16px; color: #4a4a4a; line-height: 1.5;">${escapeHtml(inviterName)} has invited you to join the <strong>${escapeHtml(workspaceName)}</strong> workspace on Soleur.</p>
-        <a href="${inviteUrl}" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 500;">Accept invitation</a>
+        <div style="text-align: center; margin: 8px 0 0;">
+          <a href="${inviteUrl}" style="${EMAIL_CTA_STYLE}">Accept invitation</a>
+        </div>
         <p style="margin: 24px 0 0; font-size: 12px; color: #9a9a9a;">This invitation expires in 7 days. If you weren't expecting this, you can ignore this email.</p>
       </div>
     `,
@@ -403,7 +427,9 @@ export async function sendInviteAcceptedEmail(
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
         <h2 style="margin: 0 0 16px; font-size: 18px; color: #1a1a1a;">${escapeHtml(accepterName)} has joined ${escapeHtml(workspaceName)}</h2>
         <p style="margin: 0 0 16px; color: #4a4a4a; line-height: 1.5;">Your invitation was accepted. ${escapeHtml(accepterName)} is now a member of <strong>${escapeHtml(workspaceName)}</strong>.</p>
-        <a href="${teamUrl}" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 500;">View team</a>
+        <div style="text-align: center; margin: 8px 0 0;">
+          <a href="${teamUrl}" style="${EMAIL_CTA_STYLE}">View team</a>
+        </div>
       </div>
     `,
   });

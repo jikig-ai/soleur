@@ -9,6 +9,8 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 const pushMock = vi.fn();
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: pushMock }),
+  // Sibling #4641 added invite redirectTo threading via useSearchParams.
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 import SetupKeyPage from "@/app/(auth)/setup-key/page";

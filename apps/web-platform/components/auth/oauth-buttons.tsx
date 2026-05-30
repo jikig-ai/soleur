@@ -1,9 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { reportSilentFallback } from "@/lib/client-observability";
-import { mapSupabaseError } from "@/lib/auth/error-messages";
+import { safeReturnTo } from "@/lib/safe-return-to";
+import {
+  type AuthErrorLike,
+  mapSupabaseAuthError,
+} from "@/lib/auth/error-messages";
 
 type Provider = "google" | "apple" | "github" | "azure";
 
@@ -61,37 +66,57 @@ const PROVIDERS: ProviderConfig[] = [
 ];
 
 export function OAuthButtons({ disabled = false }: { disabled?: boolean }) {
+  const searchParams = useSearchParams();
   const [loading, setLoading] = useState<Provider | null>(null);
   const [error, setError] = useState("");
+
+  // Thread a validated redirectTo (e.g. /invite/<token>) through the OAuth
+  // round-trip as `?next=`; the /callback route honors it as the terminal hop
+  // once the user is fully onboarded. Rejected/absent → no next param.
+  const nextParam = safeReturnTo(searchParams.get("redirectTo"));
 
   async function handleOAuth(provider: ProviderConfig) {
     setLoading(provider.id);
     setError("");
 
+    const callbackUrl = nextParam
+      ? `${window.location.origin}/callback?next=${encodeURIComponent(nextParam)}`
+      : `${window.location.origin}/callback`;
+
     const supabase = createClient();
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: provider.id,
-      options: {
-        redirectTo: `${window.location.origin}/callback`,
-        ...(provider.scopes && { scopes: provider.scopes }),
-      },
-    });
+    let error: AuthErrorLike | null = null;
+    try {
+      ({ error } = await supabase.auth.signInWithOAuth({
+        provider: provider.id,
+        options: {
+          redirectTo: callbackUrl,
+          ...(provider.scopes && { scopes: provider.scopes }),
+        },
+      }));
+    } catch (thrown) {
+      // Transport failure (fetch reject) before the redirect — route it
+      // through the same mapping layer for recoverable copy.
+      error = thrown as AuthErrorLike;
+    }
 
     if (error) {
       console.error("[auth] Supabase OAuth error:", error.message);
-      // Forward only typed enum fields — error.message can embed the user's
-      // email or other PII and Sentry is a shared project (cross-tenant
-      // exposure vector). Provider tag distinguishes Google/Apple/GitHub/Azure.
+      // Forward only typed enum/int fields in `extra` — error.message can embed
+      // the user's email or other PII and Sentry is a shared cross-tenant
+      // project. The raw error is captured via Sentry.captureException, so the
+      // message is scrubbed by sentry.client.config beforeSend, not omitted
+      // here. Provider tag distinguishes Google/Apple/GitHub/Azure.
       reportSilentFallback(error, {
         feature: "auth",
         op: "signInWithOAuth",
         extra: {
           provider: provider.id,
-          errorCode: (error as { code?: string }).code,
+          errorCode: error.code,
           errorName: error.name,
+          status: error.status,
         },
       });
-      setError(mapSupabaseError(error.message));
+      setError(mapSupabaseAuthError(error));
       setLoading(null);
     }
     // On success, the browser redirects — no state cleanup needed

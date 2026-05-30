@@ -65,6 +65,7 @@ For every review, you will verify:
 - [ ] CSRF protection enabled
 - [ ] Security headers properly configured
 - [ ] Error messages don't leak sensitive information
+- [ ] **Sentry/error-reporter PII: scrubbing the structured `extra` bag does NOT cover the `captureException` exception value.** When a helper forwards a raw `Error` to `Sentry.captureException(err)`, `err.message` ships as `event.exception.values[].value` regardless of how clean `extra` is — verify the global `beforeSend` chain scrubs message-borne PII (email, tokens) on every serialization surface (message, exception value, breadcrumb). A test asserting "never forwards error.message" that only inspects `extra` is a false-confidence signal. See `knowledge-base/project/learnings/security-issues/2026-05-29-sentry-extra-pii-discipline-does-not-cover-captureexception-value.md`.
 - [ ] Dependencies are up-to-date and vulnerability-free
 
 ## Reporting Protocol

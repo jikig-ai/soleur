@@ -57,7 +57,7 @@ export async function POST(request: Request) {
         ? 404
         : result.reason === "not_intended_invitee"
           ? 403
-          : result.reason === "already_accepted" || result.reason === "already_declined" || result.reason === "already_member"
+          : result.reason === "already_accepted" || result.reason === "already_declined" || result.reason === "already_member" || result.reason === "revoked"
             ? 409
             : 500;
     return NextResponse.json({ error: result.reason }, { status });

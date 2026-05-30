@@ -3,6 +3,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 import { TC_VERSION, TC_DOCUMENT_SHA } from "@/lib/legal/tc-version";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
+import { safeReturnTo } from "@/lib/safe-return-to";
 import * as Sentry from "@sentry/nextjs";
 import { reportSilentFallback } from "@/server/observability";
 import { hashUserIdValue } from "@/server/userid-pseudonymize";
@@ -18,6 +19,7 @@ import { shouldRouteToSetupKey } from "@/lib/onboarding/setup-key-gate";
 async function getRedirectDestination(
   supabase: SupabaseClient,
   userId: string,
+  nextHop: string | null,
 ): Promise<string> {
   const hasEffectiveKey = await userHasEffectiveByokKey(userId, {
     onErrorReturn: true,
@@ -30,9 +32,18 @@ async function getRedirectDestination(
   const setupKeySkippedAt =
     (row?.setup_key_skipped_at as string | null | undefined) ?? null;
 
-  return shouldRouteToSetupKey({ hasEffectiveKey, setupKeySkippedAt })
-    ? "/setup-key"
-    : "/dashboard";
+  // Onboarding gate (#4642): show /setup-key only when the user has no
+  // effective key (own valid key OR accepted delegation) AND has not chosen
+  // "Set up later". Thread the validated invite next-hop through it (#4641) so
+  // a brand-new invitee auto-returns to /invite/<token> AFTER onboarding
+  // (T&C recorded first, then key → repo → invite). A keyed OR skipped user
+  // honors the next hop directly, else lands on the dashboard.
+  if (shouldRouteToSetupKey({ hasEffectiveKey, setupKeySkippedAt })) {
+    return nextHop
+      ? `/setup-key?redirectTo=${encodeURIComponent(nextHop)}`
+      : "/setup-key";
+  }
+  return nextHop ?? "/dashboard";
 }
 
 export async function POST(request: Request) {
@@ -46,6 +57,18 @@ export async function POST(request: Request) {
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Optional post-acceptance destination, re-validated server-side against the
+  // open-redirect allowlist (never trust the client-supplied value).
+  let nextHop: string | null = null;
+  try {
+    const body = (await request.json()) as { redirectTo?: unknown };
+    if (typeof body?.redirectTo === "string") {
+      nextHop = safeReturnTo(body.redirectTo);
+    }
+  } catch {
+    // No/invalid JSON body — proceed with the default destination.
   }
 
   // Always delegate to the public.accept_terms RPC. Idempotency lives in
@@ -77,6 +100,6 @@ export async function POST(request: Request) {
     );
   }
 
-  const redirect = await getRedirectDestination(supabase, user.id);
+  const redirect = await getRedirectDestination(supabase, user.id, nextHop);
   return NextResponse.json({ ok: true, redirect });
 }
