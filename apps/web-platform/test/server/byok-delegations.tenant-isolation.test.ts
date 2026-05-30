@@ -39,6 +39,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { randomBytes, randomUUID } from "node:crypto";
+import { BYOK_SIDE_LETTER_VERSION } from "@/server/byok-side-letter";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -111,6 +112,30 @@ async function addMember(
     .from("workspace_members")
     .insert({ workspace_id: workspaceId, user_id: userId, role: "member" });
   expect(error, `addMember(${userId} → ${workspaceId})`).toBeNull();
+}
+
+// resolve_byok_key_owner Gate 1 (mig 083) only resolves a delegation if a
+// current-version acceptance row exists for the GRANTEE. Grant ≠ acceptance
+// by design (acceptance is the grantee's separate consent act), so the
+// grant→resolve ACs must seed it. Mirrors the canonical insert at
+// app/api/workspace/delegations/accept/route.ts via the service-role client
+// (the integration harness has no authenticated grantee session). user_id is
+// the GRANTEE (matches the resolver clause a.user_id = bd.grantee_user_id);
+// side_letter_version is imported (not hardcoded) so a future version bump
+// can't silently re-break this test with the same 0-rows signature.
+async function seedAcceptance(
+  service: SupabaseClient,
+  delegationId: string,
+  granteeUserId: string,
+): Promise<void> {
+  const { error } = await service
+    .from("byok_delegation_acceptances")
+    .insert({
+      user_id: granteeUserId,
+      delegation_id: delegationId,
+      side_letter_version: BYOK_SIDE_LETTER_VERSION,
+    });
+  expect(error, `seedAcceptance(${delegationId})`).toBeNull();
 }
 
 describe.skipIf(!INTEGRATION_ENABLED)(
@@ -255,6 +280,9 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       const delegationId = grantData as unknown as string;
       expect(delegationId).toBeTruthy();
 
+      // bob (grantee) must record consent before the resolver returns the row.
+      await seedAcceptance(service, delegationId, bob.id);
+
       const { data, error } = await service.rpc("resolve_byok_key_owner", {
         p_caller_user_id: bob.id,
         p_workspace_id: alice.workspaceId,
@@ -305,6 +333,10 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       });
       expect(grantC.error).toBeNull();
       const idC = grantC.data as unknown as string;
+
+      // dave (grantee) consents to BOTH delegations before resolving each.
+      await seedAcceptance(service, idA, dave.id);
+      await seedAcceptance(service, idC, dave.id);
 
       const inA = await service.rpc("resolve_byok_key_owner", {
         p_caller_user_id: dave.id,

@@ -103,12 +103,18 @@ export const APP_URL_FALLBACK = "https://app.soleur.ai";
  *   small (<1 KB each). Pino stdout-only values go here too.
  * - `message`: only used when `err` is not an `Error`. Defaults to
  *   `"<feature> silent fallback"`. Ignored when `err instanceof Error`.
+ * - `art33Breach`: when `true`, sets the `art_33_breach = "true"` Sentry tag.
+ *   Reserved for GDPR Art. 33 breach surfaces (e.g. a BYOK cross-tenant key
+ *   leak) so a dedicated alert rule can route the 72h-notification clock
+ *   distinctly from ordinary silent fallbacks (#4364). The SQL comment at
+ *   `064_byok_delegations.sql:197` designed this tag; this option wires it.
  */
 export interface SilentFallbackOptions {
   feature: string;
   op?: string;
   extra?: Record<string, unknown>;
   message?: string;
+  art33Breach?: boolean;
 }
 
 /**
@@ -165,9 +171,10 @@ export function reportSilentFallback(
   err: unknown,
   options: SilentFallbackOptions,
 ): void {
-  const { feature, op, extra, message } = options;
+  const { feature, op, extra, message, art33Breach } = options;
   const tags: Record<string, string> = { feature };
   if (op) tags.op = op;
+  if (art33Breach) tags.art_33_breach = "true";
 
   // Pseudonymize `userId` → `userIdHash` (Recital 26) at the emit boundary.
   // Centralized here so the 40+ call sites continue passing raw `userId` and
@@ -212,9 +219,10 @@ export function warnSilentFallback(
   err: unknown,
   options: SilentFallbackOptions,
 ): void {
-  const { feature, op, extra, message } = options;
+  const { feature, op, extra, message, art33Breach } = options;
   const tags: Record<string, string> = { feature };
   if (op) tags.op = op;
+  if (art33Breach) tags.art_33_breach = "true";
 
   // Pseudonymize `userId` → `userIdHash` at the emit boundary (see
   // reportSilentFallback for rationale).
@@ -426,6 +434,8 @@ export function __resetMirrorDebounceForTests(): void {
  * Callers:
  * - `cc-dispatcher.ts` — write-boundary sentinel (`assertWriteScope`),
  *   W4-orphan drop (`CC_OP_SLUGS.usageOrphanDropped`).
+ * - `cost-writer.ts` — BYOK Art. 33 cross-tenant key-leak breach
+ *   (`op="cross-tenant-violation"`, `feature`+`art33Breach` tags; #4656).
  *
  * Sentry retention (typically 30-90 days) does NOT satisfy Art. 33(5)'s
  * indefinite breach documentation requirement. A durable audit-log table
@@ -447,9 +457,31 @@ const _p0Dedup = new TtlDedupMap<string>(
 
 export function mirrorP0Deduped(
   err: Error,
-  ctx: { op: string; userId: string; conversationId: string },
+  ctx: {
+    op: string;
+    userId: string;
+    conversationId: string;
+    // #4656 items 2+3 — the BYOK Art. 33 breach path routes through this
+    // primitive; these tags also serve item-1's rule filter. The
+    // `byok_art_33_breach` Sentry rule (issue-alerts.tf) is
+    // `filter_match = "all"` on BOTH `feature=byok-delegations` AND
+    // `art_33_breach=true`, so BOTH tags must be present or the rule never
+    // fires. `feature` mirrors the `reportSilentFallback` tag vocabulary.
+    feature?: string;
+    art33Breach?: boolean;
+    // #4656 item 3 — cross-tenant-leak clock-anchor identifier carried into
+    // the Sentry `extra` alongside the inherited `first_seen_at`.
+    delegationId?: string;
+  },
 ): void {
   // Dedup key keeps raw `userId` — in-process map only, never emitted.
+  // For the BYOK cross-tenant path `userId` is the GRANTOR (the BYOK-key
+  // owner whose key leaked) — the correct Art. 33 data-subject anchor, not
+  // the offending grantee (`callerUserId`). Two grantees abusing the same
+  // grantor's key in the same conversation within the TTL coalesce to one
+  // page (same leaked key + same conversation = one incident; the clock has
+  // already started); the distinguishing `delegationId` is preserved in the
+  // Sentry `extra` for forensic attribution.
   const key = `${ctx.userId}:${ctx.op}:${ctx.conversationId}`;
   const now = Date.now();
   if (!_p0Dedup.tryClaim(key, now)) return;
@@ -463,19 +495,28 @@ export function mirrorP0Deduped(
     `p0 deduped mirror: ${ctx.op}`,
   );
 
+  const tags: Record<string, string> = {
+    op: ctx.op,
+    scope: "p0_deduped",
+    userIdHash,
+  };
+  if (ctx.feature) tags.feature = ctx.feature;
+  if (ctx.art33Breach) tags.art_33_breach = "true";
+
   // Sentry — fatal severity, bypasses `mirrorWithDebounce` 5-min window.
   // `first_seen_at` is the Art. 33(1) 72h-clock anchor.
   try {
     if (typeof Sentry.captureException === "function") {
       Sentry.captureException(err, {
         level: "fatal",
-        tags: { op: ctx.op, scope: "p0_deduped", userIdHash },
+        tags,
         extra: {
           op: ctx.op,
           userIdHash,
           conversationId: ctx.conversationId,
           severity: "breach_attempt",
           first_seen_at: new Date(now).toISOString(),
+          ...(ctx.delegationId ? { delegationId: ctx.delegationId } : {}),
         },
       });
     }

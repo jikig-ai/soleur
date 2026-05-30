@@ -23,7 +23,7 @@
 import { randomUUID } from "node:crypto";
 
 import { createServiceClient } from "@/lib/supabase/service";
-import { reportSilentFallback } from "@/server/observability";
+import { reportSilentFallback, mirrorP0Deduped } from "@/server/observability";
 import { sendToClient } from "@/server/ws-handler";
 import { createChildLogger } from "@/server/logger";
 import {
@@ -31,6 +31,7 @@ import {
   ByokDelegationExpiredError,
   ByokDelegationHourlyCapError,
   ByokDelegationDailyCapError,
+  ByokDelegationCrossTenantError,
 } from "./byok-resolver";
 
 const log = createChildLogger("cost-writer");
@@ -194,6 +195,37 @@ export function persistTurnCost(
           reportSilentFallback(
             new ByokDelegationDailyCapError(delegation.delegationId),
             { feature: "byok-delegations", op: "daily-cap-exceeded", extra: baseExtra },
+          );
+        } else if (message.includes("byok_delegations:cross-tenant:")) {
+          // GDPR Art. 33 breach surface: the grantee used the grantor's BYOK
+          // key from outside the grantor's workspace. Route through
+          // `mirrorP0Deduped` (#4656 items 2+3) — NOT `reportSilentFallback`:
+          //   - FATAL severity (a cross-tenant key leak is a breach, not a
+          //     degraded fallback) so it pages, not folds into noise. This is
+          //     the load-bearing distinction from `reportSilentFallback`, which
+          //     captures at default (error) severity with no clock anchor.
+          //   - `first_seen_at` + `severity=breach_attempt` clock anchor for the
+          //     Art. 33(1) 72h notification window (item 3), even when re-fires
+          //     within the 1h dedup window are suppressed.
+          //   - Pino mirror BEFORE the try/catch-guarded Sentry call, so a
+          //     swallowed/rate-limited Sentry capture still leaves a durable
+          //     stdout signal (item 2 — capture-swallow resilience).
+          // The `feature` + `art33Breach` options carry the two tags the
+          // `byok_art_33_breach` rule (#4364) filters on (filter_match="all"):
+          // `feature=byok-delegations` AND `art_33_breach=true`. Raise string is
+          // the HYPHEN form `byok_delegations:cross-tenant:` per mig 064
+          // L214/220/227 (sibling reasons use underscores; only cross-tenant is
+          // hyphenated in the migration).
+          mirrorP0Deduped(
+            new ByokDelegationCrossTenantError(delegation.delegationId),
+            {
+              op: "cross-tenant-violation",
+              userId,
+              conversationId,
+              delegationId: delegation.delegationId,
+              feature: "byok-delegations",
+              art33Breach: true,
+            },
           );
         } else {
           log.error(

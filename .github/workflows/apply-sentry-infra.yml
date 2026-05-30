@@ -6,10 +6,14 @@
 # the auto-apply allow-list in #4585 (previously operator-applied). See:
 #   knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md
 #
-# Authorization model: the PR merge IS the human authorization. Issue-alert
-# resources are excluded from this auto-apply (they are import-only per the
-# operator AC13 step in the plan); only cron-monitor and uptime-monitor
-# changes trigger an apply.
+# Authorization model: the PR merge IS the human authorization. The 4 AUTH
+# issue-alert resources are excluded from this auto-apply (they are
+# import-only per the operator AC13 step in the plan; a fresh apply would
+# 412). The 2 BYOK issue-alert resources (byok_art_33_breach,
+# byok_cap_exceeded, #4364) ARE included — they are apply-created (no
+# pre-existing Sentry rule to import) and named in the -target set below.
+# So: cron-monitor, uptime-monitor, and BYOK issue-alert changes trigger an
+# apply; the auth issue-alert rules never do.
 #
 # Kill switch: include `[skip-sentry-apply]` in the merge commit message to
 # skip auto-apply for that merge.
@@ -41,6 +45,7 @@ on:
     paths:
       - "apps/web-platform/infra/sentry/cron-monitors.tf"
       - "apps/web-platform/infra/sentry/uptime-monitors.tf"
+      - "apps/web-platform/infra/sentry/issue-alerts.tf"
       # Defense-in-depth: re-fire on filter mutations so a PR that mutates
       # the destroy-guard filter without touching infra still runs the
       # apply step against `main`'s captured baseline (#4419).
@@ -201,6 +206,8 @@ jobs:
             -target=sentry_uptime_monitor.soleur_www \
             -target=sentry_uptime_monitor.soleur_changelog_deep \
             -target=sentry_uptime_monitor.soleur_acme_probe \
+            -target=sentry_issue_alert.byok_art_33_breach \
+            -target=sentry_issue_alert.byok_cap_exceeded \
             -no-color -input=false -out=tfplan
           rc=$?
           if [[ $rc -ne 0 ]]; then
@@ -252,6 +259,23 @@ jobs:
         run: |
           set -euo pipefail
           terraform apply -auto-approve -input=false tfplan
+
+      - name: BYOK Art.33 detector liveness assertion (#4656 item 5)
+        # Read-only post-apply check: assert both BYOK issue-alert rules
+        # (byok-art-33-breach, byok-cap-exceeded) exist in Sentry by name. A
+        # silent mis-wire (dropped -target, deleted/muted rule, name drift)
+        # would leave the GDPR Art.33 control un-paged until a real breach.
+        # Emits NO synthetic breach event (plan D2). Fail-closed: a non-zero
+        # exit halts the workflow and surfaces a GitHub Actions failure.
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+          SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+        run: |
+          set -euo pipefail
+          which jq >/dev/null 2>&1 || sudo apt-get install -y jq
+          bash apps/web-platform/scripts/assert-byok-rules-exist.sh
 
       - name: Post-apply summary
         if: always()

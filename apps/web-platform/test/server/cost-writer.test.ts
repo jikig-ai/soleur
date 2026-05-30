@@ -9,7 +9,13 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const { rpcSpy, sendToClientSpy } = vi.hoisted(() => ({
   rpcSpy: vi.fn(
-    async (_name: string, _args: Record<string, unknown>) => ({ error: null }),
+    // Return type widened to the error union so per-test mockImplementation
+    // can return an RPC error (e.g. the cross-tenant P0001 path) without
+    // tripping TS2345 — the default value stays { error: null } (#4364).
+    async (
+      _name: string,
+      _args: Record<string, unknown>,
+    ): Promise<{ error: null | { message: string } }> => ({ error: null }),
   ),
   sendToClientSpy: vi.fn(
     (_userId: string, _msg: Record<string, unknown>) => true,
@@ -22,6 +28,7 @@ vi.mock("@/lib/supabase/service", () => ({
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
+  mirrorP0Deduped: vi.fn(),
 }));
 
 vi.mock("@/server/ws-handler", () => ({
@@ -37,6 +44,8 @@ vi.mock("@/server/logger", () => ({
 }));
 
 import { persistTurnCost } from "@/server/cost-writer";
+import { reportSilentFallback, mirrorP0Deduped } from "@/server/observability";
+import { ByokDelegationCrossTenantError } from "@/server/byok-resolver";
 
 const USER = "550e8400-e29b-41d4-a716-446655440000";
 const WORKSPACE = "660e8400-e29b-41d4-a716-446655440111";
@@ -117,5 +126,78 @@ describe("persistTurnCost — workspace_id wiring (Phase 3)", () => {
       conversationId: CONV,
       workspaceId: WORKSPACE,
     });
+  });
+});
+
+describe("persistTurnCost — cross-tenant Art.33 emission (#4364, hardened #4656)", () => {
+  it("routes byok_delegations:cross-tenant through mirrorP0Deduped (fatal, recurrence-resilient, clock-anchored)", async () => {
+    const p0Mock = vi.mocked(mirrorP0Deduped);
+    const reportMock = vi.mocked(reportSilentFallback);
+    p0Mock.mockClear();
+    reportMock.mockClear();
+    // The migration-064 trigger raises the HYPHEN form on the cross-tenant
+    // path. cost-writer must route it through `mirrorP0Deduped` (#4656 items
+    // 2+3): fatal severity, no 5-min debounce, and `first_seen_at` clock
+    // anchor — NEVER the `reportSilentFallback` path (capture-swallowed, no
+    // clock anchor) and never the merged-rpc-failure catch-all. The
+    // `feature` + `art33Breach` options carry the two tags the
+    // `byok_art_33_breach` rule filters on (filter_match="all").
+    rpcSpy.mockImplementation(
+      async (
+        name: string,
+        _args: Record<string, unknown>,
+      ): Promise<{ error: null | { message: string } }> => {
+        if (name === "check_and_record_byok_delegation_use") {
+          return {
+            error: {
+              message:
+                "byok_delegations:cross-tenant: grantee g-1 is not a member of workspace ws-1",
+            },
+          };
+        }
+        return { error: null };
+      },
+    );
+    persistTurnCost(
+      USER,
+      CONV,
+      "cpo",
+      WORKSPACE,
+      {
+        totalCostUsd: 0.02,
+        usage: {
+          input_tokens: 10,
+          output_tokens: 5,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
+      },
+      { delegationId: "deadbeef", callerUserId: "g-1" },
+    );
+    await new Promise((r) => setImmediate(r));
+
+    expect(p0Mock).toHaveBeenCalledTimes(1);
+    const [errArg, ctx] = p0Mock.mock.calls[0];
+    expect(errArg).toBeInstanceOf(ByokDelegationCrossTenantError);
+    expect(ctx).toMatchObject({
+      op: "cross-tenant-violation",
+      userId: USER,
+      conversationId: CONV,
+      delegationId: "deadbeef",
+      feature: "byok-delegations",
+      art33Breach: true,
+    });
+
+    // Must NOT route through reportSilentFallback for the cross-tenant op
+    // (capture-swallow + no clock anchor was the #4656 item-2/3 gap), and must
+    // NOT fall through to the merged-rpc-failure catch-all.
+    const crossTenantViaFallback = reportMock.mock.calls.find(
+      (c) => (c[1] as { op?: string })?.op === "cross-tenant-violation",
+    );
+    expect(crossTenantViaFallback).toBeFalsy();
+    const fallback = reportMock.mock.calls.find(
+      (c) => (c[1] as { op?: string })?.op === "merged-rpc-failure",
+    );
+    expect(fallback).toBeFalsy();
   });
 });

@@ -221,6 +221,18 @@ attrs scalar; `assertion_json` is a function-built string), so the
 destroy-guard's `nested_deletes: 0` posture stays correct without a per-type
 jq clause. `sentry_issue_alert.*` remains import-only.
 
+**Amendment (2026-05-30, #4656):** two BYOK Art. 33 hardening notes.
+(1) `sentry_issue_alert.byok_art_33_breach` now uses `action_match = "any"` over
+three event-lifecycle conditions (`first_seen_event` + `reappeared_event` +
+`regression_event`) — the **only** rule in `issue-alerts.tf` using `"any"` (the
+6 others use `"all"`); required because the three lifecycle states are
+mutually-exclusive, so `"all"` would be unsatisfiable. (2) A read-only
+post-apply liveness control (`apps/web-platform/scripts/assert-byok-rules-exist.sh`)
+asserts both BYOK rules exist in Sentry by name after every apply, fail-closed.
+It is deliberately existence-by-name (not filter-shape): the filters are
+TF-owned and re-asserted on each apply, so a post-apply existence check is the
+minimal sufficient signal for the apply-time mis-wire failure mode.
+
 ## Consequences
 
 ### Positive

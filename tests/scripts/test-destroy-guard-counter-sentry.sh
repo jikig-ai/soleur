@@ -164,11 +164,25 @@ t_ack_destroy_substring_rejected() {
   fi
 }
 
+# T6 (#4364): an UPDATE on sentry_issue_alert that removes one filters_v2 block
+# (2 -> 1) is a nested-block delete that resource_deletes cannot see. The
+# sentry_issue_alert nested-clause must count it (rdel=0 ndel=1 dcount=1 rc=1).
+# Pins that the BYOK apply-created rules' array-of-blocks shrink trips the guard.
+t_issue_alert_nested_delete_trips() {
+  local out; out=$(_run_gate "$FIXTURES/tfplan-sentry-issue-alert-nested-delete.json" "feat: narrow byok alert filter")
+  if [[ "$out" == "0:1:1:1" ]]; then
+    _report "T6 sentry_issue_alert filters_v2 shrink trips nested guard (rdel=0 ndel=1 dcount=1 rc=1)" ok
+  else
+    _report "T6 sentry_issue_alert filters_v2 shrink trips nested guard" fail "got '$out' want '0:1:1:1'"
+  fi
+}
+
 t_resource_delete_trips
 t_no_changes_passes
 t_ack_destroy_allows_resource_delete
 t_real_baseline_zero
 t_ack_destroy_substring_rejected
+t_issue_alert_nested_delete_trips
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]
