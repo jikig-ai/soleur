@@ -12,25 +12,27 @@ related_issues: ["#4364", "#4232"]
 **Status:** Deepened
 **Author:** soleur:plan + soleur:deepen-plan (one-shot)
 **Issue:** #4364 (de-deferred; original deferral premise invalid)
-**Supersedes:** `knowledge-base/project/plans/2026-05-27-sentry-byok-alert-rules.md` (DEFERRED skeleton, if present)
 
 ## Problem Statement
 
 PR-A (#4290, MERGED) shipped `byok-delegations` observability events to Sentry.
-The emitter lives at **`apps/web-platform/lib/byok/delegation-events.ts`** (NOT
-`src/lib/observability/...` — this repo has no `src/` tree; the original issue
-body and the one-shot brief both cite the wrong path). It emits a Sentry event on
-every cross-tenant / revoke-grace / cap-exceeded / expiry path, carrying these
-**tags** (set via `scope.setTag(...)`, lines 27-35 — verified this session):
+The emitter is **`emitDelegationEvent(...)` in `apps/web-platform/server/cost-writer.ts`**
+(lines 131-160 — verified this session; NOT `src/lib/observability/...` — this
+repo has no `src/` tree, and the issue body + one-shot brief both cite a wrong
+path). It emits a Sentry event on every cross-tenant / cap-exceeded path,
+carrying these **tags** (set via `scope.setTag(...)`):
 
-- `feature = "byok-delegations"` (constant `BYOK_DELEGATION_FEATURE`, every event)
-- `op = cross-tenant-violation | revoke-past-grace | hourly-cap-exceeded | daily-cap-exceeded | expired`
-  (`BYOK_DELEGATION_OP`, lines 20-25)
-- `art_33_breach = "true"` (string, set ONLY on `cross-tenant-violation`, line 35)
+- `feature = "byok-delegations"` (cost-writer.ts:136, every event)
+- `op = cross-tenant-violation | hourly-cap-exceeded | daily-cap-exceeded | …`
+  (cost-writer.ts:137)
+- `art_33_breach = "true"` (string, set ONLY on `op === "cross-tenant-violation"`,
+  cost-writer.ts:140-141)
 
-Levels (`scope.setLevel`, line 38): cross-tenant-violation → `fatal`;
-revoke-past-grace / hourly-cap-exceeded / daily-cap-exceeded → `warning`;
-expired → `info`.
+Levels (`scope.setLevel`, cost-writer.ts:142-146): cross-tenant-violation →
+`fatal`; hourly-cap-exceeded / daily-cap-exceeded → `warning`; else → `info`.
+The function docstring (cost-writer.ts:123-130) explicitly says it is tagged
+"so the Sentry alert rules from issue #4364 can route on them" — confirming this
+plan is the intended consumer.
 
 There are **no alert rules** routing those events to a human. A cross-tenant
 violation starts the GDPR Art. 33 72-hour breach-notification clock, yet today
@@ -39,10 +41,10 @@ observability gap (`hr-observability-as-plan-quality-gate`) and a compliance gap
 (`hr-gdpr-gate-on-regulated-data-surfaces`).
 
 The issue's original deferral (Sentry alert actions are "UI-only" / "no Sentry
-MCP server") was **invalidated** by the maintainer comment 2026-05-30 and by
-learning `2026-05-14-sentry-mcp-alert-rule.md`: Sentry issue-alerts are fully
-API-settable (conditions + filters + actions). The re-eval trigger (PR-B #4508
-merged) is satisfied.
+MCP server") was **invalidated** by the maintainer comment 2026-05-30: Sentry
+issue-alerts are fully API-settable (conditions + filters + actions), which the
+existing terraform root already proves (the 4 auth `sentry_issue_alert`
+resources). The re-eval trigger (PR-B #4508 merged) is satisfied.
 
 ## Research Reconciliation — Brief vs. Codebase
 
@@ -136,8 +138,9 @@ pattern: the canonical form is `sentry_issue_alert` in this file.**
 | Terraform sentry root exists; `sentry_issue_alert` is the resource type | `apps/web-platform/infra/sentry/issue-alerts.tf` | yes |
 | Provider `jianyuan/sentry` pinned `0.15.0-beta2` | `versions.tf` + `.terraform.lock.hcl` | yes |
 | Org/project via `var.sentry_org` / `data.sentry_project.web_platform.slug`; EU host | `main.tf`, `variables.tf` | yes |
-| Tag keys/values `feature`/`op`/`art_33_breach` and exact literals | `lib/byok/delegation-events.ts:18-35` | yes |
-| Tags emitted via `scope.setTag` (→ matchable by TaggedEventFilter) | `delegation-events.ts:27,28,35` | yes |
+| Tag keys/values `feature`/`op`/`art_33_breach` and exact literals | `server/cost-writer.ts:136-141` | yes |
+| Tags emitted via `scope.setTag` (→ matchable by TaggedEventFilter) | `server/cost-writer.ts:136,137,141` | yes |
+| Create-time POST dedup keys on action-shape+frequency+match, not conditions | learning `2026-05-17-sentry-issue-alert-create-dedup-on-action-match-not-conditions.md` | yes |
 | Existing rule frequencies 60/61/62/30 (must avoid for dedup) | `issue-alerts.tf` | yes |
 | Auth token = GitHub repo secret, NOT Doppler | `infra/sentry/README.md` §Authentication | yes |
 | Auto-apply workflow exists; issue-alerts currently `-target`-excluded | `.github/workflows/apply-sentry-infra.yml` | yes |

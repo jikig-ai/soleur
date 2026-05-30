@@ -32,7 +32,8 @@ terraform IaC root `apps/web-platform/infra/sentry/` — do NOT write a TS scrip
 - [ ] 1.2 Add `sentry_issue_alert.byok_cap_exceeded` to `issue-alerts.tf`:
       `feature = byok-delegations` AND `op IN {hourly-cap-exceeded,
       daily-cap-exceeded}`; `frequency = 15`; lower-urgency action; CREATE.
-- [ ] 1.3 Verify tag literals against `apps/web-platform/lib/byok/delegation-events.ts:18-35`.
+- [ ] 1.3 Verify tag literals against `apps/web-platform/server/cost-writer.ts:136-146`
+      (`emitDelegationEvent`: feature/op/art_33_breach setTag + fatal/warning/info levels).
 
 ## Phase 2 — Wire the apply workflow
 
