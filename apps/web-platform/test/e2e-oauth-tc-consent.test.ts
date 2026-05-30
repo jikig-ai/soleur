@@ -35,6 +35,7 @@ const {
   mockServiceRpc,
   mockReportSilentFallback,
   mockValidateOrigin,
+  mockUserHasEffectiveByokKey,
 } = vi.hoisted(() => ({
   mockExchangeCodeForSession: vi.fn(),
   mockGetUser: vi.fn(),
@@ -44,6 +45,11 @@ const {
   mockServiceRpc: vi.fn(),
   mockReportSilentFallback: vi.fn(),
   mockValidateOrigin: vi.fn(() => ({ valid: true, origin: "https://app.soleur.ai" })),
+  mockUserHasEffectiveByokKey: vi.fn(),
+}));
+
+vi.mock("@/server/byok-resolver", () => ({
+  userHasEffectiveByokKey: mockUserHasEffectiveByokKey,
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -155,10 +161,24 @@ function stubServiceUsersSelect(tcVersion: string | null): void {
   });
 }
 
+// Stub the accept-terms session client's users SELECT for setup_key_skipped_at
+// (getRedirectDestination reads the skip flag via the session client). Non
+// "api_keys" tables route to mockUserFromAcceptTerms via the `from` dispatch.
+function stubAcceptTermsSkipFlag(skippedAt: string | null): void {
+  const maybeSingle = vi
+    .fn()
+    .mockResolvedValue({ data: { setup_key_skipped_at: skippedAt }, error: null });
+  const eq = vi.fn().mockReturnValue({ maybeSingle });
+  mockUserFromAcceptTerms.mockReturnValue({
+    select: vi.fn().mockReturnValue({ eq }),
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockValidateOrigin.mockReturnValue({ valid: true, origin: "https://app.soleur.ai" });
   mockServiceRpc.mockResolvedValue({ data: null, error: null });
+  mockUserHasEffectiveByokKey.mockResolvedValue(true);
 });
 
 describe("E2E: OAuth → /accept-terms → RPC (AC9)", () => {
@@ -182,14 +202,8 @@ describe("E2E: OAuth → /accept-terms → RPC (AC9)", () => {
       data: { user: { id: USER_ID, email: "u@example.com" } },
     });
 
-    // user-scoped client's api_keys SELECT for getRedirectDestination.
-    const limit = vi.fn().mockResolvedValue({ data: [{ id: "k1" }], error: null });
-    const eq3 = vi.fn().mockReturnValue({ limit });
-    const eq2 = vi.fn().mockReturnValue({ eq: eq3 });
-    const eq1 = vi.fn().mockReturnValue({ eq: eq2 });
-    mockUserFromCallback.mockReturnValue({
-      select: vi.fn().mockReturnValue({ eq: eq1 }),
-    });
+    // session client's users SELECT for the skip flag in getRedirectDestination.
+    stubAcceptTermsSkipFlag(null);
 
     const res = await acceptTermsPOST(makeAcceptTermsRequest());
 
@@ -220,13 +234,7 @@ describe("E2E: OAuth → /accept-terms → RPC (AC9)", () => {
     expect(new URL(cbRes.headers.get("location")!).pathname).toBe("/accept-terms");
 
     // (2) user clicks "I agree" → POST /api/accept-terms
-    const limit = vi.fn().mockResolvedValue({ data: [{ id: "k1" }], error: null });
-    const eq3 = vi.fn().mockReturnValue({ limit });
-    const eq2 = vi.fn().mockReturnValue({ eq: eq3 });
-    const eq1 = vi.fn().mockReturnValue({ eq: eq2 });
-    mockUserFromCallback.mockReturnValue({
-      select: vi.fn().mockReturnValue({ eq: eq1 }),
-    });
+    stubAcceptTermsSkipFlag(null);
 
     const atRes = await acceptTermsPOST(makeAcceptTermsRequest());
     expect(atRes.status).toBe(200);

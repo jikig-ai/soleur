@@ -6,20 +6,33 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import * as Sentry from "@sentry/nextjs";
 import { reportSilentFallback } from "@/server/observability";
 import { hashUserIdValue } from "@/server/userid-pseudonymize";
+import { userHasEffectiveByokKey } from "@/server/byok-resolver";
+import { shouldRouteToSetupKey } from "@/lib/onboarding/setup-key-gate";
 
+// Delegation+skip-aware (#4642). Effective-key = own valid key OR accepted
+// delegation; `onErrorReturn: true` fails OPEN so a transient resolver error
+// never traps a possibly-delegated user at /setup-key (chat-time enforcement
+// is authoritative). The skip flag honors an explicit "Set up later" — read
+// via the session client (RLS owner-SELECT) so the service client stays
+// confined to the RPC consent write.
 async function getRedirectDestination(
   supabase: SupabaseClient,
   userId: string,
 ): Promise<string> {
-  const { data: keys } = await supabase
-    .from("api_keys")
-    .select("id")
-    .eq("user_id", userId)
-    .eq("provider", "anthropic")
-    .eq("is_valid", true)
-    .limit(1);
+  const hasEffectiveKey = await userHasEffectiveByokKey(userId, {
+    onErrorReturn: true,
+  });
+  const { data: row } = await supabase
+    .from("users")
+    .select("setup_key_skipped_at")
+    .eq("id", userId)
+    .maybeSingle();
+  const setupKeySkippedAt =
+    (row?.setup_key_skipped_at as string | null | undefined) ?? null;
 
-  return !keys || keys.length === 0 ? "/setup-key" : "/dashboard";
+  return shouldRouteToSetupKey({ hasEffectiveKey, setupKeySkippedAt })
+    ? "/setup-key"
+    : "/dashboard";
 }
 
 export async function POST(request: Request) {
