@@ -103,12 +103,18 @@ export const APP_URL_FALLBACK = "https://app.soleur.ai";
  *   small (<1 KB each). Pino stdout-only values go here too.
  * - `message`: only used when `err` is not an `Error`. Defaults to
  *   `"<feature> silent fallback"`. Ignored when `err instanceof Error`.
+ * - `art33Breach`: when `true`, sets the `art_33_breach = "true"` Sentry tag.
+ *   Reserved for GDPR Art. 33 breach surfaces (e.g. a BYOK cross-tenant key
+ *   leak) so a dedicated alert rule can route the 72h-notification clock
+ *   distinctly from ordinary silent fallbacks (#4364). The SQL comment at
+ *   `064_byok_delegations.sql:197` designed this tag; this option wires it.
  */
 export interface SilentFallbackOptions {
   feature: string;
   op?: string;
   extra?: Record<string, unknown>;
   message?: string;
+  art33Breach?: boolean;
 }
 
 /**
@@ -165,9 +171,10 @@ export function reportSilentFallback(
   err: unknown,
   options: SilentFallbackOptions,
 ): void {
-  const { feature, op, extra, message } = options;
+  const { feature, op, extra, message, art33Breach } = options;
   const tags: Record<string, string> = { feature };
   if (op) tags.op = op;
+  if (art33Breach) tags.art_33_breach = "true";
 
   // Pseudonymize `userId` → `userIdHash` (Recital 26) at the emit boundary.
   // Centralized here so the 40+ call sites continue passing raw `userId` and
@@ -212,9 +219,10 @@ export function warnSilentFallback(
   err: unknown,
   options: SilentFallbackOptions,
 ): void {
-  const { feature, op, extra, message } = options;
+  const { feature, op, extra, message, art33Breach } = options;
   const tags: Record<string, string> = { feature };
   if (op) tags.op = op;
+  if (art33Breach) tags.art_33_breach = "true";
 
   // Pseudonymize `userId` → `userIdHash` at the emit boundary (see
   // reportSilentFallback for rationale).
