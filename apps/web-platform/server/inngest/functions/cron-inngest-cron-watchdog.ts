@@ -16,11 +16,19 @@
 // self-restores — no operator SSH (never-defer-operator-actions,
 // hr-no-ssh-fallback-in-runbooks).
 //
-// RE-SYNC ASYMMETRY (verified vs inngest-bootstrap.sh:147 — ExecStart sets
-// no --poll-interval / --sdk-url): function discovery is bound to container
-// restart, not polling. So H9a (dropped) genuinely needs a restart/redeploy
-// to re-sync; H9b (de-planned) is recoverable by a manual-trigger event
-// alone. The two heal paths below map exactly to this asymmetry.
+// POLLING + BACKSTOP MODEL (#4652): inngest-bootstrap.sh ExecStart now sets
+// --poll-interval 60 --sdk-url http://127.0.0.1:3000/api/inngest, so the
+// server continuously re-syncs AND re-plans functions from the app's serve
+// manifest within <=60s — WITHOUT a restart. This watchdog is therefore a
+// BACKSTOP + ALERTING layer, not the primary repair:
+//   - It ALWAYS pages (ok=false Sentry heartbeat) on any MISSING/UNPLANNED.
+//   - H9b (de-planned): it fires a manual-trigger as a LATENCY OPTIMIZATION
+//     (restores the missed check-in immediately rather than waiting up to one
+//     poll interval); polling re-plans the cron within <=60s regardless.
+//   - It restarts inngest-server ONLY as a guarded backstop, after a function
+//     stays defective (MISSING ∪ UNPLANNED) for POLL_RECOVERY_GRACE_TICKS
+//     consecutive ticks — i.e. polling has demonstrably FAILED to recover it
+//     (app /api/inngest down, poll loop wedged) — and the cooldown permits it.
 //
 // ADR-033 invariants:
 //   I1 — All outbound IO (loopback fetch, inngest.send, webhook POST,
@@ -29,8 +37,9 @@
 //   I5 — Deterministic step.run return shapes (plain JSON).
 //
 // The watchdog rides the substrate it monitors (Sharp Edge): a full-substrate
-// H9a can drop the watchdog itself — defended by (a) restart re-syncs ALL
-// functions including this one, (b) its own Sentry monitor
+// H9a can drop the watchdog itself — defended by (a) --poll-interval re-syncs
+// ALL functions including this one within <=60s (the backstop restart also
+// re-syncs everything), (b) its own Sentry monitor
 // (scheduled-inngest-cron-watchdog) flips to missed if it stops firing.
 
 import { createHmac } from "node:crypto";
@@ -58,19 +67,21 @@ const SENTRY_MONITOR_SLUG = "scheduled-inngest-cron-watchdog";
 // production run blocks). Parity-tested in cron-inngest-cron-watchdog.test.ts.
 const INNGEST_HOST_FALLBACK = "http://host.docker.internal:8288";
 
-// Restart cooldown: must exceed the watchdog cron interval (4h) so two
-// consecutive H9a ticks do not restart-loop (AC6). 6h → at most ~1 restart
-// per 6h for a persistent H9a; the ok=false Sentry heartbeat keeps paging
-// in between.
+// Restart cooldown (defense-in-depth on the backstop): must exceed the
+// watchdog cron interval (4h) so two consecutive escalated ticks do not
+// restart-loop (AC6). 6h → at most ~1 restart per 6h for a persistent defect;
+// the ok=false Sentry heartbeat keeps paging in between.
 export const RESTART_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 
-// Escalate a persistent H9b (cron de-planned) to the H9a restart path after
-// this many CONSECUTIVE watchdog ticks still find the function UNPLANNED. A
-// manual-trigger re-runs the handler but does NOT re-plan the cron schedule
-// (Sharp Edge); only a restart re-plans it. Threshold 2 → ~8h of de-planned
-// state before a restart is initiated (the manual-trigger keeps the function
-// executing every 4h in the meantime, so the monitor does not go silent).
-export const UNPLANNED_RESTART_THRESHOLD = 2;
+// Backstop grace window (#4652). With --poll-interval 60 the server re-syncs
+// AND re-plans a dropped/de-planned function within <=60s automatically, so the
+// watchdog no longer restarts on the first defective tick. It restarts only
+// after a function stays defective (MISSING ∪ UNPLANNED) for this many
+// CONSECUTIVE watchdog ticks — evidence that polling has FAILED to recover it
+// (e.g. the app /api/inngest route is down or the poll loop is wedged). At the
+// 4h cadence, 2 ticks → ~8h of persistent defect despite 60s polling before a
+// backstop restart is initiated; the ok=false heartbeat pages the whole time.
+export const POLL_RECOVERY_GRACE_TICKS = 2;
 
 // State persisted to the container-local filesystem (NOT a host bind-mount —
 // only /mnt/data/workspaces and /mnt/data/plugins are mounted into this
@@ -157,12 +168,13 @@ export interface HealPlan {
   defectCount: number;
 }
 
-// Persisted watchdog state (container-local file). `unplannedStreaks` tracks
-// consecutive-tick UNPLANNED counts per fnId so a persistent H9b escalates to
-// a restart (UNPLANNED_RESTART_THRESHOLD).
+// Persisted watchdog state (container-local file). `defect_streaks` tracks
+// consecutive-tick DEFECT counts per fnId (MISSING ∪ UNPLANNED) so a defect
+// that polling fails to recover escalates to the backstop restart after
+// POLL_RECOVERY_GRACE_TICKS ticks.
 export interface WatchdogState {
   last_restart_at?: string;
-  unplanned_streaks?: Record<string, number>;
+  defect_streaks?: Record<string, number>;
 }
 
 // =============================================================================
@@ -220,26 +232,28 @@ export function planHeal(results: ClassifyResult[]): HealPlan {
   };
 }
 
-// Advance the per-fnId consecutive-UNPLANNED streaks: increment each currently
-// UNPLANNED fnId, and DROP any fnId no longer UNPLANNED (so a recovered cron
-// resets to zero rather than lingering). Pure → unit-tested.
-export function nextUnplannedStreaks(
+// Advance the per-fnId consecutive-DEFECT streaks (defect = MISSING ∪
+// UNPLANNED): increment each currently-defective fnId, and DROP any fnId no
+// longer defective (so a poll-recovered cron resets to zero rather than
+// lingering). Pure → unit-tested.
+export function nextDefectStreaks(
   prev: Record<string, number> | undefined,
-  unplannedFnIds: string[],
+  defectFnIds: string[],
 ): Record<string, number> {
   const next: Record<string, number> = {};
-  for (const fnId of unplannedFnIds) {
+  for (const fnId of defectFnIds) {
     next[fnId] = (prev?.[fnId] ?? 0) + 1;
   }
   return next;
 }
 
-// fnIds whose UNPLANNED streak has reached the escalation threshold — these
-// get routed to the restart path (a restart re-plans the cron trigger that a
-// manual-trigger alone cannot).
-export function escalatedUnplannedFnIds(
+// fnIds whose DEFECT streak has reached the backstop grace threshold — these
+// get routed to the restart path because polling has had
+// POLL_RECOVERY_GRACE_TICKS intervals to re-sync/re-plan them and FAILED. A
+// restart re-syncs (H9a) and re-plans (H9b) every function.
+export function escalatedDefectFnIds(
   streaks: Record<string, number>,
-  threshold: number = UNPLANNED_RESTART_THRESHOLD,
+  threshold: number = POLL_RECOVERY_GRACE_TICKS,
 ): string[] {
   return Object.keys(streaks).filter((fnId) => streaks[fnId] >= threshold);
 }
@@ -256,9 +270,11 @@ export function restartAllowed(
   return now - last >= RESTART_COOLDOWN_MS;
 }
 
-// A restart is warranted when at least one function needs the restart path
-// (H9a MISSING, or an H9b UNPLANNED that has escalated past the streak
-// threshold) AND the cooldown permits it.
+// A restart is warranted when at least one function has escalated to the
+// backstop — i.e. it stayed defective (MISSING ∪ UNPLANNED) for
+// POLL_RECOVERY_GRACE_TICKS consecutive ticks despite polling (#4652) — AND
+// the cooldown permits it. `restartFnIds` is the already-escalated set
+// (`escalatedDefectFnIds`); MISSING no longer bypasses the streak gate.
 export function shouldRestart(
   restartFnIds: string[],
   lastRestartAtIso: string | null,
@@ -271,7 +287,10 @@ export function shouldRestart(
 // IO helpers
 // =============================================================================
 
-async function fetchRegistry(host: string): Promise<RegistryFunction[]> {
+// Exported for reuse by oneshot-4650-monitor-close.ts (#4654) — the canonical
+// registry read. Auth via INNGEST_SIGNING_KEY (already in the container env;
+// route.ts throws at load if absent). No new credential.
+export async function fetchRegistry(host: string): Promise<RegistryFunction[]> {
   const signingKey = process.env.INNGEST_SIGNING_KEY;
   const res = await fetch(`${host}/v1/functions`, {
     headers: signingKey ? { Authorization: `Bearer ${signingKey}` } : {},
@@ -407,10 +426,12 @@ export async function cronInngestCronWatchdogHandler({
   const plan = planHeal(results);
 
   // Step 2: heal H9b (UNPLANNED) — fire each manual-trigger so the function
-  // runs once and re-posts its check-in. NOTE (Sharp Edge): a manual-trigger
-  // runs the handler but does NOT re-plan the cron schedule; the de-planned
-  // trigger persists until the next container restart re-syncs it. If H9b
-  // recurs every interval, the recurring ok=false heartbeat surfaces it.
+  // runs once and re-posts its check-in NOW. With --poll-interval 60 (#4652)
+  // the server re-plans the de-planned cron from the SDK manifest within <=60s
+  // on its own, so this manual-trigger is a LATENCY OPTIMIZATION (restores the
+  // missed check-in immediately rather than waiting up to one poll interval),
+  // not the primary repair. If a defect persists across ticks despite polling,
+  // Step 3's backstop restart escalates it.
   const manualTriggers = await step.run("heal-unplanned", async () => {
     const fired: string[] = [];
     for (const eventName of plan.manualTriggerEvents) {
@@ -436,26 +457,26 @@ export async function cronInngestCronWatchdogHandler({
     return fired;
   });
 
-  // Step 3: restart path — H9a (MISSING) AND escalated H9b (UNPLANNED for
-  // UNPLANNED_RESTART_THRESHOLD consecutive ticks; a manual-trigger restored
-  // the check-in but never re-planned the cron, so only a restart fixes the
-  // schedule). Gated by a cooldown so a persistent desync cannot restart-loop
-  // (AC6). Streaks persist across ticks in the same state file.
+  // Step 3: BACKSTOP restart path (#4652). Polling (--poll-interval 60)
+  // re-syncs/re-plans dropped (H9a) AND de-planned (H9b) functions within <=60s
+  // automatically, so the watchdog no longer restarts on the first defective
+  // tick. A restart fires ONLY when a function stays defective (MISSING ∪
+  // UNPLANNED) for POLL_RECOVERY_GRACE_TICKS consecutive ticks — evidence that
+  // polling has FAILED (app /api/inngest down, poll loop wedged) — and the
+  // cooldown permits it (defense-in-depth, AC6). Streaks persist across ticks
+  // in the same state file.
   const restartRequested = await step.run("heal-restart-path", async () => {
     const state = await readState();
-    const streaks = nextUnplannedStreaks(
-      state.unplanned_streaks,
-      plan.unplannedFnIds,
-    );
-    const escalated = escalatedUnplannedFnIds(streaks);
-    const restartFnIds = [...plan.missingFnIds, ...escalated];
+    const defectFnIds = [...plan.missingFnIds, ...plan.unplannedFnIds];
+    const streaks = nextDefectStreaks(state.defect_streaks, defectFnIds);
+    const restartFnIds = escalatedDefectFnIds(streaks);
 
     if (restartFnIds.length === 0) {
       // No restart needed this tick — persist streaks (resets recovered fns),
       // preserve the cooldown timestamp.
       await writeState({
         last_restart_at: state.last_restart_at,
-        unplanned_streaks: streaks,
+        defect_streaks: streaks,
       });
       return false;
     }
@@ -466,14 +487,14 @@ export async function cronInngestCronWatchdogHandler({
       );
       await writeState({
         last_restart_at: state.last_restart_at,
-        unplanned_streaks: streaks,
+        defect_streaks: streaks,
       });
       return false;
     }
 
     // A restart re-syncs + re-plans ALL functions, so clear streaks on success.
     const onRestarted = async () =>
-      writeState({ last_restart_at: new Date().toISOString(), unplanned_streaks: {} });
+      writeState({ last_restart_at: new Date().toISOString(), defect_streaks: {} });
 
     try {
       const webhook = await postRestartWebhook();
@@ -520,7 +541,7 @@ export async function cronInngestCronWatchdogHandler({
       // Restart not initiated — keep streaks so the next tick retries.
       await writeState({
         last_restart_at: state.last_restart_at,
-        unplanned_streaks: streaks,
+        defect_streaks: streaks,
       });
       return false;
     }

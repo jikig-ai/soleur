@@ -54,6 +54,7 @@ import { cronWeeklyAnalytics } from "@/server/inngest/functions/cron-weekly-anal
 import { eventCfTokenExpiryCheck } from "@/server/inngest/functions/event-cf-token-expiry-check";
 import { eventShipMerge } from "@/server/inngest/functions/event-ship-merge";
 import { githubOnEvent } from "@/server/inngest/functions/github-on-event";
+import { oneshot4650MonitorClose } from "@/server/inngest/functions/oneshot-4650-monitor-close";
 import { oneshotF2DeferGateReview } from "@/server/inngest/functions/oneshot-f2-defer-gate-review";
 import { oneshotGdprGate50dEval } from "@/server/inngest/functions/oneshot-gdpr-gate-50d-eval";
 import { oneshotRecheck4217Calibration } from "@/server/inngest/functions/oneshot-recheck-4217-calibration";
@@ -109,6 +110,7 @@ export const { GET, POST, PUT } = serve({
     eventCfTokenExpiryCheck,
     eventShipMerge,
     githubOnEvent,
+    oneshot4650MonitorClose,
     oneshotF2DeferGateReview,
     oneshotGdprGate50dEval,
     oneshotRecheck4217Calibration,
