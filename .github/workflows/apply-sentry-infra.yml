@@ -196,6 +196,7 @@ jobs:
             -target=sentry_cron_monitor.scheduled_competitive_analysis \
             -target=sentry_cron_monitor.scheduled_compound_promote \
             -target=sentry_cron_monitor.scheduled_stale_deferred_scope_outs \
+            -target=sentry_cron_monitor.scheduled_inngest_cron_watchdog \
             -target=sentry_uptime_monitor.soleur_apex \
             -target=sentry_uptime_monitor.soleur_www \
             -target=sentry_uptime_monitor.soleur_changelog_deep \

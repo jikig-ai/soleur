@@ -1,7 +1,16 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// vi.hoisted runs BEFORE ES-module imports — sets NEXT_PHASE so importing the
+// watchdog (which transitively loads the inngest client) does not throw on the
+// missing INNGEST_SIGNING_KEY in the test env. Mirrors cron-community-monitor.test.ts.
+vi.hoisted(() => {
+  process.env.NEXT_PHASE = "phase-production-build";
+});
+
+import { EXPECTED_CRON_FUNCTIONS } from "@/server/inngest/functions/cron-inngest-cron-watchdog";
 
 const ROUTE_PATH = resolve(
   __dirname,
@@ -82,7 +91,7 @@ describe("Inngest function registry — drift guards", () => {
 
   // UPDATE this number when adding/removing Inngest functions.
   it("(a) route.ts functions array has expected count", () => {
-    expect(routeEntries.length).toBe(40);
+    expect(routeEntries.length).toBe(41);
   });
 
   it("(b) every cron-*.ts file is registered in route.ts functions array", () => {
@@ -124,5 +133,13 @@ describe("Inngest function registry — drift guards", () => {
     const actualSlugs = new Set(slugMap.values());
     const stale = [...KNOWN_UNMONITORED_SLUGS].filter((s) => !actualSlugs.has(s));
     expect(stale).toEqual([]);
+  });
+
+  // The watchdog (cron-inngest-cron-watchdog) classifies a fixed EXPECTED_CRON_
+  // FUNCTIONS manifest against the running /v1/functions registry. If a new
+  // cron-*.ts file lands but the manifest is not updated, the watchdog would
+  // silently stop monitoring it — this parity guard forces the two in lockstep.
+  it("(e) watchdog EXPECTED_CRON_FUNCTIONS matches the cron-*.ts file set", () => {
+    expect(new Set(EXPECTED_CRON_FUNCTIONS)).toEqual(new Set(cronFiles));
   });
 });

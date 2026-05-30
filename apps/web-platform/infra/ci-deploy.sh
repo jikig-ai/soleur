@@ -188,9 +188,13 @@ resolve_env_file() {
   return 0
 }
 
-# Verify inngest-server is healthy after restart (#4538).
-# Returns 0 if /health returns {"status":200}.
-# Returns 1 if server never became reachable within the retry window.
+# Verify inngest-server is healthy after restart (#4538) AND its cron plan is
+# intact (#4650 / AC9).
+# Returns 0 only if BOTH /health is reachable AND /v1/functions lists at least
+# one function carrying a cron trigger.
+# Returns 1 if the server never became reachable, OR became reachable but the
+# scheduler has no cron-triggered function (H9 — "healthy process, cron
+# de-planned"; the /health check alone cannot distinguish this from healthy).
 # Uses `|| true` after curl instead of set +e/-e toggle — toggling set -e
 # inside a function re-enables it globally and causes the caller's non-zero
 # capture (`VERIFY_RC=$?`) to never execute.
@@ -198,19 +202,46 @@ verify_inngest_health() {
   local max_attempts="${1:-10}"
   local interval="${2:-3}"
   local response=""
+  local healthy=0
 
   for i in $(seq 1 "$max_attempts"); do
     response=$(curl -sf --max-time 5 http://127.0.0.1:8288/health 2>/dev/null) || true
 
     if [[ -n "$response" ]]; then
       logger -t "$LOG_TAG" "INNGEST_HEALTH: healthy=true (attempt $i/$max_attempts)"
-      return 0
+      healthy=1
+      break
     fi
     logger -t "$LOG_TAG" "INNGEST_HEALTH: attempt $i/$max_attempts — connection failed or empty response"
     sleep "$interval"
   done
 
-  logger -t "$LOG_TAG" "INNGEST_HEALTH: healthy=false after $max_attempts attempts"
+  if [[ "$healthy" -ne 1 ]]; then
+    logger -t "$LOG_TAG" "INNGEST_HEALTH: healthy=false after $max_attempts attempts"
+    return 1
+  fi
+
+  # Cron-plan integrity (#4650 / AC9): /health proves only process liveness.
+  # A restart that re-syncs the function registry but fails to re-plan cron
+  # triggers (H9b) would pass /health while every monitored cron stays dead.
+  # Assert the registry lists >=1 function WITH a cron trigger. Dependency-free
+  # substring check (jq is not a host dependency): match the cron-trigger KEY
+  # form `"cron":` (the value form `"cron":"<expr>"` always contains it), NOT a
+  # bare `"cron"` — every function slug is `cron-*`, so bare `"cron"` would
+  # false-pass on the slug alone even with zero planned cron triggers.
+  local functions_body=""
+  for i in $(seq 1 "$max_attempts"); do
+    functions_body=$(curl -sf --max-time 5 http://127.0.0.1:8288/v1/functions 2>/dev/null) || true
+
+    if [[ "$functions_body" == *'"cron":'* ]]; then
+      logger -t "$LOG_TAG" "INNGEST_CRON_PLAN: ok — registry has >=1 cron-triggered function (attempt $i/$max_attempts)"
+      return 0
+    fi
+    logger -t "$LOG_TAG" "INNGEST_CRON_PLAN: attempt $i/$max_attempts — no cron trigger present in registry yet"
+    sleep "$interval"
+  done
+
+  logger -t "$LOG_TAG" "INNGEST_CRON_PLAN: failed — no cron-triggered function in registry after $max_attempts attempts"
   return 1
 }
 
