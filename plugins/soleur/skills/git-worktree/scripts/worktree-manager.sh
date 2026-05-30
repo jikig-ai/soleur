@@ -1281,61 +1281,50 @@ sync_bare_files() {
 
   echo -e "${BLUE}Syncing on-disk files from git HEAD...${NC}"
 
-  # Extract all plugin-loadable trees from HEAD in one shot.
-  # The old approach used a hardcoded whitelist that missed commands, skills,
-  # agents, and docs -- causing stale files after every merge (#1188 regression).
-  # git archive | tar -x overwrites in-place and adds new files atomically.
-  local trees=(
-    "plugins/"
-    "CLAUDE.md"
-    "AGENTS.md"
-    "README.md"
-    ".claude-plugin"
-    ".claude/settings.json"
-  )
-
-  # Build archive args, skipping trees that don't exist in HEAD
-  local archive_args=()
-  for tree in "${trees[@]}"; do
-    if git cat-file -e "HEAD:$tree" 2>/dev/null; then
-      archive_args+=("$tree")
-    fi
-  done
-
-  if [[ ${#archive_args[@]} -eq 0 ]]; then
-    echo -e "${YELLOW}No syncable trees found in HEAD${NC}"
-    return 0
-  fi
-
-  # Extract directly into the bare repo root
-  if ! git archive HEAD -- "${archive_args[@]}" | tar -xC "$GIT_ROOT" 2>/dev/null; then
-    echo -e "${RED}Error: git archive extraction failed${NC}"
+  # Full mirror, not a whitelist. The bare root carries a legacy populated working
+  # tree that DRIFTS from HEAD in two ways the old archive-a-whitelist approach left
+  # unfixed: (1) any tree outside the hardcoded list stayed stale forever -- .github
+  # workflows deleted in the Inngest migration (#4483) and knowledge-base content
+  # (brand-guide drift, learning 2026-05-21) both misled later analysis; (2) deleted
+  # files were only pruned under .claude/hooks/, so every other tree accumulated
+  # tracked-deletions. checkout-index from a throwaway index materializes EVERY
+  # tracked file from HEAD (content refresh, additive -- never touches untracked
+  # node_modules/.env/.mcp.json/.worktrees/_site/.playwright-mcp); a history-scoped
+  # prune then removes tracked-deleted leftovers. Result: on-disk == HEAD exactly.
+  local tmp_index
+  tmp_index=$(mktemp)
+  if ! GIT_INDEX_FILE="$tmp_index" git read-tree HEAD 2>/dev/null \
+    || ! GIT_INDEX_FILE="$tmp_index" git --work-tree="$GIT_ROOT" checkout-index -a -f 2>/dev/null; then
+    echo -e "${RED}Error: checkout-index from HEAD failed${NC}"
+    rm -f "$tmp_index"
     return 1
   fi
+  rm -f "$tmp_index"
 
-  # Sync hook scripts from .claude/hooks/ and restore execute permissions
-  local hook_files
-  hook_files=$(git ls-tree --name-only HEAD .claude/hooks/ 2>/dev/null || true)
-  if [[ -n "$hook_files" ]]; then
-    mkdir -p "$GIT_ROOT/.claude/hooks"
-    git archive HEAD -- .claude/hooks/ | tar -xC "$GIT_ROOT" 2>/dev/null || true
-    chmod +x "$GIT_ROOT/.claude/hooks/"*.sh 2>/dev/null || true
-
-    # Remove stale hook files that no longer exist in git HEAD
-    for on_disk_hook in "$GIT_ROOT/.claude/hooks"/*; do
-      [[ -f "$on_disk_hook" ]] || continue
-      local hook_name
-      hook_name=$(basename "$on_disk_hook")
-      if ! git cat-file -e "HEAD:.claude/hooks/$hook_name" 2>/dev/null; then
-        rm "$on_disk_hook"
-        echo -e "${YELLOW}Removed stale hook: $hook_name${NC}"
-      fi
-    done
+  # Prune stale tracked-deleted files: paths git EVER tracked (the history
+  # discriminator -- NOT a raw disk scan) that are absent from HEAD but still on disk.
+  # The history gate is the safety boundary: untracked runtime artifacts were never
+  # tracked, so they never enter the candidate set and are never removed. rmdir -p
+  # cleans directories emptied by the removal (stops at the first non-empty parent).
+  local stale_count=0 rel
+  while IFS= read -r rel; do
+    [[ -n "$rel" && -e "$GIT_ROOT/$rel" ]] || continue
+    if rm -f "$GIT_ROOT/$rel"; then
+      stale_count=$((stale_count + 1))
+      rmdir -p "$(dirname "$GIT_ROOT/$rel")" 2>/dev/null || true
+    fi
+  done < <(comm -23 \
+    <(git log HEAD --pretty=format: --name-only --diff-filter=AMRC 2>/dev/null | LC_ALL=C sort -u | sed '/^$/d') \
+    <(git ls-tree -r --name-only HEAD 2>/dev/null | LC_ALL=C sort -u))
+  if [[ "$stale_count" -gt 0 ]]; then
+    echo -e "${YELLOW}Removed $stale_count stale tracked-deleted file(s) from bare root${NC}"
   fi
 
-  # Restore execute permissions on scripts
+  # Restore execute bits. checkout-index already restores the index mode, but be
+  # defensive for the scripts/hooks the plugin loader and SessionStart hooks exec.
   find "$GIT_ROOT/plugins/" -name "*.sh" -exec chmod +x {} + 2>/dev/null || true
   chmod +x "$GIT_ROOT/plugins/soleur/hooks/"*.sh 2>/dev/null || true
+  chmod +x "$GIT_ROOT/.claude/hooks/"*.sh 2>/dev/null || true
 
   echo -e "${GREEN}Synced on-disk files from git HEAD${NC}"
 }
