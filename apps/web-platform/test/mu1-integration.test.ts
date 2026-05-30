@@ -199,7 +199,20 @@ if (AC2_HAS_REPO_URL !== AC2_HAS_INSTALL_ID) {
 // GitHub installation ids fit in i32; cap at 10 digits (~10B) for headroom.
 const INSTALLATION_ID_RE = /^[1-9][0-9]{0,9}$/;
 
-describe.skipIf(!AC2_HAS_REPO_URL || !AC2_HAS_INSTALL_ID)(
+// AC-2 mints a LIVE GitHub installation token to clone the fixture repo, so it
+// requires an explicit opt-in (MU1_INTEGRATION=1) like the AC-1 block above —
+// NOT merely the presence of the MU1_FIXTURE_* vars. The fixture vars live in
+// the Doppler `dev`/`dev_scheduled` configs, so without this gate a routine
+// `doppler run -c dev -- <full suite>` run fired AC-2 and hard-failed with
+// `GitHub installation token request failed: 401` (the local env's App creds
+// can't mint a token for the fixture installation). CI never sets MU1_FIXTURE_*
+// so AC-2 already skips there; the partial-set canary above still guards the
+// one-var-set misconfig. See #4663. Run the live check with:
+//   MU1_INTEGRATION=1 doppler run -p soleur -c dev -- env TENANT_INTEGRATION_TEST=1 \
+//     npm run test:ci -- test/mu1-integration.test.ts --project unit
+const AC2_OPTED_IN = process.env.MU1_INTEGRATION === "1";
+
+describe.skipIf(!AC2_OPTED_IN || !AC2_HAS_REPO_URL || !AC2_HAS_INSTALL_ID)(
   "MU1 AC-2: provisionWorkspaceWithRepo clones fixture",
   () => {
     test("clones the fixture repo and overlays plugin symlink", async () => {
