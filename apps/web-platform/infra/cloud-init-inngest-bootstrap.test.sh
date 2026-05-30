@@ -135,12 +135,16 @@ echo ""
 echo "--- AC5: sudoers parity (deploy-inngest-bootstrap) ---"
 SUDOERS_SRC="$SCRIPT_DIR/deploy-inngest-bootstrap.sudoers"
 SUDOERS_CONTENT_ONLY=$(grep -vE '^\s*#|^\s*$' "$SUDOERS_SRC")
-# Extract the inline sudoers body (#4665 fix): exit at the NEXT write_files
-# list item (`  - path:`) AND the next mapping key (`owner:`/`permissions:`),
-# then strip comments + blank lines so the comparison is content-only on BOTH
-# sides (the source side is already filtered by the grep above). The prior awk
-# over-read past the entry (its only exit was `[a-z]+:`, which does not match
-# `  - path:`) AND compared raw-with-comments against content-only → never matched.
+# Extract the inline sudoers body (#4665 fix). The prior version's two real
+# defects: (1) it compared the raw inline block (WITH comments + blanks) against
+# the source's content-only form (`grep -vE '^\s*#|^\s*$'` above) → never matched
+# even though the alias content is byte-identical; (2) the non-empty assert
+# value-embedded the block (`[[ -n '$VAR' ]]`), which the eval mishandles on
+# special chars. Fix: pipe the extracted block through the SAME content-only
+# filter, and assert by-name (`[[ -n "$VAR" ]]`) below. The added
+# `^[[:space:]]*-[[:space:]]` exit (next write_files `- path:` item) is
+# defense-in-depth — the existing `[a-z]+:` exit already stops at the entry's
+# trailing `owner:`/`permissions:` keys.
 CLOUD_INIT_SUDOERS=$(awk '
   /path: \/etc\/sudoers\.d\/deploy-inngest-bootstrap/ { found = 1; next }
   found && /^[[:space:]]+content:[[:space:]]*\|/      { in_body = 1; next }
