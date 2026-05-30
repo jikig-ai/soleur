@@ -287,7 +287,10 @@ export function shouldRestart(
 // IO helpers
 // =============================================================================
 
-async function fetchRegistry(host: string): Promise<RegistryFunction[]> {
+// Exported for reuse by oneshot-4650-monitor-close.ts (#4654) — the canonical
+// registry read. Auth via INNGEST_SIGNING_KEY (already in the container env;
+// route.ts throws at load if absent). No new credential.
+export async function fetchRegistry(host: string): Promise<RegistryFunction[]> {
   const signingKey = process.env.INNGEST_SIGNING_KEY;
   const res = await fetch(`${host}/v1/functions`, {
     headers: signingKey ? { Authorization: `Bearer ${signingKey}` } : {},
