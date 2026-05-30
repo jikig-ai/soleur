@@ -49,7 +49,7 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 
 ## Workflow Gates
 
-- [id: wg-every-feature-listed-in-a-roadmap-phase] → rest
+- [id: wg-every-feature-listed-in-a-roadmap-phase] → core
 - [id: wg-when-closing-a-phase-milestone-update] → rest
 - [id: wg-when-fixing-a-workflow-gates-detection] → rest
 - [id: wg-zero-agents-until-user-confirms] → core
@@ -62,15 +62,15 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: wg-when-a-test-runner-crashes-segfault-oom] → rest
 - [id: wg-when-tests-fail-and-are-confirmed-pre] → rest
 - [id: wg-when-an-audit-identifies-pre-existing] → core
-- [id: wg-when-deferring-a-capability-create-a] → core
-- [id: wg-defer-only-after-inline-triage] → core
+- [id: wg-when-deferring-a-capability-create-a] → rest
+- [id: wg-defer-only-after-inline-triage] → rest
 - [id: wg-when-a-workflow-gap-causes-a-mistake-fix] → core
 - [id: wg-every-session-error-must-produce-either] → rest
 - [id: wg-use-closes-n-in-pr-body-not-title-to] → rest
 - [id: wg-after-merging-a-pr-that-adds-or-modifies] → rest
 - [id: wg-plan-prescribed-skills-must-run-inline] → rest
 - [id: wg-end-of-work-emit-resume-prompt] → rest
-- [id: wg-block-pr-ready-on-undeferred-operator-steps] → rest
+- [id: wg-block-pr-ready-on-undeferred-operator-steps] → core
 - [id: wg-pm-class-followthrough-for-operator-dogfood] → rest
 
 ## Code Quality

@@ -47,13 +47,13 @@
 
 ## Workflow Gates
 
+- Every feature in a roadmap phase table MUST have a linked GitHub issue [id: wg-every-feature-listed-in-a-roadmap-phase]. Create the issue in the same action as the roadmap edit — even for trigger-gated phases — and verify every feature row has an Issue entry before committing. **Why:** 2026-04-03 audit.
 - Zero agents until user confirms direction [id: wg-zero-agents-until-user-confirms]. Present a concise summary first, ask if they want to go deeper, only then launch research. Exception: passive domain routing (below).
 - At session start, run `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged && git worktree list` (works from bare root or any worktree) [id: wg-at-session-start-run-bash-plugins-soleur]. If no worktree exists for the task, create one with `... --yes create <name>` first. Repo root is bare — never `git pull`/`git checkout` from it.
 - At session start (after `cleanup-merged` fetches main), refresh `.mcp.json` at the bare root: `git show main:.mcp.json > .mcp.json` [id: wg-at-session-start-after-cleanup-merged]. Claude Code reads it from CWD on startup to discover MCP servers; bare repos have no working tree, so manual sync is required.
 - When an audit identifies pre-existing issues, create GitHub issues to track them before fixing [id: wg-when-an-audit-identifies-pre-existing]. Don't just note them in conversation — file them.
-- When deferring a capability, default to **documenting it in-place** (plan, register entry, ADR, or code comment) [id: wg-when-deferring-a-capability-create-a]. File a GitHub issue ONLY when the `wg-defer-only-after-inline-triage` triple test passes. The plan's "Non-Goals" list IS the documentation; converting every Non-Goal to an issue creates phantom backlog.
-- Before filing a deferred follow-up, run the triple test [id: wg-defer-only-after-inline-triage]: **(1) Inline-first** — lands in <30 min as one small file or ~10-line change? If yes → fix inline. **(2) Concrete trigger** — an observable signal saying "do this now" (date, metric, user-report)? If no → document in-place. **(3) Plausible in ~6mo** — will the trigger fire within 6mo at current scale? If no → document in-place. **Only file when all three pass**; document Non-Goals in-plan otherwise. **Why:** #4379.
 - When a workflow gap causes a mistake, fix the skill or agent first — a learning is not a fix [id: wg-when-a-workflow-gap-causes-a-mistake-fix]. A verbal acknowledgment is not a fix; edit the definition file in the same response. Record a learning only when no code change can address the gap. **Why:** #2430.
+- `/ship` Phase 5.5 blocks PR-ready when the PR body has operator-action references without `Tracks #NNNN`/`Refs #NNNN` companions to OPEN deferred-automation issues [id: wg-block-pr-ready-on-undeferred-operator-steps] [skill-enforced: ship Phase 5.5 Undeferred Operator-Step Gate]. **Why:** PR-H #4066; full spec in plugins/soleur/skills/ship/SKILL.md.
 
 ## Compliance Tier
 
