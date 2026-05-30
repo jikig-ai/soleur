@@ -12,12 +12,12 @@ vi.hoisted(() => {
 
 import {
   EXPECTED_CRON_FUNCTIONS,
+  POLL_RECOVERY_GRACE_TICKS,
   RESTART_COOLDOWN_MS,
-  UNPLANNED_RESTART_THRESHOLD,
   classifyRegistry,
-  escalatedUnplannedFnIds,
+  escalatedDefectFnIds,
   manualTriggerEventFor,
-  nextUnplannedStreaks,
+  nextDefectStreaks,
   planHeal,
   resolveInngestHost,
   restartAllowed,
@@ -200,39 +200,62 @@ describe("cron-inngest-cron-watchdog — restart cooldown (AC6, non-thrashing)",
   });
 });
 
-describe("cron-inngest-cron-watchdog — H9b escalation streaks (Fix F)", () => {
-  it("nextUnplannedStreaks: increments current UNPLANNED, drops recovered fns", () => {
+describe("cron-inngest-cron-watchdog — defect-streak backstop (#4652)", () => {
+  it("nextDefectStreaks: increments current defect fns, drops poll-recovered fns", () => {
     const prev = { "cron-community-monitor": 1, "cron-oauth-probe": 3 };
-    // community still unplanned this tick; oauth-probe recovered (not in list).
-    const next = nextUnplannedStreaks(prev, ["cron-community-monitor"]);
+    // community still defective this tick; oauth-probe poll-recovered (not in list).
+    const next = nextDefectStreaks(prev, ["cron-community-monitor"]);
     expect(next).toEqual({ "cron-community-monitor": 2 });
   });
 
-  it("nextUnplannedStreaks: starts a fresh streak at 1 with no prior state", () => {
-    expect(nextUnplannedStreaks(undefined, ["cron-gh-pages-cert-state"])).toEqual({
+  it("nextDefectStreaks: starts a fresh streak at 1 with no prior state", () => {
+    expect(nextDefectStreaks(undefined, ["cron-gh-pages-cert-state"])).toEqual({
       "cron-gh-pages-cert-state": 1,
     });
   });
 
-  it("nextUnplannedStreaks: empty UNPLANNED set clears all streaks", () => {
-    expect(nextUnplannedStreaks({ "cron-x": 5 }, [])).toEqual({});
+  it("nextDefectStreaks: empty defect set clears all streaks", () => {
+    expect(nextDefectStreaks({ "cron-x": 5 }, [])).toEqual({});
   });
 
-  it("escalatedUnplannedFnIds: only fns at/over the threshold escalate", () => {
+  it("nextDefectStreaks: tracks MISSING and UNPLANNED in one unified streak set", () => {
+    // defect = MISSING ∪ UNPLANNED — a MISSING fn accrues a streak exactly like
+    // an UNPLANNED one, so neither escalates to restart on the first tick.
+    const next = nextDefectStreaks(undefined, [
+      "cron-gh-pages-cert-state", // MISSING (H9a)
+      "cron-community-monitor", // UNPLANNED (H9b)
+    ]);
+    expect(next).toEqual({
+      "cron-gh-pages-cert-state": 1,
+      "cron-community-monitor": 1,
+    });
+  });
+
+  it("escalatedDefectFnIds: only fns at/over the grace threshold escalate", () => {
     const streaks = {
-      "cron-community-monitor": UNPLANNED_RESTART_THRESHOLD,
-      "cron-oauth-probe": UNPLANNED_RESTART_THRESHOLD - 1,
+      "cron-community-monitor": POLL_RECOVERY_GRACE_TICKS,
+      "cron-oauth-probe": POLL_RECOVERY_GRACE_TICKS - 1,
     };
-    expect(escalatedUnplannedFnIds(streaks)).toEqual(["cron-community-monitor"]);
+    expect(escalatedDefectFnIds(streaks)).toEqual(["cron-community-monitor"]);
   });
 
-  it("escalation lifecycle: a single tick of UNPLANNED does NOT escalate; the threshold-th tick does", () => {
-    // Tick 1: UNPLANNED → streak 1 → not escalated (manual-trigger handles it).
-    const s1 = nextUnplannedStreaks(undefined, ["cron-community-monitor"]);
-    expect(escalatedUnplannedFnIds(s1)).toEqual([]);
-    // Tick 2 (threshold=2): still UNPLANNED → streak 2 → escalates to restart.
-    const s2 = nextUnplannedStreaks(s1, ["cron-community-monitor"]);
-    expect(escalatedUnplannedFnIds(s2)).toEqual(["cron-community-monitor"]);
+  it("MISSING (H9a) does NOT escalate on the first tick — polling gets a grace window", () => {
+    // Regression guard for the #4652 demotion: pre-#4652 a MISSING fn went
+    // straight to the restart path on tick 1. Now it must accrue a streak first.
+    const s1 = nextDefectStreaks(undefined, ["cron-gh-pages-cert-state"]);
+    expect(escalatedDefectFnIds(s1)).toEqual([]);
+    // The grace-th consecutive defective tick (threshold=2) escalates to backstop.
+    const s2 = nextDefectStreaks(s1, ["cron-gh-pages-cert-state"]);
+    expect(escalatedDefectFnIds(s2)).toEqual(["cron-gh-pages-cert-state"]);
+  });
+
+  it("escalation lifecycle: a single defective tick does NOT escalate; the grace-th tick does", () => {
+    // Tick 1: defective → streak 1 → not escalated (polling has its grace window).
+    const s1 = nextDefectStreaks(undefined, ["cron-community-monitor"]);
+    expect(escalatedDefectFnIds(s1)).toEqual([]);
+    // Tick 2 (grace=2): still defective → streak 2 → escalates to backstop restart.
+    const s2 = nextDefectStreaks(s1, ["cron-community-monitor"]);
+    expect(escalatedDefectFnIds(s2)).toEqual(["cron-community-monitor"]);
   });
 });
 

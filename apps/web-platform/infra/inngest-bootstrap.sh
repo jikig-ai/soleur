@@ -120,11 +120,19 @@ log "SHA256 verified: $ACTUAL_SHA"
 tar -xzf "$TARBALL" -C "$TMPDIR" inngest
 install -m 0755 "$TMPDIR/inngest" "$INSTALL_PATH"
 
-# Write the inngest-server systemd unit. Mirrors webhook.service hardening
-# (User=deploy, ProtectSystem=strict, PrivateTmp, ReadWritePaths). The
-# `doppler run` wrapper materializes INNGEST_SIGNING_KEY / INNGEST_EVENT_KEY /
-# INNGEST_HEARTBEAT_URL at process start; Doppler CLI uses
-# /etc/default/inngest-server for its own token.
+fi  # end SKIP_BINARY_INSTALL guard — unit + heartbeat reconcile below always run
+
+# Write the inngest-server systemd unit. RECONCILE-ALWAYS — deliberately
+# OUTSIDE the SKIP_BINARY_INSTALL guard, matching the heartbeat-unit (and
+# Vector-unit) precedent below. An ExecStart-only change (#4652:
+# --poll-interval / --sdk-url) must land even on a same-CLI-version redeploy
+# where SKIP_BINARY_INSTALL fires; leaving the write inside the guard would
+# skip it and the host would keep the OLD ExecStart indefinitely (same masking
+# class as the #4144 heartbeat-fix cascade). The binary download/install +
+# upgrade-drain stay inside the guard above (no need to re-download on a
+# no-op redeploy); only the unit write + the restart below are reconciled
+# every bootstrap. Mirrors webhook.service hardening (User=deploy,
+# ProtectSystem=strict, PrivateTmp, ReadWritePaths).
 #
 # Signing-key prefix strip: Terraform sets INNGEST_SIGNING_KEY to the SDK-
 # format `signkey-prod-<64hex>`, but `inngest start --signing-key` requires
@@ -135,6 +143,13 @@ install -m 0755 "$TMPDIR/inngest" "$INSTALL_PATH"
 # `node_modules/inngest/helpers/strings.js`. Both sides resolve to the same
 # 32-byte HMAC seed; the prefix is purely a SDK-side string marker.
 # Surfaced 2026-05-19 via #4017 substrate audit.
+#
+# --poll-interval 60 + --sdk-url: the server polls the co-located web-platform
+# app serve route (loopback port 3000 per Dockerfile PORT=3000; /api/inngest is
+# in PUBLIC_PATHS per the #4017 fix so the poll is not 307→/login) every 60s,
+# re-syncing AND re-planning any dropped/de-planned function within one
+# interval — without a restart. This is what lets the #4650 watchdog demote its
+# restart-on-first-tick to a guarded backstop (#4652).
 cat > "$UNIT_FILE" <<'UNITEOF'
 [Unit]
 Description=Inngest self-hosted server (loopback 127.0.0.1:8288/8289)
@@ -144,7 +159,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/default/inngest-server
-ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/bin/bash -c '/usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest --signing-key "$${INNGEST_SIGNING_KEY#signkey-prod-}" --event-key "$${INNGEST_EVENT_KEY}"'
+ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/bin/bash -c '/usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest --signing-key "$${INNGEST_SIGNING_KEY#signkey-prod-}" --event-key "$${INNGEST_EVENT_KEY}" --poll-interval 60 --sdk-url http://127.0.0.1:3000/api/inngest'
 Restart=on-failure
 RestartSec=5
 User=deploy
@@ -165,8 +180,6 @@ TimeoutStopSec=180
 [Install]
 WantedBy=multi-user.target
 UNITEOF
-
-fi  # end SKIP_BINARY_INSTALL guard — heartbeat reconcile below always runs
 
 # Heartbeat ping script + service + 60s timer.
 # The URL lives in $INNGEST_HEARTBEAT_URL — resolved at ExecStart time via
@@ -276,7 +289,18 @@ fi
 echo "$INNGEST_CLI_VERSION" > "$VERSION_FILE"
 
 systemctl daemon-reload
-systemctl enable --now inngest-server.service
+# `enable --now` is a no-op when the unit is already running; a new ExecStart
+# (e.g. #4652's --poll-interval / --sdk-url) would never be picked up by an
+# already-running inngest-server process. Replace with explicit enable +
+# restart so each deploy reloads the unit — mirroring the vector.service fix
+# below (this file, "enable vector.service" + "restart vector.service") and
+# the same root cause documented there. Combined with the reconcile-always
+# unit write above, an ExecStart-only change is now deploy-reliable even on a
+# same-CLI-version redeploy (SKIP_BINARY_INSTALL path). The upgrade-drain
+# pause above runs before the binary replace; this restart subsumes the start
+# and the resume below runs after.
+systemctl enable inngest-server.service 2>/dev/null || true
+systemctl restart inngest-server.service
 systemctl enable --now inngest-heartbeat.timer
 # Force one heartbeat tick now so a unit-shape change (e.g. ExecStart) takes
 # effect immediately rather than waiting up to 60s for the next timer fire.

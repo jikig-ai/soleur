@@ -784,6 +784,27 @@ case "$COMPONENT" in
     fi
 
     rm -rf "$INNGEST_EXTRACT_DIR"
+
+    # Post-bootstrap health + cron-plan gate (#4652). The bootstrap restarts
+    # inngest-server with the new ExecStart (now carrying --poll-interval /
+    # --sdk-url); assert /health is live AND the registry re-synced >=1
+    # cron-triggered function before declaring success. Without this the
+    # `deploy inngest` path could report success on a server that came back up
+    # with an empty/unplanned registry (the H9b class #4650 chased) — the
+    # restart action already gates on this (see verify_inngest_health call on
+    # the `restart` action), the deploy path did not. The post-restart SDK
+    # sync populates the registry immediately (not waiting for the 60s poll),
+    # so the existing ~30s retry budget covers the window.
+    set +e
+    verify_inngest_health
+    VERIFY_RC=$?
+    set -e
+    if [[ "$VERIFY_RC" -ne 0 ]]; then
+      logger -t "$LOG_TAG" "FAILED: inngest deploy health/cron-plan check"
+      final_write_state 1 "inngest_health_failed"
+      exit 1
+    fi
+
     logger -t "$LOG_TAG" "SUCCESS: inngest $IMAGE:$TAG deployed"
     final_write_state 0 "success"
     ;;

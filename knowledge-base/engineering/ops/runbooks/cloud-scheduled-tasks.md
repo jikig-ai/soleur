@@ -269,17 +269,26 @@ function sync via PUT to `/api/inngest`. The self-hosted Inngest server
 (`inngest-server.service`, SQLite storage at `/var/lib/inngest/`) reconciles
 its cron scheduler state on each sync. Two failure sub-modes exist:
 
+> **#4652 update — polling now auto-recovers both sub-modes.** The server
+> ExecStart runs with `--poll-interval 60 --sdk-url http://127.0.0.1:3000/api/inngest`
+> (`inngest-bootstrap.sh`), so it re-syncs AND re-plans functions from the app's
+> serve manifest within **≤60s** automatically — for BOTH H9a and H9b, with no
+> restart. The restart path is now a **backstop** for when polling itself is
+> broken (app `/api/inngest` down, poll loop wedged), not the routine fix.
+
 **H9a — Function deregistered (full desync).** A transient loopback HTTP
 failure during the Next.js container restart causes the sync response to
 be empty or incomplete. The Inngest server drops the affected function(s)
-from its registry entirely. Result: cron trigger never fires.
+from its registry entirely. Result: cron trigger never fires — until the next
+poll (≤60s) re-syncs the function from the SDK manifest.
 
 **H9b — Cron scheduler re-planning failure (partial desync).** The function
 IS registered (appears in `/v1/functions`) but the cron trigger was not
 re-planned in the scheduler's plan table. This happens when the function
 registry write succeeds but the scheduler plan write fails silently (e.g.,
 SQLite write lock contention during a rapid sync burst). Result: function
-is registered, but cron never fires — only event-triggered invocations work.
+is registered, but cron never fires — until the next poll (≤60s) re-plans the
+cron trigger from the SDK manifest.
 
 **Distinguishing H9a from H9b:**
 
@@ -308,7 +317,18 @@ curl -s http://127.0.0.1:8288/v1/functions | \
 
 **Restore (H9):**
 
-**Automated (preferred):** Run the restart workflow from any machine with `gh` auth:
+**Primary (no action — polling self-heals):** With `--poll-interval 60` the
+server re-syncs/re-plans a dropped (H9a) or de-planned (H9b) function from the
+app's `/api/inngest` manifest within ≤60s automatically. **To confirm recovery
+WITHOUT host access (`hr-no-dashboard-eyeball`/no-SSH):** watch the
+`scheduled-inngest-cron-watchdog` Sentry monitor flip back to `ok` on its next
+4h tick (query the Sentry Crons monitor-list API), or re-run the watchdog via
+`gh workflow run`. The loopback re-query
+`curl -s http://127.0.0.1:8288/v1/functions | jq '[.[]|select(.triggers[]?.cron)]|length'`
+(>=1 with the affected cron present) is an **on-host** confirmation aid only.
+A restart is only needed when polling itself is broken (see the backstop below).
+
+**Automated backstop (if polling is broken):** Run the restart workflow from any machine with `gh` auth:
 
 ```bash
 gh workflow run restart-inngest-server.yml
@@ -357,23 +377,25 @@ needs **no operator action**:
    loopback bridge — no SSH) and classifies each function in its
    `EXPECTED_CRON_FUNCTIONS` manifest as `OK`, `MISSING` (H9a), or `UNPLANNED`
    (H9b).
-2. **Heal H9b (cron de-planned).** Fires `cron/<name>.manual-trigger` for each
-   affected function via `sendInngestWithRetry`. NOTE: a manual-trigger RUNS the
-   handler once (restores the missed check-in and keeps the function executing
-   every 4h) but does NOT re-plan the cron schedule — the de-planned trigger
-   persists until a server restart re-syncs it. The watchdog tracks a
-   consecutive-UNPLANNED streak per function and **auto-escalates to the restart
-   path (step 3) after `UNPLANNED_RESTART_THRESHOLD` (2) consecutive ticks**, so
-   a persistent H9b is structurally repaired, not merely re-triggered forever.
-3. **Heal H9a (function dropped) + escalated H9b.** A dropped function (or a
-   persistently de-planned one) genuinely needs a restart to re-sync (the server
-   runs with no `--poll-interval`). The watchdog POSTs the deploy webhook
+2. **Heal H9b (cron de-planned) — latency optimization.** Fires
+   `cron/<name>.manual-trigger` for each affected function via
+   `sendInngestWithRetry`. With `--poll-interval 60` the server re-plans the
+   de-planned cron from the SDK manifest within ≤60s on its own, so this
+   manual-trigger is now a **latency optimization** (it restores the missed
+   check-in *immediately* rather than waiting up to one poll interval), NOT the
+   primary repair.
+3. **Backstop restart (polling has failed).** Polling re-syncs (H9a) and
+   re-plans (H9b) automatically, so the watchdog no longer restarts on the first
+   defective tick. It restarts ONLY after a function stays defective
+   (MISSING ∪ UNPLANNED) for `POLL_RECOVERY_GRACE_TICKS` (2) consecutive ticks —
+   evidence that polling itself has failed (app `/api/inngest` down, poll loop
+   wedged). When that threshold is crossed it POSTs the deploy webhook
    `restart inngest _ latest` directly (D1-A, same HMAC + CF-Access path as
    `restart-inngest-server.yml`). If that POST is unreachable, it files a
    `priority/p0-critical` issue carrying the `inngest-desync-restart` label,
    which `inngest-watchdog-restart-dispatch.yml` acts on to dispatch the restart
    workflow (D1-B). A cooldown (`/var/lib/inngest/cron-watchdog/restart-cooldown.json`,
-   6h) prevents a persistent desync from restart-looping. NOTE: that path is
+   6h) is a second guard against restart-looping. NOTE: that path is
    **container-local** (not a host bind-mount); it survives the inngest-server
    restart it gates (a separate process) and is reset only by a web-platform
    redeploy — which itself re-syncs all functions, so the reset is benign.
