@@ -1,0 +1,36 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "resource_changes": [
+    {
+      "address": "sentry_issue_alert.byok_art_33_breach",
+      "mode": "managed",
+      "type": "sentry_issue_alert",
+      "name": "byok_art_33_breach",
+      "provider_name": "registry.terraform.io/jianyuan/sentry",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "name": "byok-art-33-breach",
+          "conditions_v2": [{ "first_seen_event": {} }],
+          "filters_v2": [
+            { "tagged_event": { "key": "feature", "match": "EQUAL", "value": "byok-delegations" } },
+            { "tagged_event": { "key": "art_33_breach", "match": "EQUAL", "value": "true" } }
+          ],
+          "actions_v2": [{ "notify_email": { "target_type": "IssueOwners", "fallthrough_type": "ActiveMembers" } }]
+        },
+        "after": {
+          "name": "byok-art-33-breach",
+          "conditions_v2": [{ "first_seen_event": {} }],
+          "filters_v2": [
+            { "tagged_event": { "key": "feature", "match": "EQUAL", "value": "byok-delegations" } }
+          ],
+          "actions_v2": [{ "notify_email": { "target_type": "IssueOwners", "fallthrough_type": "ActiveMembers" } }]
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    }
+  ]
+}
