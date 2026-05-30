@@ -31,8 +31,10 @@ import {
 } from "./byok-lease";
 import { createServiceClient } from "@/lib/supabase/service";
 import { createChildLogger } from "@/server/logger";
+import { reportSilentFallback } from "@/server/observability";
 import { isByokDelegationsEnabled, ANON_IDENTITY, type Identity } from "@/lib/feature-flags/server";
 import { getDefaultWorkspaceForUser } from "./workspace-resolver";
+import { resolveGranteeAcceptanceStatus } from "./byok-delegation-ui-resolver";
 
 const log = createChildLogger("byok-resolver");
 
@@ -178,6 +180,121 @@ export async function resolveKeyOwnerThenLease<T>(
     },
     fn,
   );
+}
+
+// ─── Effective-key gate (feat-skip-api-key-onboarding #4642) ──────────
+//
+// Routing/UX-only mirror of the lease's own-key-first + flag-gated-delegation
+// sequence. Used by the onboarding redirect gates (callback, accept-terms)
+// and the degraded-state banner endpoint. The chat-time enforcement path
+// (`getUserApiKey` → KeyInvalidError) is authoritative and untouched.
+
+/**
+ * Whether `callerUserId` has a USABLE BYOK key: an own VALID anthropic key
+ * OR an active, accepted delegation. Usability ≠ presence — an own *invalid*
+ * key does NOT count (the chat path would still reject it, so the user must
+ * keep seeing /setup-key).
+ *
+ * Mirrors `resolveKeyOwnerThenLease`'s sequence intentionally:
+ *   1. own VALID anthropic key (matches the lease's actual success
+ *      requirement — the RPC's own-key short-circuit at mig 083 is UNFILTERED,
+ *      so we must filter `is_valid=true` ourselves and NOT trust a
+ *      `delegation_id === null` row to mean "usable key").
+ *   2. else derive the SAME default workspace the runtime uses → org → flag.
+ *      Flag off → false (never broaden the gate past enforcement).
+ *   3. flag on → resolve_byok_key_owner; usable ONLY when `delegation_id`
+ *      is a real delegation row (own-key rows were handled in step 1).
+ *
+ * On any thrown/error path: Sentry-mirror and return `opts.onErrorReturn`.
+ * Callers pick direction — redirect gates pass `true` (fail-open: never trap
+ * a possibly-delegated user at /setup-key; chat enforcement is authoritative),
+ * the status endpoint passes `false` (fail-closed: show the banner rather than
+ * hide it and lie to a keyless user). Never serializes a ByokDelegationError
+ * subtype — the boolean carries no workspace/delegation identifiers.
+ */
+export async function userHasEffectiveByokKey(
+  callerUserId: string,
+  opts: { onErrorReturn: boolean },
+): Promise<boolean> {
+  try {
+    const supabase = createServiceClient();
+
+    // 1. Own VALID anthropic key — short-circuits regardless of the flag.
+    const { data: keys, error: keysError } = await supabase
+      .from("api_keys")
+      .select("id")
+      .eq("user_id", callerUserId)
+      .eq("provider", "anthropic")
+      .eq("is_valid", true)
+      .limit(1);
+    if (keysError) throw keysError;
+    if (keys && keys.length > 0) return true;
+
+    // 2. Derive workspace → org → flag (same default workspace as the lease).
+    const workspaceId = await getDefaultWorkspaceForUser(callerUserId, supabase);
+    const orgId = await resolveOrgIdForWorkspace(workspaceId);
+    const identity: Identity = { userId: callerUserId, role: "prd", orgId };
+    if (!(await isByokDelegationsEnabled(orgId, identity))) return false;
+
+    // 3. Resolver row — usable ONLY for a real delegation (delegation_id != null).
+    const { data, error } = await supabase
+      .rpc("resolve_byok_key_owner", {
+        p_caller_user_id: callerUserId,
+        p_workspace_id: workspaceId,
+      })
+      .maybeSingle<ResolveRow>();
+    if (error) throw error;
+    return data?.delegation_id != null;
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "byok-resolver",
+      op: "userHasEffectiveByokKey",
+    });
+    return opts.onErrorReturn;
+  }
+}
+
+/**
+ * Whether `callerUserId` has been GRANTED a BYOK delegation they have not yet
+ * accepted at the current side-letter version (or have since withdrawn). Drives
+ * the degraded-banner "accept your grant" branch so a grant-holder is never
+ * told to buy a separate Anthropic account when one click would unblock them.
+ *
+ * Fail-quiet: any error → false + Sentry mirror (the banner then falls back to
+ * the generic add-key CTA, which is safe).
+ */
+export async function userHasPendingByokDelegation(
+  callerUserId: string,
+): Promise<boolean> {
+  try {
+    const supabase = createServiceClient();
+    const workspaceId = await getDefaultWorkspaceForUser(callerUserId, supabase);
+    const orgId = await resolveOrgIdForWorkspace(workspaceId);
+    const identity: Identity = { userId: callerUserId, role: "prd", orgId };
+    if (!(await isByokDelegationsEnabled(orgId, identity))) return false;
+
+    const { data: delegation } = await supabase
+      .from("byok_delegations")
+      .select("id")
+      .eq("grantee_user_id", callerUserId)
+      .eq("workspace_id", workspaceId)
+      .is("revoked_at", null)
+      .maybeSingle<{ id: string }>();
+    if (!delegation) return false;
+
+    const status = await resolveGranteeAcceptanceStatus(callerUserId, delegation.id);
+    const acceptedCurrent =
+      status.accepted &&
+      !status.withdrawn &&
+      status.sideLetterVersion === status.currentVersion;
+    return !acceptedCurrent;
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "byok-resolver",
+      op: "userHasPendingByokDelegation",
+    });
+    return false;
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
