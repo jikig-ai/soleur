@@ -81,9 +81,11 @@ out=$(base_env SENTRY_FIXTURE_RULES="$TMPDIR_T/missing-cap.json" bash "$SCRIPT" 
 rc=$?
 set -e
 if [[ $rc -ne 0 ]]; then pass "non-zero exit when cap-exceeded absent"; else fail "expected non-zero, got 0"; fi
+if grep -q "byok-cap-exceeded" <<<"$out"; then pass "names the missing cap rule"; else fail "missing cap rule not named ($out)"; fi
 
 # ------------------------------------------------------------------------
-# T4 — non-array response (auth/region/endpoint error) → non-zero exit.
+# T4 — non-array response (auth/region/endpoint error) → non-zero exit
+#      via the fail-closed JSON-array guard (not the absent-rule path).
 # ------------------------------------------------------------------------
 echo "T4: non-array API response fails closed"
 cat >"$TMPDIR_T/error.json" <<'JSON'
@@ -94,6 +96,7 @@ out=$(base_env SENTRY_FIXTURE_RULES="$TMPDIR_T/error.json" bash "$SCRIPT" 2>&1)
 rc=$?
 set -e
 if [[ $rc -ne 0 ]]; then pass "non-zero exit on non-array response"; else fail "expected non-zero, got 0"; fi
+if grep -q "not a JSON array" <<<"$out"; then pass "fails via the JSON-array guard (right reason)"; else fail "did not hit the array guard ($out)"; fi
 
 # ------------------------------------------------------------------------
 # T5 — missing SENTRY_AUTH_TOKEN exits non-zero (preflight guard).
@@ -104,6 +107,16 @@ out=$(env -i PATH="$PATH" HOME="$HOME" bash "$SCRIPT" 2>&1)
 rc=$?
 set -e
 if [[ $rc -ne 0 ]]; then pass "non-zero exit without token"; else fail "expected non-zero, got 0"; fi
+
+# ------------------------------------------------------------------------
+# T6 — missing SENTRY_PROJECT exits non-zero (preflight guard, token set).
+# ------------------------------------------------------------------------
+echo "T6: missing SENTRY_PROJECT"
+set +e
+out=$(env -i PATH="$PATH" HOME="$HOME" SENTRY_AUTH_TOKEN=t SENTRY_ORG=jikigai bash "$SCRIPT" 2>&1)
+rc=$?
+set -e
+if [[ $rc -ne 0 ]]; then pass "non-zero exit without project"; else fail "expected non-zero, got 0"; fi
 
 echo ""
 echo "assert-byok-rules-exist.test.sh: $PASS passed, $FAIL failed"

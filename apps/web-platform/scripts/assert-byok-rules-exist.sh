@@ -17,14 +17,30 @@
 # GDPR surface and could itself page. Existence-by-name is the deterministic,
 # side-effect-free liveness signal.
 #
+# SCOPE — existence-by-name, deliberately NOT filter-shape. The rule's
+# `conditions_v2`/`filters_v2`/`actions_v2` are Terraform-owned (only
+# `environment` is in `lifecycle.ignore_changes`), and this assertion runs
+# POST-apply in the same workflow — so immediately after `terraform apply`
+# re-writes the filters from source, a rule's tag filters are guaranteed
+# correct. Tag-drift (a UI edit that leaves the rule present but renames a
+# `tagged_event` key) between applies is therefore self-healing on the next
+# apply; the residual window (out-of-band UI mute/drift undetected until the
+# next apply) is covered by the deferred recurring-liveness-cron option (plan
+# Phase 3.2, gated on review judgment). Name-matching is safe here because the
+# failure mode this gate catches is ABSENCE — a duplicate name still passes,
+# which is the correct (fail-open-to-present) direction for an existence check.
+#
 # Required env: SENTRY_AUTH_TOKEN, SENTRY_ORG, SENTRY_PROJECT, SENTRY_API_HOST.
 # Test injection (assert-byok-rules-exist.test.sh ONLY):
 #   SENTRY_FIXTURE_RULES — file path; served instead of the live GET.
 
 set -euo pipefail
 
+# Fail-loud on a cleared/misconfigured org secret (no silent default) — a wrong
+# org would query the wrong project and produce a false liveness verdict. The
+# workflow always passes `secrets.SENTRY_ORG`; this guards the empty-secret case.
 : "${SENTRY_AUTH_TOKEN:?SENTRY_AUTH_TOKEN must be set}"
-: "${SENTRY_ORG:=jikigai}"
+: "${SENTRY_ORG:?SENTRY_ORG must be set}"
 : "${SENTRY_PROJECT:?SENTRY_PROJECT must be set}"
 
 # The two rules this control depends on. Names are the `name` attribute of the

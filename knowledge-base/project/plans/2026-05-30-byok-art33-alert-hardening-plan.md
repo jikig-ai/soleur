@@ -197,6 +197,19 @@ disclose that metadata to every Sentry seat at N>1 — but the userId is already
 pseudonymized (`hashUserId`) at the emit boundary, so the exposure is
 delegation/conversation identifiers, not raw PII.
 
+**Failure mode — rule exists but tag-filters drifted (item 5 liveness scope):**
+the `assert-byok-rules-exist.sh` liveness check asserts rule EXISTENCE by name,
+not `filters_v2` shape. A rule that exists with a drifted `tagged_event` key
+would capture the breach event yet silently fail to match. This is mitigated,
+not unhandled: `conditions_v2`/`filters_v2`/`actions_v2` are Terraform-owned
+(NOT in `lifecycle.ignore_changes`), and the liveness check runs POST-apply —
+so every apply re-writes the filters from source and then re-proves existence.
+Tag-drift is self-healing on the next apply; the residual window (drift between
+applies, absent a Terraform run) is covered by the deferred recurring-liveness
+check (Phase 3.2, gated on review judgment — judged: defer for the single-user
+solo-founder Sentry org). Existence-by-name is the deliberate minimal signal,
+not an oversight.
+
 **Brand-survival threshold:** single-user incident.
 
 CPO sign-off required at plan time before `/work` begins (carry-forward from

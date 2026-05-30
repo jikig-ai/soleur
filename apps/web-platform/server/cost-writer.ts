@@ -201,13 +201,15 @@ export function persistTurnCost(
           // key from outside the grantor's workspace. Route through
           // `mirrorP0Deduped` (#4656 items 2+3) — NOT `reportSilentFallback`:
           //   - FATAL severity (a cross-tenant key leak is a breach, not a
-          //     degraded fallback) so it pages, not folds into noise.
-          //   - GUARANTEED pino mirror BEFORE the try/catch-guarded Sentry
-          //     call, so a swallowed/rate-limited Sentry capture still leaves a
-          //     durable stdout signal (item 2 — capture-swallow resilience).
+          //     degraded fallback) so it pages, not folds into noise. This is
+          //     the load-bearing distinction from `reportSilentFallback`, which
+          //     captures at default (error) severity with no clock anchor.
           //   - `first_seen_at` + `severity=breach_attempt` clock anchor for the
           //     Art. 33(1) 72h notification window (item 3), even when re-fires
           //     within the 1h dedup window are suppressed.
+          //   - Pino mirror BEFORE the try/catch-guarded Sentry call, so a
+          //     swallowed/rate-limited Sentry capture still leaves a durable
+          //     stdout signal (item 2 — capture-swallow resilience).
           // The `feature` + `art33Breach` options carry the two tags the
           // `byok_art_33_breach` rule (#4364) filters on (filter_match="all"):
           // `feature=byok-delegations` AND `art_33_breach=true`. Raise string is

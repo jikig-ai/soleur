@@ -224,6 +224,17 @@ resource "sentry_issue_alert" "byok_art_33_breach" {
   # re-pages on recurrence. Attribute names verified via
   # `terraform providers schema -json` (beta2): condition types include
   # first_seen_event, reappeared_event, regression_event.
+  #
+  # Interaction with the app-side dedup: the emit path (`mirrorP0Deduped`,
+  # observability.ts) suppresses re-fires for the same
+  # `grantorUserId:op:conversationId` for 1h (P0_DEDUP_TTL_MS). So
+  # reappeared/regression here re-page a recurrence on the SAME conversation
+  # only after that 1h window lapses; a recurrence in a DIFFERENT conversation
+  # is a fresh dedup key and re-pages immediately. The first occurrence always
+  # pages and stamps `first_seen_at`, so the Art. 33(1) 72h clock starts on
+  # first detection regardless — the 1h floor only bounds *re-paging* of an
+  # already-detected same-conversation incident, which is immaterial to the
+  # 72h window.
   conditions_v2 = [
     { first_seen_event = {} },
     { reappeared_event = {} },
