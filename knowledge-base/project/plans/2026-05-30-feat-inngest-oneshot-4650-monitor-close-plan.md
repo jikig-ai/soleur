@@ -132,7 +132,9 @@ not `step.sleepUntil` (K2); ADR-033 I1–I6 (no Sentry cron monitor for the ones
 |--------|-----------|------------------------|
 | Credential leak / over-broad writes | A future arbitrary-spec scheduler runs with full prd env + App token | **K3** registered-functions-only (this PR ships ONE reviewed function); K21; ADR-046 |
 | Silent no-op | Oneshot never fires or wrongly closes #4650 | Stable-`id` dedup + on-or-after date guard; fail-safe-open on registry-fetch error; #4650 self-recovers + watchdog backstop |
-| Wrong close | #4650 closed while a cron is actually de-planned | Close ONLY when all 3 classify `OK`; partial-health leaves open + posts status |
+| Wrong close (health axis) | #4650 closed while a cron is actually de-planned | Close ONLY when all 3 classify `OK`; partial-health leaves open + alerts |
+| Wrong close (identity axis) | A replayed/forged `oneshot/monitor-close-4650.fire` event with a different `issue` closes an arbitrary repo issue | **Mitigated in code (review P1):** handler pins `data.issue === TARGET_ISSUE` (4650), else `reportSilentFallback(op:"wrong-issue")` + no-op |
+| Credential persistence | Live App installation token written to Inngest's durable step state | **Mitigated in code (review):** token minted+used inside each `step.run`, never returned across the step boundary (security-sentinel rated the prior threading P3/acceptable — loopback SQLite, never in Sentry/pino; this is defense-in-depth) |
 
 **CPO sign-off:** carried forward from brainstorm Phase 0.5 (CPO assessed the scope and recommended the minimal surface; operator chose Approach A). `user-impact-reviewer` will run at review time per review/SKILL.md.
 
