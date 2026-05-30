@@ -14,6 +14,7 @@ const {
   mockSupabaseSelect,
   mockSupabaseMaybeSingle,
   mockSupabaseInsert,
+  mockUserHasEffectiveByokKey,
 } = vi.hoisted(() => {
   const mockSupabaseEq = vi.fn();
   const mockSupabaseNeq = vi.fn();
@@ -50,8 +51,13 @@ const {
     mockSupabaseSelect,
     mockSupabaseMaybeSingle,
     mockSupabaseInsert,
+    mockUserHasEffectiveByokKey: vi.fn().mockResolvedValue(true),
   };
 });
+
+vi.mock("@/server/byok-resolver", () => ({
+  userHasEffectiveByokKey: mockUserHasEffectiveByokKey,
+}));
 
 // ---------------------------------------------------------------------------
 // Module mocks
@@ -197,6 +203,47 @@ describe("setup route — health scanner guard", () => {
       recommendations: [],
       kbExists: false,
     });
+
+    // Default: user has a usable key → auto-sync proceeds.
+    mockUserHasEffectiveByokKey.mockResolvedValue(true);
+  });
+
+  // feat-skip-api-key-onboarding (#4642 review): the auto-sync agent run
+  // rejects at getUserApiKey enforcement for a keyless user, which would
+  // orphan a stalled "active" conversation behind a "ready" screen. Gate the
+  // conversation insert + sync trigger on an effective key (fail-open).
+  test("keyless user → no orphaned sync conversation is created", async () => {
+    mockUserHasEffectiveByokKey.mockResolvedValue(false);
+    mockSupabaseEq
+      .mockReturnValueOnce({ neq: mockSupabaseNeq })
+      .mockResolvedValue({ error: null });
+
+    const response = await POST(
+      makeRequest({ repoUrl: "https://github.com/test/repo", source: "connect_existing" }),
+    );
+    expect(response.status).toBe(200);
+    await flushPromises();
+
+    expect(mockUserHasEffectiveByokKey).toHaveBeenCalledWith(
+      "user-123",
+      expect.objectContaining({ onErrorReturn: true }),
+    );
+    expect(mockSupabaseInsert).not.toHaveBeenCalled();
+  });
+
+  test("user with an effective key → sync conversation IS created", async () => {
+    mockUserHasEffectiveByokKey.mockResolvedValue(true);
+    mockSupabaseEq
+      .mockReturnValueOnce({ neq: mockSupabaseNeq })
+      .mockResolvedValue({ error: null });
+
+    const response = await POST(
+      makeRequest({ repoUrl: "https://github.com/test/repo", source: "connect_existing" }),
+    );
+    expect(response.status).toBe(200);
+    await flushPromises();
+
+    expect(mockSupabaseInsert).toHaveBeenCalled();
   });
 
   test('does NOT call scanProjectHealth when source is "start_fresh"', async () => {

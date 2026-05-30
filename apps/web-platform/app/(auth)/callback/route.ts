@@ -17,6 +17,8 @@ import {
   warnSilentFallback,
 } from "@/server/observability";
 import { hashUserIdValue } from "@/server/userid-pseudonymize";
+import { userHasEffectiveByokKey } from "@/server/byok-resolver";
+import { shouldRouteToSetupKey } from "@/lib/onboarding/setup-key-gate";
 
 // Matches both the canonical verifier cookie and the hypothetical chunked
 // variant (`@supabase/ssr` chunks `sb-<ref>-auth-token` once it exceeds ~4KB;
@@ -237,25 +239,34 @@ export async function GET(request: NextRequest) {
       if (tcAcceptedVersion !== TC_VERSION) {
         redirectPath = "/accept-terms";
       } else {
-        const { data: keys } = await supabase
-          .from("api_keys")
-          .select("id")
-          .eq("user_id", user.id)
-          .eq("provider", "anthropic")
-          .eq("is_valid", true)
-          .limit(1);
+        // Delegation+skip-aware (#4642). `hasEffectiveKey` = own valid key OR
+        // accepted delegation; `onErrorReturn: true` fails OPEN so a transient
+        // resolver error never traps a possibly-delegated user at /setup-key
+        // (chat-time enforcement is authoritative). `setup_key_skipped_at` is
+        // read alongside the existing repo_status service-client read.
+        const hasEffectiveKey = await userHasEffectiveByokKey(user.id, {
+          onErrorReturn: true,
+        });
+        const serviceClient = createServiceClient();
+        const { data: repoUser } = await serviceClient
+          .from("users")
+          .select("repo_status, setup_key_skipped_at")
+          .eq("id", user.id)
+          .single();
+        const setupKeySkippedAt =
+          (repoUser?.setup_key_skipped_at as string | null | undefined) ?? null;
 
-        if (!keys || keys.length === 0) {
+        if (shouldRouteToSetupKey({ hasEffectiveKey, setupKeySkippedAt })) {
           redirectPath = "/setup-key";
+        } else if (!hasEffectiveKey) {
+          // Keyless but skipped: terminal hop — honor the invite next-param
+          // (#4641) else the dashboard (where the NoApiKeyBanner explains the
+          // blocked state). Do NOT route into /connect-repo — repo setup
+          // auto-fires a headless sync agent that needs a key, which would
+          // orphan a stalled "active" conversation and show a misleading
+          // "ready" screen (#4642 review).
+          redirectPath = nextParam ?? "/dashboard";
         } else {
-          // Check if a repository is connected
-          const serviceClient = createServiceClient();
-          const { data: repoUser } = await serviceClient
-            .from("users")
-            .select("repo_status")
-            .eq("id", user.id)
-            .single();
-
           redirectPath =
             !repoUser || repoUser.repo_status === "not_connected"
               ? "/connect-repo"

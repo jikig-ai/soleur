@@ -2,8 +2,11 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **4 issue alerts** (auth observability stack) — imported from existing
-  rules created by `apps/web-platform/scripts/configure-sentry-alerts.sh`.
+- **6 issue alerts** — 4 auth observability rules (import-only, mirrored from
+  rules created by `apps/web-platform/scripts/configure-sentry-alerts.sh`) +
+  2 BYOK-delegations rules (`byok-art-33-breach`, `byok-cap-exceeded`) that are
+  **apply-created** from real `conditions_v2`/`filters_v2`/`actions_v2` (#4364,
+  NOT import-only — terraform owns them; the apply workflow `-target`s both).
 - **8 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
   Actions workflows that touch secrets (closes #3236). Auto-applied on
   push-to-main via `.github/workflows/apply-sentry-infra.yml`. A 9th monitor

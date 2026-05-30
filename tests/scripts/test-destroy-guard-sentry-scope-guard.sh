@@ -9,10 +9,11 @@
 # path-specific clause is required (uptime added in #4585; see the jq
 # filter's CURRENT SCOPE comment for the scalar-attr enumeration).
 #
-# If a future PR adds a different sentry resource type that DOES carry an
-# array-of-blocks (e.g. sentry_issue_alert with conditions{} / actions{}),
-# the destroy-guard-filter-sentry.jq must be extended with a corresponding
-# nested-clause BEFORE that resource is auto-applied.
+# sentry_issue_alert was added to scope in #4364 (the 2 apply-created BYOK
+# rules); it DOES carry array-of-blocks (conditions_v2/filters_v2/actions_v2),
+# so destroy-guard-filter-sentry.jq was extended with a matching nested-clause
+# in the same PR. Any FURTHER new sentry resource type that carries an
+# array-of-blocks must likewise extend the jq filter BEFORE being auto-applied.
 #
 # COMPENSATING CONTROL FOR BETA-PROVIDER DRIFT: this guard keys on resource
 # TYPE, not on live nested-block shape. `sentry_uptime_monitor` is a beta
@@ -48,7 +49,7 @@ if [[ -z "$types" ]]; then
   exit 1
 fi
 
-unexpected=$(echo "$types" | grep -vxE 'sentry_cron_monitor|sentry_uptime_monitor' || true)
+unexpected=$(echo "$types" | grep -vxE 'sentry_cron_monitor|sentry_uptime_monitor|sentry_issue_alert' || true)
 if [[ -n "$unexpected" ]]; then
   echo "[FAIL] apply-sentry-infra.yml targets unexpected resource type(s):" >&2
   printf '  %s\n' "$unexpected" >&2
@@ -60,4 +61,4 @@ if [[ -n "$unexpected" ]]; then
   exit 1
 fi
 
-echo "[ok] apply-sentry-infra.yml targets only sentry_cron_monitor + sentry_uptime_monitor (current filter scope)"
+echo "[ok] apply-sentry-infra.yml targets only sentry_cron_monitor + sentry_uptime_monitor + sentry_issue_alert (current filter scope)"

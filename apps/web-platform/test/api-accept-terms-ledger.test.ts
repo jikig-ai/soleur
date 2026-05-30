@@ -26,6 +26,7 @@ const {
   mockReportSilentFallback,
   mockValidateOrigin,
   mockRejectCsrf,
+  mockUserHasEffectiveByokKey,
 } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockUserFrom: vi.fn(),
@@ -36,6 +37,11 @@ const {
   mockRejectCsrf: vi.fn(
     () => new Response(JSON.stringify({ error: "Forbidden" }), { status: 403 }),
   ),
+  mockUserHasEffectiveByokKey: vi.fn(),
+}));
+
+vi.mock("@/server/byok-resolver", () => ({
+  userHasEffectiveByokKey: mockUserHasEffectiveByokKey,
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -92,13 +98,14 @@ function setupAuthedUser(): void {
   });
 }
 
-// Stub the user-scoped client's api_keys SELECT (for getRedirectDestination).
-function setupApiKeysQuery(rows: Array<{ id: string }>): void {
-  const limit = vi.fn().mockResolvedValue({ data: rows, error: null });
-  const eq3 = vi.fn().mockReturnValue({ limit });
-  const eq2 = vi.fn().mockReturnValue({ eq: eq3 });
-  const eq1 = vi.fn().mockReturnValue({ eq: eq2 });
-  const select = vi.fn().mockReturnValue({ eq: eq1 });
+// Stub the user-scoped client's users SELECT for setup_key_skipped_at
+// (getRedirectDestination reads the skip flag via the session client).
+function setupSkipFlag(skippedAt: string | null): void {
+  const maybeSingle = vi
+    .fn()
+    .mockResolvedValue({ data: { setup_key_skipped_at: skippedAt }, error: null });
+  const eq = vi.fn().mockReturnValue({ maybeSingle });
+  const select = vi.fn().mockReturnValue({ eq });
   mockUserFrom.mockReturnValue({ select });
 }
 
@@ -114,11 +121,12 @@ describe("POST /api/accept-terms — RPC delegation contract", () => {
       new Response(JSON.stringify({ error: "Forbidden" }), { status: 403 }),
     );
     mockServiceRpc.mockResolvedValue({ data: null, error: null });
+    mockUserHasEffectiveByokKey.mockResolvedValue(true);
   });
 
   test("calls public.accept_terms RPC exactly once with (p_user_id, p_version, p_doc_sha)", async () => {
     setupAuthedUser();
-    setupApiKeysQuery([{ id: "key-1" }]);
+    setupSkipFlag(null);
 
     const res = await POST(makeRequest());
 
@@ -136,7 +144,7 @@ describe("POST /api/accept-terms — RPC delegation contract", () => {
 
   test("does NOT write to users or tc_acceptances directly via service client", async () => {
     setupAuthedUser();
-    setupApiKeysQuery([{ id: "key-1" }]);
+    setupSkipFlag(null);
 
     await POST(makeRequest());
 
@@ -156,7 +164,7 @@ describe("POST /api/accept-terms — RPC delegation contract", () => {
     // (ON CONFLICT DO NOTHING + same-value UPDATE). The old idempotency
     // SELECT must be gone (Kieran P0-3).
     setupAuthedUser();
-    setupApiKeysQuery([{ id: "key-1" }]);
+    setupSkipFlag(null);
 
     // Simulate a service-client .from() that would return the existing
     // version if the route still SELECTed. With the new shape, no such
@@ -187,7 +195,7 @@ describe("POST /api/accept-terms — RPC delegation contract", () => {
 
   test("surfaces RPC error to Sentry via reportSilentFallback and returns 500", async () => {
     setupAuthedUser();
-    setupApiKeysQuery([]);
+    setupSkipFlag(null);
     mockServiceRpc.mockResolvedValue({
       data: null,
       error: { message: "db connection lost" },
@@ -207,6 +215,46 @@ describe("POST /api/accept-terms — RPC delegation contract", () => {
     const res = await POST(makeRequest());
     expect(res.status).toBe(401);
     expect(mockServiceRpc).not.toHaveBeenCalled();
+  });
+
+  // feat-skip-api-key-onboarding (#4642) — AC3: redirect honors effective-key
+  // OR an explicit skip; a delegated/skipped user is never sent to /setup-key.
+  describe("skip+delegation-aware redirect", () => {
+    test("effective key (own or delegated) → /dashboard", async () => {
+      setupAuthedUser();
+      setupSkipFlag(null);
+      mockUserHasEffectiveByokKey.mockResolvedValue(true);
+      const res = await POST(makeRequest());
+      expect((await res.json()).redirect).toBe("/dashboard");
+    });
+
+    test("keyless, not skipped → /setup-key", async () => {
+      setupAuthedUser();
+      setupSkipFlag(null);
+      mockUserHasEffectiveByokKey.mockResolvedValue(false);
+      const res = await POST(makeRequest());
+      expect((await res.json()).redirect).toBe("/setup-key");
+    });
+
+    test("keyless but skipped → /dashboard (honors 'Set up later')", async () => {
+      setupAuthedUser();
+      setupSkipFlag("2026-05-30T00:00:00Z");
+      mockUserHasEffectiveByokKey.mockResolvedValue(false);
+      const res = await POST(makeRequest());
+      expect((await res.json()).redirect).toBe("/dashboard");
+    });
+
+    test("resolver fails open (onErrorReturn:true) — passes true so a transient error never traps the user", async () => {
+      setupAuthedUser();
+      setupSkipFlag(null);
+      // Assert the route asked for fail-open.
+      mockUserHasEffectiveByokKey.mockResolvedValue(true);
+      await POST(makeRequest());
+      expect(mockUserHasEffectiveByokKey).toHaveBeenCalledWith(
+        USER_ID,
+        expect.objectContaining({ onErrorReturn: true }),
+      );
+    });
   });
 
   test("returns 403 when CSRF origin check fails", async () => {
