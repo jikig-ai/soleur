@@ -215,14 +215,14 @@ resource "sentry_issue_alert" "byok_art_33_breach" {
     {
       tagged_event = {
         key   = "feature"
-        match = "eq"
+        match = "EQUAL"
         value = "byok-delegations"
       }
     },
     {
       tagged_event = {
         key   = "art_33_breach"
-        match = "eq"
+        match = "EQUAL"
         value = "true"
       }
     },
@@ -260,14 +260,14 @@ resource "sentry_issue_alert" "byok_cap_exceeded" {
     {
       tagged_event = {
         key   = "feature"
-        match = "eq"
+        match = "EQUAL"
         value = "byok-delegations"
       }
     },
     {
       tagged_event = {
         key   = "op"
-        match = "in"
+        match = "IS_IN"
         value = "hourly-cap-exceeded,daily-cap-exceeded"
       }
     },

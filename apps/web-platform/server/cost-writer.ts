@@ -196,13 +196,15 @@ export function persistTurnCost(
             new ByokDelegationDailyCapError(delegation.delegationId),
             { feature: "byok-delegations", op: "daily-cap-exceeded", extra: baseExtra },
           );
-        } else if (message.includes("byok_delegations:cross_tenant:")) {
+        } else if (message.includes("byok_delegations:cross-tenant:")) {
           // GDPR Art. 33 breach surface: the grantee used the grantor's BYOK
           // key from outside the grantor's workspace. Route to a DISTINCT op
           // tagged `art_33_breach=true` so the dedicated alert rule (#4364)
           // starts the 72h-notification clock — never the merged-rpc-failure
           // catch-all, where it would be indistinguishable from a transient
-          // DB error. Raise string is the underscore form per mig 064 L193.
+          // DB error. Raise string is the HYPHEN form `byok_delegations:cross-tenant:`
+          // per mig 064 L214/220/227 (note: sibling reasons use underscores;
+          // only cross-tenant is hyphenated in the migration).
           reportSilentFallback(
             new ByokDelegationCrossTenantError(delegation.delegationId),
             {
