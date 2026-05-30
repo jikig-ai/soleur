@@ -262,6 +262,21 @@ write_body() {
 # Per-route mock behavior. Order matters: 8288 must match before generic /health
 # because the canary loop's curl -sf for /health does NOT pass -w.
 case "$URL" in
+  *"8288/v1/functions"*)
+    # Cron-plan registry probe (#4650 AC9). Must match before 8288/health
+    # so the substring routes here. Default: a function WITH a cron trigger
+    # (healthy plan). Overrides simulate the two H9 failure modes.
+    if [[ "${MOCK_CURL_INNGEST_FUNCTIONS_FAIL:-}" == "1" ]]; then
+      exit 1
+    fi
+    if [[ "${MOCK_CURL_INNGEST_FUNCTIONS_NOCRON:-}" == "1" ]]; then
+      # H9b: registered but cron de-planned — only the event trigger survives.
+      write_body '[{"slug":"soleur-runtime-cron-community-monitor","triggers":[{"event":"cron/community-monitor.manual-trigger"}]}]'
+      exit 0
+    fi
+    write_body '[{"slug":"soleur-runtime-cron-community-monitor","triggers":[{"cron":"0 8 * * *"},{"event":"cron/community-monitor.manual-trigger"}]}]'
+    exit 0
+    ;;
   *"8288/health"*)
     if [[ "${MOCK_CURL_INNGEST_HEALTH_FAIL:-}" == "1" ]]; then
       exit 1
@@ -1869,6 +1884,17 @@ assert_state_contains "restart inngest health failure" \
   "inngest_health_failed" "1" \
   "restart inngest _ latest" \
   "export MOCK_CURL_INNGEST_HEALTH_FAIL=1"
+
+# #4650 AC9: restart verifies cron-plan integrity, not just /health. A server
+# that is /health-healthy but whose cron triggers were not re-planned (H9b)
+# must FAIL verification — this is the liveness-vs-plan gap the watchdog and
+# this assertion close. The default mock returns a cron-triggered function, so
+# the AC1 "restart inngest succeeds" test above already exercises the positive
+# (cron-present) path.
+assert_state_contains "restart inngest fails when cron plan de-planned (#4650 AC9)" \
+  "inngest_health_failed" "1" \
+  "restart inngest _ latest" \
+  "export MOCK_CURL_INNGEST_FUNCTIONS_NOCRON=1"
 
 # Existing deploy validation still rejects `deploy inngest restart latest`
 # (image mismatch since "restart" != expected image)

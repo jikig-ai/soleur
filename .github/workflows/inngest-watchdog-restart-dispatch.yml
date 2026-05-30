@@ -1,0 +1,44 @@
+# D1-B fallback for the Inngest cron-trigger self-healing watchdog (issue
+# #4650). When the watchdog cannot reach the deploy webhook directly (D1-A,
+# egress blocked / 5xx), it files a p0 issue carrying the
+# `inngest-desync-restart` label. This workflow listens for that label and
+# dispatches restart-inngest-server.yml — keeping the H9a restart autonomous
+# without operator intervention (never-defer-operator-actions).
+#
+# Security: the trigger condition matches ONLY the controlled label name. No
+# untrusted issue content (title/body) is interpolated into any run: command.
+name: Inngest Watchdog — Restart Dispatch
+
+on:
+  issues:
+    types: [labeled]
+  # push trigger scoped to this file forces GitHub to register the workflow in
+  # the Actions UI (matches restart-inngest-server.yml's registration note).
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/inngest-watchdog-restart-dispatch.yml'
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch-restart:
+    # Only act on the watchdog's escalation label. github.event.label.name is a
+    # repo-controlled label string, not free-form user input.
+    if: github.event_name == 'issues' && github.event.label.name == 'inngest-desync-restart'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch restart-inngest-server.yml
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          echo "Watchdog escalation label detected on issue #${ISSUE_NUMBER} — dispatching restart-inngest-server.yml"
+          gh workflow run restart-inngest-server.yml --ref main \
+            --repo "${GITHUB_REPOSITORY}"
+          gh issue comment "${ISSUE_NUMBER}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --body "Dispatched \`restart-inngest-server.yml\` via the watchdog D1-B escalation path. Watch the [Actions tab](https://github.com/${GITHUB_REPOSITORY}/actions/workflows/restart-inngest-server.yml) for completion."
