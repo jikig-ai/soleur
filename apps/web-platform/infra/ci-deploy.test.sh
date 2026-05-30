@@ -1906,6 +1906,11 @@ assert_state_contains "restart inngest fails when cron plan de-planned (#4650 AC
 # at inngest_image_env_missing) — out of scope here; instead assert the WIRING:
 # in the deploy-inngest branch verify_inngest_health runs BEFORE the success
 # state-write, with an inngest_health_failed branch between them.
+# ORDERING DEPENDENCY: the `tail -1` anchors below assume the `deploy inngest`
+# case arm appears AFTER the `restart inngest` arm in ci-deploy.sh (so the last
+# verify_inngest_health / last inngest_health_failed belong to the deploy arm).
+# That holds today; if the case arms are reordered, re-anchor these greps to the
+# deploy-inngest block (e.g. via awk between the arm's case label and `;;`).
 TOTAL=$((TOTAL + 1))
 DI_VERIFY_LINE=$(grep -nE '^[[:space:]]*verify_inngest_health[[:space:]]*$' "$DEPLOY_SCRIPT" | tail -1 | cut -d: -f1)
 DI_SUCCESS_LINE=$(grep -nE 'SUCCESS: inngest .* deployed' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1)

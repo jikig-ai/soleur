@@ -319,9 +319,13 @@ curl -s http://127.0.0.1:8288/v1/functions | \
 
 **Primary (no action — polling self-heals):** With `--poll-interval 60` the
 server re-syncs/re-plans a dropped (H9a) or de-planned (H9b) function from the
-app's `/api/inngest` manifest within ≤60s automatically. Re-query
+app's `/api/inngest` manifest within ≤60s automatically. **To confirm recovery
+WITHOUT host access (`hr-no-dashboard-eyeball`/no-SSH):** watch the
+`scheduled-inngest-cron-watchdog` Sentry monitor flip back to `ok` on its next
+4h tick (query the Sentry Crons monitor-list API), or re-run the watchdog via
+`gh workflow run`. The loopback re-query
 `curl -s http://127.0.0.1:8288/v1/functions | jq '[.[]|select(.triggers[]?.cron)]|length'`
-one minute later — it should be back to >=1 with the affected cron present.
+(>=1 with the affected cron present) is an **on-host** confirmation aid only.
 A restart is only needed when polling itself is broken (see the backstop below).
 
 **Automated backstop (if polling is broken):** Run the restart workflow from any machine with `gh` auth:

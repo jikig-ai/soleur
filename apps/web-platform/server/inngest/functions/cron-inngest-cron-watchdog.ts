@@ -270,9 +270,11 @@ export function restartAllowed(
   return now - last >= RESTART_COOLDOWN_MS;
 }
 
-// A restart is warranted when at least one function needs the restart path
-// (H9a MISSING, or an H9b UNPLANNED that has escalated past the streak
-// threshold) AND the cooldown permits it.
+// A restart is warranted when at least one function has escalated to the
+// backstop — i.e. it stayed defective (MISSING ∪ UNPLANNED) for
+// POLL_RECOVERY_GRACE_TICKS consecutive ticks despite polling (#4652) — AND
+// the cooldown permits it. `restartFnIds` is the already-escalated set
+// (`escalatedDefectFnIds`); MISSING no longer bypasses the streak gate.
 export function shouldRestart(
   restartFnIds: string[],
   lastRestartAtIso: string | null,

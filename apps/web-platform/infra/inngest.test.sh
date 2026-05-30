@@ -174,9 +174,11 @@ assert "server unit write is OUTSIDE the SKIP_BINARY_INSTALL guard (reconcile-al
 assert "bootstrap restarts inngest-server.service (new ExecStart loads on redeploy)" \
   "grep -qE '^systemctl restart inngest-server.service' '$BOOTSTRAP_SH'"
 # The upgrade-drain resume must still run after the restart (R2 — restart must
-# not orphan the pause/resume pairing).
-assert "upgrade-drain resume still present (pause/resume pairing intact)" \
-  "grep -qE '\" resume \"|INSTALL_PATH\" resume|resume >/dev/null' '$BOOTSTRAP_SH' || grep -qE 'resume' '$BOOTSTRAP_SH'"
+# not orphan the pause/resume pairing). Match the actual resume COMMAND
+# (`"$INSTALL_PATH" resume`) precisely — no broad `|| grep resume` fallback,
+# which would vacuously pass on any comment line merely mentioning "resume".
+assert "upgrade-drain resume command still present (pause/resume pairing intact)" \
+  "grep -qE '\"\\\$INSTALL_PATH\" resume' '$BOOTSTRAP_SH'"
 
 # --- `terraform fmt -check` for HCL hygiene ---
 echo ""
