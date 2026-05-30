@@ -1,0 +1,75 @@
+# Deletes the head branch of a bot-generated PR when that PR is CLOSED WITHOUT
+# MERGING. Closes the only stale-branch leak the repo's existing hygiene misses.
+#
+# Why this exists (and why it is reactive, not a cron janitor):
+#   - The repo already sets `delete_branch_on_merge: true`, so any PR that MERGES
+#     has its head branch auto-deleted by GitHub. That path is already clean.
+#   - The bot branch creators (7 Inngest cron functions — cron-content-generator,
+#     cron-growth-audit, cron-community-monitor, cron-campaign-calendar,
+#     cron-content-publisher, cron-weekly-analytics, cron-growth-execution — plus
+#     the rule-metrics-aggregate GHA) all persist via the same async pattern:
+#         git push origin "$BRANCH" && gh pr create ... && gh pr merge --squash --auto
+#     `--auto` merges LATER, when checks pass. The creating run exits first, so the
+#     creator physically cannot clean up a branch whose PR is closed unmerged —
+#     it is already gone by the time the close happens. A reactive trigger on the
+#     close event is the only place that knowledge exists.
+#   - This fires on the exact event that leaks (a bot PR closing unmerged) and
+#     deletes nothing on a schedule.
+#
+# Coverage: closed-unmerged PRs whose head branch matches a known bot prefix
+#   (ci/, bot-fix, learning-, review-). MERGED PRs are excluded (already
+#   auto-deleted). Human feature branches are excluded by prefix.
+#
+# Known residual (intentionally NOT covered): branches that were pushed but never
+#   opened a PR (e.g. `gh pr create` failed after `git push`). No PR-close event
+#   ever fires for them, so a reactive workflow cannot see them. These are rare
+#   and a periodic sweep was explicitly declined in favor of source-aligned
+#   reactive cleanup; revisit only if that tail grows.
+#
+# Security: the head branch name is attacker-influenceable. It is used ONLY via
+#   (a) `startsWith()` in the `if:` expression (GitHub expression functions, no
+#   shell) and (b) an `env:` var dereferenced inside a quoted gh-api path — never
+#   interpolated into a `run:` line. Same env-block pattern as
+#   pr-auto-close-scanner.yml / follow-through-closure-guard.yml.
+
+name: "Cleanup unmerged bot branches"
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write       # delete the head ref
+  pull-requests: read
+
+jobs:
+  delete-unmerged-bot-branch:
+    # Only same-repo (non-fork) bot branches whose PR closed WITHOUT merging.
+    if: >
+      github.event.pull_request.merged == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (
+        startsWith(github.event.pull_request.head.ref, 'ci/') ||
+        startsWith(github.event.pull_request.head.ref, 'bot-fix') ||
+        startsWith(github.event.pull_request.head.ref, 'learning-') ||
+        startsWith(github.event.pull_request.head.ref, 'review-')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete head ref
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "PR #${PR_NUMBER} closed unmerged — deleting bot branch: ${HEAD_REF}"
+          if gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${HEAD_REF}" 2>err.log; then
+            echo "::notice::Deleted unmerged bot branch ${HEAD_REF} (PR #${PR_NUMBER})"
+          elif grep -qiE 'Reference does not exist|Not Found|422' err.log; then
+            echo "::notice::Branch ${HEAD_REF} already gone — nothing to delete (PR #${PR_NUMBER})"
+          else
+            echo "::error::Failed to delete ${HEAD_REF} (PR #${PR_NUMBER})"
+            cat err.log
+            exit 1
+          fi

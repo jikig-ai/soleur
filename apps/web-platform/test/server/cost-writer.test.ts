@@ -28,6 +28,7 @@ vi.mock("@/lib/supabase/service", () => ({
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
+  mirrorP0Deduped: vi.fn(),
 }));
 
 vi.mock("@/server/ws-handler", () => ({
@@ -43,7 +44,7 @@ vi.mock("@/server/logger", () => ({
 }));
 
 import { persistTurnCost } from "@/server/cost-writer";
-import { reportSilentFallback } from "@/server/observability";
+import { reportSilentFallback, mirrorP0Deduped } from "@/server/observability";
 import { ByokDelegationCrossTenantError } from "@/server/byok-resolver";
 
 const USER = "550e8400-e29b-41d4-a716-446655440000";
@@ -128,14 +129,19 @@ describe("persistTurnCost — workspace_id wiring (Phase 3)", () => {
   });
 });
 
-describe("persistTurnCost — cross-tenant Art.33 emission (#4364)", () => {
-  it("routes byok_delegations:cross-tenant to op=cross-tenant-violation with art_33_breach tag", async () => {
+describe("persistTurnCost — cross-tenant Art.33 emission (#4364, hardened #4656)", () => {
+  it("routes byok_delegations:cross-tenant through mirrorP0Deduped (fatal, recurrence-resilient, clock-anchored)", async () => {
+    const p0Mock = vi.mocked(mirrorP0Deduped);
     const reportMock = vi.mocked(reportSilentFallback);
+    p0Mock.mockClear();
     reportMock.mockClear();
     // The migration-064 trigger raises the HYPHEN form on the cross-tenant
-    // path. cost-writer must route it to a DISTINCT op + art33Breach so the
-    // dedicated Art.33 alert rule fires — never the merged-rpc-failure
-    // catch-all. Guards the hyphen/underscore bug caught in review.
+    // path. cost-writer must route it through `mirrorP0Deduped` (#4656 items
+    // 2+3): fatal severity, no 5-min debounce, and `first_seen_at` clock
+    // anchor — NEVER the `reportSilentFallback` path (capture-swallowed, no
+    // clock anchor) and never the merged-rpc-failure catch-all. The
+    // `feature` + `art33Breach` options carry the two tags the
+    // `byok_art_33_breach` rule filters on (filter_match="all").
     rpcSpy.mockImplementation(
       async (
         name: string,
@@ -170,15 +176,25 @@ describe("persistTurnCost — cross-tenant Art.33 emission (#4364)", () => {
     );
     await new Promise((r) => setImmediate(r));
 
-    const call = reportMock.mock.calls.find(
+    expect(p0Mock).toHaveBeenCalledTimes(1);
+    const [errArg, ctx] = p0Mock.mock.calls[0];
+    expect(errArg).toBeInstanceOf(ByokDelegationCrossTenantError);
+    expect(ctx).toMatchObject({
+      op: "cross-tenant-violation",
+      userId: USER,
+      conversationId: CONV,
+      delegationId: "deadbeef",
+      feature: "byok-delegations",
+      art33Breach: true,
+    });
+
+    // Must NOT route through reportSilentFallback for the cross-tenant op
+    // (capture-swallow + no clock anchor was the #4656 item-2/3 gap), and must
+    // NOT fall through to the merged-rpc-failure catch-all.
+    const crossTenantViaFallback = reportMock.mock.calls.find(
       (c) => (c[1] as { op?: string })?.op === "cross-tenant-violation",
     );
-    expect(call).toBeTruthy();
-    expect(call?.[0]).toBeInstanceOf(ByokDelegationCrossTenantError);
-    expect((call?.[1] as { feature: string }).feature).toBe("byok-delegations");
-    expect((call?.[1] as { art33Breach?: boolean }).art33Breach).toBe(true);
-
-    // Must NOT also fall through to the merged-rpc-failure catch-all.
+    expect(crossTenantViaFallback).toBeFalsy();
     const fallback = reportMock.mock.calls.find(
       (c) => (c[1] as { op?: string })?.op === "merged-rpc-failure",
     );

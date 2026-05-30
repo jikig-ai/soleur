@@ -260,6 +260,23 @@ jobs:
           set -euo pipefail
           terraform apply -auto-approve -input=false tfplan
 
+      - name: BYOK Art.33 detector liveness assertion (#4656 item 5)
+        # Read-only post-apply check: assert both BYOK issue-alert rules
+        # (byok-art-33-breach, byok-cap-exceeded) exist in Sentry by name. A
+        # silent mis-wire (dropped -target, deleted/muted rule, name drift)
+        # would leave the GDPR Art.33 control un-paged until a real breach.
+        # Emits NO synthetic breach event (plan D2). Fail-closed: a non-zero
+        # exit halts the workflow and surfaces a GitHub Actions failure.
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+          SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+        run: |
+          set -euo pipefail
+          which jq >/dev/null 2>&1 || sudo apt-get install -y jq
+          bash apps/web-platform/scripts/assert-byok-rules-exist.sh
+
       - name: Post-apply summary
         if: always()
         env:

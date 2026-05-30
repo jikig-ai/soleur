@@ -332,4 +332,79 @@ describe("mirrorP0Deduped — userIdHash pseudonymization", () => {
     mirrorP0Deduped(err, { op: "o", userId: "u", conversationId: "c2" });
     expect(mockCaptureException).toHaveBeenCalledTimes(2);
   });
+
+  // #4656 items 1+2+3 — the BYOK Art.33 breach routes through this primitive.
+  // The `byok_art_33_breach` Sentry rule (issue-alerts.tf) is filter_match="all"
+  // on BOTH `feature=byok-delegations` AND `art_33_breach=true`, so the event
+  // MUST carry both tags or the rule never fires. `delegationId` is the
+  // cross-tenant-leak clock-anchor identifier.
+  it("sets feature + art_33_breach tags and delegationId extra when the Art.33 options are passed", () => {
+    const err = new Error("cross-tenant BYOK key leak");
+    mirrorP0Deduped(err, {
+      op: "cross-tenant-violation",
+      userId: "grantor-1",
+      conversationId: "conv-x",
+      feature: "byok-delegations",
+      art33Breach: true,
+      delegationId: "deadbeef",
+    });
+
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+    const [, payload] = mockCaptureException.mock.calls[0];
+    expect(payload.level).toBe("fatal");
+    expect(payload.tags).toMatchObject({
+      op: "cross-tenant-violation",
+      scope: "p0_deduped",
+      feature: "byok-delegations",
+      art_33_breach: "true",
+    });
+    expect(payload.extra).toMatchObject({
+      delegationId: "deadbeef",
+      severity: "breach_attempt",
+    });
+    expect(typeof payload.extra.first_seen_at).toBe("string");
+  });
+
+  it("omits feature/art_33_breach tags and delegationId extra when the options are absent", () => {
+    const err = new Error("plain write-boundary violation");
+    mirrorP0Deduped(err, {
+      op: "cc.write-boundary",
+      userId: "u",
+      conversationId: "c",
+    });
+
+    const [, payload] = mockCaptureException.mock.calls[0];
+    expect(payload.tags).not.toHaveProperty("feature");
+    expect(payload.tags).not.toHaveProperty("art_33_breach");
+    expect(payload.extra).not.toHaveProperty("delegationId");
+  });
+
+  // #4656 item 2 — capture-swallow resilience: the guaranteed pino mirror fires
+  // BEFORE the try/catch-guarded Sentry capture, so a swallowed/rate-limited
+  // Sentry call still leaves a durable stdout breach record. This is the
+  // load-bearing property for the BYOK Art.33 path when Sentry is down.
+  it("still emits the pino mirror when the Sentry capture throws (swallowed)", () => {
+    mockCaptureException.mockImplementationOnce(() => {
+      throw new Error("Sentry uninitialized / rate-limited");
+    });
+    const err = new Error("cross-tenant BYOK key leak");
+
+    // Must not propagate the swallowed Sentry error to the caller.
+    expect(() =>
+      mirrorP0Deduped(err, {
+        op: "cross-tenant-violation",
+        userId: "grantor-1",
+        conversationId: "conv-x",
+        feature: "byok-delegations",
+        art33Breach: true,
+        delegationId: "deadbeef",
+      }),
+    ).not.toThrow();
+
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+    expect(mockLoggerError).toHaveBeenCalledTimes(1);
+    const [pinoCtx, pinoMsg] = mockLoggerError.mock.calls[0];
+    expect(pinoCtx).toMatchObject({ op: "cross-tenant-violation" });
+    expect(pinoMsg).toBe("p0 deduped mirror: cross-tenant-violation");
+  });
 });
