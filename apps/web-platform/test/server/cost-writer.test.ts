@@ -9,7 +9,13 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const { rpcSpy, sendToClientSpy } = vi.hoisted(() => ({
   rpcSpy: vi.fn(
-    async (_name: string, _args: Record<string, unknown>) => ({ error: null }),
+    // Return type widened to the error union so per-test mockImplementation
+    // can return an RPC error (e.g. the cross-tenant P0001 path) without
+    // tripping TS2345 — the default value stays { error: null } (#4364).
+    async (
+      _name: string,
+      _args: Record<string, unknown>,
+    ): Promise<{ error: null | { message: string } }> => ({ error: null }),
   ),
   sendToClientSpy: vi.fn(
     (_userId: string, _msg: Record<string, unknown>) => true,
@@ -130,17 +136,22 @@ describe("persistTurnCost — cross-tenant Art.33 emission (#4364)", () => {
     // path. cost-writer must route it to a DISTINCT op + art33Breach so the
     // dedicated Art.33 alert rule fires — never the merged-rpc-failure
     // catch-all. Guards the hyphen/underscore bug caught in review.
-    rpcSpy.mockImplementation(async (name: string) => {
-      if (name === "check_and_record_byok_delegation_use") {
-        return {
-          error: {
-            message:
-              "byok_delegations:cross-tenant: grantee g-1 is not a member of workspace ws-1",
-          },
-        };
-      }
-      return { error: null };
-    });
+    rpcSpy.mockImplementation(
+      async (
+        name: string,
+        _args: Record<string, unknown>,
+      ): Promise<{ error: null | { message: string } }> => {
+        if (name === "check_and_record_byok_delegation_use") {
+          return {
+            error: {
+              message:
+                "byok_delegations:cross-tenant: grantee g-1 is not a member of workspace ws-1",
+            },
+          };
+        }
+        return { error: null };
+      },
+    );
     persistTurnCost(
       USER,
       CONV,
