@@ -174,3 +174,114 @@ resource "sentry_issue_alert" "auth_signout_burst" {
     ]
   }
 }
+
+# ── BYOK delegations alert rules (#4364) — APPLY-CREATED, NOT import-only ───
+# Unlike the 4 auth rules above (which mirror legacy script-created rules and
+# are imported with `conditions_v2/filters_v2 = []` placeholders), these two
+# have NO pre-existing Sentry rule. Terraform CREATES them from real
+# conditions_v2 + filters_v2 + actions_v2, so:
+#   - conditions/filters/actions are NOT under `ignore_changes` — this file is
+#     the source of truth for them (the whole point of the rule).
+#   - `environment` IS ignored: the provider recomputes it on read for these
+#     project-wide rules just as it does for the auth rules.
+#   - distinct `frequency` (5, 15) avoids Sentry's POST-time "exact duplicate"
+#     dedup (keyed on action-shape + frequency + match, NOT conditions — see
+#     2026-05-17-sentry-issue-alert-create-dedup-on-action-match-not-conditions.md).
+#     Taken set is 60/61/62/30 (auth rules) — 5 and 15 are free.
+#   - the apply workflow MUST `-target` both (see apply-sentry-infra.yml); the
+#     untargeted apply is scoped to monitors so it never trips the import-only
+#     auth rules.
+# Tag vocabulary verified against apps/web-platform/server/cost-writer.ts +
+# server/observability.ts: events carry `feature=byok-delegations`, `op=<...>`,
+# and `art_33_breach=true` on the cross-tenant path (wired in this PR's #4364
+# Goal 0a). Schema attribute names verified via `terraform providers schema
+# -json` against jianyuan/sentry 0.15.0-beta2 (Phase 0).
+
+# Rule 1 — GDPR Art. 33 breach (cross-tenant BYOK key leak). Highest urgency:
+# tight frequency + notify ActiveMembers fallthrough. Filters require BOTH
+# feature=byok-delegations AND art_33_breach=true (filter_match = "all").
+resource "sentry_issue_alert" "byok_art_33_breach" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "byok-art-33-breach"
+  action_match = "all"
+  filter_match = "all"
+  frequency    = 5
+
+  conditions_v2 = [
+    { first_seen_event = {} },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "eq"
+        value = "byok-delegations"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "art_33_breach"
+        match = "eq"
+        value = "true"
+      }
+    },
+  ]
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# Rule 2 — BYOK delegation cap exceeded (hourly | daily). Lower urgency:
+# wider frequency + quieter `NoOne` fallthrough. Filters require
+# feature=byok-delegations AND op ∈ {hourly-cap-exceeded, daily-cap-exceeded}
+# via a single `in` match (comma-separated; `in` confirmed in beta2 schema).
+resource "sentry_issue_alert" "byok_cap_exceeded" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "byok-cap-exceeded"
+  action_match = "all"
+  filter_match = "all"
+  frequency    = 15
+
+  conditions_v2 = [
+    { first_seen_event = {} },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "eq"
+        value = "byok-delegations"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "op"
+        match = "in"
+        value = "hourly-cap-exceeded,daily-cap-exceeded"
+      }
+    },
+  ]
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "NoOne"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
