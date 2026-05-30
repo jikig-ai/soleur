@@ -423,3 +423,26 @@ resource "sentry_cron_monitor" "scheduled_ux_audit" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# Issue #4650: Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-inngest-cron-watchdog.ts`.
+# NEW monitor — self-healing watchdog for the cron-trigger desync regression
+# (runbook H9). Every 4h it queries the running server's /v1/functions registry
+# and self-restores dropped (H9a) / de-planned (H9b) cron triggers; an ok=false
+# heartbeat flips THIS monitor to error when any monitored function is defective.
+# 4-hourly (0 */4 * * *) — 120-min margin per the Inngest ≤2-min jitter plus
+# slack for the loopback fetch + heal steps. 5 min runtime (pure-IO: loopback
+# fetch + inngest.send + optional webhook POST, no claude-eval spawn).
+# The watchdog rides the substrate it monitors — if it stops firing entirely,
+# this monitor's own missed check-in surfaces the meta-failure.
+resource "sentry_cron_monitor" "scheduled_inngest_cron_watchdog" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-inngest-cron-watchdog"
+  schedule                = { crontab = "0 */4 * * *" }
+  checkin_margin_minutes  = 120
+  max_runtime_minutes     = 5
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
