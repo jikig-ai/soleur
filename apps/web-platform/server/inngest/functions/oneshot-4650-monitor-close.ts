@@ -43,11 +43,18 @@ import {
 
 const FUNCTION_NAME = "oneshot-4650-monitor-close";
 
+// The only issue this oneshot is allowed to act on. data.issue is asserted
+// against this (identity axis) so a replayed/forged event carrying a different
+// issue number cannot drive a close on an arbitrary repo issue.
+const TARGET_ISSUE = 4650;
+
 const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
 
 // The 3 cron functions backing #4650's Sentry monitors (1:1 with the monitor
 // slugs scheduled-{gh-pages-cert-state,community-monitor,inngest-cron-watchdog}).
-const TARGET_FN_IDS = [
+// Exported so a unit test can assert TARGET_FN_IDS ⊂ EXPECTED_CRON_FUNCTIONS
+// (guards against this subset silently drifting from the watchdog manifest).
+export const TARGET_FN_IDS = [
   "cron-gh-pages-cert-state",
   "cron-community-monitor",
   "cron-inngest-cron-watchdog",
@@ -91,6 +98,32 @@ export async function oneshot4650MonitorCloseHandler({
     );
     return { ok: false, reason: "invalid-date-override" };
   }
+  // Identity guard: only ever act on #4650 (the close uses data.issue; pin it).
+  if (data.issue !== TARGET_ISSUE) {
+    reportSilentFallback(
+      new Error(`unexpected issue ${data.issue} (only ${TARGET_ISSUE} allowed)`),
+      {
+        feature: FUNCTION_NAME,
+        op: "wrong-issue",
+        message: "event carried a non-target issue number",
+        extra: { fn: FUNCTION_NAME, issue: data.issue, target: TARGET_ISSUE },
+      },
+    );
+    return { ok: false, reason: "wrong-issue" };
+  }
+  // expected_date is the trust boundary too — validate it like date_override.
+  if (!isValidYmd(data.expected_date)) {
+    reportSilentFallback(
+      new Error(`Invalid expected_date: ${JSON.stringify(data.expected_date)}`),
+      {
+        feature: FUNCTION_NAME,
+        op: "expected-date-validation",
+        message: "expected_date must be a real YYYY-MM-DD date",
+        extra: { fn: FUNCTION_NAME, raw: String(data.expected_date).slice(0, 20) },
+      },
+    );
+    return { ok: false, reason: "invalid-expected-date" };
+  }
   const today = data.date_override ?? new Date().toISOString().slice(0, 10);
   if (today < data.expected_date) {
     // Early replay/desync — expected and benign, so warn-level (not error).
@@ -106,8 +139,11 @@ export async function oneshot4650MonitorCloseHandler({
     return { ok: false, reason: "date-guard" };
   }
 
-  // --- Step 1: issue state + token (load-bearing idempotency) ---------------
-  const issue = await step.run("check-issue-state", async () => {
+  // --- Step 1: issue state (load-bearing idempotency) ----------------------
+  // Token is minted+used inside the step and NOT returned — keeping a live
+  // installation token out of Inngest's persisted step state. The close step
+  // (step 3) mints its own.
+  const issueState = await step.run("check-issue-state", async () => {
     const token = await mintInstallationToken({
       tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
     });
@@ -117,7 +153,7 @@ export async function oneshot4650MonitorCloseHandler({
       "GET /repos/{owner}/{repo}/issues/{issue_number}",
       { owner: REPO_OWNER, repo: REPO_NAME, issue_number: data.issue },
     );
-    return { token, state: (res.data as { state?: string }).state ?? "open" };
+    return (res.data as { state?: string }).state ?? "open";
   });
 
   // --- Step 2: classify the 3 target cron functions ------------------------
@@ -142,9 +178,22 @@ export async function oneshot4650MonitorCloseHandler({
   const unhealthy = classify.results.filter((r) => r.status !== "OK");
 
   // --- Already-closed: still audit health so a FOREIGN close over a real
-  // de-plan is not silently masked as success (sf P1-2). --------------------
-  if (issue.state === "closed") {
-    if (classify.ok && unhealthy.length > 0) {
+  // de-plan is not silently masked as success (sf P1-2). A registry-read
+  // failure here would otherwise yield empty results (unhealthy.length === 0)
+  // and silently pass the audit — emit a distinct fallback in that case so the
+  // very audit this branch exists for is not defeated by an outage. --------
+  if (issueState === "closed") {
+    if (!classify.ok) {
+      reportSilentFallback(
+        new Error(`#${data.issue} already closed; registry unreadable — cannot audit`),
+        {
+          feature: FUNCTION_NAME,
+          op: "already-closed-registry-unreadable",
+          message: "could not confirm cron health on an already-closed #4650",
+          extra: { fn: FUNCTION_NAME },
+        },
+      );
+    } else if (unhealthy.length > 0) {
       reportSilentFallback(
         new Error(
           `#${data.issue} already closed but ${unhealthy.length} cron(s) not OK`,
@@ -181,8 +230,11 @@ export async function oneshot4650MonitorCloseHandler({
 
   // --- Open + all 3 re-planned → close #4650 -------------------------------
   const closed = await step.run("close-issue", async () => {
+    const token = await mintInstallationToken({
+      tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
+    });
     const { Octokit } = await import("@octokit/core");
-    const octokit = new Octokit({ auth: issue.token });
+    const octokit = new Octokit({ auth: token });
     const body = [
       `## Autonomous close — all 3 cron triggers re-planned`,
       "",

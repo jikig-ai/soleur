@@ -49,7 +49,11 @@ vi.mock("@octokit/core", () => ({
 
 // --- SUT import (module does not exist yet — RED) ----------------------------
 
-import { oneshot4650MonitorCloseHandler } from "@/server/inngest/functions/oneshot-4650-monitor-close";
+import {
+  oneshot4650MonitorCloseHandler,
+  TARGET_FN_IDS,
+} from "@/server/inngest/functions/oneshot-4650-monitor-close";
+import { EXPECTED_CRON_FUNCTIONS } from "@/server/inngest/functions/cron-inngest-cron-watchdog";
 
 // --- Helpers ----------------------------------------------------------------
 
@@ -97,9 +101,20 @@ function event(over?: Partial<{ issue: number; expected_date: string; date_overr
 
 function setIssueState(state: "open" | "closed") {
   octokitRequestSpy.mockImplementation(async (route: string) => {
-    if (route.includes("GET")) return { data: { state } };
+    if (route.startsWith("GET ")) return { data: { state } };
     return { data: {} }; // comment POST / issue PATCH (close)
   });
+}
+
+function postedComment(): boolean {
+  return octokitRequestSpy.mock.calls.some(
+    (c) => typeof c[0] === "string" && c[0].includes("/comments"),
+  );
+}
+function patched(): boolean {
+  return octokitRequestSpy.mock.calls.some(
+    (c) => typeof c[0] === "string" && c[0].startsWith("PATCH "),
+  );
 }
 
 beforeEach(() => {
@@ -120,10 +135,7 @@ describe("oneshot-4650-monitor-close", () => {
     expect(warnSilentFallbackSpy).toHaveBeenCalledTimes(1);
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
     // must NOT have attempted a close (PATCH)
-    const patched = octokitRequestSpy.mock.calls.some(
-      (c) => typeof c[0] === "string" && c[0].includes("PATCH"),
-    );
-    expect(patched).toBe(false);
+    expect(patched()).toBe(false);
   });
 
   it("date-guard: invalid calendar date in date_override → invalid-date-override", async () => {
@@ -144,11 +156,9 @@ describe("oneshot-4650-monitor-close", () => {
       step: makeStep(),
       logger,
     });
-    expect(res.ok).toBe(true);
-    const patched = octokitRequestSpy.mock.calls.some(
-      (c) => typeof c[0] === "string" && c[0].includes("PATCH"),
-    );
-    expect(patched).toBe(true);
+    expect(res).toEqual({ ok: true, reason: "closed" });
+    expect(postedComment()).toBe(true); // comment precedes close
+    expect(patched()).toBe(true);
   });
 
   it("partial registry (1 MISSING) + open → leave open, reportSilentFallback, NO close", async () => {
@@ -165,10 +175,7 @@ describe("oneshot-4650-monitor-close", () => {
     });
     expect(res).toEqual({ ok: false, reason: "not-all-healthy" });
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
-    const patched = octokitRequestSpy.mock.calls.some(
-      (c) => typeof c[0] === "string" && c[0].includes("PATCH"),
-    );
-    expect(patched).toBe(false);
+    expect(patched()).toBe(false);
   });
 
   it("registry fetch throws + open → fail-safe, no close (distinct from partial)", async () => {
@@ -181,10 +188,7 @@ describe("oneshot-4650-monitor-close", () => {
     });
     expect(res).toEqual({ ok: false, reason: "registry-fetch-failed" });
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
-    const patched = octokitRequestSpy.mock.calls.some(
-      (c) => typeof c[0] === "string" && c[0].includes("PATCH"),
-    );
-    expect(patched).toBe(false);
+    expect(patched()).toBe(false);
   });
 
   it("already-closed + all OK → no-op success, no already-closed-unhealthy alert", async () => {
@@ -216,5 +220,54 @@ describe("oneshot-4650-monitor-close", () => {
     expect(reportSilentFallbackSpy.mock.calls[0][1]).toMatchObject({
       op: "already-closed-unhealthy",
     });
+  });
+
+  it("open + all OK but the close PATCH fails → close-failed + reportSilentFallback", async () => {
+    fetchRegistrySpy.mockResolvedValue(allHealthyRegistry());
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route.startsWith("GET ")) return { data: { state: "open" } };
+      if (route.startsWith("PATCH ")) throw new Error("422 cannot close");
+      return { data: {} }; // comment POST
+    });
+    const res = await oneshot4650MonitorCloseHandler({
+      event: event({ date_override: "2026-05-31" }),
+      step: makeStep(),
+      logger,
+    });
+    expect(res).toEqual({ ok: false, reason: "close-failed" });
+    expect(reportSilentFallbackSpy.mock.calls.some((c) => c[1]?.op === "close-issue")).toBe(true);
+  });
+
+  it("default real-clock path (no date_override) after expected_date → closes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-01T09:00:00Z"));
+    try {
+      fetchRegistrySpy.mockResolvedValue(allHealthyRegistry());
+      setIssueState("open");
+      const res = await oneshot4650MonitorCloseHandler({
+        event: event(), // no date_override → exercises new Date()
+        step: makeStep(),
+        logger,
+      });
+      expect(res).toEqual({ ok: true, reason: "closed" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("non-target issue → wrong-issue, never touches GitHub", async () => {
+    const res = await oneshot4650MonitorCloseHandler({
+      event: event({ issue: 9999, date_override: "2026-05-31" }),
+      step: makeStep(),
+      logger,
+    });
+    expect(res).toEqual({ ok: false, reason: "wrong-issue" });
+    expect(octokitRequestSpy).not.toHaveBeenCalled();
+  });
+
+  it("TARGET_FN_IDS is a subset of the watchdog EXPECTED_CRON_FUNCTIONS manifest", () => {
+    for (const fnId of TARGET_FN_IDS) {
+      expect(EXPECTED_CRON_FUNCTIONS).toContain(fnId);
+    }
   });
 });
