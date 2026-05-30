@@ -53,7 +53,9 @@ import {
 const SENTRY_MONITOR_SLUG = "scheduled-inngest-cron-watchdog";
 
 // Loopback fallback when INNGEST_BASE_URL is unset. Matches the container's
-// runtime env (ci-deploy.sh:425 sets INNGEST_BASE_URL=http://host.docker.internal:8288).
+// runtime env: the web-platform `docker run` in ci-deploy.sh sets
+// `-e INNGEST_BASE_URL=http://host.docker.internal:8288` (both the canary and
+// production run blocks). Parity-tested in cron-inngest-cron-watchdog.test.ts.
 const INNGEST_HOST_FALLBACK = "http://host.docker.internal:8288";
 
 // Restart cooldown: must exceed the watchdog cron interval (4h) so two
@@ -62,9 +64,23 @@ const INNGEST_HOST_FALLBACK = "http://host.docker.internal:8288";
 // in between.
 export const RESTART_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 
-// Host-bind-mounted (survives container restart — the inngest-server SQLite
-// dir is on /mnt/data). In-memory cooldown would be cleared by the very
-// restart it gates (Sharp Edge: cooldown state must survive restart).
+// Escalate a persistent H9b (cron de-planned) to the H9a restart path after
+// this many CONSECUTIVE watchdog ticks still find the function UNPLANNED. A
+// manual-trigger re-runs the handler but does NOT re-plan the cron schedule
+// (Sharp Edge); only a restart re-plans it. Threshold 2 → ~8h of de-planned
+// state before a restart is initiated (the manual-trigger keeps the function
+// executing every 4h in the meantime, so the monitor does not go silent).
+export const UNPLANNED_RESTART_THRESHOLD = 2;
+
+// State persisted to the container-local filesystem (NOT a host bind-mount —
+// only /mnt/data/workspaces and /mnt/data/plugins are mounted into this
+// container; this path is a plain writable-layer dir). That is sufficient for
+// a read-own-write cooldown: it survives the event it gates — H9a heal restarts
+// `inngest-server.service`, a SEPARATE process, leaving this container (and
+// this file) untouched. A web-platform REDEPLOY resets it, but a redeploy
+// re-syncs every function (no MISSING → no restart attempted), so the reset is
+// benign. In-memory state would be cleared on every Inngest function replay, so
+// an on-disk file is still required between the 4h ticks.
 const COOLDOWN_DIR = "/var/lib/inngest/cron-watchdog";
 const COOLDOWN_FILE = `${COOLDOWN_DIR}/restart-cooldown.json`;
 
@@ -137,7 +153,16 @@ export interface ClassifyResult {
 export interface HealPlan {
   manualTriggerEvents: string[];
   missingFnIds: string[];
+  unplannedFnIds: string[];
   defectCount: number;
+}
+
+// Persisted watchdog state (container-local file). `unplannedStreaks` tracks
+// consecutive-tick UNPLANNED counts per fnId so a persistent H9b escalates to
+// a restart (UNPLANNED_RESTART_THRESHOLD).
+export interface WatchdogState {
+  last_restart_at?: string;
+  unplanned_streaks?: Record<string, number>;
 }
 
 // =============================================================================
@@ -183,14 +208,40 @@ export function planHeal(results: ClassifyResult[]): HealPlan {
   const missingFnIds = results
     .filter((r) => r.status === "MISSING")
     .map((r) => r.fnId);
-  const manualTriggerEvents = results
+  const unplannedFnIds = results
     .filter((r) => r.status === "UNPLANNED")
-    .map((r) => manualTriggerEventFor(r.fnId));
+    .map((r) => r.fnId);
+  const manualTriggerEvents = unplannedFnIds.map(manualTriggerEventFor);
   return {
     manualTriggerEvents,
     missingFnIds,
-    defectCount: missingFnIds.length + manualTriggerEvents.length,
+    unplannedFnIds,
+    defectCount: missingFnIds.length + unplannedFnIds.length,
   };
+}
+
+// Advance the per-fnId consecutive-UNPLANNED streaks: increment each currently
+// UNPLANNED fnId, and DROP any fnId no longer UNPLANNED (so a recovered cron
+// resets to zero rather than lingering). Pure → unit-tested.
+export function nextUnplannedStreaks(
+  prev: Record<string, number> | undefined,
+  unplannedFnIds: string[],
+): Record<string, number> {
+  const next: Record<string, number> = {};
+  for (const fnId of unplannedFnIds) {
+    next[fnId] = (prev?.[fnId] ?? 0) + 1;
+  }
+  return next;
+}
+
+// fnIds whose UNPLANNED streak has reached the escalation threshold — these
+// get routed to the restart path (a restart re-plans the cron trigger that a
+// manual-trigger alone cannot).
+export function escalatedUnplannedFnIds(
+  streaks: Record<string, number>,
+  threshold: number = UNPLANNED_RESTART_THRESHOLD,
+): string[] {
+  return Object.keys(streaks).filter((fnId) => streaks[fnId] >= threshold);
 }
 
 // Cooldown gate: fail open on a missing/unparseable record (a desync is worse
@@ -205,12 +256,15 @@ export function restartAllowed(
   return now - last >= RESTART_COOLDOWN_MS;
 }
 
+// A restart is warranted when at least one function needs the restart path
+// (H9a MISSING, or an H9b UNPLANNED that has escalated past the streak
+// threshold) AND the cooldown permits it.
 export function shouldRestart(
-  missingFnIds: string[],
+  restartFnIds: string[],
   lastRestartAtIso: string | null,
   now: number,
 ): boolean {
-  return missingFnIds.length > 0 && restartAllowed(lastRestartAtIso, now);
+  return restartFnIds.length > 0 && restartAllowed(lastRestartAtIso, now);
 }
 
 // =============================================================================
@@ -238,26 +292,26 @@ async function fetchRegistry(host: string): Promise<RegistryFunction[]> {
   );
 }
 
-async function readLastRestartAt(): Promise<string | null> {
+async function readState(): Promise<WatchdogState> {
   try {
     const { readFile } = await import("node:fs/promises");
     const raw = await readFile(COOLDOWN_FILE, "utf8");
-    const parsed = JSON.parse(raw) as { last_restart_at?: string };
-    return parsed.last_restart_at ?? null;
+    return JSON.parse(raw) as WatchdogState;
   } catch {
-    return null; // no prior restart recorded
+    return {}; // no prior state recorded
   }
 }
 
-async function writeLastRestartAt(iso: string): Promise<void> {
+async function writeState(state: WatchdogState): Promise<void> {
   const { mkdir, writeFile } = await import("node:fs/promises");
   await mkdir(COOLDOWN_DIR, { recursive: true });
-  await writeFile(COOLDOWN_FILE, JSON.stringify({ last_restart_at: iso }));
+  await writeFile(COOLDOWN_FILE, JSON.stringify(state));
 }
 
 // D1-A: POST the deploy webhook to restart inngest-server (same HMAC + CF-Access
 // path as restart-inngest-server.yml). The webhook's ci-deploy.sh rejects any
-// non-`inngest` restart component (line ~256), so runtime scope is bounded.
+// restart whose component is not `inngest` (the `restart` action branch in
+// ci-deploy.sh), so runtime scope is bounded to inngest-server restarts.
 async function postRestartWebhook(): Promise<{ ok: boolean; status: number }> {
   const secret = process.env.WEBHOOK_DEPLOY_SECRET;
   const cfId = process.env.CF_ACCESS_CLIENT_ID;
@@ -286,17 +340,17 @@ async function postRestartWebhook(): Promise<{ ok: boolean; status: number }> {
 // restart autonomous when the direct webhook POST is unreachable.
 async function fileRestartEscalationIssue(
   token: string,
-  missingFnIds: string[],
+  affectedFnIds: string[],
 ): Promise<void> {
   const { Octokit } = await import("@octokit/core");
   const octokit = new Octokit({ auth: token });
-  const title = "[inngest-desync] cron functions dropped from registry (H9a)";
+  const title = "[inngest-desync] cron functions need a server restart (H9a/H9b)";
   const search = await octokit.request("GET /search/issues", {
     q: `repo:${REPO_OWNER}/${REPO_NAME} is:issue is:open in:title "${title}"`,
     per_page: 1,
   });
   const existing = (search.data.items ?? [])[0];
-  const detail = `Missing from /v1/functions at ${new Date().toISOString()}: ${missingFnIds.join(", ")}`;
+  const detail = `Cron-plan defect (dropped or persistently de-planned) at ${new Date().toISOString()}: ${affectedFnIds.join(", ")}`;
   if (existing) {
     await octokit.request(
       "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
@@ -315,7 +369,7 @@ async function fileRestartEscalationIssue(
     title,
     labels: ["priority/p0-critical", RESTART_ESCALATION_LABEL],
     body: [
-      "## Inngest cron functions dropped from the running registry (H9a)",
+      "## Inngest cron functions need a server restart (H9a dropped / H9b persistently de-planned)",
       "",
       detail,
       "",
@@ -340,7 +394,7 @@ export async function cronInngestCronWatchdogHandler({
 }: HandlerArgs): Promise<{
   ok: boolean;
   results: ClassifyResult[];
-  healed: { manualTriggers: string[]; restartInitiated: boolean };
+  healed: { manualTriggers: string[]; restartRequested: boolean };
 }> {
   // Step 1: query the running server's function registry (loopback, no SSH).
   const registry = await step.run("fetch-registry", async () => {
@@ -382,35 +436,60 @@ export async function cronInngestCronWatchdogHandler({
     return fired;
   });
 
-  // Step 3: heal H9a (MISSING) — initiate a server restart (D1-A webhook,
-  // D1-B escalation issue on failure), gated by a restart-survivable cooldown
-  // so a persistent desync cannot restart-loop (AC6).
-  const restartInitiated = await step.run("heal-missing", async () => {
-    if (plan.missingFnIds.length === 0) return false;
-    const lastRestartAt = await readLastRestartAt();
-    if (!shouldRestart(plan.missingFnIds, lastRestartAt, Date.now())) {
-      logger.warn(
-        { fn: "cron-inngest-cron-watchdog", missing: plan.missingFnIds },
-        "H9a detected but within restart cooldown — skipping restart (ok=false heartbeat still pages)",
-      );
+  // Step 3: restart path — H9a (MISSING) AND escalated H9b (UNPLANNED for
+  // UNPLANNED_RESTART_THRESHOLD consecutive ticks; a manual-trigger restored
+  // the check-in but never re-planned the cron, so only a restart fixes the
+  // schedule). Gated by a cooldown so a persistent desync cannot restart-loop
+  // (AC6). Streaks persist across ticks in the same state file.
+  const restartRequested = await step.run("heal-restart-path", async () => {
+    const state = await readState();
+    const streaks = nextUnplannedStreaks(
+      state.unplanned_streaks,
+      plan.unplannedFnIds,
+    );
+    const escalated = escalatedUnplannedFnIds(streaks);
+    const restartFnIds = [...plan.missingFnIds, ...escalated];
+
+    if (restartFnIds.length === 0) {
+      // No restart needed this tick — persist streaks (resets recovered fns),
+      // preserve the cooldown timestamp.
+      await writeState({
+        last_restart_at: state.last_restart_at,
+        unplanned_streaks: streaks,
+      });
       return false;
     }
+    if (!shouldRestart(restartFnIds, state.last_restart_at ?? null, Date.now())) {
+      logger.warn(
+        { fn: "cron-inngest-cron-watchdog", restartFnIds },
+        "Restart warranted (H9a/escalated-H9b) but within cooldown — skipping (ok=false heartbeat still pages)",
+      );
+      await writeState({
+        last_restart_at: state.last_restart_at,
+        unplanned_streaks: streaks,
+      });
+      return false;
+    }
+
+    // A restart re-syncs + re-plans ALL functions, so clear streaks on success.
+    const onRestarted = async () =>
+      writeState({ last_restart_at: new Date().toISOString(), unplanned_streaks: {} });
+
     try {
       const webhook = await postRestartWebhook();
       if (webhook.ok) {
-        await writeLastRestartAt(new Date().toISOString());
+        await onRestarted();
         logger.info(
-          { fn: "cron-inngest-cron-watchdog", missing: plan.missingFnIds },
-          "H9a heal: restart webhook accepted (HTTP 202)",
+          { fn: "cron-inngest-cron-watchdog", restartFnIds },
+          "Restart webhook accepted (HTTP 202)",
         );
         return true;
       }
-      // D1-A failed → D1-B escalation.
       reportSilentFallback(
         new Error(`restart webhook non-202 (status=${webhook.status})`),
         {
           feature: "cron-inngest-cron-watchdog",
-          op: "heal-missing-webhook",
+          op: "heal-restart-webhook",
           message: "Restart webhook POST failed — escalating to D1-B issue",
           extra: { fn: "cron-inngest-cron-watchdog", status: webhook.status },
         },
@@ -418,7 +497,7 @@ export async function cronInngestCronWatchdogHandler({
     } catch (err) {
       reportSilentFallback(err, {
         feature: "cron-inngest-cron-watchdog",
-        op: "heal-missing-webhook",
+        op: "heal-restart-webhook",
         message: "Restart webhook POST threw — escalating to D1-B issue",
         extra: { fn: "cron-inngest-cron-watchdog" },
       });
@@ -428,15 +507,20 @@ export async function cronInngestCronWatchdogHandler({
       const token = await mintInstallationToken({
         tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
       });
-      await fileRestartEscalationIssue(token, plan.missingFnIds);
-      await writeLastRestartAt(new Date().toISOString());
+      await fileRestartEscalationIssue(token, restartFnIds);
+      await onRestarted();
       return true;
     } catch (err) {
       reportSilentFallback(err, {
         feature: "cron-inngest-cron-watchdog",
-        op: "heal-missing-escalate",
+        op: "heal-restart-escalate",
         message: "D1-B escalation-issue filing failed",
         extra: { fn: "cron-inngest-cron-watchdog" },
+      });
+      // Restart not initiated — keep streaks so the next tick retries.
+      await writeState({
+        last_restart_at: state.last_restart_at,
+        unplanned_streaks: streaks,
       });
       return false;
     }
@@ -454,7 +538,7 @@ export async function cronInngestCronWatchdogHandler({
     });
   });
 
-  return { ok, results, healed: { manualTriggers, restartInitiated } };
+  return { ok, results, healed: { manualTriggers, restartRequested } };
 }
 
 // =============================================================================

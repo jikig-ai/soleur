@@ -25,9 +25,18 @@ permissions:
 
 jobs:
   dispatch-restart:
-    # Only act on the watchdog's escalation label. github.event.label.name is a
-    # repo-controlled label string, not free-form user input.
-    if: github.event_name == 'issues' && github.event.label.name == 'inngest-desync-restart'
+    # Only act on the watchdog's escalation label AND only when the issue was
+    # opened by a bot (the GitHub App that the watchdog mints its token from).
+    # The label alone is insufficient as an authority boundary: applying a label
+    # needs only Triage permission, so a label-only gate would let any triager
+    # restart prod repeatedly. Requiring the issue author to be a Bot narrows the
+    # trigger surface to the watchdog's own auto-filed issues.
+    # github.event.label.name / issue.user.type are repo/GitHub-controlled, not
+    # free-form user input.
+    if: >-
+      github.event_name == 'issues' &&
+      github.event.label.name == 'inngest-desync-restart' &&
+      github.event.issue.user.type == 'Bot'
     runs-on: ubuntu-latest
     steps:
       - name: Dispatch restart-inngest-server.yml

@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 // vi.hoisted runs BEFORE the ES-module imports below — sets NEXT_PHASE so the
@@ -10,8 +13,11 @@ vi.hoisted(() => {
 import {
   EXPECTED_CRON_FUNCTIONS,
   RESTART_COOLDOWN_MS,
+  UNPLANNED_RESTART_THRESHOLD,
   classifyRegistry,
+  escalatedUnplannedFnIds,
   manualTriggerEventFor,
+  nextUnplannedStreaks,
   planHeal,
   resolveInngestHost,
   restartAllowed,
@@ -184,8 +190,49 @@ describe("cron-inngest-cron-watchdog — restart cooldown (AC6, non-thrashing)",
     expect(shouldRestart(missing, persisted, tick2At)).toBe(false);
   });
 
-  it("shouldRestart: no MISSING functions → never restarts even if allowed", () => {
+  it("shouldRestart: no restart-trigger functions → never restarts even if allowed", () => {
     expect(shouldRestart([], null, NOW)).toBe(false);
+  });
+
+  it("restartAllowed: exactly at the cooldown boundary → allowed (>= semantics)", () => {
+    const exactly = new Date(NOW - RESTART_COOLDOWN_MS).toISOString();
+    expect(restartAllowed(exactly, NOW)).toBe(true);
+  });
+});
+
+describe("cron-inngest-cron-watchdog — H9b escalation streaks (Fix F)", () => {
+  it("nextUnplannedStreaks: increments current UNPLANNED, drops recovered fns", () => {
+    const prev = { "cron-community-monitor": 1, "cron-oauth-probe": 3 };
+    // community still unplanned this tick; oauth-probe recovered (not in list).
+    const next = nextUnplannedStreaks(prev, ["cron-community-monitor"]);
+    expect(next).toEqual({ "cron-community-monitor": 2 });
+  });
+
+  it("nextUnplannedStreaks: starts a fresh streak at 1 with no prior state", () => {
+    expect(nextUnplannedStreaks(undefined, ["cron-gh-pages-cert-state"])).toEqual({
+      "cron-gh-pages-cert-state": 1,
+    });
+  });
+
+  it("nextUnplannedStreaks: empty UNPLANNED set clears all streaks", () => {
+    expect(nextUnplannedStreaks({ "cron-x": 5 }, [])).toEqual({});
+  });
+
+  it("escalatedUnplannedFnIds: only fns at/over the threshold escalate", () => {
+    const streaks = {
+      "cron-community-monitor": UNPLANNED_RESTART_THRESHOLD,
+      "cron-oauth-probe": UNPLANNED_RESTART_THRESHOLD - 1,
+    };
+    expect(escalatedUnplannedFnIds(streaks)).toEqual(["cron-community-monitor"]);
+  });
+
+  it("escalation lifecycle: a single tick of UNPLANNED does NOT escalate; the threshold-th tick does", () => {
+    // Tick 1: UNPLANNED → streak 1 → not escalated (manual-trigger handles it).
+    const s1 = nextUnplannedStreaks(undefined, ["cron-community-monitor"]);
+    expect(escalatedUnplannedFnIds(s1)).toEqual([]);
+    // Tick 2 (threshold=2): still UNPLANNED → streak 2 → escalates to restart.
+    const s2 = nextUnplannedStreaks(s1, ["cron-community-monitor"]);
+    expect(escalatedUnplannedFnIds(s2)).toEqual(["cron-community-monitor"]);
   });
 });
 
@@ -202,5 +249,19 @@ describe("cron-inngest-cron-watchdog — resolveInngestHost", () => {
   it("falls back to host.docker.internal loopback when unset", () => {
     expect(resolveInngestHost(undefined)).toBe("http://host.docker.internal:8288");
     expect(resolveInngestHost("")).toBe("http://host.docker.internal:8288");
+  });
+
+  // Parity guard: the fallback host must equal the INNGEST_BASE_URL that
+  // ci-deploy.sh injects into the web-platform container. If that env value
+  // changes (port bump, host form), the dormant fallback would silently point
+  // at the wrong loopback during a partial-env restart.
+  it("INNGEST_HOST_FALLBACK matches the INNGEST_BASE_URL ci-deploy.sh sets", () => {
+    const ciDeploy = readFileSync(
+      resolve(__dirname, "../../../infra/ci-deploy.sh"),
+      "utf8",
+    );
+    const m = ciDeploy.match(/INNGEST_BASE_URL=(http:\/\/[^\s\\]+)/);
+    expect(m).not.toBeNull();
+    expect(resolveInngestHost(undefined)).toBe(m![1]);
   });
 });

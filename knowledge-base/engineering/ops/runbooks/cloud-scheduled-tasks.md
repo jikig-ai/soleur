@@ -359,19 +359,24 @@ needs **no operator action**:
    (H9b).
 2. **Heal H9b (cron de-planned).** Fires `cron/<name>.manual-trigger` for each
    affected function via `sendInngestWithRetry`. NOTE: a manual-trigger RUNS the
-   handler once (restores the missed check-in) but does NOT re-plan the cron
-   schedule — the de-planned trigger persists until the next container restart
-   re-syncs it. A recurring H9b therefore keeps surfacing as a recurring
-   `ok=false` heartbeat (see step 4) and should escalate to a restart.
-3. **Heal H9a (function dropped).** A dropped function genuinely needs a
-   restart to re-sync (the server runs with no `--poll-interval`). The watchdog
-   POSTs the deploy webhook `restart inngest _ latest` directly (D1-A, same HMAC
-   + CF-Access path as `restart-inngest-server.yml`). If that POST is
-   unreachable, it files a `priority/p0-critical` issue carrying the
-   `inngest-desync-restart` label, which `inngest-watchdog-restart-dispatch.yml`
-   acts on to dispatch the restart workflow (D1-B). A restart-survivable
-   cooldown (`/var/lib/inngest/cron-watchdog/restart-cooldown.json`, 6h) prevents
-   a persistent desync from restart-looping.
+   handler once (restores the missed check-in and keeps the function executing
+   every 4h) but does NOT re-plan the cron schedule — the de-planned trigger
+   persists until a server restart re-syncs it. The watchdog tracks a
+   consecutive-UNPLANNED streak per function and **auto-escalates to the restart
+   path (step 3) after `UNPLANNED_RESTART_THRESHOLD` (2) consecutive ticks**, so
+   a persistent H9b is structurally repaired, not merely re-triggered forever.
+3. **Heal H9a (function dropped) + escalated H9b.** A dropped function (or a
+   persistently de-planned one) genuinely needs a restart to re-sync (the server
+   runs with no `--poll-interval`). The watchdog POSTs the deploy webhook
+   `restart inngest _ latest` directly (D1-A, same HMAC + CF-Access path as
+   `restart-inngest-server.yml`). If that POST is unreachable, it files a
+   `priority/p0-critical` issue carrying the `inngest-desync-restart` label,
+   which `inngest-watchdog-restart-dispatch.yml` acts on to dispatch the restart
+   workflow (D1-B). A cooldown (`/var/lib/inngest/cron-watchdog/restart-cooldown.json`,
+   6h) prevents a persistent desync from restart-looping. NOTE: that path is
+   **container-local** (not a host bind-mount); it survives the inngest-server
+   restart it gates (a separate process) and is reset only by a web-platform
+   redeploy — which itself re-syncs all functions, so the reset is benign.
 4. **Surface (SSH-free read).** Posts an `ok`/`error` heartbeat to the
    `scheduled-inngest-cron-watchdog` Sentry monitor every 4h; `ok=false` when
    any monitored function is MISSING/UNPLANNED. Read its state via the Sentry

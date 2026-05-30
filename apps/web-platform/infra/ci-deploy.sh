@@ -225,13 +225,15 @@ verify_inngest_health() {
   # A restart that re-syncs the function registry but fails to re-plan cron
   # triggers (H9b) would pass /health while every monitored cron stays dead.
   # Assert the registry lists >=1 function WITH a cron trigger. Dependency-free
-  # substring check (jq is not a host dependency): the /v1/functions payload
-  # embeds `"cron":"<expr>"` for every planned cron trigger.
+  # substring check (jq is not a host dependency): match the cron-trigger KEY
+  # form `"cron":` (the value form `"cron":"<expr>"` always contains it), NOT a
+  # bare `"cron"` — every function slug is `cron-*`, so bare `"cron"` would
+  # false-pass on the slug alone even with zero planned cron triggers.
   local functions_body=""
   for i in $(seq 1 "$max_attempts"); do
     functions_body=$(curl -sf --max-time 5 http://127.0.0.1:8288/v1/functions 2>/dev/null) || true
 
-    if [[ "$functions_body" == *'"cron"'* ]]; then
+    if [[ "$functions_body" == *'"cron":'* ]]; then
       logger -t "$LOG_TAG" "INNGEST_CRON_PLAN: ok — registry has >=1 cron-triggered function (attempt $i/$max_attempts)"
       return 0
     fi
