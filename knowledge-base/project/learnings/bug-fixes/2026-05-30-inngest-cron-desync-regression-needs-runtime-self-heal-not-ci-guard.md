@@ -98,6 +98,13 @@ The operational/automation piece is shipped this cycle — NOT deferred (unlike
 - Cooldown state must live on the host-bind-mounted `/var/lib/inngest/`, not in
   process memory — an in-memory cooldown is cleared by the very restart it gates.
 
+## Session Errors
+
+1. **One-shot collision gate fired on a closed CONTEXTUAL `#N`.** The first `/soleur:one-shot` invocation carried `#4533` (the prior, CLOSED remediation issue) as context; the Step 0a.5 collision gate treats any closed `#N` as "work already done" and aborts. **Recovery:** aborted and re-invoked with every `#`-prefixed number rephrased ("issue 4533", "Sentry incident 5032155") so only true work-targets appear in `#N` form. **Prevention:** already documented in one-shot's "Sharp edge for freeform-prose invocations" — scrub closed contextual `#N` refs before invoking. The routing layer (go) should pre-scrub when handing prose to one-shot.
+2. **`gh issue create` blocked — missing `--milestone`.** An un-bypassable hook requires `--milestone`. **Recovery:** re-ran with `--milestone "Post-MVP / Later"`. **Prevention:** already hook-enforced; default operational issues to that milestone.
+3. **`Edit` failed with "File has not been read yet" on route.ts.** The file had been read via `cat` (Bash), but the harness only counts the Read tool. **Recovery:** Read tool → Edit. **Prevention:** use the Read tool (not `cat`) before editing — relates to `hr-always-read-a-file-before-editing-it`; the harness tracks Read-tool reads specifically.
+4. **`tsc` TS2493/TS2345 on handler-test `vi.fn` mocks.** `vi.fn(async () => {})` infers param tuple `[]` and return `Promise<never>`, breaking `.mock.calls[i][1]` indexing and `mockResolvedValueOnce`. **Recovery:** typed the mocks `vi.fn(async (..._args: unknown[]): Promise<T> => …)`. **Prevention:** when a `vi.fn` mock will be indexed via `.mock.calls` or fed `mockResolvedValueOnce`, give it an explicit param+return signature.
+
 ## Cross-References
 
 - Runbook: `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` (H9 → "Self-healing (automated)")
