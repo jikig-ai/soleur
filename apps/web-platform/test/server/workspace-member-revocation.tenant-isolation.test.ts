@@ -48,7 +48,7 @@ const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 // "JWT issued well before removal" case and absorbs cross-service skew up to
 // this many seconds. The strict-`>` boundary itself stays covered by 3.2.3,
 // which derives both iat probes from the DB-written revoked_after (one clock).
-const REVOCATION_IAT_SKEW_BUFFER_SEC = 30;
+const PROBE_IAT_BACKDATE_SEC = 30;
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -190,9 +190,9 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       const bClient = clientWithJwt(url, anonKey, bJwtPre);
       // Backdate by the skew buffer so revoked_after (Postgres clock) is
       // reliably > the probed iat regardless of GoTrue↔Postgres skew. See
-      // REVOCATION_IAT_SKEW_BUFFER_SEC.
+      // PROBE_IAT_BACKDATE_SEC.
       const iatIso = new Date(
-        (bIatPre - REVOCATION_IAT_SKEW_BUFFER_SEC) * 1000,
+        (bIatPre - PROBE_IAT_BACKDATE_SEC) * 1000,
       ).toISOString();
       const { data: revoke, error: revokeErr } = await bClient.rpc(
         "check_my_revocation",
@@ -217,9 +217,9 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       const bClient = clientWithJwt(url, anonKey, bJwtPre);
       // Backdate by the skew buffer so revoked_after (Postgres clock) is
       // reliably > the probed iat regardless of GoTrue↔Postgres skew. See
-      // REVOCATION_IAT_SKEW_BUFFER_SEC.
+      // PROBE_IAT_BACKDATE_SEC.
       const iatIso = new Date(
-        (bIatPre - REVOCATION_IAT_SKEW_BUFFER_SEC) * 1000,
+        (bIatPre - PROBE_IAT_BACKDATE_SEC) * 1000,
       ).toISOString();
       const { data: revoke } = await bClient.rpc("check_my_revocation", {
         p_jwt_iat: iatIso,
