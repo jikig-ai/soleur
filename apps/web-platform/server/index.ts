@@ -24,7 +24,11 @@ import {
   buildHealthResponse,
   buildInternalMetricsResponse,
 } from "./health";
-import { inngest } from "@/server/inngest/client";
+// NOTE: do NOT statically import "@/server/inngest/client" here — it throws at
+// module-load when INNGEST_SIGNING_KEY is unset (client.ts), which would crash
+// the server at startup in environments without Inngest configured (e2e CI,
+// local dev). The self-arm below dynamic-imports it inside an INNGEST_SIGNING_KEY
+// guard so the client only loads where Inngest is actually configured.
 import { sendInngestWithRetry } from "@/server/inngest/send-with-retry";
 import { reportSilentFallback } from "@/server/observability";
 
@@ -123,30 +127,36 @@ app.prepare().then(() => {
   // watchdog backstop). Guarded IIFE so even a synchronous throw routes to Sentry
   // rather than escaping as an unhandledRejection — under ADR-033 this oneshot
   // has NO Sentry monitor, so this catch is the only signal for a lost arm.
-  void (async () => {
-    try {
-      await sendInngestWithRetry(
-        () =>
-          inngest.send({
-            name: "oneshot/monitor-close-4650.fire",
-            id: "oneshot-4650-close-2026-05-31-v1",
-            ts: new Date("2026-05-31T09:00:00Z").getTime(),
-            data: {
-              issue: 4650,
-              expected_date: "2026-05-31",
-              actor: "platform" as const,
-            },
-          }),
-        { feature: "oneshot-4650-arm", eventId: "oneshot-4650-close-2026-05-31-v1" },
-      );
-    } catch (err) {
-      reportSilentFallback(err, {
-        feature: "oneshot-4650-arm",
-        op: "self-arm-send",
-        message: "failed to arm oneshot-4650-monitor-close at boot",
-      });
-    }
-  })();
+  // Only arm where Inngest is configured (prod). Absent the signing key (e2e CI,
+  // local dev), skip entirely — there is no Inngest server to arm against, and
+  // loading the client would throw at module-load.
+  if (process.env.INNGEST_SIGNING_KEY) {
+    void (async () => {
+      try {
+        const { inngest } = await import("@/server/inngest/client");
+        await sendInngestWithRetry(
+          () =>
+            inngest.send({
+              name: "oneshot/monitor-close-4650.fire",
+              id: "oneshot-4650-close-2026-05-31-v1",
+              ts: new Date("2026-05-31T09:00:00Z").getTime(),
+              data: {
+                issue: 4650,
+                expected_date: "2026-05-31",
+                actor: "platform" as const,
+              },
+            }),
+          { feature: "oneshot-4650-arm", eventId: "oneshot-4650-close-2026-05-31-v1" },
+        );
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "oneshot-4650-arm",
+          op: "self-arm-send",
+          message: "failed to arm oneshot-4650-monitor-close at boot",
+        });
+      }
+    })();
+  }
 
   server.listen(port, () => {
     log.info({ port, env: dev ? "development" : "production" }, "Server ready");
