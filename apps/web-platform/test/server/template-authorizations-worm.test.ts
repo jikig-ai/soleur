@@ -215,6 +215,9 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .eq("founder_id", userA.id)
         .is("revoked_at", null)
         .limit(1);
+      // Assert the grant exists so a fixture-setup failure surfaces as a clear
+      // assertion rather than an opaque "cannot read 'id' of undefined".
+      expect(gr?.length, "freshGrantA: active grant present").toBe(1);
       return gr![0].id as string;
     }
 
@@ -674,6 +677,16 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         p_reason: "quota_exhausted",
       });
       expect(error?.code).toBe("42501");
+
+      // Post-deny re-read: distinguish "carve-out anti-spoof refused" from a
+      // silent no-op — the under-quota row must remain active.
+      const { data: row } = await service
+        .from("template_authorizations")
+        .select("revoked_at")
+        .eq("founder_id", userA.id)
+        .eq("template_hash", templateHash)
+        .single();
+      expect(row?.revoked_at, "under-quota row must remain unrevoked").toBeNull();
     });
 
     test("(#4709 gate preserved) authed non-carve-out reason 'policy_violation' → still 42501", async () => {
@@ -689,6 +702,21 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         error?.code,
         "founder-attribution gate must still block policy_violation",
       ).toBe("42501");
+      // Pin the carve-out's allowlist branch (not a blanket block): the error
+      // must be the founder-attribution gate, proving 'policy_violation' fell
+      // through the `expired`/`quota_exhausted` allowlist to the ELSE.
+      expect(error?.message).toContain(
+        "authenticated callers must use reason=founder_revoked",
+      );
+
+      // Post-deny re-read: the row must remain active.
+      const { data: row } = await service
+        .from("template_authorizations")
+        .select("revoked_at")
+        .eq("founder_id", userA.id)
+        .eq("template_hash", templateHash)
+        .single();
+      expect(row?.revoked_at, "policy_violation must not revoke the row").toBeNull();
     });
 
     test("(#4709 cross-tenant) tenantB cannot auto-revoke userA's expired row → 42501, row untouched", async () => {

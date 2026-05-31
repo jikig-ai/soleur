@@ -99,6 +99,18 @@ BEGIN
     IF p_reason IN ('expired', 'quota_exhausted') THEN
       -- Re-derive against the caller's own most-recent row (mirrors the
       -- predicate's `order by authorized_at desc limit 1`).
+      --
+      -- Deliberately NOT filtered by `revoked_at IS NULL`: the partial-UNIQUE
+      -- index `template_authorizations_active_unique (founder_id,
+      -- template_hash) WHERE revoked_at IS NULL` (mig 053) guarantees at most
+      -- one active row per (founder, hash), and that active row is the most
+      -- recent (authorize_template is first-writer-wins), so the row checked
+      -- here IS the row the UPDATE below targets. The already-revoked case is
+      -- the idempotent no-op: re-derivation passes on the dead row's bounds,
+      -- then the UPDATE's `revoked_at IS NULL` matches zero rows → affected=0,
+      -- no throw (regression test `(#4709 carve-out: idempotent)`). Adding
+      -- `AND revoked_at IS NULL` here would instead raise 42501 on the second
+      -- fire — do NOT add it.
       SELECT * INTO v_row
         FROM public.template_authorizations
        WHERE template_hash = p_template_hash
