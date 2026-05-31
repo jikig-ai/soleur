@@ -2,24 +2,23 @@
 
 ## Plan Phase
 - Plan file: knowledge-base/project/plans/2026-05-31-fix-kb-sync-stale-design-folder-frozen-timestamps-plan.md
-- Status: complete (rewritten 2026-05-31 against live prod data; original H1/H2 disproven)
+- Status: evidence-complete v3 (writeup only, no fix implemented — operator chose "full data writeup, then decide")
 
-### Errors
-- Planning subagent (and my initial scratch note) anchored on H1 (path divergence) / H2 (shallow-clone non-fast-forward). Both disproven by the live `kb_sync_history` ledger. Plan rewritten.
+## TRUE root cause (v3, data-confirmed via Doppler prd pooler, read-only)
+- Screenshot workspace = 754ee124 (ops@jikigai.com / github.com/jikig-ai/soleur), NOT 52af49c2 (that's jean.deruelle/chatte).
+- 754ee124: repo_status=ready, github_installation_id=NULL, last sync 2026-04-23, kb_sync_history=0 rows.
+- Webhook reconcile selects `WHERE github_installation_id=<push id> AND repo_url=…`; NULL never matches → workspace unreachable, zero ledger rows.
+- Migrations NOT behind (114 applied, latest 088). Only installation in the system is 122213433 (chatte); NO GitHub App install exists for jikig-ai/soleur (audit_github_token_use empty for soleur). Legacy pre-App connection, never re-authorized.
 
-### Root cause (data-confirmed, prod read-only via Doppler DATABASE_URL_POOLER)
-- Affected workspace `52af49c2` (jean.deruelle@jikigai.com, solo → N2 holds), connected to `https://github.com/jikig-ai/soleur`.
-- `repo_last_synced_at = 2026-04-26T10:30:31Z`; `kb_sync_history` = 50 rows ALL `ok=true`, newest Apr 26 → no reconcile since Apr 26; zero failure rows ⇒ sync not failing, it stopped being attempted.
-- Legacy sync path retired; current `workspace-reconcile-on-push` (Inngest, #2854/#2891) created AFTER the freeze.
-- `workspace-reconcile-on-push.ts:149` `isIgnoredReconcileRepo` short-circuit runs BEFORE workspace resolution; PR #4666 (May 30) added `jikig-ai/soleur` to the ignore-list. Founder dogfoods their KB from that exact repo → every push dropped before the matching workspace is queried.
-- Reproduced reconcile match query: matches exactly 1 workspace (52af49c2, connected, owner row present) — fan-out is simply never reached.
+## Remedies (operator to choose)
+1. Data recovery: install/authorize GitHub App on jikig-ai/soleur → set installation_id on user+ws 754ee124 → dispatch reconcile (consent gate, Playwright only to consent screen).
+2. Systemic guard: detect ready+NULL-install workspaces → needs_reauth state + UI reconnect + Sentry breadcrumb.
+3. Observability backstop: Inngest cron alert when a ready workspace has no successful kb_sync_history row in N days.
 
-### Fix
-- (A) Reorder ignore short-circuit to AFTER resolution, gated on `rows.length===0` (preserves #4666's zero-workspace silence; never starves a connected workspace).
-- (B) Warn (Sentry breadcrumb) when an ignored repo HAS connected workspaces (the gap that hid this for 5 weeks).
-- (C) Automated recovery: dispatch one reconcile event for 52af49c2 (re-clone fallback via workspace.ts if non-ff); verify via ledger row + /api/kb/tree (no SSH).
+## Diagnostic errors retracted (4) — NO migrations applied
+H1 path-divergence; H2 shallow-clone non-ff; "#4666 shadows 52af49c2" (wrong id→repo map); "prod 5 migrations behind" (false — 088 applied).
 
-### Components Invoked
-- Skill: soleur:plan, soleur:deepen-plan (produced the disproven plan)
-- Live diagnosis: Doppler DATABASE_URL_POOLER (prd) + pg (/tmp), git archaeology
-- Plan rewritten by orchestrator against evidence
+## Components Invoked
+- Skills: soleur:plan, soleur:deepen-plan (produced the disproven v1/v2 plan)
+- Live diagnosis: Doppler DATABASE_URL_POOLER (prd) + pg in /tmp; git archaeology
+- Plan rewritten by orchestrator against evidence; autonomous one-shot pipeline halted at user direction
