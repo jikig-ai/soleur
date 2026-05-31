@@ -90,23 +90,23 @@ promise is "your AI team works on *your* repo, safely."
 
 ### Phase 0 — Preconditions (verify before any edit)
 
-- [ ] **0.1 Confirm RPC + helper shape.** `resolveInstallationId(userId, workspaceId?)` returns
+- [x] **0.1 Confirm RPC + helper shape.** `resolveInstallationId(userId, workspaceId?)` returns
       `number | null` and reads via `resolve_workspace_installation_id` (membership-checked, NULL
       for non-members). Verified at `server/resolve-installation-id.ts:30`.
-- [ ] **0.2 Confirm service-client read of `workspace_members` is available in the three routes.**
+- [x] **0.2 Confirm service-client read of `workspace_members` is available in the three routes.**
       All three already call `createServiceClient()` (`detect:43`, `repos:22`, `setup:55`).
       Service-role bypasses RLS and the column-REVOKE, so a service-client SELECT of
       `workspace_members (workspace_id) WHERE user_id = <userId>` joined to
       `workspaces (id, github_installation_id)` is readable. Grep:
       `git grep -n 'from("workspace_members")' apps/web-platform/server` confirms the
       service-role enumeration precedent (`org-memberships-resolver.ts:74,128`).
-- [ ] **0.3 Confirm `checkRepoAccess(installationId, owner, repo)` exists** (`github-app.ts:596`)
+- [x] **0.3 Confirm `checkRepoAccess(installationId, owner, repo)` exists** (`github-app.ts:596`)
       and maps 200->`ok` / 404->`not_found` / 403->`access_revoked`. This is the per-repo
       owning-install resolver primitive — selecting an install for a chosen repo is "find the
       reachable install whose `GET /repos/{owner}/{repo}` returns 200".
-- [ ] **0.4 Confirm `listInstallationRepos(installationId)` returns `Repo[]`** with `fullName`
+- [x] **0.4 Confirm `listInstallationRepos(installationId)` returns `Repo[]`** with `fullName`
       (`github-app.ts:643`). Aggregation de-dupes on `fullName`.
-- [ ] **0.5 Confirm test runner.** `apps/web-platform/vitest.config.ts` collects node tests at
+- [x] **0.5 Confirm test runner.** `apps/web-platform/vitest.config.ts` collects node tests at
       `test/**/*.test.ts` and dom tests at `test/**/*.test.tsx`. New server/route tests go under
       `apps/web-platform/test/` with the `.test.ts` suffix. Pinned runner:
       `./node_modules/.bin/vitest run`.
@@ -207,11 +207,11 @@ export async function resolveReachableInstallationIds(
 }
 ```
 
-- [ ] **1.1** Write the helper as above. Confirm the PostgREST embed shape against the precedent in
+- [x] **1.1** Write the helper as above. Confirm the PostgREST embed shape against the precedent in
       `workspace-resolver.ts:201` (`.select("workspace_id, workspaces!inner(created_at)")`) and
       `org-memberships-resolver.ts:74` — same `workspaces!inner(...)` embedded-resource form. The
       embed returns an object (or array) the helper normalizes.
-- [ ] **1.2** No new RPC, no migration — service-role read of `workspace_members` + the embedded
+- [x] **1.2** No new RPC, no migration — service-role read of `workspace_members` + the embedded
       `workspaces.github_installation_id` is permitted under the service grant (079 only REVOKEs the
       `authenticated` table grant; `service_role` keeps its default grant per 079:86).
 
@@ -247,7 +247,7 @@ export async function resolveOwningInstallationForRepo(
 }
 ```
 
-- [ ] **2.1** Add the export. `checkRepoAccess` already returns the small closed set the loop
+- [x] **2.1** Add the export. `checkRepoAccess` already returns the small closed set the loop
       branches on. Sequential probing keeps the GitHub call count bounded by the (small) reachable
       set; short-circuit on first `ok`.
 
@@ -258,11 +258,11 @@ export async function resolveOwningInstallationForRepo(
 Current behavior keeps the early "already stored" return and the login resolution, but the repo
 listing must aggregate across the reachable set so an org repo (org login != user login) appears.
 
-- [ ] **3.1** Keep the `userData.github_installation_id` early-return (`:52-65`) AND extend it:
+- [x] **3.1** Keep the `userData.github_installation_id` early-return (`:52-65`) AND extend it:
       after listing the stored install's repos, also union the **membership-reachable** installs'
       repos (a stored personal install does not preclude a separate workspace org install).
-- [ ] **3.2** Keep the login resolution (`:67-101`) to obtain `githubLogin`.
-- [ ] **3.3** Replace the single `findInstallationForLogin` -> store -> `listInstallationRepos` tail
+- [x] **3.2** Keep the login resolution (`:67-101`) to obtain `githubLogin`.
+- [x] **3.3** Replace the single `findInstallationForLogin` -> store -> `listInstallationRepos` tail
       (`:103-182`) with:
       1. `const reachable = await resolveReachableInstallationIds(serviceClient, user.id, githubLogin)`.
       2. If `reachable.length === 0` -> `{ installed: false, reason: "not_installed" }` (unchanged
@@ -275,7 +275,7 @@ listing must aggregate across the reachable set so an org repo (org login != use
          de-duped on `fullName`. A per-install failure is logged and skipped (do not fail the whole
          list — the user may have a stale/revoked sibling install).
       5. Return `{ installed: true, repos }`.
-- [ ] **3.4** Preserve CSRF (`validateOrigin`/`rejectCsrf` at `:31-32`) and the auth gate.
+- [x] **3.4** Preserve CSRF (`validateOrigin`/`rejectCsrf` at `:31-32`) and the auth gate.
 
 ### Phase 4 — `repos` route: list across reachable installs
 
@@ -284,16 +284,16 @@ listing must aggregate across the reachable set so an org repo (org login != use
 This route is GET (no body, no CSRF token — read-only, auth-gated). It currently 400s when
 `users.github_installation_id` is NULL.
 
-- [ ] **4.1** Resolve `githubLogin` the same way detect does. **Phase 4.1a** extracts
+- [x] **4.1** Resolve `githubLogin` the same way detect does. **Phase 4.1a** extracts
       `resolveGithubLogin(serviceClient, userId, userData)` into a shared module (the detect +
       install routes both inline the `auth.admin.getUserById` + `github_username` fallback — this
       avoids a third copy). The `users` read here must also select `github_username` for the
       email-only fallback (mirror `detect:48`).
-- [ ] **4.2** `const reachable = await resolveReachableInstallationIds(serviceClient, user.id, githubLogin)`.
-- [ ] **4.3** If `reachable.length === 0` -> keep the 400 "GitHub App not installed" contract (the
+- [x] **4.2** `const reachable = await resolveReachableInstallationIds(serviceClient, user.id, githubLogin)`.
+- [x] **4.3** If `reachable.length === 0` -> keep the 400 "GitHub App not installed" contract (the
       frontend `fetchRepos`/`handleConnectExisting` paths branch on `!res.ok` to then try
       detect/redirect — preserve that). **No arbitrary install fallback.**
-- [ ] **4.4** Otherwise aggregate repos across `reachable` (de-dupe on `fullName`), return
+- [x] **4.4** Otherwise aggregate repos across `reachable` (de-dupe on `fullName`), return
       `{ repos }`. Per-install failure logged + skipped.
 
 ### Phase 5 — `setup` route: membership fallback for the clone install
@@ -303,7 +303,7 @@ This route is GET (no body, no CSRF token — read-only, auth-gated). It current
 The repoUrl is already validated and normalized (`:43-53`) to `https://github.com/<owner>/<repo>`.
 Parse `owner`/`repo` from the normalized URL for owning-install resolution.
 
-- [ ] **5.1** Keep the `users` read (`:58-62`) but treat NULL `github_installation_id` as a
+- [x] **5.1** Keep the `users` read (`:58-62`) but treat NULL `github_installation_id` as a
       *fallback trigger*, not a hard 400. Resolve the install in this priority order:
       1. **Owning install from the reachable set** (most correct): parse `owner/repo` from
          `repoUrl`; `reachable = resolveReachableInstallationIds(serviceClient, user.id, githubLogin)`;
@@ -313,23 +313,23 @@ Parse `owner`/`repo` from the normalized URL for owning-install resolution.
       2. If owning resolution returns null AND `users.github_installation_id` is set, use the stored
          id (preserves the personal happy path even on a transient `checkRepoAccess` degraded probe).
       3. If still unresolved -> keep the 400 "GitHub App not installed" contract.
-- [ ] **5.2** Use the resolved `installId` everywhere the route currently uses
+- [x] **5.2** Use the resolved `installId` everywhere the route currently uses
       `userData.github_installation_id`: the optimistic-lock mirror (`:101-105`) and the
       `provisionWorkspaceWithRepo(...)` call (`:116-123`). **Do NOT write the resolved install onto
       `users.github_installation_id`** — resolve per-request (unique-constraint safe). The
       `mirrorRepoColsToSoloWorkspace` write targets `workspaces` (the user's solo workspace) and is
       ADR-044-correct; it may carry the resolved install (it already did for the stored case).
-- [ ] **5.3** Preserve CSRF (`:23-24`), the optimistic clone-lock (`:71-97`), and the
+- [x] **5.3** Preserve CSRF (`:23-24`), the optimistic clone-lock (`:71-97`), and the
       Sentry/observability error path (`:225-264`) unchanged.
-- [ ] **5.4** **Owner/repo parse safety:** derive `owner`/`repo` from the *normalized* `repoUrl`
+- [x] **5.4** **Owner/repo parse safety:** derive `owner`/`repo` from the *normalized* `repoUrl`
       (post-`normalizeRepoUrl`, post-regex) so the parse sees the canonical form. A
       `new URL(repoUrl).pathname.split("/")` against the already-validated form is safe (the regex
       at `:48` guarantees exactly `<owner>/<repo>`).
 
 ### Phase 6 — Type-check + suite
 
-- [ ] **6.1** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` — zero errors.
-- [ ] **6.2** `cd apps/web-platform && ./node_modules/.bin/vitest run` — full suite green (the new
+- [x] **6.1** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` — zero errors.
+- [x] **6.2** `cd apps/web-platform && ./node_modules/.bin/vitest run` — full suite green (the new
       tests + no regression in `detect-installation-fallback`, `install-route`,
       `setup-route-health-scanner`, `resolve-installation-id`, `repo-url`).
 
@@ -343,93 +343,93 @@ chain mocks). All fixtures synthesized — no prod data (`cq-test-fixtures-synth
 
 ### New file: `apps/web-platform/test/reachable-installations.test.ts`
 
-- [ ] **T1 (RED -> GREEN): org member, login != org login, install on workspace.** Mock
+- [x] **T1 (RED -> GREEN): org member, login != org login, install on workspace.** Mock
       `findInstallationForLogin("deruelle") -> null` (no personal install). Mock the service-client
       `workspace_members` embed to return one workspace carrying install `122213433`. Assert
       `resolveReachableInstallationIds(service, "754ee124", "deruelle")` -> `[122213433]`.
-- [ ] **T2 (RED -> GREEN): owning-install resolution for the selected repo.** Mock
+- [x] **T2 (RED -> GREEN): owning-install resolution for the selected repo.** Mock
       `checkRepoAccess(122213433, "jikig-ai", "soleur") -> "ok"`. Assert
       `resolveOwningInstallationForRepo([122213433], "jikig-ai", "soleur")` -> `122213433`.
-- [ ] **T3 (regression): no matching install AND no membership install -> empty set / null.**
+- [x] **T3 (regression): no matching install AND no membership install -> empty set / null.**
       `findInstallationForLogin -> null`, `workspace_members` embed -> `[]`. Assert
       `resolveReachableInstallationIds` -> `[]` and `resolveOwningInstallationForRepo([], ...)` ->
       `null` (no arbitrary install leakage).
-- [ ] **T4 (security): membership read is user-scoped.** Assert the helper calls
+- [x] **T4 (security): membership read is user-scoped.** Assert the helper calls
       `.eq("user_id", <userId>)` on the `workspace_members` chain (spy on the chain) — proves the
       enumeration cannot return a sibling-user's install.
-- [ ] **T5 (union + dedupe): personal install + workspace install, overlapping.**
+- [x] **T5 (union + dedupe): personal install + workspace install, overlapping.**
       `findInstallationForLogin -> 999`; workspace carries `999` and `122213433`. Assert the set is
       `[999, 122213433]` (deduped, both present).
-- [ ] **T6 (resilience): `checkRepoAccess` returns "degraded" for one install, "ok" for next.**
+- [x] **T6 (resilience): `checkRepoAccess` returns "degraded" for one install, "ok" for next.**
       Assert `resolveOwningInstallationForRepo` keeps probing past `degraded` and returns the `ok`
       install.
 
 ### New file: `apps/web-platform/test/repos-route-reachable.test.ts`
 
-- [ ] **T7 (RED -> GREEN): GET /api/repo/repos lists the org repo for the org member.**
+- [x] **T7 (RED -> GREEN): GET /api/repo/repos lists the org repo for the org member.**
       `users.github_installation_id = null`, `github_username = "deruelle"`,
       `findInstallationForLogin -> null`, workspace carries `122213433`,
       `listInstallationRepos(122213433) -> [{ fullName: "jikig-ai/soleur", ... }]`. Assert response
       `{ repos: [{ fullName: "jikig-ai/soleur" }] }` (was: 400 "not installed").
-- [ ] **T8 (regression): no reachable install -> 400 "GitHub App not installed".** All sources empty.
+- [x] **T8 (regression): no reachable install -> 400 "GitHub App not installed".** All sources empty.
       Assert status 400 + the unchanged error string (frontend depends on it).
 
 ### New file: `apps/web-platform/test/setup-route-install-resolution.test.ts`
 
-- [ ] **T9 (RED -> GREEN — the headline case): org member clones org repo via membership install.**
+- [x] **T9 (RED -> GREEN — the headline case): org member clones org repo via membership install.**
       `users.github_installation_id = null`; `repoUrl = https://github.com/jikig-ai/soleur`;
       reachable set `[122213433]`; `checkRepoAccess(122213433,"jikig-ai","soleur") -> "ok"`. Assert
       `provisionWorkspaceWithRepo` is called with install `122213433` (spy the mock's args) and the
       route returns `{ status: "cloning" }` (was: 400 "GitHub App not installed").
-- [ ] **T10 (no write to users): assert no `users.update({github_installation_id})` occurs in the
+- [x] **T10 (no write to users): assert no `users.update({github_installation_id})` occurs in the
       membership-fallback path** (spy the `users` update chain) — per-request resolution only,
       unique-constraint-safe.
-- [ ] **T11 (regression: personal happy path unchanged).** `users.github_installation_id = 999`;
+- [x] **T11 (regression: personal happy path unchanged).** `users.github_installation_id = 999`;
       `checkRepoAccess(999, owner, repo) -> "ok"`; assert clone uses `999`.
-- [ ] **T12 (regression: no reachable install -> 400).** NULL stored id, empty reachable set, owning
+- [x] **T12 (regression: no reachable install -> 400).** NULL stored id, empty reachable set, owning
       resolution null. Assert 400 "GitHub App not installed".
-- [ ] **T13 (degraded-probe fallback to stored id).** `users.github_installation_id = 999`;
+- [x] **T13 (degraded-probe fallback to stored id).** `users.github_installation_id = 999`;
       `resolveOwningInstallationForRepo -> null` because `checkRepoAccess` returned "degraded" for
       999; assert the route falls back to the stored `999` (Phase 5.1 priority 2) and clones.
 
 ### Detect-installation augmentation (extend existing suite)
 
-- [ ] **T14 (extend `detect-installation-fallback.test.ts`): org member sees the org repo.** Add a
+- [x] **T14 (extend `detect-installation-fallback.test.ts`): org member sees the org repo.** Add a
       case: `findInstallationForLogin -> null`, workspace carries `122213433`,
       `listInstallationRepos(122213433) -> [jikig-ai/soleur]`. Assert
       `{ installed: true, repos: [{ fullName: "jikig-ai/soleur" }] }`.
-- [ ] **T15 (extend): existing personal-install detect cases stay green** (no regression to the
+- [x] **T15 (extend): existing personal-install detect cases stay green** (no regression to the
       login-match + store + mirror path).
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-- [ ] **AC1** `resolveReachableInstallationIds(service, "754ee124", "deruelle")` returns
+- [x] **AC1** `resolveReachableInstallationIds(service, "754ee124", "deruelle")` returns
       `[122213433]` when the login source is empty and the user's workspace carries `122213433` (T1).
-- [ ] **AC2** `resolveOwningInstallationForRepo([122213433], "jikig-ai", "soleur")` returns
+- [x] **AC2** `resolveOwningInstallationForRepo([122213433], "jikig-ai", "soleur")` returns
       `122213433` (T2); returns `null` for an empty reachable set (T3).
-- [ ] **AC3** `GET /api/repo/repos` for the org member (NULL `users.github_installation_id`,
+- [x] **AC3** `GET /api/repo/repos` for the org member (NULL `users.github_installation_id`,
       membership install present) returns `200 { repos: [..., {fullName:"jikig-ai/soleur"}, ...] }`
       (T7).
-- [ ] **AC4** `POST /api/repo/setup` with `repoUrl=https://github.com/jikig-ai/soleur` and NULL
+- [x] **AC4** `POST /api/repo/setup` with `repoUrl=https://github.com/jikig-ai/soleur` and NULL
       `users.github_installation_id` calls `provisionWorkspaceWithRepo` with install `122213433` and
       returns `{ status: "cloning" }` (T9).
-- [ ] **AC5** The membership-fallback setup path performs **no** `users.update` of
+- [x] **AC5** The membership-fallback setup path performs **no** `users.update` of
       `github_installation_id` (T10) — verified by spying the `users` update chain.
-- [ ] **AC6 (security):** the membership enumeration query is scoped by `.eq("user_id", <userId>)`
+- [x] **AC6 (security):** the membership enumeration query is scoped by `.eq("user_id", <userId>)`
       (T4); a user with no login-match and no membership install gets 400 / empty set, never an
       arbitrary install (T3, T8, T12).
-- [ ] **AC7 (regression):** personal-install happy path unchanged in detect (T15), repos (implicit
+- [x] **AC7 (regression):** personal-install happy path unchanged in detect (T15), repos (implicit
       via reachable union), and setup (T11); the degraded-probe path falls back to the stored id
       (T13).
-- [ ] **AC8** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` exits 0.
-- [ ] **AC9** `cd apps/web-platform && ./node_modules/.bin/vitest run` exits 0 (full suite),
+- [x] **AC8** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` exits 0.
+- [x] **AC9** `cd apps/web-platform && ./node_modules/.bin/vitest run` exits 0 (full suite),
       including the unchanged `detect-installation-fallback`, `install-route`,
       `setup-route-health-scanner`, `resolve-installation-id` suites.
-- [ ] **AC10** No new Supabase migration file is added (`git status apps/web-platform/supabase/migrations/`
+- [x] **AC10** No new Supabase migration file is added (`git status apps/web-platform/supabase/migrations/`
       shows no new file); the fix reuses `resolve_workspace_installation_id` and the service-role read.
-- [ ] **AC11** PR body uses `Ref #<issue>` (not `Closes`) if the un-freeze depends on the post-merge
+- [x] **AC11** PR body uses `Ref #<issue>` (not `Closes`) if the un-freeze depends on the post-merge
       re-run of the connect flow; the code fix itself is complete at merge.
 
 ### Post-merge (user dogfood)

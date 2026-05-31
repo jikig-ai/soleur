@@ -1,49 +1,57 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, test, expect, vi, beforeEach } from "vitest";
+
+const mockFindInstallationForLogin = vi.fn();
+const mockCheckRepoAccess = vi.fn();
+const mockReportSilentFallback = vi.fn();
 
 vi.mock("@/server/github-app", () => ({
-  findInstallationForLogin: vi.fn(),
-  listInstallationRepos: vi.fn(),
-  verifyInstallationOwnership: vi.fn(),
-  checkRepoAccess: vi.fn(),
+  findInstallationForLogin: (...args: unknown[]) =>
+    mockFindInstallationForLogin(...args),
+  checkRepoAccess: (...args: unknown[]) => mockCheckRepoAccess(...args),
 }));
 
-vi.mock("@sentry/nextjs", () => ({
-  captureException: vi.fn(),
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: (...args: unknown[]) =>
+    mockReportSilentFallback(...args),
 }));
 
-import { findInstallationForLogin } from "@/server/github-app";
-import * as Sentry from "@sentry/nextjs";
-import { resolveReachableInstallationIds } from "@/server/reachable-installations";
-
-const mockFindInstallation = vi.mocked(findInstallationForLogin);
+import {
+  resolveReachableInstallationIds,
+  resolveOwningInstallationForRepo,
+} from "@/server/reachable-installations";
 
 type MembershipRow = {
-  workspace_id: string;
-  workspaces?: { github_installation_id?: number | null } | null;
+  workspaces:
+    | { github_installation_id: number | null }
+    | { github_installation_id: number | null }[]
+    | null;
 };
 
-function mockServiceFrom(opts: {
+// Spy-capturing service-client mock. The workspace_members chain records the
+// `.eq("user_id", <id>)` call so the security test (T4) can assert scoping.
+function makeService(opts: {
   memberships?: MembershipRow[];
   membershipError?: unknown;
+  eqSpy?: ReturnType<typeof vi.fn>;
 }) {
-  return (table: string) => {
-    if (table !== "workspace_members") {
-      throw new Error(`unexpected table: ${table}`);
-    }
-    const builder: Record<string, unknown> = {
-      select: () => builder,
-      eq: () =>
-        Promise.resolve({
-          data: opts.membershipError ? null : (opts.memberships ?? []),
-          error: opts.membershipError ?? null,
+  return {
+    from: (table: string) => {
+      if (table !== "workspace_members") {
+        throw new Error(`unexpected table: ${table}`);
+      }
+      return {
+        select: () => ({
+          eq: (col: string, val: string) => {
+            opts.eqSpy?.(col, val);
+            return Promise.resolve({
+              data: opts.membershipError ? null : (opts.memberships ?? []),
+              error: opts.membershipError ?? null,
+            });
+          },
         }),
-    };
-    return builder;
-  };
-}
-
-function serviceClient(opts: Parameters<typeof mockServiceFrom>[0]) {
-  return { from: mockServiceFrom(opts) } as never;
+      };
+    },
+  } as never;
 }
 
 describe("resolveReachableInstallationIds", () => {
@@ -51,76 +59,113 @@ describe("resolveReachableInstallationIds", () => {
     vi.clearAllMocks();
   });
 
-  it("T1: personal-only — login matches an install, no memberships", async () => {
-    mockFindInstallation.mockResolvedValue(111);
+  test("T1: org member, login != org login, install on workspace", async () => {
+    mockFindInstallationForLogin.mockResolvedValue(null);
+    const service = makeService({
+      memberships: [{ workspaces: { github_installation_id: 122213433 } }],
+    });
     const ids = await resolveReachableInstallationIds(
-      serviceClient({ memberships: [] }),
-      "user-1",
-      "octocat",
+      service,
+      "754ee124",
+      "deruelle",
     );
-    expect(ids).toEqual([111]);
+    expect(ids).toEqual([122213433]);
   });
 
-  it("T2: org-only — no personal match, one membership with install", async () => {
-    mockFindInstallation.mockResolvedValue(null);
+  test("T3: no login match AND no membership install -> empty set / null", async () => {
+    mockFindInstallationForLogin.mockResolvedValue(null);
+    const service = makeService({ memberships: [] });
     const ids = await resolveReachableInstallationIds(
-      serviceClient({
-        memberships: [
-          { workspace_id: "ws-1", workspaces: { github_installation_id: 222 } },
-        ],
-      }),
-      "user-1",
-      "octocat",
-    );
-    expect(ids).toEqual([222]);
-  });
-
-  it("T3: both — personal + membership installs, deduped (order-insensitive)", async () => {
-    mockFindInstallation.mockResolvedValue(111);
-    const ids = await resolveReachableInstallationIds(
-      serviceClient({
-        memberships: [
-          { workspace_id: "ws-1", workspaces: { github_installation_id: 222 } },
-        ],
-      }),
-      "user-1",
-      "octocat",
-    );
-    expect(ids.sort()).toEqual([111, 222]);
-  });
-
-  it("T4: dedupe — personal install == org install → single id", async () => {
-    mockFindInstallation.mockResolvedValue(333);
-    const ids = await resolveReachableInstallationIds(
-      serviceClient({
-        memberships: [
-          { workspace_id: "ws-1", workspaces: { github_installation_id: 333 } },
-        ],
-      }),
-      "user-1",
-      "octocat",
-    );
-    expect(ids).toEqual([333]);
-  });
-
-  it("T5: membership query error → degrade to personal-only + Sentry", async () => {
-    mockFindInstallation.mockResolvedValue(111);
-    const ids = await resolveReachableInstallationIds(
-      serviceClient({ membershipError: { message: "boom" } }),
-      "user-1",
-      "octocat",
-    );
-    expect(ids).toEqual([111]);
-    expect(Sentry.captureException).toHaveBeenCalled();
-  });
-
-  it("T6: no login, no memberships → []", async () => {
-    const ids = await resolveReachableInstallationIds(
-      serviceClient({ memberships: [] }),
-      "user-1",
-      null,
+      service,
+      "754ee124",
+      "deruelle",
     );
     expect(ids).toEqual([]);
-    expect(mockFindInstallation).not.toHaveBeenCalled();
+    expect(await resolveOwningInstallationForRepo([], "o", "r")).toBeNull();
+  });
+
+  test("T4 (security): membership read is scoped by .eq('user_id', userId)", async () => {
+    mockFindInstallationForLogin.mockResolvedValue(null);
+    const eqSpy = vi.fn();
+    const service = makeService({ memberships: [], eqSpy });
+    await resolveReachableInstallationIds(service, "754ee124", "deruelle");
+    expect(eqSpy).toHaveBeenCalledWith("user_id", "754ee124");
+  });
+
+  test("T5: union + dedupe — personal install + workspace installs, overlapping", async () => {
+    mockFindInstallationForLogin.mockResolvedValue(999);
+    const service = makeService({
+      memberships: [
+        { workspaces: { github_installation_id: 999 } },
+        { workspaces: { github_installation_id: 122213433 } },
+      ],
+    });
+    const ids = await resolveReachableInstallationIds(
+      service,
+      "754ee124",
+      "deruelle",
+    );
+    expect(ids.sort((a, b) => a - b)).toEqual([999, 122213433]);
+  });
+
+  test("membership query error -> degrade to login-only + reportSilentFallback", async () => {
+    mockFindInstallationForLogin.mockResolvedValue(111);
+    const service = makeService({ membershipError: { message: "boom" } });
+    const ids = await resolveReachableInstallationIds(
+      service,
+      "754ee124",
+      "deruelle",
+    );
+    expect(ids).toEqual([111]);
+    expect(mockReportSilentFallback).toHaveBeenCalled();
+  });
+
+  test("no login, no memberships -> [] (findInstallationForLogin not called)", async () => {
+    const service = makeService({ memberships: [] });
+    const ids = await resolveReachableInstallationIds(service, "754ee124", null);
+    expect(ids).toEqual([]);
+    expect(mockFindInstallationForLogin).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveOwningInstallationForRepo", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test("T2: returns the install whose checkRepoAccess is 'ok'", async () => {
+    mockCheckRepoAccess.mockImplementation(async (id: number) =>
+      id === 122213433 ? "ok" : "not_found",
+    );
+    const result = await resolveOwningInstallationForRepo(
+      [122213433],
+      "jikig-ai",
+      "soleur",
+    );
+    expect(result).toBe(122213433);
+    expect(mockCheckRepoAccess).toHaveBeenCalledWith(
+      122213433,
+      "jikig-ai",
+      "soleur",
+    );
+  });
+
+  test("T6 (resilience): keeps probing past 'degraded' and returns the 'ok' install", async () => {
+    mockCheckRepoAccess.mockImplementation(async (id: number) =>
+      id === 1 ? "degraded" : "ok",
+    );
+    const result = await resolveOwningInstallationForRepo(
+      [1, 2],
+      "jikig-ai",
+      "soleur",
+    );
+    expect(result).toBe(2);
+    expect(mockCheckRepoAccess).toHaveBeenCalledTimes(2);
+  });
+
+  test("returns null when no reachable install owns the repo", async () => {
+    mockCheckRepoAccess.mockResolvedValue("not_found");
+    const result = await resolveOwningInstallationForRepo([1, 2], "o", "r");
+    expect(result).toBeNull();
   });
 });
