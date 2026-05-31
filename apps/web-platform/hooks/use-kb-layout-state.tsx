@@ -10,6 +10,7 @@ import type { KbChatContextValue } from "@/components/kb/kb-chat-context";
 import { safeSession } from "@/lib/safe-session";
 import { getAncestorPaths } from "@/components/kb/get-ancestor-paths";
 import type { TreeNode } from "@/server/kb-reader";
+import { reportSilentFallback } from "@/lib/client-observability";
 import type { KbSyncHistoryRow } from "@/components/kb/kb-sync-status";
 
 const KB_SIDEBAR_OPEN_KEY = "kb.chat.sidebarOpen";
@@ -98,8 +99,12 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
         // re-derives this to false after a successful reconnect.
         setNeedsReconnect(data.needsReconnect === true);
         setLoading(false);
-      } catch {
+      } catch (err) {
         if (!signal?.aborted) {
+          // #4712 — a 200-with-malformed-body or network throw must not
+          // silently null the needsReconnect signal this hook now carries.
+          // Mirror to Sentry (client) before degrading to the generic state.
+          reportSilentFallback(err, { feature: "kb-tree", op: "fetch-tree" });
           setError("unknown");
           setLoading(false);
         }
