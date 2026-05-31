@@ -1,0 +1,1310 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "F3Eoz",
+      "x": 0,
+      "y": 0,
+      "name": "ProjectSetupCard — needs_reconnect variant",
+      "width": 560,
+      "fill": "$--bg-base",
+      "layout": "vertical",
+      "gap": 28,
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "blVio",
+          "name": "b1title",
+          "fill": "$--text-primary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "ProjectSetupCard — \"needs reconnect\" variant (Settings)",
+          "fontFamily": "Inter",
+          "fontSize": 20,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "Xj4P7",
+          "name": "b1sub",
+          "fill": "$--text-secondary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Settings › Project. New amber state between ready+Connected and error. Three states shown.",
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "gkgPo",
+          "name": "State 1 — default",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 10,
+          "children": [
+            {
+              "type": "text",
+              "id": "8rOAB",
+              "name": "s1label",
+              "fill": "$--accent-gold-fill",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "STATE 1 · DEFAULT",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 1
+            },
+            {
+              "type": "frame",
+              "id": "iT2g8",
+              "name": "section",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 16,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "dZwoY",
+                  "name": "s1h2",
+                  "fill": "$--text-primary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Project",
+                  "fontFamily": "Inter",
+                  "fontSize": 18,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "8pCBR",
+                  "name": "card",
+                  "width": "fill_container",
+                  "fill": "$--bg-surface-1",
+                  "cornerRadius": 12,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$--border-default"
+                  },
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "cCpJ8",
+                      "name": "s1reponame",
+                      "fill": "$--text-primary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "acme-co/web-platform",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "mffYC",
+                      "name": "amber notice",
+                      "width": "fill_container",
+                      "fill": "$--amber-notice-bg",
+                      "cornerRadius": 8,
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "$--amber-notice-border"
+                      },
+                      "gap": 12,
+                      "padding": 14,
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "6sqom",
+                          "name": "s1icon",
+                          "width": 18,
+                          "height": 18,
+                          "iconFontName": "triangle-alert",
+                          "iconFontFamily": "lucide",
+                          "fill": "$--amber-notice-fg"
+                        },
+                        {
+                          "type": "text",
+                          "id": "3co0E",
+                          "name": "s1noticetext",
+                          "fill": "$--amber-notice-fg-strong",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "This project can't sync — reconnect to restore Knowledge Base updates.",
+                          "lineHeight": 1.4,
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "OejBE",
+                      "name": "actions",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 8,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "JSdH2",
+                          "name": "Reconnect button",
+                          "fill": "$--accent-gold-fill",
+                          "cornerRadius": 8,
+                          "gap": 8,
+                          "padding": [
+                            8,
+                            16
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon_font",
+                              "id": "zyYII",
+                              "name": "s1btnicon",
+                              "width": 15,
+                              "height": 15,
+                              "iconFontName": "refresh-cw",
+                              "iconFontFamily": "lucide",
+                              "fill": "$--text-on-accent"
+                            },
+                            {
+                              "type": "text",
+                              "id": "ZXBNP",
+                              "name": "s1btnlabel",
+                              "fill": "$--text-on-accent",
+                              "content": "Reconnect",
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "6QBMl",
+                          "name": "s1help",
+                          "fill": "$--text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Reconnect re-authorizes GitHub access so syncing can resume.",
+                          "lineHeight": 1.4,
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "DAZcB",
+          "name": "State 2 — in-flight",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 10,
+          "children": [
+            {
+              "type": "text",
+              "id": "Zswyt",
+              "name": "s2label",
+              "fill": "$--accent-gold-fill",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "STATE 2 · IN-FLIGHT (Reconnecting…)",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 1
+            },
+            {
+              "type": "frame",
+              "id": "tHwBn",
+              "name": "s2sec",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 16,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "ccJmL",
+                  "name": "s2h2",
+                  "fill": "$--text-primary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Project",
+                  "fontFamily": "Inter",
+                  "fontSize": 18,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "2h2bc",
+                  "name": "card",
+                  "width": "fill_container",
+                  "fill": "$--bg-surface-1",
+                  "cornerRadius": 12,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$--border-default"
+                  },
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "W0gmc",
+                      "name": "s2reponame",
+                      "fill": "$--text-primary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "acme-co/web-platform",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "0Tx9e",
+                      "name": "amber notice",
+                      "width": "fill_container",
+                      "fill": "$--amber-notice-bg",
+                      "cornerRadius": 8,
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "$--amber-notice-border"
+                      },
+                      "gap": 12,
+                      "padding": 14,
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "eAbJl",
+                          "name": "s2icon",
+                          "width": 18,
+                          "height": 18,
+                          "iconFontName": "triangle-alert",
+                          "iconFontFamily": "lucide",
+                          "fill": "$--amber-notice-fg"
+                        },
+                        {
+                          "type": "text",
+                          "id": "7Exjr",
+                          "name": "s2noticetext",
+                          "fill": "$--amber-notice-fg-strong",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "This project can't sync — reconnect to restore Knowledge Base updates.",
+                          "lineHeight": 1.4,
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "0f50W",
+                      "name": "Reconnect button (busy)",
+                      "opacity": 0.6,
+                      "fill": "$--accent-gold-fill",
+                      "cornerRadius": 8,
+                      "gap": 8,
+                      "padding": [
+                        8,
+                        16
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "OL43h",
+                          "name": "s2btnicon",
+                          "width": 15,
+                          "height": 15,
+                          "iconFontName": "loader-circle",
+                          "iconFontFamily": "lucide",
+                          "fill": "$--text-on-accent"
+                        },
+                        {
+                          "type": "text",
+                          "id": "QkoCt",
+                          "name": "s2btnlabel",
+                          "fill": "$--text-on-accent",
+                          "content": "Reconnecting…",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "PRcAP",
+                      "name": "s2note",
+                      "fill": "$--text-tertiary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Button disabled while detect-installation runs; spinner replaces the refresh icon.",
+                      "lineHeight": 1.4,
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal",
+                      "fontStyle": "italic"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "FA27J",
+          "name": "State 3 — success / cleared",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 10,
+          "children": [
+            {
+              "type": "text",
+              "id": "FudhS",
+              "name": "s3label",
+              "fill": "$--accent-gold-fill",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "STATE 3 · SUCCESS / CLEARED (reverts to Connected)",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 1
+            },
+            {
+              "type": "frame",
+              "id": "QDQAs",
+              "name": "s3sec",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 16,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "quGgL",
+                  "name": "s3h2",
+                  "fill": "$--text-primary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Project",
+                  "fontFamily": "Inter",
+                  "fontSize": 18,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "n6rTC",
+                  "name": "card",
+                  "width": "fill_container",
+                  "fill": "$--bg-surface-1",
+                  "cornerRadius": 12,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$--border-default"
+                  },
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "T1CJK",
+                      "name": "name row",
+                      "width": "fill_container",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "3htR0",
+                          "name": "s3name",
+                          "fill": "$--text-primary",
+                          "content": "acme-co/web-platform",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "55z0W",
+                          "name": "Connected chip",
+                          "fill": "$--green-chip-bg",
+                          "cornerRadius": 999,
+                          "padding": [
+                            2,
+                            8
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "8WTGs",
+                              "name": "s3chiptext",
+                              "fill": "$--green-chip-fg",
+                              "content": "Connected",
+                              "fontFamily": "Inter",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "EWXHC",
+                      "name": "s3sync",
+                      "fill": "$--text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Last synced: 6/1/2026",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "TjBvf",
+                      "name": "Disconnect button",
+                      "fill": "$--bg-surface-2",
+                      "cornerRadius": 8,
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "$--border-default"
+                      },
+                      "padding": [
+                        8,
+                        16
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "X9Vg8",
+                          "name": "s3disctext",
+                          "fill": "$--text-secondary",
+                          "content": "Disconnect",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "aVHx5",
+                      "name": "s3note",
+                      "fill": "$--text-tertiary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "detect-installation returned installed:true → router.refresh() → needsReconnect=false. Amber notice no longer renders.",
+                      "lineHeight": 1.4,
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal",
+                      "fontStyle": "italic"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "wkPfe",
+      "x": 640,
+      "y": 0,
+      "name": "KbReconnectNotice — inline banner",
+      "width": 760,
+      "fill": "$--bg-base",
+      "layout": "vertical",
+      "gap": 28,
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "Grz9q",
+          "name": "b2title",
+          "fill": "$--text-primary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "KbReconnectNotice — inline banner above KB file tree",
+          "fontFamily": "Inter",
+          "fontSize": 20,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "dz2Ao",
+          "name": "b2sub",
+          "fill": "$--text-secondary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Point of pain: sits above stale KB tree / document content. Three states shown.",
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "anTaH",
+          "name": "KB State 1 — default",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 10,
+          "children": [
+            {
+              "type": "text",
+              "id": "Nlmk5",
+              "name": "k1label",
+              "fill": "$--accent-gold-fill",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "STATE 1 · DEFAULT (banner above stale KB tree)",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 1
+            },
+            {
+              "type": "frame",
+              "id": "b5tlt",
+              "name": "KB shell",
+              "clip": true,
+              "width": "fill_container",
+              "fill": "$--bg-surface-1",
+              "cornerRadius": 12,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "$--border-default"
+              },
+              "layout": "vertical",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "101Qz",
+                  "name": "KbReconnectNotice",
+                  "width": "fill_container",
+                  "fill": "$--amber-notice-bg",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "$--amber-notice-border"
+                  },
+                  "gap": 12,
+                  "padding": [
+                    12,
+                    16
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "BltNo",
+                      "name": "k1bicon",
+                      "width": 18,
+                      "height": 18,
+                      "iconFontName": "triangle-alert",
+                      "iconFontFamily": "lucide",
+                      "fill": "$--amber-notice-fg"
+                    },
+                    {
+                      "type": "text",
+                      "id": "drSQG",
+                      "name": "k1btext",
+                      "fill": "$--amber-notice-fg-strong",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "This project can't sync — reconnect to restore Knowledge Base updates.",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "dvxfY",
+                      "name": "Reconnect button",
+                      "fill": "$--accent-gold-fill",
+                      "cornerRadius": 8,
+                      "gap": 7,
+                      "padding": [
+                        7,
+                        14
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "x7RLU",
+                          "name": "k1bbicon",
+                          "width": 14,
+                          "height": 14,
+                          "iconFontName": "refresh-cw",
+                          "iconFontFamily": "lucide",
+                          "fill": "$--text-on-accent"
+                        },
+                        {
+                          "type": "text",
+                          "id": "G7ga3",
+                          "name": "k1bblabel",
+                          "fill": "$--text-on-accent",
+                          "content": "Reconnect",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "UHzXT",
+                  "name": "KB body",
+                  "width": "fill_container",
+                  "height": 200,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "il4WK",
+                      "name": "file tree (stale)",
+                      "width": 200,
+                      "height": "fill_container",
+                      "fill": "$--bg-base",
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": {
+                          "right": 1
+                        },
+                        "fill": "$--border-default"
+                      },
+                      "layout": "vertical",
+                      "gap": 8,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "D2mvr",
+                          "name": "t1",
+                          "fill": "$--text-secondary",
+                          "content": "📁 docs",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "7AfBT",
+                          "name": "t2",
+                          "fill": "$--text-tertiary",
+                          "content": "📄 overview.md",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "laQOL",
+                          "name": "t3",
+                          "fill": "$--text-tertiary",
+                          "content": "📄 architecture.md",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "ryubz",
+                          "name": "t4",
+                          "fill": "$--text-secondary",
+                          "content": "📁 specs",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "anD6d",
+                          "name": "t5",
+                          "fill": "$--text-tertiary",
+                          "content": "📄 plan.md",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Qy7T2",
+                      "name": "document content",
+                      "width": "fill_container",
+                      "height": "fill_container",
+                      "layout": "vertical",
+                      "gap": 10,
+                      "padding": 20,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "lJGJI",
+                          "name": "c1",
+                          "fill": "$--text-primary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "overview.md",
+                          "fontFamily": "Inter",
+                          "fontSize": 15,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "cIdQa",
+                          "name": "c2",
+                          "width": "fill_container",
+                          "height": 8,
+                          "fill": "$--bg-surface-2",
+                          "cornerRadius": 4,
+                          "layout": "vertical"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "ZYxZs",
+                          "name": "c3",
+                          "width": "fill_container",
+                          "height": 8,
+                          "fill": "$--bg-surface-2",
+                          "cornerRadius": 4,
+                          "layout": "vertical"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "eLWaM",
+                          "name": "c4",
+                          "width": 240,
+                          "height": 8,
+                          "fill": "$--bg-surface-2",
+                          "cornerRadius": 4,
+                          "layout": "vertical"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "wssF1",
+          "name": "KB State 2 — in-flight",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 10,
+          "children": [
+            {
+              "type": "text",
+              "id": "V5Nqo",
+              "name": "k2label",
+              "fill": "$--accent-gold-fill",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "STATE 2 · IN-FLIGHT (Reconnecting…)",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 1
+            },
+            {
+              "type": "frame",
+              "id": "Bz3oa",
+              "name": "KB shell",
+              "clip": true,
+              "width": "fill_container",
+              "fill": "$--bg-surface-1",
+              "cornerRadius": 12,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "$--border-default"
+              },
+              "layout": "vertical",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "tBgv7",
+                  "name": "KbReconnectNotice (busy)",
+                  "width": "fill_container",
+                  "fill": "$--amber-notice-bg",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "$--amber-notice-border"
+                  },
+                  "gap": 12,
+                  "padding": [
+                    12,
+                    16
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "QoVQR",
+                      "name": "k2bicon",
+                      "width": 18,
+                      "height": 18,
+                      "iconFontName": "triangle-alert",
+                      "iconFontFamily": "lucide",
+                      "fill": "$--amber-notice-fg"
+                    },
+                    {
+                      "type": "text",
+                      "id": "OHP1I",
+                      "name": "k2btext",
+                      "fill": "$--amber-notice-fg-strong",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Reconnecting… restoring Knowledge Base sync.",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "GLgib",
+                      "name": "Reconnect button (busy)",
+                      "opacity": 0.6,
+                      "fill": "$--accent-gold-fill",
+                      "cornerRadius": 8,
+                      "gap": 7,
+                      "padding": [
+                        7,
+                        14
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "NSNpF",
+                          "name": "k2bbicon",
+                          "width": 14,
+                          "height": 14,
+                          "iconFontName": "loader-circle",
+                          "iconFontFamily": "lucide",
+                          "fill": "$--text-on-accent"
+                        },
+                        {
+                          "type": "text",
+                          "id": "TWjR4",
+                          "name": "k2bblabel",
+                          "fill": "$--text-on-accent",
+                          "content": "Reconnecting…",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "sxKYD",
+                  "name": "KB body",
+                  "width": "fill_container",
+                  "height": 120,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "IkI8o",
+                      "name": "k2tree",
+                      "width": 200,
+                      "height": "fill_container",
+                      "fill": "$--bg-base",
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": {
+                          "right": 1
+                        },
+                        "fill": "$--border-default"
+                      },
+                      "layout": "vertical",
+                      "gap": 8,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "UHBZr",
+                          "name": "k2t1",
+                          "fill": "$--text-secondary",
+                          "content": "📁 docs",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "6vLaH",
+                          "name": "k2t2",
+                          "fill": "$--text-tertiary",
+                          "content": "📄 overview.md",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "SG9fN",
+                      "name": "k2content",
+                      "width": "fill_container",
+                      "height": "fill_container",
+                      "layout": "vertical",
+                      "gap": 10,
+                      "padding": 20,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "LgHqN",
+                          "name": "k2c1",
+                          "fill": "$--text-primary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "overview.md",
+                          "fontFamily": "Inter",
+                          "fontSize": 15,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "5oG23",
+              "name": "k2note",
+              "fill": "$--text-tertiary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "In-flight: button disabled + spinner; banner copy shifts to active voice. Loading state from use-reconnect.",
+              "lineHeight": 1.4,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal",
+              "fontStyle": "italic"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "XXifD",
+          "name": "KB State 3 — success / cleared",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 10,
+          "children": [
+            {
+              "type": "text",
+              "id": "Uwpeq",
+              "name": "k3label",
+              "fill": "$--accent-gold-fill",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "STATE 3 · SUCCESS / CLEARED (banner removed)",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 1
+            },
+            {
+              "type": "frame",
+              "id": "M677s",
+              "name": "KB shell",
+              "clip": true,
+              "width": "fill_container",
+              "fill": "$--bg-surface-1",
+              "cornerRadius": 12,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "$--border-default"
+              },
+              "layout": "vertical",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "aAd0P",
+                  "name": "KB body",
+                  "width": "fill_container",
+                  "height": 160,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "0TH1M",
+                      "name": "k3tree",
+                      "width": 200,
+                      "height": "fill_container",
+                      "fill": "$--bg-base",
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": {
+                          "right": 1
+                        },
+                        "fill": "$--border-default"
+                      },
+                      "layout": "vertical",
+                      "gap": 8,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "GTSzO",
+                          "name": "k3t1",
+                          "fill": "$--text-secondary",
+                          "content": "📁 docs",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "2h4fn",
+                          "name": "k3t2",
+                          "fill": "$--text-secondary",
+                          "content": "📄 overview.md",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "GosKD",
+                          "name": "k3t3",
+                          "fill": "$--text-secondary",
+                          "content": "📄 architecture.md",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "pzrnr",
+                          "name": "k3t4",
+                          "fill": "$--text-secondary",
+                          "content": "📁 specs",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "CI2VN",
+                      "name": "k3content",
+                      "width": "fill_container",
+                      "height": "fill_container",
+                      "layout": "vertical",
+                      "gap": 10,
+                      "padding": 20,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "ykV6G",
+                          "name": "synced chip",
+                          "fill": "$--green-chip-bg",
+                          "cornerRadius": 999,
+                          "gap": 6,
+                          "padding": [
+                            3,
+                            9
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon_font",
+                              "id": "NoQiE",
+                              "name": "k3synci",
+                              "width": 13,
+                              "height": 13,
+                              "iconFontName": "check",
+                              "iconFontFamily": "lucide",
+                              "fill": "$--green-chip-fg"
+                            },
+                            {
+                              "type": "text",
+                              "id": "tOtd3",
+                              "name": "k3synct",
+                              "fill": "$--green-chip-fg",
+                              "content": "Synced just now",
+                              "fontFamily": "Inter",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "8vVH5",
+                          "name": "k3c1",
+                          "fill": "$--text-primary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "overview.md",
+                          "fontFamily": "Inter",
+                          "fontSize": 15,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "i7Qiv",
+                          "name": "k3c2",
+                          "width": "fill_container",
+                          "height": 8,
+                          "fill": "$--bg-surface-2",
+                          "cornerRadius": 4,
+                          "layout": "vertical"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "i5Mef",
+                          "name": "k3c3",
+                          "width": 280,
+                          "height": 8,
+                          "fill": "$--bg-surface-2",
+                          "cornerRadius": 4,
+                          "layout": "vertical"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "sQGAn",
+              "name": "k3note",
+              "fill": "$--text-tertiary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Cleared: needsReconnect=false after router.refresh(); banner no longer mounts. KB tree resumes updating.",
+              "lineHeight": 1.4,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal",
+              "fontStyle": "italic"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variables": {
+    "--bg-base": {
+      "type": "color",
+      "value": "#0A0A0A"
+    },
+    "--bg-surface-1": {
+      "type": "color",
+      "value": "#141414"
+    },
+    "--bg-surface-2": {
+      "type": "color",
+      "value": "#1C1C1C"
+    },
+    "--border-default": {
+      "type": "color",
+      "value": "#2A2A2A"
+    },
+    "--text-primary": {
+      "type": "color",
+      "value": "#FFFFFF"
+    },
+    "--text-secondary": {
+      "type": "color",
+      "value": "#848484"
+    },
+    "--text-tertiary": {
+      "type": "color",
+      "value": "#6A6A6A"
+    },
+    "--accent-gold-fill": {
+      "type": "color",
+      "value": "#C9A962"
+    },
+    "--text-on-accent": {
+      "type": "color",
+      "value": "#1A1612"
+    },
+    "--green-chip-bg": {
+      "type": "color",
+      "value": "#14532D80"
+    },
+    "--green-chip-fg": {
+      "type": "color",
+      "value": "#4ADE80"
+    },
+    "--amber-notice-border": {
+      "type": "color",
+      "value": "#92400E"
+    },
+    "--amber-notice-bg": {
+      "type": "color",
+      "value": "#451A0380"
+    },
+    "--amber-notice-fg": {
+      "type": "color",
+      "value": "#FBBF24"
+    },
+    "--amber-notice-fg-strong": {
+      "type": "color",
+      "value": "#FCD34D"
+    },
+    "--font-primary": {
+      "type": "string",
+      "value": "Inter"
+    },
+    "--font-secondary": {
+      "type": "string",
+      "value": "Inter"
+    }
+  }
+}
