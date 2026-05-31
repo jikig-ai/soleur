@@ -424,12 +424,15 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(secondErr, "idempotent re-run RPC").toBeNull();
       expect(secondRun as unknown as number).toBe(0);
 
-      // (h.3) WORM is re-armed after the RPC: the app.worm_bypass GUC is
-      // SET LOCAL (transaction-scoped) and reset to 'off' inside the RPC, so a
-      // subsequent bare UPDATE must still be rejected with P0001 — the bypass
-      // must not leak. Migration 087 replaced the superuser-only
-      // session_replication_role bypass (which raised 42501 on managed
-      // Supabase — Sentry WEB-PLATFORM-13) with this privilege-free GUC.
+      // (h.3) WORM stays armed for a bare UPDATE after the anonymise RPC.
+      // NOTE: this runs against dev's CURRENT (pre-087) schema where the trigger
+      // is a pure-reject that raises P0001 for any service-role UPDATE — so on
+      // dev it proves steady-state WORM reject, NOT specifically that the
+      // post-087 app.worm_bypass GUC fails to leak (the GUC isn't set on dev's
+      // pre-087 RPC). The GUC-leak / re-arm invariant is pinned deterministically
+      // in the migration-SQL guardrail (087-worm-bypass-privilege-independence
+      // .test.ts asserts every RPC sets app.worm_bypass='off' after its write).
+      // Post-087-deploy this same assertion additionally exercises the GUC path.
       const { error: rearmErr } = await service
         .from("action_sends")
         .update({ recipient_id_hash: sha256("post-anonymise-rewrite") })

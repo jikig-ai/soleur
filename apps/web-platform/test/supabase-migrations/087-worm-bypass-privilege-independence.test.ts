@@ -126,6 +126,20 @@ describe("migration 087_worm_bypass_privilege_independence", () => {
         expect(block).not.toMatch(/session_replication_role/i);
       });
 
+      it(`${rpc} re-arms WORM with SET LOCAL app.worm_bypass = 'off' after the write`, () => {
+        // The re-arm is the single most security-load-bearing line: if it were
+        // dropped, the GUC would leak to the rest of the transaction and any
+        // subsequent statement would silently bypass WORM. SET LOCAL is already
+        // txn-scoped, but each saga RPC re-arms immediately after its one write
+        // (mirrors the prior RESET session_replication_role). The integration
+        // test cannot verify this on dev (the failure is prod-only), so it is
+        // pinned here deterministically.
+        const block = fnBlock(executable, rpc);
+        expect(block).toMatch(
+          /SET\s+LOCAL\s+app\.worm_bypass\s*=\s*'off'/i,
+        );
+      });
+
       it(`${rpc} keeps search_path pinned`, () => {
         const block = fnBlock(executable, rpc);
         expect(block).toMatch(
@@ -153,6 +167,33 @@ describe("migration 087_worm_bypass_privilege_independence", () => {
           `${fn} must still reject non-bypass writes`,
         ).toMatch(/RAISE\s+EXCEPTION[\s\S]*?'P0001'/i);
       }
+    });
+  });
+
+  describe("list ↔ migration reconciliation (no function escapes coverage)", () => {
+    it("every CREATE OR REPLACE FUNCTION in the migration is in ANONYMISE_RPCS or TRIGGER_FNS", () => {
+      // Guards the regression class the git-history review flagged: if a future
+      // edit to 087 adds a function (e.g. reintroducing session_replication_role
+      // on a 10th anonymise RPC), the hardcoded lists would silently not cover
+      // it and the suite would stay green. Reconcile the declared set against
+      // the migration body so the lists cannot drift from the SQL.
+      const declared = new Set([...ANONYMISE_RPCS, ...TRIGGER_FNS]);
+      const created = new Set(
+        [...executable.matchAll(
+          /CREATE\s+OR\s+REPLACE\s+FUNCTION\s+public\.([a-z0-9_]+)\s*\(/gi,
+        )].map((m) => m[1].toLowerCase()),
+      );
+      const uncovered = [...created].filter((n) => !declared.has(n));
+      expect(
+        uncovered,
+        `migration creates functions not in the test's coverage lists: ${uncovered.join(", ")}`,
+      ).toEqual([]);
+      // And every listed function must actually exist in the migration.
+      const missing = [...declared].filter((n) => !created.has(n));
+      expect(
+        missing,
+        `listed functions absent from the migration: ${missing.join(", ")}`,
+      ).toEqual([]);
     });
   });
 
