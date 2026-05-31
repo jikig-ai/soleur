@@ -120,6 +120,17 @@ function MemberRow({
   // AC-FLOW4: owner cannot remove self → no kebab menu trigger rendered.
   const showActions = !isCurrentUser;
 
+  // #4715: prompt the owner to share a key with a keyless, undelegated member
+  // (only when delegations are enabled and this is not the owner's own row).
+  // `!member.delegationFromMe` already owns the delegation term — no separate
+  // delegationsByGrantee probe.
+  const showShareKeyPrompt =
+    byokDelegationsEnabled &&
+    isOwner &&
+    !isCurrentUser &&
+    !member.hasEffectiveKey &&
+    !member.delegationFromMe;
+
   return (
     <div className={`grid ${byokDelegationsEnabled ? "grid-cols-[1fr_auto_auto_auto_auto]" : "grid-cols-[1fr_auto_auto_auto]"} items-center gap-4 border-b border-soleur-border-default px-6 py-4 last:border-b-0`}>
       <div className="flex items-center gap-3">
@@ -129,6 +140,18 @@ function MemberRow({
             {member.email.split("@")[0]}
           </div>
           <div className="truncate text-xs text-soleur-text-muted">{member.email}</div>
+          {showShareKeyPrompt && (
+            <p className="mt-1 text-xs text-soleur-text-muted">
+              No API key yet — can view the workspace but can&apos;t run tasks.{" "}
+              <a
+                href="mailto:?subject=Add%20your%20Anthropic%20API%20key%20to%20Soleur"
+                className="underline decoration-dotted underline-offset-2 hover:text-soleur-text-secondary"
+              >
+                or ask them to add their own
+              </a>
+              .
+            </p>
+          )}
         </div>
       </div>
       <span
@@ -150,6 +173,7 @@ function MemberRow({
           delegationToMe={member.delegationToMe}
           isSelf={isCurrentUser}
           flagEnabled={byokDelegationsEnabled}
+          promptShareKey={showShareKeyPrompt}
         />
       )}
       <span className="text-right text-xs text-soleur-text-muted">

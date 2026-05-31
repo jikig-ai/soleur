@@ -14,6 +14,7 @@ import { OrgSwitcherContainer } from "@/components/dashboard/org-switcher-contai
 import { LiveRepoBadge } from "@/components/dashboard/live-repo-badge";
 import { MembershipRevokedScreen } from "@/components/dashboard/membership-revoked-screen";
 import { NoApiKeyBanner } from "@/components/dashboard/no-api-key-banner";
+import { PendingInviteBannerRecovery } from "@/components/dashboard/pending-invite-banner-recovery";
 
 const BANNER_DISMISS_KEY = "soleur:past_due_banner_dismissed";
 
@@ -403,6 +404,11 @@ export default function DashboardLayout({
           </div>
         )}
         <PaymentWarningBanner subscriptionStatus={subscriptionStatus} />
+        {/* Recovery banner (#4715): an invitee who abandoned at /invite reaches
+            /dashboard with the accept RPC never called. Self-gates via
+            /api/workspace/pending-invites and backs off on chat routes (which
+            already mount the banner server-side). */}
+        <PendingInviteBannerRecovery />
         {/* Keyless / delegated-but-keyless degraded-state banner (#4642).
             Self-gates via /api/byok/effective-status — renders nothing for
             users with a usable key. */}
