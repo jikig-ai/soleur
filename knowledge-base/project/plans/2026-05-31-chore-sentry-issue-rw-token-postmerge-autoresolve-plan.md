@@ -15,6 +15,20 @@ status: planned
 
 > Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed). No spec.md exists for this branch; lane chosen by content (touches a skill + infra credential + docs).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-31
+**Sections enhanced:** Implementation Phase 3 (Research Insights added), Risks & Mitigations (Precedent-Diff added)
+
+### Key Improvements
+1. **Precedent-diff (Phase 4.4):** confirmed the new write reuses the EXACT token-resolution + endpoint shape already established in postmerge Phase 3.6 (SKILL.md:112-114 token fallback, :141 `/organizations/${SENTRY_ORG}/issues/${ISSUE_ID}/` URL). The issue-resolve *write* is novel (no prior Sentry write in-repo) but minimal/canonical — `PUT` on the same org-scoped issues URL with `{"status":"resolved"}`, the contract the issue body itself reproduces.
+2. **Hard-gate verification:** Phase 4.6 (User-Brand Impact, threshold `none` + scope-out), 4.7 (Observability 5-field schema, no-SSH discoverability test), 4.8 (no PAT-shaped variable — the credential is a Sentry Internal Integration token, not a GitHub PAT) all pass.
+3. **Sensitive-path confirmation:** both edited files (`apps/web-platform/.env.example`, `plugins/soleur/skills/postmerge/SKILL.md`) are NON-sensitive per the canonical regex, so the `threshold: none` scope-out is valid (and not even strictly required).
+
+### New Considerations Discovered
+- The `event:admin` scope is the deliberate superset choice (covers both the existing GET read AND the new PUT write in Phase 3.6 with one token), avoiding a second read-token dependency.
+- The credential class is **Internal Integration** (64-hex, no prefix) per learning `2026-05-21-…-disambiguation` — NOT an Org Auth (`sntrys_`) token, which carries no user identity and historically lacks `event:admin`. This is why the mint is UI-only and un-Terraformable.
+
 ## Overview
 
 `/soleur:postmerge` Phase 3.6 ("Sentry Error-Count Delta") can **read** a linked Sentry issue's status/count/lastSeen, but it cannot **write** — it only *recommends* resolution in prose. Every fix that resolves a Sentry-tracked error therefore leaves the historical issue open in the active list until an operator resolves it by hand in the UI. All existing Doppler `prd` Sentry tokens (`SENTRY_AUTH_TOKEN`, `SENTRY_API_TOKEN`, `SENTRY_IAC_AUTH_TOKEN`) return **403** on the issue-update (`PUT .../issues/<id>/`) endpoint — they are scoped for release upload / IaC / event ingest / Discover-count reads, none carry `event:write`/`event:admin`.
@@ -96,6 +110,25 @@ Edit `plugins/soleur/skills/postmerge/SKILL.md` Phase 3.6 (currently ends at the
 - **Graceful Degradation table:** add a row — `No SENTRY_ISSUE_RW_TOKEN | Skip auto-resolve; keep read-only delta (recommend manual resolution as today)`.
 
 > Phase 3.6 stays **advisory / non-blocking** end to end. The write is additive: with the token absent, behavior is byte-identical to today (read + recommend).
+
+### Research Insights (Phase 3 — Precedent-Diff)
+
+**Established read pattern reused verbatim:** the existing Phase 3.6 GET (SKILL.md:139-142) and Phase 3.5 token-fallback (SKILL.md:112-114) are the canonical form. The new write mirrors them:
+
+| Aspect | Existing GET (precedent) | New PUT (this plan) |
+|---|---|---|
+| Token source | `doppler secrets get SENTRY_AUTH_TOKEN … || SENTRY_API_TOKEN` | `doppler secrets get SENTRY_ISSUE_RW_TOKEN` (no fallback to read tokens — they 403 on write) |
+| URL | `https://${API_HOST}/api/0/organizations/${SENTRY_ORG}/issues/${ISSUE_ID}/` | **same URL** |
+| Method/body | `GET` (no body) | `PUT -d '{"status":"resolved"}'` |
+| curl flags | `-sfS` | `-sfS -X PUT -H 'Content-Type: application/json'` |
+
+**API contract verification:** the org-scoped issues endpoint (`/api/0/organizations/{org}/issues/{id}/`) accepts `PUT` with `{"status":"resolved"}` to mutate issue status — this is the exact request the issue body reproduces (returning 403 only on token scope, confirming the *shape* is correct and the *scope* is the gap). No new endpoint discovery is required; the write is the same URL the GET already targets.
+
+**Novelty note:** no prior Sentry *write* exists in-repo (`git grep` for `-X PUT … sentry` / `issues/.*resolved` returns only the existing GET-interpretation prose). The pattern is therefore novel-for-write but adopts the established read scaffolding; reviewers should scrutinize the guard placement (write must be unreachable from the still-firing branch) more than the curl form.
+
+**Relevant learnings applied:**
+- `2026-05-21-sentry-internal-integration-vs-user-auth-token-disambiguation.md` → drives the `event:admin` Internal Integration choice and the "64-hex no-prefix" token-class expectation in the operator mint step.
+- `2026-05-19-sentry-401-is-not-unowned-verify-token-scope-first.md` → reinforces the Sharp Edge that a 401/403 from the EU host is a *scope/host* signal (verify `event:admin` + `jikigai-eu` host), not an "issue not found" signal; the WARN message names the scope to check.
 
 ## Open Code-Review Overlap
 
