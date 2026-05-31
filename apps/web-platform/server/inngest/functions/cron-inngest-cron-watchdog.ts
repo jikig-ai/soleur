@@ -288,12 +288,16 @@ export function shouldRestart(
 // =============================================================================
 
 // Exported for reuse by oneshot-4650-monitor-close.ts (#4654) — the canonical
-// registry read. Auth via INNGEST_SIGNING_KEY (already in the container env;
-// route.ts throws at load if absent). No new credential.
+// registry read. UNAUTHENTICATED: the loopback /v1/functions introspection
+// endpoint answers without auth (see the header note below). No credential.
 export async function fetchRegistry(host: string): Promise<RegistryFunction[]> {
-  const signingKey = process.env.INNGEST_SIGNING_KEY;
+  // Do NOT send an Authorization header. /v1/functions is an unauthenticated
+  // loopback introspection endpoint — ci-deploy.sh's verify_inngest_health
+  // curls it with no auth and gets 200. Sending
+  // `Authorization: Bearer <signkey-prod-...>` returned 404 from the app
+  // container (#4682: WEB-PLATFORM-14 fired 5x — the watchdog ran on schedule
+  // but threw here before its heartbeat step, leaving its monitor silent).
   const res = await fetch(`${host}/v1/functions`, {
-    headers: signingKey ? { Authorization: `Bearer ${signingKey}` } : {},
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!res.ok) {
@@ -416,10 +420,61 @@ export async function cronInngestCronWatchdogHandler({
   healed: { manualTriggers: string[]; restartRequested: boolean };
 }> {
   // Step 1: query the running server's function registry (loopback, no SSH).
+  // NON-FATAL (#4682): a registry-read failure must NOT abort the handler
+  // before the heartbeat — that produced a SILENT watchdog (0 check-ins for
+  // ~5 fires) when /v1/functions 404'd. Catch inside the step, return null on
+  // failure, and treat "can't read the registry" as a defect that pages below.
   const registry = await step.run("fetch-registry", async () => {
     const host = resolveInngestHost(process.env.INNGEST_BASE_URL);
-    return fetchRegistry(host);
+    try {
+      return await fetchRegistry(host);
+    } catch (err) {
+      // SSH-free root-cause probe (#4682): /v1/functions 404s from the app
+      // container while the host's 127.0.0.1:8288/v1/functions returns 200, and
+      // dropping the auth header did NOT change it — so the cause is the network
+      // path, not auth. Probe /health on the SAME host so the next fire's Sentry
+      // event definitively separates the two hypotheses:
+      //   - health 200 → connectivity is fine; the 404 is path-/loopback-gated
+      //     introspection (fix host-side: expose /v1/functions or move the read).
+      //   - health unreachable → broad container→server connectivity loss
+      //     (fix INNGEST_BASE_URL / docker networking).
+      let healthStatus = "unprobed";
+      try {
+        const hr = await fetch(`${host}/health`, {
+          signal: AbortSignal.timeout(5_000),
+        });
+        healthStatus = String(hr.status);
+      } catch (he) {
+        healthStatus = `unreachable:${(he as Error)?.name ?? "error"}`;
+      }
+      reportSilentFallback(err, {
+        feature: "cron-inngest-cron-watchdog",
+        op: "fetch-registry",
+        message: "Failed to read /v1/functions — cannot verify cron substrate (#4682)",
+        extra: { fn: "cron-inngest-cron-watchdog", registryHost: host, healthStatus },
+      });
+      return null;
+    }
   });
+
+  // Registry unreadable → substrate health UNKNOWN → page (ok=false) and skip
+  // heal (no data to act on). The heartbeat ALWAYS posts so the watchdog's own
+  // monitor is never silent — the failure mode #4682 fixed.
+  if (registry === null) {
+    await step.run("sentry-heartbeat-registry-unreadable", async () => {
+      await postSentryHeartbeat({
+        ok: false,
+        sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+        cronName: "cron-inngest-cron-watchdog",
+        logger,
+      });
+    });
+    return {
+      ok: false,
+      results: [],
+      healed: { manualTriggers: [], restartRequested: false },
+    };
+  }
 
   // Pure classification (no IO — safe in the handler body).
   const results = classifyRegistry(registry);

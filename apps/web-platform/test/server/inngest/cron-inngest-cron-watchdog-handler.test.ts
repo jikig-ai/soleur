@@ -38,6 +38,8 @@ vi.mock("@/server/inngest/functions/_cron-shared", async () => {
 });
 
 import { cronInngestCronWatchdogHandler, EXPECTED_CRON_FUNCTIONS } from "@/server/inngest/functions/cron-inngest-cron-watchdog";
+import { postSentryHeartbeat } from "@/server/inngest/functions/_cron-shared";
+import { reportSilentFallback } from "@/server/observability";
 
 // Fake Inngest step: runs each step body inline (no replay machinery).
 const fakeStep = { run: <T>(_name: string, fn: () => Promise<T>) => fn() };
@@ -183,5 +185,105 @@ describe("cronInngestCronWatchdogHandler — backstop restart orchestration (#46
     const persisted = JSON.parse(String(lastWrite![1]));
     expect(persisted.last_restart_at).toBe("2026-05-29T00:00:00Z");
     expect(persisted.defect_streaks).toEqual({});
+  });
+});
+
+describe("cronInngestCronWatchdogHandler — registry-fetch is non-fatal (#4682)", () => {
+  const ORIG = { ...process.env };
+
+  beforeEach(() => {
+    writeFileMock.mockClear();
+    readFileMock.mockClear();
+    vi.mocked(postSentryHeartbeat).mockClear();
+    vi.mocked(reportSilentFallback).mockClear();
+    process.env.INNGEST_BASE_URL = "http://host.docker.internal:8288";
+    process.env.WEBHOOK_DEPLOY_SECRET = "secret";
+    process.env.CF_ACCESS_CLIENT_ID = "cf-id";
+    process.env.CF_ACCESS_CLIENT_SECRET = "cf-secret";
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    process.env = { ...ORIG };
+  });
+
+  it("404 from /v1/functions → handler does NOT crash, posts ok=false heartbeat, no restart (#4682)", async () => {
+    // The exact prod failure: /v1/functions returns 404 → fetchRegistry throws.
+    // Pre-#4682 this aborted the handler before the heartbeat → 0 check-ins
+    // (silent watchdog). Now it must catch, page ok=false, and skip heal.
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      const u = String(url);
+      // /health probe must be matched before /v1/functions has no overlap, but
+      // order defensively: /health is the #4682 diagnostic probe on failure.
+      if (u.includes("/health")) {
+        return { ok: true, status: 200 } as unknown as Response;
+      }
+      if (u.includes("/v1/functions")) {
+        return { ok: false, status: 404, json: async () => ({}) } as unknown as Response;
+      }
+      if (u.includes("deploy.soleur.ai")) {
+        return { status: 202 } as unknown as Response;
+      }
+      throw new Error(`unexpected fetch ${u}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const out = await cronInngestCronWatchdogHandler({
+      step: fakeStep,
+      logger: fakeLogger,
+    } as never).catch((e) => e);
+
+    // Did NOT reject (the silent-death failure mode is gone).
+    expect(out).not.toBeInstanceOf(Error);
+    expect(out.ok).toBe(false);
+    expect(out.results).toEqual([]);
+    expect(out.healed.restartRequested).toBe(false);
+    // The load-bearing fix: a heartbeat (ok=false) IS posted so the monitor pages
+    // instead of going silent.
+    const hb = vi.mocked(postSentryHeartbeat).mock.calls.at(-1);
+    expect(hb).toBeDefined();
+    expect(hb![0]).toMatchObject({ ok: false, sentryMonitorSlug: "scheduled-inngest-cron-watchdog" });
+    // No restart webhook on the degraded path (no registry data to act on).
+    expect(
+      fetchMock.mock.calls.some((c) => String(c[0]).includes("deploy.soleur.ai")),
+    ).toBe(false);
+    // #4682 diagnostic: on a registry-read failure the watchdog probes /health
+    // on the same host so the next fire's Sentry event pins path-404 vs
+    // connectivity. Assert the probe fired AND its result reached the report.
+    expect(
+      fetchMock.mock.calls.some((c) => String(c[0]).includes("/health")),
+    ).toBe(true);
+    const reportCall = vi.mocked(reportSilentFallback).mock.calls.find(
+      (c) => (c[1] as { op?: string })?.op === "fetch-registry",
+    );
+    expect(reportCall).toBeDefined();
+    expect((reportCall![1] as { extra?: { healthStatus?: string } }).extra?.healthStatus).toBe("200");
+  });
+
+  it("does NOT send an Authorization header to /v1/functions (#4682 — unauth loopback endpoint)", async () => {
+    // INNGEST_SIGNING_KEY is present in prod; the header it would carry caused
+    // the 404. Assert the registry fetch is unauthenticated regardless.
+    process.env.INNGEST_SIGNING_KEY = "signkey-prod-deadbeef";
+    const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
+    const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      return {
+        ok: true,
+        json: async () =>
+          EXPECTED_CRON_FUNCTIONS.map((fnId) => ({
+            slug: `soleur-runtime-${fnId}`,
+            triggers: [{ cron: "0 8 * * *" }],
+          })),
+      } as unknown as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await cronInngestCronWatchdogHandler({ step: fakeStep, logger: fakeLogger } as never);
+
+    const regCall = calls.find((c) => c.url.includes("/v1/functions"));
+    expect(regCall).toBeDefined();
+    const headers = (regCall!.init?.headers ?? {}) as Record<string, string>;
+    const headerKeys = Object.keys(headers).map((k) => k.toLowerCase());
+    expect(headerKeys).not.toContain("authorization");
   });
 });
