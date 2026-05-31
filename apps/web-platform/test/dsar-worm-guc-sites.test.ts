@@ -4,25 +4,42 @@ import path from "node:path";
 
 // WORM-bypass surface gate per `feat-dsar-art15-export-endpoint` AC29 + S1.
 //
-// The `dsar_export_audit_pii` WORM trigger allows UPDATE/DELETE only when
-// the GUC `app.dsar_audit_anonymise_in_progress` is set AND `current_user
-// = 'service_role'`. The "function OID allowlist" component of AC29 is
-// enforced by this file-parse lint: it asserts the `SET ...
-// app.dsar_audit_anonymise_in_progress` token appears EXACTLY ONCE
-// across the entire codebase (in the body of the
-// `anonymise_dsar_export_audit_pii` RPC inside migration 041).
+// The `dsar_export_audit_pii` WORM trigger originally allowed UPDATE/DELETE
+// only when the GUC `app.dsar_audit_anonymise_in_progress` was set AND
+// `current_user = 'service_role'`. The "function OID allowlist" component of
+// AC29 is enforced by this file-parse lint: it asserts the `SET ...
+// app.dsar_audit_anonymise_in_progress` token appears EXACTLY ONCE across the
+// forward source tree (in the body of the `anonymise_dsar_export_audit_pii`
+// RPC inside migration 041).
+//
+// SUPERSEDED BY MIGRATION 087 (#4696): the dead `current_user='service_role'`
+// gate was always-false inside a SECURITY DEFINER RPC (it always raised P0001,
+// breaking Art.17 erasure). Migration 087 CREATE OR REPLACEs both the trigger
+// fn and the RPC to use the privilege-free `app.worm_bypass` GUC, so in the
+// LIVE DB this per-table GUC is no longer read or set. Migration 041's forward
+// SET-site is now vestigial dead code (overwritten at runtime by 087), but it
+// remains in the append-only migration FILE — so this lint still pins it at
+// exactly 1 forward occurrence to keep guarding against NEW forward reuse of
+// the deprecated GUC name. The single-live-SET-site invariant for the active
+// mechanism now lives in 087-worm-bypass-privilege-independence.test.ts
+// (every anonymise RPC sets `app.worm_bypass='on'`/`'off'`).
+//
+// `.down.sql` files are EXCLUDED from the scan: a down-migration legitimately
+// restores the superseded RPC body (and thus the old SET-site) for rollback
+// fidelity — that is not a live forward surface and must not count against the
+// single-SET-site budget. 087.down.sql restoring the 041 body is the case this
+// exclusion handles.
 //
 // Prevents:
-//   - Accidental WORM-bypass surface widening (a second SET site that
+//   - Accidental WORM-bypass surface widening (a second forward SET site that
 //     could be reached by an unrelated code path).
 //   - Cargo-culted reuse of the GUC name in other features that would
 //     inadvertently grant WORM-bypass to a different caller.
 //
 // Failure mode this catches:
 //   A future developer adds `SET app.dsar_audit_anonymise_in_progress
-//   = 'on'` to a stored procedure or session-config wrapper without
-//   reading the AC29 design rationale. The trigger silently grants
-//   bypass; the test fails CI before the change merges.
+//   = 'on'` to a forward stored procedure or session-config wrapper without
+//   reading the AC29 design rationale.
 
 const GUC_NAME = "app.dsar_audit_anonymise_in_progress";
 const REPO_ROOT = path.join(__dirname, "..");
@@ -67,7 +84,10 @@ function walkFiles(dir: string, acc: string[]): void {
     if (st.isDirectory()) {
       walkFiles(full, acc);
     } else if (st.isFile()) {
-      if (/\.(ts|tsx|js|jsx|mjs|cjs|sql)$/.test(e)) {
+      // Exclude `.down.sql` rollback files — they restore superseded RPC
+      // bodies (and thus the old SET-site) by design; counting them would
+      // break the forward-surface invariant after migration 087 (#4696).
+      if (/\.(ts|tsx|js|jsx|mjs|cjs|sql)$/.test(e) && !e.endsWith(".down.sql")) {
         acc.push(full);
       }
     }

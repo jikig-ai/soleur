@@ -13,7 +13,11 @@
  *       (DB CHECK enum-absence regex; defense-in-depth per Arch F3)
  *   (h) anonymise_action_sends(uuid) → action_sends.user_id IS NULL +
  *       recipient_id_hash '__anonymised__' (Art-17 erasure; cascade
- *       integration covered by account-delete-scope-grants-cascade.test.ts)
+ *       integration covered by account-delete-scope-grants-cascade.test.ts).
+ *       (h.2) idempotent re-run → 0 rows. (h.3) WORM re-armed after the RPC
+ *       (the app.worm_bypass GUC must not leak) — migration 087 (#4696)
+ *       replaced the superuser-only session_replication_role bypass that
+ *       raised 42501 on managed Supabase (Sentry WEB-PLATFORM-13).
  *   (i) Cross-tenant SELECT → 0 rows (RLS owner-select)
  *
  * Opt-in via TENANT_INTEGRATION_TEST=1. Requires `doppler run -p soleur -c dev`.
@@ -408,6 +412,34 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(afterRows?.length).toBe(1);
       expect(afterRows![0].user_id, "user_id zeroed").toBeNull();
       expect(afterRows![0].recipient_id_hash, "recipient_id_hash overwritten").toBe("__anonymised__");
+
+      // (h.2) Idempotent re-run: the WHERE user_id = p_user_id clause matches
+      // nothing on a second pass, so 0 additional rows are anonymised. Guards
+      // the saga's recoverability invariant (a re-run after a partial failure
+      // is safe). Migration 087 (#4696).
+      const { data: secondRun, error: secondErr } = await service.rpc(
+        "anonymise_action_sends",
+        { p_user_id: u.id },
+      );
+      expect(secondErr, "idempotent re-run RPC").toBeNull();
+      expect(secondRun as unknown as number).toBe(0);
+
+      // (h.3) WORM stays armed for a bare UPDATE after the anonymise RPC.
+      // NOTE: this runs against dev's CURRENT (pre-087) schema where the trigger
+      // is a pure-reject that raises P0001 for any service-role UPDATE — so on
+      // dev it proves steady-state WORM reject, NOT specifically that the
+      // post-087 app.worm_bypass GUC fails to leak (the GUC isn't set on dev's
+      // pre-087 RPC). The GUC-leak / re-arm invariant is pinned deterministically
+      // in the migration-SQL guardrail (087-worm-bypass-privilege-independence
+      // .test.ts asserts every RPC sets app.worm_bypass='off' after its write).
+      // Post-087-deploy this same assertion additionally exercises the GUC path.
+      const { error: rearmErr } = await service
+        .from("action_sends")
+        .update({ recipient_id_hash: sha256("post-anonymise-rewrite") })
+        .eq("message_id", msg.id);
+      expect(rearmErr, "WORM re-armed after anonymise").not.toBeNull();
+      expect(rearmErr!.code).toBe("P0001");
+      expect(rearmErr!.message).toMatch(/append-only|WORM/i);
 
       // Best-effort cleanup of the throwaway user — independent of the
       // assertion under test. Cascade-ordering owned by
