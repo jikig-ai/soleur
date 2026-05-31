@@ -126,6 +126,39 @@ BEGIN
 END;
 $fn$;
 
+CREATE OR REPLACE FUNCTION public.tc_acceptances_no_mutate()
+  RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = public, pg_temp
+AS $fn$
+DECLARE
+  v_anonymise_flag text;
+BEGIN
+  v_anonymise_flag := current_setting('app.tc_acceptances_anonymise_in_progress', true);
+  IF v_anonymise_flag <> '' AND current_user = 'service_role' THEN
+    RETURN COALESCE(NEW, OLD);
+  END IF;
+  RAISE EXCEPTION 'tc_acceptances is append-only (WORM)' USING ERRCODE = 'P0001';
+END;
+$fn$;
+
+CREATE OR REPLACE FUNCTION public.dsar_export_audit_pii_no_mutate()
+  RETURNS trigger
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = public, pg_temp
+AS $fn$
+DECLARE
+  v_anonymise_flag text;
+BEGIN
+  v_anonymise_flag := current_setting('app.dsar_audit_anonymise_in_progress', true);
+  IF v_anonymise_flag <> '' AND current_user = 'service_role' THEN
+    RETURN COALESCE(NEW, OLD);
+  END IF;
+  RAISE EXCEPTION 'dsar_export_audit_pii is append-only (WORM)' USING ERRCODE = 'P0001';
+END;
+$fn$;
+
 CREATE OR REPLACE FUNCTION public.workspace_members_audit()
   RETURNS trigger
   LANGUAGE plpgsql
@@ -358,5 +391,42 @@ BEGIN
      SET founder_id = NULL,
          repo_full_name = NULL
    WHERE founder_id = p_founder_id;
+END;
+$fn$;
+
+CREATE OR REPLACE FUNCTION public.anonymise_tc_acceptances(p_user_id uuid)
+  RETURNS integer
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = public, pg_temp
+AS $fn$
+DECLARE
+  v_rows int;
+BEGIN
+  SET LOCAL app.tc_acceptances_anonymise_in_progress = 'on';
+  UPDATE public.tc_acceptances
+     SET user_id = NULL
+   WHERE user_id = p_user_id;
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  RETURN v_rows;
+END;
+$fn$;
+
+CREATE OR REPLACE FUNCTION public.anonymise_dsar_export_audit_pii(p_user_id uuid)
+  RETURNS integer
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = public, pg_temp
+AS $fn$
+DECLARE
+  v_rows int;
+BEGIN
+  SET LOCAL app.dsar_audit_anonymise_in_progress = 'on';
+  UPDATE public.dsar_export_audit_pii
+     SET requester_ip = NULL,
+         user_agent   = NULL
+   WHERE user_id = p_user_id;
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  RETURN v_rows;
 END;
 $fn$;

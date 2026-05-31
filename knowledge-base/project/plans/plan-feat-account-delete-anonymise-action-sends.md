@@ -30,12 +30,23 @@ approved the new mechanism + scope via `AskUserQuestion` (CPO sign-off surface).
 
 2. **Scope expanded to the full erasure path** (operator chose "Full saga +
    DROP NOT NULL"): migration `087_worm_bypass_privilege_independence.sql`
-   converts **7 anonymise RPCs** (action_sends, template_authorizations,
-   workspace_member_actions, workspace_members, byok_delegation_acceptances,
-   byok_delegation_withdrawals, audit_github_token_use) + **8 trigger
-   functions** (6 BEFORE reject/shape + 2 AFTER side-effect). The plan's
-   5-table scope would have left the saga still failing at
-   `anonymise_workspace_members`.
+   converts **9 anonymise RPCs** + **10 trigger functions**. Beyond the 7
+   `session_replication_role` (42501) functions (action_sends,
+   template_authorizations, workspace_member_actions, workspace_members,
+   byok_delegation_acceptances, byok_delegation_withdrawals,
+   audit_github_token_use), a multi-agent review at /work caught a SECOND,
+   independent defect on the same saga: `anonymise_tc_acceptances` (mig 044,
+   saga-FATAL) and `anonymise_dsar_export_audit_pii` (mig 041) use a per-table
+   sentinel GUC PAIRED with the proven-dead `current_user='service_role'` gate
+   (always-false inside a SECURITY DEFINER RPC → ALWAYS raises P0001 — the exact
+   learning-2026-05-18 pattern; 050 fixed scope_grants this way, 041/044 were
+   never converted). **Empirically reproduced on dev**: `anonymise_tc_acceptances`
+   on a real row → P0001. Since tc_acceptances is FATAL and every user has a
+   consent row, fixing only the session_replication_role steps would have left
+   erasure broken downstream. Both converted to the same `app.worm_bypass` GUC.
+   `tenant_deploy_audit` (mig 043, same dead-gate, NON-saga) deferred to #4702.
+   The plan's original 5-table scope would have left the saga failing at
+   `anonymise_workspace_members` AND `anonymise_tc_acceptances`.
 
 3. **`byok_delegation_acceptances.user_id` DROP NOT NULL** — a REAL, distinct
    defect (NOT the retracted action_sends one): the column is `NOT NULL` with

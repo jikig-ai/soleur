@@ -59,6 +59,10 @@ const ANONYMISE_RPCS = [
   "anonymise_byok_delegation_acceptances",
   "anonymise_byok_delegation_withdrawals",
   "anonymise_audit_github_token_use",
+  // Pattern-C (sentinel-GUC + dead `current_user='service_role'` gate) saga
+  // functions found at review time — same uniform conversion (#4696).
+  "anonymise_tc_acceptances",
+  "anonymise_dsar_export_audit_pii",
 ];
 
 // The 8 trigger functions that must now honor app.worm_bypass: 6 BEFORE
@@ -72,6 +76,8 @@ const WORM_REJECT_FNS = [
   "byok_delegation_withdrawals_no_mutate",
   "workspace_member_actions_no_mutate",
   "audit_github_token_use_no_mutate",
+  "tc_acceptances_no_mutate",
+  "dsar_export_audit_pii_no_mutate",
 ];
 const AFTER_SUPPRESS_FNS = [
   "workspace_members_audit",
@@ -102,6 +108,11 @@ describe("migration 087_worm_bypass_privilege_independence", () => {
       expect(executable).not.toMatch(
         /current_user\s*=\s*'service_role'/i,
       );
+    });
+
+    it("forward migration drops the per-table sentinel GUCs (Pattern-C dead-gate functions)", () => {
+      expect(executable).not.toMatch(/app\.tc_acceptances_anonymise_in_progress/i);
+      expect(executable).not.toMatch(/app\.dsar_audit_anonymise_in_progress/i);
     });
   });
 

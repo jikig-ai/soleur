@@ -11,21 +11,37 @@
 -- such step (anonymise_action_sends) and NO account can be deleted at all —
 -- the right to erasure cannot be honoured (an Art. 17 / Art. 5(1)(e) failure).
 --
--- FIX: replace the privileged GUC with a privilege-free custom GUC,
--- `app.worm_bypass`, set with SET LOCAL (transaction-scoped) inside each
--- anonymise RPC and honored by the trigger functions via
+-- A SECOND, independent defect on the SAME saga (found at review time):
+-- `anonymise_tc_acceptances` (mig 044, saga-FATAL) and
+-- `anonymise_dsar_export_audit_pii` (mig 041) bypass their WORM triggers via a
+-- per-table sentinel GUC PAIRED with `current_user = 'service_role'`. Inside a
+-- SECURITY DEFINER RPC owned by `postgres`, `current_user` is `postgres`, NOT
+-- `service_role`, so the gate is silently ALWAYS-FALSE → the bypass never
+-- fires → the trigger ALWAYS raises P0001 "append-only (WORM)". This is the
+-- exact pattern learning 2026-05-18 documents (migration 050 fixed scope_grants
+-- this way; 041/044 were never converted). Empirically reproduced on dev:
+-- `anonymise_tc_acceptances` on a real row → P0001. Because tc_acceptances is a
+-- FATAL saga step that virtually every user hits, fixing only the
+-- session_replication_role steps would leave erasure broken downstream. Both
+-- are converted here to the same `app.worm_bypass` GUC.
+--
+-- FIX: replace BOTH broken bypasses (the superuser-only
+-- session_replication_role AND the dead `current_user='service_role'` sentinel)
+-- with a single privilege-free custom GUC, `app.worm_bypass`, set with SET LOCAL
+-- (transaction-scoped) inside each anonymise RPC and honored by the trigger
+-- functions via
 --   current_setting('app.worm_bypass', true) = 'on'
 -- Custom namespaced GUCs require no special privilege, so the 42501 is gone.
 -- The check has NO `current_user` dependency, so it is NOT the proven-dead
 -- pattern from learning
--- 2026-05-18-worm-trigger-bypass-role-check-fails-under-postgrest-routing.md
--- (where `current_user = 'service_role'` is silently always-false inside a
--- SECURITY DEFINER function under PostgREST routing). It is that learning's
--- own recommended no-role-check bypass. Precedent for shape-scoped WORM
--- bypass is migration 050 (scope_grants); this migration uses the uniform
--- GUC variant because anonymise_workspace_members must suppress AFTER
--- side-effect triggers (audit writer + byok-revoke cascade), which structural
--- shape detection cannot express.
+-- 2026-05-18-worm-trigger-bypass-role-check-fails-under-postgrest-routing.md.
+-- It is that learning's own recommended no-role-check bypass and a refinement
+-- of the existing `app.*_anonymise_in_progress` sentinel-GUC convention
+-- (migrations 041/043/044) with the dead `current_user` half removed.
+-- Precedent for shape-scoped WORM bypass is migration 050 (scope_grants); this
+-- migration uses the uniform GUC variant because anonymise_workspace_members
+-- must suppress AFTER side-effect triggers (audit writer + byok-revoke cascade),
+-- which structural shape detection cannot express.
 --
 -- SCOPE — all session_replication_role-dependent functions on the erasure
 -- path (the account-delete saga):
@@ -36,10 +52,14 @@
 --   * anonymise_byok_delegation_acceptances     (mig 074)  — FATAL
 --   * anonymise_byok_delegation_withdrawals     (mig 084)  — FATAL
 --   * anonymise_audit_github_token_use          (mig 037/066) — non-fatal
+--   * anonymise_tc_acceptances                  (mig 044)  — FATAL (dead-gate)
+--   * anonymise_dsar_export_audit_pii           (mig 041)  — non-fatal (dead-gate)
 -- and their trigger functions. NOT in scope (deferred — non-erasure paths,
--- tracked separately): purge_workspace_member_actions (retention) and
--- revoke_template_authorization (revoke). They remain on session_replication_
--- role and are still broken on prod; fixing them does not unblock erasure.
+-- tracked separately in #4702): purge_workspace_member_actions (retention) and
+-- revoke_template_authorization (revoke) still on session_replication_role; and
+-- tenant_deploy_audit_no_mutate / anonymise_tenant_deploy_audit (mig 043) which
+-- carry the same dead `current_user` gate but are operator-side, NOT on the
+-- account-delete saga. Fixing those does not unblock erasure.
 --
 -- byok_delegation_acceptances.user_id: the column is NOT NULL with FK→users
 -- ON DELETE RESTRICT, yet anonymise_byok_delegation_acceptances sets it NULL.
@@ -231,6 +251,47 @@ END;
 $fn$;
 
 REVOKE ALL ON FUNCTION public.audit_github_token_use_no_mutate()
+  FROM PUBLIC, anon, authenticated, service_role;
+
+-- 1.7 tc_acceptances_no_mutate. Was a sentinel GUC
+--     (app.tc_acceptances_anonymise_in_progress) PAIRED with the proven-dead
+--     `current_user = 'service_role'` gate (always-false inside a SECURITY
+--     DEFINER RPC → always raised P0001 → anonymise_tc_acceptances broken on
+--     the saga). Converted to the uniform app.worm_bypass GUC. INVOKER.
+CREATE OR REPLACE FUNCTION public.tc_acceptances_no_mutate()
+  RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = public, pg_temp
+AS $fn$
+BEGIN
+  IF current_setting('app.worm_bypass', true) = 'on' THEN
+    RETURN COALESCE(NEW, OLD);
+  END IF;
+  RAISE EXCEPTION 'tc_acceptances is append-only (WORM)' USING ERRCODE = 'P0001';
+END;
+$fn$;
+
+REVOKE ALL ON FUNCTION public.tc_acceptances_no_mutate()
+  FROM PUBLIC, anon, authenticated, service_role;
+
+-- 1.8 dsar_export_audit_pii_no_mutate. Same dead-gate defect as 1.7 (sentinel
+--     GUC app.dsar_audit_anonymise_in_progress + dead `current_user` gate).
+--     Converted to app.worm_bypass. SECURITY DEFINER (preserved).
+CREATE OR REPLACE FUNCTION public.dsar_export_audit_pii_no_mutate()
+  RETURNS trigger
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = public, pg_temp
+AS $fn$
+BEGIN
+  IF current_setting('app.worm_bypass', true) = 'on' THEN
+    RETURN COALESCE(NEW, OLD);
+  END IF;
+  RAISE EXCEPTION 'dsar_export_audit_pii is append-only (WORM)' USING ERRCODE = 'P0001';
+END;
+$fn$;
+
+REVOKE ALL ON FUNCTION public.dsar_export_audit_pii_no_mutate()
   FROM PUBLIC, anon, authenticated, service_role;
 
 -- ===========================================================================
@@ -516,5 +577,50 @@ BEGIN
          repo_full_name = NULL
    WHERE founder_id = p_founder_id;
   SET LOCAL app.worm_bypass = 'off';
+END;
+$fn$;
+
+-- 3.8 anonymise_tc_acceptances (mig 044; saga-FATAL). Was the dead-gate sentinel
+--     GUC app.tc_acceptances_anonymise_in_progress; now app.worm_bypass.
+CREATE OR REPLACE FUNCTION public.anonymise_tc_acceptances(p_user_id uuid)
+  RETURNS integer
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = public, pg_temp
+AS $fn$
+DECLARE
+  v_rows int;
+BEGIN
+  SET LOCAL app.worm_bypass = 'on';
+  UPDATE public.tc_acceptances
+     SET user_id = NULL
+   WHERE user_id = p_user_id;
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  SET LOCAL app.worm_bypass = 'off';
+  RETURN v_rows;
+END;
+$fn$;
+
+-- 3.9 anonymise_dsar_export_audit_pii (mig 041). Was the dead-gate sentinel GUC
+--     app.dsar_audit_anonymise_in_progress; now app.worm_bypass. Nulls the PII
+--     columns (requester_ip, user_agent); user_id is preserved as the audit
+--     linkage (NOT nulled), matching the prior body.
+CREATE OR REPLACE FUNCTION public.anonymise_dsar_export_audit_pii(p_user_id uuid)
+  RETURNS integer
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = public, pg_temp
+AS $fn$
+DECLARE
+  v_rows int;
+BEGIN
+  SET LOCAL app.worm_bypass = 'on';
+  UPDATE public.dsar_export_audit_pii
+     SET requester_ip = NULL,
+         user_agent   = NULL
+   WHERE user_id = p_user_id;
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  SET LOCAL app.worm_bypass = 'off';
+  RETURN v_rows;
 END;
 $fn$;
