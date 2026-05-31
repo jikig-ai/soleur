@@ -1,26 +1,5 @@
-import { createClient } from "@/lib/supabase/server";
 import { SettingsShell } from "@/components/settings/settings-shell";
-import { isTeamWorkspaceInviteEnabled, type Identity } from "@/lib/feature-flags/server";
-import { resolveCurrentOrganizationId } from "@/server/workspace-resolver";
-
-// Server-side flag evaluation. AC-A requires the "Members" link href
-// (`/dashboard/settings/team`) NOT appear in the client bundle when the flag is
-// OFF — so we pass `membersTab` as a prop rather than gating the link
-// client-side on a runtime boolean.
-async function resolveMembersTab(): Promise<{ href: string; label: string } | null> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return null;
-
-  const orgId = await resolveCurrentOrganizationId(user.id, supabase);
-  if (!orgId) return null;
-
-  const identity: Identity = { userId: user.id, role: "prd", orgId };
-  if (!(await isTeamWorkspaceInviteEnabled(orgId, identity))) return null;
-  return { href: "/dashboard/settings/team", label: "Members" };
-}
+import { resolveMembersTab } from "@/server/members-tab";
 
 export default async function SettingsLayout({
   children,
