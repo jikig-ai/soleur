@@ -176,7 +176,10 @@ fi
 # plain `sort` ranks v1.1.9 above v1.1.10, the exact bug class that hid the drift.
 echo ""
 echo "--- AC6: pin drift-guard vs latest published vinngest-v* tag ---"
-PIN=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" | head -1 | sed 's/.*://')
+# `|| true`: under `set -euo pipefail` a zero-match grep exits 1 and pipefail
+# would abort the whole script here (before AC6b + the results summary) if the
+# image ref is ever renamed. Let the empty PIN fall through to a clean FAIL.
+PIN=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" | head -1 | sed 's/.*://' || true)
 # git -C "$SCRIPT_DIR" (NOT `git rev-parse --show-toplevel`, which resolves to
 # the bare-repo parent in a worktree). Any failure (no git, no tags, not a repo)
 # collapses to an empty result → visible SKIP, never a false-green.
@@ -184,8 +187,17 @@ LATEST_TAG=$(git -C "$SCRIPT_DIR" tag --list 'vinngest-v*' 2>/dev/null \
   | sed 's/^vinngest-//' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
   | sort -V | tail -1 || true)
 if [[ -z "$LATEST_TAG" ]]; then
-  echo "  SKIP: no vinngest-v* git tags reachable (shallow clone / tagless checkout);"
-  echo "        drift comparison skipped (CI fetches tags via fetch-tags: true)."
+  if [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ]]; then
+    # In CI the deploy-script-tests checkout fetches tags (fetch-depth: 0 +
+    # fetch-tags: true). An empty tag set in CI means that wiring regressed —
+    # FAIL loudly rather than SKIP, so the guard can never silently disarm.
+    assert "vinngest-v* tags reachable in CI (guard must not silently disarm)" "false"
+    echo "        No vinngest-v* tags in a CI checkout — verify fetch-depth: 0 +"
+    echo "        fetch-tags: true on deploy-script-tests in infra-validation.yml."
+  else
+    echo "  SKIP: no vinngest-v* git tags reachable (shallow clone / tagless checkout);"
+    echo "        drift comparison skipped (CI fetches tags via fetch-tags: true)."
+  fi
 else
   assert "cloud-init pin ($PIN) matches latest published vinngest-v* tag ($LATEST_TAG)" \
     "[[ '$PIN' == '$LATEST_TAG' ]]"
@@ -196,12 +208,16 @@ else
   fi
 fi
 
-# --- AC6b: all pin refs share one tag (catches a partial bump) ---
+# --- AC6b: all pin refs present AND share one tag (catches a partial bump) ---
+# Assert BOTH count==3 (docker pull/create/inspect) AND distinct==1. distinct==1
+# alone passes vacuously if a future refactor drops the refs to a single
+# surviving line; asserting the count keeps the multi-ref coupling intact.
 echo ""
-echo "--- AC6b: pin-consistency (all soleur-inngest-bootstrap refs agree) ---"
+echo "--- AC6b: pin-consistency (all soleur-inngest-bootstrap refs present + agree) ---"
+PIN_REF_COUNT=$(grep -coE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" || true)
 DISTINCT_PINS=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" | sort -u | wc -l)
-assert "all soleur-inngest-bootstrap pin refs share one tag (found $DISTINCT_PINS distinct)" \
-  "(( DISTINCT_PINS == 1 ))"
+assert "all 3 soleur-inngest-bootstrap pin refs present and share one tag (found $PIN_REF_COUNT refs, $DISTINCT_PINS distinct)" \
+  "(( PIN_REF_COUNT == 3 && DISTINCT_PINS == 1 ))"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="
