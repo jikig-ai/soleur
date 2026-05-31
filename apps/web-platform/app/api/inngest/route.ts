@@ -51,6 +51,7 @@ import { cronStaleDeferredScopeOuts } from "@/server/inngest/functions/cron-stal
 import { cronStrategyReview } from "@/server/inngest/functions/cron-strategy-review";
 import { cronUxAudit } from "@/server/inngest/functions/cron-ux-audit";
 import { cronWeeklyAnalytics } from "@/server/inngest/functions/cron-weekly-analytics";
+import { cronWorkspaceSyncHealth } from "@/server/inngest/functions/cron-workspace-sync-health";
 import { eventCfTokenExpiryCheck } from "@/server/inngest/functions/event-cf-token-expiry-check";
 import { eventShipMerge } from "@/server/inngest/functions/event-ship-merge";
 import { githubOnEvent } from "@/server/inngest/functions/github-on-event";
@@ -107,6 +108,7 @@ export const { GET, POST, PUT } = serve({
     cronStrategyReview,
     cronUxAudit,
     cronWeeklyAnalytics,
+    cronWorkspaceSyncHealth,
     eventCfTokenExpiryCheck,
     eventShipMerge,
     githubOnEvent,
