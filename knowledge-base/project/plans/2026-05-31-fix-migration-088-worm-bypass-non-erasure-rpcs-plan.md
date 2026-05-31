@@ -44,10 +44,17 @@ superuser, so that GUC raises `42501 permission denied to set parameter "session
 - `purge_workspace_member_actions` is invoked by pg_cron and **never deletes anything** — the
   7-year retention sweep is silently a no-op, an Art. 5(1)(e) storage-limitation drift (audit PII
   accumulates past its lawful retention window indefinitely).
-- `revoke_template_authorization` throws `42501` on every call that reaches the bypass — both the
-  founder-initiated revoke (`/api/template-authorizations/revoke`) and the service-role auto-revoke
-  side-effect (`is-template-authorized.ts`, reasons `expired`/`quota_exhausted`). Founders cannot
-  withdraw a template authorization (Art. 7(3) "as easily withdrawable as given").
+- `revoke_template_authorization` throws `42501` when the founder-initiated revoke
+  (`/api/template-authorizations/revoke`, `reason='founder_revoked'`) reaches the bypass line. Founders
+  cannot withdraw a template authorization (Art. 7(3) "as easily withdrawable as given"). 088 fixes
+  **this** path. **Correction (review FINDING 4):** the auto-revoke side-effect
+  (`is-template-authorized.ts`, reasons `expired`/`quota_exhausted`) does NOT also benefit from 088 — its
+  caller runs the authenticated SSR client (`createClient()`, `auth.uid()` non-NULL), so the pre-existing
+  founder-attribution gate (`auth.uid() IS NOT NULL AND p_reason <> 'founder_revoked'` → 42501) rejects
+  it *before* the bypass line, independent of which GUC the bypass uses. That path is a pre-existing
+  latent defect outside 088's scope (it is fire-and-forget — `warnSilentFallback`, no user-facing 500 —
+  and read-time denial keeps the gate behavior correct; only the persisted `revoked_at` never lands).
+  Tracked separately as a discovered bug (#4709); 088 neither fixes nor regresses it.
 
 **The trigger functions are already fixed.** Migration 087 §1.2 rewrote
 `template_authorizations_no_mutate()` and §1.5 rewrote `workspace_member_actions_no_mutate()` to honor
@@ -71,7 +78,7 @@ RAISE LOG). Add a migration-shape guardrail test mirroring
 | Trigger functions already honor `app.worm_bypass` after 087 | Confirmed: 087 §1.2 `template_authorizations_no_mutate` + §1.5 `workspace_member_actions_no_mutate` both check `current_setting('app.worm_bypass', true) = 'on'`. Triggers `EXECUTE FUNCTION` those functions (mig 063 L133/L139, mig 053 L181/L187). | No trigger-function edits in 088. Down migration also leaves triggers untouched. |
 | Guardrail test should assert neither **function** references `session_replication_role` | The two trigger functions never referenced it post-087 anyway; the live references are in the two **RPC** bodies. | Test asserts (a) the 088 forward migration nowhere references `session_replication_role`, and (b) each of the two RPCs sets `app.worm_bypass='on'`/`'off'` and keeps `search_path` pinned. Mirrors 087 test structure. |
 | `purge` is "scheduled" / cron-invoked | mig 063 COMMENT: "pg_cron-invoked 7-year retention purge." Caller is pg_cron (no app-code call site). | Plan notes the cron path; verification is migration-shape + a DEV-only live probe (no PROD writes). |
-| `revoke` has a single call path | TWO callers: `app/api/template-authorizations/revoke/route.ts` (authenticated founder, `reason='founder_revoked'`) and `server/templates/is-template-authorized.ts:180` (service-role auto-revoke, `reason='expired'`/`'quota_exhausted'`). Both reach the same bypassed UPDATE. | Preserve the full reason-enum gate + `auth.uid()` authz block verbatim; only swap the two bypass lines. Both callers benefit. |
+| `revoke` has a single call path | TWO callers: `app/api/template-authorizations/revoke/route.ts` (authenticated founder, `reason='founder_revoked'`) and `server/templates/is-template-authorized.ts:180` (auto-revoke, `reason='expired'`/`'quota_exhausted'`). **Correction (review FINDING 4):** the auto-revoke caller is NOT service-role — it runs the authenticated SSR client (`send/route.ts:82` → `runTemplateGate` → `isTemplateAuthorized`, `auth.uid()` non-NULL), so it is rejected at the founder-attribution gate (42501) *before* the bypass, independent of the GUC swap. Only the founder path reaches the bypassed UPDATE. | Preserve the full reason-enum gate + `auth.uid()` authz block verbatim; only swap the two bypass lines. **Only the founder-initiated path benefits**; the auto-revoke path is a pre-existing defect tracked separately (a real fix needs a service-role client or a gate carve-out — a security design call outside 088's mirror-087 scope). |
 
 ## User-Brand Impact
 

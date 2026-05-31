@@ -105,6 +105,26 @@ describe("migration 088_worm_bypass_non_erasure_rpcs", () => {
           /SET\s+search_path\s*(?:=|TO)\s*'?public'?\s*,\s*'?pg_temp'?/i,
         );
       });
+
+      it(`${rpc} arms 'on' BEFORE the single write and re-arms 'off' AFTER it`, () => {
+        // The security property is the ORDERING, not mere presence: arm the
+        // bypass, do exactly one write, re-arm. A body that re-armed 'off'
+        // before the write would leave the write WORM-rejected; one that armed
+        // 'on' after the write would never bypass. Pin arm < write < re-arm.
+        const block = fnBlock(executable, rpc);
+        const onIdx = block.search(/SET\s+LOCAL\s+app\.worm_bypass\s*=\s*'on'/i);
+        const dmlIdx = block.search(/\b(DELETE\s+FROM|UPDATE)\b/i);
+        const offIdx = block.search(
+          /SET\s+LOCAL\s+app\.worm_bypass\s*=\s*'off'/i,
+        );
+        expect(onIdx, "arm 'on' must be present").toBeGreaterThanOrEqual(0);
+        expect(dmlIdx, "single write must follow arm 'on'").toBeGreaterThan(
+          onIdx,
+        );
+        expect(offIdx, "re-arm 'off' must follow the write").toBeGreaterThan(
+          dmlIdx,
+        );
+      });
     }
   });
 
@@ -159,6 +179,14 @@ describe("migration 088_worm_bypass_non_erasure_rpcs", () => {
   describe("down migration", () => {
     it("restores session_replication_role in both RPCs (forward-only reality)", () => {
       expect(downExecutable).toMatch(/session_replication_role/i);
+    });
+
+    it("removes app.worm_bypass from the restored bodies (rollback symmetry)", () => {
+      // Symmetric with the forward migration's `not.toMatch(session_replication_role)`:
+      // a botched down that restored session_replication_role but left a stray
+      // app.worm_bypass line (double-bypass / wrong-GUC re-arm) would otherwise
+      // stay green.
+      expect(downExecutable).not.toMatch(/app\.worm_bypass/i);
     });
 
     it("re-CREATEs both RPCs", () => {

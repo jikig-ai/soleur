@@ -177,4 +177,6 @@ COMMENT ON FUNCTION public.revoke_template_authorization(text, text) IS
   'Founder-initiated revoke (Art. 7(3) "as easily withdrawable as given"). '
   'Also called auto-revoke-side-effect from the isTemplateAuthorized '
   'predicate on quota/expired detection so the scope-grants UI does '
-  'not display lying rows.';
+  'not display lying rows. WORM bypass via SET LOCAL app.worm_bypass=''on'' '
+  '(privilege-free; replaces the prior superuser-only replica-role GUC that '
+  'raised 42501 on managed Supabase); re-armed ''off'' after the UPDATE. #4702.';
