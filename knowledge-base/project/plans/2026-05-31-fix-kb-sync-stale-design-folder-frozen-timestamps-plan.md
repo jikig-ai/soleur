@@ -46,11 +46,27 @@ Migration 080 (ADR-044 backfill, already applied) copies `users.github_installat
 3. **"#4666 ignore-list shadows ws 52af49c2"** — wrong id→repo mapping (52af49c2 is `chatte`; screenshot ws is 754ee124). Retracted.
 4. **"Prod 5 migrations behind (079–083)"** — false; `_schema_migrations` has 114 rows through 088. Retracted. **No migrations were applied.**
 
-## Candidate remedies (NOT chosen — operator to decide)
+## Chosen scope — Track B: systemic detection + observability (operator decision 2026-05-31)
 
-- **Recover the workspace (data):** install/authorize the GitHub App on `jikig-ai/soleur`, persist the `installation_id` onto user+workspace 754ee124, dispatch one `platform/workspace.reconcile.requested` to pull current `main`. The App install is a real consent gate (Playwright can drive only up to the consent screen).
-- **Systemic fix (code):** mark `repo_status='ready' AND github_installation_id IS NULL` workspaces as needs-reauth (current `repo_status` CHECK allows only `not_connected|cloning|ready|error` — would need `error`+reason or a constraint change), add a UI reconnect affordance + Sentry breadcrumb so unreconcilable-but-"ready" workspaces are never silent again.
-- **Observability backstop:** an Inngest cron alerting when any `ready` workspace has had no successful `kb_sync_history` row in N days — would have caught this ~Apr 26.
+Operator will handle the `jikig-ai/soleur` GitHub-App reconnect manually (Track A). This PR ships **Track B only**: make the "ready but unreconcilable" failure class **loud instead of silent**, so it can never again sit frozen for weeks unnoticed.
 
-## Open question for the operator
-Is `jikig-ai/soleur` meant to be connected via the GitHub App at all (it's the platform's own dev repo, and is on the `#4666` reconcile ignore-list), or is the intended KB source different? This determines whether the fix is "install the App on soleur" vs "this workspace should point elsewhere / be deprecated."
+**Why detection-only (not state mutation):** flipping `users.repo_status` to `error` was considered and **rejected** — `app/api/kb/tree/route.ts:36` returns **409 on `repo_status='error'`**, which would *blank the user's KB tree* (strictly worse than today's stale-but-visible tree). No `repo_status` mutation. No migration. No UI change (so no UX gate). Pure observability cron, matching the read-only `cron-membership-health` precedent exactly.
+
+### Implementation
+- **New Inngest cron `cron-workspace-sync-health`** (`apps/web-platform/server/inngest/functions/cron-workspace-sync-health.ts`), modeled on `cron-membership-health.ts`. Daily schedule. Scans `workspaces` (the reconcile authority) for the exact unreconcilable class:
+  `repo_status = 'ready' AND github_installation_id IS NULL`.
+  Each such workspace can **never** match the push-reconcile filter (`workspace-reconcile-on-push.ts:164` — `.eq("github_installation_id", installationId)`), so it silently never syncs. For each finding, `reportSilentFallback(...)` (feature `workspace-sync-health`, op `ready-null-installation`) → Sentry page. Read-only; no mutation.
+- **Register** in `app/api/inngest/route.ts` `serve({ functions: [...] })`.
+- **Tests** (`apps/web-platform/test/server/inngest/workspace-sync-health.test.ts`), modeled on `membership-health.test.ts`: (RED) a `ready`+NULL-install workspace triggers exactly one `reportSilentFallback`; a `ready`+non-NULL-install workspace and a `not_connected` workspace trigger none; a DB error path reports once and returns no findings.
+
+### Non-goals (documented, not built)
+- **Stale-last-sync heuristic** (alert when a `ready`+installed workspace has no `kb_sync_history ok:true` row in N days) — broader, higher false-positive risk; follow-up.
+- **UI reconnect affordance for the `ready`+NULL-install state** — the existing `RepoConnectionCard` only shows "Reconnect" on `repo_status='error'`, which we deliberately don't set. A `needsReconnect` derived flag + card change needs UX review; follow-up. Operator is reconnecting manually this time.
+
+## Acceptance Criteria (Track B)
+- [ ] RED→GREEN: `cron-workspace-sync-health` reports each `repo_status='ready' AND github_installation_id IS NULL` workspace to Sentry via `reportSilentFallback`; emits nothing for ready+installed or not_connected; DB-error path reports once and returns `{ ok:true, findings:[] }`. Read-only (no `.update`/`.upsert` on the SUT).
+- [ ] Registered in `app/api/inngest/route.ts`.
+- [ ] `./node_modules/.bin/vitest run` (the new test + reconcile suite) green; `./node_modules/.bin/tsc --noEmit` clean in `apps/web-platform`.
+
+## Open question (non-blocking; resolved for Track A by operator)
+`jikig-ai/soleur` is the platform's own dev repo and is on the `#4666` reconcile ignore-list — note that even after reconnect, the ignore-list short-circuit (`workspace-reconcile-on-push.ts:149`) may also need attention for this specific repo. Out of scope for Track B (detection still fires regardless).

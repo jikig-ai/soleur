@@ -143,6 +143,7 @@ export const EXPECTED_CRON_FUNCTIONS: string[] = [
   "cron-strategy-review",
   "cron-ux-audit",
   "cron-weekly-analytics",
+  "cron-workspace-sync-health",
 ];
 
 // =============================================================================
