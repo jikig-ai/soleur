@@ -37,7 +37,7 @@ This plan: (1) provisions a separate read/write-scoped Sentry **Internal Integra
 
 **Detail level:** MORE. Single skill edit + one Doppler secret + one `.env.example` line. The only non-trivial axis is the operator-credential dependency and the graceful-degradation contract.
 
-Closes #4681 — but note the credential half is operator-only (mint + Doppler write); the **code** half (skill + docs) is what this PR ships. See Acceptance Criteria split (`Ref #4681`, not `Closes`).
+Ref #4681 (NOT `Closes`) — the credential half is operator-only (mint + Doppler write); the **code** half (skill + docs) is what this PR ships, and the issue stays open until the operator completes the post-merge credential step. See Acceptance Criteria split.
 
 ## Premise Validation
 
