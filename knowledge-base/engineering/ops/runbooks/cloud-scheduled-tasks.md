@@ -7,7 +7,7 @@ date: 2026-04-21
 # Cloud Scheduled Tasks -- Silence Diagnosis and Restore Runbook
 
 **Tracking issue:** #2714
-**Watchdog workflow:** `.github/workflows/scheduled-cloud-task-heartbeat.yml`
+**Watchdog:** `apps/web-platform/server/inngest/functions/cron-cloud-task-heartbeat.ts` (Inngest cron, post-TR9; the former `.github/workflows/scheduled-cloud-task-heartbeat.yml` was deleted in the TR9 migration)
 **Migration context:** PR #1095 (issue #1094) migrated content-generator, campaign-calendar, and growth-audit execution from GitHub Actions to Claude Code Cloud scheduled tasks on 2026-03-25.
 **Foundational learning:** `knowledge-base/project/learnings/2026-04-03-content-cadence-gap-cloud-task-migration.md`
 
