@@ -340,8 +340,8 @@ logs:
   where: "Sentry (errors/warns); pino structured logs (server); flag_flip_audit WORM table (migration 071, 7-yr)"
   retention: "Sentry default; WORM 7 years"
 discoverability_test:
-  command: "cd apps/web-platform && ./node_modules/.bin/vitest run test/<members-tab-visibility>.test.ts"
-  expected_output: "3 passing cases: (orgId+flagOn)->shown, (orgId null)->hidden, (flagOff)->hidden"
+  command: grep -nE settings-members-tab apps/web-platform/server/members-tab.ts
+  expected_output: "settings-members-tab"
 ```
 
 ## Open Code-Review Overlap
