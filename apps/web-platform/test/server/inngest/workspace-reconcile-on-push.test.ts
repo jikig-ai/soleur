@@ -314,8 +314,12 @@ describe("reconcile — no workspace match (pino-only, no Sentry)", () => {
 });
 
 describe("reconcile — ignored internal repo (stop the source)", () => {
-  it("short-circuits the platform's own dev repo with no DB query, no log, no Sentry", async () => {
-    WORKSPACE_ROWS = [{ id: "ws-A" }]; // would match if the query ran
+  it("returns ignored-internal-repo with no sync, no log, no Sentry when ZERO workspaces match", async () => {
+    // #4666 intent preserved: an ignored repo (the platform's own dev repo)
+    // with no connected workspace is a fully-silent skip. The ignore check now
+    // runs AFTER resolution, gated on zero matches — so the workspace query DID
+    // run (one indexed select), but nothing else fires.
+    WORKSPACE_ROWS = [];
     const handler = await importHandler();
     const result = await handler({
       event: makeEvent({ fullName: "jikig-ai/soleur" }),
@@ -324,12 +328,49 @@ describe("reconcile — ignored internal repo (stop the source)", () => {
     });
 
     expect(result).toEqual({ ok: false, reason: "ignored-internal-repo" });
-    // Fully silent: no workspace resolution query, no sync, no log, no Sentry.
-    expect(repoUrlFilterSpy).not.toHaveBeenCalled();
+    // The resolution query runs (ignore is now post-resolution), but the skip
+    // itself is silent: no sync, no benign-skip log, no Sentry.
     expect(syncWorkspaceSpy).not.toHaveBeenCalled();
     expect(loggerInfoSpy).not.toHaveBeenCalled();
     expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("RECONCILES an ignored repo that HAS a connected workspace, and warns once (regression: dogfood KB freeze)", async () => {
+    // The bug: the ignore check ran BEFORE resolution, so a real connected
+    // workspace on an ignored repo (founder dogfooding their KB from the
+    // platform's own repo) was silently starved for ~5 weeks. Now the ignored
+    // repo is reconciled because it has a workspace, and a shadowed-workspace
+    // breadcrumb fires so the misconfiguration is never again silent.
+    WORKSPACE_ROWS = [{ id: "ws-A" }];
+    OWNERS.set("ws-A", "owner-A");
+    EXISTING_DIRS.add(wsPath("ws-A"));
+    syncWorkspaceSpy.mockResolvedValue({ ok: true });
+
+    const handler = await importHandler();
+    const result = await handler({
+      event: makeEvent({ fullName: "jikig-ai/soleur" }),
+      step: makeStep(),
+      logger,
+    });
+
+    expect(result).toEqual({ ok: true, synced: 1 });
+    expect(syncWorkspaceSpy).toHaveBeenCalledTimes(1);
+    expect(syncWorkspaceSpy).toHaveBeenCalledWith(
+      42,
+      wsPath("ws-A"),
+      expect.anything(),
+      expect.objectContaining({ userId: "owner-A", op: "push" }),
+    );
+    expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
+      expect.objectContaining({ trigger: "webhook_push", ok: true }),
+    );
+    // Shadowed-workspace breadcrumb fires exactly once.
+    expect(warnSilentFallbackSpy).toHaveBeenCalledTimes(1);
+    expect(warnSilentFallbackSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "ignored-repo-has-workspaces" }),
+    );
   });
 
   it("does NOT short-circuit a customer repo whose slug merely shares the ignored prefix", async () => {

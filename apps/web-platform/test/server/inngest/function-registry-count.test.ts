@@ -67,6 +67,9 @@ const KNOWN_UNMONITORED_SLUGS = new Set([
   "scheduled-ruleset-bypass-audit",
   "scheduled-seo-aeo-audit",
   "scheduled-weekly-analytics",
+  // New (never a GHA workflow). Findings alert via reportSilentFallback Sentry
+  // issues, not a cron monitor; tf monitor deferred with the TR9 batch (#4476).
+  "cron-workspace-sync-health",
 ]);
 
 const GHA_ONLY_MONITORS = new Set([
@@ -91,7 +94,7 @@ describe("Inngest function registry — drift guards", () => {
 
   // UPDATE this number when adding/removing Inngest functions.
   it("(a) route.ts functions array has expected count", () => {
-    expect(routeEntries.length).toBe(42);
+    expect(routeEntries.length).toBe(43);
   });
 
   it("(b) every cron-*.ts file is registered in route.ts functions array", () => {

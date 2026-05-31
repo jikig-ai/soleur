@@ -143,13 +143,14 @@ export async function workspaceReconcileOnPushHandler({
   // URL FIRST or the match is zero-rows while a URL→URL parity test passes.
   const targetRepoUrl = normalizeRepoUrl(`https://github.com/${fullName}`);
 
-  // Platform-internal repo (the GitHub App is installed on it, but it is not a
-  // customer workspace). Short-circuit BEFORE the DB query and BEFORE any
-  // log/Sentry emission — these pushes are expected and carry zero signal.
-  if (isIgnoredReconcileRepo(targetRepoUrl)) {
-    return { ok: false, reason: "ignored-internal-repo" };
-  }
-
+  // NOTE: the ignored-internal-repo short-circuit is evaluated AFTER this
+  // resolution, gated on zero matches (see below). It previously ran BEFORE
+  // the query and silently starved a real connected workspace on an ignored
+  // repo — e.g. the founder dogfooding their KB from the platform's own repo,
+  // which was added to the ignore-list for Sentry-noise suppression (#4666).
+  // Resolving first costs one indexed `select id`; the silent skip still fires
+  // for the common zero-workspace case, preserving #4666's intent.
+  //
   // Resolve EVERY workspace connected to (installation_id, repo). Service
   // client: the webhook is a trusted post-signature-verification context and
   // workspaces may be owned by different users (two-users-same-fork). The
@@ -181,6 +182,17 @@ export async function workspaceReconcileOnPushHandler({
 
   const rows = workspaces.rows ?? [];
   if (rows.length === 0) {
+    // Ignored-internal-repo short-circuit, NOW gated on zero matches (#4666
+    // intent preserved). A push to an ignored repo (e.g. the platform's own
+    // dev repo) with NO connected workspace is fully silent — no log, no
+    // Sentry — exactly as #4666 intended. Evaluated here (after resolution)
+    // rather than before it, so an ignored repo that DOES have a connected
+    // workspace is no longer starved (the bug that froze a dogfooding KB for
+    // ~5 weeks: the ignore check ran first and dropped the push before the
+    // matching workspace was ever queried).
+    if (isIgnoredReconcileRepo(targetRepoUrl)) {
+      return { ok: false, reason: "ignored-internal-repo" };
+    }
     // Expected, benign outcome -- app uninstalled, repo not yet onboarded, a
     // disconnected fork, or a stale/replayed webhook. NOT actionable. Logged to
     // Better Stack (pino) for the drain but deliberately NOT mirrored to Sentry:
@@ -188,8 +200,7 @@ export async function workspaceReconcileOnPushHandler({
     // could not bound it across the platform's container churn (each new worker
     // resets the debounce map), so every push still created Sentry issues +
     // alert emails for zero signal. Genuine resolution errors still page via the
-    // reportSilentFallback path above; the platform's own dev repo is handled
-    // earlier by the ignored-repo short-circuit.
+    // reportSilentFallback path above.
     logger.info(
       {
         feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
@@ -201,6 +212,21 @@ export async function workspaceReconcileOnPushHandler({
       "Reconcile skipped — no workspace connected to this repo",
     );
     return { ok: false, reason: "no-workspace-match" };
+  }
+
+  // Shadowed-workspace guard (the gap that hid the ~5-week freeze). An ignored
+  // repo that nonetheless HAS connected workspaces is a misconfiguration worth
+  // surfacing: the ignore-list was added to suppress zero-signal noise, not to
+  // starve a real workspace. Warn once (Sentry breadcrumb) — but DO reconcile
+  // the workspaces below. Fires at most once per push to such a repo.
+  if (isIgnoredReconcileRepo(targetRepoUrl)) {
+    warnSilentFallback(new Error("ignored repo has connected workspaces"), {
+      feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
+      op: "ignored-repo-has-workspaces",
+      extra: { installationId, deliveryId, targetRepoUrl, workspaceCount: rows.length },
+      message:
+        "Reconcile ignore-list shadows a connected workspace — reconciling anyway; review WORKSPACE_RECONCILE_IGNORE_REPOS",
+    });
   }
 
   // Fan out: process every matching workspace independently. A push to a
