@@ -35,6 +35,6 @@ export function shouldRouteToSetupKey({
  * `startsWith("/invite/")` check requires the trailing slash, so prefix-adjacent
  * paths like `/invited-users` never match.
  */
-export function isInviteReturnTarget(nextHop: string | null): boolean {
+export function isInviteReturnTarget(nextHop: string | null): nextHop is string {
   return nextHop?.startsWith("/invite/") ?? false;
 }
