@@ -84,15 +84,26 @@ describe("POST /api/accept-terms — redirectTo threading", () => {
     expect(json.redirect).toBe("/invite/tok123");
   });
 
-  test("no-key user with redirectTo → /setup-key CARRIES the target forward (auto-return after onboarding)", async () => {
+  test("no-key user with redirectTo=/invite/<token> → lands on the invite (#4715: invite outranks /setup-key)", async () => {
     mockUserHasEffectiveByokKey.mockResolvedValue(false);
     const res = await POST(makeRequest({ redirectTo: "/invite/tok123" }));
     const json = await res.json();
-    // Onboarding still takes precedence, but the invite target is threaded
-    // onto setup-key so a brand-new invitee auto-returns to /invite after
-    // key + repo setup (T&C-first ordering preserved).
+    // #4715 reverses the #4641 "carry forward onto /setup-key" behavior for
+    // invite targets: a keyless invitee can't complete the key-purchase funnel,
+    // so the validated invite next-hop now OUTRANKS the onboarding gate. T&C is
+    // still recorded first (the accept_terms RPC runs before this redirect).
+    expect(json.redirect).toBe("/invite/tok123");
+    expect(json.redirect).not.toContain("setup-key");
+  });
+
+  test("no-key user with a non-invite redirectTo → /setup-key CARRIES the target forward (unchanged)", async () => {
+    mockUserHasEffectiveByokKey.mockResolvedValue(false);
+    const res = await POST(makeRequest({ redirectTo: "/dashboard" }));
+    const json = await res.json();
+    // Non-invite targets still thread onto /setup-key so a genuine new signup
+    // auto-returns after onboarding — only `/invite/` outranks the gate.
     expect(json.redirect).toBe(
-      `/setup-key?redirectTo=${encodeURIComponent("/invite/tok123")}`,
+      `/setup-key?redirectTo=${encodeURIComponent("/dashboard")}`,
     );
   });
 
@@ -127,4 +138,54 @@ describe("POST /api/accept-terms — redirectTo threading", () => {
     const json = await res.json();
     expect(json.redirect).toBe("/dashboard");
   });
+});
+
+describe("POST /api/accept-terms — TR2 ordering (T&C before membership)", () => {
+  test("accept_terms RPC error → 500 and NO redirect is produced (never /invite before consent)", async () => {
+    // The redirect — including any /invite hop — is computed only AFTER the
+    // accept_terms RPC succeeds. If the RPC fails, the route returns 500 and the
+    // body carries no `redirect`, so an invitee can never reach /invite before
+    // their T&C acceptance is durably recorded. `/invite` is in PUBLIC_PATHS so
+    // the middleware T&C gate does NOT fire there — this ordering IS the consent
+    // guarantee.
+    mockUserHasEffectiveByokKey.mockResolvedValue(false);
+    mockServiceRpc.mockResolvedValue({
+      data: null,
+      error: { message: "rpc failed" },
+    });
+    const res = await POST(makeRequest({ redirectTo: "/invite/tok123" }));
+    expect(res.status).toBe(500);
+    const json = await res.json();
+    expect(json.redirect).toBeUndefined();
+    expect(JSON.stringify(json)).not.toContain("/invite/");
+  });
+});
+
+describe("POST /api/accept-terms — open-redirect reject vectors (no /invite/ bypass)", () => {
+  // Each hostile value must be nulled by safeReturnTo BEFORE isInviteReturnTarget
+  // sees it, so a keyless user falls to bare /setup-key — never an off-origin
+  // hop and never a forged /invite/ target.
+  const VECTORS: Array<[string, string]> = [
+    ["protocol-relative", "//evil.example"],
+    ["absolute URL", "https://evil.example"],
+    ["backslash bypass", "/\\evil.example"],
+    ["path traversal", "/dashboard/../secret"],
+    // The critical one: a value that LOOKS like an invite target but smuggles a
+    // protocol-relative host via percent-encoded separators. safeReturnTo runs
+    // the dangerous-substring guards on the decoded form, so /invite/%2F%2Fevil
+    // → /invite///evil → rejected.
+    ["smuggled invite prefix", "/invite/%2F%2Fevil.example"],
+  ];
+
+  test.each(VECTORS)(
+    "%s redirectTo is rejected → bare /setup-key (keyless), no leak",
+    async (_label, hostile) => {
+      mockUserHasEffectiveByokKey.mockResolvedValue(false);
+      const res = await POST(makeRequest({ redirectTo: hostile }));
+      const json = await res.json();
+      expect(json.redirect).toBe("/setup-key");
+      expect(json.redirect).not.toContain("evil");
+      expect(json.redirect).not.toContain("redirectTo");
+    },
+  );
 });

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { hashToken, type LookupResult } from "@/server/workspace-invitations";
@@ -10,6 +11,14 @@ interface Props {
 export default async function InvitePage({ params }: Props) {
   const { token } = await params;
   const tokenHash = hashToken(token);
+
+  // Resolve the session first so BOTH the terminal "not available" card and the
+  // accept card can branch on auth (spec-flow J7: a dead-end terminal card is a
+  // single-user trap — give the user a forward hop).
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
   const service = createServiceClient();
   const { data } = await service.rpc("lookup_invitation_by_token", {
@@ -28,15 +37,17 @@ export default async function InvitePage({ params }: Props) {
           <p className="text-soleur-text-secondary">
             This invitation may have expired, already been used, or is no longer valid.
           </p>
+          {/* J7 forward CTA — never leave the user at a hard dead-end. */}
+          <Link
+            href={user ? "/dashboard" : "/login"}
+            className="mt-6 inline-block rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent hover:opacity-90"
+          >
+            {user ? "Go to your dashboard" : "Sign in"}
+          </Link>
         </div>
       </div>
     );
   }
-
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
 
   // Compute the invitee match on the server. The lookup result carries only
   // invitee_email (not invitee_user_id), so the client gate is email-based;
@@ -69,6 +80,13 @@ export default async function InvitePage({ params }: Props) {
             <span className="font-medium text-soleur-text-primary">{result.role}</span>
           </p>
         </div>
+
+        {/* Art. 13 disclosure (FR2 / CLO guardrail): tell the invitee what
+            joining shares BEFORE they accept — rendered co-temporally with the
+            Accept button, not deferred to onboarding. */}
+        <p className="mb-4 text-center text-xs text-soleur-text-muted">
+          Members share this workspace&apos;s data, agents, and billing.
+        </p>
 
         <InviteActions
           invitationId={result.invitation_id}
