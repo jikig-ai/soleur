@@ -21,8 +21,8 @@ Two sequenced PRs on `feat-kb-sync-followups`, **item 1 first**. RED→GREEN per
 - [ ] 2.2 Confirm `app/(dashboard)/dashboard/page.tsx:143` reads `.tree` only (additive-safe; no change).
 
 ### 3. Reconnect hook
-- [ ] 3.1 `components/repo/use-reconnect.ts` `useReconnect(onReconnected)` → `{ reconnect, isPending }`: POST detect-installation; success → `onReconnected()` + confirmation; failure → `sessionStorage.setItem("soleur_return_to", location.pathname)` then `assign("/connect-repo?return_to=…")`. No `.catch(noop)`.
-- [ ] 3.2 RED `test/components/repo/use-reconnect.test.tsx` (happy-dom; mock `window.location` happy-dom way): detect→install fallback; `isPending` toggles; error routes to `/connect-repo`.
+- [ ] 3.1 `components/repo/use-reconnect.ts` `useReconnect(onReconnected)` → `{ reconnect, isPending }`: POST detect-installation; success → `onReconnected()` + confirmation; failure → **emit `client-observability` (`reportSilentFallback` on network error / `warnSilentFallback` on `installed:false`, `feature:"kb-reconnect"`, `op:"detect-installation-fallback"`), then** `sessionStorage.setItem("soleur_return_to", location.pathname)` then `assign("/connect-repo?return_to=…")`. No `.catch(noop)`.
+- [ ] 3.2 RED `test/components/repo/use-reconnect.test.tsx` (happy-dom; mock `window.location` happy-dom way): detect→install fallback; `isPending` toggles; error routes to `/connect-repo`; **telemetry fires on the failure branch before redirect**.
 
 ### 4. Shared notice component
 - [ ] 4.1 `components/repo/reconnect-notice.tsx` `<ReconnectNotice variant="card"|"banner" onReconnected>` — amber notice + Reconnect button (uses `useReconnect`); default/in-flight/cleared states per wireframes; single honest copy.
@@ -34,8 +34,8 @@ Two sequenced PRs on `feat-kb-sync-followups`, **item 1 first**. RED→GREEN per
 - [ ] 5.3 Extend `test/project-setup-card.test.tsx`: variant only on `ready ∧ needsReconnect`; Connected view suppressed.
 
 ### 6. KB-view banner surface
-- [ ] 6.1 `hooks/use-kb-layout-state.tsx`: add `needsReconnect` state, set in `fetchTree`, expose in memo.
-- [ ] 6.2 Mount `<ReconnectNotice variant="banner" onReconnected={refreshTree} />` above content in `kb-desktop-layout.tsx` + `kb-mobile-layout.tsx`, gated on `needsReconnect`. **`onReconnected` = `refreshTree`, NOT `router.refresh()`.**
+- [ ] 6.1 `hooks/use-kb-layout-state.tsx`: add `needsReconnect` state, set in `fetchTree`, expose on **`ctxValue` (`:180`)**; add `needsReconnect` to `kb-context.tsx` `KbContextValue` type.
+- [ ] 6.2 Mount `<ReconnectNotice variant="banner" onReconnected={refreshTree} />` above content in `kb-desktop-layout.tsx` + `kb-mobile-layout.tsx`, **reading `needsReconnect` + `refreshTree` from `useKb()`**, gated on `needsReconnect`. **`onReconnected` = `refreshTree`, NOT `router.refresh()`.**
 - [ ] 6.3 RED `test/components/kb/kb-reconnect-banner.test.tsx` (happy-dom): renders only when `needsReconnect`; success uses `refreshTree`.
 
 ### 7. PR 1 ship
