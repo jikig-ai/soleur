@@ -239,6 +239,16 @@ apps/web-platform/server/workspace-invitations.ts
 # sole cross-tenant matching contract per ADR-044, hard merge gate AC7).
 apps/web-platform/server/inngest/functions/workspace-reconcile-on-push.ts
 
+# #4709 — cron-workspace-sync-health.ts is a read-only daily probe that scans
+# the workspaces table for the ready-but-unreachable class (repo_status='ready'
+# AND github_installation_id IS NULL) and reports each to Sentry via
+# reportSilentFallback. Service-role is structurally required: the Inngest cron
+# runs with no user JWT in scope (event-driven / scheduled), and the scan spans
+# tenants by design (a platform-wide health probe, not a per-tenant query). It
+# performs NO writes and no per-tenant mutation — same posture as the other
+# cron-*.ts probes (cron-membership-health) and workspace-reconcile-on-push.
+apps/web-platform/server/inngest/functions/cron-workspace-sync-health.ts
+
 # resolve-installation-id.ts was REMOVED from this allowlist in PR #4559
 # (#4558): the #4543 workspace-sibling lookup + the .ilike("repo_url") LIKE
 # fallback were deleted; it now reads the credential ONLY via the membership-
