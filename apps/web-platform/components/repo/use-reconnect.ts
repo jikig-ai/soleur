@@ -73,7 +73,14 @@ function redirectToConnectRepo(): void {
   // (`/dashboard` prefix, rejects `..`/`//`) passes. The query param alone is
   // dropped on the auto-detect path, so persist to sessionStorage too.
   const returnTo = window.location.pathname;
-  sessionStorage.setItem("soleur_return_to", returnTo);
+  // Non-essential nicety: persist where to land post-OAuth. In Safari private
+  // mode `setItem` throws (QuotaExceededError); swallow it so the throw can
+  // never preempt the essential redirect below (#4712 dead-button guard).
+  try {
+    sessionStorage.setItem("soleur_return_to", returnTo);
+  } catch {
+    /* storage unavailable — return_to is a nicety; redirect is essential */
+  }
   window.location.assign(
     "/connect-repo?return_to=" + encodeURIComponent(returnTo),
   );

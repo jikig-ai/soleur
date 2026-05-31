@@ -14,6 +14,7 @@ import {
 import { useKbLayoutState } from "@/hooks/use-kb-layout-state";
 import { KbDesktopLayout } from "@/components/kb/kb-desktop-layout";
 import { KbMobileLayout } from "@/components/kb/kb-mobile-layout";
+import { ReconnectNotice } from "@/components/repo/reconnect-notice";
 
 export default function KbLayout({ children }: { children: ReactNode }) {
   const state = useKbLayoutState();
@@ -33,6 +34,20 @@ export default function KbLayout({ children }: { children: ReactNode }) {
       <KbContext value={ctxValue}>
         <KbChatContext value={chatCtxValue}>
           <KbChatQuoteBridgeProvider onOpenSidebar={openSidebar}>
+            {/* #4712 — the reconnect banner must surface on the KB surface even
+                when the tree is empty/non-content (EmptyState, NoProjectState,
+                UnknownError). The content-bearing branch mounts its own banner
+                inside KbDesktop/MobileLayout; this covers the full-width branch.
+                Suppressed during `loading` to avoid flicker before the tree
+                resolves needsReconnect. */}
+            {!loading && ctxValue.needsReconnect && (
+              <div className="shrink-0 p-4">
+                <ReconnectNotice
+                  variant="banner"
+                  onReconnected={ctxValue.refreshTree}
+                />
+              </div>
+            )}
             {loading && <LoadingSkeleton />}
             {error === "workspace-not-ready" && <WorkspaceNotReady />}
             {error === "not-found" && <NoProjectState />}

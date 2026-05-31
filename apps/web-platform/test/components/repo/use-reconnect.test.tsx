@@ -136,6 +136,36 @@ describe("useReconnect", () => {
     expect(assignSpy).toHaveBeenCalledTimes(1);
   });
 
+  test("still redirects when sessionStorage.setItem throws (Safari private mode)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ installed: false }), { status: 200 }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const setItemSpy = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(() => {
+        throw new DOMException("QuotaExceededError", "QuotaExceededError");
+      });
+
+    try {
+      const { result } = renderHook(() => useReconnect(vi.fn()));
+      await act(async () => {
+        await result.current.reconnect();
+      });
+
+      // The storage write threw, but the essential redirect MUST still run.
+      expect(assignSpy).toHaveBeenCalledWith(
+        "/connect-repo?return_to=" +
+          encodeURIComponent("/dashboard/kb/some/file"),
+      );
+    } finally {
+      setItemSpy.mockRestore();
+    }
+  });
+
   test("isPending toggles true during the request and clears after", async () => {
     let resolveFetch!: (r: Response) => void;
     const fetchMock = vi.fn(
