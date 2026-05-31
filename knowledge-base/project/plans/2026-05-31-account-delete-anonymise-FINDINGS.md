@@ -49,6 +49,29 @@ Companion to `plan-feat-account-delete-anonymise-action-sends.md`.
   PostgREST routing inside a SECURITY DEFINER function; 048/050 dropped the role
   check and rely on a single-SET-site `SET LOCAL app.*` GUC + structural shape.
 
+## 1b. SECOND BUG — prod Sentry ingestion is dead for web-platform (VERIFIED)
+
+Using the prd Doppler Sentry token (`SENTRY_AUTH_TOKEN`/`SENTRY_ORG=soleur`/
+`SENTRY_PROJECT=web-platform`), the Sentry REST API returns **HTTP 200** but:
+
+- `GET /projects/soleur/web-platform/` → `"firstEvent": null`
+  (project created 2026-04-29; **never received a single event**).
+- Issues endpoint returns **0** for every query (all-time, no statsPeriod):
+  `op:anonymise-action-sends`, `feature:account-delete`, `anonymise_action_sends`,
+  `session_replication_role`, `permission denied`, `account deletion failed`, and
+  the empty/recent query.
+- Sibling org projects (`soleur-docs`, `ssr-canary`) DO have `firstEvent` set, so
+  the token scope and org are fine — ingestion is broken **specifically** for
+  web-platform.
+
+**Implication:** the account-delete saga's `reportSilentFallback(... op:
+"anonymise-action-sends")` mirror (account-delete.ts:274-289) is firing into a
+void in prod. The plan's Observability section assumed this Sentry alert path
+works; it does not. This is an independent observability defect that should get
+its own tracking issue (`wg-when-deferring-a-capability-create-a`) — without it,
+the next saga failure is again invisible. It also means **the Sentry path for
+reproducing the account-delete error is unavailable** (no event was ever stored).
+
 ## 2. Root-cause HYPOTHESIS (NOT reproduced this session)
 
 `session_replication_role` is a superuser-only GUC (PGC_SUSET) in stock
@@ -63,8 +86,10 @@ the lesson that two of the original three "defects" were already disproven).
 
 It is also possible the dev Supabase role HAS the privilege while prod's differs,
 or that the real error is a different SQLSTATE — only reproduction or the real
-Sentry event (`op=anonymise-action-sends`) can confirm. No Sentry token is in dev
-Doppler; `psql` is unavailable here.
+Sentry event (`op=anonymise-action-sends`) can confirm. **Both reproduction paths
+are blocked in this environment:** the Sentry event was never ingested (§1b — the
+web-platform project has `firstEvent: null`), and `psql` is not installed so the
+dev-DB reproduction cannot run here either.
 
 ## 3. Candidate fix (to be finalised AFTER reproduction)
 
