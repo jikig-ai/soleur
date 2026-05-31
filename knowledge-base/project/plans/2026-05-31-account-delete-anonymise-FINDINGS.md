@@ -49,47 +49,58 @@ Companion to `plan-feat-account-delete-anonymise-action-sends.md`.
   PostgREST routing inside a SECURITY DEFINER function; 048/050 dropped the role
   check and rely on a single-SET-site `SET LOCAL app.*` GUC + structural shape.
 
-## 1b. SECOND BUG — prod Sentry ingestion is dead for web-platform (VERIFIED)
+## 1b. ROOT CAUSE CONFIRMED via production Sentry event
 
-Using the prd Doppler Sentry token (`SENTRY_AUTH_TOKEN`/`SENTRY_ORG=soleur`/
-`SENTRY_PROJECT=web-platform`), the Sentry REST API returns **HTTP 200** but:
+> An earlier version of this section wrongly claimed "prod Sentry ingestion is
+> dead / firstEvent null / 0 events". **Retracted** — that came from the wrong
+> token (`SENTRY_AUTH_TOKEN` lacks issues scope → HTTP 403, which I misread as 0)
+> and delayed tool output. Correct facts and the real event are below.
 
-- `GET /projects/soleur/web-platform/` → `"firstEvent": null`
-  (project created 2026-04-29; **never received a single event**).
-- Issues endpoint returns **0** for every query (all-time, no statsPeriod):
-  `op:anonymise-action-sends`, `feature:account-delete`, `anonymise_action_sends`,
-  `session_replication_role`, `permission denied`, `account deletion failed`, and
-  the empty/recent query.
-- Sibling org projects (`soleur-docs`, `ssr-canary`) DO have `firstEvent` set, so
-  the token scope and org are fine — ingestion is broken **specifically** for
-  web-platform.
+Correct access (prd Doppler): `SENTRY_ORG=jikigai-eu`, `SENTRY_PROJECT=web-platform`,
+and the issues endpoint requires the **issue-scoped** token `SENTRY_ISSUE_RW_TOKEN`
+(`SENTRY_AUTH_TOKEN` → 403). The project's `firstEvent` is `2026-05-17` — it
+ingests events normally.
 
-**Implication:** the account-delete saga's `reportSilentFallback(... op:
-"anonymise-action-sends")` mirror (account-delete.ts:274-289) is firing into a
-void in prod. The plan's Observability section assumed this Sentry alert path
-works; it does not. This is an independent observability defect that should get
-its own tracking issue (`wg-when-deferring-a-capability-create-a`) — without it,
-the next saga failure is again invisible. It also means **the Sentry path for
-reproducing the account-delete error is unavailable** (no event was ever stored).
+**The real production event** (query `op:anonymise-action-sends`, HTTP 200, n=1):
 
-## 2. Root-cause HYPOTHESIS (NOT reproduced this session)
+- Issue `WEB-PLATFORM-3J` (id `6862074819`), culprit `deleteAccount`, count **2**,
+  `environment=production`, `level=error`, `url=https://app.soleur.ai/settings`,
+  tags `op=anonymise-action-sends` / `feature=account-delete`.
+- Outer exception: `Error: anonymise_action_sends failed — aborting deletion to
+  avoid FK-block` (the saga's wrapper at account-delete.ts:274-281).
+- **Nested cause: `PostgrestError: permission denied to set parameter
+  "session_replication_role"`, SQLSTATE `42501`.**
+
+This is the exact failure the plan hypothesised as "Defect A", now **confirmed by
+production telemetry** (not just reasoned from source). The `session_replication_role`
+free-text Sentry search returned 0 only because Sentry indexes the outer Error
+title, not the nested `PostgrestError.value` — the substring isn't tokenised. The
+event payload itself carries the SQLSTATE.
+
+**Regression-assertion string (now sourced from the real event):**
+`permission denied to set parameter "session_replication_role"` / code `42501`.
+
+Minor follow-up (not blocking the fix): the saga error groups under the generic
+outer Error title, making the real PG cause un-searchable by SQLSTATE in Sentry.
+Worth adding the PG `code` as a Sentry tag in `reportSilentFallback` so future
+anonymise failures are queryable by SQLSTATE. Track as a small observability
+issue.
+
+## 2. Root cause (CONFIRMED — see §1b)
 
 `session_replication_role` is a superuser-only GUC (PGC_SUSET) in stock
-PostgreSQL. The four anonymise RPCs are `SECURITY DEFINER` owned (typically) by
-`postgres`, which on managed Supabase is **not** a full superuser. If so, the
-`SET LOCAL session_replication_role = 'replica'` raises
-`42501 permission denied to set parameter "session_replication_role"` before the
-UPDATE, the RPC throws, and `account-delete.ts:268-290` returns the observed UI
-error. This matches the plan's "Defect A" and the user's screenshot symptom, but
-**must still be reproduced** before writing the fix (per the plan's hard gate and
-the lesson that two of the original three "defects" were already disproven).
+PostgreSQL. The anonymise RPCs are `SECURITY DEFINER` owned by `postgres`, which
+on managed Supabase is **not** a full superuser, so `SET LOCAL
+session_replication_role = 'replica'` raises `42501 permission denied to set
+parameter "session_replication_role"` before the UPDATE. The RPC throws,
+`account-delete.ts:268-290` catches it and returns the observed UI error. **The
+production Sentry event `WEB-PLATFORM-3J` confirms exactly this** (§1b) — it is no
+longer a hypothesis. The two other draft "defects" (NOT NULL, missing grant)
+remain correctly retracted.
 
-It is also possible the dev Supabase role HAS the privilege while prod's differs,
-or that the real error is a different SQLSTATE — only reproduction or the real
-Sentry event (`op=anonymise-action-sends`) can confirm. **Both reproduction paths
-are blocked in this environment:** the Sentry event was never ingested (§1b — the
-web-platform project has `firstEvent: null`), and `psql` is not installed so the
-dev-DB reproduction cannot run here either.
+Note `psql` is not installed in this environment, so transactional dev-DB
+validation of the fix migration cannot run here; the fix still needs that
+validation (or CI) before merge.
 
 ## 3. Candidate fix (to be finalised AFTER reproduction)
 
