@@ -429,11 +429,29 @@ export async function cronInngestCronWatchdogHandler({
     try {
       return await fetchRegistry(host);
     } catch (err) {
+      // SSH-free root-cause probe (#4682): /v1/functions 404s from the app
+      // container while the host's 127.0.0.1:8288/v1/functions returns 200, and
+      // dropping the auth header did NOT change it — so the cause is the network
+      // path, not auth. Probe /health on the SAME host so the next fire's Sentry
+      // event definitively separates the two hypotheses:
+      //   - health 200 → connectivity is fine; the 404 is path-/loopback-gated
+      //     introspection (fix host-side: expose /v1/functions or move the read).
+      //   - health unreachable → broad container→server connectivity loss
+      //     (fix INNGEST_BASE_URL / docker networking).
+      let healthStatus = "unprobed";
+      try {
+        const hr = await fetch(`${host}/health`, {
+          signal: AbortSignal.timeout(5_000),
+        });
+        healthStatus = String(hr.status);
+      } catch (he) {
+        healthStatus = `unreachable:${(he as Error)?.name ?? "error"}`;
+      }
       reportSilentFallback(err, {
         feature: "cron-inngest-cron-watchdog",
         op: "fetch-registry",
-        message: "Failed to read /v1/functions — cannot verify cron substrate",
-        extra: { fn: "cron-inngest-cron-watchdog", host },
+        message: "Failed to read /v1/functions — cannot verify cron substrate (#4682)",
+        extra: { fn: "cron-inngest-cron-watchdog", registryHost: host, healthStatus },
       });
       return null;
     }
