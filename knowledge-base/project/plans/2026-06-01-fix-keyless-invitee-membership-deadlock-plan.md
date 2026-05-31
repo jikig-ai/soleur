@@ -201,8 +201,8 @@ logs:
   where: Sentry (errors) + Next.js server logs (request-scoped); no new log surface
   retention: existing Sentry/Better Stack retention
 discoverability_test:
-  command: "cd apps/web-platform && ./node_modules/.bin/vitest run test/server/accept-terms-redirect.test.ts test/server/callback-redirect.test.ts"
-  expected_output: "all redirect-precedence cases pass (keyless+invite → /invite, keyless+non-invite → /setup-key)"
+  command: "apps/web-platform/node_modules/.bin/vitest run --root apps/web-platform test/accept-terms-redirect-to.test.ts test/e2e-oauth-tc-consent.test.ts"
+  expected_output: "passed"
 ```
 
 ## Domain Review
