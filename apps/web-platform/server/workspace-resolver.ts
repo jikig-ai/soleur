@@ -80,6 +80,37 @@ interface SupabaseLike {
 }
 
 /**
+ * True when the user has at least one `workspace_members` row.
+ *
+ * Used to distinguish a legitimately org-less identity (normal — stay silent)
+ * from the integrity surface where a *member* resolves a null current org, in
+ * which case org-gated UI (the Members + Team Activity tabs) silently vanishes
+ * with no error. Fail-quiet on a query error: this is a diagnostic discriminator
+ * on an already-degraded branch and must never itself block a render.
+ *
+ * RLS: `workspace_members` peer-select (`members_select_peers` → `is_workspace_member(workspace_id, auth.uid())`,
+ * migration 053). The explicit `.eq("user_id", userId)` self-scopes the probe to
+ * the caller's own rows regardless — the boolean cannot be influenced cross-tenant.
+ */
+export async function userHasWorkspaceMembership(
+  userId: string,
+  supabase: SupabaseLike,
+): Promise<boolean> {
+  type ChainShape = {
+    select: (cols: string) => ChainShape;
+    eq: (col: string, val: string) => ChainShape;
+    limit: (n: number) => ChainShape;
+  } & PromiseLike<{ data: unknown[] | null; error: unknown }>;
+
+  const chain = supabase.from("workspace_members") as ChainShape;
+  const result = await awaitChain<{ data: unknown[] | null; error: unknown }>(
+    chain.select("workspace_id").eq("user_id", userId).limit(1),
+  );
+  if (result.error) return false; // fail-quiet — never block render on a probe
+  return (result.data?.length ?? 0) > 0;
+}
+
+/**
  * Resolve the user's CURRENT workspace id from `user_session_state`
  * (ADR-044). Source-of-truth read (preferred over the JWT claim, which can
  * be stale on an un-refreshed session). Falls back to the user's SOLO

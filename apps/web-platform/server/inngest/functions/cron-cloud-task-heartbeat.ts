@@ -39,16 +39,28 @@ export interface TaskEntry {
   maxGapDays: number;
 }
 
+// INVENTORY SCOPE — output-producing scheduled tasks ONLY.
+//
+// The heartbeat's only valid signal is "did this task produce its expected
+// `scheduled-<task>` issue artifact within its cadence window?" — so a task
+// belongs here ONLY if its cron function actually creates a `scheduled-<task>`
+// labeled issue. Three tasks were removed because they are NON-PRODUCERS and
+// would false-fire forever via the `daysSince === null → silent: true` branch:
+//   - daily-triage: labels existing issues only (prompt forbids `gh issue create`)
+//   - ux-audit: runs UX_AUDIT_DRY_RUN=true → writes Supabase/stdout, no issue
+//   - bug-fixer: opens bot-fix PRs, never a `scheduled-bug-fixer` issue
+// Cron LIVENESS for ALL tasks (including these three) is covered separately by
+// the per-function Sentry cron monitors — see #4708, which retired the sibling
+// cron-inngest-cron-watchdog for the same reason (Inngest `/v1/*` run-history is
+// loopback-gated and unreachable from the app container). maxGapDays is derived
+// from each task's real cron cadence; see the runbook's Threshold Derivation.
 export const TASK_INVENTORY: TaskEntry[] = [
-  { name: "content-generator", label: "scheduled-content-generator", maxGapDays: 4 },
-  { name: "daily-triage", label: "scheduled-daily-triage", maxGapDays: 2 },
+  { name: "content-generator", label: "scheduled-content-generator", maxGapDays: 9 },
   { name: "strategy-review", label: "scheduled-strategy-review", maxGapDays: 9 },
-  { name: "legal-audit", label: "scheduled-legal-audit", maxGapDays: 9 },
-  { name: "competitive-analysis", label: "scheduled-competitive-analysis", maxGapDays: 32 },
-  { name: "community-monitor", label: "scheduled-community-monitor", maxGapDays: 9 },
+  { name: "legal-audit", label: "scheduled-legal-audit", maxGapDays: 95 },
+  { name: "competitive-analysis", label: "scheduled-competitive-analysis", maxGapDays: 40 },
+  { name: "community-monitor", label: "scheduled-community-monitor", maxGapDays: 3 },
   { name: "roadmap-review", label: "scheduled-roadmap-review", maxGapDays: 9 },
-  { name: "ux-audit", label: "scheduled-ux-audit", maxGapDays: 32 },
-  { name: "bug-fixer", label: "scheduled-bug-fixer", maxGapDays: 9 },
 ];
 
 const SILENCE_ISSUE_TITLE_PREFIX = "[cloud-task-silence]";
