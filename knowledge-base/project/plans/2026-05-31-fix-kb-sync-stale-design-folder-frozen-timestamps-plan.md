@@ -119,13 +119,19 @@ If those two paths point at **different directories** for an existing operator (
 3.1 The affected dir holds stale content (deleted `design/`, frozen mtimes) because the shallow `--ff-only` pull aborted non-fast-forward (H2). A `--ff-only` pull cannot delete `design/` across a diverged/rewritten upstream history on a shallow clone. Recovery options, in preference order: (a) `git fetch --unshallow` then `git pull --ff-only` (reachable from `syncWorkspace` which calls `gitWithInstallationAuth` directly, bypassing the `session-sync` wrapper allowlist); (b) if still non-ff (genuine local divergence), re-provision via teardown + re-clone reusing `removeWorkspaceDir` + `provisionWorkspaceWithRepo` (`workspace.ts`). Do NOT weaken `session-sync.ts` `ALLOWED_GIT_SUBCOMMANDS` (forbids `reset`/`clean`/`checkout` per #2905). Automate the recovery as a one-shot event-triggered Inngest function (canonical per ADR-033, 32 `cron-*.ts` precedents) — do NOT leave "operator re-clones manually" as an output (`hr-never-label-any-step-as-manual-without`).
 3.2 Verify post-recovery: tree no longer shows `design/`, mtimes current, `kb_sync_history` latest row `ok:true`.
 
+## Precedent-Diff (deepen Phase 4.4)
+
+- **Scheduled-work:** reconcile is already an Inngest function (canonical per ADR-033; 32 `cron-*.ts` precedents). Phase 3 recovery, if it needs a one-shot re-clone, is a new event-triggered Inngest function — NOT GH Actions. Re-clone precedent: `provisionWorkspaceWithRepo` + `removeWorkspaceDir` (`workspace.ts`); recovery = teardown + re-provision, no novel pattern.
+- **Path resolution:** ADR-044 §42 (`workspacePathForWorkspaceId(resolveCurrentWorkspaceId(...))`) is the canonical directive; the reconcile already follows it, the KB read endpoints do not. The H1 fix propagates an established pattern — no new pattern.
+- **Failure classification:** `ERROR_CLASS_NON_FAST_FORWARD` already exists/exported (`session-sync.ts:313`) and is consumed by the reconcile; the manual route just never produces it. The fix wires existing constants. No `SECURITY DEFINER`/atomic-write/lock precedent applies (no SQL function or concurrent-write primitive introduced).
+
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] `kb-sync-path-resolution.test.ts` proves tree-read, manual-sync, and webhook-reconcile resolve the **identical** on-disk dir for (a) a legacy `users.workspace_path` operator and (b) an ADR-044 workspace-id operator.
-- [ ] `syncWorkspace` classifies non-fast-forward distinctly from auth/timeout/IO; the manual `/api/kb/sync` route no longer hard-codes `sync_failed` for every failure (`sync/route.ts:138` gap closed).
-- [ ] A unit test proves `resolveWorkspacePath` either honors `legacyWorkspacePath` when set (matching its doc) or the doc is corrected to match UUID-only behavior — code and doc agree.
-- [ ] Sibling-query sweep (Phase 0.6) result pasted into PR body: every `workspace_path`+`knowledge-base` join site routes through the unified resolver.
+- [ ] **(H2)** `syncWorkspace` classifies a non-fast-forward `git pull --ff-only` failure as `ERROR_CLASS_NON_FAST_FORWARD` (not opaque `sync_failed`) AND attempts shallow→full recovery (`fetch --unshallow` retry, or re-clone); a test drives a shallow-clone-vs-rebased-upstream fixture and asserts the recovery lands the upstream deletion. (RED first.)
+- [ ] The manual `/api/kb/sync` route no longer hard-codes `sync_failed` for every failure (`sync/route.ts:138` gap closed).
+- [ ] **(H1, only if confirmed)** `kb-sync-path-resolution.test.ts` proves tree-read === manual-sync === reconcile dir for (a) a solo operator (N2: already equal) and (b) a non-solo org member whose active workspace ≠ solo workspace.
+- [ ] Sibling-query sweep (Phase 0.6) result pasted into PR body: the 9 `users.workspace_path` read sites are each scoped-in (H1) or scoped-out (N2-correct) with rationale.
 - [ ] PR body uses `Ref #<issue>` (not `Closes`) if recovery of the live workspace is a post-merge operator/automation step; otherwise `Closes`.
 
 ### Post-merge (operator / automation)
@@ -137,7 +143,7 @@ If those two paths point at **different directories** for an existing operator (
 
 ### Engineering
 **Status:** reviewed
-**Assessment:** Core defect is a read/write path-resolution seam opened by ADR-044. Fix unifies resolution through `workspace-resolver.ts` and adds failure observability. Risk: on-disk dir migration for legacy operators if UUID-only is chosen — prefer honor-legacy to avoid it.
+**Assessment:** Deepen-pass re-frame — for solo operators (N2) the core defect is H2 (silent non-fast-forward against a `--depth 1` shallow clone), fixed in `syncWorkspace` with failure classification + unshallow/re-clone recovery. For org members only, H1 (read/write path seam from ADR-044) applies and is fixed by routing KB read endpoints through the existing `workspacePathForWorkspaceId(resolveCurrentWorkspaceId(...))` chain (ADR-044 §42). No on-disk dir migration needed (N2 makes solo dirs already-aligned).
 
 ### Product/UX Gate
 **Tier:** advisory
@@ -192,7 +198,9 @@ None — no open `code-review`-labelled issue names the path-resolution files (t
 ## Sharp Edges
 
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6. (This plan's section is filled.)
-- `resolveWorkspacePath`'s doc-comment claims a two-tier legacy bridge but the **code ignores `legacyWorkspacePath` and always returns the UUID path** — do not trust the doc; the Phase 2 decision hinges on which behavior is correct. Confirm against the live affected operator's on-disk dirs in Phase 0 before choosing.
+- **Deepen-verified:** there is NO `resolveWorkspacePath(workspaceId, legacy)` function — the v1 plan invented it. Real exports: `workspacePathForWorkspaceId` (pure, resolver:265), `resolveWorkspacePathForUser` (async, resolver:250), `resolveCurrentWorkspaceId` (resolver:94). Use `workspacePathForWorkspaceId(resolveCurrentWorkspaceId(...))` per ADR-044 §42; do not re-introduce the phantom function at /work.
+- **Deepen-verified:** H5 (suspected `fullName` omission in the reconcile payload) REJECTED — `webhook-push-reconcilable.ts:56` returns all required fields and fail-closes on missing `full_name`. Do not pursue.
+- **Shallow clone (`workspace.ts:173`, `--depth 1`) is the H2 amplifier:** a plain re-pull will NOT remove an upstream-deleted `design/` across a rewritten history without `--unshallow` or re-clone. Phase 3.1 recovery accounts for this.
 - Do NOT weaken `session-sync.ts` `ALLOWED_GIT_SUBCOMMANDS` (forbids `reset`/`clean`/`checkout`) to force-recover a diverged tree — that allowlist exists for #2905's failure class. Recovery of a diverged working tree is a re-provision, not a `git reset`.
 - `git pull --ff-only` cannot delete an upstream-removed folder if local history diverged — Phase 3 recovery must account for this; a plain re-pull will NOT remove `design/` on a diverged tree.
 - The `~5w` window: relative to the 2026-05-31 screenshot, ADR-044 (#4559) merged ~6 days prior, but the operator's last *good* sync was ~5w ago — the freeze likely began BEFORE ADR-044 (candidate: the webhook-reconcile feature #4224 itself, or an earlier shallow-clone non-fast-forward). Phase 0.4 must pin the actual freeze-onset date before attributing causation — do not assume ADR-044 is the sole cause.
