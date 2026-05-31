@@ -183,13 +183,13 @@ discoverability_test:
 ## Acceptance Criteria
 
 ### Pre-merge (PR — this ships in-PR, no prod write)
-- [ ] `apps/web-platform/.env.example` contains a `SENTRY_ISSUE_RW_TOKEN=` line with the documenting comment (grep: `grep -c '^SENTRY_ISSUE_RW_TOKEN=' apps/web-platform/.env.example` returns 1).
-- [ ] `plugins/soleur/skills/postmerge/SKILL.md` Phase 3.6 contains a `PUT` to `/issues/${ISSUE_ID}/` with `{"status":"resolved"}` (grep: `grep -c '"status":"resolved"' plugins/soleur/skills/postmerge/SKILL.md` returns ≥1) AND the PUT is preceded by a `SENTRY_ISSUE_RW_TOKEN` resolution line.
-- [ ] The PUT appears textually inside the "expected good outcome" branch, NOT the "still firing" branch (manual read: the `STILL-FIRING` interpretation bullet is unchanged).
-- [ ] Graceful Degradation table has a `No SENTRY_ISSUE_RW_TOKEN` row.
-- [ ] Phase 7 report vocabulary includes `AUTO-RESOLVED`.
-- [ ] `bun test plugins/soleur/test/components.test.ts` passes (postmerge SKILL `description:` is unchanged → no budget impact; verify the suite still green after the body edit).
-- [ ] No new dependency, no migration, no Terraform change (this PR is docs + skill text only).
+- [x] `apps/web-platform/.env.example` contains a `SENTRY_ISSUE_RW_TOKEN=` line with the documenting comment (grep: `grep -c '^SENTRY_ISSUE_RW_TOKEN=' apps/web-platform/.env.example` returns 1).
+- [x] `plugins/soleur/skills/postmerge/SKILL.md` Phase 3.6 contains a `PUT` to `/issues/${ISSUE_ID}/` with `{"status":"resolved"}` (grep: `grep -c '"status":"resolved"' plugins/soleur/skills/postmerge/SKILL.md` returns ≥1) AND the PUT is preceded by a `SENTRY_ISSUE_RW_TOKEN` resolution line.
+- [x] The PUT appears textually inside the "expected good outcome" branch, NOT the "still firing" branch (manual read: the `STILL-FIRING` interpretation bullet is unchanged).
+- [x] Graceful Degradation table has a `No SENTRY_ISSUE_RW_TOKEN` row.
+- [x] Phase 7 report vocabulary includes `AUTO-RESOLVED`.
+- [x] `bun test plugins/soleur/test/components.test.ts` passes (postmerge SKILL `description:` is unchanged → no budget impact; verify the suite still green after the body edit).
+- [x] No new dependency, no migration, no Terraform change (this PR is docs + skill text only).
 
 ### Post-merge (operator)
 - [ ] Operator mints the `postmerge-issue-rw` Internal Integration token on `jikigai-eu` with `event:admin` + `org:read` + `project:read`.
