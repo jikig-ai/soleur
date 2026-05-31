@@ -63,18 +63,35 @@ jobs:
       - name: Resolve image tag
         id: tag
         # Hardened against workflow-injection: untrusted inputs (GITHUB_REF,
-        # inputs.ref) flow through env vars, never inlined into shell. The
-        # tag-derivation + revalidation lives in the unit-tested guard so the
-        # invariant is verified pre-merge (workflow_dispatch can't be
-        # live-triggered on a feature branch). The guard's post-strip regex is
-        # byte-identical to the consumer drift-guard's regex
-        # (cloud-init-inngest-bootstrap.test.sh) — a parity test asserts it.
+        # inputs.ref) flow through env vars, never inlined into shell.
+        #
+        # This logic is INLINE (not a checked-out script) on purpose: the
+        # checkout above lands `inputs.ref`'s tree (an existing tag, predating
+        # this workflow), so a `.github/scripts/*.sh` helper would not exist
+        # there and the step would fail with exit 127. The workflow file is
+        # always read from the default branch, so inline logic is current
+        # regardless of which tag tree is checked out. The post-strip regex
+        # `^v[0-9]+\.[0-9]+\.[0-9]+$` is byte-identical to the consumer
+        # drift-guard's regex (cloud-init-inngest-bootstrap.test.sh) — a parity
+        # test asserts it; an inline-equivalent harness unit-tests the logic.
         env:
           GH_EVENT: ${{ github.event_name }}
           INPUTS_REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
-          tag=$(bash .github/scripts/inngest-bootstrap-tag-guard.sh resolve-tag "$GH_EVENT" "$GITHUB_REF" "$INPUTS_REF")
+          # Discriminate on the event name (NOT inputs.ref emptiness) so a
+          # future stale/defaulted dispatch input can't misroute the push path.
+          if [[ "$GH_EVENT" == "workflow_dispatch" ]]; then
+            src="$INPUTS_REF"
+          else
+            src="$GITHUB_REF"
+          fi
+          tag="${src#refs/tags/}"
+          tag="${tag#vinngest-}"
+          # The regex is the reject gate (not the strip) and guarantees non-empty.
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: resolved tag '$tag' is not vX.Y.Z (from ref '$src', event '$GH_EVENT')"; exit 1
+          fi
           printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
 
       - name: Read pinned inngest-cli + vector versions + SHAs from *.tf
