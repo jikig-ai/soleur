@@ -1,6 +1,6 @@
 ---
 title: "Account-delete anonymise failure — verified facts & resume notes"
-status: diagnosis-strong-implementation-pending
+status: implemented-migration-087-pending-review-and-cpo-signoff
 regulated_surface: "GDPR Article 17 (Right to Erasure)"
 requires_cpo_signoff: true
 created: 2026-05-31
@@ -9,6 +9,19 @@ draft_pr: 4679
 ---
 
 # Account-delete `anonymise-action-sends` failure — findings
+
+> **RESOLVED (2026-05-31):** migration `087_worm_bypass_privilege_independence.sql`
+> implements the fix via a **uniform `app.worm_bypass` custom GUC** (NOT the
+> plan's structural-shape — `anonymise_workspace_members` suppresses AFTER
+> side-effect triggers, which structural-shape cannot express; operator approved
+> the GUC + full-saga scope). Scope expanded beyond the §3 5-table list to the
+> full erasure path (7 RPCs + 8 trigger fns) + DROP NOT NULL on
+> `byok_delegation_acceptances.user_id` (a real, distinct NOT-NULL defect with 81
+> live rows). Transactionally validated on dev (BEGIN…ROLLBACK): all RPCs succeed
+> without `session_replication_role`, WORM still rejects (P0001), idempotent,
+> AFTER-trigger suppression yields 0 new audit rows. §1b observability defect
+> fixed on this branch (commit 8ca8b666, `pg_code` Sentry tag). Deferred
+> non-erasure paths (purge/revoke) → #4702. See plan §"Implementation Addendum".
 
 Companion to `plan-feat-account-delete-anonymise-action-sends.md`.
 
