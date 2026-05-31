@@ -366,56 +366,42 @@ does).
 
 ### Self-healing (automated — primary path, no SSH)
 
-The CI guard above is build-time only; the manual restore is SSH-gated. The
-`cron-inngest-cron-watchdog` Inngest function
-(`apps/web-platform/server/inngest/functions/cron-inngest-cron-watchdog.ts`,
-shipped for regression #4650) closes both gaps — it runs **every 4 hours** and
-needs **no operator action**:
+**The H9 self-heal is now `--poll-interval 60` (#4652), not the watchdog.** The
+self-hosted server polls the co-located app's `/api/inngest` manifest every 60s
+and re-syncs (H9a) AND re-plans (H9b) any dropped/de-planned function within one
+interval, with no restart. This is the automatic, no-operator-action repair for
+both sub-modes.
 
-1. **Detect.** Queries the running server's loopback `/v1/functions` (via
-   `INNGEST_BASE_URL` → `host.docker.internal:8288`, the container's existing
-   loopback bridge — no SSH) and classifies each function in its
-   `EXPECTED_CRON_FUNCTIONS` manifest as `OK`, `MISSING` (H9a), or `UNPLANNED`
-   (H9b).
-2. **Heal H9b (cron de-planned) — latency optimization.** Fires
-   `cron/<name>.manual-trigger` for each affected function via
-   `sendInngestWithRetry`. With `--poll-interval 60` the server re-plans the
-   de-planned cron from the SDK manifest within ≤60s on its own, so this
-   manual-trigger is now a **latency optimization** (it restores the missed
-   check-in *immediately* rather than waiting up to one poll interval), NOT the
-   primary repair.
-3. **Backstop restart (polling has failed).** Polling re-syncs (H9a) and
-   re-plans (H9b) automatically, so the watchdog no longer restarts on the first
-   defective tick. It restarts ONLY after a function stays defective
-   (MISSING ∪ UNPLANNED) for `POLL_RECOVERY_GRACE_TICKS` (2) consecutive ticks —
-   evidence that polling itself has failed (app `/api/inngest` down, poll loop
-   wedged). When that threshold is crossed it POSTs the deploy webhook
-   `restart inngest _ latest` directly (D1-A, same HMAC + CF-Access path as
-   `restart-inngest-server.yml`). If that POST is unreachable, it files a
-   `priority/p0-critical` issue carrying the `inngest-desync-restart` label,
-   which `inngest-watchdog-restart-dispatch.yml` acts on to dispatch the restart
-   workflow (D1-B). A cooldown (`/var/lib/inngest/cron-watchdog/restart-cooldown.json`,
-   6h) is a second guard against restart-looping. NOTE: that path is
-   **container-local** (not a host bind-mount); it survives the inngest-server
-   restart it gates (a separate process) and is reset only by a web-platform
-   redeploy — which itself re-syncs all functions, so the reset is benign.
-4. **Surface (SSH-free read).** Posts an `ok`/`error` heartbeat to the
-   `scheduled-inngest-cron-watchdog` Sentry monitor every 4h; `ok=false` when
-   any monitored function is MISSING/UNPLANNED. Read its state via the Sentry
-   Crons API (no SSH):
+**Alerting** is the per-function Sentry cron monitors: each monitored cron has
+its own `scheduled-*` monitor with `failure_issue_threshold`, so a cron that
+stops checking in pages on its own (that is how the original #4650 regression —
+`scheduled-community-monitor` / `scheduled-gh-pages-cert-state` missed check-ins
+— was caught). Read any monitor's state via the Sentry Crons API (no SSH):
 
-   ```bash
-   curl -s -H "Authorization: Bearer $SENTRY_API_TOKEN" \
-     "https://sentry.io/api/0/organizations/$SENTRY_ORG/monitors/?per_page=100" \
-     | jq '.[] | select(.slug=="scheduled-inngest-cron-watchdog") | {slug, envs: [.environments[]? | {name, status, lastCheckIn}]}'
-   ```
+```bash
+curl -s -H "Authorization: Bearer $SENTRY_API_TOKEN" \
+  "https://sentry.io/api/0/organizations/$SENTRY_ORG/monitors/?per_page=100" \
+  | jq '.[] | {slug, envs: [.environments[]? | {name, status, lastCheckIn}]}'
+```
 
-   If the watchdog itself stops firing (a full-substrate H9a can drop the
-   watchdog too), its own monitor's missed check-in surfaces the meta-failure.
+**The `cron-inngest-cron-watchdog` function is RETIRED to a liveness-only beacon
+(#4682).** Its original design queried the server's `/v1/functions` registry to
+classify MISSING/UNPLANNED crons and manual-trigger/restart to repair — but that
+introspection API is **loopback-gated** on the inngest server: from the app
+container `/health` returns 200 yet `/v1/functions` returns 404, while the host's
+`127.0.0.1:8288/v1/functions` returns 200 (confirmed via the #4682 `/health`
+probe). A containerized watchdog therefore can never read the registry, and the
+self-heal it provided is redundant with polling + the per-function monitors
+above. It now just posts an `ok=true` heartbeat to `scheduled-inngest-cron-watchdog`
+proving the cron scheduler fired it (a coarse substrate-liveness signal; if the
+whole scheduler dies, this monitor goes missed and pages). It no longer reads the
+registry, fires manual-triggers, or restarts. The `inngest-watchdog-restart-dispatch.yml`
+workflow + the exported heal/restart helpers in the watchdog module are now
+dormant (cleanup tracked separately).
 
 The manual SSH fallback below is retained as a **last resort** only
-(`hr-no-ssh-fallback-in-runbooks`); the watchdog + restart workflow are the
-primary paths.
+(`hr-no-ssh-fallback-in-runbooks`); polling + the per-function monitors + the
+`restart-inngest-server.yml` workflow (above) are the primary paths.
 
 ## Restore Procedure (generalized)
 
