@@ -168,6 +168,38 @@ function stubServiceUsersFullyOnboarded(
   });
 }
 
+/**
+ * Like stubServiceUsersFullyOnboarded but also drives `setup_key_skipped_at` on
+ * the repo_status select, so the keyless-SKIPPED branch (callback:261-268) can
+ * be exercised. A non-null `skippedAt` means the user chose "Set up later".
+ */
+function stubServiceUsersWithSkip(
+  tcVersion: string | null,
+  repoStatus: string,
+  skippedAt: string | null,
+): void {
+  mockServiceFrom.mockImplementation((table: string) => {
+    if (table !== "users") {
+      return { select: vi.fn(), update: vi.fn(), upsert: vi.fn() };
+    }
+    const select = vi.fn((columns: string) => {
+      if (typeof columns === "string" && columns.includes("repo_status")) {
+        const single = vi.fn().mockResolvedValue({
+          data: { repo_status: repoStatus, setup_key_skipped_at: skippedAt },
+          error: null,
+        });
+        return { eq: vi.fn().mockReturnValue({ single }) };
+      }
+      const single = vi.fn().mockResolvedValue({
+        data: { workspace_status: "ready", tc_accepted_version: tcVersion },
+        error: null,
+      });
+      return { eq: vi.fn().mockReturnValue({ single }) };
+    });
+    return { select, update: vi.fn(), upsert: vi.fn() };
+  });
+}
+
 /** Wire the user-scoped api_keys SELECT to return a valid key (keyed user). */
 function stubApiKeysPresent(): void {
   const limit = vi.fn().mockResolvedValue({ data: [{ id: "k1" }], error: null });
@@ -340,5 +372,65 @@ describe("OAuth callback: next-param terminal hop (Phase 4)", () => {
     );
 
     expect(new URL(res.headers.get("location")!).pathname).toBe("/dashboard");
+  });
+});
+
+describe("OAuth callback: keyless invitee redirect precedence (#4715)", () => {
+  beforeEach(() => {
+    mockExchangeCodeForSession.mockResolvedValue({ data: null, error: null });
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: USER_ID, email: "u@example.com" } },
+    });
+  });
+
+  test("keyless, NOT skipped, ?next=/invite/<token> → /invite (invite outranks /setup-key)", async () => {
+    // The live bug: this branch set redirectPath = "/setup-key" and DROPPED the
+    // invite next-param entirely, stranding a keyless invitee at the onboarding
+    // funnel. T&C is already recorded (tcVersion === TC_VERSION) so honoring the
+    // invite target here does not bypass consent.
+    mockUserHasEffectiveByokKey.mockResolvedValue(false);
+    stubServiceUsersWithSkip(TC_VERSION, "connected", null);
+
+    const res = await callbackGET(
+      makeCallbackRequest("code-k1", "&next=%2Finvite%2Ftok123"),
+    );
+
+    expect(new URL(res.headers.get("location")!).pathname).toBe("/invite/tok123");
+  });
+
+  test("keyless, NOT skipped, no invite next → /setup-key (genuine new signup unchanged)", async () => {
+    mockUserHasEffectiveByokKey.mockResolvedValue(false);
+    stubServiceUsersWithSkip(TC_VERSION, "connected", null);
+
+    const res = await callbackGET(makeCallbackRequest("code-k2"));
+
+    expect(new URL(res.headers.get("location")!).pathname).toBe("/setup-key");
+  });
+
+  test("keyless, NOT skipped, open-redirect ?next → /setup-key (rejected, not honored)", async () => {
+    mockUserHasEffectiveByokKey.mockResolvedValue(false);
+    stubServiceUsersWithSkip(TC_VERSION, "connected", null);
+
+    const res = await callbackGET(
+      makeCallbackRequest("code-k3", "&next=https%3A%2F%2Fevil.example"),
+    );
+
+    // safeReturnTo nulls the hostile value upstream → nextParam is null →
+    // isInviteReturnTarget(null) is false → /setup-key (no off-origin hop).
+    expect(new URL(res.headers.get("location")!).pathname).toBe("/setup-key");
+  });
+
+  test("keyless but SKIPPED, ?next=/invite/<token> → /invite (branch untouched — regression guard)", async () => {
+    // The keyless-SKIPPED branch already honored nextParam before #4715; this
+    // locks that it still does (we must not double-patch an already-correct
+    // branch).
+    mockUserHasEffectiveByokKey.mockResolvedValue(false);
+    stubServiceUsersWithSkip(TC_VERSION, "connected", "2026-01-01T00:00:00Z");
+
+    const res = await callbackGET(
+      makeCallbackRequest("code-k4", "&next=%2Finvite%2Ftok123"),
+    );
+
+    expect(new URL(res.headers.get("location")!).pathname).toBe("/invite/tok123");
   });
 });

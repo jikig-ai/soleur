@@ -9,6 +9,7 @@ const OWNER: TeamMembershipRow = {
   role: "owner",
   addedAt: "2026-01-01T00:00:00Z",
   isSelf: true,
+  hasEffectiveKey: true,
 };
 const MEMBER: TeamMembershipRow = {
   userId: "user-member",
@@ -16,6 +17,7 @@ const MEMBER: TeamMembershipRow = {
   role: "member",
   addedAt: "2026-02-01T00:00:00Z",
   isSelf: false,
+  hasEffectiveKey: true,
 };
 
 describe("TeamMembershipList", () => {
@@ -88,6 +90,59 @@ describe("TeamMembershipList", () => {
     expect(kebabs).toHaveLength(1);
     fireEvent.click(kebabs[0]);
     expect(screen.getByText(/remove member/i)).toBeInTheDocument();
+  });
+
+  // #4715 Phase 9 — owner "Share a key" prompt for a keyless, undelegated,
+  // non-self member (only when byok delegations are enabled).
+  const KEYLESS_MEMBER: TeamMembershipRow = {
+    userId: "user-keyless",
+    email: "joiner@jikigai.com",
+    role: "member",
+    addedAt: "2026-03-01T00:00:00Z",
+    isSelf: false,
+    hasEffectiveKey: false,
+  };
+
+  function renderWithDelegations(members: TeamMembershipRow[]) {
+    return render(
+      <TeamMembershipList
+        members={members}
+        currentUserId="user-owner"
+        workspaceId="ws-1"
+        isOwner={true}
+        byokDelegationsEnabled={true}
+        organizationName="Test Org"
+      />,
+    );
+  }
+
+  it("Share-a-key: keyless + undelegated + non-self member → hint + 'Share a key' + add-own link", () => {
+    renderWithDelegations([OWNER, KEYLESS_MEMBER]);
+    expect(screen.getByText(/can view the workspace but can't run tasks/i)).toBeInTheDocument();
+    expect(screen.getByText(/share a key/i)).toBeInTheDocument();
+    expect(screen.getByText(/ask them to add their own/i)).toBeInTheDocument();
+  });
+
+  it("Share-a-key: a member already granted a key by me (delegationFromMe) → no prompt", () => {
+    const delegated: TeamMembershipRow = {
+      ...KEYLESS_MEMBER,
+      delegationFromMe: { id: "d1", dailyCapCents: 2000, todaySpentCents: 0, active: true },
+    };
+    renderWithDelegations([OWNER, delegated]);
+    expect(screen.queryByText(/can view the workspace but can't run tasks/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/share a key/i)).not.toBeInTheDocument();
+  });
+
+  it("Share-a-key: a member with their own effective key → no prompt", () => {
+    renderWithDelegations([OWNER, { ...KEYLESS_MEMBER, hasEffectiveKey: true }]);
+    expect(screen.queryByText(/can view the workspace but can't run tasks/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/share a key/i)).not.toBeInTheDocument();
+  });
+
+  it("Share-a-key: the owner's own (self) keyless row never prompts", () => {
+    renderWithDelegations([{ ...OWNER, hasEffectiveKey: false }]);
+    expect(screen.queryByText(/can view the workspace but can't run tasks/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/share a key/i)).not.toBeInTheDocument();
   });
 
   it("renders empty solo state hint when only one member", () => {

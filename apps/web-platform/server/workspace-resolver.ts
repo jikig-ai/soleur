@@ -106,8 +106,73 @@ export async function userHasWorkspaceMembership(
   const result = await awaitChain<{ data: unknown[] | null; error: unknown }>(
     chain.select("workspace_id").eq("user_id", userId).limit(1),
   );
-  if (result.error) return false; // fail-quiet — never block render on a probe
+  if (result.error) {
+    // fail-quiet — never block render on a probe, but mirror to Sentry
+    // (cq-silent-fallback-must-mirror-to-sentry) so a recurring membership-probe
+    // failure on this integrity surface is visible, not pino-stdout-only.
+    reportSilentFallback(result.error, {
+      feature: "workspace-resolver",
+      op: "userHasWorkspaceMembership",
+      extra: { userId },
+    });
+    return false;
+  }
   return (result.data?.length ?? 0) > 0;
+}
+
+/**
+ * feat-invite-accept-membership-byok (#4715). True when the user is a member of
+ * a workspace they do NOT own — i.e. a shared workspace they were invited into.
+ * Per the N2 invariant (migration 053), a solo user's workspace id equals their
+ * user id, so a `workspace_members` row whose `workspace_id !== userId` is a
+ * genuine shared membership.
+ *
+ * Drives the dashboard NoApiKeyBanner copy: a keyless SHARED member must see the
+ * "ask your owner to share a key, or add your own" joiner copy — not the solo
+ * "buy a separate paid Anthropic account" dead-end. Fail-quiet to `false`
+ * (treat as solo) on a probe error so a transient failure degrades to the
+ * existing copy rather than blocking the render — same posture as
+ * `userHasWorkspaceMembership`.
+ *
+ * `userId` is the SESSION-derived id at the call site (IDOR guard preserved);
+ * the `.eq("user_id", userId)` self-scopes the probe regardless of RLS.
+ */
+export async function userIsSharedWorkspaceMember(
+  userId: string,
+  supabase: SupabaseLike,
+): Promise<boolean> {
+  type ChainShape = {
+    select: (cols: string) => ChainShape;
+    eq: (col: string, val: string) => ChainShape;
+  } & PromiseLike<{
+    data: { workspace_id: string }[] | null;
+    error: unknown;
+  }>;
+
+  const chain = supabase.from("workspace_members") as ChainShape;
+  const result = await awaitChain<{
+    data: { workspace_id: string }[] | null;
+    error: unknown;
+  }>(chain.select("workspace_id").eq("user_id", userId));
+  if (result.error) {
+    // fail-quiet — degrade to solo copy, but mirror to Sentry
+    // (cq-silent-fallback-must-mirror-to-sentry); the sibling resolvers in this
+    // file do the same. A recurring probe failure is the integrity surface this
+    // feature exists to surface, so it must not be invisible.
+    reportSilentFallback(result.error, {
+      feature: "workspace-resolver",
+      op: "userIsSharedWorkspaceMember",
+      extra: { userId },
+    });
+    return false;
+  }
+  // INVARIANT: this id-equality test assumes an owner always holds the
+  // self-referential membership row (workspace_id === user_id, the N2 invariant
+  // from migration 053). If a future team-workspace flow mints a workspace with
+  // a fresh gen_random_uuid() id, its OWNER would get a row where
+  // workspace_id !== user_id and be misclassified as a shared member — that
+  // flow must classify by role/ownership, not id-equality. See #2778.
+  return (result.data ?? []).some((r) => r.workspace_id !== userId);
 }
 
 /**

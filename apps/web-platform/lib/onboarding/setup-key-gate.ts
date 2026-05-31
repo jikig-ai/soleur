@@ -22,3 +22,19 @@ export function shouldRouteToSetupKey({
 }: SetupKeyGateInput): boolean {
   return !hasEffectiveKey && setupKeySkippedAt == null;
 }
+
+/**
+ * feat-invite-accept-membership-byok (#4715). True when a validated post-auth
+ * next-hop targets workspace-invite acceptance (`/invite/<token>`). The two
+ * redirect gates use it to let an invite target OUTRANK the /setup-key
+ * onboarding step, so a keyless invitee accepts membership instead of stalling
+ * at a key-purchase funnel they can't complete.
+ *
+ * `nextHop` is always `safeReturnTo`-validated upstream (same-origin, allowlist
+ * prefix `/invite/`), so this only ever sees a benign relative path — the
+ * `startsWith("/invite/")` check requires the trailing slash, so prefix-adjacent
+ * paths like `/invited-users` never match.
+ */
+export function isInviteReturnTarget(nextHop: string | null): nextHop is string {
+  return nextHop?.startsWith("/invite/") ?? false;
+}

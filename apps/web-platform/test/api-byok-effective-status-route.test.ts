@@ -12,10 +12,12 @@ const {
   mockGetUser,
   mockUserHasEffectiveByokKey,
   mockUserHasPendingByokDelegation,
+  mockUserIsSharedWorkspaceMember,
 } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockUserHasEffectiveByokKey: vi.fn(),
   mockUserHasPendingByokDelegation: vi.fn(),
+  mockUserIsSharedWorkspaceMember: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -25,6 +27,10 @@ vi.mock("@/lib/supabase/server", () => ({
 vi.mock("@/server/byok-resolver", () => ({
   userHasEffectiveByokKey: mockUserHasEffectiveByokKey,
   userHasPendingByokDelegation: mockUserHasPendingByokDelegation,
+}));
+
+vi.mock("@/server/workspace-resolver", () => ({
+  userIsSharedWorkspaceMember: mockUserIsSharedWorkspaceMember,
 }));
 
 import { GET } from "@/app/api/byok/effective-status/route";
@@ -40,6 +46,7 @@ beforeEach(() => {
   mockGetUser.mockResolvedValue({ data: { user: { id: USER_ID } } });
   mockUserHasEffectiveByokKey.mockResolvedValue(true);
   mockUserHasPendingByokDelegation.mockResolvedValue(false);
+  mockUserIsSharedWorkspaceMember.mockResolvedValue(false);
 });
 
 describe("GET /api/byok/effective-status (AC6)", () => {
@@ -53,14 +60,38 @@ describe("GET /api/byok/effective-status (AC6)", () => {
     mockUserHasEffectiveByokKey.mockResolvedValue(true);
     const res = await GET(makeRequest());
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ hasEffectiveKey: true, pendingDelegation: false });
+    expect(await res.json()).toEqual({
+      hasEffectiveKey: true,
+      pendingDelegation: false,
+      isSharedWorkspaceMember: false,
+    });
   });
 
   test("returns hasEffectiveKey:false + pendingDelegation:true for a grant-holder", async () => {
     mockUserHasEffectiveByokKey.mockResolvedValue(false);
     mockUserHasPendingByokDelegation.mockResolvedValue(true);
     const res = await GET(makeRequest());
-    expect(await res.json()).toEqual({ hasEffectiveKey: false, pendingDelegation: true });
+    expect(await res.json()).toEqual({
+      hasEffectiveKey: false,
+      pendingDelegation: true,
+      isSharedWorkspaceMember: false,
+    });
+  });
+
+  test("plumbs isSharedWorkspaceMember:true (#4715), session-derived only", async () => {
+    mockUserHasEffectiveByokKey.mockResolvedValue(false);
+    mockUserIsSharedWorkspaceMember.mockResolvedValue(true);
+    const res = await GET(
+      makeRequest("https://app.soleur.ai/api/byok/effective-status?userId=attacker-uuid"),
+    );
+    expect(await res.json()).toEqual({
+      hasEffectiveKey: false,
+      pendingDelegation: false,
+      isSharedWorkspaceMember: true,
+    });
+    // IDOR guard preserved — resolved from the authed session, never the query.
+    const calledUserIds = mockUserIsSharedWorkspaceMember.mock.calls.map((c) => c[0]);
+    expect(calledUserIds).toEqual([USER_ID]);
   });
 
   test("computes hasEffectiveKey fail-closed (onErrorReturn:false)", async () => {

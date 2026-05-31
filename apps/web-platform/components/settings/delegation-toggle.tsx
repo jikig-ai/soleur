@@ -20,6 +20,12 @@ interface DelegationToggleProps {
   } | null;
   isSelf: boolean;
   flagEnabled: boolean;
+  /**
+   * #4715: render a "Share a key" label above the grant control when the owner
+   * is being prompted to fund a keyless, undelegated member. Purely a label —
+   * the control still creates a GRANT only (TR3), no new logic.
+   */
+  promptShareKey?: boolean;
 }
 
 export function DelegationToggle({
@@ -31,6 +37,7 @@ export function DelegationToggle({
   delegationToMe,
   isSelf,
   flagEnabled,
+  promptShareKey = false,
 }: DelegationToggleProps) {
   if (!flagEnabled) return null;
 
@@ -45,12 +52,19 @@ export function DelegationToggle({
   if (!isOwner || isSelf) return <span className="w-20" />;
 
   return (
-    <OwnerDelegationControl
-      memberUserId={memberUserId}
-      memberEmail={memberEmail}
-      workspaceId={workspaceId}
-      delegation={delegation ?? null}
-    />
+    <div className="flex flex-col items-end gap-0.5">
+      {promptShareKey && (
+        <span className="text-xs font-medium text-soleur-accent-gold-fg">
+          Share a key
+        </span>
+      )}
+      <OwnerDelegationControl
+        memberUserId={memberUserId}
+        memberEmail={memberEmail}
+        workspaceId={workspaceId}
+        delegation={delegation ?? null}
+      />
+    </div>
   );
 }
 
