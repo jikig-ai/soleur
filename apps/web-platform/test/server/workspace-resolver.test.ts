@@ -11,6 +11,7 @@ import {
 } from "@/server/workspace-resolver";
 import { mockQueryChain } from "../helpers/mock-supabase";
 
+import { reportSilentFallback } from "@/server/observability";
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
 }));
@@ -191,11 +192,17 @@ describe("workspace-resolver: userIsSharedWorkspaceMember (#4715)", () => {
     expect(await userIsSharedWorkspaceMember(userId, supabase)).toBe(false);
   });
 
-  it("false when the membership probe errors (fail-quiet → solo copy)", async () => {
+  it("false when the membership probe errors (fail-quiet → solo copy) AND mirrors to Sentry", async () => {
+    vi.mocked(reportSilentFallback).mockClear();
     const userId = randomUUID();
     const chain = mockQueryChain(null, { message: "probe failed" });
     const supabase = supabaseFor(chain);
 
     expect(await userIsSharedWorkspaceMember(userId, supabase)).toBe(false);
+    // cq-silent-fallback-must-mirror-to-sentry: the degraded path must page.
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      { message: "probe failed" },
+      expect.objectContaining({ op: "userIsSharedWorkspaceMember" }),
+    );
   });
 });

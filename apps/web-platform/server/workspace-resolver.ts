@@ -106,7 +106,17 @@ export async function userHasWorkspaceMembership(
   const result = await awaitChain<{ data: unknown[] | null; error: unknown }>(
     chain.select("workspace_id").eq("user_id", userId).limit(1),
   );
-  if (result.error) return false; // fail-quiet — never block render on a probe
+  if (result.error) {
+    // fail-quiet — never block render on a probe, but mirror to Sentry
+    // (cq-silent-fallback-must-mirror-to-sentry) so a recurring membership-probe
+    // failure on this integrity surface is visible, not pino-stdout-only.
+    reportSilentFallback(result.error, {
+      feature: "workspace-resolver",
+      op: "userHasWorkspaceMembership",
+      extra: { userId },
+    });
+    return false;
+  }
   return (result.data?.length ?? 0) > 0;
 }
 
@@ -144,7 +154,24 @@ export async function userIsSharedWorkspaceMember(
     data: { workspace_id: string }[] | null;
     error: unknown;
   }>(chain.select("workspace_id").eq("user_id", userId));
-  if (result.error) return false; // fail-quiet — degrade to solo copy
+  if (result.error) {
+    // fail-quiet — degrade to solo copy, but mirror to Sentry
+    // (cq-silent-fallback-must-mirror-to-sentry); the sibling resolvers in this
+    // file do the same. A recurring probe failure is the integrity surface this
+    // feature exists to surface, so it must not be invisible.
+    reportSilentFallback(result.error, {
+      feature: "workspace-resolver",
+      op: "userIsSharedWorkspaceMember",
+      extra: { userId },
+    });
+    return false;
+  }
+  // INVARIANT: this id-equality test assumes an owner always holds the
+  // self-referential membership row (workspace_id === user_id, the N2 invariant
+  // from migration 053). If a future team-workspace flow mints a workspace with
+  // a fresh gen_random_uuid() id, its OWNER would get a row where
+  // workspace_id !== user_id and be misclassified as a shared member — that
+  // flow must classify by role/ownership, not id-equality. See #2778.
   return (result.data ?? []).some((r) => r.workspace_id !== userId);
 }
 

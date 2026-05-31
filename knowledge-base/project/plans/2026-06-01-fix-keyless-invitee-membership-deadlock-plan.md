@@ -65,6 +65,15 @@ consent.
 **Brand-survival threshold:** `single-user incident` → `requires_cpo_signoff: true`
 (CPO signed at 2026-05-31 brainstorm; `user-impact-reviewer` runs at PR review).
 
+**Scope-out (review, P3):** the owner "Share a key" prompt can false-fire for a
+member already funded by a *different* co-owner — `hasEffectiveKey` resolves the
+member's own-default-workspace org context and `delegationFromMe` is keyed
+`${me}:${grantee}`, so a co-owner's grant is invisible to both signals. This is
+out of v1 scope: the platform is single-owner-strict (2026-05-27 role-management
+brainstorm); the mis-fire only reaches a user under the deferred multi-owner
+migration, at which point the reader must switch to org-owner context. No v1 user
+is affected.
+
 ## Implementation Phases
 
 **Single PR (#4713).** Plan-review (DHH, concurred by Simplicity) collapsed the original two-PR split: once member-copy (Phase 6) + recovery-banner (Phase 7) had to move into "PR1" to avoid a false-state window, the "brand-survival ships first" rationale dissolved — nothing in the owner-prompt blocks the redirect fix when it's one branch; merge when green. Phases are grouped A/B/C by concern, not by PR.
