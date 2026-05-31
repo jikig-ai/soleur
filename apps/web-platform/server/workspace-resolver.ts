@@ -111,6 +111,44 @@ export async function userHasWorkspaceMembership(
 }
 
 /**
+ * feat-invite-accept-membership-byok (#4715). True when the user is a member of
+ * a workspace they do NOT own — i.e. a shared workspace they were invited into.
+ * Per the N2 invariant (migration 053), a solo user's workspace id equals their
+ * user id, so a `workspace_members` row whose `workspace_id !== userId` is a
+ * genuine shared membership.
+ *
+ * Drives the dashboard NoApiKeyBanner copy: a keyless SHARED member must see the
+ * "ask your owner to share a key, or add your own" joiner copy — not the solo
+ * "buy a separate paid Anthropic account" dead-end. Fail-quiet to `false`
+ * (treat as solo) on a probe error so a transient failure degrades to the
+ * existing copy rather than blocking the render — same posture as
+ * `userHasWorkspaceMembership`.
+ *
+ * `userId` is the SESSION-derived id at the call site (IDOR guard preserved);
+ * the `.eq("user_id", userId)` self-scopes the probe regardless of RLS.
+ */
+export async function userIsSharedWorkspaceMember(
+  userId: string,
+  supabase: SupabaseLike,
+): Promise<boolean> {
+  type ChainShape = {
+    select: (cols: string) => ChainShape;
+    eq: (col: string, val: string) => ChainShape;
+  } & PromiseLike<{
+    data: { workspace_id: string }[] | null;
+    error: unknown;
+  }>;
+
+  const chain = supabase.from("workspace_members") as ChainShape;
+  const result = await awaitChain<{
+    data: { workspace_id: string }[] | null;
+    error: unknown;
+  }>(chain.select("workspace_id").eq("user_id", userId));
+  if (result.error) return false; // fail-quiet — degrade to solo copy
+  return (result.data ?? []).some((r) => r.workspace_id !== userId);
+}
+
+/**
  * Resolve the user's CURRENT workspace id from `user_session_state`
  * (ADR-044). Source-of-truth read (preferred over the JWT claim, which can
  * be stale on an un-refreshed session). Falls back to the user's SOLO

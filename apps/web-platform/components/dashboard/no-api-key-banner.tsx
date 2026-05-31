@@ -17,6 +17,7 @@ import { reportSilentFallback } from "@/lib/client-observability";
 interface EffectiveStatus {
   hasEffectiveKey: boolean;
   pendingDelegation: boolean;
+  isSharedWorkspaceMember: boolean;
 }
 
 export function NoApiKeyBanner() {
@@ -45,6 +46,7 @@ export function NoApiKeyBanner() {
           setStatus({
             hasEffectiveKey: data.hasEffectiveKey,
             pendingDelegation: data.pendingDelegation === true,
+            isSharedWorkspaceMember: data.isSharedWorkspaceMember === true,
           });
         }
       } catch (err) {
@@ -66,6 +68,33 @@ export function NoApiKeyBanner() {
   if (!status || status.hasEffectiveKey) return null;
 
   const pending = status.pendingDelegation;
+  // A keyless invited member (#4715) — must not see the solo "buy a separate
+  // paid account" dead-end. They can browse the shared workspace; running tasks
+  // just needs a key (owner-shared or their own). The pending-grant branch takes
+  // precedence (a grant awaiting acceptance is the one-click path).
+  const joiner = !pending && status.isSharedWorkspaceMember;
+
+  let title: string;
+  let body: string;
+  if (pending) {
+    title = "You've been granted shared access";
+    body = "Accept your grant to start running tasks.";
+  } else if (joiner) {
+    title = "You're in — tasks need an API key";
+    body =
+      "You can browse this workspace, but running tasks needs an API key. Ask your workspace owner to share one, or add your own.";
+  } else {
+    title = "Tasks are disabled until you add a key";
+    body =
+      "Soleur needs your own Anthropic API key to run tasks. Getting a key requires a separate, paid Anthropic account.";
+  }
+
+  const ctaHref = pending ? "/dashboard/chat" : "/dashboard/settings/services";
+  const ctaLabel = pending
+    ? "Accept access"
+    : joiner
+      ? "Add your own key"
+      : "Add your API key";
 
   return (
     <div
@@ -76,21 +105,15 @@ export function NoApiKeyBanner() {
       <div className="mx-auto flex max-w-4xl items-center justify-between gap-3">
         <div className="min-w-0 space-y-0.5">
           <p id="no-api-key-title" className="text-sm font-medium text-soleur-text-primary">
-            {pending
-              ? "You've been granted shared access"
-              : "Tasks are disabled until you add a key"}
+            {title}
           </p>
-          <p className="text-xs text-soleur-text-secondary">
-            {pending
-              ? "Accept your grant to start running tasks."
-              : "Soleur needs your own Anthropic API key to run tasks. Getting a key requires a separate, paid Anthropic account."}
-          </p>
+          <p className="text-xs text-soleur-text-secondary">{body}</p>
         </div>
         <Link
-          href={pending ? "/dashboard/chat" : "/dashboard/settings/services"}
+          href={ctaHref}
           className="shrink-0 rounded-lg bg-soleur-accent-gold-fill px-3 py-1.5 text-xs font-medium text-soleur-text-on-accent hover:opacity-90"
         >
-          {pending ? "Accept access" : "Add your API key"}
+          {ctaLabel}
         </Link>
       </div>
     </div>
