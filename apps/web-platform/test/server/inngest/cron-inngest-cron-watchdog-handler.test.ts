@@ -39,6 +39,7 @@ vi.mock("@/server/inngest/functions/_cron-shared", async () => {
 
 import { cronInngestCronWatchdogHandler, EXPECTED_CRON_FUNCTIONS } from "@/server/inngest/functions/cron-inngest-cron-watchdog";
 import { postSentryHeartbeat } from "@/server/inngest/functions/_cron-shared";
+import { reportSilentFallback } from "@/server/observability";
 
 // Fake Inngest step: runs each step body inline (no replay machinery).
 const fakeStep = { run: <T>(_name: string, fn: () => Promise<T>) => fn() };
@@ -194,6 +195,7 @@ describe("cronInngestCronWatchdogHandler — registry-fetch is non-fatal (#4682)
     writeFileMock.mockClear();
     readFileMock.mockClear();
     vi.mocked(postSentryHeartbeat).mockClear();
+    vi.mocked(reportSilentFallback).mockClear();
     process.env.INNGEST_BASE_URL = "http://host.docker.internal:8288";
     process.env.WEBHOOK_DEPLOY_SECRET = "secret";
     process.env.CF_ACCESS_CLIENT_ID = "cf-id";
@@ -211,6 +213,11 @@ describe("cronInngestCronWatchdogHandler — registry-fetch is non-fatal (#4682)
     // (silent watchdog). Now it must catch, page ok=false, and skip heal.
     const fetchMock = vi.fn(async (url: string | URL) => {
       const u = String(url);
+      // /health probe must be matched before /v1/functions has no overlap, but
+      // order defensively: /health is the #4682 diagnostic probe on failure.
+      if (u.includes("/health")) {
+        return { ok: true, status: 200 } as unknown as Response;
+      }
       if (u.includes("/v1/functions")) {
         return { ok: false, status: 404, json: async () => ({}) } as unknown as Response;
       }
@@ -240,6 +247,17 @@ describe("cronInngestCronWatchdogHandler — registry-fetch is non-fatal (#4682)
     expect(
       fetchMock.mock.calls.some((c) => String(c[0]).includes("deploy.soleur.ai")),
     ).toBe(false);
+    // #4682 diagnostic: on a registry-read failure the watchdog probes /health
+    // on the same host so the next fire's Sentry event pins path-404 vs
+    // connectivity. Assert the probe fired AND its result reached the report.
+    expect(
+      fetchMock.mock.calls.some((c) => String(c[0]).includes("/health")),
+    ).toBe(true);
+    const reportCall = vi.mocked(reportSilentFallback).mock.calls.find(
+      (c) => (c[1] as { op?: string })?.op === "fetch-registry",
+    );
+    expect(reportCall).toBeDefined();
+    expect((reportCall![1] as { extra?: { healthStatus?: string } }).extra?.healthStatus).toBe("200");
   });
 
   it("does NOT send an Authorization header to /v1/functions (#4682 — unauth loopback endpoint)", async () => {
