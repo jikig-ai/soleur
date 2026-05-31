@@ -80,20 +80,6 @@ interface SupabaseLike {
 }
 
 /**
- * Pure visibility predicate for the Settings "Members" tab
- * (feat-team-workspace-multi-user). The tab — and the dependent "Team
- * Activity" tab — render only when the user has a resolved current org AND the
- * team-workspace-invite flag evaluates ON for it. Extracted so the three-branch
- * decision is deterministically testable without the live Flagsmith/Supabase
- * dependency. The 2026-05-31 ops@jikigai.com disappearance was a live-state
- * question (invisible to code-grep); this predicate guards a future *code*
- * regression of the chain itself.
- */
-export function shouldShowMembersTab(orgId: string | null, flagOn: boolean): boolean {
-  return orgId != null && flagOn;
-}
-
-/**
  * True when the user has at least one `workspace_members` row.
  *
  * Used to distinguish a legitimately org-less identity (normal — stay silent)
@@ -102,7 +88,9 @@ export function shouldShowMembersTab(orgId: string | null, flagOn: boolean): boo
  * with no error. Fail-quiet on a query error: this is a diagnostic discriminator
  * on an already-degraded branch and must never itself block a render.
  *
- * RLS: `workspace_members` owner-select (`auth.uid() = user_id`).
+ * RLS: `workspace_members` peer-select (`members_select_peers` → `is_workspace_member(workspace_id, auth.uid())`,
+ * migration 053). The explicit `.eq("user_id", userId)` self-scopes the probe to
+ * the caller's own rows regardless — the boolean cannot be influenced cross-tenant.
  */
 export async function userHasWorkspaceMembership(
   userId: string,
