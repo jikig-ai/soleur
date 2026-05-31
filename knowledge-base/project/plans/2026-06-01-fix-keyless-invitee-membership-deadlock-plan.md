@@ -155,16 +155,16 @@ not touch the `withIsolationScope` blocks. #3739 remains open.
 ## Acceptance Criteria
 
 ### Pre-merge (single PR #4713)
-- [ ] `isInviteReturnTarget` unit tests green (prefix boundary covered).
-- [ ] Keyless invitee through signup → T&C → lands on `/invite/<token>` (NOT `/setup-key`); accepting writes `workspace_members` and flips the invite out of Pending. Asserted via the accept-terms + callback redirect tests.
-- [ ] `/setup-key` still shown for keyless **non-invite** new signups (regression); keyless-**skipped** + invite still → `/invite` (branch untouched — regression guard).
-- [ ] Open-redirect reject-vector tests (raw + percent-decoded) green; no `/invite/` bypass.
-- [ ] TR2 ordering test (exercises the redirect fns): no site yields `/invite/<t>` before T&C recorded. (TR4 is a grep recorded in the PR description, not a test.)
-- [ ] Art. 13 disclosure renders on the invite page; "Invitation not available" card has a forward CTA (J7).
-- [ ] **(J4)** Keyless shared-member empty state shows joiner copy + "Add your own key" (driven by `isSharedWorkspaceMember` from effective-status); solo + pending-delegation copy unchanged.
-- [ ] **(J3)** Pending-invite user on `/dashboard` (not `/dashboard/chat`) sees `PendingInviteBanner`; one-click Accept fires the RPC; exactly one banner on chat routes (no double-render).
-- [ ] Owner sees hint + "Share a key" only for a keyless (`!hasEffectiveKey`), undelegated (`!delegationFromMe`), non-self member; `hasEffectiveKey` resolver tests green (own-key / keyless / error); TR3 (GRANT-only, no 074 consent-row write).
-- [ ] `vitest run` (web-platform) + `tsc --noEmit` clean.
+- [x] `isInviteReturnTarget` unit tests green (prefix boundary covered).
+- [x] Keyless invitee through signup → T&C → lands on `/invite/<token>` (NOT `/setup-key`); accepting writes `workspace_members` and flips the invite out of Pending. Asserted via the accept-terms + callback redirect tests.
+- [x] `/setup-key` still shown for keyless **non-invite** new signups (regression); keyless-**skipped** + invite still → `/invite` (branch untouched — regression guard).
+- [x] Open-redirect reject-vector tests (raw + percent-decoded) green; no `/invite/` bypass.
+- [x] TR2 ordering test (exercises the redirect fns): no site yields `/invite/<t>` before T&C recorded. (TR4 is a grep recorded in the PR description, not a test.)
+- [x] Art. 13 disclosure renders on the invite page; "Invitation not available" card has a forward CTA (J7).
+- [x] **(J4)** Keyless shared-member empty state shows joiner copy + "Add your own key" (driven by `isSharedWorkspaceMember` from effective-status); solo + pending-delegation copy unchanged.
+- [x] **(J3)** Pending-invite user on `/dashboard` (not `/dashboard/chat`) sees `PendingInviteBanner`; one-click Accept fires the RPC; exactly one banner on chat routes (no double-render).
+- [x] Owner sees hint + "Share a key" only for a keyless (`!hasEffectiveKey`), undelegated (`!delegationFromMe`), non-self member; `hasEffectiveKey` resolver tests green (own-key / keyless / error); TR3 (GRANT-only, no 074 consent-row write).
+- [x] `vitest run` (web-platform) + `tsc --noEmit` clean.
 
 ### Post-merge (operator)
 - [ ] Re-run the invite→signup→accept flow against **dev** via Playwright (new-user path); confirm the `workspace_members` row lands and the owner's invite leaves Pending (the box PR #4641 left unchecked). `Automation:` Playwright MCP against dev.
