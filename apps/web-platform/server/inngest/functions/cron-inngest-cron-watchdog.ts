@@ -42,15 +42,8 @@
 // re-syncs everything), (b) its own Sentry monitor
 // (scheduled-inngest-cron-watchdog) flips to missed if it stops firing.
 
-import { createHmac } from "node:crypto";
-
 import { inngest } from "@/server/inngest/client";
-import { reportSilentFallback } from "@/server/observability";
-import { sendInngestWithRetry } from "@/server/inngest/send-with-retry";
 import {
-  REPO_OWNER,
-  REPO_NAME,
-  mintInstallationToken,
   postSentryHeartbeat,
   type HandlerArgs,
 } from "./_cron-shared";
@@ -83,27 +76,7 @@ export const RESTART_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 // backstop restart is initiated; the ok=false heartbeat pages the whole time.
 export const POLL_RECOVERY_GRACE_TICKS = 2;
 
-// State persisted to the container-local filesystem (NOT a host bind-mount —
-// only /mnt/data/workspaces and /mnt/data/plugins are mounted into this
-// container; this path is a plain writable-layer dir). That is sufficient for
-// a read-own-write cooldown: it survives the event it gates — H9a heal restarts
-// `inngest-server.service`, a SEPARATE process, leaving this container (and
-// this file) untouched. A web-platform REDEPLOY resets it, but a redeploy
-// re-syncs every function (no MISSING → no restart attempted), so the reset is
-// benign. In-memory state would be cleared on every Inngest function replay, so
-// an on-disk file is still required between the 4h ticks.
-const COOLDOWN_DIR = "/var/lib/inngest/cron-watchdog";
-const COOLDOWN_FILE = `${COOLDOWN_DIR}/restart-cooldown.json`;
-
 const FETCH_TIMEOUT_MS = 10_000;
-const WEBHOOK_TIMEOUT_MS = 30_000;
-
-const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
-
-// Sentinel label the D1-B fallback issue carries; inngest-watchdog-restart-
-// dispatch.yml listens for it and dispatches restart-inngest-server.yml,
-// keeping the H9a restart autonomous even when the direct webhook POST fails.
-const RESTART_ESCALATION_LABEL = "inngest-desync-restart";
 
 // Expected-cron manifest — every cron-*.ts function that MUST have a live
 // cron trigger. function-registry-count.test.ts (e) asserts this set equals
@@ -315,98 +288,6 @@ export async function fetchRegistry(host: string): Promise<RegistryFunction[]> {
   );
 }
 
-async function readState(): Promise<WatchdogState> {
-  try {
-    const { readFile } = await import("node:fs/promises");
-    const raw = await readFile(COOLDOWN_FILE, "utf8");
-    return JSON.parse(raw) as WatchdogState;
-  } catch {
-    return {}; // no prior state recorded
-  }
-}
-
-async function writeState(state: WatchdogState): Promise<void> {
-  const { mkdir, writeFile } = await import("node:fs/promises");
-  await mkdir(COOLDOWN_DIR, { recursive: true });
-  await writeFile(COOLDOWN_FILE, JSON.stringify(state));
-}
-
-// D1-A: POST the deploy webhook to restart inngest-server (same HMAC + CF-Access
-// path as restart-inngest-server.yml). The webhook's ci-deploy.sh rejects any
-// restart whose component is not `inngest` (the `restart` action branch in
-// ci-deploy.sh), so runtime scope is bounded to inngest-server restarts.
-async function postRestartWebhook(): Promise<{ ok: boolean; status: number }> {
-  const secret = process.env.WEBHOOK_DEPLOY_SECRET;
-  const cfId = process.env.CF_ACCESS_CLIENT_ID;
-  const cfSecret = process.env.CF_ACCESS_CLIENT_SECRET;
-  if (!secret || !cfId || !cfSecret) {
-    return { ok: false, status: 0 }; // creds absent → escalate to D1-B
-  }
-  const payload = JSON.stringify({ command: "restart inngest _ latest" });
-  const signature = createHmac("sha256", secret).update(payload).digest("hex");
-  const res = await fetch("https://deploy.soleur.ai/hooks/deploy", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Signature-256": `sha256=${signature}`,
-      "CF-Access-Client-Id": cfId,
-      "CF-Access-Client-Secret": cfSecret,
-    },
-    body: payload,
-    signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
-  });
-  return { ok: res.status === 202, status: res.status };
-}
-
-// D1-B fallback: file (or comment on) a p0 escalation issue carrying the
-// sentinel label that inngest-watchdog-restart-dispatch.yml acts on. Keeps the
-// restart autonomous when the direct webhook POST is unreachable.
-async function fileRestartEscalationIssue(
-  token: string,
-  affectedFnIds: string[],
-): Promise<void> {
-  const { Octokit } = await import("@octokit/core");
-  const octokit = new Octokit({ auth: token });
-  const title = "[inngest-desync] cron functions need a server restart (H9a/H9b)";
-  const search = await octokit.request("GET /search/issues", {
-    q: `repo:${REPO_OWNER}/${REPO_NAME} is:issue is:open in:title "${title}"`,
-    per_page: 1,
-  });
-  const existing = (search.data.items ?? [])[0];
-  const detail = `Cron-plan defect (dropped or persistently de-planned) at ${new Date().toISOString()}: ${affectedFnIds.join(", ")}`;
-  if (existing) {
-    await octokit.request(
-      "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
-      {
-        owner: REPO_OWNER,
-        repo: REPO_NAME,
-        issue_number: existing.number,
-        body: `Still desynced — ${detail}`,
-      },
-    );
-    return;
-  }
-  await octokit.request("POST /repos/{owner}/{repo}/issues", {
-    owner: REPO_OWNER,
-    repo: REPO_NAME,
-    title,
-    labels: ["priority/p0-critical", RESTART_ESCALATION_LABEL],
-    body: [
-      "## Inngest cron functions need a server restart (H9a dropped / H9b persistently de-planned)",
-      "",
-      detail,
-      "",
-      "The watchdog could not reach the deploy webhook directly (D1-A). This",
-      `issue carries the \`${RESTART_ESCALATION_LABEL}\` label so`,
-      "`inngest-watchdog-restart-dispatch.yml` dispatches `restart-inngest-server.yml`.",
-      "",
-      "Runbook: [cloud-scheduled-tasks.md H9](https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md).",
-      "",
-      "_Auto-filed by the [cron-inngest-cron-watchdog Inngest function](https://github.com/jikig-ai/soleur/blob/main/apps/web-platform/server/inngest/functions/cron-inngest-cron-watchdog.ts)._",
-    ].join("\n"),
-  });
-}
-
 // =============================================================================
 // Handler
 // =============================================================================
@@ -419,202 +300,35 @@ export async function cronInngestCronWatchdogHandler({
   results: ClassifyResult[];
   healed: { manualTriggers: string[]; restartRequested: boolean };
 }> {
-  // Step 1: query the running server's function registry (loopback, no SSH).
-  // NON-FATAL (#4682): a registry-read failure must NOT abort the handler
-  // before the heartbeat — that produced a SILENT watchdog (0 check-ins for
-  // ~5 fires) when /v1/functions 404'd. Catch inside the step, return null on
-  // failure, and treat "can't read the registry" as a defect that pages below.
-  const registry = await step.run("fetch-registry", async () => {
-    const host = resolveInngestHost(process.env.INNGEST_BASE_URL);
-    try {
-      return await fetchRegistry(host);
-    } catch (err) {
-      // SSH-free root-cause probe (#4682): /v1/functions 404s from the app
-      // container while the host's 127.0.0.1:8288/v1/functions returns 200, and
-      // dropping the auth header did NOT change it — so the cause is the network
-      // path, not auth. Probe /health on the SAME host so the next fire's Sentry
-      // event definitively separates the two hypotheses:
-      //   - health 200 → connectivity is fine; the 404 is path-/loopback-gated
-      //     introspection (fix host-side: expose /v1/functions or move the read).
-      //   - health unreachable → broad container→server connectivity loss
-      //     (fix INNGEST_BASE_URL / docker networking).
-      let healthStatus = "unprobed";
-      try {
-        const hr = await fetch(`${host}/health`, {
-          signal: AbortSignal.timeout(5_000),
-        });
-        healthStatus = String(hr.status);
-      } catch (he) {
-        healthStatus = `unreachable:${(he as Error)?.name ?? "error"}`;
-      }
-      reportSilentFallback(err, {
-        feature: "cron-inngest-cron-watchdog",
-        op: "fetch-registry",
-        message: "Failed to read /v1/functions — cannot verify cron substrate (#4682)",
-        extra: { fn: "cron-inngest-cron-watchdog", registryHost: host, healthStatus },
-      });
-      return null;
-    }
-  });
-
-  // Registry unreadable → substrate health UNKNOWN → page (ok=false) and skip
-  // heal (no data to act on). The heartbeat ALWAYS posts so the watchdog's own
-  // monitor is never silent — the failure mode #4682 fixed.
-  if (registry === null) {
-    await step.run("sentry-heartbeat-registry-unreadable", async () => {
-      await postSentryHeartbeat({
-        ok: false,
-        sentryMonitorSlug: SENTRY_MONITOR_SLUG,
-        cronName: "cron-inngest-cron-watchdog",
-        logger,
-      });
-    });
-    return {
-      ok: false,
-      results: [],
-      healed: { manualTriggers: [], restartRequested: false },
-    };
-  }
-
-  // Pure classification (no IO — safe in the handler body).
-  const results = classifyRegistry(registry);
-  const plan = planHeal(results);
-
-  // Step 2: heal H9b (UNPLANNED) — fire each manual-trigger so the function
-  // runs once and re-posts its check-in NOW. With --poll-interval 60 (#4652)
-  // the server re-plans the de-planned cron from the SDK manifest within <=60s
-  // on its own, so this manual-trigger is a LATENCY OPTIMIZATION (restores the
-  // missed check-in immediately rather than waiting up to one poll interval),
-  // not the primary repair. If a defect persists across ticks despite polling,
-  // Step 3's backstop restart escalates it.
-  const manualTriggers = await step.run("heal-unplanned", async () => {
-    const fired: string[] = [];
-    for (const eventName of plan.manualTriggerEvents) {
-      try {
-        await sendInngestWithRetry(
-          () => inngest.send({ name: eventName, data: {} }),
-          { feature: "cron-inngest-cron-watchdog", eventId: eventName },
-        );
-        fired.push(eventName);
-        logger.info(
-          { fn: "cron-inngest-cron-watchdog", event: eventName },
-          "H9b heal: fired manual-trigger for de-planned cron",
-        );
-      } catch (err) {
-        reportSilentFallback(err, {
-          feature: "cron-inngest-cron-watchdog",
-          op: "heal-unplanned",
-          message: `Failed to fire manual-trigger ${eventName}`,
-          extra: { fn: "cron-inngest-cron-watchdog", event: eventName },
-        });
-      }
-    }
-    return fired;
-  });
-
-  // Step 3: BACKSTOP restart path (#4652). Polling (--poll-interval 60)
-  // re-syncs/re-plans dropped (H9a) AND de-planned (H9b) functions within <=60s
-  // automatically, so the watchdog no longer restarts on the first defective
-  // tick. A restart fires ONLY when a function stays defective (MISSING ∪
-  // UNPLANNED) for POLL_RECOVERY_GRACE_TICKS consecutive ticks — evidence that
-  // polling has FAILED (app /api/inngest down, poll loop wedged) — and the
-  // cooldown permits it (defense-in-depth, AC6). Streaks persist across ticks
-  // in the same state file.
-  const restartRequested = await step.run("heal-restart-path", async () => {
-    const state = await readState();
-    const defectFnIds = [...plan.missingFnIds, ...plan.unplannedFnIds];
-    const streaks = nextDefectStreaks(state.defect_streaks, defectFnIds);
-    const restartFnIds = escalatedDefectFnIds(streaks);
-
-    if (restartFnIds.length === 0) {
-      // No restart needed this tick — persist streaks (resets recovered fns),
-      // preserve the cooldown timestamp.
-      await writeState({
-        last_restart_at: state.last_restart_at,
-        defect_streaks: streaks,
-      });
-      return false;
-    }
-    if (!shouldRestart(restartFnIds, state.last_restart_at ?? null, Date.now())) {
-      logger.warn(
-        { fn: "cron-inngest-cron-watchdog", restartFnIds },
-        "Restart warranted (H9a/escalated-H9b) but within cooldown — skipping (ok=false heartbeat still pages)",
-      );
-      await writeState({
-        last_restart_at: state.last_restart_at,
-        defect_streaks: streaks,
-      });
-      return false;
-    }
-
-    // A restart re-syncs + re-plans ALL functions, so clear streaks on success.
-    const onRestarted = async () =>
-      writeState({ last_restart_at: new Date().toISOString(), defect_streaks: {} });
-
-    try {
-      const webhook = await postRestartWebhook();
-      if (webhook.ok) {
-        await onRestarted();
-        logger.info(
-          { fn: "cron-inngest-cron-watchdog", restartFnIds },
-          "Restart webhook accepted (HTTP 202)",
-        );
-        return true;
-      }
-      reportSilentFallback(
-        new Error(`restart webhook non-202 (status=${webhook.status})`),
-        {
-          feature: "cron-inngest-cron-watchdog",
-          op: "heal-restart-webhook",
-          message: "Restart webhook POST failed — escalating to D1-B issue",
-          extra: { fn: "cron-inngest-cron-watchdog", status: webhook.status },
-        },
-      );
-    } catch (err) {
-      reportSilentFallback(err, {
-        feature: "cron-inngest-cron-watchdog",
-        op: "heal-restart-webhook",
-        message: "Restart webhook POST threw — escalating to D1-B issue",
-        extra: { fn: "cron-inngest-cron-watchdog" },
-      });
-    }
-    // D1-B: file the escalation issue (best-effort).
-    try {
-      const token = await mintInstallationToken({
-        tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
-      });
-      await fileRestartEscalationIssue(token, restartFnIds);
-      await onRestarted();
-      return true;
-    } catch (err) {
-      reportSilentFallback(err, {
-        feature: "cron-inngest-cron-watchdog",
-        op: "heal-restart-escalate",
-        message: "D1-B escalation-issue filing failed",
-        extra: { fn: "cron-inngest-cron-watchdog" },
-      });
-      // Restart not initiated — keep streaks so the next tick retries.
-      await writeState({
-        last_restart_at: state.last_restart_at,
-        defect_streaks: streaks,
-      });
-      return false;
-    }
-  });
-
-  // Step 4: Sentry heartbeat — ok=false when any monitored function is
-  // MISSING/UNPLANNED, so the watchdog's own monitor flips to error and pages.
-  const ok = plan.defectCount === 0;
+  // RETIRED to a liveness-only beacon (#4682). The original self-heal read the
+  // inngest server's /v1/functions registry to classify MISSING/UNPLANNED crons
+  // and manual-trigger/restart to repair. That introspection API is
+  // loopback-gated on the server: from the app container /health=200 but
+  // /v1/functions=404, while the host's 127.0.0.1:8288/v1/functions=200
+  // (confirmed via the #4682 /health probe) — so a containerized watchdog
+  // CANNOT read it; no auth/network change fixes that.
+  //
+  // The self-heal is also redundant now:
+  //   - `--poll-interval 60` (#4652, live) re-syncs AND re-plans dropped/
+  //     de-planned functions within <=60s — the PRIMARY self-heal.
+  //   - the per-function Sentry cron monitors (failure_issue_threshold) already
+  //     page on missed check-ins (how the #4650 regression was caught).
+  //
+  // So this function just posts an ok=true liveness heartbeat: its own check-in
+  // proves the inngest cron scheduler is alive enough to fire it (if the whole
+  // scheduler dies, this monitor goes missed and pages). It no longer reads the
+  // registry, fires manual-triggers, or restarts — and no longer false-pages
+  // ok=false every 4h on an introspection it cannot perform.
   await step.run("sentry-heartbeat", async () => {
     await postSentryHeartbeat({
-      ok,
+      ok: true,
       sentryMonitorSlug: SENTRY_MONITOR_SLUG,
       cronName: "cron-inngest-cron-watchdog",
       logger,
     });
   });
 
-  return { ok, results, healed: { manualTriggers, restartRequested } };
+  return { ok: true, results: [], healed: { manualTriggers: [], restartRequested: false } };
 }
 
 // =============================================================================

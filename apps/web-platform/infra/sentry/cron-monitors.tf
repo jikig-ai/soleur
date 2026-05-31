@@ -426,15 +426,15 @@ resource "sentry_cron_monitor" "scheduled_ux_audit" {
 
 # Issue #4650: Inngest-fired via
 # `apps/web-platform/server/inngest/functions/cron-inngest-cron-watchdog.ts`.
-# NEW monitor — self-healing watchdog for the cron-trigger desync regression
-# (runbook H9). Every 4h it queries the running server's /v1/functions registry
-# and self-restores dropped (H9a) / de-planned (H9b) cron triggers; an ok=false
-# heartbeat flips THIS monitor to error when any monitored function is defective.
-# 4-hourly (0 */4 * * *) — 120-min margin per the Inngest ≤2-min jitter plus
-# slack for the loopback fetch + heal steps. 5 min runtime (pure-IO: loopback
-# fetch + inngest.send + optional webhook POST, no claude-eval spawn).
-# The watchdog rides the substrate it monitors — if it stops firing entirely,
-# this monitor's own missed check-in surfaces the meta-failure.
+# LIVENESS BEACON (#4682 retired the self-heal). The watchdog originally queried
+# the server's /v1/functions registry to classify + self-restore dropped (H9a) /
+# de-planned (H9b) cron triggers, but that introspection API is loopback-gated
+# and unreachable from the app container (health=200, /v1/functions=404), and the
+# self-heal is redundant with --poll-interval 60 (#4652) + the per-function cron
+# monitors. The function now just posts ok=true every 4h: its own check-in proves
+# the inngest cron scheduler is alive enough to fire it. So THIS monitor pages
+# only on a MISSED check-in (scheduler dead / function dropped), never on ok=false.
+# 4-hourly (0 */4 * * *) — 120-min margin per the Inngest ≤2-min jitter.
 resource "sentry_cron_monitor" "scheduled_inngest_cron_watchdog" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
