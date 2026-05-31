@@ -3,7 +3,7 @@
 ## Problem
 
 The operator reported the multi-user **Members** tab had disappeared from Settings
-for `ops@jikigai.com` (screenshot at 2026-05-31 20:18 UTC). The plan
+for `ops@example.com` (screenshot at 2026-05-31 20:18 UTC). The plan
 (`2026-05-31-fix-multi-user-feature-not-visible-plan.md`) was a *diagnose-then-fix*
 with four ranked hypotheses, the leading one (H1) being "the #4617 segment cutover
 dropped jikigai's org from the `team-workspace-invite-orgs` Flagsmith segment", whose
