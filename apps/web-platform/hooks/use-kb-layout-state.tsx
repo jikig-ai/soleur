@@ -55,6 +55,7 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
   const [kbCollapsed, setKbCollapsed] = useState(false);
   const [tree, setTree] = useState<TreeNode | null>(null);
   const [lastSync, setLastSync] = useState<KbSyncHistoryRow | null>(null);
+  const [needsReconnect, setNeedsReconnect] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<KbContextValue["error"]>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -93,6 +94,9 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
         // Cached on the layout state; refetched on KbSyncStatus's Sync-now
         // resolution via refreshTree (the same fetchTree callback).
         setLastSync((data.lastSync as KbSyncHistoryRow | null) ?? null);
+        // #4712 — server-derived reconnect signal; refreshTree re-fetches and
+        // re-derives this to false after a successful reconnect.
+        setNeedsReconnect(data.needsReconnect === true);
         setLoading(false);
       } catch {
         if (!signal?.aborted) {
@@ -179,8 +183,18 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
       toggleExpanded,
       refreshTree: fetchTree,
       lastSync,
+      needsReconnect,
     }),
-    [tree, lastSync, loading, error, expanded, toggleExpanded, fetchTree],
+    [
+      tree,
+      lastSync,
+      needsReconnect,
+      loading,
+      error,
+      expanded,
+      toggleExpanded,
+      fetchTree,
+    ],
   );
 
   // --- Chat sidebar state -------------------------------------------------

@@ -1,6 +1,8 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { DisconnectRepoDialog } from "./disconnect-repo-dialog";
+import { ReconnectNotice } from "@/components/repo/reconnect-notice";
 
 export type RepoStatus = "not_connected" | "ready" | "error" | "cloning";
 
@@ -8,6 +10,12 @@ interface ProjectSetupCardProps {
   repoUrl: string | null;
   repoStatus: RepoStatus;
   repoLastSyncedAt: string | null;
+  /**
+   * #4712 — `ready` repo whose `github_installation_id` is NULL (the #4706
+   * silent-freeze class). Suppresses the Connected view and renders the
+   * reconnect affordance instead.
+   */
+  needsReconnect?: boolean;
 }
 
 function extractRepoName(url: string): string {
@@ -23,7 +31,9 @@ export function ProjectSetupCard({
   repoUrl,
   repoStatus,
   repoLastSyncedAt,
+  needsReconnect = false,
 }: ProjectSetupCardProps) {
+  const router = useRouter();
   return (
     <section>
       <h2 className="mb-4 text-lg font-semibold text-soleur-text-primary">Project</h2>
@@ -43,7 +53,14 @@ export function ProjectSetupCard({
           </div>
         )}
 
-        {repoStatus === "ready" && repoUrl && (
+        {repoStatus === "ready" && needsReconnect && (
+          <ReconnectNotice
+            variant="card"
+            onReconnected={() => router.refresh()}
+          />
+        )}
+
+        {repoStatus === "ready" && repoUrl && !needsReconnect && (
           <div className="space-y-4">
             <div className="space-y-1">
               <div className="flex items-center gap-2">

@@ -6,6 +6,8 @@ import { Group, Panel, Separator } from "react-resizable-panels";
 import type { UseKbLayoutStateResult } from "@/hooks/use-kb-layout-state";
 import { KbSidebarShell } from "@/components/kb/kb-sidebar-shell";
 import { KbDocShell } from "@/components/kb/kb-doc-shell";
+import { useKb } from "@/components/kb/kb-context";
+import { ReconnectNotice } from "@/components/repo/reconnect-notice";
 
 const KbChatContent = dynamic(
   () =>
@@ -43,6 +45,7 @@ export function KbDesktopLayout({ children, state }: KbDesktopLayoutProps) {
     isContentView,
     toggleKbCollapsed,
   } = state;
+  const { needsReconnect, refreshTree } = useKb();
 
   return (
     <div className="flex h-full">
@@ -66,6 +69,11 @@ export function KbDesktopLayout({ children, state }: KbDesktopLayoutProps) {
       <Group orientation="horizontal" className="h-full flex-1 min-w-0">
         <Panel minSize="40%">
           <div className="relative min-w-0 flex flex-1 flex-col h-full">
+            {needsReconnect && (
+              <div className="shrink-0 p-4">
+                <ReconnectNotice variant="banner" onReconnected={refreshTree} />
+              </div>
+            )}
             <KbDocShell
               collapsed={kbCollapsed}
               isContentView={isContentView}
