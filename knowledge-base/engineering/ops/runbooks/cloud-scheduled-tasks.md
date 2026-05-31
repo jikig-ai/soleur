@@ -41,24 +41,47 @@ did not run at all.
 
 ## Task Inventory
 
-Nine tasks are monitored. Thresholds derived from observed natural cadence +
-one cadence-cycle of slack; see Threshold Derivation below.
+**The heartbeat monitors ONLY output-PRODUCING scheduled tasks** — tasks whose
+Inngest cron function actually creates a `scheduled-<task>`-labeled issue. Its
+single signal is: *"did this task produce its expected `scheduled-<task>` issue
+artifact within its cadence window?"* (`TASK_INVENTORY` in
+`apps/web-platform/server/inngest/functions/cron-cloud-task-heartbeat.ts`).
+Thresholds are derived from each task's real cron cadence + one cadence-cycle of
+slack; see Threshold Derivation below.
 
-| Task | Execution surface | Schedule | Audit label | Threshold (days) |
-|------|-------------------|----------|-------------|------------------|
-| content-generator | Claude Code Cloud (`soleur-scheduled`) | Tue+Thu 10:00 UTC | `scheduled-content-generator` | 4 |
-| community-monitor | Claude Code Cloud (`soleur-scheduled`) | Daily | `scheduled-community-monitor` | 2 |
-| growth-audit | Claude Code Cloud (`soleur-scheduled`) | Weekly Mon | `scheduled-growth-audit` | 10 |
-| campaign-calendar | GitHub Actions | Weekly Mon | `scheduled-campaign-calendar` | 10 |
-| competitive-analysis | GitHub Actions | Monthly 1st | `scheduled-competitive-analysis` | 35 |
-| roadmap-review | GitHub Actions | Monthly 1st | `scheduled-roadmap-review` | 35 |
-| growth-execution | GitHub Actions | Bi-monthly (1st, 15th) | `scheduled-growth-execution` | 18 |
-| seo-aeo-audit | GitHub Actions | Weekly Mon | `scheduled-seo-aeo-audit` | 10 |
-| daily-triage | GitHub Actions | Daily | `scheduled-daily-triage` | 2 |
+| Task | Execution surface | Cron (UTC) | Audit label | Threshold (days) |
+|------|-------------------|-----------|-------------|------------------|
+| content-generator | Inngest cron | `0 10 * * 2,4` (Tue+Thu) | `scheduled-content-generator` | 9 |
+| strategy-review | Inngest cron | `0 8 * * 1` (Weekly Mon) | `scheduled-strategy-review` | 9 |
+| legal-audit | Inngest cron | `0 11 1 1,4,7,10 *` (Quarterly) | `scheduled-legal-audit` | 95 |
+| competitive-analysis | Inngest cron | `0 9 1 * *` (Monthly 1st) | `scheduled-competitive-analysis` | 40 |
+| community-monitor | Inngest cron | `0 8 * * *` (Daily) | `scheduled-community-monitor` | 3 |
+| roadmap-review | Inngest cron | `0 9 * * 1` (Weekly Mon) | `scheduled-roadmap-review` | 9 |
 
-The Max plan caps the `soleur-scheduled` environment at **3 Cloud task
-definitions**. Adding a 4th Cloud task evicts an existing one silently — this
-is the top-priority risk the watchdog protects against.
+### Excluded NON-PRODUCERS (do not re-add)
+
+These scheduled tasks run on their own Inngest crons but **never create a
+`scheduled-<task>` issue**, so the heartbeat's label-presence signal can never
+observe them — including them produces a permanent false-positive
+`[cloud-task-silence]` alert via the `daysSince === null → silent: true` branch.
+They were removed deliberately:
+
+| Task | Why it produces no `scheduled-<task>` issue |
+|------|---------------------------------------------|
+| daily-triage | Labels existing issues only; its prompt forbids `gh issue create`. |
+| ux-audit | Runs `UX_AUDIT_DRY_RUN=true` → writes findings to Supabase/stdout, no issue. |
+| bug-fixer | Opens `bot-fix/*` PRs; never attaches a `scheduled-bug-fixer` label to an issue. |
+
+**Liveness for these three (and every cron) is covered separately** by the
+per-function Sentry cron monitors (see Self-healing below and **#4708**) — the
+heartbeat was never their liveness signal. Do NOT "restore" them to
+`TASK_INVENTORY` to regain coverage; that coverage already exists in Sentry.
+
+The heartbeat does **not** and **cannot** use Inngest `/v1/*` run-history as a
+liveness signal: that introspection API is loopback-gated and unreachable from
+the app container (proven in #4708 — see the loopback note in Self-healing
+below). The "did the cron fire" question belongs to the per-function Sentry
+monitors; this watchdog answers only the orthogonal "did it produce output".
 
 ## Diagnosis Checklist
 
@@ -429,40 +452,56 @@ Documented here so a future operator can update without re-deriving.
 
 | Task | Cadence | Max natural gap | Threshold | Slack |
 |------|---------|-----------------|-----------|-------|
-| content-generator | Tue+Thu | 5 days (Thu→Tue) | 4 | -1 (tight — see below) |
-| community-monitor | Daily | 1 day | 2 | +1 day |
-| growth-audit | Weekly Mon | 7 days | 10 | +3 days |
-| campaign-calendar | Weekly Mon | 7 days | 10 | +3 days |
-| competitive-analysis | Monthly 1st | ~31 days | 35 | +4 days |
-| roadmap-review | Monthly 1st | ~31 days | 35 | +4 days |
-| growth-execution | Bi-monthly | 16 days | 18 | +2 days |
-| seo-aeo-audit | Weekly Mon | 7 days | 10 | +3 days |
-| daily-triage | Daily | 1 day | 2 | +1 day |
+| content-generator | Tue+Thu | 5 days (Thu→Tue) | 9 | +4 days (one missed cycle) |
+| strategy-review | Weekly Mon | 7 days | 9 | +2 days |
+| legal-audit | Quarterly (1st Jan/Apr/Jul/Oct) | 92 days (Jul→Oct) | 95 | +3 days |
+| competitive-analysis | Monthly 1st | ~31 days | 40 | +9 days (one missed month) |
+| community-monitor | Daily | 1 day | 3 | +2 days (weekend/transient) |
+| roadmap-review | Weekly Mon | 7 days | 9 | +2 days |
 
-**Why content-generator is aggressive (4 days):** The prior silence incident
-was 21 days. A conservative threshold (e.g., 7 days) defeats the point of the
-watchdog. 4 days covers exactly one missed Thu→Tue fire with ~24h headroom
-before alert. If a single upstream transient (Anthropic API blip, WebSearch
-failure, Cloud rate-limit) knocks out one fire, the watchdog opens one issue
-and auto-closes on the next successful fire — sustainable noise level (~1
-issue/week worst case).
+**Why content-generator is 9, not 4:** The Thu→Tue gap alone is 5 days, so the
+prior `4`-day threshold false-fired on a perfectly on-time week. 9 = one full
+cadence cycle (5d max gap) + one missed firing of slack — it surfaces a genuine
+two-cycle outage without alerting on a single transient miss.
+
+**Why legal-audit is 95 (headline defect):** legal-audit runs quarterly; the
+longest quarter gap is 92 days (Jul 1 → Oct 1). The prior `9`-day threshold
+guaranteed a false `[cloud-task-silence]` alert ~9 days into every quarter. 95 =
+92-day floor + 3d slack.
+
+**Why community-monitor is 3, not 9:** it is a daily producer, so a 9-day
+threshold would let a real 8-day outage go unnoticed. 3 = 1d cadence + 2d slack
+(absorbs a weekend / single transient). This is a tightening that improves
+true-positive latency, safe because community-monitor genuinely fires daily.
 
 ## Updating the Watchdog
 
-When a new scheduled task is added:
+The watchdog is now the `cron-cloud-task-heartbeat` **Inngest cron function**
+(`apps/web-platform/server/inngest/functions/cron-cloud-task-heartbeat.ts`),
+not the (deleted, post-TR9) `.github/workflows/scheduled-cloud-task-heartbeat.yml`.
 
-1. Add a row to the `TASKS` array in
-   `.github/workflows/scheduled-cloud-task-heartbeat.yml` in the format
-   `task-name:audit-issue-label:max_gap_days`.
-2. Add a matching row to the Task Inventory and Threshold Derivation tables
-   above.
-3. Verify the label exists (`gh label list | grep <label>`); create if
-   missing.
-4. Dispatch the workflow manually (`gh workflow run scheduled-cloud-task-heartbeat.yml`)
-   and confirm the new row is processed without a silence flag.
+**Eligibility check FIRST — is the task a producer?** Only add a task to
+`TASK_INVENTORY` if its cron function actually creates a `scheduled-<task>`
+labeled issue (grep its `cron-<task>.ts` for an `octokit … POST /issues` /
+`gh issue create` that attaches the `scheduled-<task>` label). If it does not —
+a dry-run, a labels-only triage, a PR-only fixer — do **not** add it; its
+liveness is covered by its own per-function Sentry monitor instead (see the
+Excluded Non-Producers table above).
 
-When a task is removed: delete the row from both the TASKS array and this
-runbook's tables in the same PR.
+When a new producing task is added:
+
+1. Add an entry to `TASK_INVENTORY` in `cron-cloud-task-heartbeat.ts` —
+   `{ name, label: "scheduled-<name>", maxGapDays }` — with `maxGapDays` derived
+   from the task's real cron cadence (Threshold Derivation above).
+2. Add matching rows to the Task Inventory and Threshold Derivation tables here.
+3. Update the cardinality + threshold assertions in
+   `apps/web-platform/test/server/inngest/cron-cloud-task-heartbeat.test.ts`
+   (the `toHaveLength(N)`, the `it.each` table, the non-producer guard).
+4. Verify the label exists (`gh label list | grep <label>`); create if missing.
+
+When a task is removed: delete its entry from `TASK_INVENTORY`, update the test
+assertions, and update both tables here in the same PR — and add it to the
+Excluded Non-Producers table if it was removed for being a non-producer.
 
 ## Dedup Contract
 
