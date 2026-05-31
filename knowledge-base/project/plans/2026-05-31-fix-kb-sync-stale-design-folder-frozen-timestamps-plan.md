@@ -1,149 +1,135 @@
 ---
-title: "fix: KB sync stale — design folder persists, timestamps frozen ~5w"
+title: "fix: KB sync stale — reconcile short-circuits ignored-repo before matching a real connected workspace"
 type: bug
 status: draft
 created: 2026-05-31
 branch: feat-one-shot-kb-sync-stale-design-folder
-lane: cross-domain
+lane: single-domain
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
-# 🐛 fix: Knowledge Base sync is stale — `design` folder persists and all timestamps frozen at ~5 weeks
+# 🐛 fix: Knowledge Base sync is stale — `design/` folder persists, timestamps frozen at ~5 weeks
 
-> Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed). No spec.md exists for this branch.
+> **This plan was rewritten 2026-05-31 against live production data.** The original v1/deepen plan hypothesized H1 (read/write path-resolution divergence) and H2 (silent non-fast-forward against a `--depth 1` shallow clone). **Both are disproven by the production `kb_sync_history` ledger** (see Evidence). They are retained only as "Rejected Hypotheses" so the disconfirming evidence is on record. The real cause is a reconcile **short-circuit ordering bug** introduced by PR #4666.
 
-## Enhancement Summary (deepen-pass, 2026-05-31)
+## Evidence (live prod, read-only via Doppler `DATABASE_URL_POOLER`, 2026-05-31)
 
-**Verified corrections applied to the v1 plan (each grep/read-confirmed against the codebase):**
+Affected operator: `jean.deruelle@jikigai.com`, user/workspace id `52af49c2-d68e-477b-ba76-129e41807c7c`. **Solo** (workspace id == user id → migration-053 N2 invariant holds, so read-dir == write-dir; H1 cannot bite). The `ops@jikigai.com` row in the screenshot has `repo_url=null`/`workspace_path=null` and views the tree via the shared/org workspace — the connected workspace under the hood is `52af49c2`.
 
-1. **N2 invariant re-ranks the hypotheses.** Migration 053 (`053_organizations_and_workspace_members.sql:35,63`) + ADR-044 §42 establish `workspaces.id == users.id` for **solo** users. So `users.workspace_path` (`/workspaces/<userId>`, read path) and `workspacePathForWorkspaceId(ws.id)` (`/workspaces/<workspaceId>`, write path) point at the **SAME directory for a solo operator** — **H1 path-divergence does NOT bite solo users**, only non-solo org members whose active workspace ≠ solo workspace. For the likely (solo) screenshot subject, **H2 (silent non-fast-forward) is the prime suspect**, not H1.
-2. **Shallow-clone amplifies H2.** Provisioning clones `--depth 1` (`workspace.ts:173`); `syncWorkspace` runs `git pull --ff-only` (`kb-route-helpers.ts:304`) via `promisify(execFile)` (rejects on non-zero → throws → swallowed by `reportSilentFallback`). A depth-1 tree cannot fast-forward across an upstream rebase/squash/force-push (no merge base) → `--ff-only` aborts → frozen tree. This is the most likely concrete mechanism.
-3. **H5 (reconcile payload field omission) investigated and REJECTED.** A partial grep suggested `webhook-push-reconcilable.ts` dropped `fullName`/`defaultBranch` from its `ok:true` return; the **full file read disproves it** — line 56 returns all fields and fail-closes on missing `full_name`. No action. (Recorded as a worked example of why deepen full-file reads beat grep previews.)
-4. **Phantom-function correction.** The v1 Files-to-Edit referenced `resolveWorkspacePath(workspaceId, legacyWorkspacePath)` with a "doc vs code disagreement." **No such function exists.** Real exports: `workspacePathForWorkspaceId(workspaceId)` (resolver:265) and `resolveWorkspacePathForUser(userId, supabase)` (resolver:250). Corrected in Files-to-Edit + Phase 2 below.
-5. **Sibling-query sweep (per `hr-type-widening-cross-consumer-grep`).** `users.workspace_path` is read at 9 production sites; the H1 fix (if pursued for org members) must address each — but per N2 all are CORRECT for solo users. Enumerated in Files-to-Edit.
-
-## Overview
-
-The KB file tree in the Soleur web app shows stale content (screenshot Sun May 31 22:19): a top-level `design/` folder (containing `upgrade-modal-at-capa…`, modified "5w ago") that no longer exists in the source repo, and **every** directory/file entry (`INDEX.md`, `kb-categories.txt`, `kb-tags.txt`, all folders) reporting "5w ago" `modifiedAt` timestamps. The KB has not re-synced from source for ~5 weeks, and a prior fix attempt did not resolve it.
-
-**Root-cause hypothesis (high confidence — to be confirmed in Phase 0):** This is a **path-resolution divergence introduced by ADR-044 (PR #4559, merged Sun May 25)**, the exact ~5-week-prior window (relative to the 2026-05-31 screenshot the bug is ~6 days; relative to the operator's actual last-good sync ~5w predates ADR-044 — see Hypotheses for the two-window distinction). The reconcile *write* path and the tree *read* path resolve the workspace directory differently:
-
-- **Read path** (`/api/kb/tree` → `buildTree`) resolves `kbRoot` from **`users.workspace_path`** (legacy `<WORKSPACES_ROOT>/<user_id>` scheme). See `apps/web-platform/app/api/kb/tree/route.ts:13,35`.
-- **Write path** (webhook push → `workspaceReconcileOnPush`) resolves the dir from **`workspacePathForWorkspaceId(ws.id)` = `<WORKSPACES_ROOT>/<workspace_id>`** (ADR-044 UUID scheme). See `apps/web-platform/server/inngest/functions/workspace-reconcile-on-push.ts:223` + `apps/web-platform/server/workspace-resolver.ts:26`.
-
-If those two paths point at **different directories** for an existing operator (legacy `users.workspace_path` populated with a user-id path, while the reconcile targets a workspace-id path), then `git pull --ff-only` runs against a directory the tree never reads — the tree forever reflects the pre-ADR-044 on-disk state, the `design/` folder that was deleted upstream ~5w ago is never removed, and `mtime` stays frozen. The "Sync now" manual button (`/api/kb/sync`) shares the **read** path's `users.workspace_path` resolution, so it pulls into the dir the tree reads — meaning manual sync *should* work for legacy users but webhook reconcile writes to the wrong dir; OR (the inverse case for ADR-044-provisioned users) reconcile writes to the workspace-id dir but the tree reads a non-existent/empty legacy path and falls back to stale cache. The two on-disk schemes must be reconciled to a single source of truth.
-
-**Secondary hypothesis (must be ruled out, not assumed):** the sync is silently failing — `syncWorkspace` runs `git pull --ff-only` (`kb-route-helpers.ts:304`); if the local working tree has divergent/auto-committed history, `--ff-only` aborts non-fast-forward and the error is swallowed by `reportSilentFallback` (best-effort contract). A `design/`-folder delete upstream + any local commit would produce exactly a non-fast-forward that freezes the tree. This is independent of the path divergence and may co-occur.
-
-**Why prior fixes missed it:** the three recent reconcile PRs (#4623, #4666 debounce/Sentry-noise; #4546 installation-ID resolution) all addressed **observability and resolution of *which workspaces match a push*** — none touched the **path the matched workspace pulls into vs. the path the tree reads from**. The bug is downstream of "did we find the workspace" and upstream of "what does the user see"; it sits precisely in the read/write path-resolution seam that no prior fix inspected.
-
-## Research Reconciliation — Spec vs. Codebase
-
-| Claim (from bug report / inferred) | Reality (codebase) | Plan response |
+| Probe | Result | Implication |
 |---|---|---|
-| "A prior fix attempt did not resolve it" | #4623/#4666/#4546 fixed Sentry-noise + multi-user install-ID resolution, NOT the read/write path seam | Phase 0 confirms which dir each path resolves to for the affected operator before any code change |
-| "KB not re-syncing from source" | `syncWorkspace` uses `git pull --ff-only`; failures swallowed by `reportSilentFallback` (best-effort) | Phase 1 adds structured failure classification + verifiable observability; Phase 2 fixes path resolution |
-| Tree reads current on-disk state | `buildTree` reads `users.workspace_path/knowledge-base` (`tree/route.ts:35`); manual sync + reconcile may write elsewhere | Unify read+write path resolution through `workspace-resolver.ts` |
-| `design/` folder is a render bug | `buildTree` faithfully reflects on-disk dirs (`kb-reader.ts:215-227`); the folder physically exists on disk in the dir the tree reads | Confirm on-disk presence in Phase 0; fix is to make the pull reach that dir |
+| `users.repo_last_synced_at` (52af49c2) | `2026-04-26T10:30:31Z` | The "~5w ago" freeze onset, exactly. |
+| `users.kb_sync_history` length / outcomes | **50 rows, ALL `ok=true`** (49 `webhook_push` + 1 `manual_sync`), spanning **only 2026-04-25 → 2026-04-26**, newest = `2026-04-26T10:30:31Z` | The ledger is a rolling cap. Newest entry is Apr 26 ⇒ **no reconcile has produced a sync since Apr 26.** Zero `ok=false` rows ever ⇒ **the sync is not failing — it stopped being attempted.** This disproves H2 (a failing `--ff-only` pull would write `ok=false` rows). |
+| Git archaeology around freeze | #2799 (`--depth 1`, Apr 26) + #2802 (`--ff-only`, Apr 26); **the current `workspace-reconcile-on-push` Inngest path was created LATER** — #2854 (Apr 28) + #2891 (webhook emits the event, Apr 30) | The 50 `ok=true` rows were the **legacy** sync path's last day. The current reconcile path went live *after* the freeze and has produced **zero ledger rows of any kind** for this workspace. |
+| Reconcile resolution query, reproduced exactly: `workspaces WHERE github_installation_id=89473706 AND repo_url='https://github.com/jikig-ai/soleur'` | **matches exactly 1 row** — workspace `52af49c2`, `repo_status=connected`; `workspace_members` has the `owner` row | The workspace IS resolvable. The fan-out loop (and `syncWorkspace`) is simply **never reached**. |
+| `workspace-reconcile-on-push.ts:149` short-circuit | `if (isIgnoredReconcileRepo(targetRepoUrl)) return {ok:false, reason:"ignored-internal-repo"}` runs **before** the resolution query | `jikig-ai/soleur` is the default ignore slug (PR #4666). The push is dropped before the matching workspace is ever queried. **Root cause.** |
 
-## User-Brand Impact
+**Why the ledger is silent rather than showing failures:** both `ignored-internal-repo` (line 150) and `no-workspace-match` (line 203) `return` **before** `appendKbSyncRow` is ever called. So this entire class of freeze is invisible in the ledger — which is exactly why it went unnoticed for 5 weeks and why a prior fix (looking at sync mechanics) missed it.
 
-- **If this lands broken, the user experiences:** the KB tree continues to show deleted folders (`design/`) and frozen "5w ago" timestamps — the product's core "your knowledge base, always current" promise is visibly false on every page load. A KB that silently stops reflecting the source repo is indistinguishable from a dead product to a non-technical operator.
-- **If this leaks, the user's data/workflow is exposed via:** no data leak vector (read/write are same-tenant, RLS-scoped). The exposure is **workflow trust**: an operator making decisions off a 5-week-stale KB, and agents reading stale KB context into prompts (the workspace dir feeds both the tree AND agent sessions via `session-sync.ts`).
-- **Brand-survival threshold:** single-user incident — a single operator seeing their KB frozen for 5 weeks is a brand-survival event for a knowledge-base product. CPO sign-off required (see frontmatter).
+## Root Cause
 
-> CPO sign-off required at plan time before `/work` begins. Invoke CPO domain leader if not already covered by Phase 2.5 carry-forward. `user-impact-reviewer` will be invoked at review-time.
+PR #4666 (`fix(reconcile): drop benign no-workspace-match from Sentry + skip internal repos`, merged 2026-05-30) added `jikig-ai/soleur` to `RECONCILE_IGNORED_REPO_SLUGS` to suppress Sentry noise from pushes that match **zero** workspaces. The intent was correct (the platform's own dev repo normally has no customer workspace), but the **short-circuit is placed before workspace resolution** (`workspace-reconcile-on-push.ts:149`). The Soleur founder **dogfoods their own KB from `jikig-ai/soleur`** — they have a real, `connected` workspace on that exact repo. So the ignore gate now drops every push to `jikig-ai/soleur` *before* discovering that a genuine workspace is attached, permanently starving the founder's KB of reconciles.
 
-## Hypotheses
+The Apr 26 freeze onset predates #4666 by a month: the legacy sync path was retired (#2854/#2891, Apr 28–30) and replaced by the new reconcile path, which during Apr 28 → May 30 matched zero workspaces for this repo (workspaces.repo_url was not populated for it until the ADR-044 backfill, #4559, May 25). The ADR-044 backfill *would* have un-frozen it on May 25 — but #4666 landed May 30 and re-blocked it via the ignore gate before a reconcile happened to fire in that window. Net: a real connected workspace has been starved continuously since Apr 26, and is now hard-blocked by the ignore-ordering bug.
 
-> Network/connectivity gate: this plan involves `git pull` over HTTPS to GitHub via installation auth. Per the network-outage checklist, before concluding "sync logic is broken," Phase 0 MUST verify the L3→L7 order: (1) the workspace dir's `git remote -v` resolves and the GitHub App installation token is valid (auth, not firewall — egress to api.github.com is the dependency); (2) `git pull --ff-only` actually executes and returns non-zero vs. silently no-ops. Do NOT propose a logic fix before confirming the pull command runs and its exit status. The `reportSilentFallback` swallow means a 30s timeout or auth-401 looks identical to "nothing to pull" in the current code.
+## Fix
 
-**H2 — Silent non-fast-forward against a SHALLOW clone (deepen-pass prime suspect for solo users).** Provisioning clones `--depth 1` (`workspace.ts:173`). `syncWorkspace` runs `git pull --ff-only` (`kb-route-helpers.ts:304`); `gitWithInstallationAuth` uses `promisify(execFile)` which rejects on non-zero exit, so a failed pull throws and is swallowed by `reportSilentFallback`. A depth-1 tree cannot fast-forward across an upstream rebase/squash/force-push/history-rewrite (the shallow history lacks the merge base) → `--ff-only` aborts → the `design/` delete + 5w of commits never land. Local auto-commits (`session-sync.ts` auto-commits `knowledge-base/`) compound it. Confirm: `git -C <readdir> rev-parse --is-shallow-repository` (expect `true`), `git -C <readdir> status`, `git -C <readdir> log --oneline -5`, then a dry-run `git -C <readdir> pull --ff-only` to observe the non-ff abort. Fix candidates: `git fetch --unshallow` before the ff-only pull, OR re-clone on non-ff. (Note: `syncPull` session path uses `--no-rebase --autostash` and may merge where reconcile/manual `--ff-only` freeze.)
+**(A) Reorder the ignore short-circuit to run AFTER workspace resolution, gated on zero matches** (`workspace-reconcile-on-push.ts`). Pseudocode:
 
-**H1 — Path-resolution divergence (org members only — NOT solo users, per N2).** Read path (`users.workspace_path`) ≠ write path (`<WORKSPACES_ROOT>/<workspace_id>`) ONLY when a member's active workspace ≠ their solo workspace (ADR-044 §49 names exactly this rollback hazard). For solo users, migration 053's `workspaces.id == users.id` backfill makes them the SAME directory. Confirm the affected operator's membership shape FIRST: if solo, deprioritize H1 → pursue H2. If org member, resolve both dirs and `ls` each: the one with `design/` + 5w mtimes is the read dir; the one with current content (if any) is the write dir.
+```
+const rows = (await resolve-workspaces).rows ?? []
+if (rows.length === 0) {
+  if (isIgnoredReconcileRepo(targetRepoUrl)) return { ok:false, reason:"ignored-internal-repo" } // silent, preserves #4666
+  logger.info({ op:"skip-no-workspace-match", ... })                                            // pino-only, preserves #4666
+  return { ok:false, reason:"no-workspace-match" }
+}
+// rows.length > 0: a real workspace is connected — ALWAYS reconcile, even for an "ignored" repo
+```
 
-**H3 — Webhook never dispatched.** The push that deleted `design/` (5w ago) predates the #4224 webhook-reconcile feature (merged later) OR predates ADR-044's v=2 schema. v=1 envelopes drain to `{ok:false}` via the schema-gate (`workspace-reconcile-on-push.ts:123-139`); a push from before the webhook existed never reconciled at all. Confirm: was webhook-reconcile live at the time the operator's last source change landed? If not, only the manual "Sync now" path could recover — test it explicitly.
+This preserves #4666's entire intent — zero-workspace pushes to `jikig-ai/soleur` still skip silently with no Sentry/log noise — while never starving a repo that has a genuinely connected workspace. The extra DB query for ignored repos is one indexed `select id` and only on pushes that currently short-circuit; negligible.
 
-**H4 — `repo_status`/`workspace_status` gate blocks the read.** `/api/kb/tree` 404s if `repo_status === "not_connected"` and 503s if `workspace_status !== "ready"` (`tree/route.ts:17,21`). Stale tree implies the gates pass, so the row IS `ready`/connected — but confirm the row's `repo_url` matches the repo the webhook fires for (ADR-044 `compose-before-normalize` parity, `workspace-reconcile-on-push.ts:144`), else the fan-out matches zero workspaces and silently skips.
+**(B) Make the silent freeze observable (the gap that hid this for 5 weeks).** A repo that has connected workspaces but is on the ignore-list is a *misconfiguration* worth one Sentry breadcrumb (not a flood — it fires at most once per push to such a repo, and after fix (A) the founder's repo is no longer in that state). Emit a `warnSilentFallback`/pino warning when `rows.length > 0 && isIgnoredReconcileRepo(targetRepoUrl)` so an ignore-list that shadows a real workspace can never again be silent. Keep `no-workspace-match` at pino-info per #4666.
+
+**(C) Recover the already-frozen workspace.** Reconcile fix (A) only fixes *go-forward* pushes; the on-disk `52af49c2` workspace still holds the stale tree (deleted `design/`, Apr-26 mtimes). Recovery = dispatch one `platform/workspace.reconcile.requested` event for this installation/repo (the same path a push uses) so the existing reconcile pulls current `main` and the tree refreshes. This MUST be automation, not an operator step (`hr-never-label-any-step-as-manual-without`): trigger it via `inngest.send` from a one-shot event-triggered function (canonical per ADR-033; precedent: the `oneshot-*.ts` functions already registered in `app/api/inngest/route.ts`). If the pull cannot fast-forward the shallow clone (the H2 mechanism — possible but unconfirmed for this dir), the recovery function falls back to `removeWorkspaceDir` + `provisionWorkspaceWithRepo` (re-clone), reusing existing `workspace.ts` helpers; do NOT weaken `session-sync.ts` `ALLOWED_GIT_SUBCOMMANDS`.
+
+## Rejected Hypotheses (from v1/deepen — disproven by Evidence)
+
+- **H1 — read/write path-resolution divergence (ADR-044).** Disproven: the affected operator is solo (workspace id == user id, N2), so read-dir and write-dir are identical. Divergence cannot occur.
+- **H2 — silent non-fast-forward against the `--depth 1` shallow clone.** Disproven: a failing `git pull --ff-only` writes an `ok=false` / `error_class=sync_failed` ledger row. The ledger has **zero** `ok=false` rows. The sync code is never reached, so its git mechanics are irrelevant to this freeze. (Retained as the fallback path inside recovery (C) only.)
+- **H5 — `fullName` omission in the reconcile payload.** Already rejected at deepen; `webhook-push-reconcilable.ts:56` returns all fields. No change.
 
 ## Files to Edit
 
-> Deepen-pass: scope depends on which hypothesis Phase 0 confirms. **If H2 (shallow-clone non-ff) is confirmed** (likely for solo users), the fix centers on `syncWorkspace` (unshallow + recovery + failure classification) — NOT the resolver unification. The resolver work applies ONLY to H1 (org-member divergence). Do NOT over-build; pursue the confirmed hypothesis.
-
-- `apps/web-platform/server/kb-route-helpers.ts` **(H2 — likely the fix)** — `syncWorkspace` (line 293-326) runs only `git pull --ff-only` against a `--depth 1` clone. Add: (a) classify the non-fast-forward failure from git stderr → `ERROR_CLASS_NON_FAST_FORWARD` (already exported, `session-sync.ts:313`) instead of opaque `sync_failed`; (b) on non-ff, `git fetch --unshallow` (idempotent if already complete) then retry `pull --ff-only`, OR trigger re-clone recovery (Phase 3). NOTE: `syncWorkspace` calls `gitWithInstallationAuth` directly (NOT the `session-sync` connected-repo wrapper), so `fetch --unshallow` is reachable here without weakening any allowlist — confirm in Phase 0.
-- `apps/web-platform/server/webhook-push-reconcilable.ts` — **H5 REJECTED, no change.** Verified `:56` returns all required fields (`defaultBranch`, `fullName`) and fail-closes on missing `full_name`. Listed only to record it was checked.
-- `apps/web-platform/server/workspace-resolver.ts` — **no new function needed** (H1 path only). The unified authority is the EXISTING `workspacePathForWorkspaceId(await resolveCurrentWorkspaceId(userId, tenant))` chain (ADR-044 §42 directive). The phantom `resolveWorkspacePath(workspaceId, legacy)` from the v1 plan does not exist — do not introduce it.
-- `apps/web-platform/app/api/kb/tree/route.ts` (line 35) — **H1 only.** Replace inline `path.join(userData.workspace_path, "knowledge-base")` with the resolver chain. Note: route currently uses a SERVICE client; the resolver chain needs a tenant client — auth-context change.
-- `apps/web-platform/app/api/kb/sync/route.ts` (line 116-121) — **H1 only.** Same resolver chain so manual "Sync now" targets the dir the tree reads AND the reconcile writes.
-- `apps/web-platform/server/kb-route-helpers.ts` — `authenticateAndResolveKbPath` (line 131) + `resolveUserKbRoot` (line 275) build `kbRoot` from `users.workspace_path`; route through the resolver chain for H1.
-- `apps/web-platform/server/inngest/functions/workspace-reconcile-on-push.ts` (line 223) — already uses `workspacePathForWorkspaceId(ws.id)` (the ADR-044-correct side). No change for H1; for H2 it inherits the `syncWorkspace` fix automatically.
-- `apps/web-platform/server/session-sync.ts` — `syncPull`/`syncPush` operate on a caller-passed `workspacePath` (agent-runner). Confirm agent-runner (`agent-runner.ts:944`) resolves the same dir post-fix so agents read the tree the user sees.
-
-**Sibling-query sweep result (Phase 0.6, run at deepen — `hr-type-widening-cross-consumer-grep`):** `users.workspace_path` is read at 9 production sites — `kb-route-helpers.ts` (×2), `kb-document-resolver.ts:93` (agent KB read), `kb-share.ts:687/779` (share/preview), `kb/upload/route.ts:76/237`, `kb/tree/route.ts:35`, `kb/sync/route.ts:116`, `agent-runner.ts:936/944`, `attachment-pipeline.ts:133`, `dsar-export.ts:1985`. Per N2 all are CORRECT for solo users today; only org members diverge. Address EACH only if H1 (org-member divergence) is the confirmed root cause — do NOT rewrite all 9 for an H2 (shallow-clone) bug.
+- `apps/web-platform/server/inngest/functions/workspace-reconcile-on-push.ts` — fix (A) reorder; fix (B) shadowed-workspace warning. The `isIgnoredReconcileRepo` / `repoSlug` / `RECONCILE_IGNORED_REPO_SLUGS` helpers are unchanged; only the call-site ordering moves.
+- `apps/web-platform/test/server/inngest/workspace-reconcile-on-push.test.ts` (create or extend) — RED tests, see Test Scenarios.
 
 ## Files to Create
 
-- `apps/web-platform/supabase/migrations/0XX_<reconcile_legacy_workspace_path>.sql` — ONLY if Phase 2 decides on-disk migration of legacy `<root>/<userId>` dirs to `<root>/<workspaceId>` is required. Read the 2-3 most-recent migrations first; this is a data/ops migration, not DDL — it may instead be a one-shot reconcile step in an Inngest function rather than a SQL file. Decide in Phase 2.
-- `apps/web-platform/test/server/kb-sync-path-resolution.test.ts` — RED test asserting tree-read dir === manual-sync dir === reconcile-write dir for both a legacy (`users.workspace_path` set) and an ADR-044 (workspace-id) operator.
+- `apps/web-platform/server/inngest/functions/oneshot-kb-reconcile-recovery.ts` — fix (C) one-shot recovery function (event-triggered, dispatches a reconcile for the stale workspace; self-disabling). Register in `app/api/inngest/route.ts`. Model on the existing `oneshot-4650-monitor-close.ts` pattern. **Only if Phase 0 confirms a plain reconcile does not self-recover the dir** — if dispatching one reconcile event un-freezes it, recovery is just that dispatch + verification, no new file.
 
-## Phase 0 — Confirm root cause on the live affected workspace (READ-ONLY, no prod writes)
+## Phase 0 — Confirm fix sufficiency (READ-ONLY; live diagnosis already done)
 
-> Per `hr-no-dashboard-eyeball-pull-data-yourself` + `hr-dev-prd-distinct-supabase-projects`: use read-only Supabase MCP / `doppler secrets get` probes against the affected operator's row; do NOT run integration suites against prod. All steps here are read-only.
-
-0.0 **H2 shallow-clone check FIRST (cheapest, highest-value).** On the affected operator's read dir: `git -C <readdir> rev-parse --is-shallow-repository` (expect `true`), then a read-only `git -C <readdir> pull --ff-only` to observe the abort. A `fatal: Not possible to fast-forward` confirms H2 — the shallow clone can't fast-forward across the upstream history that deleted `design/`. (H5 — a suspected `fullName` omission — was checked at deepen and REJECTED; `webhook-push-reconcilable.ts:56` returns all fields. Do not re-investigate.)
-0.1 Resolve the affected operator's `users` row: `workspace_path`, `workspace_status`, `repo_status`, `repo_url`, `github_installation_id`, and the matching `workspaces` row (`id`, `repo_url`, `github_installation_id`). **Determine membership shape: solo (workspace_id == user_id, N2) or org member.** If solo, H1 is ruled out (read dir == write dir per migration 053) → focus H2.
-0.2 Compute BOTH candidate dirs: `users.workspace_path` (read path) and `<WORKSPACES_ROOT>/<workspaces.id>` (write path). For solo users these are identical (N2); for org members they may differ. `ls -la` + `git -C <dir> log --oneline -3` on each (read-only). Identify which holds the `design/` folder + 5w mtimes.
-0.3 In the read dir: `git -C <readdir> status`, `git -C <readdir> remote -v`, `--is-shallow-repository`, and a **dry-run** `git -C <readdir> pull --ff-only` to observe whether a fast-forward is even possible — confirms/refutes H2.
-0.4 Verify webhook-reconcile timeline (H3): when did webhook-reconcile (#4224) + ADR-044 v=2 go live vs. the operator's last source push? `gh` / Inngest run history (read-only).
-0.5 **Calibration:** read the actual `workspace-resolver.ts` exports (`workspacePathForWorkspaceId`, `resolveWorkspacePathForUser`, `resolveCurrentWorkspaceId`) — there is NO `resolveWorkspacePath(workspaceId, legacy)` function. Confirm the resolver chain `workspacePathForWorkspaceId(resolveCurrentWorkspaceId(...))` is the ADR-044 §42 directive before any H1 work.
-0.6 Sibling-query sweep: `git grep -n 'workspace_path' apps/web-platform/server apps/web-platform/app | grep -i "join\|knowledge-base"` and `git grep -n 'workspacePathForWorkspaceId\|resolveCurrentWorkspaceId'` — enumerate EVERY path-resolution site (9 known, listed in Files to Edit) so an H1 fix is exhaustive.
-
-## Phase 1 — Make sync failures observable (RED first)
-
-1.1 RED: test that a non-fast-forward `git pull` in `syncWorkspace` produces a distinct `error_class` (not the catch-all `sync_failed`) and a Sentry mirror with the actual git stderr.
-1.2 GREEN: classify the `gitWithInstallationAuth(["pull","--ff-only"])` rejection in `syncWorkspace` (kb-route-helpers.ts:304) — detect non-fast-forward from git stderr; map to `ERROR_CLASS_NON_FAST_FORWARD` (already exported, `session-sync.ts:313`). Today the manual route hard-codes `sync_failed` (`sync/route.ts:138`) precisely because the helper cannot distinguish — close that gap.
-1.3 Ensure the desync chip + reconnect affordance fire correctly (`kb-sync-status.tsx:61`) when `error_class` is non-fast-forward.
-
-## Phase 2 — Unify path resolution (H1 only — org-member divergence)
-
-> Run this phase ONLY if Phase 0 confirms H1 (org member whose active workspace ≠ solo workspace). For a solo operator with H2 confirmed, SKIP to Phase 3 recovery — the read and write dirs already agree per N2.
-
-2.1 The unification target is the EXISTING resolver chain `workspacePathForWorkspaceId(await resolveCurrentWorkspaceId(userId, tenant))` (ADR-044 §42 directive) — NOT a new function. The reconcile already uses `workspacePathForWorkspaceId(ws.id)` (correct side); the KB read endpoints use the `users.workspace_path` denorm cache (the divergent side for org members). Align the read endpoints to the reconcile's authority.
-2.2 RED: `kb-sync-path-resolution.test.ts` asserts tree-read === manual-sync === reconcile dir for (a) a solo operator (N2: already equal) and (b) a non-solo org member whose active workspace ≠ solo workspace.
-2.3 GREEN: route `tree/route.ts` (line 35), `sync/route.ts` (line 116), `kb-route-helpers.ts` (both helpers) through `workspacePathForWorkspaceId(resolveCurrentWorkspaceId(...))`. The reconcile (`workspace-reconcile-on-push.ts:223`) already resolves correctly — no change.
-2.4 Confirm the agent KB read path (`kb-document-resolver.ts:93`) and share path (`kb-share.ts:687`) also align, or document why they may legitimately lag (sibling-query sweep hits).
-
-## Phase 3 — Recover the already-stale workspace (the `design/` folder + frozen tree)
-
-3.1 The affected dir holds stale content (deleted `design/`, frozen mtimes) because the shallow `--ff-only` pull aborted non-fast-forward (H2). A `--ff-only` pull cannot delete `design/` across a diverged/rewritten upstream history on a shallow clone. Recovery options, in preference order: (a) `git fetch --unshallow` then `git pull --ff-only` (reachable from `syncWorkspace` which calls `gitWithInstallationAuth` directly, bypassing the `session-sync` wrapper allowlist); (b) if still non-ff (genuine local divergence), re-provision via teardown + re-clone reusing `removeWorkspaceDir` + `provisionWorkspaceWithRepo` (`workspace.ts`). Do NOT weaken `session-sync.ts` `ALLOWED_GIT_SUBCOMMANDS` (forbids `reset`/`clean`/`checkout` per #2905). Automate the recovery as a one-shot event-triggered Inngest function (canonical per ADR-033, 32 `cron-*.ts` precedents) — do NOT leave "operator re-clones manually" as an output (`hr-never-label-any-step-as-manual-without`).
-3.2 Verify post-recovery: tree no longer shows `design/`, mtimes current, `kb_sync_history` latest row `ok:true`.
-
-## Precedent-Diff (deepen Phase 4.4)
-
-- **Scheduled-work:** reconcile is already an Inngest function (canonical per ADR-033; 32 `cron-*.ts` precedents). Phase 3 recovery, if it needs a one-shot re-clone, is a new event-triggered Inngest function — NOT GH Actions. Re-clone precedent: `provisionWorkspaceWithRepo` + `removeWorkspaceDir` (`workspace.ts`); recovery = teardown + re-provision, no novel pattern.
-- **Path resolution:** ADR-044 §42 (`workspacePathForWorkspaceId(resolveCurrentWorkspaceId(...))`) is the canonical directive; the reconcile already follows it, the KB read endpoints do not. The H1 fix propagates an established pattern — no new pattern.
-- **Failure classification:** `ERROR_CLASS_NON_FAST_FORWARD` already exists/exported (`session-sync.ts:313`) and is consumed by the reconcile; the manual route just never produces it. The fix wires existing constants. No `SECURITY DEFINER`/atomic-write/lock precedent applies (no SQL function or concurrent-write primitive introduced).
+The live diagnosis in Evidence is complete and authoritative. Phase 0 remaining:
+0.1 Re-confirm at /work time (state can move): re-run the reconcile match query (must still return ≥1 row for `52af49c2`) and re-confirm `jikig-ai/soleur ∈ RECONCILE_IGNORED_REPO_SLUGS` default. (Both confirmed 2026-05-31.)
+0.2 Confirm the on-disk dir `/data/workspaces/52af49c2-...` exists and is shallow — informs whether recovery (C) needs the re-clone fallback. **This requires the app host; do NOT SSH** (`hr-no-ssh-fallback-in-runbooks`). Instead: dispatch the recovery reconcile (C) and read the resulting `kb_sync_history` row — `ok=true` ⇒ plain reconcile sufficed; `ok=false error_class=non_fast_forward` ⇒ the re-clone fallback is needed. The ledger is the observability layer; no host access required.
+0.3 Sweep for OTHER ignored repos that shadow a real workspace: `select w.id, w.repo_url from workspaces w where regexp_replace(regexp_replace(w.repo_url,'^https?://[^/]+/',''),'\.git$','') = any(string_to_array('jikig-ai/soleur', ','))`. If any non-founder workspace is also shadowed, fix (A) covers it automatically — note in PR body.
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] **(H2)** `syncWorkspace` classifies a non-fast-forward `git pull --ff-only` failure as `ERROR_CLASS_NON_FAST_FORWARD` (not opaque `sync_failed`) AND attempts shallow→full recovery (`fetch --unshallow` retry, or re-clone); a test drives a shallow-clone-vs-rebased-upstream fixture and asserts the recovery lands the upstream deletion. (RED first.)
-- [ ] The manual `/api/kb/sync` route no longer hard-codes `sync_failed` for every failure (`sync/route.ts:138` gap closed).
-- [ ] **(H1, only if confirmed)** `kb-sync-path-resolution.test.ts` proves tree-read === manual-sync === reconcile dir for (a) a solo operator (N2: already equal) and (b) a non-solo org member whose active workspace ≠ solo workspace.
-- [ ] Sibling-query sweep (Phase 0.6) result pasted into PR body: the 9 `users.workspace_path` read sites are each scoped-in (H1) or scoped-out (N2-correct) with rationale.
-- [ ] PR body uses `Ref #<issue>` (not `Closes`) if recovery of the live workspace is a post-merge operator/automation step; otherwise `Closes`.
+- [ ] **(A)** RED test: a push to an ignored repo (`jikig-ai/soleur`) that HAS ≥1 connected workspace reconciles all matched workspaces (fan-out runs, `appendKbSyncRow` called) — fails on current `main` (short-circuits at `ignored-internal-repo`), passes after the reorder.
+- [ ] **(A)** Regression test: a push to an ignored repo with ZERO connected workspaces still returns `ignored-internal-repo` with NO Sentry mirror and NO `kb_sync_history` row (preserves #4666).
+- [ ] **(A)** Regression test: a push to a non-ignored repo with zero workspaces still returns `no-workspace-match` at pino-info, no Sentry (preserves #4666).
+- [ ] **(B)** A push to an ignored repo that HAS connected workspaces emits exactly one shadowed-workspace warning (assert the mirror/log fires).
+- [ ] Full `workspace-reconcile-on-push` suite green; `./node_modules/.bin/tsc --noEmit` clean in `apps/web-platform`.
+- [ ] PR body uses `Closes #<issue>` if recovery is automated in-PR (fix C ships), else `Ref` + automated post-merge recovery.
 
-### Post-merge (operator / automation)
-- [ ] On the affected workspace, the KB tree shows current content (no `design/` folder), current timestamps, and `kb_sync_history` latest row `ok:true`. **Automation:** prefer a one-shot reconcile Inngest function fired on merge (per Phase 3.1) over an operator step; if genuinely operator-only, justify with `Automation: not feasible because <X>`.
+### Post-merge (automation, not operator)
+- [ ] **(C)** Recovery reconcile dispatched for `52af49c2`; verify via `kb_sync_history`: a new `ok=true` row dated post-merge, and the KB tree (via `/api/kb/tree`) shows **no `design/` folder** and current timestamps. Automated through the one-shot Inngest function / event dispatch — no operator step.
+
+## Observability
+
+```yaml
+liveness_signal:
+  what: kb_sync_history newest row ok:true with sync_completed_at advancing per push to a connected repo
+  cadence: per webhook push (reconcile) + on-demand manual sync
+  alert_target: Sentry (workspace-reconcile-push feature) + Better Stack pino drain
+  configured_in: workspace-reconcile-on-push.ts (appendKbSyncRow), session-sync.ts
+error_reporting:
+  destination: Sentry via reportSilentFallback / warnSilentFallback (feature workspace-reconcile-push)
+  fail_loud: true — shadowed-workspace (ignored repo WITH connected workspaces) now warns (fix B); previously silent
+failure_modes:
+  - mode: ignore-list shadows a real connected workspace (THIS bug)
+    detection: fix (B) warnSilentFallback when rows.length>0 && isIgnoredReconcileRepo
+    alert_route: Sentry breadcrumb + pino
+  - mode: push matches zero workspaces (benign)
+    detection: pino info skip-no-workspace-match (preserved from #4666)
+    alert_route: Better Stack only (intentionally not Sentry per #4666)
+  - mode: sync git failure (non-fast-forward etc.)
+    detection: appendKbSyncRow ok=false error_class in the fan-out loop
+    alert_route: kb_sync_history.error_class → desync chip + Sentry
+logs:
+  where: Better Stack (pino) + Sentry; users.kb_sync_history JSONB (per-operator, rolling cap)
+  retention: Better Stack default; kb_sync_history rolling cap
+discoverability_test:
+  command: "curl -s -H 'cookie: <session>' https://app.soleur.ai/api/kb/tree | jq '.tree.children[].name, .lastSync'"
+  expected_output: "no 'design' entry; lastSync.ok == true with recent sync_completed_at"
+```
+
+## User-Brand Impact
+
+- **If this lands broken, the user experiences:** the KB tree keeps showing a deleted `design/` folder and frozen "5w ago" timestamps — the product's core "your knowledge base, always current" promise is visibly false on every page load, and agents read 5-week-stale KB context into prompts (the workspace dir feeds both the tree and agent sessions).
+- **If this leaks:** no data-leak vector (same-tenant, RLS-scoped). The exposure is workflow trust: decisions and agent context built on a stale KB.
+- **Brand-survival threshold:** single-user incident — the founder's own KB frozen for 5 weeks on a knowledge-base product. CPO sign-off required (frontmatter); `user-impact-reviewer` invoked at review time.
 
 ## Domain Review
 
-**Domains relevant:** Engineering, Product (Product/UX Gate — ADVISORY: no new UI surface, but the KB tree's correctness is the user-facing artifact).
+**Domains relevant:** Engineering (single-domain — one Inngest function + one recovery function). Product/UX: advisory only (no new UI surface; the user-facing artifact is the KB tree reflecting reality, covered by ACs).
 
 ### Engineering
 **Status:** reviewed
-**Assessment:** Deepen-pass re-frame — for solo operators (N2) the core defect is H2 (silent non-fast-forward against a `--depth 1` shallow clone), fixed in `syncWorkspace` with failure classification + unshallow/re-clone recovery. For org members only, H1 (read/write path seam from ADR-044) applies and is fixed by routing KB read endpoints through the existing `workspacePathForWorkspaceId(resolveCurrentWorkspaceId(...))` chain (ADR-044 §42). No on-disk dir migration needed (N2 makes solo dirs already-aligned).
+**Assessment:** Single-domain reconcile-ordering fix. The defect is a short-circuit placed before workspace resolution (PR #4666); the fix reorders it to gate on zero-matches, preserving the Sentry-noise suppression while never starving a connected workspace. Recovery of the already-frozen dir is an event dispatch reusing the existing reconcile path (re-clone fallback via existing `workspace.ts` helpers). No path-resolution change (N2 makes solo dirs aligned), no schema change, no allowlist weakening.
 
 ### Product/UX Gate
 **Tier:** advisory
@@ -153,57 +139,20 @@ If those two paths point at **different directories** for an existing operator (
 **Pencil available:** N/A
 
 #### Findings
-No new interactive surface; the change makes the existing KB tree reflect reality. The user-facing artifact is correctness of the tree + accuracy of the sync chip, covered by ACs.
-
-## Observability
-
-```yaml
-liveness_signal:
-  what: kb_sync_history latest-row ok:true + sync_completed_at advancing per webhook push / manual sync
-  cadence: per push (webhook reconcile) + on-demand (manual sync)
-  alert_target: Sentry (workspace-reconcile-push feature) + Better Stack pino drain
-  configured_in: apps/web-platform/server/session-sync.ts (appendKbSyncRow), workspace-reconcile-on-push.ts
-error_reporting:
-  destination: Sentry via reportSilentFallback (feature kb-route-helpers / workspace-reconcile-push)
-  fail_loud: true — non-fast-forward now classified distinctly (Phase 1.2), no longer swallowed as opaque sync_failed
-failure_modes:
-  - mode: non-fast-forward pull (divergent local working tree)
-    detection: git stderr classification in syncWorkspace
-    alert_route: kb_sync_history.error_class=non_fast_forward → desync chip + Sentry
-  - mode: path-resolution divergence (read dir != write dir)
-    detection: kb-sync-path-resolution.test.ts (regression guard); runtime invariant — resolver is single authority
-    alert_route: compile-time (single resolver) + test
-  - mode: webhook fan-out matches zero workspaces (repo_url parity drift)
-    detection: existing pino info log skip-no-workspace-match (workspace-reconcile-on-push.ts:193)
-    alert_route: Better Stack (intentionally not Sentry per #4666)
-logs:
-  where: Better Stack (pino) + Sentry; kb_sync_history JSONB (per-operator, capped 100)
-  retention: Better Stack default; kb_sync_history last 100 rows
-discoverability_test:
-  command: "curl -s -H 'cookie: <session>' https://app.soleur.ai/api/kb/tree | jq '.tree.children[].name, .lastSync'"
-  expected_output: "no 'design' entry; lastSync.ok == true with recent sync_completed_at"
-```
-
-## Open Code-Review Overlap
-
-None — no open `code-review`-labelled issue names the path-resolution files (tree/route.ts, sync/route.ts, workspace-resolver.ts, kb-route-helpers.ts). (Phase 0.6 sweep will re-confirm against the live issue list at /work time.)
+No new interactive surface; the change makes the existing KB tree reflect reality.
 
 ## Test Scenarios
 
-1. Legacy operator (`users.workspace_path` set): push to source deletes a folder → webhook reconcile pulls into the SAME dir the tree reads → tree reflects the deletion. (Pre-fix: fails — different dirs.)
-2. ADR-044 operator (workspace-id path, no legacy): same push → tree + reconcile agree.
-3. Non-fast-forward: local KB working tree diverged → `syncWorkspace` returns classified non-fast-forward → desync chip shows "Workspace out of sync", not a false "Synced".
-4. Manual "Sync now" pulls into the dir the tree reads (regression guard for the read===sync invariant).
+1. **Ignored repo WITH connected workspace** (the bug): event for `jikig-ai/soleur`, installation 89473706, with a matching `workspaces` row → fan-out reconciles it, `appendKbSyncRow` called. (Pre-fix: returns `ignored-internal-repo`, no sync.)
+2. **Ignored repo with ZERO workspaces** (preserve #4666): event for `jikig-ai/soleur` with no matching workspace → `ignored-internal-repo`, no Sentry, no ledger row.
+3. **Non-ignored repo, zero workspaces** (preserve #4666): → `no-workspace-match` at pino-info, no Sentry.
+4. **Shadowed-workspace warning** (fix B): ignored repo with ≥1 workspace emits exactly one warning mirror.
+5. **Recovery** (fix C): dispatching the recovery event for `52af49c2` produces a fresh `ok=true` ledger row and a tree with no `design/`.
 
 ## Sharp Edges
 
-- A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6. (This plan's section is filled.)
-- **Deepen-verified:** there is NO `resolveWorkspacePath(workspaceId, legacy)` function — the v1 plan invented it. Real exports: `workspacePathForWorkspaceId` (pure, resolver:265), `resolveWorkspacePathForUser` (async, resolver:250), `resolveCurrentWorkspaceId` (resolver:94). Use `workspacePathForWorkspaceId(resolveCurrentWorkspaceId(...))` per ADR-044 §42; do not re-introduce the phantom function at /work.
-- **Deepen-verified:** H5 (suspected `fullName` omission in the reconcile payload) REJECTED — `webhook-push-reconcilable.ts:56` returns all required fields and fail-closes on missing `full_name`. Do not pursue.
-- **Shallow clone (`workspace.ts:173`, `--depth 1`) is the H2 amplifier:** a plain re-pull will NOT remove an upstream-deleted `design/` across a rewritten history without `--unshallow` or re-clone. Phase 3.1 recovery accounts for this.
-- Do NOT weaken `session-sync.ts` `ALLOWED_GIT_SUBCOMMANDS` (forbids `reset`/`clean`/`checkout`) to force-recover a diverged tree — that allowlist exists for #2905's failure class. Recovery of a diverged working tree is a re-provision, not a `git reset`.
-- `git pull --ff-only` cannot delete an upstream-removed folder if local history diverged — Phase 3 recovery must account for this; a plain re-pull will NOT remove `design/` on a diverged tree.
-- The `~5w` window: relative to the 2026-05-31 screenshot, ADR-044 (#4559) merged ~6 days prior, but the operator's last *good* sync was ~5w ago — the freeze likely began BEFORE ADR-044 (candidate: the webhook-reconcile feature #4224 itself, or an earlier shallow-clone non-fast-forward). Phase 0.4 must pin the actual freeze-onset date before attributing causation — do not assume ADR-044 is the sole cause.
-- **Deepen-verified:** the v1 plan cited a non-existent `resolveWorkspacePath(workspaceId, legacyWorkspacePath)` function with a fabricated "doc vs code disagreement." Corrected — real exports are `workspacePathForWorkspaceId` (pure, resolver:265) and `resolveWorkspacePathForUser` (async, resolver:250). Do not re-introduce the phantom function at /work.
-- **Deepen-verified:** H5 (a suspected `fullName` omission in the reconcile payload) was investigated and REJECTED — `webhook-push-reconcilable.ts:56` returns all required fields and fail-closes on missing `full_name`. Do not pursue H5.
-- **Shallow clone is the H2 amplifier:** `workspace.ts:173` clones `--depth 1`; a plain re-pull will NOT remove an upstream-deleted `design/` across a rewritten history without `--unshallow` or re-clone. Recovery must account for this (Phase 3.1).
+- The ignore-list (`RECONCILE_IGNORED_REPO_SLUGS`) is still valuable for *zero-workspace* internal pushes — do NOT delete it; only move WHERE it is evaluated (after resolution, gated on `rows.length===0`).
+- `users.kb_sync_history` short-circuit blindness: `ignored-internal-repo` and `no-workspace-match` write no ledger row by design. Fix (B) adds a Sentry breadcrumb only for the shadowed-workspace case, not for benign zero-workspace skips — keep that distinction or #4666's noise returns.
+- Recovery (C) must be automation, not an operator step (`hr-never-label-any-step-as-manual-without`). The dispatch + ledger-read verification needs no host SSH (`hr-no-ssh-fallback-in-runbooks`).
+- Solo-user N2 invariant (migration 053): workspace id == user id for solo operators, so the founder's read-dir == write-dir. Do not reintroduce H1 path-unification work — it is a no-op for this incident.
+- If Phase 0.3 finds other shadowed workspaces, fix (A) covers them; surface the list in the PR body so the founder knows the blast radius.
