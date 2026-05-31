@@ -6,6 +6,59 @@ brand_survival_threshold: single-user incident
 
 # Plan: Fix Account-Delete Saga Failure at anonymise-action-sends (GDPR Art. 17)
 
+## Implementation Addendum (2026-05-31, /work — migration 087)
+
+The implementation **deviated from the plan's prescribed structural-shape
+mechanism** after pulling authoritative current function bodies from the live
+dev DB (FINDINGS §5.2). Three plan gaps drove the change; the operator
+approved the new mechanism + scope via `AskUserQuestion` (CPO sign-off surface).
+
+1. **Mechanism: uniform `app.worm_bypass` custom GUC, NOT structural-shape.**
+   `anonymise_workspace_members` (a saga-FATAL step the plan's 5-table scope
+   omitted) uses the bypass to suppress two **AFTER side-effect triggers**
+   (`workspace_members_audit`, `byok_delegations_on_member_delete`) so the
+   erasure DELETE creates no new audit/PII rows. Structural-shape detection
+   has no "reject shape" to permit for an AFTER side-effect trigger — it
+   fundamentally cannot express this case. A privilege-free `SET LOCAL
+   app.worm_bypass = 'on'` GUC (checked via `current_setting('app.worm_bypass',
+   true) = 'on'`) is uniform across BEFORE-reject AND AFTER-suppress triggers,
+   needs no superuser (fixes the 42501), and has NO `current_user` dependency
+   (so it is NOT the proven-dead pattern of learning 2026-05-18 — it is that
+   learning's own recommended no-role-check bypass). This avoids the plan's
+   `FOR EACH STATEMENT → FOR EACH ROW` trigger-form change entirely (the GUC
+   check works at statement level).
+
+2. **Scope expanded to the full erasure path** (operator chose "Full saga +
+   DROP NOT NULL"): migration `087_worm_bypass_privilege_independence.sql`
+   converts **7 anonymise RPCs** (action_sends, template_authorizations,
+   workspace_member_actions, workspace_members, byok_delegation_acceptances,
+   byok_delegation_withdrawals, audit_github_token_use) + **8 trigger
+   functions** (6 BEFORE reject/shape + 2 AFTER side-effect). The plan's
+   5-table scope would have left the saga still failing at
+   `anonymise_workspace_members`.
+
+3. **`byok_delegation_acceptances.user_id` DROP NOT NULL** — a REAL, distinct
+   defect (NOT the retracted action_sends one): the column is `NOT NULL` with
+   81 live rows and FK→users ON DELETE RESTRICT, yet the anonymise RPC sets it
+   NULL (23502 on any real row, independent of WORM). Made nullable.
+
+**Deferred** (operator choice, non-erasure paths): `purge_workspace_member_actions`
++ `revoke_template_authorization` still use `session_replication_role` →
+tracking issue #4702. **Already fixed upstream**: the FINDINGS §1b observability
+defect (PostgREST `pg_code` not captured) landed via #4695 (`observability.ts`
+extracts `pg_code` as a Sentry tag) — no work needed.
+
+**Verification**: transactional dev validation (BEGIN…assert…ROLLBACK, never
+committed) proved each RPC succeeds without `session_replication_role`, WORM
+still rejects ordinary UPDATE/DELETE (P0001), DROP NOT NULL lets the byok
+anonymise null a real row, idempotent re-run = 0, the GUC re-arms after the RPC
+(no leak), and the AFTER-trigger suppression creates 0 new audit rows on a
+3-row workspace_members DELETE. The 42501 cannot reproduce on dev (dev's
+`postgres` holds the `session_replication_role` grant; prod's does not — this
+matches the FINDINGS and is itself the root-cause confirmation). Regression
+guard: `test/supabase-migrations/087-worm-bypass-privilege-independence.test.ts`
+(no-DB, default CI) + extended `action-sends-worm.test.ts` (h.2/h.3).
+
 ## Enhancement Summary
 **Deepened on:** 2026-05-30
 **Key corrections during deepen (load-bearing):**

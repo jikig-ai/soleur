@@ -13,7 +13,11 @@
  *       (DB CHECK enum-absence regex; defense-in-depth per Arch F3)
  *   (h) anonymise_action_sends(uuid) → action_sends.user_id IS NULL +
  *       recipient_id_hash '__anonymised__' (Art-17 erasure; cascade
- *       integration covered by account-delete-scope-grants-cascade.test.ts)
+ *       integration covered by account-delete-scope-grants-cascade.test.ts).
+ *       (h.2) idempotent re-run → 0 rows. (h.3) WORM re-armed after the RPC
+ *       (the app.worm_bypass GUC must not leak) — migration 087 (#4696)
+ *       replaced the superuser-only session_replication_role bypass that
+ *       raised 42501 on managed Supabase (Sentry WEB-PLATFORM-13).
  *   (i) Cross-tenant SELECT → 0 rows (RLS owner-select)
  *
  * Opt-in via TENANT_INTEGRATION_TEST=1. Requires `doppler run -p soleur -c dev`.
@@ -408,6 +412,31 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(afterRows?.length).toBe(1);
       expect(afterRows![0].user_id, "user_id zeroed").toBeNull();
       expect(afterRows![0].recipient_id_hash, "recipient_id_hash overwritten").toBe("__anonymised__");
+
+      // (h.2) Idempotent re-run: the WHERE user_id = p_user_id clause matches
+      // nothing on a second pass, so 0 additional rows are anonymised. Guards
+      // the saga's recoverability invariant (a re-run after a partial failure
+      // is safe). Migration 087 (#4696).
+      const { data: secondRun, error: secondErr } = await service.rpc(
+        "anonymise_action_sends",
+        { p_user_id: u.id },
+      );
+      expect(secondErr, "idempotent re-run RPC").toBeNull();
+      expect(secondRun as unknown as number).toBe(0);
+
+      // (h.3) WORM is re-armed after the RPC: the app.worm_bypass GUC is
+      // SET LOCAL (transaction-scoped) and reset to 'off' inside the RPC, so a
+      // subsequent bare UPDATE must still be rejected with P0001 — the bypass
+      // must not leak. Migration 087 replaced the superuser-only
+      // session_replication_role bypass (which raised 42501 on managed
+      // Supabase — Sentry WEB-PLATFORM-13) with this privilege-free GUC.
+      const { error: rearmErr } = await service
+        .from("action_sends")
+        .update({ recipient_id_hash: sha256("post-anonymise-rewrite") })
+        .eq("message_id", msg.id);
+      expect(rearmErr, "WORM re-armed after anonymise").not.toBeNull();
+      expect(rearmErr!.code).toBe("P0001");
+      expect(rearmErr!.message).toMatch(/append-only|WORM/i);
 
       // Best-effort cleanup of the throwaway user — independent of the
       // assertion under test. Cascade-ordering owned by
