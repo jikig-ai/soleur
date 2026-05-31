@@ -174,19 +174,18 @@ required at plan time; `user-impact-reviewer` runs at review-time.
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] `088_worm_bypass_non_erasure_rpcs.sql` exists; `grep -c session_replication_role` on it returns `0`.
-- [ ] `grep -c "SET LOCAL app.worm_bypass = 'on'"` on the forward migration returns `2` (one per RPC).
-- [ ] `grep -c "SET LOCAL app.worm_bypass = 'off'"` on the forward migration returns `2`.
-- [ ] Each RPC block retains `SET search_path = public, pg_temp` (asserted by the test's per-RPC `search_path` check).
-- [ ] `revoke_template_authorization` body still contains the 8-value `p_reason` enum gate and the
-      `auth.uid() IS NOT NULL AND p_reason <> 'founder_revoked'` founder-attribution gate (diff shows
-      only the two bypass lines + comment changed vs. mig 053 body).
-- [ ] `purge_workspace_member_actions` body still contains the `created_at < now() - interval '7 years'`
-      DELETE and the `RAISE LOG 'audit_retention_purge …'` line.
-- [ ] `088_…down.sql` exists; `grep -c session_replication_role` returns `≥ 2` (both RPCs restored).
-- [ ] New test file `088-worm-bypass-non-erasure-rpcs.test.ts` passes; the list↔migration reconciliation
+- [x] `088_worm_bypass_non_erasure_rpcs.sql` exists; comment-stripped executable references `session_replication_role` `0` times (test-pinned).
+- [x] Forward migration sets `SET LOCAL app.worm_bypass = 'on'` once per RPC (test-pinned per-RPC fnBlock).
+- [x] Forward migration sets `SET LOCAL app.worm_bypass = 'off'` (re-arm) once per RPC (test-pinned).
+- [x] Each RPC block retains `SET search_path = public, pg_temp` (asserted by the test's per-RPC `search_path` check).
+- [x] `revoke_template_authorization` body still contains the 8-value `p_reason` enum gate and the
+      `auth.uid() IS NOT NULL AND p_reason <> 'founder_revoked'` founder-attribution gate (test-pinned content gate; copied verbatim from mig 053 modulo the two bypass lines + comment).
+- [x] `purge_workspace_member_actions` body still contains the `created_at < now() - interval '7 years'`
+      DELETE and the `RAISE LOG 'audit_retention_purge …'` line (test-pinned content gate).
+- [x] `088_…down.sql` exists; `grep -c session_replication_role` returns `8` (both RPCs restored).
+- [x] New test file `088-worm-bypass-non-erasure-rpcs.test.ts` passes; the list↔migration reconciliation
       test reports zero uncovered functions.
-- [ ] 087 test still passes (no regression on the shared trigger functions / shared assertions).
+- [x] 087 test still passes (45 tests; no regression on the shared trigger functions / shared assertions).
 - [ ] PR body uses `Closes #4702`.
 
 ### Post-merge (operator)
