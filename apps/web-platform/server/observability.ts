@@ -2,6 +2,7 @@ import { createHash, createHmac } from "node:crypto";
 import * as Sentry from "@sentry/nextjs";
 import logger from "@/server/logger";
 import { renameUserIdToHash } from "@/server/userid-pseudonymize";
+import { sqlStateFromError } from "@/lib/postgres-errors";
 
 const SENTRY_USERID_PEPPER = process.env.SENTRY_USERID_PEPPER;
 
@@ -176,6 +177,14 @@ export function reportSilentFallback(
   if (op) tags.op = op;
   if (art33Breach) tags.art_33_breach = "true";
 
+  // Surface a PostgREST/Postgres SQLSTATE (e.g. 42501 insufficient_privilege,
+  // 23505 unique_violation) as a queryable `pg_code` tag so on-call can search
+  // `pg_code:<sqlstate>` in Sentry instead of reasoning from the wrapper string
+  // alone (#4695). Only the code is extracted — `details`/`hint` may embed row
+  // values (PII); see sqlStateFromError. No-op for non-Postgres errors.
+  const pgCode = sqlStateFromError(err);
+  if (pgCode) tags.pg_code = pgCode;
+
   // Pseudonymize `userId` → `userIdHash` (Recital 26) at the emit boundary.
   // Centralized here so the 40+ call sites continue passing raw `userId` and
   // never need to know about the rename. Renamed (not value-swapped) so log
@@ -223,6 +232,14 @@ export function warnSilentFallback(
   const tags: Record<string, string> = { feature };
   if (op) tags.op = op;
   if (art33Breach) tags.art_33_breach = "true";
+
+  // Surface a PostgREST/Postgres SQLSTATE (e.g. 42501 insufficient_privilege,
+  // 23505 unique_violation) as a queryable `pg_code` tag so on-call can search
+  // `pg_code:<sqlstate>` in Sentry instead of reasoning from the wrapper string
+  // alone (#4695). Only the code is extracted — `details`/`hint` may embed row
+  // values (PII); see sqlStateFromError. No-op for non-Postgres errors.
+  const pgCode = sqlStateFromError(err);
+  if (pgCode) tags.pg_code = pgCode;
 
   // Pseudonymize `userId` → `userIdHash` at the emit boundary (see
   // reportSilentFallback for rationale).

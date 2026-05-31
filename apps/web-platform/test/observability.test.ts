@@ -148,7 +148,8 @@ describe("reportSilentFallback — userIdHash pseudonymization", () => {
     const [msg, payload] = mockCaptureMessage.mock.calls[0];
     expect(msg).toBe("kb-share silent fallback");
     expect(payload.level).toBe("error");
-    expect(payload.tags).toEqual({ feature: "kb-share", op: "create" });
+    // SQLSTATE 23505 (unique_violation) surfaces as the `pg_code` tag (#4695).
+    expect(payload.tags).toEqual({ feature: "kb-share", op: "create", pg_code: "23505" });
     expect(payload.extra).toEqual({
       err: pgError,
       userIdHash: expectedHashFor("u1"),
@@ -224,6 +225,101 @@ describe("reportSilentFallback — userIdHash pseudonymization", () => {
   });
 });
 
+describe("reportSilentFallback — pg_code SQLSTATE tagging (#4695)", () => {
+  it("surfaces SQLSTATE as the pg_code tag on the non-Error → captureMessage path", () => {
+    // The account-delete erasure path: anonymise_action_sends RPC returns a
+    // PostgrestError ({ message, details, hint, code }), not an Error instance.
+    const pgErr = {
+      message: 'permission denied to set parameter "session_replication_role"',
+      details: null,
+      hint: null,
+      code: "42501",
+    };
+    reportSilentFallback(pgErr, {
+      feature: "account-delete",
+      op: "anonymise-action-sends",
+      extra: { userId: "u1" },
+      message: "anonymise_action_sends failed — aborting deletion to avoid FK-block",
+    });
+
+    const [, payload] = mockCaptureMessage.mock.calls[0];
+    expect(payload.tags).toEqual({
+      feature: "account-delete",
+      op: "anonymise-action-sends",
+      pg_code: "42501",
+    });
+  });
+
+  it("surfaces SQLSTATE as the pg_code tag on the Error → captureException path", () => {
+    // node-postgres / thrown-PostgrestError shape: a real Error carrying `code`.
+    const err = Object.assign(
+      new Error("permission denied to set parameter"),
+      { code: "42501", details: "secret-row-value", hint: "do not leak me" },
+    );
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-action-sends",
+      extra: { userId: "u1" },
+    });
+
+    const [errArg, payload] = mockCaptureException.mock.calls[0];
+    expect(errArg).toBe(err);
+    expect(payload.tags).toEqual({
+      feature: "account-delete",
+      op: "anonymise-action-sends",
+      pg_code: "42501",
+    });
+  });
+
+  it("never leaks details/hint (potential row values) into tags or extra", () => {
+    // PII guard (#4695 acceptance #3): Postgres embeds row values in `details`
+    // for constraint violations — only the SQLSTATE code is PII-free, so only
+    // the code is surfaced. details/hint must appear in NEITHER tags nor extra.
+    const err = Object.assign(new Error("unique violation"), {
+      code: "23505",
+      details: "Key (email)=(alice@example.com) already exists.",
+      hint: "some hint that might carry an identifier",
+    });
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-scope-grants",
+      extra: { userId: "u1" },
+    });
+
+    const [, payload] = mockCaptureException.mock.calls[0];
+    const tagValues = JSON.stringify(payload.tags);
+    const extraValues = JSON.stringify(payload.extra);
+    expect(tagValues).not.toContain("alice@example.com");
+    expect(tagValues).not.toContain("Key (email)");
+    expect(tagValues).not.toContain("some hint");
+    expect(extraValues).not.toContain("alice@example.com");
+    expect(extraValues).not.toContain("Key (email)");
+    expect(extraValues).not.toContain("some hint");
+    expect(payload.tags).not.toHaveProperty("pg_details");
+    expect(payload.tags).not.toHaveProperty("pg_hint");
+    expect(payload.extra).not.toHaveProperty("pg_details");
+    expect(payload.extra).not.toHaveProperty("pg_hint");
+  });
+
+  it("does NOT add pg_code when the error is not a Postgres error (Node errno)", () => {
+    // An ENOENT on an optional mount must not be mis-tagged as a DB failure.
+    const err = Object.assign(new Error("no such file"), { code: "ENOENT" });
+    reportSilentFallback(err, { feature: "kb-share", op: "read" });
+
+    const [, payload] = mockCaptureException.mock.calls[0];
+    expect(payload.tags).toEqual({ feature: "kb-share", op: "read" });
+    expect(payload.tags).not.toHaveProperty("pg_code");
+  });
+
+  it("does NOT add pg_code when the error carries no code at all", () => {
+    const err = new Error("plain error");
+    reportSilentFallback(err, { feature: "kb-share" });
+
+    const [, payload] = mockCaptureException.mock.calls[0];
+    expect(payload.tags).toEqual({ feature: "kb-share" });
+  });
+});
+
 describe("warnSilentFallback — userIdHash pseudonymization", () => {
   it("hashes userId on the Error → captureException(level=warning) path", () => {
     const err = new Error("timeout");
@@ -274,6 +370,18 @@ describe("warnSilentFallback — userIdHash pseudonymization", () => {
       level: "warning",
       tags: { feature: "noop" },
       extra: { other: "value" },
+    });
+  });
+
+  it("surfaces SQLSTATE as the pg_code tag (#4695)", () => {
+    const err = Object.assign(new Error("lock not available"), { code: "55P03" });
+    warnSilentFallback(err, { feature: "concurrency", op: "acquire-slot" });
+
+    const [, payload] = mockCaptureException.mock.calls[0];
+    expect(payload.tags).toEqual({
+      feature: "concurrency",
+      op: "acquire-slot",
+      pg_code: "55P03",
     });
   });
 });
