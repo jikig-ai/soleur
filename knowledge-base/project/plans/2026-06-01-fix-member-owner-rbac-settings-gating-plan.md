@@ -12,6 +12,39 @@ labels: [bug, type/security, domain/engineering, priority/p1-high]
 
 # 🐛 fix: Member vs Owner RBAC — gate owner-only actions in the Settings UI
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-01
+**Sections enhanced:** Overview, Research Reconciliation, Acceptance Criteria (AC5/AC6 tightened), Implementation Phases, Precedent Diff (new)
+**Research method:** Direct grep/Read verification (Task subagents unavailable in this
+environment; per-section research agents and multi-agent review substituted with
+deterministic codebase probes).
+
+### Key Improvements
+
+1. **All cited file:line references verified live** against the worktree
+   (`team/page.tsx:34-36/:68`, `team-membership-list.tsx:195/:207-213`,
+   `invite-member/route.ts:63-66`, `remove-member/route.ts:54-57`,
+   `delegation-toggle.tsx:52`, `vitest.config.ts:60`) — all accurate.
+2. **AC6 negative claim proven:** `git grep -nw inviteWorkspaceMember` (excl. tests +
+   definition) returns **zero** production callers → the legacy direct-RPC invite path
+   is confirmed dead code; the real path is `createWorkspaceInvitation` (which DOES pass
+   `p_caller_user_id`). Recorded as a confirmed finding, not a hypothesis.
+3. **AC5 tightened** to avoid a brittle aggregate: `invite-member/route.ts` legitimately
+   contains TWO `role !== "owner"` occurrences (caller-owner gate at `:64` + body role
+   validation `role !== "owner" && role !== "member"` at `:52`). AC5 now asserts the
+   caller-owner gate line in each route is unchanged, not a raw count.
+4. **Precedent-diff added** — the `isOwner` gating convention has 3 in-repo precedents to
+   copy verbatim.
+
+### New Considerations Discovered
+
+- The 403 client UX is poor (`window.alert("Failed …")` / `console.error`) — but since
+  Members will no longer reach those buttons after this fix, improving the alert copy is
+  explicitly out of scope (no Member path reaches it).
+- The empty-state CTA ("Invite a teammate …", `team/page.tsx:87-92`) is shown to solo
+  Members too — folded into Phase 2 as an optional `isOwner` gate.
+
 ## Overview
 
 **Reported symptom:** Member `jean.deruelle@gmail.com` appears to have the same
@@ -130,12 +163,16 @@ review time per the review skill's conditional-agent block.
   `test/team-membership-list.test.tsx` (`:78` "non-self row exposes kebab menu with
   Remove action", `:64` AC-FLOW4 self-row no-kebab) still pass unchanged; Owner sees
   invite + remove + transfer.
-- [ ] **AC5 (server gates intact):** No deletion of the `callerRow.role !== "owner"`
-  checks in `invite-member/route.ts:63`, `remove-member/route.ts:54`,
-  `transfer-ownership/route.ts:62`, `cancel-invite/route.ts:56`, `delegations/route.ts:75`.
-  `grep -c 'role !== "owner"'` across these five routes is unchanged (defense-in-depth
-  retained).
-- [ ] **AC6 (latent-path audit):** `git grep -n "inviteWorkspaceMember\b" apps/web-platform --` (excluding tests + the definition) returns zero production callers → confirmed unused; record finding. If any caller exists, add the owner-check there too (in scope) OR file a follow-up (see Non-Goals).
+- [ ] **AC5 (server gates intact):** The caller-owner gate
+  (`if (!callerRow || callerRow.role !== "owner") return 403`) is preserved verbatim in
+  `invite-member/route.ts:63-66`, `remove-member/route.ts:54-57`,
+  `transfer-ownership/route.ts:61-63`, `cancel-invite/route.ts:56-58`, and the
+  membership gate in `delegations/route.ts:75-76`. **Note:** `invite-member/route.ts`
+  contains TWO `role !== "owner"` matches (the caller gate AND the body validation
+  `role !== "owner" && role !== "member"` at `:52`) — assert the *caller gate line*
+  is intact, do NOT rely on a raw `grep -c` count (verified at deepen time). No server
+  gate is removed on the theory that the UI now hides the control.
+- [ ] **AC6 (latent-path audit — VERIFIED at deepen):** `git grep -nw "inviteWorkspaceMember" apps/web-platform` (excluding `*.test.*` and the `workspace-membership.ts:79` definition) returns **zero** production callers — confirmed dead code at deepen time. Record this finding in the PR body. If `/work` re-runs the grep and finds a NEW caller (introduced since), add the owner-check at that caller (in scope) OR file the follow-up in Non-Goals.
 - [ ] **AC7 (tests run under the right runner + path):** New/changed tests live under
   `apps/web-platform/test/**/*.test.tsx` (vitest jsdom project; `vitest.config.ts:60`
   `include: ["test/**/*.test.tsx"]`) — NOT co-located. Run with
@@ -332,6 +369,30 @@ discoverability_test:
 | Delegation toggle | Member | Toggle hidden (already correct — regression-lock) |
 | API: POST invite-member as Member | Member | 403 `not_owner` (server gate retained) |
 | API: POST remove-member as Member | Member | 403 `not_owner` (server gate retained) |
+
+## Precedent Diff (isOwner UI-gating convention)
+
+This fix is **not novel** — it copies an established in-repo convention. The gap exists
+only because two controls escaped it. Precedents to mirror verbatim (verified at deepen):
+
+| Precedent (correct today) | Pattern | Apply to (this fix) |
+| --- | --- | --- |
+| `pending-invites-list.tsx:116` | `{isOwner && (<button>Revoke…</button>)}` — wrap the owner-only button in an `isOwner &&` guard | "Remove member" button (`team-membership-list.tsx:207`) |
+| `delegation-toggle.tsx:52` | `if (!isOwner || isSelf) return <span className="w-20" />;` — early-return null/spacer for non-owners | `invite-member-action.tsx` (`if (!isOwner) return null;`) |
+| `team-membership-list.tsx:195` | `{isOwner && member.role !== "owner" && (...)}` — "Transfer ownership" already gated (sibling of the ungated Remove button in the SAME menu) | direct sibling — the cleanest fix gates `showActions` so the whole kebab is owner-only |
+
+**Risk if not mirrored:** divergent gating styles (some `return null`, some `&&` wrap,
+some spacer) make future audits harder. Mirror the closest sibling per control.
+
+## Risks & Mitigations
+
+| Risk | Mitigation |
+| --- | --- |
+| Over-gating hides controls from a legitimate Owner | AC4 pins existing `isOwner={true}` tests; manual QA as Owner |
+| Removing server 403 gate "because UI hides it now" | AC5 asserts caller-owner gate lines preserved verbatim |
+| New test co-located under `components/**` → silently never run | AC7 + Sharp Edges: tests under `test/**/*.test.tsx` only |
+| Future caller of dead `inviteWorkspaceMember` bypasses owner-check | AC6 re-runs the grep at `/work`; follow-up to delete or fix the legacy fn |
+| Gating `billing` (report's literal ask) would lock a Member out of their OWN subscription | Decision #1: billing is personal today; do NOT gate without CPO/CFO sign-off |
 
 ## Sharp Edges
 

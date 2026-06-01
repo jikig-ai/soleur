@@ -31,8 +31,8 @@ plan: knowledge-base/project/plans/2026-06-01-fix-member-owner-rbac-settings-gat
 
 ## Phase 3 — Defense-in-depth verification (no code change)
 
-- [ ] 3.1 Re-grep AC5 server gates in the five routes — confirm untouched.
-- [ ] 3.2 Record AC6 finding (legacy `inviteWorkspaceMember` caller audit).
+- [ ] 3.1 Confirm caller-owner gate LINE preserved verbatim in the 5 routes (do NOT use raw `grep -c` — invite-member has 2 `role !== "owner"` matches: caller gate + body validation).
+- [ ] 3.2 Record AC6 finding in PR body: `inviteWorkspaceMember` had ZERO production callers at deepen time (verified `git grep -nw`, excl tests + def). Re-run at /work to catch any newly-introduced caller.
 
 ## Phase 4 — Optional copy reconciliation (gated by Decision #1)
 
