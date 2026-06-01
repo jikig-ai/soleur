@@ -300,11 +300,17 @@ OR treat fs existence as readiness. Decide in Phase 0. Either preserves the exis
   `current_workspace_id` is the shared workspace returns **200** with the shared
   workspace's tree (not 404). Verified by `kb-active-workspace-scoping.test.ts` and
   Playwright network capture.
-- AC2: `GET /api/kb/content/[...path]`, `/api/kb/file/[...path]`, `/api/kb/search` for the
-  same member return the shared workspace's content (not 404). All four KB read routes are
-  swept — grep proof: `git grep -n 'from("users")' apps/web-platform/app/api/kb/` returns
-  zero caller-id-scoped `workspace_path`/`repo_status` reads after the cutover (or each
-  remaining one is annotated as intentionally solo-scoped).
+- AC2: `GET /api/kb/content/[...path]` (+HEAD) and `/api/kb/search` for the same member
+  return the shared workspace's content (not 404). The **read** routes (`tree`, `content`,
+  `search`) are swept via `resolveActiveWorkspaceKbRoot`. **SCOPE RECONCILIATION (review
+  finding):** `kb/file/[...path]` is **write-only** (PATCH/DELETE, no GET) and resolves via
+  the shared `kb-route-helpers` (`authenticateAndResolveKbPath`); together with `kb/upload`,
+  `kb/share`, and `kb/sync` it crosses the `github_installation_id` credential boundary and
+  is **deferred to #4755** (Q2) — NOT swept in this PR. So `git grep -n 'from("users")'
+  apps/web-platform/app/api/kb/` intentionally still returns caller-id-scoped reads in
+  `kb/tree` (solo-only `kb_sync_history`/`github_installation_id`, guarded by
+  `activeWorkspaceId === user.id`) and `kb/sync` (deferred write path). Member KB *viewing*
+  is fully fixed; member *write/share/sync* fails closed (400/503) until #4755.
 - AC3: A null/absent `current_workspace_id` claim resolves to the caller's solo workspace
   (`= userId`); a claim pointing at a workspace the caller is NOT a member of resolves to
   solo (never the sibling). Unit-tested (IDOR / cross-tenant guard).

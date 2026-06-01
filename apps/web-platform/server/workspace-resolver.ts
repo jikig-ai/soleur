@@ -259,6 +259,15 @@ interface WorkspaceRepoRow {
   organization_id: string | null;
 }
 
+// Shared shape for the single-row reads this resolver issues (collapses the
+// four otherwise-identical inline `& PromiseLike<...>` chain casts). Mirrors
+// the structural-mock convention the rest of this file uses (SupabaseLike).
+type MaybeSingleChain<T> = {
+  select: (cols: string) => MaybeSingleChain<T>;
+  eq: (col: string, val: string) => MaybeSingleChain<T>;
+  maybeSingle: () => MaybeSingleChain<T>;
+} & PromiseLike<{ data: T | null; error: unknown }>;
+
 export async function resolveActiveWorkspaceKbRoot(
   userId: string,
   supabase: SupabaseLike,
@@ -271,12 +280,9 @@ export async function resolveActiveWorkspaceKbRoot(
   //    active-repo route's corrective set_current_workspace_id write is for the
   //    badge; a GET must stay side-effect-free).
   if (activeWorkspaceId !== userId) {
-    type MemberChain = {
-      select: (cols: string) => MemberChain;
-      eq: (col: string, val: string) => MemberChain;
-      maybeSingle: () => MemberChain;
-    } & PromiseLike<{ data: { user_id: string } | null; error: unknown }>;
-    const memberChain = supabase.from("workspace_members") as MemberChain;
+    const memberChain = supabase.from("workspace_members") as MaybeSingleChain<{
+      user_id: string;
+    }>;
     const membership = await awaitChain<{
       data: { user_id: string } | null;
       error: unknown;
@@ -287,6 +293,17 @@ export async function resolveActiveWorkspaceKbRoot(
         .eq("user_id", userId)
         .maybeSingle(),
     );
+    // A transient probe error must page (cq-silent-fallback-must-mirror-to-sentry,
+    // matching the sibling resolvers in this file) — but it still fails CLOSED to
+    // solo, never the sibling. A clean `!membership.data` is the legitimate
+    // non-member case (no mirror).
+    if (membership.error) {
+      reportSilentFallback(membership.error, {
+        feature: "workspace-resolver",
+        op: "resolveActiveWorkspaceKbRoot.membership-probe",
+        extra: { userId, activeWorkspaceId },
+      });
+    }
     if (membership.error || !membership.data) {
       activeWorkspaceId = userId; // never the sibling
     }
@@ -294,18 +311,23 @@ export async function resolveActiveWorkspaceKbRoot(
 
   // 3. Connectivity gate — read the SOURCE OF TRUTH (`workspaces`), not
   //    `users.repo_status` (ADR-044 relocated repo state to `workspaces`).
-  type WsChain = {
-    select: (cols: string) => WsChain;
-    eq: (col: string, val: string) => WsChain;
-    maybeSingle: () => WsChain;
-  } & PromiseLike<{ data: WorkspaceRepoRow | null; error: unknown }>;
-  const wsChain = supabase.from("workspaces") as WsChain;
+  const wsChain = supabase.from("workspaces") as MaybeSingleChain<WorkspaceRepoRow>;
   const wsResult = await awaitChain<{ data: WorkspaceRepoRow | null; error: unknown }>(
     wsChain
       .select("repo_status, organization_id")
       .eq("id", activeWorkspaceId)
       .maybeSingle(),
   );
+  // A query error degrades to 404 ("No Project Connected") — mirror it so a
+  // recurring workspaces-read failure on this brand-survival read path is
+  // visible, not an invisible bare-404 (cq-silent-fallback-must-mirror-to-sentry).
+  if (wsResult.error) {
+    reportSilentFallback(wsResult.error, {
+      feature: "workspace-resolver",
+      op: "resolveActiveWorkspaceKbRoot.workspaces-read",
+      extra: { userId, activeWorkspaceId },
+    });
+  }
   const repoStatus = wsResult.data?.repo_status ?? null;
   if (wsResult.error || !repoStatus || repoStatus === "not_connected") {
     return { ok: false, status: 404 };
@@ -318,32 +340,40 @@ export async function resolveActiveWorkspaceKbRoot(
   if (activeWorkspaceId !== userId) {
     const orgId = wsResult.data?.organization_id ?? null;
     if (!orgId) return { ok: false, status: 503 };
-    type OrgChain = {
-      select: (cols: string) => OrgChain;
-      eq: (col: string, val: string) => OrgChain;
-      maybeSingle: () => OrgChain;
-    } & PromiseLike<{ data: { owner_user_id: string } | null; error: unknown }>;
-    const orgChain = supabase.from("organizations") as OrgChain;
+    const orgChain = supabase.from("organizations") as MaybeSingleChain<{
+      owner_user_id: string;
+    }>;
     const orgResult = await awaitChain<{
       data: { owner_user_id: string } | null;
       error: unknown;
     }>(orgChain.select("owner_user_id").eq("id", orgId).maybeSingle());
+    if (orgResult.error) {
+      reportSilentFallback(orgResult.error, {
+        feature: "workspace-resolver",
+        op: "resolveActiveWorkspaceKbRoot.organizations-read",
+        extra: { userId, activeWorkspaceId },
+      });
+    }
     if (orgResult.error || !orgResult.data?.owner_user_id) {
       return { ok: false, status: 503 };
     }
     ownerId = orgResult.data.owner_user_id;
   }
 
-  type UserChain = {
-    select: (cols: string) => UserChain;
-    eq: (col: string, val: string) => UserChain;
-    maybeSingle: () => UserChain;
-  } & PromiseLike<{ data: { workspace_status: string | null } | null; error: unknown }>;
-  const userChain = supabase.from("users") as UserChain;
+  const userChain = supabase.from("users") as MaybeSingleChain<{
+    workspace_status: string | null;
+  }>;
   const ownerResult = await awaitChain<{
     data: { workspace_status: string | null } | null;
     error: unknown;
   }>(userChain.select("workspace_status").eq("id", ownerId).maybeSingle());
+  if (ownerResult.error) {
+    reportSilentFallback(ownerResult.error, {
+      feature: "workspace-resolver",
+      op: "resolveActiveWorkspaceKbRoot.owner-readiness-read",
+      extra: { userId, activeWorkspaceId, ownerId },
+    });
+  }
   if (ownerResult.error || ownerResult.data?.workspace_status !== "ready") {
     return { ok: false, status: 503 };
   }

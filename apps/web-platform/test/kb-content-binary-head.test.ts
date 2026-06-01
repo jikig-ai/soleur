@@ -2,6 +2,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
+import { kbSoloActiveWorkspaceChain } from "./helpers/mock-supabase";
 
 const { mockGetUser, mockFrom } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
@@ -28,26 +29,8 @@ let tmpWorkspace: string;
 let kbRoot: string;
 
 // ADR-044 (#4543): see kb-content-binary.test.ts — the route resolves the
-// active workspace (solo owner == caller) and derives the fs dir from the id.
-function mockQueryBuilder(data: Record<string, unknown> = {}, error: unknown = null) {
-  const merged = {
-    current_workspace_id: null,
-    repo_status: "ready",
-    organization_id: "user-1",
-    workspace_status: "ready",
-    ...data,
-  };
-  const term = {
-    then: (fn: (v: unknown) => unknown) =>
-      Promise.resolve({ data: error ? null : merged, error }).then(fn),
-  };
-  return {
-    select: vi.fn().mockReturnThis(),
-    eq: vi.fn().mockReturnThis(),
-    single: vi.fn().mockReturnValue(term),
-    maybeSingle: vi.fn().mockReturnValue(term),
-  };
-}
+// active workspace (solo owner == caller) via the shared helper.
+const mockQueryBuilder = kbSoloActiveWorkspaceChain;
 
 function buildRequest(pathStr: string, headers: Record<string, string> = {}): Request {
   return new Request(`http://localhost:3000/api/kb/content/${pathStr}`, {

@@ -2,6 +2,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
+import { kbSoloActiveWorkspaceChain } from "./helpers/mock-supabase";
 
 // ---------------------------------------------------------------------------
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
@@ -40,31 +41,11 @@ let tmpWorkspace: string;
 let kbRoot: string;
 
 // ADR-044 (#4543): the content route resolves the ACTIVE workspace via
-// resolveActiveWorkspaceKbRoot, which reads user_session_state → workspaces →
-// users (solo owner == caller here) and derives the fs dir from the workspace
-// id. A single `.from()`-shared builder returns the same superset row for every
-// table, so current_workspace_id=null → solo, repo_status=ready, and
-// workspace_status (overridable per test) gate exactly as the legacy own-row
-// read did. maybeSingle() is required (the resolver uses it, not single()).
-function mockQueryBuilder(data: Record<string, unknown> = {}, error: unknown = null) {
-  const merged = {
-    current_workspace_id: null,
-    repo_status: "ready",
-    organization_id: "user-1",
-    workspace_status: "ready",
-    ...data,
-  };
-  const term = {
-    then: (fn: (v: unknown) => unknown) =>
-      Promise.resolve({ data: error ? null : merged, error }).then(fn),
-  };
-  return {
-    select: vi.fn().mockReturnThis(),
-    eq: vi.fn().mockReturnThis(),
-    single: vi.fn().mockReturnValue(term),
-    maybeSingle: vi.fn().mockReturnValue(term),
-  };
-}
+// resolveActiveWorkspaceKbRoot (solo owner == caller here). The shared
+// kbSoloActiveWorkspaceChain helper returns the same superset row for every
+// table so a `.from()`-agnostic mock satisfies the resolver's multi-table read;
+// per-table coverage lives in test/server/kb-active-workspace-scoping.test.ts.
+const mockQueryBuilder = kbSoloActiveWorkspaceChain;
 
 function buildRequest(pathStr: string): Request {
   return new Request(`http://localhost:3000/api/kb/content/${pathStr}`);
