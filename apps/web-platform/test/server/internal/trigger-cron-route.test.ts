@@ -174,3 +174,83 @@ describe("POST /api/internal/trigger-cron — dispatch", () => {
     });
   });
 });
+
+describe("POST /api/internal/trigger-cron — optional event data pass-through (#4742)", () => {
+  // AC-A1: an allowlisted event with a `data` object forwards the per-cron
+  // fields verbatim alongside the route-controlled audit keys.
+  it("forwards body.data fields (issue_number) while stamping trigger + fresh at (AC-A1)", async () => {
+    const res = await POST(
+      makeRequest({ event: ALLOWED_EVENT, data: { issue_number: 4383 } }),
+    );
+    expect(res.status).toBe(202);
+    expect(mockInngestSend).toHaveBeenCalledTimes(1);
+    const envelope = mockInngestSend.mock.calls[0][0];
+    expect(envelope.name).toBe(ALLOWED_EVENT);
+    expect(envelope.data.issue_number).toBe(4383);
+    expect(envelope.data.trigger).toBe("manual-api");
+    expect(typeof envelope.data.at).toBe("string");
+    expect(() => new Date(envelope.data.at as string).toISOString()).not.toThrow();
+  });
+
+  // AC-A2: route keys are spread LAST so a caller cannot forge a payload that
+  // mimics a scheduled (non-manual) fire — the audit-poison guard.
+  it("never lets body.data override trigger/at (route keys win — audit-poison guard) (AC-A2)", async () => {
+    const res = await POST(
+      makeRequest({
+        event: ALLOWED_EVENT,
+        data: { trigger: "spoofed", at: "1999-01-01T00:00:00.000Z" },
+      }),
+    );
+    expect(res.status).toBe(202);
+    const envelope = mockInngestSend.mock.calls[0][0];
+    expect(envelope.data.trigger).toBe("manual-api");
+    expect(envelope.data.at).not.toBe("1999-01-01T00:00:00.000Z");
+    // fresh ISO timestamp, not the spoofed value
+    expect(() => new Date(envelope.data.at as string).toISOString()).not.toThrow();
+  });
+
+  // AC-A3: back-compat — with NO `data` key, the envelope carries EXACTLY the
+  // two route-controlled keys and nothing else (gated explicitly, not assumed:
+  // the legacy dispatch test uses permissive toMatchObject).
+  it("dispatches exactly {trigger, at} when data is absent (back-compat, exact keys) (AC-A3)", async () => {
+    const res = await POST(makeRequest({ event: ALLOWED_EVENT }));
+    expect(res.status).toBe(202);
+    const envelope = mockInngestSend.mock.calls[0][0];
+    expect(Object.keys(envelope.data).sort()).toEqual(["at", "trigger"]);
+    expect(envelope.data.trigger).toBe("manual-api");
+  });
+
+  // AC-A3 (null variant): explicit `data: null` is treated as no-data, same as absent.
+  it("treats explicit data:null as no-data (exact {trigger, at}) (AC-A3)", async () => {
+    const res = await POST(makeRequest({ event: ALLOWED_EVENT, data: null }));
+    expect(res.status).toBe(202);
+    const envelope = mockInngestSend.mock.calls[0][0];
+    expect(Object.keys(envelope.data).sort()).toEqual(["at", "trigger"]);
+  });
+
+  // AC-A4: a present-but-non-plain-object `data` is rejected 400 before dispatch.
+  it("returns 400 on non-plain-object data (number / string / array), no dispatch (AC-A4)", async () => {
+    for (const bad of [42, "x", ["a"], true] as const) {
+      mockInngestSend.mockClear();
+      mockSendInngestWithRetry.mockClear();
+      const res = await POST(
+        makeRequest({ event: ALLOWED_EVENT, data: bad as unknown as object }),
+      );
+      expect(res.status).toBe(400);
+      expect(mockSendInngestWithRetry).not.toHaveBeenCalled();
+      expect(mockInngestSend).not.toHaveBeenCalled();
+    }
+  });
+
+  // AC-A5: the existing 64 KiB 413-before-parse guard still covers the widened
+  // body when the bulk lives in `data`.
+  it("returns 413 on oversized data padding (before parse, no dispatch) (AC-A5)", async () => {
+    const huge = JSON.stringify({
+      event: ALLOWED_EVENT,
+      data: { pad: "a".repeat(70 * 1024) },
+    });
+    const res = await POST(makeRequest(huge));
+    expect(res.status).toBe(413);
+    expect(mockSendInngestWithRetry).not.toHaveBeenCalled();
+  });
+});
