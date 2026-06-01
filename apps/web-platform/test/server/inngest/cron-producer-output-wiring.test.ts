@@ -31,6 +31,10 @@ const WIRED_PRODUCERS = [
   "cron-growth-execution.ts",
   "cron-seo-aeo-audit.ts",
   "cron-community-monitor.ts",
+  // cron-campaign-calendar files a per-overdue `scheduled-campaign-calendar`
+  // issue (STEP 2c) AND a heartbeat audit issue with the same label when zero
+  // overdue (STEP 2.5) — an artifact lands every run, so it is output-aware.
+  "cron-campaign-calendar.ts",
 ] as const;
 
 // #4730 — the 4 best-effort claude-eval siblings. A non-zero claude exit (or a
@@ -45,7 +49,6 @@ const WIRED_PRODUCERS = [
 const BEST_EFFORT_CRONS = [
   "cron-agent-native-audit.ts",
   "cron-legal-audit.ts",
-  "cron-campaign-calendar.ts",
   "cron-ux-audit.ts",
 ] as const;
 
@@ -66,7 +69,11 @@ describe("output-aware heartbeat wiring (always-create producers)", () => {
       expect(src).toContain("ok: heartbeatOk");
       // The success path must NOT still pass the raw spawn result. (The
       // setup-failure early-exit legitimately passes `ok: false`, so we only
-      // forbid the spawnResult.ok form specifically.)
+      // forbid the spawnResult.ok form specifically.) This anchor intentionally
+      // relies on the leading-space `ok:` to distinguish the heartbeat key from
+      // the resolver's legitimate `spawnOk: spawnResult.ok` argument (capital
+      // O), which producers DO contain — see the toContain("resolveOutputAwareOk(")
+      // assertion above.
       expect(src).not.toContain("ok: spawnResult.ok");
     },
   );

@@ -28,7 +28,7 @@ reference_plan: knowledge-base/project/plans/2026-06-01-fix-scheduled-bug-fixer-
 
 ### New Considerations Discovered
 
-- `cron-campaign-calendar` was the one ambiguous case (a "calendar generator" sounds like a producer) but its prompt creates issues only per-overdue-item — so it is Pattern A, NOT a producer. Wiring Pattern B would false-RED healthy zero-overdue runs.
+- `cron-campaign-calendar` was the one ambiguous case. **Correction (multi-agent review, PR #4732):** the plan-time read missed prompt **STEP 2.5** ("Heartbeat audit issue (runs when NEW == 0): create and immediately close a heartbeat audit issue … Label: `scheduled-campaign-calendar`"). Combined with STEP 2(c)'s per-overdue issue (same label), the cron creates a `scheduled-campaign-calendar` artifact on EVERY run → it is **Pattern B** (always-create producer), not Pattern A. Final split is therefore **5 Pattern-B + 3 Pattern-A**. security-sentinel + architecture-strategist independently flagged the misclassification; reclassified inline.
 - None of the 8 raw crons declare `runStartedAt`; the 4 Pattern-B crons must thread it (copied from the 3 already-wired producers). The `resolveOutputAwareOk` helper works unchanged because all 4 label their summary issue with their `SENTRY_MONITOR_SLUG`.
 
 ## Overview
@@ -157,7 +157,7 @@ precedent-diff; the work phase reads the full prompt to lock each call.
 | `cron-community-monitor` (`scheduled-community-monitor`) | `:292` | **B** producer | `cron-community-monitor.ts:105,118` "create a GitHub Issue summarizing the findings"; even on no-platform-enabled it "create[s] a GitHub Issue titled …" + writes a dated digest each run. | Pattern B (unconditional digest). |
 | `cron-agent-native-audit` (`scheduled-agent-native-audit`) | `:246` | **A** best-effort | `cron-agent-native-audit.ts:124` "For each filed issue" — per-gap, no unconditional summary. Clean audit = zero issues is normal. | Pattern A; mirror bug-fixer + `cron-strategy-review` exclusion. |
 | `cron-legal-audit` (`scheduled-legal-audit`) | `:263` | **A** best-effort | `cron-legal-audit.ts:132` "If no legal documents are found, exit cleanly **without filing**". | Pattern A; explicit zero-issue clean path. |
-| `cron-campaign-calendar` (`scheduled-campaign-calendar`) | `:196` | **A** best-effort | `cron-campaign-calendar.ts:74-77` "For each overdue item … (c) If not found, create a new issue" — per-overdue-item only; zero overdue = no issue. | Pattern A (NOT a calendar producer — issues are per-overdue-item, like strategy-review's zero-issue clean run). |
+| `cron-campaign-calendar` (`scheduled-campaign-calendar`) | `:196` | **B** producer (corrected) | `cron-campaign-calendar.ts:81-84` STEP 2.5 "Heartbeat audit issue (runs when NEW == 0): create and immediately close … Label: scheduled-campaign-calendar" + STEP 2(c) per-overdue issue (same label) → artifact every run. | **Reclassified A→B at review** (PR #4732): plan-time read missed STEP 2.5; wire `resolveOutputAwareOk` + `runStartedAt`. |
 | `cron-ux-audit` (`scheduled-ux-audit`) | `:329` | **A** best-effort | `cron-ux-audit.ts:126` "No findings.json found — skipping upload" — conditional on findings. | Pattern A. |
 
 **Work-time confirmation (not re-litigation):** the classification above is

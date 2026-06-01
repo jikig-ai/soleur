@@ -19,6 +19,7 @@ import {
   redactToken,
   mintInstallationToken,
   postSentryHeartbeat,
+  resolveOutputAwareOk,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -28,7 +29,7 @@ import {
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
 import { inngest } from "@/server/inngest/client";
-import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
+import { reportSilentFallback } from "@/server/observability";
 
 // =============================================================================
 // Constants
@@ -121,6 +122,14 @@ export async function cronCampaignCalendarHandler({
   step,
   logger,
 }: HandlerArgs): Promise<{ ok: boolean }> {
+  // Run-window start — the lower bound for the post-run output check. Captured
+  // before the mint step (memoized across Inngest replays) so a replay reuses
+  // the original window rather than re-stamping a later "now".
+  const runStartedAt = await step.run(
+    "run-started-at",
+    async () => new Date().toISOString(),
+  );
+
   // --- Step 1: mint installation token (memoized across replays) ---
   const installationToken = await step.run(
     "mint-installation-token",
@@ -189,46 +198,32 @@ export async function cronCampaignCalendarHandler({
           },
         },
       );
-    } else if (!spawnResult.ok) {
-      // Best-effort cron: a non-zero/no-artifact claude exit is NORMAL — this is
-      // NOT a calendar producer; the prompt files issues only per-overdue-item,
-      // so a zero-overdue run legitimately creates nothing (wiring the
-      // output-aware producer shape would false-RED a healthy run). The
-      // monitor's liveness contract is "the pipeline ran end-to-end without an
-      // INFRASTRUCTURE fault" (token mint, clone, parse), not "claude produced
-      // an artifact today" — so do NOT page; the infra-fault early-returns above
-      // keep their strict status=error. Pattern + rationale: cron-bug-fixer.ts
-      // (PR #4727, incident 5127648 / #4730). warnSilentFallback (not a bare
-      // logger.warn) is load-bearing — a pino logger.warn only adds a Sentry
-      // breadcrumb (flushed solely on a later captureException a clean ok:true
-      // run never produces) and lands in a Docker json-file stream Vector does
-      // not tail, i.e. invisible without SSH
-      // (cq-silent-fallback-must-mirror-to-sentry, hr-observability-layer-citation).
-      warnSilentFallback(
-        new Error("claude-eval exited non-zero — best-effort run, no artifact this cycle"),
-        {
-          feature: "cron-campaign-calendar",
-          op: "claude-eval-nonzero-noop",
-          message:
-            "claude-eval exited non-zero (best-effort); cron monitor stays green (liveness, not success)",
-          extra: {
-            fn: "cron-campaign-calendar",
-            exitCode: spawnResult.exitCode,
-            durationMs: spawnResult.durationMs,
-          },
-        },
-      );
     }
 
-    // --- Step 4: sentry-heartbeat (final POST) ---
-    // The pipeline reached the end without an INFRA fault → healthy liveness
-    // check-in regardless of claude's exit code (the non-zero exit is a
-    // best-effort outcome, surfaced above, never a liveness failure).
+    // --- Step 4: output-aware heartbeat. This cron is an always-create
+    //     producer, NOT best-effort: STEP 2(c) files a per-overdue
+    //     `scheduled-campaign-calendar` issue, and STEP 2.5 files (then
+    //     immediately closes) a heartbeat audit issue with the SAME label when
+    //     NEW == 0 — so a `scheduled-campaign-calendar` artifact lands in the
+    //     run window on EVERY run (create, or comment-bump via STEP 2(b), both
+    //     of which `verifyScheduledIssueCreated` counts via updated_at). A clean
+    //     exit that produced none turns the monitor RED (and emits
+    //     `scheduled-output-missing`) instead of false-green on claude's exit
+    //     code. Mirrors the producers wired by PR #4714 (#4730). Infra faults
+    //     still page via the early-return status=error heartbeats. ---
+    const heartbeatOk = await step.run("verify-output", async () =>
+      resolveOutputAwareOk({
+        spawnOk: spawnResult.ok,
+        label: SENTRY_MONITOR_SLUG,
+        runStartedAt,
+        cronName: "cron-campaign-calendar",
+      }),
+    );
     await step.run("sentry-heartbeat", async () => {
-      await postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-campaign-calendar", logger });
+      await postSentryHeartbeat({ ok: heartbeatOk, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-campaign-calendar", logger });
     });
 
-    return { ok: true };
+    return { ok: heartbeatOk };
   } finally {
     await teardownEphemeralWorkspace(ephemeralRoot, "cron-campaign-calendar").catch((err) => {
       reportSilentFallback(err, {

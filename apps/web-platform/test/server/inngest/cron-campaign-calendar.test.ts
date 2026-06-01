@@ -155,21 +155,25 @@ describe("buildSpawnEnv allowlist (security surface)", () => {
   });
 });
 
-describe("#4730 — heartbeat decoupled from claude exit code (best-effort)", () => {
-  it("success-path heartbeat is liveness (ok: true), not the bare spawn exit code", () => {
-    // NOT a calendar producer: the prompt files issues only per-overdue-item,
-    // so a zero-overdue run legitimately creates nothing — wiring the
-    // output-aware producer shape would false-RED a healthy run. A non-zero/no-
-    // artifact run is NORMAL; the monitor's liveness contract is "pipeline ran
-    // end-to-end without an INFRA fault". Mirrors cron-bug-fixer.ts (PR #4727).
+describe("#4730 — output-aware heartbeat (always-create producer)", () => {
+  it("gates the heartbeat on output, not the bare spawn exit code", () => {
+    // This cron is an always-create producer, NOT best-effort: STEP 2(c) files a
+    // per-overdue `scheduled-campaign-calendar` issue, and STEP 2.5 files (then
+    // closes) a heartbeat audit issue with the SAME label when NEW == 0 — so a
+    // labeled artifact lands in the run window every run. A clean exit that
+    // produced none must turn the monitor RED (output-aware) instead of
+    // false-green. Mirrors the producers wired by PR #4714.
     expect(SUT_SOURCE).not.toContain("ok: spawnResult.ok");
-    expect(SUT_SOURCE).toContain("postSentryHeartbeat({ ok: true");
+    expect(SUT_SOURCE).toContain("resolveOutputAwareOk(");
+    expect(SUT_SOURCE).toContain("runStartedAt");
+    expect(SUT_SOURCE).toContain("ok: heartbeatOk");
   });
 
-  it("surfaces the non-zero exit as a non-paging WARNING Sentry event (off-host visible)", () => {
-    // warnSilentFallback (queryable WARNING), NOT a bare logger.warn — see
-    // cq-silent-fallback-must-mirror-to-sentry / hr-observability-layer-citation.
-    expect(SUT_SOURCE).toContain("warnSilentFallback");
-    expect(SUT_SOURCE).toContain('op: "claude-eval-nonzero-noop"');
+  it("retains the STEP 2.5 unconditional heartbeat-issue path that makes it a producer", () => {
+    // Guard the prompt invariant the classification depends on: if STEP 2.5 is
+    // ever removed, the cron stops being always-create and the output-aware
+    // wiring would start false-RED'ing healthy zero-overdue runs.
+    expect(SUT_SOURCE).toContain("STEP 2.5");
+    expect(SUT_SOURCE).toContain("scheduled-campaign-calendar");
   });
 });
