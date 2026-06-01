@@ -164,10 +164,10 @@ condition; H3 → fix the infra and keep the strict condition. Do not assume.
 
 ### Phase 0 — Preconditions (verify before any edit)
 
-- [ ] `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-bug-fixer.test.ts` is green on `origin/main` (baseline; per `2026-05-27` Session Error 1 — run vitest from `apps/web-platform`, not the monorepo root).
-- [ ] Confirm `SpawnResult.ok = exitCode === 0` at `_cron-claude-eval-substrate.ts:231` (already verified at plan time).
-- [ ] Confirm the final heartbeat is `overallOk = spawnResult.ok && !!detectedPr` at `cron-bug-fixer.ts:792` and the `!detectedPr` early-return at `:756` is `ok: spawnResult.ok` (already verified at plan time).
-- [ ] `grep -n "status=error\|status=ok" apps/web-platform/test/server/inngest/cron-bug-fixer.test.ts` — enumerate every test that asserts the heartbeat status so the Phase 3 changes update them coherently (groups (b), (e), manual-trigger).
+- [x] `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-bug-fixer.test.ts` green at baseline (30 tests).
+- [x] Confirmed `SpawnResult.ok = exitCode === 0` at `_cron-claude-eval-substrate.ts:231`.
+- [x] Confirmed final heartbeat was `overallOk = spawnResult.ok && !!detectedPr` at `:792` and `!detectedPr` early-return at `:756` was `ok: spawnResult.ok`.
+- [x] Enumerated heartbeat-status tests: status sites `:489`/`:577`/`:803`/`:828`; `result.ok` sites `:482`/`:566`/`:822`/`:888`.
 
 ### Phase 1 — Confirm root cause from the Sentry event (data-pull, no SSH)
 
@@ -189,34 +189,19 @@ deterministic verdict rule.
   - A `reportSilentFallback` event with `op: "claude-eval-timeout"` and `durationMs ≈ 3_000_000` → **H2**.
   - A `setup-ephemeral-workspace` / `mint-installation-token` / `child_process.spawn` error event near the failing check-in timestamps → **H3** (genuine infra error).
   - **Absence** of any infra-error `reportSilentFallback` around the failing fires, with check-in `duration` well under 50 min → **H1** (claude exited non-zero with no infra fault; the "no fix today" normal case).
-- [ ] Cross-check cron-fire liveness to rule out H9 confusion: the monitor shows *error* check-ins (not gaps), confirming the function fires. Record the selected hypothesis in the PR body.
+- [x] Cross-checked: monitor shows *error* check-ins (05-30 ok → 05-31 error → 06-01 error), not gaps → function fires → **H1 confirmed** (claude non-zero exit, no infra fault; zero `cron-bug-fixer` Sentry issues over 14d rules out H2/H3/H4). Recorded for PR body.
 
 ### Phase 2 — Fix (branch by confirmed hypothesis)
 
 **Phase 2-A — H1/H2 confirmed (primary, expected): relax the exit condition.**
 
-- [ ] In `cron-bug-fixer.ts`, redefine the heartbeat `ok` so a clean
-  end-to-end run is healthy regardless of claude's exit code. Concretely:
-  - The final heartbeat becomes `ok: true` (the pipeline reached the end:
-    token+workspace+spawn+detect+teardown all ran without throwing). Drop the
-    `spawnResult.ok && !!detectedPr` conjunction.
-  - The `!detectedPr` branch (:756) likewise becomes `ok: true` (a clean run
-    that produced no PR is the normal best-effort outcome).
-  - Keep `status=error` ONLY on genuine infrastructure faults that already
-    have early-return error heartbeats: setup-workspace catch (:691), bad
-    manual-trigger payload (:612). These are unchanged.
-  - When `spawnResult.ok === false` (claude non-zero) OR
-    `spawnResult.abortedByTimeout`, emit a structured `logger.info`/`logger.warn`
-    ("bug-fixer claude-eval produced no fix" / "aborted by 50-min budget") and
-    a low-urgency Sentry breadcrumb — NOT a `status=error` heartbeat. The
-    timeout `reportSilentFallback` at :727 may stay (it's a `warning`-level
-    telemetry breadcrumb, not the monitor page) — decide at /work whether a
-    chronic-timeout signal is still wanted as a separate, non-paging alert.
-  - Update the handler return shape (`ok`) to reflect the new semantic so the
-    return value and the heartbeat agree.
-- [ ] Update the cron-monitors.tf header prose if any comment claims the
-  bug-fixer pages on claude failure (verify; likely no change needed — the
-  Terraform resource is unaffected since `status` is computed app-side).
+- [x] Redefined heartbeat `ok` in `cron-bug-fixer.ts`:
+  - Final heartbeat → `ok: true`; dropped the dead `overallOk = spawnResult.ok && !!detectedPr`.
+  - `!detectedPr` branch → `ok: true`.
+  - Kept `status=error` on genuine infra faults: setup-workspace catch, parse-event-data. Unchanged.
+  - Added `logger.warn` on `!spawnResult.ok` ("claude-eval exited non-zero (no fix landed); not paging the cron monitor"); kept the chronic-timeout `reportSilentFallback` (op=claude-eval-timeout) as a non-paging breadcrumb.
+  - Updated handler return `ok` in lockstep.
+- [x] cron-monitors.tf: no change needed — the `scheduled_bug_fixer` resource only sets cadence/margins; `status` is computed app-side. No comment claims it pages on claude failure.
 
 **Phase 2-B — H3 confirmed: fix the infra, keep the strict page.**
 
@@ -234,24 +219,11 @@ recurrence.)
 
 For the primary (H1/H2) path:
 
-- [ ] **Rewrite test group (e)**: the existing
-  `"claude spawn non-zero exit + no PR detected → ?status=error"`
-  (`cron-bug-fixer.test.ts:806`) encodes the OLD (buggy) semantic. Replace
-  with `"claude non-zero exit (no fix) → ?status=ok"` — a clean run with a
-  non-zero claude exit and no PR is a healthy liveness check-in. This is
-  directly testable with the existing harness: `wireSpawn(1)` (the helper at
-  `:229` already takes a claude exit code) + no PR wired → assert
-  `status=ok`. **Also flip the return-value assertion**: this test's
-  `expect(result.ok).toBe(false)` (`:822`) must become `toBe(true)` since the
-  handler return `ok` is changed in lockstep with the heartbeat (Phase 2-A).
-- [ ] **Add** `"claude timeout-abort → ?status=ok (+ telemetry breadcrumb, no page)"`.
-- [ ] **Keep** the genuine-error tests as `status=error`: group (b)
-  `"plugin sentinel manifest missing"` (:543/:577) and manual-trigger
-  `"rejects non-integer issue_number"` (:879). These are infra/operator
-  faults and must still page.
-- [ ] **Keep** group (e) happy-path `"?status=ok with scheduled-bug-fixer slug"`
-  (:762) and the no-qualifying-issue `status=ok` (:474).
-- [ ] Run: `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-bug-fixer.test.ts`.
+- [x] **Rewrote test group (e)** non-zero-exit test → `"claude non-zero exit (no fix landed) → ?status=ok"`: `wireSpawn(1)` + no PR → asserts `status=ok`, `result.ok === true`, and no infra-fault breadcrumb. RED verified (`expected false to be true` against pre-fix code).
+- [x] **Added** `"claude-eval aborted by 50-min timeout → ?status=ok"` — drives the real `AbortController` via fake timers; asserts monitor green + `claude-eval-timeout` breadcrumb present. RED verified.
+- [x] **Kept** genuine-error `status=error` tests: sentinel-missing, non-integer issue_number.
+- [x] **Kept** group (e) happy-path `status=ok` + no-qualifying-issue `status=ok`.
+- [x] Ran cron-bug-fixer.test.ts → **31 passed**.
 
 ### Phase 4 — Recover the live monitor to healthy
 
@@ -280,21 +252,13 @@ For the primary (H1/H2) path:
 
 ### Pre-merge (PR)
 
-- [ ] PR body names the confirmed hypothesis (H1/H2/H3/H4) with the Sentry
-  event evidence pulled in Phase 1 (verdict rule output pasted).
-- [ ] PR body states the `auth-callback-no-code-burst` linkage was confirmed
-  coincidental (red herring), citing the 2026-05-27 precedent — the auth
-  callback route is **not** modified by this PR (`git diff --name-only` shows
-  no `app/(auth)/callback/route.ts`).
-- [ ] (H1/H2 path) `cron-bug-fixer.ts` heartbeat `ok` is decoupled from
-  `spawnResult.ok`: a clean end-to-end run with a non-zero claude exit and/or
-  no detected PR posts `?status=ok`. `grep -n "status=ok\|status=error" `…
-  semantics verified by the rewritten tests.
-- [ ] (H1/H2 path) Genuine infra/operator faults still post `?status=error`:
-  setup-workspace catch, bad manual-trigger payload, plugin-sentinel-missing.
-- [ ] `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-bug-fixer.test.ts` is green, including the rewritten group (e) tests.
-- [ ] `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/function-registry-count.test.ts` still green (slug↔monitor parity unaffected).
-- [ ] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
+- [x] PR body names the confirmed hypothesis (**H1**) with the Sentry evidence (see Phase 1 verdict).
+- [x] PR body states the `auth-callback-no-code-burst` linkage was confirmed coincidental, citing the 2026-05-27 precedent — `git diff --name-only` shows no `app/(auth)/callback/route.ts`.
+- [x] `cron-bug-fixer.ts` heartbeat `ok` decoupled from `spawnResult.ok`: clean end-to-end run with non-zero claude exit / no PR posts `?status=ok`. Verified by rewritten tests.
+- [x] Genuine infra/operator faults still post `?status=error`: setup-workspace catch, parse-event-data, plugin-sentinel-missing.
+- [x] cron-bug-fixer.test.ts green (31), including rewritten group (e).
+- [x] function-registry-count.test.ts still green (7).
+- [x] `tsc --noEmit` clean.
 
 ### Post-merge (operator/automatable)
 
