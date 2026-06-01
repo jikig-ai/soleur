@@ -14,6 +14,20 @@ brand_survival_threshold: none
 
 ✨ **Type:** enhancement (additive schema-flexible field) · **Issue:** #4728 · **Parent:** #4717 (closed by #4726)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-01 · **Sections enhanced:** Research Reconciliation, User-Brand Impact, Type-Widening Sweep, Risks (precedent), Observability
+**Gates run inline (no subagent tooling in this environment):** 4.6 User-Brand Impact halt (PASS), 4.7 Observability schema (PASS — 5 fields, no ssh), 4.8 PAT-shaped variable scan (PASS — none), 4.45 verify-the-negative pass, 4.4 precedent-diff gate, live PR/issue/attribution checks.
+
+### Key Improvements
+1. **Sensitive-path scope-out added (gate fix).** 3 edited files match the preflight Check 6 sensitive-path regex (`server/`, `app/api/`); at `threshold: none` the plan now carries the required `threshold: none, reason:` scope-out bullet — without it, preflight would FAIL at ship time.
+2. **Premise reconciliation hardened.** Verified via grep that #4717 shipped users-centric with NO `skippedMultiWorkspace` counter; #4728's re-eval criterion (b) references a non-existent counter. Plan reframed as orthogonal foundations, matching the brainstorm's 2026-06-01 plan-review pivot note.
+3. **Negative claims verified.** "reader-inert" / "consumer never reads workspace_id" confirmed by grep (`cron-workspace-sync-health.ts` has 0 `workspace_id` refs; `kb-sync-status.tsx` has no field enumeration).
+
+### New Considerations Discovered
+- The **manual `/api/kb/sync` route has no `workspace_id` in scope** — it is users-centric (resolves by `users.workspace_path`). Leaving its rows `workspace_id`-free is correct and backfill-tolerant; fabricating one would need an extra `workspace_members` query for zero present-day benefit.
+- **No migration needed.** `kb_sync_history` is JSONB; the field rides inside the existing `append_kb_sync_row` RPC `p_row jsonb` argument unchanged.
+
 ## Overview
 
 `kb_sync_history` is a JSONB array column on `public.users` (migration 017). Each rich
@@ -67,8 +81,16 @@ already owns; it is never surfaced in a user-facing string and never leaves the 
 No PII, no new cross-controller data movement.
 
 **Brand-survival threshold:** none. (Additive, reader-inert, ops-internal field on a JSONB
-column. No sensitive-path surface per preflight Check 6: no schema DDL, no auth flow, no API
-route behavior change, no `.sql` migration.)
+column. No schema DDL, no auth flow, no API route behavior change, no `.sql` migration.)
+
+- **threshold: none, reason:** the edited files `apps/web-platform/server/session-sync.ts`,
+  `apps/web-platform/server/inngest/functions/workspace-reconcile-on-push.ts`, and
+  `apps/web-platform/app/api/kb/sync/route.ts` match the preflight Check 6 sensitive-path
+  regex (`server/`, `app/api/`), but the change is a strict additive optional field on an
+  ops-internal JSONB telemetry column — no credential, auth, billing, secret, or
+  user-data-exposure surface is touched; readers ignore the field; the manual route is a
+  documented no-op. This scope-out is required because the threshold is `none` AND
+  sensitive-path files are touched (preflight Check 6 / deepen-plan Phase 4.6).
 
 ## Acceptance Criteria
 
@@ -291,6 +313,17 @@ producer writes the discriminator.
 - **Risk: precedent drift on `ws.id`.** → Mitigation: `ws.id` is the exact id already used
   for `workspacePathForWorkspaceId(ws.id)` and `reconcile-${ws.id}` in the same loop body;
   no new resolution.
+
+### Precedent-Diff Gate (deepen-plan Phase 4.4)
+
+**Pattern: adding an optional field to the `KbSyncRow` JSONB row shape.** Not novel — the
+`KbSyncRow` type grew `error_class?`, `push_received_at?`, `sha_before?`, and `sha_after?` the
+same additive-optional way (all introduced in #4224, `session-sync.ts:327`). The append path
+is unchanged: the new field rides inside the `append_kb_sync_row` RPC's `p_row jsonb` argument
+(migration 053), which `jsonb`-stores whatever object it receives. No DDL precedent needed
+(JSONB column, migration 017). **Conclusion:** strict additive-optional precedent exists in
+the same type; the change follows it verbatim. No `SECURITY DEFINER`/atomic-write/lock
+precedent applies (the RPC is untouched).
 
 ## Sharp Edges
 
