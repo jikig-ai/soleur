@@ -18,6 +18,14 @@ export interface SpawnResult {
   signal: NodeJS.Signals | null;
   abortedByTimeout: boolean;
   durationMs: number;
+  // Bounded tail of the child's stderr (redacted), so a non-zero exit is
+  // self-diagnosing in Sentry. The line-by-line pino stream goes to app stdout,
+  // which Vector does NOT ship to Better Stack — capturing the tail here is the
+  // only path that reaches Sentry. #4714 follow-up (roadmap/content silent
+  // non-zero exits were undiagnosable: app stdout is not in the log warehouse).
+  // Optional: sibling crons (daily-triage, follow-through-monitor) build their
+  // own SpawnResult literals via the inline spawn pattern and do not populate it.
+  stderrTail?: string;
 }
 
 export const KILL_ESCALATION_MS = 5_000;
@@ -198,6 +206,9 @@ export async function spawnClaudeEval(args: {
   let abortedByTimeout = false;
   let exited = false;
   let escalationTimer: NodeJS.Timeout | null = null;
+  // Rolling bounded tail of redacted stderr lines (last STDERR_CAP_BYTES) so a
+  // non-zero exit can be surfaced to Sentry by the caller.
+  let stderrTail = "";
 
   try {
     return await new Promise<SpawnResult>((resolve) => {
@@ -220,10 +231,10 @@ export async function spawnClaudeEval(args: {
       if (child.stderr) {
         const rlErr = createInterface({ input: child.stderr });
         rlErr.on("line", (line) => {
-          logger.error(
-            { fn: cronName, stream: "stderr" },
-            redactToken(line, installationToken),
-          );
+          const redacted = redactToken(line, installationToken);
+          logger.error({ fn: cronName, stream: "stderr" }, redacted);
+          // Keep a bounded tail (drop oldest) for the Sentry surface.
+          stderrTail = (stderrTail + redacted + "\n").slice(-STDERR_CAP_BYTES);
         });
       }
 
@@ -263,6 +274,7 @@ export async function spawnClaudeEval(args: {
           signal,
           abortedByTimeout,
           durationMs: Date.now() - startedAt,
+          stderrTail,
         });
       });
       child.on("error", (err) => {
@@ -281,6 +293,7 @@ export async function spawnClaudeEval(args: {
           signal: null,
           abortedByTimeout,
           durationMs: Date.now() - startedAt,
+          stderrTail: stderrTail || redactedMsg,
         });
       });
 
