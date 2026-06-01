@@ -70,8 +70,7 @@ export async function getPendingInvitesForUser(
     created_at,
     workspaces!inner(name),
     inviter:users!workspace_invitations_inviter_user_id_fkey(
-      email,
-      raw_user_meta_data
+      email
     )
   `;
 
@@ -125,15 +124,13 @@ export async function getPendingInvitesForUser(
       const workspace = row.workspaces as { name: string } | null;
       const inviter = row.inviter as {
         email: string | null;
-        raw_user_meta_data: { full_name?: string } | null;
       } | null;
 
       return {
         id: row.id as string,
         workspace_id: row.workspace_id as string,
         workspace_name: workspace?.name ?? "Workspace",
-        inviter_name:
-          inviter?.raw_user_meta_data?.full_name ?? inviter?.email ?? "A team member",
+        inviter_name: inviter?.email ?? "A team member",
         role: row.role as string,
         expires_at: row.expires_at as string,
         created_at: row.created_at as string,
