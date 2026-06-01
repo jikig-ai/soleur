@@ -1467,3 +1467,63 @@ describe("#4408/#4409/#3177 new comparison + disambiguation pages", () => {
     ).toBe(true);
   });
 });
+
+// -- Test 19: #3993 /vision/ demotes internal codenames from proper nouns ---
+// The 2026-05-18 content audit (§1, C-6/C-7) flagged /vision/ for reading like
+// an internal strategy memo: it used "vessel" as metaphor-as-jargon and
+// introduced "Global Brain", "Swarm of Agents", and "Decision Ledger" as
+// proper-noun codenames ("Internally called..."). The rewrite reframes them as
+// plain lowercase descriptions a non-technical founder/journalist/investor
+// understands, while preserving the strategic substance AND the #4754 freshness
+// block (stat-led summary + last-updated byline).
+//
+// CodeQL hygiene (net-new test code is a merge gate): these are pure absence/
+// presence checks via html.includes("literal") — NO tag-strip
+// (js/incomplete-multi-character-sanitization), NO &amp; decode
+// (js/double-escaping), NO unanchored .test() (js/regex/missing-regexp-anchor).
+describe("#3993 /vision/ demotes internal codenames + preserves the freshness block", () => {
+  // Case-sensitive proper-noun forms the audit named. The plain-language
+  // replacements use lowercase phrasing, so these exact strings must be absent
+  // from the rendered page.
+  const BANNED_CODENAMES = [
+    "Global Brain",
+    "Swarm of Agents",
+    "Decision Ledger",
+    "vessel",
+  ];
+
+  test("rendered /vision/ contains none of the four proper-noun codenames", () => {
+    const html = readSite("vision/index.html");
+    for (const codename of BANNED_CODENAMES) {
+      expect(
+        html.includes(codename),
+        `/vision/ must not surface the internal codename/metaphor "${codename}"`,
+      ).toBe(false);
+    }
+  });
+
+  test("rendered /vision/ still renders the #4754 stat-led summary + last-updated block", () => {
+    const html = readSite("vision/index.html");
+    // Positive guard: don't regress PR B's freshness work while rewriting prose.
+    const summaryMatches = [
+      ...html.matchAll(/<p class="page-summary">([\s\S]*?)<\/p>/g),
+    ];
+    expect(summaryMatches.length, "/vision/ has exactly one stat-led summary").toBe(
+      1,
+    );
+    expect(
+      summaryMatches[0][1].trim().length,
+      "/vision/ stat-led summary is a real sentence",
+    ).toBeGreaterThan(80);
+    const metaMatches = [
+      ...html.matchAll(/<p class="page-meta">([\s\S]*?)<\/p>/g),
+    ];
+    expect(metaMatches.length, "/vision/ has exactly one last-updated block").toBe(
+      1,
+    );
+    expect(
+      metaMatches[0][1].includes("Last updated"),
+      '/vision/ last-updated block carries the "Last updated" label',
+    ).toBe(true);
+  });
+});
