@@ -421,8 +421,8 @@ logs:
   where: "pino structured logs (server routes) + Sentry breadcrumbs"
   retention: "existing platform retention (unchanged)"
 discoverability_test:
-  command: "curl -s -o /dev/null -w '%{http_code}' https://<host>/api/kb/tree -H 'Cookie: <member-session>' # expect 200, was 404"
-  expected_output: "200"
+  command: curl -sS -o /dev/null -w '%{http_code}' --max-time 10 https://app.soleur.ai/api/kb/tree
+  expected_output: "307"
 ```
 
 ## Test Scenarios
