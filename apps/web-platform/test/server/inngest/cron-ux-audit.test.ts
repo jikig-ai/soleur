@@ -72,3 +72,22 @@ describe("UX_AUDIT_PROMPT — anchor strings (regression-detection)", () => {
     expect(SUT_SOURCE).toContain(anchor);
   });
 });
+
+describe("#4730 — heartbeat decoupled from claude exit code (best-effort)", () => {
+  it("success-path heartbeat is liveness (ok: true), not the bare spawn exit code", () => {
+    // Findings upload is conditional ("No findings.json found — skipping
+    // upload"), so a clean run with no findings is NORMAL. The monitor's
+    // liveness contract is "pipeline ran end-to-end without an INFRA fault" —
+    // decoupled from claude's exit. Mirrors cron-bug-fixer.ts (PR #4727). The
+    // pre-fix line was the forbidden `ok: spawnResult.ok`.
+    expect(SUT_SOURCE).not.toContain("ok: spawnResult.ok");
+    expect(SUT_SOURCE).toContain("postSentryHeartbeat({ ok: true");
+  });
+
+  it("surfaces the non-zero exit as a non-paging WARNING Sentry event (off-host visible)", () => {
+    // warnSilentFallback (queryable WARNING), NOT a bare logger.warn — see
+    // cq-silent-fallback-must-mirror-to-sentry / hr-observability-layer-citation.
+    expect(SUT_SOURCE).toContain("warnSilentFallback");
+    expect(SUT_SOURCE).toContain('op: "claude-eval-nonzero-noop"');
+  });
+});

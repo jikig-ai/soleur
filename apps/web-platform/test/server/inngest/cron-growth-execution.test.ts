@@ -174,3 +174,17 @@ describe("buildSpawnEnv allowlist (security surface)", () => {
     });
   });
 });
+
+describe("#4730 — output-aware heartbeat (always-create producer)", () => {
+  it("gates the heartbeat on output, not the bare spawn exit code", () => {
+    // This cron creates a `[Scheduled] Growth Execution` issue every run — the
+    // prompt explicitly files "No stale pages found" when there is nothing to
+    // do — so a clean exit that produced no artifact must turn the monitor RED
+    // (output-aware) instead of false-green. Mirrors the 3 producers wired by
+    // PR #4714. The pre-fix line was the forbidden `ok: spawnResult.ok`.
+    expect(SUT_SOURCE).not.toContain("ok: spawnResult.ok");
+    expect(SUT_SOURCE).toContain("resolveOutputAwareOk(");
+    expect(SUT_SOURCE).toContain("runStartedAt");
+    expect(SUT_SOURCE).toContain("ok: heartbeatOk");
+  });
+});

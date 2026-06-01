@@ -55,6 +55,7 @@ import {
   redactToken,
   mintInstallationToken,
   postSentryHeartbeat,
+  resolveOutputAwareOk,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -221,6 +222,14 @@ export async function cronCommunityMonitorHandler({
   step,
   logger,
 }: HandlerArgs): Promise<{ ok: boolean }> {
+  // Run-window start — the lower bound for the post-run output check. Captured
+  // before the mint step (memoized across Inngest replays) so a replay reuses
+  // the original window rather than re-stamping a later "now".
+  const runStartedAt = await step.run(
+    "run-started-at",
+    async () => new Date().toISOString(),
+  );
+
   const installationToken = await step.run(
     "mint-installation-token",
     async () => {
@@ -288,11 +297,27 @@ export async function cronCommunityMonitorHandler({
       );
     }
 
+    // --- output-aware heartbeat. This cron is an always-create producer — it
+    //     writes a dated digest and files a GitHub issue summarizing the
+    //     findings every run (even the no-platform-enabled path creates a titled
+    //     issue) — so a clean exit that produced no `scheduled-community-monitor`
+    //     issue in the run window turns the monitor RED (and emits
+    //     `scheduled-output-missing`) instead of false-green on claude's exit
+    //     code. Mirrors the 3 producers wired by PR #4714 (#4730). Infra faults
+    //     still page via the early-return status=error heartbeats. ---
+    const heartbeatOk = await step.run("verify-output", async () =>
+      resolveOutputAwareOk({
+        spawnOk: spawnResult.ok,
+        label: SENTRY_MONITOR_SLUG,
+        runStartedAt,
+        cronName: "cron-community-monitor",
+      }),
+    );
     await step.run("sentry-heartbeat", async () => {
-      await postSentryHeartbeat({ ok: spawnResult.ok, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-community-monitor", logger });
+      await postSentryHeartbeat({ ok: heartbeatOk, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-community-monitor", logger });
     });
 
-    return { ok: spawnResult.ok };
+    return { ok: heartbeatOk };
   } finally {
     await teardownEphemeralWorkspace(ephemeralRoot, "cron-community-monitor").catch((err) => {
       reportSilentFallback(err, {
