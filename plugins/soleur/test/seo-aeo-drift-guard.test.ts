@@ -466,3 +466,192 @@ describe("GSC coverage regression guard (www→apex host flip)", () => {
     expect(stub).toContain("/legal/terms-and-conditions/");
   });
 });
+
+// -- Test 11: #3174 Person.knowsAbout holds topical areas, not role/bio ----
+
+describe("#3174 Person JSON-LD knowsAbout is a topical-area array on every emitter", () => {
+  // Canonical topical array lives in site.json; the drift-guard pins the
+  // rendered Person nodes to it so a regression back to role/bio strings
+  // (the pre-#3174 state, where knowsAbout === author.credentials) fails.
+  const author = () =>
+    JSON.parse(readFileSync(SITE_JSON, "utf8")) as {
+      author: { knowsAbout: string[]; credentials: string[]; bio: string };
+    };
+
+  // A topical area is a short noun phrase. Role/bio sentences ("Founder,
+  // Soleur", "15+ years in distributed systems", the full bio) are NOT
+  // topics. This guard fails if any entry looks like a credential/bio line.
+  function assertTopical(entries: string[], where: string) {
+    const { credentials, bio } = author().author;
+    expect(entries.length, `${where}: knowsAbout non-empty`).toBeGreaterThan(0);
+    for (const e of entries) {
+      expect(
+        credentials.includes(e),
+        `${where}: "${e}" is a credential string, not a topic`,
+      ).toBe(false);
+      expect(e === bio, `${where}: knowsAbout entry equals bio sentence`).toBe(
+        false,
+      );
+      // Role/bio sentence smells: tenure phrasing, comma-separated title.
+      expect(
+        /\d+\+?\s*years|^Founder,|\bFounder of\b/.test(e),
+        `${where}: "${e}" reads like a role/bio sentence, not a topic`,
+      ).toBe(false);
+    }
+  }
+
+  test("about ProfilePage Person.knowsAbout pins site.json topical array", () => {
+    const html = readSite("about/index.html");
+    const blocks = jsonLdBlocks(html);
+    const profile = blocks.find(
+      (b): b is {
+        "@type": string;
+        mainEntity: { "@type": string; knowsAbout?: string[]; description?: string };
+      } =>
+        typeof b === "object" &&
+        b !== null &&
+        (b as { "@type"?: string })["@type"] === "ProfilePage",
+    );
+    expect(profile, "about: ProfilePage JSON-LD block").toBeDefined();
+    const person = profile!.mainEntity;
+    expect(person["@type"]).toBe("Person");
+    expect(typeof person.description, "about: Person.description").toBe("string");
+    expect(person.knowsAbout).toEqual(author().author.knowsAbout);
+    assertTopical(person.knowsAbout!, "about ProfilePage Person");
+  });
+
+  test("every blog post BlogPosting.author.knowsAbout pins the topical array", () => {
+    const blogDir = resolve(SITE, "blog");
+    const entries = existsSync(blogDir)
+      ? readdirSync(blogDir).filter((e) => {
+          const idx = join(blogDir, e, "index.html");
+          if (!existsSync(idx) || !statSync(join(blogDir, e)).isDirectory())
+            return false;
+          const body = readFileSync(idx, "utf8");
+          return !(body.length < 2000 && /<meta\s+http-equiv="refresh"/i.test(body));
+        })
+      : [];
+    expect(entries.length).toBeGreaterThan(0);
+    const expected = author().author.knowsAbout;
+    for (const slug of entries) {
+      const html = readSite(`blog/${slug}/index.html`);
+      const post = jsonLdBlocks(html).find(
+        (b): b is { "@type": string; author: { knowsAbout?: string[] } } =>
+          typeof b === "object" &&
+          b !== null &&
+          (b as { "@type"?: string })["@type"] === "BlogPosting",
+      );
+      expect(post, `${slug}: BlogPosting JSON-LD block`).toBeDefined();
+      expect(post!.author.knowsAbout, `${slug}: knowsAbout`).toEqual(expected);
+      assertTopical(post!.author.knowsAbout!, `${slug} BlogPosting Person`);
+    }
+  });
+});
+
+// -- Test 12: #3173 BlogPosting.image threads per-post ogImage --------------
+
+describe("#3173 BlogPosting.image uses the post-specific ogImage, not the site default", () => {
+  // Parse ogImage frontmatter from every source post, then assert the built
+  // BlogPosting.image renders that exact filename. Posts WITHOUT ogImage
+  // legitimately fall back to og-image.png; the count parity assertion below
+  // pins the imageless population so a regression (dropping the per-post
+  // thread) collapses every post to the default and is caught.
+  const SRC_BLOG = resolve(REPO_ROOT, "plugins/soleur/docs/blog");
+  const siteUrl = () =>
+    (JSON.parse(readFileSync(SITE_JSON, "utf8")) as { url: string }).url;
+
+  function sourcePosts(): { slug: string; ogImage: string | null }[] {
+    return readdirSync(SRC_BLOG)
+      .filter((f) => f.endsWith(".md"))
+      .map((f) => {
+        const src = readFileSync(join(SRC_BLOG, f), "utf8");
+        const m = src.match(/^ogImage:\s*["']?([^"'\n]+)["']?\s*$/m);
+        // Eleventy strips the leading YYYY-MM-DD- date prefix from fileSlug.
+        const slug = f.replace(/\.md$/, "").replace(/^\d{4}-\d{2}-\d{2}-/, "");
+        return { slug, ogImage: m ? m[1].trim() : null };
+      });
+  }
+
+  function blogPostingImage(slug: string): string {
+    const html = readSite(`blog/${slug}/index.html`);
+    const post = jsonLdBlocks(html).find(
+      (b): b is { "@type": string; image: string } =>
+        typeof b === "object" &&
+        b !== null &&
+        (b as { "@type"?: string })["@type"] === "BlogPosting",
+    );
+    expect(post, `${slug}: BlogPosting JSON-LD block`).toBeDefined();
+    return post!.image;
+  }
+
+  test("posts with ogImage frontmatter render that exact filename in BlogPosting.image", () => {
+    const withImage = sourcePosts().filter((p) => p.ogImage);
+    expect(withImage.length).toBeGreaterThan(0);
+    for (const { slug, ogImage } of withImage) {
+      const built = resolve(SITE, "blog", slug, "index.html");
+      if (!existsSync(built)) continue; // permalink override — skip silently
+      const image = blogPostingImage(slug);
+      const expected = `${siteUrl()}/images/${ogImage}`;
+      expect(image, `${slug}: BlogPosting.image threads ogImage`).toBe(expected);
+      expect(image, `${slug}: must not be the site default`).not.toBe(
+        `${siteUrl()}/images/og-image.png`,
+      );
+    }
+  });
+
+  test("posts without ogImage fall back to the site default og-image.png", () => {
+    const without = sourcePosts().filter((p) => !p.ogImage);
+    for (const { slug } of without) {
+      const built = resolve(SITE, "blog", slug, "index.html");
+      if (!existsSync(built)) continue;
+      expect(blogPostingImage(slug), `${slug}: default image`).toBe(
+        `${siteUrl()}/images/og-image.png`,
+      );
+    }
+  });
+});
+
+// -- Test 13: #3171 FAQPage JSON-LD parity beyond /pricing/ -----------------
+
+describe("#3171 FAQPage JSON-LD matches the visible FAQ on every Q&A page", () => {
+  // #2707 already covers /pricing/. This generalizes the parity invariant to
+  // every other page that renders a visible FAQ block, so a future page that
+  // ships <details class="faq-item"> without a matching FAQPage JSON-LD (or
+  // with a drifted question set) fails the guard.
+  for (const page of ["about", "company-as-a-service", ""]) {
+    const label = page === "" ? "homepage" : `/${page}/`;
+    const rel = page === "" ? "index.html" : `${page}/index.html`;
+    test(`${label}: FAQPage mainEntity count + names match visible <summary>`, () => {
+      const html = readSite(rel);
+      const detailsCount = [
+        ...html.matchAll(/<details class="faq-item">/g),
+      ].length;
+      if (detailsCount === 0) return; // page has no visible FAQ — nothing to pin
+      const faq = jsonLdBlocks(html).find(
+        (b): b is { "@type": string; mainEntity: { name: string }[] } =>
+          typeof b === "object" &&
+          b !== null &&
+          (b as { "@type"?: string })["@type"] === "FAQPage",
+      );
+      expect(faq, `${label}: FAQPage JSON-LD present for visible FAQ`).toBeDefined();
+      const summaries = [
+        ...html.matchAll(/<summary class="faq-question">([\s\S]*?)<\/summary>/g),
+      ].map((m) => m[1].replace(/<[^>]+>/g, "").trim());
+      const names = faq!.mainEntity.map((q) => q.name.trim());
+      expect(detailsCount, `${label}: details vs JSON-LD count`).toBe(names.length);
+      expect(summaries.length, `${label}: summaries vs JSON-LD count`).toBe(
+        names.length,
+      );
+      for (const name of names) {
+        // HTML-entity normalization parity (mirrors #2707 precedent): decode
+        // common entities so an apostrophe rendered as &#39; still matches.
+        const norm = (s: string) =>
+          s.replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, "&").replace(/&quot;/g, '"');
+        expect(
+          summaries.map(norm),
+          `${label}: JSON-LD question "${name}" has a visible <summary>`,
+        ).toContain(norm(name));
+      }
+    });
+  }
+});
