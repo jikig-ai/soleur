@@ -19,6 +19,7 @@ import {
   redactToken,
   mintInstallationToken,
   postSentryHeartbeat,
+  resolveOutputAwareOk,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -121,6 +122,14 @@ export async function cronCampaignCalendarHandler({
   step,
   logger,
 }: HandlerArgs): Promise<{ ok: boolean }> {
+  // Run-window start — the lower bound for the post-run output check. Captured
+  // before the mint step (memoized across Inngest replays) so a replay reuses
+  // the original window rather than re-stamping a later "now".
+  const runStartedAt = await step.run(
+    "run-started-at",
+    async () => new Date().toISOString(),
+  );
+
   // --- Step 1: mint installation token (memoized across replays) ---
   const installationToken = await step.run(
     "mint-installation-token",
@@ -191,12 +200,30 @@ export async function cronCampaignCalendarHandler({
       );
     }
 
-    // --- Step 4: sentry-heartbeat (final POST) ---
+    // --- Step 4: output-aware heartbeat. This cron is an always-create
+    //     producer, NOT best-effort: STEP 2(c) files a per-overdue
+    //     `scheduled-campaign-calendar` issue, and STEP 2.5 files (then
+    //     immediately closes) a heartbeat audit issue with the SAME label when
+    //     NEW == 0 — so a `scheduled-campaign-calendar` artifact lands in the
+    //     run window on EVERY run (create, or comment-bump via STEP 2(b), both
+    //     of which `verifyScheduledIssueCreated` counts via updated_at). A clean
+    //     exit that produced none turns the monitor RED (and emits
+    //     `scheduled-output-missing`) instead of false-green on claude's exit
+    //     code. Mirrors the producers wired by PR #4714 (#4730). Infra faults
+    //     still page via the early-return status=error heartbeats. ---
+    const heartbeatOk = await step.run("verify-output", async () =>
+      resolveOutputAwareOk({
+        spawnOk: spawnResult.ok,
+        label: SENTRY_MONITOR_SLUG,
+        runStartedAt,
+        cronName: "cron-campaign-calendar",
+      }),
+    );
     await step.run("sentry-heartbeat", async () => {
-      await postSentryHeartbeat({ ok: spawnResult.ok, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-campaign-calendar", logger });
+      await postSentryHeartbeat({ ok: heartbeatOk, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-campaign-calendar", logger });
     });
 
-    return { ok: spawnResult.ok };
+    return { ok: heartbeatOk };
   } finally {
     await teardownEphemeralWorkspace(ephemeralRoot, "cron-campaign-calendar").catch((err) => {
       reportSilentFallback(err, {

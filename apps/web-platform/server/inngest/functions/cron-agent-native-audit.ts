@@ -60,7 +60,7 @@ import {
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
 import { inngest } from "@/server/inngest/client";
-import { reportSilentFallback } from "@/server/observability";
+import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
 
 // =============================================================================
 // Constants
@@ -239,14 +239,44 @@ export async function cronAgentNativeAuditHandler({
           },
         },
       );
+    } else if (!spawnResult.ok) {
+      // Best-effort cron: a non-zero claude exit is the NORMAL outcome (a clean
+      // audit run legitimately files nothing per-gap). The monitor's liveness
+      // contract is "the pipeline ran end-to-end without an INFRASTRUCTURE
+      // fault" (token mint, clone, parse) — NOT "claude produced an artifact
+      // today" — so do NOT page; the infra-fault early-returns above keep their
+      // strict status=error. Pattern + rationale: cron-bug-fixer.ts (PR #4727,
+      // incident 5127648 / #4730). warnSilentFallback (not a bare logger.warn)
+      // is load-bearing — a pino logger.warn only adds a Sentry breadcrumb
+      // (flushed solely on a later captureException a clean ok:true run never
+      // produces) and lands in a Docker json-file stream Vector does not tail,
+      // i.e. invisible without SSH (cq-silent-fallback-must-mirror-to-sentry,
+      // hr-observability-layer-citation).
+      warnSilentFallback(
+        new Error("claude-eval exited non-zero — best-effort run, no artifact this cycle"),
+        {
+          feature: "cron-agent-native-audit",
+          op: "claude-eval-nonzero-noop",
+          message:
+            "claude-eval exited non-zero (best-effort); cron monitor stays green (liveness, not success)",
+          extra: {
+            fn: "cron-agent-native-audit",
+            exitCode: spawnResult.exitCode,
+            durationMs: spawnResult.durationMs,
+          },
+        },
+      );
     }
 
     // --- Step 4: sentry-heartbeat (final POST) ---
+    // The pipeline reached the end without an INFRA fault → healthy liveness
+    // check-in regardless of claude's exit code (the non-zero exit is a
+    // best-effort outcome, surfaced above, never a liveness failure).
     await step.run("sentry-heartbeat", async () => {
-      await postSentryHeartbeat({ ok: spawnResult.ok, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-agent-native-audit", logger });
+      await postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-agent-native-audit", logger });
     });
 
-    return { ok: spawnResult.ok };
+    return { ok: true };
   } finally {
     // Best-effort teardown (idempotent rm -rf with force:true). The
     // teardown helper already mirrors any failure to Sentry — wrapping

@@ -154,3 +154,26 @@ describe("buildSpawnEnv allowlist (security surface)", () => {
     });
   });
 });
+
+describe("#4730 — output-aware heartbeat (always-create producer)", () => {
+  it("gates the heartbeat on output, not the bare spawn exit code", () => {
+    // This cron is an always-create producer, NOT best-effort: STEP 2(c) files a
+    // per-overdue `scheduled-campaign-calendar` issue, and STEP 2.5 files (then
+    // closes) a heartbeat audit issue with the SAME label when NEW == 0 — so a
+    // labeled artifact lands in the run window every run. A clean exit that
+    // produced none must turn the monitor RED (output-aware) instead of
+    // false-green. Mirrors the producers wired by PR #4714.
+    expect(SUT_SOURCE).not.toContain("ok: spawnResult.ok");
+    expect(SUT_SOURCE).toContain("resolveOutputAwareOk(");
+    expect(SUT_SOURCE).toContain("runStartedAt");
+    expect(SUT_SOURCE).toContain("ok: heartbeatOk");
+  });
+
+  it("retains the STEP 2.5 unconditional heartbeat-issue path that makes it a producer", () => {
+    // Guard the prompt invariant the classification depends on: if STEP 2.5 is
+    // ever removed, the cron stops being always-create and the output-aware
+    // wiring would start false-RED'ing healthy zero-overdue runs.
+    expect(SUT_SOURCE).toContain("STEP 2.5");
+    expect(SUT_SOURCE).toContain("scheduled-campaign-calendar");
+  });
+});
