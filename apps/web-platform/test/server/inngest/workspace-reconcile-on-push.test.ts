@@ -347,12 +347,15 @@ describe("reconcile — ignored internal repo (stop the source)", () => {
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
   });
 
-  it("RECONCILES an ignored repo that HAS a connected workspace, and warns once (regression: dogfood KB freeze)", async () => {
+  it("RECONCILES an ignored repo that HAS a connected workspace, logs at info, does not page (regression: dogfood KB freeze + #4706 over-warn)", async () => {
     // The bug: the ignore check ran BEFORE resolution, so a real connected
     // workspace on an ignored repo (founder dogfooding their KB from the
-    // platform's own repo) was silently starved for ~5 weeks. Now the ignored
-    // repo is reconciled because it has a workspace, and a shadowed-workspace
-    // breadcrumb fires so the misconfiguration is never again silent.
+    // platform's own repo) was silently starved for ~5 weeks. #4706 fixed that
+    // (reconcile-anyway) but added a Sentry WARNING on the shadowed-workspace
+    // sub-case — which is the EXPECTED steady state for the dogfood repo, so it
+    // became a per-push alert flood with zero signal. Now the ignored repo is
+    // reconciled because it has a workspace, and the shadowed-workspace state is
+    // recorded at pino `info` (Better Stack audit trail) instead of paging Sentry.
     WORKSPACE_ROWS = [{ id: "ws-A" }];
     OWNERS.set("ws-A", "owner-A");
     EXISTING_DIRS.add(wsPath("ws-A"));
@@ -376,11 +379,19 @@ describe("reconcile — ignored internal repo (stop the source)", () => {
     expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
       expect.objectContaining({ trigger: "webhook_push", ok: true }),
     );
-    // Shadowed-workspace breadcrumb fires exactly once.
-    expect(warnSilentFallbackSpy).toHaveBeenCalledTimes(1);
-    expect(warnSilentFallbackSpy).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ op: "ignored-repo-has-workspaces" }),
+    // Shadowed-workspace state is recorded at info, NOT mirrored to Sentry.
+    expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+    // Only the ignored-repo-has-workspaces info-log fires for this case
+    // (rows.length === 1, ignored repo → no skip-no-workspace-match log). Assert
+    // on the op list so a future regression that adds a second info-log on this
+    // path names the unexpected op rather than a bare count mismatch.
+    expect(loggerInfoSpy.mock.calls.map((c) => (c[0] as { op?: string }).op)).toEqual([
+      "ignored-repo-has-workspaces",
+    ]);
+    expect(loggerInfoSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ op: "ignored-repo-has-workspaces", workspaceCount: 1 }),
+      "Reconcile ignore-list shadows a connected workspace — reconciling anyway (info; review WORKSPACE_RECONCILE_IGNORE_REPOS if unexpected)",
     );
   });
 
