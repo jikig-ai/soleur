@@ -22,6 +22,10 @@ export interface SpawnResult {
 
 export const KILL_ESCALATION_MS = 5_000;
 
+// Hard ceiling on captured child stderr — a pathological process must not OOM
+// the worker. 8 KiB comfortably holds a git fatal: line + a few hints.
+export const STDERR_CAP_BYTES = 8192;
+
 export function resolveClaudeBin(): string {
   const override = process.env.CLAUDE_BIN;
   if (override && existsSync(override)) return override;
@@ -44,18 +48,38 @@ export function spawnSimple(
   cmd: string,
   args: string[],
   opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
-): Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }> {
+): Promise<{
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  stderr: string;
+}> {
   return new Promise((resolve) => {
+    // Capture stderr (stdin/stdout stay ignored). Without this, a non-zero
+    // exit — e.g. `git clone` exit 128 — discarded the only line that says
+    // WHY (auth/network/DNS), leaving Sentry with an opaque exit code. The
+    // caller folds this into the thrown error so the next failure is
+    // self-diagnosing (cq-silent-fallback-must-mirror-to-sentry).
     const child = spawn(cmd, args, {
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "pipe"],
       cwd: opts.cwd,
       env: opts.env ?? process.env,
     });
+    let stderr = "";
+    if (child.stderr) {
+      child.stderr.setEncoding("utf-8");
+      child.stderr.on("data", (chunk: string) => {
+        // Exact cap (slice on assignment) — appending whole chunks could
+        // overshoot the ceiling by up to one chunk's length.
+        if (stderr.length < STDERR_CAP_BYTES) {
+          stderr = (stderr + chunk).slice(0, STDERR_CAP_BYTES);
+        }
+      });
+    }
     child.on("exit", (exitCode: number | null, signal: NodeJS.Signals | null) => {
-      resolve({ exitCode, signal });
+      resolve({ exitCode, signal, stderr: stderr.trim() });
     });
-    child.on("error", () => {
-      resolve({ exitCode: -1, signal: null });
+    child.on("error", (err: Error) => {
+      resolve({ exitCode: -1, signal: null, stderr: err.message });
     });
   });
 }
@@ -87,8 +111,14 @@ export async function setupEphemeralWorkspace(args: {
     spawnCwd,
   ]);
   if (cloneResult.exitCode !== 0) {
+    // Fold git's stderr into the message so the failure is self-diagnosing
+    // (auth vs network vs DNS). Redact the installation token first — the
+    // clone URL embeds it and git echoes the remote on some failures.
+    // cloneResult.stderr is already trimmed by spawnSimple.
+    const reason = redactToken(cloneResult.stderr, installationToken);
     throw new Error(
-      `git clone failed (exit ${cloneResult.exitCode}, signal ${cloneResult.signal}) for jikig-ai/soleur`,
+      `git clone failed (exit ${cloneResult.exitCode}, signal ${cloneResult.signal}) for jikig-ai/soleur` +
+        (reason ? `: ${reason}` : ""),
     );
   }
 
