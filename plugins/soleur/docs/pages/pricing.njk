@@ -6,6 +6,8 @@ layout: base.njk
 permalink: pricing/
 ogImage: pricing-og.png
 ogImageAlt: "Soleur Pricing — Every department. One price."
+date: 2026-06-01
+last_updated: 2026-06-01
 ---
 
     <!-- Hero -->
@@ -17,6 +19,8 @@ ogImageAlt: "Soleur Pricing — Every department. One price."
         <p class="hero-stat">{{ stats.agents }} Agents &middot; {{ stats.departments }} Departments &middot; {{ stats.skills }} Skills &middot; Compounding Knowledge</p>
       </div>
     </section>
+
+    {% include "page-freshness.njk" %}
 
     <!-- Waitlist CTA -->
     <section class="landing-cta" id="waitlist">

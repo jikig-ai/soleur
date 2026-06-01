@@ -18,9 +18,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const reportSilentFallbackSpy = vi.fn();
+const warnSilentFallbackSpy = vi.fn();
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: (...a: unknown[]) => reportSilentFallbackSpy(...a),
-  warnSilentFallback: vi.fn(),
+  warnSilentFallback: (...a: unknown[]) => warnSilentFallbackSpy(...a),
 }));
 
 import {
@@ -41,6 +42,7 @@ const RUN_START = "2026-05-31T09:00:00.000Z";
 
 afterEach(() => {
   reportSilentFallbackSpy.mockClear();
+  warnSilentFallbackSpy.mockClear();
 });
 
 describe("verifyScheduledIssueCreated", () => {
@@ -146,21 +148,7 @@ describe("verifyScheduledIssueCreated", () => {
 });
 
 describe("resolveOutputAwareOk", () => {
-  it("spawn failed → ok:false, verify skipped, no output-missing event", async () => {
-    const octokit = octokitReturning([]);
-    const ok = await resolveOutputAwareOk({
-      spawnOk: false,
-      label: "scheduled-roadmap-review",
-      runStartedAt: RUN_START,
-      cronName: "cron-roadmap-review",
-      octokit,
-    });
-    expect(ok).toBe(false);
-    expect(octokit.request).not.toHaveBeenCalled();
-    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
-  });
-
-  it("spawn ok + issue present → ok:true, no event", async () => {
+  it("issue present + spawn ok → ok:true, no event", async () => {
     const octokit = octokitReturning([
       { updated_at: "2026-05-31T09:30:00.000Z" },
     ]);
@@ -173,11 +161,34 @@ describe("resolveOutputAwareOk", () => {
     });
     expect(ok).toBe(true);
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+    expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
   });
 
-  it("spawn ok + NO issue → ok:false + scheduled-output-missing event (the fix)", async () => {
+  it("issue present + spawn NON-ZERO → ok:true + non-paging WARN (output overrides exit code)", async () => {
+    // The competitive-analysis #4747 false-red regression: claude created the
+    // issue but exited non-zero on a trailing step. Output is the contract →
+    // green, with a warning (not a red monitor).
     const octokit = octokitReturning([
-      { updated_at: "2026-05-18T12:00:00.000Z" }, // last week, before window
+      { updated_at: "2026-06-01T11:15:00.000Z" },
+    ]);
+    const ok = await resolveOutputAwareOk({
+      spawnOk: false,
+      label: "scheduled-competitive-analysis",
+      runStartedAt: RUN_START,
+      cronName: "cron-competitive-analysis",
+      octokit,
+    });
+    expect(ok).toBe(true); // <-- the fix: was false before
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+    expect(warnSilentFallbackSpy).toHaveBeenCalledTimes(1);
+    expect(warnSilentFallbackSpy.mock.calls[0][1].op).toBe(
+      "scheduled-output-nonzero-exit",
+    );
+  });
+
+  it("NO issue + spawn ok → ok:false + scheduled-output-missing (silent no-op)", async () => {
+    const octokit = octokitReturning([
+      { updated_at: "2026-05-18T12:00:00.000Z" }, // before window
     ]);
     const ok = await resolveOutputAwareOk({
       spawnOk: true,
@@ -190,25 +201,53 @@ describe("resolveOutputAwareOk", () => {
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
     const opts = reportSilentFallbackSpy.mock.calls[0][1];
     expect(opts.op).toBe("scheduled-output-missing");
-    expect(opts.feature).toBe("cron-roadmap-review");
+    expect(opts.extra.spawnOk).toBe(true);
   });
 
-  it("spawn ok + verify THREW → ok:true (inconclusive) + verify-output-failed event", async () => {
+  it("NO issue + spawn NON-ZERO → ok:false + scheduled-output-missing (spawnOk:false in extra)", async () => {
+    const octokit = octokitReturning([]);
+    const ok = await resolveOutputAwareOk({
+      spawnOk: false,
+      label: "scheduled-roadmap-review",
+      runStartedAt: RUN_START,
+      cronName: "cron-roadmap-review",
+      octokit,
+    });
+    expect(ok).toBe(false);
+    expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+    expect(reportSilentFallbackSpy.mock.calls[0][1].op).toBe(
+      "scheduled-output-missing",
+    );
+    expect(reportSilentFallbackSpy.mock.calls[0][1].extra.spawnOk).toBe(false);
+  });
+
+  it("verify THREW → falls back to spawn exit code + verify-output-failed event", async () => {
     const request = vi.fn().mockRejectedValue(new Error("GitHub 502"));
     const octokit = { request } as unknown as Parameters<
       typeof resolveOutputAwareOk
     >[0]["octokit"];
-    const ok = await resolveOutputAwareOk({
+    // spawnOk true → inconclusive verify falls back to true
+    const okTrue = await resolveOutputAwareOk({
       spawnOk: true,
       label: "scheduled-content-generator",
       runStartedAt: RUN_START,
       cronName: "cron-content-generator",
       octokit,
     });
-    expect(ok).toBe(true); // do NOT red-flag a possibly-successful run
+    expect(okTrue).toBe(true);
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
     expect(reportSilentFallbackSpy.mock.calls[0][1].op).toBe(
       "verify-output-failed",
     );
+    reportSilentFallbackSpy.mockClear();
+    // spawnOk false → inconclusive verify falls back to false
+    const okFalse = await resolveOutputAwareOk({
+      spawnOk: false,
+      label: "scheduled-content-generator",
+      runStartedAt: RUN_START,
+      cronName: "cron-content-generator",
+      octokit,
+    });
+    expect(okFalse).toBe(false);
   });
 });

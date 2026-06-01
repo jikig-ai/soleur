@@ -19,6 +19,7 @@
     "image": "/images/fixture-author.svg",
     "bio": "Fixture bio with \"quotes\" and </script><script>alert(1)</script> breakout.",
     "credentials": ["Credential with \"quotes\"", "Credential with & ampersand"],
+    "knowsAbout": ["Topic with \"quotes\"", "Topic with & ampersand", "Distributed systems"],
     "sameAs": ["https://github.com/fixture", "https://x.com/fixture"]
   },
   "footerColumns": [],
