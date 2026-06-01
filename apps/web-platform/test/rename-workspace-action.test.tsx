@@ -36,8 +36,9 @@ describe("RenameWorkspaceAction", () => {
   });
 
   it("owner can rename: input is prefilled, POSTs the new name, updates display", async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({ ok: true, name: "Acme Studio" }), { status: 200 }),
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ ok: true, name: "Acme Studio" }), { status: 200 }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -57,7 +58,8 @@ describe("RenameWorkspaceAction", () => {
         expect.objectContaining({ method: "POST" }),
       );
     });
-    const sentBody = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    const init = fetchMock.mock.calls[0][1]!;
+    const sentBody = JSON.parse(init.body as string);
     expect(sentBody).toEqual({ organizationId: ORG_ID, name: "Acme Studio" });
 
     await waitFor(() => {
