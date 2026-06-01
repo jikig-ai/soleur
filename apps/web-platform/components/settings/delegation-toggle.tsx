@@ -97,7 +97,14 @@ function OwnerDelegationControl({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ delegationId: delegation.id, reason: "grantor_revoke" }),
         });
-        if (res.ok) setActive(false);
+        if (res.ok) {
+          setActive(false);
+        } else {
+          // AC5: never silently swallow a non-OK response — a failed write must
+          // be operator-visible, not a toggle that snaps back with no signal.
+          console.error("[delegation-toggle] revoke failed:", res.status);
+          window.alert("Couldn't stop sharing the key. Please try again.");
+        }
       } else {
         const res = await fetch("/api/workspace/delegations", {
           method: "POST",
@@ -108,8 +115,20 @@ function OwnerDelegationControl({
             dailyCapCents: capCents,
           }),
         });
-        if (res.ok) setActive(true);
+        if (res.ok) {
+          setActive(true);
+        } else {
+          console.error("[delegation-toggle] grant failed:", res.status);
+          window.alert("Couldn't share a key with this member. Please try again.");
+        }
       }
+    } catch (err) {
+      // A thrown fetch (offline, DNS/TLS failure, aborted request) bypasses the
+      // !res.ok branches above; without this catch the toggle would snap back
+      // to its prior state with no signal — the same silent no-op AC5 fixes for
+      // non-OK responses. Surface it the same way.
+      console.error("[delegation-toggle] request failed:", err);
+      window.alert("Something went wrong. Please check your connection and try again.");
     } finally {
       setLoading(false);
     }

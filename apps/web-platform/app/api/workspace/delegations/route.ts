@@ -76,13 +76,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "not_owner" }, { status: 403 });
   }
 
+  // Canonical 7-arg contract from migration 064 (mirrors scripts/byok-grant.ts).
+  // PostgREST resolves rpc() by argument NAME — these MUST match the function
+  // signature exactly or resolution fails (PGRST202 → 400 → silent toggle revert).
+  // hourly defaults to the daily cap (RPC rejects NULL with 22003; the UI exposes
+  // only a daily stepper). expires_at is null = never expires (UI-created grants).
   const { data, error } = await service.rpc("grant_byok_delegation", {
     p_grantor_user_id: user.id,
     p_grantee_user_id: body.granteeUserId,
     p_workspace_id: body.workspaceId,
-    p_daily_cap_cents: body.dailyCapCents,
-    p_hourly_cap_cents: body.hourlyCapCents ?? null,
-    p_created_by_user_id: user.id,
+    p_daily_usd_cap_cents: body.dailyCapCents,
+    p_hourly_usd_cap_cents: body.hourlyCapCents ?? body.dailyCapCents,
+    p_expires_at: null,
+    p_actor_user_id: user.id,
   });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
