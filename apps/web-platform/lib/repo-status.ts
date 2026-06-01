@@ -35,9 +35,13 @@ export function repoNeedsReconnect(
  * personal install already on the user column) so only the `ready + NULL user
  * column` cohort pays the extra workspace-credential read.
  *
- * Fail toward the alarm: a null/error RPC result (non-member, no install, or a
- * reported failure) keeps `needsReconnect=true` so the genuine #4706 silent
- * freeze still surfaces the banner. Do NOT swallow to `false`.
+ * Fail toward the alarm: resolveInstallationId converts the expected failure
+ * modes (non-member, no install, RPC error, tenant-auth error) to `null`
+ * itself (all Sentry-mirrored), and `null` keeps `needsReconnect=true` so the
+ * genuine #4706 silent freeze still surfaces the banner. A truly unexpected
+ * (non-RuntimeAuthError) throw propagates and fails loud — matching the
+ * `kb/sync` precedent rather than being swallowed to `false`. Do NOT add a
+ * catch that returns `false`.
  */
 export async function resolveNeedsReconnect(
   repoStatus: string | null,

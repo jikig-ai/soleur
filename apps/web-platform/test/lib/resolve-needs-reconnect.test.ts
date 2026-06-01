@@ -38,6 +38,19 @@ describe("resolveNeedsReconnect", () => {
   it("is true for ready + undefined user install when no workspace credential resolves", async () => {
     mockResolve.mockResolvedValue(null);
     expect(await resolveNeedsReconnect("ready", undefined, "user-1")).toBe(true);
+    // undefined must reach the RPC just like null — a regression that
+    // short-circuits undefined before the RPC would skip the alarm check.
+    expect(mockResolve).toHaveBeenCalledWith("user-1");
+  });
+
+  // Fail-loud contract: resolveInstallationId swallows the EXPECTED failures to
+  // null itself (covered above), but a truly unexpected throw must propagate —
+  // not be caught and swallowed to false (which would hide the #4706 freeze).
+  it("propagates an unexpected credential-read rejection (fails loud, not swallowed to false)", async () => {
+    mockResolve.mockRejectedValue(new Error("unexpected RPC failure"));
+    await expect(resolveNeedsReconnect("ready", null, "user-1")).rejects.toThrow(
+      "unexpected RPC failure",
+    );
   });
 
   // AC3 — personal install set on the user column → connected, and the cheap
@@ -54,13 +67,15 @@ describe("resolveNeedsReconnect", () => {
   });
 
   // AC4 — non-ready statuses short-circuit to false with no RPC, mirroring the
-  // pure predicate's existing contract.
-  it("is false for non-ready statuses without resolving the workspace credential", async () => {
-    expect(await resolveNeedsReconnect("not_connected", null, "user-1")).toBe(false);
-    expect(await resolveNeedsReconnect("error", null, "user-1")).toBe(false);
-    expect(await resolveNeedsReconnect("cloning", null, "user-1")).toBe(false);
-    expect(mockResolve).not.toHaveBeenCalled();
-  });
+  // pure predicate's existing contract. it.each so a regression on a single
+  // status reports the offending value rather than a bundled failure.
+  it.each(["not_connected", "error", "cloning"])(
+    "is false for non-ready status %s without resolving the workspace credential",
+    async (status) => {
+      expect(await resolveNeedsReconnect(status, null, "user-1")).toBe(false);
+      expect(mockResolve).not.toHaveBeenCalled();
+    },
+  );
 
   it("is false for null repoStatus without resolving the workspace credential", async () => {
     expect(await resolveNeedsReconnect(null, null, "user-1")).toBe(false);
