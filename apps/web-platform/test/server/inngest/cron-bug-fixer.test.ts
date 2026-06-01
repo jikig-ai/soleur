@@ -49,8 +49,10 @@ vi.mock("node:fs", () => ({
 }));
 
 const reportSilentFallbackSpy = vi.fn();
+const warnSilentFallbackSpy = vi.fn();
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
+  warnSilentFallback: warnSilentFallbackSpy,
 }));
 
 const octokitRequestSpy = vi.fn();
@@ -134,6 +136,7 @@ beforeEach(() => {
   writeFileSpy.mockReset();
   existsSyncSpy.mockReset();
   reportSilentFallbackSpy.mockReset();
+  warnSilentFallbackSpy.mockReset();
   octokitRequestSpy.mockReset();
   octokitGraphqlSpy.mockReset();
   createProbeOctokitSpy.mockReset();
@@ -836,13 +839,71 @@ describe("cron-bug-fixer — (e) Sentry heartbeat URL shape", () => {
     expect(sentryCall).toBeDefined();
     expect(sentryCall![0] as string).toContain("status=ok");
     // No infra-fault breadcrumb on a benign no-fix run — only the (kept-strict)
-    // setup-workspace / parse-event paths page; the no-fix exit is logged, not
-    // mirrored to Sentry as an error.
+    // setup-workspace / parse-event paths page as errors.
     const infraReport = reportSilentFallbackSpy.mock.calls.find(([, ctx]) => {
       const op = (ctx as { op?: string }).op;
       return op === "setup-ephemeral-workspace" || op === "parse-event-data";
     });
     expect(infraReport).toBeUndefined();
+    // But the no-fix exit IS surfaced as a queryable WARNING-level Sentry event
+    // (off-host-visible, non-paging) so a chronically-broken-but-live fixer is
+    // diff-able — a bare logger.warn would be invisible without SSH.
+    const noFixWarn = warnSilentFallbackSpy.mock.calls.find(
+      ([, ctx]) => (ctx as { op?: string }).op === "claude-eval-nonzero-nofix",
+    );
+    expect(noFixWarn).toBeDefined();
+    expect((noFixWarn![1] as { extra?: { selectedIssue?: number } }).extra?.selectedIssue).toBe(950);
+  });
+
+  it("claude non-zero exit WITH a detected PR → ?status=ok (final-heartbeat branch; agent opened a PR despite non-zero exit)", async () => {
+    // The H1 decoupling must also hold on the FINAL heartbeat branch, reached
+    // when claude exits non-zero but detect-pr nonetheless finds a PR the agent
+    // opened before exiting. Distinct from the no-PR early-return branch above.
+    const p3Issues = [
+      {
+        number: 970,
+        title: "fix: nonzero-with-pr",
+        labels: [{ name: "priority/p3-low" }, { name: "type/bug" }],
+        created_at: "2026-05-01T00:00:00Z",
+      },
+    ];
+    wireOctokit({
+      p3Issues,
+      detectedPR: [
+        {
+          number: 971,
+          node_id: "PR_n970",
+          head: { ref: "bot-fix/970-fix" },
+          created_at: "2026-05-01T01:00:00Z",
+        },
+      ],
+      prAuthor: "app/claude",
+      prLabels: [{ name: "priority/p3-low" }, { name: "bot-fix/auto-merge-eligible" }],
+      prFiles: [{ filename: "fix.ts" }],
+      issuePriorityLabels: [{ name: "priority/p3-low" }, { name: "bot-fix/auto-merge-eligible" }],
+      sourceIssueNumber: 970,
+      prNumber: 971,
+    });
+
+    wireSpawn(1); // non-zero exit, but a PR was opened
+    const { cronBugFixerHandler } = await importHandler();
+    const step = makeStep();
+    const result = await cronBugFixerHandler({ step, logger });
+
+    expect(result.ok).toBe(true);
+    expect(result.prNumber).toBe(971);
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const sentryCall = fetchMock.mock.calls.find(([url]) =>
+      typeof url === "string" && url.includes("/cron/scheduled-bug-fixer/"),
+    );
+    expect(sentryCall).toBeDefined();
+    expect(sentryCall![0] as string).toContain("status=ok");
+    // The non-zero exit is still surfaced as a queryable warning even though a
+    // PR landed (claude exited non-zero but opened a PR before exiting).
+    const noFixWarn = warnSilentFallbackSpy.mock.calls.find(
+      ([, ctx]) => (ctx as { op?: string }).op === "claude-eval-nonzero-nofix",
+    );
+    expect(noFixWarn).toBeDefined();
   });
 
   it("claude-eval aborted by 50-min timeout → ?status=ok (monitor stays green; chronic-timeout still surfaces as non-paging telemetry)", async () => {
@@ -865,7 +926,11 @@ describe("cron-bug-fixer — (e) Sentry heartbeat URL shape", () => {
 
       // git exits 0; claude NEVER exits on its own → forces the substrate's
       // AbortController timeout. Capture the claude child so we can emit its
-      // signal-killed exit after the abort fires.
+      // signal-killed exit after the abort fires. Use an implausibly-high pid:
+      // the abort handler issues `process.kill(-pid, "SIGTERM")` (a process
+      // GROUP signal); the default fake pid (22222) could collide with a real
+      // group on a busy CI runner, so pick one no runner will own.
+      const FAKE_CLAUDE_PID = 999_999_999;
       let claudeChild: FakeChild | null = null;
       spawnSpy.mockImplementation((cmd: string) => {
         if (cmd === "git") {
@@ -873,7 +938,7 @@ describe("cron-bug-fixer — (e) Sentry heartbeat URL shape", () => {
           queueMicrotask(() => gitChild.emit("exit", 0, null));
           return gitChild;
         }
-        claudeChild = makeChild();
+        claudeChild = makeChild(FAKE_CLAUDE_PID);
         return claudeChild; // no auto-exit
       });
 
@@ -883,6 +948,9 @@ describe("cron-bug-fixer — (e) Sentry heartbeat URL shape", () => {
 
       // Let setup-workspace + claude-eval spawn run so claudeChild exists.
       await vi.advanceTimersByTimeAsync(0);
+      // Guard against silent vacuity: if the spawn ordering ever changes so the
+      // claude child was never created, fail legibly instead of NPE-ing below.
+      expect(claudeChild).not.toBeNull();
       // Cross the 50-min budget → ac.abort() → abortedByTimeout = true, SIGTERM.
       await vi.advanceTimersByTimeAsync(50 * 60 * 1000 + 1);
       // The SIGTERM'd child exits (null code, signal SIGTERM) → spawnResult.ok=false.

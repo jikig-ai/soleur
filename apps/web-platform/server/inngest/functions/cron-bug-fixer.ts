@@ -64,7 +64,7 @@ import {
 import type { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
 import { createProbeOctokit } from "@/server/github/probe-octokit";
-import { reportSilentFallback } from "@/server/observability";
+import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
 
 // =============================================================================
 // Constants
@@ -742,25 +742,48 @@ export async function cronBugFixerHandler({
     }
 
     // A non-zero claude exit (no fix landed, or aborted by the 50-min budget)
-    // is the NORMAL best-effort outcome for an autonomous fixer — log it for
-    // observability, but do NOT page the cron monitor. The monitor's liveness
-    // contract is "the pipeline fired and ran end-to-end without an
-    // INFRASTRUCTURE fault" (token mint, clone, spawn-error, parse), not
-    // "claude shipped a PR today". Those infra faults keep their strict
-    // status=error early-returns above (parse-event-data, setup-workspace).
-    // Decoupling the heartbeat from spawnResult.ok is the fix for the
-    // scheduled-bug-fixer error-check-in incident (H1 — see
+    // is the NORMAL best-effort outcome for an autonomous fixer — surface it
+    // as observability, but do NOT page the cron monitor. The monitor's
+    // liveness contract is "the pipeline fired and ran end-to-end without an
+    // INFRASTRUCTURE fault" (token mint, clone, parse), not "claude shipped a
+    // PR today". Those infra faults keep their strict status=error
+    // early-returns above (parse-event-data, setup-workspace). Decoupling the
+    // heartbeat from spawnResult.ok is the fix for the scheduled-bug-fixer
+    // error-check-in incident (H1 — see
     // knowledge-base/project/plans/2026-06-01-fix-scheduled-bug-fixer-cron-error-checkin-plan.md).
-    if (!spawnResult.ok) {
-      logger.warn(
+    //
+    // We emit a WARNING-level Sentry event (warnSilentFallback) rather than a
+    // bare logger.warn so the signal is queryable off-host: a bare pino
+    // logger.warn only adds a Sentry breadcrumb (flushed solely on a later
+    // captureException, which a clean ok:true run never produces) and lands in
+    // a Docker json-file stream that Vector does not tail — i.e. invisible
+    // without SSH. The warning event (op=claude-eval-nonzero-nofix, tagged with
+    // selectedIssue) does NOT page (no monitor status change, no issue-alert
+    // rule) but makes a chronically-broken-but-live fixer — e.g. the same
+    // issue selected and never fixed for N days running — diff-able week over
+    // week. This closes the observability gap a green monitor would otherwise
+    // hide. The two infra-fault paths that DO still surface independently:
+    // the 50-min timeout (op=claude-eval-timeout, above) and a claude spawn
+    // failure (op=child_process.spawn, emitted inside the substrate's
+    // child.on("error"); exitCode === -1) — so the else-if below intentionally
+    // skips the timeout case to avoid a duplicate signal.
+    if (spawnResult.abortedByTimeout) {
+      // already surfaced by the claude-eval-timeout reportSilentFallback above
+    } else if (!spawnResult.ok) {
+      warnSilentFallback(
+        new Error("claude-eval exited non-zero — no fix landed this run"),
         {
-          fn: "cron-bug-fixer",
-          selectedIssue,
-          exitCode: spawnResult.exitCode,
-          abortedByTimeout: spawnResult.abortedByTimeout,
-          durationMs: spawnResult.durationMs,
+          feature: "cron-bug-fixer",
+          op: "claude-eval-nonzero-nofix",
+          message:
+            "claude-eval exited non-zero (no fix landed); cron monitor stays green (liveness, not success)",
+          extra: {
+            fn: "cron-bug-fixer",
+            selectedIssue,
+            exitCode: spawnResult.exitCode,
+            durationMs: spawnResult.durationMs,
+          },
         },
-        "claude-eval exited non-zero (no fix landed); not paging the cron monitor",
       );
     }
 
