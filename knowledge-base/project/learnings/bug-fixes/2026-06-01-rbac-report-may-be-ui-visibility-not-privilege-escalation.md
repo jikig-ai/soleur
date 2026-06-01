@@ -11,8 +11,8 @@ pr: 4763
 
 ## Problem
 
-Operator reported that a workspace **Member** (`jean.deruelle@gmail.com`) appeared to
-have the same access as the **Owner** (`ops@jikigai.com`), "especially in Settings."
+Operator reported that a workspace **Member** (e.g. `member@example.com`) appeared to
+have the same access as the **Owner** (e.g. `owner@example.com`), "especially in Settings."
 The instinct on an RBAC report is to assume privilege escalation and start hardening
 the authorization model (routes, RLS, RPCs).
 
