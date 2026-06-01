@@ -383,11 +383,15 @@ describe("reconcile — ignored internal repo (stop the source)", () => {
     expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
     // Only the ignored-repo-has-workspaces info-log fires for this case
-    // (rows.length === 1, ignored repo → no skip-no-workspace-match log).
-    expect(loggerInfoSpy).toHaveBeenCalledTimes(1);
+    // (rows.length === 1, ignored repo → no skip-no-workspace-match log). Assert
+    // on the op list so a future regression that adds a second info-log on this
+    // path names the unexpected op rather than a bare count mismatch.
+    expect(loggerInfoSpy.mock.calls.map((c) => (c[0] as { op?: string }).op)).toEqual([
+      "ignored-repo-has-workspaces",
+    ]);
     expect(loggerInfoSpy).toHaveBeenCalledWith(
       expect.objectContaining({ op: "ignored-repo-has-workspaces", workspaceCount: 1 }),
-      expect.any(String),
+      "Reconcile ignore-list shadows a connected workspace — reconciling anyway (info; review WORKSPACE_RECONCILE_IGNORE_REPOS if unexpected)",
     );
   });
 
