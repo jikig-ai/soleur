@@ -194,6 +194,39 @@ describe("cron-daily-triage — T6 GitHub App token injection (#512e25)", () => 
       .env;
     expect(spawnEnv.GH_TOKEN).toBe("ghs_TESTTOKEN_REDACT_ME");
   });
+
+  it("the minted token OVERRIDES any ambient process.env.GH_TOKEN (the incident vector)", async () => {
+    // Positive control (test-design review MEDIUM): seed a bogus ambient PAT
+    // (the pre-fix env the bug fell back to) and assert the SUBPROCESS sees the
+    // minted token, NOT the ambient one — the hr-github-app-auth-not-pat contract.
+    const prior = process.env.GH_TOKEN;
+    process.env.GH_TOKEN = "ghp_AMBIENT_PAT_SHOULD_NOT_LEAK";
+    try {
+      const child = makeChild();
+      spawnSpy.mockImplementation(() => {
+        queueMicrotask(() => child.emit("exit", 0, null));
+        return child;
+      });
+
+      const handler = await importHandler();
+      const step = makeStep();
+      await handler({ step, logger });
+
+      // the 60-min lifetime floor propagates to generateInstallationToken
+      // (installation id 12345 from the createProbeOctokit mock).
+      expect(generateInstallationTokenSpy).toHaveBeenCalledWith(12345, {
+        minRemainingMs: 50 * 60 * 1000 + 10 * 60 * 1000,
+      });
+
+      const spawnEnv2 = (spawnSpy.mock.calls[0][2] as { env: NodeJS.ProcessEnv })
+        .env;
+      expect(spawnEnv2.GH_TOKEN).toBe("ghs_TESTTOKEN_REDACT_ME");
+      expect(spawnEnv2.GH_TOKEN).not.toBe("ghp_AMBIENT_PAT_SHOULD_NOT_LEAK");
+    } finally {
+      if (prior === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = prior;
+    }
+  });
 });
 
 describe("cron-daily-triage — T2 spawn error (ENOENT)", () => {
