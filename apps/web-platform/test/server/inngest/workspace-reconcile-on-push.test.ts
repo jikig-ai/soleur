@@ -216,6 +216,8 @@ describe("reconcile — happy path (single workspace)", () => {
     expect(rows.at(-1)).toEqual(
       expect.objectContaining({ trigger: "webhook_push", ok: true }),
     );
+    // #4728 — the ok:true reconcile row carries the workspace discriminator.
+    expect(rows.at(-1)).toEqual(expect.objectContaining({ workspace_id: "ws-A" }));
   });
 });
 
@@ -238,6 +240,15 @@ describe("reconcile — fan-out (AC6)", () => {
     );
     expect(APPENDS.get("owner-A")).toHaveLength(1);
     expect(APPENDS.get("owner-B")).toHaveLength(1);
+    // #4728 — each owner's row carries ITS OWN workspace discriminator. Guards
+    // against a producer bug that writes a single captured id to every row (the
+    // exact multi-workspace attribution #4728 exists to enable).
+    expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
+      expect.objectContaining({ workspace_id: "ws-A" }),
+    );
+    expect(APPENDS.get("owner-B")!.at(-1)).toEqual(
+      expect.objectContaining({ workspace_id: "ws-B" }),
+    );
   });
 });
 
@@ -403,7 +414,12 @@ describe("reconcile — workspace dir not provisioned", () => {
     expect(syncWorkspaceSpy).not.toHaveBeenCalled();
     expect(result).toEqual({ ok: false, reason: "no-workspace-synced" });
     expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
-      expect.objectContaining({ ok: false, error_class: "workspace_not_ready" }),
+      expect.objectContaining({
+        ok: false,
+        error_class: "workspace_not_ready",
+        // #4728 — failure rows also carry the workspace discriminator.
+        workspace_id: "ws-A",
+      }),
     );
     expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
       expect.anything(),
@@ -424,7 +440,12 @@ describe("reconcile — sync failure", () => {
 
     expect(result).toEqual({ ok: false, reason: "no-workspace-synced" });
     expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
-      expect.objectContaining({ ok: false, error_class: "sync_failed" }),
+      expect.objectContaining({
+        ok: false,
+        error_class: "sync_failed",
+        // #4728 — failure rows also carry the workspace discriminator.
+        workspace_id: "ws-A",
+      }),
     );
     expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
       expect.anything(),
