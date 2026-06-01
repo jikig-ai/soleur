@@ -673,3 +673,179 @@ describe("#3171 FAQPage JSON-LD matches the visible FAQ on every Q&A page", () =
     });
   }
 });
+
+// -- Test 14: #3169 / #3170 / #3994 evergreen freshness block ---------------
+// Every evergreen page must render, below the hero: (1) a stat-led summary
+// paragraph (AEO citation target, #3169), and (2) a visible "Last updated"
+// line + author byline (#3170), driven by per-page last_updated frontmatter
+// rendered through _includes/page-freshness.njk. The combination targets the
+// AEO Presence ≥55% exit gate (#3994). Shared partial → assert on every page.
+
+describe("#3169/#3170/#3994 evergreen pages render stat-led summary + last-updated byline below the hero", () => {
+  // Canonical evergreen set (homepage + the five cited pages) plus
+  // /getting-started/ (also evergreen; carries the #4410 block too).
+  const EVERGREEN: { label: string; rel: string }[] = [
+    { label: "homepage", rel: "index.html" },
+    { label: "/about/", rel: "about/index.html" },
+    { label: "/vision/", rel: "vision/index.html" },
+    { label: "/pricing/", rel: "pricing/index.html" },
+    { label: "/agents/", rel: "agents/index.html" },
+    { label: "/skills/", rel: "skills/index.html" },
+    { label: "/getting-started/", rel: "getting-started/index.html" },
+  ];
+
+  // Byline name is the single source of truth in site.json — pin to it so a
+  // rename in the data file must update the rendered byline in lockstep.
+  const authorName = () =>
+    (JSON.parse(readFileSync(SITE_JSON, "utf8")) as { author: { name: string } })
+      .author.name;
+
+  test("every evergreen page has exactly one stat-led summary + one last-updated byline, summary below the H1", () => {
+    let checked = 0;
+    for (const { label, rel } of EVERGREEN) {
+      const abs = resolve(SITE, rel);
+      if (!existsSync(abs)) continue; // build/permalink drift — skip, counter guards vacuity
+      checked++;
+      const html = readFileSync(abs, "utf8");
+
+      // (1) Stat-led summary — exactly one, non-trivial length. The summary is
+      // plain text inside the <p>; capture the inner text and .trim() only — no
+      // tag-strip regex (js/incomplete-multi-character-sanitization) and no
+      // &amp;->& decode (js/double-escaping). The summary contains no nested
+      // markup by construction (page-freshness.njk emits a bare text node).
+      const summaryMatches = [
+        ...html.matchAll(/<p class="page-summary">([\s\S]*?)<\/p>/g),
+      ];
+      expect(summaryMatches.length, `${label}: exactly one .page-summary`).toBe(1);
+      const summaryText = summaryMatches[0][1].trim();
+      expect(
+        summaryText.length,
+        `${label}: stat-led summary is a real sentence`,
+      ).toBeGreaterThan(80);
+      // Proof points the AEO audit wants extractable from the summary.
+      expect(summaryText, `${label}: summary names Company-as-a-Service`).toContain(
+        "Company-as-a-Service",
+      );
+      expect(
+        /Model Context Protocol/.test(summaryText),
+        `${label}: summary cites MCP`,
+      ).toBe(true);
+
+      // (2) Last-updated + byline block — exactly one, with a machine-readable
+      // <time datetime="YYYY-MM-DD"> and the author byline.
+      const metaMatches = [
+        ...html.matchAll(/<p class="page-meta">([\s\S]*?)<\/p>/g),
+      ];
+      expect(metaMatches.length, `${label}: exactly one .page-meta`).toBe(1);
+      const metaText = metaMatches[0][1];
+      expect(metaText, `${label}: visible "Last updated" label`).toContain(
+        "Last updated",
+      );
+      expect(
+        /<time datetime="\d{4}-\d{2}-\d{2}">/.test(metaText),
+        `${label}: machine-readable <time datetime>`,
+      ).toBe(true);
+      expect(metaText, `${label}: author byline`).toContain(authorName());
+
+      // (3) Ordering — the summary must sit BELOW the page H1 (below-the-hero).
+      const h1Pos = html.search(/<h1[ >]/);
+      const summaryPos = html.indexOf('class="page-summary"');
+      expect(h1Pos, `${label}: page has an H1`).toBeGreaterThanOrEqual(0);
+      expect(
+        summaryPos > h1Pos,
+        `${label}: stat-led summary renders below the hero H1`,
+      ).toBe(true);
+    }
+    expect(
+      checked,
+      "at least one evergreen page asserted against built HTML",
+    ).toBe(EVERGREEN.length);
+  });
+
+  test("every evergreen page's WebPage JSON-LD dateModified reflects the freshness date", () => {
+    let checked = 0;
+    for (const { label, rel } of EVERGREEN) {
+      const abs = resolve(SITE, rel);
+      if (!existsSync(abs)) continue;
+      checked++;
+      const html = readFileSync(abs, "utf8");
+      // base.njk emits a single JSON-LD script holding a @graph array; the
+      // WebPage node lives inside that graph, not as a top-level block.
+      const nodes = jsonLdBlocks(html).flatMap((b) => {
+        if (typeof b !== "object" || b === null) return [];
+        const graph = (b as { "@graph"?: unknown[] })["@graph"];
+        return Array.isArray(graph) ? graph : [b];
+      });
+      const webPage = nodes.find(
+        (b): b is { "@type": string; dateModified?: string } =>
+          typeof b === "object" &&
+          b !== null &&
+          (b as { "@type"?: string })["@type"] === "WebPage",
+      );
+      expect(webPage, `${label}: WebPage JSON-LD block`).toBeDefined();
+      expect(
+        typeof webPage!.dateModified,
+        `${label}: WebPage.dateModified present (freshness signal)`,
+      ).toBe("string");
+      // RFC-3339-ish — the dateToRfc3339 filter emits an ISO timestamp.
+      expect(
+        /^\d{4}-\d{2}-\d{2}T/.test(webPage!.dateModified!),
+        `${label}: dateModified is an ISO timestamp`,
+      ).toBe(true);
+    }
+    expect(checked, "dateModified asserted on every evergreen page").toBe(
+      EVERGREEN.length,
+    );
+  });
+});
+
+// -- Test 15: #4410 /getting-started/ definition + external citations -------
+// The single weakest page for AI-engine extractability gets a plain-language
+// Soleur definition at the top and ≥2 external citations (Apache-2.0, Claude
+// Code docs, MCP spec). Assert on the built page.
+
+describe("#4410 /getting-started/ has a plain-language definition + external citations", () => {
+  test("renders one .page-definition and ≥2 distinct external citation hrefs", () => {
+    const html = readSite("getting-started/index.html");
+
+    const defMatches = [
+      ...html.matchAll(/<p class="page-definition">([\s\S]*?)<\/p>/g),
+    ];
+    expect(defMatches.length, "exactly one .page-definition").toBe(1);
+    expect(
+      defMatches[0][1].trim().length,
+      "definition is a real plain-language sentence",
+    ).toBeGreaterThan(60);
+
+    // Count distinct external hrefs inside the citations block. Match on the
+    // href attribute only (no text extraction → no sanitization CodeQL flags).
+    const citeBlock = html.match(
+      /<div class="page-citations">([\s\S]*?)<\/div>/,
+    );
+    expect(citeBlock, ".page-citations block present").not.toBeNull();
+    const hrefs = new Set(
+      [...citeBlock![1].matchAll(/href="(https?:\/\/[^"]+)"/g)].map(
+        (m) => m[1],
+      ),
+    );
+    expect(
+      hrefs.size,
+      "≥2 distinct external citations in /getting-started/",
+    ).toBeGreaterThanOrEqual(2);
+
+    // Pin the three audit-mandated sources (host-anchored, not bare substring).
+    const hostMatched = (re: RegExp) => [...hrefs].some((h) => re.test(h));
+    expect(
+      hostMatched(/^https:\/\/www\.apache\.org\//),
+      "cites Apache-2.0 license",
+    ).toBe(true);
+    expect(
+      hostMatched(/^https:\/\/docs\.claude\.com\//),
+      "cites Claude Code docs",
+    ).toBe(true);
+    expect(
+      hostMatched(/^https:\/\/modelcontextprotocol\.io(\/|$)/),
+      "cites the MCP spec",
+    ).toBe(true);
+  });
+});
