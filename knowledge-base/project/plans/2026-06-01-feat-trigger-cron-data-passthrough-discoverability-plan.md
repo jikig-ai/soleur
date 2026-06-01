@@ -339,8 +339,9 @@ logs:
   where: "Sentry (reportSilentFallback) + Next.js server logs"
   retention: "per existing Sentry/host retention (unchanged)"
 discoverability_test:
-  command: "curl -sS -X POST https://app.soleur.ai/api/internal/trigger-cron -H \"Authorization: Bearer $TOKEN\" -H 'content-type: application/json' -d '{\"event\":\"cron/workspace-sync-health.manual-trigger\",\"data\":{}}' -w '%{http_code}'"
-  expected_output: "202 with body {\"dispatched\":\"cron/workspace-sync-health.manual-trigger\",\"trigger\":\"manual-api\"} (NO ssh)"
+  command: "curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -X POST https://app.soleur.ai/api/internal/trigger-cron -H 'content-type: application/json' -d '{\"event\":\"cron/workspace-sync-health.manual-trigger\"}'"
+  expected_output: "401"
+  note: "Token-free reachability + fail-closed probe (no secret needed, no ssh): an unauthenticated POST proves the route exists and rejects with 401. The authenticated 202 path (with Bearer + optional data) is exercised by the unit suite and the post-merge AC-D1 skill --dry-run/live check."
 ```
 
 ## Test Scenarios
