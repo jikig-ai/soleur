@@ -5,7 +5,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import logger from "@/server/logger";
 import { buildTree } from "@/server/kb-reader";
 import { withUserRateLimit } from "@/server/with-user-rate-limit";
-import { repoNeedsReconnect } from "@/lib/repo-status";
+import { resolveNeedsReconnect } from "@/lib/repo-status";
 
 async function getHandler(_req: Request, user: User) {
   const serviceClient = createServiceClient();
@@ -34,11 +34,14 @@ async function getHandler(_req: Request, user: User) {
     : [];
   const lastSync = historyArr.length > 0 ? historyArr[historyArr.length - 1] : null;
 
-  // #4712 — deterministic reconnect signal. `ready` + NULL install id is the
-  // #4706 silent-freeze class (webhook reconcile selects by install id).
-  const needsReconnect = repoNeedsReconnect(
+  // #4712 — capability-aware reconnect signal. `ready` + NULL user install id
+  // is EITHER the #4706 silent-freeze class OR a workspace-shared install whose
+  // credential lives on the workspace (ADR-044); resolveNeedsReconnect reads the
+  // same signal the sync path uses so the banner clears once sync can resume.
+  const needsReconnect = await resolveNeedsReconnect(
     userData.repo_status,
     userData.github_installation_id,
+    user.id,
   );
 
   try {
