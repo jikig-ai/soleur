@@ -83,6 +83,62 @@ export async function cronWorkspaceSyncHealthHandler({
     });
   }
 
+  // Step 2b (item 2, #4712): ready + INSTALLED workspaces whose owner's LATEST
+  // kb_sync_history row is ok:false — a persistent recorded sync failure that
+  // item-1's NULL-install scan can never catch (those write zero rows). This
+  // class IS installed, so the webhook reaches it, but the sync keeps failing
+  // and the user just sees a stale tree. kb_sync_history lives on `users` only
+  // (ADR-044 mirrored repo cols — not history — to workspaces), so this scan
+  // targets `users`, unlike the workspaces scan above. Read-only; reports
+  // in-place and deliberately does NOT widen the function's ScanResult return.
+  await step.run("scan-stale-sync-failed", async (): Promise<{ reported: number }> => {
+    const { createServiceClient } = await import("@/lib/supabase/service");
+    const service = createServiceClient();
+    const { data, error } = await service
+      .from("users")
+      .select("id, kb_sync_history")
+      .eq("repo_status", "ready")
+      .not("github_installation_id", "is", null);
+    if (error) {
+      reportSilentFallback(error, {
+        feature: SENTRY_FEATURE,
+        op: "scan-stale",
+        message: "Stale-sync-failed scan failed",
+      });
+      return { reported: 0 };
+    }
+    const rows = (data as { id: string; kb_sync_history: unknown }[] | null) ?? [];
+    let reported = 0;
+    for (const r of rows) {
+      // Latest row only (at(-1)) — NOT .some(): a since-recovered repo whose
+      // history contains an old ok:false must not fire. Legacy {date,count}
+      // rows and ok:true rows are excluded by the `'ok' in latest` guard.
+      const history = Array.isArray(r.kb_sync_history) ? r.kb_sync_history : [];
+      const latest = history.at(-1);
+      if (
+        typeof latest === "object" &&
+        latest !== null &&
+        "ok" in latest &&
+        (latest as { ok: unknown }).ok === false
+      ) {
+        reportSilentFallback(
+          new Error("ready+installed workspace's latest KB sync failed"),
+          {
+            feature: SENTRY_FEATURE,
+            op: "stale-sync-failed",
+            // reportSilentFallback hashes extra.userId → userIdHash. Static
+            // Error message above carries no PII (deepen security note).
+            extra: { userId: r.id },
+            message:
+              "Latest kb_sync_history row is ok:false on an installed workspace — KB stale despite installed app; needs investigation",
+          },
+        );
+        reported++;
+      }
+    }
+    return { reported };
+  });
+
   // Step 3: Sentry heartbeat. ok = the scan itself ran (findings are expected
   // signal, not a probe failure).
   await step.run("sentry-heartbeat", async () => {

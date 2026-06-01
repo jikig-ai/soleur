@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { SettingsContent } from "@/components/settings/settings-content";
 import type { RepoStatus } from "@/components/settings/project-setup-card";
+import { repoNeedsReconnect } from "@/lib/repo-status";
 
 export default async function SettingsPage() {
   const supabase = await createClient();
@@ -26,10 +27,17 @@ export default async function SettingsPage() {
       .single(),
     service
       .from("users")
-      .select("repo_url, repo_status, repo_last_synced_at")
+      .select(
+        "repo_url, repo_status, repo_last_synced_at, github_installation_id",
+      )
       .eq("id", user.id)
       .single(),
   ]);
+
+  const needsReconnect = repoNeedsReconnect(
+    userData?.repo_status ?? null,
+    userData?.github_installation_id ?? null,
+  );
 
   return (
     <SettingsContent
@@ -40,6 +48,7 @@ export default async function SettingsPage() {
       repoUrl={userData?.repo_url ?? null}
       repoStatus={(userData?.repo_status as RepoStatus) ?? "not_connected"}
       repoLastSyncedAt={userData?.repo_last_synced_at ?? null}
+      needsReconnect={needsReconnect}
     />
   );
 }

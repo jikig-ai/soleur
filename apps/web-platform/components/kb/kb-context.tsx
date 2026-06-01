@@ -15,6 +15,11 @@ export interface KbContextValue {
   // `null` for never-synced operators. `KbContentHeader` reads this from
   // context and renders `<KbSyncStatus lastSync={...} />`.
   lastSync: KbSyncHistoryRow | null;
+  // #4712 — `ready` + NULL install id (the #4706 silent-freeze class),
+  // surfaced by `/api/kb/tree`. Gates the inline reconnect banner. Cleared by
+  // `refreshTree()` after a successful reconnect (client-fetched state — NOT
+  // `router.refresh()`).
+  needsReconnect: boolean;
 }
 
 export const KbContext = createContext<KbContextValue | null>(null);
