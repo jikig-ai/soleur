@@ -656,8 +656,11 @@ export async function getDefaultBranchHeadCommitAt(
   repo: string,
 ): Promise<number | null> {
   const token = await generateInstallationToken(installationId);
+  // Encode the path segments (defense-in-depth, matching this file's upstream-
+  // distrust posture): repo_url is DB-sourced and canonical today, but encoding
+  // forecloses any `?`/`#`/`..`-in-segment from reshaping the GitHub API path.
   const response = await githubFetch(
-    `${GITHUB_API}/repos/${owner}/${repo}/commits?per_page=1`,
+    `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits?per_page=1`,
     { headers: { Authorization: `token ${token}` } },
   );
   // Empty repository → GitHub returns 409 ("Git Repository is empty"); not an

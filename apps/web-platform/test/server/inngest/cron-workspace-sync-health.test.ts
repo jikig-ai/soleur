@@ -298,11 +298,17 @@ describe("cron-workspace-sync-health — stale-sync-failed (item 2)", () => {
     // Top-level return is unchanged (item-1 ScanResult); item-2 reports in-place.
     expect(result).toEqual({ ok: true, findings: [], error: null });
     // Arm 2 (op:scan-stale) AND arm 3 (op:scan-went-quiet) both scan `users`, so
-    // a shared users-table outage blinds both and each reports once.
-    expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(2);
+    // a shared users-table outage blinds both and each reports once. Assert BOTH
+    // ops explicitly rather than a bare count(2) — the count silently encodes
+    // "two arms read users" and would mask an arm-3 regression that double-reports
+    // scan-stale; per-op assertions point a future failure at the right arm.
     expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ feature: "workspace-sync-health", op: "scan-stale" }),
+    );
+    expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ feature: "workspace-sync-health", op: "scan-went-quiet" }),
     );
   });
 });
@@ -398,6 +404,41 @@ describe("cron-workspace-sync-health — went-quiet (item 3, #4717)", () => {
     // gap == maxGap ⇒ `<= maxGap` ⇒ fresh ⇒ skipped before the probe.
     expect(getDefaultBranchHeadCommitAtSpy).not.toHaveBeenCalled();
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("respects the cross-clock FRESHNESS_SLACK_MS boundary (commit within slack → no fire; beyond → fire)", async () => {
+    // Fake time so the HEAD-vs-lastOk gap is exact (slack = 5min). lastOk is 10d
+    // stale (clause b holds), so only clause (a) — the cross-clock slack — decides.
+    vi.useFakeTimers();
+    const fixed = new Date("2026-06-01T00:00:00Z").getTime();
+    vi.setSystemTime(fixed);
+    const lastOk = fixed - 10 * DAY;
+    const baseRow = {
+      id: "user-slack",
+      repo_url: "https://github.com/acme/widget",
+      github_installation_id: 123,
+      kb_sync_history: [
+        { at: new Date(lastOk).toISOString(), trigger: "webhook_push", ok: true, sync_completed_at: lastOk },
+      ],
+    };
+
+    // (i) commit 2min after lastOk — inside the 5min slack → must NOT fire.
+    USERS_ROWS = [baseRow];
+    getDefaultBranchHeadCommitAtSpy.mockResolvedValue(lastOk + 2 * 60 * 1000);
+    let handler = await importHandler();
+    await handler({ step: makeStep(), logger });
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+
+    // (ii) commit 6min after lastOk — beyond the slack → fires.
+    reportSilentFallbackSpy.mockReset();
+    USERS_ROWS = [baseRow];
+    getDefaultBranchHeadCommitAtSpy.mockResolvedValue(lastOk + 6 * 60 * 1000);
+    handler = await importHandler();
+    await handler({ step: makeStep(), logger });
+    expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "went-quiet", extra: expect.objectContaining({ userId: "user-slack" }) }),
+    );
   });
 
   it("does NOT fire for a latest ok:false row (arm 2 owns it; arm 3 skips)", async () => {

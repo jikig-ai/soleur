@@ -30,9 +30,10 @@ const SENTRY_MONITOR_SLUG = "cron-workspace-sync-health";
 const SENTRY_FEATURE = "workspace-sync-health";
 
 // Arm 3 (#4717) — went-quiet detection tuning.
-// Cross-clock guard: `pushed`/commit time comes from GitHub's clock, lastOk from
-// ours. The slack must exceed GitHub↔our NTP skew (sub-second in practice); 5min
-// is generous headroom. It is NOT a tuning knob — keep it a file-local literal.
+// Cross-clock guard: the default-branch HEAD `committer.date` comes from GitHub's
+// clock, lastOk from ours. The slack must exceed GitHub↔our NTP skew (sub-second
+// in practice); 5min is generous headroom. It is NOT a tuning knob — keep it a
+// file-local literal. (committer.date is client-rewritable; see the arm-3 block.)
 const FRESHNESS_SLACK_MS = 5 * 60 * 1000;
 // Staleness floor. A blank or `0` env var must NOT yield a 0-day firehose, so the
 // guard rejects non-finite AND non-positive values (mirrors WORKSPACE_RECONCILE_
@@ -162,8 +163,26 @@ export async function cronWorkspaceSyncHealthHandler({
   // sync. Fire only when BOTH (a) the repo pushed since the last sync (+slack,
   // cross-clock) AND (b) the last sync is older than N days — clause (a)
   // suppresses the idle-repo false positive. Scans `users` (mirrors arm 2 → the
-  // two arms partition by latest-row ok-polarity; never double-report). The whole
-  // body is try/caught so an unexpected throw can NEVER skip the heartbeat below.
+  // two arms partition by latest-row ok-polarity; never double-report).
+  //
+  // DEFAULT BRANCH is the correct probe target (not "any branch"): the reconcile
+  // only ever syncs the default branch — webhook-push-reconcilable.ts drops
+  // non-default-branch pushes, tags, and deletions — so default-branch HEAD is
+  // exactly "the content we should have synced." This is also why a feature-
+  // branch push can't false-positive here. NOTE: GitHub's `committer.date` is
+  // client-rewritable (rebase/amend/fabricated date); a force-push that backdates
+  // HEAD could mask a real change (false negative) or future-dating could over-
+  // fire — both rare, accepted at p3 (plan Risks).
+  //
+  // Legacy-tail blind spot: a user whose latest row is a legacy {date,count} row
+  // (no `ok` key) is deliberately skipped — we cannot assert freshness from it.
+  // Largely moot (the legacy writer is RLS-blocked; only pre-existing historical
+  // data can have a legacy tail), but it IS an accepted coverage gap, not health.
+  //
+  // Heartbeat isolation is STRUCTURAL: the heartbeat is its own later step.run and
+  // consumes only arm-1's `scan.ok` — it never reads arm-3 state. The try/catch
+  // below is belt-and-suspenders (keeps this step's return clean); do NOT fold the
+  // heartbeat into this step on the belief the try/catch alone protects it.
   await step.run("scan-went-quiet", async (): Promise<{ wentQuiet: number }> => {
     try {
       const { createServiceClient } = await import("@/lib/supabase/service");
@@ -216,7 +235,11 @@ export async function cronWorkspaceSyncHealthHandler({
         if (now - lastOkSyncAt <= maxGapMs) continue; // fresh — clause (b) fails
 
         // owner/repo from the user's own repo_url (NOT _cron-shared constants,
-        // which point at Soleur's own repo). Mirrors workspace-reconcile-on-push.
+        // which point at Soleur's own repo). Mirrors workspace-reconcile-on-push's
+        // repoSlug. repo_url is canonical `https://github.com/owner/repo` at write
+        // time (normalizeRepoUrl), so a falsy owner/repo here is a near-impossible
+        // legacy/malformed row — skipping it silently is benign (the helper
+        // encodeURIComponent-guards the segments regardless).
         const slug = r.repo_url
           .replace(/^https?:\/\/[^/]+\//i, "")
           .replace(/\.git$/i, "");
