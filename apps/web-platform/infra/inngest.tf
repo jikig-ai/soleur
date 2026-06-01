@@ -1,11 +1,15 @@
 # Inngest server IaC (#3960, PR-F follow-up).
 #
 # Provisions:
-#   - 4 random_id resources for INNGEST_SIGNING_KEY / INNGEST_EVENT_KEY ({prd,dev}).
+#   - 6 random_id resources: INNGEST_SIGNING_KEY / INNGEST_EVENT_KEY ({prd,dev})
+#     + INNGEST_MANUAL_TRIGGER_SECRET ({prd,dev}, #4734).
 #     Self-hosted Inngest per ADR-030; signing/event keys are operator-chosen randoms
 #     (no dashboard issuance flow). 32 bytes => 64 hex chars; SDK accepts the
 #     `signkey-<env>-<hex>` shape (see node_modules/inngest/helpers/strings.js).
-#   - 5 doppler_secret resources (4 Inngest keys + 1 heartbeat URL for prd).
+#     The manual-trigger secret is opaque to the SDK (a bare 64-hex Bearer value
+#     consumed by POST /api/internal/trigger-cron — no signkey- prefix needed).
+#   - 7 doppler_secret resources (4 Inngest keys + 1 heartbeat URL for prd
+#     + 2 manual-trigger secrets {prd,dev}).
 #   - 1 betteruptime_heartbeat (60s period, 30s grace) — free-tier email alerts.
 #   - Conditional betteruptime_policy gated by var.betterstack_paid_tier.
 #
@@ -41,6 +45,16 @@ resource "random_id" "inngest_event_key_prd" {
 }
 
 resource "random_id" "inngest_event_key_dev" {
+  byte_length = 32
+}
+
+# Manual-trigger Bearer secret (#4734) — opaque 64-hex, consumed by
+# POST /api/internal/trigger-cron. Distinct random per env (prd != dev).
+resource "random_id" "inngest_manual_trigger_secret_prd" {
+  byte_length = 32
+}
+
+resource "random_id" "inngest_manual_trigger_secret_dev" {
   byte_length = 32
 }
 
@@ -87,6 +101,33 @@ resource "doppler_secret" "inngest_event_key_dev" {
   config     = "dev"
   name       = "INNGEST_EVENT_KEY"
   value      = random_id.inngest_event_key_dev.hex
+  visibility = "masked"
+
+  lifecycle {
+    ignore_changes = [value] # see signing_key_prd above — rotate via `terraform taint random_id.<name>`.
+  }
+}
+
+# Manual-trigger Bearer secret (#4734) — opaque .hex (no signkey- prefix; the
+# value is compared verbatim by the route's timingSafeEqual, not parsed by the
+# Inngest SDK).
+resource "doppler_secret" "inngest_manual_trigger_secret_prd" {
+  project    = "soleur"
+  config     = "prd"
+  name       = "INNGEST_MANUAL_TRIGGER_SECRET"
+  value      = random_id.inngest_manual_trigger_secret_prd.hex
+  visibility = "masked"
+
+  lifecycle {
+    ignore_changes = [value] # see signing_key_prd above — rotate via `terraform taint random_id.<name>`.
+  }
+}
+
+resource "doppler_secret" "inngest_manual_trigger_secret_dev" {
+  project    = "soleur"
+  config     = "dev"
+  name       = "INNGEST_MANUAL_TRIGGER_SECRET"
+  value      = random_id.inngest_manual_trigger_secret_dev.hex
   visibility = "masked"
 
   lifecycle {

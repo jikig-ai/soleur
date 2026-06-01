@@ -22,6 +22,12 @@ const EXEMPT_ROUTES = new Set([
   // cron job ONLY, authenticated via HMAC-SHA256 against
   // KB_DRIFT_INGEST_SIGNING_KEY. No cookies; not browser-reachable.
   "app/api/internal/kb-drift-ingest/route.ts",
+  // #4734 — on-demand cron trigger is an internal operator/agent route
+  // authenticated via a fail-closed Bearer shared secret
+  // (INNGEST_MANUAL_TRIGGER_SECRET, length-guarded timingSafeEqual). No
+  // cookies / no browser session, so origin-validation CSRF does not apply —
+  // the secret is the trust boundary. Same class as kb-drift-ingest above.
+  "app/api/internal/trigger-cron/route.ts",
 ]);
 
 describe("CSRF coverage", () => {
