@@ -240,6 +240,15 @@ describe("reconcile — fan-out (AC6)", () => {
     );
     expect(APPENDS.get("owner-A")).toHaveLength(1);
     expect(APPENDS.get("owner-B")).toHaveLength(1);
+    // #4728 — each owner's row carries ITS OWN workspace discriminator. Guards
+    // against a producer bug that writes a single captured id to every row (the
+    // exact multi-workspace attribution #4728 exists to enable).
+    expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
+      expect.objectContaining({ workspace_id: "ws-A" }),
+    );
+    expect(APPENDS.get("owner-B")!.at(-1)).toEqual(
+      expect.objectContaining({ workspace_id: "ws-B" }),
+    );
   });
 });
 
