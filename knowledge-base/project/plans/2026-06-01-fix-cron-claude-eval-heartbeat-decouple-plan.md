@@ -198,23 +198,23 @@ _threshold: none, reason: change is confined to operator-facing cron-monitor hea
 
 ### Pre-merge (PR)
 
-- [ ] For each of the 8 in-scope crons, the heartbeat semantic (Pattern A page
+- [x] For each of the 8 in-scope crons, the heartbeat semantic (Pattern A page
   vs. non-paging breadcrumb, or Pattern B output-aware) is **explicitly decided
   and documented inline** with a comment citing the liveness contract (mirror
   the `cron-bug-fixer.ts:744-769` comment block).
-- [ ] `git grep -nE "ok: spawnResult\.ok" apps/web-platform/server/inngest/functions/cron-*.ts`
+- [x] `git grep -nE "ok: spawnResult\.ok" apps/web-platform/server/inngest/functions/cron-*.ts`
   returns **0** hits after the change (the exact pre-fix line that PR #4714
   forbids for producers; extend the enforcement to the 8 newly-fixed crons).
-- [ ] Each in-scope cron's test file is updated RED→GREEN mirroring the
+- [x] Each in-scope cron's test file is updated RED→GREEN mirroring the
   bug-fixer group-(e) rewrite (`cron-bug-fixer.test.ts:809-856`): a
   non-zero-exit clean run asserts the heartbeat URL contains `status=ok` AND
   (Pattern A) a `warnSilentFallback` breadcrumb with the documented `op`, OR
   (Pattern B) `resolveOutputAwareOk` is invoked and a missing-output run posts
   `status=error`.
-- [ ] `reportSilentFallback` infra-fault early-returns remain **strict**
+- [x] `reportSilentFallback` infra-fault early-returns remain **strict**
   (still post `ok: false` / `status=error`): assert at least one infra-fault
   test per cron still pages (or confirm the existing one is unchanged).
-- [ ] `cron-producer-output-wiring.test.ts` adds the **4 Pattern-B** crons
+- [x] `cron-producer-output-wiring.test.ts` adds the **4 Pattern-B** crons
   (`cron-growth-audit`, `cron-growth-execution`, `cron-seo-aeo-audit`,
   `cron-community-monitor`) to the `ALWAYS_CREATE_PRODUCERS` list it asserts
   on (each must contain `resolveOutputAwareOk(` and NOT `ok: spawnResult.ok`),
@@ -225,14 +225,14 @@ _threshold: none, reason: change is confined to operator-facing cron-monitor hea
   Add a sibling guard asserting the 4 Pattern-A crons contain neither
   `ok: spawnResult.ok` (forbidden) nor `resolveOutputAwareOk` (wrong pattern)
   but DO contain `postSentryHeartbeat({ ok: true` + a `warnSilentFallback` op.
-- [ ] `tsc --noEmit` clean; the in-scope cron test files pass via the package's
+- [x] `tsc --noEmit` clean; the in-scope cron test files pass via the package's
   configured runner (vitest — verify via `apps/web-platform/package.json`
   `scripts.test` and `vitest.config.ts` `include` globs, not a hardcoded
   runner).
 
 ### Post-merge (operator)
 
-- [ ] None. The Inngest function container is restarted automatically by
+- [x] None. The Inngest function container is restarted automatically by
   `web-platform-release.yml` on merge to `main` touching
   `apps/web-platform/**` (path-filtered `on.push`); the PR merge IS the
   deploy. No separate operator step. (Automation: handled by existing release
@@ -296,26 +296,26 @@ None.
 
 ## Implementation Phases (TDD)
 
-1. **Phase 0 — precondition grep.** Re-run
+1. **[x] Phase 0 — precondition grep.** Re-run
    `git grep -nE "ok: spawnResult\.ok" apps/web-platform/server/inngest/functions/cron-*.ts`
    to confirm the 9 sites (8 in scope + bug-fixer already done). Re-read each
    full prompt to confirm the precedent-diff classification (4B/4A) has no
    counter-evidence (a producer with an ALSO-conditional path, or vice-versa).
    Read each target cron's existing infra-fault early-returns so they are
    preserved untouched.
-2. **Phase 1 — RED (per cron).** For each cron, add a failing test mirroring
+2. **[x] Phase 1 — RED (per cron).** For each cron, add a failing test mirroring
    `cron-bug-fixer.test.ts:809-856`: a non-zero-exit clean run must post
    `status=ok` and — (Pattern A) emit the documented `warnSilentFallback` op
    AND the no-output run stays green; (Pattern B) invoke `resolveOutputAwareOk`
    AND a spawn-ok-but-no-issue run posts `status=error`
    (`scheduled-output-missing`). Keep an existing infra-fault test asserting
    `status=error`.
-3. **Phase 2 — GREEN (per cron).** Apply Pattern A (agent-native, legal,
+3. **[x] Phase 2 — GREEN (per cron).** Apply Pattern A (agent-native, legal,
    campaign-calendar, ux) or Pattern B (growth-audit, growth-execution,
    seo-aeo, community-monitor — thread `runStartedAt` + call
    `resolveOutputAwareOk`) to each cron's success-path heartbeat, with the
    inline liveness-contract comment. Leave infra-fault early-returns untouched.
-4. **Phase 3 — enforcement + suite.** Extend `cron-producer-output-wiring.test.ts`:
+4. **[x] Phase 3 — enforcement + suite.** Extend `cron-producer-output-wiring.test.ts`:
    add the 4 Pattern-B crons to `ALWAYS_CREATE_PRODUCERS`; add a sibling guard
    for the 4 Pattern-A crons (no `ok: spawnResult.ok`, no `resolveOutputAwareOk`,
    has `postSentryHeartbeat({ ok: true` + a `warnSilentFallback` op). Run

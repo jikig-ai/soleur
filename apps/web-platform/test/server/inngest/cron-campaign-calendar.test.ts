@@ -154,3 +154,22 @@ describe("buildSpawnEnv allowlist (security surface)", () => {
     });
   });
 });
+
+describe("#4730 — heartbeat decoupled from claude exit code (best-effort)", () => {
+  it("success-path heartbeat is liveness (ok: true), not the bare spawn exit code", () => {
+    // NOT a calendar producer: the prompt files issues only per-overdue-item,
+    // so a zero-overdue run legitimately creates nothing — wiring the
+    // output-aware producer shape would false-RED a healthy run. A non-zero/no-
+    // artifact run is NORMAL; the monitor's liveness contract is "pipeline ran
+    // end-to-end without an INFRA fault". Mirrors cron-bug-fixer.ts (PR #4727).
+    expect(SUT_SOURCE).not.toContain("ok: spawnResult.ok");
+    expect(SUT_SOURCE).toContain("postSentryHeartbeat({ ok: true");
+  });
+
+  it("surfaces the non-zero exit as a non-paging WARNING Sentry event (off-host visible)", () => {
+    // warnSilentFallback (queryable WARNING), NOT a bare logger.warn — see
+    // cq-silent-fallback-must-mirror-to-sentry / hr-observability-layer-citation.
+    expect(SUT_SOURCE).toContain("warnSilentFallback");
+    expect(SUT_SOURCE).toContain('op: "claude-eval-nonzero-noop"');
+  });
+});
