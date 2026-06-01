@@ -130,18 +130,18 @@ the DB, so the named-arg mismatch was invisible to CI. `tsc` cannot catch it bec
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — RPC param alignment.** `route.ts` POST calls `grant_byok_delegation` with exactly the
+- [x] **AC1 — RPC param alignment.** `route.ts` POST calls `grant_byok_delegation` with exactly the
   064 named args: `p_grantor_user_id`, `p_grantee_user_id`, `p_workspace_id`,
   `p_daily_usd_cap_cents`, `p_hourly_usd_cap_cents`, `p_expires_at`, `p_actor_user_id`. Verify:
   `grep -nE 'p_daily_cap_cents|p_hourly_cap_cents|p_created_by_user_id' apps/web-platform/app/api/workspace/delegations/route.ts` returns **zero** matches.
-- [ ] **AC2 — hourly cap supplied.** Because `p_hourly_usd_cap_cents` is mandatory (no DEFAULT) and
+- [x] **AC2 — hourly cap supplied.** Because `p_hourly_usd_cap_cents` is mandatory (no DEFAULT) and
   the 064 RPC rejects `NULL` (`ERRCODE 22003`, range `[1, daily]`), the route MUST send a non-null
   hourly cap. Default to the daily cap when the client omits `hourlyCapCents`
   (`p_hourly_usd_cap_cents: body.hourlyCapCents ?? body.dailyCapCents`). Verify via AC4 test asserting
   the value passed.
-- [ ] **AC3 — expiry supplied.** Route sends `p_expires_at: null` (UI-created delegations never
+- [x] **AC3 — expiry supplied.** Route sends `p_expires_at: null` (UI-created delegations never
   expire, matching `byok-grant.ts` "never" default).
-- [ ] **AC4 — route POST test (RED→GREEN).** New test
+- [x] **AC4 — route POST test (RED→GREEN).** New test
   `apps/web-platform/test/api-delegation-grant-route.test.ts` (mirrors the
   `api-delegation-withdraw-route.test.ts` mock pattern: `mockServiceRpc`, `mockGetUser`,
   `mockValidateOrigin`, `mockIsByokDelegationsEnabled`, `mockResolveCurrentOrganizationId`).
@@ -152,14 +152,14 @@ the DB, so the named-arg mismatch was invisible to CI. `tsc` cannot catch it bec
   Covers: happy path (200 + `delegationId`), non-owner (403 `not_owner`), missing fields (400),
   flag-off (404). Runner: `cd apps/web-platform && ./node_modules/.bin/vitest run test/api-delegation-grant-route.test.ts`
   (file lives under `test/**/*.test.ts` per `vitest.config.ts:44` node-project include glob).
-- [ ] **AC5 — client surfaces failures.** `delegation-toggle.tsx` `handleToggle` no longer silently
+- [x] **AC5 — client surfaces failures.** `delegation-toggle.tsx` `handleToggle` no longer silently
   drops a non-OK POST/DELETE response. On `!res.ok`, surface a visible error (inline message or
   `window.alert`, matching the existing `team-membership-list.tsx` remove-member pattern at line 114)
   so a future RPC/authz failure is operator-visible rather than a silent no-op. The toggle's `active`
   state is only set on success (already true; keep it).
-- [ ] **AC6 — no other miscalls.** `grep -rn 'grant_byok_delegation' apps/web-platform --include=*.ts | grep -v migrations | grep -v test`
+- [x] **AC6 — no other miscalls.** `grep -rn 'grant_byok_delegation' apps/web-platform --include=*.ts | grep -v migrations | grep -v test`
   shows only `route.ts` and `byok-grant.ts`, both using the canonical names.
-- [ ] **AC7 — full suite green.** `cd apps/web-platform && <package.json test script>` passes
+- [x] **AC7 — full suite green.** `cd apps/web-platform && <package.json test script>` passes
   (use the script in `apps/web-platform/package.json`, not a hardcoded runner; check
   `apps/web-platform/bunfig.toml` does not block discovery).
 
