@@ -1,0 +1,82 @@
+---
+title: "Glossary"
+seoTitle: "AI Agent Glossary: Company-as-a-Service, Agentic Engineering, MCP & More | Soleur"
+description: "A canonical glossary of the AI agent terms Soleur uses: Company-as-a-Service, agentic engineering, AI agent, MCP, Claude Code plugin, skill, knowledge base, human-in-the-loop."
+permalink: glossary/
+layout: base.njk
+---
+
+<article class="content-page">
+  <header class="content-page-header">
+    <p class="section-label">Reference</p>
+    <h1>Glossary</h1>
+    <p class="hero-tagline">The canonical definitions behind the Soleur platform, in one place.</p>
+    <div class="blog-post-meta">
+      <span class="blog-post-author">by <a href="{{ site.author.url }}" rel="author">{{ site.author.name }}</a>, {{ site.author.role }} of {{ site.name }}</span>
+    </div>
+  </header>
+
+  <div class="content-page-body">
+
+  <p>The AI-agent vocabulary is young and inconsistent. The same word means different things across vendors, and the most important distinctions -- plugin versus skill versus MCP, agent versus chatbot, vibe coding versus agentic engineering -- get blurred. This glossary is the canonical source for how Soleur uses each term. Every definition opens with a one-sentence quotable answer, expands in two to three sentences, and cites an external source.</p>
+
+  <h2 id="company-as-a-service">Company-as-a-Service</h2>
+  <p><strong>Company-as-a-Service (CaaS) is a platform category where AI agents run every department of a business -- engineering, marketing, legal, finance, operations, product, sales, and support -- sharing one compounding knowledge base.</strong> Instead of hiring specialists or stitching together dozens of isolated SaaS tools, a founder installs one platform and gets a full AI organization. The structural difference from SaaS is cross-department memory: the marketing decisions inform the sales battlecards, and the legal audit references the approved privacy policy. Soleur coined and is built on this model -- see the <a href="{{ site.url }}/company-as-a-service/">Company-as-a-Service pillar</a>. The broader shift it belongs to is documented in a16z's <a href="https://a16z.com/the-economic-case-for-generative-ai-and-foundation-models/" rel="noopener noreferrer">economic case for generative AI</a>.</p>
+
+  <h2 id="agentic-engineering">Agentic Engineering</h2>
+  <p><strong>Agentic engineering is a structured methodology where AI agents execute multi-step workflows under human oversight, compounding institutional knowledge across every session.</strong> It is the production-grade successor to vibe coding: it keeps the speed of AI generation but adds a plan before the code, tests and review after it, and a memory that carries the lesson forward. The academic framing of the split appears in <a href="https://arxiv.org/abs/2505.19443" rel="noopener noreferrer">arXiv 2505.19443</a>. See the <a href="{{ site.url }}/agentic-engineering/">Agentic Engineering pillar</a>.</p>
+
+  <h2 id="ai-agent">AI Agent</h2>
+  <p><strong>An AI agent is a goal-directed software worker that takes an objective, plans the steps, uses tools, and returns a finished, inspectable result -- not a chatbot that merely answers questions.</strong> A useful agent has five properties: goal-oriented, tool-using, memory-carrying, verifiable, and correctable. LangChain frames it as a system that uses a language model to decide the control flow of an application. Read LangChain's <a href="https://blog.langchain.com/what-is-an-agent/" rel="noopener noreferrer">definition of an agent</a> and Anthropic's <a href="https://www.anthropic.com/engineering/building-effective-agents" rel="noopener noreferrer">Building Effective Agents</a>.</p>
+
+  <h2 id="mcp">MCP (Model Context Protocol)</h2>
+  <p><strong>The Model Context Protocol (MCP) is an open standard that lets AI applications connect to external systems -- databases, APIs, file stores, SaaS products -- through a uniform interface.</strong> An MCP server is a separate process that exposes tools, resources, and prompts; it is how an agent reaches the world outside its own context. It answers the question "what systems can the model reach," as distinct from a skill's "what should the model know how to do." See the <a href="https://www.anthropic.com/news/model-context-protocol" rel="noopener noreferrer">MCP announcement</a> and <a href="https://modelcontextprotocol.io/" rel="noopener noreferrer">modelcontextprotocol.io</a>.</p>
+
+  <h2 id="claude-code-plugin">Claude Code Plugin</h2>
+  <p><strong>A Claude Code plugin is a distributable bundle that can contain commands, agents, skills, hooks, and MCP server configuration, installed as a single versioned unit and shared across a team via a marketplace.</strong> The plugin is the distribution layer; skills and MCP servers are the capability layers inside it. It answers "how do I ship a capability set to a team." Soleur itself is a plugin. See the <a href="https://docs.claude.com/en/docs/claude-code/plugins" rel="noopener noreferrer">Claude Code plugins documentation</a> and the <a href="{{ site.url }}/claude-code-plugins/">Claude Code plugins pillar</a>.</p>
+
+  <h2 id="skill">Skill</h2>
+  <p><strong>A skill is a packaged unit of procedural knowledge -- a SKILL.md file plus optional scripts and references -- that teaches a model how to perform a task and loads on demand when relevant.</strong> Unlike an MCP server, a skill runs in-context with no separate process and no external connection; it encodes know-how, not reach. Skills can be bundled inside plugins and shared as libraries. See the <a href="https://docs.claude.com/en/docs/agents-and-tools/agent-skills" rel="noopener noreferrer">Agent Skills documentation</a>.</p>
+
+  <h2 id="knowledge-base">Knowledge Base (Compound Knowledge)</h2>
+  <p><strong>A knowledge base is the persistent, shared memory where an AI organization records decisions, patterns, and conventions so that every project starts ahead of the last one.</strong> Compounding knowledge is what separates an agentic organization from running many disconnected tools: a lesson learned once is written back and reused everywhere. Without it, every session re-learns the same lessons and the system gets slower with scale, not faster. See <a href="{{ site.url }}/blog/knowledge-compounding-in-ai-development/">Knowledge Compounding in AI Development</a>.</p>
+
+  <h2 id="human-in-the-loop">Human-in-the-Loop</h2>
+  <p><strong>Human-in-the-loop is a design pattern where a human reviews, approves, or corrects an AI system's actions at defined checkpoints, keeping the founder as the decision-maker and the agent as the executor.</strong> In agentic engineering it appears as the review checkpoint before merge and the correctability property of an agent. The discipline breaks when the human abandons that checkpoint. Anthropic's <a href="https://www.anthropic.com/engineering/building-effective-agents" rel="noopener noreferrer">Building Effective Agents</a> treats oversight as a first-class part of agent design.</p>
+
+  <h2 id="vibe-coding">Vibe Coding</h2>
+  <p><strong>Vibe coding is a conversational style of building software where you accept the code the model generates and run it to see if it works, prioritizing speed over structure.</strong> Andrej Karpathy coined the term in February 2025 to describe "fully giving in to the vibes." It excels at prototypes and weekend hacks and falls apart on the last 30% of production work -- integration, edge cases, maintainability. See Karpathy's <a href="https://x.com/karpathy/status/1886192184808149383" rel="noopener noreferrer">original tweet</a> and Addy Osmani's <a href="https://addyo.substack.com/p/the-70-problem-hard-truths-about" rel="noopener noreferrer">The 70% Problem</a>.</p>
+
+  <h2 id="context-engineering">Context Engineering</h2>
+  <p><strong>Context engineering is the practice of deciding what information enters a model's limited context window -- and what to leave out -- so the model has exactly what it needs to do the task well.</strong> Every loaded plugin, skill, and document costs context budget that competes with the founder's actual project. Good context engineering is why a focused knowledge base outperforms dumping everything into the prompt. See Anthropic's guidance in <a href="https://www.anthropic.com/engineering/building-effective-agents" rel="noopener noreferrer">Building Effective Agents</a>.</p>
+
+  <h2>Where These Terms Come Together</h2>
+
+  <p>These definitions are not academic. They describe one working system: a <a href="{{ site.url }}/company-as-a-service/">Company-as-a-Service</a> platform, built with <a href="{{ site.url }}/agentic-engineering/">agentic engineering</a>, shipped as a <a href="{{ site.url }}/claude-code-plugins/">Claude Code plugin</a>, made of agents and skills that share a knowledge base. Explore the <a href="{{ site.url }}/agents/">{{ stats.agents }} agents</a> and <a href="{{ site.url }}/skills/">{{ stats.skills }} skills</a> that put the vocabulary into practice.</p>
+
+  </div>
+</article>
+
+<script type="application/ld+json">
+{# All string interpolations in this JSON-LD block MUST use | jsonLdSafe | safe — see #2609 #}
+{
+  "@context": "https://schema.org",
+  "@type": "DefinedTermSet",
+  "name": {{ ("Soleur Glossary") | jsonLdSafe | safe }},
+  "description": {{ description | jsonLdSafe | safe }},
+  "url": {{ (site.url + "/glossary/") | jsonLdSafe | safe }},
+  "inLanguage": "en-US",
+  "hasDefinedTerm": [
+    { "@type": "DefinedTerm", "name": "Company-as-a-Service", "url": {{ (site.url + "/glossary/#company-as-a-service") | jsonLdSafe | safe }} },
+    { "@type": "DefinedTerm", "name": "Agentic Engineering", "url": {{ (site.url + "/glossary/#agentic-engineering") | jsonLdSafe | safe }} },
+    { "@type": "DefinedTerm", "name": "AI Agent", "url": {{ (site.url + "/glossary/#ai-agent") | jsonLdSafe | safe }} },
+    { "@type": "DefinedTerm", "name": "MCP (Model Context Protocol)", "url": {{ (site.url + "/glossary/#mcp") | jsonLdSafe | safe }} },
+    { "@type": "DefinedTerm", "name": "Claude Code Plugin", "url": {{ (site.url + "/glossary/#claude-code-plugin") | jsonLdSafe | safe }} },
+    { "@type": "DefinedTerm", "name": "Skill", "url": {{ (site.url + "/glossary/#skill") | jsonLdSafe | safe }} },
+    { "@type": "DefinedTerm", "name": "Knowledge Base", "url": {{ (site.url + "/glossary/#knowledge-base") | jsonLdSafe | safe }} },
+    { "@type": "DefinedTerm", "name": "Human-in-the-Loop", "url": {{ (site.url + "/glossary/#human-in-the-loop") | jsonLdSafe | safe }} },
+    { "@type": "DefinedTerm", "name": "Vibe Coding", "url": {{ (site.url + "/glossary/#vibe-coding") | jsonLdSafe | safe }} },
+    { "@type": "DefinedTerm", "name": "Context Engineering", "url": {{ (site.url + "/glossary/#context-engineering") | jsonLdSafe | safe }} }
+  ]
+}
+</script>
