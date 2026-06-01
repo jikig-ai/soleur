@@ -174,8 +174,9 @@ logs:
   where: "existing logger in kb/tree route (kb/tree: unexpected error) + Sentry breadcrumbs"
   retention: "Sentry default"
 discoverability_test:
-  command: "cd apps/web-platform && ./node_modules/.bin/vitest run test/lib/repo-status.test.ts"
-  expected_output: "all repoNeedsReconnect + resolveNeedsReconnect cases pass (AC1-AC4)"
+  command: curl -sS -o /dev/null -w "%{http_code}" --max-time 10 https://app.soleur.ai/api/kb/tree
+  expected_output: 307 or 401
+  note: "SSH-free liveness probe — an unauthenticated GET to the route that derives needsReconnect redirects (307) or 401s, proving the route is live. The needsReconnect logic itself is covered by the unit + route suites (cd apps/web-platform; ./node_modules/.bin/vitest run test/lib/resolve-needs-reconnect.test.ts test/lib/repo-status.test.ts test/api/kb-tree.test.ts)."
 ```
 
 ## Hypotheses
