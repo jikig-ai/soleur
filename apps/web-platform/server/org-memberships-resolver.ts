@@ -143,6 +143,10 @@ export async function resolveOrgMemberships(
     .map((m) => {
       const ws = workspaceById.get(m.workspace_id);
       if (!ws) return null;
+      // Defense-in-depth: migration 091 backfills every NULL org name to a
+      // non-NULL default and handle_new_user no longer inserts NULL, so a
+      // stored NULL (→ "Untitled") should be unreachable in production. The
+      // guard remains as a last resort. See feat-one-shot-workspace-untitled-name.
       const orgName = orgNameById.get(ws.organization_id) ?? "Untitled";
       return {
         organizationId: ws.organization_id,
