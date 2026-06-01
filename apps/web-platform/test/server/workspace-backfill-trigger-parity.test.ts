@@ -31,6 +31,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { randomBytes } from "node:crypto";
+import { DEFAULT_ORG_NAME } from "@/lib/workspace-name";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -154,8 +155,10 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .select("id, owner_user_id, name")
         .eq("owner_user_id", user.id);
       expect(organizations).toHaveLength(1);
-      // Backfill-shaped org has NULL name.
-      expect(organizations![0].name).toBeNull();
+      // Migration 091 (#4762): handle_new_user now seeds DEFAULT_ORG_NAME at
+      // signup (was NULL in mig 053) so the org switcher never renders the
+      // "Untitled" sentinel for multi-workspace users.
+      expect(organizations![0].name).toBe(DEFAULT_ORG_NAME);
     });
 
     test("TS fallback upsert is a no-op after trigger — no duplicate rows", async () => {
