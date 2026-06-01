@@ -587,9 +587,11 @@ describe("#3173 BlogPosting.image uses the post-specific ogImage, not the site d
   test("posts with ogImage frontmatter render that exact filename in BlogPosting.image", () => {
     const withImage = sourcePosts().filter((p) => p.ogImage);
     expect(withImage.length).toBeGreaterThan(0);
+    let checked = 0;
     for (const { slug, ogImage } of withImage) {
       const built = resolve(SITE, "blog", slug, "index.html");
       if (!existsSync(built)) continue; // permalink override — skip silently
+      checked++;
       const image = blogPostingImage(slug);
       const expected = `${siteUrl()}/images/${ogImage}`;
       expect(image, `${slug}: BlogPosting.image threads ogImage`).toBe(expected);
@@ -597,17 +599,29 @@ describe("#3173 BlogPosting.image uses the post-specific ogImage, not the site d
         `${siteUrl()}/images/og-image.png`,
       );
     }
+    // Guard against a vacuous pass: a slug-derivation drift that skipped every
+    // post would otherwise leave this test green having asserted nothing.
+    expect(
+      checked,
+      "at least one ogImage post asserted against built HTML",
+    ).toBeGreaterThan(0);
   });
 
   test("posts without ogImage fall back to the site default og-image.png", () => {
     const without = sourcePosts().filter((p) => !p.ogImage);
+    let checked = 0;
     for (const { slug } of without) {
       const built = resolve(SITE, "blog", slug, "index.html");
       if (!existsSync(built)) continue;
+      checked++;
       expect(blogPostingImage(slug), `${slug}: default image`).toBe(
         `${siteUrl()}/images/og-image.png`,
       );
     }
+    expect(
+      checked,
+      "at least one imageless post asserted against built HTML",
+    ).toBeGreaterThan(0);
   });
 });
 
