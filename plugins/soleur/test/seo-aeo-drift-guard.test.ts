@@ -850,7 +850,140 @@ describe("#4410 /getting-started/ has a plain-language definition + external cit
   });
 });
 
-// -- Test 16: #4405 / #4406 high-traffic <title> is not brand-only ----------
+// -- Test 16: #3165/#3166/#3167/#3168/#3996 marketing copy invariants -------
+// One-shot content batch. Pins the five copy/markup fixes against built HTML so
+// a future edit that regresses any of them fails loudly:
+//   #3168 homepage memory-first deck-line under the H1
+//   #3167 /about/ full entity H1 (not bare "About")
+//   #3166 /pricing/ inline "concurrent conversation" definition near the table
+//   #3165 no hard prose agent/skill count on homepage/pricing/about (soft floor)
+//   #3996 Cursor/Copilot comparison promoted OUT of <details> into a section
+// Presence checks use html.includes("literal") (not unanchored .test()) per the
+// js/regex/missing-regexp-anchor guidance; no tag-strip / &amp; decode.
+
+describe("#3165/#3166/#3167/#3168/#3996 marketing copy invariants", () => {
+  // The three prose-bearing marketing pages targeted by #3165.
+  const PROSE_PAGES: { label: string; rel: string }[] = [
+    { label: "homepage", rel: "index.html" },
+    { label: "/pricing/", rel: "pricing/index.html" },
+    { label: "/about/", rel: "about/index.html" },
+  ];
+
+  test("#3168 homepage renders a memory-first deck-line under the H1", () => {
+    const html = readSite("index.html");
+    // The deck-line sits in the hero-tagline slot directly under the H1.
+    const tagline = html.match(
+      /<p class="hero-tagline">([\s\S]*?)<\/p>/,
+    );
+    expect(tagline, "homepage has a hero-tagline deck-line").not.toBeNull();
+    const text = tagline![1];
+    // Memory-first hook copy (audit 2026-05-04 §Homepage rewrite #2).
+    expect(text, "deck-line surfaces the memory-first hook").toContain(
+      "already knows your business",
+    );
+    // Ordering: the deck-line renders AFTER the H1 (below it).
+    const h1Pos = html.search(/<h1[ >]/);
+    const taglinePos = html.indexOf('class="hero-tagline"');
+    expect(h1Pos, "homepage has an H1").toBeGreaterThanOrEqual(0);
+    expect(taglinePos > h1Pos, "deck-line renders below the H1").toBe(true);
+  });
+
+  test("#3167 /about/ H1 is the full entity H1, not bare \"About\"", () => {
+    const html = readSite("about/index.html");
+    const m = html.match(/<h1>([\s\S]*?)<\/h1>/);
+    expect(m, "/about/ has an H1").not.toBeNull();
+    const h1 = m![1].trim();
+    expect(h1, "/about/ H1 names the founder entity").toContain(
+      "Jean Deruelle",
+    );
+    expect(h1, "/about/ H1 names the org entity").toContain("Soleur");
+    expect(h1 === "About", "/about/ H1 is not the bare word").toBe(false);
+  });
+
+  test("#3166 /pricing/ defines a concurrent conversation inline near the table", () => {
+    const html = readSite("pricing/index.html");
+    expect(
+      html.includes("A concurrent conversation is one active session"),
+      "/pricing/ has the inline concurrent-conversation definition",
+    ).toBe(true);
+    // The definition renders ABOVE the pricing tier grid (near the table).
+    const defPos = html.indexOf("A concurrent conversation is one active session");
+    const gridPos = html.indexOf('class="pricing-grid"');
+    expect(defPos, "definition present").toBeGreaterThanOrEqual(0);
+    expect(gridPos, "pricing grid present").toBeGreaterThanOrEqual(0);
+    expect(defPos < gridPos, "definition sits above the pricing grid").toBe(
+      true,
+    );
+  });
+
+  test("#3165 no hard prose agent/skill count on homepage/pricing/about", () => {
+    let checked = 0;
+    for (const { label, rel } of PROSE_PAGES) {
+      const html = readSite(rel);
+      checked++;
+      // The literal the audit/issue called out must never reappear in prose.
+      expect(html.includes("66 AI agents"), `${label}: no "66 AI agents"`).toBe(
+        false,
+      );
+      // Stronger drift guard: NO interpolated exact count appears as a prose
+      // "N AI agents" / "N agents" / "N specialists" phrase. The stat strip,
+      // pricing hero-stat, and tier listings render bare numbers without these
+      // prose suffixes, so this matches prose only. A regression that puts
+      // {{ stats.agents }} back into a prose sentence reintroduces the suffix
+      // and fails here. (Anchored alternation — not a validation .test().)
+      const proseCount = html.match(
+        /\b\d+\s+(?:AI agents|agents|specialists|AI skills|workflow skills)\b/,
+      );
+      expect(
+        proseCount,
+        `${label}: prose must use the 60+ soft floor, found "${proseCount?.[0]}"`,
+      ).toBeNull();
+      // Positive guard: the soft floor is actually present in prose.
+      expect(
+        html.includes("60+ AI agents") || html.includes("60+ agents"),
+        `${label}: 60+ soft floor present in prose`,
+      ).toBe(true);
+    }
+    expect(checked, "all three prose pages asserted").toBe(PROSE_PAGES.length);
+  });
+
+  test("#3996 Cursor/Copilot comparison is promoted OUT of <details> on the homepage", () => {
+    const html = readSite("index.html");
+    // The promoted comparison lives in a dedicated non-collapsed section.
+    expect(
+      html.includes('id="soleur-vs-copilots"'),
+      "homepage has the promoted comparison section",
+    ).toBe(true);
+    expect(
+      html.includes("Soleur vs. Cursor and GitHub Copilot"),
+      "promoted section carries the comparison heading",
+    ).toBe(true);
+
+    // Assert the comparison lead sentence appears OUTSIDE any <details> block.
+    // Strip every <details>…</details> region, then confirm the lead sentence
+    // still appears in what remains. (Region removal of a fixed tag pair — not
+    // the single-pass /<[^>]+>/g tag-strip that trips
+    // js/incomplete-multi-character-sanitization.)
+    const LEAD = "Cursor and Copilot help you write code. Soleur helps you run a company.";
+    expect(html.includes(LEAD), "comparison lead sentence present").toBe(true);
+    const outsideDetails = html.replace(
+      /<details[\s\S]*?<\/details>/g,
+      "",
+    );
+    expect(
+      outsideDetails.includes(LEAD),
+      "comparison lead renders outside any <details> (above-the-fold-ish, crawlable)",
+    ).toBe(true);
+
+    // Hero jump-link to the promoted section keeps it discoverable from the fold.
+    expect(
+      html.includes('href="#soleur-vs-copilots"'),
+      "hero links to the promoted comparison section",
+    ).toBe(true);
+  });
+});
+
+// -- Test 14: #4405 / #4406 high-traffic <title> is not brand-only ----------
 // The audit (C1, C3) flagged /getting-started/ and /blog/ as brand-only titles
 // that forfeit all non-branded search traffic. R1/R5 rewrites surface
 // non-brand keywords. This guard fails if either title regresses to a
