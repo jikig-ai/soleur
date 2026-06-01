@@ -221,6 +221,143 @@ interface WorkspaceMemberRow {
   workspace_id: string;
 }
 
+/**
+ * Resolve the calling user's KB filesystem root for their ACTIVE workspace
+ * (ADR-044 read-path cutover, #4543). The KB lives on disk at
+ * `<WORKSPACES_ROOT>/<active_workspace_id>/knowledge-base`; connectivity and
+ * readiness are gated on the ACTIVE workspace — NEVER the caller's own `users`
+ * row. For an invited member viewing a workspace they do not own, the caller's
+ * own row is the empty solo row, so reading it is the exact #4543 dual-ownership
+ * bug that 404s the KB ("No Project Connected") for members.
+ *
+ * Mirrors the canonical `app/api/workspace/active-repo` resolution exactly:
+ *   1. resolve `current_workspace_id` (→ solo fallback, never a sibling);
+ *   2. J5 self-heal — a non-solo claim the caller is no longer a member of
+ *      falls back to the solo workspace (read-only; no corrective write on a
+ *      GET, unlike active-repo's badge self-heal);
+ *   3. gate connectivity on the active workspace's `workspaces.repo_status`;
+ *   4. gate readiness on the active workspace OWNER's `users.workspace_status`
+ *      (resolved via `organizations.owner_user_id`). For a solo caller the
+ *      owner IS the caller, so this is a byte-identical own-row read.
+ *
+ * Returns a discriminated result mirroring the legacy KB-route status contract
+ * (404 = no repo / not connected, 503 = not ready) so each route preserves the
+ * exact response the client hook (`use-kb-layout-state.tsx`) discriminates.
+ */
+export type ActiveWorkspaceKbAccess =
+  | { ok: false; status: 404 | 503 }
+  | {
+      ok: true;
+      activeWorkspaceId: string;
+      workspacePath: string;
+      kbRoot: string;
+      repoStatus: string;
+    };
+
+interface WorkspaceRepoRow {
+  repo_status: string | null;
+  organization_id: string | null;
+}
+
+export async function resolveActiveWorkspaceKbRoot(
+  userId: string,
+  supabase: SupabaseLike,
+): Promise<ActiveWorkspaceKbAccess> {
+  // 1. Active workspace id — claim → solo fallback (never a sibling).
+  let activeWorkspaceId = await resolveCurrentWorkspaceId(userId, supabase);
+
+  // 2. J5 self-heal parity: a non-solo claim the caller is no longer a member
+  //    of must NOT read the sibling's KB. Fall back to solo (read-only — the
+  //    active-repo route's corrective set_current_workspace_id write is for the
+  //    badge; a GET must stay side-effect-free).
+  if (activeWorkspaceId !== userId) {
+    type MemberChain = {
+      select: (cols: string) => MemberChain;
+      eq: (col: string, val: string) => MemberChain;
+      maybeSingle: () => MemberChain;
+    } & PromiseLike<{ data: { user_id: string } | null; error: unknown }>;
+    const memberChain = supabase.from("workspace_members") as MemberChain;
+    const membership = await awaitChain<{
+      data: { user_id: string } | null;
+      error: unknown;
+    }>(
+      memberChain
+        .select("user_id")
+        .eq("workspace_id", activeWorkspaceId)
+        .eq("user_id", userId)
+        .maybeSingle(),
+    );
+    if (membership.error || !membership.data) {
+      activeWorkspaceId = userId; // never the sibling
+    }
+  }
+
+  // 3. Connectivity gate — read the SOURCE OF TRUTH (`workspaces`), not
+  //    `users.repo_status` (ADR-044 relocated repo state to `workspaces`).
+  type WsChain = {
+    select: (cols: string) => WsChain;
+    eq: (col: string, val: string) => WsChain;
+    maybeSingle: () => WsChain;
+  } & PromiseLike<{ data: WorkspaceRepoRow | null; error: unknown }>;
+  const wsChain = supabase.from("workspaces") as WsChain;
+  const wsResult = await awaitChain<{ data: WorkspaceRepoRow | null; error: unknown }>(
+    wsChain
+      .select("repo_status, organization_id")
+      .eq("id", activeWorkspaceId)
+      .maybeSingle(),
+  );
+  const repoStatus = wsResult.data?.repo_status ?? null;
+  if (wsResult.error || !repoStatus || repoStatus === "not_connected") {
+    return { ok: false, status: 404 };
+  }
+
+  // 4. Readiness gate — the active workspace OWNER's `users.workspace_status`.
+  //    Solo shortcut: owner === caller (N2), so skip the organizations hop and
+  //    read the caller's own row (byte-identical to the legacy behavior).
+  let ownerId = userId;
+  if (activeWorkspaceId !== userId) {
+    const orgId = wsResult.data?.organization_id ?? null;
+    if (!orgId) return { ok: false, status: 503 };
+    type OrgChain = {
+      select: (cols: string) => OrgChain;
+      eq: (col: string, val: string) => OrgChain;
+      maybeSingle: () => OrgChain;
+    } & PromiseLike<{ data: { owner_user_id: string } | null; error: unknown }>;
+    const orgChain = supabase.from("organizations") as OrgChain;
+    const orgResult = await awaitChain<{
+      data: { owner_user_id: string } | null;
+      error: unknown;
+    }>(orgChain.select("owner_user_id").eq("id", orgId).maybeSingle());
+    if (orgResult.error || !orgResult.data?.owner_user_id) {
+      return { ok: false, status: 503 };
+    }
+    ownerId = orgResult.data.owner_user_id;
+  }
+
+  type UserChain = {
+    select: (cols: string) => UserChain;
+    eq: (col: string, val: string) => UserChain;
+    maybeSingle: () => UserChain;
+  } & PromiseLike<{ data: { workspace_status: string | null } | null; error: unknown }>;
+  const userChain = supabase.from("users") as UserChain;
+  const ownerResult = await awaitChain<{
+    data: { workspace_status: string | null } | null;
+    error: unknown;
+  }>(userChain.select("workspace_status").eq("id", ownerId).maybeSingle());
+  if (ownerResult.error || ownerResult.data?.workspace_status !== "ready") {
+    return { ok: false, status: 503 };
+  }
+
+  const workspacePath = workspacePathForWorkspaceId(activeWorkspaceId);
+  return {
+    ok: true,
+    activeWorkspaceId,
+    workspacePath,
+    kbRoot: join(workspacePath, "knowledge-base"),
+    repoStatus,
+  };
+}
+
 async function awaitChain<T>(chain: unknown): Promise<T> {
   // The chain is a thenable; await coerces it without explicit .then chaining.
   return (await (chain as PromiseLike<T>)) as T;

@@ -23,17 +23,29 @@ vi.mock("@/server/logger", () => ({
 
 import { HEAD } from "@/app/api/kb/content/[...path]/route";
 
+let tmpRoot: string;
 let tmpWorkspace: string;
 let kbRoot: string;
 
-function mockQueryBuilder(data: unknown, error: unknown = null) {
+// ADR-044 (#4543): see kb-content-binary.test.ts — the route resolves the
+// active workspace (solo owner == caller) and derives the fs dir from the id.
+function mockQueryBuilder(data: Record<string, unknown> = {}, error: unknown = null) {
+  const merged = {
+    current_workspace_id: null,
+    repo_status: "ready",
+    organization_id: "user-1",
+    workspace_status: "ready",
+    ...data,
+  };
+  const term = {
+    then: (fn: (v: unknown) => unknown) =>
+      Promise.resolve({ data: error ? null : merged, error }).then(fn),
+  };
   return {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
-    single: vi.fn().mockReturnValue({
-      then: (fn: (v: unknown) => unknown) =>
-        Promise.resolve({ data, error }).then(fn),
-    }),
+    single: vi.fn().mockReturnValue(term),
+    maybeSingle: vi.fn().mockReturnValue(term),
   };
 }
 
@@ -62,13 +74,15 @@ function mockAuthOk() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  tmpWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "kb-content-head-"));
+  tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "kb-content-head-root-"));
+  process.env.WORKSPACES_ROOT = tmpRoot;
+  tmpWorkspace = path.join(tmpRoot, "user-1");
   kbRoot = path.join(tmpWorkspace, "knowledge-base");
   fs.mkdirSync(kbRoot, { recursive: true });
 });
 
 afterEach(() => {
-  fs.rmSync(tmpWorkspace, { recursive: true, force: true });
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
 describe("HEAD /api/kb/content/[...path]", () => {

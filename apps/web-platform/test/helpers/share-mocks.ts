@@ -58,9 +58,25 @@ export interface KbShareLinksFixture {
   listData?: unknown[];
 }
 
+/**
+ * Active-workspace resolution fixture (ADR-044, #4543). The owner KB routes
+ * (`kb/content`, `kb/tree`, `kb/search`) now resolve the ACTIVE workspace via
+ * `resolveActiveWorkspaceKbRoot`, which reads `user_session_state` → `workspaces`
+ * (→ `organizations` only for a non-solo member). Defaults model a solo owner
+ * with a connected, ready workspace so existing owner-route tests resolve
+ * exactly as the legacy own-row read did. Shared-route tests never query these
+ * tables, so the extra cases are inert for them.
+ */
+export interface ActiveWorkspaceFixture {
+  currentWorkspaceId?: string | null;
+  repoStatus?: string | null;
+  organizationId?: string | null;
+}
+
 export interface ShareSupabaseFromMockOpts {
   users?: UsersRowFixture | null;
   kb_share_links?: KbShareLinksFixture;
+  activeWorkspace?: ActiveWorkspaceFixture;
 }
 
 /**
@@ -79,12 +95,44 @@ export function shareSupabaseFromMock(
         return usersChain(opts.users ?? null);
       case "kb_share_links":
         return kbShareLinksChain(opts.kb_share_links ?? {}, opts.users ?? null);
+      case "user_session_state":
+        return singleRowChain({
+          current_workspace_id: opts.activeWorkspace?.currentWorkspaceId ?? null,
+        });
+      case "workspaces":
+        return singleRowChain({
+          repo_status: opts.activeWorkspace?.repoStatus ?? "ready",
+          organization_id: opts.activeWorkspace?.organizationId ?? null,
+        });
+      case "organizations":
+        return singleRowChain({
+          owner_user_id: opts.activeWorkspace?.organizationId ?? null,
+        });
       default:
         throw new Error(
           `shareSupabaseFromMock: unmocked table "${table}" — configure it in the helper call`,
         );
     }
   };
+}
+
+/**
+ * Minimal `.select().eq()…maybeSingle()/single()` chain resolving to a fixed
+ * row. Used for the active-workspace resolution tables (user_session_state,
+ * workspaces, organizations) which the resolver reads via `.maybeSingle()`.
+ */
+function singleRowChain(data: Record<string, unknown> | null) {
+  const term = {
+    then: (onfulfilled?: (v: unknown) => unknown) =>
+      Promise.resolve({ data, error: null }).then(onfulfilled),
+  };
+  const chain: Record<string, unknown> = {
+    single: vi.fn().mockReturnValue(term),
+    maybeSingle: vi.fn().mockReturnValue(term),
+  };
+  chain.select = vi.fn().mockReturnValue(chain);
+  chain.eq = vi.fn().mockReturnValue(chain);
+  return chain;
 }
 
 function usersChain(row: UsersRowFixture | null) {
@@ -98,14 +146,18 @@ function usersChain(row: UsersRowFixture | null) {
           github_installation_id: row.githubInstallationId ?? null,
           ...row.override,
         };
+  const terminal = {
+    single: vi.fn().mockResolvedValue({
+      data,
+      error: data === null ? new Error("user not found") : null,
+    }),
+    // ADR-044 (#4543): resolveActiveWorkspaceKbRoot reads the owner's
+    // workspace_status via .maybeSingle().
+    maybeSingle: vi.fn().mockResolvedValue({ data, error: null }),
+  };
   return {
     select: vi.fn().mockReturnValue({
-      eq: vi.fn().mockReturnValue({
-        single: vi.fn().mockResolvedValue({
-          data,
-          error: data === null ? new Error("user not found") : null,
-        }),
-      }),
+      eq: vi.fn().mockReturnValue(terminal),
     }),
   };
 }
