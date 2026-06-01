@@ -158,6 +158,23 @@ describe("validate-seo.sh", () => {
     expect(stdout).toContain("contains redirecting URLs");
   });
 
+  test("sitemap.xml with a root-level *.html (no /pages/) redirect URL fails", async () => {
+    setupSite();
+    // The gate predicate is an OR of two shapes: `\.html$` OR `/pages/`. The
+    // /pages/*.html fixture above satisfies BOTH arms at once, so it cannot
+    // detect a regression that narrows the regex to just `/pages/`. This case
+    // exercises the `\.html$` arm in isolation (root-level .html, no /pages/).
+    writeFileSync(
+      `${TMP_DIR}/sitemap.xml`,
+      '<urlset><url><loc>https://example.com/about.html</loc><lastmod>2026-01-01</lastmod></url></urlset>',
+    );
+    const proc = Bun.spawn(["bash", SCRIPT, TMP_DIR], { stdout: "pipe", stderr: "pipe" });
+    const exitCode = await proc.exited;
+    const stdout = await new Response(proc.stdout).text();
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("contains redirecting URLs");
+  });
+
   test("sitemap.xml with only clean trailing-slash URLs passes the redirect-stub gate", async () => {
     setupSite(); // default fixture sitemap is a single trailing-slash <loc>
     const proc = Bun.spawn(["bash", SCRIPT, TMP_DIR], { stdout: "pipe", stderr: "pipe" });
