@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { SettingsContent } from "@/components/settings/settings-content";
 import type { RepoStatus } from "@/components/settings/project-setup-card";
-import { repoNeedsReconnect } from "@/lib/repo-status";
+import { resolveNeedsReconnect } from "@/lib/repo-status";
 
 export default async function SettingsPage() {
   const supabase = await createClient();
@@ -34,9 +34,10 @@ export default async function SettingsPage() {
       .single(),
   ]);
 
-  const needsReconnect = repoNeedsReconnect(
+  const needsReconnect = await resolveNeedsReconnect(
     userData?.repo_status ?? null,
     userData?.github_installation_id ?? null,
+    user.id,
   );
 
   return (

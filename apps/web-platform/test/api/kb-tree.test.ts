@@ -5,8 +5,9 @@ import { mockQueryChain } from "../helpers/mock-supabase";
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
 // ---------------------------------------------------------------------------
 
-const { mockFrom } = vi.hoisted(() => ({
+const { mockFrom, mockResolveInstallationId } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
+  mockResolveInstallationId: vi.fn(),
 }));
 
 const TEST_USER = { id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" };
@@ -29,6 +30,14 @@ vi.mock("@/server/kb-reader", () => ({
   buildTree: vi.fn(async () => ({ name: "knowledge-base", path: "", children: [] })),
 }));
 
+// #4712 follow-up — the route now derives needsReconnect via the async
+// `resolveNeedsReconnect`, which (for ready + NULL user install) resolves the
+// workspace-scoped credential. Mock that read so a `ready + null` row no longer
+// reaches the real Supabase client.
+vi.mock("@/server/resolve-installation-id", () => ({
+  resolveInstallationId: mockResolveInstallationId,
+}));
+
 vi.mock("@/server/logger", () => ({
   default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -49,9 +58,12 @@ const BASE_USER = {
 describe("GET /api/kb/tree — needsReconnect", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: no workspace-scoped credential resolves (the #4706 silent-freeze
+    // shape). Individual tests override to exercise the workspace-shared case.
+    mockResolveInstallationId.mockResolvedValue(null);
   });
 
-  test("needsReconnect=true for ready repo with null installation id", async () => {
+  test("needsReconnect=true for ready repo with null user install AND no workspace credential (#4706 freeze)", async () => {
     mockFrom.mockReturnValue(
       mockQueryChain({ ...BASE_USER, github_installation_id: null }),
     );
@@ -60,9 +72,21 @@ describe("GET /api/kb/tree — needsReconnect", () => {
     const body = await res.json();
     expect(body.needsReconnect).toBe(true);
     expect(body.tree).toBeTruthy();
+    expect(mockResolveInstallationId).toHaveBeenCalledWith(TEST_USER.id);
   });
 
-  test("needsReconnect=false for ready repo with an installation id", async () => {
+  test("needsReconnect=false for ready repo with null user install but a resolvable workspace credential (the bug fix)", async () => {
+    mockResolveInstallationId.mockResolvedValue(424242);
+    mockFrom.mockReturnValue(
+      mockQueryChain({ ...BASE_USER, github_installation_id: null }),
+    );
+    const res = await GET(makeRequest());
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.needsReconnect).toBe(false);
+  });
+
+  test("needsReconnect=false for ready repo with an installation id (short-circuits before workspace credential)", async () => {
     mockFrom.mockReturnValue(
       mockQueryChain({ ...BASE_USER, github_installation_id: 98765 }),
     );
@@ -70,6 +94,7 @@ describe("GET /api/kb/tree — needsReconnect", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.needsReconnect).toBe(false);
+    expect(mockResolveInstallationId).not.toHaveBeenCalled();
   });
 
   test("not_connected short-circuits to 404 (no needsReconnect)", async () => {
