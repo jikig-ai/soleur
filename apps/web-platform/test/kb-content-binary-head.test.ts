@@ -2,6 +2,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
+import { kbSoloActiveWorkspaceChain } from "./helpers/mock-supabase";
 
 const { mockGetUser, mockFrom } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
@@ -23,19 +24,13 @@ vi.mock("@/server/logger", () => ({
 
 import { HEAD } from "@/app/api/kb/content/[...path]/route";
 
+let tmpRoot: string;
 let tmpWorkspace: string;
 let kbRoot: string;
 
-function mockQueryBuilder(data: unknown, error: unknown = null) {
-  return {
-    select: vi.fn().mockReturnThis(),
-    eq: vi.fn().mockReturnThis(),
-    single: vi.fn().mockReturnValue({
-      then: (fn: (v: unknown) => unknown) =>
-        Promise.resolve({ data, error }).then(fn),
-    }),
-  };
-}
+// ADR-044 (#4543): see kb-content-binary.test.ts — the route resolves the
+// active workspace (solo owner == caller) via the shared helper.
+const mockQueryBuilder = kbSoloActiveWorkspaceChain;
 
 function buildRequest(pathStr: string, headers: Record<string, string> = {}): Request {
   return new Request(`http://localhost:3000/api/kb/content/${pathStr}`, {
@@ -62,13 +57,15 @@ function mockAuthOk() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  tmpWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "kb-content-head-"));
+  tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "kb-content-head-root-"));
+  process.env.WORKSPACES_ROOT = tmpRoot;
+  tmpWorkspace = path.join(tmpRoot, "user-1");
   kbRoot = path.join(tmpWorkspace, "knowledge-base");
   fs.mkdirSync(kbRoot, { recursive: true });
 });
 
 afterEach(() => {
-  fs.rmSync(tmpWorkspace, { recursive: true, force: true });
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
 describe("HEAD /api/kb/content/[...path]", () => {

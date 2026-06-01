@@ -114,19 +114,27 @@ describe("KB API security", () => {
       const relativePath = filePath.split("/apps/web-platform/")[1];
 
       // Same proven-delegation pattern as the auth check above (#2245).
-      // Accept either helper — authenticateAndResolveKbPath (file routes)
-      // or resolveUserKbRoot (share/upload, added in #2467 cleanup).
+      // Accept any of the readiness-gating helpers:
+      //   - authenticateAndResolveKbPath (file routes)
+      //   - resolveUserKbRoot (share/upload, #2467 cleanup)
+      //   - resolveActiveWorkspaceKbRoot (active-workspace read path, ADR-044
+      //     #4543 — moves the workspace_status (503) gate into the shared
+      //     resolver so the read routes are member-aware).
       const hasInline = content.includes("workspace_status");
       const helperName =
-        /const\s+\w+\s*=\s*await\s+(authenticateAndResolveKbPath|resolveUserKbRoot)\s*\(/;
+        /const\s+\w+\s*=\s*await\s+(authenticateAndResolveKbPath|resolveUserKbRoot|resolveActiveWorkspaceKbRoot)\s*\(/;
       const invokesHelper = helperName.test(content);
+      // authenticateAndResolveKbPath/resolveUserKbRoot return { ok, response };
+      // resolveActiveWorkspaceKbRoot returns { ok, status } and the route maps
+      // status → its own Response. Accept either `return x.response` or any
+      // early return inside an `if (!x.ok)` guard.
       const checksHelperResult =
-        /if\s*\(\s*!\s*\w+\.ok\s*\)\s*return\s+\w+\.response/.test(content);
+        /if\s*\(\s*!\s*\w+\.ok\s*\)\s*\{?\s*return\b/.test(content);
       const delegatesToHelper = invokesHelper && checksHelperResult;
 
       expect(
         hasInline || delegatesToHelper,
-        `${relativePath} missing workspace_status check (inline or proven authenticateAndResolveKbPath / resolveUserKbRoot delegation)`,
+        `${relativePath} missing workspace_status check (inline or proven authenticateAndResolveKbPath / resolveUserKbRoot / resolveActiveWorkspaceKbRoot delegation)`,
       ).toBe(true);
     }
   });
