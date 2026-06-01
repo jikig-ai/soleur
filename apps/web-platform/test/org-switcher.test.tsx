@@ -83,16 +83,8 @@ describe("OrgSwitcher", () => {
     expect(onSwitch).not.toHaveBeenCalled();
   });
 
-  // AC7 (feat-one-shot-workspace-untitled-name): once migration 091 backfills
-  // non-NULL names, the resolver's `?? "Untitled"` guard is unreachable. A
-  // two-org fixture with real names must render both names and never the
-  // "Untitled" sentinel.
-  it("AC7: renders real org names, never the 'Untitled' sentinel", () => {
-    render(<OrgSwitcher memberships={[JIKIGAI, ACME]} />);
-    fireEvent.click(screen.getByRole("button", { name: /switch workspace/i }));
-    const menu = screen.getByRole("menu");
-    expect(within(menu).getByText("jikigai")).toBeInTheDocument();
-    expect(within(menu).getByText("Acme Studio")).toBeInTheDocument();
-    expect(within(menu).queryByText("Untitled")).not.toBeInTheDocument();
-  });
+  // AC7 note: the switcher renders whatever organizationName the resolver
+  // supplies (covered by the render tests above). The "Untitled" fallback is
+  // owned by the resolver, NOT this component — that arm is tested directly in
+  // test/org-memberships-resolver.test.ts (feat-one-shot-workspace-untitled-name).
 });

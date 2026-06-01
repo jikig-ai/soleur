@@ -138,4 +138,39 @@ describe("InviteMemberModal", () => {
     const body = JSON.parse((renameCall[1] as RequestInit).body as string);
     expect(body).toEqual({ organizationId: ORG_ID, name: "Acme Studio" });
   });
+
+  it("a failed first-invite rename does NOT block the invite POST (best-effort)", async () => {
+    // The rename is fired before the invite and wrapped in a swallow-catch so a
+    // rename failure never aborts the primary action (the invite).
+    const mockFetch = vi.fn(async (url: string) => {
+      if (url === "/api/workspace/rename") throw new Error("network down");
+      return { ok: true, json: () => Promise.resolve({}) } as unknown as Response;
+    });
+    vi.stubGlobal("fetch", mockFetch);
+
+    render(
+      <InviteMemberModal
+        open
+        workspaceId={WORKSPACE_ID}
+        organizationId={ORG_ID}
+        organizationName="My Workspace"
+        onClose={() => {}}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/name your workspace/i), {
+      target: { value: "Acme Studio" },
+    });
+    fireEvent.change(screen.getByLabelText(/Email address/i), {
+      target: { value: "harry@jikigai.com" },
+    });
+    fireEvent.click(screen.getByLabelText(/employee or contractor/i));
+    fireEvent.click(screen.getByRole("button", { name: /send invite/i }));
+
+    await vi.waitFor(() => {
+      const inviteCalled = mockFetch.mock.calls.some(
+        ([url]) => url === "/api/workspace/invite-member",
+      );
+      expect(inviteCalled).toBe(true);
+    });
+  });
 });

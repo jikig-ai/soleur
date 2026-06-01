@@ -6,6 +6,7 @@ import { sessions } from "@/server/session-registry";
 import { closeWithPreamble } from "@/lib/ws-close-helper";
 import { WS_CLOSE_CODES } from "@/lib/types";
 import { reportSilentFallback } from "@/server/observability";
+import { validateWorkspaceName } from "@/lib/workspace-name";
 
 // PERMANENT service-role surface (.service-role-allowlist line 133):
 // invite_workspace_member + remove_workspace_member RPCs require service-role
@@ -446,20 +447,22 @@ export type RenameOrganizationFailureReason =
 export async function renameOrganization(
   args: RenameOrganizationArgs,
 ): Promise<RenameOrganizationResult> {
-  const trimmed = args.name.trim();
-  if (trimmed.length === 0 || trimmed.length > 60) {
+  const validated = validateWorkspaceName(args.name);
+  if (!validated.ok) {
     return { ok: false, reason: "invalid_name" };
   }
 
   const service = createServiceClient();
   const { error } = await service.rpc("rename_organization", {
     p_organization_id: args.organizationId,
-    p_name: trimmed,
+    p_name: validated.trimmed,
     p_caller_user_id: args.callerUserId,
   });
 
   if (error) {
     const msg = error.message ?? "";
+    // caller_not_owner / invalid_name are expected, caller-correctable
+    // outcomes — not silent failures, so they are not mirrored to Sentry.
     if (msg.includes("caller is not an owner")) {
       return { ok: false, reason: "caller_not_owner" };
     }
@@ -469,6 +472,15 @@ export async function renameOrganization(
     if (msg.includes("no organization row")) {
       return { ok: false, reason: "not_found" };
     }
+    // rpc_failed is an unexpected DB-side failure — mirror to Sentry per
+    // cq-silent-fallback-must-mirror-to-sentry (matches workspace-invitations).
+    // The 28000 NULL-caller arm also lands here (unreachable from the route,
+    // which always forwards a verified getUser() id).
+    reportSilentFallback(error, {
+      feature: "workspace-membership",
+      op: "rename-organization-rpc",
+      extra: { organizationId: args.organizationId, callerUserId: args.callerUserId },
+    });
     return { ok: false, reason: "rpc_failed", detail: msg };
   }
 

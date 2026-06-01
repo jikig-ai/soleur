@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { DEFAULT_ORG_NAME, WORKSPACE_NAME_MAX } from "@/lib/workspace-name";
 
 const ATTESTATION_TEXT =
   "I confirm this member is my employee or contractor under written agreement, and I consent to them accessing this workspace's connected repository and knowledge-base.";
@@ -14,8 +15,8 @@ const ATTESTATION_TEXT =
 // DRAFT consent copy — pending CLO/counsel review per #4558.
 
 // AC6: the org name is "still the default" (and so worth prompting for at
-// first-invite) when it is empty/NULL or the generic backfill/trigger default.
-const DEFAULT_ORG_NAME = "My Workspace";
+// first-invite) when it is empty/NULL or the generic backfill/trigger default
+// (DEFAULT_ORG_NAME, shared with the migration literal via lib/workspace-name).
 
 export function InviteMemberModal({
   open,
@@ -182,9 +183,9 @@ export function InviteMemberModal({
             <input
               type="text"
               value={workspaceName}
-              maxLength={60}
+              maxLength={WORKSPACE_NAME_MAX}
               onChange={(e) => setWorkspaceName(e.target.value)}
-              placeholder="e.g. Acme Studio"
+              placeholder="e.g. Marketing team"
               className="w-full rounded-md border border-soleur-border-default bg-soleur-bg-surface-2/50 px-3 py-2 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted outline-none focus:border-soleur-border-emphasized"
             />
             <span className="mt-1 block text-xs text-soleur-text-muted">

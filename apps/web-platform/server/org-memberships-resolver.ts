@@ -1,4 +1,5 @@
 import { resolveCurrentOrganizationId } from "@/server/workspace-resolver";
+import { UNTITLED_FALLBACK } from "@/lib/workspace-name";
 
 // Returns the user's full list of organization memberships with role + member
 // count. Powers the dashboard OrgSwitcher (Phase 5.3) which hides itself when
@@ -145,9 +146,9 @@ export async function resolveOrgMemberships(
       if (!ws) return null;
       // Defense-in-depth: migration 091 backfills every NULL org name to a
       // non-NULL default and handle_new_user no longer inserts NULL, so a
-      // stored NULL (→ "Untitled") should be unreachable in production. The
-      // guard remains as a last resort. See feat-one-shot-workspace-untitled-name.
-      const orgName = orgNameById.get(ws.organization_id) ?? "Untitled";
+      // stored NULL (→ UNTITLED_FALLBACK) should be unreachable in production.
+      // The guard remains as a last resort. See feat-one-shot-workspace-untitled-name.
+      const orgName = orgNameById.get(ws.organization_id) ?? UNTITLED_FALLBACK;
       return {
         organizationId: ws.organization_id,
         organizationName: orgName,

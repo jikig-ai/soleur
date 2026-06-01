@@ -103,7 +103,13 @@ describe("migration 091_rename_organization_and_default_names", () => {
       expect(executable).toMatch(
         /REVOKE\s+ALL\s+ON\s+FUNCTION\s+public\.rename_organization\(uuid,\s*text,\s*uuid\)\s+FROM\s+PUBLIC,\s*anon,\s*authenticated/i,
       );
+      // SECURITY: grant to service_role ONLY. The RPC accepts a caller-override
+      // (p_caller_user_id) — granting EXECUTE to `authenticated` would let any
+      // user forge the owner identity via PostgREST and bypass the route gate.
       expect(executable).toMatch(
+        /GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+public\.rename_organization\(uuid,\s*text,\s*uuid\)\s+TO\s+service_role/i,
+      );
+      expect(executable).not.toMatch(
         /GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+public\.rename_organization\(uuid,\s*text,\s*uuid\)\s+TO\s+authenticated/i,
       );
     });

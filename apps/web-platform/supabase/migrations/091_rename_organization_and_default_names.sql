@@ -25,8 +25,10 @@
 -- Per cq-pg-security-definer-search-path-pin-pg-temp: every SECURITY DEFINER
 -- function pins SET search_path = public, pg_temp (pg_temp LAST).
 -- Per 2026-05-06-supabase-default-privileges-defeat-revoke-from-public:
--- explicit REVOKE from PUBLIC + anon + authenticated; explicit GRANT to
--- authenticated.
+-- explicit REVOKE from PUBLIC + anon + authenticated. rename_organization is
+-- then GRANTed to service_role ONLY (NOT authenticated) — it takes a forgeable
+-- caller-override param, so it must be unreachable via PostgREST by an
+-- authenticated user; see the grant block below for the full rationale.
 
 -- =====================================================================
 -- 1. rename_organization RPC (sole authenticated write path)
@@ -103,10 +105,18 @@ BEGIN
 END;
 $$;
 
+-- GRANT to service_role ONLY (NOT authenticated). The RPC takes a
+-- caller-override param (p_caller_user_id) that COALESCE prefers over
+-- auth.uid(); if authenticated could reach it via PostgREST, any user could
+-- forge p_caller_user_id = <victim owner uuid> and bypass the route's
+-- owner-gate. Mirrors accept_workspace_invitation's grant matrix (mig 076/085)
+-- exactly — the forgeable-override pattern is ONLY safe behind service-role,
+-- because the sole caller (server/workspace-membership.ts renameOrganization)
+-- invokes via createServiceClient() and passes the verified getUser() id.
 REVOKE ALL ON FUNCTION public.rename_organization(uuid, text, uuid)
   FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.rename_organization(uuid, text, uuid)
-  TO authenticated;
+  TO service_role;
 
 COMMENT ON FUNCTION public.rename_organization(uuid, text, uuid) IS
   'Owner-gated single-row rename of organizations.name. SECURITY DEFINER '
@@ -183,19 +193,23 @@ COMMENT ON FUNCTION public.handle_new_user() IS
 -- =====================================================================
 -- 3. Backfill existing NULL-name rows to the default
 -- =====================================================================
--- Idempotent: WHERE name IS NULL discriminator → re-running this migration
--- on a populated DB updates 0 rows. Privacy: generic non-PII label only.
+-- Idempotent: the `name IS NULL OR btrim(name) = ''` discriminator → re-running
+-- this migration on a populated DB updates 0 rows (the default is non-empty).
+-- The empty-string arm is belt-and-braces: no write path emits '' (the rename
+-- RPC trims+rejects empty, and mig 053 only ever wrote NULL), but the runtime
+-- guards render '' as the "Untitled" sentinel, so the backfill normalizes any
+-- stray empty row too. Privacy: generic non-PII label only.
 
 DO $$
 DECLARE
   v_org_rc int;
   v_ws_rc  int;
 BEGIN
-  UPDATE public.organizations SET name = 'My Workspace' WHERE name IS NULL;
+  UPDATE public.organizations SET name = 'My Workspace' WHERE name IS NULL OR btrim(name) = '';
   GET DIAGNOSTICS v_org_rc = ROW_COUNT;
-  RAISE NOTICE '[091-backfill] organizations renamed from NULL: %', v_org_rc;
+  RAISE NOTICE '[091-backfill] organizations renamed from NULL/empty: %', v_org_rc;
 
-  UPDATE public.workspaces SET name = 'My Workspace' WHERE name IS NULL;
+  UPDATE public.workspaces SET name = 'My Workspace' WHERE name IS NULL OR btrim(name) = '';
   GET DIAGNOSTICS v_ws_rc = ROW_COUNT;
-  RAISE NOTICE '[091-backfill] workspaces renamed from NULL: %', v_ws_rc;
+  RAISE NOTICE '[091-backfill] workspaces renamed from NULL/empty: %', v_ws_rc;
 END $$;

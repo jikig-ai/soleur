@@ -1,6 +1,11 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import {
+  UNTITLED_FALLBACK,
+  WORKSPACE_NAME_MAX,
+  validateWorkspaceName,
+} from "@/lib/workspace-name";
 
 // AC5: owner-only inline rename for the organization display name (the org
 // switcher label). Non-owners see the name read-only — the edit affordance is
@@ -22,11 +27,12 @@ export function RenameWorkspaceAction({
   const [error, setError] = useState<string | null>(null);
 
   const save = useCallback(async () => {
-    const trimmed = draft.trim();
-    if (trimmed.length === 0 || trimmed.length > 60) {
-      setError("Workspace name must be 1–60 characters.");
+    const validated = validateWorkspaceName(draft);
+    if (!validated.ok) {
+      setError(`Workspace name must be 1–${WORKSPACE_NAME_MAX} characters.`);
       return;
     }
+    const trimmed = validated.trimmed;
     setSubmitting(true);
     setError(null);
     try {
@@ -59,7 +65,7 @@ export function RenameWorkspaceAction({
           data-testid="workspace-name"
           className="text-sm font-medium text-soleur-text-primary"
         >
-          {name || "Untitled"}
+          {name || UNTITLED_FALLBACK}
         </span>
         {isOwner && !editing && (
           <button
@@ -81,7 +87,7 @@ export function RenameWorkspaceAction({
             <input
               aria-label="Workspace name"
               value={draft}
-              maxLength={60}
+              maxLength={WORKSPACE_NAME_MAX}
               onChange={(e) => setDraft(e.target.value)}
               className="rounded-md border border-soleur-border-default bg-soleur-bg-surface-2/50 px-3 py-1.5 text-sm text-soleur-text-primary outline-none focus:border-soleur-border-emphasized"
             />

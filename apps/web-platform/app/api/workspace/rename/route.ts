@@ -4,6 +4,7 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isTeamWorkspaceInviteEnabled, type Identity } from "@/lib/feature-flags/server";
 import { resolveTeamMembershipPageData } from "@/server/team-membership-resolver";
 import { renameOrganization } from "@/server/workspace-membership";
+import { validateWorkspaceName } from "@/lib/workspace-name";
 
 // POST /api/workspace/rename
 // Body: { organizationId, name }
@@ -45,8 +46,8 @@ export async function POST(request: Request) {
   if (typeof organizationId !== "string" || typeof name !== "string") {
     return NextResponse.json({ error: "invalid_body" }, { status: 400 });
   }
-  const trimmed = name.trim();
-  if (trimmed.length === 0 || trimmed.length > 60) {
+  const validated = validateWorkspaceName(name);
+  if (!validated.ok) {
     return NextResponse.json({ error: "invalid_body" }, { status: 400 });
   }
 
@@ -56,12 +57,12 @@ export async function POST(request: Request) {
 
   const callerRow = pageData.data.members.find((m) => m.userId === user.id);
   if (!callerRow || callerRow.role !== "owner") {
-    return NextResponse.json({ error: "not_owner" }, { status: 403 });
+    return NextResponse.json({ error: "caller_not_owner" }, { status: 403 });
   }
 
   const result = await renameOrganization({
     organizationId,
-    name: trimmed,
+    name: validated.trimmed,
     callerUserId: user.id,
   });
 
@@ -79,5 +80,5 @@ export async function POST(request: Request) {
       { status },
     );
   }
-  return NextResponse.json({ ok: true, name: trimmed });
+  return NextResponse.json({ ok: true, name: validated.trimmed });
 }
