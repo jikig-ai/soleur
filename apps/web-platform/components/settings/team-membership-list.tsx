@@ -117,8 +117,11 @@ function MemberRow({
     window.location.reload();
   }, [member.email, member.userId, workspaceId]);
 
-  // AC-FLOW4: owner cannot remove self → no kebab menu trigger rendered.
-  const showActions = !isCurrentUser;
+  // RBAC: the kebab menu holds only owner-only actions (Remove member,
+  // Transfer ownership), so it is gated on `isOwner` — Members see no kebab on
+  // any row. AC-FLOW4: an owner also gets no kebab on their own (self) row
+  // (cannot remove/transfer to self).
+  const showActions = !isCurrentUser && isOwner;
 
   // #4715: prompt the owner to share a key with a keyless, undelegated member
   // (only when delegations are enabled and this is not the owner's own row).

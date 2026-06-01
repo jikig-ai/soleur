@@ -92,6 +92,65 @@ describe("TeamMembershipList", () => {
     expect(screen.getByText(/remove member/i)).toBeInTheDocument();
   });
 
+  // RBAC gating: a Member (isOwner=false) viewing the team must NOT see any
+  // owner-only affordance. The kebab trigger gates the whole owner-only menu
+  // (Remove member + Transfer ownership), so a Member sees no kebab on any
+  // non-self row. Owner-only API routes still 403 a Member as defense-in-depth.
+  it("Member (isOwner=false): non-self row exposes NO kebab trigger", () => {
+    render(
+      <TeamMembershipList
+        members={[OWNER, MEMBER]}
+        currentUserId="user-member"
+        workspaceId="ws-1"
+        isOwner={false}
+        byokDelegationsEnabled={false}
+        organizationName="Test Org"
+      />,
+    );
+    // The OWNER row is non-self for this Member; without the gate it would
+    // render a kebab. With the gate, no row exposes one.
+    expect(screen.queryByLabelText(/row actions/i)).not.toBeInTheDocument();
+  });
+
+  // Attempting to open any kebab a Member can reach must surface no owner-only
+  // action. The kebab trigger is itself gated, so without the fix the trigger
+  // exists, opens, and reveals "Remove member" (RED); with the fix there is no
+  // trigger to open (GREEN). Clicking-when-present is load-bearing: a closed
+  // menu hides the text regardless of the gate, which would pass vacuously.
+  it("Member (isOwner=false): no Remove member action is reachable", () => {
+    render(
+      <TeamMembershipList
+        members={[OWNER, MEMBER]}
+        currentUserId="user-member"
+        workspaceId="ws-1"
+        isOwner={false}
+        byokDelegationsEnabled={false}
+        organizationName="Test Org"
+      />,
+    );
+    for (const kebab of screen.queryAllByLabelText(/row actions/i)) {
+      fireEvent.click(kebab);
+    }
+    expect(screen.queryByText(/remove member/i)).not.toBeInTheDocument();
+  });
+
+  it("Member (isOwner=false): no Transfer ownership action is reachable", () => {
+    render(
+      <TeamMembershipList
+        members={[OWNER, MEMBER]}
+        currentUserId="user-member"
+        workspaceId="ws-1"
+        isOwner={false}
+        byokDelegationsEnabled={false}
+        organizationName="Test Org"
+      />,
+    );
+    for (const kebab of screen.queryAllByLabelText(/row actions/i)) {
+      fireEvent.click(kebab);
+    }
+    expect(screen.queryByText(/transfer ownership/i)).not.toBeInTheDocument();
+  });
+
   // #4715 Phase 9 — owner "Share a key" prompt for a keyless, undelegated,
   // non-self member (only when byok delegations are enabled).
   const KEYLESS_MEMBER: TeamMembershipRow = {

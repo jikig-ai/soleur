@@ -147,23 +147,23 @@ review time per the review skill's conditional-agent block.
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (invite gate):** In `team/page.tsx`, the `<InviteMemberAction>` trigger is
+- [x] **AC1 (invite gate):** In `team/page.tsx`, the `<InviteMemberAction>` trigger is
   rendered only when the current user `isOwner`. Verified: render the Team page server
   component path / component with a Member identity → "+ Invite member" button absent;
   with Owner → present. (`grep -n "InviteMemberAction" app/(dashboard)/dashboard/settings/team/page.tsx` shows it wrapped in an `isOwner &&` guard or receives an `isOwner` prop that self-hides.)
-- [ ] **AC2 (remove gate):** In `team-membership-list.tsx`, the "Remove member" `<button>`
+- [x] **AC2 (remove gate):** In `team-membership-list.tsx`, the "Remove member" `<button>`
   (`:207-213`) is wrapped in `{isOwner && (...)}`, matching the sibling "Transfer
   ownership" guard. Verified by a new RTL test: `render(<TeamMembershipList ... isOwner={false} />)` then open a non-self row's kebab → **no** "Remove member" and **no** "Transfer ownership" item present; with `isOwner={true}` both present (preserve existing `:78` test).
-- [ ] **AC3 (kebab empty-for-member):** When `isOwner={false}`, a non-self member row's
+- [x] **AC3 (kebab empty-for-member):** When `isOwner={false}`, a non-self member row's
   kebab menu, if it renders at all, contains zero owner-only actions. Decision in
   Decisions: hide the kebab trigger entirely for Members (cleaner) — assert the
   `aria-label="Row actions for …"` button is absent when `isOwner={false}` and the row
   is non-self.
-- [ ] **AC4 (no over-gating regression — Owner):** Existing `isOwner={true}` tests in
+- [x] **AC4 (no over-gating regression — Owner):** Existing `isOwner={true}` tests in
   `test/team-membership-list.test.tsx` (`:78` "non-self row exposes kebab menu with
   Remove action", `:64` AC-FLOW4 self-row no-kebab) still pass unchanged; Owner sees
   invite + remove + transfer.
-- [ ] **AC5 (server gates intact):** The caller-owner gate
+- [x] **AC5 (server gates intact):** The caller-owner gate
   (`if (!callerRow || callerRow.role !== "owner") return 403`) is preserved verbatim in
   `invite-member/route.ts:63-66`, `remove-member/route.ts:54-57`,
   `transfer-ownership/route.ts:61-63`, `cancel-invite/route.ts:56-58`, and the
@@ -172,13 +172,13 @@ review time per the review skill's conditional-agent block.
   `role !== "owner" && role !== "member"` at `:52`) — assert the *caller gate line*
   is intact, do NOT rely on a raw `grep -c` count (verified at deepen time). No server
   gate is removed on the theory that the UI now hides the control.
-- [ ] **AC6 (latent-path audit — VERIFIED at deepen):** `git grep -nw "inviteWorkspaceMember" apps/web-platform` (excluding `*.test.*` and the `workspace-membership.ts:79` definition) returns **zero** production callers — confirmed dead code at deepen time. Record this finding in the PR body. If `/work` re-runs the grep and finds a NEW caller (introduced since), add the owner-check at that caller (in scope) OR file the follow-up in Non-Goals.
-- [ ] **AC7 (tests run under the right runner + path):** New/changed tests live under
+- [x] **AC6 (latent-path audit — VERIFIED at deepen):** `git grep -nw "inviteWorkspaceMember" apps/web-platform` (excluding `*.test.*` and the `workspace-membership.ts:79` definition) returns **zero** production callers — confirmed dead code at deepen time. Record this finding in the PR body. If `/work` re-runs the grep and finds a NEW caller (introduced since), add the owner-check at that caller (in scope) OR file the follow-up in Non-Goals.
+- [x] **AC7 (tests run under the right runner + path):** New/changed tests live under
   `apps/web-platform/test/**/*.test.tsx` (vitest jsdom project; `vitest.config.ts:60`
   `include: ["test/**/*.test.tsx"]`) — NOT co-located. Run with
   `./node_modules/.bin/vitest run test/team-membership-list.test.tsx` (the package uses
   vitest; `bun test` is blocked by `bunfig.toml`).
-- [ ] **AC8 (typecheck):** `npx tsc --noEmit` (or the repo's typecheck script) passes;
+- [x] **AC8 (typecheck):** `npx tsc --noEmit` (or the repo's typecheck script) passes;
   the new `isOwner` prop threading introduces no type errors.
 
 ### Post-merge (operator)
