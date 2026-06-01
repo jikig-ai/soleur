@@ -650,21 +650,25 @@ describe("#3171 FAQPage JSON-LD matches the visible FAQ on every Q&A page", () =
       expect(faq, `${label}: FAQPage JSON-LD present for visible FAQ`).toBeDefined();
       const summaries = [
         ...html.matchAll(/<summary class="faq-question">([\s\S]*?)<\/summary>/g),
-      ].map((m) => m[1].replace(/<[^>]+>/g, "").trim());
+      ].map((m) => m[1].trim());
       const names = faq!.mainEntity.map((q) => q.name.trim());
       expect(detailsCount, `${label}: details vs JSON-LD count`).toBe(names.length);
       expect(summaries.length, `${label}: summaries vs JSON-LD count`).toBe(
         names.length,
       );
+      // Decode ONLY the autoescape entities Nunjucks emits for apostrophes and
+      // double-quotes in a text node. Deliberately NOT &amp; (the &amp;->&
+      // round-trip is the js/double-escaping CodeQL pattern) and no tag-strip
+      // (summaries are plain text; /<[^>]+>/g is the js/incomplete-multi-
+      // character-sanitization pattern). A future question that introduces
+      // nested markup will fail loudly here — correct drift-guard behavior.
+      const decodeText = (s: string) =>
+        s.replace(/&#39;/g, "'").replace(/&quot;/g, '"');
       for (const name of names) {
-        // HTML-entity normalization parity (mirrors #2707 precedent): decode
-        // common entities so an apostrophe rendered as &#39; still matches.
-        const norm = (s: string) =>
-          s.replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, "&").replace(/&quot;/g, '"');
         expect(
-          summaries.map(norm),
+          summaries.map(decodeText),
           `${label}: JSON-LD question "${name}" has a visible <summary>`,
-        ).toContain(norm(name));
+        ).toContain(decodeText(name));
       }
     });
   }
