@@ -1,13 +1,18 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { listInstallationRepos } from "@/server/github-app";
+import { listInstallationRepos, type Repo } from "@/server/github-app";
+import { resolveReachableInstallationIds } from "@/server/reachable-installations";
+import { resolveGithubLogin } from "@/server/github-login";
 import logger from "@/server/logger";
 
 /**
  * GET /api/repo/repos
  *
- * Lists repositories accessible to the user's GitHub App installation.
- * Requires the user to have a stored github_installation_id.
+ * Lists repositories accessible across ALL of the user's reachable GitHub App
+ * installations — their personal (login-matched) install PLUS any install
+ * carried by a workspace they are a member of (ADR-044). This surfaces an
+ * org-owned repo whose org login != the user's login. Keeps the 400 contract
+ * when the reachable set is empty (the frontend branches on !res.ok).
  */
 export async function GET() {
   const supabase = await createClient();
@@ -20,30 +25,51 @@ export async function GET() {
   }
 
   const serviceClient = createServiceClient();
-  const { data: userData, error: fetchError } = await serviceClient
+  const { data: userData } = await serviceClient
     .from("users")
-    .select("github_installation_id")
+    .select("github_username")
     .eq("id", user.id)
     .single();
 
-  if (fetchError || !userData?.github_installation_id) {
+  const githubLogin = await resolveGithubLogin(
+    serviceClient,
+    user.id,
+    userData?.github_username,
+  );
+
+  const reachable = await resolveReachableInstallationIds(
+    serviceClient,
+    user.id,
+    githubLogin,
+  );
+
+  if (reachable.length === 0) {
     return NextResponse.json(
       { error: "GitHub App not installed. Please install the app first." },
       { status: 400 },
     );
   }
 
-  try {
-    const repos = await listInstallationRepos(userData.github_installation_id);
-    return NextResponse.json({ repos });
-  } catch (err) {
-    logger.error(
-      { err, userId: user.id },
-      "Failed to list installation repos",
-    );
-    return NextResponse.json(
-      { error: "Failed to list repositories" },
-      { status: 500 },
-    );
+  // Aggregate repos across all reachable installs, de-duped on fullName.
+  // A per-install failure is logged and skipped (do not fail the whole list).
+  const seen = new Set<string>();
+  const repos: Repo[] = [];
+  for (const installationId of reachable) {
+    try {
+      const installRepos = await listInstallationRepos(installationId);
+      for (const r of installRepos) {
+        if (!seen.has(r.fullName)) {
+          seen.add(r.fullName);
+          repos.push(r);
+        }
+      }
+    } catch (err) {
+      logger.error(
+        { err, userId: user.id, installationId },
+        "Failed to list repos for a reachable installation — skipping",
+      );
+    }
   }
+
+  return NextResponse.json({ repos });
 }

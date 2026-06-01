@@ -19,6 +19,7 @@ import {
   redactToken,
   mintInstallationToken,
   postSentryHeartbeat,
+  resolveOutputAwareOk,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -126,6 +127,12 @@ export async function cronContentGeneratorHandler({
   step,
   logger,
 }: HandlerArgs): Promise<{ ok: boolean }> {
+  // Run-window start for the post-run output check (replay-stable).
+  const runStartedAt = await step.run(
+    "run-started-at",
+    async () => new Date().toISOString(),
+  );
+
   // --- Step 1: mint installation token (memoized across replays) ---
   const installationToken = await step.run(
     "mint-installation-token",
@@ -196,12 +203,23 @@ export async function cronContentGeneratorHandler({
       );
     }
 
-    // --- Step 4: sentry-heartbeat (final POST) ---
+    // --- Step 4: output-aware heartbeat. The prompt's MANDATORY STEP 6 always
+    //     creates a `scheduled-content-generator` audit issue (even on the
+    //     no-topic / FAIL-citation early exits); a clean run that produced none
+    //     turns the monitor RED instead of false-green. ---
+    const heartbeatOk = await step.run("verify-output", async () =>
+      resolveOutputAwareOk({
+        spawnOk: spawnResult.ok,
+        label: SENTRY_MONITOR_SLUG,
+        runStartedAt,
+        cronName: "cron-content-generator",
+      }),
+    );
     await step.run("sentry-heartbeat", async () => {
-      await postSentryHeartbeat({ ok: spawnResult.ok, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-content-generator", logger });
+      await postSentryHeartbeat({ ok: heartbeatOk, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-content-generator", logger });
     });
 
-    return { ok: spawnResult.ok };
+    return { ok: heartbeatOk };
   } finally {
     await teardownEphemeralWorkspace(ephemeralRoot, "cron-content-generator").catch((err) => {
       reportSilentFallback(err, {
