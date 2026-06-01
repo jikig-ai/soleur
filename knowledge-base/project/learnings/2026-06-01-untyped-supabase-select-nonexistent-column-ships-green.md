@@ -13,7 +13,7 @@ tags: [supabase, postgrest, 42703, schema-drift, test-mocks, regression-test, in
 
 ## Problem
 
-The keyless-invitee membership deadlock (#4715) was "fixed, merged, and deployed" via PR #4713 — yet reproduced in production the next day: an invited user (`jean.deruelle@gmail.com`) stayed stuck in their own empty solo workspace, the owner's invite stayed `Pending`, and there was no in-app path to accept.
+The keyless-invitee membership deadlock (#4715) was "fixed, merged, and deployed" via PR #4713 — yet reproduced in production the next day: an invited user (a keyless invitee, e.g. `invitee@example.com`) stayed stuck in their own empty solo workspace, the owner's invite stayed `Pending`, and there was no in-app path to accept.
 
 PR #4713 added a `PendingInviteBannerRecovery` banner (the in-app accept path for an invitee who abandoned the `/invite` link). The banner self-fetches `GET /api/workspace/pending-invites`, which calls `getPendingInvitesForUser()` in `apps/web-platform/server/workspace-invitations.ts`. That function's embedded select was:
 
