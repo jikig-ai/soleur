@@ -74,6 +74,7 @@ export default async function TeamMembershipPage() {
           </div>
           <InviteMemberAction
             workspaceId={data.workspaceId}
+            isOwner={isOwner}
             organizationId={data.organizationId}
             organizationName={data.organizationName}
           />
@@ -95,7 +96,7 @@ export default async function TeamMembershipPage() {
         isOwner={isOwner}
       />
 
-      {memberCount === 1 && pendingInvites.length === 0 && (
+      {isOwner && memberCount === 1 && pendingInvites.length === 0 && (
         <p className="mt-6 text-sm text-soleur-text-secondary">
           <span className="font-medium text-soleur-accent-gold-fg">Solo for now.</span>{" "}
           Invite a teammate to share this workspace&apos;s agents, knowledge, and billing.

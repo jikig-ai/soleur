@@ -92,6 +92,91 @@ describe("TeamMembershipList", () => {
     expect(screen.getByText(/remove member/i)).toBeInTheDocument();
   });
 
+  // AC4 (over-gating regression guard): the Owner positive control for Transfer
+  // ownership. The Member tests above lock that Transfer stays hidden; this pins
+  // the counterpart — an Owner viewing a non-owner member row CAN still reach
+  // Transfer ownership. Without it, a regression hiding Transfer from Owners too
+  // would pass every other test.
+  it("Owner (isOwner=true): non-owner member row exposes Transfer ownership", () => {
+    render(
+      <TeamMembershipList
+        members={[OWNER, MEMBER]}
+        currentUserId="user-owner"
+        workspaceId="ws-1"
+        isOwner={true}
+        byokDelegationsEnabled={false}
+        organizationName="Test Org"
+      />,
+    );
+    const kebabs = screen.getAllByLabelText(/row actions/i);
+    expect(kebabs).toHaveLength(1);
+    fireEvent.click(kebabs[0]);
+    expect(screen.getByText(/transfer ownership/i)).toBeInTheDocument();
+  });
+
+  // RBAC gating: a Member (isOwner=false) viewing the team must NOT see any
+  // owner-only affordance. The kebab trigger gates the whole owner-only menu
+  // (Remove member + Transfer ownership), so a Member sees no kebab on any
+  // non-self row. Owner-only API routes still 403 a Member as defense-in-depth.
+  it("Member (isOwner=false): non-self row exposes NO kebab trigger", () => {
+    render(
+      <TeamMembershipList
+        members={[OWNER, MEMBER]}
+        currentUserId="user-member"
+        workspaceId="ws-1"
+        isOwner={false}
+        byokDelegationsEnabled={false}
+        organizationName="Test Org"
+      />,
+    );
+    // The OWNER row is non-self for this Member; without the gate it would
+    // render a kebab. With the gate, no row exposes one.
+    expect(screen.queryByLabelText(/row actions/i)).not.toBeInTheDocument();
+  });
+
+  // Attempting to open any kebab a Member can reach must surface no owner-only
+  // action. The kebab trigger is itself gated, so without the fix the trigger
+  // exists, opens, and reveals "Remove member" (RED); with the fix there is no
+  // trigger to open (GREEN). Clicking-when-present is load-bearing: a closed
+  // menu hides the text regardless of the gate, which would pass vacuously.
+  it("Member (isOwner=false): no Remove member action is reachable", () => {
+    render(
+      <TeamMembershipList
+        members={[OWNER, MEMBER]}
+        currentUserId="user-member"
+        workspaceId="ws-1"
+        isOwner={false}
+        byokDelegationsEnabled={false}
+        organizationName="Test Org"
+      />,
+    );
+    for (const kebab of screen.queryAllByLabelText(/row actions/i)) {
+      fireEvent.click(kebab);
+    }
+    expect(screen.queryByText(/remove member/i)).not.toBeInTheDocument();
+  });
+
+  // Regression-lock (already GREEN on main): "Transfer ownership" was already
+  // gated by `{isOwner && member.role !== "owner"}`, so a Member never saw it
+  // even before this fix. This test does NOT exercise the new `showActions`
+  // gate — it pins that the pre-existing gating stays in place.
+  it("Member (isOwner=false): no Transfer ownership action is reachable", () => {
+    render(
+      <TeamMembershipList
+        members={[OWNER, MEMBER]}
+        currentUserId="user-member"
+        workspaceId="ws-1"
+        isOwner={false}
+        byokDelegationsEnabled={false}
+        organizationName="Test Org"
+      />,
+    );
+    for (const kebab of screen.queryAllByLabelText(/row actions/i)) {
+      fireEvent.click(kebab);
+    }
+    expect(screen.queryByText(/transfer ownership/i)).not.toBeInTheDocument();
+  });
+
   // #4715 Phase 9 — owner "Share a key" prompt for a keyless, undelegated,
   // non-self member (only when byok delegations are enabled).
   const KEYLESS_MEMBER: TeamMembershipRow = {
