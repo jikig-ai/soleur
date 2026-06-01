@@ -72,7 +72,11 @@ export default async function TeamMembershipPage() {
               {memberCount === 1 ? "1 member" : `${memberCount} members`}
             </p>
           </div>
-          <InviteMemberAction workspaceId={data.workspaceId} />
+          <InviteMemberAction
+            workspaceId={data.workspaceId}
+            organizationId={data.organizationId}
+            organizationName={data.organizationName}
+          />
         </div>
 
         <TeamMembershipList

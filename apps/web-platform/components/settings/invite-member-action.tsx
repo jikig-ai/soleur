@@ -6,7 +6,15 @@ import { InviteMemberModal } from "@/components/settings/invite-member-modal";
 // Small client wrapper that pairs the "+ Invite member" trigger with the
 // modal — separated from the server-rendered page so the page itself stays
 // async + RSC-clean.
-export function InviteMemberAction({ workspaceId }: { workspaceId: string }) {
+export function InviteMemberAction({
+  workspaceId,
+  organizationId,
+  organizationName,
+}: {
+  workspaceId: string;
+  organizationId?: string;
+  organizationName?: string | null;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -20,6 +28,8 @@ export function InviteMemberAction({ workspaceId }: { workspaceId: string }) {
       <InviteMemberModal
         open={open}
         workspaceId={workspaceId}
+        organizationId={organizationId}
+        organizationName={organizationName}
         onClose={() => setOpen(false)}
       />
     </>

@@ -13,14 +13,24 @@ const ATTESTATION_TEXT =
 // it is the migration-058 workspace_member_attestations consent of record.
 // DRAFT consent copy — pending CLO/counsel review per #4558.
 
+// AC6: the org name is "still the default" (and so worth prompting for at
+// first-invite) when it is empty/NULL or the generic backfill/trigger default.
+const DEFAULT_ORG_NAME = "My Workspace";
+
 export function InviteMemberModal({
   open,
   workspaceId,
   onClose,
+  organizationId,
+  organizationName,
 }: {
   open: boolean;
   workspaceId: string;
   onClose: () => void;
+  /** Org being invited into — enables the optional first-invite rename. */
+  organizationId?: string;
+  /** Current org name — the rename field only shows while it's still default. */
+  organizationName?: string | null;
 }) {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"member" | "owner">("member");
@@ -28,6 +38,15 @@ export function InviteMemberModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [workspaceName, setWorkspaceName] = useState("");
+
+  const isDefaultName =
+    !organizationName ||
+    organizationName.trim() === "" ||
+    organizationName.trim() === DEFAULT_ORG_NAME;
+  // Only prompt for a name when we know which org to rename AND it's still the
+  // default — once named, the rename UI on the team page owns subsequent edits.
+  const showNameField = Boolean(organizationId) && isDefaultName;
 
   // Reset form whenever the modal toggles open. Closes a leaky-state hazard
   // when an operator cancels then reopens for a different invitee.
@@ -39,6 +58,7 @@ export function InviteMemberModal({
       setSubmitting(false);
       setError(null);
       setSuccess(false);
+      setWorkspaceName("");
     }
   }, [open]);
 
@@ -49,6 +69,22 @@ export function InviteMemberModal({
       setSubmitting(true);
       setError(null);
       try {
+        // AC6: opportunistic first-invite rename. Best-effort — a rename
+        // failure must not block the invite (the invite is the primary action).
+        if (showNameField && organizationId && workspaceName.trim()) {
+          try {
+            await fetch("/api/workspace/rename", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                organizationId,
+                name: workspaceName.trim(),
+              }),
+            });
+          } catch {
+            // swallow — invite proceeds regardless
+          }
+        }
         const res = await fetch("/api/workspace/invite-member", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -83,7 +119,17 @@ export function InviteMemberModal({
         setSubmitting(false);
       }
     },
-    [email, role, attested, submitting, workspaceId, onClose],
+    [
+      email,
+      role,
+      attested,
+      submitting,
+      workspaceId,
+      onClose,
+      showNameField,
+      organizationId,
+      workspaceName,
+    ],
   );
 
   if (!open) return null;
@@ -126,6 +172,26 @@ export function InviteMemberModal({
           <div className="mb-4 rounded-md bg-green-500/10 px-3 py-2 text-sm text-green-400">
             Invite sent! They&apos;ll receive an email with a join link.
           </div>
+        )}
+
+        {showNameField && (
+          <label className="mb-4 block">
+            <span className="mb-1 block text-sm font-medium text-soleur-text-primary">
+              Name your workspace
+            </span>
+            <input
+              type="text"
+              value={workspaceName}
+              maxLength={60}
+              onChange={(e) => setWorkspaceName(e.target.value)}
+              placeholder="e.g. Acme Studio"
+              className="w-full rounded-md border border-soleur-border-default bg-soleur-bg-surface-2/50 px-3 py-2 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted outline-none focus:border-soleur-border-emphasized"
+            />
+            <span className="mt-1 block text-xs text-soleur-text-muted">
+              Optional. Helps teammates tell this workspace apart in the
+              switcher. You can change it later in Team settings.
+            </span>
+          </label>
         )}
 
         <label className="mb-4 block">
