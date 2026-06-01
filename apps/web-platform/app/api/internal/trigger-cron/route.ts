@@ -91,13 +91,35 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Event not allowlisted" }, { status: 400 });
   }
 
+  // Optional per-cron event `data` pass-through (#4742). The route is a dumb
+  // forwarder: each consuming cron validates its own fields (e.g.
+  // cron-bug-fixer.ts validates event.data.issue_number is a positive integer
+  // and Sentry-reports on invalid). We only enforce that `data`, when present,
+  // is a PLAIN object — a non-plain-object spread is either a silent no-op
+  // (`...42`, `...null`) or injects index keys (`...["a"]`), so reject it
+  // explicitly before merge. `null`/absent are treated as no-data.
+  const rawData = (body as { data?: unknown } | null)?.data;
+  const hasData = rawData !== undefined && rawData !== null;
+  if (
+    hasData &&
+    (typeof rawData !== "object" || Array.isArray(rawData))
+  ) {
+    return NextResponse.json({ error: "data must be a plain object" }, { status: 400 });
+  }
+  const callerData = hasData ? (rawData as Record<string, unknown>) : {};
+
   try {
     const { inngest } = await import("@/server/inngest/client");
     await sendInngestWithRetry(
       () =>
         inngest.send({
           name,
-          data: { trigger: "manual-api", at: new Date().toISOString() },
+          // Route-controlled keys are spread LAST so a caller cannot override
+          // `trigger`/`at` and forge a payload that mimics a scheduled (non-
+          // manual) fire — the audit-poison guard (the issue's prose
+          // `{ trigger, at, ...data }` describes intent, NOT literal spread
+          // order; route keys MUST win).
+          data: { ...callerData, trigger: "manual-api", at: new Date().toISOString() },
         }),
       { feature: "trigger-cron" },
     );
