@@ -803,29 +803,109 @@ describe("cron-bug-fixer — (e) Sentry heartbeat URL shape", () => {
     expect(url).toContain("status=ok");
   });
 
-  it("claude spawn non-zero exit + no PR detected → ?status=error", async () => {
+  it("claude non-zero exit (no fix landed) → ?status=ok (monitor liveness, not claude success)", async () => {
+    // A non-zero claude --print exit (max-turns exhaustion / no-fix terminal
+    // state) is the NORMAL best-effort outcome for an autonomous fixer, NOT an
+    // operational error. The cron monitor's liveness contract is "the pipeline
+    // fired and ran end-to-end without an infrastructure fault" — decoupled
+    // from whether claude shipped a PR today. So a clean end-to-end run with a
+    // non-zero claude exit and no detected PR must post ?status=ok and the
+    // handler must return ok:true. Genuine infra faults keep their strict
+    // status=error early-returns (see the (b) sentinel and parse-event tests).
+    // Root-cause: H1 in plan 2026-06-01-fix-scheduled-bug-fixer-cron-error-checkin.
     const p3Issues = [
       {
         number: 950,
-        title: "fix: heartbeat-error",
+        title: "fix: heartbeat-ok-on-no-fix",
         labels: [{ name: "priority/p3-low" }, { name: "type/bug" }],
         created_at: "2026-05-01T00:00:00Z",
       },
     ];
     wireOctokit({ p3Issues });
 
-    wireSpawn(1); // non-zero exit
+    wireSpawn(1); // non-zero exit (claude found no fix)
     const { cronBugFixerHandler } = await importHandler();
     const step = makeStep();
     const result = await cronBugFixerHandler({ step, logger });
 
-    expect(result.ok).toBe(false);
+    expect(result.ok).toBe(true);
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
     const sentryCall = fetchMock.mock.calls.find(([url]) =>
       typeof url === "string" && url.includes("/cron/scheduled-bug-fixer/"),
     );
     expect(sentryCall).toBeDefined();
-    expect(sentryCall![0] as string).toContain("status=error");
+    expect(sentryCall![0] as string).toContain("status=ok");
+    // No infra-fault breadcrumb on a benign no-fix run — only the (kept-strict)
+    // setup-workspace / parse-event paths page; the no-fix exit is logged, not
+    // mirrored to Sentry as an error.
+    const infraReport = reportSilentFallbackSpy.mock.calls.find(([, ctx]) => {
+      const op = (ctx as { op?: string }).op;
+      return op === "setup-ephemeral-workspace" || op === "parse-event-data";
+    });
+    expect(infraReport).toBeUndefined();
+  });
+
+  it("claude-eval aborted by 50-min timeout → ?status=ok (monitor stays green; chronic-timeout still surfaces as non-paging telemetry)", async () => {
+    // A timeout is the same liveness class as a non-zero exit: the pipeline
+    // fired and ran to a heartbeat without an infrastructure fault, so the
+    // monitor must read ok. The chronic-timeout signal is preserved as a
+    // separate non-paging reportSilentFallback breadcrumb (op=claude-eval-timeout),
+    // NOT as a cron-monitor status=error page. (H2 in the same plan.)
+    vi.useFakeTimers();
+    try {
+      const p3Issues = [
+        {
+          number: 960,
+          title: "fix: timeout-stays-green",
+          labels: [{ name: "priority/p3-low" }, { name: "type/bug" }],
+          created_at: "2026-05-01T00:00:00Z",
+        },
+      ];
+      wireOctokit({ p3Issues });
+
+      // git exits 0; claude NEVER exits on its own → forces the substrate's
+      // AbortController timeout. Capture the claude child so we can emit its
+      // signal-killed exit after the abort fires.
+      let claudeChild: FakeChild | null = null;
+      spawnSpy.mockImplementation((cmd: string) => {
+        if (cmd === "git") {
+          const gitChild = makeChild();
+          queueMicrotask(() => gitChild.emit("exit", 0, null));
+          return gitChild;
+        }
+        claudeChild = makeChild();
+        return claudeChild; // no auto-exit
+      });
+
+      const { cronBugFixerHandler } = await importHandler();
+      const step = makeStep();
+      const resultPromise = cronBugFixerHandler({ step, logger });
+
+      // Let setup-workspace + claude-eval spawn run so claudeChild exists.
+      await vi.advanceTimersByTimeAsync(0);
+      // Cross the 50-min budget → ac.abort() → abortedByTimeout = true, SIGTERM.
+      await vi.advanceTimersByTimeAsync(50 * 60 * 1000 + 1);
+      // The SIGTERM'd child exits (null code, signal SIGTERM) → spawnResult.ok=false.
+      claudeChild!.emit("exit", null, "SIGTERM");
+      await vi.advanceTimersByTimeAsync(0);
+
+      const result = await resultPromise;
+
+      expect(result.ok).toBe(true);
+      const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+      const sentryCall = fetchMock.mock.calls.find(([url]) =>
+        typeof url === "string" && url.includes("/cron/scheduled-bug-fixer/"),
+      );
+      expect(sentryCall).toBeDefined();
+      expect(sentryCall![0] as string).toContain("status=ok");
+      // Chronic-timeout telemetry preserved (non-paging breadcrumb).
+      const timeoutReport = reportSilentFallbackSpy.mock.calls.find(
+        ([, ctx]) => (ctx as { op?: string }).op === "claude-eval-timeout",
+      );
+      expect(timeoutReport).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("validates SENTRY_DOMAIN, project, public key — malformed env skips heartbeat", async () => {

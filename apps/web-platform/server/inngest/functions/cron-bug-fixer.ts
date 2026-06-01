@@ -741,6 +741,29 @@ export async function cronBugFixerHandler({
       );
     }
 
+    // A non-zero claude exit (no fix landed, or aborted by the 50-min budget)
+    // is the NORMAL best-effort outcome for an autonomous fixer — log it for
+    // observability, but do NOT page the cron monitor. The monitor's liveness
+    // contract is "the pipeline fired and ran end-to-end without an
+    // INFRASTRUCTURE fault" (token mint, clone, spawn-error, parse), not
+    // "claude shipped a PR today". Those infra faults keep their strict
+    // status=error early-returns above (parse-event-data, setup-workspace).
+    // Decoupling the heartbeat from spawnResult.ok is the fix for the
+    // scheduled-bug-fixer error-check-in incident (H1 — see
+    // knowledge-base/project/plans/2026-06-01-fix-scheduled-bug-fixer-cron-error-checkin-plan.md).
+    if (!spawnResult.ok) {
+      logger.warn(
+        {
+          fn: "cron-bug-fixer",
+          selectedIssue,
+          exitCode: spawnResult.exitCode,
+          abortedByTimeout: spawnResult.abortedByTimeout,
+          durationMs: spawnResult.durationMs,
+        },
+        "claude-eval exited non-zero (no fix landed); not paging the cron monitor",
+      );
+    }
+
     // --- Step 6: detect-pr (even on non-zero exit; agent may have opened PR) ---
     const detectedPr = await step.run("detect-pr", async () => {
       const octokit = await createProbeOctokit();
@@ -752,14 +775,16 @@ export async function cronBugFixerHandler({
         { fn: "cron-bug-fixer", selectedIssue },
         "No bot-fix PR detected after claude-eval",
       );
+      // Clean run that produced no PR is the normal best-effort outcome →
+      // healthy liveness check-in (the no-fix exit is already logged above).
       await step.run("sentry-heartbeat", async () => {
-        await postSentryHeartbeat({ ok: spawnResult.ok, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-bug-fixer", logger });
+        await postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-bug-fixer", logger });
       });
       return {
         selectedIssue,
         prNumber: null,
         autoMergeQueued: false,
-        ok: spawnResult.ok,
+        ok: true,
       };
     }
 
@@ -789,16 +814,19 @@ export async function cronBugFixerHandler({
     }
 
     // --- Step 9: sentry-heartbeat (final POST) ---
-    const overallOk = spawnResult.ok && !!detectedPr;
+    // The pipeline reached the end without an infrastructure fault → healthy,
+    // regardless of claude's exit code or whether a PR was detected (those are
+    // best-effort outcomes, logged above, never a liveness failure). Infra
+    // faults page via the early-return status=error heartbeats above.
     await step.run("sentry-heartbeat", async () => {
-      await postSentryHeartbeat({ ok: overallOk, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-bug-fixer", logger });
+      await postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-bug-fixer", logger });
     });
 
     return {
       selectedIssue,
       prNumber: detectedPr.number,
       autoMergeQueued: gateResult.queued,
-      ok: overallOk,
+      ok: true,
     };
   } finally {
     // Best-effort teardown (idempotent rm -rf with force:true). The
