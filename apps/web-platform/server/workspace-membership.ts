@@ -415,3 +415,62 @@ export async function transferWorkspaceOwnership(
 
   return { ok: true, attestationId: String(data) };
 }
+
+export interface RenameOrganizationArgs {
+  organizationId: string;
+  name: string;
+  /**
+   * Verified getUser() id from the route — forwarded as p_caller_user_id so
+   * the rename_organization owner-gate resolves the caller correctly under
+   * the service-role client (auth.uid() is NULL there). See migration 091.
+   */
+  callerUserId: string;
+}
+
+export type RenameOrganizationResult =
+  | { ok: true }
+  | { ok: false; reason: RenameOrganizationFailureReason; detail?: string };
+
+export type RenameOrganizationFailureReason =
+  | "invalid_name"
+  | "caller_not_owner"
+  | "not_found"
+  | "rpc_failed";
+
+/**
+ * Rename an organization (the org switcher's display name). Owner-gated via the
+ * rename_organization RPC (migration 091) — a single-row UPDATE on
+ * organizations.name. Unlike the membership RPCs there is no session abort:
+ * a rename revokes no one's access.
+ */
+export async function renameOrganization(
+  args: RenameOrganizationArgs,
+): Promise<RenameOrganizationResult> {
+  const trimmed = args.name.trim();
+  if (trimmed.length === 0 || trimmed.length > 60) {
+    return { ok: false, reason: "invalid_name" };
+  }
+
+  const service = createServiceClient();
+  const { error } = await service.rpc("rename_organization", {
+    p_organization_id: args.organizationId,
+    p_name: trimmed,
+    p_caller_user_id: args.callerUserId,
+  });
+
+  if (error) {
+    const msg = error.message ?? "";
+    if (msg.includes("caller is not an owner")) {
+      return { ok: false, reason: "caller_not_owner" };
+    }
+    if (msg.includes("name must")) {
+      return { ok: false, reason: "invalid_name" };
+    }
+    if (msg.includes("no organization row")) {
+      return { ok: false, reason: "not_found" };
+    }
+    return { ok: false, reason: "rpc_failed", detail: msg };
+  }
+
+  return { ok: true };
+}
