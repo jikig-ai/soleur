@@ -43,4 +43,4 @@ Spec lacks a `spec.md` — defaulted to `lane: cross-domain` (TR2 fail-closed).
 
 ## Follow-up
 
-- [ ] F.1 If H1 confirmed, file a follow-up issue to assess the same over-tight semantic in `cron-roadmap-review.ts:277` + `cron-legal-audit.ts:263` (do NOT widen this PR to all five claude-eval crons silently).
+- [x] F.1 Filed consolidated cohort tracker **#4730** — the over-tight `ok: spawnResult.ok` semantic affects **11** sibling claude-eval crons (not just roadmap-review/legal-audit). Deferred deliberately (per-cron liveness-contract decision, not a mechanical sweep); did NOT widen this PR.
