@@ -303,10 +303,14 @@ jobs:
               -target=random_id.inngest_signing_key_dev \
               -target=random_id.inngest_event_key_prd \
               -target=random_id.inngest_event_key_dev \
+              -target=random_id.inngest_manual_trigger_secret_prd \
+              -target=random_id.inngest_manual_trigger_secret_dev \
               -target=doppler_secret.inngest_signing_key_prd \
               -target=doppler_secret.inngest_signing_key_dev \
               -target=doppler_secret.inngest_event_key_prd \
               -target=doppler_secret.inngest_event_key_dev \
+              -target=doppler_secret.inngest_manual_trigger_secret_prd \
+              -target=doppler_secret.inngest_manual_trigger_secret_dev \
               -target=betteruptime_heartbeat.inngest_prd \
               -target=betteruptime_policy.inngest \
               -target=doppler_secret.inngest_heartbeat_url_prd \
