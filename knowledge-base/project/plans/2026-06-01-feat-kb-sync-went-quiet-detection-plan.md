@@ -217,6 +217,15 @@ already-authorized `owner/repo` to GitHub; Sentry receives a hashed `userId` onl
 **Brand-survival threshold:** single-user incident. `requires_cpo_signoff: true`
 (CPO covered by brainstorm carry-forward). `user-impact-reviewer` runs at PR review.
 
+**Review-confirmed residuals (accepted, cited in code):** (1) the probe targets the
+**default branch**, which is correct-by-construction because the reconcile only
+syncs default-branch pushes (`webhook-push-reconcilable.ts:40`) — no false-negative
+for non-default-branch activity. (2) A user whose latest `kb_sync_history` row is a
+legacy `{date,count}` row is a deliberate, accepted blind spot (largely moot — the
+legacy writer is RLS-blocked). (3) `committer.date` is client-rewritable, so a
+force-push could rarely mask/over-fire — accepted at p3. All three are documented in
+the arm-3 code comment.
+
 ## GDPR / Compliance (assessed inline)
 
 Read-only, no new processor (GitHub/Sentry already authorized), Sentry `extra` is
