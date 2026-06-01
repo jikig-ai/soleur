@@ -138,27 +138,27 @@ fail because `went-quiet` op never fires.
 
 ### Pre-merge (PR)
 
-- [ ] Arm-3 reports each went-quiet ready+installed user via `reportSilentFallback`
+- [x] Arm-3 reports each went-quiet ready+installed user via `reportSilentFallback`
   (op `went-quiet`, `extra:{userId}` only); emits nothing for: idle
   (`headCommitAt <= lastOkSyncAt`), fresh (`now − lastOkSyncAt <= N`), latest
   `ok:false` (arm 2), NULL-install (filtered out / arm 1), empty-repo, empty/legacy
   history.
-- [ ] Default-branch HEAD commit read via `getDefaultBranchHeadCommitAt`
+- [x] Default-branch HEAD commit read via `getDefaultBranchHeadCommitAt`
   (`githubFetch` GET `/commits?per_page=1`, token from
   `generateInstallationToken(user.github_installation_id)`), owner/repo parsed
   from `user.repo_url` — NOT `_cron-shared` `REPO_OWNER/REPO_NAME`. Both
   AND-conditions enforced; threshold from `KB_WENT_QUIET_MAX_GAP_DAYS` (guarded `> 0`, default 3).
-- [ ] Failure isolation: users-scan DB error reports once (op `scan-went-quiet`)
+- [x] Failure isolation: users-scan DB error reports once (op `scan-went-quiet`)
   and returns; per-user probe error reports (op `went-quiet-probe`) and continues;
   any unexpected throw in the arm-3 step is caught so the **heartbeat still posts**;
   arms 1 & 2 unaffected.
-- [ ] No `ScanResult`/return widening (in-place reporting, like arm 2); heartbeat
+- [x] No `ScanResult`/return widening (in-place reporting, like arm 2); heartbeat
   `ok` stays `scan.ok` (arm-1 result; scan-ran, not findings-present — explicitly a
   weaker liveness signal for arm 3's DB error, matching arm 2). No `repo_status`
   mutation; no migration; no new Inngest function; no new npm dependency; no UI.
-- [ ] `# KB_WENT_QUIET_MAX_GAP_DAYS=3` documented in `.env.example`.
-- [ ] `vitest run <test>` green + `tsc --noEmit` clean in `apps/web-platform`.
-- [ ] PR body uses `Closes #4717`. #4728 (per-workspace `workspace_id`) remains open.
+- [x] `# KB_WENT_QUIET_MAX_GAP_DAYS=3` documented in `.env.example`.
+- [x] `vitest run <test>` green + `tsc --noEmit` clean in `apps/web-platform`.
+- [x] PR body uses `Closes #4717`. #4728 (per-workspace `workspace_id`) remains open.
 
 ## Test Scenarios (TR5)
 
