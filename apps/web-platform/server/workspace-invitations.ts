@@ -191,9 +191,24 @@ export async function createWorkspaceInvitation(
   };
 }
 
+// Named union (mirrors RevokeInvitationReason) so the route's reason→status
+// switch and the client reasonToMessage mapper get compile-time exhaustiveness —
+// an unmapped reason is exactly the bug class this fix closes (`revoked`/`unknown`
+// silently hitting the generic "Something went wrong").
+export type AcceptInvitationReason =
+  | "invitation_not_found"
+  | "already_accepted"
+  | "already_declined"
+  | "revoked"
+  | "expired"
+  | "already_member"
+  | "not_intended_invitee"
+  | "rpc_failed"
+  | "unknown";
+
 export type AcceptInvitationResult =
   | { ok: true; workspaceId: string; attestationId: string }
-  | { ok: false; reason: string };
+  | { ok: false; reason: AcceptInvitationReason };
 
 export async function acceptWorkspaceInvitation(
   invitationId: string,
@@ -207,12 +222,38 @@ export async function acceptWorkspaceInvitation(
 
   if (error) {
     log.error({ err: error.message }, "accept_workspace_invitation RPC failed");
+    // Pass a slimmed `{ code, message }` (NOT the raw PostgrestError) so
+    // sqlStateFromError still emits the SQLSTATE as a queryable `pg_code` Sentry
+    // tag — turning this failure class (e.g. the P0001 attestation-immutability
+    // conflict fixed in migration 090) from a dark "Something went wrong" into a
+    // one-grep diagnosis (#4695) — WITHOUT shipping the PostgrestError's
+    // `details`/`hint` fields (which can embed offending row values) into the
+    // unscrubbed Sentry `extra`.
+    reportSilentFallback(
+      { code: error.code, message: error.message },
+      {
+        feature: "workspace-invitations",
+        op: "accept",
+        message: `accept_workspace_invitation RPC failed: ${error.message}`,
+      },
+    );
     return { ok: false, reason: "rpc_failed" };
   }
 
-  const result = data as { ok: boolean; reason?: string; workspace_id?: string; attestation_id?: string };
+  const result = data as { ok: boolean; reason?: AcceptInvitationReason; workspace_id?: string; attestation_id?: string };
   if (!result.ok) {
-    return { ok: false, reason: result.reason ?? "unknown" };
+    const reason: AcceptInvitationReason = result.reason ?? "unknown";
+    // A reasonless ok=false means the RPC contract drifted — mirror to Sentry
+    // (cq-silent-fallback-must-mirror-to-sentry), matching revokeWorkspaceInvitation.
+    if (reason === "unknown") {
+      log.error("accept_workspace_invitation returned ok=false with no reason");
+      reportSilentFallback(null, {
+        feature: "workspace-invitations",
+        op: "accept",
+        message: "accept_workspace_invitation returned ok=false with no reason",
+      });
+    }
+    return { ok: false, reason };
   }
 
   return {

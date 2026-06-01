@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { reasonToMessage } from "./invite-reason-messages";
 
 interface Props {
   invitationId: string;
@@ -14,29 +15,6 @@ interface Props {
   isIntendedInvitee: boolean;
   /** Email of the currently signed-in account (for the mismatch notice). */
   signedInEmail: string;
-}
-
-/**
- * Map a server reason code to human-readable copy so a raw code
- * (e.g. `not_intended_invitee`) never leaks into the UI, even on the
- * defensive 403 path the server enforces.
- */
-function reasonToMessage(reason: string | undefined): string {
-  switch (reason) {
-    case "not_intended_invitee":
-      return "This invitation isn't addressed to your account.";
-    case "expired":
-      return "This invitation has expired.";
-    case "already_accepted":
-    case "already_member":
-      return "You've already joined this workspace.";
-    case "already_declined":
-      return "This invitation has already been declined.";
-    case "invitation_not_found":
-      return "This invitation is no longer available.";
-    default:
-      return reason ? "Something went wrong. Please try again." : "";
-  }
 }
 
 export function InviteActions({
