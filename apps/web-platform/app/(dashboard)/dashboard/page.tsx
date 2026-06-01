@@ -218,15 +218,25 @@ export default function DashboardPage() {
     let cancelled = false;
     const supabase = createClient();
     (async () => {
+      // ADR-044 (#4543): the repo-disconnected hint must reflect the ACTIVE
+      // workspace's repo, not the caller's own `users.repo_url`. For an invited
+      // member, their own row is the empty solo row, so reading it would render
+      // a spurious "your repository is disconnected" hint while they view a
+      // workspace whose repo IS connected. /api/workspace/active-repo is already
+      // active-workspace-aware (claim → solo fallback, never a sibling).
+      let repoUrl: string | null = null;
+      try {
+        const res = await fetch("/api/workspace/active-repo");
+        if (res.ok) {
+          const data = (await res.json()) as { repoUrl?: string | null };
+          repoUrl = data.repoUrl ?? null;
+        }
+      } catch {
+        return; // Network drop — suppress the hint rather than show a false one.
+      }
+      if (cancelled || repoUrl) return; // Active workspace connected — no hint.
       const { data: auth } = await supabase.auth.getUser();
       if (!auth.user) return;
-      const { data: userRow } = await supabase
-        .from("users")
-        .select("repo_url")
-        .eq("id", auth.user.id)
-        .maybeSingle();
-      const repoUrl = (userRow?.repo_url as string | null | undefined) ?? null;
-      if (repoUrl) return; // Connected — no hint needed.
       // `count=exact head=true` — row-less query, just the total.
       const { count } = await supabase
         .from("conversations")

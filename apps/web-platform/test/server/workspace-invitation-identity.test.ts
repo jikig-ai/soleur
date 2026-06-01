@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const {
   mockGetUser,
+  mockUserRpc,
   mockServiceFrom,
   mockServiceRpc,
   mockValidateOrigin,
@@ -10,6 +11,7 @@ const {
   mockSendEmail,
 } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
+  mockUserRpc: vi.fn(),
   mockServiceFrom: vi.fn(),
   mockServiceRpc: vi.fn(),
   mockValidateOrigin: vi.fn(),
@@ -21,6 +23,9 @@ const {
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(() => ({
     auth: { getUser: mockGetUser },
+    // ADR-044 (#4543): the accept route switches the member's active workspace
+    // via the membership-checked set_current_workspace_id RPC on the USER client.
+    rpc: mockUserRpc,
   })),
 }));
 
@@ -43,6 +48,10 @@ vi.mock("@/server/workspace-invitations", () => ({
 
 vi.mock("@/server/notifications", () => ({
   sendInviteAcceptedEmail: mockSendEmail,
+}));
+
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: vi.fn(),
 }));
 
 function makeRequest(body: Record<string, unknown>): Request {
@@ -91,6 +100,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockValidateOrigin.mockReturnValue({ valid: true, origin: "http://localhost:3000" });
   mockSendEmail.mockResolvedValue(undefined);
+  mockUserRpc.mockResolvedValue({ data: null, error: null });
 });
 
 describe("accept-invite identity check", () => {
@@ -142,6 +152,32 @@ describe("accept-invite identity check", () => {
     const res = await acceptPOST(makeRequest({ invitationId: INVITATION_ID }));
     expect(res.status).toBe(200);
     expect(mockAcceptInvitation).toHaveBeenCalledWith(INVITATION_ID, INVITEE_USER_ID);
+  });
+
+  it("switches the member's ACTIVE workspace to the accepted workspace (set_current_workspace_id) so they land in the shared workspace, not a 404 (#4543)", async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: INVITEE_USER_ID, email: INVITEE_EMAIL } },
+    });
+    mockServiceFrom.mockReturnValue(chainableMock(INVITATION_ROW));
+    mockAcceptInvitation.mockResolvedValue({ ok: true, workspaceId: "ws-001", attestationId: "att-1" });
+
+    const res = await acceptPOST(makeRequest({ invitationId: INVITATION_ID }));
+    expect(res.status).toBe(200);
+    expect(mockUserRpc).toHaveBeenCalledWith("set_current_workspace_id", {
+      p_workspace_id: "ws-001",
+    });
+  });
+
+  it("still returns 200 when the active-workspace switch fails (accept already committed; switch is best-effort)", async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: INVITEE_USER_ID, email: INVITEE_EMAIL } },
+    });
+    mockServiceFrom.mockReturnValue(chainableMock(INVITATION_ROW));
+    mockAcceptInvitation.mockResolvedValue({ ok: true, workspaceId: "ws-001", attestationId: "att-1" });
+    mockUserRpc.mockResolvedValue({ data: null, error: { message: "boom" } });
+
+    const res = await acceptPOST(makeRequest({ invitationId: INVITATION_ID }));
+    expect(res.status).toBe(200);
   });
 
   it("proceeds to RPC when authenticated user email matches invitee_email (case-insensitive)", async () => {
