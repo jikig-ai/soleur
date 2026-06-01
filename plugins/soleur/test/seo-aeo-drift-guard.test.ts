@@ -1319,3 +1319,151 @@ describe("#3175/#3176/#2561/#2560/#2559 marketing pillars + clusters + glossary"
     ).toBe(true);
   });
 });
+
+// -- Test 18: #4408 / #4409 / #3177 new comparison + disambiguation surfaces --
+// The three net-new content pages shipped for the commercial-intent comparison
+// gap (#4408 /compare/soleur-vs-cursor/, #4409 /compare/soleur-vs-devin/) and the
+// AEO disambiguation post (#3177 /blog/claude-code-plugin-vs-skill-vs-mcp/).
+// Each must build with a non-empty <title> + meta description; each visible FAQ
+// must have a matching FAQPage JSON-LD (mainEntity names == visible <summary>
+// text — the #2707/#3171 parity shape); and the disambiguation post must render
+// the Plugin/Skill/MCP table.
+
+describe("#4408/#4409/#3177 new comparison + disambiguation pages", () => {
+  // The three new surfaces, by built relative path.
+  const PAGES: { label: string; rel: string }[] = [
+    { label: "/compare/soleur-vs-cursor/", rel: "compare/soleur-vs-cursor/index.html" },
+    { label: "/compare/soleur-vs-devin/", rel: "compare/soleur-vs-devin/index.html" },
+    {
+      label: "/blog/claude-code-plugin-vs-skill-vs-mcp/",
+      rel: "blog/claude-code-plugin-vs-skill-vs-mcp/index.html",
+    },
+  ];
+
+  // Decode ONLY the autoescape entities Nunjucks emits for apostrophes and
+  // double-quotes in a text node. Deliberately NOT &amp; (the &amp;->& round-trip
+  // is the js/double-escaping CodeQL pattern) and NO tag-strip (/<[^>]+>/g is the
+  // js/incomplete-multi-character-sanitization pattern). Question text is plain
+  // ASCII by construction, so .trim() alone suffices; the decode is defensive.
+  const decodeText = (s: string) =>
+    s.replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+
+  test("each new page builds with a non-empty <title> and meta description", () => {
+    let checked = 0;
+    for (const { label, rel } of PAGES) {
+      const abs = resolve(SITE, rel);
+      expect(existsSync(abs), `${label}: built file present`).toBe(true);
+      const html = readFileSync(abs, "utf8");
+
+      const title = extractTitle(html);
+      expect(title.length, `${label}: non-empty <title>`).toBeGreaterThan(0);
+      // The /compare/ pages are brand-anchored (seoTitle ends "| Soleur"); the
+      // disambiguation blog post is keyword-led (no brand suffix), so only
+      // require the brand anchor on the comparison surfaces.
+      if (rel.startsWith("compare/")) {
+        expect(title, `${label}: <title> is brand-anchored`).toContain("Soleur");
+      }
+
+      const metaMatches = [
+        ...html.matchAll(/<meta name="description" content="([^"]*)"/g),
+      ];
+      expect(
+        metaMatches.length,
+        `${label}: exactly one <meta name="description">`,
+      ).toBe(1);
+      expect(
+        metaMatches[0][1].trim().length,
+        `${label}: meta description is a real sentence`,
+      ).toBeGreaterThan(50);
+      checked++;
+    }
+    expect(checked, "all three new pages asserted").toBe(PAGES.length);
+  });
+
+  test("each new page's visible FAQ matches its FAQPage JSON-LD (count + names)", () => {
+    let checked = 0;
+    for (const { label, rel } of PAGES) {
+      const html = readSite(rel);
+      const detailsCount = [
+        ...html.matchAll(/<details class="faq-item">/g),
+      ].length;
+      // Every new page ships a visible FAQ — assert that, then assert parity.
+      expect(detailsCount, `${label}: renders a visible FAQ`).toBeGreaterThan(0);
+
+      const faq = jsonLdBlocks(html).find(
+        (b): b is { "@type": string; mainEntity: { name: string }[] } =>
+          typeof b === "object" &&
+          b !== null &&
+          (b as { "@type"?: string })["@type"] === "FAQPage",
+      );
+      expect(faq, `${label}: FAQPage JSON-LD present for visible FAQ`).toBeDefined();
+
+      const summaries = [
+        ...html.matchAll(/<summary class="faq-question">([\s\S]*?)<\/summary>/g),
+      ].map((m) => m[1].trim());
+      const names = faq!.mainEntity.map((q) => q.name.trim());
+
+      expect(detailsCount, `${label}: details vs JSON-LD count`).toBe(names.length);
+      expect(summaries.length, `${label}: summaries vs JSON-LD count`).toBe(
+        names.length,
+      );
+      for (const name of names) {
+        expect(
+          summaries.map(decodeText),
+          `${label}: JSON-LD question "${name}" has a matching visible <summary>`,
+        ).toContain(decodeText(name));
+      }
+      checked++;
+    }
+    expect(checked, "FAQ parity asserted on all three new pages").toBe(
+      PAGES.length,
+    );
+  });
+
+  test("#3177 disambiguation post renders a Plugin/Skill/MCP table", () => {
+    const html = readSite("blog/claude-code-plugin-vs-skill-vs-mcp/index.html");
+    // The post body renders inside .prose; the disambiguation table is a real
+    // <table>. Assert structure (a table with header cells) and the three
+    // primitive column headers it disambiguates. Literal-substring presence
+    // checks (.includes) — no regex validation, so no js/regex/missing-regexp-anchor.
+    expect(html.includes("<table>"), "disambiguation <table> present").toBe(true);
+    expect(html.includes("</table>"), "disambiguation table closed").toBe(true);
+    // The three primitives are the table's value columns.
+    expect(html.includes("<th>Skill</th>"), "Skill column header").toBe(true);
+    expect(html.includes("<th>MCP server</th>"), "MCP server column header").toBe(
+      true,
+    );
+    expect(html.includes("<th>Plugin</th>"), "Plugin column header").toBe(true);
+    // The "Scope" row anchors the scope/lifecycle/distribution axes the issue
+    // (#3177) requires the table to disambiguate.
+    expect(html.includes("Scope"), "table covers Scope").toBe(true);
+    expect(html.includes("Lifecycle"), "table covers Lifecycle").toBe(true);
+    expect(html.includes("Distribution"), "table covers Distribution").toBe(true);
+  });
+
+  test("#3177 disambiguation post links the plugin pillar + a sibling cluster post", () => {
+    const html = readSite("blog/claude-code-plugin-vs-skill-vs-mcp/index.html");
+    // Internal cross-links the issue requires: the Claude Code plugin pillar
+    // (best-claude-code-plugins-2026) and a sibling (skill-libraries-vs-workflow-plugins).
+    // Href-attribute presence checks — no text extraction, no sanitization concern.
+    expect(
+      html.includes('href="/blog/best-claude-code-plugins-2026/"'),
+      "links the plugin pillar post",
+    ).toBe(true);
+    expect(
+      html.includes('href="/blog/skill-libraries-vs-workflow-plugins/"'),
+      "links a sibling cluster post",
+    ).toBe(true);
+  });
+
+  test("#4408 cursor compare page cross-links the existing soleur-vs-cursor blog post", () => {
+    const html = readSite("compare/soleur-vs-cursor/index.html");
+    // The issue requires the /compare/ page and the existing blog post to be
+    // cross-linked (not duplicated). The compare page links the blog post via an
+    // absolute {{ site.url }}-prefixed href.
+    expect(
+      html.includes("/blog/soleur-vs-cursor/"),
+      "cursor compare page links the existing blog post",
+    ).toBe(true);
+  });
+});

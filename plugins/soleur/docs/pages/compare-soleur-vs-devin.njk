@@ -1,0 +1,201 @@
+---
+title: "Soleur vs Devin"
+seoTitle: "Soleur vs Devin: Autonomous Coding Agent vs AI Organization | Soleur"
+description: "Devin is an autonomous software engineer that dropped from 500 to 20 dollars a month. Soleur is a full AI organization. A fair comparison for solo founders."
+permalink: compare/soleur-vs-devin/index.html
+layout: base.njk
+ogImage: "blog/og-soleur-vs-devin.png"
+ogImageAlt: "Soleur vs Devin comparison"
+date: 2026-06-01
+last_updated: 2026-06-01
+---
+
+    <!-- Hero -->
+    <section class="page-hero">
+      <div class="container">
+        <p class="section-label">Comparison</p>
+        <h1>Soleur vs Devin</h1>
+        <p>Devin is an autonomous software engineer in a sandbox. Soleur is a full AI organization across eight departments. Different problems, different scope.</p>
+      </div>
+    </section>
+
+    <section class="content">
+      <div class="container">
+        <div class="prose">
+
+          <p><strong>One-sentence summary:</strong> Devin is Cognition's autonomous AI software engineer that plans, writes, tests, and ships code in a sandbox; Soleur is a <a href="{{ site.url }}/company-as-a-service/">Company-as-a-Service</a> platform that runs {{ stats.agents }} agents across {{ stats.departments }} departments. Devin solves the engineering-hiring problem; Soleur covers the whole company.</p>
+
+          <h2>The pricing arc that put Devin back on the radar</h2>
+
+          <p>Devin became the price anchor for autonomous AI agents. Cognition launched it as a premium product, then <a href="https://cognition.ai/blog/devin-2" rel="noopener noreferrer" target="_blank">released Devin 2</a> and <a href="https://venturebeat.com/programming-development/devin-2-0-is-here-cognition-slashes-price-of-ai-software-engineer-to-20-per-month-from-500" rel="noopener noreferrer" target="_blank">cut the entry price from 500 dollars per month to 20 dollars per month</a> — a roughly 25x reduction that put an autonomous software engineer within reach of every solo founder who codes. That price move is what makes Devin a live option in the consideration set again, and it is why the comparison matters now.</p>
+
+          <h2>What each one is</h2>
+
+          <p><strong>Devin</strong> is <a href="https://cognition.ai/" rel="noopener noreferrer" target="_blank">Cognition's</a> autonomous AI software engineer. Given a problem statement or GitHub issue, Devin plans a solution, writes code, runs tests, debugs failures, reads documentation, and submits a pull request, operating with its own browser, terminal, and editor in a sandboxed environment. It is purpose-built for long-horizon software engineering and nothing else.</p>
+
+          <p><strong>Soleur</strong> is the Company-as-a-Service platform. It runs inside Claude Code and deploys {{ stats.agents }} specialist agents across {{ stats.departments }} departments — engineering, marketing, legal, finance, operations, product, sales, and support — over a compounding knowledge base. Engineering is one department of many. Soleur is open source under Apache 2.0.</p>
+
+          <h2>Side-by-side comparison</h2>
+
+          <table>
+            <thead>
+              <tr>
+                <th>Dimension</th>
+                <th>Devin</th>
+                <th>Soleur</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Category</td>
+                <td>Autonomous AI software engineer</td>
+                <td>AI organization across every department</td>
+              </tr>
+              <tr>
+                <td>Domain coverage</td>
+                <td>Software engineering</td>
+                <td>Engineering, marketing, legal, finance, operations, product, sales, support</td>
+              </tr>
+              <tr>
+                <td>Autonomy model</td>
+                <td>Autonomous execution in a sandbox; review the output</td>
+                <td>Human-in-the-loop decision gates; review the plan and the work</td>
+              </tr>
+              <tr>
+                <td>Memory model</td>
+                <td>Session-scoped; starts from repository state each task</td>
+                <td>Cross-domain compounding knowledge base (git-tracked Markdown)</td>
+              </tr>
+              <tr>
+                <td>Sandboxed browser and terminal</td>
+                <td>Yes</td>
+                <td>Partial (runs in your Claude Code environment)</td>
+              </tr>
+              <tr>
+                <td>Pre-built non-engineering agents</td>
+                <td>No</td>
+                <td>Yes (legal, finance, marketing, sales, and more)</td>
+              </tr>
+              <tr>
+                <td>Pricing</td>
+                <td>From 20 dollars per month (down from 500)</td>
+                <td>Open source and free to self-host; hosted plans from 49 dollars per month</td>
+              </tr>
+              <tr>
+                <td>Source availability</td>
+                <td>Closed source</td>
+                <td>Open source (Apache 2.0), fully auditable</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h2>When to pick Devin</h2>
+
+          <p>Pick Devin when your bottleneck is engineering velocity and the rest of the company is already handled. If you have a validated product, a clear roadmap, legal and financial infrastructure in place, and the remaining constraint is shipping code faster, Devin's autonomous engineering at 20 dollars per month is a strong option. It is also the right call for a pure software-engineering problem with little marketing, legal, or financial complexity — some developer-tools and infrastructure companies genuinely run that way for a long stretch.</p>
+
+          <h2>When to pick Soleur</h2>
+
+          <p>Pick Soleur when the missing piece is not just code. A solo founder is simultaneously the CTO, CMO, CLO, CFO, and head of sales. Devin cannot draft the privacy policy the new feature needs, run the competitive analysis that should precede the roadmap, or remember last month's compliance decision — because it has no cross-domain knowledge base and it is scoped to engineering by design. Soleur covers all eight departments through one lifecycle, so the legal review, the financial model, the marketing copy, and the engineering work share context and compound over time.</p>
+
+          <p>The two can work together: use Soleur for the organizational workflow and delegate well-scoped, long-horizon coding tasks to Devin, then let Soleur's compound step capture the architectural decisions back into the knowledge base.</p>
+
+          <h2>Your expertise, amplified</h2>
+
+          <p>Soleur is built human-in-the-loop. You make the decisions; agents execute; knowledge compounds. The plan is visible before implementation; the review happens before anything ships. The knowledge base is a directory of readable, git-tracked Markdown files you can audit and edit directly — an architecture designed for decisions where the cost of being wrong is high.</p>
+
+          <h2>Frequently asked questions</h2>
+
+          <div class="faq-list">
+            <details class="faq-item">
+              <summary class="faq-question">Is Soleur a Devin alternative?</summary>
+              <p class="faq-answer">Partly. Soleur includes engineering agents that plan, implement, and review code, so it overlaps with what Devin does. But Soleur is broader: it is an AI organization across eight departments, not an autonomous coding agent. If you need engineering plus legal, finance, marketing, and the rest, Soleur is the alternative to running all of those yourself.</p>
+            </details>
+            <details class="faq-item">
+              <summary class="faq-question">Why did Devin drop from 500 to 20 dollars per month?</summary>
+              <p class="faq-answer">Cognition released Devin 2 and cut the entry price from 500 dollars per month to 20 dollars per month, a roughly 25x reduction that made an autonomous software engineer accessible to individual founders. That price move is what brought Devin back into the comparison set for solo builders evaluating autonomous agents.</p>
+            </details>
+            <details class="faq-item">
+              <summary class="faq-question">Can Devin and Soleur be used together?</summary>
+              <p class="faq-answer">Yes. Use Soleur for the full organizational workflow, including planning, product strategy, legal, finance, and marketing, and delegate well-scoped long-horizon coding tasks to Devin as an execution layer. Soleur's compound step captures the architectural decisions Devin surfaces and feeds them back into the cross-domain knowledge base.</p>
+            </details>
+            <details class="faq-item">
+              <summary class="faq-question">Does Devin handle non-engineering work?</summary>
+              <p class="faq-answer">No. Devin is purpose-built for software engineering and is scoped to coding tasks. It does not draft contracts, run competitive intelligence, build financial models, or plan marketing campaigns. Soleur covers those domains with specialist agents and a shared knowledge base.</p>
+            </details>
+          </div>
+
+          <h2>Get started</h2>
+
+          <p>See the <a href="{{ site.url }}/agents/">{{ stats.agents }} agents</a>, read <a href="{{ site.url }}/getting-started/">how to get started</a>, or install the open source version:</p>
+
+          <pre><code>claude plugin install soleur</code></pre>
+
+        </div>
+      </div>
+    </section>
+
+<script type="application/ld+json">
+{# All string interpolations in this JSON-LD block MUST use | jsonLdSafe | safe — see #2609 #}
+{
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": {{ title | jsonLdSafe | safe }},
+  "description": {{ description | jsonLdSafe | safe }},
+  "url": {{ (site.url + "/compare/soleur-vs-devin/") | jsonLdSafe | safe }},
+  "inLanguage": "en-US",
+  "image": {{ (site.url + "/images/" + ogImage) | jsonLdSafe | safe }},
+  "author": {
+    "@type": "Person",
+    "@id": {{ (site.url + "/about/#jean-deruelle") | jsonLdSafe | safe }},
+    "name": {{ site.author.name | jsonLdSafe | safe }},
+    "url": {{ site.author.url | jsonLdSafe | safe }},
+    "jobTitle": {{ (site.author.role + " of " + site.name) | jsonLdSafe | safe }}
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": {{ site.name | jsonLdSafe | safe }},
+    "url": {{ site.url | jsonLdSafe | safe }}
+  }
+}
+</script>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Is Soleur a Devin alternative?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Partly. Soleur includes engineering agents that plan, implement, and review code, so it overlaps with what Devin does. But Soleur is broader: it is an AI organization across eight departments, not an autonomous coding agent. If you need engineering plus legal, finance, marketing, and the rest, Soleur is the alternative to running all of those yourself."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Why did Devin drop from 500 to 20 dollars per month?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Cognition released Devin 2 and cut the entry price from 500 dollars per month to 20 dollars per month, a roughly 25x reduction that made an autonomous software engineer accessible to individual founders. That price move is what brought Devin back into the comparison set for solo builders evaluating autonomous agents."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Can Devin and Soleur be used together?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. Use Soleur for the full organizational workflow, including planning, product strategy, legal, finance, and marketing, and delegate well-scoped long-horizon coding tasks to Devin as an execution layer. Soleur's compound step captures the architectural decisions Devin surfaces and feeds them back into the cross-domain knowledge base."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does Devin handle non-engineering work?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "No. Devin is purpose-built for software engineering and is scoped to coding tasks. It does not draft contracts, run competitive intelligence, build financial models, or plan marketing campaigns. Soleur covers those domains with specialist agents and a shared knowledge base."
+      }
+    }
+  ]
+}
+</script>
