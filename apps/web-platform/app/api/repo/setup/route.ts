@@ -6,6 +6,11 @@ import { provisionWorkspaceWithRepo } from "@/server/workspace";
 import { scanProjectHealth } from "@/server/project-scanner";
 import { normalizeRepoUrl } from "@/lib/repo-url";
 import { mirrorRepoColsToSoloWorkspace } from "@/server/workspace-repo-mirror";
+import {
+  resolveReachableInstallationIds,
+  resolveOwningInstallationForRepo,
+} from "@/server/reachable-installations";
+import { resolveGithubLogin } from "@/server/github-login";
 import { GitOperationError, sanitizeGitStderr } from "@/server/git-auth";
 import logger from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
@@ -55,13 +60,57 @@ export async function POST(request: Request) {
   const serviceClient = createServiceClient();
 
   // Get user's installation ID
-  const { data: userData, error: fetchError } = await serviceClient
+  const { data: userData } = await serviceClient
     .from("users")
-    .select("github_installation_id, email")
+    .select("github_installation_id, email, github_username")
     .eq("id", user.id)
     .single();
 
-  if (fetchError || !userData?.github_installation_id) {
+  // Resolve the installation that should be used for THIS repo. Priority:
+  //   1. Owning install from the reachable set (most correct): the install
+  //      that actually has the repo, regardless of whether
+  //      users.github_installation_id is set. This is the path that lets an
+  //      org member clone an org-owned repo via a workspace-membership install
+  //      (ADR-044) without a stored personal install.
+  //   2. Stored users.github_installation_id (preserves the personal happy
+  //      path even when the owning-install probe is degraded/inconclusive).
+  //   3. Otherwise -> keep the 400 "not installed" contract.
+  //
+  // We do NOT write the resolved install back onto users.github_installation_id
+  // (unique constraint — ADR-044 resolves the shared case per-request).
+  //
+  // Parse owner/repo from the already-normalized repoUrl (canonical
+  // <owner>/<repo> guaranteed by the format regex above).
+  const ownerRepoMatch = repoUrl.match(
+    /^https:\/\/github\.com\/([^/]+)\/([^/]+)$/,
+  );
+  let installationId: number | null = null;
+  if (ownerRepoMatch) {
+    const [, owner, repo] = ownerRepoMatch;
+    const githubLogin = await resolveGithubLogin(
+      serviceClient,
+      user.id,
+      userData?.github_username,
+    );
+    const reachable = await resolveReachableInstallationIds(
+      serviceClient,
+      user.id,
+      githubLogin,
+    );
+    installationId = await resolveOwningInstallationForRepo(
+      reachable,
+      owner,
+      repo,
+    );
+  }
+
+  // Degraded-probe fallback: owning resolution was inconclusive, but a stored
+  // install exists — use it.
+  if (installationId == null && userData?.github_installation_id) {
+    installationId = userData.github_installation_id;
+  }
+
+  if (installationId == null) {
     return NextResponse.json(
       { error: "GitHub App not installed. Please install the app first." },
       { status: 400 },
@@ -100,13 +149,13 @@ export async function POST(request: Request) {
   // so the workspaces-only read path sees the in-progress connection.
   await mirrorRepoColsToSoloWorkspace(serviceClient, user.id, {
     repo_url: repoUrl,
-    github_installation_id: userData.github_installation_id,
+    github_installation_id: installationId,
     repo_status: "cloning",
   });
 
   // Kick off clone in the background (don't await)
   const userName = user.user_metadata?.full_name ?? user.email?.split("@")[0] ?? "Soleur User";
-  const userEmail = userData.email ?? user.email ?? "";
+  const userEmail = userData?.email ?? user.email ?? "";
 
   const isStartFresh = body.source === "start_fresh";
 
@@ -116,7 +165,7 @@ export async function POST(request: Request) {
   provisionWorkspaceWithRepo(
     user.id,
     repoUrl,
-    userData.github_installation_id,
+    installationId,
     userName,
     userEmail,
     { suppressWelcomeHook: isStartFresh },
