@@ -13,9 +13,13 @@ import { InviteMemberModal } from "@/components/settings/invite-member-modal";
 export function InviteMemberAction({
   workspaceId,
   isOwner,
+  organizationId,
+  organizationName,
 }: {
   workspaceId: string;
   isOwner: boolean;
+  organizationId?: string;
+  organizationName?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   if (!isOwner) return null;
@@ -31,6 +35,8 @@ export function InviteMemberAction({
       <InviteMemberModal
         open={open}
         workspaceId={workspaceId}
+        organizationId={organizationId}
+        organizationName={organizationName}
         onClose={() => setOpen(false)}
       />
     </>

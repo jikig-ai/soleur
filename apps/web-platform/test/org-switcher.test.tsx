@@ -82,4 +82,9 @@ describe("OrgSwitcher", () => {
     fireEvent.click(within(menu).getByText("jikigai"));
     expect(onSwitch).not.toHaveBeenCalled();
   });
+
+  // AC7 note: the switcher renders whatever organizationName the resolver
+  // supplies (covered by the render tests above). The "Untitled" fallback is
+  // owned by the resolver, NOT this component — that arm is tested directly in
+  // test/org-memberships-resolver.test.ts (feat-one-shot-workspace-untitled-name).
 });

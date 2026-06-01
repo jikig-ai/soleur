@@ -4,6 +4,7 @@ import { resolveTeamMembershipPageData } from "@/server/team-membership-resolver
 import { TeamMembershipList } from "@/components/settings/team-membership-list";
 import { InviteMemberAction } from "@/components/settings/invite-member-action";
 import { PendingInvitesList } from "@/components/settings/pending-invites-list";
+import { RenameWorkspaceAction } from "@/components/settings/rename-workspace-action";
 
 // AC-A: flag OFF → HTTP 404 via notFound(). Flagsmith single-control gate
 // lives inside resolveTeamMembershipPageData. The "/dashboard/settings/team"
@@ -52,10 +53,16 @@ export default async function TeamMembershipPage() {
   return (
     <div>
       <h1 className="mb-2 text-2xl font-semibold text-soleur-text-primary">Team</h1>
-      <p className="mb-8 text-sm text-soleur-text-secondary">
+      <p className="mb-6 text-sm text-soleur-text-secondary">
         People who can act in this workspace. All members share the same
         workspace data, agents, and billing.
       </p>
+
+      <RenameWorkspaceAction
+        organizationId={data.organizationId}
+        organizationName={data.organizationName}
+        isOwner={isOwner}
+      />
 
       <div className="rounded-lg border border-soleur-border-default">
         <div className="flex items-center justify-between border-b border-soleur-border-default px-6 py-4">
@@ -65,7 +72,12 @@ export default async function TeamMembershipPage() {
               {memberCount === 1 ? "1 member" : `${memberCount} members`}
             </p>
           </div>
-          <InviteMemberAction workspaceId={data.workspaceId} isOwner={isOwner} />
+          <InviteMemberAction
+            workspaceId={data.workspaceId}
+            isOwner={isOwner}
+            organizationId={data.organizationId}
+            organizationName={data.organizationName}
+          />
         </div>
 
         <TeamMembershipList
