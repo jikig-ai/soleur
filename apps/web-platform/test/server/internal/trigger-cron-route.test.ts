@@ -1,4 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+// Capture the inherited value so afterEach restores it — INNGEST_MANUAL_TRIGGER_SECRET
+// is security-relevant; never leak a stub/delete to a sibling file in the worker.
+const ORIG_SECRET = process.env.INNGEST_MANUAL_TRIGGER_SECRET;
 
 const { mockSendInngestWithRetry, mockReportSilentFallback, mockInngestSend } =
   vi.hoisted(() => ({
@@ -54,6 +58,11 @@ beforeEach(() => {
   mockInngestSend.mockResolvedValue({ ids: ["evt_1"] });
 });
 
+afterEach(() => {
+  if (ORIG_SECRET === undefined) delete process.env.INNGEST_MANUAL_TRIGGER_SECRET;
+  else process.env.INNGEST_MANUAL_TRIGGER_SECRET = ORIG_SECRET;
+});
+
 describe("POST /api/internal/trigger-cron — auth / fail-closed", () => {
   it("returns 503 (fail-closed) when the secret is unset (no dispatch)", async () => {
     delete process.env.INNGEST_MANUAL_TRIGGER_SECRET;
@@ -83,6 +92,19 @@ describe("POST /api/internal/trigger-cron — auth / fail-closed", () => {
       makeRequest(
         { event: ALLOWED_EVENT },
         { authorization: `Bearer ${SECRET}-extra` },
+      ),
+    );
+    expect(res.status).toBe(401);
+    expect(mockSendInngestWithRetry).not.toHaveBeenCalled();
+  });
+
+  it("returns 401 on a CORRECT-length but wrong-bytes Bearer (positive control: timingSafeEqual is the deciding gate, not just the length-guard)", async () => {
+    const wrongSameLength = "x".repeat(SECRET.length);
+    expect(wrongSameLength.length).toBe(SECRET.length); // guard: same length
+    const res = await POST(
+      makeRequest(
+        { event: ALLOWED_EVENT },
+        { authorization: `Bearer ${wrongSameLength}` },
       ),
     );
     expect(res.status).toBe(401);
@@ -129,6 +151,13 @@ describe("POST /api/internal/trigger-cron — dispatch", () => {
   it("returns 400 on malformed JSON (valid secret + auth)", async () => {
     const res = await POST(makeRequest("{not json"));
     expect(res.status).toBe(400);
+    expect(mockSendInngestWithRetry).not.toHaveBeenCalled();
+  });
+
+  it("returns 413 on an oversized body (memory-amp DoS guard, no dispatch)", async () => {
+    const huge = JSON.stringify({ event: ALLOWED_EVENT, pad: "a".repeat(70 * 1024) });
+    const res = await POST(makeRequest(huge));
+    expect(res.status).toBe(413);
     expect(mockSendInngestWithRetry).not.toHaveBeenCalled();
   });
 

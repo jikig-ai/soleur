@@ -56,7 +56,7 @@ export const EXPECTED_CRON_FUNCTIONS: string[] = [
 ];
 
 // fnId "cron-community-monitor" → event "cron/community-monitor.manual-trigger".
-// Uniform across all cron-*.ts functions (verified at /work).
+// Uniform across all cron-*.ts functions.
 export function manualTriggerEventFor(fnId: string): string {
   return `cron/${fnId.replace(/^cron-/, "")}.manual-trigger`;
 }

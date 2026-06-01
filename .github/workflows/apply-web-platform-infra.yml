@@ -13,7 +13,7 @@
 # Adapted from `apply-sentry-infra.yml` (ADR-031) with two adjustments:
 #   1. Doppler `--name-transformer tf-var` invocation wraps `terraform plan`/`apply`
 #      because the web-platform root reads ~12 `TF_VAR_*` inputs from Doppler.
-#   2. `-target=`-scoped apply (74 explicit targets). server.tf SSH-provisioned
+#   2. `-target=`-scoped apply (80 explicit targets). server.tf SSH-provisioned
 #      `terraform_data.*` resources are EXCLUDED — the GitHub runner egress IP is
 #      not in `var.admin_ips`, so any SSH connection from the runner fails with
 #      `ssh: handshake failed: connection reset by peer`. Those 7 resources land
