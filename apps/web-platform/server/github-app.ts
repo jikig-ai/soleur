@@ -638,6 +638,47 @@ export async function checkRepoAccess(
 }
 
 /**
+ * Latest commit timestamp (epoch ms) on a repo's DEFAULT branch, via the
+ * installation token. Used by the KB-sync went-quiet detector (#4717) to
+ * correlate real default-branch activity against the last successful sync —
+ * the out-of-band signal that `kb_sync_history` cannot provide once a workspace
+ * goes quiet (it stops writing rows).
+ *
+ * `GET /commits?per_page=1` with no `sha` lists the repo's default branch.
+ * Returns the HEAD commit's `committer.date` as epoch ms; `null` when the repo
+ * has no commits (brand-new repo → GitHub 409 Conflict, or an empty array).
+ * Throws on token / network / other non-200 so the caller can classify it as a
+ * probe error (reportSilentFallback). Mirrors `checkRepoAccess` above.
+ */
+export async function getDefaultBranchHeadCommitAt(
+  installationId: number,
+  owner: string,
+  repo: string,
+): Promise<number | null> {
+  const token = await generateInstallationToken(installationId);
+  const response = await githubFetch(
+    `${GITHUB_API}/repos/${owner}/${repo}/commits?per_page=1`,
+    { headers: { Authorization: `token ${token}` } },
+  );
+  // Empty repository → GitHub returns 409 ("Git Repository is empty"); not an
+  // error for our purposes — there is simply nothing to have gone quiet.
+  if (response.status === 409) return null;
+  if (response.status !== 200) {
+    throw new Error(
+      `GitHub GET /commits returned ${response.status} for ${owner}/${repo}`,
+    );
+  }
+  const body = (await response.json()) as Array<{
+    commit?: { committer?: { date?: string } };
+  }>;
+  if (!Array.isArray(body) || body.length === 0) return null;
+  const dateStr = body[0]?.commit?.committer?.date;
+  if (!dateStr) return null;
+  const ms = Date.parse(dateStr);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/**
  * List repositories accessible to a GitHub App installation.
  */
 export async function listInstallationRepos(
