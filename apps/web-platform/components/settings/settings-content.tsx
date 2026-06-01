@@ -10,6 +10,7 @@ interface SettingsContentProps {
   repoUrl: string | null;
   repoStatus: RepoStatus;
   repoLastSyncedAt: string | null;
+  needsReconnect: boolean;
 }
 
 export function SettingsContent({
@@ -20,6 +21,7 @@ export function SettingsContent({
   repoUrl,
   repoStatus,
   repoLastSyncedAt,
+  needsReconnect,
 }: SettingsContentProps) {
   return (
     <div className="space-y-10">
@@ -41,6 +43,7 @@ export function SettingsContent({
         repoUrl={repoUrl}
         repoStatus={repoStatus}
         repoLastSyncedAt={repoLastSyncedAt}
+        needsReconnect={needsReconnect}
       />
 
       {/* API Key Section */}

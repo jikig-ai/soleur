@@ -1,5 +1,6 @@
 import { isTeamWorkspaceInviteEnabled, isByokDelegationsEnabled, type Identity } from "@/lib/feature-flags/server";
 import { resolveCurrentOrganizationId } from "@/server/workspace-resolver";
+import { userHasEffectiveByokKey } from "@/server/byok-resolver";
 
 // Server-only resolver for the /dashboard/settings/team membership page.
 // Factored out of the page component so AC-A's flag-OFF → notFound() behavior
@@ -11,6 +12,14 @@ export interface TeamMembershipRow {
   role: "owner" | "member";
   addedAt: string; // membership.created_at
   isSelf: boolean;
+  /**
+   * #4715: whether THIS member has their own effective BYOK key (own valid key
+   * OR accepted delegation), via userHasEffectiveByokKey (own-key signal only).
+   * Drives the owner "Share a key" prompt — shown for a keyless, undelegated
+   * member. Fail-closed (false) on resolver error so the prompt surfaces rather
+   * than hiding a genuinely keyless member.
+   */
+  hasEffectiveKey: boolean;
   delegationFromMe?: {
     id: string;
     dailyCapCents: number;
@@ -174,6 +183,22 @@ export async function resolveTeamMembershipPageData(
     }
   }
 
+  // #4715: per-member own-key status. N round-trips is fine for v1's tiny
+  // member lists (batch only if lists grow). userHasEffectiveByokKey is the
+  // own-key signal ONLY — Phase 9's `!delegationFromMe` already owns the
+  // delegation term, so we do NOT OR delegationsByGrantee here (avoids the
+  // own-default-workspace-context nuance). NEVER read api_keys directly
+  // (2026-05-29-byok-delegation-aware-onboarding-gating).
+  const effectiveKeyByUserId = new Map<string, boolean>();
+  await Promise.all(
+    rows.map(async (r) => {
+      effectiveKeyByUserId.set(
+        r.user_id,
+        await userHasEffectiveByokKey(r.user_id, { onErrorReturn: false }),
+      );
+    }),
+  );
+
   const members: TeamMembershipRow[] = rows.map((r) => {
     const row: TeamMembershipRow = {
       userId: r.user_id,
@@ -181,6 +206,7 @@ export async function resolveTeamMembershipPageData(
       role: r.role,
       addedAt: r.created_at,
       isSelf: r.user_id === user.id,
+      hasEffectiveKey: effectiveKeyByUserId.get(r.user_id) ?? false,
     };
 
     if (byokEnabled) {

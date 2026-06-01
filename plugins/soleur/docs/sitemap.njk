@@ -5,7 +5,12 @@ eleventyExcludeFromCollections: true
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 {%- for entry in collections.all %}
-{%- if entry.url.endsWith("/") or entry.url.endsWith(".html") %}
+{# Emit ONLY canonical trailing-slash directory URLs. Do NOT add `.html` here:
+   redirect stubs live at /pages/*.html (page-redirects.njk) and would be indexed
+   by Google as "Page with redirect". Every canonical page outputs at a trailing-
+   slash URL (`permalink: agents/` -> /agents/; `index.njk` -> /). Guarded by the
+   redirect-stub gate in validate-seo.sh. See the 2026-06-01 GSC plan. #}
+{%- if entry.url.endsWith("/") %}
   <url>
     <loc>{{ site.url }}{{ entry.url }}</loc>
     <lastmod>{{ entry.date | dateToShort }}</lastmod>

@@ -97,6 +97,61 @@ describe("KbLayout", () => {
     expect(screen.getByPlaceholderText("Search files...")).toBeInTheDocument();
   });
 
+  it("renders the reconnect banner over an EMPTY tree when needsReconnect", async () => {
+    mockPathname = "/dashboard/kb";
+    // Ready workspace, NULL install id, EMPTY knowledge-base/ dir: the full-
+    // width EmptyState branch renders (no tree children) — the banner must
+    // still surface (#4712).
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          tree: { name: "root", type: "directory", path: "", children: [] },
+          needsReconnect: true,
+        }),
+    });
+
+    const { default: KbLayout } = await import(
+      "@/app/(dashboard)/dashboard/kb/layout"
+    );
+
+    render(
+      <KbLayout>
+        <div>content</div>
+      </KbLayout>,
+    );
+
+    expect(await screen.findByText(/can't sync/i)).toBeInTheDocument();
+  });
+
+  it("does NOT render the banner over an empty tree while needsReconnect is false", async () => {
+    mockPathname = "/dashboard/kb";
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          tree: { name: "root", type: "directory", path: "", children: [] },
+          needsReconnect: false,
+        }),
+    });
+
+    const { default: KbLayout } = await import(
+      "@/app/(dashboard)/dashboard/kb/layout"
+    );
+
+    render(
+      <KbLayout>
+        <div>content</div>
+      </KbLayout>,
+    );
+
+    // Let the tree resolve (EmptyState renders) before asserting absence.
+    await screen.findByText(/nothing here yet/i);
+    expect(screen.queryByText(/can't sync/i)).not.toBeInTheDocument();
+  });
+
   it("does not render FileTree twice at root path", async () => {
     mockPathname = "/dashboard/kb";
 

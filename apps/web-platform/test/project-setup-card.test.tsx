@@ -10,6 +10,13 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
+// The needs-reconnect variant renders <ReconnectNotice>, which uses the
+// reconnect hook. Stub it so no real fetch fires (the hook is covered by
+// use-reconnect.test.tsx).
+vi.mock("@/components/repo/use-reconnect", () => ({
+  useReconnect: () => ({ reconnect: vi.fn(), isPending: false }),
+}));
+
 // ---------------------------------------------------------------------------
 // ProjectSetupCard tests
 // ---------------------------------------------------------------------------
@@ -158,5 +165,57 @@ describe("ProjectSetupCard", () => {
     expect(
       screen.queryByRole("button", { name: /disconnect/i }),
     ).not.toBeInTheDocument();
+  });
+
+  it("renders the reconnect notice only on ready + needsReconnect", async () => {
+    const { ProjectSetupCard } = await import(
+      "@/components/settings/project-setup-card"
+    );
+    render(
+      <ProjectSetupCard
+        repoUrl="https://github.com/owner/my-repo"
+        repoStatus="ready"
+        repoLastSyncedAt="2026-04-01T12:00:00Z"
+        needsReconnect={true}
+      />,
+    );
+    expect(screen.getByText(/can't sync/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^reconnect$/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("suppresses the Connected view when needsReconnect is true", async () => {
+    const { ProjectSetupCard } = await import(
+      "@/components/settings/project-setup-card"
+    );
+    render(
+      <ProjectSetupCard
+        repoUrl="https://github.com/owner/my-repo"
+        repoStatus="ready"
+        repoLastSyncedAt="2026-04-01T12:00:00Z"
+        needsReconnect={true}
+      />,
+    );
+    expect(screen.queryByText(/connected/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /disconnect/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does NOT render the reconnect notice when ready and not needing reconnect", async () => {
+    const { ProjectSetupCard } = await import(
+      "@/components/settings/project-setup-card"
+    );
+    render(
+      <ProjectSetupCard
+        repoUrl="https://github.com/owner/my-repo"
+        repoStatus="ready"
+        repoLastSyncedAt="2026-04-01T12:00:00Z"
+        needsReconnect={false}
+      />,
+    );
+    expect(screen.queryByText(/can't sync/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/connected/i)).toBeInTheDocument();
   });
 });
