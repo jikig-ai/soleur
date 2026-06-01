@@ -65,7 +65,7 @@ export default async function TeamMembershipPage() {
               {memberCount === 1 ? "1 member" : `${memberCount} members`}
             </p>
           </div>
-          <InviteMemberAction workspaceId={data.workspaceId} />
+          <InviteMemberAction workspaceId={data.workspaceId} isOwner={isOwner} />
         </div>
 
         <TeamMembershipList
@@ -84,7 +84,7 @@ export default async function TeamMembershipPage() {
         isOwner={isOwner}
       />
 
-      {memberCount === 1 && pendingInvites.length === 0 && (
+      {isOwner && memberCount === 1 && pendingInvites.length === 0 && (
         <p className="mt-6 text-sm text-soleur-text-secondary">
           <span className="font-medium text-soleur-accent-gold-fg">Solo for now.</span>{" "}
           Invite a teammate to share this workspace&apos;s agents, knowledge, and billing.
