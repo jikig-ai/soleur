@@ -152,6 +152,7 @@ describe("Settings page sections", () => {
         repoUrl={null}
         repoStatus="not_connected"
         repoLastSyncedAt={null}
+        needsReconnect={false}
       />,
     );
     expect(screen.getByText("API Key")).toBeInTheDocument();
@@ -170,6 +171,7 @@ describe("Settings page sections", () => {
         repoUrl={null}
         repoStatus="not_connected"
         repoLastSyncedAt={null}
+        needsReconnect={false}
       />,
     );
     expect(screen.getByText("Account")).toBeInTheDocument();
@@ -189,6 +191,7 @@ describe("Settings page sections", () => {
         repoUrl={null}
         repoStatus="not_connected"
         repoLastSyncedAt={null}
+        needsReconnect={false}
       />,
     );
     expect(screen.getByText("Danger Zone")).toBeInTheDocument();
@@ -207,6 +210,7 @@ describe("Settings page sections", () => {
         repoUrl={null}
         repoStatus="not_connected"
         repoLastSyncedAt={null}
+        needsReconnect={false}
       />,
     );
     const headings = screen.getAllByRole("heading", { level: 2 });
@@ -229,6 +233,7 @@ describe("Settings page sections", () => {
         repoUrl={null}
         repoStatus="not_connected"
         repoLastSyncedAt={null}
+        needsReconnect={false}
       />,
     );
     expect(screen.getByText(/no key configured/i)).toBeInTheDocument();
@@ -247,6 +252,7 @@ describe("Settings page sections", () => {
         repoUrl={null}
         repoStatus="not_connected"
         repoLastSyncedAt={null}
+        needsReconnect={false}
       />,
     );
     expect(screen.getByText(/provider:/i)).toBeInTheDocument();
@@ -265,6 +271,7 @@ describe("Settings page sections", () => {
         repoUrl={null}
         repoStatus="not_connected"
         repoLastSyncedAt={null}
+        needsReconnect={false}
       />,
     );
     // Project section should appear — look for heading rendered by ProjectSetupCard
@@ -284,6 +291,7 @@ describe("Settings page sections", () => {
         repoUrl={null}
         repoStatus="not_connected"
         repoLastSyncedAt={null}
+        needsReconnect={false}
       />,
     );
     const headings = screen.getAllByRole("heading", { level: 2 });

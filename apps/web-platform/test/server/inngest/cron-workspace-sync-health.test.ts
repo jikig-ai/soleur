@@ -20,8 +20,12 @@ function restoreEnv(key: keyof typeof ORIGINAL_ENV) {
 // Rows returned by the workspaces query, and the captured filter args.
 let WORKSPACE_ROWS: { id: string; repo_url: string | null }[] = [];
 let WORKSPACE_QUERY_ERROR: { message: string } | null = null;
+// Rows returned by the item-2 `users` scan (#4712), and its captured filter args.
+let USERS_ROWS: { id: string; kb_sync_history: unknown }[] = [];
+let USERS_QUERY_ERROR: { message: string } | null = null;
 const eqSpy = vi.fn();
 const isSpy = vi.fn();
+const notSpy = vi.fn();
 
 const serviceFrom = vi.fn((table: string) => {
   if (table === "workspaces") {
@@ -39,6 +43,26 @@ const serviceFrom = vi.fn((table: string) => {
         Promise.resolve({
           data: WORKSPACE_QUERY_ERROR ? null : WORKSPACE_ROWS,
           error: WORKSPACE_QUERY_ERROR,
+        }).then(resolve),
+    } as Record<string, unknown>;
+    return chain;
+  }
+  if (table === "users") {
+    // item-2 scan: .select("id, kb_sync_history").eq("repo_status","ready").not("github_installation_id","is",null)
+    const chain = {
+      select: () => chain,
+      eq: (col: string, val: unknown) => {
+        eqSpy(col, val);
+        return chain;
+      },
+      not: (col: string, op: string, val: unknown) => {
+        notSpy(col, op, val);
+        return chain;
+      },
+      then: (resolve: (v: unknown) => unknown) =>
+        Promise.resolve({
+          data: USERS_QUERY_ERROR ? null : USERS_ROWS,
+          error: USERS_QUERY_ERROR,
         }).then(resolve),
     } as Record<string, unknown>;
     return chain;
@@ -81,9 +105,12 @@ function makeStep() {
 beforeEach(() => {
   WORKSPACE_ROWS = [];
   WORKSPACE_QUERY_ERROR = null;
+  USERS_ROWS = [];
+  USERS_QUERY_ERROR = null;
   serviceFrom.mockClear();
   eqSpy.mockClear();
   isSpy.mockClear();
+  notSpy.mockClear();
   reportSilentFallbackSpy.mockReset();
   postSentryHeartbeatSpy.mockClear();
   vi.resetModules();
@@ -183,5 +210,76 @@ describe("cron-workspace-sync-health — DB error", () => {
     // The mock chain only exposes select/eq/is/then; any update/upsert/delete
     // call would throw "is not a function". Reaching here proves read-only.
     expect(serviceFrom).toHaveBeenCalledWith("workspaces");
+  });
+});
+
+// Item 2 (#4712): ready + INSTALLED users whose LATEST kb_sync_history row is
+// ok:false. Scans `users` (where kb_sync_history lives), reports op:"stale-sync-failed".
+describe("cron-workspace-sync-health — stale-sync-failed (item 2)", () => {
+  const okFalse = { at: "2026-05-30T00:00:00Z", trigger: "webhook_push", ok: false, error_class: "sync_failed", sync_completed_at: 1 };
+  const okTrue = { at: "2026-05-31T00:00:00Z", trigger: "webhook_push", ok: true, sync_completed_at: 2 };
+  const legacy = { date: "2026-05-29", count: 3 };
+
+  it("scans users for ready + installed (github_installation_id IS NOT NULL)", async () => {
+    const handler = await importHandler();
+    await handler({ step: makeStep(), logger });
+
+    expect(serviceFrom).toHaveBeenCalledWith("users");
+    expect(eqSpy).toHaveBeenCalledWith("repo_status", "ready");
+    expect(notSpy).toHaveBeenCalledWith("github_installation_id", "is", null);
+  });
+
+  it("reports a user whose LATEST row is ok:false exactly once (op:stale-sync-failed, hashed userId)", async () => {
+    USERS_ROWS = [{ id: "user-X", kb_sync_history: [okTrue, okFalse] }];
+    const handler = await importHandler();
+    await handler({ step: makeStep(), logger });
+
+    expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+    expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        feature: "workspace-sync-health",
+        op: "stale-sync-failed",
+        extra: expect.objectContaining({ userId: "user-X" }),
+      }),
+    );
+  });
+
+  it("does NOT report when the latest row is ok:true (even if an older row failed)", async () => {
+    USERS_ROWS = [{ id: "user-recovered", kb_sync_history: [okFalse, okTrue] }];
+    const handler = await importHandler();
+    await handler({ step: makeStep(), logger });
+
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("does NOT report when the latest row is a legacy {date,count} row", async () => {
+    USERS_ROWS = [{ id: "user-legacy", kb_sync_history: [okFalse, legacy] }];
+    const handler = await importHandler();
+    await handler({ step: makeStep(), logger });
+
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("does NOT report when history is empty (went-quiet / NULL-install class, deferred #4717)", async () => {
+    USERS_ROWS = [{ id: "user-empty", kb_sync_history: [] }];
+    const handler = await importHandler();
+    await handler({ step: makeStep(), logger });
+
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("reports the users-scan DB error once (op:scan-stale) and does not crash the function", async () => {
+    USERS_QUERY_ERROR = { message: "users scan failed" };
+    const handler = await importHandler();
+    const result = await handler({ step: makeStep(), logger });
+
+    // Top-level return is unchanged (item-1 ScanResult); item-2 reports in-place.
+    expect(result).toEqual({ ok: true, findings: [], error: null });
+    expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+    expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ feature: "workspace-sync-health", op: "scan-stale" }),
+    );
   });
 });

@@ -15,7 +15,11 @@ vi.mock("@/lib/client-observability", () => ({
 
 import { NoApiKeyBanner } from "@/components/dashboard/no-api-key-banner";
 
-function mockStatus(body: { hasEffectiveKey: boolean; pendingDelegation: boolean }) {
+function mockStatus(body: {
+  hasEffectiveKey: boolean;
+  pendingDelegation: boolean;
+  isSharedWorkspaceMember?: boolean;
+}) {
   vi.stubGlobal(
     "fetch",
     vi.fn().mockResolvedValue({ ok: true, json: async () => body }),
@@ -49,6 +53,32 @@ describe("NoApiKeyBanner (AC6)", () => {
     // /dashboard/chat mounts the DelegationBanner → accept-side-letter flow.
     expect(cta.getAttribute("href")).toBe("/dashboard/chat");
     expect(screen.getByText(/granted shared access/i)).toBeTruthy();
+  });
+
+  it("keyless SHARED member → joiner copy + 'Add your own key' (not the solo buy-an-account copy) — #4715 J4", async () => {
+    mockStatus({
+      hasEffectiveKey: false,
+      pendingDelegation: false,
+      isSharedWorkspaceMember: true,
+    });
+    render(<NoApiKeyBanner />);
+    const cta = await screen.findByRole("link", { name: /add your own key/i });
+    expect(cta.getAttribute("href")).toBe("/dashboard/settings/services");
+    // Browse-but-can't-run framing — never the solo dead-end copy.
+    expect(screen.getByText(/browse this workspace/i)).toBeTruthy();
+    expect(screen.queryByText(/separate, paid Anthropic account/i)).toBeNull();
+  });
+
+  it("keyless SOLO (not a shared member) → original buy-an-account copy unchanged", async () => {
+    mockStatus({
+      hasEffectiveKey: false,
+      pendingDelegation: false,
+      isSharedWorkspaceMember: false,
+    });
+    render(<NoApiKeyBanner />);
+    expect(await screen.findByText(/tasks are disabled/i)).toBeTruthy();
+    expect(screen.getByText(/separate, paid Anthropic account/i)).toBeTruthy();
+    expect(screen.queryByText(/browse this workspace/i)).toBeNull();
   });
 
   it("renders nothing when the status fetch fails (safe degradation)", async () => {

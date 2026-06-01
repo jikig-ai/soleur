@@ -8,7 +8,10 @@ import * as Sentry from "@sentry/nextjs";
 import { reportSilentFallback } from "@/server/observability";
 import { hashUserIdValue } from "@/server/userid-pseudonymize";
 import { userHasEffectiveByokKey } from "@/server/byok-resolver";
-import { shouldRouteToSetupKey } from "@/lib/onboarding/setup-key-gate";
+import {
+  shouldRouteToSetupKey,
+  isInviteReturnTarget,
+} from "@/lib/onboarding/setup-key-gate";
 
 // Delegation+skip-aware (#4642). Effective-key = own valid key OR accepted
 // delegation; `onErrorReturn: true` fails OPEN so a transient resolver error
@@ -32,12 +35,21 @@ async function getRedirectDestination(
   const setupKeySkippedAt =
     (row?.setup_key_skipped_at as string | null | undefined) ?? null;
 
+  // Invite outranks onboarding (#4715): a keyless invitee can't complete the
+  // /setup-key key-purchase funnel, so a validated `/invite/<token>` next-hop
+  // returns DIRECTLY (T&C already recorded by the accept_terms RPC above) and
+  // the invitee accepts membership → lands in the shared workspace. This
+  // reverses the #4641 "wrap onto /setup-key" behavior for invite targets only.
+  if (isInviteReturnTarget(nextHop)) {
+    return nextHop ?? "/dashboard";
+  }
+
   // Onboarding gate (#4642): show /setup-key only when the user has no
   // effective key (own valid key OR accepted delegation) AND has not chosen
-  // "Set up later". Thread the validated invite next-hop through it (#4641) so
-  // a brand-new invitee auto-returns to /invite/<token> AFTER onboarding
-  // (T&C recorded first, then key → repo → invite). A keyed OR skipped user
-  // honors the next hop directly, else lands on the dashboard.
+  // "Set up later". Thread a validated NON-invite next-hop through it (#4641)
+  // so a brand-new signup auto-returns AFTER onboarding (T&C recorded first,
+  // then key → repo → target). A keyed OR skipped user honors the next hop
+  // directly, else lands on the dashboard.
   if (shouldRouteToSetupKey({ hasEffectiveKey, setupKeySkippedAt })) {
     return nextHop
       ? `/setup-key?redirectTo=${encodeURIComponent(nextHop)}`

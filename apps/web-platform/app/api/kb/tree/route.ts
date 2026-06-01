@@ -5,12 +5,15 @@ import { createServiceClient } from "@/lib/supabase/server";
 import logger from "@/server/logger";
 import { buildTree } from "@/server/kb-reader";
 import { withUserRateLimit } from "@/server/with-user-rate-limit";
+import { repoNeedsReconnect } from "@/lib/repo-status";
 
 async function getHandler(_req: Request, user: User) {
   const serviceClient = createServiceClient();
   const { data: userData, error: fetchError } = await serviceClient
     .from("users")
-    .select("workspace_path, workspace_status, repo_status, kb_sync_history")
+    .select(
+      "workspace_path, workspace_status, repo_status, kb_sync_history, github_installation_id",
+    )
     .eq("id", user.id)
     .single();
 
@@ -31,10 +34,17 @@ async function getHandler(_req: Request, user: User) {
     : [];
   const lastSync = historyArr.length > 0 ? historyArr[historyArr.length - 1] : null;
 
+  // #4712 — deterministic reconnect signal. `ready` + NULL install id is the
+  // #4706 silent-freeze class (webhook reconcile selects by install id).
+  const needsReconnect = repoNeedsReconnect(
+    userData.repo_status,
+    userData.github_installation_id,
+  );
+
   try {
     const kbRoot = path.join(userData.workspace_path, "knowledge-base");
     const tree = await buildTree(kbRoot);
-    return NextResponse.json({ tree, lastSync });
+    return NextResponse.json({ tree, lastSync, needsReconnect });
   } catch (err) {
     logger.error({ err }, "kb/tree: unexpected error");
     return NextResponse.json(

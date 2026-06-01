@@ -40,6 +40,7 @@ function renderFileTree(overrides: Partial<KbContextValue> = {}) {
     toggleExpanded: vi.fn(),
     refreshTree: mockRefreshTree,
     lastSync: null,
+    needsReconnect: false,
     ...overrides,
   };
   return render(

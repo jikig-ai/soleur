@@ -2,6 +2,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { resolveTeamMembershipPageData } from "@/server/team-membership-resolver";
 import { __resetFeatureFlagsForTests } from "@/lib/feature-flags/server";
 
+// #4715 Phase 8: the resolver computes per-member hasEffectiveKey via
+// userHasEffectiveByokKey (own-key signal, fail-closed). Mock the helper so the
+// resolver doesn't hit the live api_keys/delegations tables. Default false
+// (keyless) — individual tests override per user via mockImplementation.
+const { mockUserHasEffectiveByokKey } = vi.hoisted(() => ({
+  mockUserHasEffectiveByokKey: vi.fn(),
+}));
+vi.mock("@/server/byok-resolver", () => ({
+  userHasEffectiveByokKey: mockUserHasEffectiveByokKey,
+}));
+
 // Flagsmith single-control gate. Tests stub via env vars so resolver exercises
 // the real gate logic (env-fallback path when FLAGSMITH_ENVIRONMENT_KEY unset).
 
@@ -117,6 +128,8 @@ describe("resolveTeamMembershipPageData", () => {
     // 2026-05-20-vitest-unstub-does-not-clear-process-inherited-env-vars.
     vi.stubEnv("FLAG_BYOK_DELEGATIONS", "");
     __resetFeatureFlagsForTests();
+    mockUserHasEffectiveByokKey.mockReset();
+    mockUserHasEffectiveByokKey.mockResolvedValue(false);
   });
 
   it("AC-A: returns not-found when feature flag is OFF", async () => {
@@ -193,6 +206,43 @@ describe("resolveTeamMembershipPageData", () => {
       expect(result.data.members).toHaveLength(2);
       const owner = result.data.members.find((m) => m.role === "owner");
       expect(owner?.email).toBe("jean@jikigai.com");
+    }
+  });
+
+  it("#4715: per-member hasEffectiveKey — keyed member true, keyless member false", async () => {
+    vi.stubEnv("FLAG_TEAM_WORKSPACE_INVITE", "1");
+    const keyedMember = "00000000-0000-0000-0000-000000000333";
+    const keylessMember = "00000000-0000-0000-0000-000000000444";
+    // Own-key signal only — keyed only for keyedMember.
+    mockUserHasEffectiveByokKey.mockImplementation(async (userId: string) =>
+      userId === keyedMember,
+    );
+    const { supabase, service } = mockSupabaseClients({
+      user: { id: USER_ID, email: "jean@jikigai.com", app_metadata: {} },
+      sessionOrgId: ORG_ID,
+      members: [
+        { workspace_id: WORKSPACE_ID, user_id: USER_ID, role: "owner", created_at: "2026-01-01T00:00:00Z" },
+        { workspace_id: WORKSPACE_ID, user_id: keyedMember, role: "member", created_at: "2026-02-01T00:00:00Z" },
+        { workspace_id: WORKSPACE_ID, user_id: keylessMember, role: "member", created_at: "2026-03-01T00:00:00Z" },
+      ],
+      emails: {
+        [USER_ID]: { email: "jean@jikigai.com", created_at: "2025-01-01T00:00:00Z" },
+        [keyedMember]: { email: "keyed@x.com", created_at: "2025-02-01T00:00:00Z" },
+        [keylessMember]: { email: "keyless@x.com", created_at: "2025-03-01T00:00:00Z" },
+      },
+    });
+    const result = await resolveTeamMembershipPageData(supabase as never, service as never);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const keyed = result.data.members.find((m) => m.userId === keyedMember);
+      const keyless = result.data.members.find((m) => m.userId === keylessMember);
+      expect(keyed?.hasEffectiveKey).toBe(true);
+      expect(keyless?.hasEffectiveKey).toBe(false);
+      // Fail-closed: helper invoked with onErrorReturn:false per member.
+      expect(mockUserHasEffectiveByokKey).toHaveBeenCalledWith(
+        keylessMember,
+        expect.objectContaining({ onErrorReturn: false }),
+      );
     }
   });
 
