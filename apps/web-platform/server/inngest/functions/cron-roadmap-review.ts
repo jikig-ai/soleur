@@ -290,6 +290,7 @@ export async function cronRoadmapReviewHandler({
         label: SENTRY_MONITOR_SLUG,
         runStartedAt,
         cronName: "cron-roadmap-review",
+        stderrTail: spawnResult.stderrTail,
       }),
     );
     await step.run("sentry-heartbeat", async () => {
