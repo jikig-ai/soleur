@@ -268,8 +268,10 @@ describe("cron-follow-through-monitor — T7 GitHub App token injection (#512e25
 
     // (b) the server-side `gh issue list` (execFileSync) env carries the token.
     expect(execFileSyncSpy).toHaveBeenCalledTimes(1);
-    const execEnv = (execFileSyncSpy.mock.calls[0][2] as { env: NodeJS.ProcessEnv })
-      .env;
+    // execFileSyncSpy is typed with no params, so widen the call tuple before
+    // indexing the options (3rd) arg.
+    const execCall = execFileSyncSpy.mock.calls[0] as unknown as unknown[];
+    const execEnv = (execCall[2] as { env: NodeJS.ProcessEnv }).env;
     expect(execEnv.GH_TOKEN).toBe("ghs_TESTTOKEN_REDACT_ME");
 
     // (c) the claude-eval spawn env carries the token.

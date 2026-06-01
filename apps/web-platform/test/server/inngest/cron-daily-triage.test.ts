@@ -26,6 +26,22 @@ vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
 }));
 
+// Mint-token deps (#512e25 fix): the handler now mints a GitHub App
+// installation token (mintInstallationToken → createProbeOctokit +
+// generateInstallationToken) and injects it as GH_TOKEN so `gh` is
+// authenticated inside the prod container (hr-github-app-auth-not-pat).
+// Same root cause + fix as cron-follow-through-monitor; mocks mirror
+// cron-bug-fixer.test.ts:60-70.
+const createProbeOctokitSpy = vi.fn();
+vi.mock("@/server/github/probe-octokit", () => ({
+  createProbeOctokit: createProbeOctokitSpy,
+}));
+
+const generateInstallationTokenSpy = vi.fn();
+vi.mock("@/server/github-app", () => ({
+  generateInstallationToken: generateInstallationTokenSpy,
+}));
+
 // --- Helpers ----------------------------------------------------------------
 
 interface MockStep {
@@ -72,6 +88,17 @@ beforeEach(() => {
   vi.resetModules();
   spawnSpy.mockReset();
   reportSilentFallbackSpy.mockReset();
+  createProbeOctokitSpy.mockReset();
+  generateInstallationTokenSpy.mockReset();
+  createProbeOctokitSpy.mockImplementation(async () => ({
+    request: vi.fn(async (route: string) => {
+      if (route === "GET /repos/{owner}/{repo}/installation") {
+        return { data: { id: 12345 } };
+      }
+      return { data: {} };
+    }),
+  }));
+  generateInstallationTokenSpy.mockResolvedValue("ghs_TESTTOKEN_REDACT_ME");
   logger.info.mockReset();
   logger.warn.mockReset();
   logger.error.mockReset();
@@ -134,11 +161,38 @@ describe("cron-daily-triage — T1 happy path", () => {
     expect(url).toContain("status=ok");
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
 
-    // step.run called for claude-eval AND sentry-heartbeat.
+    // #512e25: step.run order is mint-installation-token → claude-eval →
+    // sentry-heartbeat. The token mint runs first so GH_TOKEN is authenticated.
     expect(step.calls.map((c) => c.name)).toEqual([
+      "mint-installation-token",
       "claude-eval",
       "sentry-heartbeat",
     ]);
+  });
+});
+
+describe("cron-daily-triage — T6 GitHub App token injection (#512e25)", () => {
+  it("mints an installation token first and injects it as GH_TOKEN into the claude spawn", async () => {
+    const child = makeChild();
+    spawnSpy.mockImplementation(() => {
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return child;
+    });
+
+    const handler = await importHandler();
+    const step = makeStep();
+    await handler({ step, logger });
+
+    // mint ran, and ran first.
+    expect(generateInstallationTokenSpy).toHaveBeenCalledTimes(1);
+    expect(step.calls[0].name).toBe("mint-installation-token");
+    expect(step.calls[0].result).toBe("ghs_TESTTOKEN_REDACT_ME");
+
+    // the claude spawn env carries the minted token (not process.env.GH_TOKEN).
+    expect(spawnSpy).toHaveBeenCalledTimes(1);
+    const spawnEnv = (spawnSpy.mock.calls[0][2] as { env: NodeJS.ProcessEnv })
+      .env;
+    expect(spawnEnv.GH_TOKEN).toBe("ghs_TESTTOKEN_REDACT_ME");
   });
 });
 
