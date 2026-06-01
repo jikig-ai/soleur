@@ -11,6 +11,26 @@ fn_id: soleur-runtime-cron-follow-through-monitor
 
 # fix: cron-follow-through-monitor — replace unauthenticated `gh` CLI shell-out with GitHub App installation token 🐛
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-01
+
+**Deepen-plan gates run:**
+- Phase 4.4 Precedent-Diff Gate — PASS. Pattern (GitHub App installation-token mint + inject as `GH_TOKEN`) has a canonical in-repo precedent: `cron-bug-fixer.ts`. Side-by-side diff added to Risks & Mitigations (R6). Scheduled-work check: the plan modifies an EXISTING Inngest cron (canonical per ADR-033) — no new scheduled job, no GH-Actions-cron migration concern.
+- Phase 4.45 Verify-the-Negative Pass — PASS. All negative claims grep-verified: (a) "`buildSpawnEnv` no longer reads `process.env.GH_TOKEN`" confirmed as a fix target (current code reads it at `cron-follow-through-monitor.ts:260` — the bug); (b) "token is never logged" confirmed — zero token-logging sites in the file.
+- Phase 4.6 User-Brand Impact Halt — PASS. Section present, threshold `none` with a non-empty scope-out reason (sensitive-path `apps/web-platform/server/` matched → scope-out bullet required and present).
+- Phase 4.7 Observability Gate — PASS. All 5 fields present, non-placeholder; `discoverability_test.command` is SSH-free.
+- Phase 4.8 PAT-Shaped Variable Halt — PASS. Zero PAT-shaped vars/literals; the fix uses a minted GitHub App installation token (the rule's prescribed alternative).
+
+### Key Improvements
+1. Confirmed the exact peer precedent (`cron-bug-fixer.ts`) and pinned the line-level diff so /work copies the proven shape rather than re-deriving.
+2. Confirmed blast-radius: `cron-daily-triage.ts` is the ONLY other function with the identical bug (`grep` = 2 hits repo-wide) — folding it in is net-positive.
+3. Confirmed the no-BYOK build-time gate forbids only `runWithByokLease` imports — the installation-token fix is orthogonal and passes (bug-fixer proves it).
+
+### New Considerations Discovered
+- The server-side `execFileSync` is the surface that throws the cited Sentry error FIRST; the in-prompt agent `gh` calls would also fail but are secondary. Both are fixed by the single token-mint change.
+- `_predicate-validator.ts` has NO server-side `gh` shell-out (parses HTML-comment YAML), so it needs no change — the only server-side `gh` is the handler's `execFileSync`.
+
 ## Overview
 
 The Inngest cron `cron-follow-through-monitor` (fnId `soleur-runtime-cron-follow-through-monitor`) throws on **every** scheduled run (`0 9 * * 1-5`, i.e. 09:00 UTC weekdays). The `validate-predicates` `step.run` shells out to the `gh` CLI via `execFileSync` to list open `follow-through` issues:
@@ -141,6 +161,20 @@ Run AC7-AC9 (and AC10 if folded). Confirm `grep -n "GH_TOKEN: process.env.GH_TOK
 - **R3 — Installation token scope.** The App installation token already grants `issues:write` + `pull_requests:write` (proven by `cron-bug-fixer.ts` running `gh issue view/edit/comment/close` and `gh pr create` against the same token). No new permission needed; this is the identical credential.
 - **R4 — `mintInstallationToken` throws (App private key missing/invalid in prod).** Then the new mint step throws and Inngest's `retries: 1` retries; on persistent failure the step error surfaces (Inngest run marked failed + the function's existing Sentry instrumentation). This is the correct loud-failure behavior — a missing App key is a real prod misconfiguration, not something to swallow. Precedent: bug-fixer's mint step has the same failure semantics.
 - **R5 — `buildSpawnEnv` signature change is a breaking contract within the file.** Mitigated by phase ordering: the signature change + all three call-site updates land in the same edit (Phase 2). `tsc --noEmit` (AC9) catches any missed call site.
+
+### R6 — Precedent-Diff (Phase 4.4): mirror `cron-bug-fixer.ts` exactly
+
+This is a pattern-bound behavior (GitHub App installation-token mint + inject as `GH_TOKEN`). Canonical precedent in the same directory, verified line-level on 2026-06-01:
+
+| Concern | Precedent — `cron-bug-fixer.ts` | This fix — `cron-follow-through-monitor.ts` |
+| --- | --- | --- |
+| Import | `mintInstallationToken` from `./_cron-shared` (line 54) | Extend existing `./_cron-shared` import (adds `mintInstallationToken`) |
+| Min-lifetime const | `TOKEN_MIN_LIFETIME_MS = 50*60*1000 + 10*60*1000` (line 79) | Same value (60 min); agent runs ≤15 min → ≥45 min headroom |
+| Mint step | `step.run(...)` → `mintInstallationToken({ tokenMinLifetimeMs })` (line 628-631) | New first `step.run("mint-installation-token", …)` before `ensure-labels` |
+| Env builder | `buildSpawnEnv(installationToken)` → `GH_TOKEN: installationToken` (line 187-194); drops ambient PAT per `hr-github-app-auth-not-pat` | Identical: `buildSpawnEnv(installationToken: string)` returning `GH_TOKEN: installationToken` |
+| Allowlisted env keys | PATH, HOME, NODE_ENV, ANTHROPIC_API_KEY, GH_TOKEN | Same set (already matches; only the GH_TOKEN source changes) |
+
+**Divergence (intentional):** bug-fixer ALSO builds an authenticated clone URL from the token and uses `redactToken` to keep it out of logs. follow-through builds NO clone URL — so `redactToken`/`buildAuthenticatedCloneUrl` are NOT needed here. The token only ever appears as a subprocess env var. This is the only divergence; everything else is a 1:1 copy.
 
 ## Observability
 
