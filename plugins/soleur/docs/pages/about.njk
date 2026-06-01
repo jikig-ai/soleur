@@ -147,6 +147,8 @@ permalink: about/index.html
         "name": "Jean Deruelle",
         "url": {{ (site.url + "/about/") | jsonLdSafe | safe }},
         "jobTitle": "Founder",
+        "description": {{ site.author.bio | jsonLdSafe | safe }},
+        "knowsAbout": {{ site.author.knowsAbout | jsonLdSafe | safe }},
         "worksFor": {
           "@type": "Organization",
           "name": {{ site.name | jsonLdSafe | safe }},
