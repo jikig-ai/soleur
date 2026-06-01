@@ -213,6 +213,7 @@ export async function cronContentGeneratorHandler({
         label: SENTRY_MONITOR_SLUG,
         runStartedAt,
         cronName: "cron-content-generator",
+        stderrTail: spawnResult.stderrTail,
       }),
     );
     await step.run("sentry-heartbeat", async () => {
