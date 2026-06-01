@@ -7,6 +7,24 @@ requires_cpo_signoff: true
 
 # 🐛 fix: "Share a key" toggle no-ops — POST /api/workspace/delegations sends wrong RPC param names
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-01
+**Sections enhanced:** Overview, Acceptance Criteria, Risks & Mitigations
+**Passes run:** mandatory gates (4.6 User-Brand Impact ✓, 4.7 Observability ✓, 4.8 PAT-shaped ✓ — none tripped), precedent-diff gate (4.4), implementation-realism verification (4.45)
+
+### Key Improvements
+
+1. **Verified the load-bearing claims against the code, not memory.** Confirmed `grant_byok_delegation` (064) is the sole definition, has zero parameter DEFAULTs, and that `p_hourly_usd_cap_cents IS NULL → RAISE 22003` — so AC2's hourly-cap-default is mandatory, not stylistic.
+2. **Confirmed the service-role admin path requirement.** The 064 RPC's `auth.uid() IS NULL` branch (service-role, which the route uses via `createServiceClient`) requires BOTH `p_grantor_user_id` AND `p_actor_user_id` non-null. The broken route omits `p_actor_user_id` (sends `p_created_by_user_id`), compounding the resolution failure — fix must supply `p_actor_user_id: user.id`.
+3. **Precedent-diff: route should mirror `byok-grant.ts` exactly.** Both call via service-role client; `byok-grant.ts:173-180` is the proven canonical contract. No novel pattern.
+4. **INSERT-trigger reality check.** `byok_delegations_same_workspace` (BEFORE INSERT) requires grantor + grantee both be workspace members — satisfied for the reported case (owner funding an existing member). No additional precondition needed.
+
+### New Considerations Discovered
+
+- The route's `body` type already declares `hourlyCapCents?: number`, so the `?? body.dailyCapCents` fallback needs no client-contract change.
+- The `byok_delegations` table is a WORM ledger (`byok_delegations_no_update`/`no_mutate` triggers). The grant path is a plain INSERT — unaffected by WORM update-shape rules. Do NOT touch the triggers.
+
 ## Overview
 
 On **Settings → Members → Team**, an org owner clicking the **"Share a key"** toggle next to a
@@ -229,6 +247,34 @@ discoverability_test:
   command: "cd apps/web-platform && ./node_modules/.bin/vitest run test/api-delegation-grant-route.test.ts"
   expected_output: "test passes; mockServiceRpc called with the 7-key canonical arg object incl. p_expires_at"
 ```
+
+## Risks & Mitigations
+
+### Precedent-diff (RPC permissioning + named-arg contract)
+
+`grant_byok_delegation` is invoked from exactly two call sites; the fix makes them identical in arg shape.
+
+| Param | `byok-grant.ts:173-180` (working precedent) | `route.ts:79-86` (current, broken) | `route.ts` (after fix) |
+| --- | --- | --- | --- |
+| `p_grantor_user_id` | `grantorId` | `user.id` ✓ | `user.id` |
+| `p_grantee_user_id` | `granteeId` | `body.granteeUserId` ✓ | `body.granteeUserId` |
+| `p_workspace_id` | `workspaceId` | `body.workspaceId` ✓ | `body.workspaceId` |
+| daily cap | `p_daily_usd_cap_cents` | `p_daily_cap_cents` ✗ | `p_daily_usd_cap_cents` |
+| hourly cap | `p_hourly_usd_cap_cents` | `p_hourly_cap_cents` ✗ | `p_hourly_usd_cap_cents: body.hourlyCapCents ?? body.dailyCapCents` |
+| expiry | `p_expires_at` | *(absent)* ✗ | `p_expires_at: null` |
+| actor | `p_actor_user_id` | `p_created_by_user_id` ✗ | `p_actor_user_id: user.id` |
+
+Both call sites use a **service-role client** (`createServiceClient()` / service-role key), so both take the RPC's `auth.uid() IS NULL` admin branch (064:428-435), which mandates non-null `p_grantor_user_id` + `p_actor_user_id`. The fix satisfies this; the current route cannot (it omits `p_actor_user_id`). Pattern is **not novel** — copy the proven precedent.
+
+### Failure mechanism (why "nothing happens")
+
+- supabase-js `.rpc(name, params)` posts `params` to PostgREST, which resolves the function by **named arguments**. A param set that doesn't match any overload → PGRST202 (`Could not find the function … in the schema cache`). `route.ts:88` maps this to `NextResponse.json({ error }, { status: 400 })`. The client (`delegation-toggle.tsx:111`) only flips `setActive(true)` `if (res.ok)` — on a 400 it does nothing and never resets, so the toggle visibly reverts to off with no message. AC5 makes this class of failure operator-visible going forward.
+
+### Risks
+
+- **Low blast radius.** Pure caller fix; no schema/RPC/migration/infra change. The RPC, its triggers, and the working CLI path are untouched.
+- **Hourly-cap default is a deliberate UX choice** (hourly = daily when the UI exposes only a daily stepper). Documented in Sharp Edges; not a copy from the CLI (which takes an explicit hourly arg).
+- **No new exposure surface.** The corrected path keeps the existing owner-only authz gate (`route.ts:75-77`) and the RPC's cross-tenant + WORM INSERT triggers.
 
 ## Sharp Edges
 
