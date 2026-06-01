@@ -75,6 +75,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import {
+  mintInstallationToken,
   postSentryHeartbeat,
   type HandlerArgs,
 } from "./_cron-shared";
@@ -243,6 +244,12 @@ const CLAUDE_CODE_FLAGS = [
 // hard-coded timing drift).
 export const MAX_TURN_DURATION_MS = 15 * 60 * 1000;
 
+// Token-lifetime floor passed to generateInstallationToken (via
+// mintInstallationToken). The cron agent runs ≤15 min (MAX_TURN_DURATION_MS),
+// so a 60-min min-lifetime token leaves ≥45 min headroom. Same value as the
+// peer crons (cron-bug-fixer/community-monitor/roadmap-review).
+const TOKEN_MIN_LIFETIME_MS = 50 * 60 * 1000 + 10 * 60 * 1000;
+
 // Sentry slug — NEW resource added in apps/web-platform/infra/sentry/cron-monitors.tf
 // at this PR. Function id and slug naming match (no continuity rename hazard).
 const SENTRY_MONITOR_SLUG = "scheduled-follow-through";
@@ -251,13 +258,20 @@ const SENTRY_MONITOR_SLUG = "scheduled-follow-through";
 // ANTHROPIC_API_KEY, GH_TOKEN reach the subprocess. Caps SSRF + secret-
 // exfil blast radius (Layer 2 of dual defense; Layer 1 is the in-prompt
 // HTTPS-and-non-RFC1918 guard).
-function buildSpawnEnv(): NodeJS.ProcessEnv {
+//
+// GH_TOKEN is the freshly minted GitHub App installation token (deliberately
+// NOT process.env.GH_TOKEN/GITHUB_TOKEN — those are empty inside the prod
+// Next.js container, which is why this cron threw `gh auth login` on every
+// run; Sentry 512e253141294ac1a808b2ef03a21289). Per hr-github-app-auth-not-pat,
+// production code authenticates via the short-lived installation token, never
+// an ambient PAT / `gh auth login`. Mirrors cron-bug-fixer.ts:187-195.
+function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
     NODE_ENV: process.env.NODE_ENV,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-    GH_TOKEN: process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN,
+    GH_TOKEN: installationToken,
   };
 }
 
@@ -269,6 +283,16 @@ export async function cronFollowThroughMonitorHandler({
   durationMs: number;
   abortedByTimeout: boolean;
 }> {
+  // Step 0: mint-installation-token — authenticate every gh subprocess with a
+  // short-lived GitHub App installation token. Memoized across Inngest replay
+  // (its own step.run), so it is minted once per invocation, not per gh call.
+  // Without this the `gh issue list`/`gh label create`/agent gh calls run
+  // unauthenticated inside the prod container and throw `gh auth login`
+  // (Sentry 512e253141294ac1a808b2ef03a21289). NEVER log this value.
+  const installationToken = await step.run("mint-installation-token", () =>
+    mintInstallationToken({ tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS }),
+  );
+
   // Step 1: ensure-labels — carries the GHA `Ensure labels exist` step's
   // intent into the Inngest function so the labels exist before the agent
   // touches them. Three labels: `follow-through` (the corpus filter),
@@ -302,7 +326,7 @@ export async function cronFollowThroughMonitorHandler({
         description: "Opt out of @-mention notifications from cron-follow-through-monitor",
       },
     ];
-    const ghEnv = buildSpawnEnv();
+    const ghEnv = buildSpawnEnv(installationToken);
     interface LabelOutcome {
       name: string;
       ok: boolean;
@@ -410,7 +434,7 @@ export async function cronFollowThroughMonitorHandler({
           "gh",
           ["issue", "list", "--label", "follow-through", "--state", "open",
            "--json", "number,title,body", "--limit", "100"],
-          { env: buildSpawnEnv(), timeout: 30_000 },
+          { env: buildSpawnEnv(installationToken), timeout: 30_000 },
         ).toString("utf-8");
         const issues: IssueData[] = JSON.parse(stdout || "[]");
 
@@ -453,7 +477,7 @@ export async function cronFollowThroughMonitorHandler({
           {
             detached: true, // own process group so SIGTERM propagates to grandchildren
             stdio: ["ignore", "inherit", "inherit"],
-            env: buildSpawnEnv(),
+            env: buildSpawnEnv(installationToken),
           },
         );
 
