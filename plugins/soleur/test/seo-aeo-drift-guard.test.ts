@@ -982,3 +982,174 @@ describe("#3165/#3166/#3167/#3168/#3996 marketing copy invariants", () => {
     ).toBe(true);
   });
 });
+
+// -- Test 14: #4405 / #4406 high-traffic <title> is not brand-only ----------
+// The audit (C1, C3) flagged /getting-started/ and /blog/ as brand-only titles
+// that forfeit all non-branded search traffic. R1/R5 rewrites surface
+// non-brand keywords. This guard fails if either title regresses to a
+// brand-only string (just "Soleur" + the page noun + separators).
+
+describe("#4405/#4406 /getting-started/ + /blog/ <title> surfaces non-brand keywords", () => {
+  // Each page must surface at least one of these non-brand keyword tokens in
+  // its <title>. Lowercased substring checks (no regex validation → no anchor
+  // CodeQL concern). Pulled from R1 (install/AI organization/two commands) and
+  // R5 (Company-as-a-Service/agentic/at scale/AI teams).
+  const PAGES: { label: string; rel: string; keywords: string[] }[] = [
+    {
+      label: "/getting-started/",
+      rel: "getting-started/index.html",
+      keywords: ["install", "ai organization", "two commands"],
+    },
+    {
+      label: "/blog/",
+      rel: "blog/index.html",
+      keywords: [
+        "company-as-a-service",
+        "agentic engineering",
+        "at scale",
+        "ai teams",
+      ],
+    },
+  ];
+
+  // Brand/structural tokens that, on their own, do NOT count as a search hook.
+  // If stripping these from the title leaves nothing, the title is brand-only.
+  const BRAND_NOISE = ["soleur", "blog", "—", "|", "-", "with"];
+
+  let checked = 0;
+  for (const { label, rel, keywords } of PAGES) {
+    test(`${label} <title> contains a non-brand keyword (not brand-only)`, () => {
+      const html = readSite(rel);
+      const title = extractTitle(html);
+      const lower = title.toLowerCase();
+
+      // (1) At least one audit-named keyword token is present.
+      const present = keywords.filter((k) => lower.includes(k));
+      expect(
+        present.length,
+        `${label}: <title> "${title}" surfaces no non-brand keyword (${keywords.join(", ")})`,
+      ).toBeGreaterThan(0);
+
+      // (2) Stripping brand/structural noise must leave real residual words —
+      // proves the title is more than "Blog — Soleur". Split on whitespace and
+      // drop pure-noise tokens; a brand-only title collapses to zero residual.
+      const residual = lower
+        .split(/\s+/)
+        .map((w) => w.trim())
+        .filter((w) => w.length > 0 && !BRAND_NOISE.includes(w));
+      expect(
+        residual.length,
+        `${label}: <title> "${title}" is brand-only after removing brand/structural tokens`,
+      ).toBeGreaterThan(0);
+
+      checked++;
+    });
+  }
+
+  test("both high-traffic titles were asserted (no vacuous skip)", () => {
+    expect(checked).toBe(PAGES.length);
+  });
+});
+
+// -- Test 17: #4407 every canonical sampled page renders a non-empty meta ----
+// The audit (C4) claimed no <meta name="description"> on any sampled page — a
+// stale WebFetch artifact. base.njk renders `{{ description or site.description }}`,
+// so every canonical page is non-empty by construction. This guard pins that:
+// a regression that drops the fallback (or a page that somehow renders an empty
+// description) fails. Redirect stubs (<meta http-equiv="refresh">) are excluded.
+
+describe("#4407 canonical sampled pages render a non-empty <meta name=\"description\">", () => {
+  // The nine audit-sampled pages plus the always-present home + company page.
+  const SAMPLED: { label: string; rel: string }[] = [
+    { label: "homepage", rel: "index.html" },
+    { label: "/pricing/", rel: "pricing/index.html" },
+    { label: "/getting-started/", rel: "getting-started/index.html" },
+    { label: "/agents/", rel: "agents/index.html" },
+    { label: "/skills/", rel: "skills/index.html" },
+    { label: "/vision/", rel: "vision/index.html" },
+    { label: "/about/", rel: "about/index.html" },
+    { label: "/community/", rel: "community/index.html" },
+    { label: "/blog/", rel: "blog/index.html" },
+    { label: "/changelog/", rel: "changelog/index.html" },
+    { label: "/legal/", rel: "legal/index.html" },
+    { label: "/company-as-a-service/", rel: "company-as-a-service/index.html" },
+  ];
+
+  // SERP envelope: a meta description should be a real sentence, not a single
+  // word, and not absurdly long. The lower bound (≥50) catches truncated/empty
+  // descriptions; the upper bound is generous (≤220) because audit-mandated
+  // copy (R5 /blog/) intentionally runs long. The homepage's stricter 120-160
+  // window is pinned separately by Test #2808 above.
+  const META_MIN = 50;
+  const META_MAX = 220;
+
+  // Attribute-capture extraction (no generic tag regex → avoids
+  // js/incomplete-multi-character-sanitization). Returns the first meta
+  // description content or null.
+  function metaDescription(html: string): string | null {
+    const m = [
+      ...html.matchAll(/<meta name="description" content="([^"]*)"/g),
+    ];
+    return m.length > 0 ? m[0][1] : null;
+  }
+
+  test("every sampled canonical page has exactly one non-empty meta description within SERP bounds", () => {
+    let checked = 0;
+    const seen = new Map<string, string>();
+    for (const { label, rel } of SAMPLED) {
+      const abs = resolve(SITE, rel);
+      if (!existsSync(abs)) continue; // build/permalink drift — counter guards vacuity
+      const html = readFileSync(abs, "utf8");
+
+      // Skip any redirect stub defensively (a sampled permalink should never be
+      // one, but exclude by mechanism rather than by trusting the path).
+      // Plain substring presence check (.includes, not a regex) — this is
+      // trusted built HTML and the marker can appear anywhere in <head>, so a
+      // regex anchor would be semantically wrong; .includes sidesteps the
+      // js/regex/missing-regexp-anchor pattern entirely.
+      if (html.length < 2000 && html.includes('http-equiv="refresh"')) {
+        continue;
+      }
+      checked++;
+
+      const matches = [
+        ...html.matchAll(/<meta name="description" content="([^"]*)"/g),
+      ];
+      expect(
+        matches.length,
+        `${label}: exactly one <meta name="description">`,
+      ).toBe(1);
+
+      const content = metaDescription(html)!.trim();
+      expect(
+        content.length,
+        `${label}: meta description is a real sentence (≥${META_MIN})`,
+      ).toBeGreaterThanOrEqual(META_MIN);
+      expect(
+        content.length,
+        `${label}: meta description within ${META_MAX} chars`,
+      ).toBeLessThanOrEqual(META_MAX);
+
+      seen.set(label, content);
+    }
+
+    // The two audit-named pages must carry their bespoke (non-default) copy —
+    // proves they did not silently fall back to site.description.
+    const siteDefault = (
+      JSON.parse(readFileSync(SITE_JSON, "utf8")) as { description: string }
+    ).description;
+    for (const label of ["/getting-started/", "/blog/"]) {
+      const d = seen.get(label);
+      expect(d, `${label}: present in sampled set`).toBeTruthy();
+      expect(
+        d,
+        `${label}: carries a bespoke meta, not the site default`,
+      ).not.toBe(siteDefault);
+    }
+
+    expect(
+      checked,
+      "every sampled canonical page asserted against built HTML",
+    ).toBe(SAMPLED.length);
+  });
+});
