@@ -10,6 +10,7 @@ const mockAdminGetUserById = vi.fn();
 const mockFindInstallationForLogin = vi.fn();
 const mockVerifyInstallationOwnership = vi.fn();
 const mockListInstallationRepos = vi.fn();
+const mockResolveReachable = vi.fn();
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({
@@ -31,9 +32,26 @@ vi.mock("@/server/logger", () => ({
 }));
 
 vi.mock("@/server/github-app", () => ({
-  findInstallationForLogin: (...args: unknown[]) => mockFindInstallationForLogin(...args),
-  verifyInstallationOwnership: (...args: unknown[]) => mockVerifyInstallationOwnership(...args),
-  listInstallationRepos: (...args: unknown[]) => mockListInstallationRepos(...args),
+  findInstallationForLogin: (...args: unknown[]) =>
+    mockFindInstallationForLogin(...args),
+  verifyInstallationOwnership: (...args: unknown[]) =>
+    mockVerifyInstallationOwnership(...args),
+  listInstallationRepos: (...args: unknown[]) =>
+    mockListInstallationRepos(...args),
+}));
+
+// Repo aggregation now flows through resolveReachableInstallationIds. By
+// default we mirror the legacy single-install behavior: return the
+// login-matched install so the existing listInstallationRepos mock drives the
+// repo list. T14 overrides this to inject an org-membership install.
+vi.mock("@/server/reachable-installations", () => ({
+  resolveReachableInstallationIds: (...args: unknown[]) =>
+    mockResolveReachable(...args),
+}));
+
+// mirrorRepoColsToSoloWorkspace is dynamically imported by the route.
+vi.mock("@/server/workspace-repo-mirror", () => ({
+  mirrorRepoColsToSoloWorkspace: vi.fn(async () => {}),
 }));
 
 import { POST } from "../app/api/repo/detect-installation/route";
@@ -49,26 +67,19 @@ function makeRequest() {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Table-routing helpers for mockServiceFrom
-// ---------------------------------------------------------------------------
 type TableOperation = "select" | "update";
 type TableMockConfig = Record<string, Partial<Record<TableOperation, unknown>>>;
 
-/**
- * Configure mockServiceFrom to route by table name + operation instead of
- * relying on positional mockReturnValueOnce chains.
- */
 function setupTableRoutes(config: TableMockConfig) {
   mockServiceFrom.mockImplementation((table: string) => {
-    // ADR-044: detect-installation mirrors the installation grant to the
-    // solo workspace via mirrorRepoColsToSoloWorkspace — accept the write.
     if (table === "workspaces") {
       return { update: () => ({ eq: async () => ({ error: null }) }) };
     }
     const tableConfig = config[table];
     if (!tableConfig) {
-      throw new Error(`Unexpected .from("${table}") call — add it to setupTableRoutes`);
+      throw new Error(
+        `Unexpected .from("${table}") call — add it to setupTableRoutes`,
+      );
     }
     const mock: Record<string, unknown> = {};
     if (tableConfig.select !== undefined) {
@@ -88,37 +99,41 @@ function setupTableRoutes(config: TableMockConfig) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests: github_username fallback
+// Tests
 // ---------------------------------------------------------------------------
 
 describe("POST /api/repo/detect-installation — github_username fallback", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-
-    // Default: authenticated user
-    mockGetUser.mockResolvedValue({
-      data: { user: { id: "user-123" } },
-    });
+    mockGetUser.mockResolvedValue({ data: { user: { id: "user-123" } } });
+    // Default: reachable set is the single login-matched install (legacy shape).
+    mockResolveReachable.mockImplementation(
+      async (_svc: unknown, _uid: string, login: string | null) =>
+        login ? [12345] : [],
+    );
   });
 
-  test("uses stored github_username when no Supabase GitHub identity exists", async () => {
-    // Route .from("users") to return select data and accept updates
+  test("T15: uses stored github_username when no Supabase GitHub identity exists", async () => {
     setupTableRoutes({
       users: {
         select: { github_installation_id: null, github_username: "deruelle" },
-        update: null, // no error
+        update: null,
       },
     });
-
-    // No GitHub identity in Supabase
     mockAdminGetUserById.mockResolvedValue({
-      data: { user: { id: "user-123", identities: [{ provider: "email", identity_data: {} }] } },
+      data: {
+        user: {
+          id: "user-123",
+          identities: [{ provider: "email", identity_data: {} }],
+        },
+      },
     });
-
-    // Installation found
     mockFindInstallationForLogin.mockResolvedValue(12345);
     mockVerifyInstallationOwnership.mockResolvedValue({ verified: true });
-    mockListInstallationRepos.mockResolvedValue([{ name: "my-repo", fullName: "deruelle/my-repo" }]);
+    mockResolveReachable.mockResolvedValue([12345]);
+    mockListInstallationRepos.mockResolvedValue([
+      { name: "my-repo", fullName: "deruelle/my-repo" },
+    ]);
 
     const response = await POST(makeRequest());
     const data = await response.json();
@@ -129,16 +144,18 @@ describe("POST /api/repo/detect-installation — github_username fallback", () =
   });
 
   test("returns no_github_identity when neither Supabase identity nor github_username exists", async () => {
-    // Route .from("users") — no installation ID or username
     setupTableRoutes({
       users: {
         select: { github_installation_id: null, github_username: null },
       },
     });
-
-    // No GitHub identity in Supabase
     mockAdminGetUserById.mockResolvedValue({
-      data: { user: { id: "user-123", identities: [{ provider: "email", identity_data: {} }] } },
+      data: {
+        user: {
+          id: "user-123",
+          identities: [{ provider: "email", identity_data: {} }],
+        },
+      },
     });
 
     const response = await POST(makeRequest());
@@ -149,15 +166,12 @@ describe("POST /api/repo/detect-installation — github_username fallback", () =
   });
 
   test("prefers Supabase GitHub identity over stored github_username", async () => {
-    // Route .from("users") — no installation ID, accept updates
     setupTableRoutes({
       users: {
         select: { github_installation_id: null },
-        update: null, // no error
+        update: null,
       },
     });
-
-    // Has GitHub identity in Supabase
     mockAdminGetUserById.mockResolvedValue({
       data: {
         user: {
@@ -168,17 +182,51 @@ describe("POST /api/repo/detect-installation — github_username fallback", () =
         },
       },
     });
-
-    // Installation found
     mockFindInstallationForLogin.mockResolvedValue(99999);
     mockVerifyInstallationOwnership.mockResolvedValue({ verified: true });
-    mockListInstallationRepos.mockResolvedValue([{ name: "repo", fullName: "supabase-user/repo" }]);
+    mockResolveReachable.mockResolvedValue([99999]);
+    mockListInstallationRepos.mockResolvedValue([
+      { name: "repo", fullName: "supabase-user/repo" },
+    ]);
 
     const response = await POST(makeRequest());
     const data = await response.json();
 
     expect(data.installed).toBe(true);
-    // Should use Supabase identity, not stored github_username
     expect(mockFindInstallationForLogin).toHaveBeenCalledWith("supabase-user");
+  });
+
+  test("T14: org member (login != org login) sees the org repo on first call", async () => {
+    // No personal install matches the login...
+    setupTableRoutes({
+      users: {
+        select: { github_installation_id: null, github_username: "deruelle" },
+        update: null,
+      },
+    });
+    mockAdminGetUserById.mockResolvedValue({
+      data: {
+        user: {
+          id: "user-123",
+          identities: [{ provider: "email", identity_data: {} }],
+        },
+      },
+    });
+    mockFindInstallationForLogin.mockResolvedValue(null);
+    // ...but a workspace-membership install owns the org repo.
+    mockResolveReachable.mockResolvedValue([122213433]);
+    mockListInstallationRepos.mockResolvedValue([
+      { name: "soleur", fullName: "jikig-ai/soleur" },
+    ]);
+
+    const response = await POST(makeRequest());
+    const data = await response.json();
+
+    expect(data.installed).toBe(true);
+    expect(data.repos.map((r: { fullName: string }) => r.fullName)).toEqual([
+      "jikig-ai/soleur",
+    ]);
+    // The membership-only install is NOT persisted on users (unique constraint).
+    expect(mockFindInstallationForLogin).toHaveBeenCalledWith("deruelle");
   });
 });
