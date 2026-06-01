@@ -1,0 +1,99 @@
+// On-demand cron trigger route (#4734).
+//
+// POST /api/internal/trigger-cron dispatches a whitelisted
+// `cron/<name>.manual-trigger` event via the app's already-wired Inngest
+// client, so a cron can be fired on demand WITHOUT SSH-ing to the Hetzner box
+// and curling the loopback Inngest event endpoint (a forbidden manual prod op).
+//
+// Authentication: a fail-closed shared secret (INNGEST_MANUAL_TRIGGER_SECRET,
+// Doppler-provisioned, TF-generated random) compared via a length-guarded
+// constant-time `timingSafeEqual`. This reuses the PRIMITIVE shape from
+// app/api/internal/kb-drift-ingest/route.ts (fail-closed readSecret +
+// timingSafeEqual + length-guard) but is a Bearer shared-secret compare, NOT
+// HMAC — the body is a single allowlisted event name with no replay-sensitive
+// payload (see #4734 design / security Open Questions).
+//
+// Abuse surface (brand-survival threshold = single-user incident): several
+// allowlisted crons mutate state or spend money (cron/bug-fixer opens PRs;
+// content-generator / competitive-analysis / growth-execution / daily-triage
+// spend Anthropic/API budget). The secret IS the trust boundary; the allowlist
+// (derived from EXPECTED_CRON_FUNCTIONS, drift-guarded) bounds the blast radius
+// to known cron events. The mutating crons additionally carry account-scoped
+// Inngest concurrency caps (limit 1, key "cron-platform"), so a replay flood
+// collapses to one extra in-flight run rather than unbounded parallelism.
+
+import { timingSafeEqual } from "node:crypto";
+import { NextResponse } from "next/server";
+import { reportSilentFallback } from "@/server/observability";
+import { sendInngestWithRetry } from "@/server/inngest/send-with-retry";
+import { isAllowlistedManualTrigger } from "@/lib/inngest/manual-trigger-allowlist";
+
+// NOTE: the Inngest client is imported DYNAMICALLY inside POST (see below),
+// mirroring app/api/webhooks/github/route.ts:285 — this defers the client's
+// load-time fail-closed throw (missing INNGEST_SIGNING_KEY) to request time
+// and keeps the route module importable during `next build` page-data
+// collection.
+
+function readSecret(): string | null {
+  const v = process.env.INNGEST_MANUAL_TRIGGER_SECRET;
+  return v && v.length > 0 ? v : null;
+}
+
+function bearerMatches(header: string | null, secret: string): boolean {
+  if (!header) return false;
+  const token = header.startsWith("Bearer ")
+    ? header.slice("Bearer ".length)
+    : header;
+  const a = Buffer.from(token, "utf8");
+  const b = Buffer.from(secret, "utf8");
+  // Length-guard before timingSafeEqual (it throws on unequal-length buffers).
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+export async function POST(request: Request) {
+  const secret = readSecret();
+  if (!secret) {
+    // Fail-closed: indistinguishable-from-absent. 503 (server misconfigured),
+    // NOT 401 — distinct from "secret set but Bearer wrong".
+    return NextResponse.json({ error: "Not available" }, { status: 503 });
+  }
+  if (!bearerMatches(request.headers.get("authorization"), secret)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Malformed JSON" }, { status: 400 });
+  }
+  const name = (body as { event?: unknown } | null)?.event;
+  if (!isAllowlistedManualTrigger(name)) {
+    return NextResponse.json({ error: "Event not allowlisted" }, { status: 400 });
+  }
+
+  try {
+    const { inngest } = await import("@/server/inngest/client");
+    await sendInngestWithRetry(
+      () =>
+        inngest.send({
+          name,
+          data: { trigger: "manual-api", at: new Date().toISOString() },
+        }),
+      { feature: "trigger-cron" },
+    );
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "trigger-cron",
+      op: "dispatch",
+      extra: { event: name },
+    });
+    return NextResponse.json({ error: "Dispatch failed" }, { status: 502 });
+  }
+
+  return NextResponse.json(
+    { dispatched: name, trigger: "manual-api" },
+    { status: 202 },
+  );
+}
