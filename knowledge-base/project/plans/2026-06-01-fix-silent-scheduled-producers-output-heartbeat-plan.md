@@ -291,9 +291,23 @@ done
 ```yaml
 liveness_signal:
   what: per-function Sentry Crons check-in via postSentryHeartbeat, now gated on actual issue creation
-  cadence: each cron fire (weekly / monthly per function)
-  alert_target: Sentry monitor per SENTRY_MONITOR_SLUG (one per function); existing alert rules
-  configured_in: apps/web-platform/server/inngest/functions/_cron-shared.ts (postSentryHeartbeat) + each cron's sentry-heartbeat step
+  cadence: each cron fire (weekly / monthly / twice-weekly per function)
+  alert_target: |
+    Sentry cron monitor per SENTRY_MONITOR_SLUG. A ?status=error check-in opens a
+    Sentry ISSUE via failure_issue_threshold=1 on the monitor resource (defined in
+    cron-monitors.tf). Monitor-issue routing is the org default "new issue" alert,
+    which per the issue-alerts.tf header is intentionally Sentry-managed under
+    ignore_changes (NOT this repo's IaC) — the same routing every existing
+    scheduled_* monitor already relies on. This PR adds no new notification surface;
+    it makes the existing monitors reflect actual output (review P1 #2;
+    hr-observability-layer-citation).
+    <!-- iac-routing-ack: plan-phase-2-8-reviewed -->
+    The notification rule is pre-existing Sentry-managed config shared by all
+    scheduled_* monitors; no new .tf resource is provisioned for routing.
+  monitors_configured_in: apps/web-platform/infra/sentry/cron-monitors.tf (one
+    sentry_cron_monitor per slug; this PR ADDS the missing scheduled_content_generator
+    — without it content-generator's ?status=error was dropped on the floor, review P1 #1)
+  checkin_configured_in: apps/web-platform/server/inngest/functions/_cron-shared.ts (postSentryHeartbeat) + each cron's sentry-heartbeat step
 error_reporting:
   destination: Sentry via reportSilentFallback (feature=cron-<name>, op=scheduled-output-missing)
   fail_loud: true

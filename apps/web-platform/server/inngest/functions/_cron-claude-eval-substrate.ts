@@ -22,6 +22,10 @@ export interface SpawnResult {
 
 export const KILL_ESCALATION_MS = 5_000;
 
+// Hard ceiling on captured child stderr — a pathological process must not OOM
+// the worker. 8 KiB comfortably holds a git fatal: line + a few hints.
+export const STDERR_CAP_BYTES = 8192;
+
 export function resolveClaudeBin(): string {
   const override = process.env.CLAUDE_BIN;
   if (override && existsSync(override)) return override;
@@ -64,8 +68,11 @@ export function spawnSimple(
     if (child.stderr) {
       child.stderr.setEncoding("utf-8");
       child.stderr.on("data", (chunk: string) => {
-        // Bound the buffer — a pathological producer must not OOM the worker.
-        if (stderr.length < 8192) stderr += chunk;
+        // Exact cap (slice on assignment) — appending whole chunks could
+        // overshoot the ceiling by up to one chunk's length.
+        if (stderr.length < STDERR_CAP_BYTES) {
+          stderr = (stderr + chunk).slice(0, STDERR_CAP_BYTES);
+        }
       });
     }
     child.on("exit", (exitCode: number | null, signal: NodeJS.Signals | null) => {
@@ -107,7 +114,8 @@ export async function setupEphemeralWorkspace(args: {
     // Fold git's stderr into the message so the failure is self-diagnosing
     // (auth vs network vs DNS). Redact the installation token first — the
     // clone URL embeds it and git echoes the remote on some failures.
-    const reason = redactToken(cloneResult.stderr, installationToken).trim();
+    // cloneResult.stderr is already trimmed by spawnSimple.
+    const reason = redactToken(cloneResult.stderr, installationToken);
     throw new Error(
       `git clone failed (exit ${cloneResult.exitCode}, signal ${cloneResult.signal}) for jikig-ai/soleur` +
         (reason ? `: ${reason}` : ""),

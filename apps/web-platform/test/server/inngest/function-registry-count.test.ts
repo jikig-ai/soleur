@@ -55,7 +55,11 @@ function extractTfMonitorNames(): Set<string> {
 const KNOWN_UNMONITORED_SLUGS = new Set([
   "scheduled-campaign-calendar",
   "scheduled-cloud-task-heartbeat",
-  "scheduled-content-generator",
+  // scheduled-content-generator REMOVED from exemption (#4684): it is a real
+  // output producer (creates a scheduled-content-generator issue every run) and
+  // now has a sentry_cron_monitor in cron-monitors.tf. Its prior exemption is
+  // exactly why its post-migration silence went unalerted at the per-function
+  // layer — the monitor it checked into did not exist.
   "scheduled-content-publisher",
   "scheduled-growth-audit",
   "scheduled-growth-execution",

@@ -359,6 +359,29 @@ resource "sentry_cron_monitor" "scheduled_competitive_analysis" {
   timezone                = "UTC"
 }
 
+# TR9 Phase 2 (#4483): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-content-generator.ts`. This
+# monitor was MISSING — the function POSTed check-ins to the
+# `scheduled-content-generator` slug that Sentry had never been told existed,
+# so a `?status=error` heartbeat opened no issue. #4689's output-aware heartbeat
+# is inert for content-generator (#4684) without this resource: the producer
+# correctly resolves ok:false, but with no monitor the red signal is dropped.
+# Tue/Thu 10:00 UTC. Inngest-fired — 30-min margin per the Inngest-fired
+# precedent. 55 min mirrors the claude-eval cohort (50-min MAX_TURN_DURATION_MS
+# budget plus slack). Single-miss alert (failure_issue_threshold=1): a single
+# missed twice-weekly fire is noteworthy.
+resource "sentry_cron_monitor" "scheduled_content_generator" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-content-generator"
+  schedule                = { crontab = "0 10 * * 2,4" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 55
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 # PR #4457: Inngest-fired via
 # `apps/web-platform/server/inngest/functions/cron-stale-deferred-scope-outs.ts`.
 # Migrated from the GHA scheduled-stale-deferred-scope-outs workflow (deleted
