@@ -38,6 +38,7 @@ import {
   tearDownSharedWorkspace,
   type SharedWorkspaceFixture,
 } from "@/test/helpers/workspace-members-fixtures";
+import { DEFAULT_ORG_NAME } from "@/lib/workspace-name";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -149,14 +150,16 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     test("organizations chain returns Harry's solo backfill org (Phase 7.2 / AC10)", async () => {
       if (SCHEMA_CACHE_READY === false) return;
       const harry = fixture.members[1];
-      // Harry has a backfill-shaped solo org (created by handle_new_user
+      // Harry has a default-named solo org (created by handle_new_user
       // trigger at signup). Owner_user_id keys directly on his auth id.
       const { data } = await service
         .from("organizations")
         .select("id, owner_user_id, name")
         .eq("owner_user_id", harry.userId);
       expect(data?.length ?? 0).toBeGreaterThanOrEqual(1);
-      expect(data![0].name).toBeNull();
+      // Migration 091 (#4762): the signup trigger seeds DEFAULT_ORG_NAME
+      // (was NULL in mig 053). Art. 15 export still includes the org row.
+      expect(data![0].name).toBe(DEFAULT_ORG_NAME);
     });
 
     test("deleteAccount(Harry) end-to-end — FK-reverse cascade clears the chain (AC-GDPR-17-CALLER)", async () => {
