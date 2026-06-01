@@ -215,18 +215,30 @@ export async function workspaceReconcileOnPushHandler({
   }
 
   // Shadowed-workspace guard (the gap that hid the ~5-week freeze). An ignored
-  // repo that nonetheless HAS connected workspaces is a misconfiguration worth
-  // surfacing: the ignore-list was added to suppress zero-signal noise, not to
-  // starve a real workspace. Warn once (Sentry breadcrumb) — but DO reconcile
-  // the workspaces below. Fires at most once per push to such a repo.
+  // repo that nonetheless HAS connected workspaces is the EXPECTED steady state
+  // when the founder dogfoods their KB out of an ignored repo (the default
+  // ignore entry `jikig-ai/soleur` is the platform's own dev repo). It is NOT a
+  // misconfiguration: we reconcile the workspaces below exactly as for any other
+  // repo. #4706 emitted a Sentry warning here to make the prior silent-starve
+  // loud, but the condition is permanently true for the default config, so the
+  // breadcrumb became a per-push alert flood with zero signal. Record it at pino
+  // `info` (Better Stack audit trail) so an operator can still pull "which
+  // ignored repos still have live workspaces" on demand — but do NOT mirror to
+  // Sentry. Genuine reconcile failures (sync / skip-not-ready / resolve) still
+  // page via the reportSilentFallback sites. Mirrors the benign-skip info-log
+  // above (skip-no-workspace-match).
   if (isIgnoredReconcileRepo(targetRepoUrl)) {
-    warnSilentFallback(new Error("ignored repo has connected workspaces"), {
-      feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
-      op: "ignored-repo-has-workspaces",
-      extra: { installationId, deliveryId, targetRepoUrl, workspaceCount: rows.length },
-      message:
-        "Reconcile ignore-list shadows a connected workspace — reconciling anyway; review WORKSPACE_RECONCILE_IGNORE_REPOS",
-    });
+    logger.info(
+      {
+        feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
+        op: "ignored-repo-has-workspaces",
+        installationId,
+        deliveryId,
+        targetRepoUrl,
+        workspaceCount: rows.length,
+      },
+      "Reconcile ignore-list shadows a connected workspace — reconciling anyway (info; review WORKSPACE_RECONCILE_IGNORE_REPOS if unexpected)",
+    );
   }
 
   // Fan out: process every matching workspace independently. A push to a
