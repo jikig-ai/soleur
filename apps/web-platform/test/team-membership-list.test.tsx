@@ -92,6 +92,28 @@ describe("TeamMembershipList", () => {
     expect(screen.getByText(/remove member/i)).toBeInTheDocument();
   });
 
+  // AC4 (over-gating regression guard): the Owner positive control for Transfer
+  // ownership. The Member tests above lock that Transfer stays hidden; this pins
+  // the counterpart — an Owner viewing a non-owner member row CAN still reach
+  // Transfer ownership. Without it, a regression hiding Transfer from Owners too
+  // would pass every other test.
+  it("Owner (isOwner=true): non-owner member row exposes Transfer ownership", () => {
+    render(
+      <TeamMembershipList
+        members={[OWNER, MEMBER]}
+        currentUserId="user-owner"
+        workspaceId="ws-1"
+        isOwner={true}
+        byokDelegationsEnabled={false}
+        organizationName="Test Org"
+      />,
+    );
+    const kebabs = screen.getAllByLabelText(/row actions/i);
+    expect(kebabs).toHaveLength(1);
+    fireEvent.click(kebabs[0]);
+    expect(screen.getByText(/transfer ownership/i)).toBeInTheDocument();
+  });
+
   // RBAC gating: a Member (isOwner=false) viewing the team must NOT see any
   // owner-only affordance. The kebab trigger gates the whole owner-only menu
   // (Remove member + Transfer ownership), so a Member sees no kebab on any
@@ -134,6 +156,10 @@ describe("TeamMembershipList", () => {
     expect(screen.queryByText(/remove member/i)).not.toBeInTheDocument();
   });
 
+  // Regression-lock (already GREEN on main): "Transfer ownership" was already
+  // gated by `{isOwner && member.role !== "owner"}`, so a Member never saw it
+  // even before this fix. This test does NOT exercise the new `showActions`
+  // gate — it pins that the pre-existing gating stays in place.
   it("Member (isOwner=false): no Transfer ownership action is reachable", () => {
     render(
       <TeamMembershipList
