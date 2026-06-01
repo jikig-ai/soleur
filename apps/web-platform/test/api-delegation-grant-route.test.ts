@@ -136,11 +136,19 @@ describe("POST /api/workspace/delegations (grant — AC1/AC2/AC3/AC4)", () => {
     mockMembershipMaybeSingle.mockResolvedValue({ data: null });
     const res = await POST(makeRequest(validBody()));
     expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "not_owner" });
     expect(mockServiceRpc).not.toHaveBeenCalled();
   });
 
   test("400 missing_fields when a required field is absent", async () => {
     const res = await POST(makeRequest({ workspaceId: WORKSPACE_ID, granteeUserId: GRANTEE_ID }));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "missing_fields" });
+    expect(mockServiceRpc).not.toHaveBeenCalled();
+  });
+
+  test("400 missing_fields when dailyCapCents is 0 (falsy guard, never reaches the RPC)", async () => {
+    const res = await POST(makeRequest(validBody({ dailyCapCents: 0 })));
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: "missing_fields" });
     expect(mockServiceRpc).not.toHaveBeenCalled();

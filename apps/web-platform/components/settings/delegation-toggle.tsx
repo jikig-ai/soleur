@@ -122,6 +122,13 @@ function OwnerDelegationControl({
           window.alert("Couldn't share a key with this member. Please try again.");
         }
       }
+    } catch (err) {
+      // A thrown fetch (offline, DNS/TLS failure, aborted request) bypasses the
+      // !res.ok branches above; without this catch the toggle would snap back
+      // to its prior state with no signal — the same silent no-op AC5 fixes for
+      // non-OK responses. Surface it the same way.
+      console.error("[delegation-toggle] request failed:", err);
+      window.alert("Something went wrong. Please check your connection and try again.");
     } finally {
       setLoading(false);
     }
