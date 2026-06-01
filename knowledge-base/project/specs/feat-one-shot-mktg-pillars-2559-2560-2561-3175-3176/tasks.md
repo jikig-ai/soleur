@@ -1,0 +1,21 @@
+# Tasks — feat-one-shot-mktg-pillars-2559-2560-2561-3175-3176
+
+- [x] Read 5 issue bodies + content plans (2026-04-18, 2026-05-04) + brand guide
+- [x] Audit existing pages: `/company-as-a-service/` already shipped (closes #3175 + D/F links)
+- [x] Confirm disambiguation post slug targets (best-claude-code-plugins-2026, company-as-a-service) resolve
+- [x] Verify citation URL pool (curl 200 + WebFetch for stats); drop BLS (bot-walled)
+- [x] Write plan + tasks
+- [ ] #3176 — `pages/ai-agents-for-solo-founders.njk` (~3,000 w, cost table, FAQ+JSON-LD)
+- [ ] #2561 — `pages/agentic-engineering.njk` (~3,000 w, comparison table, FAQ+JSON-LD)
+- [ ] #2561 — `pages/glossary.njk` (10 terms + citations); link from footer (site.json)
+- [ ] #2560 — `pages/ai-cto.njk` (~2,000 w, cost table → /pricing/, FAQ+JSON-LD)
+- [ ] #2560 — `pages/ai-cmo.njk` (~2,000 w, cost table → /pricing/, FAQ+JSON-LD)
+- [ ] #2560 — `pages/solo-founder-ai-stack.njk` (~2,200 w, stack table → /pricing/, FAQ+JSON-LD)
+- [ ] #2559 — `pages/claude-code-plugins.njk` (~3,500 w, marketplace table, FAQ+JSON-LD)
+- [ ] Add `/glossary/` to site.json footer Resources
+- [ ] Extend seo-aeo-drift-guard.test.ts with new describe block (parity + vacuity guards)
+- [ ] Build (`npx @11ty/eleventy --output=/tmp/site-prE`) + verify pages present
+- [ ] validate-seo.sh exit 0
+- [ ] bun test (3 SEO files + full suite) green
+- [ ] CodeQL self-check grep clean; anti-slop clean; internal-link grep
+- [ ] Commit (conventional msg, no Closes #N)

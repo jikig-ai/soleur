@@ -1153,3 +1153,169 @@ describe("#4407 canonical sampled pages render a non-empty <meta name=\"descript
     ).toBe(SAMPLED.length);
   });
 });
+
+// -- Test 7: net-new marketing pillars / clusters / glossary ----------------
+// Closes #3175 (/company-as-a-service/ pillar — also the inbound link target
+// for the homepage + /compare/ pages), #3176 (/ai-agents-for-solo-founders/),
+// #2561 (/agentic-engineering/ pillar + /glossary/), #2560 (AI CTO / AI CMO /
+// Solo Founder AI Stack clusters), and #2559 (Claude Code plugins pillar).
+//
+// CodeQL hygiene for this block (net-new test code is a merge gate):
+//  - FAQ <summary> text is plain (no nested tags) → use .trim(), never a
+//    /<[^>]+>/g tag-strip (avoids js/incomplete-multi-character-sanitization).
+//  - HTML-entity decode is limited to &#39; and &quot;; &amp; is NOT collapsed
+//    to & (avoids js/double-escaping). FAQ questions are authored free of
+//    apostrophes/ampersands, so decode is belt-and-suspenders.
+//  - Presence checks use html.includes(literal), never an unanchored .test()
+//    (avoids js/regex/missing-regexp-anchor).
+describe("#3175/#3176/#2561/#2560/#2559 marketing pillars + clusters + glossary", () => {
+  // Decode only the two entities the build emits inside visible FAQ summaries.
+  // Deliberately does NOT touch &amp; (see header note).
+  const decodeFaqText = (s: string): string =>
+    s.replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+
+  // Plain-text <summary> bodies → split on the literal close tag, trim. No
+  // tag-strip regex because these summaries never contain nested markup.
+  const faqSummaries = (html: string): string[] =>
+    [...html.matchAll(/<summary class="faq-question">([^<]*)<\/summary>/g)].map(
+      (m) => decodeFaqText(m[1]).trim(),
+    );
+
+  const faqDetailsCount = (html: string): number =>
+    [...html.matchAll(/<details class="faq-item">/g)].length;
+
+  function faqPageNames(html: string): string[] {
+    const block = jsonLdBlocks(html).find(
+      (b): b is { "@type": string; mainEntity: { name: string }[] } =>
+        typeof b === "object" &&
+        b !== null &&
+        (b as { "@type"?: string })["@type"] === "FAQPage",
+    );
+    return block ? block.mainEntity.map((q) => q.name.trim()) : [];
+  }
+
+  // Pages with a visible FAQ block + FAQPage JSON-LD that must stay in parity.
+  const FAQ_PAGES = [
+    "company-as-a-service/index.html",
+    "ai-agents-for-solo-founders/index.html",
+    "agentic-engineering/index.html",
+    "ai-cto/index.html",
+    "ai-cmo/index.html",
+    "solo-founder-ai-stack/index.html",
+    "claude-code-plugins/index.html",
+  ];
+
+  // All net-new routes that must build with a real title + meta description.
+  const NEW_PAGES = [
+    ...FAQ_PAGES,
+    "glossary/index.html",
+  ];
+
+  test("every new page builds with a non-empty <title> and meta description", () => {
+    let checked = 0;
+    for (const rel of NEW_PAGES) {
+      const html = readSite(rel);
+      const title = extractTitle(html);
+      expect(title.length, `${rel}: non-empty <title>`).toBeGreaterThan(0);
+      expect(title, `${rel}: brand-anchored title`).toContain("Soleur");
+
+      const meta = [
+        ...html.matchAll(/<meta name="description" content="([^"]*)"/g),
+      ];
+      expect(meta.length, `${rel}: exactly one meta description`).toBe(1);
+      expect(
+        meta[0][1].trim().length,
+        `${rel}: meta description is a real sentence`,
+      ).toBeGreaterThanOrEqual(50);
+      checked++;
+    }
+    expect(checked, "every new page asserted").toBe(NEW_PAGES.length);
+  });
+
+  test("each new page with a visible FAQ has a parity-matched FAQPage JSON-LD", () => {
+    let checked = 0;
+    for (const rel of FAQ_PAGES) {
+      const html = readSite(rel);
+      const summaries = faqSummaries(html);
+      const details = faqDetailsCount(html);
+      const names = faqPageNames(html);
+
+      expect(names.length, `${rel}: FAQPage JSON-LD present`).toBeGreaterThan(0);
+      expect(summaries.length, `${rel}: visible summaries present`).toBe(
+        details,
+      );
+      expect(
+        details,
+        `${rel}: <details> count equals JSON-LD question count`,
+      ).toBe(names.length);
+      for (const name of names) {
+        expect(
+          summaries,
+          `${rel}: JSON-LD question "${name}" has a character-identical visible <summary>`,
+        ).toContain(name);
+      }
+      checked++;
+    }
+    expect(checked, "every FAQ page asserted for parity").toBe(
+      FAQ_PAGES.length,
+    );
+  });
+
+  test("/company-as-a-service/ exists and carries the quotable definition (closes D/F inbound links)", () => {
+    const html = readSite("company-as-a-service/index.html");
+    // Quotable definition near the top — presence check, not regex.
+    expect(
+      html.includes("Company-as-a-Service (CaaS) is a new category of platform"),
+      "quotable CaaS definition present",
+    ).toBe(true);
+    // The inbound-link target slug resolves as a real page.
+    expect(html.includes("<h1>Company-as-a-Service</h1>"), "CaaS H1").toBe(true);
+  });
+
+  test("/glossary/ renders at least 8 term definitions", () => {
+    const html = readSite("glossary/index.html");
+    const terms = [
+      "Company-as-a-Service",
+      "Agentic Engineering",
+      "AI Agent",
+      "MCP (Model Context Protocol)",
+      "Claude Code Plugin",
+      "Skill",
+      "Knowledge Base",
+      "Human-in-the-Loop",
+      "Vibe Coding",
+      "Context Engineering",
+    ];
+    let found = 0;
+    for (const t of terms) {
+      if (html.includes(`>${t}</h2>`)) found++;
+    }
+    expect(found, "glossary renders >= 8 of the canonical terms").toBeGreaterThanOrEqual(
+      8,
+    );
+    // DefinedTermSet JSON-LD backs the visible terms.
+    const hasTermSet = jsonLdBlocks(html).some(
+      (b) =>
+        typeof b === "object" &&
+        b !== null &&
+        (b as { "@type"?: string })["@type"] === "DefinedTermSet",
+    );
+    expect(hasTermSet, "glossary has DefinedTermSet JSON-LD").toBe(true);
+  });
+
+  test("the Claude Code plugins pillar exists and the disambiguation post slug it links to is well-formed", () => {
+    const pillar = readSite("claude-code-plugins/index.html");
+    // The pillar is the head-term page; it links to the existing reviews post
+    // and the sibling disambiguation post by their canonical slugs.
+    expect(
+      pillar.includes('href="https://soleur.ai/blog/best-claude-code-plugins-2026/"'),
+      "pillar links to the existing best-plugins reviews post",
+    ).toBe(true);
+    expect(
+      pillar.includes(
+        'href="https://soleur.ai/blog/claude-code-plugin-vs-skill-vs-mcp/"',
+      ),
+      "pillar links to the disambiguation post by its canonical slug",
+    ).toBe(true);
+  });
+});

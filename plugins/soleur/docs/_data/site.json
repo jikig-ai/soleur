@@ -68,6 +68,7 @@
       "heading": "Resources",
       "links": [
         { "label": "Blog", "url": "/blog/" },
+        { "label": "Glossary", "url": "/glossary/" },
         { "label": "Community", "url": "/community/" },
         { "label": "Vision", "url": "/vision/" },
         { "label": "About", "url": "/about/" },
