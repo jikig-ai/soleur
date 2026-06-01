@@ -193,16 +193,23 @@ describe("POST /api/internal/trigger-cron — optional event data pass-through (
   });
 
   // AC-A2: route keys are spread LAST so a caller cannot forge a payload that
-  // mimics a scheduled (non-manual) fire — the audit-poison guard.
+  // mimics a scheduled (non-manual) fire — the audit-poison guard. The
+  // non-colliding `issue_number` key makes this test SELF-gating: it fails both
+  // the "callerData never merged" mutant (issue_number absent) AND the
+  // "route keys spread first" mutant (trigger === "spoofed"), so it does not
+  // depend on AC-A1 to have discriminating power.
   it("never lets body.data override trigger/at (route keys win — audit-poison guard) (AC-A2)", async () => {
     const res = await POST(
       makeRequest({
         event: ALLOWED_EVENT,
-        data: { trigger: "spoofed", at: "1999-01-01T00:00:00.000Z" },
+        data: { issue_number: 99, trigger: "spoofed", at: "1999-01-01T00:00:00.000Z" },
       }),
     );
     expect(res.status).toBe(202);
     const envelope = mockInngestSend.mock.calls[0][0];
+    // non-colliding caller key survives (proves the merge happened) ...
+    expect(envelope.data.issue_number).toBe(99);
+    // ... while colliding route keys still win (proves spread order).
     expect(envelope.data.trigger).toBe("manual-api");
     expect(envelope.data.at).not.toBe("1999-01-01T00:00:00.000Z");
     // fresh ISO timestamp, not the spoofed value
@@ -233,12 +240,13 @@ describe("POST /api/internal/trigger-cron — optional event data pass-through (
     for (const bad of [42, "x", ["a"], true] as const) {
       mockInngestSend.mockClear();
       mockSendInngestWithRetry.mockClear();
+      const label = `data=${JSON.stringify(bad)}`;
       const res = await POST(
         makeRequest({ event: ALLOWED_EVENT, data: bad as unknown as object }),
       );
-      expect(res.status).toBe(400);
-      expect(mockSendInngestWithRetry).not.toHaveBeenCalled();
-      expect(mockInngestSend).not.toHaveBeenCalled();
+      expect(res.status, label).toBe(400);
+      expect(mockSendInngestWithRetry, label).not.toHaveBeenCalled();
+      expect(mockInngestSend, label).not.toHaveBeenCalled();
     }
   });
 

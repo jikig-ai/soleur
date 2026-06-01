@@ -93,9 +93,15 @@ if [[ -z "$EVENT" ]]; then
   exit 2
 fi
 
+case "$CONFIG" in
+  prd|dev) ;;
+  *) echo "trigger.sh: --config must be 'prd' or 'dev' (got: $CONFIG)" >&2; exit 2 ;;
+esac
+
 # Validate the event against the manifest-derived allowlist (fail fast before
-# minting a Doppler read or hitting the route).
-if ! list_events "$MANIFEST" | grep -qxF "$EVENT"; then
+# minting a Doppler read or hitting the route). The `--` stops grep from
+# interpreting an event string that begins with `-` as an option.
+if ! list_events "$MANIFEST" | grep -qxF -- "$EVENT"; then
   echo "trigger.sh: '$EVENT' is not an allowlisted manual-trigger event." >&2
   echo "Run 'trigger.sh --list' to see valid events." >&2
   exit 2
@@ -113,11 +119,11 @@ else
 fi
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
-  echo "# dry-run (config=$CONFIG): would POST to $ROUTE_URL"
-  echo "TOKEN=\$(doppler secrets get $SECRET_NAME -p $DOPPLER_PROJECT -c $CONFIG --plain)"
-  echo "curl -sS -X POST $ROUTE_URL \\"
-  echo "  -H \"Authorization: Bearer \$TOKEN\" -H 'content-type: application/json' \\"
-  echo "  -d '$BODY' -w '\\n%{http_code}\\n'"
+  printf '%s\n' "# dry-run (config=$CONFIG): would POST to $ROUTE_URL"
+  printf '%s\n' "TOKEN=\$(doppler secrets get $SECRET_NAME -p $DOPPLER_PROJECT -c $CONFIG --plain)"
+  printf '%s\n' "curl -sS -X POST $ROUTE_URL \\"
+  printf '%s\n' "  -H \"Authorization: Bearer \$TOKEN\" -H 'content-type: application/json' \\"
+  printf '%s\n' "  -d '$BODY' -w '\\n%{http_code}\\n'"
   exit 0
 fi
 

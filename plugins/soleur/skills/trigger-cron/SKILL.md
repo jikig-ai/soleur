@@ -59,8 +59,11 @@ plugins/soleur/skills/trigger-cron/scripts/trigger.sh \
 
 - **Read-only secret access.** The script reads `INNGEST_MANUAL_TRIGGER_SECRET`
   via `doppler secrets get … --plain` only — it never writes or mutates the
-  secret, and never echoes it (the token is piped straight into the `curl`
-  Authorization header).
+  secret, never echoes or logs it, and `unset`s the token immediately after the
+  `curl` call. The token is passed as the `curl` `Authorization` header argument
+  (same exposure profile as every other operator `curl` in the runbooks); the
+  `--dry-run` path prints the command form with `$TOKEN` unexpanded, so it never
+  mints or reveals the secret.
 - **The route is a dumb forwarder.** Per-cron field validation (e.g.
   `issue_number` positive-integer) lives in each cron, not the route. A bad
   `--data` shape that the route accepts (any plain object) may still be rejected
