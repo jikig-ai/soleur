@@ -48,7 +48,8 @@ runs themselves are green:
    `apps/web-platform/infra/sentry/cron-monitors.tf` monitor's project
    via `doppler secrets list -p soleur -c prd` and the Sentry monitor
    settings page.
-4. Re-run via `inngest send cron/oauth-probe.manual-trigger` after fixing
+4. Re-run the probe via the HTTP trigger route (see
+   [§ Re-run the probe on demand](#re-run-the-probe-on-demand)) after fixing
    the secret.
 
 ## L3-first triage gate
@@ -236,7 +237,8 @@ Remediation:
 2. Confirm "Request user authorization (OAuth) during installation" is
    checked.
 3. Click Update (CSRF-protected — agent shells cannot auto-submit).
-4. Re-run the probe: `inngest send cron/oauth-probe.manual-trigger`.
+4. Re-run the probe via the HTTP trigger route (see
+   [§ Re-run the probe on demand](#re-run-the-probe-on-demand)).
 5. Close the tracking issue with the closure-gate comment per
    `/ship` Phase 7 Step 3.5 callback-URL audit anchor: include the verbatim
    callback URLs, the workflow run ID, and the textarea byte count.
@@ -507,10 +509,17 @@ mutation path) and re-set Doppler `prd` `GITHUB_APP_PRIVATE_KEY` (explicit ack).
 Stray-whitespace App ID: `doppler secrets set GITHUB_APP_ID` with the trimmed
 value (the `readAppId()` guard now also strips it in code).
 
-**STEP 4 — Re-run + confirm recovery (no SSH, no dashboard-watching).**
+**STEP 4 — Re-run + confirm recovery (no SSH, no dashboard-watching).** Fire the
+probe via the HTTP trigger route (see
+[§ Re-run the probe on demand](#re-run-the-probe-on-demand)), then check the
+Sentry monitor heartbeat:
 
 ```bash
-inngest send cron/oauth-probe.manual-trigger
+TRIGGER_TOKEN=$(doppler secrets get INNGEST_MANUAL_TRIGGER_SECRET -p soleur -c prd --plain)
+curl -sS -X POST https://app.soleur.ai/api/internal/trigger-cron \
+  -H "Authorization: Bearer $TRIGGER_TOKEN" -H 'content-type: application/json' \
+  -d '{"event":"cron/oauth-probe.manual-trigger"}'
+unset TRIGGER_TOKEN
 curl -s -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
   "https://de.sentry.io/api/0/organizations/jikigai-eu/monitors/scheduled-oauth-probe/checkins/?limit=1" \
   | jq -r '.[0].status'   # Expect: ok
@@ -624,12 +633,28 @@ script is the only complete inventory path. Do not skip the script.
 
 ### Re-run the probe on demand
 
-The probe is fired by the self-hosted Inngest worker. To trigger an
-on-demand run from the operator's machine:
+The probe registers a `cron/oauth-probe.manual-trigger` sibling trigger (see
+`cron-oauth-probe.ts`). To fire it on demand from the operator's machine:
+
+**HTTP (PRIMARY — no SSH):** POST to the internal trigger route (#4734, #4742):
 
 ```bash
-# Send the manual-trigger event the function registers as a sibling
-# trigger (see cron-oauth-probe.ts: `{ event: "cron/oauth-probe.manual-trigger" }`).
+TOKEN=$(doppler secrets get INNGEST_MANUAL_TRIGGER_SECRET -p soleur -c prd --plain)
+curl -sS -X POST https://app.soleur.ai/api/internal/trigger-cron \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"event":"cron/oauth-probe.manual-trigger"}' -w '\n%{http_code}\n'
+unset TOKEN
+# → 202 {"dispatched":"cron/oauth-probe.manual-trigger","trigger":"manual-api"}
+```
+
+Or via the skill: `plugins/soleur/skills/trigger-cron/scripts/trigger.sh
+--event cron/oauth-probe.manual-trigger`.
+
+**Last-resort diagnosis (on-host, only if the HTTP route is itself down):** the
+Inngest CLI talks to the loopback endpoint and requires being on the Hetzner host:
+
+```bash
+# on the Hetzner host (last-resort)
 inngest send cron/oauth-probe.manual-trigger
 ```
 

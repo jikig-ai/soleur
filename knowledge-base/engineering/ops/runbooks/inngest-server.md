@@ -15,6 +15,45 @@ Per ADR-030 the Inngest server runs as a single-host SQLite-backed durable trigg
 | FR5 flag flip | [§ FR5 flip](#fr5-flag-flip) |
 | Unpause heartbeat after first ping | [§ Unpause heartbeat](#unpause-heartbeat) |
 | Cron bug-fixer manual trigger | [§ Cron bug-fixer](#cron-bug-fixer) |
+| Fire any cron on demand | [§ On-demand cron trigger (HTTP)](#on-demand-cron-trigger-http--primary) |
+
+## On-demand cron trigger (HTTP — PRIMARY)
+
+To fire any allowlisted `cron/<name>.manual-trigger` event on demand, POST to the
+internal trigger route — **no SSH to the Hetzner box required** (#4734, #4742):
+
+```bash
+TOKEN=$(doppler secrets get INNGEST_MANUAL_TRIGGER_SECRET -p soleur -c prd --plain)
+curl -sS -X POST https://app.soleur.ai/api/internal/trigger-cron \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"event":"cron/workspace-sync-health.manual-trigger"}' \
+  -w '\n%{http_code}\n'
+unset TOKEN
+# → 202 {"dispatched":"cron/workspace-sync-health.manual-trigger","trigger":"manual-api"}
+```
+
+**Optional per-cron `data`** — crons that read `event.data` (e.g. `cron-bug-fixer`
+reads `event.data.issue_number`) accept a `data` object. Route-controlled keys
+(`trigger`, `at`) are stamped server-side and CANNOT be overridden by `data`:
+
+```bash
+  -d '{"event":"cron/bug-fixer.manual-trigger","data":{"issue_number":4383}}'
+```
+
+The allowlist is derived from `EXPECTED_CRON_FUNCTIONS`
+(`apps/web-platform/server/inngest/cron-manifest.ts`) — a non-allowlisted event
+returns 400. Non-plain-object `data` returns 400; the per-cron field validation
+(e.g. `issue_number` positive-integer) lives in each cron, not the route.
+
+**Agent/operator wrapper:** the `/soleur:trigger-cron` skill wraps this POST
+(reads the secret read-only, lists allowlisted events, supports `--dry-run`):
+
+```bash
+plugins/soleur/skills/trigger-cron/scripts/trigger.sh --list
+plugins/soleur/skills/trigger-cron/scripts/trigger.sh \
+  --event cron/bug-fixer.manual-trigger --data '{"issue_number":4383}' --dry-run
+```
 
 ## Fresh-host bootstrap
 
@@ -197,14 +236,33 @@ Manual triggers do NOT preempt scheduled runs — they queue behind them.
 
 ### How to fire
 
-**CLI (preferred):**
+**HTTP (PRIMARY — no SSH):** POST to the internal trigger route (see
+[§ On-demand cron trigger (HTTP)](#on-demand-cron-trigger-http--primary) for the
+full Bearer + `data` contract):
+
 ```bash
-inngest send '{"name":"cron/bug-fixer.manual-trigger","data":{"issue_number":4383}}'
+TOKEN=$(doppler secrets get INNGEST_MANUAL_TRIGGER_SECRET -p soleur -c prd --plain)
+curl -sS -X POST https://app.soleur.ai/api/internal/trigger-cron \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"event":"cron/bug-fixer.manual-trigger","data":{"issue_number":4383}}'
+unset TOKEN
 ```
 
-Without `issue_number` (runs the default cascade):
+Without `issue_number` (runs the default cascade) — omit `data` (or send `{}`):
 ```bash
-inngest send '{"name":"cron/bug-fixer.manual-trigger","data":{}}'
+  -d '{"event":"cron/bug-fixer.manual-trigger"}'
+```
+
+Or via the skill: `plugins/soleur/skills/trigger-cron/scripts/trigger.sh
+--event cron/bug-fixer.manual-trigger --data '{"issue_number":4383}'`.
+
+**Last-resort diagnosis (on-host, only if the HTTP route is itself down):** the
+Inngest CLI talks to the loopback event endpoint and requires being on the
+Hetzner host. Use ONLY when the public route is unreachable:
+
+```bash
+# on the Hetzner host (last-resort)
+inngest send '{"name":"cron/bug-fixer.manual-trigger","data":{"issue_number":4383}}'
 ```
 
 **Inngest dashboard:** Navigate to the Events tab → Send Event → paste the JSON body above.
