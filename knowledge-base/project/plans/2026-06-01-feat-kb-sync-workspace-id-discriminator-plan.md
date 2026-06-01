@@ -96,30 +96,30 @@ column. No schema DDL, no auth flow, no API route behavior change, no `.sql` mig
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — Type widened (optional).** `KbSyncRow` in `apps/web-platform/server/session-sync.ts`
+- [x] **AC1 — Type widened (optional).** `KbSyncRow` in `apps/web-platform/server/session-sync.ts`
   gains `workspace_id?: string` (optional, NOT required — required would break the 2
   manual-route call sites and every legacy row).
   Verify: `grep -n 'workspace_id?: string' apps/web-platform/server/session-sync.ts` returns 1.
-- [ ] **AC2 — Reconcile producer writes the field at all 3 sites.** All three
+- [x] **AC2 — Reconcile producer writes the field at all 3 sites.** All three
   `appendKbSyncRow(ownerId, {…})` calls in
   `apps/web-platform/server/inngest/functions/workspace-reconcile-on-push.ts`
   (skip-not-ready, sync-failed, ok:true) include `workspace_id: ws.id`.
   Verify: `grep -c 'workspace_id: ws.id' apps/web-platform/server/inngest/functions/workspace-reconcile-on-push.ts` returns `3`.
-- [ ] **AC3 — Manual route deliberately omits the field.** The 2 `appendKbSyncRow(userId, {…})`
+- [x] **AC3 — Manual route deliberately omits the field.** The 2 `appendKbSyncRow(userId, {…})`
   calls in `apps/web-platform/app/api/kb/sync/route.ts` do **not** set `workspace_id`
   (no `workspace_id` in scope; documented decision per Research Reconciliation row 4).
   Verify: `grep -c 'workspace_id' apps/web-platform/app/api/kb/sync/route.ts` returns `0`.
-- [ ] **AC4 — Reconcile test asserts the discriminator.** The existing
+- [x] **AC4 — Reconcile test asserts the discriminator.** The existing
   `apps/web-platform/test/server/inngest/workspace-reconcile-on-push.test.ts` is extended so
   at least one `appendKbSyncRowSpy` assertion uses
   `expect.objectContaining({ workspace_id: <wsId> })` for the relevant workspace id, on the
   ok:true path and at least one failure path.
-- [ ] **AC5 — No consumer regression.** `tsc --noEmit` passes (the `lib/analytics.ts`,
+- [x] **AC5 — No consumer regression.** `tsc --noEmit` passes (the `lib/analytics.ts`,
   `components/kb/kb-sync-status.tsx`, and `cron-workspace-sync-health.ts` readers compile
   unchanged against the widened-but-optional type). The route test
   (`kb-sync-route.test.ts`) still passes — its `expect.objectContaining({ trigger: "manual",
   ok: true })` partial matchers are unaffected by AC3.
-- [ ] **AC6 — Targeted suite green.** `cd apps/web-platform && ./node_modules/.bin/vitest run
+- [x] **AC6 — Targeted suite green.** `cd apps/web-platform && ./node_modules/.bin/vitest run
   test/server/inngest/workspace-reconcile-on-push.test.ts test/server/kb-sync-route.test.ts`
   passes. (Runner is vitest per `apps/web-platform/package.json` `"test": "vitest"`; files
   match the `test/**/*.test.ts` include glob in `vitest.config.ts:44`.)

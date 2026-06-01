@@ -216,6 +216,8 @@ describe("reconcile — happy path (single workspace)", () => {
     expect(rows.at(-1)).toEqual(
       expect.objectContaining({ trigger: "webhook_push", ok: true }),
     );
+    // #4728 — the ok:true reconcile row carries the workspace discriminator.
+    expect(rows.at(-1)).toEqual(expect.objectContaining({ workspace_id: "ws-A" }));
   });
 });
 
@@ -403,7 +405,12 @@ describe("reconcile — workspace dir not provisioned", () => {
     expect(syncWorkspaceSpy).not.toHaveBeenCalled();
     expect(result).toEqual({ ok: false, reason: "no-workspace-synced" });
     expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
-      expect.objectContaining({ ok: false, error_class: "workspace_not_ready" }),
+      expect.objectContaining({
+        ok: false,
+        error_class: "workspace_not_ready",
+        // #4728 — failure rows also carry the workspace discriminator.
+        workspace_id: "ws-A",
+      }),
     );
     expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
       expect.anything(),
@@ -424,7 +431,12 @@ describe("reconcile — sync failure", () => {
 
     expect(result).toEqual({ ok: false, reason: "no-workspace-synced" });
     expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
-      expect.objectContaining({ ok: false, error_class: "sync_failed" }),
+      expect.objectContaining({
+        ok: false,
+        error_class: "sync_failed",
+        // #4728 — failure rows also carry the workspace discriminator.
+        workspace_id: "ws-A",
+      }),
     );
     expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
       expect.anything(),

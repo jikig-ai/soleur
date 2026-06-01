@@ -268,6 +268,7 @@ export async function workspaceReconcileOnPushHandler({
             error_class: ERROR_CLASS_WORKSPACE_NOT_READY,
             push_received_at: pushReceivedAt,
             sync_completed_at: skipAt,
+            workspace_id: ws.id, // #4728 — discriminator (id in scope from fan-out loop)
           });
         }
         return { synced: false };
@@ -298,6 +299,7 @@ export async function workspaceReconcileOnPushHandler({
             error_class: ERROR_CLASS_SYNC_FAILED,
             push_received_at: pushReceivedAt,
             sync_completed_at: completedAt,
+            workspace_id: ws.id, // #4728 — discriminator (id in scope from fan-out loop)
           });
         }
         return { synced: false };
@@ -312,6 +314,7 @@ export async function workspaceReconcileOnPushHandler({
           ok: true,
           push_received_at: pushReceivedAt,
           sync_completed_at: completedAt,
+          workspace_id: ws.id, // #4728 — discriminator (id in scope from fan-out loop)
         });
       }
       return { synced: true };
