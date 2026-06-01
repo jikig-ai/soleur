@@ -44,9 +44,21 @@
 
 import { inngest } from "@/server/inngest/client";
 import {
+  EXPECTED_CRON_FUNCTIONS,
+  manualTriggerEventFor,
+} from "@/server/inngest/cron-manifest";
+import {
   postSentryHeartbeat,
   type HandlerArgs,
 } from "./_cron-shared";
+
+// Re-exported from the client-free leaf (#4734) so existing importers of this
+// path (function-registry-count, cron-inngest-cron-watchdog, oneshot-4650-
+// monitor-close tests) keep resolving these symbols here. The route + allowlist
+// import them from cron-manifest.ts directly to avoid loading the Inngest
+// client. Imported above (not just re-exported) so the watchdog's own
+// internal references below stay in local scope.
+export { EXPECTED_CRON_FUNCTIONS, manualTriggerEventFor };
 
 // =============================================================================
 // Constants
@@ -78,46 +90,8 @@ export const POLL_RECOVERY_GRACE_TICKS = 2;
 
 const FETCH_TIMEOUT_MS = 10_000;
 
-// Expected-cron manifest — every cron-*.ts function that MUST have a live
-// cron trigger. function-registry-count.test.ts (e) asserts this set equals
-// the cron-*.ts file list, so it cannot silently drift. Includes the watchdog
-// itself (it is a registered cron; when it runs it is planned → classifies OK;
-// its own Sentry monitor is the backstop if it stops).
-export const EXPECTED_CRON_FUNCTIONS: string[] = [
-  "cron-agent-native-audit",
-  "cron-bug-fixer",
-  "cron-campaign-calendar",
-  "cron-cloud-task-heartbeat",
-  "cron-community-monitor",
-  "cron-competitive-analysis",
-  "cron-compound-promote",
-  "cron-content-generator",
-  "cron-content-publisher",
-  "cron-content-vendor-drift",
-  "cron-daily-triage",
-  "cron-follow-through-monitor",
-  "cron-gh-pages-cert-state",
-  "cron-github-app-drift-guard",
-  "cron-growth-audit",
-  "cron-growth-execution",
-  "cron-inngest-cron-watchdog",
-  "cron-legal-audit",
-  "cron-linkedin-token-check",
-  "cron-membership-health",
-  "cron-nag-4216-readiness",
-  "cron-oauth-probe",
-  "cron-plausible-goals",
-  "cron-roadmap-review",
-  "cron-rule-prune",
-  "cron-ruleset-bypass-audit",
-  "cron-seo-aeo-audit",
-  "cron-skill-freshness",
-  "cron-stale-deferred-scope-outs",
-  "cron-strategy-review",
-  "cron-ux-audit",
-  "cron-weekly-analytics",
-  "cron-workspace-sync-health",
-];
+// EXPECTED_CRON_FUNCTIONS + manualTriggerEventFor moved to the client-free
+// cron-manifest.ts leaf (#4734) and re-exported above; see the import block.
 
 // =============================================================================
 // Types
@@ -154,12 +128,6 @@ export interface WatchdogState {
 // =============================================================================
 // Pure helpers (unit-tested in cron-inngest-cron-watchdog.test.ts)
 // =============================================================================
-
-// fnId "cron-community-monitor" → event "cron/community-monitor.manual-trigger".
-// Uniform across all cron-*.ts functions (verified at /work).
-export function manualTriggerEventFor(fnId: string): string {
-  return `cron/${fnId.replace(/^cron-/, "")}.manual-trigger`;
-}
 
 export function resolveInngestHost(baseUrl: string | undefined): string {
   if (!baseUrl) return INNGEST_HOST_FALLBACK;
