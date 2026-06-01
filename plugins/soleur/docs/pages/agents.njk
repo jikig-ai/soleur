@@ -2,6 +2,9 @@
 description: "AI agents for every business department -- engineering, marketing, legal, finance, operations, product, sales, and support. The full Soleur agent roster."
 layout: base.njk
 permalink: agents/
+date: 2026-06-01
+last_updated: 2026-06-01
+summaryRegister: technical
 eleventyComputed:
   title: "{{ stats.agents }} AI Agents for Solo Founders"
   seoTitle: "{{ stats.agents }} AI Agents for Solo Founders — Every Department | Soleur"
@@ -14,6 +17,8 @@ eleventyComputed:
         <p><span data-last-verified="{{ site.statsLastVerified }}">{{ stats.agents }} AI agents</span> across {{ stats.departments }} business departments — from code review and architecture to marketing strategy, legal compliance, and financial reporting.</p>
       </div>
     </section>
+
+    {% include "page-freshness.njk" %}
 
     <section class="content">
       <div class="container">
