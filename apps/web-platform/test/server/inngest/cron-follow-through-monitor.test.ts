@@ -51,6 +51,21 @@ vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
 }));
 
+// Mint-token deps (#512e25 fix): the handler now mints a GitHub App
+// installation token via mintInstallationToken() → createProbeOctokit() +
+// generateInstallationToken(), injected as GH_TOKEN so `gh` is authenticated
+// inside the prod container (hr-github-app-auth-not-pat). Mock the underlying
+// deps, matching cron-bug-fixer.test.ts:60-70.
+const createProbeOctokitSpy = vi.fn();
+vi.mock("@/server/github/probe-octokit", () => ({
+  createProbeOctokit: createProbeOctokitSpy,
+}));
+
+const generateInstallationTokenSpy = vi.fn();
+vi.mock("@/server/github-app", () => ({
+  generateInstallationToken: generateInstallationTokenSpy,
+}));
+
 // --- Helpers ----------------------------------------------------------------
 
 interface MockStep {
@@ -122,6 +137,18 @@ beforeEach(() => {
   formatPredicateResultsSpy.mockReset();
   formatPredicateResultsSpy.mockReturnValue("## Pre-Validated Predicate Results\n\nNo predicates.");
   reportSilentFallbackSpy.mockReset();
+  createProbeOctokitSpy.mockReset();
+  generateInstallationTokenSpy.mockReset();
+  // Default mint path: installation lookup → 60-min token.
+  createProbeOctokitSpy.mockImplementation(async () => ({
+    request: vi.fn(async (route: string) => {
+      if (route === "GET /repos/{owner}/{repo}/installation") {
+        return { data: { id: 12345 } };
+      }
+      return { data: {} };
+    }),
+  }));
+  generateInstallationTokenSpy.mockResolvedValue("ghs_TESTTOKEN_REDACT_ME");
   logger.info.mockReset();
   logger.warn.mockReset();
   logger.error.mockReset();
@@ -206,16 +233,98 @@ describe("cron-follow-through-monitor — T1 happy path", () => {
     expect(url).toContain("status=ok");
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
 
-    // #4068: FOUR step.run steps: ensure-labels → validate-predicates →
-    // claude-eval → sentry-heartbeat. validate-predicates is the Layer 3
-    // SSRF hardening step that executes predicates server-side before the
-    // agent runs.
+    // #512e25 + #4068: FIVE step.run steps: mint-installation-token →
+    // ensure-labels → validate-predicates → claude-eval → sentry-heartbeat.
+    // mint-installation-token is the first step (memoized across Inngest
+    // replay) so a valid GH_TOKEN is available to every gh subprocess.
     expect(step.calls.map((c) => c.name)).toEqual([
+      "mint-installation-token",
       "ensure-labels",
       "validate-predicates",
       "claude-eval",
       "sentry-heartbeat",
     ]);
+  });
+});
+
+describe("cron-follow-through-monitor — T7 GitHub App token injection (#512e25)", () => {
+  it("mints an installation token first and injects it as GH_TOKEN into every gh subprocess", async () => {
+    const child = makeChild();
+    spawnSpy.mockImplementation(
+      withEnsureLabelsAutoExit(() => {
+        queueMicrotask(() => child.emit("exit", 0, null));
+        return child;
+      }),
+    );
+
+    const handler = await importHandler();
+    const step = makeStep();
+    await handler({ step, logger });
+
+    // (a) the mint step ran, and ran FIRST.
+    expect(generateInstallationTokenSpy).toHaveBeenCalledTimes(1);
+    expect(step.calls[0].name).toBe("mint-installation-token");
+    expect(step.calls[0].result).toBe("ghs_TESTTOKEN_REDACT_ME");
+
+    // (b) the server-side `gh issue list` (execFileSync) env carries the token.
+    expect(execFileSyncSpy).toHaveBeenCalledTimes(1);
+    // execFileSyncSpy is typed with no params, so widen the call tuple before
+    // indexing the options (3rd) arg.
+    const execCall = execFileSyncSpy.mock.calls[0] as unknown as unknown[];
+    const execEnv = (execCall[2] as { env: NodeJS.ProcessEnv }).env;
+    expect(execEnv.GH_TOKEN).toBe("ghs_TESTTOKEN_REDACT_ME");
+
+    // (c) the claude-eval spawn env carries the token.
+    const claudeCalls = spawnSpy.mock.calls.filter((c) => c[0] !== "gh");
+    expect(claudeCalls).toHaveLength(1);
+    const claudeEnv = (claudeCalls[0][2] as { env: NodeJS.ProcessEnv }).env;
+    expect(claudeEnv.GH_TOKEN).toBe("ghs_TESTTOKEN_REDACT_ME");
+
+    // (d) the ensure-labels `gh label create` spawn envs carry the token.
+    const ghCalls = spawnSpy.mock.calls.filter((c) => c[0] === "gh");
+    expect(ghCalls.length).toBeGreaterThan(0);
+    for (const call of ghCalls) {
+      const ghEnv = (call[2] as { env: NodeJS.ProcessEnv }).env;
+      expect(ghEnv.GH_TOKEN).toBe("ghs_TESTTOKEN_REDACT_ME");
+    }
+  });
+
+  it("the minted token OVERRIDES any ambient process.env.GH_TOKEN (the incident vector)", async () => {
+    // Positive control (test-design review MEDIUM): the GH_TOKEN value-equality
+    // assertion in the prior test rides behind the mint-step-existence gate, so
+    // it is never independently observed as RED. Seed a bogus ambient PAT (the
+    // exact pre-fix env the bug fell back to) and assert the SUBPROCESS sees the
+    // minted token, NOT the ambient one — this is the hr-github-app-auth-not-pat
+    // contract and would fail if buildSpawnEnv ever reverted to reading env.
+    const prior = process.env.GH_TOKEN;
+    process.env.GH_TOKEN = "ghp_AMBIENT_PAT_SHOULD_NOT_LEAK";
+    try {
+      const child = makeChild();
+      spawnSpy.mockImplementation(
+        withEnsureLabelsAutoExit(() => {
+          queueMicrotask(() => child.emit("exit", 0, null));
+          return child;
+        }),
+      );
+
+      const handler = await importHandler();
+      const step = makeStep();
+      await handler({ step, logger });
+
+      // the 60-min lifetime floor propagates to generateInstallationToken
+      // (installation id 12345 from the createProbeOctokit mock).
+      expect(generateInstallationTokenSpy).toHaveBeenCalledWith(12345, {
+        minRemainingMs: 50 * 60 * 1000 + 10 * 60 * 1000,
+      });
+
+      const claudeCalls = spawnSpy.mock.calls.filter((c) => c[0] !== "gh");
+      const claudeEnv = (claudeCalls[0][2] as { env: NodeJS.ProcessEnv }).env;
+      expect(claudeEnv.GH_TOKEN).toBe("ghs_TESTTOKEN_REDACT_ME");
+      expect(claudeEnv.GH_TOKEN).not.toBe("ghp_AMBIENT_PAT_SHOULD_NOT_LEAK");
+    } finally {
+      if (prior === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = prior;
+    }
   });
 });
 
