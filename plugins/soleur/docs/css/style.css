@@ -1427,6 +1427,15 @@
     margin-top: var(--space-6);
   }
 
+  /* Pricing page: inline Concurrent Conversations definition (#3166) */
+  .pricing-concurrency-note {
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+    text-align: center;
+    max-width: 60ch;
+    margin: 0 auto var(--space-6);
+  }
+
   /* Pricing page: Proof tagline */
   .proof-tagline {
     font-family: var(--font-mono);
