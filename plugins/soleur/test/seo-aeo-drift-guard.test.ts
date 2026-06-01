@@ -844,7 +844,7 @@ describe("#4410 /getting-started/ has a plain-language definition + external cit
       "cites Claude Code docs",
     ).toBe(true);
     expect(
-      hostMatched(/^https:\/\/modelcontextprotocol\.io/),
+      hostMatched(/^https:\/\/modelcontextprotocol\.io(\/|$)/),
       "cites the MCP spec",
     ).toBe(true);
   });
