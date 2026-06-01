@@ -2,6 +2,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
+import { kbSoloActiveWorkspaceChain } from "./helpers/mock-supabase";
 
 // ---------------------------------------------------------------------------
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
@@ -35,19 +36,16 @@ import { GET } from "@/app/api/kb/content/[...path]/route";
 // Helpers
 // ---------------------------------------------------------------------------
 
+let tmpRoot: string;
 let tmpWorkspace: string;
 let kbRoot: string;
 
-function mockQueryBuilder(data: unknown, error: unknown = null) {
-  return {
-    select: vi.fn().mockReturnThis(),
-    eq: vi.fn().mockReturnThis(),
-    single: vi.fn().mockReturnValue({
-      then: (fn: (v: unknown) => unknown) =>
-        Promise.resolve({ data, error }).then(fn),
-    }),
-  };
-}
+// ADR-044 (#4543): the content route resolves the ACTIVE workspace via
+// resolveActiveWorkspaceKbRoot (solo owner == caller here). The shared
+// kbSoloActiveWorkspaceChain helper returns the same superset row for every
+// table so a `.from()`-agnostic mock satisfies the resolver's multi-table read;
+// per-table coverage lives in test/server/kb-active-workspace-scoping.test.ts.
+const mockQueryBuilder = kbSoloActiveWorkspaceChain;
 
 function buildRequest(pathStr: string): Request {
   return new Request(`http://localhost:3000/api/kb/content/${pathStr}`);
@@ -59,13 +57,16 @@ function callGET(request: Request, pathSegments: string[]) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  tmpWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "kb-binary-test-"));
+  tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "kb-binary-root-"));
+  process.env.WORKSPACES_ROOT = tmpRoot;
+  // The active-workspace fs dir is `<WORKSPACES_ROOT>/<userId>` (solo N2).
+  tmpWorkspace = path.join(tmpRoot, "user-1");
   kbRoot = path.join(tmpWorkspace, "knowledge-base");
   fs.mkdirSync(kbRoot, { recursive: true });
 });
 
 afterEach(() => {
-  fs.rmSync(tmpWorkspace, { recursive: true, force: true });
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
 // ---------------------------------------------------------------------------

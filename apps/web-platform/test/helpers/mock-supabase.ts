@@ -112,6 +112,46 @@ export function mockQueryChain<T>(
 }
 
 /**
+ * Single shared `.from()`-agnostic chain for KB owner-route tests (kb/content
+ * GET+HEAD binary serving) where the route resolves the ACTIVE workspace via
+ * `resolveActiveWorkspaceKbRoot` (ADR-044, #4543). The resolver reads
+ * user_session_state → workspaces → users in one pass; returning the same
+ * superset row for every table makes a `mockFrom.mockReturnValue(...)` mock
+ * satisfy all three: `current_workspace_id: null` → solo (== caller, so the
+ * organizations hop is skipped), `repo_status: "ready"` → connected,
+ * `workspace_status: "ready"` → ready. Pass overrides to exercise the gates
+ * (e.g. `{ workspace_status: "provisioning" }` → 503). `.maybeSingle()` is
+ * required (the resolver uses it, not `.single()`).
+ *
+ * Per-table assertion coverage of the resolver itself lives in
+ * `test/server/kb-active-workspace-scoping.test.ts` (strict per-table
+ * dispatcher); these owner-route tests only need the resolution to succeed so
+ * the file-serving path under test runs.
+ */
+export function kbSoloActiveWorkspaceChain(
+  data: Record<string, unknown> = {},
+  error: { message: string } | null = null,
+) {
+  const merged = {
+    current_workspace_id: null,
+    repo_status: "ready",
+    workspace_status: "ready",
+    ...data,
+  };
+  const term = {
+    then: (onfulfilled?: (v: unknown) => unknown) =>
+      Promise.resolve({ data: error ? null : merged, error }).then(onfulfilled),
+  };
+  const chain = {
+    select: vi.fn(() => chain),
+    eq: vi.fn(() => chain),
+    single: vi.fn(() => term),
+    maybeSingle: vi.fn(() => term),
+  };
+  return chain;
+}
+
+/**
  * Build a thenable for a Supabase `.rpc(name, args)` call.
  *
  * PostgREST RPC responses do NOT carry a `count` header; the body itself

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { resolveActiveWorkspaceKbRoot } from "@/server/workspace-resolver";
 import logger from "@/server/logger";
 import {
   readContent,
@@ -30,18 +31,13 @@ export async function GET(
   }
 
   const serviceClient = createServiceClient();
-  const { data: userData, error: fetchError } = await serviceClient
-    .from("users")
-    .select("workspace_path, workspace_status")
-    .eq("id", user.id)
-    .single();
-
-  if (fetchError || !userData?.workspace_path) {
-    return NextResponse.json({ error: "Workspace not found" }, { status: 404 });
-  }
-
-  if (userData.workspace_status !== "ready") {
-    return NextResponse.json({ error: "Workspace not ready" }, { status: 503 });
+  // ADR-044 (#4543): resolve the ACTIVE workspace's KB root, not the caller's
+  // own `users` row (which for an invited member is their empty solo row → 404).
+  const access = await resolveActiveWorkspaceKbRoot(user.id, serviceClient);
+  if (!access.ok) {
+    return access.status === 404
+      ? NextResponse.json({ error: "Workspace not found" }, { status: 404 })
+      : NextResponse.json({ error: "Workspace not ready" }, { status: 503 });
   }
 
   const { path: pathSegments } = await params;
@@ -51,7 +47,7 @@ export async function GET(
     return NextResponse.json({ error: "File not found" }, { status: 404 });
   }
 
-  const kbRoot = path.join(userData.workspace_path, "knowledge-base");
+  const kbRoot = access.kbRoot;
 
   return serveKbFile(kbRoot, relativePath, {
     request,
@@ -104,18 +100,11 @@ export async function HEAD(
   }
 
   const serviceClient = createServiceClient();
-  const { data: userData, error: fetchError } = await serviceClient
-    .from("users")
-    .select("workspace_path, workspace_status")
-    .eq("id", user.id)
-    .single();
-
-  if (fetchError || !userData?.workspace_path) {
-    return new Response(null, { status: 404 });
-  }
-
-  if (userData.workspace_status !== "ready") {
-    return new Response(null, { status: 503 });
+  // ADR-044 (#4543): active-workspace KB root (member-aware), not the caller's
+  // own `users` row.
+  const access = await resolveActiveWorkspaceKbRoot(user.id, serviceClient);
+  if (!access.ok) {
+    return new Response(null, { status: access.status });
   }
 
   const { path: pathSegments } = await params;
@@ -125,7 +114,7 @@ export async function HEAD(
     return new Response(null, { status: 404 });
   }
 
-  const kbRoot = path.join(userData.workspace_path, "knowledge-base");
+  const kbRoot = access.kbRoot;
   const ext = path.extname(relativePath).toLowerCase();
 
   // Markdown HEAD: emit the same Content-Type the GET JSON response
