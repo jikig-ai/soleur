@@ -73,21 +73,25 @@ describe.skipIf(!INTEGRATION_ENABLED)("getPendingInvitesForUser — live", () =>
       .update(randomBytes(32).toString("base64url"))
       .digest("hex");
 
-    const { data: createData, error: createErr } = await service.rpc(
-      "create_workspace_invitation",
-      {
-        p_workspace_id: fixture.workspaceId,
-        p_invitee_email: inviteeEmail,
-        p_role: "member",
-        p_token_hash: tokenHash,
-        p_attestation_text: "integration-test invite",
-        p_caller_user_id: owner.userId,
-      },
-    );
-    expect(createErr).toBeNull();
-    expect((createData as { ok: boolean }).ok).toBe(true);
-
+    // Create inside the try so any assertion failure below still hits the
+    // finally cleanup — an orphaned invitation row (workspace_id is ON DELETE
+    // RESTRICT, migration 075) would otherwise block tearDownSharedWorkspace
+    // and leak synthetic org/workspace/users in DEV.
     try {
+      const { data: createData, error: createErr } = await service.rpc(
+        "create_workspace_invitation",
+        {
+          p_workspace_id: fixture.workspaceId,
+          p_invitee_email: inviteeEmail,
+          p_role: "member",
+          p_token_hash: tokenHash,
+          p_attestation_text: "integration-test invite",
+          p_caller_user_id: owner.userId,
+        },
+      );
+      expect(createErr).toBeNull();
+      expect((createData as { ok: boolean }).ok).toBe(true);
+
       // The invitee has no account yet — match purely by email, exactly as the
       // recovery banner does for a keyless invitee. A random userId proves the
       // byEmail branch alone surfaces the invite.

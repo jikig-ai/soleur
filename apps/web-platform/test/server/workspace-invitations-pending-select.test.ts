@@ -53,9 +53,33 @@ describe("getPendingInvitesForUser — select string (42703 regression)", () => 
     );
 
     // Guard the other direction: a future "fix" must not silently drop the
-    // inviter embed or the email column the display name derives from.
-    expect(selectArg).toMatch(/inviter:users!workspace_invitations_inviter_user_id_fkey/);
-    expect(selectArg).toMatch(/\bemail\b/);
+    // inviter embed or the email column the display name derives from. Match
+    // the observable contract (an inviter embed off `users` selecting email),
+    // not the exact FK-constraint name — the integration test owns FK
+    // resolution against the live schema.
+    expect(selectArg).toMatch(/inviter:users!\w*\(\s*email/s);
+  });
+
+  it("queries both branches with the same column-safe select and lowercases the email", async () => {
+    const chain = mockQueryChain([], null);
+    mockFrom.mockReturnValue(chain);
+
+    await getPendingInvitesForUser(TEST_USER_ID, "Alice@Example.COM");
+
+    // Promise.all issues two queries (by user_id and by email) on the same
+    // chain — both select strings must be column-safe, not just the first.
+    expect(chain.select.mock.calls).toHaveLength(2);
+    for (const call of chain.select.mock.calls) {
+      expect(call[0] as string).not.toMatch(/\braw_user_meta_data\b/);
+    }
+
+    // The byEmail branch must lowercase the address (invitee_email is stored
+    // LOWER()-normalized); dropping .toLowerCase() would silently break
+    // mixed-case invitees while every mock-only test stays green.
+    expect(chain.eq.mock.calls).toContainEqual([
+      "invitee_email",
+      "alice@example.com",
+    ]);
   });
 
   it("derives inviter_name from the inviter email when present", async () => {
