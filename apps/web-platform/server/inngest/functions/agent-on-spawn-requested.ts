@@ -449,7 +449,9 @@ export async function agentOnSpawnRequestedHandler({
             keyOwnerUserId: founderId,
           },
           async (lease) => {
-            const apiKey = await lease.getApiKey();
+            // Raw-REST consumer (`new Anthropic({apiKey})`) — MUST use the
+            // api_key row; an oauth_token cannot authenticate the REST API.
+            const apiKey = await lease.getRestApiKey();
             const client = new Anthropic({ apiKey });
             const sdkResult = (await client.messages.create({
               model: leaderModule.model,

@@ -117,13 +117,21 @@ vi.mock("@/server/byok-lease", async () => {
         body: (lease: {
           workspaceContextUserId: string;
           keyOwnerUserId: string;
-          getApiKey: () => string | Promise<string>;
+          getRestApiKey: () => string | Promise<string>;
+          getAgentCredential: () => Promise<{ value: string; scheme: "api_key" | "oauth_token" }>;
         }) => Promise<T>,
       ) =>
         body({
           workspaceContextUserId: args.workspaceContextUserId,
           keyOwnerUserId: args.keyOwnerUserId,
-          getApiKey: () => mockGetUserApiKey(),
+          // cc-dispatcher is an Agent-SDK consumer → getAgentCredential.
+          // Bridge the legacy mockGetUserApiKey value/rejection into the
+          // new { value, scheme } shape (scheme=api_key for these tests).
+          getRestApiKey: () => mockGetUserApiKey(),
+          getAgentCredential: async () => ({
+            value: await mockGetUserApiKey(),
+            scheme: "api_key" as const,
+          }),
         }),
     ),
   };
@@ -418,9 +426,10 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
 
     await realSdkQueryFactory(makeArgs());
 
-    expect(mockBuildAgentEnv).toHaveBeenCalledWith("sk-test", {
-      PLAUSIBLE_API_KEY: "plk-1",
-    });
+    expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+      { value: "sk-test", scheme: "api_key" },
+      { PLAUSIBLE_API_KEY: "plk-1" },
+    );
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.env.ANTHROPIC_API_KEY).toBe("sk-test");
     // CWE-526: no service-role key in env.
