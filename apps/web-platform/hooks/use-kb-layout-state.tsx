@@ -34,8 +34,6 @@ export interface UseKbLayoutStateResult {
   loading: boolean;
   error: KbContextValue["error"];
   hasTreeContent: boolean;
-  kbCollapsed: boolean;
-  toggleKbCollapsed: () => void;
   // Chat state
   contextPath: string | null;
   showChat: boolean;
@@ -53,7 +51,6 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
   const router = useRouter();
   const isDesktop = useMediaQuery("(min-width: 768px)");
   const chatPanelRef = usePanelRef();
-  const [kbCollapsed, setKbCollapsed] = useState(false);
   const [tree, setTree] = useState<TreeNode | null>(null);
   const [lastSync, setLastSync] = useState<KbSyncHistoryRow | null>(null);
   const [needsReconnect, setNeedsReconnect] = useState(false);
@@ -157,13 +154,9 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
     });
   }, [pathname]);
 
-  const toggleKbCollapsed = useCallback(() => {
-    setKbCollapsed((prev) => !prev);
-  }, []);
-
-  // ⌘B is owned solely by (dashboard)/layout.tsx (AC5). The KB file tree no
-  // longer registers its own keydown handler; the in-tree collapse button
-  // (KbSidebarShell) remains for click-driven collapse.
+  // ⌘B and rail collapse are owned solely by (dashboard)/layout.tsx (AC5,
+  // ADR-047). KB no longer has its own collapse axis — the tree lives in the
+  // unified rail, which collapses as a whole.
 
   const isContentView = pathname !== "/dashboard/kb";
   const hasTreeContent = !!(tree?.children && tree.children.length > 0);
@@ -294,8 +287,6 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
     loading,
     error,
     hasTreeContent,
-    kbCollapsed,
-    toggleKbCollapsed,
     contextPath,
     showChat,
     openSidebar,

@@ -20,12 +20,10 @@ interface KbMobileLayoutProps {
 
 export function KbMobileLayout({ children, state }: KbMobileLayoutProps) {
   const {
-    kbCollapsed,
     isContentView,
     contextPath,
     chatCtxValue,
     closeSidebar,
-    toggleKbCollapsed,
   } = state;
   const { needsReconnect, refreshTree } = useKb();
 
@@ -42,11 +40,7 @@ export function KbMobileLayout({ children, state }: KbMobileLayoutProps) {
       )}
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
-          <KbDocShell
-            collapsed={kbCollapsed}
-            isContentView={isContentView}
-            onExpand={toggleKbCollapsed}
-          >
+          <KbDocShell isContentView={isContentView}>
             {children}
           </KbDocShell>
         </div>

@@ -40,9 +40,7 @@ export function KbDesktopLayout({ children, state }: KbDesktopLayoutProps) {
     showChat,
     contextPath,
     closeSidebar,
-    kbCollapsed,
     isContentView,
-    toggleKbCollapsed,
   } = state;
   const { needsReconnect, refreshTree } = useKb();
 
@@ -59,11 +57,7 @@ export function KbDesktopLayout({ children, state }: KbDesktopLayoutProps) {
                 <ReconnectNotice variant="banner" onReconnected={refreshTree} />
               </div>
             )}
-            <KbDocShell
-              collapsed={kbCollapsed}
-              isContentView={isContentView}
-              onExpand={toggleKbCollapsed}
-            >
+            <KbDocShell isContentView={isContentView}>
               {children}
             </KbDocShell>
           </div>

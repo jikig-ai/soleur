@@ -15,7 +15,6 @@ import {
   type ActionClassTier,
 } from "@/server/scope-grants/action-class-map";
 import { reportSilentFallback } from "@/server/observability";
-import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 import { emitWorkspaceActionContext } from "@/server/workspace-action-audit";
 
 export const dynamic = "force-dynamic";
@@ -94,17 +93,18 @@ export async function POST(req: Request) {
     data: { action_class: actionClass, tier, grant_id: data },
   });
 
-  // AC11: record the active workspace at scope-grant commit time
-  // (wrong-workspace detector). The RPC scopes the grant to the session's
-  // active workspace; resolve it so the audit line names the same tenant.
-  const activeWorkspaceId = await resolveCurrentWorkspaceId(user.id, supabase);
-  if (activeWorkspaceId) {
-    emitWorkspaceActionContext({
-      action: "scope-grant",
-      userId: user.id,
-      workspaceId: activeWorkspaceId,
-    });
-  }
+  // AC11: record the workspace this grant actually landed in at commit time
+  // (wrong-workspace detector). grant_action_class (migration 063) scopes the
+  // grant UNCONDITIONALLY to the founder's SOLO workspace (workspace_id =
+  // auth.uid()); multi-workspace scope-grants are deferred to #4342. So the
+  // audited tenant is the solo workspace = user.id — NOT the session's active
+  // workspace (resolveCurrentWorkspaceId would diverge after a workspace
+  // switch and make the detector log a tenant the grant never touched).
+  emitWorkspaceActionContext({
+    action: "scope-grant",
+    userId: user.id,
+    workspaceId: user.id,
+  });
 
   return NextResponse.json({ id: data, action_class: actionClass, tier });
 }

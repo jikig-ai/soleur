@@ -142,8 +142,10 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
     expect(slot).toContainElement(screen.getByTestId("portaled-nav"));
   });
 
-  it("RQ1/AC1: renders the context band in the mobile top bar on a mobile viewport", () => {
-    // stubMatchMedia returns matches:false → isDesktop=false → mobile band.
+  it("RQ1/AC1: renders BOTH a mobile-top-bar band and a rail band (CSS-placed, single importer)", () => {
+    // Placement is CSS-driven (mobile bar is `md:hidden`, rail band is
+    // `hidden md:block`) so identity + back chevron paint on the first frame
+    // on every breakpoint — no JS viewport gate, no SSR/hydration identity gap.
     mockPathname = "/dashboard";
     render(
       <Wrap>
@@ -152,8 +154,11 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
         </DashboardLayout>
       </Wrap>,
     );
-    const band = screen.getByTestId("workspace-context-band");
-    expect(band).toHaveAttribute("data-variant", "mobile");
+    const variants = screen
+      .getAllByTestId("workspace-context-band")
+      .map((el) => el.getAttribute("data-variant"))
+      .sort();
+    expect(variants).toEqual(["mobile", "rail"]);
   });
 
   it("does NOT render portal content at the top level (slot absent)", () => {

@@ -67,8 +67,6 @@ function makeState(): UseKbLayoutStateResult {
     loading: false,
     error: null,
     hasTreeContent: true,
-    kbCollapsed: false,
-    toggleKbCollapsed: vi.fn(),
     contextPath: null,
     showChat: false,
     openSidebar: vi.fn(),

@@ -6,7 +6,6 @@ import { usePathname } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { TeamNamesProvider } from "@/hooks/use-team-names";
 import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse";
-import { useMediaQuery } from "@/hooks/use-media-query";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { SignOutConfirmModal } from "@/components/auth/sign-out-confirm-modal";
 import { useSignOut } from "@/components/auth/use-sign-out";
@@ -105,11 +104,6 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  // Single-mount the context band: render it in the rail on desktop, in the
-  // mobile top bar below md (RQ1). useMediaQuery reads matchMedia synchronously
-  // on the client, so exactly one band instance mounts — no duplicate
-  // OrgSwitcherContainer/LiveRepoBadge fetch (AC4b).
-  const isDesktop = useMediaQuery("(min-width: 768px)");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -222,9 +216,10 @@ export default function DashboardLayout({
         >
           <MenuIcon className="h-5 w-5" />
         </button>
-        {!isDesktop && (
-          <WorkspaceContextBand pathname={pathname} variant="mobile" />
-        )}
+        {/* Mobile band — placed via CSS (this bar is `md:hidden`), NOT a JS
+            viewport gate, so workspace identity + the back chevron paint on the
+            FIRST frame (no SSR/hydration tick where identity is absent). */}
+        <WorkspaceContextBand pathname={pathname} variant="mobile" />
       </div>
 
       {/* Overlay backdrop — always rendered for fade transition */}
@@ -289,9 +284,14 @@ export default function DashboardLayout({
             collapse, leaving the active workspace ambiguous during a
             tenant-sensitive action. The band is the SOLE render site for both
             components (AC4b single-mount); it also carries the back chevron +
-            section title in drilled states. Rendered in the rail on desktop;
-            on mobile the band lives in the top bar (RQ1) — exactly one mount. */}
-        {isDesktop && <WorkspaceContextBand pathname={pathname} />}
+            section title in drilled states. Placed via CSS (`hidden md:block`)
+            so it paints on the first frame on desktop; on mobile the band lives
+            in the top bar (RQ1). Each band manages its own data fetch — the two
+            CSS-exclusive placements never show identity twice (AC4b: the band
+            is still the single importer of OrgSwitcherContainer/LiveRepoBadge). */}
+        <div className="hidden md:block">
+          <WorkspaceContextBand pathname={pathname} />
+        </div>
 
         {/* Rail swap region (ADR-047): the section's secondary nav REPLACES
             the primary nav + footer in the same rail when drilled. A true

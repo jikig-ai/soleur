@@ -8,11 +8,15 @@ import { useState, useEffect, useCallback } from "react";
 // rail lifted into the unified rail; sweep them once so stale "1" values don't
 // linger. KB collapse was always ephemeral (in-memory useState), so it has no
 // key to clean.
-const ORPHAN_COLLAPSE_KEYS = [
+export const ORPHAN_COLLAPSE_KEYS = [
   "soleur:sidebar.settings.collapsed",
   "soleur:sidebar.chat-rail.collapsed",
 ] as const;
 let orphansCleaned = false;
+/** Test-only: reset the one-shot cleanup latch so a test can exercise it. */
+export function __resetOrphanCleanupForTests(): void {
+  orphansCleaned = false;
+}
 function cleanupOrphanCollapseKeys() {
   if (orphansCleaned) return;
   orphansCleaned = true;
