@@ -249,6 +249,15 @@ apps/web-platform/server/inngest/functions/workspace-reconcile-on-push.ts
 # cron-*.ts probes (cron-membership-health) and workspace-reconcile-on-push.
 apps/web-platform/server/inngest/functions/cron-workspace-sync-health.ts
 
+# 2026-06-02 — cron-supabase-disk-io.ts is a read-only proactive Disk-IO monitor.
+# It calls the disk_io_pressure_signal() SECURITY DEFINER RPC (migration 095),
+# which is REVOKE-from-all / GRANT-EXECUTE-to-service_role-only, so the cron must
+# use the service-role client. Same posture as cron-workspace-sync-health: the
+# Inngest cron runs with no user JWT in scope, the signal is platform-wide (not
+# per-tenant), and it performs NO writes and no per-tenant mutation. The RPC
+# returns only aggregate stat-view counts + table names — no row data, no PII.
+apps/web-platform/server/inngest/functions/cron-supabase-disk-io.ts
+
 # resolve-installation-id.ts was REMOVED from this allowlist in PR #4559
 # (#4558): the #4543 workspace-sibling lookup + the .ilike("repo_url") LIKE
 # fallback were deleted; it now reads the credential ONLY via the membership-
