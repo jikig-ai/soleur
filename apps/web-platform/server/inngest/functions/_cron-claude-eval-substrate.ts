@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, statfs, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { getPluginPath } from "@/server/plugin-path";
@@ -11,7 +10,9 @@ import {
 } from "@/server/observability";
 import {
   buildAuthenticatedCloneUrl,
+  DEFAULT_CRON_WORKSPACE_MIN_FREE_MB,
   redactToken,
+  resolveCronWorkspaceRoot,
   type HandlerArgs,
 } from "./_cron-shared";
 
@@ -36,25 +37,6 @@ export const KILL_ESCALATION_MS = 5_000;
 // Hard ceiling on captured child stderr — a pathological process must not OOM
 // the worker. 8 KiB comfortably holds a git fatal: line + a few hints.
 export const STDERR_CAP_BYTES = 8192;
-
-/**
- * Base dir for the ephemeral cron workspace. In prod, ci-deploy.sh sets
- * CRON_WORKSPACE_ROOT=/workspaces (the roomy /mnt/data volume) so the git clone
- * of the ~100 MB soleur tree does not exhaust the 256 MB /tmp tmpfs
- * (#4684/#4689). Unset/whitespace → os.tmpdir() preserves local/CI/test
- * behavior. The mkdtemp `soleur-${cronName}-` prefix keeps cron dirs distinct
- * from the UUID user-workspace dirs that also live under /workspaces.
- */
-export function resolveCronWorkspaceRoot(): string {
-  return process.env.CRON_WORKSPACE_ROOT?.trim() || tmpdir();
-}
-
-// Soft floor for the pre-clone free-space guard: the soleur working tree is
-// ~100 MB and grows every content PR; warn under 256 MB free so the operator
-// sees the squeeze BEFORE ENOSPC kills the clone. Tunable via
-// CRON_WORKSPACE_MIN_FREE_MB (NaN/0 → this default). Non-fatal — a wrong floor
-// must never block a clone that would otherwise succeed.
-export const DEFAULT_CRON_WORKSPACE_MIN_FREE_MB = 256;
 
 export function resolveClaudeBin(): string {
   const override = process.env.CLAUDE_BIN;

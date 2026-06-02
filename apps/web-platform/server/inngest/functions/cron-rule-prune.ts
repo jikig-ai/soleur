@@ -21,7 +21,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
@@ -31,6 +30,7 @@ import {
   REPO_NAME,
   redactToken,
   buildAuthenticatedCloneUrl,
+  resolveCronWorkspaceRoot,
   mintInstallationToken,
   postSentryHeartbeat,
   type HandlerArgs,
@@ -137,7 +137,7 @@ async function setupEphemeralWorkspace(
   token: string,
 ): Promise<{ ephemeralRoot: string; repoRoot: string }> {
   const ephemeralRoot = await mkdtemp(
-    join(tmpdir(), "soleur-cron-rule-prune-"),
+    join(resolveCronWorkspaceRoot(), "soleur-cron-rule-prune-"),
   );
   const repoRoot = join(ephemeralRoot, "repo");
   const cloneUrl = buildAuthenticatedCloneUrl(token);

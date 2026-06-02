@@ -18,7 +18,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
@@ -27,6 +26,7 @@ import {
   REPO_NAME,
   redactToken,
   buildAuthenticatedCloneUrl,
+  resolveCronWorkspaceRoot,
   mintInstallationToken,
   postSentryHeartbeat,
   type HandlerArgs,
@@ -143,7 +143,9 @@ export async function cronWeeklyAnalyticsHandler({
   try {
     // --- Step 2: clone + run analytics script --------------------------------
     const scriptResult = await step.run("run-analytics", async () => {
-      ephemeralRoot = await mkdtemp(join(tmpdir(), `soleur-${FUNCTION_NAME}-`));
+      ephemeralRoot = await mkdtemp(
+        join(resolveCronWorkspaceRoot(), `soleur-${FUNCTION_NAME}-`),
+      );
       const repoRoot = join(ephemeralRoot, "repo");
       const cloneUrl = buildAuthenticatedCloneUrl(installationToken);
       const cloneResult = await spawnGit(["clone", "--depth=1", cloneUrl, repoRoot]);

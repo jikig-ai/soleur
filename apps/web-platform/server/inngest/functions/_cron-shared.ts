@@ -1,9 +1,31 @@
+import { tmpdir } from "node:os";
 import { createProbeOctokit } from "@/server/github/probe-octokit";
 import { generateInstallationToken } from "@/server/github-app";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
 
 export const REPO_OWNER = "jikig-ai";
 export const REPO_NAME = "soleur";
+
+/**
+ * Base dir for a cron's ephemeral git-clone workspace. In prod, ci-deploy.sh
+ * sets CRON_WORKSPACE_ROOT=/workspaces (the roomy /mnt/data volume) so the
+ * --depth=1 clone of the ~100 MB soleur tree does not exhaust the 256 MB /tmp
+ * tmpfs (#4684/#4689). Unset/whitespace → os.tmpdir() preserves local/CI/test
+ * behavior. Every cron that clones the repo (the substrate's
+ * setupEphemeralWorkspace AND the handlers with their own inline clone) MUST
+ * route its mkdtemp parent through this helper — the env var alone is inert if
+ * the code keeps calling tmpdir() directly. The `soleur-${cronName}-` prefix
+ * keeps cron dirs distinct from the UUID user-workspace dirs under /workspaces.
+ */
+export function resolveCronWorkspaceRoot(): string {
+  return process.env.CRON_WORKSPACE_ROOT?.trim() || tmpdir();
+}
+
+// Soft floor for the substrate's pre-clone free-space guard: the soleur tree is
+// ~100 MB and grows every content PR; warn under 256 MB free so the operator
+// sees the squeeze BEFORE ENOSPC kills the clone. Tunable via
+// CRON_WORKSPACE_MIN_FREE_MB (NaN/0 → this default). Non-fatal.
+export const DEFAULT_CRON_WORKSPACE_MIN_FREE_MB = 256;
 
 export const SENTRY_DOMAIN_RE = /^[a-z0-9.-]+\.sentry\.io$/i;
 export const SENTRY_PROJECT_RE = /^\d+$/;

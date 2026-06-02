@@ -17,10 +17,8 @@ vi.hoisted(() => {
   process.env.NEXT_PHASE = "phase-production-build";
 });
 
-import {
-  resolveCronWorkspaceRoot,
-  spawnSimple,
-} from "@/server/inngest/functions/_cron-claude-eval-substrate";
+import { resolveCronWorkspaceRoot } from "@/server/inngest/functions/_cron-shared";
+import { spawnSimple } from "@/server/inngest/functions/_cron-claude-eval-substrate";
 
 // #4684/#4689 — crons mkdtemp'd under os.tmpdir() (the 256 MB /tmp tmpfs in
 // prod), so a git clone of the ~100 MB soleur tree ENOSPC'd. The fix routes the
