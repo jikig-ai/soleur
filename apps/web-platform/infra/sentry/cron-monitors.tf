@@ -484,3 +484,24 @@ resource "sentry_cron_monitor" "scheduled_inngest_cron_watchdog" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# 2026-06-02: Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-supabase-disk-io.ts`.
+# Proactive prod Disk-IO early-warning monitor. A MISSED check-in means the
+# monitor stopped (scheduler dead / function dropped); a ?status=error heartbeat
+# means the monitor RAN and a tripwire fired (cache-hit floor breach, a dedup
+# table over the row ceiling, or the signal RPC failed). 6-hourly (0 */6 * * *) —
+# 30-min margin per the Inngest ≤2-min-jitter precedent. 10-min runtime mirrors
+# the small-cron cohort (pure-TS, one read-only RPC, no claude-eval spawn). Slug
+# MUST match SENTRY_MONITOR_SLUG in the handler.
+resource "sentry_cron_monitor" "scheduled_supabase_disk_io" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-supabase-disk-io"
+  schedule                = { crontab = "0 */6 * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
