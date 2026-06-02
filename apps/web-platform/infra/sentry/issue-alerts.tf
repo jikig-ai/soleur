@@ -325,3 +325,72 @@ resource "sentry_issue_alert" "byok_cap_exceeded" {
     ignore_changes = [environment]
   }
 }
+
+# ── Chat write-absence liveness alert (#4849) — APPLY-CREATED, NOT import-only ─
+# Pages on any interactive-message INSERT failure in `dispatchSoleurGo`. All
+# three insert-blocking ops throw AND carry `feature=cc-dispatcher`
+# (cc-dispatcher.ts:1457 tenant-mint, :1477 workspaceRead, :1502 the INSERT) —
+# scoping to only the INSERT slug would leave the two sibling failure paths
+# (identical user-visible outage: "message didn't save") unpaged, the
+# single-user-incident window this alert exists to close. The signal already
+# exists (reportSilentFallback → captureException); no app change needed. The
+# 3-week chat-RLS outage (#4831/#4848) hit the :1502 INSERT — this catches that
+# class and its two siblings. Cross-artifact op/feature contract pinned by
+# test/sentry-chat-alert-op-contract.test.ts.
+#
+# `action_match="any"`: first_seen/reappeared/regression are mutually-exclusive
+# event-lifecycle states (a captured event is exactly one) — "all" is never
+# satisfiable. reappeared+regression re-page a recurrence after the founder
+# resolves the Sentry issue. This path uses plain `reportSilentFallback` (no
+# `mirrorP0Deduped` TTL), so every failed save emits — re-paging relies on
+# Sentry's own issue-fingerprint folding, which the 3 lifecycle conditions
+# handle. Distinct `frequency=10` avoids Sentry POST-time exact-duplicate dedup
+# (taken: 5,15,30,60,61,62). `IS_IN` proven in beta2 at byok_cap_exceeded above.
+resource "sentry_issue_alert" "chat_message_save_failure" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "chat-message-save-failure"
+  action_match = "any"
+  filter_match = "all"
+  frequency    = 10
+
+  conditions_v2 = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "EQUAL"
+        value = "cc-dispatcher"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "op"
+        match = "IS_IN"
+        value = "tenant-mint.persistUserMessage,persistUserMessage.workspaceRead,persist-user-message"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors byok_art_33_breach:259-269): IssueOwners has no
+  # ownership rule on this project → falls through to ActiveMembers, correctly
+  # paging the solo founder. Unlike byok_art_33, this event carries NO
+  # cross-tenant content (only op + pg_code tags) so the fallthrough does not
+  # over-disclose. Revisit recipient pinning (target_type="Member") before the
+  # first non-founder Sentry seat.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}

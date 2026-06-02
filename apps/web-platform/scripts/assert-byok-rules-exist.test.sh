@@ -36,28 +36,31 @@ base_env() {
 # ------------------------------------------------------------------------
 # T1 — both rules present → exit 0.
 # ------------------------------------------------------------------------
-echo "T1: both BYOK rules present"
+echo "T1: all expected rules present"
 cat >"$TMPDIR_T/both.json" <<'JSON'
 [
   {"id": "1", "name": "byok-art-33-breach"},
   {"id": "2", "name": "byok-cap-exceeded"},
-  {"id": "3", "name": "auth-exchange-code-burst"}
+  {"id": "3", "name": "chat-message-save-failure"},
+  {"id": "4", "name": "auth-exchange-code-burst"}
 ]
 JSON
 set +e
 out=$(base_env SENTRY_FIXTURE_RULES="$TMPDIR_T/both.json" bash "$SCRIPT" 2>&1)
 rc=$?
 set -e
-if [[ $rc -eq 0 ]]; then pass "exit 0 when both rules present"; else fail "expected exit 0, got $rc ($out)"; fi
+if [[ $rc -eq 0 ]]; then pass "exit 0 when all expected rules present"; else fail "expected exit 0, got $rc ($out)"; fi
 
 # ------------------------------------------------------------------------
 # T2 — art-33-breach missing → non-zero exit, names the missing rule.
 # ------------------------------------------------------------------------
 echo "T2: byok-art-33-breach missing"
+# chat-message-save-failure present so only art-33 is absent (isolation).
 cat >"$TMPDIR_T/missing-breach.json" <<'JSON'
 [
   {"id": "2", "name": "byok-cap-exceeded"},
-  {"id": "3", "name": "auth-exchange-code-burst"}
+  {"id": "3", "name": "chat-message-save-failure"},
+  {"id": "4", "name": "auth-exchange-code-burst"}
 ]
 JSON
 set +e
@@ -71,9 +74,11 @@ if grep -q "byok-art-33-breach" <<<"$out"; then pass "names the missing rule"; e
 # T3 — cap-exceeded missing → non-zero exit.
 # ------------------------------------------------------------------------
 echo "T3: byok-cap-exceeded missing"
+# chat-message-save-failure present so only cap is absent (isolation).
 cat >"$TMPDIR_T/missing-cap.json" <<'JSON'
 [
-  {"id": "1", "name": "byok-art-33-breach"}
+  {"id": "1", "name": "byok-art-33-breach"},
+  {"id": "3", "name": "chat-message-save-failure"}
 ]
 JSON
 set +e
@@ -117,6 +122,24 @@ out=$(env -i PATH="$PATH" HOME="$HOME" SENTRY_AUTH_TOKEN=t SENTRY_ORG=jikigai ba
 rc=$?
 set -e
 if [[ $rc -ne 0 ]]; then pass "non-zero exit without project"; else fail "expected non-zero, got 0"; fi
+
+# ------------------------------------------------------------------------
+# T7 — chat-message-save-failure missing → non-zero exit, names the rule
+#      (#4849 detector-liveness parity with T2/T3).
+# ------------------------------------------------------------------------
+echo "T7: chat-message-save-failure missing"
+cat >"$TMPDIR_T/missing-chat.json" <<'JSON'
+[
+  {"id": "1", "name": "byok-art-33-breach"},
+  {"id": "2", "name": "byok-cap-exceeded"}
+]
+JSON
+set +e
+out=$(base_env SENTRY_FIXTURE_RULES="$TMPDIR_T/missing-chat.json" bash "$SCRIPT" 2>&1)
+rc=$?
+set -e
+if [[ $rc -ne 0 ]]; then pass "non-zero exit when chat-message-save-failure absent"; else fail "expected non-zero, got 0"; fi
+if grep -q "chat-message-save-failure" <<<"$out"; then pass "names the missing chat rule"; else fail "missing chat rule not named ($out)"; fi
 
 echo ""
 echo "assert-byok-rules-exist.test.sh: $PASS passed, $FAIL failed"

@@ -212,6 +212,7 @@ jobs:
             -target=sentry_uptime_monitor.soleur_acme_probe \
             -target=sentry_issue_alert.byok_art_33_breach \
             -target=sentry_issue_alert.byok_cap_exceeded \
+            -target=sentry_issue_alert.chat_message_save_failure \
             -no-color -input=false -out=tfplan
           rc=$?
           if [[ $rc -ne 0 ]]; then
