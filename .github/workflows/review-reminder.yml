@@ -1,8 +1,10 @@
 name: Review Reminders
 
 on:
-  schedule:
-    - cron: '0 0 1 * *'
+  # Scheduling moved to the Inngest cron `cron-review-reminder` (monthly, 1st at
+  # 00:00 UTC), which dispatches this workflow with no inputs so it defaults the
+  # date to today. Inngest is the single scheduling substrate. The
+  # `date_override` input is retained for manual testing.
   workflow_dispatch:
     inputs:
       date_override:
