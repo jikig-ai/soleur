@@ -98,6 +98,21 @@ flows; the user has no signal that this is a bug, not a paywall.
 availability/correctness fault: the cap gate fails closed and blocks legitimate work. (`workspace_id`
 is the user's own solo-workspace id, never cross-tenant.)
 
+**No-workspace-binding user class (new fail-loud path — scoped out, net-neutral):** the fix adds a
+fail-loud `throw "No workspace binding for user — slot acquire aborted."` in `ws-handler.ts` when
+`getUserWorkspace(userId)` is null at acquire time (caught by the `start_session` try/catch →
+`sanitizeErrorForClient` → generic error toast). A user whose session opened WITHOUT a workspace
+binding (pre-Phase-1 users with no `workspace_members` row, or a transient bind failure at
+`ws-handler.ts:2293-2317`) now sees a generic error toast on new-conversation start instead of the
+pre-fix concurrency-cap modal. **This is net-neutral and not a new denial:** the same user class was
+already blocked pre-fix (null `workspace_id` → 23502 → fail-closed cap modal), and is independently
+gated by the existing `createConversation:809-812` "No workspace binding" throw on first message
+regardless of this change. The binding is process-local and re-established on every reconnect, so the
+worst case is a single errored start that succeeds on retry/reconnect. Failing loud here is the
+correct outcome — passing null to the RPC would re-trigger the 23502 this fix closes. The TS-side
+"No workspace binding for user" Sentry signal (op:acquireSlot, no pg_code) is the observability
+mirror (see Observability §failure_modes).
+
 **Brand-survival threshold:** `single-user incident`. A single new user hitting an unconditional
 "limit reached" wall on first use is a first-impression brand failure; the fix touches a
 SECURITY DEFINER RPC and a NOT NULL invariant where a wrong `workspace_id` derivation would be a

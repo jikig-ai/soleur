@@ -137,8 +137,9 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // user the active workspace is user.id (ADR-038 N2).
       // NOTE: the rest of this opt-in suite is independently stale against the
       // current dev schema (conversations.title was removed; insertConversation
-      // omits the NOT NULL workspace_id) and does not run in CI — tracked for
-      // repair separately. This update keeps the RPC contract aligned.
+      // omits the NOT NULL workspace_id; bare deleteUser teardown) and does not
+      // run in CI — repair tracked in #4798. This update keeps the RPC contract
+      // aligned so the helper targets the new 4-arg overload (mig 093).
       const { data, error } = await service.rpc("acquire_conversation_slot", {
         p_user_id: user.id,
         p_conversation_id: conversationId,

@@ -98,7 +98,7 @@ vi.mock("@/server/current-repo-url", () => ({
 }));
 
 import { handleMessage, sessions, type ClientSession } from "@/server/ws-handler";
-import { setUserWorkspace } from "@/server/agent-session-registry";
+import { setUserWorkspace, clearUserWorkspace } from "@/server/agent-session-registry";
 
 interface SentCapture {
   sent: unknown[];
@@ -134,8 +134,8 @@ describe("start_session — concurrency cap enforcement", () => {
     sessions.clear();
     mockRpc.mockReset();
     // The acquire path resolves getUserWorkspace(userId) (set at session-open
-    // in prod, ws-handler.ts:2294) and fails loud if absent — mig 093 passes
-    // it as the slot's NOT NULL workspace_id. Seed it for the synthetic user.
+    // in prod, ws-handler.ts setUserWorkspace) and fails loud if absent — mig
+    // 093 passes it as the slot's NOT NULL workspace_id. Seed it per test.
     setUserWorkspace("user-1", "user-1");
   });
 
@@ -176,6 +176,31 @@ describe("start_session — concurrency cap enforcement", () => {
     expect(capture.closeCalls).toEqual([]);
     expect(session.pending?.id).toBeTruthy();
     expect(capture.sent.some((m) => (m as { type?: string }).type === "session_started")).toBe(true);
+    // Regression guard (mig 093): the acquire RPC MUST receive p_workspace_id
+    // — without it the slot INSERT fails 23502 (NOT NULL since mig 059). This
+    // is the only in-CI assertion of the 4-arg wiring; the live contract is
+    // covered by concurrency-acquire-slot-workspace-id.integration.test.ts.
+    expect(mockRpc).toHaveBeenCalledWith(
+      "acquire_conversation_slot",
+      expect.objectContaining({ p_workspace_id: "user-1" }),
+    );
+  });
+
+  it("aborts the acquire (no slot RPC) when the user has no workspace binding", async () => {
+    // mig 093 fail-loud: getUserWorkspace(userId) absent → throw before the
+    // RPC, rather than passing null and re-triggering 23502. Mirrors
+    // createConversation:809-812.
+    clearUserWorkspace("user-1");
+    const { session, capture } = createMockSession("solo");
+    sessions.set("user-1", session);
+
+    await handleMessage("user-1", JSON.stringify({ type: "start_session" }));
+
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(session.pending).toBeUndefined();
+    expect(
+      capture.sent.some((m) => (m as { type?: string }).type === "error"),
+    ).toBe(true);
   });
 
   it("free tier emits nextTier='solo' in preamble", async () => {
