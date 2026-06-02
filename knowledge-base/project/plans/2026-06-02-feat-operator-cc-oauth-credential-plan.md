@@ -10,6 +10,8 @@ pr: 4824
 spec: knowledge-base/project/specs/feat-operator-cc-oauth/spec.md
 brainstorm: knowledge-base/project/brainstorms/2026-06-02-operator-cc-subscription-auth-brainstorm.md
 plan_reviewed: 2026-06-02  # spec-flow + simplicity + architecture; v2 incorporates all P0/P1
+deepened: 2026-06-02  # triad resolved P0 fork → two-row consumer-class model (see § Deepen-Plan Resolution)
+status: ready-for-work
 ---
 
 # Plan: Operator Claude Code Subscription Auth (`oauth_token` credential)
@@ -29,8 +31,36 @@ the hard date gate.
 **v2 note:** this plan was revised after spec-flow + architecture + simplicity review. The
 load-bearing change: **all enforcement lives at the lease decrypt chokepoint**
 (`byok-lease.ts fetchAndDecryptIntoSlot`), not in the resolver or per-dispatcher, because 4
-of 6 credential consumers bypass both. See `## Open Design Questions` for the one unresolved
-fork (deepen-plan).
+of 6 credential consumers bypass both. The P0 fork is now **resolved** — see `## Deepen-Plan Resolution` below.
+
+## Deepen-Plan Resolution (2026-06-02) — supersedes Phases 1–4 where they conflict
+
+Triad (architecture-strategist + data-integrity-guardian + security-sentinel) resolved the P0 fork.
+
+**Decision: Option B — the operator holds BOTH credentials; selection is deterministic by consumer class.** A (force-all-SDK) is disproportionate (`classifyMessage` is a 1-shot REST call; `agent-on-spawn-requested` is a durable Inngest tool-loop — multi-week rewrite). C (degrade) is partial (leader turns can't degrade).
+
+**Data model — TWO ROWS BY PROVIDER (no `credential_type` column).** The single-row `credential_type` discriminator (Phase 1 as written) cannot hold both an api_key and an oauth token on the UNIQUE `(user_id,'anthropic')` row — and P0 proves both are needed.
+- `provider='anthropic'` row = the **api_key** (feeds raw-REST consumers).
+- NEW `provider='anthropic_oauth'` row = the **oauth_token** (feeds the Agent SDK subprocess).
+- `(user_id, provider)` UNIQUE enforces at-most-one-of-each for free. The **provider value IS the discriminator** — drop the `credential_type` column.
+- Rejected: parallel oauth-column trio on one row (partial-NULL states, doubled secret surface — the "integrity trap").
+
+**Security boundary is STRUCTURAL, not a runtime check (resolves security P0-1/P0-2 by construction):**
+- Raw-REST consumers call `lease.getRestApiKey()` → queries ONLY `provider='anthropic'` → **physically cannot return an oauth token** (it lives in a row the REST query never reads). The oauth→`x-api-key` leak is impossible by construction.
+- Agent SDK path calls `lease.getAgentCredential()` → prefer `provider='anthropic_oauth'` (date + owner + kill-switch gates fire HERE, only when oauth is actually selected) → fall back to `provider='anthropic'`. Returns `{ value, scheme: 'api_key'|'oauth_token' }`; `buildAgentEnv` branches on `scheme`.
+- Mandatory cross-consumer sweep (`hr-type-widening-cross-consumer-grep`): grep ALL `getApiKey()` sites (≥3); route every raw-REST caller (`domain-router.ts` classify, `agent-on-spawn-requested.ts:452`) to `getRestApiKey()`. Default-missing consumer kind ⇒ raw-REST (deny oauth).
+
+**Gates fire only on the oauth read** (`getAgentCredential` prefer-oauth branch): the owner guard MUST run on the `anthropic_oauth` query path.
+
+**Write path:** the new oauth-secret write goes through a predicate-locked SECURITY DEFINER RPC mirroring `033_migrate_api_key_to_v2_rpc.sql` (`SET search_path = public, pg_temp`, REVOKE authenticated/anon + GRANT service_role, operator-identity predicate baked in so the DB refuses a non-operator oauth write even if the route gate regresses). Existing api_key path unchanged.
+
+**Migration 096 (revised):** provider-CHECK expansion mirroring `014_expand_provider_check.sql` to add `'anthropic_oauth'`. **No new column.** Back-compat: metadata-only re-validate, existing rows unaffected. Down-migration MUST first delete/guard any surviving `anthropic_oauth` rows before restoring the prior CHECK (else the down `ADD CONSTRAINT` fails).
+
+**P1 — validation probe (FR6):** v1 is a NO-OP — "write succeeds; first run validates" (operator is the only user; a bad token fails the first run loudly). Add a test asserting no module outside `agent-env.ts` references `CLAUDE_CODE_OAUTH_TOKEN` (`grep -L`), so the probe can never become a 2nd CWE-526 injection site.
+
+**Telemetry (security P1-2):** assert the 3 `DISABLE_*` overrides cannot be clobbered by the post-allowlist service-token loop (`agent-env.ts:54+`).
+
+**ADR:** capture "BYOK credential-selection by consumer class + structural REST/SDK boundary" via `/soleur:architecture create` (advisory).
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -101,7 +131,7 @@ In `byok-lease.ts fetchAndDecryptIntoSlot` (`:288-342`) — the single point eve
 - `apps/web-platform/components/settings/key-rotation-form.tsx` + `app/(dashboard)/dashboard/settings/page.tsx` — toggle + operator-account surfacing.
 - `apps/web-platform/lib/ws-client.ts` (`:697-704`) — `subscription_limit` reception.
 
-## Open Design Questions (resolve in deepen-plan — single-user-incident mandates it)
+## Open Design Questions — RESOLVED 2026-06-02 (see § Deepen-Plan Resolution; kept for record)
 - **P0 — direct-API consumers cannot use an OAuth token.** `domain-router.ts:127` (`x-api-key` classification fetch, live) and `agent-on-spawn-requested.ts:453` (`new Anthropic({apiKey})`) send the credential to Anthropic's REST API, which an OAuth token CANNOT authenticate. If the operator's single `anthropic` row is `oauth_token`, these paths break. Candidate resolutions: (a) **force-all-through-SDK** — route classification/spawn through the Agent SDK path; (b) **api_key fallback** — these direct paths fall back to a separate operator api_key (reopens two-credential model → reconsider `provider`-value); (c) **reject + degrade** — lease gate rejects `oauth_token` for direct-API callers and they degrade (classification → default route). Interacts with the credential_type-vs-provider decision. **Must resolve before /work.**
 - **P1 — token validation probe (FR6).** `setup-token` tokens can't be validated by the `/v1/models` GET. Net-new, no prior pattern. The probe MUST source the token through the lease/`buildAgentEnv`, never a direct `process.env` write (else a 2nd uncovered auth-injection site). Fallback for v1: "write succeeds; first run validates" (operator is the only user).
 
