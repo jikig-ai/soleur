@@ -17,28 +17,47 @@
 // `deploy_pipeline_fix` is `local-exec` with NO connection block → correctly
 // excluded by this predicate (do NOT count it).
 //
-// COMMENT-STRIP (SpecFlow 2c, P0): server.tf's leading comment for
-// infra_config_handler_bootstrap contains the literal `connection{type="ssh"}`.
-// `#`/`//` line comments are stripped before matching so that comment cannot
-// false-count (and mask a real miss). A non-vacuity test below proves the strip
-// is load-bearing.
+// COMMENT-STRIP (SpecFlow 2c, P0): a server.tf comment block (the #3756-
+// regression-explanation preceding infra_config_handler_bootstrap) contains the
+// literal `connection{type="ssh"}`. `#`/`//` line comments are stripped before
+// matching so that comment cannot false-count (and mask a real miss). A
+// non-vacuity test below proves the strip is load-bearing.
+//
+// CONCURRENCY-GROUP PARITY (#4844 P0): the R2 backend has no state lock, so the
+// IDENTICAL `concurrency.group` literal in both SSH-applying workflows is the
+// sole state serializer. A divergent string silently fails to serialize (GHA
+// does not error), so this test also asserts the two literals are byte-equal and
+// the shared cloudflared pins match — converting that silent-correctness
+// invariant into an enforced one.
 //
 // DOCUMENTED LIMITATION (SpecFlow 2b): this guard is ONE-DIRECTIONAL — it proves
 // every SSH resource is in the union, NOT that every `-target=` line points at a
 // live resource. A stale/typo'd `-target=` is NOT caught here (terraform exits 0
 // on "no resources matched"). A reverse-direction guard is out of scope.
 //
-// PARSER ASSUMPTIONS: HCL braces are balanced even inside the remote-exec inline
-// strings in these files (`${…}` interpolations and heredoc bodies carry no
-// unbalanced `{`/`}`), so brace-matching the resource body is sound. No `/* */`
-// block comments are present in these files; only `#`/`//` line comments are
-// stripped. Both hold for apps/web-platform/infra/*.tf as of #4844.
+// PARSER ASSUMPTIONS: (1) HCL braces are balanced even inside the remote-exec
+// inline strings in these files (`${…}` interpolations and heredoc bodies carry
+// no unbalanced `{`/`}`), so brace-matching the resource body is sound. (2) No
+// `/* */` block comments are present; only `#`/`//` line comments are stripped.
+// (3) `isSshProvisioned` matches `type = "ssh"` BEFORE the first `}` after
+// `connection {` — i.e. the connection block carries no nested brace before
+// `type`. If a future block reorders `type` after a `${…}`-bearing attribute the
+// predicate fails OPEN (resource silently invisible to the guard); the
+// `connection`-blocks here put `type` first, so it holds as of #4844.
 //
 // Test harness: bun:test (matches sibling tests in plugins/soleur/test/*.ts).
 
 import { describe, test, expect, beforeAll } from "bun:test";
-import { resolve } from "path";
-import { readFileSync, existsSync, readdirSync } from "fs";
+import { resolve, join } from "path";
+import {
+  readFileSync,
+  existsSync,
+  readdirSync,
+  writeFileSync,
+  mkdtempSync,
+  rmSync,
+} from "fs";
+import { tmpdir } from "os";
 
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
@@ -147,16 +166,38 @@ function listInfraTfFiles(): string[] {
     .sort();
 }
 
-/** Names of every SSH-provisioned terraform_data resource across all infra *.tf. */
-function collectSshProvisioned(): string[] {
+/** Names of every SSH-provisioned terraform_data resource across the given infra
+ *  *.tf files (defaults to all of them). Parameterized so a test can drive a
+ *  synthetic file through the REAL walk → extract → predicate chain end-to-end. */
+function collectSshProvisioned(files: string[] = listInfraTfFiles()): string[] {
   const names: string[] = [];
-  for (const file of listInfraTfFiles()) {
+  for (const file of files) {
     const stripped = stripComments(readFileSync(file, "utf8"));
     for (const r of extractTerraformDataResources(stripped)) {
       if (isSshProvisioned(r.body)) names.push(r.name);
     }
   }
   return names.sort();
+}
+
+/** Extract `concurrency.group`, `cancel-in-progress`, and the cloudflared pins
+ *  from a workflow file (simple line scans — these keys are single-valued). */
+function extractWorkflowInvariants(workflowText: string): {
+  group: string | null;
+  cancelInProgress: string | null;
+  cloudflaredVersion: string | null;
+  cloudflaredSha256: string | null;
+} {
+  const grab = (re: RegExp) => {
+    const m = workflowText.match(re);
+    return m ? m[1] : null;
+  };
+  return {
+    group: grab(/^\s*group:\s*(\S+)\s*$/m),
+    cancelInProgress: grab(/^\s*cancel-in-progress:\s*(\S+)\s*$/m),
+    cloudflaredVersion: grab(/^\s*CLOUDFLARED_VERSION:\s*"([^"]+)"/m),
+    cloudflaredSha256: grab(/^\s*CLOUDFLARED_SHA256:\s*"([^"]+)"/m),
+  };
 }
 
 let sshProvisioned: string[];
@@ -267,5 +308,63 @@ resource "terraform_data" "synthetic_untargeted_ssh" {
     const augmented = [...sshProvisioned, "synthetic_untargeted_ssh"];
     const uncovered = augmented.filter((n) => !coveredUnion.has(n));
     expect(uncovered).toEqual(["synthetic_untargeted_ssh"]);
+  });
+
+  // End-to-end fail-closed proof: drive the synthetic resource through the REAL
+  // walk → extract → predicate → coverage chain (not a string injected into the
+  // pre-computed array), so a regression in collectSshProvisioned's file
+  // discovery is also caught. Write the synthetic .tf to an OS tmpdir (NOT the
+  // infra dir — that would pollute the real walk for sibling tests).
+  test("a real un-targeted SSH .tf file is discovered AND flagged uncovered", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tf-parity-"));
+    try {
+      const tmpTf = join(dir, "synthetic.tf");
+      writeFileSync(tmpTf, SYNTHETIC, "utf8");
+      const discovered = collectSshProvisioned([
+        ...listInfraTfFiles(),
+        tmpTf,
+      ]);
+      expect(discovered).toContain("synthetic_untargeted_ssh");
+      const uncovered = discovered.filter((n) => !coveredUnion.has(n));
+      expect(uncovered).toEqual(["synthetic_untargeted_ssh"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("concurrency-group + cloudflared-pin parity across the two workflows (#4844 P0)", () => {
+  // The shared concurrency group is the SOLE state serializer (R2 has no lock).
+  // GHA silently fails to serialize on divergent group strings, so assert the
+  // two literals are byte-equal. Also assert both keep cancel-in-progress:false
+  // and that the duplicated cloudflared pins (forwarded to the shared composite
+  // action via `with:`) stay in sync.
+  const EXPECTED_GROUP = "terraform-apply-web-platform-host";
+  let wpi: ReturnType<typeof extractWorkflowInvariants>;
+  let dpf: ReturnType<typeof extractWorkflowInvariants>;
+
+  beforeAll(() => {
+    wpi = extractWorkflowInvariants(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"));
+    dpf = extractWorkflowInvariants(
+      readFileSync(DEPLOY_PIPELINE_FIX_WORKFLOW, "utf8"),
+    );
+  });
+
+  test("both workflows declare the IDENTICAL concurrency group literal", () => {
+    expect(wpi.group).toBe(EXPECTED_GROUP);
+    expect(dpf.group).toBe(EXPECTED_GROUP);
+    expect(wpi.group).toBe(dpf.group);
+  });
+
+  test("both workflows keep cancel-in-progress: false", () => {
+    expect(wpi.cancelInProgress).toBe("false");
+    expect(dpf.cancelInProgress).toBe("false");
+  });
+
+  test("the cloudflared version + sha256 pins match across both workflows", () => {
+    expect(wpi.cloudflaredVersion).not.toBeNull();
+    expect(wpi.cloudflaredSha256).not.toBeNull();
+    expect(wpi.cloudflaredVersion).toBe(dpf.cloudflaredVersion);
+    expect(wpi.cloudflaredSha256).toBe(dpf.cloudflaredSha256);
   });
 });

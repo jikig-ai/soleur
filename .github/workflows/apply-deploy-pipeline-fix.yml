@@ -93,7 +93,7 @@ on:
 concurrency:
   # LOAD-BEARING shared group (#4844): this MUST be the IDENTICAL literal string
   # used in apply-web-platform-infra.yml. The R2 backend has NO state lock
-  # (apps/web-platform/infra/main.tf:13 `use_lockfile = false` — R2 lacks S3
+  # (apps/web-platform/infra/main.tf `use_lockfile = false` — R2 lacks S3
   # conditional writes), so this shared GitHub Actions concurrency group is the
   # SOLE serializer preventing two concurrent `terraform apply` runs from
   # last-writer-wins-clobbering web-platform/terraform.tfstate. Both workflows
