@@ -94,6 +94,8 @@ So the change is: (1) a new migration `092` widening the RPC signature + flippin
 
 **Brand-survival threshold:** single-user incident.
 
+**Rolling-deploy window (fails closed, no escalation):** the migrate job applies on merge before/with the app cutover. During the transient skew window, both directions fail closed to the *existing* HTTP 500 — (a) schema-applied/old-app: old 3-arg call resolves to the new 4-arg form with `p_caller_user_id` defaulted NULL → `COALESCE(NULL, auth.uid())` NULL under service-role → 28000 → 500 (identical to the pre-fix state); (b) new-app/schema-not-applied: 4-arg call against the not-yet-created form → PGRST202 → 500. No data loss and no `authenticated`-reachable forgeable overload exists at any instant because the DROP (of the 3-arg) and the service_role-only GRANT (of the 4-arg) land atomically in one migration. The flow is dogfood-gated (`isTeamWorkspaceInviteEnabled`) and was 100% broken before this PR, so the window regresses nothing.
+
 > `requires_cpo_signoff: true` — CPO sign-off required at plan time before `/work` begins. CPO has not been separately invoked (no Task tool in this environment); confirm CPO review or invoke at /work Phase 0. `user-impact-reviewer` will be invoked at review-time (handled by review/SKILL.md conditional-agent block).
 
 ## Acceptance Criteria

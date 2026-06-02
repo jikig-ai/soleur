@@ -11,13 +11,19 @@ import { describe, test, expect, vi, beforeEach } from "vitest";
 // asserts the payload carries p_caller_user_id. Mirrors the rename_organization
 // fix (PR #4762 / migration 091).
 
-const { mockRpc, mockCreateServiceClient, mockAbortSessions, mockSessionsGet } =
-  vi.hoisted(() => ({
-    mockRpc: vi.fn(),
-    mockCreateServiceClient: vi.fn(),
-    mockAbortSessions: vi.fn(),
-    mockSessionsGet: vi.fn(() => undefined),
-  }));
+const {
+  mockRpc,
+  mockCreateServiceClient,
+  mockAbortSessions,
+  mockSessionsGet,
+  mockReportSilentFallback,
+} = vi.hoisted(() => ({
+  mockRpc: vi.fn(),
+  mockCreateServiceClient: vi.fn(),
+  mockAbortSessions: vi.fn(),
+  mockSessionsGet: vi.fn(() => undefined),
+  mockReportSilentFallback: vi.fn(),
+}));
 
 vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: mockCreateServiceClient,
@@ -36,7 +42,7 @@ vi.mock("@/lib/ws-close-helper", () => ({
 }));
 
 vi.mock("@/server/observability", () => ({
-  reportSilentFallback: vi.fn(),
+  reportSilentFallback: mockReportSilentFallback,
 }));
 
 import { transferWorkspaceOwnership } from "@/server/workspace-membership";
@@ -84,10 +90,13 @@ describe("transferWorkspaceOwnership wrapper", () => {
     expect(mockRpc).not.toHaveBeenCalled();
   });
 
-  test("maps an unmatched RPC error to rpc_failed (the broken-auth symptom)", async () => {
+  test("maps an unmatched RPC error to rpc_failed and mirrors it to Sentry (the broken-auth symptom)", async () => {
+    // Migration 092 raises 'caller_user_id is NULL …' (was 'auth.uid() is NULL …'
+    // pre-092). Either way it is an unmatched message → rpc_failed, mirrored to
+    // Sentry per cq-silent-fallback-must-mirror-to-sentry.
     mockRpc.mockResolvedValue({
       data: null,
-      error: { message: "auth.uid() is NULL — caller must be authenticated" },
+      error: { message: "caller_user_id is NULL — caller must be authenticated" },
     });
 
     const result = await transferWorkspaceOwnership({
@@ -101,9 +110,11 @@ describe("transferWorkspaceOwnership wrapper", () => {
     if (!result.ok) {
       expect(result.reason).toBe("rpc_failed");
     }
+    // Unexpected DB-side failure must mirror to Sentry.
+    expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
   });
 
-  test("maps caller_not_owner RPC error to the typed reason", async () => {
+  test("maps caller_not_owner RPC error to the typed reason (no Sentry mirror)", async () => {
     mockRpc.mockResolvedValue({
       data: null,
       error: { message: "caller is not an owner of workspace x" },
@@ -117,5 +128,41 @@ describe("transferWorkspaceOwnership wrapper", () => {
     });
 
     expect(result).toEqual({ ok: false, reason: "caller_not_owner" });
+    // Expected, caller-correctable outcome — not a silent failure.
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  test("maps target_not_member RPC error to the typed reason", async () => {
+    mockRpc.mockResolvedValue({
+      data: null,
+      error: { message: "target user is not a member of workspace x" },
+    });
+
+    const result = await transferWorkspaceOwnership({
+      callerUserId: CALLER_ID,
+      workspaceId: WORKSPACE_ID,
+      newOwnerUserId: NEW_OWNER_ID,
+      attestationText: ATTESTATION,
+    });
+
+    expect(result).toEqual({ ok: false, reason: "target_not_member" });
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  test("maps target_already_owner RPC error to the typed reason", async () => {
+    mockRpc.mockResolvedValue({
+      data: null,
+      error: { message: "target user is already the owner of workspace x" },
+    });
+
+    const result = await transferWorkspaceOwnership({
+      callerUserId: CALLER_ID,
+      workspaceId: WORKSPACE_ID,
+      newOwnerUserId: NEW_OWNER_ID,
+      attestationText: ATTESTATION,
+    });
+
+    expect(result).toEqual({ ok: false, reason: "target_already_owner" });
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
   });
 });

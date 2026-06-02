@@ -32,6 +32,13 @@
 -- update_workspace_member_role and anonymise_organization_membership
 -- functions that also live in 075 are unaffected and intentionally NOT
 -- re-emitted here (re-emitting would create a second source of truth).
+--
+-- FORWARD REFERENCE: any future migration that DROPs and recreates
+-- transfer_workspace_ownership MUST preserve the
+-- COALESCE(p_caller_user_id, auth.uid()) caller resolution AND the
+-- service_role-only grant — reverting to a bare auth.uid() gate or an
+-- authenticated grant silently re-introduces #4765 (service-role 500) or
+-- the #4762 forgeable-override tenant-takeover class respectively.
 
 -- Drop the old 3-arg, authenticated-granted overload. Postgres distinguishes
 -- overloads by parameter list, so without this DROP the 075 form would remain

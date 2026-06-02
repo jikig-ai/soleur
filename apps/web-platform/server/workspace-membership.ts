@@ -389,6 +389,17 @@ export async function transferWorkspaceOwnership(
     if (msg.includes("target user is already the owner")) {
       return { ok: false, reason: "target_already_owner" };
     }
+    // self_transfer / caller_not_owner / target_* are expected,
+    // caller-correctable outcomes — not silent failures. rpc_failed is an
+    // unexpected DB-side failure — mirror to Sentry per
+    // cq-silent-fallback-must-mirror-to-sentry (matches renameOrganization).
+    // The 28000 NULL-caller arm also lands here (unreachable from the route,
+    // which always forwards a verified getUser() id as p_caller_user_id).
+    reportSilentFallback(error, {
+      feature: "workspace-membership",
+      op: "transfer-workspace-ownership-rpc",
+      extra: { workspaceId: args.workspaceId, callerUserId: args.callerUserId },
+    });
     return { ok: false, reason: "rpc_failed", detail: msg };
   }
 
