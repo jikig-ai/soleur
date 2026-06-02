@@ -5,7 +5,7 @@ name: skill-security-scan / pre-merge required check
 # Runs on every pull_request synchronize event against `main`. For each new
 # SKILL.md / agent MD file added in the PR diff, runs the scanner and asserts:
 #   1. If verdict is HIGH-RISK, a corresponding override artifact MUST exist
-#      under knowledge-base/security/skill-overrides/.
+#      under knowledge-base/engineering/security/skill-overrides/.
 #   2. If an override artifact exists, parse-override.sh MUST validate it
 #      (frontmatter schema, slug regex, rule_pack_sha256 freshness).
 #
@@ -133,7 +133,7 @@ jobs:
                 echo "::error file=$path::HIGH-RISK on path with un-derivable slug"
                 fail=1
               elif ! echo "$matched_skills" | grep -qFx -- "$slug"; then
-                echo "::error file=$path::HIGH-RISK without matching override artifact (expected skill=$slug under knowledge-base/security/skill-overrides/)"
+                echo "::error file=$path::HIGH-RISK without matching override artifact (expected skill=$slug under knowledge-base/engineering/security/skill-overrides/)"
                 fail=1
               fi
             fi
