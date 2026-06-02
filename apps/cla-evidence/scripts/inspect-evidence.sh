@@ -9,6 +9,7 @@
 #   inspect-evidence.sh by-pr <pr-number>
 #   inspect-evidence.sh by-contributor <login>
 #   inspect-evidence.sh by-quarter <yyyy-qN>
+#   inspect-evidence.sh tombstone <object-sha>   # GDPR-erased records (#3950)
 
 set -euo pipefail
 
@@ -20,6 +21,7 @@ Usage:
   inspect-evidence.sh by-pr <pr-number>
   inspect-evidence.sh by-contributor <login>
   inspect-evidence.sh by-quarter <yyyy-qN>
+  inspect-evidence.sh tombstone <object-sha>
 USAGE
   exit 64
 fi
@@ -106,7 +108,26 @@ case "$mode" in
     # returns 1, which would abort the script. Use an if-block instead.
     if [[ "$matched" -eq 0 ]]; then
       echo "no records for PR #${pr}" >&2
+      # A signature with no live record may have been GDPR-erased (Art. 17).
+      # Tombstones are keyed by the deleted object's sha, NOT by PR number, so
+      # we cannot auto-resolve the sha from a PR here — hint the operator toward
+      # the explicit subcommand (issue #3950 item 4).
+      echo "  if the record was GDPR-erased, try: inspect-evidence.sh tombstone <prior-object-sha>" >&2
     fi
+    ;;
+  tombstone)
+    # Surface a GDPR Art. 17 erasure tombstone (tombstones/<sha>.deleted.json,
+    # written by gdpr-override.sh). Agent-native parity: anything an operator can
+    # see, an agent can see via the canonical reader. A missing tombstone is a
+    # legitimate "no such erasure" answer (exit 0), NOT an error.
+    sha="$arg"
+    tomb_key="tombstones/${sha}.deleted.json"
+    if ! body=$(aws_exec s3 cp "s3://$bucket/$tomb_key" - 2>/dev/null); then
+      echo "no tombstone for ${sha}" >&2
+      exit 0
+    fi
+    assert_schema_version "$body" "$tomb_key"
+    jq --arg key "$tomb_key" '. + { _key: $key }' <<< "$body"
     ;;
   by-contributor)
     login="$arg"

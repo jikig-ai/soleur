@@ -109,6 +109,83 @@ else
   fail=1
 fi
 
+# ── Tombstone-mode tests (issue #3950 item 4) ──────────────────────────────
+# Tombstone stub: `s3 cp s3://…/tombstones/<sha>.deleted.json -` returns the
+# fixture body; a cp whose s3 URI contains "missingsha" simulates a 404 (exit 1).
+mk_tombstone_stub() {
+  local fixture_body="$1"
+  cat > "$work/aws" <<EOF
+#!/usr/bin/env bash
+MODE=; src=
+for a in "\$@"; do
+  case "\$a" in
+    cp)     MODE=cp ;;
+    s3://*) src="\$a" ;;
+  esac
+done
+if [[ "\$MODE" == cp ]]; then
+  [[ "\$src" == *missingsha* ]] && exit 1   # simulate 404
+  cat "$work/body.json"
+  exit 0
+fi
+exit 0
+EOF
+  chmod +x "$work/aws"
+  printf '%s\n' "$fixture_body" > "$work/body.json"
+}
+
+run_tombstone() {
+  PATH="$work:$PATH" \
+  R2_CLA_EVIDENCE_ACCESS_KEY_ID=stub-key \
+  R2_CLA_EVIDENCE_SECRET=stub-secret \
+  R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
+  R2_CLA_EVIDENCE_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com \
+    bash "$SUT" tombstone "$1"
+}
+
+SHA_OK=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+# TS10: tombstone <sha> with schema_version 1.0 → exit 0, body + _key echoed.
+mk_tombstone_stub "{\"schema_version\":\"1.0\",\"deleted_at\":\"2026-06-02T00:00:00Z\",\"admin_actor\":\"ops@stub.invalid\",\"gdpr_request_ref\":\"DSAR-2026-001\",\"prior_object_sha\":\"$SHA_OK\",\"override_reason\":\"art17 erasure\"}"
+if out=$(run_tombstone "$SHA_OK" 2>&1); then
+  if grep -q '"schema_version": "1.0"' <<<"$out" && grep -q "\"_key\": \"tombstones/$SHA_OK.deleted.json\"" <<<"$out"; then
+    green "PASS: TS10 tombstone 1.0 → exit 0 + body with _key"
+  else
+    red "FAIL: TS10 expected 1.0 body + _key in stdout; got:"; red "$out"; fail=1
+  fi
+else
+  red "FAIL: TS10 expected exit 0 on tombstone 1.0; got non-zero"; red "$out"; fail=1
+fi
+
+# TS11: tombstone <sha> with schema_version 2.0 → exit 3 (consumer boundary).
+mk_tombstone_stub "{\"schema_version\":\"2.0\",\"prior_object_sha\":\"$SHA_OK\"}"
+out=$(run_tombstone "$SHA_OK" 2>&1) && rc=0 || rc=$?
+if [[ "$rc" -eq 3 ]] && grep -qE '::error::schema_version mismatch' <<<"$out"; then
+  green "PASS: TS11 tombstone 2.0 → exit 3 + ::error:: annotation"
+else
+  red "FAIL: TS11 expected exit 3 + schema_version mismatch; got rc=$rc"; red "$out"; fail=1
+fi
+
+# TS12: tombstone <sha> on a missing key → exit 0 with 'no tombstone' message.
+mk_tombstone_stub '{"schema_version":"1.0"}'
+MISSING=missingsha0000000000000000000000000000000000000000000000000000
+out=$(run_tombstone "$MISSING" 2>&1) && rc=0 || rc=$?
+if [[ "$rc" -eq 0 ]] && grep -qE "no tombstone for ${MISSING}" <<<"$out"; then
+  green "PASS: TS12 missing tombstone → exit 0 + 'no tombstone' message"
+else
+  red "FAIL: TS12 expected exit 0 + 'no tombstone for <sha>'; got rc=$rc"; red "$out"; fail=1
+fi
+
+# TS13: by-pr 404 message hints at the tombstone subcommand (item 4 'or' branch).
+mk_aws_stub '{"schema_version":"1.0","actor":{"login":"alice"},"pr_of_record":{"number":1}}'
+out=$(run_sut 2>&1) && rc=0 || rc=$?
+# run_sut queries by-pr 4242; the fixture is PR #1 → no match → hint should fire.
+if grep -qE 'no records for PR #4242' <<<"$out" && grep -qE 'tombstone <' <<<"$out"; then
+  green "PASS: TS13 by-pr no-match message hints at tombstone subcommand"
+else
+  red "FAIL: TS13 expected 'no records for PR #4242' + 'tombstone <' hint; got:"; red "$out"; fail=1
+fi
+
 if [[ "$fail" -eq 0 ]]; then
   green "ALL Phase 7 inspect.test.sh tests passed."
 fi
