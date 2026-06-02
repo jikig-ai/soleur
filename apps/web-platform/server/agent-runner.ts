@@ -466,6 +466,9 @@ async function saveMessage(
     id: randomUUID(),
     conversation_id: conversationId,
     workspace_id: convWsRow.workspace_id,
+    // mig 053: messages.template_id NOT NULL (no default). Interactive
+    // (non-template) messages use the 'default_legacy' sentinel. #4839.
+    template_id: "default_legacy",
     role,
     content,
     tool_calls: toolCalls || null,
@@ -2467,6 +2470,9 @@ export async function sendUserMessage(
     id: messageId,
     conversation_id: conversationId,
     workspace_id: conv.workspace_id,
+    // mig 053: messages.template_id NOT NULL (no default). Interactive
+    // messages use the 'default_legacy' sentinel. #4839.
+    template_id: "default_legacy",
     role: "user",
     content,
     tool_calls: null,

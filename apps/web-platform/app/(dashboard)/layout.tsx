@@ -248,9 +248,16 @@ export default function DashboardLayout({
       >
         {/* Brand + close/collapse buttons */}
         <div className={`flex items-center justify-between safe-top ${collapsed ? "px-2 py-5" : "px-5 py-5"}`}>
-          <span className={`text-lg font-semibold tracking-tight text-soleur-text-primary overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>
-            Soleur
-          </span>
+          {/* #4810 Bug 1: the wordmark is top-level chrome — render it ONLY when
+              not drilled (render-conditional, NOT a CSS hide; jsdom asserts DOM
+              presence). Gated individually so the sibling close button + collapse
+              chevron in this row survive in drilled states. Composes with the
+              existing collapsed `md:hidden` (hide-on-collapse within the top level). */}
+          {drill === null && (
+            <span className={`text-lg font-semibold tracking-tight text-soleur-text-primary overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>
+              Soleur
+            </span>
+          )}
           <button
             onClick={() => setDrawerOpen(false)}
             aria-label="Close navigation"
@@ -273,10 +280,13 @@ export default function DashboardLayout({
           </button>
         </div>
 
-        {/* Theme toggle — sidebar header (spec TR7). */}
-        <div className={`border-b border-soleur-border-default ${collapsed ? "px-2 py-3" : "px-3 py-3"}`}>
-          <ThemeToggle collapsed={collapsed} />
-        </div>
+        {/* Theme toggle — sidebar header (spec TR7). #4810 Bug 1: top-level
+            chrome, render-conditional on top level only (drill-hide). */}
+        {drill === null && (
+          <div className={`border-b border-soleur-border-default ${collapsed ? "px-2 py-3" : "px-3 py-3"}`}>
+            <ThemeToggle collapsed={collapsed} />
+          </div>
+        )}
 
         {/* Persistent workspace context band (ADR-047). Mounted OUTSIDE the
             rail swap region and NEVER gated on `collapsed` — this fixes the
@@ -290,7 +300,7 @@ export default function DashboardLayout({
             CSS-exclusive placements never show identity twice (AC4b: the band
             is still the single importer of OrgSwitcherContainer/LiveRepoBadge). */}
         <div className="hidden md:block">
-          <WorkspaceContextBand pathname={pathname} />
+          <WorkspaceContextBand pathname={pathname} collapsed={collapsed} />
         </div>
 
         {/* Rail swap region (ADR-047): the section's secondary nav REPLACES
