@@ -194,13 +194,13 @@ Checked open `code-review` issues for any that name
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — `title` removed.** `grep -n "title" apps/web-platform/test/conversation-archive-release-slot.integration.test.ts` returns **zero** lines inside the `insertConversation` insert object (the word may survive only in unrelated prose/test names — verify the INSERT payload specifically).
-- [ ] **AC2 — `workspace_id` supplied.** The `insertConversation` insert object contains `workspace_id: user.id`. Verify: `grep -nE "workspace_id:\s*user\.id" apps/web-platform/test/conversation-archive-release-slot.integration.test.ts` returns ≥1.
-- [ ] **AC3 — WORM-bypass teardown.** `afterAll` calls `anonymise_workspace_members` and `anonymise_workspace_member_actions` **before** `deleteUser`, plus `workspaces`/`organizations` cleanup. Verify: `grep -nE "anonymise_workspace_member" apps/web-platform/test/conversation-archive-release-slot.integration.test.ts` returns exactly 2 RPC calls, both lexically above the `deleteUser` line.
-- [ ] **AC4 — staleness note gone.** `grep -n "#4798\|independently stale\|does not run in CI" apps/web-platform/test/conversation-archive-release-slot.integration.test.ts` returns **zero** lines.
-- [ ] **AC5 — typecheck clean.** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` exits 0 (the file is collected by vitest's `test/**/*.test.ts` include glob — `vitest.config.ts:44` — so it must compile).
-- [ ] **AC6 — default (skipped) suite run stays green.** `cd apps/web-platform && ./node_modules/.bin/vitest run test/conversation-archive-release-slot.integration.test.ts` (no env flag) reports the describe block **skipped**, exit 0 — proving the edit did not break the skip-gate or compilation.
-- [ ] **AC7 — live dev run all-green (the actual repair proof).** With dev creds, the full opt-in suite passes all 6 tests:
+- [x] **AC1 — `title` removed.** `grep -n "title" apps/web-platform/test/conversation-archive-release-slot.integration.test.ts` returns **zero** lines inside the `insertConversation` insert object (the word may survive only in unrelated prose/test names — verify the INSERT payload specifically).
+- [x] **AC2 — `workspace_id` supplied.** The `insertConversation` insert object contains `workspace_id: user.id`. Verify: `grep -nE "workspace_id:\s*user\.id" apps/web-platform/test/conversation-archive-release-slot.integration.test.ts` returns ≥1.
+- [x] **AC3 — WORM-bypass teardown.** `afterAll` calls `anonymise_workspace_members` and `anonymise_workspace_member_actions` **before** `deleteUser`, plus `workspaces`/`organizations` cleanup. Verify: `grep -nE "anonymise_workspace_member" apps/web-platform/test/conversation-archive-release-slot.integration.test.ts` returns exactly 2 RPC calls, both lexically above the `deleteUser` line.
+- [x] **AC4 — staleness note gone.** `grep -n "#4798\|independently stale\|does not run in CI" apps/web-platform/test/conversation-archive-release-slot.integration.test.ts` returns **zero** lines.
+- [x] **AC5 — typecheck clean.** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` exits 0 (the file is collected by vitest's `test/**/*.test.ts` include glob — `vitest.config.ts:44` — so it must compile).
+- [x] **AC6 — default (skipped) suite run stays green.** `cd apps/web-platform && ./node_modules/.bin/vitest run test/conversation-archive-release-slot.integration.test.ts` (no env flag) reports the describe block **skipped**, exit 0 — proving the edit did not break the skip-gate or compilation.
+- [x] **AC7 — live dev run all-green (the actual repair proof).** With dev creds, the full opt-in suite passes all 6 tests:
   ```bash
   cd apps/web-platform && \
     doppler run -p soleur -c dev -- \
@@ -211,7 +211,7 @@ Checked open `code-review` issues for any that name
   rows left behind in dev (teardown verified). **Automation:** runnable in-session
   via the `doppler`/`vitest` CLIs (no SSH, no dashboard) — execute at /work time
   and paste the summary into the PR body. NOT an operator step.
-- [ ] **AC8 — synthetic-only invariant preserved.** `SYNTHETIC_EMAIL_PATTERN` and the `assertSynthetic` guards remain unchanged (`cq-test-fixtures-synthesized-only`, `hr-dev-prd-distinct-supabase-projects`).
+- [x] **AC8 — synthetic-only invariant preserved.** `SYNTHETIC_EMAIL_PATTERN` and the `assertSynthetic` guards remain unchanged (`cq-test-fixtures-synthesized-only`, `hr-dev-prd-distinct-supabase-projects`).
 
 ### Post-merge (operator)
 
