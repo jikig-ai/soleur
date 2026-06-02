@@ -27,6 +27,7 @@ import {
   redactToken,
   buildAuthenticatedCloneUrl,
   resolveCronWorkspaceRoot,
+  warnIfCronWorkspaceLowOnDisk,
   mintInstallationToken,
   postSentryHeartbeat,
   type HandlerArgs,
@@ -147,6 +148,7 @@ export async function cronWeeklyAnalyticsHandler({
         join(resolveCronWorkspaceRoot(), `soleur-${FUNCTION_NAME}-`),
       );
       const repoRoot = join(ephemeralRoot, "repo");
+      await warnIfCronWorkspaceLowOnDisk(ephemeralRoot, FUNCTION_NAME);
       const cloneUrl = buildAuthenticatedCloneUrl(installationToken);
       const cloneResult = await spawnGit(["clone", "--depth=1", cloneUrl, repoRoot]);
       if (cloneResult.exitCode !== 0) {

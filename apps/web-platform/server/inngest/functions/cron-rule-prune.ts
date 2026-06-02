@@ -31,6 +31,7 @@ import {
   redactToken,
   buildAuthenticatedCloneUrl,
   resolveCronWorkspaceRoot,
+  warnIfCronWorkspaceLowOnDisk,
   mintInstallationToken,
   postSentryHeartbeat,
   type HandlerArgs,
@@ -140,6 +141,7 @@ async function setupEphemeralWorkspace(
     join(resolveCronWorkspaceRoot(), "soleur-cron-rule-prune-"),
   );
   const repoRoot = join(ephemeralRoot, "repo");
+  await warnIfCronWorkspaceLowOnDisk(ephemeralRoot, "cron-rule-prune");
   const cloneUrl = buildAuthenticatedCloneUrl(token);
   const result = await spawnGit(["clone", "--depth=1", cloneUrl, repoRoot]);
   if (result.exitCode !== 0) {

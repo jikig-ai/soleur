@@ -51,6 +51,7 @@ import {
   redactToken,
   buildAuthenticatedCloneUrl,
   resolveCronWorkspaceRoot,
+  warnIfCronWorkspaceLowOnDisk,
   mintInstallationToken,
   postSentryHeartbeat,
   type HandlerArgs,
@@ -116,6 +117,7 @@ async function setupEphemeralWorkspace(token: string): Promise<{
     join(resolveCronWorkspaceRoot(), "soleur-cron-strategy-review-"),
   );
   const repoRoot = join(ephemeralRoot, "repo");
+  await warnIfCronWorkspaceLowOnDisk(ephemeralRoot, "cron-strategy-review");
   const cloneUrl = buildAuthenticatedCloneUrl(token);
   const cloneResult = await new Promise<{
     exitCode: number | null;

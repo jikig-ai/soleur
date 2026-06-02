@@ -1,3 +1,4 @@
+import { statfs } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createProbeOctokit } from "@/server/github/probe-octokit";
 import { generateInstallationToken } from "@/server/github-app";
@@ -21,11 +22,56 @@ export function resolveCronWorkspaceRoot(): string {
   return process.env.CRON_WORKSPACE_ROOT?.trim() || tmpdir();
 }
 
-// Soft floor for the substrate's pre-clone free-space guard: the soleur tree is
-// ~100 MB and grows every content PR; warn under 256 MB free so the operator
-// sees the squeeze BEFORE ENOSPC kills the clone. Tunable via
-// CRON_WORKSPACE_MIN_FREE_MB (NaN/0 → this default). Non-fatal.
+// Soft floor for the pre-clone free-space guard: the soleur tree is ~100 MB and
+// grows every content PR; warn under 256 MB free so the operator sees the
+// squeeze BEFORE ENOSPC kills the clone. Tunable via CRON_WORKSPACE_MIN_FREE_MB
+// (NaN/0 → this default). Non-fatal.
 export const DEFAULT_CRON_WORKSPACE_MIN_FREE_MB = 256;
+
+/**
+ * Non-fatal pre-clone free-space guard. statfs the cron workspace root and emit
+ * a non-paging WARN if free space is below the floor, so the operator sees the
+ * squeeze in Sentry BEFORE a `git clone` ENOSPCs (#4684/#4689). MUST NEVER throw
+ * — a wrong floor or a statfs probe error must never block a clone that would
+ * otherwise succeed. Call once after mkdtemp and before the clone, from EVERY
+ * cron that clones the repo (the substrate's setupEphemeralWorkspace AND the
+ * handlers with their own inline clone), so the observability is not half-applied.
+ * Uses `bavail` (blocks free to an unprivileged caller — what the 1001 container
+ * user actually gets), not `bfree`.
+ */
+export async function warnIfCronWorkspaceLowOnDisk(
+  ephemeralRoot: string,
+  cronName: string,
+): Promise<void> {
+  try {
+    const stats = await statfs(ephemeralRoot);
+    const freeMb = Math.floor((stats.bavail * stats.bsize) / (1024 * 1024));
+    const floorMb =
+      Number(process.env.CRON_WORKSPACE_MIN_FREE_MB) ||
+      DEFAULT_CRON_WORKSPACE_MIN_FREE_MB;
+    if (freeMb < floorMb) {
+      warnSilentFallback(
+        new Error(
+          `cron workspace root low on disk: ${freeMb} MB free < ${floorMb} MB floor at ${ephemeralRoot} — git clone may ENOSPC`,
+        ),
+        {
+          feature: cronName,
+          op: "cron-workspace-low-disk",
+          message: "Cron ephemeral workspace low on free disk before clone",
+          extra: { fn: cronName, ephemeralRoot, freeMb, floorMb },
+        },
+      );
+    }
+  } catch (err) {
+    // statfs failure is itself non-fatal — never block a clone on a probe error.
+    reportSilentFallback(err, {
+      feature: cronName,
+      op: "cron-workspace-statfs-failed",
+      message: "Could not statfs cron workspace root (non-fatal)",
+      extra: { fn: cronName, ephemeralRoot },
+    });
+  }
+}
 
 export const SENTRY_DOMAIN_RE = /^[a-z0-9.-]+\.sentry\.io$/i;
 export const SENTRY_PROJECT_RE = /^\d+$/;
