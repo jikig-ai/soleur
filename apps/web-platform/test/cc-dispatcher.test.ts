@@ -68,14 +68,23 @@ vi.mock("@/lib/supabase/tenant", async () => {
   const { supabaseTenantFactory } = await import(
     "@/test/helpers/cc-dispatcher-harness"
   );
-  return supabaseTenantFactory({ mockMessagesInsert });
+  // messages-workspace_id RLS fix: the conversation read returns "ws-A" so
+  // T1/T2 can assert the INSERT payload's workspace_id is derived from the
+  // parent conversation (not resolveCurrentWorkspaceId / a literal).
+  return supabaseTenantFactory({
+    mockMessagesInsert,
+    mockConversationWorkspaceId: "ws-A",
+  });
 });
 
 vi.mock("@/lib/supabase/service", async () => {
   const { supabaseServiceFactory } = await import(
     "@/test/helpers/cc-dispatcher-harness"
   );
-  return supabaseServiceFactory({ mockMessagesInsert });
+  return supabaseServiceFactory({
+    mockMessagesInsert,
+    mockConversationWorkspaceId: "ws-A",
+  });
 });
 
 import {
@@ -1100,6 +1109,134 @@ describe("cc-dispatcher singletons + orchestration", () => {
     });
   }
 
+  function userInsertCalls(
+    insertMock: ReturnType<typeof vi.fn>,
+  ): Array<Record<string, unknown>> {
+    return insertMock.mock.calls
+      .map((c) => c[0] as { role?: string } & Record<string, unknown>)
+      .filter((row) => row && row.role === "user");
+  }
+
+  // ---------------------------------------------------------------------------
+  // messages-workspace_id RLS fix (migration 059) — every interactive
+  // `messages` INSERT must carry `workspace_id` derived from the PARENT
+  // CONVERSATION so the `messages_workspace_member_insert` WITH CHECK
+  // (`is_workspace_member(workspace_id, auth.uid())`) is satisfied. Omitting
+  // it → NULL → RLS reject → "An unexpected error occurred." (the outage).
+  // The harness conversation read returns "ws-A"; assert equality (NOT mere
+  // presence) so the wrong-source bug (resolveCurrentWorkspaceId) is caught.
+  // ---------------------------------------------------------------------------
+
+  it("T1-workspace-id: user-row INSERT carries workspace_id from the parent conversation", async () => {
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    __setCcRunnerForTests(
+      makeAssistantPersistenceStubRunner({
+        onDispatch: () => {
+          // No assistant text needed — the user-row INSERT happens pre-runner.
+        },
+      }),
+    );
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    await dispatchSoleurGo({
+      userId: "u-ws-user",
+      conversationId: "conv-ws-user",
+      userMessage: "hello",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await vi.waitFor(() =>
+      expect(userInsertCalls(mockMessagesInsert)).toHaveLength(1),
+    );
+    const [row] = userInsertCalls(mockMessagesInsert);
+    expect(row.workspace_id).toBe("ws-A");
+  });
+
+  it("T2-workspace-id: assistant-row INSERT (buildRow) carries workspace_id from the parent conversation", async () => {
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    __setCcRunnerForTests(
+      makeAssistantPersistenceStubRunner({
+        onDispatch: (events) => {
+          events.onText("Hello world.");
+          events.onTextTurnEnd?.();
+        },
+      }),
+    );
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    await dispatchSoleurGo({
+      userId: "u-ws-asst",
+      conversationId: "conv-ws-asst",
+      userMessage: "summarize",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await vi.waitFor(() =>
+      expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(1),
+    );
+    const [row] = assistantInsertCalls(mockMessagesInsert);
+    expect(row.workspace_id).toBe("ws-A");
+  });
+
+  it("T6-workspace-id-read-failure: conversation workspace_id read error mirrors via reportSilentFallback AND throws (no NULL insert)", async () => {
+    // The conversation workspace_id read errors → the dispatch MUST mirror to
+    // Sentry and throw, never proceed to an INSERT with a NULL workspace_id
+    // (which would 500 under RLS in prod).
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+    const { getFreshTenantClient } = await import("@/lib/supabase/tenant");
+
+    // Override the tenant client so the conversations read returns an error.
+    (getFreshTenantClient as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async () => ({
+        from: (table: string) => {
+          if (table === "conversations") {
+            return {
+              select: () => ({
+                eq: () => ({
+                  single: async () => ({
+                    data: null,
+                    error: { message: "workspace read boom" },
+                  }),
+                }),
+              }),
+            };
+          }
+          if (table === "messages") {
+            return { insert: mockMessagesInsert };
+          }
+          throw new Error(`unexpected table: ${table}`);
+        },
+      }),
+    );
+
+    __setCcRunnerForTests(
+      makeAssistantPersistenceStubRunner({ onDispatch: () => {} }),
+    );
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    await expect(
+      dispatchSoleurGo({
+        userId: "u-ws-fail",
+        conversationId: "conv-ws-fail",
+        userMessage: "hello",
+        currentRouting: { kind: "soleur_go_pending" },
+        sendToClient,
+        persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+      }),
+    ).rejects.toThrow();
+
+    // No messages INSERT happened (we threw before it).
+    expect(userInsertCalls(mockMessagesInsert)).toHaveLength(0);
+    // The read failure was mirrored to Sentry.
+    expect(mockReportSilentFallback).toHaveBeenCalled();
+  });
+
   it("T1: persists assistant message via supabase().from('messages').insert when onTextTurnEnd fires", async () => {
     const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
 
@@ -1333,6 +1470,11 @@ describe("cc-dispatcher singletons + orchestration", () => {
           content: "partial reply before abort",
           leader_id: "cc_router",
           status: "aborted",
+          // review (P2): the aborted branch of buildRow must also carry
+          // workspace_id (mig 059 RLS). Without this, a future drop of
+          // workspace_id on the aborted-only path passes T2 (complete) and
+          // ships a broken aborted-turn persist.
+          workspace_id: "ws-A",
         }),
       );
     },

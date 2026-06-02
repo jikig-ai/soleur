@@ -609,7 +609,7 @@ fi
 
 ### Deploy Pipeline Fix Drift Gate
 
-**Trigger:** PR touches any of the 6 `terraform_data.deploy_pipeline_fix` trigger files:
+**Trigger:** PR touches any of the `terraform_data.deploy_pipeline_fix` trigger files:
 
 - `apps/web-platform/infra/ci-deploy.sh`
 - `apps/web-platform/infra/ci-deploy-wrapper.sh`
@@ -617,10 +617,15 @@ fi
 - `apps/web-platform/infra/cat-deploy-state.sh`
 - `apps/web-platform/infra/canary-bundle-claim-check.sh`
 - `apps/web-platform/infra/hooks.json.tmpl`
+- `apps/web-platform/infra/deploy-inngest-bootstrap.sudoers`
+- `apps/web-platform/infra/infra-config-apply.sh`
+- `apps/web-platform/infra/infra-config-install.sh` (#4829 — delivered by the SSH bridge, kept in the hash for drift-guard sync)
+- `apps/web-platform/infra/push-infra-config.sh`
+- `apps/web-platform/infra/cat-infra-config-state.sh`
 
 **Detection:**
 
-The five trigger files are enumerated as a single bash array. The regex below MUST be derived from this array — keep the gate's reject criteria, documentation block, and test fixtures in sync (per `cq-when-a-plan-prescribes-a-validator-guard-or` — guard-surface coupling). If `apps/web-platform/infra/server.tf`'s `triggers_replace` `sha256(join(",",...))` block is changed (file added, removed, renamed), update the array, the regex, and `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` in the same PR.
+The trigger files are enumerated as a single bash array. The regex below MUST be derived from this array — keep the gate's reject criteria, documentation block, and test fixtures in sync (per `cq-when-a-plan-prescribes-a-validator-guard-or` — guard-surface coupling). If `apps/web-platform/infra/server.tf`'s `triggers_replace` `sha256(join(",",...))` block is changed (file added, removed, renamed), update the array, the regex, and `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` in the same PR.
 
 ```bash
 DEPLOY_PIPELINE_FIX_TRIGGERS=(
@@ -632,10 +637,11 @@ DEPLOY_PIPELINE_FIX_TRIGGERS=(
   "apps/web-platform/infra/hooks.json.tmpl"
   "apps/web-platform/infra/deploy-inngest-bootstrap.sudoers"
   "apps/web-platform/infra/infra-config-apply.sh"
+  "apps/web-platform/infra/infra-config-install.sh"
   "apps/web-platform/infra/push-infra-config.sh"
   "apps/web-platform/infra/cat-infra-config-state.sh"
 )
-DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|push-infra-config\.sh|cat-infra-config-state\.sh)$'
+DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|infra-config-install\.sh|push-infra-config\.sh|cat-infra-config-state\.sh)$'
 
 git diff --name-only origin/main...HEAD | grep -E "$DPF_REGEX"
 ```
@@ -646,7 +652,41 @@ If the grep matches at least one path, the gate fires. Trigger condition is "≥
 
 The PR's diff will produce drift on `terraform_data.deploy_pipeline_fix` — by design, because `hcloud_server.web` has `lifecycle.ignore_changes = [user_data]` (per `#967`) so cloud-init can't re-apply.
 
-**Auto-apply on merge.** The [`apply-deploy-pipeline-fix.yml`](../../../../.github/workflows/apply-deploy-pipeline-fix.yml) workflow auto-fires on push to `main` when any of the 6 trigger files change. It runs the targeted `terraform apply` from Doppler `prd_terraform`, verifies server-side hashes match the merged tree, and auto-closes any open `infra: drift detected in web-platform` issue. **Zero operator action required** post-merge — the PR review is the human authorization. Kill switch: include `[skip-deploy-fix-apply]` in any commit message on the PR to suppress the apply for that merge.
+**Auto-apply on merge.** The [`apply-deploy-pipeline-fix.yml`](../../../../.github/workflows/apply-deploy-pipeline-fix.yml) workflow auto-fires on push to `main` when any trigger file changes. It runs the targeted `terraform apply` from Doppler `prd_terraform`, verifies the post-apply `files_written == files_total` invariant, and auto-closes any open `infra: drift detected in web-platform` issue. **Zero operator action required** post-merge — the PR review is the human authorization. Kill switch: include `[skip-deploy-fix-apply]` in any commit message on the PR to suppress the apply for that merge.
+
+**Both resources auto-apply (#4829).** The workflow's `-target=` set now lists BOTH `terraform_data.deploy_pipeline_fix` (HTTPS webhook push) AND `terraform_data.infra_config_handler_bootstrap` (the root-SSH bridge that delivers the handler + the `infra-config-install` escalation helper + the sudoers grant). The runner reaches the SSH bridge over the existing Cloudflare Tunnel SSH route — it installs `cloudflared`, opens a `cloudflared access tcp` localhost forward authenticated by the CF Access `ci_ssh` service token, and adds an `iptables -t nat OUTPUT REDIRECT` rule so terraform's Go SSH client transparently reaches sshd. The firewall `admin_ips` allowlist is unchanged (the tunnel is the access path, not an IP grant). A handler/helper/sudoers change therefore lands on prod with **zero operator `terraform apply`** — eliminating the manual step that left #4827 dormant. **One-time precondition:** the live host must already trust the current CI key (`terraform_data.root_authorized_keys`, applied on the operator's most recent full `terraform apply`); a first-apply `Permission denied (publickey)` means the key is not on-host, not a bridge defect (the CI path cannot self-apply `root_authorized_keys` — same firewall reason).
+
+**In-session apply (operator-machine fallback, #4829).** When `/ship` runs on the operator's own machine rather than CI — detect via `[[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]]` AND `ssh-add -l` listing a key — the agent CAN apply the bridge in-session over the operator's direct SSH (their IP is in `admin_ips`, their ssh-agent key is in root's `authorized_keys`) instead of deferring to the CI auto-apply. This is the rare fallback (transient CI failure, or shipping a handler change you want live immediately); the CI auto-apply above is the default. Run:
+
+```bash
+if [[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]] && ssh-add -l >/dev/null 2>&1; then
+  cd apps/web-platform/infra
+  # Only the bridge target here (NOT deploy_pipeline_fix): the in-session fallback
+  # exists to land a handler/helper/sudoers change immediately; the webhook push
+  # (deploy_pipeline_fix) is independently covered by the CI auto-apply and does not
+  # need the operator's SSH path. Do NOT widen this to a 2-target apply.
+  doppler run -p soleur -c prd_terraform -- \
+    terraform apply -target=terraform_data.infra_config_handler_bootstrap -input=true
+  # The Terraform "yes" prompt is the load-bearing authorization
+  # (hr-menu-option-ack-not-prod-write-auth). Do NOT pass -auto-approve.
+fi
+```
+
+Verify with the no-host-login status hook (per `hr-no-ssh-fallback-in-runbooks` — `files_written == files_total` via `/hooks/infra-config-status`, NOT an SSH hash compare):
+
+```bash
+WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET -p soleur -c prd_terraform --plain)
+CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID -p soleur -c prd_terraform --plain)
+CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET -p soleur -c prd_terraform --plain)
+HMAC=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+curl -fsS -H "X-Signature-256: sha256=${HMAC}" \
+  -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
+  -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
+  "https://deploy.$(doppler secrets get APP_DOMAIN_BASE -p soleur -c prd_terraform --plain)/hooks/infra-config-status" \
+  | jq -e '.exit_code == 0 and .files_failed == 0 and .files_written == .files_total'
+```
+
+If `ssh-add -l` lists no key (no agent), do NOT attempt the in-session apply — let the CI auto-apply on merge handle it (no operator-only step is introduced; the CI path is the default).
 
 This gate's role is now purely informational: surface that the PR will trigger the auto-apply, and confirm the operator has not used the kill-switch unintentionally. Issue #3618 tracks the deeper refactor that eliminates the `terraform_data.deploy_pipeline_fix` pattern entirely (containerized deploy-orchestrator).
 
@@ -743,6 +783,43 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
 **If not triggered:** Skip silently.
 
 **Why:** In #1265, the CMO content gate was fixed to catch product features but the PWA feature itself was never assessed — the fix shipped without remediating the original gap. "Gate fixed" is not done — "gate fixed AND missed case remediated" is done.
+
+### Incident-PIR Gate (mandatory when triggered)
+
+Enforces the operator's standing rule — **every detected incident gets a post-incident report** — at the merge boundary: when a PR fixes a production incident/outage — **including an incident discovered incidentally while doing other work (after-the-fact)** — a post-incident report (PIR) MUST be produced before merge. (Constitution: "Incident detected → PIR always.") A fix that silently closes an outage without a PIR loses the learning that prevents recurrence (this gate exists because the 2026-06-02 chat-RLS outage went undetected for ~3 weeks and was nearly shipped-and-forgotten without a post-mortem).
+
+**Trigger — fires if ANY of:**
+
+1. The session invoked `/soleur:incident` (a PIR was scaffolded) — then this gate just verifies it landed on the branch.
+2. The referenced plan/spec OR the PR body declares `brand_survival_threshold: single-user incident` or `aggregate pattern` **AND** the change is a production-incident fix (not a greenfield feature). Distinguish via the incident-signal scan below.
+3. **Incident-signal scan.** The PR title/body or linked plan matches (case-insensitive) an outage signal AND a production signal:
+
+   ```bash
+   PR_TEXT=$(gh pr view --json title,body --jq '.title + "\n" + .body' 2>/dev/null || true)
+   PLAN_PATH=$(printf '%s' "$PR_TEXT" | grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])"`]+' | head -n1 || true)
+   PLAN_TEXT=""; [[ -n "$PLAN_PATH" && -f "$PLAN_PATH" ]] && PLAN_TEXT=$(cat "$PLAN_PATH")
+   HAYSTACK=$(printf '%s\n%s' "$PR_TEXT" "$PLAN_TEXT")
+   OUTAGE_RE='(outage|incident|broke[n]?|down for|silently (broken|failing)|regression in prod|users? (cannot|could not|can.?t)|unable to (send|use|log ?in)|production .*(broken|down|failing)|Sentry .*(error|alert).*(prod|production|user))'
+   PROD_RE='(prod|production|deployed|live|app\.soleur\.ai|tenant-zero|customer)'
+   echo "$HAYSTACK" | grep -qiE "$OUTAGE_RE" && echo "$HAYSTACK" | grep -qiE "$PROD_RE" && echo "INCIDENT-SIGNAL: yes"
+   ```
+
+   A greenfield-feature PR (no production-failure framing) does NOT trigger — the signals require BOTH an outage verb AND a production context. When uncertain, the gate fires (fail-toward-PIR for ambiguous prod-fix PRs); over-producing a short PIR is cheaper than losing an incident's learning.
+
+**If triggered — require a PIR on the branch:**
+
+```bash
+git diff --name-only origin/main...HEAD | grep -E '^knowledge-base/engineering/ops/post-mortems/.+-postmortem\.md$'
+```
+
+- **Match (a PIR was added/modified on this branch):** Pass. Confirm its frontmatter carries `brand_survival_threshold` and the Art. 33/34 fields (availability outages set both `false` with an `n/a` rationale; data-exposure incidents must evaluate the GDPR gate per `/soleur:incident` Phase 2).
+- **No match:** the incident has no PIR. **Headless mode:** invoke `/soleur:incident` (or, if unavailable in the loaded plugin snapshot, author the PIR directly using `plugins/soleur/skills/incident/templates/pir.md` → `knowledge-base/engineering/ops/post-mortems/<slug>-postmortem.md`), commit it, then re-run the gate. **Interactive mode:** prompt — (a) run `/soleur:incident` now, (b) author the PIR inline, or (c) defer with a tracked `type/chore` issue carrying a `Re-eval by:` criterion AND the `deferred-automation` sentinel (only when the PIR genuinely needs data not yet available). Default-deny on "we'll write it later" with no tracked issue.
+
+**Also file the systemic follow-ups the PIR names** (alerting gaps, write-site sweeps) as their own issues — a PIR with `## Follow-ups` that never become issues is shelf-ware.
+
+**If not triggered:** Skip silently (greenfield features, docs, refactors with no production-incident framing).
+
+**Why:** The 2026-06-02 chat-message-saving outage (migration 059 made `messages.workspace_id` RLS-required but the INSERT sites were never swept) ran for ~3 weeks, was first MISdiagnosed, and was nearly shipped-and-forgotten with no post-mortem. The operator's standing instruction is that **any** detected incident — even one found incidentally while fixing something else — always gets a post-mortem. This gate makes that mechanical at the merge boundary. PIR: `knowledge-base/engineering/ops/post-mortems/chat-rls-workspace-id-outage-postmortem.md`.
 
 ### Undeferred Operator-Step Gate (mandatory)
 

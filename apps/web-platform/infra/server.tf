@@ -333,13 +333,23 @@ resource "terraform_data" "journald_persistent" {
 #
 # Shows as "will be created" in CI drift reports -- expected behavior, same as the
 # 7 sibling SSH provisioners. Apply-path firewall note: SSH:22 is allowlisted to
-# var.admin_ips only (firewall.tf), so the handshake succeeds iff the operator/CI
-# egress IP ∈ admin_ips. A `connection reset by peer` here is admin-IP drift (fix:
-# /soleur:admin-ip-refresh, runbook admin-ip-drift.md), NOT an sshd/handler fault —
-# per hr-ssh-diagnosis-verify-firewall. RUNNER-EGRESS CAVEAT: the GitHub-hosted CI
-# runner egress IP is NOT in admin_ips and is non-static, so this resource is
-# admin-applied (like the 7 siblings) — do NOT add it to apply-deploy-pipeline-fix.yml's
-# -target= set (which applies only the webhook resource).
+# var.admin_ips only (firewall.tf) for DIRECT-IP dials. The OPERATOR-LOCAL apply
+# dials the direct IP, so its handshake succeeds iff the operator egress IP ∈
+# admin_ips. A `connection reset by peer` on the operator path is admin-IP drift
+# (fix: /soleur:admin-ip-refresh, runbook admin-ip-drift.md), NOT an sshd/handler
+# fault — per hr-ssh-diagnosis-verify-firewall.
+#
+# #4829 — CI ACCESS IS VIA THE CLOUDFLARE TUNNEL, NOT admin_ips. The GitHub-hosted
+# runner egress IP is non-static and NOT in admin_ips, so `apply-deploy-pipeline-fix.yml`
+# reaches this bridge over the existing CF Tunnel SSH route (tunnel.tf: ssh://localhost:22
+# ingress + CF Access ci_ssh service token) instead of the firewall-gated direct IP.
+# The runner opens a `cloudflared access tcp` localhost forward and an
+# `iptables -t nat OUTPUT REDIRECT` rule rewrites SERVER_IP:22 → 127.0.0.1:2222,
+# so the inbound SSH arrives at sshd via the host-side cloudflared daemon and never
+# traverses the :22 admin_ips ingress rule (firewall byte-unchanged). This bridge IS
+# now in apply-deploy-pipeline-fix.yml's -target= set; a CI handshake failure here is
+# either a missing/stale CI key in root's authorized_keys (terraform_data.root_authorized_keys,
+# operator-local-apply only) or an expired ci_ssh CF Access token — NOT admin-IP drift.
 #
 # #4827 ADDITION: this bridge also delivers infra-config-install.sh (the pinned
 # root-run escalation helper) + the updated deploy-inngest-bootstrap.sudoers (with
@@ -348,8 +358,11 @@ resource "terraform_data" "journald_persistent" {
 # binary AND the sudoers alias present on-host before `sudo infra-config-install`
 # is permitted — but the handler cannot deliver either (the helper is deliberately
 # OUT of the webhook FILE_MAP, and writing the sudoers itself requires the alias).
-# Root SSH is the only non-circular bootstrap path. deploy_pipeline_fix depends_on
-# this resource so the SSH delivery lands before its webhook push runs.
+# Root SSH is the only non-circular bootstrap path. #4829 — deploy_pipeline_fix does
+# NOT depends_on this resource; both are listed as explicit -target=s in
+# apply-deploy-pipeline-fix.yml and apply on the same CI run. Ordering between the SSH
+# helper/sudoers delivery and the webhook push is handled by the handler's per-file
+# install_rejected self-heal (see the deploy_pipeline_fix depends_on rationale below).
 resource "terraform_data" "infra_config_handler_bootstrap" {
   triggers_replace = sha256(join(",", [
     file("${path.module}/infra-config-apply.sh"),
@@ -359,11 +372,27 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
     local.hooks_json,
   ]))
 
+  # #4829 — DUAL-CONTEXT connection. Two apply paths reach this bridge:
+  #   (1) operator-local full `terraform apply` — var.ci_ssh_private_key is unset
+  #       (null), so agent = true uses the operator's ssh-agent (their key is
+  #       already in root's authorized_keys). Byte-equivalent to the pre-#4829
+  #       behavior.
+  #   (2) CI `apply-deploy-pipeline-fix.yml` over the Cloudflare Tunnel —
+  #       TF_VAR_ci_ssh_private_key carries Doppler DEPLOY_SSH_PRIVATE_KEY, so
+  #       agent = false and the Go SSH client authenticates with that explicit
+  #       key. The runner has no ssh-agent; the host trusts the matching pubkey
+  #       via terraform_data.root_authorized_keys (ci-ssh-key.tf).
+  # connection.host stays the literal ipv4_address in BOTH paths — the CI runner
+  # transparently redirects SERVER_IP:22 → 127.0.0.1:2222 (the cloudflared TCP
+  # forward) via an `iptables -t nat OUTPUT REDIRECT` rule, invisible to the Go
+  # SSH client (which does NOT read ~/.ssh/config / ProxyCommand — see learning
+  # 2026-05-20-terraform-go-ssh-client-ignores-ssh-config-multi-agent-catch.md).
   connection {
-    type  = "ssh"
-    host  = hcloud_server.web.ipv4_address
-    user  = "root"
-    agent = true
+    type        = "ssh"
+    host        = hcloud_server.web.ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
   }
 
   # The two scripts are on-disk files → straight scp. hooks.json is NOT: it is a
@@ -458,16 +487,18 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
 resource "terraform_data" "deploy_pipeline_fix" {
   # AppArmor profile must be loaded before ci-deploy.sh references it (#1570).
   #
-  # #4827 — deliberately NO depends_on the infra_config_handler_bootstrap bridge.
-  # `apply-deploy-pipeline-fix.yml` runs `terraform apply -target=this` from the CI
-  # runner, and `-target` pulls in a resource's dependencies — a depends_on the
-  # bridge would force the runner to apply the bridge's SSH provisioners, which
-  # fail because the runner egress IP is not in var.admin_ips (the bridge is
-  # admin-applied by design; see its header + server.tf:330). Ordering between the
-  # SSH delivery of helper+sudoers and the webhook push is instead handled by the
-  # handler's per-file self-heal: a push that predates the helper/sudoers records
-  # install_rejected for that file and the next push lands it. The admin full
-  # `terraform apply` delivers both on the same run.
+  # #4827/#4829 — deliberately NO depends_on the infra_config_handler_bootstrap
+  # bridge, even though both are now applied by `apply-deploy-pipeline-fix.yml`.
+  # The workflow lists BOTH resources EXPLICITLY in its `-target=` set (#4829), so
+  # a depends_on is unnecessary for ordering AND would over-couple the resource
+  # graph: a depends_on would force EVERY apply of deploy_pipeline_fix (including
+  # the operator-local full apply) to also recreate the bridge. Keeping them as
+  # independent explicit targets lets the workflow apply each on its own merits.
+  # Ordering between the SSH delivery of helper+sudoers (the bridge) and the
+  # webhook push (this resource) is handled by the handler's per-file self-heal: a
+  # push that predates the helper/sudoers records install_rejected for that file
+  # and the next push lands it. Both targets apply on the same CI run, so the
+  # window is a single apply.
   depends_on = [terraform_data.apparmor_bwrap_profile]
 
   # hcloud_server.web has ignore_changes=[user_data], so cloud-init never re-applies
@@ -494,6 +525,15 @@ resource "terraform_data" "deploy_pipeline_fix" {
     # the ship-skill DEPLOY_PIPELINE_FIX_TRIGGERS) in sync without a 3-way edit.
     file("${path.module}/deploy-inngest-bootstrap.sudoers"),
     file("${path.module}/infra-config-apply.sh"),
+    # NOTE (#4829): infra-config-install.sh is delivered by the
+    # infra_config_handler_bootstrap SSH bridge (root-managed escalation helper),
+    # NOT this webhook path. It is kept in THIS hash for the same reason as the
+    # sudoers above: so a helper-only change re-fires deploy_pipeline_fix (harmless
+    # — re-pushes the unchanged 7 webhook files) AND keeps the deploy-pipeline-fix
+    # drift guard (plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts
+    # TRIGGER_FILES + the ship-skill DEPLOY_PIPELINE_FIX_TRIGGERS array) in sync,
+    # so the ship gate fires + notifies the operator on a helper-only change.
+    file("${path.module}/infra-config-install.sh"),
     file("${path.module}/push-infra-config.sh"),
     file("${path.module}/cat-infra-config-state.sh"),
     local.hooks_json,
