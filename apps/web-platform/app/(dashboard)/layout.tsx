@@ -237,7 +237,7 @@ export default function DashboardLayout({
           fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-soleur-border-default bg-soleur-bg-surface-1
           transition-transform duration-200 ease-out
           ${drawerOpen ? "translate-x-0" : "-translate-x-full"}
-          md:relative md:z-auto md:translate-x-0
+          md:relative md:z-30 md:translate-x-0
           md:transition-[width] md:duration-200 md:ease-out
           ${collapsed ? "md:w-14" : "md:w-56"}
         `}
