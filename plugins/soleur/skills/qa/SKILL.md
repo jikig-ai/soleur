@@ -69,7 +69,7 @@ Store the config name for use in subsequent `doppler` commands.
 
 ### Step 2.6: Structural-UI Visual-Regression Gate (#4834 / ADR-048)
 
-This is the gate's semantic home. Run it when the diff (`git diff --name-only origin/$(git rev-parse --abbrev-ref HEAD)...HEAD`) touches `apps/web-platform/app/(dashboard)/**`, `apps/web-platform/components/dashboard/**`, or any `layout.tsx`. Skip silently otherwise.
+This is the gate's semantic home. Run it when the diff (`git diff --name-only origin/main...HEAD` — the branch-vs-main merge-base diff; do NOT use `origin/<branch>...HEAD`, which only sees unpushed commits and returns 0 files once the branch is pushed, silently skipping the gate) touches `apps/web-platform/app/(dashboard)/**`, `apps/web-platform/components/dashboard/**`, or any `layout.tsx`. Skip silently otherwise.
 
 **Why this exists:** jsdom (vitest) renders no CSS, so `md:w-14` / `hidden md:block` / `flex-wrap` / `display:none` regressions ship green through the unit suite (the #4810 class — top-level chrome leaking into drilled routes; a collapsed rail with no icon-only form). The gate renders real CSS in real headless Chromium.
 

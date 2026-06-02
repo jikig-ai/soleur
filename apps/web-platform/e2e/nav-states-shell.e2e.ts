@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import type { Page } from "@playwright/test";
+import type { Page, Response } from "@playwright/test";
 import {
   injectFakeSupabaseSession,
   mockSupabaseAuth,
@@ -136,15 +136,51 @@ async function seedCollapsed(page: Page): Promise<void> {
   }, RAIL_COLLAPSE_KEY);
 }
 
-/** Navigate; skip (don't fail) only on a dev-server CSS-compile 500 in worktree. */
+/**
+ * Navigate. A 5xx is the local worktree's CSS-compile quirk — skip THERE only.
+ * In CI a 5xx means the shell this gate guards is actually broken, so it must
+ * FAIL, never skip to a green exit (a skipped test exits 0 = brand-survival
+ * false-GREEN — the exact hole this gate exists to close).
+ */
 async function gotoOrSkip(page: Page, path: string): Promise<void> {
-  const res = await page.goto(path);
-  if (res && res.status() >= 500) {
-    test.skip(true, "Dev server 5xx (CSS compile) — passes in CI container");
+  // The authenticated dev server's first navigation can ERR_ABORTED / refuse
+  // connection during cold compile. Retry transient NETWORK aborts a few times
+  // (deterministic, not reliant on CI `retries`). A 5xx is NOT retried here — it
+  // flows to the CI-fail / local-skip branch below. A persistent abort still throws.
+  let res: Response | null = null;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      res = await page.goto(path, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      lastErr = undefined;
+      break;
+    } catch (err) {
+      lastErr = err;
+      if (
+        !/ERR_ABORTED|ECONNREFUSED|ERR_CONNECTION|ERR_NETWORK_CHANGED|ERR_EMPTY_RESPONSE/.test(
+          String(err),
+        )
+      ) {
+        throw err;
+      }
+      // Page-independent backoff — page.waitForTimeout throws if a degraded
+      // server already tore the context down, masking the real abort.
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
   }
+  if (lastErr) throw lastErr;
   const html = await page.content();
-  if (html.includes('statusCode":500') || html.includes("ERR_INVALID_URL_SCHEME")) {
-    test.skip(true, "Dev server 5xx (CSS compile) — passes in CI container");
+  const is5xx =
+    (res !== null && res.status() >= 500) ||
+    html.includes('statusCode":500') ||
+    html.includes("ERR_INVALID_URL_SCHEME");
+  if (is5xx) {
+    if (process.env.CI) {
+      throw new Error(
+        `Dashboard route ${path} returned 5xx in CI — the visual gate must fail, not skip.`,
+      );
+    }
+    test.skip(true, "Dev server 5xx (CSS compile) — local worktree only; fails in CI");
   }
 }
 
@@ -161,7 +197,6 @@ const railBand = (page: Page) =>
 // scope identity/repo assertions to the RAIL band or they resolve to 2 elements.
 const orgIdentity = (page: Page) => railBand(page).getByTestId("workspace-identity-static");
 const repoBadge = (page: Page) => railBand(page).getByTestId("live-repo-badge");
-const repoText = (page: Page) => railBand(page).getByText("Working on:", { exact: false });
 const secondarySlot = (page: Page) => page.getByTestId("rail-secondary-slot");
 const primaryNav = (page: Page) => page.getByRole("link", { name: "Knowledge Base" });
 
@@ -177,10 +212,11 @@ test.describe("nav-states visual gate — desktop", () => {
     await expect(primaryNav(page)).toBeVisible();
     await expect(secondarySlot(page)).toHaveCount(0);
 
-    // Identity CONTENT (not just band box) is visible.
-    await expect(railBand(page)).toBeVisible();
-    await expect(orgIdentity(page)).toContainText("Soleur Workspace");
-    await expect(repoBadge(page)).toContainText("acme/repo");
+    // Identity CONTENT (not just band box) is visible. Generous timeout — the
+    // org/repo come from async app-route fetches that lag a cold route compile.
+    await expect(railBand(page)).toBeVisible({ timeout: 15_000 });
+    await expect(orgIdentity(page)).toContainText("Soleur Workspace", { timeout: 15_000 });
+    await expect(repoBadge(page)).toContainText("acme/repo", { timeout: 15_000 });
   });
 
   test("drilled (expanded): top-level chrome is GONE; band + section + slot remain (Bug 1)", async ({ page }) => {
@@ -189,9 +225,9 @@ test.describe("nav-states visual gate — desktop", () => {
 
     // The drilled rail swaps to the secondary slot + section title.
     await expect(secondarySlot(page)).toBeVisible({ timeout: 15_000 });
-    await expect(railBand(page)).toBeVisible();
-    await expect(railBand(page)).toContainText("Knowledge Base"); // section title in band
-    await expect(orgIdentity(page)).toContainText("Soleur Workspace"); // identity survives drill
+    await expect(railBand(page)).toBeVisible({ timeout: 15_000 });
+    await expect(railBand(page)).toContainText("Knowledge Base", { timeout: 15_000 }); // section title in band
+    await expect(orgIdentity(page)).toContainText("Soleur Workspace", { timeout: 15_000 }); // identity survives drill
 
     // Bug 1 invariant: wordmark + theme toggle must NOT be present when drilled.
     await expect(wordmark(page)).toHaveCount(0);
@@ -209,16 +245,23 @@ test.describe("nav-states visual gate — desktop", () => {
     // Retrying assertion: wait for the post-hydration collapsed width (md:w-14 = 56px).
     await expect(aside).toHaveClass(/md:w-14/, { timeout: 15_000 });
 
-    // Identity never unmounts on collapse (ADR-047) — band still present.
+    // Identity never unmounts on collapse (ADR-047) — band still present, in its
+    // icon-only form (positive invariant: the icon marker IS rendered).
     await expect(railBand(page)).toBeVisible();
+    await expect(railBand(page)).toHaveAttribute("data-collapsed", "true");
+    await expect(page.getByTestId("live-repo-dot")).toBeVisible();
 
     // Bug 2 invariant: the rail must NOT overflow horizontally, and the verbose
-    // "Working on:" repo label must be hidden in the collapsed (icon-only) form.
+    // "Working on:" repo label must be ABSENT from the rail (icon-only form). Use
+    // toHaveCount(0) at the rail-variant scope — NOT toBeHidden() on the (empty)
+    // rail band, which would pass vacuously on a zero-match locator.
     const overflow = await aside.evaluate(
       (el) => el.scrollWidth - el.clientWidth,
     );
     expect(overflow).toBeLessThanOrEqual(1);
-    await expect(repoText(page)).toBeHidden();
+    await expect(
+      page.locator('[data-variant="rail"]').getByText("Working on:", { exact: false }),
+    ).toHaveCount(0);
   });
 
   test("collapsed drilled: icon-only, no overflow, chrome gone", async ({ page }) => {
@@ -229,6 +272,7 @@ test.describe("nav-states visual gate — desktop", () => {
     const aside = page.locator("aside").first();
     await expect(aside).toHaveClass(/md:w-14/, { timeout: 15_000 });
     await expect(railBand(page)).toBeVisible();
+    await expect(railBand(page)).toHaveAttribute("data-collapsed", "true");
     await expect(wordmark(page)).toHaveCount(0); // Bug 1
     const overflow = await aside.evaluate((el) => el.scrollWidth - el.clientWidth);
     expect(overflow).toBeLessThanOrEqual(1); // Bug 2
@@ -248,6 +292,6 @@ test.describe("nav-states visual gate — mobile", () => {
       '[data-testid="workspace-context-band"][data-variant="mobile"]',
     );
     await expect(mobileBand).toBeVisible({ timeout: 15_000 });
-    await expect(mobileBand).toContainText("Soleur Workspace");
+    await expect(mobileBand).toContainText("Soleur Workspace", { timeout: 15_000 });
   });
 });
