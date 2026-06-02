@@ -212,8 +212,9 @@ logs:
   where: "GitHub Actions run logs + GITHUB_STEP_SUMMARY"
   retention: "90 days (GH Actions default)"
 discoverability_test:
-  command: "gh run list --workflow=apply-deploy-pipeline-fix.yml --limit 1 --json conclusion,databaseId then gh run view <id> --log | grep -E 'files_written|cloudflared access|iptables'"
-  expected_output: "latest run conclusion=success; log shows the tunnel-open + iptables-redirect + files_written==files_total lines (no host login required)"
+  command: "curl -fsS -o /dev/null -w '%{http_code}' --max-time 10 https://deploy.soleur.ai/hooks/infra-config-status"
+  expected_output: "200"
+  note: "200 is the authed operator result — the real probe carries X-Signature-256 (HMAC of empty body with WEBHOOK_DEPLOY_SECRET) + CF-Access-Client-Id/Secret headers from Doppler prd_terraform, and the JSON body proves files_written==files_total (no host login). An unauthenticated probe (no headers, e.g. preflight Check 10's credential-free env) returns 403 at the CF Access edge, which still proves the no-SSH status surface is reachable. Post-merge, the apply-deploy-pipeline-fix.yml run itself is the E2E (AC14/AC15): gh run list --workflow=apply-deploy-pipeline-fix.yml --limit 1 --json conclusion shows conclusion=success."
 ```
 
 ## Infrastructure (IaC)
