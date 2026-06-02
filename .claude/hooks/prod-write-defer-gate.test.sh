@@ -108,6 +108,53 @@ assert_match_enforce() {
   TOTAL=$((TOTAL + 1))
 }
 
+# assert_match_default_unset NAME CMD EXPECTED_RULE_ID
+# Default-when-unset path (AC3): invoke the hook with SOLEUR_DEFER_DRYRUN
+# completely UNSET (not pinned to 0 or 1) and assert the enforce envelope.
+# This is the ONE behavior the rest of the suite does not cover — every other
+# case pins the env var via run_hook, so a silent revert of the `:-0` default
+# back to `:-1` would pass all of them. This case is the sole guard against
+# that revert (see plan §Sharp Edges). Mirrors assert_match_enforce's
+# assertions but uses `env -i` WITHOUT SOLEUR_DEFER_DRYRUN.
+assert_match_default_unset() {
+  local name="$1" cmd="$2" expected_rule="$3"
+  local tmp; tmp=$(mktemp -d); local incidents="$tmp/incidents"
+  mkdir -p "$incidents"
+  local payload; payload=$(make_payload "$cmd")
+  local out
+  out=$(env -i \
+    HOME="${HOME:?}" PATH="$PATH" \
+    INCIDENTS_REPO_ROOT="$incidents" \
+    bash -c 'printf "%s" "$1" | "'"$HOOK"'" 2>/dev/null' _ "$payload")
+  local jsonl="$incidents/.claude/.rule-incidents.jsonl"
+  local decision event_name reason seen_kind seen_rule
+  decision=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // ""' 2>/dev/null || echo "")
+  event_name=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.hookEventName // ""' 2>/dev/null || echo "")
+  reason=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null || echo "")
+  if [[ -f "$jsonl" ]]; then
+    seen_rule=$(jq -r 'select(.kind=="defer_requested") | .rule_id' "$jsonl" | head -1)
+    seen_kind=$(jq -r '.kind' "$jsonl" | head -1)
+  else
+    seen_rule=""; seen_kind=""
+  fi
+  if [[ "$decision" == "defer" && "$event_name" == "PreToolUse" \
+        && "$seen_kind" == "defer_requested" && "$seen_rule" == "$expected_rule" \
+        && -n "$reason" ]]; then
+    echo "PASS: $name"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL: $name"
+    echo "  cmd=$cmd"
+    echo "  decision=$decision (expected defer), event_name=$event_name (expected PreToolUse)"
+    echo "  kind=$seen_kind (expected defer_requested), rule=$seen_rule (expected $expected_rule)"
+    echo "  reason=$reason"
+    echo "  (SOLEUR_DEFER_DRYRUN intentionally UNSET — a failure here implies the :-0 enforce default reverted to :-1 dry-run)"
+    FAIL=$((FAIL + 1))
+  fi
+  TOTAL=$((TOTAL + 1))
+  rm -rf "$tmp"
+}
+
 # assert_nomatch NAME CMD
 # Hook should output empty JSON / no decision, and emit NO incident.
 assert_nomatch() {
@@ -211,6 +258,10 @@ echo "--- Tier D: enforce mode (wrapped defer envelope) ---"
 assert_match_enforce "D1 enforce push main"            "git push origin main"                                         "prod-write-defer-git-push-main"
 assert_match_enforce "D2 enforce terraform apply"      "terraform apply -auto-approve"                                "prod-write-defer-terraform-apply"
 assert_match_enforce "D3 enforce doppler prd"          "doppler secrets set FOO=bar --config prd_terraform"           "prod-write-defer-doppler-secrets-stdout"
+# D4 (AC3): default-when-unset must be enforce. SOLEUR_DEFER_DRYRUN is NOT set
+# in the env — exercises the hardcoded `${SOLEUR_DEFER_DRYRUN:-0}` fallback.
+# RED against the pre-flip `:-1` default (would emit would_defer/allow).
+assert_match_default_unset "D4 default-unset enforce"  "terraform apply"                                              "prod-write-defer-terraform-apply"
 
 # ============================================================
 # Tier E: bypass (TTY + env reason+operator) → kind=bypass, allow
@@ -301,6 +352,35 @@ echo "--- Tier G: broken regex → fail-closed ---"
     PASS=$((PASS+1))
   else
     echo "FAIL: G1 (decision=$decision expected deny; kind=$seen_kind expected hook_self_fault)"
+    echo "  out=$out"
+    echo "  jsonl=$(cat "$jsonl" 2>/dev/null)"
+    FAIL=$((FAIL+1))
+  fi
+  TOTAL=$((TOTAL+1))
+  rm -rf "$tmp"
+}
+
+# G2: invalid SOLEUR_DEFER_DRYRUN value → fail-closed via the case `*)` arm.
+# Guards the plan §User-Brand Impact "mistyped flip" paralysis path: if the
+# `:-0` default is ever edited to a non-0/non-1 value, the hook must DENY
+# (deny_self_fault), never silently allow. Without this case a future edit
+# that produces e.g. `:-O` (letter O) would fail open with no test signal.
+{
+  tmp=$(mktemp -d); incidents="$tmp/incidents"; mkdir -p "$incidents"
+  payload=$(make_payload "terraform apply")
+  out=$(env -i \
+    HOME="${HOME:?}" PATH="$PATH" \
+    INCIDENTS_REPO_ROOT="$incidents" \
+    SOLEUR_DEFER_DRYRUN=99 \
+    bash -c 'printf "%s" "$1" | "'"$HOOK"'" 2>/dev/null' _ "$payload")
+  decision=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // ""' 2>/dev/null || echo "")
+  jsonl="$incidents/.claude/.rule-incidents.jsonl"
+  seen_kind=$(jq -r 'select(.kind=="hook_self_fault") | .kind' "$jsonl" 2>/dev/null | head -1)
+  if [[ "$decision" == "deny" && "$seen_kind" == "hook_self_fault" ]]; then
+    echo "PASS: G2 invalid SOLEUR_DEFER_DRYRUN value → deny + hook_self_fault"
+    PASS=$((PASS+1))
+  else
+    echo "FAIL: G2 (decision=$decision expected deny; kind=$seen_kind expected hook_self_fault)"
     echo "  out=$out"
     echo "  jsonl=$(cat "$jsonl" 2>/dev/null)"
     FAIL=$((FAIL+1))

@@ -12,9 +12,9 @@
 #                                              operate against it and the same trap class applies to
 #                                              cross-tenant value chunks rendered post-deletion).
 #
-# Mode (controlled by SOLEUR_DEFER_DRYRUN, default 1):
-#   1 (dry-run, default) — emit kind=would_defer, allow (output "{}").
-#   0 (enforce)          — emit kind=defer_requested, append approvals.jsonl,
+# Mode (controlled by SOLEUR_DEFER_DRYRUN, default 0):
+#   1 (dry-run)          — emit kind=would_defer, allow (output "{}").
+#   0 (enforce, default) — emit kind=defer_requested, append approvals.jsonl,
 #                          return wrapped defer envelope (hookEventName=PreToolUse,
 #                          permissionDecision=defer). DEFER_VALUE empirically
 #                          verified in DEFER-DECISION-PAYLOAD-SHAPE.md (CC 2.1.142).
@@ -32,7 +32,7 @@ set -uo pipefail
 # shellcheck source=lib/incidents.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh"
 
-SOLEUR_DEFER_DRYRUN="${SOLEUR_DEFER_DRYRUN:-1}"
+SOLEUR_DEFER_DRYRUN="${SOLEUR_DEFER_DRYRUN:-0}"
 # Empirically verified: "defer" gives silent pause, suitable for claude --resume.
 # See .claude/hooks/DEFER-DECISION-PAYLOAD-SHAPE.md.
 DEFER_VALUE="defer"
@@ -251,6 +251,10 @@ case "$SOLEUR_DEFER_DRYRUN" in
     echo "[prod-write-defer-gate] DEFERRED $MATCHED_RULE: $CMD_DISPLAY" >&2
     if [[ -n "$SESSION_ID_SAFE" ]]; then
       echo "[prod-write-defer-gate] resume via: claude --resume $SESSION_ID_SAFE" >&2
+    else
+      # No session_id in the hook payload — still give the operator a recovery
+      # path rather than a silent pause (plan §User-Brand Impact bullet-1).
+      echo "[prod-write-defer-gate] resume via: claude --resume (no session_id in payload; pick the paused session)" >&2
     fi
     jq -n \
       --arg rule "$MATCHED_RULE" \
