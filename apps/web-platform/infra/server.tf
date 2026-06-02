@@ -485,12 +485,14 @@ resource "terraform_data" "deploy_pipeline_fix" {
     file("${path.module}/webhook.service"),
     file("${path.module}/cat-deploy-state.sh"),
     file("${path.module}/canary-bundle-claim-check.sh"),
-    # NOTE (#4827): deploy-inngest-bootstrap.sudoers is intentionally NOT hashed
-    # here. push-infra-config.sh no longer carries the sudoers (it is root-managed,
-    # delivered by terraform_data.infra_config_handler_bootstrap over SSH, which
-    # hashes it in ITS triggers_replace and which this resource depends_on). Hashing
-    # it here would only force a spurious re-push of the 7 webhook files on a
-    # sudoers-only change without delivering the sudoers.
+    # NOTE (#4827): the sudoers is no longer webhook-delivered (removed from
+    # push-infra-config.sh + FILE_MAP; it is root-managed via the
+    # infra_config_handler_bootstrap SSH bridge). It is kept in THIS hash so a
+    # sudoers change still re-fires deploy_pipeline_fix (harmless — re-pushes the
+    # unchanged 7 webhook files) AND keeps the deploy-pipeline-fix drift guard
+    # (plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts TRIGGER_FILES +
+    # the ship-skill DEPLOY_PIPELINE_FIX_TRIGGERS) in sync without a 3-way edit.
+    file("${path.module}/deploy-inngest-bootstrap.sudoers"),
     file("${path.module}/infra-config-apply.sh"),
     file("${path.module}/push-infra-config.sh"),
     file("${path.module}/cat-infra-config-state.sh"),
