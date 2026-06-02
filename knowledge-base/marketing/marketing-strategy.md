@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-22
-last_reviewed: 2026-03-22
+last_updated: 2026-06-01
+last_reviewed: 2026-06-01
 review_cadence: quarterly
 owner: CMO
 depends_on:
@@ -55,7 +55,7 @@ Soleur is the Company-as-a-Service platform -- 60+ agents, 60+ skills, 3 command
 | dateModified signals | No blog post has `updated` frontmatter. Google freshness assessment blocked. | High |
 | Social proof (external) | 5 case studies published but no testimonials from external users. | High |
 | User validation | 1-2 informal conversations. Need 10+ problem interviews. | High |
-| Brand term compliance | "Plugin" still appears in homepage hero subtitle, FAQ texts, llms.txt, Getting Started meta description. | High |
+| Brand term compliance | Resolved (2026-06-01, #1051). Primary surfaces -- homepage hero, llms.txt, Getting Started, About, Community -- lead with the Company-as-a-Service platform. "Plugin" remains only in exception-permitted contexts (CLI install commands, SEO pillar pages, legal defined terms) per brand-guide line 96. | Low |
 | Pricing | Undecided. Vision page mentions "success tax" but no committed model. | Medium |
 | Email / newsletter | Does not exist. No way to capture or nurture leads. | Medium |
 | Page-specific OG images | Single generic OG image on all pages. Low social sharing CTR. | Medium |
@@ -75,7 +75,7 @@ For **solo founders building real companies** who are frustrated that AI helps w
 
 These are the structural advantages that competitors cannot replicate by shipping features. All marketing messaging must ladder up to at least one.
 
-1. **Compounding knowledge base.** Cross-domain institutional memory that persists across sessions. The brand guide informs marketing content. The competitive analysis shapes product positioning. The legal audit references the privacy policy. No competitor -- not Cowork, not Notion, not Tanka -- has this across business domains within a terminal-first workflow. **[2026-03-22]** The moat itself is validated by user research -- founders described cross-domain pain unprompted. The "terminal-first workflow" qualifier should be removed in the next rewrite; the compounding knowledge base moat is delivery-agnostic.
+1. **Compounding knowledge base.** Cross-domain institutional memory that persists across sessions. The brand guide informs marketing content. The competitive analysis shapes product positioning. The legal audit references the privacy policy. No competitor -- not Cowork, not Notion, not Tanka -- has this across business domains. **[2026-03-22]** The moat itself is validated by user research -- founders described cross-domain pain unprompted. **[2026-06-01]** The "terminal-first workflow" qualifier has been removed; the compounding knowledge base moat is delivery-agnostic.
 
 2. **Cross-domain coherence.** 60+ agents share context across 8 domains. A decision in product strategy propagates to engineering planning, marketing copy, and legal review. Competitors are either deep in one domain (Cursor, Devin) or broad but stateless across many (Cowork).
 
@@ -141,7 +141,7 @@ For the PIVOT validation, narrow to:
 | X/Twitter solopreneur network | Medium | Medium | P1 -- amplification and thought leadership |
 | IndieHackers | Medium | Medium | P2 -- active solopreneur community |
 | Claude Code Discord | High | Low | P2 -- technical builders (beachhead) |
-| GitHub (issue engagement, plugin discovery) | Medium | Low | P2 -- technical discovery surface |
+| GitHub (issue engagement, open-source discovery) | Medium | Low | P2 -- technical discovery surface feeding the cloud waitlist |
 | Hacker News | High (when triggered) | Low (organic) | P3 -- submit articles, not product launches |
 | Reddit (r/ClaudeAI, r/SaaS, r/solopreneur) | Medium | Low | P3 -- respond to relevant threads |
 
@@ -201,8 +201,8 @@ No paid acquisition until organic channels prove the thesis. The validation phas
 
 **Priority actions:**
 
-1. Optimize Claude Code plugin registry listing (description, keywords, categories)
-2. Ensure `claude plugin install soleur` experience is clean and immediate
+1. Optimize the open-source / self-hosted listing (Claude Code plugin registry: description, keywords, categories). Treat it as a technical-discovery channel that feeds the cloud waitlist, not the primary conversion surface.
+2. Ensure the self-hosted `claude plugin install soleur` experience is clean and immediate, with a clear path to reserve cloud-platform access
 3. Build onboarding flow that demonstrates cross-domain value in the first 10 minutes
 4. Create "Built with Soleur" showcase starting with soleur.ai itself
 
@@ -334,7 +334,7 @@ Completed: CaaS category definition (Gap 2), Cursor positioning (Gap 6). See `co
 |--------|--------|--------|
 | Monthly organic visitors | 500+ | Plausible |
 | Article pageviews | 100+ per article | Plausible |
-| Plugin installs | 50+ total | Claude Code registry (if available) |
+| Self-hosted installs (waitlist feeder) | 50+ total | Claude Code registry (if available) |
 | Testimonials collected | 3-5 | Validation participants |
 | Case studies published | 1+ | soleur.ai |
 | AEO citation rate | Soleur mentioned in 2+ AI search results for target queries | Manual audit |
@@ -384,7 +384,7 @@ Weekly snapshots are generated automatically by CI (`scheduled-weekly-analytics.
 **Response:**
 
 1. Publish immediate comparison content: "Soleur vs. Notion Custom Agents"
-2. Emphasize terminal-first workflow vs. workspace-first (different audiences)
+2. Emphasize founder-controlled operations with compounding memory vs. workspace-first collaboration (different audiences). Delivery surface is no longer a differentiating axis now that Soleur ships as a web product.
 3. Emphasize compounding knowledge base scoped to solo founder operations vs. team collaboration
 4. Lean into engineering depth (Notion's agents will start shallow)
 
