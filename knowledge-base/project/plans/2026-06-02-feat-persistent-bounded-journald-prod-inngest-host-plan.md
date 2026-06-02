@@ -31,6 +31,22 @@ runcmd — never as a manual operator step.
 
 > Spec lacks valid `lane:` (no spec.md for this branch — one-shot path skipped brainstorm) — defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-02
+**Sections enhanced:** Hypotheses (Network-Outage Deep-Dive), Research Reconciliation (precedent-diff), Sizing, Files to Edit (provisioner shape).
+**Gates run:** 4.4 precedent-diff (SSH `terraform_data` shape) · 4.5 Network-Outage Deep-Dive (FIRED — SSH provisioner) · 4.6 User-Brand Impact (PASS) · 4.7 Observability (PASS, all 5 fields) · 4.8 PAT-shaped variable (PASS, none).
+
+### Key Improvements
+1. **L3 firewall fact pinned (Network-Outage Deep-Dive):** `firewall.tf` gates SSH port 22 ingress to `var.admin_ips` ONLY — the CI-deploy SSH rule was removed in #749 (deploys use the CF-Tunnel webhook). So the journald `terraform_data` SSH provisioner reaches the host iff the operator/CI egress IP is in `admin_ips`. Verified, not assumed.
+2. **Precedent-diff (Phase 4.4):** the SSH `terraform_data` provisioner shape is NOT novel — 6 sibling provisioners in `server.tf` use the exact `connection { type="ssh"; host=hcloud_server.web.ipv4_address; user="root"; agent=true }` + `triggers_replace = sha256(file(...))` + `file` + `remote-exec` + positive-assertion shape (`disk_monitor_install:68`, `fail2ban_tuning:146`). The journald provisioner is a 1:1 clone of `disk_monitor_install` with a different payload.
+3. **cx33 disk fact made authoritative-by-probe:** the plan no longer hard-asserts "80 GB" as a sizing input — Phase 0's live `df /` is the authoritative number; the `SystemKeepFree=2G` hard floor makes the journal safe regardless of the exact root size.
+4. **Provider pin verified:** `hetznercloud/hcloud` is pinned at `1.63.0` (`~> 1.49`); `hcloud_server.web.ipv4_address` is a stable attribute across this range (used by all 6 sibling provisioners).
+
+### New Considerations Discovered
+- The journald drop-in dir `/etc/systemd/journald.conf.d/` is the standard systemd override path; no repo precedent for a journald drop-in specifically, but cloud-init already writes other `/etc/systemd/system/*` units via `write_files` literal heredocs — match that style (NOT base64).
+- `ci-deploy.sh` runs BOTH the app container (`:450`) and the canary (`:616`) with `--log-driver journald`. The on-disk journal therefore absorbs canary log volume too (transient, during deploys) — folded into the `SystemMaxUse=1G` headroom reasoning (Risk R3).
+
 ## Overview
 
 The prod host `hcloud_server.web` (`soleur-web-platform`, tagged `host_name = "soleur-inngest-prd"` in `vector.toml:265`) runs systemd-journald with **no persistent-storage or sizing configuration**. There is no `Storage=persistent`, no `SystemMaxUse`, no `SystemKeepFree`, and no `mkdir -p /var/log/journal` anywhere under `apps/web-platform/infra/` (verified by grep: the only `/var/log/journal` references are reader-side `journal_directory` lines in `vector.toml`, all 3 journald sources).
@@ -69,7 +85,7 @@ There is exactly **one** prod host. `inngest.tf` provisions only Inngest *secret
 
 ## Sizing decision (cx33, 80 GB disk)
 
-The cx33 has 4 vCPU / 8 GB RAM / **80 GB** local NVMe (root `/`). `/var/log/journal` lives on root `/` (the 20 GB `hcloud_volume.workspaces` is a separate mount at `/mnt/data`). Budget reasoning (to be confirmed against Phase 0's live `df /` + inngest-store size):
+The cx33 has 4 vCPU / 8 GB RAM and a local NVMe root `/` (Hetzner cx33 nominal disk is ~80 GB; **the authoritative number is Phase 0's live `df -h /`, not this recollection** — do not hard-code 80 in the drop-in). `/var/log/journal` lives on root `/` (the 20 GB `hcloud_volume.workspaces` is a separate mount at `/mnt/data`). Budget reasoning (to be confirmed against Phase 0's live `df /` + inngest-store size):
 
 - `SystemMaxUse=1G` — hard cap on the persistent journal. Comfortably holds days of WARN+ supervisor journald + the new app-container pino volume (Vector filters to `level >= 40` before egress, but the journal on disk holds ALL levels — see Risk R3). 1 GB on an 80 GB root is ~1.25%, well under `disk-monitor.sh`'s 80% WARN threshold even alongside Docker images + the inngest SQLite store.
 - `SystemKeepFree=2G` — journald stops writing if free space on `/` drops below 2 GB, so the journal can never be the cause of a full-disk outage. This is the load-bearing safety bound; it overrides `SystemMaxUse` when disk is tight.
@@ -111,6 +127,19 @@ This plan's apply path (Part 3) is a `terraform_data` with `connection { type = 
 - **L7 — service layer (ONLY after L3 verified):** sshd up, journald restart succeeded, `/var/log/journal` writable. The positive post-assertions in the provisioner cover the journald-service layer.
 
 If the apply succeeds on first connect, note "L3 verified implicitly (handshake succeeded); no outage" in the PR body.
+
+### Network-Outage Deep-Dive (deepen-plan Phase 4.5 — FIRED via SSH-provisioner resource-shape trigger)
+
+The `terraform_data.journald_persistent` resource carries `connection { type = "ssh" }` + `file` + `remote-exec` provisioners — the implicit-SSH-dependency trigger. Layer-by-layer verification status against `firewall.tf` (read at deepen time):
+
+| Layer | Verification artifact | Status |
+|---|---|---|
+| **L3 firewall allow-list** | `firewall.tf:4-13` — `hcloud_firewall.web` opens port 22 ingress via `dynamic "rule"` over `var.admin_ips` ONLY. The CI-deploy SSH rule was **removed in #749** ("deploys now use webhook via Cloudflare Tunnel"). So the apply's SSH handshake succeeds **iff** the operator/CI egress IP (`curl -s https://ifconfig.me/ip`) is a member of `admin_ips` (Doppler `prd_terraform`). **This is the single load-bearing connectivity precondition.** | Verified (mechanism). Operator must confirm egress IP ∈ `admin_ips` at apply time (Phase 0.3 AC). |
+| **L3 DNS / routing** | `dig +short <host>` must equal `hcloud_server.web.ipv4_address`. The 6 sibling SSH provisioners use the same `host = hcloud_server.web.ipv4_address` interpolation — no DNS hostname involved (direct IPv4), so DNS is not on the path. | Verified (no DNS dependency — direct IP). |
+| **L7 TLS / proxy** | N/A — the apply path is raw SSH (port 22), not HTTPS. The CF-Tunnel HTTPS path (`deploy_pipeline_fix`) is explicitly NOT used here. | N/A. |
+| **L7 service layer** | sshd up; journald restart succeeds; `/var/log/journal` writable. Covered by the provisioner's positive post-assertions. | Verified at apply by assertions. |
+
+**Gap that must close before apply:** the egress-IP ∈ `admin_ips` check (Phase 0.3). If the apply hits `ssh: handshake failed: connection reset by peer`, the cause is firewall drift (admin-IP rotation), NOT sshd/journald — fix via `/soleur:admin-ip-refresh`, per `hr-ssh-diagnosis-verify-firewall` + runbook `admin-ip-drift.md`. Do NOT propose an sshd or journald-service fix before re-verifying L3. Precedent for this exact inversion: #3061 (handshake reset on `deploy_pipeline_fix` with zero SSH keywords in plan) and #2681 (admin-IP drift mistaken for fail2ban).
 
 ## Infrastructure (IaC)
 
@@ -202,6 +231,19 @@ No cross-domain implications detected — infrastructure/observability change. N
 - **R2 — Sizing too large for actual `/` headroom:** Phase 0 reads live `df /` + inngest store size; `SystemKeepFree=2G` is the hard safety bound — journald stops writing before it can fill the disk regardless of `SystemMaxUse`. `disk-monitor.sh` is the existing backstop.
 - **R3 — On-disk journal holds ALL pino levels (not just WARN+):** Vector filters `level >= 40` *before egress to Better Stack*, but the host journal under `/var/log/journal` retains every level from the `--log-driver journald` container. This is the volume `SystemMaxUse=1G` bounds. Confirm the 1G cap holds for the app-container INFO volume during Phase 0 (`journalctl --disk-usage` after a representative window); raise the cap or tighten only if it churns faster than ~1 day of retention. Precedent for sizing-against-actual-volume: the inngest SQLite ~60MB/month figure in `inngest-server.md:195`.
 - **R4 — Drop-in path/precedence:** systemd reads `/etc/systemd/journald.conf.d/*.conf` drop-ins over `/etc/systemd/journald.conf`; the `00-` prefix orders it first. Optionally verify with a `systemd-analyze cat-config systemd/journald.conf` diagnostic in the provisioner post-assertions.
+
+### Precedent-diff (deepen-plan Phase 4.4)
+
+The SSH `terraform_data` provisioner shape is **established precedent, not novel** — verified by grepping `server.tf` at deepen time. The journald provisioner is a 1:1 structural clone of `disk_monitor_install` (`server.tf:68-98`); the only payload difference is what the `remote-exec` does. Element-by-element:
+
+- `connection`: identical to the precedent — `{ type="ssh"; host=hcloud_server.web.ipv4_address; user="root"; agent=true }`.
+- `triggers_replace`: precedent uses `sha256(join(",", [secret, file(script)]))`; this plan uses `sha256(file(".../journald-soleur.conf"))` (no secret, so no `join`).
+- `provisioner "file"`: precedent pushes a script to `/usr/local/bin/`; this plan pushes the drop-in to `/etc/systemd/journald.conf.d/00-soleur.conf`.
+- `provisioner "remote-exec"`: precedent does daemon-reload + enable-timer; this plan does create-`/var/log/journal` + chown + journal-daemon restart + journal flush + **positive post-assertions**.
+- positive post-assertions: adopt the **`fail2ban_tuning` pattern** (`server.tf:197-199` uses `test "$(...)" = 'expected'`) over `disk_monitor_install`'s informational list-timers — journald persistence is a state we must *prove*, not just *observe*. Mirrors fail2ban's "if the override silently didn't take, fail the provisioner" rationale.
+- drift display: "will be created" every plan; add a header comment matching the siblings.
+
+No deviation from precedent is required. The single judgment call (assertion style) is resolved toward the stricter `fail2ban_tuning` shape.
 
 ## Sharp Edges
 
