@@ -133,59 +133,59 @@ will be invoked at review-time. (See Domain Review below for how CPO is covered.
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — Pre-open snapshot instruction present.** `ux-design-lead.md` Step 2
+- [x] **AC1 — Pre-open snapshot instruction present.** `ux-design-lead.md` Step 2
   (the `open_document` step) instructs the agent, when opening an **existing**
   `.pen`, to record `stat -c %s <path>` and `sha256sum <path>` **before** calling
   `open_document`. Verifiable: `grep -qiE "before .*open_document|snapshot.*(size|sha256|checksum)" plugins/soleur/agents/product/design/ux-design-lead.md`.
-- [ ] **AC2 — Post-open collapse gate present.** The agent is instructed to
+- [x] **AC2 — Post-open collapse gate present.** The agent is instructed to
   re-`stat` after `open_document` and **halt** (surfacing the pre/post sizes
   verbatim) if the post-open size has collapsed below a stated fraction of the
   pre-open size, treating it as a parse-failure wipe (not a legitimate open).
   Verifiable: `grep -qiE "collapse|post-open .*size|fraction|parse failure" plugins/soleur/agents/product/design/ux-design-lead.md`.
-- [ ] **AC3 — Collapse threshold is concrete, not vague.** The instruction names a
+- [x] **AC3 — Collapse threshold is concrete, not vague.** The instruction names a
   specific, testable trip condition (e.g., "post-open size < 50% of pre-open size
   OR post-open size ≤ 64 bytes"). The 41-byte / 133KB case from #3274 must trip
   it. Verifiable by inspection + the regex in AC2.
-- [ ] **AC4 — `open_document` on a *new* file is exempt.** The instruction makes
+- [x] **AC4 — `open_document` on a *new* file is exempt.** The instruction makes
   clear the collapse gate applies only when opening a **pre-existing non-empty**
   `.pen` (creating a brand-new document legitimately starts empty). Verifiable by
   inspection (the snapshot is guarded on "existing file").
-- [ ] **AC5 — Commit-after-first-save instruction present in brand-workshop.**
+- [x] **AC5 — Commit-after-first-save instruction present in brand-workshop.**
   `brainstorm-brand-workshop.md` step 4.5 (the ux-design-lead handoff) instructs
   that immediately after the `.pen` is first saved under
   `knowledge-base/product/design/`, it is `git add`ed + committed to the worktree
   branch (before any iteration loop), so a later wipe is git-recoverable.
   Verifiable: `grep -qiE "git add.*\.pen|commit.*\.pen|commit the .pen" plugins/soleur/skills/brainstorm/references/brainstorm-brand-workshop.md`.
-- [ ] **AC6 — Canonical-path reinforcement.** The commit-after-save instruction
+- [x] **AC6 — Canonical-path reinforcement.** The commit-after-save instruction
   explicitly requires the committed `.pen` be under `knowledge-base/product/design/`
   (not an app tree like `apps/web-platform/design/`, the #3274 loss path). The
   rationale cited in the edit MUST be **audit reachability** (`/soleur:ux-audit`
   only scans `knowledge-base/product/design/`) — NOT gitignore (`.pen` files are
   not gitignored anywhere in this repo; verified via `git check-ignore`).
   Verifiable by inspection + `! grep -qi "gitignored" <new instruction text>`.
-- [ ] **AC7 — Dangling citation repointed (fold-in).** The stale
+- [x] **AC7 — Dangling citation repointed (fold-in).** The stale
   `AGENTS.md:cq-pencil-mcp-silent-drop-diagnosis-checklist` reference at
   `ux-design-lead.md:57` is replaced with a live pointer to
   `plugins/soleur/skills/pencil-setup/SKILL.md` Sharp Edges
   (`ex-cq-pencil-mcp-silent-drop-diagnosis-checklist`) and/or the learning
   `knowledge-base/project/learnings/bug-fixes/2026-04-19-ux-design-lead-headless-stub-fabrication.md`.
   Verifiable: `! grep -q "AGENTS.md:cq-pencil-mcp-silent-drop-diagnosis-checklist" plugins/soleur/agents/product/design/ux-design-lead.md` (zero matches) AND the new pointer resolves to a real file.
-- [ ] **AC8 — New regression test: snapshot/collapse guard.** A new sibling test
+- [x] **AC8 — New regression test: snapshot/collapse guard.** A new sibling test
   `plugins/soleur/test/ux-design-lead-open-document-snapshot-guard.test.sh`
   (modeled on `ux-design-lead-output-path-guard.test.sh`) asserts the agent body
   contains the pre-open snapshot instruction, the post-open collapse gate, and the
   exemption for new files. Test exits 0. Verifiable: `bash plugins/soleur/test/ux-design-lead-open-document-snapshot-guard.test.sh`.
-- [ ] **AC9 — New regression test: commit-after-save guard.** A new sibling test
+- [x] **AC9 — New regression test: commit-after-save guard.** A new sibling test
   `plugins/soleur/test/brand-workshop-pen-commit-after-save.test.sh` asserts
   `brainstorm-brand-workshop.md` contains the commit-after-first-save instruction
   for the `.pen` file. Test exits 0.
-- [ ] **AC10 — No dangling-citation regression.** Either AC8's test or AC9's test
+- [x] **AC10 — No dangling-citation regression.** Either AC8's test or AC9's test
   (whichever edits `ux-design-lead.md`) also asserts the retired
   `cq-pencil-mcp-silent-drop-diagnosis-checklist` string is absent and the
   canonical KB path is still referenced (mirrors the existing
   `ux-design-lead-output-path-guard.test.sh` assertions so the fold-in cannot
   silently regress).
-- [ ] **AC11 — Full suite green.** `bash scripts/test-all.sh` passes; the two new
+- [x] **AC11 — Full suite green.** `bash scripts/test-all.sh` passes; the two new
   `.test.sh` files are auto-discovered by the `plugins/soleur/test/*.test.sh` glob
   at `scripts/test-all.sh:176` (no runner-registration edit needed — verified).
 
