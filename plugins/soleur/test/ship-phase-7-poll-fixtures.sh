@@ -39,8 +39,8 @@ fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 extract_block() {
   local source_file="$1"
   awk '
-    /phase-7-poll-block:start/ { in_block=1; next }
-    /phase-7-poll-block:end/ { in_block=0 }
+    /<!-- phase-7-poll-block:start -->/ { in_block=1; next }
+    /<!-- phase-7-poll-block:end -->/ { in_block=0; next }
     in_block && /^```bash$/ { next }
     in_block && /^```$/ { next }
     in_block { print }
