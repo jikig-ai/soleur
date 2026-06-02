@@ -204,8 +204,13 @@ export async function resolveOutputAwareOk(args: {
   // scheduled-output-missing Sentry event so a non-zero exit is self-diagnosing
   // (app stdout is not shipped to the log warehouse).
   stderrTail?: string;
+  // Raw spawn exit code, surfaced in the scheduled-output-missing extra so a
+  // turn-exhaustion exit can be distinguished from a hard failure without SSH
+  // (#4684/#4689). Optional — sites that do not hold the SpawnResult omit it.
+  exitCode?: number | null;
 }): Promise<boolean> {
-  const { spawnOk, label, runStartedAt, cronName, octokit, stderrTail } = args;
+  const { spawnOk, label, runStartedAt, cronName, octokit, stderrTail, exitCode } =
+    args;
 
   let issueCreated: boolean;
   try {
@@ -263,6 +268,9 @@ export async function resolveOutputAwareOk(args: {
         label,
         runStartedAt,
         spawnOk,
+        // Raw spawn exit code — distinguishes a turn-exhaustion exit from a hard
+        // failure at a glance, alongside the stderr tail below.
+        exitCode,
         // The claude-eval stderr tail is the diagnostic payload — without it the
         // non-zero-exit reason lives only in app stdout, which is not shipped.
         stderrTail: stderrTail ? stderrTail.slice(-4000) : undefined,
