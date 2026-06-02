@@ -13,47 +13,60 @@ Plan is the source of truth; this file is the executable breakdown.
 
 ## Phase 0 — Preconditions (verify, no edits)
 
-- [ ] 0.1 Confirm `insert-draft-card.ts:66` solo-pin (`workspace_id = input.founderId`).
-- [ ] 0.2 Confirm `today/route.ts` has no workspace filter (only `.eq("user_id")`).
-- [ ] 0.3 Confirm `resolveCurrentWorkspaceId(userId, supabase)` signature (`workspace-resolver.ts:190`).
-- [ ] 0.4 Read the kb-drift-ingest payload Zod schema; confirm it lacks `workspace_id` and locate where to add it.
-- [ ] 0.5 Read-only DEV-then-prod probe (Supabase MCP, project per `hr-dev-prd-distinct-supabase-projects`): count `messages` rows where `source = 'kb_drift'` to size the migration-093 decision.
-- [ ] 0.6 Locate the KB-drift walker producer (POSTs to `/api/internal/kb-drift-ingest`); confirm it knows the scanned `workspace_id`. Files: `apps/web-platform/infra/kb-drift.tf` + walker source.
+- [x] 0.1 Confirmed `insert-draft-card.ts:66` solo-pin (`workspace_id = input.founderId`).
+- [x] 0.2 Confirmed `today/route.ts` had no workspace filter (only `.eq("user_id")`).
+- [x] 0.3 Confirmed `resolveCurrentWorkspaceId(userId, supabase)` signature (`workspace-resolver.ts:190`).
+- [x] 0.4 Read kb-drift-ingest payload validator + walker — **CORRECTION:** the walker
+      (`scripts/kb-drift-walker.sh`) scans Soleur's OWN repo KB (one global company KB), NOT a
+      per-workspace KB. No `workspace_id` to thread. Plan D2 premise is false. See scoping-audit.md.
+- [x] 0.5 Read-only prod probe (`DATABASE_URL_POOLER`, SELECT-only): 4 `kb-drift` draft cards,
+      ALL pinned to the SOLO workspace (`52af49c2…` = founderId). Write is correct → no migration.
+- [x] 0.6 Walker producer located (`.github/workflows/kb-drift-walker.yml`) — global-repo scan,
+      no per-workspace concept (confirms 0.4).
 
-## Phase 1 — Fix the read leak (active-workspace scoping) [TDD]
+## Phase 1 — Fix the read leak (active-workspace scoping) [TDD] — DONE
 
-- [ ] 1.1 RED: add a route test under `apps/web-platform/test/api/dashboard/today/` (verify vitest `include:` globs) seeding two workspaces for one owner + a drift card in workspace A; assert it returns only when A is active.
-- [ ] 1.2 GREEN: in `today/route.ts`, resolve `activeWorkspaceId = await resolveCurrentWorkspaceId(userId, supabase)` (import from `@/server/workspace-resolver`); add `.eq("workspace_id", activeWorkspaceId)` to the select chain.
-- [ ] 1.3 Update the `today/route.ts` docblock to state the active-workspace scoping invariant.
-- [ ] 1.4 Audit `today/[id]/{send,edit,discard,cancel,cost,undo}/route.ts`: each scopes by `.eq("id").eq("user_id")` (+RLS). Add an active-workspace guard for consistency OR record per-route rationale (AC3).
+- [x] 1.1 RED: added two-workspace assertions to `test/server/dashboard/today-route.test.ts`
+      (resolver mocked; asserts `.eq("workspace_id", activeWorkspaceId)`).
+- [x] 1.2 GREEN: `today/route.ts` resolves `activeWorkspaceId = await resolveCurrentWorkspaceId(userId, supabase)`
+      and adds `.eq("workspace_id", activeWorkspaceId)`.
+- [x] 1.3 Updated the `today/route.ts` docblock with the active-workspace scoping invariant.
+- [x] 1.4 Audited `today/[id]/{send,edit,discard,cancel,cost,undo}`: id+user_id+RLS scoping is
+      sufficient (AC3) — rationale recorded in scoping-audit.md. No guard added (regression risk, zero gain).
 
-## Phase 2 — Fix the write attribution (workspace-correct card) [TDD]
+## Phase 2 — Write attribution — DROPPED (false premise)
 
-- [ ] 2.1 Add `workspace_id` to the HMAC-signed kb-drift-ingest payload Zod schema + the walker producer that POSTs it.
-- [ ] 2.2 RED: assert a KB-drift POST for workspace A writes a `messages` row with `workspace_id = A`.
-- [ ] 2.3 GREEN: add an explicit optional `workspace_id` override param to `insertDraftCard` (the docblock at `:12-20` prescribes this exact extension); default stays solo-pin for github/cfo callers.
-- [ ] 2.4 `kb-drift-ingest/route.ts`: pass payload `workspace_id` into `insertDraftCard`. Update the `:208` `logger.info` `workspace_id` field for log accuracy (NOT a write site — log field only).
+- [x] 2.x The walker scans Soleur's global company-repo KB; the card correctly belongs to the
+      operator's solo workspace (prod probe: all 4 cards solo-pinned). No walker-threading, no
+      `insertDraftCard` override, no `:208` change needed. The write was already correct.
 
-## Phase 3 — Migration 093 decision (optional)
+## Phase 3 — Migration 093 — DROPPED (not needed)
 
-- [ ] 3.1 From the Phase 0.5 count, decide: forward-only writes suffice (record "no migration" + rationale) OR write `093_reattribute_kb_drift_drafts.sql` (+ `.down.sql`) following 090-092 conventions (txn-wrapped, no CONCURRENTLY).
+- [x] 3.1 No re-attribution required — the 4 existing `kb-drift` cards correctly belong to solo.
+      No migration. Rationale in PR body + scoping-audit.md.
 
-## Phase 4 — Audit: conversations
+## Phase 4 — Audit: conversations — DONE
 
-- [ ] 4.1 `dashboard/page.tsx:240` orphaned-conversation count (`.eq("user_id")`, cross-workspace): scope to active workspace OR document the cross-workspace intent for the reconnect hint.
-- [ ] 4.2 `conversations-tools.ts:163` list tool scopes by `repo_url`: audit whether two workspaces can share a `repo_url`; add `.eq("workspace_id", active)` if so. Note the `visibility='private'` default (mig 075) as the second scoping axis.
-- [ ] 4.3 Sweep ALL `from("conversations")` sites (per `hr-write-boundary-sentinel-sweep-all-write-sites`); classify each workspace-correct / by-design / needs-fix.
+- [x] 4.1 `dashboard/page.tsx` orphaned-count: documented as intentionally cross-workspace (fires
+      only when active workspace has no repo; user's own non-sensitive count). Comment added.
+- [x] 4.2 `conversations-tools.ts` list tool: HARDENED — added `.eq("workspace_id", activeWorkspaceId)`
+      alongside `repo_url` to separate same-repo-two-workspace mixing (TDD; mig 059 workspace_id).
+- [x] 4.3 Swept all `from("conversations")` sites: list/count reads classified (see scoping-audit.md);
+      writes/DSAR/account-delete are user-scoped by design (GDPR export/delete must span all workspaces).
 
-## Phase 5 — Audit: rate limiting + billing
+## Phase 5 — Audit: rate limiting + billing — DONE
 
-- [ ] 5.1 Rate limiting: document `sessionThrottle` (`ws-handler.ts:1294`) + `user_concurrency_slots` (mig 029) per-user keying. Decide keep-per-user (recommended — coupled to per-user plan_tier; per-workspace would let one user multiply paid capacity) and add an invariant comment, OR file a tracking issue for per-workspace caps (do NOT implement here).
-- [ ] 5.2 Billing: fix or relabel the cross-workspace conversation count at `settings/billing/page.tsx:54`. Note the `const workspaceId = user.id` solo-assumption (`:30`) is acceptable for per-user billing. File a per-workspace/per-org billing tracking issue IF on `knowledge-base/product/roadmap.md`, with CPO input.
+- [x] 5.1 Rate limiting: KEEP per-user (coupled to per-user plan_tier; per-workspace would multiply
+      paid capacity). Invariant comment added at `ws-handler.ts` start_session throttle site.
+- [x] 5.2 Billing: correctly per-user by schema (one stripe_customer_id/user). Cross-workspace
+      conversation count is correct for a per-user subscription retention nudge. Rationale comments
+      added. Per-workspace/org billing NOT on roadmap (closest: CP5 #4670) → no tracking issue filed.
 
 ## Phase 6 — Verify
 
-- [ ] 6.1 Run affected tests via `package.json scripts.test` (vitest); RED→GREEN for Phases 1-2.
-- [ ] 6.2 `tsc --noEmit` clean for web-platform.
-- [ ] 6.3 Optional Playwright: two-workspace owner, drift card on A, switch to B, confirm absence.
+- [x] 6.1 Affected vitest suites green (RED→GREEN for read-scoping + conversations list).
+- [ ] 6.2 `tsc --noEmit` clean for web-platform (run in Phase 6 below).
+- [ ] 6.3 Optional Playwright: two-workspace owner, drift card on solo, switch to second, confirm absence.
 
 ## Post-merge (operator)
 

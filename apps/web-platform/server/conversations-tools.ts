@@ -6,6 +6,7 @@ import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
 import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import { getCurrentRepoUrl } from "@/server/current-repo-url";
+import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import { STATUS_LABELS } from "@/lib/types";
 import {
@@ -148,15 +149,29 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
           .default(LIST_LIMIT_DEFAULT),
       },
       async (args) => {
-        const repoUrl = await getCurrentRepoUrl(userId);
-        if (!repoUrl) return disconnectedResponse();
-
         // PR-C §2.9 (#3244): tenant client. RLS on `conversations`
-        // enforces `auth.uid() = user_id`. The preceding
-        // `getCurrentRepoUrl(userId)` call IS the auth probe (it
-        // reads users via tenant + handles RuntimeAuthError) — a
-        // separate probe here would re-mint the same JWT for no gain.
+        // enforces `auth.uid() = user_id`. getFreshTenantClient mints (and
+        // throws RuntimeAuthError on) the same JWT getCurrentRepoUrl would —
+        // minting it here first lets us resolve the active workspace ONCE and
+        // thread it into both the repo_url read and the workspace_id filter.
         const tenant = await getFreshTenantClient(userId);
+        // Active-workspace scoping (workspace-leak audit, 2026-06-02): repo_url
+        // alone cannot separate two of the owner's OWN workspaces that connect
+        // the SAME repo — both rows share repo_url. conversations.workspace_id
+        // (NOT NULL, mig 059) is the precise discriminator. Resolve the active
+        // workspace ONCE and pass it to getCurrentRepoUrl via its `workspaceId`
+        // override so repo_url and the filter share a SINGLE snapshot — a
+        // concurrent set_current_workspace_id switch between two independent
+        // resolves could otherwise pair workspace A's repo_url with workspace
+        // B's id and return an empty list (false-negative). Both workspaces
+        // belong to the same user (not cross-tenant); the single-snapshot read
+        // makes the comment's "cannot disagree" invariant actually hold. So
+        // this only excludes the same-repo sibling-workspace rows — never
+        // legitimately-visible or workspace-shared conversations (those carry
+        // the active workspace_id).
+        const activeWorkspaceId = await resolveCurrentWorkspaceId(userId, tenant);
+        const repoUrl = await getCurrentRepoUrl(userId, activeWorkspaceId);
+        if (!repoUrl) return disconnectedResponse();
         // visibility-sweep: RLS policy conversations_owner_or_shared
         // returns own + workspace-shared conversations; no app-level
         // user_id filter needed.
@@ -165,7 +180,8 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
           .select(
             "id, status, domain_leader, last_active, created_at, archived_at, visibility, user_id",
           )
-          .eq("repo_url", repoUrl);
+          .eq("repo_url", repoUrl)
+          .eq("workspace_id", activeWorkspaceId);
 
         if (args.archived) {
           query = query.not("archived_at", "is", null);
