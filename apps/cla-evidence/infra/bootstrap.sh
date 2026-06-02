@@ -65,6 +65,8 @@ step()   { printf '\n→ %s\n' "$*"; }
 # later, after the verify block that now calls cf_token_verify).
 # shellcheck source=../scripts/_cf-admin-token.sh disable=SC1091
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)/_cf-admin-token.sh"
+# shellcheck source=../scripts/_r2-endpoint.sh disable=SC1091
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)/_r2-endpoint.sh"
 
 # ─────────────────────────────────────────────────────────────────────────
 # Pre-flight: deps + auth + admin token
@@ -222,6 +224,10 @@ fi
 
 # Endpoint is derivable but stored for sidecar simplicity.
 R2_ENDPOINT="https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com"
+# Pin the canonical hostname on the value we are about to persist (item 1 of
+# #3950) — guards against a malformed CF_ACCOUNT_ID landing a bad endpoint in
+# Doppler prd_cla, which every downstream consumer would then trust.
+assert_r2_endpoint "$R2_ENDPOINT"
 
 doppler secrets set \
   --project soleur --config prd_cla \

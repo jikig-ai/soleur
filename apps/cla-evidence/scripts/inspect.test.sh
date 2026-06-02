@@ -59,7 +59,7 @@ run_sut() {
   R2_CLA_EVIDENCE_ACCESS_KEY_ID=stub-key \
   R2_CLA_EVIDENCE_SECRET=stub-secret \
   R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
-  R2_CLA_EVIDENCE_ENDPOINT=https://example.invalid \
+  R2_CLA_EVIDENCE_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com \
     bash "$SUT" by-pr 4242
 }
 

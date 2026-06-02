@@ -164,7 +164,7 @@ unset CF_ADMIN_TOKEN
 R2_CLA_EVIDENCE_ACCESS_KEY_ID=stub-access-key-id-32chars-aaaa \
 R2_CLA_EVIDENCE_SECRET=hmac-secret-fingerprint-do-not-leak \
 R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence-stub \
-R2_CLA_EVIDENCE_ENDPOINT=https://stub.r2.example \
+R2_CLA_EVIDENCE_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com \
 AWS_ACCESS_KEY_ID=stub-access-key-id-32chars-aaaa \
 AWS_SECRET_ACCESS_KEY=hmac-secret-fingerprint-do-not-leak \
   exec "\$@"
@@ -244,12 +244,12 @@ run_sut() {
   CF_ADMIN_TOKEN="${CF_ADMIN_TOKEN-bearer-secret-fingerprint-do-not-leak}" \
   CF_ACCOUNT_ID="${CF_ACCOUNT_ID-stub-account-id}" \
   R2_CLA_EVIDENCE_BUCKET="${R2_CLA_EVIDENCE_BUCKET-soleur-cla-evidence}" \
-  R2_CLA_EVIDENCE_ENDPOINT="${R2_CLA_EVIDENCE_ENDPOINT-https://stub.r2.example}" \
+  R2_CLA_EVIDENCE_ENDPOINT="${R2_CLA_EVIDENCE_ENDPOINT-https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com}" \
   TARGET_KEY="${TARGET_KEY-signatures/abc123def456abc123def456abc123def456abc123def456abc123def456abcd.json}" \
   GDPR_REQUEST_REF="${GDPR_REQUEST_REF-DSAR-2026-STUB-001}" \
   PRIOR_SHA="${PRIOR_SHA-abc123def456abc123def456abc123def456abc123def456abc123def456abcd}" \
   OVERRIDE_REASON="${OVERRIDE_REASON-GDPR Article 17 erasure — stub test invocation}" \
-  ADMIN_ACTOR="${ADMIN_ACTOR-stub-operator@example.invalid}" \
+  ADMIN_ACTOR="${ADMIN_ACTOR-stub-operator@stub.invalid}" \
   GDPR_OVERRIDE_MAIN_TEST_SH="$work/main.test.sh" \
   GDPR_OVERRIDE_SENTINEL_DIR="$work/sentinel" \
     bash "$SUT" "$@"
@@ -440,12 +440,12 @@ R2_CLA_EVIDENCE_SECRET="$FP_HMAC" \
   PATH="$work:$PATH" \
   CF_ACCOUNT_ID=stub-account-id \
   R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
-  R2_CLA_EVIDENCE_ENDPOINT=https://stub.r2.example \
+  R2_CLA_EVIDENCE_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com \
   TARGET_KEY="signatures/abc123def456abc123def456abc123def456abc123def456abc123def456abcd.json" \
   GDPR_REQUEST_REF=DSAR-J \
   PRIOR_SHA=abc123def456abc123def456abc123def456abc123def456abc123def456abcd \
   OVERRIDE_REASON="stub j" \
-  ADMIN_ACTOR=stub@example.invalid \
+  ADMIN_ACTOR=stub@stub.invalid \
   GDPR_OVERRIDE_MAIN_TEST_SH="$work/main.test.sh" \
   GDPR_OVERRIDE_SENTINEL_DIR="$work/sentinel" \
     bash -x "$SUT" --shape=enabled-false >"$work/out.j" 2>"$work/trace.j" || true

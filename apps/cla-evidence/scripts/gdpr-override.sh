@@ -38,6 +38,8 @@ usage_err() { red "::error::usage: $*"; exit 64; }
 # Sourced AFTER red/green/yellow are defined (helper sourcing precondition).
 # shellcheck source=_cf-admin-token.sh disable=SC1091
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_cf-admin-token.sh"
+# shellcheck source=_r2-endpoint.sh disable=SC1091
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_r2-endpoint.sh"
 
 # ── Help ─────────────────────────────────────────────────────────────────────
 show_help() {
@@ -119,6 +121,10 @@ for v in "${required_envs[@]}"; do
   [[ -z "${!v:-}" ]] && missing+=("$v")
 done
 [[ ${#missing[@]} -gt 0 ]] && usage_err "missing required env: ${missing[*]}"
+
+# Pin the R2 endpoint to the canonical hostname BEFORE the dry-run guard below —
+# a redirected endpoint must fail closed even in --dry-run (item 1 of #3950).
+assert_r2_endpoint "$R2_CLA_EVIDENCE_ENDPOINT"
 
 # PRIOR_SHA must be 64-char lowercase hex (third-consumer schema invariant —
 # inspect-evidence.sh exits 3 on malformed values).

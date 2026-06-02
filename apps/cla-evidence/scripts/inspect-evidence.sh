@@ -27,6 +27,11 @@ fi
 bucket="${R2_CLA_EVIDENCE_BUCKET:-soleur-cla-evidence}"
 endpoint="${R2_CLA_EVIDENCE_ENDPOINT:?R2_CLA_EVIDENCE_ENDPOINT must be set}"
 
+# Pin the R2 endpoint to the canonical hostname before any read (item 1 of #3950).
+# shellcheck source=_r2-endpoint.sh disable=SC1091
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_r2-endpoint.sh"
+assert_r2_endpoint "$endpoint"
+
 command -v aws >/dev/null || { echo "::error::aws CLI required" >&2; exit 64; }
 command -v jq  >/dev/null || { echo "::error::jq required" >&2; exit 64; }
 

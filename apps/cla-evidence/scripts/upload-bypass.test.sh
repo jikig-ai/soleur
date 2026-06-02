@@ -64,7 +64,7 @@ run_sut() {
   R2_CLA_EVIDENCE_ACCESS_KEY_ID=00000000000000000000000000000000 \
   R2_CLA_EVIDENCE_SECRET=0000000000000000000000000000000000000000000000000000000000000000 \
   R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
-  R2_CLA_EVIDENCE_ENDPOINT=https://example.invalid \
+  R2_CLA_EVIDENCE_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com \
     bash "$SUT" "$payload"
 }
 
@@ -241,7 +241,7 @@ out=$(
   R2_CLA_EVIDENCE_ACCESS_KEY_ID=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA \
   R2_CLA_EVIDENCE_SECRET=0000000000000000000000000000000000000000000000000000000000000000 \
   R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
-  R2_CLA_EVIDENCE_ENDPOINT=https://example.invalid \
+  R2_CLA_EVIDENCE_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com \
     bash "$SUT" "$payload" 2>&1
 ) && rc=0 || rc=$?
 if [[ "$rc" -ne 0 ]] && grep -q 'length=53, expected 32' <<<"$out" && grep -q 'bootstrap.sh' <<<"$out"; then
