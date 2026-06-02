@@ -434,6 +434,7 @@ function buildRow(
   mode: PersistMode,
   text: string,
   conversationId: string,
+  workspaceId: string,
 ): Record<string, unknown> {
   // #3603 W4 — gated single-read site for `CC_PERSIST_USAGE`. The hot-path
   // env read is intentional: enables runtime rollback flip without a
@@ -449,6 +450,9 @@ function buildRow(
   const row: Record<string, unknown> = {
     id: randomUUID(),
     conversation_id: conversationId,
+    // mig 059: messages.workspace_id NOT NULL + member-keyed INSERT RLS.
+    // Derived from the parent conversation by the caller; see saveAssistantMessage.
+    workspace_id: workspaceId,
     role: "assistant",
     content: text,
     tool_calls: null,
@@ -1425,10 +1429,14 @@ export async function dispatchSoleurGo(
       "cc-dispatcher: assertWriteScope halted user-message persistence",
     );
   }
-  // PR-C §2.11 (#3244): tenant-scoped message INSERTs. RLS on `messages`
-  // enforces FK-join to `conversations.user_id`; the `assertWriteScope`
-  // sentinel above is the defense-in-depth layer. The implicit JWT mint
-  // is the auth probe — see ws-handler `tenantFor` doc-comment.
+  // PR-C §2.11 (#3244): tenant-scoped message INSERTs. Post-migration 059,
+  // RLS on `messages` requires `workspace_id` to be a workspace the caller is
+  // a member of (`messages_workspace_member_insert` WITH CHECK
+  // `is_workspace_member(workspace_id, auth.uid())`); we derive `workspace_id`
+  // from the parent conversation, which the caller's conversation-RLS already
+  // gated on membership (the ownership probe above). The `assertWriteScope`
+  // sentinel is the defense-in-depth layer. The implicit JWT mint is the auth
+  // probe — see ws-handler `tenantFor` doc-comment.
   //
   // Wrap mint in try/catch so a transient RuntimeAuthError gets a
   // structured Sentry mirror before the throw bubbles into the outer
@@ -1445,10 +1453,35 @@ export async function dispatchSoleurGo(
     });
     throw mintErr;
   }
+
+  // Read the parent conversation's `workspace_id` once via the already-minted
+  // tenant client (no second mint — Kieran single-RTT). Threaded into BOTH the
+  // user-row INSERT below and the assistant-row INSERT (via `buildRow`) so
+  // every interactive `messages` write satisfies the mig-059 WITH CHECK. On
+  // read failure, mirror to Sentry and throw — never proceed to a NULL
+  // workspace_id INSERT (which would 500 under RLS).
+  const { data: convWsRow, error: convWsErr } = await tenant
+    .from("conversations")
+    .select("workspace_id")
+    .eq("id", conversationId)
+    .single();
+  if (convWsErr || !convWsRow) {
+    reportSilentFallback(convWsErr ?? new Error("conversation workspace_id not found"), {
+      feature: "cc-dispatcher",
+      op: "persistUserMessage.workspaceRead",
+      extra: { userId, conversationId },
+    });
+    throw new Error(
+      `Failed to resolve conversation workspace_id: ${convWsErr?.message ?? "row absent"}`,
+    );
+  }
+  const conversationWorkspaceId = convWsRow.workspace_id as string;
+
   const messageId = randomUUID();
   const { error: insertErr } = await tenant.from("messages").insert({
     id: messageId,
     conversation_id: conversationId,
+    workspace_id: conversationWorkspaceId,
     role: "user",
     content: rawUserMessage,
     tool_calls: null,
@@ -1549,15 +1582,17 @@ export async function dispatchSoleurGo(
     mode: PersistMode,
     text: string,
   ): Promise<void> {
-    // #3603 W1 — Cross-tenant write-boundary sentinel. Post-PR-C/PR-D,
-    // cc-path writes via tenant-scoped clients (RLS enforces FK-join to
-    // conversations.user_id). This guard catches the residual case where
-    // the dispatch closure's userId/conversationId disagree with a future
-    // SDK-payload-derived identifier — RLS cannot, since the JWT is A's
-    // and the row's conversation_id is A-owned. Returns `false` only via
-    // the test seam today (sentinel placeholder); load-bearing call site
-    // for that future identifier comparison. See `assertWriteScope`
-    // module-level doc.
+    // #3603 W1 — Cross-tenant write-boundary sentinel. Post-migration 059,
+    // RLS on `messages` requires `workspace_id` to be a workspace the caller
+    // is a member of (`messages_workspace_member_insert` WITH CHECK
+    // `is_workspace_member(workspace_id, auth.uid())`); we derive it from the
+    // parent conversation, which the caller's conversation-RLS already gated on
+    // membership. This guard catches the residual case where the dispatch
+    // closure's userId/conversationId disagree with a future SDK-payload-derived
+    // identifier — RLS cannot, since the JWT is A's and the row's workspace_id
+    // is A-member-gated. Returns `false` only via the test seam today (sentinel
+    // placeholder); load-bearing call site for that future identifier
+    // comparison. See `assertWriteScope` module-level doc.
     if (!assertWriteScope(userId, conversationId)) return;
 
     // Empty-drop contract (PR-A1): an empty-text turn produces no row.
@@ -1566,9 +1601,10 @@ export async function dispatchSoleurGo(
     // future caller can't silently produce an empty assistant row.
     if (!text) return;
 
-    const row = buildRow(mode, text, conversationId);
+    const row = buildRow(mode, text, conversationId, conversationWorkspaceId);
     // PR-C §2.11 (#3244): tenant-scoped assistant-row INSERT. Reuses
-    // the `tenant` minted at function entry (above the user-row INSERT).
+    // the `tenant` minted at function entry (above the user-row INSERT) and
+    // the `conversationWorkspaceId` read once there (mig 059 member-keyed RLS).
     const { error } = await tenant.from("messages").insert(row);
     if (error) {
       mirrorInsertError(error, mode, userId, conversationId, text);
