@@ -78,3 +78,39 @@ describe("DelegationToggle — owner grant control", () => {
     expect(getSwitch()).toHaveAttribute("aria-checked", "false");
   });
 });
+
+describe("DelegationToggle — owner revoke control (cannot-disable bug)", () => {
+  // T2/T3: once a delegation exists, toggling OFF issues a DELETE. The revoke
+  // RPC arg-mismatch (route.ts) made every DELETE return 400, so the toggle
+  // snapped back ON and the user could never stop sharing the key. With the
+  // route fixed (DELETE → 200) the switch must flip to OFF and stay OFF.
+  const activeProps = {
+    ...baseProps,
+    delegation: { id: "d-1", dailyCapCents: 2000, todaySpentCents: 0, active: true },
+  };
+
+  it("turns the toggle off after a successful revoke DELETE (T2)", async () => {
+    render(<DelegationToggle {...activeProps} />);
+    const toggle = getSwitch();
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+
+    await userEvent.click(toggle);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/workspace/delegations",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(getSwitch()).toHaveAttribute("aria-checked", "false");
+    expect(alertMock).not.toHaveBeenCalled();
+  });
+
+  it("stays on and alerts when the revoke DELETE returns non-OK (T3)", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: "forbidden" }), { status: 400 }));
+    render(<DelegationToggle {...activeProps} />);
+
+    await userEvent.click(getSwitch());
+
+    expect(alertMock).toHaveBeenCalledTimes(1);
+    expect(getSwitch()).toHaveAttribute("aria-checked", "true");
+  });
+});
