@@ -12,6 +12,64 @@ source_learning: knowledge-base/project/learnings/2026-06-02-auto-merge-livelock
 
 # docs: settle-then-admin-merge escape hatch at the Phase 7 BEHIND inflection (#4790)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-02
+**Sections enhanced:** Research Reconciliation (empirically proven), Acceptance Criteria, Risks
+**Method:** direct in-worktree verification (no agent fan-out needed — every load-bearing
+claim is mechanically checkable against the three target files, which are in hand).
+
+### Key empirical results (the critical path is de-risked)
+
+1. **The Phase 1 awk fix ALONE turns the fixture from RED → 13 pass / 0 fail.** Applied the
+   comment-form anchor (`/<!-- phase-7-poll-block:start -->/` + `:end`) to a temp copy of the
+   fixture **in-place** (so `REPO_ROOT` resolves) and ran it against the UNMODIFIED ship +
+   merge-pr blocks: all 5 scenarios (MERGED, required-fail, BEHIND-saturation, DIRTY,
+   absent-check) + mirror-parity + `bash -n` pass. This proves the harness-fix-first phase
+   ordering is correct and the unmodified blocks stay extractable.
+2. **Extractor over-slurp confirmed ship-only.** Old awk: ship → 549 lines (broken),
+   merge-pr → 71 lines (clean, no prose marker mention). Fixed awk: ship → 119 lines ending
+   in `done`, zero `**If merged`, all 3 fingerprint tokens present; merge-pr → 71 lines with
+   all 9 mirror-parity tokens. The single anchor change fixes ship without disturbing merge-pr.
+3. **Fence-boundary claim verified.** `:end` fence at ship L1232; the cap-explanation prose
+   at L1243 is OUTSIDE it — so AC3's full-procedure token greps MUST target the raw file, the
+   in-loop echo only carries the short pointer (Sharp Edge holds).
+4. **Hard gates pass:** User-Brand Impact (threshold `none` + scope-out reason bullet; zero
+   sensitive-path Files-to-Edit), Observability (skips — pure docs/test, nothing under
+   `apps/*/{server,src,infra}` or `plugins/*/scripts/`), PAT-shaped-variable halt (no match).
+   Network-outage gate does not fire (`Base branch was modified`/`--admin` are git, not L3/L7
+   connectivity). Precedent-diff gate: no SQL/atomic-write/lock/RPC pattern; no scheduled job.
+
+### Research Insights
+
+**Verification evidence (paste into PR body at /work time):**
+
+```text
+# Phase 1 fix proven against unmodified blocks (in-place temp copy):
+ship-phase-7 fixture: 13 pass, 0 fail
+
+# Over-slurp is ship-only:
+old awk: ship=549 lines (broken), merge-pr=71 (clean)
+new awk: ship=119 lines, ends in `done`, 0x "**If merged", 3 fingerprint tokens
+new awk: merge-pr=71 lines, 9/9 mirror-parity tokens
+
+# Fence boundary:
+ship :end fence = L1232 ; cap-prose "The sync is capped at MAX_BEHIND_SYNCS=6" = L1243 (OUTSIDE fence)
+
+# AC7 grep-semantics: `fixtures\.sh\b` does NOT match the new `ship-phase-7-poll-fixtures.test.sh`
+```
+
+**Edge cases surfaced during verification:**
+
+- `scripts/test-all.sh` refuses to run from the bare root (L39-43) — Phase 5 must invoke it
+  from the worktree.
+- The fixture computes `REPO_ROOT` from `BASH_SOURCE/../../..` (fixture L22) — it MUST live
+  under `plugins/soleur/test/` for that to resolve; the rename keeps it there, so REPO_ROOT is
+  unaffected (verified: a `/tmp` copy fails REPO_ROOT resolution, an in-place copy passes).
+- The `perl -0pi` patch used for verification targets the exact two awk-rule lines; /work
+  should make the edit by hand per Phase 1 (keep both fence-strip rules verbatim, add `next`
+  to the `:end` rule).
+
 ## Overview
 
 When `origin/main` merges PRs faster than the ~8-minute CI check cycle, the Phase 7
