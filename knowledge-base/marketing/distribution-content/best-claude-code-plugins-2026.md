@@ -1,7 +1,7 @@
 ---
 title: "Best Claude Code Plugins 2026: The Extensions Worth Installing"
 type: pillar
-publish_date: 2026-06-03
+publish_date: 2026-06-02
 channels: linkedin-company
 status: scheduled
 ---
