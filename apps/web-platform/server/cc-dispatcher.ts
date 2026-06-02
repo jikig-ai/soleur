@@ -453,6 +453,11 @@ function buildRow(
     // mig 059: messages.workspace_id NOT NULL + member-keyed INSERT RLS.
     // Derived from the parent conversation by the caller; see saveAssistantMessage.
     workspace_id: workspaceId,
+    // mig 053: messages.template_id NOT NULL (no default) + CHECK
+    // (^[a-z][a-z0-9_]*$). Interactive (non-template) messages use the
+    // 'default_legacy' sentinel — same value the draft-card helper and the
+    // 053 backfill use. Omitting it violates the NOT-NULL constraint (#4839).
+    template_id: "default_legacy",
     role: "assistant",
     content: text,
     tool_calls: null,
@@ -1483,6 +1488,9 @@ export async function dispatchSoleurGo(
     id: messageId,
     conversation_id: conversationId,
     workspace_id: conversationWorkspaceId,
+    // mig 053: messages.template_id NOT NULL (no default). Interactive
+    // messages use the 'default_legacy' sentinel (see buildRow). #4839.
+    template_id: "default_legacy",
     role: "user",
     content: rawUserMessage,
     tool_calls: null,

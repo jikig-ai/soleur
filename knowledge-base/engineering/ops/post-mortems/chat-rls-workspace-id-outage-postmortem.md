@@ -85,3 +85,13 @@ Sending any message in the interactive chat returned the generic bubble **"An un
 - A liveness alert on write absence (factor 2 follow-up).
 - Lower error-noise floor so real errors surface (the #4816 noise reduction, in hindsight, was the enabling diagnostic step).
 - Triage discipline: trace the user-visible symptom to its producer, not the alert's named op.
+
+## Update (2026-06-02): second un-swept NOT-NULL column — `template_id` (#4839)
+
+After PR #4831 deployed, chat **still** errored on send. The workspace_id RLS error was gone, but the insert now reached the **next** un-swept required column: `Failed to save user message: null value in column "template_id" of relation "messages" violates not-null constraint` (`dispatchSoleurGo`, 2026-06-02T21:14Z). `messages.template_id` was made NOT NULL (no default) by **migration 053** — a separate, earlier instance of the *same* un-swept-INSERT-site class as 059's workspace_id. The 059 RLS WITH CHECK fired first and masked the 053 NOT-NULL violation.
+
+**Process miss:** when fixing #4831 I added only the column named in the error (workspace_id) instead of querying `information_schema` for the **complete** set of NOT-NULL-no-default columns and sweeping them all at once.
+
+**Authoritative fix (PR #4839-fix):** queried prod `information_schema.columns` — the ONLY two NOT-NULL-no-default columns on `messages` are `workspace_id` and `template_id`. Added `template_id: "default_legacy"` (the migration-053 backfill sentinel, satisfies the `^[a-z][a-z0-9_]*$` CHECK) to all 4 interactive INSERT sites, and **generalized the grep-sweep guard test to require BOTH columns** (`REQUIRED_MESSAGE_COLUMNS`) so a third un-swept column would fail CI.
+
+**Added prevention:** when fixing a NOT-NULL/RLS insert failure, enumerate ALL required columns via `information_schema` (NOT NULL + no default) and sweep every site in one pass — a single error message names only the first violation; RLS-check-before-constraint and one-constraint-at-a-time evaluation both mask the rest.
