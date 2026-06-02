@@ -457,13 +457,18 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
 # means new servers provisioned from scratch will miss the change.
 resource "terraform_data" "deploy_pipeline_fix" {
   # AppArmor profile must be loaded before ci-deploy.sh references it (#1570).
-  # #4827 — the handler-bootstrap bridge must deliver infra-config-install + the
-  # INFRA_CONFIG_INSTALL sudoers grant over root SSH BEFORE this resource's webhook
-  # push runs, so the handler's prod-mode escalation is permitted on first apply.
-  depends_on = [
-    terraform_data.apparmor_bwrap_profile,
-    terraform_data.infra_config_handler_bootstrap,
-  ]
+  #
+  # #4827 — deliberately NO depends_on the infra_config_handler_bootstrap bridge.
+  # `apply-deploy-pipeline-fix.yml` runs `terraform apply -target=this` from the CI
+  # runner, and `-target` pulls in a resource's dependencies — a depends_on the
+  # bridge would force the runner to apply the bridge's SSH provisioners, which
+  # fail because the runner egress IP is not in var.admin_ips (the bridge is
+  # admin-applied by design; see its header + server.tf:330). Ordering between the
+  # SSH delivery of helper+sudoers and the webhook push is instead handled by the
+  # handler's per-file self-heal: a push that predates the helper/sudoers records
+  # install_rejected for that file and the next push lands it. The admin full
+  # `terraform apply` delivers both on the same run.
+  depends_on = [terraform_data.apparmor_bwrap_profile]
 
   # hcloud_server.web has ignore_changes=[user_data], so cloud-init never re-applies
   # to the existing server. This resource is the sole path for pushing ci-deploy.sh,
