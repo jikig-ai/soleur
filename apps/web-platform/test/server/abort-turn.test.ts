@@ -277,7 +277,7 @@ describe("messagePersisted race-window guard (plan §1.9)", () => {
   // mocking the SDK; re-implementing the guard pattern in 4 lines and
   // asserting against it is the cheapest faithful coverage.
 
-  function makeAbortBranch(state: { messagePersisted: boolean }, spy: ReturnType<typeof vi.fn>) {
+  function makeAbortBranch(state: { messagePersisted: boolean }, spy: ReturnType<typeof vi.fn<(status: string, fullText: string) => Promise<void>>>) {
     return async (fullText: string) => {
       if (!state.messagePersisted && fullText.length > 0) {
         // Set BEFORE the await — production-equivalent ordering. If
@@ -291,7 +291,7 @@ describe("messagePersisted race-window guard (plan §1.9)", () => {
     };
   }
 
-  function makeResultBranch(state: { messagePersisted: boolean }, spy: ReturnType<typeof vi.fn>) {
+  function makeResultBranch(state: { messagePersisted: boolean }, spy: ReturnType<typeof vi.fn<(status: string, fullText: string) => Promise<void>>>) {
     return async (fullText: string) => {
       if (fullText.length > 0 && !state.messagePersisted) {
         await spy("complete", fullText);
