@@ -15,7 +15,7 @@ depends_on:
 
 **This is not the problem-interview asset.** For 15-minute research calls (no pitch, no onboarding), use [`validation-outreach-template.md`](./validation-outreach-template.md). That document recruits for *research*; this one recruits for *participation*. Same audience, different ask — keep both discoverable as a pair.
 
-> **Gate:** This file is the M4 deliverable. It produces the copy; it does **not** send anything. No recruitment outreach fires until the roadmap Marketing Gate (M1–M4, M12–M63) and the Multi-User Readiness Gate complete. See `knowledge-base/product/roadmap.md`.
+> **Gate:** This file is the M4 deliverable. It produces the copy; it does **not** send anything. No recruitment outreach fires until the roadmap Marketing Gate and the Multi-User Readiness Gate complete — see `knowledge-base/product/roadmap.md` for the authoritative milestone list (the gate clause is the source of truth; don't duplicate the milestone ranges here, where they drift).
 
 ---
 
@@ -150,7 +150,7 @@ Recruitment copy that reads as spam is a brand-damage vector and gets you banned
 
 ## Proof-point discipline
 
-- **Counts are soft floors.** Use "60+ agents", "60+ skills", "420+ merged PRs" in prose — never a hardcoded exact count, which drifts as components ship (brand-guide line 79).
+- **Counts are soft floors.** Use "60+ agents", "60+ skills", "420+ merged PRs" in prose — never a hardcoded exact count, which drifts as components ship (brand-guide, "Numbers: soft floors in prose").
 - **No fabricated stats or unverified citations.** If a claim needs an external source, verify the live URL before embedding it and annotate `<!-- verified: YYYY-MM-DD source: <url> -->`. Recruitment DMs rarely need citations — prefer authoring directly from this guide with none.
 - **No price as a call-to-action.** Pricing is still under validation. These templates lead with "free for two weeks", never a committed price. Willingness-to-pay is a research topic for the interview, not a CTA here.
 - **Prohibited terms in General-register copy:** no "plugin", "Claude Code", "copilot", "assistant", "AI-powered", "just", "simply", or "terminal-first" in the X/Twitter, Direct network, or IndieHackers-general templates. Those audiences include non-Claude-Code founders; lead with outcomes, not tooling vocabulary.
