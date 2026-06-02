@@ -2,11 +2,40 @@
 title: "fix: align unified chat input box and apply it to the dashboard landing prompt"
 type: fix
 date: 2026-06-02
+deepened: 2026-06-02
 lane: single-domain
 brand_survival_threshold: none
 ---
 
 # fix: Align unified chat input box + apply ChatGPT-style unification to dashboard landing prompt
+
+## Enhancement Summary
+
+**Deepened on:** 2026-06-02
+**Sections enhanced:** 3 (Risks & Mitigations / Precedent Diff added; Domain Review wireframe
+reference added; Sharp Edges + realism caveats grounded against live code)
+**Research approach:** local-only (strong in-repo prior art + verifiable precedent). External
+research skipped — the two superseded 2026-04-12 alignment plans already grounded Tailwind v4
+`min-h` / `items-end` / `field-sizing` semantics, and the unified-box precedent is verifiable by
+`git`-reading `chat-input.tsx`. No high-risk domain (no security, payments, external API, data).
+
+### Key Improvements
+1. **Precedent-Diff gate (Phase 4.4):** added a side-by-side table proving the dashboard box
+   mirrors `chat-input.tsx`'s container verbatim, and surfaced the load-bearing divergence — the
+   precedent's auto-grow effect sets `style.height` inline (overriding `min-h`), which is why
+   Part A needs visual verification while Part B (`<input>`, no auto-grow) is deterministic.
+2. **Wireframe gate (Phase 4.9):** confirmed the committed `chat-ux-redesign.pen` already covers
+   all three surfaces ("Chat Input", "Follow up…", "What are you building") — no new wireframe
+   needed; referenced as the design source of truth.
+3. **All halt gates verified green:** User-Brand Impact (threshold `none`, no sensitive path),
+   Observability (skip — pure presentational), PAT-shaped sweep (no matches).
+
+### New Considerations Discovered
+- The textarea's resting height is governed by an inline `style.height = scrollHeight` effect
+  (`chat-input.tsx:186-187`), NOT by the `min-h` class — so the padding value is a
+  visual-verification output, not an arithmetic constant.
+- Two open code-review issues (#2590 god-component extraction, #3334 gold-gradient CTA) touch
+  `dashboard/page.tsx`; both acknowledged out-of-scope (different concerns, different lines).
 
 ## Overview
 
@@ -197,7 +226,7 @@ the component. (If a future change makes the two truly identical, extract a pres
 | `apps/web-platform/test/chat-input.test.tsx` | Update `:136` `expect(textarea.className).toContain("min-h-[40px]")` → the new floor (`min-h-[36px]`). |
 | `apps/web-platform/test/chat-input-auto-grow.test.tsx` | Update `:46` `expect(textarea.className).toMatch(/min-h-\[40px\]/)` → new floor regex. The `:44` negative `h-[\d+px]` guard and `:47` `max-h-[140px]` assertions are unchanged. |
 
-> **Class-assertion sweep (per learning `2026-06-02-class-assertion-sweep-must-use-bare-token-not-bracketed.md`,
+> **Class-assertion sweep (per learning `2026-06-02-test-class-assertion-sweep-must-use-bare-token-not-bracketed.md`,
 > authored by 4c52fc1c itself):** grep the BARE token, not the bracketed form, before freezing
 > the test edits. Run `grep -rn "min-h-\[40px\]" apps/web-platform` AND
 > `grep -rn "40px" apps/web-platform/test/chat-input*.tsx` to catch BOTH the `toContain("min-h-[40px]")`
@@ -272,17 +301,27 @@ No overlap with `chat-input.tsx` or the two test files.
 **Decision:** auto-accepted (pipeline)
 **Agents invoked:** none
 **Skipped specialists:** none — `ux-design-lead` N/A: this modifies the styling of EXISTING
-input controls to match an already-shipped design (4c52fc1c's ChatGPT-style box). No new page,
-no new flow, no new interactive surface, no new component file. The mechanical UI-surface
-override does not force BLOCKING because no NEW `components/**/*.tsx`, `app/**/page.tsx`, or
-`app/**/layout.tsx` file is CREATED (both edited files already exist).
-**Pencil available:** N/A (no UI surface created; cosmetic alignment of existing controls)
+input controls to match an already-shipped, already-designed pattern (4c52fc1c's ChatGPT-style
+box). No new page, no new flow, no new interactive surface, no new component file. Both edited
+files already exist. The target design is the committed wireframe (below), so a new wireframe
+would be redundant.
+**Pencil available:** committed `.pen` already covers the surfaces (no new artifact needed).
+
+**Wireframe (committed, authoritative for this change):**
+`knowledge-base/product/design/command-center/chat-ux-redesign.pen` — verified committed
+(`git ls-files`), 119 KB. It already contains the target design for ALL THREE surfaces in scope:
+the **"Chat Input"** box, the conversation **"Follow up…"** bottom bar, and the dashboard
+**"What are you building"** landing prompt (verified by string-grep into the `.pen`). This plan
+brings the implementation into conformance with that committed design — the wireframe is the
+source of truth, not a new deliverable. Satisfies `wg-ui-feature-requires-pen-wireframe` /
+deepen-plan Phase 4.9.
 
 #### Findings
 
 CSS/markup-only correction bringing two surfaces into visual parity with the already-approved
-unified-box design. No copy changes (placeholder/heading text unchanged). No brand-voice or
-flow implications. Visual verification via Playwright is the appropriate gate, not wireframes.
+unified-box design captured in `chat-ux-redesign.pen`. No copy changes (placeholder/heading text
+unchanged). No brand-voice or flow implications. Visual verification via Playwright (against the
+committed wireframe) is the appropriate gate, not a new wireframe.
 
 ## Observability
 
@@ -318,6 +357,27 @@ condition: no new code/infra surface that could fail silently.)
 - Given a 375px viewport on the chat surface, when rendered, then the mobile @ button stays
   inside the textarea.
 
+## Risks & Mitigations — Precedent Diff (deepen-plan Phase 4.4)
+
+The dashboard unified box is a **pattern-bound behavior** with an in-repo precedent: the
+`ChatInput` container. Side-by-side (verified `git`-read at deepen time):
+
+| Element | Precedent (`chat-input.tsx`) | Dashboard target (`page.tsx`) |
+|---|---|---|
+| Container | `:606` `flex items-end gap-1.5 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-2 py-1.5 transition-shadow focus-within:border-soleur-border-emphasized` | identical, minus the `flashQuote` ring (no quote-flash analogue on the dashboard) |
+| Paperclip | `:615` borderless `h-[36px] w-[36px] rounded-lg ... hover:bg-soleur-bg-surface-2` | identical |
+| Send | `:682` borderless `h-[36px] w-[36px] rounded-lg bg-amber-600 ... hover:bg-amber-500` | identical |
+| Text field | `<textarea>` borderless transparent, auto-grow effect (`:186-187`) | `<input>` borderless transparent, **no auto-grow** (single-line by nature) |
+
+**Key precedent-divergence note (realism pass):** the precedent's `<textarea>` height is driven by
+a `useIsomorphicLayoutEffect` that sets `el.style.height = scrollHeight` inline (`chat-input.tsx:186-187`),
+which **overrides the `min-h` Tailwind class via the higher-specificity inline `height`**. That is
+why the Part A padding/`min-h` change MUST be visually verified — the inline-height effect, not the
+class alone, determines the resting height. The **dashboard `<input>` has NO such effect**, so its
+`min-h-[36px]` behaves predictably (a plain single-line input clamps to the padding+line-height,
+floored by `min-h`). Conclusion: Part B's alignment is low-risk (deterministic); Part A's is the
+one requiring the Playwright pass.
+
 ## Sharp Edges
 
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/placeholder text, or
@@ -349,7 +409,7 @@ condition: no new code/infra surface that could fail silently.)
   and `2026-04-12-fix-chat-input-alignment-plan.md` (pre-unification 44px-floor approach).
 - Unification commit: `4c52fc1c` (#4832) — the source of the current box and the 36px buttons.
 - Learning authored by that same commit:
-  `knowledge-base/project/learnings/2026-06-02-class-assertion-sweep-must-use-bare-token-not-bracketed.md`.
+  `knowledge-base/project/learnings/2026-06-02-test-class-assertion-sweep-must-use-bare-token-not-bracketed.md`.
 
 ### Related files
 
