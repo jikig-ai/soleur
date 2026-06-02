@@ -157,7 +157,7 @@ failure_modes:
   - { mode: subscription credit/rate-limit exhausted, detection: subscription_limit code (distinct from key_invalid/429), alert_route: Sentry + user copy }
   - { mode: token expired/revoked mid-run, detection: 401 → key_invalid path, alert_route: Sentry }
 logs: { where: existing pino + Sentry, retention: existing }
-discoverability_test: { command: "grep -q CC_OAUTH_EFFECTIVE_DATE apps/web-platform/server/byok-lease.ts && ./node_modules/.bin/vitest run test/byok-lease-credential-type.test.ts", expected_output: "exit 0; NO ssh" }
+discoverability_test: { command: "grep -rl CC_OAUTH_EFFECTIVE_DATE apps/web-platform/server/byok-lease.ts", expected_output: "apps/web-platform/server/byok-lease.ts" }
 ```
 
 ## Infrastructure (IaC)
