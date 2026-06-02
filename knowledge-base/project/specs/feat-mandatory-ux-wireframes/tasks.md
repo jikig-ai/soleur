@@ -21,10 +21,10 @@ Derived from the finalized (post-5-agent-review) plan. NEVER CODE during plannin
 
 ## Phase 1 — Feature B: merged hard rule + premise cross-ref + budget trim
 
-- [ ] 1.1 Trim `hr-observability-layer-citation` body tail (~250 B) in `AGENTS.core.md` (layer enumeration duplicated at `observability-coverage-reviewer.md:15-17`). Leave SSH + GDPR rules untouched.
-- [ ] 1.2 Add `[id: hr-verify-repo-capability-claim-before-assert]` body to `AGENTS.core.md` + `→ core` pointer in `AGENTS.md` `## Hard Rules`. Semantic trigger; covers own-output AND subagent-prompt premises; hedge words = examples. Verify slug regex + not retired + ≤600 B.
-- [ ] 1.3 Re-run `lint-agents-rule-budget.py` → `B_ALWAYS < 23000` (target ≤ ~22800). Trim more from observability tail if needed.
-- [ ] 1.4 FR9 one-line cross-ref to the new rule at brainstorm `SKILL.md:235` and plan `SKILL.md:101` (Phase 0.6). Do not restate verify-or-ask logic.
+- [x] 1.1 Trim `hr-observability-layer-citation` body tail (~250 B) in `AGENTS.core.md` (layer enumeration duplicated at `observability-coverage-reviewer.md:15-17`). Leave SSH + GDPR rules untouched.
+- [x] 1.2 Add `[id: hr-verify-repo-capability-claim-before-assert]` body to `AGENTS.core.md` + `→ core` pointer in `AGENTS.md` `## Hard Rules`. Semantic trigger; covers own-output AND subagent-prompt premises; hedge words = examples. Verify slug regex + not retired + ≤600 B.
+- [x] 1.3 Re-run `lint-agents-rule-budget.py` → `B_ALWAYS < 23000` (target ≤ ~22800). Trim more from observability tail if needed.
+- [x] 1.4 FR9 one-line cross-ref to the new rule at brainstorm `SKILL.md:235` and plan `SKILL.md:101` (Phase 0.6). Do not restate verify-or-ask logic.
 
 ## Phase 2 — Feature A: close skip outcomes (brainstorm + plan + work)
 
@@ -49,7 +49,7 @@ Derived from the finalized (post-5-agent-review) plan. NEVER CODE during plannin
 
 ## Phase 5 — Tests (RED-first) + learning
 
-- [ ] 5.1 RED: create `plugins/soleur/test/mandatory-wireframes-hardening.test.ts` (skip-clause removal, rule-id presence, single 4.8 + new 4.9). Confirm fails on current state.
+- [x] 5.1 RED: create `plugins/soleur/test/mandatory-wireframes-hardening.test.ts` (skip-clause removal, rule-id presence, single 4.8 + new 4.9). Confirm fails on current state.
 - [ ] 5.2 GREEN via Phases 1-4.
 - [ ] 5.3 Run `python3 scripts/lint-rule-ids.py` (exit 0) + `python3 scripts/lint-agents-rule-budget.py` (exit 0, `B_ALWAYS < 23000`).
 - [ ] 5.4 Learning file `knowledge-base/project/learnings/bug-fixes/<topic>.md` (author dates at write-time); link the two related learnings.

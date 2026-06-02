@@ -102,6 +102,8 @@ Refine the idea through collaborative dialogue using the **AskUserQuestion tool*
 
 Run BEFORE spawning any research (Phase 1) — research and downstream phases are expensive, and building a plan atop a stale premise wastes all of it. `brainstorm` Phase 1.1 does this validation when a brainstorm precedes plan, but `plan` is frequently entered directly (including the one-shot → plan path that skips brainstorm), so the cheap probe must also live here. This is distinct from Phase 1.7 reconciliation (which checks spec claims AFTER research returns) — this gate fires before research is even dispatched.
 
+This also covers your **own** option-bounding capability claims — not just cited references. Before asserting that a repo tool/skill/script "only does X" or "can't do Y" to bound the plan's options, grep/read it first or phrase it as a question (`hr-verify-repo-capability-claim-before-assert`).
+
 For every issue, blocker, dependency, or prior-art artifact the feature description **cites by reference**, verify it still holds:
 
 1. **Cited GitHub issues / PRs** (`#N`, `Closes #N`, "blocked by #N", "follow-up to #N"): run `gh issue view <N> --json state,title,closedByPullRequestsReferences` and `gh pr view <N> --json state,merged` where applicable. If a blocker is already `closed`/`merged`, or the issue this plan targets is already closed by a merged PR, **the premise is stale** — surface via **AskUserQuestion** ("Issue #N appears already resolved by PR #M. Re-scope, or close as done?") rather than planning against it.
