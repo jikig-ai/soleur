@@ -29,6 +29,12 @@ Plan: 1 to add, 0 to change, 1 to destroy.
 
 Every resolution is the same: a human-authorized `terraform apply -target=terraform_data.deploy_pipeline_fix` against the `prd_terraform` Doppler config.
 
+## Closing note (2026-06-02, #4811): the webhook handler now has its own SSH bootstrap path
+
+A sharper variant of this pattern bit hard in the `#4804` freeze: `infra-config-apply.sh` (the `/hooks/infra-config` **webhook handler** itself) had **no deploy path to a running host at all**. It is not in `push-infra-config.sh`'s 8-file payload nor in its own `FILE_MAP`, so it cannot self-deliver by construction — and the only would-be delivery (`deploy_pipeline_fix`'s `triggers_replace` re-firing `push-infra-config.sh`) pushes the *other* files, leaving a handler edit dead on the host. Net: a handler/`hooks.json` drift was **unrecoverable through the webhook path**, because the recovery itself routes through the stale handler.
+
+`#4811` adds `terraform_data.infra_config_handler_bootstrap` — a dedicated SSH provisioner (the SSH analogue of `journald_persistent`) that delivers `infra-config-apply.sh` + `cat-infra-config-state.sh` + the rendered `hooks.json` directly to the running host over SSH, independent of the on-host handler. So **a handler edit is no longer a silent no-op on the host**: the bootstrap re-fires on any handler/`hooks.json`/status-script change and re-aligns the host. It is admin-applied (not in `apply-deploy-pipeline-fix.yml`'s CI `-target=` set — the runner egress IP isn't in `admin_ips`), exactly like the 7 sibling SSH provisioners. The routine webhook push (`deploy_pipeline_fix`) continues for the other 8 files unchanged.
+
 ## Why this is by design
 
 `apps/web-platform/infra/server.tf`:
