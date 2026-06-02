@@ -560,6 +560,37 @@ When filing:
 - Use `gh issue create --body-file <path>` — never `--body "$VAR"` — so
   untrusted finding text (diffs, agent output) cannot shell-interpolate.
 
+**Auto-wire deferred-scope-outs into the follow-through sweeper.** When a
+scope-out passes the CONCUR gate AND its `Re-eval by:` trigger is a concrete
+date / dependency / event-grep / counter form, the filing ALSO wires the issue
+into the follow-through auto-close substrate so it cannot rot open past its
+trigger:
+
+1. add `--label follow-through` to the `gh issue create` call (alongside
+   `--label deferred-scope-out`);
+2. scaffold a verification script named `<slug>-<issue-or-pr>.sh` under the
+   followthroughs directory by `cp`-ing the
+   [stub template](../ship/references/followthrough-stub-template.sh) and
+   replacing the TODO body with the exit-code probe for the trigger shape
+   (mapping in [review-todo-structure.md](./references/review-todo-structure.md)
+   §Re-evaluation Trigger), then `chmod +x`;
+3. embed the `<!-- soleur:followthrough script=… earliest=… [secrets=…] -->`
+   directive in the issue body (`earliest=` = the trigger date for a date form;
+   the filing date for dependency/event-grep/counter forms, which self-gate via
+   the probe's transient exit).
+
+Validation is NOT re-implemented here — the `gh issue create --label
+follow-through` call is intercepted by
+`.claude/hooks/follow-through-directive-gate.sh`, which fails-closed if the
+directive is missing/malformed, the script path escapes the followthroughs
+root, the script is absent/non-executable, or `earliest` doesn't parse. **Ordering:**
+scaffold + `chmod +x` the script BEFORE the `gh issue create` call (the gate and
+the sweeper both require the file on disk; for review-time filings it lands in
+the review PR's branch). Full contract:
+[`followthrough-convention.md`](../../../../knowledge-base/engineering/ops/runbooks/followthrough-convention.md)
+§Trigger → verification mapping. This subsection is additive — the cost-of-filing
+gate, the four scope-out criteria, and the CONCUR gate above are unchanged.
+
 Everything else (magic numbers, duplicated helpers, small refactors, missing
 tests for PR-introduced code, polish, naming, a11y on PR-introduced surfaces,
 performance issues introduced by the PR) MUST be fixed inline.
