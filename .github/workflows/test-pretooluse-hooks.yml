@@ -240,8 +240,9 @@ jobs:
           # Probe 2: enforce default (SOLEUR_DEFER_DRYRUN unset, mirrors unit D4)
           # -> permissionDecision=defer, hookEventName=PreToolUse, kind=defer_requested.
           # env -u (not env -i) so jq/bash stay on PATH; the var is unset at job
-          # scope (the agent step's pin at line 71 is step-scoped), so this also
-          # guards against a future job-level pin or a silent default flip to :-1.
+          # scope (the "Test hooks via claude-code-action" step's pin is
+          # step-scoped), so this also guards against a future job-level pin or a
+          # silent default flip to :-1.
           root2=$(mktemp -d)
           out2=$(printf '%s' "$PAYLOAD" \
             | env -u SOLEUR_DEFER_DRYRUN INCIDENTS_REPO_ROOT="$root2" .claude/hooks/prod-write-defer-gate.sh)
