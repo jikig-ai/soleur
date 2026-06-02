@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { RailSlotHarness } from "./helpers/rail-slot-harness";
 
 // Stable mock references (avoid useEffect re-fires)
 const mockPush = vi.fn();
@@ -62,12 +63,14 @@ describe("KbLayout", () => {
     );
 
     render(
-      <KbLayout>
-        <div data-testid="content-page">File content here</div>
-      </KbLayout>,
+      <RailSlotHarness>
+        <KbLayout>
+          <div data-testid="content-page">File content here</div>
+        </KbLayout>
+      </RailSlotHarness>,
     );
 
-    // Wait for tree to load
+    // Tree is portaled into the rail slot (ADR-047)
     const nav = await screen.findByRole("navigation", {
       name: /knowledge base file tree/i,
     });
@@ -85,9 +88,11 @@ describe("KbLayout", () => {
     );
 
     render(
-      <KbLayout>
-        <div>content</div>
-      </KbLayout>,
+      <RailSlotHarness>
+        <KbLayout>
+          <div>content</div>
+        </KbLayout>
+      </RailSlotHarness>,
     );
 
     // Wait for tree to load, then check search input is present
@@ -160,16 +165,18 @@ describe("KbLayout", () => {
     );
 
     render(
-      <KbLayout>
-        <div data-testid="page-content">page content</div>
-      </KbLayout>,
+      <RailSlotHarness>
+        <KbLayout>
+          <div data-testid="page-content">page content</div>
+        </KbLayout>
+      </RailSlotHarness>,
     );
 
     await screen.findByRole("navigation", {
       name: /knowledge base file tree/i,
     });
 
-    // Should only have one navigation element (tree rendered once in sidebar)
+    // Should only have one navigation element (tree portaled once into the slot)
     const navs = screen.getAllByRole("navigation", {
       name: /knowledge base file tree/i,
     });

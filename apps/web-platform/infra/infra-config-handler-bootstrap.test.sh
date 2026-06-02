@@ -6,7 +6,7 @@
 # via (1) cloud-init write_files — dead on the existing host because
 # hcloud_server.web carries ignore_changes=[user_data] — and (2) the
 # deploy_pipeline_fix triggers_replace hash, which re-fires push-infra-config.sh,
-# which pushes the OTHER 8 files but NOT the handler itself (the handler is not in
+# which pushes the OTHER 7 files but NOT the handler itself (the handler is not in
 # push-infra-config.sh's payload nor in its own FILE_MAP). Net: a handler/hooks.json
 # drift on the host was unrecoverable through the webhook path, because the recovery
 # itself routes through the stale handler.
@@ -131,6 +131,33 @@ assert "asserts hooks.json maps cat_infra_config_state_sh_b64 key" \
   "printf '%s' \"\$BLOCK\" | grep -qE 'cat_infra_config_state_sh_b64'"
 assert "asserts the webhook unit is active (is-active)" \
   "printf '%s' \"\$BLOCK\" | grep -qE 'systemctl is-active webhook'"
+
+# --- AC7: #4827 — bridge also bootstraps the escalation helper + sudoers grant ---
+# The webhook handler's prod-mode escalation needs BOTH infra-config-install AND
+# the INFRA_CONFIG_INSTALL sudoers alias present before `sudo infra-config-install`
+# is permitted, and it cannot deliver either itself (the helper is OUT of FILE_MAP;
+# writing the sudoers requires the alias). Root SSH is the only non-circular
+# bootstrap — these assertions pin that delivery so it cannot silently regress.
+echo ""
+echo "--- AC7: escalation helper + sudoers delivered over root SSH (#4827) ---"
+assert "triggers_replace references infra-config-install.sh" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'file\(\"\\\$\{path\.module\}/infra-config-install\.sh\"\)'"
+assert "triggers_replace references deploy-inngest-bootstrap.sudoers" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'file\(\"\\\$\{path\.module\}/deploy-inngest-bootstrap\.sudoers\"\)'"
+assert "file provisioner delivers infra-config-install (destination)" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'destination[[:space:]]*=[[:space:]]*\"/usr/local/bin/infra-config-install\"'"
+assert "file provisioner sources infra-config-install.sh from path.module" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'source[[:space:]]*=[[:space:]]*\"\\\$\{path\.module\}/infra-config-install\.sh\"'"
+assert "file provisioner sources the sudoers grant from path.module" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'source[[:space:]]*=[[:space:]]*\"\\\$\{path\.module\}/deploy-inngest-bootstrap\.sudoers\"'"
+assert "remote-exec visudo-validates the staged sudoers before install" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'visudo -cf /tmp/deploy-inngest-bootstrap\.sudoers\.staged'"
+assert "remote-exec atomically installs the sudoers grant root:root 0440" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'install -o root -g root -m 0440 /tmp/deploy-inngest-bootstrap\.sudoers\.staged /etc/sudoers\.d/deploy-inngest-bootstrap'"
+assert "remote-exec asserts the helper is executable (test -x)" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'test -x /usr/local/bin/infra-config-install'"
+assert "remote-exec asserts the INFRA_CONFIG_INSTALL grant landed" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'grep -q INFRA_CONFIG_INSTALL /etc/sudoers\.d/deploy-inngest-bootstrap'"
 
 # --- AC6: wired into CI (infra-validation.yml) ---
 echo ""
