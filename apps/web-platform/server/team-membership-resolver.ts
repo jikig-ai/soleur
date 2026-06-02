@@ -1,6 +1,7 @@
 import { isTeamWorkspaceInviteEnabled, isByokDelegationsEnabled, type Identity } from "@/lib/feature-flags/server";
-import { resolveCurrentOrganizationId } from "@/server/workspace-resolver";
+import { resolveCurrentOrganizationId, resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 import { userHasEffectiveByokKey } from "@/server/byok-resolver";
+import { reportSilentFallback } from "@/server/observability";
 
 // Server-only resolver for the /dashboard/settings/team membership page.
 // Factored out of the page component so AC-A's flag-OFF → notFound() behavior
@@ -114,24 +115,51 @@ export async function resolveTeamMembershipPageData(
     };
   };
 
-  // Org → workspaces. For now we collapse to the user's primary workspace
-  // (N2 invariant: solo users have workspace_id === user_id). Multi-workspace
-  // orgs land in #2778 (post-MVP projects refactor).
-  // We resolve via current_organization_id → workspaces → members.
-  // Query: workspaces.organization_id = orgId, then their members.
-  const wsChain = service.from("workspaces") as {
-    select: (cols: string) => {
-      eq: (
-        col: string,
-        val: string,
-      ) => Promise<{ data: { id: string }[] | null; error: unknown }>;
+  // ADR-044 active-workspace convergence. #4767 applied this member-side; this
+  // applies it owner-side. The page MUST read delegations from — and pass to the
+  // grant POST body — the SAME workspace the member consumes from: the canonical
+  // current_workspace_id. The legacy unordered `workspaces.organization_id=orgId
+  // [0]` was a third, order-dependent resolution mechanism (neither
+  // getDefaultWorkspaceForUser nor resolveCurrentWorkspaceId). For a >1-workspace
+  // org it could pick a workspace different from the one the grant was written
+  // to, so the persisted toggle state was invisible on reload (symptom 1) and
+  // grants landed where the member never read them (symptom 2).
+  let workspaceId = await resolveCurrentWorkspaceId(user.id, service);
+
+  // J5 self-heal parity (mirrors resolveActiveWorkspaceKbRoot): a non-solo claim
+  // the caller is no longer a member of must fall back to the caller's OWN solo
+  // workspace (user.id) — never a sibling tenant's workspace (preserves the
+  // #4767 cross-tenant invariant). Read-only; no corrective write on a page read.
+  if (workspaceId !== user.id) {
+    const probe = service.from("workspace_members") as {
+      select: (cols: string) => {
+        eq: (col: string, val: string) => {
+          eq: (col: string, val: string) => {
+            maybeSingle: () => Promise<{ data: { user_id: string } | null; error: unknown }>;
+          };
+        };
+      };
     };
-  };
-  const wsResp = await wsChain.select("id").eq("organization_id", orgId);
-  if (wsResp.error || !wsResp.data || wsResp.data.length === 0) {
-    return { ok: false, reason: "no-membership" };
+    const membership = await probe
+      .select("user_id")
+      .eq("workspace_id", workspaceId)
+      .eq("user_id", user.id)
+      .maybeSingle();
+    // A transient probe error must page (cq-silent-fallback-must-mirror-to-sentry,
+    // matching resolveActiveWorkspaceKbRoot's membership probe) — but it still
+    // fails CLOSED to solo, never the sibling. A clean `!membership.data` is the
+    // legitimate non-member case (no mirror).
+    if (membership.error) {
+      reportSilentFallback(membership.error, {
+        feature: "team-membership-resolver",
+        op: "resolveTeamMembershipPageData.workspace-claim-membership-probe",
+        extra: { userId: user.id, claimedWorkspaceId: workspaceId },
+      });
+    }
+    if (membership.error || !membership.data) {
+      workspaceId = user.id; // never the sibling
+    }
   }
-  const workspaceId = wsResp.data[0].id;
 
   const membersResp = await membershipChain
     .select("workspace_id, user_id, role, created_at")
