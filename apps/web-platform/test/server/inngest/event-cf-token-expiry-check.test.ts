@@ -21,7 +21,9 @@ vi.mock("@/server/observability", () => ({
 
 const octokitRequestSpy = vi.fn();
 vi.mock("@octokit/core", () => ({
-  Octokit: vi.fn(() => ({ request: octokitRequestSpy })),
+  Octokit: vi.fn(function (this: Record<string, unknown>) {
+    this.request = octokitRequestSpy;
+  }),
 }));
 
 vi.mock("@/server/github/probe-octokit", () => ({

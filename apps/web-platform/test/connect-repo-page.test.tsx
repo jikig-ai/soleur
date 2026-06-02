@@ -44,7 +44,7 @@ const mockRepo = {
 };
 
 let mockFetch: ReturnType<typeof vi.fn>;
-let hrefSetter: ReturnType<typeof vi.fn>;
+let hrefSetter: ReturnType<typeof vi.fn<(v: any) => void>>;
 
 function setupFetchMock(overrides: Record<string, () => Promise<Response>> = {}) {
   const defaults: Record<string, () => Promise<Response>> = {
@@ -103,7 +103,7 @@ beforeEach(() => {
   setupFetchMock();
 
   // Track window.location.href assignments (redirect detection)
-  hrefSetter = vi.fn();
+  hrefSetter = vi.fn<(v: any) => void>();
   const originalHref = window.location.href;
   Object.defineProperty(window.location, "href", {
     get: () => originalHref,

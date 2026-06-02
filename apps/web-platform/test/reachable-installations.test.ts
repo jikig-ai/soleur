@@ -32,7 +32,7 @@ type MembershipRow = {
 function makeService(opts: {
   memberships?: MembershipRow[];
   membershipError?: unknown;
-  eqSpy?: ReturnType<typeof vi.fn>;
+  eqSpy?: ReturnType<typeof vi.fn<(col: string, val: string) => void>>;
 }) {
   return {
     from: (table: string) => {

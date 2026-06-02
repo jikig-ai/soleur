@@ -89,10 +89,18 @@ import * as permissionCallbackReexport from "../server/permission-callback";
 // ---------------------------------------------------------------------------
 
 interface TestDeps {
-  abortableReviewGate: ReturnType<typeof vi.fn>;
-  sendToClient: ReturnType<typeof vi.fn>;
-  notifyOfflineUser: ReturnType<typeof vi.fn>;
-  updateConversationStatus: ReturnType<typeof vi.fn>;
+  abortableReviewGate: ReturnType<
+    typeof vi.fn<CanUseToolContext["deps"]["abortableReviewGate"]>
+  >;
+  sendToClient: ReturnType<
+    typeof vi.fn<CanUseToolContext["deps"]["sendToClient"]>
+  >;
+  notifyOfflineUser: ReturnType<
+    typeof vi.fn<CanUseToolContext["deps"]["notifyOfflineUser"]>
+  >;
+  updateConversationStatus: ReturnType<
+    typeof vi.fn<CanUseToolContext["deps"]["updateConversationStatus"]>
+  >;
 }
 
 function buildContext(

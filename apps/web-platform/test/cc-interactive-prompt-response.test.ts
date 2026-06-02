@@ -51,11 +51,15 @@ function seedPrompt(
 
 describe("handleInteractivePromptResponse (Stage 2.14)", () => {
   let registry: PendingPromptRegistry;
-  let deliverToolResult: ReturnType<typeof vi.fn>;
+  let deliverToolResult: ReturnType<
+    typeof vi.fn<(args: { conversationId: string; toolUseId: string; content: string }) => void>
+  >;
 
   beforeEach(() => {
     registry = new PendingPromptRegistry({ nowFn: () => 0 });
-    deliverToolResult = vi.fn();
+    deliverToolResult = vi.fn<
+      (args: { conversationId: string; toolUseId: string; content: string }) => void
+    >();
   });
 
   it("delivers to runner on ownership match + valid payload", () => {
@@ -253,7 +257,9 @@ describe("handleInteractivePromptResponse (Stage 2.14)", () => {
   it("accepts diff / todo_write / notebook_edit 'ack'", () => {
     for (const kind of ["diff", "todo_write", "notebook_edit"] as const) {
       const reg = new PendingPromptRegistry({ nowFn: () => 0 });
-      const cb = vi.fn();
+      const cb = vi.fn<
+        (args: { conversationId: string; toolUseId: string; content: string }) => void
+      >();
       reg.register({
         promptId: mintPromptId("p-x"),
         conversationId: mintConversationId("conv-1"),

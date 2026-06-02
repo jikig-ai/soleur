@@ -57,8 +57,10 @@ function hex(buf: Buffer): string {
 
 let tmpWorkspace: string;
 let kbRoot: string;
-let insertSpy: ReturnType<typeof vi.fn>;
-let updateSpy: ReturnType<typeof vi.fn>;
+let insertSpy: ReturnType<
+  typeof vi.fn<(payload: { content_sha256: string }) => Promise<{ error: null }>>
+>;
+let updateSpy: ReturnType<typeof vi.fn<(payload: unknown) => Promise<{ error: null }>>>;
 let existingShare: { id: string; token: string; content_sha256: string | null } | null;
 
 function createShareRequest(documentPath: string): Request {
