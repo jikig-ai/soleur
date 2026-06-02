@@ -24,7 +24,7 @@ export function ThinkingDots() {
 export function ToolStatusChip({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-2 py-0.5" data-testid="tool-status-chip">
-      <span className="whitespace-nowrap text-sm text-soleur-text-secondary">{label}</span>
+      <span className="min-w-0 text-sm text-soleur-text-secondary [overflow-wrap:anywhere]">{label}</span>
     </div>
   );
 }

@@ -282,3 +282,104 @@ test.describe("cc-soleur-go bubbles: tool-use-chip unregistered-mcp-fqn", () => 
     assertNoPageErrors(injector);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 3.5 Concierge status-box overflow — inverse of #4852 (#4855-class)
+//
+// #4852 added bare `whitespace-nowrap` to the `ToolStatusChip` label
+// (message-bubble.tsx:27) to stop premature wrapping of a short status label.
+// With the bubble `max-w` cap + `min-w-0` ancestor chain, that left a label
+// *wider* than the cap no way to wrap and no way to grow → it overflowed the
+// Concierge card's right border. The fix swaps `nowrap` for the wrap-capable
+// `[overflow-wrap:anywhere]` idiom (already on the streaming body, :269).
+//
+// jsdom returns 0 for layout values (constitution line 312), so the no-overflow
+// proof MUST live in Playwright. Overflow assertion mirrors the
+// `nav-states-shell.e2e.ts:259,277` precedent: `scrollWidth - clientWidth`
+// with an empty-band guard (assert the label text is populated) so a
+// collapsed/empty card cannot vacuously pass.
+//
+// Both render contexts (`full` chat-surface + narrow `sidebar`) are exercised:
+// the sidebar (`kb-chat-content.tsx`) is narrower so overflow is MORE likely.
+// The deterministic harness drives the same `tool_use` bubble both times; the
+// long-label assertion is the regression guard, the short-label single-line
+// assertion proves #4852 is not re-broken.
+// ---------------------------------------------------------------------------
+
+const LONG_STATUS_LABEL =
+  "Routing to the right experts and coordinating across every domain leader to assemble the most accurate, comprehensive response possible for this request";
+const SHORT_STATUS_LABEL = "Working";
+
+/** Measure the Concierge card (the bordered `rounded-xl` ancestor of the
+ *  status chip) for horizontal overflow. Returns the layout band plus the
+ *  label text so the caller can assert the band is non-empty (empty-band
+ *  guard — an unpopulated card would vacuously satisfy scroll<=client). */
+async function measureCardOverflow(page: Page) {
+  const chip = page.locator('[data-testid="tool-status-chip"]').first();
+  await expect(chip).toBeVisible();
+  return chip.evaluate((el) => {
+    const card = el.closest(".rounded-xl") as HTMLElement | null;
+    if (!card) throw new Error("status chip has no .rounded-xl card ancestor");
+    return {
+      overflow: card.scrollWidth - card.clientWidth,
+      labelText: el.textContent ?? "",
+    };
+  });
+}
+
+test.describe("cc-soleur-go bubbles: Concierge status-box overflow", () => {
+  test("long status label wraps inside the card — no horizontal overflow", async ({
+    page,
+  }) => {
+    const injector = await bootChat(page);
+
+    injector.send({
+      type: "tool_use",
+      leaderId: "cc_router",
+      label: LONG_STATUS_LABEL,
+    } satisfies StreamEvent);
+
+    const { overflow, labelText } = await measureCardOverflow(page);
+
+    // Empty-band guard (nav-states-shell.e2e.ts:19 precedent): the card must
+    // actually contain the long label, else scroll<=client passes vacuously.
+    expect(labelText).toContain("Routing to the right experts");
+    // 1px tolerance for sub-pixel rounding; a real overflow is tens of px.
+    expect(overflow).toBeLessThanOrEqual(1);
+
+    assertNoPageErrors(injector);
+  });
+
+  test("short status label stays single-line (does not re-break #4852)", async ({
+    page,
+  }) => {
+    const injector = await bootChat(page);
+
+    injector.send({
+      type: "tool_use",
+      leaderId: "cc_router",
+      label: SHORT_STATUS_LABEL,
+    } satisfies StreamEvent);
+
+    const chip = page.locator('[data-testid="tool-status-chip"]').first();
+    await expect(chip).toBeVisible();
+
+    const lineInfo = await chip.locator("span").first().evaluate((el) => {
+      const style = getComputedStyle(el);
+      const lineHeight = parseFloat(style.lineHeight);
+      return {
+        height: (el as HTMLElement).offsetHeight,
+        lineHeight: Number.isFinite(lineHeight) ? lineHeight : null,
+      };
+    });
+
+    // A short label with available width must occupy a single line. If
+    // `nowrap`-removal had reintroduced #4852's premature wrap, the span would
+    // span two line-boxes (height ≈ 2× lineHeight).
+    if (lineInfo.lineHeight) {
+      expect(lineInfo.height).toBeLessThan(lineInfo.lineHeight * 1.8);
+    }
+
+    assertNoPageErrors(injector);
+  });
+});
