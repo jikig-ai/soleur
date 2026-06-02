@@ -1,9 +1,77 @@
+import { statfs } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { createProbeOctokit } from "@/server/github/probe-octokit";
 import { generateInstallationToken } from "@/server/github-app";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
 
 export const REPO_OWNER = "jikig-ai";
 export const REPO_NAME = "soleur";
+
+/**
+ * Base dir for a cron's ephemeral git-clone workspace. In prod, ci-deploy.sh
+ * sets CRON_WORKSPACE_ROOT=/workspaces (the roomy /mnt/data volume) so the
+ * --depth=1 clone of the ~100 MB soleur tree does not exhaust the 256 MB /tmp
+ * tmpfs (#4684/#4689). Unset/whitespace → os.tmpdir() preserves local/CI/test
+ * behavior. Every cron that clones the repo (the substrate's
+ * setupEphemeralWorkspace AND the handlers with their own inline clone) MUST
+ * route its mkdtemp parent through this helper — the env var alone is inert if
+ * the code keeps calling tmpdir() directly. The `soleur-${cronName}-` prefix
+ * keeps cron dirs distinct from the UUID user-workspace dirs under /workspaces.
+ */
+export function resolveCronWorkspaceRoot(): string {
+  return process.env.CRON_WORKSPACE_ROOT?.trim() || tmpdir();
+}
+
+// Soft floor for the pre-clone free-space guard: the soleur tree is ~100 MB and
+// grows every content PR; warn under 256 MB free so the operator sees the
+// squeeze BEFORE ENOSPC kills the clone. Tunable via CRON_WORKSPACE_MIN_FREE_MB
+// (NaN/0 → this default). Non-fatal.
+export const DEFAULT_CRON_WORKSPACE_MIN_FREE_MB = 256;
+
+/**
+ * Non-fatal pre-clone free-space guard. statfs the cron workspace root and emit
+ * a non-paging WARN if free space is below the floor, so the operator sees the
+ * squeeze in Sentry BEFORE a `git clone` ENOSPCs (#4684/#4689). MUST NEVER throw
+ * — a wrong floor or a statfs probe error must never block a clone that would
+ * otherwise succeed. Call once after mkdtemp and before the clone, from EVERY
+ * cron that clones the repo (the substrate's setupEphemeralWorkspace AND the
+ * handlers with their own inline clone), so the observability is not half-applied.
+ * Uses `bavail` (blocks free to an unprivileged caller — what the 1001 container
+ * user actually gets), not `bfree`.
+ */
+export async function warnIfCronWorkspaceLowOnDisk(
+  ephemeralRoot: string,
+  cronName: string,
+): Promise<void> {
+  try {
+    const stats = await statfs(ephemeralRoot);
+    const freeMb = Math.floor((stats.bavail * stats.bsize) / (1024 * 1024));
+    const floorMb =
+      Number(process.env.CRON_WORKSPACE_MIN_FREE_MB) ||
+      DEFAULT_CRON_WORKSPACE_MIN_FREE_MB;
+    if (freeMb < floorMb) {
+      warnSilentFallback(
+        new Error(
+          `cron workspace root low on disk: ${freeMb} MB free < ${floorMb} MB floor at ${ephemeralRoot} — git clone may ENOSPC`,
+        ),
+        {
+          feature: cronName,
+          op: "cron-workspace-low-disk",
+          message: "Cron ephemeral workspace low on free disk before clone",
+          extra: { fn: cronName, ephemeralRoot, freeMb, floorMb },
+        },
+      );
+    }
+  } catch (err) {
+    // statfs failure is itself non-fatal — never block a clone on a probe error.
+    reportSilentFallback(err, {
+      feature: cronName,
+      op: "cron-workspace-statfs-failed",
+      message: "Could not statfs cron workspace root (non-fatal)",
+      extra: { fn: cronName, ephemeralRoot },
+    });
+  }
+}
 
 export const SENTRY_DOMAIN_RE = /^[a-z0-9.-]+\.sentry\.io$/i;
 export const SENTRY_PROJECT_RE = /^\d+$/;
@@ -204,8 +272,13 @@ export async function resolveOutputAwareOk(args: {
   // scheduled-output-missing Sentry event so a non-zero exit is self-diagnosing
   // (app stdout is not shipped to the log warehouse).
   stderrTail?: string;
+  // Raw spawn exit code, surfaced in the scheduled-output-missing extra so a
+  // turn-exhaustion exit can be distinguished from a hard failure without SSH
+  // (#4684/#4689). Optional — sites that do not hold the SpawnResult omit it.
+  exitCode?: number | null;
 }): Promise<boolean> {
-  const { spawnOk, label, runStartedAt, cronName, octokit, stderrTail } = args;
+  const { spawnOk, label, runStartedAt, cronName, octokit, stderrTail, exitCode } =
+    args;
 
   let issueCreated: boolean;
   try {
@@ -263,6 +336,9 @@ export async function resolveOutputAwareOk(args: {
         label,
         runStartedAt,
         spawnOk,
+        // Raw spawn exit code — distinguishes a turn-exhaustion exit from a hard
+        // failure at a glance, alongside the stderr tail below.
+        exitCode,
         // The claude-eval stderr tail is the diagnostic payload — without it the
         // non-zero-exit reason lives only in app stdout, which is not shipped.
         stderrTail: stderrTail ? stderrTail.slice(-4000) : undefined,
