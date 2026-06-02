@@ -48,4 +48,4 @@ status: ready-for-work  # P0 fork resolved by deepen-plan triad (two-row consume
 - [x] 7.5 migration 096 up/down validated against the LIVE dev schema via a transactional dry-run (BEGIN→up→assert→down→assert→ROLLBACK, drift-free): up adds `anthropic_oauth` to the real `api_keys_provider_check`; `store_oauth_credential` created SECURITY DEFINER with authenticated/anon EXECUTE denied + service_role granted; down restores the CHECK + drops the fn. Real apply runs via the automated deploy pipeline on merge (`run-migrations.sh`; the unmerged-apply gate funnels there — applying unmerged to dev would create #4241-class drift).
 
 ## Phase 0 (advisory)
-- [x] ADR-047 — "Operator CC OAuth credential — selection by consumer class + structural REST/SDK boundary" (absorbed inline at review time per the review sharp-edge for already-shipping-architecture ADRs).
+- [x] ADR-048 — "Operator CC OAuth credential — selection by consumer class + structural REST/SDK boundary" (absorbed inline at review time per the review sharp-edge for already-shipping-architecture ADRs).
