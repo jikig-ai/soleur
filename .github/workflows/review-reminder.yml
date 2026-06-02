@@ -50,6 +50,14 @@ jobs:
           gh label create review-reminder --description "Auto-created review reminder" --color "0E8A16" 2>/dev/null || true
 
           while IFS= read -r file; do
+            # Only treat a LEADING YAML frontmatter block as review metadata.
+            # The sed range /^---$/,/^---$/ matches the first '---' anywhere in
+            # the file, so a doc with no leading frontmatter but an embedded
+            # ```yaml frontmatter example (e.g. a feature spec) would have that
+            # example mis-parsed as metadata, firing a spurious reminder (#4724).
+            # Require line 1 to be '---' so only the real frontmatter is parsed.
+            [[ "$(head -n 1 "$file")" == "---" ]] || continue
+
             # Extract review_cadence from YAML frontmatter (opt-in field)
             review_cadence=$(sed -n '/^---$/,/^---$/{ /^review_cadence:/{ s/.*: *//; p; q; } }' "$file")
 

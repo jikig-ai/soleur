@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-01
-last_reviewed: 2026-04-01
+last_updated: 2026-06-02
+last_reviewed: 2026-06-02
 review_cadence: monthly
 owner: CMO
 depends_on:
@@ -13,6 +13,8 @@ depends_on:
 # SEO Refresh Queue
 
 This document tracks pages that need SEO updates, new pages that should be created for search visibility, and pages that need monitoring for competitive changes. Reviewed monthly.
+
+> **[2026-06-02 Review note]** Competitor monitoring rows reconciled to `knowledge-base/product/competitive-intelligence.md` (2026-05-30 scan): **Polsia** ARR revised down ($1.5M → $450K+), 500+ companies, pricing now $49 base + 20% rev-share; **Paperclip** crossed 30,000+ stars and is now built on Claude Code; **Notion** Custom Agents beta ended May 3, credit pricing live since May 4. The comparison-page action items (P2 Paperclip, Notion update) remain open — copy on those pages should be refreshed against these figures.
 
 ---
 
@@ -109,7 +111,7 @@ Pages that do not exist but should, based on keyword research and competitive po
 | **Soleur vs. Notion Custom Agents** | soleur vs notion ai, company as a service vs notion | Commercial | P1 | **PUBLISHED** (2026-03-17). |
 | **Soleur vs. Cursor** | soleur vs cursor, cursor automations vs soleur | Commercial | P1 | **PUBLISHED** (2026-03-19). Addresses Automations + Marketplace. |
 | **Soleur vs. Polsia** | soleur vs polsia, autonomous AI company, autopilot vs decision-maker | Commercial | P1 | **PUBLISHED** (2026-03-26). FAQ JSON-LD present. generated_date: 2026-03-26 |
-| **Soleur vs. Paperclip** | soleur vs paperclip, AI company orchestration, zero-human company, company orchestration open source | Commercial | **P2** (new) | Paperclip at 14.6k GitHub stars. Infrastructure-layer orchestration vs. domain intelligence. Complementary positioning opportunity. Clipmart upcoming. generated_date: 2026-03-31 |
+| **Soleur vs. Paperclip** | soleur vs paperclip, AI company orchestration, zero-human company, company orchestration open source | Commercial | **P2** (new) | Paperclip at 30,000+ GitHub stars (crossed in three weeks); now built on Claude Code. Infrastructure-layer orchestration vs. domain intelligence. Complementary positioning opportunity. Clipmart upcoming. generated_date: 2026-03-31 |
 | **Soleur vs. Devin** | soleur vs devin, AI software engineer vs AI organization, autonomous coding comparison | Commercial | P2 | Devin at $20/month is the price anchor for autonomous agents. Differentiation: engineering-only vs. 8-domain organization. generated_date: 2026-04-21 |
 | **Soleur vs. Tanka** | soleur vs tanka, AI co-founder comparison, memory AI platform comparison | Commercial | P3 | Tanka claims memory compounding. Need to differentiate: communication-scoped memory vs. cross-domain business memory. generated_date: 2026-05-05 |
 | **Soleur vs. CrewAI** | soleur vs crewai, AI agent framework vs AI organization, multi-agent comparison | Commercial | P3 | Different categories (framework vs. product) but searchers compare them. Honest positioning: CrewAI is for building custom agents, Soleur is a ready-made organization. generated_date: 2026-05-07 |
@@ -143,13 +145,13 @@ Pages and keywords to watch for competitive changes. No action needed unless tri
 
 ### 3.1 Competitor Content Monitoring
 
-| Competitor | What to Watch | Trigger for Action | Current Status (2026-03-12) |
+| Competitor | What to Watch | Trigger for Action | Current Status (2026-06-02) |
 |------------|--------------|-------------------|----------------|
 | **Anthropic Cowork** | Blog posts, plugin announcements, CaaS positioning, Microsoft Copilot Cowork expansion | Anthropic uses "Company-as-a-Service" or equivalent framing, adds persistent memory, or Copilot Cowork expands beyond M365 workflows | No CaaS framing detected. Microsoft Copilot Cowork launched Mar 9 (Research Preview). Engineering plugins live. |
 | **Cursor** | Marketplace business-domain plugins, automation memory expansion, multi-domain features | Cursor marketplace gets marketing/legal/finance plugins, or automation memory becomes cross-domain | **STALE: Requires immediate update.** Automations + 30+ marketplace plugins launched Mar 5. Now an agent platform, not just an IDE. Built-in automation memory that learns from past runs. |
-| **Polsia** | Domain expansion, knowledge base, revenue share changes, ARR growth | Polsia adds legal/finance/product domains, implements cross-domain knowledge base, or drops revenue share | **NEW entrant.** $1.5M ARR, 2,000+ companies. $29-59/month tiers. Fastest CaaS traction. |
-| **Paperclip** | Clipmart launch, knowledge layer, Claude Code adapter, funding | Clipmart ships with curated company templates, Paperclip adds knowledge layer | **NEW entrant.** 14.6k GitHub stars. v0.3.0 with Cursor/OpenCode/Pi adapters. Clipmart upcoming. |
-| **Notion** | Custom Agents updates, engineering agent announcements, solo-founder positioning, post-beta pricing | Notion adds engineering agents or positions Custom Agents for solo founders. Post-beta pricing (May 2026) | Custom Agents launched Feb 24. MiniMax M2.5 support (Mar 3, 10x cheaper). Free beta through May 3. |
+| **Polsia** | Domain expansion, knowledge base, revenue share changes, ARR trajectory | Polsia adds legal/finance/product domains, implements cross-domain knowledge base, or drops revenue share | $450K+ ARR (**revised down** from $1.5M; trajectory ambiguous), 500+ companies. $49/mo base + 20% rev-share. |
+| **Paperclip** | Clipmart launch, knowledge layer, Claude Code adapter, funding | Clipmart ships with curated company templates, Paperclip adds knowledge layer | 30,000+ GitHub stars (crossed in three weeks); now built on Claude Code. v0.3.0 with Cursor/OpenCode/Pi adapters. Clipmart upcoming. |
+| **Notion** | Custom Agents updates, engineering agent announcements, solo-founder positioning, post-beta pricing | Notion adds engineering agents or positions Custom Agents for solo founders | Custom Agents launched Feb 24. MiniMax M2.5 support (Mar 3, 10x cheaper). **Beta ended May 3; credit pricing live since May 4** ($10/1,000 credits). |
 | **Tanka** | Agent Store expansion, engineering agents, pricing announcements | Tanka adds engineering agents or launches paid pricing | Agent Store planned. Fundraising agent launched. Pricing: free <50 users, $299/mo 50+. |
 | **SoloCEO** | Product launch, execution capabilities, pricing | SoloCEO moves from advisory to operational execution | Limited public information. Advisory-only. |
 | **OpenAI Codex** | Domain expansion beyond security, Codex platform business agents | Codex adds marketing/legal/finance agents alongside Codex Security | **NEW entrant.** Codex Security launched Mar 6 (first non-coding domain agent). GPT-5.4 with computer-use. |
@@ -203,16 +205,16 @@ Based on competitive intelligence scan of 2026-03-12, the following comparison p
 | Page | Status | Reason | Priority |
 |------|--------|--------|----------|
 | **Soleur vs. Cursor** | Stale (if exists) / Create | Cursor shipped Automations (event-driven agents), 30+ marketplace plugins, cloud agents with computer use, built-in automation memory. March 5, 2026. The "Cursor is engineering-only" framing is no longer sufficient -- Cursor is now an agent platform. | P1 |
-| **Soleur vs. Polsia** | Create | Polsia at $1.5M ARR, 2,000+ managed companies. $29-59/month tiers. Most direct CaaS competitor. Fully autonomous vs. Soleur's founder-in-the-loop. No existing comparison page. | P1 |
+| **Soleur vs. Polsia** | Create | Polsia at $450K+ ARR (revised down from $1.5M), 500+ managed companies. $49/mo base + 20% rev-share. Most direct CaaS competitor. Fully autonomous vs. Soleur's founder-in-the-loop. No existing comparison page. | P1 |
 | **Soleur vs. Anthropic Cowork** | Stale (if exists) / Create | Microsoft Copilot Cowork launched March 9 powered by Anthropic Claude. Dual distribution surface (Anthropic direct + Microsoft 365). Must address the Microsoft partnership and expanded enterprise connectors. | P1 |
-| **Soleur vs. Paperclip** | Create | Paperclip at 14.6k GitHub stars. Open-source orchestration for zero-human companies. Infrastructure-layer vs. domain intelligence framing. Clipmart upcoming. Complementary positioning opportunity. | P2 |
-| **Soleur vs. Notion Custom Agents** | Stale (if exists) / Update | Notion added MiniMax M2.5 support (10x cheaper, March 3). Post-beta pricing ($10/1,000 credits) starts May 2026. Update with credit-based pricing analysis. | P2 |
+| **Soleur vs. Paperclip** | Create | Paperclip at 30,000+ GitHub stars (crossed in three weeks); now built on Claude Code. Open-source orchestration for zero-human companies. Infrastructure-layer vs. domain intelligence framing. Clipmart upcoming. Complementary positioning opportunity. | P2 |
+| **Soleur vs. Notion Custom Agents** | Stale (if exists) / Update | Notion added MiniMax M2.5 support (10x cheaper, March 3). Beta ended May 3; credit pricing ($10/1,000 credits) live since May 4. Update with credit-based pricing analysis. | P2 |
 | **Soleur vs. OpenAI Codex** | Create | GPT-5.4 with native computer-use (March 5). Codex Security agent launched (March 6) -- first domain expansion beyond coding. If OpenAI adds more domain agents, Codex becomes a Tier 0 threat. | P3 |
 | **Soleur vs. Replit Agent** | Update (if exists) | Agent 4 launched. Parallel agents, ChatGPT integration, $400M Series D at $9B valuation. $20-100/month tiered. | P3 |
 
 ---
 
-_Updated: 2026-04-01. Sources: content-audit.md (2026-03-17), aeo-audit.md (2026-03-17), seo-audit.md (2026-03-17), content-plan.md (2026-03-17), competitive-intelligence.md (2026-03-12). Priority 1 items completed in biweekly growth execution 2026-04-01._
+_Updated: 2026-06-02. Sources: content-audit.md (2026-03-17), aeo-audit.md (2026-03-17), seo-audit.md (2026-03-17), content-plan.md (2026-03-17), competitive-intelligence.md (2026-05-30). Priority 1 items completed in biweekly growth execution 2026-04-01; competitor rows reconciled 2026-06-02._
 
 ## Auto-Discovered Topics
 
