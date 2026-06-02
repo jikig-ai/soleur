@@ -621,7 +621,8 @@ describe("#3173 BlogPosting.image uses the post-specific ogImage, not the site d
     // for any imageless post reintroduced later, so this is not vacuous: it
     // pins the intended end-state (zero imageless posts) and fails if a post
     // loses its ogImage. (The per-post threading regression #3173 guards
-    // against is caught by sub-test (a), not here.)
+    // against is caught by the "posts with ogImage frontmatter render that
+    // exact filename" test above, not here.)
     expect(
       without.length,
       "all blog posts now carry bespoke ogImage (#4753); if an imageless " +
