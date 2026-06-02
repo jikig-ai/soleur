@@ -43,7 +43,7 @@ FILE_MAP=(
 # TEST_DESTDIR allows tests to redirect writes to a sandbox
 DESTDIR="${TEST_DESTDIR:-}"
 
-# Prod-mode escalation (#4827): the handler runs as User=deploy but the 8 managed
+# Prod-mode escalation (#4827): the handler runs as User=deploy but the 7 managed
 # files live in root:root 0755 dirs the deploy user cannot mktemp into (EACCES).
 # In prod mode (DESTDIR empty) we stage each decoded payload in a deploy-writable
 # dir, then escalate the atomic install to root via the pinned sudoers helper
@@ -152,10 +152,14 @@ for entry in "${FILE_MAP[@]}"; do
     mv -f "$tmpfile" "$dest"
   else
     # Prod mode: escalate the atomic install to root via the pinned helper. The
-    # helper validates dest ∈ allowlist + TOCTOU-guards the staged temp, then does
-    # mktemp-in-dest + chmod + chown + atomic mv (it runs as root, so no EACCES).
+    # helper validates dest ∈ allowlist + mode/owner against its authoritative
+    # table, then mktemps-in-dest + chmod + chown + atomic mv (it runs as root, so
+    # no EACCES). The payload is piped over STDIN — NOT passed as a file path — so
+    # the deploy-writable staging temp cannot be symlink-swapped between check and
+    # use (#4827 security review P1). The `< "$tmpfile"` redirect is opened by THIS
+    # (deploy) process before sudo elevates.
     install_rc=0
-    sudo "$INSTALL_HELPER" "$tmpfile" "$dest_path" "$mode" "$owner" 2>/dev/null || install_rc=$?
+    sudo "$INSTALL_HELPER" "$dest_path" "$mode" "$owner" < "$tmpfile" 2>/dev/null || install_rc=$?
     rm -f "$tmpfile"
     if [[ "$install_rc" -ne 0 ]]; then
       # rc=3 from the helper means the dest/TOCTOU guard rejected the install;

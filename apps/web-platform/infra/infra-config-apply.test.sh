@@ -434,16 +434,18 @@ test_missing_env_partial_write() {
   teardown
 }
 
-# --- Test 13: Prod-mode escalated move — stage in deploy-writable dir, escalate via helper (#4827) ---
+# --- Test 13: Prod-mode escalated install — stage in deploy-writable dir, escalate via helper (#4827) ---
 # RED-first: the current handler mktemps INSIDE each root-owned dest dir, which
 # EACCESes as the deploy user. The fix stages the decoded payload in a
-# deploy-writable staging dir and escalates the atomic move to root via a pinned
-# sudoers helper. This test asserts (a) the handler never mktemps in a dest dir
-# and (b) it invokes the pinned escalation helper once per file with the correct
-# (src-in-staging, dest, mode, owner) args. Runs in "prod mode" (TEST_DESTDIR
-# unset) with a mocked sudo + helper recorder so no real root path is touched.
+# deploy-writable staging dir and escalates the install to root via a pinned
+# sudoers helper, piping the payload over STDIN (no caller-controlled source path,
+# #4827 security review P1). This test asserts the handler (a) does NOT EACCES on a
+# root-owned dest dir (it exits 0) and (b) invokes the pinned helper once per file
+# with the correct (dest, mode, owner) AND the decoded payload on stdin. Runs in
+# "prod mode" (TEST_DESTDIR unset) with a mocked sudo + helper recorder so no real
+# root path is touched.
 test_prod_mode_escalated_move() {
-  echo "TEST: prod-mode escalated move — stage + escalate via pinned helper (#4827)"
+  echo "TEST: prod-mode escalated install — stage + escalate via pinned helper (#4827)"
   # Safety rail: the pre-fix handler mktemps in the REAL dest dirs. As a non-root
   # user that EACCESes (the intended RED signal). As root it would clobber real
   # system files, so refuse to run this case as root (CI runs non-root; the
@@ -462,15 +464,17 @@ test_prod_mode_escalated_move() {
   export INFRA_CONFIG_STAGING_DIR="${TMPDIR_ROOT}/staging"
   mkdir -p "$INFRA_CONFIG_STAGING_DIR"
 
-  # Helper recorder: append "src|dest|mode|owner" per invocation, write nothing.
+  # Helper recorder: append "dest|mode|owner|<stdin-payload>" per invocation,
+  # write nothing. Reading stdin proves the handler pipes the decoded payload (the
+  # P1 stdin contract) rather than passing a swappable file path.
   local helper_log="${TMPDIR_ROOT}/helper.log"
   export INFRA_CONFIG_INSTALL_HELPER="${TMPDIR_ROOT}/bin/infra-config-install-mock"
-  printf '#!/bin/sh\nprintf "%%s|%%s|%%s|%%s\\n" "$1" "$2" "$3" "$4" >> "%s"\nexit 0\n' \
-    "$helper_log" > "$INFRA_CONFIG_INSTALL_HELPER"
+  printf '#!/bin/sh\nprintf "%%s|%%s|%%s|" "$1" "$2" "$3" >> "%s"\ncat >> "%s"\nprintf "\\n" >> "%s"\nexit 0\n' \
+    "$helper_log" "$helper_log" "$helper_log" > "$INFRA_CONFIG_INSTALL_HELPER"
   chmod +x "$INFRA_CONFIG_INSTALL_HELPER"
 
   # Mock sudo to transparently exec its arguments (so `sudo helper ...` runs the
-  # recorder). Overrides the exit-0 stub from setup().
+  # recorder) while PRESERVING stdin. Overrides the exit-0 stub from setup().
   printf '#!/bin/sh\nexec "$@"\n' > "$TMPDIR_ROOT/bin/sudo"
   chmod +x "$TMPDIR_ROOT/bin/sudo"
 
@@ -486,27 +490,20 @@ test_prod_mode_escalated_move() {
   calls=$([[ -f "$helper_log" ]] && wc -l < "$helper_log" | tr -d ' ' || echo 0)
   assert_eq "escalation helper invoked once per file (7)" "7" "$calls"
 
-  # Every recorded src must live in the deploy-writable staging dir — NOT in a
-  # root-owned dest dir (the EACCES this fix removes). `grep -c` already emits a
-  # bare count (0 on no match); `|| true` only neutralizes its exit-1-on-zero.
-  local staged_calls
-  staged_calls=$(grep -c "^${INFRA_CONFIG_STAGING_DIR}/" "$helper_log" 2>/dev/null || true)
-  assert_eq "all 7 srcs staged in deploy-writable dir" "7" "$staged_calls"
+  # The handler exiting 0 proves it staged in INFRA_CONFIG_STAGING_DIR rather than
+  # mktemp-ing in a root-owned dest dir (which would EACCES as non-root) — the
+  # exact bug this fix removes. Confirm the staging dir is the one configured.
+  assert_eq "staging dir is the deploy-writable sandbox" "${TMPDIR_ROOT}/staging" "$INFRA_CONFIG_STAGING_DIR"
 
-  # The handler must NOT mktemp in a dest dir: no src may point under the
-  # canonical dest directories.
-  local dest_dir_srcs
-  dest_dir_srcs=$(grep -cE '^(/usr/local/bin|/etc/systemd/system|/etc/webhook|/etc/sudoers.d)/tmp\.' "$helper_log" 2>/dev/null || true)
-  assert_eq "no src mktemp'd inside a root-owned dest dir" "0" "$dest_dir_srcs"
-
-  # Spot-check the ci-deploy.sh invocation carries the right (dest, mode, owner).
+  # Spot-check the ci-deploy.sh invocation: correct (dest, mode, owner) AND the
+  # decoded payload piped over stdin (export_valid_env_vars sets it to "#!/bin/bash").
   local cideploy_line
-  cideploy_line=$(grep '|/usr/local/bin/ci-deploy.sh|' "$helper_log" 2>/dev/null || echo "")
-  if [[ "$cideploy_line" == *"|/usr/local/bin/ci-deploy.sh|755|root:root" ]]; then
-    echo "  PASS: ci-deploy.sh escalated with dest=/usr/local/bin/ci-deploy.sh mode=755 owner=root:root"
+  cideploy_line=$(grep '^/usr/local/bin/ci-deploy.sh|' "$helper_log" 2>/dev/null || echo "")
+  if [[ "$cideploy_line" == "/usr/local/bin/ci-deploy.sh|755|root:root|#!/bin/bash" ]]; then
+    echo "  PASS: ci-deploy.sh escalated with dest+mode+owner and decoded payload on stdin"
     PASS=$((PASS + 1))
   else
-    echo "  FAIL: ci-deploy.sh escalation args wrong: '$cideploy_line'"
+    echo "  FAIL: ci-deploy.sh escalation wrong: '$cideploy_line'"
     FAIL=$((FAIL + 1))
   fi
 

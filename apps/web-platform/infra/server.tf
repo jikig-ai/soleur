@@ -290,7 +290,7 @@ resource "terraform_data" "journald_persistent" {
 # only via (1) cloud-init write_files — dead on the existing host because
 # hcloud_server.web carries ignore_changes=[user_data], so cloud-init never
 # re-applies — and (2) deploy_pipeline_fix's triggers_replace hash, which re-fires
-# push-infra-config.sh. But push-infra-config.sh pushes the OTHER 8 files and does
+# push-infra-config.sh. But push-infra-config.sh pushes the OTHER 7 files and does
 # NOT send infra-config-apply.sh (the handler is not in its payload nor in the
 # handler's own FILE_MAP — it cannot deliver itself by construction). Net: a
 # handler/hooks.json drift on the host was UNRECOVERABLE through the webhook path,
@@ -320,7 +320,7 @@ resource "terraform_data" "journald_persistent" {
 #
 # DUAL-FIRE IS INTENTIONAL: infra-config-apply.sh, cat-infra-config-state.sh, and
 # local.hooks_json appear in BOTH this triggers_replace AND deploy_pipeline_fix's.
-# A handler edit re-fires both — deploy_pipeline_fix re-pushes the other 8 files,
+# A handler edit re-fires both — deploy_pipeline_fix re-pushes the other 7 files,
 # while THIS resource is the only one that actually delivers the handler. Do not
 # "dedupe" them.
 #
@@ -480,7 +480,12 @@ resource "terraform_data" "deploy_pipeline_fix" {
     file("${path.module}/webhook.service"),
     file("${path.module}/cat-deploy-state.sh"),
     file("${path.module}/canary-bundle-claim-check.sh"),
-    file("${path.module}/deploy-inngest-bootstrap.sudoers"),
+    # NOTE (#4827): deploy-inngest-bootstrap.sudoers is intentionally NOT hashed
+    # here. push-infra-config.sh no longer carries the sudoers (it is root-managed,
+    # delivered by terraform_data.infra_config_handler_bootstrap over SSH, which
+    # hashes it in ITS triggers_replace and which this resource depends_on). Hashing
+    # it here would only force a spurious re-push of the 7 webhook files on a
+    # sudoers-only change without delivering the sudoers.
     file("${path.module}/infra-config-apply.sh"),
     file("${path.module}/push-infra-config.sh"),
     file("${path.module}/cat-infra-config-state.sh"),

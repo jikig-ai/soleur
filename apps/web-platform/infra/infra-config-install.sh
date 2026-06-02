@@ -3,31 +3,38 @@
 # /hooks/infra-config webhook handler (#4827, Ref #4804).
 #
 # WHY THIS EXISTS: infra-config-apply.sh runs as User=deploy (webhook.service).
-# Its 8 managed files live in root:root 0755 destination directories
-# (/usr/local/bin, /etc/systemd/system, /etc/webhook, /etc/sudoers.d). The deploy
-# user cannot mktemp inside those dirs — EACCES — so the handler could never land
-# a single file (the #4827 bug: every push wrote 0 files). systemd ReadWritePaths
-# elevates the mount namespace to read-write but does NOT override DAC ownership.
+# Its 7 managed files live in root:root 0755 destination directories
+# (/usr/local/bin, /etc/systemd/system, /etc/webhook). The deploy user cannot
+# mktemp inside those dirs — EACCES — so the handler could never land a single
+# file (the #4827 bug: every push wrote 0 files). systemd ReadWritePaths elevates
+# the mount namespace to read-write but does NOT override DAC ownership.
 #
-# THE FIX: the handler stages each decoded payload in a deploy-writable dir, then
-# invokes THIS helper via a wildcard-free sudoers grant
+# THE FIX: the handler base64-decodes each payload, then invokes THIS helper via a
+# wildcard-free sudoers grant
 # (Cmnd_Alias INFRA_CONFIG_INSTALL = /usr/local/bin/infra-config-install). sudo
 # permits the bare command with ANY arguments — so the SECURITY BOUNDARY is here,
-# not in sudoers: the helper hardcodes the 8 allowlisted destinations and refuses
-# anything else, and refuses TOCTOU-attackable staged sources (symlink / wrong
-# owner). Mirrors the inngest-bootstrap precedent (ci-deploy.sh:683-788): fixed
-# pinned path, dest pinned by an in-image allowlist, symlink/owner guards.
+# not in sudoers: the helper hardcodes the 7 allowlisted destinations and refuses
+# anything else. Because the helper runs as root it has no EACCES problem in the
+# dest dirs: it mktemps in the destination directory itself and does a
+# same-filesystem atomic rename.
 #
-# Because the helper runs as root it has no EACCES problem in the dest dirs: it
-# mktemps in the destination directory itself and does a same-filesystem atomic
-# rename, so atomicity holds regardless of which filesystem the staging dir is on.
+# PAYLOAD IS READ FROM STDIN, NOT A FILE PATH (#4827 security review, P1 fix).
+# An earlier design passed a staged file path as $1; because the staging dir
+# (/var/lock) is deploy-writable, a deploy user invoking `sudo infra-config-install`
+# directly could swap that path to a symlink → /etc/shadow (etc.) in the window
+# between the helper's owner/symlink check and its `cp`, and root would copy a
+# root-only file into a world-readable 0755 dest (confidentiality break / privesc).
+# Reading the payload from STDIN removes the on-disk attacker-controlled source
+# entirely: the redirect (`< file`) is opened by the DEPLOY user before sudo
+# elevates, so a deploy user can only ever feed bytes they could already read —
+# `sudo infra-config-install <dest> <mode> <owner> < /etc/shadow` fails at open as
+# deploy. There is no path to swap, so no TOCTOU.
 #
 # CONTRACT (exit codes consumed by infra-config-apply.sh's per-file accounting):
 #   0 = installed
-#   1 = install failure (mktemp/cp/chmod/chown/mv)
+#   1 = install failure (mktemp/write/chmod/chown/mv)
 #   2 = usage error (wrong arg count)
-#   3 = rejected (dest not in allowlist, mode/owner mismatch, or TOCTOU guard
-#       tripped) → install_rejected
+#   3 = rejected (dest not in allowlist, or mode/owner mismatch) → install_rejected
 #
 # PRIVILEGE-ESCALATION HARDENING (#4827 security review):
 #  - The sudoers grant `deploy ALL=(root) NOPASSWD: /usr/local/bin/infra-config-install`
@@ -64,15 +71,14 @@ declare -rA DEST_SPEC=(
 DESTDIR="${TEST_DESTDIR:-}"
 
 usage() {
-  echo "usage: infra-config-install <staged-src> <canonical-dest> <mode> <owner>" >&2
+  echo "usage: infra-config-install <canonical-dest> <mode> <owner> < payload" >&2
   exit 2
 }
 
-[[ "$#" -eq 4 ]] || usage
-src="$1"
-dest_canonical="$2"
-caller_mode="$3"
-caller_owner="$4"
+[[ "$#" -eq 3 ]] || usage
+dest_canonical="$1"
+caller_mode="$2"
+caller_owner="$3"
 
 reject() {
   local reason="$1"
@@ -92,19 +98,6 @@ read -r mode owner <<< "$spec"
 [[ "$caller_mode" == "$mode" ]] || reject "mode_mismatch:caller=$caller_mode:expected=$mode"
 [[ "$caller_owner" == "$owner" ]] || reject "owner_mismatch:caller=$caller_owner:expected=$owner"
 
-# --- TOCTOU guards on the staged source (the one attacker-influenceable input) ---
-# Refuse a symlinked source: the deploy user could repoint it after the handler
-# staged it, tricking root into copying arbitrary file content.
-[[ -L "$src" ]] && reject "src_symlink"
-[[ -f "$src" ]] || reject "src_missing"
-
-# The staged source must be owned by the invoking (deploy) user. Under sudo,
-# SUDO_USER is the real caller; outside sudo (sandbox tests), fall back to the
-# current user so the guard still validates ownership.
-expected_owner="${SUDO_USER:-$(id -un)}"
-actual_owner="$(stat -c '%U' "$src" 2>/dev/null || echo '?')"
-[[ "$actual_owner" == "$expected_owner" ]] || reject "src_owner_mismatch:$actual_owner"
-
 # --- Resolve the real write target (sandbox prefix in test mode) ---
 dest="${DESTDIR}${dest_canonical}"
 dest_dir="$(dirname "$dest")"
@@ -113,7 +106,8 @@ dest_dir="$(dirname "$dest")"
 [[ -L "$dest" ]] && reject "dest_symlink"
 
 # --- Atomic install: mktemp IN the dest dir (root can write it), then rename ---
-# Same-filesystem rename → atomic regardless of where the staging dir lives.
+# Same-filesystem rename → atomic. The payload comes from STDIN (see header) so
+# there is no caller-controlled source path to symlink-swap.
 install_fail() {
   local reason="$1"
   logger -t "$LOG_TAG" "FAILED: dest=$dest_canonical reason=$reason" 2>/dev/null || true
@@ -124,7 +118,7 @@ install_fail() {
 tmp="$(mktemp "${dest_dir}/tmp.infra-config-install.XXXXXX" 2>/dev/null)" || install_fail "mktemp"
 trap 'rm -f "$tmp"' EXIT
 
-cp "$src" "$tmp" || install_fail "cp"
+cat > "$tmp" || install_fail "write"
 chmod "$mode" "$tmp" || install_fail "chmod"
 # chown only works as root; skip in sandbox/test mode (mirrors the handler).
 if [[ -z "$DESTDIR" ]]; then

@@ -6,7 +6,7 @@
 # via (1) cloud-init write_files — dead on the existing host because
 # hcloud_server.web carries ignore_changes=[user_data] — and (2) the
 # deploy_pipeline_fix triggers_replace hash, which re-fires push-infra-config.sh,
-# which pushes the OTHER 8 files but NOT the handler itself (the handler is not in
+# which pushes the OTHER 7 files but NOT the handler itself (the handler is not in
 # push-infra-config.sh's payload nor in its own FILE_MAP). Net: a handler/hooks.json
 # drift on the host was unrecoverable through the webhook path, because the recovery
 # itself routes through the stale handler.
