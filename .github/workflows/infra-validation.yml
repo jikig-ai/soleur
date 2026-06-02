@@ -144,6 +144,9 @@ jobs:
       - name: Run cloud-init inngest-bootstrap pin drift-guard
         run: bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
 
+      - name: Run journald persistent-storage tests
+        run: bash apps/web-platform/infra/journald-config.test.sh
+
   check-secrets:
     runs-on: ubuntu-24.04
     outputs:

@@ -287,6 +287,17 @@ write_files:
     owner: root:root
     permissions: '0644'
 
+  # systemd-journald persistent + bounded storage drop-in (#4792, #4773).
+  # Content injected from journald-soleur.conf via Terraform base64encode(file())
+  # so this fresh-host copy is byte-identical to the one terraform_data.
+  # journald_persistent pushes to the existing host. Keep in sync with
+  # terraform_data.journald_persistent in server.tf (both read journald-soleur.conf).
+  - path: /etc/systemd/journald.conf.d/00-soleur.conf
+    encoding: b64
+    content: ${journald_soleur_conf_b64}
+    owner: root:root
+    permissions: '0644'
+
 runcmd:
   # Apply SSH hardening immediately (drop-in written by write_files above).
   # Runs BEFORE the package audit so the operator always has hardened SSH
@@ -332,6 +343,19 @@ runcmd:
   # install with the defaults-debian.conf [sshd] jail enabled. The reload
   # picks up the bantime.maxtime cap before any login activity is recorded.
   - systemctl reload fail2ban || systemctl restart fail2ban
+
+  # Make systemd-journald persistent + bounded BEFORE any container starts with
+  # `--log-driver journald` (#4792, #4773). The drop-in at
+  # /etc/systemd/journald.conf.d/00-soleur.conf was written by write_files above.
+  # Creating /var/log/journal + restarting journald switches it from volatile
+  # (RAM under /run, lost on reboot) to persistent, so Vector's 3 journald
+  # sources read a durable journal from first container start. Idempotent:
+  # mkdir -p / restart / flush are all safe to re-run. Mirrors
+  # terraform_data.journald_persistent in server.tf (the existing-host path).
+  - mkdir -p /var/log/journal
+  - systemd-tmpfiles --create --prefix /var/log/journal
+  - systemctl restart systemd-journald
+  - journalctl --flush
 
   # Install Doppler CLI v3.75.3 (for secrets injection) with checksum verification
   - |
