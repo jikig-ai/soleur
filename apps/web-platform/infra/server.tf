@@ -74,10 +74,11 @@ resource "terraform_data" "disk_monitor_install" {
   ]))
 
   connection {
-    type  = "ssh"
-    host  = hcloud_server.web.ipv4_address
-    user  = "root"
-    agent = true
+    type        = "ssh"
+    host        = hcloud_server.web.ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
   }
 
   provisioner "file" {
@@ -112,10 +113,11 @@ resource "terraform_data" "resource_monitor_install" {
   ]))
 
   connection {
-    type  = "ssh"
-    host  = hcloud_server.web.ipv4_address
-    user  = "root"
-    agent = true
+    type        = "ssh"
+    host        = hcloud_server.web.ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
   }
 
   provisioner "file" {
@@ -149,10 +151,11 @@ resource "terraform_data" "fail2ban_tuning" {
   triggers_replace = sha256(file("${path.module}/fail2ban-sshd.local"))
 
   connection {
-    type  = "ssh"
-    host  = hcloud_server.web.ipv4_address
-    user  = "root"
-    agent = true
+    type        = "ssh"
+    host        = hcloud_server.web.ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
   }
 
   # Ensure fail2ban is installed before dropping the jail.d override. The
@@ -224,10 +227,11 @@ resource "terraform_data" "journald_persistent" {
   triggers_replace = sha256(file("${path.module}/journald-soleur.conf"))
 
   connection {
-    type  = "ssh"
-    host  = hcloud_server.web.ipv4_address
-    user  = "root"
-    agent = true
+    type        = "ssh"
+    host        = hcloud_server.web.ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
   }
 
   # The drop-in dir does NOT exist by default on Ubuntu — systemd ships
@@ -570,10 +574,11 @@ resource "terraform_data" "docker_seccomp_config" {
   triggers_replace = sha256(file("${path.module}/seccomp-bwrap.json"))
 
   connection {
-    type  = "ssh"
-    host  = hcloud_server.web.ipv4_address
-    user  = "root"
-    agent = true
+    type        = "ssh"
+    host        = hcloud_server.web.ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
   }
 
   provisioner "remote-exec" {
@@ -606,10 +611,11 @@ resource "terraform_data" "apparmor_bwrap_profile" {
   triggers_replace = sha256(file("${path.module}/apparmor-soleur-bwrap.profile"))
 
   connection {
-    type  = "ssh"
-    host  = hcloud_server.web.ipv4_address
-    user  = "root"
-    agent = true
+    type        = "ssh"
+    host        = hcloud_server.web.ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
   }
 
   provisioner "file" {
@@ -633,10 +639,11 @@ resource "terraform_data" "orphan_reaper_install" {
   triggers_replace = sha256(file("${path.module}/orphan-reaper.sh"))
 
   connection {
-    type  = "ssh"
-    host  = hcloud_server.web.ipv4_address
-    user  = "root"
-    agent = true
+    type        = "ssh"
+    host        = hcloud_server.web.ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
   }
 
   provisioner "file" {
