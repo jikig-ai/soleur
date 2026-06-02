@@ -76,6 +76,19 @@ export function createSupabaseMockImpl(
     userData?: Record<string, unknown>;
     apiKeyRows?: Record<string, unknown>[];
     mockRpc?: ReturnType<typeof vi.fn>;
+    /**
+     * Optional spy wired onto `messages`.insert so tests can assert the
+     * captured INSERT payload (e.g. that it carries `workspace_id`). When
+     * omitted, a default no-op insert returning `{ error: null }` is used.
+     */
+    mockMessagesInsert?: ReturnType<typeof vi.fn>;
+    /**
+     * workspace_id returned from the `conversations` SELECT(s) that the
+     * messages-workspace_id RLS fix added to `saveMessage` and
+     * `sendUserMessage`. Default "ws-test"; per-path tests can override to
+     * assert the INSERT payload carries the conversation's workspace_id.
+     */
+    conversationWorkspaceId?: string;
   } = {},
 ) {
   const userData = opts.userData ?? {
@@ -84,6 +97,7 @@ export function createSupabaseMockImpl(
     github_installation_id: null,
     repo_url: null,
   };
+  const conversationWorkspaceId = opts.conversationWorkspaceId ?? "ws-test";
 
   if (opts.mockRpc) {
     configureInstallationRpc(
@@ -150,12 +164,48 @@ export function createSupabaseMockImpl(
       (conversationsUpdateChain.eq as ReturnType<typeof vi.fn>).mockReturnValue(
         conversationsUpdateChain,
       );
+      // SELECT chain for the workspace_id reads added by the messages-
+      // workspace_id RLS fix:
+      //   saveMessage:      .select("workspace_id").eq("id", …).single()
+      //   sendUserMessage:  .select("domain_leader, session_id, workspace_id")
+      //                       .eq("id", …).eq("user_id", …).single()
+      // `.eq` returns the same chain (composite-key) and `.single()`
+      // terminates with a conversation row carrying workspace_id.
+      const conversationsSelectChain: Record<string, unknown> = {
+        eq: vi.fn(),
+        single: vi.fn(() => ({
+          data: {
+            domain_leader: "cpo",
+            session_id: null,
+            workspace_id: conversationWorkspaceId,
+          },
+          error: null,
+        })),
+      };
+      (conversationsSelectChain.eq as ReturnType<typeof vi.fn>).mockReturnValue(
+        conversationsSelectChain,
+      );
       return {
         update: vi.fn(() => conversationsUpdateChain),
+        select: vi.fn(() => conversationsSelectChain),
       };
     }
     if (table === "messages") {
-      return { insert: () => ({ error: null }) };
+      return {
+        insert: opts.mockMessagesInsert ?? (() => ({ error: null })),
+        // `loadConversationHistory` reads prior messages via
+        //   .select(...).eq("conversation_id", …).order("created_at", …)
+        // which is awaited directly (thenable) → empty history by default.
+        select: () => {
+          const chain: Record<string, unknown> = {
+            eq: () => chain,
+            order: () => Promise.resolve({ data: [], error: null }),
+            then: (resolve: (v: unknown) => void) =>
+              resolve({ data: [], error: null }),
+          };
+          return chain;
+        },
+      };
     }
     return {
       select: () => ({

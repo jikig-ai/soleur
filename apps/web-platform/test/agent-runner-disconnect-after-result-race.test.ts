@@ -273,6 +273,21 @@ function setupSupabaseMock(): { updates: UpdateRecord[] } {
           (chain.eq as ReturnType<typeof vi.fn>).mockReturnValue(chain);
           return chain;
         }),
+        // mig 059: saveMessage reads conversations.workspace_id before the
+        // messages INSERT (.select("workspace_id").eq("id", …).single()).
+        select: vi.fn(() => {
+          const selectChain: Record<string, unknown> = {
+            eq: vi.fn(),
+            single: vi.fn(() => ({
+              data: { workspace_id: "ws-race" },
+              error: null,
+            })),
+          };
+          (selectChain.eq as ReturnType<typeof vi.fn>).mockReturnValue(
+            selectChain,
+          );
+          return selectChain;
+        }),
       };
     }
     if (table === "messages") {
