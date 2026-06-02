@@ -253,7 +253,11 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain)
+          # APP_DOMAIN_BASE is NOT in the prd_terraform config — fall back to the
+          # canonical default exactly like the verify steps below (do NOT use the
+          # bare form: it exits non-zero under `set -e` and kills the step before
+          # cloudflared starts; #4829 post-merge hotfix).
+          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
           SERVER_IP=$(terraform output -raw server_ip)
           if [[ -z "$SERVER_IP" ]]; then
             echo "::error::terraform output server_ip is empty — state not populated; cannot scope the NAT redirect to the prod host."
