@@ -36,6 +36,19 @@ FILE_MAP=(
 # TEST_DESTDIR allows tests to redirect writes to a sandbox
 DESTDIR="${TEST_DESTDIR:-}"
 
+# Prod-mode escalation (#4827): the handler runs as User=deploy but the 8 managed
+# files live in root:root 0755 dirs the deploy user cannot mktemp into (EACCES).
+# In prod mode (DESTDIR empty) we stage each decoded payload in a deploy-writable
+# dir, then escalate the atomic install to root via the pinned sudoers helper
+# (Cmnd_Alias INFRA_CONFIG_INSTALL). In test mode (DESTDIR set) the sandbox dest
+# dirs ARE writable, so the legacy in-dest mktemp + mv path runs unchanged.
+#   STAGING_DIR  — deploy-writable, in webhook.service ReadWritePaths (/var/lock).
+#   INSTALL_HELPER — the root-run escalation helper (delivered via cloud-init +
+#                    the SSH handler-bootstrap bridge; NOT in the webhook FILE_MAP
+#                    to avoid the helper-can't-deliver-itself paradox + count churn).
+STAGING_DIR="${INFRA_CONFIG_STAGING_DIR:-/var/lock}"
+INSTALL_HELPER="${INFRA_CONFIG_INSTALL_HELPER:-/usr/local/bin/infra-config-install}"
+
 # State file for observability (#4554). Queryable via /hooks/infra-config-status.
 STATE_FILE="${INFRA_CONFIG_STATE:-/var/lock/infra-config-apply.state}"
 START_TS=$(date +%s)
@@ -88,12 +101,23 @@ for entry in "${FILE_MAP[@]}"; do
   fi
 
   dest="${DESTDIR}${dest_path}"
-  dest_dir=$(dirname "$dest")
 
   logger -t "$LOG_TAG" "writing: $dest_path"
 
-  # Decode to a temp file in the same directory (same filesystem for mv atomicity)
-  tmpfile=$(mktemp "${dest_dir}/tmp.infra-config.XXXXXX")
+  # Stage the decoded payload.
+  #  - test mode (DESTDIR set): stage IN the sandbox dest dir; same-fs mv is atomic
+  #    and the sandbox dirs are writable (legacy path, unchanged).
+  #  - prod mode (DESTDIR empty): stage in the deploy-writable STAGING_DIR; the
+  #    root helper re-stages into the (root-owned) dest dir and does the atomic
+  #    rename there, so the deploy user never has to write a root-owned dir (#4827).
+  if [[ -n "$DESTDIR" ]]; then
+    stage_dir=$(dirname "$dest")
+  else
+    stage_dir="$STAGING_DIR"
+  fi
+
+  # Decode to a temp file in the staging dir.
+  tmpfile=$(mktemp "${stage_dir}/tmp.infra-config.XXXXXX")
   TMPFILES+=("$tmpfile")
 
   if ! echo "${!env_var}" | base64 -d > "$tmpfile" 2>/dev/null; then
@@ -106,7 +130,8 @@ for entry in "${FILE_MAP[@]}"; do
     continue
   fi
 
-  # Sudoers files get visudo validation before install
+  # Sudoers files get visudo validation before install (validate the staged temp
+  # before it is escalated to root — same gate in both modes).
   if [[ "$dest_path" == /etc/sudoers.d/* ]]; then
     if ! visudo -cf "$tmpfile" 2>/dev/null; then
       logger -t "$LOG_TAG" "SKIPPED: $dest_path reason=visudo_validation_failed"
@@ -120,13 +145,38 @@ for entry in "${FILE_MAP[@]}"; do
   fi
 
   chmod "$mode" "$tmpfile"
-  # chown only works as root; skip in test mode
-  if [[ -z "$DESTDIR" ]]; then
-    chown "$owner" "$tmpfile"
-  fi
-  mv -f "$tmpfile" "$dest"
+  # SHA is computed from the staged temp (content-identical to the installed
+  # file) BEFORE the move, so it is available in both modes without re-reading a
+  # root-owned dest the deploy user may not be able to stat.
+  local_sha=$(sha256sum "$tmpfile" | awk '{print $1}')
 
-  local_sha=$(sha256sum "$dest" | awk '{print $1}')
+  if [[ -n "$DESTDIR" ]]; then
+    # Test/sandbox mode: chown skipped (not root), atomic same-fs rename.
+    mv -f "$tmpfile" "$dest"
+  else
+    # Prod mode: escalate the atomic install to root via the pinned helper. The
+    # helper validates dest ∈ allowlist + TOCTOU-guards the staged temp, then does
+    # mktemp-in-dest + chmod + chown + atomic mv (it runs as root, so no EACCES).
+    install_rc=0
+    sudo "$INSTALL_HELPER" "$tmpfile" "$dest_path" "$mode" "$owner" 2>/dev/null || install_rc=$?
+    rm -f "$tmpfile"
+    if [[ "$install_rc" -ne 0 ]]; then
+      # rc=3 from the helper means the dest/TOCTOU guard rejected the install;
+      # any other non-zero is an install failure (mktemp/cp/chmod/chown/mv/sudo).
+      if [[ "$install_rc" -eq 3 ]]; then
+        reason="install_rejected"
+      else
+        reason="install_failed"
+      fi
+      logger -t "$LOG_TAG" "FAILED: $dest_path reason=$reason rc=$install_rc"
+      echo "ERROR: escalated install failed ($reason) for $dest_path" >&2
+      [[ -n "$FILES_JSON" ]] && FILES_JSON+=","
+      FILES_JSON+="{\"file\":\"$dest_path\",\"sha256\":\"\",\"status\":\"failed\",\"reason\":\"$reason\"}"
+      FAIL_COUNT=$((FAIL_COUNT + 1))
+      continue
+    fi
+  fi
+
   logger -t "$LOG_TAG" "wrote: $dest_path sha256=$local_sha"
   [[ -n "$FILES_JSON" ]] && FILES_JSON+=","
   FILES_JSON+="{\"file\":\"$dest_path\",\"sha256\":\"$local_sha\",\"status\":\"ok\"}"
