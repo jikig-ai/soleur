@@ -239,6 +239,162 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     });
   });
 
+  it("does NOT fetch history for a fresh session_started conversation (FR1/AC1)", async () => {
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+
+    await connectAndAuth(result);
+
+    // Server starts a BRAND-NEW conversation: deferred-creation path emits
+    // session_started with a pending UUID and NO DB row yet. resumedFrom
+    // stays null. The resume-history effect must NOT fire a fetch — the row
+    // does not exist, so GET /messages would 404 (the bug this fixes).
+    serverSend({
+      type: "session_started",
+      conversationId: "conv-fresh-deferred-999",
+    });
+
+    // The handler ran (realConversationId resolved). With both state updates
+    // batched, the resume effect has had its chance to fire.
+    await waitFor(() => {
+      expect(result.current.realConversationId).toBe("conv-fresh-deferred-999");
+    });
+
+    // No history fetch for the fresh deferred id, and the hook never enters
+    // the loading state for it.
+    const freshFetchCalls = fetchSpy.mock.calls.filter(
+      (call) => typeof call[0] === "string" && call[0].includes("conv-fresh-deferred-999"),
+    );
+    expect(freshFetchCalls.length).toBe(0);
+    expect(result.current.historyLoading).toBe(false);
+  });
+
+  it("fetches history for a session_resumed row with zero messages (FR2/AC2)", async () => {
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+
+    await connectAndAuth(result);
+
+    // A genuine resume of an existing row that happens to have 0 messages
+    // MUST still fetch (the row exists; api-messages returns 200-empty). The
+    // gate keys on session_started vs session_resumed, NOT on message count.
+    fetchSpy.mockResolvedValue(
+      new Response(JSON.stringify({ messages: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    serverSend({
+      type: "session_resumed",
+      conversationId: "conv-resumed-empty-777",
+      resumedFromTimestamp: "2026-04-16T14:15:00Z",
+      messageCount: 0,
+    });
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/conversations/conv-resumed-empty-777/messages",
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: "Bearer test-token" }),
+        }),
+      );
+    });
+
+    // Exactly one fetch for the resolved id (the resume effect fired once).
+    const resumedFetchCalls = fetchSpy.mock.calls.filter(
+      (call) => typeof call[0] === "string" && call[0].includes("conv-resumed-empty-777"),
+    );
+    expect(resumedFetchCalls.length).toBe(1);
+
+    await waitFor(() => {
+      expect(result.current.historyLoading).toBe(false);
+      expect(result.current.messages.length).toBe(0);
+    });
+  });
+
+  it("flips resumed→fresh within one mounted hook: switching from a resumed thread to a new chat does NOT fetch (FR1 hook-reuse)", async () => {
+    // The KB sidebar reuses ONE useWebSocket across conversation switches
+    // (resumeByContextPath resolves a new realConversationId while the hook
+    // stays mounted). If sessionKind failed to flip back to "fresh" on the
+    // second session_started, the resume effect would fire a would-be-404
+    // fetch for the fresh id. This locks the FR1 gate against that path.
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+
+    await connectAndAuth(result);
+
+    // 1) Resume an existing thread → fetch fires.
+    serverSend({
+      type: "session_resumed",
+      conversationId: "conv-A-resumed",
+      resumedFromTimestamp: "2026-04-16T14:15:00Z",
+      messageCount: 3,
+    });
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/conversations/conv-A-resumed/messages",
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: "Bearer test-token" }),
+        }),
+      );
+    });
+
+    // 2) Same mounted hook now starts a BRAND-NEW conversation. sessionKind
+    //    must flip "resumed" → "fresh", so NO fetch fires for the new id.
+    fetchSpy.mockClear();
+    serverSend({
+      type: "session_started",
+      conversationId: "conv-B-fresh",
+    });
+
+    await waitFor(() => {
+      expect(result.current.realConversationId).toBe("conv-B-fresh");
+    });
+
+    const freshFetchCalls = fetchSpy.mock.calls.filter(
+      (call) => typeof call[0] === "string" && call[0].includes("conv-B-fresh"),
+    );
+    expect(freshFetchCalls.length).toBe(0);
+    expect(result.current.historyLoading).toBe(false);
+  });
+
+  it("deep-link to a never-materialized uuid 404s into the empty state, not the error boundary (FR5/AC9)", async () => {
+    // Full-route navigation to /dashboard/chat/<uuid> for a valid-but-
+    // deferred / never-persisted id (stale bookmark). The mount-time effect
+    // fetches, gets a 404, returns null silently. The resting state must be
+    // the empty composer: historyLoading false, no messages, no lastError
+    // (lastError is a WS-connection error, NOT a history-fetch 404).
+    fetchSpy.mockResolvedValue(
+      new Response(JSON.stringify({ error: "Conversation not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("11111111-2222-3333-4444-555555555555"));
+
+    await connectAndAuth(result);
+
+    // Mount-time effect fired the fetch for the non-"new" id.
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/conversations/11111111-2222-3333-4444-555555555555/messages",
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: "Bearer test-token" }),
+        }),
+      );
+    });
+
+    // Resting state = empty composer, not error boundary.
+    await waitFor(() => {
+      expect(result.current.historyLoading).toBe(false);
+    });
+    expect(result.current.messages.length).toBe(0);
+    expect(result.current.lastError).toBeNull();
+  });
+
   it("does NOT fetch history when conversationId is not 'new'", async () => {
     const { useWebSocket } = await import("@/lib/ws-client");
     // Using a real conversation ID (not "new") — the existing effect handles this

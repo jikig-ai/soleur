@@ -5,7 +5,7 @@ import {
   getFreshTenantClient,
   RuntimeAuthError,
 } from "@/lib/supabase/tenant";
-import { reportSilentFallback } from "@/server/observability";
+import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
 
 // PR-C §2.2 (#3244): module-level service-role client is PERMANENT —
 // used only for `supabase.auth.getUser(token)` at the route entry point
@@ -109,7 +109,16 @@ export async function handleConversationMessages(
     .single();
 
   if (convErr || !conv) {
-    reportSilentFallback(convErr ?? null, {
+    // Defense-in-depth (FR3): a row-absent 404 is the expected deferred-
+    // conversation noise class (a fresh KB-chat open whose row has not
+    // materialized yet, a multi-tab race, or a stale deep-link). Mirror at
+    // WARNING level — consistent with the sibling empty-200 breadcrumb below
+    // ("baseline noise from fresh-but-not-yet-written conversations is
+    // accepted"). Genuine 401 (invalid-token) and 500 (auth-probe / messages-
+    // load) sites keep reportSilentFallback (error) and continue to page. The
+    // HTTP 404 status and op string are unchanged so the existing alert rule
+    // and the client's `!res.ok` branch keep working.
+    warnSilentFallback(convErr ?? null, {
       feature: "kb-chat",
       op: "history-fetch-404-not-owned-or-missing",
       extra: { conversationId, userId: user.id },

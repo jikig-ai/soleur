@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-12
-last_reviewed: 2026-03-12
+last_updated: 2026-06-02
+last_reviewed: 2026-06-02
 review_cadence: monthly
 owner: CRO
 depends_on:
@@ -12,12 +12,14 @@ convergence_risk: Medium-High
 
 # Battlecard: Notion AI (Custom Agents)
 
+> **[2026-06-02 Review note]** Pricing status advanced past the beta window (per `knowledge-base/product/competitive-intelligence.md`, 2026-05-30 scan): the free Custom Agents beta **ended May 3, 2026**, and **credit-based pricing has been live since May 4**. Figures restated to past/active tense; the May-4 paywall transition is now an acquisition-monitoring window (watch whether agent seats drop post-paywall).
+
 ## Quick Facts
 
 | Field | Value |
 |-------|-------|
 | **Product** | Notion 3.3 -- workspace tool with Custom Agents (launched Feb 24, 2026) |
-| **Pricing** | $10/mo AI add-on per user. Custom Agents: free beta through May 3, 2026; then $10/1,000 credits (variable per task complexity). Business and Enterprise plans only. |
+| **Pricing** | $10/mo AI add-on per user. Custom Agents: free beta **ended May 3, 2026**; **credit-based pricing live since May 4** at $10/1,000 credits (variable per task complexity). Business and Enterprise plans only. |
 | **User Base** | 35M+ users |
 | **Domain Coverage** | Multi-domain workspace agents: docs, databases, projects, cross-app MCP integrations (Slack, Figma, Linear, HubSpot) |
 | **Key Features** | Custom Agents (autonomous, scheduled, team-oriented). Multi-model (GPT-5.2, Claude Opus 4.5, Gemini 3). **NEW (Mar 3):** MiniMax M2.5 support (10x cheaper for basic tasks). 21,000+ agents built in early testing. 20-minute autonomous sessions. Cross-app MCP integrations now include Asana. |
@@ -76,15 +78,15 @@ convergence_risk: Medium-High
 
 Review monthly. Notion is the highest convergence risk in Tier 3. Monitor closely.
 
-| Trigger | Current Status (2026-03-12) | Action if Triggered |
+| Trigger | Current Status (2026-06-02) | Action if Triggered |
 |---------|---------------------------|-------------------|
 | Notion adds engineering agents | No signal | Major escalation. Publish comparison immediately. Emphasize engineering depth (13+ review agents, architecture, security) vs. Notion's likely shallow offering. |
 | Notion positions for solo founders | Currently team-focused (Business/Enterprise plans only) | Update positioning. Emphasize terminal-first workflow, open source, and compounding knowledge base designed for one-person operations. |
 | Notion adds persistent business-scoped memory | Workspace context only | Evaluate whether Notion's memory architecture compounds across domains like Soleur's. If yes, differentiate on engineering depth and open source. |
 | Notion hits 50,000+ custom agents | 21,000+ in early testing | Category is validated. Lean into CaaS category definition to differentiate agent-for-tasks (Notion) from agent-as-organization (Soleur). |
-| Notion post-beta pricing makes autonomous agents cheap | Free beta through May 3, 2026. $10/1,000 credits after. MiniMax M2.5 at 10x cheaper. | If credit costs are low enough for heavy autonomous use, Notion becomes a cost-competitive multi-domain option. Emphasize engineering depth, structured business knowledge, and open source. |
+| Notion post-beta pricing makes autonomous agents cheap | **Beta ended May 3; credit pricing live since May 4** at $10/1,000 credits. MiniMax M2.5 at 10x cheaper for basic tasks. | If credit costs are low enough for heavy autonomous use, Notion becomes a cost-competitive multi-domain option. Emphasize engineering depth, structured business knowledge, and open source. Monitor post-paywall seat retention. |
 | Notion acquires engineering AI company | No signal | Assess acquisition. Update battlecard and comparison content immediately. |
 
 ---
 
-_Updated: 2026-03-12. Source: competitive-intelligence.md (2026-03-12)._
+_Updated: 2026-06-02. Source: competitive-intelligence.md (2026-05-30)._

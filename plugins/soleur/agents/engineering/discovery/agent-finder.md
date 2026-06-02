@@ -146,7 +146,7 @@ findings and a mandatory advisory disclaimer footer. Operator handling:
   The PreToolUse hook on `Write` (`.claude/hooks/skill-security-scan-write.sh`)
   is the load-bearing gate — it WILL deny the subsequent Write call regardless
   of agent cooperation, unless a valid override artifact exists in the working
-  branch under `knowledge-base/security/skill-overrides/`.
+  branch under `knowledge-base/engineering/security/skill-overrides/`.
 
 This step is the **operator-friendly cooperative path**. The actual block-on-
 HIGH-RISK enforcement lives at the tool layer (PreToolUse hook), per Sharp

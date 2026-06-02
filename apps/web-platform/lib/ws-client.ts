@@ -22,7 +22,7 @@ import {
 } from "@/lib/chat-state-machine";
 import { isKnownWSMessageType } from "@/lib/ws-known-types";
 import { parseWSMessage } from "@/lib/ws-zod-schemas";
-import { reportSilentFallback } from "@/lib/client-observability";
+import { reportSilentFallback, warnSilentFallback } from "@/lib/client-observability";
 import * as Sentry from "@sentry/nextjs";
 import { STUCK_TIMEOUT_MS } from "@/lib/ws-constants";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
@@ -402,6 +402,15 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const [sessionConfirmed, setSessionConfirmed] = useState(false);
   const [realConversationId, setRealConversationId] = useState<string | null>(null);
   const [resumedFrom, setResumedFrom] = useState<ResumedFrom | null>(null);
+  // Discriminates a brand-new (deferred-creation) session from a genuine
+  // resume so the resume-history effect can skip the fetch for fresh
+  // conversations whose DB row does not exist yet. `session_started` sets
+  // "fresh" (no row — fetch would 404); `session_resumed` sets "resumed"
+  // (row exists, even with 0 messages — fetch the 200-empty body). Keys the
+  // FR1 gate on the session kind, NOT on message count, so a resumed-but-
+  // empty thread still hydrates. Client-local (no wire change): the server
+  // already distinguishes the two via distinct message types.
+  const [sessionKind, setSessionKind] = useState<"fresh" | "resumed" | null>(null);
   const [usageData, setUsageData] = useState<UsageData | null>(null);
   // Stage 4 review F3: persisted `workflow_ended_at` from history fetch.
   const [workflowEndedAt, setWorkflowEndedAt] = useState<string | null>(null);
@@ -501,6 +510,13 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     clearAllTimeouts();
     setSessionConfirmed(false);
     setRealConversationId(null);
+    // Keep sessionKind paired with realConversationId: both are only ever
+    // written together by the session_started/session_resumed handlers, so
+    // clearing the id without clearing the kind would leave a stale "resumed"
+    // that could re-arm the resume-history fetch on the next id resolution.
+    // (review: P3 reset-symmetry — defends the FR1 gate against future
+    // refactors that decouple the two writes.)
+    setSessionKind(null);
     if (wsRef.current) {
       wsRef.current.onclose = null;
       wsRef.current.close();
@@ -802,6 +818,10 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
             realConversationIdRef.current = msg.conversationId;
           }
           setResumedFrom(null);
+          // Deferred-creation: no DB row exists for this pending UUID yet
+          // (it materializes on the first chat message). Mark fresh so the
+          // resume-history effect skips the would-be-404 fetch (FR1).
+          setSessionKind("fresh");
           setSessionConfirmed(true);
           break;
         }
@@ -817,6 +837,10 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
             timestamp: msg.resumedFromTimestamp,
             messageCount: msg.messageCount,
           });
+          // Real row exists (even if messageCount === 0) — the resume-history
+          // effect SHOULD fetch (api-messages returns 200-empty for a zero-
+          // message row). Gate keys on session kind, not count (FR2).
+          setSessionKind("resumed");
           setSessionConfirmed(true);
           break;
         }
@@ -1005,7 +1029,14 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       },
     );
     if (!res.ok) {
-      reportSilentFallback(null, {
+      // A 404 on the deferred-creation path is an expected, recoverable
+      // state (FR1 eliminates it at the source for fresh KB-chat opens; a
+      // residual 404 is a stale deep-link or multi-tab race). Mirror it at
+      // WARNING level so it stays observable without paging. Genuine
+      // failures (401 invalid-token, 500 messages-load) keep ERROR level
+      // and continue to page. Op string + HTTP handling unchanged (FR4).
+      const mirror = res.status === 404 ? warnSilentFallback : reportSilentFallback;
+      mirror(null, {
         feature: "kb-chat",
         op: "history-fetch-failed",
         extra: { conversationId: targetId, status: res.status },
@@ -1210,11 +1241,18 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     if (!realConversationId) return;
     if (realConversationId === conversationId) return; // existing effect handles this
     if (conversationId !== "new") return; // only the sidebar resume path
+    // FR1: a fresh (`session_started`) conversation has no DB row yet —
+    // deferred creation materializes it only on the first chat message. A
+    // fetch here would 404 (`history-fetch-404-not-owned-or-missing`) on
+    // every new KB-chat open. Only a genuine resume (`session_resumed`,
+    // sessionKind === "resumed") has a row to fetch. Keyed on session kind,
+    // not message count, so a resumed-but-empty thread still hydrates (FR2).
+    if (sessionKind !== "resumed") return;
 
     const controller = new AbortController();
     void runHistoryFetch(realConversationId, controller);
     return () => controller.abort();
-  }, [realConversationId, conversationId]);
+  }, [realConversationId, conversationId, sessionKind]);
 
   useEffect(() => {
     mountedRef.current = true;

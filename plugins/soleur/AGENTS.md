@@ -70,6 +70,7 @@ To add a new domain (e.g., product, growth):
 6. Commands stay flat under `commands/` (only entry-point commands: go, sync, help). Workflow stages are skills.
 7. The plugin loader discovers agents recursively -- no config changes needed
 8. Landing page department cards, stats, and legal doc counts update automatically from data
+9. If the domain gets a top-level `knowledge-base/<domain>/` directory, add `<domain>` to `SANCTIONED_DIRS` in `.claude/hooks/kb-domain-allowlist-guard.sh` (the advisory guard that flags new top-level KB dirs outside the sanctioned set)
 
 ## Command and Skill Naming Convention
 
