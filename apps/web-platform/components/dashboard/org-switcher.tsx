@@ -92,7 +92,7 @@ export function OrgSwitcher({
       {open && (
         <div
           role="menu"
-          className="absolute left-1/2 top-12 z-50 w-80 -translate-x-1/2 rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 py-2 shadow-xl"
+          className="absolute left-0 top-full z-50 mt-2 w-80 max-w-[calc(100vw-1.5rem)] rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 py-2 shadow-xl"
         >
           <div className="px-4 pb-2 text-xs font-medium uppercase tracking-wider text-soleur-text-muted">
             Your workspaces
