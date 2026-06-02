@@ -8,10 +8,28 @@ status: planned
 brand_survival_threshold: single-user incident
 sentry_issue: 52442f7a9b77462b9927b1f055204cce
 related_issues: [4342, 4356]
-related_prs: [4343, 4356, 4225, 2617]
+related_prs: [4343, 4356, 4225, 2617, 4229]
+requires_cpo_signoff: true
 ---
 
 # fix: `acquire_conversation_slot` 23502 — RPC INSERT missing `workspace_id` after mig 059 NOT NULL
+
+## Enhancement Summary
+
+**Deepened on:** 2026-06-02
+**Sections enhanced:** Approach (materially revised), Acceptance Criteria, Files to Edit, Risks, Alternatives.
+**Research agents used:** direct codebase precedent-diff (Phase 4.4), verify-the-negative pass (Phase 4.45), Phase 4.6/4.7/4.8 gates (all pass).
+
+### Key Improvements (architecture correction — deepen-plan caught this; plan-review would not)
+
+1. **CHANGED the fix shape from "pure-SQL solo-canary derivation" to "TS resolves the active workspace + widen RPC to a 4-arg `p_workspace_id`."** The original v1 derived `workspace_id = p_user_id` inside the RPC via the solo-canary `workspace_members` row. That is **correct only for solo users** — it mis-keys the slot for a user actively working inside a *shared/team* workspace. The slot's `workspace_id` MUST equal the workspace of the conversation it gates.
+2. **Mirror the canonical conversation-insert pattern.** `createConversation` (`ws-handler.ts:808-819`) sets `workspace_id = getUserWorkspace(userId)` — the session-cached **active** workspace, resolved at session-open (`ws-handler.ts:2294` via `getWorkspaceForUserInOrganization` → `getDefaultWorkspaceForUser`). The slot acquire happens in the same handler with the same value in scope; `acquireSlot` must pass it through so `slot.workspace_id == conversation.workspace_id` (the equality `find_stuck_active_conversations` (`037:52-54`) and the RLS member-select (`059:227`) both assume).
+3. **Adopt the exact migration-061 byok precedent** (`record_byok_use_and_check_cap` / `write_byok_audit` were widened to a `p_workspace_id` arg when their table got `workspace_id NOT NULL` in mig 055) rather than deriving inside the function. This is the established codebase convention for "table gained workspace_id NOT NULL; re-issue its writer RPC."
+
+### New Considerations Discovered
+
+- `resolveCurrentWorkspaceId` (`workspace-resolver.ts:190-218`, ADR-044) and the session cache `getUserWorkspace` (`ws-handler.ts:46`) both fail **closed to the solo workspace (`= userId`), never a sibling** — so the new arg can never cross-tenant a slot. The widened RPC inherits that safety from the caller.
+- Widening the signature changes the grant target type list (`(uuid, uuid, integer)` → `(uuid, uuid, integer, uuid)`); the new migration MUST re-issue the `grant execute … to service_role` for the new signature (a `CREATE OR REPLACE` with a *different* arg list creates a NEW function overload, NOT a replacement — so old grants do not carry and a stale 3-arg overload could linger). See revised AC2 + Risks.
 
 ## 🐛 Summary
 
@@ -69,7 +87,7 @@ until they started a genuinely new conversation).
 - The Stripe webhook-lag re-acquire (`ws-handler.ts:1447-1484`) also gates on `cap_hit`. None of
   the three recovery paths touch the `"error"` branch.
 
-## 🎯 User-Brand Impact
+## User-Brand Impact
 
 **If this lands broken, the user experiences:** every attempt to start a *new* conversation in the
 Command Center is silently denied with the "Concurrent-conversation limit reached" upgrade modal —
@@ -91,68 +109,93 @@ carried via threshold); `user-impact-reviewer` runs at review time.
 | Hypothesis (from issue) | Reality (verified in repo) | Plan response |
 | --- | --- | --- |
 | "acquireSlot inserts a row where a NOT NULL column receives null" | Correct. The null column is **`workspace_id`** (added NOT NULL in mig `059:223`, no default), not `user_id`/`conversation_id` (both supplied non-null by the RPC). | Re-issue the RPC to populate `workspace_id`. |
-| "find which column is null, fix the upstream value" | The upstream value is **not** a TS argument — both `acquireSlot` callers pass non-null `userId` + `pendingId=randomUUID()` (`ws-handler.ts:1445/1497`). The gap is **in the RPC body**, which never learned about the column mig 059 added. | Fix lives in a new migration that re-issues `acquire_conversation_slot`, not in `concurrency.ts`. |
+| "find which column is null, fix the upstream value" | The null is `workspace_id`, which the RPC never populated. The correct value is the user's **active** workspace (`getUserWorkspace(userId)`, the session cache set at `ws-handler.ts:2294`) — the same value `createConversation` writes to the conversation row (`ws-handler.ts:808-819`). | **Revised (deepen-plan):** resolve `workspace_id` in TS at the call site and pass it to a **widened 4-arg RPC** (`p_workspace_id uuid`), mirroring the mig-061 byok precedent and the conversation-insert pattern. The fix touches `concurrency.ts`, the two `acquireSlot` call sites in `ws-handler.ts`, AND a new migration. |
+| (v1 alternative) derive `workspace_id` inside the RPC via solo-canary | **Incorrect for team workspaces:** `workspace_members WHERE workspace_id = user_id` always resolves the *solo* workspace, so a member acting inside a shared workspace would get a slot keyed to their personal workspace — diverging from the conversation's `workspace_id` and the reaper's join. | Rejected in favor of caller-supplied active workspace (see Alternatives). Solo derivation is a *fallback* only, already provided by `resolveCurrentWorkspaceId`/`getUserWorkspace` failing closed to `userId`. |
 | "ensure the fallback no longer fires for this case" | The `reportSilentFallback` mirror in `concurrency.ts` is **correct as designed** (per `cq-silent-fallback-must-mirror-to-sentry`) — it should stay. Once the RPC populates `workspace_id`, the 23502 stops and the fallback stops firing naturally. | Do **not** remove the fallback; verify it no longer fires via the integration test. |
-| `acquire_conversation_slot` re-issued in a later migration? | **No.** Only defined in `029:101`; `git grep "function public.acquire_conversation_slot"` returns only 029. | New migration `093` is the first re-issue. |
+| `acquire_conversation_slot` re-issued in a later migration? | **No.** Only defined in `029:101`; `git grep "function public.acquire_conversation_slot"` returns only 029. | New migration `093` is the first re-issue (DROP old 3-arg + CREATE 4-arg). |
 | `touch_conversation_slot` / `release_conversation_slot` also broken? | **No.** `touch` is an UPDATE (`029:185`), `release` is a DELETE (`029:201`) — neither writes `workspace_id`, so neither violates the NOT NULL. | Out of scope; leave both unchanged. |
+| Is `getUserWorkspace(userId)` in scope at the `acquireSlot` call sites? | **Yes.** Set at session-open (`ws-handler.ts:2294`, `setUserWorkspace`) before any `start_session` handler runs; `createConversation` already reads it at `ws-handler.ts:808`. Both `acquireSlot` calls (`1445`, `1497`) are in the same `start_session` handler. | Pass `getUserWorkspace(userId)` through `acquireSlot` to the RPC. Fail loud if absent (mirrors `createConversation:809-812`). |
+| Does signature widening need a DROP? | **Yes.** Per mig-061 precedent (`061:37,79`), a different arg list under `CREATE OR REPLACE` makes a NEW overload and leaves the old function + its grant in place. | Migration does `DROP FUNCTION IF EXISTS …(uuid,uuid,integer)` then `CREATE FUNCTION …(uuid,uuid,integer,uuid)` + re-grant. |
 
 ## 📋 Acceptance Criteria
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — RPC re-issued.** A new migration `apps/web-platform/supabase/migrations/093_acquire_slot_workspace_id.sql`
-  contains exactly one `create or replace function public.acquire_conversation_slot(uuid, uuid, integer)`
-  whose INSERT column list includes `workspace_id`. Verify:
-  `grep -c "workspace_id" apps/web-platform/supabase/migrations/093_acquire_slot_workspace_id.sql` ≥ 2
-  (one in the resolution SELECT/derivation, one in the INSERT column list).
-- [ ] **AC2 — Signature + grants preserved.** The re-issued function keeps the **same 3-arg signature**
-  `(p_user_id uuid, p_conversation_id uuid, p_effective_cap integer)` and the same
-  `returns table (status text, active_count integer, effective_cap integer)`. No `revoke`/`grant`
-  churn needed (CREATE OR REPLACE preserves existing ACLs); if the body changes the arg list the
-  existing grants at `029:205-210` break — so the arg list MUST be byte-identical. Verify the TS
-  caller `concurrency.ts:83-87` is **unchanged** (still passes 3 params): `git diff --stat` shows no
-  change to `concurrency.ts`.
-- [ ] **AC3 — `workspace_id` derived via solo-canary, fail-loud on miss.** The RPC resolves
-  `v_workspace_id` from `public.workspace_members WHERE user_id = p_user_id AND workspace_id = p_user_id
-  AND role = 'owner'` (the permanent solo-backfill row guaranteed by `handle_new_user`, mig
-  `053:208-210`). If no row is found, `RAISE EXCEPTION` with a clear message rather than INSERTing NULL
-  (a NULL would re-trigger 23502 anyway; an explicit raise gives a queryable error). Verify the body
-  contains `workspace_members` and `role = 'owner'`.
+- [ ] **AC1 — RPC re-issued with 4-arg signature.** A new migration
+  `apps/web-platform/supabase/migrations/093_acquire_slot_workspace_id.sql` does
+  `DROP FUNCTION IF EXISTS public.acquire_conversation_slot(uuid, uuid, integer);` then
+  `CREATE FUNCTION public.acquire_conversation_slot(p_user_id uuid, p_conversation_id uuid,
+  p_effective_cap integer, p_workspace_id uuid)` whose INSERT column list includes `workspace_id`
+  with value `p_workspace_id`. Verify:
+  `grep -cE "drop function if exists public.acquire_conversation_slot|p_workspace_id" apps/web-platform/supabase/migrations/093_acquire_slot_workspace_id.sql` ≥ 3.
+- [ ] **AC2 — grants re-issued for new signature.** Because the arg list changed, the migration
+  re-issues `revoke all on function public.acquire_conversation_slot(uuid, uuid, integer, uuid) from public;`
+  and `grant execute on function public.acquire_conversation_slot(uuid, uuid, integer, uuid) to service_role;`
+  (mirrors `029:205-210` for the new signature, and the mig-061 DROP+CREATE+grant pattern). No stale
+  3-arg overload remains (the DROP removes it). Verify both `grant execute` and `(uuid, uuid, integer, uuid)`
+  appear in the migration.
+- [ ] **AC3 — caller supplies the active workspace; fail-loud on absent.** `concurrency.ts` `acquireSlot`
+  gains a `workspaceId: string` parameter and passes `p_workspace_id: workspaceId` in the RPC call.
+  **All THREE** call sites in `ws-handler.ts` pass `getUserWorkspace(userId)`: `1445` (initial),
+  `1479` (Stripe webhook-lag retry), `1497` (ledger-divergence retry). Resolve `getUserWorkspace(userId)`
+  once at the top of the `start_session` acquire block; if null, abort the acquire via the existing
+  "No workspace binding for user" error path (mirrors `createConversation:809-812`) rather than passing
+  null (which would re-trigger 23502). Verify `concurrency.ts` contains `p_workspace_id`, the
+  `acquireSlot` signature includes a workspace param, and all 3 `ws-handler.ts` call sites pass the
+  resolved workspace id: `git grep -c "acquireSlot(" apps/web-platform/server/ws-handler.ts` = 3, none
+  passing only 3 args.
 - [ ] **AC4 — `search_path` + SECURITY DEFINER pinned.** Re-issued function retains
   `language plpgsql security definer set search_path = public, pg_temp` per
   `cq-pg-security-definer-search-path-pin-pg-temp`. Verify the body contains
   `set search_path = public, pg_temp`.
 - [ ] **AC5 — down migration with knowingly-broken caveat.** `093_acquire_slot_workspace_id.down.sql`
-  restores the verbatim `029:101-166` body and documents in its header that applying the down WHILE
-  the `059:223` NOT NULL is in place leaves a knowingly-broken state (acquire fails 23502) — mirrors
-  the `063_post_workspace_rpc_repair.down.sql` convention. Verify header contains the substring
-  `knowingly-broken`.
+  does `DROP FUNCTION IF EXISTS public.acquire_conversation_slot(uuid, uuid, integer, uuid);` then
+  restores the verbatim 3-arg `029:101-166` body + its `029:205,208` grants, and documents in its
+  header that applying the down WHILE the `059:223` NOT NULL is in place leaves a knowingly-broken
+  state (acquire fails 23502) — mirrors the `063_post_workspace_rpc_repair.down.sql` convention.
+  Verify header contains the substring `knowingly-broken`.
 - [ ] **AC6 — integration test (RED→GREEN).** A new test
-  `apps/web-platform/test/concurrency-acquire-slot-workspace-id.integration.test.ts` calls the RPC for
-  a synthesized solo user with a fresh conversation id and asserts the returned `status = 'ok'` AND
-  that the persisted `user_concurrency_slots` row has `workspace_id = userId`. Written first against
-  the pre-fix RPC to confirm it reproduces 23502 (per `cq-write-failing-tests-before`), then passes
-  after the migration. Runner: vitest (`test/**/*.test.ts` per `vitest.config.ts:44`). Verify with
+  `apps/web-platform/test/concurrency-acquire-slot-workspace-id.integration.test.ts` calls the RPC
+  (post-fix 4-arg form) for a synthesized solo user with a fresh conversation id, passing
+  `p_workspace_id = userId` (solo N2), and asserts `status = 'ok'` AND the persisted
+  `user_concurrency_slots` row has `workspace_id = userId`. **Add a second case** that passes a
+  distinct `p_workspace_id` (a synthesized non-solo workspace the user owns) and asserts the slot row
+  carries THAT workspace_id — proving the slot tracks the active workspace, not a hardcoded solo value.
+  Written first against the pre-fix RPC to confirm it reproduces 23502 (per `cq-write-failing-tests-before`),
+  then passes after the migration. Runner: vitest (`test/**/*.test.ts` per `vitest.config.ts:44`).
+  Verify with
   `./node_modules/.bin/vitest run test/concurrency-acquire-slot-workspace-id.integration.test.ts` from
   `apps/web-platform/`.
 - [ ] **AC7 — fallback no-fire assertion.** AC6's GREEN run, executed against the real dev-Supabase
   schema, returns `status = 'ok'` (not `error`) — proving the `reportSilentFallback` branch in
   `concurrency.ts:102` no longer fires for the new-acquire path. The `reportSilentFallback` call itself
   is **not removed** (it correctly guards the genuine-error path per `cq-silent-fallback-must-mirror-to-sentry`).
-- [ ] **AC8 — existing slot tests still pass.** `conversation-archive-release-slot.integration.test.ts`
-  and the `ws-handler-cap-hit-self-heal` / `agent-runner-*` suites that mock `acquireSlot` are
-  unaffected (they mock the TS wrapper, whose signature is unchanged). Verify `vitest run` over the
-  slots + ws-handler test set is green.
-- [ ] **AC9 — `tsc --noEmit` clean** for `apps/web-platform` (no TS changes expected, but the gate
-  confirms no accidental drift). Run from `apps/web-platform/`: `./node_modules/.bin/tsc --noEmit`.
+- [ ] **AC8 — direct-RPC-caller test updated (contract-pair sweep).** `conversation-archive-release-slot.integration.test.ts`
+  defines a **local** `acquireSlot` helper (`:130-147`) that calls the RPC **directly** with the
+  **3-arg** form. After the migration DROPs the 3-arg overload, this call breaks (PGRST202 /
+  function-not-found). It MUST be updated to pass `p_workspace_id: user.id`. This is the exact
+  contract-pair sweep the post-mig-059 learning mandates — grep every direct RPC caller:
+  `git grep -n 'rpc("acquire_conversation_slot"' apps/web-platform` and update each. The
+  `ws-handler-cap-hit-self-heal` / `agent-runner-*` suites mock the TS `acquireSlot` wrapper via
+  `vi.fn()` (return-value mocks, no arity assertions found via
+  `git grep "acquireSlot).toHaveBeenCalledWith"` → 0 hits) so they are unaffected by the wrapper's new
+  param — but re-run them to confirm. Verify `vitest run` over the slots + ws-handler + agent-runner
+  test set is green.
+- [ ] **AC9 — `tsc --noEmit` clean** for `apps/web-platform` after the `acquireSlot` signature change
+  and both `ws-handler.ts` call-site updates. The widened param is a *required* positional arg, so
+  `tsc` will flag any call site not updated — this is the compiler enumerating the call sites for us
+  (3 known: `concurrency.ts:83` internal + `ws-handler.ts:1445,1497`; plus the `1479` retry call).
+  Run from `apps/web-platform/`: `./node_modules/.bin/tsc --noEmit`.
 
 ### Post-merge (operator)
 
 - [ ] **AC10 — migration applied to prd.** Migration `093` is applied via the existing
   `web-platform-release.yml#migrate` job on merge to `main` (path-filtered on
   `apps/web-platform/**`). **Automation: feasible** — the release pipeline already runs migrations;
-  no separate operator apply step. Verify post-deploy via the Supabase MCP (read-only):
-  `select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='acquire_conversation_slot'` returns 1, AND introspect the function body contains `workspace_id`.
+  no separate operator apply step. Verify post-deploy via the Supabase MCP (read-only): introspect
+  `pg_proc` for `acquire_conversation_slot` and assert exactly ONE overload remains, with arg types
+  `(uuid, uuid, integer, uuid)` (the 4-arg form) and NO lingering 3-arg `(uuid, uuid, integer)`
+  overload, AND the function body (`pg_get_functiondef`) contains `workspace_id`.
 - [ ] **AC11 — Sentry issue resolved.** After deploy, confirm Sentry issue
   `52442f7a9b77462b9927b1f055204cce` (`pg_code:23502 op:acquireSlot`) stops receiving new events for
   the new-acquire path. **Automation: feasible** — query Sentry events API for the issue filtered to
@@ -169,12 +212,15 @@ carried via threshold); `user-impact-reviewer` runs at review time.
   `ls apps/web-platform/supabase/migrations/*.sql | sed -E 's#.*/([0-9]+)_.*#\1#' | sort -n | tail -1`.
 - [ ] Re-read `029_plan_tier_and_concurrency_slots.sql:101-166` (the canonical body to base the
   re-issue on) and `059_workspace_keyed_rls_sweep.sql:205-229` (the column/NOT NULL/RLS it added).
-- [ ] Read the precedent re-issue `061_byok_audit_workspace_id_rpcs.sql` and the down-file convention
-  in `063_post_workspace_rpc_repair.down.sql` (knowingly-broken caveat).
-- [ ] Confirm the solo-canary invariant in `053_organizations_and_workspace_members.sql:184-210`
-  (`handle_new_user` provisions one permanent `workspace_members(workspace_id=u.id, user_id=u.id,
-  role='owner')` per user).
-- [ ] **Live read-only repro (recommended, per Sharp Edge "write-path internally-consistent claim"):**
+- [ ] Read the precedent re-issue `061_byok_audit_workspace_id_rpcs.sql` — note it uses
+  **`DROP FUNCTION IF EXISTS …(old-sig)` + `CREATE`** (lines 37, 79), NOT `CREATE OR REPLACE`, because
+  the arg list changes — and the down-file convention in `063_post_workspace_rpc_repair.down.sql`
+  (knowingly-broken caveat).
+- [ ] Read the canonical workspace resolution: `workspace-resolver.ts:190-218` (`resolveCurrentWorkspaceId`,
+  fails closed to `userId`, never a sibling) and the session cache `getUserWorkspace`/`setUserWorkspace`
+  (`ws-handler.ts:46,2294`). Confirm `createConversation:808-819` reads `getUserWorkspace(userId)` as
+  the conversation's `workspace_id` — the slot must use the same value.
+- [ ] **Live read-only repro (per Sharp Edge "write-path internally-consistent claim"):**
   against dev-Supabase via the Supabase MCP, run
   `BEGIN; SELECT public.acquire_conversation_slot('<seed-user>'::uuid, gen_random_uuid(), 5); ROLLBACK;`
   for a seeded solo user and capture the actual SQLSTATE — expect `23502` on column `workspace_id`.
@@ -185,60 +231,70 @@ carried via threshold); `user-impact-reviewer` runs at review time.
 
 - [ ] Create `apps/web-platform/test/concurrency-acquire-slot-workspace-id.integration.test.ts`
   modeled on `conversation-archive-release-slot.integration.test.ts` (same dev-Supabase service-client
-  harness). Synthesize a solo user (which gets the `handle_new_user` solo-workspace backfill), call
-  `acquire_conversation_slot(userId, randomUUID(), 5)`, assert `status = 'ok'` and the persisted row's
-  `workspace_id = userId`. Run it against the **pre-fix** RPC and confirm it fails with the 23502
-  symptom (status `error` from the wrapper, or raw RPC error in the direct-RPC test). This is the
-  RED gate per `cq-write-failing-tests-before`.
+  harness). Synthesize a solo user (which gets the `handle_new_user` solo-workspace backfill). RED
+  baseline: call the **pre-fix 3-arg** RPC `acquire_conversation_slot(userId, randomUUID(), 5)` and
+  confirm it fails with raw RPC error SQLSTATE `23502` on `workspace_id`. After Phase 2, switch the
+  call to the 4-arg form and assert (a) `status='ok'` + persisted `workspace_id = userId` for the
+  solo case, and (b) for a distinct owned non-solo workspace, the slot row carries THAT workspace_id
+  (AC6 case 2). RED gate per `cq-write-failing-tests-before`.
 
-### Phase 2 — Re-issue the RPC (GREEN)
+### Phase 2 — Re-issue the RPC (4-arg, GREEN)
 
-- [ ] Create `apps/web-platform/supabase/migrations/093_acquire_slot_workspace_id.sql`. Body = verbatim
-  copy of `029:101-166` with two changes:
-  1. Add a `v_workspace_id uuid;` declare + a resolution SELECT immediately after the advisory lock:
-     ```sql
-     select workspace_id into v_workspace_id
-       from public.workspace_members
-      where user_id = p_user_id
-        and workspace_id = p_user_id
-        and role = 'owner';
-     if v_workspace_id is null then
-       raise exception 'acquire_conversation_slot: no solo workspace for user %', p_user_id
-         using errcode = 'P0001';
-     end if;
-     ```
-     (Resolving via `workspace_members` rather than hardcoding `p_user_id` keeps the derivation
-     correct if multi-workspace support later widens the RPC to accept an explicit `p_workspace_id`;
-     for the solo case the resolved value equals `p_user_id`, matching the `059:215-216` backfill.)
-  2. Add `workspace_id` to the INSERT column list + value:
+- [ ] Create `apps/web-platform/supabase/migrations/093_acquire_slot_workspace_id.sql`:
+  1. `DROP FUNCTION IF EXISTS public.acquire_conversation_slot(uuid, uuid, integer);` (per mig-061
+     pattern — the arg list changes, so this is a new function, not a replacement).
+  2. `CREATE FUNCTION public.acquire_conversation_slot(p_user_id uuid, p_conversation_id uuid,
+     p_effective_cap integer, p_workspace_id uuid)` — body = verbatim copy of `029:101-166` with one
+     change: add `workspace_id` to the INSERT column list + value `p_workspace_id`:
      ```sql
      insert into public.user_concurrency_slots (user_id, conversation_id, workspace_id)
-     values (p_user_id, p_conversation_id, v_workspace_id)
+     values (p_user_id, p_conversation_id, p_workspace_id)
      on conflict (user_id, conversation_id)
        do update set last_heartbeat_at = now()
      returning (xmax = 0) into v_was_insert;
      ```
-- [ ] Keep the file header in the FORWARD-ONLY + `cq-pg-security-definer-search-path-pin-pg-temp`
-  documentation style of migrations 029/059/063. Cite the root cause (mig 059 NOT NULL + this PR's
-  re-issue) and the learning file.
-- [ ] Create `093_acquire_slot_workspace_id.down.sql` restoring the `029:101-166` body verbatim, with
-  a header caveat copied in spirit from `063_post_workspace_rpc_repair.down.sql` (applying down while
-  `059:223` NOT NULL stands re-introduces the 23502; down is for controlled rollback only).
+     Keep `language plpgsql security definer set search_path = public, pg_temp`, the advisory lock,
+     the lazy sweep, the cap-check, and the return shape all **verbatim** from 029. Do NOT add
+     `workspace_id` to the `do update set` clause (the existing row keeps its backfilled value).
+  3. `revoke all on function public.acquire_conversation_slot(uuid, uuid, integer, uuid) from public;`
+     + `grant execute on function public.acquire_conversation_slot(uuid, uuid, integer, uuid) to service_role;`
+     (mirror `029:205,208` for the new signature).
+- [ ] Header in the FORWARD-ONLY + `cq-pg-security-definer-search-path-pin-pg-temp` style of
+  029/059/061/063. Cite the root cause (mig 059 NOT NULL + un-re-issued writer) and the post-mig-059
+  learning file.
+- [ ] Create `093_acquire_slot_workspace_id.down.sql`:
+  `DROP FUNCTION IF EXISTS public.acquire_conversation_slot(uuid, uuid, integer, uuid);` then restore
+  the verbatim 3-arg `029:101-166` body + its `029:205,208` grants; header caveat copied in spirit
+  from `063_post_workspace_rpc_repair.down.sql` (down re-introduces the 23502 while `059:223` stands —
+  controlled rollback only).
+
+### Phase 3 — TS call sites (GREEN)
+
+- [ ] `concurrency.ts`: add `workspaceId: string` param to `acquireSlot(userId, conversationId,
+  effectiveCap, workspaceId)` and pass `p_workspace_id: workspaceId` in the `supabase.rpc(...)` call
+  (`:83-87`). `touchSlot`/`releaseSlot` unchanged (they don't write `workspace_id`).
+- [ ] `ws-handler.ts`: resolve `const slotWorkspaceId = getUserWorkspace(userId)` once at the top of the
+  `start_session` acquire block; if null, abort via the existing "No workspace binding for user" error
+  path. Pass `slotWorkspaceId` to all THREE `acquireSlot(...)` calls (`1445`, `1479`, `1497`).
+- [ ] Update the direct-RPC test caller in `conversation-archive-release-slot.integration.test.ts:130-147`
+  to pass `p_workspace_id: user.id` (AC8 contract-pair sweep). Grep
+  `git grep -n 'rpc("acquire_conversation_slot"' apps/web-platform` → 2 hits (concurrency.ts +
+  this test); both updated.
 - [ ] Run AC6/AC7 integration test → GREEN.
 
-### Phase 3 — Regression + type gates
+### Phase 4 — Regression + type gates
 
-- [ ] Run the slots + ws-handler test set (AC8) and `tsc --noEmit` (AC9).
-- [ ] Confirm `concurrency.ts` is **untouched** (`git diff --stat` shows no app-code change) — the fix
-  is purely SQL.
+- [ ] `./node_modules/.bin/tsc --noEmit` from `apps/web-platform/` → clean. The new required param means
+  `tsc` flags every un-updated `acquireSlot` call — use that as the call-site enumerator (AC9).
+- [ ] Run the slots + ws-handler + agent-runner test set → green (AC8).
 
-### Phase 4 — Ship
+### Phase 5 — Ship
 
 - [ ] PR body uses `Closes #<tracking-issue>` (migration applies synchronously in
   `web-platform-release.yml#migrate` on merge — see `wg-use-closes-n-in-pr-body-not-title-to`). Link
   Sentry issue `52442f7a9b77462b9927b1f055204cce` and the post-mig-059 learning.
-- [ ] Post-merge: verify AC10 (function body contains `workspace_id` via Supabase MCP introspection)
-  and AC11 (Sentry no-fire).
+- [ ] Post-merge: verify AC10 (4-arg function body contains `workspace_id` via Supabase MCP
+  introspection; no stale 3-arg overload) and AC11 (Sentry no-fire).
 
 ## 🔍 Hypotheses (ruled in / out)
 
@@ -253,31 +309,50 @@ carried via threshold); `user-impact-reviewer` runs at review time.
 
 ## ⚠️ Risks & Sharp Edges
 
-- **Multi-workspace future:** the solo-canary derivation assumes one owner-workspace per user. When
-  team-workspace assigns a conversation to a *non-personal* workspace, the RPC must be widened to
-  accept an explicit `p_workspace_id` (changing the signature + the TS caller + the grants). Track as
-  Future Work (see learning §"solo-canary invariant as derivation source"). For today's solo-tenant
-  reality this is correct and matches the `059` backfill semantics.
-- **Signature immutability:** the existing `grant execute … (uuid, uuid, integer)` at `029:208` is
-  keyed on the exact arg types. The re-issue MUST NOT change the arg list, or the grants silently
-  stop applying. `CREATE OR REPLACE` with an identical signature preserves ACLs.
+- **Precedent-diff (Phase 4.4) — SECURITY DEFINER RPC signature widening:** the established codebase
+  pattern for "table gained `workspace_id NOT NULL`; re-issue its writer RPC" is mig 061
+  (`record_byok_use_and_check_cap`, `write_byok_audit`): **`DROP FUNCTION IF EXISTS …(old-sig)` +
+  `CREATE` with the new `p_workspace_id` arg + re-grant** (`061:37,79`). This plan mirrors it exactly.
+  Do NOT use `CREATE OR REPLACE` — a changed arg list creates a NEW overload and leaves a stale 3-arg
+  function (with its grant) in place; the DROP is load-bearing.
 - **`on conflict do update` path is unaffected** — it does not touch `workspace_id`, so existing rows
-  keep their backfilled value. Only the new-row INSERT branch needed the fix; do not add
-  `workspace_id` to the `do update set` clause (would be a no-op churn and risks overwriting a valid
-  backfilled value with a re-derived one).
+  keep their backfilled value. Only the new-row INSERT branch needed the fix; do NOT add
+  `workspace_id` to the `do update set` clause (would risk overwriting a valid backfilled value).
+- **Slot workspace_id MUST equal the conversation's workspace_id.** `createConversation` writes
+  `workspace_id = getUserWorkspace(userId)` (`ws-handler.ts:808-819`); the slot acquire MUST use the
+  same value so `find_stuck_active_conversations`'s join (`037:52-54`) and the RLS member-select
+  (`059:227`) line up. Passing a *different* workspace (e.g., a hardcoded solo id while the conversation
+  is in a team workspace) would make the reaper unable to match slot↔conversation and could hide the
+  slot from the workspace's member-select. This is precisely why the caller-supplied value (not an
+  in-RPC solo derivation) is correct.
+- **`getUserWorkspace` / `resolveCurrentWorkspaceId` fail closed to `userId`, never a sibling**
+  (`workspace-resolver.ts:215,217`). So the new `p_workspace_id` arg cannot cross-tenant a slot even
+  on a stale/absent session claim — the worst case degrades to the solo workspace, identical to v1's
+  derivation. The RPC trusts the caller because the caller is server-side WS code with the session
+  cache, and the RPC is SECURITY DEFINER reachable only by `service_role` (AC2 grant).
 - **Do NOT remove the `reportSilentFallback` mirror** in `concurrency.ts` — it is the correct,
   rule-mandated observability for the genuine-error path (`cq-silent-fallback-must-mirror-to-sentry`).
   The fix is to stop *causing* the error, not to silence its reporting.
 - **Empty `## User-Brand Impact` would fail `deepen-plan` Phase 4.6** — section is filled above with a
   concrete artifact, exposure note, and `single-user incident` threshold.
-- **Migration is non-transactional-safe:** the body is a single `CREATE OR REPLACE FUNCTION` — no
-  `CREATE INDEX CONCURRENTLY`/`VACUUM`/`ALTER SYSTEM`, so it runs cleanly inside Supabase's
+- **Migration is non-transactional-safe:** the body is `DROP FUNCTION` + `CREATE FUNCTION` + grants —
+  no `CREATE INDEX CONCURRENTLY`/`VACUUM`/`ALTER SYSTEM`, so it runs cleanly inside Supabase's
   per-migration transaction wrapper (per the 029/025/027 CONCURRENTLY caveat).
+- **Phase order is load-bearing** (`2026-05-10-plan-phase-order-load-bearing-when-contract-changes`):
+  Phase 2 (RPC contract: new 4-arg signature) MUST land before Phase 3 (TS callers passing the 4th
+  arg). The whole PR merges atomically, but `/work` executes phases sequentially — a Phase-3 caller
+  built against a not-yet-existing 4-arg overload is dead/failing until Phase 2.
 
 ## 🗂 Files to Edit
 
-- _none_ (no application-code change — confirming `concurrency.ts` and `ws-handler.ts` stay untouched
-  is itself an acceptance criterion, AC2).
+- `apps/web-platform/server/concurrency.ts` — add `workspaceId` param to `acquireSlot`; pass
+  `p_workspace_id` in the RPC call. (`touchSlot`/`releaseSlot` unchanged.)
+- `apps/web-platform/server/ws-handler.ts` — resolve `getUserWorkspace(userId)` once in the
+  `start_session` acquire block (fail-loud if null) and pass it to all 3 `acquireSlot` calls
+  (`1445`, `1479`, `1497`).
+- `apps/web-platform/test/conversation-archive-release-slot.integration.test.ts` — update the local
+  direct-RPC `acquireSlot` helper (`:130-147`) to pass `p_workspace_id: user.id` (contract-pair sweep,
+  AC8).
 
 ## 🆕 Files to Create
 
@@ -294,9 +369,10 @@ missed by the #4343/#4356 sweep, which filed no scope-out for the slots table).
 
 **Domains relevant:** Product (availability/first-impression), Engineering (DB contract-pair).
 
-This is an infrastructure/correctness fix (a missing column on a SECURITY DEFINER RPC INSERT). No new
-user-facing surface, no new UI component, no new flow — the fix *restores* the existing
-new-conversation flow that mig 059 silently broke. Product/UX Gate tier: **NONE** (no new
+This is an infrastructure/correctness fix (a missing column on a SECURITY DEFINER RPC INSERT, plus the
+TS callers that supply it). No new user-facing surface, no new UI component, no new flow — the fix
+*restores* the existing new-conversation flow that mig 059 silently broke. Product/UX Gate tier:
+**NONE** (no new
 user-facing page/flow/component; mechanical-escalation file scan finds no `components/**/*.tsx` /
 `app/**/page.tsx` in Files to Create). CPO sign-off is required at plan time per the
 `single-user incident` threshold (frontmatter), not because of a new UI surface.
@@ -321,9 +397,9 @@ failure_modes:
   - mode: workspace_id NOT NULL violation on acquire INSERT (this bug)
     detection: Sentry pg_code:23502 op:acquireSlot
     alert_route: Sentry level:error feature:concurrency
-  - mode: no solo workspace_members row for user (post-fix RAISE P0001)
-    detection: Sentry pg_code:P0001 op:acquireSlot (distinct from 23502)
-    alert_route: same Sentry routing — distinguishable by pg_code tag
+  - mode: getUserWorkspace(userId) null at acquire call site (post-fix fail-loud abort)
+    detection: Sentry "No workspace binding for user" op:acquireSlot (TS-side, no pg_code)
+    alert_route: same Sentry routing feature:concurrency — abort BEFORE the RPC, so never a NULL INSERT
   - mode: PostgREST RPC timeout returning {data:null,error:null}
     detection: concurrency.ts:115 "exhausted 3 retries" captureMessage
     alert_route: Sentry level:error feature:concurrency
@@ -339,13 +415,14 @@ discoverability_test:
 
 | Approach | Verdict |
 | --- | --- |
-| Populate `workspace_id = p_user_id` directly in the INSERT (skip the `workspace_members` SELECT) | Functionally correct for solo tenancy (equals the resolved value) but loses the fail-loud check and the multi-workspace-ready shape. Rejected in favor of the `workspace_members` resolution per the learning's "solo-canary invariant as derivation source" guidance. |
-| Add a `DEFAULT` to `workspace_id` in a new ALTER | Wrong: there is no sensible table-level default for a per-user workspace id; the value is request-scoped (the acquiring user's workspace). |
+| **CHOSEN: caller supplies `p_workspace_id` (4-arg RPC), resolved from `getUserWorkspace(userId)`** | Mirrors the conversation-insert pattern (`ws-handler.ts:808-819`) and the mig-061 byok precedent. The slot tracks the *active* workspace, identical to the conversation it gates. Correct for both solo and team workspaces today; no Future Work deferral needed. |
+| Derive `workspace_id = p_user_id` (or solo-canary `workspace_members`) **inside** the RPC (v1) | **Rejected.** Correct only for solo users — a member acting in a shared workspace would get a slot keyed to their personal workspace, diverging from the conversation's `workspace_id`, breaking the reaper join (`037:52-54`) and the RLS member-select (`059:227`). The deepen-plan precedent-diff (Phase 4.4) surfaced the conversation-insert pattern that makes the caller-supplied value the correct source. |
+| Add a `DEFAULT` to `workspace_id` in a new ALTER | Wrong: there is no sensible table-level default for a per-request workspace id; the value is request-scoped (the acquiring user's *active* workspace). |
 | Make `workspace_id` nullable again | Reverts a deliberate tenant-isolation invariant from mig 059; unacceptable. |
-| Fix in TS (`concurrency.ts` passes a 4th `p_workspace_id` arg) | Requires changing the RPC signature + the grants + the caller, larger blast radius, and the workspace resolution belongs server-side in the SECURITY DEFINER function (where `workspace_members` is reachable without RLS). Deferred to the multi-workspace Future Work item if/when an explicit workspace selection is needed. |
 
-## Future Work (deferred — track as issue if multi-workspace ships)
+## Future Work
 
-- Widen `acquire_conversation_slot` to accept an explicit `p_workspace_id` (4-arg signature) when
-  conversations can be assigned to non-personal workspaces. This changes the signature, grants, and TS
-  caller. File a tracking issue at that time; out of scope for this single-tenant fix.
+- None required for correctness. The 4-arg RPC already handles solo and team workspaces. If a future
+  flow needs to acquire a slot for a workspace the caller is not actively in, add an explicit
+  membership check inside the RPC (it is SECURITY DEFINER and can read `workspace_members` without
+  RLS) — but no such flow exists today, so this is not deferred work, just a note.
