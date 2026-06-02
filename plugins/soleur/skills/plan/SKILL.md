@@ -102,6 +102,8 @@ Refine the idea through collaborative dialogue using the **AskUserQuestion tool*
 
 Run BEFORE spawning any research (Phase 1) — research and downstream phases are expensive, and building a plan atop a stale premise wastes all of it. `brainstorm` Phase 1.1 does this validation when a brainstorm precedes plan, but `plan` is frequently entered directly (including the one-shot → plan path that skips brainstorm), so the cheap probe must also live here. This is distinct from Phase 1.7 reconciliation (which checks spec claims AFTER research returns) — this gate fires before research is even dispatched.
 
+This also covers your **own** option-bounding capability claims — not just cited references. Before asserting that a repo tool/skill/script "only does X" or "can't do Y" to bound the plan's options, grep/read it first or phrase it as a question (`hr-verify-repo-capability-claim-before-assert`).
+
 For every issue, blocker, dependency, or prior-art artifact the feature description **cites by reference**, verify it still holds:
 
 1. **Cited GitHub issues / PRs** (`#N`, `Closes #N`, "blocked by #N", "follow-up to #N"): run `gh issue view <N> --json state,title,closedByPullRequestsReferences` and `gh pr view <N> --json state,merged` where applicable. If a blocker is already `closed`/`merged`, or the issue this plan targets is already closed by a merged PR, **the premise is stale** — surface via **AskUserQuestion** ("Issue #N appears already resolved by PR #M. Re-scope, or close as done?") rather than planning against it.
@@ -303,7 +305,9 @@ For each specialist in `REQUIRED_SPECIALISTS`:
 
 **Step 2 — Product/UX Gate:**
 
-After Steps 1 and 1.5 complete, if Product domain was flagged as relevant, run the existing three-tier classification:
+**Mechanical UI-surface override (runs FIRST, before the subjective relevance check).** Scan the plan's `## Files to Create` AND `## Files to Edit` against the shared UI-surface term list + glob superset (`plugins/soleur/skills/brainstorm/references/ui-surface-terms.md`). If any path matches, **force Product-relevant = true AND tier = BLOCKING**, regardless of what the Step-1 semantic sweep concluded. This closes the silent-skip hole where a UI feature whose sweep judged Product NONE would skip the gate entirely (a UI feature must never reach `## NONE` by subjective judgment alone). A plan that only *discusses* UI but *implements* orchestration/docs (no UI-surface file in its Files lists) is exempt and may be NONE.
+
+After Steps 1 and 1.5 complete, if Product domain was flagged as relevant (by the sweep OR the mechanical override above), run the three-tier classification:
 
 - **BLOCKING**: Creates new user-facing pages, multi-step user flows, or significant new UI components — including modals, dialogs, confirmation flows, and interstitials with emotional or persuasive copy (e.g., signup flows, dashboards, onboarding wizards, chat interfaces, retention modals, cancel confirmation screens, prompts, banners)
 - **ADVISORY**: Modifies existing user-facing pages or components without adding new interactive surfaces (e.g., layout changes, form updates, adding fields to existing screens)
@@ -318,10 +322,10 @@ A plan that *discusses* UI concepts but *implements* orchestration changes (e.g.
 1. Run spec-flow-analyzer via Task with UI-flow-aware prompt: "Analyze the user flows in this plan. Map each screen, identify entry/exit points, dead ends, missing error states, and flows that drop the user. Focus on user journey completeness, not technical implementation."
 2. Run CPO via Task with scoped prompt: "Assess the product implications of this plan: {plan summary}. Cross-reference against brand-guide.md and constitution.md. Identify product strategy concerns, flow gaps, and positioning issues. Output a structured advisory — do not use AskUserQuestion."
 3. **Brainstorm carry-forward check.** Before invoking ux-design-lead, check the UX signal source. If the only UX validation is brainstorm carry-forward (brainstorm assessed the *idea*, not the *page design*), reject it: "Brainstorm validated the idea, not the page design. Proceeding to wireframes." Then continue to step 4. This check applies to BLOCKING tier only — ADVISORY and NONE tiers may still carry forward brainstorm UX findings.
-4. Invoke ux-design-lead via Task with scoped prompt: "Create wireframes for these user flows: {flow list}. Platform: desktop. Fidelity: wireframe." The agent has its own Pencil MCP prerequisite check — if Pencil is unavailable, the agent will stop with an installation message. If the Task returns without wireframes (agent self-stopped), write `Pencil available: no` in the Domain Review section, add `ux-design-lead` to `**Skipped specialists:**` with the user's justification, and display: "ux-design-lead skipped (Pencil MCP not available). Consider running wireframes manually before implementation."
+4. Invoke ux-design-lead via Task with scoped prompt: "Create wireframes for these user flows: {flow list}. Platform: desktop. Fidelity: wireframe." **On the one-shot/pipeline path (no brainstorm ran), plan Phase 2.5 is the SOLE PRODUCER of wireframes — it must GENERATE the `.pen`, not defer.** If the agent self-stops because Pencil is unavailable, do NOT record a skip: run `bash plugins/soleur/skills/pencil-setup/scripts/check_deps.sh --auto` (installs `@pencil.dev/cli`; auth via `PENCIL_CLI_KEY` from Doppler `soleur/dev`) and re-invoke. **Hard-block** (do not proceed, do not write to `Skipped specialists:`) only if auth is genuinely unsatisfiable or Node < 22.9.0, with a single instruction: "Provision PENCIL_CLI_KEY in Doppler soleur/dev (or `pencil login`), or install Node ≥ 22.9.0, then re-run plan." The two permitted outcomes are a committed `.pen` or this hard-block — `ux-design-lead` may never appear in `Skipped specialists:` for a UI feature (`wg-ui-feature-requires-pen-wireframe`). **Verifier asserts the invariant, not the proxy:** confirm the `.pen` exists on disk (non-empty) under `knowledge-base/product/design/{domain}/` and is referenced in the spec FRs — not "specialist reported done"; set `Pencil available: yes`.
 5. **Content Review Gate.** Check if any domain leader (CMO, CRO, CPO, or other) recommended a copywriter or content specialist in their Step 1 assessment. If yes: invoke copywriter agent via Task with prompt: "Review the planned page content for brand voice compliance, value proposition clarity, and messaging effectiveness. Reference brand-guide.md." If copywriter ran successfully, add `copywriter` to `**Agents invoked:**`. If user declines, add `copywriter` to `**Skipped specialists:**` with the user's reason. If copywriter agent fails (timeout, error), add `copywriter` to `**Skipped specialists:**` with note `(agent error — review manually)` and set `**Decision:** reviewed (partial)`. If no domain leader recommended a copywriter, skip this step silently. This gate also fires on ADVISORY tier when a domain leader recommended a copywriter — the recommendation is the signal, not the tier.
 6. Phase 3 SpecFlow is skipped (spec-flow-analyzer already ran in step 1 with UI-aware prompt — avoids duplicate invocation).
-7. If any agent in the pipeline fails (timeout, error), write partial findings with `Decision: reviewed (partial)`. **BLOCKING gate enforcement:** If the tier is BLOCKING and any required specialist (ux-design-lead, copywriter, spec-flow-analyzer) failed, do NOT silently proceed. Instead, use AskUserQuestion to present: "BLOCKING Product/UX Gate: [specialist] failed ([reason]). UX artifacts are required before implementation (AGENTS.md). How to proceed?" Options: (a) **Retry now** — re-invoke the failed agents, (b) **Skip with acknowledgment** — proceed without UX artifacts (user accepts the risk), (c) **Defer to next session** — save partial plan, run UX gate when agents are available. Record the user's choice in the Domain Review section. For ADVISORY tier or non-specialist agents, proceed silently with partial findings as before.
+7. If any agent in the pipeline fails (timeout, error), write partial findings with `Decision: reviewed (partial)`. **BLOCKING gate enforcement:** If the tier is BLOCKING and a required specialist failed, do NOT silently proceed. For **`ux-design-lead`** specifically there is NO "skip" option — it is a non-skippable producer (step 4): retry via `pencil-setup --auto`, or hard-block until Pencil is provisioned. For **copywriter / spec-flow-analyzer** failures, use AskUserQuestion: "BLOCKING Product/UX Gate: [specialist] failed ([reason]). How to proceed?" Options: (a) **Retry now**, (b) **Skip with acknowledgment** (copywriter/spec-flow only — never ux-design-lead), (c) **Defer to next session**. Record the choice in the Domain Review section. For ADVISORY tier or non-specialist agents, proceed silently with partial findings as before.
 
 **On ADVISORY:**
 
@@ -332,7 +336,7 @@ A plan that *discusses* UI concepts but *implements* orchestration changes (e.g.
 
 **On NONE:** Skip — no Product/UX Gate subsection needed beyond the domain sweep finding.
 
-If Product domain was NOT flagged as relevant in the sweep, skip Step 2 entirely.
+If Product domain was NOT flagged as relevant in the sweep **AND the mechanical UI-surface override did not fire**, skip Step 2 entirely. If the override fired, Step 2 runs at BLOCKING tier regardless of the sweep.
 
 **Writing the `## Domain Review` section:**
 
@@ -355,8 +359,8 @@ After both steps complete, write the `## Domain Review` section to the plan file
 **Tier:** blocking | advisory
 **Decision:** reviewed | reviewed (partial) | skipped | auto-accepted (pipeline)
 **Agents invoked:** spec-flow-analyzer, cpo, ux-design-lead, copywriter | [subset] | none
-**Skipped specialists:** ux-design-lead (<reason>), copywriter (<reason>) | none
-**Pencil available:** yes | no | N/A
+**Skipped specialists:** copywriter (<reason>) | none — `ux-design-lead` is NEVER valid here for a UI feature (non-skippable: `.pen` committed or hard-block per `wg-ui-feature-requires-pen-wireframe`)
+**Pencil available:** yes | hard-blocked (auth/Node) | N/A (no UI surface)
 
 #### Findings
 
