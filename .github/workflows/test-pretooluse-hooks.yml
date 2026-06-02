@@ -60,6 +60,14 @@ jobs:
 
       - name: Test hooks via claude-code-action
         uses: anthropics/claude-code-action@ab8b1e6471c519c585ba17e8ecaccc9d83043541 # v1.0.101
+        env:
+          # Test 6 asserts dry-run telemetry (kind=would_defer). The hook's
+          # hardcoded default is now 0 (enforce) as of PR #3800, so this test
+          # must PIN dry-run explicitly — without this pin Test 6 would run in
+          # enforce mode, emit defer_requested + permissionDecision=defer, and
+          # the line-186 assertion (would_defer) + the agent rubric would both
+          # report a false FAIL. The hook subprocess inherits this step env.
+          SOLEUR_DEFER_DRYRUN: "1"
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
@@ -127,8 +135,9 @@ jobs:
             follow-up if needed.
 
             ## Test 6: F2 prod-write defer gate (dry-run telemetry)
-            SOLEUR_DEFER_DRYRUN=1 is the hardcoded default. In dry-run mode the
-            hook emits kind=would_defer and ALLOWS the command. We test that
+            SOLEUR_DEFER_DRYRUN=1 is pinned for this test via the step env (the
+            hardcoded default is now 0 / enforce as of PR #3800). In dry-run mode
+            the hook emits kind=would_defer and ALLOWS the command. We test that
             the hook fires without blocking.
 
             Run: terraform apply -no-color
