@@ -3,6 +3,7 @@ title: "Soleur vs. Polsia: Two Architectures for Running a Company with AI"
 seoTitle: "Soleur vs. Polsia: Human-in-the-Loop vs. Autonomous AI"
 date: 2026-03-26
 description: "Polsia runs your company autonomously for $29/month. Soleur keeps the founder in the decision seat. A comparison of two CaaS architectures for solo founders."
+ogImage: "blog/og-soleur-vs-polsia.png"
 tags:
   - comparison
   - polsia

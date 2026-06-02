@@ -3,6 +3,7 @@ title: "Your AI Team Now Works From Your Actual Codebase"
 seoTitle: "Your AI Team Now Works From Your Actual Codebase | Soleur"
 date: 2026-03-29
 description: "Connect your GitHub repo at onboarding and every Soleur agent conversation starts with real project context. No blank workspaces, no lost context."
+ogImage: "blog/og-ai-team-from-your-codebase.png"
 tags:
   - product-update
   - github
