@@ -224,18 +224,7 @@ describe("ConversationsRail", () => {
     expect(localStorage.getItem("soleur:sidebar.chat-rail.collapsed")).toBe("1");
   });
 
-  it("toggles collapse via Cmd/Ctrl+B keyboard shortcut", async () => {
-    setRailHook([makeConversation({ id: "c1", title: "Row" })]);
-
-    const { ConversationsRail } = await import(
-      "@/components/chat/conversations-rail"
-    );
-    render(<ConversationsRail />);
-
-    fireEvent.keyDown(window, { key: "b", ctrlKey: true });
-    expect(localStorage.getItem("soleur:sidebar.chat-rail.collapsed")).toBe("1");
-
-    fireEvent.keyDown(window, { key: "b", ctrlKey: true });
-    expect(localStorage.getItem("soleur:sidebar.chat-rail.collapsed")).toBeNull();
-  });
+  // ⌘B is now owned solely by (dashboard)/layout.tsx (AC5); the conversations
+  // rail no longer registers its own keydown handler. ⌘B behavior is covered
+  // in dashboard-sidebar-collapse.test.tsx.
 });

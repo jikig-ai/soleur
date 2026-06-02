@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect } from "react";
 import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse";
 
 interface SettingsTab {
@@ -38,19 +37,9 @@ export function SettingsShell({
   const pathname = usePathname();
   const [settingsCollapsed, toggleSettingsCollapsed] = useSidebarCollapse("soleur:sidebar.settings.collapsed");
 
-  useEffect(() => {
-    function handleToggleShortcut(e: KeyboardEvent) {
-      if (!(e.metaKey || e.ctrlKey) || e.key !== "b") return;
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
-      if ((e.target as HTMLElement)?.isContentEditable) return;
-      if (!pathname.startsWith("/dashboard/settings")) return;
-      e.preventDefault();
-      toggleSettingsCollapsed();
-    }
-    document.addEventListener("keydown", handleToggleShortcut);
-    return () => document.removeEventListener("keydown", handleToggleShortcut);
-  }, [pathname, toggleSettingsCollapsed]);
+  // ⌘B is owned solely by (dashboard)/layout.tsx (AC5). The settings sub-nav
+  // no longer registers its own keydown handler; the collapse buttons below
+  // remain for click-driven collapse.
 
   return (
     <div className="flex min-h-full">

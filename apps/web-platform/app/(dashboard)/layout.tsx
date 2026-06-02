@@ -10,8 +10,7 @@ import { ConversationsRail } from "@/components/chat/conversations-rail";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { SignOutConfirmModal } from "@/components/auth/sign-out-confirm-modal";
 import { useSignOut } from "@/components/auth/use-sign-out";
-import { OrgSwitcherContainer } from "@/components/dashboard/org-switcher-container";
-import { LiveRepoBadge } from "@/components/dashboard/live-repo-badge";
+import { WorkspaceContextBand } from "@/components/dashboard/workspace-context-band";
 import { MembershipRevokedScreen } from "@/components/dashboard/membership-revoked-screen";
 import { NoApiKeyBanner } from "@/components/dashboard/no-api-key-banner";
 import { PendingInviteBannerRecovery } from "@/components/dashboard/pending-invite-banner-recovery";
@@ -154,7 +153,10 @@ export default function DashboardLayout({
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // Cmd/Ctrl+B toggles sidebar on non-KB, non-Settings routes
+  // Cmd/Ctrl+B toggles THE single nav rail (AC5). This is now the sole ⌘B
+  // owner across every section — the per-route handlers that previously lived
+  // in SettingsShell, useKbLayoutState, and ConversationsRail are removed, so
+  // there is exactly one keydown handler and exactly one rail it toggles.
   useEffect(() => {
     function handleToggleShortcut(e: KeyboardEvent) {
       if (!(e.metaKey || e.ctrlKey) || e.key !== "b") return;
@@ -162,21 +164,12 @@ export default function DashboardLayout({
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       if ((e.target as HTMLElement)?.isContentEditable) return;
-      // Only fire on routes that are NOT KB, Settings, or chat. ConversationsRail
-      // owns the keystroke on chat routes; SettingsShell owns it under
-      // /dashboard/settings — both have their own inner collapse state.
-      if (
-        pathname.startsWith("/dashboard/kb") ||
-        pathname.startsWith("/dashboard/settings") ||
-        pathname.startsWith("/dashboard/chat")
-      )
-        return;
       e.preventDefault();
       toggleCollapsed();
     }
     document.addEventListener("keydown", handleToggleShortcut);
     return () => document.removeEventListener("keydown", handleToggleShortcut);
-  }, [pathname, toggleCollapsed]);
+  }, [toggleCollapsed]);
 
   // Body scroll lock when drawer is open
   useEffect(() => {
@@ -274,20 +267,14 @@ export default function DashboardLayout({
           <ThemeToggle collapsed={collapsed} />
         </div>
 
-        {/* Org-switcher — AC-C: renders nothing for solo users (count <= 1).
-            Multi-org users see the chip + dropdown. Hidden when sidebar
-            collapsed (the chip's value is the workspace name; truncating to
-            an icon defeats the purpose). */}
-        {!collapsed && <OrgSwitcherContainer />}
-
-        {/* Live-repo badge — "Working on: owner/repo" for the ACTIVE workspace
-            (ADR-044, #4543). Poll-on-mount/focus; surfaces the J5 revocation
-            interstitial when access is lost. Hidden when collapsed. */}
-        {!collapsed && (
-          <div className="border-b border-soleur-border-default px-3 py-2">
-            <LiveRepoBadge />
-          </div>
-        )}
+        {/* Persistent workspace context band (ADR-047). Mounted OUTSIDE the
+            rail swap region and NEVER gated on `collapsed` — this fixes the
+            live bug where OrgSwitcherContainer + LiveRepoBadge unmounted on
+            collapse, leaving the active workspace ambiguous during a
+            tenant-sensitive action. The band is the SOLE render site for both
+            components (AC4b single-mount); it also carries the back chevron +
+            section title in drilled states. */}
+        <WorkspaceContextBand pathname={pathname} />
 
         {/* Navigation */}
         <nav className={`flex-1 space-y-1 pt-3 ${collapsed ? "px-1" : "px-3"}`}>

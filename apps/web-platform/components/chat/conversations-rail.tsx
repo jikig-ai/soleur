@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect } from "react";
+import { memo } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useConversations } from "@/hooks/use-conversations";
@@ -90,16 +90,9 @@ export function ConversationsRail() {
   const activeId = params?.conversationId;
   const [collapsed, toggle] = useSidebarCollapse(COLLAPSE_KEY);
 
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "b") {
-        e.preventDefault();
-        toggle();
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [toggle]);
+  // ⌘B is owned solely by (dashboard)/layout.tsx (AC5). The conversations rail
+  // no longer registers its own keydown handler; the collapse buttons below
+  // remain for click-driven collapse.
 
   if (collapsed) {
     return (

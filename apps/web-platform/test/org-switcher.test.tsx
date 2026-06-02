@@ -25,9 +25,16 @@ describe("OrgSwitcher", () => {
     vi.restoreAllMocks();
   });
 
-  it("AC-C: renders nothing when user belongs to only 1 organization", () => {
-    const { container } = render(<OrgSwitcher memberships={[JIKIGAI]} />);
-    expect(container).toBeEmptyDOMElement();
+  it("RQ7: a solo user (1 org) sees a NON-interactive identity chip with the workspace name, no switcher", () => {
+    render(<OrgSwitcher memberships={[JIKIGAI]} />);
+    // name visible for orientation
+    expect(screen.getByTestId("workspace-identity-static")).toHaveTextContent(
+      "jikigai",
+    );
+    // ...but no interactive switch affordance (nothing to switch to)
+    expect(
+      screen.queryByRole("button", { name: /switch workspace/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("AC-C: renders nothing when memberships list is empty", () => {

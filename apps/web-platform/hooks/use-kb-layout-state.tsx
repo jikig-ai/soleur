@@ -161,20 +161,9 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
     setKbCollapsed((prev) => !prev);
   }, []);
 
-  // Cmd+B / Ctrl+B toggles KB file tree sidebar (only on KB routes, not in inputs)
-  useEffect(() => {
-    function handleToggleShortcut(e: KeyboardEvent) {
-      if (!(e.metaKey || e.ctrlKey) || e.key !== "b") return;
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
-      if ((e.target as HTMLElement)?.isContentEditable) return;
-      if (!pathname.startsWith("/dashboard/kb")) return;
-      e.preventDefault();
-      toggleKbCollapsed();
-    }
-    document.addEventListener("keydown", handleToggleShortcut);
-    return () => document.removeEventListener("keydown", handleToggleShortcut);
-  }, [pathname, toggleKbCollapsed]);
+  // ⌘B is owned solely by (dashboard)/layout.tsx (AC5). The KB file tree no
+  // longer registers its own keydown handler; the in-tree collapse button
+  // (KbSidebarShell) remains for click-driven collapse.
 
   const isContentView = pathname !== "/dashboard/kb";
   const hasTreeContent = !!(tree?.children && tree.children.length > 0);

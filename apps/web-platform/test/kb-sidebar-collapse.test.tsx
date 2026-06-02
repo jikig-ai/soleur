@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 let mockPathname = "/dashboard/kb";
@@ -90,32 +90,9 @@ describe("KB sidebar collapse", () => {
     expect(screen.getByLabelText("Expand file tree")).toBeInTheDocument();
   });
 
-  it("Cmd+B toggles KB sidebar on /dashboard/kb routes", async () => {
-    render(<KbLayout><div>content</div></KbLayout>);
-    await screen.findByTestId("file-tree");
-    fireEvent.keyDown(document, { key: "b", metaKey: true });
-    expect(screen.getByLabelText("Expand file tree")).toBeInTheDocument();
-  });
-
-  it("Ctrl+B toggles KB sidebar", async () => {
-    render(<KbLayout><div>content</div></KbLayout>);
-    await screen.findByTestId("file-tree");
-    fireEvent.keyDown(document, { key: "b", ctrlKey: true });
-    expect(screen.getByLabelText("Expand file tree")).toBeInTheDocument();
-  });
-
-  it("ignores Cmd+B when focus is in an input", async () => {
-    mockPathname = "/dashboard/kb/somefile";
-    render(
-      <KbLayout>
-        <input data-testid="test-input" />
-      </KbLayout>,
-    );
-    await screen.findByTestId("file-tree");
-    const input = screen.getByTestId("test-input");
-    fireEvent.keyDown(input, { key: "b", metaKey: true, bubbles: true });
-    expect(screen.getByLabelText("Collapse file tree")).toBeInTheDocument();
-  });
+  // ⌘B is now owned solely by (dashboard)/layout.tsx (AC5); the KB file tree
+  // no longer registers its own keydown handler. ⌘B behavior is covered in
+  // dashboard-sidebar-collapse.test.tsx. Click-driven collapse (above) stays.
 
   it("preserves mobile class-swap behavior", async () => {
     mockPathname = "/dashboard/kb/somefile";
