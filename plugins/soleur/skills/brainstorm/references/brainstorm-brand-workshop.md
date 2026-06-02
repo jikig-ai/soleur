@@ -75,6 +75,43 @@
       Task ux-design-lead("Render representative mockups applying <new tokens> to: primary button (default/hover/disabled), card surface with text hierarchy, form input (default/focus/error), navigation bar, modal/dialog, and one error state. If both light and dark palettes exist, render both side-by-side. Output is a .pen file in knowledge-base/product/design/brand/<topic>-<YYYY-MM-DD>/ produced via Pencil MCP in headless mode — IDE/Desktop modes are blocked by step 4.5.0. Pencil is the founder's standard design surface and is the required primary path. The agent must NOT fall back to Playwright/HTML mockups; if the headless adapter fails mid-run, halt and surface the error to the founder. After PNG export, if `export_nodes` was called on the canvas root the output will include a uniform `#F2F2F2` canvas tail — either pass the smallest content-bounding nodeId to `export_nodes` instead of the root, OR post-process with a `#F2F2F2`-aware PIL crop. See `knowledge-base/project/learnings/2026-05-05-brand-mockup-export-and-routing.md` solution #2.")
       ```
 
+   a.1. **Commit the `.pen` source immediately after first save (recover-from-wipe safety).**
+
+      As soon as the ux-design-lead's first `save()` produces the `.pen` under
+      `knowledge-base/product/design/brand/<topic>-<YYYY-MM-DD>/`, `git add` + commit
+      it to the worktree branch **before** the review/iteration loop (step 4.5.b
+      onward) — so an iteration-cycle wipe (#3274: `open_document` silently
+      overwriting the source with empty state) is recoverable via
+      `git checkout -- <path>`. **Gate the commit on a non-collapsed save first**:
+      `stat -c %s <pen>` must be `> 64 bytes` (a 41-byte `{"version": …, "children": []}`
+      shell is a failed/empty save, not a baseline worth committing — committing it
+      defeats the recover-from-wipe purpose). If the `.pen` is `≤ 64 bytes`, halt and
+      surface the save failure instead of committing.
+
+      ```bash
+      pen=knowledge-base/product/design/brand/<topic>-<YYYY-MM-DD>/<topic>.pen
+      sz=$(stat -c %s "$pen")
+      if [[ "$sz" -le 64 ]]; then
+        echo "BLOCKED: $pen is only ${sz}B — first save did not produce a real document; not committing a wiped baseline." >&2
+      else
+        git add "$pen"
+        git commit -m "docs: commit design source <topic>.pen (recover-from-wipe safety)"
+      fi
+      ```
+
+      Before committing, confirm the `.pen` carries no realistic credential strings
+      in any wireframed token/input field — use obviously-fake placeholders
+      (`your-api-token-here`, `sk_test_example_key`) per the ux-design-lead
+      "Important Guidelines" (realistic `sk_live_…` patterns trip GitHub push
+      protection at workshop-end push, blocking the recovery commit's later push).
+
+      The committed `.pen` MUST live under `knowledge-base/product/design/` — never an
+      app tree like `apps/web-platform/design/` (the #3274 loss path). The reason is
+      **audit reachability**: `/soleur:ux-audit` scans only the canonical
+      `knowledge-base/product/design/` path. The risk this commit closes is the
+      workshop simply never committing the source, leaving an `open_document` wipe
+      unrecoverable.
+
    b. **Surface mockups to the founder** via AskUserQuestion with options: `Approve`, `Request changes`, `Reject`. Include the mockup file paths in the question body so the founder can open them.
 
    c. **If "Request changes":** capture the founder's feedback verbatim, hand back to brand-architect with the feedback, then re-run step 4.5 (mockup → review). Maximum 3 iterations before pausing for a fresh-context resume.
