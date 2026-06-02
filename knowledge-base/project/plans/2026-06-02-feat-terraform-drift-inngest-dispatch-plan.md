@@ -216,8 +216,9 @@ logs:
   where: "Inngest run logs (app container stdout, sentry-correlation middleware tags inngest.run_id/fn_id); GHA run logs for the terraform execution"
   retention: "Inngest/app-container stdout per host policy; GHA run logs per GitHub retention"
 discoverability_test:
-  command: "gh workflow run scheduled-terraform-drift.yml --ref main && gh run list --workflow=scheduled-terraform-drift.yml --limit 3"
-  expected_output: "A new queued/in-progress run appears (proves the workflow_dispatch path the Inngest function uses is live); the Inngest fire can be exercised via POST /api/internal/trigger-cron with event cron/terraform-drift.manual-trigger"
+  command: "gh run list --workflow=scheduled-terraform-drift.yml --limit 1 --json conclusion --jq '.[0].conclusion'"
+  expected_output: "success"
+  note: "Pre-merge, no-SSH, read-only (no side effect): proves the workflow the Inngest fn dispatches is live and its run history is queryable. Post-merge, a real dispatch can be exercised without waiting for 06:00/18:00 via POST /api/internal/trigger-cron with event cron/terraform-drift.manual-trigger; confirm the resulting run's event is workflow_dispatch (not schedule)."
 ```
 
 ## Implementation Phases
