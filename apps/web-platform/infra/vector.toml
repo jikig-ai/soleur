@@ -47,8 +47,14 @@ batch_size = 16
 # shipped to Better Stack — only the inngest CLI supervisor's systemd journald
 # (Source 1) was. cloud-init.yml + ci-deploy.sh now start the container with
 # `--log-driver journald`, so its stdout/stderr land in the host journal tagged
-# CONTAINER_NAME=soleur-web-platform (Docker's journald driver sets this field;
-# the canary container is `-canary` and is intentionally NOT matched here).
+# CONTAINER_NAME=soleur-web-platform (Docker's journald driver sets this field).
+# The canary container ALSO logs to journald (ci-deploy.sh) but is excluded here
+# as an implicit consequence of exact-value matching: systemd `include_matches`
+# is FIELD=value equality (sd_journal_add_match), not prefix/substring, so
+# `["soleur-web-platform"]` never matches `soleur-web-platform-canary`. Canary
+# journald coverage is intentionally local-only (docker logs), not warehoused —
+# do NOT widen this to a prefix/regex (would double Better Stack quota). A
+# parity fixture in vector-pii-scrub.test.sh pins the exclusion.
 #
 # NO `include_matches.PRIORITY` filter (deliberate — differs from Sources 1/2):
 # pino writes EVERY level to fd 1 (stdout) with no `destination` configured
@@ -64,8 +70,11 @@ batch_size = 16
 
 # ---------------- Filter: app container WARN+ (pino level >= 40) ----------------
 # Quota control (#4773 Vendor-tier reality check): the app container's stdout is
-# higher-volume than the supervisor journald (every HTTP request + cron INFO
-# line). Keep only pino WARN/ERROR/FATAL (level >= 40) so the INFO firehose does
+# higher-volume than the supervisor journald (cron INFO output + scattered
+# logger.info; there is no per-request pino-http logger, so this is not a
+# request-per-line firehose — the WARN+ cut is conservative headroom, not a
+# hard necessity). Keep only pino WARN/ERROR/FATAL (level >= 40) so the INFO
+# volume does
 # not blow the Better Stack quota; the cron FAILURE reason (non-zero exit stderr,
 # logged at error level) is the load-bearing signal here. The INFO-level
 # max-turns notice still reaches Sentry via SpawnResult.stdoutTail (PR-A) — this

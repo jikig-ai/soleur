@@ -331,6 +331,23 @@ run_filter_fixture "filter KEEPS pino ERROR (level 50 — cron nonzero exit)" \
   '{"message":"{\"level\":50,\"fn\":\"cron-growth-audit\",\"msg\":\"nonzero exit\"}"}' "true"
 run_filter_fixture "filter KEEPS non-JSON crash line (fd2 stack)" \
   '{"message":"Segmentation fault (core dumped)"}' "true"
+# Boundary + non-numeric-level edge cases (pin the >= 40 cut and the `?? 0`
+# default so a future off-by-one or to_int regression is caught):
+run_filter_fixture "filter DROPS pino just-below boundary (level 39)" \
+  '{"message":"{\"level\":39,\"msg\":\"just below warn\"}"}' "false"
+run_filter_fixture "filter DROPS JSON object missing level (?? 0 default)" \
+  '{"message":"{\"msg\":\"no level field\",\"fn\":\"cron-x\"}"}' "false"
+run_filter_fixture "filter KEEPS string-typed level (to_int parses \"40\")" \
+  '{"message":"{\"level\":\"40\",\"msg\":\"string level\"}"}' "true"
+
+# Canary-exclusion config pin (#4773): the source must use EXACT-value
+# include_matches on the production container name only. systemd journal
+# matching is FIELD=value equality, so this excludes `soleur-web-platform-canary`
+# (which also logs to journald via ci-deploy.sh). A future widen to a prefix /
+# regex would silently start ingesting canary lines and double Better Stack
+# quota — pin the exact single-element array so that change fails this gate.
+assert_grep "source pins exact production container name (no canary, no wildcard)" \
+  '^include_matches\.CONTAINER_NAME = \["soleur-web-platform"\]$'
 
 echo
 echo "=== Summary: $PASS passed, $FAIL failed ==="

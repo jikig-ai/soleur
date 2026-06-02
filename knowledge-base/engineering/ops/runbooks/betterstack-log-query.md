@@ -92,7 +92,20 @@ Two deliberate trade-offs:
   `extra.stdoutTail` (#4773 PR-A), alongside `extra.stderrTail`/`extra.exitCode`.
 - **Container log retention moved to journald.** Switching off `json-file`
   dropped its `max-size 10m/max-file 3` rotation; the container's `docker logs`
-  and retention are now governed by journald's `SystemMaxUse`.
+  and retention are now governed by journald — at its **default** `SystemMaxUse`
+  (min(10% of /var, 4 GB)) unless an explicit bound is provisioned. Explicitly
+  sizing `SystemMaxUse` + ensuring `Storage=persistent` (so the journal survives
+  reboot and the redirected container volume can't evict the supervisor/system
+  journal Sources 1/2 depend on) is tracked as a follow-up infra task — the
+  journald storage config predates #4773 and applies equally to the two
+  pre-existing journald sources.
+- **Rollout on existing hosts (non-load-bearing order).** PR-C is fully active
+  only after BOTH (a) an inngest-bootstrap deploy ships the new `vector.toml`,
+  AND (b) a web-platform deploy re-creates the `soleur-web-platform` container
+  with `--log-driver journald`. Either interleaving degrades gracefully: a
+  journald source with no matching lines is benign, and a journald-logging
+  container with no matching source just isn't shipped until the config lands.
+  No operator action beyond a normal deploy of both components.
 
 Two further blind spots surfaced by the cron-workspace ENOSPC incident
 (#4684/#4689): (a) the `_metrics` table stores **empty** `AggregateFunction`

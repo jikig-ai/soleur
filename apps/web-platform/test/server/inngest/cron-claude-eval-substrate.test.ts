@@ -10,8 +10,7 @@
 // because it `vi.mock`s node:child_process, which hoists file-wide and would
 // clobber the real-spawn calls below).
 
-import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -113,7 +112,7 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
     chmodSync(binPath, 0o755);
     process.env.CLAUDE_BIN = binPath;
     const spawnCwd = join(dir, "repo");
-    spawnSync("mkdir", ["-p", spawnCwd]);
+    mkdirSync(spawnCwd, { recursive: true });
     return spawnCwd;
   }
 
