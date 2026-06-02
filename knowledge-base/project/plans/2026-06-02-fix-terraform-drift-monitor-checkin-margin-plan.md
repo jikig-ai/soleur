@@ -237,8 +237,9 @@ logs:
   where: "GitHub Actions run logs for apply-sentry-infra.yml; Sentry monitor check-in history"
   retention: "GitHub Actions default (90 days); Sentry per-plan retention"
 discoverability_test:
-  command: "gh run list --workflow=apply-sentry-infra.yml --limit 1 --json conclusion (post-merge) AND read the applied margin via the Sentry monitors API with SENTRY_AUTH_TOKEN"
-  expected_output: "apply run conclusion=success; monitor config.checkin_margin_minutes == 480"
+  command: "gh run list --workflow=apply-sentry-infra.yml --limit 1 --json conclusion --jq '.[0].conclusion'"
+  expected_output: "success"
+  note: "Pre-merge, no-SSH: proves the apply pipeline that will roll out THIS margin change is healthy and discoverable. Post-merge, the same workflow re-runs on the merge commit and a Sentry monitors API GET (with SENTRY_AUTH_TOKEN) confirms checkin_margin_minutes == 480 — see Acceptance Criteria > Post-merge."
 ```
 
 ## Acceptance Criteria
