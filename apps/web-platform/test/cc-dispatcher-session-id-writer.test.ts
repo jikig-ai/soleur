@@ -57,6 +57,19 @@ vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => ({
     from: (table: string) => {
       if (table === "messages") return { insert: mockMessagesInsert };
+      // mig 059: cc-dispatcher reads the parent conversation's workspace_id
+      // before the messages INSERT; satisfy that read.
+      if (table === "conversations")
+        return {
+          select: () => ({
+            eq: () => ({
+              single: async () => ({
+                data: { workspace_id: "ws-test" },
+                error: null,
+              }),
+            }),
+          }),
+        };
       throw new Error(`unexpected table: ${table}`);
     },
     storage: { from: () => ({ download: vi.fn() }) },
@@ -68,6 +81,17 @@ vi.mock("@/lib/supabase/tenant", () => ({
   getFreshTenantClient: vi.fn(async () => ({
     from: (table: string) => {
       if (table === "messages") return { insert: mockMessagesInsert };
+      if (table === "conversations")
+        return {
+          select: () => ({
+            eq: () => ({
+              single: async () => ({
+                data: { workspace_id: "ws-test" },
+                error: null,
+              }),
+            }),
+          }),
+        };
       throw new Error(`unexpected table: ${table}`);
     },
   })),

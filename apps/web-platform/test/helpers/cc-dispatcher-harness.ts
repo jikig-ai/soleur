@@ -107,15 +107,39 @@ export async function kbDocumentResolverFactory(opts: {
   };
 }
 
+/**
+ * Build a `conversations` table mock satisfying the workspace_id read added by
+ * the messages-workspace_id RLS fix:
+ *   `tenant.from("conversations").select("workspace_id").eq("id", id).single()`
+ * Returns `{ data: { workspace_id }, error: null }` so the dispatcher has a
+ * value to thread into the `messages` INSERT. The workspace_id is configurable
+ * (default `"ws-test"`) so per-path tests can assert equality.
+ */
+function conversationsWorkspaceIdChain(workspaceId: string) {
+  return {
+    select: () => ({
+      eq: () => ({
+        single: async () => ({ data: { workspace_id: workspaceId }, error: null }),
+      }),
+    }),
+  };
+}
+
 export function supabaseServiceFactory(opts: {
   mockMessagesInsert: Mock;
+  /** workspace_id returned by the conversations read (default "ws-test"). */
+  mockConversationWorkspaceId?: string;
 }): Record<string, unknown> {
+  const workspaceId = opts.mockConversationWorkspaceId ?? "ws-test";
   return {
     serverUrl: () => "https://test.supabase.co",
     createServiceClient: () => ({
       from: (table: string) => {
         if (table === "messages") {
           return { insert: opts.mockMessagesInsert };
+        }
+        if (table === "conversations") {
+          return conversationsWorkspaceIdChain(workspaceId);
         }
         throw new Error(`unexpected table in cc-dispatcher harness: ${table}`);
       },
@@ -137,12 +161,18 @@ export function supabaseServiceFactory(opts: {
 export function supabaseTenantFactory(opts: {
   mockMessagesInsert: Mock;
   mockGetMyRevocationStatus?: Mock;
+  /** workspace_id returned by the conversations read (default "ws-test"). */
+  mockConversationWorkspaceId?: string;
 }): Record<string, unknown> {
+  const workspaceId = opts.mockConversationWorkspaceId ?? "ws-test";
   return {
     getFreshTenantClient: vi.fn(async () => ({
       from: (table: string) => {
         if (table === "messages") {
           return { insert: opts.mockMessagesInsert };
+        }
+        if (table === "conversations") {
+          return conversationsWorkspaceIdChain(workspaceId);
         }
         throw new Error(`unexpected table in cc-dispatcher harness: ${table}`);
       },
