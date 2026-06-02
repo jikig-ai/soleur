@@ -10,6 +10,37 @@ status: planned
 
 # feat: Migrate scheduled-terraform-drift from GHA `schedule:` to Inngest-dispatched trigger ✨
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-02
+**Sections enhanced:** Research Reconciliation, Key Design Decision, Acceptance Criteria, Sharp Edges
+
+### Key Improvements (deepen pass, all live-verified)
+1. **Octokit contract verified against the PINNED SDK.** `@octokit/openapi-types/types.d.ts:85087`
+   (installed under `apps/web-platform/node_modules`): *"The ID of the workflow. **You can also pass
+   the workflow file name as a string.**"* → AC1's `workflow_id: "scheduled-terraform-drift.yml"` is
+   correct; no numeric-ID lookup needed. `@octokit/core` is installed (weekly-analytics uses it).
+2. **Precedent-diff / scheduled-work gate:** 33 Inngest cron functions exist → Inngest is the
+   canonical scheduled-work substrate per ADR-033. The dispatch-hybrid (Inngest schedules, GHA
+   executes terraform) is the correct shape; the in-process-terraform alternative is correctly a
+   HARD NON-GOAL.
+3. **Premise validation (live):** PR #4772 is MERGED with the cited title; commit `9e88d61e` is an
+   ancestor of `origin/main`. The 480-margin this PR tightens is real and current.
+4. **Prerequisite blocker CLEARED (live):** `github-app-manifest.json:19` grants `actions: write`,
+   parity-tested at `github-app-manifest-parity.test.ts:62`. No app-permission widening; no PAT.
+
+### New Considerations Discovered
+- The new dispatcher should define **no `SENTRY_MONITOR_SLUG`** (Design A) — this is the only place
+  the PR diverges from the unanimous slug-per-cron convention, but it passes every
+  `function-registry-count.test.ts` guard cleanly (guards c/d/c2 skip slug-less files). Flagged for
+  plan-review/deepen adjudication; Design B (own monitor) documented as the convention-aligned
+  fallback.
+- The manual-trigger allowlist is **derived** from `EXPECTED_CRON_FUNCTIONS` — adding the manifest
+  entry auto-registers `cron/terraform-drift.manual-trigger`; no second list to edit. This also
+  gives a zero-wait post-merge verification path (AC12) via `POST /api/internal/trigger-cron`.
+
+# feat: Migrate scheduled-terraform-drift from GHA `schedule:` to Inngest-dispatched trigger ✨
+
 ## Overview
 
 `scheduled-terraform-drift` is the last hourly/twice-daily cron still fired by a GitHub
@@ -309,6 +340,38 @@ None — checked after the Files-to-Edit list was finalized. (Run `gh issue list
 - Dispatch throws → handler reports to Sentry via `reportSilentFallback` (token redacted) → returns `{ ok: false }`; no unhandled rejection.
 - `function-registry-count.test.ts` guards (a)/(b)/(e) all green with the new file + bumped count.
 - The new cron defines NO `SENTRY_MONITOR_SLUG` → guards (c)/(d)/(c2) skip it; no tf monitor required (Design A).
+
+## Research Insights (deepen pass — live-verified 2026-06-02)
+
+**Octokit workflow_dispatch contract (load-bearing runtime shape):**
+- `@octokit/openapi-types/types.d.ts:85087` (pinned, under `apps/web-platform/node_modules`):
+  `/** @description The ID of the workflow. You can also pass the workflow file name as a string. */`
+  → passing `workflow_id: "scheduled-terraform-drift.yml"` is supported; the cron does NOT need to
+  resolve a numeric workflow ID first.
+- `@octokit/core` is installed; `cron-weekly-analytics.ts:265-266` is the canonical in-cron Octokit
+  pattern (`const { Octokit } = await import("@octokit/core"); new Octokit({ auth: token })`).
+- Reference implementation sketch (Phase 1):
+  ```ts
+  await step.run("dispatch-workflow", async () => {
+    const { Octokit } = await import("@octokit/core");
+    const octokit = new Octokit({ auth: installationToken });
+    await octokit.request(
+      "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
+      { owner: REPO_OWNER, repo: REPO_NAME, workflow_id: "scheduled-terraform-drift.yml", ref: "main" },
+    );
+  });
+  ```
+
+**Precedent-diff (scheduled-work pattern):** 33 `cron-*.ts` Inngest functions exist → Inngest is the
+canonical scheduling substrate (ADR-033). No `cron-*.ts` currently calls `workflow_dispatch` — this
+is the FIRST GHA-dispatch-from-Inngest-cron pattern (weekly-analytics dispatches via `inngest.send()`
+cascade + Octokit-for-PR, not workflow_dispatch). The pattern is novel in the cron set but composes
+existing primitives (`mintInstallationToken` + Octokit request); flagged for reviewer scrutiny.
+
+**Token lifetime:** one API call → a short `TOKEN_MIN_LIFETIME_MS` suffices. weekly-analytics uses
+`15 * 60 * 1000` (it then clones + pushes); a dispatch-only cron can use that or smaller. The mint
+path (`mintInstallationToken` → `createProbeOctokit` → `generateInstallationToken`) returns a token
+with the App's full installation scope, which already includes `actions: write`.
 
 ## Sharp Edges
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder
