@@ -311,6 +311,9 @@ export async function cronCommunityMonitorHandler({
         label: SENTRY_MONITOR_SLUG,
         runStartedAt,
         cronName: "cron-community-monitor",
+        stderrTail: spawnResult.stderrTail,
+        exitCode: spawnResult.exitCode,
+        stdoutTail: spawnResult.stdoutTail,
       }),
     );
     await step.run("sentry-heartbeat", async () => {

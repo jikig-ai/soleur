@@ -75,6 +75,16 @@ describe("output-aware heartbeat wiring (always-create producers)", () => {
       // O), which producers DO contain — see the toContain("resolveOutputAwareOk(")
       // assertion above.
       expect(src).not.toContain("ok: spawnResult.ok");
+
+      // #4773 — the diagnostic triple (exitCode + stderrTail + stdoutTail) must
+      // be threaded from the SpawnResult into resolveOutputAwareOk, or the
+      // scheduled-output-missing Sentry extra loses the only off-host-visible
+      // failure reason (app stdout/stderr are not shipped to Better Stack). A
+      // revert of just the threading would otherwise pass the whole suite — this
+      // is the same un-wiring-guard rationale as `ok: heartbeatOk` above.
+      expect(src).toContain("stderrTail: spawnResult.stderrTail");
+      expect(src).toContain("exitCode: spawnResult.exitCode");
+      expect(src).toContain("stdoutTail: spawnResult.stdoutTail");
     },
   );
 

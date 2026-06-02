@@ -251,6 +251,9 @@ export async function cronGrowthExecutionHandler({
         label: SENTRY_MONITOR_SLUG,
         runStartedAt,
         cronName: "cron-growth-execution",
+        stderrTail: spawnResult.stderrTail,
+        exitCode: spawnResult.exitCode,
+        stdoutTail: spawnResult.stdoutTail,
       }),
     );
     await step.run("sentry-heartbeat", async () => {

@@ -214,6 +214,9 @@ export async function cronGrowthAuditHandler({
         label: SENTRY_MONITOR_SLUG,
         runStartedAt,
         cronName: "cron-growth-audit",
+        stderrTail: spawnResult.stderrTail,
+        exitCode: spawnResult.exitCode,
+        stdoutTail: spawnResult.stdoutTail,
       }),
     );
     await step.run("sentry-heartbeat", async () => {
