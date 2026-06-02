@@ -162,6 +162,7 @@ export const MessageBubble = memo(function MessageBubble({
         )}
 
         <div
+          data-testid="message-bubble-card"
           className={`relative min-w-0 rounded-xl px-4 py-3 text-sm leading-relaxed ${
             isUser
               ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
