@@ -15,6 +15,44 @@ related_prs: [4831, 4838, 4848, 4824, 3263, 3419, 3344]
 
 # Fix Concierge prefill-400 on resume + tool-approval regression + status-box wrap
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-03
+
+**Sections enhanced:** TL;DR root-cause, Phase 2 (SDK-grounded `dir` semantics), Premise
+Validation (PR-state verification), Risks (precedent diff), Phase 4.9 determination.
+
+**Research method:** Direct code + installed-SDK grounding (the deepen pipeline runs inside a
+Task subagent so per-section sub-agents could not be fanned out; all claims were instead
+verified against `node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts` and `gh` live state).
+
+### Key Improvements
+1. **SDK-grounded false-negative root cause.** `GetSessionMessagesOptions.dir` is documented
+   (`sdk.d.ts:524`) as: *"Project directory to find the session in. If omitted, searches all
+   projects."* The SDK persists/looks-up sessions under `~/.claude/projects/<sanitized-cwd>/`
+   (`sdk.d.ts:3780`, `cwd` defaults to `process.cwd()` at `:876`). So passing a `dir` that does
+   not byte-match the SDK's sanitized-cwd project dir makes `getSessionMessages` return `[]`
+   (false negative). Passing a *wrong* `dir` is strictly worse than omitting it — omission falls
+   back to all-projects search. This sharpens Phase 2b: the guard's `dir` must equal the SDK
+   `cwd` exactly, or the guard should omit `dir` and search all projects.
+2. **SessionMessage union is closed.** `SessionMessage.type` is exactly `'user' | 'assistant'`
+   (`sdk.d.ts:2564`) in the installed version — the guard's positive-match (`=== "assistant"`)
+   is exhaustive today; no `system`/`tool_result` variant exists to leak through.
+3. **All cited PRs verified MERGED/CLOSED live** (see Premise Validation) — no stale citation.
+
+### New Considerations Discovered
+- **Omit-`dir` is a candidate fix.** Because omitting `dir` searches all projects, the cheapest
+  robust fix for the false-negative may be to drop the `dir` argument entirely on the guard's
+  probe (the `sessionId` is globally unique, so an all-projects search still finds the right
+  session) rather than chase cwd/dir byte-equality. Weigh both at /work Phase 2b; prefer the
+  one with the smaller blast radius and an explicit test.
+- **Phase 4.9 (UI-wireframe halt) determination:** Regression 2 is a *style tweak with no
+  structural/layout change* — explicitly EXCLUDED from the wireframe requirement per
+  `plugins/soleur/skills/brainstorm/references/ui-surface-terms.md` ("Pure copy or style tweaks
+  with no structural/layout change"). No `.pen` is required; `ux-design-lead` is correctly NOT
+  in `Skipped specialists:` because the ADVISORY tier (existing component, CSS-only) does not
+  invoke it. Visual verification is via Playwright screenshots at /work (AC6).
+
 ## TL;DR
 
 Two regressions in the web Dashboard chat/Concierge flow after the chat-persistence
@@ -94,6 +132,16 @@ Checked (all on the worktree HEAD; today is 2026-06-02):
   persistence-interaction** regression, not a logic edit to those files. Verified via `git log`.
 - **FLAG_CC_SOLEUR_GO retired** in `#3270` — cc-soleur-go runs unconditionally
   (ws-handler.ts:1316). The Concierge always uses `dispatchSoleurGo`. Verified.
+
+**Live PR/issue state verification (deepen pass, `gh` on 2026-06-03):**
+- `#4831` MERGED — "fix(chat): populate messages.workspace_id on interactive INSERTs …"
+- `#4838` MERGED — "fix(chat): align unified input box + apply ChatGPT-style box …"
+- `#4848` MERGED — "fix(chat): set messages.template_id on interactive INSERTs (2nd NOT-NULL layer)"
+- `#4824` MERGED — "feat(byok): operator Claude Code subscription oauth_token credential"
+- `#3263` MERGED — "fix(cc-concierge): drop resume when persisted session ends with assistant (#3250)"
+- `#3344` CLOSED (issue) — "chore(safe-bash): widen cc-path safe-bash allowlist for KB exploration parity"
+- `#3270` CLOSED — "chore: remove FLAG_CC_SOLEUR_GO (always-on in prod and dev)"
+- `#3338` MERGED — the Bash-routes-through-canUseTool change on the cc-path.
 
 No stale premise blocks the plan. The plan shape is **fix a regressed guard + a UI wrap**,
 not build-from-scratch.
@@ -175,11 +223,19 @@ Two candidate fixes; choose at /work based on Phase 1 evidence (prefer the small
   message — same recovery as the assistant-terminated branch), keeping the distinct
   `prefill-guard-empty-history` warn op for observability. Verify against the prior plan's
   "empty-history short-circuit refinement" note before flipping polarity.
-- **2b (dir correctness).** If Phase 1 proves the `dir`/`cwd` divergence, fix the
+- **2b (dir correctness).** If Phase 1 proves the `dir`/`cwd` divergence, EITHER (i) fix the
   `workspacePath` threaded into `applyPrefillGuard` to equal `buildAgentQueryOptions.cwd`
-  exactly on both call sites (cc-dispatcher.ts:959, agent-runner.ts:1722). Add a drift-guard
-  assertion in `agent-runner-query-options.test.ts` that the guard's `dir` and the SDK `cwd`
-  are sourced from the same value.
+  exactly on both call sites (cc-dispatcher.ts:959, agent-runner.ts:1722), OR (ii) **drop the
+  `dir` argument from the guard's `getSessionMessages` probe** so it searches all projects
+  (`sdk.d.ts:524`: "If omitted, searches all projects") — the `resumeSessionId` is globally
+  unique, so an all-projects search still resolves the correct session and is immune to
+  cwd-sanitization drift. (ii) is the smaller-blast-radius fix if cwd↔dir equality cannot be
+  cheaply guaranteed. Add a drift-guard assertion in `agent-runner-query-options.test.ts` that
+  the guard's `dir` and the SDK `cwd` are sourced from the same value (for fix (i)) OR a test
+  that the guard resolves the session without a `dir` (for fix (ii)).
+  SDK grounding: `getSessionMessages(_sessionId, { dir?, limit?, offset? })` at `sdk.d.ts:518,
+  523-528`; `cwd` defaults to `process.cwd()` and sessions persist under
+  `~/.claude/projects/<sanitized-cwd>/` (`sdk.d.ts:876, 3780`).
 - Keep the positive-match polarity (`last.type === "assistant"`) — do not regress to a
   negative match.
 
@@ -273,6 +329,14 @@ Regression 2 is a non-wrapping/width tweak to the existing Concierge status chip
 Visual verification via Playwright screenshots is required at /work (both routing-chip and
 tool_use states). The "Routing to the right experts..." copy is unchanged (no copywriter gate).
 
+**Wireframe gate (deepen-plan Phase 4.9) determination:** SKIP — Regression 2 is a *style
+tweak with no structural/layout change*, explicitly EXCLUDED from the wireframe requirement per
+`plugins/soleur/skills/brainstorm/references/ui-surface-terms.md` ("## Excluded … Pure copy or
+style tweaks with no structural/layout change"). The CSS-only `whitespace-nowrap`/`w-fit` edit
+adds no new component file, page, layout, modal, or flow. No `.pen` is required; `ux-design-lead`
+is therefore NOT a skipped specialist (it is not invoked at ADVISORY tier for an existing-component
+style change). Visual proof is the Playwright screenshot in AC6.
+
 ## Infrastructure (IaC)
 
 Skip — no new infrastructure, server, service, secret, vendor, or persistent runtime process.
@@ -345,7 +409,19 @@ discoverability_test:
   confused-deputy surface.** Mitigation: Phase 3 explicitly forbids loosening the allowlist;
   "restore auto-approval" = restore the batched-approval cache hit-rate, not the regex.
 - **R3 — Agent SDK `getSessionMessages` surface drift.** Mitigation: pinned via existing guard
-  tests; `dir`/`cwd` invariant test (AC2) catches a cwd-encoding change.
+  tests; `dir`/`cwd` invariant test (AC2) catches a cwd-encoding change. Verified against
+  installed SDK: `getSessionMessages` at `sdk.d.ts:518`; `SessionMessage.type` is the closed
+  union `'user' | 'assistant'` at `sdk.d.ts:2564` (positive-match polarity is exhaustive today).
+
+### Precedent diff (guard pattern)
+The prefill guard is NOT a novel pattern — it is the existing `#3250`/`#3263` remediation
+(plan `2026-05-05-fix-cc-concierge-prefill-on-resume-plan.md`, code in
+`agent-prefill-guard.ts`). This plan extends/repairs it; it does NOT introduce a new SQL/RPC/
+lock/atomic-write primitive (no `SECURITY DEFINER`, no migration, no connection-pool tuning).
+The precedent to diff against is the guard's own empty-history branch (lines 217-232) and the
+two call sites (cc-dispatcher.ts:959, agent-runner.ts:1722) — keep the path-sanitized Sentry
+mirror (`sanitizeProbeError`) and the positive-match polarity. No novel-pattern scrutiny needed
+beyond the false-negative repair.
 - **R4 — `whitespace-nowrap` on the wrong element could clip long status labels off-screen.**
   Mitigation: scope to the status chip + header only; keep the bubble's `max-w-[90%]` cap so a
   pathologically long label still wraps at the cap; Playwright verify both states.
