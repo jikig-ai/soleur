@@ -96,13 +96,20 @@ if [[ -e "${KB_ROOT}/${SEGMENT}" ]]; then
 fi
 
 # NEW unsanctioned top-level entry → advisory ask.
-emit_incident kb-domain-allowlist-guard ask \
+# emit_incident's event_type enum is {deny, bypass, applied, warn} (lib/incidents.sh);
+# `warn` is the advisory/non-blocking class (the harness-facing decision below is
+# still "ask"). `ask` is NOT a telemetry event_type and would be dropped from
+# the aggregator's fire_count.
+emit_incident kb-domain-allowlist-guard warn \
   "New top-level knowledge-base entry outside sanctioned domain set" "$TARGET"
-jq -n --arg seg "$SEGMENT" --arg target "$TARGET" '{
+# Reason-string dir/file lists are derived from the arrays above (single source of
+# truth) so they cannot drift from SANCTIONED_DIRS/SANCTIONED_FILES.
+jq -n --arg seg "$SEGMENT" --arg target "$TARGET" \
+      --arg dirs "${SANCTIONED_DIRS[*]}" --arg files "${SANCTIONED_FILES[*]}" '{
   hookSpecificOutput: {
     hookEventName: "PreToolUse",
     permissionDecision: "ask",
-    permissionDecisionReason: ("ADVISORY: kb-domain-allowlist-guard — this write introduces a NEW top-level entry under knowledge-base/ (`" + $seg + "`) that is not in the sanctioned domain set.\n\nTarget: " + $target + "\n\nSanctioned top-level dirs: engineering finance legal marketing operations product project sales support\nSanctioned top-level files: INDEX.md kb-categories.txt kb-tags.txt\n\nIf this is intentional, confirm to proceed AND add the domain to .claude/hooks/kb-domain-allowlist-guard.sh + follow plugins/soleur/AGENTS.md \"Adding a New Domain\". Otherwise, place the artifact under an existing domain.")
+    permissionDecisionReason: ("ADVISORY: kb-domain-allowlist-guard — this write introduces a NEW top-level entry under knowledge-base/ (`" + $seg + "`) that is not in the sanctioned domain set.\n\nTarget: " + $target + "\n\nSanctioned top-level dirs: " + $dirs + "\nSanctioned top-level files: " + $files + "\n\nIf this is intentional, confirm to proceed AND add the domain to .claude/hooks/kb-domain-allowlist-guard.sh + follow plugins/soleur/AGENTS.md \"Adding a New Domain\". Otherwise, place the artifact under an existing domain.")
   }
 }'
 exit 0

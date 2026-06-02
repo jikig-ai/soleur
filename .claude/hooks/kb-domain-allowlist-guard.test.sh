@@ -36,8 +36,10 @@ echo "T2: re-adding security/ → ask"
 out=$(invoke_write "knowledge-base/security/skill-overrides/x.md")
 [[ "$(decision_of "$out")" == "ask" ]] && pass "ask on re-added security/" || fail "out=$out"
 
-# T3 — Write INTO the relocated, on-disk engineering/security path → pass-through.
-echo "T3: write into existing engineering/security/skill-overrides → pass-through"
+# T3 — Sanctioned domain (engineering) short-circuit → pass-through, even for a
+# nested security/ subpath. (This passes via the SANCTIONED_DIRS check, NOT the
+# on-disk-existence branch — that branch is covered by T10.)
+echo "T3: write into sanctioned engineering domain (nested security/) → pass-through"
 out=$(invoke_write "$TMP_KB/knowledge-base/engineering/security/skill-overrides/2026-06-02-foo.md")
 [[ -z "$(decision_of "$out")" ]] && pass "no decision (sanctioned engineering domain)" || fail "out=$out"
 
@@ -70,6 +72,16 @@ out=$(invoke_bash 'mkdir -p knowledge-base/observability')
 echo "T9: empty tool_input → pass-through"
 out=$(printf '{"tool_input":{}}' | bash "$HOOK")
 [[ -z "$(decision_of "$out")" ]] && pass "no-op on empty tool_input" || fail "out=$out"
+
+# T10 — Unsanctioned segment that ALREADY EXISTS on disk → pass-through.
+# Exercises the on-disk-existence branch (guard.sh) that T1-T9 never reach:
+# a previously-acknowledged (but not-yet-allowlisted) domain must stop nagging.
+# `observability` is NOT in SANCTIONED_DIRS, so the only thing that can produce a
+# pass here is the existence check resolving against CLAUDE_PROJECT_DIR.
+echo "T10: unsanctioned-but-on-disk segment → pass-through (existence branch)"
+mkdir -p "$TMP_KB/knowledge-base/observability"
+out=$(invoke_write "knowledge-base/observability/foo.md")
+[[ -z "$(decision_of "$out")" ]] && pass "no decision (segment exists on disk)" || fail "out=$out"
 
 echo
 echo "Results: $PASS passed, $FAIL failed"

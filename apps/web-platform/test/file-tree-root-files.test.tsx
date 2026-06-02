@@ -114,6 +114,11 @@ describe("FileTree root-level file rendering", () => {
     expect(link.getAttribute("href")).toBe("/dashboard/kb/kb-tags.txt");
     // Still a file: no directory expand toggle.
     expect(container.querySelector("[aria-expanded]")).toBeNull();
+    // Positively confirm this IS the isAttachment=true case (edit affordances
+    // present) — so the discriminator above ("is a file" = <Link>/no-aria-expanded)
+    // is proven robust AGAINST edit-button presence, not vacuously true.
+    const editItem = link.closest("li")!;
+    expect(editItem.querySelector('[aria-label*="elete"]')).toBeTruthy();
   });
 
   it("still renders a root-level directory as an expandable TreeItem", () => {
