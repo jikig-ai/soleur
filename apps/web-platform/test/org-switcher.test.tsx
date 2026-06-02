@@ -83,6 +83,18 @@ describe("OrgSwitcher", () => {
     expect(onSwitch).not.toHaveBeenCalled();
   });
 
+  it("AC4: dropdown menu is left-anchored (no left-clip classes)", () => {
+    render(<OrgSwitcher memberships={[JIKIGAI, ACME]} />);
+    fireEvent.click(screen.getByRole("button", { name: /switch workspace/i }));
+    const menu = screen.getByRole("menu");
+    // The clip-prone centered pattern must be gone...
+    expect(menu.className).not.toContain("left-1/2");
+    expect(menu.className).not.toContain("-translate-x-1/2");
+    // ...replaced by the verified left-anchor precedent.
+    expect(menu.className).toContain("left-0");
+    expect(menu.className).toContain("top-full");
+  });
+
   // AC7 note: the switcher renders whatever organizationName the resolver
   // supplies (covered by the render tests above). The "Untitled" fallback is
   // owned by the resolver, NOT this component — that arm is tested directly in
