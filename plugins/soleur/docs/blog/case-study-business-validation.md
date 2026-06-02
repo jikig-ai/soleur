@@ -2,6 +2,7 @@
 title: "Running a Business Validation Workshop With AI Gates"
 date: 2026-03-10
 description: "A technical founder cannot tell if the market needs their product. A 6-gate AI validation workshop produced a PIVOT verdict that changed the project direction."
+ogImage: "blog/og-case-study-business-validation.png"
 tags:
   - case-study
   - product
