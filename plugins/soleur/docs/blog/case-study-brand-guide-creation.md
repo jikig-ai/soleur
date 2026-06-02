@@ -3,6 +3,7 @@ title: "From Scattered Positioning to a Full Brand Guide in Two Sessions"
 seoTitle: "From Scattered Positioning to a Full Brand Guide"
 date: 2026-03-10
 description: "An interactive brand workshop turned scattered READMEs into a brand guide covering identity, voice, visual direction, and channel guidelines."
+ogImage: "blog/og-case-study-brand-guide.png"
 tags:
   - case-study
   - marketing

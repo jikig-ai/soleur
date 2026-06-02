@@ -83,10 +83,15 @@ resource "cloudflare_record" "mx_send_send" {
   ttl      = 1
 }
 
+# Multi-rua: aggregate reports fan out to (1) the apex Proton mailbox and
+# (2) the free Postmark DMARC aggregator, which turns reports into a
+# human-readable weekly failure digest (#3012, brainstorm 2026-06-02).
+# Policy is UNCHANGED — only the rua list is extended. Do NOT adopt
+# Postmark's suggested "p=none" record; that would downgrade enforcement.
 resource "cloudflare_record" "dmarc" {
   zone_id = var.cf_zone_id
   name    = "_dmarc"
-  content = "v=DMARC1; p=reject; rua=mailto:dmarc-reports@soleur.ai; pct=100"
+  content = "v=DMARC1; p=reject; rua=mailto:dmarc-reports@soleur.ai,mailto:re+yyggnc2ymkj@dmarc.postmarkapp.com; pct=100"
   type    = "TXT"
   ttl     = 1
 }

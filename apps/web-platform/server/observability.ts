@@ -85,6 +85,18 @@ function hashExtraUserId(
 }
 
 /**
+ * Strip line terminators from a human-readable log message so a CR/LF (or
+ * unicode line/paragraph separator) cannot forge a fake log line in a
+ * downstream plaintext view (js/log-injection). pino JSON-escapes values, but
+ * this is the boundary where operator-/error-derived strings become the log
+ * `msg`, so neutralize here. Unicode separators are matched via escape
+ * sequences only (cq-regex-unicode-separators-escape-only).
+ */
+function sanitizeLogMessage(message: string): string {
+  return message.replace(/[\r\n\u2028\u2029\v\f]+/g, " ");
+}
+
+/**
  * Single source of truth for the literal app-origin used when
  * `NEXT_PUBLIC_APP_URL` is unset. Matches prod; used by every
  * `reportSilentFallback`-guarded fallback site so a future domain rename
@@ -191,9 +203,11 @@ export function reportSilentFallback(
   // readers can tell at a glance that pseudonymization is in effect.
   const transformedExtra = hashExtraUserId(extra);
 
+  const safeMessage = sanitizeLogMessage(message ?? `${feature} silent fallback`);
+
   // Mirror the structured context into pino so log aggregators (container
   // stdout, Better Stack) also get the same tag vocabulary.
-  logger.error({ err, feature, op, ...transformedExtra }, message ?? `${feature} silent fallback`);
+  logger.error({ err, feature, op, ...transformedExtra }, safeMessage);
 
   // Sentry's namespace shape varies across the dev-server bundle (where
   // captureMessage may be tree-shaken when DSN is unset) and the prod build.
@@ -206,7 +220,7 @@ export function reportSilentFallback(
         Sentry.captureException(err, { tags, extra: transformedExtra });
       }
     } else if (typeof Sentry.captureMessage === "function") {
-      Sentry.captureMessage(message ?? `${feature} silent fallback`, {
+      Sentry.captureMessage(safeMessage, {
         level: "error",
         tags,
         extra: { err, ...transformedExtra },
@@ -245,7 +259,9 @@ export function warnSilentFallback(
   // reportSilentFallback for rationale).
   const transformedExtra = hashExtraUserId(extra);
 
-  logger.warn({ err, feature, op, ...transformedExtra }, message ?? `${feature} silent fallback`);
+  const safeMessage = sanitizeLogMessage(message ?? `${feature} silent fallback`);
+
+  logger.warn({ err, feature, op, ...transformedExtra }, safeMessage);
 
   try {
     if (err instanceof Error) {
@@ -253,7 +269,7 @@ export function warnSilentFallback(
         Sentry.captureException(err, { level: "warning", tags, extra: transformedExtra });
       }
     } else if (typeof Sentry.captureMessage === "function") {
-      Sentry.captureMessage(message ?? `${feature} silent fallback`, {
+      Sentry.captureMessage(safeMessage, {
         level: "warning",
         tags,
         extra: { err, ...transformedExtra },
