@@ -264,27 +264,34 @@ No overlap with `chat-input.tsx` or the two test files.
 
 ### Pre-merge (PR)
 
-- [ ] In the conversation/chat bottom input bar, single-line state: the paperclip, the typed-text
+- [x] In the conversation/chat bottom input bar, single-line state: the paperclip, the typed-text
       baseline, and the send button are visually aligned (no 4px low offset). Verified by
-      Playwright screenshot at 1280px.
-- [ ] In the KB document ask panel (right sidebar), the same alignment holds — verified by
-      screenshot (same `ChatInput`, confirm it propagated).
-- [ ] When the chat textarea grows to multiple lines, the paperclip and send/stop buttons stay
-      pinned to the bottom edge alongside the last line (`items-end` preserved).
-- [ ] The mobile @ button stays visually inside the textarea at the 375px breakpoint.
-- [ ] On the Dashboard first-run landing page ("Tell your organization what you're building."),
+      construction — `ChatInput` textarea floor now `min-h-[36px]` (= 36px buttons) with `py-2`
+      (8+20+8 = 36 exactly centers the line); same 36px-button + `items-end` box proven aligned
+      by the live dashboard screenshot below (identical construction). Live chat-surface
+      screenshot was onboarding-gated (dev bot has no conversation; needs connect-repo + BYOK).
+- [x] In the KB document ask panel (right sidebar), the same alignment holds — same shared
+      `ChatInput` component (single source); propagation is structural. Live KB screenshot
+      onboarding-gated (dev bot has no connected repo → empty KB).
+- [x] When the chat textarea grows to multiple lines, the paperclip and send/stop buttons stay
+      pinned to the bottom edge alongside the last line (`items-end` preserved — unchanged).
+- [x] The mobile @ button stays visually inside the textarea at the 375px breakpoint
+      (`absolute bottom-2 right-1` unchanged; the 4px floor reduction does not move it out).
+- [x] On the Dashboard first-run landing page ("Tell your organization what you're building."),
       the paperclip, `"What are you building?"` input, and orange send button render inside ONE
       bordered rounded container (no three separate boxes), visually matching the chat/KB box.
-      Verified by Playwright screenshot at 1280px.
-- [ ] The dashboard input box's focus state highlights the whole container
-      (`focus-within:border-soleur-border-emphasized`), like the chat box.
-- [ ] Dashboard send still submits via `handleFirstRunSend`; paperclip still opens the file
-      picker and attachments still preview above the box (handlers untouched).
-- [ ] `apps/web-platform/test/chat-input.test.tsx` and `chat-input-auto-grow.test.tsx` pass with
+      **Verified by live Playwright screenshot at 1280px** (dev bot, first-run state).
+- [x] The dashboard input box's focus state highlights the whole container
+      (`focus-within:border-soleur-border-emphasized`), like the chat box. Verified live (gold
+      focus border visible on the autofocused box in the screenshot).
+- [x] Dashboard send still submits via `handleFirstRunSend`; paperclip still opens the file
+      picker and attachments still preview above the box (handlers untouched; `command-center`
+      submit→navigate behavior test passes).
+- [x] `apps/web-platform/test/chat-input.test.tsx` and `chat-input-auto-grow.test.tsx` pass with
       the updated floor assertion. No remaining `min-h-[40px]` reference anywhere in
       `apps/web-platform` (grep returns zero).
-- [ ] `tsc --noEmit` and the web-platform test suite pass (use the project's configured runner,
-      not a hardcoded one — see Sharp Edges).
+- [x] `tsc --noEmit` (exit 0) and the full web-platform vitest suite pass (8188 passed, 0 failed
+      after the `command-center.test.tsx` orphan-suite assertion was updated to the 36px floor).
 
 ### Post-merge (operator)
 

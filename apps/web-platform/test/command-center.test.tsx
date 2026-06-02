@@ -434,8 +434,14 @@ describe("Command Center", () => {
         expect(screen.getByPlaceholderText("What are you building?")).toBeInTheDocument();
       });
 
+      // Unified box (matches the shared ChatInput, chat-input.tsx): the
+      // borderless input rests at the 36px button floor so the input, text
+      // baseline, and send button line up inside the one bordered container.
       const input = screen.getByPlaceholderText("What are you building?");
-      expect(input.className).toContain("min-h-[44px]");
+      expect(input.className).toContain("min-h-[36px]");
+
+      const sendButton = screen.getByLabelText("Send message");
+      expect(sendButton.className).toContain("h-[36px]");
     });
 
     it("renders a paperclip attach button", async () => {
