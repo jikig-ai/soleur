@@ -8,6 +8,8 @@
 #     (c) run_in_background + `gh run watch` (self-looping idiom, no explicit loop)
 #     (d) run_in_background + `gh pr checks --watch`
 #     (e) run_in_background + while-loop + curl (generic remote read)
+#     (p) run_in_background + for+seq loop + sleep + gh run/pr view (the
+#         2026-06-02 escape: a bounded for-poll the while|until signature missed)
 #   ALLOW (must NOT false-fire):
 #     (f) foreground while+gh poll (run_in_background absent/false) — Monitor is
 #         advisory here but the BANNED tool is run_in_background, so allow.
@@ -15,6 +17,7 @@
 #     (h) run_in_background background build (npm run build)
 #     (i) run_in_background local-only while-loop (no remote-read token)
 #     (j) run_in_background write fan-out loop (gh issue create) — not a read/poll
+#     (j2) run_in_background for-loop remote READ but NO sleep — batch fetch, not a poll
 #     (k) override-marker present
 #     (l) non-Bash tool
 
@@ -76,6 +79,12 @@ assert_decision "(d) bg + gh pr checks --watch denies" "deny" \
 assert_decision "(e) bg + while + curl denies" "deny" \
   "$(mk_bg true 'while :; do curl -s https://api.example.com/status; sleep 45; done')"
 
+# (p) Regression for the 2026-06-02 escape: a bounded `for i in $(seq …)` poll
+# that sleeps between iterations and reads remote state (gh run/pr view). The
+# while|until-only signature missed it because `for` was excluded outright.
+assert_decision "(p) bg + for+seq + sleep + gh run/pr view denies" "deny" \
+  "$(mk_bg true 'for i in $(seq 1 40); do gh run view "$RID" --json status; gh pr view 4850 --json state; sleep 45; done')"
+
 # --- ALLOW cases (no false positives) -------------------------------------
 
 assert_decision "(f) FOREGROUND while+gh poll allows (flag absent)" "allow" \
@@ -95,6 +104,9 @@ assert_decision "(i) bg local-only while-loop allows (no remote read)" "allow" \
 
 assert_decision "(j) bg write fan-out loop (gh issue create) allows" "allow" \
   "$(mk_bg true 'for n in 1 2 3; do gh issue create --title "t$n" --body x; done')"
+
+assert_decision "(j2) bg for-loop remote READ but NO sleep allows (batch fetch)" "allow" \
+  "$(mk_bg true 'for n in 1 2 3; do gh pr view "$n" --json state >> out.txt; done')"
 
 assert_decision "(k) override-marker allows" "allow" \
   "$(mk_bg true 'while true; do gh pr view 4595; sleep 60; done

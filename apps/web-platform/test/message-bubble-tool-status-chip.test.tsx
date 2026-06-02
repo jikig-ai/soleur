@@ -63,4 +63,22 @@ describe("MessageBubble tool_use ToolStatusChip (no redundant dot)", () => {
     );
     expect(container.querySelector(".message-bubble-active")).not.toBeNull();
   });
+
+  // Regression (#4852): the short status label ("Routing to the right
+  // experts…") wrapped onto two lines even when horizontal space was
+  // available. The label span must be `whitespace-nowrap` so the bubble
+  // grows to its natural single-line width instead of wrapping.
+  test("label span is whitespace-nowrap (no unnecessary wrap of short status text)", () => {
+    const { getByTestId } = render(
+      <MessageBubble
+        role="assistant"
+        content=""
+        messageState="tool_use"
+        toolLabel="Routing to the right experts..."
+      />,
+    );
+    const chip = getByTestId("tool-status-chip");
+    const labelSpan = chip.children[0] as HTMLElement;
+    expect(labelSpan.className).toContain("whitespace-nowrap");
+  });
 });

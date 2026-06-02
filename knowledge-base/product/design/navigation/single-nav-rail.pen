@@ -6,7 +6,7 @@
       "id": "DJOsF",
       "x": 0,
       "y": 0,
-      "name": "01 — Main Nav (top level)",
+      "name": "01 \u2014 Main Nav (top level)",
       "clip": true,
       "width": 1440,
       "height": 900,
@@ -570,7 +570,7 @@
                   "id": "HhTnX",
                   "name": "wt",
                   "fill": "$text-tertiary",
-                  "content": "Single rail → full-width content area",
+                  "content": "Single rail \u2192 full-width content area",
                   "fontFamily": "Inter",
                   "fontSize": 13,
                   "fontWeight": "normal"
@@ -588,7 +588,7 @@
           "name": "n1",
           "width": 1440,
           "height": 120,
-          "content": "FRAME 1 — Main nav (top level). One rail (w-56 / 224px): workspace switcher + 'Working on: jikig-ai/soleur' badge + theme toggle + nav (Dashboard / Knowledge Base / Analytics) + footer (email · Status · Settings · Sign out). Per TR1 the switcher + repo badge mount in the always-mounted layout ABOVE the swap region. The wide empty content area to the right is the real-estate baseline frames 2–4 build on."
+          "content": "FRAME 1 \u2014 Main nav (top level). One rail (w-56 / 224px): workspace switcher + 'Working on: jikig-ai/soleur' badge + theme toggle + nav (Dashboard / Knowledge Base / Analytics) + footer (email \u00b7 Status \u00b7 Settings \u00b7 Sign out). Per TR1 the switcher + repo badge mount in the always-mounted layout ABOVE the swap region. The wide empty content area to the right is the real-estate baseline frames 2\u20134 build on."
         }
       ]
     },
@@ -597,7 +597,7 @@
       "id": "je2N5",
       "x": 1540,
       "y": 0,
-      "name": "02 — Drilled: Knowledge Base",
+      "name": "02 \u2014 Drilled: Knowledge Base",
       "clip": true,
       "width": 1440,
       "height": 900,
@@ -796,7 +796,7 @@
                       "type": "text",
                       "id": "Q3hBB",
                       "fill": "$text-tertiary",
-                      "content": "Search files…",
+                      "content": "Search files\u2026",
                       "fontFamily": "Inter",
                       "fontSize": 12,
                       "fontWeight": "normal"
@@ -1055,7 +1055,7 @@
                   "fill": "$text-tertiary",
                   "textGrowth": "fixed-width",
                   "width": "fill_container",
-                  "content": "engineering / decisions · last edited 2 days ago",
+                  "content": "engineering / decisions \u00b7 last edited 2 days ago",
                   "fontFamily": "Inter",
                   "fontSize": 13,
                   "fontWeight": "normal"
@@ -1097,7 +1097,7 @@
                   "fill": "$text-secondary",
                   "textGrowth": "fixed-width",
                   "width": "fill_container",
-                  "content": "This document is rendered in the reclaimed real-estate. With the single rail, the doc-reading column is wider than today's two-rail layout — the KB tree column is no longer competing for horizontal space.",
+                  "content": "This document is rendered in the reclaimed real-estate. With the single rail, the doc-reading column is wider than today's two-rail layout \u2014 the KB tree column is no longer competing for horizontal space.",
                   "lineHeight": 1.5,
                   "fontFamily": "Inter",
                   "fontSize": 14,
@@ -1128,7 +1128,7 @@
           "name": "n2",
           "width": 1440,
           "height": 120,
-          "content": "FRAME 2 — Drilled into Knowledge Base. The SAME rail now shows the slim PERSISTENT context band at top: [‹ back · S avatar · Soleur Workspace · jikig-ai/soleur · Knowledge Base], then file search + folder tree. Workspace identity NEVER disappears (TR1 circuit breaker). The KB tree's old second-rail width is reclaimed → wider doc-reading content."
+          "content": "FRAME 2 \u2014 Drilled into Knowledge Base. The SAME rail now shows the slim PERSISTENT context band at top: [\u2039 back \u00b7 S avatar \u00b7 Soleur Workspace \u00b7 jikig-ai/soleur \u00b7 Knowledge Base], then file search + folder tree. Workspace identity NEVER disappears (TR1 circuit breaker). The KB tree's old second-rail width is reclaimed \u2192 wider doc-reading content."
         }
       ]
     },
@@ -1137,7 +1137,7 @@
       "id": "6nqA8",
       "x": 3080,
       "y": 0,
-      "name": "03 — Drilled: Settings (Members)",
+      "name": "03 \u2014 Drilled: Settings (Members)",
       "clip": true,
       "width": 1440,
       "height": 900,
@@ -1589,7 +1589,7 @@
                   "fill": "$text-secondary",
                   "textGrowth": "fixed-width",
                   "width": "fill_container",
-                  "content": "Inviting into → Soleur Workspace · jikig-ai/soleur. This identity comes from the persistent context band and is the wrong-workspace circuit breaker.",
+                  "content": "Inviting into \u2192 Soleur Workspace \u00b7 jikig-ai/soleur. This identity comes from the persistent context band and is the wrong-workspace circuit breaker.",
                   "fontFamily": "Inter",
                   "fontSize": 13,
                   "fontWeight": "normal"
@@ -1829,7 +1829,7 @@
           "name": "n3",
           "width": 1440,
           "height": 120,
-          "content": "FRAME 3 — Drilled into Settings, Members pane. Same single rail: context band [‹ back · S · Soleur Workspace · jikig-ai/soleur · Settings] + settings sub-nav (General / Conversation names / Integrations / Scope Grants / Billing / Members[active] / Team Activity). Members shown to make the wrong-workspace concern concrete: 'Invite member' mutates membership, so the band's workspace identity (gold-bordered) is the safeguard (CLO requirement; AC1 zero wrong-workspace actions)."
+          "content": "FRAME 3 \u2014 Drilled into Settings, Members pane. Same single rail: context band [\u2039 back \u00b7 S \u00b7 Soleur Workspace \u00b7 jikig-ai/soleur \u00b7 Settings] + settings sub-nav (General / Conversation names / Integrations / Scope Grants / Billing / Members[active] / Team Activity). Members shown to make the wrong-workspace concern concrete: 'Invite member' mutates membership, so the band's workspace identity (gold-bordered) is the safeguard (CLO requirement; AC1 zero wrong-workspace actions)."
         }
       ]
     },
@@ -1838,7 +1838,7 @@
       "id": "Aijv4",
       "x": 4620,
       "y": 0,
-      "name": "04 — Drilled: Chat (PDF)",
+      "name": "04 \u2014 Drilled: Chat (PDF)",
       "clip": true,
       "width": 1440,
       "height": 900,
@@ -2097,7 +2097,7 @@
                       "fill": "$text-tertiary",
                       "textGrowth": "fixed-width",
                       "width": "fill_container",
-                      "content": "What's the implied runway if…",
+                      "content": "What's the implied runway if\u2026",
                       "fontFamily": "Inter",
                       "fontSize": 11,
                       "fontWeight": "normal"
@@ -2261,7 +2261,7 @@
                       "fill": "$text-tertiary",
                       "textGrowth": "fixed-width",
                       "width": "fill_container",
-                      "content": "FINANCIAL SUMMARY — Q3",
+                      "content": "FINANCIAL SUMMARY \u2014 Q3",
                       "fontFamily": "Inter",
                       "fontSize": 13,
                       "fontWeight": "600",
@@ -2391,7 +2391,7 @@
                       "fill": "$text-tertiary",
                       "textGrowth": "fixed-width",
                       "width": "fill_container",
-                      "content": "Ask about this document…",
+                      "content": "Ask about this document\u2026",
                       "fontFamily": "Inter",
                       "fontSize": 13,
                       "fontWeight": "normal"
@@ -2420,7 +2420,7 @@
           "name": "n4",
           "width": 1440,
           "height": 120,
-          "content": "FRAME 4 — Drilled into Chat. Same single rail: context band [‹ back · S · Soleur Workspace · jikig-ai/soleur · Chat] + the Conversations list (replaces primary nav). The reclaimed width goes to the chat-on-PDF surface: PDF viewer + chat thread side-by-side, wider than today's three-column squeeze (OQ3: replacing primary nav with conversations is the intended 'win real estate for conversations' behavior)."
+          "content": "FRAME 4 \u2014 Drilled into Chat. Same single rail: context band [\u2039 back \u00b7 S \u00b7 Soleur Workspace \u00b7 jikig-ai/soleur \u00b7 Chat] + the Conversations list (replaces primary nav). The reclaimed width goes to the chat-on-PDF surface: PDF viewer + chat thread side-by-side, wider than today's three-column squeeze (OQ3: replacing primary nav with conversations is the intended 'win real estate for conversations' behavior)."
         }
       ]
     },
@@ -2429,7 +2429,7 @@
       "id": "Yes4A",
       "x": 6160,
       "y": 0,
-      "name": "05 — Mobile drill-in",
+      "name": "05 \u2014 Mobile drill-in",
       "clip": true,
       "width": 390,
       "height": 844,
@@ -2619,7 +2619,7 @@
                       "type": "text",
                       "id": "jDlhP",
                       "fill": "$text-tertiary",
-                      "content": "Search files…",
+                      "content": "Search files\u2026",
                       "fontFamily": "Inter",
                       "fontSize": 13,
                       "fontWeight": "normal"
@@ -2805,7 +2805,1154 @@
           "name": "n5",
           "width": 390,
           "height": 170,
-          "content": "FRAME 5 — Mobile drill-in (390×844). Single column mirrors kb-mobile-layout.tsx: the persistent context band (back · workspace · repo · section) sits atop the tree; tapping a file replaces the tree with content (isContentView), back returns. Workspace identity stays pinned in every state — same circuit-breaker invariant as desktop (FR8)."
+          "content": "FRAME 5 \u2014 Mobile drill-in (390\u00d7844). Single column mirrors kb-mobile-layout.tsx: the persistent context band (back \u00b7 workspace \u00b7 repo \u00b7 section) sits atop the tree; tapping a file replaces the tree with content (isContentView), back returns. Workspace identity stays pinned in every state \u2014 same circuit-breaker invariant as desktop (FR8)."
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "zf0041",
+      "name": "06 \u2014 Collapsed: top level",
+      "width": 1440,
+      "height": 900,
+      "fill": "$bg-base",
+      "x": 7000,
+      "y": 0,
+      "layout": "horizontal",
+      "children": [
+        {
+          "type": "frame",
+          "id": "zf0001",
+          "name": "Nav Rail (collapsed)",
+          "width": 56,
+          "height": "fill_container",
+          "layout": "vertical",
+          "fill": "$bg-surface-1",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "right": 1
+            },
+            "fill": "$border-default"
+          },
+          "alignItems": "center",
+          "padding": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "zf0002",
+              "name": "brand",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 8,
+              "padding": [
+                14,
+                0,
+                12,
+                0
+              ],
+              "alignItems": "center",
+              "stroke": {
+                "align": "inside",
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "$border-default"
+              },
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "zf0004",
+                  "name": "brandmark",
+                  "width": 30,
+                  "height": 30,
+                  "cornerRadius": 8,
+                  "fill": "$gold-accent",
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "zt0003",
+                      "content": "S",
+                      "fill": "$bg-base",
+                      "fontSize": 15,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "zf0006",
+                  "name": "expand toggle",
+                  "width": 30,
+                  "height": 30,
+                  "cornerRadius": 8,
+                  "fill": "$bg-surface-2",
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "zi0005",
+                      "iconFontName": "chevrons-right",
+                      "iconFontFamily": "lucide",
+                      "width": 15,
+                      "height": 15,
+                      "fill": "$text-secondary"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "zf0007",
+              "name": "workspace identity",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 8,
+              "padding": [
+                12,
+                0,
+                12,
+                0
+              ],
+              "alignItems": "center",
+              "stroke": {
+                "align": "inside",
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "$border-default"
+              },
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "zf0009",
+                  "name": "org avatar",
+                  "width": 30,
+                  "height": 30,
+                  "cornerRadius": 8,
+                  "fill": "$gold-accent",
+                  "stroke": {
+                    "thickness": 1.5,
+                    "fill": "$border-emphasized"
+                  },
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "zt0008",
+                      "content": "S",
+                      "fill": "$bg-base",
+                      "fontSize": 13,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "zf0011",
+                  "name": "repo dot",
+                  "width": 30,
+                  "height": 30,
+                  "cornerRadius": 8,
+                  "fill": "$bg-surface-2",
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "zi0010",
+                      "iconFontName": "git-branch",
+                      "iconFontFamily": "lucide",
+                      "width": 14,
+                      "height": 14,
+                      "fill": "$gold-accent"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "zf0012",
+              "name": "nav items",
+              "width": "fill_container",
+              "height": "fill_container",
+              "layout": "vertical",
+              "gap": 4,
+              "padding": [
+                12,
+                0,
+                12,
+                0
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "zf0013",
+                  "name": "cell",
+                  "width": 40,
+                  "height": 40,
+                  "cornerRadius": 8,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "fill": "$bg-surface-2",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "zi0014",
+                      "iconFontName": "layout-grid",
+                      "iconFontFamily": "lucide",
+                      "width": 16,
+                      "height": 16,
+                      "fill": "$text-primary"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "zf0015",
+                  "name": "cell",
+                  "width": 40,
+                  "height": 40,
+                  "cornerRadius": 8,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "zi0016",
+                      "iconFontName": "book-open",
+                      "iconFontFamily": "lucide",
+                      "width": 16,
+                      "height": 16,
+                      "fill": "$text-secondary"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "zf0017",
+                  "name": "cell",
+                  "width": 40,
+                  "height": 40,
+                  "cornerRadius": 8,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "zi0018",
+                      "iconFontName": "chart-bar",
+                      "iconFontFamily": "lucide",
+                      "width": 16,
+                      "height": 16,
+                      "fill": "$text-secondary"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "zf0019",
+              "name": "footer",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 4,
+              "padding": [
+                12,
+                0,
+                14,
+                0
+              ],
+              "alignItems": "center",
+              "stroke": {
+                "align": "inside",
+                "thickness": {
+                  "top": 1
+                },
+                "fill": "$border-default"
+              },
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "zf0021",
+                  "name": "theme toggle",
+                  "width": 40,
+                  "height": 40,
+                  "cornerRadius": 8,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "fill": "$bg-surface-2",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "zi0020",
+                      "iconFontName": "moon",
+                      "iconFontFamily": "lucide",
+                      "width": 15,
+                      "height": 15,
+                      "fill": "$text-secondary"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "zf0022",
+                  "name": "cell",
+                  "width": 40,
+                  "height": 40,
+                  "cornerRadius": 8,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "zi0023",
+                      "iconFontName": "activity",
+                      "iconFontFamily": "lucide",
+                      "width": 16,
+                      "height": 16,
+                      "fill": "$text-secondary"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "zf0024",
+                  "name": "cell",
+                  "width": 40,
+                  "height": 40,
+                  "cornerRadius": 8,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "zi0025",
+                      "iconFontName": "settings",
+                      "iconFontFamily": "lucide",
+                      "width": 16,
+                      "height": 16,
+                      "fill": "$text-secondary"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "zf0026",
+                  "name": "cell",
+                  "width": 40,
+                  "height": 40,
+                  "cornerRadius": 8,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "zi0027",
+                      "iconFontName": "log-out",
+                      "iconFontFamily": "lucide",
+                      "width": 16,
+                      "height": 16,
+                      "fill": "$text-secondary"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "zf0028",
+          "name": "Content area",
+          "width": "fill_container",
+          "height": "fill_container",
+          "layout": "vertical",
+          "gap": 24,
+          "padding": [
+            40,
+            48
+          ],
+          "fill": "$bg-base",
+          "children": [
+            {
+              "type": "frame",
+              "id": "zf0031",
+              "name": "hd",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 6,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "zt0029",
+                  "content": "Dashboard",
+                  "width": "fill_container",
+                  "textGrowth": "fixed-width",
+                  "fill": "$text-primary",
+                  "fontSize": 26,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "zt0030",
+                  "content": "Collapsed rail (md:w-14 / 56px) \u2014 identity persists as icons.",
+                  "width": "fill_container",
+                  "textGrowth": "fixed-width",
+                  "fill": "$text-secondary",
+                  "fontSize": 14
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "zf0032",
+              "name": "row",
+              "width": "fill_container",
+              "height": 200,
+              "gap": 20,
+              "layout": "horizontal",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "zf0033",
+                  "name": "c0",
+                  "width": "fill_container",
+                  "height": "fill_container",
+                  "fill": "$bg-surface-1",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "$border-default"
+                  },
+                  "cornerRadius": 10
+                },
+                {
+                  "type": "frame",
+                  "id": "zf0034",
+                  "name": "c1",
+                  "width": "fill_container",
+                  "height": "fill_container",
+                  "fill": "$bg-surface-1",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "$border-default"
+                  },
+                  "cornerRadius": 10
+                },
+                {
+                  "type": "frame",
+                  "id": "zf0035",
+                  "name": "c2",
+                  "width": "fill_container",
+                  "height": "fill_container",
+                  "fill": "$bg-surface-1",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "$border-default"
+                  },
+                  "cornerRadius": 10
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "zf0037",
+              "name": "wide",
+              "width": "fill_container",
+              "height": "fill_container",
+              "fill": "$bg-surface-1",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$border-default"
+              },
+              "cornerRadius": 10,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "zt0036",
+                  "content": "Even more horizontal real estate than the 224px rail.",
+                  "fill": "$text-tertiary",
+                  "fontSize": 13
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "zf0038",
+          "name": "hover overlay (org tooltip)",
+          "layout": "none",
+          "layoutPosition": "absolute",
+          "x": 0,
+          "y": 0,
+          "width": 420,
+          "height": 900,
+          "children": [
+            {
+              "type": "frame",
+              "id": "zf0039",
+              "name": "tooltip",
+              "layout": "horizontal",
+              "layoutPosition": "absolute",
+              "x": 66,
+              "y": 150,
+              "width": "fit_content",
+              "height": "fit_content",
+              "padding": [
+                6,
+                10
+              ],
+              "gap": 6,
+              "cornerRadius": 6,
+              "fill": "$bg-surface-2",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$border-default"
+              },
+              "alignItems": "center",
+              "effect": [
+                {
+                  "type": "shadow",
+                  "shadowType": "outer",
+                  "offset": {
+                    "x": 0,
+                    "y": 4
+                  },
+                  "blur": 16,
+                  "spread": 0,
+                  "color": "#00000066"
+                }
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "zt0040",
+                  "content": "Soleur Workspace \u00b7 Owner",
+                  "fontSize": 12,
+                  "fontWeight": "500",
+                  "fill": "$text-primary"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "note",
+          "id": "zn0042",
+          "layoutPosition": "absolute",
+          "x": 7000,
+          "y": 930,
+          "name": "note",
+          "width": 1440,
+          "height": 130,
+          "content": "FRAME 6 \u2014 COLLAPSED top level (md:w-14 / 56px). The fix for #4810: at 56px every label is dropped, only icons remain centered in the rail. Top\u2192bottom: brand mark (S) + expand chevron (chevrons-right restores w-56); workspace identity as ICONS ONLY \u2014 gold org avatar (S, gold-bordered) + repo dot (git-branch glyph) \u2014 NEVER unmounts (TR1 / ADR-047 circuit breaker); icon-only primary nav (Dashboard active / KB / Analytics); footer = theme toggle + Status + Settings + Sign out. Hover any item \u2192 tooltip pill recovers the hidden text label (a11y: identity stays discoverable). The 'Working on: jikig-ai/soleur' string is NOT crushed into the strip \u2014 it is recovered on hover only."
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "zf0088",
+      "name": "07 \u2014 Collapsed: drilled KB (tree peek)",
+      "width": 1440,
+      "height": 900,
+      "fill": "$bg-base",
+      "x": 8540,
+      "y": 0,
+      "layout": "horizontal",
+      "children": [
+        {
+          "type": "frame",
+          "id": "zf0043",
+          "name": "Nav Rail (collapsed + drilled)",
+          "width": 56,
+          "height": "fill_container",
+          "layout": "vertical",
+          "fill": "$bg-surface-1",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "right": 1
+            },
+            "fill": "$border-default"
+          },
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "zf0044",
+              "name": "CONTEXT BAND (collapsed)",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 8,
+              "padding": [
+                14,
+                0,
+                12,
+                0
+              ],
+              "alignItems": "center",
+              "fill": "$bg-surface-2",
+              "stroke": {
+                "align": "inside",
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "$border-default"
+              },
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "zf0046",
+                  "name": "back chevron",
+                  "width": 30,
+                  "height": 30,
+                  "cornerRadius": 8,
+                  "fill": "$bg-base",
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "zi0045",
+                      "iconFontName": "chevron-left",
+                      "iconFontFamily": "lucide",
+                      "width": 15,
+                      "height": 15,
+                      "fill": "$gold-accent"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "zf0048",
+                  "name": "org avatar",
+                  "width": 30,
+                  "height": 30,
+                  "cornerRadius": 8,
+                  "fill": "$gold-accent",
+                  "stroke": {
+                    "thickness": 1.5,
+                    "fill": "$border-emphasized"
+                  },
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "zt0047",
+                      "content": "S",
+                      "fill": "$bg-base",
+                      "fontSize": 13,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "zf0050",
+                  "name": "repo dot",
+                  "width": 30,
+                  "height": 30,
+                  "cornerRadius": 8,
+                  "fill": "$bg-base",
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "zi0049",
+                      "iconFontName": "git-branch",
+                      "iconFontFamily": "lucide",
+                      "width": 14,
+                      "height": 14,
+                      "fill": "$gold-accent"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "zf0052",
+                  "name": "section icon",
+                  "width": 30,
+                  "height": 30,
+                  "cornerRadius": 8,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "zi0051",
+                      "iconFontName": "book-open",
+                      "iconFontFamily": "lucide",
+                      "width": 15,
+                      "height": 15,
+                      "fill": "$gold-accent"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "zf0053",
+          "name": "auto-expanded tree peek",
+          "width": 200,
+          "height": "fill_container",
+          "layout": "vertical",
+          "fill": "$bg-surface-1",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "right": 1
+            },
+            "fill": "$border-default"
+          },
+          "children": [
+            {
+              "type": "frame",
+              "id": "zf0058",
+              "name": "peek head",
+              "width": "fill_container",
+              "gap": 8,
+              "padding": [
+                12,
+                14,
+                8,
+                14
+              ],
+              "alignItems": "center",
+              "layout": "horizontal",
+              "stroke": {
+                "align": "inside",
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "$border-default"
+              },
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "zi0054",
+                  "iconFontName": "book-open",
+                  "iconFontFamily": "lucide",
+                  "width": 14,
+                  "height": 14,
+                  "fill": "$gold-accent"
+                },
+                {
+                  "type": "text",
+                  "id": "zt0055",
+                  "content": "Knowledge Base",
+                  "fill": "$text-primary",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "zf0057",
+                  "name": "pin",
+                  "width": "fill_container",
+                  "layout": "horizontal",
+                  "justifyContent": "end",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "zi0056",
+                      "iconFontName": "pin",
+                      "iconFontFamily": "lucide",
+                      "width": 13,
+                      "height": 13,
+                      "fill": "$text-tertiary"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "zf0059",
+              "name": "tree",
+              "width": "fill_container",
+              "height": "fill_container",
+              "layout": "vertical",
+              "gap": 1,
+              "padding": [
+                6,
+                8,
+                12,
+                8
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "zf0060",
+                  "name": "row",
+                  "width": "fill_container",
+                  "gap": 8,
+                  "padding": [
+                    7,
+                    8,
+                    7,
+                    8
+                  ],
+                  "alignItems": "center",
+                  "cornerRadius": 6,
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "zi0061",
+                      "iconFontName": "chevron-down",
+                      "iconFontFamily": "lucide",
+                      "width": 13,
+                      "height": 13,
+                      "fill": "$text-secondary"
+                    },
+                    {
+                      "type": "icon_font",
+                      "id": "zi0062",
+                      "iconFontName": "folder",
+                      "iconFontFamily": "lucide",
+                      "width": 14,
+                      "height": 14,
+                      "fill": "$text-secondary"
+                    },
+                    {
+                      "type": "text",
+                      "id": "zt0063",
+                      "content": "engineering",
+                      "fill": "$text-primary",
+                      "fontSize": 12
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "zf0064",
+                  "name": "row",
+                  "width": "fill_container",
+                  "gap": 8,
+                  "padding": [
+                    7,
+                    8,
+                    7,
+                    28
+                  ],
+                  "alignItems": "center",
+                  "cornerRadius": 6,
+                  "fill": "$bg-surface-2",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "zi0065",
+                      "iconFontName": "file-text",
+                      "iconFontFamily": "lucide",
+                      "width": 13,
+                      "height": 13,
+                      "fill": "$gold-accent"
+                    },
+                    {
+                      "type": "text",
+                      "id": "zt0066",
+                      "content": "adr-044.md",
+                      "fill": "$text-primary",
+                      "fontSize": 12
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "zf0067",
+                  "name": "row",
+                  "width": "fill_container",
+                  "gap": 8,
+                  "padding": [
+                    7,
+                    8,
+                    7,
+                    28
+                  ],
+                  "alignItems": "center",
+                  "cornerRadius": 6,
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "zi0068",
+                      "iconFontName": "file-text",
+                      "iconFontFamily": "lucide",
+                      "width": 13,
+                      "height": 13,
+                      "fill": "$text-tertiary"
+                    },
+                    {
+                      "type": "text",
+                      "id": "zt0069",
+                      "content": "runbook.md",
+                      "fill": "$text-secondary",
+                      "fontSize": 12
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "zf0070",
+                  "name": "row",
+                  "width": "fill_container",
+                  "gap": 8,
+                  "padding": [
+                    7,
+                    8,
+                    7,
+                    8
+                  ],
+                  "alignItems": "center",
+                  "cornerRadius": 6,
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "zi0071",
+                      "iconFontName": "chevron-right",
+                      "iconFontFamily": "lucide",
+                      "width": 13,
+                      "height": 13,
+                      "fill": "$text-secondary"
+                    },
+                    {
+                      "type": "icon_font",
+                      "id": "zi0072",
+                      "iconFontName": "folder",
+                      "iconFontFamily": "lucide",
+                      "width": 14,
+                      "height": 14,
+                      "fill": "$text-secondary"
+                    },
+                    {
+                      "type": "text",
+                      "id": "zt0073",
+                      "content": "finance",
+                      "fill": "$text-secondary",
+                      "fontSize": 12
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "zf0074",
+                  "name": "row",
+                  "width": "fill_container",
+                  "gap": 8,
+                  "padding": [
+                    7,
+                    8,
+                    7,
+                    8
+                  ],
+                  "alignItems": "center",
+                  "cornerRadius": 6,
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "zi0075",
+                      "iconFontName": "chevron-right",
+                      "iconFontFamily": "lucide",
+                      "width": 13,
+                      "height": 13,
+                      "fill": "$text-secondary"
+                    },
+                    {
+                      "type": "icon_font",
+                      "id": "zi0076",
+                      "iconFontName": "folder",
+                      "iconFontFamily": "lucide",
+                      "width": 14,
+                      "height": 14,
+                      "fill": "$text-secondary"
+                    },
+                    {
+                      "type": "text",
+                      "id": "zt0077",
+                      "content": "legal",
+                      "fill": "$text-secondary",
+                      "fontSize": 12
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "zf0078",
+          "name": "KB Content",
+          "width": "fill_container",
+          "height": "fill_container",
+          "layout": "vertical",
+          "gap": 20,
+          "padding": [
+            40,
+            56
+          ],
+          "fill": "$bg-base",
+          "children": [
+            {
+              "type": "frame",
+              "id": "zf0081",
+              "name": "kbh",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 6,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "zt0079",
+                  "content": "adr-044.md",
+                  "width": "fill_container",
+                  "textGrowth": "fixed-width",
+                  "fill": "$text-primary",
+                  "fontSize": 24,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "zt0080",
+                  "content": "engineering / decisions \u00b7 collapsed rail + tree peek",
+                  "width": "fill_container",
+                  "textGrowth": "fixed-width",
+                  "fill": "$text-tertiary",
+                  "fontSize": 13
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "zf0084",
+              "name": "doc",
+              "width": "fill_container",
+              "height": "fill_container",
+              "layout": "vertical",
+              "gap": 14,
+              "padding": [
+                28,
+                32
+              ],
+              "fill": "$bg-surface-1",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$border-default"
+              },
+              "cornerRadius": 10,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "zt0082",
+                  "content": "Collapsed + drilled: the tree auto-expands as a peek panel",
+                  "width": "fill_container",
+                  "textGrowth": "fixed-width",
+                  "fill": "$text-primary",
+                  "fontSize": 16,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "zt0083",
+                  "content": "At 56px the secondary tree cannot legibly collapse to icons (folders and files are indistinguishable as glyphs). Rather than crush it, drilling into a section auto-expands an attached 200px tree-peek panel anchored to the icon spine. The collapse chevron is replaced by a pin: unpinning returns to the icon spine; the spine itself keeps the identity icons mounted.",
+                  "width": "fill_container",
+                  "textGrowth": "fixed-width",
+                  "fill": "$text-secondary",
+                  "fontSize": 14
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "zf0085",
+          "name": "hover overlay (back tooltip)",
+          "layout": "none",
+          "layoutPosition": "absolute",
+          "x": 0,
+          "y": 0,
+          "width": 300,
+          "height": 900,
+          "children": [
+            {
+              "type": "frame",
+              "id": "zf0086",
+              "name": "tooltip",
+              "layout": "horizontal",
+              "layoutPosition": "absolute",
+              "x": 66,
+              "y": 14,
+              "width": "fit_content",
+              "height": "fit_content",
+              "padding": [
+                6,
+                10
+              ],
+              "gap": 6,
+              "cornerRadius": 6,
+              "fill": "$bg-surface-2",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$border-default"
+              },
+              "alignItems": "center",
+              "effect": [
+                {
+                  "type": "shadow",
+                  "shadowType": "outer",
+                  "offset": {
+                    "x": 0,
+                    "y": 4
+                  },
+                  "blur": 16,
+                  "spread": 0,
+                  "color": "#00000066"
+                }
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "zt0087",
+                  "content": "Back to all sections",
+                  "fontSize": 12,
+                  "fontWeight": "500",
+                  "fill": "$text-primary"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "note",
+          "id": "zn0089",
+          "layoutPosition": "absolute",
+          "x": 8540,
+          "y": 930,
+          "name": "note",
+          "width": 1440,
+          "height": 130,
+          "content": "FRAME 7 \u2014 COLLAPSED + DRILLED (Knowledge Base). Two bug fixes + one UX decision. (1) The drilled context band drops the 'Soleur' wordmark AND the theme toggle (bug #1: they must NOT appear in drilled states); only icons remain \u2014 back chevron, gold org avatar, repo dot, section icon (book-open). (2) Identity icons never unmount (TR1 / ADR-047). (3) DECISION \u2014 at 56px the KB file tree CANNOT collapse to icons (folders vs files are indistinguishable as bare glyphs, and indent-only loses the hierarchy). Of {a: force-expand whole rail, b: icon/indent-only tree, c: auto-expand a peek panel}, we RECOMMEND (c): drilling auto-expands a 200px tree-peek panel anchored to the 56px icon spine. The spine stays collapsed (identity + reclaimed chrome width preserved); the collapse chevron becomes a PIN \u2014 unpin to dismiss the peek back to the spine. This keeps the reclaimed real-estate win while making the tree legible, and avoids option (a)'s jarring full re-expand and option (b)'s unreadable glyph soup."
         }
       ]
     }
