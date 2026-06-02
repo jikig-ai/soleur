@@ -27,9 +27,11 @@ rc=$?
 set -e
 assert_eq "0" "$rc" "agent records a pre-open snapshot before open_document on existing .pen"
 
-# AC2 — post-open collapse gate present.
+# AC2 — post-open collapse gate present. Match tokens unique to the new gate
+# block — NOT the bare word "collapse", which already appears in the pre-existing
+# UX-audit "sidebar collapse" prose and would make this assertion vacuous.
 set +e
-grep -qiE "collapse|post-open .*size|fraction|parse failure" "$AGENT"
+grep -qiE "collapse gate|destructive wipe|parse failure" "$AGENT"
 rc=$?
 set -e
 assert_eq "0" "$rc" "agent has a post-open collapse gate"
@@ -60,6 +62,17 @@ grep -q "ex-cq-pencil-mcp-silent-drop-diagnosis-checklist" "$AGENT"
 rc=$?
 set -e
 assert_eq "0" "$rc" "repointed to live ex-cq-pencil-mcp-silent-drop-diagnosis-checklist Sharp Edge"
+
+# The repoint must be machine-resolvable: the anchor token must grep cleanly in
+# the cited target (guards against the backtick-split rendering that made the
+# token unsearchable in SKILL.md).
+PENCIL_SKILL="$REPO_ROOT/plugins/soleur/skills/pencil-setup/SKILL.md"
+assert_file_exists "$PENCIL_SKILL" "pencil-setup SKILL.md (repoint target) exists"
+set +e
+grep -q "ex-cq-pencil-mcp-silent-drop-diagnosis-checklist" "$PENCIL_SKILL"
+rc=$?
+set -e
+assert_eq "0" "$rc" "anchor token is greppable (contiguous) in the cited target SKILL.md"
 
 set +e
 grep -q "knowledge-base/product/design/" "$AGENT"
