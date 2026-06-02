@@ -172,7 +172,13 @@ cmd_generate_token() {
   fi
 
   local redirect_uri="${LINKEDIN_REDIRECT_URI:-$LINKEDIN_DEFAULT_REDIRECT_URI}"
-  local scopes="openid%20profile%20w_member_social"
+  # w_organization_social is REQUIRED to post as a Company Page (author
+  # urn:li:organization:<id>). Without it the /rest/posts call fails with
+  # HTTP 400 "Organization Or Events permissions must be used when using
+  # organization as author" (#4046 — surfaced when a member-only token was
+  # rotated in and the Phase-6 test post hit this). The app must have the
+  # Community Management API product approved for LinkedIn to grant it.
+  local scopes="openid%20profile%20w_member_social%20w_organization_social"
   local auth_url="${LINKEDIN_OAUTH}/authorization?response_type=code&client_id=${LINKEDIN_CLIENT_ID}&redirect_uri=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${redirect_uri}', safe=''))" 2>/dev/null || echo "${redirect_uri}")&scope=${scopes}"
 
   echo "=== LinkedIn OAuth Token Generation ===" >&2

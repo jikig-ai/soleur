@@ -24,7 +24,7 @@ export function ThinkingDots() {
 export function ToolStatusChip({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-2 py-0.5" data-testid="tool-status-chip">
-      <span className="text-sm text-soleur-text-secondary">{label}</span>
+      <span className="whitespace-nowrap text-sm text-soleur-text-secondary">{label}</span>
     </div>
   );
 }
@@ -190,7 +190,7 @@ export const MessageBubble = memo(function MessageBubble({
               className="mb-1 flex items-center gap-2"
               data-testid="message-bubble-header"
             >
-              <span className="text-xs font-semibold text-soleur-text-secondary">
+              <span className="whitespace-nowrap text-xs font-semibold text-soleur-text-secondary">
                 {headerPrimary}
               </span>
               {showFullTitle && !titleContainsName && (
