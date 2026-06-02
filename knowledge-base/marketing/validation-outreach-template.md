@@ -13,6 +13,8 @@ depends_on:
 
 **Channel:** LinkedIn DM, Discord DM, or indie hacker community post.
 
+> **Sibling asset:** This template recruits for *research* (15-min calls, no pitch). For **Phase 4 participation** outreach (onboard + 2-week unassisted usage), per-channel templates live in [`recruitment-messaging-templates.md`](./recruitment-messaging-templates.md). Same audience, different ask.
+
 ---
 
 ## Template: Direct Message

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { reportSilentFallback } from "@/lib/client-observability";
 
 interface DelegationAcceptanceModalProps {
   delegationId: string;
@@ -50,7 +51,17 @@ export function DelegationAcceptanceModal({
       });
       if (res.ok) {
         onAccepted();
+      } else {
+        reportSilentFallback(
+          new Error(`delegation accept returned ${res.status}`),
+          { feature: "byok-delegation", op: "accept" },
+        );
       }
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: "byok-delegation",
+        op: "accept",
+      });
     } finally {
       setLoading(false);
     }
@@ -66,7 +77,17 @@ export function DelegationAcceptanceModal({
       });
       if (res.ok) {
         onDeclined();
+      } else {
+        reportSilentFallback(
+          new Error(`delegation decline returned ${res.status}`),
+          { feature: "byok-delegation", op: "decline" },
+        );
       }
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: "byok-delegation",
+        op: "decline",
+      });
     } finally {
       setLoading(false);
     }
@@ -84,16 +105,34 @@ export function DelegationAcceptanceModal({
       });
       if (res.ok) {
         onWithdrawn?.();
+      } else {
+        reportSilentFallback(
+          new Error(`delegation withdraw returned ${res.status}`),
+          { feature: "byok-delegation", op: "withdraw" },
+        );
       }
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: "byok-delegation",
+        op: "withdraw",
+      });
     } finally {
       setLoading(false);
     }
   }, [delegationId, onWithdrawn]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="delegation-consent-title"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+    >
       <div className="mx-4 w-full max-w-lg rounded-xl border border-soleur-border-default bg-soleur-bg-base p-6 shadow-xl">
-        <h2 className="text-lg font-semibold text-soleur-text-primary">
+        <h2
+          id="delegation-consent-title"
+          className="text-lg font-semibold text-soleur-text-primary"
+        >
           {alreadyAccepted ? "Delegation Consent — active" : "Delegation Consent"}
         </h2>
         <p className="mt-2 text-sm text-soleur-text-secondary">
@@ -177,7 +216,7 @@ export function DelegationAcceptanceModal({
                 type="button"
                 onClick={handleAccept}
                 disabled={loading || !telemetryAck}
-                className="flex-1 rounded-lg bg-soleur-accent-gold-fg px-4 py-2 text-sm font-medium text-white hover:bg-soleur-accent-gold-fg/90 disabled:opacity-50"
+                className="flex-1 rounded-lg bg-soleur-accent-gold-fg px-4 py-2 text-sm font-medium text-soleur-bg-surface-1 hover:opacity-90 disabled:opacity-50"
               >
                 {loading ? "Processing..." : "I accept"}
               </button>
