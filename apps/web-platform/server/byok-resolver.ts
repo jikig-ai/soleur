@@ -128,10 +128,11 @@ export async function resolveKeyOwnerThenLease<T>(
   // one current-repo-url / resolve-installation-id use). It supersedes the old
   // getDefaultWorkspaceForUser (MIN(created_at) = the member's oldest/solo
   // workspace), which resolved the WRONG workspace for an invited member who
-  // already had a solo account (#4767). resolveCurrentWorkspaceId never throws:
-  // on a query error it Sentry-mirrors and returns the caller's own solo
-  // workspace (never a sibling), so the catch below is a defensive guard — its
-  // fall-to-direct-lease direction is the safe one if it ever does fire.
+  // already had a solo account (#4767). resolveCurrentWorkspaceId does not
+  // throw on a handled query error: it Sentry-mirrors and returns the caller's
+  // own solo workspace (never a sibling). The catch below remains a defensive
+  // guard for an unhandled transport-level rejection — its fall-to-direct-lease
+  // direction is the safe one if it ever does fire.
   let workspaceId: string;
   try {
     workspaceId = await resolveCurrentWorkspaceId(workspaceContextUserId, supabase);
@@ -323,11 +324,11 @@ export async function userHasPendingByokDelegation(
  * (MIN(created_at) = the caller's oldest/solo workspace). For an invited member
  * who already had a solo account, the delegation lives in the SHARED workspace
  * the owner granted into, while MIN(created_at) resolved their solo workspace —
- * the keyless-banner bug (#4767). resolveCurrentWorkspaceId never throws (it
- * Sentry-mirrors and fails closed to the caller's own solo workspace, never a
- * sibling), so the org lookup below is the only remaining throw site each
- * caller's outer catch handles (fail-open redirect gate vs fail-closed status /
- * fail-quiet banner).
+ * the keyless-banner bug (#4767). resolveCurrentWorkspaceId does not throw on a
+ * handled query error (it Sentry-mirrors and fails closed to the caller's own
+ * solo workspace, never a sibling), so the org lookup below is the primary
+ * remaining throw site each caller's outer catch handles (fail-open redirect
+ * gate vs fail-closed status / fail-quiet banner).
  */
 async function resolveByokDelegationContext(
   callerUserId: string,

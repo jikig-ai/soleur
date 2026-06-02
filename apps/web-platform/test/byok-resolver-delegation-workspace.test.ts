@@ -187,13 +187,21 @@ describe("byok-resolver derives the CURRENT (shared) workspace, not the solo def
     expect(mockGetDefaultWorkspaceForUser).not.toHaveBeenCalled();
   });
 
-  test("shared+UNaccepted delegation → hasEffectiveKey false AND pending true (acceptance gate intact)", async () => {
-    // No delegation row from the RPC (mig-084 Gate 1 acceptance not met) → false.
+  test("shared+UNaccepted delegation → hasEffectiveKey false", async () => {
+    // The mig-084 Gate-1 acceptance check lives inside the resolve_byok_key_owner
+    // SQL RPC, which is mocked here — so at the TS layer an unaccepted grant is
+    // indistinguishable from "no row" (both → RPC returns null → false). This
+    // asserts the TS contract (null row → false); the SQL acceptance gate itself
+    // is covered by the DB-backed byok integration suite, not this unit.
     const effective = await userHasEffectiveByokKey(MEMBER, { onErrorReturn: false });
     expect(effective).toBe(false);
+  });
 
+  test("shared+UNaccepted delegation → pending true (pending branch on the SHARED workspace)", async () => {
     // Pending check finds the grantee row in the SHARED workspace and the
-    // acceptance status is not-current → pending true.
+    // acceptance status is not-current → pending true. This DOES exercise the
+    // acceptance logic (via the resolveGranteeAcceptanceStatus mock), unlike the
+    // effective-key half above.
     delegationRowByWorkspace[SHARED_WS] = { id: "deleg-1" };
     mockResolveGranteeAcceptanceStatus.mockResolvedValue({
       accepted: false,
@@ -236,10 +244,16 @@ describe("byok-resolver derives the CURRENT (shared) workspace, not the solo def
     expect(mockGetDefaultWorkspaceForUser).not.toHaveBeenCalled();
   });
 
-  test("fail-closed: resolver degrades to the caller's own solo workspace, never a sibling", async () => {
-    // resolveCurrentWorkspaceId never throws — on error it Sentry-mirrors and
-    // returns the caller's own userId (solo). The RPC then sees the solo ws,
-    // finds no delegation, and the status endpoint stays fail-closed (false).
+  // Safety guard (NOT bug-reproduction): this asserts the degrade-to-solo
+  // fallback is the safe direction. Because resolveCurrentWorkspaceId returns
+  // the caller's own userId on a handled query error, and SOLO_WS === MEMBER by
+  // construction, this passes identically pre- and post-fix — it is a
+  // regression guard against a future change that would resolve a SIBLING
+  // workspace on degrade, not a test that distinguishes the #4767 fix.
+  test("degrade-to-solo safety guard: a degraded resolve queries the caller's own workspace, never a sibling", async () => {
+    // On error resolveCurrentWorkspaceId Sentry-mirrors and returns the caller's
+    // own userId (solo). The RPC then sees the solo ws, finds no delegation, and
+    // the status endpoint stays fail-closed (false).
     mockResolveCurrentWorkspaceId.mockResolvedValue(MEMBER); // solo fallback
     primeRpcSharedWorkspaceOnly({ key_owner_user_id: GRANTOR, delegation_id: "deleg-1" });
     const result = await userHasEffectiveByokKey(MEMBER, { onErrorReturn: false });
