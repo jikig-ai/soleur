@@ -189,10 +189,20 @@ export async function updateWorkspaceMemberRole(
     p_workspace_id: args.workspaceId,
     p_user_id: args.targetUserId,
     p_new_role: args.newRole,
+    // Forward the route-verified getUser() id: the RPC runs under
+    // createServiceClient() where auth.uid() is NULL, so the owner-gate
+    // resolves the caller via COALESCE(p_caller_user_id, auth.uid())
+    // (migration 094). Without this the gate raises 28000. See #4779-followup.
+    p_caller_user_id: args.callerUserId,
   });
   if (error) {
     const msg = error.message ?? "";
-    if (msg.includes("caller is not an owner")) {
+    if (
+      msg.includes("caller is not an owner") ||
+      // Unreachable now that the route forwards p_caller_user_id (mig 094);
+      // map the NULL-caller 28000 arm to a typed reason as defense-in-depth.
+      msg.includes("caller_user_id is NULL")
+    ) {
       return { ok: false, reason: "caller_not_owner" };
     }
     if (msg.includes("no workspace_members row")) {
@@ -271,13 +281,26 @@ export async function removeWorkspaceMember(
   const { error } = await service.rpc("remove_workspace_member", {
     p_workspace_id: args.workspaceId,
     p_user_id: args.inviteeUserId,
+    // Forward the route-verified getUser() id: the RPC runs under
+    // createServiceClient() where auth.uid() is NULL, so the owner-gate
+    // resolves the caller via COALESCE(p_caller_user_id, auth.uid())
+    // (migration 094). Without this the gate raises 28000 → rpc_failed → the
+    // "Failed to remove member" toast. See #4779-followup.
+    p_caller_user_id: args.callerUserId,
   });
   if (error) {
     const msg = error.message ?? "";
     if (msg.includes("owner cannot remove self")) {
       return { ok: false, reason: "owner_cannot_remove_self" };
     }
-    if (msg.includes("not workspace owner") || msg.includes("caller is not")) {
+    if (
+      msg.includes("not workspace owner") ||
+      msg.includes("caller is not") ||
+      // Unreachable now that the route forwards p_caller_user_id (mig 094),
+      // but map the NULL-caller 28000 arm to a typed reason so a future
+      // regression surfaces as caller_not_owner, not an opaque rpc_failed 500.
+      msg.includes("caller_user_id is NULL")
+    ) {
       return { ok: false, reason: "caller_not_owner" };
     }
     if (msg.includes("not a member")) {

@@ -114,3 +114,69 @@ describe("DelegationToggle — owner revoke control (cannot-disable bug)", () =>
     expect(getSwitch()).toHaveAttribute("aria-checked", "true");
   });
 });
+
+describe("DelegationToggle — owner inline cap edit (post-join cap update)", () => {
+  // #4779-followup: once a member has joined and a delegation is active, the
+  // owner must be able to CHANGE the daily cap without revoke+re-grant. The
+  // cap display gains an "Edit cap" affordance that PATCHes the cap in place.
+  const activeProps = {
+    ...baseProps,
+    delegation: { id: "d-1", dailyCapCents: 2000, todaySpentCents: 500, active: true },
+  };
+
+  it("shows the current cap and an Edit cap affordance for an active delegation", () => {
+    render(<DelegationToggle {...activeProps} />);
+    // $5.00 spent / $20 cap
+    expect(screen.getByText(/\$5\.00\/\s*\$20/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /edit cap/i })).toBeTruthy();
+  });
+
+  it("PATCHes the new cap and updates the displayed cap on success", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    render(<DelegationToggle {...activeProps} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /edit cap/i }));
+    const input = screen.getByLabelText(/daily cap in dollars/i);
+    await userEvent.clear(input);
+    await userEvent.type(input, "50");
+    await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/workspace/delegations",
+      expect.objectContaining({ method: "PATCH" }),
+    );
+    const call = fetchMock.mock.calls.find((c) => c[1]?.method === "PATCH");
+    expect(JSON.parse(call![1].body as string)).toEqual({
+      delegationId: "d-1",
+      dailyCapCents: 5000,
+    });
+    // Displayed cap updates to $50.
+    expect(screen.getByText(/\$5\.00\/\s*\$50/)).toBeTruthy();
+    expect(alertMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the prior cap and alerts when the PATCH returns non-OK", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: "already revoked" }), { status: 400 }));
+    render(<DelegationToggle {...activeProps} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /edit cap/i }));
+    const input = screen.getByLabelText(/daily cap in dollars/i);
+    await userEvent.clear(input);
+    await userEvent.type(input, "50");
+    await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(alertMock).toHaveBeenCalledTimes(1);
+    // Prior cap ($20) preserved.
+    expect(screen.getByText(/\$5\.00\/\s*\$20/)).toBeTruthy();
+  });
+
+  it("Cancel closes the editor without issuing a PATCH", async () => {
+    render(<DelegationToggle {...activeProps} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /edit cap/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.getByText(/\$5\.00\/\s*\$20/)).toBeTruthy();
+  });
+});
