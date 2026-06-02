@@ -1470,6 +1470,11 @@ describe("cc-dispatcher singletons + orchestration", () => {
           content: "partial reply before abort",
           leader_id: "cc_router",
           status: "aborted",
+          // review (P2): the aborted branch of buildRow must also carry
+          // workspace_id (mig 059 RLS). Without this, a future drop of
+          // workspace_id on the aborted-only path passes T2 (complete) and
+          // ships a broken aborted-turn persist.
+          workspace_id: "ws-A",
         }),
       );
     },

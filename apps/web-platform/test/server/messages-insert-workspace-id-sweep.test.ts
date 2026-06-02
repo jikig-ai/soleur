@@ -20,12 +20,27 @@ import { join, resolve } from "node:path";
  * `hr-write-boundary-sentinel-sweep-all-write-sites`.
  */
 
+// review (P3): scan every dir where a `messages` INSERT could live, not just
+// server/. Today all interactive inserts are under server/, but a future
+// insert added under app/api/ or inngest/ must be caught too. The matcher
+// only fires on `.from("messages").insert(`, so widening the walk is safe
+// (SELECT/UPDATE on messages elsewhere never match). Each dir is guarded for
+// existence so the test stays green if a dir is absent.
+const SCAN_DIRS = ["server", "app", "inngest", "lib"].map((d) =>
+  resolve(__dirname, "..", "..", d),
+);
 const SERVER_DIR = resolve(__dirname, "..", "..", "server");
 
-/** Recursively collect every `.ts` file under `dir`. */
+/** Recursively collect every `.ts` file under `dir`. No-op if `dir` is absent. */
 function collectTsFiles(dir: string): string[] {
   const out: string[] = [];
-  for (const entry of readdirSync(dir)) {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return out; // dir absent — guarded per SCAN_DIRS comment
+  }
+  for (const entry of entries) {
     const full = join(dir, entry);
     const st = statSync(full);
     if (st.isDirectory()) {
@@ -162,7 +177,7 @@ function payloadHasWorkspaceId(payload: string): boolean {
 
 describe("messages INSERT write-boundary sweep — workspace_id present (mig 059)", () => {
   it("every server `.from(\"messages\").insert(...)` payload carries workspace_id", () => {
-    const files = collectTsFiles(SERVER_DIR);
+    const files = SCAN_DIRS.flatMap((d) => collectTsFiles(d));
     const violations: string[] = [];
     let totalFindings = 0;
 
@@ -178,7 +193,11 @@ describe("messages INSERT write-boundary sweep — workspace_id present (mig 059
       }
     }
 
-    // Guard against a vacuous pass (regex matching nothing).
+    // Guard against a vacuous pass (regex matching nothing). Floor = the 5
+    // known insert sites today: cc-dispatcher user + assistant(buildRow),
+    // agent-runner saveMessage + sendUserMessage, and the service-role
+    // insert-draft-card exemplar. If a site is intentionally removed, lower
+    // this floor deliberately (do not let it silently drop to a tight equality).
     expect(totalFindings).toBeGreaterThanOrEqual(5);
     expect(violations).toEqual([]);
   });
