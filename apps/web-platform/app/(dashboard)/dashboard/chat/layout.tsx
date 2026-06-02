@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { ConversationsRail } from "@/components/chat/conversations-rail";
+import { ConversationsRailPortal } from "@/components/chat/conversations-rail-portal";
 import { DelegationBanner, type DelegationBannerProps } from "@/components/chat/delegation-banner";
 import { PendingInviteBanner } from "@/components/dashboard/pending-invite-banner";
 import { createClient } from "@/lib/supabase/server";
@@ -64,12 +64,11 @@ export default async function ChatLayout({ children }: { children: ReactNode }) 
 
   return (
     <div className="flex h-full min-h-0 flex-1">
-      <aside
-        data-testid="conversations-rail"
-        className="hidden md:block md:w-72 md:shrink-0 md:border-r md:border-soleur-border-default md:bg-soleur-bg-base"
-      >
-        <ConversationsRail />
-      </aside>
+      {/* The conversations rail now lives in the single nav rail's secondary
+          slot (ADR-047) — portaled there from this segment so the rail swaps
+          to it on /dashboard/chat. The old sibling <aside> is deleted; only
+          the async delegation/invite banner resolution above stays here. */}
+      <ConversationsRailPortal />
       <div className="flex min-w-0 flex-1 flex-col">
         {pendingInvite && <PendingInviteBanner {...pendingInvite} />}
         {bannerProps && <DelegationBanner {...bannerProps} />}

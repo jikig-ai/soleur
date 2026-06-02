@@ -91,7 +91,15 @@ export function OrgSwitcherContainer() {
       setStatus("failed");
       return;
     }
-    window.location.reload();
+    // RQ2 (brand-critical) — HARD navigation to the neutral /dashboard route,
+    // NOT a soft router.push. The previous window.location.reload() was
+    // load-bearing for correctness (it forced server components to re-render
+    // against the freshly-minted JWT above); a soft nav would serve cached RSC
+    // and land the user on STALE prior-tenant data. assign("/dashboard") gives
+    // BOTH the neutral landing (never a tenant-sensitive pane for the new
+    // workspace) AND the full RSC re-render. executeSwitch is shared by the
+    // confirm AND failure→Retry paths, so this one change covers both.
+    window.location.assign("/dashboard");
   }, []);
 
   const handleConfirm = useCallback(() => {
@@ -103,11 +111,13 @@ export function OrgSwitcherContainer() {
     setStatus("idle");
   }, []);
 
+  // No flash before the membership fetch resolves.
   if (memberships === null) return null;
-  // AC-C: collapse the sidebar band entirely for solo users — no border, no
-  // padding — so the dashboard chrome is indistinguishable from before
-  // multi-tenant support landed.
-  if (memberships.length <= 1) return null;
+  // RQ7: the band always surfaces the active-workspace name for orientation.
+  // OrgSwitcher decides the affordance: an interactive switcher for multi-org
+  // users, a non-interactive identity chip for solo users (and nothing at all
+  // when there are zero memberships). The container no longer self-hides on
+  // `<= 1` — the band owns the single render path for workspace identity.
 
   return (
     <div className="border-b border-soleur-border-default px-3 py-3">

@@ -5,6 +5,7 @@ import { isByokDelegationsEnabled, type Identity } from "@/lib/feature-flags/ser
 import { resolveCurrentOrganizationId } from "@/server/workspace-resolver";
 import { resolveGrantorDelegations } from "@/server/byok-delegation-ui-resolver";
 import { reportSilentFallback } from "@/server/observability";
+import { emitWorkspaceActionContext } from "@/server/workspace-action-audit";
 
 export async function GET(request: Request) {
   const { valid, origin } = validateOrigin(request);
@@ -93,6 +94,16 @@ export async function POST(request: Request) {
   });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+
+  // AC11: record the active workspace at api-key-share commit time
+  // (wrong-workspace detector). Ownership of body.workspaceId was just proven.
+  emitWorkspaceActionContext({
+    action: "api-key-share",
+    userId: user.id,
+    workspaceId: body.workspaceId,
+    organizationId: orgId,
+  });
+
   return NextResponse.json({ delegationId: data });
 }
 

@@ -1,8 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse";
+import {
+  useSidebarCollapse,
+  ORPHAN_COLLAPSE_KEYS,
+  __resetOrphanCleanupForTests,
+} from "@/hooks/use-sidebar-collapse";
 
 const STORAGE_KEY = "soleur:sidebar.test.collapsed";
+const MAIN_KEY = "soleur:sidebar.main.collapsed";
 
 describe("useSidebarCollapse", () => {
   beforeEach(() => {
@@ -78,6 +83,27 @@ describe("useSidebarCollapse", () => {
 
     expect(resultA.current[0]).toBe(true);
     expect(resultB.current[0]).toBe(false);
+  });
+
+  // ADR-047 collapse-key unification (review: data-integrity + pattern-recognition).
+  it("never lists the live unified key among the orphan keys to sweep", () => {
+    // Regression guard: a future typo adding the main key to the orphan list
+    // would make the hook delete the user's live collapse state on every mount.
+    expect([...ORPHAN_COLLAPSE_KEYS]).not.toContain(MAIN_KEY);
+  });
+
+  it("sweeps the orphaned per-section keys on first mount, keeping the main key", () => {
+    __resetOrphanCleanupForTests();
+    localStorage.setItem(MAIN_KEY, "1");
+    for (const k of ORPHAN_COLLAPSE_KEYS) localStorage.setItem(k, "1");
+
+    renderHook(() => useSidebarCollapse(MAIN_KEY));
+
+    // Orphans swept; the live unified key is untouched.
+    for (const k of ORPHAN_COLLAPSE_KEYS) {
+      expect(localStorage.getItem(k)).toBeNull();
+    }
+    expect(localStorage.getItem(MAIN_KEY)).toBe("1");
   });
 
   it("degrades gracefully when localStorage throws", () => {
