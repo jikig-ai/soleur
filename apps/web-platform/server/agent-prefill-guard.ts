@@ -230,16 +230,17 @@ export async function applyPrefillGuard(
 
   if (history.length === 0) {
     // Empty history for a known resumeSessionId is suspicious — the id
-    // was emitted by the SDK on a prior turn, so an empty list means
-    // either the session file was rotated/deleted, or `dir` is wrong.
-    // Pass `resume:` through (Anthropic accepts empty conversation +
-    // new user message) and emit a distinct op for `dir`-arg drift
-    // detection.
+    // was emitted by the SDK on a prior turn, so an empty list means the
+    // session file was rotated, deleted, or never persisted. (Since the
+    // probe omits `dir` and searches all projects (#4852), a cwd-encoding
+    // mismatch can no longer produce this `[]`.) Pass `resume:` through
+    // (Anthropic accepts empty conversation + new user message) and emit a
+    // distinct op so a rising empty-history rate is observable.
     warnSilentFallback(null, {
       feature: args.feature,
       op: "prefill-guard-empty-history",
       message:
-        "Persisted session has zero messages — possible dir-arg drift or missing session file",
+        "Persisted session has zero messages — session file rotated, deleted, or never persisted",
       extra: baseExtra,
     });
     return { safeResumeSessionId: args.resumeSessionId };
