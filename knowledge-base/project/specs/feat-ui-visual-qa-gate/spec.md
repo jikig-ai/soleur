@@ -61,7 +61,16 @@ invocation skips `/soleur:qa` (only one-shot runs qa pre-merge). The non-technic
   collapse chevron + `ThemeToggle` so they render only at the top level.
 - **FR5 — Bug 2 fix.** Give `WorkspaceContextBand` an icon-only collapsed form (pass/derive a
   `collapsed` signal; gate text content on it without unmounting the identity). Follow the
-  ux-design-lead wireframe for the collapsed icon-only band + the collapsed-drilled tree behavior.
+  ux-design-lead wireframe: `knowledge-base/product/design/navigation/single-nav-rail.pen`
+  frames **06 — Collapsed: top level** and **07 — Collapsed: drilled KB (tree peek)** (review PNGs:
+  `screenshots/06-collapsed-top-level.png`, `screenshots/07-collapsed-drilled-kb-tree-peek.png`).
+  Collapsed form = back-chevron + org avatar + repo dot + section icon only (NO wordmark/theme
+  toggle per Bug 1); hover tooltips recover every hidden text label (a11y).
+  - **Collapsed-drilled tree = option (c):** at 56px the KB tree cannot legibly icon-collapse, so
+    drilling auto-expands a **200px tree-peek panel anchored to the 56px icon spine** (spine stays
+    collapsed, preserving identity icons + reclaimed width). The collapse chevron becomes a **pin**
+    affordance; unpinning dismisses the peek back to the bare spine. (Rejected: (a) force-expand
+    whole rail — discards collapse intent; (b) icon/indent-only tree — unreadable glyph soup.)
 - **FR6 — strengthen jsdom test.** In `test/nav-rail-drill.test.tsx`, assert the drilled rail
   contains band + section + secondary-nav ONLY, and does NOT contain wordmark / ThemeToggle /
   footer (pure DOM-presence; would have caught Bug 1).
@@ -107,7 +116,7 @@ invocation skips `/soleur:qa` (only one-shot runs qa pre-merge). The non-technic
 
 ## Open Questions (carry to plan)
 
-- Collapsed-drilled KB-tree behavior — resolved by ux-design-lead wireframe (force-expand vs
-  icon-tree vs auto-expand-on-click).
+- ~~Collapsed-drilled KB-tree behavior~~ — **RESOLVED** (wireframe option (c): 200px tree-peek
+  panel anchored to the collapsed spine; chevron→pin). See FR5.
 - Exact `/work` Phase 4 hook point (operator observed qa-skip; SKILL.md text reads as terminal).
 - CI wall-clock cost of the added `authenticated` webServer + viewport matrix.

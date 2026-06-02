@@ -91,7 +91,7 @@ a merge blocker.
 | 10 | **Create an ADR** codifying "structural-UI diffs require a headless visual-regression gate; jsdom cannot see CSS" + the mock-vs-live seeding rationale. | So it isn't re-litigated. Relates to ADR-047. |
 | 11 | **One PR, ordered:** build gate → capture RED baseline on the live bugs → fix both bugs → gate goes GREEN. | The gate is proven by catching the bugs; the diff tells the story. (CPO) |
 | 12 | **Scope = nav/dashboard shell + 1-2 drilled routes**; build the matrix (route list × viewport) so adding routes is cheap; defer broad per-page visual regression to a tracked issue (YAGNI). | Captures the actual failure class (shell leakage, collapsed-state absence) without flaky snapshot-maintenance cost. (CPO) |
-| 13 | **Visual design:** collapsed-rail wireframe authored via ux-design-lead (the collapsed icon-only band + collapsed-drilled tree treatment were never designed). `.pen` path linked in spec. | wg-ui-feature-requires-pen-wireframe; the collapsed band is genuinely new UI. |
+| 13 | **Visual design:** collapsed-rail wireframe authored via ux-design-lead — `single-nav-rail.pen` frames 06 (collapsed top-level) + 07 (collapsed-drilled KB tree-peek). Collapsed-drilled tree = **option (c): 200px tree-peek panel anchored to the 56px spine; chevron→pin**. | wg-ui-feature-requires-pen-wireframe; the collapsed band was genuinely new UI. Resolves OQ1. |
 
 ## User-Brand Impact
 
@@ -107,10 +107,20 @@ a merge blocker.
 
 ## Open Questions
 
-1. **Collapsed-drilled tree behavior** — at 56px, does the drilled secondary content (KB file
-   tree) (a) force-expand the rail, (b) collapse to icon/indent-only, or (c) auto-expand on
-   click? Resolved by the ux-design-lead wireframe (Decision 13); carry the chosen behavior into
-   the plan.
+1. ~~Collapsed-drilled tree behavior~~ — **RESOLVED (option c)** by the ux-design-lead wireframe:
+   drilling auto-expands a 200px tree-peek panel anchored to the collapsed 56px spine; the collapse
+   chevron becomes a pin. Carry into the plan (frames 06/07 in `single-nav-rail.pen`).
+
+## Session Errors
+
+- **Pencil MCP adapter is destructive in this headless environment.** `mcp__pencil__open_document`
+  loaded an empty editor and **truncated `single-nav-rail.pen` to 0 bytes on open** (twice), and
+  also touched a stray copy at the bare-repo path. The ux-design-lead recovered from a git-HEAD
+  backup, hand-authored the two new frames as schema-validated JSON, and rendered review PNGs via
+  headless Chrome instead of `export_nodes`. Both the worktree `.pen` (verified valid JSON, 7
+  frames) and the main-checkout `.pen` (verified hash-identical to the committed blob) are intact.
+  Matches the `cq-pencil-mcp-silent-drop` failure class. Tracked: #3274 (recurrence noted).
+  end. The MCP adapter must be repaired (or the Pencil GUI used) before the next `.pen` edit.
 2. **`/work` Phase 4 wiring mechanics** — the operator observed direct `/work` chaining
    `review → resolve-todo → compound → ship` and skipping qa; the work SKILL.md text reads as if
    Phase 4 is terminal. Confirm at plan time exactly where the structural-UI predicate hooks so
