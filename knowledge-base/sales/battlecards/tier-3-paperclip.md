@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-12
-last_reviewed: 2026-03-12
+last_updated: 2026-06-02
+last_reviewed: 2026-06-02
 review_cadence: monthly
 owner: CRO
 depends_on:
@@ -12,14 +12,16 @@ convergence_risk: Medium
 
 # Battlecard: Paperclip
 
+> **[2026-06-02 Review note]** Traction updated against `knowledge-base/product/competitive-intelligence.md` (2026-05-30 scan): Paperclip **crossed 30,000+ GitHub stars in three weeks** (roughly double the 14.6k March figure) and is now **explicitly built on Anthropic's Claude Code**. The "stars exceed 30k" convergence trigger below has effectively fired — category validation is confirmed; treat the open-source-orchestration narrative as a live competitive surface, not a hypothetical.
+
 ## Quick Facts
 
 | Field | Value |
 |-------|-------|
 | **Product** | Paperclip -- open-source orchestration platform for zero-human companies. MIT-licensed. Self-hosted. |
 | **Pricing** | Free (MIT license, self-hosted). No paid tier. |
-| **GitHub Stars** | 14.6k (March 2026). 1.7k forks. Rapid growth from 4.3k to 14.6k in one week. |
-| **Latest Version** | v0.3.0 (March 9, 2026). New adapters for Cursor, OpenCode, Pi. |
+| **GitHub Stars** | 30,000+ (crossed in three weeks, per 2026-05-30 scan; ~14.6k in March). Launched March 4, 2026 by pseudonymous `@dotta`. |
+| **Latest Version** | v0.3.0 (March 9, 2026). New adapters for Cursor, OpenCode, Pi. **Now explicitly built on Anthropic's Claude Code.** |
 | **Domain Coverage** | Agent-runtime-agnostic. Does not provide domain-specific agents. Users bring their own agents (Claude, OpenClaw, Cursor, Codex, Bash, HTTP webhooks). Target domains: marketing, crypto, e-commerce, software development, sales, media. |
 | **Key Features** | Org charts with reporting lines, cascading goals (company mission to individual tasks), heartbeat scheduling, per-agent monthly budgets with auto-pause, governance with rollback and approval gates, immutable audit logs, atomic task checkout, multi-company support. Upcoming: Clipmart (pre-built company templates). |
 | **Knowledge Persistence** | None. No knowledge layer. Orchestration infrastructure only. |
@@ -45,7 +47,7 @@ convergence_risk: Medium
 | **Pricing** | Free (MIT) | Free (Apache-2.0). Paid tier planned at $49/month. | Both free at core. |
 | **Self-hosted** | Yes (Node.js + Postgres) | Yes (Claude Code plugin, local-first) | Both self-hosted. |
 | **Agent flexibility** | Any agent runtime (Claude, Cursor, Codex, scripts, webhooks) | Claude Code native. Anthropic model dependency. | Paperclip (runtime-agnostic) |
-| **GitHub traction** | 14.6k stars (rapid growth) | Early stage. | Paperclip |
+| **GitHub traction** | 30,000+ stars (crossed in three weeks) | Early stage. | Paperclip |
 | **Company templates** | Clipmart (upcoming): pre-built company templates with org structures and agent configs | 60+ agents ship as integrated organization. No assembly required. | Soleur (ready-made) vs. Paperclip (assembly from templates) |
 
 ## Talk Tracks
@@ -54,7 +56,7 @@ convergence_risk: Medium
 
 **Response:** "Paperclip is excellent infrastructure. It gives you the org chart, the budgets, the governance. What it does not give you is the agents or the knowledge. Paperclip is the scaffolding. Soleur is the organization that fills it. You can use Paperclip to orchestrate Claude sessions and Python scripts, but those agents do not share institutional memory, do not reference each other's work, and do not compound across domains. Soleur's 60+ agents share a knowledge base where the brand guide informs marketing, the competitive analysis shapes pricing, and the legal audit references the privacy policy. Paperclip orchestrates tasks. Soleur compounds intelligence."
 
-### "Paperclip is MIT-licensed and has 14.6k stars. It's more popular."
+### "Paperclip is MIT-licensed and has 30,000+ stars. It's more popular."
 
 **Response:** "Paperclip's growth is impressive and validates the demand for AI company orchestration. GitHub stars measure developer interest in the infrastructure problem. Soleur solves a different problem: domain-specific intelligence with compounding knowledge. A founder using Paperclip still needs to source, configure, and connect agents for each business function. A founder using Soleur gets 60+ agents that work together out of the box. The projects could be complementary -- Soleur's agents running within Paperclip's orchestration framework."
 
@@ -74,14 +76,14 @@ convergence_risk: Medium
 
 Review monthly. Paperclip is complementary today but could converge.
 
-| Trigger | Current Status (2026-03-12) | Action if Triggered |
+| Trigger | Current Status (2026-06-02) | Action if Triggered |
 |---------|---------------------------|-------------------|
 | Clipmart launches with curated, knowledge-aware company templates | Upcoming feature. Not shipped. | Evaluate template quality and domain coverage. If templates include domain-specific intelligence, convergence risk escalates. Consider publishing a Soleur template for Paperclip's Clipmart. |
 | Paperclip adds a knowledge layer | No knowledge persistence. Infrastructure-only. | Major escalation. If Paperclip adds cross-agent shared knowledge, the "orchestration vs. intelligence" differentiation weakens. |
 | Paperclip ships a Claude Code adapter | v0.3.0 added Cursor, OpenCode, Pi adapters. No Claude Code adapter yet. | Evaluate integration quality. Consider building a Soleur-Paperclip integration before Paperclip builds a generic Claude Code adapter. |
-| Paperclip GitHub stars exceed 30k | 14.6k stars (March 2026). Growing rapidly. | Community traction validated. Evaluate whether Soleur should publish a Paperclip adapter to ride distribution. |
+| Paperclip GitHub stars exceed 30k | **TRIGGERED** — 30,000+ stars (crossed in three weeks, per 2026-05-30 scan). | Community traction validated. Evaluate whether Soleur should publish a Paperclip adapter to ride distribution. Next escalation threshold: 100k stars. |
 | Paperclip raises funding or announces commercial tier | MIT-licensed, no commercial model. | Monitor pricing relative to Soleur. If Paperclip charges for hosted orchestration, the "free OSS orchestration + Soleur domain intelligence" stack becomes more expensive. |
 
 ---
 
-_Updated: 2026-03-12. Source: competitive-intelligence.md (2026-03-12)._
+_Updated: 2026-06-02. Source: competitive-intelligence.md (2026-05-30)._
