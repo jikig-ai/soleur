@@ -54,8 +54,15 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.79
 # `sandbox.failIfUnavailable: true` set in agent-runner.ts (see #2634), the
 # agent process refuses to start instead of silently falling back to
 # unsandboxed Bash execution. Do NOT remove socat in future cleanups.
+#
+# `jq` is load-bearing for the content publisher: cron-content-publisher.ts
+# spawns scripts/content-publisher.sh (jq x5) which spawns the LinkedIn scripts
+# (linkedin-community.sh jq x8). The TR9 migration moved the publisher off the
+# GHA runner (jq preinstalled) into this image without porting the dependency,
+# so every scheduled post failed with "jq is required but not installed" and
+# routed to a per-post fallback issue (e.g. #4858). Do NOT remove jq.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates git bubblewrap socat qpdf \
+    ca-certificates git bubblewrap socat qpdf jq \
     && rm -rf /var/lib/apt/lists/*
 
 # GitHub CLI (needed by cron-follow-through-monitor gh label/issue commands
