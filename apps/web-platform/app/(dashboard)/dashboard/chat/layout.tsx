@@ -4,7 +4,7 @@ import { DelegationBanner, type DelegationBannerProps } from "@/components/chat/
 import { PendingInviteBanner } from "@/components/dashboard/pending-invite-banner";
 import { createClient } from "@/lib/supabase/server";
 import { isByokDelegationsEnabled, type Identity } from "@/lib/feature-flags/server";
-import { resolveCurrentOrganizationId } from "@/server/workspace-resolver";
+import { resolveCurrentOrganizationId, resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 import { resolveGranteeDelegation, resolveGranteeAcceptanceStatus } from "@/server/byok-delegation-ui-resolver";
 import { getPendingInvitesForUser } from "@/server/workspace-invitations";
 import { BYOK_SIDE_LETTER_VERSION } from "@/server/byok-side-letter";
@@ -26,7 +26,12 @@ export default async function ChatLayout({ children }: { children: ReactNode }) 
       if (orgId) {
         const identity: Identity = { userId: user.id, role: "prd", orgId };
         if (await isByokDelegationsEnabled(orgId, identity)) {
-          const workspaceId = user.id;
+          // The grantee's delegation lives in the ACTIVE (shared) workspace the
+          // owner granted into — NOT their oldest/solo workspace. Resolve the
+          // current workspace (ADR-044) so an invited member with a pre-existing
+          // solo account sees their chat delegation banner (#4767). Fails closed
+          // to the caller's own solo workspace on error, never a sibling.
+          const workspaceId = await resolveCurrentWorkspaceId(user.id, supabase);
           const delegation = await resolveGranteeDelegation(user.id, workspaceId, orgId, identity);
           if (delegation) {
             const acceptance = await resolveGranteeAcceptanceStatus(user.id, delegation.id);
