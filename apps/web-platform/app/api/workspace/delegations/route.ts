@@ -139,10 +139,16 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
+  // Canonical 3-arg contract from migration 064 (064:495-498; mirrors
+  // scripts/byok-revoke.ts:154-158). PostgREST resolves rpc() by argument NAME
+  // — these MUST match the function signature exactly or resolution fails
+  // (PGRST202 → 400 → the toggle can never be turned OFF). The legacy
+  // p_revoked_by_user_id / p_revocation_reason names never existed on this RPC;
+  // this is the same defect class #4761 fixed for the grant path.
   const { error } = await service.rpc("revoke_byok_delegation", {
     p_delegation_id: body.delegationId,
-    p_revoked_by_user_id: user.id,
-    p_revocation_reason: reason,
+    p_actor_user_id: user.id,
+    p_reason: reason,
   });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
