@@ -78,12 +78,17 @@ export async function acquireSlot(
   userId: string,
   conversationId: string,
   effectiveCap: number,
+  workspaceId: string,
 ): Promise<AcquireSlotResult> {
   for (let attempt = 0; attempt < 3; attempt++) {
     const { data, error } = await supabase.rpc("acquire_conversation_slot", {
       p_user_id: userId,
       p_conversation_id: conversationId,
       p_effective_cap: effectiveCap,
+      // mig 093: workspace_id is NOT NULL on user_concurrency_slots (mig 059).
+      // Pass the session-active workspace so slot.workspace_id ==
+      // conversation.workspace_id. Closes Sentry 23502 acquireSlot.
+      p_workspace_id: workspaceId,
     });
     if (!error && data) {
       const row = Array.isArray(data) ? data[0] : data;
@@ -103,7 +108,7 @@ export async function acquireSlot(
       reportSilentFallback(error, {
         feature: "concurrency",
         op: "acquireSlot",
-        extra: { userId, conversationId, effectiveCap, attempt },
+        extra: { userId, conversationId, effectiveCap, workspaceId, attempt },
       });
       return { status: "error", activeCount: 0, effectiveCap };
     }
@@ -117,7 +122,7 @@ export async function acquireSlot(
     {
       feature: "concurrency",
       op: "acquireSlot",
-      extra: { userId, conversationId, effectiveCap },
+      extra: { userId, conversationId, effectiveCap, workspaceId },
     },
   );
   return { status: "error", activeCount: 0, effectiveCap };

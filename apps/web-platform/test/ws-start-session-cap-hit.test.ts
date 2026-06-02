@@ -98,6 +98,7 @@ vi.mock("@/server/current-repo-url", () => ({
 }));
 
 import { handleMessage, sessions, type ClientSession } from "@/server/ws-handler";
+import { setUserWorkspace } from "@/server/agent-session-registry";
 
 interface SentCapture {
   sent: unknown[];
@@ -132,6 +133,10 @@ describe("start_session — concurrency cap enforcement", () => {
     vi.clearAllMocks();
     sessions.clear();
     mockRpc.mockReset();
+    // The acquire path resolves getUserWorkspace(userId) (set at session-open
+    // in prod, ws-handler.ts:2294) and fails loud if absent — mig 093 passes
+    // it as the slot's NOT NULL workspace_id. Seed it for the synthetic user.
+    setUserWorkspace("user-1", "user-1");
   });
 
   it("cap_hit: sends preamble, closes with 4010, does not set pending", async () => {

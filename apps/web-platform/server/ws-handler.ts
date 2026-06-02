@@ -1437,12 +1437,25 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         // The row is created on the first real chat message.
         const pendingId = randomUUID();
 
+        // Resolve the session-active workspace once. The slot's workspace_id
+        // (NOT NULL since mig 059) MUST equal the conversation's workspace_id,
+        // which createConversation writes as getUserWorkspace(userId)
+        // (see :808-819). Fail loud (mirrors createConversation:809-812)
+        // rather than passing null/undefined to acquireSlot — a null
+        // p_workspace_id would re-trigger the 23502 this path closes (mig 093).
+        const slotWorkspaceId = getUserWorkspace(userId);
+        if (!slotWorkspaceId) {
+          throw new Error(
+            "No workspace binding for user — slot acquire aborted.",
+          );
+        }
+
         // Plan-based concurrency gate. Acquire a slot keyed on (userId,
         // pendingId). A cap_hit result denies before we mutate any session
         // state so the client can present the upgrade modal without the
         // confusion of a session_started that never got a response.
         const cap = effectiveCap(session.planTier, session.concurrencyOverride);
-        let acquire = await acquireSlot(userId, pendingId, cap);
+        let acquire = await acquireSlot(userId, pendingId, cap, slotWorkspaceId);
 
         if (acquire.status === "cap_hit" && session.stripeSubscriptionId) {
           // Webhook-lag fallback: ask Stripe directly. If the live tier
@@ -1476,7 +1489,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             if (liveCap > cap) {
               session.planTier = live.tier;
               session.concurrencyOverride = freshOverride;
-              acquire = await acquireSlot(userId, pendingId, liveCap);
+              acquire = await acquireSlot(userId, pendingId, liveCap, slotWorkspaceId);
             }
           } catch (liveErr) {
             Sentry.captureException(liveErr);
@@ -1494,7 +1507,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           const recovered = await tryLedgerDivergenceRecovery(userId);
           if (recovered.didRecover) {
             const cap = effectiveCap(session.planTier, session.concurrencyOverride);
-            acquire = await acquireSlot(userId, pendingId, cap);
+            acquire = await acquireSlot(userId, pendingId, cap, slotWorkspaceId);
           }
         }
 
