@@ -205,6 +205,7 @@ jobs:
             -target=sentry_cron_monitor.scheduled_bug_fixer \
             -target=sentry_cron_monitor.scheduled_content_generator \
             -target=sentry_cron_monitor.scheduled_ux_audit \
+            -target=sentry_cron_monitor.scheduled_supabase_disk_io \
             -target=sentry_uptime_monitor.soleur_apex \
             -target=sentry_uptime_monitor.soleur_www \
             -target=sentry_uptime_monitor.soleur_changelog_deep \
