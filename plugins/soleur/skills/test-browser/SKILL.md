@@ -7,6 +7,8 @@ description: "This skill should be used when running end-to-end browser tests on
 
 <command_purpose>Run end-to-end browser tests on pages affected by a PR or branch changes using agent-browser CLI.</command_purpose>
 
+> **Positioning (ADR-048, #4834):** for **structural-UI** diffs (nav/rail/dashboard shell), the *pre-merge* visual check is now the committed, CI-blocking `nav-states-*.e2e.ts` gate run by `/soleur:qa` Step 2.6 — not this skill. Running `test-browser` only *after* ship is the deferral trap that let the #4810 layout bugs reach prod. Treat this skill as a **post-ship smoke** (broad page reachability + console-error sweep) that complements, never replaces, the pre-merge `/soleur:qa` gate.
+
 ## CRITICAL: Use agent-browser CLI Only
 
 **DO NOT use Chrome MCP tools (mcp__claude-in-chrome__*).**

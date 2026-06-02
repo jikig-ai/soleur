@@ -67,6 +67,22 @@ echo "${DEPLOY_URL:-not_set}"
 
 Store the config name for use in subsequent `doppler` commands.
 
+### Step 2.6: Structural-UI Visual-Regression Gate (#4834 / ADR-048)
+
+This is the gate's semantic home. Run it when the diff (`git diff --name-only origin/$(git rev-parse --abbrev-ref HEAD)...HEAD`) touches `apps/web-platform/app/(dashboard)/**`, `apps/web-platform/components/dashboard/**`, or any `layout.tsx`. Skip silently otherwise.
+
+**Why this exists:** jsdom (vitest) renders no CSS, so `md:w-14` / `hidden md:block` / `flex-wrap` / `display:none` regressions ship green through the unit suite (the #4810 class — top-level chrome leaking into drilled routes; a collapsed rail with no icon-only form). The gate renders real CSS in real headless Chromium.
+
+**Deterministic layer (BLOCKING).** Run the committed `nav-states-*.e2e.ts` spec in the existing `authenticated` Playwright project — real headless Chromium + real Next.js SSR seeded by the **offline mock-Supabase storageState** (`e2e/global-setup.ts` + `e2e/helpers/supabase-mocks.ts`). Zero credentials; NO `dev-signin`; never point at a live origin (CLO: synthetic fixtures only).
+
+```bash
+cd apps/web-platform && ./node_modules/.bin/playwright test nav-states --project=authenticated --reporter=list
+```
+
+A non-zero exit FAILS this QA run. The assertions read invariants jsdom cannot: drilled routes hide the wordmark + ThemeToggle; the collapsed rail is icon-only with no horizontal overflow; the workspace-identity band is visible (with org + repo content) in every drill state × viewport.
+
+**Advisory vision layer (NON-BLOCKING).** Optionally drive Playwright MCP over the same routes and screenshot each, then run a vision pass for anything the deterministic assertions miss (spacing, color, truncation). This is informational only — headed MCP cannot run in autonomous `/work`/CI, so it never blocks the merge. Surface findings as notes in the QA report.
+
 ### Step 3: Execute Test Scenarios
 
 For each test scenario in the plan, execute the steps it describes. Scenarios contain three possible step types, identified by their prefix:
