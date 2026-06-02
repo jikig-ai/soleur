@@ -38,6 +38,7 @@ resource "hcloud_server" "web" {
     journald_soleur_conf_b64             = base64encode(file("${path.module}/journald-soleur.conf"))
     hooks_json_b64                       = base64encode(local.hooks_json)
     infra_config_apply_script_b64        = base64encode(file("${path.module}/infra-config-apply.sh"))
+    infra_config_install_script_b64      = base64encode(file("${path.module}/infra-config-install.sh"))
     cat_infra_config_state_script_b64    = base64encode(file("${path.module}/cat-infra-config-state.sh"))
     tunnel_token                         = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
     webhook_deploy_secret                = var.webhook_deploy_secret
@@ -339,9 +340,21 @@ resource "terraform_data" "journald_persistent" {
 # runner egress IP is NOT in admin_ips and is non-static, so this resource is
 # admin-applied (like the 7 siblings) — do NOT add it to apply-deploy-pipeline-fix.yml's
 # -target= set (which applies only the webhook resource).
+#
+# #4827 ADDITION: this bridge also delivers infra-config-install.sh (the pinned
+# root-run escalation helper) + the updated deploy-inngest-bootstrap.sudoers (with
+# the INFRA_CONFIG_INSTALL grant) over root SSH. This is load-bearing for the
+# chicken-and-egg: the webhook handler's prod-mode escalation needs BOTH the helper
+# binary AND the sudoers alias present on-host before `sudo infra-config-install`
+# is permitted — but the handler cannot deliver either (the helper is deliberately
+# OUT of the webhook FILE_MAP, and writing the sudoers itself requires the alias).
+# Root SSH is the only non-circular bootstrap path. deploy_pipeline_fix depends_on
+# this resource so the SSH delivery lands before its webhook push runs.
 resource "terraform_data" "infra_config_handler_bootstrap" {
   triggers_replace = sha256(join(",", [
     file("${path.module}/infra-config-apply.sh"),
+    file("${path.module}/infra-config-install.sh"),
+    file("${path.module}/deploy-inngest-bootstrap.sudoers"),
     file("${path.module}/cat-infra-config-state.sh"),
     local.hooks_json,
   ]))
@@ -369,6 +382,24 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
     destination = "/usr/local/bin/cat-infra-config-state.sh"
   }
 
+  # #4827 — the escalation helper. Delivered here (root SSH) because the webhook
+  # handler that depends on it cannot deliver it (it is OUT of the FILE_MAP).
+  provisioner "file" {
+    source      = "${path.module}/infra-config-install.sh"
+    destination = "/usr/local/bin/infra-config-install"
+  }
+
+  # #4827 — the sudoers grant (with the new INFRA_CONFIG_INSTALL alias). Staged to
+  # a temp path then visudo-validated + installed below; writing it directly would
+  # risk a half-written file in /etc/sudoers.d. The handler ALSO carries this file
+  # in its FILE_MAP, but the webhook self-heal of the sudoers is circular on the
+  # first apply (escalating its write needs the alias this file adds), so root SSH
+  # bootstraps it.
+  provisioner "file" {
+    source      = "${path.module}/deploy-inngest-bootstrap.sudoers"
+    destination = "/tmp/deploy-inngest-bootstrap.sudoers.staged"
+  }
+
   provisioner "remote-exec" {
     inline = [
       # Render hooks.json from the secret-bearing local value (base64 so the
@@ -378,10 +409,17 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
       "printf '%s' '${base64encode(local.hooks_json)}' | base64 -d > /etc/webhook/hooks.json",
       # Ownership/permissions: scripts root:root 0755, hooks.json root:deploy 0640
       # (match cloud-init.yml write_files for these paths).
-      "chown root:root /usr/local/bin/infra-config-apply.sh /usr/local/bin/cat-infra-config-state.sh",
-      "chmod 0755 /usr/local/bin/infra-config-apply.sh /usr/local/bin/cat-infra-config-state.sh",
+      "chown root:root /usr/local/bin/infra-config-apply.sh /usr/local/bin/cat-infra-config-state.sh /usr/local/bin/infra-config-install",
+      "chmod 0755 /usr/local/bin/infra-config-apply.sh /usr/local/bin/cat-infra-config-state.sh /usr/local/bin/infra-config-install",
       "chown root:deploy /etc/webhook/hooks.json",
       "chmod 0640 /etc/webhook/hooks.json",
+      # #4827 — validate then atomically install the sudoers grant. visudo -cf
+      # gates a malformed file from disabling sudo entirely; install does an
+      # owner/mode-correct atomic placement. Fail the provisioner on a bad file
+      # rather than ship a broken /etc/sudoers.d.
+      "visudo -cf /tmp/deploy-inngest-bootstrap.sudoers.staged",
+      "install -o root -g root -m 0440 /tmp/deploy-inngest-bootstrap.sudoers.staged /etc/sudoers.d/deploy-inngest-bootstrap",
+      "rm -f /tmp/deploy-inngest-bootstrap.sudoers.staged",
       # Synchronous restart (safe — this SSH path is not the webhook process).
       "systemctl restart webhook",
       # Positive post-write assertions (journald_persistent / fail2ban_tuning
@@ -389,6 +427,10 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
       # assertion fails the provisioner instead of silently shipping dead config.
       "test -x /usr/local/bin/infra-config-apply.sh",
       "test -x /usr/local/bin/cat-infra-config-state.sh",
+      "test -x /usr/local/bin/infra-config-install",
+      # The sudoers grant landed and parses (the INFRA_CONFIG_INSTALL alias is
+      # what makes the webhook handler's prod-mode escalation work).
+      "grep -q INFRA_CONFIG_INSTALL /etc/sudoers.d/deploy-inngest-bootstrap",
       # hooks.json re-registers the status hook + maps the state-reporter key (the
       # exact host drift that caused the #4804 freeze: stale hooks.json had neither).
       "grep -q infra-config-status /etc/webhook/hooks.json",
@@ -415,7 +457,13 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
 # means new servers provisioned from scratch will miss the change.
 resource "terraform_data" "deploy_pipeline_fix" {
   # AppArmor profile must be loaded before ci-deploy.sh references it (#1570).
-  depends_on = [terraform_data.apparmor_bwrap_profile]
+  # #4827 — the handler-bootstrap bridge must deliver infra-config-install + the
+  # INFRA_CONFIG_INSTALL sudoers grant over root SSH BEFORE this resource's webhook
+  # push runs, so the handler's prod-mode escalation is permitted on first apply.
+  depends_on = [
+    terraform_data.apparmor_bwrap_profile,
+    terraform_data.infra_config_handler_bootstrap,
+  ]
 
   # hcloud_server.web has ignore_changes=[user_data], so cloud-init never re-applies
   # to the existing server. This resource is the sole path for pushing ci-deploy.sh,

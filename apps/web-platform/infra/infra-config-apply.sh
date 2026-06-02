@@ -22,13 +22,20 @@ readonly LOG_TAG="infra-config-apply"
 # Each entry: ENV_VAR_NAME | DEST_PATH | MODE | OWNER
 # DEST_PATH values are interpolated unescaped into the state JSON ("file":"...");
 # keep them JSON-safe (no '"' or '\') so /hooks/infra-config-status stays parseable.
+# NOTE (#4827): /etc/sudoers.d/deploy-inngest-bootstrap is intentionally NOT in
+# this map. Prod-mode writes now escalate through the pinned infra-config-install
+# helper (the deploy user cannot write root:root dirs directly), and letting that
+# helper write a sudoers file would be an unbounded privilege escalation (a deploy
+# user invoking it directly could install `NOPASSWD: ALL`; visudo validates syntax
+# only, not policy). The sudoers grant is therefore managed root-only — delivered
+# by terraform_data.infra_config_handler_bootstrap (root SSH) + cloud-init
+# write_files — never via this webhook handler. See the security review on #4827.
 FILE_MAP=(
   "CI_DEPLOY_SH_B64|/usr/local/bin/ci-deploy.sh|755|root:root"
   "CI_DEPLOY_WRAPPER_SH_B64|/usr/local/bin/ci-deploy-wrapper.sh|755|root:root"
   "WEBHOOK_SERVICE_B64|/etc/systemd/system/webhook.service|644|root:root"
   "CAT_DEPLOY_STATE_SH_B64|/usr/local/bin/cat-deploy-state.sh|755|root:root"
   "CANARY_BUNDLE_CLAIM_CHECK_SH_B64|/usr/local/bin/canary-bundle-claim-check.sh|755|root:root"
-  "DEPLOY_INNGEST_BOOTSTRAP_SUDOERS_B64|/etc/sudoers.d/deploy-inngest-bootstrap|440|root:root"
   "HOOKS_JSON_B64|/etc/webhook/hooks.json|640|root:deploy"
   "CAT_INFRA_CONFIG_STATE_SH_B64|/usr/local/bin/cat-infra-config-state.sh|755|root:root"
 )
@@ -130,19 +137,9 @@ for entry in "${FILE_MAP[@]}"; do
     continue
   fi
 
-  # Sudoers files get visudo validation before install (validate the staged temp
-  # before it is escalated to root — same gate in both modes).
-  if [[ "$dest_path" == /etc/sudoers.d/* ]]; then
-    if ! visudo -cf "$tmpfile" 2>/dev/null; then
-      logger -t "$LOG_TAG" "SKIPPED: $dest_path reason=visudo_validation_failed"
-      echo "WARNING: visudo validation failed for $dest_path — skipping install" >&2
-      [[ -n "$FILES_JSON" ]] && FILES_JSON+=","
-      FILES_JSON+="{\"file\":\"$dest_path\",\"sha256\":\"\",\"status\":\"skipped\",\"reason\":\"visudo_validation_failed\"}"
-      FAIL_COUNT=$((FAIL_COUNT + 1))
-      rm -f "$tmpfile"
-      continue
-    fi
-  fi
+  # NOTE (#4827): the former visudo-validation arm for /etc/sudoers.d/* was
+  # removed with the sudoers entry — that file is no longer in FILE_MAP (it is
+  # root-managed, not webhook-writable; see the FILE_MAP comment above).
 
   chmod "$mode" "$tmpfile"
   # SHA is computed from the staged temp (content-identical to the installed

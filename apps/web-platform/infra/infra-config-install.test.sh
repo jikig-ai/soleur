@@ -148,28 +148,82 @@ test_reject_symlink_src() {
   teardown
 }
 
-# --- Test 5: All 8 managed dests are accepted ---
+# --- Test 5: All 7 managed dests are accepted with their authoritative spec ---
+# Each entry is "dest|mode|owner" — mode/owner MUST match the helper's internal
+# table (caller-supplied values that disagree are rejected, #4827 hardening).
+# The sudoers dest is intentionally absent (root-managed, not helper-writable).
 test_all_managed_dests_accepted() {
-  echo "TEST: install — every FILE_MAP dest is allowlisted"
+  echo "TEST: install — every FILE_MAP dest is allowlisted (7, sudoers excluded)"
   setup
-  local dests=(
-    "/usr/local/bin/ci-deploy.sh"
-    "/usr/local/bin/ci-deploy-wrapper.sh"
-    "/etc/systemd/system/webhook.service"
-    "/usr/local/bin/cat-deploy-state.sh"
-    "/usr/local/bin/canary-bundle-claim-check.sh"
-    "/etc/sudoers.d/deploy-inngest-bootstrap"
-    "/etc/webhook/hooks.json"
-    "/usr/local/bin/cat-infra-config-state.sh"
+  local specs=(
+    "/usr/local/bin/ci-deploy.sh|755|root:root"
+    "/usr/local/bin/ci-deploy-wrapper.sh|755|root:root"
+    "/etc/systemd/system/webhook.service|644|root:root"
+    "/usr/local/bin/cat-deploy-state.sh|755|root:root"
+    "/usr/local/bin/canary-bundle-claim-check.sh|755|root:root"
+    "/etc/webhook/hooks.json|640|root:deploy"
+    "/usr/local/bin/cat-infra-config-state.sh|755|root:root"
   )
-  local accepted=0 d src rc
-  for d in "${dests[@]}"; do
+  local accepted=0 entry d mode owner src rc
+  for entry in "${specs[@]}"; do
+    IFS='|' read -r d mode owner <<< "$entry"
     src=$(stage_payload "payload-$(basename "$d")")
     rc=0
-    bash "$HELPER" "$src" "$d" "644" "root:root" 2>/dev/null || rc=$?
+    bash "$HELPER" "$src" "$d" "$mode" "$owner" 2>/dev/null || rc=$?
     [[ "$rc" == "$RC_OK" ]] && accepted=$((accepted + 1))
   done
-  assert_eq "all 8 managed dests accepted" "8" "$accepted"
+  assert_eq "all 7 managed dests accepted" "7" "$accepted"
+
+  teardown
+}
+
+# --- Test 6: Sudoers dest is rejected (root-managed, #4827 security review) ---
+# A deploy user invoking the helper directly must NOT be able to write the
+# grant-definition file (it could install `NOPASSWD: ALL`).
+test_reject_sudoers_dest() {
+  echo "TEST: install — sudoers dest is rejected (rc=3)"
+  setup
+  local src; src=$(stage_payload "evil-sudoers" "deploy ALL=(root) NOPASSWD: ALL")
+
+  local rc=0
+  bash "$HELPER" "$src" "/etc/sudoers.d/deploy-inngest-bootstrap" "440" "root:root" 2>/dev/null || rc=$?
+  assert_eq "helper rejects the sudoers dest" "$RC_REJECTED" "$rc"
+
+  teardown
+}
+
+# --- Test 7: setuid escalation via caller mode is rejected (#4827 hardening) ---
+# mode/owner come from the helper's internal table, not the caller — a deploy
+# user passing mode=4755 to setuid a root binary is refused.
+test_reject_setuid_mode() {
+  echo "TEST: install — caller mode mismatch (setuid attempt) is rejected (rc=3)"
+  setup
+  local src; src=$(stage_payload "ci-deploy.sh")
+
+  local rc=0
+  bash "$HELPER" "$src" "/usr/local/bin/ci-deploy.sh" "4755" "root:root" 2>/dev/null || rc=$?
+  assert_eq "helper rejects setuid mode" "$RC_REJECTED" "$rc"
+
+  if [[ -f "${TEST_DESTDIR}/usr/local/bin/ci-deploy.sh" ]]; then
+    echo "  FAIL: setuid-mode call wrote the file anyway"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: setuid-mode call wrote nothing"
+    PASS=$((PASS + 1))
+  fi
+
+  teardown
+}
+
+# --- Test 8: owner-seize via caller owner is rejected (#4827 hardening) ---
+test_reject_owner_seize() {
+  echo "TEST: install — caller owner mismatch (chown seize) is rejected (rc=3)"
+  setup
+  local src; src=$(stage_payload "ci-deploy.sh")
+
+  local rc=0
+  bash "$HELPER" "$src" "/usr/local/bin/ci-deploy.sh" "755" "deploy:deploy" 2>/dev/null || rc=$?
+  assert_eq "helper rejects owner seize" "$RC_REJECTED" "$rc"
 
   teardown
 }
@@ -181,6 +235,9 @@ test_reject_nonallowlisted_dest
 test_reject_traversal
 test_reject_symlink_src
 test_all_managed_dests_accepted
+test_reject_sudoers_dest
+test_reject_setuid_mode
+test_reject_owner_seize
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then

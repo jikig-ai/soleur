@@ -83,7 +83,7 @@ threshold: aggregate pattern, reason: deploy-pipeline infra only; no user-data s
 
 ### Post-merge (operator)
 
-- [ ] **AC10 — Live push lands all files.** After `terraform apply` delivers the fixed handler + sudoers to the host, a `/hooks/infra-config` push (or the dual-fire from the handler-hash trigger) yields `GET /hooks/infra-config-status` → `{"exit_code":0,"files_written":8,"files_failed":0,"files_total":8}`. Verify via the deploy webhook status endpoint (read-only `curl`, NOT ssh) per `hr-no-dashboard-eyeball-pull-data-yourself`.
+- [ ] **AC10 — Live push lands all files.** After `terraform apply` delivers the fixed handler + helper + sudoers to the host, a `/hooks/infra-config` push (or the dual-fire from the handler-hash trigger) yields `GET /hooks/infra-config-status` → `{"exit_code":0,"files_written":7,"files_failed":0,"files_total":7}`. **NOTE (security review on #4827):** the sudoers grant was REMOVED from the webhook FILE_MAP (8→7 files) — letting the deploy-user escalation helper write a sudoers file is an unbounded privilege escalation (a deploy user could install `NOPASSWD: ALL`; visudo validates syntax, not policy). The sudoers is now delivered root-only (the SSH `infra_config_handler_bootstrap` bridge + cloud-init), so the webhook push count is **7**, not 8. Verify via the deploy webhook status endpoint (read-only `curl`, NOT ssh) per `hr-no-dashboard-eyeball-pull-data-yourself`.
 - [ ] **AC11 — Downstream self-heal.** `GET /hooks/deploy-status` reports `journald_storage.persistent == true` (the freshly-landed `cat-deploy-state.sh` now emits the field that the stale 2026-05-21 version predated).
 
 ## Implementation Phases

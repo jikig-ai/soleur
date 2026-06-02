@@ -36,7 +36,6 @@ cat > "$PAYLOAD_FILE" <<PAYLOAD
   "webhook_service_b64": "$(base64 -w0 < "${INFRA_DIR}/webhook.service")",
   "cat_deploy_state_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/cat-deploy-state.sh")",
   "canary_bundle_claim_check_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/canary-bundle-claim-check.sh")",
-  "deploy_inngest_bootstrap_sudoers_b64": "$(base64 -w0 < "${INFRA_DIR}/deploy-inngest-bootstrap.sudoers")",
   "hooks_json_b64": "${HOOKS_JSON_B64}",
   "cat_infra_config_state_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/cat-infra-config-state.sh")"
 }

@@ -26,22 +26,37 @@
 #   0 = installed
 #   1 = install failure (mktemp/cp/chmod/chown/mv)
 #   2 = usage error (wrong arg count)
-#   3 = rejected (dest not in allowlist, or TOCTOU guard tripped) → install_rejected
+#   3 = rejected (dest not in allowlist, mode/owner mismatch, or TOCTOU guard
+#       tripped) → install_rejected
+#
+# PRIVILEGE-ESCALATION HARDENING (#4827 security review):
+#  - The sudoers grant `deploy ALL=(root) NOPASSWD: /usr/local/bin/infra-config-install`
+#    lets the deploy user invoke this helper DIRECTLY with arbitrary args — not
+#    only through the handler. So mode + owner are NOT trusted from the caller:
+#    they are derived from an authoritative per-dest table below, and the helper
+#    REJECTS any call whose supplied mode/owner disagrees. This blocks a deploy
+#    user from passing mode=4755 to setuid a root-owned binary or owner=deploy to
+#    seize one.
+#  - /etc/sudoers.d/* is deliberately NOT in this table. The grant-definition file
+#    is the one file whose content-write is an unbounded escalation (a deploy user
+#    could install `NOPASSWD: ALL`); visudo only checks syntax, not policy, so the
+#    helper cannot safely validate it. It is managed root-only (the SSH
+#    handler-bootstrap bridge + cloud-init write_files), never via this helper.
 set -euo pipefail
 
 readonly LOG_TAG="infra-config-install"
 
-# Canonical destinations the helper is permitted to write. MUST stay in lockstep
-# with FILE_MAP in infra-config-apply.sh — a dest absent here is rejected (rc=3).
-readonly ALLOWED_DESTS=(
-  "/usr/local/bin/ci-deploy.sh"
-  "/usr/local/bin/ci-deploy-wrapper.sh"
-  "/etc/systemd/system/webhook.service"
-  "/usr/local/bin/cat-deploy-state.sh"
-  "/usr/local/bin/canary-bundle-claim-check.sh"
-  "/etc/sudoers.d/deploy-inngest-bootstrap"
-  "/etc/webhook/hooks.json"
-  "/usr/local/bin/cat-infra-config-state.sh"
+# Authoritative dest → "mode owner" table. MUST stay in lockstep with FILE_MAP in
+# infra-config-apply.sh (minus the sudoers entry, which is root-managed). A dest
+# absent here is rejected (rc=3). mode/owner come from HERE, not the caller.
+declare -rA DEST_SPEC=(
+  ["/usr/local/bin/ci-deploy.sh"]="755 root:root"
+  ["/usr/local/bin/ci-deploy-wrapper.sh"]="755 root:root"
+  ["/etc/systemd/system/webhook.service"]="644 root:root"
+  ["/usr/local/bin/cat-deploy-state.sh"]="755 root:root"
+  ["/usr/local/bin/canary-bundle-claim-check.sh"]="755 root:root"
+  ["/etc/webhook/hooks.json"]="640 root:deploy"
+  ["/usr/local/bin/cat-infra-config-state.sh"]="755 root:root"
 )
 
 # TEST_DESTDIR redirects writes to a sandbox and skips chown (no root needed),
@@ -56,8 +71,8 @@ usage() {
 [[ "$#" -eq 4 ]] || usage
 src="$1"
 dest_canonical="$2"
-mode="$3"
-owner="$4"
+caller_mode="$3"
+caller_owner="$4"
 
 reject() {
   local reason="$1"
@@ -66,15 +81,16 @@ reject() {
   exit 3
 }
 
-# --- Allowlist check (canonical dest, before any sandbox prefix) ---
-allowed=0
-for d in "${ALLOWED_DESTS[@]}"; do
-  if [[ "$dest_canonical" == "$d" ]]; then
-    allowed=1
-    break
-  fi
-done
-[[ "$allowed" -eq 1 ]] || reject "dest_not_allowlisted"
+# --- Allowlist + authoritative mode/owner (canonical dest, before sandbox prefix) ---
+spec="${DEST_SPEC[$dest_canonical]:-}"
+[[ -n "$spec" ]] || reject "dest_not_allowlisted"
+read -r mode owner <<< "$spec"
+
+# Reject any caller whose requested mode/owner disagrees with the authoritative
+# table — a deploy user trying to escalate (setuid/chown) is refused, and a
+# handler/FILE_MAP drift is surfaced loudly rather than silently overridden.
+[[ "$caller_mode" == "$mode" ]] || reject "mode_mismatch:caller=$caller_mode:expected=$mode"
+[[ "$caller_owner" == "$owner" ]] || reject "owner_mismatch:caller=$caller_owner:expected=$owner"
 
 # --- TOCTOU guards on the staged source (the one attacker-influenceable input) ---
 # Refuse a symlinked source: the deploy user could repoint it after the handler
