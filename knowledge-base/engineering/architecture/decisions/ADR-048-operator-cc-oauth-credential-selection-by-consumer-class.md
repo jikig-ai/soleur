@@ -1,5 +1,5 @@
 ---
-adr: ADR-047
+adr: ADR-048
 title: Operator Claude Code subscription credential — selection by consumer class + structural REST/SDK boundary
 status: accepted
 date: 2026-06-02
@@ -10,7 +10,7 @@ related_plans:
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-047: Operator CC OAuth credential — selection by consumer class + structural REST/SDK boundary
+# ADR-048: Operator CC OAuth credential — selection by consumer class + structural REST/SDK boundary
 
 ## Status
 

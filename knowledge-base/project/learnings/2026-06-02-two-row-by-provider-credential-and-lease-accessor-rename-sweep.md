@@ -3,7 +3,7 @@ date: 2026-06-02
 category: best-practices
 module: web-platform/byok
 related: [4825, 4824]
-related_adrs: [ADR-047]
+related_adrs: [ADR-048]
 tags: [byok, credentials, oauth, structural-boundary, migration, test-mocks]
 ---
 
