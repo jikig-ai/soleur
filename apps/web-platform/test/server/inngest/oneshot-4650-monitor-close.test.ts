@@ -44,7 +44,12 @@ vi.mock("@/server/inngest/functions/_cron-shared", async () => {
 });
 
 vi.mock("@octokit/core", () => ({
-  Octokit: vi.fn().mockImplementation(() => ({ request: octokitRequestSpy })),
+  // vitest 4: mocks invoked with `new` now construct an instance, so a
+  // constructor mock must use the `function` keyword and assign to `this`
+  // (an arrow returning an object throws "is not a constructor").
+  Octokit: vi.fn().mockImplementation(function (this: Record<string, unknown>) {
+    this.request = octokitRequestSpy;
+  }),
 }));
 
 // --- SUT import (module does not exist yet — RED) ----------------------------

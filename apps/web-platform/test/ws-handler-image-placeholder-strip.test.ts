@@ -14,6 +14,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { WSMessage } from "@/lib/types";
+import type { SilentFallbackOptions } from "@/server/observability";
 
 import { stripAndReportImagePlaceholders } from "@/server/image-paste-strip";
 
@@ -21,12 +22,14 @@ describe("stripAndReportImagePlaceholders", () => {
   const userId = "user-aaaa";
   const conversationId = "conv-bbbb";
 
-  let send: ReturnType<typeof vi.fn>;
-  let reportFallback: ReturnType<typeof vi.fn>;
+  let send: ReturnType<typeof vi.fn<(msg: WSMessage) => void>>;
+  let reportFallback: ReturnType<
+    typeof vi.fn<(err: unknown, options: SilentFallbackOptions) => void>
+  >;
 
   beforeEach(() => {
-    send = vi.fn();
-    reportFallback = vi.fn();
+    send = vi.fn<(msg: WSMessage) => void>();
+    reportFallback = vi.fn<(err: unknown, options: SilentFallbackOptions) => void>();
   });
 
   it("returns original text when content has no placeholders (no side effects)", () => {
