@@ -22,9 +22,15 @@ const { AppCtor, getInstallationOctokit, hookAfter, hookError, recordCalls } =
   }));
 
 vi.mock("@octokit/app", () => ({
-  App: vi.fn().mockImplementation((opts: unknown) => {
+  // vitest 4: mocks invoked with `new` now construct an instance, so a
+  // constructor mock must use the `function` keyword and assign to `this`
+  // (an arrow returning an object throws "is not a constructor").
+  App: vi.fn().mockImplementation(function (
+    this: Record<string, unknown>,
+    opts: unknown,
+  ) {
     AppCtor(opts);
-    return { getInstallationOctokit };
+    this.getInstallationOctokit = getInstallationOctokit;
   }),
 }));
 

@@ -30,9 +30,14 @@ vi.mock("web-push", () => ({
 }));
 
 vi.mock("resend", () => ({
-  Resend: vi.fn().mockImplementation(() => ({
-    emails: { send: mockResendSend },
-  })),
+  // vitest 4: mocks invoked with `new` now construct an instance, so a
+  // constructor mock must use the `function` keyword and assign to `this`
+  // (an arrow returning an object throws "is not a constructor").
+  Resend: vi.fn().mockImplementation(function (
+    this: Record<string, unknown>,
+  ) {
+    this.emails = { send: mockResendSend };
+  }),
 }));
 
 vi.mock("@/lib/supabase/service", () => ({
