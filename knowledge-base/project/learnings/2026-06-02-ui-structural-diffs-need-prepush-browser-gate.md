@@ -4,7 +4,7 @@ category: workflow-patterns
 tags: [testing, jsdom, playwright, visual-regression, nav-rail, qa-gate, ci]
 relates:
   - knowledge-base/engineering/architecture/decisions/ADR-047-nav-context-band-outside-swap.md
-  - knowledge-base/engineering/architecture/decisions/ADR-048-headless-visual-regression-gate.md
+  - knowledge-base/engineering/architecture/decisions/ADR-049-headless-visual-regression-gate.md
   - knowledge-base/project/learnings/2026-06-02-server-audit-must-read-rpc-body-and-ssr-identity-needs-css-placement.md
 issue: 4834
 pr: 4833

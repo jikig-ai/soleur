@@ -5,7 +5,7 @@ import {
   mockSupabaseAuth,
 } from "./helpers/supabase-mocks";
 
-// Headless visual-regression gate for the single nav rail (ADR-048, #4834).
+// Headless visual-regression gate for the single nav rail (ADR-049, #4834).
 //
 // Catches the CSS-layout bug class that jsdom (vitest) structurally cannot see
 // — the two bugs PR #4810 shipped:

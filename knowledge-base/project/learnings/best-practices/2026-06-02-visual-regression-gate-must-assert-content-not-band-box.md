@@ -4,7 +4,7 @@ category: best-practices
 tags: [e2e, playwright, visual-regression, false-green, plan-review, mock]
 relates:
   - knowledge-base/project/learnings/2026-06-02-ui-structural-diffs-need-prepush-browser-gate.md
-  - knowledge-base/engineering/architecture/decisions/ADR-048-headless-visual-regression-gate.md
+  - knowledge-base/engineering/architecture/decisions/ADR-049-headless-visual-regression-gate.md
 issue: 4834
 pr: 4833
 ---

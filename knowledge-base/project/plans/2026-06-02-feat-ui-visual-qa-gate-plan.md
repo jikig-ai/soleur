@@ -10,7 +10,7 @@ pr: 4833
 branch: feat-ui-visual-qa-gate
 brainstorm: knowledge-base/project/brainstorms/2026-06-02-ui-visual-qa-gate-brainstorm.md
 spec: knowledge-base/project/specs/feat-ui-visual-qa-gate/spec.md
-adr: knowledge-base/engineering/architecture/decisions/ADR-048-headless-visual-regression-gate.md
+adr: knowledge-base/engineering/architecture/decisions/ADR-049-headless-visual-regression-gate.md
 related: [4810, 4813, 4835]
 ---
 
@@ -43,7 +43,7 @@ credentials, headless, and **CI-blocking by construction** — `ci.yml`'s `e2e` 
 ## Research Insights (institutional learnings)
 
 - `2026-06-02-ui-structural-diffs-need-prepush-browser-gate.md` (keystone — this feature's post-mortem): seed client state deterministically; assert what jsdom can't; committed gate; RED-then-GREEN same PR; close the `/work` vs `/one-shot` asymmetry.
-- `ADR-047` (invariants the assertions encode): band outside the swap, visible every drill state, single-mount, ⌘B sole collapse owner. `ADR-048` (this gate's accepted decision).
+- `ADR-047` (invariants the assertions encode): band outside the swap, visible every drill state, single-mount, ⌘B sole collapse owner. `ADR-049` (this gate's accepted decision).
 - `2026-04-10-supabase-e2e-localstorage-session-injection.md`: seed BOTH cookie AND `localStorage["sb-localhost-auth-token"]` (browser client short-circuits on localStorage) — Phase 0 step 3.
 - `2026-04-10-e2e-authenticated-dashboard-tests-mock-supabase.md`: glob (not regex) testMatch; authenticated timeout 60s for SSR cold-compile.
 - `2026-05-14-plan-prescribed-runtime-shapes-must-be-grepped-against-installed-version.md`: verify Playwright APIs against `node_modules/playwright-core/types/types.d.ts`; `rm -rf .next/types` before tsc.
@@ -164,7 +164,7 @@ same routes for an LLM visual-diff overlay (informational, not blocking).
    folds into the e2e spec). Cleanup — lowest priority of the three.
 
 ### Phase 6 — ADR + docs (already committed this branch)
-ADR-048 + brainstorm + spec + learning already on the branch. Verify links resolve at ship.
+ADR-049 + brainstorm + spec + learning already on the branch. Verify links resolve at ship.
 
 ## Files to Create
 - `apps/web-platform/e2e/nav-states-shell.e2e.ts` — the gate (lean matrix + FR3 invariant assertions + non-committed screenshots). Imports `e2e/helpers/supabase-mocks.ts` (`injectFakeSupabaseSession` + `mockSupabaseAuth`) and `page.route`-mocks `/api/workspace/active-repo` + `/api/workspace/list-memberships`.
@@ -260,7 +260,7 @@ discoverability_test:  # command (NO ssh): npx playwright test --project=authent
 ## Alternatives Considered
 | Approach | Rejected because |
 |---|---|
-| Live `doppler -c dev` + `/api/auth/dev-signin` | Reintroduces 307→/login; forces real `DEV_USER_*` creds + `FLAG_DEV_SIGNIN` into CI; headed-only. (ADR-048) |
+| Live `doppler -c dev` + `/api/auth/dev-signin` | Reintroduces 307→/login; forces real `DEV_USER_*` creds + `FLAG_DEV_SIGNIN` into CI; headed-only. (ADR-049) |
 | Agent-driven Playwright MCP walkthrough as the gate | Headed-only, non-durable, no CI regression guard. Kept as advisory vision. |
 | New CI job for e2e | Unnecessary — `ci.yml` `e2e` job already runs `npx playwright test`. |
 | Broad per-page visual regression now | YAGNI (CPO); deferred to #4835. |

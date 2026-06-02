@@ -4,7 +4,7 @@ category: best-practices
 tags: [skills, diff-predicate, gate, playwright, e2e, flake, false-green]
 relates:
   - knowledge-base/project/learnings/best-practices/2026-06-02-visual-regression-gate-must-assert-content-not-band-box.md
-  - knowledge-base/engineering/architecture/decisions/ADR-048-headless-visual-regression-gate.md
+  - knowledge-base/engineering/architecture/decisions/ADR-049-headless-visual-regression-gate.md
 issue: 4834
 pr: 4833
 ---

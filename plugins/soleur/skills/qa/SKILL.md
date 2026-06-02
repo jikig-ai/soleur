@@ -67,7 +67,7 @@ echo "${DEPLOY_URL:-not_set}"
 
 Store the config name for use in subsequent `doppler` commands.
 
-### Step 2.6: Structural-UI Visual-Regression Gate (#4834 / ADR-048)
+### Step 2.6: Structural-UI Visual-Regression Gate (#4834 / ADR-049)
 
 This is the gate's semantic home. Run it when the diff (`git diff --name-only origin/main...HEAD` — the branch-vs-main merge-base diff; do NOT use `origin/<branch>...HEAD`, which only sees unpushed commits and returns 0 files once the branch is pushed, silently skipping the gate) touches `apps/web-platform/app/(dashboard)/**`, `apps/web-platform/components/dashboard/**`, or any `layout.tsx`. Skip silently otherwise.
 

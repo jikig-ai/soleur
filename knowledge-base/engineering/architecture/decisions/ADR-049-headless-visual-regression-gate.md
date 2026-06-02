@@ -1,4 +1,4 @@
-# ADR-048: Headless Visual-Regression Gate for Structural-UI Diffs
+# ADR-049: Headless Visual-Regression Gate for Structural-UI Diffs
 
 - **Status:** Accepted
 - **Date:** 2026-06-02

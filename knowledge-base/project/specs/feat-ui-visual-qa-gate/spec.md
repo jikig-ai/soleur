@@ -10,7 +10,7 @@ pr: 4833
 brainstorm: knowledge-base/project/brainstorms/2026-06-02-ui-visual-qa-gate-brainstorm.md
 related:
   - knowledge-base/engineering/architecture/decisions/ADR-047-nav-context-band-outside-swap.md
-  - knowledge-base/engineering/architecture/decisions/ADR-048-headless-visual-regression-gate.md
+  - knowledge-base/engineering/architecture/decisions/ADR-049-headless-visual-regression-gate.md
 ---
 
 # Spec — Headless Visual-Regression Gate for UI-Structural Diffs
@@ -76,7 +76,7 @@ invocation skips `/soleur:qa` (only one-shot runs qa pre-merge). The non-technic
   footer (pure DOM-presence; would have caught Bug 1).
 - **FR7 — wire into `/soleur:work` Phase 4** behind the diff-path predicate; spec also runs
   CI-blocking. Reposition `/soleur:test-browser` to post-ship smoke only.
-- **FR8 — ADR-048** codifies the standing gate + mock-vs-live seeding rationale.
+- **FR8 — ADR-049** codifies the standing gate + mock-vs-live seeding rationale.
 
 ## Technical Requirements
 
@@ -103,7 +103,7 @@ invocation skips `/soleur:qa` (only one-shot runs qa pre-merge). The non-technic
 - AC2: After FR4 + FR5, the spec PASSES (GREEN) across the full matrix.
 - AC3: The strengthened jsdom test (FR6) fails on the pre-fix DOM and passes after.
 - AC4: `npm run lint` / `tsc` / `vitest` all green; the e2e spec runs headless with no display.
-- AC5: ADR-048 committed; `/soleur:test-browser` repositioned; `/work` predicate wired.
+- AC5: ADR-049 committed; `/soleur:test-browser` repositioned; `/work` predicate wired.
 
 ## Test Scenarios
 
