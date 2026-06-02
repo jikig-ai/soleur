@@ -18,14 +18,14 @@ import { describe, test, expect, vi, beforeEach } from "vitest";
 // signal: a non-revoked grantee delegation with no current-version acceptance.
 
 const {
-  mockGetDefaultWorkspaceForUser,
+  mockResolveCurrentWorkspaceId,
   mockIsByokDelegationsEnabled,
   mockServiceRpc,
   mockServiceFrom,
   mockReportSilentFallback,
   mockResolveGranteeAcceptanceStatus,
 } = vi.hoisted(() => ({
-  mockGetDefaultWorkspaceForUser: vi.fn(),
+  mockResolveCurrentWorkspaceId: vi.fn(),
   mockIsByokDelegationsEnabled: vi.fn(),
   mockServiceRpc: vi.fn(),
   mockServiceFrom: vi.fn(),
@@ -53,7 +53,7 @@ vi.mock("@/lib/feature-flags/server", () => ({
 }));
 
 vi.mock("@/server/workspace-resolver", () => ({
-  getDefaultWorkspaceForUser: mockGetDefaultWorkspaceForUser,
+  resolveCurrentWorkspaceId: mockResolveCurrentWorkspaceId,
 }));
 
 vi.mock("@/server/byok-delegation-ui-resolver", () => ({
@@ -114,7 +114,7 @@ beforeEach(() => {
   workspaceOrgResult = { data: { organization_id: "org-1" }, error: null };
   delegationRowResult = { data: null, error: null };
   buildFrom();
-  mockGetDefaultWorkspaceForUser.mockResolvedValue(WORKSPACE);
+  mockResolveCurrentWorkspaceId.mockResolvedValue(WORKSPACE);
   mockIsByokDelegationsEnabled.mockResolvedValue(true);
   primeRpc({ data: null, error: null });
 });
@@ -130,7 +130,7 @@ describe("userHasEffectiveByokKey (AC2)", () => {
     mockIsByokDelegationsEnabled.mockResolvedValue(false);
     expect(await userHasEffectiveByokKey(CALLER, { onErrorReturn: true })).toBe(true);
     // Own-valid-key short-circuits BEFORE any workspace/flag resolution.
-    expect(mockGetDefaultWorkspaceForUser).not.toHaveBeenCalled();
+    expect(mockResolveCurrentWorkspaceId).not.toHaveBeenCalled();
   });
 
   test("own INVALID/non-anthropic key only → false (routed to /setup-key)", async () => {
@@ -165,23 +165,23 @@ describe("userHasEffectiveByokKey (AC2)", () => {
     expect(await userHasEffectiveByokKey(CALLER, { onErrorReturn: true })).toBe(false);
   });
 
-  test("uses the SAME getDefaultWorkspaceForUser the lease uses (parity)", async () => {
+  test("uses the SAME resolveCurrentWorkspaceId (active workspace) the lease uses (parity)", async () => {
     apiKeysResult = { data: [], error: null };
     primeRpc({ data: { key_owner_user_id: "g", delegation_id: "d" }, error: null });
     await userHasEffectiveByokKey(CALLER, { onErrorReturn: true });
-    expect(mockGetDefaultWorkspaceForUser).toHaveBeenCalledWith(CALLER, expect.anything());
+    expect(mockResolveCurrentWorkspaceId).toHaveBeenCalledWith(CALLER, expect.anything());
   });
 
   test("resolution error → onErrorReturn (fail-open) + Sentry mirror", async () => {
     apiKeysResult = { data: [], error: null };
-    mockGetDefaultWorkspaceForUser.mockRejectedValue(new Error("workspace boom"));
+    mockResolveCurrentWorkspaceId.mockRejectedValue(new Error("workspace boom"));
     expect(await userHasEffectiveByokKey(CALLER, { onErrorReturn: true })).toBe(true);
     expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
   });
 
   test("resolution error → onErrorReturn (fail-closed for status endpoint)", async () => {
     apiKeysResult = { data: [], error: null };
-    mockGetDefaultWorkspaceForUser.mockRejectedValue(new Error("workspace boom"));
+    mockResolveCurrentWorkspaceId.mockRejectedValue(new Error("workspace boom"));
     expect(await userHasEffectiveByokKey(CALLER, { onErrorReturn: false })).toBe(false);
     expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
   });
@@ -238,7 +238,7 @@ describe("userHasPendingByokDelegation (banner accept-grant branch)", () => {
   });
 
   test("error path → false + Sentry mirror", async () => {
-    mockGetDefaultWorkspaceForUser.mockRejectedValue(new Error("boom"));
+    mockResolveCurrentWorkspaceId.mockRejectedValue(new Error("boom"));
     expect(await userHasPendingByokDelegation(CALLER)).toBe(false);
     expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
   });

@@ -899,12 +899,16 @@ export const realSdkQueryFactory: QueryFactory = async (
   // `sdkQuery({apiKey, ...})` below has already passed the key into the
   // SDK's internal state — the lease's finally-zeroize fires after the
   // SDK has captured what it needs.
-  // Phase 3 (feat-team-workspace-multi-user): N2 invariant pins
-  // workspaceContextUserId === keyOwnerUserId for solo workspaces;
-  // team workspaces will diverge when Phase 4 invite flow ships.
+  // Phase 3 (feat-team-workspace-multi-user): the args stay
+  // `args.userId, args.userId`; the workspace the BYOK key is resolved
+  // against is derived INSIDE resolveKeyOwnerThenLease via
+  // resolveCurrentWorkspaceId (the caller's ACTIVE workspace — the shared
+  // workspace an owner granted into, post Phase-4 invite flow), no longer
+  // the oldest/solo workspace (#4767). For a solo caller the active
+  // workspace IS their solo workspace, so solo behavior is unchanged.
   // Sentinel sweep site #3 (#4232 PR-A). callerUserId = args.userId
   // (server-derived per cc-dispatcher contract; provenance in PR body).
-  // N2 solo invariant kept: callerUserId === workspaceContextUserId.
+  // Invariant kept: callerUserId === workspaceContextUserId.
   return resolveKeyOwnerThenLease(
     args.userId,
     args.userId,
