@@ -457,7 +457,7 @@ interface CacheEntry {
  * Process-local per-userId cache of `Promise<CacheEntry>`.
  *
  * Storing the in-flight Promise (not the resolved value) is the load-
- * bearing dedup: concurrent cold callers (e.g., `Promise.all([lease.getApiKey(),
+ * bearing dedup: concurrent cold callers (e.g., `Promise.all([lease.getAgentCredential(),
  * getUserServiceTokens(userId)])` at session start) await the same
  * pending mint instead of each consuming a slot from the 60/hr ceiling.
  * Entries are reminted when `now - mintedAt > ttlSec/4` (Resolution C
