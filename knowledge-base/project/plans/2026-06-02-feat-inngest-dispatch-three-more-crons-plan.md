@@ -9,6 +9,26 @@ brand_survival_threshold: none
 
 # feat: Inngest-dispatch three more recurring crons
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-02
+
+### Halt gates (all passed)
+- **4.6 User-Brand Impact** — section present, threshold `none` with a canonical `threshold: none, reason: …` scope-out bullet (required because the diff touches the sensitive path `apps/web-platform/server/**`).
+- **4.7 Observability** — `## Observability` present; all 5 fields populated, `discoverability_test.command` is SSH-free (vitest invocation).
+- **4.8 PAT-shaped variable halt** — no PAT-shaped vars/literals; auth is the existing GitHub App installation token (`actions: write`) via `mintInstallationToken`.
+
+### Verifications performed live (this pass)
+- **Registry count re-derived** with the test's exact regex `grep -cE '^[[:space:]]+\w+,$'` → **44** today; target **47**. (A naive comma-split gives 48 — comment-line artifacts — and is the trap to avoid.)
+- **Precedent (Phase 4.4)** — 34 Inngest cron functions exist; Inngest is canonical per ADR-033. Dispatch-hybrid precedent is the just-merged `cron-terraform-drift.ts`; pattern is NOT novel.
+- **PR attribution** — `#4787` (terraform-drift Inngest-dispatch) and `#4772` (superseded margin PR) confirmed as merged commits via `git log --grep`; template file present on `main`.
+- **Cited rule IDs** (`hr-github-app-auth-not-pat`, `cq-write-failing-tests-before`, `hr-weigh-…`, `hr-observability-…`) all active in AGENTS.md; the learning-file path resolves.
+- **Literal consistency** — the 3 cron strings, 3 workflow filenames, and the `44→47` count are internally consistent across Overview / Reconciliation / AC / Phases / Risks / Sharp Edges.
+- **Substrate guards** — `cron-substrate-imports.test.ts` auto-discovers `cron-*.ts` and asserts the relative `./_cron-shared` import + no local symbol redefinition; the 3 new files pass by mirroring the template (no test edit needed). Slug-less files skip `function-registry-count` guards (c)/(d)/(c2)/(f)/(f2) cleanly.
+
+### Note on depth
+This is a near-mechanical, three-times-repeated migration against a literal merged template (`cron-terraform-drift.ts` + its test), at brand-survival threshold `none`. No external/framework research was warranted; the structural plan + the four documented test gotchas (in the cited learning) are the load-bearing content.
+
 ## Overview
 
 Migrate THREE more recurring GitHub Actions crons from GHA `schedule:` triggers to **Inngest-dispatched** triggers, so Inngest becomes the single scheduling substrate across the platform. This repeats — three times, near-identically — the **dispatch-hybrid** pattern shipped for `scheduled-terraform-drift` in `cron-terraform-drift.ts` (merged 2026-06-02, PR #4787).
@@ -49,7 +69,9 @@ The ARGUMENTS prose was largely accurate; one moving-target number was confirmed
 
 **If this lands broken, the user experiences:** nothing user-facing — these are internal infra/CI crons (dev migration-drift probe, main-branch test-suite monitor, doc-review reminders). A broken dispatch means a cron silently stops firing; the failure mode is operator-internal (drift undetected, a red main goes un-issued), not customer-visible.
 **If this leaks, the user's data is exposed via:** N/A — the Inngest functions hold only a short-lived `actions: write`-scoped GitHub App installation token and dispatch a workflow by name; no operator/customer data is read, processed, or moved. The token is redacted from any error before it reaches Sentry (`redactToken` + `[REDACTED-INSTALLATION-TOKEN]` sentinel).
-**Brand-survival threshold:** none — internal scheduling substrate change with no customer-data surface and no customer-facing artifact. Sensitive-path note: the diff touches `apps/web-platform/server/**` (code class) but no schema/auth/API-route/regulated-data surface; threshold `none` with reason: the change only adds dispatch-only scheduler functions that hold a scoped GitHub App token and read/write no customer data.
+**Brand-survival threshold:** none — internal scheduling substrate change with no customer-data surface and no customer-facing artifact.
+
+- `threshold: none, reason: diff touches apps/web-platform/server/** (code class) but only adds dispatch-only scheduler functions that hold a scoped GitHub App token and read/write no customer data — no schema, auth, API-route, or regulated-data surface.`
 
 ## Acceptance Criteria
 
