@@ -15,6 +15,16 @@ deferred: 4847
 
 # Plan — Generalize the CF Tunnel CI-apply pattern to the 7 on-host hardening resources (#4844)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-02 (substance triad: security-sentinel, architecture-strategist, data-integrity-guardian; after 4-agent panel + SpecFlow).
+
+**Load-bearing correction discovered:** the original plan asserted "the R2 state lock serializes terraform ops" in 4 places. Both architecture-strategist and data-integrity-guardian independently grepped `main.tf:13` (`use_lockfile = false` — "R2 does not support S3 conditional writes") and **falsified** it: there is NO state lock. This flips the SpecFlow-5a shared concurrency group from "redundant defense-in-depth" to the **sole serialization guard** against lost-update state corruption — escalated to P0-BLOCKING, with an identical-literal-group-string AC. Every prior reviewer (style panel + SpecFlow) had repeated the false R2-lock assumption; only the substance triad caught it.
+
+**Other deepen findings applied:** taint/idempotency over-claim corrected to "convergent on full re-run via taint, given state persisted" (lost-taint-on-killed-process window); saved-tfplan staleness under dual-fire (fail-loud, resolved by the shared group); Doppler-input masking AC (composite inputs aren't auto-masked like `secrets.*`); branch-protection dependency surfaced as a pre-merge AC; destroy-guard-omission rationale documented; third-writer (drift detector) noted as a #4847 concern.
+
+**Confirmed as designed (no change):** composite-action choice (shared network namespace), two-apply shape B, `-target` dependency-pull semantics (apparmor is an ancestor of deploy_pipeline_fix, not pulled), parity-test comment-strip parser. CODEOWNERS coverage sufficient; security posture unchanged-or-improved vs the already-live #4830 mechanism (credential blast radius byte-identical).
+
 ## Overview
 
 PR #4830 (merged) proved a CF Tunnel SSH bridge that lets a GitHub runner SSH to the prod
@@ -84,7 +94,8 @@ the bridge is NOT needed during plan — only the second apply.
 - **Step order in the `apply` job:** `terraform init` (L209) → plan (L218, **80 non-SSH targets only — do NOT add the 7 here**) → destroy-guard (L336-359) → apply saved `tfplan` (L370) → existing post-apply token sync (L397-432, produces `CI_SSH_ACCESS_TOKEN_ID/_SECRET` in Doppler) → **NEW token-presence gate** → **NEW SSH apply (gated)**.
 - **NEW token-presence gate step:** `doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain 2>/dev/null || true`; if empty/absent, set `ssh_apply_skip=true` and `::warning::` "first-bootstrap: SSH resources deferred to next run after token sync" (mirrors the existing `skip_sync` bootstrap-cycle guard at L384-395). If present, `ssh_apply_skip=false`.
 - **NEW SSH apply (only if `ssh_apply_skip != 'true'`):** `- uses: ./.github/actions/cf-tunnel-ssh-bridge` (brings up tunnel + NAT + key) → `doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform apply -auto-approve -input=false -target=terraform_data.disk_monitor_install -target=… (all 7)` → caller-side `if: always()` teardown with `[[ -n "${SERVER_IP:-}" ]]` / `[[ -n "${CLOUDFLARED_PID:-}" ]]` guards (SpecFlow 1a). AWS R2 creds exported via `doppler secrets get --plain` BEFORE the tf-var run (TR2).
-- **Cross-workflow concurrency (SpecFlow 5a):** a `server.tf` change already fires BOTH workflows (apply-web-platform-infra paths `apps/web-platform/infra/**` ∩ apply-deploy-pipeline-fix paths `…/server.tf`). The R2 state lock serializes terraform ops and both SSH applies are hash-gated idempotent (overlap on `apparmor_bwrap_profile` via `deploy_pipeline_fix`'s `depends_on` is a redundant no-op, not corruption). Mitigation evaluated at deepen-plan: either give both workflows a SHARED concurrency group (serializes at GHA level, prevents two concurrent tunnels to the same host root) OR document the ownership boundary. Default: shared concurrency group `terraform-apply-web-platform-host` on both SSH-applying workflows.
+- **Cross-workflow concurrency (SpecFlow 5a — P0, BLOCKING).** `apps/web-platform/infra/main.tf:13` sets `use_lockfile = false` ("R2 does not support S3 conditional writes") — **there is NO terraform state lock on this backend.** A `server.tf` change fires BOTH workflows (apply-web-platform-infra paths `apps/web-platform/infra/**` ∩ apply-deploy-pipeline-fix paths `…/server.tf`). This plan BREAKS the prior disjointness: it adds `apparmor_bwrap_profile` to web-platform's SSH `-target` set while apply-deploy-pipeline-fix pulls the SAME resource transitively via `deploy_pipeline_fix`'s `depends_on` (server.tf:502) → two concurrent `terraform apply` processes write the same `web-platform/terraform.tfstate` R2 object with last-writer-wins → **lost-update state corruption** (NOT a "redundant no-op"). **Mitigation is load-bearing, not optional:** both SSH-applying workflows MUST adopt the IDENTICAL literal `concurrency.group: terraform-apply-web-platform-host` (GHA does not error on divergent group strings — they silently fail to serialize). With no backend lock, the shared GHA group is the SOLE serialization guard. Keep `cancel-in-progress: false` on both (cancelling a half-applied unlocked run is the worse split-state). Add a comment at `main.tf:13` + both workflows stating the group is load-bearing BECAUSE the backend has no lock, so a future maintainer can't drop it believing R2 locks.
+- **Destroy-guard rationale for the SSH `-target` apply (data-integrity Q4).** The new SSH apply omits a destroy-guard deliberately: the `destroy-guard-filter-web-platform.jq` scope is Cloudflare-resource-only and would never flag a `terraform_data` replace anyway, AND none of the 7 has a `when = destroy` provisioner (a `triggers_replace` destroy+recreate is a pure state-entry swap with no on-host teardown). Document this in Phase 4 + the parity-test header so a future maintainer adding a destroy-provisioned SSH resource doesn't assume guard coverage.
 - Fix the stale header comment (lines 16-27): the 7 resources now apply HERE (the token-gated SSH step) over the bridge, not "via apply-deploy-pipeline-fix.yml".
 
 ### Phase 5 — Parity-guard test (self-healing)
@@ -110,6 +121,7 @@ the bridge is NOT needed during plan — only the second apply.
 - `.github/workflows/apply-deploy-pipeline-fix.yml` — replace inline bridge with `uses:`; keep caller teardown; **fix now-stale CAVEAT comment L46-54** (Kieran P2); add shared concurrency group (5a)
 - `.github/workflows/apply-web-platform-infra.yml` — token-gated SSH apply behind the bridge AFTER the post-apply token sync (shape B); caller teardown with `-n` guards; 7 `-target=` lines on the NEW SSH apply (NOT the main plan); fix stale header comment; add shared concurrency group (5a)
 - `.github/CODEOWNERS` — add `/.github/actions/cf-tunnel-ssh-bridge/ @deruelle` row
+- `apps/web-platform/infra/main.tf` — add a comment at the `use_lockfile = false` line (L13) noting the shared GHA concurrency group is the load-bearing serializer (no backend lock)
 
 ## Acceptance Criteria
 
@@ -120,12 +132,16 @@ the bridge is NOT needed during plan — only the second apply.
 - AC4. In `apply-web-platform-infra.yml`: the main plan/apply does NOT contain the 7 new `-target=` lines; a SEPARATE token-gated SSH-apply step contains all 7, runs the bridge `uses:` step + an `if: always()` teardown with `-n` guards, and is positioned AFTER the post-apply token-sync step. Stale header comment fixed.
 - AC5. Token-gate: the SSH-apply step is conditioned on `CI_SSH_ACCESS_TOKEN_ID` presence and emits `::warning::` + skips (does not fail the job) when absent (first-bootstrap path).
 - AC6. `plugins/soleur/test/terraform-target-parity.test.ts` passes on current state (sentinel ≥9 met by globbing all infra `*.tf` with comment-stripped parse) AND fails on a synthetic in-test fixture string adding an un-targeted SSH resource (verify via fixture, not by editing real `.tf`).
-- AC7. Both SSH-applying workflows share one concurrency group (5a). `bash scripts/test-all.sh` passes (parity + destroy-guard + ship-gate suites green).
+- AC7. Both SSH-applying workflows declare the **identical literal** `group: terraform-apply-web-platform-host` (deepen P0 — divergent strings silently fail to serialize): `grep -c 'group: terraform-apply-web-platform-host' .github/workflows/apply-web-platform-infra.yml .github/workflows/apply-deploy-pipeline-fix.yml` == 1 each. Both retain `cancel-in-progress: false`. `main.tf:13` + both workflows carry a comment stating the group is load-bearing because the backend has no lock.
+- AC8. (security P2) `inputs.doppler-token` / the SSH-key / CF-token inputs appear in `action.yml` ONLY inside `env:` mappings, never in a `run:` body or step `name:` (composite-action inputs are not auto-masked like `secrets.*`): `grep -nE 'inputs\.(doppler-token|.*key.*|.*token.*)' .github/actions/cf-tunnel-ssh-bridge/action.yml` shows every hit under an `env:` key.
+- AC9. The SSH `-target` apply step documents (comment) why it omits a destroy-guard (jq scope is Cloudflare-only; `terraform_data` has no `when=destroy` provisioner).
+- AC10. `bash scripts/test-all.sh` passes (parity + destroy-guard + ship-gate suites green).
+- AC11. (security P1-to-confirm) Pre-merge: confirm `main` branch protection requires CODEOWNERS review (cite the R15 enforced ruleset in the PR body), since the merge is the sole authorization for prod root writes.
 
 ### Post-merge (CI — automated)
-- AC8. On the merge commit, `apply-web-platform-infra.yml` runs to conclusion=success and the token-gated SSH step applies the 7 siblings (or `::warning::`-skips on first bootstrap). Verify (NO ssh): `gh run list --workflow=apply-web-platform-infra.yml --limit 3 --json conclusion,headSha`.
-- AC9. Editing one hardening file (e.g. `fail2ban-sshd.local`) in a follow-up PR auto-applies on merge with no operator-local `terraform apply`.
-- AC10. PR body uses `Ref #4844` (NOT `Closes` — issue closes only after AC8 confirms the post-merge apply landed; ops-remediation class per `wg-use-closes-n-in-pr-body-not-title-to`). `gh issue close 4844` after AC8.
+- AC12. On the merge commit, `apply-web-platform-infra.yml` runs to conclusion=success and the token-gated SSH step applies the 7 siblings (or `::warning::`-skips on first bootstrap). Verify (NO ssh): `gh run list --workflow=apply-web-platform-infra.yml --limit 3 --json conclusion,headSha`.
+- AC13. Editing one hardening file (e.g. `fail2ban-sshd.local`) in a follow-up PR auto-applies on merge with no operator-local `terraform apply`.
+- AC14. PR body uses `Ref #4844` (NOT `Closes` — issue closes only after AC12 confirms the post-merge apply landed; ops-remediation class per `wg-use-closes-n-in-pr-body-not-title-to`). `gh issue close 4844` after AC12.
 
 ## Open Code-Review Overlap
 
@@ -210,9 +226,13 @@ discoverability_test:
 
 ## Risks & Mitigations
 - **Tunnel idle window (SpecFlow 1c).** Resolved by shape B: the bridge is up ONLY for the short token-gated SSH `-target` apply (7 idempotent provisioners), NOT across the 80-target non-SSH plan/apply. Idle window is now comparable to the proven #4830 sibling.
-- **Cross-workflow concurrency (SpecFlow 5a — P0).** A `server.tf` change fires both apply workflows (pre-existing dual trigger). The R2 state lock serializes terraform ops; both SSH applies are hash-gated idempotent (apparmor overlap is a redundant no-op). Mitigation: shared concurrency group on both SSH-applying workflows prevents two concurrent tunnels to the same host root. (deepen-plan architecture-strategist to confirm the group name / coupling trade-off.)
+- **No backend state lock — concurrent-writer corruption (deepen triad P0, BLOCKING).** `main.tf:13` `use_lockfile = false` → R2 has NO state locking. Two concurrent `terraform apply` runs (the dual-workflow trigger on a `server.tf` change, now overlapping on `apparmor_bwrap_profile`) last-writer-wins-clobber `web-platform/terraform.tfstate`. Mitigation: the shared `concurrency.group: terraform-apply-web-platform-host` (identical literal in both workflows) is the SOLE serializer — see Phase 4. This is NOT "defense-in-depth over an R2 lock"; there is no lock.
+- **Saved-tfplan staleness under dual-fire (deepen P1 — fail-loud).** If the sibling workflow writes state between this job's `terraform plan -out=tfplan` (L237) and `apply tfplan` (L370), terraform's saved-plan consistency check errors `Saved plan is stale` (fail-loud, not corruption) and the SSH apply is unreached. Resolved by the same shared concurrency group (serialization prevents a mid-job sibling write).
 - **First-bootstrap inversion (SpecFlow 5b — P1).** Resolved by shape B: the token-gated SSH step runs AFTER the post-apply token sync and `::warning::`-skips when tokens are absent, so a from-scratch rebuild self-heals on the next run instead of dead-ending.
-- **Partial apply / mid-inline-list failure (SpecFlow 4a/4b).** A failure in SSH resource #4 leaves #1-3 applied; `triggers_replace` hashes make re-runs idempotent and `terraform_data` taints a failed-provisioner resource for full re-run. Blast radius decoupled by shape B (a tunnel flake fails only the SSH apply, not the 80 DNS/secret resources). Recovery relies on the taint mechanism — note in /work.
+- **Partial apply / mid-inline-list failure (SpecFlow 4a/4b + deepen P0-2).** A failure in SSH resource #4 leaves #1-3 applied; a failed-provisioner `terraform_data` is tainted → next apply destroy+recreates it (re-running all its provisioners). The bodies are **convergent on full re-run via taint, GIVEN state was persisted** — NOT unconditionally "idempotent": (a) a run killed AFTER tainting but BEFORE the R2 state write loses the taint (window widened by the missing lock; closed by the shared group serializing re-runs), and (b) the provisioners' positive-assertion tails (e.g. `fail2ban-client get sshd bantime == 600`) force a full destroy/recreate per retry, not a no-op. Acceptable, but `/work` must NOT treat these as idempotent no-ops. Blast radius decoupled by shape B (a tunnel flake fails only the SSH apply, not the 80 DNS/secret resources).
+- **Branch-protection dependency (security P1-to-confirm).** The "merge IS authorization for prod root write" model rests on `main` actually requiring CODEOWNERS review (CODEOWNERS:6 flags this as a "separate operator follow-up"). Generalizing to 7 hardening resources raises the consequence if unenforced. Pre-merge: confirm the `main` ruleset requires CODEOWNERS review (R15 canonical `scripts/ci-required-ruleset-canonical-required-status-checks.json`) and cite it in the PR body.
+- **Inter-apply crash window (deepen P2).** The job does two non-atomic R2 state writes (main apply, then SSH apply). A runner crash between them leaves 80 applied + 7 not — recoverable via idempotent re-apply on the next merge/run.
+- **Third state writer (deepen P3 — out of scope here).** `scheduled-terraform-drift.yml` writes the same state on its own group, but is detect-only (`terraform plan`, no apply → no state persist) for parts 1+2. Becomes a concurrent-writer concern only when part 3 (#4847) makes it apply — track there.
 - **Hardening files CI-writable.** A malicious/buggy PR editing a profile auto-applies on merge. Mitigation: CODEOWNERS-gated merge is the checkpoint (already pinned). Credential blast radius unchanged (root already reachable via the live bridge).
 - **`-target` allowlist drift.** A future resource silently no-ops if not appended. Mitigation: the new parity test (Phase 5). Known limitation: one-directional (a stale/typo'd `-target` is not caught — terraform exits 0 on no-match).
 
@@ -246,4 +266,21 @@ discoverability_test:
 | Simplicity/DHH | CODEOWNERS discussed in 4 places | LOW | **Applied** — decisive single row added (Phase 6) |
 | DHH | Scope is sound; abstraction + parity test both load-bearing | — | No change (confirmed keep) |
 
-Kieran verdict: APPROVE-with-one-blocking-fix (the P1 parity scope — applied). DHH: ship the work, trim the plan (done). Simplicity: minor tweaks only (done). Open architectural item for deepen-plan: confirm the 5a shared-concurrency-group name + coupling trade-off.
+Kieran verdict: APPROVE-with-one-blocking-fix (the P1 parity scope — applied). DHH: ship the work, trim the plan (done). Simplicity: minor tweaks only (done).
+
+### Deepen-plan substance triad (security / architecture / data-integrity)
+
+| Reviewer | Finding | Severity | Disposition |
+|---|---|---|---|
+| Architecture + Data-integrity | `main.tf:13` `use_lockfile = false` — NO R2 state lock; "R2 serializes" claim FALSE; plan breaks disjointness (apparmor written by both workflows concurrently) → lost-update corruption | **P0** | **Applied** — shared concurrency group reframed as SOLE serializer (Phase 4 + Risks); identical-literal-string AC7; main.tf comment |
+| Data-integrity | "idempotent" over-claim; lost-taint-on-killed-process window; positive-assertion tails force full recreate | P0-2 | **Applied** — Risks reworded to "convergent on re-run via taint, given state persisted"; /work caution |
+| Data-integrity | Saved-tfplan staleness under dual-fire | P1 | **Applied** — Risks (fail-loud; resolved by shared group) |
+| Security | Composite `inputs.doppler-token` not auto-masked like `secrets.*` — must stay in `env:` only | P2 | **Applied** — AC8 |
+| Security | "Merge IS authorization" rests on `main` requiring CODEOWNERS review (CODEOWNERS:6 flags it unconfirmed) | P1-confirm | **Applied** — AC11 pre-merge + Risks |
+| Data-integrity | SSH `-target` apply needs no destroy-guard (jq Cloudflare-scoped; no `when=destroy` provisioner) — but document why | P2 | **Applied** — Phase 4 + AC9 |
+| Architecture | Inter-apply runner-crash window (80 applied, 7 not) | P2 | **Applied** — Risks |
+| Architecture | Third writer `scheduled-terraform-drift.yml` on a separate group | P3 | **Noted** — out of scope (detect-only for parts 1+2); #4847 concern |
+| Security/Arch/Data | composite-action choice, two-apply shape B, `-target` ancestor-pull semantics, parser comment-strip | — | **Confirmed as designed** |
+| Architecture | Optional ADR amendment: bridge promoted to shared composite action → two-writers-one-state topology | advisory | Noted; header comments suffice at single-operator scale |
+
+Triad net: security posture unchanged-or-improved vs the already-live #4830 mechanism; the one genuine blocker (no-lock concurrent-writer corruption) is mitigated by the now-mandatory shared concurrency group.

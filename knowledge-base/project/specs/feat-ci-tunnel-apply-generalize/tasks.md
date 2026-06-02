@@ -23,7 +23,9 @@ plan: knowledge-base/project/plans/2026-06-02-feat-ci-tunnel-apply-generalize-pl
 - [ ] 2.1 Replace inline bridge (L182-309) with `uses: ./.github/actions/cf-tunnel-ssh-bridge` + input forwards
 - [ ] 2.2 Keep the existing `if: always()` teardown (L339-363)
 - [ ] 2.3 Fix the now-stale CAVEAT comment (L46-54) — apparmor publickey failure resolved by Phase 3
-- [ ] 2.4 Add shared concurrency group (5a) `terraform-apply-web-platform-host`
+- [ ] 2.4 Change concurrency group to the IDENTICAL literal `terraform-apply-web-platform-host` (must byte-match Phase 4.6) — this is the SOLE state serializer since `main.tf:13` `use_lockfile = false` (no R2 lock); keep `cancel-in-progress: false`; add load-bearing comment
+- [ ] 2.5 In `apps/web-platform/infra/main.tf` add a comment at the `use_lockfile = false` line: shared GHA concurrency group is the load-bearing serializer (no backend lock)
+- [ ] 2.6 Verify in `action.yml`: `inputs.doppler-token`/SSH-key/CF-token inputs used ONLY in `env:` mappings, never `run:`/`name:` (not auto-masked like secrets.*)
 
 ## Phase 3 — server.tf dual-context retrofit (contract)
 - [ ] 3.1 For each of the 7 sibling connection blocks (L76-81, 114-119, 151-156, 226-231, 572-577, 608-613, 635-640): add `private_key = var.ci_ssh_private_key`, change `agent = true` → `agent = var.ci_ssh_private_key == null`
@@ -33,8 +35,9 @@ plan: knowledge-base/project/plans/2026-06-02-feat-ci-tunnel-apply-generalize-pl
 - [ ] 4.2 Add token-presence gate step AFTER post-apply token sync (L397-432): `doppler secrets get CI_SSH_ACCESS_TOKEN_ID` → set `ssh_apply_skip`
 - [ ] 4.3 Add token-gated SSH-apply step (`if ssh_apply_skip != 'true'`): `uses:` bridge → AWS creds export → `doppler run --name-transformer tf-var -- terraform apply -target=<7 SSH>`
 - [ ] 4.4 Caller-side `if: always()` teardown with `[[ -n "${SERVER_IP:-}" ]]` / `[[ -n "${CLOUDFLARED_PID:-}" ]]` guards
+- [ ] 4.4b Comment on the SSH `-target` apply: no destroy-guard needed (jq is Cloudflare-scoped; `terraform_data` has no `when=destroy` provisioner)
 - [ ] 4.5 Fix stale header comment (L16-27)
-- [ ] 4.6 Add shared concurrency group (5a) matching Phase 2.4
+- [ ] 4.6 Set concurrency group to the IDENTICAL literal `terraform-apply-web-platform-host` (byte-match Phase 2.4 — divergent strings silently fail to serialize); keep `cancel-in-progress: false`
 
 ## Phase 5 — Parity-guard test
 - [ ] 5.1 Create `plugins/soleur/test/terraform-target-parity.test.ts` (`bun:test`)
@@ -52,8 +55,8 @@ plan: knowledge-base/project/plans/2026-06-02-feat-ci-tunnel-apply-generalize-pl
 - [ ] 7.3 Operator-local `terraform plan` (key var unset) shows no connection-block diff
 
 ## Acceptance verification (pre-merge)
-- [ ] AC1-AC7 per plan (grep/run-checkable)
+- [ ] AC1-AC11 per plan (grep/run-checkable). Key: AC7 identical-literal concurrency group in BOTH workflows; AC8 doppler-token only in `env:`; AC9 destroy-guard-omission documented; AC11 confirm `main` branch protection requires CODEOWNERS review (cite ruleset in PR body)
 
 ## Post-merge (CI)
-- [ ] AC8 `gh run list --workflow=apply-web-platform-infra.yml` conclusion=success
-- [ ] AC10 PR body `Ref #4844`; `gh issue close 4844` after AC8
+- [ ] AC12 `gh run list --workflow=apply-web-platform-infra.yml` conclusion=success
+- [ ] AC14 PR body `Ref #4844`; `gh issue close 4844` after AC12
