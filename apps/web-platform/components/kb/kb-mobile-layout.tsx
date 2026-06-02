@@ -3,7 +3,6 @@
 import type { ReactNode } from "react";
 import dynamic from "next/dynamic";
 import type { UseKbLayoutStateResult } from "@/hooks/use-kb-layout-state";
-import { KbSidebarShell } from "@/components/kb/kb-sidebar-shell";
 import { KbDocShell } from "@/components/kb/kb-doc-shell";
 import { useKb } from "@/components/kb/kb-context";
 import { ReconnectNotice } from "@/components/repo/reconnect-notice";
@@ -30,6 +29,10 @@ export function KbMobileLayout({ children, state }: KbMobileLayoutProps) {
   } = state;
   const { needsReconnect, refreshTree } = useKb();
 
+  // ADR-047: the file tree lives in the single nav rail's secondary slot
+  // (the mobile drawer), portaled from kb/layout.tsx — it no longer competes
+  // with the doc viewer for the content column. The doc always fills the
+  // content area here.
   return (
     <div className="flex h-full flex-col">
       {needsReconnect && (
@@ -38,19 +41,7 @@ export function KbMobileLayout({ children, state }: KbMobileLayoutProps) {
         </div>
       )}
       <div className="flex min-h-0 flex-1">
-        <aside
-          inert={kbCollapsed || undefined}
-          className={`w-full shrink-0 overflow-y-auto border-r border-soleur-border-default
-            ${isContentView ? "hidden" : "block"}`}
-        >
-          <KbSidebarShell onCollapse={toggleKbCollapsed} />
-        </aside>
-
-        <div
-          className={`min-w-0 flex-1 ${
-            isContentView ? "" : "hidden"
-          } flex flex-col`}
-        >
+        <div className="flex min-w-0 flex-1 flex-col">
           <KbDocShell
             collapsed={kbCollapsed}
             isContentView={isContentView}

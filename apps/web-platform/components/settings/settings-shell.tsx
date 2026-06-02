@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse";
+import { RailSlotPortal } from "@/components/dashboard/rail-slot";
 
 interface SettingsTab {
   href: string;
@@ -20,6 +20,13 @@ const STATIC_SETTINGS_TABS: readonly SettingsTab[] = [
 // AC-A: when the team-workspace-invite flag is OFF, `membersTab` is null and
 // the Members link href is not constructed here. The server layout evaluates
 // the flag gate and decides what to pass.
+//
+// ADR-047: the Settings sub-nav is lifted into the single nav rail's secondary
+// slot via a portal — it stays inside this client component's subtree (so it
+// keeps the server-resolved membersTab/activityTab props) while its DOM lands
+// in the unified rail. The per-shell collapse chrome and the mobile bottom tab
+// bar are gone: the unified rail owns collapse (⌘B) and hosts the nav on every
+// breakpoint (the drawer on mobile).
 export function SettingsShell({
   children,
   membersTab = null,
@@ -35,36 +42,11 @@ export function SettingsShell({
     ...(activityTab ? [activityTab] : []),
   ];
   const pathname = usePathname();
-  const [settingsCollapsed, toggleSettingsCollapsed] = useSidebarCollapse("soleur:sidebar.settings.collapsed");
-
-  // ⌘B is owned solely by (dashboard)/layout.tsx (AC5). The settings sub-nav
-  // no longer registers its own keydown handler; the collapse buttons below
-  // remain for click-driven collapse.
 
   return (
     <div className="flex min-h-full">
-      {/* Settings sidebar — hidden on mobile, shown on md+ */}
-      <nav
-        inert={settingsCollapsed || undefined}
-        className={`hidden shrink-0 border-r border-soleur-border-default md:block md:overflow-hidden
-        md:transition-[width] md:duration-200 md:ease-out
-        ${settingsCollapsed ? "md:w-0 md:border-r-0" : "w-48"}`}>
-        <div className="w-48 px-4 py-5">
-          <div className="mb-4 flex min-h-7 items-center justify-between">
-            <h2 className="text-xs font-medium uppercase tracking-wider text-soleur-text-muted">
-              Settings
-            </h2>
-            <button
-              onClick={toggleSettingsCollapsed}
-              aria-label="Collapse settings nav"
-              title="Collapse settings nav (⌘B)"
-              className="flex h-6 w-6 items-center justify-center rounded text-soleur-text-secondary hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
-            >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
-              </svg>
-            </button>
-          </div>
+      <RailSlotPortal>
+        <nav aria-label="Settings" className="px-2 py-2">
           <ul className="space-y-1">
             {SETTINGS_TABS.map((tab) => {
               const active =
@@ -76,6 +58,7 @@ export function SettingsShell({
                 <li key={tab.href}>
                   <Link
                     href={tab.href}
+                    aria-current={active ? "page" : undefined}
                     className={`block rounded-lg px-3 py-2 text-sm transition-colors ${
                       active
                         ? "bg-soleur-bg-surface-2 text-soleur-text-primary font-medium"
@@ -88,45 +71,11 @@ export function SettingsShell({
               );
             })}
           </ul>
-        </div>
-      </nav>
-
-      {/* Mobile tab bar */}
-      <div className="fixed bottom-0 left-0 right-0 z-40 flex border-t border-soleur-border-default bg-soleur-bg-surface-1 safe-bottom md:hidden">
-        {SETTINGS_TABS.map((tab) => {
-          const active =
-            tab.href === "/dashboard/settings"
-              ? pathname === "/dashboard/settings"
-              : pathname.startsWith(tab.href);
-
-          return (
-            <Link
-              key={tab.href}
-              href={tab.href}
-              className={`flex-1 py-3 text-center text-xs font-medium transition-colors ${
-                active ? "text-soleur-text-primary" : "text-soleur-text-muted"
-              }`}
-            >
-              {tab.label}
-            </Link>
-          );
-        })}
-      </div>
+        </nav>
+      </RailSlotPortal>
 
       {/* Content area */}
-      <div className={`relative flex-1 px-4 py-10 pb-20 md:pb-10 md:transition-[padding] md:duration-200 md:ease-out ${settingsCollapsed ? "md:pl-[14.5rem] md:pr-10" : "md:px-10"}`}>
-        {settingsCollapsed && (
-          <button
-            onClick={toggleSettingsCollapsed}
-            aria-label="Expand settings nav"
-            title="Expand settings nav (⌘B)"
-            className="absolute left-2 top-5 z-10 hidden md:flex h-6 w-6 items-center justify-center rounded text-soleur-text-secondary hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
-          >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
-            </svg>
-          </button>
-        )}
+      <div className="relative flex-1 px-4 py-10 md:px-10">
         <div className="mx-auto max-w-2xl">{children}</div>
       </div>
     </div>

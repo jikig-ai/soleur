@@ -4,7 +4,6 @@ import type { ReactNode } from "react";
 import dynamic from "next/dynamic";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import type { UseKbLayoutStateResult } from "@/hooks/use-kb-layout-state";
-import { KbSidebarShell } from "@/components/kb/kb-sidebar-shell";
 import { KbDocShell } from "@/components/kb/kb-doc-shell";
 import { useKb } from "@/components/kb/kb-context";
 import { ReconnectNotice } from "@/components/repo/reconnect-notice";
@@ -49,23 +48,9 @@ export function KbDesktopLayout({ children, state }: KbDesktopLayoutProps) {
 
   return (
     <div className="flex h-full">
-      {/* File-tree sidebar — animated width transition mirrors SettingsShell.
-          Padding lives on the inner wrapper (NOT the aside) so md:w-0 +
-          box-border collapses fully (#3585). Transition classes are
-          unconditional so React keeps the animation across state changes
-          (#3573). */}
-      <aside
-        inert={kbCollapsed || undefined}
-        className={`hidden shrink-0 border-r border-soleur-border-default md:block md:overflow-hidden md:transition-[width] md:duration-200 md:ease-out ${
-          kbCollapsed ? "md:w-0 md:border-r-0" : "md:w-72"
-        }`}
-      >
-        <div className="w-72 h-full">
-          <KbSidebarShell onCollapse={toggleKbCollapsed} />
-        </div>
-      </aside>
-
-      {/* Doc viewer + (optional) chat — resizable against each other. */}
+      {/* The file tree lives in the single nav rail's secondary slot now
+          (ADR-047, portaled from kb/layout.tsx). This layout owns only the
+          doc viewer + (optional) chat — resizable against each other. */}
       <Group orientation="horizontal" className="h-full flex-1 min-w-0">
         <Panel minSize="40%">
           <div className="relative min-w-0 flex flex-1 flex-col h-full">

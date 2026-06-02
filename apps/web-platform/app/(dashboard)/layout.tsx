@@ -6,11 +6,12 @@ import { usePathname } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { TeamNamesProvider } from "@/hooks/use-team-names";
 import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse";
-import { ConversationsRail } from "@/components/chat/conversations-rail";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { SignOutConfirmModal } from "@/components/auth/sign-out-confirm-modal";
 import { useSignOut } from "@/components/auth/use-sign-out";
 import { WorkspaceContextBand } from "@/components/dashboard/workspace-context-band";
+import { RailSlotProvider } from "@/components/dashboard/rail-slot";
+import { segmentToDrillLevel } from "@/hooks/segment-to-drill-level";
 import { MembershipRevokedScreen } from "@/components/dashboard/membership-revoked-screen";
 import { NoApiKeyBanner } from "@/components/dashboard/no-api-key-banner";
 import { PendingInviteBannerRecovery } from "@/components/dashboard/pending-invite-banner-recovery";
@@ -110,6 +111,9 @@ export default function DashboardLayout({
   const [collapsed, toggleCollapsed] = useSidebarCollapse("soleur:sidebar.main.collapsed");
   const [signOutModalOpen, setSignOutModalOpen] = useState(false);
   const { handleSignOut, isSigningOut } = useSignOut();
+  // Secondary-nav slot node — drilled sections portal their nav here (ADR-047).
+  // A useState ref-callback so the provider value updates once the slot mounts.
+  const [railSlotEl, setRailSlotEl] = useState<HTMLElement | null>(null);
 
   // Check admin status on mount
   useEffect(() => {
@@ -137,7 +141,10 @@ export default function DashboardLayout({
   }, []);
 
   const navItems = isAdmin ? [...NAV_ITEMS, ...ADMIN_NAV_ITEMS] : NAV_ITEMS;
-  const settingsActive = pathname.startsWith("/dashboard/settings");
+  // segmentToDrillLevel is the SOLE drill-state authority (AC4c) — no raw
+  // pathname.startsWith("/dashboard/(kb|settings|chat)") literal lives here.
+  const drill = segmentToDrillLevel(pathname);
+  const settingsActive = drill === "settings";
 
   // Auto-close drawer on route change
   useEffect(() => {
@@ -195,6 +202,7 @@ export default function DashboardLayout({
 
   return (
     <TeamNamesProvider>
+    <RailSlotProvider value={railSlotEl}>
     <div className="flex h-dvh flex-col md:flex-row">
       {/* Mobile top bar — only visible below md breakpoint */}
       <div className="flex h-14 shrink-0 items-center border-b border-soleur-border-default bg-soleur-bg-surface-1 px-4 safe-top md:hidden">
@@ -276,96 +284,91 @@ export default function DashboardLayout({
             section title in drilled states. */}
         <WorkspaceContextBand pathname={pathname} />
 
-        {/* Navigation */}
-        <nav className={`flex-1 space-y-1 pt-3 ${collapsed ? "px-1" : "px-3"}`}>
-          {navItems.map((item) => {
-            const active =
-              item.href === "/dashboard"
-                ? pathname === "/dashboard" || pathname.startsWith("/dashboard/chat")
-                : pathname.startsWith(item.href);
+        {/* Rail swap region (ADR-047): the section's secondary nav REPLACES
+            the primary nav + footer in the same rail when drilled. A true
+            conditional swap (not CSS hide) — exactly one nav surface mounts at
+            a time. The drilled section portals its nav into the slot below. */}
+        {drill === null ? (
+          <>
+            {/* Navigation */}
+            <nav className={`flex-1 space-y-1 pt-3 ${collapsed ? "px-1" : "px-3"}`}>
+              {navItems.map((item) => {
+                const active =
+                  item.href === "/dashboard"
+                    ? pathname === "/dashboard" || drill === "chat"
+                    : pathname.startsWith(item.href);
 
-            return (
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    title={collapsed ? item.label : undefined}
+                    aria-current={active ? "page" : undefined}
+                    className={`flex min-h-[44px] items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
+                      active
+                        ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
+                        : "text-soleur-text-muted hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary"
+                    } ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
+                  >
+                    <item.icon className="h-4 w-4 shrink-0" />
+                    <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>
+                      {item.label}
+                    </span>
+                  </Link>
+                );
+              })}
+            </nav>
+
+            {/* Footer links */}
+            <div className={`border-t border-soleur-border-default safe-bottom ${collapsed ? "p-1" : "p-3"}`}>
+              {userEmail && !collapsed && (
+                <p
+                  className="truncate px-3 py-1 text-xs text-soleur-text-muted"
+                  title={userEmail}
+                >
+                  {userEmail}
+                </p>
+              )}
+              <a
+                href="https://soleur-ai.betteruptime.com/"
+                target="_blank"
+                rel="noopener noreferrer"
+                title={collapsed ? "Status" : undefined}
+                className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
+              >
+                <StatusIcon className="h-4 w-4 shrink-0" />
+                <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Status</span>
+              </a>
               <Link
-                key={item.href}
-                href={item.href}
-                title={collapsed ? item.label : undefined}
-                aria-current={active ? "page" : undefined}
-                className={`flex min-h-[44px] items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
-                  active
+                href="/dashboard/settings"
+                title={collapsed ? "Settings" : undefined}
+                aria-current={settingsActive ? "page" : undefined}
+                className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
+                  settingsActive
                     ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
                     : "text-soleur-text-muted hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary"
                 } ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
               >
-                <item.icon className="h-4 w-4 shrink-0" />
-                <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>
-                  {item.label}
-                </span>
+                <SettingsIcon className="h-4 w-4 shrink-0" />
+                <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Settings</span>
               </Link>
-            );
-          })}
-        </nav>
-
-        {/* Recent conversations — mobile drawer only. Mounted only when
-            the drawer is open AND on chat routes, so:
-              (1) the rail does NOT mount on /dashboard, /dashboard/kb,
-                  /dashboard/settings (avoiding wasted Realtime channels +
-                  query bursts on every dashboard route); and
-              (2) at md+ the drawer button never fires (drawerOpen stays
-                  false), so the chat-segment <aside hidden md:block /> is
-                  the sole rail mount on desktop — no double-mount, no
-                  duplicate "command-center" channel subscription.
-            See review feedback on PR #3021 (perf P1 + user-impact F1/F3). */}
-        {drawerOpen && pathname.startsWith("/dashboard/chat") && (
+              <button
+                onClick={() => setSignOutModalOpen(true)}
+                title={collapsed ? "Sign out" : undefined}
+                className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
+              >
+                <LogOutIcon className="h-4 w-4 shrink-0" />
+                <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Sign out</span>
+              </button>
+            </div>
+          </>
+        ) : (
           <div
-            data-testid="conversations-rail-drawer"
-            className="flex min-h-0 flex-1 flex-col border-t border-soleur-border-default md:hidden"
-          >
-            <ConversationsRail />
-          </div>
+            ref={setRailSlotEl}
+            data-testid="rail-secondary-slot"
+            className="flex min-h-0 flex-1 flex-col overflow-y-auto"
+          />
         )}
-
-        {/* Footer links */}
-        <div className={`border-t border-soleur-border-default safe-bottom ${collapsed ? "p-1" : "p-3"}`}>
-          {userEmail && !collapsed && (
-            <p
-              className="truncate px-3 py-1 text-xs text-soleur-text-muted"
-              title={userEmail}
-            >
-              {userEmail}
-            </p>
-          )}
-          <a
-            href="https://soleur-ai.betteruptime.com/"
-            target="_blank"
-            rel="noopener noreferrer"
-            title={collapsed ? "Status" : undefined}
-            className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
-          >
-            <StatusIcon className="h-4 w-4 shrink-0" />
-            <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Status</span>
-          </a>
-          <Link
-            href="/dashboard/settings"
-            title={collapsed ? "Settings" : undefined}
-            aria-current={settingsActive ? "page" : undefined}
-            className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
-              settingsActive
-                ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
-                : "text-soleur-text-muted hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary"
-            } ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
-          >
-            <SettingsIcon className="h-4 w-4 shrink-0" />
-            <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Settings</span>
-          </Link>
-          <button
-            onClick={() => setSignOutModalOpen(true)}
-            title={collapsed ? "Sign out" : undefined}
-            className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
-          >
-            <LogOutIcon className="h-4 w-4 shrink-0" />
-            <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Sign out</span>
-          </button>
-        </div>
       </aside>
 
       {/* Main content — inert when drawer is open for focus trapping */}
@@ -414,6 +417,7 @@ export default function DashboardLayout({
           once at the dashboard root so it survives across route changes. */}
       <MembershipRevokedScreen />
     </div>
+    </RailSlotProvider>
     </TeamNamesProvider>
   );
 }

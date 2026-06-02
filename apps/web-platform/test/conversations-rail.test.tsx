@@ -101,18 +101,21 @@ afterEach(() => {
 });
 
 describe("ChatLayout (server component shell)", () => {
-  it("renders <ConversationsRail /> alongside its children", async () => {
+  it("portals <ConversationsRail /> into the rail slot, alongside its children (ADR-047)", async () => {
     paramsMock.mockReturnValue({ conversationId: "conv-1" });
     setRailHook([makeConversation({ id: "conv-1", title: "Hello" })]);
 
     const { default: ChatLayout } = await import(
       "@/app/(dashboard)/dashboard/chat/layout"
     );
+    const { RailSlotHarness } = await import("./helpers/rail-slot-harness");
 
     const children = <div data-testid="chat-page">child</div>;
-    render(await ChatLayout({ children }));
+    // The rail no longer lives in a sibling <aside>; it is portaled into the
+    // single nav rail's slot. The harness supplies a slot node so the portal
+    // resolves in isolation.
+    render(<RailSlotHarness>{await ChatLayout({ children })}</RailSlotHarness>);
 
-    // Both the rail and the page child render in the layout.
     expect(screen.getByTestId("conversations-rail")).toBeInTheDocument();
     expect(screen.getByTestId("chat-page")).toBeInTheDocument();
   });
@@ -208,23 +211,7 @@ describe("ConversationsRail", () => {
     expect(screen.getByText("Needs attention")).toBeInTheDocument();
   });
 
-  it("toggles collapsed state and persists via useSidebarCollapse storage key", async () => {
-    setRailHook([makeConversation({ id: "c1", title: "Some row" })]);
-
-    const { ConversationsRail } = await import(
-      "@/components/chat/conversations-rail"
-    );
-    render(<ConversationsRail />);
-
-    const toggle = screen.getByRole("button", {
-      name: /collapse|expand/i,
-    });
-    fireEvent.click(toggle);
-
-    expect(localStorage.getItem("soleur:sidebar.chat-rail.collapsed")).toBe("1");
-  });
-
-  // ⌘B is now owned solely by (dashboard)/layout.tsx (AC5); the conversations
-  // rail no longer registers its own keydown handler. ⌘B behavior is covered
-  // in dashboard-sidebar-collapse.test.tsx.
+  // ADR-047: the conversations rail no longer owns a collapse button or ⌘B —
+  // the unified nav rail owns collapse (covered in
+  // dashboard-sidebar-collapse.test.tsx). The rail just renders the list.
 });

@@ -4,13 +4,11 @@ import { memo } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useConversations } from "@/hooks/use-conversations";
-import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse";
 import { relativeTime } from "@/lib/relative-time";
 import { LEADER_COLORS } from "@/components/chat/leader-colors";
 import type { ConversationStatus } from "@/lib/types";
 import type { ConversationWithPreview } from "@/hooks/use-conversations";
 
-const COLLAPSE_KEY = "soleur:sidebar.chat-rail.collapsed";
 const RAIL_LIMIT = 15;
 // Hoisted to module scope so re-renders pass the SAME options object
 // reference to useConversations — a literal `{ limit: RAIL_LIMIT }` per
@@ -88,41 +86,17 @@ export function ConversationsRail() {
   const { conversations, loading } = useConversations(RAIL_OPTIONS);
   const params = useParams<{ conversationId: string }>();
   const activeId = params?.conversationId;
-  const [collapsed, toggle] = useSidebarCollapse(COLLAPSE_KEY);
 
-  // ⌘B is owned solely by (dashboard)/layout.tsx (AC5). The conversations rail
-  // no longer registers its own keydown handler; the collapse buttons below
-  // remain for click-driven collapse.
-
-  if (collapsed) {
-    return (
-      <div className="flex h-full flex-col items-center py-2">
-        <button
-          type="button"
-          aria-label="Expand conversations rail"
-          onClick={toggle}
-          className="rounded p-2 text-soleur-text-secondary hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
-        >
-          ›
-        </button>
-      </div>
-    );
-  }
+  // ADR-047: the conversations rail lives in the single nav rail's slot now.
+  // Collapse is owned by the unified rail (⌘B / the band) — no per-rail
+  // collapse state or button here.
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b border-soleur-border-default px-3 py-2">
+      <div className="flex items-center border-b border-soleur-border-default px-3 py-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-soleur-text-muted">
           Recent conversations
         </span>
-        <button
-          type="button"
-          aria-label="Collapse conversations rail"
-          onClick={toggle}
-          className="rounded p-1 text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
-        >
-          ‹
-        </button>
       </div>
 
       <nav className="min-h-0 flex-1 overflow-y-auto py-1">

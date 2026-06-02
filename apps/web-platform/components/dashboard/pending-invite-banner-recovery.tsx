@@ -17,6 +17,7 @@
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { PendingInviteBanner } from "@/components/dashboard/pending-invite-banner";
+import { segmentToDrillLevel } from "@/hooks/segment-to-drill-level";
 import { reportSilentFallback } from "@/lib/client-observability";
 
 interface PendingInvite {
@@ -31,7 +32,7 @@ export function PendingInviteBannerRecovery() {
 
   // Chat routes already mount the banner server-side — back off to avoid a
   // double render. Gate BEFORE the fetch so chat routes don't even probe.
-  const onChatRoute = pathname?.startsWith("/dashboard/chat") ?? false;
+  const onChatRoute = segmentToDrillLevel(pathname ?? "") === "chat";
 
   useEffect(() => {
     if (onChatRoute) return;
