@@ -20,6 +20,8 @@ readonly LOG_TAG="infra-config-apply"
 
 # --- File map (hardcoded — no generic JSON, no jq) ---
 # Each entry: ENV_VAR_NAME | DEST_PATH | MODE | OWNER
+# DEST_PATH values are interpolated unescaped into the state JSON ("file":"...");
+# keep them JSON-safe (no '"' or '\') so /hooks/infra-config-status stays parseable.
 FILE_MAP=(
   "CI_DEPLOY_SH_B64|/usr/local/bin/ci-deploy.sh|755|root:root"
   "CI_DEPLOY_WRAPPER_SH_B64|/usr/local/bin/ci-deploy-wrapper.sh|755|root:root"
@@ -42,7 +44,10 @@ START_TS=$(date +%s)
 rm -f "${STATE_FILE}.final"
 
 # EXIT trap: on non-zero exit without a .final sentinel, write "unhandled" state.
-# Also cleans up temp files and the sentinel.
+# Also cleans up temp files and the sentinel. files_total:0 is a "no-accounting"
+# sentinel (the trap fires before/independent of the write loop and before
+# TOTAL_COUNT is set); it pairs with files_written:0/files_failed:0 and is
+# harmless to the CI gate, which fails on the non-zero exit_code first.
 TMPFILES=()
 trap 'rc=$?; if [ "$rc" -ne 0 ] && [ ! -f "${STATE_FILE}.final" ]; then
   printf "{\"start_ts\":%d,\"end_ts\":%d,\"exit_code\":%d,\"reason\":\"unhandled\",\"files_written\":0,\"files_failed\":0,\"files_total\":0,\"files\":[]}\n" \
@@ -159,6 +164,12 @@ if [[ -n "${state_tmp:-}" ]]; then
 fi
 
 # --- Post-write commands (skip in test mode) ---
+# Intentionally UNCONDITIONAL on FAIL_COUNT: a partial apply must still
+# daemon-reload + self-restart so a freshly-written hooks.json (the chicken-and-egg
+# self-heal, #4804) activates and re-aligns the host env-mapping for the next
+# apply. A missing_env on a NON-hooks.json file can transiently leave the router
+# pointing at a stale/absent target until the next clean apply; the CI verify gate
+# catches the partial (files_written != files_total) and the next apply self-heals.
 if [[ -z "${INFRA_CONFIG_TEST_MODE:-}" ]]; then
   sync
   systemctl daemon-reload

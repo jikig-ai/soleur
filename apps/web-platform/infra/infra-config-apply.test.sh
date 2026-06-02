@@ -121,41 +121,50 @@ test_happy_path() {
   teardown
 }
 
-# --- Test 2: Missing env var rejection ---
+# --- Test 2: Missing env var → exits non-zero (partial-apply contract, #4804) ---
+# Post-#4804 the handler no longer aborts all writes on a missing var; it records
+# a per-file missing_env failure, writes the rest, and exits 1. This test pins the
+# exit-code + per-file-failure dimension; test_missing_env_partial_write pins the
+# "other files still written" dimension.
 test_missing_env_var() {
-  echo "TEST: missing env var — handler rejects"
+  echo "TEST: missing env var — exits non-zero with a per-file missing_env failure"
   setup
 
   # Set all but one required var
   export_valid_env_vars
   unset HOOKS_JSON_B64  # missing
 
-  if bash "$HANDLER" 2>/dev/null; then
-    echo "  FAIL: handler should have failed with missing HOOKS_JSON_B64"
-    FAIL=$((FAIL + 1))
-  else
-    echo "  PASS: handler rejected missing env var"
-    PASS=$((PASS + 1))
-  fi
+  local rc=0
+  bash "$HANDLER" 2>/dev/null || rc=$?
+  assert_eq "handler exits 1 on missing var" "1" "$rc"
+
+  local files_failed missing_reason
+  files_failed=$(jq -r '.files_failed' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  missing_reason=$(jq -r '.files[] | select(.file == "/etc/webhook/hooks.json") | .reason' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  assert_eq "files_failed is 1" "1" "$files_failed"
+  assert_eq "missing file reason is missing_env" "missing_env" "$missing_reason"
 
   teardown
 }
 
-# --- Test 3: Empty env var rejection ---
+# --- Test 3: Empty env var → exits non-zero with a per-file missing_env failure ---
+# An empty (vs unset) payload var takes the same missing_env arm (`-z` covers both).
 test_empty_env_var() {
-  echo "TEST: empty env var — handler rejects"
+  echo "TEST: empty env var — exits non-zero with a per-file missing_env failure"
   setup
 
   export_valid_env_vars
   export CI_DEPLOY_SH_B64=""
 
-  if bash "$HANDLER" 2>/dev/null; then
-    echo "  FAIL: handler should have failed with empty CI_DEPLOY_SH_B64"
-    FAIL=$((FAIL + 1))
-  else
-    echo "  PASS: handler rejected empty env var"
-    PASS=$((PASS + 1))
-  fi
+  local rc=0
+  bash "$HANDLER" 2>/dev/null || rc=$?
+  assert_eq "handler exits 1 on empty var" "1" "$rc"
+
+  local files_failed empty_reason
+  files_failed=$(jq -r '.files_failed' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  empty_reason=$(jq -r '.files[] | select(.file == "/usr/local/bin/ci-deploy.sh") | .reason' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  assert_eq "files_failed is 1" "1" "$files_failed"
+  assert_eq "empty-var file reason is missing_env" "missing_env" "$empty_reason"
 
   teardown
 }

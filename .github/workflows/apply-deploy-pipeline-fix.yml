@@ -310,19 +310,40 @@ jobs:
             exit 1
           fi
 
-      - name: Verify journald_storage no-SSH surface is live (AC12, #4804)
+      - name: Check whether #4804 is still open (scopes the one-time self-heal verification)
+        id: check_4804
         if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          STATE=$(gh issue view 4804 --json state --jq '.state' 2>/dev/null || echo "MISSING")
+          if [[ "$STATE" == "OPEN" ]]; then
+            echo "open=true" >> "$GITHUB_OUTPUT"
+            echo "#4804 is OPEN — running the one-time journald self-heal verification + close."
+          else
+            echo "open=false" >> "$GITHUB_OUTPUT"
+            echo "#4804 is ${STATE} (not OPEN) — skipping the journald close-out check; the generic files_written==files_total gate above is the standing landed-files guard."
+          fi
+
+      - name: Verify journald_storage no-SSH surface is live (AC12, #4804)
+        if: success() && steps.check_4804.outputs.open == 'true'
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DOPPLER_PROJECT: soleur
           DOPPLER_CONFIG: prd_terraform
-        # Asserts the ORIGINAL symptom is cleared: /hooks/deploy-status returned
-        # journald_storage == null because cat-deploy-state.sh was frozen at
-        # 2026-05-21 (#4804). After the apply pushes the fresh cat-deploy-state.sh
-        # (carrying the #4792/#4800 journald_storage field), the field must report
-        # persistent == true. Standing regression guard: it runs on every apply, so
-        # a future freeze of cat-deploy-state.sh fails loud here instead of silently.
+        # ONE-TIME close-out check for #4804, NOT a standing regression guard.
+        # The ORIGINAL symptom: /hooks/deploy-status returned journald_storage ==
+        # null because cat-deploy-state.sh was frozen at 2026-05-21 (#4804). After
+        # the apply pushes the fresh cat-deploy-state.sh (carrying the #4792/#4800
+        # journald_storage field), the field must report persistent == true before
+        # we close #4804. It is gated on #4804 still being OPEN so it auto-disables
+        # once resolved — the generic `files_written == files_total && files_failed
+        # == 0` gate above is the STANDING landed-files guard (it already proves
+        # cat-deploy-state.sh landed). Asserting a specific FIELD VALUE on every
+        # future apply would over-couple this deploy-reliability workflow to one
+        # feature and false-red on a deliberate future journald change.
         run: |
           set -euo pipefail
           APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
@@ -363,7 +384,7 @@ jobs:
           fi
 
       - name: Close #4804 after self-heal verified
-        if: success()
+        if: success() && steps.check_4804.outputs.open == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MERGE_SHA: ${{ github.sha }}
