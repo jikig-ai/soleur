@@ -164,29 +164,39 @@ function MemberRow({
           )}
         </div>
       </div>
+      {/* justify-self-center: the badge is a grid item; without it the bordered
+          span stretches to fill the auto column and left-aligns, drifting from
+          the text-center "Role" header. Center it to sit under the header. */}
       <span
         className={
           member.role === "owner"
-            ? "rounded-md border border-soleur-accent-gold-fg/40 px-2 py-0.5 text-xs font-medium text-soleur-accent-gold-fg"
-            : "rounded-md border border-soleur-border-default px-2 py-0.5 text-xs font-medium text-soleur-text-secondary"
+            ? "justify-self-center rounded-md border border-soleur-accent-gold-fg/40 px-2 py-0.5 text-xs font-medium text-soleur-accent-gold-fg"
+            : "justify-self-center rounded-md border border-soleur-border-default px-2 py-0.5 text-xs font-medium text-soleur-text-secondary"
         }
       >
         {member.role === "owner" ? "Owner" : "Member"}
       </span>
       {byokDelegationsEnabled && (
-        <DelegationToggle
-          memberUserId={member.userId}
-          memberEmail={member.email}
-          workspaceId={workspaceId}
-          isOwner={isOwner}
-          delegation={member.delegationFromMe}
-          delegationToMe={member.delegationToMe}
-          isSelf={isCurrentUser}
-          flagEnabled={byokDelegationsEnabled}
-          promptShareKey={showShareKeyPrompt}
-        />
+        // justify-self-center: center the Funded control under its text-center
+        // header (DelegationToggle right-aligns internally; the shrink-wrapped
+        // wrapper makes that a no-op while centering the cluster in the column).
+        <div className="justify-self-center">
+          <DelegationToggle
+            memberUserId={member.userId}
+            memberEmail={member.email}
+            workspaceId={workspaceId}
+            isOwner={isOwner}
+            delegation={member.delegationFromMe}
+            delegationToMe={member.delegationToMe}
+            isSelf={isCurrentUser}
+            flagEnabled={byokDelegationsEnabled}
+            promptShareKey={showShareKeyPrompt}
+          />
+        </div>
       )}
-      <span className="text-right text-xs text-soleur-text-muted">
+      {/* justify-self-end + text-right: right-align under the text-right "Added"
+          header (don't rely on the default stretch). */}
+      <span className="justify-self-end text-right text-xs text-soleur-text-muted">
         {isCurrentUser ? "— (you)" : formatRelative(member.addedAt)}
       </span>
       <div className="relative w-6" ref={menuRef}>

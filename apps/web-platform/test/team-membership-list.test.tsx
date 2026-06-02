@@ -47,6 +47,33 @@ describe("TeamMembershipList", () => {
     expect(memberBadges).toHaveLength(1);
   });
 
+  it("AC-ALIGN: role badge is centered under its header (justify-self-center), not stretched/left", () => {
+    render(
+      <TeamMembershipList
+        members={[OWNER, MEMBER]}
+        currentUserId="user-owner"
+        workspaceId="ws-1"
+        isOwner={true}
+        byokDelegationsEnabled={false}
+        organizationName="Test Org"
+      />,
+    );
+    // The bordered role badge (Owner/Member) must carry justify-self-center so
+    // it sits under the text-center "Role" header instead of stretching to fill
+    // the auto grid column and left-aligning. Regression guard for the
+    // misalignment reported after PR #4779.
+    const badges = [
+      screen.getByText("Owner"),
+      ...screen.getAllByText("Member").filter((el) => el.className.includes("rounded-md")),
+    ];
+    for (const badge of badges) {
+      expect(badge.className).toContain("justify-self-center");
+    }
+    // The "Added" value cell right-aligns under the text-right header.
+    const added = screen.getByText(/—\s*\(you\)/);
+    expect(added.className).toContain("justify-self-end");
+  });
+
   it("marks current user with '— (you)'", () => {
     render(
       <TeamMembershipList

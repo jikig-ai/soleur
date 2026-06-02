@@ -74,6 +74,13 @@ the `isTeamWorkspaceInviteEnabled` dogfood flag), so neither deploy-skew directi
 regresses anything (both fail closed to the existing 500; the DROP+GRANT land atomically
 so no `authenticated`-reachable forgeable overload exists at any instant).
 
+**Recurrence #4 + sibling sweep (mig 094, #4779-followup, 2026-06-02).** A user reported "after PR #4779, removing a member fails with a 500." The removal RPC (`remove_workspace_member`, mig 062/067/068) had the **exact same** bare-`auth.uid()`-under-service-role defect — PR #4779 only touched the same page's workspace-resolution, a **timing coincidence, not the cause**. Migration 094 applied the verbatim 091/092 fix (COALESCE + DROP old overload + service_role-only) to `remove_workspace_member` AND `update_workspace_member_role` (dormant, defense-in-depth). Two meta-lessons:
+
+1. **"Bug appeared after PR X" is a hypothesis, not a fact — trace the actual mechanism.** The 28000-under-service-role defect predated #4779 by months; grepping the literal RAISE + the `createServiceClient()` caller falsified the attribution in minutes.
+2. **The same PR added `update_byok_delegation_cap` using the OTHER safe shape** (064 grant/revoke impersonation-guard: `auth.uid()` branch + actor-impersonation RAISE → safe to `GRANT TO authenticated, service_role`). Picking the correct shape per RPC is the load-bearing decision — member-mutation RPCs (forgeable override, no internal guard) → service_role-only; BYOK RPCs (internal impersonation guard) → authenticated+service_role.
+
+**Last unpatched dormant sibling: `invite_workspace_member` (mig 063).** The architecture reviewer flagged it — same bare-`auth.uid()` hole, same `createServiceClient()` wrapper (`inviteWorkspaceMember`), but **no live route caller** (the live invite flow uses `createWorkspaceInvitation`, the pending-invite path). It was NOT patched in 094 (out of scope; security-sentinel did not corroborate; different RPC family) but its stale/wrong wrapper comment was rewritten to document the latent gap + the mig-094 fix shape to apply when it is wired to a route. **When wiring `invite_workspace_member` to a route, widen it to the COALESCE + service_role-only shape FIRST, or it 500s on first use** — the 5th instance of this class, pre-documented.
+
 ## Follow-up Insight: verify-sentinel parity when mirroring a precedent migration
 
 When a grant-flip migration mirrors a precedent that ships a paired

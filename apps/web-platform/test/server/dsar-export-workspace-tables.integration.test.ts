@@ -107,14 +107,17 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       if (SCHEMA_CACHE_READY === false) return;
       const harry = fixture.members[1];
 
-      // remove_workspace_member is 2-arg (p_workspace_id, p_user_id) per
-      // mig 062:272; the SECURITY DEFINER body reads the actor from
-      // auth.uid(). Service-role contexts have auth.uid() = NULL so the
-      // RPC raises 28000; fallback DELETE is the canonical removal path
-      // here (mirrors workspace-members.test.ts:113-119 precedent).
+      // mig 094: remove_workspace_member is now 3-arg + service_role-only and
+      // resolves the caller via COALESCE(p_caller_user_id, auth.uid()).
+      // Service-role contexts have auth.uid() = NULL, so we forward the owner
+      // (members[0]) as p_caller_user_id — exactly as the production wrapper
+      // does. The fallback DELETE remains as defense-in-depth in case the RPC
+      // is unavailable in a degraded environment.
+      const owner = fixture.members[0];
       const { error: rmErr } = await service.rpc("remove_workspace_member", {
         p_workspace_id: fixture.workspaceId,
         p_user_id: harry.userId,
+        p_caller_user_id: owner.userId,
       });
       if (rmErr) {
         const { error: delErr } = await service
