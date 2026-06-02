@@ -133,32 +133,32 @@ The Vector routing item required tracing the runtime topology, because the issue
 ### Pre-merge (PR)
 
 **PR-A — stdout tail capture:**
-- [ ] `SpawnResult` has an optional `stdoutTail?: string` field with a comment mirroring the
+- [x] `SpawnResult` has an optional `stdoutTail?: string` field with a comment mirroring the
       `stderrTail` doc block (`_cron-claude-eval-substrate.ts:16-30`).
-- [ ] A `STDOUT_TAIL_CAP_BYTES` constant is exported, mirroring `STDERR_CAP_BYTES` (8192).
+- [x] A `STDOUT_TAIL_CAP_BYTES` constant is exported, mirroring `STDERR_CAP_BYTES` (8192).
       Justify the chosen value inline (the max-turns notice is a few hundred bytes; the cap is a
       pathological-OOM ceiling, same rationale as stderr).
-- [ ] The stdout readline `on("line")` handler accumulates a bounded redacted tail using the
+- [x] The stdout readline `on("line")` handler accumulates a bounded redacted tail using the
       identical pattern as `:242`: `stdoutTail = (stdoutTail + redacted + "\n").slice(-STDOUT_TAIL_CAP_BYTES)`,
       and still calls `logger.info` for the live stream (do NOT drop the existing log line).
-- [ ] Every `finish({...})` / resolve path that already sets `stderrTail` also sets `stdoutTail`
+- [x] Every `finish({...})` / resolve path that already sets `stderrTail` also sets `stdoutTail`
       (the `child.on("exit")` path at `:275-284` and the `child.on("error")` path at `:295-302`).
       Grep: `grep -n "stderrTail" _cron-claude-eval-substrate.ts` and confirm a sibling
       `stdoutTail` at each — no resolve path sets one without the other.
-- [ ] `resolveOutputAwareOk` accepts an optional `stdoutTail?: string` param and folds it into
+- [x] `resolveOutputAwareOk` accepts an optional `stdoutTail?: string` param and folds it into
       the `scheduled-output-missing` `extra` as `stdoutTail: stdoutTail ? stdoutTail.slice(-N) : undefined`
       (choose N consistent with the existing `stderrTail.slice(-4000)`).
 
 **PR-B — thread diagnostics into 5 sites:**
-- [ ] All 5 cited sites pass `stderrTail: spawnResult.stderrTail` + `exitCode: spawnResult.exitCode`
+- [x] All 5 cited sites pass `stderrTail: spawnResult.stderrTail` + `exitCode: spawnResult.exitCode`
       (and `stdoutTail: spawnResult.stdoutTail` from PR-A) into `resolveOutputAwareOk`.
-- [ ] Verification grep returns **8** sites passing all three fields (the 5 fixed + 3 pre-existing):
+- [x] Verification grep returns **8** sites passing all three fields (the 5 fixed + 3 pre-existing):
       `grep -rl "stderrTail: spawnResult.stderrTail" apps/web-platform/server/inngest/functions/cron-*.ts | wc -l` → 8.
-- [ ] No site passes `stderrTail` without also passing `exitCode` (and vice versa) — the fields
+- [x] No site passes `stderrTail` without also passing `exitCode` (and vice versa) — the fields
       are a diagnostic triple.
 
 **PR-C — Vector routing:**
-- [ ] `soleur-web-platform` container runs with `--log-driver journald`, added to **all THREE**
+- [x] `soleur-web-platform` container runs with `--log-driver journald`, added to **all THREE**
       `docker run` sites (verified 2026-06-02 — none currently set a log driver, all inherit the
       json-file daemon default): `cloud-init.yml:505` (first-boot), `ci-deploy.sh:613-627`
       (production deploy — the canonical path that re-creates the container on every release),
@@ -166,27 +166,27 @@ The Vector routing item required tracing the runtime topology, because the issue
       canary's log routing matches production before promotion). Grep
       `grep -n "docker run -d" apps/web-platform/infra/ci-deploy.sh apps/web-platform/infra/cloud-init.yml`
       to confirm the count is 3 and each gets the flag.
-- [ ] `vector.toml` gains a journald source filtered to the app container
+- [x] `vector.toml` gains a journald source filtered to the app container
       (`include_matches.CONTAINER_NAME = ["soleur-web-platform"]` or the journald
       `CONTAINER_TAG`/`SYSLOG_IDENTIFIER` the json-file→journald driver actually emits —
       verify the field name against `journalctl CONTAINER_NAME=soleur-web-platform` output
       shape before freezing; see Sharp Edges).
-- [ ] The new source's output is wired into `inputs` of `pii_scrub_drop_userdata`
+- [x] The new source's output is wired into `inputs` of `pii_scrub_drop_userdata`
       (`vector.toml:63`) so it traverses the full 3-stage redaction pipeline before the sink —
       NOT a direct path to `tag_journald`/`betterstack`.
-- [ ] The new source carries a distinct `source_kind` tag (e.g. `app_container`) in
+- [x] The new source carries a distinct `source_kind` tag (e.g. `app_container`) in
       `tag_journald` so Better Stack can filter cron pino lines from supervisor journald.
-- [ ] `vector validate --no-environment --config-toml apps/web-platform/infra/vector.toml`
+- [x] `vector validate --no-environment --config-toml apps/web-platform/infra/vector.toml`
       passes locally (the `validate-vector-config.yml` CI gate).
-- [ ] `vector-pii-scrub.test.sh` is extended to assert the new app-container source routes
+- [x] `vector-pii-scrub.test.sh` is extended to assert the new app-container source routes
       through the pii_scrub pipeline (a cron line with a `userId` is hashed, an Art-9
       user-content key is dropped).
-- [ ] `betterstack-log-query.md` `## Known coverage gap` is updated to record the gap as
+- [x] `betterstack-log-query.md` `## Known coverage gap` is updated to record the gap as
       **closed** (cron pino stdout now queryable), with the new `source_kind` filter documented
       so an operator can query `fn: cron-<name>` in Better Stack.
 
 ### Post-merge (operator)
-- [ ] None required. PR-C config ships through the merge-driven bootstrap rebuild + container
+- [x] None required. PR-C config ships through the merge-driven bootstrap rebuild + container
       restart (`build-inngest-bootstrap-image.yml` → `web-platform-release.yml`); `vector.service`
       `enable + restart` on deploy. Automation: feasible — no SSH, no dashboard click.
 
