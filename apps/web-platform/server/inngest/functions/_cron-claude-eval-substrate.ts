@@ -27,6 +27,14 @@ export interface SpawnResult {
   // Optional: sibling crons (daily-triage, follow-through-monitor) build their
   // own SpawnResult literals via the inline spawn pattern and do not populate it.
   stderrTail?: string;
+  // Bounded tail of the child's stdout (redacted). `claude --print` writes its
+  // max-turns notice to STDOUT, not stderr — that notice previously reached only
+  // logger.info (app stdout), which Vector does NOT ship to Better Stack, so a
+  // turn-exhaustion exit was red-on-the-monitor but not self-diagnosing without
+  // SSH. Capturing the tail here folds the notice into the scheduled-output-missing
+  // Sentry extra alongside stderrTail. #4773 (follow-up to #4714/#4770).
+  // Optional, same as stderrTail: inline-spawn sibling crons do not populate it.
+  stdoutTail?: string;
 }
 
 export const KILL_ESCALATION_MS = 5_000;
@@ -34,6 +42,11 @@ export const KILL_ESCALATION_MS = 5_000;
 // Hard ceiling on captured child stderr — a pathological process must not OOM
 // the worker. 8 KiB comfortably holds a git fatal: line + a few hints.
 export const STDERR_CAP_BYTES = 8192;
+
+// Hard ceiling on captured child stdout. The max-turns notice is a few hundred
+// bytes; the cap is a pathological-OOM ceiling (a runaway --print could stream
+// unbounded stdout), same rationale and value as STDERR_CAP_BYTES.
+export const STDOUT_TAIL_CAP_BYTES = 8192;
 
 export function resolveClaudeBin(): string {
   const override = process.env.CLAUDE_BIN;
@@ -214,6 +227,10 @@ export async function spawnClaudeEval(args: {
   // Rolling bounded tail of redacted stderr lines (last STDERR_CAP_BYTES) so a
   // non-zero exit can be surfaced to Sentry by the caller.
   let stderrTail = "";
+  // Rolling bounded tail of redacted stdout lines (last STDOUT_TAIL_CAP_BYTES).
+  // Carries the `claude --print` max-turns notice (stdout, not stderr) to the
+  // Sentry surface. #4773.
+  let stdoutTail = "";
 
   try {
     return await new Promise<SpawnResult>((resolve) => {
@@ -227,10 +244,11 @@ export async function spawnClaudeEval(args: {
       if (child.stdout) {
         const rlOut = createInterface({ input: child.stdout });
         rlOut.on("line", (line) => {
-          logger.info(
-            { fn: cronName, stream: "stdout" },
-            redactToken(line, installationToken),
-          );
+          const redacted = redactToken(line, installationToken);
+          logger.info({ fn: cronName, stream: "stdout" }, redacted);
+          // Keep a bounded tail (drop oldest) for the Sentry surface — mirrors
+          // the stderrTail accumulation below. Carries the max-turns notice.
+          stdoutTail = (stdoutTail + redacted + "\n").slice(-STDOUT_TAIL_CAP_BYTES);
         });
       }
       if (child.stderr) {
@@ -280,6 +298,7 @@ export async function spawnClaudeEval(args: {
           abortedByTimeout,
           durationMs: Date.now() - startedAt,
           stderrTail,
+          stdoutTail,
         });
       });
       child.on("error", (err) => {
@@ -299,6 +318,10 @@ export async function spawnClaudeEval(args: {
           abortedByTimeout,
           durationMs: Date.now() - startedAt,
           stderrTail: stderrTail || redactedMsg,
+          // No `|| redactedMsg` fallback for stdout: a child_process spawn error
+          // (ENOENT, EACCES) means the child never started, so there is no stdout
+          // to capture — the error message belongs on stderrTail only. #4773.
+          stdoutTail,
         });
       });
 

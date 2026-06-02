@@ -266,6 +266,7 @@ export async function cronCompetitiveAnalysisHandler({
         cronName: "cron-competitive-analysis",
         stderrTail: spawnResult.stderrTail,
         exitCode: spawnResult.exitCode,
+        stdoutTail: spawnResult.stdoutTail,
       }),
     );
     await step.run("sentry-heartbeat", async () => {

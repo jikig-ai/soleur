@@ -292,6 +292,7 @@ export async function cronRoadmapReviewHandler({
         cronName: "cron-roadmap-review",
         stderrTail: spawnResult.stderrTail,
         exitCode: spawnResult.exitCode,
+        stdoutTail: spawnResult.stdoutTail,
       }),
     );
     await step.run("sentry-heartbeat", async () => {
