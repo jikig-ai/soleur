@@ -76,7 +76,7 @@ When the scanner returns `HIGH-RISK` and the operator judges the finding to be a
 false-positive or accepted-risk, override by committing a structured artifact:
 
 ```
-knowledge-base/security/skill-overrides/YYYY-MM-DD-<slug>.md
+knowledge-base/engineering/security/skill-overrides/YYYY-MM-DD-<slug>.md
 ```
 
 The artifact is the sole audit-trail (no git trailer involved — squash-merge-safe).

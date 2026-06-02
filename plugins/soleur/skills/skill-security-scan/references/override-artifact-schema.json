@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://soleur.ai/schemas/skill-security-scan/override-artifact.json",
   "title": "Skill Security Scan Override Artifact",
-  "description": "Frontmatter schema for knowledge-base/security/skill-overrides/YYYY-MM-DD-<slug>.md. The artifact alone is the audit-trail; no git trailer is involved (squash-merge-safe).",
+  "description": "Frontmatter schema for knowledge-base/engineering/security/skill-overrides/YYYY-MM-DD-<slug>.md. The artifact alone is the audit-trail; no git trailer is involved (squash-merge-safe).",
   "type": "object",
   "required": [
     "skill",

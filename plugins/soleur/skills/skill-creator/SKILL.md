@@ -220,7 +220,7 @@ Operator handling:
 - **`HIGH-RISK`** — present findings + override instructions referencing
   [skill-security-scan/references/override-mechanism.md](../skill-security-scan/references/override-mechanism.md).
   Block packaging until either (a) the SKILL.md is revised, or (b) a valid
-  override artifact is committed under `knowledge-base/security/skill-overrides/`.
+  override artifact is committed under `knowledge-base/engineering/security/skill-overrides/`.
 
 The PreToolUse hook on `Write` (`.claude/hooks/skill-security-scan-write.sh`)
 is the load-bearing gate at the tool layer — this Step 5b is the

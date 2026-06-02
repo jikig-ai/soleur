@@ -43,7 +43,7 @@ for path in "$@"; do
         HIGH-RISK)
           # Check for override artifact in current branch staged or committed diff.
           override_present=0
-          if git diff --cached --name-only --diff-filter=A 2>/dev/null | grep -q '^knowledge-base/security/skill-overrides/'; then
+          if git diff --cached --name-only --diff-filter=A 2>/dev/null | grep -q '^knowledge-base/engineering/security/skill-overrides/'; then
             override_present=1
           fi
           if [ "$override_present" = "1" ]; then
