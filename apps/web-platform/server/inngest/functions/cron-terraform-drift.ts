@@ -52,7 +52,7 @@ import {
   redactToken,
   REPO_NAME,
   REPO_OWNER,
-} from "@/server/inngest/functions/_cron-shared";
+} from "./_cron-shared";
 import { reportSilentFallback } from "@/server/observability";
 
 const FUNCTION_NAME = "cron-terraform-drift";
