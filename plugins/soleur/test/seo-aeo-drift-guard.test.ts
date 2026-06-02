@@ -609,19 +609,25 @@ describe("#3173 BlogPosting.image uses the post-specific ogImage, not the site d
 
   test("posts without ogImage fall back to the site default og-image.png", () => {
     const without = sourcePosts().filter((p) => !p.ogImage);
-    let checked = 0;
     for (const { slug } of without) {
       const built = resolve(SITE, "blog", slug, "index.html");
       if (!existsSync(built)) continue;
-      checked++;
       expect(blogPostingImage(slug), `${slug}: default image`).toBe(
         `${siteUrl()}/images/og-image.png`,
       );
     }
+    // As of #4753 every blog post carries a bespoke ogImage, so `without` is
+    // expected empty. The loop above still asserts the default-fallback path
+    // for any imageless post reintroduced later, so this is not vacuous: it
+    // pins the intended end-state (zero imageless posts) and fails if a post
+    // loses its ogImage. (The per-post threading regression #3173 guards
+    // against is caught by the "posts with ogImage frontmatter render that
+    // exact filename" test above, not here.)
     expect(
-      checked,
-      "at least one imageless post asserted against built HTML",
-    ).toBeGreaterThan(0);
+      without.length,
+      "all blog posts now carry bespoke ogImage (#4753); if an imageless " +
+        "post is added intentionally, relax this back to a >= 0 floor",
+    ).toBe(0);
   });
 });
 

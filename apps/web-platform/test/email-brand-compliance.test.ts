@@ -19,9 +19,9 @@ vi.mock("web-push", () => ({
 }));
 
 vi.mock("resend", () => ({
-  Resend: vi.fn().mockImplementation(() => ({
-    emails: { send: mockResendSend },
-  })),
+  Resend: vi.fn().mockImplementation(function (this: Record<string, unknown>) {
+    this.emails = { send: mockResendSend };
+  }),
 }));
 
 vi.mock("@/lib/supabase/service", () => ({

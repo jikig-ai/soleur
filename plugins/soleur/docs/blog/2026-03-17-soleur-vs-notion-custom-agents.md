@@ -3,6 +3,7 @@ title: "Soleur vs. Notion Custom Agents: Company-as-a-Service vs. Workspace Auto
 seoTitle: "Soleur vs. Notion Custom Agents: AI Org vs. Automation"
 date: 2026-03-17
 description: "Notion Custom Agents automate recurring workspace tasks. Soleur runs a full AI organization with compounding knowledge. A direct comparison for solo founders."
+ogImage: "blog/og-soleur-vs-notion-custom-agents.png"
 tags:
   - comparison
   - notion

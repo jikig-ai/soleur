@@ -1,20 +1,16 @@
 import type { ReactNode } from "react";
 import { ConversationsRail } from "@/components/chat/conversations-rail";
-import { DelegationBanner } from "@/components/chat/delegation-banner";
+import { DelegationBanner, type DelegationBannerProps } from "@/components/chat/delegation-banner";
 import { PendingInviteBanner } from "@/components/dashboard/pending-invite-banner";
 import { createClient } from "@/lib/supabase/server";
 import { isByokDelegationsEnabled, type Identity } from "@/lib/feature-flags/server";
 import { resolveCurrentOrganizationId, resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 import { resolveGranteeDelegation, resolveGranteeAcceptanceStatus } from "@/server/byok-delegation-ui-resolver";
 import { getPendingInvitesForUser } from "@/server/workspace-invitations";
+import { BYOK_SIDE_LETTER_VERSION } from "@/server/byok-side-letter";
 
 export default async function ChatLayout({ children }: { children: ReactNode }) {
-  let bannerProps: {
-    grantorDisplayName: string;
-    todaySpentCents: number;
-    dailyCapCents: number;
-    pending: boolean;
-  } | null = null;
+  let bannerProps: DelegationBannerProps | null = null;
 
   let pendingInvite: {
     invitationId: string;
@@ -43,7 +39,11 @@ export default async function ChatLayout({ children }: { children: ReactNode }) 
               grantorDisplayName: delegation.grantorDisplayName,
               todaySpentCents: delegation.todaySpentCents,
               dailyCapCents: delegation.dailyCapCents,
-              pending: !acceptance.accepted,
+              hourlyCapCents: delegation.hourlyCapCents,
+              delegationId: delegation.id,
+              sideLetterVersion: BYOK_SIDE_LETTER_VERSION,
+              alreadyAccepted: acceptance.accepted,
+              withdrawn: acceptance.withdrawn,
             };
           }
         }

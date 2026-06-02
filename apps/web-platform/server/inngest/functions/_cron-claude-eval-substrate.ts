@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { getPluginPath } from "@/server/plugin-path";
@@ -9,6 +8,8 @@ import { reportSilentFallback } from "@/server/observability";
 import {
   buildAuthenticatedCloneUrl,
   redactToken,
+  resolveCronWorkspaceRoot,
+  warnIfCronWorkspaceLowOnDisk,
   type HandlerArgs,
 } from "./_cron-shared";
 
@@ -107,9 +108,13 @@ export async function setupEphemeralWorkspace(args: {
 }): Promise<{ ephemeralRoot: string; spawnCwd: string }> {
   const { installationToken, cronName } = args;
   const ephemeralRoot = await mkdtemp(
-    join(tmpdir(), `soleur-${cronName}-`),
+    join(resolveCronWorkspaceRoot(), `soleur-${cronName}-`),
   );
   const spawnCwd = join(ephemeralRoot, "repo");
+
+  // Pre-clone free-space guard (#4684/#4689 observability fold-in). Non-fatal:
+  // warns in Sentry if the workspace root is low on disk before the clone.
+  await warnIfCronWorkspaceLowOnDisk(ephemeralRoot, cronName);
 
   const cloneUrl = buildAuthenticatedCloneUrl(installationToken);
   const cloneResult = await spawnSimple("git", [

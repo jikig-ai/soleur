@@ -3,6 +3,7 @@ title: "Credential Helper Isolation: Secure Git Auth in Sandboxed Environments"
 seoTitle: "Git Credential Helper Isolation Pattern for Sandboxed AI Agents"
 date: 2026-03-29
 description: "How Soleur authenticates git in sandboxed AI agent sessions: temporary credential helpers, GitHub App installation tokens, and randomized paths."
+ogImage: "blog/og-credential-helper-isolation.png"
 tags:
   - engineering
   - security

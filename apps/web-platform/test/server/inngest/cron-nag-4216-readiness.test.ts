@@ -20,7 +20,14 @@ vi.mock("@/server/observability", () => ({
 
 const octokitRequestSpy = vi.fn();
 vi.mock("@octokit/core", () => ({
-  Octokit: vi.fn(() => ({ request: octokitRequestSpy })),
+  // vitest 4: mocks invoked with `new` now construct an instance, so a
+  // constructor mock must use the `function` keyword and assign to `this`
+  // (an arrow returning an object throws "is not a constructor").
+  Octokit: vi.fn().mockImplementation(function (
+    this: Record<string, unknown>,
+  ) {
+    this.request = octokitRequestSpy;
+  }),
 }));
 
 vi.mock("@/server/github/probe-octokit", () => ({
