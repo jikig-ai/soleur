@@ -227,9 +227,12 @@ test_state_file_happy_path() {
   exit_code=$(jq -r '.exit_code' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   files_written=$(jq -r '.files_written' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   files_failed=$(jq -r '.files_failed' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  local files_total
+  files_total=$(jq -r '.files_total' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   assert_eq "exit_code is 0" "0" "$exit_code"
   assert_eq "files_written is 8" "8" "$files_written"
   assert_eq "files_failed is 0" "0" "$files_failed"
+  assert_eq "files_total is 8" "8" "$files_total"
 
   local first_file_status first_file_sha
   first_file_status=$(jq -r '.files[0].status' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
@@ -413,6 +416,60 @@ test_exit_trap_unhandled() {
   teardown
 }
 
+# --- Test 12: Partial write — one missing env var writes the other 7 (#4804) ---
+# Regression guard for the chicken-and-egg freeze: when the host's stale
+# hooks.json fails to pass a newly-added payload key, the corresponding env var
+# is empty on the host. The handler must record a per-file missing_env failure
+# and STILL write the other files (crucially the new hooks.json that re-aligns
+# the env mapping), instead of the former upfront all-or-nothing exit 1 that
+# wrote nothing and froze every file.
+test_missing_env_partial_write() {
+  echo "TEST: one missing env var — other 7 files still written (#4804)"
+  setup
+  export_valid_env_vars
+  unset CAT_INFRA_CONFIG_STATE_SH_B64  # simulate host hooks.json drift on the newest key
+
+  local rc=0
+  bash "$HANDLER" 2>/dev/null || rc=$?
+  assert_eq "handler exits 1 on partial failure" "1" "$rc"
+
+  # The 7 present files are still written
+  assert_file_exists "ci-deploy.sh written" "$TEST_DESTDIR/usr/local/bin/ci-deploy.sh"
+  assert_file_exists "ci-deploy-wrapper.sh written" "$TEST_DESTDIR/usr/local/bin/ci-deploy-wrapper.sh"
+  assert_file_exists "webhook.service written" "$TEST_DESTDIR/etc/systemd/system/webhook.service"
+  assert_file_exists "cat-deploy-state.sh written" "$TEST_DESTDIR/usr/local/bin/cat-deploy-state.sh"
+  assert_file_exists "canary-bundle-claim-check.sh written" "$TEST_DESTDIR/usr/local/bin/canary-bundle-claim-check.sh"
+  assert_file_exists "sudoers written" "$TEST_DESTDIR/etc/sudoers.d/deploy-inngest-bootstrap"
+  assert_file_exists "hooks.json written (self-heals env mapping)" "$TEST_DESTDIR/etc/webhook/hooks.json"
+
+  # The missing-env file is NOT written
+  if [[ -f "$TEST_DESTDIR/usr/local/bin/cat-infra-config-state.sh" ]]; then
+    echo "  FAIL: missing-env file should not be written"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: missing-env file correctly not written"
+    PASS=$((PASS + 1))
+  fi
+
+  # State JSON counts: 7 written, 1 failed, 8 total
+  local files_written files_failed files_total
+  files_written=$(jq -r '.files_written' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  files_failed=$(jq -r '.files_failed' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  files_total=$(jq -r '.files_total' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  assert_eq "files_written is 7" "7" "$files_written"
+  assert_eq "files_failed is 1" "1" "$files_failed"
+  assert_eq "files_total is 8" "8" "$files_total"
+
+  # The missing file's entry records status:failed, reason:missing_env
+  local mstatus mreason
+  mstatus=$(jq -r '.files[] | select(.file == "/usr/local/bin/cat-infra-config-state.sh") | .status' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  mreason=$(jq -r '.files[] | select(.file == "/usr/local/bin/cat-infra-config-state.sh") | .reason' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  assert_eq "missing file status is failed" "failed" "$mstatus"
+  assert_eq "missing file reason is missing_env" "missing_env" "$mreason"
+
+  teardown
+}
+
 # --- Run all tests ---
 echo "=== infra-config-apply.sh test suite ==="
 test_happy_path
@@ -426,6 +483,7 @@ test_state_file_visudo_skip
 test_logger_tag
 test_restart_ordering
 test_exit_trap_unhandled
+test_missing_env_partial_write
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then

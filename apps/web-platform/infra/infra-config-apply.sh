@@ -45,19 +45,19 @@ rm -f "${STATE_FILE}.final"
 # Also cleans up temp files and the sentinel.
 TMPFILES=()
 trap 'rc=$?; if [ "$rc" -ne 0 ] && [ ! -f "${STATE_FILE}.final" ]; then
-  printf "{\"start_ts\":%d,\"end_ts\":%d,\"exit_code\":%d,\"reason\":\"unhandled\",\"files_written\":0,\"files_failed\":0,\"files\":[]}\n" \
+  printf "{\"start_ts\":%d,\"end_ts\":%d,\"exit_code\":%d,\"reason\":\"unhandled\",\"files_written\":0,\"files_failed\":0,\"files_total\":0,\"files\":[]}\n" \
     "$START_TS" "$(date +%s)" "$rc" > "$STATE_FILE" 2>/dev/null || true
 fi; rm -f "${TMPFILES[@]}" "${STATE_FILE}.final"' EXIT
 
-# --- Validate all required env vars upfront ---
-for entry in "${FILE_MAP[@]}"; do
-  IFS='|' read -r env_var _ _ _ <<< "$entry"
-  if [[ -z "${!env_var:-}" ]]; then
-    logger -t "$LOG_TAG" "FATAL: required env var $env_var is missing or empty"
-    echo "ERROR: required env var $env_var is missing or empty" >&2
-    exit 1
-  fi
-done
+# NOTE: env vars are validated PER FILE inside the write loop below (missing_env
+# arm), NOT upfront. The former upfront all-or-nothing `exit 1` caused the
+# chicken-and-egg freeze (#4804): when a new file was added to FILE_MAP +
+# hooks.json env-passing atomically, the host's stale hooks.json could not pass
+# the new key, leaving its env var empty — and the upfront gate then aborted the
+# ENTIRE write, including the new hooks.json that would have re-aligned the
+# mapping. Per-file accounting lets the 7 good files (crucially the new
+# hooks.json) land while the absent one is recorded as a failure and surfaces a
+# loud exit_code=1 to the CI verify gate.
 
 TOTAL_COUNT=${#FILE_MAP[@]}
 logger -t "$LOG_TAG" "starting: $TOTAL_COUNT files to write"
@@ -69,6 +69,19 @@ FILES_JSON=""
 
 for entry in "${FILE_MAP[@]}"; do
   IFS='|' read -r env_var dest_path mode owner <<< "$entry"
+
+  # Missing-env arm: record a per-file failure and continue so the OTHER files
+  # still land (chicken-and-egg self-heal, #4804). Placed before mktemp so no
+  # orphan temp file is created for the absent file.
+  if [[ -z "${!env_var:-}" ]]; then
+    logger -t "$LOG_TAG" "FAILED: $dest_path reason=missing_env env=$env_var"
+    echo "ERROR: missing payload for $dest_path (env $env_var empty)" >&2
+    [[ -n "$FILES_JSON" ]] && FILES_JSON+=","
+    FILES_JSON+="{\"file\":\"$dest_path\",\"sha256\":\"\",\"status\":\"failed\",\"reason\":\"missing_env\"}"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    continue
+  fi
+
   dest="${DESTDIR}${dest_path}"
   dest_dir=$(dirname "$dest")
 
@@ -130,8 +143,8 @@ state_tmp=$(mktemp "${STATE_FILE}.XXXXXX" 2>/dev/null) || {
   state_tmp=""
 }
 if [[ -n "${state_tmp:-}" ]]; then
-  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"files_written":%d,"files_failed":%d,"files":[%s]}\n' \
-    "$START_TS" "$END_TS" "$EXIT_CODE" "$WRITTEN_COUNT" "$FAIL_COUNT" "$FILES_JSON" \
+  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"files_written":%d,"files_failed":%d,"files_total":%d,"files":[%s]}\n' \
+    "$START_TS" "$END_TS" "$EXIT_CODE" "$WRITTEN_COUNT" "$FAIL_COUNT" "$TOTAL_COUNT" "$FILES_JSON" \
     > "$state_tmp" 2>/dev/null || {
     logger -t "$LOG_TAG" "write_state: printf/redirect failed"
     rm -f "$state_tmp"
