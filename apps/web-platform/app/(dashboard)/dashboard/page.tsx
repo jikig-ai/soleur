@@ -238,6 +238,14 @@ export default function DashboardPage() {
       const { data: auth } = await supabase.auth.getUser();
       if (!auth.user) return;
       // `count=exact head=true` — row-less query, just the total.
+      // INTENTIONALLY cross-workspace (workspace-scoping audit, 2026-06-02):
+      // this hint fires ONLY when the ACTIVE workspace has no connected repo
+      // (guarded by the `repoUrl` check above). The count is a coarse "you have
+      // conversations from a repo connected in ANOTHER of your workspaces —
+      // reconnect" nudge, so scoping it to the active workspace would make it
+      // ~0 and useless. It is the user's OWN non-sensitive row count (no
+      // content, no cross-tenant data) — not a leak. Do not add a workspace_id
+      // filter here without re-deriving the nudge's purpose.
       const { count } = await supabase
         .from("conversations")
         .select("id", { count: "exact", head: true })

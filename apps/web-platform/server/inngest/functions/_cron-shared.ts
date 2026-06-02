@@ -276,9 +276,22 @@ export async function resolveOutputAwareOk(args: {
   // turn-exhaustion exit can be distinguished from a hard failure without SSH
   // (#4684/#4689). Optional — sites that do not hold the SpawnResult omit it.
   exitCode?: number | null;
+  // Bounded redacted stdout tail from the claude-eval spawn. `claude --print`
+  // writes its max-turns notice to stdout, not stderr — folding it into the
+  // scheduled-output-missing extra makes a turn-exhaustion exit self-diagnosing
+  // without SSH (app stdout is not shipped to the log warehouse). #4773.
+  stdoutTail?: string;
 }): Promise<boolean> {
-  const { spawnOk, label, runStartedAt, cronName, octokit, stderrTail, exitCode } =
-    args;
+  const {
+    spawnOk,
+    label,
+    runStartedAt,
+    cronName,
+    octokit,
+    stderrTail,
+    exitCode,
+    stdoutTail,
+  } = args;
 
   let issueCreated: boolean;
   try {
@@ -342,6 +355,9 @@ export async function resolveOutputAwareOk(args: {
         // The claude-eval stderr tail is the diagnostic payload — without it the
         // non-zero-exit reason lives only in app stdout, which is not shipped.
         stderrTail: stderrTail ? stderrTail.slice(-4000) : undefined,
+        // The stdout tail carries the `claude --print` max-turns notice (written
+        // to stdout, not stderr) — same diagnostic role as stderrTail. #4773.
+        stdoutTail: stdoutTail ? stdoutTail.slice(-4000) : undefined,
       },
     },
   );

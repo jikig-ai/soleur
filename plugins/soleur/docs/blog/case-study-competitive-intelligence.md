@@ -2,6 +2,7 @@
 title: "Tracking 17 Competitors in One Session -- With Battlecards"
 date: 2026-03-10
 description: "Tracking 17 competitors while shipping is a full-time job. Soleur's AI agents produced a competitive intelligence report with tier analysis and battlecards."
+ogImage: "blog/og-case-study-competitive-intelligence.png"
 tags:
   - case-study
   - product

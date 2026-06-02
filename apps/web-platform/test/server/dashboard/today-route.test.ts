@@ -6,7 +6,7 @@ import { describe, test, expect, vi, beforeEach } from "vitest";
 // external_low_stakes). Inline-ranked + sliced to ≤7 items; remainder in
 // `extras`. Cache-Control: private, max-age=60 (Art. 14 minimization).
 
-const { mockGetUser, mockEq, mockIn, mockOrder, mockLimit, mockSelect, mockFrom } = vi.hoisted(() => {
+const { mockGetUser, mockEq, mockIn, mockOrder, mockLimit, mockSelect, mockFrom, mockResolveWorkspace } = vi.hoisted(() => {
   const mockLimit = vi.fn();
   const mockOrder = vi.fn(() => ({ limit: mockLimit }));
   const mockIn = vi.fn(() => ({ eq: mockEq, in: mockIn, order: mockOrder }));
@@ -17,7 +17,16 @@ const { mockGetUser, mockEq, mockIn, mockOrder, mockLimit, mockSelect, mockFrom 
   }));
   const mockSelect = vi.fn(() => ({ eq: mockEq, in: mockIn, order: mockOrder }));
   const mockFrom = vi.fn(() => ({ select: mockSelect }));
-  return { mockGetUser: vi.fn(), mockEq, mockIn, mockOrder, mockLimit, mockSelect, mockFrom };
+  return {
+    mockGetUser: vi.fn(),
+    mockEq,
+    mockIn,
+    mockOrder,
+    mockLimit,
+    mockSelect,
+    mockFrom,
+    mockResolveWorkspace: vi.fn(),
+  };
 });
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -25,6 +34,13 @@ vi.mock("@/lib/supabase/server", () => ({
     auth: { getUser: mockGetUser },
     from: mockFrom,
   })),
+}));
+
+// Active-workspace resolver: scope the Today read to the caller's SELECTED
+// workspace (claim → solo fallback). Mocked so route tests assert the query
+// shape without exercising the user_session_state read path.
+vi.mock("@/server/workspace-resolver", () => ({
+  resolveCurrentWorkspaceId: mockResolveWorkspace,
 }));
 
 import { GET } from "@/app/api/dashboard/today/route";
@@ -52,6 +68,8 @@ beforeEach(() => {
     data: { user: { id: "founder-A" } },
     error: null,
   });
+  // Default: solo workspace active (= userId), matching the common case.
+  mockResolveWorkspace.mockResolvedValue("founder-A");
 });
 
 describe("/api/dashboard/today (PR-H)", () => {
@@ -71,6 +89,39 @@ describe("/api/dashboard/today (PR-H)", () => {
     ]);
     expect(mockEq).toHaveBeenCalledWith("user_id", "founder-A");
     expect(mockEq).toHaveBeenCalledWith("status", "draft");
+  });
+
+  // ── Workspace-scoping leak fix (knowledge-drift cross-workspace) ──────────
+  // An owner of two workspaces saw a solo-pinned KB-drift card on BOTH. The
+  // read must scope to the ACTIVE workspace, not just user_id. See plan
+  // 2026-06-02-fix-workspace-scoping-leak; root cause: today/route had no
+  // workspace_id filter and messages RLS (is_workspace_member) passes for an
+  // owner across ALL their workspaces.
+
+  test("AC1: scopes the read to the ACTIVE workspace (resolveCurrentWorkspaceId)", async () => {
+    // Owner is currently on their SECOND workspace, not the solo one.
+    mockResolveWorkspace.mockResolvedValue("workspace-B");
+    await GET(makeRequest());
+    expect(mockResolveWorkspace).toHaveBeenCalledWith(
+      "founder-A",
+      expect.anything(),
+    );
+    // The select chain MUST filter by the active workspace — without this the
+    // solo-pinned card leaks onto every workspace the owner switches to.
+    expect(mockEq).toHaveBeenCalledWith("workspace_id", "workspace-B");
+  });
+
+  test("AC1: workspace_id filter is ADDITIVE to user_id (exactly one, = active id)", async () => {
+    // Distinct from the test above: prove the active-workspace filter does not
+    // REPLACE the existing user_id scope (belt-and-suspenders), and that exactly
+    // ONE workspace_id predicate is emitted carrying the resolved active id — no
+    // stray/duplicate filter that could pair a wrong workspace.
+    mockResolveWorkspace.mockResolvedValue("workspace-B");
+    await GET(makeRequest());
+    const wsCalls = mockEq.mock.calls.filter((c) => c[0] === "workspace_id");
+    expect(wsCalls).toEqual([["workspace_id", "workspace-B"]]);
+    // user_id scope still present alongside it (not replaced by the new filter).
+    expect(mockEq).toHaveBeenCalledWith("user_id", "founder-A");
   });
 
   test("returns { items: [], extras: [] } on empty result", async () => {

@@ -447,6 +447,7 @@ case "$COMPONENT" in
     # under /tmp — the askpass script lives in $HOME instead.
     docker run -d \
       --name soleur-web-platform-canary \
+      --log-driver journald \
       --restart no \
       --security-opt apparmor=soleur-bwrap \
       --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
@@ -612,6 +613,7 @@ case "$COMPONENT" in
       # /tmp no longer needs to be exec-able for git credential helpers.
       if docker run -d \
         --name soleur-web-platform \
+        --log-driver journald \
         --restart unless-stopped \
         --security-opt apparmor=soleur-bwrap \
         --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \

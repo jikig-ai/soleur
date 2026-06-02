@@ -34,6 +34,13 @@ step()   { printf '\n→ %s\n' "$*"; }
 
 usage_err() { red "::error::usage: $*"; exit 64; }
 
+# ── Shared CF-admin-token helpers (verify + self-revoke) ─────────────────────
+# Sourced AFTER red/green/yellow are defined (helper sourcing precondition).
+# shellcheck source=_cf-admin-token.sh disable=SC1091
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_cf-admin-token.sh"
+# shellcheck source=_r2-endpoint.sh disable=SC1091
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_r2-endpoint.sh"
+
 # ── Help ─────────────────────────────────────────────────────────────────────
 show_help() {
   cat <<'EOF'
@@ -115,6 +122,10 @@ for v in "${required_envs[@]}"; do
 done
 [[ ${#missing[@]} -gt 0 ]] && usage_err "missing required env: ${missing[*]}"
 
+# Pin the R2 endpoint to the canonical hostname BEFORE the dry-run guard below —
+# a redirected endpoint must fail closed even in --dry-run (item 1 of #3950).
+assert_r2_endpoint "$R2_CLA_EVIDENCE_ENDPOINT"
+
 # PRIOR_SHA must be 64-char lowercase hex (third-consumer schema invariant —
 # inspect-evidence.sh exits 3 on malformed values).
 if ! [[ "$PRIOR_SHA" =~ ^[0-9a-f]{64}$ ]]; then
@@ -183,40 +194,23 @@ _cleanup_partial_override() {
   exit "$rc"
 }
 
+# Thin wrapper over the shared helper — preserves the existing no-arg
+# `_self_revoke` call sites (the various step/cleanup error paths), which rely
+# on the closed-over $CF_ADMIN_TOKEN / $CF_ADMIN_TOKEN_ID. Note the ERR/INT/TERM
+# trap handler (_cleanup_partial_override) deliberately does NOT self-revoke —
+# the operator needs the token live to investigate a mid-flight interrupt.
 _self_revoke() {
-  if [[ -z "$CF_ADMIN_TOKEN_ID" ]]; then
-    yellow "  WARN: no admin-token id captured; revoke manually in CF dashboard."
-    return 0
-  fi
-  if curl --max-time 30 -fsS -X DELETE \
-      -H "Authorization: Bearer $CF_ADMIN_TOKEN" \
-      "$CF_API/user/tokens/$CF_ADMIN_TOKEN_ID" >/dev/null 2>&1; then
-    green "  admin token self-revoked"
-  else
-    yellow "  WARN: self-revoke failed; revoke $CF_ADMIN_TOKEN_ID manually in CF dashboard."
-  fi
+  cf_token_self_revoke "$CF_ADMIN_TOKEN" "$CF_ADMIN_TOKEN_ID"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 1 — verify CF admin token
 # ─────────────────────────────────────────────────────────────────────────────
 step "[1/8] verify CF admin token"
-if ! verify=$(curl --max-time 30 -fsS \
-    -H "Authorization: Bearer $CF_ADMIN_TOKEN" \
-    "$CF_API/user/tokens/verify" 2>/dev/null); then
-  red "::error::admin token verify failed; rotate and retry"
-  exit 1
-fi
-status=$(printf '%s' "$verify" | jq -r '.result.status // "unknown"')
-if [[ "$status" != "active" ]]; then
-  red "::error::admin token status=$status (expected active)"
-  exit 1
-fi
-CF_ADMIN_TOKEN_ID=$(printf '%s' "$verify" | jq -r '.result.id // ""')
-if [[ -z "$CF_ADMIN_TOKEN_ID" ]]; then
-  red "::error::could not capture admin token id (needed for self-revoke)"
-  exit 1
-fi
+# Shared helper: verifies active status + captures id; hard-fails (non-zero)
+# on verify error / non-active / empty id. `|| exit 1` preserves the prior
+# exit-1 pre-PUT-abort contract (no self-revoke needed — nothing mutated yet).
+CF_ADMIN_TOKEN_ID=$(cf_token_verify "$CF_ADMIN_TOKEN") || exit 1
 green "  token verified (id captured for self-revoke)"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -304,7 +298,11 @@ green "  lock rules temporarily modified"
 # ─────────────────────────────────────────────────────────────────────────────
 step "[4/8] DELETE object via S3-compat HMAC (prd_cla env)"
 delete_rc=0
-doppler run -p soleur -c prd_cla -- \
+# env -u CF_ADMIN_TOKEN: strip the bearer before doppler/aws so it is not
+# visible via /proc/<pid>/environ to the child aws process (item 2 of #3950).
+# The aws S3 call authenticates via the HMAC pair from prd_cla — never the
+# bearer — so stripping it is pure attack-surface reduction, no behavior change.
+env -u CF_ADMIN_TOKEN doppler run -p soleur -c prd_cla -- \
   aws --endpoint-url "$R2_CLA_EVIDENCE_ENDPOINT" \
       s3api delete-object \
       --bucket "$R2_CLA_EVIDENCE_BUCKET" \
@@ -409,7 +407,7 @@ jq -n \
   '{schema_version:$sv, deleted_at:$dt, admin_actor:$actor, gdpr_request_ref:$ref, prior_object_sha:$sha, override_reason:$reason}' \
   > "$tomb_body"
 
-if ! doppler run -p soleur -c prd_cla -- \
+if ! env -u CF_ADMIN_TOKEN doppler run -p soleur -c prd_cla -- \
     aws --endpoint-url "$R2_CLA_EVIDENCE_ENDPOINT" \
         s3api put-object \
         --bucket "$R2_CLA_EVIDENCE_BUCKET" \

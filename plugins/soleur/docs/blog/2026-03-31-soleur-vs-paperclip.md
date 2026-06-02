@@ -3,6 +3,7 @@ title: "Soleur vs. Paperclip: Domain Intelligence vs. AI Company Orchestration"
 seoTitle: "Soleur vs. Paperclip: Open-Source AI Company Platforms Compared"
 date: 2026-03-31
 description: "Soleur vs. Paperclip: both open-source AI company platforms, but from opposite directions. One provides infrastructure, the other provides intelligence."
+ogImage: "blog/og-soleur-vs-paperclip.png"
 tags:
   - comparison
   - paperclip

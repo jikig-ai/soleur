@@ -52,7 +52,9 @@ export async function resolveGrantorDelegations(
 
   const { data: delegations, error } = await service
     .from("byok_delegations")
-    .select("id, grantee_user_id, daily_cap_cents, hourly_cap_cents, created_at, revoked_at")
+    // Real columns are *_usd_cap_cents (migration 064:82,86); alias to the short
+    // keys the GrantorDelegation shape uses. The bare names 42703 at runtime.
+    .select("id, grantee_user_id, daily_cap_cents:daily_usd_cap_cents, hourly_cap_cents:hourly_usd_cap_cents, created_at, revoked_at")
     .eq("grantor_user_id", userId)
     .eq("workspace_id", workspaceId)
     .is("revoked_at", null)
@@ -126,7 +128,9 @@ export async function resolveGranteeDelegation(
 
   const { data: delegation, error } = await service
     .from("byok_delegations")
-    .select("id, grantor_user_id, daily_cap_cents, hourly_cap_cents")
+    // Real columns are *_usd_cap_cents (migration 064:82,86); alias to the short
+    // keys the GranteeDelegation shape uses. The bare names 42703 at runtime.
+    .select("id, grantor_user_id, daily_cap_cents:daily_usd_cap_cents, hourly_cap_cents:hourly_usd_cap_cents")
     .eq("grantee_user_id", userId)
     .eq("workspace_id", workspaceId)
     .is("revoked_at", null)

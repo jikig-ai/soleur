@@ -4,12 +4,15 @@
 # which would convert them to TF_VAR_* format and break S3 auth).
 # Plan output is sanitized before posting to GitHub issues.
 # All action references are SHA-pinned.
+# Trigger: the twice-daily fire (06:00/18:00 UTC) is now Inngest-dispatched via
+# apps/web-platform/server/inngest/functions/cron-terraform-drift.ts (workflow_dispatch),
+# NOT a GitHub Actions `schedule:` trigger. Inngest is the single scheduling
+# substrate (ADR-033); this removes GHA scheduled-dispatch jitter at its source.
+# terraform still runs HERE in the ephemeral runner (the Inngest fn only dispatches).
 # To test manually: gh workflow run scheduled-terraform-drift.yml
 name: Terraform Drift Detection
 
 on:
-  schedule:
-    - cron: '0 6,18 * * *'
   workflow_dispatch:
 
 concurrency:

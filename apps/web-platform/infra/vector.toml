@@ -41,7 +41,62 @@ include_matches.PRIORITY = ["0", "1", "2"]
 journal_directory = "/var/log/journal"
 batch_size = 16
 
-# ---------------- Source 3: host metrics (CPU/mem/disk/net) ----------------
+# ---------------- Source 3: app container journald (#4773) ----------------
+# The Next.js app runs as the `soleur-web-platform` Docker container, whose
+# pino stdout (incl. `spawnClaudeEval` cron output, `fn: cron-<name>`) was NOT
+# shipped to Better Stack — only the inngest CLI supervisor's systemd journald
+# (Source 1) was. cloud-init.yml + ci-deploy.sh now start the container with
+# `--log-driver journald`, so its stdout/stderr land in the host journal tagged
+# CONTAINER_NAME=soleur-web-platform (Docker's journald driver sets this field).
+# The canary container ALSO logs to journald (ci-deploy.sh) but is excluded here
+# as an implicit consequence of exact-value matching: systemd `include_matches`
+# is FIELD=value equality (sd_journal_add_match), not prefix/substring, so
+# `["soleur-web-platform"]` never matches `soleur-web-platform-canary`. Canary
+# journald coverage is intentionally local-only (docker logs), not warehoused —
+# do NOT widen this to a prefix/regex (would double Better Stack quota). A
+# parity fixture in vector-pii-scrub.test.sh pins the exclusion.
+#
+# NO `include_matches.PRIORITY` filter (deliberate — differs from Sources 1/2):
+# pino writes EVERY level to fd 1 (stdout) with no `destination` configured
+# (server/logger.ts:102), and Docker's journald driver maps fd 1 → PRIORITY 6
+# uniformly regardless of pino level. A PRIORITY 0-4 (WARN+) match would
+# therefore drop 100% of pino lines. Level filtering happens by parsing the
+# pino JSON `level` field in `app_container_warn_filter` below instead.
+[sources.app_container_journald]
+type = "journald"
+include_matches.CONTAINER_NAME = ["soleur-web-platform"]
+journal_directory = "/var/log/journal"
+batch_size = 16
+
+# ---------------- Filter: app container WARN+ (pino level >= 40) ----------------
+# Quota control (#4773 Vendor-tier reality check): the app container's stdout is
+# higher-volume than the supervisor journald (cron INFO output + scattered
+# logger.info; there is no per-request pino-http logger, so this is not a
+# request-per-line firehose — the WARN+ cut is conservative headroom, not a
+# hard necessity). Keep only pino WARN/ERROR/FATAL (level >= 40) so the INFO
+# volume does
+# not blow the Better Stack quota; the cron FAILURE reason (non-zero exit stderr,
+# logged at error level) is the load-bearing signal here. The INFO-level
+# max-turns notice still reaches Sentry via SpawnResult.stdoutTail (PR-A) — this
+# Better Stack path is for queryable WARN+ diagnosis, per the plan trade-off.
+# Non-JSON lines (container crash / uncaught-exception stack on fd 2) are kept.
+[transforms.app_container_warn_filter]
+type = "filter"
+inputs = ["app_container_journald"]
+condition = '''
+parsed, parse_err = parse_json(.message)
+if parse_err != null {
+  true
+} else if is_object(parsed) {
+  parsed_obj = object!(parsed)
+  level_int = to_int(parsed_obj.level) ?? 0
+  level_int >= 40
+} else {
+  true
+}
+'''
+
+# ---------------- Source 4: host metrics (CPU/mem/disk/net) ----------------
 # 30s scrape. Each scrape emits ~80-100 metric series on the cx33;
 # rate-limited downstream by Vector's internal batching.
 [sources.host_metrics]
@@ -60,7 +115,10 @@ collectors = ["cpu", "memory", "disk", "filesystem", "load", "network"]
 # Non-pino lines (kernel oops, raw stderr) fall through to pii_scrub_string.
 [transforms.pii_scrub_drop_userdata]
 type = "remap"
-inputs = ["inngest_journald", "system_journald"]
+# app_container_warn_filter (#4773) is wired here, NOT direct to the sink, so
+# the app container's pino lines traverse the full 3-stage redaction (Art-9 key
+# drop → userId HMAC → string backstop) like every other source.
+inputs = ["inngest_journald", "system_journald", "app_container_warn_filter"]
 source = '''
 .pii_scrub_applied = ""
 parsed, parse_err = parse_json(.message)
@@ -183,15 +241,26 @@ if contains(tag, "structured") {
 
 # ---------------- Transform: tag journald events for Better Stack ----------------
 # VRL adds a `source_kind` tag so Better Stack's log search can filter by
-# {inngest, system}. Other journald fields (PRIORITY, _SYSTEMD_UNIT,
+# {journald, app_container}. Other journald fields (PRIORITY, _SYSTEMD_UNIT,
 # host, message) flow through unchanged. Inputs chain back through the
 # three pii_scrub_* transforms above so every event reaching Better Stack
 # carries a `pii_scrub_applied` audit tag.
+#
+# #4773: the app container's lines carry a CONTAINER_NAME journald field (set by
+# Docker's journald driver); supervisor/system lines carry _SYSTEMD_UNIT and no
+# CONTAINER_NAME. Tagging app-container lines `source_kind=app_container` lets an
+# operator filter cron pino lines (`fn: cron-<name>`) from supervisor journald in
+# Better Stack. The pii_scrub_* transforms preserve CONTAINER_NAME (they edit
+# only `.message` + `.pii_scrub_applied`), so the field survives to here.
 [transforms.tag_journald]
 type = "remap"
 inputs = ["pii_scrub_string"]
 source = '''
-.source_kind = "journald"
+if exists(.CONTAINER_NAME) {
+  .source_kind = "app_container"
+} else {
+  .source_kind = "journald"
+}
 .shipper = "vector"
 .host_name = "soleur-inngest-prd"
 '''
