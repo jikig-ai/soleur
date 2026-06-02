@@ -50,6 +50,7 @@ export const EXPECTED_CRON_FUNCTIONS: string[] = [
   "cron-skill-freshness",
   "cron-stale-deferred-scope-outs",
   "cron-strategy-review",
+  "cron-terraform-drift",
   "cron-ux-audit",
   "cron-weekly-analytics",
   "cron-workspace-sync-health",
