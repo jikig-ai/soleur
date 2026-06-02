@@ -577,7 +577,11 @@ trigger:
 3. embed the `<!-- soleur:followthrough script=… earliest=… [secrets=…] -->`
    directive in the issue body (`earliest=` = the trigger date for a date form;
    the filing date for dependency/event-grep/counter forms, which self-gate via
-   the probe's transient exit).
+   the probe's transient exit). **For any gh-using probe shape (dependency /
+   event-grep / counter) the directive MUST declare `secrets=GH_TOKEN`** — the
+   sweeper's `env -i` sandbox strips all but PATH/HOME + declared secrets, so a
+   gh-probe without it is unauthenticated in CI and never closes (silent
+   never-close). Only the date shape needs no `secrets=`.
 
 Validation is NOT re-implemented here — the `gh issue create --label
 follow-through` call is intercepted by

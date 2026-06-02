@@ -7,7 +7,11 @@
 #   1 = FAIL      (hardening regression -> sweeper leaves open, comments FAIL)
 #   * = TRANSIENT (no post-merge green run yet / gh API failure -> retry next sweep)
 #
-# No secrets required (uses the sweeper's default GH_TOKEN env block).
+# Requires GH_TOKEN. The sweeper runs verification scripts under `env -i`
+# (PATH + HOME + directive-declared secrets= only), so this gh-using probe's
+# directive MUST declare `secrets=GH_TOKEN` — otherwise `gh` is unauthenticated
+# on the CI runner (where auth comes from GH_TOKEN, not ~/.config/gh) and part
+# (b) returns exit 2 (transient) on every sweep, so #3950 never closes.
 #
 # Close criteria (the #3950 re-evaluation trigger, event-grep shape):
 #   (a) the 4 hardening markers from PR #4784 are still present in-tree

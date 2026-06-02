@@ -212,8 +212,10 @@ the docblock + exit-semantics shape). `set -uo pipefail` (not `-e`) matches both
 
 - [ ] **POST1** Once the script is on `main`, add the directive to #3950's body via
       `gh issue edit 3950 --body-file <tmp>` appending:
-      `<!-- soleur:followthrough script=scripts/followthroughs/cla-evidence-hardening-3950.sh earliest=2026-06-02T09:14:45Z -->`.
-      The `follow-through` label is already present (no `gh issue edit --add-label`
+      `<!-- soleur:followthrough script=scripts/followthroughs/cla-evidence-hardening-3950.sh earliest=2026-06-02T09:14:45Z secrets=GH_TOKEN -->`.
+      `secrets=GH_TOKEN` is REQUIRED — the sweeper's `env -i` sandbox strips it
+      otherwise and the gh-probe silently never closes (review P1). The
+      `follow-through` label is already present (no `gh issue edit --add-label`
       needed). **Automation:** single `gh` call — bake into `/ship` post-merge
       verification, do NOT punt to a human.
 - [ ] **POST2** Trigger one sweep to confirm auto-close:
