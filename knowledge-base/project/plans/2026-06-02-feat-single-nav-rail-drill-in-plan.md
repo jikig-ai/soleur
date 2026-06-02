@@ -272,8 +272,12 @@ spec-flow-analyzer surfaced 4 P0 + 5 P1 journey gaps; P0s resolved in RQ1/RQ2/RQ
 hard-nav switch-landing, switcher reachability, empty Chat-nav); RQ4 position-resume CUT to a
 follow-up. ux-design-lead produced `knowledge-base/product/design/navigation/single-nav-rail.pen` +
 5 screenshots; frame 3 makes the wrong-workspace circuit breaker concrete (Members + "Inviting into
-→ workspace" callout). CPO sign-off required at plan time (threshold = single-user incident); CPO
-assessed the approach at brainstorm — confirm sign-off before `/work`.
+→ workspace" callout). **CPO plan-time sign-off: CLEARED (2026-06-02) with 3 conditions** — all
+already in the plan: (1) AC10 must include a "switch mid-task, then resume" task so the
+always-discard-section-context trade is *measured*; (2) solo-user band chip renders a visibly
+non-interactive state (`memberships<=1`); (3) empty-state CTAs (AC6) stay pre-merge. CPO explicitly
+REJECTED the v1 mitigations of returning-to-section-root (re-introduces stale-tenant risk) and a
+switch toast (redundant with the persistent band). Cleared for /work.
 
 **5-agent plan-review applied (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow):**
 cut RQ4 + the KB→localStorage migration; reframed `segmentToDrillLevel` as a pure sole-authority
