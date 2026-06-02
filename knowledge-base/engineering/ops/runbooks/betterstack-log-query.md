@@ -63,14 +63,36 @@ List existing connections: `GET https://logs.betterstack.com/api/v1/connections`
 - Columns: `dt` (event time, use for WHERE/ORDER), `raw` (the full log line as text/JSON).
 - Recent logs: `remote(t520508_..._logs)`. Older than the hot window: `s3Cluster(primary, t520508_..._s3)` with `WHERE _row_type = 1`, `UNION ALL`-combined.
 
-## Known coverage gap (discovered 2026-06-01)
+## App container pino lines (cron failures) — now queryable (#4773, 2026-06-02)
 
-This Vector source currently ships **only host metrics + the inngest supervisor's
-journald** — the Next.js app's pino stdout (including `spawnClaudeEval` cron
-stderr, `fn: cron-<name>`) is **NOT** in this source. So a cron's claude-eval
-failure reason is not queryable here today. Tracked in #4773 (route the app
-container's stdout into Vector). Until then, a non-zero claude exit is
-red-on-the-monitor but its reason lives only in the container's local journal.
+**Closed (was a coverage gap discovered 2026-06-01).** The Next.js app container's
+pino stdout — including `spawnClaudeEval` cron output, `fn: cron-<name>` — now
+ships to this source. The container starts with `--log-driver journald`
+(cloud-init.yml + ci-deploy.sh, all 3 `docker run` sites), and Vector's
+`app_container_journald` source ingests it filtered to pino **WARN+** (level ≥ 40)
+via `app_container_warn_filter`, then through the same 3-stage `pii_scrub_*`
+redaction as every other source.
+
+Query cron pino lines in Better Stack by `source_kind`:
+
+```sql
+SELECT dt, raw FROM remote(t520508_..._logs)
+WHERE raw LIKE '%"source_kind":"app_container"%'
+  AND raw LIKE '%"fn":"cron-growth-audit"%'
+ORDER BY dt DESC LIMIT 50 FORMAT JSONEachRow
+```
+
+Two deliberate trade-offs:
+- **WARN+ only.** The filter parses the pino `level` field (NOT journald
+  `PRIORITY` — Docker's journald driver maps all stdout to PRIORITY 6 regardless
+  of pino level, so a PRIORITY filter would drop everything). INFO/DEBUG (the
+  request-log firehose) is dropped for quota. A non-zero claude exit logs at
+  error level → shipped. The INFO-level `claude --print` **max-turns notice**
+  is NOT here — it reaches **Sentry** via the `scheduled-output-missing`
+  `extra.stdoutTail` (#4773 PR-A), alongside `extra.stderrTail`/`extra.exitCode`.
+- **Container log retention moved to journald.** Switching off `json-file`
+  dropped its `max-size 10m/max-file 3` rotation; the container's `docker logs`
+  and retention are now governed by journald's `SystemMaxUse`.
 
 Two further blind spots surfaced by the cron-workspace ENOSPC incident
 (#4684/#4689): (a) the `_metrics` table stores **empty** `AggregateFunction`

@@ -504,6 +504,7 @@ runcmd:
     # exec-from-/tmp call sites first.
     docker run -d \
       --name soleur-web-platform \
+      --log-driver journald \
       --restart unless-stopped \
       --tmpfs /tmp:rw,nosuid,nodev,size=256m \
       --env-file "$TMPENV" \
