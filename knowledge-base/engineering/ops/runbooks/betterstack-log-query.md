@@ -68,6 +68,17 @@ List existing connections: `GET https://logs.betterstack.com/api/v1/connections`
 This Vector source currently ships **only host metrics + the inngest supervisor's
 journald** — the Next.js app's pino stdout (including `spawnClaudeEval` cron
 stderr, `fn: cron-<name>`) is **NOT** in this source. So a cron's claude-eval
-failure reason is not queryable here today. Filed as a follow-up to route the
-app container's stdout into Vector. Until then, a non-zero claude exit is
+failure reason is not queryable here today. Tracked in #4773 (route the app
+container's stdout into Vector). Until then, a non-zero claude exit is
 red-on-the-monitor but its reason lives only in the container's local journal.
+
+Two further blind spots surfaced by the cron-workspace ENOSPC incident
+(#4684/#4689): (a) the `_metrics` table stores **empty** `AggregateFunction`
+values — the actual metric numbers live as JSON in the `_logs` `raw` column, so
+query `_logs`, not `_metrics`, for metric values. (b) The Vector host-metrics
+source reports only **HOST** filesystems (the root volume), **not** the
+container's `/tmp` tmpfs. That is why the 256 MB-tmpfs clone ENOSPC was invisible
+here while the host root showed ~56 GB free — host metrics are structurally blind
+to the per-container tmpfs the crons clone into. Disk-pressure on a cron
+workspace surfaces via Sentry (`op=cron-workspace-low-disk` WARN, and the
+`scheduled-output-missing` `extra.stderrTail`/`extra.exitCode`), not here.
