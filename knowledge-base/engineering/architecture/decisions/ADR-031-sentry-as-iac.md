@@ -233,6 +233,22 @@ It is deliberately existence-by-name (not filter-shape): the filters are
 TF-owned and re-asserted on each apply, so a post-apply existence check is the
 minimal sufficient signal for the apply-time mis-wire failure mode.
 
+**Amendment (2026-06-03, #4849):** a third apply-created issue-alert rule,
+`sentry_issue_alert.chat_message_save_failure`, joins the auto-apply `-target`
+set. It is the chat write-absence liveness alert — pages on any
+interactive-message INSERT failure in `dispatchSoleurGo` via `op IS_IN`
+{`tenant-mint.persistUserMessage`, `persistUserMessage.workspaceRead`,
+`persist-user-message`} + `feature == cc-dispatcher` (`filter_match = "all"`,
+`action_match = "any"` like `byok_art_33_breach`). Same apply-created posture
+(`lifecycle.ignore_changes = [environment]` only). Its name is added to
+`assert-byok-rules-exist.sh` `EXPECTED_RULES` (the script is now generically
+"issue-alert detector liveness"), and a cross-artifact contract test
+(`test/sentry-chat-alert-op-contract.test.ts`) pins the op/feature filter values
+against the emit site in `cc-dispatcher.ts`. No guard/jq/scope-guard edit: it is
+the already-covered `sentry_issue_alert` type. Apply-created issue-alert count is
+now 3 (`byok_art_33_breach`, `byok_cap_exceeded`, `chat_message_save_failure`);
+the 4 `auth-*` rules remain import-only.
+
 ## Consequences
 
 ### Positive
