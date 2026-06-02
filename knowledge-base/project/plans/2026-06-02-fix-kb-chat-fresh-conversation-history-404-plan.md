@@ -306,6 +306,16 @@ No novel observability primitive introduced.
   occurrences are `warning`-level, not `error`. Automation: query Sentry issues API for the op
   over a 24h window post-deploy; deterministic verdict = error-level count for that op == 0.
   (Per `hr-no-dashboard-eyeball-pull-data-yourself` — pull via API, do not eyeball the dashboard.)
+  - **Warning-rate floor (review: user-impact P2).** The severity downgrade collapses the
+    *benign row-absent* and the *genuine RLS-denied-on-an-owned-row* cases into one `warning`-level
+    op (`.single()` returns "no rows" for both — they are indistinguishable at the handler, a
+    pre-existing conflation). So `error-count == 0` alone is now trivially satisfied even by a real
+    broken-open regression. The post-deploy check MUST therefore ALSO assert the `warning`-level
+    rate for this op stays at/below its expected fresh-deferred-noise baseline: a genuine
+    broken-open (RLS starts filtering rows users *do* own) would spike `warning` volume for owners
+    hitting their own conversations. Verdict = error-count == 0 **AND** warning-rate within ~2× the
+    pre-deploy fresh-open baseline; a warning-rate spike is the page-worthy anomaly. RLS remains the
+    enforcement boundary — this AC guards operator *visibility* of a regression, not access itself.
 
 ## Hypotheses
 

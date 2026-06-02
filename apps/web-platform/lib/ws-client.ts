@@ -510,6 +510,13 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     clearAllTimeouts();
     setSessionConfirmed(false);
     setRealConversationId(null);
+    // Keep sessionKind paired with realConversationId: both are only ever
+    // written together by the session_started/session_resumed handlers, so
+    // clearing the id without clearing the kind would leave a stale "resumed"
+    // that could re-arm the resume-history fetch on the next id resolution.
+    // (review: P3 reset-symmetry — defends the FR1 gate against future
+    // refactors that decouple the two writes.)
+    setSessionKind(null);
     if (wsRef.current) {
       wsRef.current.onclose = null;
       wsRef.current.close();

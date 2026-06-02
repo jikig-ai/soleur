@@ -313,6 +313,52 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     });
   });
 
+  it("flips resumed→fresh within one mounted hook: switching from a resumed thread to a new chat does NOT fetch (FR1 hook-reuse)", async () => {
+    // The KB sidebar reuses ONE useWebSocket across conversation switches
+    // (resumeByContextPath resolves a new realConversationId while the hook
+    // stays mounted). If sessionKind failed to flip back to "fresh" on the
+    // second session_started, the resume effect would fire a would-be-404
+    // fetch for the fresh id. This locks the FR1 gate against that path.
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+
+    await connectAndAuth(result);
+
+    // 1) Resume an existing thread → fetch fires.
+    serverSend({
+      type: "session_resumed",
+      conversationId: "conv-A-resumed",
+      resumedFromTimestamp: "2026-04-16T14:15:00Z",
+      messageCount: 3,
+    });
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/conversations/conv-A-resumed/messages",
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: "Bearer test-token" }),
+        }),
+      );
+    });
+
+    // 2) Same mounted hook now starts a BRAND-NEW conversation. sessionKind
+    //    must flip "resumed" → "fresh", so NO fetch fires for the new id.
+    fetchSpy.mockClear();
+    serverSend({
+      type: "session_started",
+      conversationId: "conv-B-fresh",
+    });
+
+    await waitFor(() => {
+      expect(result.current.realConversationId).toBe("conv-B-fresh");
+    });
+
+    const freshFetchCalls = fetchSpy.mock.calls.filter(
+      (call) => typeof call[0] === "string" && call[0].includes("conv-B-fresh"),
+    );
+    expect(freshFetchCalls.length).toBe(0);
+    expect(result.current.historyLoading).toBe(false);
+  });
+
   it("deep-link to a never-materialized uuid 404s into the empty state, not the error boundary (FR5/AC9)", async () => {
     // Full-route navigation to /dashboard/chat/<uuid> for a valid-but-
     // deferred / never-persisted id (stale bookmark). The mount-time effect
