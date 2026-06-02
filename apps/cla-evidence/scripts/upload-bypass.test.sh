@@ -64,7 +64,7 @@ run_sut() {
   R2_CLA_EVIDENCE_ACCESS_KEY_ID=00000000000000000000000000000000 \
   R2_CLA_EVIDENCE_SECRET=0000000000000000000000000000000000000000000000000000000000000000 \
   R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
-  R2_CLA_EVIDENCE_ENDPOINT=https://example.invalid \
+  R2_CLA_EVIDENCE_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com \
     bash "$SUT" "$payload"
 }
 
@@ -241,7 +241,7 @@ out=$(
   R2_CLA_EVIDENCE_ACCESS_KEY_ID=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA \
   R2_CLA_EVIDENCE_SECRET=0000000000000000000000000000000000000000000000000000000000000000 \
   R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
-  R2_CLA_EVIDENCE_ENDPOINT=https://example.invalid \
+  R2_CLA_EVIDENCE_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com \
     bash "$SUT" "$payload" 2>&1
 ) && rc=0 || rc=$?
 if [[ "$rc" -ne 0 ]] && grep -q 'length=53, expected 32' <<<"$out" && grep -q 'bootstrap.sh' <<<"$out"; then
@@ -258,6 +258,29 @@ if [[ "$rc" -eq 64 ]] && grep -qE 'missing principal' <<<"$out"; then
   green "PASS: Bypass.f missing principal → exit 64"
 else
   red "FAIL: Bypass.f expected exit 64 with 'missing principal'; got rc=$rc"
+  red "$out"
+  fail=1
+fi
+
+# Bypass.i: tampered/non-canonical R2 endpoint → exit 64 from the assert_r2_endpoint
+# guard in r2-conditional-put.sh (item 1 of #3950). This is the integration test
+# proving the endpoint pin is WIRED into the upload path — without it, a refactor
+# dropping the `source`/`assert_r2_endpoint` lines would leave every test green
+# (the happy-path fixtures only confirm the guard does NOT fire). Valid creds, so
+# only the endpoint guard can produce the 64.
+prime_200
+out=$(
+  PATH="$work:$PATH" \
+  R2_CLA_EVIDENCE_ACCESS_KEY_ID=00000000000000000000000000000000 \
+  R2_CLA_EVIDENCE_SECRET=0000000000000000000000000000000000000000000000000000000000000000 \
+  R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
+  R2_CLA_EVIDENCE_ENDPOINT=https://evil.example.com \
+    bash "$SUT" "$payload" 2>&1
+) && rc=0 || rc=$?
+if [[ "$rc" -eq 64 ]] && grep -qE '::error::.*canonical R2 hostname' <<<"$out"; then
+  green "PASS: Bypass.i tampered endpoint → exit 64 (endpoint pin wired into upload path)"
+else
+  red "FAIL: Bypass.i expected exit 64 + canonical-hostname error; got rc=$rc"
   red "$out"
   fail=1
 fi
