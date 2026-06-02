@@ -86,11 +86,16 @@ export async function inviteWorkspaceMember(
   }
 
   const service = createServiceClient();
-  // Note: invite_workspace_member RPC enforces caller-is-owner via auth.uid().
-  // Service-role calls do NOT set auth.uid(), so we pass the caller explicitly
-  // and the RPC checks `caller_id IS NULL OR caller_id = ...`. Migration 054
-  // §1.2.6 defines the RPC's signature; the SECURITY DEFINER body re-reads
-  // the caller's owner row in workspace_members before the WORM write.
+  // LATENT GAP (#4779-followup): invite_workspace_member (mig 063) gates the
+  // caller on a bare auth.uid() and has NO p_caller_user_id override param, so
+  // under createServiceClient() (auth.uid() NULL) it would raise 28000 — the
+  // same defect class migration 094 fixed for remove_workspace_member /
+  // update_workspace_member_role. This wrapper currently has NO live route
+  // caller (the live invite flow uses createWorkspaceInvitation, the
+  // pending-invite path), so the gap is dormant. When this RPC is wired to a
+  // route, it MUST first be widened to the COALESCE(p_caller_user_id,
+  // auth.uid()) + service_role-only shape (mig 092/094 precedent) and this call
+  // updated to forward args.callerUserId — otherwise it 500s on first use.
   const { data, error } = await service.rpc("invite_workspace_member", {
     p_workspace_id: args.workspaceId,
     p_invitee_user_id: inviteeUserId,

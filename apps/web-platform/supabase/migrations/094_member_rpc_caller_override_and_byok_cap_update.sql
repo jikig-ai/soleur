@@ -297,7 +297,7 @@ COMMENT ON FUNCTION public.update_workspace_member_role(uuid, uuid, text, uuid) 
 CREATE OR REPLACE FUNCTION public.update_byok_delegation_cap(
   p_delegation_id        uuid,
   p_daily_usd_cap_cents  int,
-  p_hourly_usd_cap_cents int,
+  p_hourly_usd_cap_cents int DEFAULT NULL,
   p_actor_user_id        uuid DEFAULT NULL
 ) RETURNS void
   LANGUAGE plpgsql
@@ -307,6 +307,7 @@ AS $$
 DECLARE
   v_caller_jwt uuid := auth.uid();
   v_actor      uuid;
+  v_hourly     int;
   v_row        public.byok_delegations%ROWTYPE;
 BEGIN
   IF v_caller_jwt IS NULL THEN
@@ -323,7 +324,7 @@ BEGIN
     v_actor := v_caller_jwt;
   END IF;
 
-  -- Cap bound checks (identical to grant_byok_delegation 064:451-463).
+  -- Daily cap bound check (identical to grant_byok_delegation 064:451-457).
   IF p_daily_usd_cap_cents IS NULL
      OR p_daily_usd_cap_cents < 1
      OR p_daily_usd_cap_cents > 1000000 THEN
@@ -331,15 +332,8 @@ BEGIN
       p_daily_usd_cap_cents
       USING ERRCODE = '22003';
   END IF;
-  IF p_hourly_usd_cap_cents IS NULL
-     OR p_hourly_usd_cap_cents < 1
-     OR p_hourly_usd_cap_cents > p_daily_usd_cap_cents THEN
-    RAISE EXCEPTION 'update_byok_delegation_cap: hourly_usd_cap_cents out of range [1, daily=%]; got %',
-      p_daily_usd_cap_cents, p_hourly_usd_cap_cents
-      USING ERRCODE = '22003';
-  END IF;
 
-  -- Row-lock + load OLD shape for attribution / idempotency validation.
+  -- Row-lock + load OLD shape for attribution / idempotency / hourly-preserve.
   SELECT * INTO v_row
     FROM public.byok_delegations
    WHERE id = p_delegation_id
@@ -365,11 +359,32 @@ BEGIN
       USING ERRCODE = '42501';
   END IF;
 
+  -- Resolve the hourly cap. When the caller omits it (NULL — the UI exposes
+  -- only a daily stepper), PRESERVE the existing hourly cap clamped to the new
+  -- daily. This never silently RAISES the member's hourly burst rate: a prior
+  -- split cap (e.g. CLI-granted daily=$50/hourly=$5) keeps hourly=$5 when the
+  -- owner edits daily, instead of being silently bumped to the new daily. An
+  -- explicit value is range-checked like grant_byok_delegation (064:458-463).
+  IF p_hourly_usd_cap_cents IS NULL THEN
+    v_hourly := LEAST(
+      COALESCE(v_row.hourly_usd_cap_cents, p_daily_usd_cap_cents),
+      p_daily_usd_cap_cents
+    );
+  ELSE
+    IF p_hourly_usd_cap_cents < 1
+       OR p_hourly_usd_cap_cents > p_daily_usd_cap_cents THEN
+      RAISE EXCEPTION 'update_byok_delegation_cap: hourly_usd_cap_cents out of range [1, daily=%]; got %',
+        p_daily_usd_cap_cents, p_hourly_usd_cap_cents
+        USING ERRCODE = '22003';
+    END IF;
+    v_hourly := p_hourly_usd_cap_cents;
+  END IF;
+
   -- The WORM Shape-3 flip requires at least one cap value to actually change
   -- (064:338-341); a no-op UPDATE would fall through to the trigger's catch-all
   -- RAISE. Surface a clean error instead.
   IF p_daily_usd_cap_cents = v_row.daily_usd_cap_cents
-     AND p_hourly_usd_cap_cents = v_row.hourly_usd_cap_cents THEN
+     AND v_hourly = v_row.hourly_usd_cap_cents THEN
     RAISE EXCEPTION 'update_byok_delegation_cap: caps unchanged for delegation %', p_delegation_id
       USING ERRCODE = '22023';
   END IF;
@@ -377,7 +392,7 @@ BEGIN
   -- WORM Shape-3 cap-update flip (064:332-353).
   UPDATE public.byok_delegations
      SET daily_usd_cap_cents    = p_daily_usd_cap_cents,
-         hourly_usd_cap_cents   = p_hourly_usd_cap_cents,
+         hourly_usd_cap_cents   = v_hourly,
          cap_updated_at         = now(),
          cap_updated_by_user_id = v_actor
    WHERE id = p_delegation_id;

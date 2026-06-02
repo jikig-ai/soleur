@@ -104,7 +104,9 @@ describe("PATCH /api/workspace/delegations (cap update)", () => {
     expect(mockServiceRpc).toHaveBeenCalledWith("update_byok_delegation_cap", {
       p_delegation_id: DELEGATION_ID,
       p_daily_usd_cap_cents: 5000,
-      p_hourly_usd_cap_cents: 5000, // defaults to daily (UI exposes a daily stepper)
+      // null → the RPC PRESERVES the existing hourly cap (clamped to new daily);
+      // the UI exposes only a daily stepper and must not silently raise hourly.
+      p_hourly_usd_cap_cents: null,
       p_actor_user_id: OWNER_ID,
     });
   });

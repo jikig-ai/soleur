@@ -179,4 +179,31 @@ describe("DelegationToggle — owner inline cap edit (post-join cap update)", ()
     expect(fetchMock).not.toHaveBeenCalled();
     expect(screen.getByText(/\$5\.00\/\s*\$20/)).toBeTruthy();
   });
+
+  it("keeps the prior cap and alerts when the PATCH fetch throws (offline/network)", async () => {
+    // Symmetric with the grant/revoke network-throw guards: a thrown fetch must
+    // not be a silent no-op on the cap-save path either.
+    fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
+    render(<DelegationToggle {...activeProps} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /edit cap/i }));
+    const input = screen.getByLabelText(/daily cap in dollars/i);
+    await userEvent.clear(input);
+    await userEvent.type(input, "50");
+    await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(alertMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/\$5\.00\/\s*\$20/)).toBeTruthy();
+  });
+
+  it("disables Save for empty/sub-$1 input (no silent $1 floor write)", async () => {
+    render(<DelegationToggle {...activeProps} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /edit cap/i }));
+    const input = screen.getByLabelText(/daily cap in dollars/i);
+    await userEvent.clear(input);
+
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

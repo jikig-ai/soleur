@@ -130,7 +130,7 @@ export async function PATCH(request: Request) {
   // this, but a fast 403 avoids an opaque RPC error. Mirrors the DELETE probe.
   const { data: delegation, error: probeError } = await service
     .from("byok_delegations")
-    .select("grantor_user_id, created_by_user_id, revoked_at")
+    .select("grantor_user_id, created_by_user_id")
     .eq("id", body.delegationId)
     .maybeSingle();
   if (probeError) {
@@ -148,14 +148,15 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
-  // Canonical 4-arg contract from migration 094. PostgREST resolves rpc() by
-  // argument NAME — these MUST match the function signature exactly or
-  // resolution fails (PGRST202 → 400). hourly defaults to the daily cap (the UI
-  // exposes only a daily stepper; the RPC rejects hourly > daily).
+  // Canonical contract from migration 094. PostgREST resolves rpc() by argument
+  // NAME — these MUST match the function signature exactly or resolution fails
+  // (PGRST202 → 400). The UI exposes only a daily stepper, so hourly is sent as
+  // null → the RPC PRESERVES the delegation's existing hourly cap (clamped to
+  // the new daily), never silently raising the member's burst rate.
   const { error } = await service.rpc("update_byok_delegation_cap", {
     p_delegation_id: body.delegationId,
     p_daily_usd_cap_cents: body.dailyCapCents,
-    p_hourly_usd_cap_cents: body.hourlyCapCents ?? body.dailyCapCents,
+    p_hourly_usd_cap_cents: body.hourlyCapCents ?? null,
     p_actor_user_id: user.id,
   });
 

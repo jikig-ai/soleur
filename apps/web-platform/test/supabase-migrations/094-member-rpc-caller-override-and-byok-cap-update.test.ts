@@ -143,10 +143,21 @@ describe("migration 094_member_rpc_caller_override_and_byok_cap_update", () => {
   // update_byok_delegation_cap (Problem 2)
   // ---------------------------------------------------------------
   describe("update_byok_delegation_cap: new WORM Shape-3 cap-update RPC", () => {
-    it("declares the 4-arg signature", () => {
+    it("declares the 4-arg signature (hourly + actor both DEFAULT NULL)", () => {
       expect(executable).toMatch(
-        /CREATE\s+OR\s+REPLACE\s+FUNCTION\s+public\.update_byok_delegation_cap\(\s*p_delegation_id\s+uuid\s*,\s*p_daily_usd_cap_cents\s+int\s*,\s*p_hourly_usd_cap_cents\s+int\s*,\s*p_actor_user_id\s+uuid\s+DEFAULT\s+NULL\s*\)/i,
+        /CREATE\s+OR\s+REPLACE\s+FUNCTION\s+public\.update_byok_delegation_cap\(\s*p_delegation_id\s+uuid\s*,\s*p_daily_usd_cap_cents\s+int\s*,\s*p_hourly_usd_cap_cents\s+int\s+DEFAULT\s+NULL\s*,\s*p_actor_user_id\s+uuid\s+DEFAULT\s+NULL\s*\)/i,
       );
+    });
+
+    it("preserves the existing hourly cap (clamped to the new daily) when hourly is omitted — never silently raises burst rate", () => {
+      const body = fnBody(executable, "update_byok_delegation_cap")![1];
+      // NULL hourly → LEAST(COALESCE(existing hourly, daily), daily): preserve,
+      // clamped down to the new daily, never raised.
+      expect(body).toMatch(
+        /p_hourly_usd_cap_cents\s+IS\s+NULL[\s\S]*?LEAST\(\s*COALESCE\(\s*v_row\.hourly_usd_cap_cents\s*,\s*p_daily_usd_cap_cents\s*\)\s*,\s*p_daily_usd_cap_cents\s*\)/i,
+      );
+      // The UPDATE writes the resolved v_hourly, not the raw param.
+      expect(body).toMatch(/hourly_usd_cap_cents\s*=\s*v_hourly/i);
     });
 
     it("is SECURITY DEFINER with pinned search_path", () => {
@@ -187,7 +198,7 @@ describe("migration 094_member_rpc_caller_override_and_byok_cap_update", () => {
     it("performs the WORM Shape-3 UPDATE (caps + cap_updated_at + cap_updated_by_user_id, nothing else)", () => {
       const body = fnBody(executable, "update_byok_delegation_cap")![1];
       expect(body).toMatch(
-        /UPDATE\s+public\.byok_delegations[\s\S]*?daily_usd_cap_cents\s*=\s*p_daily_usd_cap_cents[\s\S]*?hourly_usd_cap_cents\s*=\s*p_hourly_usd_cap_cents[\s\S]*?cap_updated_at\s*=\s*now\(\)[\s\S]*?cap_updated_by_user_id\s*=\s*v_actor/i,
+        /UPDATE\s+public\.byok_delegations[\s\S]*?daily_usd_cap_cents\s*=\s*p_daily_usd_cap_cents[\s\S]*?hourly_usd_cap_cents\s*=\s*v_hourly[\s\S]*?cap_updated_at\s*=\s*now\(\)[\s\S]*?cap_updated_by_user_id\s*=\s*v_actor/i,
       );
     });
 

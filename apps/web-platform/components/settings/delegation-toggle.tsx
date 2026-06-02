@@ -85,7 +85,8 @@ function OwnerDelegationControl({
   } | null;
 }) {
   const [loading, setLoading] = useState(false);
-  const [capCents, setCapCents] = useState(delegation?.dailyCapCents ?? 2000);
+  // Pre-grant `<input>` model (only shown when there is no active delegation).
+  const [grantDraftCapCents, setGrantDraftCapCents] = useState(delegation?.dailyCapCents ?? 2000);
   const [active, setActive] = useState(!!delegation?.active);
   // Post-join cap edit (#4779-followup): an active delegation's daily cap can
   // be changed in place via PATCH (the WORM Shape-3 flip), without revoke+
@@ -93,7 +94,7 @@ function OwnerDelegationControl({
   // updates locally on a successful save. `editingCap` toggles the inline
   // editor; `draftDollars` holds the raw input string (parsed on save so
   // mid-typing never clamps).
-  const [displayCapCents, setDisplayCapCents] = useState(delegation?.dailyCapCents ?? 0);
+  const [displayCapCents, setDisplayCapCents] = useState(delegation?.dailyCapCents ?? 2000);
   const [editingCap, setEditingCap] = useState(false);
   const [draftDollars, setDraftDollars] = useState(
     String((delegation?.dailyCapCents ?? 2000) / 100),
@@ -153,7 +154,7 @@ function OwnerDelegationControl({
           body: JSON.stringify({
             workspaceId,
             granteeUserId: memberUserId,
-            dailyCapCents: capCents,
+            dailyCapCents: grantDraftCapCents,
           }),
         });
         if (res.ok) {
@@ -173,7 +174,7 @@ function OwnerDelegationControl({
     } finally {
       setLoading(false);
     }
-  }, [active, delegation, workspaceId, memberUserId, capCents]);
+  }, [active, delegation, workspaceId, memberUserId, grantDraftCapCents]);
 
   return (
     <div className="flex items-center gap-2">
@@ -225,9 +226,11 @@ function OwnerDelegationControl({
           />
           <button
             type="button"
-            disabled={loading}
+            // Block Save on empty/invalid/sub-$1 input so clearing the field and
+            // saving can't silently write the $1.00 floor (an unintended de-fund).
+            disabled={loading || !(Number(draftDollars) >= 1)}
             onClick={handleSaveCap}
-            className="text-xs font-medium text-soleur-accent-gold-fg hover:underline"
+            className="text-xs font-medium text-soleur-accent-gold-fg hover:underline disabled:opacity-50"
           >
             Save
           </button>
@@ -245,8 +248,8 @@ function OwnerDelegationControl({
         <input
           type="number"
           min={1}
-          value={capCents / 100}
-          onChange={(e) => setCapCents(Math.max(100, Math.round(Number(e.target.value) * 100)))}
+          value={grantDraftCapCents / 100}
+          onChange={(e) => setGrantDraftCapCents(Math.max(100, Math.round(Number(e.target.value) * 100)))}
           className="w-16 rounded border border-soleur-border-default bg-soleur-bg-base px-1 py-0.5 text-xs text-soleur-text-primary"
           aria-label="Daily cap in dollars"
         />
