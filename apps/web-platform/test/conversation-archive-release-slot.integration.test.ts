@@ -10,6 +10,9 @@
  *     ./node_modules/.bin/vitest run test/conversation-archive-release-slot.integration.test.ts
  *
  * Plan: 2026-05-04-fix-cc-conversation-limit-archive-plan.md AC6 / AC14.
+ * Schema-alignment repair (drop title + add NOT NULL workspace_id +
+ * WORM-bypass teardown):
+ * 2026-06-02-fix-repair-stale-conversation-archive-release-slot-integration-suite-plan.md.
  *
  * Vitest cannot exercise Postgres triggers natively — the migration-shape
  * test (test/supabase-migrations/036-release-slot-on-archive.test.ts) pins
@@ -97,6 +100,32 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     afterAll(async () => {
       if (!service || !user.id) return;
       assertSynthetic(user.email);
+      // Teardown in FK-dependency order. The new-user trigger auto-creates a
+      // solo organization, a solo workspace (workspaces.id = user.id, ADR-038
+      // N2), an owner membership, and a workspace_member_actions audit row
+      // whose {target,actor}_user_id are RESTRICT FKs to public.users — so a
+      // bare deleteUser fails. Use the anonymise_* RPCs (mig 063): a DIRECT
+      // delete of workspace_members fires the audit trigger and RE-creates a
+      // workspace_member_actions row referencing the user, re-blocking the
+      // delete. anonymise_workspace_members sets app.worm_bypass to suppress
+      // that audit; anonymise_workspace_member_actions NULLs the existing
+      // membership-creation audit row's user refs. (Mirrors the #4791 sibling
+      // test concurrency-acquire-slot-workspace-id.integration.test.ts.)
+      await service
+        .from("user_concurrency_slots")
+        .delete()
+        .eq("user_id", user.id);
+      await service.from("conversations").delete().eq("user_id", user.id);
+      await service.rpc("anonymise_workspace_members", { p_user_id: user.id });
+      await service.rpc("anonymise_workspace_member_actions", {
+        p_user_id: user.id,
+      });
+      await service.from("workspaces").delete().eq("id", user.id);
+      await service
+        .from("organizations")
+        .delete()
+        .eq("owner_user_id", user.id);
+
       const { data: check } = await service.auth.admin.getUserById(user.id);
       if (check?.user?.email && check.user.email !== user.email) {
         throw new Error(
@@ -118,10 +147,19 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       const { error } = await service.from("conversations").insert({
         id,
         user_id: user.id,
+        // workspace_id is NOT NULL post-mig-059 and FKs workspaces(id) ON
+        // DELETE RESTRICT, so it must reference a real workspace row — that is
+        // the binding reason it is set. For this solo synthetic user the real
+        // workspace is the trigger-created solo workspace whose id equals
+        // user.id (ADR-038 N2). Kept equal to the acquireSlot helper's
+        // p_workspace_id below for consistency; note the archive trigger under
+        // test keys on (user_id, conversation id) and is workspace-independent,
+        // so this equality is for FK-reachability + sibling RLS contracts, not
+        // for any assertion in this file.
+        workspace_id: user.id,
         session_id: sessionId,
         repo_url: repoUrl,
         status: "active",
-        title: "slot-trigger integration",
       });
       expect(error, `insert conversation failed: ${error?.message}`).toBeNull();
       return id;
@@ -135,11 +173,6 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // arg and the 3-arg overload was DROPped, so this direct caller must
       // pass p_workspace_id or it 404s (PGRST202). For this solo synthetic
       // user the active workspace is user.id (ADR-038 N2).
-      // NOTE: the rest of this opt-in suite is independently stale against the
-      // current dev schema (conversations.title was removed; insertConversation
-      // omits the NOT NULL workspace_id; bare deleteUser teardown) and does not
-      // run in CI — repair tracked in #4798. This update keeps the RPC contract
-      // aligned so the helper targets the new 4-arg overload (mig 093).
       const { data, error } = await service.rpc("acquire_conversation_slot", {
         p_user_id: user.id,
         p_conversation_id: conversationId,
