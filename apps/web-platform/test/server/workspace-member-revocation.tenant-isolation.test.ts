@@ -163,15 +163,18 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       const userB = fixtureX.members[1];
 
       // Owner A removes B from workspace X.
-      // Note: remove_workspace_member is SECURITY DEFINER and reads
-      // auth.uid() — but service-role calls produce NULL auth.uid().
-      // For this integration test we invoke via authenticated-JWT
-      // routing through PostgREST so the RPC sees a real auth.uid().
+      // mig 094: remove_workspace_member is service_role-only (the authenticated
+      // EXECUTE grant was REVOKED to close the forgeable-override class) and
+      // resolves the caller via COALESCE(p_caller_user_id, auth.uid()). The
+      // production wrapper invokes it via the service client forwarding the
+      // owner id — mirror that. aClient (below) is still used for the
+      // positive-control check_my_revocation read on Owner A's JWT.
       const aJwt = await mintUserJwt(url, serviceKey, ownerA.email);
       const aClient = clientWithJwt(url, anonKey, aJwt);
-      const { error: removeErr } = await aClient.rpc("remove_workspace_member", {
+      const { error: removeErr } = await service.rpc("remove_workspace_member", {
         p_workspace_id: fixtureX.workspaceId,
         p_user_id: userB.userId,
+        p_caller_user_id: ownerA.userId,
       });
       expect(removeErr).toBeNull();
 
