@@ -358,8 +358,11 @@ resource "terraform_data" "journald_persistent" {
 # binary AND the sudoers alias present on-host before `sudo infra-config-install`
 # is permitted — but the handler cannot deliver either (the helper is deliberately
 # OUT of the webhook FILE_MAP, and writing the sudoers itself requires the alias).
-# Root SSH is the only non-circular bootstrap path. deploy_pipeline_fix depends_on
-# this resource so the SSH delivery lands before its webhook push runs.
+# Root SSH is the only non-circular bootstrap path. #4829 — deploy_pipeline_fix does
+# NOT depends_on this resource; both are listed as explicit -target=s in
+# apply-deploy-pipeline-fix.yml and apply on the same CI run. Ordering between the SSH
+# helper/sudoers delivery and the webhook push is handled by the handler's per-file
+# install_rejected self-heal (see the deploy_pipeline_fix depends_on rationale below).
 resource "terraform_data" "infra_config_handler_bootstrap" {
   triggers_replace = sha256(join(",", [
     file("${path.module}/infra-config-apply.sh"),

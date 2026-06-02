@@ -43,6 +43,16 @@
 #     The firewall admin_ips allowlist is byte-unchanged — the tunnel is the access
 #     path, not an IP grant.
 #
+# CAVEAT (#4829): deploy_pipeline_fix has `depends_on = [apparmor_bwrap_profile]`,
+# and `-target` pulls in dependencies. apparmor_bwrap_profile (and docker_seccomp_config)
+# are agent=true SSH siblings WITHOUT the dual-context connection block. If one of
+# their profile files (apparmor-soleur-bwrap.profile / seccomp-bwrap.json) is changed
+# in the SAME merge as a trigger file, this CI apply would try to recreate it over SSH
+# with no ssh-agent on the runner → publickey failure. Those profile files are NOT in
+# the paths: filter, so a profile-only change does not fire this workflow; a co-change
+# with a trigger file still requires an operator-local `terraform apply`. Pre-existing
+# coupling (predates #4829); documented here so the failure is diagnosable.
+#
 # All untrusted inputs (commit messages, workflow_dispatch inputs) are routed
 # through env vars before reaching any `run:` block — CI workflow
 # injection-prevention convention. All action references are SHA-pinned.
@@ -215,8 +225,8 @@ jobs:
         # The bridge connection authenticates with var.ci_ssh_private_key
         # (agent = false in CI). The secret name (DEPLOY_SSH_PRIVATE_KEY) does NOT
         # map to the var name (ci_ssh_private_key) via --name-transformer tf-var,
-        # so it is set here explicitly. The key is multiline (PEM) → GITHUB_ENV
-        # heredoc-delimiter form; each line add-masked. NEVER on the command line
+        # so it is set here explicitly. The key is multiline (OpenSSH format) →
+        # GITHUB_ENV heredoc-delimiter form; each line add-masked. NEVER on the command line
         # (AC6). terraform marks the var sensitive = true so it is never echoed in
         # plan/apply output.
         run: |
@@ -245,6 +255,10 @@ jobs:
           set -euo pipefail
           APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain)
           SERVER_IP=$(terraform output -raw server_ip)
+          if [[ -z "$SERVER_IP" ]]; then
+            echo "::error::terraform output server_ip is empty — state not populated; cannot scope the NAT redirect to the prod host."
+            exit 1
+          fi
           printf '::add-mask::%s\n' "$SERVER_IP"
           printf 'SERVER_IP=%s\n' "$SERVER_IP" >> "$GITHUB_ENV"
 
@@ -283,9 +297,12 @@ jobs:
           # (transparent to the Go client), with no server.tf connection.host change.
           # Scoped to -d "$SERVER_IP" so ONLY traffic to the prod host is hijacked,
           # never all outbound :22 on the runner. OUTPUT chain → only this runner's egress.
-          sudo iptables -t nat -A OUTPUT \
+          if ! sudo iptables -t nat -A OUTPUT \
             -d "$SERVER_IP" -p tcp --dport 22 \
-            -j REDIRECT --to-ports 2222
+            -j REDIRECT --to-ports 2222; then
+            echo "::error::iptables NAT redirect SERVER_IP:22 → 127.0.0.1:2222 failed — terraform's Go SSH client cannot reach the host via the tunnel."
+            exit 1
+          fi
 
       - name: Terraform plan
         working-directory: ${{ env.INFRA_DIR }}
@@ -332,9 +349,13 @@ jobs:
           if [[ -n "${CLOUDFLARED_PID:-}" ]]; then
             kill "$CLOUDFLARED_PID" 2>/dev/null || true
           fi
-          if [[ -s /tmp/cloudflared.log ]]; then
+          if [[ -f /tmp/cloudflared.log ]]; then
             echo "=== /tmp/cloudflared.log (last 200 lines) ==="
-            tail -n 200 /tmp/cloudflared.log
+            if [[ -s /tmp/cloudflared.log ]]; then
+              tail -n 200 /tmp/cloudflared.log
+            else
+              echo "(log empty — cloudflared may have failed before writing any output)"
+            fi
           fi
 
       - name: Verify webhook is alive post-apply
