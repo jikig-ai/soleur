@@ -132,7 +132,9 @@ describe("cronTerraformDriftHandler — dispatch behavior", () => {
     expect(endpoint).toBe(
       "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
     );
-    expect(params).toMatchObject({
+    // Exhaustive (toEqual, not toMatchObject) — an extra/leaked field on a
+    // credential-bearing dispatch call must fail the test.
+    expect(params).toEqual({
       owner: "jikig-ai",
       repo: "soleur",
       workflow_id: "scheduled-terraform-drift.yml",
@@ -152,10 +154,16 @@ describe("cronTerraformDriftHandler — dispatch behavior", () => {
 
     expect(result).toEqual({ ok: false });
     expect(h.reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
-    const [, options] = h.reportSilentFallbackSpy.mock.calls[0];
+    const [errArg, options] = h.reportSilentFallbackSpy.mock.calls[0];
     expect(options).toMatchObject({ feature: "cron-terraform-drift" });
-    // The minted token must be redacted out of anything passed to Sentry.
-    const serialized = JSON.stringify(h.reportSilentFallbackSpy.mock.calls[0]);
-    expect(serialized).not.toContain("fake-installation-token");
+    // The minted token must be redacted out of the Error handed to Sentry.
+    // Inspect the Error's .message directly — JSON.stringify(new Error(...))
+    // drops the (non-enumerable) message, so a serialize-then-grep check would
+    // pass vacuously whether or not redaction fired.
+    const errMessage = errArg instanceof Error ? errArg.message : String(errArg);
+    expect(errMessage).not.toContain("fake-installation-token");
+    // Positive control: prove redaction ACTIVELY fired (an empty/dropped
+    // message would also satisfy the negative assertion above).
+    expect(errMessage).toContain("[REDACTED-INSTALLATION-TOKEN]");
   });
 });

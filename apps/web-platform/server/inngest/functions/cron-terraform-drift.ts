@@ -94,9 +94,11 @@ export async function cronTerraformDriftHandler({
     return { ok: true };
   } catch (err) {
     const e = err as Error;
-    const redacted = new Error(
-      redactToken(`${e.name}: ${e.message}`, installationToken),
-    );
+    // Redact the minted token out of the message before it reaches Sentry,
+    // preserving the original Error.name as a field (matches the
+    // cron-weekly-analytics precedent).
+    const redacted = new Error(redactToken(e.message, installationToken));
+    redacted.name = e.name;
     reportSilentFallback(redacted, {
       feature: FUNCTION_NAME,
       op: "dispatch-workflow",
