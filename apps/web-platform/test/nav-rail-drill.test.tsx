@@ -89,6 +89,9 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
       screen.getByRole("link", { name: "Knowledge Base" }),
     ).toBeInTheDocument();
     expect(screen.queryByTestId("rail-secondary-slot")).not.toBeInTheDocument();
+    // Top-level chrome IS present at the top level (complements the drilled
+    // absence assertion below — the Bug 1 fix must not hide it everywhere).
+    expect(screen.getByText("Soleur")).toBeInTheDocument();
   });
 
   it("KEEPS the primary nav on /dashboard/admin/analytics (allowlist, RQ6)", () => {
@@ -122,6 +125,22 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
       expect(
         screen.queryByRole("link", { name: "Knowledge Base" }),
       ).not.toBeInTheDocument();
+
+      // Bug 1 (DOM-presence half, jsdom-catchable): top-level chrome — the
+      // `Soleur` wordmark, the ThemeToggle, and the footer (Sign out) — must
+      // NOT be in the drilled DOM. They render OUTSIDE the drill swap on the
+      // buggy code (RED); the render-conditional fix removes them (GREEN).
+      expect(screen.queryByText("Soleur")).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("group", { name: "Theme" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: /sign out/i }),
+      ).not.toBeInTheDocument();
+      // …but the workspace identity band still mounts when drilled (ADR-047).
+      expect(
+        screen.getAllByTestId("workspace-context-band").length,
+      ).toBeGreaterThan(0);
     },
   );
 

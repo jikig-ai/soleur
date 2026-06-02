@@ -67,6 +67,22 @@ echo "${DEPLOY_URL:-not_set}"
 
 Store the config name for use in subsequent `doppler` commands.
 
+### Step 2.6: Structural-UI Visual-Regression Gate (#4834 / ADR-049)
+
+This is the gate's semantic home. Run it when the diff (`git diff --name-only origin/main...HEAD` — the branch-vs-main merge-base diff; do NOT use `origin/<branch>...HEAD`, which only sees unpushed commits and returns 0 files once the branch is pushed, silently skipping the gate) touches `apps/web-platform/app/(dashboard)/**`, `apps/web-platform/components/dashboard/**`, or any `layout.tsx`. Skip silently otherwise.
+
+**Why this exists:** jsdom (vitest) renders no CSS, so `md:w-14` / `hidden md:block` / `flex-wrap` / `display:none` regressions ship green through the unit suite (the #4810 class — top-level chrome leaking into drilled routes; a collapsed rail with no icon-only form). The gate renders real CSS in real headless Chromium.
+
+**Deterministic layer (BLOCKING).** Run the committed `nav-states-*.e2e.ts` spec in the existing `authenticated` Playwright project — real headless Chromium + real Next.js SSR seeded by the **offline mock-Supabase storageState** (`e2e/global-setup.ts` + `e2e/helpers/supabase-mocks.ts`). Zero credentials; NO `dev-signin`; never point at a live origin (CLO: synthetic fixtures only).
+
+```bash
+cd apps/web-platform && ./node_modules/.bin/playwright test nav-states --project=authenticated --reporter=list
+```
+
+A non-zero exit FAILS this QA run. The assertions read invariants jsdom cannot: drilled routes hide the wordmark + ThemeToggle; the collapsed rail is icon-only with no horizontal overflow; the workspace-identity band is visible (with org + repo content) in every drill state × viewport.
+
+**Advisory vision layer (NON-BLOCKING).** Optionally drive Playwright MCP over the same routes and screenshot each, then run a vision pass for anything the deterministic assertions miss (spacing, color, truncation). This is informational only — headed MCP cannot run in autonomous `/work`/CI, so it never blocks the merge. Surface findings as notes in the QA report.
+
 ### Step 3: Execute Test Scenarios
 
 For each test scenario in the plan, execute the steps it describes. Scenarios contain three possible step types, identified by their prefix:
@@ -149,6 +165,7 @@ The skill handles missing prerequisites without blocking the pipeline:
 ## Notes
 
 - For Playwright auth in production QA, use Supabase admin API `generate_link` to get the OTP code, then enter it in the OTP form. Do not use the magic link `action_link` URL — Playwright navigation does not trigger client-side hash fragment processing.
+- For Playwright MCP visual verification of an authenticated surface on a LOCAL dev server: start the server with `NEXT_PUBLIC_DEV_EXTRA_ORIGINS=<origin>` (else state-mutating POSTs 403 on CSRF), mint a cookie via `ux-audit/scripts/bot-signin.ts` with `NEXT_PUBLIC_APP_URL=http://localhost:<port>`, inject it with `page.context().addCookies()` (the `run_code_unsafe` sandbox has no `require`/`Buffer`/`atob` — pre-escape data into a literal), drive onboarding gates via `page.evaluate(fetch(...))` not UI clicks, and `curl`-pre-warm slow routes before `browser_navigate`. Full recipe: `knowledge-base/project/learnings/2026-06-02-playwright-mcp-local-auth-dashboard-verification.md`.
 - This skill does NOT test error paths (network failure simulation, invalid input). That capability is deferred to a future iteration.
 - Screenshots from Playwright MCP resolve from the repo root, not the shell CWD. Always use absolute paths when in a worktree.
 - Test data cleanup is critical — always include cleanup steps in test scenarios to avoid accumulating garbage data in external services.
