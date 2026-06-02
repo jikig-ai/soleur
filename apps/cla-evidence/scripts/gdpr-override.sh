@@ -296,7 +296,11 @@ green "  lock rules temporarily modified"
 # ─────────────────────────────────────────────────────────────────────────────
 step "[4/8] DELETE object via S3-compat HMAC (prd_cla env)"
 delete_rc=0
-doppler run -p soleur -c prd_cla -- \
+# env -u CF_ADMIN_TOKEN: strip the bearer before doppler/aws so it is not
+# visible via /proc/<pid>/environ to the child aws process (item 2 of #3950).
+# The aws S3 call authenticates via the HMAC pair from prd_cla — never the
+# bearer — so stripping it is pure attack-surface reduction, no behavior change.
+env -u CF_ADMIN_TOKEN doppler run -p soleur -c prd_cla -- \
   aws --endpoint-url "$R2_CLA_EVIDENCE_ENDPOINT" \
       s3api delete-object \
       --bucket "$R2_CLA_EVIDENCE_BUCKET" \
@@ -401,7 +405,7 @@ jq -n \
   '{schema_version:$sv, deleted_at:$dt, admin_actor:$actor, gdpr_request_ref:$ref, prior_object_sha:$sha, override_reason:$reason}' \
   > "$tomb_body"
 
-if ! doppler run -p soleur -c prd_cla -- \
+if ! env -u CF_ADMIN_TOKEN doppler run -p soleur -c prd_cla -- \
     aws --endpoint-url "$R2_CLA_EVIDENCE_ENDPOINT" \
         s3api put-object \
         --bucket "$R2_CLA_EVIDENCE_BUCKET" \
