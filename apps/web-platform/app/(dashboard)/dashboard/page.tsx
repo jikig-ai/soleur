@@ -502,12 +502,16 @@ export default function DashboardPage() {
             <p className="mb-2 text-xs text-red-400">{attachError}</p>
           )}
 
-          <div className="flex items-center gap-3">
+          {/* Unified input box: the paperclip + send controls live *inside* one
+              bordered container alongside the borderless input — mirrors the
+              shared ChatInput (chat-input.tsx) ChatGPT-style box so the
+              dashboard landing prompt matches the chat and KB surfaces. */}
+          <div className="flex items-end gap-1.5 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-2 py-1.5 transition-shadow focus-within:border-soleur-border-emphasized">
             {/* Paperclip / attach button */}
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl border border-soleur-border-default text-soleur-text-secondary transition-colors hover:border-soleur-border-default hover:text-soleur-text-primary"
+              className="flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-lg text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
               aria-label="Attach files"
             >
               <svg className="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -526,23 +530,25 @@ export default function DashboardPage() {
               }}
             />
 
-            <input
-              name="idea"
-              type="text"
-              placeholder="What are you building?"
-              autoFocus
-              className="min-h-[44px] flex-1 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted focus:border-soleur-border-default focus:outline-none"
-              onPaste={(e) => {
-                const files = Array.from(e.clipboardData.files);
-                if (files.length > 0) {
-                  e.preventDefault();
-                  validateAndAddFiles(files);
-                }
-              }}
-            />
+            <div className="flex-1">
+              <input
+                name="idea"
+                type="text"
+                placeholder="What are you building?"
+                autoFocus
+                className="min-h-[36px] w-full border-none bg-transparent px-1 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted focus:outline-none"
+                onPaste={(e) => {
+                  const files = Array.from(e.clipboardData.files);
+                  if (files.length > 0) {
+                    e.preventDefault();
+                    validateAndAddFiles(files);
+                  }
+                }}
+              />
+            </div>
             <button
               type="submit"
-              className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl bg-amber-600 text-soleur-text-on-accent transition-colors hover:bg-amber-500"
+              className="flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-lg bg-amber-600 text-soleur-text-on-accent transition-colors hover:bg-amber-500"
               aria-label="Send message"
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -590,7 +596,7 @@ export default function DashboardPage() {
         <button
           type="button"
           onClick={() => router.push("/dashboard/chat/new")}
-          className="mb-10 rounded-lg bg-gradient-to-r from-[#D4B36A] to-[#B8923E] px-6 py-3 text-sm font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90"
+          className="mb-10 rounded-lg bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-6 py-3 text-sm font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90"
         >
           New conversation
         </button>
@@ -709,7 +715,7 @@ export default function DashboardPage() {
         <button
           type="button"
           onClick={() => router.push("/dashboard/chat/new")}
-          className="min-h-[44px] rounded-lg bg-gradient-to-r from-[#D4B36A] to-[#B8923E] px-4 py-2 text-sm font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90"
+          className="min-h-[44px] rounded-lg bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-4 py-2 text-sm font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90"
         >
           + New conversation
         </button>
