@@ -214,6 +214,7 @@ export async function cronContentGeneratorHandler({
         runStartedAt,
         cronName: "cron-content-generator",
         stderrTail: spawnResult.stderrTail,
+        exitCode: spawnResult.exitCode,
       }),
     );
     await step.run("sentry-heartbeat", async () => {

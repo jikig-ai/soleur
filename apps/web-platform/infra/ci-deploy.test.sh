@@ -1183,6 +1183,59 @@ assert_tmpfs_flag "web-platform: docker run has --tmpfs /tmp:size=256m without n
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
 
 echo ""
+echo "--- CRON_WORKSPACE_ROOT on docker run (#4684/#4689) ---"
+
+assert_cron_workspace_root() {
+  # Verify every docker run line carries -e CRON_WORKSPACE_ROOT=/workspaces.
+  # Crons mkdtemp their ephemeral clone workspace under this root; in prod it
+  # must be the roomy /mnt/data/workspaces volume, NOT the 256 MB /tmp tmpfs,
+  # or a git clone of the ~100 MB soleur tree ENOSPCs. The assertion spans ALL
+  # docker run lines (canary AND prod) — scoping it to one line would let a
+  # canary/prod environment skew ship silently.
+  local description="$1"
+  local cmd="$2"
+
+  TOTAL=$((TOTAL + 1))
+
+  local output actual_exit
+  output=$(
+    export MOCK_DOCKER_MODE="apparmor-trace"
+    run_deploy "$cmd" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  local run_lines
+  run_lines=$(printf '%s\n' "$output" | grep "^DOCKER_RUN_ARGS:" || true)
+
+  if [[ -z "$run_lines" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (no DOCKER_RUN_ARGS lines found)"
+    echo "        output: $output"
+    return
+  fi
+
+  local all_have_root=true
+  while IFS= read -r line; do
+    if ! printf '%s\n' "$line" | grep -qF -- "-e CRON_WORKSPACE_ROOT=/workspaces"; then
+      all_have_root=false
+      break
+    fi
+  done <<< "$run_lines"
+
+  if [[ "$all_have_root" == "true" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $description"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (docker run missing -e CRON_WORKSPACE_ROOT=/workspaces)"
+    echo "        docker run lines:"
+    printf '%s\n' "$run_lines" | head -5 | sed 's/^/    /'
+  fi
+}
+
+assert_cron_workspace_root "web-platform: docker run has -e CRON_WORKSPACE_ROOT=/workspaces" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+
+echo ""
 echo "--- Bwrap canary sandbox check ---"
 
 assert_bwrap_canary_check() {

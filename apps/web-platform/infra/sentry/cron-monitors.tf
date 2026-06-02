@@ -45,12 +45,32 @@
 # lines 71-77), update this prose AND verify the field becomes load-
 # bearing for the new resource.
 
+# scheduled-terraform-drift is GHA-fired (.github/workflows/scheduled-terraform-drift.yml,
+# on.schedule "0 6,18 * * *"), so it is subject to GitHub Actions scheduled-
+# dispatch jitter — unlike the Inngest-fired siblings at 30 min. The original
+# 180-min margin was undersized: a 58-day `gh run list` survey (2026-06-02) of
+# 115 scheduled runs showed ~11% of deliveries exceeding 180 min, with an
+# observed MAX of 339 min late (the overnight 06:00 slot is the worst offender;
+# the 18:00 slot maxed at 215 min). That produced recurring false alarms — e.g.
+# the 2026-06-01 18:00 run landed at 21:34 UTC (214 min late): Sentry opened a
+# "missed check-in" at 21:00, then the late-but-successful check-in flipped the
+# monitor straight to "regressed" (recovery_threshold = 1). Widen to 480 (8h):
+# it covers the 339-min worst case with ~42% headroom and stays under the
+# 720-min inter-fire gap (06:00 -> 18:00), so a maximally-late run of one slot
+# is never misread as a missed run of the next — single-run sensitivity is
+# preserved. Precedent: GHA-fired siblings get jitter-absorbing margins
+# (scheduled_gh_pages_cert_state 240, daily; scheduled_realtime_probe 1440,
+# dropped-run #4189); 480 sits between them because this workflow's observed
+# max (339) exceeds gh-pages' tolerance but the failure mode is jitter, not a
+# whole-run drop. NB: the README "observed + 2x" heuristic is for run
+# DURATIONS (max_runtime), not scheduling jitter — applied to jitter it would
+# over-pad past the inter-fire interval and erode real-miss sensitivity.
 resource "sentry_cron_monitor" "scheduled_terraform_drift" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-terraform-drift"
   schedule                = { crontab = "0 6,18 * * *" }
-  checkin_margin_minutes  = 180
+  checkin_margin_minutes  = 480
   max_runtime_minutes     = 15
   failure_issue_threshold = 1
   recovery_threshold      = 1
