@@ -23,6 +23,14 @@ has three reported symptoms against `app.soleur.ai`:
    *"Couldn't share a key with this member. Please try again."*
 3. **CANNOT DISABLE** — once on, the toggle cannot be turned off; it snaps back
    on (revoke path appears broken).
+4. **FUTURE JOIN DATE** (reported after planning, addressed in /work) — the
+   "Added" column shows e.g. *"Today, 14:08"* at 09:20, a time in the future. The
+   `formatRelative` helper labelled any row created within the last 24h as
+   "Today, HH:MM"; a row created **yesterday** afternoon is ~19h old (inside the
+   24h window) so it rendered with yesterday's clock time under a "Today" label.
+   Fixed via calendar-day comparison (Today / Yesterday / Nd ago / absolute date;
+   future-dated rows show an absolute date). See
+   `components/settings/team-membership-list.tsx` + `test/team-membership-list.test.tsx`.
 
 Two recent merges are the immediate context and **are already on `origin/main`**
 (premise validated — see Research Reconciliation):
@@ -152,17 +160,17 @@ the arg fix alone makes the revoke path functional.
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (revoke args):** `DELETE /api/workspace/delegations` calls
+- [x] **AC1 (revoke args):** `DELETE /api/workspace/delegations` calls
   `service.rpc("revoke_byok_delegation", {...})` with exactly
   `{ p_delegation_id, p_actor_user_id, p_reason }` and **no** `p_revoked_by_user_id`
   / `p_revocation_reason` keys. Verified by a new vitest `toHaveBeenCalledWith`
   assertion + negative `not.toHaveProperty` on the two legacy names. Test is RED
   against current `route.ts`, GREEN after the fix.
-- [ ] **AC2 (revoke success flips state):** with the mocked RPC returning
+- [x] **AC2 (revoke success flips state):** with the mocked RPC returning
   `{ error: null }`, the route returns `{ ok: true }` (200) and the toggle's
   `setActive(false)` branch runs (component test: after a successful DELETE the
   `role="switch"` reads `aria-checked="false"`).
-- [ ] **AC3 (owner workspace convergence):** `resolveTeamMembershipPageData`
+- [x] **AC3 (owner workspace convergence):** `resolveTeamMembershipPageData`
   resolves the page `workspaceId` via `resolveCurrentWorkspaceId(user.id, …)`
   (the ADR-044 canonical resolver), not via unordered
   `workspaces.organization_id=orgId [0]`. Verified in
@@ -170,21 +178,21 @@ the arg fix alone makes the revoke path functional.
   `current_workspace_id` = shared workspace W but whose org also contains an
   older workspace V, the resolver returns `workspaceId === W`, and
   `delegationFromMe` is read against W.
-- [ ] **AC4 (fail-closed invariant preserved):** when `current_workspace_id`
+- [x] **AC4 (fail-closed invariant preserved):** when `current_workspace_id`
   resolution errors or the caller is not a member of the claimed workspace, the
   resolver falls back to the caller's **own solo** workspace (`user.id`), never a
   sibling — mirrors #4767 / `resolveActiveWorkspaceKbRoot` J5 self-heal. Covered
   by a resolver test asserting the solo fallback id.
-- [ ] **AC5 (grant↔read↔consume same id):** the workspace id passed to
+- [x] **AC5 (grant↔read↔consume same id):** the workspace id passed to
   `DelegationToggle.workspaceId` (→ grant POST body) equals the id the page reads
   `byok_delegations` from equals the id `resolveCurrentWorkspaceId` returns for
   the owner — asserted via the resolver test returning a single id used for all
   three. (Closes the symptom-1/symptom-2 divergence.)
-- [ ] **AC6 (no schema change):** `git diff --name-only origin/main...HEAD` shows
+- [x] **AC6 (no schema change):** `git diff --name-only origin/main...HEAD` shows
   **zero** files under `apps/web-platform/supabase/migrations/`.
-- [ ] **AC7 (no regression in grant):** existing `api-delegation-grant-route.test.ts`
+- [x] **AC7 (no regression in grant):** existing `api-delegation-grant-route.test.ts`
   and `delegation-toggle.test.tsx` continue to pass unchanged.
-- [ ] **AC8 (typecheck + lint):** `npm run --prefix apps/web-platform typecheck`
+- [x] **AC8 (typecheck + lint):** `npm run --prefix apps/web-platform typecheck`
   (= `tsc --noEmit`) and `npm run --prefix apps/web-platform lint` pass. NOTE:
   the repo has **no root `workspaces:` field**, so `-w apps/web-platform` does
   NOT work — CI uses `--prefix apps/web-platform` (verified against
