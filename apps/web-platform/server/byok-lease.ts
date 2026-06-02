@@ -89,8 +89,14 @@ function isCcOauthEnabled(): boolean {
  */
 export class OauthNotYetPermittedError extends Error {
   constructor() {
+    // Date derived from the single-source constant so the message can never
+    // drift from the gate it describes.
     super(
-      "Claude Code subscription auth is not permitted before 2026-06-15",
+      `Claude Code subscription auth is not permitted before ${new Date(
+        CC_OAUTH_EFFECTIVE_DATE,
+      )
+        .toISOString()
+        .slice(0, 10)}`,
     );
     this.name = "OauthNotYetPermittedError";
   }
@@ -263,6 +269,11 @@ export function mapByokLeaseCauseToErrorCode(
       // feat-operator-cc-oauth FR5 — credit/rate-limit exhaustion on a
       // subscription (oauth_token) run is distinct from key_invalid so the
       // UI renders "subscription limit reached" copy, not a re-paste prompt.
+      // NO PRODUCER YET: nothing constructs ByokLeaseError{cause:
+      // "subscription_limit"} today — the SDK credit-signal classifier lands
+      // in Phase 5 (plan §Phase 5, "defer to first real hit"). The
+      // cause→code→WS→UI render path is pre-wired so that hit needs no
+      // type/render change.
       return "subscription_limit";
     case "escape":
       return undefined;
@@ -343,10 +354,10 @@ interface EncryptedRow {
 const als = new AsyncLocalStorage<LeaseSlot>();
 
 /**
- * Build a `ByokLease` whose `getApiKey()` resolves the plaintext from
- * the slot stored in ALS.
+ * Build a `ByokLease` whose accessors (`getRestApiKey` /
+ * `getAgentCredential`) resolve the plaintext from the slot stored in ALS.
  *
- * Escape detection: each call to `getApiKey()` re-reads the current ALS
+ * Escape detection: each accessor call re-reads the current ALS
  * context and verifies it is the same slot the lease was bound to. A
  * captured reference outside the original scope sees a different (or
  * `undefined`) ALS context and throws.
@@ -561,7 +572,7 @@ export async function runWithByokLease<T>(
  * Get the active BYOK lease for the current async context, or `null`
  * outside any scope. Does not throw.
  *
- * The returned lease's `getApiKey()` performs the same escape check as
+ * The returned lease's accessors perform the same escape check as
  * the one passed to `fn`, so capturing the return value and using it
  * later is safe within the same scope and unsafe outside it (per the
  * function-not-property contract).

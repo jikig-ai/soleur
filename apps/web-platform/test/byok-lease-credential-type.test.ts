@@ -154,6 +154,18 @@ describe("getAgentCredential — oauth preference + gates", () => {
     ).rejects.toBeInstanceOf(OauthNotYetPermittedError);
   });
 
+  it("AC3 boundary: exactly at the effective instant the oauth credential is permitted (gate is `<`, not `<=`)", async () => {
+    process.env.CC_OAUTH_ENABLED = "1";
+    vi.spyOn(Date, "now").mockReturnValue(CC_OAUTH_EFFECTIVE_DATE);
+    seedProvider("anthropic_oauth", OAUTH_PLAINTEXT, OPERATOR);
+
+    const cred = await runWithByokLease(
+      { workspaceContextUserId: OPERATOR, keyOwnerUserId: OPERATOR },
+      (lease) => Promise.resolve(lease.getAgentCredential()),
+    );
+    expect(cred).toEqual({ value: OAUTH_PLAINTEXT, scheme: "oauth_token" });
+  });
+
   it("AC4: owner mismatch on the oauth read throws OauthDelegationForbiddenError", async () => {
     process.env.CC_OAUTH_ENABLED = "1";
     vi.spyOn(Date, "now").mockReturnValue(AFTER_DATE);

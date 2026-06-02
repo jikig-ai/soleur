@@ -22,6 +22,7 @@ export default async function SettingsPage() {
       .from("api_keys")
       .select("provider, is_valid, updated_at")
       .eq("user_id", user.id)
+      .eq("provider", "anthropic")
       .eq("is_valid", true)
       .limit(1)
       .single(),

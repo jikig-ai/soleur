@@ -79,6 +79,11 @@ Triad (architecture-strategist + data-integrity-guardian + security-sentinel) re
 the operator believes they're on the subscription (both-keys trap).
 **If this leaks:** the stored `CLAUDE_CODE_OAUTH_TOKEN` (tied to a personal Claude account,
 un-scopable) — same encryption surface as BYOK keys (HKDF + AES-256-GCM, zeroized).
+**On down-migration:** `096…down.sql` DELETEs the operator's `anthropic_oauth`
+row (load-bearing — required before the CHECK can be restored). This destroys
+the stored subscription token, but it is **operator-only and recoverable** by
+re-running `claude setup-token` + re-paste; scoped-out as an acknowledged
+rollback cost, not a silent data-loss.
 **Brand-survival threshold:** single-user incident. CPO sign-off carried from brainstorm;
 `user-impact-reviewer` runs at PR review.
 
