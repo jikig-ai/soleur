@@ -318,24 +318,17 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         if (!fixture) throw new Error("fixture build failed");
         const [alice, bob] = fixture.workspace.members;
 
-        // Caller must be an owner; mig 067 enforces this via auth.uid().
-        // Service-role call: we set request.jwt.claims to Alice's sub so
-        // auth.uid() inside the SECURITY DEFINER RPC resolves correctly.
-        // (Service-role bypasses RLS for the SELECT/DELETE but the RPC
-        // body's `IF v_caller_user_id IS NULL THEN RAISE` check fires
-        // on auth.uid() = NULL, so the claim header is load-bearing.)
-        const url = requireEnv("SUPABASE_URL");
-        const anonKey = requireEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY");
-        const { mintFounderJwt } = await import("@/lib/supabase/tenant");
-        const aliceMint = await mintFounderJwt(alice.userId);
-        const aliceClient = createClient(url, anonKey, {
-          global: { headers: { Authorization: `Bearer ${aliceMint.jwt}` } },
-          auth: { persistSession: false, autoRefreshToken: false },
-        });
-
-        const { error: rpcErr } = await aliceClient.rpc("remove_workspace_member", {
+        // mig 094: remove_workspace_member is service_role-only (the
+        // authenticated EXECUTE grant was REVOKED to close the forgeable-
+        // override privilege-escalation class) and resolves the caller via
+        // COALESCE(p_caller_user_id, auth.uid()). The production wrapper
+        // (server/workspace-membership.ts removeWorkspaceMember) invokes it via
+        // the service client and forwards the route-verified owner id as
+        // p_caller_user_id — mirror that exact call shape here.
+        const { error: rpcErr } = await service.rpc("remove_workspace_member", {
           p_workspace_id: fixture.workspace.workspaceId,
           p_user_id: bob.userId,
+          p_caller_user_id: alice.userId,
         });
         expect(rpcErr, `remove_workspace_member failed: ${rpcErr?.message}`).toBeNull();
 
