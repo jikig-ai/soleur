@@ -74,11 +74,35 @@ a build. Both halves were endorsed by the operator.
 
 Source pricing (fetched 2026-06-02): Resend Inbound included on all plans incl. free (3k emails/mo, no inbound-specific fee); Cloudflare Email Routing free on all plans, Email Workers on standard Workers free tier; Postmark DMARC free weekly digest, $14/mo/domain premium dashboard.
 
+## Bus Validation Verdict (business-validator, 2026-06-02)
+
+**FAIL as a distinct platform capability now; CONDITIONAL PASS for a narrow deferred slice
+(read-only inbound notice triage) once a named second consumer exists.**
+
+- Zero customer-demand signal: the validated beachhead (non-technical solo founders) never
+  raised email triage in interviews. The capability profile matches the *operator's* own
+  inbox (registrars, abuse, DMARC, legal), not a customer's — the "build for ourselves and
+  call it a platform capability" trap.
+- Hard design cap (not just a low score): inbound free-text email is a prompt-injection
+  surface and the platform's injection defense (#4671) is itself an unsolved Post-MVP bet;
+  an LLM can never be system-of-record for a statutory clock (DSAR Art.12 / breach Art.33).
+- Even the narrow operator need is better served by a forward-to-human-inbox rule than an
+  LLM classifier (near-zero cost/risk).
+- **Three conditions, all required, to flip FAIL → CONDITIONAL PASS:** (1) a named second
+  consumer from the #1439 founder-recruitment cohort asks for an email-only customer-facing
+  action; (2) scope = one concrete action surfaced into the existing conversation inbox
+  (3.3 / #1690), not a general bus; (3) statutory-class mail never reaches the LLM act path.
+
+**Outcome:** Do not open a roadmap row. Log as a Post-MVP bet adjacent to CP1/CP4; re-validate
+after the #1439 cohort, gated on the three conditions.
+
 ## Open Questions
 
-1. Which free aggregator? (Recommended: Postmark DMARC. Alternatives: dmarcian, URIports, Valimail — all have free tiers.) Operator picks; signup emails digests to the operator, so it's operator-owned.
-2. Does the bus validation (K3) pass? If yes, what is the concrete first/second consumer that justifies the build?
-3. (Deferred to any future build) parse-and-discard vs. retain raw DMARC reports — CLO prefers store only the failure delta.
+1. Which free aggregator? (Recommended: Postmark DMARC. Alternatives: dmarcian, URIports,
+   Valimail — all have free tiers.) Operator chose to proceed with Postmark DMARC; signup is
+   operator-owned (digests are emailed to the operator).
+2. (Deferred to any future build) parse-and-discard vs. retain raw DMARC reports — CLO prefers
+   store only the failure delta.
 
 ## Domain Assessments
 
