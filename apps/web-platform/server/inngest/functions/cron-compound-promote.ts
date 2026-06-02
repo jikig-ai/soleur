@@ -19,7 +19,14 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { Octokit } from "@octokit/core";
@@ -220,7 +227,12 @@ async function applyDiffToWorkspace(
   diff: string,
   repoRoot: string,
 ): Promise<boolean> {
-  const diffFile = join(tmpdir(), `compound-promote-diff-${Date.now()}.patch`);
+  // Write the patch inside a per-invocation private temp directory (mode 0700
+  // via mkdtemp) rather than a predictable `tmpdir()/...-${Date.now()}.patch`
+  // name in the world-readable OS temp dir. A guessable name in a shared dir is
+  // pre-creatable/symlinkable by another local user (js/insecure-temporary-file).
+  const tmpDir = await mkdtemp(join(tmpdir(), "compound-promote-"));
+  const diffFile = join(tmpDir, "diff.patch");
   await writeFile(diffFile, diff);
   try {
     const check = await spawnGit(["apply", "--check", diffFile], {
@@ -230,7 +242,7 @@ async function applyDiffToWorkspace(
     await spawnGit(["apply", diffFile], { cwd: repoRoot });
     return true;
   } finally {
-    await rm(diffFile, { force: true }).catch(() => {});
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -561,13 +573,15 @@ export async function cronCompoundPromoteHandler({
           return;
         }
 
-        // Audit log row
+        // Audit log row — atomic O_APPEND write instead of existsSync→read→
+        // concat→writeFile, which CodeQL flags as a TOCTOU race
+        // (js/file-system-race: the file can change between the existence check
+        // and the rewrite, clobbering a concurrent append). promotion-log.md is
+        // repo-committed so it always exists at runtime; appendFile also creates
+        // it if absent, so the prior existsSync guard was redundant.
         const logPath = join(repoRoot, "knowledge-base", "project", "learnings", "promotion-log.md");
-        if (existsSync(logPath)) {
-          const existing = await readFile(logPath, "utf-8");
-          const row = `\n| ${dateSuffix} | ${clusterHash} | ${cluster.target_path} | ${cluster.source_learnings.length} | pending | ${cluster.tier} | (PR pending) |\n`;
-          await writeFile(logPath, existing + row);
-        }
+        const row = `\n| ${dateSuffix} | ${clusterHash} | ${cluster.target_path} | ${cluster.source_learnings.length} | pending | ${cluster.tier} | (PR pending) |\n`;
+        await appendFile(logPath, row);
 
         await spawnGitChecked(["add", cluster.target_path, "knowledge-base/project/learnings/promotion-log.md"], { cwd: repoRoot });
         await spawnGitChecked(["config", "user.name", "github-actions[bot]"], { cwd: repoRoot });
