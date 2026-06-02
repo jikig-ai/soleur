@@ -143,51 +143,51 @@ API routes, no .sql), so preflight Check 6 does not require a sign-off bullet.`
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (fixture green — the gate):** `bash plugins/soleur/test/ship-phase-7-poll-fixtures.sh`
+- [x] **AC1 (fixture green — the gate):** `bash plugins/soleur/test/ship-phase-7-poll-fixtures.sh`
       (or, after the rename in AC6, `bash plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh`)
       exits 0 and prints `ship-phase-7 fixture: N pass, 0 fail`. This is currently RED on
       `origin/main` — the PR turns it green. Capture the full pass/fail line in the PR body.
-- [ ] **AC2 (extractor fix):** the `extract_block` awk in the fixture anchors on the full
+- [x] **AC2 (extractor fix):** the `extract_block` awk in the fixture anchors on the full
       HTML-comment fence form. `awk` extraction of the canonical block stops at the real
       `:end` fence (ship/SKILL.md L1232) — i.e. the extracted block ends with `done` and
       does NOT contain the literal string `**If merged`. Verify:
       `extract_block "$SKILL" | grep -c '\*\*If merged'` returns `0`.
-- [ ] **AC3 (escape-hatch text present, both blocks):** the extended `[ship.phase7.behind_exhausted]`
+- [x] **AC3 (escape-hatch text present, both blocks):** the extended `[ship.phase7.behind_exhausted]`
       guidance in BOTH ship Phase 7 and merge-pr Phase 5.2 names: `--admin`, the
       zero-conflict-surface caveat, the local-sync precondition
       (`git fetch` + `git reset --hard origin/`), and the `Base branch was modified`
       retry note. Verify each token appears in each block's extracted text.
-- [ ] **AC4 (mirror byte-parity of the warning string):** the new/extended warning
+- [x] **AC4 (mirror byte-parity of the warning string):** the new/extended warning
       string is byte-identical between ship L1222-region and merge-pr L342-region.
       Verify: extract both blocks, isolate the `behind_exhausted` echo line(s), `diff`
       them — empty diff. (The blocks differ elsewhere by design; only the shared
       warning-emit text must match.)
-- [ ] **AC5 (fixture mirror-parity tokens preserved):** the fixture's mirror token list
+- [x] **AC5 (fixture mirror-parity tokens preserved):** the fixture's mirror token list
       (current L87-90) still passes — `[ship.phase7.behind_exhausted]`, `MAX_BEHIND_SYNCS=6`,
       `mergeStateStatus`, `bucket == "fail"`, `[ship.phase7.required_failed]`,
       `[ship.phase7.dirty]`, `*DIRTY*`, `mapfile -t REQUIRED_CHECKS`, `is-inside-work-tree`
       all present in the extracted mirror. (Covered by AC1, called out separately because
       it's the parity invariant the change must not regress.)
-- [ ] **AC6 (orphan fixed — CI now runs it):** the fixture file is renamed to
+- [x] **AC6 (orphan fixed — CI now runs it):** the fixture file is renamed to
       `plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh` so `scripts/test-all.sh`'s
       `plugins/soleur/test/*.test.sh` glob discovers it. Verify both:
       `git ls-files plugins/soleur/test/ | grep -c 'ship-phase-7-poll-fixtures.test.sh'`
       returns `1`, AND a dry-run of the glob includes it:
       `for f in plugins/soleur/test/*.test.sh; do echo "$f"; done | grep -c 'ship-phase-7-poll-fixtures.test.sh'`
       returns `1`.
-- [ ] **AC7 (rename references swept):** the three SKILL.md references to the old fixture
+- [x] **AC7 (rename references swept):** the three SKILL.md references to the old fixture
       path are updated to the new name. Verify
       `git grep -n 'ship-phase-7-poll-fixtures\.sh\b' plugins/soleur/skills/` returns ZERO
       hits (was: ship/SKILL.md L1114, merge-pr/SKILL.md L277 + L373). Also the fixture's
       own self-referencing `Run via:` header comment (current L18) points at the new name.
-- [ ] **AC8 (Scenario 3 still matches):** the `behind_exhausted` warning still contains
+- [x] **AC8 (Scenario 3 still matches):** the `behind_exhausted` warning still contains
       the substring `BEHIND budget exhausted after 6 auto-syncs` (so Scenario 3's
       `must_match` regex holds) OR Scenario 3's `must_match` is updated in the same commit
       to match the new wording. Whichever path is taken, AC1 (green) covers the outcome.
-- [ ] **AC9 (no version-file bump):** no edit to `plugins/soleur/plugin.json` version or
+- [x] **AC9 (no version-file bump):** no edit to `plugins/soleur/plugin.json` version or
       `marketplace.json` (frozen sentinels). PR body carries a `## Changelog` section and
       a `semver:patch` label (doc/behaviour-clarification — no new component).
-- [ ] **AC10 (issue link):** PR body uses `Closes #4790` (this is a normal docs PR with no
+- [x] **AC10 (issue link):** PR body uses `Closes #4790` (this is a normal docs PR with no
       post-merge operator action, so `Closes` is correct — not the `Ref #N`
       ops-remediation exception).
 

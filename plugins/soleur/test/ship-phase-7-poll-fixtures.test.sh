@@ -15,7 +15,7 @@
 # Synthesized-only — no live `gh` calls, no network, no real PR
 # (per cq-test-fixtures-synthesized-only). Run via:
 #
-#   bash plugins/soleur/test/ship-phase-7-poll-fixtures.sh
+#   bash plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh
 
 set -uo pipefail
 
