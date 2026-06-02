@@ -16,7 +16,7 @@ lane: cross-domain
 
 ## Phase 1 — RED (failing test first)
 
-- [ ] 1.1 Add case to `infra-config-apply.test.sh`: one env var unset → assert exit 1, 7 files written with correct content, state `files_written==7`/`files_failed==1`, missing file `status:"failed", reason:"missing_env"`.
+- [ ] 1.1 Add case to `infra-config-apply.test.sh`: one env var unset → assert exit 1, 7 files written with correct content, state `files_written==7`/`files_failed==1`/`files_total==8`, missing file `status:"failed", reason:"missing_env"`.
 - [ ] 1.2 (Optional) Add happy-path-unchanged case (8/0/exit 0).
 - [ ] 1.3 Run test → confirm new case RED-fails against current upfront-gate behavior.
 
@@ -25,11 +25,12 @@ lane: cross-domain
 - [ ] 2.1 Delete upfront validation loop (`infra-config-apply.sh:52-60`).
 - [ ] 2.2 Add per-file `missing_env` arm at top of write-loop body (before `mktemp`): record failed file, `continue`, increment `FAIL_COUNT`.
 - [ ] 2.3 Confirm `EXIT_CODE=1` when `FAIL_COUNT>0` (existing logic unchanged).
-- [ ] 2.4 Run handler test → all cases pass (GREEN).
+- [ ] 2.4 Emit `"files_total":$TOTAL_COUNT` into state JSON success-path printf (line 133) + `"files_total":0` into EXIT-trap printf (line 48). (TOTAL_COUNT computed at line 62 but currently not emitted.)
+- [ ] 2.5 Run handler test → all cases pass (GREEN), state JSON carries `files_total` in every case.
 
 ## Phase 3 — GREEN: CI verify-step strengthening
 
-- [ ] 3.1 In `apply-deploy-pipeline-fix.yml` "Verify infra-config apply succeeded": parse `.files_failed`/`.files_written`/`.exit_code`; fail when `files_failed != 0`.
+- [ ] 3.1 In `apply-deploy-pipeline-fix.yml` "Verify infra-config apply succeeded": parse `.files_failed`/`.files_written`/`.files_total`/`.exit_code`; fail when `files_failed != 0` OR `files_written != files_total`. Never hardcode 8.
 - [ ] 3.2 Replace unconditional 404-pass with bounded first-bootstrap tolerance (explicit `workflow_dispatch`/input signal); persistent 404 on `push` fails. Route untrusted input via `env:`.
 - [ ] 3.3 Add final post-apply assertion: `GET /hooks/deploy-status` → `jq -e '.journald_storage.persistent == true'` (HMAC + CF-Access headers), gated `if: success()`.
 - [ ] 3.4 Add `gh issue close 4804 --reason completed` step `if: success()` after 3.3 (or document `/soleur:ship` handles it).

@@ -14,6 +14,45 @@ emoji: 🐛
 
 > Spec lacks valid `lane:` (no spec.md for this branch) — defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-02
+**Sections enhanced:** Acceptance Criteria (AC5, AC11), Phase 2, Risks/Sharp Edges, Network-Outage finding
+**Research passes:** verify-the-negative (4.45), precedent-diff (4.4), network-outage gate (4.5), halt gates (4.6/4.7/4.8 all PASS)
+
+### Key Improvements
+
+1. **`files_total` must be emitted into the state JSON (NEW Phase 2 step).** Verified that
+   `infra-config-apply.sh` computes `TOTAL_COUNT=${#FILE_MAP[@]}` (line 62) but does **NOT** emit
+   it into the state JSON (only `files_written` + `files_failed` at line 133). The CI step
+   therefore cannot assert `files_written == TOTAL` without either hardcoding `8` (which silently
+   drifts when FILE_MAP grows — the exact bug class that caused the freeze) or adding the field.
+   Phase 2 now adds a `"files_total":%d` field; AC5 asserts `files_written == files_total &&
+   files_failed == 0`, self-contained and drift-proof.
+2. **`files_written + files_failed == files_total` is an invariant** after the Phase 2 change:
+   every FILE_MAP entry hits exactly one of three `continue`/increment arms (written, failed-base64,
+   failed-visudo) plus the new failed-missing_env arm. Verified loop structure at lines 66-116.
+3. **AC11 trigger is definitive, not hedged.** Verified the `apply-deploy-pipeline-fix.yml`
+   `paths:` filter (lines 48-49) includes `infra-config-apply.sh` AND `push-infra-config.sh`.
+   Since this PR edits `infra-config-apply.sh`, the merge **will** trigger the auto-apply. (The
+   workflow file `apply-deploy-pipeline-fix.yml` itself is NOT in its own `paths:` filter — so a
+   workflow-only edit would not self-trigger, but that's moot here.)
+4. **Network-Outage gate (4.5): L3 firewall NOT applicable to this resource.** Verified
+   `terraform_data.deploy_pipeline_fix` uses **`provisioner "local-exec"` only** (server.tf:332) —
+   the SSH `connection`/`file`/`remote-exec` provisioners were removed in #3756. So the
+   implicit-SSH-dependency trigger does NOT fire; the firewall/connection-reset keywords in
+   Hypotheses are correctly classified as **ruled-out** (the failure is an application-layer
+   `exit 1`, not connectivity). Telemetry emitted for the keyword match.
+
+### New Considerations Discovered
+
+- The `push-infra-config.sh`-cannot-read-async-exit claim is **confirmed** by code: webhook
+  `success-http-response-code: 202` (hooks.json.tmpl:34) + async `systemd-run --on-active=3s`
+  self-restart (infra-config-apply.sh:155). The assertion must live in CI, not the provisioner.
+- `cat-infra-config-state.sh` echoes the state file verbatim, so any field added to the state
+  JSON (e.g., `files_total`) is automatically exposed at `/hooks/infra-config-status` — no change
+  to the reporter script needed.
+
 ## Overview
 
 `terraform_data.deploy_pipeline_fix` reports **success on every merge**, but a subset of the
@@ -140,11 +179,19 @@ script, and a CI workflow.
   `grep -c infra-config-apply.test.sh .github/workflows/infra-validation.yml` returns 0 today,
   must return ≥1 after). Verify: run `bash apps/web-platform/infra/infra-config-apply.test.sh`
   locally → all cases pass.
-- [ ] **AC5 — CI verify step asserts the full landed-files invariant.** The "Verify infra-config
-  apply succeeded" step in `apply-deploy-pipeline-fix.yml` asserts `files_failed == 0` AND
-  `files_written == <TOTAL>` (parsed from the `infra-config-status` JSON via `jq`), not just
-  `exit_code == 0`. Verify: the step's bash extracts `.files_failed` and `.files_written` and
-  fails (`exit 1`) when `files_failed != 0` or `files_written != TOTAL`.
+- [ ] **AC5 — CI verify step asserts the full landed-files invariant.** Two parts:
+  - **AC5a (handler):** `infra-config-apply.sh` emits a `"files_total":%d` field (value
+    `TOTAL_COUNT`) into the state JSON in BOTH the success path (line 133) and the EXIT-trap
+    "unhandled" path (line 48, value 0 or TOTAL — see Phase 2). Today only `files_written` +
+    `files_failed` are emitted; `TOTAL_COUNT` is computed (line 62) but never written. Verify:
+    `grep -c 'files_total' apps/web-platform/infra/infra-config-apply.sh` ≥ 1, and the handler
+    test asserts the field appears in the state JSON.
+  - **AC5b (CI):** The "Verify infra-config apply succeeded" step asserts `files_failed == 0` AND
+    `files_written == files_total` (both parsed from the `infra-config-status` JSON via `jq`), not
+    just `exit_code == 0`. Verify: the step extracts `.files_failed`, `.files_written`,
+    `.files_total` and fails (`exit 1`) when `files_failed != 0` OR `files_written != files_total`.
+    Do NOT hardcode `8` — derive the total from the JSON so the gate survives future FILE_MAP
+    additions (the exact drift class that caused this bug).
 - [ ] **AC6 — 404 no longer silently passes after first apply.** The unconditional
   "tolerate 404 — host may predate this feature" branch is replaced with a bounded one-time
   tolerance: a 404 is tolerated **only** when a documented first-bootstrap marker applies
@@ -167,14 +214,13 @@ script, and a CI workflow.
 
 ### Post-merge (operator/automated)
 
-- [ ] **AC11 — Auto-apply runs and self-heals.** Merging this PR (which touches
-  `infra-config-apply.sh` + `apply-deploy-pipeline-fix.yml` + `push-infra-config.sh`? see Files)
-  triggers `apply-deploy-pipeline-fix.yml` on push to main (path filter already covers
-  `infra-config-apply.sh` and `apply-deploy-pipeline-fix.yml` is the workflow itself — confirm
-  the `paths:` filter triggers; if `apply-deploy-pipeline-fix.yml` edits alone don't trigger it,
-  the `infra-config-apply.sh` edit does). The apply pushes the corrected handler + the current
-  `hooks.json` to the host. **Automation:** fully automated via the existing `on: push` workflow
-  — no operator SSH, no manual terraform.
+- [ ] **AC11 — Auto-apply runs and self-heals.** Merging this PR triggers
+  `apply-deploy-pipeline-fix.yml` on push to main: **verified** the `paths:` filter (lines 48-49)
+  includes `apps/web-platform/infra/infra-config-apply.sh`, which this PR edits, so the trigger is
+  definitive. The apply pushes the corrected handler + the current `hooks.json` to the host (the
+  new hooks.json lands even if one env var were missing, self-healing the env-mapping).
+  **Automation:** fully automated via the existing `on: push` workflow — no operator SSH, no
+  manual terraform.
 - [ ] **AC12 — Verification via no-SSH surface.** After the auto-apply, the strengthened verify
   step asserts `files_written == TOTAL && files_failed == 0`. Then confirm the original symptom
   is cleared: `GET /hooks/deploy-status` returns `.journald_storage.persistent == true` (the
@@ -214,7 +260,7 @@ script, and a CI workflow.
   EXCEPT one (e.g., unset `CAT_INFRA_CONFIG_STATE_SH_B64`), assert:
   - exit code 1,
   - 7 destination files written with correct decoded content,
-  - state JSON `files_written == 7`, `files_failed == 1`,
+  - state JSON `files_written == 7`, `files_failed == 1`, `files_total == 8`,
   - the missing file's entry has `status:"failed", reason:"missing_env"`.
   This test RED-fails against the current upfront-gate behavior (current behavior: 0 files
   written, exit 1, no per-file JSON for the others).
@@ -238,15 +284,25 @@ Files: `apps/web-platform/infra/infra-config-apply.sh`
   (placed at the top of the loop body, before `mktemp`, so no temp file is created for the
   missing file).
 - [ ] Confirm `EXIT_CODE=1` when `FAIL_COUNT>0` (existing lines 122-125, unchanged).
-- [ ] Run the handler test → all cases (RED from Phase 1 + existing) pass.
+- [ ] **Emit `files_total` into the state JSON.** Add `"files_total":%d` to the success-path
+  `printf` (line 133) with value `$TOTAL_COUNT`, and add it to the EXIT-trap "unhandled" `printf`
+  (line 48) with value `0` (the trap fires before any count is known; `files_written==0` +
+  `files_total==0` is a consistent "nothing happened" sentinel — or use `$TOTAL_COUNT` if it is
+  in scope at trap time; verify scope and pick the consistent form). `cat-infra-config-state.sh`
+  echoes the state file verbatim, so the field is automatically exposed at
+  `/hooks/infra-config-status` with no reporter change. This makes AC5b's
+  `files_written == files_total` check self-contained.
+- [ ] Run the handler test → all cases (RED from Phase 1 + existing) pass, and the state JSON in
+  every case carries `files_total`.
 
 ### Phase 3 — GREEN: CI verify-step strengthening (Defects 1 + 2)
 
 Files: `.github/workflows/apply-deploy-pipeline-fix.yml`
 
 - [ ] In the "Verify infra-config apply succeeded" step, after parsing the JSON, extract
-  `.files_failed` and `.files_written` (and `.exit_code`) via `jq`. Fail the step when
-  `files_failed != 0`. (Keep the `exit_code` check as a belt-and-suspenders.)
+  `.files_failed`, `.files_written`, `.files_total` (and `.exit_code`) via `jq`. Fail the step
+  when `files_failed != 0` OR `files_written != files_total`. (Keep the `exit_code` check as a
+  belt-and-suspenders.) Derive total from `.files_total` — never hardcode `8`.
 - [ ] Replace the unconditional 404-tolerance (`break` + "Tolerating missing endpoint" pass) with
   a bounded one: tolerate 404 ONLY on an explicit first-bootstrap signal (e.g.,
   `github.event_name == 'workflow_dispatch'` with a `reason` input, OR a dedicated boolean input
@@ -333,6 +389,29 @@ completeness the **ruled-out** hypotheses:
   `hooks.json.tmpl:34` + the `systemd-run --on-active=3s` self-restart making the script
   asynchronous to the HTTP response.
 
+### Network-Outage Deep-Dive (gate fired on keyword match; resolved NOT-APPLICABLE)
+
+The deepen-plan Phase 4.5 network-outage gate fired because the Hypotheses section contains the
+substrings `firewall` and `connection reset`. Layer-by-layer verification:
+
+- **L3 firewall allow-list:** NOT APPLICABLE. `terraform_data.deploy_pipeline_fix` uses
+  `provisioner "local-exec"` **only** (verified `server.tf:332`); the SSH
+  `connection`/`file`/`remote-exec` provisioners were removed in #3756. There is no SSH
+  apply-time dependency for this resource, so the implicit-SSH-dependency trigger
+  (`provisioner "remote-exec"` / `connection { type = "ssh" }`) does NOT fire. Per
+  `hr-ssh-diagnosis-verify-firewall`, no firewall/egress-IP check is required because no SSH
+  handshake occurs.
+- **L3 DNS/routing:** the push reaches the host via the CF Tunnel HTTPS endpoint
+  (`deploy.soleur.ai/hooks/infra-config`); evidence shows HTTP **202** was returned, so DNS +
+  routing + tunnel were healthy at the time of the freeze.
+- **L7 TLS/proxy:** CF Access + HMAC both validated (a 401/403 would have made
+  `push-infra-config.sh` exit 1; it saw 202). No proxy-layer fault.
+- **L7 application:** **the actual fault** — the host script's internal all-or-nothing `exit 1`
+  wrote nothing, masked by the trigger-and-forget 202. This is the plan's primary hypothesis.
+
+Conclusion: the failure is purely application-layer; the network keywords are ruled-out, not
+load-bearing. No firewall remediation is part of this plan.
+
 ## Domain Review
 
 **Domains relevant:** none
@@ -393,10 +472,11 @@ discoverability_test:
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder
   text, or omits the threshold will fail `deepen-plan` Phase 4.6. (Filled above: threshold `none`
   with a non-empty scope-out reason.)
-- The CI Verify step must derive `TOTAL` from `FILE_MAP` semantics, not a hardcoded literal that
-  silently drifts when a future file is added to FILE_MAP. Prefer asserting `files_failed == 0`
-  (invariant regardless of count) as the load-bearing gate; treat `files_written == TOTAL` as a
-  secondary check only if the script emits a total field.
+- The CI Verify step must derive the total from the state JSON's `files_total` field (emitted by
+  the handler per Phase 2), NOT from a hardcoded literal `8` that silently drifts when a future
+  file is added to FILE_MAP — that drift is the exact bug class this PR fixes. Both
+  `files_failed == 0` AND `files_written == files_total` are load-bearing; `files_failed == 0`
+  alone would pass if a future file were silently dropped from the loop without being counted.
 - When editing the 404-tolerance, the untrusted `reason` / input must route through an `env:` var
   before reaching `run:` (workflow injection-prevention convention, header lines 30-33).
 - The new `missing_env` arm must be placed BEFORE `mktemp` in the loop body so no orphan temp file
