@@ -30,6 +30,7 @@ vi.mock("@/lib/feature-flags/server", () => ({
 }));
 vi.mock("@/server/workspace-resolver", () => ({
   resolveCurrentOrganizationId: vi.fn().mockResolvedValue(null),
+  resolveCurrentWorkspaceId: vi.fn().mockImplementation((userId: string) => Promise.resolve(userId)),
 }));
 vi.mock("@/server/byok-delegation-ui-resolver", () => ({
   resolveGranteeDelegation: vi.fn().mockResolvedValue(null),

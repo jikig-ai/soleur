@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-05-05
-last_reviewed: 2026-05-05
+last_reviewed: 2026-06-01
 review_cadence: quarterly
 owner: CMO
 depends_on:
