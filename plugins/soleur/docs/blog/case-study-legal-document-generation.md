@@ -2,6 +2,7 @@
 title: "How We Generated 9 Legal Documents in Days, Not Months"
 date: 2026-03-10
 description: "AI agents produced 9 legal documents -- Terms, Privacy Policy, GDPR, CLAs -- totaling 17,761 words with dual-jurisdiction coverage in days, not months."
+ogImage: "blog/og-case-study-legal-documents.png"
 tags:
   - case-study
   - legal
