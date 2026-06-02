@@ -51,6 +51,11 @@ export function DelegationAcceptanceModal({
       });
       if (res.ok) {
         onAccepted();
+      } else {
+        reportSilentFallback(
+          new Error(`delegation accept returned ${res.status}`),
+          { feature: "byok-delegation", op: "accept" },
+        );
       }
     } catch (err) {
       reportSilentFallback(err, {
@@ -72,6 +77,11 @@ export function DelegationAcceptanceModal({
       });
       if (res.ok) {
         onDeclined();
+      } else {
+        reportSilentFallback(
+          new Error(`delegation decline returned ${res.status}`),
+          { feature: "byok-delegation", op: "decline" },
+        );
       }
     } catch (err) {
       reportSilentFallback(err, {
@@ -95,6 +105,11 @@ export function DelegationAcceptanceModal({
       });
       if (res.ok) {
         onWithdrawn?.();
+      } else {
+        reportSilentFallback(
+          new Error(`delegation withdraw returned ${res.status}`),
+          { feature: "byok-delegation", op: "withdraw" },
+        );
       }
     } catch (err) {
       reportSilentFallback(err, {
@@ -201,7 +216,7 @@ export function DelegationAcceptanceModal({
                 type="button"
                 onClick={handleAccept}
                 disabled={loading || !telemetryAck}
-                className="flex-1 rounded-lg bg-soleur-accent-gold-fg px-4 py-2 text-sm font-medium text-white hover:bg-soleur-accent-gold-fg/90 disabled:opacity-50"
+                className="flex-1 rounded-lg bg-soleur-accent-gold-fg px-4 py-2 text-sm font-medium text-soleur-bg-surface-1 hover:opacity-90 disabled:opacity-50"
               >
                 {loading ? "Processing..." : "I accept"}
               </button>

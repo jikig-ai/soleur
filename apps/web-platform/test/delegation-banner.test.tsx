@@ -20,7 +20,6 @@ const baseProps = {
   todaySpentCents: 0,
   dailyCapCents: 2000,
   hourlyCapCents: 500,
-  pending: true,
   delegationId: "deleg-1",
   sideLetterVersion: "1.0.0",
   alreadyAccepted: false,
@@ -111,7 +110,6 @@ describe("DelegationBanner — pending (never-accepted) variant", () => {
 describe("DelegationBanner — active (alreadyAccepted) variant", () => {
   const activeProps = {
     ...baseProps,
-    pending: false,
     alreadyAccepted: true,
     todaySpentCents: 123,
   };
@@ -143,7 +141,6 @@ describe("DelegationBanner — withdrawn (3rd state) variant", () => {
     render(
       <DelegationBanner
         {...baseProps}
-        pending={false}
         alreadyAccepted={true}
         withdrawn={true}
       />,

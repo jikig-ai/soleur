@@ -4,12 +4,11 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { DelegationAcceptanceModal } from "@/components/settings/delegation-acceptance-modal";
 
-interface DelegationBannerProps {
+export interface DelegationBannerProps {
   grantorDisplayName: string;
   todaySpentCents: number;
   dailyCapCents: number;
   hourlyCapCents: number | null;
-  pending: boolean;
   delegationId: string;
   sideLetterVersion: string;
   alreadyAccepted: boolean;
@@ -67,7 +66,7 @@ export function DelegationBanner({
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="ml-auto rounded-md bg-soleur-accent-gold-fg px-3 py-1 text-xs font-medium text-white hover:bg-soleur-accent-gold-fg/90"
+          className="ml-auto rounded-md bg-soleur-accent-gold-fg px-3 py-1 text-xs font-medium text-soleur-bg-surface-1 hover:opacity-90"
         >
           Review &amp; accept
         </button>
