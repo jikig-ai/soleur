@@ -278,32 +278,32 @@ root showed 56 GB free.
 
 ### Pre-merge (PR)
 
-- [ ] `_cron-claude-eval-substrate.ts` exports `resolveCronWorkspaceRoot()`;
+- [x] `_cron-claude-eval-substrate.ts` exports `resolveCronWorkspaceRoot()`;
       `mkdtemp` parent is `resolveCronWorkspaceRoot()` not `tmpdir()` directly;
       `soleur-${cronName}-` prefix unchanged. (`grep -n resolveCronWorkspaceRoot`
       shows the export AND the use at the mkdtemp call.)
-- [ ] Pre-clone `statfs` guard emits `op: "cron-workspace-low-disk"` WARN when
+- [x] Pre-clone `statfs` guard emits `op: "cron-workspace-low-disk"` WARN when
       free < floor and `op: "cron-workspace-statfs-failed"` on probe error;
       neither throws (the clone still runs). (Code review: no `throw` in the
       guard block.)
-- [ ] `scheduled-output-missing` Sentry `extra` includes `exitCode`
+- [x] `scheduled-output-missing` Sentry `extra` includes `exitCode`
       (`grep -n exitCode _cron-shared.ts` shows it in the extra object).
-- [ ] `ci-deploy.sh` canary AND prod docker run blocks each contain exactly one
+- [x] `ci-deploy.sh` canary AND prod docker run blocks each contain exactly one
       `-e CRON_WORKSPACE_ROOT=/workspaces` line; the `--tmpfs /tmp:…size=256m`
       line is byte-for-byte unchanged.
       (`grep -c 'CRON_WORKSPACE_ROOT=/workspaces' ci-deploy.sh` → 2;
       `grep -c 'tmpfs /tmp:rw,nosuid,nodev,size=256m' ci-deploy.sh` → 2.)
-- [ ] `ci-deploy.test.sh` `assert_cron_workspace_root` passes against both
+- [x] `ci-deploy.test.sh` `assert_cron_workspace_root` passes against both
       docker run lines (run `bash apps/web-platform/infra/ci-deploy.test.sh`).
-- [ ] Substrate unit test asserts env-set → env value, env-unset → `tmpdir()`,
+- [x] Substrate unit test asserts env-set → env value, env-unset → `tmpdir()`,
       whitespace → `tmpdir()`. (`./node_modules/.bin/vitest run test/server/inngest/cron-claude-eval-substrate.test.ts` green.)
-- [ ] No change to any cron prompt or `--max-turns` / `MAX_TURN_DURATION_MS`.
+- [x] No change to any cron prompt or `--max-turns` / `MAX_TURN_DURATION_MS`.
       (`git diff` touches no `*.prompt` text and no turn/duration constant;
       `cron-roadmap-review.test.ts` and `cron-content-generator.test.ts`
       prompt-anchor assertions remain green.)
-- [ ] `betterstack-log-query.md` coverage-gap section gains the container-tmpfs
+- [x] `betterstack-log-query.md` coverage-gap section gains the container-tmpfs
       + `_metrics`-emptiness clarification.
-- [ ] PR body uses `Closes #4684` and `Closes #4689` (code fix lands at merge;
+- [x] PR body uses `Closes #4684` and `Closes #4689` (code fix lands at merge;
       no post-merge prod-write step — the deploy IS the remediation, see below).
 
 ### Post-merge (operator)
