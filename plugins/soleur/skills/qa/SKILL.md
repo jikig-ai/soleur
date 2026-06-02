@@ -149,6 +149,7 @@ The skill handles missing prerequisites without blocking the pipeline:
 ## Notes
 
 - For Playwright auth in production QA, use Supabase admin API `generate_link` to get the OTP code, then enter it in the OTP form. Do not use the magic link `action_link` URL — Playwright navigation does not trigger client-side hash fragment processing.
+- For Playwright MCP visual verification of an authenticated surface on a LOCAL dev server: start the server with `NEXT_PUBLIC_DEV_EXTRA_ORIGINS=<origin>` (else state-mutating POSTs 403 on CSRF), mint a cookie via `ux-audit/scripts/bot-signin.ts` with `NEXT_PUBLIC_APP_URL=http://localhost:<port>`, inject it with `page.context().addCookies()` (the `run_code_unsafe` sandbox has no `require`/`Buffer`/`atob` — pre-escape data into a literal), drive onboarding gates via `page.evaluate(fetch(...))` not UI clicks, and `curl`-pre-warm slow routes before `browser_navigate`. Full recipe: `knowledge-base/project/learnings/2026-06-02-playwright-mcp-local-auth-dashboard-verification.md`.
 - This skill does NOT test error paths (network failure simulation, invalid input). That capability is deferred to a future iteration.
 - Screenshots from Playwright MCP resolve from the repo root, not the shell CWD. Always use absolute paths when in a worktree.
 - Test data cleanup is critical — always include cleanup steps in test scenarios to avoid accumulating garbage data in external services.
