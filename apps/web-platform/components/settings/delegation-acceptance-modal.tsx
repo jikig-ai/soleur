@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { reportSilentFallback } from "@/lib/client-observability";
 
 interface DelegationAcceptanceModalProps {
   delegationId: string;
@@ -51,6 +52,11 @@ export function DelegationAcceptanceModal({
       if (res.ok) {
         onAccepted();
       }
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: "byok-delegation",
+        op: "accept",
+      });
     } finally {
       setLoading(false);
     }
@@ -67,6 +73,11 @@ export function DelegationAcceptanceModal({
       if (res.ok) {
         onDeclined();
       }
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: "byok-delegation",
+        op: "decline",
+      });
     } finally {
       setLoading(false);
     }
@@ -85,15 +96,28 @@ export function DelegationAcceptanceModal({
       if (res.ok) {
         onWithdrawn?.();
       }
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: "byok-delegation",
+        op: "withdraw",
+      });
     } finally {
       setLoading(false);
     }
   }, [delegationId, onWithdrawn]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="delegation-consent-title"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+    >
       <div className="mx-4 w-full max-w-lg rounded-xl border border-soleur-border-default bg-soleur-bg-base p-6 shadow-xl">
-        <h2 className="text-lg font-semibold text-soleur-text-primary">
+        <h2
+          id="delegation-consent-title"
+          className="text-lg font-semibold text-soleur-text-primary"
+        >
           {alreadyAccepted ? "Delegation Consent — active" : "Delegation Consent"}
         </h2>
         <p className="mt-2 text-sm text-soleur-text-secondary">

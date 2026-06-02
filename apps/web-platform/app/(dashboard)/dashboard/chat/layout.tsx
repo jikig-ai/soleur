@@ -7,13 +7,19 @@ import { isByokDelegationsEnabled, type Identity } from "@/lib/feature-flags/ser
 import { resolveCurrentOrganizationId } from "@/server/workspace-resolver";
 import { resolveGranteeDelegation, resolveGranteeAcceptanceStatus } from "@/server/byok-delegation-ui-resolver";
 import { getPendingInvitesForUser } from "@/server/workspace-invitations";
+import { BYOK_SIDE_LETTER_VERSION } from "@/server/byok-side-letter";
 
 export default async function ChatLayout({ children }: { children: ReactNode }) {
   let bannerProps: {
     grantorDisplayName: string;
     todaySpentCents: number;
     dailyCapCents: number;
+    hourlyCapCents: number | null;
     pending: boolean;
+    delegationId: string;
+    sideLetterVersion: string;
+    alreadyAccepted: boolean;
+    withdrawn: boolean;
   } | null = null;
 
   let pendingInvite: {
@@ -38,7 +44,12 @@ export default async function ChatLayout({ children }: { children: ReactNode }) 
               grantorDisplayName: delegation.grantorDisplayName,
               todaySpentCents: delegation.todaySpentCents,
               dailyCapCents: delegation.dailyCapCents,
+              hourlyCapCents: delegation.hourlyCapCents,
               pending: !acceptance.accepted,
+              delegationId: delegation.id,
+              sideLetterVersion: BYOK_SIDE_LETTER_VERSION,
+              alreadyAccepted: acceptance.accepted,
+              withdrawn: acceptance.withdrawn,
             };
           }
         }
