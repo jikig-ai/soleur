@@ -173,6 +173,27 @@ describe("reportSilentFallback — userIdHash pseudonymization", () => {
     expect(payload.extra).not.toHaveProperty("userId");
   });
 
+  it("strips line terminators from the message before logging (js/log-injection)", () => {
+    // A CR/LF (or unicode line/paragraph separator) in the message must not
+    // survive into the pino `msg` field or Sentry, where it could forge a log
+    // line in a downstream plaintext view.
+    reportSilentFallback(null, {
+      feature: "accept-terms",
+      op: "record",
+      message: "User row not found\r\nFAKE 2026 ERROR forged\u2028tail\u2029end\vx\fy",
+      extra: { userId: "u1" },
+    });
+
+    const sanitized = "User row not found FAKE 2026 ERROR forged tail end x y";
+    // pino path (logger.error second arg)
+    const [, loggedMsg] = mockLoggerError.mock.calls[0];
+    expect(loggedMsg).toBe(sanitized);
+    expect(loggedMsg).not.toMatch(/[\r\n\u2028\u2029\v\f]/);
+    // Sentry captureMessage path uses the same sanitized string
+    const [sentryMsg] = mockCaptureMessage.mock.calls[0];
+    expect(sentryMsg).toBe(sanitized);
+  });
+
   it("does not emit tags.op when op is omitted", () => {
     const err = new Error("boom");
     reportSilentFallback(err, { feature: "shared-token", extra: { token: "abc" } });

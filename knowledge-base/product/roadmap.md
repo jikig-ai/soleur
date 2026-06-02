@@ -237,7 +237,7 @@ Before recruiting founders, all public surfaces must reflect the cloud platform 
 | M1 | Update brand guide positioning (remove plugin framing, cloud platform as primary) | 30 min | Done — [#1004](https://github.com/jikig-ai/soleur/issues/1004) |
 | M2 | Update homepage hero subtitle + meta description (remove "plugin" from meta descriptions) | 30 min | Done — [#1129](https://github.com/jikig-ai/soleur/issues/1129) |
 | M3 | Update marketing strategy for cloud pivot | 2 hours | Not started — [#1051](https://github.com/jikig-ai/soleur/issues/1051) |
-| M4 | Draft recruitment messaging templates per channel | 2 hours | Not started — [#1445](https://github.com/jikig-ai/soleur/issues/1445) |
+| M4 | Draft recruitment messaging templates per channel | 2 hours | Done — [#1445](https://github.com/jikig-ai/soleur/issues/1445) (`knowledge-base/marketing/recruitment-messaging-templates.md`) |
 | M5 | Update Getting Started page (cloud platform primary, CLI plugin secondary) | 2 hours | Done — [#1446](https://github.com/jikig-ai/soleur/issues/1446) |
 | M6 | Standardize agent/skill counts across all surfaces | 2 hours | Done — [#1447](https://github.com/jikig-ai/soleur/issues/1447) |
 | M7 | Exclude feed.xml from sitemap.xml | 15 min | Done — [#1122](https://github.com/jikig-ai/soleur/issues/1122) |

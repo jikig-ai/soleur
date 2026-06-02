@@ -158,13 +158,18 @@ while [[ \$# -gt 0 ]]; do
     *) shift ;;
   esac
 done
-printf 'run config=%s argv=%s\n' "\$config" "\$*" >> "\$log"
+# Record whether CF_ADMIN_TOKEN reached the doppler PROCESS env (i.e. before
+# doppler's own child-scrub below). With \`env -u CF_ADMIN_TOKEN doppler …\`
+# (item 2 of #3950) the bearer is stripped before doppler ever runs → da=0.
+# Without the wrap, run_sut exports it and doppler inherits it → da=1.
+da=0; [[ -n "\${CF_ADMIN_TOKEN:-}" ]] && da=1
+printf 'run config=%s cf_admin_in_doppler_env=%s argv=%s\n' "\$config" "\$da" "\$*" >> "\$log"
 # Mirror the driver's CF_ADMIN_TOKEN-scrub semantics.
 unset CF_ADMIN_TOKEN
 R2_CLA_EVIDENCE_ACCESS_KEY_ID=stub-access-key-id-32chars-aaaa \
 R2_CLA_EVIDENCE_SECRET=hmac-secret-fingerprint-do-not-leak \
 R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence-stub \
-R2_CLA_EVIDENCE_ENDPOINT=https://stub.r2.example \
+R2_CLA_EVIDENCE_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com \
 AWS_ACCESS_KEY_ID=stub-access-key-id-32chars-aaaa \
 AWS_SECRET_ACCESS_KEY=hmac-secret-fingerprint-do-not-leak \
   exec "\$@"
@@ -244,12 +249,12 @@ run_sut() {
   CF_ADMIN_TOKEN="${CF_ADMIN_TOKEN-bearer-secret-fingerprint-do-not-leak}" \
   CF_ACCOUNT_ID="${CF_ACCOUNT_ID-stub-account-id}" \
   R2_CLA_EVIDENCE_BUCKET="${R2_CLA_EVIDENCE_BUCKET-soleur-cla-evidence}" \
-  R2_CLA_EVIDENCE_ENDPOINT="${R2_CLA_EVIDENCE_ENDPOINT-https://stub.r2.example}" \
+  R2_CLA_EVIDENCE_ENDPOINT="${R2_CLA_EVIDENCE_ENDPOINT-https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com}" \
   TARGET_KEY="${TARGET_KEY-signatures/abc123def456abc123def456abc123def456abc123def456abc123def456abcd.json}" \
   GDPR_REQUEST_REF="${GDPR_REQUEST_REF-DSAR-2026-STUB-001}" \
   PRIOR_SHA="${PRIOR_SHA-abc123def456abc123def456abc123def456abc123def456abc123def456abcd}" \
   OVERRIDE_REASON="${OVERRIDE_REASON-GDPR Article 17 erasure — stub test invocation}" \
-  ADMIN_ACTOR="${ADMIN_ACTOR-stub-operator@example.invalid}" \
+  ADMIN_ACTOR="${ADMIN_ACTOR-stub-operator@stub.invalid}" \
   GDPR_OVERRIDE_MAIN_TEST_SH="$work/main.test.sh" \
   GDPR_OVERRIDE_SENTINEL_DIR="$work/sentinel" \
     bash "$SUT" "$@"
@@ -440,12 +445,12 @@ R2_CLA_EVIDENCE_SECRET="$FP_HMAC" \
   PATH="$work:$PATH" \
   CF_ACCOUNT_ID=stub-account-id \
   R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
-  R2_CLA_EVIDENCE_ENDPOINT=https://stub.r2.example \
+  R2_CLA_EVIDENCE_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com \
   TARGET_KEY="signatures/abc123def456abc123def456abc123def456abc123def456abc123def456abcd.json" \
   GDPR_REQUEST_REF=DSAR-J \
   PRIOR_SHA=abc123def456abc123def456abc123def456abc123def456abc123def456abcd \
   OVERRIDE_REASON="stub j" \
-  ADMIN_ACTOR=stub@example.invalid \
+  ADMIN_ACTOR=stub@stub.invalid \
   GDPR_OVERRIDE_MAIN_TEST_SH="$work/main.test.sh" \
   GDPR_OVERRIDE_SENTINEL_DIR="$work/sentinel" \
     bash -x "$SUT" --shape=enabled-false >"$work/out.j" 2>"$work/trace.j" || true
@@ -519,6 +524,31 @@ if [[ "$rc" -eq 4 ]] \
 else
   red "FAIL: TS-OVERRIDE.l expected rc=4 + 'tombstone PUT failed' + no 'tombstone written' + 5 curl + 2 aws; got rc=$rc curl=$(wc -l < "$work/curl.log") aws=$(wc -l < "$work/aws.log")"
   indent_stderr <<<"$out"
+  fail=1
+fi
+
+# ─── TS-OVERRIDE.m ─ env -u scrub: CF_ADMIN_TOKEN absent from doppler proc env ─
+# Item 2 of #3950: every `doppler run -- aws …` site is wrapped as
+# `env -u CF_ADMIN_TOKEN doppler run -- aws …` so the bearer is not visible via
+# /proc/<pid>/environ to the doppler→aws child chain. The doppler stub records
+# cf_admin_in_doppler_env per call (set by the parent env BEFORE doppler's own
+# scrub). Without the env -u wrap this is 1 (run_sut exports the bearer); with
+# it, 0. This distinguishes gated-from-ungated (the assertion fails on un-wrapped
+# code), per the RED-verification discipline for scrub primitives.
+reset_stubs; prime_happy_a
+if run_sut --shape=enabled-false >"$work/out.m" 2>&1; then
+  doppler_runs=$(grep -c 'cf_admin_in_doppler_env=' "$work/doppler.log" || true)
+  doppler_leak=$(grep -c 'cf_admin_in_doppler_env=1' "$work/doppler.log" || true)
+  if [[ "$doppler_runs" -eq 2 ]] && [[ "$doppler_leak" -eq 0 ]]; then
+    green "PASS: TS-OVERRIDE.m env -u strips CF_ADMIN_TOKEN from both doppler-run child envs"
+  else
+    red "FAIL: TS-OVERRIDE.m expected 2 doppler runs, 0 with CF_ADMIN_TOKEN; got runs=$doppler_runs leak=$doppler_leak"
+    sed 's/^/  /' "$work/doppler.log" >&2
+    fail=1
+  fi
+else
+  red "FAIL: TS-OVERRIDE.m expected exit 0 on happy path"
+  sed 's/^/  /' "$work/out.m" >&2
   fail=1
 fi
 

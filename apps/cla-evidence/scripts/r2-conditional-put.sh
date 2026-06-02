@@ -52,6 +52,13 @@ label="${LABEL:-upload-evidence}"
 dup_label="${DUP_LABEL:-duplicate}"
 bucket="${R2_CLA_EVIDENCE_BUCKET:-soleur-cla-evidence}"
 endpoint="${R2_CLA_EVIDENCE_ENDPOINT:?R2_CLA_EVIDENCE_ENDPOINT must be set}"
+
+# Pin the R2 endpoint to the canonical hostname before any PUT (item 1 of #3950).
+# Covers upload-evidence.sh + upload-bypass.sh, which both exec this script.
+# shellcheck source=_r2-endpoint.sh disable=SC1091
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_r2-endpoint.sh"
+assert_r2_endpoint "$endpoint"
+
 url="${endpoint%/}/${bucket}/${key}"
 
 # Credential-shape preflight. R2's S3-compat SigV4 hard-fails with

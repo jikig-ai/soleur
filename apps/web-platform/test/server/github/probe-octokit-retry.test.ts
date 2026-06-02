@@ -29,10 +29,15 @@ const {
 } = vi.hoisted(() => {
   const mockRequest = vi.fn();
   const mockGetInstallationOctokit = vi.fn();
-  const MockApp = vi.fn().mockImplementation(() => ({
-    octokit: { request: mockRequest },
-    getInstallationOctokit: mockGetInstallationOctokit,
-  }));
+  // vitest 4: mocks invoked with `new` now construct an instance, so a
+  // constructor mock must use the `function` keyword and assign to `this`
+  // (an arrow returning an object throws "is not a constructor").
+  const MockApp = vi.fn().mockImplementation(function (
+    this: Record<string, unknown>,
+  ) {
+    this.octokit = { request: mockRequest };
+    this.getInstallationOctokit = mockGetInstallationOctokit;
+  });
   return {
     mockRequest,
     mockGetInstallationOctokit,

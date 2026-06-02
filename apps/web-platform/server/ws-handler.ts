@@ -1290,7 +1290,14 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     // start_session: create conversation, boot agent, reply with ID
     // ------------------------------------------------------------------
     case "start_session": {
-      // Layer 3: Agent session creation rate limit (per-user, post-auth)
+      // Layer 3: Agent session creation rate limit (per-user, post-auth).
+      // INVARIANT (workspace-scoping audit, 2026-06-02): the throttle key is
+      // the USER, not the active workspace, and MUST stay per-user. The cap is
+      // coupled to the per-user plan_tier / concurrency_override model
+      // (user_concurrency_slots, mig 029) and the per-user Stripe subscription.
+      // Keying it per-workspace would let one user multiply paid capacity by
+      // creating workspaces. Per-workspace caps require a per-workspace billing
+      // model first (deferred — see plan 2026-06-02-fix-workspace-scoping-leak D6).
       if (!sessionThrottle.isAllowed(userId)) {
         logRateLimitRejection("session-limit", userId);
         sendToClient(userId, {

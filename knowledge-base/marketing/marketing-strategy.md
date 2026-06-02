@@ -429,6 +429,7 @@ This strategy is supported by detailed specialist documents:
 | Document | Path | Contents |
 |----------|------|----------|
 | Content Strategy | `knowledge-base/marketing/content-strategy.md` | Content gaps (12), pillar definitions, quarterly calendar (Mar-Jun 2026), execution priorities |
+| Recruitment Messaging | `knowledge-base/marketing/recruitment-messaging-templates.md` | Per-channel Phase 4 recruitment copy (Discord, GitHub, IndieHackers, X/Twitter, direct network); dual-register split + non-Claude-Code quota guidance |
 | Pricing Strategy | `knowledge-base/product/pricing-strategy.md` | Competitive pricing matrix, recommended model, value metric analysis |
 | SEO Refresh Queue | `knowledge-base/marketing/seo-refresh-queue.md` | Stale pages, new pages needed, monitoring list |
 | Battlecard: Anthropic Cowork | `knowledge-base/sales/battlecards/tier-0-anthropic-cowork.md` | Talk tracks, differentiators, objection handling |
