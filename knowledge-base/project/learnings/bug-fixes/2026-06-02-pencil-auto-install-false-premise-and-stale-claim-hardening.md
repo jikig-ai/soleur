@@ -16,7 +16,7 @@ limiting claims about repo capabilities, with no verification:
 1. "pencil-setup only registers the MCP server; it can't auto-install Pencil."
 2. "Pencil is GUI-only" — **baked as a load-bearing premise into a CTO subagent prompt.**
 
-Both are false. `plugins/soleur/skills/pencil-setup/scripts/check_deps.sh:419`
+Both are false. `plugins/soleur/skills/pencil-setup/scripts/check_deps.sh:420`
 (`attempt_headless_install()`) runs `npm install --prefix ~/.local @pencil.dev/cli` — a headless,
 no-sudo, no-display install — and auths via `PENCIL_CLI_KEY` from Doppler `soleur/dev`. The
 headless `.pen` authoring path works. The CTO agent self-corrected on finding the headless
