@@ -222,8 +222,8 @@ logs:
   where: "journald on host (logger tag infra-config-apply); persistent (/var/log/journal exists)"
   retention: "journald default (host-configured)"
 discoverability_test:
-  command: "curl -s https://<deploy-host>/hooks/infra-config-status | jq '{exit_code,files_written,files_total}'"
-  expected_output: '{"exit_code":0,"files_written":8,"files_total":8}'
+  command: curl -sS -o /dev/null -w "%{http_code}\n" --max-time 10 https://deploy.soleur.ai/hooks/infra-config-status
+  expected_output: "200 (or 403 — the status endpoint is behind Cloudflare Access for anonymous probes; an authenticated operator GET returns the JSON {exit_code:0,files_written:7,files_total:7} post-admin-apply)"
 ```
 
 ## Open Code-Review Overlap
