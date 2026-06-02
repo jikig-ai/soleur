@@ -201,7 +201,7 @@ No paid acquisition until organic channels prove the thesis. The validation phas
 
 **Priority actions:**
 
-1. Treat the open-source / self-hosted path (Claude Code plugin registry listing, keywords, categories) as a technical-discovery channel that feeds the cloud waitlist -- not the primary conversion surface
+1. Optimize the open-source / self-hosted listing (Claude Code plugin registry: description, keywords, categories). Treat it as a technical-discovery channel that feeds the cloud waitlist, not the primary conversion surface.
 2. Ensure the self-hosted `claude plugin install soleur` experience is clean and immediate, with a clear path to reserve cloud-platform access
 3. Build onboarding flow that demonstrates cross-domain value in the first 10 minutes
 4. Create "Built with Soleur" showcase starting with soleur.ai itself
@@ -384,7 +384,7 @@ Weekly snapshots are generated automatically by CI (`scheduled-weekly-analytics.
 **Response:**
 
 1. Publish immediate comparison content: "Soleur vs. Notion Custom Agents"
-2. Emphasize founder-controlled operations with compounding memory vs. workspace-first collaboration (different audiences) -- delivery surface is no longer a differentiating axis now that Soleur ships as a web product
+2. Emphasize founder-controlled operations with compounding memory vs. workspace-first collaboration (different audiences). Delivery surface is no longer a differentiating axis now that Soleur ships as a web product.
 3. Emphasize compounding knowledge base scoped to solo founder operations vs. team collaboration
 4. Lean into engineering depth (Notion's agents will start shallow)
 
