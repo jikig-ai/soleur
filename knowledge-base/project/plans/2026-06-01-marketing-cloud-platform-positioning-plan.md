@@ -225,11 +225,11 @@ do not erase the delivery truth, just stop leading with it.
 
 ### Pre-merge (PR)
 
-- [ ] Zero *lead-with-plugin* prose in primary positioning surfaces: `index.njk` hero,
+- [x] Zero *lead-with-plugin* prose in primary positioning surfaces: `index.njk` hero,
       `brand-guide.md` Positioning, `about.njk` (lines 33 + 51), `community.njk:47`,
       README "What is Soleur?". (Secondary "open source / runs in Claude Code" mentions are
       permitted.) Verify: `grep -niE "is (an? )?(open-source )?claude code plugin" plugins/soleur/docs/pages/about.njk plugins/soleur/docs/pages/community.njk` returns no *lede* hits.
-- [ ] `marketing-strategy.md`: "terminal-first" removed/reframed as a *positioning advantage*
+- [x] `marketing-strategy.md`: "terminal-first" removed/reframed as a *positioning advantage*
       per brand-guide line 91 — at line ~78 (Moat #1 qualifier) and line ~387 ("emphasize
       terminal-first vs workspace-first"). The 2026-03-22 review *note* at line ~72 that
       explains the change may remain (it documents the rationale). Verify:
@@ -237,11 +237,11 @@ do not erase the delivery truth, just stop leading with it.
       *advocacy* of terminal-first as a differentiator (review-note mentions OK). Channel/metric
       lines (plugin registry, lines ~144/204-205/337) reframed as self-host→waitlist funnel;
       `last_updated: 2026-06-01`.
-- [ ] `plugins/soleur/docs/_data/skills.js:11` comment count matches the live SKILL.md count.
-- [ ] `bash scripts/sync-readme-counts.sh --check` exits 0 (README counts in sync).
-- [ ] `bun test plugins/soleur/test/marketing-content-drift.test.ts` passes (or the project's
+- [x] `plugins/soleur/docs/_data/skills.js:11` comment count matches the live SKILL.md count.
+- [x] `bash scripts/sync-readme-counts.sh --check` exits 0 (README counts in sync).
+- [x] `bun test plugins/soleur/test/marketing-content-drift.test.ts` passes (or the project's
       `package.json scripts.test` runner equivalent — confirm runner before invoking).
-- [ ] Eleventy build succeeds: `npm run docs:build` exits 0 (catches `.njk` syntax / JSON-LD
+- [x] Eleventy build succeeds: `npm run docs:build` exits 0 (catches `.njk` syntax / JSON-LD
       breakage on edited pages).
 - [ ] PR body documents the verify-and-close findings for M1/M2/M5 (which surfaces were already
       compliant) so the CMO gate reviewer can confirm coverage.
