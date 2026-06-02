@@ -80,7 +80,9 @@ function mockXhr(status: number, body: unknown) {
 
   vi.stubGlobal(
     "XMLHttpRequest",
-    vi.fn(() => xhrInstance),
+    vi.fn(function (this: Record<string, unknown>) {
+      return xhrInstance;
+    }),
   );
 
   return xhrInstance;

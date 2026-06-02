@@ -165,13 +165,15 @@ function makeEvents() {
 describe("soleur-go-runner interactive-prompt bridge (Stage 2.10)", () => {
   let emittedEvents: Array<{ userId: string; event: InteractivePromptEvent }>;
   let registry: PendingPromptRegistry;
-  let emitInteractivePrompt: ReturnType<typeof vi.fn>;
+  let emitInteractivePrompt: ReturnType<
+    typeof vi.fn<(userId: string, event: InteractivePromptEvent) => void>
+  >;
 
   beforeEach(() => {
     vi.useFakeTimers({ now: 0 });
     emittedEvents = [];
     registry = new PendingPromptRegistry({ nowFn: () => Date.now() });
-    emitInteractivePrompt = vi.fn(
+    emitInteractivePrompt = vi.fn<(userId: string, event: InteractivePromptEvent) => void>(
       (userId: string, event: InteractivePromptEvent) => {
         emittedEvents.push({ userId, event });
       },

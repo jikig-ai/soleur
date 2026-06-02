@@ -35,9 +35,11 @@ vi.mock("@/lib/auth/validate-origin", () => ({
 }));
 
 vi.mock("@/server/rate-limiter", () => ({
-  SlidingWindowCounter: vi.fn().mockImplementation(() => ({
-    isAllowed: mockIsAllowed,
-  })),
+  SlidingWindowCounter: vi.fn().mockImplementation(function (
+    this: Record<string, unknown>,
+  ) {
+    this.isAllowed = mockIsAllowed;
+  }),
 }));
 
 vi.mock("@/server/logger", () => ({

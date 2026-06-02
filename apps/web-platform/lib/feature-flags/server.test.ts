@@ -4,9 +4,14 @@ const mockGetIdentityFlags = vi.fn();
 
 vi.mock("flagsmith-nodejs", () => {
   return {
-    Flagsmith: vi.fn().mockImplementation(() => ({
-      getIdentityFlags: mockGetIdentityFlags,
-    })),
+    // vitest 4: mocks invoked with `new` now construct an instance, so a
+    // constructor mock must use the `function` keyword and assign to `this`
+    // (an arrow returning an object throws "is not a constructor").
+    Flagsmith: vi.fn().mockImplementation(function (
+      this: Record<string, unknown>,
+    ) {
+      this.getIdentityFlags = mockGetIdentityFlags;
+    }),
   };
 });
 
