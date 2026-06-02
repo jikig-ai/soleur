@@ -253,10 +253,13 @@ Two open code-review issues touch `dashboard/page.tsx`:
   The styling change leaves the composer markup smaller/cleaner, which eases the later
   extraction. #2590 stays open; its re-eval criterion ("a new feature forces editing this file")
   is acknowledged but the alignment fix is not the right vehicle for the extraction.
-- **#3334** (consolidate gold-gradient primary CTA): **Acknowledge.** Touches the "New
-  conversation" gold-gradient CTAs at `dashboard/page.tsx:526`/`:623`, NOT the first-run input
-  send button (which uses solid `bg-amber-600`, unchanged by this plan). Different lines,
-  different concern. Out of scope; #3334 stays open.
+- **#3334** (consolidate gold-gradient primary CTA): **Folded in at operator request.** While
+  this PR already edits `dashboard/page.tsx` (and the anti-slop scanner flagged the literal-hex
+  gold gradient there as a blocking BRAND-RAW-HEX finding), the operator asked to clean up #3334
+  as we go. Resolved: all four gold-gradient call sites tokenized to
+  `--soleur-accent-gradient-{start,end}` (no literal hex) and unified to horizontal direction
+  (`GOLD_GRADIENT` 135deg→90deg, per the operator's design call). #3334 closed by this PR. The
+  first-run input send button (solid `bg-amber-600`) is unaffected.
 
 No overlap with `chat-input.tsx` or the two test files.
 
