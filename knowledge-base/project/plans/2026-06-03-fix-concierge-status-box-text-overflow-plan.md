@@ -9,6 +9,45 @@ brand_survival_threshold: aggregate pattern
 
 # 🐛 Fix Concierge status box text overflow
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-03
+**Sections enhanced:** Approach (Research Insights), Files to Create, Acceptance
+Criteria, Observability, Phase 0, Risks (R4).
+**Method:** Inline deepen (Task-tool parallel agents unavailable in this
+environment); all findings verified live via `grep`/config-read against the
+worktree. Deepen halt gates 4.6 (User-Brand Impact), 4.7 (Observability), 4.8
+(PAT-shaped), 4.9 (UI-wireframe) all PASS.
+
+### Key Improvements
+
+1. **Corrected the Playwright test path (load-bearing).** v1 prescribed
+   `apps/web-platform/test/<...>.spec.ts`, which would be **silently skipped** —
+   Playwright here uses `testDir: "./e2e"` + `testMatch: "**/*.e2e.ts"`
+   (`playwright.config.ts:13-14`), and the bubble tests require the
+   `authenticated` project restricted to `cc-soleur-go-*` / `start-fresh-*` /
+   `nav-states-*` (`:48-53`). The test must be `e2e/cc-soleur-go-*.e2e.ts` (or
+   extend `e2e/cc-soleur-go-bubbles.e2e.ts`). This is the #3743 testMatch-drift
+   class — catching it here saves a mid-`/work` pivot AND prevents shipping a
+   verification that never runs.
+2. **Pinned the overflow-assertion precedent.** `e2e/nav-states-shell.e2e.ts:259,277`
+   already implements `scrollWidth - clientWidth` overflow checks with an
+   empty-band guard (`:19`). The new test reuses it verbatim — no novel assertion.
+3. **Verified the CSS mechanism against codebase precedent.** `[overflow-wrap:anywhere]`
+   is already used at `message-bubble.tsx:242` and `:269`; Option A is a
+   convention match, and the `min-w-0` ancestor chain (`:157/159/165`) is what
+   actually prevents #4852's premature wrap from returning — not `whitespace-nowrap`.
+
+### New Considerations Discovered
+
+- The existing `e2e/cc-soleur-go-bubbles.e2e.ts` already wires `attachWsInjector`
+  + Supabase mocks to drive the real reducer's routing bubble — extending it is
+  cheaper than a fresh harness.
+- jsdom returns 0 for layout values (constitution line 312), so the vitest test
+  can only assert the className mechanism; the actual overflow proof is e2e-only.
+
+---
+
 The Soleur Concierge status box ("Soleur Concierge" header + "Working" badge +
 status label such as "Routing to the right experts...") renders the status label
 on a single forced line that **overflows past the right border** of the bordered
@@ -107,7 +146,7 @@ liveness_signal:
   what: "Playwright deterministic screenshot of the Concierge tool_use bubble (long-label case)"
   cadence: per-PR (CI Playwright run on the affected route)
   alert_target: PR CI status (red on visual/structural regression)
-  configured_in: apps/web-platform/test/<concierge-overflow>.spec.ts (new, Phase 3)
+  configured_in: apps/web-platform/e2e/cc-soleur-go-bubbles.e2e.ts (extend) or e2e/cc-soleur-go-status-overflow.e2e.ts (new) — authenticated Playwright project
 error_reporting:
   destination: N/A — no runtime error path added; client render is presentational
   fail_loud: CI test failure (vitest className assertion + Playwright no-clip assertion)
@@ -164,6 +203,52 @@ test assertion (`message-bubble-tool-status-chip.test.tsx:82`) must be updated t
 assert the chosen mechanism (`[overflow-wrap:anywhere]`/`break-words` for A; the
 bubble `w-fit` class for B) — **never delete the regression intent**, re-point it.
 
+### Research Insights
+
+**CSS mechanism — why Option A is correct and low-risk:**
+
+- `[overflow-wrap:anywhere]` (CSS `overflow-wrap: anywhere`) instructs the layout
+  engine to break a line only when the content would otherwise overflow its
+  container; it does NOT force breaks when the content fits. So a short label
+  ("Working") on a flex parent with available width stays on one line, while a
+  long label wraps at the bubble's `max-w` cap. This is precisely the
+  "single-line-when-it-fits, wrap-when-it-doesn't" semantic the bug requires, and
+  it is the idiom the codebase already uses (verified `grep -n "overflow-wrap:anywhere"`)
+  at exactly two sites: the user-bubble wrapper (`message-bubble.tsx:242`,
+  `min-w-0 [overflow-wrap:anywhere]`) and the streaming body (`:269`,
+  `min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]`). Adopting it on the chip
+  label is a convention match, not a novel pattern.
+- Subtle distinction vs. `whitespace-normal`: the chip label currently has
+  `whitespace-nowrap`. Removing it returns the span to the default `whitespace:
+  normal`, under which `overflow-wrap:anywhere` governs break points. `break-words`
+  (`overflow-wrap: break-word`) is a near-equivalent; prefer `[overflow-wrap:anywhere]`
+  for exact parity with line 269 (it also breaks within an unbroken long token,
+  which a status label generally is not, but the parity keeps the codebase
+  uniform).
+- **#4852 non-regression mechanism (why A does not re-break the premature wrap):**
+  #4852's premature wrap was a *flex min-content collapse of the bubble width* —
+  the bubble shrank to its min-content and the label wrapped even with room. That
+  was already addressed by the `min-w-0` chain on the flex ancestors
+  (`message-bubble.tsx:157, 159, 165`), which lets the bubble take content width up
+  to the `max-w` cap. `whitespace-nowrap` was an over-correction on top of that.
+  With the `min-w-0` chain intact, the bubble still grows to content width; the
+  only behavior change from dropping `nowrap` is that a label *exceeding* the cap
+  now wraps instead of overflowing. The Playwright short-label single-line
+  assertion is the empirical proof obligation.
+
+**Precedent-diff (Phase 4.4) — overflow-assertion pattern:**
+
+- `git grep "scrollWidth - .*clientWidth" apps/web-platform/e2e/` →
+  `e2e/nav-states-shell.e2e.ts:259,277`. Canonical form:
+  `await el.evaluate((el) => el.scrollWidth - el.clientWidth)` with an explicit
+  empty-band guard (`:19` comment) so a collapsed/empty element cannot vacuously
+  pass `scrollWidth <= clientWidth`. The new test reuses this verbatim — no novel
+  assertion shape. **No precedent diverges**; the pattern is established.
+
+**No external framework research required:** this is a Tailwind/CSS layout fix on
+an existing component using idioms already present three times in the same file;
+Context7/WebSearch would add nothing the codebase precedent does not already pin.
+
 ## Files to Edit
 
 - `apps/web-platform/components/chat/message-bubble.tsx` — `ToolStatusChip` label
@@ -178,18 +263,34 @@ bubble `w-fit` class for B) — **never delete the regression intent**, re-point
   passing tests (single child, verbatim label, "Working" pill, active border)
   intact.
 
-## Files to Create
+## Files to Create / Extend (Playwright)
 
-- `apps/web-platform/test/<concierge-status-overflow>.spec.ts` (Playwright) — a
-  deterministic browser test that mounts/navigates to the Concierge `tool_use`
-  bubble with a long label and asserts **no horizontal overflow** of the card
-  (`labelScrollWidth <= cardClientWidth`, or `getBoundingClientRect` right edge ≤
-  card right edge), AND a short label renders single-line. Run in BOTH `full` and
-  `sidebar` variants. (Per constitution line 312, jsdom/vitest cannot assert
-  layout overflow — `clientWidth`/`scrollWidth` return 0 in jsdom — so the
-  overflow assertion MUST live in Playwright; vitest only asserts the className
-  mechanism.) Confirm the filename matches the Playwright project's `testMatch`
-  glob before writing (Phase 0 grep below).
+- **Extend `apps/web-platform/e2e/cc-soleur-go-bubbles.e2e.ts`** (preferred) OR
+  create **`apps/web-platform/e2e/cc-soleur-go-status-overflow.e2e.ts`** —
+  deterministic browser test that drives the Concierge `tool_use`/routing bubble
+  via the existing `attachWsInjector` WS-frame harness (NOT a fresh mount) with a
+  long status label, then asserts **no horizontal overflow** of the card, AND a
+  short label renders single-line. Run in BOTH `full` and `sidebar` variants.
+
+  **CORRECTED at deepen-plan (was wrong in v1):** Playwright in this app uses
+  `testDir: "./e2e"` + `testMatch: "**/*.e2e.ts"` (`playwright.config.ts:13-14`).
+  A `test/*.spec.ts` file (v1's path) would be **silently skipped** — it matches
+  neither the dir nor the glob (the #3743 testMatch-drift class). The bubble
+  tests additionally require the `authenticated` project, whose `testMatch` is
+  `["**/start-fresh-*.e2e.ts", "**/cc-soleur-go-*.e2e.ts", "**/nav-states-*.e2e.ts"]`
+  (`playwright.config.ts:48-53`) — so the filename MUST start with `cc-soleur-go-`
+  (or extend the existing `cc-soleur-go-bubbles.e2e.ts`, the cleanest option since
+  it already wires `attachWsInjector` + Supabase mocks for the routing bubble).
+
+  **Overflow assertion — reuse the existing precedent.** `e2e/nav-states-shell.e2e.ts:259,277`
+  already does `el.evaluate((el) => el.scrollWidth - el.clientWidth)` and documents
+  the empty-band pitfall (line 19: "an empty band would satisfy
+  `scrollWidth<=clientWidth`, so we ALSO assert the band [is populated]"). Mirror
+  this: assert `card.scrollWidth - card.clientWidth <= <tolerance>` for the long
+  label AND assert the label element is non-empty / has the expected text, so an
+  empty/collapsed card cannot vacuously pass. (Per constitution line 312,
+  jsdom/vitest returns 0 for layout values — the overflow assertion MUST live in
+  Playwright; vitest only asserts the className mechanism.)
 
 ## Open Code-Review Overlap
 
@@ -211,10 +312,15 @@ edited files (`message-bubble.tsx`, `message-bubble-tool-status-chip.test.tsx`).
 - [ ] `message-bubble-tool-status-chip.test.tsx` updated: the #4852 assertion at
       line 82 now asserts the new mechanism (no orphaned `whitespace-nowrap`
       expectation on the chip label). All 5 tests in the file pass.
-- [ ] New Playwright spec asserts **no horizontal overflow** of the Concierge
-      card for a long status label, in BOTH `full` and `sidebar` variants.
-- [ ] New Playwright spec asserts a short label renders single-line when space is
+- [ ] New/extended Playwright **e2e** test (`e2e/cc-soleur-go-*.e2e.ts`, authenticated
+      project) asserts **no horizontal overflow** of the Concierge card
+      (`card.scrollWidth - card.clientWidth <= tolerance` AND label non-empty, per
+      the `nav-states-shell.e2e.ts:259,277` precedent) for a long status label, in
+      BOTH `full` and `sidebar` variants.
+- [ ] Same e2e test asserts a short label renders single-line when space is
       available (proves #4852 not re-broken).
+- [ ] The new test FILE matches `testMatch` — `ls apps/web-platform/e2e/cc-soleur-go-*.e2e.ts`
+      includes it (or it lives inside the existing `cc-soleur-go-bubbles.e2e.ts`).
 - [ ] `cd apps/web-platform && ./node_modules/.bin/vitest run test/message-bubble-tool-status-chip.test.tsx test/message-bubble-header.test.tsx` is green.
 - [ ] `tsc --noEmit` clean for `apps/web-platform`.
 
@@ -260,7 +366,7 @@ component).
 The mechanical UI-surface override fires (`components/**/*.tsx` in Files to Edit),
 forcing Product-relevant = true. However, no NEW file matches
 `components/**/*.tsx` / `app/**/page.tsx` / `app/**/layout.tsx` in Files to
-**Create** (the only new file is a `.spec.ts` test), so the mechanical BLOCKING
+**Create** (the only new file is an `.e2e.ts` Playwright test), so the mechanical BLOCKING
 escalation does not fire. The change modifies an existing component's wrap
 behavior without adding any interactive surface → ADVISORY. In pipeline context
 ADVISORY auto-accepts.
@@ -278,10 +384,13 @@ ADVISORY auto-accepts.
 - **R3 — jsdom test silently no-ops on overflow.** jsdom returns 0 for
   `clientWidth`/`scrollWidth` (constitution line 312). *Mitigation:* the overflow
   assertion lives in Playwright; vitest asserts only the className mechanism.
-- **R4 — Playwright spec filename misses the project `testMatch` glob** (AGENTS.md
-  Sharp Edge / #3743). *Mitigation:* Phase 0 grep the Playwright config for
-  `testMatch`/`testDir` and confirm the new spec lands on the correct project
-  before writing it.
+- **R4 — Playwright test filename misses the project `testMatch` glob** (AGENTS.md
+  Sharp Edge / #3743). **RESOLVED at deepen-plan:** config verified —
+  `testDir: ./e2e`, `testMatch: **/*.e2e.ts`, authenticated project restricted to
+  `cc-soleur-go-*` / `start-fresh-*` / `nav-states-*`. The plan now prescribes
+  `e2e/cc-soleur-go-*.e2e.ts` (or extending `cc-soleur-go-bubbles.e2e.ts`). The
+  v1 `test/*.spec.ts` path would have been silently skipped — the exact bug class
+  R4 names.
 - **R5 — fix verified in only one render variant.** The bug is more visible in the
   narrow `sidebar` variant (`kb-chat-content.tsx:178`). AGENTS.md Sharp Edge:
   "verify alignment in both toggle/render states." *Mitigation:* Playwright runs
@@ -291,9 +400,12 @@ ADVISORY auto-accepts.
 
 1. `grep -n "whitespace-nowrap" apps/web-platform/components/chat/message-bubble.tsx`
    → confirm exactly two sites (line 27 chip, line 193 header); edit only line 27.
-2. `grep -nE "testMatch|testDir|projects" apps/web-platform/playwright.config.ts`
-   (or equivalent) → confirm the new `.spec.ts` filename lands on the right
-   Playwright project (R4).
+2. **VERIFIED at deepen-plan:** `apps/web-platform/playwright.config.ts:13-14`
+   → `testDir: "./e2e"`, `testMatch: "**/*.e2e.ts"`; the `authenticated` project
+   (`:48-53`) restricts to `**/cc-soleur-go-*.e2e.ts` (+ `start-fresh-*`,
+   `nav-states-*`). The new test MUST be `e2e/cc-soleur-go-*.e2e.ts` or extend
+   `e2e/cc-soleur-go-bubbles.e2e.ts`. (Do not use `test/*.spec.ts` — silently
+   skipped.)
 3. `grep -n "include" apps/web-platform/vitest.config.ts` → confirm the updated
    `.test.tsx` is collected by `test/**/*.test.tsx` (it already lives there).
 4. Re-read `message-bubble.tsx:24-30, 155-175, 264-269` to confirm line numbers
