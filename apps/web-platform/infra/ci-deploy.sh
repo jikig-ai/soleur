@@ -454,6 +454,7 @@ case "$COMPONENT" in
       --env-file "$ENV_FILE" \
       --add-host host.docker.internal:host-gateway \
       -e INNGEST_BASE_URL=http://host.docker.internal:8288 \
+      -e CRON_WORKSPACE_ROOT=/workspaces \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
       -p 0.0.0.0:3001:3000 \
@@ -618,6 +619,7 @@ case "$COMPONENT" in
         --env-file "$ENV_FILE" \
         --add-host host.docker.internal:host-gateway \
         -e INNGEST_BASE_URL=http://host.docker.internal:8288 \
+        -e CRON_WORKSPACE_ROOT=/workspaces \
         -v /mnt/data/workspaces:/workspaces \
         -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
         -p 0.0.0.0:80:3000 \
