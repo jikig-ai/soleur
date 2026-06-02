@@ -896,13 +896,16 @@ export async function startAgentSession(
     // RuntimeAuthError synchronously rather than mid-tool-call.
     // Phase 3 (feat-team-workspace-multi-user): split userId into
     // workspaceContextUserId (whose workspace the agent acts upon) vs
-    // keyOwnerUserId (whose api_keys row backs the BYOK key). For solo
-    // workspaces both equal `userId` (N2 invariant — workspaces.id =
-    // owner_user_id for backfilled solo); team workspaces will diverge
-    // when Phase 4 invite flow ships.
+    // keyOwnerUserId (whose api_keys row backs the BYOK key). The args stay
+    // `userId, userId`; the workspace the BYOK key is resolved against is
+    // derived INSIDE resolveKeyOwnerThenLease via resolveCurrentWorkspaceId
+    // (the member's ACTIVE workspace — the shared workspace an owner granted
+    // into, post Phase-4 invite flow), no longer the oldest/solo workspace
+    // (#4767). For a solo caller the active workspace IS their solo workspace,
+    // so solo behavior is preserved bit-for-bit.
     // Sentinel sweep site #1 (#4232 PR-A). callerUserId = userId (server-
     // derived per agent-runner JWT contract; provenance enumerated in PR
-    // body). N2 solo invariant kept: callerUserId === workspaceContextUserId.
+    // body). Invariant kept: callerUserId === workspaceContextUserId.
     await resolveKeyOwnerThenLease(
       userId,
       userId,
@@ -2518,7 +2521,8 @@ export async function sendUserMessage(
   if (!conv.domain_leader) {
     try {
       // Sentinel sweep site #2 (#4232 PR-A). Routing-side BYOK fetch;
-      // same N2 solo invariant + server-derived `userId` provenance.
+      // workspace resolved against the caller's ACTIVE workspace inside
+      // resolveKeyOwnerThenLease (#4767) + server-derived `userId` provenance.
       await resolveKeyOwnerThenLease(
         userId,
         userId,
