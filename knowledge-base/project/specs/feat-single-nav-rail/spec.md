@@ -94,5 +94,17 @@ action is already possible today.
 
 ## Visual Design
 
-ux-design-lead wireframes (drill states, context band, collapsed workspace identity) are
-a prerequisite — first plan step. No `.pen` artifact exists yet (Capability Gap #1).
+ux-design-lead wireframes are at `knowledge-base/product/design/navigation/single-nav-rail.pen`
+with exported frames in `knowledge-base/product/design/navigation/screenshots/`. Frame → FR map
+(AC9 — wireframes referenced in the spec FRs):
+
+- `01-main-nav-top-level.png` — FR3 (context band: workspace chip + switcher + "Working on" repo)
+  + top-level primary nav (Dashboard / Knowledge Base / Analytics) + footer.
+- `02-drilled-knowledge-base.png` — FR1 (KB tree replaces primary nav) + FR2 (back chevron) +
+  FR3 (compact band identity persists while drilled).
+- `03-drilled-settings-members.png` — FR1 (Settings sub-nav in the rail) + the wrong-workspace
+  circuit breaker ("Inviting into → workspace" callout backing AC1 / the AC11 detector).
+- `04-drilled-chat-on-pdf.png` — FR1 (Conversations rail in the single rail) + FR5 (sibling
+  switching is back-then-forward, no in-band section switcher).
+- `05-mobile-drill-in.png` — FR8 (mobile drill) + FR3/RQ1 (context band identity in the mobile
+  top bar, outside the hamburger drawer).
