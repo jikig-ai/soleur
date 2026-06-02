@@ -85,8 +85,50 @@ function OwnerDelegationControl({
   } | null;
 }) {
   const [loading, setLoading] = useState(false);
-  const [capCents, setCapCents] = useState(delegation?.dailyCapCents ?? 2000);
+  // Pre-grant `<input>` model (only shown when there is no active delegation).
+  const [grantDraftCapCents, setGrantDraftCapCents] = useState(delegation?.dailyCapCents ?? 2000);
   const [active, setActive] = useState(!!delegation?.active);
+  // Post-join cap edit (#4779-followup): an active delegation's daily cap can
+  // be changed in place via PATCH (the WORM Shape-3 flip), without revoke+
+  // re-grant. `displayCapCents` is the cap shown in the $spent/$cap label; it
+  // updates locally on a successful save. `editingCap` toggles the inline
+  // editor; `draftDollars` holds the raw input string (parsed on save so
+  // mid-typing never clamps).
+  const [displayCapCents, setDisplayCapCents] = useState(delegation?.dailyCapCents ?? 2000);
+  const [editingCap, setEditingCap] = useState(false);
+  const [draftDollars, setDraftDollars] = useState(
+    String((delegation?.dailyCapCents ?? 2000) / 100),
+  );
+
+  const handleSaveCap = useCallback(async () => {
+    if (!delegation) return;
+    const nextCapCents = Math.max(100, Math.round(Number(draftDollars) * 100));
+    setLoading(true);
+    try {
+      const res = await fetch("/api/workspace/delegations", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ delegationId: delegation.id, dailyCapCents: nextCapCents }),
+      });
+      if (res.ok) {
+        setDisplayCapCents(nextCapCents);
+        setEditingCap(false);
+      } else {
+        // Mirror the grant/revoke error posture (AC5): a failed write must be
+        // operator-visible, never a silent revert. Close the editor so the
+        // unchanged $spent/$cap label signals the cap did NOT change.
+        console.error("[delegation-toggle] cap update failed:", res.status);
+        window.alert("Couldn't update the daily cap. Please try again.");
+        setEditingCap(false);
+      }
+    } catch (err) {
+      console.error("[delegation-toggle] cap update request failed:", err);
+      window.alert("Something went wrong. Please check your connection and try again.");
+      setEditingCap(false);
+    } finally {
+      setLoading(false);
+    }
+  }, [delegation, draftDollars]);
 
   const handleToggle = useCallback(async () => {
     setLoading(true);
@@ -112,7 +154,7 @@ function OwnerDelegationControl({
           body: JSON.stringify({
             workspaceId,
             granteeUserId: memberUserId,
-            dailyCapCents: capCents,
+            dailyCapCents: grantDraftCapCents,
           }),
         });
         if (res.ok) {
@@ -132,7 +174,7 @@ function OwnerDelegationControl({
     } finally {
       setLoading(false);
     }
-  }, [active, delegation, workspaceId, memberUserId, capCents]);
+  }, [active, delegation, workspaceId, memberUserId, grantDraftCapCents]);
 
   return (
     <div className="flex items-center gap-2">
@@ -153,18 +195,61 @@ function OwnerDelegationControl({
           }`}
         />
       </button>
-      {active && delegation && (
-        <span className="text-xs text-soleur-text-muted">
-          ${(delegation.todaySpentCents / 100).toFixed(2)}/
-          ${(delegation.dailyCapCents / 100).toFixed(0)}
-        </span>
+      {active && delegation && !editingCap && (
+        <>
+          <span className="text-xs text-soleur-text-muted">
+            ${(delegation.todaySpentCents / 100).toFixed(2)}/
+            ${(displayCapCents / 100).toFixed(0)}
+          </span>
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => {
+              setDraftDollars(String(displayCapCents / 100));
+              setEditingCap(true);
+            }}
+            className="text-xs text-soleur-text-muted underline decoration-dotted underline-offset-2 hover:text-soleur-text-secondary"
+          >
+            Edit cap
+          </button>
+        </>
+      )}
+      {active && delegation && editingCap && (
+        <>
+          <input
+            type="number"
+            min={1}
+            value={draftDollars}
+            onChange={(e) => setDraftDollars(e.target.value)}
+            className="w-16 rounded border border-soleur-border-default bg-soleur-bg-base px-1 py-0.5 text-xs text-soleur-text-primary"
+            aria-label="Daily cap in dollars"
+          />
+          <button
+            type="button"
+            // Block Save on empty/invalid/sub-$1 input so clearing the field and
+            // saving can't silently write the $1.00 floor (an unintended de-fund).
+            disabled={loading || !(Number(draftDollars) >= 1)}
+            onClick={handleSaveCap}
+            className="text-xs font-medium text-soleur-accent-gold-fg hover:underline disabled:opacity-50"
+          >
+            Save
+          </button>
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => setEditingCap(false)}
+            className="text-xs text-soleur-text-muted hover:text-soleur-text-secondary"
+          >
+            Cancel
+          </button>
+        </>
       )}
       {!active && !delegation && (
         <input
           type="number"
           min={1}
-          value={capCents / 100}
-          onChange={(e) => setCapCents(Math.max(100, Math.round(Number(e.target.value) * 100)))}
+          value={grantDraftCapCents / 100}
+          onChange={(e) => setGrantDraftCapCents(Math.max(100, Math.round(Number(e.target.value) * 100)))}
           className="w-16 rounded border border-soleur-border-default bg-soleur-bg-base px-1 py-0.5 text-xs text-soleur-text-primary"
           aria-label="Daily cap in dollars"
         />
