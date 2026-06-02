@@ -347,6 +347,50 @@ EOF
   rm -rf "$root"
 }
 
+# --- T8: secrets=GH_TOKEN forwarding through the env -i sandbox ------------
+# Regression guard for the silent-never-close P1 (gh-using follow-through
+# probes): the sweeper runs verification scripts under `env -i` (PATH + HOME +
+# directive-declared secrets= ONLY). A gh-probe that omits `secrets=GH_TOKEN`
+# loses the token in CI and returns transient forever. Proves both directions:
+# (a) without secrets= the token is STRIPPED; (b) with secrets=GH_TOKEN it is
+# FORWARDED. The probe writes the value it sees to a CWD-relative sidecar
+# (CWD = the issue tmpdir, preserved across env -i).
+t8_secrets_gh_token_forwarded() {
+  local root; root=$(setup_tmpdir)
+  cat > "$root/scripts/followthroughs/token-probe.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "${GH_TOKEN:-ABSENT}" > token-probe.out
+exit 0
+EOF
+  chmod +x "$root/scripts/followthroughs/token-probe.sh"
+  export GH_TOKEN="ghs_t8_sentinel_value"
+
+  # (a) NO secrets= → env -i strips GH_TOKEN → probe sees ABSENT.
+  rm -f "$root/token-probe.out"
+  local body_nosecret
+  body_nosecret=$(cat <<'EOF'
+<!-- soleur:followthrough script=scripts/followthroughs/token-probe.sh earliest=2020-01-01T00:00:00Z -->
+EOF
+)
+  invoke_run_one "$root" "$body_nosecret" >/dev/null
+  assert_eq        "T8a no secrets= → GH_TOKEN stripped by env -i" \
+                   "ABSENT" "$(cat "$root/token-probe.out" 2>/dev/null)"
+
+  # (b) secrets=GH_TOKEN → forwarded → probe sees the sentinel value.
+  rm -f "$root/token-probe.out"
+  local body_secret
+  body_secret=$(cat <<'EOF'
+<!-- soleur:followthrough script=scripts/followthroughs/token-probe.sh earliest=2020-01-01T00:00:00Z secrets=GH_TOKEN -->
+EOF
+)
+  invoke_run_one "$root" "$body_secret" >/dev/null
+  assert_eq        "T8b secrets=GH_TOKEN → forwarded into env -i sandbox" \
+                   "ghs_t8_sentinel_value" "$(cat "$root/token-probe.out" 2>/dev/null)"
+
+  unset GH_TOKEN
+  rm -rf "$root"
+}
+
 t1_realpath_rejects_traversal
 t2_first_directive_wins
 t3_anchored_awk_skips_mid_prose
@@ -354,6 +398,7 @@ t4_canonical_body_happy_path
 t5_multi_script_token_first_wins
 t6_fenced_block_directive_is_skipped
 t7_symlink_under_allowlist_rejected
+t8_secrets_gh_token_forwarded
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
