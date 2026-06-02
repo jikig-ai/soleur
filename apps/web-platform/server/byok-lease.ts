@@ -5,13 +5,18 @@
  * Contract:
  *   - `runWithByokLease({ workspaceContextUserId, keyOwnerUserId }, fn)`
  *     opens an ALS scope, lazy-decrypts the `keyOwnerUserId`'s BYOK
- *     Anthropic key on first `lease.getApiKey()` call, and `zeroize`s
- *     the buffer in `finally` (success OR throw). The lease exposes
- *     both userIds as sync properties for downstream cost-writers.
- *   - `lease.getApiKey()` is a function (NOT a property accessor) per
- *     type-design F3. A captured-and-leaked lease reference outside the
- *     ALS scope throws `ByokLeaseError {cause: "escape"}` — the load-
- *     bearing test that catches the silent-leak class.
+ *     credential on first `lease.getRestApiKey()` /
+ *     `lease.getAgentCredential()` call, and `zeroize`s the buffer(s) in
+ *     `finally` (success OR throw). The lease exposes both userIds as sync
+ *     properties for downstream cost-writers.
+ *   - Two-row-by-provider model (feat-operator-cc-oauth): `getRestApiKey()`
+ *     reads ONLY `provider='anthropic'` (raw-REST consumers, cannot return
+ *     an oauth token by construction); `getAgentCredential()` prefers
+ *     `provider='anthropic_oauth'` (gated) and returns `{ value, scheme }`.
+ *   - The accessors are functions (NOT property accessors) per type-design
+ *     F3. A captured-and-leaked lease reference outside the ALS scope
+ *     throws `ByokLeaseError {cause: "escape"}` — the load-bearing test
+ *     that catches the silent-leak class.
  *   - `getCurrentByokLease()` reads the active lease from the ALS
  *     context. Returns `null` outside any scope; never throws.
  *
@@ -30,9 +35,9 @@
  * tenant-scoped Supabase client (`getFreshTenantClient`) so RLS
  * isolates the row to the key owner's own data. `decryptKey` returns a
  * Buffer (PR-B §1.4.2 refactor); the buffer lives in the ALS slot and
- * is wiped in `finally`. The string conversion happens at
- * `getApiKey()` for SDK consumption — that intern surface is
- * documented in §3.6 ADR.
+ * is wiped in `finally`. The string conversion happens at the accessor
+ * (`getRestApiKey` / `getAgentCredential`) for SDK consumption — that
+ * intern surface is documented in §3.6 ADR.
  *
  * Subprocess env-leak handling (CWE-526): see plan §1.5.7 and #3244.
  * The Anthropic Claude Agent SDK spawns a CLI subprocess that reads
@@ -48,12 +53,62 @@ import { createHash } from "node:crypto";
 import * as Sentry from "@sentry/nextjs";
 
 import { decryptKey, decryptKeyLegacy, zeroize } from "./byok";
+import type { AgentAuthScheme, AgentCredential } from "./agent-env";
 import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import { createChildLogger } from "@/server/logger";
 
 const log = createChildLogger("byok-lease");
 
 export type UserId = string;
+
+/**
+ * feat-operator-cc-oauth (CLO Guardrail 1). The `oauth_token` execution
+ * path fails closed before this instant. Single source of truth for the
+ * date gate — `getAgentCredential()`'s oauth-read branch is the only
+ * reader. Exported so the lease test can derive before/after boundaries.
+ */
+export const CC_OAUTH_EFFECTIVE_DATE = Date.parse("2026-06-15T00:00:00Z");
+
+/**
+ * Kill-switch (plan §Phase 6.2). When unset/falsey the oauth read is never
+ * attempted — the lease behaves exactly as the api_key-only path did, so
+ * the whole feature is inert (AC8). Instant disable without a Flagsmith
+ * round-trip. Read at call time so a deploy-time env flip takes effect on
+ * the next lease without a process restart contract.
+ */
+function isCcOauthEnabled(): boolean {
+  const v = process.env.CC_OAUTH_ENABLED;
+  return v === "1" || v === "true";
+}
+
+/**
+ * CLO Guardrail 1 — raised when an `anthropic_oauth` credential is selected
+ * before `CC_OAUTH_EFFECTIVE_DATE`. Fail-closed (the run does NOT silently
+ * fall back to the api_key, which would defeat the policy gate). Operator-
+ * only surface (only the operator can hold an oauth row).
+ */
+export class OauthNotYetPermittedError extends Error {
+  constructor() {
+    super(
+      "Claude Code subscription auth is not permitted before 2026-06-15",
+    );
+    this.name = "OauthNotYetPermittedError";
+  }
+}
+
+/**
+ * CLO Guardrail 2 — raised when an `anthropic_oauth` credential would fund a
+ * run it does not own (delegated lease, or keyOwner ≠ workspace context).
+ * The subscription credit may fund ONLY its owner's own runs; fail-closed.
+ */
+export class OauthDelegationForbiddenError extends Error {
+  constructor() {
+    super(
+      "Claude Code subscription token may only fund its owner's own runs",
+    );
+    this.name = "OauthDelegationForbiddenError";
+  }
+}
 
 export interface ByokLeaseArgs {
   /**
@@ -96,10 +151,18 @@ export interface ByokLeaseArgs {
  *     pattern caught by the function-not-property contract).
  */
 export class ByokLeaseError extends Error {
-  public readonly cause: "fetch_failed" | "decrypt_failed" | "escape";
+  public readonly cause:
+    | "fetch_failed"
+    | "decrypt_failed"
+    | "escape"
+    | "subscription_limit";
 
   constructor(
-    cause: "fetch_failed" | "decrypt_failed" | "escape",
+    cause:
+      | "fetch_failed"
+      | "decrypt_failed"
+      | "escape"
+      | "subscription_limit",
     message: string,
   ) {
     super(message);
@@ -191,11 +254,16 @@ export function reportMissingByokKey(err: MissingByokKeyError): void {
  */
 export function mapByokLeaseCauseToErrorCode(
   cause: ByokLeaseError["cause"],
-): "key_invalid" | undefined {
+): "key_invalid" | "subscription_limit" | undefined {
   switch (cause) {
     case "fetch_failed":
     case "decrypt_failed":
       return "key_invalid";
+    case "subscription_limit":
+      // feat-operator-cc-oauth FR5 — credit/rate-limit exhaustion on a
+      // subscription (oauth_token) run is distinct from key_invalid so the
+      // UI renders "subscription limit reached" copy, not a re-paste prompt.
+      return "subscription_limit";
     case "escape":
       return undefined;
     default: {
@@ -217,31 +285,59 @@ export interface ByokLease {
    */
   readonly delegationId?: string;
   /**
-   * Return the plaintext API key as a string. Lazy-decrypts on first
-   * call; subsequent calls within the same scope return the cached
-   * plaintext.
+   * Raw-REST plaintext API key. Queries ONLY `provider='anthropic'`, so it
+   * is STRUCTURALLY incapable of returning an `oauth_token` (that secret
+   * lives in a row this query never reads) — the oauth→`x-api-key` leak is
+   * impossible by construction (plan § Deepen-Plan Resolution). Use from
+   * every raw-REST consumer (`new Anthropic({apiKey})`, `x-api-key` fetch).
+   * Lazy-decrypts on first call; cached for the scope.
    *
    * @throws {ByokLeaseError} cause="escape" if called outside the
    *   originating ALS scope (captured-reference leak).
    * @throws {ByokLeaseError} cause="fetch_failed" if the api_keys row
    *   read errored (DB error / RLS deny).
    * @throws {MissingByokKeyError} if the `keyOwnerUserId` has NO
-   *   api_keys row (fail-closed; AC-D).
+   *   `provider='anthropic'` api_keys row (fail-closed; AC-D).
    * @throws {ByokLeaseError} cause="decrypt_failed" if AES-GCM auth
    *   verification failed.
    */
-  getApiKey(): string | Promise<string>;
+  getRestApiKey(): string | Promise<string>;
+  /**
+   * Agent-SDK credential. Prefers `provider='anthropic_oauth'` (the
+   * subscription token) when the kill-switch is on; falls back to
+   * `provider='anthropic'`. Returns `{ value, scheme }` so `buildAgentEnv`
+   * injects exactly one auth var. The date (CLO G1), owner (CLO G2), and
+   * kill-switch (AC8) gates fire ONLY on the oauth read.
+   *
+   * @throws {OauthNotYetPermittedError} if an oauth row is selected before
+   *   `CC_OAUTH_EFFECTIVE_DATE` (fail-closed; no silent api_key fallback).
+   * @throws {OauthDelegationForbiddenError} if an oauth row would fund a
+   *   delegated / non-owner run (fail-closed).
+   * @throws {ByokLeaseError} / {MissingByokKeyError} as `getRestApiKey`.
+   */
+  getAgentCredential(): AgentCredential | Promise<AgentCredential>;
 }
 
 interface LeaseSlot {
   workspaceContextUserId: UserId;
   keyOwnerUserId: UserId;
-  /** Lazy plaintext buffer — populated on first getApiKey call. */
-  apiKeyBuffer: Buffer | null;
-  /** Set false on scope exit. Lease.getApiKey() checks this. */
+  /** Lazy plaintext for `provider='anthropic'` (raw-REST). */
+  restApiKeyBuffer: Buffer | null;
+  /** Lazy plaintext for the Agent-SDK credential (oauth or anthropic fallback). */
+  agentCredentialBuffer: Buffer | null;
+  /** Scheme of the cached agent credential; null until first resolution. */
+  agentCredentialScheme: AgentAuthScheme | null;
+  /** Set false on scope exit. Both accessors check this. */
   alive: boolean;
   /** BYOK Delegations PR-A (#4232). Threaded through to ByokLease. */
   delegationId?: string;
+}
+
+interface EncryptedRow {
+  encrypted_key: string;
+  iv: string;
+  auth_tag: string;
+  key_version: number;
 }
 
 const als = new AsyncLocalStorage<LeaseSlot>();
@@ -255,43 +351,63 @@ const als = new AsyncLocalStorage<LeaseSlot>();
  * captured reference outside the original scope sees a different (or
  * `undefined`) ALS context and throws.
  */
+/**
+ * Synchronous escape check (per type-design F3 — escape must be a sync
+ * throw so `expect(() => lease.getRestApiKey()).toThrow(...)` catches it;
+ * an async-only check would surface as a Promise rejection only).
+ */
+function assertLeaseAlive(slot: LeaseSlot): void {
+  const current = als.getStore();
+  if (!current || current !== slot || !slot.alive) {
+    throw new ByokLeaseError(
+      "escape",
+      "Authentication unavailable; retry shortly",
+    );
+  }
+}
+
 function makeLease(slot: LeaseSlot): ByokLease {
   return {
     workspaceContextUserId: slot.workspaceContextUserId,
     keyOwnerUserId: slot.keyOwnerUserId,
     delegationId: slot.delegationId,
-    getApiKey(): string | Promise<string> {
-      // Synchronous escape check (per type-design F3 — escape must be a
-      // sync throw so `expect(() => lease.getApiKey()).toThrow(...)`
-      // catches it; an async-only check would surface as Promise
-      // rejection only).
-      const current = als.getStore();
-      if (!current || current !== slot || !slot.alive) {
-        throw new ByokLeaseError(
-          "escape",
-          "Authentication unavailable; retry shortly",
-        );
+    getRestApiKey(): string | Promise<string> {
+      assertLeaseAlive(slot);
+      // Cache hit — return synchronously to keep hot-path callers off the
+      // microtask queue.
+      if (slot.restApiKeyBuffer) {
+        return slot.restApiKeyBuffer.toString("utf8");
       }
-
-      // Cache hit — return synchronously to keep hot-path callers
-      // off the microtask queue.
-      if (slot.apiKeyBuffer) {
-        return slot.apiKeyBuffer.toString("utf8");
+      return fetchRestApiKeyIntoSlot(slot);
+    },
+    getAgentCredential(): AgentCredential | Promise<AgentCredential> {
+      assertLeaseAlive(slot);
+      if (slot.agentCredentialBuffer && slot.agentCredentialScheme) {
+        return {
+          value: slot.agentCredentialBuffer.toString("utf8"),
+          scheme: slot.agentCredentialScheme,
+        };
       }
-
-      // Lazy fetch + decrypt — async path, callers must `await`.
-      return fetchAndDecryptIntoSlot(slot);
+      return fetchAgentCredentialIntoSlot(slot);
     },
   };
 }
 
-async function fetchAndDecryptIntoSlot(slot: LeaseSlot): Promise<string> {
+/**
+ * Read the `is_valid` row for a single provider via the tenant-scoped
+ * client. Returns `null` when no row exists (caller decides whether that is
+ * a fail-closed MissingByokKeyError or a fall-through to another provider).
+ */
+async function fetchProviderRow(
+  slot: LeaseSlot,
+  provider: "anthropic" | "anthropic_oauth",
+): Promise<EncryptedRow | null> {
   const tenant = await getFreshTenantClient(slot.keyOwnerUserId);
   const { data, error } = await tenant
     .from("api_keys")
     .select("encrypted_key, iv, auth_tag, key_version")
     .eq("user_id", slot.keyOwnerUserId)
-    .eq("provider", "anthropic")
+    .eq("provider", provider)
     .eq("is_valid", true)
     .limit(1)
     .maybeSingle();
@@ -302,33 +418,32 @@ async function fetchAndDecryptIntoSlot(slot: LeaseSlot): Promise<string> {
       "Authentication unavailable; retry shortly",
     );
   }
-  if (!data) {
-    // Phase 3.2 AC-D: legitimate "no key on file" — distinct from a DB
-    // error. Triggers the configure-banner UI path, not the key-prompt.
-    throw new MissingByokKeyError(
-      slot.workspaceContextUserId,
-      slot.keyOwnerUserId,
-    );
-  }
+  return (data as EncryptedRow | null) ?? null;
+}
 
-  let buf: Buffer;
+/** Decrypt a fetched row into a plaintext Buffer (cause=decrypt_failed on auth-tag mismatch). */
+function decryptRow(row: EncryptedRow, keyOwnerUserId: UserId): Buffer {
   try {
-    const encrypted = Buffer.from(data.encrypted_key, "base64");
-    const iv = Buffer.from(data.iv, "base64");
-    const tag = Buffer.from(data.auth_tag, "base64");
-    buf =
-      data.key_version === 1
-        ? decryptKeyLegacy(encrypted, iv, tag)
-        : decryptKey(encrypted, iv, tag, slot.keyOwnerUserId);
+    const encrypted = Buffer.from(row.encrypted_key, "base64");
+    const iv = Buffer.from(row.iv, "base64");
+    const tag = Buffer.from(row.auth_tag, "base64");
+    return row.key_version === 1
+      ? decryptKeyLegacy(encrypted, iv, tag)
+      : decryptKey(encrypted, iv, tag, keyOwnerUserId);
   } catch (_err) {
     throw new ByokLeaseError(
       "decrypt_failed",
       "Authentication unavailable; retry shortly",
     );
   }
+}
 
-  // Re-check liveness after the await chain — a parallel scope-end
-  // could have flipped `alive` between fetch and here.
+/**
+ * Re-check liveness after the fetch/decrypt await chain — a parallel
+ * scope-end could have flipped `alive` between fetch and here. Zeroizes the
+ * just-decrypted buffer before throwing so it never lingers.
+ */
+function assertAliveAfterDecrypt(slot: LeaseSlot, buf: Buffer): void {
   if (!slot.alive || als.getStore() !== slot) {
     zeroize(buf);
     throw new ByokLeaseError(
@@ -336,9 +451,68 @@ async function fetchAndDecryptIntoSlot(slot: LeaseSlot): Promise<string> {
       "Authentication unavailable; retry shortly",
     );
   }
+}
 
-  slot.apiKeyBuffer = buf;
+async function fetchRestApiKeyIntoSlot(slot: LeaseSlot): Promise<string> {
+  const row = await fetchProviderRow(slot, "anthropic");
+  if (!row) {
+    // Phase 3.2 AC-D: legitimate "no key on file" — distinct from a DB
+    // error. Triggers the configure-banner UI path, not the key-prompt.
+    throw new MissingByokKeyError(
+      slot.workspaceContextUserId,
+      slot.keyOwnerUserId,
+    );
+  }
+  const buf = decryptRow(row, slot.keyOwnerUserId);
+  assertAliveAfterDecrypt(slot, buf);
+  slot.restApiKeyBuffer = buf;
   return buf.toString("utf8");
+}
+
+async function fetchAgentCredentialIntoSlot(
+  slot: LeaseSlot,
+): Promise<AgentCredential> {
+  // Prefer the subscription oauth token — but ONLY attempt the read when the
+  // kill-switch is on, so a disabled feature behaves bit-for-bit like the
+  // api_key-only path (AC8).
+  if (isCcOauthEnabled()) {
+    const oauthRow = await fetchProviderRow(slot, "anthropic_oauth");
+    if (oauthRow) {
+      // ---- Gates fire ONLY on the oauth read (plan §Phase 2.3) ----
+      // CLO G1 — date gate. Fail-closed; NEVER silently fall back to the
+      // api_key (that would defeat the policy gate).
+      if (Date.now() < CC_OAUTH_EFFECTIVE_DATE) {
+        throw new OauthNotYetPermittedError();
+      }
+      // CLO G2 — owner-only routing. A delegated lease or a keyOwner that
+      // differs from the workspace context is a cross-owner run.
+      if (
+        slot.delegationId != null ||
+        slot.keyOwnerUserId !== slot.workspaceContextUserId
+      ) {
+        throw new OauthDelegationForbiddenError();
+      }
+      const buf = decryptRow(oauthRow, slot.keyOwnerUserId);
+      assertAliveAfterDecrypt(slot, buf);
+      slot.agentCredentialBuffer = buf;
+      slot.agentCredentialScheme = "oauth_token";
+      return { value: buf.toString("utf8"), scheme: "oauth_token" };
+    }
+  }
+
+  // Fall back to the raw-REST api_key (scheme=api_key).
+  const apiRow = await fetchProviderRow(slot, "anthropic");
+  if (!apiRow) {
+    throw new MissingByokKeyError(
+      slot.workspaceContextUserId,
+      slot.keyOwnerUserId,
+    );
+  }
+  const buf = decryptRow(apiRow, slot.keyOwnerUserId);
+  assertAliveAfterDecrypt(slot, buf);
+  slot.agentCredentialBuffer = buf;
+  slot.agentCredentialScheme = "api_key";
+  return { value: buf.toString("utf8"), scheme: "api_key" };
 }
 
 /**
@@ -362,7 +536,9 @@ export async function runWithByokLease<T>(
     workspaceContextUserId: args.workspaceContextUserId,
     keyOwnerUserId: args.keyOwnerUserId,
     delegationId: args.delegationId,
-    apiKeyBuffer: null,
+    restApiKeyBuffer: null,
+    agentCredentialBuffer: null,
+    agentCredentialScheme: null,
     alive: true,
   };
 
@@ -372,8 +548,11 @@ export async function runWithByokLease<T>(
       return fn(lease);
     });
   } finally {
-    if (slot.apiKeyBuffer) zeroize(slot.apiKeyBuffer);
-    slot.apiKeyBuffer = null;
+    if (slot.restApiKeyBuffer) zeroize(slot.restApiKeyBuffer);
+    if (slot.agentCredentialBuffer) zeroize(slot.agentCredentialBuffer);
+    slot.restApiKeyBuffer = null;
+    slot.agentCredentialBuffer = null;
+    slot.agentCredentialScheme = null;
     slot.alive = false;
   }
 }

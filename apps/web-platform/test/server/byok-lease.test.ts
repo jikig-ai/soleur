@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 // PR-B §1.4.1 — BYOK lease unit tests.
 //
 // Asserts the load-bearing invariants of `runWithByokLease`:
-//   1. ALS scope: lease.getApiKey() works inside fn, throws outside.
+//   1. ALS scope: lease.getRestApiKey() works inside fn, throws outside.
 //   2. Zeroize-on-finally: the underlying Buffer is wiped after the
 //      scope closes (success OR throw paths).
 //   3. Capture-and-leak: a captured `lease` reference outside the
@@ -101,14 +101,14 @@ beforeEach(() => {
 });
 
 describe("runWithByokLease — ALS scope invariants", () => {
-  it("inside fn: lease.getApiKey() returns the decrypted plaintext", async () => {
+  it("inside fn: lease.getRestApiKey() returns the decrypted plaintext", async () => {
     seedApiKey();
 
     const result = await runWithByokLease(
       { workspaceContextUserId: TEST_USER, keyOwnerUserId: TEST_USER },
       async (lease) => {
         // First call: lazy fetch — Promise<string>.
-        return await lease.getApiKey();
+        return await lease.getRestApiKey();
       },
     );
 
@@ -122,9 +122,9 @@ describe("runWithByokLease — ALS scope invariants", () => {
       { workspaceContextUserId: TEST_USER, keyOwnerUserId: TEST_USER },
       async (lease) => {
         // Prime the cache.
-        await lease.getApiKey();
+        await lease.getRestApiKey();
         // Second call: cache hit — synchronous string return.
-        const second = lease.getApiKey();
+        const second = lease.getRestApiKey();
         expect(typeof second).toBe("string");
         expect(second).toBe(TEST_PLAINTEXT);
       },
@@ -139,19 +139,19 @@ describe("runWithByokLease — ALS scope invariants", () => {
       async (lease) => {
         const current = getCurrentByokLease();
         expect(current).not.toBeNull();
-        const a = await lease.getApiKey();
-        const b = await current!.getApiKey();
+        const a = await lease.getRestApiKey();
+        const b = await current!.getRestApiKey();
         expect(b).toBe(a);
       },
     );
   });
 
-  it("inside fn: getApiKey() across nested awaits still works (ALS propagation)", async () => {
+  it("inside fn: getRestApiKey() across nested awaits still works (ALS propagation)", async () => {
     seedApiKey();
 
     const inner = async (l: ByokLease) => {
       await new Promise((r) => setImmediate(r));
-      return await l.getApiKey();
+      return await l.getRestApiKey();
     };
 
     const result = await runWithByokLease(
@@ -179,14 +179,14 @@ describe("runWithByokLease — zeroize-on-finally", () => {
       async (lease) => {
         captured = lease;
         // Prime the buffer so we can tell wipe-completed from no-buffer.
-        expect(await lease.getApiKey()).toBe(TEST_PLAINTEXT);
+        expect(await lease.getRestApiKey()).toBe(TEST_PLAINTEXT);
       },
     );
 
     expect(captured).not.toBeNull();
-    expect(() => captured!.getApiKey()).toThrowError(ByokLeaseError);
+    expect(() => captured!.getRestApiKey()).toThrowError(ByokLeaseError);
     try {
-      captured!.getApiKey();
+      captured!.getRestApiKey();
     } catch (err) {
       expect((err as ByokLeaseError).cause).toBe("escape");
     }
@@ -201,14 +201,14 @@ describe("runWithByokLease — zeroize-on-finally", () => {
         { workspaceContextUserId: TEST_USER, keyOwnerUserId: TEST_USER },
         async (lease) => {
           captured = lease;
-          expect(await lease.getApiKey()).toBe(TEST_PLAINTEXT);
+          expect(await lease.getRestApiKey()).toBe(TEST_PLAINTEXT);
           throw new Error("fn-internal-failure");
         },
       ),
     ).rejects.toThrow("fn-internal-failure");
 
     expect(captured).not.toBeNull();
-    expect(() => captured!.getApiKey()).toThrowError(ByokLeaseError);
+    expect(() => captured!.getRestApiKey()).toThrowError(ByokLeaseError);
   });
 
   it("captured lease across two sibling lease scopes throws (no slot reuse)", async () => {
@@ -219,18 +219,18 @@ describe("runWithByokLease — zeroize-on-finally", () => {
       { workspaceContextUserId: TEST_USER, keyOwnerUserId: TEST_USER },
       async (lease) => {
         firstLease = lease;
-        await lease.getApiKey();
+        await lease.getRestApiKey();
       },
     );
 
     // Open a SECOND scope. The first lease's slot is dead; calling
-    // getApiKey on the captured first-lease must NOT silently return
+    // getRestApiKey on the captured first-lease must NOT silently return
     // the second scope's plaintext.
     await runWithByokLease(
       { workspaceContextUserId: TEST_USER, keyOwnerUserId: TEST_USER },
       async (lease) => {
-        expect(() => firstLease!.getApiKey()).toThrowError(ByokLeaseError);
-        expect(await lease.getApiKey()).toBe(TEST_PLAINTEXT);
+        expect(() => firstLease!.getRestApiKey()).toThrowError(ByokLeaseError);
+        expect(await lease.getRestApiKey()).toBe(TEST_PLAINTEXT);
       },
     );
   });
@@ -251,7 +251,7 @@ describe("runWithByokLease — error paths", () => {
     ).rejects.toBe(sentinel);
   });
 
-  it("api_keys fetch error: getApiKey() throws ByokLeaseError{cause:fetch_failed}", async () => {
+  it("api_keys fetch error: getRestApiKey() throws ByokLeaseError{cause:fetch_failed}", async () => {
     mocks.setFetchError(new Error("DB unreachable"));
     mocks.setApiKeyRow(null);
 
@@ -259,7 +259,7 @@ describe("runWithByokLease — error paths", () => {
       runWithByokLease(
         { workspaceContextUserId: TEST_USER, keyOwnerUserId: TEST_USER },
         async (lease) => {
-          return await lease.getApiKey();
+          return await lease.getRestApiKey();
         },
       ),
     ).rejects.toMatchObject({
@@ -274,7 +274,7 @@ describe("runWithByokLease — error paths", () => {
   // configure-banner); the latter is "DB error / RLS deny" (key-invalid
   // signal). Without splitting, the UI cannot tell the configure-banner
   // case from the key-prompt case — see plan §Phase 3.2.
-  it("missing api_keys row: getApiKey() throws MissingByokKeyError with workspace context", async () => {
+  it("missing api_keys row: getRestApiKey() throws MissingByokKeyError with workspace context", async () => {
     mocks.setApiKeyRow(null);
     mocks.setFetchError(null);
 
@@ -284,7 +284,7 @@ describe("runWithByokLease — error paths", () => {
         { workspaceContextUserId: TEST_USER, keyOwnerUserId: TEST_OWNER },
         async (lease) => {
           try {
-            return await lease.getApiKey();
+            return await lease.getRestApiKey();
           } catch (err) {
             caught = err;
             throw err;
@@ -323,7 +323,7 @@ describe("runWithByokLease — no plaintext leak surfaces", () => {
     await runWithByokLease(
       { workspaceContextUserId: TEST_USER, keyOwnerUserId: TEST_USER },
       async (lease) => {
-        await lease.getApiKey();
+        await lease.getRestApiKey();
         // Stringify the lease — anyone who logs `{ lease }` should not see
         // the plaintext or the buffer contents.
         leaseSnapshot = JSON.stringify(lease);

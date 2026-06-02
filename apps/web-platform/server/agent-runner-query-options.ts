@@ -25,7 +25,7 @@ import type {
   Options as SDKOptions,
 } from "@anthropic-ai/claude-agent-sdk";
 
-import { buildAgentEnv } from "./agent-env";
+import { buildAgentEnv, type AgentCredential } from "./agent-env";
 import { buildAgentSandboxConfig } from "./agent-runner-sandbox-config";
 import { createSandboxHook } from "./sandbox-hook";
 import { createChildLogger } from "./logger";
@@ -59,7 +59,13 @@ export interface SubagentStartPayloadOverride {
 export interface AgentQueryOptionsArgs {
   workspacePath: string;
   pluginPath: string;
-  apiKey: string;
+  /**
+   * The resolved agent credential (`{ value, scheme }`). Threaded as a
+   * single object — NOT a bare key string — so `buildAgentEnv` injects
+   * exactly one auth var; a forgotten scheme is a TYPE error, not a silent
+   * wrong-var (feat-operator-cc-oauth Phase 3).
+   */
+  credential: AgentCredential;
   serviceTokens: Record<string, string>;
   systemPrompt: string;
   /** SDK chain step 5 — the canUseTool callback. Required. */
@@ -133,7 +139,7 @@ export function buildAgentQueryOptions(
       ...(args.extraDisallowedTools ?? []),
     ],
     systemPrompt: args.systemPrompt,
-    env: buildAgentEnv(args.apiKey, args.serviceTokens),
+    env: buildAgentEnv(args.credential, args.serviceTokens),
     // Sandbox literal lives in `buildAgentSandboxConfig` so legacy + cc
     // share the same shape verbatim (drift-guarded by
     // `agent-runner-helpers.test.ts`).
