@@ -191,7 +191,13 @@ R2_SECRET="$R2_S3_SECRET_ACCESS_KEY"
 # cla-evidence workflow runs — the 2026-05-16 outage class. The probe key
 # is content-addressed under bootstrap-probe/ so it's idempotent across
 # re-runs and easy to identify+delete in the bucket inspector.
-probe_endpoint="https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com/${BUCKET_NAME}/bootstrap-probe/$(date -u +%Y%m%dT%H%M%SZ).json"
+# Pin the canonical R2 endpoint base (guards a malformed CF_ACCOUNT_ID) BEFORE
+# this credentialed probe PUT — without it, a bad account id would send the R2
+# HMAC secret to a non-canonical host (item 1 of #3950). Reused for the Doppler
+# push below.
+R2_ENDPOINT="https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com"
+assert_r2_endpoint "$R2_ENDPOINT"
+probe_endpoint="${R2_ENDPOINT}/${BUCKET_NAME}/bootstrap-probe/$(date -u +%Y%m%dT%H%M%SZ).json"
 probe_body='{"probe":"bootstrap","ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
 probe_code=$(curl -sS -o /tmp/r2-probe-body -w "%{http_code}" --max-time 30 \
   -X PUT \
@@ -222,12 +228,8 @@ else
   yellow "  prd_cla already exists; will update secrets in place"
 fi
 
-# Endpoint is derivable but stored for sidecar simplicity.
-R2_ENDPOINT="https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com"
-# Pin the canonical hostname on the value we are about to persist (item 1 of
-# #3950) — guards against a malformed CF_ACCOUNT_ID landing a bad endpoint in
-# Doppler prd_cla, which every downstream consumer would then trust.
-assert_r2_endpoint "$R2_ENDPOINT"
+# Endpoint is derivable but stored for sidecar simplicity. R2_ENDPOINT was
+# computed AND validated (assert_r2_endpoint) above, before the probe PUT.
 
 doppler secrets set \
   --project soleur --config prd_cla \

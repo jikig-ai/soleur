@@ -194,9 +194,11 @@ _cleanup_partial_override() {
   exit "$rc"
 }
 
-# Thin wrapper over the shared helper — preserves the existing no-arg call
-# sites (:232, :290, :327 and the trap handler) which rely on the closed-over
-# $CF_ADMIN_TOKEN / $CF_ADMIN_TOKEN_ID.
+# Thin wrapper over the shared helper — preserves the existing no-arg
+# `_self_revoke` call sites (the various step/cleanup error paths), which rely
+# on the closed-over $CF_ADMIN_TOKEN / $CF_ADMIN_TOKEN_ID. Note the ERR/INT/TERM
+# trap handler (_cleanup_partial_override) deliberately does NOT self-revoke —
+# the operator needs the token live to investigate a mid-flight interrupt.
 _self_revoke() {
   cf_token_self_revoke "$CF_ADMIN_TOKEN" "$CF_ADMIN_TOKEN_ID"
 }

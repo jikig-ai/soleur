@@ -111,7 +111,9 @@ fi
 
 # ── Tombstone-mode tests (issue #3950 item 4) ──────────────────────────────
 # Tombstone stub: `s3 cp s3://…/tombstones/<sha>.deleted.json -` returns the
-# fixture body; a cp whose s3 URI contains "missingsha" simulates a 404 (exit 1).
+# fixture body. A cp whose s3 URI contains the all-'b' sha emits a 404-shaped
+# stderr (genuine "no such erasure"); the all-'c' sha emits a non-404 error
+# (AccessDenied) so the reader's 404-vs-transport distinction is exercised.
 mk_tombstone_stub() {
   local fixture_body="$1"
   cat > "$work/aws" <<EOF
@@ -124,7 +126,14 @@ for a in "\$@"; do
   esac
 done
 if [[ "\$MODE" == cp ]]; then
-  [[ "\$src" == *missingsha* ]] && exit 1   # simulate 404
+  if [[ "\$src" == *bbbbbbbbbbbbbbbb* ]]; then
+    echo "fatal error: An error occurred (404) when calling the HeadObject operation: Not Found" >&2
+    exit 1
+  fi
+  if [[ "\$src" == *cccccccccccccccc* ]]; then
+    echo "fatal error: An error occurred (AccessDenied) when calling the GetObject operation: Access Denied" >&2
+    exit 1
+  fi
   cat "$work/body.json"
   exit 0
 fi
@@ -144,6 +153,8 @@ run_tombstone() {
 }
 
 SHA_OK=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+SHA_MISSING=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+SHA_DENIED=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 
 # TS10: tombstone <sha> with schema_version 1.0 → exit 0, body + _key echoed.
 mk_tombstone_stub "{\"schema_version\":\"1.0\",\"deleted_at\":\"2026-06-02T00:00:00Z\",\"admin_actor\":\"ops@stub.invalid\",\"gdpr_request_ref\":\"DSAR-2026-001\",\"prior_object_sha\":\"$SHA_OK\",\"override_reason\":\"art17 erasure\"}"
@@ -166,14 +177,32 @@ else
   red "FAIL: TS11 expected exit 3 + schema_version mismatch; got rc=$rc"; red "$out"; fail=1
 fi
 
-# TS12: tombstone <sha> on a missing key → exit 0 with 'no tombstone' message.
+# TS12: tombstone <sha> on a genuine 404 → exit 0 with 'no tombstone' message.
 mk_tombstone_stub '{"schema_version":"1.0"}'
-MISSING=missingsha0000000000000000000000000000000000000000000000000000
-out=$(run_tombstone "$MISSING" 2>&1) && rc=0 || rc=$?
-if [[ "$rc" -eq 0 ]] && grep -qE "no tombstone for ${MISSING}" <<<"$out"; then
-  green "PASS: TS12 missing tombstone → exit 0 + 'no tombstone' message"
+out=$(run_tombstone "$SHA_MISSING" 2>&1) && rc=0 || rc=$?
+if [[ "$rc" -eq 0 ]] && grep -qE "no tombstone for ${SHA_MISSING}" <<<"$out"; then
+  green "PASS: TS12 genuine 404 → exit 0 + 'no tombstone' message"
 else
   red "FAIL: TS12 expected exit 0 + 'no tombstone for <sha>'; got rc=$rc"; red "$out"; fail=1
+fi
+
+# TS12b: tombstone fetch FAILS for a non-404 reason (AccessDenied / cred error)
+# → exit 1 + ::error:: (must NOT be reported as an authoritative "no tombstone").
+mk_tombstone_stub '{"schema_version":"1.0"}'
+out=$(run_tombstone "$SHA_DENIED" 2>&1) && rc=0 || rc=$?
+if [[ "$rc" -eq 1 ]] && grep -qE '::error::tombstone fetch failed' <<<"$out" && ! grep -qE "no tombstone for ${SHA_DENIED}" <<<"$out"; then
+  green "PASS: TS12b non-404 fetch error → exit 1 + ::error::, NOT a false 'no tombstone'"
+else
+  red "FAIL: TS12b expected exit 1 + 'tombstone fetch failed' + no false negative; got rc=$rc"; red "$out"; fail=1
+fi
+
+# TS12c: malformed (non-64-hex) sha → exit 64 before any fetch.
+mk_tombstone_stub '{"schema_version":"1.0"}'
+out=$(run_tombstone "NOThex-and-too-short" 2>&1) && rc=0 || rc=$?
+if [[ "$rc" -eq 64 ]] && grep -qE '::error::object-sha must be 64-char lowercase hex' <<<"$out"; then
+  green "PASS: TS12c malformed sha → exit 64 (input-shape guard, mirrors write path)"
+else
+  red "FAIL: TS12c expected exit 64 + sha-shape error; got rc=$rc"; red "$out"; fail=1
 fi
 
 # TS13: by-pr 404 message hints at the tombstone subcommand (item 4 'or' branch).
