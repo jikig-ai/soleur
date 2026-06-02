@@ -4,6 +4,7 @@ import { memo } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useConversations } from "@/hooks/use-conversations";
+import { RailEmptyState } from "@/components/dashboard/rail-empty-state";
 import { relativeTime } from "@/lib/relative-time";
 import { LEADER_COLORS } from "@/components/chat/leader-colors";
 import type { ConversationStatus } from "@/lib/types";
@@ -101,12 +102,12 @@ export function ConversationsRail() {
 
       <nav className="min-h-0 flex-1 overflow-y-auto py-1">
         {!loading && conversations.length === 0 ? (
-          <Link
-            href="/dashboard/chat/new"
-            className="block px-3 py-3 text-sm text-blue-400 hover:bg-soleur-bg-surface-1"
-          >
-            + New conversation
-          </Link>
+          <RailEmptyState
+            testId="conversations-rail-empty"
+            message="No conversations yet."
+            ctaLabel="Start one"
+            ctaHref="/dashboard/chat/new"
+          />
         ) : (
           conversations.map((conv) => (
             <ConversationRailRow

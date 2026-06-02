@@ -2,6 +2,8 @@
 
 import { FileTree } from "@/components/kb/file-tree";
 import { SearchOverlay } from "@/components/kb/search-overlay";
+import { useKb } from "@/components/kb/kb-context";
+import { RailEmptyState } from "@/components/dashboard/rail-empty-state";
 
 interface KbSidebarShellProps {
   /**
@@ -19,6 +21,11 @@ interface KbSidebarShellProps {
  * ("Knowledge Base") now lives in the persistent context band, not here.
  */
 export function KbSidebarShell({ onCollapse }: KbSidebarShellProps) {
+  const { tree, loading } = useKb();
+  // RQ5 / AC6: never a blank KB rail. Once loaded with no docs, show a labeled
+  // CTA in place of the (null-rendering) empty FileTree.
+  const isEmpty = !loading && !tree?.children?.length;
+
   return (
     <div className="flex h-full flex-col">
       {onCollapse && (
@@ -49,7 +56,16 @@ export function KbSidebarShell({ onCollapse }: KbSidebarShellProps) {
         <SearchOverlay />
       </div>
       <div className="flex-1 overflow-y-auto px-2 pb-4">
-        <FileTree />
+        {isEmpty ? (
+          <RailEmptyState
+            testId="kb-rail-empty"
+            message="No documents yet."
+            ctaLabel="Connect a repo or add docs"
+            ctaHref="/dashboard/settings/services"
+          />
+        ) : (
+          <FileTree />
+        )}
       </div>
     </div>
   );

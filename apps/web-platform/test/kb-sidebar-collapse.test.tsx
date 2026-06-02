@@ -102,6 +102,40 @@ describe("KB file tree lifts into the single nav rail slot (ADR-047)", () => {
     expect(screen.queryByLabelText("Expand file tree")).not.toBeInTheDocument();
   });
 
+  it("shows a labeled empty-state CTA in the rail when the KB has no docs (AC6)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url === "/api/kb/tree") {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () =>
+              Promise.resolve({ tree: { name: "root", children: [] } }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({}),
+        });
+      }),
+    );
+    render(
+      <RailSlotHarness>
+        <KbLayout>
+          <div>content</div>
+        </KbLayout>
+      </RailSlotHarness>,
+    );
+    const slot = await screen.findByTestId("rail-slot-harness");
+    const empty = await within(slot).findByTestId("kb-rail-empty");
+    expect(empty).toHaveTextContent(/no documents yet/i);
+    expect(
+      within(empty).getByRole("link", { name: /connect a repo or add docs/i }),
+    ).toBeInTheDocument();
+  });
+
   it("renders nothing into the rail when there is no slot (top-level / no drill)", async () => {
     // No RailSlotProvider → the portal has no target and the tree no-ops.
     render(

@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { TeamNamesProvider } from "@/hooks/use-team-names";
 import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { SignOutConfirmModal } from "@/components/auth/sign-out-confirm-modal";
 import { useSignOut } from "@/components/auth/use-sign-out";
@@ -104,6 +105,11 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  // Single-mount the context band: render it in the rail on desktop, in the
+  // mobile top bar below md (RQ1). useMediaQuery reads matchMedia synchronously
+  // on the client, so exactly one band instance mounts — no duplicate
+  // OrgSwitcherContainer/LiveRepoBadge fetch (AC4b).
+  const isDesktop = useMediaQuery("(min-width: 768px)");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -204,19 +210,21 @@ export default function DashboardLayout({
     <TeamNamesProvider>
     <RailSlotProvider value={railSlotEl}>
     <div className="flex h-dvh flex-col md:flex-row">
-      {/* Mobile top bar — only visible below md breakpoint */}
-      <div className="flex h-14 shrink-0 items-center border-b border-soleur-border-default bg-soleur-bg-surface-1 px-4 safe-top md:hidden">
+      {/* Mobile top bar — only visible below md breakpoint. RQ1: the context
+          band replaces the bare "Soleur" label so workspace identity is shown
+          in EVERY mobile state, OUTSIDE the hamburger drawer. */}
+      <div className="flex min-h-14 shrink-0 items-center gap-1 border-b border-soleur-border-default bg-soleur-bg-surface-1 px-2 safe-top md:hidden">
         <button
           onClick={() => setDrawerOpen(true)}
           aria-label="Open navigation"
           aria-expanded={drawerOpen}
-          className="flex h-10 w-10 items-center justify-center rounded-lg text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
         >
           <MenuIcon className="h-5 w-5" />
         </button>
-        <span className="ml-3 text-lg font-semibold tracking-tight text-soleur-text-primary">
-          Soleur
-        </span>
+        {!isDesktop && (
+          <WorkspaceContextBand pathname={pathname} variant="mobile" />
+        )}
       </div>
 
       {/* Overlay backdrop — always rendered for fade transition */}
@@ -281,8 +289,9 @@ export default function DashboardLayout({
             collapse, leaving the active workspace ambiguous during a
             tenant-sensitive action. The band is the SOLE render site for both
             components (AC4b single-mount); it also carries the back chevron +
-            section title in drilled states. */}
-        <WorkspaceContextBand pathname={pathname} />
+            section title in drilled states. Rendered in the rail on desktop;
+            on mobile the band lives in the top bar (RQ1) — exactly one mount. */}
+        {isDesktop && <WorkspaceContextBand pathname={pathname} />}
 
         {/* Rail swap region (ADR-047): the section's secondary nav REPLACES
             the primary nav + footer in the same rail when drilled. A true

@@ -15,6 +15,8 @@ import {
   type ActionClassTier,
 } from "@/server/scope-grants/action-class-map";
 import { reportSilentFallback } from "@/server/observability";
+import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
+import { emitWorkspaceActionContext } from "@/server/workspace-action-audit";
 
 export const dynamic = "force-dynamic";
 
@@ -91,6 +93,18 @@ export async function POST(req: Request) {
     level: "info",
     data: { action_class: actionClass, tier, grant_id: data },
   });
+
+  // AC11: record the active workspace at scope-grant commit time
+  // (wrong-workspace detector). The RPC scopes the grant to the session's
+  // active workspace; resolve it so the audit line names the same tenant.
+  const activeWorkspaceId = await resolveCurrentWorkspaceId(user.id, supabase);
+  if (activeWorkspaceId) {
+    emitWorkspaceActionContext({
+      action: "scope-grant",
+      userId: user.id,
+      workspaceId: activeWorkspaceId,
+    });
+  }
 
   return NextResponse.json({ id: data, action_class: actionClass, tier });
 }

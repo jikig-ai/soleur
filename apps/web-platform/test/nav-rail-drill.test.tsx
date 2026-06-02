@@ -142,6 +142,20 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
     expect(slot).toContainElement(screen.getByTestId("portaled-nav"));
   });
 
+  it("RQ1/AC1: renders the context band in the mobile top bar on a mobile viewport", () => {
+    // stubMatchMedia returns matches:false → isDesktop=false → mobile band.
+    mockPathname = "/dashboard";
+    render(
+      <Wrap>
+        <DashboardLayout>
+          <div>content</div>
+        </DashboardLayout>
+      </Wrap>,
+    );
+    const band = screen.getByTestId("workspace-context-band");
+    expect(band).toHaveAttribute("data-variant", "mobile");
+  });
+
   it("does NOT render portal content at the top level (slot absent)", () => {
     mockPathname = "/dashboard";
     render(

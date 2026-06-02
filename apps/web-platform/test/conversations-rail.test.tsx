@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
 import type { ConversationWithPreview } from "@/hooks/use-conversations";
 
 // RED phase for plan 2026-04-29-feat-command-center-conversation-nav.
@@ -179,7 +179,7 @@ describe("ConversationsRail", () => {
     expect(link).toHaveAttribute("href", "/dashboard");
   });
 
-  it("renders an empty-state '+ New conversation' CTA when there are zero rows", async () => {
+  it("renders a labeled empty-state CTA (never a blank rail) when there are zero rows (AC6)", async () => {
     setRailHook([]);
 
     const { ConversationsRail } = await import(
@@ -187,8 +187,10 @@ describe("ConversationsRail", () => {
     );
     render(<ConversationsRail />);
 
-    const cta = screen.getByRole("link", { name: /\+ new conversation/i });
-    expect(cta).toBeInTheDocument();
+    const empty = screen.getByTestId("conversations-rail-empty");
+    expect(empty).toHaveTextContent(/no conversations yet/i);
+    const cta = within(empty).getByRole("link", { name: /start one/i });
+    expect(cta).toHaveAttribute("href", "/dashboard/chat/new");
   });
 
   it("renders the inline status badge with founder-language labels", async () => {
