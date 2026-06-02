@@ -370,7 +370,7 @@ Starting SHA for rollback: <starting-sha>
 To rollback: git reset --hard <starting-sha> && git push --force-with-lease origin <branch-name>
 ```
 
-The state-machine details (`mergeStateStatus` enum coverage, fail-open required-check fetch, fixture at `plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh`) are documented in `plugins/soleur/skills/ship/SKILL.md` Phase 7. At the 6-sync `behind_exhausted` cap, see ship/SKILL.md Phase 7 "Auto-sync on BEHIND" for the settle-then-admin-merge escape hatch (zero-conflict-surface changes only).
+The state-machine details (`mergeStateStatus` enum coverage, fail-open required-check fetch, fixture at `plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh`) are documented in `plugins/soleur/skills/ship/SKILL.md` Phase 7. At the 6-sync `behind_exhausted` cap, see ship/SKILL.md Phase 7 "Auto-sync on BEHIND" for the settle-then-admin-merge escape hatch (zero-conflict-surface changes only); the `"Auto-sync on BEHIND" below` reference inside the mirrored poll-block echo above points at that ship section, not a section in this file.
 
 ## Phase 6: Cleanup and Report
 
