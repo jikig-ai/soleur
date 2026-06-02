@@ -437,16 +437,35 @@ async function saveMessage(
    */
   meta?: { status?: "complete" | "aborted"; usage?: UsageSnapshot },
 ) {
-  // PR-B §1.5.1 (#3244): tenant-scoped insert. RLS on `messages` requires
-  // `EXISTS (SELECT 1 FROM conversations WHERE id = conversation_id AND
-  // user_id = auth.uid())` — a cross-founder write fails the policy and
-  // surfaces as a Postgres error (not a silent no-op). The userId param
-  // is the founder identity for `getFreshTenantClient`; the actual write
-  // is keyed on `conversation_id` and the FK-join policy enforces ownership.
+  // PR-B §1.5.1 (#3244): tenant-scoped insert. Post-migration 059, RLS on
+  // `messages` requires `workspace_id` to be a workspace the caller is a member
+  // of (`messages_workspace_member_insert` WITH CHECK
+  // `is_workspace_member(workspace_id, auth.uid())`); we derive `workspace_id`
+  // from the parent conversation, which the caller's conversation-RLS already
+  // gated on membership. The userId param is the founder identity for
+  // `getFreshTenantClient`; the write is keyed on `conversation_id` and the
+  // member-keyed policy enforces ownership.
   const tenant = await getFreshTenantClient(userId);
+
+  // Read the parent conversation's workspace_id once via the same tenant
+  // client (no second mint). On read failure throw the same
+  // `Failed to save message:` contract — never proceed to a NULL workspace_id
+  // INSERT (which would 500 under the mig-059 WITH CHECK).
+  const { data: convWsRow, error: convWsErr } = await tenant
+    .from("conversations")
+    .select("workspace_id")
+    .eq("id", conversationId)
+    .single();
+  if (convWsErr || !convWsRow) {
+    throw new Error(
+      `Failed to save message: ${convWsErr?.message ?? "conversation workspace_id not found"}`,
+    );
+  }
+
   const { error } = await tenant.from("messages").insert({
     id: randomUUID(),
     conversation_id: conversationId,
+    workspace_id: convWsRow.workspace_id,
     role,
     content,
     tool_calls: toolCalls || null,
@@ -2425,21 +2444,29 @@ export async function sendUserMessage(
   // conversation owner should drive agent sessions. Workspace members
   // can READ shared conversations but not inject messages into them.
   const sendTenant = await getFreshTenantClient(userId);
+  // mig 059: also read `workspace_id` here (zero extra RTT — extend the
+  // existing select) so the user-row INSERT below can satisfy the member-keyed
+  // RLS WITH CHECK. Derived from the parent conversation, which this same
+  // (id, user_id)-scoped read already gated on ownership.
   const { data: conv, error: convErr } = await sendTenant
     .from("conversations")
-    .select("domain_leader, session_id")
+    .select("domain_leader, session_id, workspace_id")
     .eq("id", conversationId)
     .eq("user_id", userId)
     .single();
 
   if (convErr || !conv) throw new Error(ERR_CONVERSATION_NOT_FOUND);
 
-  // PR-B §1.5.1: tenant-scoped insert. RLS on `messages` enforces
-  // ownership via the FK-join policy on `conversations.user_id`.
+  // PR-B §1.5.1: tenant-scoped insert. Post-migration 059, RLS on `messages`
+  // requires `workspace_id` to be a workspace the caller is a member of
+  // (`messages_workspace_member_insert` WITH CHECK
+  // `is_workspace_member(workspace_id, auth.uid())`); we derive it from the
+  // parent conversation read above.
   const messageId = randomUUID();
   const { error: msgErr } = await sendTenant.from("messages").insert({
     id: messageId,
     conversation_id: conversationId,
+    workspace_id: conv.workspace_id,
     role: "user",
     content,
     tool_calls: null,
