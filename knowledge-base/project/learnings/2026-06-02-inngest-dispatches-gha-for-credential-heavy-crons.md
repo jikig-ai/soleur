@@ -24,6 +24,10 @@ A new dispatch-only Inngest cron (`apps/web-platform/server/inngest/functions/cr
 
 4. **Type vitest mock spies whose `.mock.calls[i]` you destructure.** `vi.fn(async () => ...)` infers an empty arg tuple `[]`, so `const [a, b] = spy.mock.calls[0]` fails tsc TS2493. Give the spy `(...args: unknown[])`.
 
+5. **A cron string with `*/N` step syntax inside a JSDoc `/** */` header closes the comment block early.** The terraform template's cron (`0 6,18 * * *`) has no `*/`, so this only bites when the new cron uses step syntax (`15 */6 * * *`, `0 */6 * * *`): the literal `*/6` in a `/** … */` header comment is parsed as the comment terminator → esbuild `Unexpected "*"` at transform time and the WHOLE test file fails at collection (`0 test`), not at an assertion. Keep the cron literal OUT of the header prose — describe it as "every 6 hours at HH:15 UTC". The `{ cron: "15 */6 * * *" }` in the `createFunction` call is a string literal (not a comment) and is fine. Monthly crons (`0 0 1 * *`) have no step operator and are safe.
+
+6. **Don't add a source-string NEGATIVE anchor (`not.toContain("date_override")`) for a token the header comment must legitimately mention.** review-reminder's workflow has an OPTIONAL `date_override` input that the dispatch deliberately omits; the function header explains that decision in prose, so a `not.toContain("date_override")` / `not.toContain("inputs:")` source anchor fails on the comment, not on a real leak. The binding guard for "no inputs forwarded" is the exhaustive happy-path `toEqual` asserting the dispatch params equal exactly `{ owner, repo, workflow_id, ref }` — a leaked `inputs` key fails it. Reserve source-string anchors for tokens that should never appear anywhere in the file.
+
 ## Session Errors
 
 1. **`_cron-shared` alias import → substrate guard failure.** Recovery: relative `./_cron-shared`. Prevention: gotcha #1 above (guard-enforced convention).
@@ -32,6 +36,12 @@ A new dispatch-only Inngest cron (`apps/web-platform/server/inngest/functions/cr
 4. **test-all.sh EXIT=1 masked as "exit code 0" by the background-wrapper notification** (91/92 suites). Recovery: grepped the `EXIT=` log marker (written via `echo "EXIT=$?" >> log`). Prevention: known tail-masking class (`2026-05-18-test-all-tail-masking`); always read the explicit `EXIT=` marker, never the wrapper's exit.
 5. **signature-verify `importRoute()` timeouts (16s) in the 694-file single-process local shard.** Pass in isolation; CI shards webplat into 2 so won't hit it. Recovery: re-ran the failing files in isolation (CI-equivalent) to classify as resource-contention, not regression. Prevention: the documented doppler-env/contention caveat — re-run a failing webplat file in isolation before treating it as a regression.
 6. **(forwarded)** Plan subagent Write blocked by worktree-boundary hook (main-repo path); corrected immediately. No impact.
+
+### Second migration (PR #4799 — dev-migration-drift, main-health-monitor, review-reminder)
+7. **`*/6` cron in JSDoc header → esbuild `Unexpected "*"`, suite fails at collection.** Two of the three new functions (`15 */6`, `0 */6`) had the cron literal in the `/** */` header; `*/6` closed the comment. Recovery: reworded headers to prose. Prevention: gotcha #5 above.
+8. **Brittle `not.toContain("date_override")` source anchor failed on the explanatory header comment.** Recovery: dropped the anchor; the exhaustive `toEqual` (no `inputs` key) is the binding guard. Prevention: gotcha #6 above.
+9. **Alphabetical-placement slip in the plan** — plan said `cron-review-reminder` goes "after cron-roadmap-review"; it sorts BEFORE (`review` < `roadmap`, `e`<`o`). Caught at /work; placed correctly. Ordering is convention-only (parity guards (b)/(e) check set membership, not order), so this was cosmetic. Prevention: re-derive alpha placement at write-time, don't trust the plan's prose ordering.
+10. **`Edit` before `Read`** on a workflow YAML I'd only inspected via Bash `sed`/`grep`. Recovery: Read tool first. Prevention: `hr-always-read-a-file-before-editing-it` — Bash inspection does not satisfy the Read-before-Edit precondition.
 
 Related: [[2026-05-19-inngest-substrate-five-bug-cascade]], [[2026-06-02-sentry-cron-margin-must-absorb-gha-dispatch-jitter]] (the predecessor PR #4772 this supersedes), [[2026-05-18-vendor-cron-heartbeat-silent-fail-pattern]].
 
