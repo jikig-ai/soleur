@@ -74,7 +74,7 @@ $(echo "$tampered" | tr ' ' '\n' | grep -v '^$' | sed 's/^/  - /')
 
 Re-run with \`scripts/run-self-test.sh --regenerate-manifest\` (dev) or fix
 the rule pack before scanning. Override requires a structured artifact under
-\`knowledge-base/security/skill-overrides/\`.
+\`knowledge-base/engineering/security/skill-overrides/\`.
 
 ---
 Advisory static analysis only. LOW-RISK does not constitute a security audit,

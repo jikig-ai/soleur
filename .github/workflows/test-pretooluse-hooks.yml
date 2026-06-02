@@ -182,22 +182,81 @@ jobs:
           jq empty "$INCIDENTS_FILE" || { echo "::error::jsonl is malformed"; exit 1; }
           echo "jsonl is valid; $(wc -l < "$INCIDENTS_FILE") events recorded."
 
-      - name: Assert F2 defer-gate dry-run telemetry
+      - name: Dump F2 defer-gate agent-runtime telemetry (informational)
         if: always()
         env:
           INCIDENTS_FILE: .claude/.rule-incidents.jsonl
         run: |
-          # Test 6 ran `terraform apply` — F2 prod-write-defer-terraform-apply
-          # rule must have emitted kind=would_defer in dry-run mode.
+          # INFORMATIONAL ONLY — this step does NOT gate the job (intentional
+          # exit 0 on absence). The agent may legitimately not issue the raw
+          # `terraform apply` Bash call (e.g. it reasons around the missing
+          # terraform binary), so a kind=would_defer row from the AGENT runtime
+          # is non-deterministic and must never fail CI. The authoritative,
+          # agent-independent F2 content assertion lives in the
+          # "Assert F2 defer-gate telemetry (deterministic)" step below, which
+          # hard-fails (exit 1) on a genuine regression. See issue #4818.
           if [[ ! -s "$INCIDENTS_FILE" ]]; then
-            echo "::warning::no incidents file; cannot assert F2 telemetry"
+            echo "::notice::no agent-runtime incidents file (agent did not issue a hooked command); deterministic step is the real gate"
             exit 0
           fi
           count=$(jq -c 'select(.kind == "would_defer" and .rule_id == "prod-write-defer-terraform-apply")' "$INCIDENTS_FILE" | wc -l)
           if [[ "$count" -lt 1 ]]; then
-            echo "::warning::F2 dry-run telemetry missing for terraform apply (expected kind=would_defer row)"
-            echo "rows present:"
+            echo "::notice::no agent-runtime would_defer row for terraform apply (non-deterministic; not a failure). Rows present:"
             jq -c '.rule_id + " :: " + (.kind // "rule_event")' "$INCIDENTS_FILE"
             exit 0
           fi
-          echo "F2 dry-run telemetry present: $count would_defer row(s) for terraform apply."
+          echo "agent-runtime F2 dry-run telemetry present: $count would_defer row(s) for terraform apply."
+
+      - name: Assert F2 defer-gate telemetry (deterministic)
+        if: always()
+        run: |
+          # Agent-independent, deterministic F2 telemetry gate (issue #4818).
+          # Pipes a synthetic payload directly through the hook — no agent, no
+          # real terraform binary — and HARD-FAILS (exit 1) if either the
+          # dry-run (would_defer / empty-allow) or the enforce-default
+          # (defer / defer_requested) envelope regresses. This replaces the old
+          # ::warning::-and-exit-0 soft check, whose assertion could silently
+          # no-op when the agent chose not to run the exact hooked command.
+          PAYLOAD='{"tool_input":{"command":"terraform apply"},"session_id":"ci-test6"}'
+
+          # Probe 1: dry-run (SOLEUR_DEFER_DRYRUN=1) -> kind=would_defer, empty-allow.
+          root=$(mktemp -d)
+          out=$(printf '%s' "$PAYLOAD" \
+            | env SOLEUR_DEFER_DRYRUN=1 INCIDENTS_REPO_ROOT="$root" .claude/hooks/prod-write-defer-gate.sh)
+          jsonl="$root/.claude/.rule-incidents.jsonl"
+          decision=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // ""')
+          if [[ -n "$decision" ]]; then
+            echo "::error::dry-run should allow (empty permissionDecision), got: $decision"
+            exit 1
+          fi
+          count=$(jq -c 'select(.kind=="would_defer" and .rule_id=="prod-write-defer-terraform-apply")' "$jsonl" 2>/dev/null | wc -l)
+          if [[ "$count" -lt 1 ]]; then
+            echo "::error::dry-run would_defer row absent for terraform apply"
+            cat "$jsonl" 2>/dev/null || true
+            exit 1
+          fi
+          echo "dry-run OK: $count would_defer row(s)"
+
+          # Probe 2: enforce default (SOLEUR_DEFER_DRYRUN unset, mirrors unit D4)
+          # -> permissionDecision=defer, hookEventName=PreToolUse, kind=defer_requested.
+          # env -u (not env -i) so jq/bash stay on PATH; the var is unset at job
+          # scope (the "Test hooks via claude-code-action" step's pin is
+          # step-scoped), so this also guards against a future job-level pin or a
+          # silent default flip to :-1.
+          root2=$(mktemp -d)
+          out2=$(printf '%s' "$PAYLOAD" \
+            | env -u SOLEUR_DEFER_DRYRUN INCIDENTS_REPO_ROOT="$root2" .claude/hooks/prod-write-defer-gate.sh)
+          jsonl2="$root2/.claude/.rule-incidents.jsonl"
+          decision2=$(printf '%s' "$out2" | jq -r '.hookSpecificOutput.permissionDecision // ""')
+          ename2=$(printf '%s' "$out2" | jq -r '.hookSpecificOutput.hookEventName // ""')
+          if [[ "$decision2" != "defer" || "$ename2" != "PreToolUse" ]]; then
+            echo "::error::enforce default should defer/PreToolUse, got decision=$decision2 event=$ename2"
+            exit 1
+          fi
+          count2=$(jq -c 'select(.kind=="defer_requested" and .rule_id=="prod-write-defer-terraform-apply")' "$jsonl2" 2>/dev/null | wc -l)
+          if [[ "$count2" -lt 1 ]]; then
+            echo "::error::enforce defer_requested row absent for terraform apply"
+            cat "$jsonl2" 2>/dev/null || true
+            exit 1
+          fi
+          echo "enforce-default OK: $count2 defer_requested row(s)"
