@@ -196,8 +196,9 @@ The diagnostic queries return only aggregate counts + normalized query TEXT (par
 no literals) + table names — no row data, no PII. The issue/Sentry payload MUST be
 restricted to those shapes (enforced in Phase 3 + AC).
 
-**Brand-survival threshold:** `single-user incident`. CPO sign-off required at plan time
-before `/work`. `user-impact-reviewer` runs at review time.
+- **Brand-survival threshold:** `single-user incident`
+
+CPO sign-off required at plan time before `/work`. `user-impact-reviewer` runs at review time.
 
 ## Implementation Phases
 
@@ -598,8 +599,9 @@ logs:
   where: app pino to Better Stack (handler logger.info/warn); Sentry for errors
   retention: Better Stack standard retention
 discoverability_test:
-  command: "curl -sS -X POST $MGMT_API/database/query -d query=pg_stat_statements-cache-hit-pct (NO ssh) — the same probe the monitor runs"
-  expected_output: a cache_hit_pct number (~100.0 healthy)
+  command: |
+    curl -sS -o /dev/null -w "%{http_code}\n" --max-time 10 https://app.soleur.ai/api/inngest
+  expected_output: "401 (the Inngest serve endpoint that hosts cron-supabase-disk-io is reachable; 401 = HMAC-gated, which is the healthy unauthenticated response). 200 also acceptable. 000/timeout = the cron host is unreachable. No ssh, no secret needed."
 ```
 
 ## Infrastructure (IaC)
