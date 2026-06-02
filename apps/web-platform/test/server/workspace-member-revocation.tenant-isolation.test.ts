@@ -300,17 +300,21 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       });
 
       const ownerA = fixtureX.members[0];
-      const aJwt = await mintUserJwt(url, serviceKey, ownerA.email);
-      const aClient = clientWithJwt(url, anonKey, aJwt);
 
-      // Transfer ownership from A to D — exercises the audit writer and
-      // the mig 075 transfer_workspace_ownership path.
-      const { data: attestationId, error: transferErr } = await aClient.rpc(
+      // Transfer ownership from A to D — exercises the audit writer and the
+      // transfer_workspace_ownership path. Post-mig-092 (#4768) the function is
+      // service-role-only: the authenticated 3-arg overload was DROPPED to close
+      // the #4762 forgeable-caller tenant-takeover class. Production
+      // (server/workspace-membership.ts) now invokes it via the service client
+      // with the verified caller id forwarded as p_caller_user_id; mirror that
+      // here. Calling as an authenticated tenant client now yields 42501.
+      const { data: attestationId, error: transferErr } = await service.rpc(
         "transfer_workspace_ownership",
         {
           p_workspace_id: fixtureX.workspaceId,
           p_new_owner_user_id: dId,
           p_attestation_text: "test-ownership-transfer-3.2.4-fixture",
+          p_caller_user_id: ownerA.userId,
         },
       );
       expect(transferErr, `transfer_workspace_ownership failed: ${transferErr?.message}`).toBeNull();
