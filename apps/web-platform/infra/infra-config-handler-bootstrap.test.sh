@@ -63,7 +63,9 @@ assert "resource declared" \
   "grep -qE 'resource \"terraform_data\" \"infra_config_handler_bootstrap\"' '$SERVER_TF'"
 
 # Extract the resource block (from its declaration to the next column-0 `}`) so
-# all subsequent assertions are scoped to it.
+# all subsequent assertions are scoped to it. Relies on `terraform fmt` canonical
+# indentation: every nested block's closing brace is indented, so the first
+# column-0 `}` is the resource terminator (fmt is gated in infra-validation.yml).
 # shellcheck disable=SC2034  # consumed via `eval "$condition"` in assert()
 BLOCK=$(awk '
   /^resource "terraform_data" "infra_config_handler_bootstrap"/ { f=1 }
@@ -87,6 +89,8 @@ assert "connection uses the operator SSH agent (agent = true)" \
 # --- AC3: triggers_replace references all three trigger inputs ---
 echo ""
 echo "--- AC3: triggers_replace complete (handler + status script + hooks.json) ---"
+assert "triggers_replace uses the sha256(join(...)) wrapper" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'triggers_replace[[:space:]]*=[[:space:]]*sha256\(join\('"
 assert "triggers_replace references infra-config-apply.sh" \
   "printf '%s' \"\$BLOCK\" | grep -qE 'file\(\"\\\$\{path\.module\}/infra-config-apply\.sh\"\)'"
 assert "triggers_replace references cat-infra-config-state.sh" \
@@ -96,13 +100,21 @@ assert "triggers_replace references local.hooks_json" \
 
 # --- AC4: handler delivered (the load-bearing anti-regression invariant) ---
 echo ""
-echo "--- AC4: resource writes /usr/local/bin/infra-config-apply.sh ---"
-# This is the file deploy_pipeline_fix CANNOT deliver. Its presence in this
-# resource body is the proof that the handler now HAS a deploy path.
-assert "resource delivers /usr/local/bin/infra-config-apply.sh" \
-  "printf '%s' \"\$BLOCK\" | grep -qE '/usr/local/bin/infra-config-apply\.sh'"
-assert "resource delivers /usr/local/bin/cat-infra-config-state.sh" \
-  "printf '%s' \"\$BLOCK\" | grep -qE '/usr/local/bin/cat-infra-config-state\.sh'"
+echo "--- AC4: resource DELIVERS the handler via provisioner \"file\" ---"
+# This is the file deploy_pipeline_fix CANNOT deliver. The delivery must be
+# anchored to the provisioner "file" source/destination PAIR, NOT the bare path
+# — the path string also appears in the chown/chmod/test-x lifecycle lines, so a
+# bare-path grep would stay green even if the `provisioner "file"` delivery block
+# were deleted (the exact regression this test exists to catch). Assert both the
+# destination (only ever on the scp block) AND the path.module source.
+assert "file provisioner delivers infra-config-apply.sh to /usr/local/bin (destination)" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'destination[[:space:]]*=[[:space:]]*\"/usr/local/bin/infra-config-apply\.sh\"'"
+assert "file provisioner sources infra-config-apply.sh from path.module" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'source[[:space:]]*=[[:space:]]*\"\\\$\{path\.module\}/infra-config-apply\.sh\"'"
+assert "file provisioner delivers cat-infra-config-state.sh to /usr/local/bin (destination)" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'destination[[:space:]]*=[[:space:]]*\"/usr/local/bin/cat-infra-config-state\.sh\"'"
+assert "file provisioner sources cat-infra-config-state.sh from path.module" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'source[[:space:]]*=[[:space:]]*\"\\\$\{path\.module\}/cat-infra-config-state\.sh\"'"
 assert "resource writes /etc/webhook/hooks.json" \
   "printf '%s' \"\$BLOCK\" | grep -qE '/etc/webhook/hooks\.json'"
 # hooks.json is a secret-bearing templatefile() render (not on disk), so it must

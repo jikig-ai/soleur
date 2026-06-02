@@ -303,9 +303,14 @@ resource "terraform_data" "journald_persistent" {
 # SSH was never removed from the stack — 7 sibling terraform_data resources here
 # still use connection{type="ssh"} today (disk_monitor_install, resource_monitor_install,
 # fail2ban_tuning, journald_persistent, docker_seccomp_config, apparmor_bwrap_profile,
-# orphan_reaper_install). This is the SSH analogue of journald_persistent (the
-# closest precedent: single-purpose SSH install + positive post-write assertions +
-# a service restart), NOT a reversal of #3756's routine-push decision.
+# orphan_reaper_install). This is a HYBRID of the established siblings: the
+# connection block + positive post-write assertions + service restart are
+# journald_persistent's shape, while the multi-input `sha256(join(...))`
+# triggers_replace and the base64 secret-render are deploy_pipeline_fix's /
+# disk_monitor_install's (a secret-bearing local.hooks_json cannot be a single
+# `file()`). Do NOT "simplify" the multi-input trigger to journald's single-file()
+# form — it legitimately tracks 3 inputs. NOT a reversal of #3756's routine-push
+# decision.
 #
 # RUNNING-HOST-ONLY: unlike deploy_pipeline_fix this resource has NO cloud-init
 # mirror — fresh hosts get the handler from cloud-init write_files
