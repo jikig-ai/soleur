@@ -147,10 +147,15 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       const { error } = await service.from("conversations").insert({
         id,
         user_id: user.id,
-        // Solo synthetic user: the active workspace IS the solo workspace,
-        // whose id equals user.id (ADR-038 N2). Matches the acquireSlot
-        // helper's p_workspace_id below so slot.workspace_id ==
-        // conversation.workspace_id. Required post-mig-059 (NOT NULL).
+        // workspace_id is NOT NULL post-mig-059 and FKs workspaces(id) ON
+        // DELETE RESTRICT, so it must reference a real workspace row — that is
+        // the binding reason it is set. For this solo synthetic user the real
+        // workspace is the trigger-created solo workspace whose id equals
+        // user.id (ADR-038 N2). Kept equal to the acquireSlot helper's
+        // p_workspace_id below for consistency; note the archive trigger under
+        // test keys on (user_id, conversation id) and is workspace-independent,
+        // so this equality is for FK-reachability + sibling RLS contracts, not
+        // for any assertion in this file.
         workspace_id: user.id,
         session_id: sessionId,
         repo_url: repoUrl,
