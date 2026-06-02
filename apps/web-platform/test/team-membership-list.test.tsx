@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { TeamMembershipList } from "@/components/settings/team-membership-list";
 import type { TeamMembershipRow } from "@/server/team-membership-resolver";
@@ -228,6 +228,57 @@ describe("TeamMembershipList", () => {
     renderWithDelegations([{ ...OWNER, hasEffectiveKey: false }]);
     expect(screen.queryByText(/can view the workspace but can't run tasks/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/share a key/i)).not.toBeInTheDocument();
+  });
+
+  // Join-date bug (symptom 4): the "Added" column used a 24-hour window
+  // (`now - then < 24h`) to decide "Today, HH:MM". A membership created
+  // yesterday afternoon (e.g. 14:08), viewed this morning (09:20), is ~19h ago
+  // — inside the 24h window — so it rendered "Today, 14:08", which looks like a
+  // FUTURE time. The label must be calendar-day-aware, not a rolling window.
+  // Fixtures are built with `new Date(y, m, d, h, mm)` (LOCAL time) so the
+  // assertion holds regardless of the host TZ — the component renders via
+  // local getHours/getDate, matching construction.
+  describe("Added column — calendar-day-aware relative time", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      // "Now" = local Tue Jun 2, 09:20.
+      vi.setSystemTime(new Date(2026, 5, 2, 9, 20, 0));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    function renderMember(addedAt: string) {
+      render(
+        <TeamMembershipList
+          members={[OWNER, { ...MEMBER, addedAt }]}
+          currentUserId="user-owner"
+          workspaceId="ws-1"
+          isOwner={true}
+          byokDelegationsEnabled={false}
+          organizationName="Test Org"
+        />,
+      );
+    }
+
+    it("a member added YESTERDAY afternoon is NOT labelled 'Today' (no future time)", () => {
+      // Local Jun 1, 14:08 — ~19h before now: inside the old 24h window.
+      renderMember(new Date(2026, 5, 1, 14, 8, 0).toISOString());
+      expect(screen.queryByText(/Today, 14:08/)).not.toBeInTheDocument();
+      expect(screen.getByText(/Yesterday, 14:08/)).toBeInTheDocument();
+    });
+
+    it("a member added earlier TODAY is labelled 'Today, HH:MM'", () => {
+      // Local Jun 2, 09:15 — five minutes before now, genuinely today.
+      renderMember(new Date(2026, 5, 2, 9, 15, 0).toISOString());
+      expect(screen.getByText(/Today, 09:15/)).toBeInTheDocument();
+    });
+
+    it("a member added several days ago is NOT labelled 'Today'", () => {
+      // Local May 30 — 3 calendar days ago.
+      renderMember(new Date(2026, 4, 30, 16, 0, 0).toISOString());
+      expect(screen.queryByText(/Today/)).not.toBeInTheDocument();
+    });
   });
 
   it("renders empty solo state hint when only one member", () => {

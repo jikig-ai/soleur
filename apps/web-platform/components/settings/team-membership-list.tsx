@@ -7,19 +7,26 @@ import { TransferOwnershipDialog } from "@/components/settings/transfer-ownershi
 
 function formatRelative(iso: string): string {
   try {
-    const then = new Date(iso).getTime();
-    const now = Date.now();
-    const diffMs = now - then;
+    const then = new Date(iso);
+    if (Number.isNaN(then.getTime())) return iso;
+    const now = new Date();
+    // Calendar-day difference, NOT a rolling 24h window. A row created
+    // yesterday afternoon viewed this morning is <24h old but a DIFFERENT
+    // calendar day — labelling it "Today, 14:08" reads as a future time
+    // (the symptom-4 bug). Compare day-start instants in LOCAL time, matching
+    // the local getHours/getMinutes used for the clock label.
+    const startOfDay = (d: Date) =>
+      new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
     const day = 24 * 60 * 60 * 1000;
-    if (diffMs < day) {
-      const d = new Date(iso);
-      const hh = String(d.getHours()).padStart(2, "0");
-      const mm = String(d.getMinutes()).padStart(2, "0");
-      return `Today, ${hh}:${mm}`;
-    }
-    const days = Math.floor(diffMs / day);
-    if (days < 7) return `${days}d ago`;
-    return new Date(iso).toLocaleDateString();
+    const dayDiff = Math.round((startOfDay(now) - startOfDay(then)) / day);
+    const hh = String(then.getHours()).padStart(2, "0");
+    const mm = String(then.getMinutes()).padStart(2, "0");
+    if (dayDiff === 0) return `Today, ${hh}:${mm}`;
+    if (dayDiff === 1) return `Yesterday, ${hh}:${mm}`;
+    if (dayDiff >= 2 && dayDiff < 7) return `${dayDiff}d ago`;
+    // Older, or any future-dated row (dayDiff < 0): show the absolute date
+    // rather than a misleading relative label.
+    return then.toLocaleDateString();
   } catch {
     return iso;
   }
