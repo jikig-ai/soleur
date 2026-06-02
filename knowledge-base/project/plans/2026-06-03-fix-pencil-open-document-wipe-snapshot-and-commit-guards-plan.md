@@ -13,6 +13,54 @@ branch: feat-one-shot-pencil-open-document-wipe-3274
 
 # 🐛 fix(pencil): guard against `open_document` .pen wipe (snapshot-verify + commit-after-save)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-03
+**Sections enhanced:** Research Reconciliation (corrected), AC6, Phase 1 step 3, Phase 2 step 2, plus this summary.
+
+### Key Improvements (deepen-plan verify-the-negative pass)
+
+1. **Corrected a false premise.** The round-1 plan asserted the #3274 loss file
+   (`apps/web-platform/design/theme-toggle.pen`) was *gitignored*. The verify pass
+   ran `git check-ignore` and found **no `*.pen` ignore rule anywhere** — neither
+   app-tree nor KB `.pen` paths are ignored. The real loss cause is the workflow
+   **never committing** the `.pen`, full stop. All four "gitignored" assertions
+   were rewritten as explicit corrections directing the implementer NOT to claim
+   gitignore in the agent/skill edits.
+2. **Re-grounded the canonical-path rationale.** The "save under
+   `knowledge-base/product/design/`" instruction is justified by **audit
+   reachability** (`/soleur:ux-audit` scans only that path, per agent line 21),
+   not gitignore. AC6 now verifies the edit does NOT use the word "gitignored".
+
+### Gate verification (all passed)
+
+- **4.6 User-Brand Impact:** present, threshold `single-user incident`, valid.
+- **4.7 Observability:** section present; plan is docs+test-only → skip condition
+  documented (no Files-to-Edit under `apps/*/server|src|infra` or `plugins/*/scripts`).
+- **4.8 PAT-shaped variable halt:** no matches.
+- **4.9 UI-wireframe halt:** no UI-surface file in Files-to-Edit → skip (NONE tier).
+- **4.5 Network-outage:** no trigger patterns.
+- **Citations:** `#3274` resolves OPEN with matching title; the only rule-ID
+  reference (`ex-cq-pencil-mcp-silent-drop-diagnosis-checklist`) is correctly
+  labeled retired (0 matches in `AGENTS.*.md`, verified); all `knowledge-base/*.md`
+  citations resolve.
+- **4.4 Precedent-diff:** the new `.test.sh` guards follow the established sibling
+  `ux-design-lead-output-path-guard.test.sh` shape (sources `test-helpers.sh`,
+  `assert_file_exists`/`assert_eq`, grep-over-markdown). No novel pattern.
+
+### New Considerations Discovered
+
+- The fix is purely a **workflow-commit gap** plus an **open-time size gate** — no
+  gitignore change, no `.gitignore` edit needed.
+- Brand-workshop step 5 commits ONLY `brand-guide.md` (verified at lines 91-92);
+  the `.pen` commit is genuinely absent, confirming mitigation (3)'s necessity.
+
+> **Note for `/work`:** Task sub-agent fan-out (parallel skill/review/research
+> agents) and the `/plan_review` triad were unavailable in this planning
+> environment (no Task tool). The deepen-plan deterministic gates (4.4–4.9) and
+> verify-the-negative / post-edit-audit passes were executed inline by the planner.
+> A review-time pass (multi-agent `/soleur:review`) should still run before merge.
+
 ## Overview
 
 `mcp__pencil__open_document` overwrote a 133KB `.pen` file with empty document
@@ -55,7 +103,7 @@ collapse detectable.
 | Existing post-save gate only checks `> 0 bytes` | Confirmed: line 57, "assert the result is > 0 bytes" | Strengthen with explicit cross-reference to the new collapse gate; keep the >0 check |
 | Brand-workshop commits the `.pen` after first save | **FALSE.** Step 5 commits **only** `knowledge-base/marketing/brand-guide.md` (`brainstorm-brand-workshop.md:88-92`). The `.pen` is never committed by the workshop. | Add a commit-after-first-save step in the ux-design-lead handoff (4.5.a) AND a worktree-commit instruction so the `.pen` lands in git before iteration |
 | Line-57 cites `AGENTS.md:cq-pencil-mcp-silent-drop-diagnosis-checklist` | **STALE.** That rule was retired; it now lives as Sharp Edge `ex-cq-pencil-mcp-silent-drop-diagnosis-checklist` in `plugins/soleur/skills/pencil-setup/SKILL.md:185` + learning `knowledge-base/project/learnings/bug-fixes/2026-04-19-ux-design-lead-headless-stub-fabrication.md`. `grep -c cq-pencil` over `AGENTS.{core,rest,docs}.md` = 0. | **Fold in:** repoint the dangling citation to the live Sharp Edge + learning file (one-line edit in the same file we are already editing) |
-| Wiped file was at `apps/web-platform/design/theme-toggle.pen` | Confirmed from issue body. This is a path the agent's output-path guard (line 21) is supposed to override to `knowledge-base/product/design/`, AND it is app-tree-gitignored, so it was never committed. | Reinforces mitigation (3): commit-after-save must target the canonical KB path; note in the agent body that an un-committed `.pen` under an app tree is doubly at risk (gitignored + wipeable) |
+| Wiped file was at `apps/web-platform/design/theme-toggle.pen` | Confirmed from issue body ("File was never committed"). This is a path the agent's output-path guard (line 21) is supposed to override to `knowledge-base/product/design/`. **Correction (deepen-plan verify pass):** `.pen` files are NOT gitignored anywhere in this repo — `git check-ignore` on both `apps/web-platform/design/x.pen` and `knowledge-base/product/design/x.pen` returns no match, and there is no `*.pen` ignore rule. The loss cause was simply that **the workflow never committed it**, not that it couldn't be committed. The agent's line-21 reasoning ("app-tree artifacts are *usually* gitignored by app-level rules") is a general claim that does not hold for `.pen` here. | Reinforces mitigation (3): the fix is **commit-after-save** (the workflow's gap), not relying on gitignore. The canonical-path argument still holds but for the audit-reachability reason in line 21 (`/soleur:ux-audit` only scans `knowledge-base/product/design/`), not gitignore. Do NOT assert "gitignored" in the agent/skill edits. |
 
 ## User-Brand Impact
 
@@ -110,8 +158,11 @@ will be invoked at review-time. (See Domain Review below for how CPO is covered.
   Verifiable: `grep -qiE "git add.*\.pen|commit.*\.pen|commit the .pen" plugins/soleur/skills/brainstorm/references/brainstorm-brand-workshop.md`.
 - [ ] **AC6 — Canonical-path reinforcement.** The commit-after-save instruction
   explicitly requires the committed `.pen` be under `knowledge-base/product/design/`
-  (not an app tree like `apps/web-platform/design/`, which is gitignored and was
-  the #3274 loss path). Verifiable by inspection.
+  (not an app tree like `apps/web-platform/design/`, the #3274 loss path). The
+  rationale cited in the edit MUST be **audit reachability** (`/soleur:ux-audit`
+  only scans `knowledge-base/product/design/`) — NOT gitignore (`.pen` files are
+  not gitignored anywhere in this repo; verified via `git check-ignore`).
+  Verifiable by inspection + `! grep -qi "gitignored" <new instruction text>`.
 - [ ] **AC7 — Dangling citation repointed (fold-in).** The stale
   `AGENTS.md:cq-pencil-mcp-silent-drop-diagnosis-checklist` reference at
   `ux-design-lead.md:57` is replaced with a live pointer to
@@ -182,10 +233,12 @@ will be invoked at review-time. (See Domain Review below for how CPO is covered.
    and the learning file
    `knowledge-base/project/learnings/bug-fixes/2026-04-19-ux-design-lead-headless-stub-fabrication.md`.
 3. **Important Guidelines (bottom of file).** Add a one-line note: an un-committed
-   `.pen` under an app source tree (e.g., `apps/web-platform/design/`) is doubly
-   at risk — it is gitignored by app rules (so not recoverable from git) AND
-   wipeable by a destructive `open_document`; always save+commit under
-   `knowledge-base/product/design/`.
+   `.pen` is at risk — a destructive `open_document` can wipe it with no on-disk
+   recovery. Always save AND commit the `.pen` under `knowledge-base/product/design/`
+   (the canonical path that `/soleur:ux-audit` scans; app-tree paths like
+   `apps/web-platform/design/` are not audit-reachable). **Do NOT claim app-tree
+   `.pen` files are gitignored — they are not** (verified); the actual risk is the
+   workflow never committing them.
 
 ### Phase 2 — brand-workshop commit-after-first-save (mitigation 3)
 
@@ -199,8 +252,9 @@ will be invoked at review-time. (See Domain Review below for how CPO is covered.
    recoverable via `git checkout -- <path>`. The commit message should name the
    `.pen` path (e.g., `docs: commit design source <topic>.pen (recover-from-wipe safety)`).
 2. **Reinforce canonical path (AC6).** State the committed `.pen` MUST be under
-   `knowledge-base/product/design/` — never an app tree (gitignored, the #3274
-   loss path).
+   `knowledge-base/product/design/` — never an app tree (the #3274 loss path).
+   Cite the reason as **audit reachability** (`/soleur:ux-audit` scans only the
+   canonical path), not gitignore.
 3. **Step 5 (existing commit).** Leave as-is; it commits `brand-guide.md`. The
    new 4.5.a commit is additive and earlier in the flow (the whole point is the
    `.pen` is safe in git *before* iteration, not only at workshop end).

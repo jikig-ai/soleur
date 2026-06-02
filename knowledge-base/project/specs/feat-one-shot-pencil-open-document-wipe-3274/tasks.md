@@ -13,12 +13,12 @@ plan: knowledge-base/project/plans/2026-06-03-fix-pencil-open-document-wipe-snap
 - [ ] 1.2 Add post-open collapse HARD GATE: halt + surface pre/post sizes verbatim if post-open size < 50% of pre-open OR ≤ 64 bytes; treat as parse-failure wipe. (AC2, AC3)
 - [ ] 1.3 Add new-file exemption (collapse gate applies only to pre-existing non-empty `.pen`). (AC4)
 - [ ] 1.4 Fold in dangling-citation fix at line 57: repoint `AGENTS.md:cq-pencil-mcp-silent-drop-diagnosis-checklist` to pencil-setup SKILL Sharp Edge + learning file; keep the `>0 bytes` assertion. (AC7)
-- [ ] 1.5 Add Important-Guidelines note: un-committed `.pen` under an app tree is doubly at risk (gitignored + wipeable); save+commit under `knowledge-base/product/design/`.
+- [ ] 1.5 Add Important-Guidelines note: an un-committed `.pen` is at risk (a destructive `open_document` can wipe it with no on-disk recovery); always save AND commit under `knowledge-base/product/design/`. **Correction (deepen-plan):** do NOT claim app-tree `.pen` files are gitignored — verified they are NOT (`git check-ignore` finds no `*.pen` rule). Rationale for canonical path is audit reachability (`/soleur:ux-audit`), not gitignore.
 
 ## Phase 2 — brand-workshop commit-after-first-save (mitigation 3)
 
 - [ ] 2.1 Edit `plugins/soleur/skills/brainstorm/references/brainstorm-brand-workshop.md` step 4.5.a: commit the `.pen` to the worktree branch immediately after first save, before the iteration loop. (AC5)
-- [ ] 2.2 Reinforce committed `.pen` MUST be under `knowledge-base/product/design/` (never an app tree). (AC6)
+- [ ] 2.2 Reinforce committed `.pen` MUST be under `knowledge-base/product/design/` (never an app tree). Cite reason as audit reachability (`/soleur:ux-audit`), NOT gitignore. (AC6)
 - [ ] 2.3 Leave step 5 (brand-guide.md commit) unchanged; new commit is additive + earlier.
 
 ## Phase 3 — regression guards
