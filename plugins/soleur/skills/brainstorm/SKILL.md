@@ -403,7 +403,7 @@ Ensure the brainstorms directory exists before writing.
 
 ### Phase 3.55: Visual Design (if feature has UI surfaces)
 
-**Skip if** the brainstorm scope has no user-facing UI (e.g., pure infrastructure, CI, legal-only). Detect by scanning Key Decisions for terms: `UI`, `page`, `modal`, `banner`, `component`, `tab`, `form`, `email template`, `landing page`, `public route`.
+**Trigger.** Run this phase iff the brainstorm scope touches a UI surface per the shared term list (`plugins/soleur/skills/brainstorm/references/ui-surface-terms.md`): pages, components, modals, banners, nav/layout, flows, email templates. A scope with **no** UI surface (pure infra/CI/legal/orchestration) genuinely skips — that is the trigger boundary, not a silent skip. For a UI-surface feature this phase has exactly **two** permitted terminal outcomes: a committed `.pen` artifact, or a **hard-block**. "Skipped" is NOT a permitted outcome (`wg-ui-feature-requires-pen-wireframe`).
 
 **If UI surfaces exist**, spawn the ux-design-lead agent via the **Agent tool** to create wireframes in `.pen` files. The agent owns the output path convention (`knowledge-base/product/design/{domain}/`) — do NOT supply output paths in the spawn prompt.
 
@@ -416,9 +416,16 @@ Ensure the brainstorms directory exists before writing.
 
 **After the agent completes**, reference the wireframe paths in the brainstorm document's Key Decisions table (add a "Visual design" row) and in the spec's Functional Requirements (link each FR to its wireframe). Commit wireframes alongside other brainstorm artifacts in Phase 3.6 step 6.
 
-**Pipeline/headless mode:** If `HEADLESS_MODE=true`, skip visual design (wireframes require interactive Pencil MCP). Echo: `Phase 3.55: skipped (headless mode — no Pencil MCP available)`.
+**Pencil unavailable → auto-install, then hard-block (never skip).** If Pencil tools (`mcp__pencil__batch_design`) are not connected — including `HEADLESS_MODE=true`, which is NOT an exemption (headless `.pen` authoring works) — run the `pencil-setup --auto` flow (`bash plugins/soleur/skills/pencil-setup/scripts/check_deps.sh --auto`, which installs `@pencil.dev/cli` to `~/.local` via npm, no sudo/display; auth via `PENCIL_CLI_KEY` from Doppler `soleur/dev`), then re-check `mcp__pencil__*` and author the `.pen`. **Hard-block only** if auth is genuinely unsatisfiable (no key + no interactive login) or Node < 22.9.0, with a single instruction:
 
-**Pencil MCP unavailable:** If Pencil tools (`mcp__pencil__batch_design`) are not available, skip with: `Phase 3.55: skipped (Pencil MCP not connected). Run /soleur:pencil-setup to configure, then re-run brainstorm with visual design.`
+```
+Phase 3.55 hard-block: wireframes are mandatory for this UI feature and Pencil could not be
+auto-installed. Provision PENCIL_CLI_KEY in Doppler soleur/dev (or `pencil login`), or install
+Node ≥ 22.9.0, then re-run brainstorm. (No Markdown/ASCII fallback — headless .pen authoring is
+the only supported path.)
+```
+
+Do NOT record a "skipped" outcome and proceed — the only terminal states are `.pen` committed or this hard-block.
 
 ### Phase 3.6: Create Spec and Issue (if worktree exists)
 

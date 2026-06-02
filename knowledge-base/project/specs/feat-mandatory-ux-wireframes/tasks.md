@@ -28,31 +28,31 @@ Derived from the finalized (post-5-agent-review) plan. NEVER CODE during plannin
 
 ## Phase 2 — Feature A: close skip outcomes (brainstorm + plan + work)
 
-- [ ] 2.1 brainstorm `SKILL.md:404-421`: keep `:406` trigger; replace `:419`/`:421` skips with auto-install-then-block; remove `Phase 3.55: skipped` echoes; cite term-list.
-- [ ] 2.2 plan `SKILL.md` Phase 2.5: add mechanical UI-surface override at TOP of Step 1 → force Product-relevant + tier=BLOCKING when Files match term-list/glob superset (fixes the Product-NONE-sweep silent state).
-- [ ] 2.3 plan `:302`: exclude `ux-design-lead` from the skippable specialist set for UI features.
-- [ ] 2.4 plan `:321`: remove self-stop → `Skipped specialists` branch; auto-install + re-invoke; hard-block on genuine failure; one-shot path = sole producer (generate `.pen`).
-- [ ] 2.5 plan `:324` step 7: remove "Skip with acknowledgment" for ux-design-lead; reconcile with `:321` (no contradictory offer).
-- [ ] 2.6 plan `:358-359` Heading Contract: ux-design-lead never in `Skipped specialists:` for UI; verifier asserts `.pen` on disk (non-empty, under `knowledge-base/product/design/{domain}/`, in spec FRs).
-- [ ] 2.7 work `SKILL.md:104` Check-9: widen glob to term-list superset (`.njk/.html/.vue/.svelte/.astro` + email templates); add arm: UI plan with NO `### Product/UX Gate` subsection → FAIL.
+- [x] 2.1 brainstorm `SKILL.md:404-421`: keep `:406` trigger; replace `:419`/`:421` skips with auto-install-then-block; remove `Phase 3.55: skipped` echoes; cite term-list.
+- [x] 2.2 plan `SKILL.md` Phase 2.5: add mechanical UI-surface override at TOP of Step 1 → force Product-relevant + tier=BLOCKING when Files match term-list/glob superset (fixes the Product-NONE-sweep silent state).
+- [x] 2.3 plan `:302`: exclude `ux-design-lead` from the skippable specialist set for UI features.
+- [x] 2.4 plan `:321`: remove self-stop → `Skipped specialists` branch; auto-install + re-invoke; hard-block on genuine failure; one-shot path = sole producer (generate `.pen`).
+- [x] 2.5 plan `:324` step 7: remove "Skip with acknowledgment" for ux-design-lead; reconcile with `:321` (no contradictory offer).
+- [x] 2.6 plan `:358-359` Heading Contract: ux-design-lead never in `Skipped specialists:` for UI; verifier asserts `.pen` on disk (non-empty, under `knowledge-base/product/design/{domain}/`, in spec FRs).
+- [x] 2.7 work `SKILL.md:104` Check-9: widen glob to term-list superset (`.njk/.html/.vue/.svelte/.astro` + email templates); add arm: UI plan with NO `### Product/UX Gate` subsection → FAIL.
 
 ## Phase 3 — Shared UI-surface term-list
 
-- [ ] 3.1 Create `plugins/soleur/skills/brainstorm/references/ui-surface-terms.md` (SoT).
-- [ ] 3.2 Cite it from all four layers: brainstorm 3.55, plan 2.5, deepen-plan 4.9, work Check-9.
+- [x] 3.1 Create `plugins/soleur/skills/brainstorm/references/ui-surface-terms.md` (SoT).
+- [x] 3.2 Cite it from all four layers: brainstorm 3.55, plan 2.5, deepen-plan 4.9, work Check-9.
 
 ## Phase 4 — deepen-plan 4.9 halt + constitution / wg-* promotion
 
-- [ ] 4.1 deepen-plan: add `### 4.9. UI-Wireframe Artifact Halt` AFTER the existing 4.8 (`:445`), mirroring 4.6/4.7 (grep `.pen` ref → HALT + `emit_incident wg-ui-feature-requires-pen-wireframe applied`).
-- [ ] 4.2 Add `wg-ui-feature-requires-pen-wireframe` body to `AGENTS.docs.md` + `→ docs-only` pointer in `AGENTS.md` `## Workflow Gates`; `[skill-enforced: brainstorm 3.55 + plan 2.5 + deepen-plan 4.9]`.
-- [ ] 4.3 Annotate `constitution.md:177` as promoted (`→ wg-ui-feature-requires-pen-wireframe`); keep retired `ex-wg-...` text immutable.
+- [x] 4.1 deepen-plan: add `### 4.9. UI-Wireframe Artifact Halt` AFTER the existing 4.8 (`:445`), mirroring 4.6/4.7 (grep `.pen` ref → HALT + `emit_incident wg-ui-feature-requires-pen-wireframe applied`).
+- [x] 4.2 Add `wg-ui-feature-requires-pen-wireframe` body to `AGENTS.docs.md` + `→ docs-only` pointer in `AGENTS.md` `## Workflow Gates`; `[skill-enforced: brainstorm 3.55 + plan 2.5 + deepen-plan 4.9]`.
+- [x] 4.3 Annotate `constitution.md:177` as promoted (`→ wg-ui-feature-requires-pen-wireframe`); keep retired `ex-wg-...` text immutable.
 
 ## Phase 5 — Tests (RED-first) + learning
 
 - [x] 5.1 RED: create `plugins/soleur/test/mandatory-wireframes-hardening.test.ts` (skip-clause removal, rule-id presence, single 4.8 + new 4.9). Confirm fails on current state.
-- [ ] 5.2 GREEN via Phases 1-4.
-- [ ] 5.3 Run `python3 scripts/lint-rule-ids.py` (exit 0) + `python3 scripts/lint-agents-rule-budget.py` (exit 0, `B_ALWAYS < 23000`).
-- [ ] 5.4 Learning file `knowledge-base/project/learnings/bug-fixes/<topic>.md` (author dates at write-time); link the two related learnings.
+- [x] 5.2 GREEN via Phases 1-4.
+- [x] 5.3 Run `python3 scripts/lint-rule-ids.py` (exit 0) + `python3 scripts/lint-agents-rule-budget.py` (exit 0, `B_ALWAYS < 23000`).
+- [x] 5.4 Learning file `knowledge-base/project/learnings/bug-fixes/<topic>.md` (author dates at write-time); link the two related learnings.
 - [ ] 5.5 `cd <worktree> && bun test plugins/soleur/test/mandatory-wireframes-hardening.test.ts` + `components.test.ts` green (run inside worktree).
 
 ## Acceptance Criteria (gate before PR-ready)
