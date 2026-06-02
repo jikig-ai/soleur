@@ -729,7 +729,15 @@ export function startInactivityTimer(): void {
 // Changing this constant without updating those sites desyncs the sweep
 // mechanisms — one will reap rows the others consider live.
 const STUCK_ACTIVE_THRESHOLD_SECONDS = 120;
-const STUCK_ACTIVE_CHECK_INTERVAL_MS = 60 * 1_000;
+// Widened 60s → 300s (2026-06-02 disk-IO remediation): this drives the
+// setInterval that calls `find_stuck_active_conversations` every tick — the #2
+// prod Supabase Disk-IO write consumer (760k ms / 38k calls over a 27-day
+// window). 300s cuts that RPC volume 5×. The 120s STUCK_ACTIVE_THRESHOLD_SECONDS
+// staleness window above is INDEPENDENT of poll cadence (it stays 120s on all
+// four co-locked sources listed above); worst-case reap latency rises 180s →
+// 420s, still far under any user expectation for this rare recovery path. See
+// plan 2026-06-02-fix-supabase-disk-io-recurrence-and-sentry-monitor-plan.md Phase 1.
+const STUCK_ACTIVE_CHECK_INTERVAL_MS = 300 * 1_000;
 
 export function startStuckActiveReaper(): NodeJS.Timeout {
   const timer = setInterval(async () => {
