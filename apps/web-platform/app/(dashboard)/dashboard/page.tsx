@@ -596,7 +596,7 @@ export default function DashboardPage() {
         <button
           type="button"
           onClick={() => router.push("/dashboard/chat/new")}
-          className="mb-10 rounded-lg bg-gradient-to-r from-[#D4B36A] to-[#B8923E] px-6 py-3 text-sm font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90"
+          className="mb-10 rounded-lg bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-6 py-3 text-sm font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90"
         >
           New conversation
         </button>
@@ -715,7 +715,7 @@ export default function DashboardPage() {
         <button
           type="button"
           onClick={() => router.push("/dashboard/chat/new")}
-          className="min-h-[44px] rounded-lg bg-gradient-to-r from-[#D4B36A] to-[#B8923E] px-4 py-2 text-sm font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90"
+          className="min-h-[44px] rounded-lg bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-4 py-2 text-sm font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90"
         >
           + New conversation
         </button>
