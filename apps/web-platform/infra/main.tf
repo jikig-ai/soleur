@@ -10,7 +10,13 @@ terraform {
     skip_region_validation      = true
     skip_s3_checksum            = true
     use_path_style              = true
-    use_lockfile                = false # R2 does not support S3 conditional writes
+    # R2 does not support S3 conditional writes, so there is NO terraform state
+    # lock on this backend. The shared GitHub Actions concurrency group
+    # `terraform-apply-web-platform-host` (identical literal in BOTH
+    # apply-web-platform-infra.yml and apply-deploy-pipeline-fix.yml) is the SOLE
+    # serializer preventing concurrent applies from clobbering this state object
+    # (#4844). Do NOT drop that group believing R2 locks — it does not.
+    use_lockfile = false
   }
 
   required_providers {

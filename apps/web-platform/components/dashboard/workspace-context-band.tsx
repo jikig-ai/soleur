@@ -47,12 +47,68 @@ function BackChevronIcon({ className }: { className?: string }) {
 export function WorkspaceContextBand({
   pathname,
   variant = "rail",
+  collapsed = false,
 }: {
   pathname: string;
   /** "rail" mounts in the sidebar; "mobile" mounts in the mobile top bar. */
   variant?: "rail" | "mobile";
+  /** Rail-only: when the sidebar is collapsed (md:w-14) render the icon-only
+   *  form. Ignored for variant="mobile" (the mobile top bar never collapses). */
+  collapsed?: boolean;
 }) {
   const drill = segmentToDrillLevel(pathname);
+
+  // #4810 Bug 2: at md:w-14 (56px) the verbose org chip + "Working on:" repo +
+  // section title overflow into an unreadable strip. Render an icon-only column
+  // when collapsed — back chevron (drilled), an org avatar mark, a repo dot, and
+  // a section glyph — so the rail never overflows horizontally. The identity is
+  // never FULLY unmounted (ADR-047): the data-bearing OrgSwitcherContainer +
+  // LiveRepoBadge stay mounted in the CSS-exclusive mobile band, and hover titles
+  // here recover orientation. Verbose labels return verbatim on expand.
+  if (variant === "rail" && collapsed) {
+    return (
+      <div
+        data-testid="workspace-context-band"
+        data-variant="rail"
+        data-collapsed="true"
+        className="flex flex-col items-center gap-3 border-b border-soleur-border-default px-2 py-3"
+      >
+        {drill ? (
+          <Link
+            href="/dashboard"
+            aria-label="Back to menu"
+            data-testid="nav-back-chevron"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-soleur-accent-gold-fg hover:bg-soleur-bg-surface-2"
+          >
+            <BackChevronIcon className="h-4 w-4" />
+          </Link>
+        ) : null}
+        <span
+          data-testid="workspace-identity-icon"
+          aria-label="Active workspace"
+          title="Active workspace"
+          className="h-6 w-6 shrink-0 rounded-sm bg-soleur-accent-gold-fg/60"
+        />
+        <span
+          data-testid="live-repo-dot"
+          aria-label="Active repository"
+          title="Active repository"
+          className="text-base leading-none text-soleur-accent-gold-fg"
+        >
+          ●
+        </span>
+        {drill ? (
+          <span
+            data-testid="nav-section-title"
+            title={SECTION_LABELS[drill]}
+            className="text-xs font-semibold uppercase text-soleur-text-muted"
+          >
+            {SECTION_LABELS[drill].charAt(0)}
+          </span>
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div

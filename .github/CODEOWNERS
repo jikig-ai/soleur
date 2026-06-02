@@ -115,3 +115,11 @@
 /.github/workflows/                                     @deruelle
 /.github/workflows/apply-sentry-infra.yml               @deruelle
 /.github/workflows/apply-web-platform-infra.yml         @deruelle
+
+# CF Tunnel SSH bridge composite action (#4844). The security-critical
+# root-SSH mechanism shared by apply-web-platform-infra.yml and
+# apply-deploy-pipeline-fix.yml — a change here can redirect the prod-host
+# SSH bridge, so it carries the same @deruelle review scope as the workflows
+# that consume it (the default `*` rule already covers it; this is the
+# explicit load-bearing-files-get-explicit-rows row).
+/.github/actions/cf-tunnel-ssh-bridge/                  @deruelle
