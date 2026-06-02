@@ -173,18 +173,18 @@ Edit each of these 13 live sites, replacing `knowledge-base/security/skill-overr
 
 ### Pre-merge (PR)
 
-- [ ] `git ls-files knowledge-base/engineering/security/skill-overrides/` returns `.gitkeep`; `git ls-files knowledge-base/security/` returns nothing; `ls knowledge-base/ | grep -x security` is empty.
-- [ ] `git log --follow --oneline -- knowledge-base/engineering/security/skill-overrides/.gitkeep` shows history predating this PR (history preserved via `git mv`).
-- [ ] `grep -rn "knowledge-base/security/skill-overrides" . --exclude-dir=.git` returns ONLY the 5 named historical artifacts (zero live-wiring matches).
-- [ ] `parse-override.sh` `path_re` is `^knowledge-base/engineering/security/skill-overrides/...`; a synthesized override at the new path validates (parser exit 0, artifact in `.matched`); a synthesized override at the OLD path is ignored.
-- [ ] `skill-security-scan-write.sh` classifies a new-path override write as `file_kind=override` → `permissionDecision: ask`.
-- [ ] `file-tree.tsx` top-level map branches on `node.type` (matches `:280` shape).
-- [ ] `apps/web-platform/test/file-tree-root-files.test.tsx` exists and is collected by vitest (`.test.tsx` under `test/`); it asserts a root `type:"file"` node renders as a `FileNode` (`<Link>`, no `aria-expanded`, no upload button) and a root `type:"directory"` node still renders as a `TreeItem`.
-- [ ] `cd apps/web-platform && npm run test:ci -- file-tree` is green.
-- [ ] `.claude/hooks/kb-domain-allowlist-guard.sh` exists, is executable, is wired in `.claude/settings.json` PreToolUse, and the sanctioned set excludes `security`.
-- [ ] `.claude/hooks/kb-domain-allowlist-guard.test.sh` is green and covers: unsanctioned-new-dir → `ask`, re-adding `security/` → `ask`, write-into-existing-sanctioned → exit 0, sanctioned top-level file → exit 0, malformed JSON → exit 0.
-- [ ] `tsc --noEmit` (web-platform) shows no new errors.
-- [ ] No dated artifact under `knowledge-base/project/{brainstorms,plans,specs}/` and the `2026-05-20` learning are modified.
+- [x] `git ls-files knowledge-base/engineering/security/skill-overrides/` returns `.gitkeep`; `git ls-files knowledge-base/security/` returns nothing; `ls knowledge-base/ | grep -x security` is empty.
+- [x] `git log --follow --oneline -- knowledge-base/engineering/security/skill-overrides/.gitkeep` shows history predating this PR (history preserved via `git mv`).
+- [x] `grep -rn "knowledge-base/security/skill-overrides" . --exclude-dir=.git` returns ONLY the 5 named historical artifacts (zero live-wiring matches).
+- [x] `parse-override.sh` `path_re` is `^knowledge-base/engineering/security/skill-overrides/...`; a synthesized override at the new path validates (parser exit 0, artifact in `.matched`); a synthesized override at the OLD path is ignored.
+- [x] `skill-security-scan-write.sh` classifies a new-path override write as `file_kind=override` → `permissionDecision: ask`.
+- [x] `file-tree.tsx` top-level map branches on `node.type` (matches `:280` shape).
+- [x] `apps/web-platform/test/file-tree-root-files.test.tsx` exists and is collected by vitest (`.test.tsx` under `test/`); it asserts a root `type:"file"` node renders as a `FileNode` (`<Link>`, no `aria-expanded`, no upload button) and a root `type:"directory"` node still renders as a `TreeItem`.
+- [x] `cd apps/web-platform && npm run test:ci -- file-tree` is green.
+- [x] `.claude/hooks/kb-domain-allowlist-guard.sh` exists, is executable, is wired in `.claude/settings.json` PreToolUse, and the sanctioned set excludes `security`.
+- [x] `.claude/hooks/kb-domain-allowlist-guard.test.sh` is green and covers: unsanctioned-new-dir → `ask`, re-adding `security/` → `ask`, write-into-existing-sanctioned → exit 0, sanctioned top-level file → exit 0, malformed JSON → exit 0.
+- [x] `tsc --noEmit` (web-platform) shows no new errors.
+- [x] No dated artifact under `knowledge-base/project/{brainstorms,plans,specs}/` and the `2026-05-20` learning are modified.
 - [ ] PR body includes a `## Changelog` section and a `semver:` label (`semver:patch` — bug fix + advisory tooling; the new hook is repo infra, not a plugin component).
 
 ## Domain Review
