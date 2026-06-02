@@ -27,8 +27,17 @@ export default async function BillingPage() {
   const identity: Identity = { userId: user.id, role: "prd", orgId: orgId ?? "" };
   const byokEnabled = orgId ? await isByokDelegationsEnabled(orgId, identity) : false;
 
+  // Solo-pin for the delegation pane (per-user billing model). workspace-scoping
+  // audit 2026-06-02: billing is PER-USER by schema (one stripe_customer_id +
+  // subscription_status per `users` row), so workspaceId = user.id is correct
+  // for the billing surface; per-workspace/org billing is deferred (plan D5).
   const workspaceId = user.id;
 
+  // conversationCount feeds the cancel-retention modal ("you have N
+  // Conversations" nudge). INTENTIONALLY per-user / cross-workspace: the
+  // subscription covers ALL the user's workspaces, so the total reflects their
+  // full investment under one plan — correct for a per-user-billing retention
+  // context. The "Conversations" label is generic and accurate.
   const [{ data: userData }, { count: conversationCount }, { count: serviceTokenCount }] =
     await Promise.all([
       service

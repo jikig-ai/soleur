@@ -12,17 +12,24 @@ import { describe, test, expect, vi, beforeEach } from "vitest";
 //     - archive/unarchive UPDATE WHERE (id, user_id, repo_url) — three-column
 //       backstop so a cross-repo cached id fails closed as "not found".
 
-const { mockUserRepoUrl } = vi.hoisted(() => ({
+const { mockUserRepoUrl, mockResolveWorkspace } = vi.hoisted(() => ({
   mockUserRepoUrl: vi.fn(
-    () => "https://github.com/acme/repo" as string | null,
+    (..._args: unknown[]) => "https://github.com/acme/repo" as string | null,
   ),
+  // Active-workspace resolver: defaults to solo (= userId). Tests override to
+  // assert the list query carries the active workspace_id predicate.
+  mockResolveWorkspace: vi.fn((userId: string) => Promise.resolve(userId)),
 }));
 
 vi.mock("@/server/current-repo-url", () => ({
-  getCurrentRepoUrl: (...args: unknown[]) => {
-    void args;
-    return Promise.resolve(mockUserRepoUrl());
-  },
+  // Forward args so tests can assert getCurrentRepoUrl received the
+  // single-snapshot workspaceId override (repo_url + filter share one resolve).
+  getCurrentRepoUrl: (...args: unknown[]) =>
+    Promise.resolve(mockUserRepoUrl(...args)),
+}));
+
+vi.mock("@/server/workspace-resolver", () => ({
+  resolveCurrentWorkspaceId: (userId: string) => mockResolveWorkspace(userId),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -183,6 +190,28 @@ describe("conversations_list MCP tool", () => {
     const byCol = Object.fromEntries(predicates.map((p) => [p.col, p.val]));
     expect(byCol["repo_url"]).toBe("https://github.com/acme/repo");
     expect(byCol["user_id"]).toBeUndefined();
+  });
+
+  test("scopes the list to the ACTIVE workspace_id (same-repo, two-workspace separation)", async () => {
+    // An owner can connect the SAME repo to two of their workspaces. repo_url
+    // alone cannot separate them; conversations carry workspace_id (mig 059)
+    // so the list must also pin the active workspace. resolveCurrentWorkspaceId
+    // returns "ws-active" here (the owner's currently-selected workspace).
+    mockResolveWorkspace.mockResolvedValueOnce("ws-active");
+    const predicates: Predicate[] = [];
+    mockServiceClient.mockReturnValue(
+      setupSupabaseMock({ listRows: [], predicates }),
+    );
+    const t = await getTool("conversations_list", "owner-1");
+    await t.handler({});
+    const byCol = Object.fromEntries(predicates.map((p) => [p.col, p.val]));
+    expect(byCol["repo_url"]).toBe("https://github.com/acme/repo");
+    expect(byCol["workspace_id"]).toBe("ws-active");
+    // Single-snapshot invariant: the active workspace is resolved ONCE and
+    // threaded into getCurrentRepoUrl, so repo_url and the workspace_id filter
+    // cannot diverge under a concurrent set_current_workspace_id switch.
+    expect(mockResolveWorkspace).toHaveBeenCalledTimes(1);
+    expect(mockUserRepoUrl).toHaveBeenCalledWith("owner-1", "ws-active");
   });
 
   test("disconnected user short-circuits with typed error (not empty list)", async () => {
