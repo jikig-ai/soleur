@@ -1,5 +1,9 @@
 # AGENTS Docs-class — loaded for docs-only sessions (markdown / Eleventy / AGENTS-md meta)
 
+## Workflow Gates
+
+- A feature touching any new/changed UI surface must end design with a committed `.pen` wireframe OR a hard-block — never "skipped" [id: wg-ui-feature-requires-pen-wireframe] [skill-enforced: brainstorm Phase 3.55 + plan Phase 2.5 + deepen-plan Phase 4.9]. UI surface = pages, components, modals, banners, nav/layout, flows (list: `skills/brainstorm/references/ui-surface-terms.md`); excludes copy/style and backend-only. Pencil unavailable → `pencil-setup --auto`, then hard-block only if auth/Node unsatisfiable. Verifier asserts the `.pen` on disk, not "specialist ran". **Why:** #4819.
+
 ## Code Quality
 
 - Rule IDs on AGENTS.md rules are immutable [id: cq-rule-ids-are-immutable] [hook-enforced: lefthook lint-rule-ids.py]. Remove a rule by appending its ID to `scripts/retired-rule-ids.txt` (`<id> | date | PR | breadcrumb`); reintroducing a retired ID is linter-rejected. Section prefixes (`hr`, `wg`, `cq`, `rf`, `pdr`, `cm`) match the section.

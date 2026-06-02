@@ -46,6 +46,7 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: hr-observability-layer-citation] → core
 - [id: hr-github-app-auth-not-pat] → core
 - [id: hr-monitor-not-run-in-background-for-polling] → core
+- [id: hr-verify-repo-capability-claim-before-assert] → core
 
 ## Workflow Gates
 
@@ -72,6 +73,7 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: wg-end-of-work-emit-resume-prompt] → rest
 - [id: wg-block-pr-ready-on-undeferred-operator-steps] → core
 - [id: wg-pm-class-followthrough-for-operator-dogfood] → rest
+- [id: wg-ui-feature-requires-pen-wireframe] → docs-only
 
 ## Code Quality
 
