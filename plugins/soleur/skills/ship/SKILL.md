@@ -784,6 +784,43 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
 
 **Why:** In #1265, the CMO content gate was fixed to catch product features but the PWA feature itself was never assessed — the fix shipped without remediating the original gap. "Gate fixed" is not done — "gate fixed AND missed case remediated" is done.
 
+### Incident-PIR Gate (mandatory when triggered)
+
+Enforces the operator's standing rule — **every detected incident gets a post-incident report** — at the merge boundary: when a PR fixes a production incident/outage — **including an incident discovered incidentally while doing other work (after-the-fact)** — a post-incident report (PIR) MUST be produced before merge. (Constitution: "Incident detected → PIR always.") A fix that silently closes an outage without a PIR loses the learning that prevents recurrence (this gate exists because the 2026-06-02 chat-RLS outage went undetected for ~3 weeks and was nearly shipped-and-forgotten without a post-mortem).
+
+**Trigger — fires if ANY of:**
+
+1. The session invoked `/soleur:incident` (a PIR was scaffolded) — then this gate just verifies it landed on the branch.
+2. The referenced plan/spec OR the PR body declares `brand_survival_threshold: single-user incident` or `aggregate pattern` **AND** the change is a production-incident fix (not a greenfield feature). Distinguish via the incident-signal scan below.
+3. **Incident-signal scan.** The PR title/body or linked plan matches (case-insensitive) an outage signal AND a production signal:
+
+   ```bash
+   PR_TEXT=$(gh pr view --json title,body --jq '.title + "\n" + .body' 2>/dev/null || true)
+   PLAN_PATH=$(printf '%s' "$PR_TEXT" | grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])"`]+' | head -n1 || true)
+   PLAN_TEXT=""; [[ -n "$PLAN_PATH" && -f "$PLAN_PATH" ]] && PLAN_TEXT=$(cat "$PLAN_PATH")
+   HAYSTACK=$(printf '%s\n%s' "$PR_TEXT" "$PLAN_TEXT")
+   OUTAGE_RE='(outage|incident|broke[n]?|down for|silently (broken|failing)|regression in prod|users? (cannot|could not|can.?t)|unable to (send|use|log ?in)|production .*(broken|down|failing)|Sentry .*(error|alert).*(prod|production|user))'
+   PROD_RE='(prod|production|deployed|live|app\.soleur\.ai|tenant-zero|customer)'
+   echo "$HAYSTACK" | grep -qiE "$OUTAGE_RE" && echo "$HAYSTACK" | grep -qiE "$PROD_RE" && echo "INCIDENT-SIGNAL: yes"
+   ```
+
+   A greenfield-feature PR (no production-failure framing) does NOT trigger — the signals require BOTH an outage verb AND a production context. When uncertain, the gate fires (fail-toward-PIR for ambiguous prod-fix PRs); over-producing a short PIR is cheaper than losing an incident's learning.
+
+**If triggered — require a PIR on the branch:**
+
+```bash
+git diff --name-only origin/main...HEAD | grep -E '^knowledge-base/engineering/ops/post-mortems/.+-postmortem\.md$'
+```
+
+- **Match (a PIR was added/modified on this branch):** Pass. Confirm its frontmatter carries `brand_survival_threshold` and the Art. 33/34 fields (availability outages set both `false` with an `n/a` rationale; data-exposure incidents must evaluate the GDPR gate per `/soleur:incident` Phase 2).
+- **No match:** the incident has no PIR. **Headless mode:** invoke `/soleur:incident` (or, if unavailable in the loaded plugin snapshot, author the PIR directly using `plugins/soleur/skills/incident/templates/pir.md` → `knowledge-base/engineering/ops/post-mortems/<slug>-postmortem.md`), commit it, then re-run the gate. **Interactive mode:** prompt — (a) run `/soleur:incident` now, (b) author the PIR inline, or (c) defer with a tracked `type/chore` issue carrying a `Re-eval by:` criterion AND the `deferred-automation` sentinel (only when the PIR genuinely needs data not yet available). Default-deny on "we'll write it later" with no tracked issue.
+
+**Also file the systemic follow-ups the PIR names** (alerting gaps, write-site sweeps) as their own issues — a PIR with `## Follow-ups` that never become issues is shelf-ware.
+
+**If not triggered:** Skip silently (greenfield features, docs, refactors with no production-incident framing).
+
+**Why:** The 2026-06-02 chat-message-saving outage (migration 059 made `messages.workspace_id` RLS-required but the INSERT sites were never swept) ran for ~3 weeks, was first MISdiagnosed, and was nearly shipped-and-forgotten with no post-mortem. The operator's standing instruction is that **any** detected incident — even one found incidentally while fixing something else — always gets a post-mortem. This gate makes that mechanical at the merge boundary. PIR: `knowledge-base/engineering/ops/post-mortems/chat-rls-workspace-id-outage-postmortem.md`.
+
 ### Undeferred Operator-Step Gate (mandatory)
 
 Enforces hard rule `hr-never-label-any-step-as-manual-without` at the `gh pr ready` boundary. Blocks PR-ready when the PR body contains "operator runs"-class steps without a `Tracks #NNNN` / `Refs #NNNN` companion linking to an OPEN `type/chore` (or `type/feature`) issue that carries the `deferred-automation` / `automation gap` sentinel.
