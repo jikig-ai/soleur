@@ -33,7 +33,7 @@ import { createServiceClient } from "@/lib/supabase/service";
 import { createChildLogger } from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
 import { isByokDelegationsEnabled, ANON_IDENTITY, type Identity } from "@/lib/feature-flags/server";
-import { getDefaultWorkspaceForUser } from "./workspace-resolver";
+import { resolveCurrentWorkspaceId } from "./workspace-resolver";
 import { resolveGranteeAcceptanceStatus } from "./byok-delegation-ui-resolver";
 
 const log = createChildLogger("byok-resolver");
@@ -123,9 +123,18 @@ export async function resolveKeyOwnerThenLease<T>(
 ): Promise<T> {
   const supabase = createServiceClient();
 
+  // Derive the member's ACTIVE workspace — the shared workspace an owner
+  // granted a delegation into — via the canonical ADR-044 resolver (the same
+  // one current-repo-url / resolve-installation-id use). It supersedes the old
+  // getDefaultWorkspaceForUser (MIN(created_at) = the member's oldest/solo
+  // workspace), which resolved the WRONG workspace for an invited member who
+  // already had a solo account (#4767). resolveCurrentWorkspaceId never throws:
+  // on a query error it Sentry-mirrors and returns the caller's own solo
+  // workspace (never a sibling), so the catch below is a defensive guard — its
+  // fall-to-direct-lease direction is the safe one if it ever does fire.
   let workspaceId: string;
   try {
-    workspaceId = await getDefaultWorkspaceForUser(workspaceContextUserId, supabase);
+    workspaceId = await resolveCurrentWorkspaceId(workspaceContextUserId, supabase);
   } catch (err) {
     log.warn({ err, workspaceContextUserId }, "byok-resolver: workspace lookup failed; falling back to direct lease");
     return runWithByokLease(
@@ -200,7 +209,7 @@ export async function resolveKeyOwnerThenLease<T>(
  *      requirement — the RPC's own-key short-circuit at mig 083 is UNFILTERED,
  *      so we must filter `is_valid=true` ourselves and NOT trust a
  *      `delegation_id === null` row to mean "usable key").
- *   2. else derive the SAME default workspace the runtime uses → org → flag.
+ *   2. else derive the SAME active workspace the runtime uses → org → flag.
  *      Flag off → false (never broaden the gate past enforcement).
  *   3. flag on → resolve_byok_key_owner; usable ONLY when `delegation_id`
  *      is a real delegation row (own-key rows were handled in step 1).
@@ -230,7 +239,7 @@ export async function userHasEffectiveByokKey(
     if (keysError) throw keysError;
     if (keys && keys.length > 0) return true;
 
-    // 2. Derive workspace → org → flag (same default workspace as the lease).
+    // 2. Derive workspace → org → flag (same active workspace as the lease).
     const { workspaceId, flagEnabled } = await resolveByokDelegationContext(
       callerUserId,
       supabase,
@@ -305,17 +314,26 @@ export async function userHasPendingByokDelegation(
 
 /**
  * Resolve the BYOK delegation context for an effective-key / pending check:
- * the default workspace (the SAME one `resolveKeyOwnerThenLease` uses) and
- * whether the org-targeted delegations flag is on. Shared by both
- * `userHasEffectiveByokKey` and `userHasPendingByokDelegation`. Throws on
- * workspace/org lookup failure so each caller's own outer catch picks the fail
- * direction (fail-open redirect gate vs fail-closed status / fail-quiet banner).
+ * the caller's ACTIVE workspace (the SAME one `resolveKeyOwnerThenLease` uses)
+ * and whether the org-targeted delegations flag is on. Shared by both
+ * `userHasEffectiveByokKey` and `userHasPendingByokDelegation`.
+ *
+ * Workspace derivation is `resolveCurrentWorkspaceId` (the canonical ADR-044
+ * active-workspace resolver), NOT the old getDefaultWorkspaceForUser
+ * (MIN(created_at) = the caller's oldest/solo workspace). For an invited member
+ * who already had a solo account, the delegation lives in the SHARED workspace
+ * the owner granted into, while MIN(created_at) resolved their solo workspace —
+ * the keyless-banner bug (#4767). resolveCurrentWorkspaceId never throws (it
+ * Sentry-mirrors and fails closed to the caller's own solo workspace, never a
+ * sibling), so the org lookup below is the only remaining throw site each
+ * caller's outer catch handles (fail-open redirect gate vs fail-closed status /
+ * fail-quiet banner).
  */
 async function resolveByokDelegationContext(
   callerUserId: string,
   supabase: ReturnType<typeof createServiceClient>,
 ): Promise<{ workspaceId: string; flagEnabled: boolean }> {
-  const workspaceId = await getDefaultWorkspaceForUser(callerUserId, supabase);
+  const workspaceId = await resolveCurrentWorkspaceId(callerUserId, supabase);
   const orgId = await resolveOrgIdForWorkspace(workspaceId);
   const identity: Identity = { userId: callerUserId, role: "prd", orgId };
   const flagEnabled = await isByokDelegationsEnabled(orgId, identity);
