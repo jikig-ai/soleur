@@ -35,6 +35,7 @@ resource "hcloud_server" "web" {
     disk_monitor_script_b64              = base64encode(file("${path.module}/disk-monitor.sh"))
     resource_monitor_script_b64          = base64encode(file("${path.module}/resource-monitor.sh"))
     fail2ban_sshd_local_b64              = base64encode(file("${path.module}/fail2ban-sshd.local"))
+    journald_soleur_conf_b64             = base64encode(file("${path.module}/journald-soleur.conf"))
     hooks_json_b64                       = base64encode(local.hooks_json)
     infra_config_apply_script_b64        = base64encode(file("${path.module}/infra-config-apply.sh"))
     cat_infra_config_state_script_b64    = base64encode(file("${path.module}/cat-infra-config-state.sh"))
@@ -197,6 +198,67 @@ resource "terraform_data" "fail2ban_tuning" {
       "test \"$(fail2ban-client get sshd bantime)\" = '600'",
       "test \"$(fail2ban-client get sshd maxretry)\" = '5'",
       "test \"$(fail2ban-client get sshd findtime)\" = '600'",
+    ]
+  }
+}
+
+# Make systemd-journald persistent + bounded on the existing server (#4792, #4773).
+# PR #4786 moved the soleur-web-platform container to `--log-driver journald`, so
+# the host journal must persist across reboots (else Vector's 3 journald sources
+# read an empty /var/log/journal post-reboot) and be sized so it can never fill /.
+# Cloud-init handles fresh servers; this provisioner handles the existing one
+# (ignore_changes on user_data means cloud-init changes never apply to it — so a
+# cloud-init-only edit would land dead config; this SSH path is the sole live-prod
+# apply path). Source of truth for the drop-in: journald-soleur.conf (sibling
+# file, also rendered into cloud-init via base64encode(file()) — keep both in
+# sync). Shows as "will be created" in CI drift reports -- expected behavior, same
+# as the 6 sibling SSH provisioners. SSH connection precedent: disk_monitor_install.
+# Positive-assertion precedent: fail2ban_tuning (prove persistence took, don't
+# just observe it). Apply-path firewall note: SSH:22 is allowlisted to
+# var.admin_ips only (firewall.tf; CI-deploy SSH rule removed in #749), so the
+# handshake succeeds iff the operator/CI egress IP ∈ admin_ips. A
+# `connection reset by peer` here is admin-IP drift (fix: /soleur:admin-ip-refresh,
+# runbook admin-ip-drift.md), NOT an sshd/journald fault — per hr-ssh-diagnosis-verify-firewall.
+resource "terraform_data" "journald_persistent" {
+  triggers_replace = sha256(file("${path.module}/journald-soleur.conf"))
+
+  connection {
+    type  = "ssh"
+    host  = hcloud_server.web.ipv4_address
+    user  = "root"
+    agent = true
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/journald-soleur.conf"
+    destination = "/etc/systemd/journald.conf.d/00-soleur.conf"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "chown root:root /etc/systemd/journald.conf.d/00-soleur.conf",
+      "chmod 0644 /etc/systemd/journald.conf.d/00-soleur.conf",
+      # Create the persistent journal dir with journald's expected ownership +
+      # ACLs. systemd-tmpfiles applies the packaged tmpfiles.d/systemd.conf rule
+      # for /var/log/journal (0755 root:systemd-journal + setgid + read ACLs);
+      # mkdir -p first so the rule has a dir to adjust. Both idempotent.
+      "mkdir -p /var/log/journal",
+      "systemd-tmpfiles --create --prefix /var/log/journal",
+      # Restart picks up the Storage=persistent + cap drop-in; flush migrates the
+      # volatile /run journal into /var/log/journal. Sub-second daemon restart;
+      # buffered logs are flushed, not lost. No container/app/Vector restart.
+      "systemctl restart systemd-journald",
+      "journalctl --flush",
+      # Diagnostic dump (informational; printed to CI drift logs).
+      "systemd-analyze cat-config systemd/journald.conf | grep -E '^(Storage|SystemMaxUse|SystemKeepFree|RuntimeMaxUse)=' || true",
+      # Positive assertions (fail2ban_tuning pattern): if the drop-in did NOT take
+      # effect, journald would still be volatile and these would fail the
+      # provisioner instead of silently shipping dead config.
+      "test -d /var/log/journal",
+      # --header lists active journal files with their paths; a persistent journal
+      # has files under /var/log/journal. Volatile-only journals list /run paths.
+      "journalctl --header | grep -q '/var/log/journal'",
+      "test \"$(systemctl is-active systemd-journald)\" = 'active'",
     ]
   }
 }

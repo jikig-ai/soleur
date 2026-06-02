@@ -45,6 +45,40 @@ service_journal_tail() {
   fi
 }
 
+# journald persistent-storage state (#4792). No-SSH post-apply verification for
+# the persistent + bounded host journal: reports whether /var/log/journal exists
+# and journald is actually writing there (persistent vs volatile), plus the root
+# filesystem headroom and the inngest SQLite store size that share `/` with the
+# journal. All best-effort + read-only; missing tools collapse to safe defaults
+# so the webhook never errors on a non-systemd / minimal host.
+journald_storage_json() {
+  local persistent=false dir_present=false root_avail="" store_bytes=0
+  if [[ -d /var/log/journal ]]; then
+    dir_present=true
+    # `journalctl --header` lists active journal files with their on-disk paths;
+    # a file under /var/log/journal proves journald is in persistent mode (a
+    # volatile-only journal lists /run/log/journal paths instead).
+    if command -v journalctl >/dev/null 2>&1 \
+      && journalctl --header 2>/dev/null | grep -q '/var/log/journal'; then
+      persistent=true
+    fi
+  fi
+  # Avail bytes on the root filesystem (the journal lives on `/`, NOT /mnt/data).
+  if command -v df >/dev/null 2>&1; then
+    root_avail=$(df -h --output=avail / 2>/dev/null | tail -1 | tr -d ' ' || true)
+  fi
+  # Inngest SQLite store footprint — competes with the journal for root-disk space.
+  if [[ -d /var/lib/inngest ]] && command -v du >/dev/null 2>&1; then
+    store_bytes=$(du -sb /var/lib/inngest 2>/dev/null | cut -f1 || echo 0)
+  fi
+  jq -nc \
+    --argjson persistent "$persistent" \
+    --argjson dir_present "$dir_present" \
+    --arg root_avail "$root_avail" \
+    --argjson store_bytes "${store_bytes:-0}" \
+    '{persistent: $persistent, journal_dir_present: $dir_present, root_avail: $root_avail, inngest_store_bytes: $store_bytes}'
+}
+
 # Per-cron last-fire timestamps written by postSentryHeartbeat (#4131).
 # Glob is best-effort; empty dir or missing path produces "{}".
 inngest_crons_json() {
@@ -67,6 +101,7 @@ INNGEST_SERVER_STATUS="$(service_status inngest-server.service)"
 VECTOR_STATUS="$(service_status vector.service)"
 VECTOR_JOURNAL_TAIL="$(service_journal_tail vector.service)"
 INNGEST_CRONS="$(inngest_crons_json)"
+JOURNALD_STORAGE="$(journald_storage_json)"
 
 STATE_FILE="${CI_DEPLOY_STATE:-/var/lock/ci-deploy.state}"
 
@@ -86,7 +121,8 @@ jq -nc \
   --arg vs "$VECTOR_STATUS" \
   --arg vj "$VECTOR_JOURNAL_TAIL" \
   --argjson ic "$INNGEST_CRONS" \
-  '$base + {services: (($base.services // {}) + {
+  --argjson js "$JOURNALD_STORAGE" \
+  '$base + {journald_storage: $js, services: (($base.services // {}) + {
     inngest_heartbeat: $hb,
     inngest_server: $is,
     vector: $vs,

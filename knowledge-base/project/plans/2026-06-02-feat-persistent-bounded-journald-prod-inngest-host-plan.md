@@ -193,13 +193,13 @@ discoverability_test:
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] `journald-soleur.conf` exists with `Storage=persistent`, `SystemMaxUse=1G`, `SystemKeepFree=2G`, `RuntimeMaxUse=200M` under a `[Journal]` section. (The single `SystemMaxUse` cap is the only aggregate; self-consistent by construction.)
-- [ ] `cloud-init.yml` write_files contains a byte-identical copy of the drop-in at `/etc/systemd/journald.conf.d/00-soleur.conf`, AND a runcmd step creating `/var/log/journal` + restarting journald + flushing the journal, placed before the container-start step.
-- [ ] `cloud-init.yml` still parses: `python3 -c "import yaml; yaml.safe_load(open('apps/web-platform/infra/cloud-init.yml'))"` returns 0.
-- [ ] `server.tf` contains `resource "terraform_data" "journald_persistent"` with an SSH `connection` block (`agent = true`), `triggers_replace = sha256(file(.../journald-soleur.conf))`, a `file` provisioner to `/etc/systemd/journald.conf.d/00-soleur.conf`, and a `remote-exec` with the create-dir -> restart -> flush -> positive-assertion sequence.
-- [ ] `terraform fmt -check` and `terraform validate` pass for `apps/web-platform/infra/`.
-- [ ] `journald-config.test.sh` passes: byte-parity (standalone file vs cloud-init inline), required-keys present, YAML round-trip, `terraform_data` block shape.
-- [ ] PR body records Phase 0 host-state answers: `/var/log/journal` present? current `Storage=`? `/` headroom? inngest store size? — and the L3 firewall/egress-IP verification result.
+- [x] `journald-soleur.conf` exists with `Storage=persistent`, `SystemMaxUse=1G`, `SystemKeepFree=2G`, `RuntimeMaxUse=200M` under a `[Journal]` section. (The single `SystemMaxUse` cap is the only aggregate; self-consistent by construction.)
+- [x] `cloud-init.yml` write_files contains a byte-identical copy of the drop-in at `/etc/systemd/journald.conf.d/00-soleur.conf`, AND a runcmd step creating `/var/log/journal` + restarting journald + flushing the journal, placed before the container-start step. (Byte-parity via `${journald_soleur_conf_b64}` = `base64encode(file(...))` — same file() the provisioner pushes raw; the `fail2ban-sshd.local` two-path precedent. Stronger than a hand-maintained literal heredoc; deviation from plan's "literal heredoc" suggestion noted in commit.)
+- [x] `cloud-init.yml` still parses: `python3 -c "import yaml; yaml.safe_load(open('apps/web-platform/infra/cloud-init.yml'))"` returns 0.
+- [x] `server.tf` contains `resource "terraform_data" "journald_persistent"` with an SSH `connection` block (`agent = true`), `triggers_replace = sha256(file(.../journald-soleur.conf))`, a `file` provisioner to `/etc/systemd/journald.conf.d/00-soleur.conf`, and a `remote-exec` with the create-dir -> restart -> flush -> positive-assertion sequence.
+- [x] `terraform fmt -check` and `terraform validate` pass for `apps/web-platform/infra/`.
+- [x] `journald-config.test.sh` passes (32/32): byte-parity wiring, required-keys present, YAML round-trip, `terraform_data` block shape, runcmd ordering. Added as an explicit step in `infra-validation.yml` (CI runs infra `*.test.sh` by name, not glob).
+- [ ] PR body records Phase 0 host-state answers: `/var/log/journal` present? current `Storage=`? `/` headroom? inngest store size? — and the L3 firewall/egress-IP verification result. (No-SSH path wired: `cat-deploy-state.sh` now emits `journald_storage`; live values captured at apply time via the webhook.)
 - [ ] PR body uses `Ref #4792` (NOT `Closes #4792`) — the actual remediation runs at apply time, post-merge (ops-only-prod-write class). Closure is a post-merge step.
 
 ### Post-merge (operator / CI)
