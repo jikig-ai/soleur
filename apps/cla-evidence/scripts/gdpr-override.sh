@@ -34,6 +34,11 @@ step()   { printf '\n→ %s\n' "$*"; }
 
 usage_err() { red "::error::usage: $*"; exit 64; }
 
+# ── Shared CF-admin-token helpers (verify + self-revoke) ─────────────────────
+# Sourced AFTER red/green/yellow are defined (helper sourcing precondition).
+# shellcheck source=_cf-admin-token.sh disable=SC1091
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_cf-admin-token.sh"
+
 # ── Help ─────────────────────────────────────────────────────────────────────
 show_help() {
   cat <<'EOF'
@@ -183,40 +188,21 @@ _cleanup_partial_override() {
   exit "$rc"
 }
 
+# Thin wrapper over the shared helper — preserves the existing no-arg call
+# sites (:232, :290, :327 and the trap handler) which rely on the closed-over
+# $CF_ADMIN_TOKEN / $CF_ADMIN_TOKEN_ID.
 _self_revoke() {
-  if [[ -z "$CF_ADMIN_TOKEN_ID" ]]; then
-    yellow "  WARN: no admin-token id captured; revoke manually in CF dashboard."
-    return 0
-  fi
-  if curl --max-time 30 -fsS -X DELETE \
-      -H "Authorization: Bearer $CF_ADMIN_TOKEN" \
-      "$CF_API/user/tokens/$CF_ADMIN_TOKEN_ID" >/dev/null 2>&1; then
-    green "  admin token self-revoked"
-  else
-    yellow "  WARN: self-revoke failed; revoke $CF_ADMIN_TOKEN_ID manually in CF dashboard."
-  fi
+  cf_token_self_revoke "$CF_ADMIN_TOKEN" "$CF_ADMIN_TOKEN_ID"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 1 — verify CF admin token
 # ─────────────────────────────────────────────────────────────────────────────
 step "[1/8] verify CF admin token"
-if ! verify=$(curl --max-time 30 -fsS \
-    -H "Authorization: Bearer $CF_ADMIN_TOKEN" \
-    "$CF_API/user/tokens/verify" 2>/dev/null); then
-  red "::error::admin token verify failed; rotate and retry"
-  exit 1
-fi
-status=$(printf '%s' "$verify" | jq -r '.result.status // "unknown"')
-if [[ "$status" != "active" ]]; then
-  red "::error::admin token status=$status (expected active)"
-  exit 1
-fi
-CF_ADMIN_TOKEN_ID=$(printf '%s' "$verify" | jq -r '.result.id // ""')
-if [[ -z "$CF_ADMIN_TOKEN_ID" ]]; then
-  red "::error::could not capture admin token id (needed for self-revoke)"
-  exit 1
-fi
+# Shared helper: verifies active status + captures id; hard-fails (non-zero)
+# on verify error / non-active / empty id. `|| exit 1` preserves the prior
+# exit-1 pre-PUT-abort contract (no self-revoke needed — nothing mutated yet).
+CF_ADMIN_TOKEN_ID=$(cf_token_verify "$CF_ADMIN_TOKEN") || exit 1
 green "  token verified (id captured for self-revoke)"
 
 # ─────────────────────────────────────────────────────────────────────────────

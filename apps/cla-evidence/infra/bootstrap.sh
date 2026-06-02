@@ -59,6 +59,13 @@ green()  { printf '%b%s%b\n' "$GREEN"  "$*" "$NC"; }
 yellow() { printf '%b%s%b\n' "$YELLOW" "$*" "$NC"; }
 step()   { printf '\n→ %s\n' "$*"; }
 
+# Shared CF-admin-token helpers (verify + self-revoke). Sourced AFTER the
+# red/green/yellow helpers above (sourcing precondition) and via a self-
+# contained script-dir anchor so it does NOT depend on INFRA_DIR (computed
+# later, after the verify block that now calls cf_token_verify).
+# shellcheck source=../scripts/_cf-admin-token.sh disable=SC1091
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)/_cf-admin-token.sh"
+
 # ─────────────────────────────────────────────────────────────────────────
 # Pre-flight: deps + auth + admin token
 # ─────────────────────────────────────────────────────────────────────────
@@ -78,14 +85,12 @@ if [[ -z "${CF_ADMIN_TOKEN_BOOTSTRAP:-}" ]]; then
 fi
 
 # Verify the admin token actually has the scopes we need before going further.
-verify=$(curl -fsS \
-  -H "Authorization: Bearer $CF_ADMIN_TOKEN_BOOTSTRAP" \
-  https://api.cloudflare.com/client/v4/user/tokens/verify 2>&1) \
-  || { red "CF_ADMIN_TOKEN_BOOTSTRAP failed verify; rotate and retry"; exit 1; }
-status=$(printf '%s' "$verify" | jq -r '.result.status // "unknown"')
-[[ "$status" == "active" ]] || { red "admin token status=$status (not active)"; exit 1; }
-# Capture token id for the post-bootstrap self-revoke step.
-CF_ADMIN_TOKEN_ID=$(printf '%s' "$verify" | jq -r '.result.id // ""')
+# Shared helper hard-fails on verify error / non-active / empty id. The empty-id
+# hard-fail is the defensive upgrade (issue #3950 item 3): the prior inline form
+# captured the id with `// ""` and continued on empty, silently disabling the
+# post-run self-revoke. Now an un-capturable id aborts bootstrap up front.
+CF_ADMIN_TOKEN_ID=$(cf_token_verify "$CF_ADMIN_TOKEN_BOOTSTRAP") \
+  || { red "CF_ADMIN_TOKEN_BOOTSTRAP failed verify (or token id not captured); rotate and retry"; exit 1; }
 
 # Compute total step count once so the step counter is consistent end-to-end.
 if [[ "${SENTINEL_PR_AUTOMATION:-0}" == "1" ]]; then
@@ -285,20 +290,10 @@ fi
 # dashboard — closes the residual window between bootstrap exit and
 # manual revocation.
 # ─────────────────────────────────────────────────────────────────────────
-if [[ -n "$CF_ADMIN_TOKEN_ID" ]]; then
-  if curl -fsS -X DELETE \
-      -H "Authorization: Bearer $CF_ADMIN_TOKEN_BOOTSTRAP" \
-      "https://api.cloudflare.com/client/v4/user/tokens/$CF_ADMIN_TOKEN_ID" \
-      >/dev/null 2>&1; then
-    green ""
-    green "  CF_ADMIN_TOKEN_BOOTSTRAP self-revoked via CF API."
-  else
-    yellow ""
-    yellow "  WARN: self-revoke of CF_ADMIN_TOKEN_BOOTSTRAP failed; revoke manually in the dashboard."
-  fi
-else
-  yellow "  WARN: could not capture token id; revoke CF_ADMIN_TOKEN_BOOTSTRAP manually in the dashboard."
-fi
+# Shared best-effort self-revoke (warns, never hard-fails). CF_ADMIN_TOKEN_ID
+# is guaranteed non-empty here — cf_token_verify aborts up front on empty id.
+green ""
+cf_token_self_revoke "$CF_ADMIN_TOKEN_BOOTSTRAP" "$CF_ADMIN_TOKEN_ID"
 
 # ─────────────────────────────────────────────────────────────────────────
 # Done — closing reminders
