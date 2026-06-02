@@ -202,7 +202,12 @@ export async function resolveTeamMembershipPageData(
       };
     };
     const delegResp = await delegChain
-      .select("id, grantor_user_id, grantee_user_id, daily_cap_cents")
+      // The byok_delegations columns are daily_usd_cap_cents / hourly_usd_cap_cents
+      // (migration 064:82,86). Alias to the short key the TS shape uses. Querying
+      // the bare `daily_cap_cents` name returns PostgREST 42703 (column does not
+      // exist) → delegResp.error → delegationFromMe never populates → the toggle
+      // renders OFF on every reload regardless of workspace (the core of symptom 1).
+      .select("id, grantor_user_id, grantee_user_id, daily_cap_cents:daily_usd_cap_cents")
       .eq("workspace_id", workspaceId)
       .is("revoked_at", null);
     for (const d of delegResp.data ?? []) {

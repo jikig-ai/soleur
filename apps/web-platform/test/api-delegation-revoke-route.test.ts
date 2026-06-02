@@ -66,6 +66,10 @@ vi.mock("@/server/byok-delegation-ui-resolver", () => ({
   resolveGrantorDelegations: vi.fn(async () => []),
 }));
 
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: vi.fn(),
+}));
+
 import { DELETE } from "@/app/api/workspace/delegations/route";
 
 const OWNER_ID = "owner-uuid";
@@ -91,9 +95,11 @@ beforeEach(() => {
   mockIsByokDelegationsEnabled.mockResolvedValue(true);
   mockResolveCurrentOrganizationId.mockResolvedValue("org-1");
   mockGetUser.mockResolvedValue({ data: { user: { id: OWNER_ID, email: "owner@example.com" } } });
-  // The grantor owns this delegation → passes the ownership probe.
+  // The grantor owns this delegation, not yet revoked → passes the ownership
+  // probe and the idempotent-stop guard, reaching the RPC.
   mockDelegationMaybeSingle.mockResolvedValue({
-    data: { grantor_user_id: OWNER_ID, grantee_user_id: GRANTEE_ID },
+    data: { grantor_user_id: OWNER_ID, grantee_user_id: GRANTEE_ID, revoked_at: null },
+    error: null,
   });
   mockServiceRpc.mockResolvedValue({ error: null });
 });
@@ -156,9 +162,28 @@ describe("DELETE /api/workspace/delegations (revoke — AC1/AC2)", () => {
   });
 
   test("403 forbidden when the delegation does not exist", async () => {
-    mockDelegationMaybeSingle.mockResolvedValue({ data: null });
+    mockDelegationMaybeSingle.mockResolvedValue({ data: null, error: null });
     const res = await DELETE(makeRequest(validBody()));
     expect(res.status).toBe(403);
+    expect(mockServiceRpc).not.toHaveBeenCalled();
+  });
+
+  test("503 when the ownership probe errors transiently (not a misleading 403)", async () => {
+    mockDelegationMaybeSingle.mockResolvedValue({ data: null, error: { message: "timeout" } });
+    const res = await DELETE(makeRequest(validBody()));
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "probe_failed" });
+    expect(mockServiceRpc).not.toHaveBeenCalled();
+  });
+
+  test("idempotent: an already-revoked delegation returns 200 without calling the RPC", async () => {
+    mockDelegationMaybeSingle.mockResolvedValue({
+      data: { grantor_user_id: OWNER_ID, grantee_user_id: GRANTEE_ID, revoked_at: "2026-06-01T00:00:00Z" },
+      error: null,
+    });
+    const res = await DELETE(makeRequest(validBody()));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
     expect(mockServiceRpc).not.toHaveBeenCalled();
   });
 

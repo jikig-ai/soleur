@@ -13,6 +13,16 @@ vi.mock("@/server/byok-resolver", () => ({
   userHasEffectiveByokKey: mockUserHasEffectiveByokKey,
 }));
 
+// The owner-side J5 self-heal mirrors a transient membership-probe error to
+// Sentry (cq-silent-fallback-must-mirror-to-sentry). Mock it so the error-branch
+// test can assert the mirror fires without a real observability sink.
+const { mockReportSilentFallback } = vi.hoisted(() => ({
+  mockReportSilentFallback: vi.fn(),
+}));
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: mockReportSilentFallback,
+}));
+
 // Flagsmith single-control gate. Tests stub via env vars so resolver exercises
 // the real gate logic (env-fallback path when FLAGSMITH_ENVIRONMENT_KEY unset).
 
@@ -44,6 +54,9 @@ interface ResolveOpts {
   // false → the membership probe returns null and the resolver falls back to
   // the caller's own solo workspace (user.id), never a sibling. Default true.
   ownerIsMemberOfClaimed?: boolean;
+  // J5 self-heal: when true the membership probe returns a transient error;
+  // the resolver must mirror to Sentry AND still fail closed to user.id.
+  selfHealProbeError?: boolean;
 }
 
 function mockSupabaseClients(opts: ResolveOpts) {
@@ -72,10 +85,11 @@ function mockSupabaseClients(opts: ResolveOpts) {
             // J5 self-heal probe: .select().eq("workspace_id", ws).eq("user_id", u).maybeSingle()
             eq: () => ({
               maybeSingle: () =>
-                Promise.resolve({
-                  data: isMember ? { user_id: opts.user?.id } : null,
-                  error: null,
-                }),
+                Promise.resolve(
+                  opts.selfHealProbeError
+                    ? { data: null, error: { message: "probe boom" } }
+                    : { data: isMember ? { user_id: opts.user?.id } : null, error: null },
+                ),
             }),
           }),
         }),
@@ -156,6 +170,7 @@ describe("resolveTeamMembershipPageData", () => {
     __resetFeatureFlagsForTests();
     mockUserHasEffectiveByokKey.mockReset();
     mockUserHasEffectiveByokKey.mockResolvedValue(false);
+    mockReportSilentFallback.mockReset();
   });
 
   it("AC-A: returns not-found when feature flag is OFF", async () => {
@@ -356,6 +371,34 @@ describe("resolveTeamMembershipPageData", () => {
       // N2 invariant: solo workspace_id === user_id. NULL claim → solo (user.id).
       expect(result.data.workspaceId).toBe(USER_ID);
     }
+  });
+
+  it("AC4 (probe error): a transient self-heal probe error mirrors to Sentry AND fails closed to solo", async () => {
+    vi.stubEnv("FLAG_TEAM_WORKSPACE_INVITE", "1");
+    const { supabase, service } = mockSupabaseClients({
+      user: { id: USER_ID, email: "jean@jikigai.com", app_metadata: {} },
+      sessionOrgId: ORG_ID,
+      sessionWorkspaceId: WORKSPACE_ID, // non-solo claim → probe runs
+      selfHealProbeError: true,
+      members: [
+        { workspace_id: USER_ID, user_id: USER_ID, role: "owner", created_at: "2026-01-01T00:00:00Z" },
+      ],
+      emails: {
+        [USER_ID]: { email: "jean@jikigai.com", created_at: "2025-01-01T00:00:00Z" },
+      },
+    });
+    const result = await resolveTeamMembershipPageData(supabase as never, service as never);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.workspaceId).toBe(USER_ID); // fail closed, never the sibling
+    }
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        feature: "team-membership-resolver",
+        op: expect.stringContaining("workspace-claim-membership-probe"),
+      }),
+    );
   });
 
   it("AC-FLOW4 surface: returns owner role for self so UI can disable remove-self", async () => {

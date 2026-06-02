@@ -4,6 +4,7 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isByokDelegationsEnabled, type Identity } from "@/lib/feature-flags/server";
 import { resolveCurrentOrganizationId } from "@/server/workspace-resolver";
 import { resolveGrantorDelegations } from "@/server/byok-delegation-ui-resolver";
+import { reportSilentFallback } from "@/server/observability";
 
 export async function GET(request: Request) {
   const { valid, origin } = validateOrigin(request);
@@ -130,13 +131,30 @@ export async function DELETE(request: Request) {
 
   const service = createServiceClient();
 
-  const { data: delegation } = await service
+  const { data: delegation, error: probeError } = await service
     .from("byok_delegations")
-    .select("grantor_user_id, grantee_user_id")
+    .select("grantor_user_id, grantee_user_id, revoked_at")
     .eq("id", body.delegationId)
     .maybeSingle();
+  // A transient probe error must not masquerade as a 403 "forbidden" (the owner
+  // would be told they may not stop their own spend). Mirror it and return 503
+  // so the client retries (cq-silent-fallback-must-mirror-to-sentry).
+  if (probeError) {
+    reportSilentFallback(probeError, {
+      feature: "byok-delegations",
+      op: "DELETE.ownership-probe",
+      extra: { userId: user.id, delegationId: body.delegationId },
+    });
+    return NextResponse.json({ error: "probe_failed" }, { status: 503 });
+  }
   if (!delegation || (delegation.grantor_user_id !== user.id && delegation.grantee_user_id !== user.id)) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
+  // Idempotent stop: if already revoked, the spend is already off. Returning
+  // {ok:true} avoids the RPC's "already revoked" P0001 surfacing as a 400 →
+  // "Couldn't stop sharing the key" on a double-click / concurrent decline.
+  if (delegation.revoked_at !== null) {
+    return NextResponse.json({ ok: true });
   }
 
   // Canonical 3-arg contract from migration 064 (064:495-498; mirrors

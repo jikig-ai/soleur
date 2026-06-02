@@ -156,6 +156,38 @@ the arg fix alone makes the revoke path functional.
   stop a spend delegation, or whose share silently no-ops, is a brand-survival
   event for a small-team product.
 
+### Review-surfaced guarantees (post-implementation, /work)
+
+- **Root cause of symptom 1 was a wrong column name, not only workspace
+  divergence.** Both `team-membership-resolver.ts` and `byok-delegation-ui-resolver.ts`
+  selected `daily_cap_cents` / `hourly_cap_cents` from `byok_delegations`, but the
+  real columns are `daily_usd_cap_cents` / `hourly_usd_cap_cents` (064:82,86). The
+  untyped service client + arg-discarding chain mocks let this ship green; at
+  runtime it returns PostgREST 42703 → the SSR `delegationFromMe` read errored →
+  the toggle rendered OFF on **every** reload regardless of workspace. Fixed via
+  PostgREST aliases (`daily_cap_cents:daily_usd_cap_cents`) + a source-level
+  regression guard (`test/byok-delegation-cap-column-names.test.ts`). This is the
+  fundamental symptom-1 cause for the common single-workspace org.
+- **Orphaned pre-fix grants cannot manifest in current prod.** Workspace
+  divergence (`current_workspace_id` ≠ the old unordered `workspaces[0]`) requires
+  an org with ≥2 workspaces. The product is single-workspace-per-org today (N2:
+  `workspace_id === user_id`; multi-workspace is deferred to #2778). When #2778
+  ships multi-workspace, that work MUST include a one-time reconciliation of any
+  active `byok_delegations` whose `workspace_id` ≠ the grantor's resolved active
+  workspace. `FLAG_BYOK_DELEGATIONS` env-fallback is `0` in prd (feature enabled
+  selectively via Flagsmith for dogfood orgs), further bounding the population.
+- **Transferred-ownership owners read the correct workspace.** Transfer-ownership
+  (mig 075) requires the transferee to already be a member; `accept-invite` sets
+  their `current_workspace_id` on join, so `resolveCurrentWorkspaceId` returns the
+  org workspace. In the unlikely NULL-claim edge, the J5 self-heal fails **closed
+  to the owner's own solo workspace, never a sibling** — the degraded outcome is a
+  visible-empty team (silent no-op), not a cross-tenant spend leak.
+- **Revoke path hardened beyond the arg fix.** The DELETE ownership probe now
+  mirrors transient errors to Sentry and returns 503 (not a misleading 403), and
+  an already-revoked delegation returns `{ok:true}` idempotently so a double-click
+  / concurrent decline never shows "Couldn't stop sharing the key" when the spend
+  is in fact already stopped.
+
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
