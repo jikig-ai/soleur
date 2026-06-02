@@ -271,8 +271,13 @@ logs:
   where: GitHub Actions job logs (no persistent store; scripts are operator-run or CI-run)
   retention: GitHub Actions default (90d)
 discoverability_test:
-  command: "for t in apps/cla-evidence/scripts/*.test.sh; do bash \"$t\"; done && bash apps/cla-evidence/infra/main.test.sh"
-  expected_output: all suites print PASS / ALL ... passed and exit 0 (no ssh)
+  command: bash apps/cla-evidence/scripts/_r2-endpoint.test.sh
+  expected_output: "ALL _r2-endpoint.sh tests passed."
+  # Single command (no shell-active tokens) so preflight Check 10 can execute it
+  # offline. Proves the endpoint-pin security gate is live. The full suite is
+  # `for t in apps/cla-evidence/scripts/*.test.sh; do bash "$t"; done && bash
+  # apps/cla-evidence/infra/main.test.sh` (run by CI's scripts shard +
+  # infra-validation.yml) — kept here as prose, not as the probe command.
 ```
 
 ## Infrastructure (IaC)
