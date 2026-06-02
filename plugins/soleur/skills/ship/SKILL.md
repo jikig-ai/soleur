@@ -1111,7 +1111,7 @@ Use the **Monitor tool** with this shell loop (state-change + heartbeat, max 15 
 ```bash
 # <!-- phase-7-poll-block:start --> (do NOT edit without updating the
 # mirror in plugins/soleur/skills/merge-pr/SKILL.md §5.2 and the fixture
-# at plugins/soleur/test/ship-phase-7-poll-fixtures.sh; the fixture's awk
+# at plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh; the fixture's awk
 # extractor anchors on this fence + the variable-set fingerprint below.)
 prev=""; i=0; behind_syncs=0; MAX_BEHIND_SYNCS=6; behind_warned=0
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
@@ -1219,7 +1219,7 @@ while true; do
     # to heartbeat. PR may still merge if main calms down — but the
     # operator now has the diagnosis without log-archaeology.
     elapsed=$((i * 60))
-    echo "$(date +%H:%M:%S) [${i}/15] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s. origin/main is moving faster than this PR's CI cycle. Recommendation: stop ship pipeline; merge during a quieter window." >&2
+    echo "$(date +%H:%M:%S) [${i}/15] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s. origin/main is moving faster than this PR's CI cycle. Recommendation: for a zero-conflict-surface change, use the settle-then-admin-merge escape hatch (gh pr merge --squash --admin after confirming required checks are green on the current SHA — see \"Auto-sync on BEHIND\" below for the full procedure); else merge during a quieter window." >&2
     behind_warned=1
   fi
 
@@ -1240,7 +1240,17 @@ Each meaningful event (first iteration, every state change, heartbeat every 3rd 
 2. Merging origin/main into the branch with `--no-edit`. If conflicts arise (`--diff-filter=U` returns paths), the loop aborts the merge and stops polling — manual resolution is required and continuing would mask the conflict.
 3. Pushing the merge commit. This bumps the PR head ref, GitHub re-evaluates the queued auto-merge, and (assuming CI passes) the merge fires.
 
-The sync is capped at `MAX_BEHIND_SYNCS=6` per poll invocation. A pathological case — every sync triggers a new commit on main (parallel-active-repo class) — would otherwise consume the full 15-minute budget on BEHIND→BEHIND→BEHIND with no progress. After 6 syncs, the loop emits a structured `BEHIND budget exhausted` warning naming the elapsed time and recommendation to merge during a quieter window, then falls through to heartbeat — the PR may still merge if main calms down, but the operator now has the diagnosis at the inflection point instead of at the 15-minute timeout.
+The sync is capped at `MAX_BEHIND_SYNCS=6` per poll invocation. A pathological case — every sync triggers a new commit on main (parallel-active-repo class) — would otherwise consume the full 15-minute budget on BEHIND→BEHIND→BEHIND with no progress. After 6 syncs, the loop emits a structured `BEHIND budget exhausted` warning naming the elapsed time, then falls through to heartbeat — the PR may still merge if main calms down, but the operator now has the diagnosis at the inflection point instead of at the 15-minute timeout.
+
+**Settle-then-admin-merge escape hatch (zero-conflict-surface changes only).** When `main` is merging PRs faster than this PR's ~8-minute CI cycle, the auto-sync loop livelocks: every `git merge origin/main` push bumps the head ref, re-triggers the full required-check set, and `main` moves again before the checks settle — so the branch is never `CLEAN`-at-current-`main` and GitHub's queued auto-merge never fires (learning `2026-06-02-auto-merge-livelock-fast-moving-main.md`, surfaced on PR #4774). At the 6-sync cap, if this change has **zero conflict surface** (a docs/skill edit, an additive file, anything that cannot semantically conflict with what's landing on `main`), the up-to-date requirement is *purely procedural* and can be bypassed deterministically:
+
+1. **Stop auto-syncing.** The loop has already capped itself; do not hand-roll more `git merge origin/main` pushes (that is the livelock).
+2. **Confirm required checks are green on the CURRENT SHA** — `gh pr checks <N>` must show no required check in a `pending` or `fail` bucket (the canonical poll loop reads this via `gh pr checks --json name,bucket`). `--admin` bypasses ONLY the up-to-date gate, **NOT** the checks; merging with a red or pending required check ships unverified code.
+3. **Sync local → origin** so the local ref is fast-forward with the pushed head: `git fetch origin && git reset --hard origin/<branch>` (this discards any uncommitted or un-pushed local work on the branch — confirm `git status` is clean first).
+4. **Admin-merge:** `gh pr merge <N> --squash --admin`. This bypasses only the "branch must be up to date with base" rule.
+5. **Retry the transient race.** A busy `main` returns `Base branch was modified. Review and try the merge again.` between the check read and the merge call; loop with a short backoff until it lands: `for i in $(seq 1 20); do gh pr merge <N> --squash --admin && break; sleep 18; done`.
+
+Do **not** use this hatch for a change with real conflict surface — there, the up-to-date requirement is load-bearing and the correct move is to merge during a quieter window (or resolve the conflict and let CI re-verify).
 
 **Required-check failure exit.** Each tick, the loop intersects `gh pr checks --json name,bucket` failures (`bucket == "fail"`) with the repo's required-check name set (fetched once at loop entry via `gh api 'repos/{owner}/{repo}/rules/branches/main'`). On the first intersection, the loop exits and prints the failing check name + a pointer to `gh pr checks <number>` / `gh run view --log-failed`. This replaces the silent 15-minute heartbeat that occurs when a required check fails mid-poll but auto-merge sits queued waiting for a state transition that will never come. If the required-check fetch fails (no auth, no ruleset, archived repo), the scan is a no-op and the existing CLOSED-on-CI-failure fallback below still catches the terminal case — fail-open is deliberate, do NOT "harden" to fail-closed.
 

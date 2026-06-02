@@ -245,11 +245,11 @@ Regex engine: bash ERE with POSIX `[[:space:]]`. Anchor
 
 ### Modes
 
-- **`SOLEUR_DEFER_DRYRUN=1`** (DEFAULT, hardcoded fallback). Match → emit
+- **`SOLEUR_DEFER_DRYRUN=1`** (dry-run; introduced in PR #3787, demoted from default to opt-in in PR #3800). Match → emit
   `kind: "would_defer"`, return `{}` (allow). Collects telemetry without
   blocking work.
-- **`SOLEUR_DEFER_DRYRUN=0`** (enforce; flipped via follow-up PR #3800 after
-  ~2 weeks of dry-run review). Match → emit `kind: "defer_requested"`,
+- **`SOLEUR_DEFER_DRYRUN=0`** (DEFAULT, hardcoded fallback; enforce-flipped in
+  PR #3800 after an 18-day dry-run review). Match → emit `kind: "defer_requested"`,
   append `.claude/logs/approvals.jsonl` row, return the wrapped defer
   envelope:
   ```json
@@ -319,8 +319,11 @@ the dry-run window does NOT include CI/scheduled-runs (their
 gated addition: `wrangler secret put` (prod), `supabase --linked db push`,
 `stripe ... --live`, `gh release create`, `gh pr merge --admin`.
 
-The enforce-flip (`SOLEUR_DEFER_DRYRUN` default 1 → 0) ships in a separate
-follow-up PR (#3800) once the operator confirms manifest hit-rate.
+The enforce-flip (`SOLEUR_DEFER_DRYRUN` default 1 → 0) shipped in PR #3800
+after the 18-day dry-run review confirmed manifest hit-rate (real prod-write
+demand on the terraform-apply and doppler-secrets rules; zero phantom-rule
+noise). Enforce is now the hardcoded default; set `SOLEUR_DEFER_DRYRUN=1` to
+opt back into dry-run telemetry mode.
 
 ### F1 PermissionDenied event hook (deferred)
 

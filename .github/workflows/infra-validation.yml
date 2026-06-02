@@ -138,6 +138,9 @@ jobs:
       - name: Run canary-bundle-claim-check.sh tests
         run: bash apps/web-platform/infra/canary-bundle-claim-check.test.sh
 
+      - name: Run infra-config-apply.sh tests
+        run: bash apps/web-platform/infra/infra-config-apply.test.sh
+
       - name: Run www-apex-canonicalizer drift-guard
         run: bash apps/web-platform/infra/www-apex-canonicalizer.test.sh
 
