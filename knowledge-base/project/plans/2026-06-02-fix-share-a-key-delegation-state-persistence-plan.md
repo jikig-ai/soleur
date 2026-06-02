@@ -79,6 +79,47 @@ state-sync defect, plus an RPC-arg parallel to #4761 that #4761 did not touch:**
 `service_role` already holds `EXECUTE` on `revoke_byok_delegation` (064:572), so
 the arg fix alone makes the revoke path functional.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-02
+**Gates run:** 4.4 precedent-diff, 4.45 verify-the-negative, 4.6 User-Brand Impact
+(pass), 4.7 Observability (pass), 4.8 PAT-shaped (pass, no match), 4.5 network
+(skipped, no triggers). Live citation + attribution verification.
+
+### Key verifications (all confirmed against `origin/main`)
+
+1. **Cited PRs are MERGED and touch the claimed files.** `#4761` (MERGED) changed
+   `delegations/route.ts` (12 lines) + `delegation-toggle.tsx` — confirms it fixed
+   the **grant** args and silent-swallow, leaving the **revoke** args at the old
+   names. `#4767` (MERGED) swapped `getDefaultWorkspaceForUser →
+   resolveCurrentWorkspaceId` in `byok-resolver.ts` + `chat/layout.tsx`.
+2. **Revoke precedent-diff (4.4):** the prescribed fix
+   `{ p_delegation_id, p_actor_user_id, p_reason }` is byte-identical to migration
+   064's signature (`064:495-498`) and the working CLI `scripts/byok-revoke.ts:154-158`.
+   The broken route uses `p_revoked_by_user_id` / `p_revocation_reason`. Not novel —
+   this is the canonical revoke arg set.
+3. **Owner-resolver precedent (Fix B):** #4767's member-side diff is the exact
+   pattern Fix B applies to the owner page (`getDefaultWorkspaceForUser` /
+   unordered-`[0]` → `resolveCurrentWorkspaceId`). Not novel.
+4. **Verify-the-negative (4.45):** the "fail closed to the caller's own solo
+   workspace, never a sibling" claim is **confirmed** by
+   `workspace-resolver.ts:215` (`return userId; // fail to solo workspace, never a
+   sibling`) and the doc comments at `:234,:275`. The fix preserves the
+   cross-tenant invariant.
+
+### New consideration surfaced
+
+- `resolveCurrentWorkspaceId` returns `userId` (the owner's solo workspace) when
+  `current_workspace_id` is NULL. For an owner who created the org solo and never
+  switched, this is the shared workspace (N2: `workspace_id === user_id`), so the
+  read is correct. But an owner whose org workspace id ≠ `user_id` (e.g., ownership
+  transferred to them, or a future multi-workspace org) MUST have a
+  `current_workspace_id` row pointing at the org workspace, else the solo fallback
+  reads the wrong workspace. /work MUST trace the owner's `current_workspace_id`
+  lifecycle (set by `accept-invite` / `set_current_workspace_id` / active-repo
+  badge self-heal) and add a resolver test for the NULL-claim owner case (already
+  captured as task 2.5 and the third Sharp Edge).
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Premise (from task framing) | Codebase reality (verified) | Plan response |
