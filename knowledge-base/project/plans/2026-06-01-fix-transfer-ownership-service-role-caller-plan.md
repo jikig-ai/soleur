@@ -92,7 +92,7 @@ So the change is: (1) a new migration `092` widening the RPC signature + flippin
 
 **If this leaks, the user's workflow/data is exposed via:** a forgeable `p_caller_user_id` reachable from PostgREST by `authenticated` would let any logged-in user POST a crafted RPC call with `p_caller_user_id = <victim owner uuid>`, transferring a victim's workspace ownership to themselves — full tenant takeover. This is the identical P1 privilege-escalation class fixed in #4762; the override param is **only** safe behind a service_role-only grant.
 
-**Brand-survival threshold:** single-user incident.
+- **Brand-survival threshold:** single-user incident
 
 **Rolling-deploy window (fails closed, no escalation):** the migrate job applies on merge before/with the app cutover. During the transient skew window, both directions fail closed to the *existing* HTTP 500 — (a) schema-applied/old-app: old 3-arg call resolves to the new 4-arg form with `p_caller_user_id` defaulted NULL → `COALESCE(NULL, auth.uid())` NULL under service-role → 28000 → 500 (identical to the pre-fix state); (b) new-app/schema-not-applied: 4-arg call against the not-yet-created form → PGRST202 → 500. No data loss and no `authenticated`-reachable forgeable overload exists at any instant because the DROP (of the 3-arg) and the service_role-only GRANT (of the 4-arg) land atomically in one migration. The flow is dogfood-gated (`isTeamWorkspaceInviteEnabled`) and was 100% broken before this PR, so the window regresses nothing.
 
@@ -220,8 +220,13 @@ logs:
   where: Sentry (silent-fallback arms) + Next.js route response bodies
   retention: Sentry default project retention
 discoverability_test:
-  command: "cd apps/web-platform && ./node_modules/.bin/vitest run test/supabase-migrations/092-transfer-ownership-caller-override.test.ts test/server/transfer-ownership-wrapper.test.ts"
-  expected_output: "all tests pass (signature widened, COALESCE present, grant service_role-only, wrapper forwards p_caller_user_id)"
+  command: curl -fsS -o /dev/null -w "%{http_code}" --max-time 10 -X POST https://app.soleur.ai/api/workspace/transfer-ownership
+  expected_output: "307"
+  # Cookieless POST → 307 redirect to /login proves the transfer-ownership
+  # surface is reachable and auth-gated (not 404/500) without SSH or creds.
+  # The functional fix (caller resolved, grant service_role-only) is covered
+  # locally by the migration-shape + wrapper vitest suites and post-merge by
+  # the verify/092 sentinel in the verify-migrations CI job.
 ```
 
 ## Test Scenarios
