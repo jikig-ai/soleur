@@ -81,6 +81,22 @@ rollout is only atomic in the *repo*. On a host that updates the transport confi
 mechanism depend on the field already being deliverable. Prefer per-item accounting so the
 self-healing config can always land.
 
+## Review-surfaced design lesson: scope value-assertions to their close-out
+
+The first cut of the fix added a **standing** `journald_storage.persistent == true`
+assertion that hard-failed on *every* future deploy-pipeline-fix apply. Multi-agent
+review (architecture-strategist) flagged this as over-coupling: a generic
+deploy-reliability workflow should not permanently gate on one downstream feature's
+field *value*. A deliberate future journald change would false-red an unrelated
+merge with a misleading "#4792/#4800 has not landed" message.
+
+The generalizable rule: **a workflow's standing gate should assert its own generic
+contract** (here, `files_written == files_total && files_failed == 0` — which already
+proves the file landed), **and a one-time symptom/value check should be scoped to the
+thing it closes out** (gated on the issue still being OPEN, so it auto-disables once
+resolved). Distinguish "did the artifact deploy?" (standing, generic) from "does this
+specific field have this specific value?" (close-out, point-in-time).
+
 ## Cross-references
 
 - [[2026-04-29-deploy-pipeline-fix-postapply-verification-cf-access]] — the post-apply
