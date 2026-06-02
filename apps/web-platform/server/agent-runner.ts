@@ -701,9 +701,11 @@ export function startInactivityTimer(): void {
  * 30 s by `ws-handler.ts` for the active conversation; their staleness is
  * the authoritative liveness signal.
  *
- * Threshold (120 s) and cadence (60 s) match the existing pg_cron sweep
+ * The 120 s staleness threshold matches the existing pg_cron sweep
  * (migration 029 line 219-225) so the two sweep mechanisms agree on a
- * single liveness threshold.
+ * single liveness threshold. The poll cadence (300 s as of the 2026-06-02
+ * disk-IO remediation) is INTENTIONALLY decoupled from that threshold and
+ * from the pg_cron sweep cadence — see STUCK_ACTIVE_CHECK_INTERVAL_MS below.
  *
  * Per-row order: status flip → releaseSlot → abortSession.
  *   - Status flip first means the abort-branch in `startAgentSession`'s
@@ -775,7 +777,7 @@ export function startStuckActiveReaper(): NodeJS.Timeout {
     await Promise.allSettled(
       candidates.map(async (conv) => {
         // #3463: race-window guard. The candidate set was computed
-        // ≤60s ago; the candidate's session may have completed cleanly
+        // ≤300s ago (the reaper poll cadence); the candidate's session may have completed cleanly
         // (result branch wrote `waiting_for_user`) in the interval
         // between RPC return and this UPDATE. The `find_stuck_active`
         // RPC selects on `status='active' AND heartbeat-stale`, but
@@ -2242,9 +2244,9 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
         }
 
         // Outer catch: result-branch wrap might not have run; release
-        // slot so the user isn't stuck for up to 60s waiting for the
-        // reaper. releaseSlot already swallows errors internally
-        // (concurrency.ts) — no extra .catch needed.
+        // slot so the user isn't stuck for up to ~300s (the reaper poll
+        // cadence) waiting for the reaper. releaseSlot already swallows
+        // errors internally (concurrency.ts) — no extra .catch needed.
         await releaseSlot(userId, conversationId);
       }
     } else if (
@@ -2306,7 +2308,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           "Failed to mark conversation as failed",
         );
       });
-      // Outer catch: result-branch wrap might not have run; release slot so the user isn't stuck for up to 60s waiting for the reaper.
+      // Outer catch: result-branch wrap might not have run; release slot so the user isn't stuck for up to ~300s (the reaper poll cadence) waiting for the reaper.
       // releaseSlot already swallows errors internally (concurrency.ts) — no extra .catch needed.
       await releaseSlot(userId, conversationId);
     }

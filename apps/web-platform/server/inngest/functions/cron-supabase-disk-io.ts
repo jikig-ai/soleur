@@ -70,7 +70,9 @@ export interface DiskIoSignal {
   cache_hit_pct: number | null;
   // table name → live-row estimate (n_live_tup) for the unbounded dedup tables.
   dedup_table_rows: Record<string, number> | null | undefined;
-  // top public tables by (ins+upd+del); diagnostic context only (not gated on).
+  // top public tables by (ins+upd+del); diagnostic context ONLY — surfaced in
+  // the issue body to point the operator at the write driver, never a verdict
+  // input (the verdict gates on cache_hit_pct + dedup_table_rows).
   top_write_churn: Array<{ table: string; writes: number }>;
   sampled_at: string;
 }

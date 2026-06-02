@@ -25,8 +25,17 @@
 --                          context folded into the alert so the operator sees
 --                          WHICH table is driving writes without SSH.
 --
--- All counts are O(1) catalog reads (n_live_tup is an estimate, not a scan), so
--- the monitor adds negligible IO itself.
+-- The gated counts are O(1) catalog reads (n_live_tup is an estimate, not a
+-- scan). top_write_churn does a bounded top-5 sort over the in-memory
+-- pg_stat_user_tables view (no on-disk IO, no heap scan) — it is diagnostic
+-- context only, not a verdict input. Either way the monitor adds negligible IO.
+--
+-- VISIBILITY DEPENDENCY: this function reads cluster-wide stat rows, which
+-- require the OWNER role to hold pg_monitor (or be superuser); a role without it
+-- sees only its own backend's rows (others NULL-masked). On Supabase, migrations
+-- run as `postgres` (a pg_monitor member), so this holds. The post-deploy
+-- manual-trigger check (a non-null cache_hit_pct on first fire) is the runtime
+-- confirmation that the owner role has the required visibility.
 --
 -- search_path pinned public, pg_temp per cq-pg-security-definer-search-path-pin-pg-temp.
 -- Read-only: REVOKE from all, GRANT EXECUTE to service_role only (the cron's

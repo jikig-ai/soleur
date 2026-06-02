@@ -181,9 +181,14 @@ Specific failure modes: (a) if the stuck-active reaper cadence widening is botch
 reaper stops entirely, stuck "active" conversations linger and block the per-user
 concurrency slot → user cannot start a new agent run; (b) if the `processed_github_events`
 retention sweep deletes rows INSIDE the replay window, a re-delivered GitHub webhook is
-re-processed (double-effect — e.g. a duplicate repo-connect); (c) if the monitor's
-threshold is mis-tuned it either pages constantly (alert fatigue) or stays silent through a
-real depletion (the exact failure this feature exists to prevent).
+re-processed (double-effect — e.g. a duplicate repo-connect); (b2) [added at review per
+user-impact Finding 3] the work-time-folded `processed_stripe_events` sweep touches the
+PAYMENT dedup surface — if it deleted a row inside Stripe's replay window a re-delivered
+Stripe event could double-process (incorrect/duplicate charge), the highest-severity
+artifact class. Scoped out as safe: the 90-day sweep window EQUALS Stripe's documented
+replay window (migration 030:12), so the DELETE never crosses the replay boundary; (c) if
+the monitor's threshold is mis-tuned it either pages constantly (alert fatigue) or stays
+silent through a real depletion (the exact failure this feature exists to prevent).
 
 **If this leaks, the user's data is exposed via:** the monitor queries prod via the
 Management API and folds query output into a Sentry event + a public GitHub issue body.
