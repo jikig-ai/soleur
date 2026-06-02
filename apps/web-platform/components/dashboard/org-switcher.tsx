@@ -59,10 +59,37 @@ export function OrgSwitcher({
     [onSwitch],
   );
 
-  // AC-C: hide entirely on solo / empty membership.
-  if (memberships.length <= 1) return null;
+  // RQ7: with no memberships there is no workspace to name — render nothing.
+  if (memberships.length === 0) return null;
 
   const current = memberships.find((m) => m.isCurrent) ?? memberships[0];
+
+  // RQ7 / CPO sign-off condition #2: a solo user (exactly one workspace) still
+  // sees their workspace NAME in the context band for orientation, but as a
+  // VISIBLY NON-INTERACTIVE chip — no dropdown trigger, no `▾` affordance —
+  // because there is nothing to switch to. The band's identity display is a
+  // distinct concern from the interactive switch.
+  if (memberships.length === 1) {
+    return (
+      <div
+        data-testid="workspace-identity-static"
+        className="flex items-center gap-2 rounded-md px-3 py-1.5 text-left"
+      >
+        <span
+          aria-hidden="true"
+          className="h-6 w-6 shrink-0 rounded-sm bg-soleur-accent-gold-fg/60"
+        />
+        <span className="min-w-0">
+          <span className="block truncate text-sm font-medium text-soleur-text-primary">
+            {current.organizationName}
+          </span>
+          <span className="block text-xs text-soleur-accent-gold-fg">
+            {roleLabel(current.role)}
+          </span>
+        </span>
+      </div>
+    );
+  }
 
   return (
     <div ref={ref} className="relative">

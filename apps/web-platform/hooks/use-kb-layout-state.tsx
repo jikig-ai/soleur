@@ -34,8 +34,6 @@ export interface UseKbLayoutStateResult {
   loading: boolean;
   error: KbContextValue["error"];
   hasTreeContent: boolean;
-  kbCollapsed: boolean;
-  toggleKbCollapsed: () => void;
   // Chat state
   contextPath: string | null;
   showChat: boolean;
@@ -53,7 +51,6 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
   const router = useRouter();
   const isDesktop = useMediaQuery("(min-width: 768px)");
   const chatPanelRef = usePanelRef();
-  const [kbCollapsed, setKbCollapsed] = useState(false);
   const [tree, setTree] = useState<TreeNode | null>(null);
   const [lastSync, setLastSync] = useState<KbSyncHistoryRow | null>(null);
   const [needsReconnect, setNeedsReconnect] = useState(false);
@@ -157,24 +154,9 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
     });
   }, [pathname]);
 
-  const toggleKbCollapsed = useCallback(() => {
-    setKbCollapsed((prev) => !prev);
-  }, []);
-
-  // Cmd+B / Ctrl+B toggles KB file tree sidebar (only on KB routes, not in inputs)
-  useEffect(() => {
-    function handleToggleShortcut(e: KeyboardEvent) {
-      if (!(e.metaKey || e.ctrlKey) || e.key !== "b") return;
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
-      if ((e.target as HTMLElement)?.isContentEditable) return;
-      if (!pathname.startsWith("/dashboard/kb")) return;
-      e.preventDefault();
-      toggleKbCollapsed();
-    }
-    document.addEventListener("keydown", handleToggleShortcut);
-    return () => document.removeEventListener("keydown", handleToggleShortcut);
-  }, [pathname, toggleKbCollapsed]);
+  // ⌘B and rail collapse are owned solely by (dashboard)/layout.tsx (AC5,
+  // ADR-047). KB no longer has its own collapse axis — the tree lives in the
+  // unified rail, which collapses as a whole.
 
   const isContentView = pathname !== "/dashboard/kb";
   const hasTreeContent = !!(tree?.children && tree.children.length > 0);
@@ -305,8 +287,6 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
     loading,
     error,
     hasTreeContent,
-    kbCollapsed,
-    toggleKbCollapsed,
     contextPath,
     showChat,
     openSidebar,

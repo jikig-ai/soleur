@@ -138,14 +138,10 @@ describe("DashboardLayout — Settings sidebar relocation", () => {
     ).toBeTruthy();
   });
 
-  it("applies the active-state classes when on a /dashboard/settings route", async () => {
-    setPathname("/dashboard/settings/billing");
-    await renderDashboard();
-
-    const settings = screen.getByRole("link", { name: /^settings$/i });
-
-    expect(settings).toHaveAttribute("aria-current", "page");
-    expect(settings.className).toContain("bg-soleur-bg-surface-2");
-    expect(settings.className).toContain("text-soleur-text-primary");
-  });
+  // ADR-047: on a /dashboard/settings route the rail now DRILLS — the primary
+  // nav + footer (incl. this Settings link) are replaced by the Settings
+  // sub-nav in the slot. The footer Settings link therefore only exists at the
+  // top level (where it is never "active"); its drilled active-state moved to
+  // the lifted sub-nav (settings-sidebar-collapse.test.tsx). The footer-order
+  // tests above still exercise the top-level state.
 });
