@@ -16,6 +16,35 @@ status: planned
 
 # feat: F2 enforce-flip — flip `SOLEUR_DEFER_DRYRUN` default 1 → 0
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-02
+
+### Deepen-plan hard gates (all PASS)
+- **Phase 4.6 User-Brand Impact halt** — section present, concrete, threshold `single-user incident`. PASS.
+- **Phase 4.7 Observability gate** — all 5 fields present + non-placeholder; `discoverability_test.command` is `ssh`-free. PASS.
+- **Phase 4.8 PAT-shaped variable halt** — no PAT-shaped TF var / env var / literal token. PASS.
+
+### Verify-the-negative pass (Phase 4.45)
+- **"sole consumer of the default"** — `grep SOLEUR_DEFER_DRYRUN` across `*.ts/*.sh/*.js/*.yml` returns exactly: the hook, its test, and `test-pretooluse-hooks.yml`. The plan already names the CI workflow as the implicit third consumer (handled by AC5) — claim CONFIRMED, correctly qualified.
+- **"provisions nothing / no new infra"** — all 4 Files-to-Edit are `.claude/hooks/*` + a `.github/workflows/*.yml` test; none under `apps/*/infra/`. CONFIRMED.
+
+### Live citation verification
+- PR #3787 — `MERGED` 2026-05-15 (18-day dry-run window CONFIRMED).
+- Issue #3800 — `OPEN` (target; `Closes #3800` in body). Issue #3789 — `OPEN` (parent stays open). CONFIRMED.
+- Issue #4029 — `OPEN` (the security issue behind the doppler-stdout rule widening; symmetric issue-probe after the PR-probe returned not-a-PR). Plan's "pre-#4029 rename" reference CONFIRMED accurate.
+- No AGENTS.md rule-IDs cited in the plan body → zero fabrication-class risk.
+
+### Precedent-diff (Phase 4.4)
+- No new scheduled job, no SQL `SECURITY DEFINER/INVOKER`, no lock/atomic-write/RPC pattern. The only pattern-bound idiom is the bash `${VAR:-default}` env-default — sibling precedent is the hook's own line 35 (the line being flipped). No novel pattern.
+
+### Note on agent fan-out
+The skills/learnings/research/review sub-agent fan-out (deepen-plan Phases 2, 3, 4, 5) requires the Task tool, which is unavailable in this planning-subagent context. The load-bearing deepen value — the three mandatory halt-gates, the verify-the-negative pass, and live citation verification — was executed mechanically (above) and all pass. The plan required no corrections from the deepen pass. The 5-agent plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow-analyzer) is likewise Task-gated; a self-review against those lenses found no findings (plan is a minimal one-line flip + consumer syncs; the blast-radius catch — CI Test 6's implicit default dependency — was already surfaced and handled by AC5; the flow-gap catch — the default-unset path — is AC3/D4).
+
+---
+
+> Original plan below (preserved verbatim).
+
 ## Overview
 
 The F2 prod-write defer gate (`.claude/hooks/prod-write-defer-gate.sh`, shipped dry-run-default by PR #3787, merged 2026-05-15) has run in dry-run mode for 18 days (gate: ≥14 days — SATISFIED). This PR performs the **enforce-flip** anticipated by PR #3787 and documented in `.claude/hooks/README.md:251` and `:322`: change the hardcoded fallback
