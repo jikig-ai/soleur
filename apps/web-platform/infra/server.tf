@@ -229,6 +229,19 @@ resource "terraform_data" "journald_persistent" {
     agent = true
   }
 
+  # The drop-in dir does NOT exist by default on Ubuntu — systemd ships
+  # /etc/systemd/journald.conf but not the journald.conf.d/ subdir, and the
+  # `file` provisioner (scp) does not create remote parents. On the existing
+  # host cloud-init's write_files (which would create the dir) never runs
+  # (ignore_changes=[user_data]), so this mkdir is load-bearing: without it the
+  # very first apply fails at scp `No such file or directory`. Mirrors the
+  # fail2ban_tuning pre-`file` remote-exec that guarantees its target dir exists.
+  provisioner "remote-exec" {
+    inline = [
+      "mkdir -p /etc/systemd/journald.conf.d",
+    ]
+  }
+
   provisioner "file" {
     source      = "${path.module}/journald-soleur.conf"
     destination = "/etc/systemd/journald.conf.d/00-soleur.conf"
@@ -246,7 +259,12 @@ resource "terraform_data" "journald_persistent" {
       "systemd-tmpfiles --create --prefix /var/log/journal",
       # Restart picks up the Storage=persistent + cap drop-in; flush migrates the
       # volatile /run journal into /var/log/journal. Sub-second daemon restart;
-      # buffered logs are flushed, not lost. No container/app/Vector restart.
+      # buffered logs are flushed, not lost. No container/app/Vector restart:
+      # Vector's journald sources read by sd_journal cursor (not file path) and
+      # are restart/rotation-tolerant, so they resume from their stored cursor
+      # with no gap beyond the sub-second window. Resumption is verified
+      # out-of-band (no SSH) post-apply via the cat-deploy-state webhook —
+      # vector_journal_tail non-empty + journald_storage.persistent=true.
       "systemctl restart systemd-journald",
       "journalctl --flush",
       # Diagnostic dump (informational; printed to CI drift logs).

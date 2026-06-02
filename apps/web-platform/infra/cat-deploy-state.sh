@@ -69,7 +69,10 @@ journald_storage_json() {
   fi
   # Inngest SQLite store footprint — competes with the journal for root-disk space.
   if [[ -d /var/lib/inngest ]] && command -v du >/dev/null 2>&1; then
-    store_bytes=$(du -sb /var/lib/inngest 2>/dev/null | cut -f1 || echo 0)
+    # On du failure the pipe exits via cut (success), so a trailing `|| echo 0`
+    # would never fire — store_bytes goes empty and the ${store_bytes:-0} guard
+    # at the jq call site supplies the 0. Keep the fallback at the call site only.
+    store_bytes=$(du -sb /var/lib/inngest 2>/dev/null | cut -f1)
   fi
   jq -nc \
     --argjson persistent "$persistent" \

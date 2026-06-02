@@ -100,6 +100,7 @@ echo ""
 echo "--- AC4: journald_persistent provisioner shape (SSH + triggers + file + remote-exec) ---"
 # Extract the resource block (from its declaration to the next top-level
 # `resource`/`locals`/`}` at column 0) so assertions are scoped to it.
+# shellcheck disable=SC2034  # consumed via `eval "$condition"` in assert()
 BLOCK=$(awk '
   /^resource "terraform_data" "journald_persistent"/ { f=1 }
   f { print }
@@ -116,6 +117,11 @@ assert "connection host = hcloud_server.web.ipv4_address" \
   "printf '%s' \"\$BLOCK\" | grep -qE 'host[[:space:]]*=[[:space:]]*hcloud_server\.web\.ipv4_address'"
 assert "file provisioner pushes drop-in to /etc/systemd/journald.conf.d/00-soleur.conf" \
   "printf '%s' \"\$BLOCK\" | grep -qE 'destination[[:space:]]*=[[:space:]]*\"/etc/systemd/journald\.conf\.d/00-soleur\.conf\"'"
+# The drop-in dir is NOT created by default on Ubuntu and scp won't create
+# parents — a preceding remote-exec mkdir is load-bearing or the first apply
+# fails. (Regression guard for the review P1.)
+assert "remote-exec creates the drop-in dir before the file provisioner pushes into it" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'mkdir -p /etc/systemd/journald\.conf\.d'"
 assert "remote-exec creates /var/log/journal" \
   "printf '%s' \"\$BLOCK\" | grep -qE 'mkdir -p /var/log/journal'"
 assert "remote-exec restarts systemd-journald" \
