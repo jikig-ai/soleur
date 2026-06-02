@@ -1,5 +1,24 @@
 # 🐛 fix: populate workspace_id on interactive `messages` INSERTs (RLS-blocked chat outage)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-02
+**Sections enhanced:** Fix strategy, Test scenarios, Verification, Domain Review
+**Research applied:** Context7 (`/supabase/supabase` RLS INSERT WITH CHECK), 5 institutional learnings, review-agent lenses (data-integrity-guardian, security-sentinel, silent-failure-hunter, pr-test-analyzer) applied inline (no `Task` subagent tool available in this environment).
+
+### Key Improvements
+1. **Test infra already exists — no new capture seam needed.** The cc-dispatcher harness (`test/helpers/cc-dispatcher-harness.ts:116-118,143-145`) already wires `tenant.from("messages").insert` to a spy `opts.mockMessagesInsert`, and `cc-dispatcher.test.ts:1085-1091` already reads `insertMock.mock.calls` and filters by role. T1-T4 reduce to adding a `workspace_id` assertion on the already-captured payload. This shrinks AC5 effort substantially.
+2. **Context7 confirms the fix shape.** supabase-js v2 (`^2.49.0`, installed) returns `{ data, error }` (no throw) and an INSERT WITH CHECK policy referencing `workspace_id` requires the column be populated with a value satisfying the predicate — the Clerk `organization_id` example is the direct analog. The fix's "derive from parent conversation" approach is the documented-correct way to satisfy a membership-keyed WITH CHECK.
+3. **`saveMessage` reuses the SAME conversation read it can piggyback.** `sendUserMessage` already SELECTs the conversation (add `workspace_id` to the existing select — zero extra RTT); `saveMessage` and cc-dispatcher need exactly one added SELECT each, on the already-minted tenant client.
+4. **Symptom-chain precedent documented.** Learning `2026-03-28-unapplied-migration-command-center-chat-failure.md` is the canonical "An unexpected error occurred" → schema/RLS-mismatch debugging chain and establishes the merge-time prod-DB verification rule this plan's §Verification implements.
+
+### New Considerations Discovered
+- **`{ error }` destructure is already correct at all sites** (learning `2026-03-20-supabase-silent-error-return-values.md`) — the fix must preserve it; do not switch to `throwOnError()`.
+- **Negative-control is mandatory for the grep-sweep test** (T5) so it can't vacuously pass — assert a synthetic insert WITHOUT `workspace_id` fails the matcher (silent-failure-hunter lens).
+- **`buildRow` is a pure function returning `Record<string, unknown>`** — adding `workspace_id` is type-safe but the column is not statically checked against the DB; the grep-sweep test is the only mechanical guard (type-widening-cascade lens).
+
+---
+
 **Date:** 2026-06-02
 **Type:** bug / production outage
 **Branch:** `feat-one-shot-messages-workspace-id-rls-insert`
@@ -125,6 +144,36 @@ insert payload at `447-456`. On conversation-read failure, throw
 `workspace_id` to that existing select** — no extra round-trip — and include it in the
 INSERT at `2438-2445`.
 
+### Research Insights — fix strategy
+
+**Context7 (`/supabase/supabase`, RLS INSERT WITH CHECK):** An INSERT policy whose
+`WITH CHECK` references a column requires that column to carry a value satisfying the
+predicate at insert time. The canonical example is the Clerk integration policy
+("the newly inserted row has the user's org ID in the `organization_id` column"),
+which is the exact analog of `is_workspace_member(workspace_id, auth.uid())`. Omitting
+the column → it is `NULL` → predicate false → `new row violates row-level security
+policy`. Confirms the bug mechanism and that populating `workspace_id` from a workspace
+the caller is a member of is the documented fix.
+
+**supabase-js contract (`^2.49.0` installed, verified in `apps/web-platform/package.json`):**
+`.insert()` returns `{ data, error }` and does NOT throw (learning
+`2026-03-20-supabase-silent-error-return-values.md`). All four sites already destructure
+`{ error }` and surface it — **preserve this**; do NOT introduce `.throwOnError()`
+(changes the whole-chain contract). The new conversation-`workspace_id` reads must
+likewise destructure `{ data, error }` and branch on error (mirror via
+`reportSilentFallback` per `cq-silent-fallback-must-mirror-to-sentry`).
+
+**Single-RTT discipline (Kieran P2-2, reaffirmed):** Reuse the already-minted `tenant`
+(cc-dispatcher) / `sendTenant` (agent-runner) clients for the workspace read. For
+`sendUserMessage` there is ZERO added RTT (extend the existing select). For
+cc-dispatcher and `saveMessage` there is exactly one added SELECT each.
+
+**Anti-pattern avoided:** Do NOT derive `workspace_id` from `resolveCurrentWorkspaceId`
+(`workspace-resolver.ts:190`) — it returns the *session-selected* workspace, which can
+diverge from the conversation's workspace for a multi-membership operator and would
+write a row into the wrong workspace (passes RLS by membership, but mis-attributes the
+message). The parent conversation's `workspace_id` is the only correct source.
+
 ---
 
 ## Acceptance criteria
@@ -143,14 +192,22 @@ INSERT at `2438-2445`.
 
 ## Test scenarios (RED first — `cq-write-failing-tests-before`)
 
-Mock infra: `apps/web-platform/test/helpers/mock-supabase.ts` (`mockQueryChain`)
-already returns `this` for `.insert` and is thenable. To **capture** the insert
-payload, the chain's `insert` mock must record its first argument. Extend the helper
-(or wire an inline `vi.fn()` capturing spy in each test's `vi.hoisted`/`vi.mock`
-block) so `insert.mock.calls[0][0]` is assertable. Existing harnesses to extend:
-`test/helpers/cc-dispatcher-harness.ts`, `test/helpers/agent-runner-mocks.ts`, and the
-tenant-isolation suites `test/server/cc-dispatcher.tenant-isolation.test.ts` +
-`test/server/agent-runner.tenant-isolation.test.ts`.
+**Capture seam already exists (verified — do NOT build new infra):** The cc-dispatcher
+harness wires `tenant.from("messages").insert` to the spy `opts.mockMessagesInsert`
+(`test/helpers/cc-dispatcher-harness.ts:116-118` for the service path and `143-145`
+for the `getFreshTenantClient` tenant path). `cc-dispatcher.test.ts:1085-1091` already
+defines `assistantInsertCalls(insertMock)` reading `insertMock.mock.calls` and filtering
+by `role`. **T1-T4 just add a `workspace_id` assertion to the already-captured payload.**
+For the agent-runner path, reuse / mirror `test/helpers/agent-runner-mocks.ts` the same
+way. The tenant-isolation suites `test/server/cc-dispatcher.tenant-isolation.test.ts` +
+`test/server/agent-runner.tenant-isolation.test.ts` are the natural home for the
+cross-tenant + workspace-id assertions. `mock-supabase.ts`'s `mockQueryChain` already
+returns `this` for `.insert` and is thenable; if a test uses it directly, assert
+`insert.mock.calls[0][0].workspace_id`.
+
+To exercise the workspace-read, the conversation mock must return a `workspace_id`
+(e.g. `{ workspace_id: "ws-A", … }`) from the `.single()`/`.select()` terminal so the
+fix has a value to thread.
 
 1. **T1 (cc-dispatcher user row):** dispatch a turn; conversation mock returns
    `workspace_id: "ws-A"`. Assert the user-INSERT payload `(1449)` has
@@ -172,6 +229,26 @@ tenant-isolation suites `test/server/cc-dispatcher.tenant-isolation.test.ts` +
 
 > All fixtures synthesized (`cq-test-fixtures-synthesized-only`) — no real workspace
 > ids except the redacted `754ee124-…` referenced in prose only.
+
+### Research Insights — tests
+
+**pr-test-analyzer lens:** T5 (grep-sweep) must be non-vacuous — include a negative
+control: a synthetic insert-object literal lacking `workspace_id` MUST make the matcher
+fail. Without it, a regex that matches nothing passes silently (the exact failure mode
+in learning `2026-05-12` Defect B's call-count test). Mirror the existing
+`T-W1-invariant-7` pattern at `cc-dispatcher.test.ts:1819` (call-site-exhaustive
+assertion across user + complete + aborted writes) — add `workspace_id` presence to
+each captured call there too.
+
+**silent-failure-hunter lens:** T6 must assert BOTH that `reportSilentFallback` fires
+AND that the path throws (or aborts the insert) — never a NULL-`workspace_id` insert
+that would 500 in prod. A test that only checks the throw, or only the mirror, misses
+half the contract.
+
+**data-integrity-guardian lens:** add an assertion that the asserted `workspace_id`
+equals the *conversation's* `workspace_id` (not merely "is present" and not
+`resolveCurrentWorkspaceId`'s value) — the wrong-source bug (mis-attribution to the
+session-selected workspace) passes a "present" check but is a data-integrity defect.
 
 ---
 
@@ -259,7 +336,8 @@ this is a fix to restore correct workspace-keyed writes, not a new regulated sur
 - **Exemplar (correct):** `apps/web-platform/server/messages/insert-draft-card.ts:66-83`
 - **Error sanitizer:** `apps/web-platform/server/error-sanitizer.ts:79`
 - **Workspace resolvers:** `apps/web-platform/server/workspace-resolver.ts:190` (`resolveCurrentWorkspaceId`)
-- **Learnings:** `knowledge-base/project/learnings/integration-issues/2026-05-05-cc-dispatcher-assistant-persistence-asymmetry.md`; `knowledge-base/project/learnings/2026-05-12-type-widening-cascades-and-write-boundary-sentinels.md`
+- **Learnings:** `knowledge-base/project/learnings/integration-issues/2026-05-05-cc-dispatcher-assistant-persistence-asymmetry.md`; `knowledge-base/project/learnings/2026-05-12-type-widening-cascades-and-write-boundary-sentinels.md`; `knowledge-base/project/learnings/2026-03-28-unapplied-migration-command-center-chat-failure.md` (the "An unexpected error occurred" → schema/RLS-mismatch chain + merge-time prod-DB verification rule); `knowledge-base/project/learnings/2026-03-20-supabase-silent-error-return-values.md` (`{ error }`-destructure contract — preserve)
+- **Context7:** `/supabase/supabase` — RLS INSERT WITH CHECK requires the referenced column be populated to satisfy the predicate (Clerk `organization_id` analog)
 - **Test infra:** `apps/web-platform/test/helpers/mock-supabase.ts`; `test/helpers/cc-dispatcher-harness.ts`; `test/helpers/agent-runner-mocks.ts`; `test/server/{cc-dispatcher,agent-runner}.tenant-isolation.test.ts`
 - **Related rules:** `hr-write-boundary-sentinel-sweep-all-write-sites`, `cq-write-failing-tests-before`, `hr-no-dashboard-eyeball-pull-data-yourself`, `hr-dev-prd-distinct-supabase-projects`, `cq-silent-fallback-must-mirror-to-sentry`
 - **Prior adjacent PR:** #4816 (history-fetch 404 noise — did NOT fix this write-path RLS failure)

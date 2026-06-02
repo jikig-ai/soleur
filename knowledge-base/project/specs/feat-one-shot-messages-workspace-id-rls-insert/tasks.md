@@ -4,7 +4,7 @@ Plan: `knowledge-base/project/plans/2026-06-02-fix-interactive-messages-workspac
 
 ## Phase 1 — RED (failing tests first)
 
-- [ ] 1.1 Extend `test/helpers/mock-supabase.ts` (or per-test `vi.hoisted` spies) so `.from("messages").insert` records its payload for assertion (`insert.mock.calls[0][0]`).
+- [ ] 1.1 Reuse the EXISTING capture seam: `cc-dispatcher-harness.ts:116-118,143-145` already spies `messages.insert` via `opts.mockMessagesInsert`; `cc-dispatcher.test.ts:1085-1091` already reads `insertMock.mock.calls`. Ensure conversation mock returns a `workspace_id`. Mirror for agent-runner via `agent-runner-mocks.ts`. (No new mock infra.)
 - [ ] 1.2 T1 — cc-dispatcher user-row INSERT asserts `workspace_id` == conversation's `workspace_id`. (RED)
 - [ ] 1.3 T2 — cc-dispatcher assistant-row INSERT (via `buildRow`/1572) asserts `workspace_id`. (RED)
 - [ ] 1.4 T3 — agent-runner `saveMessage` INSERT asserts `workspace_id`. (RED)
