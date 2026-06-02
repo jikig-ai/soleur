@@ -929,12 +929,13 @@ export const realSdkQueryFactory: QueryFactory = async (
     );
 
     // Plan §2.11 canonical pattern (mirrors agent-runner.ts:2361):
-    // hoist `await lease.getApiKey()` OUT of `Promise.all` so the
-    // `string | Promise<string>` union in `getApiKey`'s return type
-    // does not surface awkwardly through `Promise.all`'s array element
-    // inference. `buildAgentQueryOptions.apiKey: string` consumes the
-    // unwrapped value.
-    const apiKey = await lease.getApiKey();
+    // hoist `await lease.getAgentCredential()` OUT of `Promise.all` so the
+    // `AgentCredential | Promise<AgentCredential>` union does not surface
+    // awkwardly through `Promise.all`'s array element inference.
+    // `buildAgentQueryOptions.credential` consumes the unwrapped value.
+    // Agent-SDK consumer: prefers the operator subscription oauth_token
+    // when enabled+permitted; otherwise the api_key (feat-operator-cc-oauth).
+    const credential = await lease.getAgentCredential();
     const [workspacePath, serviceTokens] = await Promise.all([
       fetchUserWorkspacePath(args.userId),
       getUserServiceTokens(args.userId),
@@ -1085,7 +1086,7 @@ export const realSdkQueryFactory: QueryFactory = async (
       options: buildAgentQueryOptions({
         workspacePath,
         pluginPath,
-        apiKey,
+        credential,
         serviceTokens,
         systemPrompt: effectiveSystemPrompt,
         resumeSessionId: safeResumeSessionId,

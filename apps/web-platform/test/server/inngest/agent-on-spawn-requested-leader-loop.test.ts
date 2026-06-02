@@ -162,7 +162,8 @@ const runWithByokLeaseSpy = vi.fn(async (_args: unknown, fn: unknown) => {
   const lease = {
     workspaceContextUserId: "founder-123",
     keyOwnerUserId: "founder-123",
-    getApiKey: () => "test-api-key",
+    // Raw-REST consumer (`new Anthropic({apiKey})`) → getRestApiKey.
+    getRestApiKey: () => "test-api-key",
   };
   return (fn as (l: unknown) => Promise<unknown>)(lease);
 });

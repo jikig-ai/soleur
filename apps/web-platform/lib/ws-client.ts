@@ -711,6 +711,23 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
             });
           }
 
+          // feat-operator-cc-oauth FR5 — subscription credit/rate-limit
+          // exhaustion on an oauth_token run. Distinct from `key_invalid`
+          // (no "Update key" action — re-pasting the token would be the
+          // WRONG action) and non-retryable (the credit window must reset).
+          // Server-side producer (SDK credit-signal classification) lands on
+          // first real hit per plan §Phase 5; the reception + render path is
+          // pre-wired here so that hit needs no client change.
+          if (msg.errorCode === "subscription_limit") {
+            setLastError({
+              code: "subscription_limit",
+              message:
+                "Claude subscription limit reached. Runs resume when the subscription credit window resets.",
+            });
+            teardown();
+            return;
+          }
+
           // #3254 — image-placeholder-strip surfaced a structured error.
           // Promote into `lastError` so a programmatic / agent-driven
           // client can branch on `code` instead of regexing the assistant
