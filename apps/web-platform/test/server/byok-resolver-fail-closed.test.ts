@@ -1,22 +1,30 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
 
-// AC12 (feat-byok-delegation-consent, #4625): on ANY resolver error or
-// fall-through branch (workspace lookup failure, flag disabled, RPC error,
-// no delegation row), resolveKeyOwnerThenLease MUST lease the CALLER's own
-// key — keyOwnerUserId === callerUserId — never a grantor key. The lease
-// body then raises MissingByokKeyError for a keyless grantee (fail-CLOSED),
-// which is the desired UX. This guards the deepen P0 #3 invariant: no error
-// path ever leases a grantor key.
+// AC12 (feat-byok-delegation-consent, #4625): on ANY resolver fall-through
+// branch (workspace degrade-to-solo, flag disabled, RPC error, no delegation
+// row), resolveKeyOwnerThenLease MUST lease the CALLER's own key —
+// keyOwnerUserId === callerUserId — never a grantor key. The lease body then
+// raises MissingByokKeyError for a keyless grantee (fail-CLOSED), which is the
+// desired UX. This guards the deepen P0 #3 invariant: no error path ever leases
+// a grantor key.
+//
+// #4767: the workspace source is now resolveCurrentWorkspaceId (active
+// workspace), which NEVER throws — on a query error it Sentry-mirrors and
+// returns the caller's own solo workspace (never a sibling). The fail-closed
+// scenario is therefore "resolver degrades to the solo workspace → no
+// delegation found there → caller key leased", not an injected throw. The
+// outer try/catch in resolveKeyOwnerThenLease survives as a defensive guard
+// (covered by its own test below).
 
 const {
   mockRunWithByokLease,
-  mockGetDefaultWorkspaceForUser,
+  mockResolveCurrentWorkspaceId,
   mockIsByokDelegationsEnabled,
   mockServiceRpc,
   mockServiceFrom,
 } = vi.hoisted(() => ({
   mockRunWithByokLease: vi.fn(),
-  mockGetDefaultWorkspaceForUser: vi.fn(),
+  mockResolveCurrentWorkspaceId: vi.fn(),
   mockIsByokDelegationsEnabled: vi.fn(),
   mockServiceRpc: vi.fn(),
   mockServiceFrom: vi.fn(),
@@ -40,10 +48,10 @@ vi.mock("@/lib/feature-flags/server", () => ({
 }));
 
 vi.mock("../../server/workspace-resolver", () => ({
-  getDefaultWorkspaceForUser: mockGetDefaultWorkspaceForUser,
+  resolveCurrentWorkspaceId: mockResolveCurrentWorkspaceId,
 }));
 vi.mock("@/server/workspace-resolver", () => ({
-  getDefaultWorkspaceForUser: mockGetDefaultWorkspaceForUser,
+  resolveCurrentWorkspaceId: mockResolveCurrentWorkspaceId,
 }));
 
 import { resolveKeyOwnerThenLease } from "@/server/byok-resolver";
@@ -85,15 +93,28 @@ beforeEach(() => {
 });
 
 describe("resolveKeyOwnerThenLease — fail-closed on every error branch (AC12)", () => {
-  test("workspace lookup throws → leases caller key, no delegationId", async () => {
-    mockGetDefaultWorkspaceForUser.mockRejectedValue(new Error("workspace lookup failed"));
+  test("workspace resolver degrades to solo workspace → leases caller key, no delegationId", async () => {
+    // resolveCurrentWorkspaceId never throws; on a query error it returns the
+    // caller's own (solo) workspace. The RPC then finds no delegation there →
+    // caller key leased, fail-closed.
+    mockResolveCurrentWorkspaceId.mockResolvedValue(WORKSPACE_CTX);
+    primeResolverRpc({ data: null, error: null });
+    await resolveKeyOwnerThenLease(CALLER, WORKSPACE_CTX, async () => "x");
+    expect(leasedKeyOwner).toBe(CALLER);
+    expect(leasedDelegationId).toBeUndefined();
+  });
+
+  test("defensive: workspace resolver unexpectedly throws → outer catch leases caller key", async () => {
+    // resolveCurrentWorkspaceId is documented never-throw, but the defensive
+    // try/catch must still fall to the direct (caller-key) lease if it ever does.
+    mockResolveCurrentWorkspaceId.mockRejectedValue(new Error("unexpected"));
     await resolveKeyOwnerThenLease(CALLER, WORKSPACE_CTX, async () => "x");
     expect(leasedKeyOwner).toBe(CALLER);
     expect(leasedDelegationId).toBeUndefined();
   });
 
   test("flag disabled → leases caller key", async () => {
-    mockGetDefaultWorkspaceForUser.mockResolvedValue("ws-1");
+    mockResolveCurrentWorkspaceId.mockResolvedValue("ws-1");
     mockIsByokDelegationsEnabled.mockResolvedValue(false);
     await resolveKeyOwnerThenLease(CALLER, WORKSPACE_CTX, async () => "x");
     expect(leasedKeyOwner).toBe(CALLER);
@@ -101,7 +122,7 @@ describe("resolveKeyOwnerThenLease — fail-closed on every error branch (AC12)"
   });
 
   test("RPC error → leases caller key (never the grantor)", async () => {
-    mockGetDefaultWorkspaceForUser.mockResolvedValue("ws-1");
+    mockResolveCurrentWorkspaceId.mockResolvedValue("ws-1");
     primeResolverRpc({ data: null, error: { message: "rpc boom" } });
     await resolveKeyOwnerThenLease(CALLER, WORKSPACE_CTX, async () => "x");
     expect(leasedKeyOwner).toBe(CALLER);
@@ -110,7 +131,7 @@ describe("resolveKeyOwnerThenLease — fail-closed on every error branch (AC12)"
   });
 
   test("no delegation row → leases caller key (MissingByokKeyError UX)", async () => {
-    mockGetDefaultWorkspaceForUser.mockResolvedValue("ws-1");
+    mockResolveCurrentWorkspaceId.mockResolvedValue("ws-1");
     primeResolverRpc({ data: null, error: null });
     await resolveKeyOwnerThenLease(CALLER, WORKSPACE_CTX, async () => "x");
     expect(leasedKeyOwner).toBe(CALLER);
@@ -120,7 +141,7 @@ describe("resolveKeyOwnerThenLease — fail-closed on every error branch (AC12)"
   test("happy path (gated delegation resolves) DOES lease the grantor key", async () => {
     // Negative control: proves the test can distinguish the grantor-lease
     // path from the fail-closed path (so the assertions above aren't vacuous).
-    mockGetDefaultWorkspaceForUser.mockResolvedValue("ws-1");
+    mockResolveCurrentWorkspaceId.mockResolvedValue("ws-1");
     primeResolverRpc({ data: { key_owner_user_id: GRANTOR, delegation_id: "deleg-1" }, error: null });
     await resolveKeyOwnerThenLease(CALLER, WORKSPACE_CTX, async () => "x");
     expect(leasedKeyOwner).toBe(GRANTOR);
