@@ -15,9 +15,14 @@
 import { describe, it, expect, vi } from "vitest";
 
 vi.mock("@/server/agent-env", () => ({
-  buildAgentEnv: vi.fn((apiKey: string, _tokens: Record<string, string>) => ({
-    ANTHROPIC_API_KEY: apiKey,
-  })),
+  buildAgentEnv: vi.fn(
+    (
+      credential: { value: string; scheme: string },
+      _tokens: Record<string, string>,
+    ) => ({
+      ANTHROPIC_API_KEY: credential.value,
+    }),
+  ),
 }));
 
 vi.mock("@/server/sandbox-hook", () => ({
@@ -32,7 +37,7 @@ const PLUGIN = "/tmp/test-workspace/plugins/soleur";
 const minArgs = {
   workspacePath: WORKSPACE,
   pluginPath: PLUGIN,
-  apiKey: "sk-test",
+  credential: { value: "sk-test", scheme: "api_key" as const },
   serviceTokens: {} as Record<string, string>,
   systemPrompt: "you are a router",
   canUseTool: (async () => ({ behavior: "allow" as const, updatedInput: {} })) as never,

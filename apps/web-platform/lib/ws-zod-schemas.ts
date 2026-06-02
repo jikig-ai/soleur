@@ -353,6 +353,10 @@ const errorSchema = z.strictObject({
       // api_keys row. Distinct from key_invalid (which means key exists
       // but is unusable).
       "byok_key_missing",
+      // feat-operator-cc-oauth FR5 — subscription credit/rate-limit
+      // exhaustion on an oauth_token run; non-retryable, distinct from
+      // key_invalid and the per-account rate_limited throttle.
+      "subscription_limit",
       "session_expired",
       "session_resumed",
       "rate_limited",

@@ -97,7 +97,7 @@ function supabase() { return _supabase ??= createServiceClient(); }
  */
 function resolveSessionErrorCode(
   err: unknown,
-): "key_invalid" | "byok_key_missing" | undefined {
+): "key_invalid" | "byok_key_missing" | "subscription_limit" | undefined {
   if (err instanceof KeyInvalidError) return "key_invalid";
   if (err instanceof ByokLeaseError) return mapByokLeaseCauseToErrorCode(err.cause);
   // Phase 3.2 AC-D: MissingByokKeyError carries its own client-facing
@@ -939,9 +939,11 @@ export async function startAgentSession(
       userId,
       userId,
       async (lease) => {
-    // Get user's decrypted API key and service tokens
-    const [apiKey, serviceTokens] = await Promise.all([
-      lease.getApiKey(),
+    // Agent-SDK consumer — resolve the credential ({ value, scheme }) so the
+    // subprocess env carries exactly one auth var. Prefers the operator
+    // subscription oauth_token when enabled+permitted; otherwise api_key.
+    const [credential, serviceTokens] = await Promise.all([
+      lease.getAgentCredential(),
       getUserServiceTokens(userId),
     ]);
 
@@ -1744,7 +1746,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       options: buildAgentQueryOptions({
         workspacePath,
         pluginPath,
-        apiKey,
+        credential,
         serviceTokens,
         systemPrompt: effectiveSystemPrompt,
         resumeSessionId: safeResumeSessionId,
@@ -2564,7 +2566,10 @@ export async function sendUserMessage(
         userId,
         userId,
         async (lease) => {
-        const apiKey = await lease.getApiKey();
+        // Raw-REST consumer — `routeMessage` → `classifyMessage` hits the
+        // Anthropic REST API with `x-api-key`, which an oauth_token cannot
+        // authenticate. MUST use the api_key row (provider='anthropic').
+        const apiKey = await lease.getRestApiKey();
 
         // tenant-scoped read of team_names. RLS enforces auth.uid() = user_id.
         // sendTenant from earlier in this function is reusable here

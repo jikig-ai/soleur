@@ -40,12 +40,12 @@ afterEach(() => {
 
 describe("buildAgentEnv: feat-team-workspace-multi-user env var isolation (CWE-526)", () => {
   it("does NOT include FLAG_TEAM_WORKSPACE_INVITE in the subprocess env", () => {
-    const env = buildAgentEnv("test-api-key");
+    const env = buildAgentEnv({ value: "test-api-key", scheme: "api_key" });
     expect(env).not.toHaveProperty("FLAG_TEAM_WORKSPACE_INVITE");
   });
 
   it("still includes the canonical agent runtime contract (ANTHROPIC_API_KEY + overrides)", () => {
-    const env = buildAgentEnv("test-api-key");
+    const env = buildAgentEnv({ value: "test-api-key", scheme: "api_key" });
     expect(env.ANTHROPIC_API_KEY).toBe("test-api-key");
     expect(env.DISABLE_AUTOUPDATER).toBe("1");
     expect(env.DISABLE_TELEMETRY).toBe("1");

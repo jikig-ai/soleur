@@ -595,13 +595,24 @@ export function ChatInput({
         </div>
       )}
 
-      <div className="flex items-center gap-2">
+      {/* Unified input box: the attach + send controls live *inside* one
+          bordered container alongside the borderless textarea (ChatGPT-style)
+          rather than as separate boxes floating beside the field. `items-end`
+          keeps the buttons pinned to the bottom edge as the textarea grows;
+          the focus ring + quote-flash live on the container now that the
+          textarea itself is transparent and borderless. */}
+      <div
+        className={
+          "flex items-end gap-1.5 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-2 py-1.5 transition-shadow focus-within:border-soleur-border-emphasized" +
+          (flashQuote ? " ring-2 ring-amber-400" : "")
+        }
+      >
         {/* Paperclip / attach button */}
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled || isUploading}
-          className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl border border-soleur-border-default text-soleur-text-secondary transition-colors hover:border-soleur-border-emphasized hover:text-soleur-text-primary disabled:opacity-50"
+          className="flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-lg text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary disabled:opacity-50"
           aria-label="Attach file"
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -632,17 +643,14 @@ export function ChatInput({
             disabled={disabled || isUploading}
             rows={1}
             data-quote-flashing={flashQuote ? "true" : undefined}
-            className={
-              "w-full resize-none rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-2.5 pr-12 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted focus:border-soleur-border-emphasized focus:outline-none disabled:opacity-50 min-h-[72px] max-h-[140px] overflow-y-auto transition-shadow" +
-              (flashQuote ? " ring-2 ring-amber-400" : "")
-            }
+            className="w-full resize-none border-none bg-transparent px-1 py-2 pr-8 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted focus:outline-none disabled:opacity-50 min-h-[40px] max-h-[140px] overflow-y-auto"
           />
           {/* Mobile @ button */}
           <button
             type="button"
             onClick={handleAtButtonClick}
             disabled={disabled}
-            className="absolute bottom-2.5 right-2 rounded-md p-1 text-soleur-text-muted transition-colors hover:text-soleur-text-secondary disabled:opacity-50 md:hidden"
+            className="absolute bottom-2 right-1 rounded-md p-1 text-soleur-text-muted transition-colors hover:text-soleur-text-secondary disabled:opacity-50 md:hidden"
             aria-label="Mention a leader"
           >
             <span className="text-sm font-medium">@</span>
@@ -658,7 +666,7 @@ export function ChatInput({
             type="button"
             onClick={onStop}
             disabled={isStopping || onStop === undefined}
-            className="flex h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl border border-amber-700/50 bg-soleur-bg-surface-2 px-3 text-soleur-text-primary transition-colors hover:border-amber-600 hover:bg-soleur-bg-surface-1 disabled:opacity-60"
+            className="flex h-[36px] min-w-[36px] shrink-0 items-center justify-center rounded-lg border border-amber-700/50 bg-soleur-bg-surface-2 px-3 text-soleur-text-primary transition-colors hover:border-amber-600 hover:bg-soleur-bg-surface-1 disabled:opacity-60"
             aria-label={isStopping ? "Stopping" : "Stop"}
             data-testid="chat-stop-button"
           >
@@ -671,7 +679,7 @@ export function ChatInput({
             type="button"
             onClick={handleSubmit}
             disabled={disabled || isUploading || (!value.trim() && attachments.length === 0)}
-            className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl bg-amber-600 text-soleur-text-on-accent transition-colors hover:bg-amber-500 disabled:opacity-50 disabled:hover:bg-amber-600"
+            className="flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-lg bg-amber-600 text-soleur-text-on-accent transition-colors hover:bg-amber-500 disabled:opacity-50 disabled:hover:bg-amber-600"
             aria-label="Send message"
           >
             {isUploading ? (

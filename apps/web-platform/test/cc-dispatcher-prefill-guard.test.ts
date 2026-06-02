@@ -100,7 +100,7 @@ vi.mock("@/lib/supabase/tenant", () => ({
 // body in `runWithByokLease(args.userId, body)`. Short-circuit the lease
 // so the test does not pull the real `fetchAndDecryptIntoSlot` chain
 // (which would need a fully-shaped `api_keys.select.eq.eq.eq.limit.single`
-// terminal); `body` is invoked with a fake `lease.getApiKey() = "fake-key"`.
+// terminal); `body` is invoked with a fake `lease.getAgentCredential()`.
 vi.mock("@/server/byok-lease", async () => {
   const actual = await vi.importActual<typeof import("@/server/byok-lease")>(
     "@/server/byok-lease",
@@ -113,13 +113,16 @@ vi.mock("@/server/byok-lease", async () => {
         body: (lease: {
           workspaceContextUserId: string;
           keyOwnerUserId: string;
-          getApiKey: () => string;
+          getRestApiKey: () => string;
+          getAgentCredential: () => Promise<{ value: string; scheme: "api_key" | "oauth_token" }>;
         }) => Promise<T>,
       ) =>
         body({
           workspaceContextUserId: args.workspaceContextUserId,
           keyOwnerUserId: args.keyOwnerUserId,
-          getApiKey: () => "fake-byok-key",
+          // cc-dispatcher is an Agent-SDK consumer → getAgentCredential.
+          getRestApiKey: () => "fake-byok-key",
+          getAgentCredential: async () => ({ value: "fake-byok-key", scheme: "api_key" as const }),
         }),
     ),
   };
