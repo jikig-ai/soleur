@@ -164,15 +164,33 @@ function extractBalancedBrace(src: string, openIdx: number): string {
   return src.slice(openIdx);
 }
 
-/** Does the resolved payload assign `workspace_id`? */
-function payloadHasWorkspaceId(payload: string): boolean {
+/**
+ * The `messages` columns that are NOT NULL with NO column default — every
+ * INSERT payload MUST supply each one or the insert fails at runtime (RLS
+ * WITH CHECK for workspace_id, NOT-NULL constraint for template_id). This
+ * list is the authoritative set verified against prod `information_schema`
+ * on 2026-06-02 (#4831 missed template_id because the workspace_id RLS error
+ * fired first and masked it — #4839). If a future migration adds another
+ * NOT-NULL-no-default column to `messages`, add it here AND to every insert
+ * site in the same change.
+ */
+const REQUIRED_MESSAGE_COLUMNS = ["workspace_id", "template_id"] as const;
+
+/** Does the resolved payload assign `col`? */
+function payloadHasColumn(payload: string, col: string): boolean {
   // Matches all three field forms:
-  //   - `workspace_id: value`  (object key)
-  //   - `workspace_id =`/`row.workspace_id =`  (builder-function assignment)
-  //   - `workspace_id,` / `workspace_id }`  (ES6 shorthand property, e.g.
-  //      insert-draft-card.ts's `const workspace_id = …; insert({ workspace_id })`).
-  return /workspace_id\s*[:=]/.test(payload) ||
-    /(?:^|[{,]\s*)workspace_id\s*(?:,|\n|\}|$)/.test(payload);
+  //   - `col: value`  (object key)
+  //   - `col =`/`row.col =`  (builder-function assignment)
+  //   - `col,` / `col }`  (ES6 shorthand, e.g. insert-draft-card.ts's
+  //      `const workspace_id = …; insert({ workspace_id })`).
+  const escaped = col.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`${escaped}\\s*[:=]`).test(payload) ||
+    new RegExp(`(?:^|[{,]\\s*)${escaped}\\s*(?:,|\\n|\\}|$)`).test(payload);
+}
+
+/** Back-compat alias for the negative-control test. */
+function payloadHasWorkspaceId(payload: string): boolean {
+  return payloadHasColumn(payload, "workspace_id");
 }
 
 describe("messages INSERT write-boundary sweep — workspace_id present (mig 059)", () => {
@@ -185,10 +203,12 @@ describe("messages INSERT write-boundary sweep — workspace_id present (mig 059
       const src = readFileSync(file, "utf8");
       for (const finding of findMessagesInserts(src)) {
         totalFindings += 1;
-        if (!payloadHasWorkspaceId(finding.resolvedPayload)) {
-          violations.push(
-            `${file}: insert payload missing workspace_id → ${finding.argSource.slice(0, 80)}`,
-          );
+        for (const col of REQUIRED_MESSAGE_COLUMNS) {
+          if (!payloadHasColumn(finding.resolvedPayload, col)) {
+            violations.push(
+              `${file}: insert payload missing ${col} → ${finding.argSource.slice(0, 80)}`,
+            );
+          }
         }
       }
     }
