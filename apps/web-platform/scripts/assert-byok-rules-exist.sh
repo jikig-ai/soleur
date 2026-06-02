@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# BYOK Art. 33 detector liveness assertion (#4656 item 5).
+# Issue-alert detector liveness assertion (#4656 item 5; extended #4849).
 #
-# Asserts the two BYOK issue-alert rules (`byok-art-33-breach`,
-# `byok-cap-exceeded`) exist in Sentry by name via a READ-ONLY project
-# rules-list GET. A silent mis-wire — a dropped `-target` in the apply
-# workflow, a deleted/muted rule, or a name drift — is otherwise invisible
-# until a real cross-tenant BYOK-key leak fails to page. For the
-# `byok-art-33-breach` rule that means the GDPR Art. 33(1) 72-hour
-# notification clock never starts (single-user-incident threshold).
+# Asserts the expected `sentry_issue_alert` rules exist in Sentry by name via a
+# READ-ONLY project rules-list GET. A silent mis-wire — a dropped `-target` in
+# the apply workflow, a deleted/muted rule, or a name drift — is otherwise
+# invisible until a real incident fails to page. For `byok-art-33-breach` that
+# means the GDPR Art. 33(1) 72-hour notification clock never starts; for
+# `chat-message-save-failure` (#4849) it means an interactive-message-save
+# outage goes un-paged (both single-user-incident threshold).
 #
 # Wired as a post-apply step in apply-sentry-infra.yml so every apply that
-# touches issue-alerts.tf re-proves both rules are live.
+# touches issue-alerts.tf re-proves all expected rules are live.
 #
 # READ-ONLY by design (plan D2): emits NO synthetic `op=canary` breach event.
 # A fake breach would inject false Art. 33 audit residue into the single-user
@@ -43,10 +43,10 @@ set -euo pipefail
 : "${SENTRY_ORG:?SENTRY_ORG must be set}"
 : "${SENTRY_PROJECT:?SENTRY_PROJECT must be set}"
 
-# The two rules this control depends on. Names are the `name` attribute of the
-# `sentry_issue_alert` resources in
+# The issue-alert rules this control depends on. Names are the `name` attribute
+# of the `sentry_issue_alert` resources in
 # apps/web-platform/infra/sentry/issue-alerts.tf.
-EXPECTED_RULES=("byok-art-33-breach" "byok-cap-exceeded")
+EXPECTED_RULES=("byok-art-33-breach" "byok-cap-exceeded" "chat-message-save-failure")
 
 fetch_rules() {
   if [[ -n "${SENTRY_FIXTURE_RULES:-}" ]]; then
