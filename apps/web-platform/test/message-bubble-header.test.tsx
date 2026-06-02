@@ -121,4 +121,23 @@ describe("MessageBubble header substring suppression (Bug 2 #3225)", () => {
     expect(header.textContent).toContain("CMO Riley");
     expect(header.textContent).toContain("Chief Marketing Officer");
   });
+
+  // Regression (#4852): the "Soleur Concierge" header wrapped alongside the
+  // status chip when the bubble was narrow. The primary header span must be
+  // `whitespace-nowrap` so the leader name stays on one line.
+  test("primary header span is whitespace-nowrap (leader name does not wrap)", () => {
+    const { container } = render(
+      <MessageBubble
+        role="assistant"
+        content=""
+        leaderId="cc_router"
+        messageState="tool_use"
+        toolLabel="Routing to the right experts..."
+      />,
+    );
+    const header = getHeader(container);
+    const primarySpan = header.querySelector("span");
+    expect(primarySpan).not.toBeNull();
+    expect(primarySpan?.className).toContain("whitespace-nowrap");
+  });
 });

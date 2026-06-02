@@ -52,7 +52,15 @@ describe("applyPrefillGuard", () => {
     expect(mockWarnSilentFallback).not.toHaveBeenCalled();
   });
 
-  it("invokes getSessionMessages with { dir: workspacePath } (drift-guard)", async () => {
+  // Regression (#4852): the probe MUST NOT pass a `dir` so the SDK
+  // searches all projects (`sdk.d.ts:524` — "If omitted, searches all
+  // projects"). Passing `dir: workspacePath` produced a false-negative
+  // `[]` whenever the SDK persisted the session under a different
+  // cwd-encoding than `workspacePath`, which let an assistant-terminated
+  // thread pass through `resume:` and 400 the model. `resumeSessionId` is
+  // globally unique, so an all-projects search still resolves the right
+  // session and is immune to cwd-sanitization drift.
+  it("probes getSessionMessages WITHOUT a dir (all-projects search, immune to cwd drift)", async () => {
     mockGetSessionMessages.mockResolvedValueOnce([
       { type: "user", uuid: "u1", session_id: "s", message: {}, parent_tool_use_id: null },
     ]);
@@ -64,9 +72,32 @@ describe("applyPrefillGuard", () => {
     });
 
     expect(mockGetSessionMessages).toHaveBeenCalledOnce();
-    expect(mockGetSessionMessages).toHaveBeenCalledWith("s", {
-      dir: WORKSPACE_PATH,
+    // Called with ONLY the sessionId — no `dir` option. A `{ dir: ... }`
+    // second arg is the bug this regression test pins.
+    expect(mockGetSessionMessages).toHaveBeenCalledWith("s");
+    const secondArg = mockGetSessionMessages.mock.calls[0][1];
+    expect(secondArg?.dir).toBeUndefined();
+  });
+
+  // Regression (#4852): the live 400. The session exists and ends on
+  // `assistant`, but a dir-scoped probe used to miss it (returned `[]`).
+  // With the all-projects probe the assistant tail is found and `resume:`
+  // is dropped — the model never sees the prefill-terminated thread.
+  it("drops resume when the all-projects probe finds an assistant-terminated session that a dir-scoped probe would have missed", async () => {
+    mockGetSessionMessages.mockResolvedValueOnce([
+      { type: "user", uuid: "u1", session_id: "s", message: {}, parent_tool_use_id: null },
+      { type: "assistant", uuid: "a1", session_id: "s", message: { content: "partial…" }, parent_tool_use_id: null },
+    ]);
+
+    const result = await applyPrefillGuard({
+      ...COMMON_ARGS,
+      resumeSessionId: "s",
+      feature: "cc-concierge",
     });
+
+    expect(result.safeResumeSessionId).toBeUndefined();
+    expect(mockGetSessionMessages).toHaveBeenCalledWith("s");
+    expect(mockWarnSilentFallback.mock.calls[0][1].op).toBe("prefill-guard");
   });
 
   it("preserves resume when persisted session ends with user message", async () => {

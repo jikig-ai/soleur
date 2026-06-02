@@ -13,8 +13,10 @@
 // thread shape to Anthropic and the user sees the raw 400 in the
 // response bubble.
 //
-// The guard probes `getSessionMessages(resumeSessionId, { dir })` once
-// at SDK call construction. If the trailing entry is
+// The guard probes `getSessionMessages(resumeSessionId)` once at SDK
+// call construction (no `dir` — all-projects search, #4852; a dir-scoped
+// probe missed sessions persisted under a different cwd-encoding and
+// leaked the 400). If the trailing entry is
 // `type: "assistant"`, drop `resume:` (the SDK starts a fresh
 // server-side session; the runner's caller pushes the new user prompt
 // verbatim) and emit one Sentry warn under
@@ -54,11 +56,13 @@ export interface ApplyPrefillGuardArgs {
    */
   resumeSessionId: string | undefined;
   /**
-   * Workspace cwd passed verbatim to `getSessionMessages` as `dir`.
-   * The SDK looks up persisted sessions under
-   * `~/.claude/projects/<encoded(cwd)>/`; passing the wrong dir
-   * silently returns `[]` (false negative). Drift-guarded by the
-   * helper's tests.
+   * Workspace cwd. Sentry-attribution only — NOT passed to
+   * `getSessionMessages` as `dir`. The probe deliberately omits `dir` and
+   * searches all projects, because passing a `dir` that did not match the
+   * SDK's persisted cwd-encoding silently returned `[]` (false negative →
+   * resume passed through → prefill 400, #4852). `resumeSessionId` is
+   * globally unique, so an all-projects search resolves the session
+   * regardless of cwd encoding.
    */
   workspacePath: string;
   userId: string;
@@ -198,9 +202,19 @@ export async function applyPrefillGuard(
 
   let history: SessionMessage[];
   try {
-    history = await getSessionMessages(args.resumeSessionId, {
-      dir: args.workspacePath,
-    });
+    // Probe WITHOUT a `dir` so the SDK searches all projects
+    // (`sdk.d.ts:524` — "If omitted, searches all projects"). A
+    // dir-scoped probe (`{ dir: workspacePath }`) returned a
+    // false-negative `[]` whenever the SDK persisted the session under a
+    // different cwd-encoding than `workspacePath` (e.g. the container's
+    // `process.cwd()` rather than the workspace path). That `[]` fell into
+    // the empty-history pass-through branch and forwarded an
+    // assistant-terminated `resume:` to the model → HTTP 400 "model does
+    // not support assistant message prefill" (#4852). `resumeSessionId` is
+    // globally unique, so the all-projects search still resolves the exact
+    // session and is immune to cwd-sanitization drift. `workspacePath` is
+    // retained on the args for Sentry attribution only (see `baseExtra`).
+    history = await getSessionMessages(args.resumeSessionId);
   } catch (err) {
     warnSilentFallback(sanitizeProbeError(err), {
       feature: args.feature,
