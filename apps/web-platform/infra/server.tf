@@ -281,6 +281,124 @@ resource "terraform_data" "journald_persistent" {
   }
 }
 
+# Handler-bootstrap bridge: deliver infra-config-apply.sh (the /hooks/infra-config
+# webhook handler) + cat-infra-config-state.sh + the rendered hooks.json directly
+# to the running host over SSH (#4811, Ref #4804).
+#
+# WHY THIS EXISTS (the chicken-and-egg this closes): the handler reaches the host
+# only via (1) cloud-init write_files — dead on the existing host because
+# hcloud_server.web carries ignore_changes=[user_data], so cloud-init never
+# re-applies — and (2) deploy_pipeline_fix's triggers_replace hash, which re-fires
+# push-infra-config.sh. But push-infra-config.sh pushes the OTHER 8 files and does
+# NOT send infra-config-apply.sh (the handler is not in its payload nor in the
+# handler's own FILE_MAP — it cannot deliver itself by construction). Net: a
+# handler/hooks.json drift on the host was UNRECOVERABLE through the webhook path,
+# because the recovery itself routes through the stale handler (the #4804 freeze).
+# SSH is the only path that can deliver the handler TO a host where the handler is
+# broken. PR #4805 made the handler fail loud, but a fix can only take effect on a
+# host that receives the new handler — this resource is that delivery path.
+#
+# WHY SSH IS NOT A #3756 REGRESSION: #3756 replaced ONLY deploy_pipeline_fix's SSH
+# provisioner with the webhook, to keep the *routine* deploy-config push HTTPS-only.
+# SSH was never removed from the stack — 7 sibling terraform_data resources here
+# still use connection{type="ssh"} today (disk_monitor_install, resource_monitor_install,
+# fail2ban_tuning, journald_persistent, docker_seccomp_config, apparmor_bwrap_profile,
+# orphan_reaper_install). This is a HYBRID of the established siblings: the
+# connection block + positive post-write assertions + service restart are
+# journald_persistent's shape, while the multi-input `sha256(join(...))`
+# triggers_replace and the base64 secret-render are deploy_pipeline_fix's /
+# disk_monitor_install's (a secret-bearing local.hooks_json cannot be a single
+# `file()`). Do NOT "simplify" the multi-input trigger to journald's single-file()
+# form — it legitimately tracks 3 inputs. NOT a reversal of #3756's routine-push
+# decision.
+#
+# RUNNING-HOST-ONLY: unlike deploy_pipeline_fix this resource has NO cloud-init
+# mirror — fresh hosts get the handler from cloud-init write_files
+# (cloud-init.yml, search "path: /usr/local/bin/infra-config-apply.sh") directly.
+# Do NOT add a redundant cloud-init block.
+#
+# DUAL-FIRE IS INTENTIONAL: infra-config-apply.sh, cat-infra-config-state.sh, and
+# local.hooks_json appear in BOTH this triggers_replace AND deploy_pipeline_fix's.
+# A handler edit re-fires both — deploy_pipeline_fix re-pushes the other 8 files,
+# while THIS resource is the only one that actually delivers the handler. Do not
+# "dedupe" them.
+#
+# SYNCHRONOUS RESTART: the webhook restart below is direct (systemctl restart),
+# unlike the handler's own deferred self-restart (systemd-run --on-active=3s). The
+# handler must defer because it IS exec'd by the webhook binary (killing webhook
+# kills the in-flight response). This SSH path is independent of the webhook
+# process (SSH = root over :22; webhook = deploy user on 127.0.0.1:9000), so it
+# can restart + assert active immediately. Do NOT copy the deferred-restart dance.
+#
+# Shows as "will be created" in CI drift reports -- expected behavior, same as the
+# 7 sibling SSH provisioners. Apply-path firewall note: SSH:22 is allowlisted to
+# var.admin_ips only (firewall.tf), so the handshake succeeds iff the operator/CI
+# egress IP ∈ admin_ips. A `connection reset by peer` here is admin-IP drift (fix:
+# /soleur:admin-ip-refresh, runbook admin-ip-drift.md), NOT an sshd/handler fault —
+# per hr-ssh-diagnosis-verify-firewall. RUNNER-EGRESS CAVEAT: the GitHub-hosted CI
+# runner egress IP is NOT in admin_ips and is non-static, so this resource is
+# admin-applied (like the 7 siblings) — do NOT add it to apply-deploy-pipeline-fix.yml's
+# -target= set (which applies only the webhook resource).
+resource "terraform_data" "infra_config_handler_bootstrap" {
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/infra-config-apply.sh"),
+    file("${path.module}/cat-infra-config-state.sh"),
+    local.hooks_json,
+  ]))
+
+  connection {
+    type  = "ssh"
+    host  = hcloud_server.web.ipv4_address
+    user  = "root"
+    agent = true
+  }
+
+  # The two scripts are on-disk files → straight scp. hooks.json is NOT: it is a
+  # templatefile() render with var.webhook_deploy_secret interpolated (the on-disk
+  # file is the .tmpl, not the rendered output — same trap push-infra-config.sh
+  # documents), so it cannot be a provisioner "file" source. It is written via the
+  # remote-exec base64 heredoc below, exactly as push-infra-config.sh passes
+  # HOOKS_JSON_B64.
+  provisioner "file" {
+    source      = "${path.module}/infra-config-apply.sh"
+    destination = "/usr/local/bin/infra-config-apply.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/cat-infra-config-state.sh"
+    destination = "/usr/local/bin/cat-infra-config-state.sh"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      # Render hooks.json from the secret-bearing local value (base64 so the
+      # interpolated content survives the inline string; sensitive interpolation
+      # in remote-exec is the same mechanism disk_monitor_install uses for
+      # var.resend_api_key — Terraform only refuses it in local-exec's command).
+      "printf '%s' '${base64encode(local.hooks_json)}' | base64 -d > /etc/webhook/hooks.json",
+      # Ownership/permissions: scripts root:root 0755, hooks.json root:deploy 0640
+      # (match cloud-init.yml write_files for these paths).
+      "chown root:root /usr/local/bin/infra-config-apply.sh /usr/local/bin/cat-infra-config-state.sh",
+      "chmod 0755 /usr/local/bin/infra-config-apply.sh /usr/local/bin/cat-infra-config-state.sh",
+      "chown root:deploy /etc/webhook/hooks.json",
+      "chmod 0640 /etc/webhook/hooks.json",
+      # Synchronous restart (safe — this SSH path is not the webhook process).
+      "systemctl restart webhook",
+      # Positive post-write assertions (journald_persistent / fail2ban_tuning
+      # pattern): prove the bootstrap took, don't just observe it. A failed
+      # assertion fails the provisioner instead of silently shipping dead config.
+      "test -x /usr/local/bin/infra-config-apply.sh",
+      "test -x /usr/local/bin/cat-infra-config-state.sh",
+      # hooks.json re-registers the status hook + maps the state-reporter key (the
+      # exact host drift that caused the #4804 freeze: stale hooks.json had neither).
+      "grep -q infra-config-status /etc/webhook/hooks.json",
+      "grep -q cat_infra_config_state_sh_b64 /etc/webhook/hooks.json",
+      # The webhook listener restarted cleanly and is serving.
+      "test \"$(systemctl is-active webhook)\" = 'active'",
+    ]
+  }
+}
+
 # Fix deploy pipeline: push current ci-deploy.sh, update webhook.service
 # (EnvironmentFile + ReadWritePaths=/var/lock), and delete stale /mnt/data/.env.
 # Cloud-init handles new servers; this provisioner fixes the existing one
