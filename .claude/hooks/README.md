@@ -245,7 +245,7 @@ Regex engine: bash ERE with POSIX `[[:space:]]`. Anchor
 
 ### Modes
 
-- **`SOLEUR_DEFER_DRYRUN=1`** (dry-run; opt-in since PR #3800). Match → emit
+- **`SOLEUR_DEFER_DRYRUN=1`** (dry-run; introduced in PR #3787, demoted from default to opt-in in PR #3800). Match → emit
   `kind: "would_defer"`, return `{}` (allow). Collects telemetry without
   blocking work.
 - **`SOLEUR_DEFER_DRYRUN=0`** (DEFAULT, hardcoded fallback; enforce-flipped in

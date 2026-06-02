@@ -65,8 +65,9 @@ jobs:
           # hardcoded default is now 0 (enforce) as of PR #3800, so this test
           # must PIN dry-run explicitly — without this pin Test 6 would run in
           # enforce mode, emit defer_requested + permissionDecision=defer, and
-          # the line-186 assertion (would_defer) + the agent rubric would both
-          # report a false FAIL. The hook subprocess inherits this step env.
+          # the "Assert F2 defer-gate dry-run telemetry" step's would_defer
+          # check + the agent rubric would both report a false FAIL. The hook
+          # subprocess inherits this step env.
           SOLEUR_DEFER_DRYRUN: "1"
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}

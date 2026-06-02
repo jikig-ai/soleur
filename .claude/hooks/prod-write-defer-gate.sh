@@ -251,6 +251,10 @@ case "$SOLEUR_DEFER_DRYRUN" in
     echo "[prod-write-defer-gate] DEFERRED $MATCHED_RULE: $CMD_DISPLAY" >&2
     if [[ -n "$SESSION_ID_SAFE" ]]; then
       echo "[prod-write-defer-gate] resume via: claude --resume $SESSION_ID_SAFE" >&2
+    else
+      # No session_id in the hook payload — still give the operator a recovery
+      # path rather than a silent pause (plan §User-Brand Impact bullet-1).
+      echo "[prod-write-defer-gate] resume via: claude --resume (no session_id in payload; pick the paused session)" >&2
     fi
     jq -n \
       --arg rule "$MATCHED_RULE" \
