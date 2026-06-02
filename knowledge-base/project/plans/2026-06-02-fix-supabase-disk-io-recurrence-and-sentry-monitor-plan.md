@@ -599,9 +599,8 @@ logs:
   where: app pino to Better Stack (handler logger.info/warn); Sentry for errors
   retention: Better Stack standard retention
 discoverability_test:
-  command: |
-    curl -sS -o /dev/null -w "%{http_code}\n" --max-time 10 https://app.soleur.ai/api/inngest
-  expected_output: "401 (the Inngest serve endpoint that hosts cron-supabase-disk-io is reachable; 401 = HMAC-gated, which is the healthy unauthenticated response). 200 also acceptable. 000/timeout = the cron host is unreachable. No ssh, no secret needed."
+  command: curl -sS -o /dev/null -w "%{http_code}\n" --max-time 10 https://app.soleur.ai/api/inngest
+  expected_output: "401 (the Inngest serve endpoint that hosts cron-supabase-disk-io is reachable; 401 = HMAC-gated, the healthy unauthenticated response). 200 also acceptable. 000/timeout = the cron host is unreachable. No ssh, no secret needed."
 ```
 
 ## Infrastructure (IaC)
