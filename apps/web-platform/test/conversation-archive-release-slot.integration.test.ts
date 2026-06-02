@@ -131,10 +131,20 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       conversationId: string,
       cap = 1,
     ): Promise<{ status: string; active_count: number }> {
+      // Contract-pair sweep (mig 093): the RPC gained a 4th p_workspace_id
+      // arg and the 3-arg overload was DROPped, so this direct caller must
+      // pass p_workspace_id or it 404s (PGRST202). For this solo synthetic
+      // user the active workspace is user.id (ADR-038 N2).
+      // NOTE: the rest of this opt-in suite is independently stale against the
+      // current dev schema (conversations.title was removed; insertConversation
+      // omits the NOT NULL workspace_id; bare deleteUser teardown) and does not
+      // run in CI — repair tracked in #4798. This update keeps the RPC contract
+      // aligned so the helper targets the new 4-arg overload (mig 093).
       const { data, error } = await service.rpc("acquire_conversation_slot", {
         p_user_id: user.id,
         p_conversation_id: conversationId,
         p_effective_cap: cap,
+        p_workspace_id: user.id,
       });
       expect(
         error,
