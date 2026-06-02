@@ -22,7 +22,10 @@
 #           (gh pr view|checks|list, gh run list|view|watch, gh api,
 #            gh release view, curl, wget), OR
 #       (b) an unconditional self-looping watch idiom
-#           (gh run watch, gh pr checks … --watch)
+#           (gh run watch, gh pr checks … --watch), OR
+#       (c) a `for` loop AND a `sleep` AND a remote-READ token — the bounded
+#           `for i in $(seq …); do gh …; sleep N; done` poll that wears a
+#           for-loop's clothes (the 2026-06-02 escape that motivated this branch)
 #
 # Deliberately NOT denied (fall through to allow):
 #   - run_in_background single-shot wait-then-exit (no loop): `sleep 15 && gh pr view`
@@ -30,6 +33,8 @@
 #   - local-only background loops (no remote-read token)
 #   - background remote WRITE fan-out in a loop (`gh issue create` … in a loop) —
 #     not a read/poll; use the override marker if a rare write-loop trips it
+#   - a bare `for` batch loop with NO sleep (iteration over a fixed list), even
+#     with a remote-read — only `for`+sleep+remote-read reads as a poll
 #   - sub-agent fan-out via run_in_background (no loop+remote-read signature)
 #
 # Override hatch: add the literal comment
@@ -92,16 +97,30 @@ fi
 # state) from a local loop or a write fan-out. gh subcommands scoped to
 # read/poll verbs so `gh issue create` / `gh pr merge` loops do not match.
 REMOTE_READ='gh[[:space:]]+(pr[[:space:]]+(view|checks|list)|run[[:space:]]+(list|view|watch)|api|release[[:space:]]+view)|curl[[:space:]]|wget[[:space:]]'
-# LOOP keyword. `for` excluded: a for-loop over a fixed list is iteration, not
-# polling — including it would false-fire on legitimate background batch work.
+# LOOP keyword. A bare `for` over a fixed list is iteration, not polling, so it
+# is NOT in this pattern on its own — including it unconditionally would
+# false-fire on legitimate background batch work (see the FOR_POLL branch below
+# for the narrow `for`+`sleep`+remote-read poll form that DOES qualify).
 LOOP='(^|[[:space:];&|])(while|until)([[:space:]]|$)'
 # Self-looping watch idioms — deny on the bg flag alone (no explicit loop needed).
 WATCH_IDIOM='gh[[:space:]]+run[[:space:]]+watch|gh[[:space:]]+pr[[:space:]]+checks[^|&;]*--watch'
+# `for`-loop poll: a bounded `for i in $(seq …)` / `for … in …` that ALSO sleeps
+# between iterations AND reads remote state is a poll wearing a for-loop's
+# clothes (the 2026-06-02 escape: `for i in $(seq 1 40); do gh run view; gh pr
+# view; sleep 45; done`). Gated on `sleep` + remote-read so batch for-loops that
+# lack a sleep (or do remote WRITES, e.g. `for … gh issue create`) still fall
+# through to allow. A backgrounded paginated fetch with a rate-limit `sleep`
+# trips this too — that is acceptable: it should also use Monitor or run in the
+# foreground, and the override marker covers the rare exception.
+FOR_LOOP='(^|[[:space:];&|])for([[:space:]])'
+SLEEP='(^|[[:space:];&|])sleep([[:space:]]|$)'
 
 is_poll=0
 if echo "$cmd" | grep -Eq "$WATCH_IDIOM"; then
   is_poll=1
 elif echo "$cmd" | grep -Eq "$LOOP" && echo "$cmd" | grep -Eq "$REMOTE_READ"; then
+  is_poll=1
+elif echo "$cmd" | grep -Eq "$FOR_LOOP" && echo "$cmd" | grep -Eq "$SLEEP" && echo "$cmd" | grep -Eq "$REMOTE_READ"; then
   is_poll=1
 fi
 [ "$is_poll" -eq 1 ] || allow
