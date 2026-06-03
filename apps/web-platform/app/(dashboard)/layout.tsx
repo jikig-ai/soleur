@@ -10,7 +10,9 @@ import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { SignOutConfirmModal } from "@/components/auth/sign-out-confirm-modal";
 import { useSignOut } from "@/components/auth/use-sign-out";
 import { WorkspaceContextBand } from "@/components/dashboard/workspace-context-band";
-import { RailSlotProvider } from "@/components/dashboard/rail-slot";
+import { RailSlotProvider, RailCollapsedProvider } from "@/components/dashboard/rail-slot";
+import { RailResizeHandle } from "@/components/dashboard/rail-resize-handle";
+import { useRailWidth, railMaxPx, RAIL_MIN_PX } from "@/hooks/use-rail-width";
 import { segmentToDrillLevel } from "@/hooks/segment-to-drill-level";
 import { MembershipRevokedScreen } from "@/components/dashboard/membership-revoked-screen";
 import { NoApiKeyBanner } from "@/components/dashboard/no-api-key-banner";
@@ -109,6 +111,13 @@ export default function DashboardLayout({
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
   const [collapsed, toggleCollapsed] = useSidebarCollapse("soleur:sidebar.main.collapsed");
+  // Widenable KB rail (amendment): persisted width applied to the `aside` ONLY
+  // when drilled into KB and expanded (collapse takes precedence; KB-only) and
+  // only at the md+ breakpoint (the mobile drawer keeps its `w-64` width). The
+  // value rides the `--kb-rail-w` CSS var + a `data-kb-rail-width` attribute,
+  // consumed by an md+ rule in globals.css — deterministic, no JS media-query
+  // state (which did not flip reliably under SSR hydration here).
+  const [railWidth, setRailWidth] = useRailWidth();
   const [signOutModalOpen, setSignOutModalOpen] = useState(false);
   const { handleSignOut, isSigningOut } = useSignOut();
   // Secondary-nav slot node — drilled sections portal their nav here (ADR-047).
@@ -145,6 +154,10 @@ export default function DashboardLayout({
   // pathname.startsWith("/dashboard/(kb|settings|chat)") literal lives here.
   const drill = segmentToDrillLevel(pathname);
   const settingsActive = drill === "settings";
+  // The widen affordance is KB-only AND subordinate to collapse: the inline
+  // width + handle apply solely in this branch, so collapsed (md:w-14) and
+  // Settings/Chat (md:w-56) widths are structurally untouched (AC12/AC13).
+  const kbExpanded = drill === "kb" && !collapsed;
 
   // Auto-close drawer on route change
   useEffect(() => {
@@ -203,6 +216,7 @@ export default function DashboardLayout({
   return (
     <TeamNamesProvider>
     <RailSlotProvider value={railSlotEl}>
+    <RailCollapsedProvider value={collapsed}>
     <div className="flex h-dvh flex-col md:flex-row">
       {/* Mobile top bar — only visible below md breakpoint. RQ1: the context
           band replaces the bare "Soleur" label so workspace identity is shown
@@ -237,12 +251,26 @@ export default function DashboardLayout({
           (and screen readers) target only the modal's confirm button. */}
       <aside
         inert={signOutModalOpen || undefined}
+        // The KB-expanded branch drives the md+ width from a CSS variable so the
+        // inline value is scoped to the desktop rail; the mobile `w-64` drawer
+        // is left to the base class. (Inline `style.width` would otherwise win
+        // at every breakpoint and resize the mobile drawer too — Sharp Edge.)
+        data-kb-rail-width={kbExpanded ? "" : undefined}
+        style={
+          kbExpanded
+            ? ({ "--kb-rail-w": `${railWidth}px` } as React.CSSProperties)
+            : undefined
+        }
         className={`
           fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-soleur-border-default bg-soleur-bg-surface-1
           transition-transform duration-200 ease-out
           ${drawerOpen ? "translate-x-0" : "-translate-x-full"}
           md:relative md:z-30 md:translate-x-0
           md:transition-[width] md:duration-200 md:ease-out
+          ${/* md:w-56 = 14rem = 224px = RAIL_DEFAULT_PX (use-rail-width.ts); the KB
+               rail starts at that same default. When kbExpanded, the
+               data-kb-rail-width rule in globals.css overrides this at md+ with
+               the persisted --kb-rail-w. */ ""}
           ${collapsed ? "md:w-14" : "md:w-56"}
         `}
       >
@@ -392,6 +420,22 @@ export default function DashboardLayout({
             className="flex min-h-0 flex-1 flex-col overflow-y-auto"
           />
         )}
+
+        {/* Widenable KB rail (amendment): a right-edge drag handle, rendered
+            ONLY when drilled into KB and expanded. It drives the `aside`'s
+            --kb-rail-w via the persisted useRailWidth hook (transient on drag,
+            commit on pointerup). Collapsed / Settings / Chat never render it
+            (collapse precedence + KB-only). `hidden md:block` keeps it off the
+            mobile drawer. */}
+        {kbExpanded && (
+          <RailResizeHandle
+            width={railWidth}
+            min={RAIL_MIN_PX}
+            max={railMaxPx()}
+            onWidthChange={(px) => setRailWidth(px, false)}
+            onCommit={(px) => setRailWidth(px, true)}
+          />
+        )}
       </aside>
 
       {/* Main content — inert when drawer is open for focus trapping */}
@@ -440,6 +484,7 @@ export default function DashboardLayout({
           once at the dashboard root so it survives across route changes. */}
       <MembershipRevokedScreen />
     </div>
+    </RailCollapsedProvider>
     </RailSlotProvider>
     </TeamNamesProvider>
   );

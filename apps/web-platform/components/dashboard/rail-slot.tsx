@@ -25,6 +25,23 @@ export function useRailSlot(): HTMLElement | null {
   return useContext(RailSlotContext);
 }
 
+// Sibling collapse context (NOT a widening of RailSlotContext — that value is
+// `HTMLElement | null` and is set positionally at two call sites). The portaled
+// secondary nav (Settings sub-nav / KB tree / Conversations rail) reads
+// `collapsed` through the REACT tree (it stays inside the layout's provider
+// subtree even though its DOM lands in the rail slot) so each section can
+// render-conditional its content off when the rail is collapsed — hiding the
+// secondary nav instead of letting its full-width content clip at the 56px
+// collapsed rail. Default `false` so a section rendered outside the provider
+// (isolated component tests) behaves as expanded.
+const RailCollapsedContext = createContext<boolean>(false);
+
+export const RailCollapsedProvider = RailCollapsedContext.Provider;
+
+export function useRailCollapsed(): boolean {
+  return useContext(RailCollapsedContext);
+}
+
 /**
  * Render `children` into the dashboard rail's secondary-nav slot. Renders
  * nothing until the slot node is mounted (the layout mounts it only on drilled

@@ -71,6 +71,15 @@ import {
   getUserServiceTokens,
   patchWorkspacePermissions,
 } from "./agent-runner";
+// Issue A (Concierge gh-auth): mint a per-workspace GitHub App installation
+// token and inject it as GH_TOKEN so the agent's `gh` calls authenticate
+// without `gh auth login`. resolveInstallationId is the membership-checked
+// per-workspace resolver (ADR-044) — NOT the soleur-monorepo-hardcoded
+// `mintInstallationToken` from the crons. Per hr-github-app-auth-not-pat.
+import { resolveInstallationId } from "./resolve-installation-id";
+import { generateInstallationToken } from "./github-app";
+// Issue B part 2 — per-workspace autonomous Bash toggle (fail-closed read).
+import { resolveBashAutonomous } from "./resolve-bash-autonomous";
 // PR-C §2.11 (#3244): BYOK lease wrap on realSdkQueryFactory — the
 // plaintext API key fetch surface moves from `getUserApiKey(userId)`
 // (which returns a bare string) to `lease.getApiKey()` inside
@@ -112,6 +121,11 @@ import { notifyOfflineUser } from "./notifications";
 import { createChildLogger } from "./logger";
 
 const log = createChildLogger("cc-dispatcher");
+
+// Floor lifetime for the minted GH_TOKEN (Issue A). A warm-cache token must
+// outlast a long interactive agent turn so `gh` doesn't fail mid-conversation
+// on an expired token. Mirrors the cron's TOKEN_MIN_LIFETIME_MS (~60 min).
+const GH_TOKEN_MIN_LIFETIME_MS = 60 * 60 * 1000;
 
 // Non-routable internal leader id reserved for cc-soleur-go path
 // audit-log attribution. Used by `createCanUseTool` (R-AC14), the WS
@@ -945,10 +959,47 @@ export const realSdkQueryFactory: QueryFactory = async (
     // Agent-SDK consumer: prefers the operator subscription oauth_token
     // when enabled+permitted; otherwise the api_key (feat-operator-cc-oauth).
     const credential = await lease.getAgentCredential();
-    const [workspacePath, serviceTokens] = await Promise.all([
-      fetchUserWorkspacePath(args.userId),
-      getUserServiceTokens(args.userId),
-    ]);
+    // installationId joins the existing Promise.all (it keys only off
+    // args.userId via resolveInstallationId → resolveCurrentWorkspaceId), so
+    // the resolve does not add a sequential await to cold-start dispatch.
+    const [workspacePath, serviceTokens, installationId, bashAutonomous] =
+      await Promise.all([
+        fetchUserWorkspacePath(args.userId),
+        getUserServiceTokens(args.userId),
+        resolveInstallationId(args.userId),
+        // Issue B part 2 — fail-closed false; bypasses the Bash review-gate
+        // when the active workspace owner enabled the autonomous toggle.
+        resolveBashAutonomous(args.userId),
+      ]);
+
+    // Issue A: mint a short-lived GitHub App installation token for the
+    // connected repo and inject it as GH_TOKEN so the agent's `gh` calls
+    // authenticate without an interactive `gh auth login` (the reported
+    // symptom). resolveInstallationId returns null for no-connected-repo /
+    // non-member — graceful degradation: gh simply stays unauthenticated,
+    // exactly as before. Mint failure is NON-FATAL: mirror to Sentry and
+    // proceed without GH_TOKEN — never block a conversation on a gh-auth
+    // mint. generateInstallationToken is token-cache-memoized per
+    // installation id, so this is not a per-dispatch network round-trip on a
+    // warm cache. Per hr-github-app-auth-not-pat this is an App installation
+    // token, NEVER a PAT, and the value is NEVER logged. (Sentry
+    // 512e253141294ac1a808b2ef03a21289 — cron-follow-through-monitor — is the
+    // cron-side root cause this mirrors for the interactive path.)
+    let ghToken: string | undefined;
+    if (installationId !== null) {
+      try {
+        ghToken = await generateInstallationToken(installationId, {
+          minRemainingMs: GH_TOKEN_MIN_LIFETIME_MS,
+        });
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "cc-dispatcher",
+          op: "mint-gh-token",
+          extra: { userId: args.userId, hasInstallation: true },
+          message: "GitHub App installation token mint failed; gh stays unauthenticated",
+        });
+      }
+    }
 
   // Workspace-permissions patch and the #3250 prefill-guard probe both
   // depend on `workspacePath` but not on each other — parallelize so the
@@ -1021,6 +1072,10 @@ export const realSdkQueryFactory: QueryFactory = async (
     // `cleanupCcBashGatesForConversation` so a closed/reaped conversation
     // doesn't leak grants.
     bashApprovalCache: getBashApprovalCache(args.userId, args.conversationId),
+    // Issue B part 2 — resolved above (fail-closed false). When true, the
+    // Bash branch auto-approves non-BLOCKED commands (blocklist stays
+    // authoritative).
+    bashAutonomous,
     // Real conversation-status write — replaces the prior no-op (#2920).
     // Delegates to the typed wrapper which enforces the R8 composite-key
     // invariant (`.eq("id", convId).eq("user_id", args.userId)`) and
@@ -1097,6 +1152,8 @@ export const realSdkQueryFactory: QueryFactory = async (
         pluginPath,
         credential,
         serviceTokens,
+        // Issue A — minted GH_TOKEN (or undefined when no repo connected).
+        ghToken,
         systemPrompt: effectiveSystemPrompt,
         resumeSessionId: safeResumeSessionId,
         mcpServers: readCcMcpAllowlist(),
