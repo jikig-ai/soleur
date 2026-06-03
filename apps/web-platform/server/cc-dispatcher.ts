@@ -78,6 +78,11 @@ import {
 // `mintInstallationToken` from the crons. Per hr-github-app-auth-not-pat.
 import { resolveInstallationId } from "./resolve-installation-id";
 import { generateInstallationToken } from "./github-app";
+// Session-start self-heal: if the active workspace has a connected repo but no
+// matching clone on disk, clone/repair it so the Concierge has a real git repo
+// to work in (fixes the "No git repository found" blocker). Generic per-user.
+import { getCurrentRepoUrl } from "./current-repo-url";
+import { ensureWorkspaceRepoCloned } from "./ensure-workspace-repo";
 // Issue B part 2 — per-workspace autonomous Bash toggle (fail-closed read).
 import { resolveBashAutonomous } from "./resolve-bash-autonomous";
 // PR-C §2.11 (#3244): BYOK lease wrap on realSdkQueryFactory — the
@@ -962,7 +967,7 @@ export const realSdkQueryFactory: QueryFactory = async (
     // installationId joins the existing Promise.all (it keys only off
     // args.userId via resolveInstallationId → resolveCurrentWorkspaceId), so
     // the resolve does not add a sequential await to cold-start dispatch.
-    const [workspacePath, serviceTokens, installationId, bashAutonomous] =
+    const [workspacePath, serviceTokens, installationId, bashAutonomous, repoUrl] =
       await Promise.all([
         fetchUserWorkspacePath(args.userId),
         getUserServiceTokens(args.userId),
@@ -970,7 +975,22 @@ export const realSdkQueryFactory: QueryFactory = async (
         // Issue B part 2 — fail-closed false; bypasses the Bash review-gate
         // when the active workspace owner enabled the autonomous toggle.
         resolveBashAutonomous(args.userId),
+        // Per-user connected repo (normalized, membership-checked). Drives the
+        // session-start ensure-repo self-heal below. null = not connected.
+        getCurrentRepoUrl(args.userId),
       ]);
+
+    // Session-start self-heal (generic, per-user, idempotent, fail-soft): if the
+    // workspace has a connected repo but no matching clone on disk, clone/repair
+    // it so the agent has a real git repo to branch/commit/work in. Runs once per
+    // cold conversation (the factory is per-cold-conversation). NEVER throws into
+    // the conversation; clone failure mirrors to Sentry and degrades gracefully.
+    await ensureWorkspaceRepoCloned({
+      userId: args.userId,
+      workspacePath,
+      installationId,
+      repoUrl,
+    });
 
     // Issue A: mint a short-lived GitHub App installation token for the
     // connected repo and inject it as GH_TOKEN so the agent's `gh` calls

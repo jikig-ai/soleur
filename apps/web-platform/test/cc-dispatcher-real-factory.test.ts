@@ -92,6 +92,15 @@ vi.mock("@/server/resolve-bash-autonomous", () => ({
   resolveBashAutonomous: mockResolveBashAutonomous,
 }));
 
+// Session-start ensure-repo self-heal (cold-path deps). Default no-op so the
+// factory-shape tests are unaffected.
+vi.mock("@/server/current-repo-url", () => ({
+  getCurrentRepoUrl: vi.fn(async () => null),
+}));
+vi.mock("@/server/ensure-workspace-repo", () => ({
+  ensureWorkspaceRepoCloned: vi.fn(async () => undefined),
+}));
+
 vi.mock("@/server/permission-callback", () => ({
   // The factory composes a canUseTool from this — we capture the ctx
   // passed in via the spy returned here.
