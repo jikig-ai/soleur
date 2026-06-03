@@ -287,123 +287,141 @@ test.describe("cc-soleur-go bubbles: tool-use-chip unregistered-mcp-fqn", () => 
 // 3.5 Concierge status-box overflow — inverse of #4852 (#4855-class)
 //
 // #4852 added bare `whitespace-nowrap` to the `ToolStatusChip` label
-// (message-bubble.tsx:27) to stop premature wrapping of a short status label.
-// With the bubble `max-w` cap + `min-w-0` ancestor chain, that left a label
-// *wider* than the cap no way to wrap and no way to grow → it overflowed the
-// Concierge card's right border. The fix swaps `nowrap` for the wrap-capable
-// `[overflow-wrap:anywhere]` idiom (already on the streaming body, :269).
+// (message-bubble.tsx:27) to stop premature wrapping of the routing-chip status
+// label. With the bubble `max-w` cap + `min-w-0` ancestor chain, that left a
+// label *wider* than the available card width no way to wrap and no way to grow
+// → it overflowed the Concierge card's right border. The fix swaps `nowrap`
+// for the wrap-capable `[overflow-wrap:anywhere]` idiom (already on the
+// streaming body, :269).
+//
+// This drives the REAL routing chip (`chat-surface.tsx:737-755` `isClassifying`
+// → `MessageBubble role=assistant messageState=tool_use toolLabel="Routing to
+// the right experts..."`), NOT a synthetic `tool_use` stream event (which
+// renders the lifecycle `data-tool-chip-id` chip, a DIFFERENT element). The
+// chip appears when there is a user message and no assistant reply yet, so we
+// type + send and inject no assistant frame.
 //
 // jsdom returns 0 for layout values (constitution line 312), so the no-overflow
-// proof MUST live in Playwright. Overflow assertion mirrors the
-// `nav-states-shell.e2e.ts:259,277` precedent: `scrollWidth - clientWidth`
-// with an empty-band guard (assert the label text is populated) so a
-// collapsed/empty card cannot vacuously pass.
+// proof MUST live in Playwright. Both render variants ("full" chat-surface and
+// the narrow "sidebar" `kb-chat-content.tsx`) share this SAME render path; the
+// only difference is available container width. We exercise the SAME chip at a
+// wide desktop viewport (single-line non-regression for #4852) AND a narrow
+// viewport that forces the fixed label to wrap.
 //
-// Variant coverage note: both render variants ("full" chat-surface and the
-// narrow "sidebar" `kb-chat-content.tsx`) share the SAME `MessageBubble` →
-// `ToolStatusChip` render path; the only difference between them is the
-// available container width (the sidebar is narrower, so overflow is more
-// likely). Standing up the kb-chat sidebar harness here would duplicate the
-// mock surface for zero additional component coverage, so instead we exercise
-// the long-label overflow at TWO viewport widths — the default desktop width
-// AND a deliberately narrow (sidebar-class, 420px) viewport that drives the
-// bubble's `max-w-[90%]` cap down to the overflow-prone band the sidebar
-// represents. The long-label assertion is the regression guard; the
-// short-label single-line assertion proves #4852 is not re-broken.
+// Non-vacuity (the empty-band concern from nav-states-shell.e2e.ts:19): a bare
+// `scrollWidth<=clientWidth` assertion passes vacuously if the label never
+// needed to wrap. So the narrow case asserts BOTH (a) the card does not
+// overflow AND (b) the label actually wrapped onto ≥2 line-boxes — wrapping is
+// proof the width was constrained, i.e. exactly the condition under which the
+// pre-fix `nowrap` overflowed. (a)+(b) together fail against the pre-fix code
+// (nowrap → 1 line → overflow) and pass against the fix (wrap → no overflow).
 // ---------------------------------------------------------------------------
 
-const LONG_STATUS_LABEL =
-  "Routing to the right experts and coordinating across every domain leader to assemble the most accurate, comprehensive response possible for this request";
-const SHORT_STATUS_LABEL = "Working";
+/** Drive the real `isClassifying` routing chip. The chip renders when there is
+ *  a user message and no assistant reply yet (chat-surface.tsx:456-462), which
+ *  depends ONLY on reducer state — NOT on the WS "connected" status (the input
+ *  is disabled in this offline harness, but the chip is not). So we seed the
+ *  mount-time history fetch (`/api/conversations/:id/messages`,
+ *  ws-client.ts:1041) with a single USER message and inject no assistant frame;
+ *  `workflow.state` stays "idle" (only a `workflow_started` event activates it),
+ *  so `isClassifying` is true and the fixed "Routing to the right experts..."
+ *  ToolStatusChip renders. */
+async function triggerRoutingChip(page: Page): Promise<WsInjector> {
+  await page.route("**/api/conversations/*/messages", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        messages: [
+          {
+            id: "user-msg-overflow-1",
+            role: "user",
+            content: "Fix the reported issue end to end",
+            leader_id: null,
+          },
+        ],
+        totalCostUsd: 0,
+      }),
+    }),
+  );
+  const injector = await bootChat(page);
+  await expect(page.locator('[data-testid="routing-chip"]')).toBeVisible();
+  return injector;
+}
 
-/** Measure the Concierge bubble card (anchored by the stable
- *  `data-testid="message-bubble-card"` hook, NOT a generic Tailwind utility
- *  class) for horizontal overflow. Returns the layout band plus the label text
- *  so the caller can assert the band is non-empty (empty-band guard — an
- *  unpopulated card would vacuously satisfy scroll<=client). */
-async function measureCardOverflow(page: Page) {
-  const chip = page.locator('[data-testid="tool-status-chip"]').first();
-  await expect(chip).toBeVisible();
-  return chip.evaluate((el) => {
-    const card = el.closest('[data-testid="message-bubble-card"]') as
-      | HTMLElement
-      | null;
-    if (!card) throw new Error("status chip has no message-bubble-card ancestor");
+/** Measure the routing chip's bubble card (anchored by the stable
+ *  `data-testid="message-bubble-card"` hook, NOT a generic Tailwind class) for
+ *  horizontal overflow, plus the label span's line-box height vs line-height so
+ *  the caller can prove the label wrapped (non-vacuity guard). */
+async function measureRoutingChip(page: Page) {
+  const card = page
+    .locator('[data-testid="routing-chip"] [data-testid="message-bubble-card"]')
+    .first();
+  await expect(card).toBeVisible();
+  return card.evaluate((cardEl) => {
+    const label = cardEl.querySelector(
+      '[data-testid="tool-status-chip"] span',
+    ) as HTMLElement | null;
+    if (!label) throw new Error("routing chip has no tool-status-chip label");
+    const lineHeight = parseFloat(getComputedStyle(label).lineHeight);
     return {
-      overflow: card.scrollWidth - card.clientWidth,
-      labelText: el.textContent ?? "",
+      overflow: cardEl.scrollWidth - cardEl.clientWidth,
+      labelText: label.textContent ?? "",
+      labelHeight: label.offsetHeight,
+      lineHeight,
     };
   });
 }
 
 test.describe("cc-soleur-go bubbles: Concierge status-box overflow", () => {
-  // Default desktop width + a narrow sidebar-class width. The narrow case is
-  // the proxy for the `kb-chat-content.tsx` sidebar variant: same render path,
-  // smaller container → the overflow-prone band where #4852's bare nowrap
-  // spilled past the card border.
+  // Harness-fidelity note (#4855 QA): in this offline authenticated harness the
+  // dashboard chat column renders at ~265px wide regardless of the browser
+  // viewport, so the routing chip card only ever has ~160px of content width —
+  // less than the fixed label's ~210px single-line width. The label therefore
+  // ALWAYS wraps here, and the "stays single-line when horizontal space is
+  // available" #4852-non-regression cannot be exhibited at this layer (the
+  // production chat column is far wider). That non-regression is instead pinned
+  // structurally by the vitest className assertion in
+  // `test/message-bubble-tool-status-chip.test.tsx`: the label carries
+  // `[overflow-wrap:anywhere]` (which, by CSS definition, introduces a soft-wrap
+  // opportunity ONLY when the content would otherwise overflow — it never forces
+  // a break when the line fits) and no longer carries `whitespace-nowrap`. What
+  // this Playwright layer CAN and MUST prove is the actual reported bug: the
+  // label NEVER spills past the card's right border. We assert that at the
+  // default viewport AND a deliberately narrow viewport, with a non-vacuity
+  // guard that the label genuinely wrapped (so a collapsed/empty card cannot
+  // pass trivially).
   for (const variant of [
-    { name: "full (default viewport)", width: 0 },
-    { name: "narrow (sidebar-class 420px viewport)", width: 420 },
+    { name: "default viewport", width: 0 },
+    { name: "narrow 300px viewport", width: 300 },
   ] as const) {
-    test(`long status label wraps inside the card — no horizontal overflow — ${variant.name}`, async ({
+    test(`routing chip label wraps inside the card — no horizontal overflow — ${variant.name}`, async ({
       page,
     }) => {
       if (variant.width > 0) {
         await page.setViewportSize({ width: variant.width, height: 900 });
       }
-      const injector = await bootChat(page);
+      const injector = await triggerRoutingChip(page);
 
-      injector.send({
-        type: "tool_use",
-        leaderId: "cc_router",
-        label: LONG_STATUS_LABEL,
-      } satisfies StreamEvent);
-
-      const { overflow, labelText } = await measureCardOverflow(page);
+      const m = await measureRoutingChip(page);
 
       // Empty-band guard (nav-states-shell.e2e.ts:19 precedent): the card must
-      // actually contain the long label, else scroll<=client passes vacuously.
-      expect(labelText).toContain("Routing to the right experts");
-      // 1px tolerance for sub-pixel rounding; a real overflow is tens of px.
-      expect(overflow).toBeLessThanOrEqual(1);
+      // actually contain the routing label, else scroll<=client is vacuous.
+      expect(m.labelText).toContain("Routing to the right experts");
+      // `text-sm` sets an explicit px line-height; assert finite (don't skip on
+      // NaN) so a future line-height regression to `normal` cannot make the
+      // wrap check below pass vacuously.
+      expect(Number.isFinite(m.lineHeight)).toBe(true);
+      // Non-vacuity: the constrained card forced the label to wrap onto ≥2
+      // line-boxes. This is the exact condition under which the pre-fix `nowrap`
+      // spilled past the border instead of wrapping — so the no-overflow
+      // assertion below is meaningful, not trivially satisfied by a short line.
+      expect(m.labelHeight).toBeGreaterThan(m.lineHeight * 1.5);
+      // The fix: the wrapped label stays inside the card — no horizontal
+      // overflow (1px sub-pixel tolerance; a real overflow is tens of px).
+      expect(m.overflow).toBeLessThanOrEqual(1);
 
       assertNoPageErrors(injector);
     });
   }
-
-  test("short status label stays single-line (does not re-break #4852)", async ({
-    page,
-  }) => {
-    const injector = await bootChat(page);
-
-    injector.send({
-      type: "tool_use",
-      leaderId: "cc_router",
-      label: SHORT_STATUS_LABEL,
-    } satisfies StreamEvent);
-
-    const chip = page.locator('[data-testid="tool-status-chip"]').first();
-    await expect(chip).toBeVisible();
-
-    const lineInfo = await chip.locator("span").first().evaluate((el) => {
-      const style = getComputedStyle(el);
-      const lineHeight = parseFloat(style.lineHeight);
-      return {
-        height: (el as HTMLElement).offsetHeight,
-        lineHeight,
-      };
-    });
-
-    // `text-sm` sets an explicit px line-height on the span, so getComputedStyle
-    // returns a finite value here. Assert it (rather than skipping on NaN) so a
-    // future line-height regression to `normal` cannot silently turn this
-    // #4852-non-regression guard into a vacuous pass.
-    expect(Number.isFinite(lineInfo.lineHeight)).toBe(true);
-    // A short label with available width must occupy a single line. If
-    // `nowrap`-removal had reintroduced #4852's premature wrap, the span would
-    // span two line-boxes (height ≈ 2× lineHeight).
-    expect(lineInfo.height).toBeLessThan(lineInfo.lineHeight * 1.8);
-
-    assertNoPageErrors(injector);
-  });
 });
