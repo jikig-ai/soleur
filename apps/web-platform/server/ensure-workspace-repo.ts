@@ -120,12 +120,21 @@ export async function ensureWorkspaceRepoCloned(
  * CONCURRENCY (review PR #4890 follow-up): the temp dir is unique per attempt
  * (`randomUUID` suffix), NOT a fixed `.ensure-repo-tmp`. Two cold dispatches for
  * the SAME user (two tabs / a rapid re-open) can both observe no `.git` and run
- * this concurrently against the shared `workspacePath`. A fixed temp dir let one
- * attempt's cleanup `rm` nuke the other's in-flight clone and let the cp/rename
- * interleave; a unique dir isolates each attempt's clone + cleanup. The `.git`
- * sentinel move is then guarded by a re-check (below) so the loser no-ops
- * instead of `rename`-ing onto the winner's populated `.git` (ENOTEMPTY).
+ * this concurrently against the shared `workspacePath`. The unique dir isolates
+ * each attempt's clone + cleanup `rm` (a fixed dir let one attempt's `rm` nuke
+ * the other's in-flight clone), and the `.git` sentinel move is guarded by a
+ * re-check (below) so the loser no-ops instead of `rename`-ing onto the winner's
+ * populated `.git` (ENOTEMPTY).
+ *   NOTE: the working-tree `cp` loop below is NOT serialized — both racers may
+ *   materialize their tree over `workspacePath`. That is benign here ONLY because
+ *   both clone the same `repoUrl` at the same shallow HEAD, so the bytes are
+ *   identical and `{force:true}` overwrites converge. This holds because the
+ *   function acts only on a `.git`-less workspace (no local edits to lose) and
+ *   repo *reconnect* (a different origin) is `/api/repo/setup`'s job, never this
+ *   self-heal. If that premise ever changes, serialize via the existing
+ *   `withWorkspacePermissionLock(workspacePath, …)` instead.
  */
+/** @internal — exported only for the direct concurrency unit test (graft-race). */
 export async function realGraftRepoClone(
   workspacePath: string,
   repoUrl: string,

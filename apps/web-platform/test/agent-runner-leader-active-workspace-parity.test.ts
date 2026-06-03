@@ -130,6 +130,7 @@ vi.mock("../server/vision-helpers", () => ({
 }));
 
 import { startAgentSession } from "../server/agent-runner";
+import { syncPull } from "../server/session-sync";
 import { createApiKeysMock, createQueryMock } from "./helpers/agent-runner-mocks";
 
 const MEMBER_ID = "member-1";
@@ -229,5 +230,20 @@ describe("agent-runner leader — active-workspace cwd parity", () => {
     const options = mockQuery.mock.calls[0][0].options;
     expect(options.cwd).toBe(ACTIVE_DIR);
     expect(options.cwd).not.toBe(SOLO_DIR);
+  });
+
+  test("session-start sync targets the ACTIVE workspace and runs despite a null legacy repo_status", async () => {
+    // The member's legacy solo `users.repo_status` is null (see the `users` mock),
+    // yet their ACTIVE (shared) workspace is connected. Pre-fix the leader gated
+    // syncPull/syncPush on the solo `repo_status` → an invited member's leader
+    // edits were never pulled/pushed to the shared remote. The gate is dropped;
+    // syncPull self-guards (hasRemote + active installation) and now targets the
+    // ACTIVE dir.
+    setupSupabaseMock();
+    createQueryMock(mockQuery);
+
+    await startAgentSession(MEMBER_ID, "conv-1", "cpo");
+
+    expect(vi.mocked(syncPull)).toHaveBeenCalledWith(MEMBER_ID, ACTIVE_DIR);
   });
 });
