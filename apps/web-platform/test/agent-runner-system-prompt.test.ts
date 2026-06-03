@@ -128,6 +128,21 @@ vi.mock("../server/leader-document-resolver", () => ({
   resolveLeaderDocumentContext: resolveLeaderDocumentContextSpy,
 }));
 
+// agent-runner now resolves the leader cwd from the ACTIVE workspace via
+// `resolveActiveWorkspacePath` (ADR-044 convergence) instead of the legacy
+// `users.workspace_path` column. Pin the seam to the seeded workspace_path so
+// the absolute-path assertions below stay deterministic (mirrors #4910's
+// Concierge test repoint). `importActual` keeps the other real exports that
+// byok-resolver depends on.
+vi.mock("../server/workspace-resolver", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../server/workspace-resolver")>();
+  return {
+    ...actual,
+    resolveActiveWorkspacePath: vi.fn(async () => "/tmp/test-workspace"),
+  };
+});
+
 import { startAgentSession, sendUserMessage } from "../server/agent-runner";
 import type { ConversationContext } from "../lib/types";
 import {

@@ -54,6 +54,7 @@ import { buildAuthStatusTools } from "./auth-status-tools";
 import { buildAccountTools } from "./account-tools";
 import { buildWorkspaceSettingsTools } from "./workspace-settings-tools";
 import { getCurrentRepoUrl } from "./current-repo-url";
+import { resolveActiveWorkspacePath } from "./workspace-resolver";
 import { resolveInstallationId } from "./resolve-installation-id";
 import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
@@ -971,15 +972,28 @@ export async function startAgentSession(
     const sessionTenant = await getFreshTenantClient(userId);
     const { data: user } = await sessionTenant
       .from("users")
-      .select("workspace_path, repo_status, email")
+      .select("repo_status, email")
       .eq("id", userId)
       .single();
 
-    if (!user?.workspace_path) {
+    if (!user) {
       throw new Error(ERR_WORKSPACE_NOT_PROVISIONED);
     }
 
-    const workspacePath = user.workspace_path;
+    // Resolve the leader's workspace dir from the ACTIVE workspace (ADR-044) —
+    // NOT the legacy `users.workspace_path` column. That column is stale/empty
+    // for invited members and for users provisioned after the ADR-044
+    // `users → workspaces` relocation (#4559), so reading it pointed the leader
+    // (agent cwd, KB root, doc resolver, vision, sync) at a dir that diverged
+    // from the UI KB file tree (`resolveActiveWorkspaceKbRoot`) and from the
+    // Concierge (#4910 converged the Concierge half via `fetchUserWorkspacePath`;
+    // this converges the leader half). `resolveActiveWorkspacePath` fails closed
+    // to the SOLO workspace (never a sibling) and always returns a path, so the
+    // provisioning guard above keys only on the `users` row existing.
+    // NOTE: `user.repo_status` (the syncPull gate below) is still the legacy
+    // column — repo state relocated to `workspaces` under ADR-044; converging
+    // that gate is tracked separately (the git-workspace-plumbing scope).
+    const workspacePath = await resolveActiveWorkspacePath(userId, sessionTenant);
     const pluginPath = path.join(workspacePath, "plugins", "soleur");
 
     // Extract MCP server names from plugin.json for canUseTool allowlisting.

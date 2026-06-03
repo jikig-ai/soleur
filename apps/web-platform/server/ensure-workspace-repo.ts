@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { rm, rename, cp, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 
 import { gitWithInstallationAuth } from "@/server/git-auth";
 import { reportSilentFallback } from "@/server/observability";
@@ -115,14 +116,22 @@ export async function ensureWorkspaceRepoCloned(
  * sentinel. The token is supplied via GIT_ASKPASS (env) inside
  * `gitWithInstallationAuth`, never embedded in the remote URL, and `--` guards
  * the URL arg against flag-smuggling.
+ *
+ * CONCURRENCY (review PR #4890 follow-up): the temp dir is unique per attempt
+ * (`randomUUID` suffix), NOT a fixed `.ensure-repo-tmp`. Two cold dispatches for
+ * the SAME user (two tabs / a rapid re-open) can both observe no `.git` and run
+ * this concurrently against the shared `workspacePath`. A fixed temp dir let one
+ * attempt's cleanup `rm` nuke the other's in-flight clone and let the cp/rename
+ * interleave; a unique dir isolates each attempt's clone + cleanup. The `.git`
+ * sentinel move is then guarded by a re-check (below) so the loser no-ops
+ * instead of `rename`-ing onto the winner's populated `.git` (ENOTEMPTY).
  */
-async function realGraftRepoClone(
+export async function realGraftRepoClone(
   workspacePath: string,
   repoUrl: string,
   installationId: number,
 ): Promise<void> {
-  const tmp = join(workspacePath, ".ensure-repo-tmp");
-  await rm(tmp, { recursive: true, force: true });
+  const tmp = join(workspacePath, `.ensure-repo-tmp-${randomUUID()}`);
   try {
     await gitWithInstallationAuth(
       ["clone", "--depth", "1", "--", repoUrl, tmp],
@@ -138,6 +147,13 @@ async function realGraftRepoClone(
         force: true,
       });
     }
+    // Re-check the sentinel immediately before the move. A concurrent attempt
+    // (another cold dispatch that also saw no `.git`) may have grafted first
+    // while this one was cloning. `.git` is the all-or-nothing success sentinel,
+    // so if it now exists we lost the race — leave the winner's clone intact and
+    // skip, rather than `rename`-ing onto a populated `.git` (which throws
+    // ENOTEMPTY and would mirror a spurious failure to Sentry).
+    if (existsSync(join(workspacePath, ".git"))) return;
     // .git LAST — the success sentinel. A failure before this leaves the
     // workspace `.git`-less so the next cold dispatch retries cleanly.
     await rename(join(tmp, ".git"), join(workspacePath, ".git")); // same fs

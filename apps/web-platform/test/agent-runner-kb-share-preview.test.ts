@@ -211,27 +211,24 @@ describe("agent-runner kb_share_preview tool wiring", () => {
     expect(result.behavior).toBe("allow");
   });
 
-  test("does not register kb_share_preview when workspace unavailable (test 33)", async () => {
+  test("wires kb_share_preview even when the legacy users.workspace_path is null (ADR-044 active-workspace convergence, test 33)", async () => {
+    // Convergence regression guard (#4910 leader half). Pre-fix, a null
+    // `users.workspace_path` threw ERR_WORKSPACE_NOT_PROVISIONED and the leader
+    // session never wired its tools — the exact founder-class break for invited
+    // members / post-relocation users whose legacy column is empty but whose
+    // ACTIVE workspace is healthy. The leader now resolves the workspace via
+    // `resolveActiveWorkspacePath` (fail-closed to solo, never throws on an empty
+    // column), so the session wires normally against the active workspace's
+    // kbRoot.
     setupSupabaseMock(USER_WITHOUT_WORKSPACE);
     setupQueryMockImmediate();
 
-    // Workspace path is null — startAgentSession is expected to reject
-    // via ERR_WORKSPACE_NOT_PROVISIONED before tool registration runs.
-    // The invariant: either the session rejects, or allowedTools does NOT
-    // include kb_share_preview. Defense in depth against registering the
-    // preview tool against an undefined kbRoot.
-    let threw = false;
-    try {
-      await startAgentSession("user-1", "conv-1", "cpo");
-    } catch {
-      threw = true;
-    }
+    // Must NOT throw — the empty legacy column is no longer a provisioning gate.
+    await startAgentSession("user-1", "conv-1", "cpo");
 
-    if (!threw && mockQuery.mock.calls.length > 0) {
-      const options = mockQuery.mock.calls[0][0].options;
-      expect(options.allowedTools ?? []).not.toContain(
-        "mcp__soleur_platform__kb_share_preview",
-      );
-    }
+    const options = mockQuery.mock.calls[0][0].options;
+    expect(options.allowedTools).toContain(
+      "mcp__soleur_platform__kb_share_preview",
+    );
   });
 });
