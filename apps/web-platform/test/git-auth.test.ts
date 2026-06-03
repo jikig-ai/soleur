@@ -145,7 +145,11 @@ describe("writeAskpassScriptTo (item 1b — in-sandbox askpass under workspacePa
       expect(scriptPath.startsWith(dir)).toBe(true);
       // dot-prefixed so it is unobtrusive in a working tree.
       expect(scriptPath).toMatch(/\.askpass-.*\.sh$/);
-      expect(existsSync(scriptPath)).toBe(true);
+      // No existsSync(scriptPath) check here: statSync + readFileSync below
+      // both throw if the file is absent, so the existence assertion is
+      // redundant — and a check-then-use pair (existsSync → statSync/
+      // readFileSync on the same path) is a CodeQL js/file-system-race (TOCTOU)
+      // alert. Reading/statting directly is race-free.
       expect(statSync(scriptPath).mode & 0o777).toBe(0o700);
 
       const body = readFileSync(scriptPath, "utf8");
