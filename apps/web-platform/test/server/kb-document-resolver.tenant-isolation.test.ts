@@ -1,13 +1,20 @@
 /**
- * Tenant isolation — kb-document-resolver.ts (PR-C §2.7, #3244).
+ * Tenant isolation — Concierge document workspace-path resolution.
  *
- * Covers the single migrated site at `:74` —
- * `fetchUserWorkspacePath(userId)` SELECT `users.workspace_path`.
- * RLS on `users`: `auth.uid() = id`.
+ * ADR-044 cutover (feat-one-shot-concierge-doc-context-parity): the Concierge
+ * document resolver + agent sandbox cwd no longer read `users.workspace_path`.
+ * `fetchUserWorkspacePath` (kb-document-resolver.ts) now resolves the caller's
+ * ACTIVE workspace via `resolveActiveWorkspacePath` → `resolveCurrentWorkspaceId`,
+ * which SELECTs `user_session_state.current_workspace_id` scoped to the caller's
+ * own id. RLS on `user_session_state`: `user_session_state_owner_select`
+ * (`auth.uid() = user_id`, migrations 060/064).
  *
- * Asserts: A's tenant JWT cannot read B's workspace_path. A spoofed
- * `.eq("id", userB.id).single()` MUST surface as PGRST116 (no rows)
- * which the SUT translates to `Error("Workspace not provisioned")`.
+ * Asserts: A's tenant JWT cannot read B's `user_session_state` row. B's row
+ * EXISTS (seeded via the service role), so a null result proves RLS DENIAL — not
+ * mere row-absence. This is the isolation guarantee behind the workspace-path
+ * resolution: A can never resolve B's active workspace, so the membership
+ * self-heal in `resolveActiveWorkspaceIdWithMembership` cannot be tricked into
+ * reading a sibling's workspace files.
  *
  * Opt-in via TENANT_INTEGRATION_TEST=1.
  */
@@ -47,7 +54,7 @@ function requireEnv(name: string): string {
 }
 
 describe.skipIf(!INTEGRATION_ENABLED)(
-  "tenant isolation — kb-document-resolver.ts (1 site)",
+  "tenant isolation — Concierge workspace-path resolution (user_session_state)",
   () => {
     let service: SupabaseClient;
     let aClient: SupabaseClient;
@@ -76,11 +83,15 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         expect(user.id).toBeTruthy();
       }
 
+      // Seed a user_session_state row for BOTH users so the cross-tenant read
+      // tests RLS DENIAL (B's row exists) rather than row-absence. Only user_id
+      // is required (current_organization_id / current_workspace_id are nullable
+      // FKs; updated_at defaults). Leaving current_workspace_id NULL avoids the
+      // workspaces FK — the row's existence is what the deny test needs.
       for (const user of [userA, userB]) {
         const { error } = await service
-          .from("users")
-          .update({ workspace_path: `/tmp/synthetic/${user.id.slice(0, 8)}` })
-          .eq("id", user.id);
+          .from("user_session_state")
+          .upsert({ user_id: user.id }, { onConflict: "user_id" });
         expect(error).toBeNull();
       }
 
@@ -99,30 +110,31 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       for (const user of [userA, userB]) {
         if (!user.id) continue;
         assertSynthetic(user.email);
+        // user_session_state row cascades on user delete (ON DELETE CASCADE).
         await service.auth.admin.deleteUser(user.id).catch(() => {});
       }
     }, 30_000);
 
-    test("baseline: A reads own workspace_path", async () => {
+    test("baseline: A reads own user_session_state row", async () => {
       const { data, error } = await aClient
-        .from("users")
-        .select("workspace_path")
-        .eq("id", userA.id)
-        .single();
+        .from("user_session_state")
+        .select("user_id, current_workspace_id")
+        .eq("user_id", userA.id)
+        .maybeSingle();
       expect(error).toBeNull();
-      expect(data?.workspace_path).toContain("/tmp/synthetic/");
+      expect(data?.user_id).toBe(userA.id);
     });
 
-    test("`:74` — A's tenant JWT cannot read B's workspace_path", async () => {
+    test("A's tenant JWT cannot read B's user_session_state (RLS denial)", async () => {
       const { data, error } = await aClient
-        .from("users")
-        .select("workspace_path")
-        .eq("id", userB.id)
-        .single();
-      // .single() on zero rows returns PGRST116 — the SUT translates this
-      // to `Error("Workspace not provisioned")`.
+        .from("user_session_state")
+        .select("user_id, current_workspace_id")
+        .eq("user_id", userB.id)
+        .maybeSingle();
+      // B's row EXISTS — a null result is RLS denying the cross-tenant read,
+      // not an absent row.
+      expect(error).toBeNull();
       expect(data).toBeNull();
-      expect(error?.code).toBe("PGRST116");
     });
   },
 );

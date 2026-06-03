@@ -268,17 +268,32 @@ type MaybeSingleChain<T> = {
   maybeSingle: () => MaybeSingleChain<T>;
 } & PromiseLike<{ data: T | null; error: unknown }>;
 
-export async function resolveActiveWorkspaceKbRoot(
+/**
+ * Resolve the caller's ACTIVE workspace id (ADR-044), self-healing a stale
+ * non-member claim back to the SOLO workspace (fail-closed — never a sibling).
+ *
+ * This is steps 1-2 of `resolveActiveWorkspaceKbRoot`, extracted so the
+ * Concierge document resolver and the agent sandbox cwd
+ * (`fetchUserWorkspacePath`) resolve the SAME workspace the UI KB file tree
+ * renders from. Without sharing this resolution, the agent goes blind to the
+ * document the user has open — the agent-native parity bug (#4543 class) this
+ * resolver exists to prevent.
+ *
+ * RLS: `user_session_state` + `workspace_members` reads are self-scoped via
+ * `.eq("user_id", userId)`; a tenant client cannot influence the result
+ * cross-tenant, and the non-member fallback is unconditionally solo.
+ */
+export async function resolveActiveWorkspaceIdWithMembership(
   userId: string,
   supabase: SupabaseLike,
-): Promise<ActiveWorkspaceKbAccess> {
+): Promise<string> {
   // 1. Active workspace id — claim → solo fallback (never a sibling).
   let activeWorkspaceId = await resolveCurrentWorkspaceId(userId, supabase);
 
   // 2. J5 self-heal parity: a non-solo claim the caller is no longer a member
-  //    of must NOT read the sibling's KB. Fall back to solo (read-only — the
-  //    active-repo route's corrective set_current_workspace_id write is for the
-  //    badge; a GET must stay side-effect-free).
+  //    of must NOT read the sibling's workspace. Fall back to solo (read-only —
+  //    the active-repo route's corrective set_current_workspace_id write is for
+  //    the badge; a GET / agent dispatch must stay side-effect-free).
   if (activeWorkspaceId !== userId) {
     const memberChain = supabase.from("workspace_members") as MaybeSingleChain<{
       user_id: string;
@@ -308,6 +323,41 @@ export async function resolveActiveWorkspaceKbRoot(
       activeWorkspaceId = userId; // never the sibling
     }
   }
+  return activeWorkspaceId;
+}
+
+/**
+ * The on-disk workspace path for the caller's ACTIVE workspace
+ * (`<WORKSPACES_ROOT>/<active_workspace_id>`). This is the path the UI KB file
+ * tree renders from (`resolveActiveWorkspaceKbRoot`). The Concierge document
+ * resolver and the agent sandbox cwd MUST use this — NOT the legacy
+ * `users.workspace_path` column, which is stale/empty for invited members and
+ * for users provisioned after the ADR-044 `users → workspaces` relocation
+ * (#4559). Always returns a path (the active-id resolution fails closed to
+ * solo), never throws "not provisioned".
+ */
+export async function resolveActiveWorkspacePath(
+  userId: string,
+  supabase: SupabaseLike,
+): Promise<string> {
+  const activeWorkspaceId = await resolveActiveWorkspaceIdWithMembership(
+    userId,
+    supabase,
+  );
+  return workspacePathForWorkspaceId(activeWorkspaceId);
+}
+
+export async function resolveActiveWorkspaceKbRoot(
+  userId: string,
+  supabase: SupabaseLike,
+): Promise<ActiveWorkspaceKbAccess> {
+  // 1-2. Active workspace id (claim → solo fallback) with the J5 membership
+  //      self-heal — shared with the Concierge/agent workspace-path resolver so
+  //      both read the identical fail-closed source (ADR-044 parity).
+  const activeWorkspaceId = await resolveActiveWorkspaceIdWithMembership(
+    userId,
+    supabase,
+  );
 
   // 3. Connectivity gate — read the SOURCE OF TRUTH (`workspaces`), not
   //    `users.repo_status` (ADR-044 relocated repo state to `workspaces`).
