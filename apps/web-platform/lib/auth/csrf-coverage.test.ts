@@ -28,6 +28,12 @@ const EXEMPT_ROUTES = new Set([
   // cookies / no browser session, so origin-validation CSRF does not apply —
   // the secret is the trust boundary. Same class as kb-drift-ingest above.
   "app/api/internal/trigger-cron/route.ts",
+  // Schedule-reminder emit route — internal operator/agent route authenticated
+  // via the same fail-closed Bearer shared secret as trigger-cron
+  // (INNGEST_MANUAL_TRIGGER_SECRET, length-guarded timingSafeEqual). No cookies /
+  // no browser session, so origin-validation CSRF does not apply — the secret is
+  // the trust boundary. Same class as trigger-cron / kb-drift-ingest above.
+  "app/api/internal/schedule-reminder/route.ts",
 ]);
 
 describe("CSRF coverage", () => {
