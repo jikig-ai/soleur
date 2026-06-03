@@ -8,6 +8,16 @@ export const C4_DIAGRAMS_DIR = "engineering/architecture/diagrams";
 /** Canonical LikeC4 source extension. */
 export const C4_SOURCE_EXT = ".c4";
 
+/**
+ * Precomputed, layouted model committed alongside the `.c4` sources
+ * (produced by `likec4 export json`). The app renders this directly — it does
+ * NOT run the heavy `likec4`/`@likec4/language-services` toolchain at runtime
+ * (those drag vite/esbuild/bundle-require into prod deps and break the
+ * npm10/npm11 lockfile parity that prod `npm ci` + `lockfile-sync` require).
+ * Regenerated via `/soleur:architecture render`.
+ */
+export const C4_MODEL_JSON = "model.likec4.json";
+
 /** Fenced-code language token that embeds a LikeC4 view in a markdown page. */
 export const LIKEC4_VIEW_LANG = "likec4-view";
 

@@ -248,17 +248,23 @@ Gather the label/technology/description from `$ARGUMENTS` or via AskUserQuestion
 
 ## Sub-command: render
 
-Validate the LikeC4 project and report its size.
+Validate the LikeC4 project and rebuild the precomputed model the web viewer
+renders. The Knowledge Base viewer does NOT run the `likec4` toolchain at
+runtime (it would pull vite/esbuild into production deps); it reads the
+committed, layouted `model.likec4.json`. Regenerate it after ANY `.c4` change.
 
 ```bash
 cd knowledge-base/engineering/architecture/diagrams
 npx -y likec4@latest validate .
+# Rebuild the committed layouted model the web viewer reads:
+npx -y likec4@latest export json -o model.likec4.json .
 ```
 
-On success, report element / relationship / view counts (e.g. via
-`npx -y likec4@latest export json -o /tmp/c4.json . ` then read the
-`elements` / `relations` / `views` key counts). On failure, surface the
-line-numbered diagnostics and fix the `.c4` source before continuing.
+On success, report element / relationship / view counts (read the
+`elements` / `relations` / `views` key counts from `model.likec4.json`) and
+remind the operator to commit the regenerated `model.likec4.json` alongside the
+`.c4` edits. On failure, surface the line-numbered diagnostics and fix the
+`.c4` source before continuing.
 
 ---
 

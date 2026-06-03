@@ -4,23 +4,25 @@ import { promises as fs } from "node:fs";
 import { createClient } from "@/lib/supabase/server";
 import { resolveUserKbRoot } from "@/server/kb-route-helpers";
 import { isPathInWorkspace } from "@/server/sandbox";
-import { computeC4Model } from "@/server/c4-compute";
-import { C4_DIAGRAMS_DIR, C4_SOURCE_EXT } from "@/lib/c4-constants";
 import { renameUserIdToHash } from "@/server/userid-pseudonymize";
+import { C4_DIAGRAMS_DIR, C4_SOURCE_EXT, C4_MODEL_JSON } from "@/lib/c4-constants";
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
 
-// likec4 (graphviz-wasm) is a Node-only dependency — never run on edge.
 export const runtime = "nodejs";
 
-const MAX_C4_BYTES = 512 * 1024; // generous ceiling for a project's combined .c4 sources
+const MAX_C4_BYTES = 4 * 1024 * 1024; // layouted model JSON can be large
 
 /**
  * GET /api/kb/c4/project?dir=<kb-relative dir>
  *
- * Reads the `.c4` sources of a LikeC4 project from the caller's workspace,
- * computes a layouted model, and returns it for client-side rendering.
- * Read-only; defaults to the canonical architecture diagrams project.
+ * Returns a LikeC4 project for client-side rendering: the precomputed,
+ * layouted model (`model.likec4.json`, produced by `likec4 export json` and
+ * committed alongside the sources) plus the raw `.c4` sources for the editor.
+ *
+ * Deliberately does NOT compute layout at runtime — the `likec4` toolchain
+ * pulls vite/esbuild into prod deps and breaks npm10/npm11 lockfile parity.
+ * The model is rebuilt out-of-band via `/soleur:architecture render`.
  */
 export async function GET(request: Request) {
   const supabase = await createClient();
@@ -47,66 +49,62 @@ export async function GET(request: Request) {
   }
 
   try {
-    let entries: string[];
+    // Layouted model (required).
+    const jsonAbs = path.join(dirAbs, C4_MODEL_JSON);
+    if (!isPathInWorkspace(jsonAbs, kbRoot)) {
+      return NextResponse.json({ error: "Invalid dir" }, { status: 400 });
+    }
+    let dump: unknown;
     try {
-      entries = await fs.readdir(dirAbs);
+      const stat = await fs.lstat(jsonAbs);
+      if (stat.isSymbolicLink() || stat.size > MAX_C4_BYTES) {
+        return NextResponse.json({ error: "Diagram model too large" }, { status: 413 });
+      }
+      dump = JSON.parse(await fs.readFile(jsonAbs, "utf8"));
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === "ENOENT") {
         return NextResponse.json(
-          { error: "No diagram project found" },
+          {
+            error:
+              "Diagram model not built. Run `/soleur:architecture render` to generate it.",
+            code: "MODEL_NOT_BUILT",
+          },
           { status: 404 },
         );
       }
       throw e;
     }
 
-    const c4Files = entries.filter((f) => f.endsWith(C4_SOURCE_EXT)).sort();
-    if (c4Files.length === 0) {
-      return NextResponse.json(
-        { error: "No .c4 sources in this directory" },
-        { status: 404 },
-      );
-    }
+    const viewIds = Object.keys(
+      (dump as { views?: Record<string, unknown> }).views ?? {},
+    );
 
+    // Raw .c4 sources for the editor (best-effort).
     const sources: Record<string, string> = {};
-    let totalBytes = 0;
-    for (const file of c4Files) {
-      const abs = path.join(dirAbs, file);
-      if (!isPathInWorkspace(abs, kbRoot)) continue;
-      const stat = await fs.lstat(abs);
-      if (stat.isSymbolicLink()) continue;
-      totalBytes += stat.size;
-      if (totalBytes > MAX_C4_BYTES) {
-        return NextResponse.json(
-          { error: "Diagram project too large to render" },
-          { status: 413 },
-        );
+    try {
+      for (const file of (await fs.readdir(dirAbs)).filter((f) =>
+        f.endsWith(C4_SOURCE_EXT),
+      ).sort()) {
+        const abs = path.join(dirAbs, file);
+        if (!isPathInWorkspace(abs, kbRoot)) continue;
+        if ((await fs.lstat(abs)).isSymbolicLink()) continue;
+        sources[file] = await fs.readFile(abs, "utf8");
       }
-      sources[file] = await fs.readFile(abs, "utf8");
+    } catch {
+      // sources are optional for rendering
     }
-
-    // Combine in stable order so the layout is deterministic across requests.
-    const combined = c4Files.map((f) => sources[f]).join("\n\n");
-    const { dump, viewIds, diagnostics } = await computeC4Model(combined);
 
     return NextResponse.json(
-      { dir: requestedDir, sources, dump, viewIds, diagnostics },
-      {
-        status: 200,
-        headers: { "Cache-Control": "private, no-cache" },
-      },
+      { dir: requestedDir, sources, dump, viewIds, diagnostics: [] },
+      { status: 200, headers: { "Cache-Control": "private, no-cache" } },
     );
   } catch (error) {
     Sentry.captureException(error);
-    // Pseudonymise userId at the source per #3698 (computed off the logger line).
     const errLog = renameUserIdToHash({ userId: user.id });
     logger.error(
       { err: error, ...errLog, dir: requestedDir },
-      "kb/c4/project: compute failed",
+      "kb/c4/project: read failed",
     );
-    return NextResponse.json(
-      { error: "Failed to compute diagram" },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: "Failed to load diagram" }, { status: 500 });
   }
 }

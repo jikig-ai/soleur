@@ -51,9 +51,6 @@ const nextConfig: NextConfig = {
     "ws",
     "pino",
     "pino-pretty",
-    // likec4 bundles langium + a graphviz-wasm layouter; keep it out of the
-    // webpack server bundle so the wasm/worker assets resolve at runtime.
-    "likec4",
   ],
   experimental: {
     // SECURITY: restrict Server Action origins for defense-in-depth
