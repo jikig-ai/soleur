@@ -163,26 +163,26 @@ None.
 
 ### Pre-merge (PR)
 
-- [ ] `resolveUserKbRoot` returns `{ ok: true, kbRoot, workspacePath, extras }` (not a 503
+- [x] `resolveUserKbRoot` returns `{ ok: true, kbRoot, workspacePath, extras }` (not a 503
       response) when `getFreshTenantClient` throws `RuntimeAuthError`, provided the
       service-role read of the user's own row yields a `ready` workspace — asserted by a
       new test in `kb-route-helpers.test.ts`.
-- [ ] The mint-failure fallback emits exactly one `reportSilentFallback` call carrying the
+- [x] The mint-failure fallback emits exactly one `reportSilentFallback` call carrying the
       `RuntimeAuthError` (so the operator still sees the mint failure) — asserted via
       `mockReportSilentFallback`.
-- [ ] The `extras` path (`repo_url`, `github_installation_id`) resolves through the
+- [x] The `extras` path (`repo_url`, `github_installation_id`) resolves through the
       fallback (covers the `POST /api/kb/upload` call site) — asserted by a test passing
       `{ extras: ["repo_url", "github_installation_id"] as const }`.
-- [ ] When BOTH the tenant mint fails AND the service-role read yields no
+- [x] When BOTH the tenant mint fails AND the service-role read yields no
       `workspace_path` / non-`ready` status, the helper still returns the 503 "Workspace
       not ready" response (no false-positive resolution) — asserted by a test that wires the
       **service-role** read (distinct `mockServiceFrom`) to a not-ready row.
-- [ ] The fallback tests prove the **service-role** client (not the shared tenant mock)
+- [x] The fallback tests prove the **service-role** client (not the shared tenant mock)
       produced the resolved workspace — i.e. the test uses a distinct `createServiceClient`
       mock, so the assertion does not pass vacuously through the shared `mockFrom`.
-- [ ] `GET /api/kb/share` and `createShare` are unchanged (no diff to `route.ts` GET
+- [x] `GET /api/kb/share` and `createShare` are unchanged (no diff to `route.ts` GET
       handler or to `kb-share.ts`).
-- [ ] `apps/web-platform` typechecks and the vitest suite for the edited file passes via
+- [x] `apps/web-platform` typechecks and the vitest suite for the edited file passes via
       the package runner: `cd apps/web-platform && ./node_modules/.bin/vitest run test/kb-route-helpers.test.ts`
       (package `scripts.test` is `vitest`; node-project include glob is `test/**/*.test.ts`).
 
