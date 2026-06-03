@@ -112,7 +112,11 @@ export default function DashboardLayout({
   const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
   const [collapsed, toggleCollapsed] = useSidebarCollapse("soleur:sidebar.main.collapsed");
   // Widenable KB rail (amendment): persisted width applied to the `aside` ONLY
-  // when drilled into KB and expanded (collapse takes precedence; KB-only).
+  // when drilled into KB and expanded (collapse takes precedence; KB-only) and
+  // only at the md+ breakpoint (the mobile drawer keeps its `w-64` width). The
+  // value rides the `--kb-rail-w` CSS var + a `data-kb-rail-width` attribute,
+  // consumed by an md+ rule in globals.css — deterministic, no JS media-query
+  // state (which did not flip reliably under SSR hydration here).
   const [railWidth, setRailWidth] = useRailWidth();
   const [signOutModalOpen, setSignOutModalOpen] = useState(false);
   const { handleSignOut, isSigningOut } = useSignOut();
@@ -251,6 +255,7 @@ export default function DashboardLayout({
         // inline value is scoped to the desktop rail; the mobile `w-64` drawer
         // is left to the base class. (Inline `style.width` would otherwise win
         // at every breakpoint and resize the mobile drawer too — Sharp Edge.)
+        data-kb-rail-width={kbExpanded ? "" : undefined}
         style={
           kbExpanded
             ? ({ "--kb-rail-w": `${railWidth}px` } as React.CSSProperties)
@@ -263,8 +268,10 @@ export default function DashboardLayout({
           md:relative md:z-30 md:translate-x-0
           md:transition-[width] md:duration-200 md:ease-out
           ${/* md:w-56 = 14rem = 224px = RAIL_DEFAULT_PX (use-rail-width.ts); the KB
-               rail starts at that same default before any drag. */ ""}
-          ${collapsed ? "md:w-14" : kbExpanded ? "md:w-[var(--kb-rail-w)]" : "md:w-56"}
+               rail starts at that same default. When kbExpanded, the
+               data-kb-rail-width rule in globals.css overrides this at md+ with
+               the persisted --kb-rail-w. */ ""}
+          ${collapsed ? "md:w-14" : "md:w-56"}
         `}
       >
         {/* Brand + close/collapse buttons */}

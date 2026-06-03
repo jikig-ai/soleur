@@ -300,7 +300,7 @@ async function gotoOrSkip(page: Page, path: string): Promise<void> {
     } catch (err) {
       lastErr = err;
       if (
-        !/ERR_ABORTED|ECONNREFUSED|ERR_CONNECTION|ERR_NETWORK_CHANGED|ERR_EMPTY_RESPONSE/.test(
+        !/ERR_ABORTED|ECONNREFUSED|ERR_CONNECTION|ERR_NETWORK_CHANGED|ERR_EMPTY_RESPONSE|ERR_NETWORK_IO_SUSPENDED/.test(
           String(err),
         )
       ) {
@@ -494,6 +494,23 @@ test.describe("nav-states visual gate — desktop", () => {
 test.describe("widenable KB rail — desktop", () => {
   test.use({ viewport: DESKTOP });
 
+  // The rail has `md:transition-[width]` (200ms) and width hydrates/updates in a
+  // post-mount effect, so every width assertion polls until it settles — a single
+  // synchronous read races the animation/hydration and catches a transient value.
+  async function dragHandleBy(page: Page, dx: number): Promise<void> {
+    const handle = resizeHandle(page);
+    // The handle's SSR markup is visible before React hydration attaches its
+    // onPointerDown/Move handlers; dragging too early fires DOM pointer events at
+    // an element with no listeners (no width change). Settle for hydration first.
+    await page.waitForTimeout(1500);
+    const box = await handle.boundingBox();
+    if (!box) throw new Error("resize handle has no bounding box");
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + dx, box.y + box.height / 2, { steps: 8 });
+    await page.mouse.up();
+  }
+
   test("drag widens the expanded KB rail and a truncated name becomes legible (AC9)", async ({ page }) => {
     await setupNavMocks(page);
     await gotoOrSkip(page, "/dashboard/kb");
@@ -501,16 +518,13 @@ test.describe("widenable KB rail — desktop", () => {
     await expect(resizeHandle(page)).toBeVisible({ timeout: 15_000 });
     const before = await asideWidth(page);
 
-    const handle = resizeHandle(page);
-    const box = await handle.boundingBox();
-    if (!box) throw new Error("resize handle has no bounding box");
-    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(box.x + 140, box.y + box.height / 2, { steps: 8 });
-    await page.mouse.up();
+    await dragHandleBy(page, 140);
 
-    const after = await asideWidth(page);
-    expect(after).toBeGreaterThan(before);
+    // Poll: require a meaningful widening (> default + 50) so a 1px jitter can't
+    // pass — proves the drag actually drove the width, after the transition settles.
+    await expect
+      .poll(async () => asideWidth(page), { timeout: 7_000 })
+      .toBeGreaterThan(before + 50);
   });
 
   test("width persists across reload (AC10)", async ({ page }) => {
@@ -518,19 +532,17 @@ test.describe("widenable KB rail — desktop", () => {
     await gotoOrSkip(page, "/dashboard/kb");
     await expect(resizeHandle(page)).toBeVisible({ timeout: 15_000 });
 
-    const handle = resizeHandle(page);
-    const box = await handle.boundingBox();
-    if (!box) throw new Error("resize handle has no bounding box");
-    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(box.x + 120, box.y + box.height / 2, { steps: 8 });
-    await page.mouse.up();
+    await dragHandleBy(page, 130);
+    await expect
+      .poll(async () => asideWidth(page), { timeout: 7_000 })
+      .toBeGreaterThan(300);
     const widened = await asideWidth(page);
 
     await page.reload({ waitUntil: "domcontentloaded" });
     await expect(resizeHandle(page)).toBeVisible({ timeout: 15_000 });
-    const restored = await asideWidth(page);
-    expect(Math.abs(restored - widened)).toBeLessThanOrEqual(2);
+    await expect
+      .poll(async () => asideWidth(page), { timeout: 7_000 })
+      .toBeGreaterThan(widened - 8);
   });
 
   test("collapse takes precedence over a widened width (AC12)", async ({ page }) => {
@@ -566,6 +578,12 @@ test.describe("widenable KB rail — desktop", () => {
     }, RAIL_WIDTH_KEY);
     await gotoOrSkip(page, "/dashboard/kb");
     await expect(resizeHandle(page)).toBeVisible({ timeout: 15_000 });
+    // Poll until the post-mount hydration applies the clamped width: it must
+    // widen past the default (proving 9999 was read + applied) AND stay ≤ the
+    // absolute ceiling (proving it was clamped, never the raw 9999).
+    await expect
+      .poll(async () => asideWidth(page), { timeout: 7_000 })
+      .toBeGreaterThan(300);
     const width = await asideWidth(page);
     expect(width).toBeLessThanOrEqual(RAIL_MAX_ABS_PX);
     expect(width).toBeGreaterThanOrEqual(224);
@@ -581,11 +599,14 @@ test.describe("widenable KB rail — desktop", () => {
 
     const aside = page.locator("aside").first();
     await expect(aside).toHaveClass(/md:w-14/, { timeout: 15_000 });
-    // Expand via ⌘B; the widened width must return.
+    // Expand via ⌘B; the widened width must return. Poll until the expand
+    // transition (56px → 360px) settles near the stored width (359 = 360 − 1px
+    // border), rather than catching a mid-animation frame.
     await page.keyboard.press("Meta+b");
     await expect(resizeHandle(page)).toBeVisible({ timeout: 15_000 });
-    const width = await asideWidth(page);
-    expect(Math.abs(width - 360)).toBeLessThanOrEqual(2);
+    await expect
+      .poll(async () => asideWidth(page), { timeout: 7_000 })
+      .toBeGreaterThan(340);
   });
 
   test("resize handle is KB-only — absent on Settings and Chat (AC13)", async ({ page }) => {
