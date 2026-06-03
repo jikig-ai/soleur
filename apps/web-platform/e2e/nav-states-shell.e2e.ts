@@ -252,7 +252,10 @@ test.describe("nav-states visual gate — desktop", () => {
     // Bug 1: the expanded drilled rail (md:w-56 = 224px) must not overflow — the
     // gap the existing "drilled (expanded)" test (chrome-presence only) misses.
     const overflow = await aside.evaluate((el) => el.scrollWidth - el.clientWidth);
-    expect(overflow).toBeLessThanOrEqual(1);
+    expect(
+      overflow,
+      "expanded drilled rail (md:w-56) overflows horizontally — Bug 1 regression",
+    ).toBeLessThanOrEqual(1);
 
     // Bug 2: the band's "Back to menu" affordance and the brand-row collapse
     // toggle must share one left edge (both at the rail's px-3 gutter).
@@ -264,7 +267,10 @@ test.describe("nav-states visual gate — desktop", () => {
       .boundingBox();
     expect(backBox).not.toBeNull();
     expect(collapseBox).not.toBeNull();
-    expect(Math.abs(backBox!.x - collapseBox!.x)).toBeLessThanOrEqual(6);
+    expect(
+      Math.abs(backBox!.x - collapseBox!.x),
+      "back affordance and collapse toggle left edges drifted — Bug 2 regression",
+    ).toBeLessThanOrEqual(6);
   });
 
   test("collapsed top-level: rail is icon-only, no horizontal overflow (Bug 2)", async ({ page }) => {

@@ -127,8 +127,10 @@ export function WorkspaceContextBand({
     >
       {/* Back-to-menu affordance — its OWN labelled row (not inline beside the
           pill), shown only when drilled. Synchronous (first render, never
-          async-gated). Left gutter (px-3) matches the brand-row collapse toggle
-          so the two controls share one vertical edge, and the label + distinct
+          async-gated). Left gutter (px-3) matches the brand-row collapse
+          toggle so the two controls share the same px-3 border-box gutter
+          (their border-boxes align; the collapse glyph is centered inside an
+          h-6 w-6 button so the arrowheads sit ~4px apart). The label + distinct
           BackArrowIcon stop it reading as a duplicate of the collapse chevron
           (#4810 follow-up Bug 2). Splitting it out of the pill row also frees the
           full rail width for the pill, preventing the overflow (Bug 1). */}
