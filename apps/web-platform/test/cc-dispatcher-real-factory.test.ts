@@ -524,19 +524,32 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   // -------------------------------------------------------------------------
   // Item 1d/1e — in-sandbox git GIT_ASKPASS wiring (plan §Phase 1)
   // -------------------------------------------------------------------------
-  it("item1d: connected repo → writes askpass helper UNDER workspacePath exactly once", async () => {
+  it("item1d: connected repo → writes a fixed-name askpass helper under the workspace exactly once", async () => {
     mockResolveInstallationId.mockResolvedValueOnce(987654);
     mockGenerateInstallationToken.mockResolvedValueOnce("ghs_minted_xyz");
 
     await realSdkQueryFactory(makeArgs());
 
-    // The helper is written under the user's OWN workspacePath (the only
-    // verified sandbox-readable allowWrite dir) — NOT $HOME/$TMPDIR.
+    // The helper is written under the user's OWN workspace (the only verified
+    // sandbox-readable allowWrite dir) — NOT $HOME/$TMPDIR — with a FIXED name
+    // so it is reused per workspace (no accumulation, no cleanup lifecycle).
+    // WORKSPACE_PATH/.git does not exist in the test, so the dir is the
+    // workspace root; in prod with a cloned repo it is `<workspace>/.git`.
     expect(mockWriteAskpassScriptTo).toHaveBeenCalledTimes(1);
-    expect(mockWriteAskpassScriptTo).toHaveBeenCalledWith(WORKSPACE_PATH);
-    // And the resolved path lands in the SDK env via buildAgentEnv.
-    const opts = mockQuery.mock.calls[0][0].options;
-    expect(opts.env).toBeDefined();
+    expect(mockWriteAskpassScriptTo).toHaveBeenCalledWith(
+      WORKSPACE_PATH,
+      ".soleur-askpass.sh",
+    );
+    // And the writer's resolved path is threaded into buildAgentEnv (not a
+    // vacuous "env exists" check — assert the askpass path actually flows).
+    expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        gitAskpassScriptPath: `${WORKSPACE_PATH}/.askpass-fixed-test.sh`,
+        gitInstallationToken: "ghs_minted_xyz",
+      }),
+    );
   });
 
   it("item1d: no connected repo (null installation) → NO askpass write, gitAskpassScriptPath undefined", async () => {
@@ -581,8 +594,12 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     }
     // The clone/remote URL path lives in ensure-workspace-repo (mocked here);
     // git-auth's own suite pins "token NEVER appears in execFile args". This
-    // assertion pins that the cc wiring passes only the workspace dir.
-    expect(mockWriteAskpassScriptTo).toHaveBeenCalledWith(WORKSPACE_PATH);
+    // assertion pins that the cc wiring passes only the workspace dir + the
+    // fixed helper name — never the token.
+    expect(mockWriteAskpassScriptTo).toHaveBeenCalledWith(
+      WORKSPACE_PATH,
+      ".soleur-askpass.sh",
+    );
   });
 
   it("AC1: no connected repo (null installation) → no mint, ghToken undefined, dispatch proceeds", async () => {

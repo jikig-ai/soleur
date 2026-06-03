@@ -149,12 +149,18 @@ describe("writeAskpassScriptTo (item 1b — in-sandbox askpass under workspacePa
       expect(statSync(scriptPath).mode & 0o777).toBe(0o700);
 
       const body = readFileSync(scriptPath, "utf8");
-      // Body byte-identical to the canonical writer (single-sourced).
+      // Body byte-identical to the canonical writer (proves delegation /
+      // single-source).
       expect(body).toBe(readFileSync(refPath, "utf8"));
+      // Real drift guard (RED-capable): assert the load-bearing askpass lines
+      // literally, so a future edit to the printf logic actually fails rather
+      // than passing a same-constant tautology.
+      expect(body).toContain("#!/bin/sh");
+      expect(body).toMatch(/Username\*\).*GIT_USERNAME:-x-access-token/);
+      expect(body).toMatch(/Password\*\).*GIT_INSTALLATION_TOKEN/);
       // The token is read from env at runtime — NEVER interpolated into the
       // file (brand-survival: no token in the helper body).
       expect(body).not.toMatch(/ghs_/);
-      expect(body).toMatch(/GIT_INSTALLATION_TOKEN/);
     } finally {
       cleanupAskpassScript(scriptPath);
       cleanupAskpassScript(refPath);

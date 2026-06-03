@@ -77,15 +77,18 @@ function getAskpassDir(): string {
  * shell escaping is required regardless of token contents and the token never
  * lands on disk.
  *
- * The filename is dot-prefixed (`.askpass-<uuid>.sh`) so that when `dir` is a
- * Concierge user's `workspacePath` (the in-sandbox raw-git credential path,
- * plan item 1) the helper is unobtrusive in the working tree and the
- * randomUUID suffix cannot collide with a repo-tracked path. The server-side
- * `gitWithInstallationAuth` path writes to `$HOME` via `writeAskpassScript()`
- * below, which delegates here so the body stays single-sourced (drift-free).
+ * `filename` defaults to a dot-prefixed `.askpass-<uuid>.sh` (the server-side
+ * `$HOME` path uses this — unique per invocation, never collides). The cc
+ * in-sandbox path passes a FIXED name and writes into the repo's `.git/`
+ * directory so the helper is reused per workspace (no per-dispatch
+ * accumulation, concurrency-safe — the body is identical and token-free) and
+ * can never be staged by `git add` (`.git/` is outside the working tree). The
+ * server-side `gitWithInstallationAuth` path writes to `$HOME` via
+ * `writeAskpassScript()` below, which delegates here so the body stays
+ * single-sourced (drift-free).
  */
-export function writeAskpassScriptTo(dir: string): string {
-  const scriptPath = join(dir, `.askpass-${randomUUID()}.sh`);
+export function writeAskpassScriptTo(dir: string, filename?: string): string {
+  const scriptPath = join(dir, filename ?? `.askpass-${randomUUID()}.sh`);
   writeFileSync(scriptPath, ASKPASS_SCRIPT_BODY, { mode: 0o700 });
   return scriptPath;
 }

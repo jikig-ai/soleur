@@ -10,6 +10,10 @@ import { buildAgentEnv } from "../server/agent-env";
 // `gitWithInstallationAuth` env block in `git-auth.ts` (the canonical
 // precedent) verbatim — no novel credential path.
 //
+// These six are the credential-relevant subset of `gitWithInstallationAuth`'s
+// env block (same names + values); that block's cosmetic `GIT_TERMINAL_PROGRESS`
+// is intentionally omitted for the non-interactive sandbox subprocess.
+//
 // Security invariants pinned here (brand-survival single-user-incident):
 //   - both-or-nothing: a half-wired askpass (path without token, or vice
 //     versa) is a silent auth failure — inject NEITHER unless BOTH present.

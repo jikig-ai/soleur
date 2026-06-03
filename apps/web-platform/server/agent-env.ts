@@ -149,15 +149,22 @@ export function buildAgentEnv(
   }
 
   // In-sandbox raw-git credential path (plan item 1). `GH_TOKEN` authenticates
-  // the `gh` CLI but NOT `git push`/`fetch`/`pull`. These six vars mirror the
-  // server-side `gitWithInstallationAuth` env block in `git-auth.ts` verbatim —
-  // no novel credential path. The token rides `GIT_INSTALLATION_TOKEN` (env)
-  // and is `printf`'d by the fixed askpass script; it is NEVER interpolated
-  // into the script body or a remote URL, and is NEVER logged
-  // (`hr-github-app-auth-not-pat`). BOTH-OR-NOTHING: a half-wired askpass
-  // (path without token, or token without path) is a silent auth failure, so
-  // inject the set only when both inputs are present (empty string counts as
-  // absent — graceful-degradation parity with `GH_TOKEN`).
+  // the `gh` CLI but NOT `git push`/`fetch`/`pull`. These six vars are the
+  // credential-relevant subset of the server-side `gitWithInstallationAuth`
+  // env block in `git-auth.ts` — same names + values, no novel credential
+  // path. We intentionally omit that block's seventh var `GIT_TERMINAL_PROGRESS`
+  // (a cosmetic progress-meter toggle, irrelevant to a non-interactive sandbox
+  // subprocess) and cannot replicate its argv-level `HELPER_RESET`
+  // (`-c credential.helper=`) because the agent builds its own `git` argv;
+  // `GIT_CONFIG_NOSYSTEM`+`GIT_CONFIG_GLOBAL=/dev/null` neutralize system/global
+  // helpers, and the connected repo is freshly cloned with no repo-local
+  // `credential.helper`, so `GIT_ASKPASS` is authoritative. The token rides
+  // `GIT_INSTALLATION_TOKEN` (env) and is `printf`'d by the fixed askpass
+  // script; it is NEVER interpolated into the script body or a remote URL, and
+  // is NEVER logged (`hr-github-app-auth-not-pat`). BOTH-OR-NOTHING: a
+  // half-wired askpass (path without token, or token without path) is a silent
+  // auth failure, so inject the set only when both inputs are present (empty
+  // string counts as absent — graceful-degradation parity with `GH_TOKEN`).
   if (opts?.gitAskpassScriptPath && opts?.gitInstallationToken) {
     env.GIT_ASKPASS = opts.gitAskpassScriptPath;
     env.GIT_USERNAME = "x-access-token";
