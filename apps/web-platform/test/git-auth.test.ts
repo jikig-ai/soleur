@@ -6,7 +6,14 @@
 process.env.HOME = process.env.HOME || "/tmp";
 
 import { describe, test, expect, afterEach, beforeEach, vi } from "vitest";
-import { existsSync, statSync, readFileSync } from "fs";
+import {
+  existsSync,
+  statSync,
+  readFileSync,
+  openSync,
+  fstatSync,
+  closeSync,
+} from "fs";
 import { randomUUID } from "crypto";
 
 type ExecFileCallback = (
@@ -141,20 +148,23 @@ describe("writeAskpassScriptTo (item 1b — in-sandbox askpass under workspacePa
     // A reference body produced by the existing $HOME writer — proves the
     // body is single-sourced (drift-free) between the two writers.
     const refPath = writeAskpassScript();
+    // Open the written file ONCE and stat+read the same file DESCRIPTOR (not
+    // the path). A path-based check→use pair — existsSync(path) or
+    // statSync(path) followed by readFileSync(path) — is a CodeQL
+    // js/file-system-race (TOCTOU) alert, because the path could be swapped
+    // between the two syscalls. fd-based fstatSync + readFileSync(fd) cannot
+    // re-resolve the path, so there is no race window.
+    let fd: number | undefined;
     try {
       expect(scriptPath.startsWith(dir)).toBe(true);
       // dot-prefixed so it is unobtrusive in a working tree.
       expect(scriptPath).toMatch(/\.askpass-.*\.sh$/);
-      // No existsSync(scriptPath) check here: statSync + readFileSync below
-      // both throw if the file is absent, so the existence assertion is
-      // redundant — and a check-then-use pair (existsSync → statSync/
-      // readFileSync on the same path) is a CodeQL js/file-system-race (TOCTOU)
-      // alert. Reading/statting directly is race-free.
-      expect(statSync(scriptPath).mode & 0o777).toBe(0o700);
-
-      const body = readFileSync(scriptPath, "utf8");
+      fd = openSync(scriptPath, "r");
+      expect(fstatSync(fd).mode & 0o777).toBe(0o700);
+      const body = readFileSync(fd, "utf8");
       // Body byte-identical to the canonical writer (proves delegation /
-      // single-source).
+      // single-source). refPath is read with a single fs op (no prior check),
+      // so it is not a TOCTOU pair.
       expect(body).toBe(readFileSync(refPath, "utf8"));
       // Real drift guard (RED-capable): assert the load-bearing askpass lines
       // literally, so a future edit to the printf logic actually fails rather
@@ -166,6 +176,7 @@ describe("writeAskpassScriptTo (item 1b — in-sandbox askpass under workspacePa
       // file (brand-survival: no token in the helper body).
       expect(body).not.toMatch(/ghs_/);
     } finally {
+      if (fd !== undefined) closeSync(fd);
       cleanupAskpassScript(scriptPath);
       cleanupAskpassScript(refPath);
     }
