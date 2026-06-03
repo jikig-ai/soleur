@@ -244,7 +244,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 
 | Skill | Description |
 |-------|-------------|
-| `architecture` | Create and manage Architecture Decision Records and Mermaid C4 diagrams |
+| `architecture` | Create and manage Architecture Decision Records and interactive LikeC4 diagrams |
 | `brainstorm` | Explore requirements and approaches before planning |
 | `competitive-analysis` | Run competitive intelligence scans and market research reports |
 | `deepen-plan` | Enhance plans with parallel research agents |
