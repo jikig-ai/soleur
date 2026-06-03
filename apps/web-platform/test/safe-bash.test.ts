@@ -169,6 +169,46 @@ describe("AC12 — denylists preserved (traversal + metachars)", () => {
   }
 });
 
+describe("review PR #4868 — git arg-pattern hardening", () => {
+  // --output=<file> turns a read verb into an arbitrary-file-write primitive.
+  const outputNegatives = [
+    "git diff --output=/home/jean/.bashrc",
+    "git log --output=/tmp/x HEAD",
+    "git show --output=/tmp/x",
+    "git diff --output /tmp/x", // space-separated form
+  ];
+  for (const cmd of outputNegatives) {
+    test(`rejects file-write flag: ${JSON.stringify(cmd)} === false`, () => {
+      expect(isBashCommandSafe(cmd)).toBe(false);
+    });
+  }
+
+  // Normal read flags still auto-approve (no over-tightening).
+  const readPositives = [
+    "git log --oneline -5",
+    "git log -n 5",
+    "git diff HEAD~1 --stat",
+    "git show HEAD --name-only",
+    "git rev-parse --abbrev-ref HEAD",
+  ];
+  for (const cmd of readPositives) {
+    test(`still allows read flag: ${JSON.stringify(cmd)} === true`, () => {
+      expect(isBashCommandSafe(cmd)).toBe(true);
+    });
+  }
+
+  // ReDoS pin: the prior multi-branch git patterns backtracked ~2^n on a
+  // failing tail. The single-branch form is linear — must return fast.
+  test("no catastrophic backtracking on a long failing git-arg tail", () => {
+    const evil = "git log " + "--aaaa ".repeat(60) + "!";
+    const start = performance.now();
+    const result = isBashCommandSafe(evil);
+    const elapsedMs = performance.now() - start;
+    expect(result).toBe(false); // `!` is outside PATH_TOKEN → no match
+    expect(elapsedMs).toBeLessThan(50);
+  });
+});
+
 describe("regression — single-command behavior unchanged", () => {
   test("pwd still safe", () => expect(isBashCommandSafe("pwd")).toBe(true));
   test("rm -rf still unsafe", () => expect(isBashCommandSafe("rm -rf /")).toBe(false));

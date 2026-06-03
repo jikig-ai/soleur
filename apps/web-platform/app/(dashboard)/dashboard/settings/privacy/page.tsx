@@ -8,7 +8,7 @@
 // confirmation dialog + job list.
 
 import { redirect } from "next/navigation";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import {
   DsarExportJobList,
   type DsarExportJobRow,
@@ -41,8 +41,10 @@ export default async function PrivacyPage() {
   // of the active workspace so non-owners don't see a control they can't use.
   const autonomous = await resolveBashAutonomous(user.id);
   const activeWorkspaceId = await resolveCurrentWorkspaceId(user.id, supabase);
-  const serviceClient = createServiceClient();
-  const { data: membership } = await serviceClient
+  // Cookie (RLS-scoped) client — workspace_members has a members_select_peers
+  // policy, so the caller can read its own membership row without the
+  // RLS-bypassing service-role client (review PR #4868). Scoped to user.id.
+  const { data: membership } = await supabase
     .from("workspace_members")
     .select("role")
     .eq("workspace_id", activeWorkspaceId)

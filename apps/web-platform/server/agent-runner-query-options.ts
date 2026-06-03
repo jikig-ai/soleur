@@ -91,11 +91,13 @@ export interface AgentQueryOptionsArgs {
   allowedTools?: string[];
   /**
    * Per-call disallowedTools extension (#3338). Merged with the canonical
-   * `[WebSearch, WebFetch]` list. The cc path passes `["Bash", "Edit", "Write"]`
-   * here so the model literally cannot emit those tools — `allowedTools` is
-   * auto-approve only per SDK semantics (sdk.d.ts:858-862), so the only way
-   * to actually restrict the model's tool surface is `disallowedTools` (or
-   * the `tools` option). Legacy path leaves this undefined.
+   * `[WebSearch, WebFetch]` list. The cc path passes `["Edit", "Write"]`
+   * (`CC_PATH_DISALLOWED_TOOLS`, cc-dispatcher.ts) so the model cannot emit
+   * those tools — Bash is intentionally NOT disallowed (it flows through the
+   * permission-callback Bash gate / safe-bash / autonomous bypass instead).
+   * `allowedTools` is auto-approve only per SDK semantics (sdk.d.ts:858-862),
+   * so the only way to actually restrict the model's tool surface is
+   * `disallowedTools` (or the `tools` option). Legacy path leaves this undefined.
    */
   extraDisallowedTools?: readonly string[];
   /** Legacy: 50; cc: omitted (cost-cap is enforced at the runner level). */

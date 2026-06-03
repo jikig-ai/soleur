@@ -45,19 +45,38 @@ describe("setBashAutonomous (owner-only RPC write)", () => {
     });
   });
 
-  it("mirrors to Sentry AND throws on RPC error (owner-deny raise / fault)", async () => {
+  it("owner-deny (P0001) throws BashAutonomousOwnerDeniedError (→ route 403)", async () => {
     const { reportSilentFallback } = await import("@/server/observability");
     mockRpc.mockResolvedValue({
       data: null,
-      error: { message: "not authorized: only a workspace owner may set bash_autonomous" },
+      error: {
+        code: "P0001",
+        message: "not authorized: only a workspace owner may set bash_autonomous",
+      },
     });
-    const { setBashAutonomous } = await import("@/server/set-bash-autonomous");
-    await expect(setBashAutonomous("user-1", true, "ws-1")).rejects.toThrow(
-      /failed to set bash_autonomous/i,
+    const { setBashAutonomous, BashAutonomousOwnerDeniedError } = await import(
+      "@/server/set-bash-autonomous"
+    );
+    await expect(setBashAutonomous("user-1", true, "ws-1")).rejects.toBeInstanceOf(
+      BashAutonomousOwnerDeniedError,
     );
     expect(reportSilentFallback).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ feature: "set-bash-autonomous" }),
     );
+  });
+
+  it("infra fault (no P0001) throws a generic error (→ route 500), NOT owner-denied", async () => {
+    mockRpc.mockResolvedValue({
+      data: null,
+      error: { code: "57014", message: "statement timeout" },
+    });
+    const { setBashAutonomous, BashAutonomousOwnerDeniedError } = await import(
+      "@/server/set-bash-autonomous"
+    );
+    const err = await setBashAutonomous("user-1", true, "ws-1").catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(BashAutonomousOwnerDeniedError);
+    expect(String(err.message)).toMatch(/failed to set bash_autonomous/i);
   });
 });

@@ -112,23 +112,22 @@ export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
   new RegExp(String.raw`^which\s+${PATH_TOKEN}\s*$`),
   // uname with optional flags
   /^uname(?:\s+-[a-zA-Z]+)*\s*$/,
-  // git read-only verbs
+  // git read-only verbs. Arg shape is a SINGLE non-overlapping token branch
+  // (`${PATH_TOKEN}` already covers `-flag`, `--flag`, `--flag=value`, paths,
+  // and bare numbers — all within the metachar-free PATH_TOKEN charset). The
+  // prior multi-branch form (`-[a-zA-Z]+ | --[a-zA-Z][\w-]* | PATH_TOKEN`) was
+  // exponentially ambiguous: a `--foo` token matched BOTH the `--flag` branch
+  // and the PATH_TOKEN branch, so a failing tail (e.g. a char outside the
+  // charset) forced ~2^n backtracking — a per-Bash-call ReDoS reachable under
+  // prompt injection (review PR #4868). One branch = linear. The
+  // GIT_OUTPUT_REDIRECT_DENYLIST below rejects `--output=<file>` so this
+  // read-allowlist cannot be turned into an arbitrary-file-write primitive.
   /^git\s+status\s*$/,
-  new RegExp(
-    String.raw`^git\s+log(?:\s+(?:-[a-zA-Z]+|--[a-zA-Z][\w-]*(?:=[\w./~+:=@-]+)?|-n\s+\d+|\d+|${PATH_TOKEN}))*\s*$`,
-  ),
-  new RegExp(
-    String.raw`^git\s+diff(?:\s+(?:-[a-zA-Z]+|--[a-zA-Z][\w-]*(?:=[\w./~+:=@-]+)?|${PATH_TOKEN}))*\s*$`,
-  ),
-  new RegExp(
-    String.raw`^git\s+show(?:\s+(?:-[a-zA-Z]+|--[a-zA-Z][\w-]*(?:=[\w./~+:=@-]+)?|${PATH_TOKEN}))*\s*$`,
-  ),
-  new RegExp(
-    String.raw`^git\s+branch(?:\s+(?:-[a-zA-Z]+|--[a-zA-Z][\w-]*|${PATH_TOKEN}))*\s*$`,
-  ),
-  new RegExp(
-    String.raw`^git\s+rev-parse(?:\s+(?:-[a-zA-Z]+|--[a-zA-Z][\w-]*|${PATH_TOKEN}))*\s*$`,
-  ),
+  new RegExp(String.raw`^git\s+log(?:\s+${PATH_TOKEN})*\s*$`),
+  new RegExp(String.raw`^git\s+diff(?:\s+${PATH_TOKEN})*\s*$`),
+  new RegExp(String.raw`^git\s+show(?:\s+${PATH_TOKEN})*\s*$`),
+  new RegExp(String.raw`^git\s+branch(?:\s+${PATH_TOKEN})*\s*$`),
+  new RegExp(String.raw`^git\s+rev-parse(?:\s+${PATH_TOKEN})*\s*$`),
   // git config --get only (no --set, no --unset, no --add)
   new RegExp(String.raw`^git\s+config\s+--get(?:\s+[\w.-]+)?\s*$`),
   // echo — quoted strings or barewords
@@ -203,6 +202,15 @@ export const SAFE_BASH_NEAR_MISS_PREFIX = new RegExp(
 // remain denied because they survive the strip and hit the denylist.
 const TRAILING_SAFE_REDIRECT = /\s+(?:2>\/dev\/null|2>&1)\s*$/;
 
+// git/gh write-to-file flag denylist (review PR #4868). `git diff|log|show
+// --output=<file>` writes diff content to an arbitrary path — an
+// arbitrary-file-write/truncate primitive that the PATH_TOKEN arg shape would
+// otherwise auto-approve inside a "read-only" allowlist. `--output` is the
+// only file-writing long option reachable by the allowlisted read verbs; the
+// `=`-form and the space-separated form are both rejected. Applied to every
+// segment (no allowlisted command legitimately uses `--output`).
+const FILE_WRITE_FLAG_DENYLIST = /(?:^|\s)--output(?:=|\s|$)/;
+
 /**
  * Is a single command segment (no `&&`) a safe, read-only command?
  *
@@ -222,6 +230,9 @@ function isSafeSingleSegment(segment: string): boolean {
   // per-pattern allowlist so PATH_TOKEN-shape regexes (cd <path>,
   // cat <path>, ls <path>) cannot accept `../` arg shapes.
   if (PATH_TRAVERSAL_DENYLIST.test(candidate)) return false;
+  // Stage 1c: reject the `--output=<file>` write flag before the allowlist
+  // (review PR #4868) so a read verb cannot write/truncate an arbitrary path.
+  if (FILE_WRITE_FLAG_DENYLIST.test(candidate)) return false;
   const trimmed = candidate.trim();
   if (trimmed.length === 0) return false;
   // Stage 2: leading-token allowlist match against trimmed segment.

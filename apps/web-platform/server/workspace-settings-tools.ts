@@ -11,12 +11,22 @@ import { setBashAutonomous } from "./set-bash-autonomous";
 // even for the agent. The owner check lives in the SECURITY DEFINER RPC, so a
 // non-owner agent call raises and surfaces as an error result.
 //
-// ASYMMETRY (documented to prevent a false "missing tool" review flag): these
-// tools register on the LEGACY `agent-runner.ts` platform-tools surface where
-// tool-capable domain-leader agents run. The cc-router (`cc-dispatcher`) wires
-// `platformToolNames: []` by design and exposes NO platform MCP tools, so the
-// pair is intentionally absent there. The cc-router toggles via the HTTP route
-// + UI; these MCP tools are the agent-facing equivalent on the leader surface.
+// SURFACE + KNOWN PARTIAL-PARITY GAP (review PR #4868): these tools register on
+// the LEGACY `agent-runner.ts` platform-tools surface where tool-capable
+// domain-leader agents run. The cc-soleur-go Concierge router (`cc-dispatcher`)
+// wires `platformToolNames: []` and `readCcMcpAllowlist() === {}` (Phase 1) by
+// design, so it exposes NO platform MCP tools — and it is BOTH the live
+// interactive path users converse with AND the sole consumer of the toggle.
+// Net: today a leader agent can read/set the toggle, but the Concierge a user
+// actually talks to cannot yet honor "turn on autonomous mode" via a tool — it
+// must point the user at Settings > Privacy. This is a deliberate,
+// pre-existing cc-router limitation tracked by #3722 (V2-13 Phase 2 — promote
+// MCP tools to the cc-router via CC_MCP_ALLOWLIST); this pair should be
+// included in that promotion (the Tier-3 cross-tenant-credential rationale
+// does NOT apply — these tools are closure-bound to `userId` and owner-gated in
+// the RPC, the same property cited for the kb_share/conversations Tier-1
+// promotion candidates). Until #3722 lands, the HTTP route + UI is the user's
+// path and these tools are the leader-surface agent equivalent.
 
 interface BuildWorkspaceSettingsToolsOpts {
   userId: string;
