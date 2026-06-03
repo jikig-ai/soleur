@@ -27,11 +27,13 @@ const {
   mockCaptureMessage,
   mockLoggerError,
   mockLoggerWarn,
+  mockLoggerInfo,
 } = vi.hoisted(() => ({
   mockCaptureException: vi.fn(),
   mockCaptureMessage: vi.fn(),
   mockLoggerError: vi.fn(),
   mockLoggerWarn: vi.fn(),
+  mockLoggerInfo: vi.fn(),
 }));
 
 vi.mock("@sentry/nextjs", () => ({
@@ -40,12 +42,13 @@ vi.mock("@sentry/nextjs", () => ({
 }));
 
 vi.mock("@/server/logger", () => ({
-  default: { error: mockLoggerError, warn: mockLoggerWarn, info: vi.fn(), debug: vi.fn() },
+  default: { error: mockLoggerError, warn: mockLoggerWarn, info: mockLoggerInfo, debug: vi.fn() },
 }));
 
 import {
   reportSilentFallback,
   warnSilentFallback,
+  infoSilentFallback,
   mirrorP0Deduped,
   hashUserId,
   __resetMirrorP0DedupForTests,
@@ -56,6 +59,7 @@ beforeEach(() => {
   mockCaptureMessage.mockReset();
   mockLoggerError.mockReset();
   mockLoggerWarn.mockReset();
+  mockLoggerInfo.mockReset();
   __resetMirrorP0DedupForTests();
 });
 
@@ -404,6 +408,83 @@ describe("warnSilentFallback — userIdHash pseudonymization", () => {
       op: "acquire-slot",
       pg_code: "55P03",
     });
+  });
+});
+
+describe("infoSilentFallback — every-run info-level emit (#4897)", () => {
+  it("emits captureMessage(level=info) on the null-err path with tags + extra", () => {
+    infoSilentFallback(null, {
+      feature: "cron-workspace-gc",
+      op: "workspace-gc-sweep-complete",
+      message: "workspace GC sweep complete",
+      extra: { fn: "cron-workspace-gc", root: "/workspaces", freedMb: 100, sweptCount: 1 },
+    });
+
+    expect(mockCaptureMessage).toHaveBeenCalledTimes(1);
+    const [msg, payload] = mockCaptureMessage.mock.calls[0];
+    expect(msg).toBe("workspace GC sweep complete");
+    expect(payload.level).toBe("info");
+    expect(payload.tags).toEqual({
+      feature: "cron-workspace-gc",
+      op: "workspace-gc-sweep-complete",
+    });
+    expect(payload.extra).toMatchObject({
+      fn: "cron-workspace-gc",
+      root: "/workspaces",
+      freedMb: 100,
+      sweptCount: 1,
+    });
+
+    // pino mirror is preserved inside the helper (no stdout signal lost).
+    expect(mockLoggerInfo).toHaveBeenCalledTimes(1);
+    const [pinoCtx, pinoMsg] = mockLoggerInfo.mock.calls[0];
+    expect(pinoMsg).toBe("workspace GC sweep complete");
+    expect(pinoCtx).toMatchObject({
+      feature: "cron-workspace-gc",
+      op: "workspace-gc-sweep-complete",
+      freedMb: 100,
+      sweptCount: 1,
+    });
+  });
+
+  it("never emits at warning/error level (info channel stays separable for on-call)", () => {
+    infoSilentFallback(null, {
+      feature: "cron-workspace-gc",
+      extra: { freedMb: 0 },
+    });
+
+    expect(mockCaptureException).not.toHaveBeenCalled();
+    const [, payload] = mockCaptureMessage.mock.calls[0];
+    expect(payload.level).toBe("info");
+    expect(mockLoggerWarn).not.toHaveBeenCalled();
+    expect(mockLoggerError).not.toHaveBeenCalled();
+  });
+
+  it("routes userId → userIdHash through the same hashExtraUserId boundary", () => {
+    infoSilentFallback(null, {
+      feature: "some-feature",
+      extra: { userId: "u9", count: 3 },
+    });
+
+    const [, payload] = mockCaptureMessage.mock.calls[0];
+    expect(payload.extra.userIdHash).toBe(expectedHashFor("u9"));
+    expect(payload.extra).not.toHaveProperty("userId");
+    expect(payload.extra).toMatchObject({ count: 3 });
+
+    const [pinoCtx] = mockLoggerInfo.mock.calls[0];
+    expect(pinoCtx).not.toHaveProperty("userId");
+    expect(pinoCtx.userIdHash).toBe(expectedHashFor("u9"));
+  });
+
+  it("supports the Error → captureException(level=info) symmetry path", () => {
+    const err = new Error("non-fatal context");
+    infoSilentFallback(err, { feature: "f", op: "o" });
+
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+    const [errArg, payload] = mockCaptureException.mock.calls[0];
+    expect(errArg).toBe(err);
+    expect(payload.level).toBe("info");
+    expect(payload.tags).toEqual({ feature: "f", op: "o" });
   });
 });
 
