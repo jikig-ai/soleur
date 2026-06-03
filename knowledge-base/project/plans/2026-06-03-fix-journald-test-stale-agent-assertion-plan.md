@@ -11,6 +11,33 @@ requires_cpo_signoff: false
 
 # 🐛 fix(infra): narrow stale `agent = true` assertion in `journald-config.test.sh` (+ sibling `infra-config-handler-bootstrap.test.sh`)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-03
+**Sections enhanced:** Overview (sibling finding), Research Insights (added), Hypotheses, User-Brand Impact (scope-out form), Open Code-Review Overlap
+
+### Key Improvements
+1. **Empirically proved the narrowed regex** matches the real config line in
+   both blocks and cannot false-match the `server.tf:381` comment — the
+   single load-bearing correctness check for the fix.
+2. **Sibling-query audit** surfaced a second stale assertion
+   (`infra-config-handler-bootstrap.test.sh:86-87`) that false-passes via a
+   comment substring match; both tests are now in scope (do not ship journald
+   alone).
+3. **Halt gates cleared:** User-Brand Impact (4.6, threshold `none` with
+   sensitive-path scope-out bullet — `apps/*/infra/` matches the regex),
+   Observability (4.7, justified skip — test-only), PAT-shaped (4.8, no
+   matches), UI-wireframe (4.9, no UI surface), Network-Outage (4.5, offline
+   job → no firewall remediation; telemetry emitted).
+
+### New Considerations Discovered
+- The triage is unambiguously the **stale-assertion** branch: `server.tf` is
+  correct (8 dual-context blocks; the only literal `agent = true` is comment
+  prose). No server.tf edit is warranted (AC8).
+- The two tests fail/false-pass for *different mechanical reasons* (journald
+  block has no comment → honest FAIL; bootstrap block has the dual-context
+  comment → accidental PASS), both fixed by the same narrowing.
+
 ## Overview
 
 `apps/web-platform/infra/journald-config.test.sh` AC4 asserts the SSH `connection`
@@ -121,10 +148,15 @@ regression.
 data path, no secret, no runtime code. The tests are static grep/awk over
 committed `.tf`/`.conf`/`.yml`; no credentials are read.
 
-**Brand-survival threshold:** `none`. (Diff touches no sensitive path —
-edits are confined to two `apps/web-platform/infra/*.test.sh` assertion
-strings; reason recorded for preflight Check 6: test-only assertion
-narrowing, no schema/auth/API/secret surface.)
+**Brand-survival threshold:** `none`.
+
+`threshold: none, reason: the two Files-to-Edit paths match the sensitive-path
+regex via apps/[^/]+/infra/, but the edits are test-only assertion-string
+narrowing in offline drift-guard .test.sh files — no schema, auth, API route,
+secret, runtime code, or .tf config is touched (server.tf is explicitly NOT
+modified per AC8), so there is no data/credential/money exposure surface.`
+(Scope-out bullet required because `apps/web-platform/infra/` is a
+sensitive-path prefix; recorded here for preflight Check 6.)
 
 ## Acceptance Criteria
 
@@ -213,6 +245,41 @@ to document why no network remediation is warranted:
 
 **Conclusion:** the failure is L8 (test-assertion), above all network
 layers. No L3–L7 remediation applies; the fix is to narrow the assertion.
+
+## Research Insights (deepen-plan, 2026-06-03)
+
+**Narrowed-regex behavior empirically proven** (the load-bearing correctness
+check). Extracting each block and applying both the OLD literal regex and the
+proposed narrowed regex:
+
+```
+# Bootstrap block (server.tf ~370-399):
+narrowed 'agent…=…var.ci_ssh_private_key' → line 30: "agent = var.ci_ssh_private_key == null …"  (REAL config ✓)
+old      'agent…=…true'                    → line 12: "#  … so agent = true uses the operator's …"  (COMMENT — false-pass ✗)
+
+# Journald block (server.tf ~226-235):
+narrowed 'agent…=…var.ci_ssh_private_key' → line 9:  "agent = var.ci_ssh_private_key == null …"  (REAL config ✓)
+old      'agent…=…true'                    → (no match)                                         (honest FAIL today ✓)
+```
+
+Conclusions confirmed by execution:
+- The narrowed regex matches the **real config line** in BOTH blocks and
+  matches nothing else — so both tests pass for the right reason post-fix.
+- The narrowed regex **cannot** match the `server.tf:381` comment (which reads
+  `agent = true`, not `agent = var…`), closing the false-pass hole.
+- The OLD regex is empty in the journald block (proving today's honest
+  failure) and matches only the comment in the bootstrap block (proving
+  today's accidental pass). The two failure modes are now explained by
+  evidence, not inference.
+
+**Network-Outage Deep-Dive (Phase 4.5).** Gate fired (`connection { type =
+"ssh" }` + provisioners in the referenced `server.tf`; keywords SSH/agent/
+connection). Per `hr-ssh-diagnosis-verify-firewall`, the L3→L7 ordering is
+satisfied in `## Hypotheses` with an explicit artifact: **the failing job is
+offline** (`infra-validation.yml:6` — "Offline jobs … require no secrets"),
+so no host is contacted and no firewall/egress-IP check can change a
+static-grep result. The connection blocks are correct and **not modified**;
+there is no live SSH path to remediate. Telemetry emitted.
 
 ## Files to Edit
 
