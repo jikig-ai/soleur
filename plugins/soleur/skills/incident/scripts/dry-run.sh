@@ -43,10 +43,49 @@ categories=$(jq -r '.art_33.data_categories_breached | join(",")' "${FIXTURE}")
 triggers_csv=$(jq -r '.triggers | join(",")' "${FIXTURE}")
 status_in=$(jq -r '.status' "${FIXTURE}")
 
+# New operator-supplied fields (merged-template shape). Defaults mirror SKILL.md Phase 0.
+recovery_at=$(jq -r '.recovery_at // ""' "${FIXTURE}")
+monitoring_detected_at=$(jq -r '.monitoring_detected_at // ""' "${FIXTURE}")
+detection_method=$(jq -r '.detection_method // "manual"' "${FIXTURE}")
+triggered_by=$(jq -r '.triggered_by // "system"' "${FIXTURE}")
+incident_overview=$(jq -r '.incident_overview // "TBD"' "${FIXTURE}")
+resolution=$(jq -r '.resolution // "TBD"' "${FIXTURE}")
+participants=$(jq -r '.participants // "Operator (single founder)"' "${FIXTURE}")
+version_triggered=$(jq -r '.version_triggered // "TBD"' "${FIXTURE}")
+version_restored=$(jq -r '.version_restored // "N/A — not yet restored"' "${FIXTURE}")
+services_impacted=$(jq -r '.services_impacted // "TBD"' "${FIXTURE}")
+revenue_impact=$(jq -r '.revenue_impact // "Unknown / N/A"' "${FIXTURE}")
+team_impact=$(jq -r '.team_impact // "Unknown / N/A"' "${FIXTURE}")
+
 # --- LLM-trust boundary validation (FR7) ---
 if ! [[ "${detected_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
   echo "dry-run: detected_at fails ISO-8601 regex: ${detected_at}" >&2
   exit 2
+fi
+# recovery_at / monitoring_detected_at are OPTIONAL but, when present, MUST match the
+# same regex before any duration arithmetic (FR7 — never trust an LLM-emitted duration).
+ISO_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+if [[ -n "${recovery_at}" ]] && ! [[ "${recovery_at}" =~ ${ISO_RE} ]]; then
+  echo "dry-run: recovery_at fails ISO-8601 regex: ${recovery_at}" >&2
+  exit 2
+fi
+if [[ -n "${monitoring_detected_at}" ]] && ! [[ "${monitoring_detected_at}" =~ ${ISO_RE} ]]; then
+  echo "dry-run: monitoring_detected_at fails ISO-8601 regex: ${monitoring_detected_at}" >&2
+  exit 2
+fi
+
+# --- MTTR / MTTD local computation (FR7 — never an LLM-emitted duration) ---
+if [[ -n "${recovery_at}" ]]; then
+  mttr_secs=$(( $(date -u -d "${recovery_at}" +%s) - $(date -u -d "${detected_at}" +%s) ))
+  MTTR=$(printf '%dh%dm' $(( mttr_secs / 3600 )) $(( (mttr_secs % 3600) / 60 )))
+else
+  MTTR="TBD (status not resolved)"
+fi
+if [[ "${detection_method}" == "monitoring" && -n "${monitoring_detected_at}" ]]; then
+  mttd_secs=$(( $(date -u -d "${monitoring_detected_at}" +%s) - $(date -u -d "${detected_at}" +%s) ))
+  MTTD=$(printf '%dh%dm' $(( mttd_secs / 3600 )) $(( (mttd_secs % 3600) / 60 )))
+else
+  MTTD="Unknown (external/manual report)"
 fi
 
 # Local slug computation (never accept slug from LLM).
@@ -175,7 +214,8 @@ today=$(date -u +%Y-%m-%d)
 title: "${title}"
 date: ${today}
 incident_pr: ${incident_pr}
-incident_window: "${detected_at} → TBD"
+incident_window: "${detected_at} → ${recovery_at:-TBD}"
+recovery_at: "${recovery_at:-TBD}"
 suspected_change: "${suspected_change}"
 brand_survival_threshold: ${threshold_in}
 status: open
@@ -194,31 +234,75 @@ art_33_deadline: "${art_33_deadline}"
 
 ${secret_leak_preamble}
 
+# Incident Overview
+
+${incident_overview}
+
+## Status
+
+open — one of resolved / unresolved but ended / ongoing. Mirrors the status: frontmatter.
+
 ## Symptom
 
 ${symptom}
 
-## Root-cause hypothesis
+## Incident Timeline
 
-| Hypothesis | Supporting evidence | Disconfirming evidence | Status |
-|---|---|---|---|
-| TBD | TBD | TBD | TBD |
-
-## Timeline
+- Start time (detected): ${detected_at}
+- End time (recovered): ${recovery_at:-TBD}
+- Duration (MTTR): ${MTTR}
 
 | Actor | Time (UTC) | Action |
 |---|---|---|
 | human | ${detected_at} | Incident detected. |
 
+## Participants and Systems Involved
+
+${participants}
+
+## Detection (+ MTTD)
+
+- How detected: ${detection_method} — monitoring system vs. external/manual report.
+- MTTD (mean time to detect): ${MTTD}
+
+## Triggered by
+
+${triggered_by} — one of user / system / market movement / provider.
+
+## Root-cause hypothesis (triage)
+
+| Hypothesis | Supporting evidence | Disconfirming evidence | Status |
+|---|---|---|---|
+| TBD | TBD | TBD | TBD |
+
+## Resolution
+
+${resolution}
+
 ## Recovery verification
 
 TBD.
 
-## Follow-ups
+---
 
-- [ ] TBD
+# Incident Post-Mortem Analysis
 
-## Who was affected (by role)
+## Root Cause(s) — 5-Whys
+
+TBD
+
+## Versions of Components
+
+- Version(s) that triggered the outage: ${version_triggered}
+- Version(s) that restored the service: ${version_restored}
+
+## Impact details
+
+### Services Impacted
+
+${services_impacted}
+
+### Customer Impact (by role)
 
 - Prospect: TBD
 - Authenticated app user: TBD
@@ -226,6 +310,36 @@ TBD.
 - Admin via Access: TBD
 - Billing customer: TBD
 - OAuth installation owner: TBD
+
+### Revenue Impact
+
+${revenue_impact}
+
+### Team Impact
+
+${team_impact}
+
+## Lessons Learned
+
+### Where we got lucky
+
+TBD
+
+### What went well
+
+TBD
+
+### What went wrong
+
+TBD
+
+## Follow-ups
+
+- [ ] TBD
+
+## Action Items
+
+TBD — file as GitHub issues
 EOF
 } > "${draft_file}"
 
@@ -245,7 +359,10 @@ echo "=== Phase 6: redaction sentinel (pre-inline-emit) ==="
 # log fragments in symptom/suspected_change would otherwise reach the Phase 4
 # draft via sed-substitution without an earlier scan in dry-run/headless mode.
 input_check=$(mktemp)
-printf '%s\n%s\n%s\n' "${symptom}" "${suspected_change}" "${title}" > "${input_check}"
+printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+  "${symptom}" "${suspected_change}" "${title}" \
+  "${incident_overview}" "${participants}" "${resolution}" \
+  "${services_impacted}" "${revenue_impact}" "${team_impact}" > "${input_check}"
 if ! bash "${SENTINEL}" "${input_check}" >"${sentinel_out}" 2>&1; then
   echo "sentinel: FAIL on operator-supplied fields (symptom/suspected_change/title)"
   cat "${sentinel_out}"
@@ -279,7 +396,7 @@ echo "    input 'yes'        → REJECTED. Type exactly: COMMIT-PIR"
 echo "    input 'y'          → REJECTED. Type exactly: COMMIT-PIR"
 echo "    input 'ok'         → REJECTED. Type exactly: COMMIT-PIR"
 echo "    input 'approved'   → REJECTED. Type exactly: COMMIT-PIR"
-echo "    input 'COMMIT-PIR' → would write knowledge-base/engineering/ops/runbooks/${slug}-postmortem.md"
+echo "    input 'COMMIT-PIR' → would write knowledge-base/engineering/ops/post-mortems/${slug}-postmortem.md"
 echo
 
 # --- Phase 8: status: resolved gate + compound-capture handoff (AC13) ---
