@@ -241,7 +241,8 @@ const COMPOUND_COMMANDS: readonly string[] = [
   "pwd\nls",
   "pwd\rls",
   "echo ${HOME}",
-  "ls 2>&1",
+  // NOTE: `ls 2>&1` moved to the positive set — the AC10 trailing-stderr-
+  // redirect carve-out (safe-bash.test.ts) now auto-approves it.
   "ls >& out",
   "cat foo || echo bad",
   // Bash expands $VAR inside double quotes; safe-bash must reject.
