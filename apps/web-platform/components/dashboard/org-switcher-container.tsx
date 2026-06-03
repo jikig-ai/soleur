@@ -129,7 +129,9 @@ export function OrgSwitcherContainer() {
     // No horizontal padding here — the WorkspaceContextBand identity row already
     // supplies px-3. A nested px-3 here double-padded the pill (#4810 follow-up
     // Bug 1: the bordered switch box painted past the rail's right edge).
-    <div className="border-b border-soleur-border-default py-3">
+    // Phase 2 (#4915): D4 borderless — the outer wrapper sheds its border-b;
+    // grouping is conveyed by spacing/elevation, not a hard divider.
+    <div className="py-3">
       <OrgSwitcher
         memberships={memberships}
         onSwitch={handleSelect}

@@ -109,7 +109,7 @@ export function OrgSwitcher({
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full min-w-0 items-center gap-2 rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-1.5 text-left hover:bg-soleur-bg-surface-2"
+        className="flex w-full min-w-0 items-center gap-2 rounded-md px-3 py-1.5 text-left hover:bg-soleur-bg-surface-2"
       >
         <WorkspaceIdentityTile name={current.organizationName} size="sm" />
         <span className="min-w-0">
@@ -131,7 +131,7 @@ export function OrgSwitcher({
       {open && (
         <div
           role="menu"
-          className="absolute left-0 top-full z-50 mt-2 w-80 max-w-[calc(100vw-1.5rem)] rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 py-2 shadow-xl"
+          className="absolute left-0 top-full z-50 mt-2 w-80 max-w-[calc(100vw-1.5rem)] rounded-md bg-soleur-bg-surface-1 py-2 shadow-xl ring-1 ring-soleur-border-default/40"
         >
           <div className="px-4 pb-2 text-xs font-medium uppercase tracking-wider text-soleur-text-muted">
             Your workspaces

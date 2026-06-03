@@ -285,16 +285,10 @@ export default function DashboardLayout({
             "Back to menu" affordance below it (#4810 follow-up Bug 2: the two
             were at px-5 vs px-3 and read as misaligned). */}
         <div className={`flex items-center justify-between safe-top ${collapsed ? "px-2 py-5" : "px-3 py-5"}`}>
-          {/* #4810 Bug 1: the wordmark is top-level chrome — render it ONLY when
-              not drilled (render-conditional, NOT a CSS hide; jsdom asserts DOM
-              presence). Gated individually so the sibling close button + collapse
-              chevron in this row survive in drilled states. Composes with the
-              existing collapsed `md:hidden` (hide-on-collapse within the top level). */}
-          {drill === null && (
-            <span className={`text-lg font-semibold tracking-tight text-soleur-text-primary overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>
-              Soleur
-            </span>
-          )}
+          {/* Phase 2 (#4915): the global "Soleur" wordmark is removed entirely —
+              the workspace identity band is the sole orientation anchor now. Only
+              the close (mobile) + collapse (desktop) controls remain in this row;
+              `justify-between` keeps the collapse toggle pinned to the rail edge. */}
           <button
             onClick={() => setDrawerOpen(false)}
             aria-label="Close navigation"

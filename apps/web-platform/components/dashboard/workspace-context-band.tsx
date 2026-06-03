@@ -83,7 +83,7 @@ export function WorkspaceContextBand({
         data-testid="workspace-context-band"
         data-variant="rail"
         data-collapsed="true"
-        className="flex flex-col items-center gap-3 border-b border-soleur-border-default px-2 py-3"
+        className="flex flex-col items-center gap-3 px-2 py-3"
       >
         {drill ? (
           <Link
@@ -175,7 +175,7 @@ export function WorkspaceContextBand({
       {drill && (
         <div
           data-testid="nav-section-title"
-          className="flex items-center gap-2 border-b border-soleur-border-default px-3 pb-3 text-sm font-medium text-soleur-text-primary"
+          className="flex items-center gap-2 px-3 pb-3 text-sm font-medium text-soleur-text-primary"
         >
           {SECTION_LABELS[drill]}
         </div>

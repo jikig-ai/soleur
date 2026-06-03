@@ -23,12 +23,12 @@ deferred: [4916, 4917]
 - [x] 1.6 Verify `nav-single-mount.test.ts` still green (tile imports neither container nor badge)
 
 ## Phase 2 — Borderless de-box + wordmark removal + solo/multi affordance
-- [ ] 2.1 De-box switcher trigger (`org-switcher.tsx:114,139,154`), outer container wrapper (`org-switcher-container.tsx:132`), band shell (`workspace-context-band.tsx:79,169`) → surface-1 elevation
-- [ ] 2.2 Do NOT touch confirm dialog border (`org-switcher-container.tsx:144`) or button handlers (:154-167,187-201); retain confirm/retry gold (:157,190)
-- [ ] 2.3 Solo = flat (no caret); multi = caret + pressable; keep `workspace-identity-static` testid/text
-- [ ] 2.4 Remove `<span>Soleur</span>` (`app/(dashboard)/layout.tsx:288-292`), keep flex row + sibling buttons, stays render-conditional (`drill === null`)
-- [ ] 2.5 Update wordmark tests: `nav-rail-drill.test.tsx:94/133`; `nav-states-shell.e2e.ts:369/391/479` (don't touch `"Soleur Workspace"` assertions)
-- [ ] 2.6 Preserve width-clamp classes (`w-full min-w-0`, `shrink-0`) + padding ownership
+- [x] 2.1 De-box switcher trigger (`org-switcher.tsx:114,139,154`), outer container wrapper (`org-switcher-container.tsx:132`), band shell (`workspace-context-band.tsx:79,169`) → surface-1 elevation
+- [x] 2.2 Do NOT touch confirm dialog border (`org-switcher-container.tsx:144`) or button handlers (:154-167,187-201); retain confirm/retry gold (:157,190)
+- [x] 2.3 Solo = flat (no caret); multi = caret + pressable; keep `workspace-identity-static` testid/text
+- [x] 2.4 Remove `<span>Soleur</span>` (`app/(dashboard)/layout.tsx:288-292`), keep flex row + sibling buttons, stays render-conditional (`drill === null`)
+- [x] 2.5 Update wordmark tests: `nav-rail-drill.test.tsx:94/133`; `nav-states-shell.e2e.ts:369/391/479` (don't touch `"Soleur Workspace"` assertions)
+- [x] 2.6 Preserve width-clamp classes (`w-full min-w-0`, `shrink-0`) + padding ownership
 
 ## Phase 3 — Suppress duplicate back in doc view
 - [ ] 3.1 Suppress band "Back to menu" in mobile doc view via explicit prop from `(dashboard)/layout.tsx` OR mobile-placement scoping — NO parallel pathname check in band (ADR-047 AC4c)

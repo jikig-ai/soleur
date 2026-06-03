@@ -120,3 +120,25 @@ describe("org-switcher width clamp (Bug 1)", () => {
     expect(chip.className).toContain("min-w-0");
   });
 });
+
+// Phase 2 (#4915): D4 borderless de-box. The switcher trigger sheds its hard
+// border (grouping conveyed via spacing/hover elevation), while the width-clamp
+// classes (Bug 1 guard) and the multi-org caret affordance are preserved.
+describe("org-switcher D4 borderless de-box (Phase 2)", () => {
+  it("multi-org trigger is borderless (no border-soleur-border-default) but keeps the caret + width clamp", () => {
+    render(<OrgSwitcher memberships={[SOLO, TEAMMATE]} />);
+    const button = screen.getByRole("button", { name: /switch workspace/i });
+    expect(button.className).not.toContain("border-soleur-border-default");
+    // affordance + overflow guards survive the de-box
+    expect(within(button).getByText("▾")).toBeInTheDocument();
+    expect(button.className).toContain("w-full");
+    expect(button.className).toContain("min-w-0");
+  });
+
+  it("solo identity chip stays flat — no caret, no hard border (visibly non-interactive)", () => {
+    render(<OrgSwitcher memberships={[SOLO]} />);
+    const chip = screen.getByTestId("workspace-identity-static");
+    expect(chip.className).not.toContain("border-soleur-border-default");
+    expect(within(chip).queryByText("▾")).toBeNull();
+  });
+});

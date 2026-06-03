@@ -365,9 +365,10 @@ test.describe("nav-states visual gate — desktop", () => {
     await setupNavMocks(page);
     await gotoOrSkip(page, "/dashboard");
 
-    // Top-level chrome IS shown at the top level.
-    await expect(wordmark(page)).toBeVisible({ timeout: 15_000 });
-    await expect(primaryNav(page)).toBeVisible();
+    // Phase 2 (#4915): the "Soleur" wordmark is removed everywhere — the primary
+    // nav + identity band are the top-level chrome now; the wordmark must be absent.
+    await expect(primaryNav(page)).toBeVisible({ timeout: 15_000 });
+    await expect(wordmark(page)).toHaveCount(0);
     await expect(secondarySlot(page)).toHaveCount(0);
 
     // Identity CONTENT (not just band box) is visible. Generous timeout — the

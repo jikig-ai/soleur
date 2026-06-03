@@ -89,9 +89,10 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
       screen.getByRole("link", { name: "Knowledge Base" }),
     ).toBeInTheDocument();
     expect(screen.queryByTestId("rail-secondary-slot")).not.toBeInTheDocument();
-    // Top-level chrome IS present at the top level (complements the drilled
-    // absence assertion below — the Bug 1 fix must not hide it everywhere).
-    expect(screen.getByText("Soleur")).toBeInTheDocument();
+    // Phase 2 (#4915): the global "Soleur" wordmark is REMOVED entirely — the
+    // workspace identity band is the sole orientation anchor now, so the
+    // wordmark must be absent even at the top level (D4 borderless direction).
+    expect(screen.queryByText("Soleur")).not.toBeInTheDocument();
   });
 
   it("KEEPS the primary nav on /dashboard/admin/analytics (allowlist, RQ6)", () => {
@@ -127,9 +128,9 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
       ).not.toBeInTheDocument();
 
       // Bug 1 (DOM-presence half, jsdom-catchable): top-level chrome — the
-      // `Soleur` wordmark, the ThemeToggle, and the footer (Sign out) — must
-      // NOT be in the drilled DOM. They render OUTSIDE the drill swap on the
-      // buggy code (RED); the render-conditional fix removes them (GREEN).
+      // ThemeToggle and the footer (Sign out) — must NOT be in the drilled DOM
+      // (they render inside the `drill === null` swap). The "Soleur" wordmark is
+      // removed entirely in Phase 2 (#4915), so it is absent in every state.
       expect(screen.queryByText("Soleur")).not.toBeInTheDocument();
       expect(
         screen.queryByRole("group", { name: "Theme" }),
