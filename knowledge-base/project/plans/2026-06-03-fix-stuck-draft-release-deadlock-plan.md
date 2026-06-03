@@ -116,32 +116,32 @@ test, with no user-data or money surface.
 
 ### Pre-merge (PR)
 
-- [ ] AC1 -- Idempotency treats draft as not-done. The `Check idempotency` step
+- [x] AC1 -- Idempotency treats draft as not-done. The `Check idempotency` step
   in `reusable-release.yml` sets `exists=true` only when the existing release
   is published. Verification: the step shells `gh release view "$TAG" --json isDraft`
   and gates on the parsed value being `false`; a non-existent release OR an
   existing draft both yield `exists=false`. Grep:
   `grep -n 'isDraft' .github/workflows/reusable-release.yml` returns >=1 line inside
   the idempotency step.
-- [ ] AC2 -- Orphaned-draft re-publish self-heal. When the idempotency step
+- [x] AC2 -- Orphaned-draft re-publish self-heal. When the idempotency step
   finds an existing draft (not published), a downstream path re-publishes it so
   a transient prior-run failure self-heals. Verification: the Finalise step (or an
   equivalent publish step) runs when EITHER `create_release.released == 'true'` OR
   the idempotency step recorded `draft_exists == 'true'`. Grep the Finalise `if:`
   for the disjunction.
-- [ ] AC3 -- Immutable-release flow preserved. The `Create GitHub Release` step
+- [x] AC3 -- Immutable-release flow preserved. The `Create GitHub Release` step
   still passes `--draft`; the `--draft`-rationale comment block (citing the prior
   closed PR for the immutable-upload 422) is unchanged. Verification:
   `grep -c -- '--draft' .github/workflows/reusable-release.yml` is unchanged on the
   create step; the comment lines L282-288 are byte-identical pre/post (diff shows no
   deletion in that block).
-- [ ] AC4 -- `released` output stays truthful. The job's `released` output is
+- [x] AC4 -- `released` output stays truthful. The job's `released` output is
   `true` exactly when a new tag will be persisted this run -- i.e. when a new draft
   was created OR an existing orphaned draft is (re-)published this run. A run that
   finds an already-published release still outputs `released=false` (no new tag).
   Verification: trace the `steps.create_release.outputs.released` / new output wiring
   in the test across the three scenarios.
-- [ ] AC5 -- Workflow unit test passes. A new
+- [x] AC5 -- Workflow unit test passes. A new
   `plugins/soleur/test/reusable-release-idempotency.test.sh` is auto-discovered by
   the `scripts` shard glob (`plugins/soleur/test/*.test.sh` in
   `scripts/test-all.sh:176`) and passes via
@@ -150,11 +150,11 @@ test, with no user-data or money surface.
   with three scenarios (no release / published release / orphaned draft) -- see Test
   Scenarios. The test removes the LLM and the live GitHub API from the assertion
   path (deterministic `gh` stub).
-- [ ] AC6 -- No regression to plugin/telegram lanes. The idempotency/finalise
+- [x] AC6 -- No regression to plugin/telegram lanes. The idempotency/finalise
   logic is prefix-agnostic (operates on `$TAG` only). The test runs all three
   scenarios against a representative tag for each lane to prove no
   `web-v`-specific assumption leaked in.
-- [ ] AC7 -- actionlint clean. `reusable-release.yml` passes `actionlint`
+- [x] AC7 -- actionlint clean. `reusable-release.yml` passes `actionlint`
   (workflow schema), and every edited embedded `run:` snippet passes
   `bash -c '<extracted snippet>'` syntax check (never `bash -n` on the `.yml`).
 
