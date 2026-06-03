@@ -130,36 +130,45 @@ across the cron cohort. (No `single-user incident` exposure; no `requires_cpo_si
 
 ### Pre-merge (PR)
 
-- [ ] AC1 — `CLAUDE_CODE_FLAGS` in `cron-community-monitor.ts` sets `--max-turns` to the
+- [x] AC1 — `CLAUDE_CODE_FLAGS` in `cron-community-monitor.ts` sets `--max-turns` to the
   new value (proposed **80**, matching the proven-healthy daily-triage budget). Verify:
   `grep -A1 '"--max-turns"' apps/web-platform/server/inngest/functions/cron-community-monitor.ts`
-  shows the new literal.
-- [ ] AC2 — The header-comment turn-budget rationale (line ~35 `--max-turns 50 (was 40)`)
+  shows the new literal. ✓ `"--max-turns", "80"`.
+- [x] AC2 — The header-comment turn-budget rationale (line ~35 `--max-turns 50 (was 40)`)
   is updated to the new value WITH a one-line rationale citing the max-turns learning and
-  the daily-triage comparator. (Stale header comments are a documented drift surface.)
-- [ ] AC3 — The prompt's data-collection step is restructured to spend fewer turns:
+  the daily-triage comparator. (Stale header comments are a documented drift surface.) ✓
+  SHAPE DIFF comment + a dedicated turn-budget block on `MAX_TURN_DURATION_MS`.
+- [x] AC3 — The prompt's data-collection step is restructured to spend fewer turns:
   the GitHub batch (step 2 Batch 2) and the Discord/X/Bluesky batch (Batch 1) each remain
   a single Bash call; the issue-create + DEDUP-check are positioned to survive a tight
   budget. (Decision in Phase 2 below — minimal prompt edit, preserving the verbatim-anchor
-  test contract.)
-- [ ] AC4 — `MAX_TURN_DURATION_MS` review: confirm 50-min wall-clock is still adequate for
+  test contract.) **Resolved via the conservative default: NO prompt edit.** The existing
+  batching directives already collapse the 7-platform collection into 2 Bash calls; the
+  budget bump (60% more headroom, daily-triage parity) is the confirmed lever. A prompt
+  reorder is a behavior change validatable only at the post-merge AC9 live run, so it is
+  deferred to AC9's evidence — if 80 turns still exhaust, the prompt-efficiency lever
+  re-opens with fresh stdoutTail data.
+- [x] AC4 — `MAX_TURN_DURATION_MS` review: confirm 50-min wall-clock is still adequate for
   80 turns (ratio 0.625 min/turn, within the 0.55–1.2 peer band per the max-turns
   learning). Document the ratio in the header comment. If the new turn count would need
   more wall-clock, bump `MAX_TURN_DURATION_MS` in lockstep (the documented silent-failure
   pairing). **Note:** `MAX_TURN_DURATION_MS` is also exported and asserted by
   `cron-community-monitor.test.ts` (`expect(MAX_TURN_DURATION_MS).toBe(50 * 60 * 1000)`) —
-  if changed, update that assertion too.
-- [ ] AC5 — `cron-community-monitor.test.ts` passes (run the package's actual runner —
+  if changed, update that assertion too. ✓ Ratio 0.625 min/turn (in-band); kept 50 min, so
+  the test assertion is untouched. Ratio documented in the new header block.
+- [x] AC5 — `cron-community-monitor.test.ts` passes (run the package's actual runner —
   `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-community-monitor.test.ts`).
   The prompt verbatim-anchor assertions (`SUT_SOURCE.toContain(...)`) MUST still pass. There
   are **27 anchored substrings** across two `it.each` blocks (enumerated in Research Insights
   below). The Phase 1 `--max-turns` bump touches NONE of them (no anchor pins the turn value).
   Any Phase 2 prompt edit MUST either avoid all 27 anchored substrings or update the matching
-  anchor in lockstep in the same commit.
-- [ ] AC6 — `tsc --noEmit` clean for `apps/web-platform`.
-- [ ] AC7 — The output-aware heartbeat (`resolveOutputAwareOk`) and the `artifact-required`
+  anchor in lockstep in the same commit. ✓ 60/60 pass (added 1 turn-budget RED→GREEN guard);
+  full inngest + sweep suites 1383/1383.
+- [x] AC6 — `tsc --noEmit` clean for `apps/web-platform`. ✓
+- [x] AC7 — The output-aware heartbeat (`resolveOutputAwareOk`) and the `artifact-required`
   semantics are UNCHANGED. `SUT_SOURCE.not.toContain("ok: spawnResult.ok")` and
-  `toContain("resolveOutputAwareOk(")` still hold (the `#4730` test block).
+  `toContain("resolveOutputAwareOk(")` still hold (the `#4730` test block). ✓ grep:
+  resolveOutputAwareOk×1, ok: heartbeatOk×2, ok: spawnResult.ok×0.
 
 ### Post-merge (operator / automated)
 
