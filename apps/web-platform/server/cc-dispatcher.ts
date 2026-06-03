@@ -111,6 +111,11 @@ import type { PdfExtractErrorClass } from "./pdf-text-extract";
 // Re-export so existing call sites keep working.
 export { resolveConciergeDocumentContext } from "./kb-document-resolver";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
+// In-sandbox raw-git credential path (plan item 1). `writeAskpassScriptTo`
+// writes the fixed-body GIT_ASKPASS helper UNDER the user's `workspacePath`
+// (the only verified sandbox-readable allowWrite dir); the token rides
+// GIT_INSTALLATION_TOKEN env, never the script body. NEVER logged.
+import { writeAskpassScriptTo, cleanupAskpassScript } from "./git-auth";
 import { buildToolUseWSMessage } from "./tool-labels";
 import {
   getBashApprovalCache,
@@ -1072,6 +1077,32 @@ export const realSdkQueryFactory: QueryFactory = async (
     sessionId: null,
   };
 
+  // In-sandbox raw-git credential path (plan item 1). `GH_TOKEN` (above)
+  // authenticates the `gh` CLI; raw `git push`/`fetch`/`pull` in the bwrap
+  // sandbox needs a GIT_ASKPASS helper the sandbox can read+exec. The ONLY
+  // verified sandbox-readable allowWrite dir is `workspacePath`
+  // (`buildAgentSandboxConfig` allowWrite:[workspacePath] +
+  // `createSandboxHook` realpath-containment); `$HOME`/`/tmp` bwrap-visibility
+  // is unverifiable. So write the helper UNDER `workspacePath` and pass its
+  // absolute path as GIT_ASKPASS (threaded via buildAgentQueryOptions →
+  // buildAgentEnv). Only when a token was minted (a connected,
+  // membership-checked repo) — graceful-degradation parity with GH_TOKEN. The
+  // token rides GIT_INSTALLATION_TOKEN env, NEVER the script body or a remote
+  // URL, and is NEVER logged (hr-github-app-auth-not-pat).
+  const gitAskpassScriptPath =
+    ghToken !== undefined ? writeAskpassScriptTo(workspacePath) : undefined;
+  // Bounded cleanup (owner: this conversation's AbortController). The helper
+  // is unlinked when the controller aborts (closeConversation / reapIdle).
+  // The body is token-free (reads GIT_INSTALLATION_TOKEN at runtime), 0o700,
+  // random-named, and under the user's OWN workspacePath, so a residual file
+  // is filesystem-clutter only — no cross-tenant read. The factory's catch
+  // path below also cleans up on a synchronous startup throw.
+  if (gitAskpassScriptPath) {
+    controller.signal.addEventListener("abort", () => {
+      cleanupAskpassScript(gitAskpassScriptPath);
+    });
+  }
+
   const ccDeps: CanUseToolDeps = {
     abortableReviewGate: (ccSession, gateId, signal, timeoutMs, options) => {
       // Register BEFORE awaiting the resolver so a synchronous
@@ -1174,6 +1205,10 @@ export const realSdkQueryFactory: QueryFactory = async (
         serviceTokens,
         // Issue A — minted GH_TOKEN (or undefined when no repo connected).
         ghToken,
+        // Plan item 1 — in-sandbox raw-git GIT_ASKPASS helper path (or
+        // undefined when no token was minted). The askpass token IS `ghToken`
+        // (threaded as gitInstallationToken inside buildAgentEnv).
+        gitAskpassScriptPath,
         systemPrompt: effectiveSystemPrompt,
         resumeSessionId: safeResumeSessionId,
         mcpServers: readCcMcpAllowlist(),
@@ -1216,6 +1251,11 @@ export const realSdkQueryFactory: QueryFactory = async (
       }),
     });
   } catch (err) {
+    // Bounded cleanup on synchronous startup throw — the controller never
+    // aborts in this path, so unlink the askpass helper here too (item 1).
+    if (gitAskpassScriptPath) {
+      cleanupAskpassScript(gitAskpassScriptPath);
+    }
     // Mirror the "sandbox required but unavailable" branch in
     // agent-runner.ts startAgentSession's catch (feature:
     // "agent-sandbox", op: "sdk-startup"). Other inner throws bubble up

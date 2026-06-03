@@ -132,6 +132,52 @@ describe("writeAskpassScript", () => {
   });
 });
 
+describe("writeAskpassScriptTo (item 1b — in-sandbox askpass under workspacePath)", () => {
+  test("writes a 0o700 script under the given dir, byte-identical body, no token", async () => {
+    const { writeAskpassScriptTo, writeAskpassScript, cleanupAskpassScript } =
+      await import("../server/git-auth");
+    const dir = process.env.HOME!;
+    const scriptPath = writeAskpassScriptTo(dir);
+    // A reference body produced by the existing $HOME writer — proves the
+    // body is single-sourced (drift-free) between the two writers.
+    const refPath = writeAskpassScript();
+    try {
+      expect(scriptPath.startsWith(dir)).toBe(true);
+      // dot-prefixed so it is unobtrusive in a working tree.
+      expect(scriptPath).toMatch(/\.askpass-.*\.sh$/);
+      expect(existsSync(scriptPath)).toBe(true);
+      expect(statSync(scriptPath).mode & 0o777).toBe(0o700);
+
+      const body = readFileSync(scriptPath, "utf8");
+      // Body byte-identical to the canonical writer (single-sourced).
+      expect(body).toBe(readFileSync(refPath, "utf8"));
+      // The token is read from env at runtime — NEVER interpolated into the
+      // file (brand-survival: no token in the helper body).
+      expect(body).not.toMatch(/ghs_/);
+      expect(body).toMatch(/GIT_INSTALLATION_TOKEN/);
+    } finally {
+      cleanupAskpassScript(scriptPath);
+      cleanupAskpassScript(refPath);
+    }
+  });
+
+  test("two invocations write distinct paths (randomUUID suffix) with identical bodies", async () => {
+    const { writeAskpassScriptTo, cleanupAskpassScript } = await import(
+      "../server/git-auth"
+    );
+    const dir = process.env.HOME!;
+    const p1 = writeAskpassScriptTo(dir);
+    const p2 = writeAskpassScriptTo(dir);
+    try {
+      expect(p1).not.toBe(p2);
+      expect(readFileSync(p1, "utf8")).toBe(readFileSync(p2, "utf8"));
+    } finally {
+      cleanupAskpassScript(p1);
+      cleanupAskpassScript(p2);
+    }
+  });
+});
+
 describe("cleanupAskpassScript", () => {
   test("unlinks the file", async () => {
     const { writeAskpassScript, cleanupAskpassScript } = await import(
