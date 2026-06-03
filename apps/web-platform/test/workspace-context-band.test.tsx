@@ -199,3 +199,28 @@ describe("WorkspaceContextBand — collapsed monogram identity (Phase 1, #4915)"
     );
   });
 });
+
+// Phase 3 (#4915): one back control per state. In the mobile KB doc view the
+// kb-content-header already owns a "Back to file tree" affordance, so the band's
+// "Back to menu" is suppressed via an explicit `suppressBack` prop (driven by the
+// layout, which owns pathname — the band itself never adds a parallel pathname
+// check; ADR-047 AC4c).
+describe("WorkspaceContextBand — back suppression (Phase 3, #4915)", () => {
+  it("suppresses the back affordance when suppressBack is set, keeping identity + section title", () => {
+    render(
+      <WorkspaceContextBand
+        pathname="/dashboard/kb/engineering/x.md"
+        variant="mobile"
+        suppressBack
+      />,
+    );
+    expect(screen.queryByTestId("nav-back-chevron")).not.toBeInTheDocument();
+    // only the back link is suppressed — the section title still renders
+    expect(screen.getByTestId("nav-section-title")).toBeInTheDocument();
+  });
+
+  it("still renders the back affordance when suppressBack is absent (KB landing / other drills)", () => {
+    render(<WorkspaceContextBand pathname="/dashboard/kb" variant="mobile" />);
+    expect(screen.getByTestId("nav-back-chevron")).toBeInTheDocument();
+  });
+});

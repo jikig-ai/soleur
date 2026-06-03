@@ -55,6 +55,7 @@ export function WorkspaceContextBand({
   variant = "rail",
   collapsed = false,
   activeWorkspaceName,
+  suppressBack = false,
 }: {
   pathname: string;
   /** "rail" mounts in the sidebar; "mobile" mounts in the mobile top bar. */
@@ -62,6 +63,13 @@ export function WorkspaceContextBand({
   /** Rail-only: when the sidebar is collapsed (md:w-14) render the icon-only
    *  form. Ignored for variant="mobile" (the mobile top bar never collapses). */
   collapsed?: boolean;
+  /** Suppress the band's "Back to menu" affordance (Phase 3, #4915). The layout
+   *  sets this on the MOBILE band in the KB doc view, where kb-content-header
+   *  already owns the only back ("Back to file tree") — so the two backs no
+   *  longer co-render. The band derives nothing from pathname here: the decision
+   *  is computed by the layout (the sole pathname owner) and passed in, keeping
+   *  segmentToDrillLevel the sole drill authority (ADR-047 AC4c). */
+  suppressBack?: boolean;
   /** Collapsed-rail only: the active workspace name. The collapsed band does
    *  NOT mount OrgSwitcherContainer, so it has no name in scope — the layout
    *  threads it in (P0-3) so the monogram tile + full-name tooltip can render
@@ -85,7 +93,7 @@ export function WorkspaceContextBand({
         data-collapsed="true"
         className="flex flex-col items-center gap-3 px-2 py-3"
       >
-        {drill ? (
+        {drill && !suppressBack ? (
           <Link
             href="/dashboard"
             aria-label="Back to menu"
@@ -160,7 +168,7 @@ export function WorkspaceContextBand({
           matches the brand-row collapse toggle so the two controls share the
           same px-3 border-box gutter. The label + distinct BackArrowIcon stop it
           reading as a duplicate of the collapse chevron (#4810 follow-up Bug 2). */}
-      {drill ? (
+      {drill && !suppressBack ? (
         <Link
           href="/dashboard"
           aria-label="Back to menu"

@@ -163,6 +163,13 @@ export default function DashboardLayout({
   // width + handle apply solely in this branch, so collapsed (md:w-14) and
   // Settings/Chat (md:w-56) widths are structurally untouched (AC12/AC13).
   const kbExpanded = drill === "kb" && !collapsed;
+  // Phase 3 (#4915): one back per state. In the mobile KB DOC VIEW the
+  // kb-content-header owns the only back ("Back to file tree", md:hidden), so the
+  // mobile band's "Back to menu" is suppressed to stop the two co-rendering. This
+  // is path EXTRACTION ("a KB doc is open" — trailing-slash form), explicitly
+  // distinct from drill detection (which stays sole to segmentToDrillLevel,
+  // AC4c): the band itself never reads pathname for this — the layout owns it.
+  const inKbDocView = pathname.startsWith("/dashboard/kb/");
 
   // Auto-close drawer on route change
   useEffect(() => {
@@ -238,7 +245,11 @@ export default function DashboardLayout({
         {/* Mobile band — placed via CSS (this bar is `md:hidden`), NOT a JS
             viewport gate, so workspace identity + the back chevron paint on the
             FIRST frame (no SSR/hydration tick where identity is absent). */}
-        <WorkspaceContextBand pathname={pathname} variant="mobile" />
+        <WorkspaceContextBand
+          pathname={pathname}
+          variant="mobile"
+          suppressBack={inKbDocView}
+        />
       </div>
 
       {/* Overlay backdrop — always rendered for fade transition */}

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 
 // Stable module-level pathname mock — a fresh object each render would refire
 // effects (learning 2026-04-07-userouter-mock-instability). One mutable string.
@@ -193,6 +193,49 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
       </Wrap>,
     );
     expect(screen.queryByTestId("portaled-nav")).not.toBeInTheDocument();
+  });
+
+  // Phase 3 (#4915): one back control per state. In the mobile KB DOC VIEW the
+  // kb-content-header owns the only back ("Back to file tree"), so the layout
+  // passes suppressBack to the MOBILE band only — the desktop rail band keeps its
+  // "Back to menu" (kb-content-header's back is md:hidden there, so no double).
+  function bandsByVariant() {
+    const map: Record<string, HTMLElement> = {};
+    for (const el of screen.getAllByTestId("workspace-context-band")) {
+      map[el.getAttribute("data-variant") ?? "?"] = el;
+    }
+    return map;
+  }
+
+  it("KB doc view: mobile band suppresses 'Back to menu'; rail band keeps it (one back per state)", () => {
+    mockPathname = "/dashboard/kb/engineering/x.md";
+    render(
+      <Wrap>
+        <DashboardLayout>
+          <div>content</div>
+        </DashboardLayout>
+      </Wrap>,
+    );
+    const { mobile, rail } = bandsByVariant();
+    expect(
+      within(mobile).queryByTestId("nav-back-chevron"),
+    ).not.toBeInTheDocument();
+    expect(within(rail).getByTestId("nav-back-chevron")).toBeInTheDocument();
+  });
+
+  it("KB landing (not doc view): the mobile band STILL shows 'Back to menu' (it is the only back there)", () => {
+    mockPathname = "/dashboard/kb";
+    render(
+      <Wrap>
+        <DashboardLayout>
+          <div>content</div>
+        </DashboardLayout>
+      </Wrap>,
+    );
+    const { mobile } = bandsByVariant();
+    expect(
+      within(mobile).getByTestId("nav-back-chevron"),
+    ).toBeInTheDocument();
   });
 });
 

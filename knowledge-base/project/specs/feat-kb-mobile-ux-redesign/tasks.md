@@ -31,9 +31,9 @@ deferred: [4916, 4917]
 - [x] 2.6 Preserve width-clamp classes (`w-full min-w-0`, `shrink-0`) + padding ownership
 
 ## Phase 3 — Suppress duplicate back in doc view
-- [ ] 3.1 Suppress band "Back to menu" in mobile doc view via explicit prop from `(dashboard)/layout.tsx` OR mobile-placement scoping — NO parallel pathname check in band (ADR-047 AC4c)
-- [ ] 3.2 Keep band back glyph distinct from collapse chevron (`nav-chevron-alignment.test.tsx:83/92`)
-- [ ] 3.3 Add test: exactly one back control per state (doc view = file-tree back only)
+- [x] 3.1 Suppress band "Back to menu" in mobile doc view via explicit prop from `(dashboard)/layout.tsx` OR mobile-placement scoping — NO parallel pathname check in band (ADR-047 AC4c)
+- [x] 3.2 Keep band back glyph distinct from collapse chevron (`nav-chevron-alignment.test.tsx:83/92`)
+- [x] 3.3 Add test: exactly one back control per state (doc view = file-tree back only)
 
 ## Phase 4 — Page-body chrome for fullWidth states + title ownership
 - [ ] 4.1 Add page-body "Knowledge Base" title + mobile back to the single `kb/layout.tsx` fullWidth wrapper (do NOT re-mount identity band)
