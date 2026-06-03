@@ -337,26 +337,26 @@ template):
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] `cron-workspace-gc.ts` exists; sweep matches **only** `^soleur-` `maxdepth 1`,
+- [x] `cron-workspace-gc.ts` exists; sweep matches **only** `^soleur-` `maxdepth 1`,
       age-gated `> CRON_WORKSPACE_GC_MAX_AGE_MS` (default 1 h); per-dir `rm` is
       fail-soft (one error never aborts the loop).
-- [ ] `statfs` before AND after the sweep are emitted to Sentry with
+- [x] `statfs` before AND after the sweep are emitted to Sentry with
       `{ freeMbBefore, freeMbAfter, freedMb, sweptCount, root }`; uses `bavail`.
-- [ ] `EXPECTED_CRON_FUNCTIONS` contains `"cron-workspace-gc"`; `manual-trigger-allowlist.ts`
+- [x] `EXPECTED_CRON_FUNCTIONS` contains `"cron-workspace-gc"`; `manual-trigger-allowlist.ts`
       is **NOT** edited; `isAllowlistedManualTrigger("cron/workspace-gc.manual-trigger")`
       returns true (assert in the cron-manifest / allowlist test path).
-- [ ] `createFunction` triggers include `{ cron: "0 */6 * * *" }` **and**
+- [x] `createFunction` triggers include `{ cron: "0 */6 * * *" }` **and**
       `{ event: "cron/workspace-gc.manual-trigger" }`.
-- [ ] `app/api/inngest/route.ts` imports + registers `cronWorkspaceGc`;
+- [x] `app/api/inngest/route.ts` imports + registers `cronWorkspaceGc`;
       `function-registry-count.test.ts` green with the re-derived count.
-- [ ] `ci-deploy.sh` sets `CRON_WORKSPACE_ROOT=/workspaces/.cron` at **both** docker-run
+- [x] `ci-deploy.sh` sets `CRON_WORKSPACE_ROOT=/workspaces/.cron` at **both** docker-run
       sites and `mkdir -p … && chown 1001:1001 /mnt/data/workspaces/.cron` is present.
-- [ ] `ci-deploy.test.sh:1186–1235` `assert_cron_workspace_root` literal updated to
+- [x] `ci-deploy.test.sh:1186–1235` `assert_cron_workspace_root` literal updated to
       `-e CRON_WORKSPACE_ROOT=/workspaces/.cron` (substring match means it false-passes
       otherwise — verified at deepen time); the FAIL strings + function comment updated to match.
-- [ ] `cron-workspace-gc.test.ts` green incl. the UUID-dir-not-swept guard;
+- [x] `cron-workspace-gc.test.ts` green incl. the UUID-dir-not-swept guard;
       full `test-all.sh` EXIT=0 (read the explicit `EXIT=` marker, not the wrapper exit).
-- [ ] `tsc --noEmit` clean.
+- [x] `tsc --noEmit` clean.
 
 ### Post-merge (operator/automated, no SSH)
 - [ ] Merge fires `web-platform-release.yml` (path-filtered) → container restarts with
