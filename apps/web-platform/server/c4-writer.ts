@@ -12,6 +12,7 @@ import {
 } from "@/server/github-api";
 import { syncWorkspace } from "@/server/kb-route-helpers";
 import { isC4DiagramPath } from "@/lib/c4-constants";
+import { renameUserIdToHash } from "@/server/userid-pseudonymize";
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
 
@@ -61,6 +62,9 @@ export async function writeC4Diagram(
 
   const filePath = `knowledge-base/${relativePath}`;
   const fileName = relativePath.split("/").pop() ?? relativePath;
+  // Pseudonymise userId at the source per #3698 — log `userIdHash`, never the
+  // raw id. Computed off the logger line so the source carries no raw token.
+  const userLog = renameUserIdToHash({ userId });
 
   try {
     // Resolve current blob sha (update) — absent means create.
@@ -101,7 +105,7 @@ export async function writeC4Diagram(
     }
 
     logger.info(
-      { event: "c4_write", userId, path: filePath },
+      { event: "c4_write", ...userLog, path: filePath },
       "kb/c4: diagram source written",
     );
     return { ok: true, commitSha: result?.commit?.sha ?? null };
@@ -117,12 +121,12 @@ export async function writeC4Diagram(
         };
       }
       logger.error(
-        { err: error, userId, path: filePath },
+        { err: error, ...userLog, path: filePath },
         "kb/c4: GitHub API error",
       );
       return { ok: false, status: 502, error: error.message, code: "GITHUB_API_ERROR" };
     }
-    logger.error({ err: error, userId }, "kb/c4: unexpected write error");
+    logger.error({ err: error, ...userLog }, "kb/c4: unexpected write error");
     return { ok: false, status: 500, error: "Internal server error" };
   }
 }

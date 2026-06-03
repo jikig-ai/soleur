@@ -6,6 +6,7 @@ import { resolveUserKbRoot } from "@/server/kb-route-helpers";
 import { isPathInWorkspace } from "@/server/sandbox";
 import { computeC4Model } from "@/server/c4-compute";
 import { C4_DIAGRAMS_DIR, C4_SOURCE_EXT } from "@/lib/c4-constants";
+import { renameUserIdToHash } from "@/server/userid-pseudonymize";
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
 
@@ -97,8 +98,10 @@ export async function GET(request: Request) {
     );
   } catch (error) {
     Sentry.captureException(error);
+    // Pseudonymise userId at the source per #3698 (computed off the logger line).
+    const errLog = renameUserIdToHash({ userId: user.id });
     logger.error(
-      { err: error, userId: user.id, dir: requestedDir },
+      { err: error, ...errLog, dir: requestedDir },
       "kb/c4/project: compute failed",
     );
     return NextResponse.json(
