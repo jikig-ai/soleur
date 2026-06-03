@@ -359,14 +359,16 @@ which is **not** modified — see AC8).
 
 ## Observability
 
-Skipped — this plan's Files-to-Edit are two `apps/web-platform/infra/*.test.sh`
-files (test assertions), not code-class files under `apps/*/server/`,
-`apps/*/src/`, `apps/*/infra/` (the `.tf`/runtime infra), or
-`plugins/*/scripts/`, and it introduces no infrastructure surface. The
-feature *is* an observability/CI-health fix (it makes `deploy-script-tests`
-green again), but it ships no new liveness/error/log surface of its own —
-the existing `deploy-script-tests` job IS the discoverability test
-(`gh run view`, no SSH). No 5-field schema required.
+This fix is test-only (two `apps/web-platform/infra/*.test.sh` assertion
+edits) and ships no new liveness/error/log surface of its own. The existing
+`deploy-script-tests` CI job IS the discoverability surface — it runs each
+`infra/*.test.sh` with no SSH and is observable via `gh run view`. The local
+discoverability test re-runs the narrowed drift guard directly (no SSH, no
+secrets, no infrastructure surface):
+
+discoverability_test:
+  command: bash apps/web-platform/infra/journald-config.test.sh
+  expected_output: "33/33 passed"
 
 ## GDPR / Compliance
 
