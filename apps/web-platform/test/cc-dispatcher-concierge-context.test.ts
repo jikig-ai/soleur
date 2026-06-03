@@ -102,13 +102,14 @@ beforeEach(() => {
     data: { workspace_path: tmpRoot },
     error: null,
   });
+  // Per-test isolation comes from re-seeding this spy each case; the resolver
+  // resolves the active-workspace path via `resolveActiveWorkspacePath` (no
+  // value cache to leak across tests).
   resolveActiveWorkspacePathSpy.mockResolvedValue(tmpRoot);
   extractPdfTextSpy.mockReset();
   reportSilentFallbackSpy.mockReset();
-  // Drain the per-process workspace-path memo so each test sees its own
-  // tmpRoot (the resolver caches `users.workspace_path` for the
-  // conversation lifetime — without a reset, test N's tmpRoot leaks into
-  // test N+1).
+  // Retained no-op (the workspace-path value cache was removed in the ADR-044
+  // cutover); harmless.
   _resetWorkspacePathCacheForTests();
 });
 

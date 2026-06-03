@@ -905,12 +905,12 @@ export function cleanupCcBashGatesForConversation(
 // the factory once per cold conversation; reused dispatches skip.
 // ---------------------------------------------------------------------------
 
-// `fetchUserWorkspacePath`, `resolveConciergeDocumentContext`, and the
-// per-process workspace memo were extracted to `./kb-document-resolver`
-// so this orchestration module no longer owns filesystem responsibilities
-// alongside SDK Query construction, MCP wiring, BYOK token resolution,
-// bash-approval, and rate-limiting. Both modules share the workspace
-// memo via the resolver's exported helper.
+// `fetchUserWorkspacePath` and `resolveConciergeDocumentContext` were
+// extracted to `./kb-document-resolver` so this orchestration module no
+// longer owns filesystem responsibilities alongside SDK Query construction,
+// MCP wiring, BYOK token resolution, bash-approval, and rate-limiting. Both
+// modules resolve the active-workspace path via the same exported helper
+// (one source of truth; no value cache — the active workspace is mutable).
 
 /**
  * Build a real SDK `Query` for one cold cc-soleur-go conversation. Async
@@ -2187,9 +2187,10 @@ export function __resetDispatcherForTests(): void {
   // prefix in test A can survive into test B (cross-file leak via the
   // module-level Map). Mirrors the centralization Fix 6 of PR #2954.
   _resetBashApprovalCacheForTests();
-  // Drain the workspace-path memo so a `users.workspace_path` swap in
-  // tests is observable. Lives in `kb-document-resolver.ts` for the same
-  // reason as the bash cache: shared across files, drained centrally.
+  // Retained no-op: the workspace-path value cache was removed in the ADR-044
+  // cutover (the active workspace is mutable per session). Kept in the central
+  // reset so test files that call it keep compiling. See
+  // `kb-document-resolver.ts` `_resetWorkspacePathCacheForTests`.
   _resetWorkspacePathCacheForTests();
 }
 

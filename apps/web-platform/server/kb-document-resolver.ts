@@ -7,10 +7,9 @@
 // Extracted from `cc-dispatcher.ts` so the orchestration layer doesn't
 // own filesystem responsibilities on top of SDK Query construction, MCP
 // wiring, BYOK token resolution, bash-approval, and rate-limiting. The
-// per-process `_workspacePathCache` lives here too because it's the
-// resolver's hot path; the cc-dispatcher's `realSdkQueryFactory`
-// re-imports `fetchUserWorkspacePath` from this module so both paths
-// share one cache and one source of truth.
+// cc-dispatcher's `realSdkQueryFactory` re-imports `fetchUserWorkspacePath`
+// from this module so the document resolver and the agent sandbox cwd share
+// one source of truth for the active-workspace path.
 
 import { readFile } from "fs/promises";
 import path from "path";
