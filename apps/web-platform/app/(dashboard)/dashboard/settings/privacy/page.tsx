@@ -8,12 +8,15 @@
 // confirmation dialog + job list.
 
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import {
   DsarExportJobList,
   type DsarExportJobRow,
   type JobStatus,
 } from "@/components/settings/dsar-export-job-list";
+import { BashAutonomousToggle } from "@/components/settings/bash-autonomous-toggle";
+import { resolveBashAutonomous } from "@/server/resolve-bash-autonomous";
+import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +35,20 @@ export default async function PrivacyPage() {
     .eq("user_id", user.id)
     .order("requested_at", { ascending: false })
     .limit(20);
+
+  // Issue B part 2 — Concierge autonomous-mode toggle (owner-only). Read the
+  // current value (member-checked, fail-closed false) and resolve owner status
+  // of the active workspace so non-owners don't see a control they can't use.
+  const autonomous = await resolveBashAutonomous(user.id);
+  const activeWorkspaceId = await resolveCurrentWorkspaceId(user.id, supabase);
+  const serviceClient = createServiceClient();
+  const { data: membership } = await serviceClient
+    .from("workspace_members")
+    .select("role")
+    .eq("workspace_id", activeWorkspaceId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  const isWorkspaceOwner = membership?.role === "owner";
 
   const jobs: DsarExportJobRow[] = (jobsData ?? []).map((row) => ({
     id: row.id as string,
@@ -73,6 +90,22 @@ export default async function PrivacyPage() {
         </p>
         <DsarExportJobList initialJobs={jobs} />
       </section>
+
+      {isWorkspaceOwner && (
+        <section>
+          <h2 className="mb-3 text-lg font-semibold text-soleur-text-primary">
+            Concierge command approval
+          </h2>
+          <p className="mb-4 text-sm text-soleur-text-secondary">
+            By default the Concierge asks you to approve each command it runs.
+            Autonomous mode lets it run non-blocked commands without asking.
+          </p>
+          <BashAutonomousToggle
+            initialAutonomous={autonomous}
+            isOwner={isWorkspaceOwner}
+          />
+        </section>
+      )}
     </div>
   );
 }

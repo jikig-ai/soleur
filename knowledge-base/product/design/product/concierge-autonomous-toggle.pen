@@ -1,1 +1,248 @@
-{}
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "gjDId",
+      "x": 0,
+      "y": 0,
+      "name": "Concierge Autonomous Toggle",
+      "width": 1120,
+      "fill": "#0B0B0C",
+      "gap": 48,
+      "padding": 48,
+      "children": [
+        {
+          "type": "frame",
+          "id": "v6cE2",
+          "name": "State 1 — Settings (OFF, default)",
+          "width": 480,
+          "layout": "vertical",
+          "gap": 12,
+          "children": [
+            {
+              "type": "text",
+              "id": "NiPaL",
+              "name": "a_h",
+              "fill": "#9A948A",
+              "content": "1 — Settings row (default: OFF)",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "yqFrq",
+              "name": "cardA",
+              "width": "fill_container",
+              "fill": "#17140E",
+              "cornerRadius": 12,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#2E2A22"
+              },
+              "layout": "vertical",
+              "gap": 12,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "8upbu",
+                  "name": "rowA",
+                  "width": "fill_container",
+                  "gap": 16,
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "w3SDJ",
+                      "name": "labelA",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 4,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "yU14c",
+                          "name": "labelA_t",
+                          "fill": "#F4F1EA",
+                          "content": "Autonomous mode",
+                          "fontFamily": "Inter",
+                          "fontSize": 16,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "d0Ap1",
+                          "name": "labelA_d",
+                          "fill": "#9A948A",
+                          "content": "Let the Concierge run commands without asking you to approve each one.",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "aJmWx",
+                      "name": "toggleOff",
+                      "width": 40,
+                      "height": 22,
+                      "fill": "#3A352B",
+                      "cornerRadius": 999,
+                      "padding": 3,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "Bxjeh",
+                          "name": "knobOff",
+                          "width": 16,
+                          "height": 16,
+                          "fill": "#F4F1EA",
+                          "cornerRadius": 999
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "RMTW4",
+                  "name": "noteA",
+                  "fill": "#9A948A",
+                  "content": "Off by default. The blocklist (curl/wget/sudo/…) always applies — even when on.",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "CXEBF",
+          "name": "State 2 — Enable confirmation (interstitial)",
+          "width": 480,
+          "fill": "#0B0B0C",
+          "layout": "vertical",
+          "gap": 12,
+          "children": [
+            {
+              "type": "text",
+              "id": "K9Wue",
+              "name": "b_h",
+              "fill": "#9A948A",
+              "content": "2 — Risk interstitial (shown BEFORE on)",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "iUnG8",
+              "name": "modal",
+              "width": "fill_container",
+              "fill": "#17140E",
+              "cornerRadius": 12,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#C2410C"
+              },
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "TpNB9",
+                  "name": "m_title",
+                  "fill": "#F4F1EA",
+                  "content": "Turn on autonomous mode?",
+                  "fontFamily": "Inter",
+                  "fontSize": 18,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "9rP6S",
+                  "name": "m_body",
+                  "fill": "#F4F1EA",
+                  "content": "The Concierge will run any non-blocked command without asking. If a malicious issue or repo file tricks the agent (prompt injection), it could delete files or leak data with no approval step. Only turn this on for repos and workspaces you fully trust.",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "SvvP6",
+                  "name": "m_actions",
+                  "width": "fill_container",
+                  "gap": 12,
+                  "justifyContent": "end",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "yrg4n",
+                      "name": "m_cancel",
+                      "cornerRadius": 8,
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "#2E2A22"
+                      },
+                      "padding": [
+                        10,
+                        16
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "MhIFC",
+                          "name": "m_cancel_t",
+                          "fill": "#F4F1EA",
+                          "content": "Cancel",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "F8iXe",
+                      "name": "m_enable",
+                      "fill": "#C2410C",
+                      "cornerRadius": 8,
+                      "padding": [
+                        10,
+                        16
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "OpJ6z",
+                          "name": "m_enable_t",
+                          "fill": "#FFFFFF",
+                          "content": "I understand — turn it on",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
