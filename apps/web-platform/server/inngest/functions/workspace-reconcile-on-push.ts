@@ -308,7 +308,10 @@ export async function workspaceReconcileOnPushHandler({
             sha_before: beforeSha,
             sha_after: headSha,
             ok: false,
-            error_class: ERROR_CLASS_SYNC_FAILED,
+            // Real class from the git stderr/exit signature — `syncWorkspace`
+            // classifies non_fast_forward vs sync_failed (and self-heals a
+            // diverged clone first). No longer hard-coded.
+            error_class: syncResult.errorClass,
             push_received_at: pushReceivedAt,
             sync_completed_at: completedAt,
             workspace_id: ws.id, // #4728 — discriminator (id in scope from fan-out loop)
@@ -324,6 +327,8 @@ export async function workspaceReconcileOnPushHandler({
           sha_before: beforeSha,
           sha_after: headSha,
           ok: true,
+          // true when a diverged clone was self-healed via reset (vs clean pull)
+          recovered: syncResult.recovered,
           push_received_at: pushReceivedAt,
           sync_completed_at: completedAt,
           workspace_id: ws.id, // #4728 — discriminator (id in scope from fan-out loop)

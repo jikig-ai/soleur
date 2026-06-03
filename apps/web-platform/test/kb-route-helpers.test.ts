@@ -40,11 +40,13 @@ vi.mock("@/lib/supabase/tenant", () => ({
   RuntimeAuthError: class RuntimeAuthError extends Error {},
 }));
 
-const { mockReportSilentFallback } = vi.hoisted(() => ({
+const { mockReportSilentFallback, mockWarnSilentFallback } = vi.hoisted(() => ({
   mockReportSilentFallback: vi.fn(),
+  mockWarnSilentFallback: vi.fn(),
 }));
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
+  warnSilentFallback: mockWarnSilentFallback,
 }));
 
 vi.mock("@/lib/auth/validate-origin", () => ({
@@ -429,5 +431,206 @@ describe("syncWorkspace", () => {
         }),
       }),
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // Fix B (this plan) — classify git failure + gated self-heal.
+  // The non-fast-forward stderr signature was captured from the installed git
+  // (2.53.0): `fatal: Not possible to fast-forward, aborting.`
+  // -------------------------------------------------------------------------
+
+  // A helper that builds a per-argv mock so the pull rejects but the
+  // self-heal git ops (fetch / rev-list / reset) can be scripted.
+  function scriptGit(handlers: {
+    pull?: () => Promise<unknown> | never;
+    fetch?: () => Promise<unknown>;
+    revList?: () => Promise<unknown>;
+    reset?: () => Promise<unknown>;
+    symbolicRef?: () => Promise<unknown>;
+  }) {
+    mockGitWithAuth.mockImplementation((args: string[]) => {
+      const verb = args[0];
+      if (verb === "pull") {
+        return handlers.pull
+          ? handlers.pull()
+          : Promise.resolve(Buffer.from(""));
+      }
+      if (verb === "symbolic-ref") {
+        return handlers.symbolicRef
+          ? handlers.symbolicRef()
+          : Promise.resolve(Buffer.from("origin/main\n"));
+      }
+      if (verb === "fetch") {
+        return handlers.fetch
+          ? handlers.fetch()
+          : Promise.resolve(Buffer.from(""));
+      }
+      if (verb === "rev-list") {
+        return handlers.revList
+          ? handlers.revList()
+          : Promise.resolve(Buffer.from("0\n"));
+      }
+      if (verb === "reset") {
+        return handlers.reset
+          ? handlers.reset()
+          : Promise.resolve(Buffer.from(""));
+      }
+      return Promise.resolve(Buffer.from(""));
+    });
+  }
+
+  const NON_FF_STDERR =
+    "fatal: Not possible to fast-forward, aborting.";
+
+  test("classifies a non-fast-forward stderr as non_fast_forward", async () => {
+    // Diverged with ZERO local commits → safe self-heal path resets and recovers.
+    scriptGit({
+      pull: () => Promise.reject(new Error(NON_FF_STDERR)),
+      revList: () => Promise.resolve(Buffer.from("0\n")),
+    });
+
+    const result = await syncWorkspace(
+      TEST_INSTALLATION_ID,
+      TEST_WORKSPACE_PATH,
+      fakeLogger,
+      { userId: TEST_USER_ID, op: "push" },
+    );
+
+    // Recovered → ok:true. The classification is asserted via the self-heal
+    // path being taken (a sync_failed would never fetch/reset).
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.recovered).toBe(true);
+  });
+
+  test("classifies an auth/IO error as sync_failed (no self-heal attempted)", async () => {
+    const authErr = new Error("fatal: Authentication failed for repo");
+    mockGitWithAuth.mockRejectedValue(authErr);
+
+    const result = await syncWorkspace(
+      TEST_INSTALLATION_ID,
+      TEST_WORKSPACE_PATH,
+      fakeLogger,
+      { userId: TEST_USER_ID, op: "manual" },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errorClass).toBe("sync_failed");
+    // Only the pull was attempted — no fetch/rev-list/reset.
+    const verbs = mockGitWithAuth.mock.calls.map((c: unknown[]) => (c[0] as string[])[0]);
+    expect(verbs).toEqual(["pull"]);
+  });
+
+  test("self-heal: non-FF + ZERO local commits → fetch + reset to resolved default branch, returns {ok:true, recovered:true}", async () => {
+    scriptGit({
+      pull: () => Promise.reject(new Error(NON_FF_STDERR)),
+      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      revList: () => Promise.resolve(Buffer.from("0\n")),
+    });
+
+    const result = await syncWorkspace(
+      TEST_INSTALLATION_ID,
+      TEST_WORKSPACE_PATH,
+      fakeLogger,
+      { userId: TEST_USER_ID, op: "push" },
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.recovered).toBe(true);
+
+    const calls = mockGitWithAuth.mock.calls.map((c: unknown[]) => c[0] as string[]);
+    // fetch origin <default> and reset --hard origin/<default> must be present,
+    // resolved (not literal "main" passed by us — derived from symbolic-ref).
+    expect(calls).toContainEqual(["fetch", "origin", "main"]);
+    expect(calls).toContainEqual(["reset", "--hard", "origin/main"]);
+    // rev-list guard ran before reset.
+    const verbs = calls.map((a) => a[0]);
+    expect(verbs.indexOf("rev-list")).toBeLessThan(verbs.indexOf("reset"));
+  });
+
+  test("self-heal AC-B6: non-FF + NON-ZERO local commits → NO reset, returns {ok:false, errorClass:non_fast_forward}", async () => {
+    scriptGit({
+      pull: () => Promise.reject(new Error(NON_FF_STDERR)),
+      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      revList: () => Promise.resolve(Buffer.from("3\n")), // un-pushed agent work
+    });
+
+    const result = await syncWorkspace(
+      TEST_INSTALLATION_ID,
+      TEST_WORKSPACE_PATH,
+      fakeLogger,
+      { userId: TEST_USER_ID, op: "push" },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errorClass).toBe("non_fast_forward");
+
+    const verbs = mockGitWithAuth.mock.calls.map(
+      (c: unknown[]) => (c[0] as string[])[0],
+    );
+    expect(verbs).not.toContain("reset");
+    // Dirty-abort is observable + fail_loud.
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "self-heal-aborted-dirty" }),
+    );
+  });
+
+  test("self-heal failure: non-FF + reset rejects → fail_loud + {ok:false}", async () => {
+    const resetErr = new Error("fatal: reset failed");
+    scriptGit({
+      pull: () => Promise.reject(new Error(NON_FF_STDERR)),
+      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      revList: () => Promise.resolve(Buffer.from("0\n")),
+      reset: () => Promise.reject(resetErr),
+    });
+
+    const result = await syncWorkspace(
+      TEST_INSTALLATION_ID,
+      TEST_WORKSPACE_PATH,
+      fakeLogger,
+      { userId: TEST_USER_ID, op: "push" },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errorClass).toBe("non_fast_forward");
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      resetErr,
+      expect.objectContaining({ op: "self-heal-failed" }),
+    );
+  });
+
+  test("self-heal success is observable (op:self-heal-reset mirror)", async () => {
+    scriptGit({
+      pull: () => Promise.reject(new Error(NON_FF_STDERR)),
+      revList: () => Promise.resolve(Buffer.from("0\n")),
+    });
+
+    await syncWorkspace(TEST_INSTALLATION_ID, TEST_WORKSPACE_PATH, fakeLogger, {
+      userId: TEST_USER_ID,
+      op: "push",
+    });
+
+    expect(mockWarnSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "self-heal-reset" }),
+    );
+  });
+
+  test("clean pull → ok:true, no reset, no recovered flag", async () => {
+    mockGitWithAuth.mockResolvedValue(Buffer.from(""));
+
+    const result = await syncWorkspace(
+      TEST_INSTALLATION_ID,
+      TEST_WORKSPACE_PATH,
+      fakeLogger,
+      { userId: TEST_USER_ID, op: "manual" },
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.recovered).toBeUndefined();
+    const verbs = mockGitWithAuth.mock.calls.map(
+      (c: unknown[]) => (c[0] as string[])[0],
+    );
+    expect(verbs).toEqual(["pull"]);
   });
 });
