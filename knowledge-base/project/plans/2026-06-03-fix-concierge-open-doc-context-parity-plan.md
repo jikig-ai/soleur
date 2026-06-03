@@ -12,6 +12,58 @@ requires_cpo_signoff: true
 
 > Spec lacks valid `lane:` (no spec.md for this branch) — defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-03
+**Gates passed:** 4.6 User-Brand Impact (present, threshold `single-user incident`), 4.7 Observability
+(all 5 fields present, no SSH in `discoverability_test`), 4.8 PAT-shaped var halt (none), 4.9
+UI-wireframe (no UI-surface file in Files-to-Edit/Create → skip). Cited rule IDs verified ACTIVE in
+`AGENTS.rest.md`: `cq-write-failing-tests-before`, `cq-silent-fallback-must-mirror-to-sentry`,
+`cq-test-fixtures-synthesized-only`. Cited code lines verified: `kb-chat-content.tsx:111`
+(`type: "kb-viewer"`), `ws-handler.ts:1086/1106` (`if (context?.path && !warmCcQuery)`),
+`ws-handler.ts:997` (`cc-pdf-resolver-skip` captureMessage). Issues #4849 (CLOSED) / #4854 (OPEN)
+verified live — citation-only, not work targets.
+
+> Note: the deepen-plan parallel research/review/skill sub-agents (Phase 2/3/4/5) could not be
+> spawned — the Task tool is unavailable in this planning environment. The structural halt gates
+> (4.6–4.9), precedent-diff (4.4), and verify-the-negative (4.45) passes were run inline below.
+> Given `brand_survival_threshold: single-user incident`, /work SHOULD re-run deepen-plan (or
+> ultrathink) where the substance reviewers (data-integrity-guardian, security-sentinel,
+> architecture-strategist) are available — plan-review style agents cannot cover proxy-vs-invariant
+> or workspace-isolation regressions.
+
+### Key Improvements (over the as-planned draft)
+
+1. **Root cause confirmed as a single workspace-source divergence (Phase 4.45 verify-the-negative).**
+   Both the document resolver (`kb-document-resolver.ts:72-102` `fetchUserWorkspacePath` →
+   `users.workspace_path`) AND the agent sandbox `cwd` (`cc-dispatcher.ts:978` `realSdkQueryFactory`
+   Promise.all → same `fetchUserWorkspacePath`) read the SAME per-user source. The UI "Workspace
+   ready" + file tree render from a different source. This is why failure 1 (doc not read) and
+   failure 2 (no .git / not initialized) co-occur — they are one bug.
+2. **Quote path (⌘⇧L) confirmed already wired** (`kb-chat-content.tsx:41` → `quoteRef` →
+   `ChatSurface` `insertQuote`); the gap is the open-document BODY only. Plan scopes the doc-body
+   fix and explicitly does NOT re-plumb the quote path.
+3. **Injection wiring confirmed intact end-to-end** (resolver → `dispatchSoleurGoForConversation`
+   `...documentArgs` → runner). The fix lives in workspace-source resolution, not the wiring.
+4. **Security-gate precedent-diff (Phase 4.4):** the two read-containment gates
+   (`knowledge-base/` prefix gate at `kb-document-resolver.ts:152`; `isPathInWorkspace` at `:193`)
+   are the ONLY controls preventing cross-workspace / `.git/**` / `attachments/<otherConv>` reads
+   via a Concierge `context.path`. Any workspace-path resolution change MUST preserve both — added
+   to ACs and User-Brand Impact.
+
+### New Considerations Discovered
+
+- **Coordination risk with the in-flight git-workspace-plumbing branch.** The merged PR #4868 and
+  the sibling plan `2026-06-03-fix-concierge-git-workspace-plumbing-per-user-repo-plan.md` both
+  touch workspace-path / repo resolution for the Concierge. If both branches independently change
+  how `fetchUserWorkspacePath` / the sandbox `cwd` resolves, they will conflict or double-fix. The
+  /work phase MUST read that plan's Phase 0 outcome before editing the workspace resolver.
+- **The `_workspacePathCache` per-process memo** (`kb-document-resolver.ts:70`) caches
+  `users.workspace_path` for the user's lifetime. If the bug is "stale workspace_path", a fix that
+  changes the SOURCE must also ensure the cache is keyed/invalidated correctly — the regression
+  test already drains it via `_resetWorkspacePathCacheForTests`, but production cache staleness is
+  a candidate failure mode to check in Phase 0.
+
 ## Overview
 
 Two changes in one PR.
