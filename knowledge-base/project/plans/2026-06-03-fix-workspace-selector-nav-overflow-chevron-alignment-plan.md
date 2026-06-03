@@ -8,6 +8,49 @@ brand_survival_threshold: none
 status: planned
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-03
+**Sections enhanced:** Root-Cause Analysis, Approach (Fix A/B), Acceptance Criteria, Test Scenarios, Risks
+**Halt gates passed:** 4.6 User-Brand Impact (threshold `none` + scope-out; Files-to-Edit do NOT match sensitive-path regex), 4.7 Observability (pure-CSS, no `server|src|infra` surface — section present), 4.8 PAT-shape (clean), 4.9 UI-Wireframe (no new UI surface file — only a `test/**` file in Files-to-Create → ADVISORY, no `.pen` required)
+
+### Key Improvements (grounded in branch source)
+
+1. **The existing #4833 VRT gate (`e2e/nav-states-shell.e2e.ts`) already asserts
+   `scrollWidth - clientWidth <= 1` on the `<aside>` — but ONLY for the two
+   COLLAPSED states (lines 239, 267).** The "drilled (expanded)" test (line 222)
+   checks chrome presence and does NOT assert overflow. **This is the exact gap
+   that lets Bug 1 ship.** The fix is to add the same overflow assertion to a new
+   expanded-drilled test at `md:w-56` for `/dashboard/kb` and `/dashboard/chat/<id>`.
+   Reuse the existing `aside.evaluate((el) => el.scrollWidth - el.clientWidth)` shape
+   verbatim — it is the canonical overflow probe in this file.
+2. **Flex-clamp precedent confirmed:** the codebase's canonical truncating-flex
+   shape is `min-w-0 flex-1 truncate` (`components/chat/kb-chat-content.tsx:150`)
+   and `max-w-full` for media (`components/kb/file-preview.tsx:73`). The
+   `OrgSwitcher` button is the only rail-bound interactive control that omits a
+   `w-full`/`min-w-0` clamp on its own flex container — adopt the precedent shape.
+3. **Regression risk is low and verified:** `org-switcher.test.tsx`,
+   `workspace-context-band.test.tsx`, `org-switcher-container.test.tsx` have ZERO
+   `toHaveClass` assertions on padding/width (`grep -cE toHaveClass` → 0/0/0). The
+   only class assertions are on the dropdown menu's `left-0`/`top-full` positioning
+   (org-switcher.test.tsx:98-102), which Fix A/B do not touch.
+4. **Both chevrons are byte-identical glyphs** — `ChevronLeftIcon` (layout.tsx:577)
+   and `BackChevronIcon` (band:29-45) share the identical path
+   `M15.75 19.5 8.25 12l7.5-7.5`. Confirms the "duplicate-looking arrows" report and
+   makes the A2 (distinct-icon) disambiguation a real, verifiable change.
+
+### New Considerations Discovered
+
+- The VRT gate's empty-band guard (e2e comment lines 16-19) means an overflow test
+  must ALSO assert the band's verbose content is visible — an unmounted band would
+  trivially satisfy `scrollWidth <= clientWidth`. The new expanded-drilled overflow
+  test must assert the pill text (workspace name) is visible AND no overflow.
+- The collapse toggle is rendered UNCONDITIONALLY on md+ (layout:269, no `drill`
+  gate); the band back chevron is rendered only when `drill !== null`. So the "two
+  chevrons" only co-exist in drilled states — which is exactly the chat/KB
+  screenshots. Top-level `/dashboard` shows only the collapse toggle (band uses the
+  invisible placeholder, band:137-141). AC8 protects this.
+
 # 🐛 fix: Workspace selector overflows nav rail + back-arrow chevrons misaligned
 
 ## Overview
@@ -238,9 +281,13 @@ on the final Files-to-Edit list; the other three files had zero matches.)
 ### Pre-merge (PR)
 
 - [ ] **AC1 — No overflow (expanded drilled).** At `md:w-56` on `/dashboard/kb` and
-  `/dashboard/chat/<id>`, the workspace pill's right edge is `<=` the rail's right
-  edge (no spill into `<main>`). Verified by Playwright `nav-states-shell.e2e.ts`
-  screenshot/bounding-box assertion (the #4833 VRT gate) for both routes.
+  `/dashboard/chat/<id>`, the rail must not overflow: add a NEW test to
+  `e2e/nav-states-shell.e2e.ts` (the existing "drilled (expanded)" test at line 222
+  checks chrome presence only — it has NO overflow assertion; that gap is why Bug 1
+  ships). The new test reuses the canonical probe verbatim:
+  `const overflow = await aside.evaluate((el) => el.scrollWidth - el.clientWidth); expect(overflow).toBeLessThanOrEqual(1);`
+  AND (per the empty-band guard, e2e:16-19) asserts the pill's workspace-name text
+  is visible so an unmounted band cannot trivially pass.
 - [ ] **AC2 — No overflow (collapsed).** At `md:w-14` the icon-only band path
   (`data-collapsed="true"`) stays within 56px; no horizontal scrollbar on the rail.
 - [ ] **AC3 — Single collapse chevron.** In every state there is exactly ONE
@@ -320,6 +367,32 @@ None — no server, service, cron, vendor, DNS, cert, secret, or firewall rule
 introduced. Pure code change against the already-provisioned web-platform app.
 
 ## Risks & Mitigations
+
+### Precedent diff (Phase 4.4)
+
+Pattern-bound behavior: truncating flex within a width-bounded rail. Codebase
+precedent exists — adopt it rather than inventing a clamp shape:
+
+```
+# Canonical truncating-flex (components/chat/kb-chat-content.tsx:150)
+<div className="min-w-0 flex-1 truncate"> ... </div>
+# Media clamp (components/kb/file-preview.tsx:73)
+className="max-h-[60vh] max-w-full object-contain"
+```
+
+The `OrgSwitcher` button (org-switcher.tsx:102) currently has neither `w-full` nor
+`min-w-0` on its own flex container — it is the outlier. Fix B applies the precedent
+shape (`w-full min-w-0 max-w-full`) to the button + static chip; the inner text
+column already follows precedent (`min-w-0 ... truncate`, org-switcher.tsx:82-83,108-109).
+
+### Verify-the-negative (Phase 4.45)
+
+The plan's "no behavior regression" claim (AC6) was probed: `OrgSwitcherContainer`'s
+switch path (`executeSwitch`, RPC + `refreshSession` + `window.location.assign`,
+org-switcher-container.tsx:64-103) is NOT in any Files-to-Edit hunk — Fix B touches
+only the `border-b px-3 py-3` wrapper (L123) padding, not the logic. Confirmed:
+existing behavior tests have 0 `toHaveClass` padding/width assertions, so the
+class-only changes cannot break them.
 
 - **Flexbox `min-w-0` chain.** A single missing `min-w-0` between band `flex-1` →
   container → button defeats truncation. Mitigation: Fix B step 3 audits the full

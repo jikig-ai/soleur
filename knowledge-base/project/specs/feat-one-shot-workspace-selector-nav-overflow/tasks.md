@@ -38,9 +38,14 @@ lane: single-domain
 ## 3. Testing / Verification
 
 - [ ] 3.1 New + existing vitest suites pass (`vitest run`) — AC6/AC7.
-- [ ] 3.2 Playwright VRT gate `e2e/nav-states-shell.e2e.ts`: assert pill within rail
-      bounds on `/dashboard/kb` and `/dashboard/chat/<id>`, expanded + collapsed
-      (AC1/AC2), and back-affordance x ~= collapse-toggle x (AC4).
+- [ ] 3.2 Playwright VRT gate `e2e/nav-states-shell.e2e.ts`: ADD a new
+      "drilled (expanded): no horizontal overflow (Bug 1)" test at `md:w-56` for
+      `/dashboard/kb` and `/dashboard/chat/<id>` — the existing line-222 test checks
+      chrome only, NO overflow assertion. Reuse the canonical probe verbatim:
+      `aside.evaluate((el) => el.scrollWidth - el.clientWidth)` → `toBeLessThanOrEqual(1)`,
+      AND assert pill workspace-name text is visible (empty-band guard, e2e:16-19).
+      Collapsed states (AC2) already covered by existing tests at lines 239/267.
+      Add back-affordance x ~= collapse-toggle x bounding-box check (AC4).
 - [ ] 3.3 Confirm `/dashboard` top-level unchanged: wordmark + single chevron, no
       back chevron (AC8).
 - [ ] 3.4 Confirm no workspace-switch behavior regression (RPC/JWT/reload untouched).
