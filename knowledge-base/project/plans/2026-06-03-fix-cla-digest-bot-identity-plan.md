@@ -13,6 +13,22 @@ requires_cpo_signoff: false
 
 🐛 **Bug fix** — recurring `cla-check` FAILURE on every automated community-digest PR (e.g. PR #4907).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-03
+**Sections enhanced:** Decisions (precedent-diff), Research Insights (live-verification evidence)
+
+### Key Improvements
+
+1. **Precedent-diff gate (Phase 4.4):** confirmed the target identity (`github-actions[bot]` / `41898282+...@users.noreply.github.com`) is the *exact* canonical form already used by 9 sibling cron functions and is distinct from the agent push path's local identity — the fix adopts an established pattern, not a novel one.
+2. **Live-verification evidence:** every cited PR/issue (#4907 OPEN, #4899 MERGED, #4870 MERGED), commit (9cd62804 ancestor-of-main, 17c6afd4 = digest commit), CLA action SHA pin (`ca4a40a7…`), and the load-bearing DB-ID claim (`github-actions[bot]` = 41898282, type Bot) resolved live at deepen time.
+3. **Halt gates 4.6/4.7/4.8/4.9 all pass:** User-Brand Impact present (threshold `aggregate pattern`), Observability 5-field schema complete with non-SSH discoverability test, no PAT-shaped variables, no UI surface.
+
+### New Considerations Discovered
+
+- The fix relies on GitHub resolving the `41898282+github-actions[bot]@users.noreply.github.com` noreply email → DB ID 41898282. This is the same resolution the 9 sibling crons already depend on and that `cla-evidence` exercises today; if GitHub ever changes noreply→account mapping, failure mode and detection are captured in `## Observability`.
+- No defense was *relaxed* by this change — the global default moves from a never-clearing identity (`soleur@localhost`) to an always-clearing one (`github-actions[bot]`); strictly an improvement in CLA outcome with no new ceiling to name.
+
 ## Overview
 
 The daily `cron-community-monitor` Inngest function opens a community-digest PR. Its digest commit is authored by `Soleur <soleur@localhost>` — an identity with **no GitHub login**. The `cla-check` workflow (`contributor-assistant/github-action@v2.6.1`, `.github/workflows/cla.yml`) resolves PR authors via GraphQL `commit.author.user.login`; `soleur@localhost` maps to no contributor, so it can never match the allowlist (`dependabot[bot],github-actions[bot],renovate[bot],deruelle,claude[bot]`) and the check fails. The PR is then stuck — and the standard "comment to sign the CLA" remediation cannot work, because `soleur@localhost` has no GitHub account to attribute a signature to.
@@ -123,6 +139,20 @@ Satisfies AC8.
 - **Keep the prompt-level `git config` as defense-in-depth (recommended, do NOT simplify).** The seven sibling cron functions (`cron-seo-aeo-audit`, `cron-competitive-analysis`, `cron-growth-audit`, `cron-campaign-calendar`, `cron-growth-execution`, `cron-content-generator`, `cron-community-monitor`) all set the same local github-actions[bot] identity. Removing it from `cron-community-monitor` alone would create inconsistency with its siblings AND remove a working override for the (rare) case where local config is desired over the global. The prompt step is now redundant-but-harmless: when the model executes it, identity is correct; when skipped, the new global default is *also* correct. Belt-and-suspenders is the right call here. (If a follow-up wants to retire the prompt steps cohort-wide now that the global is safe, that is a separate, larger PR — file as a deferral, do not fold in.)
 - **PR #4907 unblock: close-and-regenerate over author-amend** (Phase 2). Lower risk, lower toil, no information loss.
 - **No Concierge change.** `push-branch.ts` sets its own local identity; the global default swap does not reach it.
+
+### Precedent-Diff (Phase 4.4) — pattern is established, not novel
+
+The chosen identity is the canonical bot-author form already used across the cron cohort. `git grep` for the email literal returns 9 sibling sites that set exactly `github-actions[bot]` / `41898282+github-actions[bot]@users.noreply.github.com` as a **local** repo config before committing:
+
+| Site | Mechanism | Scope |
+|---|---|---|
+| `cron-community-monitor.ts:181-182` | prompt prose (free-text → unreliable) | local |
+| `cron-seo-aeo-audit.ts:112-113`, `cron-competitive-analysis.ts:132-133`, `cron-growth-audit.ts:93-94`, `cron-campaign-calendar.ts:92-93`, `cron-growth-execution.ts:120-121`, `cron-content-generator.ts:97-98` | prompt prose | local |
+| `cron-weekly-analytics.ts:271-272`, `cron-compound-promote.ts:590-591`, `cron-rule-prune.ts:298-304`, `cron-content-vendor-drift.ts:540-546` | `spawnGitChecked(["config", ...])` (deterministic code) | local |
+| **`Dockerfile:137` (this fix)** | `git config --global` (deterministic build layer) | **global default** |
+| `push-branch.ts:99-110` (agent push) | `execFileSync("git", ["config", ...])` with `AGENT_AUTHOR_NAME`/`EMAIL` | local (`Soleur Agent <agent@soleur.ai>` — distinct, intentional) |
+
+Diff vs precedent: this fix sets the **same canonical identity** the cron cohort already uses, but at the **global** layer so it becomes the safe *default* (the cron prompt steps remain as local-scope defense-in-depth). The only site with a deliberately *different* identity is `push-branch.ts` (the Concierge/agent path), which sets its own local identity and is therefore unaffected by the global swap — confirming the #4899 non-regression. **No novel pattern is introduced; the fix moves an already-canonical value to a more robust scope.**
 
 ## Domain Review
 
