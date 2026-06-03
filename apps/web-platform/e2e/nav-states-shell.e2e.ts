@@ -455,6 +455,18 @@ test.describe("nav-states visual gate — desktop", () => {
     await expect(railBand(page)).toHaveAttribute("data-collapsed", "true");
     await expect(page.getByTestId("live-repo-dot")).toBeVisible();
 
+    // Phase 1 (#4915): the collapsed identity is the MONOGRAM tile (non-gold),
+    // and the FULL workspace name is the tooltip — the authoritative
+    // disambiguator for shared-initial monograms (P0-3).
+    const idIcon = railBand(page).getByTestId("workspace-identity-icon");
+    await expect(idIcon).toHaveAttribute("title", "Soleur Workspace", {
+      timeout: 15_000,
+    });
+    const monogram = idIcon.getByTestId("workspace-identity-tile");
+    await expect(monogram).toBeVisible();
+    await expect(monogram).toHaveText("S"); // "Soleur Workspace" → "S"
+    expect(await monogram.getAttribute("class")).not.toMatch(/accent-gold/);
+
     // Bug 2 invariant: the rail must NOT overflow horizontally, and the verbose
     // "Working on:" repo label must be ABSENT from the rail (icon-only form). Use
     // toHaveCount(0) at the rail-variant scope — NOT toBeHidden() on the (empty)
@@ -692,5 +704,38 @@ test.describe("nav-states visual gate — mobile", () => {
     );
     await expect(mobileBand).toBeVisible({ timeout: 15_000 });
     await expect(mobileBand).toContainText("Soleur Workspace", { timeout: 15_000 });
+  });
+
+  test("mobile fullWidth (empty KB): page-body header owns the only 'Knowledge Base' title + back (Phase 4)", async ({ page }) => {
+    await setupNavMocks(page);
+    // Override with an EMPTY tree so the fullWidth EmptyState branch renders
+    // (registered AFTER setup → Playwright matches it first).
+    await page.route("**/api/kb/tree*", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          tree: { name: "root", type: "directory", path: "", children: [] },
+          lastSync: null,
+          needsReconnect: false,
+        }),
+      }),
+    );
+    await gotoOrSkip(page, "/dashboard/kb");
+
+    // P0-1: the chromeless mobile fullWidth body now carries a page header.
+    const header = page.getByTestId("kb-page-mobile-header");
+    await expect(header).toBeVisible({ timeout: 15_000 });
+    await expect(header.getByText("Knowledge Base")).toBeVisible();
+    await expect(
+      header.getByRole("link", { name: /back to menu/i }),
+    ).toHaveAttribute("href", "/dashboard");
+
+    // P2-4: exactly one "Knowledge Base" title on mobile — the band's mobile
+    // section title is suppressed (the page header owns it).
+    const mobileBand = page.locator(
+      '[data-testid="workspace-context-band"][data-variant="mobile"]',
+    );
+    await expect(mobileBand.getByTestId("nav-section-title")).toHaveCount(0);
   });
 });

@@ -40,10 +40,10 @@ deferred: [4916, 4917]
 - [x] 4.2 Ensure exactly one "Knowledge Base" title on mobile (no band/page double-render)
 
 ## Phase 5 — Visual regression gate + test reconciliation
-- [ ] 5.1 Extend `e2e/nav-states-shell.e2e.ts`: mock app routes (`/api/workspace/active-repo`, `/list-memberships`); assert content testids + `scrollWidth-clientWidth<=1` at `md:w-56`/`md:w-14`; identity present every drill state; collapsed monogram non-gold + name tooltip
-- [ ] 5.2 Reconcile vitest suites green: `nav-single-mount`, `nav-chevron-alignment`, `nav-rail-drill`, `org-switcher`, `workspace-context-band`, `workspace-identity-tile`
-- [ ] 5.3 `tsc --noEmit` clean; run e2e via Playwright (excluded from vitest)
-- [ ] 5.4 PR body: `Closes #4915`; reference #4916, #4917
+- [x] 5.1 Extend `e2e/nav-states-shell.e2e.ts`: mock app routes (`/api/workspace/active-repo`, `/list-memberships`); assert content testids + `scrollWidth-clientWidth<=1` at `md:w-56`/`md:w-14`; identity present every drill state; collapsed monogram non-gold + name tooltip
+- [x] 5.2 Reconcile vitest suites green: `nav-single-mount`, `nav-chevron-alignment`, `nav-rail-drill`, `org-switcher`, `workspace-context-band`, `workspace-identity-tile`
+- [x] 5.3 `tsc --noEmit` clean; run e2e via Playwright (excluded from vitest)
+- [ ] 5.4 PR body: `Closes #4915`; reference #4916, #4917 (at ship)
 
 ## Out of scope (tracked)
 - #4916 — workspace logo UPLOAD (settings + storage + logo_url + gdpr-gate)
