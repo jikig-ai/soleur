@@ -64,6 +64,27 @@ export function useRailWidth(
     }
   }, [storageKey]);
 
+  // Re-clamp the APPLIED width against the live viewport on resize so the 40vw
+  // ceiling (railMaxPx) cannot go stale — a window shrunk below the stored
+  // width must not let the rail swallow the content area. Re-derive from the
+  // stored INTENT (not the current applied value) so growing the window back
+  // restores the user's chosen width rather than the transiently-clamped one.
+  // setState bails out when the clamp is a no-op, so this only re-renders (and
+  // refreshes the handle's `max`) when the viewport actually constrains the rail.
+  useEffect(() => {
+    function onResize() {
+      try {
+        const raw = localStorage.getItem(storageKey);
+        const intent = raw !== null ? parseInt(raw, 10) : RAIL_DEFAULT_PX;
+        setWidthState(clampRailWidth(Number.isNaN(intent) ? RAIL_DEFAULT_PX : intent));
+      } catch {
+        setWidthState((w) => clampRailWidth(w));
+      }
+    }
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [storageKey]);
+
   const setWidth = useCallback(
     (px: number, persist = true) => {
       const clamped = clampRailWidth(px);

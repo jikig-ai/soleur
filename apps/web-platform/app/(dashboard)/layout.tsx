@@ -253,7 +253,7 @@ export default function DashboardLayout({
         // at every breakpoint and resize the mobile drawer too — Sharp Edge.)
         style={
           kbExpanded
-            ? ({ ["--kb-rail-w" as string]: `${railWidth}px` } as React.CSSProperties)
+            ? ({ "--kb-rail-w": `${railWidth}px` } as React.CSSProperties)
             : undefined
         }
         className={`
@@ -262,6 +262,8 @@ export default function DashboardLayout({
           ${drawerOpen ? "translate-x-0" : "-translate-x-full"}
           md:relative md:z-30 md:translate-x-0
           md:transition-[width] md:duration-200 md:ease-out
+          ${/* md:w-56 = 14rem = 224px = RAIL_DEFAULT_PX (use-rail-width.ts); the KB
+               rail starts at that same default before any drag. */ ""}
           ${collapsed ? "md:w-14" : kbExpanded ? "md:w-[var(--kb-rail-w)]" : "md:w-56"}
         `}
       >

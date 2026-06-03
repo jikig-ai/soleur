@@ -96,6 +96,41 @@ describe("useRailWidth", () => {
     expect(localStorage.getItem(RAIL_WIDTH_KEY)).toBeNull();
   });
 
+  it("re-clamps the applied width against the live viewport on resize, preserving stored intent", () => {
+    const originalWidth = window.innerWidth;
+    const setViewport = (w: number) =>
+      Object.defineProperty(window, "innerWidth", {
+        value: w,
+        configurable: true,
+        writable: true,
+      });
+    // Pin a wide viewport so 400 fits (railMaxPx(1280) = 480) at hydration,
+    // independent of the test env's default innerWidth.
+    setViewport(1280);
+    localStorage.setItem(RAIL_WIDTH_KEY, "400");
+    const { result } = renderHook(() => useRailWidth());
+    expect(result.current[0]).toBe(400);
+
+    // Shrink the viewport so 40vw falls below the stored width → clamp kicks in.
+    act(() => {
+      setViewport(500);
+      window.dispatchEvent(new Event("resize"));
+    });
+    // railMaxPx(500) = max(224, min(480, 200)) = 224 → applied width clamps down,
+    // but the stored INTENT (400) is untouched so a grow-back restores it.
+    expect(result.current[0]).toBe(224);
+    expect(localStorage.getItem(RAIL_WIDTH_KEY)).toBe("400");
+
+    // Grow the viewport back → the stored 400 intent is re-applied.
+    act(() => {
+      setViewport(1280);
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(result.current[0]).toBe(400);
+
+    setViewport(originalWidth);
+  });
+
   it("is private-mode safe — a throwing localStorage does not crash the hook", () => {
     const throwingStorage = {
       getItem: () => {

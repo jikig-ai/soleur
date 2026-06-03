@@ -29,6 +29,11 @@ import {
 // useEffect, so the collapsed-width assertions use retrying locator assertions.
 
 const RAIL_COLLAPSE_KEY = "soleur:sidebar.main.collapsed";
+// Mirrors RAIL_WIDTH_KEY in hooks/use-rail-width.ts. Declared here (not imported)
+// because addInitScript/page.evaluate run in the browser context where importing
+// a "use client" hook module is awkward; keep the literal in lockstep with the hook.
+const RAIL_WIDTH_KEY = "soleur:sidebar.kb.width";
+const RAIL_MAX_ABS_PX = 480; // mirrors RAIL_MAX_ABS_PX in use-rail-width.ts
 
 const MOCK_MEMBERSHIP = {
   organizationId: "org-e2e-1",
@@ -532,9 +537,9 @@ test.describe("widenable KB rail — desktop", () => {
     await setupNavMocks(page);
     // Pre-seed a widened width, then collapse — the rail must still be 56px and
     // the handle gone; the stored width is preserved for re-expand.
-    await page.addInitScript(() => {
-      localStorage.setItem("soleur:sidebar.kb.width", "400");
-    });
+    await page.addInitScript((key) => {
+      localStorage.setItem(key, "400");
+    }, RAIL_WIDTH_KEY);
     await seedCollapsed(page);
     await gotoOrSkip(page, "/dashboard/kb");
 
@@ -544,10 +549,43 @@ test.describe("widenable KB rail — desktop", () => {
     const width = await asideWidth(page);
     expect(width).toBeLessThanOrEqual(64); // ~56px collapsed rail
     // Stored width is untouched (returns on expand).
-    const stored = await page.evaluate(() =>
-      localStorage.getItem("soleur:sidebar.kb.width"),
+    const stored = await page.evaluate(
+      (key) => localStorage.getItem(key),
+      RAIL_WIDTH_KEY,
     );
     expect(stored).toBe("400");
+  });
+
+  test("a stored over-range width is clamped on hydration, never swallowing content (AC11 wiring)", async ({ page }) => {
+    await setupNavMocks(page);
+    // Seed a corrupt/oversized stored width; the layout must apply the CLAMPED
+    // value (≤ RAIL_MAX_ABS_PX), proving the hook's clamp-on-read reaches the
+    // aside — the wiring the unit clamp test cannot cover.
+    await page.addInitScript((key) => {
+      localStorage.setItem(key, "9999");
+    }, RAIL_WIDTH_KEY);
+    await gotoOrSkip(page, "/dashboard/kb");
+    await expect(resizeHandle(page)).toBeVisible({ timeout: 15_000 });
+    const width = await asideWidth(page);
+    expect(width).toBeLessThanOrEqual(RAIL_MAX_ABS_PX);
+    expect(width).toBeGreaterThanOrEqual(224);
+  });
+
+  test("re-expanding a collapsed-but-widened rail restores the stored width (AC12 round-trip)", async ({ page }) => {
+    await setupNavMocks(page);
+    await page.addInitScript((key) => {
+      localStorage.setItem(key, "360");
+    }, RAIL_WIDTH_KEY);
+    await seedCollapsed(page);
+    await gotoOrSkip(page, "/dashboard/kb");
+
+    const aside = page.locator("aside").first();
+    await expect(aside).toHaveClass(/md:w-14/, { timeout: 15_000 });
+    // Expand via ⌘B; the widened width must return.
+    await page.keyboard.press("Meta+b");
+    await expect(resizeHandle(page)).toBeVisible({ timeout: 15_000 });
+    const width = await asideWidth(page);
+    expect(Math.abs(width - 360)).toBeLessThanOrEqual(2);
   });
 
   test("resize handle is KB-only — absent on Settings and Chat (AC13)", async ({ page }) => {
