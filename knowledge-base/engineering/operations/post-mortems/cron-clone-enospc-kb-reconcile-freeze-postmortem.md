@@ -7,12 +7,45 @@ status: resolved
 art_33_breach: false
 art_34_notification: false
 gdpr_rationale: "No personal-data exposure. The affected content is the user's own Knowledge Base (their own git repo), visible only to them; the failure mode is under-display (stale/frozen sync), not over-exposure. The reclaimed data is the platform's OWN ephemeral repo clones (jikig-ai/soleur), never user content. No Art. 33/34 clock."
-related_prs: [4770, 4878, 4886]
+related_prs: [4770, 4878, 4886, 4895, 4901]
 related_issues: [4882]
 sibling_pir: kb-sync-stale-no-manual-recovery-postmortem.md
+root_cause_corrected: true
 ---
 
 # Post-Incident Report: cron-clone ENOSPC froze the org-workspace KB reconcile
+
+> ## ⚠️ ROOT-CAUSE CORRECTION (2026-06-03, after deeper no-SSH diagnosis)
+>
+> **The freeze was NOT caused by cron-clone ENOSPC.** That mechanism came from the
+> initial incident report and was never confirmed — a no-SSH Sentry-issue read
+> (`SENTRY_IAC_AUTH_TOKEN`) later showed **zero** `cron-workspace-low-disk` / ENOSPC
+> warns in the window, and the reconcile's ACTUAL error (Sentry `WEB-PLATFORM-1V`,
+> count 39):
+>
+> ```
+> error: Your local changes to the following files would be overwritten by merge:
+> 	.claude/settings.json
+> Please commit your changes or stash them before you merge. Aborting
+> ```
+>
+> The org-KB **mirror clone had an uncommitted local edit to `.claude/settings.json`**,
+> so `git pull --ff-only` aborted on EVERY push (a **dirty-working-tree** failure,
+> NOT ENOSPC and NOT the #4878 non-fast-forward class), and the reconcile froze.
+>
+> **Actual fix: PR #4901** — `classifyGitSyncError` now routes the dirty-tree abort
+> to the same gated `reset --hard origin/<default>` self-heal (#4878), which discards
+> the spurious mirror edit while the un-pushed-commit gate protects real session work.
+>
+> The cron-clone GC + isolation work below (#4886/#4895) is **real defense-in-depth**
+> for a genuine leak class, but it did **not** cause or fix this freeze. The sections
+> below are retained for that GC history; treat their "Root cause"/"Resolution" as the
+> *hypothesis that motivated the GC*, superseded by this correction.
+>
+> **Process lesson:** don't trust an incident report's stated mechanism — pull the
+> producer's actual error via the no-SSH toolchain first
+> (`hr-no-dashboard-eyeball-pull-data-yourself`). See
+> `knowledge-base/project/learnings/workflow-patterns/2026-06-03-no-ssh-prod-signal-toolchain-never-hand-the-operator-an-ssh-task.md`.
 
 ## Summary
 

@@ -76,6 +76,14 @@ vi.mock("@/server/resolve-installation-id", () => ({
 vi.mock("@/server/github-app", () => ({
   generateInstallationToken: vi.fn(async () => "ghs_test"),
 }));
+// Plan item 1 — cc-dispatcher imports the in-sandbox askpass writer from
+// git-auth. Mock here too (Phase 0.4 sweep: any new cold-path import must be
+// mocked in BOTH cc-dispatcher test files or the suite throws on import).
+// Default no-repo path never calls it, but the module must resolve.
+vi.mock("@/server/git-auth", () => ({
+  writeAskpassScriptTo: vi.fn(() => "/tmp/ws/.askpass-test.sh"),
+  cleanupAskpassScript: vi.fn(),
+}));
 vi.mock("@/server/resolve-bash-autonomous", () => ({
   resolveBashAutonomous: vi.fn(async () => false),
 }));
