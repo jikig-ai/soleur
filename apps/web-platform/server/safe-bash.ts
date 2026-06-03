@@ -11,16 +11,30 @@
 // command — substring matches do NOT count, so `pwd && curl evil` cannot
 // match the `pwd` entry.
 //
-// The regex contract is two-stage:
-//   1. SHELL_METACHAR_DENYLIST rejects ANY raw command containing one of
-//      `;`, `&`, `&&`, `|`, `||`, backtick, `$(`, `${`, `>`, `>>`, `<`,
-//      `<<`, newline, carriage return. Single-regex check on the raw
-//      string (not after splitting) so escape-sneak attempts (`pwd\;ls`)
-//      cannot launder through. Backslash itself is rejected to seal the
-//      escape-sneak surface.
-//   2. SAFE_BASH_PATTERNS matches the trimmed command. Each per-tool
+// The regex contract is two-stage, applied PER SEGMENT (see the
+// `&&`-decomposition carve-out below):
+//   1. SHELL_METACHAR_DENYLIST rejects ANY segment containing one of
+//      `;`, `&`, `|`, `||`, backtick, `$(`, `${`, `>`, `>>`, `<`,
+//      `<<`, newline, carriage return, backslash. Backslash itself is
+//      rejected to seal the escape-sneak surface (`pwd\;ls`).
+//   2. SAFE_BASH_PATTERNS matches the trimmed segment. Each per-tool
 //      pattern uses a narrow path/identifier arg shape — no shell
 //      metacharacters allowed in args either.
+//
+// Two carve-outs relax this for read-only multi-command ergonomics WITHOUT
+// weakening the denylist (Issue B part 1):
+//   (a) `&&`-decomposition (AC9): `isBashCommandSafe` splits the raw command
+//       on `&&` and requires EVERY segment to pass stages 1+2 independently.
+//       This is the ONLY reason a `&` may appear in the input — a single `&`
+//       never splits, so its segment retains the `&` and stage 1 rejects it.
+//       `;`/`|`/`||` are NOT split points: they stay inside a segment and
+//       trip stage 1. The denylist regex is unchanged — `&` is still denied
+//       per-segment; decomposition happens on the string BEFORE the segment
+//       is denylist-checked.
+//   (b) Trailing stderr redirect (AC10): a single trailing `2>/dev/null` or
+//       `2>&1` is stripped from a segment BEFORE stage 1, so its `>`/`&` do
+//       not trip the (unchanged) denylist. File-path redirects survive the
+//       strip and are still rejected by stage 1.
 //
 // `find` and `grep` are intentionally OMITTED — both accept `-exec` and
 // could shell out. `find` is also redundant with the SDK's `Glob` tool
@@ -65,6 +79,13 @@ const PATH_TOKEN = String.raw`[\w./~+:=@-]+`;
 // rejects `$`/backtick at the raw-string level, so quoted strings here
 // cannot contain expansion sigils.
 const ECHO_TOKEN = String.raw`(?:"[^"\\]*"|'[^'\\]*'|[\w./~+:=@-]+)`;
+
+// gh-arg token (Issue B part 1, AC6): a flag (`--json`, `-R`, `--state`) OR a
+// value bareword. Adds `,` to PATH_TOKEN so `--json body,title,state` and
+// `--json number,title,state` match. No shell metachars — the raw-string
+// SHELL_METACHAR_DENYLIST still rejects `|`/`$`/backtick/`<`/`>` before any
+// pattern runs, so a comma is the only extra char this admits over PATH_TOKEN.
+const GH_ARG = String.raw`[\w./~+:=@,-]+`;
 
 export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
   // No-arg / fixed-form commands
@@ -112,6 +133,24 @@ export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
   new RegExp(String.raw`^git\s+config\s+--get(?:\s+[\w.-]+)?\s*$`),
   // echo — quoted strings or barewords
   new RegExp(String.raw`^echo(?:\s+${ECHO_TOKEN})*\s*$`),
+  // Read-only `gh` verbs (Issue B part 1, AC6). ONLY view/list/status/diff/
+  // checks/repo-view — never a write verb (edit/comment/close/create/merge/
+  // review/delete/secret/api). Arg shape: flags + comma-bearing values
+  // (`--json body,title,state`). No shell metacharacters reach here — the
+  // raw-string denylist already rejected `|`/`$`/backtick/redirects, so a
+  // `--jq '.[] | x'` pipe-bearing form falls through to the review-gate.
+  new RegExp(String.raw`^gh\s+issue\s+(?:view|list|status)(?:\s+${GH_ARG})*\s*$`),
+  new RegExp(String.raw`^gh\s+pr\s+(?:view|list|status|diff|checks)(?:\s+${GH_ARG})*\s*$`),
+  new RegExp(String.raw`^gh\s+repo\s+view(?:\s+${GH_ARG})*\s*$`),
+  // Read-only worktree-manager.sh subcommands ONLY (Issue B part 1, AC8).
+  // `list`/`ls` shell out to `git worktree list` (read-only). Every other
+  // subcommand (create/cleanup-merged/cleanup-tmp/draft-pr/sync) writes or
+  // destroys and is deliberately EXCLUDED — it stays gated (or is covered by
+  // the opt-in autonomous toggle). Exact literal path; the optional leading
+  // `./` is the form the agent emits; `..` cannot appear (PATH_TRAVERSAL_DENYLIST).
+  new RegExp(
+    String.raw`^bash\s+(?:\./)?plugins/soleur/skills/git-worktree/scripts/worktree-manager\.sh\s+(?:list|ls)\s*$`,
+  ),
 ];
 
 // Single source of truth for the safe-bash verb list. Used by the
@@ -123,6 +162,7 @@ const SAFE_BASH_VERBS = [
   "pwd", "whoami", "id", "date", "hostname",
   "cd", "ls", "cat", "head", "tail", "wc",
   "file", "stat", "which", "uname", "git", "echo",
+  "gh", "bash",
 ] as const;
 
 // Near-miss prefix detection (#3252). Matches commands whose leading
@@ -155,26 +195,57 @@ export const SAFE_BASH_NEAR_MISS_PREFIX = new RegExp(
  * The check runs AFTER `isBashCommandBlocked` in the canUseTool flow so
  * the blocklist is authoritative when both could match.
  */
-export function isBashCommandSafe(command: unknown): boolean {
-  if (typeof command !== "string" || command.length === 0) return false;
-  if (command.length > SAFE_BASH_MAX_INPUT_LENGTH) return false;
+// Trailing stderr-redirect carve-out (Issue B part 1, AC10). ONLY the exact
+// `2>/dev/null` and `2>&1` suffixes are recognized — both discard or merge
+// stderr without writing to an arbitrary file. Stripped from a segment BEFORE
+// the denylist runs so the suffix's own `>`/`&` don't trip SHELL_METACHAR_
+// DENYLIST. File-path redirects (`>`, `>>`, `<`, `>&`) are NOT recognized and
+// remain denied because they survive the strip and hit the denylist.
+const TRAILING_SAFE_REDIRECT = /\s+(?:2>\/dev\/null|2>&1)\s*$/;
+
+/**
+ * Is a single command segment (no `&&`) a safe, read-only command?
+ *
+ * Strips one recognized trailing stderr redirect, then applies the intact
+ * SHELL_METACHAR_DENYLIST + PATH_TRAVERSAL_DENYLIST + SAFE_BASH_PATTERNS
+ * allowlist. This is the per-segment unit that `isBashCommandSafe` composes
+ * across an `&&` chain — each denylist is re-applied here, never relaxed.
+ */
+function isSafeSingleSegment(segment: string): boolean {
+  // Strip a single recognized trailing stderr redirect (AC10). Anything else
+  // containing `>`/`<`/`&` survives to the denylist below.
+  const candidate = segment.replace(TRAILING_SAFE_REDIRECT, "");
   // Stage 1: raw-string metacharacter denylist. Run BEFORE trim so
   // leading/trailing newlines (for example) are caught.
-  if (SHELL_METACHAR_DENYLIST.test(command)) return false;
+  if (SHELL_METACHAR_DENYLIST.test(candidate)) return false;
   // Stage 1b: parent-dir traversal denylist (#3252). Run BEFORE the
   // per-pattern allowlist so PATH_TOKEN-shape regexes (cd <path>,
-  // cat <path>, ls <path>) cannot accept `../` arg shapes. Filenames
-  // starting with `..` (e.g. `..baz`) are not matched — see the regex
-  // definition. Bash uses `command`, not `file_path`/`path`, so the
-  // canUseTool's isFileTool→isPathInWorkspace defense does NOT fire
-  // for Bash invocations. This denylist is the canUseTool-boundary
-  // check; the bubblewrap sandbox is the OS-syscall-boundary check.
-  if (PATH_TRAVERSAL_DENYLIST.test(command)) return false;
-  const trimmed = command.trim();
+  // cat <path>, ls <path>) cannot accept `../` arg shapes.
+  if (PATH_TRAVERSAL_DENYLIST.test(candidate)) return false;
+  const trimmed = candidate.trim();
   if (trimmed.length === 0) return false;
-  // Stage 2: leading-token allowlist match against trimmed string.
+  // Stage 2: leading-token allowlist match against trimmed segment.
   for (const pattern of SAFE_BASH_PATTERNS) {
     if (pattern.test(trimmed)) return true;
   }
   return false;
+}
+
+export function isBashCommandSafe(command: unknown): boolean {
+  if (typeof command !== "string" || command.length === 0) return false;
+  if (command.length > SAFE_BASH_MAX_INPUT_LENGTH) return false;
+  // Decompose on `&&` ONLY (Issue B part 1, AC9). Each segment must
+  // independently be a safe single command. `&&`-decomposition is the ONLY
+  // relaxation: it is implemented by splitting, NOT by removing `&`/`>`/`<`
+  // from SHELL_METACHAR_DENYLIST. `;`/`|`/`||`/`$`/backtick/redirect stay
+  // fully denied because they remain inside a segment and trip the intact
+  // per-segment denylist. A single `&` (not `&&`) never splits, so the
+  // segment retains it and is rejected. A dangling/leading `&&` yields an
+  // empty segment, which fails the trimmed-length-0 check.
+  //
+  // `isBashCommandBlocked` (permission-callback.ts) is applied to the RAW
+  // full command BEFORE this function runs, so a blocked verb anywhere in a
+  // chain denies the whole command before decomposition is ever consulted.
+  const segments = command.split("&&");
+  return segments.every((seg) => isSafeSingleSegment(seg));
 }
