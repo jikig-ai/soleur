@@ -84,6 +84,27 @@ const OAUTH_ENV_VAR = "CLAUDE_CODE_OAUTH_TOKEN";
  */
 export interface BuildAgentEnvOptions {
   ghToken?: string;
+  /**
+   * Absolute path to the in-sandbox GIT_ASKPASS helper script. Written by
+   * the server under the agent's own `workspacePath` (the only verified
+   * sandbox-readable `allowWrite` dir) so a bwrap `git` subprocess can
+   * read+exec it. `GH_TOKEN` authenticates the `gh` CLI; raw `git`
+   * push/fetch/pull needs THIS separate askpass path. Paired with
+   * `gitInstallationToken` — both-or-nothing (a half-wired askpass is a
+   * silent auth failure).
+   */
+  gitAskpassScriptPath?: string;
+  /**
+   * The freshly-minted GitHub App **installation** token the askpass
+   * script reads at runtime from `GIT_INSTALLATION_TOKEN`. It is delivered
+   * via env ONLY — never interpolated into the askpass script body, never
+   * embedded in a `.git/config` remote URL, NEVER logged. Per
+   * `hr-github-app-auth-not-pat` this is an App installation token, never a
+   * PAT. Same token value as `ghToken` at the cc call site (one is for
+   * `gh`, the other for raw `git`); carried as a distinct field so the
+   * both-present guard is explicit.
+   */
+  gitInstallationToken?: string;
 }
 
 export function buildAgentEnv(
@@ -125,6 +146,32 @@ export function buildAgentEnv(
   // is a no-op (graceful degradation when no repo is connected). Never log.
   if (opts?.ghToken) {
     env.GH_TOKEN = opts.ghToken;
+  }
+
+  // In-sandbox raw-git credential path (plan item 1). `GH_TOKEN` authenticates
+  // the `gh` CLI but NOT `git push`/`fetch`/`pull`. These six vars are the
+  // credential-relevant subset of the server-side `gitWithInstallationAuth`
+  // env block in `git-auth.ts` — same names + values, no novel credential
+  // path. We intentionally omit that block's seventh var `GIT_TERMINAL_PROGRESS`
+  // (a cosmetic progress-meter toggle, irrelevant to a non-interactive sandbox
+  // subprocess) and cannot replicate its argv-level `HELPER_RESET`
+  // (`-c credential.helper=`) because the agent builds its own `git` argv;
+  // `GIT_CONFIG_NOSYSTEM`+`GIT_CONFIG_GLOBAL=/dev/null` neutralize system/global
+  // helpers, and the connected repo is freshly cloned with no repo-local
+  // `credential.helper`, so `GIT_ASKPASS` is authoritative. The token rides
+  // `GIT_INSTALLATION_TOKEN` (env) and is `printf`'d by the fixed askpass
+  // script; it is NEVER interpolated into the script body or a remote URL, and
+  // is NEVER logged (`hr-github-app-auth-not-pat`). BOTH-OR-NOTHING: a
+  // half-wired askpass (path without token, or token without path) is a silent
+  // auth failure, so inject the set only when both inputs are present (empty
+  // string counts as absent — graceful-degradation parity with `GH_TOKEN`).
+  if (opts?.gitAskpassScriptPath && opts?.gitInstallationToken) {
+    env.GIT_ASKPASS = opts.gitAskpassScriptPath;
+    env.GIT_USERNAME = "x-access-token";
+    env.GIT_INSTALLATION_TOKEN = opts.gitInstallationToken;
+    env.GIT_TERMINAL_PROMPT = "0";
+    env.GIT_CONFIG_NOSYSTEM = "1";
+    env.GIT_CONFIG_GLOBAL = "/dev/null";
   }
 
   // Auth var LAST and mutually exclusive: the credential branch is

@@ -30,6 +30,8 @@ const {
   mockResolveInstallationId,
   mockGenerateInstallationToken,
   mockResolveBashAutonomous,
+  mockWriteAskpassScriptTo,
+  mockCleanupAskpassScript,
 } = vi.hoisted(() => ({
   mockQuery: vi.fn(),
   mockGetUserApiKey: vi.fn(),
@@ -43,6 +45,8 @@ const {
   mockResolveInstallationId: vi.fn(),
   mockGenerateInstallationToken: vi.fn(),
   mockResolveBashAutonomous: vi.fn(),
+  mockWriteAskpassScriptTo: vi.fn(),
+  mockCleanupAskpassScript: vi.fn(),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -84,6 +88,14 @@ vi.mock("@/server/resolve-installation-id", () => ({
 
 vi.mock("@/server/github-app", () => ({
   generateInstallationToken: mockGenerateInstallationToken,
+}));
+
+// Plan item 1 — cc-dispatcher now imports the in-sandbox askpass writer from
+// git-auth. MUST be mocked here AND in cc-dispatcher-prefill-guard.test.ts or
+// the cold-start suite throws on import (Phase 0.4 sweep).
+vi.mock("@/server/git-auth", () => ({
+  writeAskpassScriptTo: mockWriteAskpassScriptTo,
+  cleanupAskpassScript: mockCleanupAskpassScript,
 }));
 
 // Issue B part 2 — autonomous toggle. Default off (false) so factory-shape
@@ -283,6 +295,11 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     mockResolveInstallationId.mockResolvedValue(null);
     mockGenerateInstallationToken.mockResolvedValue("ghs_default_test_token");
     mockResolveBashAutonomous.mockResolvedValue(false);
+    // Item 1 — in-sandbox askpass writer returns a deterministic path under
+    // the workspace (the real writer uses a randomUUID suffix).
+    mockWriteAskpassScriptTo.mockReturnValue(
+      `${WORKSPACE_PATH}/.askpass-fixed-test.sh`,
+    );
     setupSupabaseMockReturning(WORKSPACE_PATH);
   });
 
@@ -490,11 +507,98 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       987654,
       expect.objectContaining({ minRemainingMs: expect.any(Number) }),
     );
-    // buildAgentEnv receives the minted token via the opts param.
+    // buildAgentEnv receives the minted token via the opts param — plus the
+    // in-sandbox askpass wiring (item 1): the helper path + the same token as
+    // gitInstallationToken.
     expect(mockBuildAgentEnv).toHaveBeenCalledWith(
       { value: "sk-test", scheme: "api_key" },
       {},
-      { ghToken: "ghs_minted_xyz" },
+      {
+        ghToken: "ghs_minted_xyz",
+        gitAskpassScriptPath: `${WORKSPACE_PATH}/.askpass-fixed-test.sh`,
+        gitInstallationToken: "ghs_minted_xyz",
+      },
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // Item 1d/1e — in-sandbox git GIT_ASKPASS wiring (plan §Phase 1)
+  // -------------------------------------------------------------------------
+  it("item1d: connected repo → writes a fixed-name askpass helper under the workspace exactly once", async () => {
+    mockResolveInstallationId.mockResolvedValueOnce(987654);
+    mockGenerateInstallationToken.mockResolvedValueOnce("ghs_minted_xyz");
+
+    await realSdkQueryFactory(makeArgs());
+
+    // The helper is written under the user's OWN workspace (the only verified
+    // sandbox-readable allowWrite dir) — NOT $HOME/$TMPDIR — with a FIXED name
+    // so it is reused per workspace (no accumulation, no cleanup lifecycle).
+    // WORKSPACE_PATH/.git does not exist in the test, so the dir is the
+    // workspace root; in prod with a cloned repo it is `<workspace>/.git`.
+    expect(mockWriteAskpassScriptTo).toHaveBeenCalledTimes(1);
+    expect(mockWriteAskpassScriptTo).toHaveBeenCalledWith(
+      WORKSPACE_PATH,
+      ".soleur-askpass.sh",
+    );
+    // And the writer's resolved path is threaded into buildAgentEnv (not a
+    // vacuous "env exists" check — assert the askpass path actually flows).
+    expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        gitAskpassScriptPath: `${WORKSPACE_PATH}/.askpass-fixed-test.sh`,
+        gitInstallationToken: "ghs_minted_xyz",
+      }),
+    );
+  });
+
+  it("item1d: no connected repo (null installation) → NO askpass write, gitAskpassScriptPath undefined", async () => {
+    mockResolveInstallationId.mockResolvedValueOnce(null);
+
+    await realSdkQueryFactory(makeArgs());
+
+    expect(mockWriteAskpassScriptTo).not.toHaveBeenCalled();
+    // buildAgentEnv receives undefined askpass inputs (both-or-nothing → the
+    // GIT_* set is never injected for a no-repo dispatch).
+    expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+      { value: "sk-test", scheme: "api_key" },
+      {},
+      {
+        ghToken: undefined,
+        gitAskpassScriptPath: undefined,
+        gitInstallationToken: undefined,
+      },
+    );
+  });
+
+  it("item1d: mint failure → NO askpass write (no token to ride GIT_INSTALLATION_TOKEN)", async () => {
+    mockResolveInstallationId.mockResolvedValueOnce(987654);
+    mockGenerateInstallationToken.mockRejectedValueOnce(new Error("mint boom"));
+
+    await realSdkQueryFactory(makeArgs());
+
+    expect(mockWriteAskpassScriptTo).not.toHaveBeenCalled();
+  });
+
+  it("item1e: the askpass-helper path is the ONLY place the credential is wired — token never embedded in a remote URL or argv", async () => {
+    mockResolveInstallationId.mockResolvedValueOnce(987654);
+    mockGenerateInstallationToken.mockResolvedValueOnce("ghs_minted_xyz");
+
+    await realSdkQueryFactory(makeArgs());
+
+    // The minted token must NOT appear in the askpass-writer arguments (it
+    // takes only the dir); it rides GIT_INSTALLATION_TOKEN env, set by
+    // buildAgentEnv. Synthesized-fixture invariant per cq-test-fixtures-synthesized-only.
+    for (const call of mockWriteAskpassScriptTo.mock.calls) {
+      expect(JSON.stringify(call)).not.toContain("ghs_minted_xyz");
+    }
+    // The clone/remote URL path lives in ensure-workspace-repo (mocked here);
+    // git-auth's own suite pins "token NEVER appears in execFile args". This
+    // assertion pins that the cc wiring passes only the workspace dir + the
+    // fixed helper name — never the token.
+    expect(mockWriteAskpassScriptTo).toHaveBeenCalledWith(
+      WORKSPACE_PATH,
+      ".soleur-askpass.sh",
     );
   });
 
