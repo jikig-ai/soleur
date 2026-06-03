@@ -178,25 +178,25 @@ merged document, or a self-heal that wipes a workspace, is a per-user trust-endi
 
 **Fix A — manual sync affordance**
 
-- [ ] AC-A1: `KbSyncStatus` is rendered from `KbSidebarShell`
+- [x] AC-A1: `KbSyncStatus` is rendered from `KbSidebarShell`
   (`apps/web-platform/components/kb/kb-sidebar-shell.tsx`), reading `lastSync` +
   `refreshTree` from `useKb()`. Verify: `git grep -n "KbSyncStatus" apps/web-platform/components/kb/kb-sidebar-shell.tsx`
   returns ≥1 line.
-- [ ] AC-A2: On the empty-tree rail branch (`isEmpty === true`) the sync affordance is
+- [x] AC-A2: On the empty-tree rail branch (`isEmpty === true`) the sync affordance is
   STILL rendered (the affordance must survive the "No documents yet" CTA branch — that is
   the exact stale/empty landing the incident hit). Verify via component test: render
   `KbSidebarShell` with an empty tree and assert `getByRole("button", { name: /sync now/i })`.
-- [ ] AC-A3: Clicking "Sync now" from the rail POSTs `/api/kb/sync` and, on success, calls
+- [x] AC-A3: Clicking "Sync now" from the rail POSTs `/api/kb/sync` and, on success, calls
   `refreshTree` (re-fetches `/api/kb/tree` → updates tree + lastSync). Verify via test on
   the rail wrapper: mock fetch, assert URL `/api/kb/sync` + method POST + that the
   context `refreshTree` was invoked on success.
-- [ ] AC-A4: `error_class`-driven desync label still renders (`ok:false` row →
+- [x] AC-A4: `error_class`-driven desync label still renders (`ok:false` row →
   "out of sync") from the rail mount — no regression to the existing
   `kb-sync-status.test.tsx` discriminator cases (all existing tests still pass).
-- [ ] AC-A5: Decision recorded (Phase 1) on whether `DesktopPlaceholder` ALSO gets the
+- [x] AC-A5: Decision recorded (Phase 1) on whether `DesktopPlaceholder` ALSO gets the
   affordance. If yes, the placeholder test asserts the button; if no, a one-line rationale
   is in the plan body and the rail mount alone satisfies "reachable without opening a file".
-- [ ] AC-A6: The rail mount matches the committed wireframe
+- [x] AC-A6: The rail mount matches the committed wireframe
   `knowledge-base/product/design/kb-viewer/kb-viewer-wireframes.pen` (three states: synced
   "Synced Nm ago", empty-tree "Workspace ready", desync "Workspace out of sync") — the
   affordance is pinned to the rail footer above-the-fold and renders in ALL three rail
@@ -204,19 +204,19 @@ merged document, or a self-heal that wipes a workspace, is a per-user trust-endi
 
 **Fix B — reconcile classification + self-heal**
 
-- [ ] AC-B1: `syncWorkspace` returns a discriminated failure carrying a typed
+- [x] AC-B1: `syncWorkspace` returns a discriminated failure carrying a typed
   `errorClass: KbSyncErrorClass` (at minimum `non_fast_forward` vs `sync_failed`), derived
   from the git stderr/exit signature — NOT hard-coded. Verify via
   `test/kb-route-helpers.test.ts`: mock `gitWithInstallationAuth` to reject with a stderr
   containing the non-fast-forward signature and assert the returned `errorClass === "non_fast_forward"`;
   reject with an auth/IO error and assert `errorClass === "sync_failed"`.
-- [ ] AC-B2: Both `appendKbSyncRow` call sites
+- [x] AC-B2: Both `appendKbSyncRow` call sites
   (`app/api/kb/sync/route.ts`, `server/inngest/functions/workspace-reconcile-on-push.ts`)
   write the REAL `error_class` from `syncResult`, not a hard-coded literal. Verify:
   `git grep -n "ERROR_CLASS_SYNC_FAILED" app/api/kb/sync/route.ts server/inngest/functions/workspace-reconcile-on-push.ts`
   no longer shows it as the only/hard-coded value on the failure path (the value flows from
   `syncResult.errorClass`).
-- [ ] AC-B3: On a detected `non_fast_forward`, `syncWorkspace` attempts the gated self-heal
+- [x] AC-B3: On a detected `non_fast_forward`, `syncWorkspace` attempts the gated self-heal
   via `gitWithInstallationAuth`: `git fetch origin <default>`, then check local commits
   (`git rev-list --count @{u}..HEAD`). If ZERO → `git reset --hard origin/<default>` and
   return `{ ok: true, recovered: true }`. If NON-ZERO → do NOT reset; return
@@ -225,31 +225,31 @@ merged document, or a self-heal that wipes a workspace, is a per-user trust-endi
   commits → assert fetch+rev-list+reset argv with resolved default branch + `{ok:true,
   recovered:true}`; (b) non-FF + non-zero local commits → assert NO reset argv + `{ok:false}`;
   (c) self-heal git error → `{ok:false}` + fail_loud.
-- [ ] AC-B4: The self-heal is OBSERVABLE: a successful self-heal emits a distinct Sentry
+- [x] AC-B4: The self-heal is OBSERVABLE: a successful self-heal emits a distinct Sentry
   breadcrumb/event AND records a `kb_sync_history` row distinguishing "recovered via
   reset" from a clean pull (e.g. `ok:true` with a `recovered: true`/trigger annotation or a
   dedicated breadcrumb). A FAILED self-heal mirrors to Sentry with `fail_loud` and records
   `ok:false`. Verify: tests assert the observability call fired on both branches.
-- [ ] AC-B5: The default branch is resolved, not assumed `main`. Verify the resolution
+- [x] AC-B5: The default branch is resolved, not assumed `main`. Verify the resolution
   source in `Files to Edit` (Phase 2 decides: `git symbolic-ref refs/remotes/origin/HEAD`,
   the reconcile event's `defaultBranch`, or `workspaces`/`users` column). Test asserts the
   reset targets the resolved ref, not a literal `main`.
-- [ ] AC-B6: Self-heal NEVER destroys un-pushed local commits. The `hasLocalCommits` guard
+- [x] AC-B6: Self-heal NEVER destroys un-pushed local commits. The `hasLocalCommits` guard
   (`git rev-list --count @{u}..HEAD`, reusing the exact probe at `session-sync.ts:200-208`)
   gates the `reset --hard`. Verify: the test in AC-B3(b) asserts a diverged clone WITH local
   commits is NOT reset. (This is the mandatory replacement for the falsified "read-only
   mirror" premise — see Overview correction.)
-- [ ] AC-B7: `tsc --noEmit` clean for `apps/web-platform` (union widening of the
+- [x] AC-B7: `tsc --noEmit` clean for `apps/web-platform` (union widening of the
   `syncWorkspace` return shape threads to all callers — `cq-union-widening-grep-three-patterns`
   / `hr-type-widening-cross-consumer-grep`).
-- [ ] AC-B8: Full enumeration of `syncWorkspace` callers updated for the new return shape.
+- [x] AC-B8: Full enumeration of `syncWorkspace` callers updated for the new return shape.
   Verified at deepen-plan time: FOUR production call sites consume the return —
   `app/api/kb/sync/route.ts:116` (manual), `server/inngest/functions/workspace-reconcile-on-push.ts:289`
   (reconcile), AND `app/api/kb/file/[...path]/route.ts:66` + `:308` (delete/rename file
   route — TWO sites the original Files-to-Edit list missed). Each must handle the new
   `errorClass`/`recovered` shape. Verify: `git grep -n "syncWorkspace(" apps/web-platform`
   + `tsc --noEmit`.
-- [ ] AC-B9: The SIBLING inline-pull surface `app/api/kb/upload/route.ts:234`
+- [x] AC-B9: The SIBLING inline-pull surface `app/api/kb/upload/route.ts:234`
   (`gitWithInstallationAuth(["pull","--ff-only"])`, NOT routed through `syncWorkspace`) has
   the IDENTICAL latent non-fast-forward bug. Decide at `/work` time: route it through the
   hardened `syncWorkspace` (preferred — closes the bug class), or scope it out with a
@@ -592,3 +592,48 @@ None — pure code change against already-provisioned surfaces (`apps/web-platfo
 `components`, `app/api`). No new server, secret, vendor, cron, or persistent process. The
 post-merge re-sync (Phase 3) uses the EXISTING allowlisted `/api/internal/trigger-cron` +
 the EXISTING reconcile Inngest function; no new infra.
+
+## Phase 0 Findings
+
+Root-cause trace via Sentry/Inngest could NOT be pulled in this implementation
+environment: no Sentry/Inngest MCP is surfaced here, and the Supabase MCP query tools are
+not available either. Proceeding with the FULL Fix B (classification + gated self-heal)
+because:
+
+(a) the `ERROR_CLASS_NON_FAST_FORWARD` producer-gap is a latent bug regardless of this
+    incident's exact cause — the constant exists, is fixtured in tests, keys the
+    `KbSyncStatus` desync state, yet had NO producer; both failure sites hard-coded
+    `sync_failed`, so a diverged clone could never surface correctly.
+(b) the gated self-heal is safe-by-construction: it resets ONLY when
+    `git rev-list --count @{u}..HEAD == 0` (zero un-pushed local commits), otherwise it
+    bails WITHOUT destroying anything (AC-B6), and is idempotent (a `reset --hard` to an
+    already-matching ref is a no-op).
+
+Post-deploy AC-P2 verification must confirm the REAL `error_class` of the incident via the
+observability path (Sentry/`kb_sync_history`), not a dashboard eyeball.
+
+**Verified at /work time (not from memory):** the exact non-fast-forward stderr from the
+installed git (2.53.0) is `fatal: Not possible to fast-forward, aborting.` — the classifier
+matches the stable substring `Not possible to fast-forward`. `git symbolic-ref --short
+refs/remotes/origin/HEAD` resolves to `origin/main` for a normal clone (used for default-
+branch resolution, AC-B5).
+
+### AC-A5 decision — DesktopPlaceholder mount
+
+**Rail mount only; DesktopPlaceholder NOT additionally instrumented.** The rail
+(`KbSidebarShell`) is always mounted via the `RailSlotPortal` and now renders the affordance
+in BOTH the populated and empty-tree branches — covering "no file open" and "empty/fresh KB
+landing", which is exactly the self-recovery path the incident needed. A second mount in
+`DesktopPlaceholder` ("Select a file to view") would be redundant (the rail is on-screen
+beside it) and risk double-affordance confusion. Rationale recorded; rail mount alone
+satisfies "reachable without opening a file".
+
+### AC-B9 / #2244 decision — upload route
+
+**Folded in (Closes #2244).** The inline `gitWithInstallationAuth(["pull","--ff-only"])` at
+`app/api/kb/upload/route.ts` was a clean one-line swap to the hardened `syncWorkspace`
+(`op: "upload"`) — same bindings (`github_installation_id`, `workspace_path`, `user.id`)
+were already in scope, no #2235 remnants or extra scope. This closes the identical latent
+non-fast-forward bug on the second upload path AND #2244 in one change. The unused
+`gitWithInstallationAuth` import was removed; `Sentry` import retained (still used by other
+catch sites in the route).
