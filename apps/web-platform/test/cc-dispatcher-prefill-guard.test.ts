@@ -80,6 +80,14 @@ vi.mock("@/server/resolve-bash-autonomous", () => ({
   resolveBashAutonomous: vi.fn(async () => false),
 }));
 
+// Session-start ensure-repo self-heal (cold-path deps) — default no-op.
+vi.mock("@/server/current-repo-url", () => ({
+  getCurrentRepoUrl: vi.fn(async () => null),
+}));
+vi.mock("@/server/ensure-workspace-repo", () => ({
+  ensureWorkspaceRepoCloned: vi.fn(async () => undefined),
+}));
+
 vi.mock("@/server/permission-callback", () => ({
   createCanUseTool: vi.fn(() => async () => ({ behavior: "allow" })),
 }));
