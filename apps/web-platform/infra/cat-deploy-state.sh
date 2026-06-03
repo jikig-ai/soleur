@@ -106,10 +106,9 @@ HEARTBEAT_STATUS="$(service_status inngest-heartbeat.service)"
 # inngest-heartbeat.timer (OnUnitActiveSec=60s, inngest-bootstrap.sh:216-245). It
 # reports `inactive` from `systemctl is-active` as soon as each 60s ExecStart
 # completes successfully — i.e. `inactive` is the NORMAL, healthy steady state
-# between fires, NOT a fault. (`failed` here is the real fault, e.g. the empty-URL
-# #4116 class.) The durable liveness signal is the TIMER's active-state below;
-# read both so a healthy oneshot never again mis-frames a deploy incident the way
-# #4896 read `inngest_heartbeat: inactive` as the root cause when it was a red herring.
+# between fires, NOT a fault (`failed` is the real fault, e.g. the empty-URL
+# #4116 class). The durable liveness signal is the TIMER's active-state below;
+# read both so `inactive` alone is never re-read as a deploy failure (#4896).
 HEARTBEAT_TIMER_STATUS="$(service_status inngest-heartbeat.timer)"
 INNGEST_SERVER_STATUS="$(service_status inngest-server.service)"
 VECTOR_STATUS="$(service_status vector.service)"
