@@ -22,6 +22,20 @@ On 2026-06-03 the `cron-cloud-task-heartbeat` Inngest watchdog filed **five** `[
 
 **SCOPE GUARD:** the watchdog ONLY. Do **not** modify any `cron-*.ts` task handlers. The three genuine failures (#4873 content-generator, #4876 community-monitor, #4877 roadmap-review) are already fixed by merged **PR #4770** (`CRON_WORKSPACE_ROOT=/workspaces` relocation off the 256 MB `/tmp` tmpfs) and **PR #4870** (community max-turns 50→80), deployed by 2026-06-03 09:48; they self-heal on next scheduled fire via the watchdog's existing recovery branch. Leave them alone.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-03
+**Sections enhanced:** AC1, Files to Edit, Test Scenarios, User-Brand Impact (+ Research Insights, this summary).
+
+### Key Improvements
+1. **Three-origin `daysSince === null` disambiguation.** Source-read of the watchdog (`:123` zero-rows / `:142` NaN-parse / `:146` catch) revealed the grace must apply to ONLY the zero-rows arm. AC1 + Files-to-Edit now pin the exact line and explicitly hold the other two at `silent: true`. This is the highest-value catch of the deepen pass — a naive "flip every `daysSince === null` to silent:false" would have silenced corrupt-timestamp and API-error anomalies.
+2. **Grace is a *restoration*, not a new behavior.** Learning `2026-04-21-cloud-task-silence-watchdog-pattern.md` (line 43) documents the original GHA watchdog's "Warnings, not errors, on ambiguous states … `no audit issues ever seen for <label> — skipping` for newly-added tasks." The Inngest TS port (#4708 era) regressed this to `silent: true`. The plan restores documented prior art — strengthens the PR narrative and the runbook note.
+3. **Sensitive-path scope-out added.** The watchdog lives under `apps/web-platform/server/` (matches the preflight Check 6 sensitive-path regex), so the `none` threshold now carries the canonical `threshold: none, reason: …` scope-out bullet to clear the ship-time gate.
+
+### New Considerations Discovered
+- The recovery-branch comment (`:236`) interpolates `${result.daysSince}` → renders `null days ago` for a pending task; the null-guard is now explicit in Files-to-Edit.
+- `TASK_INVENTORY` has exactly one importer beyond its own test (verified `git grep`), so removing strategy-review cannot break any other parity assertion; `cron-shared.test.ts`'s `scheduled-strategy-review` is a fixture label, untouched.
+
 ## Premise Validation
 
 All cited references were checked at plan time and held:
@@ -47,13 +61,15 @@ All cited references were checked at plan time and held:
 
 **If this leaks, the user's data is exposed via:** N/A — the watchdog reads/writes only repo issue metadata via an installation-scoped token; no user data, no PII, no regulated surface is touched.
 
-**Brand-survival threshold:** `none` — internal ops observability tuning. No sensitive-path diff (watchdog is `apps/web-platform/server/inngest/functions/`, not auth/schema/API-route/migration). Reason: this change only adjusts which scheduled-task monitor states file a GitHub issue vs. a Sentry warning; it carries no user-facing or data-exposure surface.
+**Brand-survival threshold:** `none` — internal ops observability tuning. The watchdog is `apps/web-platform/server/inngest/functions/`, not auth/schema/API-route/migration.
+
+- threshold: none, reason: the edited file is under `apps/web-platform/server/` (matches the sensitive-path regex) but the change only adjusts which scheduled-task monitor states file a GitHub issue vs. a Sentry warning — it reads/writes only repo issue metadata via an installation-scoped token and touches no auth, no DB schema, no user data, and no API route.
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — never-produced grace.** In `cron-cloud-task-heartbeat.ts`, when `daysSince === null` AND the task threw no error (zero issues ever found), the result is reported as `pending-first-run`: `silent: false`, with a `warnSilentFallback(...)` call at `op: "task-pending-first-run"`. The issue-handling step files NO new `[cloud-task-silence]` issue for such a task and does NOT comment on / keep open an existing one. (The `catch`-branch `daysSince: null` for an actual API error MUST remain `silent: true` — error ≠ pending.)
+- [ ] **AC1 — never-produced grace (zero-rows arm ONLY).** In `cron-cloud-task-heartbeat.ts`, the grace applies to **exactly one** of the three current `daysSince === null` origins — the `if (issues.length === 0)` arm at `:123` (the issues query succeeded and returned zero rows = the task has never produced its label). That arm is flipped to `silent: false` (pending-first-run) + a `warnSilentFallback(...)` call at `op: "task-pending-first-run"`. The issue-handling step files NO new `[cloud-task-silence]` issue for such a task and does NOT comment on / keep open an existing one. **The other two `daysSince === null` origins MUST remain `silent: true`:** (i) the `catch (err)` arm at `:146` (an actual API error — error ≠ pending), and (ii) the in-band `daysSince === null` at `:142` when issues EXIST but `Date.parse(created_at)` returned `NaN` (corrupt/unparseable timestamp — a real anomaly, not a pending task). The grace's discriminator is "query returned **zero** rows", not "`daysSince` happens to be null".
 - [ ] **AC2 — strategy-review removed.** `TASK_INVENTORY` no longer contains a `strategy-review` entry. The INVENTORY SCOPE comment block in `cron-cloud-task-heartbeat.ts` is updated to add strategy-review to the excluded conditional-producer rationale (cite: conditional/idempotent producer; liveness via Sentry `scheduled-strategy-review`).
 - [ ] **AC3 — legal-audit retained.** `TASK_INVENTORY` STILL contains the `legal-audit` entry (`label: "scheduled-legal-audit", maxGapDays: 95`). The grace, not removal, fixes its false positive.
 - [ ] **AC4 — tests: cardinality.** `cron-cloud-task-heartbeat.test.ts` `toHaveLength(N)` updated `6 → 5`; the `it.each` table drops the strategy-review row; `legal-audit` row retained; the existing non-producer guard (`daily-triage`, `ux-audit`, `bug-fixer`) extended to also assert `strategy-review` is excluded. The `legal-audit threshold clears the 92-day floor` anchor retained.
@@ -73,7 +89,7 @@ All cited references were checked at plan time and held:
 
 - `apps/web-platform/server/inngest/functions/cron-cloud-task-heartbeat.ts`
   - Add `warnSilentFallback` to the `@/server/observability` import.
-  - In `check-task-silence`: when `issues.length === 0`, push `{ ..., silent: false, daysSince: null }` (pending-first-run) instead of `silent: true`, and call `warnSilentFallback(null, { feature: "cron-cloud-task-heartbeat", op: "task-pending-first-run", message: \`Task ${task.name} has never produced a ${task.label} issue — pending first run\`, extra: { fn: "cron-cloud-task-heartbeat", task: task.name } })`. Keep the `catch`-branch push as `silent: true` (real API error, distinct from pending). **Design note:** the discriminator is "did the issues query succeed with zero rows" (pending) vs "did the query throw" (error) — these are already two distinct code paths (the `if (issues.length === 0)` arm vs the `catch`), so no new flag is needed; only the `silent` value on the zero-rows arm changes.
+  - In `check-task-silence`: at the `if (issues.length === 0)` arm (`:123`), push `{ ..., silent: false, daysSince: null }` (pending-first-run) instead of `silent: true`, and call `warnSilentFallback(null, { feature: "cron-cloud-task-heartbeat", op: "task-pending-first-run", message: \`Task ${task.name} has never produced a ${task.label} issue — pending first run\`, extra: { fn: "cron-cloud-task-heartbeat", task: task.name } })`. **Leave the other two `silent: true` sites untouched:** the `catch (err)` arm (`:146`, real API error) and the in-band `silent: daysSince === null || daysSince > task.maxGapDays` (`:142`) — the latter's `daysSince === null` is the NaN-`created_at` corrupt-data case, which must stay flagged. **Design note:** the grace's discriminator is "the query succeeded with zero rows", a distinct code path from "query threw" (`catch`) and from "issues exist but timestamp unparseable" (`:142`). Only the `:123` arm's `silent` value changes; no new `TaskCheckResult` field is needed.
   - In `issue-handling`: the `result.silent` gate already skips issue-filing for `silent: false` results, and the recovery (`else`) branch already closes an existing open silence issue — so a pending-first-run task (now `silent: false`) will neither file nor keep open an issue, and will auto-close any stale one. Verify the recovery comment text reads sensibly for the `daysSince === null` case (it currently interpolates `last issue was ${result.daysSince} days ago` → would render `null days ago`). Guard the recovery-comment detail so `daysSince === null` reads `pending first run (never produced an issue)` instead of `null days ago`.
   - Remove the `strategy-review` entry from `TASK_INVENTORY`.
   - Update the INVENTORY SCOPE comment: add strategy-review to the excluded-non-producer list with the conditional-producer rationale; add a one-line note on the never-produced grace.
@@ -149,9 +165,21 @@ discoverability_test:
 1. **Never-produced grace (legal-audit case):** Octokit returns `[]` for `scheduled-legal-audit` → result `silent:false, daysSince:null`; `warnSilentFallback` called with `op:"task-pending-first-run"`; issue-handling makes NO `POST /repos/{owner}/{repo}/issues`; if a stale open silence issue exists, it is closed via the recovery branch with a `pending first run` comment (not `null days ago`).
 2. **Over-threshold silence (real positive):** Octokit returns one issue `created_at` older than `maxGapDays` → `silent:true`; issue filed/commented as before.
 3. **Catch-branch API error:** the issues request throws → `reportSilentFallback` at `op:"check-task"`, `silent:true` (error ≠ pending — must NOT be downgraded to the grace).
+3b. **Corrupt-timestamp (NaN parse):** Octokit returns one issue with an unparseable `created_at` → `daysSince === null` via the `:142` path, `silent:true` (anomaly ≠ pending — the grace is the zero-rows arm only). [Optional but recommended — guards the three-origin distinction from regressing.]
 4. **strategy-review excluded:** `TASK_INVENTORY.find(t => t.name === "strategy-review")` is `undefined`; length is 5; non-producer guard passes for all four names.
 5. **legal-audit retained:** present with `maxGapDays: 95`, clears the 92-day quarterly floor.
 6. **cron-shared parity:** `cron-shared.test.ts` passes unedited.
+
+## Research Insights
+
+**Precedent-diff (Phase 4.4):** This plan adds NO new scheduled job — it edits the existing `cron-cloud-task-heartbeat` Inngest function. The scheduled-work pattern check (Inngest > GH Actions cron, ADR-033) is therefore N/A. The watchdog is already an Inngest cron (`30 9 * * *`), 1 of 38 `cron-*.ts` functions; no trigger-mechanism decision is in scope.
+
+**Institutional learning applied — `2026-04-21-cloud-task-silence-watchdog-pattern.md`:**
+- The never-produced grace is a **restoration** of the original GHA watchdog's documented behavior: *"Warnings, not errors, on ambiguous states. `::warning::no audit issues ever seen for <label> — skipping` for newly-added tasks"* (learning line 43). The TS Inngest port flipped this ambiguous-state-warn to `silent: true`. Restoring warn-only on zero-rows realigns with the original design intent.
+- The watchdog's core contract is unchanged: *"in any system where the absence of output is a valid failure mode, build monitoring around output cadence"* (learning Key Insight). For a **conditional** producer (strategy-review), absence-of-output is NOT a failure mode (quiet weeks are legitimate) — which is exactly why removing it from `TASK_INVENTORY` (rather than thresholding) is correct, consistent with the existing daily-triage / ux-audit / bug-fixer exclusions.
+- The learning's strict-mode bash arithmetic pitfall (`-gt` on non-numeric crashes under `set -euo pipefail`) is **N/A** here — the Inngest watchdog is TypeScript; `daysSince > task.maxGapDays` is a JS numeric comparison with no strict-mode crash class. The TS analogue (guard against `NaN`) is already handled by the `Number.isNaN(createdAt)` check at `:135` and preserved by this plan.
+
+**Verify-the-negative pass (Phase 4.45):** every load-bearing negative claim was grepped against source and confirmed: (a) no `TASK_INVENTORY` importer beyond the heartbeat fn + its own test; (b) the zero-rows / NaN-parse / catch arms are three structurally distinct paths; (c) `issue-handling` gates filing on `if (result.silent)` so a `silent: false` pending task neither files nor keeps open an issue (it takes the recovery `else`, which closes any stale one).
 
 ## Sharp Edges
 

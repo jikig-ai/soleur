@@ -12,13 +12,14 @@ lane: cross-domain
   - [ ] 1.1.1 Never-produced case: zero matching issues → `silent:false`, `warnSilentFallback` called at `op:"task-pending-first-run"`, NO `POST /repos/{owner}/{repo}/issues`.
   - [ ] 1.1.2 Control: one issue older than `maxGapDays` → `silent:true`.
   - [ ] 1.1.3 Control: issues request throws → `reportSilentFallback` at `op:"check-task"`, `silent:true` (error ≠ pending).
+  - [ ] 1.1.4 Control (recommended): issue with unparseable `created_at` → `daysSince===null` via `:142`, `silent:true` (corrupt data ≠ pending).
 - [ ] 1.2 Update `TASK_INVENTORY` assertions: `toHaveLength(6)` → `toHaveLength(5)`; drop the `strategy-review` `it.each` row; extend the non-producer guard to include `"strategy-review"`; keep the legal-audit 92-day-floor anchor.
 - [ ] 1.3 Confirm RED (new grace tests fail against current source).
 
 ## Phase 2 — Implement watchdog (GREEN)
 
 - [ ] 2.1 Import `warnSilentFallback` from `@/server/observability` in `cron-cloud-task-heartbeat.ts`.
-- [ ] 2.2 In `check-task-silence`, flip the `issues.length === 0` arm to `silent:false` (pending-first-run) + `warnSilentFallback(null, { feature, op:"task-pending-first-run", message, extra })`. Keep the `catch` arm `silent:true`.
+- [ ] 2.2 In `check-task-silence`, flip ONLY the `if (issues.length === 0)` arm (`:123`) to `silent:false` (pending-first-run) + `warnSilentFallback(null, { feature, op:"task-pending-first-run", message, extra })`. Leave BOTH other `silent:true` sites untouched: the `catch` arm (`:146`, API error) AND the in-band `:142` `daysSince === null` (NaN-parsed `created_at` = corrupt data, not pending).
 - [ ] 2.3 Guard the recovery-branch comment so `daysSince === null` renders `pending first run (never produced an issue)` instead of `null days ago`.
 - [ ] 2.4 Remove the `strategy-review` entry from `TASK_INVENTORY`.
 - [ ] 2.5 Update the INVENTORY SCOPE comment: add strategy-review to the excluded conditional-producer list + a one-line never-produced-grace note.
