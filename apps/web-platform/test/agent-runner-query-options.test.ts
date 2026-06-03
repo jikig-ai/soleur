@@ -30,6 +30,7 @@ vi.mock("@/server/sandbox-hook", () => ({
 }));
 
 import { buildAgentQueryOptions } from "@/server/agent-runner-query-options";
+import { buildAgentEnv } from "@/server/agent-env";
 
 const WORKSPACE = "/tmp/test-workspace";
 const PLUGIN = "/tmp/test-workspace/plugins/soleur";
@@ -142,6 +143,41 @@ describe("buildAgentQueryOptions — per-call overrides (T2/T3)", () => {
     expect(cc.hooks?.SubagentStart).toBeDefined();
     // biome-ignore lint/style/noNonNullAssertion: shape verified above
     expect(Array.isArray(cc.hooks!.SubagentStart)).toBe(true);
+  });
+});
+
+describe("buildAgentQueryOptions — in-sandbox git askpass threading (item 1c)", () => {
+  it("threads gitAskpassScriptPath + ghToken into buildAgentEnv (token reused as gitInstallationToken)", () => {
+    vi.mocked(buildAgentEnv).mockClear();
+    buildAgentQueryOptions({
+      ...minArgs,
+      ghToken: "ghs_install_tok",
+      gitAskpassScriptPath: "/tmp/test-workspace/.askpass-xyz.sh",
+    });
+    expect(buildAgentEnv).toHaveBeenCalledWith(
+      minArgs.credential,
+      minArgs.serviceTokens,
+      {
+        ghToken: "ghs_install_tok",
+        gitAskpassScriptPath: "/tmp/test-workspace/.askpass-xyz.sh",
+        // The askpass token IS the installation token (same value as ghToken).
+        gitInstallationToken: "ghs_install_tok",
+      },
+    );
+  });
+
+  it("omits the askpass path when gitAskpassScriptPath is absent (legacy runner parity)", () => {
+    vi.mocked(buildAgentEnv).mockClear();
+    buildAgentQueryOptions(minArgs);
+    expect(buildAgentEnv).toHaveBeenCalledWith(
+      minArgs.credential,
+      minArgs.serviceTokens,
+      {
+        ghToken: undefined,
+        gitAskpassScriptPath: undefined,
+        gitInstallationToken: undefined,
+      },
+    );
   });
 });
 

@@ -6,7 +6,14 @@
 process.env.HOME = process.env.HOME || "/tmp";
 
 import { describe, test, expect, afterEach, beforeEach, vi } from "vitest";
-import { existsSync, statSync, readFileSync } from "fs";
+import {
+  existsSync,
+  statSync,
+  readFileSync,
+  openSync,
+  fstatSync,
+  closeSync,
+} from "fs";
 import { randomUUID } from "crypto";
 
 type ExecFileCallback = (
@@ -128,6 +135,66 @@ describe("writeAskpassScript", () => {
       expect(body).toMatch(/Password/);
     } finally {
       cleanupAskpassScript(scriptPath);
+    }
+  });
+});
+
+describe("writeAskpassScriptTo (item 1b — in-sandbox askpass under workspacePath)", () => {
+  test("writes a 0o700 script under the given dir, byte-identical body, no token", async () => {
+    const { writeAskpassScriptTo, writeAskpassScript, cleanupAskpassScript } =
+      await import("../server/git-auth");
+    const dir = process.env.HOME!;
+    const scriptPath = writeAskpassScriptTo(dir);
+    // A reference body produced by the existing $HOME writer — proves the
+    // body is single-sourced (drift-free) between the two writers.
+    const refPath = writeAskpassScript();
+    // Open the written file ONCE and stat+read the same file DESCRIPTOR (not
+    // the path). A path-based check→use pair — existsSync(path) or
+    // statSync(path) followed by readFileSync(path) — is a CodeQL
+    // js/file-system-race (TOCTOU) alert, because the path could be swapped
+    // between the two syscalls. fd-based fstatSync + readFileSync(fd) cannot
+    // re-resolve the path, so there is no race window.
+    let fd: number | undefined;
+    try {
+      expect(scriptPath.startsWith(dir)).toBe(true);
+      // dot-prefixed so it is unobtrusive in a working tree.
+      expect(scriptPath).toMatch(/\.askpass-.*\.sh$/);
+      fd = openSync(scriptPath, "r");
+      expect(fstatSync(fd).mode & 0o777).toBe(0o700);
+      const body = readFileSync(fd, "utf8");
+      // Body byte-identical to the canonical writer (proves delegation /
+      // single-source). refPath is read with a single fs op (no prior check),
+      // so it is not a TOCTOU pair.
+      expect(body).toBe(readFileSync(refPath, "utf8"));
+      // Real drift guard (RED-capable): assert the load-bearing askpass lines
+      // literally, so a future edit to the printf logic actually fails rather
+      // than passing a same-constant tautology.
+      expect(body).toContain("#!/bin/sh");
+      expect(body).toMatch(/Username\*\).*GIT_USERNAME:-x-access-token/);
+      expect(body).toMatch(/Password\*\).*GIT_INSTALLATION_TOKEN/);
+      // The token is read from env at runtime — NEVER interpolated into the
+      // file (brand-survival: no token in the helper body).
+      expect(body).not.toMatch(/ghs_/);
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+      cleanupAskpassScript(scriptPath);
+      cleanupAskpassScript(refPath);
+    }
+  });
+
+  test("two invocations write distinct paths (randomUUID suffix) with identical bodies", async () => {
+    const { writeAskpassScriptTo, cleanupAskpassScript } = await import(
+      "../server/git-auth"
+    );
+    const dir = process.env.HOME!;
+    const p1 = writeAskpassScriptTo(dir);
+    const p2 = writeAskpassScriptTo(dir);
+    try {
+      expect(p1).not.toBe(p2);
+      expect(readFileSync(p1, "utf8")).toBe(readFileSync(p2, "utf8"));
+    } finally {
+      cleanupAskpassScript(p1);
+      cleanupAskpassScript(p2);
     }
   });
 });
