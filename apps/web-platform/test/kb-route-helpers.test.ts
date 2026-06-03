@@ -816,6 +816,9 @@ describe("resolveUserKbRoot — tenant-mint fallback", () => {
       expect(result.extras.github_installation_id).toBe(TEST_INSTALLATION_ID);
     }
     expect(mockServiceFrom).toHaveBeenCalledWith("users");
+    // Non-vacuity: extras must come from the SERVICE read, not a split read
+    // that fetches base cols via service and extras via the (thrown) tenant.
+    expect(mockFrom).not.toHaveBeenCalled();
   });
 
   test("fallback still 503s when the SERVICE-ROLE read yields a non-ready workspace (no false-positive resolution)", async () => {
@@ -842,6 +845,8 @@ describe("resolveUserKbRoot — tenant-mint fallback", () => {
 
     expect(result.ok).toBe(true);
     expect(mockServiceFrom).toHaveBeenCalledWith("users");
+    // Non-vacuity: a denied_jti must NOT fall through to a tenant read.
+    expect(mockFrom).not.toHaveBeenCalled();
   });
 
   test("a non-RuntimeAuthError from the mint is re-thrown (not swallowed by the fallback)", async () => {

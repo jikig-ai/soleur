@@ -90,6 +90,13 @@ export async function authenticateAndResolveKbPath(
   // enforces `auth.uid() = id`. The `.single()` SELECT IS the auth
   // probe (the route flow reads only the caller's own row before any
   // cross-row work).
+  //
+  // NOTE: unlike `resolveUserKbRoot` (which falls back to a service-role
+  // read on mint failure), this helper intentionally 503s — it serves the
+  // file PATCH/DELETE *mutation* routes, where a `denied_jti` deny-list trip
+  // is MEANT to block the action; a service-role fallback there would defeat
+  // that revocation. Applying the same fallback to the mutation paths needs
+  // an explicit per-cause adjudication, tracked in #4914.
   let tenant;
   try {
     tenant = await getFreshTenantClient(user.id);
