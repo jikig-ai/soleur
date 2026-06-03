@@ -136,4 +136,26 @@ describe("ChatInput", () => {
     expect(textarea.className).toContain("min-h-[36px]");
     expect(textarea.className).toContain("max-h-[140px]");
   });
+
+  // Focus styling (AC6): the composer must NOT use the gold emphasized border
+  // on focus-within, and must keep a visible but neutral focus affordance.
+  // jsdom cannot evaluate the global @layer base :focus-visible box-shadow, so
+  // the inner-ring removal (AC1a) is verified by className-token absence on the
+  // textarea + the AC8 screenshot, not by getComputedStyle.
+  it("composer container has a neutral (non-gold) focus-within affordance", () => {
+    setup();
+    const textarea = screen.getByRole("textbox");
+    const container = textarea.closest("div.rounded-xl") as HTMLElement;
+    expect(container).not.toBeNull();
+    // No gold outer border on focus.
+    expect(container.className).not.toContain("focus-within:border-soleur-border-emphasized");
+    // Still has a visible, neutral focus-within border.
+    expect(container.className).toContain("focus-within:border-soleur-text-muted");
+  });
+
+  it("textarea suppresses the inherited global gold focus ring", () => {
+    setup();
+    const textarea = screen.getByRole("textbox");
+    expect(textarea.className).toContain("focus-visible:shadow-none");
+  });
 });
