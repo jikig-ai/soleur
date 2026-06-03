@@ -66,7 +66,11 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.next }}
       tag: ${{ steps.version.outputs.tag }}
-      released: ${{ steps.create_release.outputs.released || 'false' }}
+      # released=true when a new git tag is materialized this run: a fresh draft
+      # was created (create_release) OR an orphaned draft is re-published by the
+      # Finalise step (idempotency.draft_exists). An already-published release
+      # yields false (no new tag). Refs #4902.
+      released: ${{ steps.create_release.outputs.released == 'true' || steps.idempotency.outputs.draft_exists == 'true' }}
       docker_pushed: ${{ steps.docker_pushed.outputs.pushed || 'false' }}
 
     steps:
@@ -245,12 +249,31 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
-          if gh release view "$TAG" &>/dev/null; then
-            printf 'exists=%s\n' "true" >> "$GITHUB_OUTPUT"
-            echo "Release $TAG already exists, skipping"
+          # exists=true ONLY when the release is already PUBLISHED. A non-existent
+          # release OR an orphaned DRAFT (a draft materializes NO git tag) both
+          # yield exists=false so the pipeline proceeds -- an orphaned draft is
+          # re-published by the Finalise step below, self-healing a transient
+          # prior-run failure instead of locking the version baseline forever.
+          # The OLD bare `gh release view` check treated a draft as "done" and
+          # skipped re-creation on every later run, freezing BUILD_VERSION.
+          # Refs #4902 (stuck-draft deadlock).
+          REL_JSON=$(mktemp)
+          if gh release view "$TAG" --json isDraft >"$REL_JSON" 2>/dev/null; then
+            IS_DRAFT=$(jq -r '.isDraft' "$REL_JSON")
+            if [ "$IS_DRAFT" = "false" ]; then
+              printf 'exists=%s\n' "true" >> "$GITHUB_OUTPUT"
+              printf 'draft_exists=%s\n' "false" >> "$GITHUB_OUTPUT"
+              echo "Release $TAG already published, skipping"
+            else
+              printf 'exists=%s\n' "false" >> "$GITHUB_OUTPUT"
+              printf 'draft_exists=%s\n' "true" >> "$GITHUB_OUTPUT"
+              echo "Release $TAG exists as an ORPHANED DRAFT -- will re-publish (self-heal)"
+            fi
           else
             printf 'exists=%s\n' "false" >> "$GITHUB_OUTPUT"
+            printf 'draft_exists=%s\n' "false" >> "$GITHUB_OUTPUT"
           fi
+          rm -f "$REL_JSON"
 
       - name: Extract changelog from PR body
         if: steps.check_changed.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'
@@ -273,7 +296,7 @@ jobs:
           echo "$CHANGELOG" > "$RELEASE_NOTES_FILE"
 
       - name: Create GitHub Release (as draft)
-        if: steps.check_changed.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'
+        if: steps.check_changed.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false' && steps.idempotency.outputs.draft_exists == 'false'
         id: create_release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -574,8 +597,18 @@ jobs:
       # Discord notify steps below fire after this, so they always link
       # to a visible release URL. Refs #3849 AC16 / run 26156985840
       # (web-v0.99.1 upload-to-immutable HTTP 422).
+      # Self-heal gate (#4902): publish when EITHER a new draft was created this
+      # run OR the idempotency step found an orphaned draft. `gh release edit
+      # --draft=false` is idempotent -- on a draft it publishes (materializing
+      # the git tag); on an already-published release it is a no-op. The
+      # orphaned-draft path skips the audit-upload step above (gated on
+      # create_release.released), which is correct: we only flip draft->published
+      # here, never upload to a published (immutable) release.
       - name: Finalise release (publish draft)
-        if: steps.create_release.outputs.released == 'true'
+        if: >-
+          steps.check_changed.outputs.changed == 'true' &&
+          (steps.create_release.outputs.released == 'true' ||
+           steps.idempotency.outputs.draft_exists == 'true')
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
@@ -583,8 +616,16 @@ jobs:
           gh release edit "$TAG" --draft=false
           echo "Published release $TAG"
 
+      # Notify on a self-heal too (#4902): an orphaned draft means the prior run
+      # died BEFORE this step, so the re-publish is the FIRST successful release
+      # announcement -- fire it. (Unlike the Sentry-audit step above, which stays
+      # create-only: its asset upload is an evidence-trail re-run, not an
+      # announcement, and re-uploading to a published release would 422.)
       - name: Email notification (release)
-        if: steps.create_release.outputs.released == 'true'
+        if: >-
+          steps.check_changed.outputs.changed == 'true' &&
+          (steps.create_release.outputs.released == 'true' ||
+           steps.idempotency.outputs.draft_exists == 'true')
         continue-on-error: true
         uses: ./.github/actions/notify-ops-email
         with:
@@ -595,7 +636,10 @@ jobs:
       # Inline step required: GITHUB_TOKEN-created releases don't fire
       # 'release: published' events, so a separate workflow cannot trigger.
       - name: Post to Discord (release)
-        if: steps.create_release.outputs.released == 'true'
+        if: >-
+          steps.check_changed.outputs.changed == 'true' &&
+          (steps.create_release.outputs.released == 'true' ||
+           steps.idempotency.outputs.draft_exists == 'true')
         continue-on-error: true
         env:
           DISCORD_RELEASES_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASES_WEBHOOK_URL }}
