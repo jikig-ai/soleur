@@ -274,8 +274,12 @@ export default function DashboardLayout({
           ${collapsed ? "md:w-14" : "md:w-56"}
         `}
       >
-        {/* Brand + close/collapse buttons */}
-        <div className={`flex items-center justify-between safe-top ${collapsed ? "px-2 py-5" : "px-5 py-5"}`}>
+        {/* Brand + close/collapse buttons. Gutter is px-3 (expanded) to match
+            the rest of the rail (nav items, footer, workspace band) so the
+            collapse toggle shares the same px-3 border-box gutter as the band's
+            "Back to menu" affordance below it (#4810 follow-up Bug 2: the two
+            were at px-5 vs px-3 and read as misaligned). */}
+        <div className={`flex items-center justify-between safe-top ${collapsed ? "px-2 py-5" : "px-3 py-5"}`}>
           {/* #4810 Bug 1: the wordmark is top-level chrome — render it ONLY when
               not drilled (render-conditional, NOT a CSS hide; jsdom asserts DOM
               presence). Gated individually so the sibling close button + collapse

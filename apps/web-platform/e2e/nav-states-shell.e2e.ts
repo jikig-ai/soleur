@@ -394,6 +394,51 @@ test.describe("nav-states visual gate — desktop", () => {
     await expect(primaryNav(page)).toHaveCount(0);
   });
 
+  test("drilled (expanded): no horizontal overflow + back affordance aligned to collapse toggle (#4810 follow-up)", async ({ page }) => {
+    await setupNavMocks(page);
+    await gotoOrSkip(page, "/dashboard/kb");
+
+    const aside = page.locator("aside").first();
+    await expect(aside).toHaveClass(/md:w-56/, { timeout: 15_000 });
+    await expect(railBand(page)).toBeVisible({ timeout: 15_000 });
+    // Empty-band guard: identity content must be present so the no-overflow
+    // assertion below cannot pass vacuously on an unmounted band.
+    await expect(orgIdentity(page)).toContainText("Soleur Workspace", {
+      timeout: 15_000,
+    });
+
+    // Bug 1: the expanded drilled rail (md:w-56 = 224px) must not overflow — the
+    // gap the existing "drilled (expanded)" test (chrome-presence only) misses.
+    const overflow = await aside.evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(
+      overflow,
+      "expanded drilled rail (md:w-56) overflows horizontally — Bug 1 regression",
+    ).toBeLessThanOrEqual(1);
+
+    // Bug 2: the back-affordance arrowhead and the brand-row collapse-toggle
+    // arrowhead must share the rail's px-3 gutter. Measure the glyph <svg>s, not
+    // the elements: the back Link stretches full rail width (its px-3 is internal
+    // padding, so its border-box sits at the rail edge), whereas the collapse
+    // button has no padding (its px-3 is the row gutter). Comparing border-boxes
+    // would compare a padded box to an unpadded one. The glyphs are what the user
+    // sees aligned: back glyph at the px-3 gutter (12px), collapse glyph centered
+    // in its h-6 w-6 button (~16px) — a ~4px offset the 6px tolerance absorbs.
+    const backGlyph = await railBand(page)
+      .getByTestId("nav-back-chevron")
+      .locator("svg")
+      .boundingBox();
+    const collapseGlyph = await page
+      .getByRole("button", { name: "Collapse sidebar" })
+      .locator("svg")
+      .boundingBox();
+    expect(backGlyph).not.toBeNull();
+    expect(collapseGlyph).not.toBeNull();
+    expect(
+      Math.abs(backGlyph!.x - collapseGlyph!.x),
+      "back affordance and collapse toggle arrowheads drifted — Bug 2 regression",
+    ).toBeLessThanOrEqual(6);
+  });
+
   test("collapsed top-level: rail is icon-only, no horizontal overflow (Bug 2)", async ({ page }) => {
     await setupNavMocks(page);
     await seedCollapsed(page);

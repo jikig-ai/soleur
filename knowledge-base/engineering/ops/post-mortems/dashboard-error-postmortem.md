@@ -3,11 +3,15 @@ title: "Postmortem: app.soleur.ai/dashboard error.tsx outage"
 date: 2026-04-28
 incident_pr: 3014
 incident_window: "2026-04-28 ~22:22Z (Sentry first-seen `TypeError: Unknown encoding: base64url`) → 2026-04-28 22:37:08Z (v0.58.2 canary swap completed; recovery delivered by PR #3017's browser-safe JWT decode + Layer 2 promotion)"
+recovery_at: "2026-04-28T22:37:08Z"
 suspected_change: "PR #3007 — JWT-claims guardrails for NEXT_PUBLIC_SUPABASE_ANON_KEY (validator's runtime base64url decode fails in browser; fixed in PR #3017)"
 brand_survival_threshold: single-user incident
 status: closed
 closed_on: 2026-04-29
 closed_via: "#3015 follow-through (see Recovery Verification)"
+art_33_triggered: false
+art_34_triggered: false
+art_33_deadline: "n/a — availability/render-failure incident; no personal-data breach (no data exposed, exfiltrated, or lost — the page threw at module load)"
 triggers:
   - dashboard error boundary
   - inlined supabase claim
@@ -32,6 +36,14 @@ Each step below is tagged with one of:
 
 # Postmortem: /dashboard error.tsx outage
 
+## Incident Overview
+
+A module-load JWT-decode throw introduced by PR #3007 (a `base64url` decode that works in Node but not in the browser) broke `/dashboard` for every authenticated visitor, while `/health` and the canary stayed green and no Sentry alert fired. Recovery arrived ~15m later via PR #3017's browser-safe decode (v0.58.2 canary swap).
+
+## Status
+
+closed — recovered 2026-04-28T22:37:08Z (v0.58.2); closed 2026-04-29 via #3015 follow-through.
+
 ## Symptom
 
 Every authenticated visitor to `app.soleur.ai/dashboard` rendered the
@@ -53,6 +65,27 @@ probe set, preflight Check 7). Phase 1 (diagnose root cause) and Phase 2
 (hot-fix prod) are operator-driven below — every command is a destructive
 or sensitive prod read/write that requires explicit per-command approval
 per AGENTS.md `hr-menu-option-ack-not-prod-write-auth`.
+
+## Incident Timeline
+
+- **Start time (detected):** 2026-04-28 ~22:22Z (Sentry first-seen `TypeError: Unknown encoding: base64url`)
+- **End time (recovered):** 2026-04-28T22:37:08Z (v0.58.2 canary swap completed)
+- **Duration (MTTR):** ~15m (22:22Z → 22:37:08Z)
+
+The diagnosis and hot-fix order of events is documented in detail in the Phase 1 (diagnose) and Phase 2 (hot-fix) sections below.
+
+## Participants and Systems Involved
+
+Operator (single founder) + Claude Code agent (every Phase 1/2 prod step is `agent-with-ack` per `hr-menu-option-ack-not-prod-write-auth`). Systems: web-platform (Next.js `app/error.tsx` boundary, `lib/supabase/client.ts` validator), the release/canary pipeline (`web-platform-release.yml`, `ci-deploy.sh`), Sentry, Cloudflare.
+
+## Detection (+ MTTD)
+
+- **How detected:** external/manual — direct browser report; no Sentry alert, no canary rollback, no Cloudflare 5xx alert fired (the page returned HTTP 200 with the error boundary as its body).
+- **MTTD (mean time to detect):** Unknown (external/manual — operator-side direct browser report). The three observability gaps that prevented automated detection are enumerated in "Three failures, one incident" above and "Why both gates failed" below.
+
+## Triggered by
+
+system — the deploy of PR #3007 (commit `7d556531`), which promoted a browser-incompatible `base64url` decode at module load to production via the canary upgrade.
 
 ## Root-cause hypothesis (verify in Phase 1)
 
@@ -244,6 +277,10 @@ Agent assertion: the rendered HTML must NOT contain `data-error-boundary=`
 Human sign-off: visual review of the screenshot — confirm Command Center
 renders correctly, not the boundary.
 
+## Resolution
+
+Recovery was delivered by PR #3017 ("browser-safe JWT decode + Layer 2 promotion"), which replaced the Node-only `Buffer.from(..., "base64url")` decode in `validate-anon-key.ts` with an `atob`-based browser-safe equivalent. Its push to `apps/web-platform/**` auto-triggered a path-filtered release build (commit `92e8b3d5`); the canary swap to v0.58.2 completed at 22:37:08Z. The planned Phase 2 manual hot-fix was therefore a no-op (Phase 1.4 exit gate) — see Recovery Verification.
+
 ## Recovery Verification
 
 Filled in 2026-04-29 by /one-shot pipeline against issue #3015. Phase 2
@@ -274,6 +311,62 @@ regression PR #3017 fixed.
 
 - A non-blocking warning surfaces on every prod image pull: `dockerd: failed to validate image signature ... expected image index descriptor, got application/vnd.docker.distribution.manifest.v2+json`. The image still pulls and the canary still swaps — out of scope for this postmortem; flag for a separate ops follow-up if signature enforcement is desired.
 
+---
+
+# Incident Post-Mortem Analysis
+
+## Root Cause(s) — 5-Whys
+
+1. **Why did `/dashboard` render the error boundary?** Client hydration imported `@/lib/supabase/client`, whose module-load validator threw.
+2. **Why did the validator throw?** It called a `base64url` decode (`Buffer.from(..., "base64url")`) to read the inlined anon-key's JWT claims — and `base64url` is not a valid encoding in the browser runtime (`TypeError: Unknown encoding: base64url`).
+3. **Why did a Node-only decode run in the browser?** PR #3007 added the validator at module load in the client bundle (`lib/supabase/client.ts`) without a browser-safe decode path; `server.ts`/`service.ts`/`middleware.ts` never invoke it, so SSR succeeded and only client hydration threw.
+4. **Why did it reach production?** The canary `/health` probe is middleware-bypassed and never imports the client module, so the broken bundle passed the canary and was promoted; no Sentry alert fired (DSN/alert-rule gap).
+5. **Why was there no safety net?** The canary lacked a real authenticated-render probe and the error path lacked an alert rule — three independent observability/canary gaps let a 100%-of-authenticated-users render failure ship silently. Confirmed root cause (full evidence above): H1 — the validator's `base64url` decode call failing in the browser, fixed by PR #3017's `atob`-based decode.
+
+## Versions of Components
+
+- **Version(s) that triggered the outage:** soleur-web-platform v0.58.1 (PR #3007 `7d556531`, post-#3016, pre-#3017).
+- **Version(s) that restored the service:** soleur-web-platform v0.58.2 (`web-v0.58.2`, commit `92e8b3d5`, PR #3017).
+
+## Impact details
+
+### Services Impacted
+
+`app.soleur.ai/dashboard` (every authenticated post-auth landing). Sign-in itself succeeded; SSR HTML arrived; only client hydration threw. `/health` returned 200 throughout.
+
+### Customer Impact (by role)
+
+Per learning `2026-05-06-user-impact-section-by-role-not-surface.md` — enumerate by USER ROLE, not by surface (derived from "every authenticated visitor to /dashboard"):
+
+- Prospect: NOT AFFECTED (unauthenticated marketing pages render server-side; the throw is on the authenticated client bundle).
+- Authenticated app user: **fully blocked** — every authenticated visitor to `/dashboard` saw the error boundary for the ~15m window. In production this was the single founder/tenant-zero user; the same defect would have blocked every authenticated user once others onboarded.
+- Legal-document signer: AFFECTED if a signing flow routed through `/dashboard` during the window; signing surfaces share the authenticated client bundle.
+- Admin via Access: NOT AFFECTED at the infra layer (Access unaffected); affected only insofar as an admin is also an authenticated app user hitting `/dashboard`.
+- Billing customer: NOT AFFECTED (no billing path touched; pre-revenue).
+- OAuth installation owner: NOT AFFECTED (callback/installation surfaces unaffected by the client-bundle throw).
+
+### Revenue Impact
+
+Unknown / N/A — pre-revenue; single founder / tenant-zero.
+
+### Team Impact
+
+~15m MTTR; recovery delivered organically by PR #3017's auto-trigger (no manual hot-fix executed). Follow-on verification + the canary-script false-negative discovery (tracked #3033) consumed additional operator/agent time in the #3015 follow-through.
+
+## Lessons Learned
+
+### Where we got lucky
+
+Recovery was delivered organically — PR #3017's path-filtered auto-trigger shipped the fix before the planned manual Phase 2 hot-fix was needed (Phase 1.4 no-op exit gate), so MTTR stayed at ~15m despite three failed safety nets.
+
+### What went well
+
+Diagnosis was evidence-driven (Sentry event IDs + browser-console transcript + decoded bundle claims), and PR #3014 shipped the structural fixes (observability migration, segment-scoped error boundary, layered canary probes, preflight Check 7) alongside the incident response.
+
+### What went wrong
+
+All three safety nets missed simultaneously — see "Why both gates failed" below: the canary `/health` probe never imports the client module, Sentry had no alert on the error-boundary feature (and possibly a DSN/flush gap), and Cloudflare 5xx alerts can't fire on an HTTP-200 error-boundary render.
+
 ## Why both gates failed
 
 | Gate | Why it missed | Fix shipped in #3014 |
@@ -282,7 +375,9 @@ regression PR #3017 fixed.
 | Sentry alerts | (Operator confirms via Phase 1.4.) Either DSN missing in bundle, no alert rule on `feature: dashboard-error-boundary`, OR client SDK queue not flushed before page unload. | `app/error.tsx` migrated to `reportSilentFallback`; new `(dashboard)/error.tsx` segment boundary with `segment: dashboard` tag; `lib/supabase/client.ts` wraps validator throws to emit Sentry **before** re-throwing. |
 | Cloudflare 5xx alerts | Page returns HTTP 200 (the error boundary IS the rendered output, not a server 5xx). | Out of scope — the layered canary probe + synthetic check (Phase 4.6, deferred) replaces this signal. |
 
-## Follow-up issues
+## Action Items
+
+GitHub issues to file so this cannot recur (logs, tests, alerts, automation, docs, PRs):
 
 | ID | Description | Automation path |
 |---|---|---|
