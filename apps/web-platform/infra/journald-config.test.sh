@@ -111,8 +111,12 @@ assert "triggers_replace = sha256(file(journald-soleur.conf))" \
   "printf '%s' \"\$BLOCK\" | grep -qE 'triggers_replace[[:space:]]*=[[:space:]]*sha256\(file\(\"\\\$\{path\.module\}/journald-soleur\.conf\"\)\)'"
 assert "SSH connection block (type=ssh)" \
   "printf '%s' \"\$BLOCK\" | grep -qE 'type[[:space:]]*=[[:space:]]*\"ssh\"'"
-assert "connection uses the operator SSH agent (agent = true)" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'agent[[:space:]]*=[[:space:]]*true'"
+# `agent = true` was stale post-#4845: server.tf now uses the dual-context
+# toggle `agent = var.ci_ssh_private_key == null` (operator ssh-agent locally,
+# explicit Doppler key in CI). The conditional regex below cannot false-match
+# the #4829 dual-context comment (which reads literal `agent = true`).
+assert "connection uses the dual-context ssh-agent toggle agent = var.ci_ssh_private_key == null" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'agent[[:space:]]*=[[:space:]]*var\.ci_ssh_private_key[[:space:]]*==[[:space:]]*null'"
 assert "connection host = hcloud_server.web.ipv4_address" \
   "printf '%s' \"\$BLOCK\" | grep -qE 'host[[:space:]]*=[[:space:]]*hcloud_server\.web\.ipv4_address'"
 assert "file provisioner pushes drop-in to /etc/systemd/journald.conf.d/00-soleur.conf" \
