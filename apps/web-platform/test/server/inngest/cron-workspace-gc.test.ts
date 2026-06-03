@@ -37,6 +37,7 @@ vi.mock("@/server/inngest/functions/_cron-shared", () => ({
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
   warnSilentFallback: vi.fn(),
+  infoSilentFallback: vi.fn(),
 }));
 
 import { statfs, readdir, stat, rm } from "node:fs/promises";
@@ -44,6 +45,7 @@ import { postSentryHeartbeat } from "@/server/inngest/functions/_cron-shared";
 import {
   reportSilentFallback,
   warnSilentFallback,
+  infoSilentFallback,
 } from "@/server/observability";
 import {
   cronWorkspaceGc,
@@ -129,6 +131,20 @@ describe("cronWorkspaceGcHandler — sweep semantics", () => {
       expect.objectContaining({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG }),
     );
     expect(warnSilentFallback).not.toHaveBeenCalled();
+
+    // AC4 — every-run reclaim signal fires on the HEALTHY path (the case that
+    // was previously Sentry-silent: logger.info only). This is the no-SSH
+    // reclaim-verification signal the issue (#4897) exists for.
+    expect(infoSilentFallback).toHaveBeenCalledTimes(1);
+    const infoCall = (infoSilentFallback as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(infoCall[1].feature).toBe("cron-workspace-gc");
+    expect(infoCall[1].extra).toMatchObject({
+      freeMbBefore: 500,
+      freeMbAfter: 600,
+      freedMb: 100,
+      sweptCount: 1,
+      root: "/workspaces",
+    });
   });
 
   it("emits a warn with the before/after payload when the volume is still under floor after sweeping", async () => {
@@ -145,6 +161,20 @@ describe("cronWorkspaceGcHandler — sweep semantics", () => {
     expect(warnSilentFallback).toHaveBeenCalledTimes(1);
     const extra = (warnSilentFallback as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1].extra;
     expect(extra).toMatchObject({
+      freeMbBefore: 50,
+      freeMbAfter: 100,
+      freedMb: 50,
+      sweptCount: 1,
+      root: "/workspaces",
+    });
+
+    // AC5 — info fires on EVERY run, independent of the low-disk warn. Both the
+    // informational (every-run) and actionable (low-disk) signals are emitted at
+    // distinct Sentry levels so on-call can filter them apart.
+    expect(infoSilentFallback).toHaveBeenCalledTimes(1);
+    expect(
+      (infoSilentFallback as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1].extra,
+    ).toMatchObject({
       freeMbBefore: 50,
       freeMbAfter: 100,
       freedMb: 50,
@@ -191,6 +221,13 @@ describe("cronWorkspaceGcHandler — sweep semantics", () => {
     expect(result.sweptCount).toBe(1); // sweep still happened
     expect(result.freedMb).toBe(0); // graceful degrade — no NaN, no negative
     expect(reportSilentFallback).toHaveBeenCalledTimes(1); // the statfs-after failure
+
+    // Test Scenario 4 — the every-run info event still fires with freedMb: 0
+    // (no NaN) even when the after-sweep statfs degraded.
+    expect(infoSilentFallback).toHaveBeenCalledTimes(1);
+    expect(
+      (infoSilentFallback as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1].extra,
+    ).toMatchObject({ freedMb: 0, sweptCount: 1 });
     expect(postSentryHeartbeat).toHaveBeenCalledWith(
       expect.objectContaining({ ok: true }),
     );
@@ -205,6 +242,9 @@ describe("cronWorkspaceGcHandler — sweep semantics", () => {
     expect(result.sweptCount).toBe(0);
     expect(rm).not.toHaveBeenCalled();
     expect(reportSilentFallback).not.toHaveBeenCalled();
+    // AC6 — the absent-volume short-circuit returns before the emit; an absent
+    // volume has nothing to report, so the info channel stays quiet.
+    expect(infoSilentFallback).not.toHaveBeenCalled();
     expect(postSentryHeartbeat).toHaveBeenCalledWith(
       expect.objectContaining({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG }),
     );

@@ -42,6 +42,7 @@ import { inngest } from "@/server/inngest/client";
 import {
   reportSilentFallback,
   warnSilentFallback,
+  infoSilentFallback,
 } from "@/server/observability";
 import {
   freeMb,
@@ -194,14 +195,21 @@ export async function cronWorkspaceGcHandler({
         ? freeMbAfter - freeMbBefore
         : 0;
 
-    // Structured every-run record to app stdout (pino). The durable Sentry path
-    // is the heartbeat (liveness) + the warn below (actionable low-disk) — Vector
-    // does not ship app stdout to Better Stack, so the actionable signal must be
-    // a Sentry event, not a log line.
-    logger.info(
-      { fn: CRON_NAME, root, freeMbBefore, freeMbAfter, freedMb, sweptCount },
-      "workspace GC sweep complete",
-    );
+    // Structured every-run record. Emitted as a durable info-level Sentry event
+    // (NOT just pino stdout, which Vector does not ship to Better Stack) so a
+    // no-SSH operator can confirm how much disk a HEALTHY reclaim freed via the
+    // Sentry events API after firing cron/workspace-gc.manual-trigger (#4897).
+    // infoSilentFallback re-emits the same pino logger.info mirror internally,
+    // so no stdout signal is lost. Distinct Sentry level from the warn below:
+    // level:info is the informational every-run throughput record; level:warning
+    // (low-disk, below) stays the actionable/paging channel so on-call can
+    // filter them apart.
+    infoSilentFallback(null, {
+      feature: CRON_NAME,
+      op: "workspace-gc-sweep-complete",
+      message: "workspace GC sweep complete",
+      extra: { fn: CRON_NAME, root, freeMbBefore, freeMbAfter, freedMb, sweptCount },
+    });
 
     // Actionable Sentry signal: the volume is STILL under the free-space floor
     // after reclaiming everything sweepable — i.e. the leak is outpacing the GC
