@@ -60,6 +60,18 @@ describe("ensureWorkspaceRepoCloned", () => {
     expect(mockGraftRepoClone).toHaveBeenCalledWith(WS, REPO, 123);
   });
 
+  it("success breadcrumb keeps action:'cloned' but drops the raw userId key (item 3 — clears userid-bypass-lint)", async () => {
+    mockExistsSync.mockReturnValue(false);
+    await ensureWorkspaceRepoCloned({ userId: "u1", workspacePath: WS, installationId: 123, repoUrl: REPO });
+    expect(mockLogInfo).toHaveBeenCalledTimes(1);
+    const firstArg = mockLogInfo.mock.calls[0][0];
+    expect(firstArg).toMatchObject({ action: "cloned" });
+    // The direct logger.info site must NOT carry a raw `userId` key — pino's
+    // formatters.log hashes top-level userId at runtime, but the advisory
+    // userid-bypass-lint guard scans SOURCE for direct logger({ userId }).
+    expect(firstArg).not.toHaveProperty("userId");
+  });
+
   it("ANY existing .git → no-op (never destroys an existing repo: Start-Fresh, already-cloned, or mismatched origin)", async () => {
     mockExistsSync.mockReturnValue(true);
     await ensureWorkspaceRepoCloned({ userId: "u1", workspacePath: WS, installationId: 123, repoUrl: REPO });

@@ -67,20 +67,39 @@ function getAskpassDir(): string {
 }
 
 /**
- * Write a fixed-body askpass script to a unique path in $HOME.
- * Returns the absolute path. The caller is responsible for cleanup
- * via `cleanupAskpassScript`.
+ * Write the fixed-body askpass script to a unique path UNDER `dir`,
+ * mode `0o700`, returning the absolute path. The caller owns cleanup via
+ * `cleanupAskpassScript`.
  *
- * The script body is byte-identical across invocations — the token
- * is read from the child process's `GIT_INSTALLATION_TOKEN` env var,
- * not interpolated into the file, so no shell escaping is required
- * regardless of token contents.
+ * The script body is byte-identical across invocations (single-sourced from
+ * `ASKPASS_SCRIPT_BODY`) — the token is read from the child process's
+ * `GIT_INSTALLATION_TOKEN` env var, NOT interpolated into the file, so no
+ * shell escaping is required regardless of token contents and the token never
+ * lands on disk.
+ *
+ * `filename` defaults to a dot-prefixed `.askpass-<uuid>.sh` (the server-side
+ * `$HOME` path uses this — unique per invocation, never collides). The cc
+ * in-sandbox path passes a FIXED name and writes into the repo's `.git/`
+ * directory so the helper is reused per workspace (no per-dispatch
+ * accumulation, concurrency-safe — the body is identical and token-free) and
+ * can never be staged by `git add` (`.git/` is outside the working tree). The
+ * server-side `gitWithInstallationAuth` path writes to `$HOME` via
+ * `writeAskpassScript()` below, which delegates here so the body stays
+ * single-sourced (drift-free).
  */
-export function writeAskpassScript(): string {
-  const dir = getAskpassDir();
-  const scriptPath = join(dir, `askpass-${randomUUID()}.sh`);
+export function writeAskpassScriptTo(dir: string, filename?: string): string {
+  const scriptPath = join(dir, filename ?? `.askpass-${randomUUID()}.sh`);
   writeFileSync(scriptPath, ASKPASS_SCRIPT_BODY, { mode: 0o700 });
   return scriptPath;
+}
+
+/**
+ * Write a fixed-body askpass script to a unique path in $HOME (server-side
+ * `gitWithInstallationAuth` path). Delegates to `writeAskpassScriptTo` so the
+ * body is single-sourced. Returns the absolute path; caller owns cleanup.
+ */
+export function writeAskpassScript(): string {
+  return writeAskpassScriptTo(getAskpassDir());
 }
 
 /**

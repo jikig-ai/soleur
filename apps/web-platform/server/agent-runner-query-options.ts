@@ -75,6 +75,16 @@ export interface AgentQueryOptionsArgs {
    * Never logged. See `buildAgentEnv` `BuildAgentEnvOptions.ghToken`.
    */
   ghToken?: string;
+  /**
+   * Optional absolute path to the in-sandbox GIT_ASKPASS helper script,
+   * written by the cc path under the user's `workspacePath` (plan item 1).
+   * When set alongside `ghToken`, threaded into `buildAgentEnv` so raw `git`
+   * push/fetch/pull in the sandbox authenticates. The askpass token IS the
+   * installation token (`ghToken`), passed as `gitInstallationToken`.
+   * Per-call divergent (cc path sets it per-dispatch; legacy runner leaves it
+   * undefined), so NOT part of the shared-field drift snapshot. Never logged.
+   */
+  gitAskpassScriptPath?: string;
   systemPrompt: string;
   /** SDK chain step 5 — the canUseTool callback. Required. */
   // biome-ignore lint/suspicious/noExplicitAny: SDK CanUseTool is a typed callable; helper accepts the SDK's type
@@ -151,6 +161,11 @@ export function buildAgentQueryOptions(
     systemPrompt: args.systemPrompt,
     env: buildAgentEnv(args.credential, args.serviceTokens, {
       ghToken: args.ghToken,
+      // In-sandbox raw-git credential path (item 1). The askpass token IS the
+      // installation token (`ghToken`); `buildAgentEnv` injects the GIT_* set
+      // only when BOTH the path and token are present (both-or-nothing).
+      gitAskpassScriptPath: args.gitAskpassScriptPath,
+      gitInstallationToken: args.ghToken,
     }),
     // Sandbox literal lives in `buildAgentSandboxConfig` so legacy + cc
     // share the same shape verbatim (drift-guarded by
