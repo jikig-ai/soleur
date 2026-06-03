@@ -122,7 +122,13 @@ is the identical brand-survival dead-end PR #4913 fixed for the share button, on
 **If this leaks, the user's workflow is exposed via:** N/A for the `jwt_mint`/`rotation` fallback —
 the service-role read is hard-scoped `.eq("id", user.id)` where `user.id` is the already-authenticated
 session user (`supabase.auth.getUser()`), so even under fallback a caller reads only its OWN
-`workspace_path`/`repo_url`/`github_installation_id` — never another tenant's. The privileged
+`workspace_path`/`repo_url`/`github_installation_id` — never another tenant's. The second read the
+fallback path can reach — `resolveInstallationId(user.id)` (when the row has `repo_url` but a null
+`github_installation_id`, `:157`) — is also self-scoped: it resolves the workspace internally from the
+same server-derived `user.id` and reads the credential only via the membership-checked
+`resolve_workspace_installation_id` SECURITY DEFINER RPC (the `github_installation_id` column is
+revoked from the `authenticated` grant), so a non-member resolves `null` → a clean `400 "No
+repository connected"`, never another tenant's installation. The privileged
 mutation downstream still requires the resolved installation-id to belong to that same row. The
 `denied_jti` path is the *opposite* of a leak: it **tightens** behavior (a revoked token is now
 blocked with 403 instead of silently 503'd, but it never falls back to service-role on revocation).

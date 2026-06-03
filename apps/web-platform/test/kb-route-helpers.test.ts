@@ -883,6 +883,12 @@ describe("authenticateAndResolveKbPath — tenant-mint fallback (#4914)", () => 
 
   // FR1 / AC1 — jwt_mint availability failure → service-role fallback resolves.
   test("jwt_mint → service-role fallback resolves OK (NOT 503)", async () => {
+    // Give the service-role row a DISTINCT workspace_path so the value
+    // assertion itself proves provenance (the row came from the service-role
+    // client, not the thrown tenant client) — not just the `mockFrom not
+    // called` negative assertion.
+    const SERVICE_ONLY_WORKSPACE = "/workspaces/service-role-only";
+    setupServiceUserData({ workspace_path: SERVICE_ONLY_WORKSPACE });
     mockGetFreshTenantClient.mockRejectedValueOnce(
       new RuntimeAuthError("jwt_mint", "mint failed"),
     );
@@ -894,7 +900,10 @@ describe("authenticateAndResolveKbPath — tenant-mint fallback (#4914)", () => 
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.ctx.userData.workspace_path).toBe(TEST_WORKSPACE_PATH);
+      // The resolved path is the SERVICE row's value — independent proof of
+      // provenance, not just the negative `mockFrom not called` assertion.
+      expect(result.ctx.userData.workspace_path).toBe(SERVICE_ONLY_WORKSPACE);
+      expect(result.ctx.kbRoot).toContain(SERVICE_ONLY_WORKSPACE);
       expect(result.ctx.owner).toBe("test-owner");
       expect(result.ctx.repo).toBe("test-repo");
     }
