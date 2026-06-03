@@ -65,11 +65,35 @@ describe("OrgSwitcherContainer — workspace switch write-path (3.10)", () => {
     });
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ memberships: [JIKIGAI, ACME] }),
+      vi.fn((url: string) => {
+        if (url.includes("active-repo")) {
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                workspaceId: JIKIGAI.workspaceId,
+                repoUrl: "https://github.com/jikig-ai/soleur",
+                repoName: "jikig-ai/soleur",
+                repoStatus: "connected",
+                fellBackToSolo: false,
+              }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ memberships: [JIKIGAI, ACME] }),
+        });
       }),
     );
+  });
+
+  it("folds the active repo name into the pill face (data plumbing via useActiveRepo)", async () => {
+    render(<OrgSwitcherContainer />);
+    const pill = await screen.findByRole("button", {
+      name: /switch workspace/i,
+    });
+    const subtitle = await within(pill).findByTestId("live-repo-badge");
+    expect(subtitle).toHaveTextContent("jikig-ai/soleur");
   });
 
   it("selecting a workspace shows a confirm step BEFORE switching (no immediate RPC)", async () => {
