@@ -3,10 +3,12 @@ set -euo pipefail
 
 # Read-only deploy state reporter for #2185 webhook observability.
 # Invoked by /hooks/deploy-status (adnanh/webhook) -- see hooks.json.tmpl.
-# Returns the JSON written by ci-deploy.sh write_state, MERGED with a
-# `services.inngest_heartbeat` field reading live `systemctl is-active`
-# state (#4116 — discoverability_test for the new plan-skill observability
-# gate). Sentinels:
+# Returns the JSON written by ci-deploy.sh write_state, MERGED with live
+# `systemctl is-active` fields: `services.inngest_heartbeat` (the oneshot
+# .service, #4116 — discoverability_test for the plan-skill observability gate)
+# and `services.inngest_heartbeat_timer` (the .timer, #4896 — the durable
+# liveness signal; the oneshot .service reads `inactive` as its healthy steady
+# state, so the timer's active-state is what proves liveness). Sentinels:
 #   {"exit_code":-2,"reason":"no_prior_deploy"} -- no state file exists
 #   {"exit_code":-3,"reason":"corrupt_state"}   -- state file unparseable
 # Exit-code protocol defined in ci-deploy.sh header (#2205).
@@ -100,6 +102,15 @@ inngest_crons_json() {
 }
 
 HEARTBEAT_STATUS="$(service_status inngest-heartbeat.service)"
+# inngest-heartbeat.service is a Type=oneshot unit (no RemainAfterExit) driven by
+# inngest-heartbeat.timer (OnUnitActiveSec=60s, inngest-bootstrap.sh:216-245). It
+# reports `inactive` from `systemctl is-active` as soon as each 60s ExecStart
+# completes successfully — i.e. `inactive` is the NORMAL, healthy steady state
+# between fires, NOT a fault. (`failed` here is the real fault, e.g. the empty-URL
+# #4116 class.) The durable liveness signal is the TIMER's active-state below;
+# read both so a healthy oneshot never again mis-frames a deploy incident the way
+# #4896 read `inngest_heartbeat: inactive` as the root cause when it was a red herring.
+HEARTBEAT_TIMER_STATUS="$(service_status inngest-heartbeat.timer)"
 INNGEST_SERVER_STATUS="$(service_status inngest-server.service)"
 VECTOR_STATUS="$(service_status vector.service)"
 VECTOR_JOURNAL_TAIL="$(service_journal_tail vector.service)"
@@ -120,6 +131,7 @@ fi
 jq -nc \
   --argjson base "$BASE" \
   --arg hb "$HEARTBEAT_STATUS" \
+  --arg hbt "$HEARTBEAT_TIMER_STATUS" \
   --arg is "$INNGEST_SERVER_STATUS" \
   --arg vs "$VECTOR_STATUS" \
   --arg vj "$VECTOR_JOURNAL_TAIL" \
@@ -127,6 +139,7 @@ jq -nc \
   --argjson js "$JOURNALD_STORAGE" \
   '$base + {journald_storage: $js, services: (($base.services // {}) + {
     inngest_heartbeat: $hb,
+    inngest_heartbeat_timer: $hbt,
     inngest_server: $is,
     vector: $vs,
     vector_journal_tail: $vj,

@@ -160,29 +160,29 @@ is present.)
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — Recovery confirmed read-only.** Plan body (Phase 0) records: latest
+- [x] **AC1 — Recovery confirmed read-only.** Plan body (Phase 0) records: latest
       `web-platform-release.yml` run conclusion = `success`; `/health` `version` ≥
       `0.102.0`; the three issue-cited failing runs are all strictly before the first
       post-#4895 success. Verification commands are baked into Phase 0, no SSH.
-- [ ] **AC2 — Reporter reports the durable liveness signal.** `cat-deploy-state.sh`
+- [x] **AC2 — Reporter reports the durable liveness signal.** `cat-deploy-state.sh`
       adds an `inngest_heartbeat_timer` field reading `systemctl is-active
       inngest-heartbeat.timer` (the timer is `active` on a healthy host), and the
       existing `inngest_heartbeat` (oneshot `.service`) field is retained with an
       inline comment documenting that `inactive` is the expected steady state for a
       timer-driven oneshot. Verified by `jq -e '.services.inngest_heartbeat_timer'`
       against a synthesized state fixture.
-- [ ] **AC3 — Test coverage.** `cat-deploy-state.test.sh` asserts the new
+- [x] **AC3 — Test coverage.** `cat-deploy-state.test.sh` asserts the new
       `inngest_heartbeat_timer` field is present across all 4 base-state branches
       (no_prior_deploy, OK, services-merge, corrupt_state), mirroring the existing
       `inngest_heartbeat` assertions at `cat-deploy-state.test.sh:39-66`. Run:
       `bash apps/web-platform/infra/cat-deploy-state.test.sh` — exits 0, all asserts pass.
-- [ ] **AC4 — No gate-logic change.** `git diff` shows zero edits to
+- [x] **AC4 — No gate-logic change.** `git diff` shows zero edits to
       `web-platform-release.yml` and zero edits to the `inngest-heartbeat.{service,timer}`
       heredocs in `inngest-bootstrap.sh` (this plan does NOT touch the unit; it fixes
       only the reporter). Grep-verify: `git diff --name-only` contains
       `cat-deploy-state.sh` + `cat-deploy-state.test.sh` and NOT `inngest-bootstrap.sh`
       or `web-platform-release.yml`.
-- [ ] **AC5 — Full infra test suite green.** The owning suite passes:
+- [x] **AC5 — Full infra test suite green.** The owning suite passes:
       `bash apps/web-platform/infra/cat-deploy-state.test.sh` AND any harness that
       exercises the reporter (confirm the runner in Phase 0 via `ls
       apps/web-platform/infra/*.test.sh`; do not assume a framework).
