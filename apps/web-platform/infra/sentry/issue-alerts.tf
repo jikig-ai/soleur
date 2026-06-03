@@ -457,3 +457,84 @@ resource "sentry_issue_alert" "workspace_sync_health" {
     ignore_changes = [environment]
   }
 }
+
+# ── KB tenant-mint silent-fallback alert (#4918) — APPLY-CREATED, NOT import ──
+# Pages on the first occurrence of any KB tenant-JWT mint failure. PIR #4913
+# (generate-link-tenant-mint-regression-postmortem.md) found the durability gap
+# the #4913 service-role fallback did NOT close: the mint failure emitted a
+# `reportSilentFallback` Sentry signal on EVERY tenant-mint dead-end, yet no
+# alert routed it to attention, so it sat latent ~19 days until the founder hit
+# the dead Generate-link button while dogfooding. This rule is the missing
+# NOTIFICATION layer (hr-no-dashboard-eyeball-pull-data-yourself) — the signal
+# already exists (RuntimeAuthError → captureException with feature/op tags); no
+# app change needed.
+#
+# op-SCOPED filter (op IS_IN, NOT feature-only): unlike workspace_sync_health
+# (whose feature tag is dedicated to one cron), `feature=kb-route-helpers` spans
+# 6 ops — the 3 tenant-mint slugs PLUS workspace-sync-*, self-heal-*, and
+# kb-sync.unexpected. A feature-only filter would over-page on those unrelated
+# self-heal/workspace-sync events. So this mirrors chat_message_save_failure's
+# op-scoped shape. The THIRD slug `kb-sync.tenant-mint` (sync/route.ts:62) is
+# the identical RuntimeAuthError→503 mint-failure class the issue body omitted;
+# at brand-survival threshold `single-user incident`, scoping out the next-most-
+# likely sibling is anti-pattern, so it is folded into the IS_IN value.
+#
+# `action_match="any"`: first_seen/reappeared/regression are mutually-exclusive
+# event-lifecycle states (a captured event is exactly one) — "all" is never
+# satisfiable. reappeared+regression re-page a recurrence after the founder
+# resolves the Sentry issue — the issue-alert equivalent of the issue text's
+# `failure_issue_threshold = 1` (which is a cron/uptime-monitor attribute, NOT
+# valid on sentry_issue_alert). Distinct `frequency=12` avoids Sentry POST-time
+# exact-duplicate dedup (taken: 5,10,11,15,30,60,61,62; keyed on action-shape +
+# frequency + match, NOT conditions — not evaluated by lifecycle-condition rules
+# but must be unique). `IS_IN` proven in beta2 at byok_cap_exceeded above.
+# Cross-artifact op/feature contract pinned by
+# test/sentry-kb-tenant-mint-alert-op-contract.test.ts.
+resource "sentry_issue_alert" "kb_tenant_mint_silent_fallback" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "kb-tenant-mint-silent-fallback"
+  action_match = "any"
+  filter_match = "all"
+  frequency    = 12
+
+  conditions_v2 = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "EQUAL"
+        value = "kb-route-helpers"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "op"
+        match = "IS_IN"
+        value = "resolveUserKbRoot.tenant-mint,authenticateAndResolveKbPath.tenant-mint,kb-sync.tenant-mint"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors chat_message_save_failure:378-383): IssueOwners
+  # has no ownership rule on this project → falls through to ActiveMembers,
+  # correctly paging the solo founder. These events carry NO cross-tenant
+  # content (only hashed userId + op + pg_code tags) so the fallthrough does not
+  # over-disclose. Revisit recipient pinning (target_type="Member") before the
+  # first non-founder Sentry seat.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}

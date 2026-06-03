@@ -135,10 +135,10 @@ One founder-reported bug; ~one session to root-cause + fix.
 ## Follow-ups
 
 - [ ] Apply the same mint-failure resilience to `authenticateAndResolveKbPath` (file PATCH/DELETE routes), with a per-cause `denied_jti` adjudication — tracked in #4914.
-- [ ] Wire an alert on the `resolveUserKbRoot.tenant-mint` / `authenticateAndResolveKbPath.tenant-mint` `reportSilentFallback` rate so a recurring mint failure pages instead of sitting latent.
+- [x] Wire an alert on the `resolveUserKbRoot.tenant-mint` / `authenticateAndResolveKbPath.tenant-mint` `reportSilentFallback` rate so a recurring mint failure pages instead of sitting latent. — `sentry_issue_alert.kb_tenant_mint_silent_fallback` (#4918); op-scoped IS_IN over the 3 tenant-mint slugs (incl. the `kb-sync.tenant-mint` sibling).
 - [ ] Consider surfacing a user-facing error toast on a genuine share 503 (client `share-popover.tsx`) so a real not-ready state is not an invisible idle bounce.
 
 ## Action Items
 
 - #4914 — file-route tenant-mint fallback (already filed; `type/chore` + `deferred-scope-out`).
-- Alert on tenant-mint `reportSilentFallback` rate — to file as a `type/chore` observability item (no existing alert covers the share/upload mint-failure rate).
+- #4918 — alert on tenant-mint `reportSilentFallback` rate (landed): `sentry_issue_alert.kb_tenant_mint_silent_fallback` pages on the first occurrence of any KB tenant-mint failure across the 3 mint-failure ops.
