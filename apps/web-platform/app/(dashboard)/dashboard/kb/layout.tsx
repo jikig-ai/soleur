@@ -2,6 +2,9 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { isKbDocView } from "@/hooks/segment-to-drill-level";
+import { BackArrowIcon } from "@/components/dashboard/nav-icons";
 import { KbContext } from "@/components/kb/kb-context";
 import { KbChatContext } from "@/components/kb/kb-chat-context";
 import { KbChatQuoteBridgeProvider } from "@/components/kb/kb-chat-quote-bridge";
@@ -33,6 +36,14 @@ export default function KbLayout({ children }: { children: ReactNode }) {
 
   const fullWidth = loading || error || (!loading && !hasTreeContent);
 
+  // One back per state (#4915): the mobile page header shows its own "Back to
+  // menu" ONLY in the KB doc view, where the persistent band's back is
+  // suppressed (layout.tsx keys `suppressBack` on the SAME isKbDocView
+  // predicate). On the KB landing (and its fullWidth sub-states) the band keeps
+  // its back, so the page header renders the title only — no duplicate back.
+  const pathname = usePathname();
+  const showHeaderBack = isKbDocView(pathname);
+
   return (
     <KbContext value={ctxValue}>
       <KbChatContext value={chatCtxValue}>
@@ -60,25 +71,15 @@ export default function KbLayout({ children }: { children: ReactNode }) {
                 data-testid="kb-page-mobile-header"
                 className="flex shrink-0 items-center gap-2 border-b border-soleur-border-default px-4 py-3 md:hidden"
               >
-                <Link
-                  href="/dashboard"
-                  aria-label="Back to menu"
-                  className="flex items-center text-soleur-text-secondary hover:text-soleur-text-primary"
-                >
-                  <svg
-                    className="h-5 w-5"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={1.5}
+                {showHeaderBack && (
+                  <Link
+                    href="/dashboard"
+                    aria-label="Back to menu"
+                    className="flex items-center text-soleur-text-secondary hover:text-soleur-text-primary"
                   >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18"
-                    />
-                  </svg>
-                </Link>
+                    <BackArrowIcon className="h-5 w-5" />
+                  </Link>
+                )}
                 {/* Mobile page title — the band's mobile section title is
                     suppressed for KB so this is the single "Knowledge Base"
                     title on mobile (P2-4). */}

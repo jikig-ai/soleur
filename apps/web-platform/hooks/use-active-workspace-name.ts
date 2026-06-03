@@ -6,8 +6,11 @@ import type { OrgMembershipSummary } from "@/server/org-memberships-resolver";
 // The active workspace NAME, for the collapsed rail band (which does NOT mount
 // OrgSwitcherContainer and therefore has no membership data in scope — P0-3,
 // #4915). Modeled on use-active-repo.ts: a module-level in-flight latch
-// coalesces concurrent callers into ONE GET so the layout's read shares a
-// single request rather than racing the band's own membership fetches.
+// coalesces THIS hook's own concurrent callers into ONE GET. (It does NOT
+// coalesce with OrgSwitcherContainer's separate raw fetch — that lives in the
+// container's own effect; the two only overlap when both are mounted, which the
+// `enabled` gate below avoids by only fetching in the collapsed state where the
+// container is absent.)
 //
 // This is a HOOK, not a component — it is outside the scope of the
 // nav-single-mount.test.ts import guard (which tracks OrgSwitcherContainer +
@@ -43,7 +46,13 @@ export function __resetActiveWorkspaceNameCoalesceForTests(): void {
   inFlight = null;
 }
 
-export function useActiveWorkspaceName(): string | null {
+/**
+ * @param enabled When false, the hook performs no fetch and registers no focus
+ *   listener (returns last-known or null). The collapsed rail is the only
+ *   consumer of the name, so the layout passes `collapsed` here — the expanded
+ *   rail + mobile band already surface the name via OrgSwitcherContainer.
+ */
+export function useActiveWorkspaceName(enabled = true): string | null {
   const [name, setName] = useState<string | null>(null);
 
   const poll = useCallback(async () => {
@@ -52,11 +61,12 @@ export function useActiveWorkspaceName(): string | null {
   }, []);
 
   useEffect(() => {
+    if (!enabled) return;
     poll();
     const onFocus = () => poll();
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [poll]);
+  }, [poll, enabled]);
 
   return name;
 }

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   segmentToDrillLevel,
   DRILL_SEGMENTS,
+  isKbDocView,
 } from "@/hooks/segment-to-drill-level";
 
 describe("segmentToDrillLevel — sole drill-state authority (RQ8 / AC4c)", () => {
@@ -38,5 +39,21 @@ describe("segmentToDrillLevel — sole drill-state authority (RQ8 / AC4c)", () =
 
   it("exposes exactly the three allowlisted segments", () => {
     expect([...DRILL_SEGMENTS].sort()).toEqual(["chat", "kb", "settings"]);
+  });
+});
+
+// #4915: isKbDocView is the depth-within-section companion that drives the
+// one-back-per-state wiring (band suppressBack + KB page-header back key on it).
+describe("isKbDocView — KB doc view vs landing (one-back-per-state predicate)", () => {
+  it("is true ONLY for a path BELOW /dashboard/kb/ (a doc is open)", () => {
+    expect(isKbDocView("/dashboard/kb/engineering/adr-044.md")).toBe(true);
+    expect(isKbDocView("/dashboard/kb/x.md")).toBe(true);
+  });
+
+  it("is false on the KB landing and every non-doc route", () => {
+    expect(isKbDocView("/dashboard/kb")).toBe(false); // landing, not a doc
+    expect(isKbDocView("/dashboard")).toBe(false);
+    expect(isKbDocView("/dashboard/settings/members")).toBe(false);
+    expect(isKbDocView("/dashboard/kbx")).toBe(false); // substring, not the section
   });
 });

@@ -706,7 +706,7 @@ test.describe("nav-states visual gate — mobile", () => {
     await expect(mobileBand).toContainText("Soleur Workspace", { timeout: 15_000 });
   });
 
-  test("mobile fullWidth (empty KB): page-body header owns the only 'Knowledge Base' title + back (Phase 4)", async ({ page }) => {
+  test("mobile fullWidth (empty KB landing): page header owns the title; the band owns the SINGLE 'Back to menu' (Phase 4, one back per state)", async ({ page }) => {
     await setupNavMocks(page);
     // Override with an EMPTY tree so the fullWidth EmptyState branch renders
     // (registered AFTER setup → Playwright matches it first).
@@ -723,13 +723,20 @@ test.describe("nav-states visual gate — mobile", () => {
     );
     await gotoOrSkip(page, "/dashboard/kb");
 
-    // P0-1: the chromeless mobile fullWidth body now carries a page header.
+    // P0-1: the chromeless mobile fullWidth body now carries a page header title.
     const header = page.getByTestId("kb-page-mobile-header");
     await expect(header).toBeVisible({ timeout: 15_000 });
     await expect(header.getByText("Knowledge Base")).toBeVisible();
+
+    // One back per state: on the KB LANDING the persistent band owns "Back to
+    // menu"; the page header must NOT duplicate it. Exactly one visible
+    // "Back to menu" across the mobile viewport (the rail band is md-hidden).
     await expect(
       header.getByRole("link", { name: /back to menu/i }),
-    ).toHaveAttribute("href", "/dashboard");
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("link", { name: /back to menu/i }),
+    ).toHaveCount(1);
 
     // P2-4: exactly one "Knowledge Base" title on mobile — the band's mobile
     // section title is suppressed (the page header owns it).

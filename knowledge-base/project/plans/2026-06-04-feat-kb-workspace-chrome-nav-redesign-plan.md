@@ -144,6 +144,8 @@ spec-flow surfaced P0-1 (chromeless sub-states hide identity → folded into Pha
 
 CPO sign-off: covered by brainstorm Phase 0.1 framing (CPO participated). `user-impact-reviewer` will be invoked at PR review. Mitigations: identity unmistakable at rest in every state (Phase 4), hybrid rule + name-hashed tint + tooltip resolve monogram ambiguity (Phase 1), switch flow untouched (no new cross-tenant vector introduced).
 
+**Bounded async window (review finding, accepted):** the COLLAPSED desktop rail derives its monogram tooltip from `useActiveWorkspaceName`, an async fetch. On first paint (or a transient `list-memberships` failure with no cached value) the collapsed tile shows `?` with the static `"Active workspace"` tooltip for ~one RTT. This is identity-**absent**, never identity-**misidentified** (once resolved the name is server-`isCurrent`-derived, matching the switch state machine's tenant authority), it is desktop-collapsed-only, and it does not strand the user (the switcher + back affordance remain). It therefore does not breach the single-user-incident threshold. The expanded rail + mobile band are synchronous (OrgSwitcherContainer), so the window exists only in the one state that genuinely lacks the data in scope.
+
 ## Observability
 
 ```yaml

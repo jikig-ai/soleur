@@ -31,3 +31,22 @@ export function segmentToDrillLevel(pathname: string): DrillLevel | null {
   }
   return null;
 }
+
+/**
+ * Depth-within-section companion to `segmentToDrillLevel` (#4915): is a KB
+ * DOCUMENT open (a path BELOW `/dashboard/kb/`), as opposed to the KB landing
+ * (`/dashboard/kb` exactly)?
+ *
+ * This is path EXTRACTION ("which KB view is open"), NOT drill detection —
+ * `segmentToDrillLevel` deliberately collapses landing and doc view into the
+ * SAME `"kb"` drill level (RQ6), so it cannot answer this finer question. The
+ * trailing-slash form is exactly the case `nav-drill-authority.test.ts`
+ * EXCLUDES from its drill-literal guard, so this is the sanctioned predicate
+ * for the one-back-per-state wiring: the layout suppresses the band's "Back to
+ * menu" in the mobile doc view, and the KB page-body header shows its own back
+ * only there — the two are keyed on this single predicate so exactly one back
+ * renders per state.
+ */
+export function isKbDocView(pathname: string): boolean {
+  return pathname.startsWith("/dashboard/kb/");
+}

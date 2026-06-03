@@ -4,6 +4,7 @@ import Link from "next/link";
 import { OrgSwitcherContainer } from "@/components/dashboard/org-switcher-container";
 import { LiveRepoBadge } from "@/components/dashboard/live-repo-badge";
 import { WorkspaceIdentityTile } from "@/components/dashboard/workspace-identity-tile";
+import { BackArrowIcon } from "@/components/dashboard/nav-icons";
 import {
   segmentToDrillLevel,
   type DrillLevel,
@@ -26,29 +27,6 @@ const SECTION_LABELS: Record<DrillLevel, string> = {
   settings: "Settings",
   chat: "Chat",
 };
-
-// Distinct from the layout collapse-toggle chevron (ChevronLeftIcon, path
-// "M15.75 19.5 8.25 12l7.5-7.5"). The two controls sat at different vertical
-// positions with byte-identical glyphs, reading as a broken duplicate (#4810
-// follow-up). A long left arrow ("back to menu") is visually unmistakable from
-// the rail-collapse chevron.
-function BackArrowIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      strokeWidth={1.5}
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18"
-      />
-    </svg>
-  );
-}
 
 export function WorkspaceContextBand({
   pathname,
@@ -125,7 +103,7 @@ export function WorkspaceContextBand({
         >
           ●
         </span>
-        {drill ? (
+        {drill && !suppressSectionTitle ? (
           <span
             data-testid="nav-section-title"
             title={SECTION_LABELS[drill]}

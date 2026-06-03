@@ -14,7 +14,7 @@ import { useActiveWorkspaceName } from "@/hooks/use-active-workspace-name";
 import { RailSlotProvider, RailCollapsedProvider } from "@/components/dashboard/rail-slot";
 import { RailResizeHandle } from "@/components/dashboard/rail-resize-handle";
 import { useRailWidth, railMaxPx, RAIL_MIN_PX } from "@/hooks/use-rail-width";
-import { segmentToDrillLevel } from "@/hooks/segment-to-drill-level";
+import { segmentToDrillLevel, isKbDocView } from "@/hooks/segment-to-drill-level";
 import { MembershipRevokedScreen } from "@/components/dashboard/membership-revoked-screen";
 import { NoApiKeyBanner } from "@/components/dashboard/no-api-key-banner";
 import { PendingInviteBannerRecovery } from "@/components/dashboard/pending-invite-banner-recovery";
@@ -126,8 +126,11 @@ export default function DashboardLayout({
   const [railSlotEl, setRailSlotEl] = useState<HTMLElement | null>(null);
   // Active workspace name for the COLLAPSED rail band's monogram tooltip — the
   // collapsed band does not mount OrgSwitcherContainer, so the name is threaded
-  // in here (P0-3, #4915). Coalesced with the band's membership fetch.
-  const activeWorkspaceName = useActiveWorkspaceName();
+  // in here (P0-3, #4915). Gated on `collapsed`: the expanded rail + mobile band
+  // already surface the name via OrgSwitcherContainer, so the fetch only fires
+  // for the one state that lacks it (avoids a redundant cold-mount GET + a
+  // net-new focus poll in the common expanded case).
+  const activeWorkspaceName = useActiveWorkspaceName(collapsed);
 
   // Check admin status on mount
   useEffect(() => {
@@ -169,7 +172,9 @@ export default function DashboardLayout({
   // is path EXTRACTION ("a KB doc is open" — trailing-slash form), explicitly
   // distinct from drill detection (which stays sole to segmentToDrillLevel,
   // AC4c): the band itself never reads pathname for this — the layout owns it.
-  const inKbDocView = pathname.startsWith("/dashboard/kb/");
+  // The KB page-body header (kb/layout.tsx) keys its own back on the SAME
+  // predicate, so exactly one "Back to menu" renders per state.
+  const inKbDocView = isKbDocView(pathname);
 
   // Auto-close drawer on route change
   useEffect(() => {
