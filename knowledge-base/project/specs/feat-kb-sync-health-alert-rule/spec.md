@@ -39,19 +39,26 @@ detection-signal; this closes alerting.
   `non_fast_forward` case (deferred — cron-side refinement, out of scope).
 - NG3: No explicit "older than N hours" age gate (deferred — lifecycle-condition
   design makes it largely moot).
-- NG4: No alert on the cron's internal scan-failure ops
-  (`scan`/`scan-stale`/`scan-went-quiet`/`went-quiet-probe`) — deferred
-  follow-up; excluded to honor the alert-fatigue constraint.
+- NG4: ~~No alert on the cron's internal scan-failure ops~~ **[Reversed
+  2026-06-03 per plan-review]** — feature-only matching (FR2) now DOES alert on
+  the probe-failure ops. Plan-review showed arms 2/3 swallow their scan errors
+  and the heartbeat misses them, so the probe-failure ops are the only
+  broken-probe signal; excluding them reintroduced the silent-failure class the
+  PIR targets. These failures are rare, so they do not cause fatigue (lifecycle
+  conditions handle finding-repeat fatigue).
 
 ## Functional Requirements
 
 - FR1: Add a `sentry_issue_alert "workspace_sync_health"` resource to
   `apps/web-platform/infra/sentry/issue-alerts.tf`, mirroring the structure of
   `chat_message_save_failure` (`issue-alerts.tf:349-396`).
-- FR2: `filters_v2` MUST match `feature EQUAL "workspace-sync-health"` AND
-  `op IS_IN "ready-null-installation,stale-sync-failed,went-quiet"`
-  (`filter_match="all"`). These are the three user-actionable finding ops emitted
-  by the cron (Arm 1 / Arm 2 / Arm 3 respectively).
+- FR2: `filters_v2` MUST match `feature EQUAL "workspace-sync-health"` ONLY (no
+  `op` filter). Every event the cron emits on this feature is operator-actionable
+  — the 3 findings (`ready-null-installation`/`stale-sync-failed`/`went-quiet`)
+  AND the 4 probe-failure ops (`scan`/`scan-stale`/`scan-went-quiet`/`went-quiet-probe`),
+  which are the only signal when arms 2/3 swallow a scan error the heartbeat
+  misses. Feature-only matching covers all of them and future-proofs against new
+  cron arms. [Updated 2026-06-03 per plan-review: was `op IS_IN {3 finding ops}`.]
 - FR3: `conditions_v2` MUST use the lifecycle triad `first_seen_event` /
   `reappeared_event` / `regression_event` with `action_match="any"` (the
   anti-fatigue design: one issue per divergence, re-page on regression only —
@@ -68,10 +75,11 @@ detection-signal; this closes alerting.
 ## Technical Requirements
 
 - TR1: Add a contract test mirroring
-  `apps/web-platform/test/sentry-chat-alert-op-contract.test.ts` that asserts
-  the alert rule's matched op strings are exactly the set of finding-op strings
-  emitted by `cron-workspace-sync-health.ts`, so a cron op rename breaks the
-  test rather than silently un-matching the alert (G3).
+  `apps/web-platform/test/sentry-chat-alert-op-contract.test.ts` that asserts the
+  `feature` tag (`workspace-sync-health`) appears in BOTH the cron's
+  `SENTRY_FEATURE` const and the alert's feature filter, so a rename on either
+  side breaks the test rather than silently un-matching the alert (G3). Under
+  feature-only matching there is no op-set to pin.
 - TR2: The change is Terraform-only under `apps/web-platform/infra/sentry/`;
   applied via the existing `apply-sentry-infra.yml` workflow. No migration, no
   app deploy.
@@ -81,7 +89,7 @@ detection-signal; this closes alerting.
 
 - AC1: `terraform plan` shows exactly one new `sentry_issue_alert` resource and
   no diffs to existing rules.
-- AC2: The contract test (TR1) passes and fails if any of the three finding-op
-  strings is changed in the cron without updating the alert.
-- AC3: The matched op set equals `{ready-null-installation, stale-sync-failed,
-  went-quiet}` and `feature` equals `workspace-sync-health`.
+- AC2: The contract test (TR1) passes and fails if the `feature` tag is renamed
+  in the cron without updating the alert (or vice versa).
+- AC3: The alert's `filters_v2` contains exactly one filter — `feature EQUAL
+  "workspace-sync-health"` — and no `op` filter.

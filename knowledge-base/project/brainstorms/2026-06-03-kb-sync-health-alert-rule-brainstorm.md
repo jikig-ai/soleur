@@ -84,7 +84,7 @@ exact-duplicate dedup.
 |---|----------|-----------|
 | 1 | Alert-rule only; no app-code change | Probe + signal already shipped (#4712/#4717); only notification is missing |
 | 2 | Mirror `chat_message_save_failure` resource | Proven same-class pattern; encodes anti-fatigue lifecycle-condition design |
-| 3 | Match `feature=workspace-sync-health` + `op IS_IN {ready-null-installation, stale-sync-failed, went-quiet}` | The three user-actionable *finding* ops; excludes internal `scan*`/`*-probe` failure ops to minimize fatigue (operator's concern) |
+| 3 | Match `feature=workspace-sync-health` only (no `op` filter) **[Updated 2026-06-03 at plan-review]** | Originally scoped to 3 finding ops to minimize fatigue, but plan-review found arms 2/3 swallow scan errors the heartbeat misses, so the probe-failure ops are the only broken-probe signal. Feature-only covers findings + probe-failures, is future-proof, and the dedicated feature tag means every event is operator-actionable. Fatigue is handled by lifecycle conditions, not op-scoping. |
 | 4 | Lifecycle conditions (first_seen/reappeared/regression), not per-event | Folds persistent daily re-fires into one issue; pages on new + regression only |
 | 5 | `frequency` = unused distinct value (e.g. 11 or 20) | Avoid Sentry exact-dup dedup vs sibling rules (5/10/15/30/60/61/62 taken) |
 | 6 | `notify_email` IssueOwners → ActiveMembers fallthrough | Solo-founder N=1; mirrors `chat_message_save_failure`; events carry no cross-tenant content (op + hashed userId only) |
