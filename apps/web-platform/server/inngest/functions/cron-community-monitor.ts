@@ -33,8 +33,10 @@
 //     LINKEDIN_PERSON_URN (the community-router.sh platform scripts need
 //     these to flip platforms from "disabled" → "enabled").
 //   - --max-turns 80 (was 50, orig 40 — see turn-budget rationale on
-//     MAX_TURN_DURATION_MS); --allowedTools is NARROWER (no WebSearch,
-//     WebFetch — mirrors the YAML's claude_args).
+//     MAX_TURN_DURATION_MS); --allowedTools is NARROWER than the cohort
+//     default (no WebSearch, WebFetch). (The original GHA workflow
+//     scheduled-community-monitor.yml was deleted in #4468; this comment no
+//     longer mirrors a live file.)
 //   - Cron 0 8 * * * (daily 08:00 UTC, not weekly Monday 09:00).
 //   - DEDUP RULE uses 24h window (daily cadence) not 6 days (weekly).
 //   - ISSUE CLOSURE SAFETY and ROADMAP.MD CONFLICT GUARD are N/A (prompt
@@ -84,9 +86,11 @@ const TOKEN_MIN_LIFETIME_MS = 50 * 60 * 1000 + 10 * 60 * 1000;
 // ceiling), so it never reached its final issue-create step and this
 // always-create producer filed no `scheduled-community-monitor` issue —
 // correctly turning the output-aware heartbeat RED. 80 matches the
-// proven-healthy `cron-daily-triage` budget running through the same
-// DEFAULT_CLAUDE_SETTINGS (the heavier 7-platform digest + git→PR→issue task
-// no longer fit in 50 with error/retry headroom). The timeout-to-turns ratio
+// proven-healthy `cron-daily-triage` turn budget running through the same
+// DEFAULT_CLAUDE_SETTINGS (daily-triage pairs 80 turns with a 60-min ceiling;
+// we keep 50 min — see the in-band ratio below). The heavier 7-platform
+// digest + git→PR→issue task no longer fit in 50 with error/retry headroom.
+// The timeout-to-turns ratio
 // is 50 min ÷ 80 = 0.625 min/turn — within the 0.55–1.2 peer band per the
 // 2026-03-20-claude-code-action-max-turns-budget learning, so the 50-min
 // wall-clock stays adequate (no MAX_TURN_DURATION_MS change needed).
