@@ -258,31 +258,31 @@ Test path `test/kb-route-helpers.test.ts` matches the node `test/**/*.test.ts` i
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 (FR1):** `jwt_mint` and `rotation` mint failures resolve via the service-role fallback —
+- [x] **AC1 (FR1):** `jwt_mint` and `rotation` mint failures resolve via the service-role fallback —
   `authenticateAndResolveKbPath` returns `{ ok: true, ctx }`, NOT 503. Verified by Test 1 + 2 green
   (and RED against pre-fix `kb-route-helpers.ts`).
-- [ ] **AC2 (FR2):** `denied_jti` returns `{ ok: false, response }` with `response.status === 403` and
+- [x] **AC2 (FR2):** `denied_jti` returns `{ ok: false, response }` with `response.status === 403` and
   body `{ error: "Access denied" }`; `mockServiceFrom` is **not** called (no service-role fallback on
   revocation). Verified by Test 3 green.
-- [ ] **AC3 (FR2, fail-closed shape):** the `denied_jti` path **resolves to a Response object, never
+- [x] **AC3 (FR2, fail-closed shape):** the `denied_jti` path **resolves to a Response object, never
   rejects** — `.resolves.toMatchObject({ ok: false })`. Verified by Test 4 green. (Guards the
   out-of-try-block uncontrolled-500 escape.)
-- [ ] **AC4 (FR3):** `reportSilentFallback` fires exactly once for each of all three causes with
+- [x] **AC4 (FR3):** `reportSilentFallback` fires exactly once for each of all three causes with
   `op: "authenticateAndResolveKbPath.tenant-mint"` and `extra: { userId }`. Verified by Test 5 green.
-- [ ] **AC5 (FR1, no false-positive):** a service-role read returning a not-ready workspace still
+- [x] **AC5 (FR1, no false-positive):** a service-role read returning a not-ready workspace still
   503s under fallback. Verified by Test 6 green.
-- [ ] **AC6 (FR4):** a non-`RuntimeAuthError` mint failure is re-thrown unchanged. Verified by Test 7.
-- [ ] **AC7 (FR5):** the NOTE comment at `kb-route-helpers.ts` no longer says "intentionally 503s …
+- [x] **AC6 (FR4):** a non-`RuntimeAuthError` mint failure is re-thrown unchanged. Verified by Test 7.
+- [x] **AC7 (FR5):** the NOTE comment at `kb-route-helpers.ts` no longer says "intentionally 503s …
   tracked in #4914"; it names the per-cause ceiling (`jwt_mint`/`rotation` fall back; `denied_jti`
   fails closed) and the rationale. Verified by `grep -n "denied_jti" apps/web-platform/server/kb-route-helpers.ts`
   returning a match inside the `authenticateAndResolveKbPath` comment block + manual read.
-- [ ] **AC8 (FR6):** `apps/web-platform/.service-role-allowlist` "#4913" block mentions
+- [x] **AC8 (FR6):** `apps/web-platform/.service-role-allowlist` "#4913" block mentions
   `authenticateAndResolveKbPath`'s availability-only fallback (#4914). No new path line added (the
   file is already allowlisted). Verified by `grep -c "apps/web-platform/server/kb-route-helpers.ts"
   apps/web-platform/.service-role-allowlist` returning exactly `1` (unchanged count).
-- [ ] **AC9 (gate):** the `service-role-allowlist-gate` CI job stays green — no new disallowed
+- [x] **AC9 (gate):** the `service-role-allowlist-gate` CI job stays green — no new disallowed
   service-role importer (the file is already allowlisted; no new `createServiceClient` *file* added).
-- [ ] **AC10:** `apps/web-platform` typechecks (`cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`)
+- [x] **AC10:** `apps/web-platform` typechecks (`cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`)
   and the `kb-route-helpers.test.ts` vitest file is fully green.
 
 ### Post-merge (operator)

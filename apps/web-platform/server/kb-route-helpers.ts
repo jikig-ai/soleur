@@ -91,12 +91,29 @@ export async function authenticateAndResolveKbPath(
   // probe (the route flow reads only the caller's own row before any
   // cross-row work).
   //
-  // NOTE: unlike `resolveUserKbRoot` (which falls back to a service-role
-  // read on mint failure), this helper intentionally 503s — it serves the
-  // file PATCH/DELETE *mutation* routes, where a `denied_jti` deny-list trip
-  // is MEANT to block the action; a service-role fallback there would defeat
-  // that revocation. Applying the same fallback to the mutation paths needs
-  // an explicit per-cause adjudication, tracked in #4914.
+  // PER-CAUSE tenant-mint fallback (#4914), diverging from `resolveUserKbRoot`'s
+  // all-causes fallback because this helper serves the file PATCH/DELETE
+  // *mutation* routes (not the read/share path):
+  //   - `jwt_mint` | `rotation` (availability failures — signing/RPC failure, or
+  //     the 60/hr per-founder mint ceiling tripped): fall back to a SERVICE-ROLE
+  //     read of the caller's OWN row, exactly as `resolveUserKbRoot` does. The
+  //     read stays hard-scoped `.eq("id", user.id)` (server-derived session
+  //     user, never request-controlled), so the fallback restores availability
+  //     without weakening cross-tenant isolation — the mutation then proceeds.
+  //   - `denied_jti` (the cached JWT's jti landed in `public.denied_jti` — a
+  //     DELIBERATE revocation) and any future un-named cause: FAIL CLOSED with a
+  //     403. Unlike the share path (whose privileged `createShare` write was
+  //     already service-role, so the deny-list never gated it), here the
+  //     downstream GitHub mutation IS gated on this helper resolving — a
+  //     service-role fallback would defeat the revocation's intent. We branch on
+  //     the POSITIVE allow-list of availability causes so an unknown 4th cause
+  //     fails closed (the safe default on a mutation route), not open.
+  // `reportSilentFallback` fires for EVERY cause (incl. `denied_jti`) BEFORE the
+  // branch, so a chronic mint failure AND a revocation-hit both stay Sentry-
+  // visible (cq-silent-fallback-must-mirror-to-sentry). The fail-closed path
+  // MUST RETURN a Response (never throw): both route handlers call this helper
+  // OUTSIDE their try block, so a thrown RuntimeAuthError would escape to
+  // Next.js → an uncontrolled 500.
   let tenant;
   try {
     tenant = await getFreshTenantClient(user.id);
@@ -107,9 +124,16 @@ export async function authenticateAndResolveKbPath(
         op: "authenticateAndResolveKbPath.tenant-mint",
         extra: { userId: user.id },
       });
-      return err(503, "Workspace not ready");
+      if (mintErr.cause === "jwt_mint" || mintErr.cause === "rotation") {
+        // Availability failure — restore availability via a self-row read.
+        tenant = createServiceClient();
+      } else {
+        // `denied_jti` (revocation) or any future cause — honor the deny-list.
+        return err(403, "Access denied");
+      }
+    } else {
+      throw mintErr;
     }
-    throw mintErr;
   }
   const { data: userData } = await tenant
     .from("users")
