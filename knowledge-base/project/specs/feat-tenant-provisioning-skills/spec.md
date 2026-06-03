@@ -6,7 +6,7 @@ parent_issue: 3723
 deferred_issues: [3773]
 brainstorm: knowledge-base/project/brainstorms/2026-05-26-tenant-provisioning-skills-brainstorm.md
 adr: knowledge-base/engineering/architecture/decisions/ADR-030-multi-tenant-deploy-substrate.md
-runbook: knowledge-base/engineering/ops/runbooks/tenant-provisioning.md
+runbook: knowledge-base/engineering/operations/runbooks/tenant-provisioning.md
 lane: cross-domain
 brand_survival_threshold: single-user incident
 status: draft

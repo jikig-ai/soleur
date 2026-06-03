@@ -316,7 +316,7 @@ jobs:
 Update the H9 section in `cloud-scheduled-tasks.md` to reference the new automated restore path via `gh workflow run restart-inngest-server.yml` instead of SSH.
 
 **Files to edit:**
-- `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` (H9 Restore section)
+- `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` (H9 Restore section)
 
 ## User-Brand Impact
 
@@ -430,7 +430,7 @@ The `verify_inngest_functions()` helper uses `count >= 1` (not exact match again
 - `apps/web-platform/infra/ci-deploy.test.sh` -- add restart test cases
 - `apps/web-platform/infra/deploy-inngest-bootstrap.sudoers` -- add INNGEST_RESTART Cmnd_Alias
 - `apps/web-platform/infra/cloud-init.yml` -- add INNGEST_RESTART Cmnd_Alias to inline sudoers block at lines 54-64 (fresh-host parity with deploy-inngest-bootstrap.sudoers, per Kieran review P5)
-- `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` -- update H9 Restore with automated path
+- `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` -- update H9 Restore with automated path
 
 ## Files to Create
 
@@ -497,7 +497,7 @@ Reviewed by DHH Rails Reviewer, Kieran Rails Reviewer, and Code Simplicity Revie
 ## References
 
 - Issue: #4538
-- H9 runbook: `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` lines 264-327
+- H9 runbook: `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` lines 264-327
 - Function registry test: `apps/web-platform/test/server/inngest/function-registry-count.test.ts`
 - PR #4531: documented the gap and added the H9 hypothesis
 - Inngest substrate learning: `knowledge-base/project/learnings/2026-05-19-inngest-substrate-five-bug-cascade.md`

@@ -18,7 +18,7 @@ requires_cpo_signoff: false
 
 **Plan v1 (demote + 5 Why-trims).** Rejected at 5-agent plan review: simplification panel (DHH + code-simplicity) said "prefer retirement"; correctness panel (Kieran + spec-flow) flagged byte-math drift + missing atomic-commit AC + Trim 2 over-trim.
 
-**Plan v2 (retire `hr-no-dashboard-eyeball-pull-data-yourself` + 2 Why-trims).** Rejected at /work-time cross-reference sweep: the retirement candidate is canonically anchored in 5 operator-facing surfaces (`plugins/soleur/skills/ship/SKILL.md:1143,1169`, `plugins/soleur/skills/plan/SKILL.md:726`, `plugins/soleur/agents/engineering/review/deployment-verification-agent.md:97`, `knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md:160`, `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md:101`). Retirement would leave these as dangling references OR force an 8-edit sweep — both fail the "cheapest credible path" framing.
+**Plan v2 (retire `hr-no-dashboard-eyeball-pull-data-yourself` + 2 Why-trims).** Rejected at /work-time cross-reference sweep: the retirement candidate is canonically anchored in 5 operator-facing surfaces (`plugins/soleur/skills/ship/SKILL.md:1143,1169`, `plugins/soleur/skills/plan/SKILL.md:726`, `plugins/soleur/agents/engineering/review/deployment-verification-agent.md:97`, `knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md:160`, `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md:101`). Retirement would leave these as dangling references OR force an 8-edit sweep — both fail the "cheapest credible path" framing.
 
 **Plan v3 (this file) — demote + 6 Why-trims with plan-review fixes baked in.** Returns to architecture-strategist's ACCEPTED approach with the following corrections baked in:
 
@@ -122,7 +122,7 @@ Per `cq-agents-md-why-single-line` (governs Why shape, not Why existence), the W
 
 - Current Why: `**Why:** #2681 — #2654 plan had sshd hypotheses; cause was admin-IP drift.`
 - New Why: `**Why:** #2681.`
-- Bytes saved: **61 B**. The runbook citation (`knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`) earlier in the body is preserved.
+- Bytes saved: **61 B**. The runbook citation (`knowledge-base/engineering/operations/runbooks/admin-ip-drift.md`) earlier in the body is preserved.
 
 **Trim 5 — `wg-when-a-workflow-gap-causes-a-mistake-fix` (AGENTS.core.md:51).**
 

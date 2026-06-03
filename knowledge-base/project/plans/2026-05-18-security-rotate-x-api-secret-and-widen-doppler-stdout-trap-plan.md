@@ -153,12 +153,12 @@ X Developer Portal: free tier supports unlimited secret regenerations on the sam
    Returns ≥ 1 match.
 
 5. **AC5 — Runbook hardening sweep.** The following operator-facing runbooks each have at least one `doppler secrets set` / `doppler secrets delete` invocation guarded with `>/dev/null 2>&1`:
-   - `knowledge-base/engineering/ops/runbooks/stripe-live-activation.md`
-   - `knowledge-base/engineering/ops/runbooks/tenant-offboarding.md`
-   - `knowledge-base/engineering/ops/runbooks/tenant-provisioning.md`
-   - `knowledge-base/engineering/ops/runbooks/github-app-drift.md`
-   - `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md` (already uses `--silent` on `set`; reconcile for `delete` if any)
-   - `knowledge-base/engineering/ops/runbooks/inngest-server.md`
+   - `knowledge-base/engineering/operations/runbooks/stripe-live-activation.md`
+   - `knowledge-base/engineering/operations/runbooks/tenant-offboarding.md`
+   - `knowledge-base/engineering/operations/runbooks/tenant-provisioning.md`
+   - `knowledge-base/engineering/operations/runbooks/github-app-drift.md`
+   - `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md` (already uses `--silent` on `set`; reconcile for `delete` if any)
+   - `knowledge-base/engineering/operations/runbooks/inngest-server.md`
 
    Verification grep (sweep across operator-facing surfaces — excluding `knowledge-base/project/{plans,specs}/**` and `**/archive/**` per the `2026-04-29-docs-fix-verification-greps-must-span-operator-surfaces.md` convention):
    ```bash
@@ -368,12 +368,12 @@ Bootstrap script ships in the PR (per `hr-multi-step-post-merge-bootstrap-script
 - `.claude/hooks/prod-write-defer-gate.test.sh` — add ≥ 6 new assertions (4 `delete` + 2 widened `set`); update existing `set` assertions to use the new rule_id; add negative `--help` assertion.
 - `.claude/hooks/README.md` — update line 240 starter-manifest table row + line 290 caveat to reflect widening.
 - `knowledge-base/project/learnings/2026-05-18-supabase-custom-access-token-hook-discriminator.md` — widen Leak-2 prevention text; update Hook hardening proposal sentence.
-- `knowledge-base/engineering/ops/runbooks/stripe-live-activation.md` — add `>/dev/null 2>&1` to `doppler secrets set` invocations OR document the `--silent` rationale already present.
-- `knowledge-base/engineering/ops/runbooks/tenant-offboarding.md` — `doppler secrets delete` invocations get `>/dev/null 2>&1`.
-- `knowledge-base/engineering/ops/runbooks/tenant-provisioning.md` — same.
-- `knowledge-base/engineering/ops/runbooks/github-app-drift.md` — same.
-- `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md` — verify `set` already redirected; add for `delete` if any.
-- `knowledge-base/engineering/ops/runbooks/inngest-server.md` — same.
+- `knowledge-base/engineering/operations/runbooks/stripe-live-activation.md` — add `>/dev/null 2>&1` to `doppler secrets set` invocations OR document the `--silent` rationale already present.
+- `knowledge-base/engineering/operations/runbooks/tenant-offboarding.md` — `doppler secrets delete` invocations get `>/dev/null 2>&1`.
+- `knowledge-base/engineering/operations/runbooks/tenant-provisioning.md` — same.
+- `knowledge-base/engineering/operations/runbooks/github-app-drift.md` — same.
+- `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md` — verify `set` already redirected; add for `delete` if any.
+- `knowledge-base/engineering/operations/runbooks/inngest-server.md` — same.
 
 ## Files to Create
 

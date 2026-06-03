@@ -73,7 +73,7 @@ Evidence excerpt (first L3 hypothesis):
      list against (a) the current operator egress via `curl -s https://ifconfig.me/ip`
      and (b) the current GitHub runner ranges from
      `https://api.github.com/meta` (`.actions[]`).
-   - Runbook: `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`.
+   - Runbook: `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md`.
    - Prior incident: issue #2681.
 ```
 
@@ -136,4 +136,4 @@ Captured per compound Phase 0.5. Each error is paired with a prevention proposal
 - AGENTS.md rules: `hr-ssh-diagnosis-verify-firewall`, `hr-menu-option-ack-not-prod-write-auth`, `hr-all-infrastructure-provisioning-servers`, `hr-never-label-any-step-as-manual-without`.
 - Prior incident: issue #2681 (stale admin-IP misdiagnosed as fail2ban).
 - Related learning: `knowledge-base/project/learnings/bug-fixes/2026-04-19-admin-ip-drift-misdiagnosed-as-fail2ban.md`.
-- Runbook: `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`.
+- Runbook: `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md`.

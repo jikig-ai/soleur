@@ -25,7 +25,7 @@ status: brainstorm-complete
 
 ## What We're Building
 
-Four Soleur skills automating runbook Steps 1-4+7 from `knowledge-base/engineering/ops/runbooks/tenant-provisioning.md`. Each skill generates a per-tenant Terraform provisioning root where TF resources exist, with guided CLI fallback for operations Terraform cannot reach.
+Four Soleur skills automating runbook Steps 1-4+7 from `knowledge-base/engineering/operations/runbooks/tenant-provisioning.md`. Each skill generates a per-tenant Terraform provisioning root where TF resources exist, with guided CLI fallback for operations Terraform cannot reach.
 
 ### Scope
 

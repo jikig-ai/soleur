@@ -33,7 +33,7 @@ The cumulative diff modifies the following surfaces; each fires the correspondin
 | New Supabase migration with personal-data column | `apps/web-platform/supabase/migrations/043_tenant_deploy_audit.sql` (founder_id UUID + audit row) | GDPR-Art-30 (RoPA row required); GDPR-Art-32 (TOMs enumeration); GDPR-Art-5(1)(e) (retention basis); GDPR-Art-17 (anonymise-vs-delete) |
 | New legal artifact directory | `knowledge-base/legal/tos-research/` + `knowledge-base/legal/legitimate-interest-assessments/` | GDPR-Art-6 (lawful-basis disclosure path) |
 | New ADR with multi-tenant scope | `knowledge-base/engineering/architecture/decisions/ADR-030-multi-tenant-deploy-substrate.md` | GDPR-Art-46 (no third-country transfers at v1; verified); GDPR-Chapter-V (vendor flow-down) |
-| New runbook with cross-vendor provisioning | `knowledge-base/engineering/ops/runbooks/tenant-provisioning.md` | GDPR-Art-28 (sub-processor evidence); GDPR-DataMin-1 (Art. 5(1)(c)) |
+| New runbook with cross-vendor provisioning | `knowledge-base/engineering/operations/runbooks/tenant-provisioning.md` | GDPR-Art-28 (sub-processor evidence); GDPR-DataMin-1 (Art. 5(1)(c)) |
 | Updated Article 30 register | `knowledge-base/legal/article-30-register.md` (new Processing Activity row) | GDPR-Art-30 (controller-side RoPA completeness) |
 
 ## Findings

@@ -185,7 +185,7 @@ export async function eventCfTokenExpiryCheckHandler({
           "",
           "### What to do",
           "",
-          `Follow the [rotation runbook](https://github.com/${REPO_OWNER}/${REPO_NAME}/blob/main/knowledge-base/engineering/ops/runbooks/cloudflare-service-token-rotation.md) for renewal steps.`,
+          `Follow the [rotation runbook](https://github.com/${REPO_OWNER}/${REPO_NAME}/blob/main/knowledge-base/engineering/operations/runbooks/cloudflare-service-token-rotation.md) for renewal steps.`,
           "",
           "**References:** #974",
         ].join("\n");

@@ -1023,7 +1023,7 @@ Sibling to ADR-030 (Inngest as durable trigger layer). Captures:
 
 #### 10.2 Runbook update
 
-Edit `knowledge-base/engineering/ops/runbooks/inngest-server.md`: append PR-G flip section.
+Edit `knowledge-base/engineering/operations/runbooks/inngest-server.md`: append PR-G flip section.
 
 ```markdown
 ## PR-G post-merge: Flipping SOLEUR_FR5_ENABLED to true
@@ -1115,7 +1115,7 @@ Goal: all checks green, draft PR ready for review.
 | `plugins/soleur/docs/pages/legal/privacy-policy.md` | Mirror of above. | 7.1 |
 | `docs/legal/data-protection-disclosure.md` | §2.3(o) extension (scope_grants ledger + audit viewer surfaces). | 7.1 |
 | `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` | Mirror of above. | 7.1 |
-| `knowledge-base/engineering/ops/runbooks/inngest-server.md` | Append "PR-G post-merge: Flipping SOLEUR_FR5_ENABLED" section. | 10.2 |
+| `knowledge-base/engineering/operations/runbooks/inngest-server.md` | Append "PR-G post-merge: Flipping SOLEUR_FR5_ENABLED" section. | 10.2 |
 | `knowledge-base/legal/article-30-register.md` | Add "Scope Grants" processing activity row. | 10.3 |
 | `knowledge-base/legal/compliance-posture.md` | Update Active Items with PR-G findings from gdpr-gate (Phase 0.7). | 0.7 |
 

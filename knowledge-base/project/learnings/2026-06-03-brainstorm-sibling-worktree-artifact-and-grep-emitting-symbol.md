@@ -6,7 +6,7 @@ Two premise-verification misses surfaced during the #4849 chat-write-absence-ale
 brainstorm — both produced a *transiently wrong* framing that later evidence corrected:
 
 1. **"Cited artifact missing on main."** The pre-worktree premise probe ran
-   `git show main:knowledge-base/engineering/ops/post-mortems/chat-rls-workspace-id-outage-postmortem.md`
+   `git show main:knowledge-base/engineering/operations/post-mortems/chat-rls-workspace-id-outage-postmortem.md`
    and got nothing, so the source PIR (the document the issue's "factor 2" follow-up
    is derived from) looked absent. The existing brainstorm guidance covers the
    bare-repo-lag case ("if `git show` fails, defer until inside the worktree and

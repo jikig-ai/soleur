@@ -26,7 +26,7 @@
 -- assert every allowed value is present.
 --
 -- FORWARD-ONLY. Rollback = drop both columns after confirming no code path
--- references them. See knowledge-base/engineering/ops/runbooks/supabase-migrations.md.
+-- references them. See knowledge-base/engineering/operations/runbooks/supabase-migrations.md.
 --
 -- CONCURRENTLY is NOT used. Supabase's migration runner wraps each file in a
 -- transaction (SQLSTATE 25001 on CONCURRENTLY in a txn). Plain

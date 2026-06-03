@@ -58,7 +58,7 @@ issues: [4684, 4689]
 
 - 5.1 Append container-tmpfs + `_metrics`-emptiness clarification to the
   existing `## Known coverage gap` section in
-  `knowledge-base/engineering/ops/runbooks/betterstack-log-query.md`.
+  `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`.
 
 ## Phase 6 — Deferred-item tracking + ship
 

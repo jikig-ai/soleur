@@ -154,7 +154,7 @@ export const JWT_AUDIENCE = "soleur-runtime";
  * Bounded retries smooth transient bursts (concurrent CI runs, prior-hour
  * residue against the dev project's per-instance ceiling). They do NOT
  * fix steady-state ceiling exhaustion — see
- * `knowledge-base/engineering/ops/runbooks/supabase-magiclink-rate-limit.md`
+ * `knowledge-base/engineering/operations/runbooks/supabase-magiclink-rate-limit.md`
  * for the operational fix.
  */
 const DEFAULT_VERIFY_OTP_MAX_RETRIES = 3;

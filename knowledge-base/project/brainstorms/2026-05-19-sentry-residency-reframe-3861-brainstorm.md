@@ -86,7 +86,7 @@ Probe report committed at `knowledge-base/legal/audits/2026-05-19-sentry-token-s
 
 **Files (~3–4):**
 - `knowledge-base/legal/audits/2026-05-19-sentry-token-scope-probe-report.md` (NEW; probe output + screenshots)
-- `knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md` (`status: open`; strike `art_33_deadline`; strike `art_33_triggered: true`; append `## Phase 9 — Gate 3b Correction (2026-05-19)` section with Sentry replies verbatim + token-scope probe results)
+- `knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md` (`status: open`; strike `art_33_deadline`; strike `art_33_triggered: true`; append `## Phase 9 — Gate 3b Correction (2026-05-19)` section with Sentry replies verbatim + token-scope probe results)
 - `apps/web-platform/scripts/sentry-monitors-audit.sh` (header comment reframe: "destination-controllability drift" not "phantom-ingest")
 - Close #3962 (Gate-3b resolved 12 days early)
 
@@ -147,7 +147,7 @@ None identified. The probe sequence uses existing Doppler tokens + standard Sent
 - Committed corpus to correct:
   - `knowledge-base/legal/article-30-register.md` PA8 §(d) + Vendor DPAs row
   - `knowledge-base/legal/audits/2026-05-17-sentry-phantom-ingest-window-auth-users-audit.md`
-  - `knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`
+  - `knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`
   - `knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md`
   - `knowledge-base/project/learnings/2026-05-15-sentry-dsn-cluster-substring-authoritative-residency.md`
   - `knowledge-base/project/learnings/2026-05-16-brainstorm-premise-cascade-and-playwright-handoff-discipline.md`

@@ -19,7 +19,7 @@ Issue #3833 (shrink B_ALWAYS below 22,000) went through three plan iterations be
     - `plugins/soleur/skills/plan/SKILL.md:726`
     - `plugins/soleur/agents/engineering/review/deployment-verification-agent.md:97`
     - `knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md:160`
-    - `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md:101`
+    - `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md:101`
 
    Retirement would have left 5 dangling references (rule body absent from sidecars; references resolve to a retired ID via `retired-rule-ids.txt` → learning file). The brainstorm 2026-04-23 retirement protocol allows this, but operator-facing skill bodies reading `Per hr-no-dashboard-eyeball...` would point at nothing in-context.
 3. **Plan v3 — pivot back to demote + 6 Why-trims.** Architecture-strategist had ACCEPTED this approach at plan review; the simplification panel had argued for retirement without accounting for cross-reference anchoring cost.

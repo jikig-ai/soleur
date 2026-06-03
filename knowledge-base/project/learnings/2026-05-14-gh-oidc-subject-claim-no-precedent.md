@@ -59,4 +59,4 @@ Future search queries for "OIDC subject claim", "github actions OIDC trust", or 
 - Brainstorm: `knowledge-base/project/brainstorms/2026-05-14-soleur-managed-deploy-substrate-multi-tenant-brainstorm.md`
 - Doppler OIDC examples: `https://docs.doppler.com/docs/github-oidc-examples`
 - GitHub OIDC docs: `https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/about-security-hardening-with-openid-connect`
-- Runbook Step 7 (Environment + reviewers): `knowledge-base/engineering/ops/runbooks/tenant-provisioning.md`
+- Runbook Step 7 (Environment + reviewers): `knowledge-base/engineering/operations/runbooks/tenant-provisioning.md`

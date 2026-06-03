@@ -75,7 +75,7 @@ A scheduled GitHub Actions workflow runs monthly, computes the SHA-256 of the R2
 
 ### FR8: Inspection runbook
 
-`knowledge-base/engineering/ops/runbooks/cla-signature-evidence-retrieval.md` documents: (a) generating a read-only scoped R2 token, (b) retrieving evidence records for a contributor or PR, (c) producing a notarized export for legal counsel, (d) handling a GDPR Art. 17 erasure request under Governance mode.
+`knowledge-base/engineering/operations/runbooks/cla-signature-evidence-retrieval.md` documents: (a) generating a read-only scoped R2 token, (b) retrieving evidence records for a contributor or PR, (c) producing a notarized export for legal counsel, (d) handling a GDPR Art. 17 erasure request under Governance mode.
 
 ## Technical Requirements
 
@@ -191,7 +191,7 @@ The plan's `## Research Reconciliation` and `## Sharp Edges` sections resolved 1
 7. **Allowlist-bypass timing race** — resolved via R2 `If-None-Match: *` per-quarter canonical record (Phase 4 + brainstorm Q3 final answer). Resolves gap #7.
 8. **TR8 backfill: Elvalio's correct sign PR** — backfill record uses `pr_of_record.number = 3196` (actual sign location) and `first_pr_signed_against = 3186` (where the action originally accepted). Implemented in `apps/web-platform/scripts/cla-backfill-evidence.ts`. Resolves gap #8 (Elvalio pr_of_record correction).
 9. **Always-timestamp YYYY-MM in manifest pre-image** — monthly cron's manifest header line includes `{"manifest_yyyy_mm":"YYYY-MM","schema_version":"1.0"}` so each month's TSQ is unique even on a quiet bucket; the timestamp chain advances regardless of activity. Resolves gap #9.
-10. **GDPR Art. 17 admin-override + tombstone protocol** — documented in `knowledge-base/engineering/ops/runbooks/cla-signature-evidence-retrieval.md` §7; tombstone written to `tombstones/<sha>.deleted.json` with no contributor PII, included in next monthly manifest so chain shows "object H → tombstone T at M+1." Resolves gap #10.
+10. **GDPR Art. 17 admin-override + tombstone protocol** — documented in `knowledge-base/engineering/operations/runbooks/cla-signature-evidence-retrieval.md` §7; tombstone written to `tombstones/<sha>.deleted.json` with no contributor PII, included in next monthly manifest so chain shows "object H → tombstone T at M+1." Resolves gap #10.
 11. **Receipt comment soft-fail** — folded into sidecar workflow as final step with `continue-on-error: true` (Code-Simplicity F4); receipt failure does NOT block the merge gate (canonical evidence is the R2 object). Resolves gap #11.
 
 The PR's Acceptance Criteria (plan §Pre-merge / Post-merge) cover every resolution above. Sharp-edges and pattern reuse captured in [2026-05-04-cla-evidence-sidecar-pattern.md](../../learnings/2026-05-04-cla-evidence-sidecar-pattern.md).

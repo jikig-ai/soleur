@@ -12,6 +12,6 @@
 #
 # Flipping to true requires a committed PR that operators can review. The
 # .example file (promotion-config.yml.example) is documentation only.
-# See knowledge-base/engineering/ops/runbooks/compound-promote-runbook.md.
+# See knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md.
 # Default: OFF. Issue: #2720.
 enabled: false

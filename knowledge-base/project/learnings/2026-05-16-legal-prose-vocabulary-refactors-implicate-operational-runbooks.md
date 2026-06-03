@@ -19,7 +19,7 @@ PR #3920 migrated the cla-evidence bucket from S3 Object Lock (which R2 does not
 - `docs/legal/gdpr-policy.md` + `plugins/soleur/docs/pages/legal/gdpr-policy.md` — §2.2 + §3.4 vocabulary reword
 - `knowledge-base/project/learnings/2026-05-04-cla-evidence-sidecar-pattern.md` — Section 12 explaining the API surface change
 
-The plan correctly enumerated all five files. The multi-agent review (10 agents, parallel) added one finding the plan missed: **the operational runbook at `knowledge-base/engineering/ops/runbooks/cla-signature-evidence-retrieval.md` §7 was now stale**. §7.1 still told the operator to mint a CF token with "Bypass Governance Retention" permission (an S3 Object Lock concept R2 doesn't implement); §7.3 still described `aws s3api delete-object --bypass-governance-retention` (the exact S3 surface verified empirically as NotImplemented by R2).
+The plan correctly enumerated all five files. The multi-agent review (10 agents, parallel) added one finding the plan missed: **the operational runbook at `knowledge-base/engineering/operations/runbooks/cla-signature-evidence-retrieval.md` §7 was now stale**. §7.1 still told the operator to mint a CF token with "Bypass Governance Retention" permission (an S3 Object Lock concept R2 doesn't implement); §7.3 still described `aws s3api delete-object --bypass-governance-retention` (the exact S3 surface verified empirically as NotImplemented by R2).
 
 The legal docs were updated to describe the NEW procedure ("temporarily edit the bucket lock-rule list to exclude the offending object, delete, restore") — but no PR file updated the runbook to match. An operator following §7 verbatim during a real GDPR Art. 17 request would have every step fail.
 
@@ -41,7 +41,7 @@ When a plan touches `docs/legal/*.md` or `plugins/soleur/docs/pages/legal/*.md` 
 # Example gate during plan time, replacing <old-vocab> with the literal string
 # being deprecated (e.g., "Object Lock Governance", "--bypass-governance-retention",
 # "X-Vault-Token", "S3 Object Lock").
-git grep -nl '<old-vocab>' knowledge-base/engineering/ops/runbooks/ docs/ apps/ plugins/ \
+git grep -nl '<old-vocab>' knowledge-base/engineering/operations/runbooks/ docs/ apps/ plugins/ \
   | grep -v knowledge-base/project/learnings/ \
   | grep -v knowledge-base/project/plans/
 ```

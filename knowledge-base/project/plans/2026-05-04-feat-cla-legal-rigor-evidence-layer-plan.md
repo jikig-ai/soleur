@@ -79,13 +79,13 @@ The plan corrects 8 spec-vs-codebase reconciliations surfaced by repo research, 
 | 3 | Copy R2 backend + bucket-resource Terraform from `apps/web-platform/infra/main.tf`. | The backend stanza exists (lines 1–31). **No `cloudflare_r2_bucket` resource exists anywhere in the repo.** State bucket was provisioned out-of-band. | Phase 1 declares the `cloudflare_r2_bucket` resource greenfield. Document the resource shape with `location_hint = "weur"`, `lifecycle { prevent_destroy = true }`, and Governance object-lock configuration as the new precedent. |
 | 4 | `secret-scan.yml` is a `pull_request_target` precedent. | Verified: `secret-scan.yml` is `pull_request`, NOT `pull_request_target`. Only `cla.yml` uses `pull_request_target`. | Cite `cla.yml` only as the security envelope precedent. |
 | 5 | Cloudflare token-rotation runbook documents `gh secret set` from Doppler. | Verified: runbook pipes from `terraform output … \| gh secret set CF_*`. Doppler is not the source. | Phase 1 Step 7 documents the new `gh secret set` flow specifically for `R2_CLA_EVIDENCE_*` keys, sourced from Doppler `prd_cla` config (different pattern from existing CF token rotation, intentional — see learning #9). |
-| 6 | Expense ledger lives at `knowledge-base/engineering/ops/runbooks/...`. | Verified: lives at `knowledge-base/operations/expenses.md`. | Phase 9 edits the correct path. |
+| 6 | Expense ledger lives at `knowledge-base/engineering/operations/runbooks/...`. | Verified: lives at `knowledge-base/operations/expenses.md`. | Phase 9 edits the correct path. |
 | 7 | Doppler config for workflow secrets: spec referenced `prd_cla` + `ci`. | Verified: existing configs are `dev`, `dev_personal`, `ci`, `prd`, `prd_scheduled`, `prd_terraform`. `prd_cla` does NOT exist. | Phase 1 Step 5 creates `prd_cla` as a new Doppler config, separate from `prd_terraform` per learning #9. Workflow uses `DOPPLER_TOKEN_CLA` (matches existing `DOPPLER_TOKEN_PRD` suffix pattern from `web-platform-release.yml`). |
 | 8 | Branch protection / required checks management is via Terraform. | Verified: managed via shell scripts (`scripts/create-cla-required-ruleset.sh`, `scripts/create-ci-required-ruleset.sh`). Required-checks list in `scripts/required-checks.txt`. PUT is full-replace per learning #11. | Phase 2 Step 6 extends `scripts/create-cla-required-ruleset.sh` to include `cla-evidence` Check Run (integration_id 15368, per learning #12). Full payload re-PUT to avoid ghost bypass actors. |
 
 ## Open Code-Review Overlap
 
-**None.** Queried 34 open `code-review` issues against 12 paths the plan touches (`.github/workflows/cla.yml`, all six legal docs in source + Eleventy mirrors, `knowledge-base/operations/expenses.md`, `apps/web-platform/server/observability.ts`, `apps/web-platform/infra/main.tf`, `scripts/create-cla-required-ruleset.sh`, `knowledge-base/engineering/ops/runbooks/cloudflare-service-token-rotation.md`). Zero matches.
+**None.** Queried 34 open `code-review` issues against 12 paths the plan touches (`.github/workflows/cla.yml`, all six legal docs in source + Eleventy mirrors, `knowledge-base/operations/expenses.md`, `apps/web-platform/server/observability.ts`, `apps/web-platform/infra/main.tf`, `scripts/create-cla-required-ruleset.sh`, `knowledge-base/engineering/operations/runbooks/cloudflare-service-token-rotation.md`). Zero matches.
 
 ## Implementation Phases
 
@@ -115,7 +115,7 @@ The phasing prioritizes legal-evidence depth over feature breadth: foundation (T
    | Cloudflare R2 (cla-evidence) | Cloudflare | storage | 0.00 | active | - | Off-site CLA signature archive, Governance object-lock, 10yr retention, region weur. Pay-per-use: $0.015/GB-mo + $0.36/M writes. Sub-cent/mo at realistic scale. See apps/cla-evidence/infra/. |
    ```
 
-6. Document the new Doppler-sourced workflow-secret rotation flow as a sibling section in `knowledge-base/engineering/ops/runbooks/cloudflare-service-token-rotation.md` (one-line cross-link; Phase 7 owns the standalone CLA evidence runbook).
+6. Document the new Doppler-sourced workflow-secret rotation flow as a sibling section in `knowledge-base/engineering/operations/runbooks/cloudflare-service-token-rotation.md` (one-line cross-link; Phase 7 owns the standalone CLA evidence runbook).
 
 **Tests (Phase 1):**
 - `apps/cla-evidence/infra/main.test.sh` — `terraform validate`, `terraform fmt -check`, lint for `prevent_destroy = true`, lint for Governance mode + 3650 days.
@@ -269,7 +269,7 @@ The phasing prioritizes legal-evidence depth over feature breadth: foundation (T
    - For every record fetched, asserts `jq -e --arg v "1.0" '.schema_version == $v'` — exits 3 on mismatch (paralleling backfill + sidecar exit codes).
    - Usage: `inspect-evidence.sh by-pr 3196` or `inspect-evidence.sh by-contributor Elvalio`. Outputs JSON to stdout for piping to legal counsel's preferred export tool.
 
-2. Create `knowledge-base/engineering/ops/runbooks/cla-signature-evidence-retrieval.md`. Sections:
+2. Create `knowledge-base/engineering/operations/runbooks/cla-signature-evidence-retrieval.md`. Sections:
    - **Trigger:** DMCA notice, IP dispute, GDPR Art. 17 erasure request, contributor revocation.
    - **Pre-step**: confirm scope with CLO (legal counsel) before any data movement.
    - **Read-token generation**: operator generates a Cloudflare dashboard ad-hoc token (24h TTL, scoped to `soleur-cla-evidence` read-only). Document the dashboard click-path; revoked after use.
@@ -286,7 +286,7 @@ The phasing prioritizes legal-evidence depth over feature breadth: foundation (T
    - **Audit-log read**: Cloudflare account audit log shows the override; pull and attach to the runbook execution.
    - **Paid-TSA fallback**: if FreeTSA fails 3 consecutive months, switch to DigiCert/GlobalSign — manual provisioning steps documented inline.
 
-3. Cross-link from `knowledge-base/engineering/ops/runbooks/cloudflare-service-token-rotation.md` (the Phase 1 cross-link target).
+3. Cross-link from `knowledge-base/engineering/operations/runbooks/cloudflare-service-token-rotation.md` (the Phase 1 cross-link target).
 
 4. Sharp edge: the runbook itself must NOT contain real signer names or PII — fixtures only, per `cq-test-fixtures-synthesized-only`.
 
@@ -369,7 +369,7 @@ The phasing prioritizes legal-evidence depth over feature breadth: foundation (T
 | `apps/web-platform/test/legal-doc-consistency.test.ts` | 6 | source ↔ Eleventy mirror diff guard |
 | `.github/workflows/cla-evidence.yml` | 2 | Sidecar workflow (includes receipt comment as final soft-fail step) |
 | `.github/workflows/cla-evidence-timestamp.yml` | 5 | Monthly RFC 3161 cron |
-| `knowledge-base/engineering/ops/runbooks/cla-signature-evidence-retrieval.md` | 7 | Inspection + erasure runbook |
+| `knowledge-base/engineering/operations/runbooks/cla-signature-evidence-retrieval.md` | 7 | Inspection + erasure runbook |
 | `knowledge-base/project/learnings/2026-05-04-cla-evidence-sidecar-pattern.md` | 9 | Post-merge learning capture |
 
 ## Files to Edit
@@ -390,7 +390,7 @@ The phasing prioritizes legal-evidence depth over feature breadth: foundation (T
 | `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` | 6 | Mirror |
 | `plugins/soleur/docs/pages/legal/gdpr-policy.md` | 6 | Mirror |
 | `knowledge-base/operations/expenses.md` | 1, 9 | New R2 line entry |
-| `knowledge-base/engineering/ops/runbooks/cloudflare-service-token-rotation.md` | 1 | Cross-link to new CLA runbook |
+| `knowledge-base/engineering/operations/runbooks/cloudflare-service-token-rotation.md` | 1 | Cross-link to new CLA runbook |
 | `knowledge-base/project/brainstorms/2026-05-04-cla-legal-rigor-brainstorm.md` | 9 | Open-question final answers |
 | `knowledge-base/project/specs/feat-cla-legal-rigor/spec.md` | 2, 9 | Spec-flow gap resolutions; pr_of_record correction for Elvalio |
 
@@ -414,7 +414,7 @@ The phasing prioritizes legal-evidence depth over feature breadth: foundation (T
 - [ ] RFC 3161 verify-replay test passes against a recorded `.tsr` fixture (Phase 5).
 - [ ] All five legal docs (source) updated with revocation clause + sub-processor + processing activity + balancing test; CLO-equivalent (`legal-compliance-auditor`) reviewed at review time.
 - [ ] All five Eleventy mirror docs updated with both `Last Updated` locations; `legal-doc-consistency.test.ts` passes (zero body drift).
-- [ ] Inspection runbook at `knowledge-base/engineering/ops/runbooks/cla-signature-evidence-retrieval.md` covers all 7 sections from Phase 7.
+- [ ] Inspection runbook at `knowledge-base/engineering/operations/runbooks/cla-signature-evidence-retrieval.md` covers all 7 sections from Phase 7.
 - [ ] `apps/cla-evidence/scripts/inspect-evidence.sh` exists and asserts `schema_version === "1.0"` on every fetched record (third schema-version consumer per Kieran F3).
 - [ ] Test suite includes TS23 (backfill aborts on schema_version mismatch), TS24 (sidecar tombstone-append aborts on schema mismatch), TS25 (inspect script exits 3 on schema mismatch) per Kieran F4.
 - [ ] Expense ledger updated at `knowledge-base/operations/expenses.md`.

@@ -95,7 +95,7 @@ test in Phase 2.1 IS the failing test, written alongside the workflow.
 
 ### 2.2 Operator runbook
 
-- [ ] **2.2.1** Create `knowledge-base/engineering/ops/runbooks/github-app-drift.md`. Frontmatter: title, owner, related links.
+- [ ] **2.2.1** Create `knowledge-base/engineering/operations/runbooks/github-app-drift.md`. Frontmatter: title, owner, related links.
 - [ ] **2.2.2** Section "Bootstrap":
   - Where to find the App DB ID (GitHub UI: `/settings/apps/<slug>` → "App ID" field).
   - Canonical PEM base64 encoding command: `base64 -w 0 < app.pem > app.pem.b64` then store via `cat app.pem.b64 | doppler secrets set GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 --plain -p soleur -c prd` (verify with `doppler secrets get … --plain | base64 -d | head -1`).

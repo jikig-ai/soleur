@@ -91,7 +91,7 @@ discoverability_test:
    - Add a one-line note: "`secrets:write` added to default_permissions in #4173; installation 122213433 re-accepted the new permission via the GitHub UI (operator-only carve-out per `2026-05-15-operator-only-step-canonical-list.md` case-b — App-permission acceptance has no GitHub API)."
    - Cite the manifest-vs-live drift-guard as the standing detection primitive.
 
-4. **`knowledge-base/engineering/ops/runbooks/github-app-provisioning.md`** — under Step 2 "Permissions: 7 keys per the manifest's default_permissions", update to "8 keys" and re-enumerate (`actions:write, administration:write, checks:read, contents:write, members:read, metadata:read, pull_requests:write, secrets:write`). Add a sentence: "Whenever a new permission key is added to the manifest, the founder must re-accept the App installation at `https://github.com/organizations/jikig-ai/settings/installations/122213433` — there is no API for App-permission self-modification."
+4. **`knowledge-base/engineering/operations/runbooks/github-app-provisioning.md`** — under Step 2 "Permissions: 7 keys per the manifest's default_permissions", update to "8 keys" and re-enumerate (`actions:write, administration:write, checks:read, contents:write, members:read, metadata:read, pull_requests:write, secrets:write`). Add a sentence: "Whenever a new permission key is added to the manifest, the founder must re-accept the App installation at `https://github.com/organizations/jikig-ai/settings/installations/122213433` — there is no API for App-permission self-modification."
 
 5. **`apps/web-platform/test/github-app-manifest-drift-guard.test.ts`** — no test edit required. The fixtures are synthesized inline (`manifest: object; response: object`) — none of the six test cases hardcode a specific permission key value. After-manifest-edit, the next CI run will exercise the script against the new manifest content; the script's behavior is unchanged.
 
@@ -219,7 +219,7 @@ Expected: all 6 cases pass (no behavior change; the script is unchanged).
 # detection primitive for manifest-vs-live divergence going forward.
 ```
 
-3.3. Edit `knowledge-base/engineering/ops/runbooks/github-app-provisioning.md` Step 2 enumeration:
+3.3. Edit `knowledge-base/engineering/operations/runbooks/github-app-provisioning.md` Step 2 enumeration:
 ```diff
 -- Permissions: 7 keys per the manifest's `default_permissions`
 +- Permissions: 8 keys per the manifest's `default_permissions`
@@ -301,7 +301,7 @@ Expected: `"success"`. The cron consumes `DOPPLER_TOKEN_KB_DRIFT` as `DOPPLER_TO
 - [ ] AC4: Manifest parity + drift-guard contract tests pass. Verify: `cd apps/web-platform && ./node_modules/.bin/vitest run test/github-app-manifest-parity.test.ts test/github-app-manifest-drift-guard.test.ts test/github-app-drift-guard-contract.test.ts` exits 0 with all assertions passing. (apps/web-platform uses vitest, not bun-test — `bunfig.toml` blocks bun-test discovery.)
 - [ ] AC5: `apps/web-platform/infra/main.tf` comment block at lines 58-65 cites #4173 and the post-#4173 installation-grant state. Verify: `grep -c '#4173' apps/web-platform/infra/main.tf` returns ≥1.
 - [ ] AC6: `apps/web-platform/infra/github-app.tf` header references the operator-only carve-out for App-permission acceptance. Verify: `grep -c 'Post-#4173' apps/web-platform/infra/github-app.tf` returns ≥1.
-- [ ] AC7: `knowledge-base/engineering/ops/runbooks/github-app-provisioning.md` enumerates all 8 permission keys and includes the Step 2a re-acceptance subsection. Verify: `grep -c 'secrets:write' knowledge-base/engineering/ops/runbooks/github-app-provisioning.md` returns ≥1 AND `grep -c 'Re-accept App installation' knowledge-base/engineering/ops/runbooks/github-app-provisioning.md` returns ≥1.
+- [ ] AC7: `knowledge-base/engineering/operations/runbooks/github-app-provisioning.md` enumerates all 8 permission keys and includes the Step 2a re-acceptance subsection. Verify: `grep -c 'secrets:write' knowledge-base/engineering/operations/runbooks/github-app-provisioning.md` returns ≥1 AND `grep -c 'Re-accept App installation' knowledge-base/engineering/operations/runbooks/github-app-provisioning.md` returns ≥1.
 - [ ] AC8: `gh issue view 4173 --json state` returns `"OPEN"` AND PR body uses `Ref #4173` (NOT `Closes #4173`) — the issue closure is tied to Phase 1 (post-merge operator-action) AND Phase 4 verification, both post-merge per `2026-04-22-plan-ac-external-state-must-be-api-verified.md`. The agent runs the operator-mediated browser action inline at /work time per Phase 1; resulting installation state is the close trigger.
 
 ### Post-merge (operator + agent)
@@ -345,7 +345,7 @@ Expected: `"success"`. The cron consumes `DOPPLER_TOKEN_KB_DRIFT` as `DOPPLER_TO
 
 ```bash
 gh issue list --label code-review --state open --json number,title,body --limit 200 > /tmp/open-review-issues.json
-for path in apps/web-platform/infra/github-app-manifest.json apps/web-platform/infra/main.tf apps/web-platform/infra/github-app.tf knowledge-base/engineering/ops/runbooks/github-app-provisioning.md; do
+for path in apps/web-platform/infra/github-app-manifest.json apps/web-platform/infra/main.tf apps/web-platform/infra/github-app.tf knowledge-base/engineering/operations/runbooks/github-app-provisioning.md; do
   jq -r --arg path "$path" '.[] | select(.body // "" | contains($path)) | "#\(.number): \(.title)"' /tmp/open-review-issues.json
 done
 ```
@@ -415,7 +415,7 @@ No new test framework required. The existing vitest + `bun test` toolchain cover
 
 - **#4115 / PR #4121 (merged 2026-05-20)** — manifest-as-IaC pattern + drift-guard extension. Learning: `2026-05-20-manifest-as-iac-with-shared-diff-script-contract.md`. Establishes the manifest file as the source-of-truth and the diff-script as the shared contract between CI and contract test. This PR consumes both invariants.
 - **#4150 / PR #4161 (merged 2026-05-20)** — App-auth migration. Learning: `2026-05-20-tf-operator-mint-variables-are-design-smell.md`. Session Error 1 specifically calls out this class of failure: "the App needed `Repository Secrets: Read and write` permission added to its declared permissions, AND the installation needed to accept the new permission." The prior PR added the App-level declaration via Playwright; the installation-grant step appears to have been incomplete (or the previous click only updated the manifest at the App level without triggering the installation re-accept banner). This PR closes that gap.
-- **#3187 / PR #3224 (merged 2026-05-05)** — App drift-guard (App-level declaration vs `gh api /app`). Runbook: `knowledge-base/engineering/ops/runbooks/github-app-drift.md`. The drift-guard does NOT compare installation grants — that's the load-bearing gap this PR's #4173 exists to highlight.
+- **#3187 / PR #3224 (merged 2026-05-05)** — App drift-guard (App-level declaration vs `gh api /app`). Runbook: `knowledge-base/engineering/operations/runbooks/github-app-drift.md`. The drift-guard does NOT compare installation grants — that's the load-bearing gap this PR's #4173 exists to highlight.
 
 ## References
 

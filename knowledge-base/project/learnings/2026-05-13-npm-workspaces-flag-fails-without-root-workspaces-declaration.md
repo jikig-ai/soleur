@@ -24,7 +24,7 @@ The plan was reviewed by ≥3 agents at plan time. /work faithfully implemented 
 
 - `apps/web-platform/scripts/hash-user-id.ts` header docstring (3 locations)
 - `apps/web-platform/scripts/hash-user-id.ts` `fail()` stderr messages (2 locations)
-- `knowledge-base/engineering/ops/runbooks/recover-userid-from-pino-stdout.md` Flow 1 step 2
+- `knowledge-base/engineering/operations/runbooks/recover-userid-from-pino-stdout.md` Flow 1 step 2
 
 The 5-test vitest suite passed because the tests invoke the script via `spawnSync("bun", [SCRIPT_PATH, ...])` directly — they bypass the npm wrapper entirely.
 

@@ -83,7 +83,7 @@ Both grounds were correct. Without the DISSENT gate I would have filed a scope-o
 
 5. **ADR-021 numbering conflict** — plan prescribed `ADR-021-stateless-self-modifying-cron.md` but that number was already taken by `ADR-021-kb-binary-serving-pattern.md` (shipped 2026-04-29). Recovery: renumbered to ADR-027; rewrote 5 plan refs. **Prevention:** any plan that prescribes an ADR number MUST grep `knowledge-base/engineering/architecture/decisions/ADR-*.md` at /work Phase 0 to confirm availability — adopt the next-unassigned number on conflict.
 
-6. **Runbook path divergence from convention** — plan specified `knowledge-base/engineering/runbooks/` (new dir) but the existing convention is `knowledge-base/engineering/ops/runbooks/`. Recovery: relocated runbook + updated 4 references. **Prevention:** plan Phase 1 (and /work Phase 0) should verify every new directory path against existing repo conventions via `find` or `ls -d` before creation — adopt the existing pattern by default.
+6. **Runbook path divergence from convention** — plan specified `knowledge-base/engineering/runbooks/` (new dir) but the existing convention is `knowledge-base/engineering/operations/runbooks/`. Recovery: relocated runbook + updated 4 references. **Prevention:** plan Phase 1 (and /work Phase 0) should verify every new directory path against existing repo conventions via `find` or `ls -d` before creation — adopt the existing pattern by default.
 
 7. **GitHub API 504 transient** — `gh issue create` returned HTTP 504 on first attempt. Recovery: re-ran the same command. **Prevention:** tolerate transient `gh` API 5xx errors with one automatic retry; escalate to the user only on second failure.
 

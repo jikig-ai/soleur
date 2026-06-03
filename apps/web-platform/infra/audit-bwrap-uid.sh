@@ -5,7 +5,7 @@
 # functional AND that the security-opts it depends on are still attached.
 #
 # Invoke from the MU1 runbook (see
-# knowledge-base/engineering/ops/runbooks/mu1-signup-workspace-verification.md)
+# knowledge-base/engineering/operations/runbooks/mu1-signup-workspace-verification.md)
 # or wire into CI post-deploy. Safe to run standalone by piping from any
 # Soleur worktree (the prod host has no repo checkout by design — see #2606):
 #
