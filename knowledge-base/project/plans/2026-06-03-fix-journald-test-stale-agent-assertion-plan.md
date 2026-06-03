@@ -162,44 +162,44 @@ sensitive-path prefix; recorded here for preflight Check 6.)
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — journald assertion narrowed.** `journald-config.test.sh`
+- [x] **AC1 — journald assertion narrowed.** `journald-config.test.sh`
   AC4's agent assertion no longer requires literal `agent = true`. It
   asserts the dual-context conditional present in the real block. Verify:
   `grep -nE "agent\[\[:space:\]\]\*=\[\[:space:\]\]\*var\\\\.ci_ssh_private_key == null" apps/web-platform/infra/journald-config.test.sh`
   returns ≥1 match AND
   `grep -nE "agent\[\[:space:\]\]\*=\[\[:space:\]\]\*true" apps/web-platform/infra/journald-config.test.sh`
   returns **0** matches.
-- [ ] **AC2 — journald test passes.** `bash apps/web-platform/infra/journald-config.test.sh`
+- [x] **AC2 — journald test passes.** `bash apps/web-platform/infra/journald-config.test.sh`
   → `=== Results: 33/33 passed ===`, exit `0`.
-- [ ] **AC3 — assertion description updated.** The `assert "…"` description
+- [x] **AC3 — assertion description updated.** The `assert "…"` description
   string for the agent test no longer reads "connection uses the operator
   SSH agent (agent = true)" — it describes the dual-context shape (e.g.
   "connection uses the dual-context ssh-agent toggle (agent = … == null)").
   Verify: `grep -c "operator SSH agent (agent = true)" apps/web-platform/infra/journald-config.test.sh`
   → `0`.
-- [ ] **AC4 — sibling assertion narrowed (bootstrap).** Same narrowing
+- [x] **AC4 — sibling assertion narrowed (bootstrap).** Same narrowing
   applied to `infra-config-handler-bootstrap.test.sh:86-87`. Verify both
   greps from AC1 against that file: conditional present, literal-`true`
   absent, and `grep -c "operator SSH agent (agent = true)" apps/web-platform/infra/infra-config-handler-bootstrap.test.sh`
   → `0`.
-- [ ] **AC5 — sibling test still passes (now for the right reason).**
+- [x] **AC5 — sibling test still passes (now for the right reason).**
   `bash apps/web-platform/infra/infra-config-handler-bootstrap.test.sh`
   → `33/33`, exit `0`. (It passed before via comment false-match; it must
   still pass after, now matching real config.)
-- [ ] **AC6 — anti-false-pass guard.** The new assertion's awk-extracted
+- [x] **AC6 — anti-false-pass guard.** The new assertion's awk-extracted
   `BLOCK` must match the conditional on a **real config line**, not the
   comment. The narrowed regex `agent[[:space:]]*=[[:space:]]*var\.ci_ssh_private_key`
   cannot match the comment at `server.tf:381` (which reads `agent = true`,
   not `agent = var…`), so the bootstrap test passes only via the real
   block. Document this in a one-line code comment next to the assertion.
-- [ ] **AC7 — no other infra test carries the stale assertion.** Full-class
+- [x] **AC7 — no other infra test carries the stale assertion.** Full-class
   sweep:
   `grep -rln "operator SSH agent (agent = true)" apps/web-platform/infra/*.test.sh`
   returns **0 files** after the fix. (Pre-fix it returns exactly the 2
   files above — confirm the universe is 2, not more.)
-- [ ] **AC8 — server.tf untouched.** `git diff --stat origin/main -- apps/web-platform/infra/server.tf`
+- [x] **AC8 — server.tf untouched.** `git diff --stat origin/main -- apps/web-platform/infra/server.tf`
   is empty. The fix is test-only; `server.tf` is correct as-is.
-- [ ] **AC9 — full deploy-script-tests suite green locally.** Run every
+- [x] **AC9 — full deploy-script-tests suite green locally.** Run every
   `run:` step from `.github/workflows/infra-validation.yml`'s
   `deploy-script-tests` job (`grep -oE 'bash apps/web-platform/infra/[a-z0-9-]+\.test\.sh' .github/workflows/infra-validation.yml | sort -u`)
   and confirm all exit `0` — guards against a stale assertion elsewhere in
