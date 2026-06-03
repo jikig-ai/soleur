@@ -132,12 +132,12 @@ Not applicable — no new scheduled job. The Inngest cron `cron-community-monito
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] `buildSpawnEnv()` return object in `cron-community-monitor.ts` contains all four of `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET` as `process.env.<KEY>` entries.
-- [ ] `buildSpawnEnv()` does **NOT** contain `X_ALLOW_POST` (verify: `grep -c 'X_ALLOW_POST' apps/web-platform/server/inngest/functions/cron-community-monitor.ts` returns `0`).
-- [ ] The `...process.env` spread is still absent from `buildSpawnEnv()` (negative-class invariant unchanged).
-- [ ] The comment block above `buildSpawnEnv()` lists the four `X_*` additions and notes `X_ALLOW_POST` is deliberately excluded.
-- [ ] Positive-class `it.each` in the spawn-env test asserts all four X_* vars are forwarded; negative assertion confirms `X_ALLOW_POST` is absent.
-- [ ] `./node_modules/.bin/vitest run test/server/inngest/cron-community-monitor.test.ts` passes (run from `apps/web-platform/`).
+- [x] `buildSpawnEnv()` return object in `cron-community-monitor.ts` contains all four of `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET` as `process.env.<KEY>` entries.
+- [x] `buildSpawnEnv()` does **NOT** contain `X_ALLOW_POST` (verify: `grep -c 'X_ALLOW_POST' apps/web-platform/server/inngest/functions/cron-community-monitor.ts` returns `0`).
+- [x] The `...process.env` spread is still absent from `buildSpawnEnv()` (negative-class invariant unchanged).
+- [x] The comment block above `buildSpawnEnv()` lists the four `X_*` additions and notes `X_ALLOW_POST` is deliberately excluded.
+- [x] Positive-class `it.each` in the spawn-env test asserts all four X_* vars are forwarded; negative assertion confirms `X_ALLOW_POST` is absent.
+- [x] `./node_modules/.bin/vitest run test/server/inngest/cron-community-monitor.test.ts` passes (run from `apps/web-platform/`).
 
 ### Post-merge (operator)
 - [ ] None. Credentials are already present in Doppler `soleur/prd_scheduled` (verified) — no Doppler/secret changes. The next scheduled (08:00 UTC) or manually triggered community-monitor run will pick up the new allowlist and report X/Twitter as **enabled**. The `web-platform-release.yml` pipeline restarts the container on merge to `main` touching `apps/web-platform/**`, so no operator restart step is needed.

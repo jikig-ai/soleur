@@ -193,8 +193,21 @@ describe("buildSpawnEnv allowlist (PR-11 bucket-ii security surface)", () => {
       "BSKY_APP_PASSWORD",
       "LINKEDIN_ACCESS_TOKEN",
       "LINKEDIN_PERSON_URN",
+      "X_API_KEY",
+      "X_API_SECRET",
+      "X_ACCESS_TOKEN",
+      "X_ACCESS_TOKEN_SECRET",
     ])("allowlist contains %s", (key) => {
       expect(buildEnvBody).toContain(`${key}: process.env.${key}`);
+    });
+
+    // Read-only invariant: the community monitor forwards X read credentials
+    // (above) but MUST NOT forward X_ALLOW_POST — the posting defense-in-depth
+    // guard (x-community.sh:611). Only the publisher (cron-content-publisher.ts)
+    // arms posting. A future careless edit that adds X_ALLOW_POST here would
+    // silently enable posting from a read-only digest path.
+    it("allowlist does NOT contain X_ALLOW_POST (monitor is read-only)", () => {
+      expect(buildEnvBody).not.toContain("X_ALLOW_POST");
     });
   });
 
