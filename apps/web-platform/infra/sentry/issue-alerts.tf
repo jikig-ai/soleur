@@ -471,9 +471,10 @@ resource "sentry_issue_alert" "workspace_sync_health" {
 #
 # op-SCOPED filter (op IS_IN, NOT feature-only): unlike workspace_sync_health
 # (whose feature tag is dedicated to one cron), `feature=kb-route-helpers` spans
-# 6 ops — the 3 tenant-mint slugs PLUS workspace-sync-*, self-heal-*, and
-# kb-sync.unexpected. A feature-only filter would over-page on those unrelated
-# self-heal/workspace-sync events. So this mirrors chat_message_save_failure's
+# several ops beyond tenant-mint — the 3 tenant-mint slugs PLUS workspace-sync-*,
+# 3x self-heal-*, and kb-sync.unexpected. A feature-only filter would over-page
+# on those unrelated self-heal/workspace-sync events. So this mirrors
+# chat_message_save_failure's
 # op-scoped shape. The THIRD slug `kb-sync.tenant-mint` (sync/route.ts:62) is
 # the identical RuntimeAuthError→503 mint-failure class the issue body omitted;
 # at brand-survival threshold `single-user incident`, scoping out the next-most-
