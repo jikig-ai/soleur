@@ -35,9 +35,20 @@ did not run at all.
   issues, so the watchdog's label-based query counts them as signal. Manual
   runs mask schedule drift — the next scheduled fire is still the authoritative
   check.
-- **Label exists but has never been applied.** The watchdog emits a warning
-  (`::warning::no audit issues ever seen for <label> — skipping`) and does
-  not flag silence. This is correct behavior for newly added tasks.
+- **Label exists but has never been applied (never-produced grace).** When a
+  task in `TASK_INVENTORY` has produced **zero** `scheduled-<task>` issues ever
+  (the issues query succeeds and returns no rows), the watchdog reports it as
+  `pending-first-run`: it emits a Sentry **warning** (`warnSilentFallback`,
+  `op: task-pending-first-run`, non-paging) and does **not** flag silence — so no
+  `[cloud-task-silence]` GitHub issue is filed and any stale one is auto-closed.
+  This is correct for a newly-migrated producer before its first scheduled fire.
+  **Worked example (#4875):** `legal-audit` migrated GHA→Inngest on 2026-05-25;
+  its first real quarterly fire is 2026-07-01, so it is `pending-first-run` until
+  then. Once it fires, the normal 95-day threshold applies. The grace is the
+  zero-rows arm ONLY — an API error (`catch`) or an issue with an unparseable
+  `created_at` (NaN parse) still flags `silent: true` (those are real anomalies,
+  not pending tasks). Liveness for the pre-first-fire window is covered by the
+  task's own per-function Sentry cron monitor, not this watchdog.
 
 ## Task Inventory
 
@@ -52,30 +63,34 @@ slack; see Threshold Derivation below.
 | Task | Execution surface | Cron (UTC) | Audit label | Threshold (days) |
 |------|-------------------|-----------|-------------|------------------|
 | content-generator | Inngest cron | `0 10 * * 2,4` (Tue+Thu) | `scheduled-content-generator` | 9 |
-| strategy-review | Inngest cron | `0 8 * * 1` (Weekly Mon) | `scheduled-strategy-review` | 9 |
 | legal-audit | Inngest cron | `0 11 1 1,4,7,10 *` (Quarterly) | `scheduled-legal-audit` | 95 |
 | competitive-analysis | Inngest cron | `0 9 1 * *` (Monthly 1st) | `scheduled-competitive-analysis` | 40 |
 | community-monitor | Inngest cron | `0 8 * * *` (Daily) | `scheduled-community-monitor` | 3 |
 | roadmap-review | Inngest cron | `0 9 * * 1` (Weekly Mon) | `scheduled-roadmap-review` | 9 |
 
-### Excluded NON-PRODUCERS (do not re-add)
+### Excluded NON-PRODUCERS and CONDITIONAL producers (do not re-add)
 
-These scheduled tasks run on their own Inngest crons but **never create a
-`scheduled-<task>` issue**, so the heartbeat's label-presence signal can never
-observe them — including them produces a permanent false-positive
-`[cloud-task-silence]` alert via the `daysSince === null → silent: true` branch.
-They were removed deliberately:
+These scheduled tasks run on their own Inngest crons but do **not**
+unconditionally create a `scheduled-<task>` issue, so the heartbeat's
+label-presence signal can never reliably observe them. Re-adding any of them is
+wrong: a pure non-producer would sit in `pending-first-run` forever (a permanent
+daily `op: task-pending-first-run` Sentry warning that never graduates to a real
+first fire), and a conditional producer would either false-fire on its legitimate
+quiet cycles or mask genuine multi-cycle silence. They were removed deliberately:
 
-| Task | Why it produces no `scheduled-<task>` issue |
+| Task | Why it is not a reliable producer |
 |------|---------------------------------------------|
 | daily-triage | Labels existing issues only; its prompt forbids `gh issue create`. |
 | ux-audit | Runs `UX_AUDIT_DRY_RUN=true` → writes findings to Supabase/stdout, no issue. |
 | bug-fixer | Opens `bot-fix/*` PRs; never attaches a `scheduled-bug-fixer` label to an issue. |
+| strategy-review | **Conditional/idempotent producer (#4874):** opens an issue ONLY per knowledge-base file needing review (title-dedup, skips `up_to_date`), so a quiet week with everything up-to-date legitimately yields zero issues. Issue-presence is the wrong silence signal. |
 
-**Liveness for these three (and every cron) is covered separately** by the
+**Liveness for these (and every cron) is covered separately** by the
 per-function Sentry cron monitors (see Self-healing below and **#4708**) — the
-heartbeat was never their liveness signal. Do NOT "restore" them to
-`TASK_INVENTORY` to regain coverage; that coverage already exists in Sentry.
+heartbeat was never their liveness signal. For strategy-review specifically, the
+liveness signal is the Sentry cron monitor `scheduled-strategy-review`. Do NOT
+"restore" any of them to `TASK_INVENTORY` to regain coverage; that coverage
+already exists in Sentry.
 
 The heartbeat does **not** and **cannot** use Inngest `/v1/*` run-history as a
 liveness signal: that introspection API is loopback-gated and unreachable from
@@ -453,7 +468,6 @@ Documented here so a future operator can update without re-deriving.
 | Task | Cadence | Max natural gap | Threshold | Slack |
 |------|---------|-----------------|-----------|-------|
 | content-generator | Tue+Thu | 5 days (Thu→Tue) | 9 | +4 days (one missed cycle) |
-| strategy-review | Weekly Mon | 7 days | 9 | +2 days |
 | legal-audit | Quarterly (1st Jan/Apr/Jul/Oct) | 92 days (Jul→Oct) | 95 | +3 days |
 | competitive-analysis | Monthly 1st | ~31 days | 40 | +9 days (one missed month) |
 | community-monitor | Daily | 1 day | 3 | +2 days (weekend/transient) |
