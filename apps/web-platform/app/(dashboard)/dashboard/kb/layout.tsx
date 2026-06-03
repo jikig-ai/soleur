@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import Link from "next/link";
 import { KbContext } from "@/components/kb/kb-context";
 import { KbChatContext } from "@/components/kb/kb-chat-context";
 import { KbChatQuoteBridgeProvider } from "@/components/kb/kb-chat-quote-bridge";
@@ -47,23 +48,62 @@ export default function KbLayout({ children }: { children: ReactNode }) {
           </RailSlotPortal>
 
           {fullWidth ? (
-            <>
-              {/* #4712 — surface the reconnect banner even on the empty/error
-                  branch. Suppressed during loading to avoid flicker. */}
-              {!loading && ctxValue.needsReconnect && (
-                <div className="shrink-0 p-4">
-                  <ReconnectNotice
-                    variant="banner"
-                    onReconnected={ctxValue.refreshTree}
-                  />
-                </div>
-              )}
-              {loading && <LoadingSkeleton />}
-              {error === "workspace-not-ready" && <WorkspaceNotReady />}
-              {error === "not-found" && <NoProjectState />}
-              {error === "unknown" && <UnknownError />}
-              {!loading && !error && !hasTreeContent && <EmptyState />}
-            </>
+            // Phase 4 (#4915): page-body chrome for the otherwise-chromeless
+            // mobile fullWidth sub-states (loading / workspace-not-ready /
+            // no-project / unknown-error / empty). ONE wrapper edit chromes all
+            // of them — the identity band is NOT re-mounted here (it already
+            // persists above the KB swap; ADR-047 render-outside-swap). The
+            // header is mobile-only (md:hidden): desktop orientation comes from
+            // the persistent rail band.
+            <div className="flex h-full flex-col">
+              <header
+                data-testid="kb-page-mobile-header"
+                className="flex shrink-0 items-center gap-2 border-b border-soleur-border-default px-4 py-3 md:hidden"
+              >
+                <Link
+                  href="/dashboard"
+                  aria-label="Back to menu"
+                  className="flex items-center text-soleur-text-secondary hover:text-soleur-text-primary"
+                >
+                  <svg
+                    className="h-5 w-5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={1.5}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18"
+                    />
+                  </svg>
+                </Link>
+                {/* Mobile page title — the band's mobile section title is
+                    suppressed for KB so this is the single "Knowledge Base"
+                    title on mobile (P2-4). */}
+                <h1 className="text-sm font-medium text-soleur-text-primary">
+                  Knowledge Base
+                </h1>
+              </header>
+              <div className="flex min-h-0 flex-1 flex-col">
+                {/* #4712 — surface the reconnect banner even on the empty/error
+                    branch. Suppressed during loading to avoid flicker. */}
+                {!loading && ctxValue.needsReconnect && (
+                  <div className="shrink-0 p-4">
+                    <ReconnectNotice
+                      variant="banner"
+                      onReconnected={ctxValue.refreshTree}
+                    />
+                  </div>
+                )}
+                {loading && <LoadingSkeleton />}
+                {error === "workspace-not-ready" && <WorkspaceNotReady />}
+                {error === "not-found" && <NoProjectState />}
+                {error === "unknown" && <UnknownError />}
+                {!loading && !error && !hasTreeContent && <EmptyState />}
+              </div>
+            </div>
           ) : isDesktop ? (
             <KbDesktopLayout state={state}>{children}</KbDesktopLayout>
           ) : (

@@ -56,6 +56,7 @@ export function WorkspaceContextBand({
   collapsed = false,
   activeWorkspaceName,
   suppressBack = false,
+  suppressSectionTitle = false,
 }: {
   pathname: string;
   /** "rail" mounts in the sidebar; "mobile" mounts in the mobile top bar. */
@@ -75,6 +76,11 @@ export function WorkspaceContextBand({
    *  threads it in (P0-3) so the monogram tile + full-name tooltip can render
    *  as the authoritative disambiguator for shared-initial workspaces. */
   activeWorkspaceName?: string;
+  /** Suppress the band's section-title row (Phase 4, #4915). The layout sets
+   *  this on the MOBILE band for KB, where the page body owns the "Knowledge
+   *  Base" title — so the two don't double-render on mobile. The desktop rail
+   *  band keeps its section title. KB-scoped, so Settings/Chat are unaffected. */
+  suppressSectionTitle?: boolean;
 }) {
   const drill = segmentToDrillLevel(pathname);
 
@@ -180,7 +186,7 @@ export function WorkspaceContextBand({
         </Link>
       ) : null}
 
-      {drill && (
+      {drill && !suppressSectionTitle && (
         <div
           data-testid="nav-section-title"
           className="flex items-center gap-2 px-3 pb-3 text-sm font-medium text-soleur-text-primary"

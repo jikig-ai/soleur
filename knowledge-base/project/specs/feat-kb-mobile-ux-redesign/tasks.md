@@ -36,8 +36,8 @@ deferred: [4916, 4917]
 - [x] 3.3 Add test: exactly one back control per state (doc view = file-tree back only)
 
 ## Phase 4 — Page-body chrome for fullWidth states + title ownership
-- [ ] 4.1 Add page-body "Knowledge Base" title + mobile back to the single `kb/layout.tsx` fullWidth wrapper (do NOT re-mount identity band)
-- [ ] 4.2 Ensure exactly one "Knowledge Base" title on mobile (no band/page double-render)
+- [x] 4.1 Add page-body "Knowledge Base" title + mobile back to the single `kb/layout.tsx` fullWidth wrapper (do NOT re-mount identity band)
+- [x] 4.2 Ensure exactly one "Knowledge Base" title on mobile (no band/page double-render)
 
 ## Phase 5 — Visual regression gate + test reconciliation
 - [ ] 5.1 Extend `e2e/nav-states-shell.e2e.ts`: mock app routes (`/api/workspace/active-repo`, `/list-memberships`); assert content testids + `scrollWidth-clientWidth<=1` at `md:w-56`/`md:w-14`; identity present every drill state; collapsed monogram non-gold + name tooltip

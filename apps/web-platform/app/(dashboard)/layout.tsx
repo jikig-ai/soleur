@@ -249,6 +249,10 @@ export default function DashboardLayout({
           pathname={pathname}
           variant="mobile"
           suppressBack={inKbDocView}
+          // KB owns its "Knowledge Base" title in the page body on mobile
+          // (kb/layout fullWidth header), so the mobile band drops the duplicate
+          // section title. Settings/Chat keep theirs (KB-scoped).
+          suppressSectionTitle={drill === "kb"}
         />
       </div>
 

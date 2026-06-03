@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { RailSlotHarness } from "./helpers/rail-slot-harness";
 
 // Stable mock references (avoid useEffect re-fires)
@@ -155,6 +155,39 @@ describe("KbLayout", () => {
     // Let the tree resolve (EmptyState renders) before asserting absence.
     await screen.findByText(/nothing here yet/i);
     expect(screen.queryByText(/can't sync/i)).not.toBeInTheDocument();
+  });
+
+  it("Phase 4 (#4915): the fullWidth branch renders a mobile page header (back to menu + Knowledge Base title)", async () => {
+    mockPathname = "/dashboard/kb";
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          tree: { name: "root", type: "directory", path: "", children: [] },
+          needsReconnect: false,
+        }),
+    });
+
+    const { default: KbLayout } = await import(
+      "@/app/(dashboard)/dashboard/kb/layout"
+    );
+
+    render(
+      <KbLayout>
+        <div>content</div>
+      </KbLayout>,
+    );
+
+    // EmptyState (a fullWidth sub-state) has rendered.
+    await screen.findByText(/nothing here yet/i);
+    // Page-body chrome present: a mobile-only header carrying the back
+    // affordance + the "Knowledge Base" page title (P0-1 / P2-4).
+    const header = screen.getByTestId("kb-page-mobile-header");
+    expect(within(header).getByText("Knowledge Base")).toBeInTheDocument();
+    expect(
+      within(header).getByRole("link", { name: /back to menu/i }),
+    ).toHaveAttribute("href", "/dashboard");
   });
 
   it("does not render FileTree twice at root path", async () => {

@@ -237,6 +237,40 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
       within(mobile).getByTestId("nav-back-chevron"),
     ).toBeInTheDocument();
   });
+
+  // Phase 4 (#4915): on mobile KB the page body owns the "Knowledge Base" title,
+  // so the layout suppresses the MOBILE band's section title; the desktop rail
+  // band keeps it. Settings/Chat are unaffected (suppression is KB-scoped).
+  it("KB: mobile band section title is suppressed (page body owns it); rail band keeps it", () => {
+    mockPathname = "/dashboard/kb";
+    render(
+      <Wrap>
+        <DashboardLayout>
+          <div>content</div>
+        </DashboardLayout>
+      </Wrap>,
+    );
+    const { mobile, rail } = bandsByVariant();
+    expect(
+      within(mobile).queryByTestId("nav-section-title"),
+    ).not.toBeInTheDocument();
+    expect(within(rail).getByTestId("nav-section-title")).toBeInTheDocument();
+  });
+
+  it("Settings: the mobile band section title is NOT suppressed (KB-scoped)", () => {
+    mockPathname = "/dashboard/settings";
+    render(
+      <Wrap>
+        <DashboardLayout>
+          <div>content</div>
+        </DashboardLayout>
+      </Wrap>,
+    );
+    const { mobile } = bandsByVariant();
+    expect(
+      within(mobile).getByTestId("nav-section-title"),
+    ).toBeInTheDocument();
+  });
 });
 
 // Widenable KB rail (amendment): the resize handle renders ONLY in the

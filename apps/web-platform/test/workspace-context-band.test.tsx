@@ -224,3 +224,25 @@ describe("WorkspaceContextBand — back suppression (Phase 3, #4915)", () => {
     expect(screen.getByTestId("nav-back-chevron")).toBeInTheDocument();
   });
 });
+
+// Phase 4 (#4915): title ownership per breakpoint. On mobile KB the page body
+// owns the "Knowledge Base" title (kb/layout fullWidth header), so the layout
+// suppresses the MOBILE band's section-title via suppressSectionTitle to keep
+// exactly one title on mobile. Desktop (rail band) keeps the section title.
+describe("WorkspaceContextBand — section-title ownership (Phase 4, #4915)", () => {
+  it("suppresses the band section title when suppressSectionTitle is set", () => {
+    render(
+      <WorkspaceContextBand
+        pathname="/dashboard/kb"
+        variant="mobile"
+        suppressSectionTitle
+      />,
+    );
+    expect(screen.queryByTestId("nav-section-title")).not.toBeInTheDocument();
+  });
+
+  it("renders the band section title when suppressSectionTitle is absent (default)", () => {
+    render(<WorkspaceContextBand pathname="/dashboard/kb" variant="mobile" />);
+    expect(screen.getByTestId("nav-section-title")).toBeInTheDocument();
+  });
+});
