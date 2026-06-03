@@ -128,7 +128,7 @@ export function KbSyncStatus({ lastSync, onSynced, onError }: KbSyncStatusProps)
         onClick={handleSyncNow}
         disabled={pending}
         aria-label="Sync now"
-        className="inline-flex items-center gap-1.5 rounded-lg border border-soleur-border-default px-2 py-1 text-xs font-medium text-soleur-text-secondary transition-colors hover:border-soleur-border-emphasized hover:text-soleur-text-primary disabled:opacity-60"
+        className="inline-flex items-center gap-1.5 rounded-lg border border-soleur-accent-gold-fg/40 px-2 py-1 text-xs font-medium text-soleur-accent-gold-fg transition-colors hover:border-soleur-accent-gold-fg hover:text-soleur-accent-gold-text disabled:opacity-60"
       >
         {pending ? "Syncing…" : "Sync now"}
       </button>
