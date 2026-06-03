@@ -57,8 +57,8 @@ RUN git config --global user.name "github-actions[bot]" \
 `contributor-assistant/github-action` **hardcode-drops** committers whose
 `databaseId === 41898282` (the GitHub Actions bot) *before* the allowlist
 filter runs (`src/graphql.ts`: `filteredCommitters = committers.filter((c) => c.id !== 41898282)`).
-The `41898282+...@users.noreply.github.com` noreply email resolves to that
-account (`gh api /users/github-actions%5Bbot%5D` → `{"id":41898282,...,"type":"Bot"}`).
+The `41898282+github-actions[bot]@users.noreply.github.com` noreply email resolves
+to that account (`gh api /users/github-actions%5Bbot%5D` → `{"id":41898282,...,"type":"Bot"}`).
 So a digest commit authored under this identity clears CLA **even when the
 prompt's local `git config` step is skipped.** The prompt-level local config is
 kept as defense-in-depth (12 sibling crons already use the same canonical
@@ -80,7 +80,8 @@ the allowlist is irrelevant if the committer has no resolvable GitHub login.
 
 Non-regression note: the Concierge per-user/per-repo credentialing
 (commit 9cd62804 / #4899) is unaffected — `push-branch.ts` sets its own *local*
-identity (`Soleur Agent <agent@soleur.ai>`), and local config overrides global.
+author identity (`Soleur Agent`, a distinct non-github-actions name), and local
+config overrides global.
 
 ## Session Errors
 
