@@ -18,3 +18,13 @@ None. CWD verified == WORKING DIRECTORY. Plan + tasks.md committed (f49a5dfb) an
 - skill: soleur:plan
 - skill: soleur:deepen-plan (gates 4.4, 4.45, 4.6, 4.7, 4.8, 4.9 all pass)
 - Bash, Read, Edit, Write
+
+## Work Phase
+- Status: complete. git mv (42 renames, history preserved AC3), boundary-anchored sweep (262 files), residual gate 0 (AC4), full suite 98/98 (AC10). All AC1-AC12 verified; AC13 = no operator action.
+- Decision: excluded the feature's own plan/tasks/session-state from the sweep + residual gate (point-in-time migration records, same as **/archive/**) — captured in learning 2026-06-03-path-rename-sweep-exclude-own-migration-artifacts.md and routed to soleur:plan SKILL.md.
+
+## Review Phase
+- 4 agents (git-history, pattern-recognition, security-sentinel, code-quality) — 0 P1/P2; 2 P3 pre-existing dead-links (not exacerbated, wontfix). 0 scope-out filings.
+
+## Compound Phase
+- Learning written; routing bullet added to soleur:plan; rule-budget WARN is pre-existing (AGENTS.md/core.md delta=0). Deviation analyst: no hard-rule violations.
