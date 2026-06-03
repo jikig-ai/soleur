@@ -21,9 +21,16 @@ function roleLabel(role: "owner" | "member"): string {
 export function OrgSwitcher({
   memberships,
   onSwitch,
+  repoName,
 }: {
   memberships: readonly OrgMembershipSummary[];
   onSwitch?: (organizationId: string) => void;
+  /** Active-workspace repo (e.g. "jikig-ai/soleur"), surfaced as a muted
+   *  subtitle on the closed pill face. The role label now lives only in the
+   *  dropdown (multi-org) — the face shows workspace identity, not role.
+   *  The subtitle keeps the `live-repo-badge` testid (inherited from the
+   *  retired standalone badge) so existing e2e/unit selectors stay valid. */
+  repoName?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -83,9 +90,14 @@ export function OrgSwitcher({
           <span className="block truncate text-sm font-medium text-soleur-text-primary">
             {current.organizationName}
           </span>
-          <span className="block text-xs text-soleur-accent-gold-fg">
-            {roleLabel(current.role)}
-          </span>
+          {repoName ? (
+            <span
+              data-testid="live-repo-badge"
+              className="block truncate text-xs text-soleur-text-muted"
+            >
+              {repoName}
+            </span>
+          ) : null}
         </span>
       </div>
     );
@@ -109,9 +121,14 @@ export function OrgSwitcher({
           <span className="block truncate text-sm font-medium text-soleur-text-primary">
             {current.organizationName}
           </span>
-          <span className="block text-xs text-soleur-accent-gold-fg">
-            {roleLabel(current.role)}
-          </span>
+          {repoName ? (
+            <span
+              data-testid="live-repo-badge"
+              className="block truncate text-xs text-soleur-text-muted"
+            >
+              {repoName}
+            </span>
+          ) : null}
         </span>
         <span aria-hidden="true" className="ml-1 shrink-0 text-soleur-text-muted">▾</span>
       </button>
