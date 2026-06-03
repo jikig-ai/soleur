@@ -26,7 +26,12 @@ const SECTION_LABELS: Record<DrillLevel, string> = {
   chat: "Chat",
 };
 
-function BackChevronIcon({ className }: { className?: string }) {
+// Distinct from the layout collapse-toggle chevron (ChevronLeftIcon, path
+// "M15.75 19.5 8.25 12l7.5-7.5"). The two controls sat at different vertical
+// positions with byte-identical glyphs, reading as a broken duplicate (#4810
+// follow-up). A long left arrow ("back to menu") is visually unmistakable from
+// the rail-collapse chevron.
+function BackArrowIcon({ className }: { className?: string }) {
   return (
     <svg
       className={className}
@@ -38,7 +43,7 @@ function BackChevronIcon({ className }: { className?: string }) {
       <path
         strokeLinecap="round"
         strokeLinejoin="round"
-        d="M15.75 19.5 8.25 12l7.5-7.5"
+        d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18"
       />
     </svg>
   );
@@ -80,7 +85,7 @@ export function WorkspaceContextBand({
             data-testid="nav-back-chevron"
             className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-soleur-accent-gold-fg hover:bg-soleur-bg-surface-2"
           >
-            <BackChevronIcon className="h-4 w-4" />
+            <BackArrowIcon className="h-4 w-4" />
           </Link>
         ) : null}
         <span
@@ -120,25 +125,27 @@ export function WorkspaceContextBand({
           : "flex flex-col"
       }
     >
-      <div className="flex items-center gap-2 px-3 pt-3">
-        {/* Back chevron — synchronous (first render, never async-gated) and
-            shown only when drilled. When not drilled an invisible placeholder
-            of the same size reserves the slot so the identity row does not
-            shift between top-level and drilled states (AC3). */}
-        {drill ? (
-          <Link
-            href="/dashboard"
-            aria-label="Back to menu"
-            data-testid="nav-back-chevron"
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-soleur-accent-gold-fg hover:bg-soleur-bg-surface-2"
-          >
-            <BackChevronIcon className="h-4 w-4" />
-          </Link>
-        ) : (
-          <span aria-hidden="true" className="invisible h-7 w-7 shrink-0">
-            <BackChevronIcon className="h-4 w-4" />
-          </span>
-        )}
+      {/* Back-to-menu affordance — its OWN labelled row (not inline beside the
+          pill), shown only when drilled. Synchronous (first render, never
+          async-gated). Left gutter (px-3) matches the brand-row collapse
+          toggle so the two controls share the same px-3 border-box gutter
+          (their border-boxes align; the collapse glyph is centered inside an
+          h-6 w-6 button so the arrowheads sit ~4px apart). The label + distinct
+          BackArrowIcon stop it reading as a duplicate of the collapse chevron
+          (#4810 follow-up Bug 2). Splitting it out of the pill row also frees the
+          full rail width for the pill, preventing the overflow (Bug 1). */}
+      {drill ? (
+        <Link
+          href="/dashboard"
+          aria-label="Back to menu"
+          data-testid="nav-back-chevron"
+          className="flex min-w-0 items-center gap-2 px-3 pt-3 text-sm text-soleur-accent-gold-fg hover:text-soleur-text-primary"
+        >
+          <BackArrowIcon className="h-4 w-4 shrink-0" />
+          <span className="truncate">Back to menu</span>
+        </Link>
+      ) : null}
+      <div className={`flex items-center gap-2 px-3 ${drill ? "pt-2" : "pt-3"}`}>
         <div className="min-w-0 flex-1">
           <OrgSwitcherContainer />
         </div>
