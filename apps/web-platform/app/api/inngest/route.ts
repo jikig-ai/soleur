@@ -59,6 +59,7 @@ import { cronWeeklyAnalytics } from "@/server/inngest/functions/cron-weekly-anal
 import { cronWorkspaceGc } from "@/server/inngest/functions/cron-workspace-gc";
 import { cronWorkspaceSyncHealth } from "@/server/inngest/functions/cron-workspace-sync-health";
 import { eventCfTokenExpiryCheck } from "@/server/inngest/functions/event-cf-token-expiry-check";
+import { eventScheduledReminder } from "@/server/inngest/functions/event-scheduled-reminder";
 import { eventShipMerge } from "@/server/inngest/functions/event-ship-merge";
 import { githubOnEvent } from "@/server/inngest/functions/github-on-event";
 import { oneshot4650MonitorClose } from "@/server/inngest/functions/oneshot-4650-monitor-close";
@@ -123,6 +124,7 @@ export const { GET, POST, PUT } = serve({
     cronWorkspaceGc,
     cronWorkspaceSyncHealth,
     eventCfTokenExpiryCheck,
+    eventScheduledReminder,
     eventShipMerge,
     githubOnEvent,
     oneshot4650MonitorClose,
