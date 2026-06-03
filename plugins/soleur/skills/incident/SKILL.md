@@ -35,17 +35,52 @@ All prod-touching steps are advisory + ack-gated per `hr-menu-option-ack-not-pro
 Collect from the operator (or from the dry-run fixture):
 
 1. `title` — short prose, e.g. `"dashboard error boundary outage 2026-05-14"`.
-2. `detected_at` — ISO-8601 UTC. The skill validates the regex `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$` before substitution (FR7 LLM-trust boundary).
+2. `detected_at` — ISO-8601 UTC. The skill validates the regex `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$` before substitution (FR7 LLM-trust boundary). This is the incident START time.
 3. `symptom` — operator prose, free-form.
 4. `suspected_change` — `PR #N` or commit SHA. Skill validates `incident_pr` is numeric.
 5. `affected_user_count` — integer estimate; 0 is valid.
 6. `data_categories_breached` — array of GDPR Art. 4(1) categories (email, userId, IP, billing, content). Empty array = no personal-data breach.
 7. `risk_to_subjects` — enum `none | low | medium | high`. Phase 2 reads this for Art. 34 trigger evaluation.
+8. `incident_overview` — operator prose, 1-2 sentence executive summary (distinct from `symptom`, which is the full operator prose). Default `TBD`.
+9. `recovery_at` — ISO-8601 UTC, OPTIONAL. The incident END time. Validated against the SAME regex as `detected_at` before substitution. Empty → status not yet resolved → MTTR rendered `TBD`.
+10. `monitoring_detected_at` — ISO-8601 UTC, OPTIONAL. The moment a monitoring system first flagged the incident (used only when `detection_method == monitoring`). Same regex validation.
+11. `detection_method` — enum `monitoring | external | manual`. Feeds the Detection section and the MTTD computation.
+12. `triggered_by` — enum `user | system | market | provider`.
+13. `participants` — operator prose (people + systems involved). Default `Operator (single founder)`.
+14. `resolution` — operator prose: which actions brought resolution. Default `TBD`.
+15. `version_triggered` — repo + version / PR / commit SHA that triggered the outage. Default `TBD`.
+16. `version_restored` — repo + version / PR / commit SHA that restored the service. Default `N/A — not yet restored`.
+17. `services_impacted` — operator prose. Default `TBD`.
+18. `revenue_impact` — operator prose. Default `Unknown / N/A` (never fabricate a number).
+19. `team_impact` — operator prose. Default `Unknown / N/A`.
+
+The post-resolution review fields (`{{ROOT_CAUSE_5WHYS}}`, `{{LUCKY}}`, `{{WENT_WELL}}`, `{{WENT_WRONG}}`, `{{ACTION_ITEMS}}`) are NOT captured at Phase 0 — they do not exist yet at incident-open time. They scaffold with a static `TBD` default and the operator fills them during the Phase 7 review. This keeps Phase 0 inside the <60s classification budget (only operator-answerable-at-open fields are prompted).
 
 Compute locally (FR7 LLM-trust boundary — never accept these from an LLM-emitted blob):
 
 - `slug` — `awk` kebab-case of title, dropping non-`[a-z0-9-]`.
 - File path — derived from slug: `knowledge-base/engineering/ops/post-mortems/${slug}-postmortem.md`.
+- `MTTR` (mean time to recovery) / `MTTD` (mean time to detect) — computed from validated timestamps, NEVER an LLM-emitted duration. The ISO regex gates FORMAT but not calendar validity (it accepts month 13 / day 40 / hour 25), so `date -u -d` can still reject a regex-passing value — capture the epoch with explicit failure handling and HALT on a bad date or a transposed (negative) pair rather than emitting a garbage/empty duration:
+  ```bash
+  iso_to_epoch() {  # halt on a regex-valid-but-calendar-invalid date
+    local epoch
+    date -u -d "$1" +%s 2>/dev/null || { echo "incident: not a valid calendar date: $1" >&2; exit 2; }
+  }
+  if [[ -n "${recovery_at}" ]]; then
+    mttr_secs=$(( $(iso_to_epoch "${recovery_at}") - $(iso_to_epoch "${detected_at}") ))
+    (( mttr_secs < 0 )) && { echo "incident: recovery_at precedes detected_at (transposed)" >&2; exit 2; }
+    MTTR=$(printf '%dh%dm' $(( mttr_secs / 3600 )) $(( (mttr_secs % 3600) / 60 )))
+  else
+    MTTR="TBD (status not resolved)"
+  fi
+  if [[ "${detection_method}" == "monitoring" && -n "${monitoring_detected_at}" ]]; then
+    mttd_secs=$(( $(iso_to_epoch "${monitoring_detected_at}") - $(iso_to_epoch "${detected_at}") ))
+    (( mttd_secs < 0 )) && { echo "incident: monitoring_detected_at precedes detected_at (transposed)" >&2; exit 2; }
+    MTTD=$(printf '%dh%dm' $(( mttd_secs / 3600 )) $(( (mttd_secs % 3600) / 60 )))
+  else
+    MTTD="Unknown (external/manual report)"
+  fi
+  ```
 
 ## Phase 1 — Classification
 
@@ -113,19 +148,37 @@ Selected runbook slugs auto-populate Phase 4 `triggers[]` verbatim (SpecFlow Imp
 | `{{TITLE}}` | Phase 0 `title` |
 | `{{DATE}}` | `date -u +%Y-%m-%d` |
 | `{{INCIDENT_PR}}` | Phase 0 `suspected_change` (numeric-validated) |
-| `{{INCIDENT_WINDOW}}` | `${detected_at} → TBD` (operator fills recovery time in Phase 7 review) |
+| `{{INCIDENT_WINDOW}}` | `${detected_at} → ${recovery_at:-TBD}` (operator fills recovery time in Phase 7 review when empty) |
+| `{{RECOVERY_AT}}` | Phase 0 `recovery_at` (ISO-8601 validated; default `TBD`) |
 | `{{SUSPECTED_CHANGE}}` | Phase 0 `suspected_change` prose |
 | `{{BRAND_SURVIVAL_THRESHOLD}}` | Phase 1 confirmed value |
-| `{{STATUS}}` | Literal `open` (terminal value is `resolved` — set by operator in Phase 7 review before Phase 8) |
+| `{{STATUS}}` | Literal `open` (terminal value is `resolved` — set by operator in Phase 7 review before Phase 8). The Status prose section reads the same value — single source of truth. |
 | `{{TRIGGERS_LIST}}` | Phase 3 selected runbook slugs as YAML list items |
 | `{{ART_33_TRIGGERED}}` | Phase 2 |
 | `{{ART_34_TRIGGERED}}` | Phase 2 |
 | `{{ART_33_DEADLINE}}` | Phase 2 |
 | `{{CLASSIFICATION_OVERRIDE_BLOCK}}` | Phase 1 (empty if no override) |
 | `{{SECRET_LEAK_PREAMBLE}}` | See below |
+| `{{INCIDENT_OVERVIEW}}` | Phase 0 `incident_overview` (operator prose; sentinel-scanned + sed-escaped) |
 | `{{SYMPTOM}}` | Phase 0 `symptom` |
+| `{{DETECTED_AT}}` | Phase 0 `detected_at` (incident start) |
+| `{{MTTR}}` | Computed locally from `recovery_at − detected_at` (Phase 0 compute block); `TBD (status not resolved)` when `recovery_at` empty |
+| `{{PARTICIPANTS}}` | Phase 0 `participants` (default `Operator (single founder)`) |
+| `{{DETECTION_METHOD}}` | Phase 0 `detection_method` enum: `monitoring \| external \| manual` |
+| `{{MTTD}}` | Computed locally; `Unknown (external/manual report)` when not monitoring-detected |
+| `{{TRIGGERED_BY}}` | Phase 0 `triggered_by` enum: `user \| system \| market \| provider` |
 | `{{ROOT_CAUSE_HYPOTHESIS}}` | TBD (operator fills in Phase 7 review) |
-| `{{DETECTED_AT}}` | Phase 0 `detected_at` |
+| `{{RESOLUTION}}` | Phase 0 `resolution` (operator prose; default `TBD`) |
+| `{{ROOT_CAUSE_5WHYS}}` | Phase 7 review (operator fills; default `TBD`) |
+| `{{VERSION_TRIGGERED}}` | Phase 0 `version_triggered` (repo + version/PR/SHA; default `TBD`) |
+| `{{VERSION_RESTORED}}` | Phase 0 `version_restored` (default `N/A — not yet restored`) |
+| `{{SERVICES_IMPACTED}}` | Phase 0 `services_impacted` (default `TBD`) |
+| `{{REVENUE_IMPACT}}` | Phase 0 `revenue_impact` (default `Unknown / N/A`) |
+| `{{TEAM_IMPACT}}` | Phase 0 `team_impact` (default `Unknown / N/A`) |
+| `{{LUCKY}}` | Phase 7 review (default `TBD`) |
+| `{{WENT_WELL}}` | Phase 7 review (default `TBD`) |
+| `{{WENT_WRONG}}` | Phase 7 review (default `TBD`) |
+| `{{ACTION_ITEMS}}` | Phase 7 review (default `TBD — file as GitHub issues`) |
 
 **Secret-leak preamble** (TR2): if `triggers[]` contains any of `api_key_leaked`, `credentials_exposed`, `token_exposed`, `secret_in_logs`, replace `{{SECRET_LEAK_PREAMBLE}}` with:
 
@@ -210,8 +263,8 @@ Skill computes identifiers locally and validates format-sensitive LLM-emitted fi
 
 - `slug` — local `awk`, never LLM-emitted.
 - `incident_pr` — prefer the first `#NNNN` token in `suspected_change` (regex `#[0-9]+`); fall back to leading numeric run only when no `#NNNN` exists. Prevents `"see #3721 (replaces #2725)"` from resolving to `3721` against an unrelated prose-leading numeric.
-- `detected_at` — ISO-8601 regex match before passing to `date -u -d`.
-- `title` and `symptom` — these are operator-supplied free-form prose that flows into `sed`-substitution against `templates/pir.md`. Run them through `sed`-metacharacter escaping (`s|[\\/&]|\\&|g` plus newline strip) before substituting, OR perform substitution with `awk` literal-replace semantics. An LLM-emitted title containing `&` or `/` will otherwise corrupt the template.
-- Phase 0 / dry-run mode: run the redaction sentinel against the operator-supplied `symptom` / `suspected_change` / `title` strings the moment they are captured, BEFORE any echo to the conversation transcript. Phase 6's sentinel-on-draft is the second pass; this is the first.
+- `detected_at` / `recovery_at` / `monitoring_detected_at` — ISO-8601 regex match before passing to `date -u -d`. `recovery_at` and `monitoring_detected_at` are optional; when present they MUST match the same regex as `detected_at` before any duration arithmetic. MTTR/MTTD are computed locally from these validated timestamps (Phase 0 compute block) — NEVER accepted as an LLM-emitted duration string.
+- `title`, `symptom`, and the new operator-prose fields (`incident_overview`, `participants`, `resolution`, `services_impacted`, `revenue_impact`, `team_impact`, `version_triggered`, `version_restored`) — these are operator-supplied free-form prose that flows into `sed`-substitution against `templates/pir.md`. Run EACH through `sed`-metacharacter escaping (`s|[\\/&]|\\&|g` plus newline strip) before substituting, OR perform substitution with `awk` literal-replace semantics. An LLM-emitted value containing `&` or `/` will otherwise corrupt the template. The enum fields (`detection_method`, `triggered_by`) are validated against their fixed value lists before substitution and need no escaping.
+- Phase 0 / dry-run mode: run the redaction sentinel against EVERY operator-supplied string the moment it is captured, BEFORE any echo to the conversation transcript — `symptom` / `suspected_change` / `title` / `incident_overview` / `participants` / `resolution` / `services_impacted` / `revenue_impact` / `team_impact` / `version_triggered` / `version_restored`, AND the `triggers[]` entries (echoed during Phase 3 routing). Any field that is echoed to the transcript OR substituted into the draft must be in this first pass; Phase 6's sentinel-on-draft is the second pass, not a substitute for the first.
 
 Validation failure halts the skill with an explicit operator-fix prompt; the substitution never happens with malformed input.
