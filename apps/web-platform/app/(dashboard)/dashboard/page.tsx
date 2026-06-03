@@ -506,7 +506,7 @@ export default function DashboardPage() {
               bordered container alongside the borderless input — mirrors the
               shared ChatInput (chat-input.tsx) ChatGPT-style box so the
               dashboard landing prompt matches the chat and KB surfaces. */}
-          <div className="flex items-end gap-1.5 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-2 py-1.5 transition-shadow focus-within:border-soleur-border-emphasized">
+          <div className="flex items-end gap-1.5 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-2 py-1.5 transition-shadow focus-within:border-soleur-text-secondary">
             {/* Paperclip / attach button */}
             <button
               type="button"
@@ -536,7 +536,7 @@ export default function DashboardPage() {
                 type="text"
                 placeholder="What are you building?"
                 autoFocus
-                className="min-h-[36px] w-full border-none bg-transparent px-1 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted focus:outline-none"
+                className="min-h-[36px] w-full border-none bg-transparent px-1 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted focus:outline-none focus-visible:shadow-none"
                 onPaste={(e) => {
                   const files = Array.from(e.clipboardData.files);
                   if (files.length > 0) {
