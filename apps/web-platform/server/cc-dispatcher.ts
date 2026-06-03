@@ -78,6 +78,8 @@ import {
 // `mintInstallationToken` from the crons. Per hr-github-app-auth-not-pat.
 import { resolveInstallationId } from "./resolve-installation-id";
 import { generateInstallationToken } from "./github-app";
+// Issue B part 2 — per-workspace autonomous Bash toggle (fail-closed read).
+import { resolveBashAutonomous } from "./resolve-bash-autonomous";
 // PR-C §2.11 (#3244): BYOK lease wrap on realSdkQueryFactory — the
 // plaintext API key fetch surface moves from `getUserApiKey(userId)`
 // (which returns a bare string) to `lease.getApiKey()` inside
@@ -960,11 +962,15 @@ export const realSdkQueryFactory: QueryFactory = async (
     // installationId joins the existing Promise.all (it keys only off
     // args.userId via resolveInstallationId → resolveCurrentWorkspaceId), so
     // the resolve does not add a sequential await to cold-start dispatch.
-    const [workspacePath, serviceTokens, installationId] = await Promise.all([
-      fetchUserWorkspacePath(args.userId),
-      getUserServiceTokens(args.userId),
-      resolveInstallationId(args.userId),
-    ]);
+    const [workspacePath, serviceTokens, installationId, bashAutonomous] =
+      await Promise.all([
+        fetchUserWorkspacePath(args.userId),
+        getUserServiceTokens(args.userId),
+        resolveInstallationId(args.userId),
+        // Issue B part 2 — fail-closed false; bypasses the Bash review-gate
+        // when the active workspace owner enabled the autonomous toggle.
+        resolveBashAutonomous(args.userId),
+      ]);
 
     // Issue A: mint a short-lived GitHub App installation token for the
     // connected repo and inject it as GH_TOKEN so the agent's `gh` calls
@@ -1066,6 +1072,10 @@ export const realSdkQueryFactory: QueryFactory = async (
     // `cleanupCcBashGatesForConversation` so a closed/reaped conversation
     // doesn't leak grants.
     bashApprovalCache: getBashApprovalCache(args.userId, args.conversationId),
+    // Issue B part 2 — resolved above (fail-closed false). When true, the
+    // Bash branch auto-approves non-BLOCKED commands (blocklist stays
+    // authoritative).
+    bashAutonomous,
     // Real conversation-status write — replaces the prior no-op (#2920).
     // Delegates to the typed wrapper which enforces the R8 composite-key
     // invariant (`.eq("id", convId).eq("user_id", args.userId)`) and

@@ -152,6 +152,17 @@ export interface CanUseToolDeps {
    * leaders.
    */
   bashApprovalCache?: BashApprovalCache;
+  /**
+   * Issue B part 2 — per-workspace "autonomous / trusted" toggle. When true,
+   * the Bash branch auto-approves every NON-BLOCKED command (skips the
+   * review-gate). `isBashCommandBlocked` stays AUTHORITATIVE even under
+   * autonomy: the toggle bypasses ONLY the review-gate, NEVER the blocklist
+   * (sudo/curl/wget/nc/sh -c/eval/base64 -d//dev/tcp). Off (undefined/false)
+   * preserves the existing review-gate behavior. Threaded from cc-dispatcher
+   * via `resolveBashAutonomous` (fail-closed false), analogous to
+   * `bashApprovalCache`. Default-deny: a missing dep is non-autonomous.
+   */
+  bashAutonomous?: boolean;
 }
 
 export interface CanUseToolContext {
@@ -382,6 +393,32 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
             extra: { leadingToken },
           });
         }
+      }
+
+      // Issue B part 2 — autonomous/trusted bypass. Placed AFTER the
+      // blocklist (deny, above) and AFTER isBashCommandSafe + near-miss
+      // telemetry (so the drift signal still fires) but BEFORE the
+      // batched-cache/review-gate. When the workspace is autonomous, every
+      // command that survived the blocklist auto-approves with no gate. The
+      // blocklist remains authoritative: sudo/curl/wget/nc/sh -c/eval/
+      // base64 -d//dev/tcp were already denied above and never reach here.
+      if (deps.bashAutonomous) {
+        log.info(
+          {
+            sec: true,
+            tool: toolName,
+            decision: "autonomous-bypass",
+            repo: `${ctx.repoOwner}/${ctx.repoName}`,
+          },
+          "Bash command auto-approved via workspace autonomous toggle",
+        );
+        logPermissionDecision(
+          "canUseTool-bash",
+          toolName,
+          "allow",
+          "autonomous-bypass",
+        );
+        return allow(toolInput);
       }
 
       // #2921 batched-approval cache: pre-gate check (synchronous Map

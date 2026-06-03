@@ -29,6 +29,7 @@ const {
   mockSupabaseFrom,
   mockResolveInstallationId,
   mockGenerateInstallationToken,
+  mockResolveBashAutonomous,
 } = vi.hoisted(() => ({
   mockQuery: vi.fn(),
   mockGetUserApiKey: vi.fn(),
@@ -41,6 +42,7 @@ const {
   mockSupabaseFrom: vi.fn(),
   mockResolveInstallationId: vi.fn(),
   mockGenerateInstallationToken: vi.fn(),
+  mockResolveBashAutonomous: vi.fn(),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -82,6 +84,12 @@ vi.mock("@/server/resolve-installation-id", () => ({
 
 vi.mock("@/server/github-app", () => ({
   generateInstallationToken: mockGenerateInstallationToken,
+}));
+
+// Issue B part 2 — autonomous toggle. Default off (false) so factory-shape
+// tests dispatch with the review-gate intact.
+vi.mock("@/server/resolve-bash-autonomous", () => ({
+  resolveBashAutonomous: mockResolveBashAutonomous,
 }));
 
 vi.mock("@/server/permission-callback", () => ({
@@ -265,6 +273,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     // Issue A defaults: no connected repo (null) → no mint, no GH_TOKEN.
     mockResolveInstallationId.mockResolvedValue(null);
     mockGenerateInstallationToken.mockResolvedValue("ghs_default_test_token");
+    mockResolveBashAutonomous.mockResolvedValue(false);
     setupSupabaseMockReturning(WORKSPACE_PATH);
   });
 
