@@ -236,6 +236,37 @@ test.describe("nav-states visual gate — desktop", () => {
     await expect(primaryNav(page)).toHaveCount(0);
   });
 
+  test("drilled (expanded): no horizontal overflow + back affordance aligned to collapse toggle (#4810 follow-up)", async ({ page }) => {
+    await setupNavMocks(page);
+    await gotoOrSkip(page, "/dashboard/kb");
+
+    const aside = page.locator("aside").first();
+    await expect(aside).toHaveClass(/md:w-56/, { timeout: 15_000 });
+    await expect(railBand(page)).toBeVisible({ timeout: 15_000 });
+    // Empty-band guard: identity content must be present so the no-overflow
+    // assertion below cannot pass vacuously on an unmounted band.
+    await expect(orgIdentity(page)).toContainText("Soleur Workspace", {
+      timeout: 15_000,
+    });
+
+    // Bug 1: the expanded drilled rail (md:w-56 = 224px) must not overflow — the
+    // gap the existing "drilled (expanded)" test (chrome-presence only) misses.
+    const overflow = await aside.evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(1);
+
+    // Bug 2: the band's "Back to menu" affordance and the brand-row collapse
+    // toggle must share one left edge (both at the rail's px-3 gutter).
+    const backBox = await railBand(page)
+      .getByTestId("nav-back-chevron")
+      .boundingBox();
+    const collapseBox = await page
+      .getByRole("button", { name: "Collapse sidebar" })
+      .boundingBox();
+    expect(backBox).not.toBeNull();
+    expect(collapseBox).not.toBeNull();
+    expect(Math.abs(backBox!.x - collapseBox!.x)).toBeLessThanOrEqual(6);
+  });
+
   test("collapsed top-level: rail is icon-only, no horizontal overflow (Bug 2)", async ({ page }) => {
     await setupNavMocks(page);
     await seedCollapsed(page);

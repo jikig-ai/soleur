@@ -280,7 +280,7 @@ on the final Files-to-Edit list; the other three files had zero matches.)
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — No overflow (expanded drilled).** At `md:w-56` on `/dashboard/kb` and
+- [x] **AC1 — No overflow (expanded drilled).** At `md:w-56` on `/dashboard/kb` and
   `/dashboard/chat/<id>`, the rail must not overflow: add a NEW test to
   `e2e/nav-states-shell.e2e.ts` (the existing "drilled (expanded)" test at line 222
   checks chrome presence only — it has NO overflow assertion; that gap is why Bug 1
@@ -288,25 +288,25 @@ on the final Files-to-Edit list; the other three files had zero matches.)
   `const overflow = await aside.evaluate((el) => el.scrollWidth - el.clientWidth); expect(overflow).toBeLessThanOrEqual(1);`
   AND (per the empty-band guard, e2e:16-19) asserts the pill's workspace-name text
   is visible so an unmounted band cannot trivially pass.
-- [ ] **AC2 — No overflow (collapsed).** At `md:w-14` the icon-only band path
+- [x] **AC2 — No overflow (collapsed).** At `md:w-14` the icon-only band path
   (`data-collapsed="true"`) stays within 56px; no horizontal scrollbar on the rail.
-- [ ] **AC3 — Single collapse chevron.** In every state there is exactly ONE
+- [x] **AC3 — Single collapse chevron.** In every state there is exactly ONE
   collapse-toggle control (`aria-label="Collapse sidebar"`/`"Expand sidebar"`) at the
   top of the rail. Asserted in `nav-chevron-alignment.test.tsx`.
-- [ ] **AC4 — Back affordance disambiguated + aligned.** In a drilled state, the
+- [x] **AC4 — Back affordance disambiguated + aligned.** In a drilled state, the
   band's `nav-back-chevron` is (a) present exactly once, (b) NOT a byte-identical
   duplicate of the collapse glyph (distinct label/icon per Fix A), and (c) shares the
   collapse toggle's left gutter. Asserted in the new test + a Playwright bounding-box
   check that the back affordance's `x` ~= the collapse toggle's `x` (within tolerance).
-- [ ] **AC5 — Both toggle states verified.** The new test renders the band with
+- [x] **AC5 — Both toggle states verified.** The new test renders the band with
   `collapsed={false}` AND `collapsed={true}` for a drilled pathname and asserts the
   back affordance in each (the two paths are different DOM subtrees).
-- [ ] **AC6 — No behavior regression.** `org-switcher-container.test.tsx`,
+- [x] **AC6 — No behavior regression.** `org-switcher-container.test.tsx`,
   `org-switcher.test.tsx`, `workspace-context-band.test.tsx`, `nav-rail-drill.test.tsx`,
   `nav-single-mount.test.ts` all pass unchanged (switch RPC/JWT/reload logic untouched).
-- [ ] **AC7 — Suite green.** `./node_modules/.bin/vitest run` (the package runner;
+- [x] **AC7 — Suite green.** `./node_modules/.bin/vitest run` (the package runner;
   NOT `bun test` — `bunfig.toml` blocks bun discovery) passes for the web-platform app.
-- [ ] **AC8 — Top-level unchanged.** `/dashboard` (`drill === null`) still shows the
+- [x] **AC8 — Top-level unchanged.** `/dashboard` (`drill === null`) still shows the
   Soleur wordmark + single collapse chevron + full-width pill (no back chevron, the
   invisible placeholder path band:137-141 is preserved).
 

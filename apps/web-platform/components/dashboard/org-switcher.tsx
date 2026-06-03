@@ -73,7 +73,7 @@ export function OrgSwitcher({
     return (
       <div
         data-testid="workspace-identity-static"
-        className="flex items-center gap-2 rounded-md px-3 py-1.5 text-left"
+        className="flex w-full min-w-0 max-w-full items-center gap-2 rounded-md px-3 py-1.5 text-left"
       >
         <span
           aria-hidden="true"
@@ -99,7 +99,7 @@ export function OrgSwitcher({
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-2 rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-1.5 text-left hover:bg-soleur-bg-surface-2"
+        className="flex w-full min-w-0 max-w-full items-center gap-2 rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-1.5 text-left hover:bg-soleur-bg-surface-2"
       >
         <span
           aria-hidden="true"
@@ -113,7 +113,7 @@ export function OrgSwitcher({
             {roleLabel(current.role)}
           </span>
         </span>
-        <span aria-hidden="true" className="ml-1 text-soleur-text-muted">▾</span>
+        <span aria-hidden="true" className="ml-1 shrink-0 text-soleur-text-muted">▾</span>
       </button>
 
       {open && (
