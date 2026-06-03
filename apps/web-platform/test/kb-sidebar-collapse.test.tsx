@@ -145,4 +145,35 @@ describe("KB file tree lifts into the single nav rail slot (ADR-047)", () => {
     );
     expect(screen.queryByTestId("file-tree")).not.toBeInTheDocument();
   });
+
+  // AC2 — collapsed: the search overlay + file tree are DOM-removed so the
+  // arbitrarily-nested rows cannot clip at the 56px collapsed rail. The stable
+  // `kb-rail-tree` wrapper survives so the present/absent assertion is anchored.
+  it("DOM-removes the search + file tree when collapsed (AC2)", async () => {
+    render(
+      <RailSlotHarness collapsed>
+        <KbLayout>
+          <div>content</div>
+        </KbLayout>
+      </RailSlotHarness>,
+    );
+    const slot = await screen.findByTestId("rail-slot-harness");
+    expect(within(slot).getByTestId("kb-rail-tree")).toBeInTheDocument();
+    expect(within(slot).queryByTestId("file-tree")).not.toBeInTheDocument();
+    expect(within(slot).queryByTestId("search-overlay")).not.toBeInTheDocument();
+  });
+
+  // AC4 — expanded: the same wrapper holds the tree + search (no vacuous AC2).
+  it("keeps the search + file tree present when expanded (AC4)", async () => {
+    render(
+      <RailSlotHarness collapsed={false}>
+        <KbLayout>
+          <div>content</div>
+        </KbLayout>
+      </RailSlotHarness>,
+    );
+    const wrapper = await screen.findByTestId("kb-rail-tree");
+    expect(await within(wrapper).findByTestId("file-tree")).toBeInTheDocument();
+    expect(within(wrapper).getByTestId("search-overlay")).toBeInTheDocument();
+  });
 });
