@@ -1,0 +1,117 @@
+# Follow-Through Convention
+
+A `follow-through` is a tracker issue whose closure depends on wall-clock
+time passing AND a verifiable condition being true (e.g. "wait 48 hours
+then check that Sentry monitors received check-ins"). The
+follow-through sweeper closes them automatically when both gates pass.
+
+## Why
+
+Without automation, the engineer who filed the tracker has to remember
+to come back and check. Sessions close, calendar reminders get lost,
+and the issue rots open. With the sweeper, the issue closes the day the
+verification passes — no human revisit required.
+
+## Author workflow
+
+1. **File the tracker** with label `follow-through` and a clear close-criteria description in the body.
+2. **Write the verification script** under `scripts/followthroughs/<short-name>-<issue-num>.sh`. Conventions:
+   - Exit 0 = PASS (close-criteria met → sweeper closes the issue)
+   - Exit 1 = FAIL (criteria not met → sweeper comments, leaves open)
+   - Any other exit = TRANSIENT (network failure, timeout → sweeper retries next sweep)
+   - The script may print human-readable output to stdout/stderr; the sweeper captures the last 4 KB and posts it as a comment.
+   - The script must be deterministic in its exit semantics: do not exit 0 on partial success.
+3. **Declare needed secrets** via the directive's `secrets=` clause. Only the named secrets get exported into the script's environment. Add the secret to `.github/workflows/scheduled-followthrough-sweeper.yml` `env:` block if it isn't already wired.
+4. **Add the directive** to the issue body:
+
+   ```html
+   <!-- soleur:followthrough
+     script=scripts/followthroughs/sentry-checkins-3859.sh
+     earliest=2026-05-17T18:00:00Z
+     secrets=SENTRY_AUTH_TOKEN
+   -->
+   ```
+
+   Place it inline anywhere in the body. Multiple directives in one body: only the first is honored.
+
+5. **Open a PR** that lands the script + (optionally) any new secrets in the workflow env. CI on the PR includes the workflow file's syntax check.
+
+## Directive fields
+
+| Field | Required | Notes |
+|---|---|---|
+| `script` | yes | Path MUST start with `scripts/followthroughs/`. Other paths are refused (defense against tampered issue bodies pointing at arbitrary files). |
+| `earliest` | yes | ISO-8601 UTC timestamp. The sweeper skips the issue until `now >= earliest`. |
+| `secrets` | optional | Comma-separated GitHub secret names. Only these are exported into the script's environment. Omit if the script needs no secrets. |
+
+## Trigger → verification mapping
+
+Deferred-scope-out issues (filed by `/soleur:review` §5) carry a **re-evaluation
+trigger** in one of four concrete shapes. The review skill auto-wires each into
+this substrate: it adds the `follow-through` label, scaffolds a verification
+script (from [`../../../../plugins/soleur/skills/ship/references/followthrough-stub-template.sh`](../../../../plugins/soleur/skills/ship/references/followthrough-stub-template.sh)),
+and embeds the directive — so the issue auto-closes the moment its trigger fires
+instead of rotting open. Each trigger shape maps 1:1 to an exit-code probe:
+
+| Trigger shape | `earliest=` | `secrets=` | Verification script body (fill into the stub) |
+|---|---|---|---|
+| **Date** — `Re-evaluate by YYYY-MM-DD` | `<date>T00:00:00Z` | none | trivial `exit 0` (a real `exit 0` script file is still required — the gate rejects an empty/absent `script=`); the `earliest` wall-clock gate alone defers closure until the date |
+| **Dependency** — `Re-evaluate when #N lands` | filing date | `GH_TOKEN` | `[[ "$(gh issue view N --json state --jq .state)" == CLOSED ]] && exit 0 \|\| exit 2` |
+| **Event-grep** — `Re-evaluate when <pattern> matches in <corpus>` | filing date | `GH_TOKEN` (gh corpus) | corpus probe nonempty ? `exit 0` : `exit 2` — e.g. `gh run list --workflow X --status success --created ">=<cutoff>" --json conclusion \| jq -e 'length >= 1' >/dev/null && exit 0 \|\| exit 2` |
+| **Counter** — `Re-evaluate when <counter> exceeds <threshold>` | filing date | `GH_TOKEN` (gh/API counter) | `[[ "$count" -ge "$threshold" ]] && exit 0 \|\| exit 2` where `$count` comes from `gh`/SQL/grep |
+
+**`secrets=GH_TOKEN` is MANDATORY for any gh-using probe.** The sweeper runs
+verification scripts under `env -i` (PATH + HOME + directive-declared `secrets=`
+ONLY). On the CI runner `gh` authenticates from `GH_TOKEN`, not `~/.config/gh`,
+so a gh-using script with NO `secrets=GH_TOKEN` is unauthenticated → `gh` fails →
+the probe returns exit 2 (transient) on every sweep and the issue **never closes**
+(a silent never-close, not a loud failure). The date shape is the only one that
+needs no `secrets=` (its body never calls `gh`). This is the same opt-in
+mechanism `sentry-checkins-3859.sh` uses (`secrets=SENTRY_AUTH_TOKEN`).
+
+**Exit contract** (same as Author workflow): `0` = PASS → sweeper closes;
+`1` = FAIL → sweeper comments + leaves open (reserve for a genuine "this should
+NOT close" regression, not a not-yet condition); any other exit = TRANSIENT →
+retry next sweep (use `exit 2` for "the trigger has not fired yet").
+
+**`earliest=` semantics.** It is a hard wall-clock gate evaluated BEFORE the
+script runs (`scripts/sweep-followthroughs.sh` skips the issue until
+`now >= earliest`). For the **date** shape it IS the verification. For
+dependency / event-grep / counter shapes the *script* self-gates via its
+transient exit, so set `earliest=` to the filing date — do NOT set a far-future
+`earliest=` (that double-gates and delays verification).
+
+**Scaffolding contract.** `cp` the stub template → replace the TODO body with the
+probe for the trigger shape → `chmod +x` → embed the directive (include
+`secrets=GH_TOKEN` for any gh-using shape — dependency / event-grep / counter).
+The script must exist + be executable on disk BEFORE `gh issue create --label
+follow-through` runs — `.claude/hooks/follow-through-directive-gate.sh` (and the
+sweeper) reject a missing/non-executable `script=` path. For review-time filings
+the script lands in the review PR's branch.
+
+**First deferred-scope-out instance**: #3950 (review: cla-evidence scripts
+hardening bundle) — `scripts/followthroughs/cla-evidence-hardening-3950.sh` is the
+worked event-grep example (asserts the 4 hardening markers are intact, then
+probes for a post-PR-#4784-merge green `cla-evidence.yml` run; `earliest=` is the
+merge timestamp; its directive declares `secrets=GH_TOKEN`).
+
+## Security guarantees
+
+- Verification scripts are code-reviewed at PR time and live committed in the repo. Issue body editors cannot inline-execute code, only reference an existing path.
+- The sweeper exports a narrow allowlist of secrets (declared per-script), not the full workflow env.
+- Issue body content reaches the sweeper via `awk` on stdin (no shell interpolation). Directive values are passed to the verification script as environment values and command-line args, never via shell-evaluated strings.
+- The sweeper uses `gh` CLI for issue close/comment, not raw token interpolation.
+
+## What the sweeper does NOT cover
+
+- **One-shot scheduling**: every sweep checks every open follow-through. If you want a script to run exactly once at a specific timestamp, that's a regular scheduled workflow, not a follow-through.
+- **Inline scripts**: scripts must be committed. We considered allowing inline shell in directives and rejected it for security.
+- **Multi-step verification**: each script is one binary pass/fail. For verifications that span multiple days with different criteria, file multiple follow-through issues that block each other.
+
+## Operator reference
+
+- **Workflow**: `.github/workflows/scheduled-followthrough-sweeper.yml`
+- **Driver script**: `scripts/sweep-followthroughs.sh`
+- **Manual run**: `gh workflow run scheduled-followthrough-sweeper.yml`
+- **Dry run**: `gh workflow run scheduled-followthrough-sweeper.yml -f dry_run=true`
+- **First user**: #3859 (Sentry cron monitor check-in receipts after #3849 rotation)

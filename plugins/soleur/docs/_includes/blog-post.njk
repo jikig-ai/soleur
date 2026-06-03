@@ -33,7 +33,7 @@ layout: base.njk
     "description": {{ site.author.bio | jsonLdSafe | safe }},
     "image": {{ (site.url + site.author.image) | jsonLdSafe | safe }},
     "sameAs": {{ site.author.sameAs | jsonLdSafe | safe }},
-    "knowsAbout": {{ site.author.credentials | jsonLdSafe | safe }}
+    "knowsAbout": {{ site.author.knowsAbout | jsonLdSafe | safe }}
   },
   "publisher": {
     "@type": "Organization",

@@ -49,7 +49,7 @@ Implementation breakdown derived from the plan. Each task has a hard checklist; 
 - [x] **3.1** Phase 0 — capture operator facts via inline prompts (title, detected_at UTC, symptom prose, suspected_change PR/SHA, affected_user_count).
 - [x] **3.2** Phase 1 — render `brand_survival_threshold` decision criteria text inline BEFORE asking for confirm. Advisory + rationale. Operator confirms/overrides; override emits `classification_override` to PIR frontmatter.
 - [x] **3.3** Phase 2 — compute `art_33_deadline = detected_at + 72h`. Block Phase 3+ on Art. 33 OR Art. 34 trigger. Separate operator acks if both fire.
-- [x] **3.4** Phase 3 — `awk`-scan `knowledge-base/engineering/ops/runbooks/*.md` for `triggers:` frontmatter; literal-substring match; surface top-3; selected runbook slugs auto-populate Phase 4 `triggers[]` verbatim. Surface "no runbook matches" if none.
+- [x] **3.4** Phase 3 — `awk`-scan `knowledge-base/engineering/operations/runbooks/*.md` for `triggers:` frontmatter; literal-substring match; surface top-3; selected runbook slugs auto-populate Phase 4 `triggers[]` verbatim. Surface "no runbook matches" if none.
 - [x] **3.5** Phase 4 — `sed`-substitute against `templates/pir.md`. Frontmatter MUST use `brand_survival_threshold:` (NOT `brand_threshold:`). Body sections per FR2 Phase 4.
 - [x] **3.6** Phase 5 — emit one-line "Public-summary deferred to #3732" note (no public artifact in MVP).
 - [x] **3.7** Phase 6 — invoke `scripts/redact-sentinel.sh` against draft BEFORE writing to disk OR emitting inline (pre-inline-emit gate per FR3).
@@ -73,7 +73,7 @@ Implementation breakdown derived from the plan. Each task has a hard checklist; 
 
 - [x] **6.1** Add `[Updated 2026-05-13: D1 direction reversed per plan Research Reconciliation]` markers to spec.md in **Problem Statement, Goals (4 occurrences), Non-Goals, FR1, AC1-AC3**.
 - [x] **6.2** Add `[Updated 2026-05-13]` marker to brainstorm doc Key-Decisions row for D1 direction.
-- [x] **6.3** Add cross-reference header note to `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md` (post-rename) pointing at `/soleur:incident` for future PIRs.
+- [x] **6.3** Add cross-reference header note to `knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md` (post-rename) pointing at `/soleur:incident` for future PIRs.
 - [x] **6.4** Issue #3724 body update already covered by Step 0.1.
 
 ## Step 7 — Multi-agent review

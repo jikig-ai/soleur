@@ -4,14 +4,16 @@ seoTitle: "Soleur — AI Agents for Solo Founders | Every Department, One Platfo
 description: "Company-as-a-Service for solo founders. AI agents across 8 departments — engineering, marketing, legal, finance, operations, product, sales, support."
 layout: base.njk
 permalink: index.html
+date: 2026-06-01
+last_updated: 2026-06-01
 ---
 
     <!-- Hero -->
     <section class="landing-hero">
       <p class="section-label">Company-as-a-Service</p>
       <h1>Stop hiring. Start delegating.</h1>
-      <p class="hero-tagline">The Company-as-a-Service platform for solo founders. Build a billion-dollar company — alone.</p>
-      <p class="hero-sub">Soleur is an open-source company-as-a-service platform that deploys {{ stats.agents }} AI agents across {{ stats.departments }} business departments &mdash; engineering, marketing, legal, finance, operations, product, sales, and support &mdash; giving a single founder the operational capacity of a full organization. Every agent shares a compounding knowledge base that grows with your business.</p>
+      <p class="hero-tagline">The Company-as-a-Service platform that already knows your business. Build a billion-dollar company &mdash; alone.</p>
+      <p class="hero-sub">Soleur is the open-source Company-as-a-Service platform: 60+ AI agents across {{ stats.departments }} business departments &mdash; engineering, marketing, legal, finance, operations, product, sales, and support &mdash; giving one founder the operational capacity of a full organization. Every agent shares a compounding knowledge base that grows with your business.</p>
       <p class="hero-trust">Human-in-the-loop. Your expertise, amplified.</p>
       <form class="newsletter-form hero-waitlist-form" id="homepage-waitlist-form"
         action="https://buttondown.com/api/emails/embed-subscribe/soleur"
@@ -29,8 +31,11 @@ permalink: index.html
       <div class="hero-cta">
         <a href="/pricing/" class="cta-button">See Pricing &amp; Join Waitlist <span aria-hidden="true">&rarr;</span></a>
         <a href="/getting-started/" class="cta-link">Or try the open-source version <span aria-hidden="true">&rarr;</span></a>
+        <a href="#soleur-vs-copilots" class="cta-link">How Soleur compares to Cursor &amp; Copilot <span aria-hidden="true">&rarr;</span></a>
       </div>
     </section>
+
+    {% include "page-freshness.njk" %}
 
     <!-- Stats Strip -->
     <section class="landing-stats" aria-label="Platform statistics">
@@ -154,6 +159,17 @@ permalink: index.html
       </div>
     </section>
 
+    <!-- Soleur vs. coding copilots — promoted from FAQ <details> for AEO/SEO extractability (#3996) -->
+    <section class="landing-section" id="soleur-vs-copilots">
+      <div class="landing-section-inner">
+        <p class="section-label">How Soleur Compares</p>
+        <h2 class="section-title">Soleur vs. Cursor and GitHub Copilot</h2>
+        <p class="section-desc">Cursor and Copilot help you write code. Soleur helps you run a company. Soleur includes agents for marketing strategy, legal compliance, financial planning, sales pipeline analysis, and more &mdash; not just engineering.</p>
+        <p class="section-desc">The core difference is memory. Soleur maintains a persistent, compounding knowledge base across every department: your marketing agent knows your brand voice, your legal agent knows your compliance posture, your finance agent references your actual revenue data. Cursor and Copilot start fresh every session. Soleur remembers.</p>
+        <p class="section-desc">Soleur is built on <a href="https://docs.anthropic.com/en/docs/claude-code" rel="noopener noreferrer">Claude Code</a> and the <a href="https://modelcontextprotocol.io/" rel="noopener noreferrer">Model Context Protocol (MCP)</a>, the open standard for connecting AI to external tools.</p>
+      </div>
+    </section>
+
     <!-- FAQ Section -->
     <section class="landing-section">
       <div class="landing-section-inner">
@@ -162,7 +178,7 @@ permalink: index.html
         <div class="faq-list">
           <details class="faq-item">
             <summary class="faq-question">What is Soleur?</summary>
-            <p class="faq-answer">Soleur deploys {{ stats.agents }} AI agents across {{ stats.departments }} business departments &mdash; engineering, marketing, legal, finance, operations, product, sales, and support &mdash; giving a single founder the capacity of a full organization. Every agent shares a compounding knowledge base, so your marketing agent knows what your legal agent decided, and your finance agent references your actual revenue data. Your expertise stays in the loop: agents provide starting points, you make the final call.</p>
+            <p class="faq-answer">Soleur deploys 60+ AI agents across {{ stats.departments }} business departments &mdash; engineering, marketing, legal, finance, operations, product, sales, and support &mdash; giving a single founder the capacity of a full organization. Every agent shares a compounding knowledge base, so your marketing agent knows what your legal agent decided, and your finance agent references your actual revenue data. Your expertise stays in the loop: agents provide starting points, you make the final call.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">What is company-as-a-service?</summary>
@@ -202,7 +218,7 @@ permalink: index.html
           "name": "What is Soleur?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": {{ ("Soleur deploys " + stats.agents + " AI agents across " + stats.departments + " business departments — engineering, marketing, legal, finance, operations, product, sales, and support — giving a single founder the capacity of a full organization. Every agent shares a compounding knowledge base, so your marketing agent knows what your legal agent decided, and your finance agent references your actual revenue data. Your expertise stays in the loop: agents provide starting points, you make the final call.") | jsonLdSafe | safe }}
+            "text": {{ ("Soleur deploys 60+ AI agents across " + stats.departments + " business departments — engineering, marketing, legal, finance, operations, product, sales, and support — giving a single founder the capacity of a full organization. Every agent shares a compounding knowledge base, so your marketing agent knows what your legal agent decided, and your finance agent references your actual revenue data. Your expertise stays in the loop: agents provide starting points, you make the final call.") | jsonLdSafe | safe }}
           }
         },
         {
@@ -260,7 +276,7 @@ permalink: index.html
     <!-- Final CTA -->
     <section class="landing-cta">
       <h2>Stop hiring. Start delegating.</h2>
-      <p>{{ stats.agents }} agents across {{ stats.departments }} departments. One knowledge base that remembers everything.</p>
+      <p>60+ agents across {{ stats.departments }} departments. One knowledge base that remembers everything.</p>
       <a href="/pricing/" class="btn btn-primary">See Pricing &amp; Join Waitlist</a>
       <p class="waitlist-secondary"><a href="/getting-started/">Or start with the free self-hosted version &rarr;</a></p>
     </section>

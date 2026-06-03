@@ -30,6 +30,7 @@ import { cronContentGenerator } from "@/server/inngest/functions/cron-content-ge
 import { cronContentPublisher } from "@/server/inngest/functions/cron-content-publisher";
 import { cronContentVendorDrift } from "@/server/inngest/functions/cron-content-vendor-drift";
 import { cronDailyTriage } from "@/server/inngest/functions/cron-daily-triage";
+import { cronDevMigrationDrift } from "@/server/inngest/functions/cron-dev-migration-drift";
 import { cronFollowThroughMonitor } from "@/server/inngest/functions/cron-follow-through-monitor";
 import { cronGhPagesCertState } from "@/server/inngest/functions/cron-gh-pages-cert-state";
 import { cronGithubAppDriftGuard } from "@/server/inngest/functions/cron-github-app-drift-guard";
@@ -38,10 +39,12 @@ import { cronGrowthExecution } from "@/server/inngest/functions/cron-growth-exec
 import { cronInngestCronWatchdog } from "@/server/inngest/functions/cron-inngest-cron-watchdog";
 import { cronLegalAudit } from "@/server/inngest/functions/cron-legal-audit";
 import { cronLinkedinTokenCheck } from "@/server/inngest/functions/cron-linkedin-token-check";
+import { cronMainHealthMonitor } from "@/server/inngest/functions/cron-main-health-monitor";
 import { cronMembershipHealth } from "@/server/inngest/functions/cron-membership-health";
 import { cronNag4216Readiness } from "@/server/inngest/functions/cron-nag-4216-readiness";
 import { cronOauthProbe } from "@/server/inngest/functions/cron-oauth-probe";
 import { cronPlausibleGoals } from "@/server/inngest/functions/cron-plausible-goals";
+import { cronReviewReminder } from "@/server/inngest/functions/cron-review-reminder";
 import { cronRoadmapReview } from "@/server/inngest/functions/cron-roadmap-review";
 import { cronRulePrune } from "@/server/inngest/functions/cron-rule-prune";
 import { cronRulesetBypassAudit } from "@/server/inngest/functions/cron-ruleset-bypass-audit";
@@ -49,12 +52,18 @@ import { cronSeoAeoAudit } from "@/server/inngest/functions/cron-seo-aeo-audit";
 import { cronSkillFreshness } from "@/server/inngest/functions/cron-skill-freshness";
 import { cronStaleDeferredScopeOuts } from "@/server/inngest/functions/cron-stale-deferred-scope-outs";
 import { cronStrategyReview } from "@/server/inngest/functions/cron-strategy-review";
+import { cronSupabaseDiskIo } from "@/server/inngest/functions/cron-supabase-disk-io";
+import { cronTerraformDrift } from "@/server/inngest/functions/cron-terraform-drift";
 import { cronUxAudit } from "@/server/inngest/functions/cron-ux-audit";
 import { cronWeeklyAnalytics } from "@/server/inngest/functions/cron-weekly-analytics";
+import { cronWorkspaceGc } from "@/server/inngest/functions/cron-workspace-gc";
+import { cronWorkspaceSyncHealth } from "@/server/inngest/functions/cron-workspace-sync-health";
 import { eventCfTokenExpiryCheck } from "@/server/inngest/functions/event-cf-token-expiry-check";
+import { eventScheduledReminder } from "@/server/inngest/functions/event-scheduled-reminder";
 import { eventShipMerge } from "@/server/inngest/functions/event-ship-merge";
 import { githubOnEvent } from "@/server/inngest/functions/github-on-event";
 import { oneshot4650MonitorClose } from "@/server/inngest/functions/oneshot-4650-monitor-close";
+import { oneshotHeartbeatRecoveryVerify } from "@/server/inngest/functions/oneshot-heartbeat-recovery-verify";
 import { oneshotF2DeferGateReview } from "@/server/inngest/functions/oneshot-f2-defer-gate-review";
 import { oneshotGdprGate50dEval } from "@/server/inngest/functions/oneshot-gdpr-gate-50d-eval";
 import { oneshotRecheck4217Calibration } from "@/server/inngest/functions/oneshot-recheck-4217-calibration";
@@ -86,6 +95,7 @@ export const { GET, POST, PUT } = serve({
     cronCompoundPromote,
     cronContentVendorDrift,
     cronDailyTriage,
+    cronDevMigrationDrift,
     cronFollowThroughMonitor,
     cronGhPagesCertState,
     cronGithubAppDriftGuard,
@@ -94,10 +104,12 @@ export const { GET, POST, PUT } = serve({
     cronInngestCronWatchdog,
     cronLegalAudit,
     cronLinkedinTokenCheck,
+    cronMainHealthMonitor,
     cronMembershipHealth,
     cronNag4216Readiness,
     cronOauthProbe,
     cronPlausibleGoals,
+    cronReviewReminder,
     cronRoadmapReview,
     cronRulePrune,
     cronRulesetBypassAudit,
@@ -105,12 +117,18 @@ export const { GET, POST, PUT } = serve({
     cronSkillFreshness,
     cronStaleDeferredScopeOuts,
     cronStrategyReview,
+    cronSupabaseDiskIo,
+    cronTerraformDrift,
     cronUxAudit,
     cronWeeklyAnalytics,
+    cronWorkspaceGc,
+    cronWorkspaceSyncHealth,
     eventCfTokenExpiryCheck,
+    eventScheduledReminder,
     eventShipMerge,
     githubOnEvent,
     oneshot4650MonitorClose,
+    oneshotHeartbeatRecoveryVerify,
     oneshotF2DeferGateReview,
     oneshotGdprGate50dEval,
     oneshotRecheck4217Calibration,

@@ -66,7 +66,7 @@ jobs:
             fi
           done <<< "$added"
           if [ -n "$violations" ]; then
-            body=$(printf '**Bypass detected.** Merge commit `%s` introduced HIGH-RISK skill(s) WITHOUT a corresponding override artifact under `knowledge-base/security/skill-overrides/`.\n\nViolating files:\n' "$MERGE_SHA")
+            body=$(printf '**Bypass detected.** Merge commit `%s` introduced HIGH-RISK skill(s) WITHOUT a corresponding override artifact under `knowledge-base/engineering/security/skill-overrides/`.\n\nViolating files:\n' "$MERGE_SHA")
             for v in $violations; do
               body="${body}- $v"$'\n'
             done

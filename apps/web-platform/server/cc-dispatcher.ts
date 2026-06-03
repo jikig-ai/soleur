@@ -14,6 +14,7 @@
 // MCP servers for cc-soleur-go path — referenced in factory body).
 
 import { randomUUID } from "crypto";
+import { existsSync } from "node:fs";
 import path from "path";
 
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
@@ -71,6 +72,20 @@ import {
   getUserServiceTokens,
   patchWorkspacePermissions,
 } from "./agent-runner";
+// Issue A (Concierge gh-auth): mint a per-workspace GitHub App installation
+// token and inject it as GH_TOKEN so the agent's `gh` calls authenticate
+// without `gh auth login`. resolveInstallationId is the membership-checked
+// per-workspace resolver (ADR-044) — NOT the soleur-monorepo-hardcoded
+// `mintInstallationToken` from the crons. Per hr-github-app-auth-not-pat.
+import { resolveInstallationId } from "./resolve-installation-id";
+import { generateInstallationToken } from "./github-app";
+// Session-start self-heal: if the active workspace has a connected repo but no
+// matching clone on disk, clone/repair it so the Concierge has a real git repo
+// to work in (fixes the "No git repository found" blocker). Generic per-user.
+import { getCurrentRepoUrl } from "./current-repo-url";
+import { ensureWorkspaceRepoCloned } from "./ensure-workspace-repo";
+// Issue B part 2 — per-workspace autonomous Bash toggle (fail-closed read).
+import { resolveBashAutonomous } from "./resolve-bash-autonomous";
 // PR-C §2.11 (#3244): BYOK lease wrap on realSdkQueryFactory — the
 // plaintext API key fetch surface moves from `getUserApiKey(userId)`
 // (which returns a bare string) to `lease.getApiKey()` inside
@@ -97,6 +112,11 @@ import type { PdfExtractErrorClass } from "./pdf-text-extract";
 // Re-export so existing call sites keep working.
 export { resolveConciergeDocumentContext } from "./kb-document-resolver";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
+// In-sandbox raw-git credential path (plan item 1). `writeAskpassScriptTo`
+// writes the fixed-body GIT_ASKPASS helper UNDER the user's `workspacePath`
+// (the only verified sandbox-readable allowWrite dir); the token rides
+// GIT_INSTALLATION_TOKEN env, never the script body. NEVER logged.
+import { writeAskpassScriptTo } from "./git-auth";
 import { buildToolUseWSMessage } from "./tool-labels";
 import {
   getBashApprovalCache,
@@ -112,6 +132,11 @@ import { notifyOfflineUser } from "./notifications";
 import { createChildLogger } from "./logger";
 
 const log = createChildLogger("cc-dispatcher");
+
+// Floor lifetime for the minted GH_TOKEN (Issue A). A warm-cache token must
+// outlast a long interactive agent turn so `gh` doesn't fail mid-conversation
+// on an expired token. Mirrors the cron's TOKEN_MIN_LIFETIME_MS (~60 min).
+const GH_TOKEN_MIN_LIFETIME_MS = 60 * 60 * 1000;
 
 // Non-routable internal leader id reserved for cc-soleur-go path
 // audit-log attribution. Used by `createCanUseTool` (R-AC14), the WS
@@ -434,6 +459,7 @@ function buildRow(
   mode: PersistMode,
   text: string,
   conversationId: string,
+  workspaceId: string,
 ): Record<string, unknown> {
   // #3603 W4 — gated single-read site for `CC_PERSIST_USAGE`. The hot-path
   // env read is intentional: enables runtime rollback flip without a
@@ -449,6 +475,14 @@ function buildRow(
   const row: Record<string, unknown> = {
     id: randomUUID(),
     conversation_id: conversationId,
+    // mig 059: messages.workspace_id NOT NULL + member-keyed INSERT RLS.
+    // Derived from the parent conversation by the caller; see saveAssistantMessage.
+    workspace_id: workspaceId,
+    // mig 053: messages.template_id NOT NULL (no default) + CHECK
+    // (^[a-z][a-z0-9_]*$). Interactive (non-template) messages use the
+    // 'default_legacy' sentinel — same value the draft-card helper and the
+    // 053 backfill use. Omitting it violates the NOT-NULL constraint (#4839).
+    template_id: "default_legacy",
     role: "assistant",
     content: text,
     tool_calls: null,
@@ -899,12 +933,16 @@ export const realSdkQueryFactory: QueryFactory = async (
   // `sdkQuery({apiKey, ...})` below has already passed the key into the
   // SDK's internal state — the lease's finally-zeroize fires after the
   // SDK has captured what it needs.
-  // Phase 3 (feat-team-workspace-multi-user): N2 invariant pins
-  // workspaceContextUserId === keyOwnerUserId for solo workspaces;
-  // team workspaces will diverge when Phase 4 invite flow ships.
+  // Phase 3 (feat-team-workspace-multi-user): the args stay
+  // `args.userId, args.userId`; the workspace the BYOK key is resolved
+  // against is derived INSIDE resolveKeyOwnerThenLease via
+  // resolveCurrentWorkspaceId (the caller's ACTIVE workspace — the shared
+  // workspace an owner granted into, post Phase-4 invite flow), no longer
+  // the oldest/solo workspace (#4767). For a solo caller the active
+  // workspace IS their solo workspace, so solo behavior is unchanged.
   // Sentinel sweep site #3 (#4232 PR-A). callerUserId = args.userId
   // (server-derived per cc-dispatcher contract; provenance in PR body).
-  // N2 solo invariant kept: callerUserId === workspaceContextUserId.
+  // Invariant kept: callerUserId === workspaceContextUserId.
   return resolveKeyOwnerThenLease(
     args.userId,
     args.userId,
@@ -925,16 +963,69 @@ export const realSdkQueryFactory: QueryFactory = async (
     );
 
     // Plan §2.11 canonical pattern (mirrors agent-runner.ts:2361):
-    // hoist `await lease.getApiKey()` OUT of `Promise.all` so the
-    // `string | Promise<string>` union in `getApiKey`'s return type
-    // does not surface awkwardly through `Promise.all`'s array element
-    // inference. `buildAgentQueryOptions.apiKey: string` consumes the
-    // unwrapped value.
-    const apiKey = await lease.getApiKey();
-    const [workspacePath, serviceTokens] = await Promise.all([
-      fetchUserWorkspacePath(args.userId),
-      getUserServiceTokens(args.userId),
-    ]);
+    // hoist `await lease.getAgentCredential()` OUT of `Promise.all` so the
+    // `AgentCredential | Promise<AgentCredential>` union does not surface
+    // awkwardly through `Promise.all`'s array element inference.
+    // `buildAgentQueryOptions.credential` consumes the unwrapped value.
+    // Agent-SDK consumer: prefers the operator subscription oauth_token
+    // when enabled+permitted; otherwise the api_key (feat-operator-cc-oauth).
+    const credential = await lease.getAgentCredential();
+    // installationId joins the existing Promise.all (it keys only off
+    // args.userId via resolveInstallationId → resolveCurrentWorkspaceId), so
+    // the resolve does not add a sequential await to cold-start dispatch.
+    const [workspacePath, serviceTokens, installationId, bashAutonomous, repoUrl] =
+      await Promise.all([
+        fetchUserWorkspacePath(args.userId),
+        getUserServiceTokens(args.userId),
+        resolveInstallationId(args.userId),
+        // Issue B part 2 — fail-closed false; bypasses the Bash review-gate
+        // when the active workspace owner enabled the autonomous toggle.
+        resolveBashAutonomous(args.userId),
+        // Per-user connected repo (normalized, membership-checked). Drives the
+        // session-start ensure-repo self-heal below. null = not connected.
+        getCurrentRepoUrl(args.userId),
+      ]);
+
+    // Session-start self-heal (generic, per-user, idempotent, fail-soft): if the
+    // workspace has a connected repo but no matching clone on disk, clone/repair
+    // it so the agent has a real git repo to branch/commit/work in. Runs once per
+    // cold conversation (the factory is per-cold-conversation). NEVER throws into
+    // the conversation; clone failure mirrors to Sentry and degrades gracefully.
+    await ensureWorkspaceRepoCloned({
+      userId: args.userId,
+      workspacePath,
+      installationId,
+      repoUrl,
+    });
+
+    // Issue A: mint a short-lived GitHub App installation token for the
+    // connected repo and inject it as GH_TOKEN so the agent's `gh` calls
+    // authenticate without an interactive `gh auth login` (the reported
+    // symptom). resolveInstallationId returns null for no-connected-repo /
+    // non-member — graceful degradation: gh simply stays unauthenticated,
+    // exactly as before. Mint failure is NON-FATAL: mirror to Sentry and
+    // proceed without GH_TOKEN — never block a conversation on a gh-auth
+    // mint. generateInstallationToken is token-cache-memoized per
+    // installation id, so this is not a per-dispatch network round-trip on a
+    // warm cache. Per hr-github-app-auth-not-pat this is an App installation
+    // token, NEVER a PAT, and the value is NEVER logged. (Sentry
+    // 512e253141294ac1a808b2ef03a21289 — cron-follow-through-monitor — is the
+    // cron-side root cause this mirrors for the interactive path.)
+    let ghToken: string | undefined;
+    if (installationId !== null) {
+      try {
+        ghToken = await generateInstallationToken(installationId, {
+          minRemainingMs: GH_TOKEN_MIN_LIFETIME_MS,
+        });
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "cc-dispatcher",
+          op: "mint-gh-token",
+          extra: { userId: args.userId, hasInstallation: true },
+          message: "GitHub App installation token mint failed; gh stays unauthenticated",
+        });
+      }
+    }
 
   // Workspace-permissions patch and the #3250 prefill-guard probe both
   // depend on `workspacePath` but not on each other — parallelize so the
@@ -987,6 +1078,39 @@ export const realSdkQueryFactory: QueryFactory = async (
     sessionId: null,
   };
 
+  // In-sandbox raw-git credential path (plan item 1). `GH_TOKEN` (above)
+  // authenticates the `gh` CLI; raw `git push`/`fetch`/`pull` in the bwrap
+  // sandbox needs a GIT_ASKPASS helper the sandbox can read+exec. The only
+  // verified sandbox-readable allowWrite dir is `workspacePath`
+  // (`buildAgentSandboxConfig` allowWrite:[workspacePath] +
+  // `createSandboxHook` realpath-containment); `$HOME`/`/tmp` bwrap-visibility
+  // is unverifiable. We write the helper into the repo's `.git/` directory
+  // (under `workspacePath`, so the SAME containment guarantees sandbox
+  // readability) rather than the working-tree root, for two reasons:
+  //   1. `.git/` is outside the working tree, so the agent's own
+  //      `git add -A`/commit/push can NEVER stage the helper into the user's
+  //      repo (the working-tree-litter vector — review user-impact P1 / arch P2).
+  //   2. A FIXED filename means the helper is reused per workspace: no
+  //      per-dispatch accumulation, no cleanup lifecycle to get wrong, and it
+  //      is concurrency-safe because the body is byte-identical and token-free
+  //      (reads GIT_INSTALLATION_TOKEN at runtime). This replaces the prior
+  //      per-dispatch random-name + AbortController-cleanup design, whose
+  //      cleanup never fired on the normal completion path (the synthetic
+  //      controller is only aborted via `_ccBashGates`, which is populated
+  //      solely when a Bash review-gate fires — review arch P1 / perf P2).
+  // When `.git` is absent (clone degraded → no repo) we fall back to the
+  // workspace root; there is no commit vector without a repo. Only when a
+  // token was minted (connected, membership-checked repo) — graceful-
+  // degradation parity with GH_TOKEN. The token rides GIT_INSTALLATION_TOKEN
+  // env, NEVER the script body or a remote URL, and is NEVER logged
+  // (hr-github-app-auth-not-pat).
+  let gitAskpassScriptPath: string | undefined;
+  if (ghToken) {
+    const gitDir = path.join(workspacePath, ".git");
+    const askpassDir = existsSync(gitDir) ? gitDir : workspacePath;
+    gitAskpassScriptPath = writeAskpassScriptTo(askpassDir, ".soleur-askpass.sh");
+  }
+
   const ccDeps: CanUseToolDeps = {
     abortableReviewGate: (ccSession, gateId, signal, timeoutMs, options) => {
       // Register BEFORE awaiting the resolver so a synchronous
@@ -1007,6 +1131,10 @@ export const realSdkQueryFactory: QueryFactory = async (
     // `cleanupCcBashGatesForConversation` so a closed/reaped conversation
     // doesn't leak grants.
     bashApprovalCache: getBashApprovalCache(args.userId, args.conversationId),
+    // Issue B part 2 — resolved above (fail-closed false). When true, the
+    // Bash branch auto-approves non-BLOCKED commands (blocklist stays
+    // authoritative).
+    bashAutonomous,
     // Real conversation-status write — replaces the prior no-op (#2920).
     // Delegates to the typed wrapper which enforces the R8 composite-key
     // invariant (`.eq("id", convId).eq("user_id", args.userId)`) and
@@ -1081,8 +1209,14 @@ export const realSdkQueryFactory: QueryFactory = async (
       options: buildAgentQueryOptions({
         workspacePath,
         pluginPath,
-        apiKey,
+        credential,
         serviceTokens,
+        // Issue A — minted GH_TOKEN (or undefined when no repo connected).
+        ghToken,
+        // Plan item 1 — in-sandbox raw-git GIT_ASKPASS helper path (or
+        // undefined when no token was minted). The askpass token IS `ghToken`
+        // (threaded as gitInstallationToken inside buildAgentEnv).
+        gitAskpassScriptPath,
         systemPrompt: effectiveSystemPrompt,
         resumeSessionId: safeResumeSessionId,
         mcpServers: readCcMcpAllowlist(),
@@ -1125,6 +1259,9 @@ export const realSdkQueryFactory: QueryFactory = async (
       }),
     });
   } catch (err) {
+    // No askpass cleanup needed here: the helper is a fixed-name, token-free
+    // file reused per workspace (written into `.git/`), so a startup throw
+    // leaves nothing to leak (item 1).
     // Mirror the "sandbox required but unavailable" branch in
     // agent-runner.ts startAgentSession's catch (feature:
     // "agent-sandbox", op: "sdk-startup"). Other inner throws bubble up
@@ -1421,10 +1558,14 @@ export async function dispatchSoleurGo(
       "cc-dispatcher: assertWriteScope halted user-message persistence",
     );
   }
-  // PR-C §2.11 (#3244): tenant-scoped message INSERTs. RLS on `messages`
-  // enforces FK-join to `conversations.user_id`; the `assertWriteScope`
-  // sentinel above is the defense-in-depth layer. The implicit JWT mint
-  // is the auth probe — see ws-handler `tenantFor` doc-comment.
+  // PR-C §2.11 (#3244): tenant-scoped message INSERTs. Post-migration 059,
+  // RLS on `messages` requires `workspace_id` to be a workspace the caller is
+  // a member of (`messages_workspace_member_insert` WITH CHECK
+  // `is_workspace_member(workspace_id, auth.uid())`); we derive `workspace_id`
+  // from the parent conversation, which the caller's conversation-RLS already
+  // gated on membership (the ownership probe above). The `assertWriteScope`
+  // sentinel is the defense-in-depth layer. The implicit JWT mint is the auth
+  // probe — see ws-handler `tenantFor` doc-comment.
   //
   // Wrap mint in try/catch so a transient RuntimeAuthError gets a
   // structured Sentry mirror before the throw bubbles into the outer
@@ -1441,10 +1582,38 @@ export async function dispatchSoleurGo(
     });
     throw mintErr;
   }
+
+  // Read the parent conversation's `workspace_id` once via the already-minted
+  // tenant client (no second mint — Kieran single-RTT). Threaded into BOTH the
+  // user-row INSERT below and the assistant-row INSERT (via `buildRow`) so
+  // every interactive `messages` write satisfies the mig-059 WITH CHECK. On
+  // read failure, mirror to Sentry and throw — never proceed to a NULL
+  // workspace_id INSERT (which would 500 under RLS).
+  const { data: convWsRow, error: convWsErr } = await tenant
+    .from("conversations")
+    .select("workspace_id")
+    .eq("id", conversationId)
+    .single();
+  if (convWsErr || !convWsRow) {
+    reportSilentFallback(convWsErr ?? new Error("conversation workspace_id not found"), {
+      feature: "cc-dispatcher",
+      op: "persistUserMessage.workspaceRead",
+      extra: { userId, conversationId },
+    });
+    throw new Error(
+      `Failed to resolve conversation workspace_id: ${convWsErr?.message ?? "row absent"}`,
+    );
+  }
+  const conversationWorkspaceId = convWsRow.workspace_id as string;
+
   const messageId = randomUUID();
   const { error: insertErr } = await tenant.from("messages").insert({
     id: messageId,
     conversation_id: conversationId,
+    workspace_id: conversationWorkspaceId,
+    // mig 053: messages.template_id NOT NULL (no default). Interactive
+    // messages use the 'default_legacy' sentinel (see buildRow). #4839.
+    template_id: "default_legacy",
     role: "user",
     content: rawUserMessage,
     tool_calls: null,
@@ -1545,15 +1714,17 @@ export async function dispatchSoleurGo(
     mode: PersistMode,
     text: string,
   ): Promise<void> {
-    // #3603 W1 — Cross-tenant write-boundary sentinel. Post-PR-C/PR-D,
-    // cc-path writes via tenant-scoped clients (RLS enforces FK-join to
-    // conversations.user_id). This guard catches the residual case where
-    // the dispatch closure's userId/conversationId disagree with a future
-    // SDK-payload-derived identifier — RLS cannot, since the JWT is A's
-    // and the row's conversation_id is A-owned. Returns `false` only via
-    // the test seam today (sentinel placeholder); load-bearing call site
-    // for that future identifier comparison. See `assertWriteScope`
-    // module-level doc.
+    // #3603 W1 — Cross-tenant write-boundary sentinel. Post-migration 059,
+    // RLS on `messages` requires `workspace_id` to be a workspace the caller
+    // is a member of (`messages_workspace_member_insert` WITH CHECK
+    // `is_workspace_member(workspace_id, auth.uid())`); we derive it from the
+    // parent conversation, which the caller's conversation-RLS already gated on
+    // membership. This guard catches the residual case where the dispatch
+    // closure's userId/conversationId disagree with a future SDK-payload-derived
+    // identifier — RLS cannot, since the JWT is A's and the row's workspace_id
+    // is A-member-gated. Returns `false` only via the test seam today (sentinel
+    // placeholder); load-bearing call site for that future identifier
+    // comparison. See `assertWriteScope` module-level doc.
     if (!assertWriteScope(userId, conversationId)) return;
 
     // Empty-drop contract (PR-A1): an empty-text turn produces no row.
@@ -1562,9 +1733,10 @@ export async function dispatchSoleurGo(
     // future caller can't silently produce an empty assistant row.
     if (!text) return;
 
-    const row = buildRow(mode, text, conversationId);
+    const row = buildRow(mode, text, conversationId, conversationWorkspaceId);
     // PR-C §2.11 (#3244): tenant-scoped assistant-row INSERT. Reuses
-    // the `tenant` minted at function entry (above the user-row INSERT).
+    // the `tenant` minted at function entry (above the user-row INSERT) and
+    // the `conversationWorkspaceId` read once there (mig 059 member-keyed RLS).
     const { error } = await tenant.from("messages").insert(row);
     if (error) {
       mirrorInsertError(error, mode, userId, conversationId, text);

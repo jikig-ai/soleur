@@ -40,6 +40,7 @@ function renderFileTree(overrides: Partial<KbContextValue> = {}) {
     toggleExpanded: vi.fn(),
     refreshTree: mockRefreshTree,
     lastSync: null,
+    needsReconnect: false,
     ...overrides,
   };
   return render(
@@ -79,7 +80,9 @@ function mockXhr(status: number, body: unknown) {
 
   vi.stubGlobal(
     "XMLHttpRequest",
-    vi.fn(() => xhrInstance),
+    vi.fn(function (this: Record<string, unknown>) {
+      return xhrInstance;
+    }),
   );
 
   return xhrInstance;

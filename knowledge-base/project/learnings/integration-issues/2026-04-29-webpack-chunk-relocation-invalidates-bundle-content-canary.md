@@ -124,7 +124,7 @@ Filed as **#3033** with three fix components:
 Until #3033 lands, the recovery-verification protocol for #3015-class
 follow-throughs uses **manual JWT extraction from all chunks linked
 from `/login`** as a substitute for the script — see runbook
-`knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md`
+`knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md`
 "Recovery Verification" block for the worked example.
 
 ## Key Insight (generalizable)
@@ -204,7 +204,7 @@ sessions don't re-run them.
 - **Tried to commit screenshot to gitignored `artifacts/` path.**
   `.gitignore` line 68 ignores `artifacts/`. **Recovery:** moved
   to `screenshots/` and added negation rule
-  `!knowledge-base/engineering/ops/runbooks/screenshots/**/*.png`.
+  `!knowledge-base/engineering/operations/runbooks/screenshots/**/*.png`.
   **Prevention:** before placing a committed artifact, run
   `git check-ignore -v <path>` to confirm visibility.
 - **Invalid YAML frontmatter.** Wrote
@@ -243,5 +243,5 @@ sessions don't re-run them.
 - `bug-fixes/2026-04-28-oauth-supabase-url-test-fixture-leaked-into-prod-build.md` — sibling regression that motivated Layer 3.
 - `implementation-patterns/2026-03-28-canary-rollback-docker-deploy.md` — canary swap mechanics.
 - `security-issues/canary-crash-leaks-env-file-ci-deploy-20260406.md` — separate canary failure mode.
-- Runbook `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md` "Recovery Verification" block — worked example of manual substitution while #3033 is open.
+- Runbook `knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md` "Recovery Verification" block — worked example of manual substitution while #3033 is open.
 - GitHub issue **#3033** — proposed mount + script-broadening fix.

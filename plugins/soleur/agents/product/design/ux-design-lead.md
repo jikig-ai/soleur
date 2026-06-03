@@ -45,6 +45,27 @@ Use the **AskUserQuestion tool** to clarify the design scope:
 1. Call `get_style_guide_tags` then `get_style_guide(tags)` for design inspiration. If brand tokens were extracted in Step 1, use those as primary constraints.
 2. Call `get_guidelines(topic)` for the relevant design type (`landing-page`, `design-system`, or `table`).
 3. Use `open_document` to create a new .pen file or open an existing one.
+
+   **Pre-open snapshot + post-open collapse gate (HARD GATE).** When `open_document`
+   targets an **existing** `.pen` (iteration, not new creation), a buggy adapter can
+   silently overwrite the on-disk source with empty document state while still
+   returning a success string (see #3274: a 133KB source was wiped to a 41-byte
+   `{"version": "...", "children": []}` with no error surfaced). Guard every
+   existing-file open:
+   - Record a pre-open snapshot of the existing file's size and sha256 checksum (`stat -c %s <path>` plus `sha256sum <path>`) **before** calling `open_document`. Note both values.
+   - Call `open_document`.
+   - **After** the call, immediately re-`stat -c %s <path>`. **Collapse gate:** if the
+     post-open size is `< 50%` of the pre-open size **OR** post-open size `≤ 64 bytes`
+     while the pre-open was larger, treat the open as a **destructive wipe / parse
+     failure** — do NOT proceed with iteration. Halt, surface the pre-open vs post-open
+     sizes and the pre-open checksum verbatim, and recover the source from git
+     (`git checkout -- <path>`) if it was committed (see Important Guidelines) before
+     any further Pencil op. This is the open-time analogue of the post-**save** size
+     gate at Step 3 item 2; cross-reference the two.
+   - **New-file exemption:** when `open_document` creates a brand-new document there is
+     no pre-existing file to snapshot, and the collapse gate does not apply (a new doc
+     legitimately starts at ~41 bytes). The gate fires only when opening a pre-existing
+     non-empty `.pen`.
 4. Iterative design loop:
    - Use `batch_design` to build frames, components, and content
    - Use `get_screenshot` to check visual output
@@ -54,7 +75,7 @@ Use the **AskUserQuestion tool** to clarify the design scope:
 ### Step 3: Deliver
 
 1. Save the .pen file to `knowledge-base/product/design/{domain}/{descriptive-name}.pen` (e.g., `design/brand/landing-page.pen`, `design/onboarding/signup-flow.pen`). **The `product/` segment is mandatory — the pre-#566 top-level design directory was removed in the domain restructure and writing there produces a placeholder that no automated audit catches.**
-2. **Post-save size verification (HARD GATE).** Before announcing completion, `stat -c %s <saved-file>` and assert the result is > 0 bytes. If the file is 0 bytes, the preceding Pencil MCP calls silently dropped (typically an auth or schema error the adapter returned as `isError: true`). **Read the actual adapter error text and surface it verbatim — do NOT fabricate a "headless stub" or "dropped ops" narrative.** The adapter has no stub code path; a 0-byte file always corresponds to a real `isError` response the caller can inspect. See `AGENTS.md:cq-pencil-mcp-silent-drop-diagnosis-checklist`.
+2. **Post-save size verification (HARD GATE).** Before announcing completion, `stat -c %s <saved-file>` and assert the result is > 0 bytes. If the file is 0 bytes, the preceding Pencil MCP calls silently dropped (typically an auth or schema error the adapter returned as `isError: true`). **Read the actual adapter error text and surface it verbatim — do NOT fabricate a "headless stub" or "dropped ops" narrative.** The adapter has no stub code path; a 0-byte file always corresponds to a real `isError` response the caller can inspect. See the "Silent-drop diagnosis" Sharp Edge (`ex-cq-pencil-mcp-silent-drop-diagnosis-checklist`) in `plugins/soleur/skills/pencil-setup/SKILL.md` and the learning `knowledge-base/project/learnings/bug-fixes/2026-04-19-ux-design-lead-headless-stub-fabrication.md`.
 3. **Export high-resolution screenshots.** Use `export_nodes` with `scale: 3` and `format: "png"` to export all top-level frames as **direct children** of the `screenshots/` subdirectory next to the .pen file (e.g., `knowledge-base/product/design/billing/screenshots/`). **Do NOT create a nested per-feature subfolder** — `.gitignore` rule `!knowledge-base/product/design/**/screenshots/*.png` only unignores PNGs that are direct children of `screenshots/`; nested paths like `screenshots/<feature>/05-foo.png` stay gitignored and silently fail to commit. Verify with `git check-ignore -v <png>` before announcing completion. Do NOT use `get_screenshot` for final deliverables — it produces low-resolution 512px images. `export_nodes` with `scale: 3` produces ~4K images suitable for review.
 4. **Rename screenshots to human-readable names.** `export_nodes` saves files as `{nodeId}.png`. After export, rename each file to a feature-prefixed kebab-case name continuing the existing `NN-` numbering already in the `screenshots/` folder (e.g., if `01-04` exist, the new feature starts at `05-`; rename `bBxvQ.png` → `05-upgrade-modal-at-capacity-solo.png`). Then remove the raw `{nodeId}.png` exports left behind by `export_nodes` so they don't appear as untracked siblings.
 5. **Open the screenshots folder** for founder review: `xdg-open <screenshots-directory>`. This step is not optional — the founder must visually review wireframes before proceeding.
@@ -172,3 +193,4 @@ After HTML/CSS changes to pages that have corresponding .pen design files in `kn
 - When brand-guide.md exists, the `## Visual Direction` section is the source of truth for colors, fonts, and style
 - Save all .pen files under `knowledge-base/product/design/{domain}/` organized by domain
 - When wireframing credential/token input forms, use obviously-fake placeholder values (e.g., `your-api-token-here`, `sk_test_example_key`). Realistic-looking API key patterns (e.g., `sk_live_...`) trigger GitHub push protection on design files.
+- An un-committed `.pen` is at risk: a destructive `open_document` can wipe it on disk (see #3274) with no recovery. Always save AND `git` commit the `.pen` under `knowledge-base/product/design/` — the canonical path `/soleur:ux-audit` scans; app-tree paths like `apps/web-platform/design/` are not audit-reachable. Do NOT claim app-tree `.pen` files are gitignored — they are not; the actual risk is the workflow never committing them.

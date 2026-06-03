@@ -24,9 +24,39 @@ const CRON_MONITORS_TF = resolve(
   __dirname,
   "../../../infra/sentry/cron-monitors.tf",
 );
+// The apply-sentry-infra workflow applies a HARDCODED `-target=` allowlist, not
+// the whole module. A sentry_cron_monitor resource added to the .tf without a
+// matching -target line is silently never created in prod (the apply reports
+// success over a plan that doesn't include it) — the exact gap that left
+// scheduled-content-generator's monitor absent post-#4714. Guard (f) below
+// forces .tf resources and workflow targets into lockstep.
+const APPLY_SENTRY_WF = resolve(
+  __dirname,
+  "../../../../../.github/workflows/apply-sentry-infra.yml",
+);
 
 const routeSrc = readFileSync(ROUTE_PATH, "utf8");
 const tfSrc = readFileSync(CRON_MONITORS_TF, "utf8");
+const applyWfSrc = readFileSync(APPLY_SENTRY_WF, "utf8");
+
+// Terraform resource *names* (the `"<name>"` in `resource "sentry_cron_monitor"
+// "<name>"`) — distinct from the monitor *slug* (`name = "..."`) that
+// extractTfMonitorNames reads. The workflow targets by resource name.
+function extractTfCronResourceNames(): Set<string> {
+  return new Set(
+    [...tfSrc.matchAll(/resource\s+"sentry_cron_monitor"\s+"([^"]+)"/g)].map(
+      (m) => m[1],
+    ),
+  );
+}
+
+function extractWorkflowCronTargets(): Set<string> {
+  return new Set(
+    [...applyWfSrc.matchAll(/-target=sentry_cron_monitor\.([A-Za-z0-9_]+)/g)].map(
+      (m) => m[1],
+    ),
+  );
+}
 
 function extractRouteArrayEntries(): string[] {
   return [...routeSrc.matchAll(/^\s+(\w+),$/gm)].map((m) => m[1]);
@@ -55,7 +85,11 @@ function extractTfMonitorNames(): Set<string> {
 const KNOWN_UNMONITORED_SLUGS = new Set([
   "scheduled-campaign-calendar",
   "scheduled-cloud-task-heartbeat",
-  "scheduled-content-generator",
+  // scheduled-content-generator REMOVED from exemption (#4684): it is a real
+  // output producer (creates a scheduled-content-generator issue every run) and
+  // now has a sentry_cron_monitor in cron-monitors.tf. Its prior exemption is
+  // exactly why its post-migration silence went unalerted at the per-function
+  // layer — the monitor it checked into did not exist.
   "scheduled-content-publisher",
   "scheduled-growth-audit",
   "scheduled-growth-execution",
@@ -67,6 +101,9 @@ const KNOWN_UNMONITORED_SLUGS = new Set([
   "scheduled-ruleset-bypass-audit",
   "scheduled-seo-aeo-audit",
   "scheduled-weekly-analytics",
+  // New (never a GHA workflow). Findings alert via reportSilentFallback Sentry
+  // issues, not a cron monitor; tf monitor deferred with the TR9 batch (#4476).
+  "cron-workspace-sync-health",
 ]);
 
 const GHA_ONLY_MONITORS = new Set([
@@ -91,7 +128,7 @@ describe("Inngest function registry — drift guards", () => {
 
   // UPDATE this number when adding/removing Inngest functions.
   it("(a) route.ts functions array has expected count", () => {
-    expect(routeEntries.length).toBe(42);
+    expect(routeEntries.length).toBe(51);
   });
 
   it("(b) every cron-*.ts file is registered in route.ts functions array", () => {
@@ -141,5 +178,28 @@ describe("Inngest function registry — drift guards", () => {
   // silently stop monitoring it — this parity guard forces the two in lockstep.
   it("(e) watchdog EXPECTED_CRON_FUNCTIONS matches the cron-*.ts file set", () => {
     expect(new Set(EXPECTED_CRON_FUNCTIONS)).toEqual(new Set(cronFiles));
+  });
+
+  // apply-sentry-infra.yml applies a hardcoded `-target=` allowlist. A monitor
+  // resource in the .tf without a matching target is never created in prod and
+  // the apply still reports success — invisible until a postmerge Sentry probe
+  // notices the monitor is absent. This guard forces the two lists into lockstep.
+  it("(f) every sentry_cron_monitor resource has a -target line in apply-sentry-infra.yml", () => {
+    const tfResources = extractTfCronResourceNames();
+    const wfTargets = extractWorkflowCronTargets();
+    // Vacuous-pass guard: a regex that silently matches nothing would make the
+    // subset assertion pass trivially.
+    expect(tfResources.size).toBeGreaterThan(0);
+    expect(wfTargets.size).toBeGreaterThan(0);
+
+    const untargeted = [...tfResources].filter((r) => !wfTargets.has(r)).sort();
+    expect(untargeted).toEqual([]);
+  });
+
+  it("(f2) apply-sentry-infra.yml has no -target for a non-existent monitor resource", () => {
+    const tfResources = extractTfCronResourceNames();
+    const wfTargets = extractWorkflowCronTargets();
+    const phantomTargets = [...wfTargets].filter((t) => !tfResources.has(t)).sort();
+    expect(phantomTargets).toEqual([]);
   });
 });

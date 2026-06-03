@@ -52,6 +52,7 @@ import { buildKbShareTools } from "./kb-share-tools";
 import { buildConversationsTools } from "./conversations-tools";
 import { buildAuthStatusTools } from "./auth-status-tools";
 import { buildAccountTools } from "./account-tools";
+import { buildWorkspaceSettingsTools } from "./workspace-settings-tools";
 import { getCurrentRepoUrl } from "./current-repo-url";
 import { resolveInstallationId } from "./resolve-installation-id";
 import { buildGithubTools } from "./github-tools";
@@ -97,7 +98,7 @@ function supabase() { return _supabase ??= createServiceClient(); }
  */
 function resolveSessionErrorCode(
   err: unknown,
-): "key_invalid" | "byok_key_missing" | undefined {
+): "key_invalid" | "byok_key_missing" | "subscription_limit" | undefined {
   if (err instanceof KeyInvalidError) return "key_invalid";
   if (err instanceof ByokLeaseError) return mapByokLeaseCauseToErrorCode(err.cause);
   // Phase 3.2 AC-D: MissingByokKeyError carries its own client-facing
@@ -437,16 +438,38 @@ async function saveMessage(
    */
   meta?: { status?: "complete" | "aborted"; usage?: UsageSnapshot },
 ) {
-  // PR-B §1.5.1 (#3244): tenant-scoped insert. RLS on `messages` requires
-  // `EXISTS (SELECT 1 FROM conversations WHERE id = conversation_id AND
-  // user_id = auth.uid())` — a cross-founder write fails the policy and
-  // surfaces as a Postgres error (not a silent no-op). The userId param
-  // is the founder identity for `getFreshTenantClient`; the actual write
-  // is keyed on `conversation_id` and the FK-join policy enforces ownership.
+  // PR-B §1.5.1 (#3244): tenant-scoped insert. Post-migration 059, RLS on
+  // `messages` requires `workspace_id` to be a workspace the caller is a member
+  // of (`messages_workspace_member_insert` WITH CHECK
+  // `is_workspace_member(workspace_id, auth.uid())`); we derive `workspace_id`
+  // from the parent conversation, which the caller's conversation-RLS already
+  // gated on membership. The userId param is the founder identity for
+  // `getFreshTenantClient`; the write is keyed on `conversation_id` and the
+  // member-keyed policy enforces ownership.
   const tenant = await getFreshTenantClient(userId);
+
+  // Read the parent conversation's workspace_id once via the same tenant
+  // client (no second mint). On read failure throw the same
+  // `Failed to save message:` contract — never proceed to a NULL workspace_id
+  // INSERT (which would 500 under the mig-059 WITH CHECK).
+  const { data: convWsRow, error: convWsErr } = await tenant
+    .from("conversations")
+    .select("workspace_id")
+    .eq("id", conversationId)
+    .single();
+  if (convWsErr || !convWsRow) {
+    throw new Error(
+      `Failed to save message: ${convWsErr?.message ?? "conversation workspace_id not found"}`,
+    );
+  }
+
   const { error } = await tenant.from("messages").insert({
     id: randomUUID(),
     conversation_id: conversationId,
+    workspace_id: convWsRow.workspace_id,
+    // mig 053: messages.template_id NOT NULL (no default). Interactive
+    // (non-template) messages use the 'default_legacy' sentinel. #4839.
+    template_id: "default_legacy",
     role,
     content,
     tool_calls: toolCalls || null,
@@ -701,9 +724,11 @@ export function startInactivityTimer(): void {
  * 30 s by `ws-handler.ts` for the active conversation; their staleness is
  * the authoritative liveness signal.
  *
- * Threshold (120 s) and cadence (60 s) match the existing pg_cron sweep
+ * The 120 s staleness threshold matches the existing pg_cron sweep
  * (migration 029 line 219-225) so the two sweep mechanisms agree on a
- * single liveness threshold.
+ * single liveness threshold. The poll cadence (300 s as of the 2026-06-02
+ * disk-IO remediation) is INTENTIONALLY decoupled from that threshold and
+ * from the pg_cron sweep cadence — see STUCK_ACTIVE_CHECK_INTERVAL_MS below.
  *
  * Per-row order: status flip → releaseSlot → abortSession.
  *   - Status flip first means the abort-branch in `startAgentSession`'s
@@ -729,7 +754,15 @@ export function startInactivityTimer(): void {
 // Changing this constant without updating those sites desyncs the sweep
 // mechanisms — one will reap rows the others consider live.
 const STUCK_ACTIVE_THRESHOLD_SECONDS = 120;
-const STUCK_ACTIVE_CHECK_INTERVAL_MS = 60 * 1_000;
+// Widened 60s → 300s (2026-06-02 disk-IO remediation): this drives the
+// setInterval that calls `find_stuck_active_conversations` every tick — the #2
+// prod Supabase Disk-IO write consumer (760k ms / 38k calls over a 27-day
+// window). 300s cuts that RPC volume 5×. The 120s STUCK_ACTIVE_THRESHOLD_SECONDS
+// staleness window above is INDEPENDENT of poll cadence (it stays 120s on all
+// four co-locked sources listed above); worst-case reap latency rises 180s →
+// 420s, still far under any user expectation for this rare recovery path. See
+// plan 2026-06-02-fix-supabase-disk-io-recurrence-and-sentry-monitor-plan.md Phase 1.
+const STUCK_ACTIVE_CHECK_INTERVAL_MS = 300 * 1_000;
 
 export function startStuckActiveReaper(): NodeJS.Timeout {
   const timer = setInterval(async () => {
@@ -767,7 +800,7 @@ export function startStuckActiveReaper(): NodeJS.Timeout {
     await Promise.allSettled(
       candidates.map(async (conv) => {
         // #3463: race-window guard. The candidate set was computed
-        // ≤60s ago; the candidate's session may have completed cleanly
+        // ≤300s ago (the reaper poll cadence); the candidate's session may have completed cleanly
         // (result branch wrote `waiting_for_user`) in the interval
         // between RPC return and this UPDATE. The `find_stuck_active`
         // RPC selects on `status='active' AND heartbeat-stale`, but
@@ -896,20 +929,25 @@ export async function startAgentSession(
     // RuntimeAuthError synchronously rather than mid-tool-call.
     // Phase 3 (feat-team-workspace-multi-user): split userId into
     // workspaceContextUserId (whose workspace the agent acts upon) vs
-    // keyOwnerUserId (whose api_keys row backs the BYOK key). For solo
-    // workspaces both equal `userId` (N2 invariant — workspaces.id =
-    // owner_user_id for backfilled solo); team workspaces will diverge
-    // when Phase 4 invite flow ships.
+    // keyOwnerUserId (whose api_keys row backs the BYOK key). The args stay
+    // `userId, userId`; the workspace the BYOK key is resolved against is
+    // derived INSIDE resolveKeyOwnerThenLease via resolveCurrentWorkspaceId
+    // (the member's ACTIVE workspace — the shared workspace an owner granted
+    // into, post Phase-4 invite flow), no longer the oldest/solo workspace
+    // (#4767). For a solo caller the active workspace IS their solo workspace,
+    // so solo behavior is preserved bit-for-bit.
     // Sentinel sweep site #1 (#4232 PR-A). callerUserId = userId (server-
     // derived per agent-runner JWT contract; provenance enumerated in PR
-    // body). N2 solo invariant kept: callerUserId === workspaceContextUserId.
+    // body). Invariant kept: callerUserId === workspaceContextUserId.
     await resolveKeyOwnerThenLease(
       userId,
       userId,
       async (lease) => {
-    // Get user's decrypted API key and service tokens
-    const [apiKey, serviceTokens] = await Promise.all([
-      lease.getApiKey(),
+    // Agent-SDK consumer — resolve the credential ({ value, scheme }) so the
+    // subprocess env carries exactly one auth var. Prefers the operator
+    // subscription oauth_token when enabled+permitted; otherwise api_key.
+    const [credential, serviceTokens] = await Promise.all([
+      lease.getAgentCredential(),
       getUserServiceTokens(userId),
     ]);
 
@@ -1472,6 +1510,15 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
     platformTools.push(...accountTools.tools);
     platformToolNames.push(...accountTools.toolNames);
 
+    // Workspace settings tools (Issue B part 2): agent-native parity for the
+    // Concierge autonomous-mode toggle. get = auto-approve, set = gated
+    // (flipping an approval-bypass requires a review-gate even for the agent).
+    // Registered here on the leader surface only — the cc-router exposes no
+    // platform tools (platformToolNames: []); see workspace-settings-tools.ts.
+    const workspaceSettingsTools = buildWorkspaceSettingsTools({ userId });
+    platformTools.push(...workspaceSettingsTools.tools);
+    platformToolNames.push(...workspaceSettingsTools.toolNames);
+
     // Build MCP server if any platform tools are registered
     if (platformTools.length > 0) {
       const toolServer = createSdkMcpServer({
@@ -1712,7 +1759,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       options: buildAgentQueryOptions({
         workspacePath,
         pluginPath,
-        apiKey,
+        credential,
         serviceTokens,
         systemPrompt: effectiveSystemPrompt,
         resumeSessionId: safeResumeSessionId,
@@ -2231,9 +2278,9 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
         }
 
         // Outer catch: result-branch wrap might not have run; release
-        // slot so the user isn't stuck for up to 60s waiting for the
-        // reaper. releaseSlot already swallows errors internally
-        // (concurrency.ts) — no extra .catch needed.
+        // slot so the user isn't stuck for up to ~300s (the reaper poll
+        // cadence) waiting for the reaper. releaseSlot already swallows
+        // errors internally (concurrency.ts) — no extra .catch needed.
         await releaseSlot(userId, conversationId);
       }
     } else if (
@@ -2295,7 +2342,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           "Failed to mark conversation as failed",
         );
       });
-      // Outer catch: result-branch wrap might not have run; release slot so the user isn't stuck for up to 60s waiting for the reaper.
+      // Outer catch: result-branch wrap might not have run; release slot so the user isn't stuck for up to ~300s (the reaper poll cadence) waiting for the reaper.
       // releaseSlot already swallows errors internally (concurrency.ts) — no extra .catch needed.
       await releaseSlot(userId, conversationId);
     }
@@ -2410,21 +2457,32 @@ export async function sendUserMessage(
   // conversation owner should drive agent sessions. Workspace members
   // can READ shared conversations but not inject messages into them.
   const sendTenant = await getFreshTenantClient(userId);
+  // mig 059: also read `workspace_id` here (zero extra RTT — extend the
+  // existing select) so the user-row INSERT below can satisfy the member-keyed
+  // RLS WITH CHECK. Derived from the parent conversation, which this same
+  // (id, user_id)-scoped read already gated on ownership.
   const { data: conv, error: convErr } = await sendTenant
     .from("conversations")
-    .select("domain_leader, session_id")
+    .select("domain_leader, session_id, workspace_id")
     .eq("id", conversationId)
     .eq("user_id", userId)
     .single();
 
   if (convErr || !conv) throw new Error(ERR_CONVERSATION_NOT_FOUND);
 
-  // PR-B §1.5.1: tenant-scoped insert. RLS on `messages` enforces
-  // ownership via the FK-join policy on `conversations.user_id`.
+  // PR-B §1.5.1: tenant-scoped insert. Post-migration 059, RLS on `messages`
+  // requires `workspace_id` to be a workspace the caller is a member of
+  // (`messages_workspace_member_insert` WITH CHECK
+  // `is_workspace_member(workspace_id, auth.uid())`); we derive it from the
+  // parent conversation read above.
   const messageId = randomUUID();
   const { error: msgErr } = await sendTenant.from("messages").insert({
     id: messageId,
     conversation_id: conversationId,
+    workspace_id: conv.workspace_id,
+    // mig 053: messages.template_id NOT NULL (no default). Interactive
+    // messages use the 'default_legacy' sentinel. #4839.
+    template_id: "default_legacy",
     role: "user",
     content,
     tool_calls: null,
@@ -2518,12 +2576,16 @@ export async function sendUserMessage(
   if (!conv.domain_leader) {
     try {
       // Sentinel sweep site #2 (#4232 PR-A). Routing-side BYOK fetch;
-      // same N2 solo invariant + server-derived `userId` provenance.
+      // workspace resolved against the caller's ACTIVE workspace inside
+      // resolveKeyOwnerThenLease (#4767) + server-derived `userId` provenance.
       await resolveKeyOwnerThenLease(
         userId,
         userId,
         async (lease) => {
-        const apiKey = await lease.getApiKey();
+        // Raw-REST consumer — `routeMessage` → `classifyMessage` hits the
+        // Anthropic REST API with `x-api-key`, which an oauth_token cannot
+        // authenticate. MUST use the api_key row (provider='anthropic').
+        const apiKey = await lease.getRestApiKey();
 
         // tenant-scoped read of team_names. RLS enforces auth.uid() = user_id.
         // sendTenant from earlier in this function is reusable here

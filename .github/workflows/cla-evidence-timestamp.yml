@@ -310,7 +310,7 @@ jobs:
           set -euo pipefail
           ym="${YYYY_MM:-$(date -u +%Y-%m)}"
           title="[CLA Evidence] FreeTSA outage ${ym}"
-          runbook="knowledge-base/engineering/ops/runbooks/cla-signature-evidence-retrieval.md"
+          runbook="knowledge-base/engineering/operations/runbooks/cla-signature-evidence-retrieval.md"
           # Body file keeps YAML block-scalar indentation sane (multi-line
           # strings inside run: blocks are parsed as YAML, not bash).
           mkdir -p out

@@ -85,7 +85,7 @@ Derived from `2026-05-04-fix-auth-callback-no-code-or-exchange-error-plan.md`.
      `redirect_url` contains `/login?error=oauth_cancelled`. Failure
      mode: `callback_error_passthrough`.
 4.2. Append `### callback_error_passthrough` section to
-     `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md`
+     `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md`
      under "Failure modes" with L3-first triage steps.
 
 ## 5. Type/build/test gates

@@ -18,7 +18,10 @@ import {
 } from "@/server/observability";
 import { hashUserIdValue } from "@/server/userid-pseudonymize";
 import { userHasEffectiveByokKey } from "@/server/byok-resolver";
-import { shouldRouteToSetupKey } from "@/lib/onboarding/setup-key-gate";
+import {
+  shouldRouteToSetupKey,
+  isInviteReturnTarget,
+} from "@/lib/onboarding/setup-key-gate";
 
 // Matches both the canonical verifier cookie and the hypothetical chunked
 // variant (`@supabase/ssr` chunks `sb-<ref>-auth-token` once it exceeds ~4KB;
@@ -257,7 +260,16 @@ export async function GET(request: NextRequest) {
           (repoUser?.setup_key_skipped_at as string | null | undefined) ?? null;
 
         if (shouldRouteToSetupKey({ hasEffectiveKey, setupKeySkippedAt })) {
-          redirectPath = "/setup-key";
+          // Invite outranks onboarding (#4715): a keyless invitee can't
+          // complete the /setup-key key-purchase funnel, so a validated
+          // `/invite/<token>` next-param wins here (T&C already recorded — the
+          // tcAcceptedVersion gate above routes unaccepted users to
+          // /accept-terms first). The previous code dropped nextParam entirely,
+          // the live deadlock this fix closes. Non-invite keyless signups still
+          // land on /setup-key.
+          redirectPath = isInviteReturnTarget(nextParam)
+            ? nextParam
+            : "/setup-key";
         } else if (!hasEffectiveKey) {
           // Keyless but skipped: terminal hop — honor the invite next-param
           // (#4641) else the dashboard (where the NoApiKeyBanner explains the

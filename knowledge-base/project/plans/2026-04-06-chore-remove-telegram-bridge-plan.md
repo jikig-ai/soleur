@@ -99,7 +99,7 @@ The Telegram bridge (`apps/telegram-bridge/`) was the original mobile interface 
 | `knowledge-base/project/README.md` | Remove `telegram-bridge/` from directory tree |
 | `knowledge-base/legal/compliance-posture.md` | Update Hetzner DPA row to remove "and CX22 (telegram-bridge)" |
 | `knowledge-base/operations/expenses.md` | Remove CX22 line (stale -- server already gone), update last_updated date |
-| `knowledge-base/engineering/ops/runbooks/disk-monitoring.md` | Remove "(telegram-bridge CX22 deferred)" reference |
+| `knowledge-base/engineering/operations/runbooks/disk-monitoring.md` | Remove "(telegram-bridge CX22 deferred)" reference |
 | `knowledge-base/product/roadmap.md` | Line 113 already says "Deferred" -- update to note removal/archive |
 | `plugins/soleur/skills/ship/SKILL.md` | Remove telegram-bridge app labeling logic (lines ~476-483) |
 | `plugins/soleur/skills/deploy/references/hetzner-setup.md` | Remove telegram-bridge infra reference |

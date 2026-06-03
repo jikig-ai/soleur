@@ -16,6 +16,10 @@ export function getActiveWorkspaceCount(): number {
   try {
     return readdirSync(WORKSPACES_ROOT)
       .filter((name) => !name.startsWith(".orphaned-"))
+      // `.cron` is the isolated ephemeral cron-clone subdir (#4882) — a sibling
+      // of the UUID workspace dirs, not a user workspace. Exclude it so it never
+      // inflates the active-workspace count by one.
+      .filter((name) => name !== ".cron")
       .filter((name) => {
         try {
           return statSync(join(WORKSPACES_ROOT, name)).isDirectory();

@@ -63,7 +63,7 @@ PR-G ships all three surfaces plus four load-bearing legal-doc amendments and th
 - **FR11**: Trust-tier copy lives at `apps/web-platform/lib/messages/trust-tier-copy.ts` (mirrors `lib/messages/tiers.ts` single-source pattern).
 - **FR12**: Legal doc amendments. Files to edit: `docs/legal/terms-and-conditions.md` (new §3a Command Authority + tighten §9), `docs/legal/acceptable-use-policy.md` (new "Automated agent actions" section), `docs/legal/privacy-policy.md` (Art. 22 disclosure), `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` §2.3(o) extension.
 - **FR13**: T&C version bump per `knowledge-base/legal/tc-version-bump-policy.md`. Update `apps/web-platform/lib/legal/tc-version.ts` + `tc_acceptances` migration constant. CLO sign-off captured in PR body.
-- **FR14**: Doppler `prd` `SOLEUR_FR5_ENABLED=true` set as final PR-G step. Documented in `knowledge-base/engineering/ops/runbooks/inngest-server.md` flip section.
+- **FR14**: Doppler `prd` `SOLEUR_FR5_ENABLED=true` set as final PR-G step. Documented in `knowledge-base/engineering/operations/runbooks/inngest-server.md` flip section.
 
 ## Technical Requirements
 

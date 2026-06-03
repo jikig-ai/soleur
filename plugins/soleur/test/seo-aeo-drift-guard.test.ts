@@ -466,3 +466,1070 @@ describe("GSC coverage regression guard (www→apex host flip)", () => {
     expect(stub).toContain("/legal/terms-and-conditions/");
   });
 });
+
+// -- Test 11: #3174 Person.knowsAbout holds topical areas, not role/bio ----
+
+describe("#3174 Person JSON-LD knowsAbout is a topical-area array on every emitter", () => {
+  // Canonical topical array lives in site.json; the drift-guard pins the
+  // rendered Person nodes to it so a regression back to role/bio strings
+  // (the pre-#3174 state, where knowsAbout === author.credentials) fails.
+  const author = () =>
+    JSON.parse(readFileSync(SITE_JSON, "utf8")) as {
+      author: { knowsAbout: string[]; credentials: string[]; bio: string };
+    };
+
+  // A topical area is a short noun phrase. Role/bio sentences ("Founder,
+  // Soleur", "15+ years in distributed systems", the full bio) are NOT
+  // topics. This guard fails if any entry looks like a credential/bio line.
+  function assertTopical(entries: string[], where: string) {
+    const { credentials, bio } = author().author;
+    expect(entries.length, `${where}: knowsAbout non-empty`).toBeGreaterThan(0);
+    for (const e of entries) {
+      expect(
+        credentials.includes(e),
+        `${where}: "${e}" is a credential string, not a topic`,
+      ).toBe(false);
+      expect(e === bio, `${where}: knowsAbout entry equals bio sentence`).toBe(
+        false,
+      );
+      // Role/bio sentence smells: tenure phrasing, comma-separated title.
+      expect(
+        /\d+\+?\s*years|^Founder,|\bFounder of\b/.test(e),
+        `${where}: "${e}" reads like a role/bio sentence, not a topic`,
+      ).toBe(false);
+    }
+  }
+
+  test("about ProfilePage Person.knowsAbout pins site.json topical array", () => {
+    const html = readSite("about/index.html");
+    const blocks = jsonLdBlocks(html);
+    const profile = blocks.find(
+      (b): b is {
+        "@type": string;
+        mainEntity: { "@type": string; knowsAbout?: string[]; description?: string };
+      } =>
+        typeof b === "object" &&
+        b !== null &&
+        (b as { "@type"?: string })["@type"] === "ProfilePage",
+    );
+    expect(profile, "about: ProfilePage JSON-LD block").toBeDefined();
+    const person = profile!.mainEntity;
+    expect(person["@type"]).toBe("Person");
+    expect(typeof person.description, "about: Person.description").toBe("string");
+    expect(person.knowsAbout).toEqual(author().author.knowsAbout);
+    assertTopical(person.knowsAbout!, "about ProfilePage Person");
+  });
+
+  test("every blog post BlogPosting.author.knowsAbout pins the topical array", () => {
+    const blogDir = resolve(SITE, "blog");
+    const entries = existsSync(blogDir)
+      ? readdirSync(blogDir).filter((e) => {
+          const idx = join(blogDir, e, "index.html");
+          if (!existsSync(idx) || !statSync(join(blogDir, e)).isDirectory())
+            return false;
+          const body = readFileSync(idx, "utf8");
+          return !(body.length < 2000 && /<meta\s+http-equiv="refresh"/i.test(body));
+        })
+      : [];
+    expect(entries.length).toBeGreaterThan(0);
+    const expected = author().author.knowsAbout;
+    for (const slug of entries) {
+      const html = readSite(`blog/${slug}/index.html`);
+      const post = jsonLdBlocks(html).find(
+        (b): b is { "@type": string; author: { knowsAbout?: string[] } } =>
+          typeof b === "object" &&
+          b !== null &&
+          (b as { "@type"?: string })["@type"] === "BlogPosting",
+      );
+      expect(post, `${slug}: BlogPosting JSON-LD block`).toBeDefined();
+      expect(post!.author.knowsAbout, `${slug}: knowsAbout`).toEqual(expected);
+      assertTopical(post!.author.knowsAbout!, `${slug} BlogPosting Person`);
+    }
+  });
+});
+
+// -- Test 12: #3173 BlogPosting.image threads per-post ogImage --------------
+
+describe("#3173 BlogPosting.image uses the post-specific ogImage, not the site default", () => {
+  // Parse ogImage frontmatter from every source post, then assert the built
+  // BlogPosting.image renders that exact filename. Posts WITHOUT ogImage
+  // legitimately fall back to og-image.png; the count parity assertion below
+  // pins the imageless population so a regression (dropping the per-post
+  // thread) collapses every post to the default and is caught.
+  const SRC_BLOG = resolve(REPO_ROOT, "plugins/soleur/docs/blog");
+  const siteUrl = () =>
+    (JSON.parse(readFileSync(SITE_JSON, "utf8")) as { url: string }).url;
+
+  function sourcePosts(): { slug: string; ogImage: string | null }[] {
+    return readdirSync(SRC_BLOG)
+      .filter((f) => f.endsWith(".md"))
+      .map((f) => {
+        const src = readFileSync(join(SRC_BLOG, f), "utf8");
+        const m = src.match(/^ogImage:\s*["']?([^"'\n]+)["']?\s*$/m);
+        // Eleventy strips the leading YYYY-MM-DD- date prefix from fileSlug.
+        const slug = f.replace(/\.md$/, "").replace(/^\d{4}-\d{2}-\d{2}-/, "");
+        return { slug, ogImage: m ? m[1].trim() : null };
+      });
+  }
+
+  function blogPostingImage(slug: string): string {
+    const html = readSite(`blog/${slug}/index.html`);
+    const post = jsonLdBlocks(html).find(
+      (b): b is { "@type": string; image: string } =>
+        typeof b === "object" &&
+        b !== null &&
+        (b as { "@type"?: string })["@type"] === "BlogPosting",
+    );
+    expect(post, `${slug}: BlogPosting JSON-LD block`).toBeDefined();
+    return post!.image;
+  }
+
+  test("posts with ogImage frontmatter render that exact filename in BlogPosting.image", () => {
+    const withImage = sourcePosts().filter((p) => p.ogImage);
+    expect(withImage.length).toBeGreaterThan(0);
+    let checked = 0;
+    for (const { slug, ogImage } of withImage) {
+      const built = resolve(SITE, "blog", slug, "index.html");
+      if (!existsSync(built)) continue; // permalink override — skip silently
+      checked++;
+      const image = blogPostingImage(slug);
+      const expected = `${siteUrl()}/images/${ogImage}`;
+      expect(image, `${slug}: BlogPosting.image threads ogImage`).toBe(expected);
+      expect(image, `${slug}: must not be the site default`).not.toBe(
+        `${siteUrl()}/images/og-image.png`,
+      );
+    }
+    // Guard against a vacuous pass: a slug-derivation drift that skipped every
+    // post would otherwise leave this test green having asserted nothing.
+    expect(
+      checked,
+      "at least one ogImage post asserted against built HTML",
+    ).toBeGreaterThan(0);
+  });
+
+  test("posts without ogImage fall back to the site default og-image.png", () => {
+    const without = sourcePosts().filter((p) => !p.ogImage);
+    for (const { slug } of without) {
+      const built = resolve(SITE, "blog", slug, "index.html");
+      if (!existsSync(built)) continue;
+      expect(blogPostingImage(slug), `${slug}: default image`).toBe(
+        `${siteUrl()}/images/og-image.png`,
+      );
+    }
+    // As of #4753 every blog post carries a bespoke ogImage, so `without` is
+    // expected empty. The loop above still asserts the default-fallback path
+    // for any imageless post reintroduced later, so this is not vacuous: it
+    // pins the intended end-state (zero imageless posts) and fails if a post
+    // loses its ogImage. (The per-post threading regression #3173 guards
+    // against is caught by the "posts with ogImage frontmatter render that
+    // exact filename" test above, not here.)
+    expect(
+      without.length,
+      "all blog posts now carry bespoke ogImage (#4753); if an imageless " +
+        "post is added intentionally, relax this back to a >= 0 floor",
+    ).toBe(0);
+  });
+});
+
+// -- Test 13: #3171 FAQPage JSON-LD parity beyond /pricing/ -----------------
+
+describe("#3171 FAQPage JSON-LD matches the visible FAQ on every Q&A page", () => {
+  // #2707 already covers /pricing/. This generalizes the parity invariant to
+  // every other page that renders a visible FAQ block, so a future page that
+  // ships <details class="faq-item"> without a matching FAQPage JSON-LD (or
+  // with a drifted question set) fails the guard.
+  for (const page of ["about", "company-as-a-service", ""]) {
+    const label = page === "" ? "homepage" : `/${page}/`;
+    const rel = page === "" ? "index.html" : `${page}/index.html`;
+    test(`${label}: FAQPage mainEntity count + names match visible <summary>`, () => {
+      const html = readSite(rel);
+      const detailsCount = [
+        ...html.matchAll(/<details class="faq-item">/g),
+      ].length;
+      if (detailsCount === 0) return; // page has no visible FAQ — nothing to pin
+      const faq = jsonLdBlocks(html).find(
+        (b): b is { "@type": string; mainEntity: { name: string }[] } =>
+          typeof b === "object" &&
+          b !== null &&
+          (b as { "@type"?: string })["@type"] === "FAQPage",
+      );
+      expect(faq, `${label}: FAQPage JSON-LD present for visible FAQ`).toBeDefined();
+      const summaries = [
+        ...html.matchAll(/<summary class="faq-question">([\s\S]*?)<\/summary>/g),
+      ].map((m) => m[1].trim());
+      const names = faq!.mainEntity.map((q) => q.name.trim());
+      expect(detailsCount, `${label}: details vs JSON-LD count`).toBe(names.length);
+      expect(summaries.length, `${label}: summaries vs JSON-LD count`).toBe(
+        names.length,
+      );
+      // Decode ONLY the autoescape entities Nunjucks emits for apostrophes and
+      // double-quotes in a text node. Deliberately NOT &amp; (the &amp;->&
+      // round-trip is the js/double-escaping CodeQL pattern) and no tag-strip
+      // (summaries are plain text; /<[^>]+>/g is the js/incomplete-multi-
+      // character-sanitization pattern). A future question that introduces
+      // nested markup will fail loudly here — correct drift-guard behavior.
+      const decodeText = (s: string) =>
+        s.replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+      for (const name of names) {
+        expect(
+          summaries.map(decodeText),
+          `${label}: JSON-LD question "${name}" has a visible <summary>`,
+        ).toContain(decodeText(name));
+      }
+    });
+  }
+});
+
+// -- Test 14: #3169 / #3170 / #3994 evergreen freshness block ---------------
+// Every evergreen page must render, below the hero: (1) a stat-led summary
+// paragraph (AEO citation target, #3169), and (2) a visible "Last updated"
+// line + author byline (#3170), driven by per-page last_updated frontmatter
+// rendered through _includes/page-freshness.njk. The combination targets the
+// AEO Presence ≥55% exit gate (#3994). Shared partial → assert on every page.
+
+describe("#3169/#3170/#3994 evergreen pages render stat-led summary + last-updated byline below the hero", () => {
+  // Canonical evergreen set (homepage + the five cited pages) plus
+  // /getting-started/ (also evergreen; carries the #4410 block too).
+  const EVERGREEN: { label: string; rel: string }[] = [
+    { label: "homepage", rel: "index.html" },
+    { label: "/about/", rel: "about/index.html" },
+    { label: "/vision/", rel: "vision/index.html" },
+    { label: "/pricing/", rel: "pricing/index.html" },
+    { label: "/agents/", rel: "agents/index.html" },
+    { label: "/skills/", rel: "skills/index.html" },
+    { label: "/getting-started/", rel: "getting-started/index.html" },
+  ];
+
+  // Byline name is the single source of truth in site.json — pin to it so a
+  // rename in the data file must update the rendered byline in lockstep.
+  const authorName = () =>
+    (JSON.parse(readFileSync(SITE_JSON, "utf8")) as { author: { name: string } })
+      .author.name;
+
+  test("every evergreen page has exactly one stat-led summary + one last-updated byline, summary below the H1", () => {
+    let checked = 0;
+    for (const { label, rel } of EVERGREEN) {
+      const abs = resolve(SITE, rel);
+      if (!existsSync(abs)) continue; // build/permalink drift — skip, counter guards vacuity
+      checked++;
+      const html = readFileSync(abs, "utf8");
+
+      // (1) Stat-led summary — exactly one, non-trivial length. The summary is
+      // plain text inside the <p>; capture the inner text and .trim() only — no
+      // tag-strip regex (js/incomplete-multi-character-sanitization) and no
+      // &amp;->& decode (js/double-escaping). The summary contains no nested
+      // markup by construction (page-freshness.njk emits a bare text node).
+      const summaryMatches = [
+        ...html.matchAll(/<p class="page-summary">([\s\S]*?)<\/p>/g),
+      ];
+      expect(summaryMatches.length, `${label}: exactly one .page-summary`).toBe(1);
+      const summaryText = summaryMatches[0][1].trim();
+      expect(
+        summaryText.length,
+        `${label}: stat-led summary is a real sentence`,
+      ).toBeGreaterThan(80);
+      // Proof points the AEO audit wants extractable from the summary.
+      expect(summaryText, `${label}: summary names Company-as-a-Service`).toContain(
+        "Company-as-a-Service",
+      );
+      expect(
+        /Model Context Protocol/.test(summaryText),
+        `${label}: summary cites MCP`,
+      ).toBe(true);
+
+      // (2) Last-updated + byline block — exactly one, with a machine-readable
+      // <time datetime="YYYY-MM-DD"> and the author byline.
+      const metaMatches = [
+        ...html.matchAll(/<p class="page-meta">([\s\S]*?)<\/p>/g),
+      ];
+      expect(metaMatches.length, `${label}: exactly one .page-meta`).toBe(1);
+      const metaText = metaMatches[0][1];
+      expect(metaText, `${label}: visible "Last updated" label`).toContain(
+        "Last updated",
+      );
+      expect(
+        /<time datetime="\d{4}-\d{2}-\d{2}">/.test(metaText),
+        `${label}: machine-readable <time datetime>`,
+      ).toBe(true);
+      expect(metaText, `${label}: author byline`).toContain(authorName());
+
+      // (3) Ordering — the summary must sit BELOW the page H1 (below-the-hero).
+      const h1Pos = html.search(/<h1[ >]/);
+      const summaryPos = html.indexOf('class="page-summary"');
+      expect(h1Pos, `${label}: page has an H1`).toBeGreaterThanOrEqual(0);
+      expect(
+        summaryPos > h1Pos,
+        `${label}: stat-led summary renders below the hero H1`,
+      ).toBe(true);
+    }
+    expect(
+      checked,
+      "at least one evergreen page asserted against built HTML",
+    ).toBe(EVERGREEN.length);
+  });
+
+  test("every evergreen page's WebPage JSON-LD dateModified reflects the freshness date", () => {
+    let checked = 0;
+    for (const { label, rel } of EVERGREEN) {
+      const abs = resolve(SITE, rel);
+      if (!existsSync(abs)) continue;
+      checked++;
+      const html = readFileSync(abs, "utf8");
+      // base.njk emits a single JSON-LD script holding a @graph array; the
+      // WebPage node lives inside that graph, not as a top-level block.
+      const nodes = jsonLdBlocks(html).flatMap((b) => {
+        if (typeof b !== "object" || b === null) return [];
+        const graph = (b as { "@graph"?: unknown[] })["@graph"];
+        return Array.isArray(graph) ? graph : [b];
+      });
+      const webPage = nodes.find(
+        (b): b is { "@type": string; dateModified?: string } =>
+          typeof b === "object" &&
+          b !== null &&
+          (b as { "@type"?: string })["@type"] === "WebPage",
+      );
+      expect(webPage, `${label}: WebPage JSON-LD block`).toBeDefined();
+      expect(
+        typeof webPage!.dateModified,
+        `${label}: WebPage.dateModified present (freshness signal)`,
+      ).toBe("string");
+      // RFC-3339-ish — the dateToRfc3339 filter emits an ISO timestamp.
+      expect(
+        /^\d{4}-\d{2}-\d{2}T/.test(webPage!.dateModified!),
+        `${label}: dateModified is an ISO timestamp`,
+      ).toBe(true);
+    }
+    expect(checked, "dateModified asserted on every evergreen page").toBe(
+      EVERGREEN.length,
+    );
+  });
+});
+
+// -- Test 15: #4410 /getting-started/ definition + external citations -------
+// The single weakest page for AI-engine extractability gets a plain-language
+// Soleur definition at the top and ≥2 external citations (Apache-2.0, Claude
+// Code docs, MCP spec). Assert on the built page.
+
+describe("#4410 /getting-started/ has a plain-language definition + external citations", () => {
+  test("renders one .page-definition and ≥2 distinct external citation hrefs", () => {
+    const html = readSite("getting-started/index.html");
+
+    const defMatches = [
+      ...html.matchAll(/<p class="page-definition">([\s\S]*?)<\/p>/g),
+    ];
+    expect(defMatches.length, "exactly one .page-definition").toBe(1);
+    expect(
+      defMatches[0][1].trim().length,
+      "definition is a real plain-language sentence",
+    ).toBeGreaterThan(60);
+
+    // Count distinct external hrefs inside the citations block. Match on the
+    // href attribute only (no text extraction → no sanitization CodeQL flags).
+    const citeBlock = html.match(
+      /<div class="page-citations">([\s\S]*?)<\/div>/,
+    );
+    expect(citeBlock, ".page-citations block present").not.toBeNull();
+    const hrefs = new Set(
+      [...citeBlock![1].matchAll(/href="(https?:\/\/[^"]+)"/g)].map(
+        (m) => m[1],
+      ),
+    );
+    expect(
+      hrefs.size,
+      "≥2 distinct external citations in /getting-started/",
+    ).toBeGreaterThanOrEqual(2);
+
+    // Pin the three audit-mandated sources (host-anchored, not bare substring).
+    const hostMatched = (re: RegExp) => [...hrefs].some((h) => re.test(h));
+    expect(
+      hostMatched(/^https:\/\/www\.apache\.org\//),
+      "cites Apache-2.0 license",
+    ).toBe(true);
+    expect(
+      hostMatched(/^https:\/\/docs\.claude\.com\//),
+      "cites Claude Code docs",
+    ).toBe(true);
+    expect(
+      hostMatched(/^https:\/\/modelcontextprotocol\.io(\/|$)/),
+      "cites the MCP spec",
+    ).toBe(true);
+  });
+});
+
+// -- Test 16: #3165/#3166/#3167/#3168/#3996 marketing copy invariants -------
+// One-shot content batch. Pins the five copy/markup fixes against built HTML so
+// a future edit that regresses any of them fails loudly:
+//   #3168 homepage memory-first deck-line under the H1
+//   #3167 /about/ full entity H1 (not bare "About")
+//   #3166 /pricing/ inline "concurrent conversation" definition near the table
+//   #3165 no hard prose agent/skill count on homepage/pricing/about (soft floor)
+//   #3996 Cursor/Copilot comparison promoted OUT of <details> into a section
+// Presence checks use html.includes("literal") (not unanchored .test()) per the
+// js/regex/missing-regexp-anchor guidance; no tag-strip / &amp; decode.
+
+describe("#3165/#3166/#3167/#3168/#3996 marketing copy invariants", () => {
+  // The three prose-bearing marketing pages targeted by #3165.
+  const PROSE_PAGES: { label: string; rel: string }[] = [
+    { label: "homepage", rel: "index.html" },
+    { label: "/pricing/", rel: "pricing/index.html" },
+    { label: "/about/", rel: "about/index.html" },
+  ];
+
+  test("#3168 homepage renders a memory-first deck-line under the H1", () => {
+    const html = readSite("index.html");
+    // The deck-line sits in the hero-tagline slot directly under the H1.
+    const tagline = html.match(
+      /<p class="hero-tagline">([\s\S]*?)<\/p>/,
+    );
+    expect(tagline, "homepage has a hero-tagline deck-line").not.toBeNull();
+    const text = tagline![1];
+    // Memory-first hook copy (audit 2026-05-04 §Homepage rewrite #2).
+    expect(text, "deck-line surfaces the memory-first hook").toContain(
+      "already knows your business",
+    );
+    // Ordering: the deck-line renders AFTER the H1 (below it).
+    const h1Pos = html.search(/<h1[ >]/);
+    const taglinePos = html.indexOf('class="hero-tagline"');
+    expect(h1Pos, "homepage has an H1").toBeGreaterThanOrEqual(0);
+    expect(taglinePos > h1Pos, "deck-line renders below the H1").toBe(true);
+  });
+
+  test("#3167 /about/ H1 is the full entity H1, not bare \"About\"", () => {
+    const html = readSite("about/index.html");
+    const m = html.match(/<h1>([\s\S]*?)<\/h1>/);
+    expect(m, "/about/ has an H1").not.toBeNull();
+    const h1 = m![1].trim();
+    expect(h1, "/about/ H1 names the founder entity").toContain(
+      "Jean Deruelle",
+    );
+    expect(h1, "/about/ H1 names the org entity").toContain("Soleur");
+    expect(h1 === "About", "/about/ H1 is not the bare word").toBe(false);
+  });
+
+  test("#3166 /pricing/ defines a concurrent conversation inline near the table", () => {
+    const html = readSite("pricing/index.html");
+    expect(
+      html.includes("A concurrent conversation is one active session"),
+      "/pricing/ has the inline concurrent-conversation definition",
+    ).toBe(true);
+    // The definition renders ABOVE the pricing tier grid (near the table).
+    const defPos = html.indexOf("A concurrent conversation is one active session");
+    const gridPos = html.indexOf('class="pricing-grid"');
+    expect(defPos, "definition present").toBeGreaterThanOrEqual(0);
+    expect(gridPos, "pricing grid present").toBeGreaterThanOrEqual(0);
+    expect(defPos < gridPos, "definition sits above the pricing grid").toBe(
+      true,
+    );
+  });
+
+  test("#3165 no hard prose agent/skill count on homepage/pricing/about", () => {
+    let checked = 0;
+    for (const { label, rel } of PROSE_PAGES) {
+      const html = readSite(rel);
+      checked++;
+      // The literal the audit/issue called out must never reappear in prose.
+      expect(html.includes("66 AI agents"), `${label}: no "66 AI agents"`).toBe(
+        false,
+      );
+      // Stronger drift guard: NO interpolated exact count appears as a prose
+      // "N AI agents" / "N agents" / "N specialists" phrase. The stat strip,
+      // pricing hero-stat, and tier listings render bare numbers without these
+      // prose suffixes, so this matches prose only. A regression that puts
+      // {{ stats.agents }} back into a prose sentence reintroduces the suffix
+      // and fails here. (Anchored alternation — not a validation .test().)
+      const proseCount = html.match(
+        /\b\d+\s+(?:AI agents|agents|specialists|AI skills|workflow skills)\b/,
+      );
+      expect(
+        proseCount,
+        `${label}: prose must use the 60+ soft floor, found "${proseCount?.[0]}"`,
+      ).toBeNull();
+      // Positive guard: the soft floor is actually present in prose.
+      expect(
+        html.includes("60+ AI agents") || html.includes("60+ agents"),
+        `${label}: 60+ soft floor present in prose`,
+      ).toBe(true);
+    }
+    expect(checked, "all three prose pages asserted").toBe(PROSE_PAGES.length);
+  });
+
+  test("#3996 Cursor/Copilot comparison is promoted OUT of <details> on the homepage", () => {
+    const html = readSite("index.html");
+    // The promoted comparison lives in a dedicated non-collapsed section.
+    expect(
+      html.includes('id="soleur-vs-copilots"'),
+      "homepage has the promoted comparison section",
+    ).toBe(true);
+    expect(
+      html.includes("Soleur vs. Cursor and GitHub Copilot"),
+      "promoted section carries the comparison heading",
+    ).toBe(true);
+
+    // Assert the comparison lead sentence appears OUTSIDE any <details> block.
+    // Strip every <details>…</details> region, then confirm the lead sentence
+    // still appears in what remains. (Region removal of a fixed tag pair — not
+    // the single-pass /<[^>]+>/g tag-strip that trips
+    // js/incomplete-multi-character-sanitization.)
+    const LEAD = "Cursor and Copilot help you write code. Soleur helps you run a company.";
+    expect(html.includes(LEAD), "comparison lead sentence present").toBe(true);
+    const outsideDetails = html.replace(
+      /<details[\s\S]*?<\/details>/g,
+      "",
+    );
+    expect(
+      outsideDetails.includes(LEAD),
+      "comparison lead renders outside any <details> (above-the-fold-ish, crawlable)",
+    ).toBe(true);
+
+    // Hero jump-link to the promoted section keeps it discoverable from the fold.
+    expect(
+      html.includes('href="#soleur-vs-copilots"'),
+      "hero links to the promoted comparison section",
+    ).toBe(true);
+  });
+});
+
+// -- Test 14: #4405 / #4406 high-traffic <title> is not brand-only ----------
+// The audit (C1, C3) flagged /getting-started/ and /blog/ as brand-only titles
+// that forfeit all non-branded search traffic. R1/R5 rewrites surface
+// non-brand keywords. This guard fails if either title regresses to a
+// brand-only string (just "Soleur" + the page noun + separators).
+
+describe("#4405/#4406 /getting-started/ + /blog/ <title> surfaces non-brand keywords", () => {
+  // Each page must surface at least one of these non-brand keyword tokens in
+  // its <title>. Lowercased substring checks (no regex validation → no anchor
+  // CodeQL concern). Pulled from R1 (install/AI organization/two commands) and
+  // R5 (Company-as-a-Service/agentic/at scale/AI teams).
+  const PAGES: { label: string; rel: string; keywords: string[] }[] = [
+    {
+      label: "/getting-started/",
+      rel: "getting-started/index.html",
+      keywords: ["install", "ai organization", "two commands"],
+    },
+    {
+      label: "/blog/",
+      rel: "blog/index.html",
+      keywords: [
+        "company-as-a-service",
+        "agentic engineering",
+        "at scale",
+        "ai teams",
+      ],
+    },
+  ];
+
+  // Brand/structural tokens that, on their own, do NOT count as a search hook.
+  // If stripping these from the title leaves nothing, the title is brand-only.
+  const BRAND_NOISE = ["soleur", "blog", "—", "|", "-", "with"];
+
+  let checked = 0;
+  for (const { label, rel, keywords } of PAGES) {
+    test(`${label} <title> contains a non-brand keyword (not brand-only)`, () => {
+      const html = readSite(rel);
+      const title = extractTitle(html);
+      const lower = title.toLowerCase();
+
+      // (1) At least one audit-named keyword token is present.
+      const present = keywords.filter((k) => lower.includes(k));
+      expect(
+        present.length,
+        `${label}: <title> "${title}" surfaces no non-brand keyword (${keywords.join(", ")})`,
+      ).toBeGreaterThan(0);
+
+      // (2) Stripping brand/structural noise must leave real residual words —
+      // proves the title is more than "Blog — Soleur". Split on whitespace and
+      // drop pure-noise tokens; a brand-only title collapses to zero residual.
+      const residual = lower
+        .split(/\s+/)
+        .map((w) => w.trim())
+        .filter((w) => w.length > 0 && !BRAND_NOISE.includes(w));
+      expect(
+        residual.length,
+        `${label}: <title> "${title}" is brand-only after removing brand/structural tokens`,
+      ).toBeGreaterThan(0);
+
+      checked++;
+    });
+  }
+
+  test("both high-traffic titles were asserted (no vacuous skip)", () => {
+    expect(checked).toBe(PAGES.length);
+  });
+});
+
+// -- Test 17: #4407 every canonical sampled page renders a non-empty meta ----
+// The audit (C4) claimed no <meta name="description"> on any sampled page — a
+// stale WebFetch artifact. base.njk renders `{{ description or site.description }}`,
+// so every canonical page is non-empty by construction. This guard pins that:
+// a regression that drops the fallback (or a page that somehow renders an empty
+// description) fails. Redirect stubs (<meta http-equiv="refresh">) are excluded.
+
+describe("#4407 canonical sampled pages render a non-empty <meta name=\"description\">", () => {
+  // The nine audit-sampled pages plus the always-present home + company page.
+  const SAMPLED: { label: string; rel: string }[] = [
+    { label: "homepage", rel: "index.html" },
+    { label: "/pricing/", rel: "pricing/index.html" },
+    { label: "/getting-started/", rel: "getting-started/index.html" },
+    { label: "/agents/", rel: "agents/index.html" },
+    { label: "/skills/", rel: "skills/index.html" },
+    { label: "/vision/", rel: "vision/index.html" },
+    { label: "/about/", rel: "about/index.html" },
+    { label: "/community/", rel: "community/index.html" },
+    { label: "/blog/", rel: "blog/index.html" },
+    { label: "/changelog/", rel: "changelog/index.html" },
+    { label: "/legal/", rel: "legal/index.html" },
+    { label: "/company-as-a-service/", rel: "company-as-a-service/index.html" },
+  ];
+
+  // SERP envelope: a meta description should be a real sentence, not a single
+  // word, and not absurdly long. The lower bound (≥50) catches truncated/empty
+  // descriptions; the upper bound is generous (≤220) because audit-mandated
+  // copy (R5 /blog/) intentionally runs long. The homepage's stricter 120-160
+  // window is pinned separately by Test #2808 above.
+  const META_MIN = 50;
+  const META_MAX = 220;
+
+  // Attribute-capture extraction (no generic tag regex → avoids
+  // js/incomplete-multi-character-sanitization). Returns the first meta
+  // description content or null.
+  function metaDescription(html: string): string | null {
+    const m = [
+      ...html.matchAll(/<meta name="description" content="([^"]*)"/g),
+    ];
+    return m.length > 0 ? m[0][1] : null;
+  }
+
+  test("every sampled canonical page has exactly one non-empty meta description within SERP bounds", () => {
+    let checked = 0;
+    const seen = new Map<string, string>();
+    for (const { label, rel } of SAMPLED) {
+      const abs = resolve(SITE, rel);
+      if (!existsSync(abs)) continue; // build/permalink drift — counter guards vacuity
+      const html = readFileSync(abs, "utf8");
+
+      // Skip any redirect stub defensively (a sampled permalink should never be
+      // one, but exclude by mechanism rather than by trusting the path).
+      // Plain substring presence check (.includes, not a regex) — this is
+      // trusted built HTML and the marker can appear anywhere in <head>, so a
+      // regex anchor would be semantically wrong; .includes sidesteps the
+      // js/regex/missing-regexp-anchor pattern entirely.
+      if (html.length < 2000 && html.includes('http-equiv="refresh"')) {
+        continue;
+      }
+      checked++;
+
+      const matches = [
+        ...html.matchAll(/<meta name="description" content="([^"]*)"/g),
+      ];
+      expect(
+        matches.length,
+        `${label}: exactly one <meta name="description">`,
+      ).toBe(1);
+
+      const content = metaDescription(html)!.trim();
+      expect(
+        content.length,
+        `${label}: meta description is a real sentence (≥${META_MIN})`,
+      ).toBeGreaterThanOrEqual(META_MIN);
+      expect(
+        content.length,
+        `${label}: meta description within ${META_MAX} chars`,
+      ).toBeLessThanOrEqual(META_MAX);
+
+      seen.set(label, content);
+    }
+
+    // The two audit-named pages must carry their bespoke (non-default) copy —
+    // proves they did not silently fall back to site.description.
+    const siteDefault = (
+      JSON.parse(readFileSync(SITE_JSON, "utf8")) as { description: string }
+    ).description;
+    for (const label of ["/getting-started/", "/blog/"]) {
+      const d = seen.get(label);
+      expect(d, `${label}: present in sampled set`).toBeTruthy();
+      expect(
+        d,
+        `${label}: carries a bespoke meta, not the site default`,
+      ).not.toBe(siteDefault);
+    }
+
+    expect(
+      checked,
+      "every sampled canonical page asserted against built HTML",
+    ).toBe(SAMPLED.length);
+  });
+});
+
+// -- Test 7: net-new marketing pillars / clusters / glossary ----------------
+// Closes #3175 (/company-as-a-service/ pillar — also the inbound link target
+// for the homepage + /compare/ pages), #3176 (/ai-agents-for-solo-founders/),
+// #2561 (/agentic-engineering/ pillar + /glossary/), #2560 (AI CTO / AI CMO /
+// Solo Founder AI Stack clusters), and #2559 (Claude Code plugins pillar).
+//
+// CodeQL hygiene for this block (net-new test code is a merge gate):
+//  - FAQ <summary> text is plain (no nested tags) → use .trim(), never a
+//    /<[^>]+>/g tag-strip (avoids js/incomplete-multi-character-sanitization).
+//  - HTML-entity decode is limited to &#39; and &quot;; &amp; is NOT collapsed
+//    to & (avoids js/double-escaping). FAQ questions are authored free of
+//    apostrophes/ampersands, so decode is belt-and-suspenders.
+//  - Presence checks use html.includes(literal), never an unanchored .test()
+//    (avoids js/regex/missing-regexp-anchor).
+describe("#3175/#3176/#2561/#2560/#2559 marketing pillars + clusters + glossary", () => {
+  // Decode only the two entities the build emits inside visible FAQ summaries.
+  // Deliberately does NOT touch &amp; (see header note).
+  const decodeFaqText = (s: string): string =>
+    s.replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+
+  // Plain-text <summary> bodies → split on the literal close tag, trim. No
+  // tag-strip regex because these summaries never contain nested markup.
+  const faqSummaries = (html: string): string[] =>
+    [...html.matchAll(/<summary class="faq-question">([^<]*)<\/summary>/g)].map(
+      (m) => decodeFaqText(m[1]).trim(),
+    );
+
+  const faqDetailsCount = (html: string): number =>
+    [...html.matchAll(/<details class="faq-item">/g)].length;
+
+  function faqPageNames(html: string): string[] {
+    const block = jsonLdBlocks(html).find(
+      (b): b is { "@type": string; mainEntity: { name: string }[] } =>
+        typeof b === "object" &&
+        b !== null &&
+        (b as { "@type"?: string })["@type"] === "FAQPage",
+    );
+    return block ? block.mainEntity.map((q) => q.name.trim()) : [];
+  }
+
+  // Pages with a visible FAQ block + FAQPage JSON-LD that must stay in parity.
+  const FAQ_PAGES = [
+    "company-as-a-service/index.html",
+    "ai-agents-for-solo-founders/index.html",
+    "agentic-engineering/index.html",
+    "ai-cto/index.html",
+    "ai-cmo/index.html",
+    "solo-founder-ai-stack/index.html",
+    "claude-code-plugins/index.html",
+  ];
+
+  // All net-new routes that must build with a real title + meta description.
+  const NEW_PAGES = [
+    ...FAQ_PAGES,
+    "glossary/index.html",
+  ];
+
+  test("every new page builds with a non-empty <title> and meta description", () => {
+    let checked = 0;
+    for (const rel of NEW_PAGES) {
+      const html = readSite(rel);
+      const title = extractTitle(html);
+      expect(title.length, `${rel}: non-empty <title>`).toBeGreaterThan(0);
+      expect(title, `${rel}: brand-anchored title`).toContain("Soleur");
+
+      const meta = [
+        ...html.matchAll(/<meta name="description" content="([^"]*)"/g),
+      ];
+      expect(meta.length, `${rel}: exactly one meta description`).toBe(1);
+      expect(
+        meta[0][1].trim().length,
+        `${rel}: meta description is a real sentence`,
+      ).toBeGreaterThanOrEqual(50);
+      checked++;
+    }
+    expect(checked, "every new page asserted").toBe(NEW_PAGES.length);
+  });
+
+  test("each new page with a visible FAQ has a parity-matched FAQPage JSON-LD", () => {
+    let checked = 0;
+    for (const rel of FAQ_PAGES) {
+      const html = readSite(rel);
+      const summaries = faqSummaries(html);
+      const details = faqDetailsCount(html);
+      const names = faqPageNames(html);
+
+      expect(names.length, `${rel}: FAQPage JSON-LD present`).toBeGreaterThan(0);
+      expect(summaries.length, `${rel}: visible summaries present`).toBe(
+        details,
+      );
+      expect(
+        details,
+        `${rel}: <details> count equals JSON-LD question count`,
+      ).toBe(names.length);
+      for (const name of names) {
+        expect(
+          summaries,
+          `${rel}: JSON-LD question "${name}" has a character-identical visible <summary>`,
+        ).toContain(name);
+      }
+      checked++;
+    }
+    expect(checked, "every FAQ page asserted for parity").toBe(
+      FAQ_PAGES.length,
+    );
+  });
+
+  test("/company-as-a-service/ exists and carries the quotable definition (closes D/F inbound links)", () => {
+    const html = readSite("company-as-a-service/index.html");
+    // Quotable definition near the top — presence check, not regex.
+    expect(
+      html.includes("Company-as-a-Service (CaaS) is a new category of platform"),
+      "quotable CaaS definition present",
+    ).toBe(true);
+    // The inbound-link target slug resolves as a real page.
+    expect(html.includes("<h1>Company-as-a-Service</h1>"), "CaaS H1").toBe(true);
+  });
+
+  test("/glossary/ renders at least 8 term definitions", () => {
+    const html = readSite("glossary/index.html");
+    const terms = [
+      "Company-as-a-Service",
+      "Agentic Engineering",
+      "AI Agent",
+      "MCP (Model Context Protocol)",
+      "Claude Code Plugin",
+      "Skill",
+      "Knowledge Base",
+      "Human-in-the-Loop",
+      "Vibe Coding",
+      "Context Engineering",
+    ];
+    let found = 0;
+    for (const t of terms) {
+      if (html.includes(`>${t}</h2>`)) found++;
+    }
+    expect(found, "glossary renders >= 8 of the canonical terms").toBeGreaterThanOrEqual(
+      8,
+    );
+    // DefinedTermSet JSON-LD backs the visible terms.
+    const hasTermSet = jsonLdBlocks(html).some(
+      (b) =>
+        typeof b === "object" &&
+        b !== null &&
+        (b as { "@type"?: string })["@type"] === "DefinedTermSet",
+    );
+    expect(hasTermSet, "glossary has DefinedTermSet JSON-LD").toBe(true);
+  });
+
+  test("the Claude Code plugins pillar exists and the disambiguation post slug it links to is well-formed", () => {
+    const pillar = readSite("claude-code-plugins/index.html");
+    // The pillar is the head-term page; it links to the existing reviews post
+    // and the sibling disambiguation post by their canonical slugs.
+    expect(
+      pillar.includes('href="https://soleur.ai/blog/best-claude-code-plugins-2026/"'),
+      "pillar links to the existing best-plugins reviews post",
+    ).toBe(true);
+    expect(
+      pillar.includes(
+        'href="https://soleur.ai/blog/claude-code-plugin-vs-skill-vs-mcp/"',
+      ),
+      "pillar links to the disambiguation post by its canonical slug",
+    ).toBe(true);
+  });
+});
+
+// -- Test 18: #4408 / #4409 / #3177 new comparison + disambiguation surfaces --
+// The three net-new content pages shipped for the commercial-intent comparison
+// gap (#4408 /compare/soleur-vs-cursor/, #4409 /compare/soleur-vs-devin/) and the
+// AEO disambiguation post (#3177 /blog/claude-code-plugin-vs-skill-vs-mcp/).
+// Each must build with a non-empty <title> + meta description; each visible FAQ
+// must have a matching FAQPage JSON-LD (mainEntity names == visible <summary>
+// text — the #2707/#3171 parity shape); and the disambiguation post must render
+// the Plugin/Skill/MCP table.
+
+describe("#4408/#4409/#3177 new comparison + disambiguation pages", () => {
+  // The three new surfaces, by built relative path.
+  const PAGES: { label: string; rel: string }[] = [
+    { label: "/compare/soleur-vs-cursor/", rel: "compare/soleur-vs-cursor/index.html" },
+    { label: "/compare/soleur-vs-devin/", rel: "compare/soleur-vs-devin/index.html" },
+    {
+      label: "/blog/claude-code-plugin-vs-skill-vs-mcp/",
+      rel: "blog/claude-code-plugin-vs-skill-vs-mcp/index.html",
+    },
+  ];
+
+  // Decode ONLY the autoescape entities Nunjucks emits for apostrophes and
+  // double-quotes in a text node. Deliberately NOT &amp; (the &amp;->& round-trip
+  // is the js/double-escaping CodeQL pattern) and NO tag-strip (/<[^>]+>/g is the
+  // js/incomplete-multi-character-sanitization pattern). Question text is plain
+  // ASCII by construction, so .trim() alone suffices; the decode is defensive.
+  const decodeText = (s: string) =>
+    s.replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+
+  test("each new page builds with a non-empty <title> and meta description", () => {
+    let checked = 0;
+    for (const { label, rel } of PAGES) {
+      const abs = resolve(SITE, rel);
+      expect(existsSync(abs), `${label}: built file present`).toBe(true);
+      const html = readFileSync(abs, "utf8");
+
+      const title = extractTitle(html);
+      expect(title.length, `${label}: non-empty <title>`).toBeGreaterThan(0);
+      // The /compare/ pages are brand-anchored (seoTitle ends "| Soleur"); the
+      // disambiguation blog post is keyword-led (no brand suffix), so only
+      // require the brand anchor on the comparison surfaces.
+      if (rel.startsWith("compare/")) {
+        expect(title, `${label}: <title> is brand-anchored`).toContain("Soleur");
+      }
+
+      const metaMatches = [
+        ...html.matchAll(/<meta name="description" content="([^"]*)"/g),
+      ];
+      expect(
+        metaMatches.length,
+        `${label}: exactly one <meta name="description">`,
+      ).toBe(1);
+      expect(
+        metaMatches[0][1].trim().length,
+        `${label}: meta description is a real sentence`,
+      ).toBeGreaterThan(50);
+      checked++;
+    }
+    expect(checked, "all three new pages asserted").toBe(PAGES.length);
+  });
+
+  test("each new page's visible FAQ matches its FAQPage JSON-LD (count + names)", () => {
+    let checked = 0;
+    for (const { label, rel } of PAGES) {
+      const html = readSite(rel);
+      const detailsCount = [
+        ...html.matchAll(/<details class="faq-item">/g),
+      ].length;
+      // Every new page ships a visible FAQ — assert that, then assert parity.
+      expect(detailsCount, `${label}: renders a visible FAQ`).toBeGreaterThan(0);
+
+      const faq = jsonLdBlocks(html).find(
+        (b): b is { "@type": string; mainEntity: { name: string }[] } =>
+          typeof b === "object" &&
+          b !== null &&
+          (b as { "@type"?: string })["@type"] === "FAQPage",
+      );
+      expect(faq, `${label}: FAQPage JSON-LD present for visible FAQ`).toBeDefined();
+
+      const summaries = [
+        ...html.matchAll(/<summary class="faq-question">([\s\S]*?)<\/summary>/g),
+      ].map((m) => m[1].trim());
+      const names = faq!.mainEntity.map((q) => q.name.trim());
+
+      expect(detailsCount, `${label}: details vs JSON-LD count`).toBe(names.length);
+      expect(summaries.length, `${label}: summaries vs JSON-LD count`).toBe(
+        names.length,
+      );
+      for (const name of names) {
+        expect(
+          summaries.map(decodeText),
+          `${label}: JSON-LD question "${name}" has a matching visible <summary>`,
+        ).toContain(decodeText(name));
+      }
+      checked++;
+    }
+    expect(checked, "FAQ parity asserted on all three new pages").toBe(
+      PAGES.length,
+    );
+  });
+
+  test("#3177 disambiguation post renders a Plugin/Skill/MCP table", () => {
+    const html = readSite("blog/claude-code-plugin-vs-skill-vs-mcp/index.html");
+    // The post body renders inside .prose; the disambiguation table is a real
+    // <table>. Assert structure (a table with header cells) and the three
+    // primitive column headers it disambiguates. Literal-substring presence
+    // checks (.includes) — no regex validation, so no js/regex/missing-regexp-anchor.
+    expect(html.includes("<table>"), "disambiguation <table> present").toBe(true);
+    expect(html.includes("</table>"), "disambiguation table closed").toBe(true);
+    // The three primitives are the table's value columns.
+    expect(html.includes("<th>Skill</th>"), "Skill column header").toBe(true);
+    expect(html.includes("<th>MCP server</th>"), "MCP server column header").toBe(
+      true,
+    );
+    expect(html.includes("<th>Plugin</th>"), "Plugin column header").toBe(true);
+    // The "Scope" row anchors the scope/lifecycle/distribution axes the issue
+    // (#3177) requires the table to disambiguate.
+    expect(html.includes("Scope"), "table covers Scope").toBe(true);
+    expect(html.includes("Lifecycle"), "table covers Lifecycle").toBe(true);
+    expect(html.includes("Distribution"), "table covers Distribution").toBe(true);
+  });
+
+  test("#3177 disambiguation post links the plugin pillar + a sibling cluster post", () => {
+    const html = readSite("blog/claude-code-plugin-vs-skill-vs-mcp/index.html");
+    // Internal cross-links the issue requires: the Claude Code plugin pillar
+    // (best-claude-code-plugins-2026) and a sibling (skill-libraries-vs-workflow-plugins).
+    // Href-attribute presence checks — no text extraction, no sanitization concern.
+    expect(
+      html.includes('href="/blog/best-claude-code-plugins-2026/"'),
+      "links the plugin pillar post",
+    ).toBe(true);
+    expect(
+      html.includes('href="/blog/skill-libraries-vs-workflow-plugins/"'),
+      "links a sibling cluster post",
+    ).toBe(true);
+  });
+
+  test("#4408 cursor compare page cross-links the existing soleur-vs-cursor blog post", () => {
+    const html = readSite("compare/soleur-vs-cursor/index.html");
+    // The issue requires the /compare/ page and the existing blog post to be
+    // cross-linked (not duplicated). The compare page links the blog post via an
+    // absolute {{ site.url }}-prefixed href.
+    expect(
+      html.includes("/blog/soleur-vs-cursor/"),
+      "cursor compare page links the existing blog post",
+    ).toBe(true);
+  });
+});
+
+// -- Test 19: #3993 /vision/ demotes internal codenames from proper nouns ---
+// The 2026-05-18 content audit (§1, C-6/C-7) flagged /vision/ for reading like
+// an internal strategy memo: it used "vessel" as metaphor-as-jargon and
+// introduced "Global Brain", "Swarm of Agents", and "Decision Ledger" as
+// proper-noun codenames ("Internally called..."). The rewrite reframes them as
+// plain lowercase descriptions a non-technical founder/journalist/investor
+// understands, while preserving the strategic substance AND the #4754 freshness
+// block (stat-led summary + last-updated byline).
+//
+// CodeQL hygiene (net-new test code is a merge gate): these are pure absence/
+// presence checks via html.includes("literal") — NO tag-strip
+// (js/incomplete-multi-character-sanitization), NO &amp; decode
+// (js/double-escaping), NO unanchored .test() (js/regex/missing-regexp-anchor).
+describe("#3993 /vision/ demotes internal codenames + preserves the freshness block", () => {
+  // Case-sensitive proper-noun forms the audit named. The plain-language
+  // replacements use lowercase phrasing, so these exact strings must be absent
+  // from the rendered page.
+  const BANNED_CODENAMES = [
+    "Global Brain",
+    "Swarm of Agents",
+    "Decision Ledger",
+    "vessel",
+  ];
+
+  test("rendered /vision/ contains none of the four proper-noun codenames", () => {
+    const html = readSite("vision/index.html");
+    for (const codename of BANNED_CODENAMES) {
+      expect(
+        html.includes(codename),
+        `/vision/ must not surface the internal codename/metaphor "${codename}"`,
+      ).toBe(false);
+    }
+  });
+
+  test("rendered /vision/ still renders the #4754 stat-led summary + last-updated block", () => {
+    const html = readSite("vision/index.html");
+    // Positive guard: don't regress PR B's freshness work while rewriting prose.
+    const summaryMatches = [
+      ...html.matchAll(/<p class="page-summary">([\s\S]*?)<\/p>/g),
+    ];
+    expect(summaryMatches.length, "/vision/ has exactly one stat-led summary").toBe(
+      1,
+    );
+    expect(
+      summaryMatches[0][1].trim().length,
+      "/vision/ stat-led summary is a real sentence",
+    ).toBeGreaterThan(80);
+    const metaMatches = [
+      ...html.matchAll(/<p class="page-meta">([\s\S]*?)<\/p>/g),
+    ];
+    expect(metaMatches.length, "/vision/ has exactly one last-updated block").toBe(
+      1,
+    );
+    expect(
+      metaMatches[0][1].includes("Last updated"),
+      '/vision/ last-updated block carries the "Last updated" label',
+    ).toBe(true);
+  });
+});

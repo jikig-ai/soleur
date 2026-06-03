@@ -2,6 +2,7 @@ import { createHash, createHmac } from "node:crypto";
 import * as Sentry from "@sentry/nextjs";
 import logger from "@/server/logger";
 import { renameUserIdToHash } from "@/server/userid-pseudonymize";
+import { sqlStateFromError } from "@/lib/postgres-errors";
 
 const SENTRY_USERID_PEPPER = process.env.SENTRY_USERID_PEPPER;
 
@@ -81,6 +82,18 @@ function hashExtraUserId(
 ): Record<string, unknown> | undefined {
   if (!extra || typeof extra !== "object") return extra;
   return renameUserIdToHash(extra);
+}
+
+/**
+ * Strip line terminators from a human-readable log message so a CR/LF (or
+ * unicode line/paragraph separator) cannot forge a fake log line in a
+ * downstream plaintext view (js/log-injection). pino JSON-escapes values, but
+ * this is the boundary where operator-/error-derived strings become the log
+ * `msg`, so neutralize here. Unicode separators are matched via escape
+ * sequences only (cq-regex-unicode-separators-escape-only).
+ */
+function sanitizeLogMessage(message: string): string {
+  return message.replace(/[\r\n\u2028\u2029\v\f]+/g, " ");
 }
 
 /**
@@ -176,15 +189,25 @@ export function reportSilentFallback(
   if (op) tags.op = op;
   if (art33Breach) tags.art_33_breach = "true";
 
+  // Surface a PostgREST/Postgres SQLSTATE (e.g. 42501 insufficient_privilege,
+  // 23505 unique_violation) as a queryable `pg_code` tag so on-call can search
+  // `pg_code:<sqlstate>` in Sentry instead of reasoning from the wrapper string
+  // alone (#4695). Only the code is extracted — `details`/`hint` may embed row
+  // values (PII); see sqlStateFromError. No-op for non-Postgres errors.
+  const pgCode = sqlStateFromError(err);
+  if (pgCode) tags.pg_code = pgCode;
+
   // Pseudonymize `userId` → `userIdHash` (Recital 26) at the emit boundary.
   // Centralized here so the 40+ call sites continue passing raw `userId` and
   // never need to know about the rename. Renamed (not value-swapped) so log
   // readers can tell at a glance that pseudonymization is in effect.
   const transformedExtra = hashExtraUserId(extra);
 
+  const safeMessage = sanitizeLogMessage(message ?? `${feature} silent fallback`);
+
   // Mirror the structured context into pino so log aggregators (container
   // stdout, Better Stack) also get the same tag vocabulary.
-  logger.error({ err, feature, op, ...transformedExtra }, message ?? `${feature} silent fallback`);
+  logger.error({ err, feature, op, ...transformedExtra }, safeMessage);
 
   // Sentry's namespace shape varies across the dev-server bundle (where
   // captureMessage may be tree-shaken when DSN is unset) and the prod build.
@@ -197,7 +220,7 @@ export function reportSilentFallback(
         Sentry.captureException(err, { tags, extra: transformedExtra });
       }
     } else if (typeof Sentry.captureMessage === "function") {
-      Sentry.captureMessage(message ?? `${feature} silent fallback`, {
+      Sentry.captureMessage(safeMessage, {
         level: "error",
         tags,
         extra: { err, ...transformedExtra },
@@ -224,11 +247,21 @@ export function warnSilentFallback(
   if (op) tags.op = op;
   if (art33Breach) tags.art_33_breach = "true";
 
+  // Surface a PostgREST/Postgres SQLSTATE (e.g. 42501 insufficient_privilege,
+  // 23505 unique_violation) as a queryable `pg_code` tag so on-call can search
+  // `pg_code:<sqlstate>` in Sentry instead of reasoning from the wrapper string
+  // alone (#4695). Only the code is extracted — `details`/`hint` may embed row
+  // values (PII); see sqlStateFromError. No-op for non-Postgres errors.
+  const pgCode = sqlStateFromError(err);
+  if (pgCode) tags.pg_code = pgCode;
+
   // Pseudonymize `userId` → `userIdHash` at the emit boundary (see
   // reportSilentFallback for rationale).
   const transformedExtra = hashExtraUserId(extra);
 
-  logger.warn({ err, feature, op, ...transformedExtra }, message ?? `${feature} silent fallback`);
+  const safeMessage = sanitizeLogMessage(message ?? `${feature} silent fallback`);
+
+  logger.warn({ err, feature, op, ...transformedExtra }, safeMessage);
 
   try {
     if (err instanceof Error) {
@@ -236,8 +269,63 @@ export function warnSilentFallback(
         Sentry.captureException(err, { level: "warning", tags, extra: transformedExtra });
       }
     } else if (typeof Sentry.captureMessage === "function") {
-      Sentry.captureMessage(message ?? `${feature} silent fallback`, {
+      Sentry.captureMessage(safeMessage, {
         level: "warning",
+        tags,
+        extra: { err, ...transformedExtra },
+      });
+    }
+  } catch {
+    // See reportSilentFallback — Sentry namespace may be partially shimmed
+    // in non-prod bundles; pino is the durable signal.
+  }
+}
+
+/**
+ * Info-level variant. Same contract as `warn`/`reportSilentFallback`, but emits
+ * at `level: "info"` — use for an EVERY-RUN structured record that must be
+ * queryable in Sentry without SSH (e.g. a cron's reclaim/throughput payload on
+ * the HEALTHY path), NOT just on the error/degraded branch. The pino
+ * `logger.info` mirror is preserved inside the helper, so callers replacing a
+ * bare `logger.info` lose no stdout signal.
+ *
+ * Because every call emits, prefer this only for low-cardinality periodic
+ * signals (e.g. a 6h cron); never a per-request hot path — pair with
+ * `mirrorWithDebounce` if a burst is possible. The `info` path normally passes
+ * `err = null`, so the `err instanceof Error` branch is effectively unused here,
+ * but the signature is kept symmetric with the warn/report pair so a future
+ * caller can attach a non-fatal Error. Note: `art33Breach` is intentionally NOT
+ * honored — an info-level signal is never a breach (the option is accepted for
+ * signature parity but produces no `art_33_breach` tag).
+ */
+export function infoSilentFallback(
+  err: unknown,
+  options: SilentFallbackOptions,
+): void {
+  const { feature, op, extra, message } = options;
+  const tags: Record<string, string> = { feature };
+  if (op) tags.op = op;
+
+  // pg_code surfacing kept for parity (no-op when err is null / non-Postgres).
+  const pgCode = sqlStateFromError(err);
+  if (pgCode) tags.pg_code = pgCode;
+
+  // Pseudonymize `userId` → `userIdHash` at the emit boundary (see
+  // reportSilentFallback for rationale). No-op when no `userId` key is present.
+  const transformedExtra = hashExtraUserId(extra);
+
+  const safeMessage = sanitizeLogMessage(message ?? `${feature} info`);
+
+  logger.info({ err, feature, op, ...transformedExtra }, safeMessage);
+
+  try {
+    if (err instanceof Error) {
+      if (typeof Sentry.captureException === "function") {
+        Sentry.captureException(err, { level: "info", tags, extra: transformedExtra });
+      }
+    } else if (typeof Sentry.captureMessage === "function") {
+      Sentry.captureMessage(safeMessage, {
+        level: "info",
         tags,
         extra: { err, ...transformedExtra },
       });

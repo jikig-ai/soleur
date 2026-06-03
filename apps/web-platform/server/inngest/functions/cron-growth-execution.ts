@@ -46,6 +46,7 @@ import {
   redactToken,
   mintInstallationToken,
   postSentryHeartbeat,
+  resolveOutputAwareOk,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -149,6 +150,14 @@ export async function cronGrowthExecutionHandler({
   step,
   logger,
 }: HandlerArgs): Promise<{ ok: boolean }> {
+  // Run-window start — the lower bound for the post-run output check. Captured
+  // before the mint step (memoized across Inngest replays) so a replay reuses
+  // the original window rather than re-stamping a later "now".
+  const runStartedAt = await step.run(
+    "run-started-at",
+    async () => new Date().toISOString(),
+  );
+
   // --- Step 1: mint installation token (memoized across replays) ---
   // The raw token string is the return value (NEVER log this value).
   const installationToken = await step.run(
@@ -229,12 +238,29 @@ export async function cronGrowthExecutionHandler({
       );
     }
 
-    // --- Step 4: sentry-heartbeat (final POST) ---
+    // --- Step 4: output-aware heartbeat. This cron is an always-create
+    //     producer — it files a `[Scheduled] Growth Execution` issue every run
+    //     (explicitly "No stale pages found" when there is nothing to do) — so a
+    //     clean exit that produced no `scheduled-growth-execution` issue in the
+    //     run window turns the monitor RED (and emits `scheduled-output-missing`)
+    //     instead of false-green on claude's exit code. Mirrors the 3 producers
+    //     wired by PR #4714 (#4730). Infra faults still page via the early-returns. ---
+    const heartbeatOk = await step.run("verify-output", async () =>
+      resolveOutputAwareOk({
+        spawnOk: spawnResult.ok,
+        label: SENTRY_MONITOR_SLUG,
+        runStartedAt,
+        cronName: "cron-growth-execution",
+        stderrTail: spawnResult.stderrTail,
+        exitCode: spawnResult.exitCode,
+        stdoutTail: spawnResult.stdoutTail,
+      }),
+    );
     await step.run("sentry-heartbeat", async () => {
-      await postSentryHeartbeat({ ok: spawnResult.ok, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-growth-execution", logger });
+      await postSentryHeartbeat({ ok: heartbeatOk, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-growth-execution", logger });
     });
 
-    return { ok: spawnResult.ok };
+    return { ok: heartbeatOk };
   } finally {
     // Best-effort teardown (idempotent rm -rf with force:true). The
     // teardown helper already mirrors any failure to Sentry — wrapping

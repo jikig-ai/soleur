@@ -138,19 +138,28 @@ describe("Dashboard sidebar collapse", () => {
     expect(screen.getByLabelText("Expand sidebar")).toBeInTheDocument();
   });
 
-  it("does NOT toggle sidebar on Cmd+B when on /dashboard/kb route", () => {
+  // AC5: ⌘B is now the SINGLE rail owner — it toggles the one rail on EVERY
+  // section, including KB / Settings / Chat (the per-route handlers that
+  // previously suppressed it there are gone).
+  it("DOES toggle the single rail on Cmd+B when on /dashboard/kb route", () => {
     mockPathname = "/dashboard/kb/some-file";
     render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
     fireEvent.keyDown(document, { key: "b", metaKey: true });
-    // Should still be expanded — main sidebar shortcut does not fire on KB routes
-    expect(screen.getByLabelText("Collapse sidebar")).toBeInTheDocument();
+    expect(screen.getByLabelText("Expand sidebar")).toBeInTheDocument();
   });
 
-  it("does NOT toggle sidebar on Cmd+B when on /dashboard/settings route", () => {
+  it("DOES toggle the single rail on Cmd+B when on /dashboard/settings route", () => {
     mockPathname = "/dashboard/settings/team";
     render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
     fireEvent.keyDown(document, { key: "b", metaKey: true });
-    expect(screen.getByLabelText("Collapse sidebar")).toBeInTheDocument();
+    expect(screen.getByLabelText("Expand sidebar")).toBeInTheDocument();
+  });
+
+  it("DOES toggle the single rail on Cmd+B when on /dashboard/chat route", () => {
+    mockPathname = "/dashboard/chat/abc-123";
+    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    fireEvent.keyDown(document, { key: "b", metaKey: true });
+    expect(screen.getByLabelText("Expand sidebar")).toBeInTheDocument();
   });
 
   it("ignores Cmd+B when focus is in an input element", () => {

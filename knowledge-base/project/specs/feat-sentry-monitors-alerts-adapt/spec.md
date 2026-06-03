@@ -51,7 +51,7 @@ A one-shot script (location: `plugins/soleur/skills/preflight/scripts/sentry-mon
 - Lists every Sentry Alert via API.
 - Joins on monitor-id, flags **orphan monitors** (detection without routing) and **orphan alerts** (routing referencing a missing monitor).
 - Detects region (US `sentry.io` vs EU `de.sentry.io`) the same way `configure-sentry-alerts.sh` does today.
-- Writes a Markdown report to `knowledge-base/engineering/ops/sentry-migration-audit-<YYYY-MM-DD>.md` with: monitor/alert inventory, orphan list, routing-destination table, region, timestamp. Idempotent — re-running produces a new dated file, never mutates state.
+- Writes a Markdown report to `knowledge-base/engineering/operations/sentry-migration-audit-<YYYY-MM-DD>.md` with: monitor/alert inventory, orphan list, routing-destination table, region, timestamp. Idempotent — re-running produces a new dated file, never mutates state.
 
 ### FR2: Cron monitors for scheduled workflows
 
@@ -114,7 +114,7 @@ After FR3 lands, the Sentry dashboard is read-only for managed rules (operationa
 
 ## Acceptance Criteria
 
-- **AC1.** `sentry-monitors-audit.sh` runs against prd Sentry org with `SENTRY_AUTH_TOKEN` and produces a dated report under `knowledge-base/engineering/ops/`. Report shows zero orphan monitors **or** documents each orphan with a remediation note.
+- **AC1.** `sentry-monitors-audit.sh` runs against prd Sentry org with `SENTRY_AUTH_TOKEN` and produces a dated report under `knowledge-base/engineering/operations/`. Report shows zero orphan monitors **or** documents each orphan with a remediation note.
 - **AC2.** Scheduled GH Actions workflows (daily community digest, scheduled triage) emit Sentry check-ins; a deliberate skip produces a Sentry issue within the monitor's grace window.
 - **AC3.** `terraform plan` in `terraform/sentry/` shows a no-op against prd state after import. ADR is committed.
 - **AC4.** Legal corpus diffs reviewed by CLO; `/soleur:gdpr-gate` passes on the diff. Article 30 register has the audit artifact linked.

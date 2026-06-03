@@ -6,6 +6,7 @@ import { sessions } from "@/server/session-registry";
 import { closeWithPreamble } from "@/lib/ws-close-helper";
 import { WS_CLOSE_CODES } from "@/lib/types";
 import { reportSilentFallback } from "@/server/observability";
+import { validateWorkspaceName } from "@/lib/workspace-name";
 
 // PERMANENT service-role surface (.service-role-allowlist line 133):
 // invite_workspace_member + remove_workspace_member RPCs require service-role
@@ -85,11 +86,16 @@ export async function inviteWorkspaceMember(
   }
 
   const service = createServiceClient();
-  // Note: invite_workspace_member RPC enforces caller-is-owner via auth.uid().
-  // Service-role calls do NOT set auth.uid(), so we pass the caller explicitly
-  // and the RPC checks `caller_id IS NULL OR caller_id = ...`. Migration 054
-  // §1.2.6 defines the RPC's signature; the SECURITY DEFINER body re-reads
-  // the caller's owner row in workspace_members before the WORM write.
+  // LATENT GAP (#4779-followup): invite_workspace_member (mig 063) gates the
+  // caller on a bare auth.uid() and has NO p_caller_user_id override param, so
+  // under createServiceClient() (auth.uid() NULL) it would raise 28000 — the
+  // same defect class migration 094 fixed for remove_workspace_member /
+  // update_workspace_member_role. This wrapper currently has NO live route
+  // caller (the live invite flow uses createWorkspaceInvitation, the
+  // pending-invite path), so the gap is dormant. When this RPC is wired to a
+  // route, it MUST first be widened to the COALESCE(p_caller_user_id,
+  // auth.uid()) + service_role-only shape (mig 092/094 precedent) and this call
+  // updated to forward args.callerUserId — otherwise it 500s on first use.
   const { data, error } = await service.rpc("invite_workspace_member", {
     p_workspace_id: args.workspaceId,
     p_invitee_user_id: inviteeUserId,
@@ -188,10 +194,20 @@ export async function updateWorkspaceMemberRole(
     p_workspace_id: args.workspaceId,
     p_user_id: args.targetUserId,
     p_new_role: args.newRole,
+    // Forward the route-verified getUser() id: the RPC runs under
+    // createServiceClient() where auth.uid() is NULL, so the owner-gate
+    // resolves the caller via COALESCE(p_caller_user_id, auth.uid())
+    // (migration 094). Without this the gate raises 28000. See #4779-followup.
+    p_caller_user_id: args.callerUserId,
   });
   if (error) {
     const msg = error.message ?? "";
-    if (msg.includes("caller is not an owner")) {
+    if (
+      msg.includes("caller is not an owner") ||
+      // Unreachable now that the route forwards p_caller_user_id (mig 094);
+      // map the NULL-caller 28000 arm to a typed reason as defense-in-depth.
+      msg.includes("caller_user_id is NULL")
+    ) {
       return { ok: false, reason: "caller_not_owner" };
     }
     if (msg.includes("no workspace_members row")) {
@@ -270,13 +286,26 @@ export async function removeWorkspaceMember(
   const { error } = await service.rpc("remove_workspace_member", {
     p_workspace_id: args.workspaceId,
     p_user_id: args.inviteeUserId,
+    // Forward the route-verified getUser() id: the RPC runs under
+    // createServiceClient() where auth.uid() is NULL, so the owner-gate
+    // resolves the caller via COALESCE(p_caller_user_id, auth.uid())
+    // (migration 094). Without this the gate raises 28000 → rpc_failed → the
+    // "Failed to remove member" toast. See #4779-followup.
+    p_caller_user_id: args.callerUserId,
   });
   if (error) {
     const msg = error.message ?? "";
     if (msg.includes("owner cannot remove self")) {
       return { ok: false, reason: "owner_cannot_remove_self" };
     }
-    if (msg.includes("not workspace owner") || msg.includes("caller is not")) {
+    if (
+      msg.includes("not workspace owner") ||
+      msg.includes("caller is not") ||
+      // Unreachable now that the route forwards p_caller_user_id (mig 094),
+      // but map the NULL-caller 28000 arm to a typed reason so a future
+      // regression surfaces as caller_not_owner, not an opaque rpc_failed 500.
+      msg.includes("caller_user_id is NULL")
+    ) {
       return { ok: false, reason: "caller_not_owner" };
     }
     if (msg.includes("not a member")) {
@@ -367,6 +396,11 @@ export async function transferWorkspaceOwnership(
     p_workspace_id: args.workspaceId,
     p_new_owner_user_id: args.newOwnerUserId,
     p_attestation_text: args.attestationText,
+    // Forward the route-verified getUser() id: the RPC runs under
+    // createServiceClient() where auth.uid() is NULL, so the owner-gate
+    // resolves the caller via COALESCE(p_caller_user_id, auth.uid())
+    // (migration 092). Without this the gate raises 28000. See #4765.
+    p_caller_user_id: args.callerUserId,
   });
 
   if (error) {
@@ -383,6 +417,17 @@ export async function transferWorkspaceOwnership(
     if (msg.includes("target user is already the owner")) {
       return { ok: false, reason: "target_already_owner" };
     }
+    // self_transfer / caller_not_owner / target_* are expected,
+    // caller-correctable outcomes — not silent failures. rpc_failed is an
+    // unexpected DB-side failure — mirror to Sentry per
+    // cq-silent-fallback-must-mirror-to-sentry (matches renameOrganization).
+    // The 28000 NULL-caller arm also lands here (unreachable from the route,
+    // which always forwards a verified getUser() id as p_caller_user_id).
+    reportSilentFallback(error, {
+      feature: "workspace-membership",
+      op: "transfer-workspace-ownership-rpc",
+      extra: { workspaceId: args.workspaceId, callerUserId: args.callerUserId },
+    });
     return { ok: false, reason: "rpc_failed", detail: msg };
   }
 
@@ -414,4 +459,74 @@ export async function transferWorkspaceOwnership(
   }
 
   return { ok: true, attestationId: String(data) };
+}
+
+export interface RenameOrganizationArgs {
+  organizationId: string;
+  name: string;
+  /**
+   * Verified getUser() id from the route — forwarded as p_caller_user_id so
+   * the rename_organization owner-gate resolves the caller correctly under
+   * the service-role client (auth.uid() is NULL there). See migration 091.
+   */
+  callerUserId: string;
+}
+
+export type RenameOrganizationResult =
+  | { ok: true }
+  | { ok: false; reason: RenameOrganizationFailureReason; detail?: string };
+
+export type RenameOrganizationFailureReason =
+  | "invalid_name"
+  | "caller_not_owner"
+  | "not_found"
+  | "rpc_failed";
+
+/**
+ * Rename an organization (the org switcher's display name). Owner-gated via the
+ * rename_organization RPC (migration 091) — a single-row UPDATE on
+ * organizations.name. Unlike the membership RPCs there is no session abort:
+ * a rename revokes no one's access.
+ */
+export async function renameOrganization(
+  args: RenameOrganizationArgs,
+): Promise<RenameOrganizationResult> {
+  const validated = validateWorkspaceName(args.name);
+  if (!validated.ok) {
+    return { ok: false, reason: "invalid_name" };
+  }
+
+  const service = createServiceClient();
+  const { error } = await service.rpc("rename_organization", {
+    p_organization_id: args.organizationId,
+    p_name: validated.trimmed,
+    p_caller_user_id: args.callerUserId,
+  });
+
+  if (error) {
+    const msg = error.message ?? "";
+    // caller_not_owner / invalid_name are expected, caller-correctable
+    // outcomes — not silent failures, so they are not mirrored to Sentry.
+    if (msg.includes("caller is not an owner")) {
+      return { ok: false, reason: "caller_not_owner" };
+    }
+    if (msg.includes("name must")) {
+      return { ok: false, reason: "invalid_name" };
+    }
+    if (msg.includes("no organization row")) {
+      return { ok: false, reason: "not_found" };
+    }
+    // rpc_failed is an unexpected DB-side failure — mirror to Sentry per
+    // cq-silent-fallback-must-mirror-to-sentry (matches workspace-invitations).
+    // The 28000 NULL-caller arm also lands here (unreachable from the route,
+    // which always forwards a verified getUser() id).
+    reportSilentFallback(error, {
+      feature: "workspace-membership",
+      op: "rename-organization-rpc",
+      extra: { organizationId: args.organizationId, callerUserId: args.callerUserId },
+    });
+    return { ok: false, reason: "rpc_failed", detail: msg };
+  }
+
+  return { ok: true };
 }

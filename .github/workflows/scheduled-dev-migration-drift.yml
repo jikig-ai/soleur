@@ -14,13 +14,14 @@
 # Security: only `secrets.DOPPLER_TOKEN_DEV_SCHEDULED` is referenced (mirrors
 # `tenant-integration.yml`'s pattern). No untrusted `github.event.*` inputs
 # are interpolated in any `run:` block; this workflow only triggers on
-# `schedule` (no payload) and `workflow_dispatch` (no inputs accepted).
+# `workflow_dispatch` (no inputs accepted) — the recurring run is now dispatched
+# by the Inngest cron `cron-dev-migration-drift` (every 6 hours at HH:15 UTC).
 
 name: "Scheduled: dev migration drift"
 
 on:
-  schedule:
-    - cron: '15 */6 * * *'   # every 6 hours at HH:15
+  # Scheduling moved to the Inngest cron `cron-dev-migration-drift`, which
+  # dispatches this workflow (Inngest is the single scheduling substrate).
   workflow_dispatch: {}
 
 concurrency:

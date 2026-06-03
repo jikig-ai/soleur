@@ -2,7 +2,7 @@
 
 When the scanner returns `HIGH-RISK` or `REVIEW` and the operator judges the
 finding to be a false-positive or accepted-risk, override by committing a
-**structured artifact** under `knowledge-base/security/skill-overrides/`.
+**structured artifact** under `knowledge-base/engineering/security/skill-overrides/`.
 
 The artifact alone is the audit-trail. **No git trailer is involved** — the
 `Skill-Security-Ack:` trailer was dropped during plan review (DHH + simplicity
@@ -13,7 +13,7 @@ regardless of merge strategy.
 ## Artifact location and naming
 
 ```
-knowledge-base/security/skill-overrides/YYYY-MM-DD-<slug>.md
+knowledge-base/engineering/security/skill-overrides/YYYY-MM-DD-<slug>.md
 ```
 
 - `YYYY-MM-DD` — ISO-8601 date the override was created.
@@ -56,7 +56,7 @@ timestamp: <ISO-8601>
 4. Operator creates the artifact (manual or via `skill-creator` Step 5):
 
    ```bash
-   cat > knowledge-base/security/skill-overrides/$(date -u +%Y-%m-%d)-<slug>.md <<EOF
+   cat > knowledge-base/engineering/security/skill-overrides/$(date -u +%Y-%m-%d)-<slug>.md <<EOF
    ---
    skill: <slug>
    source: <where-the-skill-came-from>

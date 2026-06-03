@@ -134,17 +134,26 @@ function primeMocks(documentPath: string, fixture: Buffer) {
   );
 }
 
+let tmpRoot: string;
+
 beforeEach(() => {
   vi.clearAllMocks();
   __resetShareHashVerdictCacheForTest();
   mocks.mockIsAllowed.mockReturnValue(true);
-  tmpWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "parity-"));
+  // ADR-044 (#4543): the owner route derives its fs dir from the active
+  // workspace id (= solo user "user-1") via workspacePathForWorkspaceId, i.e.
+  // `<WORKSPACES_ROOT>/user-1`. The shared route reads the same dir via the
+  // share owner's users.workspace_path fixture — both must point at tmpWorkspace
+  // for byte parity.
+  tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "parity-root-"));
+  process.env.WORKSPACES_ROOT = tmpRoot;
+  tmpWorkspace = path.join(tmpRoot, "user-1");
   kbRoot = path.join(tmpWorkspace, "knowledge-base");
   fs.mkdirSync(kbRoot, { recursive: true });
 });
 
 afterEach(() => {
-  fs.rmSync(tmpWorkspace, { recursive: true, force: true });
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
 describe("contract: /api/kb/content and /api/shared/[token] — bytes + headers parity", () => {

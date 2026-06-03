@@ -89,10 +89,18 @@ import * as permissionCallbackReexport from "../server/permission-callback";
 // ---------------------------------------------------------------------------
 
 interface TestDeps {
-  abortableReviewGate: ReturnType<typeof vi.fn>;
-  sendToClient: ReturnType<typeof vi.fn>;
-  notifyOfflineUser: ReturnType<typeof vi.fn>;
-  updateConversationStatus: ReturnType<typeof vi.fn>;
+  abortableReviewGate: ReturnType<
+    typeof vi.fn<CanUseToolContext["deps"]["abortableReviewGate"]>
+  >;
+  sendToClient: ReturnType<
+    typeof vi.fn<CanUseToolContext["deps"]["sendToClient"]>
+  >;
+  notifyOfflineUser: ReturnType<
+    typeof vi.fn<CanUseToolContext["deps"]["notifyOfflineUser"]>
+  >;
+  updateConversationStatus: ReturnType<
+    typeof vi.fn<CanUseToolContext["deps"]["updateConversationStatus"]>
+  >;
 }
 
 function buildContext(
@@ -233,7 +241,8 @@ const COMPOUND_COMMANDS: readonly string[] = [
   "pwd\nls",
   "pwd\rls",
   "echo ${HOME}",
-  "ls 2>&1",
+  // NOTE: `ls 2>&1` moved to the positive set — the AC10 trailing-stderr-
+  // redirect carve-out (safe-bash.test.ts) now auto-approves it.
   "ls >& out",
   "cat foo || echo bad",
   // Bash expands $VAR inside double quotes; safe-bash must reject.

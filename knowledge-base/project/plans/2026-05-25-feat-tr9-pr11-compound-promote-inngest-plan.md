@@ -370,12 +370,12 @@ resource "sentry_cron_monitor" "scheduled_compound_promote" {
 | "direct-ANTHROPIC_API_KEY classification" | True. Every cron-*.ts handler that uses Anthropic uses `ANTHROPIC_API_KEY` via `buildSpawnEnv` (claude-eval cohort) or `process.env.ANTHROPIC_API_KEY` directly (pure-TS cohort like strategy-review). Both are operator key, not BYOK. `cron-no-byok-lease-sweep.test.ts` covers compound-promote automatically via cron-* glob. | No action needed beyond the I2 invariant statement in the handler banner. |
 | "label `compound-promote`" | `gh label list --search compound-promote` returns empty. The label `self-healing/auto` exists (referenced throughout the workflow); `compound-promote` does NOT. | Two options: (a) use the existing `self-healing/auto` label for the dedup-search issue title scope, OR (b) introduce a new `compound-promote` label and create it idempotently in handler. RECOMMENDATION: use `self-healing/auto` (already exists, semantically scoped, no new label needed). FR3 amended in the FR table to use `self-healing/auto` as the dedup-search label. |
 | "claude_args" | The workflow has no `claude_args:` field. There is no claude-code-action wrapper. | No claude_args parity to verify. The Anthropic POST body shape is the equivalent contract. |
-| "Hetzner runbook + ops/runbooks/compound-promote-runbook.md" | Found at `knowledge-base/engineering/ops/runbooks/compound-promote-runbook.md`. Read in full at plan time. | Phase 4 updates the runbook to point at the Inngest handler as the runtime contract. The "Opt in" gh-workflow-run instructions become "Trigger via Inngest event `cron/compound-promote.manual-trigger`". |
+| "Hetzner runbook + ops/runbooks/compound-promote-runbook.md" | Found at `knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md`. Read in full at plan time. | Phase 4 updates the runbook to point at the Inngest handler as the runtime contract. The "Opt in" gh-workflow-run instructions become "Trigger via Inngest event `cron/compound-promote.manual-trigger`". |
 | "7-handler threshold for substrate extraction" | Verified: 7 handlers grep-positive for `spawnClaudeEval|CLAUDE_CODE_FLAGS` — daily-triage, roadmap-review, competitive-analysis, bug-fixer, follow-through-monitor, agent-native-audit, legal-audit. **Compound-promote does NOT join this cohort** (pure-TS), so it remains at 7 after PR-11. | Phase 6 still files the extraction issue (the threshold was met *before* this PR; we are documenting the technical debt, not blocked on extraction landing first). |
 
 ## Open Code-Review Overlap
 
-Queried `gh issue list --label code-review --state open --json number,title,body --limit 200`. Then per-file grep on planned files (`apps/web-platform/server/inngest/functions/cron-compound-promote.ts`, `apps/web-platform/test/server/inngest/cron-compound-promote.test.ts`, `apps/web-platform/infra/sentry/cron-monitors.tf`, `.github/workflows/apply-sentry-infra.yml`, `apps/web-platform/app/api/inngest/route.ts`, `scripts/compound-promote.sh`, `scripts/compound-promote.test.sh`, `.github/workflows/scheduled-compound-promote.yml`, `knowledge-base/engineering/ops/runbooks/compound-promote-runbook.md`).
+Queried `gh issue list --label code-review --state open --json number,title,body --limit 200`. Then per-file grep on planned files (`apps/web-platform/server/inngest/functions/cron-compound-promote.ts`, `apps/web-platform/test/server/inngest/cron-compound-promote.test.ts`, `apps/web-platform/infra/sentry/cron-monitors.tf`, `.github/workflows/apply-sentry-infra.yml`, `apps/web-platform/app/api/inngest/route.ts`, `scripts/compound-promote.sh`, `scripts/compound-promote.test.sh`, `.github/workflows/scheduled-compound-promote.yml`, `knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md`).
 
 **Result:** None. (No code-review issues currently reference compound-promote
 or the cron-substrate files.)
@@ -533,7 +533,7 @@ discoverability_test:
 - [ ] **AC16.** PR body contains the literal anchor `human review required`. Verify: the PR body template in the handler contains that exact string. (Existing workflow at line 231 uses "Reviewer: verify..."; promote the anchor in the TS port.)
 - [ ] **AC17.** Per-cluster commit message trailer matches `Bot-Author: compound-promotion-loop@<sha>\nSource-Learnings: ...\nThreshold-Hit: <count>/5\nCluster-Hash: <hex>\nTier: ...`. Unit-test-locked against a synthesized cluster.
 - [ ] **AC18.** Synthetic checks: handler calls Octokit `repos.createCheckRun` exactly 7 times per PR with names `["test", "dependency-review", "e2e", "skill-security-scan PR gate", "enforce", "cla-check", "cla-evidence"]` and `conclusion: "success"`. Unit-test-locked.
-- [ ] **AC19.** Runbook updated. Verify: `grep -c "Inngest" knowledge-base/engineering/ops/runbooks/compound-promote-runbook.md` returns ≥ 3 (data flow, runtime contract, manual-trigger event name).
+- [ ] **AC19.** Runbook updated. Verify: `grep -c "Inngest" knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md` returns ≥ 3 (data flow, runtime contract, manual-trigger event name).
 - [ ] **AC20.** `bun vitest run cron-compound-promote` passes locally + on CI.
 - [ ] **AC21.** `bun tsc --noEmit` passes (no type errors introduced).
 - [ ] **AC22.** PR description body contains `Refs #3948` (NOT `Closes #3948`); umbrella stays open per the deferred-scope-out semantic.
@@ -576,7 +576,7 @@ discoverability_test:
 3.5. Add banner comments to `scripts/compound-promote.sh` and `scripts/compound-promote.test.sh` (1:1 PR-6 cron-strategy-review.ts header convention).
 
 ### Phase 4 — Runbook
-4.1. Update `knowledge-base/engineering/ops/runbooks/compound-promote-runbook.md`:
+4.1. Update `knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md`:
 - Replace "weekly GitHub Actions cron (Sunday 00:00 UTC)" with "weekly Inngest cron function (Sunday 00:00 UTC) at `apps/web-platform/server/inngest/functions/cron-compound-promote.ts`".
 - Replace `gh workflow run scheduled-compound-promote.yml` with the Inngest manual-trigger curl recipe (see Observability discoverability_test).
 - Add a Sharp Edges entry: "ADR-021 reference in `scripts/compound-promote.sh:15` is stale — actual ADR is ADR-027. Out of scope for PR-11; file as follow-up."
@@ -712,7 +712,7 @@ discoverability_test:
 - `.github/workflows/apply-sentry-infra.yml` (append `-target=`)
 - `scripts/compound-promote.sh` (banner comment, no logic change)
 - `scripts/compound-promote.test.sh` (banner comment)
-- `knowledge-base/engineering/ops/runbooks/compound-promote-runbook.md` (Inngest runtime contract)
+- `knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md` (Inngest runtime contract)
 
 ## Files to Create
 
@@ -730,7 +730,7 @@ discoverability_test:
 - Umbrella: `#3948` (TR9 — agent-loop crons → Inngest)
 - Compound-promote v1 plan: `knowledge-base/project/plans/2026-05-11-feat-compound-promotion-loop-plan.md`
 - Compound-promote v1 PR: `#2720`
-- Compound-promote runbook: `knowledge-base/engineering/ops/runbooks/compound-promote-runbook.md`
+- Compound-promote runbook: `knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md`
 - ADR-027 (stateless self-modifying cron): `knowledge-base/engineering/architecture/decisions/ADR-027-stateless-self-modifying-cron.md`
 - ADR-033 (Inngest cron via child_process spawn): `knowledge-base/engineering/architecture/decisions/ADR-033-inngest-cron-functions-invoke-claude-code-via-child-process-spawn.md`
 - Reference handler (pure-TS): `apps/web-platform/server/inngest/functions/cron-strategy-review.ts` (TR9 PR-6, closes `#4416`)

@@ -67,8 +67,28 @@ write_files:
       # `restart inngest _ latest` command.
       Cmnd_Alias INNGEST_RESTART = /usr/bin/systemctl restart inngest-server.service
       deploy ALL=(root) NOPASSWD: INNGEST_RESTART
+
+      # #4827 — permits infra-config-apply.sh to escalate the atomic install of
+      # its 8 managed files into root:root dest dirs the deploy user cannot write.
+      # Fixed helper path, no argument wildcards (sudo-rs safe); the helper's
+      # hardcoded dest allowlist + TOCTOU guards are the security boundary.
+      Cmnd_Alias INFRA_CONFIG_INSTALL = /usr/local/bin/infra-config-install
+      deploy ALL=(root) NOPASSWD: INFRA_CONFIG_INSTALL
     owner: root:root
     permissions: '0440'
+
+  # Pinned root-run escalation helper for infra-config-apply.sh (#4827). The
+  # webhook handler runs as the deploy user and cannot mktemp inside the
+  # root:root 0755 destination dirs; it stages each payload in a deploy-writable
+  # dir then escalates the atomic install to this helper via the
+  # INFRA_CONFIG_INSTALL sudoers grant. Kept OUT of the webhook FILE_MAP (the
+  # handler can't deliver the helper it depends on); delivered via cloud-init
+  # (fresh hosts) + terraform_data.infra_config_handler_bootstrap (existing host).
+  - path: /usr/local/bin/infra-config-install
+    encoding: b64
+    content: ${infra_config_install_script_b64}
+    owner: root:root
+    permissions: '0755'
 
   # Disk space monitoring script -- alerts via email (Resend) at 80%/95% thresholds (#1409).
   # Content injected from disk-monitor.sh via Terraform base64encode(file()).
@@ -279,11 +299,22 @@ write_files:
   # multi-hour lockout via bantime.increment escalation. Content injected from
   # fail2ban-sshd.local via Terraform base64encode(file()).
   # Runbook for recovery when locked out:
-  #   knowledge-base/engineering/ops/runbooks/ssh-fail2ban-unban.md
+  #   knowledge-base/engineering/operations/runbooks/ssh-fail2ban-unban.md
   # Keep in sync with terraform_data.fail2ban_tuning in server.tf.
   - path: /etc/fail2ban/jail.d/soleur-sshd.local
     encoding: b64
     content: ${fail2ban_sshd_local_b64}
+    owner: root:root
+    permissions: '0644'
+
+  # systemd-journald persistent + bounded storage drop-in (#4792, #4773).
+  # Content injected from journald-soleur.conf via Terraform base64encode(file())
+  # so this fresh-host copy is byte-identical to the one terraform_data.
+  # journald_persistent pushes to the existing host. Keep in sync with
+  # terraform_data.journald_persistent in server.tf (both read journald-soleur.conf).
+  - path: /etc/systemd/journald.conf.d/00-soleur.conf
+    encoding: b64
+    content: ${journald_soleur_conf_b64}
     owner: root:root
     permissions: '0644'
 
@@ -332,6 +363,19 @@ runcmd:
   # install with the defaults-debian.conf [sshd] jail enabled. The reload
   # picks up the bantime.maxtime cap before any login activity is recorded.
   - systemctl reload fail2ban || systemctl restart fail2ban
+
+  # Make systemd-journald persistent + bounded BEFORE any container starts with
+  # `--log-driver journald` (#4792, #4773). The drop-in at
+  # /etc/systemd/journald.conf.d/00-soleur.conf was written by write_files above.
+  # Creating /var/log/journal + restarting journald switches it from volatile
+  # (RAM under /run, lost on reboot) to persistent, so Vector's 3 journald
+  # sources read a durable journal from first container start. Idempotent:
+  # mkdir -p / restart / flush are all safe to re-run. Mirrors
+  # terraform_data.journald_persistent in server.tf (the existing-host path).
+  - mkdir -p /var/log/journal
+  - systemd-tmpfiles --create --prefix /var/log/journal
+  - systemctl restart systemd-journald
+  - journalctl --flush
 
   # Install Doppler CLI v3.75.3 (for secrets injection) with checksum verification
   - |
@@ -504,6 +548,7 @@ runcmd:
     # exec-from-/tmp call sites first.
     docker run -d \
       --name soleur-web-platform \
+      --log-driver journald \
       --restart unless-stopped \
       --tmpfs /tmp:rw,nosuid,nodev,size=256m \
       --env-file "$TMPENV" \

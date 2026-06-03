@@ -78,7 +78,7 @@ The fix (PR #3014) layers the canary:
   #3007 regression class (client-only throws are invisible to SSR HTML
   probes; Layer 3 reads what the bundle WILL try to validate).
 - **Layer 2** (chromium-in-canary) is deferred — see
-  `knowledge-base/engineering/ops/runbooks/canary-probe-set.md`.
+  `knowledge-base/engineering/operations/runbooks/canary-probe-set.md`.
 
 **Important Next.js 15 caveat:** an `error.tsx` file in a route segment
 is rendered as a SIBLING of that segment's `layout.tsx`, NOT a child of
@@ -160,8 +160,8 @@ deferred to in-scope.
 
 ## See also
 
-- `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md` — the operator-facing diagnosis + hot-fix runbook
-- `knowledge-base/engineering/ops/runbooks/canary-probe-set.md` — the canary contract
+- `knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md` — the operator-facing diagnosis + hot-fix runbook
+- `knowledge-base/engineering/operations/runbooks/canary-probe-set.md` — the canary contract
 - `apps/web-platform/lib/supabase/client.ts` — wrapped validator call site
 - `apps/web-platform/app/error.tsx`, `apps/web-platform/app/(dashboard)/error.tsx` — observability-migrated error boundaries
 - `apps/web-platform/lib/client-observability.ts` — `reportSilentFallback` shim (avoids pulling pino into the client bundle)

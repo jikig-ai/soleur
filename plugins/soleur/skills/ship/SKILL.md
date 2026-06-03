@@ -609,7 +609,7 @@ fi
 
 ### Deploy Pipeline Fix Drift Gate
 
-**Trigger:** PR touches any of the 6 `terraform_data.deploy_pipeline_fix` trigger files:
+**Trigger:** PR touches any of the `terraform_data.deploy_pipeline_fix` trigger files:
 
 - `apps/web-platform/infra/ci-deploy.sh`
 - `apps/web-platform/infra/ci-deploy-wrapper.sh`
@@ -617,10 +617,15 @@ fi
 - `apps/web-platform/infra/cat-deploy-state.sh`
 - `apps/web-platform/infra/canary-bundle-claim-check.sh`
 - `apps/web-platform/infra/hooks.json.tmpl`
+- `apps/web-platform/infra/deploy-inngest-bootstrap.sudoers`
+- `apps/web-platform/infra/infra-config-apply.sh`
+- `apps/web-platform/infra/infra-config-install.sh` (#4829 — delivered by the SSH bridge, kept in the hash for drift-guard sync)
+- `apps/web-platform/infra/push-infra-config.sh`
+- `apps/web-platform/infra/cat-infra-config-state.sh`
 
 **Detection:**
 
-The five trigger files are enumerated as a single bash array. The regex below MUST be derived from this array — keep the gate's reject criteria, documentation block, and test fixtures in sync (per `cq-when-a-plan-prescribes-a-validator-guard-or` — guard-surface coupling). If `apps/web-platform/infra/server.tf`'s `triggers_replace` `sha256(join(",",...))` block is changed (file added, removed, renamed), update the array, the regex, and `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` in the same PR.
+The trigger files are enumerated as a single bash array. The regex below MUST be derived from this array — keep the gate's reject criteria, documentation block, and test fixtures in sync (per `cq-when-a-plan-prescribes-a-validator-guard-or` — guard-surface coupling). If `apps/web-platform/infra/server.tf`'s `triggers_replace` `sha256(join(",",...))` block is changed (file added, removed, renamed), update the array, the regex, and `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` in the same PR.
 
 ```bash
 DEPLOY_PIPELINE_FIX_TRIGGERS=(
@@ -632,10 +637,11 @@ DEPLOY_PIPELINE_FIX_TRIGGERS=(
   "apps/web-platform/infra/hooks.json.tmpl"
   "apps/web-platform/infra/deploy-inngest-bootstrap.sudoers"
   "apps/web-platform/infra/infra-config-apply.sh"
+  "apps/web-platform/infra/infra-config-install.sh"
   "apps/web-platform/infra/push-infra-config.sh"
   "apps/web-platform/infra/cat-infra-config-state.sh"
 )
-DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|push-infra-config\.sh|cat-infra-config-state\.sh)$'
+DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|infra-config-install\.sh|push-infra-config\.sh|cat-infra-config-state\.sh)$'
 
 git diff --name-only origin/main...HEAD | grep -E "$DPF_REGEX"
 ```
@@ -646,7 +652,41 @@ If the grep matches at least one path, the gate fires. Trigger condition is "≥
 
 The PR's diff will produce drift on `terraform_data.deploy_pipeline_fix` — by design, because `hcloud_server.web` has `lifecycle.ignore_changes = [user_data]` (per `#967`) so cloud-init can't re-apply.
 
-**Auto-apply on merge.** The [`apply-deploy-pipeline-fix.yml`](../../../../.github/workflows/apply-deploy-pipeline-fix.yml) workflow auto-fires on push to `main` when any of the 6 trigger files change. It runs the targeted `terraform apply` from Doppler `prd_terraform`, verifies server-side hashes match the merged tree, and auto-closes any open `infra: drift detected in web-platform` issue. **Zero operator action required** post-merge — the PR review is the human authorization. Kill switch: include `[skip-deploy-fix-apply]` in any commit message on the PR to suppress the apply for that merge.
+**Auto-apply on merge.** The [`apply-deploy-pipeline-fix.yml`](../../../../.github/workflows/apply-deploy-pipeline-fix.yml) workflow auto-fires on push to `main` when any trigger file changes. It runs the targeted `terraform apply` from Doppler `prd_terraform`, verifies the post-apply `files_written == files_total` invariant, and auto-closes any open `infra: drift detected in web-platform` issue. **Zero operator action required** post-merge — the PR review is the human authorization. Kill switch: include `[skip-deploy-fix-apply]` in any commit message on the PR to suppress the apply for that merge.
+
+**Both resources auto-apply (#4829).** The workflow's `-target=` set now lists BOTH `terraform_data.deploy_pipeline_fix` (HTTPS webhook push) AND `terraform_data.infra_config_handler_bootstrap` (the root-SSH bridge that delivers the handler + the `infra-config-install` escalation helper + the sudoers grant). The runner reaches the SSH bridge over the existing Cloudflare Tunnel SSH route — it installs `cloudflared`, opens a `cloudflared access tcp` localhost forward authenticated by the CF Access `ci_ssh` service token, and adds an `iptables -t nat OUTPUT REDIRECT` rule so terraform's Go SSH client transparently reaches sshd. The firewall `admin_ips` allowlist is unchanged (the tunnel is the access path, not an IP grant). A handler/helper/sudoers change therefore lands on prod with **zero operator `terraform apply`** — eliminating the manual step that left #4827 dormant. **One-time precondition:** the live host must already trust the current CI key (`terraform_data.root_authorized_keys`, applied on the operator's most recent full `terraform apply`); a first-apply `Permission denied (publickey)` means the key is not on-host, not a bridge defect (the CI path cannot self-apply `root_authorized_keys` — same firewall reason).
+
+**In-session apply (operator-machine fallback, #4829).** When `/ship` runs on the operator's own machine rather than CI — detect via `[[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]]` AND `ssh-add -l` listing a key — the agent CAN apply the bridge in-session over the operator's direct SSH (their IP is in `admin_ips`, their ssh-agent key is in root's `authorized_keys`) instead of deferring to the CI auto-apply. This is the rare fallback (transient CI failure, or shipping a handler change you want live immediately); the CI auto-apply above is the default. Run:
+
+```bash
+if [[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]] && ssh-add -l >/dev/null 2>&1; then
+  cd apps/web-platform/infra
+  # Only the bridge target here (NOT deploy_pipeline_fix): the in-session fallback
+  # exists to land a handler/helper/sudoers change immediately; the webhook push
+  # (deploy_pipeline_fix) is independently covered by the CI auto-apply and does not
+  # need the operator's SSH path. Do NOT widen this to a 2-target apply.
+  doppler run -p soleur -c prd_terraform -- \
+    terraform apply -target=terraform_data.infra_config_handler_bootstrap -input=true
+  # The Terraform "yes" prompt is the load-bearing authorization
+  # (hr-menu-option-ack-not-prod-write-auth). Do NOT pass -auto-approve.
+fi
+```
+
+Verify with the no-host-login status hook (per `hr-no-ssh-fallback-in-runbooks` — `files_written == files_total` via `/hooks/infra-config-status`, NOT an SSH hash compare):
+
+```bash
+WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET -p soleur -c prd_terraform --plain)
+CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID -p soleur -c prd_terraform --plain)
+CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET -p soleur -c prd_terraform --plain)
+HMAC=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+curl -fsS -H "X-Signature-256: sha256=${HMAC}" \
+  -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
+  -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
+  "https://deploy.$(doppler secrets get APP_DOMAIN_BASE -p soleur -c prd_terraform --plain)/hooks/infra-config-status" \
+  | jq -e '.exit_code == 0 and .files_failed == 0 and .files_written == .files_total'
+```
+
+If `ssh-add -l` lists no key (no agent), do NOT attempt the in-session apply — let the CI auto-apply on merge handle it (no operator-only step is introduced; the CI path is the default).
 
 This gate's role is now purely informational: surface that the PR will trigger the auto-apply, and confirm the operator has not used the kill-switch unintentionally. Issue #3618 tracks the deeper refactor that eliminates the `terraform_data.deploy_pipeline_fix` pattern entirely (containerized deploy-orchestrator).
 
@@ -743,6 +783,43 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
 **If not triggered:** Skip silently.
 
 **Why:** In #1265, the CMO content gate was fixed to catch product features but the PWA feature itself was never assessed — the fix shipped without remediating the original gap. "Gate fixed" is not done — "gate fixed AND missed case remediated" is done.
+
+### Incident-PIR Gate (mandatory when triggered)
+
+Enforces the operator's standing rule — **every detected incident gets a post-incident report** — at the merge boundary: when a PR fixes a production incident/outage — **including an incident discovered incidentally while doing other work (after-the-fact)** — a post-incident report (PIR) MUST be produced before merge. (Constitution: "Incident detected → PIR always.") A fix that silently closes an outage without a PIR loses the learning that prevents recurrence (this gate exists because the 2026-06-02 chat-RLS outage went undetected for ~3 weeks and was nearly shipped-and-forgotten without a post-mortem).
+
+**Trigger — fires if ANY of:**
+
+1. The session invoked `/soleur:incident` (a PIR was scaffolded) — then this gate just verifies it landed on the branch.
+2. The referenced plan/spec OR the PR body declares `brand_survival_threshold: single-user incident` or `aggregate pattern` **AND** the change is a production-incident fix (not a greenfield feature). Distinguish via the incident-signal scan below.
+3. **Incident-signal scan.** The PR title/body or linked plan matches (case-insensitive) an outage signal AND a production signal:
+
+   ```bash
+   PR_TEXT=$(gh pr view --json title,body --jq '.title + "\n" + .body' 2>/dev/null || true)
+   PLAN_PATH=$(printf '%s' "$PR_TEXT" | grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])"`]+' | head -n1 || true)
+   PLAN_TEXT=""; [[ -n "$PLAN_PATH" && -f "$PLAN_PATH" ]] && PLAN_TEXT=$(cat "$PLAN_PATH")
+   HAYSTACK=$(printf '%s\n%s' "$PR_TEXT" "$PLAN_TEXT")
+   OUTAGE_RE='(outage|incident|broke[n]?|down for|silently (broken|failing)|regression in prod|users? (cannot|could not|can.?t)|unable to (send|use|log ?in)|production .*(broken|down|failing)|Sentry .*(error|alert).*(prod|production|user))'
+   PROD_RE='(prod|production|deployed|live|app\.soleur\.ai|tenant-zero|customer)'
+   echo "$HAYSTACK" | grep -qiE "$OUTAGE_RE" && echo "$HAYSTACK" | grep -qiE "$PROD_RE" && echo "INCIDENT-SIGNAL: yes"
+   ```
+
+   A greenfield-feature PR (no production-failure framing) does NOT trigger — the signals require BOTH an outage verb AND a production context. When uncertain, the gate fires (fail-toward-PIR for ambiguous prod-fix PRs); over-producing a short PIR is cheaper than losing an incident's learning.
+
+**If triggered — require a PIR on the branch:**
+
+```bash
+git diff --name-only origin/main...HEAD | grep -E '^knowledge-base/engineering/operations/post-mortems/.+-postmortem\.md$'
+```
+
+- **Match (a PIR was added/modified on this branch):** Pass. Confirm its frontmatter carries `brand_survival_threshold` and the Art. 33/34 fields (availability outages set both `false` with an `n/a` rationale; data-exposure incidents must evaluate the GDPR gate per `/soleur:incident` Phase 2).
+- **No match:** the incident has no PIR. **Headless mode:** invoke `/soleur:incident` (or, if unavailable in the loaded plugin snapshot, author the PIR directly using `plugins/soleur/skills/incident/templates/pir.md` → `knowledge-base/engineering/operations/post-mortems/<slug>-postmortem.md`), commit it, then re-run the gate. **Interactive mode:** prompt — (a) run `/soleur:incident` now, (b) author the PIR inline, or (c) defer with a tracked `type/chore` issue carrying a `Re-eval by:` criterion AND the `deferred-automation` sentinel (only when the PIR genuinely needs data not yet available). Default-deny on "we'll write it later" with no tracked issue.
+
+**Also file the systemic follow-ups the PIR names** (alerting gaps, write-site sweeps) as their own issues — a PIR with `## Follow-ups` that never become issues is shelf-ware.
+
+**If not triggered:** Skip silently (greenfield features, docs, refactors with no production-incident framing).
+
+**Why:** The 2026-06-02 chat-message-saving outage (migration 059 made `messages.workspace_id` RLS-required but the INSERT sites were never swept) ran for ~3 weeks, was first MISdiagnosed, and was nearly shipped-and-forgotten with no post-mortem. The operator's standing instruction is that **any** detected incident — even one found incidentally while fixing something else — always gets a post-mortem. This gate makes that mechanical at the merge boundary. PIR: `knowledge-base/engineering/operations/post-mortems/chat-rls-workspace-id-outage-postmortem.md`.
 
 ### Undeferred Operator-Step Gate (mandatory)
 
@@ -1111,7 +1188,7 @@ Use the **Monitor tool** with this shell loop (state-change + heartbeat, max 15 
 ```bash
 # <!-- phase-7-poll-block:start --> (do NOT edit without updating the
 # mirror in plugins/soleur/skills/merge-pr/SKILL.md §5.2 and the fixture
-# at plugins/soleur/test/ship-phase-7-poll-fixtures.sh; the fixture's awk
+# at plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh; the fixture's awk
 # extractor anchors on this fence + the variable-set fingerprint below.)
 prev=""; i=0; behind_syncs=0; MAX_BEHIND_SYNCS=6; behind_warned=0
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
@@ -1219,7 +1296,7 @@ while true; do
     # to heartbeat. PR may still merge if main calms down — but the
     # operator now has the diagnosis without log-archaeology.
     elapsed=$((i * 60))
-    echo "$(date +%H:%M:%S) [${i}/15] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s. origin/main is moving faster than this PR's CI cycle. Recommendation: stop ship pipeline; merge during a quieter window." >&2
+    echo "$(date +%H:%M:%S) [${i}/15] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s. origin/main is moving faster than this PR's CI cycle. Recommendation: for a zero-conflict-surface change, use the settle-then-admin-merge escape hatch (gh pr merge --squash --admin after confirming required checks are green on the current SHA — see \"Auto-sync on BEHIND\" below for the full procedure); else merge during a quieter window." >&2
     behind_warned=1
   fi
 
@@ -1240,7 +1317,17 @@ Each meaningful event (first iteration, every state change, heartbeat every 3rd 
 2. Merging origin/main into the branch with `--no-edit`. If conflicts arise (`--diff-filter=U` returns paths), the loop aborts the merge and stops polling — manual resolution is required and continuing would mask the conflict.
 3. Pushing the merge commit. This bumps the PR head ref, GitHub re-evaluates the queued auto-merge, and (assuming CI passes) the merge fires.
 
-The sync is capped at `MAX_BEHIND_SYNCS=6` per poll invocation. A pathological case — every sync triggers a new commit on main (parallel-active-repo class) — would otherwise consume the full 15-minute budget on BEHIND→BEHIND→BEHIND with no progress. After 6 syncs, the loop emits a structured `BEHIND budget exhausted` warning naming the elapsed time and recommendation to merge during a quieter window, then falls through to heartbeat — the PR may still merge if main calms down, but the operator now has the diagnosis at the inflection point instead of at the 15-minute timeout.
+The sync is capped at `MAX_BEHIND_SYNCS=6` per poll invocation. A pathological case — every sync triggers a new commit on main (parallel-active-repo class) — would otherwise consume the full 15-minute budget on BEHIND→BEHIND→BEHIND with no progress. After 6 syncs, the loop emits a structured `BEHIND budget exhausted` warning naming the elapsed time, then falls through to heartbeat — the PR may still merge if main calms down, but the operator now has the diagnosis at the inflection point instead of at the 15-minute timeout.
+
+**Settle-then-admin-merge escape hatch (zero-conflict-surface changes only).** When `main` is merging PRs faster than this PR's ~8-minute CI cycle, the auto-sync loop livelocks: every `git merge origin/main` push bumps the head ref, re-triggers the full required-check set, and `main` moves again before the checks settle — so the branch is never `CLEAN`-at-current-`main` and GitHub's queued auto-merge never fires (learning `2026-06-02-auto-merge-livelock-fast-moving-main.md`, surfaced on PR #4774). At the 6-sync cap, if this change has **zero conflict surface** (a docs/skill edit, an additive file, anything that cannot semantically conflict with what's landing on `main`), the up-to-date requirement is *purely procedural* and can be bypassed deterministically:
+
+1. **Stop auto-syncing.** The loop has already capped itself; do not hand-roll more `git merge origin/main` pushes (that is the livelock).
+2. **Confirm required checks are green on the CURRENT SHA** — `gh pr checks <N>` must show no required check in a `pending` or `fail` bucket (the canonical poll loop reads this via `gh pr checks --json name,bucket`). `--admin` bypasses ONLY the up-to-date gate, **NOT** the checks; merging with a red or pending required check ships unverified code.
+3. **Sync local → origin** so the local ref is fast-forward with the pushed head: `git fetch origin && git reset --hard origin/<branch>` (this discards any uncommitted or un-pushed local work on the branch — confirm `git status` is clean first).
+4. **Admin-merge:** `gh pr merge <N> --squash --admin`. This bypasses only the "branch must be up to date with base" rule.
+5. **Retry the transient race.** A busy `main` returns `Base branch was modified. Review and try the merge again.` between the check read and the merge call; loop with a short backoff until it lands: `for i in $(seq 1 20); do gh pr merge <N> --squash --admin && break; sleep 18; done`.
+
+Do **not** use this hatch for a change with real conflict surface — there, the up-to-date requirement is load-bearing and the correct move is to merge during a quieter window (or resolve the conflict and let CI re-verify).
 
 **Required-check failure exit.** Each tick, the loop intersects `gh pr checks --json name,bucket` failures (`bucket == "fail"`) with the repo's required-check name set (fetched once at loop entry via `gh api 'repos/{owner}/{repo}/rules/branches/main'`). On the first intersection, the loop exits and prints the failing check name + a pointer to `gh pr checks <number>` / `gh run view --log-failed`. This replaces the silent 15-minute heartbeat that occurs when a required check fails mid-poll but auto-merge sits queued waiting for a state transition that will never come. If the required-check fetch fails (no auth, no ruleset, archived repo), the scan is a no-op and the existing CLOSED-on-CI-failure fallback below still catches the terminal case — fail-open is deliberate, do NOT "harden" to fail-closed.
 
@@ -1518,7 +1605,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    -->
    ```
 
-   Canonical convention: `knowledge-base/engineering/ops/runbooks/followthrough-convention.md`.
+   Canonical convention: `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`.
    The directive is parsed daily by `.github/workflows/scheduled-followthrough-sweeper.yml`
    via [scripts/sweep-followthroughs.sh](../../../../scripts/sweep-followthroughs.sh) — exit 0 PASS / exit 1 FAIL / other TRANSIENT.
 
@@ -1542,6 +1629,8 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    - **SQL probe** (Supabase prd): scaffold via `/soleur:schedule --once` so the workflow brings its own Doppler env; the follow-through script then queries the workflow run status via `gh run list --workflow <name>.yml --status success`.
    - **GitHub Actions probe**: `gh run list --workflow <wf>.yml --status success --created '>=<earliest>' --json conclusion | jq -e 'length > 0'`
    - **Operator-confirmed** (CAPTCHA, OAuth consent, subjective design call): the script runs `gh issue view <N> --comments --json comments | jq -re '.comments[].body' | grep -qE '^RESULT: PASS$'` — the operator types `RESULT: PASS` in an issue comment when verification is done. This is the legitimate use of operator-confirmed exit-0: the script reads the human verdict, not the human reads a dashboard.
+   - **Self-armed Inngest oneshot** (autonomous — no operator, no GH-Actions): when the verification needs fire-time prd secrets / an installation-token repo write and has bespoke logic, ship a reviewed `oneshot-*.ts` + a `server/index.ts` boot-arm (ADR-046). It fires server-side at a future `ts` and reports to an issue / Sentry on its own. Precedent `oneshot-heartbeat-recovery-verify.ts`; see [`inngest-oneshot-and-reminder-patterns.md`](../../../../knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md).
+   - **Generic reminder primitive** (autonomous — **no deploy**): for a one-off issue comment or a *registered* check, arm it via `POST /api/internal/schedule-reminder` (Bearer `INNGEST_MANUAL_TRIGGER_SECRET`, allowlisted `action`) — no new function, no deploy. Same runbook.
 
    Bare "operator manually checks" with NO scripted gate is non-compliant with
    `hr-no-dashboard-eyeball-pull-data-yourself` AND `wg-pm-class-followthrough-for-operator-dogfood`
@@ -1653,7 +1742,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    **Step 2:** Classify each new migration.
 
 - **Schema-addition** (`ADD COLUMN`, `CREATE TABLE`, `CREATE INDEX`): verify via the REST probe in Step 3 below.
-- **Data migration** (backfill, value normalization, constraint-preparation rewrite): require a sibling verify file at `apps/web-platform/supabase/verify/<same-filename>.sql`. If absent, block the session and prompt the author to add one — see `knowledge-base/engineering/ops/runbooks/supabase-migrations.md` §3 ("Data backfill verification"). Once present, CI's `verify-migrations` job runs the sentinels on every deploy and auto-closes any matching `follow-through` issues; no additional manual step here.
+- **Data migration** (backfill, value normalization, constraint-preparation rewrite): require a sibling verify file at `apps/web-platform/supabase/verify/<same-filename>.sql`. If absent, block the session and prompt the author to add one — see `knowledge-base/engineering/operations/runbooks/supabase-migrations.md` §3 ("Data backfill verification"). Once present, CI's `verify-migrations` job runs the sentinels on every deploy and auto-closes any matching `follow-through` issues; no additional manual step here.
 
    **Step 3:** Verify each schema-addition migration is live in production by querying the Supabase REST API:
 

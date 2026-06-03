@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { getPluginPath } from "@/server/plugin-path";
@@ -9,6 +8,8 @@ import { reportSilentFallback } from "@/server/observability";
 import {
   buildAuthenticatedCloneUrl,
   redactToken,
+  resolveCronWorkspaceRoot,
+  warnIfCronWorkspaceLowOnDisk,
   type HandlerArgs,
 } from "./_cron-shared";
 
@@ -18,9 +19,34 @@ export interface SpawnResult {
   signal: NodeJS.Signals | null;
   abortedByTimeout: boolean;
   durationMs: number;
+  // Bounded tail of the child's stderr (redacted), so a non-zero exit is
+  // self-diagnosing in Sentry. The line-by-line pino stream goes to app stdout,
+  // which Vector does NOT ship to Better Stack — capturing the tail here is the
+  // only path that reaches Sentry. #4714 follow-up (roadmap/content silent
+  // non-zero exits were undiagnosable: app stdout is not in the log warehouse).
+  // Optional: sibling crons (daily-triage, follow-through-monitor) build their
+  // own SpawnResult literals via the inline spawn pattern and do not populate it.
+  stderrTail?: string;
+  // Bounded tail of the child's stdout (redacted). `claude --print` writes its
+  // max-turns notice to STDOUT, not stderr — that notice previously reached only
+  // logger.info (app stdout), which Vector does NOT ship to Better Stack, so a
+  // turn-exhaustion exit was red-on-the-monitor but not self-diagnosing without
+  // SSH. Capturing the tail here folds the notice into the scheduled-output-missing
+  // Sentry extra alongside stderrTail. #4773 (follow-up to #4714/#4770).
+  // Optional, same as stderrTail: inline-spawn sibling crons do not populate it.
+  stdoutTail?: string;
 }
 
 export const KILL_ESCALATION_MS = 5_000;
+
+// Hard ceiling on captured child stderr — a pathological process must not OOM
+// the worker. 8 KiB comfortably holds a git fatal: line + a few hints.
+export const STDERR_CAP_BYTES = 8192;
+
+// Hard ceiling on captured child stdout. The max-turns notice is a few hundred
+// bytes; the cap is a pathological-OOM ceiling (a runaway --print could stream
+// unbounded stdout), same rationale and value as STDERR_CAP_BYTES.
+export const STDOUT_TAIL_CAP_BYTES = 8192;
 
 export function resolveClaudeBin(): string {
   const override = process.env.CLAUDE_BIN;
@@ -44,18 +70,38 @@ export function spawnSimple(
   cmd: string,
   args: string[],
   opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
-): Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }> {
+): Promise<{
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  stderr: string;
+}> {
   return new Promise((resolve) => {
+    // Capture stderr (stdin/stdout stay ignored). Without this, a non-zero
+    // exit — e.g. `git clone` exit 128 — discarded the only line that says
+    // WHY (auth/network/DNS), leaving Sentry with an opaque exit code. The
+    // caller folds this into the thrown error so the next failure is
+    // self-diagnosing (cq-silent-fallback-must-mirror-to-sentry).
     const child = spawn(cmd, args, {
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "pipe"],
       cwd: opts.cwd,
       env: opts.env ?? process.env,
     });
+    let stderr = "";
+    if (child.stderr) {
+      child.stderr.setEncoding("utf-8");
+      child.stderr.on("data", (chunk: string) => {
+        // Exact cap (slice on assignment) — appending whole chunks could
+        // overshoot the ceiling by up to one chunk's length.
+        if (stderr.length < STDERR_CAP_BYTES) {
+          stderr = (stderr + chunk).slice(0, STDERR_CAP_BYTES);
+        }
+      });
+    }
     child.on("exit", (exitCode: number | null, signal: NodeJS.Signals | null) => {
-      resolve({ exitCode, signal });
+      resolve({ exitCode, signal, stderr: stderr.trim() });
     });
-    child.on("error", () => {
-      resolve({ exitCode: -1, signal: null });
+    child.on("error", (err: Error) => {
+      resolve({ exitCode: -1, signal: null, stderr: err.message });
     });
   });
 }
@@ -75,9 +121,13 @@ export async function setupEphemeralWorkspace(args: {
 }): Promise<{ ephemeralRoot: string; spawnCwd: string }> {
   const { installationToken, cronName } = args;
   const ephemeralRoot = await mkdtemp(
-    join(tmpdir(), `soleur-${cronName}-`),
+    join(resolveCronWorkspaceRoot(), `soleur-${cronName}-`),
   );
   const spawnCwd = join(ephemeralRoot, "repo");
+
+  // Pre-clone free-space guard (#4684/#4689 observability fold-in). Non-fatal:
+  // warns in Sentry if the workspace root is low on disk before the clone.
+  await warnIfCronWorkspaceLowOnDisk(ephemeralRoot, cronName);
 
   const cloneUrl = buildAuthenticatedCloneUrl(installationToken);
   const cloneResult = await spawnSimple("git", [
@@ -87,8 +137,14 @@ export async function setupEphemeralWorkspace(args: {
     spawnCwd,
   ]);
   if (cloneResult.exitCode !== 0) {
+    // Fold git's stderr into the message so the failure is self-diagnosing
+    // (auth vs network vs DNS). Redact the installation token first — the
+    // clone URL embeds it and git echoes the remote on some failures.
+    // cloneResult.stderr is already trimmed by spawnSimple.
+    const reason = redactToken(cloneResult.stderr, installationToken);
     throw new Error(
-      `git clone failed (exit ${cloneResult.exitCode}, signal ${cloneResult.signal}) for jikig-ai/soleur`,
+      `git clone failed (exit ${cloneResult.exitCode}, signal ${cloneResult.signal}) for jikig-ai/soleur` +
+        (reason ? `: ${reason}` : ""),
     );
   }
 
@@ -168,6 +224,13 @@ export async function spawnClaudeEval(args: {
   let abortedByTimeout = false;
   let exited = false;
   let escalationTimer: NodeJS.Timeout | null = null;
+  // Rolling bounded tail of redacted stderr lines (last STDERR_CAP_BYTES) so a
+  // non-zero exit can be surfaced to Sentry by the caller.
+  let stderrTail = "";
+  // Rolling bounded tail of redacted stdout lines (last STDOUT_TAIL_CAP_BYTES).
+  // Carries the `claude --print` max-turns notice (stdout, not stderr) to the
+  // Sentry surface. #4773.
+  let stdoutTail = "";
 
   try {
     return await new Promise<SpawnResult>((resolve) => {
@@ -181,19 +244,20 @@ export async function spawnClaudeEval(args: {
       if (child.stdout) {
         const rlOut = createInterface({ input: child.stdout });
         rlOut.on("line", (line) => {
-          logger.info(
-            { fn: cronName, stream: "stdout" },
-            redactToken(line, installationToken),
-          );
+          const redacted = redactToken(line, installationToken);
+          logger.info({ fn: cronName, stream: "stdout" }, redacted);
+          // Keep a bounded tail (drop oldest) for the Sentry surface — mirrors
+          // the stderrTail accumulation below. Carries the max-turns notice.
+          stdoutTail = (stdoutTail + redacted + "\n").slice(-STDOUT_TAIL_CAP_BYTES);
         });
       }
       if (child.stderr) {
         const rlErr = createInterface({ input: child.stderr });
         rlErr.on("line", (line) => {
-          logger.error(
-            { fn: cronName, stream: "stderr" },
-            redactToken(line, installationToken),
-          );
+          const redacted = redactToken(line, installationToken);
+          logger.error({ fn: cronName, stream: "stderr" }, redacted);
+          // Keep a bounded tail (drop oldest) for the Sentry surface.
+          stderrTail = (stderrTail + redacted + "\n").slice(-STDERR_CAP_BYTES);
         });
       }
 
@@ -233,6 +297,8 @@ export async function spawnClaudeEval(args: {
           signal,
           abortedByTimeout,
           durationMs: Date.now() - startedAt,
+          stderrTail,
+          stdoutTail,
         });
       });
       child.on("error", (err) => {
@@ -251,6 +317,11 @@ export async function spawnClaudeEval(args: {
           signal: null,
           abortedByTimeout,
           durationMs: Date.now() - startedAt,
+          stderrTail: stderrTail || redactedMsg,
+          // No `|| redactedMsg` fallback for stdout: a child_process spawn error
+          // (ENOENT, EACCES) means the child never started, so there is no stdout
+          // to capture — the error message belongs on stderrTail only. #4773.
+          stdoutTail,
         });
       });
 

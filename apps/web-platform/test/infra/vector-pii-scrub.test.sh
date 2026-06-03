@@ -249,6 +249,106 @@ else
   echo "  SKIP: utf8-pepper (AC6) — pepper does not contain multi-byte char"
 fi
 
+# ============================================================
+# #4773 — app container journald source: routing + WARN+ filter
+# ============================================================
+echo
+echo "=== #4773 app-container source assertions ==="
+
+# (a) Routing wiring (vector validate proves connectivity; these pin the
+#     REDACTION path — the app container must traverse pii_scrub, not bypass
+#     it to the sink). Asserted against vector.toml directly.
+assert_grep() {
+  local desc="$1" pattern="$2"
+  if grep -qE "$pattern" "$VECTOR_TOML"; then
+    PASS=$((PASS+1)); echo "  PASS: $desc"
+  else
+    FAIL=$((FAIL+1)); FAILS+=("$desc: pattern not found in vector.toml: $pattern")
+  fi
+}
+assert_grep "app_container_journald source exists" '^\[sources\.app_container_journald\]'
+assert_grep "warn filter reads the app_container source" '^inputs = \["app_container_journald"\]'
+assert_grep "app container routed THROUGH pii_scrub (redaction path, not sink-direct)" \
+  '^inputs = \["inngest_journald", "system_journald", "app_container_warn_filter"\]'
+assert_grep "tag_journald tags app-container lines source_kind=app_container" 'source_kind = "app_container"'
+
+# (b) Redaction parity: a cron pino WARN+ line carrying a userId + an Art-9
+#     user-content key (prompt) must be scrubbed identically to any other
+#     source once it reaches pii_scrub. CONTAINER_NAME rides at the top level
+#     (the Vector event shape) and must pass through unchanged.
+run_fixture "app-container-cron-line (#4773 redaction parity)" \
+  '{"message":"{\"level\":50,\"fn\":\"cron-growth-audit\",\"userId\":\"test-user-id\",\"prompt\":\"secret user prompt\",\"msg\":\"claude-eval nonzero exit\"}","CONTAINER_NAME":"soleur-web-platform"}' \
+  '(.pii_scrub_applied | contains("structured"))' \
+  '(.message | fromjson | has("prompt") | not)' \
+  "(.message | fromjson | .userIdHash == \"$EXPECTED_HASH_TUI\")" \
+  '(.message | fromjson | has("userId") | not)' \
+  '(.message | fromjson | .fn == "cron-growth-audit")' \
+  '(.CONTAINER_NAME == "soleur-web-platform")'
+
+# (c) WARN+ filter behavior. Docker's journald driver maps the app container's
+#     pino stdout (every level) to PRIORITY 6, so a journald PRIORITY filter
+#     cannot distinguish levels — the filter parses the pino JSON `level`
+#     instead. INFO/DEBUG (request firehose) drop; WARN/ERROR/FATAL ship;
+#     non-JSON crash lines are kept. Extracted from vector.toml (single source
+#     of truth) and the final if-expression bound to `.keep` for evaluation.
+extract_filter_condition() {
+  awk '
+    $0 == "[transforms.app_container_warn_filter]" { in_block = 1; next }
+    in_block && /^\[/ { in_block = 0 }
+    in_block && /condition = '\'\'\''/ { capturing = 1; next }
+    capturing && /^'\'\'\''/ { capturing = 0; in_block = 0; exit }
+    capturing { print }
+  ' "$VECTOR_TOML"
+}
+# Prefix the FIRST top-level `if` with `.keep = ` so --print-object exposes the
+# boolean result (the preceding parse_json statement stays a standalone stmt).
+FILTER_PROG=$(extract_filter_condition | sed '0,/^if /s//.keep = if /')
+if [[ -z "$FILTER_PROG" ]] || ! echo "$FILTER_PROG" | grep -q '\.keep = if '; then
+  FAIL=$((FAIL+1)); FAILS+=("app_container_warn_filter: condition extraction/rewrite failed")
+fi
+
+run_filter_fixture() {
+  local name="$1" input_json="$2" expected="$3"
+  local tmp out
+  tmp=$(mktemp)
+  printf '%s\n' "$input_json" >"$tmp"
+  if ! out=$("$VECTOR_BIN" vrl --input "$tmp" --print-object "$FILTER_PROG" 2>/tmp/vector-filter-err); then
+    cat /tmp/vector-filter-err >&2
+    FAIL=$((FAIL+1)); FAILS+=("$name: vector vrl exited non-zero"); rm -f "$tmp"; return
+  fi
+  rm -f "$tmp"
+  if echo "$out" | jq -e "(.keep == $expected)" >/dev/null 2>&1; then
+    PASS=$((PASS+1)); echo "  PASS: $name (keep=$expected)"
+  else
+    FAIL=$((FAIL+1)); FAILS+=("$name: expected keep=$expected, got: $out")
+  fi
+}
+run_filter_fixture "filter DROPS pino INFO (level 30 firehose)" \
+  '{"message":"{\"level\":30,\"fn\":\"cron-growth-audit\",\"msg\":\"stdout line\"}"}' "false"
+run_filter_fixture "filter KEEPS pino WARN (level 40)" \
+  '{"message":"{\"level\":40,\"msg\":\"warn\"}"}' "true"
+run_filter_fixture "filter KEEPS pino ERROR (level 50 — cron nonzero exit)" \
+  '{"message":"{\"level\":50,\"fn\":\"cron-growth-audit\",\"msg\":\"nonzero exit\"}"}' "true"
+run_filter_fixture "filter KEEPS non-JSON crash line (fd2 stack)" \
+  '{"message":"Segmentation fault (core dumped)"}' "true"
+# Boundary + non-numeric-level edge cases (pin the >= 40 cut and the `?? 0`
+# default so a future off-by-one or to_int regression is caught):
+run_filter_fixture "filter DROPS pino just-below boundary (level 39)" \
+  '{"message":"{\"level\":39,\"msg\":\"just below warn\"}"}' "false"
+run_filter_fixture "filter DROPS JSON object missing level (?? 0 default)" \
+  '{"message":"{\"msg\":\"no level field\",\"fn\":\"cron-x\"}"}' "false"
+run_filter_fixture "filter KEEPS string-typed level (to_int parses \"40\")" \
+  '{"message":"{\"level\":\"40\",\"msg\":\"string level\"}"}' "true"
+
+# Canary-exclusion config pin (#4773): the source must use EXACT-value
+# include_matches on the production container name only. systemd journal
+# matching is FIELD=value equality, so this excludes `soleur-web-platform-canary`
+# (which also logs to journald via ci-deploy.sh). A future widen to a prefix /
+# regex would silently start ingesting canary lines and double Better Stack
+# quota — pin the exact single-element array so that change fails this gate.
+assert_grep "source pins exact production container name (no canary, no wildcard)" \
+  '^include_matches\.CONTAINER_NAME = \["soleur-web-platform"\]$'
+
 echo
 echo "=== Summary: $PASS passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then

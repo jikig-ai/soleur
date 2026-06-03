@@ -8,7 +8,7 @@ tags:
   - monitoring
 module: marketing
 date: 2026-02-20
-last_reviewed: 2026-02-20
+last_reviewed: 2026-06-02
 review_cadence: quarterly
 ---
 
@@ -145,6 +145,14 @@ Suggested quarterly review of the marketingskills plugin:
 - **Escalate** if they add Eleventy/framework-specific modes or dedicated AEO skills
 
 No automated tooling needed -- manual review of their GitHub repository is sufficient at this cadence.
+
+## 2026-06-02 Review Note
+
+Quarterly review (overdue from the May 2026 cadence). The Feb-2026 catalog above is preserved as a point-in-time snapshot; this note records drift rather than rewriting it.
+
+- **One overlap-matrix entry has changed.** Soleur now ships a `programmatic-seo-specialist` agent (not in the Feb component list). Their skill **#14 `programmatic-seo`** — previously scored **None** (line in the "None" block: "No programmatic SEO") — now has a **direct equivalent**, raising that pairing to **High** overlap. The headline summary ("3 High overlaps, 2 Medium, 3 Low, 21 None") accordingly shifts toward **4 High / 20 None** as of this review.
+- The broader thesis is unchanged: their moat is breadth (CRO, paid, pricing, retention), ours is depth in content + SEO/AEO + lifecycle integration. No short-term convergence threat.
+- **Not re-verified this cycle:** their current star count and whether the plugin still ships exactly 29 skills (the next deep monitoring pass should confirm against their GitHub repo). Flagged rather than assumed.
 
 ## Related
 

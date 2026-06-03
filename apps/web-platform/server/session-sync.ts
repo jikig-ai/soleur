@@ -331,8 +331,19 @@ export type KbSyncRow = {
   sha_after?: string;
   ok: boolean;
   error_class?: KbSyncErrorClass;
+  // #self-heal (kb-sync-affordance-reconcile) — set true on an ok:true row
+  // when the clone was recovered via a gated `reset --hard origin/<default>`
+  // (a diverged clone with zero un-pushed local commits) rather than a clean
+  // `pull --ff-only`. Absent on clean syncs and all legacy rows. Keeps the
+  // forensic trail distinguishing a reset-recovery from a normal pull.
+  recovered?: boolean;
   push_received_at?: number; // Unix ms — only set on webhook_push rows
   sync_completed_at: number; // Unix ms
+  // #4728 — workspace discriminator. Set by the webhook-push reconcile
+  // producer (workspace-reconcile-on-push.ts), where the iterated
+  // workspace id is in scope. Absent on manual-route rows and on all
+  // legacy rows; a missing value reads as legacy-single-workspace.
+  workspace_id?: string;
 };
 
 /** Legacy daily-count row shape produced by `recordKbSyncHistory`. */

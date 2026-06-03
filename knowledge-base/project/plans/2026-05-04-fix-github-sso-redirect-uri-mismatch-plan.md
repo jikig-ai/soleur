@@ -670,7 +670,7 @@ greps for the rejection string."
   (verbatim verification + run-ID requirement).
 - `apps/web-platform/test/github-resolve.test.ts` — add the negative-
   case regression test from Test Scenarios §5.
-- `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` —
+- `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md` —
   extend with the new failure modes (`github_oauth_*_unregistered`,
   `github_app_suspended`, `github_oauth_*_http`).
 
@@ -680,7 +680,7 @@ greps for the rejection string."
   — compound entry per Phase 6 (single client_id serves all flows;
   custom-domain dual-registration; HTTP 200 for both healthy and
   failing states; body-grep is load-bearing).
-- `knowledge-base/engineering/ops/runbooks/github-app-callback-audit.md`
+- `knowledge-base/engineering/operations/runbooks/github-app-callback-audit.md`
   — operator-facing runbook: how to audit the three required
   callback URLs in the GitHub App dashboard, what each one serves,
   rollback if drift detected.

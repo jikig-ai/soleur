@@ -38,6 +38,7 @@ import { spawn } from "node:child_process";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import {
+  mintInstallationToken,
   postSentryHeartbeat,
   type HandlerArgs,
 } from "./_cron-shared";
@@ -147,6 +148,12 @@ const CLAUDE_CODE_FLAGS = [
 // (cron-daily-triage.test.ts imports to avoid hard-coded timing drift).
 export const MAX_TURN_DURATION_MS = 60 * 60 * 1000;
 
+// Token-lifetime floor passed to generateInstallationToken (via
+// mintInstallationToken). The agent runs ≤60 min (MAX_TURN_DURATION_MS); the
+// 60-min min-lifetime token re-mints if the cached one has <60 min left, so a
+// freshly minted token always covers the run. Same value as peer crons.
+const TOKEN_MIN_LIFETIME_MS = 50 * 60 * 1000 + 10 * 60 * 1000;
+
 // Sentry slug stays "scheduled-daily-triage" for continuity (NOT renamed
 // to cron-daily-triage). The function file name follows the cron-* TR9
 // convention; the Sentry monitor slug carries forward from PR-F.
@@ -157,15 +164,23 @@ const SENTRY_MONITOR_SLUG = "scheduled-daily-triage";
 // INNGEST_SIGNING_KEY, GH PAT, etc.) into a process whose Bash tool can
 // `env | curl`. The allowlist below caps the blast radius of a successful
 // prompt injection to "issue-label tampering" instead of "full-tenant
-// secret exfil". GH_TOKEN/GITHUB_TOKEN are the only credential the
-// prompt's gh-CLI verbs need.
-function buildSpawnEnv(): NodeJS.ProcessEnv {
+// secret exfil". GH_TOKEN is the only credential the prompt's gh-CLI verbs
+// need.
+//
+// GH_TOKEN is the freshly minted GitHub App installation token (deliberately
+// NOT process.env.GH_TOKEN/GITHUB_TOKEN — both empty inside the prod Next.js
+// container, so the agent's `gh` calls would fail unauthenticated, same root
+// cause as Sentry 512e253141294ac1a808b2ef03a21289 on cron-follow-through-monitor).
+// Per hr-github-app-auth-not-pat, production authenticates via the short-lived
+// installation token, never an ambient PAT / `gh auth login`. Mirrors
+// cron-bug-fixer.ts:187-195.
+function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
     NODE_ENV: process.env.NODE_ENV,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-    GH_TOKEN: process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN,
+    GH_TOKEN: installationToken,
   };
 }
 
@@ -177,6 +192,17 @@ export async function cronDailyTriageHandler({
   durationMs: number;
   abortedByTimeout: boolean;
 }> {
+  // Step 0: mint-installation-token — authenticate the agent's gh subprocess
+  // with a short-lived GitHub App installation token. Memoized across Inngest
+  // replay (its own step.run). Without this the agent's in-prompt `gh issue
+  // list/view/edit/comment` calls run unauthenticated inside the prod
+  // container and fail `gh auth login` (same root cause as Sentry
+  // 512e253141294ac1a808b2ef03a21289 on cron-follow-through-monitor). NEVER
+  // log this value.
+  const installationToken = await step.run("mint-installation-token", () =>
+    mintInstallationToken({ tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS }),
+  );
+
   const result = await step.run("claude-eval", async (): Promise<SpawnResult> => {
     const claudeBin = resolveClaudeBin();
     const ac = new AbortController();
@@ -194,7 +220,7 @@ export async function cronDailyTriageHandler({
           {
             detached: true, // own process group so SIGTERM propagates to grandchildren
             stdio: ["ignore", "inherit", "inherit"],
-            env: buildSpawnEnv(),
+            env: buildSpawnEnv(installationToken),
           },
         );
 

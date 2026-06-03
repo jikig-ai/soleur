@@ -336,6 +336,58 @@
   }
   .community-text a { color: var(--color-accent); }
 
+  /* Evergreen page freshness block — stat-led summary + last-updated + byline.
+     Rendered immediately below .page-hero / .landing-hero on every evergreen
+     page (see _includes/page-freshness.njk). Below the fold → not inlined in
+     the base.njk critical-CSS block. */
+  .page-freshness {
+    padding: var(--space-6) var(--space-5) var(--space-4);
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-bg-secondary);
+  }
+  .page-summary {
+    font-size: 1.0625rem;
+    line-height: 1.7;
+    color: var(--color-text);
+    max-width: 760px;
+    margin-inline: auto;
+    text-align: center;
+  }
+  .page-meta {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--space-2) var(--space-5);
+    margin-top: var(--space-4);
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+  }
+  .page-meta a { color: var(--color-accent); }
+  .page-meta time { color: var(--color-text); }
+
+  /* /getting-started/ #4410 — plain-language definition + external citations */
+  .page-definition {
+    font-size: 1.0625rem;
+    line-height: 1.7;
+    color: var(--color-text);
+    max-width: 720px;
+    margin: var(--space-4) auto 0;
+  }
+  .page-citations {
+    margin: var(--space-4) auto 0;
+    max-width: 720px;
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+    line-height: 1.7;
+  }
+  .page-citations ul {
+    list-style: none;
+    padding: 0;
+    margin: var(--space-2) 0 0;
+  }
+  .page-citations li { margin-top: var(--space-1); }
+  .page-citations a { color: var(--color-accent); }
+
   /* Footer social links */
   .footer-social {
     display: flex;
@@ -1373,6 +1425,15 @@
     color: var(--color-text-tertiary);
     text-align: center;
     margin-top: var(--space-6);
+  }
+
+  /* Pricing page: inline Concurrent Conversations definition (#3166) */
+  .pricing-concurrency-note {
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+    text-align: center;
+    max-width: 60ch;
+    margin: 0 auto var(--space-6);
   }
 
   /* Pricing page: Proof tagline */

@@ -35,8 +35,10 @@ resource "hcloud_server" "web" {
     disk_monitor_script_b64              = base64encode(file("${path.module}/disk-monitor.sh"))
     resource_monitor_script_b64          = base64encode(file("${path.module}/resource-monitor.sh"))
     fail2ban_sshd_local_b64              = base64encode(file("${path.module}/fail2ban-sshd.local"))
+    journald_soleur_conf_b64             = base64encode(file("${path.module}/journald-soleur.conf"))
     hooks_json_b64                       = base64encode(local.hooks_json)
     infra_config_apply_script_b64        = base64encode(file("${path.module}/infra-config-apply.sh"))
+    infra_config_install_script_b64      = base64encode(file("${path.module}/infra-config-install.sh"))
     cat_infra_config_state_script_b64    = base64encode(file("${path.module}/cat-infra-config-state.sh"))
     tunnel_token                         = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
     webhook_deploy_secret                = var.webhook_deploy_secret
@@ -72,10 +74,11 @@ resource "terraform_data" "disk_monitor_install" {
   ]))
 
   connection {
-    type  = "ssh"
-    host  = hcloud_server.web.ipv4_address
-    user  = "root"
-    agent = true
+    type        = "ssh"
+    host        = hcloud_server.web.ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
   }
 
   provisioner "file" {
@@ -110,10 +113,11 @@ resource "terraform_data" "resource_monitor_install" {
   ]))
 
   connection {
-    type  = "ssh"
-    host  = hcloud_server.web.ipv4_address
-    user  = "root"
-    agent = true
+    type        = "ssh"
+    host        = hcloud_server.web.ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
   }
 
   provisioner "file" {
@@ -142,15 +146,16 @@ resource "terraform_data" "resource_monitor_install" {
 # (ignore_changes on user_data means cloud-init changes do not apply to it).
 # Source of truth for jail content: fail2ban-sshd.local (sibling file).
 # Shows as "will be created" in CI drift reports -- expected behavior.
-# Runbook for acute lockout recovery: knowledge-base/engineering/ops/runbooks/ssh-fail2ban-unban.md
+# Runbook for acute lockout recovery: knowledge-base/engineering/operations/runbooks/ssh-fail2ban-unban.md
 resource "terraform_data" "fail2ban_tuning" {
   triggers_replace = sha256(file("${path.module}/fail2ban-sshd.local"))
 
   connection {
-    type  = "ssh"
-    host  = hcloud_server.web.ipv4_address
-    user  = "root"
-    agent = true
+    type        = "ssh"
+    host        = hcloud_server.web.ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
   }
 
   # Ensure fail2ban is installed before dropping the jail.d override. The
@@ -201,6 +206,274 @@ resource "terraform_data" "fail2ban_tuning" {
   }
 }
 
+# Make systemd-journald persistent + bounded on the existing server (#4792, #4773).
+# PR #4786 moved the soleur-web-platform container to `--log-driver journald`, so
+# the host journal must persist across reboots (else Vector's 3 journald sources
+# read an empty /var/log/journal post-reboot) and be sized so it can never fill /.
+# Cloud-init handles fresh servers; this provisioner handles the existing one
+# (ignore_changes on user_data means cloud-init changes never apply to it — so a
+# cloud-init-only edit would land dead config; this SSH path is the sole live-prod
+# apply path). Source of truth for the drop-in: journald-soleur.conf (sibling
+# file, also rendered into cloud-init via base64encode(file()) — keep both in
+# sync). Shows as "will be created" in CI drift reports -- expected behavior, same
+# as the 6 sibling SSH provisioners. SSH connection precedent: disk_monitor_install.
+# Positive-assertion precedent: fail2ban_tuning (prove persistence took, don't
+# just observe it). Apply-path firewall note: SSH:22 is allowlisted to
+# var.admin_ips only (firewall.tf; CI-deploy SSH rule removed in #749), so the
+# handshake succeeds iff the operator/CI egress IP ∈ admin_ips. A
+# `connection reset by peer` here is admin-IP drift (fix: /soleur:admin-ip-refresh,
+# runbook admin-ip-drift.md), NOT an sshd/journald fault — per hr-ssh-diagnosis-verify-firewall.
+resource "terraform_data" "journald_persistent" {
+  triggers_replace = sha256(file("${path.module}/journald-soleur.conf"))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web.ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+  }
+
+  # The drop-in dir does NOT exist by default on Ubuntu — systemd ships
+  # /etc/systemd/journald.conf but not the journald.conf.d/ subdir, and the
+  # `file` provisioner (scp) does not create remote parents. On the existing
+  # host cloud-init's write_files (which would create the dir) never runs
+  # (ignore_changes=[user_data]), so this mkdir is load-bearing: without it the
+  # very first apply fails at scp `No such file or directory`. Mirrors the
+  # fail2ban_tuning pre-`file` remote-exec that guarantees its target dir exists.
+  provisioner "remote-exec" {
+    inline = [
+      "mkdir -p /etc/systemd/journald.conf.d",
+    ]
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/journald-soleur.conf"
+    destination = "/etc/systemd/journald.conf.d/00-soleur.conf"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "chown root:root /etc/systemd/journald.conf.d/00-soleur.conf",
+      "chmod 0644 /etc/systemd/journald.conf.d/00-soleur.conf",
+      # Create the persistent journal dir with journald's expected ownership +
+      # ACLs. systemd-tmpfiles applies the packaged tmpfiles.d/systemd.conf rule
+      # for /var/log/journal (0755 root:systemd-journal + setgid + read ACLs);
+      # mkdir -p first so the rule has a dir to adjust. Both idempotent.
+      "mkdir -p /var/log/journal",
+      "systemd-tmpfiles --create --prefix /var/log/journal",
+      # Restart picks up the Storage=persistent + cap drop-in; flush migrates the
+      # volatile /run journal into /var/log/journal. Sub-second daemon restart;
+      # buffered logs are flushed, not lost. No container/app/Vector restart:
+      # Vector's journald sources read by sd_journal cursor (not file path) and
+      # are restart/rotation-tolerant, so they resume from their stored cursor
+      # with no gap beyond the sub-second window. Resumption is verified
+      # out-of-band (no SSH) post-apply via the cat-deploy-state webhook —
+      # vector_journal_tail non-empty + journald_storage.persistent=true.
+      "systemctl restart systemd-journald",
+      "journalctl --flush",
+      # Diagnostic dump (informational; printed to CI drift logs).
+      "systemd-analyze cat-config systemd/journald.conf | grep -E '^(Storage|SystemMaxUse|SystemKeepFree|RuntimeMaxUse)=' || true",
+      # Positive assertions (fail2ban_tuning pattern): if the drop-in did NOT take
+      # effect, journald would still be volatile and these would fail the
+      # provisioner instead of silently shipping dead config.
+      "test -d /var/log/journal",
+      # --header lists active journal files with their paths; a persistent journal
+      # has files under /var/log/journal. Volatile-only journals list /run paths.
+      "journalctl --header | grep -q '/var/log/journal'",
+      "test \"$(systemctl is-active systemd-journald)\" = 'active'",
+    ]
+  }
+}
+
+# Handler-bootstrap bridge: deliver infra-config-apply.sh (the /hooks/infra-config
+# webhook handler) + cat-infra-config-state.sh + the rendered hooks.json directly
+# to the running host over SSH (#4811, Ref #4804).
+#
+# WHY THIS EXISTS (the chicken-and-egg this closes): the handler reaches the host
+# only via (1) cloud-init write_files — dead on the existing host because
+# hcloud_server.web carries ignore_changes=[user_data], so cloud-init never
+# re-applies — and (2) deploy_pipeline_fix's triggers_replace hash, which re-fires
+# push-infra-config.sh. But push-infra-config.sh pushes the OTHER 7 files and does
+# NOT send infra-config-apply.sh (the handler is not in its payload nor in the
+# handler's own FILE_MAP — it cannot deliver itself by construction). Net: a
+# handler/hooks.json drift on the host was UNRECOVERABLE through the webhook path,
+# because the recovery itself routes through the stale handler (the #4804 freeze).
+# SSH is the only path that can deliver the handler TO a host where the handler is
+# broken. PR #4805 made the handler fail loud, but a fix can only take effect on a
+# host that receives the new handler — this resource is that delivery path.
+#
+# WHY SSH IS NOT A #3756 REGRESSION: #3756 replaced ONLY deploy_pipeline_fix's SSH
+# provisioner with the webhook, to keep the *routine* deploy-config push HTTPS-only.
+# SSH was never removed from the stack — 7 sibling terraform_data resources here
+# still use connection{type="ssh"} today (disk_monitor_install, resource_monitor_install,
+# fail2ban_tuning, journald_persistent, docker_seccomp_config, apparmor_bwrap_profile,
+# orphan_reaper_install). This is a HYBRID of the established siblings: the
+# connection block + positive post-write assertions + service restart are
+# journald_persistent's shape, while the multi-input `sha256(join(...))`
+# triggers_replace and the base64 secret-render are deploy_pipeline_fix's /
+# disk_monitor_install's (a secret-bearing local.hooks_json cannot be a single
+# `file()`). Do NOT "simplify" the multi-input trigger to journald's single-file()
+# form — it legitimately tracks 3 inputs. NOT a reversal of #3756's routine-push
+# decision.
+#
+# RUNNING-HOST-ONLY: unlike deploy_pipeline_fix this resource has NO cloud-init
+# mirror — fresh hosts get the handler from cloud-init write_files
+# (cloud-init.yml, search "path: /usr/local/bin/infra-config-apply.sh") directly.
+# Do NOT add a redundant cloud-init block.
+#
+# DUAL-FIRE IS INTENTIONAL: infra-config-apply.sh, cat-infra-config-state.sh, and
+# local.hooks_json appear in BOTH this triggers_replace AND deploy_pipeline_fix's.
+# A handler edit re-fires both — deploy_pipeline_fix re-pushes the other 7 files,
+# while THIS resource is the only one that actually delivers the handler. Do not
+# "dedupe" them.
+#
+# SYNCHRONOUS RESTART: the webhook restart below is direct (systemctl restart),
+# unlike the handler's own deferred self-restart (systemd-run --on-active=3s). The
+# handler must defer because it IS exec'd by the webhook binary (killing webhook
+# kills the in-flight response). This SSH path is independent of the webhook
+# process (SSH = root over :22; webhook = deploy user on 127.0.0.1:9000), so it
+# can restart + assert active immediately. Do NOT copy the deferred-restart dance.
+#
+# Shows as "will be created" in CI drift reports -- expected behavior, same as the
+# 7 sibling SSH provisioners. Apply-path firewall note: SSH:22 is allowlisted to
+# var.admin_ips only (firewall.tf) for DIRECT-IP dials. The OPERATOR-LOCAL apply
+# dials the direct IP, so its handshake succeeds iff the operator egress IP ∈
+# admin_ips. A `connection reset by peer` on the operator path is admin-IP drift
+# (fix: /soleur:admin-ip-refresh, runbook admin-ip-drift.md), NOT an sshd/handler
+# fault — per hr-ssh-diagnosis-verify-firewall.
+#
+# #4829 — CI ACCESS IS VIA THE CLOUDFLARE TUNNEL, NOT admin_ips. The GitHub-hosted
+# runner egress IP is non-static and NOT in admin_ips, so `apply-deploy-pipeline-fix.yml`
+# reaches this bridge over the existing CF Tunnel SSH route (tunnel.tf: ssh://localhost:22
+# ingress + CF Access ci_ssh service token) instead of the firewall-gated direct IP.
+# The runner opens a `cloudflared access tcp` localhost forward and an
+# `iptables -t nat OUTPUT REDIRECT` rule rewrites SERVER_IP:22 → 127.0.0.1:2222,
+# so the inbound SSH arrives at sshd via the host-side cloudflared daemon and never
+# traverses the :22 admin_ips ingress rule (firewall byte-unchanged). This bridge IS
+# now in apply-deploy-pipeline-fix.yml's -target= set; a CI handshake failure here is
+# either a missing/stale CI key in root's authorized_keys (terraform_data.root_authorized_keys,
+# operator-local-apply only) or an expired ci_ssh CF Access token — NOT admin-IP drift.
+#
+# #4827 ADDITION: this bridge also delivers infra-config-install.sh (the pinned
+# root-run escalation helper) + the updated deploy-inngest-bootstrap.sudoers (with
+# the INFRA_CONFIG_INSTALL grant) over root SSH. This is load-bearing for the
+# chicken-and-egg: the webhook handler's prod-mode escalation needs BOTH the helper
+# binary AND the sudoers alias present on-host before `sudo infra-config-install`
+# is permitted — but the handler cannot deliver either (the helper is deliberately
+# OUT of the webhook FILE_MAP, and writing the sudoers itself requires the alias).
+# Root SSH is the only non-circular bootstrap path. #4829 — deploy_pipeline_fix does
+# NOT depends_on this resource; both are listed as explicit -target=s in
+# apply-deploy-pipeline-fix.yml and apply on the same CI run. Ordering between the SSH
+# helper/sudoers delivery and the webhook push is handled by the handler's per-file
+# install_rejected self-heal (see the deploy_pipeline_fix depends_on rationale below).
+resource "terraform_data" "infra_config_handler_bootstrap" {
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/infra-config-apply.sh"),
+    file("${path.module}/infra-config-install.sh"),
+    file("${path.module}/deploy-inngest-bootstrap.sudoers"),
+    file("${path.module}/cat-infra-config-state.sh"),
+    local.hooks_json,
+  ]))
+
+  # #4829 — DUAL-CONTEXT connection. Two apply paths reach this bridge:
+  #   (1) operator-local full `terraform apply` — var.ci_ssh_private_key is unset
+  #       (null), so agent = true uses the operator's ssh-agent (their key is
+  #       already in root's authorized_keys). Byte-equivalent to the pre-#4829
+  #       behavior.
+  #   (2) CI `apply-deploy-pipeline-fix.yml` over the Cloudflare Tunnel —
+  #       TF_VAR_ci_ssh_private_key carries Doppler DEPLOY_SSH_PRIVATE_KEY, so
+  #       agent = false and the Go SSH client authenticates with that explicit
+  #       key. The runner has no ssh-agent; the host trusts the matching pubkey
+  #       via terraform_data.root_authorized_keys (ci-ssh-key.tf).
+  # connection.host stays the literal ipv4_address in BOTH paths — the CI runner
+  # transparently redirects SERVER_IP:22 → 127.0.0.1:2222 (the cloudflared TCP
+  # forward) via an `iptables -t nat OUTPUT REDIRECT` rule, invisible to the Go
+  # SSH client (which does NOT read ~/.ssh/config / ProxyCommand — see learning
+  # 2026-05-20-terraform-go-ssh-client-ignores-ssh-config-multi-agent-catch.md).
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web.ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+  }
+
+  # The two scripts are on-disk files → straight scp. hooks.json is NOT: it is a
+  # templatefile() render with var.webhook_deploy_secret interpolated (the on-disk
+  # file is the .tmpl, not the rendered output — same trap push-infra-config.sh
+  # documents), so it cannot be a provisioner "file" source. It is written via the
+  # remote-exec base64 heredoc below, exactly as push-infra-config.sh passes
+  # HOOKS_JSON_B64.
+  provisioner "file" {
+    source      = "${path.module}/infra-config-apply.sh"
+    destination = "/usr/local/bin/infra-config-apply.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/cat-infra-config-state.sh"
+    destination = "/usr/local/bin/cat-infra-config-state.sh"
+  }
+
+  # #4827 — the escalation helper. Delivered here (root SSH) because the webhook
+  # handler that depends on it cannot deliver it (it is OUT of the FILE_MAP).
+  provisioner "file" {
+    source      = "${path.module}/infra-config-install.sh"
+    destination = "/usr/local/bin/infra-config-install"
+  }
+
+  # #4827 — the sudoers grant (with the new INFRA_CONFIG_INSTALL alias). Staged to
+  # a temp path then visudo-validated + installed below; writing it directly would
+  # risk a half-written file in /etc/sudoers.d. The handler ALSO carries this file
+  # in its FILE_MAP, but the webhook self-heal of the sudoers is circular on the
+  # first apply (escalating its write needs the alias this file adds), so root SSH
+  # bootstraps it.
+  provisioner "file" {
+    source      = "${path.module}/deploy-inngest-bootstrap.sudoers"
+    destination = "/tmp/deploy-inngest-bootstrap.sudoers.staged"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      # Render hooks.json from the secret-bearing local value (base64 so the
+      # interpolated content survives the inline string; sensitive interpolation
+      # in remote-exec is the same mechanism disk_monitor_install uses for
+      # var.resend_api_key — Terraform only refuses it in local-exec's command).
+      "printf '%s' '${base64encode(local.hooks_json)}' | base64 -d > /etc/webhook/hooks.json",
+      # Ownership/permissions: scripts root:root 0755, hooks.json root:deploy 0640
+      # (match cloud-init.yml write_files for these paths).
+      "chown root:root /usr/local/bin/infra-config-apply.sh /usr/local/bin/cat-infra-config-state.sh /usr/local/bin/infra-config-install",
+      "chmod 0755 /usr/local/bin/infra-config-apply.sh /usr/local/bin/cat-infra-config-state.sh /usr/local/bin/infra-config-install",
+      "chown root:deploy /etc/webhook/hooks.json",
+      "chmod 0640 /etc/webhook/hooks.json",
+      # #4827 — validate then atomically install the sudoers grant. visudo -cf
+      # gates a malformed file from disabling sudo entirely; install does an
+      # owner/mode-correct atomic placement. Fail the provisioner on a bad file
+      # rather than ship a broken /etc/sudoers.d.
+      "visudo -cf /tmp/deploy-inngest-bootstrap.sudoers.staged",
+      "install -o root -g root -m 0440 /tmp/deploy-inngest-bootstrap.sudoers.staged /etc/sudoers.d/deploy-inngest-bootstrap",
+      "rm -f /tmp/deploy-inngest-bootstrap.sudoers.staged",
+      # Synchronous restart (safe — this SSH path is not the webhook process).
+      "systemctl restart webhook",
+      # Positive post-write assertions (journald_persistent / fail2ban_tuning
+      # pattern): prove the bootstrap took, don't just observe it. A failed
+      # assertion fails the provisioner instead of silently shipping dead config.
+      "test -x /usr/local/bin/infra-config-apply.sh",
+      "test -x /usr/local/bin/cat-infra-config-state.sh",
+      "test -x /usr/local/bin/infra-config-install",
+      # The sudoers grant landed and parses (the INFRA_CONFIG_INSTALL alias is
+      # what makes the webhook handler's prod-mode escalation work).
+      "grep -q INFRA_CONFIG_INSTALL /etc/sudoers.d/deploy-inngest-bootstrap",
+      # hooks.json re-registers the status hook + maps the state-reporter key (the
+      # exact host drift that caused the #4804 freeze: stale hooks.json had neither).
+      "grep -q infra-config-status /etc/webhook/hooks.json",
+      "grep -q cat_infra_config_state_sh_b64 /etc/webhook/hooks.json",
+      # The webhook listener restarted cleanly and is serving.
+      "test \"$(systemctl is-active webhook)\" = 'active'",
+    ]
+  }
+}
+
 # Fix deploy pipeline: push current ci-deploy.sh, update webhook.service
 # (EnvironmentFile + ReadWritePaths=/var/lock), and delete stale /mnt/data/.env.
 # Cloud-init handles new servers; this provisioner fixes the existing one
@@ -217,6 +490,19 @@ resource "terraform_data" "fail2ban_tuning" {
 # means new servers provisioned from scratch will miss the change.
 resource "terraform_data" "deploy_pipeline_fix" {
   # AppArmor profile must be loaded before ci-deploy.sh references it (#1570).
+  #
+  # #4827/#4829 — deliberately NO depends_on the infra_config_handler_bootstrap
+  # bridge, even though both are now applied by `apply-deploy-pipeline-fix.yml`.
+  # The workflow lists BOTH resources EXPLICITLY in its `-target=` set (#4829), so
+  # a depends_on is unnecessary for ordering AND would over-couple the resource
+  # graph: a depends_on would force EVERY apply of deploy_pipeline_fix (including
+  # the operator-local full apply) to also recreate the bridge. Keeping them as
+  # independent explicit targets lets the workflow apply each on its own merits.
+  # Ordering between the SSH delivery of helper+sudoers (the bridge) and the
+  # webhook push (this resource) is handled by the handler's per-file self-heal: a
+  # push that predates the helper/sudoers records install_rejected for that file
+  # and the next push lands it. Both targets apply on the same CI run, so the
+  # window is a single apply.
   depends_on = [terraform_data.apparmor_bwrap_profile]
 
   # hcloud_server.web has ignore_changes=[user_data], so cloud-init never re-applies
@@ -234,8 +520,24 @@ resource "terraform_data" "deploy_pipeline_fix" {
     file("${path.module}/webhook.service"),
     file("${path.module}/cat-deploy-state.sh"),
     file("${path.module}/canary-bundle-claim-check.sh"),
+    # NOTE (#4827): the sudoers is no longer webhook-delivered (removed from
+    # push-infra-config.sh + FILE_MAP; it is root-managed via the
+    # infra_config_handler_bootstrap SSH bridge). It is kept in THIS hash so a
+    # sudoers change still re-fires deploy_pipeline_fix (harmless — re-pushes the
+    # unchanged 7 webhook files) AND keeps the deploy-pipeline-fix drift guard
+    # (plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts TRIGGER_FILES +
+    # the ship-skill DEPLOY_PIPELINE_FIX_TRIGGERS) in sync without a 3-way edit.
     file("${path.module}/deploy-inngest-bootstrap.sudoers"),
     file("${path.module}/infra-config-apply.sh"),
+    # NOTE (#4829): infra-config-install.sh is delivered by the
+    # infra_config_handler_bootstrap SSH bridge (root-managed escalation helper),
+    # NOT this webhook path. It is kept in THIS hash for the same reason as the
+    # sudoers above: so a helper-only change re-fires deploy_pipeline_fix (harmless
+    # — re-pushes the unchanged 7 webhook files) AND keeps the deploy-pipeline-fix
+    # drift guard (plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts
+    # TRIGGER_FILES + the ship-skill DEPLOY_PIPELINE_FIX_TRIGGERS array) in sync,
+    # so the ship gate fires + notifies the operator on a helper-only change.
+    file("${path.module}/infra-config-install.sh"),
     file("${path.module}/push-infra-config.sh"),
     file("${path.module}/cat-infra-config-state.sh"),
     local.hooks_json,
@@ -272,10 +574,11 @@ resource "terraform_data" "docker_seccomp_config" {
   triggers_replace = sha256(file("${path.module}/seccomp-bwrap.json"))
 
   connection {
-    type  = "ssh"
-    host  = hcloud_server.web.ipv4_address
-    user  = "root"
-    agent = true
+    type        = "ssh"
+    host        = hcloud_server.web.ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
   }
 
   provisioner "remote-exec" {
@@ -308,10 +611,11 @@ resource "terraform_data" "apparmor_bwrap_profile" {
   triggers_replace = sha256(file("${path.module}/apparmor-soleur-bwrap.profile"))
 
   connection {
-    type  = "ssh"
-    host  = hcloud_server.web.ipv4_address
-    user  = "root"
-    agent = true
+    type        = "ssh"
+    host        = hcloud_server.web.ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
   }
 
   provisioner "file" {
@@ -335,10 +639,11 @@ resource "terraform_data" "orphan_reaper_install" {
   triggers_replace = sha256(file("${path.module}/orphan-reaper.sh"))
 
   connection {
-    type  = "ssh"
-    host  = hcloud_server.web.ipv4_address
-    user  = "root"
-    agent = true
+    type        = "ssh"
+    host        = hcloud_server.web.ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
   }
 
   provisioner "file" {

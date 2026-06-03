@@ -3,6 +3,7 @@ title: "How to Run Every Business Department with AI Agents: A Solo Founder's Pl
 seoTitle: "How to Run Every Business Department with AI Agents: A Solo Founder's Playbook"
 date: 2026-05-14
 description: "Solo founders can delegate marketing, legal, finance, ops, and more to AI agents that share context. Here's how to run every department without hiring anyone."
+ogImage: "blog/og-run-every-department.png"
 tags:
   - solo-founder
   - company-as-a-service

@@ -233,7 +233,7 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 **Bootstrap (mandatory before spawning the agent):** Run [ensure-semgrep.sh](./scripts/ensure-semgrep.sh) from the repo root. The script checks PATH first, then auto-installs via brew → pipx → `pip --user` in that order. Exits 0 when semgrep is reachable. Exit 1 means an install was attempted and failed; exit 2 means no install path was available (no brew, pipx, or python3 with pip). On non-zero exit, print the script's stderr to the user and abort the review. Do NOT silently skip — the deterministic SAST pass is what catches CodeQL-equivalent patterns like `js/file-system-race` before push.
 
-**Custom rules file:** [semgrep-custom-rules.yaml](./references/semgrep-custom-rules.yaml) ships alongside the public rule packs and covers CodeQL queries the public packs miss (e.g. the TOCTOU patterns that blocked PR #2463 in CI). The semgrep-sast agent loads it via `--config=plugins/soleur/skills/review/references/semgrep-custom-rules.yaml`. Extend it whenever a CodeQL finding in CI was not caught locally — the goal is no-surprises on CI.
+**Custom rules file:** [semgrep-custom-rules.yaml](./references/semgrep-custom-rules.yaml) ships alongside the public rule packs and covers CodeQL queries the public packs miss (e.g. the TOCTOU patterns that blocked PR #2463 in CI). The semgrep-sast agent loads it via `--config=plugins/soleur/skills/review/references/semgrep-custom-rules.yaml`. Extend it whenever a CodeQL finding in CI was not caught locally — the goal is no-surprises on CI. **Run semgrep from the worktree/repo root** — that `--config` path is repo-root-relative, so a persisted `cd apps/web-platform` (left over from a prior `tsc`/`vitest` call; the Bash tool keeps CWD across calls) makes semgrep exit 7 `config path does not exist`. Use `cd <root> && semgrep …` in one call, or pass an absolute `--config`. **Why:** #4742.
 
 **What this agent checks:**
 
@@ -560,6 +560,41 @@ When filing:
 - Use `gh issue create --body-file <path>` — never `--body "$VAR"` — so
   untrusted finding text (diffs, agent output) cannot shell-interpolate.
 
+**Auto-wire deferred-scope-outs into the follow-through sweeper.** When a
+scope-out passes the CONCUR gate AND its `Re-eval by:` trigger is a concrete
+date / dependency / event-grep / counter form, the filing ALSO wires the issue
+into the follow-through auto-close substrate so it cannot rot open past its
+trigger:
+
+1. add `--label follow-through` to the `gh issue create` call (alongside
+   `--label deferred-scope-out`);
+2. scaffold a verification script named `<slug>-<issue-or-pr>.sh` under the
+   followthroughs directory by `cp`-ing the
+   [stub template](../ship/references/followthrough-stub-template.sh) and
+   replacing the TODO body with the exit-code probe for the trigger shape
+   (mapping in [review-todo-structure.md](./references/review-todo-structure.md)
+   §Re-evaluation Trigger), then `chmod +x`;
+3. embed the `<!-- soleur:followthrough script=… earliest=… [secrets=…] -->`
+   directive in the issue body (`earliest=` = the trigger date for a date form;
+   the filing date for dependency/event-grep/counter forms, which self-gate via
+   the probe's transient exit). **For any gh-using probe shape (dependency /
+   event-grep / counter) the directive MUST declare `secrets=GH_TOKEN`** — the
+   sweeper's `env -i` sandbox strips all but PATH/HOME + declared secrets, so a
+   gh-probe without it is unauthenticated in CI and never closes (silent
+   never-close). Only the date shape needs no `secrets=`.
+
+Validation is NOT re-implemented here — the `gh issue create --label
+follow-through` call is intercepted by
+`.claude/hooks/follow-through-directive-gate.sh`, which fails-closed if the
+directive is missing/malformed, the script path escapes the followthroughs
+root, the script is absent/non-executable, or `earliest` doesn't parse. **Ordering:**
+scaffold + `chmod +x` the script BEFORE the `gh issue create` call (the gate and
+the sweeper both require the file on disk; for review-time filings it lands in
+the review PR's branch). Full contract:
+[`followthrough-convention.md`](../../../../knowledge-base/engineering/operations/runbooks/followthrough-convention.md)
+§Trigger → verification mapping. This subsection is additive — the cost-of-filing
+gate, the four scope-out criteria, and the CONCUR gate above are unchanged.
+
 Everything else (magic numbers, duplicated helpers, small refactors, missing
 tests for PR-introduced code, polish, naming, a11y on PR-introduced surfaces,
 performance issues introduced by the PR) MUST be fixed inline.
@@ -874,6 +909,10 @@ Multi-agent parallel review has been shown to catch bugs in shipped, green-CI co
 
 - **Emit path re-pointed to a different alert primitive drops a tag the destination rule filters on** — when a PR re-routes an observability emit (e.g. `reportSilentFallback` → `mirrorP0Deduped`) to a primitive feeding a `filter_match = "all"` Sentry rule, the new primitive may not emit every `tagged_event` the rule ANDs on. The old primitive often supplied a *scoping* tag (`feature=...`) implicitly via a required option; the plan names only the *distinguishing* tag (`art_33_breach`) and the scoping tag silently drops → the rule never matches → a real breach never pages. tsc and a single-tag test both pass. Reviewer takeaway: when a PR re-points an emit at a different alert-feeding primitive, the spawn prompt for `security-sentinel` MUST instruct: "read the destination rule's `filters_v2`, enumerate every `tagged_event` key under `filter_match='all'`, and confirm the new primitive emits each one." **Why:** PR #4658 (#4656) — `mirrorP0Deduped` emitted `art_33_breach` but not `feature=byok-delegations`; caught at plan-gap time and confirmed by review. See `knowledge-base/project/learnings/best-practices/2026-05-30-routing-through-shared-tag-filtered-alert-primitive-needs-all-filter-tags.md`.
 
+- **Multi-step saga fix that addresses only the reported failing step / the symptom-named failure mechanism** — when a bug report names ONE failing step of an abort-on-first-error saga (account-delete cascade, multi-RPC pipeline, ordered migration chain), the reported symptom is a LOWER BOUND on the blast radius, not the blast radius: the saga only ever surfaces the FIRST broken step, and downstream steps can be broken by a DIFFERENT mechanism the symptom-grep misses. `architecture-strategist` (prompted to compare the fix against codebase precedent) and `data-integrity-guardian` reliably catch this where the plan + symptom-grep + operator framing do not. Reviewer takeaway: when a PR fixes one step of a saga by swapping a shared mechanism (a WORM-bypass, an auth gate, a serialization format), the spawn prompt MUST instruct an agent to (a) enumerate EVERY mechanism that can break the same operation class — not just the one the symptom names — via a live-DB / full-codebase scan (e.g. `pg_get_functiondef ILIKE '%session_replication_role%' OR ILIKE '%current_user%service_role%'`), and (b) confirm each remaining saga step is healthy by reproducing it on a REAL row (a 0-row call is vacuous — row-level triggers never fire). **Why:** PR for #4696 — the `session_replication_role` (42501) fix addressed 7 saga functions; review surfaced that `anonymise_tc_acceptances`/`anonymise_dsar_export_audit_pii` (mig 041/044) carry a SECOND, independent broken bypass (the proven-dead `current_user='service_role'` gate → always P0001), empirically reproduced on a real `tc_acceptances` row; without the catch, erasure stayed broken end-to-end at a later step. See `knowledge-base/project/learnings/2026-05-31-worm-bypass-fix-must-enumerate-all-mechanisms-not-just-the-reported-one.md`.
+
+- **Plan-asserted "structurally prevented" safety invariant landed as prose-only guard** — when a plan's Domain Review / User-Brand Impact claims a dangerous branch is "structurally prevented" / "never auto-X", `/work` can encode the guard on a *proxy* (`status != "resolved"`) instead of the *actual determining signal* (`lastSeen < deploy timestamp`), so the bad branch stays reachable and the prevention lives only in surrounding prose. Reviewer takeaway: when the diff adds a state-mutating action gated on a safety claim, the spawn prompt MUST name the invariant and ask "is the determining signal bound to a variable and present in the `if`, or only in the interpretation prose?" Require the guard to compute one mechanical boolean (fail-safe-false on ambiguous data), not a human-read interpretation step. **Why:** PR #4681 — postmerge auto-resolve PUT guard checked only `status != "resolved"`, omitting the `lastSeen`/deploy comparison; would have false-resolved a still-firing issue (hiding a live error). All 4 review agents independently caught it. See `knowledge-base/project/learnings/best-practices/2026-05-31-plan-asserted-structural-guard-must-be-encoded-not-prose.md`.
+
 See `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs-tests-miss.md` for the full pattern catalogue.
 
 ### Sharp Edges: Review Agent Limitations
@@ -887,6 +926,8 @@ Generalizing the rule above: whenever a review agent prescribes a CLI flag or su
 When a single agent rates a finding P1/HIGH but no orthogonal agent independently surfaces the same harm, downgrade to advisory or skip. Single-agent HIGH against two-or-more silent or contradicting agents is the modal false-positive pattern. Cross-reconcile triad before applying: a **semantic-quality** agent (code-quality, pattern-recognition), an **orthogonal runtime** agent (performance-oracle for cache/sweep/eviction; data-integrity-guardian for type widening; security-sentinel for trust-surface claims), and **git-history-analyzer** for documented-intent context. Two-of-three concur on "non-issue" → skip with a one-line disposition. The HIGH rating is a hypothesis, not a verdict, and applying a "fix" for a non-issue often re-introduces the complexity the PR was designed to eliminate. See `knowledge-base/project/learnings/2026-05-12-multi-agent-review-cross-reconcile-catches-false-positive-high-findings.md` (PR #3670 — code-quality flagged a sweep-cutoff change as HIGH "doubles Sentry events"; performance-oracle + git-history-analyzer + dedup-trace independently falsified the claim; the proposed `staleTtlMs` parameter would have re-introduced the per-cache asymmetry the F3 extraction was designed to eliminate).
 
 Parallel review batches can stall silently — spawning 12 review agents at once has been observed to produce completion notifications for only 6, with the remaining agents' transcripts frozen ~15s after spawn and no completion event emitted. When more than 30% of spawned agents stop producing output for >2 minutes after launch, proactively announce "N of M agents stalled" rather than silently waiting. Proceed with synthesis from the agents that returned — the Rate Limit Fallback gate already permits partial coverage. See `knowledge-base/project/learnings/2026-04-17-postgrest-aggregate-disabled-forces-rpc-option.md`.
+
+Concurrent mutating agents contaminate the shared worktree — `test-design-reviewer` (and any agent that empirically verifies RED by reverting the production fix in place, then re-running the suite) edits source ON the same worktree the file-reading agents (`data-integrity-guardian`, `architecture-strategist`, `security-sentinel`) are inspecting. When they overlap, the readers observe the transient revert and report it as a HIGH/blocking "uncommitted working-tree / would not compile / fix reverted" finding even though the committed HEAD is correct; an editor or linter watching the worktree can also touch files mid-run. Before trusting ANY such finding, run `git diff HEAD -- <file>` yourself after all agents return — an empty diff means the committed PR is intact and the finding was transient cross-agent contamination, not a defect. Synthesize against the committed HEAD, not the live working tree. **Why:** PR #4767 — two agents independently flagged a test-design-reviewer-induced revert of `byok-resolver.ts` as a blocker; HEAD was correct throughout. See `knowledge-base/project/learnings/bug-fixes/2026-06-02-member-delegation-resolves-active-workspace-not-solo-default.md`.
 
 When a reviewer prescribes adding a PRE-FLIGHT integrity check (a "verify before you mutate" guard) ahead of an operation that REMOVES a redundant/fallback source (a shared override being detached, a dual-write sibling being dropped, a cached value being invalidated), trace which sources satisfy the guard's assertion AT GUARD TIME. If a soon-to-be-removed source is one of them, the pre-flight guard is vacuous — it passes in exactly the dangerous case (it reads through the fallback it is about to delete) and gives false confidence. The load-bearing assertion belongs AFTER the mutation, where only the intended source can satisfy it. Reject the pre-flight suggestion with that rationale and keep the post-mutation eval-verify. **Why:** PR #4619 (#4617) — `flip.sh --detach-shared`; a proposed pre-detach "member enabled=true" check would have passed via the un-removed `org-targeted` override even when `<flag>-orgs` was never provisioned. See `knowledge-base/project/learnings/2026-05-29-pre-flight-integrity-check-through-unremoved-fallback-gives-false-confidence.md`.
 

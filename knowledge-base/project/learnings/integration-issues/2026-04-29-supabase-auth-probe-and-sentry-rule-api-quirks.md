@@ -140,7 +140,7 @@ PR #3030 adds:
 - `apps/web-platform/test/auth/sentry-tag-coverage.test.ts` — drift-guard
   ensuring every Supabase auth verb call site carries `feature:auth` +
   `op:<verb>` tags so the alert filters work.
-- `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` — L3-first
+- `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md` — L3-first
   triage gate plus failure-mode taxonomy and accepted-interval enum.
 
 ## Prevention

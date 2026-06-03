@@ -3,7 +3,7 @@
 #
 # Validates the IaC contract without standing up real providers:
 #   - inngest.tf is syntactically valid HCL (`terraform fmt -check` + grep checks).
-#   - Required resources are declared (4 random_id, 5 doppler_secret,
+#   - Required resources are declared (6 random_id, 7 doppler_secret,
 #     1 betteruptime_heartbeat, conditional betteruptime_policy).
 #   - Distinctness invariants encoded via random_id ensure prd ≠ dev and
 #     signing ≠ event by construction.
@@ -59,23 +59,28 @@ assert "doppler_token_tf variable exists"  "grep -qE '^variable \"doppler_token_
 assert "betterstack_api_token variable exists" "grep -qE '^variable \"betterstack_api_token\"' '$VARS_TF'"
 assert "betterstack_paid_tier variable exists" "grep -qE '^variable \"betterstack_paid_tier\"' '$VARS_TF'"
 
-# --- random_id resources (4: signing+event × prd+dev) ---
+# --- random_id resources (6: signing+event × prd+dev + manual-trigger × prd+dev) ---
 echo ""
-echo "--- random_id resources (4) ---"
+echo "--- random_id resources (6) ---"
 assert "random_id.inngest_signing_key_prd" "grep -qE 'resource \"random_id\" \"inngest_signing_key_prd\"' '$INNGEST_TF'"
 assert "random_id.inngest_signing_key_dev" "grep -qE 'resource \"random_id\" \"inngest_signing_key_dev\"' '$INNGEST_TF'"
 assert "random_id.inngest_event_key_prd"   "grep -qE 'resource \"random_id\" \"inngest_event_key_prd\"'   '$INNGEST_TF'"
 assert "random_id.inngest_event_key_dev"   "grep -qE 'resource \"random_id\" \"inngest_event_key_dev\"'   '$INNGEST_TF'"
-assert "random_id uses byte_length 32"     "[[ \$(grep -c 'byte_length = 32' '$INNGEST_TF') -ge 4 ]]"
+assert "random_id.inngest_manual_trigger_secret_prd" "grep -qE 'resource \"random_id\" \"inngest_manual_trigger_secret_prd\"' '$INNGEST_TF'"
+assert "random_id.inngest_manual_trigger_secret_dev" "grep -qE 'resource \"random_id\" \"inngest_manual_trigger_secret_dev\"' '$INNGEST_TF'"
+assert "random_id uses byte_length 32 (>=6)" "[[ \$(grep -c 'byte_length = 32' '$INNGEST_TF') -ge 6 ]]"
 
-# --- doppler_secret resources (5: 4 keys + heartbeat URL prd) ---
+# --- doppler_secret resources (7: 4 keys + heartbeat URL prd + 2 manual-trigger) ---
 echo ""
-echo "--- doppler_secret resources (5) ---"
+echo "--- doppler_secret resources (7) ---"
 assert "doppler_secret.inngest_signing_key_prd" "grep -qE 'resource \"doppler_secret\" \"inngest_signing_key_prd\"' '$INNGEST_TF'"
 assert "doppler_secret.inngest_signing_key_dev" "grep -qE 'resource \"doppler_secret\" \"inngest_signing_key_dev\"' '$INNGEST_TF'"
 assert "doppler_secret.inngest_event_key_prd"   "grep -qE 'resource \"doppler_secret\" \"inngest_event_key_prd\"'   '$INNGEST_TF'"
 assert "doppler_secret.inngest_event_key_dev"   "grep -qE 'resource \"doppler_secret\" \"inngest_event_key_dev\"'   '$INNGEST_TF'"
 assert "doppler_secret.inngest_heartbeat_url_prd" "grep -qE 'resource \"doppler_secret\" \"inngest_heartbeat_url_prd\"' '$INNGEST_TF'"
+assert "doppler_secret.inngest_manual_trigger_secret_prd" "grep -qE 'resource \"doppler_secret\" \"inngest_manual_trigger_secret_prd\"' '$INNGEST_TF'"
+assert "doppler_secret.inngest_manual_trigger_secret_dev" "grep -qE 'resource \"doppler_secret\" \"inngest_manual_trigger_secret_dev\"' '$INNGEST_TF'"
+assert "INNGEST_MANUAL_TRIGGER_SECRET name present (prd+dev)" "[[ \$(grep -cE 'name[[:space:]]+= \"INNGEST_MANUAL_TRIGGER_SECRET\"' '$INNGEST_TF') -eq 2 ]]"
 
 # Distinctness: signing keys carry signkey-prod-/signkey-test- prefixes ensuring prd ≠ dev.
 assert "signkey-prod- prefix on prd signing key" "grep -qE '\"signkey-prod-' '$INNGEST_TF'"
@@ -83,7 +88,7 @@ assert "signkey-test- prefix on dev signing key" "grep -qE '\"signkey-test-' '$I
 
 # Every doppler_secret has lifecycle ignore_changes on value (rotation safety).
 assert "lifecycle ignore_changes [value] on each doppler_secret" \
-  "[[ \$(grep -c 'ignore_changes = \\[value\\]' '$INNGEST_TF') -ge 5 ]]"
+  "[[ \$(grep -c 'ignore_changes = \\[value\\]' '$INNGEST_TF') -ge 7 ]]"
 
 # --- BetterStack heartbeat + policy ---
 echo ""

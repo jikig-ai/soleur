@@ -140,7 +140,7 @@ export default async function GitHubAppInitPage({
           App ID, Client ID, Client Secret, Private Key (download <code>.pem</code>),
           Webhook Secret. See the operator runbook at{" "}
           <code>
-            knowledge-base/engineering/ops/runbooks/github-app-provisioning.md
+            knowledge-base/engineering/operations/runbooks/github-app-provisioning.md
           </code>
           .
         </p>
@@ -180,7 +180,7 @@ export default async function GitHubAppInitPage({
       <p className="mt-6 text-sm text-soleur-text-muted">
         After App creation, see{" "}
         <code>
-          knowledge-base/engineering/ops/runbooks/github-app-provisioning.md
+          knowledge-base/engineering/operations/runbooks/github-app-provisioning.md
         </code>{" "}
         for the 6 paste steps (5 Doppler keys + 1 GitHub-side webhook secret).
       </p>

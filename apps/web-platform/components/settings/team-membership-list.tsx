@@ -7,19 +7,26 @@ import { TransferOwnershipDialog } from "@/components/settings/transfer-ownershi
 
 function formatRelative(iso: string): string {
   try {
-    const then = new Date(iso).getTime();
-    const now = Date.now();
-    const diffMs = now - then;
+    const then = new Date(iso);
+    if (Number.isNaN(then.getTime())) return iso;
+    const now = new Date();
+    // Calendar-day difference, NOT a rolling 24h window. A row created
+    // yesterday afternoon viewed this morning is <24h old but a DIFFERENT
+    // calendar day — labelling it "Today, 14:08" reads as a future time
+    // (the symptom-4 bug). Compare day-start instants in LOCAL time, matching
+    // the local getHours/getMinutes used for the clock label.
+    const startOfDay = (d: Date) =>
+      new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
     const day = 24 * 60 * 60 * 1000;
-    if (diffMs < day) {
-      const d = new Date(iso);
-      const hh = String(d.getHours()).padStart(2, "0");
-      const mm = String(d.getMinutes()).padStart(2, "0");
-      return `Today, ${hh}:${mm}`;
-    }
-    const days = Math.floor(diffMs / day);
-    if (days < 7) return `${days}d ago`;
-    return new Date(iso).toLocaleDateString();
+    const dayDiff = Math.round((startOfDay(now) - startOfDay(then)) / day);
+    const hh = String(then.getHours()).padStart(2, "0");
+    const mm = String(then.getMinutes()).padStart(2, "0");
+    if (dayDiff === 0) return `Today, ${hh}:${mm}`;
+    if (dayDiff === 1) return `Yesterday, ${hh}:${mm}`;
+    if (dayDiff >= 2 && dayDiff < 7) return `${dayDiff}d ago`;
+    // Older, or any future-dated row (dayDiff < 0): show the absolute date
+    // rather than a misleading relative label.
+    return then.toLocaleDateString();
   } catch {
     return iso;
   }
@@ -117,8 +124,22 @@ function MemberRow({
     window.location.reload();
   }, [member.email, member.userId, workspaceId]);
 
-  // AC-FLOW4: owner cannot remove self → no kebab menu trigger rendered.
-  const showActions = !isCurrentUser;
+  // RBAC: the kebab menu holds only owner-only actions (Remove member,
+  // Transfer ownership), so it is gated on `isOwner` — Members see no kebab on
+  // any row. AC-FLOW4: an owner also gets no kebab on their own (self) row
+  // (cannot remove/transfer to self).
+  const showActions = !isCurrentUser && isOwner;
+
+  // #4715: prompt the owner to share a key with a keyless, undelegated member
+  // (only when delegations are enabled and this is not the owner's own row).
+  // `!member.delegationFromMe` already owns the delegation term — no separate
+  // delegationsByGrantee probe.
+  const showShareKeyPrompt =
+    byokDelegationsEnabled &&
+    isOwner &&
+    !isCurrentUser &&
+    !member.hasEffectiveKey &&
+    !member.delegationFromMe;
 
   return (
     <div className={`grid ${byokDelegationsEnabled ? "grid-cols-[1fr_auto_auto_auto_auto]" : "grid-cols-[1fr_auto_auto_auto]"} items-center gap-4 border-b border-soleur-border-default px-6 py-4 last:border-b-0`}>
@@ -129,30 +150,53 @@ function MemberRow({
             {member.email.split("@")[0]}
           </div>
           <div className="truncate text-xs text-soleur-text-muted">{member.email}</div>
+          {showShareKeyPrompt && (
+            <p className="mt-1 text-xs text-soleur-text-muted">
+              No API key yet — can view the workspace but can&apos;t run tasks.{" "}
+              <a
+                href="mailto:?subject=Add%20your%20Anthropic%20API%20key%20to%20Soleur"
+                className="underline decoration-dotted underline-offset-2 hover:text-soleur-text-secondary"
+              >
+                or ask them to add their own
+              </a>
+              .
+            </p>
+          )}
         </div>
       </div>
+      {/* justify-self-center: the badge is a grid item; without it the bordered
+          span stretches to fill the auto column and left-aligns, drifting from
+          the text-center "Role" header. Center it to sit under the header. */}
       <span
         className={
           member.role === "owner"
-            ? "rounded-md border border-soleur-accent-gold-fg/40 px-2 py-0.5 text-xs font-medium text-soleur-accent-gold-fg"
-            : "rounded-md border border-soleur-border-default px-2 py-0.5 text-xs font-medium text-soleur-text-secondary"
+            ? "justify-self-center rounded-md border border-soleur-accent-gold-fg/40 px-2 py-0.5 text-xs font-medium text-soleur-accent-gold-fg"
+            : "justify-self-center rounded-md border border-soleur-border-default px-2 py-0.5 text-xs font-medium text-soleur-text-secondary"
         }
       >
         {member.role === "owner" ? "Owner" : "Member"}
       </span>
       {byokDelegationsEnabled && (
-        <DelegationToggle
-          memberUserId={member.userId}
-          memberEmail={member.email}
-          workspaceId={workspaceId}
-          isOwner={isOwner}
-          delegation={member.delegationFromMe}
-          delegationToMe={member.delegationToMe}
-          isSelf={isCurrentUser}
-          flagEnabled={byokDelegationsEnabled}
-        />
+        // justify-self-center: center the Funded control under its text-center
+        // header (DelegationToggle right-aligns internally; the shrink-wrapped
+        // wrapper makes that a no-op while centering the cluster in the column).
+        <div className="justify-self-center">
+          <DelegationToggle
+            memberUserId={member.userId}
+            memberEmail={member.email}
+            workspaceId={workspaceId}
+            isOwner={isOwner}
+            delegation={member.delegationFromMe}
+            delegationToMe={member.delegationToMe}
+            isSelf={isCurrentUser}
+            flagEnabled={byokDelegationsEnabled}
+            promptShareKey={showShareKeyPrompt}
+          />
+        </div>
       )}
-      <span className="text-right text-xs text-soleur-text-muted">
+      {/* justify-self-end + text-right: right-align under the text-right "Added"
+          header (don't rely on the default stretch). */}
+      <span className="justify-self-end text-right text-xs text-soleur-text-muted">
         {isCurrentUser ? "— (you)" : formatRelative(member.addedAt)}
       </span>
       <div className="relative w-6" ref={menuRef}>

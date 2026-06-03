@@ -114,7 +114,7 @@ infrastructure, no migrations.
 | "Build `etag` in `readBinaryFile` from `lstat.mtimeMs + size`" | `readBinaryFile` does not exist by that name — the validator is `validateBinaryFile` and it already captures `ino`, `size`, `mtimeMs` onto `BinaryFileMetadata`. | Use existing metadata; no changes to the validator. |
 | "`/shared/<token>` should emit `public` Cache-Control" | `build304Response` and `buildBinaryHeaders` both hard-code `private, max-age=60`. The share route passes a `strongETag` but no scope. | Add `scope` parameter to the four builders. Thread it from the share route. |
 | "60s max-age is too low" | Same hard-coded value. The issue proposes `public, max-age=300, stale-while-revalidate=3600`. Prior plan `2026-04-15-fix-kb-share-button-pdf-attachments-plan.md` (line 344) pushed back: bumping browser `max-age` on shared binaries breaks revocation latency. | **Revised.** Adopt a split TTL: `public, max-age=60, s-maxage=300, stale-while-revalidate=3600, must-revalidate`. Browsers re-validate every 60s (preserves the existing revocation-latency contract); Cloudflare (which honors `s-maxage` preferentially per RFC 7234 §5.2.2.9) caches 5 minutes at the edge. `must-revalidate` forces the browser to re-check the ETag once max-age expires. Owner route stays `private, max-age=60`. |
-| "Verify Cloudflare tier caps" | Not verified in-plan. Cloudflare Free caches objects up to 512 MB by default for static extensions; `MAX_BINARY_SIZE` here is 50 MB (owner-route cap). Below the edge cap. | Note in the PR body; no infra work. Document follow-up in `knowledge-base/engineering/ops/` as a separate task. |
+| "Verify Cloudflare tier caps" | Not verified in-plan. Cloudflare Free caches objects up to 512 MB by default for static extensions; `MAX_BINARY_SIZE` here is 50 MB (owner-route cap). Below the edge cap. | Note in the PR body; no infra work. Document follow-up in `knowledge-base/engineering/operations/` as a separate task. |
 
 ## Context — relevant files
 
@@ -543,7 +543,7 @@ auto-close fires on merge (per AGENTS.md `wg-use-closes-n-in-pr-body`).
   issue: verify `/api/shared/[token]` does not have a conflicting
   Page Rule / Transform Rule that overrides origin Cache-Control.
   Store findings under
-  `knowledge-base/engineering/ops/runbooks/cloudflare-kb-cache.md`.
+  `knowledge-base/engineering/operations/runbooks/cloudflare-kb-cache.md`.
   Milestone: Post-MVP / Later.
 - **Larger-object cache strategy.** If `MAX_BINARY_SIZE` ever lifts
   above the Cloudflare tier cap (512 MB on Free), the public cache

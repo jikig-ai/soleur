@@ -3,10 +3,12 @@ set -euo pipefail
 
 # Read-only deploy state reporter for #2185 webhook observability.
 # Invoked by /hooks/deploy-status (adnanh/webhook) -- see hooks.json.tmpl.
-# Returns the JSON written by ci-deploy.sh write_state, MERGED with a
-# `services.inngest_heartbeat` field reading live `systemctl is-active`
-# state (#4116 — discoverability_test for the new plan-skill observability
-# gate). Sentinels:
+# Returns the JSON written by ci-deploy.sh write_state, MERGED with live
+# `systemctl is-active` fields: `services.inngest_heartbeat` (the oneshot
+# .service, #4116 — discoverability_test for the plan-skill observability gate)
+# and `services.inngest_heartbeat_timer` (the .timer, #4896 — the durable
+# liveness signal; the oneshot .service reads `inactive` as its healthy steady
+# state, so the timer's active-state is what proves liveness). Sentinels:
 #   {"exit_code":-2,"reason":"no_prior_deploy"} -- no state file exists
 #   {"exit_code":-3,"reason":"corrupt_state"}   -- state file unparseable
 # Exit-code protocol defined in ci-deploy.sh header (#2205).
@@ -45,6 +47,43 @@ service_journal_tail() {
   fi
 }
 
+# journald persistent-storage state (#4792). No-SSH post-apply verification for
+# the persistent + bounded host journal: reports whether /var/log/journal exists
+# and journald is actually writing there (persistent vs volatile), plus the root
+# filesystem headroom and the inngest SQLite store size that share `/` with the
+# journal. All best-effort + read-only; missing tools collapse to safe defaults
+# so the webhook never errors on a non-systemd / minimal host.
+journald_storage_json() {
+  local persistent=false dir_present=false root_avail="" store_bytes=0
+  if [[ -d /var/log/journal ]]; then
+    dir_present=true
+    # `journalctl --header` lists active journal files with their on-disk paths;
+    # a file under /var/log/journal proves journald is in persistent mode (a
+    # volatile-only journal lists /run/log/journal paths instead).
+    if command -v journalctl >/dev/null 2>&1 \
+      && journalctl --header 2>/dev/null | grep -q '/var/log/journal'; then
+      persistent=true
+    fi
+  fi
+  # Avail bytes on the root filesystem (the journal lives on `/`, NOT /mnt/data).
+  if command -v df >/dev/null 2>&1; then
+    root_avail=$(df -h --output=avail / 2>/dev/null | tail -1 | tr -d ' ' || true)
+  fi
+  # Inngest SQLite store footprint — competes with the journal for root-disk space.
+  if [[ -d /var/lib/inngest ]] && command -v du >/dev/null 2>&1; then
+    # On du failure the pipe exits via cut (success), so a trailing `|| echo 0`
+    # would never fire — store_bytes goes empty and the ${store_bytes:-0} guard
+    # at the jq call site supplies the 0. Keep the fallback at the call site only.
+    store_bytes=$(du -sb /var/lib/inngest 2>/dev/null | cut -f1)
+  fi
+  jq -nc \
+    --argjson persistent "$persistent" \
+    --argjson dir_present "$dir_present" \
+    --arg root_avail "$root_avail" \
+    --argjson store_bytes "${store_bytes:-0}" \
+    '{persistent: $persistent, journal_dir_present: $dir_present, root_avail: $root_avail, inngest_store_bytes: $store_bytes}'
+}
+
 # Per-cron last-fire timestamps written by postSentryHeartbeat (#4131).
 # Glob is best-effort; empty dir or missing path produces "{}".
 inngest_crons_json() {
@@ -63,10 +102,19 @@ inngest_crons_json() {
 }
 
 HEARTBEAT_STATUS="$(service_status inngest-heartbeat.service)"
+# inngest-heartbeat.service is a Type=oneshot unit (no RemainAfterExit) driven by
+# inngest-heartbeat.timer (OnUnitActiveSec=60s, inngest-bootstrap.sh:216-245). It
+# reports `inactive` from `systemctl is-active` as soon as each 60s ExecStart
+# completes successfully — i.e. `inactive` is the NORMAL, healthy steady state
+# between fires, NOT a fault (`failed` is the real fault, e.g. the empty-URL
+# #4116 class). The durable liveness signal is the TIMER's active-state below;
+# read both so `inactive` alone is never re-read as a deploy failure (#4896).
+HEARTBEAT_TIMER_STATUS="$(service_status inngest-heartbeat.timer)"
 INNGEST_SERVER_STATUS="$(service_status inngest-server.service)"
 VECTOR_STATUS="$(service_status vector.service)"
 VECTOR_JOURNAL_TAIL="$(service_journal_tail vector.service)"
 INNGEST_CRONS="$(inngest_crons_json)"
+JOURNALD_STORAGE="$(journald_storage_json)"
 
 STATE_FILE="${CI_DEPLOY_STATE:-/var/lock/ci-deploy.state}"
 
@@ -82,12 +130,15 @@ fi
 jq -nc \
   --argjson base "$BASE" \
   --arg hb "$HEARTBEAT_STATUS" \
+  --arg hbt "$HEARTBEAT_TIMER_STATUS" \
   --arg is "$INNGEST_SERVER_STATUS" \
   --arg vs "$VECTOR_STATUS" \
   --arg vj "$VECTOR_JOURNAL_TAIL" \
   --argjson ic "$INNGEST_CRONS" \
-  '$base + {services: (($base.services // {}) + {
+  --argjson js "$JOURNALD_STORAGE" \
+  '$base + {journald_storage: $js, services: (($base.services // {}) + {
     inngest_heartbeat: $hb,
+    inngest_heartbeat_timer: $hbt,
     inngest_server: $is,
     vector: $vs,
     vector_journal_tail: $vj,

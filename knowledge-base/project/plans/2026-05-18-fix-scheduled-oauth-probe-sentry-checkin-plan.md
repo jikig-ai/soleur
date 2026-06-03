@@ -12,7 +12,7 @@ related_workflows:
 related_iac:
   - apps/web-platform/infra/sentry/cron-monitors.tf
 related_runbooks:
-  - knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md
+  - knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md
 related_issues: [2997, 3236]
 sentry_issue_id: 2c759a282af94e91a393417075074b98
 requires_cpo_signoff: false
@@ -94,10 +94,10 @@ Closes the recurring Sentry email noise.
 - [ ] AC6 — `apps/web-platform/infra/sentry/cron-monitors.tf` `resource "sentry_cron_monitor" "scheduled_oauth_probe"` changes: `schedule = { crontab = "0 * * * *" }`, `checkin_margin_minutes = 30`, `max_runtime_minutes = 10` (unchanged — see note below), `failure_issue_threshold = 2` (unchanged), `recovery_threshold = 1` (unchanged), `timezone = "UTC"` (unchanged). Comment block above the resource updated to note observed GHA cadence (~60 min daytime, longer overnight gaps). **Note on `max_runtime_minutes`:** in pure heartbeat mode (single end-of-job check-in), `max_runtime_minutes` has no runtime-overrun detection effect — Sentry only fires "missed check-in" alerts, not "ran too long". The 10-min value is retained as a future-compatible default (matches sibling monitor resources) and to keep the resource shape stable against `jianyuan/sentry v0.15.0-beta2`'s schema. Verified provider version: `apps/web-platform/infra/sentry/.terraform.lock.hcl` pins `0.15.0-beta2`.
 - [ ] AC7 — `.github/workflows/scheduled-oauth-probe.yml` workflow `cron:` line changes from `'*/15 * * * *'` to `'0 * * * *'` to align the GHA schedule with the monitor's expected cadence. The probe's 5-min job timeout (`timeout-minutes: 5`) is preserved — the probe itself completes in <1 min; only the monitor cadence needs adjustment.
 - [ ] AC8 — Workflow file header comment (line 2: "Probes prod public auth surface every 15 minutes") updated to "every hour" to keep prose in sync with the cron. Sentinel: `grep -c "every 15 minutes" .github/workflows/scheduled-oauth-probe.yml` returns 0.
-- [ ] AC9 — `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` updated at two sites: line 16 ("runs every 15 minutes" → "runs every hour") AND line 237 ("wait one probe cycle (15 min)" → "wait one probe cycle (1 h)"). Sentinel: `grep -c "15 min" knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` returns 0 (covers both "15 minutes" and "15 min").
+- [ ] AC9 — `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md` updated at two sites: line 16 ("runs every 15 minutes" → "runs every hour") AND line 237 ("wait one probe cycle (15 min)" → "wait one probe cycle (1 h)"). Sentinel: `grep -c "15 min" knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md` returns 0 (covers both "15 minutes" and "15 min").
 - [ ] AC10 — Operator-surface grep sweep, enumerated at plan time:
-  - `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` lines 16, 237 — **updated** (per AC9).
-  - `knowledge-base/engineering/ops/runbooks/github-app-drift.md` line 339 ("The user-facing OAuth probe (`scheduled-oauth-probe.yml`, every 15") — **updated** to "every hour".
+  - `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md` lines 16, 237 — **updated** (per AC9).
+  - `knowledge-base/engineering/operations/runbooks/github-app-drift.md` line 339 ("The user-facing OAuth probe (`scheduled-oauth-probe.yml`, every 15") — **updated** to "every hour".
   - `knowledge-base/legal/audits/sentry-migration-audit-2026-05-15.md` line 13 (`*/15 * * * *` in the migration audit table) — **scope-out**: this is a historical audit artifact dated 2026-05-15 that records the cron *at migration time*. Updating it would falsify the audit. Leave as-is.
   - `apps/web-platform/infra/sentry/README.md` — no `15 min` / `*/15` match anchored to oauth-probe (grep-verified at plan time). No edit required.
   - `README.md`, `CONTRIBUTING.md` — no match (grep-verified). No edit required.
@@ -118,8 +118,8 @@ Closes the recurring Sentry email noise.
 
 - `.github/workflows/scheduled-oauth-probe.yml` — replace lines 32–50 (`Sentry check-in (in_progress)` step) and lines 543–575 (`Sentry check-in (ok)` + `Sentry check-in (error)` steps) with a single `Sentry check-in (final)` step at end of job. Change cron `*/15 * * * *` → `0 * * * *` (line 16). Update header comment (line 2) "every 15 minutes" → "every hour".
 - `apps/web-platform/infra/sentry/cron-monitors.tf` — lines 44–54 (`scheduled_oauth_probe` resource): `schedule` to `0 * * * *`, `checkin_margin_minutes` 5 → 30. Update preamble comment block (lines 24–30) to keep the explanation aligned (`failure_issue_threshold = 2` still load-bearing for the new hourly cadence — a single transient hiccup over an hour is now even more plausible than a real failure; ≥2 consecutive misses = real signal).
-- `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` — line 16: "every 15 minutes" → "every hour"; line 237: "wait one probe cycle (15 min)" → "wait one probe cycle (1 h)".
-- `knowledge-base/engineering/ops/runbooks/github-app-drift.md` — line 339: "every 15" → "every hour" (referring to oauth-probe cadence).
+- `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md` — line 16: "every 15 minutes" → "every hour"; line 237: "wait one probe cycle (15 min)" → "wait one probe cycle (1 h)".
+- `knowledge-base/engineering/operations/runbooks/github-app-drift.md` — line 339: "every 15" → "every hour" (referring to oauth-probe cadence).
 
 ## Files to Create
 

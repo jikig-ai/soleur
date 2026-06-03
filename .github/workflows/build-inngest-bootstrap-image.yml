@@ -15,10 +15,14 @@ on:
   push:
     tags:
       - 'vinngest-v*.*.*'
+  # workflow_dispatch re-publishes an EXISTING vinngest-v* tag (escape hatch
+  # for a CVE base-image rebuild of an already-released version). It takes the
+  # tag name as `ref` — NOT a free-form version — so it can never mint a
+  # tagless image that blinds the cloud-init drift-guard (#4692 / #4676 AC6).
   workflow_dispatch:
     inputs:
-      tag:
-        description: 'Image tag (e.g., v1.0.0)'
+      ref:
+        description: 'Existing vinngest-vX.Y.Z tag to (re)publish (e.g., vinngest-v1.1.11)'
         required: true
         type: string
 
@@ -30,33 +34,65 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # Validate the dispatch ref BEFORE checkout, from the trusted workflow
+      # tree — so the guard script is never sourced from an untrusted ref's
+      # tree. This inline regex is the canonical full-ref validator and the
+      # load-bearing gate: a tagless publish is structurally impossible because
+      # dispatch can only check out an existing vinngest-v* tag. Dispatch
+      # requires repo write access (collaborator threat model); a wider grant
+      # would make this the sole gate.
+      - name: Validate dispatch ref
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$REF" =~ ^vinngest-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: workflow_dispatch ref '$REF' is not an existing vinngest-vX.Y.Z tag"; exit 1
+          fi
+
+      # `ref: ${{ inputs.ref }}` is empty on the push path → checkout uses the
+      # triggering tag. The requested/triggering tag is created locally via
+      # actions/checkout's `+refs/tags/X:refs/tags/X` refspec, so no fetch-tags
+      # / fetch-depth: 0 is needed. `inputs.ref` is regex-validated above
+      # before it reaches this `ref:`.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Resolve image tag
         id: tag
         # Hardened against workflow-injection: untrusted inputs (GITHUB_REF,
-        # inputs.tag) flow through env vars, never inlined into shell.
+        # inputs.ref) flow through env vars, never inlined into shell.
+        #
+        # This logic is INLINE (not a checked-out script) on purpose: the
+        # checkout above lands `inputs.ref`'s tree (an existing tag, predating
+        # this workflow), so a `.github/scripts/*.sh` helper would not exist
+        # there and the step would fail with exit 127. The workflow file is
+        # always read from the default branch, so inline logic is current
+        # regardless of which tag tree is checked out. The post-strip regex
+        # `^v[0-9]+\.[0-9]+\.[0-9]+$` is byte-identical to the consumer
+        # drift-guard's regex (cloud-init-inngest-bootstrap.test.sh) — a parity
+        # test asserts it; an inline-equivalent harness unit-tests the logic.
         env:
           GH_EVENT: ${{ github.event_name }}
-          WD_TAG: ${{ inputs.tag }}
+          INPUTS_REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
+          # Discriminate on the event name (NOT inputs.ref emptiness) so a
+          # future stale/defaulted dispatch input can't misroute the push path.
           if [[ "$GH_EVENT" == "workflow_dispatch" ]]; then
-            # Validate format defensively before echoing into GITHUB_OUTPUT.
-            if [[ ! "$WD_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "ERROR: workflow_dispatch tag '$WD_TAG' is not vX.Y.Z"; exit 1
-            fi
-            printf 'tag=%s\n' "$WD_TAG" >> "$GITHUB_OUTPUT"
+            src="$INPUTS_REF"
           else
-            # Strip `vinngest-` prefix from refs/tags/vinngest-vX.Y.Z.
-            # The push trigger's tag filter `vinngest-v*.*.*` already
-            # constrains the shape; we re-validate to be safe.
-            stripped="${GITHUB_REF#refs/tags/vinngest-}"
-            if [[ ! "$stripped" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "ERROR: tag '$stripped' is not vX.Y.Z"; exit 1
-            fi
-            printf 'tag=%s\n' "$stripped" >> "$GITHUB_OUTPUT"
+            src="$GITHUB_REF"
           fi
+          tag="${src#refs/tags/}"
+          tag="${tag#vinngest-}"
+          # The regex is the reject gate (not the strip) and guarantees non-empty.
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: resolved tag '$tag' is not vX.Y.Z (from ref '$src', event '$GH_EVENT')"; exit 1
+          fi
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
 
       - name: Read pinned inngest-cli + vector versions + SHAs from *.tf
         id: pin

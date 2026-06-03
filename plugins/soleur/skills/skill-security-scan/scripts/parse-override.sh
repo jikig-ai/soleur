@@ -2,7 +2,7 @@
 # parse-override.sh — detect and validate skill-security override artifacts.
 #
 # Scans `git diff <base>...<head> --diff-filter=A` for newly-added files
-# matching `^knowledge-base/security/skill-overrides/\d{4}-\d{2}-\d{2}-.+\.md$`,
+# matching `^knowledge-base/engineering/security/skill-overrides/\d{4}-\d{2}-\d{2}-.+\.md$`,
 # validates each artifact's frontmatter against override-artifact-schema.json,
 # checks rule_pack_sha256 freshness against current manifest, validates the
 # slug regex.
@@ -28,7 +28,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 # Path regex: YYYY-MM-DD-<slug>.md under the override directory.
-path_re='^knowledge-base/security/skill-overrides/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z][a-z0-9-]*\.md$'
+path_re='^knowledge-base/engineering/security/skill-overrides/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z][a-z0-9-]*\.md$'
 slug_re='^[a-z][a-z0-9-]*$'
 
 # Compute current manifest SHA for freshness check.

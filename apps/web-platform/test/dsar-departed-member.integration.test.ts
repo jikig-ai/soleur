@@ -165,40 +165,17 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // RPC's INSERT into workspace_member_removals fires inside the
       // same body as the DELETE — atomic.
       //
-      // The RPC pulls v_caller_user_id from auth.uid(); the service
-      // client bypasses PostgREST's role-switching, so we need to
-      // either (a) mint a runtime JWT for Jean and call via an
-      // anon-role client, or (b) impersonate via the auth header. The
-      // existing dsar-export-workspace-tables test takes path (b) by
-      // setting Authorization on the request via the service client's
-      // global headers.
-      const jeanClient = createClient(
-        requireEnv("SUPABASE_URL"),
-        requireEnv("SUPABASE_ANON_KEY"),
-        { auth: { persistSession: false, autoRefreshToken: false } },
-      );
-      // Sign Jean in to get a real user-scope JWT.
-      const { data: jeanSignIn, error: jeanSignInErr } =
-        await service.auth.admin.generateLink({
-          type: "magiclink",
-          email: jean.email,
-        });
-      if (jeanSignInErr || !jeanSignIn?.properties?.hashed_token) {
-        throw new Error(
-          `generateLink for Jean failed: ${jeanSignInErr?.message ?? "no token"}`,
-        );
-      }
-      const { error: jeanVerifyErr } = await jeanClient.auth.verifyOtp({
-        token_hash: jeanSignIn.properties.hashed_token,
-        type: "magiclink",
-      });
-      if (jeanVerifyErr) {
-        throw new Error(`verifyOtp for Jean failed: ${jeanVerifyErr.message}`);
-      }
-
-      const { error: rmErr } = await jeanClient.rpc("remove_workspace_member", {
+      // mig 094: remove_workspace_member is service_role-only (the
+      // authenticated EXECUTE grant was REVOKED to close the forgeable-
+      // override privilege-escalation class) and resolves the caller via
+      // COALESCE(p_caller_user_id, auth.uid()). The production wrapper
+      // (server/workspace-membership.ts removeWorkspaceMember) invokes it via
+      // the service client forwarding the route-verified owner id — mirror that
+      // (no per-test Jean sign-in / JWT mint is needed under the new contract).
+      const { error: rmErr } = await service.rpc("remove_workspace_member", {
         p_workspace_id: fixture.workspaceId,
         p_user_id: harry.userId,
+        p_caller_user_id: jean.userId,
       });
       if (rmErr) {
         throw new Error(

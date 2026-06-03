@@ -40,6 +40,13 @@
       "Founder, Soleur",
       "15+ years in distributed systems"
     ],
+    "knowsAbout": [
+      "AI agents",
+      "Autonomous software engineering",
+      "Distributed systems",
+      "Developer tooling",
+      "Company-as-a-Service"
+    ],
     "sameAs": [
       "https://github.com/deruelle",
       "https://x.com/jeandev_"
@@ -61,6 +68,7 @@
       "heading": "Resources",
       "links": [
         { "label": "Blog", "url": "/blog/" },
+        { "label": "Glossary", "url": "/glossary/" },
         { "label": "Community", "url": "/community/" },
         { "label": "Vision", "url": "/vision/" },
         { "label": "About", "url": "/about/" },

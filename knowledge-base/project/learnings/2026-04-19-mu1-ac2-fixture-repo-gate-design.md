@@ -140,7 +140,7 @@ branch after a terminal crash.
 ## Cross-References
 
 - Plan: `knowledge-base/project/plans/2026-04-19-ops-mu1-fixture-repo-and-ac2-test-plan.md`
-- Runbook: `knowledge-base/engineering/ops/runbooks/mu1-signup-workspace-verification.md`
+- Runbook: `knowledge-base/engineering/operations/runbooks/mu1-signup-workspace-verification.md`
 - Test: `apps/web-platform/test/mu1-integration.test.ts`
 - Issue: [#2605](https://github.com/jikig-ai/soleur/issues/2605)
 - Related rule: `cq-destructive-prod-tests-allowlist` (shared `assertSyntheticEmail` helper)

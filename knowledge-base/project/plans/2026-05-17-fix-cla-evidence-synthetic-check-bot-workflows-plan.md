@@ -260,7 +260,7 @@ No CLI invocations are landing in user-facing docs; the gate is satisfied by reu
 - Issues: #3923 (branch target), #3916 (first-filed duplicate), #3927 (third duplicate)
 - Origin PR (introduced `cla-evidence` in `required-checks.txt`): #3201, commit `b98c2177`
 - Failed CI run: https://github.com/jikig-ai/soleur/actions/runs/25972384575/job/76346571044
-- Runbook: `knowledge-base/engineering/ops/runbooks/lint-bot-statuses.md`
+- Runbook: `knowledge-base/engineering/operations/runbooks/lint-bot-statuses.md`
 - ADR: `knowledge-base/engineering/architecture/decisions/ADR-027-stateless-self-modifying-cron.md` (the deliberate-duplication carry-forward this PR honors)
 - Re-evaluation-triggered scope-out: #3593
 - Canonical source of truth: `scripts/required-checks.txt`

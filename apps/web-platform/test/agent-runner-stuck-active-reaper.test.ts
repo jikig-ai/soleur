@@ -269,12 +269,13 @@ describe("startStuckActiveReaper (AC2/AC5)", () => {
 
     timer = startStuckActiveReaper();
 
-    // Advance past one tick (60 s) and drain the microtasks queued by the
-    // RPC promise + per-row writes. Clear the timer BEFORE additional
-    // microtask drains so a second tick doesn't fire and double the
-    // observed call counts. Use `runOnlyPendingTimersAsync` for parity
-    // with sibling tests' drainage idiom.
-    await vi.advanceTimersByTimeAsync(60_000);
+    // Advance past one tick (300 s — widened from 60 s in the 2026-06-02
+    // disk-IO remediation; see agent-runner.ts STUCK_ACTIVE_CHECK_INTERVAL_MS)
+    // and drain the microtasks queued by the RPC promise + per-row writes.
+    // Clear the timer BEFORE additional microtask drains so a second tick
+    // doesn't fire and double the observed call counts. Use
+    // `runOnlyPendingTimersAsync` for parity with sibling tests' drainage idiom.
+    await vi.advanceTimersByTimeAsync(300_000);
     if (timer) clearInterval(timer);
     timer = undefined;
     await vi.runOnlyPendingTimersAsync();
@@ -324,7 +325,7 @@ describe("startStuckActiveReaper (AC2/AC5)", () => {
 
     // Should not throw — the reaper is a fire-and-forget interval.
     timer = startStuckActiveReaper();
-    await vi.advanceTimersByTimeAsync(61_000);
+    await vi.advanceTimersByTimeAsync(301_000);
     await vi.runOnlyPendingTimersAsync();
 
     // Mirror to Sentry per cq-silent-fallback-must-mirror-to-sentry.
@@ -347,7 +348,7 @@ describe("startStuckActiveReaper (AC2/AC5)", () => {
     const abortSessionSpy = vi.spyOn(agentRunnerMod, "abortSession");
 
     timer = startStuckActiveReaper();
-    await vi.advanceTimersByTimeAsync(61_000);
+    await vi.advanceTimersByTimeAsync(301_000);
     await vi.runOnlyPendingTimersAsync();
 
     expect(statusUpdates).toEqual([]);

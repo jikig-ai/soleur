@@ -1,0 +1,138 @@
+// COPY-FILL SCAFFOLD for a self-armed Inngest oneshot.
+// Extension is `.ts.template` (NOT `.ts`) so tsc / vitest / the route-registry
+// count regex do NOT pick it up. Copy to `oneshot-<name>.ts`, then fill the
+// `// FILL:` markers and complete the 3 integration points in the trailer.
+// Canonical precedent: oneshot-4650-monitor-close.ts. See the runbook
+// knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md
+//
+// ADR-046 = self-arm at boot / registered-functions-only.
+// ADR-033 invariants:
+//   I1 — all outbound IO inside step.run (replay memoization).
+//   I2 — operator-owned data only (installation token; no BYOK lease).
+//   I5 — deterministic step.run return shapes (plain JSON union).
+//   I6 — N/A unless this fn emits events (then carry actor:"platform").
+// A oneshot gets NO Sentry cron monitor (it would false-alert on missed
+// check-ins); errors route via reportSilentFallback. The token is minted INSIDE
+// step.run and never returned into persisted step state.
+
+import { inngest } from "@/server/inngest/client";
+import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
+import {
+  mintInstallationToken,
+  REPO_OWNER,
+  REPO_NAME,
+  type HandlerArgs,
+} from "./_cron-shared";
+
+const FUNCTION_NAME = "oneshot-FILL-name"; // FILL: kebab id, matches the file/event/createFunction id
+const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
+
+// FILL: the event payload this oneshot is armed with (server/index.ts boot block).
+interface EventData {
+  expected_date: string; // YYYY-MM-DD guard (or use an ISO-instant guard — see scheduled-reminder-action.ts)
+  date_override?: string;
+  actor?: "platform";
+}
+
+type HandlerResult = { ok: false; reason: string } | { ok: true; reason: string };
+
+// Validate a YYYY-MM-DD string is both well-shaped AND a real calendar date.
+function isValidYmd(s: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const d = new Date(`${s}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+
+export async function oneshotFILLHandler({
+  event,
+  step,
+}: HandlerArgs & { event: { data: EventData } }): Promise<HandlerResult> {
+  const { data } = event;
+
+  // --- Guards FIRST (validate inputs before any IO) ------------------------
+  if (data.date_override !== undefined && !isValidYmd(data.date_override)) {
+    reportSilentFallback(new Error(`Invalid date_override: ${data.date_override}`), {
+      feature: FUNCTION_NAME,
+      op: "date-override-validation",
+      extra: { fn: FUNCTION_NAME },
+    });
+    return { ok: false, reason: "invalid-date-override" };
+  }
+  if (!isValidYmd(data.expected_date)) {
+    reportSilentFallback(new Error(`Invalid expected_date: ${data.expected_date}`), {
+      feature: FUNCTION_NAME,
+      op: "expected-date-validation",
+      extra: { fn: FUNCTION_NAME },
+    });
+    return { ok: false, reason: "invalid-expected-date" };
+  }
+  const today = data.date_override ?? new Date().toISOString().slice(0, 10);
+  if (today < data.expected_date) {
+    // Early replay/desync — expected and benign, so warn-level (not error).
+    warnSilentFallback(new Error(`fired before expected_date`), {
+      feature: FUNCTION_NAME,
+      op: "date-guard",
+      extra: { fn: FUNCTION_NAME, today, expected: data.expected_date },
+    });
+    return { ok: false, reason: "date-guard" };
+  }
+
+  // --- Effect inside step.run (token minted here, never returned) ----------
+  return await step.run("do-the-thing", async () => {
+    const token = await mintInstallationToken({ tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS });
+    const { Octokit } = await import("@octokit/core");
+    const octokit = new Octokit({ auth: token });
+    try {
+      // FILL: the one-time action (read state, decide, comment/close/etc.).
+      // Use octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/comments", { owner: REPO_OWNER, repo: REPO_NAME, ... }).
+      void octokit; // FILL: remove
+      return { ok: true as const, reason: "done" };
+    } catch (err) {
+      reportSilentFallback(err, { feature: FUNCTION_NAME, op: "effect", extra: { fn: FUNCTION_NAME } });
+      return { ok: false as const, reason: "effect-failed" };
+    }
+  });
+}
+
+export const oneshotFILL = inngest.createFunction(
+  {
+    id: "oneshot-FILL-name", // FILL: must equal FUNCTION_NAME
+    concurrency: [
+      { scope: "fn", limit: 1 },
+      { scope: "account", key: '"cron-platform"', limit: 1 },
+    ],
+    retries: 1,
+  },
+  { event: "oneshot/FILL-name.fire" }, // FILL
+  oneshotFILLHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+);
+
+// === ALSO DO — the 3 integration points (the function alone does nothing) ===
+//
+// 1. REGISTER in app/api/inngest/route.ts:
+//      import { oneshotFILL } from "@/server/inngest/functions/oneshot-FILL-name";
+//      …and add `oneshotFILL,` to the `functions: [...]` array.
+//
+// 2. SELF-ARM in apps/web-platform/server/index.ts inside the
+//    `if (process.env.INNGEST_SIGNING_KEY)` boot block (copy a sibling IIFE):
+//      void (async () => {
+//        try {
+//          const { inngest } = await import("@/server/inngest/client");
+//          await sendInngestWithRetry(
+//            () => inngest.send({
+//              name: "oneshot/FILL-name.fire",
+//              id:   "oneshot-FILL-name-<YYYY-MM-DD>-v1",   // stable → dedups
+//              ts:   new Date("<YYYY-MM-DD>T09:00:00Z").getTime(),
+//              data: { expected_date: "<YYYY-MM-DD>", actor: "platform" as const },
+//            }),
+//            { feature: "oneshot-FILL-name-arm", eventId: "oneshot-FILL-name-<YYYY-MM-DD>-v1" },
+//          );
+//        } catch (err) {
+//          reportSilentFallback(err, { feature: "oneshot-FILL-name-arm", op: "self-arm-send",
+//            message: "failed to arm oneshot-FILL-name at boot" });
+//        }
+//      })();
+//
+// 3. BUMP the count in test/server/inngest/function-registry-count.test.ts `(a)`
+//    (+1). Do NOT add the fn to EXPECTED_CRON_FUNCTIONS / KNOWN_UNMONITORED_SLUGS
+//    / cron-monitors.tf — those are cron-only and a oneshot has no Sentry monitor.

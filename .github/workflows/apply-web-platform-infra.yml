@@ -13,18 +13,26 @@
 # Adapted from `apply-sentry-infra.yml` (ADR-031) with two adjustments:
 #   1. Doppler `--name-transformer tf-var` invocation wraps `terraform plan`/`apply`
 #      because the web-platform root reads ~12 `TF_VAR_*` inputs from Doppler.
-#   2. `-target=`-scoped apply (74 explicit targets). server.tf SSH-provisioned
-#      `terraform_data.*` resources are EXCLUDED — the GitHub runner egress IP is
-#      not in `var.admin_ips`, so any SSH connection from the runner fails with
-#      `ssh: handshake failed: connection reset by peer`. Those 7 resources land
-#      via `apply-deploy-pipeline-fix.yml` (mirrors that workflow's `-target=`
-#      pattern). `hcloud_server.web`, `hcloud_volume.workspaces`,
-#      `hcloud_volume_attachment.workspaces`, and `hcloud_ssh_key.default` are
-#      also excluded — managed by initial-apply + drift detector, not per-PR.
-#      `terraform_data.root_authorized_keys` (ci-ssh-key.tf) is ALSO excluded
-#      for the same SSH-from-runner reason — applied operator-locally on the
-#      first bootstrap; subsequent rotations re-fire via `triggers_replace`
-#      from a future operator-local `terraform apply -replace=tls_private_key.ci_ssh`.
+#   2. `-target=`-scoped apply, split into TWO applies (#4844):
+#      (a) the main saved-`tfplan` apply covers the 80 non-SSH resources;
+#      (b) a SEPARATE token-gated SSH apply, run AFTER the post-apply token sync
+#          and behind the CF Tunnel SSH bridge (.github/actions/cf-tunnel-ssh-bridge),
+#          covers the 7 SSH-provisioned `terraform_data.*` siblings in server.tf
+#          (disk_monitor_install, resource_monitor_install, fail2ban_tuning,
+#          journald_persistent, docker_seccomp_config, apparmor_bwrap_profile,
+#          orphan_reaper_install). The GitHub runner egress IP is not in
+#          `var.admin_ips`, so the bridge (not a direct :22 dial) is the access
+#          path. Before #4844 these 7 silently drifted: they were excluded here
+#          with no apply path, and apply-deploy-pipeline-fix.yml only `-target`s
+#          deploy_pipeline_fix + infra_config_handler_bootstrap (its header's old
+#          "those 7 land via apply-deploy-pipeline-fix.yml" claim was never true).
+#      `hcloud_server.web`, `hcloud_volume.workspaces`,
+#      `hcloud_volume_attachment.workspaces`, and `hcloud_ssh_key.default` remain
+#      excluded — managed by initial-apply + drift detector, not per-PR.
+#      `terraform_data.root_authorized_keys` (ci-ssh-key.tf) is ALSO excluded:
+#      it stays operator-local (firewall chicken-and-egg — it is what authorizes
+#      the CI key the bridge itself uses), re-firing via `triggers_replace` from a
+#      future operator-local `terraform apply -replace=tls_private_key.ci_ssh`.
 #
 # Destroy-guard shape: copies `apply-github-infra.yml` (post-#3903) — numeric-regex
 # validation of `destroy_count` + `set -e` re-enable after `rc=$?` capture.
@@ -73,9 +81,20 @@ on:
         type: string
 
 concurrency:
+  # LOAD-BEARING shared group (#4844): this MUST be the IDENTICAL literal string
+  # used in apply-deploy-pipeline-fix.yml. The R2 backend has NO state lock
+  # (apps/web-platform/infra/main.tf `use_lockfile = false` — R2 lacks S3
+  # conditional writes), so this shared GitHub Actions concurrency group is the
+  # SOLE serializer preventing two concurrent `terraform apply` runs from
+  # last-writer-wins-clobbering web-platform/terraform.tfstate. Both workflows
+  # SSH-apply apparmor_bwrap_profile (this one in its SSH -target set; the other
+  # pulls it transitively via deploy_pipeline_fix's depends_on), so they overlap
+  # on the same R2 object. GHA does NOT error on divergent group strings — they
+  # silently fail to serialize — so do not "rename for clarity".
+  #
   # `cancel-in-progress: false` per `hr-multi-step-post-merge-bootstrap-script`
-  # — cancelling a half-applied terraform run is worse than queueing the next.
-  group: terraform-apply-web-platform-infra
+  # — cancelling a half-applied unlocked terraform run is the worse split-state.
+  group: terraform-apply-web-platform-host
   cancel-in-progress: false
 
 permissions:
@@ -84,6 +103,15 @@ permissions:
 env:
   TERRAFORM_VERSION: "1.10.5"
   INFRA_DIR: apps/web-platform/infra
+  # cloudflared binary for the CF Tunnel SSH bridge (#4844) — the token-gated
+  # SSH apply of the 7 server.tf terraform_data siblings reaches the host over
+  # the tunnel via .github/actions/cf-tunnel-ssh-bridge. SHA-256 computed against
+  # the real released binary at the pinned version (NEVER paste a checksum from
+  # documentation or AI output per the 2026-03-21 server-provisioning learning,
+  # Session Error #4; re-verified at /work time). Kept byte-identical to
+  # apply-deploy-pipeline-fix.yml's pins so both bridges install the same binary.
+  CLOUDFLARED_VERSION: "2026.5.0"
+  CLOUDFLARED_SHA256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
 
 jobs:
   preflight:
@@ -303,10 +331,14 @@ jobs:
               -target=random_id.inngest_signing_key_dev \
               -target=random_id.inngest_event_key_prd \
               -target=random_id.inngest_event_key_dev \
+              -target=random_id.inngest_manual_trigger_secret_prd \
+              -target=random_id.inngest_manual_trigger_secret_dev \
               -target=doppler_secret.inngest_signing_key_prd \
               -target=doppler_secret.inngest_signing_key_dev \
               -target=doppler_secret.inngest_event_key_prd \
               -target=doppler_secret.inngest_event_key_dev \
+              -target=doppler_secret.inngest_manual_trigger_secret_prd \
+              -target=doppler_secret.inngest_manual_trigger_secret_dev \
               -target=betteruptime_heartbeat.inngest_prd \
               -target=betteruptime_policy.inngest \
               -target=doppler_secret.inngest_heartbeat_url_prd \
@@ -426,6 +458,102 @@ jobs:
             | doppler secrets set CI_SSH_ACCESS_TOKEN_SECRET --silent --no-interactive -p soleur -c prd_terraform
           unset CLIENT_ID CLIENT_SECRET
           echo "Synced CI_SSH_ACCESS_TOKEN_ID/_SECRET to Doppler prd_terraform."
+
+      # --- #4844: token-gated SSH apply of the 7 server.tf terraform_data siblings ---
+      # Runs AFTER the post-apply token sync above (shape B) so a from-scratch
+      # rebuild self-heals: the bridge needs the CF Access ci_ssh token that the
+      # sync step produces, so on the very first apply (tokens absent) this step
+      # `::warning::`-skips and the next run lands the 7 once the token exists.
+      - name: Check CI-SSH token presence (gates the SSH apply)
+        id: ssh_token_gate
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        # Mirrors the skip_sync bootstrap-cycle guard above. `doppler secrets get
+        # --plain` returns rc=1 when the key is absent and rc=0 + empty stdout
+        # when present-but-empty; the `-z` guard catches both.
+        run: |
+          set -euo pipefail
+          TOKEN_ID=$(doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain 2>/dev/null || true)
+          if [[ -z "$TOKEN_ID" ]]; then
+            echo "ssh_apply_skip=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::first-bootstrap: CI_SSH_ACCESS_TOKEN_ID absent in Doppler prd_terraform — the 7 SSH-provisioned resources are deferred to the next run after the token sync lands. The non-SSH apply + token sync above still succeeded."
+          else
+            echo "ssh_apply_skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: CF Tunnel SSH bridge (gated)
+        if: steps.ssh_token_gate.outputs.ssh_apply_skip != 'true'
+        uses: ./.github/actions/cf-tunnel-ssh-bridge
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
+          infra-dir: ${{ env.INFRA_DIR }}
+          cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}
+          cloudflared-sha256: ${{ env.CLOUDFLARED_SHA256 }}
+
+      - name: Terraform apply (SSH-provisioned resources, over the bridge)
+        if: steps.ssh_token_gate.outputs.ssh_apply_skip != 'true'
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # No destroy-guard on this step (data-integrity Q4 / AC9): the
+        # destroy-guard-filter-web-platform.jq scope is Cloudflare-resource-only
+        # and would never flag a `terraform_data` replace, AND none of the 7
+        # resources has a `when = destroy` provisioner — a triggers_replace
+        # destroy+recreate is a pure state-entry swap with no on-host teardown.
+        # A future maintainer adding a destroy-provisioned SSH resource here MUST
+        # add guard coverage.
+        #
+        # This is a SEPARATE `terraform apply` (not the saved tfplan), so it runs
+        # its own internal plan against the 7 targets. R2 backend creds (bare
+        # AWS_ACCESS_KEY_ID/_SECRET) are already in $GITHUB_ENV from "Extract
+        # backend credentials" and persist across steps; `--name-transformer
+        # tf-var` injects TF_VAR_* doppler secrets but passes those bare AWS_*
+        # vars through untouched (same pattern as the main apply above).
+        # `-var="ssh_key_path=${CI_SSH_PUB}"` satisfies HCL file() parsing for the
+        # excluded hcloud_ssh_key.default (never consumed; see the plan step).
+        # TF_VAR_ci_ssh_private_key is exported by the bridge action → agent=false.
+        run: |
+          set -euo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -auto-approve -input=false \
+              -var="ssh_key_path=${CI_SSH_PUB}" \
+              -target=terraform_data.disk_monitor_install \
+              -target=terraform_data.resource_monitor_install \
+              -target=terraform_data.fail2ban_tuning \
+              -target=terraform_data.journald_persistent \
+              -target=terraform_data.docker_seccomp_config \
+              -target=terraform_data.apparmor_bwrap_profile \
+              -target=terraform_data.orphan_reaper_install
+
+      - name: Tear down cloudflared SSH bridge
+        if: always()
+        # Caller-side teardown (the composite action cannot register a post-job
+        # hook). The `-n` guards make this a clean no-op when the bridge never ran
+        # (gated-skip or pre-bridge failure → SERVER_IP/CLOUDFLARED_PID unset), so
+        # it is intentionally `if: always()` (not gated on ssh_apply_skip). A
+        # left-over OUTPUT NAT rule or orphaned cloudflared would corrupt a later
+        # job on a persistent runner (moot on GH-hosted ephemeral runners, but the
+        # discipline is required — SpecFlow 1a).
+        run: |
+          set +e
+          if [[ -n "${SERVER_IP:-}" ]]; then
+            sudo iptables -t nat -D OUTPUT \
+              -d "$SERVER_IP" -p tcp --dport 22 \
+              -j REDIRECT --to-ports 2222 2>/dev/null || true
+          fi
+          if [[ -n "${CLOUDFLARED_PID:-}" ]]; then
+            kill "$CLOUDFLARED_PID" 2>/dev/null || true
+          fi
+          if [[ -f /tmp/cloudflared.log ]]; then
+            echo "=== /tmp/cloudflared.log (last 200 lines) ==="
+            if [[ -s /tmp/cloudflared.log ]]; then
+              tail -n 200 /tmp/cloudflared.log
+            else
+              echo "(log empty — cloudflared may have failed before writing any output)"
+            fi
+          fi
 
       - name: Post-apply summary
         if: always()

@@ -38,6 +38,7 @@ import {
   tearDownSharedWorkspace,
   type SharedWorkspaceFixture,
 } from "@/test/helpers/workspace-members-fixtures";
+import { DEFAULT_ORG_NAME } from "@/lib/workspace-name";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -106,14 +107,17 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       if (SCHEMA_CACHE_READY === false) return;
       const harry = fixture.members[1];
 
-      // remove_workspace_member is 2-arg (p_workspace_id, p_user_id) per
-      // mig 062:272; the SECURITY DEFINER body reads the actor from
-      // auth.uid(). Service-role contexts have auth.uid() = NULL so the
-      // RPC raises 28000; fallback DELETE is the canonical removal path
-      // here (mirrors workspace-members.test.ts:113-119 precedent).
+      // mig 094: remove_workspace_member is now 3-arg + service_role-only and
+      // resolves the caller via COALESCE(p_caller_user_id, auth.uid()).
+      // Service-role contexts have auth.uid() = NULL, so we forward the owner
+      // (members[0]) as p_caller_user_id — exactly as the production wrapper
+      // does. The fallback DELETE remains as defense-in-depth in case the RPC
+      // is unavailable in a degraded environment.
+      const owner = fixture.members[0];
       const { error: rmErr } = await service.rpc("remove_workspace_member", {
         p_workspace_id: fixture.workspaceId,
         p_user_id: harry.userId,
+        p_caller_user_id: owner.userId,
       });
       if (rmErr) {
         const { error: delErr } = await service
@@ -149,14 +153,16 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     test("organizations chain returns Harry's solo backfill org (Phase 7.2 / AC10)", async () => {
       if (SCHEMA_CACHE_READY === false) return;
       const harry = fixture.members[1];
-      // Harry has a backfill-shaped solo org (created by handle_new_user
+      // Harry has a default-named solo org (created by handle_new_user
       // trigger at signup). Owner_user_id keys directly on his auth id.
       const { data } = await service
         .from("organizations")
         .select("id, owner_user_id, name")
         .eq("owner_user_id", harry.userId);
       expect(data?.length ?? 0).toBeGreaterThanOrEqual(1);
-      expect(data![0].name).toBeNull();
+      // Migration 091 (#4762): the signup trigger seeds DEFAULT_ORG_NAME
+      // (was NULL in mig 053). Art. 15 export still includes the org row.
+      expect(data![0].name).toBe(DEFAULT_ORG_NAME);
     });
 
     test("deleteAccount(Harry) end-to-end — FK-reverse cascade clears the chain (AC-GDPR-17-CALLER)", async () => {

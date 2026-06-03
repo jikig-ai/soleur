@@ -365,7 +365,7 @@ Stage 0 is **UNBLOCKED** per revised criteria. New structural constraints baked 
 **Tasks:**
 
 - [ ] 5.1 — Set `FLAG_CC_SOLEUR_GO=true` and all `CC_*` cost env vars in Doppler `dev` per `cq-doppler-service-tokens-are-per-config`.
-- [ ] 5.2 — Write `knowledge-base/engineering/ops/runbooks/cc-soleur-go-rollout.md` (NEW): enable + rollback playbook + **Threat Model section** enumerating untrusted user input → SDK → tool surface; per-tool gate matrix; rate-limit posture; kill-switch usage.
+- [ ] 5.2 — Write `knowledge-base/engineering/operations/runbooks/cc-soleur-go-rollout.md` (NEW): enable + rollback playbook + **Threat Model section** enumerating untrusted user input → SDK → tool surface; per-tool gate matrix; rate-limit posture; kill-switch usage.
 - [ ] 5.3 — File V2 tracking issues (Post-MVP / Later milestone):
 
   | # | Issue title | Source |
@@ -465,7 +465,7 @@ Stage 0 is **UNBLOCKED** per revised criteria. New structural constraints baked 
 | `apps/web-platform/test/interactive-prompt-card.test.tsx` | 4 | Per-variant interactions. |
 | `apps/web-platform/test/workflow-lifecycle-bar.test.tsx` | 4 | All 3 states + CTAs. |
 | `knowledge-base/engineering/architecture/decisions/ADR-022-sdk-as-router.md` | 1 | SDK-as-router pivot rationale + AP-004 deviation. |
-| `knowledge-base/engineering/ops/runbooks/cc-soleur-go-rollout.md` | 5 | Enable + rollback playbook + threat model section. |
+| `knowledge-base/engineering/operations/runbooks/cc-soleur-go-rollout.md` | 5 | Enable + rollback playbook + threat model section. |
 
 ## Files to Delete (Stage 8 — separate PR)
 

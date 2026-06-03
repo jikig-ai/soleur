@@ -6,10 +6,28 @@ import {
   getFreshTenantClient,
   RuntimeAuthError,
 } from "@/lib/supabase/tenant";
-import { reportSilentFallback } from "@/server/observability";
+import {
+  reportSilentFallback,
+  warnSilentFallback,
+} from "@/server/observability";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isPathInWorkspace } from "@/server/sandbox";
+// Type-only import of the SHARED error-class union (the single source of truth
+// in session-sync.ts — do NOT invent a new union). Type-only is load-bearing:
+// a runtime import of session-sync would drag its module-init
+// `createChildLogger("session-sync")` into this file's import graph, breaking
+// the share/upload/delete/rename route tests that mock `@/server/logger`
+// without `createChildLogger` (this file is deliberately decoupled from heavy
+// server modules — see the lazy `git-auth` import note above). The literal
+// values below are checked against this imported union.
+import type { KbSyncErrorClass } from "@/server/session-sync";
 import type { Logger } from "pino";
+
+// Re-declared as local constants typed by the shared union (the union is the
+// source of truth; these are the literal members, NOT a new union). Kept local
+// so this module stays free of a runtime session-sync import.
+const ERROR_CLASS_NON_FAST_FORWARD: KbSyncErrorClass = "non_fast_forward";
+const ERROR_CLASS_SYNC_FAILED: KbSyncErrorClass = "sync_failed";
 
 // git-auth is lazily loaded inside syncWorkspace so that routes which only
 // need authenticateAndResolveKbPath / resolveUserKbRoot don't drag
@@ -283,12 +301,105 @@ export async function resolveUserKbRoot<
 }
 
 /**
+ * Result shape returned by {@link syncWorkspace}.
+ *
+ * - `{ ok: true }` — clean `pull --ff-only`.
+ * - `{ ok: true, recovered: true }` — a diverged clone with ZERO un-pushed
+ *   local commits was self-healed via `reset --hard origin/<default>`.
+ * - `{ ok: false, error, errorClass }` — sync failed and could not be
+ *   recovered. `errorClass` is derived from the git stderr/exit signature
+ *   (never hard-coded by callers) so the `kb_sync_history` row and the
+ *   `KbSyncStatus` desync state classify correctly (#non_fast_forward was
+ *   previously unreachable — syncWorkspace is its first producer).
+ */
+export type SyncWorkspaceResult =
+  | { ok: true; recovered?: boolean }
+  | { ok: false; error: unknown; errorClass: KbSyncErrorClass };
+
+/**
+ * Classify a failed-git error into a {@link KbSyncErrorClass}.
+ *
+ * TWO distinct `git pull --ff-only` aborts are self-healable via the SAME gated
+ * `reset --hard origin/<default>` (it discards both un-pushed commits — blocked
+ * by the gate — and uncommitted working-tree changes), so both map to
+ * `non_fast_forward` (the self-heal trigger). We reuse the existing class rather
+ * than widen the union (cq-union-widening-grep-three-patterns); a dirty-tree
+ * recovery records `non_fast_forward` + `recovered:true`, which is functionally
+ * correct for the `KbSyncStatus` UI (the `recovered` flag is what it reads).
+ *
+ * Stable stderr signatures (git 2.53.0):
+ *   1. Diverged clone:    `Not possible to fast-forward` (`fatal: …, aborting.`).
+ *   2. Dirty working tree: `would be overwritten by merge` /
+ *      `commit your changes or stash`. This is the #4886-follow-up incident:
+ *      something on the host (e.g. a runtime write to `.claude/settings.json`)
+ *      left the KB MIRROR clone dirty, and `--ff-only` aborts on EVERY push —
+ *      the reconcile froze with no row written. The mirror should always match
+ *      origin, so resetting the spurious local edit is safe (real session work
+ *      lands as COMMITS under `knowledge-base/**`, caught by the un-pushed-commit
+ *      gate).
+ *
+ * Everything else (auth, IO, network, timeout) is `sync_failed`.
+ */
+function classifyGitSyncError(err: unknown): KbSyncErrorClass {
+  const text =
+    err instanceof Error
+      ? `${err.message}\n${(err as { stderr?: string }).stderr ?? ""}`
+      : String(err);
+  if (
+    text.includes("Not possible to fast-forward") ||
+    text.includes("would be overwritten by merge") ||
+    text.includes("commit your changes or stash")
+  ) {
+    return ERROR_CLASS_NON_FAST_FORWARD;
+  }
+  return ERROR_CLASS_SYNC_FAILED;
+}
+
+/**
+ * Resolve the workspace clone's default branch as `<short>` (e.g. `main`)
+ * via `git symbolic-ref --short refs/remotes/origin/HEAD`. Robust across
+ * repos that do not use `main` (AC-B5 — never assume `main`). Falls back to
+ * `main` only if the symbolic ref is missing (detached `origin/HEAD`); the
+ * caller logs the fallback path.
+ */
+async function resolveDefaultBranch(
+  gitWithInstallationAuth: (
+    args: string[],
+    installationId: number,
+    opts: { cwd: string; timeout: number },
+  ) => Promise<Buffer | string>,
+  installationId: number,
+  workspacePath: string,
+): Promise<string> {
+  try {
+    const out = await gitWithInstallationAuth(
+      ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+      installationId,
+      { cwd: workspacePath, timeout: 30_000 },
+    );
+    const ref = out.toString().trim(); // e.g. "origin/main"
+    const branch = ref.replace(/^origin\//, "");
+    return branch || "main";
+  } catch {
+    return "main";
+  }
+}
+
+/**
  * Pull the workspace to sync local files with the remote repo after a
  * successful GitHub mutation. Uses an installation-scoped credential helper.
  *
- * Returns { ok: true } on success, { ok: false, error } on failure.
- * Callers decide which 500 response shape to return (different handlers
- * include different metadata — commitSha, oldPath/newPath, etc.).
+ * On a `non_fast_forward` (diverged clone) the function attempts a GATED,
+ * OBSERVABLE self-heal: it resets to `origin/<default>` ONLY when the clone
+ * holds ZERO un-pushed local commits (`git rev-list --count @{u}..HEAD == 0`).
+ * A non-zero count means real, un-pushed agent-session work
+ * (`session-sync.ts` auto-commits `knowledge-base/**` into the SAME clone) —
+ * the reset is ABORTED and the failure surfaces, never destroying that work
+ * (AC-B6). The guard mirrors the existing `hasLocalCommits` probe in
+ * `session-sync.ts:200-208`.
+ *
+ * Returns a {@link SyncWorkspaceResult}. Callers decide which 5xx response
+ * shape to return (different handlers include different metadata).
  */
 export async function syncWorkspace(
   installationId: number,
@@ -298,7 +409,7 @@ export async function syncWorkspace(
     userId: string;
     op: "delete" | "rename" | "upload" | "push" | "manual";
   },
-): Promise<{ ok: true } | { ok: false; error: unknown }> {
+): Promise<SyncWorkspaceResult> {
   const { gitWithInstallationAuth } = await import("@/server/git-auth");
   try {
     await gitWithInstallationAuth(
@@ -308,8 +419,9 @@ export async function syncWorkspace(
     );
     return { ok: true };
   } catch (syncError) {
+    const errorClass = classifyGitSyncError(syncError);
     log.error(
-      { err: syncError, userId: context.userId, op: context.op },
+      { err: syncError, userId: context.userId, op: context.op, errorClass },
       `kb/${context.op}: workspace sync failed`,
     );
     reportSilentFallback(syncError, {
@@ -321,6 +433,129 @@ export async function syncWorkspace(
       extra: { userId: context.userId },
       message: `kb/${context.op}: workspace sync failed`,
     });
-    return { ok: false, error: syncError };
+
+    // Gated, observable self-heal for a diverged clone (non-fast-forward).
+    if (errorClass === ERROR_CLASS_NON_FAST_FORWARD) {
+      return await selfHealNonFastForward(
+        gitWithInstallationAuth,
+        installationId,
+        workspacePath,
+        log,
+        context,
+      );
+    }
+
+    return { ok: false, error: syncError, errorClass };
+  }
+}
+
+/**
+ * Gated self-heal for a `non_fast_forward` clone. Fetches the default branch,
+ * checks for un-pushed local commits, and ONLY resets when there are none.
+ *
+ * Observability (AC-B4):
+ * - success → `warnSilentFallback` op:self-heal-reset (worth observing, not
+ *   paging) + `{ ok: true, recovered: true }` so the caller writes a
+ *   `recovered` kb_sync_history row.
+ * - un-pushed local commits present → `reportSilentFallback` (fail_loud)
+ *   op:self-heal-aborted-dirty + `{ ok: false }`; the reset is NOT run.
+ * - fetch/reset error → `reportSilentFallback` (fail_loud) op:self-heal-failed
+ *   + `{ ok: false }`.
+ *
+ * All git ops use the same installation-auth/cwd/timeout envelope as the pull.
+ * Payloads OMIT workspacePath (raw userId) per the Recital 26 omission above.
+ */
+async function selfHealNonFastForward(
+  gitWithInstallationAuth: (
+    args: string[],
+    installationId: number,
+    opts: { cwd: string; timeout: number },
+  ) => Promise<Buffer | string>,
+  installationId: number,
+  workspacePath: string,
+  log: Logger,
+  context: { userId: string; op: string },
+): Promise<SyncWorkspaceResult> {
+  const gitOpts = { cwd: workspacePath, timeout: 30_000 };
+  try {
+    const defaultBranch = await resolveDefaultBranch(
+      gitWithInstallationAuth,
+      installationId,
+      workspacePath,
+    );
+
+    await gitWithInstallationAuth(
+      ["fetch", "origin", defaultBranch],
+      installationId,
+      gitOpts,
+    );
+
+    // Local-commit guard (AC-B6) — mirrors session-sync.ts:200-208.
+    const revListOut = await gitWithInstallationAuth(
+      ["rev-list", "--count", "@{u}..HEAD"],
+      installationId,
+      gitOpts,
+    );
+    const localCommits = parseInt(revListOut.toString().trim(), 10);
+
+    if (Number.isNaN(localCommits) || localCommits > 0) {
+      // Real, un-pushed agent-session work — do NOT destroy it.
+      log.error(
+        { userId: context.userId, op: context.op, localCommits },
+        `kb/${context.op}: self-heal aborted — diverged clone holds un-pushed local commits`,
+      );
+      reportSilentFallback(
+        new Error("self-heal aborted: un-pushed local commits present"),
+        {
+          feature: "kb-route-helpers",
+          op: "self-heal-aborted-dirty",
+          extra: { userId: context.userId },
+          message: `kb/${context.op}: self-heal aborted (un-pushed local commits)`,
+        },
+      );
+      return {
+        ok: false,
+        error: new Error("non-fast-forward with un-pushed local commits"),
+        errorClass: ERROR_CLASS_NON_FAST_FORWARD,
+      };
+    }
+
+    // Phantom divergence (upstream force-push / corrupted ref). Safe to reset.
+    await gitWithInstallationAuth(
+      ["reset", "--hard", `origin/${defaultBranch}`],
+      installationId,
+      gitOpts,
+    );
+
+    log.warn(
+      { userId: context.userId, op: context.op, defaultBranch },
+      `kb/${context.op}: self-heal reset clone to origin/${defaultBranch}`,
+    );
+    warnSilentFallback(
+      new Error("workspace self-healed via reset --hard"),
+      {
+        feature: "kb-route-helpers",
+        op: "self-heal-reset",
+        extra: { userId: context.userId },
+        message: `kb/${context.op}: workspace clone self-healed (reset to origin/${defaultBranch})`,
+      },
+    );
+    return { ok: true, recovered: true };
+  } catch (healError) {
+    log.error(
+      { err: healError, userId: context.userId, op: context.op },
+      `kb/${context.op}: self-heal failed`,
+    );
+    reportSilentFallback(healError, {
+      feature: "kb-route-helpers",
+      op: "self-heal-failed",
+      extra: { userId: context.userId },
+      message: `kb/${context.op}: self-heal failed`,
+    });
+    return {
+      ok: false,
+      error: healError,
+      errorClass: ERROR_CLASS_NON_FAST_FORWARD,
+    };
   }
 }

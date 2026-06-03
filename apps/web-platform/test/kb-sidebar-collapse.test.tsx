@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen, within } from "@testing-library/react";
+import { RailSlotHarness } from "./helpers/rail-slot-harness";
 
 let mockPathname = "/dashboard/kb";
 
@@ -48,7 +48,7 @@ vi.mock("@/hooks/use-media-query", () => ({
 
 import KbLayout from "@/app/(dashboard)/dashboard/kb/layout";
 
-describe("KB sidebar collapse", () => {
+describe("KB file tree lifts into the single nav rail slot (ADR-047)", () => {
   beforeEach(() => {
     mockPathname = "/dashboard/kb";
     localStorage.clear();
@@ -76,68 +76,104 @@ describe("KB sidebar collapse", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders a collapse toggle button for KB sidebar", async () => {
-    render(<KbLayout><div>content</div></KbLayout>);
-    await screen.findByTestId("file-tree");
-    expect(screen.getByLabelText("Collapse file tree")).toBeInTheDocument();
-  });
-
-  it("toggles KB sidebar on click", async () => {
-    render(<KbLayout><div>content</div></KbLayout>);
-    await screen.findByTestId("file-tree");
-    const toggle = screen.getByLabelText("Collapse file tree");
-    await userEvent.click(toggle);
-    expect(screen.getByLabelText("Expand file tree")).toBeInTheDocument();
-  });
-
-  it("Cmd+B toggles KB sidebar on /dashboard/kb routes", async () => {
-    render(<KbLayout><div>content</div></KbLayout>);
-    await screen.findByTestId("file-tree");
-    fireEvent.keyDown(document, { key: "b", metaKey: true });
-    expect(screen.getByLabelText("Expand file tree")).toBeInTheDocument();
-  });
-
-  it("Ctrl+B toggles KB sidebar", async () => {
-    render(<KbLayout><div>content</div></KbLayout>);
-    await screen.findByTestId("file-tree");
-    fireEvent.keyDown(document, { key: "b", ctrlKey: true });
-    expect(screen.getByLabelText("Expand file tree")).toBeInTheDocument();
-  });
-
-  it("ignores Cmd+B when focus is in an input", async () => {
-    mockPathname = "/dashboard/kb/somefile";
+  it("portals the file tree + search overlay into the rail slot", async () => {
     render(
-      <KbLayout>
-        <input data-testid="test-input" />
-      </KbLayout>,
+      <RailSlotHarness>
+        <KbLayout>
+          <div>content</div>
+        </KbLayout>
+      </RailSlotHarness>,
+    );
+    const slot = await screen.findByTestId("rail-slot-harness");
+    expect(await within(slot).findByTestId("file-tree")).toBeInTheDocument();
+    expect(within(slot).getByTestId("search-overlay")).toBeInTheDocument();
+  });
+
+  it("renders NO in-shell collapse button — collapse is owned by the unified rail (⌘B)", async () => {
+    render(
+      <RailSlotHarness>
+        <KbLayout>
+          <div>content</div>
+        </KbLayout>
+      </RailSlotHarness>,
     );
     await screen.findByTestId("file-tree");
-    const input = screen.getByTestId("test-input");
-    fireEvent.keyDown(input, { key: "b", metaKey: true, bubbles: true });
-    expect(screen.getByLabelText("Collapse file tree")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Collapse file tree")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Expand file tree")).not.toBeInTheDocument();
   });
 
-  it("preserves mobile class-swap behavior", async () => {
-    mockPathname = "/dashboard/kb/somefile";
-    render(<KbLayout><div>content</div></KbLayout>);
-    await screen.findByTestId("file-tree");
-    const aside = screen.getByTestId("file-tree").closest("aside");
-    expect(aside).toBeInTheDocument();
-    expect(aside!.className).toContain("hidden");
+  it("shows a labeled empty-state CTA in the rail when the KB has no docs (AC6)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url === "/api/kb/tree") {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () =>
+              Promise.resolve({ tree: { name: "root", children: [] } }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({}),
+        });
+      }),
+    );
+    render(
+      <RailSlotHarness>
+        <KbLayout>
+          <div>content</div>
+        </KbLayout>
+      </RailSlotHarness>,
+    );
+    const slot = await screen.findByTestId("rail-slot-harness");
+    const empty = await within(slot).findByTestId("kb-rail-empty");
+    expect(empty).toHaveTextContent(/no documents yet/i);
+    expect(
+      within(empty).getByRole("link", { name: /connect a repo or add docs/i }),
+    ).toBeInTheDocument();
   });
 
-  it("KB header row uses py-5 + min-h-7 to match main sidebar brand row height", async () => {
-    render(<KbLayout><div>content</div></KbLayout>);
-    await screen.findByTestId("file-tree");
-    const collapseBtn = screen.getByLabelText("Collapse file tree");
-    const headerRow = collapseBtn.closest("header");
-    expect(headerRow).not.toBeNull();
-    expect(headerRow?.className).toMatch(/\bpy-5\b/);
-    expect(headerRow?.className).toMatch(/\bmin-h-7\b/);
-    expect(headerRow?.className).toMatch(/\bflex\b/);
-    expect(headerRow?.className).toMatch(/\bitems-center\b/);
-    expect(headerRow?.className).toMatch(/\bjustify-between\b/);
-    expect(headerRow?.className).not.toMatch(/\bpt-4\b/);
-    expect(headerRow?.className).not.toMatch(/\bpb-3\b/);
+  it("renders nothing into the rail when there is no slot (top-level / no drill)", async () => {
+    // No RailSlotProvider → the portal has no target and the tree no-ops.
+    render(
+      <KbLayout>
+        <div>content</div>
+      </KbLayout>,
+    );
+    expect(screen.queryByTestId("file-tree")).not.toBeInTheDocument();
+  });
+
+  // AC2 — collapsed: the search overlay + file tree are DOM-removed so the
+  // arbitrarily-nested rows cannot clip at the 56px collapsed rail. The stable
+  // `kb-rail-tree` wrapper survives so the present/absent assertion is anchored.
+  it("DOM-removes the search + file tree when collapsed (AC2)", async () => {
+    render(
+      <RailSlotHarness collapsed>
+        <KbLayout>
+          <div>content</div>
+        </KbLayout>
+      </RailSlotHarness>,
+    );
+    const slot = await screen.findByTestId("rail-slot-harness");
+    expect(within(slot).getByTestId("kb-rail-tree")).toBeInTheDocument();
+    expect(within(slot).queryByTestId("file-tree")).not.toBeInTheDocument();
+    expect(within(slot).queryByTestId("search-overlay")).not.toBeInTheDocument();
+  });
+
+  // AC4 — expanded: the same wrapper holds the tree + search (no vacuous AC2).
+  it("keeps the search + file tree present when expanded (AC4)", async () => {
+    render(
+      <RailSlotHarness collapsed={false}>
+        <KbLayout>
+          <div>content</div>
+        </KbLayout>
+      </RailSlotHarness>,
+    );
+    const wrapper = await screen.findByTestId("kb-rail-tree");
+    expect(await within(wrapper).findByTestId("file-tree")).toBeInTheDocument();
+    expect(within(wrapper).getByTestId("search-overlay")).toBeInTheDocument();
   });
 });

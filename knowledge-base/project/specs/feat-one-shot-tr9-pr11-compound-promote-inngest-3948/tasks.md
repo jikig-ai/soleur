@@ -32,7 +32,7 @@ Plan: `knowledge-base/project/plans/2026-05-25-feat-tr9-pr11-compound-promote-in
 
 ## Phase 4 — Runbook
 
-- [ ] 4.1. Update `knowledge-base/engineering/ops/runbooks/compound-promote-runbook.md`
+- [ ] 4.1. Update `knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md`
 
 ## Phase 5 — CI green + multi-agent review
 

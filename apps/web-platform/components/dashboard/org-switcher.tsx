@@ -21,9 +21,16 @@ function roleLabel(role: "owner" | "member"): string {
 export function OrgSwitcher({
   memberships,
   onSwitch,
+  repoName,
 }: {
   memberships: readonly OrgMembershipSummary[];
   onSwitch?: (organizationId: string) => void;
+  /** Active-workspace repo (e.g. "jikig-ai/soleur"), surfaced as a muted
+   *  subtitle on the closed pill face. The role label now lives only in the
+   *  dropdown (multi-org) — the face shows workspace identity, not role.
+   *  The subtitle keeps the `live-repo-badge` testid (inherited from the
+   *  retired standalone badge) so existing e2e/unit selectors stay valid. */
+  repoName?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -59,20 +66,21 @@ export function OrgSwitcher({
     [onSwitch],
   );
 
-  // AC-C: hide entirely on solo / empty membership.
-  if (memberships.length <= 1) return null;
+  // RQ7: with no memberships there is no workspace to name — render nothing.
+  if (memberships.length === 0) return null;
 
   const current = memberships.find((m) => m.isCurrent) ?? memberships[0];
 
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        aria-label="Switch workspace"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-2 rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-1.5 text-left hover:bg-soleur-bg-surface-2"
+  // RQ7 / CPO sign-off condition #2: a solo user (exactly one workspace) still
+  // sees their workspace NAME in the context band for orientation, but as a
+  // VISIBLY NON-INTERACTIVE chip — no dropdown trigger, no `▾` affordance —
+  // because there is nothing to switch to. The band's identity display is a
+  // distinct concern from the interactive switch.
+  if (memberships.length === 1) {
+    return (
+      <div
+        data-testid="workspace-identity-static"
+        className="flex w-full min-w-0 items-center gap-2 rounded-md px-3 py-1.5 text-left"
       >
         <span
           aria-hidden="true"
@@ -82,17 +90,53 @@ export function OrgSwitcher({
           <span className="block truncate text-sm font-medium text-soleur-text-primary">
             {current.organizationName}
           </span>
-          <span className="block text-xs text-soleur-accent-gold-fg">
-            {roleLabel(current.role)}
-          </span>
+          {repoName ? (
+            <span
+              data-testid="live-repo-badge"
+              className="block truncate text-xs text-soleur-text-muted"
+            >
+              {repoName}
+            </span>
+          ) : null}
         </span>
-        <span aria-hidden="true" className="ml-1 text-soleur-text-muted">▾</span>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        aria-label="Switch workspace"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full min-w-0 items-center gap-2 rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-1.5 text-left hover:bg-soleur-bg-surface-2"
+      >
+        <span
+          aria-hidden="true"
+          className="h-6 w-6 shrink-0 rounded-sm bg-soleur-accent-gold-fg/60"
+        />
+        <span className="min-w-0">
+          <span className="block truncate text-sm font-medium text-soleur-text-primary">
+            {current.organizationName}
+          </span>
+          {repoName ? (
+            <span
+              data-testid="live-repo-badge"
+              className="block truncate text-xs text-soleur-text-muted"
+            >
+              {repoName}
+            </span>
+          ) : null}
+        </span>
+        <span aria-hidden="true" className="ml-1 shrink-0 text-soleur-text-muted">▾</span>
       </button>
 
       {open && (
         <div
           role="menu"
-          className="absolute left-1/2 top-12 z-50 w-80 -translate-x-1/2 rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 py-2 shadow-xl"
+          className="absolute left-0 top-full z-50 mt-2 w-80 max-w-[calc(100vw-1.5rem)] rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 py-2 shadow-xl"
         >
           <div className="px-4 pb-2 text-xs font-medium uppercase tracking-wider text-soleur-text-muted">
             Your workspaces

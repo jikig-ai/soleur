@@ -19,7 +19,7 @@
  * ceiling. If you see `AuthApiError: Request rate limit reached` /
  * `code: over_request_rate_limit` mirrored from `mint.verify_otp_error`
  * (see `lib/supabase/tenant.ts`), follow the operational runbook at
- * `knowledge-base/engineering/ops/runbooks/supabase-magiclink-rate-limit.md`
+ * `knowledge-base/engineering/operations/runbooks/supabase-magiclink-rate-limit.md`
  * to bump the dev project's magiclink rate limit. The dashboard setting
  * is not yet Terraform-managed; the runbook is the durable record.
  *

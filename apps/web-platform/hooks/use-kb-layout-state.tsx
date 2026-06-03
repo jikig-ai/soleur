@@ -10,6 +10,7 @@ import type { KbChatContextValue } from "@/components/kb/kb-chat-context";
 import { safeSession } from "@/lib/safe-session";
 import { getAncestorPaths } from "@/components/kb/get-ancestor-paths";
 import type { TreeNode } from "@/server/kb-reader";
+import { reportSilentFallback } from "@/lib/client-observability";
 import type { KbSyncHistoryRow } from "@/components/kb/kb-sync-status";
 
 const KB_SIDEBAR_OPEN_KEY = "kb.chat.sidebarOpen";
@@ -33,8 +34,6 @@ export interface UseKbLayoutStateResult {
   loading: boolean;
   error: KbContextValue["error"];
   hasTreeContent: boolean;
-  kbCollapsed: boolean;
-  toggleKbCollapsed: () => void;
   // Chat state
   contextPath: string | null;
   showChat: boolean;
@@ -52,9 +51,9 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
   const router = useRouter();
   const isDesktop = useMediaQuery("(min-width: 768px)");
   const chatPanelRef = usePanelRef();
-  const [kbCollapsed, setKbCollapsed] = useState(false);
   const [tree, setTree] = useState<TreeNode | null>(null);
   const [lastSync, setLastSync] = useState<KbSyncHistoryRow | null>(null);
+  const [needsReconnect, setNeedsReconnect] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<KbContextValue["error"]>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -93,9 +92,16 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
         // Cached on the layout state; refetched on KbSyncStatus's Sync-now
         // resolution via refreshTree (the same fetchTree callback).
         setLastSync((data.lastSync as KbSyncHistoryRow | null) ?? null);
+        // #4712 — server-derived reconnect signal; refreshTree re-fetches and
+        // re-derives this to false after a successful reconnect.
+        setNeedsReconnect(data.needsReconnect === true);
         setLoading(false);
-      } catch {
+      } catch (err) {
         if (!signal?.aborted) {
+          // #4712 — a 200-with-malformed-body or network throw must not
+          // silently null the needsReconnect signal this hook now carries.
+          // Mirror to Sentry (client) before degrading to the generic state.
+          reportSilentFallback(err, { feature: "kb-tree", op: "fetch-tree" });
           setError("unknown");
           setLoading(false);
         }
@@ -148,24 +154,9 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
     });
   }, [pathname]);
 
-  const toggleKbCollapsed = useCallback(() => {
-    setKbCollapsed((prev) => !prev);
-  }, []);
-
-  // Cmd+B / Ctrl+B toggles KB file tree sidebar (only on KB routes, not in inputs)
-  useEffect(() => {
-    function handleToggleShortcut(e: KeyboardEvent) {
-      if (!(e.metaKey || e.ctrlKey) || e.key !== "b") return;
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
-      if ((e.target as HTMLElement)?.isContentEditable) return;
-      if (!pathname.startsWith("/dashboard/kb")) return;
-      e.preventDefault();
-      toggleKbCollapsed();
-    }
-    document.addEventListener("keydown", handleToggleShortcut);
-    return () => document.removeEventListener("keydown", handleToggleShortcut);
-  }, [pathname, toggleKbCollapsed]);
+  // ⌘B and rail collapse are owned solely by (dashboard)/layout.tsx (AC5,
+  // ADR-047). KB no longer has its own collapse axis — the tree lives in the
+  // unified rail, which collapses as a whole.
 
   const isContentView = pathname !== "/dashboard/kb";
   const hasTreeContent = !!(tree?.children && tree.children.length > 0);
@@ -179,8 +170,18 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
       toggleExpanded,
       refreshTree: fetchTree,
       lastSync,
+      needsReconnect,
     }),
-    [tree, lastSync, loading, error, expanded, toggleExpanded, fetchTree],
+    [
+      tree,
+      lastSync,
+      needsReconnect,
+      loading,
+      error,
+      expanded,
+      toggleExpanded,
+      fetchTree,
+    ],
   );
 
   // --- Chat sidebar state -------------------------------------------------
@@ -286,8 +287,6 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
     loading,
     error,
     hasTreeContent,
-    kbCollapsed,
-    toggleKbCollapsed,
     contextPath,
     showChat,
     openSidebar,

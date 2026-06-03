@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { reportSilentFallback } from "@/lib/client-observability";
 
 interface PendingInviteBannerProps {
   invitationId: string;
@@ -29,11 +30,24 @@ export function PendingInviteBanner({
         body: JSON.stringify({ invitationId }),
       });
       if (res.ok) {
+        // Hide the banner immediately AND navigate. Without setDismissed the
+        // banner can re-mount before the server-side invite resolver re-fetches
+        // (the SOL-49 reporter symptom: "la fenêtre … ne part pas quand on
+        // accepte"). Mirrors decline's pessimistic-revert pattern below.
+        setDismissed(true);
         router.push("/dashboard/settings/team");
         router.refresh();
+      } else {
+        reportSilentFallback(
+          new Error(`accept-invite returned ${res.status}`),
+          { feature: "workspace-invitations", op: "accept" },
+        );
       }
-    } catch {
-      // silent — banner is supplementary
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: "workspace-invitations",
+        op: "accept",
+      });
     } finally {
       setLoading(null);
     }
@@ -50,19 +64,37 @@ export function PendingInviteBanner({
       if (res.ok) {
         setDismissed(true);
         router.refresh();
+      } else {
+        reportSilentFallback(
+          new Error(`decline-invite returned ${res.status}`),
+          { feature: "workspace-invitations", op: "decline" },
+        );
       }
-    } catch {
-      // silent
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: "workspace-invitations",
+        op: "decline",
+      });
     } finally {
       setLoading(null);
     }
   }
 
   return (
-    <div className="flex items-center justify-between border-b border-[#2563eb]/20 bg-[#2563eb]/5 px-4 py-3">
+    <div className="flex items-center justify-between border-b border-soleur-accent-gold-fg/20 bg-soleur-accent-gold-fill/10 px-4 py-3">
       <div className="flex items-center gap-2 text-sm text-soleur-text-primary">
-        <svg className="h-4 w-4 text-[#2563eb]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75" />
+        <svg
+          className="h-4 w-4 text-soleur-accent-gold-fg"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75"
+          />
         </svg>
         <span>
           <strong>{inviterName}</strong> invited you to join{" "}
@@ -73,24 +105,34 @@ export function PendingInviteBanner({
         <button
           onClick={handleAccept}
           disabled={loading !== null}
-          className="rounded-md bg-[#2563eb] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#1d4ed8] disabled:opacity-50"
+          className="rounded-md bg-soleur-accent-gold-fg px-3 py-1.5 text-xs font-medium text-soleur-bg-surface-1 hover:opacity-90 disabled:opacity-50"
         >
           {loading === "accept" ? "..." : "Accept"}
         </button>
         <button
           onClick={handleDecline}
           disabled={loading !== null}
-          className="rounded-md border border-[#2A2A2A] px-3 py-1.5 text-xs font-medium text-[#9a9a9a] hover:text-white disabled:opacity-50"
+          className="rounded-md border border-soleur-border-default px-3 py-1.5 text-xs font-medium text-soleur-text-secondary hover:text-soleur-text-primary disabled:opacity-50"
         >
           {loading === "decline" ? "..." : "Decline"}
         </button>
         <button
           onClick={() => setDismissed(true)}
           aria-label="Dismiss"
-          className="ml-1 text-[#9a9a9a] hover:text-white"
+          className="ml-1 text-soleur-text-muted hover:text-soleur-text-primary"
         >
-          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M6 18 18 6M6 6l12 12"
+            />
           </svg>
         </button>
       </div>

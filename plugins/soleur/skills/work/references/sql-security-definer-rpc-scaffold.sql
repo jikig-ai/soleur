@@ -53,4 +53,16 @@ REVOKE ALL ON FUNCTION public.<fn_name>(uuid, text)
   FROM PUBLIC, anon, authenticated, service_role;
 
 -- Grant back EXECUTE only to the role(s) that should call it.
+-- SAFE here because this scaffold gates on the NON-forgeable auth.uid().
+--
+-- CALLER-OVERRIDE VARIANT (forgeable identity → service_role ONLY): if the
+-- function instead resolves the caller via COALESCE(p_caller_user_id, auth.uid())
+-- — necessary when the TS wrapper invokes via createServiceClient() (service-role
+-- key) where auth.uid() is NULL — then p_caller_user_id is client-forgeable.
+-- Granting such a function TO authenticated lets any logged-in user call it via
+-- PostgREST with a forged caller id and bypass the owner-gate. In that case GRANT
+-- to service_role ONLY (mirror accept_workspace_invitation mig 076/085), never
+-- authenticated. Rule: a forgeable caller-override param and TO service_role are a
+-- matched pair — copy BOTH halves of the precedent. See
+-- knowledge-base/project/learnings/security-issues/2026-06-01-caller-override-rpc-needs-service-role-only-grant.md (#4762/#4765).
 GRANT EXECUTE ON FUNCTION public.<fn_name>(uuid, text) TO authenticated;

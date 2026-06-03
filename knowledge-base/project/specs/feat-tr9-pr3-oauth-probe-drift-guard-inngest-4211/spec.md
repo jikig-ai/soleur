@@ -67,7 +67,7 @@ Both `.github/workflows/scheduled-oauth-probe.yml` and `.github/workflows/schedu
 
 ### FR6: Runbook updates
 
-`knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` and `github-app-drift.md` updated to reference the new operator surfaces:
+`knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md` and `github-app-drift.md` updated to reference the new operator surfaces:
 - Inngest dashboard URL for live function state
 - `inngest send cron/<fn>.manual-trigger` for operator-initiated re-probe
 - `oauth-probe-contract.test.ts` sentinel module as the contract source

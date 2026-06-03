@@ -163,6 +163,7 @@ vi.mock("@/server/current-repo-url", () => ({
 }));
 
 import { handleMessage, sessions, type ClientSession } from "@/server/ws-handler";
+import { setUserWorkspace } from "@/server/agent-session-registry";
 
 function createMockSession(): { session: ClientSession; sent: any[] } {
   const sent: any[] = [];
@@ -182,6 +183,10 @@ describe("start_session resumeByContextPath", () => {
     sessions.clear();
     conversationLookupResult = { data: null, error: null };
     messageCountResult = { count: 0, error: null };
+    // Fall-through-to-pending paths reach the slot acquire, which resolves
+    // getUserWorkspace(userId) (set at session-open in prod) and fails loud if
+    // absent — mig 093 passes it as the slot's NOT NULL workspace_id.
+    setUserWorkspace("user-1", "user-1");
   });
 
   it("resumes existing conversation when context_path row is found", async () => {

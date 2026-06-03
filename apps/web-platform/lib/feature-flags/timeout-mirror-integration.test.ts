@@ -13,9 +13,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mockGetIdentityFlags = vi.fn();
 
 vi.mock("flagsmith-nodejs", () => ({
-  Flagsmith: vi.fn().mockImplementation(() => ({
-    getIdentityFlags: mockGetIdentityFlags,
-  })),
+  Flagsmith: vi.fn().mockImplementation(function (this: Record<string, unknown>) {
+    this.getIdentityFlags = mockGetIdentityFlags;
+  }),
 }));
 
 const { mockCaptureException } = vi.hoisted(() => ({

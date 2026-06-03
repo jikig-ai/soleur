@@ -353,5 +353,5 @@ Order: (a) `tunnel.tf` edits → (b) `dns.tf` edit → (c) `terraform validate` 
   - `2026-04-22-follow-through-admin-ip-refresh-and-ssh-gate-verification.md` — Phase 1.4 trigger verification.
   - `2026-04-30-fix-terraform-drift-deploy-pipeline-fix-3061-plan.md` — canonical Doppler `--name-transformer tf-var` triplet.
   - `2026-05-09-drift-runbook-canonical-tf-invocation-and-fresh-plan.md` — fresh `terraform plan` before each runbook step.
-- Runbook: `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md` (sibling failure mode — operator SSH lockout via the same firewall, distinct from this CI-runner case).
+- Runbook: `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md` (sibling failure mode — operator SSH lockout via the same firewall, distinct from this CI-runner case).
 - AGENTS.md rules engaged: `hr-ssh-diagnosis-verify-firewall`, `hr-all-infrastructure-provisioning-servers`, `hr-every-new-terraform-root-must-include-an` (no new root added; only resources in existing root), `hr-observability-as-plan-quality-gate`, `hr-weigh-every-decision-against-target-user-impact`, `hr-menu-option-ack-not-prod-write-auth`.

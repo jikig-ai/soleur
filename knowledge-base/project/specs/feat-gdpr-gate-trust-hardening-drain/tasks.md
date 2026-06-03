@@ -53,7 +53,7 @@ Derived from `knowledge-base/project/plans/2026-05-11-refactor-gdpr-gate-trust-h
 
 ## Phase 7 — Runbook §1 rewrite (#3540)
 
-- [x] 7.1 Replace `knowledge-base/engineering/ops/runbooks/vendor-pin-drift-resolution.md` §1 with the cron-failure-path test (mutate one `upstream-blob-sha` to `0000...`, dispatch, assert `vendor/cron-failure` issue).
+- [x] 7.1 Replace `knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md` §1 with the cron-failure-path test (mutate one `upstream-blob-sha` to `0000...`, dispatch, assert `vendor/cron-failure` issue).
 - [x] 7.2 Validate the `sed` snippet against the live NOTICE indent on a scratch branch (4-space prefix on `upstream-blob-sha:`). Do not commit the scratch mutation.
 - [x] 7.3 Add a one-sentence scope note: the new §1 validates the cron-failure path only; the happy-path auto-PR requires real upstream content change.
 

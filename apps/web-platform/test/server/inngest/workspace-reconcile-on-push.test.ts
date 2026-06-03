@@ -216,6 +216,8 @@ describe("reconcile — happy path (single workspace)", () => {
     expect(rows.at(-1)).toEqual(
       expect.objectContaining({ trigger: "webhook_push", ok: true }),
     );
+    // #4728 — the ok:true reconcile row carries the workspace discriminator.
+    expect(rows.at(-1)).toEqual(expect.objectContaining({ workspace_id: "ws-A" }));
   });
 });
 
@@ -238,6 +240,15 @@ describe("reconcile — fan-out (AC6)", () => {
     );
     expect(APPENDS.get("owner-A")).toHaveLength(1);
     expect(APPENDS.get("owner-B")).toHaveLength(1);
+    // #4728 — each owner's row carries ITS OWN workspace discriminator. Guards
+    // against a producer bug that writes a single captured id to every row (the
+    // exact multi-workspace attribution #4728 exists to enable).
+    expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
+      expect.objectContaining({ workspace_id: "ws-A" }),
+    );
+    expect(APPENDS.get("owner-B")!.at(-1)).toEqual(
+      expect.objectContaining({ workspace_id: "ws-B" }),
+    );
   });
 });
 
@@ -314,8 +325,12 @@ describe("reconcile — no workspace match (pino-only, no Sentry)", () => {
 });
 
 describe("reconcile — ignored internal repo (stop the source)", () => {
-  it("short-circuits the platform's own dev repo with no DB query, no log, no Sentry", async () => {
-    WORKSPACE_ROWS = [{ id: "ws-A" }]; // would match if the query ran
+  it("returns ignored-internal-repo with no sync, no log, no Sentry when ZERO workspaces match", async () => {
+    // #4666 intent preserved: an ignored repo (the platform's own dev repo)
+    // with no connected workspace is a fully-silent skip. The ignore check now
+    // runs AFTER resolution, gated on zero matches — so the workspace query DID
+    // run (one indexed select), but nothing else fires.
+    WORKSPACE_ROWS = [];
     const handler = await importHandler();
     const result = await handler({
       event: makeEvent({ fullName: "jikig-ai/soleur" }),
@@ -324,12 +339,60 @@ describe("reconcile — ignored internal repo (stop the source)", () => {
     });
 
     expect(result).toEqual({ ok: false, reason: "ignored-internal-repo" });
-    // Fully silent: no workspace resolution query, no sync, no log, no Sentry.
-    expect(repoUrlFilterSpy).not.toHaveBeenCalled();
+    // The resolution query runs (ignore is now post-resolution), but the skip
+    // itself is silent: no sync, no benign-skip log, no Sentry.
     expect(syncWorkspaceSpy).not.toHaveBeenCalled();
     expect(loggerInfoSpy).not.toHaveBeenCalled();
     expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("RECONCILES an ignored repo that HAS a connected workspace, logs at info, does not page (regression: dogfood KB freeze + #4706 over-warn)", async () => {
+    // The bug: the ignore check ran BEFORE resolution, so a real connected
+    // workspace on an ignored repo (founder dogfooding their KB from the
+    // platform's own repo) was silently starved for ~5 weeks. #4706 fixed that
+    // (reconcile-anyway) but added a Sentry WARNING on the shadowed-workspace
+    // sub-case — which is the EXPECTED steady state for the dogfood repo, so it
+    // became a per-push alert flood with zero signal. Now the ignored repo is
+    // reconciled because it has a workspace, and the shadowed-workspace state is
+    // recorded at pino `info` (Better Stack audit trail) instead of paging Sentry.
+    WORKSPACE_ROWS = [{ id: "ws-A" }];
+    OWNERS.set("ws-A", "owner-A");
+    EXISTING_DIRS.add(wsPath("ws-A"));
+    syncWorkspaceSpy.mockResolvedValue({ ok: true });
+
+    const handler = await importHandler();
+    const result = await handler({
+      event: makeEvent({ fullName: "jikig-ai/soleur" }),
+      step: makeStep(),
+      logger,
+    });
+
+    expect(result).toEqual({ ok: true, synced: 1 });
+    expect(syncWorkspaceSpy).toHaveBeenCalledTimes(1);
+    expect(syncWorkspaceSpy).toHaveBeenCalledWith(
+      42,
+      wsPath("ws-A"),
+      expect.anything(),
+      expect.objectContaining({ userId: "owner-A", op: "push" }),
+    );
+    expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
+      expect.objectContaining({ trigger: "webhook_push", ok: true }),
+    );
+    // Shadowed-workspace state is recorded at info, NOT mirrored to Sentry.
+    expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+    // Only the ignored-repo-has-workspaces info-log fires for this case
+    // (rows.length === 1, ignored repo → no skip-no-workspace-match log). Assert
+    // on the op list so a future regression that adds a second info-log on this
+    // path names the unexpected op rather than a bare count mismatch.
+    expect(loggerInfoSpy.mock.calls.map((c) => (c[0] as { op?: string }).op)).toEqual([
+      "ignored-repo-has-workspaces",
+    ]);
+    expect(loggerInfoSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ op: "ignored-repo-has-workspaces", workspaceCount: 1 }),
+      "Reconcile ignore-list shadows a connected workspace — reconciling anyway (info; review WORKSPACE_RECONCILE_IGNORE_REPOS if unexpected)",
+    );
   });
 
   it("does NOT short-circuit a customer repo whose slug merely shares the ignored prefix", async () => {
@@ -362,7 +425,12 @@ describe("reconcile — workspace dir not provisioned", () => {
     expect(syncWorkspaceSpy).not.toHaveBeenCalled();
     expect(result).toEqual({ ok: false, reason: "no-workspace-synced" });
     expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
-      expect.objectContaining({ ok: false, error_class: "workspace_not_ready" }),
+      expect.objectContaining({
+        ok: false,
+        error_class: "workspace_not_ready",
+        // #4728 — failure rows also carry the workspace discriminator.
+        workspace_id: "ws-A",
+      }),
     );
     expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
       expect.anything(),
@@ -372,22 +440,73 @@ describe("reconcile — workspace dir not provisioned", () => {
 });
 
 describe("reconcile — sync failure", () => {
-  it("appends {sync_failed} + Sentry mirror op=sync", async () => {
+  it("propagates the REAL error_class from syncResult (sync_failed) + Sentry mirror op=sync", async () => {
     WORKSPACE_ROWS = [{ id: "ws-A" }];
     OWNERS.set("ws-A", "owner-A");
     EXISTING_DIRS.add(wsPath("ws-A"));
-    syncWorkspaceSpy.mockResolvedValue({ ok: false, error: new Error("non-fast-forward") });
+    syncWorkspaceSpy.mockResolvedValue({
+      ok: false,
+      error: new Error("auth failed"),
+      errorClass: "sync_failed",
+    });
 
     const handler = await importHandler();
     const result = await handler({ event: makeEvent(), step: makeStep(), logger });
 
     expect(result).toEqual({ ok: false, reason: "no-workspace-synced" });
     expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
-      expect.objectContaining({ ok: false, error_class: "sync_failed" }),
+      expect.objectContaining({
+        ok: false,
+        error_class: "sync_failed",
+        // #4728 — failure rows also carry the workspace discriminator.
+        workspace_id: "ws-A",
+      }),
     );
     expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ feature: "workspace-reconcile-push", op: "sync" }),
+    );
+  });
+
+  it("propagates error_class:non_fast_forward when syncResult classifies a diverged clone (AC-B2)", async () => {
+    WORKSPACE_ROWS = [{ id: "ws-A" }];
+    OWNERS.set("ws-A", "owner-A");
+    EXISTING_DIRS.add(wsPath("ws-A"));
+    syncWorkspaceSpy.mockResolvedValue({
+      ok: false,
+      error: new Error("Not possible to fast-forward, aborting."),
+      errorClass: "non_fast_forward",
+    });
+
+    const handler = await importHandler();
+    const result = await handler({ event: makeEvent(), step: makeStep(), logger });
+
+    expect(result).toEqual({ ok: false, reason: "no-workspace-synced" });
+    expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
+      expect.objectContaining({
+        ok: false,
+        error_class: "non_fast_forward",
+        workspace_id: "ws-A",
+      }),
+    );
+  });
+
+  it("records recovered:true ok-row when syncWorkspace self-healed a diverged clone (AC-B4)", async () => {
+    WORKSPACE_ROWS = [{ id: "ws-A" }];
+    OWNERS.set("ws-A", "owner-A");
+    EXISTING_DIRS.add(wsPath("ws-A"));
+    syncWorkspaceSpy.mockResolvedValue({ ok: true, recovered: true });
+
+    const handler = await importHandler();
+    const result = await handler({ event: makeEvent(), step: makeStep(), logger });
+
+    expect(result).toEqual({ ok: true, synced: 1 });
+    expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
+      expect.objectContaining({
+        ok: true,
+        recovered: true,
+        workspace_id: "ws-A",
+      }),
     );
   });
 });

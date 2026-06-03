@@ -21,6 +21,21 @@ export const PUBLIC_PATHS = [
   // 2xx assertion. Same class as #4017 (/api/inngest). NARROW exact path — do
   // NOT broaden to /api/internal (would session-bypass future internal routes).
   "/api/internal/kb-drift-ingest",
+  // /api/internal/trigger-cron: Bearer-shared-secret-gated POST
+  // (INNGEST_MANUAL_TRIGGER_SECRET) from an operator/agent firing a cron
+  // manual-trigger on demand (#4734). Carries no session cookie — Supabase
+  // middleware would 307→/login and the route's own length-guarded
+  // timingSafeEqual gate would never run (the post-merge AC4 curl would get a
+  // redirect, not 202). Same class as #4017 (/api/inngest) and kb-drift-ingest
+  // above. NARROW exact path — do NOT broaden to /api/internal.
+  "/api/internal/trigger-cron",
+  // /api/internal/schedule-reminder: Bearer-shared-secret-gated POST
+  // (INNGEST_MANUAL_TRIGGER_SECRET) that arms the generic reminder primitive
+  // (emits a future-ts `reminder.scheduled` event). Cookieless operator/agent
+  // caller — Supabase middleware would 307→/login before the route's own
+  // length-guarded timingSafeEqual gate runs. Same class as trigger-cron /
+  // kb-drift-ingest. NARROW exact path — do NOT broaden to /api/internal.
+  "/api/internal/schedule-reminder",
   "/ws",
   "/manifest.webmanifest",
   // /robots.txt: Next.js robots.ts metadata route (Disallow: /). Public-by-design,

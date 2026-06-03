@@ -27,3 +27,12 @@ deploy ALL=(root) NOPASSWD: WEBHOOK_SELF_RESTART
 # no wildcards, no argument injection.
 Cmnd_Alias INNGEST_RESTART = /usr/bin/systemctl restart inngest-server.service
 deploy ALL=(root) NOPASSWD: INNGEST_RESTART
+
+# #4827 — permits infra-config-apply.sh (the /hooks/infra-config handler, running
+# as the deploy user) to escalate the atomic install of its 7 managed files into
+# their root:root 0755 destination dirs, which the deploy user cannot mktemp into
+# (EACCES). The command is pinned to a fixed helper path with NO argument
+# wildcards (sudo-rs safe); the helper itself hardcodes the dest allowlist and
+# TOCTOU-guards the staged source, so the bare-command grant is the safe form.
+Cmnd_Alias INFRA_CONFIG_INSTALL = /usr/local/bin/infra-config-install
+deploy ALL=(root) NOPASSWD: INFRA_CONFIG_INSTALL

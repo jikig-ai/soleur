@@ -1,8 +1,11 @@
 ---
 title: Getting Started with Soleur
-description: "The AI that already knows your business. Soleur remembers every decision and customer so your team stops re-explaining context. Reserve access."
+seoTitle: "Get Started with Soleur — Install Your AI Organization in Two Commands"
+description: "Install Soleur in two commands and run a full AI organization — marketing, legal, finance, operations, sales, and support — without hiring anyone."
 layout: base.njk
 permalink: getting-started/
+date: 2026-06-01
+last_updated: 2026-06-01
 ---
 
     <!-- Hero -->
@@ -18,6 +21,23 @@ permalink: getting-started/
         <p class="cta-helper">Takes 30 seconds. We&rsquo;ll email when your spot opens.</p>
         <p class="hero-meta"><a href="mailto:ops@jikigai.com?subject=Soleur%20founding%20cohort%20intro">Founding cohort &mdash; limited to 10. Book intro <span aria-hidden="true">&rarr;</span></a><span class="hero-meta-fallback">(or email <code>ops@jikigai.com</code>)</span></p>
         <p class="hero-meta"><a href="/changelog/">Shipping weekly <span aria-hidden="true">&rarr;</span></a></p>
+      </div>
+    </section>
+
+    {% include "page-freshness.njk" %}
+
+    <!-- Plain-language definition + external citations (#4410) -->
+    <section class="page-freshness" aria-label="What Soleur is">
+      <div class="container">
+        <p class="page-definition">Soleur is an open-source <a href="https://docs.claude.com/en/docs/claude-code" rel="noopener noreferrer">Claude Code</a> platform that turns a solo founder into a full company: {{ stats.agents }} AI agents and {{ stats.skills }} workflow skills across {{ stats.departments }} departments, all sharing one knowledge base. You delegate work in plain language; the agents execute and remember every decision.</p>
+        <div class="page-citations">
+          <p>Built on open standards:</p>
+          <ul>
+            <li>Licensed under the <a href="https://www.apache.org/licenses/LICENSE-2.0" rel="noopener noreferrer">Apache License 2.0</a> &mdash; free to use, modify, and self-host.</li>
+            <li>Runs on <a href="https://docs.claude.com/en/docs/claude-code" rel="noopener noreferrer">Claude Code</a>, Anthropic&rsquo;s agentic coding environment.</li>
+            <li>Connects tools and context through the <a href="https://modelcontextprotocol.io" rel="noopener noreferrer">Model Context Protocol (MCP)</a> open specification.</li>
+          </ul>
+        </div>
       </div>
     </section>
 

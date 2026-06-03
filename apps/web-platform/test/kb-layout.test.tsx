@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { RailSlotHarness } from "./helpers/rail-slot-harness";
 
 // Stable mock references (avoid useEffect re-fires)
 const mockPush = vi.fn();
@@ -62,12 +63,14 @@ describe("KbLayout", () => {
     );
 
     render(
-      <KbLayout>
-        <div data-testid="content-page">File content here</div>
-      </KbLayout>,
+      <RailSlotHarness>
+        <KbLayout>
+          <div data-testid="content-page">File content here</div>
+        </KbLayout>
+      </RailSlotHarness>,
     );
 
-    // Wait for tree to load
+    // Tree is portaled into the rail slot (ADR-047)
     const nav = await screen.findByRole("navigation", {
       name: /knowledge base file tree/i,
     });
@@ -85,9 +88,11 @@ describe("KbLayout", () => {
     );
 
     render(
-      <KbLayout>
-        <div>content</div>
-      </KbLayout>,
+      <RailSlotHarness>
+        <KbLayout>
+          <div>content</div>
+        </KbLayout>
+      </RailSlotHarness>,
     );
 
     // Wait for tree to load, then check search input is present
@@ -95,6 +100,61 @@ describe("KbLayout", () => {
       name: /knowledge base file tree/i,
     });
     expect(screen.getByPlaceholderText("Search files...")).toBeInTheDocument();
+  });
+
+  it("renders the reconnect banner over an EMPTY tree when needsReconnect", async () => {
+    mockPathname = "/dashboard/kb";
+    // Ready workspace, NULL install id, EMPTY knowledge-base/ dir: the full-
+    // width EmptyState branch renders (no tree children) — the banner must
+    // still surface (#4712).
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          tree: { name: "root", type: "directory", path: "", children: [] },
+          needsReconnect: true,
+        }),
+    });
+
+    const { default: KbLayout } = await import(
+      "@/app/(dashboard)/dashboard/kb/layout"
+    );
+
+    render(
+      <KbLayout>
+        <div>content</div>
+      </KbLayout>,
+    );
+
+    expect(await screen.findByText(/can't sync/i)).toBeInTheDocument();
+  });
+
+  it("does NOT render the banner over an empty tree while needsReconnect is false", async () => {
+    mockPathname = "/dashboard/kb";
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          tree: { name: "root", type: "directory", path: "", children: [] },
+          needsReconnect: false,
+        }),
+    });
+
+    const { default: KbLayout } = await import(
+      "@/app/(dashboard)/dashboard/kb/layout"
+    );
+
+    render(
+      <KbLayout>
+        <div>content</div>
+      </KbLayout>,
+    );
+
+    // Let the tree resolve (EmptyState renders) before asserting absence.
+    await screen.findByText(/nothing here yet/i);
+    expect(screen.queryByText(/can't sync/i)).not.toBeInTheDocument();
   });
 
   it("does not render FileTree twice at root path", async () => {
@@ -105,16 +165,18 @@ describe("KbLayout", () => {
     );
 
     render(
-      <KbLayout>
-        <div data-testid="page-content">page content</div>
-      </KbLayout>,
+      <RailSlotHarness>
+        <KbLayout>
+          <div data-testid="page-content">page content</div>
+        </KbLayout>
+      </RailSlotHarness>,
     );
 
     await screen.findByRole("navigation", {
       name: /knowledge base file tree/i,
     });
 
-    // Should only have one navigation element (tree rendered once in sidebar)
+    // Should only have one navigation element (tree portaled once into the slot)
     const navs = screen.getAllByRole("navigation", {
       name: /knowledge base file tree/i,
     });

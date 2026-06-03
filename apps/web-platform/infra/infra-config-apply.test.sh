@@ -43,6 +43,7 @@ setup() {
 teardown() {
   rm -rf "$TMPDIR_ROOT"
   unset TEST_DESTDIR INFRA_CONFIG_TEST_MODE INFRA_CONFIG_STATE
+  unset INFRA_CONFIG_STAGING_DIR INFRA_CONFIG_INSTALL_HELPER
 }
 
 export_valid_env_vars() {
@@ -51,7 +52,6 @@ export_valid_env_vars() {
   export WEBHOOK_SERVICE_B64=$(echo -n "[Unit]" | base64 -w0)
   export CAT_DEPLOY_STATE_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
   export CANARY_BUNDLE_CLAIM_CHECK_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
-  export DEPLOY_INNGEST_BOOTSTRAP_SUDOERS_B64=$(echo -n "deploy ALL=(root) NOPASSWD: /usr/bin/bash" | base64 -w0)
   export HOOKS_JSON_B64=$(echo -n '{}' | base64 -w0)
   export CAT_INFRA_CONFIG_STATE_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
 }
@@ -111,8 +111,16 @@ test_happy_path() {
   assert_file_exists "webhook.service written" "$TEST_DESTDIR/etc/systemd/system/webhook.service"
   assert_file_exists "cat-deploy-state.sh written" "$TEST_DESTDIR/usr/local/bin/cat-deploy-state.sh"
   assert_file_exists "canary-bundle-claim-check.sh written" "$TEST_DESTDIR/usr/local/bin/canary-bundle-claim-check.sh"
-  assert_file_exists "sudoers written" "$TEST_DESTDIR/etc/sudoers.d/deploy-inngest-bootstrap"
   assert_file_exists "hooks.json written" "$TEST_DESTDIR/etc/webhook/hooks.json"
+  # #4827: the sudoers grant is NO LONGER webhook-managed (root-only delivery) —
+  # the handler must not write it even in sandbox mode.
+  if [[ -f "$TEST_DESTDIR/etc/sudoers.d/deploy-inngest-bootstrap" ]]; then
+    echo "  FAIL: sudoers must not be written by the handler (#4827 root-managed)"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: sudoers correctly not written by the handler"
+    PASS=$((PASS + 1))
+  fi
   assert_file_exists "cat-infra-config-state.sh written" "$TEST_DESTDIR/usr/local/bin/cat-infra-config-state.sh"
 
   assert_file_mode "ci-deploy.sh is executable" "$TEST_DESTDIR/usr/local/bin/ci-deploy.sh" "755"
@@ -121,71 +129,50 @@ test_happy_path() {
   teardown
 }
 
-# --- Test 2: Missing env var rejection ---
+# --- Test 2: Missing env var → exits non-zero (partial-apply contract, #4804) ---
+# Post-#4804 the handler no longer aborts all writes on a missing var; it records
+# a per-file missing_env failure, writes the rest, and exits 1. This test pins the
+# exit-code + per-file-failure dimension; test_missing_env_partial_write pins the
+# "other files still written" dimension.
 test_missing_env_var() {
-  echo "TEST: missing env var — handler rejects"
+  echo "TEST: missing env var — exits non-zero with a per-file missing_env failure"
   setup
 
   # Set all but one required var
   export_valid_env_vars
   unset HOOKS_JSON_B64  # missing
 
-  if bash "$HANDLER" 2>/dev/null; then
-    echo "  FAIL: handler should have failed with missing HOOKS_JSON_B64"
-    FAIL=$((FAIL + 1))
-  else
-    echo "  PASS: handler rejected missing env var"
-    PASS=$((PASS + 1))
-  fi
+  local rc=0
+  bash "$HANDLER" 2>/dev/null || rc=$?
+  assert_eq "handler exits 1 on missing var" "1" "$rc"
+
+  local files_failed missing_reason
+  files_failed=$(jq -r '.files_failed' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  missing_reason=$(jq -r '.files[] | select(.file == "/etc/webhook/hooks.json") | .reason' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  assert_eq "files_failed is 1" "1" "$files_failed"
+  assert_eq "missing file reason is missing_env" "missing_env" "$missing_reason"
 
   teardown
 }
 
-# --- Test 3: Empty env var rejection ---
+# --- Test 3: Empty env var → exits non-zero with a per-file missing_env failure ---
+# An empty (vs unset) payload var takes the same missing_env arm (`-z` covers both).
 test_empty_env_var() {
-  echo "TEST: empty env var — handler rejects"
+  echo "TEST: empty env var — exits non-zero with a per-file missing_env failure"
   setup
 
   export_valid_env_vars
   export CI_DEPLOY_SH_B64=""
 
-  if bash "$HANDLER" 2>/dev/null; then
-    echo "  FAIL: handler should have failed with empty CI_DEPLOY_SH_B64"
-    FAIL=$((FAIL + 1))
-  else
-    echo "  PASS: handler rejected empty env var"
-    PASS=$((PASS + 1))
-  fi
+  local rc=0
+  bash "$HANDLER" 2>/dev/null || rc=$?
+  assert_eq "handler exits 1 on empty var" "1" "$rc"
 
-  teardown
-}
-
-# --- Test 4: visudo failure halts sudoers install ---
-test_visudo_failure() {
-  echo "TEST: visudo failure — sudoers NOT installed"
-  setup
-
-  # Replace mock visudo with one that fails
-  printf '#!/bin/sh\nexit 1\n' > "$TMPDIR_ROOT/bin/visudo"
-  chmod +x "$TMPDIR_ROOT/bin/visudo"
-
-  export_valid_env_vars
-  export DEPLOY_INNGEST_BOOTSTRAP_SUDOERS_B64=$(echo -n "bad sudoers" | base64 -w0)
-
-  # Handler should still succeed (other files written) but sudoers must NOT be installed
-  bash "$HANDLER" 2>/dev/null || true
-
-  if [[ -f "$TEST_DESTDIR/etc/sudoers.d/deploy-inngest-bootstrap" ]]; then
-    echo "  FAIL: sudoers file was installed despite visudo failure"
-    FAIL=$((FAIL + 1))
-  else
-    echo "  PASS: sudoers file correctly NOT installed on visudo failure"
-    PASS=$((PASS + 1))
-  fi
-
-  # Other files should still be written
-  assert_file_exists "ci-deploy.sh still written" "$TEST_DESTDIR/usr/local/bin/ci-deploy.sh"
-  assert_file_exists "hooks.json still written" "$TEST_DESTDIR/etc/webhook/hooks.json"
+  local files_failed empty_reason
+  files_failed=$(jq -r '.files_failed' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  empty_reason=$(jq -r '.files[] | select(.file == "/usr/local/bin/ci-deploy.sh") | .reason' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  assert_eq "files_failed is 1" "1" "$files_failed"
+  assert_eq "empty-var file reason is missing_env" "missing_env" "$empty_reason"
 
   teardown
 }
@@ -227,9 +214,12 @@ test_state_file_happy_path() {
   exit_code=$(jq -r '.exit_code' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   files_written=$(jq -r '.files_written' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   files_failed=$(jq -r '.files_failed' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  local files_total
+  files_total=$(jq -r '.files_total' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   assert_eq "exit_code is 0" "0" "$exit_code"
-  assert_eq "files_written is 8" "8" "$files_written"
+  assert_eq "files_written is 7" "7" "$files_written"
   assert_eq "files_failed is 0" "0" "$files_failed"
+  assert_eq "files_total is 7" "7" "$files_total"
 
   local first_file_status first_file_sha
   first_file_status=$(jq -r '.files[0].status' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
@@ -294,28 +284,6 @@ test_state_file_partial_failure() {
     echo "  FAIL: no files succeeded despite only 1 bad input"
     FAIL=$((FAIL + 1))
   fi
-
-  teardown
-}
-
-# --- Test 8: State file visudo skip ---
-test_state_file_visudo_skip() {
-  echo "TEST: state file — visudo failure shows skipped status"
-  setup
-  export_valid_env_vars
-
-  printf '#!/bin/sh\nexit 1\n' > "$TMPDIR_ROOT/bin/visudo"
-  chmod +x "$TMPDIR_ROOT/bin/visudo"
-
-  bash "$HANDLER" 2>/dev/null || true
-
-  assert_file_exists "state file written" "$INFRA_CONFIG_STATE"
-
-  local sudoers_status sudoers_reason
-  sudoers_status=$(jq -r '.files[] | select(.file == "/etc/sudoers.d/deploy-inngest-bootstrap") | .status' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
-  sudoers_reason=$(jq -r '.files[] | select(.file == "/etc/sudoers.d/deploy-inngest-bootstrap") | .reason' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
-  assert_eq "sudoers status is skipped" "skipped" "$sudoers_status"
-  assert_eq "sudoers reason" "visudo_validation_failed" "$sudoers_reason"
 
   teardown
 }
@@ -413,19 +381,155 @@ test_exit_trap_unhandled() {
   teardown
 }
 
+# --- Test 12: Partial write — one missing env var writes the other 6 (#4804) ---
+# Regression guard for the chicken-and-egg freeze: when the host's stale
+# hooks.json fails to pass a newly-added payload key, the corresponding env var
+# is empty on the host. The handler must record a per-file missing_env failure
+# and STILL write the other files (crucially the new hooks.json that re-aligns
+# the env mapping), instead of the former upfront all-or-nothing exit 1 that
+# wrote nothing and froze every file.
+test_missing_env_partial_write() {
+  echo "TEST: one missing env var — other 6 files still written (#4804)"
+  setup
+  export_valid_env_vars
+  unset CAT_INFRA_CONFIG_STATE_SH_B64  # simulate host hooks.json drift on the newest key
+
+  local rc=0
+  bash "$HANDLER" 2>/dev/null || rc=$?
+  assert_eq "handler exits 1 on partial failure" "1" "$rc"
+
+  # The 6 present files are still written
+  assert_file_exists "ci-deploy.sh written" "$TEST_DESTDIR/usr/local/bin/ci-deploy.sh"
+  assert_file_exists "ci-deploy-wrapper.sh written" "$TEST_DESTDIR/usr/local/bin/ci-deploy-wrapper.sh"
+  assert_file_exists "webhook.service written" "$TEST_DESTDIR/etc/systemd/system/webhook.service"
+  assert_file_exists "cat-deploy-state.sh written" "$TEST_DESTDIR/usr/local/bin/cat-deploy-state.sh"
+  assert_file_exists "canary-bundle-claim-check.sh written" "$TEST_DESTDIR/usr/local/bin/canary-bundle-claim-check.sh"
+  assert_file_exists "hooks.json written (self-heals env mapping)" "$TEST_DESTDIR/etc/webhook/hooks.json"
+
+  # The missing-env file is NOT written
+  if [[ -f "$TEST_DESTDIR/usr/local/bin/cat-infra-config-state.sh" ]]; then
+    echo "  FAIL: missing-env file should not be written"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: missing-env file correctly not written"
+    PASS=$((PASS + 1))
+  fi
+
+  # State JSON counts: 6 written, 1 failed, 7 total
+  local files_written files_failed files_total
+  files_written=$(jq -r '.files_written' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  files_failed=$(jq -r '.files_failed' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  files_total=$(jq -r '.files_total' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  assert_eq "files_written is 6" "6" "$files_written"
+  assert_eq "files_failed is 1" "1" "$files_failed"
+  assert_eq "files_total is 7" "7" "$files_total"
+
+  # The missing file's entry records status:failed, reason:missing_env
+  local mstatus mreason
+  mstatus=$(jq -r '.files[] | select(.file == "/usr/local/bin/cat-infra-config-state.sh") | .status' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  mreason=$(jq -r '.files[] | select(.file == "/usr/local/bin/cat-infra-config-state.sh") | .reason' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  assert_eq "missing file status is failed" "failed" "$mstatus"
+  assert_eq "missing file reason is missing_env" "missing_env" "$mreason"
+
+  teardown
+}
+
+# --- Test 13: Prod-mode escalated install — stage in deploy-writable dir, escalate via helper (#4827) ---
+# RED-first: the current handler mktemps INSIDE each root-owned dest dir, which
+# EACCESes as the deploy user. The fix stages the decoded payload in a
+# deploy-writable staging dir and escalates the install to root via a pinned
+# sudoers helper, piping the payload over STDIN (no caller-controlled source path,
+# #4827 security review P1). This test asserts the handler (a) does NOT EACCES on a
+# root-owned dest dir (it exits 0) and (b) invokes the pinned helper once per file
+# with the correct (dest, mode, owner) AND the decoded payload on stdin. Runs in
+# "prod mode" (TEST_DESTDIR unset) with a mocked sudo + helper recorder so no real
+# root path is touched.
+test_prod_mode_escalated_move() {
+  echo "TEST: prod-mode escalated install — stage + escalate via pinned helper (#4827)"
+  # Safety rail: the pre-fix handler mktemps in the REAL dest dirs. As a non-root
+  # user that EACCESes (the intended RED signal). As root it would clobber real
+  # system files, so refuse to run this case as root (CI runs non-root; the
+  # sibling test_exit_trap_unhandled already assumes non-root).
+  if [[ "$(id -u)" == "0" ]]; then
+    echo "  SKIP: prod-mode escalation test must run as non-root"
+    return 0
+  fi
+  setup
+  # Switch from sandbox (test) mode to prod mode: unset TEST_DESTDIR so the
+  # handler takes the escalated-write branch. Keep INFRA_CONFIG_TEST_MODE=1 so the
+  # post-write self-restart block stays stubbed.
+  unset TEST_DESTDIR
+
+  # Deploy-writable staging dir (sandbox stand-in for /var/lock).
+  export INFRA_CONFIG_STAGING_DIR="${TMPDIR_ROOT}/staging"
+  mkdir -p "$INFRA_CONFIG_STAGING_DIR"
+
+  # Helper recorder: append "dest|mode|owner|<stdin-payload>" per invocation,
+  # write nothing. Reading stdin proves the handler pipes the decoded payload (the
+  # P1 stdin contract) rather than passing a swappable file path.
+  local helper_log="${TMPDIR_ROOT}/helper.log"
+  export INFRA_CONFIG_INSTALL_HELPER="${TMPDIR_ROOT}/bin/infra-config-install-mock"
+  printf '#!/bin/sh\nprintf "%%s|%%s|%%s|" "$1" "$2" "$3" >> "%s"\ncat >> "%s"\nprintf "\\n" >> "%s"\nexit 0\n' \
+    "$helper_log" "$helper_log" "$helper_log" > "$INFRA_CONFIG_INSTALL_HELPER"
+  chmod +x "$INFRA_CONFIG_INSTALL_HELPER"
+
+  # Mock sudo to transparently exec its arguments (so `sudo helper ...` runs the
+  # recorder) while PRESERVING stdin. Overrides the exit-0 stub from setup().
+  printf '#!/bin/sh\nexec "$@"\n' > "$TMPDIR_ROOT/bin/sudo"
+  chmod +x "$TMPDIR_ROOT/bin/sudo"
+
+  export_valid_env_vars
+
+  local rc=0
+  bash "$HANDLER" 2>/dev/null || rc=$?
+  assert_eq "handler exits 0 in prod mode" "0" "$rc"
+
+  # The helper must be invoked once per managed file (7 total; sudoers is
+  # root-managed and not in FILE_MAP, #4827 security review).
+  local calls
+  calls=$([[ -f "$helper_log" ]] && wc -l < "$helper_log" | tr -d ' ' || echo 0)
+  assert_eq "escalation helper invoked once per file (7)" "7" "$calls"
+
+  # The handler exiting 0 proves it staged in INFRA_CONFIG_STAGING_DIR rather than
+  # mktemp-ing in a root-owned dest dir (which would EACCES as non-root) — the
+  # exact bug this fix removes. Confirm the staging dir is the one configured.
+  assert_eq "staging dir is the deploy-writable sandbox" "${TMPDIR_ROOT}/staging" "$INFRA_CONFIG_STAGING_DIR"
+
+  # Spot-check the ci-deploy.sh invocation: correct (dest, mode, owner) AND the
+  # decoded payload piped over stdin (export_valid_env_vars sets it to "#!/bin/bash").
+  local cideploy_line
+  cideploy_line=$(grep '^/usr/local/bin/ci-deploy.sh|' "$helper_log" 2>/dev/null || echo "")
+  if [[ "$cideploy_line" == "/usr/local/bin/ci-deploy.sh|755|root:root|#!/bin/bash" ]]; then
+    echo "  PASS: ci-deploy.sh escalated with dest+mode+owner and decoded payload on stdin"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: ci-deploy.sh escalation wrong: '$cideploy_line'"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # State JSON should report all 7 written, exit 0.
+  local files_written exit_code
+  files_written=$(jq -r '.files_written' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  exit_code=$(jq -r '.exit_code' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  assert_eq "prod-mode files_written is 7" "7" "$files_written"
+  assert_eq "prod-mode exit_code is 0" "0" "$exit_code"
+
+  teardown
+}
+
 # --- Run all tests ---
 echo "=== infra-config-apply.sh test suite ==="
 test_happy_path
 test_missing_env_var
 test_empty_env_var
-test_visudo_failure
 test_atomic_write
 test_state_file_happy_path
 test_state_file_partial_failure
-test_state_file_visudo_skip
 test_logger_tag
 test_restart_ordering
 test_exit_trap_unhandled
+test_missing_env_partial_write
+test_prod_mode_escalated_move
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then

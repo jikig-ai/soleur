@@ -80,6 +80,102 @@ interface SupabaseLike {
 }
 
 /**
+ * True when the user has at least one `workspace_members` row.
+ *
+ * Used to distinguish a legitimately org-less identity (normal — stay silent)
+ * from the integrity surface where a *member* resolves a null current org, in
+ * which case org-gated UI (the Members + Team Activity tabs) silently vanishes
+ * with no error. Fail-quiet on a query error: this is a diagnostic discriminator
+ * on an already-degraded branch and must never itself block a render.
+ *
+ * RLS: `workspace_members` peer-select (`members_select_peers` → `is_workspace_member(workspace_id, auth.uid())`,
+ * migration 053). The explicit `.eq("user_id", userId)` self-scopes the probe to
+ * the caller's own rows regardless — the boolean cannot be influenced cross-tenant.
+ */
+export async function userHasWorkspaceMembership(
+  userId: string,
+  supabase: SupabaseLike,
+): Promise<boolean> {
+  type ChainShape = {
+    select: (cols: string) => ChainShape;
+    eq: (col: string, val: string) => ChainShape;
+    limit: (n: number) => ChainShape;
+  } & PromiseLike<{ data: unknown[] | null; error: unknown }>;
+
+  const chain = supabase.from("workspace_members") as ChainShape;
+  const result = await awaitChain<{ data: unknown[] | null; error: unknown }>(
+    chain.select("workspace_id").eq("user_id", userId).limit(1),
+  );
+  if (result.error) {
+    // fail-quiet — never block render on a probe, but mirror to Sentry
+    // (cq-silent-fallback-must-mirror-to-sentry) so a recurring membership-probe
+    // failure on this integrity surface is visible, not pino-stdout-only.
+    reportSilentFallback(result.error, {
+      feature: "workspace-resolver",
+      op: "userHasWorkspaceMembership",
+      extra: { userId },
+    });
+    return false;
+  }
+  return (result.data?.length ?? 0) > 0;
+}
+
+/**
+ * feat-invite-accept-membership-byok (#4715). True when the user is a member of
+ * a workspace they do NOT own — i.e. a shared workspace they were invited into.
+ * Per the N2 invariant (migration 053), a solo user's workspace id equals their
+ * user id, so a `workspace_members` row whose `workspace_id !== userId` is a
+ * genuine shared membership.
+ *
+ * Drives the dashboard NoApiKeyBanner copy: a keyless SHARED member must see the
+ * "ask your owner to share a key, or add your own" joiner copy — not the solo
+ * "buy a separate paid Anthropic account" dead-end. Fail-quiet to `false`
+ * (treat as solo) on a probe error so a transient failure degrades to the
+ * existing copy rather than blocking the render — same posture as
+ * `userHasWorkspaceMembership`.
+ *
+ * `userId` is the SESSION-derived id at the call site (IDOR guard preserved);
+ * the `.eq("user_id", userId)` self-scopes the probe regardless of RLS.
+ */
+export async function userIsSharedWorkspaceMember(
+  userId: string,
+  supabase: SupabaseLike,
+): Promise<boolean> {
+  type ChainShape = {
+    select: (cols: string) => ChainShape;
+    eq: (col: string, val: string) => ChainShape;
+  } & PromiseLike<{
+    data: { workspace_id: string }[] | null;
+    error: unknown;
+  }>;
+
+  const chain = supabase.from("workspace_members") as ChainShape;
+  const result = await awaitChain<{
+    data: { workspace_id: string }[] | null;
+    error: unknown;
+  }>(chain.select("workspace_id").eq("user_id", userId));
+  if (result.error) {
+    // fail-quiet — degrade to solo copy, but mirror to Sentry
+    // (cq-silent-fallback-must-mirror-to-sentry); the sibling resolvers in this
+    // file do the same. A recurring probe failure is the integrity surface this
+    // feature exists to surface, so it must not be invisible.
+    reportSilentFallback(result.error, {
+      feature: "workspace-resolver",
+      op: "userIsSharedWorkspaceMember",
+      extra: { userId },
+    });
+    return false;
+  }
+  // INVARIANT: this id-equality test assumes an owner always holds the
+  // self-referential membership row (workspace_id === user_id, the N2 invariant
+  // from migration 053). If a future team-workspace flow mints a workspace with
+  // a fresh gen_random_uuid() id, its OWNER would get a row where
+  // workspace_id !== user_id and be misclassified as a shared member — that
+  // flow must classify by role/ownership, not id-equality. See #2778.
+  return (result.data ?? []).some((r) => r.workspace_id !== userId);
+}
+
+/**
  * Resolve the user's CURRENT workspace id from `user_session_state`
  * (ADR-044). Source-of-truth read (preferred over the JWT claim, which can
  * be stale on an un-refreshed session). Falls back to the user's SOLO
@@ -123,6 +219,173 @@ export async function resolveCurrentWorkspaceId(
 
 interface WorkspaceMemberRow {
   workspace_id: string;
+}
+
+/**
+ * Resolve the calling user's KB filesystem root for their ACTIVE workspace
+ * (ADR-044 read-path cutover, #4543). The KB lives on disk at
+ * `<WORKSPACES_ROOT>/<active_workspace_id>/knowledge-base`; connectivity and
+ * readiness are gated on the ACTIVE workspace — NEVER the caller's own `users`
+ * row. For an invited member viewing a workspace they do not own, the caller's
+ * own row is the empty solo row, so reading it is the exact #4543 dual-ownership
+ * bug that 404s the KB ("No Project Connected") for members.
+ *
+ * Mirrors the canonical `app/api/workspace/active-repo` resolution exactly:
+ *   1. resolve `current_workspace_id` (→ solo fallback, never a sibling);
+ *   2. J5 self-heal — a non-solo claim the caller is no longer a member of
+ *      falls back to the solo workspace (read-only; no corrective write on a
+ *      GET, unlike active-repo's badge self-heal);
+ *   3. gate connectivity on the active workspace's `workspaces.repo_status`;
+ *   4. gate readiness on the active workspace OWNER's `users.workspace_status`
+ *      (resolved via `organizations.owner_user_id`). For a solo caller the
+ *      owner IS the caller, so this is a byte-identical own-row read.
+ *
+ * Returns a discriminated result mirroring the legacy KB-route status contract
+ * (404 = no repo / not connected, 503 = not ready) so each route preserves the
+ * exact response the client hook (`use-kb-layout-state.tsx`) discriminates.
+ */
+export type ActiveWorkspaceKbAccess =
+  | { ok: false; status: 404 | 503 }
+  | {
+      ok: true;
+      activeWorkspaceId: string;
+      workspacePath: string;
+      kbRoot: string;
+      repoStatus: string;
+    };
+
+interface WorkspaceRepoRow {
+  repo_status: string | null;
+  organization_id: string | null;
+}
+
+// Shared shape for the single-row reads this resolver issues (collapses the
+// four otherwise-identical inline `& PromiseLike<...>` chain casts). Mirrors
+// the structural-mock convention the rest of this file uses (SupabaseLike).
+type MaybeSingleChain<T> = {
+  select: (cols: string) => MaybeSingleChain<T>;
+  eq: (col: string, val: string) => MaybeSingleChain<T>;
+  maybeSingle: () => MaybeSingleChain<T>;
+} & PromiseLike<{ data: T | null; error: unknown }>;
+
+export async function resolveActiveWorkspaceKbRoot(
+  userId: string,
+  supabase: SupabaseLike,
+): Promise<ActiveWorkspaceKbAccess> {
+  // 1. Active workspace id — claim → solo fallback (never a sibling).
+  let activeWorkspaceId = await resolveCurrentWorkspaceId(userId, supabase);
+
+  // 2. J5 self-heal parity: a non-solo claim the caller is no longer a member
+  //    of must NOT read the sibling's KB. Fall back to solo (read-only — the
+  //    active-repo route's corrective set_current_workspace_id write is for the
+  //    badge; a GET must stay side-effect-free).
+  if (activeWorkspaceId !== userId) {
+    const memberChain = supabase.from("workspace_members") as MaybeSingleChain<{
+      user_id: string;
+    }>;
+    const membership = await awaitChain<{
+      data: { user_id: string } | null;
+      error: unknown;
+    }>(
+      memberChain
+        .select("user_id")
+        .eq("workspace_id", activeWorkspaceId)
+        .eq("user_id", userId)
+        .maybeSingle(),
+    );
+    // A transient probe error must page (cq-silent-fallback-must-mirror-to-sentry,
+    // matching the sibling resolvers in this file) — but it still fails CLOSED to
+    // solo, never the sibling. A clean `!membership.data` is the legitimate
+    // non-member case (no mirror).
+    if (membership.error) {
+      reportSilentFallback(membership.error, {
+        feature: "workspace-resolver",
+        op: "resolveActiveWorkspaceKbRoot.membership-probe",
+        extra: { userId, activeWorkspaceId },
+      });
+    }
+    if (membership.error || !membership.data) {
+      activeWorkspaceId = userId; // never the sibling
+    }
+  }
+
+  // 3. Connectivity gate — read the SOURCE OF TRUTH (`workspaces`), not
+  //    `users.repo_status` (ADR-044 relocated repo state to `workspaces`).
+  const wsChain = supabase.from("workspaces") as MaybeSingleChain<WorkspaceRepoRow>;
+  const wsResult = await awaitChain<{ data: WorkspaceRepoRow | null; error: unknown }>(
+    wsChain
+      .select("repo_status, organization_id")
+      .eq("id", activeWorkspaceId)
+      .maybeSingle(),
+  );
+  // A query error degrades to 404 ("No Project Connected") — mirror it so a
+  // recurring workspaces-read failure on this brand-survival read path is
+  // visible, not an invisible bare-404 (cq-silent-fallback-must-mirror-to-sentry).
+  if (wsResult.error) {
+    reportSilentFallback(wsResult.error, {
+      feature: "workspace-resolver",
+      op: "resolveActiveWorkspaceKbRoot.workspaces-read",
+      extra: { userId, activeWorkspaceId },
+    });
+  }
+  const repoStatus = wsResult.data?.repo_status ?? null;
+  if (wsResult.error || !repoStatus || repoStatus === "not_connected") {
+    return { ok: false, status: 404 };
+  }
+
+  // 4. Readiness gate — the active workspace OWNER's `users.workspace_status`.
+  //    Solo shortcut: owner === caller (N2), so skip the organizations hop and
+  //    read the caller's own row (byte-identical to the legacy behavior).
+  let ownerId = userId;
+  if (activeWorkspaceId !== userId) {
+    const orgId = wsResult.data?.organization_id ?? null;
+    if (!orgId) return { ok: false, status: 503 };
+    const orgChain = supabase.from("organizations") as MaybeSingleChain<{
+      owner_user_id: string;
+    }>;
+    const orgResult = await awaitChain<{
+      data: { owner_user_id: string } | null;
+      error: unknown;
+    }>(orgChain.select("owner_user_id").eq("id", orgId).maybeSingle());
+    if (orgResult.error) {
+      reportSilentFallback(orgResult.error, {
+        feature: "workspace-resolver",
+        op: "resolveActiveWorkspaceKbRoot.organizations-read",
+        extra: { userId, activeWorkspaceId },
+      });
+    }
+    if (orgResult.error || !orgResult.data?.owner_user_id) {
+      return { ok: false, status: 503 };
+    }
+    ownerId = orgResult.data.owner_user_id;
+  }
+
+  const userChain = supabase.from("users") as MaybeSingleChain<{
+    workspace_status: string | null;
+  }>;
+  const ownerResult = await awaitChain<{
+    data: { workspace_status: string | null } | null;
+    error: unknown;
+  }>(userChain.select("workspace_status").eq("id", ownerId).maybeSingle());
+  if (ownerResult.error) {
+    reportSilentFallback(ownerResult.error, {
+      feature: "workspace-resolver",
+      op: "resolveActiveWorkspaceKbRoot.owner-readiness-read",
+      extra: { userId, activeWorkspaceId, ownerId },
+    });
+  }
+  if (ownerResult.error || ownerResult.data?.workspace_status !== "ready") {
+    return { ok: false, status: 503 };
+  }
+
+  const workspacePath = workspacePathForWorkspaceId(activeWorkspaceId);
+  return {
+    ok: true,
+    activeWorkspaceId,
+    workspacePath,
+    kbRoot: join(workspacePath, "knowledge-base"),
+    repoStatus,
+  };
 }
 
 async function awaitChain<T>(chain: unknown): Promise<T> {

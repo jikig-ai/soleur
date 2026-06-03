@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
 import type { ConversationWithPreview } from "@/hooks/use-conversations";
 
 // RED phase for plan 2026-04-29-feat-command-center-conversation-nav.
@@ -30,6 +30,7 @@ vi.mock("@/lib/feature-flags/server", () => ({
 }));
 vi.mock("@/server/workspace-resolver", () => ({
   resolveCurrentOrganizationId: vi.fn().mockResolvedValue(null),
+  resolveCurrentWorkspaceId: vi.fn().mockImplementation((userId: string) => Promise.resolve(userId)),
 }));
 vi.mock("@/server/byok-delegation-ui-resolver", () => ({
   resolveGranteeDelegation: vi.fn().mockResolvedValue(null),
@@ -100,18 +101,21 @@ afterEach(() => {
 });
 
 describe("ChatLayout (server component shell)", () => {
-  it("renders <ConversationsRail /> alongside its children", async () => {
+  it("portals <ConversationsRail /> into the rail slot, alongside its children (ADR-047)", async () => {
     paramsMock.mockReturnValue({ conversationId: "conv-1" });
     setRailHook([makeConversation({ id: "conv-1", title: "Hello" })]);
 
     const { default: ChatLayout } = await import(
       "@/app/(dashboard)/dashboard/chat/layout"
     );
+    const { RailSlotHarness } = await import("./helpers/rail-slot-harness");
 
     const children = <div data-testid="chat-page">child</div>;
-    render(await ChatLayout({ children }));
+    // The rail no longer lives in a sibling <aside>; it is portaled into the
+    // single nav rail's slot. The harness supplies a slot node so the portal
+    // resolves in isolation.
+    render(<RailSlotHarness>{await ChatLayout({ children })}</RailSlotHarness>);
 
-    // Both the rail and the page child render in the layout.
     expect(screen.getByTestId("conversations-rail")).toBeInTheDocument();
     expect(screen.getByTestId("chat-page")).toBeInTheDocument();
   });
@@ -175,7 +179,7 @@ describe("ConversationsRail", () => {
     expect(link).toHaveAttribute("href", "/dashboard");
   });
 
-  it("renders an empty-state '+ New conversation' CTA when there are zero rows", async () => {
+  it("renders a labeled empty-state CTA (never a blank rail) when there are zero rows (AC6)", async () => {
     setRailHook([]);
 
     const { ConversationsRail } = await import(
@@ -183,8 +187,10 @@ describe("ConversationsRail", () => {
     );
     render(<ConversationsRail />);
 
-    const cta = screen.getByRole("link", { name: /\+ new conversation/i });
-    expect(cta).toBeInTheDocument();
+    const empty = screen.getByTestId("conversations-rail-empty");
+    expect(empty).toHaveTextContent(/no conversations yet/i);
+    const cta = within(empty).getByRole("link", { name: /start one/i });
+    expect(cta).toHaveAttribute("href", "/dashboard/chat/new");
   });
 
   it("renders the inline status badge with founder-language labels", async () => {
@@ -207,34 +213,60 @@ describe("ConversationsRail", () => {
     expect(screen.getByText("Needs attention")).toBeInTheDocument();
   });
 
-  it("toggles collapsed state and persists via useSidebarCollapse storage key", async () => {
-    setRailHook([makeConversation({ id: "c1", title: "Some row" })]);
+  // AC2 — when the unified rail is collapsed, the rich conversation rows are
+  // DOM-removed (they have no coherent icon-only form at 56px) so they cannot
+  // clip. The stable `conversations-rail` wrapper lives in the portal component
+  // (unchanged); here we assert the rows themselves leave the DOM.
+  it("DOM-removes the conversation rows when collapsed (AC2)", async () => {
+    setRailHook([
+      makeConversation({ id: "c1", title: "Row alpha" }),
+      makeConversation({ id: "c2", title: "Row beta" }),
+      makeConversation({ id: "c3", title: "Row gamma" }),
+    ]);
 
     const { ConversationsRail } = await import(
       "@/components/chat/conversations-rail"
     );
-    render(<ConversationsRail />);
+    const { RailCollapsedProvider } = await import(
+      "@/components/dashboard/rail-slot"
+    );
+    render(
+      <RailCollapsedProvider value={true}>
+        <ConversationsRail />
+      </RailCollapsedProvider>,
+    );
 
-    const toggle = screen.getByRole("button", {
-      name: /collapse|expand/i,
-    });
-    fireEvent.click(toggle);
-
-    expect(localStorage.getItem("soleur:sidebar.chat-rail.collapsed")).toBe("1");
+    expect(screen.queryByText("Recent conversations")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: /Row alpha/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: /view all in dashboard/i }),
+    ).not.toBeInTheDocument();
   });
 
-  it("toggles collapse via Cmd/Ctrl+B keyboard shortcut", async () => {
-    setRailHook([makeConversation({ id: "c1", title: "Row" })]);
+  // AC4 — expanded (the implicit default of the provider): rows present, so AC2
+  // is not satisfied vacuously by an always-empty rail.
+  it("keeps the conversation rows present when expanded (AC4)", async () => {
+    setRailHook([makeConversation({ id: "c1", title: "Row alpha" })]);
 
     const { ConversationsRail } = await import(
       "@/components/chat/conversations-rail"
     );
-    render(<ConversationsRail />);
+    const { RailCollapsedProvider } = await import(
+      "@/components/dashboard/rail-slot"
+    );
+    render(
+      <RailCollapsedProvider value={false}>
+        <ConversationsRail />
+      </RailCollapsedProvider>,
+    );
 
-    fireEvent.keyDown(window, { key: "b", ctrlKey: true });
-    expect(localStorage.getItem("soleur:sidebar.chat-rail.collapsed")).toBe("1");
-
-    fireEvent.keyDown(window, { key: "b", ctrlKey: true });
-    expect(localStorage.getItem("soleur:sidebar.chat-rail.collapsed")).toBeNull();
+    expect(screen.getByText("Recent conversations")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Row alpha/ })).toBeInTheDocument();
   });
+
+  // ADR-047: the conversations rail no longer owns a collapse button or ⌘B —
+  // the unified nav rail owns collapse (covered in
+  // dashboard-sidebar-collapse.test.tsx). The rail just renders the list.
 });

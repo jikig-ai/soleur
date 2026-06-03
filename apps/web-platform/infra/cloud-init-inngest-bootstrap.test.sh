@@ -2,8 +2,11 @@
 # Tests the Inngest bootstrap runcmd block added to cloud-init.yml in #4118.
 #
 # Asserts the structural invariants the runcmd block must satisfy:
-#   - The pinned OCI image tag is present and exactly v1.1.11 (bootstrap-script
-#     version, NOT the inngest-cli version which is sourced from Config.Env).
+#   - The pinned OCI image tag is present and well-formed (vX.Y.Z; the
+#     bootstrap-script SHAPE version, NOT the inngest-cli version which is
+#     sourced from Config.Env). The EXACT value is checked dynamically by the
+#     AC6 drift-guard below (pin must equal the latest published vinngest-v*
+#     git tag), so this file no longer hardcodes the current version (#4675).
 #   - The block sources INNGEST_CLI_VERSION + INNGEST_CLI_SHA256 via `docker
 #     inspect ... Config.Env` (rather than hardcoding them in cloud-init.yml).
 #   - The block uses `trap cleanup EXIT` so a partial failure does not leave an
@@ -49,8 +52,9 @@ assert "cloud-init.yml exists" "[[ -f '$CLOUD_INIT' ]]"
 # --- AC1: pinned OCI image tag ---
 echo ""
 echo "--- AC1: pinned OCI image tag ---"
-assert "docker pull line for soleur-inngest-bootstrap:v1.1.11 exists" \
-  "grep -qE '^[[:space:]]+docker pull ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v1\.1\.11' '$CLOUD_INIT'"
+# Shape-match only (vX.Y.Z) — the exact value is owned by the AC6 drift-guard.
+assert "docker pull line for soleur-inngest-bootstrap:vX.Y.Z exists" \
+  "grep -qE '^[[:space:]]+docker pull ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' '$CLOUD_INIT'"
 
 # --- AC1: Config.Env sourcing ---
 echo ""
@@ -81,7 +85,7 @@ assert "drift comment clarifies pin is bootstrap-image version, not inngest-cli 
 # --- AC4: positional ordering ---
 echo ""
 echo "--- AC4: positioned BEFORE soleur-web-platform docker run ---"
-BOOTSTRAP_LINE=$(grep -nE '^[[:space:]]+docker pull ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v1\.1\.11' "$CLOUD_INIT" | head -1 | cut -d: -f1)
+BOOTSTRAP_LINE=$(grep -nE '^[[:space:]]+docker pull ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 WEBPLATFORM_LINE=$(grep -nE '^[[:space:]]+--name soleur-web-platform' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 assert "bootstrap line found in cloud-init.yml"      "[[ -n '$BOOTSTRAP_LINE' ]]"
 assert "soleur-web-platform run line found"          "[[ -n '$WEBPLATFORM_LINE' ]]"
@@ -161,6 +165,59 @@ if command -v visudo >/dev/null 2>&1; then
 else
   echo "  SKIP: visudo not installed locally — CI will exercise the validation step"
 fi
+
+# --- AC6: pin matches latest published vinngest-v* git tag (#4675 drift-guard) ---
+# Durable mechanical replacement for the manual "bump the cloud-init pin on each
+# bootstrap-image release" step — forgotten 10 consecutive times (v1.0.1…v1.1.10)
+# before #4669. The pin MUST equal the semver-max published `vinngest-v*` git
+# tag: that tag is the authoritative "a new soleur-inngest-bootstrap image was
+# published" signal (build-inngest-bootstrap-image.yml is
+# `on: push: tags: ['vinngest-v*.*.*']`). sort -V (semver), NOT lexicographic —
+# plain `sort` ranks v1.1.9 above v1.1.10, the exact bug class that hid the drift.
+echo ""
+echo "--- AC6: pin drift-guard vs latest published vinngest-v* tag ---"
+# `|| true`: under `set -euo pipefail` a zero-match grep exits 1 and pipefail
+# would abort the whole script here (before AC6b + the results summary) if the
+# image ref is ever renamed. Let the empty PIN fall through to a clean FAIL.
+PIN=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" | head -1 | sed 's/.*://' || true)
+# git -C "$SCRIPT_DIR" (NOT `git rev-parse --show-toplevel`, which resolves to
+# the bare-repo parent in a worktree). Any failure (no git, no tags, not a repo)
+# collapses to an empty result → visible SKIP, never a false-green.
+LATEST_TAG=$(git -C "$SCRIPT_DIR" tag --list 'vinngest-v*' 2>/dev/null \
+  | sed 's/^vinngest-//' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+  | sort -V | tail -1 || true)
+if [[ -z "$LATEST_TAG" ]]; then
+  if [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ]]; then
+    # In CI the deploy-script-tests checkout fetches tags (fetch-depth: 0 +
+    # fetch-tags: true). An empty tag set in CI means that wiring regressed —
+    # FAIL loudly rather than SKIP, so the guard can never silently disarm.
+    assert "vinngest-v* tags reachable in CI (guard must not silently disarm)" "false"
+    echo "        No vinngest-v* tags in a CI checkout — verify fetch-depth: 0 +"
+    echo "        fetch-tags: true on deploy-script-tests in infra-validation.yml."
+  else
+    echo "  SKIP: no vinngest-v* git tags reachable (shallow clone / tagless checkout);"
+    echo "        drift comparison skipped (CI fetches tags via fetch-tags: true)."
+  fi
+else
+  assert "cloud-init pin ($PIN) matches latest published vinngest-v* tag ($LATEST_TAG)" \
+    "[[ '$PIN' == '$LATEST_TAG' ]]"
+  if [[ "$PIN" != "$LATEST_TAG" ]]; then
+    echo "        DRIFT: cloud-init.yml pins $PIN but the latest published tag is $LATEST_TAG."
+    echo "        Fix: bump every 'soleur-inngest-bootstrap:<tag>' ref in"
+    echo "        apps/web-platform/infra/cloud-init.yml to $LATEST_TAG."
+  fi
+fi
+
+# --- AC6b: all pin refs present AND share one tag (catches a partial bump) ---
+# Assert BOTH count==3 (docker pull/create/inspect) AND distinct==1. distinct==1
+# alone passes vacuously if a future refactor drops the refs to a single
+# surviving line; asserting the count keeps the multi-ref coupling intact.
+echo ""
+echo "--- AC6b: pin-consistency (all soleur-inngest-bootstrap refs present + agree) ---"
+PIN_REF_COUNT=$(grep -coE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" || true)
+DISTINCT_PINS=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" | sort -u | wc -l)
+assert "all 3 soleur-inngest-bootstrap pin refs present and share one tag (found $PIN_REF_COUNT refs, $DISTINCT_PINS distinct)" \
+  "(( PIN_REF_COUNT == 3 && DISTINCT_PINS == 1 ))"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="

@@ -228,7 +228,7 @@ Playwright snapshot, or other DOM-walking surface was invoked, so the
 ## Cross-references
 
 - PIR §Phase 9 Gate-3b Correction:
-  `knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`
+  `knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`
 - 2026-05-19 probe-divergence audit (supersedes_status above):
   `knowledge-base/legal/audits/2026-05-19-sentry-token-scope-probe-divergence.md`
 - Article 30 PA8 §(d) UPDATE block:

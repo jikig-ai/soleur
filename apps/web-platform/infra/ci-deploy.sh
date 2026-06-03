@@ -432,6 +432,15 @@ case "$COMPONENT" in
 
     # Prepare environment (shared between canary and production)
     sudo chown 1001:1001 /mnt/data/workspaces
+    # NOTE (#4886 follow-up): the `.cron` subdir isolation was reverted. A
+    # `mkdir -p /mnt/data/workspaces/.cron` in the deploy critical path ENOSPC-
+    # fails under `set -e` when the shared volume is already full (the exact
+    # state this work targets) — deadlocking the very deploy that delivers the
+    # GC. CRON_WORKSPACE_ROOT stays `/workspaces`, so cron-workspace-gc sweeps
+    # the SAME path the leaked `soleur-*` clones already live in; the GC's
+    # `soleur-` prefix guard (UUID workspace dirs are 36-char hex, never
+    # `soleur-*`) is the load-bearing protection, not the subdir. Dedicated-
+    # volume isolation is deferred to #4891 (re-eval once the volume is healthy).
     ENV_FILE=$(resolve_env_file)
     # Chain the env-file cleanup with the existing state-writing EXIT trap.
     # Replacing the trap entirely would lose the "unhandled" reason capture.
@@ -447,6 +456,7 @@ case "$COMPONENT" in
     # under /tmp — the askpass script lives in $HOME instead.
     docker run -d \
       --name soleur-web-platform-canary \
+      --log-driver journald \
       --restart no \
       --security-opt apparmor=soleur-bwrap \
       --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
@@ -454,13 +464,14 @@ case "$COMPONENT" in
       --env-file "$ENV_FILE" \
       --add-host host.docker.internal:host-gateway \
       -e INNGEST_BASE_URL=http://host.docker.internal:8288 \
+      -e CRON_WORKSPACE_ROOT=/workspaces \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
       -p 0.0.0.0:3001:3000 \
       "$IMAGE:$TAG"
 
     # Layered canary probe set. Contract:
-    #   knowledge-base/engineering/ops/runbooks/canary-probe-set.md
+    #   knowledge-base/engineering/operations/runbooks/canary-probe-set.md
     readonly CANARY_HEALTH_HTTP="/tmp/canary-health-http"
     readonly CANARY_LOGIN_HTTP="/tmp/canary-login-http"
     readonly CANARY_LOGIN_BODY="/tmp/canary-login-body.html"
@@ -611,6 +622,7 @@ case "$COMPONENT" in
       # /tmp no longer needs to be exec-able for git credential helpers.
       if docker run -d \
         --name soleur-web-platform \
+        --log-driver journald \
         --restart unless-stopped \
         --security-opt apparmor=soleur-bwrap \
         --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
@@ -618,6 +630,7 @@ case "$COMPONENT" in
         --env-file "$ENV_FILE" \
         --add-host host.docker.internal:host-gateway \
         -e INNGEST_BASE_URL=http://host.docker.internal:8288 \
+        -e CRON_WORKSPACE_ROOT=/workspaces \
         -v /mnt/data/workspaces:/workspaces \
         -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
         -p 0.0.0.0:80:3000 \

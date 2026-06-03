@@ -12,7 +12,7 @@ import {
 
 const VALID_MODELS = ["inherit", "haiku", "sonnet", "opus"];
 const KEBAB_CASE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-const SKILL_DESCRIPTION_WORD_BUDGET = 1950; // see #618; bumped +50 for #2725, bumped +100 for #4341 (3 Flagsmith operator skills landed against a 1906/1850 baseline; trimmed mine to minimum, restored ~40-word headroom)
+const SKILL_DESCRIPTION_WORD_BUDGET = 1984; // see #618; bumped +50 for #2725, bumped +100 for #4341, bumped +34 for #4742 (trigger-cron skill description, 34 words, against a 1950/1950 zero-headroom baseline)
 const SKILL_DESCRIPTION_CHAR_LIMIT = 1024;
 
 // ---------------------------------------------------------------------------

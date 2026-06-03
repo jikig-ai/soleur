@@ -45,12 +45,27 @@
 # lines 71-77), update this prose AND verify the field becomes load-
 # bearing for the new resource.
 
+# scheduled-terraform-drift is now Inngest-DISPATCHED, not GHA-`schedule:`-fired.
+# An Inngest cron (apps/web-platform/server/inngest/functions/cron-terraform-drift.ts,
+# `0 6,18 * * *`, ≤2-min jitter) triggers the scheduled-terraform-drift GHA
+# workflow via workflow_dispatch; the GHA run still executes terraform and emits
+# this monitor's end-of-job heartbeat (the Inngest fn does NOT check in here).
+# Because Inngest replaces GHA's jittery `schedule:` trigger, the margin tightens
+# 480 -> 60: Inngest fire (≤2 min) + dispatch (seconds) + runner queue + terraform
+# (~2-3 min) lands the check-in ~5-10 min after schedule, so 60 min is comfortable
+# headroom while staying far under the 720-min inter-fire gap (06:00 -> 18:00) —
+# a maximally-late run of one slot is never misread as a missed run of the next,
+# and a genuinely dropped run still pages within 60 min instead of up to 8h.
+# This supersedes the GHA-schedule-jitter rationale that justified 480 in PR #4772
+# (which widened 180 -> 480 to absorb the jitter this PR removes at its source).
+# The dispatcher's OWN liveness is covered by cron-inngest-cron-watchdog (the
+# parity-guarded EXPECTED_CRON_FUNCTIONS manifest), not a second monitor.
 resource "sentry_cron_monitor" "scheduled_terraform_drift" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-terraform-drift"
   schedule                = { crontab = "0 6,18 * * *" }
-  checkin_margin_minutes  = 180
+  checkin_margin_minutes  = 60
   max_runtime_minutes     = 15
   failure_issue_threshold = 1
   recovery_threshold      = 1
@@ -359,6 +374,29 @@ resource "sentry_cron_monitor" "scheduled_competitive_analysis" {
   timezone                = "UTC"
 }
 
+# TR9 Phase 2 (#4483): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-content-generator.ts`. This
+# monitor was MISSING — the function POSTed check-ins to the
+# `scheduled-content-generator` slug that Sentry had never been told existed,
+# so a `?status=error` heartbeat opened no issue. #4689's output-aware heartbeat
+# is inert for content-generator (#4684) without this resource: the producer
+# correctly resolves ok:false, but with no monitor the red signal is dropped.
+# Tue/Thu 10:00 UTC. Inngest-fired — 30-min margin per the Inngest-fired
+# precedent. 55 min mirrors the claude-eval cohort (50-min MAX_TURN_DURATION_MS
+# budget plus slack). Single-miss alert (failure_issue_threshold=1): a single
+# missed twice-weekly fire is noteworthy.
+resource "sentry_cron_monitor" "scheduled_content_generator" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-content-generator"
+  schedule                = { crontab = "0 10 * * 2,4" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 55
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 # PR #4457: Inngest-fired via
 # `apps/web-platform/server/inngest/functions/cron-stale-deferred-scope-outs.ts`.
 # Migrated from the GHA scheduled-stale-deferred-scope-outs workflow (deleted
@@ -426,15 +464,15 @@ resource "sentry_cron_monitor" "scheduled_ux_audit" {
 
 # Issue #4650: Inngest-fired via
 # `apps/web-platform/server/inngest/functions/cron-inngest-cron-watchdog.ts`.
-# NEW monitor — self-healing watchdog for the cron-trigger desync regression
-# (runbook H9). Every 4h it queries the running server's /v1/functions registry
-# and self-restores dropped (H9a) / de-planned (H9b) cron triggers; an ok=false
-# heartbeat flips THIS monitor to error when any monitored function is defective.
-# 4-hourly (0 */4 * * *) — 120-min margin per the Inngest ≤2-min jitter plus
-# slack for the loopback fetch + heal steps. 5 min runtime (pure-IO: loopback
-# fetch + inngest.send + optional webhook POST, no claude-eval spawn).
-# The watchdog rides the substrate it monitors — if it stops firing entirely,
-# this monitor's own missed check-in surfaces the meta-failure.
+# LIVENESS BEACON (#4682 retired the self-heal). The watchdog originally queried
+# the server's /v1/functions registry to classify + self-restore dropped (H9a) /
+# de-planned (H9b) cron triggers, but that introspection API is loopback-gated
+# and unreachable from the app container (health=200, /v1/functions=404), and the
+# self-heal is redundant with --poll-interval 60 (#4652) + the per-function cron
+# monitors. The function now just posts ok=true every 4h: its own check-in proves
+# the inngest cron scheduler is alive enough to fire it. So THIS monitor pages
+# only on a MISSED check-in (scheduler dead / function dropped), never on ok=false.
+# 4-hourly (0 */4 * * *) — 120-min margin per the Inngest ≤2-min jitter.
 resource "sentry_cron_monitor" "scheduled_inngest_cron_watchdog" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
@@ -442,6 +480,49 @@ resource "sentry_cron_monitor" "scheduled_inngest_cron_watchdog" {
   schedule                = { crontab = "0 */4 * * *" }
   checkin_margin_minutes  = 120
   max_runtime_minutes     = 5
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# 2026-06-02: Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-supabase-disk-io.ts`.
+# Proactive prod Disk-IO early-warning monitor. A MISSED check-in means the
+# monitor stopped (scheduler dead / function dropped); a ?status=error heartbeat
+# means the monitor RAN and a tripwire fired (cache-hit floor breach, a dedup
+# table over the row ceiling, or the signal RPC failed). 6-hourly (0 */6 * * *) —
+# 30-min margin per the Inngest ≤2-min-jitter precedent. 10-min runtime mirrors
+# the small-cron cohort (pure-TS, one read-only RPC, no claude-eval spawn). Slug
+# MUST match SENTRY_MONITOR_SLUG in the handler.
+resource "sentry_cron_monitor" "scheduled_supabase_disk_io" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-supabase-disk-io"
+  schedule                = { crontab = "0 */6 * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# 2026-06-03: Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-workspace-gc.ts`.
+# Ephemeral cron-clone garbage collector. A MISSED check-in means the GC stopped
+# (scheduler dead / function dropped) — the failure mode that let leaked clones
+# accumulate into the 2026-06-02 KB-sync ENOSPC freeze (#4882). The handler always
+# heartbeats ok:true (the sweep RAN; a clean 0-reclaim run is healthy) — the
+# actionable "volume still low after GC" condition pages via a warnSilentFallback
+# Sentry warn, not a ?status=error heartbeat. 6-hourly (0 */6 * * *), 30-min margin
+# + 10-min runtime mirror the disk-io small-cron cohort (pure-TS local fs, no
+# claude-eval spawn). Slug MUST match SENTRY_MONITOR_SLUG in the handler.
+resource "sentry_cron_monitor" "scheduled_workspace_gc" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-workspace-gc"
+  schedule                = { crontab = "0 */6 * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
   failure_issue_threshold = 1
   recovery_threshold      = 1
   timezone                = "UTC"

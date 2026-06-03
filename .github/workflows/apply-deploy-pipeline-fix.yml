@@ -22,11 +22,36 @@
 #   - AWS_ACCESS_KEY_ID     (R2 backend)
 #   - AWS_SECRET_ACCESS_KEY (R2 backend)
 #
-# No SSH infrastructure required (#3756): the local-exec provisioner in
-# server.tf sends file payloads via HTTPS POST through the existing CF Tunnel
-# to /hooks/infra-config. The webhook handler (infra-config-apply.sh) writes
-# files atomically on the host. No DEPLOY_SSH_PRIVATE_KEY, no cloudflared
-# binary, no iptables NAT redirect, no ssh-agent.
+# Two apply targets (#4829):
+#   - terraform_data.deploy_pipeline_fix — HTTPS-only (#3756): its local-exec
+#     provisioner POSTs base64 file payloads through the CF Tunnel to
+#     /hooks/infra-config; the webhook handler (infra-config-apply.sh) writes them
+#     atomically. No SSH needed for THIS target.
+#   - terraform_data.infra_config_handler_bootstrap — root SSH (#4827). It
+#     delivers the handler + the infra-config-install escalation helper + the
+#     sudoers grant, which the webhook path cannot self-deliver (chicken-and-egg,
+#     #4811). The GitHub-hosted runner's egress IP is not in var.admin_ips, so this
+#     job bridges SSH through the existing CF Tunnel SSH route (tunnel.tf:
+#     ssh://localhost:22 ingress + CF Access ci_ssh service token): install
+#     cloudflared, open a `cloudflared access tcp` localhost forward, and add an
+#     `iptables -t nat OUTPUT REDIRECT` rule rewriting SERVER_IP:22 → 127.0.0.1:2222
+#     (transparent to terraform's Go SSH client, which ignores ~/.ssh/config —
+#     learning 2026-05-20-terraform-go-ssh-client-ignores-ssh-config-multi-agent-catch.md).
+#     The bridge authenticates with TF_VAR_ci_ssh_private_key (Doppler
+#     DEPLOY_SSH_PRIVATE_KEY); the host trusts the matching pubkey via
+#     terraform_data.root_authorized_keys (ci-ssh-key.tf, operator-local apply).
+#     The firewall admin_ips allowlist is byte-unchanged — the tunnel is the access
+#     path, not an IP grant.
+#
+# RESOLVED (#4844): deploy_pipeline_fix has `depends_on = [apparmor_bwrap_profile]`,
+# and `-target` pulls in dependencies, so a CI apply also recreates
+# apparmor_bwrap_profile over SSH. As of #4844 ALL 7 sibling SSH provisioners
+# (including apparmor_bwrap_profile and docker_seccomp_config) carry the
+# dual-context connection block (private_key = var.ci_ssh_private_key;
+# agent = var.ci_ssh_private_key == null), so the agent-less runner authenticates
+# with the explicit CI key — no `publickey` failure on a profile co-change. The
+# earlier #4829 CAVEAT (a profile co-change in the same merge as a trigger file
+# required an operator-local `terraform apply`) no longer applies.
 #
 # All untrusted inputs (commit messages, workflow_dispatch inputs) are routed
 # through env vars before reaching any `run:` block — CI workflow
@@ -46,6 +71,10 @@ on:
       - "apps/web-platform/infra/hooks.json.tmpl"
       - "apps/web-platform/infra/deploy-inngest-bootstrap.sudoers"
       - "apps/web-platform/infra/infra-config-apply.sh"
+      # #4829 — the escalation helper is delivered by the SSH bridge, not the
+      # webhook path. A helper-only change must still fire the auto-apply so the
+      # bridge re-runs over the tunnel.
+      - "apps/web-platform/infra/infra-config-install.sh"
       - "apps/web-platform/infra/push-infra-config.sh"
       - "apps/web-platform/infra/cat-infra-config-state.sh"
       - "apps/web-platform/infra/server.tf"
@@ -55,9 +84,26 @@ on:
         description: "Why are you applying? (manual re-run only)"
         required: true
         type: string
+      allow_missing_status_endpoint:
+        description: "Tolerate a 404 from /hooks/infra-config-status (first-bootstrap ONLY — before the host has the status hook). Never set on a routine apply."
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
-  group: terraform-apply-deploy-pipeline-fix
+  # LOAD-BEARING shared group (#4844): this MUST be the IDENTICAL literal string
+  # used in apply-web-platform-infra.yml. The R2 backend has NO state lock
+  # (apps/web-platform/infra/main.tf `use_lockfile = false` — R2 lacks S3
+  # conditional writes), so this shared GitHub Actions concurrency group is the
+  # SOLE serializer preventing two concurrent `terraform apply` runs from
+  # last-writer-wins-clobbering web-platform/terraform.tfstate. Both workflows
+  # now SSH-apply apparmor_bwrap_profile (this one pulls it transitively via
+  # deploy_pipeline_fix's depends_on; the other lists it in its SSH -target set),
+  # so they overlap on the same R2 object. GHA does NOT error on divergent group
+  # strings — they silently fail to serialize — so do not "rename for clarity".
+  group: terraform-apply-web-platform-host
+  # cancel-in-progress: false — cancelling a half-applied unlocked run is the
+  # worse split-state (no backend lock to recover from).
   cancel-in-progress: false
 
 permissions:
@@ -67,6 +113,13 @@ permissions:
 env:
   TERRAFORM_VERSION: "1.10.5"
   INFRA_DIR: apps/web-platform/infra
+  # cloudflared binary for the CF Tunnel SSH bridge to the
+  # infra_config_handler_bootstrap resource (#4829, see #4177/#4181 precedent).
+  # SHA-256 computed against the real released binary at the pinned version
+  # (NEVER paste a checksum from documentation or AI output per the 2026-03-21
+  # server-provisioning learning, Session Error #4; re-verified at /work time).
+  CLOUDFLARED_VERSION: "2026.5.0"
+  CLOUDFLARED_SHA256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
 
 jobs:
   preflight:
@@ -136,6 +189,20 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         run: terraform init -input=false
 
+      # --- #4844: CF Tunnel SSH bridge (extracted to a shared composite action) ---
+      # Brings up cloudflared + iptables NAT redirect so terraform's Go SSH client
+      # reaches infra_config_handler_bootstrap over the tunnel. Same mechanism as
+      # the prior inline bridge (#4830); now shared with apply-web-platform-infra.yml.
+      # SETUP ONLY — the caller-side `if: always()` teardown below is load-bearing
+      # (the composite action cannot register a post-job hook).
+      - name: CF Tunnel SSH bridge
+        uses: ./.github/actions/cf-tunnel-ssh-bridge
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
+          infra-dir: ${{ env.INFRA_DIR }}
+          cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}
+          cloudflared-sha256: ${{ env.CLOUDFLARED_SHA256 }}
+
       - name: Terraform plan
         working-directory: ${{ env.INFRA_DIR }}
         env:
@@ -146,6 +213,7 @@ jobs:
           set -euo pipefail
           doppler run --name-transformer tf-var -- \
             terraform plan -target=terraform_data.deploy_pipeline_fix \
+            -target=terraform_data.infra_config_handler_bootstrap \
             -var="ssh_key_path=${CI_SSH_PUB}" \
             -no-color -input=false
 
@@ -159,8 +227,35 @@ jobs:
           set -euo pipefail
           doppler run --name-transformer tf-var -- \
             terraform apply -target=terraform_data.deploy_pipeline_fix \
+            -target=terraform_data.infra_config_handler_bootstrap \
             -var="ssh_key_path=${CI_SSH_PUB}" \
             -auto-approve -input=false
+
+      - name: Tear down cloudflared SSH bridge
+        if: always()
+        # Remove the NAT redirect + kill cloudflared as soon as the apply is done
+        # (the post-apply verifies below are HTTPS, not SSH). `if: always()` so a
+        # failed apply still leaves no stray rule/process — a left-over OUTPUT NAT
+        # rule or orphaned cloudflared would corrupt a later job on a persistent
+        # runner (moot on GH-hosted ephemeral runners, but the discipline is required).
+        run: |
+          set +e
+          if [[ -n "${SERVER_IP:-}" ]]; then
+            sudo iptables -t nat -D OUTPUT \
+              -d "$SERVER_IP" -p tcp --dport 22 \
+              -j REDIRECT --to-ports 2222 2>/dev/null || true
+          fi
+          if [[ -n "${CLOUDFLARED_PID:-}" ]]; then
+            kill "$CLOUDFLARED_PID" 2>/dev/null || true
+          fi
+          if [[ -f /tmp/cloudflared.log ]]; then
+            echo "=== /tmp/cloudflared.log (last 200 lines) ==="
+            if [[ -s /tmp/cloudflared.log ]]; then
+              tail -n 200 /tmp/cloudflared.log
+            else
+              echo "(log empty — cloudflared may have failed before writing any output)"
+            fi
+          fi
 
       - name: Verify webhook is alive post-apply
         working-directory: ${{ env.INFRA_DIR }}
@@ -212,6 +307,13 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DOPPLER_PROJECT: soleur
           DOPPLER_CONFIG: prd_terraform
+          # 404-tolerance is a bounded first-bootstrap escape hatch only: a host
+          # whose stale hooks.json predates the /hooks/infra-config-status hook
+          # returns 404. On a routine `push` apply this flag is always 'false',
+          # so a persistent 404 FAILS the step (it was the exact false-success
+          # vector for the 2026-05-21 freeze, #4804). Set the boolean input on a
+          # manual workflow_dispatch ONLY for a documented first bootstrap.
+          ALLOW_MISSING_STATUS: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_missing_status_endpoint }}
         run: |
           set -euo pipefail
           APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
@@ -223,7 +325,17 @@ jobs:
           # scheduling takes ~5-8s; polling immediately wastes attempt 1.
           sleep 8
 
+          # The webhook returns HTTP 202 the moment the hook TRIGGERS, not when
+          # the async handler finishes writing files (trigger-and-forget,
+          # #4804). So success is NOT "the proxy responded" — it is "the state
+          # JSON proves every file landed". Assert the full invariant:
+          #   exit_code == 0 AND files_failed == 0 AND files_written == files_total
+          # files_total is derived from the JSON (never hardcoded to the FILE_MAP
+          # length) so the gate survives future FILE_MAP additions.
           EXIT_CODE=""
+          FILES_FAILED=""
+          FILES_WRITTEN=""
+          FILES_TOTAL=""
           for attempt in 1 2 3; do
             HMAC=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
             HTTP_CODE=$(curl -s -o /tmp/infra-config-status-response.txt -w '%{http_code}' \
@@ -235,15 +347,19 @@ jobs:
 
             if [[ "$HTTP_CODE" == "200" ]]; then
               EXIT_CODE=$(jq -r '.exit_code' /tmp/infra-config-status-response.txt 2>/dev/null || echo "MISSING")
-              if [[ "$EXIT_CODE" == "0" ]]; then
-                echo "Infra-config apply succeeded (exit_code=0 on attempt $attempt)"
+              FILES_FAILED=$(jq -r '.files_failed' /tmp/infra-config-status-response.txt 2>/dev/null || echo "MISSING")
+              FILES_WRITTEN=$(jq -r '.files_written' /tmp/infra-config-status-response.txt 2>/dev/null || echo "MISSING")
+              FILES_TOTAL=$(jq -r '.files_total' /tmp/infra-config-status-response.txt 2>/dev/null || echo "MISSING")
+              if [[ "$EXIT_CODE" == "0" && "$FILES_FAILED" == "0" \
+                    && "$FILES_TOTAL" != "MISSING" && "$FILES_TOTAL" != "null" \
+                    && "$FILES_WRITTEN" == "$FILES_TOTAL" ]]; then
+                echo "Infra-config apply succeeded (exit_code=0, files_written=${FILES_WRITTEN}/${FILES_TOTAL}, files_failed=0 on attempt $attempt)"
                 cat /tmp/infra-config-status-response.txt
                 break
               fi
-              echo "Attempt $attempt: endpoint returned exit_code=$EXIT_CODE (retrying in 5s...)"
+              echo "Attempt $attempt: exit_code=$EXIT_CODE files_failed=$FILES_FAILED files_written=$FILES_WRITTEN files_total=$FILES_TOTAL (retrying in 5s...)"
             elif [[ "$HTTP_CODE" == "404" ]]; then
-              echo "::warning::infra-config-status endpoint not found (HTTP 404) — host may predate this feature. Skipping."
-              break
+              echo "Attempt $attempt: infra-config-status endpoint not found (HTTP 404)"
             else
               echo "Attempt $attempt: HTTP $HTTP_CODE (retrying in 5s...)"
             fi
@@ -253,15 +369,124 @@ jobs:
             fi
           done
 
+          # --- Final adjudication (fail loud; no silent pass) ---
           if [[ "$HTTP_CODE" == "404" ]]; then
-            echo "Tolerating missing endpoint on first apply"
-          elif [[ "$HTTP_CODE" == "200" ]] && [[ "${EXIT_CODE:-}" != "0" ]]; then
-            echo "::error::infra-config-apply reported exit_code=$EXIT_CODE (partial failure)."
+            if [[ "$ALLOW_MISSING_STATUS" == "true" ]]; then
+              echo "::warning::infra-config-status returned 404; tolerated via allow_missing_status_endpoint (documented first-bootstrap escape hatch)."
+            else
+              echo "::error::infra-config-status returned HTTP 404 after all retries — the host's hooks.json predates the status endpoint and the apply did NOT verify. This is the false-success freeze vector (#4804). For a genuine first bootstrap, re-run via workflow_dispatch with allow_missing_status_endpoint=true."
+              cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+              exit 1
+            fi
+          elif [[ "$HTTP_CODE" == "200" ]]; then
+            if [[ "$EXIT_CODE" != "0" ]]; then
+              echo "::error::infra-config-apply reported exit_code=$EXIT_CODE (partial failure)."
+              cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+              exit 1
+            fi
+            if [[ "$FILES_FAILED" != "0" ]]; then
+              echo "::error::infra-config-apply reported files_failed=$FILES_FAILED — one or more files did not land on the host."
+              cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+              exit 1
+            fi
+            if [[ "$FILES_TOTAL" == "MISSING" || "$FILES_TOTAL" == "null" || "$FILES_WRITTEN" != "$FILES_TOTAL" ]]; then
+              echo "::error::infra-config-apply landed-files mismatch: files_written=$FILES_WRITTEN files_total=$FILES_TOTAL (expected equal and non-null)."
+              cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+              exit 1
+            fi
+          else
+            echo "::error::infra-config-status did not respond with HTTP 200 after 3 attempts (last HTTP $HTTP_CODE). The handler is async behind a 202 trigger-and-forget, so a non-responding status endpoint cannot be treated as success."
             cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
             exit 1
-          elif [[ "$HTTP_CODE" != "200" ]]; then
-            echo "::warning::infra-config-status did not respond with HTTP 200 after 3 attempts."
-            cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+          fi
+
+      - name: Check whether #4804 is still open (scopes the one-time self-heal verification)
+        id: check_4804
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          STATE=$(gh issue view 4804 --json state --jq '.state' 2>/dev/null || echo "MISSING")
+          if [[ "$STATE" == "OPEN" ]]; then
+            echo "open=true" >> "$GITHUB_OUTPUT"
+            echo "#4804 is OPEN — running the one-time journald self-heal verification + close."
+          else
+            echo "open=false" >> "$GITHUB_OUTPUT"
+            echo "#4804 is ${STATE} (not OPEN) — skipping the journald close-out check; the generic files_written==files_total gate above is the standing landed-files guard."
+          fi
+
+      - name: Verify journald_storage no-SSH surface is live (AC12, #4804)
+        if: success() && steps.check_4804.outputs.open == 'true'
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        # ONE-TIME close-out check for #4804, NOT a standing regression guard.
+        # The ORIGINAL symptom: /hooks/deploy-status returned journald_storage ==
+        # null because cat-deploy-state.sh was frozen at 2026-05-21 (#4804). After
+        # the apply pushes the fresh cat-deploy-state.sh (carrying the #4792/#4800
+        # journald_storage field), the field must report persistent == true before
+        # we close #4804. It is gated on #4804 still being OPEN so it auto-disables
+        # once resolved — the generic `files_written == files_total && files_failed
+        # == 0` gate above is the STANDING landed-files guard (it already proves
+        # cat-deploy-state.sh landed). Asserting a specific FIELD VALUE on every
+        # future apply would over-couple this deploy-reliability workflow to one
+        # feature and false-red on a deliberate future journald change.
+        run: |
+          set -euo pipefail
+          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+          WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain)
+          CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain)
+          CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain)
+
+          PERSISTENT=""
+          for attempt in 1 2 3; do
+            HMAC=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+            HTTP_CODE=$(curl -s -o /tmp/deploy-status-journald.txt -w '%{http_code}' \
+              --max-time 10 \
+              -H "X-Signature-256: sha256=${HMAC}" \
+              -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
+              -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
+              "https://deploy.${APP_DOMAIN_BASE}/hooks/deploy-status" 2>/dev/null || echo "000")
+
+            if [[ "$HTTP_CODE" == "200" ]]; then
+              PERSISTENT=$(jq -r '.journald_storage.persistent' /tmp/deploy-status-journald.txt 2>/dev/null || echo "MISSING")
+              if [[ "$PERSISTENT" == "true" ]]; then
+                echo "journald_storage.persistent == true (attempt $attempt) — the #4792/#4800 no-SSH surface is live; the false-success freeze is cleared."
+                break
+              fi
+              echo "Attempt $attempt: journald_storage.persistent=$PERSISTENT (retrying in 5s...)"
+            else
+              echo "Attempt $attempt: HTTP $HTTP_CODE (retrying in 5s...)"
+            fi
+
+            if [[ "$attempt" -lt 3 ]]; then
+              sleep 5
+            fi
+          done
+
+          if [[ "$PERSISTENT" != "true" ]]; then
+            echo "::error::/hooks/deploy-status .journald_storage.persistent is '$PERSISTENT', expected 'true'. The cat-deploy-state.sh update from #4792/#4800 has not landed on the host (or persistent journald storage is not configured)."
+            cat /tmp/deploy-status-journald.txt >&2 2>/dev/null || true
+            exit 1
+          fi
+
+      - name: Close #4804 after self-heal verified
+        if: success() && steps.check_4804.outputs.open == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MERGE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          STATE=$(gh issue view 4804 --json state --jq '.state' 2>/dev/null || echo "MISSING")
+          if [[ "$STATE" == "OPEN" ]]; then
+            gh issue comment 4804 --body "Auto-closed by \`apply-deploy-pipeline-fix.yml\` after merge ${MERGE_SHA}: infra-config files landed (files_written == files_total, files_failed == 0) and \`/hooks/deploy-status\` confirms \`journald_storage.persistent == true\`. The deploy-pipeline-fix false-success freeze is resolved."
+            gh issue close 4804 --reason completed
+            echo "Closed #4804"
+          else
+            echo "#4804 is ${STATE} (not OPEN); skipping close."
           fi
 
       - name: Auto-close any open drift issues for this stack

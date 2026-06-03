@@ -163,15 +163,18 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       const userB = fixtureX.members[1];
 
       // Owner A removes B from workspace X.
-      // Note: remove_workspace_member is SECURITY DEFINER and reads
-      // auth.uid() — but service-role calls produce NULL auth.uid().
-      // For this integration test we invoke via authenticated-JWT
-      // routing through PostgREST so the RPC sees a real auth.uid().
+      // mig 094: remove_workspace_member is service_role-only (the authenticated
+      // EXECUTE grant was REVOKED to close the forgeable-override class) and
+      // resolves the caller via COALESCE(p_caller_user_id, auth.uid()). The
+      // production wrapper invokes it via the service client forwarding the
+      // owner id — mirror that. aClient (below) is still used for the
+      // positive-control check_my_revocation read on Owner A's JWT.
       const aJwt = await mintUserJwt(url, serviceKey, ownerA.email);
       const aClient = clientWithJwt(url, anonKey, aJwt);
-      const { error: removeErr } = await aClient.rpc("remove_workspace_member", {
+      const { error: removeErr } = await service.rpc("remove_workspace_member", {
         p_workspace_id: fixtureX.workspaceId,
         p_user_id: userB.userId,
+        p_caller_user_id: ownerA.userId,
       });
       expect(removeErr).toBeNull();
 
@@ -300,17 +303,21 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       });
 
       const ownerA = fixtureX.members[0];
-      const aJwt = await mintUserJwt(url, serviceKey, ownerA.email);
-      const aClient = clientWithJwt(url, anonKey, aJwt);
 
-      // Transfer ownership from A to D — exercises the audit writer and
-      // the mig 075 transfer_workspace_ownership path.
-      const { data: attestationId, error: transferErr } = await aClient.rpc(
+      // Transfer ownership from A to D — exercises the audit writer and the
+      // transfer_workspace_ownership path. Post-mig-092 (#4768) the function is
+      // service-role-only: the authenticated 3-arg overload was DROPPED to close
+      // the #4762 forgeable-caller tenant-takeover class. Production
+      // (server/workspace-membership.ts) now invokes it via the service client
+      // with the verified caller id forwarded as p_caller_user_id; mirror that
+      // here. Calling as an authenticated tenant client now yields 42501.
+      const { data: attestationId, error: transferErr } = await service.rpc(
         "transfer_workspace_ownership",
         {
           p_workspace_id: fixtureX.workspaceId,
           p_new_owner_user_id: dId,
           p_attestation_text: "test-ownership-transfer-3.2.4-fixture",
+          p_caller_user_id: ownerA.userId,
         },
       );
       expect(transferErr, `transfer_workspace_ownership failed: ${transferErr?.message}`).toBeNull();

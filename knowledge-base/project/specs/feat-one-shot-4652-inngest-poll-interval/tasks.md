@@ -38,7 +38,7 @@ Derived from `2026-05-30-feat-inngest-poll-interval-watchdog-simplification-plan
 - [ ] 3.6 Keep the Sentry heartbeat step (`:531-539`) EXACTLY as-is (`ok = defectCount === 0`).
 - [ ] 3.7 Rewrite the header comment (`:1-34`, esp. RE-SYNC ASYMMETRY `:19-23`) + inline `:368-370` for the polling-backstop model. Remove all "no `--poll-interval`" claims.
 
-## Phase 4 — Runbook H9 (`knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md`)
+## Phase 4 — Runbook H9 (`knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md`)
 
 - [ ] 4.1 Update H9a entry (`:272-275`): poll re-syncs a dropped function within ≤60s; restart is the backstop only.
 - [ ] 4.2 Update "Distinguishing"/"Restore" framing: primary restore is "wait one poll interval (≤60s) and re-query `/v1/functions`".
@@ -59,5 +59,5 @@ Derived from `2026-05-30-feat-inngest-poll-interval-watchdog-simplification-plan
 - [ ] 6.1 `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-inngest-cron-watchdog.test.ts test/server/inngest/cron-inngest-cron-watchdog-handler.test.ts test/server/inngest/function-registry-count.test.ts` (do NOT use `bun test`).
 - [ ] 6.2 `bash apps/web-platform/infra/inngest.test.sh && bash apps/web-platform/infra/ci-deploy.test.sh && bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh`.
 - [ ] 6.3 `tsc --noEmit` clean.
-- [ ] 6.4 `grep -rn "no .--poll-interval" apps/web-platform/server/inngest/ knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` returns zero (AC8).
+- [ ] 6.4 `grep -rn "no .--poll-interval" apps/web-platform/server/inngest/ knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` returns zero (AC8).
 - [ ] 6.5 PR body uses `Closes #4652`. Document the Phase 1.2 decision. Note AC11 post-merge: verify whether inngest bootstrap image auto-builds+deploys on merge or is tag-gated (`hr-tagged-build-workflow-needs-initial-tag-push`); if tag-gated, prescribe `gh workflow run` in ship, NOT SSH.

@@ -25,9 +25,33 @@ describe("OrgSwitcher", () => {
     vi.restoreAllMocks();
   });
 
-  it("AC-C: renders nothing when user belongs to only 1 organization", () => {
-    const { container } = render(<OrgSwitcher memberships={[JIKIGAI]} />);
-    expect(container).toBeEmptyDOMElement();
+  it("RQ7: a solo user (1 org) sees a NON-interactive identity chip with the workspace name, no switcher", () => {
+    render(<OrgSwitcher memberships={[JIKIGAI]} />);
+    // name visible for orientation
+    expect(screen.getByTestId("workspace-identity-static")).toHaveTextContent(
+      "jikigai",
+    );
+    // ...but no interactive switch affordance (nothing to switch to)
+    expect(
+      screen.queryByRole("button", { name: /switch workspace/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("AC4/AC5 (solo): the static chip folds in the repo subtitle and drops the role from the face", () => {
+    render(<OrgSwitcher memberships={[JIKIGAI]} repoName="jikig-ai/soleur" />);
+    const chip = screen.getByTestId("workspace-identity-static");
+    // repo subtitle is the muted second line, inside the chip
+    const subtitle = within(chip).getByTestId("live-repo-badge");
+    expect(subtitle).toHaveTextContent("jikig-ai/soleur");
+    // role no longer clutters the face (it's a solo Owner — no info loss)
+    expect(chip.textContent).not.toContain("Owner");
+  });
+
+  it("solo chip renders no subtitle when no repo is connected (compact, Open Q1)", () => {
+    render(<OrgSwitcher memberships={[JIKIGAI]} repoName={null} />);
+    const chip = screen.getByTestId("workspace-identity-static");
+    expect(within(chip).queryByTestId("live-repo-badge")).toBeNull();
+    expect(chip).toHaveTextContent("jikigai");
   });
 
   it("AC-C: renders nothing when memberships list is empty", () => {
@@ -35,12 +59,25 @@ describe("OrgSwitcher", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("renders chip with current-org name + role badge when count > 1", () => {
-    render(<OrgSwitcher memberships={[JIKIGAI, ACME]} />);
+  it("AC3/AC5 (multi-org): the closed chip shows name + repo subtitle, NOT the role on the face", () => {
+    render(
+      <OrgSwitcher memberships={[JIKIGAI, ACME]} repoName="jikig-ai/soleur" />,
+    );
     const trigger = screen.getByRole("button", { name: /switch workspace/i });
     expect(trigger).toBeInTheDocument();
     expect(trigger.textContent).toContain("jikigai");
-    expect(trigger.textContent).toContain("Owner");
+    // repo subtitle folded into the closed pill face
+    const subtitle = within(trigger).getByTestId("live-repo-badge");
+    expect(subtitle).toHaveTextContent("jikig-ai/soleur");
+    // role moved OFF the face (it now lives only in the dropdown rows)
+    expect(trigger.textContent).not.toContain("Owner");
+  });
+
+  it("multi-org chip renders no subtitle when no repo is connected (Open Q1)", () => {
+    render(<OrgSwitcher memberships={[JIKIGAI, ACME]} repoName={null} />);
+    const trigger = screen.getByRole("button", { name: /switch workspace/i });
+    expect(within(trigger).queryByTestId("live-repo-badge")).toBeNull();
+    expect(trigger.textContent).toContain("jikigai");
   });
 
   it("dropdown lists all memberships with role + member count when chip is clicked", () => {
@@ -82,4 +119,21 @@ describe("OrgSwitcher", () => {
     fireEvent.click(within(menu).getByText("jikigai"));
     expect(onSwitch).not.toHaveBeenCalled();
   });
+
+  it("AC4: dropdown menu is left-anchored (no left-clip classes)", () => {
+    render(<OrgSwitcher memberships={[JIKIGAI, ACME]} />);
+    fireEvent.click(screen.getByRole("button", { name: /switch workspace/i }));
+    const menu = screen.getByRole("menu");
+    // The clip-prone centered pattern must be gone...
+    expect(menu.className).not.toContain("left-1/2");
+    expect(menu.className).not.toContain("-translate-x-1/2");
+    // ...replaced by the verified left-anchor precedent.
+    expect(menu.className).toContain("left-0");
+    expect(menu.className).toContain("top-full");
+  });
+
+  // AC7 note: the switcher renders whatever organizationName the resolver
+  // supplies (covered by the render tests above). The "Untitled" fallback is
+  // owned by the resolver, NOT this component — that arm is tested directly in
+  // test/org-memberships-resolver.test.ts (feat-one-shot-workspace-untitled-name).
 });

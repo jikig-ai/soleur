@@ -218,16 +218,34 @@ export default function DashboardPage() {
     let cancelled = false;
     const supabase = createClient();
     (async () => {
+      // ADR-044 (#4543): the repo-disconnected hint must reflect the ACTIVE
+      // workspace's repo, not the caller's own `users.repo_url`. For an invited
+      // member, their own row is the empty solo row, so reading it would render
+      // a spurious "your repository is disconnected" hint while they view a
+      // workspace whose repo IS connected. /api/workspace/active-repo is already
+      // active-workspace-aware (claim → solo fallback, never a sibling).
+      let repoUrl: string | null = null;
+      try {
+        const res = await fetch("/api/workspace/active-repo");
+        if (res.ok) {
+          const data = (await res.json()) as { repoUrl?: string | null };
+          repoUrl = data.repoUrl ?? null;
+        }
+      } catch {
+        return; // Network drop — suppress the hint rather than show a false one.
+      }
+      if (cancelled || repoUrl) return; // Active workspace connected — no hint.
       const { data: auth } = await supabase.auth.getUser();
       if (!auth.user) return;
-      const { data: userRow } = await supabase
-        .from("users")
-        .select("repo_url")
-        .eq("id", auth.user.id)
-        .maybeSingle();
-      const repoUrl = (userRow?.repo_url as string | null | undefined) ?? null;
-      if (repoUrl) return; // Connected — no hint needed.
       // `count=exact head=true` — row-less query, just the total.
+      // INTENTIONALLY cross-workspace (workspace-scoping audit, 2026-06-02):
+      // this hint fires ONLY when the ACTIVE workspace has no connected repo
+      // (guarded by the `repoUrl` check above). The count is a coarse "you have
+      // conversations from a repo connected in ANOTHER of your workspaces —
+      // reconnect" nudge, so scoping it to the active workspace would make it
+      // ~0 and useless. It is the user's OWN non-sensitive row count (no
+      // content, no cross-tenant data) — not a leak. Do not add a workspace_id
+      // filter here without re-deriving the nudge's purpose.
       const { count } = await supabase
         .from("conversations")
         .select("id", { count: "exact", head: true })
@@ -484,12 +502,16 @@ export default function DashboardPage() {
             <p className="mb-2 text-xs text-red-400">{attachError}</p>
           )}
 
-          <div className="flex items-center gap-3">
+          {/* Unified input box: the paperclip + send controls live *inside* one
+              bordered container alongside the borderless input — mirrors the
+              shared ChatInput (chat-input.tsx) ChatGPT-style box so the
+              dashboard landing prompt matches the chat and KB surfaces. */}
+          <div className="flex items-end gap-1.5 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-2 py-1.5 transition-shadow focus-within:border-soleur-border-emphasized">
             {/* Paperclip / attach button */}
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl border border-soleur-border-default text-soleur-text-secondary transition-colors hover:border-soleur-border-default hover:text-soleur-text-primary"
+              className="flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-lg text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
               aria-label="Attach files"
             >
               <svg className="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -508,23 +530,25 @@ export default function DashboardPage() {
               }}
             />
 
-            <input
-              name="idea"
-              type="text"
-              placeholder="What are you building?"
-              autoFocus
-              className="min-h-[44px] flex-1 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted focus:border-soleur-border-default focus:outline-none"
-              onPaste={(e) => {
-                const files = Array.from(e.clipboardData.files);
-                if (files.length > 0) {
-                  e.preventDefault();
-                  validateAndAddFiles(files);
-                }
-              }}
-            />
+            <div className="flex-1">
+              <input
+                name="idea"
+                type="text"
+                placeholder="What are you building?"
+                autoFocus
+                className="min-h-[36px] w-full border-none bg-transparent px-1 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted focus:outline-none"
+                onPaste={(e) => {
+                  const files = Array.from(e.clipboardData.files);
+                  if (files.length > 0) {
+                    e.preventDefault();
+                    validateAndAddFiles(files);
+                  }
+                }}
+              />
+            </div>
             <button
               type="submit"
-              className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl bg-amber-600 text-soleur-text-on-accent transition-colors hover:bg-amber-500"
+              className="flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-lg bg-amber-600 text-soleur-text-on-accent transition-colors hover:bg-amber-500"
               aria-label="Send message"
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -572,7 +596,7 @@ export default function DashboardPage() {
         <button
           type="button"
           onClick={() => router.push("/dashboard/chat/new")}
-          className="mb-10 rounded-lg bg-gradient-to-r from-[#D4B36A] to-[#B8923E] px-6 py-3 text-sm font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90"
+          className="mb-10 rounded-lg bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-6 py-3 text-sm font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90"
         >
           New conversation
         </button>
@@ -691,7 +715,7 @@ export default function DashboardPage() {
         <button
           type="button"
           onClick={() => router.push("/dashboard/chat/new")}
-          className="min-h-[44px] rounded-lg bg-gradient-to-r from-[#D4B36A] to-[#B8923E] px-4 py-2 text-sm font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90"
+          className="min-h-[44px] rounded-lg bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-4 py-2 text-sm font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90"
         >
           + New conversation
         </button>

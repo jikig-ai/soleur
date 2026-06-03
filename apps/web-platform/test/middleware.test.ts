@@ -40,6 +40,24 @@ describe("middleware path routing", () => {
       expect(isPublicPath("/api/internal/kb-drift-ingest")).toBe(true);
     });
 
+    test("/api/internal/trigger-cron is public (Bearer-gated by route, not Supabase)", () => {
+      // route.ts verifies INNGEST_MANUAL_TRIGGER_SECRET via length-guarded
+      // timingSafeEqual before any dispatch. The operator/agent caller carries
+      // no session cookie, so Supabase middleware would 307→/login and the
+      // Bearer gate would never run (the post-merge AC4 curl would get a
+      // redirect, not 202). Same regression class as #4017 / kb-drift-ingest.
+      expect(isPublicPath("/api/internal/trigger-cron")).toBe(true);
+    });
+
+    test("/api/internal/schedule-reminder is public (Bearer-gated by route, not Supabase)", () => {
+      // Same class as trigger-cron: secret-gated, cookieless operator/agent
+      // caller. Without this, Supabase middleware 307→/login before the route's
+      // own timingSafeEqual gate runs. The bare /api/internal parent stays
+      // private (narrow exact path — no /api/internal session-bypass).
+      expect(isPublicPath("/api/internal/schedule-reminder")).toBe(true);
+      expect(isPublicPath("/api/internal")).toBe(false);
+    });
+
     test("public path sub-routes are allowed", () => {
       expect(isPublicPath("/api/webhooks/stripe")).toBe(true);
       expect(isPublicPath("/callback/")).toBe(true);

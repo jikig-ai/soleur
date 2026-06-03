@@ -58,7 +58,7 @@ Ran the planned-file overlap check against open `code-review` issues:
 
 ```bash
 gh issue list --label code-review --state open --json number,title,body --limit 200 > /tmp/open-review-issues.json
-for path in scripts/lint-bot-synthetic-completeness.sh scripts/lint-bot-synthetic-statuses.sh plugins/soleur/test/lint-bot-synthetic-statuses.test.sh plugins/soleur/test/lint-bot-synthetic-completeness.test.sh knowledge-base/engineering/ops/runbooks/lint-bot-statuses.md; do
+for path in scripts/lint-bot-synthetic-completeness.sh scripts/lint-bot-synthetic-statuses.sh plugins/soleur/test/lint-bot-synthetic-statuses.test.sh plugins/soleur/test/lint-bot-synthetic-completeness.test.sh knowledge-base/engineering/operations/runbooks/lint-bot-statuses.md; do
   jq -r --arg p "$path" '.[] | select(.body // "" | contains($p)) | "#\(.number): \(.title)"' /tmp/open-review-issues.json
 done
 ```
@@ -94,7 +94,7 @@ done
 - [x] `plugins/soleur/test/lint-bot-synthetic-statuses.test.sh` extended with at least one new test case covering a non-`scheduled-*` filename with `gh pr create` and `[skip ci]` — must fail. One case is sufficient because the statuses lint has no synthetic-posting complexity to fork on filename prefix.
 - [x] Lint scripts and tests pass locally: `bash scripts/lint-bot-synthetic-completeness.sh && bash scripts/lint-bot-synthetic-statuses.sh && bash plugins/soleur/test/lint-bot-synthetic-completeness.test.sh && bash plugins/soleur/test/lint-bot-synthetic-statuses.test.sh` all exit 0.
 - [x] `.github/workflows/ci.yml` `lint-bot-statuses` job continues to pass on the PR.
-- [x] `knowledge-base/engineering/ops/runbooks/lint-bot-statuses.md` updated to drop the "Is not: A check on non-`scheduled-*.yml` workflows" caveat and update "The as-built behavior" to describe content-based detection.
+- [x] `knowledge-base/engineering/operations/runbooks/lint-bot-statuses.md` updated to drop the "Is not: A check on non-`scheduled-*.yml` workflows" caveat and update "The as-built behavior" to describe content-based detection.
 - [x] PR body uses `Closes #3548` on its own line.
 
 ### Post-merge (operator)
@@ -107,7 +107,7 @@ done
 - `scripts/lint-bot-synthetic-completeness.sh` — replace `PATTERN="scheduled-*.yml"` glob with content-based enumeration; add `has_inline_check_runs_post` helper; thread `skill-security-scan-pr-trailer.yml` exclusion through the loop.
 - `scripts/lint-bot-synthetic-statuses.sh` — replace `PATTERN="scheduled-*.yml"` glob with `.github/workflows/*.yml` walk + `skill-security-scan-pr-trailer.yml` exclusion. (Simpler than the completeness widening — no synthetic-posting heuristic needed.)
 - `plugins/soleur/test/lint-bot-synthetic-statuses.test.sh` — add Test 8 covering a non-`scheduled-*` filename with `[skip ci]`. Add Test 9 confirming `skill-security-scan-pr-trailer.yml` is excluded.
-- `knowledge-base/engineering/ops/runbooks/lint-bot-statuses.md` — update §"Is not" (drop the `scheduled-*.yml`-only caveat), §"The as-built behavior" (describe content-based detection), §"How to extend / Adding a new bot workflow" (drop the `scheduled-*` filename convention mention).
+- `knowledge-base/engineering/operations/runbooks/lint-bot-statuses.md` — update §"Is not" (drop the `scheduled-*.yml`-only caveat), §"The as-built behavior" (describe content-based detection), §"How to extend / Adding a new bot workflow" (drop the `scheduled-*` filename convention mention).
 
 ## Files to Create
 
@@ -162,7 +162,7 @@ done
 
 ### Phase 5 — Runbook update
 
-1. Edit `knowledge-base/engineering/ops/runbooks/lint-bot-statuses.md`:
+1. Edit `knowledge-base/engineering/operations/runbooks/lint-bot-statuses.md`:
    - §"Is not" — delete the third bullet ("A check on non-`scheduled-*.yml` workflows…").
    - §"The as-built behavior / `lint-bot-synthetic-completeness.sh`" — change "Greps each `.github/workflows/scheduled-*.yml` file for `gh pr create`" to "Walks `.github/workflows/*.yml`, excludes `skill-security-scan-pr-trailer.yml`, and applies the content-based predicate (shell `gh pr create` AND inline `gh api .../check-runs`)."
    - §"How to extend / Adding a new bot workflow" — drop the "Create `.github/workflows/scheduled-<feature>.yml`" filename hint; replace with "Create `.github/workflows/<feature>.yml` (any filename other than `skill-security-scan-pr-trailer.yml`)."

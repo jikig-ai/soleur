@@ -11,6 +11,6 @@
 #
 # Copy this file to `knowledge-base/project/promotion-config.yml` (gitignored)
 # and set `enabled: true`. See
-# `knowledge-base/engineering/ops/runbooks/compound-promote-runbook.md`.
+# `knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md`.
 # Default: OFF. Issue: #2720.
 enabled: false

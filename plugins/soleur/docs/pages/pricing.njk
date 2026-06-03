@@ -6,6 +6,8 @@ layout: base.njk
 permalink: pricing/
 ogImage: pricing-og.png
 ogImageAlt: "Soleur Pricing — Every department. One price."
+date: 2026-06-01
+last_updated: 2026-06-01
 ---
 
     <!-- Hero -->
@@ -17,6 +19,8 @@ ogImageAlt: "Soleur Pricing — Every department. One price."
         <p class="hero-stat">{{ stats.agents }} Agents &middot; {{ stats.departments }} Departments &middot; {{ stats.skills }} Skills &middot; Compounding Knowledge</p>
       </div>
     </section>
+
+    {% include "page-freshness.njk" %}
 
     <!-- Waitlist CTA -->
     <section class="landing-cta" id="waitlist">
@@ -135,7 +139,7 @@ ogImageAlt: "Soleur Pricing — Every department. One price."
     <section class="landing-section">
       <div class="landing-section-inner">
         <p class="section-label">Your Organization</p>
-        <h2 class="section-title">Eight departments. {{ stats.agents }} specialists.</h2>
+        <h2 class="section-title">Eight departments. 60+ specialists.</h2>
         <div class="department-roster">
           <div class="department-card">
             <span class="department-icon">&#x1F4BB;</span>
@@ -208,7 +212,8 @@ ogImageAlt: "Soleur Pricing — Every department. One price."
       <div class="landing-section-inner">
         <p class="section-label">Plans</p>
         <h2 class="section-title">Choose your scale. Keep every department.</h2>
-        <p class="section-subtitle">Every plan includes all {{ stats.departments }} departments and {{ stats.agents }} agents. No feature gating by domain. Pick the concurrency that matches your stage.</p>
+        <p class="section-subtitle">Every plan includes all {{ stats.departments }} departments and 60+ agents. No feature gating by domain. Pick the concurrency that matches your stage.</p>
+        <p class="pricing-concurrency-note">A concurrent conversation is one active session with your AI organization &mdash; for example, your marketing agent drafting a launch announcement while your legal agent reviews a contract in a second session. The number below is a soft cap on how many run in parallel, not a limit on which agents you can use: every plan includes every agent.</p>
         <div class="pricing-grid">
 
           <div class="pricing-card">

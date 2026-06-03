@@ -158,7 +158,16 @@ describe("ChatInput — attachments", () => {
         onabort: null,
         status: 200,
       };
-      vi.stubGlobal("XMLHttpRequest", vi.fn(() => mockXhr));
+      // vitest 4: a mock invoked with `new` constructs an instance. Returning
+      // an object from a `function`-keyword constructor makes that object the
+      // instance, so the component's `new XMLHttpRequest()` yields `mockXhr`
+      // and the per-test `mockXhr.send.mockImplementation(...)` triggers fire.
+      vi.stubGlobal(
+        "XMLHttpRequest",
+        vi.fn(function () {
+          return mockXhr;
+        }),
+      );
     });
 
     it("calls onSend with attachments after successful upload", async () => {

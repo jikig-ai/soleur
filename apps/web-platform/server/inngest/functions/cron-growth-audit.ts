@@ -19,6 +19,7 @@ import {
   redactToken,
   mintInstallationToken,
   postSentryHeartbeat,
+  resolveOutputAwareOk,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -122,6 +123,14 @@ export async function cronGrowthAuditHandler({
   step,
   logger,
 }: HandlerArgs): Promise<{ ok: boolean }> {
+  // Run-window start — the lower bound for the post-run output check. Captured
+  // before the mint step (memoized across Inngest replays) so a replay reuses
+  // the original window rather than re-stamping a later "now".
+  const runStartedAt = await step.run(
+    "run-started-at",
+    async () => new Date().toISOString(),
+  );
+
   // --- Step 1: mint installation token (memoized across replays) ---
   const installationToken = await step.run(
     "mint-installation-token",
@@ -192,12 +201,29 @@ export async function cronGrowthAuditHandler({
       );
     }
 
-    // --- Step 4: sentry-heartbeat (final POST) ---
+    // --- Step 4: output-aware heartbeat. This cron is an always-create
+    //     producer — it files a `[Scheduled] Growth Audit - <today>` summary
+    //     issue every run — so a clean exit that produced no
+    //     `scheduled-growth-audit` issue in the run window turns the monitor RED
+    //     (and emits `scheduled-output-missing`) instead of false-green on
+    //     claude's exit code. Mirrors the 3 producers wired by PR #4714 (#4730).
+    //     Infra faults still page via the early-return status=error heartbeats. ---
+    const heartbeatOk = await step.run("verify-output", async () =>
+      resolveOutputAwareOk({
+        spawnOk: spawnResult.ok,
+        label: SENTRY_MONITOR_SLUG,
+        runStartedAt,
+        cronName: "cron-growth-audit",
+        stderrTail: spawnResult.stderrTail,
+        exitCode: spawnResult.exitCode,
+        stdoutTail: spawnResult.stdoutTail,
+      }),
+    );
     await step.run("sentry-heartbeat", async () => {
-      await postSentryHeartbeat({ ok: spawnResult.ok, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-growth-audit", logger });
+      await postSentryHeartbeat({ ok: heartbeatOk, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-growth-audit", logger });
     });
 
-    return { ok: spawnResult.ok };
+    return { ok: heartbeatOk };
   } finally {
     await teardownEphemeralWorkspace(ephemeralRoot, "cron-growth-audit").catch((err) => {
       reportSilentFallback(err, {

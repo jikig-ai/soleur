@@ -190,8 +190,9 @@ function setupSupabaseMockWithStatusCapture(opts: {
   failStatusWriteOnCall?: number;
   /** Custom error to throw from update chain. */
   failWithError?: { message: string };
-} = {}): { updates: UpdateRecord[] } {
+} = {}): { updates: UpdateRecord[]; messageInserts: Array<Record<string, unknown>> } {
   const updates: UpdateRecord[] = [];
+  const messageInserts: Array<Record<string, unknown>> = [];
   let conversationsUpdateCallCount = 0;
 
   mockFrom.mockImplementation((table: string) => {
@@ -305,10 +306,31 @@ function setupSupabaseMockWithStatusCapture(opts: {
           // would shadow that capture.
           return chain;
         }),
+        // SELECT chain for the workspace_id read added to `saveMessage`
+        // by the messages-workspace_id RLS fix:
+        //   .select("workspace_id").eq("id", …).single()
+        select: vi.fn(() => {
+          const selectChain: Record<string, unknown> = {
+            eq: vi.fn(),
+            single: vi.fn(() => ({
+              data: { workspace_id: "ws-final" },
+              error: null,
+            })),
+          };
+          (selectChain.eq as ReturnType<typeof vi.fn>).mockReturnValue(
+            selectChain,
+          );
+          return selectChain;
+        }),
       };
     }
     if (table === "messages") {
-      return { insert: () => ({ error: null }) };
+      return {
+        insert: (row: Record<string, unknown>) => {
+          messageInserts.push(row);
+          return { error: null };
+        },
+      };
     }
     return {
       select: () => ({ eq: () => ({ single: () => ({ data: null, error: null }) }) }),
@@ -317,7 +339,7 @@ function setupSupabaseMockWithStatusCapture(opts: {
     };
   });
 
-  return { updates };
+  return { updates, messageInserts };
 }
 
 // ---------------------------------------------------------------------------
@@ -347,6 +369,23 @@ describe("agent-runner result-branch finalization (AC1/AC6)", () => {
 
     // Slot held — release NOT called from the result-branch path.
     expect(mockReleaseSlot).not.toHaveBeenCalled();
+  });
+
+  test("T3-workspace-id: saveMessage INSERT carries workspace_id from the parent conversation (mig 059 RLS)", async () => {
+    // The assistant-row INSERT in `saveMessage` must carry `workspace_id`
+    // read from the parent conversation so `messages_workspace_member_insert`
+    // WITH CHECK (is_workspace_member(workspace_id, auth.uid())) is satisfied.
+    // The conversations SELECT mock returns "ws-final".
+    const { messageInserts } = setupSupabaseMockWithStatusCapture();
+    mockQuery.mockReturnValue(buildSdkIterator() as never);
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const assistantRows = messageInserts.filter((r) => r.role === "assistant");
+    expect(assistantRows.length).toBeGreaterThan(0);
+    for (const row of assistantRows) {
+      expect(row.workspace_id).toBe("ws-final");
+    }
   });
 
   test("sendToClient throws on stream_end → status finalized + releaseSlot called", async () => {
