@@ -104,4 +104,47 @@ describe("Settings sub-nav lifts into the single nav rail slot (ADR-047)", () =>
     );
     expect(screen.getByTestId("settings-content")).toBeInTheDocument();
   });
+
+  // AC2 — when the unified rail is collapsed, the portaled Settings sub-nav is
+  // DOM-REMOVED (a render-conditional, not display:none) so it cannot clip at
+  // the 56px collapsed rail. The stable wrapper survives both branches so the
+  // present/absent assertion targets exactly one node.
+  it("DOM-removes the settings nav when collapsed (AC2), keeping the stable wrapper", () => {
+    render(
+      <RailSlotHarness collapsed>
+        <SettingsShell>
+          <div>content</div>
+        </SettingsShell>
+      </RailSlotHarness>,
+    );
+    const slot = screen.getByTestId("rail-slot-harness");
+    // Stable wrapper always renders (so the content area can be queried in both
+    // toggle states), but the nav + its tabs are gone.
+    expect(within(slot).getByTestId("settings-rail-nav")).toBeInTheDocument();
+    expect(
+      within(slot).queryByRole("navigation", { name: "Settings" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(slot).queryByRole("link", { name: "General" }),
+    ).not.toBeInTheDocument();
+  });
+
+  // AC4 — the SAME wrapper has the nav PRESENT when expanded (so AC2 is not
+  // satisfied vacuously by an always-empty rail).
+  it("keeps the settings nav present when expanded (AC4)", () => {
+    render(
+      <RailSlotHarness collapsed={false}>
+        <SettingsShell>
+          <div>content</div>
+        </SettingsShell>
+      </RailSlotHarness>,
+    );
+    const wrapper = screen.getByTestId("settings-rail-nav");
+    expect(
+      within(wrapper).getByRole("navigation", { name: "Settings" }),
+    ).toBeInTheDocument();
+    expect(
+      within(wrapper).getByRole("link", { name: "General" }),
+    ).toBeInTheDocument();
+  });
 });
