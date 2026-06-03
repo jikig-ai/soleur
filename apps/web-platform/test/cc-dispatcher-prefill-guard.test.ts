@@ -67,6 +67,19 @@ vi.mock("@/server/sandbox-hook", () => ({
   createSandboxHook: vi.fn(() => async () => ({})),
 }));
 
+// Issue A / Issue B part 2 — these dispatcher deps key off args.userId and are
+// resolved in the cold-start Promise.all. Default to no-connected-repo / off so
+// the prefill-guard behavior under test is unaffected.
+vi.mock("@/server/resolve-installation-id", () => ({
+  resolveInstallationId: vi.fn(async () => null),
+}));
+vi.mock("@/server/github-app", () => ({
+  generateInstallationToken: vi.fn(async () => "ghs_test"),
+}));
+vi.mock("@/server/resolve-bash-autonomous", () => ({
+  resolveBashAutonomous: vi.fn(async () => false),
+}));
+
 vi.mock("@/server/permission-callback", () => ({
   createCanUseTool: vi.fn(() => async () => ({ behavior: "allow" })),
 }));

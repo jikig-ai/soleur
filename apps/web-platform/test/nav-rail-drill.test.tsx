@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 
 // Stable module-level pathname mock — a fresh object each render would refire
 // effects (learning 2026-04-07-userouter-mock-instability). One mutable string.
@@ -192,5 +192,67 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
       </Wrap>,
     );
     expect(screen.queryByTestId("portaled-nav")).not.toBeInTheDocument();
+  });
+});
+
+// Widenable KB rail (amendment): the resize handle renders ONLY in the
+// `drill === "kb" && !collapsed` branch (AC13 KB-only, AC12 collapse-precedence).
+describe("KB rail resize handle gating (AC12/AC13)", () => {
+  beforeEach(() => {
+    mockPathname = "/dashboard";
+    localStorage.clear();
+    vi.stubGlobal("matchMedia", stubMatchMedia);
+  });
+  afterEach(() => {
+    localStorage.clear();
+    vi.unstubAllGlobals();
+  });
+
+  it("renders the resize handle when drilled into KB and expanded", () => {
+    mockPathname = "/dashboard/kb";
+    render(
+      <Wrap>
+        <DashboardLayout>
+          <div>content</div>
+        </DashboardLayout>
+      </Wrap>,
+    );
+    expect(screen.getByTestId("kb-rail-resize-handle")).toBeInTheDocument();
+  });
+
+  it("does NOT render the handle on Settings or Chat drills (KB-only, AC13)", () => {
+    for (const path of ["/dashboard/settings", "/dashboard/chat/x"]) {
+      mockPathname = path;
+      const { unmount } = render(
+        <Wrap>
+          <DashboardLayout>
+            <div>content</div>
+          </DashboardLayout>
+        </Wrap>,
+      );
+      expect(
+        screen.queryByTestId("kb-rail-resize-handle"),
+      ).not.toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it("does NOT render the handle when the rail is collapsed, even on KB (collapse precedence, AC12)", async () => {
+    localStorage.setItem("soleur:sidebar.main.collapsed", "1");
+    mockPathname = "/dashboard/kb";
+    render(
+      <Wrap>
+        <DashboardLayout>
+          <div>content</div>
+        </DashboardLayout>
+      </Wrap>,
+    );
+    // useSidebarCollapse hydrates collapse in a post-mount effect; wait for the
+    // handle to disappear once collapsed=true settles.
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId("kb-rail-resize-handle"),
+      ).not.toBeInTheDocument(),
+    );
   });
 });
