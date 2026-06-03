@@ -3,6 +3,7 @@ title: "sentry phantom-ingest destination unreachable"
 date: 2026-05-16
 incident_pr: 1235
 incident_window: "2026-03-28T18:03:00Z → 2026-05-16T12:50:00Z"
+recovery_at: "2026-05-21T08:30:00Z"
 suspected_change: "PR #1235 introduced Sentry SDK + SENTRY_DSN to Doppler prd on 2026-03-28. DSN points to org ID 4511123328466944 on the de.sentry.io ingest cluster — the destination org is not enumerable, not controllable, and likely orphaned. Phantom-ingest window ≈ 49 days."
 brand_survival_threshold: none
 status: resolved
@@ -34,6 +35,14 @@ classification_override:
 - `agent-with-ack` — Claude Code did this AFTER operator confirmed via menu option per `hr-menu-option-ack-not-prod-write-auth`.
 - `human` — Operator did this directly.
 
+# Incident Overview
+
+A Sentry SDK + DSN introduced by PR #1235 (2026-03-28) pointed runtime error/event ingest at an org the operator could not, at the time, enumerate or administer — a ~49-day "phantom-ingest" window. Phase 9 (2026-05-19) later established via Sentry support + a token-scope probe that both orgs are in fact operator-owned (EU-database), so there was never a third-party recipient and no Art. 33/34 notification was warranted.
+
+## Status
+
+resolved — Gate 1 + Gate 2 closed and Gate 3 resolved as 3b (Phase 9); operator-side cleanup completed 2026-05-21.
+
 ## Symptom
 
 During Phase A2 brainstorm prereq verification (Sentry residency cleanup, follow-up to PR #3863 / issue #3861), an attempt to navigate to https://eu.sentry.io/auth/login/ returned an org-membership banner: "Your account (<operator-email>) is not a member of the eu organization. Ask an organization admin to invite you, or sign in with a different account."
@@ -46,13 +55,30 @@ Adjacent A1 audit script (`apps/web-platform/scripts/sentry-monitors-audit.sh`, 
 
 Discovered when attempting to execute A2.P1 (add payment method to "the DE jikigai org") and A2.P2 (mint DE-scoped SENTRY_AUTH_TOKEN from "the DE jikigai developer-settings") — both prerequisites assumed a controllable DE org that does not exist.
 
-## Root-cause hypothesis
+## Participants and Systems Involved
+
+Operator (single founder) + Claude Code agent (with-ack on cancellations). Systems: Sentry (ingest cluster `de.sentry.io`, dashboard/API hosts, region-router, Internal Integration proxy-user), Doppler `prd` (`SENTRY_DSN` / `SENTRY_AUTH_TOKEN`), GitHub secrets, web-platform runtime.
+
+## Detection (+ MTTD)
+
+- **How detected:** external/manual — surfaced during A2 brainstorm prereq verification (an eu.sentry.io membership wall + region-router 401), not by any monitor.
+- **MTTD (mean time to detect):** ~49 days (2026-03-28T18:03:00Z DSN introduction → 2026-05-16T12:50:00Z surfacing). The audit script shipped by PR #3863 validated DSN host/cluster substring but could not detect destination-org controllability, so the orphan-org *appearance* went unflagged for the lifetime of the DSN.
+
+## Triggered by
+
+provider (Sentry region-routing + ingest permissiveness — well-formed envelopes return 200 regardless of destination-org reachability) + system (PR #1235 DSN introduction without a destination-controllability check).
+
+## Root-cause hypothesis (triage)
 
 | Hypothesis | Supporting evidence | Disconfirming evidence | Status |
 |---|---|---|---|
 | DSN was introduced (PR #1235, 2026-03-28) without verifying destination-org existence or operator-membership; Sentry's region-routing + ingest permissiveness masked the orphan-org state for the lifetime of the DSN. | (1) eu.sentry.io login wall confirms zero EU/DE org membership for operator. (2) Region-router 302→401 pattern confirms no `jikigai` slug on EU edge. (3) Audit script in PR #3863 was designed for substring/cluster validation, not destination-controllability. (4) ADR-031 and the A2 feature description both prescribe a `de.sentry.io/api/0/users/me/` verify probe that returns 404 — the URL itself doesn't exist; the conflation between ingest host and dashboard/API host runs through the prior docs. | TBD — pending Sentry support response on owner-history for org ID 4511123328466944. If org belongs to a third party, escalate to Art 34 (risk_to_subjects → high). | open |
 
-## Timeline
+## Incident Timeline
+
+- **Start time (detected):** 2026-03-28T18:03:00Z (DSN introduction — phantom-ingest window begins)
+- **End time (recovered):** 2026-05-21T08:30:00Z (operator-side cleanup complete)
+- **Duration (MTTR):** N/A — no service outage. Error ingest functioned throughout (the SDK transmitted 200-acknowledged envelopes the entire window); "recovery" is the Phase 9 reattribution to operator-owned orgs + duplicate-org cancellation, not a service restore.
 
 | Actor | Time (UTC) | Action |
 |---|---|---|
@@ -62,6 +88,10 @@ Discovered when attempting to execute A2.P1 (add payment method to "the DE jikig
 | agent-with-ack | 2026-05-16T14:46:00Z | US shadow-org Team subscription cancelled (operator ACK'd, completed in own Chrome). Effective Jun 14 2026; org stays alive on free plan. Stops unrelated PAYG burn but does NOT address phantom-ingest itself. |
 | human | TBD | Sentry support ticket opened asking owner-history for org ID 4511123328466944. |
 | human | TBD | Recovery: runtime DSN rotated to a controllable DE org (per A2 Branch C). Phantom-ingest window closes. |
+
+## Resolution
+
+Runtime cluster surgery (PR-β #3945 + dedup-fix #3954) repointed the runtime `SENTRY_DSN` to the controllable `jikigai-eu` org and added a 4-gate destination-controllability audit; Phase 9 (Sentry support replies + a token-scope probe, 2026-05-19) reattributed both orgs as operator-owned and falsified the third-party-recipient framing; the duplicate operator-owned `jikigai` org was cancelled 2026-05-21 with balance credited to `jikigai-eu`. Full gate-by-gate detail in Phase 8 + Phase 9 below.
 
 ## Recovery verification
 
@@ -83,7 +113,30 @@ TBD. Recovery is bound to A2 brainstorm Branch C (create new DE org under operat
 - [ ] Investigate Sentry's built-in cross-org migration tooling (observed via "If migrating to another existing account, can you provide the org slug?" field on the Team-plan cancellation page) as a possible Branch C alternative to manual DSN swap + fresh tfstate.
 - [ ] After A2 ships and runtime is on new DE org: request Sentry refund for (a) US Team plan unused portion, (b) $5.46 US PAYG burn driven by misaligned IaC, (c) any phantom-window PAYG burn once accounting reconciles.
 
-## Who was affected (by role)
+---
+
+# Incident Post-Mortem Analysis
+
+## Root Cause(s) — 5-Whys
+
+1. **Why did A2 prereq verification fail?** The operator's account showed no membership of the org the runtime DSN targeted (eu.sentry.io membership wall + region-router 401/403).
+2. **Why was there no visible membership?** The runtime `SENTRY_AUTH_TOKEN` is a Sentry **Internal Integration** token authenticating as an auto-generated proxy-user that is a member only of the integration's installation org; against any other slug the membership check returns 401/403 (Phase 9 T4 mechanism).
+3. **Why did this look like an "unowned third-party org"?** Sentry's region-router 302→401 pattern + the proxy-user membership boundary + the `eu.sentry.io` `activeorg`-cookie slug-rewrite bug for `-eu`-suffix slugs combined to make an operator-owned org appear unreachable; the ingest endpoint silently 200s any well-formed envelope regardless of destination reachability, so nothing surfaced the ambiguity at runtime.
+4. **Why was the ambiguity not caught earlier?** PR #1235 introduced the DSN without a destination-controllability check, and the A1 audit script (PR #3863) validated only DSN host/cluster substring, not whether the destination org is admin-controllable.
+5. **Why did the docs reinforce the wrong mental model?** ADR-031 + the A2 feature description + the A1 plan all prescribed a `de.sentry.io/api/0/users/me/` verify probe against an ingest-only host with no API surface (returns 404), conflating ingest vs. dashboard vs. API hosts. Root cause: a DSN was shipped without proving destination-org controllability, and the audit + docs could not distinguish "right cluster, unowned destination" from "right cluster, owned destination."
+
+## Versions of Components
+
+- **Version(s) that triggered the outage:** PR #1235 (2026-03-28) — introduced the Sentry SDK + `SENTRY_DSN` to Doppler `prd` targeting org ID `4511123328466944`.
+- **Version(s) that restored the service:** PR-β #3945 (cluster surgery + 4-gate audit) + dedup-fix #3954; Phase 9 reattribution (2026-05-19) + duplicate-org cancellation (2026-05-21).
+
+## Impact details
+
+### Services Impacted
+
+No service degradation — error/event ingest functioned throughout (the runtime SDK transmitted 200-acknowledged envelopes the entire window). The impact was an *accountability/enumeration* gap (could not, at the time, enumerate or administer the destination org), not an availability or data-loss impact. Phase 9 established the destination was operator-owned the whole time.
+
+### Customer Impact (by role)
 
 Per learning `2026-05-06-user-impact-section-by-role-not-surface.md` — enumerate by USER ROLE, not by surface:
 
@@ -95,6 +148,37 @@ Per learning `2026-05-06-user-impact-section-by-role-not-surface.md` — enumera
 - **OAuth installation owner:** zero external GitHub App installations during window — installations limited to dogfooding orgs the operator administers. Internal team awareness applies.
 
 **Summary:** the affected population during the phantom-ingest window is the internal team (operator + 8 operator-adjacent accounts: founders, team, bot, internal QA / test) plus 2 friends-of-team test signups under operator instruction (per PR-α SQL-count + operator categorization on 2026-05-17). All subjects are operator-adjacent (under contractual or operator-instructed relationship) and either self-aware or directly reachable by team comms. No arms-length external-party exposure has been positively confirmed. The §5(2) accountability concern is the *enumeration gap* (cannot list the processor that received the events), not a confirmed harm to subjects.
+
+### Revenue Impact
+
+Unknown / N/A — pre-revenue; zero billing customers during the window. A small misaligned-IaC Sentry spend ($5.46 US PAYG + a US Team-plan portion) is tracked for refund in Follow-ups, not a customer-facing revenue impact.
+
+### Team Impact
+
+~49-day window of mis-modeled telemetry destination; ~5 days of operator + agent investigation (2026-05-16 → 2026-05-21) across cluster surgery, two support tickets, a token-scope probe, and corpus reconciliation (Article 30 register, ADR-031, audits, learnings).
+
+## Lessons Learned
+
+### Where we got lucky
+
+The affected population was entirely operator-adjacent (operator + 8 operator-adjacent accounts + 2 friends-of-team test signups under operator instruction); zero arms-length external app users were onboarded during the window, and Phase 9 established the destination was operator-owned — so the worst-case "third-party recipient" framing was falsified rather than realized.
+
+### What went well
+
+The A1 residency-cleanup audit muscle from PR #3863 provided the investigation scaffolding; the destination-controllability ambiguity was driven to a definitive Phase 9 resolution (support replies + a minted-and-revoked-within-163s ephemeral probe token) rather than left as a standing residual; and every corpus surface (Article 30, ADR-031, audits) was reconciled in lockstep.
+
+### What went wrong
+
+A DSN shipped (PR #1235) without proving destination-org controllability; the audit (PR #3863) validated only cluster substring, not admin-controllability; and ADR-031 + the A2/A1 docs prescribed a verify probe against an ingest-only host with no API surface, conflating ingest vs. dashboard vs. API hosts and reinforcing the wrong mental model for ~49 days.
+
+## Action Items
+
+GitHub issues / corpus updates to prevent recurrence (map of the open Follow-ups below):
+
+- **Audit gate:** extend `sentry-monitors-audit.sh` with a destination-controllability probe (`/api/0/organizations/<slug>/` → 2xx, not 302→401) — `audit_destination_admin_controllable`.
+- **Documentation:** update ADR-031's stale `de.sentry.io/settings/...` URL + add a "Sentry hosts: ingest vs dashboard vs API" glossary to prevent future host conflation.
+- **Compliance:** Article 30 PA8 §5(2) disclosure of the 2026-03-28 → 2026-05-16 window (CLO sign-off) — recorded via PR-2 UPDATE block.
+- **Billing:** request Sentry refund for the US Team-plan unused portion + $5.46 US PAYG burn driven by misaligned IaC.
 
 ## Phase 8 — Recovery Completeness
 
