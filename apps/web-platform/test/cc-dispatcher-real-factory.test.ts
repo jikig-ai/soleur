@@ -32,6 +32,7 @@ const {
   mockResolveBashAutonomous,
   mockWriteAskpassScriptTo,
   mockCleanupAskpassScript,
+  mockResolveActiveWorkspacePath,
 } = vi.hoisted(() => ({
   mockQuery: vi.fn(),
   mockGetUserApiKey: vi.fn(),
@@ -47,6 +48,7 @@ const {
   mockResolveBashAutonomous: vi.fn(),
   mockWriteAskpassScriptTo: vi.fn(),
   mockCleanupAskpassScript: vi.fn(),
+  mockResolveActiveWorkspacePath: vi.fn(),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -106,6 +108,16 @@ vi.mock("@/server/resolve-bash-autonomous", () => ({
 
 // Session-start ensure-repo self-heal (cold-path deps). Default no-op so the
 // factory-shape tests are unaffected.
+// ADR-044: fetchUserWorkspacePath now resolves the ACTIVE workspace via
+// resolveActiveWorkspacePath. Override only that export (importActual keeps the
+// rest of workspace-resolver real for any other consumer cc-dispatcher pulls).
+vi.mock("@/server/workspace-resolver", async () => {
+  const actual = await vi.importActual<typeof import("@/server/workspace-resolver")>(
+    "@/server/workspace-resolver",
+  );
+  return { ...actual, resolveActiveWorkspacePath: mockResolveActiveWorkspacePath };
+});
+
 vi.mock("@/server/current-repo-url", () => ({
   getCurrentRepoUrl: vi.fn(async () => null),
 }));
@@ -231,6 +243,16 @@ const WORKSPACE_PATH = "/tmp/cc-test-workspace";
 function setupSupabaseMockReturning(
   workspacePath: string | null = WORKSPACE_PATH,
 ) {
+  // ADR-044: the workspace path is resolved via resolveActiveWorkspacePath
+  // (active workspace), not the users.workspace_path read. A null workspacePath
+  // models the legacy "not provisioned" throw the factory's error path expects.
+  if (workspacePath) {
+    mockResolveActiveWorkspacePath.mockResolvedValue(workspacePath);
+  } else {
+    mockResolveActiveWorkspacePath.mockRejectedValue(
+      new Error("Workspace not provisioned"),
+    );
+  }
   mockSupabaseFrom.mockImplementation((table: string) => {
     if (table === "users") {
       return {

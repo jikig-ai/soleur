@@ -7,10 +7,9 @@
 // Extracted from `cc-dispatcher.ts` so the orchestration layer doesn't
 // own filesystem responsibilities on top of SDK Query construction, MCP
 // wiring, BYOK token resolution, bash-approval, and rate-limiting. The
-// per-process `_workspacePathCache` lives here too because it's the
-// resolver's hot path; the cc-dispatcher's `realSdkQueryFactory`
-// re-imports `fetchUserWorkspacePath` from this module so both paths
-// share one cache and one source of truth.
+// cc-dispatcher's `realSdkQueryFactory` re-imports `fetchUserWorkspacePath`
+// from this module so the document resolver and the agent sandbox cwd share
+// one source of truth for the active-workspace path.
 
 import { readFile } from "fs/promises";
 import path from "path";
@@ -21,6 +20,7 @@ import {
   RuntimeAuthError,
 } from "@/lib/supabase/tenant";
 import { reportSilentFallback, mirrorWithDebounce } from "./observability";
+import { resolveActiveWorkspacePath } from "./workspace-resolver";
 import { isPathInWorkspace } from "./sandbox";
 import {
   extractPdfText,
@@ -60,25 +60,35 @@ export const FULL_TEXT_CAP_BYTES = 5 * 1024 * 1024;
 
 // PR-C §2.7 (#3244): module-level service-role lazy singleton retired;
 // `getFreshTenantClient(userId)` has its own per-userId TTL cache, so
-// per-call mint cost is bounded. The workspace_path cache below is
-// orthogonal — it memoizes the VALUE, not the client.
+// per-call mint cost is bounded.
 
-// Per-process memo for `users.workspace_path`. The workspace path is
-// immutable per user lifetime — without this, every Concierge turn re-hits
-// Supabase from `resolveConciergeDocumentContext` even though the answer
-// never changes. Key: userId.
-const _workspacePathCache = new Map<string, string>();
-
+/**
+ * Resolve the on-disk workspace path the Concierge document resolver and the
+ * agent sandbox cwd should operate against.
+ *
+ * ADR-044 (#4543) cutover: this resolves the caller's ACTIVE workspace
+ * (`<WORKSPACES_ROOT>/<active_workspace_id>`, computed) — the SAME source the
+ * UI KB file tree renders from (`resolveActiveWorkspaceKbRoot`). It no longer
+ * reads the legacy `users.workspace_path` column, which is stale/empty for
+ * invited members and for users provisioned after the `users → workspaces`
+ * relocation — the divergence that left the agent blind to the document the
+ * user has open (agent-native parity bug). The membership self-heal inside
+ * `resolveActiveWorkspacePath` fails closed to the solo workspace (never a
+ * sibling), preserving cross-workspace read containment.
+ *
+ * No value cache: unlike the legacy column (immutable per user), the active
+ * workspace can change within a session (workspace switch), so a userId-keyed
+ * memo would serve a stale path after a switch. The underlying reads are a
+ * single indexed `user_session_state` lookup (+ one membership probe only when
+ * the active workspace is non-solo), and `getFreshTenantClient` already TTL-
+ * caches the client itself.
+ *
+ * RLS: the tenant client scopes `user_session_state` to `auth.uid() = user_id`.
+ * `RuntimeAuthError` from `getFreshTenantClient` is the load-bearing "workspace
+ * not provisioned" signal; callers catch it and mirror via
+ * `reportSilentFallback`.
+ */
 export async function fetchUserWorkspacePath(userId: string): Promise<string> {
-  const cached = _workspacePathCache.get(userId);
-  if (cached) return cached;
-  // PR-C §2.7 (#3244): tenant client. RLS on `users` enforces
-  // `auth.uid() = id`. The `.single()` SELECT IS the auth probe (reads
-  // only the caller's own row); RuntimeAuthError from
-  // `getFreshTenantClient` is the load-bearing distinction from
-  // "workspace not provisioned". Surface JWT-mint failure as the same
-  // contract ("Workspace not provisioned") since the caller catches and
-  // mirrors via `reportSilentFallback` in `resolveConciergeDocumentContext`.
   let tenant;
   try {
     tenant = await getFreshTenantClient(userId);
@@ -88,23 +98,18 @@ export async function fetchUserWorkspacePath(userId: string): Promise<string> {
     }
     throw err;
   }
-  const { data, error } = await tenant
-    .from("users")
-    .select("workspace_path")
-    .eq("id", userId)
-    .single();
-  if (error || !data?.workspace_path) {
-    throw new Error("Workspace not provisioned");
-  }
-  const workspacePath = data.workspace_path as string;
-  _workspacePathCache.set(userId, workspacePath);
-  return workspacePath;
+  return resolveActiveWorkspacePath(userId, tenant);
 }
 
-/** Test seam — tests that swap workspace_path between cases drain the
- *  cache to make the swap observable. Production callers never need this. */
+/**
+ * Test seam retained for import-site stability. The per-process workspace-path
+ * value cache was removed in the ADR-044 cutover (the active workspace is
+ * mutable per session), so there is nothing to drain — this is now a no-op.
+ * Kept so the document-resolver test suite that calls it between cases keeps
+ * compiling without a cross-file sweep.
+ */
 export function _resetWorkspacePathCacheForTests(): void {
-  _workspacePathCache.clear();
+  // no-op — value cache removed (see fetchUserWorkspacePath doc-comment).
 }
 
 /**

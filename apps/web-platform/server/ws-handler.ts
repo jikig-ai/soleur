@@ -1092,16 +1092,16 @@ export async function dispatchSoleurGoForConversation(
   }
 
   // 2026-05-06 Bug A1 fix — resolve workspacePath up-front when an
-  // artifact directive is going to be built. The resolver above already
-  // populated the per-process `_workspacePathCache` for non-warm turns
-  // with a contextPath; this fetch is a synchronous map lookup in that
-  // case. For warm turns or no-context dispatches, the runner skips
-  // system-prompt construction entirely (the prompt is baked at cold
-  // construction), so a missing workspacePath here is a no-op. On
-  // failure (DB transient error, missing workspace_path row), fall
-  // through with undefined — the runner's directive builder gracefully
-  // falls back to the relative path, which the Bug A2 sandbox fix
-  // tolerates for in-workspace files.
+  // artifact directive is going to be built. `fetchUserWorkspacePath`
+  // resolves the caller's ACTIVE workspace (ADR-044) — a single indexed
+  // `user_session_state` read (the resolver above made the same call, but
+  // the value is not cached, so this is an independent cheap resolve). For
+  // warm turns or no-context dispatches, the runner skips system-prompt
+  // construction entirely (the prompt is baked at cold construction), so a
+  // missing workspacePath here is a no-op. On failure (DB transient error,
+  // workspace not provisioned), fall through with undefined — the runner's
+  // directive builder gracefully falls back to the relative path, which the
+  // Bug A2 sandbox fix tolerates for in-workspace files.
   let workspacePath: string | undefined;
   if (context?.path && !warmCcQuery) {
     try {
