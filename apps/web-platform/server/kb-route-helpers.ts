@@ -12,12 +12,22 @@ import {
 } from "@/server/observability";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isPathInWorkspace } from "@/server/sandbox";
-import {
-  ERROR_CLASS_NON_FAST_FORWARD,
-  ERROR_CLASS_SYNC_FAILED,
-  type KbSyncErrorClass,
-} from "@/server/session-sync";
+// Type-only import of the SHARED error-class union (the single source of truth
+// in session-sync.ts — do NOT invent a new union). Type-only is load-bearing:
+// a runtime import of session-sync would drag its module-init
+// `createChildLogger("session-sync")` into this file's import graph, breaking
+// the share/upload/delete/rename route tests that mock `@/server/logger`
+// without `createChildLogger` (this file is deliberately decoupled from heavy
+// server modules — see the lazy `git-auth` import note above). The literal
+// values below are checked against this imported union.
+import type { KbSyncErrorClass } from "@/server/session-sync";
 import type { Logger } from "pino";
+
+// Re-declared as local constants typed by the shared union (the union is the
+// source of truth; these are the literal members, NOT a new union). Kept local
+// so this module stays free of a runtime session-sync import.
+const ERROR_CLASS_NON_FAST_FORWARD: KbSyncErrorClass = "non_fast_forward";
+const ERROR_CLASS_SYNC_FAILED: KbSyncErrorClass = "sync_failed";
 
 // git-auth is lazily loaded inside syncWorkspace so that routes which only
 // need authenticateAndResolveKbPath / resolveUserKbRoot don't drag
