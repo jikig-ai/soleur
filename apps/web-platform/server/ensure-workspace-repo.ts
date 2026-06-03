@@ -1,37 +1,30 @@
 import { existsSync } from "node:fs";
-import { rm, rename } from "node:fs/promises";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { rm, rename, cp, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 import { gitWithInstallationAuth } from "@/server/git-auth";
-import { normalizeRepoUrl } from "@/lib/repo-url";
 import { reportSilentFallback } from "@/server/observability";
 import { createChildLogger } from "@/server/logger";
 
 const log = createChildLogger("ensure-workspace-repo");
 
-// Test seams. The orchestration (`ensureWorkspaceRepoCloned`) is unit-tested by
-// stubbing the git/fs mechanics so the decision logic + fail-soft posture are
-// covered without touching real git. Production uses the real implementations.
-type ExecFn = (
-  file: string,
-  args: string[],
-  opts: { timeout?: number },
-) => Promise<{ stdout: string | Buffer }>;
+// Strict github.com HTTPS allowlist. The clone arg is also `--`-guarded against
+// argv flag-smuggling; this format check is defense-in-depth so a malformed /
+// non-github repo_url never reaches `git clone` (review PR #4890, HIGH).
+const GITHUB_HTTPS_REPO_RE =
+  /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(\.git)?$/;
+
+// Test seam: the orchestration (`ensureWorkspaceRepoCloned`) is unit-tested by
+// stubbing the graft mechanic so the decision logic + fail-soft posture are
+// covered without touching real git/fs. Production uses the real implementation.
 type GraftFn = (
   workspacePath: string,
   repoUrl: string,
   installationId: number,
 ) => Promise<void>;
 
-let execFn: ExecFn = promisify(execFile) as unknown as ExecFn;
 let graftFn: GraftFn = realGraftRepoClone;
 
-/** @internal test seam */
-export function __setExecForTests(fn: ExecFn): void {
-  execFn = fn;
-}
 /** @internal test seam */
 export function __setGraftForTests(fn: GraftFn): void {
   graftFn = fn;
@@ -48,19 +41,30 @@ export interface EnsureWorkspaceRepoArgs {
 
 /**
  * Session-start self-heal: ensure the user's connected repo is cloned into their
- * workspace. Generic per-user/per-repo — owner/repo + installation token are the
- * caller's membership-checked values; nothing is hardcoded.
+ * workspace WHEN — and only when — the workspace has NO git repository at all.
+ * Generic per-user/per-repo (owner/repo + installation token are the caller's
+ * membership-checked values; nothing is hardcoded).
  *
- * - Not connected (no installation / no repoUrl) → no-op (Start-Fresh workspaces
- *   correctly have no origin).
- * - Workspace already a clone of the connected repo → no-op (cheap disk + origin read).
- * - Connected but not cloned (no `.git`, or origin mismatch) → graft a fresh authed
- *   clone's `.git` onto the workspace dir and check out the default branch.
- * - Fail-soft: any failure mirrors to Sentry (`cq-silent-fallback-must-mirror-to-sentry`)
- *   and the function resolves — it NEVER throws into the conversation.
+ * SAFETY (review PR #4890 — brand-survival single-user-incident threshold):
+ *   - We ONLY act when `<workspacePath>/.git` is ABSENT (the exact prod symptom:
+ *     "No Git repository found"). When ANY `.git` already exists we NO-OP and
+ *     never touch it. This deliberately does NOT auto-repair an origin mismatch:
+ *     blowing away an existing `.git` could destroy un-pushed commits /
+ *     uncommitted edits, and would clobber a "Start Fresh" workspace (which has
+ *     a `.git` with no origin by design). Repo *reconnect* is the canonical
+ *     `/api/repo/setup` path's job (wipe-and-reclone), not this self-heal.
+ *   - A workspace with no `.git` has no git history to lose → grafting is safe.
+ *   - Fail-soft: any failure mirrors to Sentry
+ *     (`cq-silent-fallback-must-mirror-to-sentry`) and the function resolves —
+ *     it NEVER throws into the conversation.
+ *   - The graft lands `.git` LAST (success sentinel) so a partial failure leaves
+ *     the workspace `.git`-less and the next cold conversation retries — never a
+ *     half-grafted state that the no-op guard would permanently mask.
  *
- * The installation token rides the GIT_ASKPASS env inside `gitWithInstallationAuth`
- * (never embedded in a remote URL, never logged) — `hr-github-app-auth-not-pat`.
+ * The installation token rides GIT_ASKPASS inside `gitWithInstallationAuth`
+ * (never in a remote URL, never logged) — `hr-github-app-auth-not-pat`.
+ * The clone is shallow (`--depth 1`) — a deliberate first-slice limitation
+ * (full-history / branch checkout is follow-up scope).
  */
 export async function ensureWorkspaceRepoCloned(
   args: EnsureWorkspaceRepoArgs,
@@ -68,47 +72,44 @@ export async function ensureWorkspaceRepoCloned(
   const { userId, workspacePath, installationId, repoUrl } = args;
   if (installationId === null || !repoUrl) return; // not connected → nothing to ensure
 
+  // NEVER touch an existing repo (Start-Fresh, already-cloned, or a different
+  // origin the user is intentionally using). Only heal the no-`.git` symptom.
+  if (existsSync(join(workspacePath, ".git"))) return;
+
+  if (!GITHUB_HTTPS_REPO_RE.test(repoUrl)) {
+    reportSilentFallback(new Error("repo_url failed github-https allowlist"), {
+      feature: "ensure-workspace-repo",
+      op: "validate-repo-url",
+      extra: { userId, hasInstallation: true },
+      message: "connected repo_url is not a github.com HTTPS URL; skipping self-heal",
+    });
+    return;
+  }
+
   try {
-    if (existsSync(join(workspacePath, ".git"))) {
-      let originUrl = "";
-      try {
-        const { stdout } = await execFn(
-          "git",
-          ["-C", workspacePath, "remote", "get-url", "origin"],
-          { timeout: 10_000 },
-        );
-        originUrl = stdout.toString().trim();
-      } catch {
-        originUrl = ""; // no origin remote configured
-      }
-      if (normalizeRepoUrl(originUrl) === normalizeRepoUrl(repoUrl)) {
-        return; // already the connected repo → no-op (idempotent)
-      }
-      // .git present but origin missing/mismatched → re-graft the connected repo.
-      await graftFn(workspacePath, repoUrl, installationId);
-      log.info({ userId, action: "repaired-origin" }, "ensure-workspace-repo: repaired");
-      return;
-    }
-    // No `.git` at all → clone the connected repo into the existing workspace dir.
     await graftFn(workspacePath, repoUrl, installationId);
     log.info({ userId, action: "cloned" }, "ensure-workspace-repo: cloned connected repo");
   } catch (err) {
-    // Fail-soft: surface to Sentry, never crash the conversation. Token never logged.
+    // Fail-soft: surface to Sentry, never crash the conversation. The token is
+    // env-only inside gitWithInstallationAuth (never in argv/URL/stderr), so it
+    // cannot ride `err`; the format-validated repoUrl is non-sensitive.
     reportSilentFallback(err, {
       feature: "ensure-workspace-repo",
       op: "clone",
       extra: { userId, hasInstallation: true },
-      message: "ensure-workspace-repo failed; Concierge proceeds degraded (no clone)",
+      message: "ensure-workspace-repo clone failed; Concierge proceeds degraded (no clone)",
     });
   }
 }
 
 /**
- * Graft the connected repo onto an existing (possibly scaffold-populated) workspace
- * dir: clone shallowly into a temp subdir (same filesystem → rename is atomic),
- * move the `.git` onto the workspace, then `checkout -f <defaultBranch>` to
- * materialize tracked files over the scaffold. The token is supplied to the clone
- * via GIT_ASKPASS (env), never embedded in the remote URL.
+ * Clone the connected repo into a workspace dir that currently has NO `.git`
+ * (may hold scaffold dirs like `.claude/`). Retry-safe: clone shallowly into a
+ * temp subdir (same filesystem), materialize the tracked tree over the scaffold,
+ * then move `.git` in LAST so `.git` presence is the all-or-nothing success
+ * sentinel. The token is supplied via GIT_ASKPASS (env) inside
+ * `gitWithInstallationAuth`, never embedded in the remote URL, and `--` guards
+ * the URL arg against flag-smuggling.
  */
 async function realGraftRepoClone(
   workspacePath: string,
@@ -119,30 +120,22 @@ async function realGraftRepoClone(
   await rm(tmp, { recursive: true, force: true });
   try {
     await gitWithInstallationAuth(
-      ["clone", "--depth", "1", repoUrl, tmp],
+      ["clone", "--depth", "1", "--", repoUrl, tmp],
       installationId,
       { timeout: 120_000 },
     );
-    // Capture the default branch from the fresh clone before relocating .git.
-    let defaultBranch = "main";
-    try {
-      const { stdout } = await execFn(
-        "git",
-        ["-C", tmp, "symbolic-ref", "--short", "HEAD"],
-        { timeout: 10_000 },
-      );
-      const b = stdout.toString().trim();
-      if (b) defaultBranch = b;
-    } catch {
-      /* keep "main" fallback */
+    // Materialize the cloned working tree over the scaffold (everything except
+    // .git), overwriting any scaffold path the repo also tracks.
+    for (const entry of await readdir(tmp)) {
+      if (entry === ".git") continue;
+      await cp(join(tmp, entry), join(workspacePath, entry), {
+        recursive: true,
+        force: true,
+      });
     }
-    await rm(join(workspacePath, ".git"), { recursive: true, force: true });
+    // .git LAST — the success sentinel. A failure before this leaves the
+    // workspace `.git`-less so the next cold dispatch retries cleanly.
     await rename(join(tmp, ".git"), join(workspacePath, ".git")); // same fs
-    await execFn(
-      "git",
-      ["-C", workspacePath, "checkout", "-f", defaultBranch],
-      { timeout: 30_000 },
-    );
   } finally {
     await rm(tmp, { recursive: true, force: true }).catch(() => {});
   }
