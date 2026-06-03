@@ -114,7 +114,7 @@ None. No overlap with existing code-review-labeled scope-outs.
 - [ ] **Phase 2.3 (inline workflow updates):** each of `scheduled-content-publisher.yml`, `scheduled-disk-io-24h-recheck.yml`, `scheduled-disk-io-7d-recheck.yml` contains exactly one `name="skill-security-scan PR gate"` line. Verified per file: `grep -c 'skill-security-scan PR gate' .github/workflows/<file>.yml` returns ≥ 1.
 - [ ] **Phase 2.4 (lint passes):** `bash scripts/lint-bot-synthetic-completeness.sh` exits 0 locally; the `lint-bot-statuses` check is green on this PR.
 - [ ] **Phase 3 script created:** `scripts/update-ci-required-ruleset.sh` exists, is `chmod +x`, includes `--dry-run` mode, idempotency check, `set -euo pipefail`, and verbatim copy of `bypass_actors`/`conditions`/`name`/`target`/`enforcement` from the live GET. Verified by `bash scripts/update-ci-required-ruleset.sh --dry-run` printing the expected payload without mutation.
-- [ ] **Runbook created:** `knowledge-base/engineering/ops/runbooks/skill-security-scan-required-check.md` exists with all 7 procedural steps (preflight, dry-run, apply, verify, smoke, close, rollback).
+- [ ] **Runbook created:** `knowledge-base/engineering/operations/runbooks/skill-security-scan-required-check.md` exists with all 7 procedural steps (preflight, dry-run, apply, verify, smoke, close, rollback).
 - [ ] **No bot workflows use `[skip ci]` on PR-creating runs:** `rg "\[skip ci\]" .github/workflows/` returns zero matches. Verified pre-emptively (already true on main — re-verified to catch drift). Per learning `2026-03-20-github-required-checks-skip-ci-synthetic-status.md`.
 - [ ] **Issue link:** PR body uses `Ref #3542` (NOT `Closes #3542`). Actual closure is post-merge after Phase 5. Per `wg-use-closes-n-in-pr-body-not-title-to` and the ops-remediation extension in `/soleur:plan` Sharp Edges.
 - [ ] **Originating-plan retroactive reconciliation:** parent plan line 592 has `[Updated 2026-05-11]` annotation. One-line audit-only edit.
@@ -239,7 +239,7 @@ After Step 2.1 (config update), the lint will detect any workflow missing the ne
 This phase commits **two artifacts** in the PR:
 
 1. `scripts/update-ci-required-ruleset.sh` — idempotent, dry-run-capable script that mutates ruleset #14145388 to add `skill-security-scan PR gate`. Lives next to `scripts/create-ci-required-ruleset.sh` (same here-doc + temp-file pattern).
-2. `knowledge-base/engineering/ops/runbooks/skill-security-scan-required-check.md` — the operator runbook with the exact invocation and verification steps.
+2. `knowledge-base/engineering/operations/runbooks/skill-security-scan-required-check.md` — the operator runbook with the exact invocation and verification steps.
 
 **Script outline (`scripts/update-ci-required-ruleset.sh`):**
 
@@ -328,7 +328,7 @@ fi
 echo "Verification OK."
 ```
 
-**Runbook content (`knowledge-base/engineering/ops/runbooks/skill-security-scan-required-check.md`):**
+**Runbook content (`knowledge-base/engineering/operations/runbooks/skill-security-scan-required-check.md`):**
 
 Step-by-step procedure:
 
@@ -385,7 +385,7 @@ git push origin --delete smoke/test-skill-security-scan-r15
 ## Files to Create
 
 - `scripts/update-ci-required-ruleset.sh` — idempotent, `--dry-run`-capable ruleset mutation script. Sibling to `scripts/create-ci-required-ruleset.sh`, same here-doc + temp-file pattern.
-- `knowledge-base/engineering/ops/runbooks/skill-security-scan-required-check.md` — canonical Phase 3 operator runbook with dry-run, apply, verify, smoke, close, rollback steps.
+- `knowledge-base/engineering/operations/runbooks/skill-security-scan-required-check.md` — canonical Phase 3 operator runbook with dry-run, apply, verify, smoke, close, rollback steps.
 
 ## Files to Edit
 

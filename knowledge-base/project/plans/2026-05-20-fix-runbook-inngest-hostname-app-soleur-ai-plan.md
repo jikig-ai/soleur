@@ -43,7 +43,7 @@ Scope: rename `web-platform.soleur.ai` → `app.soleur.ai` everywhere it appears
 
 | File | Lines |
 | --- | --- |
-| `knowledge-base/engineering/ops/runbooks/inngest-server.md` | 301 |
+| `knowledge-base/engineering/operations/runbooks/inngest-server.md` | 301 |
 | `knowledge-base/project/plans/2026-05-20-feat-one-shot-inngest-cloud-init-iac-plan.md` | 177, 237, 379 |
 
 No app code, IaC, workflow YAML, test fixture, or `apps/**` doc reference the wrong hostname. Cloudflare DNS, Terraform `variables.tf`, sibling runbooks (`stripe-live-activation.md`, `github-app-callback-audit.md`, `oauth-probe-failure.md`) already use the canonical `app.soleur.ai`.
@@ -54,19 +54,19 @@ No app code, IaC, workflow YAML, test fixture, or `apps/**` doc reference the wr
 
 **If this leaks, the user's [data / workflow / money] is exposed via:** N/A — pure docs correction; no data movement, no auth surface, no money flow.
 
-**Brand-survival threshold:** `none`. The runbook lives in `knowledge-base/engineering/ops/runbooks/`, an internal operator-only surface. Wrong hostname is operator-time-wasted, not user-facing. No sensitive-path regex match — no `requires_cpo_signoff` and no scope-out reason needed because no sensitive surface is touched.
+**Brand-survival threshold:** `none`. The runbook lives in `knowledge-base/engineering/operations/runbooks/`, an internal operator-only surface. Wrong hostname is operator-time-wasted, not user-facing. No sensitive-path regex match — no `requires_cpo_signoff` and no scope-out reason needed because no sensitive surface is touched.
 
 ## Research Reconciliation — Spec vs. Codebase
 
 | Claim (from issue body) | Reality (grep on 2026-05-20) | Plan response |
 | --- | --- | --- |
 | "The actual prod hostname is `app.soleur.ai` (per `variables.tf` `app_domain` default)" | Confirmed at `apps/web-platform/infra/variables.tf:85-89` (`variable "app_domain" { default = "app.soleur.ai" }`) | Use `app.soleur.ai` as the canonical replacement. |
-| "Update `knowledge-base/engineering/ops/runbooks/inngest-server.md` (the `## Fresh-host provisioning (#4118)` section) and any other reference" | Grep returns 4 hits in 2 files (1 runbook, 1 plan file under `plans/` — NOT yet under `plans/archive/`) | Fix all 4 hits in the same commit. The merged plan file is historical but not archived; future operators searching by content can still copy-paste the bad URL. Per AGENTS.md `2026-04-29-docs-fix-verification-greps-must-span-operator-surfaces`, operator-facing surfaces include `knowledge-base/project/plans/` outside `archive/`. |
+| "Update `knowledge-base/engineering/operations/runbooks/inngest-server.md` (the `## Fresh-host provisioning (#4118)` section) and any other reference" | Grep returns 4 hits in 2 files (1 runbook, 1 plan file under `plans/` — NOT yet under `plans/archive/`) | Fix all 4 hits in the same commit. The merged plan file is historical but not archived; future operators searching by content can still copy-paste the bad URL. Per AGENTS.md `2026-04-29-docs-fix-verification-greps-must-span-operator-surfaces`, operator-facing surfaces include `knowledge-base/project/plans/` outside `archive/`. |
 | "Verify by grepping `grep -rE 'web-platform\.soleur\.ai' knowledge-base/` — every hit needs the swap" | 4 hits, all enumerated above | Acceptance Criteria includes the grep with expected `0` lines after the fix. |
 
 ## Files to Edit
 
-- `knowledge-base/engineering/ops/runbooks/inngest-server.md` — line 301 (verification `curl` URL in the `## Fresh-host provisioning (#4118)` section). The surrounding context (`### Verification (no SSH required)`) describes the verification step; the URL on the next line is the only token requiring change. No prose or AC re-flow needed.
+- `knowledge-base/engineering/operations/runbooks/inngest-server.md` — line 301 (verification `curl` URL in the `## Fresh-host provisioning (#4118)` section). The surrounding context (`### Verification (no SSH required)`) describes the verification step; the URL on the next line is the only token requiring change. No prose or AC re-flow needed.
 - `knowledge-base/project/plans/2026-05-20-feat-one-shot-inngest-cloud-init-iac-plan.md` — lines 177, 237, 379 (verification `curl` URL appears three times: once in implementation prose, once in AC-post-1 body, once in a fenced code block). Same one-token swap; no prose re-flow.
 
 ## Files to Create
@@ -88,7 +88,7 @@ grep -rE 'web-platform\.soleur\.ai' knowledge-base/
 
 # Spot-check the canonical hostname now appears at the same sites:
 grep -nE 'app\.soleur\.ai/api/inngest' \
-  knowledge-base/engineering/ops/runbooks/inngest-server.md \
+  knowledge-base/engineering/operations/runbooks/inngest-server.md \
   knowledge-base/project/plans/2026-05-20-feat-one-shot-inngest-cloud-init-iac-plan.md
 # Expected output: 4 lines (1 in runbook, 3 in plan).
 ```
@@ -98,12 +98,12 @@ grep -nE 'app\.soleur\.ai/api/inngest' \
 ### Pre-merge (PR)
 
 - [ ] **AC1.** `grep -rE 'web-platform\.soleur\.ai' knowledge-base/ --exclude-dir=feat-one-shot-runbook-hostname-4159 --exclude=2026-05-20-fix-runbook-inngest-hostname-app-soleur-ai-plan.md` returns no lines (exit code 1). The exclusions cover this fix plan and `tasks.md`, both of which intentionally retain the literal bad string in prose describing the rename (meta-documentation, not operator-actionable). Verified post-edit by the implementer.
-- [ ] **AC2.** `grep -cE 'app\.soleur\.ai/api/inngest' knowledge-base/engineering/ops/runbooks/inngest-server.md` returns `1`.
+- [ ] **AC2.** `grep -cE 'app\.soleur\.ai/api/inngest' knowledge-base/engineering/operations/runbooks/inngest-server.md` returns `1`.
 - [ ] **AC3.** `grep -cE 'app\.soleur\.ai/api/inngest' knowledge-base/project/plans/2026-05-20-feat-one-shot-inngest-cloud-init-iac-plan.md` returns `3`.
 - [ ] **AC4.** No other file is modified in this PR. `git diff --name-only main...HEAD | sort` returns EXACTLY:
 
   ```
-  knowledge-base/engineering/ops/runbooks/inngest-server.md
+  knowledge-base/engineering/operations/runbooks/inngest-server.md
   knowledge-base/project/plans/2026-05-20-feat-one-shot-inngest-cloud-init-iac-plan.md
   knowledge-base/project/plans/2026-05-20-fix-runbook-inngest-hostname-app-soleur-ai-plan.md
   knowledge-base/project/specs/feat-one-shot-runbook-hostname-4159/tasks.md
@@ -159,9 +159,9 @@ The issue is labeled `priority/p3-low` but the cost of fix is ~2 edits and the c
 
 1. Read `apps/web-platform/infra/variables.tf:85-89` — confirmed `app_domain` default = `app.soleur.ai`.
 2. `grep -rn 'web-platform\.soleur\.ai' .` (excluding `.git`/`node_modules`/`_site`/`.next`) — 4 hits, enumerated above.
-3. `grep -rn 'app\.soleur\.ai' apps/web-platform/infra/ knowledge-base/engineering/ops/runbooks/` — confirmed canonical hostname appears in 6+ sibling locations.
+3. `grep -rn 'app\.soleur\.ai' apps/web-platform/infra/ knowledge-base/engineering/operations/runbooks/` — confirmed canonical hostname appears in 6+ sibling locations.
 4. `gh issue view 4159` — confirmed scope, labels, AC text.
-5. `git log --oneline -10 -- knowledge-base/engineering/ops/runbooks/inngest-server.md` — confirmed PR #4148 (`f2b2f959`) introduced the wrong hostname.
+5. `git log --oneline -10 -- knowledge-base/engineering/operations/runbooks/inngest-server.md` — confirmed PR #4148 (`f2b2f959`) introduced the wrong hostname.
 6. `gh issue list --label code-review --state open` matched against edited file paths — zero overlap.
 
 ## Deepen-pass verifications run

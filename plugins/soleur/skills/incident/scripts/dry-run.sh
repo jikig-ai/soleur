@@ -194,7 +194,7 @@ echo
 
 # --- Phase 3: runbook routing (dry-run prints would-be matches) ---
 echo "=== Phase 3: runbook routing ==="
-runbook_dir="${REPO_ROOT}/knowledge-base/engineering/ops/runbooks"
+runbook_dir="${REPO_ROOT}/knowledge-base/engineering/operations/runbooks"
 if [[ -d "${runbook_dir}" ]]; then
   echo "  [dry-run] selected triggers (from fixture): ${triggers_csv}"
 else
@@ -426,7 +426,7 @@ echo "    input 'yes'        → REJECTED. Type exactly: COMMIT-PIR"
 echo "    input 'y'          → REJECTED. Type exactly: COMMIT-PIR"
 echo "    input 'ok'         → REJECTED. Type exactly: COMMIT-PIR"
 echo "    input 'approved'   → REJECTED. Type exactly: COMMIT-PIR"
-echo "    input 'COMMIT-PIR' → would write knowledge-base/engineering/ops/post-mortems/${slug}-postmortem.md"
+echo "    input 'COMMIT-PIR' → would write knowledge-base/engineering/operations/post-mortems/${slug}-postmortem.md"
 echo
 
 # --- Phase 8: status: resolved gate + compound-capture handoff (AC13) ---

@@ -345,7 +345,7 @@ Create `knowledge-base/project/learnings/2026-03-21-cloudflare-service-token-rot
 - [x] Workflow creates a GitHub issue when token is within 30 days of expiry
 - [x] Workflow deduplicates issues (doesn't create a second if one is open)
 - [x] Workflow closes stale issues when token is refreshed
-- [x] Rotation runbook exists in `knowledge-base/engineering/ops/runbooks/`
+- [x] Rotation runbook exists in `knowledge-base/engineering/operations/runbooks/`
 - [ ] `terraform apply` succeeds (notification policy created)
 - [ ] Workflow validated via `gh workflow run` before enabling cron schedule
 

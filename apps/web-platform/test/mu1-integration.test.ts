@@ -11,7 +11,7 @@
 //
 // See:
 //   - knowledge-base/project/plans/2026-04-18-ops-verify-signup-workspace-provisioning-plan.md
-//   - knowledge-base/engineering/ops/runbooks/mu1-signup-workspace-verification.md
+//   - knowledge-base/engineering/operations/runbooks/mu1-signup-workspace-verification.md
 
 import { tmpdir } from "os";
 import { mkdtempSync, existsSync, readlinkSync, readdirSync } from "fs";
@@ -180,7 +180,7 @@ describe.skipIf(process.env.MU1_INTEGRATION !== "1")(
 // Gated on MU1_FIXTURE_REPO_URL + MU1_FIXTURE_INSTALLATION_ID. Orthogonal to
 // AC-1's MU1_INTEGRATION gate (AC-1 needs dev Supabase; AC-2 needs GitHub App
 // creds + a public fixture repo). See #2605 and
-// knowledge-base/engineering/ops/runbooks/mu1-signup-workspace-verification.md.
+// knowledge-base/engineering/operations/runbooks/mu1-signup-workspace-verification.md.
 // ---------------------------------------------------------------------------
 
 // Partial-provisioning canary. If exactly one of the two fixture env vars is

@@ -17,7 +17,7 @@
 # Tested via apps/cla-evidence/scripts/gdpr-override.test.sh (dry-run, all
 # network IO stubbed via PATH-shadowed curl/aws/doppler).
 #
-# Runbook: knowledge-base/engineering/ops/runbooks/cla-signature-evidence-retrieval.md §7
+# Runbook: knowledge-base/engineering/operations/runbooks/cla-signature-evidence-retrieval.md §7
 
 # Suppress xtrace immediately — protects secrets if invoked with `bash -x`
 # (see TS-OVERRIDE.j). Redirect silences the `set +x` echo itself.

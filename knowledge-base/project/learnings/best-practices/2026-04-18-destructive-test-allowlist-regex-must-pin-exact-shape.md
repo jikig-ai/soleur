@@ -104,4 +104,4 @@ simplicity reviewer caught the miss in the same session.
 - AGENTS.md rule `cq-destructive-prod-tests-allowlist`
 - PR #2597 review commit `8d67b6b3`
 - Test: `apps/web-platform/test/mu1-integration.test.ts`
-- Runbook: `knowledge-base/engineering/ops/runbooks/mu1-signup-workspace-verification.md`
+- Runbook: `knowledge-base/engineering/operations/runbooks/mu1-signup-workspace-verification.md`

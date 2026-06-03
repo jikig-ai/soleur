@@ -13,7 +13,7 @@ root_cause: config_error
 resolution_type: workflow_improvement
 severity: high
 date: 2026-05-18
-incident_ref: knowledge-base/engineering/ops/post-mortems/soleur-ai-marketing-site-cloudflare-526-ssl-outage-2026-05-18-postmortem.md
+incident_ref: knowledge-base/engineering/operations/post-mortems/soleur-ai-marketing-site-cloudflare-526-ssl-outage-2026-05-18-postmortem.md
 synced_to: [terraform-architect, infra-security]
 rtd_issue: https://github.com/jikig-ai/soleur/issues/4004 https://github.com/jikig-ai/soleur/issues/4005
 ---
@@ -59,4 +59,4 @@ The window during which records are unproxied is short (CF dashboard reports cer
 - [GitHub Pages + Cloudflare Custom Domain Wiring](./2026-02-16-github-pages-cloudflare-wiring-workflow.md) — original wiring blockers; this learning adds the cert-renewal-time variant
 - [Cloudflare Dynamic-Redirect Skip Action Invalid](./2026-05-18-cloudflare-dynamic-redirect-skip-action-invalid.md) — sibling learning from the same recovery
 - [Cloudflare One User-Defined Ruleset per Zone+Phase](./2026-05-18-cloudflare-one-user-defined-ruleset-per-zone-phase.md) — sibling learning from the same recovery
-- Source incident: [soleur.ai 2026-05-18 SSL outage PIR](../../../engineering/ops/post-mortems/soleur-ai-marketing-site-cloudflare-526-ssl-outage-2026-05-18-postmortem.md)
+- Source incident: [soleur.ai 2026-05-18 SSL outage PIR](../../../engineering/operations/post-mortems/soleur-ai-marketing-site-cloudflare-526-ssl-outage-2026-05-18-postmortem.md)

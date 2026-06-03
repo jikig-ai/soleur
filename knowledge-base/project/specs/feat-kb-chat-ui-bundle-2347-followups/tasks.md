@@ -43,7 +43,7 @@ Derived from `knowledge-base/project/plans/2026-04-17-fix-kb-chat-ui-bundle-2347
 
 ## 6. Phase 6 — #2390 10C Supabase-migrations runbook
 
-- [ ] 6.1 Create `knowledge-base/engineering/ops/runbooks/supabase-migrations.md` with pre-deploy SQL verification, apply procedure, verification procedure, rollback SQL template, and post-merge verification steps.
+- [ ] 6.1 Create `knowledge-base/engineering/operations/runbooks/supabase-migrations.md` with pre-deploy SQL verification, apply procedure, verification procedure, rollback SQL template, and post-merge verification steps.
 - [ ] 6.2 Append cross-link to AGENTS.md rule `wg-when-a-pr-includes-database-migrations` (text append only — rule ID immutable per `cq-rule-ids-are-immutable`).
 - [ ] 6.3 Run `npx markdownlint-cli2 --fix` against the two specific files only (per `cq-markdownlint-fix-target-specific-paths`).
 - [ ] 6.4 Commit: `docs(ops): add supabase-migrations runbook with verification + rollback SQL`.

@@ -116,7 +116,7 @@ When authoring or reviewing a migration that combines WORM triggers with pg_cron
 
 **Supabase MCP OAuth unavailable in pipeline mode** — couldn't auto-execute dev migration apply during /work phase. Recovery: deferred dev apply to /ship Phase 5.4, then used `doppler run + Docker-wrapped psql` because postgresql-client wasn't installed locally. Prevention: SKILL.md's operator-automation gate should distinguish "tool exists but unauthenticated" from "tool unavailable". When MCP needs OAuth, fall back to CLI + Doppler-injected DATABASE_URL or to a Docker-wrapped client.
 
-**psql not installed locally** — `apps/web-platform/scripts/run-migrations.sh` requires it. Recovery: built a Docker wrapper `docker run --rm -i --network host postgres:17-alpine psql "$@"` and prepended to `PATH`. Prevention: document the Docker-wrapped fallback in `knowledge-base/engineering/ops/runbooks/supabase-migrations.md`.
+**psql not installed locally** — `apps/web-platform/scripts/run-migrations.sh` requires it. Recovery: built a Docker wrapper `docker run --rm -i --network host postgres:17-alpine psql "$@"` and prepended to `PATH`. Prevention: document the Docker-wrapped fallback in `knowledge-base/engineering/operations/runbooks/supabase-migrations.md`.
 
 **WORM trigger blocked pg_cron retention DELETE (the primary subject of this learning)** — caught by cross-agent concurrence at review (user-impact-reviewer F6 + security-sentinel Informational); data-integrity-guardian's 10-point check did not surface it. Recovery: added `Bypass 2: DELETE when retention_until < now()` clause; filed #3777 for the same defect class in pre-existing 041. Prevention: see Prevention section above — name the cron job's caller role in the review prompt.
 

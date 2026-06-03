@@ -188,7 +188,7 @@ the docblock + exit-semantics shape). `set -uo pipefail` (not `-e`) matches both
       ONLY the new subsection (no edits between lines 484-550 or 577-605). Mechanical
       check: `git diff origin/main -- plugins/soleur/skills/review/SKILL.md | grep '^-'`
       returns zero deletions inside the gate ranges.
-- [ ] **AC9** `knowledge-base/engineering/ops/runbooks/followthrough-convention.md`
+- [ ] **AC9** `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`
       gains a `## Trigger → verification mapping` section documenting all 4
       trigger→probe shapes (date / dependency / event-grep / counter) with the exit-code
       contract. Existing sections (Why / Author workflow / Directive fields / Security
@@ -301,7 +301,7 @@ restructure the list — extend each numbered item). Mapping:
 | 2. Counter — `Re-evaluate when <counter> exceeds <threshold>` | a `gh`/SQL/grep count check: `[[ "$count" -ge "$threshold" ]] && exit 0 \|\| exit 2` | exit 0 when threshold met, else transient |
 
 Add a one-line pointer: "Full mapping + script-scaffolding contract:
-`knowledge-base/engineering/ops/runbooks/followthrough-convention.md` §Trigger → verification mapping."
+`knowledge-base/engineering/operations/runbooks/followthrough-convention.md` §Trigger → verification mapping."
 
 **2b. `plugins/soleur/skills/review/SKILL.md` §5 (single bounded subsection, inserted after line 561 inside `When filing:`):**
 
@@ -366,7 +366,7 @@ call — the same in-branch ordering #3950's script follows.
 
 ### Phase 3 — Document the trigger→verification mapping in the runbook
 
-**`knowledge-base/engineering/ops/runbooks/followthrough-convention.md` — append a
+**`knowledge-base/engineering/operations/runbooks/followthrough-convention.md` — append a
 new `## Trigger → verification mapping` section** (after `## Directive fields`, before
 `## Security guarantees`, or at the natural position — additive only). Content:
 
@@ -391,7 +391,7 @@ new `## Trigger → verification mapping` section** (after `## Directive fields`
   Trigger (lines 47-53): per-form `→ verification:` annotation + runbook pointer. Phase 2a.
 - `plugins/soleur/skills/review/SKILL.md` — §5: one additive `Auto-wire …` subsection
   after line 561. Phase 2b.
-- `knowledge-base/engineering/ops/runbooks/followthrough-convention.md` — new
+- `knowledge-base/engineering/operations/runbooks/followthrough-convention.md` — new
   `## Trigger → verification mapping` section + first-instance note. Phase 3.
 
 **Not edited (verified, per scope constraints):** `.github/workflows/scheduled-followthrough-sweeper.yml`

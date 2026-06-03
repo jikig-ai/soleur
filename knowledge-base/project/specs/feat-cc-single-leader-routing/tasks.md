@@ -94,7 +94,7 @@
 ## Stage 5 — Migration, Rollout, V2 Issues
 
 - [ ] 5.1 Set `FLAG_CC_SOLEUR_GO=true` + all `CC_*` cost env vars in Doppler `dev`
-- [ ] 5.2 Write `knowledge-base/engineering/ops/runbooks/cc-soleur-go-rollout.md` (enable + rollback playbook + Threat Model section)
+- [ ] 5.2 Write `knowledge-base/engineering/operations/runbooks/cc-soleur-go-rollout.md` (enable + rollback playbook + Threat Model section)
 - [ ] 5.3 File V2 tracking issues (Post-MVP / Later milestone):
   - [ ] V2-1: MCP tool `cc_send_user_message`
   - [ ] V2-2: MCP tool `cc_respond_to_interactive_prompt`

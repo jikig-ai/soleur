@@ -47,7 +47,7 @@ Derived from the plan at `knowledge-base/project/plans/2026-05-20-feat-one-shot-
 
 ## Phase 4 — Runbook update
 
-- [ ] 4.1 Append a `## Fresh-host provisioning (#4118)` section to `knowledge-base/engineering/ops/runbooks/inngest-server.md` documenting the cloud-init install path AND the discoverability-test `curl` command.
+- [ ] 4.1 Append a `## Fresh-host provisioning (#4118)` section to `knowledge-base/engineering/operations/runbooks/inngest-server.md` documenting the cloud-init install path AND the discoverability-test `curl` command.
 - [ ] 4.2 Document the upgrade path (deploy webhook + `vinngest-vX.Y.Z` tag) as unchanged.
 
 ## Phase 5 — Final lint + budget sanity

@@ -66,7 +66,7 @@ only. The bug at plane (c) was invisible.
    (`bin/diff-github-app-manifest.sh`) — exit 0, no drift.
 
 3. **Runbook codification:** added `Step 2.1 — Re-accept App installation when
-   permissions widen` to `knowledge-base/engineering/ops/runbooks/github-app-provisioning.md`
+   permissions widen` to `knowledge-base/engineering/operations/runbooks/github-app-provisioning.md`
    so the next permission widening doesn't repeat #4173.
 
 ## Key Insight

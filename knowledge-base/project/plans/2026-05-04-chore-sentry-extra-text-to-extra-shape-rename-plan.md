@@ -320,7 +320,7 @@ after this exit-zero verification.
 ### Phase 5 — Runbook augmentation
 
 Add a short runbook section to
-`knowledge-base/engineering/ops/runbooks/` documenting the script's purpose,
+`knowledge-base/engineering/operations/runbooks/` documenting the script's purpose,
 invocation, and expected zero-match outcome going forward. Either:
 
 - Extend `oauth-probe-failure.md` with a "Sentry config drift cleanup" sibling
@@ -334,7 +334,7 @@ acceptable.
 
 ## Files to Edit
 
-- `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` —
+- `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md` —
   add a "Sentry config drift cleanup" subsection pointing to the new audit
   script (or split to a sibling runbook if length warrants).
 
@@ -583,7 +583,7 @@ acceptable.
   - `knowledge-base/project/learnings/integration-issues/2026-04-29-supabase-auth-probe-and-sentry-rule-api-quirks.md`
     — Sentry rule API quirks (interval enumeration, NotifyEmailAction
     target shapes).
-- **Runbook:** `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md`
+- **Runbook:** `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md`
   (Sentry API host detection, `SENTRY_API_HOST` env, configurator
   invocation pattern).
 - **AGENTS.md rules:**

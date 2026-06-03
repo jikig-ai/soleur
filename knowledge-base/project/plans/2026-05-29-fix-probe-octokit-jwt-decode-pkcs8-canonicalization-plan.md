@@ -233,7 +233,7 @@ Edit `apps/web-platform/server/github/probe-octokit.ts`:
 
 ### Phase 4 — Runbook update (operator-facing self-diagnosis)
 
-The runbook `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` documents the probe's
+The runbook `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md` documents the probe's
 *public-auth-surface* failure modes but has NO entry for the probe's OWN App-JWT decode failure (the
 class this PR fixes). Add one so the next operator who sees `4e6a3003…`-class events has a triage path.
 
@@ -274,7 +274,7 @@ class this PR fixes). Add one so the next operator who sees `4e6a3003…`-class 
       `./node_modules/.bin/tsc --noEmit` clean.
 - [x] **AC9 (runbook entry):** `oauth-probe-failure.md` contains a `probe_app_jwt_decode`-class
       subsection with a non-SSH verification recipe (the AC verification grep:
-      `grep -c 'A JSON web token could not be decoded' knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md`
+      `grep -c 'A JSON web token could not be decoded' knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md`
       returns ≥1).
 
 ### Post-merge (operator)
@@ -336,7 +336,7 @@ None — checked against the `## Files to Edit` list below (no open code-review 
   `new App({ privateKey })` sites through it; add `createPrivateKey` import.
 - `apps/web-platform/test/server/github/probe-octokit-retry.test.ts` (or new
   `probe-octokit-pem.test.ts`) — synthesized-keypair canonicalization tests (RED → GREEN).
-- `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` — add `probe_app_jwt_decode` failure
+- `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md` — add `probe_app_jwt_decode` failure
   mode + non-SSH verification recipe.
 
 ## Files to Create

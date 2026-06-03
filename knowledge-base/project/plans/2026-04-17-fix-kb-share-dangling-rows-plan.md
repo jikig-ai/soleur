@@ -102,7 +102,7 @@ create index idx_kb_share_links_content_sha256
   on public.kb_share_links(content_sha256);
 ```
 
-**Pre-apply check (runbook reference: `knowledge-base/engineering/ops/runbooks/supabase-migrations.md`):**
+**Pre-apply check (runbook reference: `knowledge-base/engineering/operations/runbooks/supabase-migrations.md`):**
 
 1. **Count audit** — REST probe (under Doppler `prd` creds):
 
@@ -435,6 +435,6 @@ Per AGENTS.md (`wg-when-a-pr-includes-database-migrations`): after merge, run th
 
 - Issue #2326 (root cause, option analysis, recommendation)
 - PR #2282 (feat-kb-share-btn-pdf-attachments) — where this finding originated
-- `knowledge-base/engineering/ops/runbooks/supabase-migrations.md` — migration apply procedure
+- `knowledge-base/engineering/operations/runbooks/supabase-migrations.md` — migration apply procedure
 - `knowledge-base/project/learnings/` — service-role-idor learning (already followed by current code; we maintain the pattern)
 - AGENTS.md `cq-progressive-rendering-for-large-assets` — acknowledged but orthogonal; streaming is #2316's scope

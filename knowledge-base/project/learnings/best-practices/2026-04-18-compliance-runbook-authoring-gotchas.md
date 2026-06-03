@@ -23,7 +23,7 @@ severity: medium
 
 Context: PR #2577 drained #2507 + #2508 (review-backlog against PR #2503, the
 path-PII scrubber). Two new runbooks under
-`knowledge-base/engineering/ops/runbooks/` (`plausible-pii-erasure.md` and
+`knowledge-base/engineering/operations/runbooks/` (`plausible-pii-erasure.md` and
 `plausible-dashboard-filter-audit.md`) plus a 4-line comment cross-link in
 `apps/web-platform/app/api/analytics/track/sanitize.ts` above `SCRUB_PATTERNS`.
 Multi-agent review caught five issues that a lone author would ship. The

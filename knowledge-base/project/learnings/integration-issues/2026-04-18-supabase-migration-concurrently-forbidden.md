@@ -57,7 +57,7 @@ create unique index if not exists
 ```
 
 For baseline-dup-check safety (runbook
-`knowledge-base/engineering/ops/runbooks/supabase-migrations.md`), the
+`knowledge-base/engineering/operations/runbooks/supabase-migrations.md`), the
 blocking index is actually preferable: it fails loudly on dup rows, whereas
 `CONCURRENTLY` + `IF NOT EXISTS` would leave you with a partial half-built
 `INVALID` index that Postgres ignores for uniqueness enforcement.
@@ -94,5 +94,5 @@ runner imposes.
 
 - `apps/web-platform/supabase/migrations/025_context_path_archived_predicate.sql`
 - `apps/web-platform/supabase/migrations/027_mtd_cost_aggregate.sql`
-- `knowledge-base/engineering/ops/runbooks/supabase-migrations.md`
+- `knowledge-base/engineering/operations/runbooks/supabase-migrations.md`
 - PR #2579 (incident + fix)

@@ -447,7 +447,7 @@ never raced on."
 
 - [ ] Apply migration `028_*.sql` to prod Supabase via `supabase db push` (or
   equivalent SQL Editor paste) — runbook:
-  `knowledge-base/engineering/ops/runbooks/supabase-migrations.md`.
+  `knowledge-base/engineering/operations/runbooks/supabase-migrations.md`.
 - [ ] Verify index exists: query `pg_indexes where tablename='conversations' and
   indexname='uniq_conversations_user_id_session_id'` returns one row.
 - [ ] Trigger a manual `gh workflow run scheduled-ux-audit.yml` dry-run (the workflow

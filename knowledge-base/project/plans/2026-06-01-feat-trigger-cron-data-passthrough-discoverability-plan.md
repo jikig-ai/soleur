@@ -46,7 +46,7 @@ Two independent sub-features, one PR:
   overridden by `body.data`.
 
 - **(B) Discoverability + runbook follow-through** — update
-  `knowledge-base/engineering/ops/runbooks/inngest-server.md` (2 `inngest send` sites)
+  `knowledge-base/engineering/operations/runbooks/inngest-server.md` (2 `inngest send` sites)
   and `oauth-probe-failure.md` (4 sites) to document `POST /api/internal/trigger-cron`
   as the PRIMARY path and demote the SSH `inngest send` loopback examples to a
   Last-resort section. Keep the `issue_number` example annotated (now unblocked by A).
@@ -256,8 +256,8 @@ widened body), and the security analysis governs A. B and C are docs/tooling and
 - `apps/web-platform/app/api/internal/trigger-cron/route.ts` — widen envelope merge (A).
 - `apps/web-platform/test/server/internal/trigger-cron-route.test.ts` — add data-passthrough
   + audit-poison + type-guard tests (A). (vitest node include glob `test/**/*.test.ts` covers it.)
-- `knowledge-base/engineering/ops/runbooks/inngest-server.md` — HTTP primary + demote SSH (B).
-- `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` — HTTP primary + demote SSH (B).
+- `knowledge-base/engineering/operations/runbooks/inngest-server.md` — HTTP primary + demote SSH (B).
+- `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md` — HTTP primary + demote SSH (B).
 - `plugins/soleur/test/components.test.ts` — bump `SKILL_DESCRIPTION_WORD_BUDGET` by the new
   skill's description word count (C; baseline 1950/1950, zero headroom). [If trimming siblings
   instead, edit the chosen sibling SKILL.md files instead of this line.]

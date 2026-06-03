@@ -21,9 +21,9 @@ Deferred follow-up: [#2841](https://github.com/jikig-ai/soleur/issues/2841) (rea
 
 Docs-only PR that makes the live-mode flip a mechanical operator session. Three deliverables:
 
-1. **Operator runbook** (new): `knowledge-base/engineering/ops/runbooks/stripe-live-activation.md`
+1. **Operator runbook** (new): `knowledge-base/engineering/operations/runbooks/stripe-live-activation.md`
 2. **Pricing-strategy reconciliation** (edit one file): `knowledge-base/product/pricing-strategy.md` — 2-tier → 4-tier to match code and marketing
-3. **Legal brief** (new): `knowledge-base/engineering/ops/runbooks/stripe-live-legal-checklist.md` — CLO hand-off
+3. **Legal brief** (new): `knowledge-base/engineering/operations/runbooks/stripe-live-legal-checklist.md` — CLO hand-off
 
 Alternative sequencing options are in the brainstorm; this plan executes Approach A (runbook-first).
 
@@ -47,7 +47,7 @@ Net effect: the pricing-doc reconciliation touches **one file**: `pricing-strate
 
 ### Phase 1: Runbook
 
-Create `knowledge-base/engineering/ops/runbooks/stripe-live-activation.md` following the structure of `supabase-migrations.md`. The runbook's 8 phases (summary — full content lives in the runbook itself):
+Create `knowledge-base/engineering/operations/runbooks/stripe-live-activation.md` following the structure of `supabase-migrations.md`. The runbook's 8 phases (summary — full content lives in the runbook itself):
 
 - **A. KYC (founder)** — business profile, industry, product description, statement descriptor, bank, representative identity. Wall-clock days–weeks; the only founder-exclusive phase.
 - **B. Stripe Tax enablement** — dashboard toggle, jurisdiction registration (EU OSS, UK, US nexus). Fee: 0.5%/transaction. Must precede Phase C.
@@ -78,12 +78,12 @@ One-file edit. Specific hunks:
 
 ### Phase 3: Legal brief
 
-Create `knowledge-base/engineering/ops/runbooks/stripe-live-legal-checklist.md`. This is a CLO hand-off brief, not final legal text. Sections: (1) EU 14-day cooling-off + SaaS digital-services opt-out consent wording proposal, (2) refund/cancellation policy proposal (cancel-at-period-end, no pro-rata), (3) ToS subscription addendum brief (billing cycle, price changes, tax, data retention on cancellation), (4) AUP/Privacy Policy sub-processor confirmation (Stripe DPA already covered by #670), (5) Stripe Atlas alignment note (cross-ref `2026-02-25-stripe-atlas-legal-benchmark-mismatch.md`), (6) explicit CLO sign-off line.
+Create `knowledge-base/engineering/operations/runbooks/stripe-live-legal-checklist.md`. This is a CLO hand-off brief, not final legal text. Sections: (1) EU 14-day cooling-off + SaaS digital-services opt-out consent wording proposal, (2) refund/cancellation policy proposal (cancel-at-period-end, no pro-rata), (3) ToS subscription addendum brief (billing cycle, price changes, tax, data retention on cancellation), (4) AUP/Privacy Policy sub-processor confirmation (Stripe DPA already covered by #670), (5) Stripe Atlas alignment note (cross-ref `2026-02-25-stripe-atlas-legal-benchmark-mismatch.md`), (6) explicit CLO sign-off line.
 
 ## Files to Create
 
-- `knowledge-base/engineering/ops/runbooks/stripe-live-activation.md`
-- `knowledge-base/engineering/ops/runbooks/stripe-live-legal-checklist.md`
+- `knowledge-base/engineering/operations/runbooks/stripe-live-activation.md`
+- `knowledge-base/engineering/operations/runbooks/stripe-live-legal-checklist.md`
 
 ## Files to Edit
 
@@ -100,7 +100,7 @@ Scope fence: no `.ts`, `.tsx`, `.sql`, or `.njk` changes in this PR. AC3 enforce
 3. `pricing-strategy.md` has 4 tiers matching `stripe-price-tier-map.ts`. Broadened grep gate (cover plan/tier/price variants):
    `rg -n "Pro tier|Team tier|Pro plan|Team plan|\\$99(/month| per month|/mo\\b| ?)" knowledge-base/product/pricing-strategy.md` → zero hits.
 4. `git diff --stat` shows only `*.md` files changed.
-5. `npx markdownlint-cli2 knowledge-base/product/pricing-strategy.md knowledge-base/engineering/ops/runbooks/stripe-live-activation.md knowledge-base/engineering/ops/runbooks/stripe-live-legal-checklist.md` → exit 0.
+5. `npx markdownlint-cli2 knowledge-base/product/pricing-strategy.md knowledge-base/engineering/operations/runbooks/stripe-live-activation.md knowledge-base/engineering/operations/runbooks/stripe-live-legal-checklist.md` → exit 0.
 6. Regression baseline: `cd apps/web-platform && ./node_modules/.bin/vitest run stripe` → exit 0. (Per `cq-in-worktrees-run-vitest-via-node-node`.)
 
 ### Post-merge handoff (operator tasks, not PR gates)

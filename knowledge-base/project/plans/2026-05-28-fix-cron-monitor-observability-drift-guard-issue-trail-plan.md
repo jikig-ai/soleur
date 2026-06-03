@@ -153,7 +153,7 @@ exact issue-trail capability those features shipped; no new product decision).
 - [x] **AC5 — Realtime monitor grace widened.** `apps/web-platform/infra/sentry/cron-monitors.tf` `sentry_cron_monitor.scheduled_realtime_probe.checkin_margin_minutes == 1440` with an inline comment citing GitHub-scheduler drop-a-run drift (05-26 2026-05) as the rationale. Verified by `grep -A6 'resource "sentry_cron_monitor" "scheduled_realtime_probe"' apps/web-platform/infra/sentry/cron-monitors.tf | grep -c 'checkin_margin_minutes  = 1440'` returns 1.
 - [x] **AC6 — Regression test: 403 issue-write is surfaced, not silent.** New vitest case in `apps/web-platform/test/server/inngest/cron-github-app-drift-guard.test.ts` (and a mirror in `cron-oauth-probe.test.ts`): mock the `POST /repos/{owner}/{repo}/issues` route to throw `{ status: 403 }`; assert `reportSilentFallback` is called with `op: "issue_write_403"` AND the Sentry heartbeat still posts `?status=error` (the drift result, not the issue-write failure, drives the heartbeat). Verified by `./node_modules/.bin/vitest run apps/web-platform/test/server/inngest/cron-github-app-drift-guard.test.ts apps/web-platform/test/server/inngest/cron-oauth-probe.test.ts` green.
 - [x] **AC7 — All existing drift-guard + oauth-probe + parity tests pass unchanged in behavior.** `./node_modules/.bin/vitest run apps/web-platform/test/server/inngest/cron-github-app-drift-guard.test.ts apps/web-platform/test/server/inngest/cron-oauth-probe.test.ts apps/web-platform/test/github-app-manifest-parity.test.ts` all green. (Note the bunfig.toml `pathIgnorePatterns = ["**"]` blocks `bun test`; use vitest.)
-- [x] **AC8 — Runbook Step 2.1 updated for the new install ID + issues:write.** `knowledge-base/engineering/ops/runbooks/github-app-provisioning.md` Step 2.1 install URL updated to the current installation `130018654` (was `122213433`), and a note added that this PR's `issues:write` widen requires one re-consent click that ALSO grants the long-declared-but-ungranted `members:read`, clearing the #4189 drift. Verified by `grep -c '130018654' knowledge-base/engineering/ops/runbooks/github-app-provisioning.md` returns ≥1.
+- [x] **AC8 — Runbook Step 2.1 updated for the new install ID + issues:write.** `knowledge-base/engineering/operations/runbooks/github-app-provisioning.md` Step 2.1 install URL updated to the current installation `130018654` (was `122213433`), and a note added that this PR's `issues:write` widen requires one re-consent click that ALSO grants the long-declared-but-ungranted `members:read`, clearing the #4189 drift. Verified by `grep -c '130018654' knowledge-base/engineering/operations/runbooks/github-app-provisioning.md` returns ≥1.
 - [x] **AC9 — `Ref #4189` in PR body (NOT `Closes`).** #4189 is closed by the POST-MERGE re-consent + drift-guard green tick, not by merge — use `Ref #4189` per `wg-use-closes-n-in-pr-body-not-title-to` extended for the ops-remediation class. The post-merge step (AC11) closes it. Verified by `gh pr view --json body --jq .body | grep -c 'Ref #4189'` returns 1.
 - [x] **AC10 — No new infra surface.** Net new file count = 0; net new Terraform resource count = 0 (existing resource field-edit only); net new secret count = 0. Verified by `git diff --name-status origin/main -- apps/web-platform/infra/`.
 
@@ -275,7 +275,7 @@ discoverability_test:
 - `apps/web-platform/infra/sentry/cron-monitors.tf` — `scheduled_realtime_probe.checkin_margin_minutes` 180 → 1440 + rationale comment.
 - `apps/web-platform/test/server/inngest/cron-github-app-drift-guard.test.ts` — add the AC6 403-surfaced regression case.
 - `apps/web-platform/test/server/inngest/cron-oauth-probe.test.ts` — add the AC6 mirror case.
-- `knowledge-base/engineering/ops/runbooks/github-app-provisioning.md` — Step 2.1 install ID 122213433 → 130018654 + issues:write re-consent note.
+- `knowledge-base/engineering/operations/runbooks/github-app-provisioning.md` — Step 2.1 install ID 122213433 → 130018654 + issues:write re-consent note.
 
 ## Files to Create
 
@@ -316,8 +316,8 @@ touching any of the planned files (`cron-github-app-drift-guard.ts`,
 - `apps/web-platform/infra/sentry/cron-monitors.tf:157-167` (`scheduled_realtime_probe`)
 - `.github/workflows/apply-sentry-infra.yml:182` (auto-apply target)
 - `.github/workflows/scheduled-realtime-probe.yml` (GHA-fired, scheduler-dependent)
-- `knowledge-base/engineering/ops/runbooks/github-app-provisioning.md` (Step 2.1 re-consent)
-- `knowledge-base/engineering/ops/runbooks/github-app-drift.md` (triage)
+- `knowledge-base/engineering/operations/runbooks/github-app-provisioning.md` (Step 2.1 re-consent)
+- `knowledge-base/engineering/operations/runbooks/github-app-drift.md` (triage)
 - `knowledge-base/project/learnings/2026-05-28-github-app-installation-org-level-sibling-lookup.md` (installations are org-level; workspace membership is Supabase)
 - `knowledge-base/project/learnings/2026-05-20-github-app-installation-grant-vs-manifest-three-plane-drift.md`
 - `knowledge-base/project/plans/2026-05-20-feat-drift-guard-installation-grant-diff-4179-plan.md`

@@ -34,7 +34,7 @@ class recurred in a different form: on 2026-04-19 an operator SSH session
 operator's ISP egress had rotated. See:
 
 - Rule: `AGENTS.md` `hr-ssh-diagnosis-verify-firewall`
-- Runbook: `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`
+- Runbook: `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md`
 - Skill: `plugins/soleur/skills/admin-ip-refresh/SKILL.md`
 - Plan checklist: `plugins/soleur/skills/plan/references/plan-network-outage-checklist.md`
 - Follow-up learning:

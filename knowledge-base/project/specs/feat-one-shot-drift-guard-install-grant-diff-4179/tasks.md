@@ -89,7 +89,7 @@ plan: knowledge-base/project/plans/2026-05-20-feat-drift-guard-installation-gran
   remove "#4179 as a drift-guard extension" language; replace with "Both
   planes detected by scheduled-github-app-drift-guard.yml (App-declared vs
   manifest, installation-grant vs manifest)."
-- [ ] 3.2 Update `knowledge-base/engineering/ops/runbooks/github-app-provisioning.md`
+- [ ] 3.2 Update `knowledge-base/engineering/operations/runbooks/github-app-provisioning.md`
   Step 2.1 to note the auto-close-stale behavior of the new failure modes.
 - [ ] 3.3 Run `actionlint .github/workflows/scheduled-github-app-drift-guard.yml`
   — expect green.
@@ -124,7 +124,7 @@ plan: knowledge-base/project/plans/2026-05-20-feat-drift-guard-installation-gran
   - `.github/workflows/scheduled-github-app-drift-guard.yml`
   - `apps/web-platform/test/github-app-manifest-drift-guard.test.ts`
   - `apps/web-platform/infra/github-app.tf`
-  - `knowledge-base/engineering/ops/runbooks/github-app-provisioning.md`
+  - `knowledge-base/engineering/operations/runbooks/github-app-provisioning.md`
 - [ ] 5.2 Commit message body: short summary + `Closes #4179` + `Closes #3561` +
   Co-Authored-By trailer.
 - [ ] 5.3 `git push` to the feature branch.

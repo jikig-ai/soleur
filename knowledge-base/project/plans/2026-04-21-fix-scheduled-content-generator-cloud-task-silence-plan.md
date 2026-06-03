@@ -180,7 +180,7 @@ Task \`$task\` has not produced an audit issue (label: \`$label\`) in **$days_si
 Last audit issue: $last
 
 ### Diagnosis checklist
-See [cloud-scheduled-tasks runbook](https://github.com/${GH_REPO}/blob/main/knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md).
+See [cloud-scheduled-tasks runbook](https://github.com/${GH_REPO}/blob/main/knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md).
 
 ### Reference
 - Workflow: \`.github/workflows/scheduled-cloud-task-heartbeat.yml\`
@@ -251,7 +251,7 @@ Ran `gh issue list --label code-review --state open --json number,title,body --l
 ## Files to create
 
 - `.github/workflows/scheduled-cloud-task-heartbeat.yml` — new GHA watchdog.
-- `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` — new runbook (diagnosis steps for the next silence, task-to-label mapping, restore procedure).
+- `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` — new runbook (diagnosis steps for the next silence, task-to-label mapping, restore procedure).
 
 ## Files to edit
 
@@ -347,7 +347,7 @@ Step structure (bash only — NO `claude-code-action` invocation; this is pure-b
     - `--label "cloud-task-silence,action-required,priority/p2-medium,domain/engineering,type/bug"`
     - `--milestone "Post-MVP / Later"` (per `cq-gh-issue-create-milestone-takes-title`)
     - Body: use `cat <<ISSUE_BODY` heredoc with terminator at column 10 (matching cf-token peer — avoids the column-0 heredoc terminator bug per `hr-in-github-actions-run-blocks-never-use`).
-    - Body content: headline, last-known audit issue reference, diagnostic commands block, link to runbook `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md#<task-section>`, reference to #2714.
+    - Body content: headline, last-known audit issue reference, diagnostic commands block, link to runbook `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md#<task-section>`, reference to #2714.
 
 - **`clear_silence()` logic:**
   - `STALE=$(gh issue list --repo "$GH_REPO" --state open --label cloud-task-silence --search "$task in:title" --json number --jq '.[0].number // empty')`.
@@ -366,7 +366,7 @@ Step structure (bash only — NO `claude-code-action` invocation; this is pure-b
 
 ### Phase 3 — Document the class of fault
 
-3.1 Create `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` covering:
+3.1 Create `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` covering:
 
 - Architecture: what Cloud scheduled tasks are, which env (`soleur-scheduled`), which Doppler config (`prd_scheduled`), which 3 tasks live there.
 - Task inventory table: task name, schedule, expected audit-issue label, watchdog threshold, last-verified-working date.
@@ -384,7 +384,7 @@ Step structure (bash only — NO `claude-code-action` invocation; this is pure-b
 - [ ] `knowledge-base/project/plans/2026-04-21-fix-scheduled-content-generator-cloud-task-silence-plan.md` written and committed.
 - [ ] `.github/workflows/scheduled-cloud-task-heartbeat.yml` created; `yamllint` and `actionlint` clean.
 - [ ] Heartbeat workflow contains the 9 task mappings above, each with an explicit threshold.
-- [ ] `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` created with task inventory and H1–H5 diagnosis checklist.
+- [ ] `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` created with task inventory and H1–H5 diagnosis checklist.
 - [ ] `.github/workflows/scheduled-content-generator.yml` header comment points to the new runbook.
 - [ ] `cloud-task-silence` GitHub label created (verified with `gh label list`).
 - [ ] Tests / dry-runs described under Test Scenarios pass locally.

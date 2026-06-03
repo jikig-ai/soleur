@@ -150,7 +150,7 @@ values *as their argument* — which is precisely the case for
 - `plugins/soleur/skills/review/SKILL.md` §5 — review-finding
   fix-inline default; this learning was captured retroactively because
   the bug only surfaced post-merge during AC21 manual verification.
-- `knowledge-base/engineering/ops/runbooks/github-app-drift.md` step 3
+- `knowledge-base/engineering/operations/runbooks/github-app-drift.md` step 3
   — runbook now instructs operators to rule out the self-leak class
   BEFORE rotating the key.
 

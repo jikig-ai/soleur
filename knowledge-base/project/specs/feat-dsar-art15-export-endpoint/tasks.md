@@ -137,8 +137,8 @@ Derived from plan rev-2 (post 5-agent panel sign-off). Phase ordering is load-be
 
 ## Phase 12 — Operator runbooks
 
-- 12.1 Write `knowledge-base/engineering/ops/runbooks/dsar-export-oversize.md`
-- 12.2 Write `knowledge-base/engineering/ops/runbooks/dsar-export-failed-job.md`
+- 12.1 Write `knowledge-base/engineering/operations/runbooks/dsar-export-oversize.md`
+- 12.2 Write `knowledge-base/engineering/operations/runbooks/dsar-export-failed-job.md`
 - 12.3 Write `apps/web-platform/scripts/dsar-export-oversize.sh`
 
 ## Phase 13 — Pre-merge verification

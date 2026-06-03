@@ -5,7 +5,7 @@
 # PASS comment on script exit 0; comment FAIL and leave open on exit 1;
 # comment TRANSIENT and leave open on any other exit.
 #
-# Convention: knowledge-base/engineering/ops/runbooks/followthrough-convention.md
+# Convention: knowledge-base/engineering/operations/runbooks/followthrough-convention.md
 #
 # Required env:
 #   GH_TOKEN  — GitHub token with issues:write

@@ -60,7 +60,7 @@ PR-1b paths: **None at plan-authoring time.** Verify at /work start.
 
 ## Files to Edit
 
-1. **`knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`** — append `## Phase 9 — Gate 3b Correction (2026-05-19)` section after the existing Phase 8 content. Contents:
+1. **`knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`** — append `## Phase 9 — Gate 3b Correction (2026-05-19)` section after the existing Phase 8 content. Contents:
    - (a) Both verbatim Sentry replies (billing + Rodolfo, reproduced from the brainstorm).
    - (b) Three bullets — what the original framing got wrong: (i) named third-party org claim; (ii) recipient drift claim; (iii) 49-day phantom-ingest window framing.
    - (c) Probable root cause, **post-T3 sharpened to:** "Internal Integration auth token. The runtime `SENTRY_AUTH_TOKEN` issued by the `web-platform-ci` Internal Integration installed on `jikigai-eu` post-2026-05-17 cutover. The token authenticates as a Sentry-generated proxy-user (`web-platform-ci-…@proxy-user.sentry.io`, user ID `4569715`, `dateJoined: 2026-05-17T11:25:11Z`) which is a member of `jikigai-eu` only. The 403 against `jikigai/` is a clean organization-membership-boundary failure for that proxy-user identity — not a scope-flag mismatch (the token carries `org:read`), not an Org Auth Token slug-binding (`jikigai-eu` has zero Org Auth Tokens)."
@@ -75,11 +75,11 @@ PR-1b paths: **None at plan-authoring time.** Verify at /work start.
    - `bash -n` exit 0.
 
 3. **`knowledge-base/legal/compliance-posture.md`** (row 89 breadcrumb) — append AT END of the L89 row's narrative cell:
-   `**[2026-05-19 NOTE: phantom-ingest framing superseded by PIR Phase 9 Gate-3b correction (see knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md §Phase 9). Org 4511… confirmed operator-owned by Sentry support 2026-05-19. PR-2 corpus sweep in flight under #3861.]**`
+   `**[2026-05-19 NOTE: phantom-ingest framing superseded by PIR Phase 9 Gate-3b correction (see knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md §Phase 9). Org 4511… confirmed operator-owned by Sentry support 2026-05-19. PR-2 corpus sweep in flight under #3861.]**`
    - Original prose UNCHANGED — breadcrumb only.
 
 4. **`knowledge-base/legal/audits/2026-05-17-sentry-phantom-ingest-window-auth-users-audit.md`** (frontmatter breadcrumb only) — add new frontmatter key:
-   `superseded_by_note: "2026-05-19 PIR Phase 9 Gate-3b correction — see knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md §Phase 9 and knowledge-base/legal/audits/2026-05-19-sentry-token-scope-probe-report.md. Title encodes pre-correction framing; SQL count + categorization remain factually true; PR-2 retracts the 'phantom-ingest' framing while preserving the data."`
+   `superseded_by_note: "2026-05-19 PIR Phase 9 Gate-3b correction — see knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md §Phase 9 and knowledge-base/legal/audits/2026-05-19-sentry-token-scope-probe-report.md. Title encodes pre-correction framing; SQL count + categorization remain factually true; PR-2 retracts the 'phantom-ingest' framing while preserving the data."`
 
 ## External state changes (not file edits)
 

@@ -62,12 +62,12 @@ CPO sign-off carry-forward: covered by parent #2725 brainstorm (see `knowledge-b
 ### FR1a — `brand_threshold:` → `brand_survival_threshold:`
 
 **Files (1):**
-- `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md:7`
+- `knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md:7`
 
 ### FR1b — `brand_survival:` → `brand_survival_threshold:`
 
 **Files (5):**
-- `knowledge-base/engineering/ops/runbooks/github-app-drift.md`
+- `knowledge-base/engineering/operations/runbooks/github-app-drift.md`
 - `knowledge-base/project/brainstorms/2026-05-05-github-app-drift-guard-brainstorm.md`
 - `knowledge-base/project/plans/2026-05-05-feat-github-app-drift-guard-plan.md`
 - `knowledge-base/project/specs/feat-3187-gh-app-drift-guard/spec.md`
@@ -159,15 +159,15 @@ All verified as **PROSE COMMENTS or auto-generated content**, not regex/grep/pat
 **Total: ~47 files** (42 value-form + 4 frontmatter-key FR1c + 1 FR1a + ~5 FR1b minus overlap; some files appear in both lists).
 
 Frontmatter (10 unique files):
-1. `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md` (FR1a)
-2. `knowledge-base/engineering/ops/runbooks/github-app-drift.md` (FR1b)
+1. `knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md` (FR1a)
+2. `knowledge-base/engineering/operations/runbooks/github-app-drift.md` (FR1b)
 3. `knowledge-base/project/brainstorms/2026-05-05-github-app-drift-guard-brainstorm.md` (FR1b)
 4. `knowledge-base/project/plans/2026-05-05-feat-github-app-drift-guard-plan.md` (FR1b)
 5. `knowledge-base/project/specs/feat-3187-gh-app-drift-guard/spec.md` (FR1b)
 6. `knowledge-base/project/specs/feat-3187-gh-app-drift-guard/tasks.md` (FR1b)
-7. `knowledge-base/engineering/ops/runbooks/codeql-bot-coverage.md` (FR1c)
-8. `knowledge-base/engineering/ops/runbooks/lint-bot-statuses.md` (FR1c)
-9. `knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md` (FR1c — both key + value)
+7. `knowledge-base/engineering/operations/runbooks/codeql-bot-coverage.md` (FR1c)
+8. `knowledge-base/engineering/operations/runbooks/lint-bot-statuses.md` (FR1c)
+9. `knowledge-base/engineering/operations/runbooks/ruleset-bypass-drift.md` (FR1c — both key + value)
 10. `knowledge-base/project/plans/2026-05-11-ops-ci-extend-lint-bot-synthetic-glob-plan.md` (FR1c)
 
 Value-form (42 files): enumerate at /work time via `git grep -l "single-user-incident" -- '*.md' '*.yml' '*.yaml' '*.json' '*.sh' '*.ts' '*.js' '*.py' | grep -v archive/`. Includes:

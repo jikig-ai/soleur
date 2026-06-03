@@ -43,7 +43,7 @@ PR-1 of a two-PR corrective series under #3861. Establishes first-party reproduc
 
 ## Files to Edit
 
-1. **`knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`**
+1. **`knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`**
    - Frontmatter: `status: resolved` → `open`; DELETE `art_33_triggered` line; DELETE `art_33_deadline` line; update `classification_override.chosen` → `superseded-2026-05-19`; prefix `classification_override.reason` value with `"[Superseded 2026-05-19 per Phase 9 Gate-3b correction.] "`; ADD `gate_3_resolution: 3b`; ADD `gate_3_resolution_evidence: knowledge-base/legal/audits/2026-05-19-sentry-token-scope-probe-report.md`.
    - Body: append `## Phase 9 — Gate 3b Correction (2026-05-19)` section with (a) both verbatim Sentry replies, (b) what original framing got wrong (3 bullets — US shadow org, recipient drift, 49-day phantom window), (c) probable root cause (token-scope mismatch with link to probe report + the workflow-defect learning `2026-05-19-sentry-401-is-not-unowned-verify-token-scope-first.md`), (d) `Closes #3962` cross-link + supersedes notice for PR-α/PR-γ corpus that PR-2 will retract.
 
@@ -60,7 +60,7 @@ PR-1 of a two-PR corrective series under #3861. Establishes first-party reproduc
    - Append AT END of the L89 row's narrative cell: ` **[2026-05-19 NOTE: phantom-ingest framing superseded by PIR Phase 9 Gate-3b correction; org 4511... confirmed operator-owned by Sentry support. PR-2 corpus sweep in flight.]**`
 
 5. **`knowledge-base/legal/audits/2026-05-17-sentry-phantom-ingest-window-auth-users-audit.md`** (frontmatter breadcrumb only)
-   - Add new frontmatter key: `superseded_by_note: "2026-05-19 PIR Phase 9 Gate-3b correction — see knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md §Phase 9. Title encodes pre-correction framing; SQL count + categorization remain factually true; PR-2 retracts the 'phantom-ingest' framing while preserving the data."`
+   - Add new frontmatter key: `superseded_by_note: "2026-05-19 PIR Phase 9 Gate-3b correction — see knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md §Phase 9. Title encodes pre-correction framing; SQL count + categorization remain factually true; PR-2 retracts the 'phantom-ingest' framing while preserving the data."`
 
 ## External state changes (not file edits)
 
@@ -175,7 +175,7 @@ Operator replies to Sentry billing thread choosing "transfer credit to `jikigai-
 
 ### Pre-merge (PR)
 
-- [ ] **AC1.** Probe results match (`STEP1 == 401 && STEP2 == 200 && STEP3 == 200`) AND `PROBE_TOKEN_REVOKED_AT ≤ PROBE_TOKEN_MINTED_AT + 10 minutes` per Sentry audit log — OR halt-path executed and no PIR edit appears in the diff (verifiable via `gh pr diff 4044 -- knowledge-base/engineering/ops/post-mortems/`).
+- [ ] **AC1.** Probe results match (`STEP1 == 401 && STEP2 == 200 && STEP3 == 200`) AND `PROBE_TOKEN_REVOKED_AT ≤ PROBE_TOKEN_MINTED_AT + 10 minutes` per Sentry audit log — OR halt-path executed and no PIR edit appears in the diff (verifiable via `gh pr diff 4044 -- knowledge-base/engineering/operations/post-mortems/`).
 - [ ] **AC2.** Probe report committed at `…/audits/2026-05-19-sentry-token-scope-probe-report.md` with verbatim HTTP status codes (3 steps), mint + revoke timestamps from Sentry audit log, both verbatim Sentry support replies, redacted screenshot links.
 - [ ] **AC3.** PIR YAML parses cleanly: `python3 -c "import yaml; yaml.safe_load(open('…').read().split('---')[1])"` returns exit 0. Frontmatter has `status: open`, no `art_33_triggered` key, no `art_33_deadline` key, `classification_override.chosen: superseded-2026-05-19`, `gate_3_resolution: 3b`, `gate_3_resolution_evidence: <probe-report-path>`.
 - [ ] **AC4.** PIR contains `## Phase 9 — Gate 3b Correction (2026-05-19)` heading with both Sentry replies quoted verbatim, the 3-bullet "what original framing got wrong" list, and forward pointers to the probe report + the workflow-defect learning.

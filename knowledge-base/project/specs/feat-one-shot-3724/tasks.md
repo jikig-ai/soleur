@@ -14,11 +14,11 @@ Derived from `knowledge-base/project/plans/2026-05-13-feat-brand-survival-thresh
 
 ### 1.1 FR1a — `brand_threshold:` → `brand_survival_threshold:`
 
-- [ ] **1.1.1** Edit `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md:7` — change `brand_threshold:` to `brand_survival_threshold:`.
+- [ ] **1.1.1** Edit `knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md:7` — change `brand_threshold:` to `brand_survival_threshold:`.
 
 ### 1.2 FR1b — `brand_survival:` → `brand_survival_threshold:`
 
-- [ ] **1.2.1** Edit `knowledge-base/engineering/ops/runbooks/github-app-drift.md`.
+- [ ] **1.2.1** Edit `knowledge-base/engineering/operations/runbooks/github-app-drift.md`.
 - [ ] **1.2.2** Edit `knowledge-base/project/brainstorms/2026-05-05-github-app-drift-guard-brainstorm.md`.
 - [ ] **1.2.3** Edit `knowledge-base/project/plans/2026-05-05-feat-github-app-drift-guard-plan.md`.
 - [ ] **1.2.4** Edit `knowledge-base/project/specs/feat-3187-gh-app-drift-guard/spec.md`.
@@ -26,9 +26,9 @@ Derived from `knowledge-base/project/plans/2026-05-13-feat-brand-survival-thresh
 
 ### 1.3 FR1c — semantic `threshold:` → `brand_survival_threshold:` (4 files; 2 protected)
 
-- [ ] **1.3.1** Edit `knowledge-base/engineering/ops/runbooks/codeql-bot-coverage.md:6`.
-- [ ] **1.3.2** Edit `knowledge-base/engineering/ops/runbooks/lint-bot-statuses.md:6`.
-- [ ] **1.3.3** Edit `knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md:6` (BOTH key + value form: `threshold: single-user-incident` → `brand_survival_threshold: single-user incident`).
+- [ ] **1.3.1** Edit `knowledge-base/engineering/operations/runbooks/codeql-bot-coverage.md:6`.
+- [ ] **1.3.2** Edit `knowledge-base/engineering/operations/runbooks/lint-bot-statuses.md:6`.
+- [ ] **1.3.3** Edit `knowledge-base/engineering/operations/runbooks/ruleset-bypass-drift.md:6` (BOTH key + value form: `threshold: single-user-incident` → `brand_survival_threshold: single-user incident`).
 - [ ] **1.3.4** Edit `knowledge-base/project/plans/2026-05-11-ops-ci-extend-lint-bot-synthetic-glob-plan.md:7`.
 - [ ] **1.3.5** **DO NOT EDIT** `knowledge-base/project/plans/2026-05-11-fix-preflight-...-plan.md:99` (preflight Check 6 sentinel — load-bearing).
 - [ ] **1.3.6** **DO NOT EDIT** `plugins/soleur/skills/skill-security-scan/references/test-fixtures/clean-third-party.skill.md:21` (numeric review-threshold, orthogonal vocabulary).

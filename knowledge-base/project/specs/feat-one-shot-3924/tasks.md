@@ -48,7 +48,7 @@ Derived from `knowledge-base/project/plans/2026-05-17-feat-r2-lock-rules-gdpr-ov
 - [x] **3.2** Drop runbook-header stale banner (lines ~7-9).
 - [x] **3.3** Rewrite §7.1: admin-token mint scope (Account → R2 → Edit + User → API Tokens → Edit), env-var export, driver `--help` reference, copy-pasteable invocation.
 - [x] **3.4** Rewrite §7.3: canonical driver invocation + 5-bullet flow enumeration; drop all `<details>` historical blocks.
-- [x] **3.5** Run cross-artifact drift gate (AC13b): `git grep -nl 'Object Lock Governance\|--bypass-governance-retention' knowledge-base/engineering/ops/runbooks/ docs/ apps/ plugins/` — assert zero hits outside learnings/plans/specs.
+- [x] **3.5** Run cross-artifact drift gate (AC13b): `git grep -nl 'Object Lock Governance\|--bypass-governance-retention' knowledge-base/engineering/operations/runbooks/ docs/ apps/ plugins/` — assert zero hits outside learnings/plans/specs.
 - [x] **3.6** Re-verify legal-prose parity (AC8) via awk flag-pattern diff.
 - [x] **3.7** Commit `docs(runbook): rewrite cla-evidence §7 admin-override for R2 Lock Rules (#3924)`.
 

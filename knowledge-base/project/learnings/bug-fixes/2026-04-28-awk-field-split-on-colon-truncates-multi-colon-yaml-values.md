@@ -9,7 +9,7 @@ component: github-actions
 issue: 2987
 pr: 2995
 problem_type: logic_error
-related: [knowledge-base/project/learnings/2026-03-31-awk-split-defaults-to-fs-not-whitespace.md, knowledge-base/project/learnings/2026-03-12-directory-driven-content-discovery-frontmatter-parsing.md, knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md, AGENTS.md#cq-workflow-pattern-duplication-bug-propagation, AGENTS.md#wg-when-fixing-a-workflow-gates-detection]
+related: [knowledge-base/project/learnings/2026-03-31-awk-split-defaults-to-fs-not-whitespace.md, knowledge-base/project/learnings/2026-03-12-directory-driven-content-discovery-frontmatter-parsing.md, knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md, AGENTS.md#cq-workflow-pattern-duplication-bug-propagation, AGENTS.md#wg-when-fixing-a-workflow-gates-detection]
 resolution_type: code_fix
 root_cause: parser_misuse
 severity: medium
@@ -122,5 +122,5 @@ no new AGENTS.md rule needed.
 - Predecessor PR: [#2974](https://github.com/jikig-ai/soleur/pull/2974) (introduced the dedup loop and the buggy parser)
 - Sibling learning: `knowledge-base/project/learnings/2026-03-31-awk-split-defaults-to-fs-not-whitespace.md`
 - Canonical sed parser: `scripts/content-publisher.sh` (`get_frontmatter_field`)
-- Runbook entry: `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` §H8
+- Runbook entry: `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` §H8
 - AGENTS.md rules applied: `cq-workflow-pattern-duplication-bug-propagation`, `wg-when-fixing-a-workflow-gates-detection`

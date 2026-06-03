@@ -417,7 +417,7 @@ At ttlSec=600 → 150s remint window → ≤24 mints/hour/founder ≤ precheck c
 
 3.1 **Doppler — remove `SUPABASE_JWT_SECRET` from `dev` and `prd` configs.** Owner: operator (sensitive write per `hr-menu-option-ack-not-prod-write-auth`). The plan's `/work` Phase 3 prescribes printing a clear `[ack-needed] doppler secrets delete SUPABASE_JWT_SECRET -p soleur -c dev` and a paired `prd` line, gated on a `[y/N]` prompt per the hard rule. Removal happens AFTER PR merge (post-merge operator step in AC) since the running prod process still references it until the new image rolls out.
 
-3.2 **Supabase Auth settings — runbook only.** The `supabase/supabase` Terraform provider does not (as of 2026-05-18, v1.9.1) expose `RATE_LIMIT_TOKEN_REFRESH` or `RATE_LIMIT_EMAIL_SENT` as managed fields. Document the required Auth panel state (`JWT_EXP=3600`, `EXTERNAL_EMAIL_ENABLED=true`, `RATE_LIMIT_TOKEN_REFRESH` value from Phase 0.6 probe) in `knowledge-base/engineering/ops/runbooks/tenant-provisioning.md` and file a follow-up tracking issue per `hr-all-infrastructure-provisioning-servers` + `wg-when-deferring-a-capability-create-a`.
+3.2 **Supabase Auth settings — runbook only.** The `supabase/supabase` Terraform provider does not (as of 2026-05-18, v1.9.1) expose `RATE_LIMIT_TOKEN_REFRESH` or `RATE_LIMIT_EMAIL_SENT` as managed fields. Document the required Auth panel state (`JWT_EXP=3600`, `EXTERNAL_EMAIL_ENABLED=true`, `RATE_LIMIT_TOKEN_REFRESH` value from Phase 0.6 probe) in `knowledge-base/engineering/operations/runbooks/tenant-provisioning.md` and file a follow-up tracking issue per `hr-all-infrastructure-provisioning-servers` + `wg-when-deferring-a-capability-create-a`.
 
 3.3 **GitHub Actions secrets — verify no `SUPABASE_JWT_SECRET` reference.** Run `gh secret list --json name | jq` and confirm absence. If present, remove via `gh secret delete` post-merge.
 
@@ -496,7 +496,7 @@ Ordered steps to revert if a regression surfaces post-(d) but before (e):
 - `apps/web-platform/lib/supabase/tenant.ts` (gut HS256 path, wire Supabase admin generate-session, add `decodeJwtPayloadUnsafe` + `resolveFounderEmail` helpers)
 - `apps/web-platform/lib/supabase/service.ts` — or wherever `getServiceClient` lives (grep at /work-time). Add a startup probe in production NODE_ENV: query `auth.hooks` for the registered `runtime_jwt_mint_hook` row. If absent, **hard-fail** — throw on first `getServiceClient()` call OR `process.exit(1)` at boot. Plan-phase only; implementation deferred to /work.
 - `apps/web-platform/server/sensitive-keys.ts` (remove `jwt_secret` and `supabase_jwt_secret` entries)
-- `knowledge-base/engineering/ops/runbooks/tenant-provisioning.md` (drop dashboard-paste step, document Auth hook registration via Mgmt API, document required Auth-config settings)
+- `knowledge-base/engineering/operations/runbooks/tenant-provisioning.md` (drop dashboard-paste step, document Auth hook registration via Mgmt API, document required Auth-config settings)
 - `apps/web-platform/test/server/tenant-jwt-refresh.test.ts` (new TTL/4 boundary tests + GoTrue rate-limit tests + hook-not-registered defensive seam)
 - `apps/web-platform/test/server/tenant-jwt-deny.tenant-isolation.test.ts` (re-run after substrate swap; assert revocation parity against hook-injected jti)
 
@@ -530,7 +530,7 @@ Ordered steps to revert if a regression surfaces post-(d) but before (e):
 14. **`bun run typecheck && bun test && bun run build` GREEN** in `apps/web-platform/`.
 15. **Hook-not-registered Sentry probe.** Confirm `apps/web-platform/lib/supabase/service.ts` `getServiceClient` emits a structured Sentry event of class `hook_unregistered_at_startup` when the hook is missing. Test via mocking `auth.hooks` to return empty; assert Sentry event captured.
 16. **GDPR gate execution.** `/soleur:gdpr-gate` invoked against the diff per AGENTS.md `hr-gdpr-gate-on-regulated-data-surfaces` (canonical regex matches DDL + auth flow); findings documented in PR body or filed as `compliance/critical` issues.
-17. **Tenant-provisioning runbook updated.** `knowledge-base/engineering/ops/runbooks/tenant-provisioning.md` reflects (a) no SUPABASE_JWT_SECRET paste step, (b) Custom Access Token Hook registration step (API or dashboard), (c) JWT Signing Keys enablement check.
+17. **Tenant-provisioning runbook updated.** `knowledge-base/engineering/operations/runbooks/tenant-provisioning.md` reflects (a) no SUPABASE_JWT_SECRET paste step, (b) Custom Access Token Hook registration step (API or dashboard), (c) JWT Signing Keys enablement check.
 
 ### Post-merge (operator)
 
@@ -602,7 +602,7 @@ Gate is advisory; full execution at /work Phase 0.5 per skill convention.
 ### Terraform changes
 
 - **Conditional on Phase 3.2 outcome.** If Supabase provider supports `supabase_auth_config`, add `apps/web-platform/infra/supabase-auth.tf` resource pinning the required Auth settings.
-- If not, **runbook update** at `knowledge-base/engineering/ops/runbooks/tenant-provisioning.md` documents the required Auth Settings panel state per Supabase project, with a follow-up tracking issue per `hr-all-infrastructure-provisioning-servers` and `wg-when-deferring-a-capability-create-a`.
+- If not, **runbook update** at `knowledge-base/engineering/operations/runbooks/tenant-provisioning.md` documents the required Auth Settings panel state per Supabase project, with a follow-up tracking issue per `hr-all-infrastructure-provisioning-servers` and `wg-when-deferring-a-capability-create-a`.
 
 ### Apply path
 

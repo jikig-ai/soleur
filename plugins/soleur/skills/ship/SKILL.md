@@ -809,17 +809,17 @@ Enforces the operator's standing rule — **every detected incident gets a post-
 **If triggered — require a PIR on the branch:**
 
 ```bash
-git diff --name-only origin/main...HEAD | grep -E '^knowledge-base/engineering/ops/post-mortems/.+-postmortem\.md$'
+git diff --name-only origin/main...HEAD | grep -E '^knowledge-base/engineering/operations/post-mortems/.+-postmortem\.md$'
 ```
 
 - **Match (a PIR was added/modified on this branch):** Pass. Confirm its frontmatter carries `brand_survival_threshold` and the Art. 33/34 fields (availability outages set both `false` with an `n/a` rationale; data-exposure incidents must evaluate the GDPR gate per `/soleur:incident` Phase 2).
-- **No match:** the incident has no PIR. **Headless mode:** invoke `/soleur:incident` (or, if unavailable in the loaded plugin snapshot, author the PIR directly using `plugins/soleur/skills/incident/templates/pir.md` → `knowledge-base/engineering/ops/post-mortems/<slug>-postmortem.md`), commit it, then re-run the gate. **Interactive mode:** prompt — (a) run `/soleur:incident` now, (b) author the PIR inline, or (c) defer with a tracked `type/chore` issue carrying a `Re-eval by:` criterion AND the `deferred-automation` sentinel (only when the PIR genuinely needs data not yet available). Default-deny on "we'll write it later" with no tracked issue.
+- **No match:** the incident has no PIR. **Headless mode:** invoke `/soleur:incident` (or, if unavailable in the loaded plugin snapshot, author the PIR directly using `plugins/soleur/skills/incident/templates/pir.md` → `knowledge-base/engineering/operations/post-mortems/<slug>-postmortem.md`), commit it, then re-run the gate. **Interactive mode:** prompt — (a) run `/soleur:incident` now, (b) author the PIR inline, or (c) defer with a tracked `type/chore` issue carrying a `Re-eval by:` criterion AND the `deferred-automation` sentinel (only when the PIR genuinely needs data not yet available). Default-deny on "we'll write it later" with no tracked issue.
 
 **Also file the systemic follow-ups the PIR names** (alerting gaps, write-site sweeps) as their own issues — a PIR with `## Follow-ups` that never become issues is shelf-ware.
 
 **If not triggered:** Skip silently (greenfield features, docs, refactors with no production-incident framing).
 
-**Why:** The 2026-06-02 chat-message-saving outage (migration 059 made `messages.workspace_id` RLS-required but the INSERT sites were never swept) ran for ~3 weeks, was first MISdiagnosed, and was nearly shipped-and-forgotten with no post-mortem. The operator's standing instruction is that **any** detected incident — even one found incidentally while fixing something else — always gets a post-mortem. This gate makes that mechanical at the merge boundary. PIR: `knowledge-base/engineering/ops/post-mortems/chat-rls-workspace-id-outage-postmortem.md`.
+**Why:** The 2026-06-02 chat-message-saving outage (migration 059 made `messages.workspace_id` RLS-required but the INSERT sites were never swept) ran for ~3 weeks, was first MISdiagnosed, and was nearly shipped-and-forgotten with no post-mortem. The operator's standing instruction is that **any** detected incident — even one found incidentally while fixing something else — always gets a post-mortem. This gate makes that mechanical at the merge boundary. PIR: `knowledge-base/engineering/operations/post-mortems/chat-rls-workspace-id-outage-postmortem.md`.
 
 ### Undeferred Operator-Step Gate (mandatory)
 
@@ -1605,7 +1605,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    -->
    ```
 
-   Canonical convention: `knowledge-base/engineering/ops/runbooks/followthrough-convention.md`.
+   Canonical convention: `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`.
    The directive is parsed daily by `.github/workflows/scheduled-followthrough-sweeper.yml`
    via [scripts/sweep-followthroughs.sh](../../../../scripts/sweep-followthroughs.sh) — exit 0 PASS / exit 1 FAIL / other TRANSIENT.
 
@@ -1740,7 +1740,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    **Step 2:** Classify each new migration.
 
 - **Schema-addition** (`ADD COLUMN`, `CREATE TABLE`, `CREATE INDEX`): verify via the REST probe in Step 3 below.
-- **Data migration** (backfill, value normalization, constraint-preparation rewrite): require a sibling verify file at `apps/web-platform/supabase/verify/<same-filename>.sql`. If absent, block the session and prompt the author to add one — see `knowledge-base/engineering/ops/runbooks/supabase-migrations.md` §3 ("Data backfill verification"). Once present, CI's `verify-migrations` job runs the sentinels on every deploy and auto-closes any matching `follow-through` issues; no additional manual step here.
+- **Data migration** (backfill, value normalization, constraint-preparation rewrite): require a sibling verify file at `apps/web-platform/supabase/verify/<same-filename>.sql`. If absent, block the session and prompt the author to add one — see `knowledge-base/engineering/operations/runbooks/supabase-migrations.md` §3 ("Data backfill verification"). Once present, CI's `verify-migrations` job runs the sentinels on every deploy and auto-closes any matching `follow-through` issues; no additional manual step here.
 
    **Step 3:** Verify each schema-addition migration is live in production by querying the Supabase REST API:
 

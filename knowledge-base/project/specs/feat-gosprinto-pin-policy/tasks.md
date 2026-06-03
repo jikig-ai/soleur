@@ -58,7 +58,7 @@ Scope-outs: #3526, #3527, #3528, #3529
 
 ## Phase 6: Operator runbook
 
-- [x] 6.1 Author `knowledge-base/engineering/ops/runbooks/vendor-pin-drift-resolution.md` with 6 sections: synthetic-drift test, conflict-marker resolution, rollback case, rename case, archived case, cron-failure case, POSTURE_FAIL operator chain (cross-link to policy doc)
+- [x] 6.1 Author `knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md` with 6 sections: synthetic-drift test, conflict-marker resolution, rollback case, rename case, archived case, cron-failure case, POSTURE_FAIL operator chain (cross-link to policy doc)
 - [x] 6.2 Cross-link runbook from policy doc and `compliance-posture.md`
 
 ## Phase 7: Test fixtures
