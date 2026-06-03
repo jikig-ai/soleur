@@ -215,7 +215,7 @@ describe("POST /api/kb/sync — server-side workspace_path resolution", () => {
 });
 
 describe("POST /api/kb/sync — sync failure", () => {
-  it("appends row {ok:false, error_class:sync_failed} on syncWorkspace failure", async () => {
+  it("propagates the REAL error_class from syncResult (sync_failed) — not a hard-coded literal", async () => {
     USER_ROWS.set("user-1", {
       workspace_path: "/ws/user-1",
       workspace_status: "ready",
@@ -223,7 +223,8 @@ describe("POST /api/kb/sync — sync failure", () => {
     });
     mockSyncWorkspace.mockResolvedValue({
       ok: false,
-      error: new Error("non-fast-forward"),
+      error: new Error("auth failed"),
+      errorClass: "sync_failed",
     });
 
     const res = await POST(makeRequest());
@@ -241,5 +242,53 @@ describe("POST /api/kb/sync — sync failure", () => {
     expect(body).toEqual(
       expect.objectContaining({ ok: false, error_class: "sync_failed" }),
     );
+  });
+
+  it("propagates error_class:non_fast_forward when syncResult classifies a diverged clone (AC-B2)", async () => {
+    USER_ROWS.set("user-1", {
+      workspace_path: "/ws/user-1",
+      workspace_status: "ready",
+      github_installation_id: 42,
+    });
+    mockSyncWorkspace.mockResolvedValue({
+      ok: false,
+      error: new Error("Not possible to fast-forward, aborting."),
+      errorClass: "non_fast_forward",
+    });
+
+    const res = await POST(makeRequest());
+
+    expect(res.status).toBe(200);
+    expect(mockAppendKbSyncRow).toHaveBeenCalledWith(
+      "user-1",
+      expect.objectContaining({
+        trigger: "manual",
+        ok: false,
+        error_class: "non_fast_forward",
+      }),
+    );
+    const body = await res.json();
+    expect(body).toEqual(
+      expect.objectContaining({ ok: false, error_class: "non_fast_forward" }),
+    );
+  });
+
+  it("records a recovered:true ok-row when syncWorkspace self-healed (AC-B4)", async () => {
+    USER_ROWS.set("user-1", {
+      workspace_path: "/ws/user-1",
+      workspace_status: "ready",
+      github_installation_id: 42,
+    });
+    mockSyncWorkspace.mockResolvedValue({ ok: true, recovered: true });
+
+    const res = await POST(makeRequest());
+
+    expect(res.status).toBe(200);
+    expect(mockAppendKbSyncRow).toHaveBeenCalledWith(
+      "user-1",
+      expect.objectContaining({ trigger: "manual", ok: true, recovered: true }),
+    );
+    const body = await res.json();
+    expect(body).toEqual(expect.objectContaining({ ok: true, recovered: true }));
   });
 });

@@ -3,9 +3,8 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isPathInWorkspace } from "@/server/sandbox";
 import { githubApiGet, githubApiPost, GitHubApiError } from "@/server/github-api";
-import { gitWithInstallationAuth } from "@/server/git-auth";
 import { sanitizeFilename } from "@/server/kb-validation";
-import { resolveUserKbRoot } from "@/server/kb-route-helpers";
+import { resolveUserKbRoot, syncWorkspace } from "@/server/kb-route-helpers";
 import { prepareUploadPayload } from "@/server/kb-upload-payload";
 import path from "path";
 import logger from "@/server/logger";
@@ -229,19 +228,18 @@ export async function POST(request: Request) {
       "PUT",
     );
 
-    // Workspace sync (best-effort — file is committed to GitHub)
-    try {
-      await gitWithInstallationAuth(
-        ["pull", "--ff-only"],
-        userData.github_installation_id,
-        { cwd: userData.workspace_path, timeout: 30_000 },
-      );
-    } catch (syncError) {
-      logger.error(
-        { err: syncError, userId: user.id },
-        "kb/upload: workspace sync failed after successful commit",
-      );
-      Sentry.captureException(syncError);
+    // Workspace sync (best-effort — file is committed to GitHub). Routed
+    // through the hardened `syncWorkspace` so a diverged clone classifies as
+    // non_fast_forward and self-heals (Closes #2244 — the inline pull here
+    // carried the identical latent non-fast-forward bug). `syncWorkspace`
+    // already logs + mirrors to Sentry on failure.
+    const sync = await syncWorkspace(
+      userData.github_installation_id,
+      userData.workspace_path,
+      logger,
+      { userId: user.id, op: "upload" },
+    );
+    if (!sync.ok) {
       return NextResponse.json(
         {
           error: "File committed to GitHub but workspace sync failed. Try refreshing.",
