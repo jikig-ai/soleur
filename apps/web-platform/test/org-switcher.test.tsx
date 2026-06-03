@@ -73,6 +73,13 @@ describe("OrgSwitcher", () => {
     expect(trigger.textContent).not.toContain("Owner");
   });
 
+  it("multi-org chip renders no subtitle when no repo is connected (Open Q1)", () => {
+    render(<OrgSwitcher memberships={[JIKIGAI, ACME]} repoName={null} />);
+    const trigger = screen.getByRole("button", { name: /switch workspace/i });
+    expect(within(trigger).queryByTestId("live-repo-badge")).toBeNull();
+    expect(trigger.textContent).toContain("jikigai");
+  });
+
   it("dropdown lists all memberships with role + member count when chip is clicked", () => {
     render(<OrgSwitcher memberships={[JIKIGAI, ACME]} />);
     fireEvent.click(screen.getByRole("button", { name: /switch workspace/i }));

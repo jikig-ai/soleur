@@ -32,7 +32,9 @@ export function OrgSwitcherContainer() {
   const [pending, setPending] = useState<OrgMembershipSummary | null>(null);
   const [status, setStatus] = useState<SwitchStatus>("idle");
   // The active-repo name folds into the pill face as a muted subtitle. Same
-  // self-healing source LiveRepoBadge uses (shared hook, single fetch surface).
+  // self-healing source LiveRepoBadge uses; the hook coalesces concurrent
+  // callers into one in-flight request, so the pill + interstitial share a
+  // single active-repo fetch surface (no doubled poll despite two consumers).
   const { data: repo } = useActiveRepo();
 
   useEffect(() => {
