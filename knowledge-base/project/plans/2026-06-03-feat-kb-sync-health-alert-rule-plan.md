@@ -175,6 +175,9 @@ failure_modes:
   - mode: rule deleted / array-of-blocks shrunk
     detection: destroy-guard-filter-sentry.jq in apply-sentry-infra.yml
     alert_route: apply step blocks the destructive plan
+  - mode: -target line dropped (rule silently stops applying)
+    detection: assert-byok-rules-exist.sh post-apply liveness assertion (workspace-sync-health in EXPECTED_RULES)
+    alert_route: apply workflow fails loudly (non-zero exit)
   - mode: alert too noisy (operator inbox fatigue)
     detection: operator inbox volume
     alert_route: tune frequency / lifecycle conditions in a follow-up
@@ -201,5 +204,5 @@ No regulated-data surface touched (no schema, migration, auth flow, API route, o
 - A plan whose `## User-Brand Impact` section is empty or placeholder fails `deepen-plan` Phase 4.6 — this one is filled.
 - Do not extend the scope-guard or jq filter: `sentry_issue_alert` is already in-scope (#4364). Adding a new resource of an already-allowed type needs no guard-suite edit (confirmed by reading `test-destroy-guard-sentry-scope-guard.sh`).
 - Use `Closes #4882` in the PR body (the alert lands + auto-applies on merge; not an operator-run remediation).
-- **Known debt (not a blocker):** the apply workflow has a post-apply `assert-byok-rules-exist.sh` liveness check for the BYOK rules, but no equivalent existence assertion for the new rule — so if a future edit drops the `-target` line, the rule silently stops applying and the contract test (which reads only the `.tf`, not live Sentry) won't catch it. The `chat_message_save_failure` rule shipped with the same gap, so this is consistent precedent. Optional follow-up: extend the post-apply assertion to cover all apply-created issue-alerts (flagged by Kieran plan-review).
+- **Future-drop regression — CLOSED at review time.** The plan originally framed this as deferred "known debt" (claiming no liveness assertion existed and `chat_message_save_failure` had the same gap). That was wrong: `assert-byok-rules-exist.sh` is a generalized post-apply existence assertion (`#4656` extended `#4849`) that already covered chat, and its `EXPECTED_RULES` is the canonical join-list for every apply-created issue-alert. The `user-impact-reviewer` (single-user-incident lens) caught the omission; `workspace-sync-health` was added to `EXPECTED_RULES` + the test (T8 isolation case) inline, and the script's stale "both rules"/Art.33-only messages were generalized. A future dropped `-target` line now fails the apply loudly instead of silently un-applying.
 - HCL must be **multi-line block style** (siblings' convention); inline-object form won't survive `terraform fmt -check` (AC2). Run `terraform fmt` before committing (Kieran plan-review).

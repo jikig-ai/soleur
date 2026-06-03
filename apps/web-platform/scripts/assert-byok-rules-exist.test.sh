@@ -42,7 +42,8 @@ cat >"$TMPDIR_T/both.json" <<'JSON'
   {"id": "1", "name": "byok-art-33-breach"},
   {"id": "2", "name": "byok-cap-exceeded"},
   {"id": "3", "name": "chat-message-save-failure"},
-  {"id": "4", "name": "auth-exchange-code-burst"}
+  {"id": "4", "name": "auth-exchange-code-burst"},
+  {"id": "5", "name": "workspace-sync-health"}
 ]
 JSON
 set +e
@@ -60,7 +61,8 @@ cat >"$TMPDIR_T/missing-breach.json" <<'JSON'
 [
   {"id": "2", "name": "byok-cap-exceeded"},
   {"id": "3", "name": "chat-message-save-failure"},
-  {"id": "4", "name": "auth-exchange-code-burst"}
+  {"id": "4", "name": "auth-exchange-code-burst"},
+  {"id": "5", "name": "workspace-sync-health"}
 ]
 JSON
 set +e
@@ -74,11 +76,12 @@ if grep -q "byok-art-33-breach" <<<"$out"; then pass "names the missing rule"; e
 # T3 — cap-exceeded missing → non-zero exit.
 # ------------------------------------------------------------------------
 echo "T3: byok-cap-exceeded missing"
-# chat-message-save-failure present so only cap is absent (isolation).
+# chat + workspace-sync-health present so only cap is absent (isolation).
 cat >"$TMPDIR_T/missing-cap.json" <<'JSON'
 [
   {"id": "1", "name": "byok-art-33-breach"},
-  {"id": "3", "name": "chat-message-save-failure"}
+  {"id": "3", "name": "chat-message-save-failure"},
+  {"id": "5", "name": "workspace-sync-health"}
 ]
 JSON
 set +e
@@ -131,7 +134,8 @@ echo "T7: chat-message-save-failure missing"
 cat >"$TMPDIR_T/missing-chat.json" <<'JSON'
 [
   {"id": "1", "name": "byok-art-33-breach"},
-  {"id": "2", "name": "byok-cap-exceeded"}
+  {"id": "2", "name": "byok-cap-exceeded"},
+  {"id": "5", "name": "workspace-sync-health"}
 ]
 JSON
 set +e
@@ -140,6 +144,25 @@ rc=$?
 set -e
 if [[ $rc -ne 0 ]]; then pass "non-zero exit when chat-message-save-failure absent"; else fail "expected non-zero, got 0"; fi
 if grep -q "chat-message-save-failure" <<<"$out"; then pass "names the missing chat rule"; else fail "missing chat rule not named ($out)"; fi
+
+# ------------------------------------------------------------------------
+# T8 — workspace-sync-health missing → non-zero exit, names the rule
+#      (#4882 detector-liveness parity with T2/T3/T7).
+# ------------------------------------------------------------------------
+echo "T8: workspace-sync-health missing"
+cat >"$TMPDIR_T/missing-wsh.json" <<'JSON'
+[
+  {"id": "1", "name": "byok-art-33-breach"},
+  {"id": "2", "name": "byok-cap-exceeded"},
+  {"id": "3", "name": "chat-message-save-failure"}
+]
+JSON
+set +e
+out=$(base_env SENTRY_FIXTURE_RULES="$TMPDIR_T/missing-wsh.json" bash "$SCRIPT" 2>&1)
+rc=$?
+set -e
+if [[ $rc -ne 0 ]]; then pass "non-zero exit when workspace-sync-health absent"; else fail "expected non-zero, got 0"; fi
+if grep -q "workspace-sync-health" <<<"$out"; then pass "names the missing workspace-sync-health rule"; else fail "missing wsh rule not named ($out)"; fi
 
 echo ""
 echo "assert-byok-rules-exist.test.sh: $PASS passed, $FAIL failed"
