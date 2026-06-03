@@ -257,19 +257,27 @@ test.describe("nav-states visual gate — desktop", () => {
       "expanded drilled rail (md:w-56) overflows horizontally — Bug 1 regression",
     ).toBeLessThanOrEqual(1);
 
-    // Bug 2: the band's "Back to menu" affordance and the brand-row collapse
-    // toggle must share one left edge (both at the rail's px-3 gutter).
-    const backBox = await railBand(page)
+    // Bug 2: the back-affordance arrowhead and the brand-row collapse-toggle
+    // arrowhead must share the rail's px-3 gutter. Measure the glyph <svg>s, not
+    // the elements: the back Link stretches full rail width (its px-3 is internal
+    // padding, so its border-box sits at the rail edge), whereas the collapse
+    // button has no padding (its px-3 is the row gutter). Comparing border-boxes
+    // would compare a padded box to an unpadded one. The glyphs are what the user
+    // sees aligned: back glyph at the px-3 gutter (12px), collapse glyph centered
+    // in its h-6 w-6 button (~16px) — a ~4px offset the 6px tolerance absorbs.
+    const backGlyph = await railBand(page)
       .getByTestId("nav-back-chevron")
+      .locator("svg")
       .boundingBox();
-    const collapseBox = await page
+    const collapseGlyph = await page
       .getByRole("button", { name: "Collapse sidebar" })
+      .locator("svg")
       .boundingBox();
-    expect(backBox).not.toBeNull();
-    expect(collapseBox).not.toBeNull();
+    expect(backGlyph).not.toBeNull();
+    expect(collapseGlyph).not.toBeNull();
     expect(
-      Math.abs(backBox!.x - collapseBox!.x),
-      "back affordance and collapse toggle left edges drifted — Bug 2 regression",
+      Math.abs(backGlyph!.x - collapseGlyph!.x),
+      "back affordance and collapse toggle arrowheads drifted — Bug 2 regression",
     ).toBeLessThanOrEqual(6);
   });
 
