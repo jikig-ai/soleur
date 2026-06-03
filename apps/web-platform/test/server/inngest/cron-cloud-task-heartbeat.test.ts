@@ -199,7 +199,7 @@ type LabelSpec = { issues?: Array<{ created_at: string }>; throw?: boolean };
  */
 function dispatcher(
   perLabel: Record<string, LabelSpec>,
-  existing?: { number: number },
+  existing?: { number: number; matchTask: string },
 ) {
   return async (route: string, params: Record<string, unknown> = {}) => {
     if (route === "GET /repos/{owner}/{repo}/issues") {
@@ -208,7 +208,12 @@ function dispatcher(
       return { data: spec.issues ?? [] };
     }
     if (route === "GET /search/issues") {
-      return { data: { items: existing ? [existing] : [] } };
+      // The handler's search query embeds `[cloud-task-silence] <task> silent`.
+      // Return the stale issue ONLY for the targeted task so other tasks'
+      // recovery branches don't comment on it.
+      const match =
+        existing && (params.q as string).includes(`${existing.matchTask} silent`);
+      return { data: { items: match ? [{ number: existing!.number }] : [] } };
     }
     if (route === "POST /repos/{owner}/{repo}/issues") {
       return { data: { number: 9999 } };
@@ -255,6 +260,41 @@ describe("cronCloudTaskHeartbeatHandler — never-produced grace", () => {
       (c) => c[0] === "POST /repos/{owner}/{repo}/issues",
     );
     expect(posts).toHaveLength(0);
+  });
+
+  it("pending-first-run with a stale open silence issue → auto-closes it with a null-safe comment", async () => {
+    octokitRequestSpy.mockImplementation(
+      dispatcher(
+        { "scheduled-legal-audit": { issues: [] } },
+        { number: 4875, matchTask: "legal-audit" },
+      ),
+    );
+
+    await cronCloudTaskHeartbeatHandler(makeArgs());
+
+    // recovery branch: comment + PATCH-close the stale issue for the pending task
+    const comment = octokitRequestSpy.mock.calls.find(
+      (c) =>
+        c[0] === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments" &&
+        (c[1] as { issue_number?: number }).issue_number === 4875,
+    );
+    expect(comment).toBeDefined();
+    const body = (comment![1] as { body: string }).body;
+    expect(body).toContain("pending first run (never produced an issue)");
+    expect(body).not.toContain("null days ago");
+
+    const close = octokitRequestSpy.mock.calls.find(
+      (c) =>
+        c[0] === "PATCH /repos/{owner}/{repo}/issues/{issue_number}" &&
+        (c[1] as { state?: string }).state === "closed",
+    );
+    expect(close).toBeDefined();
+    // still NO new silence issue filed for a pending task
+    expect(
+      octokitRequestSpy.mock.calls.filter(
+        (c) => c[0] === "POST /repos/{owner}/{repo}/issues",
+      ),
+    ).toHaveLength(0);
   });
 
   it("over-threshold issue → silent:true and files a silence issue (control)", async () => {
