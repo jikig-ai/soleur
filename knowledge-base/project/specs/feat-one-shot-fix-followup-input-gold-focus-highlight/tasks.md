@@ -27,13 +27,14 @@ Derived from `2026-06-04-fix-followup-composer-gold-focus-highlight-plan.md` (po
 - [ ] 3.2 Edit B (default B1): add `focus-visible:shadow-none` to the textarea className (`chat-input.tsx:646`) to suppress the inherited global gold box-shadow. Preserve `min-h-[36px]` / `max-h-[140px]`. (AC1a, AC5)
 - [ ] 3.3 Verify B1 cascade win: confirm in the built output / browser that the textarea no longer shows the gold ring on focus. If the Tailwind utility loses to the `@layer base` rule, fall back to B2 (add `data-chat-composer-input` to the textarea + a scoped `box-shadow: none` reset in `globals.css` right after lines 164-169 — do NOT alter the global rule itself).
 - [ ] 3.4 Confirm `globals.css:164-169` and all `--soleur-*` tokens are byte-unchanged (skip globals.css entirely if B1 works). (AC3)
-- [ ] 3.5 Run the new test; confirm GREEN.
+- [ ] 3.5 **[deepen-plan sibling]** Apply the same Edit A + Edit B to the dashboard landing-prompt composer: `apps/web-platform/app/(dashboard)/dashboard/page.tsx:509` (container border) + `:539` (the `<input>` — add `focus-visible:shadow-none`). Keeps the two intentionally-matched surfaces consistent. (AC9)
+- [ ] 3.6 Run the new test; confirm GREEN.
 
 ## Phase 4 — Full verification
 
 - [ ] 4.1 `vitest` for `chat-input.test.tsx`, `chat-input-quote.test.tsx`, `chat-input-auto-grow.test.tsx`; all pass. (AC4, AC5, AC7)
 - [ ] 4.2 `tsc --noEmit` clean; no new lint errors. (AC7)
-- [ ] 4.3 Visual verification (Playwright MCP / `/soleur:qa`): screenshot focused composer in dark theme — single subtle non-gold focus state. Check empty vs. with-content states; confirm Send button amber fill (`bg-amber-600`) unaffected. (AC8)
+- [ ] 4.3 Visual verification (Playwright MCP / `/soleur:qa`): screenshot focused composer in dark theme — single subtle non-gold focus state. Check empty vs. with-content states; confirm Send button amber fill (`bg-amber-600`) unaffected. Also screenshot the focused dashboard landing prompt and confirm parity. (AC8, AC9)
 - [ ] 4.4 `git diff globals.css` shows no change to the global focus-visible block (or no globals.css change at all). (AC3)
 
 ## Phase 5 — Ship
