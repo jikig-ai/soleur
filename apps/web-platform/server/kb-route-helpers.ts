@@ -319,11 +319,25 @@ export type SyncWorkspaceResult =
 /**
  * Classify a failed-git error into a {@link KbSyncErrorClass}.
  *
- * The non-fast-forward signature in `git pull --ff-only` stderr is
- * `Not possible to fast-forward` (verified against installed git 2.53.0:
- * `fatal: Not possible to fast-forward, aborting.`). Match on the stable
- * substring so a wording drift in the surrounding hint text (e.g. the
- * "Diverging branches can't be fast-forwarded" advice) does not break it.
+ * TWO distinct `git pull --ff-only` aborts are self-healable via the SAME gated
+ * `reset --hard origin/<default>` (it discards both un-pushed commits — blocked
+ * by the gate — and uncommitted working-tree changes), so both map to
+ * `non_fast_forward` (the self-heal trigger). We reuse the existing class rather
+ * than widen the union (cq-union-widening-grep-three-patterns); a dirty-tree
+ * recovery records `non_fast_forward` + `recovered:true`, which is functionally
+ * correct for the `KbSyncStatus` UI (the `recovered` flag is what it reads).
+ *
+ * Stable stderr signatures (git 2.53.0):
+ *   1. Diverged clone:    `Not possible to fast-forward` (`fatal: …, aborting.`).
+ *   2. Dirty working tree: `would be overwritten by merge` /
+ *      `commit your changes or stash`. This is the #4886-follow-up incident:
+ *      something on the host (e.g. a runtime write to `.claude/settings.json`)
+ *      left the KB MIRROR clone dirty, and `--ff-only` aborts on EVERY push —
+ *      the reconcile froze with no row written. The mirror should always match
+ *      origin, so resetting the spurious local edit is safe (real session work
+ *      lands as COMMITS under `knowledge-base/**`, caught by the un-pushed-commit
+ *      gate).
+ *
  * Everything else (auth, IO, network, timeout) is `sync_failed`.
  */
 function classifyGitSyncError(err: unknown): KbSyncErrorClass {
@@ -331,7 +345,11 @@ function classifyGitSyncError(err: unknown): KbSyncErrorClass {
     err instanceof Error
       ? `${err.message}\n${(err as { stderr?: string }).stderr ?? ""}`
       : String(err);
-  if (text.includes("Not possible to fast-forward")) {
+  if (
+    text.includes("Not possible to fast-forward") ||
+    text.includes("would be overwritten by merge") ||
+    text.includes("commit your changes or stash")
+  ) {
     return ERROR_CLASS_NON_FAST_FORWARD;
   }
   return ERROR_CLASS_SYNC_FAILED;

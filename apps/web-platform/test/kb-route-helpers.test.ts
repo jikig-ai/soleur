@@ -482,6 +482,14 @@ describe("syncWorkspace", () => {
   const NON_FF_STDERR =
     "fatal: Not possible to fast-forward, aborting.";
 
+  // #4886-follow-up incident: the KB MIRROR clone had an uncommitted local edit
+  // to `.claude/settings.json`, so `pull --ff-only` aborted on every push and the
+  // reconcile froze (no row written). git 2.53.0 stderr for that abort:
+  const DIRTY_TREE_STDERR =
+    "error: Your local changes to the following files would be overwritten by merge:\n" +
+    "\t.claude/settings.json\n" +
+    "Please commit your changes or stash them before you merge.\nAborting";
+
   test("classifies a non-fast-forward stderr as non_fast_forward", async () => {
     // Diverged with ZERO local commits → safe self-heal path resets and recovers.
     scriptGit({
@@ -500,6 +508,49 @@ describe("syncWorkspace", () => {
     // path being taken (a sync_failed would never fetch/reset).
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.recovered).toBe(true);
+  });
+
+  test("#4886-followup: dirty-working-tree abort self-heals (reset --hard) → {ok:true, recovered:true}", async () => {
+    // The KB-mirror clone had an uncommitted `.claude/settings.json` edit; the
+    // dirty-tree abort must route to the SAME gated self-heal as non_fast_forward
+    // (reset --hard discards the spurious edit; the un-pushed-commit gate protects
+    // real session work). Before this fix it classified as sync_failed → froze.
+    scriptGit({
+      pull: () => Promise.reject(new Error(DIRTY_TREE_STDERR)),
+      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      revList: () => Promise.resolve(Buffer.from("0\n")),
+    });
+
+    const result = await syncWorkspace(
+      TEST_INSTALLATION_ID,
+      TEST_WORKSPACE_PATH,
+      fakeLogger,
+      { userId: TEST_USER_ID, op: "push" },
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.recovered).toBe(true);
+    const calls = mockGitWithAuth.mock.calls.map((c: unknown[]) => c[0] as string[]);
+    expect(calls).toContainEqual(["reset", "--hard", "origin/main"]);
+  });
+
+  test("#4886-followup: dirty-tree + un-pushed commits → NO reset (gate protects work), {ok:false}", async () => {
+    scriptGit({
+      pull: () => Promise.reject(new Error(DIRTY_TREE_STDERR)),
+      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      revList: () => Promise.resolve(Buffer.from("2\n")),
+    });
+
+    const result = await syncWorkspace(
+      TEST_INSTALLATION_ID,
+      TEST_WORKSPACE_PATH,
+      fakeLogger,
+      { userId: TEST_USER_ID, op: "push" },
+    );
+
+    expect(result.ok).toBe(false);
+    const calls = mockGitWithAuth.mock.calls.map((c: unknown[]) => c[0] as string[]);
+    expect(calls.some((a) => a[0] === "reset")).toBe(false);
   });
 
   test("classifies an auth/IO error as sync_failed (no self-heal attempted)", async () => {
