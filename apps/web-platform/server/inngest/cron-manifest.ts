@@ -57,6 +57,7 @@ export const EXPECTED_CRON_FUNCTIONS: string[] = [
   "cron-terraform-drift",
   "cron-ux-audit",
   "cron-weekly-analytics",
+  "cron-workspace-gc",
   "cron-workspace-sync-health",
 ];
 
