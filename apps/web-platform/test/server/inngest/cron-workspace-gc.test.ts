@@ -24,7 +24,7 @@ vi.mock("node:fs/promises", () => ({
 }));
 
 vi.mock("@/server/inngest/functions/_cron-shared", () => ({
-  resolveCronWorkspaceRoot: vi.fn(() => "/workspaces/.cron"),
+  resolveCronWorkspaceRoot: vi.fn(() => "/workspaces"),
   postSentryHeartbeat: vi.fn(async () => {}),
   DEFAULT_CRON_WORKSPACE_MIN_FREE_MB: 256,
   // freeMb now lives in _cron-shared (single source of truth) and is re-exported
@@ -124,7 +124,7 @@ describe("cronWorkspaceGcHandler — sweep semantics", () => {
     expect(rm).not.toHaveBeenCalledWith(expect.stringContaining("soleur-fresh"), expect.anything());
     expect(result.sweptCount).toBe(1);
     expect(result.freedMb).toBe(100);
-    expect(result.root).toBe("/workspaces/.cron");
+    expect(result.root).toBe("/workspaces");
     expect(postSentryHeartbeat).toHaveBeenCalledWith(
       expect.objectContaining({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG }),
     );
@@ -149,7 +149,7 @@ describe("cronWorkspaceGcHandler — sweep semantics", () => {
       freeMbAfter: 100,
       freedMb: 50,
       sweptCount: 1,
-      root: "/workspaces/.cron",
+      root: "/workspaces",
     });
   });
 

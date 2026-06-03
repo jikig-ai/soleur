@@ -97,6 +97,27 @@ on a DB write succeeding.
 The GC is the load-bearing safeguard: isolation alone cannot stop a leak from
 filling a shared 20 GB volume.
 
+## Resolution complication — the isolation deadlocked its own deploy (follow-up fix)
+
+PR #4886's **isolation** part (2, above) backfired: it added
+`sudo mkdir -p /mnt/data/workspaces/.cron` to `ci-deploy.sh`'s critical path. On
+the **already-full** volume (the exact incident state), that `mkdir` ENOSPC-failed
+under `set -e` → `ci-deploy.sh` exited `reason=unhandled` → the **Web Platform
+Release v0.102.0 deploy FAILED**, so the container carrying the GC never shipped —
+a deadlock where the fix could not deploy because the thing it fixes was still
+broken. It also broke *every subsequent merge's* deploy. Worse, with isolation the
+GC swept `/workspaces/.cron` while the existing leak lives at `/workspaces/soleur-*`
+(the pre-isolation path), so firing the GC would have reclaimed nothing.
+
+The follow-up fix **reverts the isolation**: remove the `mkdir`/`chown`, point
+`CRON_WORKSPACE_ROOT` back to `/workspaces`. The GC now sweeps `/workspaces`
+directly — unblocking the deploy AND making the GC reclaim the *actual* leak. The
+`soleur-` prefix guard (UUID dirs are 36-char hex, never `soleur-*`) is the
+load-bearing protection, not the subdir. Dedicated-volume isolation is deferred to
+#4891. **Lesson:** never put a volume-writing command (mkdir/touch/cp) in a deploy
+critical path under `set -e` when the volume may be full — the deploy that delivers
+the fix is exactly the one that cannot afford to fail on the broken resource.
+
 ## Follow-ups
 
 - [ ] Stale/diverged-clone divergence alert (content drift, distinct from
