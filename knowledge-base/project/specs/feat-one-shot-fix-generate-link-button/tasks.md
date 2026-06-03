@@ -11,13 +11,15 @@ Lane: cross-domain | Brand-survival threshold: single-user incident (requires CP
 
 ## 2. Core Implementation (RED → GREEN)
 
-- 2.1 **RED** — add failing tests in `kb-route-helpers.test.ts`:
-  - 2.1.1 `getFreshTenantClient` throws `RuntimeAuthError` + service-role row has `ready` workspace → expect `{ ok: true, kbRoot }` (currently 503).
+- 2.0 **Test-mock prep (deepen P1):** the existing test wires tenant + service clients to the SAME `mockFrom` (test file lines 22-40). Introduce a DISTINCT `mockServiceFrom` wired only into the `createServiceClient` mock, so fallback tests prove the service-role read (not the thrown tenant read) produced the result and can set the service read's row independently. Do NOT assert the fallback through the shared `mockFrom`.
+- 2.1 **RED** — add failing tests in `kb-route-helpers.test.ts` (using `mockServiceFrom` for the service-role read):
+  - 2.1.1 `getFreshTenantClient` throws `RuntimeAuthError` + service-role row (`mockServiceFrom`) has `ready` workspace → expect `{ ok: true, kbRoot }` (currently 503); assert the service mock was consulted.
   - 2.1.2 Same, with `extras: ["repo_url", "github_installation_id"]` → expect extras populated from the fallback row.
-  - 2.1.3 Mint throws + service-role row NOT ready → expect the 503 "Workspace not ready" response preserved.
+  - 2.1.3 Mint throws + service-role row NOT ready (`mockServiceFrom` returns non-`ready`) → expect the 503 "Workspace not ready" response preserved.
   - 2.1.4 Mint throws → expect exactly one `mockReportSilentFallback` call carrying the error.
   - 2.1.5 Mint succeeds (no throw) → tenant read path unchanged, no service-role fallback, no `reportSilentFallback`.
 - 2.2 **GREEN** — in `resolveUserKbRoot` (`kb-route-helpers.ts`), replace the `RuntimeAuthError` → 503 branch with: emit `reportSilentFallback` (feature `kb-route-helpers`, op `resolveUserKbRoot.tenant-mint`), then read the same `users` row via `createServiceClient()` (`.from("users").select(selectCols).eq("id", userId).single()`), and run the existing `workspace_path`/`workspace_status === "ready"`/`extras` validation against the fallback result. Keep the happy path and the non-`RuntimeAuthError` rethrow unchanged.
+  - 2.2.1 **`denied_jti` ceiling decision (deepen P1):** `RuntimeAuthError.cause` ∈ `{jwt_mint, rotation, denied_jti}`. Decide explicitly whether the fallback fires for ALL three or only the availability causes (`jwt_mint`/`rotation`). Default: fire for all three, and ADD a code comment at the fallback site naming the ceiling (read scoped to the user's own row; the share write was never tenant-scoped). If the auth-domain owner prefers fail-closed on `denied_jti`, scope the fallback to `cause !== "denied_jti"` and keep the 503 for denied jtis. The choice must be explicit in code, not incidental.
 - 2.3 Verify NO change to `app/api/kb/share/route.ts` GET handler, `kb-share.ts`, or `share-popover.tsx`.
 
 ## 3. Testing & Verification

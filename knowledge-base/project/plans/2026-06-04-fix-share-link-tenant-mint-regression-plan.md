@@ -142,10 +142,18 @@ call sites) but the test strategy and observability section are unchanged in spi
   route's call still resolves;
   (3) fallback still returns the 503-equivalent only when the *service-role* read also
   yields no `workspace_path` / non-`ready` status;
-  (4) `reportSilentFallback` is invoked on the mint-failure fallback. The existing
-  `vi.mock("@/lib/supabase/tenant", …)` already exposes a mockable `getFreshTenantClient`
-  and `RuntimeAuthError`, and `createServiceClient` is already mocked to `mockFrom` — reuse
-  both.
+  (4) `reportSilentFallback` is invoked on the mint-failure fallback.
+  **Mock-distinguishability gotcha (deepen P1):** the existing test file wires BOTH
+  `vi.mock("@/lib/supabase/tenant", … getFreshTenantClient: vi.fn(async () => ({ from: mockFrom })))`
+  AND `vi.mock("@/lib/supabase/server", … createServiceClient: vi.fn(() => ({ from: mockFrom })))`
+  to the **same `mockFrom`** (test file lines 22-40). A fallback test that throws from
+  `getFreshTenantClient` and asserts `mockFrom` returned a ready row passes *vacuously* — it
+  cannot prove the **service-role** client (not the tenant client) produced the result. The
+  new fallback tests MUST introduce a **distinct service-role mock** (e.g. a separate
+  `mockServiceFrom` wired only into `createServiceClient`) so test (1)/(3) assert the
+  service client was the one consulted, and so test (3) can return a not-ready row from the
+  service read *independently* of the (thrown) tenant read. Do NOT reuse the shared
+  `mockFrom` for the service-role fallback assertions.
 
 ## Files to Create
 
@@ -167,7 +175,11 @@ None.
       `{ extras: ["repo_url", "github_installation_id"] as const }`.
 - [ ] When BOTH the tenant mint fails AND the service-role read yields no
       `workspace_path` / non-`ready` status, the helper still returns the 503 "Workspace
-      not ready" response (no false-positive resolution) — asserted by a test.
+      not ready" response (no false-positive resolution) — asserted by a test that wires the
+      **service-role** read (distinct `mockServiceFrom`) to a not-ready row.
+- [ ] The fallback tests prove the **service-role** client (not the shared tenant mock)
+      produced the resolved workspace — i.e. the test uses a distinct `createServiceClient`
+      mock, so the assertion does not pass vacuously through the shared `mockFrom`.
 - [ ] `GET /api/kb/share` and `createShare` are unchanged (no diff to `route.ts` GET
       handler or to `kb-share.ts`).
 - [ ] `apps/web-platform` typechecks and the vitest suite for the edited file passes via
@@ -332,6 +344,69 @@ entry required. Advisory-only; mandatory disclaimer: this is not legal advice.
 - The fallback must carry `extras` through, or the upload route (`extras: ["repo_url",
   "github_installation_id"]`) regresses to "No repository connected" 400 on mint failure.
   Test the `extras` path explicitly.
+
+## Research Insights (deepen-plan, 2026-06-04)
+
+Deepen pass ran inside the one-shot pipeline (sub-agent context — Task fan-out
+unavailable), so the substance-level checks were executed directly against the code.
+Three load-bearing findings:
+
+### 1. Precedent-diff (4.4) — fallback is a verbatim re-use, not novel
+
+`git show abcb3765~1:apps/web-platform/server/kb-route-helpers.ts` (the pre-#3854 form)
+and the current tenant read (`kb-route-helpers.ts:259-300`) are **byte-identical** query
+shapes:
+`.from("users").select(selectCols).eq("id", userId).single<Record<string, unknown>>()`,
+same `selectCols` builder, same `!userData?.workspace_path || workspace_status !== "ready"`
+validation, same `extras` loop. The fallback re-introduces the exact read #3854 removed —
+**no novel pattern**, column parity guaranteed. No correction needed.
+
+### 2. Defense-relaxation — name the ceiling for the `denied_jti` cause (P1 decision)
+
+`RuntimeAuthError.cause` is one of `"jwt_mint" | "rotation" | "denied_jti"`
+(`tenant.ts:91`). `jwt_mint` and `rotation` are **availability** failures (GoTrue error,
+mint-ceiling trip) — the fallback is unambiguously correct for these. `denied_jti` is a
+**deliberate security action** (the jti is on the deny-list). Per
+`knowledge-base/project/learnings/2026-05-05-defense-relaxation-must-name-new-ceiling.md`,
+when a fix relaxes a load-bearing defense it must name the new ceiling.
+
+**Decision (to confirm at /work):** the fallback fires for ALL three causes, and that is
+acceptable because the **ceiling still holds**: (a) the fallback read is scoped to the
+authenticated user's **own** row (`.eq("id", userId)` where `userId` = `user.id` from the
+already-validated session), so a denied jti cannot read another tenant's workspace; and
+(b) the share **write** on this path was never tenant-scoped (`createShare` uses
+service-role, `route.ts:40`), so the deny-list never gated this path's privileged action in
+the first place — `denied_jti` here only blocked a read of the user's own `workspace_path`.
+The deny-list's actual purpose (revoking a tenant token's broad DB reach) is unaffected:
+this fallback grants only the single-row self-read, not the tenant client. **/work MUST add
+a code comment at the fallback site stating this ceiling**, and the implementer should
+confirm with the auth-domain owner whether `denied_jti` should instead re-throw (fail
+closed) rather than fall back — if so, scope the fallback to `cause !== "denied_jti"` and
+keep the 503 for denied jtis. Either choice is defensible; the plan's requirement is that
+the choice be **explicit**, not incidental.
+
+### 3. Test vacuity (P1) — distinct service-role mock required
+
+Folded into `## Files to Edit` and Acceptance Criteria above: the existing test wires the
+tenant and service clients to the **same `mockFrom`**, so a fallback test must use a
+distinct `mockServiceFrom` or it passes vacuously.
+
+## Enhancement Summary
+
+**Deepened on:** 2026-06-04 (one-shot pipeline; halt gates 4.6/4.7/4.8 passed, 4.9 skipped —
+no UI-surface file edited).
+**Key improvements:**
+1. Test-mock vacuity gap closed — fallback tests now require a distinct service-role mock
+   (the shared `mockFrom` would let the fallback assertion pass without proving the
+   service client was consulted).
+2. `denied_jti` defense-relaxation decision made explicit with a named ceiling
+   (self-row-scope + write-was-never-tenant-scoped) and a /work fail-closed escape hatch.
+3. Precedent-diff confirmed the fallback is a verbatim re-use of the pre-#3854 read
+   (column parity guaranteed; not a novel pattern).
+
+**New considerations:** the `denied_jti` cause is the only substance-level surprise — a
+naive "catch RuntimeAuthError → fall back" silently extends the fallback to a security-deny
+case; the plan now forces an explicit decision there.
 
 ## References
 
