@@ -1661,10 +1661,11 @@ export async function dispatchSoleurGo(
   // Resolve workspace path in parallel with `runner.dispatch` so cold-start
   // LTFT (latency-to-first-token) does not pay an extra serial Supabase RTT.
   // The closure-shared `workspacePath` is filled by the `.then` below; in
-  // production, `realSdkQueryFactory` (line 419) awaits the SAME memo before
-  // the SDK Query can emit any block, so by the time `onToolUse` fires the
-  // value is set. On warm dispatches the memo returns synchronously inside
-  // `fetchUserWorkspacePath` and the `.then` resolves on the next microtask.
+  // production, `realSdkQueryFactory` independently resolves the same active
+  // workspace before the SDK Query can emit any block, so by the time
+  // `onToolUse` fires the value is set. `fetchUserWorkspacePath` resolves the
+  // ACTIVE workspace (ADR-044) on each call — a single indexed
+  // `user_session_state` read — so this `.then` is a cheap parallel resolve.
   // On failure, fall back to `undefined` — `buildToolLabel` still produces
   // the verbose label (just without the workspace-prefix scrub) and the
   // error is mirrored to Sentry per `cq-silent-fallback-must-mirror-to-sentry`.

@@ -150,7 +150,7 @@ See Contributing factors below — the four factors (un-swept write sites, no wr
 
 - [x] PR #4831 — populate `workspace_id` on all 4 interactive `messages` INSERTs + grep-sweep guard test (`hr-write-boundary-sentinel-sweep-all-write-sites`).
 - [ ] #4839 — post-deploy verification a fresh message persists + Sentry signature stops.
-- [ ] **Liveness alert (factor 2):** alert when a workspace records zero interactive `messages` inserts over N hours (catches a silent write-path outage without waiting for a user report). File as a monitoring follow-up.
+- [x] **Liveness alert (factor 2):** alert when a workspace records zero interactive `messages` inserts over N hours (catches a silent write-path outage without waiting for a user report). Tracked: the MVP write-absence alert shipped in **#4849** (closed — code-managed Sentry alert on the `persist-user-message` failure signal); the complementary scheduled prod write-absence probe (defense-in-depth) is deferred under **#4854** (open).
 - [x] **Workflow gate (factor 4 + the after-the-fact-postmortem ask):** ship now requires a PIR for any incident-class fix, even when the incident is discovered incidentally during another change (see this PR's `ship` Phase 5.5 Incident-PIR gate + the `wg-incident-detected-always-run-postmortem` workflow gate).
 - [x] **Migration-author sweep reminder:** the RLS-column-add → write-site-sweep lesson is captured in `2026-06-02-rls-column-add-must-sweep-all-insert-sites-and-alert-op-is-not-the-user-failure.md`.
 
@@ -158,7 +158,7 @@ See Contributing factors below — the four factors (un-swept write sites, no wr
 
 GitHub issues to prevent recurrence:
 
-- **Monitoring/alert (factor 2):** file the write-absence liveness alert (zero interactive `messages` inserts in a workspace over N hours) — tracked as a monitoring follow-up.
+- **Monitoring/alert (factor 2):** write-absence liveness alert (zero interactive `messages` inserts in a workspace over N hours) — tracked under **#4849** (closed — MVP Sentry alert on the `persist-user-message` failure signal) and **#4854** (open — deferred scheduled prod write-absence probe, defense-in-depth).
 - **Verification:** #4839 — confirm a fresh message persists post-deploy and the `Failed to save user message` Sentry signature ceases.
 - **Test/guard:** generalized grep-sweep guard requiring ALL NOT-NULL-no-default `messages` columns (`REQUIRED_MESSAGE_COLUMNS`) — landed in PR #4839-fix.
 

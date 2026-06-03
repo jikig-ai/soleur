@@ -11,11 +11,13 @@ import path from "path";
 
 const {
   fetchUserWorkspacePathSpy,
+  resolveActiveWorkspacePathSpy,
   extractPdfTextSpy,
   extractPdfMetadataSpy,
   reportSilentFallbackSpy,
 } = vi.hoisted(() => ({
   fetchUserWorkspacePathSpy: vi.fn(),
+  resolveActiveWorkspacePathSpy: vi.fn(),
   extractPdfTextSpy: vi.fn(),
   // 2026-05-07 follow-up to #3429: the resolver now imports
   // `extractPdfMetadata` for the page-count gate on the oversized_buffer
@@ -53,6 +55,13 @@ vi.mock("@/lib/supabase/tenant", () => ({
   }),
   RuntimeAuthError: class RuntimeAuthError extends Error {},
 }));
+
+vi.mock("@/server/workspace-resolver", async () => {
+  const actual = await vi.importActual<typeof import("@/server/workspace-resolver")>(
+    "@/server/workspace-resolver",
+  );
+  return { ...actual, resolveActiveWorkspacePath: resolveActiveWorkspacePathSpy };
+});
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
@@ -93,6 +102,7 @@ beforeEach(() => {
     data: { workspace_path: tmpRoot },
     error: null,
   });
+  resolveActiveWorkspacePathSpy.mockResolvedValue(tmpRoot);
   extractPdfTextSpy.mockReset();
   reportSilentFallbackSpy.mockReset();
   // Drain the per-process workspace-path memo so each test sees its own
