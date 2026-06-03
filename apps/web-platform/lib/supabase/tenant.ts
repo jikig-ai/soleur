@@ -146,8 +146,11 @@ const DEFAULT_TTL_SEC = 600;
  * rejection deep in `resolveFounderEmail` (`getUserById`). That raw error is
  * NOT a `RuntimeAuthError`, so it escapes `tenantFor`'s typed catch and, in the
  * WebSocket connect path, becomes a process-killing `unhandledRejection` that
- * crashes the dev/prod server. Same shape as the `server/workspace.ts`
- * `UUID_RE` precondition guards.
+ * crashes the dev/prod server. The regex shape mirrors the
+ * `server/workspace.ts` `UUID_RE` precondition guards; the failure SEMANTICS
+ * differ deliberately — this throws a typed `RuntimeAuthError` (caught by
+ * `tenantFor` → fail-open `null`) rather than a plain validation error, which
+ * is the entire mechanism by which the WS path degrades instead of crashing.
  */
 const TENANT_USER_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
