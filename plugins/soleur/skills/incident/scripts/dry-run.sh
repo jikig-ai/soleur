@@ -75,21 +75,66 @@ if [[ -n "${monitoring_detected_at}" ]] && ! [[ "${monitoring_detected_at}" =~ $
 fi
 
 # --- MTTR / MTTD local computation (FR7 — never an LLM-emitted duration) ---
+# The ISO regex above gates FORMAT but not calendar validity (it accepts month 13,
+# day 40, hour 25), so `date -u -d` can still reject a regex-passing value. Capture
+# the epoch with explicit failure handling (mirrors the Art. 33 deadline guard below)
+# and fail loud rather than emitting a garbage/empty duration with a green exit.
+iso_to_epoch() {
+  local ts="$1" epoch
+  if ! epoch=$(date -u -d "${ts}" +%s 2>/dev/null); then
+    echo "dry-run: timestamp not a valid calendar date: ${ts}" >&2
+    exit 2
+  fi
+  printf '%s' "${epoch}"
+}
+fmt_duration() {  # signed-safe: only ever called with a non-negative second count
+  printf '%dh%dm' $(( $1 / 3600 )) $(( ($1 % 3600) / 60 ))
+}
 if [[ -n "${recovery_at}" ]]; then
-  mttr_secs=$(( $(date -u -d "${recovery_at}" +%s) - $(date -u -d "${detected_at}" +%s) ))
-  MTTR=$(printf '%dh%dm' $(( mttr_secs / 3600 )) $(( (mttr_secs % 3600) / 60 )))
+  mttr_secs=$(( $(iso_to_epoch "${recovery_at}") - $(iso_to_epoch "${detected_at}") ))
+  if (( mttr_secs < 0 )); then
+    echo "dry-run: recovery_at (${recovery_at}) precedes detected_at (${detected_at}) — transposed timestamps" >&2
+    exit 2
+  fi
+  MTTR=$(fmt_duration "${mttr_secs}")
 else
   MTTR="TBD (status not resolved)"
 fi
 if [[ "${detection_method}" == "monitoring" && -n "${monitoring_detected_at}" ]]; then
-  mttd_secs=$(( $(date -u -d "${monitoring_detected_at}" +%s) - $(date -u -d "${detected_at}" +%s) ))
-  MTTD=$(printf '%dh%dm' $(( mttd_secs / 3600 )) $(( (mttd_secs % 3600) / 60 )))
+  mttd_secs=$(( $(iso_to_epoch "${monitoring_detected_at}") - $(iso_to_epoch "${detected_at}") ))
+  if (( mttd_secs < 0 )); then
+    echo "dry-run: monitoring_detected_at (${monitoring_detected_at}) precedes detected_at (${detected_at}) — transposed timestamps" >&2
+    exit 2
+  fi
+  MTTD=$(fmt_duration "${mttd_secs}")
 else
   MTTD="Unknown (external/manual report)"
 fi
 
 # Local slug computation (never accept slug from LLM).
 slug=$(printf '%s\n' "${title}" | awk '{ gsub(/[^a-zA-Z0-9]+/, "-"); print tolower($0) }' | sed 's/^-//;s/-$//')
+
+# --- First-pass redaction sentinel on ALL operator-supplied fields (FR7) ---
+# MUST run BEFORE any echo to the transcript (Phase 0/3 below echo several of these
+# fields). Covers every operator-controlled free-text/identifier field that later
+# reaches the draft OR is echoed to stdout — including triggers_csv (echoed in
+# Phase 3) and the version_* fields. The Phase 6 scan-on-draft is the second pass.
+early_input_check=$(mktemp)
+printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+  "${title}" "${symptom}" "${suspected_change}" \
+  "${incident_overview}" "${participants}" "${resolution}" \
+  "${services_impacted}" "${revenue_impact}" "${team_impact}" \
+  "${version_triggered}" "${version_restored}" \
+  "${detection_method}" "${triggered_by}" > "${early_input_check}"
+printf '%s\n' "${triggers_csv//,/$'\n'}" >> "${early_input_check}"
+if ! bash "${SENTINEL}" "${early_input_check}" >/dev/null 2>&1; then
+  echo "sentinel: FAIL on operator-supplied input fields (first pass, pre-echo)" >&2
+  bash "${SENTINEL}" "${early_input_check}" >&2 2>&1 || true
+  rm -f "${early_input_check}"
+  echo "[dry-run] BLOCKING — redact operator-supplied input before re-running." >&2
+  exit 1
+fi
+rm -f "${early_input_check}"
 
 # --- Phase 0 ---
 echo "=== Phase 0: facts captured ==="
@@ -354,24 +399,9 @@ echo
 
 # --- Phase 6: sentinel BEFORE Phase 7 inline-emit (AC10 ordering) ---
 echo "=== Phase 6: redaction sentinel (pre-inline-emit) ==="
-# Also sentinel-scan the operator-supplied input fields BEFORE the draft is
-# scaffolded — covers the user-impact-reviewer finding that operator-pasted
-# log fragments in symptom/suspected_change would otherwise reach the Phase 4
-# draft via sed-substitution without an earlier scan in dry-run/headless mode.
-input_check=$(mktemp)
-printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
-  "${symptom}" "${suspected_change}" "${title}" \
-  "${incident_overview}" "${participants}" "${resolution}" \
-  "${services_impacted}" "${revenue_impact}" "${team_impact}" > "${input_check}"
-if ! bash "${SENTINEL}" "${input_check}" >"${sentinel_out}" 2>&1; then
-  echo "sentinel: FAIL on operator-supplied fields (symptom/suspected_change/title)"
-  cat "${sentinel_out}"
-  rm -f "${input_check}"
-  echo "[dry-run] BLOCKING — redact operator-supplied input before re-running."
-  exit 1
-fi
-rm -f "${input_check}"
-
+# The first-pass scan on operator-supplied input ran pre-echo near the top of the
+# script (before Phase 0/3 echoed any field). This Phase 6 pass scans the fully
+# scaffolded draft — the second, on-draft sentinel pass.
 if bash "${SENTINEL}" "${draft_file}" >"${sentinel_out}" 2>&1; then
   echo "sentinel: pass"
 else

@@ -2,7 +2,7 @@
 title: "sentry phantom-ingest destination unreachable"
 date: 2026-05-16
 incident_pr: 1235
-incident_window: "2026-03-28T18:03:00Z → 2026-05-16T12:50:00Z"
+incident_window: "2026-03-28T18:03:00Z (DSN introduced) → 2026-05-16T12:50:00Z (surfaced) → 2026-05-21T08:30:00Z (operator-side cleanup complete / resolved)"
 recovery_at: "2026-05-21T08:30:00Z"
 suspected_change: "PR #1235 introduced Sentry SDK + SENTRY_DSN to Doppler prd on 2026-03-28. DSN points to org ID 4511123328466944 on the de.sentry.io ingest cluster — the destination org is not enumerable, not controllable, and likely orphaned. Phantom-ingest window ≈ 49 days."
 brand_survival_threshold: none

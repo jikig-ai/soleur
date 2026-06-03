@@ -60,19 +60,22 @@ Compute locally (FR7 LLM-trust boundary — never accept these from an LLM-emitt
 
 - `slug` — `awk` kebab-case of title, dropping non-`[a-z0-9-]`.
 - File path — derived from slug: `knowledge-base/engineering/ops/post-mortems/${slug}-postmortem.md`.
-- `MTTR` (mean time to recovery) — computed from validated timestamps, NEVER an LLM-emitted duration:
+- `MTTR` (mean time to recovery) / `MTTD` (mean time to detect) — computed from validated timestamps, NEVER an LLM-emitted duration. The ISO regex gates FORMAT but not calendar validity (it accepts month 13 / day 40 / hour 25), so `date -u -d` can still reject a regex-passing value — capture the epoch with explicit failure handling and HALT on a bad date or a transposed (negative) pair rather than emitting a garbage/empty duration:
   ```bash
+  iso_to_epoch() {  # halt on a regex-valid-but-calendar-invalid date
+    local epoch
+    date -u -d "$1" +%s 2>/dev/null || { echo "incident: not a valid calendar date: $1" >&2; exit 2; }
+  }
   if [[ -n "${recovery_at}" ]]; then
-    mttr_secs=$(( $(date -u -d "${recovery_at}" +%s) - $(date -u -d "${detected_at}" +%s) ))
+    mttr_secs=$(( $(iso_to_epoch "${recovery_at}") - $(iso_to_epoch "${detected_at}") ))
+    (( mttr_secs < 0 )) && { echo "incident: recovery_at precedes detected_at (transposed)" >&2; exit 2; }
     MTTR=$(printf '%dh%dm' $(( mttr_secs / 3600 )) $(( (mttr_secs % 3600) / 60 )))
   else
     MTTR="TBD (status not resolved)"
   fi
-  ```
-- `MTTD` (mean time to detect) — computed from validated timestamps:
-  ```bash
   if [[ "${detection_method}" == "monitoring" && -n "${monitoring_detected_at}" ]]; then
-    mttd_secs=$(( $(date -u -d "${monitoring_detected_at}" +%s) - $(date -u -d "${detected_at}" +%s) ))
+    mttd_secs=$(( $(iso_to_epoch "${monitoring_detected_at}") - $(iso_to_epoch "${detected_at}") ))
+    (( mttd_secs < 0 )) && { echo "incident: monitoring_detected_at precedes detected_at (transposed)" >&2; exit 2; }
     MTTD=$(printf '%dh%dm' $(( mttd_secs / 3600 )) $(( (mttd_secs % 3600) / 60 )))
   else
     MTTD="Unknown (external/manual report)"
@@ -261,7 +264,7 @@ Skill computes identifiers locally and validates format-sensitive LLM-emitted fi
 - `slug` — local `awk`, never LLM-emitted.
 - `incident_pr` — prefer the first `#NNNN` token in `suspected_change` (regex `#[0-9]+`); fall back to leading numeric run only when no `#NNNN` exists. Prevents `"see #3721 (replaces #2725)"` from resolving to `3721` against an unrelated prose-leading numeric.
 - `detected_at` / `recovery_at` / `monitoring_detected_at` — ISO-8601 regex match before passing to `date -u -d`. `recovery_at` and `monitoring_detected_at` are optional; when present they MUST match the same regex as `detected_at` before any duration arithmetic. MTTR/MTTD are computed locally from these validated timestamps (Phase 0 compute block) — NEVER accepted as an LLM-emitted duration string.
-- `title`, `symptom`, and the new operator-prose fields (`incident_overview`, `participants`, `resolution`, `services_impacted`, `revenue_impact`, `team_impact`) — these are operator-supplied free-form prose that flows into `sed`-substitution against `templates/pir.md`. Run EACH through `sed`-metacharacter escaping (`s|[\\/&]|\\&|g` plus newline strip) before substituting, OR perform substitution with `awk` literal-replace semantics. An LLM-emitted value containing `&` or `/` will otherwise corrupt the template. The enum fields (`detection_method`, `triggered_by`) are validated against their fixed value lists before substitution and need no escaping.
-- Phase 0 / dry-run mode: run the redaction sentinel against EVERY operator-supplied prose string (`symptom` / `suspected_change` / `title` / `incident_overview` / `participants` / `resolution` / `services_impacted` / `revenue_impact` / `team_impact`) the moment it is captured, BEFORE any echo to the conversation transcript. Phase 6's sentinel-on-draft is the second pass; this is the first.
+- `title`, `symptom`, and the new operator-prose fields (`incident_overview`, `participants`, `resolution`, `services_impacted`, `revenue_impact`, `team_impact`, `version_triggered`, `version_restored`) — these are operator-supplied free-form prose that flows into `sed`-substitution against `templates/pir.md`. Run EACH through `sed`-metacharacter escaping (`s|[\\/&]|\\&|g` plus newline strip) before substituting, OR perform substitution with `awk` literal-replace semantics. An LLM-emitted value containing `&` or `/` will otherwise corrupt the template. The enum fields (`detection_method`, `triggered_by`) are validated against their fixed value lists before substitution and need no escaping.
+- Phase 0 / dry-run mode: run the redaction sentinel against EVERY operator-supplied string the moment it is captured, BEFORE any echo to the conversation transcript — `symptom` / `suspected_change` / `title` / `incident_overview` / `participants` / `resolution` / `services_impacted` / `revenue_impact` / `team_impact` / `version_triggered` / `version_restored`, AND the `triggers[]` entries (echoed during Phase 3 routing). Any field that is echoed to the transcript OR substituted into the draft must be in this first pass; Phase 6's sentinel-on-draft is the second pass, not a substitute for the first.
 
 Validation failure halts the skill with an explicit operator-fix prompt; the substitution never happens with malformed input.
