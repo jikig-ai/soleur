@@ -9,6 +9,20 @@ brand_survival_threshold: none
 
 # 🐛 fix: X/Twitter shows "disabled" in scheduled community-monitor digest
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-03
+**Sections enhanced:** Overview (precedent diff), Files to Edit (verify-the-negative), Risks & Mitigations (new)
+**Gates run:** 4.4 Precedent-Diff, 4.45 Verify-the-Negative + Post-edit self-audit, 4.6 User-Brand Impact (pass), 4.7 Observability (pass), 4.8 PAT-shaped halt (pass), 4.9 UI-wireframe halt (no UI surface — skip)
+
+### Key Improvements
+1. **Precedent confirmed:** the fix follows the exact established `<KEY>: process.env.<KEY>` pattern already used for the 7 Discord/Bluesky/LinkedIn vars in the *same* `buildSpawnEnv()` — no novel pattern, sibling precedent is in-file.
+2. **Read-vs-write boundary verified against code:** `cron-content-publisher.ts:178` sets `X_ALLOW_POST: "true"` (the publisher posts); the monitor must NOT, and `x-community.sh:611-615` is the posting guard that the omission keeps closed. The read path (`x-community.sh:54+`) needs only the four creds.
+3. **Test-file path corrected** to `apps/web-platform/test/server/inngest/cron-community-monitor.test.ts` (the task description's path was wrong).
+
+### New Considerations Discovered
+- The four `X_*` vars are already in the Inngest runtime `process.env` (Doppler `prd_scheduled`); this change only widens the in-process forward allowlist — no secret/Doppler change, no new exposure surface beyond the already-trusted subprocess.
+
 ## Overview
 
 The 2026-06-03 scheduled community-monitor digest reported X/Twitter as **disabled** even though all four X credentials (`X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET`) are present and verified in Doppler config `soleur/prd_scheduled`.
@@ -79,6 +93,41 @@ None. (Checked: no open `code-review` issue body references the two files in thi
   ```
   (invoke from `apps/web-platform/`).
 - RED first: adding the four X_* rows to the `it.each` array BEFORE editing the source should fail (`buildEnvBody` does not yet contain `X_API_KEY: process.env.X_API_KEY`). Then add the source keys → GREEN.
+
+## Risks & Mitigations
+
+### Precedent diff (Phase 4.4)
+
+The fix is pattern-bound to an **in-file sibling precedent** — the 7 existing community vars in the same `buildSpawnEnv()` return object. The four new entries are byte-for-byte the same shape:
+
+```ts
+// Existing precedent (unchanged, in the same function):
+DISCORD_BOT_TOKEN: process.env.DISCORD_BOT_TOKEN,
+BSKY_HANDLE: process.env.BSKY_HANDLE,
+LINKEDIN_ACCESS_TOKEN: process.env.LINKEDIN_ACCESS_TOKEN,
+
+// New (this plan) — identical pattern:
+X_API_KEY: process.env.X_API_KEY,
+X_API_SECRET: process.env.X_API_SECRET,
+X_ACCESS_TOKEN: process.env.X_ACCESS_TOKEN,
+X_ACCESS_TOKEN_SECRET: process.env.X_ACCESS_TOKEN_SECRET,
+```
+
+No novel pattern; the existing allowlist is the canonical form. The spawn-env test already asserts this exact `<KEY>: process.env.<KEY>` shape for the precedent vars.
+
+### Verify-the-negative (Phase 4.45)
+
+| Negative claim in plan | Verification | Result |
+| --- | --- | --- |
+| `buildSpawnEnv()` must NOT contain `X_ALLOW_POST` | `grep -c 'X_ALLOW_POST' cron-community-monitor.ts` | `0` currently — claim holds; the new negative-class test assertion locks it. |
+| Monitor is read-only; posting stays guarded | `x-community.sh:611-615` returns 1 unless `X_ALLOW_POST=="true"` | Confirmed — guard closed when X_ALLOW_POST unset (which the plan preserves). |
+| Publisher (not monitor) is where posting is armed | `grep -n 'X_ALLOW_POST' cron-content-publisher.ts` → `178: X_ALLOW_POST: "true"` | Confirmed — the read/write boundary is deliberate; monitor must not cross it. |
+| Read path needs only the four creds | `x-community.sh:54+` validates `X_API_KEY`…`X_ACCESS_TOKEN_SECRET` for read | Confirmed — forwarding the four creds is sufficient to flip X to "enabled". |
+| No `...process.env` spread introduced | negative-class test already asserts `not.toMatch(/\.\.\.process\.env/)` | Unchanged by this fix. |
+
+### Scheduled-work pattern check
+
+Not applicable — no new scheduled job. The Inngest cron `cron-community-monitor.ts` already exists (canonical per ADR-033). This fix only edits its in-process spawn-env allowlist.
 
 ## Acceptance Criteria
 
