@@ -101,7 +101,7 @@ Diagnosis on host via Hetzner Console distinguishes these before we write the fi
 
 ## Files to Create
 
-- `knowledge-base/engineering/ops/runbooks/ssh-fail2ban-unban.md` — operator runbook for "SSH is locked out, unban from Hetzner Cloud Console".
+- `knowledge-base/engineering/operations/runbooks/ssh-fail2ban-unban.md` — operator runbook for "SSH is locked out, unban from Hetzner Cloud Console".
 
 No new test files — this is infrastructure/runbook work (AGENTS.md `cq-write-failing-tests-before` exempts infrastructure-only tasks).
 
@@ -112,7 +112,7 @@ No new test files — this is infrastructure/runbook work (AGENTS.md `cq-write-f
 ```bash
 gh issue list --label code-review --state open --json number,title,body --limit 200 > /tmp/open-review-issues.json
 for f in apps/web-platform/infra/cloud-init.yml apps/web-platform/infra/server.tf \
-         knowledge-base/engineering/ops/runbooks/ssh-fail2ban-unban.md; do
+         knowledge-base/engineering/operations/runbooks/ssh-fail2ban-unban.md; do
   jq -r --arg path "$f" '.[] | select(.body // "" | contains($path)) | "#\(.number): \(.title)"' /tmp/open-review-issues.json
 done
 ```
@@ -127,7 +127,7 @@ AGENTS.md `hr-exhaust-all-automated-options-before` escalation: (1) Doppler — 
 
 This is the one step where "manual" is justified per `hr-never-label-any-step-as-manual-without`: the channel we need to automate *is the channel that's down*.
 
-**Runbook (`knowledge-base/engineering/ops/runbooks/ssh-fail2ban-unban.md`):**
+**Runbook (`knowledge-base/engineering/operations/runbooks/ssh-fail2ban-unban.md`):**
 
 1. Open <https://console.hetzner.cloud/> → project → `soleur-web-platform` → "Console" tab (noVNC/xterm in-browser).
 2. Log in as root (the console is pre-authed to the project).
@@ -188,7 +188,7 @@ Key tuning:
   # fail2ban sshd tuning (#2654). Drop-in at jail.d/ so it overrides
   # /etc/fail2ban/jail.d/defaults-debian.conf (alphabetic load order:
   # defaults-debian.conf loads before soleur-sshd.local).
-  # Runbook for recovery when locked out: knowledge-base/engineering/ops/runbooks/ssh-fail2ban-unban.md
+  # Runbook for recovery when locked out: knowledge-base/engineering/operations/runbooks/ssh-fail2ban-unban.md
   - path: /etc/fail2ban/jail.d/soleur-sshd.local
     content: |
       [sshd]
@@ -303,7 +303,7 @@ user_data = templatefile("${path.module}/cloud-init.yml", {
 - [x] `apps/web-platform/infra/fail2ban-sshd.local` exists with the jail.local content above.
 - [x] `apps/web-platform/infra/cloud-init.yml` references `fail2ban_sshd_local_b64` and writes to `/etc/fail2ban/jail.d/soleur-sshd.local` with `0644 root:root`.
 - [x] `apps/web-platform/infra/server.tf` passes `fail2ban_sshd_local_b64 = base64encode(file(...))` into the templatefile call AND has a new `terraform_data.fail2ban_tuning` resource following the `disk_monitor_install` pattern.
-- [x] `knowledge-base/engineering/ops/runbooks/ssh-fail2ban-unban.md` exists with the Cloud Console recovery procedure.
+- [x] `knowledge-base/engineering/operations/runbooks/ssh-fail2ban-unban.md` exists with the Cloud Console recovery procedure.
 - [ ] `terraform plan` in the worktree returns a plan that adds `terraform_data.fail2ban_tuning` and makes no server replacement. (requires prod_terraform creds — deferred to apply-time.)
 - [x] No new secrets required — all changes use existing `hcloud_token`, `ssh_key_path`, SSH agent.
 
@@ -411,6 +411,6 @@ Operator MUST run `fail2ban-client --help` and `fail2ban-client --version` on-ho
   - `2026-03-19-ci-ssh-deploy-firewall-hidden-dependency.md` — context on why SSH was briefly opened to `0.0.0.0/0`; no longer applies.
   - `2026-03-20-ssh-forced-command-cloud-init-parity-gaps.md` — pattern for keeping cloud-init and `terraform_data` provisioners in sync.
   - `2026-04-03-terraform-data-remote-exec-drift-encrypted-ssh-key.md` — `terraform_data` + `connection { agent = true }` pattern reused here.
-- Runbook (new): `knowledge-base/engineering/ops/runbooks/ssh-fail2ban-unban.md`.
+- Runbook (new): `knowledge-base/engineering/operations/runbooks/ssh-fail2ban-unban.md`.
 - AGENTS.md rules invoked: `hr-all-infrastructure-provisioning-servers`, `hr-exhaust-all-automated-options-before`, `hr-never-label-any-step-as-manual-without`, `hr-menu-option-ack-not-prod-write-auth`, `cq-for-production-debugging-use`, `cq-when-running-terraform-commands-locally`, `cq-docs-cli-verification`.
 - Blocks: attaching Step 3 output to #2605 (mentioned in issue body); unblocked by Phase 1 completion.

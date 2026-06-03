@@ -411,6 +411,6 @@ pattern is touched; the only pattern axis is the Vector source shape, and it has
 - 5 sites: `cron-growth-audit.ts:212`, `cron-campaign-calendar.ts:215`, `cron-seo-aeo-audit.ts:241`, `cron-community-monitor.ts:309`, `cron-growth-execution.ts:249`
 - Vector config: `apps/web-platform/infra/vector.toml`, `apps/web-platform/infra/vector.tf`, `apps/web-platform/infra/inngest-bootstrap.sh`
 - Container: `apps/web-platform/infra/cloud-init.yml:505-516` (`soleur-web-platform`)
-- Runbook gap: `knowledge-base/engineering/ops/runbooks/betterstack-log-query.md` (`## Known coverage gap`)
+- Runbook gap: `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md` (`## Known coverage gap`)
 - CI gate: `.github/workflows/validate-vector-config.yml`, `apps/web-platform/test/infra/vector-pii-scrub.test.sh`
 - Test: `apps/web-platform/test/server/inngest/cron-claude-eval-substrate.test.ts`

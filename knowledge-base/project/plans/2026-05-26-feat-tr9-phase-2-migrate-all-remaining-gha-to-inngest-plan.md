@@ -81,7 +81,7 @@ Note: `RESEND_API_KEY` is NOT provisioned — K24 drops email notifications. Sen
 
 **E1 timing fallback:** If conversion doesn't land before May 29 09:00 UTC, the GHA fires and self-neutralizes. E1 then becomes a DELETE (like D2). State explicitly in the PR: "if GHA has already fired, skip conversion and delete."
 
-**E3 trigger UX:** After migration, operator triggers via `inngest send '{"name":"ship-merge.manual-trigger","data":{}}'` or via the Inngest dashboard "Send Event" UI. Document in `knowledge-base/engineering/ops/runbooks/`.
+**E3 trigger UX:** After migration, operator triggers via `inngest send '{"name":"ship-merge.manual-trigger","data":{}}'` or via the Inngest dashboard "Send Event" UI. Document in `knowledge-base/engineering/operations/runbooks/`.
 
 **E1-E3: No `sentry_cron_monitor` resource.** Oneshots and event-triggered functions don't have a recurring schedule. Sentry cron monitors would permanently false-alert on missed check-ins. Use `reportSilentFallback` for error reporting only. [Review fix: Kieran P0-2, P0-3.]
 

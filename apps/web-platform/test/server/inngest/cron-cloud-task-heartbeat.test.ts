@@ -6,7 +6,7 @@
 //   (c) Exported constant — TASK_INVENTORY (5 output-producing tasks).
 //   (d) Handler behavior — never-produced grace + three-origin daysSince:null.
 //
-// INVENTORY SCOPE (see knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md):
+// INVENTORY SCOPE (see knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md):
 // The heartbeat monitors ONLY scheduled tasks that UNCONDITIONALLY produce a
 // `scheduled-<task>` issue artifact. Non-producers (daily-triage, ux-audit,
 // bug-fixer) and the conditional producer strategy-review were removed because

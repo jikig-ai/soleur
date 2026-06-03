@@ -68,5 +68,5 @@ Filed at PR-ready time per Phase 9.4 of the plan:
 - **T-02** (invite-time data subject notice) — required for external
   workspaces; covered for jikigai (Jean + Harry) via parent #4229 Side Letter.
 - **Better Stack monitor provisioning** — runbook
-  `knowledge-base/engineering/ops/runbooks/cron-retention-monitor.md` is the
+  `knowledge-base/engineering/operations/runbooks/cron-retention-monitor.md` is the
   spec; monitor itself is provisioned at flag-flip-prep time.

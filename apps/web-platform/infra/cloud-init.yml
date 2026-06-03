@@ -299,7 +299,7 @@ write_files:
   # multi-hour lockout via bantime.increment escalation. Content injected from
   # fail2ban-sshd.local via Terraform base64encode(file()).
   # Runbook for recovery when locked out:
-  #   knowledge-base/engineering/ops/runbooks/ssh-fail2ban-unban.md
+  #   knowledge-base/engineering/operations/runbooks/ssh-fail2ban-unban.md
   # Keep in sync with terraform_data.fail2ban_tuning in server.tf.
   - path: /etc/fail2ban/jail.d/soleur-sshd.local
     encoding: b64

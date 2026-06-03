@@ -86,7 +86,7 @@ a `**Why:**` pointer to the discovery learning file.
 
 ## The systemic safety net (Layer 2 canary, promoted from deferred)
 
-`knowledge-base/engineering/ops/runbooks/canary-probe-set.md` Layer 2
+`knowledge-base/engineering/operations/runbooks/canary-probe-set.md` Layer 2
 (headless chromium hydrating `/login` + `/dashboard` and rejecting on any
 `pageerror` / console.error) was deferred as D1 in PR #3014. Post-incident
 it is **required** — the only gate that exercises the production browser
@@ -108,6 +108,6 @@ removing the mock.
 - `apps/web-platform/lib/supabase/validate-anon-key.ts` — fix site
 - `apps/web-platform/test/lib/supabase/validate-anon-key-browser-decode.test.ts` — regression-class test
 - `plugins/soleur/skills/preflight/SKILL.md` Check 9 — source-level gate
-- `knowledge-base/engineering/ops/runbooks/canary-probe-set.md` — Layer 2 promotion to required
+- `knowledge-base/engineering/operations/runbooks/canary-probe-set.md` — Layer 2 promotion to required
 - `knowledge-base/project/learnings/runtime-errors/2026-04-28-module-load-throw-collapses-auth-surface.md` — root incident
 - `knowledge-base/project/learnings/runtime-errors/2026-04-29-sw-cache-survives-regression-fix-without-cache-name-bump.md` — adjacent miss

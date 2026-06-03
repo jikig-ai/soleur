@@ -462,7 +462,7 @@ case "$COMPONENT" in
       "$IMAGE:$TAG"
 
     # Layered canary probe set. Contract:
-    #   knowledge-base/engineering/ops/runbooks/canary-probe-set.md
+    #   knowledge-base/engineering/operations/runbooks/canary-probe-set.md
     readonly CANARY_HEALTH_HTTP="/tmp/canary-health-http"
     readonly CANARY_LOGIN_HTTP="/tmp/canary-login-http"
     readonly CANARY_LOGIN_BODY="/tmp/canary-login-body.html"

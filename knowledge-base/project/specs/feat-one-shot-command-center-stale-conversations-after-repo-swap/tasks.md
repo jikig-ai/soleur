@@ -60,7 +60,7 @@
 
 - [ ] 9.1 Commit plan + tasks.md together with migration + test + code changes.
 - [ ] 9.2 Open PR with `Closes #<issue-number>` in the body.
-- [ ] 9.3 Post-merge operator: verify migration applied to prod Supabase per runbook `knowledge-base/engineering/ops/runbooks/supabase-migrations.md`.
+- [ ] 9.3 Post-merge operator: verify migration applied to prod Supabase per runbook `knowledge-base/engineering/operations/runbooks/supabase-migrations.md`.
 - [ ] 9.4 Post-merge operator: smoke-test the disconnect+reconnect cycle on a throwaway prod account.
 
 ## 10. Deferral issues (file in same PR)

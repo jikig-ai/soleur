@@ -285,7 +285,7 @@ None.
     `[Scheduled] Campaign Calendar - <YYYY-MM-DD> (no new overdue items)`
     audit issue, immediately close it.
   - (Conditional H5) Bump `anthropics/claude-code-action` pin if > 3 weeks old.
-- `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md`
+- `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md`
   - Add §H7 — GHA-scheduled-task max-turns starvation, with verification
     (`grep -E 'max-turns' .github/workflows/scheduled-*.yml`),
     fix template (raise turns + timeout-minutes proportionally per the
@@ -376,7 +376,7 @@ heartbeats count.
 
 ### Phase 3 — Runbook addendum (H7)
 
-Append to `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md`,
+Append to `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md`,
 after the existing §H6 (Sub-agent auth inheritance):
 
 ```markdown
@@ -437,7 +437,7 @@ After Phase 1–3 merge, verify and clean up:
 - [x] STEP 2 of the prompt body now requires the dedup guard described in
   Phase 2; STEP 2.5 (heartbeat audit issue when no new issues filed) is
   appended.
-- [x] `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md`
+- [x] `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md`
   has §H7 addendum.
 - [ ] PR body uses `Ref #2896` (NOT `Closes #2896`) per
   `cq-ops-remediation-uses-ref-not-closes-for-post-merge-fixes`.
@@ -773,7 +773,7 @@ gh issue list --label scheduled-campaign-calendar --state all --limit 3 \
 - Issue: #2896
 - Watchdog workflow: `.github/workflows/scheduled-cloud-task-heartbeat.yml`
 - Supervised workflow: `.github/workflows/scheduled-campaign-calendar.yml`
-- Runbook: `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md`
+- Runbook: `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md`
   (will gain §H7 in this PR)
 - Foundational learning: `knowledge-base/project/learnings/2026-04-03-content-cadence-gap-cloud-task-migration.md`
 - Budget formula: `knowledge-base/project/learnings/2026-03-20-claude-code-action-max-turns-budget.md`

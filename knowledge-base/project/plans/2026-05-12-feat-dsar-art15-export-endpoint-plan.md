@@ -232,8 +232,8 @@ Brainstorm enumerated 8 questions; one additional (Q-extra) surfaced during rese
 | `apps/web-platform/test/dsar-worker-per-row-where.test.ts` | Per AC30 + C1: file-parse lint over `apps/web-platform/server/dsar-export.ts` asserting every `service.from('<allowlisted-table>').select(...)` is followed by `.eq('owner_id', expectedUserId)` or equivalent positive predicate over the owner column. Failure mode: a future refactor that drops the `WHERE` clause. |
 | `apps/web-platform/test/dsar-worm-guc-sites.test.ts` | Per AC29 + S1: greps the codebase for `SET app.dsar_audit_anonymise_in_progress` and asserts exactly 1 occurrence (in the `anonymise_dsar_export_audit_pii` migration body). Prevents accidental WORM-bypass surface widening. |
 | `knowledge-base/engineering/architecture/decisions/0NN-dsar-export-substrate-and-audit-retention.md` | New ADR. Records: Q1 substrate decision; Q-extra Art. 17 vs 24-mo conflict resolution; Q-credential C1 worker-auth decision (service-role + per-row WHERE + assertReadScope, with the alternatives considered and rejected); Bun runtime invariant per S8. **Lands in Phase 1 alongside the migration per architecture-strategist's ADR-precedes-consumers guidance.** |
-| `knowledge-base/engineering/ops/runbooks/dsar-export-oversize.md` | Operator runbook for >v1-cap accounts |
-| `knowledge-base/engineering/ops/runbooks/dsar-export-failed-job.md` | Operator runbook for failed-job triage |
+| `knowledge-base/engineering/operations/runbooks/dsar-export-oversize.md` | Operator runbook for >v1-cap accounts |
+| `knowledge-base/engineering/operations/runbooks/dsar-export-failed-job.md` | Operator runbook for failed-job triage |
 | `apps/web-platform/scripts/dsar-export-oversize.sh` | Helper script for the oversize fallback runbook |
 | `.github/workflows/legal-doc-cross-document-gate.yml` | **Per C8**: CI gate that fails the PR if the file modification set includes `apps/web-platform/server/dsar-export.ts` (or any other declared "regulated-data surface" file) AND does NOT include all four legal docs (`docs/legal/privacy-policy.md`, `docs/legal/gdpr-policy.md`, `docs/legal/data-protection-disclosure.md`, `knowledge-base/legal/compliance-posture.md`). |
 
@@ -547,7 +547,7 @@ Phases ordered by dependency direction (per Kieran's P0 fix). Tests land WITH th
 | 9 | Account-delete cascade extension | Edit `apps/web-platform/server/account-delete.ts` (insert abort-dsar-jobs + anonymise step BEFORE `auth.admin.deleteUser()`; **update the `:115-117` invariant comment** in the same edit); extend `apps/web-platform/test/account-delete.test.ts` cascade-order test | AC7 + AC25 |
 | 10 | Cross-tenant integration test | `apps/web-platform/test/dsar-export-cross-tenant.integration.test.ts` (synthesised users + service-role re-check + content-level scan) | AC6 + AC15 |
 | 11 | Legal docs | Edit Privacy Policy §4.7/§8.1, GDPR Policy §6.1.b/§5.3, DPD §2.3/§5.3/§10, `compliance-posture.md`; create `.github/workflows/legal-doc-cross-document-gate.yml`; invoke `legal-compliance-auditor` agent; resolve any ripple contradictions | AC8 + FR8; cross-document gate green |
-| 12 | Operator runbooks | `knowledge-base/engineering/ops/runbooks/dsar-export-oversize.md` + `dsar-export-failed-job.md` + `apps/web-platform/scripts/dsar-export-oversize.sh` | Q4 + RK1 |
+| 12 | Operator runbooks | `knowledge-base/engineering/operations/runbooks/dsar-export-oversize.md` + `dsar-export-failed-job.md` + `apps/web-platform/scripts/dsar-export-oversize.sh` | Q4 + RK1 |
 | 13 | Pre-merge verification | Run preflight Check 6; confirm migrations applied to dev FIRST; `gh pr ready 3634` | All ACs + AC-PM-1/2/3 |
 
 ## References

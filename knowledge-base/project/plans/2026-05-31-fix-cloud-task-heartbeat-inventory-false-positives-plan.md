@@ -109,7 +109,7 @@ Removed (non-producers): `daily-triage`, `ux-audit`, `bug-fixer`.
 
 - `apps/web-platform/server/inngest/functions/cron-cloud-task-heartbeat.ts` — replace `TASK_INVENTORY` (lines 42-52) with the 6-producer corrected inventory + thresholds above. No other logic changes (detection mechanism, issue handling, Sentry heartbeat all unchanged).
 - `apps/web-platform/test/server/inngest/cron-cloud-task-heartbeat.test.ts` — update the `TASK_INVENTORY` assertions (lines 37-70) to expect **6** tasks with corrected thresholds; add a **non-producer-exclusion guard** test (assert removed names are absent) and a **cadence-vs-threshold consistency** test. (This file matches the vitest node glob `test/**/*.test.ts` per `apps/web-platform/vitest.config.ts:44`.)
-- `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` — document the monitors-only-producers scoping, the Sentry-liveness split (cite #4708), and the loopback-gated `/v1/*` non-use. Natural edit points: `## Task Inventory` (`:42`), `## Threshold Derivation` (`:425`), `## Updating the Watchdog` (`:450`). The loopback-gating is already documented at `:388-395`; add a heartbeat-specific cross-reference.
+- `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` — document the monitors-only-producers scoping, the Sentry-liveness split (cite #4708), and the loopback-gated `/v1/*` non-use. Natural edit points: `## Task Inventory` (`:42`), `## Threshold Derivation` (`:425`), `## Updating the Watchdog` (`:450`). The loopback-gating is already documented at `:388-395`; add a heartbeat-specific cross-reference.
 
 ## Files to Create
 
@@ -239,7 +239,7 @@ Skipped — no new infrastructure. The change edits only `apps/web-platform/serv
 ## References
 - `apps/web-platform/server/inngest/functions/cron-cloud-task-heartbeat.ts` (SUT)
 - `apps/web-platform/test/server/inngest/cron-cloud-task-heartbeat.test.ts` (test)
-- `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` (runbook, esp. `:375` Sentry-liveness, `:388-395` loopback-gating)
+- `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` (runbook, esp. `:375` Sentry-liveness, `:388-395` loopback-gating)
 - #4708 / commit `8535bdf1` — sibling watchdog retired to liveness-only beacon; loopback-gating proof
 - #2714 — heartbeat umbrella tracking issue
 - Alert issues: close #4691/#4690/#4685/#4687; keep open #4689/#4688/#4686/#4684

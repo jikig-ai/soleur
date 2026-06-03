@@ -30,7 +30,7 @@ priority: p1-high
 - Git history: commits `61c637c8` (#2842), `321ceacb` (#2682), `e40b8f9d` (#2653) — files changed since #2618 remediation
 - Issue history: #2873, #2874, #2618, #2234, #1899, #1505, #1412, #994, #988 (all same-class)
 - Repo code: `apps/web-platform/infra/server.tf:209-269`, `:5-8`, `:43-49`; `hooks.json.tmpl`; `cloud-init.yml:130,139`; `.github/workflows/scheduled-terraform-drift.yml`
-- Runbooks: `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`
+- Runbooks: `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md`
 
 ### Key Improvements (from deepen pass)
 
@@ -595,7 +595,7 @@ with no user-facing surface, no copy, no pricing, no legal exposure.
   `knowledge-base/project/learnings/2026-04-03-terraform-data-remote-exec-drift-encrypted-ssh-key.md`,
   `knowledge-base/project/learnings/2026-03-21-terraform-drift-dead-code-and-missing-secrets.md`
 - Workflow: `.github/workflows/scheduled-terraform-drift.yml` (cron `0 6,18 * * *`)
-- Runbook contingency: `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`
+- Runbook contingency: `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md`
 - AGENTS.md rules invoked:
   - `hr-menu-option-ack-not-prod-write-auth` (no `-auto-approve` against prd*)
   - `hr-all-infrastructure-provisioning-servers` (Terraform-only path)

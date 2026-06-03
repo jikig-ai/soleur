@@ -146,7 +146,7 @@ layers are addressed *before* any service-layer assumption. The
    not plan): `hcloud firewall describe` (or the Hetzner console) diffed against
    the applying egress `curl -s https://ifconfig.me/ip`; remediation
    `/soleur:admin-ip-refresh`, runbook
-   `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`. **Identical to the
+   `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md`. **Identical to the
    apply-path firewall note already documented on `journald_persistent`
    (`server.tf:217-221`)** — the new resource inherits the same precondition
    because it uses the same connection block.

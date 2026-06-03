@@ -113,7 +113,7 @@ None outside the triad. Operations + Marketing + Sales + Finance + Support not a
 
 ## Open Code-Review Overlap
 
-`gh issue list --label code-review --state open --json number,title,body --limit 200 → 75 open issues`. Searched bodies for each of the 5 PR-α target files (`apps/web-platform/scripts/sentry-monitors-audit.sh`, `knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md`, `knowledge-base/legal/article-30-register.md`, `knowledge-base/legal/compliance-posture.md`, `knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`) and the 5 PR-β audit-script + Terraform-root paths.
+`gh issue list --label code-review --state open --json number,title,body --limit 200 → 75 open issues`. Searched bodies for each of the 5 PR-α target files (`apps/web-platform/scripts/sentry-monitors-audit.sh`, `knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md`, `knowledge-base/legal/article-30-register.md`, `knowledge-base/legal/compliance-posture.md`, `knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`) and the 5 PR-β audit-script + Terraform-root paths.
 
 **Result:** None. No open code-review issue references any Branch C target file. No fold-in / acknowledge / defer decision needed.
 
@@ -141,7 +141,7 @@ None outside the triad. Operations + Marketing + Sales + Finance + Support not a
 
 ### PR-γ (`feat-sentry-residency-a2-branch-c-3`, to be created)
 
-- `knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md` — flip `status: open` → `status: resolved` at L8. Append `## Phase 8 — Recovery Completeness` section before `## Who was affected (by role)` at L75. See TR4 institutional-precedent mechanic below.
+- `knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md` — flip `status: open` → `status: resolved` at L8. Append `## Phase 8 — Recovery Completeness` section before `## Who was affected (by role)` at L75. See TR4 institutional-precedent mechanic below.
 - `knowledge-base/legal/article-30-register.md` — backfill `<pending C2 merge>` placeholder in PA8 §(d) with PR-β merge SHA / commit ref.
 - 4 new GH issues filed: W1 (hard rule `hr-prereq-playwright-first-then-credential-handoff`), W2 (extend `soleur:brainstorm` Phase 1.0.5 to named URL substrings), W4 (worktree-manager `.mcp.json` config-flag injection under `SOLEUR_PLAYWRIGHT_HEADED=1`), W5 (`/soleur:compound` fail-friendly on main). W3 absorbed into PR-β C5 — no separate issue.
 - US shadow org teardown — operator-driven (admin UI at `sentry.io/settings/jikigai`); document the state transitions (Team trial → free plan → eventual close) in PR-γ body.
@@ -415,7 +415,7 @@ Verification (AC6 rewritten per DHH P1 to test ingest, not string shape):
 
 - **AC6 — DSN org-id substring AND real ingest probe.** String-shape: `echo "$NEXT_PUBLIC_SENTRY_DSN" | grep -oE 'o[0-9]+'` returns new org-id `≠ 4511123328466944`. **Plus real ingest probe:** fire one synthetic event via `POST <DSN>/store/` with body `{"event_id":"<uuid>","message":"audit-probe-<ts>","level":"info"}`; wait ≤60s; `curl -H "Authorization: Bearer $TOKEN" "https://eu.sentry.io/api/0/projects/$ORG/$PROJECT/events/<event_id>/"` returns 200 with matching `event_id`. **This is the only AC that closes the loop the incident itself exposed** — string-shape verification is not sufficient because the phantom-org failure mode produced a string that LOOKED correct.
 - AC7: CI run of `.github/workflows/sentry-audit-gate.yml` green; required-check added per Phase 5 bootstrap mechanic.
-- **AC8 — Per-surface verification + SENTRY_API_TOKEN sweep (Arch F3).** `doppler secrets get SENTRY_DSN -p soleur -c prd --plain` matches new DSN; `gh secret list | grep SENTRY_` matches Doppler shape; `vercel env ls production | grep SENTRY_` matches; same for `.env.example`, `Dockerfile`, `next.config.ts`, `reusable-release.yml`, 9 scheduled workflows. **PLUS:** `grep -rn 'SENTRY_API_TOKEN' apps/ plugins/soleur/skills/postmerge/ knowledge-base/engineering/ops/runbooks/` — every match MUST resolve to the new DE-cluster token; the `audit-sentry-extra-text-references.sh:99-103` fallback-to-`SENTRY_AUTH_TOKEN` chain MUST be either consistent with the rotated value OR explicitly deprecated by Doppler-side aliasing in this PR.
+- **AC8 — Per-surface verification + SENTRY_API_TOKEN sweep (Arch F3).** `doppler secrets get SENTRY_DSN -p soleur -c prd --plain` matches new DSN; `gh secret list | grep SENTRY_` matches Doppler shape; `vercel env ls production | grep SENTRY_` matches; same for `.env.example`, `Dockerfile`, `next.config.ts`, `reusable-release.yml`, 9 scheduled workflows. **PLUS:** `grep -rn 'SENTRY_API_TOKEN' apps/ plugins/soleur/skills/postmerge/ knowledge-base/engineering/operations/runbooks/` — every match MUST resolve to the new DE-cluster token; the `audit-sentry-extra-text-references.sh:99-103` fallback-to-`SENTRY_AUTH_TOKEN` chain MUST be either consistent with the rotated value OR explicitly deprecated by Doppler-side aliasing in this PR.
 - AC9: old phantom token returns 401 against `https://eu.sentry.io/api/0/users/me/` (proves revocation).
 - AC10: `terraform state list | wc -l` returns 13; PR body contains pre/post manifest diff.
 - **AC11-pre (manual surrogate, P0 fix #5):** Each of 9 scheduled workflows manually triggered via `gh workflow run <name>.yml`; the resulting check-in event ID captured in PR-β body. Any workflow lacking `workflow_dispatch:` MUST get one added in this PR's diff (no current-state spot check needed — `grep -L "workflow_dispatch:" .github/workflows/scheduled-{cf-token-expiry-check,community-monitor,content-vendor-drift,daily-triage,github-app-drift-guard,oauth-probe,realtime-probe,skill-freshness,terraform-drift}.yml` enumerates the misses).
@@ -444,7 +444,7 @@ Verification (AC6 rewritten per DHH P1 to test ingest, not string shape):
 
 Per DHH P1 + Code-Simplicity P1: cut the institutional-precedent prose. The C5 audit-gate triple-expansion (now 4 gates per Arch F2) IS the recurrence-prevention signal; a 3-line closure citing the PR-β SHA is sufficient. If a second PIR ever benefits from the same shape, extract the template then from real n=2 precedent.
 
-Edit `knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`:
+Edit `knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`:
 1. L8: `status: open` → `status: resolved`.
 2. Append new section `## Phase 8 — Recovery Completeness` before `## Who was affected (by role)` at L75:
 
@@ -478,7 +478,7 @@ Verify each label exists via `gh label list | grep -E "^<label>\b"` before filin
 - AC12: US shadow org status documented in PR-γ body.
 - AC13: Both ticket IDs captured.
 - AC14: **(moved to PR-β Phase 8 AC14-pre.)** No longer in PR-γ scope.
-- AC15: `grep -nE "^status: resolved" knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md` returns L8; Phase 8 section present (4-branch Gate 3 enumerated; 3a/3b/3c/3d resolution selected by operator with evidence).
+- AC15: `grep -nE "^status: resolved" knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md` returns L8; Phase 8 section present (4-branch Gate 3 enumerated; 3a/3b/3c/3d resolution selected by operator with evidence).
 - AC16: **3 W-issues** (W1/W2/W5; W4 dropped) listed in PR-γ body with `gh issue view <N>` returning `state: open`.
 
 ## TR-Level Mechanics (the 5 open questions)
@@ -560,7 +560,7 @@ Plan options (verified against the cloudflare-token Doppler scope):
 
 - **AC6 (DHH P1 — real ingest probe, not string-shape only):** New DE org provisioned AND ingest path closed end-to-end. **Verify (string):** `echo "$NEXT_PUBLIC_SENTRY_DSN" | grep -oE 'o[0-9]+'` returns new org-id; `[[ "$NEW_ORG_ID" != "4511123328466944" ]]`. **Verify (ingest, load-bearing):** fire synthetic event via `POST <DSN>/store/` with body `{"event_id":"<uuid>","message":"audit-probe-<ts>","level":"info"}`; wait ≤60s; `curl -H "Authorization: Bearer $TOKEN" "https://eu.sentry.io/api/0/projects/$ORG/$PROJECT/events/<event_id>/"` returns 200 with matching `event_id`. **The ingest probe is the only verification that closes the loop the incident itself exposed.**
 - **AC7:** 4-gate audit-script green (Gate 1 org-reachable + Gate 2 project-scope + Gate 3 write-probe + Gate 4 DSN-org-id-match); CI workflow added with `SENTRY_API_HOST` env (Kieran P0-1) + token-scope pre-check (fail-loud, not `continue-on-error`); required-check bootstrap per Phase 5 mechanic. **Verify:** `gh workflow list | grep -F "Sentry Audit Gate"`; `gh api repos/jikig-ai/soleur/rulesets/14145388 --jq '.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks[] | .context'` includes `Sentry Audit Gate`.
-- **AC8 (Arch F3 — extended SENTRY_API_TOKEN sweep):** All secret surfaces hold new DSN/token values. **Verify per-surface:** `doppler secrets get SENTRY_DSN -p soleur -c prd --plain | grep -F "$NEW_ORG_ID"` AND `gh secret list | grep -F "NEXT_PUBLIC_SENTRY_DSN"` AND `vercel env pull /tmp/.env.vercel && grep -F "$NEW_ORG_ID" /tmp/.env.vercel`. **PLUS namespace-divergence sweep:** `grep -rn 'SENTRY_API_TOKEN' apps/ plugins/soleur/skills/postmerge/ knowledge-base/engineering/ops/runbooks/` — every match MUST resolve to the new DE-cluster value; `audit-sentry-extra-text-references.sh:99-103` fallback-to-`SENTRY_AUTH_TOKEN` documented (and either consistent or explicitly deprecated in this PR).
+- **AC8 (Arch F3 — extended SENTRY_API_TOKEN sweep):** All secret surfaces hold new DSN/token values. **Verify per-surface:** `doppler secrets get SENTRY_DSN -p soleur -c prd --plain | grep -F "$NEW_ORG_ID"` AND `gh secret list | grep -F "NEXT_PUBLIC_SENTRY_DSN"` AND `vercel env pull /tmp/.env.vercel && grep -F "$NEW_ORG_ID" /tmp/.env.vercel`. **PLUS namespace-divergence sweep:** `grep -rn 'SENTRY_API_TOKEN' apps/ plugins/soleur/skills/postmerge/ knowledge-base/engineering/operations/runbooks/` — every match MUST resolve to the new DE-cluster value; `audit-sentry-extra-text-references.sh:99-103` fallback-to-`SENTRY_AUTH_TOKEN` documented (and either consistent or explicitly deprecated in this PR).
 - **AC9:** Old phantom DSN not referenced in current deployment. **Verify:** `grep -rn "4511123328466944" apps/web-platform/ .github/workflows/scheduled-*.yml` returns 0 hits (after rotation).
 - **AC10:** tfstate has 13 resources imported against new DE org. **Verify:** `cd apps/web-platform/infra/sentry && terraform state list | wc -l` returns 13; `terraform plan` shows 0 changes; pre/post manifest diff captured in PR body.
 - **AC11-pre (Spec-Flow P0-2 — manual surrogate):** Each of 9 scheduled workflows manually dispatched via `gh workflow run <name>.yml`; first manual-trigger check-in event ID captured in PR-β body. Any workflow lacking `workflow_dispatch:` MUST get one added in this PR's diff.
@@ -577,7 +577,7 @@ Plan options (verified against the cloudflare-token Doppler scope):
 - AC12: US shadow org status documented.
 - AC13: Both Sentry support ticket IDs captured.
 - AC14: `<pending C2 merge>` placeholder backfilled. **Verify:** `grep -rc "<pending C2 merge>" knowledge-base/legal/article-30-register.md knowledge-base/legal/compliance-posture.md` returns 0 for both files. (Widened per PR-α review pattern-recognition P1-A to cover the placeholder-syntax-unified compliance-posture.md row.)
-- AC15: PIR status `resolved`; Phase 8 section present. **Verify:** `grep -nE "^status: resolved" knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md` returns L8; `grep -c "## Phase 8 — Recovery Completeness" ...` returns 1.
+- AC15: PIR status `resolved`; Phase 8 section present. **Verify:** `grep -nE "^status: resolved" knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md` returns L8; `grep -c "## Phase 8 — Recovery Completeness" ...` returns 1.
 - AC16: W1/W2/W4/W5 follow-up issues filed. **Verify:** each `gh issue view <N>` returns `state: open` with title matching W-spec.
 
 ### Post-merge (operator) — PR-γ
@@ -615,7 +615,7 @@ None active. Brainstorm closed all decision points; no SSH/network-connectivity 
 
 - Brainstorm: `knowledge-base/project/brainstorms/2026-05-16-sentry-residency-a2-branch-c-brainstorm.md`
 - Spec: `knowledge-base/project/specs/feat-sentry-residency-a2-branch-c-1/spec.md`
-- PIR: `knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`
+- PIR: `knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`
 - A1 plan: `knowledge-base/project/plans/2026-05-15-feat-sentry-residency-cleanup-plan.md`
 - A1 PR: #3863 (merged 2026-05-15)
 - Umbrella issue: #3861

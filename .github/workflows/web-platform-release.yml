@@ -60,7 +60,7 @@ jobs:
     # Runs supabase/verify/*.sql sentinels post-apply, then closes any open
     # `follow-through` issue whose body references a verified migration. Keeps
     # migration verification out of the human follow-through loop. See runbook
-    # knowledge-base/engineering/ops/runbooks/supabase-migrations.md §3.
+    # knowledge-base/engineering/operations/runbooks/supabase-migrations.md §3.
     needs: migrate
     if: needs.migrate.result == 'success'
     runs-on: ubuntu-latest

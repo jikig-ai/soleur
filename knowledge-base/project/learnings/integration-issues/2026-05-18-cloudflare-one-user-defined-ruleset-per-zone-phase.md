@@ -13,7 +13,7 @@ root_cause: wrong_api
 resolution_type: code_fix
 severity: high
 date: 2026-05-18
-incident_ref: knowledge-base/engineering/ops/post-mortems/soleur-ai-marketing-site-cloudflare-526-ssl-outage-2026-05-18-postmortem.md
+incident_ref: knowledge-base/engineering/operations/post-mortems/soleur-ai-marketing-site-cloudflare-526-ssl-outage-2026-05-18-postmortem.md
 synced_to: [terraform-architect]
 rtd_issue: https://github.com/jikig-ai/soleur/issues/4004
 ---
@@ -85,4 +85,4 @@ Rule ordering inside a ruleset is significant — CF evaluates top-down and the 
 - [Cloudflare Dynamic-Redirect Skip Action Invalid](./2026-05-18-cloudflare-dynamic-redirect-skip-action-invalid.md) — sibling learning from the same recovery; the `skip`-action defect made the team consider a sibling ruleset, which then collided on this constraint
 - [Cloudflare Proxy Hides Origin IPs from GH Pages Domain Check](./2026-05-18-cloudflare-proxy-hides-origin-ip-from-gh-pages-domain-check.md) — sibling learning from the same recovery
 - [Cloudflare Terraform v4→v5 Resource Names](../2026-03-20-cloudflare-terraform-v4-v5-resource-names.md) — related CF-Terraform schema constraint
-- Source incident: [soleur.ai 2026-05-18 SSL outage PIR](../../../engineering/ops/post-mortems/soleur-ai-marketing-site-cloudflare-526-ssl-outage-2026-05-18-postmortem.md)
+- Source incident: [soleur.ai 2026-05-18 SSL outage PIR](../../../engineering/operations/post-mortems/soleur-ai-marketing-site-cloudflare-526-ssl-outage-2026-05-18-postmortem.md)

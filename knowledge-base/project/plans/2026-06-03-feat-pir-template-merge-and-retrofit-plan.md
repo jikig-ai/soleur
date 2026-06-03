@@ -64,7 +64,7 @@ into the existing template, WITHOUT dropping any of the existing template's
 load-bearing GDPR/redaction/role-impact machinery. Then keep the substitution
 contract consistent (`SKILL.md` Phase 0 + Phase 4, fixtures, dry-run) and
 retrofit the 4 existing post-mortems under
-`knowledge-base/engineering/ops/post-mortems/` to the merged shape "when
+`knowledge-base/engineering/operations/post-mortems/` to the merged shape "when
 possible" (judgment per file; preserve all facts; mark missing facts as
 `Unknown`/`N/A`, never fabricate).
 
@@ -310,7 +310,7 @@ every existing frontmatter field.
   (deploy of PR #3007)`.
 - **HARD CONSTRAINT — keep sentinel-clean.** After retrofit, run
   `bash plugins/soleur/skills/incident/scripts/redact-sentinel.sh
-  knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md`
+  knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md`
   and confirm exit 0. The file currently contains JWT-shaped grep patterns
   (`eyJ...` at `:129`), a decoded `iss=supabase` payload (`:271`), DSN-shaped
   strings, and a Supabase ref `ifsccnjhymdmidffkzhl` — these pass TODAY because
@@ -410,7 +410,7 @@ every existing frontmatter field.
   (`cq-test-fixtures-synthesized-only`).
 - `plugins/soleur/skills/incident/test/fixtures/dry-run-secret-leak.json` —
   same field additions (secret-leak path still exercises the new shape).
-- 4 PIRs under `knowledge-base/engineering/ops/post-mortems/` — retrofit per
+- 4 PIRs under `knowledge-base/engineering/operations/post-mortems/` — retrofit per
   section A-D above.
 
 ## Files to Create
@@ -425,7 +425,7 @@ Queried open `code-review`-labeled issues for the planned file paths:
 gh issue list --label code-review --state open --json number,title,body --limit 200 > /tmp/open-review-issues.json
 for p in plugins/soleur/skills/incident/templates/pir.md plugins/soleur/skills/incident/SKILL.md \
          plugins/soleur/skills/incident/scripts/dry-run.sh \
-         knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md; do
+         knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md; do
   jq -r --arg path "$p" '.[] | select(.body // "" | contains($path)) | "#\(.number): \(.title)"' /tmp/open-review-issues.json
 done
 ```

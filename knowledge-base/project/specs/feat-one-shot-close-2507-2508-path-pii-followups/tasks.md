@@ -16,7 +16,7 @@ issues: [2507, 2508]
 
 ## 2. Author `plausible-pii-erasure.md`
 
-- [x] 2.1 Create `knowledge-base/engineering/ops/runbooks/plausible-pii-erasure.md` with YAML frontmatter (`category: compliance`, `tags: [plausible, gdpr, pii, erasure]`, `date: 2026-04-18`).
+- [x] 2.1 Create `knowledge-base/engineering/operations/runbooks/plausible-pii-erasure.md` with YAML frontmatter (`category: compliance`, `tags: [plausible, gdpr, pii, erasure]`, `date: 2026-04-18`).
 - [x] 2.2 Write the **Scope** section: triggers (GDPR Art. 17, CCPA §1798.105 requests for pre-2026-04-17 users).
 - [x] 2.2.1 Include explicit reference to PR #2503 and issue #2462 — both numbers.
 - [x] 2.3 Write the **Regex source of truth** section with the three sentinels + regex strings verbatim from `SCRUB_PATTERNS`.
@@ -27,12 +27,12 @@ issues: [2507, 2508]
 - [x] 2.7 Write the **Deletion — Self-hosted** subsection: ClickHouse `ALTER TABLE … DELETE WHERE …` template with mandatory dry-run, backup reminder, change-control checklist.
 - [x] 2.8 Write the **Privacy-policy note** section explaining retention-window semantics.
 - [x] 2.9 Write the **Cross-references** section linking scrubber source (symbol anchor), scrubber plan, Plausible docs, sibling filter-audit runbook, issues #2462 / #2503 / #2507 / #2508.
-- [x] 2.10 Run `npx markdownlint-cli2 --fix knowledge-base/engineering/ops/runbooks/plausible-pii-erasure.md` — must return 0 errors.
+- [x] 2.10 Run `npx markdownlint-cli2 --fix knowledge-base/engineering/operations/runbooks/plausible-pii-erasure.md` — must return 0 errors.
 - [x] 2.11 Re-read file after lint autofix.
 
 ## 3. Author `plausible-dashboard-filter-audit.md`
 
-- [x] 3.1 Create `knowledge-base/engineering/ops/runbooks/plausible-dashboard-filter-audit.md` with YAML frontmatter (`category: analytics`, `tags: [plausible, dashboard, filter, audit, path-pii]`, `date: 2026-04-18`).
+- [x] 3.1 Create `knowledge-base/engineering/operations/runbooks/plausible-dashboard-filter-audit.md` with YAML frontmatter (`category: analytics`, `tags: [plausible, dashboard, filter, audit, path-pii]`, `date: 2026-04-18`).
 - [x] 3.2 Write the **Scope** section referencing PR #2503 and #2462.
 - [x] 3.3 Write the **Sentinel mapping** table with three BEFORE/AFTER examples (email, UUID, numeric ID).
 - [x] 3.4 Write the **Audit procedure — KB grep** subsection: `rg` template for email / UUID / 6+ digit patterns over `knowledge-base/**/*.md`. Note: hits on the two new runbooks themselves are expected.
@@ -41,7 +41,7 @@ issues: [2507, 2508]
 - [x] 3.7 Write the **Operator announcement template** — one-paragraph copy-pasteable message for #engineering.
 - [x] 3.8 Write the **Close-out criteria** section with explicit 2026-05-17 date (30 days after 2026-04-17).
 - [x] 3.9 Write the **Cross-references** section.
-- [x] 3.10 Run `npx markdownlint-cli2 --fix knowledge-base/engineering/ops/runbooks/plausible-dashboard-filter-audit.md` — 0 errors.
+- [x] 3.10 Run `npx markdownlint-cli2 --fix knowledge-base/engineering/operations/runbooks/plausible-dashboard-filter-audit.md` — 0 errors.
 - [x] 3.11 Re-read file after lint autofix.
 
 ## 4. Source cross-link
@@ -62,8 +62,8 @@ issues: [2507, 2508]
 - [x] 6.2 Stage files: plan, tasks.md, two runbooks, one source edit.
   - `knowledge-base/project/plans/2026-04-18-docs-path-pii-followups-plausible-erasure-and-filter-audit-plan.md`
   - `knowledge-base/project/specs/feat-one-shot-close-2507-2508-path-pii-followups/tasks.md`
-  - `knowledge-base/engineering/ops/runbooks/plausible-pii-erasure.md`
-  - `knowledge-base/engineering/ops/runbooks/plausible-dashboard-filter-audit.md`
+  - `knowledge-base/engineering/operations/runbooks/plausible-pii-erasure.md`
+  - `knowledge-base/engineering/operations/runbooks/plausible-dashboard-filter-audit.md`
   - `apps/web-platform/app/api/analytics/track/sanitize.ts`
 - [x] 6.3 Commit: `git commit -m "docs(ops): drain path-PII scope-outs #2507 + #2508"`.
 - [x] 6.4 Push: `git push -u origin feat-one-shot-close-2507-2508-path-pii-followups`.

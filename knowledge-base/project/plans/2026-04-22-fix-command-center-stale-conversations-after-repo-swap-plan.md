@@ -230,7 +230,7 @@ Screenshots from steps 4, 5, 7 land in the PR description.
 
 ### Post-merge (operator)
 
-- [ ] Migration applied to prod Supabase (verify via REST API per AGENTS.md `wg-when-a-pr-includes-database-migrations`; runbook `knowledge-base/engineering/ops/runbooks/supabase-migrations.md`).
+- [ ] Migration applied to prod Supabase (verify via REST API per AGENTS.md `wg-when-a-pr-includes-database-migrations`; runbook `knowledge-base/engineering/operations/runbooks/supabase-migrations.md`).
 - [ ] Smoke-test on production: disconnect + reconnect cycle on a throwaway account does not leak conversations.
 
 ## Test Scenarios

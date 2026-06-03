@@ -120,7 +120,7 @@ Updated at plan time against live evidence:
 ### Post-merge (operator)
 
 - [ ] Trigger `gh workflow run scheduled-oauth-probe.yml` and verify HTTP 200 + green probe output (per `wg-after-merging-a-pr-that-adds-or-modifies`).
-- [ ] If Probe 3g surfaces drift, follow `knowledge-base/engineering/ops/runbooks/github-app-callback-audit.md` to audit the GitHub App callback URL textarea against the canonical 3-URL list. Per `hr-never-label-any-step-as-manual-without`, attempt **Playwright MCP first** to read the textarea before falling back to a manual UI handoff (the GitHub Apps settings page is auth-walled but Playwright can be driven through GitHub session cookies; only the actual textarea edit is genuinely manual due to CSRF protection — `gh api PATCH /apps/...` does NOT mutate callback URLs per the existing learning).
+- [ ] If Probe 3g surfaces drift, follow `knowledge-base/engineering/operations/runbooks/github-app-callback-audit.md` to audit the GitHub App callback URL textarea against the canonical 3-URL list. Per `hr-never-label-any-step-as-manual-without`, attempt **Playwright MCP first** to read the textarea before falling back to a manual UI handoff (the GitHub Apps settings page is auth-walled but Playwright can be driven through GitHub session cookies; only the actual textarea edit is genuinely manual due to CSRF protection — `gh api PATCH /apps/...` does NOT mutate callback URLs per the existing learning).
 - [ ] If folding #3187 (JWT-mint drift-guard) is deferred, leave a comment on #3187 with the re-evaluation criteria from this PR's scope decision.
 
 ## Test Scenarios
@@ -302,8 +302,8 @@ None. (Queried via `gh issue list --label code-review --state open --json number
 - Issue #1784 (closed): the original GitHub App callback URL configuration follow-through, which closed without verbatim verification and recurred as #3183.
 - Learning: `knowledge-base/project/learnings/integration-issues/2026-05-04-github-app-callback-url-three-entries.md` — single client_id / two flows / three callbacks / body-grep-load-bearing invariants.
 - Learning: `knowledge-base/project/learnings/2026-05-04-github-secrets-cannot-start-with-github-prefix.md` — `gh secret set GITHUB_*` returns HTTP 422; `OAUTH_PROBE_` prefix mandated.
-- Runbook: `knowledge-base/engineering/ops/runbooks/github-app-callback-audit.md` — operator audit procedure.
-- Runbook: `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` — failure-mode-keyed triage.
+- Runbook: `knowledge-base/engineering/operations/runbooks/github-app-callback-audit.md` — operator audit procedure.
+- Runbook: `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md` — failure-mode-keyed triage.
 - Code: `apps/web-platform/components/auth/oauth-buttons.tsx:107` — `disabled` prop already correctly wired.
 - Code: `apps/web-platform/app/api/auth/github-resolve/route.ts` — Flow B redirect_uri construction (`${appUrl}/api/auth/github-resolve/callback`).
 - AGENTS.md rules touched: `hr-weigh-every-decision-against-target-user-impact` (single-user incident threshold), `wg-when-fixing-a-workflow-gates-detection` (retroactive remediation of #3183), `hr-never-label-any-step-as-manual-without` (Playwright-MCP-first audit), `hr-dev-prd-distinct-supabase-projects` (verified — dev has no GitHub OAuth secret-binding to the prd App).

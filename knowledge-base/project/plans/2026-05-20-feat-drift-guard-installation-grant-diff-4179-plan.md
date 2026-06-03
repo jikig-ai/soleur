@@ -519,12 +519,12 @@ discoverability_test:
   multi-install `/app/installations` response, `jq '{permissions, events}'`
   per element produces a file the existing diff script consumes correctly.
   Verified by `./node_modules/.bin/vitest run apps/web-platform/test/github-app-manifest-drift-guard.test.ts` reports 8 passing cases (was 7).
-- [ ] AC11 — Runbook `knowledge-base/engineering/ops/runbooks/github-app-provisioning.md`
+- [ ] AC11 — Runbook `knowledge-base/engineering/operations/runbooks/github-app-provisioning.md`
   Step 2.1 updated to note: "After re-accepting installation permissions in
   the UI, the next hourly cron run of scheduled-github-app-drift-guard.yml
   will close any open `installation_permission_drift` tracking issue
   automatically via the existing auto-close-stale step at YAML:530-551."
-  Verified by `grep -c 'installation_permission_drift' knowledge-base/engineering/ops/runbooks/github-app-provisioning.md` returns at least 1.
+  Verified by `grep -c 'installation_permission_drift' knowledge-base/engineering/operations/runbooks/github-app-provisioning.md` returns at least 1.
 - [ ] AC12 — `apps/web-platform/infra/github-app.tf:24-30` comment block
   updated to remove the "tracked in #4179 as a drift-guard extension"
   language and replace with "Both planes detected by scheduled-github-app-
@@ -681,7 +681,7 @@ discoverability_test:
   24-30 to reflect that both planes are now detected (lose the "#4179 as a
   drift-guard extension" deferred-language; replace with the closed-loop
   statement).
-- `knowledge-base/engineering/ops/runbooks/github-app-provisioning.md` —
+- `knowledge-base/engineering/operations/runbooks/github-app-provisioning.md` —
   extend Step 2.1 with the auto-close-stale note + cross-reference the new
   failure mode names.
 
@@ -866,7 +866,7 @@ All four triggers either skip or resolve to existing carry-forward.
 - Suppression file: `apps/web-platform/infra/MANIFEST_DRIFT_SUPPRESS_UNTIL`
   (currently `2026-05-21T16:00:00Z` — active suppression window)
 - Terraform comment: `apps/web-platform/infra/github-app.tf:24-30`
-- Runbook: `knowledge-base/engineering/ops/runbooks/github-app-provisioning.md`
+- Runbook: `knowledge-base/engineering/operations/runbooks/github-app-provisioning.md`
   (Step 2.1 at line 62)
 - Foundational learning: `knowledge-base/project/learnings/2026-05-20-github-app-installation-grant-vs-manifest-three-plane-drift.md`
 - Manifest-as-IaC pattern learning: `knowledge-base/project/learnings/2026-05-20-manifest-as-iac-with-shared-diff-script-contract.md`

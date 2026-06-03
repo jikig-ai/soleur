@@ -55,7 +55,7 @@ The 8-component rubric that appeared on 04-19 is actually richer (source citatio
 ## Open Questions
 
 - Does the agent need an explicit instruction to produce BOTH tables, or is prescribing the headline SAP template + secondary "Detailed AEO Diagnostic" section enough? (Leaning toward explicit "produce both" instruction to prevent single-table freelancing.)
-- Should the runbook move to `knowledge-base/engineering/ops/runbooks/` for better discoverability? (Out of scope for this PR; worth a separate cleanup.)
+- Should the runbook move to `knowledge-base/engineering/operations/runbooks/` for better discoverability? (Out of scope for this PR; worth a separate cleanup.)
 
 ## Domain Assessments
 

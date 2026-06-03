@@ -53,7 +53,7 @@ Derived from `knowledge-base/project/plans/2026-05-13-fix-ruleset-bypass-audit-t
 ## Phase 4 — Runbook fix
 
 - 4.1 Edit
-  `knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md`
+  `knowledge-base/engineering/operations/runbooks/ruleset-bypass-drift.md`
   line 105 row: replace "ruleset deleted entirely" + destructive
   restore with both-interpretations + probe-first remediation.
 - 4.2 Add `token_scope_insufficient` row to failure-modes table

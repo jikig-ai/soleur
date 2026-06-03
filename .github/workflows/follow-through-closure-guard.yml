@@ -138,7 +138,7 @@ jobs:
               printf -- '- [x] Byte count\n'
             fi
             printf '\n### To close this issue\n\n'
-            printf 'Add a comment containing ALL THREE fields above, then close again. See [github-app-callback-audit.md](https://github.com/%s/blob/main/knowledge-base/engineering/ops/runbooks/github-app-callback-audit.md) for the audit procedure.\n' "$GH_REPO"
+            printf 'Add a comment containing ALL THREE fields above, then close again. See [github-app-callback-audit.md](https://github.com/%s/blob/main/knowledge-base/engineering/operations/runbooks/github-app-callback-audit.md) for the audit procedure.\n' "$GH_REPO"
           } > "$reopen_body_file"
 
           gh issue reopen "$ISSUE_NUM" --repo "$GH_REPO" \

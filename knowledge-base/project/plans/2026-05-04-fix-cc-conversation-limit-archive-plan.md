@@ -420,7 +420,7 @@ table and update the PR body.
 
 4. **Postgres triggers can be silently dropped by a future migration.**
    **Mitigation:** add the trigger name to the post-migration assertion
-   block recommended in `knowledge-base/engineering/ops/runbooks/supabase-migrations.md`
+   block recommended in `knowledge-base/engineering/operations/runbooks/supabase-migrations.md`
    if such an assertion exists; otherwise, the test suite fails loudly when
    the trigger is missing.
 

@@ -591,7 +591,7 @@ root, the script is absent/non-executable, or `earliest` doesn't parse. **Orderi
 scaffold + `chmod +x` the script BEFORE the `gh issue create` call (the gate and
 the sweeper both require the file on disk; for review-time filings it lands in
 the review PR's branch). Full contract:
-[`followthrough-convention.md`](../../../../knowledge-base/engineering/ops/runbooks/followthrough-convention.md)
+[`followthrough-convention.md`](../../../../knowledge-base/engineering/operations/runbooks/followthrough-convention.md)
 §Trigger → verification mapping. This subsection is additive — the cost-of-filing
 gate, the four scope-out criteria, and the CONCUR gate above are unchanged.
 

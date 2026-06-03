@@ -15,7 +15,7 @@
 # IssueOwners + ActiveMembers if no team is found.
 #
 # Required env: SENTRY_AUTH_TOKEN, SENTRY_ORG, SENTRY_PROJECT
-# Closes #2997. Runbook: knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md
+# Closes #2997. Runbook: knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md
 
 set -euo pipefail
 

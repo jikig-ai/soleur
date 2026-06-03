@@ -27,7 +27,7 @@ Sentry signature was present the whole time but buried under unrelated error-noi
 and watched by no alert rule (PIR contributing factor 2). We need an alert that
 catches a recurrence by instrumentation, not by a user report.
 
-Source PIR: `knowledge-base/engineering/ops/post-mortems/chat-rls-workspace-id-outage-postmortem.md`.
+Source PIR: `knowledge-base/engineering/operations/post-mortems/chat-rls-workspace-id-outage-postmortem.md`.
 
 ## Goals
 

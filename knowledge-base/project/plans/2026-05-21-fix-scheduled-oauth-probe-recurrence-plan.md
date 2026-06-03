@@ -22,7 +22,7 @@ related_workflows:
 related_iac:
   - apps/web-platform/infra/sentry/cron-monitors.tf
 related_runbooks:
-  - knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md
+  - knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md
 related_issues: [2997, 3236]
 sentry_issue_id: a94c4ec23f654101a7fc4491b16a560c
 prior_plan: knowledge-base/project/plans/2026-05-18-fix-scheduled-oauth-probe-sentry-checkin-plan.md
@@ -164,7 +164,7 @@ Not a network-outage diagnosis class. Phase 1.4 keyword scan (`SSH`, `connection
 
 **Operator-surface doc sweep (full enumeration at plan time; AC sentinel uses identical regex):**
 
-- [ ] AC14 — `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` updated at the following sites (plan-time enumerated via `grep -nE 'scheduled-oauth-probe.yml|workflow run scheduled-oauth-probe|gh run list.*oauth-probe|scheduled.*OAuth Probe' knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md`):
+- [ ] AC14 — `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md` updated at the following sites (plan-time enumerated via `grep -nE 'scheduled-oauth-probe.yml|workflow run scheduled-oauth-probe|gh run list.*oauth-probe|scheduled.*OAuth Probe' knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md`):
   - line 5 (`applies_to: .github/workflows/scheduled-oauth-probe.yml`) — replace with `apps/web-platform/server/inngest/functions/cron-oauth-probe.ts`.
   - line 16 (`runs every hour from a GitHub-hosted runner`) — replace with `runs every hour as a self-hosted Inngest cron on the Hetzner VM`.
   - line 33 (`Open the most recent green Scheduled: OAuth Probe run`) — replace with `Open the most recent Inngest function-run for cron-oauth-probe via the Inngest dashboard at https://inngest.soleur.ai/runs?function=cron-oauth-probe` OR the equivalent CLI form `inngest server runs --function cron-oauth-probe` (Phase 0.1 verifies the actual operator-facing URL/CLI).
@@ -173,11 +173,11 @@ Not a network-outage diagnosis class. Phase 1.4 keyword scan (`SSH`, `connection
   - line 228 (`gh workflow run scheduled-oauth-probe.yml`) — replace with `inngest send cron/oauth-probe.manual-trigger` (and update the surrounding "Re-run the probe" recipe at lines 489-501 to use the Inngest CLI).
   - line 237 (`wait one probe cycle (1 h)`) — UNCHANGED (still hourly).
   - line 489-501 recipe (`Re-run the probe on demand`) — translated to Inngest CLI form. The `gh run watch` pattern is replaced with `inngest server runs --function cron-oauth-probe --latest` (verify exact flag at Phase 0.1 via `inngest server runs --help`).
-  - Sentinel: `grep -cE 'gh run list.*oauth-probe|gh workflow run scheduled-oauth-probe|scheduled-oauth-probe\.yml' knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` returns 0.
-- [ ] AC15 — `knowledge-base/engineering/ops/runbooks/github-app-drift.md` line 339 still references `scheduled-oauth-probe.yml` (`The user-facing OAuth probe (scheduled-oauth-probe.yml, every hour) ...`). Updated to `The user-facing OAuth probe (Inngest cron cron-oauth-probe, every hour) ...`. Sentinel: `grep -nE 'scheduled-oauth-probe\.yml' knowledge-base/engineering/ops/runbooks/github-app-drift.md` returns 0.
+  - Sentinel: `grep -cE 'gh run list.*oauth-probe|gh workflow run scheduled-oauth-probe|scheduled-oauth-probe\.yml' knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md` returns 0.
+- [ ] AC15 — `knowledge-base/engineering/operations/runbooks/github-app-drift.md` line 339 still references `scheduled-oauth-probe.yml` (`The user-facing OAuth probe (scheduled-oauth-probe.yml, every hour) ...`). Updated to `The user-facing OAuth probe (Inngest cron cron-oauth-probe, every hour) ...`. Sentinel: `grep -nE 'scheduled-oauth-probe\.yml' knowledge-base/engineering/operations/runbooks/github-app-drift.md` returns 0.
 - [ ] AC16 — Plan-time enumerated operator-surface grep over all relevant docs, with `grep -rEn 'scheduled-oauth-probe\.yml|gh workflow run scheduled-oauth-probe|gh run list.*scheduled-oauth-probe' knowledge-base/ apps/web-platform/ README.md CONTRIBUTING.md 2>/dev/null | grep -v 'knowledge-base/project/\(plans\|specs\|learnings\)/' | grep -v archive/`:
-  - `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` — covered by AC14.
-  - `knowledge-base/engineering/ops/runbooks/github-app-drift.md` — covered by AC15.
+  - `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md` — covered by AC14.
+  - `knowledge-base/engineering/operations/runbooks/github-app-drift.md` — covered by AC15.
   - `apps/web-platform/test/oauth-probe-contract.test.ts` (referenced from oauth-probe-failure.md line 230) — **VERIFY** at Phase 0.1 whether the contract test still applies (it tests sentinel constants like `authenticity_token` strings; those are workflow-agnostic and migrate to the Inngest function unchanged — the test should still pass since the sentinel strings live in test fixtures, not in a workflow shape). If the test imports from the workflow file directly, refactor to extract sentinels to a shared module.
   - Scope exclusion: `knowledge-base/project/{plans,specs,learnings}/**`, `**/archive/**`, `knowledge-base/legal/audits/**` (historical record per the May 18 plan AC10).
   - Final sentinel: `grep -rEn 'scheduled-oauth-probe\.yml|gh workflow run scheduled-oauth-probe|gh run list.*scheduled-oauth-probe' knowledge-base/engineering/ apps/web-platform/ README.md CONTRIBUTING.md 2>/dev/null | grep -v archive/ | grep -v 'knowledge-base/project/\(plans\|specs\|learnings\)/' | wc -l` returns 0.
@@ -207,8 +207,8 @@ Not a network-outage diagnosis class. Phase 1.4 keyword scan (`SSH`, `connection
 ## Files to Edit
 
 - `apps/web-platform/infra/sentry/cron-monitors.tf` — lines 24-29 (joint-exception breadcrumb) updated to name only `scheduled_github_app_drift_guard` as the threshold=2 exception; lines 62-72 (`scheduled_oauth_probe` resource) updated: comment block rewritten to name Inngest-fired substrate; `failure_issue_threshold` 2 → 1; `checkin_margin_minutes` 30 unchanged (rationale changes only).
-- `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` — per AC14 enumeration (10 line-pair edits + the "Re-run the probe on demand" recipe at lines 489-501).
-- `knowledge-base/engineering/ops/runbooks/github-app-drift.md` — line 339 reference to `scheduled-oauth-probe.yml` translated to `cron-oauth-probe`.
+- `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md` — per AC14 enumeration (10 line-pair edits + the "Re-run the probe on demand" recipe at lines 489-501).
+- `knowledge-base/engineering/operations/runbooks/github-app-drift.md` — line 339 reference to `scheduled-oauth-probe.yml` translated to `cron-oauth-probe`.
 - `apps/web-platform/app/api/inngest/route.ts` (verified at deepen-plan time as the canonical registry file at lines 21-22 + 37) — add `import { cronOauthProbe } from "@/server/inngest/functions/cron-oauth-probe";` and extend the `functions:` array at line 37 to include `cronOauthProbe`.
 
 ## Files to Create

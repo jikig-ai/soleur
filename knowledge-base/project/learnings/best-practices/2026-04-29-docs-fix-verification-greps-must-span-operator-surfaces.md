@@ -17,8 +17,8 @@ Issue #2993 reported a wrong `gh secret set --body -` invocation in one specific
 
 That scope was too narrow. The same fabricated-flag bug class lived in three additional operator-facing surfaces the AC grep didn't cover:
 
-1. `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md:131` — `gh secret set ... --body-file -` (the same fabricated flag the deepen-plan caught at plan-time).
-2. `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md:206` — `gh secret set ... < /dev/stdin` (no-op stdin redirect; operator-trap).
+1. `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md:131` — `gh secret set ... --body-file -` (the same fabricated flag the deepen-plan caught at plan-time).
+2. `knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md:206` — `gh secret set ... < /dev/stdin` (no-op stdin redirect; operator-trap).
 3. `.github/workflows/scheduled-linkedin-token-check.yml:63` — issue-body template documenting `echo "<token>" | gh secret set` (`echo`'s trailing `\n` corrupts the JWT).
 
 The PR would have shipped with the issue closed and three same-class operator runbooks still broken if multi-agent review hadn't widened the scope.
@@ -50,7 +50,7 @@ Plan AC verification greps and cross-cutting bug-class sweeps are different arti
 
 When fixing a CLI-form-bug class (or any bug class with mechanical detection patterns), the multi-agent review phase MUST run the broad sweep across all operator-facing surfaces — not the narrow AC scope. Operator-facing surfaces for a Soleur-class repo:
 
-- `knowledge-base/engineering/ops/runbooks/**` (operator runbooks)
+- `knowledge-base/engineering/operations/runbooks/**` (operator runbooks)
 - `knowledge-base/project/learnings/**` (post-mortems with operator instructions)
 - `.github/workflows/**` (issue-body templates, scheduled job comments)
 - `apps/*/docs/**` (per-app operator docs)

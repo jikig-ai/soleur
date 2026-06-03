@@ -49,7 +49,7 @@ entries the issues prescribe — so a future operator hitting an erasure
 request or a broken dashboard does not need to reconstruct the context.
 
 **Single PR deliverable:** two new files in
-`knowledge-base/engineering/ops/runbooks/`:
+`knowledge-base/engineering/operations/runbooks/`:
 
 1. `plausible-pii-erasure.md` — remediation path for historical PII events
    (cloud Plausible via support request + self-hosted SQL template).
@@ -65,7 +65,7 @@ scrubber code discovers the historical-backlog context in one hop.
 | Spec claim (from issue bodies) | Reality (this worktree) | Plan response |
 | --- | --- | --- |
 | PR #2462 landed the path-PII scrub | The branch `fix-analytics-track-path-pii` was merged as **PR #2503** on 2026-04-17T19:16:02Z (not #2462 — that number is the issue this PR closed). Merge SHA `95d574eb77026da1fb1c50c0f32f5b463fc06dc5` resolved live via `git log --all --oneline --grep="2462"` on 2026-04-18. Both issues correctly reference #2462 as the triggering ticket. | Runbooks cite both numbers and the merge SHA to avoid confusion: `(issue #2462 → PR #2503 → commit 95d574e)`. |
-| `knowledge-base/engineering/ops/runbooks/gdpr-erasure.md` might already exist | Confirmed absent. The ops/runbooks dir contains `cloudflare-service-token-rotation.md`, `disk-monitoring.md`, `supabase-migrations.md` only. | New file; no edit. Also per-vendor naming (`plausible-pii-erasure.md`) fits the existing one-file-per-vendor pattern better than a catch-all `gdpr-erasure.md`. |
+| `knowledge-base/engineering/operations/runbooks/gdpr-erasure.md` might already exist | Confirmed absent. The ops/runbooks dir contains `cloudflare-service-token-rotation.md`, `disk-monitoring.md`, `supabase-migrations.md` only. | New file; no edit. Also per-vendor naming (`plausible-pii-erasure.md`) fits the existing one-file-per-vendor pattern better than a catch-all `gdpr-erasure.md`. |
 | Scrubber sentinels are `[email]`, `[uuid]`, `[id]` | Confirmed in `app/api/analytics/track/sanitize.ts:61,66,68`. Regexes use length-bound pre-slice (`MAX_SCRUB_INPUT_LEN = 400`) and `.replace()` (no `.test()` gate) per PR-review P1. | Runbooks quote the exact regexes and sentinels so the SQL/Stats-API queries match what the scrubber produces. |
 | Plausible Cloud has no bulk-delete API | Verified 2026-04-18: the Plausible Stats API is read-only (`/api/v1/stats/{breakdown,aggregate,timeseries}`); no `DELETE` endpoint. Ref: <https://plausible.io/docs/stats-api>. | Cloud path = Plausible support ticket with the exact path list. Self-hosted path = direct SQL against `events_v2`. |
 | Self-hosted target table is `events_v2` | The Plausible OSS schema uses ClickHouse with a `plausible_events_db.events_v2` table. Ref: <https://github.com/plausible/community-edition/blob/main/db/clickhouse/events_v2.sql>. | Self-hosted template uses `ALTER TABLE ... DELETE WHERE ...` (ClickHouse idiom, not plain Postgres `DELETE`). Dry-run via `SELECT count()` first. |
@@ -79,13 +79,13 @@ Query: `jq -r '.[] | select((.body // "") | contains("analytics-track") or conta
 | #2507 | **Fold in** — `Closes #2507` via `plausible-pii-erasure.md` | This is the subject of this PR. |
 | #2508 | **Fold in** — `Closes #2508` via `plausible-dashboard-filter-audit.md` | This is the subject of this PR. |
 
-No other open `code-review`-labeled issue touches `apps/web-platform/app/api/analytics/track/**`, `lib/analytics-client.ts`, or `knowledge-base/engineering/ops/runbooks/**`. Confirmed against 42 open issues in `/tmp/open-review-issues.json` (2026-04-18).
+No other open `code-review`-labeled issue touches `apps/web-platform/app/api/analytics/track/**`, `lib/analytics-client.ts`, or `knowledge-base/engineering/operations/runbooks/**`. Confirmed against 42 open issues in `/tmp/open-review-issues.json` (2026-04-18).
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-- [ ] New file `knowledge-base/engineering/ops/runbooks/plausible-pii-erasure.md` exists.
+- [ ] New file `knowledge-base/engineering/operations/runbooks/plausible-pii-erasure.md` exists.
   - [ ] YAML frontmatter with `category: compliance`, `tags: [plausible, gdpr, pii, erasure]`, `date: 2026-04-18`.
   - [ ] Sections: **Scope**, **Audit (identify affected events)**, **Deletion path (cloud)**, **Deletion path (self-hosted)**, **Privacy-policy note**, **Cross-references**.
   - [ ] Audit section includes a Plausible Stats API v1 `curl` invocation that matches the scrubber's three sentinels in a custom-props breakdown query (`property=event:props:path`, `filters=event:props:path~<regex>`), using the **same auth pattern as `scripts/weekly-analytics.sh:210`** (`Authorization: Bearer ${PLAUSIBLE_API_KEY}`). 2xx exit criterion, worked examples for `[email]` / `[uuid]` / `[id]`. Cites `https://plausible.io/docs/stats-api-v1`.
@@ -94,7 +94,7 @@ No other open `code-review`-labeled issue touches `apps/web-platform/app/api/ana
   - [ ] Deletion-self-hosted section includes the ClickHouse `ALTER TABLE plausible_events_db.events_v2 DELETE WHERE ...` template with a mandatory dry-run `SELECT` first and a change-control reminder.
   - [ ] Privacy-policy note explains retention-window semantics: historical raw paths remain until an erasure request triggers the deletion path.
   - [ ] Cross-references: AGENTS.md rule on PII regex design (`cq-*` — link to the scrubber source), `apps/web-platform/app/api/analytics/track/sanitize.ts`, `knowledge-base/project/plans/2026-04-17-fix-analytics-track-path-pii-plan.md`.
-- [ ] New file `knowledge-base/engineering/ops/runbooks/plausible-dashboard-filter-audit.md` exists.
+- [ ] New file `knowledge-base/engineering/operations/runbooks/plausible-dashboard-filter-audit.md` exists.
   - [ ] YAML frontmatter with `category: analytics`, `tags: [plausible, dashboard, filter, audit, path-pii]`, `date: 2026-04-18`.
   - [ ] Sections: **Scope**, **Sentinel mapping**, **Audit procedure**, **Remediation**, **Operator announcement template**, **Close-out criteria**.
   - [ ] Sentinel mapping block names all three sentinels with an example BEFORE/AFTER path for each.
@@ -117,12 +117,12 @@ that lives on the operator's calendar, not the merge gate for this PR.
 
 ## Files to Create
 
-- `knowledge-base/engineering/ops/runbooks/plausible-pii-erasure.md`
-- `knowledge-base/engineering/ops/runbooks/plausible-dashboard-filter-audit.md`
+- `knowledge-base/engineering/operations/runbooks/plausible-pii-erasure.md`
+- `knowledge-base/engineering/operations/runbooks/plausible-dashboard-filter-audit.md`
 
 ## Files to Edit
 
-- `apps/web-platform/app/api/analytics/track/sanitize.ts` — **one-line addition** inside the existing `SCRUB_PATTERNS` block comment: `// Historical backlog / dashboard audit: see knowledge-base/engineering/ops/runbooks/plausible-pii-erasure.md and plausible-dashboard-filter-audit.md`. No behaviour change.
+- `apps/web-platform/app/api/analytics/track/sanitize.ts` — **one-line addition** inside the existing `SCRUB_PATTERNS` block comment: `// Historical backlog / dashboard audit: see knowledge-base/engineering/operations/runbooks/plausible-pii-erasure.md and plausible-dashboard-filter-audit.md`. No behaviour change.
 
 ## Non-Goals
 
@@ -150,7 +150,7 @@ Documentation-only change; no new test code.
 
 **Verification steps (all runnable pre-merge):**
 
-1. `npx markdownlint-cli2 --fix knowledge-base/engineering/ops/runbooks/plausible-pii-erasure.md knowledge-base/engineering/ops/runbooks/plausible-dashboard-filter-audit.md` — returns 0 with no remaining violations after fix pass.
+1. `npx markdownlint-cli2 --fix knowledge-base/engineering/operations/runbooks/plausible-pii-erasure.md knowledge-base/engineering/operations/runbooks/plausible-dashboard-filter-audit.md` — returns 0 with no remaining violations after fix pass.
 2. `grep -n "plausible-pii-erasure" apps/web-platform/app/api/analytics/track/sanitize.ts` — returns one line.
 3. Dry-run the Plausible Stats API `curl` from the erasure runbook against the Cloud prod site (authenticated with `PLAUSIBLE_API_KEY` from Doppler `prd` if present, otherwise skip — read-only request, no side effects). A 200 with a JSON body counts as the runbook's query syntax being correct. If the key is absent, note the skip in the PR body and move on.
 4. `rg -i 'alice@example|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\b\d{6,}\b' knowledge-base/` — exercises the filter-audit runbook's own grep template. Findings that hit the two new runbook files are expected (they quote the regexes) and don't count as dashboards-referencing-PII.
@@ -177,7 +177,7 @@ This plan triggers no edits to:
 
 **Domains relevant:** none (compliance docs).
 
-Two runbooks drop into `knowledge-base/engineering/ops/runbooks/` and one
+Two runbooks drop into `knowledge-base/engineering/operations/runbooks/` and one
 source-code comment pointer is updated. Both runbooks exist to enable the
 CTO / ops-on-call to execute a GDPR erasure or run a one-time filter audit
 without reconstructing the path-PII context from PR #2503 review threads.
@@ -228,7 +228,7 @@ Cloud; self-hosted uses ClickHouse `ALTER TABLE ... DELETE WHERE`.
 
 ### Phase 1 — Draft `plausible-pii-erasure.md`
 
-**Target file:** `knowledge-base/engineering/ops/runbooks/plausible-pii-erasure.md`
+**Target file:** `knowledge-base/engineering/operations/runbooks/plausible-pii-erasure.md`
 
 **Structure (match `supabase-migrations.md` house style):**
 
@@ -312,7 +312,7 @@ lines matching `supabase-migrations.md`.
 
 ### Phase 2 — Draft `plausible-dashboard-filter-audit.md`
 
-**Target file:** `knowledge-base/engineering/ops/runbooks/plausible-dashboard-filter-audit.md`
+**Target file:** `knowledge-base/engineering/operations/runbooks/plausible-dashboard-filter-audit.md`
 
 **Structure:**
 
@@ -387,7 +387,7 @@ Post once in #engineering after this PR merges:
 > runs from the `path` prop before forwarding to Plausible. Any saved
 > dashboard or BI query pinned to a raw-PII path will silently stop
 > matching post-2026-04-17 events. See
-> `knowledge-base/engineering/ops/runbooks/plausible-dashboard-filter-audit.md`
+> `knowledge-base/engineering/operations/runbooks/plausible-dashboard-filter-audit.md`
 > for the audit + remediation procedure.
 
 ## Close-out criteria
@@ -412,7 +412,7 @@ inside the existing comment above `SCRUB_PATTERNS`. The addition:
 
 ```text
 // Historical backlog and dashboard audit: see
-// knowledge-base/engineering/ops/runbooks/plausible-pii-erasure.md and
+// knowledge-base/engineering/operations/runbooks/plausible-pii-erasure.md and
 // plausible-dashboard-filter-audit.md.
 ```
 
@@ -422,13 +422,13 @@ Placement: immediately before the existing `const SCRUB_PATTERNS = …` line
 
 ### Phase 4 — Lint + verify
 
-1. `npx markdownlint-cli2 --fix knowledge-base/engineering/ops/runbooks/plausible-pii-erasure.md knowledge-base/engineering/ops/runbooks/plausible-dashboard-filter-audit.md`
+1. `npx markdownlint-cli2 --fix knowledge-base/engineering/operations/runbooks/plausible-pii-erasure.md knowledge-base/engineering/operations/runbooks/plausible-dashboard-filter-audit.md`
 2. `cd apps/web-platform && ./node_modules/.bin/vitest run test/api-analytics-track.test.ts test/sanitize-props.test.ts` — must pass.
 3. Re-read the two runbooks from disk after markdownlint's autofix pass (per `cq-always-run-npx-markdownlint-cli2-fix-on`).
 
 ### Phase 5 — Commit, push, open PR
 
-1. `git add knowledge-base/engineering/ops/runbooks/plausible-pii-erasure.md knowledge-base/engineering/ops/runbooks/plausible-dashboard-filter-audit.md apps/web-platform/app/api/analytics/track/sanitize.ts knowledge-base/project/plans/2026-04-18-docs-path-pii-followups-plausible-erasure-and-filter-audit-plan.md`
+1. `git add knowledge-base/engineering/operations/runbooks/plausible-pii-erasure.md knowledge-base/engineering/operations/runbooks/plausible-dashboard-filter-audit.md apps/web-platform/app/api/analytics/track/sanitize.ts knowledge-base/project/plans/2026-04-18-docs-path-pii-followups-plausible-erasure-and-filter-audit-plan.md`
 2. `git commit -m "docs(ops): drain path-PII scope-outs #2507 + #2508"`
 3. `git push -u origin feat-one-shot-close-2507-2508-path-pii-followups`
 4. `gh pr create --title "docs(ops): drain path-PII scope-outs #2507 + #2508" --body "..."` — PR body MUST contain `Closes #2507` and `Closes #2508` on separate lines per `wg-use-closes-n-in-pr-body-not-title-to`.

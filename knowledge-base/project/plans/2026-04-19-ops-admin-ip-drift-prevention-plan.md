@@ -192,7 +192,7 @@ required step.
 | "Hetzner Cloud Firewall rule 10708450 allows port 22 only from `var.admin_ips`" | Confirmed -- `firewall.tf:6-13` uses `dynamic "rule" { for_each = var.admin_ips }`. Single-source-of-truth. | No widening of firewall. Keep `var.admin_ips` as the single-source-of-truth. |
 | "Add an ops command `/soleur:admin-ip-refresh`" | No such command or skill exists (verified: `ls plugins/soleur/commands/` → 3 entry-point commands only; `ls plugins/soleur/skills/` → no `admin-ip-*`). | New skill `plugins/soleur/skills/admin-ip-refresh/` (not a command -- per `plugins/soleur/AGENTS.md`, workflow stages are skills, not commands). |
 | "Update `/soleur:plan` and `/soleur:deepen-plan` to challenge network-outage hypotheses" | Both skills exist. `plan/SKILL.md` has a "Hypotheses" step in its MINIMAL/MORE templates; `deepen-plan/SKILL.md` enhances sections with parallel research. | Add a reusable `plan/references/plan-network-outage-checklist.md` referenced from both skills when the feature description matches network/connectivity symptoms (regex on the feature description). |
-| "Runbook at `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`" | Directory exists with 7 runbooks (`ssh-fail2ban-unban.md` is the closest sibling -- shares frontmatter, diagnostic structure, Hetzner context). | New runbook follows the `ssh-fail2ban-unban.md` template (YAML frontmatter, Symptom → Root Cause → Diagnosis → Recovery → Prevention sections). |
+| "Runbook at `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md`" | Directory exists with 7 runbooks (`ssh-fail2ban-unban.md` is the closest sibling -- shares frontmatter, diagnostic structure, Hetzner context). | New runbook follows the `ssh-fail2ban-unban.md` template (YAML frontmatter, Symptom → Root Cause → Diagnosis → Recovery → Prevention sections). |
 | "Rename `ADMIN_IPS` to a multi-entry list by default" | `ADMIN_IPS` is already typed `list(string)` (`variables.tf:21-24`) -- the issue's "rename" is a convention fix, not a schema change. | Skill enforces the multi-entry convention at write time: refuses to write a list of length 1 without operator override (see Phase 2). No Terraform schema change. |
 | Issue #2680 (fail2ban not actually installed) | Open. Not our scope; orthogonal root cause (packages step silently failed on first boot). | Acknowledge; do NOT fold in. Different failure class, different fix. |
 
@@ -218,7 +218,7 @@ required step.
   SKILL.md for token budget.
 - `plugins/soleur/skills/plan/references/plan-network-outage-checklist.md` --
   reusable checklist referenced from both `plan` and `deepen-plan`.
-- `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md` -- operator
+- `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md` -- operator
   runbook (diagnostic path before blaming sshd/fail2ban).
 - `knowledge-base/project/learnings/bug-fixes/2026-04-19-admin-ip-drift-misdiagnosed-as-fail2ban.md`
   -- session learning capturing the misdiagnosis class.
@@ -248,7 +248,7 @@ done
 
 ### Phase 1: Runbook (no-risk, unlocks diagnosis before skill ships)
 
-Add `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md` with
+Add `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md` with
 frontmatter matching `ssh-fail2ban-unban.md`:
 
 ```markdown
@@ -635,7 +635,7 @@ justification; cite the verification artifact.
   against current client egress IP BEFORE proposing sshd/fail2ban/service-
   layer fixes [id: hr-ssh-diagnosis-verify-firewall]. `hcloud firewall
   describe` + `curl -s https://ifconfig.me` is the load-bearing diagnostic.
-  Runbook: `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`.
+  Runbook: `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md`.
   **Why:** #2681 -- issue #2654 plan listed three sshd-layer hypotheses
   without verifying firewall; real cause was admin-IP drift.
 ```
@@ -685,7 +685,7 @@ unreachable, handshake failure), it MUST verify the L3 firewall allowlist
 against current client egress IP BEFORE proposing sshd/fail2ban/service-
 layer fixes [id: hr-ssh-diagnosis-verify-firewall]. `hcloud firewall
 describe` + `curl -s https://ifconfig.me` is the load-bearing diagnostic.
-Runbook: `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`.
+Runbook: `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md`.
 **Why:** #2681 -- issue #2654 plan listed three sshd-layer hypotheses
 without verifying firewall; real cause was admin-IP drift.
 ```
@@ -765,7 +765,7 @@ Per the new network-outage checklist (dogfooding the rule this PR ships):
       pointing to #2681. Total AGENTS.md: 36638 bytes (under 40000 cap).
       Rule count: 106 (exceeds the 100 warn threshold -- pre-existing state
       on main was 105; this PR adds 1; warning only, not a hard block).
-- [x] `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md` exists with
+- [x] `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md` exists with
       frontmatter matching the sibling runbook template.
 - [x] `knowledge-base/project/learnings/bug-fixes/2026-04-19-admin-ip-drift-misdiagnosed-as-fail2ban.md`
       exists.
@@ -880,7 +880,7 @@ pattern (`ssh-fail2ban-unban.md` is the sibling template). Diagnostic
 decision tree is layered L3 → L7, matching the incident reasoning model.
 Operator burden: one new skill invocation to remember, one new runbook to
 recall during an incident -- but the runbook has been structured to be the
-first hit when an operator greps `knowledge-base/engineering/ops/runbooks/`
+first hit when an operator greps `knowledge-base/engineering/operations/runbooks/`
 for "ssh" symptoms.
 
 ### Product (CPO)

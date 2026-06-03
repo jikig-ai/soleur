@@ -125,7 +125,7 @@ first signin; a swap incident during recruitment is brand-ending.
 - **TR10:** Add Doppler row to `knowledge-base/legal/compliance-posture.md`
   vendor DPA table with current state. File a follow-up issue if DPA
   verification is needed.
-- **TR11:** New runbook `knowledge-base/engineering/ops/runbooks/github-app-drift.md`
+- **TR11:** New runbook `knowledge-base/engineering/operations/runbooks/github-app-drift.md`
   covering: triage flow on `ci/auth-broken` vs `ci/guard-broken`, how to
   rotate the private key if leak is suspected, decision tree for escalating
   the user-facing OAuth probe, template for the post-incident retro.

@@ -24,7 +24,7 @@ related_learnings: [2026-04-03-content-cadence-gap-cloud-task-migration.md, 2026
 
 Content Generator Cloud Routine (twice-weekly Tue/Thu 10:00 UTC) reported "Success" for Apr 2, 7, 9 runs and "Failed" for Apr 14, 16 runs in the Claude Code Routines UI — but **zero PRs and zero labeled audit issues were produced on any of those dates** (`gh pr list` + `gh issue list` scoped to the window both returned `[]`). The `scheduled-content-generator` label corpus was silent from 2026-03-31 (#1348) → 2026-04-21. Watchdog from #2716 detected the silence correctly; the #2742 follow-through triggered this diagnosis.
 
-The runbook at `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` (shipped in #2716) defined hypotheses H1-H5 — all five were ruled out.
+The runbook at `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` (shipped in #2716) defined hypotheses H1-H5 — all five were ruled out.
 
 ## Investigation
 
@@ -73,7 +73,7 @@ PR #2744 diff (minimal):
  on:
 -  # MIGRATED TO CLOUD SCHEDULED TASK — 2026-03-25 (PR #1095).
 -  # Silence detection: .github/workflows/scheduled-cloud-task-heartbeat.yml (#2714).
--  # Diagnosis/restore runbook: knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md
+-  # Diagnosis/restore runbook: knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md
 -  # Uncomment schedule to revert to GHA execution.
 -  # schedule:
 -  #   - cron: '0 10 * * 2,4'  # Tuesday + Thursday 10:00 UTC

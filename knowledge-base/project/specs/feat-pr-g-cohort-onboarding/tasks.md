@@ -95,7 +95,7 @@ requires_cpo_signoff: true
 ## Phase 10 — Documentation + ADR
 
 - [ ] 10.1 Create `knowledge-base/engineering/architecture/decisions/ADR-031-per-tenant-scope-grants.md` (sibling to ADR-030).
-- [ ] 10.2 Edit `knowledge-base/engineering/ops/runbooks/inngest-server.md`: append "PR-G post-merge: Flipping SOLEUR_FR5_ENABLED" section with prerequisites, flip command, rollback command, and inline synthetic-smoke procedure (curl-based, replaces the cut Phase 11 script).
+- [ ] 10.2 Edit `knowledge-base/engineering/operations/runbooks/inngest-server.md`: append "PR-G post-merge: Flipping SOLEUR_FR5_ENABLED" section with prerequisites, flip command, rollback command, and inline synthetic-smoke procedure (curl-based, replaces the cut Phase 11 script).
 - [ ] 10.3 Edit `knowledge-base/legal/article-30-register.md`: add "Scope Grants" processing activity row.
 
 ## Phase 11 — CI green + plan-review pass + ready

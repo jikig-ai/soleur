@@ -7,7 +7,7 @@ Issue: [#1444](https://github.com/jikig-ai/soleur/issues/1444) | Draft PR: #2836
 ## Phase 1: Preflight
 
 - [ ] 1.1 Read current `knowledge-base/product/pricing-strategy.md` and identify exact hunk line ranges (expect lines 17, 25, 121-126, 127-133, 188, 215).
-- [ ] 1.2 Read `knowledge-base/engineering/ops/runbooks/supabase-migrations.md` to confirm runbook template structure.
+- [ ] 1.2 Read `knowledge-base/engineering/operations/runbooks/supabase-migrations.md` to confirm runbook template structure.
 - [ ] 1.3 Read `apps/web-platform/lib/stripe-price-tier-map.ts` to confirm the 4 tier IDs, concurrency limits, and Enterprise handling.
 - [ ] 1.4 Re-grep `apps/web-platform/` for `STRIPE_PUBLISHABLE_KEY` / `NEXT_PUBLIC_STRIPE*` to reconfirm it is not needed.
 - [ ] 1.5 Re-run the code-review overlap query (plan §Open Code-Review Overlap). If any new `code-review` labeled issue now touches the planned file paths, update plan disposition before proceeding.
@@ -16,7 +16,7 @@ Issue: [#1444](https://github.com/jikig-ai/soleur/issues/1444) | Draft PR: #2836
 
 ## Phase 2: Runbook
 
-- [ ] 2.1 Create `knowledge-base/engineering/ops/runbooks/stripe-live-activation.md` mirroring the `supabase-migrations.md` section structure.
+- [ ] 2.1 Create `knowledge-base/engineering/operations/runbooks/stripe-live-activation.md` mirroring the `supabase-migrations.md` section structure.
 - [ ] 2.2 Phase A (KYC): document founder dashboard walkthrough + rejection-appeal pointer.
 - [ ] 2.3 Phase B (Stripe Tax): dashboard toggle, EU OSS / UK / US nexus registration with external links, 0.5%/tx fee note.
 - [ ] 2.4 Phase C (price objects): `stripe prices create` invocations for Solo (4900), Startup (14900), Scale (49900), Enterprise placeholder (see plan §C). Verify against `stripe-price-tier-map.ts`.
@@ -26,7 +26,7 @@ Issue: [#1444](https://github.com/jikig-ai/soleur/issues/1444) | Draft PR: #2836
 - [ ] 2.8 Phase G (deploy + smoke): all 7 sub-steps from plan — create $0.50 test price (NOT $0), real checkout, verify `processed_stripe_events` + `public.users` rows, Dashboard "Send test webhook" as webhook-secret smoke test, cancel + refund + archive, `/pricing` CTA swap with `curl | grep checkout.stripe.com` verification.
 - [ ] 2.9 Phase H (rollback): simultaneous revert of `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET` (same `doppler secrets set` transaction, call out pairing explicitly), `STRIPE_PRICE_ID_*` revert, disable-not-delete live webhook, CTA revert, `#1444` comment.
 - [ ] 2.10 Cross-refs: `2026-04-22-stripe-webhook-idempotency-dedup-insert-first-pattern.md` (full path), `2026-04-13-stripe-status-mapping-check-constraint.md`, `2026-04-13-billing-review-findings-batch-fix.md`.
-- [ ] 2.11 `npx markdownlint-cli2 --fix knowledge-base/engineering/ops/runbooks/stripe-live-activation.md` → exit 0.
+- [ ] 2.11 `npx markdownlint-cli2 --fix knowledge-base/engineering/operations/runbooks/stripe-live-activation.md` → exit 0.
 
 ## Phase 3: pricing-strategy.md reconciliation
 
@@ -39,18 +39,18 @@ Issue: [#1444](https://github.com/jikig-ai/soleur/issues/1444) | Draft PR: #2836
 
 ## Phase 4: Legal brief
 
-- [ ] 4.1 Create `knowledge-base/engineering/ops/runbooks/stripe-live-legal-checklist.md` with 6 sections per plan Phase 3.
+- [ ] 4.1 Create `knowledge-base/engineering/operations/runbooks/stripe-live-legal-checklist.md` with 6 sections per plan Phase 3.
 - [ ] 4.2 Section 1: EU 14-day cooling-off + SaaS digital-services opt-out consent wording proposal (draft checkout-copy text for CLO review).
 - [ ] 4.3 Section 2: refund/cancellation policy — propose cancel-at-period-end, no pro-rata refunds for MVP, refund-request escalation to Stripe Dashboard.
 - [ ] 4.4 Section 3: ToS subscription addendum brief (billing cycle, price changes, tax, data retention on cancellation).
 - [ ] 4.5 Section 4: AUP/Privacy sub-processor confirmation (Stripe DPA covered by #670).
 - [ ] 4.6 Section 5: Stripe Atlas alignment note (cross-ref `2026-02-25-stripe-atlas-legal-benchmark-mismatch.md`).
 - [ ] 4.7 Section 6: explicit CLO sign-off line as final gate ("reviewed by CLO on YYYY-MM-DD").
-- [ ] 4.8 `npx markdownlint-cli2 --fix knowledge-base/engineering/ops/runbooks/stripe-live-legal-checklist.md` → exit 0.
+- [ ] 4.8 `npx markdownlint-cli2 --fix knowledge-base/engineering/operations/runbooks/stripe-live-legal-checklist.md` → exit 0.
 
 ## Phase 5: Verification + Ship
 
-- [ ] 5.1 AC5 verify: `npx markdownlint-cli2 knowledge-base/product/pricing-strategy.md knowledge-base/engineering/ops/runbooks/stripe-live-activation.md knowledge-base/engineering/ops/runbooks/stripe-live-legal-checklist.md` → exit 0.
+- [ ] 5.1 AC5 verify: `npx markdownlint-cli2 knowledge-base/product/pricing-strategy.md knowledge-base/engineering/operations/runbooks/stripe-live-activation.md knowledge-base/engineering/operations/runbooks/stripe-live-legal-checklist.md` → exit 0.
 - [ ] 5.2 AC6 verify: `cd apps/web-platform && ./node_modules/.bin/vitest run stripe` → exit 0 (regression baseline).
 - [ ] 5.3 AC3 verify: re-run broadened grep from task 3.5 → zero hits.
 - [ ] 5.4 AC4 verify: `git diff --stat main` shows only `*.md` files changed (no `.ts`, `.tsx`, `.sql`, `.njk`).
