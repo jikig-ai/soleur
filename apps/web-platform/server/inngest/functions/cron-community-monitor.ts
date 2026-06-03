@@ -213,8 +213,12 @@ CLONE DEPTH RULE: This workspace was cloned with --depth=1. Do NOT use \`git log
 //
 // PR-11 additions (bucket-ii authorization): DISCORD_WEBHOOK_URL,
 // DISCORD_BOT_TOKEN, DISCORD_GUILD_ID, BSKY_HANDLE, BSKY_APP_PASSWORD,
-// LINKEDIN_ACCESS_TOKEN, LINKEDIN_PERSON_URN — the community-router.sh
-// platform scripts need these to flip platforms from "disabled" → "enabled".
+// LINKEDIN_ACCESS_TOKEN, LINKEDIN_PERSON_URN, X_API_KEY, X_API_SECRET,
+// X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET — the community-router.sh platform
+// scripts need these to flip platforms from "disabled" → "enabled".
+// X_ALLOW_POST is deliberately EXCLUDED: it is the posting defense-in-depth
+// guard (x-community.sh:611); the monitor is read-only and only the publisher
+// (cron-content-publisher.ts) arms posting.
 // Defensive: ONLY the platform secrets the community-router.sh needs, NOT a
 // wholesale process.env passthrough.
 function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
@@ -231,6 +235,10 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
     BSKY_APP_PASSWORD: process.env.BSKY_APP_PASSWORD,
     LINKEDIN_ACCESS_TOKEN: process.env.LINKEDIN_ACCESS_TOKEN,
     LINKEDIN_PERSON_URN: process.env.LINKEDIN_PERSON_URN,
+    X_API_KEY: process.env.X_API_KEY,
+    X_API_SECRET: process.env.X_API_SECRET,
+    X_ACCESS_TOKEN: process.env.X_ACCESS_TOKEN,
+    X_ACCESS_TOKEN_SECRET: process.env.X_ACCESS_TOKEN_SECRET,
   };
 }
 
