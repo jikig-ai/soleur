@@ -83,8 +83,13 @@ assert "connection host = hcloud_server.web.ipv4_address" \
   "printf '%s' \"\$BLOCK\" | grep -qE 'host[[:space:]]*=[[:space:]]*hcloud_server\.web\.ipv4_address'"
 assert "connection user = root" \
   "printf '%s' \"\$BLOCK\" | grep -qE 'user[[:space:]]*=[[:space:]]*\"root\"'"
-assert "connection uses the operator SSH agent (agent = true)" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'agent[[:space:]]*=[[:space:]]*true'"
+# `agent = true` was stale post-#4845: server.tf now uses the dual-context
+# toggle `agent = var.ci_ssh_private_key == null` (operator ssh-agent locally,
+# explicit Doppler key in CI). The literal-`true` regex previously false-passed
+# by matching this block's #4829 dual-context comment prose, not real config;
+# the conditional regex below matches only the real `agent = var…` line.
+assert "connection uses the dual-context ssh-agent toggle agent = var.ci_ssh_private_key == null" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'agent[[:space:]]*=[[:space:]]*var\.ci_ssh_private_key[[:space:]]*==[[:space:]]*null'"
 
 # --- AC3: triggers_replace references all three trigger inputs ---
 echo ""

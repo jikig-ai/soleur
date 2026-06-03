@@ -120,7 +120,10 @@ export function OrgSwitcherContainer() {
   // `<= 1` — the band owns the single render path for workspace identity.
 
   return (
-    <div className="border-b border-soleur-border-default px-3 py-3">
+    // No horizontal padding here — the WorkspaceContextBand identity row already
+    // supplies px-3. A nested px-3 here double-padded the pill (#4810 follow-up
+    // Bug 1: the bordered switch box painted past the rail's right edge).
+    <div className="border-b border-soleur-border-default py-3">
       <OrgSwitcher memberships={memberships} onSwitch={handleSelect} />
 
       {pending && (
