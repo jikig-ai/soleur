@@ -18,7 +18,7 @@ brand_survival_threshold: single-user incident
 - [ ] 1.1 `ci-deploy.sh` site 1 (~L458): `CRON_WORKSPACE_ROOT=/workspaces` → `/workspaces/.cron`
 - [ ] 1.2 `ci-deploy.sh` site 2 (~L624, rollback path): same change
 - [ ] 1.3 `ci-deploy.sh`: add `mkdir -p /mnt/data/workspaces/.cron && chown 1001:1001 /mnt/data/workspaces/.cron` near the existing chown (~L434)
-- [ ] 1.4 Update `ci-deploy.test.sh` if it asserts the env line
+- [ ] 1.4 **MANDATORY**: update `ci-deploy.test.sh:1186-1235` `assert_cron_workspace_root` literal to `-e CRON_WORKSPACE_ROOT=/workspaces/.cron` (grep -qF is substring → false-passes otherwise; verified at deepen). Update FAIL strings + function comment too.
 
 ## Phase 2 — cron-workspace-gc.ts
 - [ ] 2.1 Create `server/inngest/functions/cron-workspace-gc.ts` (model: cron-supabase-disk-io.ts)

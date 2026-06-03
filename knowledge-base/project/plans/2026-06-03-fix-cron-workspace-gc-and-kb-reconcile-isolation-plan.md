@@ -13,6 +13,30 @@ status: draft
 
 # 🐛 Restore the KB workspace reconcile (no-SSH GC) + isolate cron clones
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-03
+**Gates passed:** 4.6 User-Brand Impact (single-user incident), 4.7 Observability
+(5/5 fields, no-ssh discoverability), 4.8 PAT-shaped (none), 4.9 UI-wireframe (no UI surface),
+4.4 scheduled-work precedent (Inngest canonical, plan correct).
+
+### Key Improvements
+1. **`ci-deploy.test.sh` substring-match stale-green trap** found and folded into Phase 1
+   + AC as a MANDATORY (not conditional) test edit — the `grep -qF` assertion would
+   false-pass the `/workspaces/.cron` value while pinning the wrong intent.
+2. **Precedent-diff verified**: GC reuses `_cron-shared.ts` `bavail` statfs arithmetic +
+   `orphan-reaper.sh` prefix/maxdepth/age sweep shape + `session-metrics.ts` ENOENT-tolerance
+   — no novel pattern; all cited to file.
+3. **Load-bearing negatives confirmed true** (verify-the-negative): GC can never reach
+   `WORKSPACES_ROOT` (distinct env + one-level-up isolation); Vector-doesn't-ship-stdout
+   justifies the Sentry-event signal path.
+
+### New Considerations Discovered
+- The `ci-deploy.test.sh` substring blindness (above) — the single most likely silent
+  regression in the change.
+- `.cron` leading-dot is NOT filtered by `session-metrics.ts` (filters only `.orphaned-`)
+  → would +1 the active-workspace count; Phase 5 extends the filter.
+
 ## Overview
 
 On **2026-06-02 07:46** the org-workspace KB reconcile silently stopped: the
@@ -205,6 +229,19 @@ mkdtemp under it. (Container user is 1001 per the existing chown.)
 > path.) The leading-dot `.cron` is deliberately hidden from `session-metrics.ts`'s
 > `readdirSync(/workspaces).filter(!startsWith(".orphaned-"))` count — see Sharp Edges.
 
+**MANDATORY (not conditional) — `ci-deploy.test.sh` WILL go stale-green:**
+`apps/web-platform/infra/ci-deploy.test.sh:1186–1235` (`assert_cron_workspace_root`)
+asserts via `grep -qF -- "-e CRON_WORKSPACE_ROOT=/workspaces"` against **every**
+`DOCKER_RUN_ARGS` line. Because `grep -F` is a **substring** match, the new value
+`-e CRON_WORKSPACE_ROOT=/workspaces/.cron` **still contains** the asserted substring
+→ the test **passes without modification but now asserts the wrong intent** (its
+comment says "must be `/workspaces`"; a future regression back to bare `/workspaces`
+would also pass). Update the assertion literal to
+`-e CRON_WORKSPACE_ROOT=/workspaces/.cron` (both the `grep -qF` and the FAIL/echo
+strings + the function comment) so the test pins the new exact value and re-catches
+drift. This is a **Research Insight finding**, not a guess — verified at deepen time
+(see Research Insights).
+
 ### Phase 2 — `cron-workspace-gc` Inngest function
 
 Create `apps/web-platform/server/inngest/functions/cron-workspace-gc.ts`,
@@ -313,8 +350,10 @@ template):
 - [ ] `app/api/inngest/route.ts` imports + registers `cronWorkspaceGc`;
       `function-registry-count.test.ts` green with the re-derived count.
 - [ ] `ci-deploy.sh` sets `CRON_WORKSPACE_ROOT=/workspaces/.cron` at **both** docker-run
-      sites and `mkdir -p … && chown 1001:1001 /mnt/data/workspaces/.cron` is present;
-      `ci-deploy.test.sh` (if it asserts on the env line) updated.
+      sites and `mkdir -p … && chown 1001:1001 /mnt/data/workspaces/.cron` is present.
+- [ ] `ci-deploy.test.sh:1186–1235` `assert_cron_workspace_root` literal updated to
+      `-e CRON_WORKSPACE_ROOT=/workspaces/.cron` (substring match means it false-passes
+      otherwise — verified at deepen time); the FAIL strings + function comment updated to match.
 - [ ] `cron-workspace-gc.test.ts` green incl. the UUID-dir-not-swept guard;
       full `test-all.sh` EXIT=0 (read the explicit `EXIT=` marker, not the wrapper exit).
 - [ ] `tsc --noEmit` clean.
@@ -322,8 +361,9 @@ template):
 ### Post-merge (operator/automated, no SSH)
 - [ ] Merge fires `web-platform-release.yml` (path-filtered) → container restarts with
       `CRON_WORKSPACE_ROOT=/workspaces/.cron` and the new fn registered. **The merge
-      IS the apply** — no operator restart step (`hr-monitor-not-run-in-background...`,
-      automation-feasibility gate).
+      IS the apply** — no operator restart step (`hr-all-infrastructure-provisioning-servers`
+      + plan automation-feasibility gate: the release pipeline already restarts the container
+      on merge to `main` touching `apps/web-platform/**`).
 - [ ] Fire the GC via `/soleur:trigger-cron` (`cron/workspace-gc.manual-trigger`,
       secret read read-only from Doppler). Verify in Sentry: `scheduled-workspace-gc`
       heartbeat `ok`, and a before/after event showing `freedMb > 0` (the leaked
@@ -442,6 +482,48 @@ the workspace-volume block. No fold-in/defer needed.
 | Add the sweep to existing `orphan-reaper.sh` (systemd) | Reuses a script, but it is SSH-provisioned and NOT fireable via trigger-cron — violates the no-SSH + on-demand requirement. | **Rejected.** |
 | Fix only the substrate `finally{rm}` to be kill-safe | Cannot help — OOM/ENOSPC/SIGKILL bypass any in-process cleanup by definition; needs an external sweeper. | **Rejected (insufficient).** |
 | Pure time-threshold disk alert, no sweep | Detects but does not reclaim — the volume stays wedged until an operator SSHes. | **Rejected.** |
+
+## Research Insights
+
+**Deepened 2026-06-03.** Verified the load-bearing claims against `origin/main` code:
+
+**Precedent-diff (Phase 4.4) — GC pattern has direct siblings, no novel pattern:**
+- `statfs` precedent: `_cron-shared.ts warnIfCronWorkspaceLowOnDisk` already does
+  `statfs(root)` and computes free-MB as `Math.floor((stats.bavail * stats.bsize) / (1024*1024))`
+  using **`bavail`** (unprivileged-free blocks, what the 1001 container user gets),
+  NOT `bfree`. The GC reuses this exact arithmetic — cite it, don't re-derive.
+- `readdir`-sweep + age-gate precedent: `orphan-reaper.sh` (`find … -maxdepth 1 -type d
+  -name '*.orphaned-*' -mmin +N`) is the structural template (prefix + maxdepth-1 + age).
+  The GC mirrors it in TS (`readdir` + `stat().mtimeMs` + age compare). `session-metrics.ts
+  getActiveWorkspaceCount` is the ENOENT-tolerant `readdir(/workspaces)` degrade pattern.
+- Scheduled-work pattern (ADR-033): Inngest is canonical — **38** `cron-*.ts` functions
+  vs **4** `scheduled-*.yml`. The plan correctly uses the Inngest in-process path (not
+  dispatch-hybrid — no credentials/claude, pure local fs, so it owns its own monitor slug).
+
+**Verify-the-negative (Phase 4.45) — load-bearing negatives confirmed true:**
+- "GC can never sweep `WORKSPACES_ROOT`" — TRUE. The GC resolves its root **only** via
+  `resolveCronWorkspaceRoot()` (returns `CRON_WORKSPACE_ROOT?.trim() || tmpdir()`), a
+  distinct env var from `WORKSPACES_ROOT` (`workspace-resolver.ts:31`). With isolation,
+  cron root = `/workspaces/.cron` and UUID dirs = `/workspaces/<id>` (one level UP) —
+  a `soleur-*`-prefixed `maxdepth 1` sweep in `.cron` is structurally unable to reach them.
+- "Vector does not ship app stdout to Better Stack" — TRUE, cited verbatim from
+  `_cron-claude-eval-substrate.ts:23-26`. Justifies routing the freed-MB signal to Sentry
+  events (the durable path), not pino stdout.
+
+**New finding — `ci-deploy.test.sh` substring-match stale-green trap (folded into Phase 1
++ AC):** `ci-deploy.test.sh:1186-1235 assert_cron_workspace_root` uses
+`grep -qF -- "-e CRON_WORKSPACE_ROOT=/workspaces"`. Because `-F` is a substring match,
+`=/workspaces/.cron` still satisfies it → the env change passes the test **silently while
+the test's pinned intent rots**. The plan now mandates updating the assertion literal to
+`=/workspaces/.cron`. (Class: "AC grep is substring-blind to the value it verifies" —
+cf. the SHA-prefix-match Sharp Edge in plan/SKILL.md.)
+
+**Test-surface enumeration confirmed:** the new cron is asserted by three orphan suites
+beyond its own test — `function-registry-count.test.ts` (manifest set == file list AND
+route-array count), `cron-substrate-imports.test.ts` (relative `./_cron-shared` import),
+and the manifest→allowlist derivation. Adding `"cron-workspace-gc"` to
+`EXPECTED_CRON_FUNCTIONS` is the single edit that satisfies the allowlist; editing
+`manual-trigger-allowlist.ts` would break the no-second-list invariant.
 
 ## Sharp Edges
 
