@@ -60,8 +60,12 @@ export async function resolveLeaderDocumentContext(args: {
    * already SELECTs `workspace_path` (alongside repo_status/installation_id)
    * for the session — passing it through here avoids a second Supabase
    * round-trip via `fetchUserWorkspacePath` on every leader turn. When
-   * omitted, the resolver falls back to the cached fetcher (Concierge
-   * shape).
+   * omitted, the resolver falls back to `fetchUserWorkspacePath` (which now
+   * resolves the ACTIVE workspace, Concierge shape). NOTE: the production
+   * leader run path supplies `preResolvedPath` from `startAgentSession`'s
+   * legacy `users.workspace_path` SELECT, so it does NOT yet flow through the
+   * active-workspace resolution — that convergence is tracked with the
+   * leader/git workspace plumbing (PR #4868 / git-workspace-plumbing plan).
    */
   workspacePath?: string;
 }): Promise<ResolvedLeaderDocumentContext> {
