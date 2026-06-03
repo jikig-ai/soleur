@@ -57,7 +57,7 @@ Ships in two PRs by design:
 
 1 open issue touches our path neighbourhood:
 
-- **#3413 — review: hourly health probe for jikig-ai/kb-template.** Lives at `.github/workflows/kb-template-health-probe.yml` + `knowledge-base/engineering/ops/runbooks/kb-template-drift.md`. **Disposition: acknowledge.** Same parent dir, different file class. #3413 stays open.
+- **#3413 — review: hourly health probe for jikig-ai/kb-template.** Lives at `.github/workflows/kb-template-health-probe.yml` + `knowledge-base/engineering/operations/runbooks/kb-template-drift.md`. **Disposition: acknowledge.** Same parent dir, different file class. #3413 stays open.
 
 No other matches across `plugins/soleur/skills/incident`, `plugins/soleur/commands/go.md`, `.claude/hooks/lib/incidents.sh`, or `AGENTS.core.md`.
 
@@ -65,7 +65,7 @@ No other matches across `plugins/soleur/skills/incident`, `plugins/soleur/comman
 
 Carried forward from brainstorm `## User-Brand Impact` section.
 
-**Artifact:** `/soleur:incident` skill output — internal PIR markdown (`<slug>-postmortem.md`) committed to `knowledge-base/engineering/ops/runbooks/`.
+**Artifact:** `/soleur:incident` skill output — internal PIR markdown (`<slug>-postmortem.md`) committed to `knowledge-base/engineering/operations/runbooks/`.
 
 **Failure modes the diff must mitigate:**
 
@@ -92,7 +92,7 @@ Carried forward from brainstorm `## User-Brand Impact` section.
 - [x] **AC1:** PR1 (#3724) merged to `main`. `git grep -l "^brand_survival:\|^brand_threshold:" -- '*.md' '*.yml' '*.yaml' '*.json'` returns zero non-archived hits AND `git grep -l "single-user-incident" -- '*.md' '*.yml' '*.yaml'` returns zero non-archived hits. (Kieran P1: `*.yaml` glob added.) PR2 rebases on top of merged main.
 - [x] **AC2:** Files exist: `plugins/soleur/skills/incident/SKILL.md`, `templates/pir.md`, `scripts/redact-sentinel.sh`, `test/redact-sentinel.test.sh`, `test/fixtures/positive-corpus.md`, `test/fixtures/dry-run-incident.json`, `test/fixtures/dry-run-secret-leak.json`, `NOTICE`. Total: **8 new files** (down from 11 — public-PIR artifacts removed per #3732 deferral).
 - [x] **AC3:** `bash plugins/soleur/skills/incident/test/redact-sentinel.test.sh` exits 0.
-- [x] **AC4:** Negative-baseline: `bash plugins/soleur/skills/incident/scripts/redact-sentinel.sh knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md` exits 0.
+- [x] **AC4:** Negative-baseline: `bash plugins/soleur/skills/incident/scripts/redact-sentinel.sh knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md` exits 0.
 - [x] **AC5:** Positive-corpus: `bash plugins/soleur/skills/incident/scripts/redact-sentinel.sh plugins/soleur/skills/incident/test/fixtures/positive-corpus.md` exits non-zero with each pattern class flagged at least once: JWT three-segment, email, UUID, Stripe `sk_/pk_/rk_`, Stripe `whsec_`, Stripe `acct_`, Stripe `cus_/pi_/seti_/sub_/in_`, IPv4, env-var-with-value.
 - [x] **AC6:** `grep -lE "emit_incident\b|\.rule-incidents\.jsonl\b" plugins/soleur/skills/incident/` returns zero. `grep -lE "^event_type:" plugins/soleur/skills/incident/templates/` returns zero. (Kieran P1: added `event_type` enum collision check.)
 - [x] **AC7:** `plugins/soleur/skills/incident/SKILL.md` description is one third-person line per constitution Code Style. `name: incident` in frontmatter. Word count ≤3000 (reduced from 5000 per DHH "SKILL.md under 1500 words" target — relaxed to 3000 given 9-phase content).
@@ -471,7 +471,7 @@ No `components/**/*.tsx`, `app/**/page.tsx`, or `app/**/layout.tsx` files. Mecha
 | `plugins/soleur/commands/go.md` | Insert `incident` intent row between line 49 (`review`) and line 50 (`default`) per FR4. |
 | `knowledge-base/project/specs/feat-incident-commander-2725/spec.md` | Add `[Updated 2026-05-13: D1 direction reversed per plan Research Reconciliation]` markers in **Problem Statement, Goals, Non-Goals, FR1, AC1-AC3** (Kieran P1 scope-widened). |
 | `knowledge-base/project/brainstorms/2026-05-13-incident-commander-brainstorm.md` | Add `[Updated 2026-05-13]` marker to Key-Decisions row for D1 direction. |
-| `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md` | Header note pointing at `/soleur:incident` for future PIR scaffolding. (Frontmatter key already renamed by D1.) |
+| `knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md` | Header note pointing at `/soleur:incident` for future PIR scaffolding. (Frontmatter key already renamed by D1.) |
 
 **Files NOT edited (deferred):**
 

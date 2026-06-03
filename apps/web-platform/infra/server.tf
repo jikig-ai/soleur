@@ -146,7 +146,7 @@ resource "terraform_data" "resource_monitor_install" {
 # (ignore_changes on user_data means cloud-init changes do not apply to it).
 # Source of truth for jail content: fail2ban-sshd.local (sibling file).
 # Shows as "will be created" in CI drift reports -- expected behavior.
-# Runbook for acute lockout recovery: knowledge-base/engineering/ops/runbooks/ssh-fail2ban-unban.md
+# Runbook for acute lockout recovery: knowledge-base/engineering/operations/runbooks/ssh-fail2ban-unban.md
 resource "terraform_data" "fail2ban_tuning" {
   triggers_replace = sha256(file("${path.module}/fail2ban-sshd.local"))
 

@@ -62,7 +62,7 @@ This plan is the first dogfood of PR #3963 (plan Phase 2.8 IaC routing gate + `i
 ### Operations (COO)
 
 **Status:** reviewed
-**Assessment:** Better Stack free tier (heartbeat + email-only) is sufficient for current alpha state. Gate paid escalation policy via `var.betterstack_paid_tier` (default false); upgrade trigger = first paying customer OR first incident with user-visible latency from email-only routing. Adds `Better Stack Responder | $29/user/mo | deferred | Trigger: first paying customer` to `knowledge-base/operations/expenses.md`. Existing `prd_terraform` Doppler token has scope — operator-only step is minting (a) one `_dev` Doppler service token, (b) one Better Stack API token, (c) four Inngest signing/event keys (2 per env). Heartbeat ping via systemd `OnUnitActiveSec=60s` timer + `curl`. New runbook at `knowledge-base/engineering/ops/runbooks/inngest-server.md` covers heartbeat-miss triage, key rotation, FR5 flag flip.
+**Assessment:** Better Stack free tier (heartbeat + email-only) is sufficient for current alpha state. Gate paid escalation policy via `var.betterstack_paid_tier` (default false); upgrade trigger = first paying customer OR first incident with user-visible latency from email-only routing. Adds `Better Stack Responder | $29/user/mo | deferred | Trigger: first paying customer` to `knowledge-base/operations/expenses.md`. Existing `prd_terraform` Doppler token has scope — operator-only step is minting (a) one `_dev` Doppler service token, (b) one Better Stack API token, (c) four Inngest signing/event keys (2 per env). Heartbeat ping via systemd `OnUnitActiveSec=60s` timer + `curl`. New runbook at `knowledge-base/engineering/operations/runbooks/inngest-server.md` covers heartbeat-miss triage, key rotation, FR5 flag flip.
 
 ### Legal (CLO)
 
@@ -91,7 +91,7 @@ Files under `apps/web-platform/infra/` (extending existing TF root):
 | `.github/workflows/build-inngest-bootstrap-image.yml` | NEW | Build + push the OCI artifact on tag push (`vinngest-*` tag pattern). Embeds the pinned inngest-cli binary + `inngest-bootstrap.sh` into a scratch image. SHA256 verified at build time. |
 | `variables.tf` | modify | Add 7 new variables (see list below). |
 | `outputs.tf` | modify | `inngest_heartbeat_url` (sensitive). |
-| `knowledge-base/engineering/ops/runbooks/inngest-server.md` | NEW | Heartbeat-miss triage, key rotation, **FR5 flag flip via `doppler secrets get`-then-flip-via-doppler-CLI procedure** (the manual step replacing the dropped TF variable). |
+| `knowledge-base/engineering/operations/runbooks/inngest-server.md` | NEW | Heartbeat-miss triage, key rotation, **FR5 flag flip via `doppler secrets get`-then-flip-via-doppler-CLI procedure** (the manual step replacing the dropped TF variable). |
 | `docs/legal/data-protection-disclosure.md` + `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` | modify | Extend bullet (m) with one-line Better Stack mention. |
 | `knowledge-base/operations/expenses.md` | modify | Append `Better Stack Responder | $29/user/mo | deferred | Trigger: first paying customer`. |
 
@@ -203,14 +203,14 @@ Mirror for `_dev`, `inngest_event_key_*`. `inngest_heartbeat_url_prd`: same `ign
 
 ### Phase 2 — Apply + verify + docs + issue close
 
-**Files: docs/legal/data-protection-disclosure.md, plugins/soleur/docs/pages/legal/data-protection-disclosure.md, knowledge-base/engineering/ops/runbooks/inngest-server.md (NEW), knowledge-base/operations/expenses.md.**
+**Files: docs/legal/data-protection-disclosure.md, plugins/soleur/docs/pages/legal/data-protection-disclosure.md, knowledge-base/engineering/operations/runbooks/inngest-server.md (NEW), knowledge-base/operations/expenses.md.**
 
 - 2.1 Operator runs `terraform apply` against dev (provider aliases scope writes to dev Doppler config + dev BetterStack heartbeat).
 - 2.2 Verify dev Doppler now contains `INNGEST_SIGNING_KEY` + `INNGEST_EVENT_KEY` + `INNGEST_HEARTBEAT_URL` via `doppler secrets get -p soleur -c dev` (read-only).
 - 2.3 Fire dev deploy webhook (`deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap vinngest-vX.Y.Z`); verify system service active on `127.0.0.1:8288`; verify BetterStack heartbeat receives first ping within 90s (`curl` the BetterStack API's heartbeat-status endpoint, or check the Better Stack dashboard).
 - 2.4 Operator runs `terraform apply` against prd once dev verification clears.
 - 2.5 Repeat verification on prd.
-- 2.6 Write `knowledge-base/engineering/ops/runbooks/inngest-server.md`: heartbeat-miss triage, key rotation procedure (Inngest dashboard → Doppler `tf` config → `terraform apply` → next webhook deploy), **FR5 flag flip procedure** (`doppler secrets get SOLEUR_FR5_ENABLED -p soleur -c prd --plain` to verify current state; flip via Doppler CLI with explicit operator confirmation — this is the manual step replacing the dropped `doppler_secret` resource), heartbeat-resource-creation post-apply curl check (R5 mitigation).
+- 2.6 Write `knowledge-base/engineering/operations/runbooks/inngest-server.md`: heartbeat-miss triage, key rotation procedure (Inngest dashboard → Doppler `tf` config → `terraform apply` → next webhook deploy), **FR5 flag flip procedure** (`doppler secrets get SOLEUR_FR5_ENABLED -p soleur -c prd --plain` to verify current state; flip via Doppler CLI with explicit operator confirmation — this is the manual step replacing the dropped `doppler_secret` resource), heartbeat-resource-creation post-apply curl check (R5 mitigation).
 - 2.7 Extend bullet (m) "Operational telemetry & breach detection" in BOTH DPD copies with one-line Better Stack mention per CLO advisory. NOT a new bullet.
 - 2.8 Append `Better Stack Responder | $29/user/mo | deferred | Trigger: first paying customer` to deferred section of `knowledge-base/operations/expenses.md`.
 - 2.9 Commit: `docs(infra+legal+ops): inngest-server runbook + DPD bullet (m) extension + expenses deferred line (PR-A Phase 2)`.
@@ -236,7 +236,7 @@ Mirror for `_dev`, `inngest_event_key_*`. `inngest_heartbeat_url_prd`: same `ign
 - `apps/web-platform/infra/inngest-bootstrap.sh`
 - `apps/web-platform/infra/inngest.test.sh`
 - `.github/workflows/build-inngest-bootstrap-image.yml`
-- `knowledge-base/engineering/ops/runbooks/inngest-server.md`
+- `knowledge-base/engineering/operations/runbooks/inngest-server.md`
 
 ## Open Code-Review Overlap
 
@@ -268,7 +268,7 @@ Mirror for `_dev`, `inngest_event_key_*`. `inngest_heartbeat_url_prd`: same `ign
 - [ ] AC8: `cloud-init.yml` `base64encode(file(...))` references use `${path.module}` prefix (verified by `grep -E 'base64encode\(file\("[^$]' cloud-init.yml | grep inngest` returns empty).
 - [ ] AC9: `.github/workflows/build-inngest-bootstrap-image.yml` exists and triggers on `vinngest-v*` tag pattern; builds + pushes `ghcr.io/jikig-ai/soleur-inngest-bootstrap:<tag>`.
 - [ ] AC10: Bullet (m) extension applied to BOTH DPD copies; no new bullet (p).
-- [ ] AC11: Runbook exists at `knowledge-base/engineering/ops/runbooks/inngest-server.md` with sections: heartbeat-miss triage, key rotation, FR5 flag flip, heartbeat-resource-creation post-apply check, one-TF-apply-at-a-time convention.
+- [ ] AC11: Runbook exists at `knowledge-base/engineering/operations/runbooks/inngest-server.md` with sections: heartbeat-miss triage, key rotation, FR5 flag flip, heartbeat-resource-creation post-apply check, one-TF-apply-at-a-time convention.
 - [ ] AC12: `knowledge-base/operations/expenses.md` deferred section contains the `Better Stack Responder | $29/user/mo` line.
 - [ ] AC13: Plan content does not trip `iac-plan-write-guard.sh` (the literal opt-out comment at file head is the legitimate escape for the 4 token-mint steps in `[ack]`).
 

@@ -26,7 +26,7 @@ Two distinct failure-of-process gaps surfaced while fixing it.
 ## Gap 1 — Runbook misclaim with destructive prescription
 
 The runbook at
-`knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md` line
+`knowledge-base/engineering/operations/runbooks/ruleset-bypass-drift.md` line
 105 mapped `live_missing_bypass_actors` to **"ruleset deleted entirely"**
 with a prescription:
 

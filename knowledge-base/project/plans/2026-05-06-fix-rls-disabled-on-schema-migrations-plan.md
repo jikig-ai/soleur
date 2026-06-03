@@ -95,7 +95,7 @@ CPO sign-off required at plan time before `/work` begins.
 - [ ] Migration is wrapped in the standard implicit transaction (no `CONCURRENTLY`, no `VACUUM`, no `ALTER SYSTEM` — matches sibling migrations 025/027/028/029/035 conventions).
 - [ ] PR description includes a verification snippet showing (a) anon-key `INSERT` returns `42501` insufficient_privilege after the migration, and (b) anon-key `SELECT` returns empty rows (or `42501`) after the migration.
 - [ ] PR body includes `Closes #<issue-number>` once the tracking issue is filed (see operator step 1 below).
-- [ ] Pre-merge dev rehearsal completed per `knowledge-base/engineering/ops/runbooks/supabase-migrations.md` §0:
+- [ ] Pre-merge dev rehearsal completed per `knowledge-base/engineering/operations/runbooks/supabase-migrations.md` §0:
   ```bash
   cd apps/web-platform
   doppler run -p soleur -c dev -- bash scripts/run-migrations.sh

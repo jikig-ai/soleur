@@ -306,7 +306,7 @@ Phase order is contract-changing-before-consumer per `2026-05-10-plan-phase-orde
 - **Pino types (Node):** `apps/web-platform/node_modules/pino/pino.d.ts:642-663`
 - **Pino source (formatters→redact ordering):** `apps/web-platform/node_modules/pino/lib/tools.js:161-200`
 - **Sentry init (server):** `apps/web-platform/sentry.server.config.ts:12-16` (`scrubSentryEvent` wired as `beforeSend` — confirmed)
-- **SSH runbook:** `knowledge-base/engineering/ops/runbooks/ssh-fail2ban-unban.md`
+- **SSH runbook:** `knowledge-base/engineering/operations/runbooks/ssh-fail2ban-unban.md`
 - **Learnings (load-bearing):**
   - `knowledge-base/project/learnings/2026-05-12-centralized-at-helper-boundary-transforms-overclaim-in-acs-and-disclosures.md` — two-clause AC pattern
   - `knowledge-base/project/learnings/security-issues/2026-05-12-multi-agent-review-catches-load-bearing-redaction-primitive-bypasses.md` — adversarial-fixture pattern, vi.hoisted discipline

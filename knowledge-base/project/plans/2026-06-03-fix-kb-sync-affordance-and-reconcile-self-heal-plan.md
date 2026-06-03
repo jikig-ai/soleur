@@ -48,7 +48,7 @@ Criteria (Fix B), Phase 2.3, Files to Edit, Domain Review, Open Code-Review Over
 
 Two bundled fixes for `apps/web-platform`, both rooted in the same incident: an Owner's
 platform Knowledge Base view is stale — the post-mortem
-`knowledge-base/engineering/ops/post-mortems/chat-rls-workspace-id-outage-postmortem.md`
+`knowledge-base/engineering/operations/post-mortems/chat-rls-workspace-id-outage-postmortem.md`
 (merged 2026-06-02 21:10 UTC, PR #4846) is absent from the platform server's workspace
 clone even though it is present on `origin/main`. The KB tree is a fresh filesystem walk
 on every load (`apps/web-platform/server/kb-reader.ts:197` `buildTree` — no view-time

@@ -3,7 +3,7 @@
 -- after file delete/rename/overwrite. See issue #2326.
 --
 -- Pre-apply: run the REST probe documented in the runbook
--- (knowledge-base/engineering/ops/runbooks/supabase-migrations.md) to count
+-- (knowledge-base/engineering/operations/runbooks/supabase-migrations.md) to count
 -- existing rows. If 0 rows, the defensive revoke below is a no-op. If >10
 -- rows, pause and switch to a soft-legacy path (keep nullable, backfill job).
 --

@@ -287,12 +287,12 @@ Existing rule: "verify they are applied to production before closing the issue."
 Proposed strengthened text (target ≤500 bytes):
 
 ```markdown
-- When a PR includes database migrations (`supabase/migrations/`), verify applied to dev FIRST, then prd, before closing the issue [id: wg-when-a-pr-includes-database-migrations]. Test via Supabase REST API. dev and prd MUST be distinct projects per `hr-dev-prd-distinct-supabase-projects`. A committed-but-unapplied migration is a silent deployment failure. Runbook: `knowledge-base/engineering/ops/runbooks/supabase-migrations.md`.
+- When a PR includes database migrations (`supabase/migrations/`), verify applied to dev FIRST, then prd, before closing the issue [id: wg-when-a-pr-includes-database-migrations]. Test via Supabase REST API. dev and prd MUST be distinct projects per `hr-dev-prd-distinct-supabase-projects`. A committed-but-unapplied migration is a silent deployment failure. Runbook: `knowledge-base/engineering/operations/runbooks/supabase-migrations.md`.
 ```
 
 Per `cq-rule-ids-are-immutable`, the rule id is preserved. The text changes; semantics now require dev-first apply.
 
-**4.4 Update supabase-migrations runbook** (`knowledge-base/engineering/ops/runbooks/supabase-migrations.md`):
+**4.4 Update supabase-migrations runbook** (`knowledge-base/engineering/operations/runbooks/supabase-migrations.md`):
 
 Add §0 "Apply to dev FIRST" section: dev-runner invocation against `soleur/dev`, sentinel verification, then prd CI path. Note that pre-#2887 the dev step was a no-op.
 
@@ -358,7 +358,7 @@ doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c ci --plain 2>/dev/null
 - [ ] AGENTS.md `hr-dev-prd-distinct-supabase-projects` rule added; byte budget verified ≤500 bytes; AGENTS.md total ≤37000 bytes (warn) or rule retirement applied
 - [ ] AGENTS.md `wg-when-a-pr-includes-database-migrations` strengthened (rule id preserved)
 - [ ] `plugins/soleur/skills/preflight/SKILL.md` Check 5 (Environment Isolation) added with PASS/FAIL/SKIP semantics
-- [ ] `knowledge-base/engineering/ops/runbooks/supabase-migrations.md` updated with dev-first ordering
+- [ ] `knowledge-base/engineering/operations/runbooks/supabase-migrations.md` updated with dev-first ordering
 - [ ] `knowledge-base/engineering/architecture/decisions/ADR-023-supabase-environment-isolation.md` written
 - [ ] Hardcoded `ifsccnjhymdmidffkzhl` references in `mu1-cleanup-guard.mjs` and `mu1-runbook-cleanup.test.sh` updated to new dev project (or templated/parameterized)
 - [ ] `mu1-integration.test.ts` SYNTH allowlist regex updated to match
@@ -478,7 +478,7 @@ Expected: both return same count (39, modulo bootstrap delta).
 
 - `AGENTS.md` — add `hr-dev-prd-distinct-supabase-projects`, strengthen `wg-when-a-pr-includes-database-migrations`
 - `plugins/soleur/skills/preflight/SKILL.md` — add Check 5 (Environment Isolation), update Phase 2 aggregate table
-- `knowledge-base/engineering/ops/runbooks/supabase-migrations.md` — add §0 dev-first apply ordering
+- `knowledge-base/engineering/operations/runbooks/supabase-migrations.md` — add §0 dev-first apply ordering
 - `apps/web-platform/infra/mu1-cleanup-guard.mjs` — update `DEV_PROJECT_REF` constant
 - `apps/web-platform/infra/mu1-runbook-cleanup.test.sh` — update `DEV_URL` literal (line 10) and prefix-attack fixtures (lines 88, 89, 94, 95)
 - `apps/web-platform/test/mu1-integration.test.ts` — update SYNTH allowlist regex (grep first to find current form)

@@ -17,9 +17,9 @@ preconditions:
 
 **Inspiration:** see `NOTICE` (MIT — alirezarezvani/claude-skills, clean-room).
 
-**Purpose:** classify an incident's `brand_survival_threshold` in <60s, gate PIR drafting behind a GDPR Art. 33/34 notification-trigger evaluation, and scaffold a redaction-gated internal PIR matching the shape of `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md`.
+**Purpose:** classify an incident's `brand_survival_threshold` in <60s, gate PIR drafting behind a GDPR Art. 33/34 notification-trigger evaluation, and scaffold a redaction-gated internal PIR matching the shape of `knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md`.
 
-**Directory convention:** PIRs (incident records) live under `knowledge-base/engineering/ops/post-mortems/`. Procedural runbooks (recovery procedures, rotation playbooks, audit checklists) live under `knowledge-base/engineering/ops/runbooks/`. The split is semantic: runbooks have `triggers:` frontmatter and are scanned by Phase 3 for routing; PIRs do not and are not scanned.
+**Directory convention:** PIRs (incident records) live under `knowledge-base/engineering/operations/post-mortems/`. Procedural runbooks (recovery procedures, rotation playbooks, audit checklists) live under `knowledge-base/engineering/operations/runbooks/`. The split is semantic: runbooks have `triggers:` frontmatter and are scanned by Phase 3 for routing; PIRs do not and are not scanned.
 
 **Operator-invoked only.** No Sentry/cron auto-fire substrate. Pre-write redaction sentinel ([scripts/redact-sentinel.sh](./scripts/redact-sentinel.sh)) is load-bearing — it runs BEFORE the draft is emitted inline to the conversation transcript AND before any file is written to disk. Transcripts ARE write boundaries; sentinel must precede inline-emit, not just file-commit.
 
@@ -59,7 +59,7 @@ The post-resolution review fields (`{{ROOT_CAUSE_5WHYS}}`, `{{LUCKY}}`, `{{WENT_
 Compute locally (FR7 LLM-trust boundary — never accept these from an LLM-emitted blob):
 
 - `slug` — `awk` kebab-case of title, dropping non-`[a-z0-9-]`.
-- File path — derived from slug: `knowledge-base/engineering/ops/post-mortems/${slug}-postmortem.md`.
+- File path — derived from slug: `knowledge-base/engineering/operations/post-mortems/${slug}-postmortem.md`.
 - `MTTR` (mean time to recovery) / `MTTD` (mean time to detect) — computed from validated timestamps, NEVER an LLM-emitted duration. The ISO regex gates FORMAT but not calendar validity (it accepts month 13 / day 40 / hour 25), so `date -u -d` can still reject a regex-passing value — capture the epoch with explicit failure handling and HALT on a bad date or a transposed (negative) pair rather than emitting a garbage/empty duration:
   ```bash
   iso_to_epoch() {  # halt on a regex-valid-but-calendar-invalid date
@@ -125,7 +125,7 @@ Operator must type each token exactly. Free-form yes is rejected. Both acks requ
 
 ## Phase 3 — Runbook routing
 
-`awk`-scan every `*.md` under `knowledge-base/engineering/ops/runbooks/` for a `triggers:` frontmatter block. Build a `{slug: [trigger, ...]}` map. Compute a literal-substring similarity score between operator `symptom` tokens and each runbook's `triggers[]`. Surface the top-3 matches with score and prompt:
+`awk`-scan every `*.md` under `knowledge-base/engineering/operations/runbooks/` for a `triggers:` frontmatter block. Build a `{slug: [trigger, ...]}` map. Compute a literal-substring similarity score between operator `symptom` tokens and each runbook's `triggers[]`. Surface the top-3 matches with score and prompt:
 
 ```
 Runbook matches:
@@ -233,7 +233,7 @@ Anything else (yes, y, ok, approved, looks good, etc.) is REJECTED. To abort, pr
 
 Parse the operator response with a case-sensitive literal-string equality check. Strip trailing `\r` and surrounding whitespace first so a `printf "COMMIT-PIR\r\n"` from a Windows-origin caller or an autonomous-orchestrator stdin pipe is not silently rejected (agent-user parity per `hr-weigh-every-decision-against-target-user-impact`): `response="${response%$'\r'}"; response="${response//[[:space:]]/}"`, then `[[ "${response}" == "COMMIT-PIR" ]]`.
 
-On `COMMIT-PIR`: write `<slug>-postmortem.md` to `knowledge-base/engineering/ops/post-mortems/`. Do not git-add — operator commits manually per their convention.
+On `COMMIT-PIR`: write `<slug>-postmortem.md` to `knowledge-base/engineering/operations/post-mortems/`. Do not git-add — operator commits manually per their convention.
 
 There is NO literal `ABORT` token. `Ctrl-C` is universal.
 

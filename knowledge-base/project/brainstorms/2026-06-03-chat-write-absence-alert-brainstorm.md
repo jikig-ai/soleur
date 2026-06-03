@@ -148,7 +148,7 @@ note, not a new processing-activity row.
 ## Session Errors
 
 1. **Cited PIR appeared "missing on main."** The premise probe found
-   `knowledge-base/engineering/ops/post-mortems/chat-rls-workspace-id-outage-postmortem.md`
+   `knowledge-base/engineering/operations/post-mortems/chat-rls-workspace-id-outage-postmortem.md`
    absent on `main`. It is **not** missing — it is in-flight on a sibling worktree
    (`feat-ui-visual-qa-gate`), authored by the same incident response, not yet
    merged. Resolved by reading it from the sibling worktree (read-only). The
@@ -167,7 +167,7 @@ note, not a new processing-activity row.
 
 ## Sources
 
-- Source PIR: `knowledge-base/engineering/ops/post-mortems/chat-rls-workspace-id-outage-postmortem.md` (on `feat-ui-visual-qa-gate`; factor 2 = this follow-up).
+- Source PIR: `knowledge-base/engineering/operations/post-mortems/chat-rls-workspace-id-outage-postmortem.md` (on `feat-ui-visual-qa-gate`; factor 2 = this follow-up).
 - Fixes: PR #4831 (workspace_id), PR #4848 (template_id) — both merged.
 - Prior art: `knowledge-base/project/learnings/2026-06-01-silence-detector-needs-out-of-band-liveness-signal.md`; `2026-06-01-best-effort-cron-monitor-liveness-not-success-and-offhost-visible-warn.md`.
 - Substrate: `apps/web-platform/infra/sentry/issue-alerts.tf`; `.github/workflows/apply-sentry-infra.yml`, `sentry-audit-gate.yml`; `.github/workflows/scheduled-realtime-probe.yml` (probe pattern for the deferred follow-up).

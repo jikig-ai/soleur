@@ -59,7 +59,7 @@ Terraform Registry pages (`registry.terraform.io`) are JS-rendered SPAs — WebF
 ## References
 
 - ADR-030: `knowledge-base/engineering/architecture/decisions/ADR-030-multi-tenant-deploy-substrate.md`
-- Tenant provisioning runbook: `knowledge-base/engineering/ops/runbooks/tenant-provisioning.md`
+- Tenant provisioning runbook: `knowledge-base/engineering/operations/runbooks/tenant-provisioning.md`
 - Brainstorm: `knowledge-base/project/brainstorms/2026-05-26-tenant-provisioning-skills-brainstorm.md`
 - Spec: `knowledge-base/project/specs/feat-tenant-provisioning-skills/spec.md`
 - Hetzner TF provider: `hetznercloud/hcloud ~> 1.49` (no project-level resources)

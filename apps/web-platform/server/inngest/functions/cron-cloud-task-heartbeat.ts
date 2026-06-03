@@ -240,7 +240,7 @@ export async function cronCloudTaskHeartbeatHandler({
                 "",
                 "### What to do",
                 "",
-                "See [cloud-scheduled-tasks.md runbook](https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md).",
+                "See [cloud-scheduled-tasks.md runbook](https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md).",
                 "",
                 "**Tracks:** #2714",
                 "",

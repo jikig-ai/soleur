@@ -104,7 +104,7 @@ The fix is a **tombstone protocol**:
 5. Revoke the admin token immediately.
 6. Append an entry to the internal DPA-override log (incident ticket; not the public branch).
 
-Runbook: `knowledge-base/engineering/ops/runbooks/cla-signature-evidence-retrieval.md` §7.
+Runbook: `knowledge-base/engineering/operations/runbooks/cla-signature-evidence-retrieval.md` §7.
 
 ---
 

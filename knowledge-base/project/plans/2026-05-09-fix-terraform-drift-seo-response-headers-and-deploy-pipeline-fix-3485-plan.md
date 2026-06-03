@@ -161,7 +161,7 @@ But `terraform plan` against `prd_terraform` reports `Plan: 1 to add, 1 to chang
   hcloud firewall describe soleur-web-platform --output json | jq -r '.rules[] | select(.protocol == "tcp" and (.port // "") == "22") | .source_ips[]'
   ```
 
-  If the operator's IP is NOT in the SSH source list, run `/soleur:admin-ip-refresh` (per AGENTS.md `hr-ssh-diagnosis-verify-firewall` runbook `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`) BEFORE invoking apply. This avoids the #3061 misdiagnosis class (SSH `connection reset by peer` mistakenly attributed to sshd/fail2ban when the cause was admin-IP drift).
+  If the operator's IP is NOT in the SSH source list, run `/soleur:admin-ip-refresh` (per AGENTS.md `hr-ssh-diagnosis-verify-firewall` runbook `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md`) BEFORE invoking apply. This avoids the #3061 misdiagnosis class (SSH `connection reset by peer` mistakenly attributed to sshd/fail2ban when the cause was admin-IP drift).
 
 - [x] **Show the exact apply command and wait for explicit `go` from the operator** (per AGENTS.md `hr-menu-option-ack-not-prod-write-auth`). Do NOT execute on a generic "yes" / menu choice or on stretched approval from Phase 2:
 
@@ -360,7 +360,7 @@ Per AGENTS.md `hr-weigh-every-decision-against-target-user-impact`, the User-Bra
 - **`terraform output` name.** `apps/web-platform/infra/outputs.tf:1` declares `output "server_ip"` — confirms the precedent plan's correction (NOT `server_ipv4`).
 - **Backend lock state.** `apps/web-platform/infra/main.tf:13` declares `use_lockfile = false  # R2 does not support S3 conditional writes`. The "no lock, freeze merges manually" risk is empirically grounded.
 - **Provider/version pins (assumed unchanged from #3061 plan).** `.terraform.lock.hcl` pins `hcloud 1.60.1`, `cloudflare 4.52.7`, `random 3.8.1`. CI's `TERRAFORM_VERSION: 1.10.5`. Operator should verify before Phase 1.
-- **L3 firewall pre-check fires here per AGENTS.md `hr-ssh-diagnosis-verify-firewall`.** Drift B's apply opens an SSH session via Terraform's `connection` block. Even though there is no current SSH symptom, the rule's intent is to verify the L3 surface BEFORE any apply that depends on it — admin IP drift is a known recurrence (`knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`) and `hcloud firewall describe` + `curl ifconfig.me/ip` is the load-bearing pre-check.
+- **L3 firewall pre-check fires here per AGENTS.md `hr-ssh-diagnosis-verify-firewall`.** Drift B's apply opens an SSH session via Terraform's `connection` block. Even though there is no current SSH symptom, the rule's intent is to verify the L3 surface BEFORE any apply that depends on it — admin IP drift is a known recurrence (`knowledge-base/engineering/operations/runbooks/admin-ip-drift.md`) and `hcloud firewall describe` + `curl ifconfig.me/ip` is the load-bearing pre-check.
 - **AGENTS.md rules applied:**
   - `hr-menu-option-ack-not-prod-write-auth` — Phases 2 and 3 each show the exact apply command and wait for explicit per-command go-ahead; no `-auto-approve` on production scope; Phase 3 explicitly notes that Phase 2's approval does NOT stretch.
   - `hr-all-infrastructure-provisioning-servers` — no manual SSH or dashboard fix; the Terraform applies ARE the fix.

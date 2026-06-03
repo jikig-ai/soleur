@@ -12,7 +12,7 @@ controller: "Jikigai SARL (France; 25 rue de Ponthieu, 75008 Paris)"
 
 # Tenant DPA register
 
-Per `knowledge-base/engineering/ops/runbooks/tenant-provisioning.md` Step 0
+Per `knowledge-base/engineering/operations/runbooks/tenant-provisioning.md` Step 0
 (per legal-compliance SHOULD #4), this register records every signed
 Tenant Data Processing Agreement before any provider provisioning runs
 on behalf of that tenant. The register is **append-only** — superseded

@@ -17,7 +17,7 @@ related_workflows:
 related_iac:
   - apps/web-platform/infra/sentry/cron-monitors.tf
 related_runbooks:
-  - knowledge-base/engineering/ops/runbooks/github-app-drift.md
+  - knowledge-base/engineering/operations/runbooks/github-app-drift.md
 related_issues: [3968, 3236]
 related_pr_reference: 3964
 reference_commit: c04ffd33

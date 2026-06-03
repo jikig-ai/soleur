@@ -49,7 +49,7 @@ assuming `<org-slug>.sentry.io/api/0/organizations/<slug>/` returning 401 means
 "the slug names an unowned third-party org" rather than "the token's membership
 scope does not include this slug" — was the root inference failure that drove
 the 2026-03-28 → 2026-05-16 ingest routing confusion documented in PIR
-`knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`
+`knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`
 (see Phase 9 Gate-3b correction; both `jikigai` and `jikigai-eu` orgs were
 operator-owned EU-database orgs throughout, per Sentry support replies
 2026-05-19, and the duplicate `jikigai` org was canceled vendor-side on

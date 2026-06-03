@@ -253,7 +253,7 @@ AC10 — `.github/workflows/scheduled-bug-fixer.yml` DELETED in same commit as t
 
 AC11 — CODEOWNERS sweep — verified at plan time, `grep -n 'scheduled-bug-fixer' .github/CODEOWNERS` returns NO matches. No CODEOWNERS edit required. (See §Workflow Deletion & Cleanup below.)
 
-AC12 — Runbook sweep — `grep -rn 'gh workflow run scheduled-bug-fixer'` returns 0 matches in `knowledge-base/engineering/ops/runbooks/`. No runbook updates required. (Verified at plan time.) ONE knowledge-base reference exists in `knowledge-base/INDEX.md` line 2065 (a *plan file index entry*, not a runbook); no edit needed.
+AC12 — Runbook sweep — `grep -rn 'gh workflow run scheduled-bug-fixer'` returns 0 matches in `knowledge-base/engineering/operations/runbooks/`. No runbook updates required. (Verified at plan time.) ONE knowledge-base reference exists in `knowledge-base/INDEX.md` line 2065 (a *plan file index entry*, not a runbook); no edit needed.
 
 AC13 — Auto-merge gate ported to TS — bot-identity check (`PR_AUTHOR` ∈ `{github-actions[bot], *[bot]*, app/claude}`), single-file diff (`(await octokit.request("GET /repos/{owner}/{repo}/pulls/{N}/files")).data.length === 1`), p3-low source (`(labels.map(l => l.name)).includes("priority/p3-low")`), label assertion (`bot-fix/auto-merge-eligible` present).
 
@@ -367,7 +367,7 @@ Delete in the SAME commit as the new TS file:
 
 NO CODEOWNERS edits required (verified at plan time — no matches).
 
-NO runbook edits required (verified at plan time — no `gh workflow run scheduled-bug-fixer` references in `knowledge-base/engineering/ops/runbooks/`).
+NO runbook edits required (verified at plan time — no `gh workflow run scheduled-bug-fixer` references in `knowledge-base/engineering/operations/runbooks/`).
 
 The `knowledge-base/INDEX.md:2065` link to the *plan* `2026-04-18-fix-scheduled-bug-fixer-max-turns-flaky-test-selection-plan.md` is a historical reference — leave unchanged. That plan documents the GHA workflow's last tuning (max-turns 35 → 55); migrating it forward is not a TR9 PR-5 concern.
 
@@ -492,7 +492,7 @@ Same-commit changes:
 Verified at plan time (NO edits required):
 
 - `.github/CODEOWNERS` — no `scheduled-bug-fixer` line (grep returned 0 matches).
-- `knowledge-base/engineering/ops/runbooks/` — no `gh workflow run scheduled-bug-fixer` references.
+- `knowledge-base/engineering/operations/runbooks/` — no `gh workflow run scheduled-bug-fixer` references.
 - `knowledge-base/INDEX.md:2065` — historical plan-index entry, leave unchanged.
 
 Forward references to retain (NOT runbook-class, NOT operator-instruction-class):
@@ -539,5 +539,5 @@ Forward references to retain (NOT runbook-class, NOT operator-instruction-class)
 ### Files verified clean (NO edits)
 
 - `.github/CODEOWNERS`
-- `knowledge-base/engineering/ops/runbooks/**`
+- `knowledge-base/engineering/operations/runbooks/**`
 - `knowledge-base/INDEX.md`

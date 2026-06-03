@@ -13,7 +13,7 @@ related:
   - "#1765 / 2026-04-11-map-supabase-errors-to-friendly-messages.md"
   - "PR #4038 — bounded retry on GoTrue over_request_rate_limit 429 (tenant.ts only)"
   - "2026-05-18-supabase-custom-access-token-hook-discriminator.md"
-  - "knowledge-base/engineering/ops/runbooks/supabase-magiclink-rate-limit.md"
+  - "knowledge-base/engineering/operations/runbooks/supabase-magiclink-rate-limit.md"
 ---
 
 # fix: OTP verification fails with generic "Something went wrong"

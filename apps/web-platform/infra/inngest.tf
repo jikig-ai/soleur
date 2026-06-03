@@ -141,7 +141,7 @@ resource "doppler_secret" "inngest_manual_trigger_secret_dev" {
 # ignore_changes is set). The ONLY supported rotation path is
 # `terraform taint random_id.<name> && terraform apply` — operators MUST NOT
 # rotate via the Doppler UI or the dashboard will desync from tfstate silently.
-# Runbook (knowledge-base/engineering/ops/runbooks/inngest-server.md) documents
+# Runbook (knowledge-base/engineering/operations/runbooks/inngest-server.md) documents
 # the taint procedure.
 
 # ---------------- Better Stack heartbeat ----------------

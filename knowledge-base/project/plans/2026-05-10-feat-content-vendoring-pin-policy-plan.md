@@ -23,7 +23,7 @@ Land a coordinated set of artifacts that govern any upstream content lifted into
 2. **Drift workflow** at `.github/workflows/scheduled-content-vendor-drift.yml` (weekly cron + severity-gated auto-PR via inline `git merge-file --diff3`).
 3. **Pre-commit gate** as a new `vendor-pin-integrity` lefthook stanza (NOTICE blob SHA vs actual file SHA; prevents silent local edits).
 4. **Runtime staleness check** in `gdpr-gate.sh` (≥30d **stdout** banner, ≥90d POSTURE_FAIL stdout line).
-5. **Operator runbook** at `knowledge-base/engineering/ops/runbooks/vendor-pin-drift-resolution.md` for the conflict-marker + manual-review path.
+5. **Operator runbook** at `knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md` for the conflict-marker + manual-review path.
 
 Why: the gdpr-gate skill (PR #3501) lifted 5 reference files at pin `7b58d68` with no policy for what happens when upstream pushes a security-relevant update. Stale rules ship as authoritative narrative claims via the gate's weave-don't-append output → operator merges a regulated-data PR on a false-clean signal → single-user incident. See brainstorm for full design rationale.
 
@@ -68,7 +68,7 @@ Carried forward from brainstorm `## User-Brand Impact` block.
 | Path | Purpose | FR/TR |
 |---|---|---|
 | `knowledge-base/engineering/policies/content-vendoring.md` | General content-vendoring policy + registry table (gosprinto = row 1) | FR1 |
-| `knowledge-base/engineering/ops/runbooks/vendor-pin-drift-resolution.md` | Operator runbook: synthetic-drift test + conflict-marker resolution + POSTURE_FAIL response | Kieran P1.3 / SpecFlow P2.6 |
+| `knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md` | Operator runbook: synthetic-drift test + conflict-marker resolution + POSTURE_FAIL response | Kieran P1.3 / SpecFlow P2.6 |
 | `.github/workflows/scheduled-content-vendor-drift.yml` | Weekly drift cron + severity-gated auto-PR (3-way merge inline) | FR3, FR4, TR3 |
 | `plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh` | Pure-bash NOTICE frontmatter parser; subcommands: `days-stale`, `field <name>`, `lifted-files`. Future date → "stale immediately" | TR2 |
 | `plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh` | Lefthook target — compares lifted-file blob SHAs against NOTICE | FR5, TR1 |
@@ -300,7 +300,7 @@ Source: `knowledge-base/engineering/policies/content-vendoring.md`
 
 ### Phase 6: Operator runbook
 
-**6.1** `knowledge-base/engineering/ops/runbooks/vendor-pin-drift-resolution.md`. Sections:
+**6.1** `knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md`. Sections:
 
 - **Synthetic-drift test** (post-merge AC): step-by-step using the committed fixtures. Operator creates a feature branch, mutates NOTICE pinned-commit to a deliberately-wrong SHA, runs `gh workflow run scheduled-content-vendor-drift.yml --ref <branch>`, asserts (a) PR opened with expected labels, (b) `last-verified` bumped on auto-PR.
 - **Conflict-marker resolution** (`needs-human-review` label): operator reviews 3-way merge output; manually resolves; commits + bumps NOTICE; merges PR.
@@ -310,7 +310,7 @@ Source: `knowledge-base/engineering/policies/content-vendoring.md`
 - **Cron failure (`vendor/cron-failure` issue)**: operator inspects workflow run; if transient (rate-limit), waits for next cron; if persistent, escalates.
 - **POSTURE_FAIL operator chain**: cross-link to policy doc Section 8.
 
-Precedent: `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md` (cited in AGENTS.md `hr-ssh-diagnosis-verify-firewall`).
+Precedent: `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md` (cited in AGENTS.md `hr-ssh-diagnosis-verify-firewall`).
 
 ### Phase 7: Tests
 

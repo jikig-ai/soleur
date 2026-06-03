@@ -9,13 +9,13 @@ lane: single-domain
 
 ## Overview
 
-Add a "Cron bug-fixer" section to `knowledge-base/engineering/ops/runbooks/inngest-server.md` documenting the manual-trigger event, override semantics, concurrency behavior, how to fire, how to observe results, and common failure modes. Closes #4383.
+Add a "Cron bug-fixer" section to `knowledge-base/engineering/operations/runbooks/inngest-server.md` documenting the manual-trigger event, override semantics, concurrency behavior, how to fire, how to observe results, and common failure modes. Closes #4383.
 
 The cron-bug-fixer function (`apps/web-platform/server/inngest/functions/cron-bug-fixer.ts`) was migrated from the GHA `scheduled-bug-fixer.yml` workflow in TR9 PR-5 (#4377). Its manual-trigger semantics are currently documented only in the source header comment and the archived PR-5 plan. An agent or operator outside the original implementation context has no canonical runbook to consult.
 
 ## Research Insights
 
-- **Existing runbook:** `knowledge-base/engineering/ops/runbooks/inngest-server.md` (326 lines) covers bootstrap, heartbeat triage, key rotation, CLI version bump, FR5 flag flip, unpause heartbeat, SQLite retention, concurrency conventions, and fresh-host provisioning. No mention of the bug-fixer function.
+- **Existing runbook:** `knowledge-base/engineering/operations/runbooks/inngest-server.md` (326 lines) covers bootstrap, heartbeat triage, key rotation, CLI version bump, FR5 flag flip, unpause heartbeat, SQLite retention, concurrency conventions, and fresh-host provisioning. No mention of the bug-fixer function.
 - **Source of truth:** `cron-bug-fixer.ts` lines 582-839 define the handler, registration, event trigger, validation, and concurrency config.
 - **Event name:** `cron/bug-fixer.manual-trigger` (registered at line 837).
 - **Payload shape:** `{ issue_number?: number }` — optional positive integer (validated at lines 594-621).
@@ -46,7 +46,7 @@ Also add a row to the Quick Reference table at the top of the file.
 
 ## Acceptance Criteria
 
-- [x] AC1 — `knowledge-base/engineering/ops/runbooks/inngest-server.md` contains a `## Cron bug-fixer` section with subsections for: event name/payload, override semantics, concurrency, how to fire, how to observe, common failure modes.
+- [x] AC1 — `knowledge-base/engineering/operations/runbooks/inngest-server.md` contains a `## Cron bug-fixer` section with subsections for: event name/payload, override semantics, concurrency, how to fire, how to observe, common failure modes.
 - [x] AC2 — Quick Reference table includes a row linking to the new section.
 - [x] AC3 — Event name matches source: `cron/bug-fixer.manual-trigger`.
 - [x] AC4 — Payload shape documented as `{ "issue_number": <positive integer> }` (optional).
@@ -68,19 +68,19 @@ Also add a row to the Quick Reference table at the top of the file.
 
 ### Phase 1: Add cron bug-fixer section to inngest-server.md
 
-1. Read `knowledge-base/engineering/ops/runbooks/inngest-server.md`.
+1. Read `knowledge-base/engineering/operations/runbooks/inngest-server.md`.
 2. Add a row to the Quick Reference table: `| Cron bug-fixer manual trigger | [section link] |`.
 3. Insert a `## Cron bug-fixer` section between `## Concurrency conventions` and `## Plan deviations`. Content derived from `cron-bug-fixer.ts` lines 582-839.
 
 ### Phase 2: Verification
 
-1. Verify the section heading exists: `grep -c '## Cron bug-fixer' knowledge-base/engineering/ops/runbooks/inngest-server.md` returns 1.
+1. Verify the section heading exists: `grep -c '## Cron bug-fixer' knowledge-base/engineering/operations/runbooks/inngest-server.md` returns 1.
 2. Verify no SSH commands: `grep -c 'ssh ' <new-section-content>` returns 0.
-3. Verify event name: `grep -c 'cron/bug-fixer.manual-trigger' knowledge-base/engineering/ops/runbooks/inngest-server.md` returns >= 1.
+3. Verify event name: `grep -c 'cron/bug-fixer.manual-trigger' knowledge-base/engineering/operations/runbooks/inngest-server.md` returns >= 1.
 
 ## Files to Edit
 
-- `knowledge-base/engineering/ops/runbooks/inngest-server.md` — add Quick Reference row + new `## Cron bug-fixer` section.
+- `knowledge-base/engineering/operations/runbooks/inngest-server.md` — add Quick Reference row + new `## Cron bug-fixer` section.
 
 ## Files to Create
 
@@ -108,7 +108,7 @@ No cross-domain implications detected — pure documentation addition to an exis
 - Source: PR #4377 (TR9 PR-5), 10-agent review. Agent-native-reviewer Observation 1.
 - Implementation: `apps/web-platform/server/inngest/functions/cron-bug-fixer.ts`
 - Umbrella: #3948
-- Existing runbook: `knowledge-base/engineering/ops/runbooks/inngest-server.md`
+- Existing runbook: `knowledge-base/engineering/operations/runbooks/inngest-server.md`
 
 ## References
 

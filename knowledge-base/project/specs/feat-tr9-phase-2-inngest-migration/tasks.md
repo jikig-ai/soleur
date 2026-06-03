@@ -16,7 +16,7 @@
 
 - [x] E1 `oneshot-f2-defer-gate-review.ts` ← `scheduled-f2-defer-gate-review.yml` (claude-eval spawn). Converted before May 29 deadline.
 - [x] E2 `oneshot-recheck-4217-calibration.ts` ← `scheduled-recheck-4217-calibration.yml` (claude-eval spawn)
-- [x] E3 `event-ship-merge.ts` ← `scheduled-ship-merge.yml` (claude-eval spawn). Runbook: `knowledge-base/engineering/ops/runbooks/ship-merge-trigger.md`.
+- [x] E3 `event-ship-merge.ts` ← `scheduled-ship-merge.yml` (claude-eval spawn). Runbook: `knowledge-base/engineering/operations/runbooks/ship-merge-trigger.md`.
 
 ## 3. Claude-code-spawn Crons (blocked on #4472)
 

@@ -76,6 +76,6 @@ Derived from `knowledge-base/project/plans/2026-05-20-feat-ship-followthrough-di
 
 - Plan: `knowledge-base/project/plans/2026-05-20-feat-ship-followthrough-directive-rewrite-plan.md`
 - Issue: #4190
-- Runbook: `knowledge-base/engineering/ops/runbooks/followthrough-convention.md`
+- Runbook: `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`
 - Sweeper script: `scripts/sweep-followthroughs.sh` (parser lines 36-48)
 - Canonical reference script: `scripts/followthroughs/sentry-checkins-3859.sh`

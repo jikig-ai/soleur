@@ -27,5 +27,5 @@ Derived from `2026-05-27-fix-sentry-cron-community-monitor-missed-checkin-plan.m
   - [x] 3.1.1 Assert function count in route.ts matches expected 40
   - [x] 3.1.2 Assert every `cron-*.ts` file has a corresponding route.ts entry
   - [x] 3.1.3 Assert every cron function's SENTRY_MONITOR_SLUG has a matching `cron-monitors.tf` resource
-- [x] 3.2 Update `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` — added H9 (Inngest server desync after deploy churn)
+- [x] 3.2 Update `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` — added H9 (Inngest server desync after deploy churn)
 - [x] 3.3 Write compound learning at `knowledge-base/project/learnings/bug-fixes/` documenting timeline, diagnosis, and fix

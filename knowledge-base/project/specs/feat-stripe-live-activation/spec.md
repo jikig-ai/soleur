@@ -41,7 +41,7 @@ Stripe is wired end-to-end in test mode — webhooks, portal, invoice history, t
 
 ### FR2: Activation runbook is executable end-to-end
 
-Runbook lives at `knowledge-base/engineering/ops/runbooks/stripe-live-activation.md`. Contains:
+Runbook lives at `knowledge-base/engineering/operations/runbooks/stripe-live-activation.md`. Contains:
 
 - Prerequisites section (KYC complete, bank, tax ID, representative verified).
 - Stripe Tax enablement step (dashboard toggle + jurisdiction registration).
@@ -76,7 +76,7 @@ Dashboard spec (to ship in a follow-up issue) must define:
 
 ### TR1: Runbook is version-controlled and CI-verifiable where possible
 
-- Runbook in the repo (`knowledge-base/engineering/ops/runbooks/`), not an external doc.
+- Runbook in the repo (`knowledge-base/engineering/operations/runbooks/`), not an external doc.
 - The `verify-stripe-prices.ts` command is the machine-checkable preflight; runbook references it as the go/no-go gate before flip.
 - Rollback procedure includes specific Doppler secret names and exact CLI commands.
 

@@ -11,7 +11,7 @@ lane: cross-domain
 
 - [ ] 0.1. Verify worktree: `git rev-parse --show-toplevel` ends with `.worktrees/feat-sentry-residency-reframe-3861`; `git branch --show-current` = `feat-sentry-residency-reframe-3861`.
 - [ ] 0.2. Verify Doppler `prd` token: `doppler secrets get SENTRY_AUTH_TOKEN -p soleur -c prd --plain >/dev/null && echo OK`.
-- [ ] 0.3. Verify PIR pre-edit state: `sed -n '7,20p' knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md` shows `status: resolved`, `art_33_triggered: true`, `art_33_deadline`, `classification_override.chosen: none`. Halt if reality differs.
+- [ ] 0.3. Verify PIR pre-edit state: `sed -n '7,20p' knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md` shows `status: resolved`, `art_33_triggered: true`, `art_33_deadline`, `classification_override.chosen: none`. Halt if reality differs.
 - [ ] 0.4. Verify Playwright MCP reachable + Sentry UI session logged in as `jean.deruelle@jikigai.com`.
 
 ## Phase 1 — Probe (3 steps, retry policy + halt table)

@@ -15,7 +15,7 @@
 /.github/workflows/secret-scan.yml                      @deruelle
 /.github/workflows/pr-quality-guards.yml                @deruelle
 /apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts @deruelle
-/knowledge-base/engineering/ops/runbooks/github-app-drift.md @deruelle
+/knowledge-base/engineering/operations/runbooks/github-app-drift.md @deruelle
 /lefthook.yml                                           @deruelle
 /apps/web-platform/scripts/lint-fixture-content.mjs     @deruelle
 /apps/web-platform/scripts/parse-gitleaks-allowlists.mjs @deruelle
