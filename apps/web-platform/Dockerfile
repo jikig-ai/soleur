@@ -134,7 +134,8 @@ RUN chown -R 1001:1001 /opt/soleur
 RUN useradd --no-log-init --uid 1001 -m soleur \
     && chown -R soleur:soleur .next
 USER soleur
-RUN git config --global user.name "Soleur" && git config --global user.email "soleur@localhost"
+RUN git config --global user.name "github-actions[bot]" \
+    && git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
 EXPOSE 3000
 
