@@ -114,7 +114,7 @@ and wires the new resource into the auto-apply `-target` set.
 - AC2: `terraform fmt -check` and `terraform validate` clean in `apps/web-platform/infra/sentry/` (config-phase validation passes against `jianyuan/sentry@0.15.0-beta2`).
 - AC3: `test-destroy-guard-sentry-scope-guard.sh` exits 0 (no new `-target` resource type introduced; `sentry_issue_alert` already allowed).
 - AC4: `grep -c 'sentry_issue_alert.workspace_sync_health' .github/workflows/apply-sentry-infra.yml` returns 1.
-- AC5: `grep -cE 'frequency\s*=\s*11\b' apps/web-platform/infra/sentry/issue-alerts.tf` returns 1 and no other rule uses 11 (frequency uniqueness preserved).
+- AC5: `grep -cE '^[[:space:]]+frequency[[:space:]]*=[[:space:]]*11\b' apps/web-platform/infra/sentry/issue-alerts.tf` returns 1 and no other rule uses 11 (frequency uniqueness preserved). NOTE: anchor on the indented assignment line — a loose `frequency\s*=\s*11` also matches the resource's header comment prose (`frequency=11`), a false second hit.
 
 ### Post-merge (automated — no operator dashboard step)
 - AC6: The `apply-sentry-infra.yml` run triggered by the merge (push to `main` touching `issue-alerts.tf`) reports `Plan: 1 to add, 0 to change, 0 to destroy` for `sentry_issue_alert.workspace_sync_health` and applies cleanly. Verify via `gh run list --workflow=apply-sentry-infra.yml --branch main --limit 1` + `gh run view <id> --log` (API, not dashboard). The new `-target` line is present in the same merge commit, so the triggered run includes it — no staleness.
