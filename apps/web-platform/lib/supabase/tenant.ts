@@ -137,6 +137,22 @@ export function mapRuntimeAuthCauseToErrorCode(
 const DEFAULT_TTL_SEC = 600;
 
 /**
+ * `auth.uid()` is ALWAYS a UUID. A non-UUID `userId` reaching the tenant-mint
+ * path is a programming/test-fixture error (e.g. an e2e mock seeding a literal
+ * "test-user-id") — it can never resolve a real tenant. The mint guard below
+ * rejects it as a `RuntimeAuthError` so callers fail-open
+ * (`ws-handler.tenantFor` → `null`, server callers early-return) instead of
+ * letting the Supabase Admin SDK throw a RAW `Expected parameter to be UUID`
+ * rejection deep in `resolveFounderEmail` (`getUserById`). That raw error is
+ * NOT a `RuntimeAuthError`, so it escapes `tenantFor`'s typed catch and, in the
+ * WebSocket connect path, becomes a process-killing `unhandledRejection` that
+ * crashes the dev/prod server. Same shape as the `server/workspace.ts`
+ * `UUID_RE` precondition guards.
+ */
+const TENANT_USER_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
  * Audience claim baked into runtime JWTs by `public.runtime_jwt_mint_hook`
  * (migration 047). Node holds this constant for parity with the hook —
  * future PostgREST-level aud filtering (dashboard-replay defense) reads
@@ -253,6 +269,17 @@ export async function mintFounderJwt(
   userId: UserId,
   opts: MintFounderJwtOpts = {},
 ): Promise<MintedJwt> {
+  // Fail closed on a malformed (non-UUID) userId BEFORE any Admin SDK call —
+  // see TENANT_USER_ID_RE docblock. A raw `getUserById` UUID-validation throw
+  // would otherwise escape the RuntimeAuthError-only catch in ws-handler and
+  // crash the process via unhandledRejection.
+  if (!TENANT_USER_ID_RE.test(userId)) {
+    throw new RuntimeAuthError(
+      "jwt_mint",
+      "Authentication unavailable; retry shortly",
+    );
+  }
+
   const ttlSec = opts.ttlSec ?? DEFAULT_TTL_SEC;
   const service = getServiceClient();
 
