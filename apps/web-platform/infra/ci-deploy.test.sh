@@ -70,6 +70,27 @@ MOCK
   chmod +x "$1/chown"
 }
 
+# Pass-through mkdir mock. The deploy script `sudo mkdir -p /mnt/data/workspaces/
+# .cron`s the isolated cron-clone subdir (#4882); the mock sudo strips `sudo` and
+# runs the real command, so a real `mkdir -p` against the nonexistent host
+# `/mnt/data` would abort the whole script under `set -e`. No-op ONLY for `/mnt/*`
+# host paths; pass every other target (PLUGIN_MOUNT_DIR / INNGEST_EXTRACT_DIR temp
+# dirs the script writes into) through to the real coreutils mkdir so those calls
+# keep working. A blanket no-op would break those legitimate dir creations.
+create_mock_mkdir() {
+  cat > "$1/mkdir" << 'MOCK'
+#!/bin/bash
+for arg in "$@"; do
+  case "$arg" in /mnt/*) exit 0 ;; esac
+done
+for real in /usr/bin/mkdir /bin/mkdir; do
+  [[ -x "$real" ]] && exec "$real" "$@"
+done
+exit 0
+MOCK
+  chmod +x "$1/mkdir"
+}
+
 create_mock_seq() {
   cat > "$1/seq" << 'MOCK'
 #!/bin/bash
@@ -357,6 +378,7 @@ create_base_mocks() {
   create_curl_mock "$mock_dir"
   create_mock_sudo "$mock_dir"
   create_mock_chown "$mock_dir"
+  create_mock_mkdir "$mock_dir"
   create_mock_seq "$mock_dir"
   create_mock_flock "$mock_dir"
   create_mock_systemctl "$mock_dir"
@@ -1186,12 +1208,17 @@ echo ""
 echo "--- CRON_WORKSPACE_ROOT on docker run (#4684/#4689) ---"
 
 assert_cron_workspace_root() {
-  # Verify every docker run line carries -e CRON_WORKSPACE_ROOT=/workspaces.
+  # Verify every docker run line carries -e CRON_WORKSPACE_ROOT=/workspaces/.cron.
   # Crons mkdtemp their ephemeral clone workspace under this root; in prod it
-  # must be the roomy /mnt/data/workspaces volume, NOT the 256 MB /tmp tmpfs,
-  # or a git clone of the ~100 MB soleur tree ENOSPCs. The assertion spans ALL
-  # docker run lines (canary AND prod) — scoping it to one line would let a
-  # canary/prod environment skew ship silently.
+  # must be the roomy /mnt/data/workspaces volume's DEDICATED `.cron` subdir, NOT
+  # the 256 MB /tmp tmpfs (a ~100 MB soleur clone ENOSPCs there) and NOT the bare
+  # /workspaces root (a leaked clone there starves the persistent UUID KB-workspace
+  # dirs that share the volume — the 2026-06-02 KB freeze, #4882). The assertion
+  # spans ALL docker run lines (canary AND prod) — scoping it to one line would let
+  # a canary/prod environment skew ship silently. NOTE: grep -qF is a SUBSTRING
+  # match, so this literal MUST pin the full `/.cron` suffix — asserting bare
+  # `/workspaces` would false-pass both the correct value and a regression back to
+  # the bare root.
   local description="$1"
   local cmd="$2"
 
@@ -1215,7 +1242,7 @@ assert_cron_workspace_root() {
 
   local all_have_root=true
   while IFS= read -r line; do
-    if ! printf '%s\n' "$line" | grep -qF -- "-e CRON_WORKSPACE_ROOT=/workspaces"; then
+    if ! printf '%s\n' "$line" | grep -qF -- "-e CRON_WORKSPACE_ROOT=/workspaces/.cron"; then
       all_have_root=false
       break
     fi
@@ -1226,13 +1253,13 @@ assert_cron_workspace_root() {
     echo "  PASS: $description"
   else
     FAIL=$((FAIL + 1))
-    echo "  FAIL: $description (docker run missing -e CRON_WORKSPACE_ROOT=/workspaces)"
+    echo "  FAIL: $description (docker run missing -e CRON_WORKSPACE_ROOT=/workspaces/.cron)"
     echo "        docker run lines:"
     printf '%s\n' "$run_lines" | head -5 | sed 's/^/    /'
   fi
 }
 
-assert_cron_workspace_root "web-platform: docker run has -e CRON_WORKSPACE_ROOT=/workspaces" \
+assert_cron_workspace_root "web-platform: docker run has -e CRON_WORKSPACE_ROOT=/workspaces/.cron" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
 
 echo ""
