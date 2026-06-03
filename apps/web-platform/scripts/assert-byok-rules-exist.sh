@@ -46,7 +46,7 @@ set -euo pipefail
 # The issue-alert rules this control depends on. Names are the `name` attribute
 # of the `sentry_issue_alert` resources in
 # apps/web-platform/infra/sentry/issue-alerts.tf.
-EXPECTED_RULES=("byok-art-33-breach" "byok-cap-exceeded" "chat-message-save-failure")
+EXPECTED_RULES=("byok-art-33-breach" "byok-cap-exceeded" "chat-message-save-failure" "workspace-sync-health")
 
 fetch_rules() {
   if [[ -n "${SENTRY_FIXTURE_RULES:-}" ]]; then
@@ -80,9 +80,9 @@ for rule in "${EXPECTED_RULES[@]}"; do
 done
 
 if (( ${#missing[@]} > 0 )); then
-  echo "ERROR: BYOK Art. 33 liveness assertion FAILED — rule(s) absent in Sentry: ${missing[*]}" >&2
-  echo "A silent mis-wire (dropped -target, deleted/muted rule, or name drift) would let a real cross-tenant breach go un-paged — the Art. 33(1) 72h clock would never start. Refs #4656 item 5." >&2
+  echo "ERROR: issue-alert liveness assertion FAILED — rule(s) absent in Sentry: ${missing[*]}" >&2
+  echo "A silent mis-wire (dropped -target, deleted/muted rule, or name drift) leaves the named control un-paged: byok-art-33-breach → the GDPR Art. 33(1) 72h clock never starts; chat-message-save-failure → message-save outage un-paged; workspace-sync-health → diverged/stale workspace KB clone (and probe self-failure) un-paged. Refs #4656 item 5, #4849, #4882." >&2
   exit 1
 fi
 
-echo "[ok] BYOK Art. 33 liveness: both rules present in Sentry (${EXPECTED_RULES[*]})."
+echo "[ok] issue-alert liveness: all expected rules present in Sentry (${EXPECTED_RULES[*]})."

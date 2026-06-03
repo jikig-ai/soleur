@@ -394,3 +394,66 @@ resource "sentry_issue_alert" "chat_message_save_failure" {
     ignore_changes = [environment]
   }
 }
+
+# server/inngest/functions/cron-workspace-sync-health.ts: a daily probe that
+# emits `feature=workspace-sync-health` events via reportSilentFallback for both
+# user-actionable findings (op ∈ {ready-null-installation, stale-sync-failed,
+# went-quiet}) AND probe-self-failures (op ∈ {scan, scan-stale, scan-went-quiet,
+# went-quiet-probe}). Detection (#4712/#4717) shipped the probe; this rule
+# (#4882) is the missing NOTIFICATION layer — without it the events sit in
+# Sentry un-notified (hr-no-dashboard-eyeball-pull-data-yourself), so the
+# KB-sync-stale PIR (#4878) failure mode (user reports a missing KB file before
+# the operator knows) recurs.
+#
+# feature-ONLY filter (no `op` IS_IN): unlike chat_message_save_failure (whose
+# `cc-dispatcher` feature spans many unrelated ops, forcing op-scoping), this
+# feature tag is dedicated to one cron and EVERY event is operator-actionable.
+# Op-scoping here would silently drop the probe-self-failure ops — and arms 2/3
+# swallow their own scan errors (return {reported:0}/{wentQuiet:0}) while the
+# heartbeat keys only on arm 1, so the probe-failure op is the ONLY signal that
+# the detector itself broke. Feature-only also future-proofs against new arms.
+#
+# `action_match="any"` + first_seen/reappeared/regression lifecycle conditions
+# (NOT a per-event condition): Sentry folds repeated daily fires of the same
+# workspace into one issue by fingerprint and re-pages only on regression after
+# the operator resolves it — this is the anti-fatigue mechanism, so a transient
+# `ok:false` does not train the operator to mute the channel. Distinct
+# `frequency=11` avoids Sentry POST-time exact-duplicate dedup (taken by
+# siblings: 5,10,15,30,60,61,62); not evaluated by lifecycle-condition rules but
+# must be unique. Cross-artifact feature contract pinned by
+# test/sentry-workspace-sync-health-alert-op-contract.test.ts.
+resource "sentry_issue_alert" "workspace_sync_health" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "workspace-sync-health"
+  action_match = "any"
+  filter_match = "all"
+  frequency    = 11
+
+  conditions_v2 = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "EQUAL"
+        value = "workspace-sync-health"
+      }
+    },
+  ]
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
