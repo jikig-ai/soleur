@@ -15,6 +15,54 @@ related_issues: [4891, 4882, 4881, 4650, 4652, 4116]
 > Note: this one-shot path ran no brainstorm; no `spec.md` exists for the branch, so
 > `lane:` defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-03
+**Halt gates passed:** 4.6 User-Brand Impact (threshold `aggregate pattern`), 4.7
+Observability (5/5 fields, no-SSH discoverability_test), 4.8 PAT-shaped (none), 4.9
+UI-wireframe (no UI surface — skipped).
+
+### Key verifications (all live, this pass)
+
+1. **Premise is stale — recovery already happened.** `gh run list --workflow=web-platform-release.yml`:
+   failures at `1998af5f`/`251b80ea`/`4d1e1cb8` (17:24–17:42), then **success** from
+   `b06de5b6` (#4895, 18:00) onward (18:00/18:06/18:17). `/health` = v0.102.0, build
+   `f78bb0a1`. Deploy queue unstuck, prod current.
+2. **Gate does NOT read `inngest_heartbeat`.** `git show origin/main:.github/workflows/web-platform-release.yml
+   | grep -c inngest_heartbeat` → **0**. The completion gate keys only on
+   `exit_code`/`reason`. The field is a reporter-only red herring. (Confirms the
+   Research Reconciliation row + the load-bearing Sharp Edge.)
+3. **#4886 did NOT touch the heartbeat unit or its storage.** `git show 1998af5f --stat`
+   touches none of `inngest-bootstrap.sh` / `inngest.tf` / `cat-deploy-state.sh`. The
+   "moved/broke the heartbeat systemd unit or its storage path" premise is false.
+4. **The oneshot-is-inactive-is-healthy claim is grounded in code.** `inngest-bootstrap.sh:216-245`
+   defines `inngest-heartbeat.service` as `Type=oneshot` (no `RemainAfterExit`) driven by
+   `inngest-heartbeat.timer` (`OnUnitActiveSec=60s`). `cron-inngest-cron-watchdog.ts:14`:
+   "The /health heartbeat (inngest-heartbeat.timer → Better Stack) proves only process liveness."
+5. **No new scheduled job introduced (Phase 4.4).** 39 existing `cron-*` Inngest functions;
+   the plan only *fires* the existing `cron-workspace-gc` manual-trigger
+   (`cron-manifest.ts:60`) as the no-SSH reclaim lever — no new cron, Inngest path already
+   canonical (ADR-033). No GH-Actions-cron anti-pattern.
+6. **All cited refs verified live:** #4886 MERGED, #4895 MERGED, #4891 OPEN (deferred
+   capacity work), #4882 CLOSED (incident origin), #4881 MERGED, #4650/#4652/#4116/#4792
+   CLOSED, #4890 MERGED.
+
+### Precedent-Diff Gate (Phase 4.4 — pattern-bound reader extension)
+
+The new `inngest_heartbeat_timer` field extends the **existing** `service_status` reader
+pattern in `cat-deploy-state.sh`, which already reads three units verbatim:
+
+```
+HEARTBEAT_STATUS="$(service_status inngest-heartbeat.service)"   # :102
+INNGEST_SERVER_STATUS="$(service_status inngest-server.service)" # :103
+VECTOR_STATUS="$(service_status vector.service)"                 # :104
+```
+
+The plan's `HEARTBEAT_TIMER_STATUS="$(service_status inngest-heartbeat.timer)"` is the
+same shape (same helper, same `--arg`/`jq` emit). **Precedent exists; pattern is not
+novel** — the change is a fourth identical reader call + one `jq` key, the lowest-risk
+form. No `SECURITY DEFINER`, atomic-write, lock, or RPC-permission surface involved.
+
 ## Overview
 
 Issue #4896 reports that web-platform deploys have failed on 3 consecutive merges

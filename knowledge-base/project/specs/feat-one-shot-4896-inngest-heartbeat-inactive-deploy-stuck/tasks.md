@@ -17,7 +17,7 @@ issue: 4896
 ## Phase 1 — Add durable timer-liveness field (RED → GREEN)
 
 - [ ] 1.1 (RED) In `cat-deploy-state.test.sh`, add 4 `inngest_heartbeat_timer` presence assertions mirroring the existing `inngest_heartbeat` asserts at lines 39-66 (no_prior_deploy / OK / services-merge / corrupt_state). Run → fails.
-- [ ] 1.2 In `cat-deploy-state.sh`: add `HEARTBEAT_TIMER_STATUS="$(service_status inngest-heartbeat.timer)"` beside the `.service` read (line 102).
+- [ ] 1.2 In `cat-deploy-state.sh`: add `HEARTBEAT_TIMER_STATUS="$(service_status inngest-heartbeat.timer)"` beside the `.service` read (line 102). Precedent: this is the 4th identical `service_status` reader call (`.service` units already read at :102-104) — same helper, same shape, lowest-risk extension (deepen-plan Phase 4.4 precedent-diff: pattern is NOT novel).
 - [ ] 1.3 In `cat-deploy-state.sh`: add `--arg hbt "$HEARTBEAT_TIMER_STATUS"` to the final `jq -nc` and emit `inngest_heartbeat_timer: $hbt` inside the `services` object (after line 129).
 - [ ] 1.4 Add inline comment on the `inngest_heartbeat` (.service) field: `inactive` is the NORMAL steady state for a timer-driven oneshot; `inngest_heartbeat_timer` (`active` on healthy host) is the durable liveness signal. Cite #4896.
 - [ ] 1.5 (GREEN) `bash apps/web-platform/infra/cat-deploy-state.test.sh` → all asserts pass.
