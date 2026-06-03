@@ -289,7 +289,13 @@ apps/web-platform/server/inngest/functions/cron-supabase-disk-io.ts
 #       so the deny-list never gated a privileged action here — `denied_jti`
 #       only ever blocked a self-read.
 # The sibling helper authenticateAndResolveKbPath (file PATCH/DELETE
-# *mutation* routes) intentionally stays tenant-only and 503s on mint
-# failure — there a `denied_jti` MUST block the action; applying the same
-# fallback there needs a per-cause adjudication, tracked in #4914.
+# *mutation* routes) ALSO uses the service-role client as an availability
+# fallback (#4914), but with a PER-CAUSE policy that diverges from
+# resolveUserKbRoot's all-causes fallback: it falls back ONLY for the
+# availability causes `jwt_mint` | `rotation` (same self-row `.eq("id", user.id)`
+# scoping ceiling), and FAILS CLOSED with a 403 on `denied_jti` (and any future
+# un-named cause). The divergence is load-bearing: unlike the share path (whose
+# createShare write was already service-role), this helper's downstream GitHub
+# mutation is gated on it resolving, so a `denied_jti` deny-list trip MUST block
+# the action — a fallback there would defeat the revocation.
 apps/web-platform/server/kb-route-helpers.ts
