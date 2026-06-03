@@ -185,8 +185,9 @@ logs:
   where: apply-sentry-infra.yml GitHub Actions run logs
   retention: GitHub Actions default (90 days)
 discoverability_test:
-  command: "cd apps/web-platform && ./node_modules/.bin/vitest run test/sentry-workspace-sync-health-alert-op-contract.test.ts"
-  expected_output: "all assertions pass (feature + 3 op slugs present in both cron and tf; IS_IN value matches)"
+  command: grep -cF "sentry_issue_alert.workspace_sync_health" .github/workflows/apply-sentry-infra.yml
+  expected_output: "1"
+  note: single no-ssh command verifying the rule is wired into the auto-apply -target set (the will-it-reach-prod check). Live-in-Sentry confirmation is the post-apply liveness assertion (assert-byok-rules-exist.sh, CI verify-migrations-adjacent step); contract correctness is the vitest contract test. Both run in CI.
 ```
 
 ## GDPR / Compliance
