@@ -603,7 +603,7 @@ export function ChatInput({
           textarea itself is transparent and borderless. */}
       <div
         className={
-          "flex items-end gap-1.5 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-2 py-1.5 transition-shadow focus-within:border-soleur-text-muted" +
+          "flex items-end gap-1.5 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-2 py-1.5 transition-shadow focus-within:border-soleur-text-secondary" +
           (flashQuote ? " ring-2 ring-amber-400" : "")
         }
       >

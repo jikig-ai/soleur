@@ -506,7 +506,7 @@ export default function DashboardPage() {
               bordered container alongside the borderless input — mirrors the
               shared ChatInput (chat-input.tsx) ChatGPT-style box so the
               dashboard landing prompt matches the chat and KB surfaces. */}
-          <div className="flex items-end gap-1.5 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-2 py-1.5 transition-shadow focus-within:border-soleur-text-muted">
+          <div className="flex items-end gap-1.5 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-2 py-1.5 transition-shadow focus-within:border-soleur-text-secondary">
             {/* Paperclip / attach button */}
             <button
               type="button"

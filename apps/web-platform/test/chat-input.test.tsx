@@ -149,8 +149,11 @@ describe("ChatInput", () => {
     expect(container).not.toBeNull();
     // No gold outer border on focus.
     expect(container.className).not.toContain("focus-within:border-soleur-border-emphasized");
-    // Still has a visible, neutral focus-within border.
-    expect(container.className).toContain("focus-within:border-soleur-text-muted");
+    // Still has a visible, neutral focus-within border. text-secondary
+    // (#848484) clears the ~3:1 WCAG focus-visibility threshold against both
+    // the resting border (#2a2a2a, ~3.8:1) and the surface (#141414, ~4.9:1)
+    // while staying neutral grey — no gold.
+    expect(container.className).toContain("focus-within:border-soleur-text-secondary");
   });
 
   it("textarea suppresses the inherited global gold focus ring", () => {
