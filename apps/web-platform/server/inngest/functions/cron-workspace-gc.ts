@@ -9,11 +9,15 @@
 // reconcile's `git pull` ENOSPC'd silently (the 2026-06-02 freeze: zero
 // kb_sync_history rows written after 07:46). An IN-PROCESS sweeper is the only
 // thing that survives a killed clone — so this cron statfs-reports the cron-clone
-// root, removes aged `soleur-*` dirs, statfs again, and posts a Sentry Crons
-// heartbeat. Pairs with the Phase-1 isolation (CRON_WORKSPACE_ROOT=/workspaces/
-// .cron) so a leak namespaces away from the persistent UUID KB-workspace dirs;
-// the GC is the load-bearing safeguard either way (isolation alone cannot stop a
-// leak from filling a shared volume).
+// root (`resolveCronWorkspaceRoot()` = `/workspaces` in prod), removes aged
+// `soleur-*` dirs there, statfs again, and posts a Sentry Crons heartbeat.
+//
+// NOTE: the `.cron` subdir isolation (#4886) was reverted — a deploy-critical-path
+// `mkdir /mnt/data/workspaces/.cron` ENOSPC-deadlocked the deploy on the already-
+// full volume. So the GC sweeps `/workspaces` DIRECTLY — the same path the leaked
+// clones live in — which is also what reclaims the existing leak. This is safe
+// because the `soleur-` prefix guard is the load-bearing protection (see below),
+// not the subdir. Dedicated-volume isolation is deferred to #4891.
 //
 // Modeled verbatim on cron-supabase-disk-io.ts. In-process (NOT dispatch-hybrid):
 // pure local fs, no claude / no BYOK / no subprocess / no credentials — so it
@@ -24,9 +28,11 @@
 //
 // DESTRUCTIVE-SWEEP SAFETY is structural, not advisory: the sweep matches ONLY
 // the `soleur-` prefix (UUID workspace dirs are 36-char `[0-9a-f-]`, never
-// `soleur-*`), is maxdepth 1, age-gated > 1h, and runs against the isolated
-// `.cron` subdir — so even a prefix bug cannot reach the UUID dirs one level up.
-// cron-workspace-gc.test.ts asserts a UUID dir is never swept.
+// `soleur-*`), is maxdepth 1, and age-gated > 1h. The prefix guard is the sole
+// load-bearing protection now that the GC sweeps `/workspaces` (where the UUID
+// dirs also live) — a 36-char UUID dir can never satisfy `startsWith("soleur-")`,
+// so it is provably unreachable regardless of CRON_WORKSPACE_ROOT's value.
+// cron-workspace-gc.test.ts asserts a UUID dir is never swept (even when old).
 //
 // Plan: knowledge-base/project/plans/2026-06-03-fix-cron-workspace-gc-and-kb-reconcile-isolation-plan.md
 
