@@ -31,6 +31,16 @@ pass() {
   echo "  pass: $1"
   PASS=$((PASS + 1))
 }
+# Explicit if/then/else (not `cond && pass || fail`) keeps this shellcheck-clean
+# (no SC2015) and matches the sibling concurrent-ship.test.sh convention.
+assert_eq() {
+  local desc="$1" got="$2" want="$3"
+  if [[ "$got" == "$want" ]]; then
+    pass "$desc"
+  else
+    fail "$desc -> got '$got', want '$want'"
+  fi
+}
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -44,16 +54,21 @@ trap 'rm -rf "$TMP"' EXIT
 # ---------------------------------------------------------------------------
 extract_run_block() {
   local step_name="$1"
+  # Buffer the block, then dedent by the MINIMUM leading-whitespace across all
+  # non-blank run lines (not the first line's indent) so a future edit that
+  # reorders the block cannot silently over-dedent and corrupt the shell.
   awk -v target="$step_name" '
     $0 ~ "- name: " target { instep=1; next }
     instep && /^[[:space:]]*- name: / { exit }
     instep && /^[[:space:]]*run: \|/ { inrun=1; next }
     inrun {
-      if (base == 0) {
-        match($0, /^[[:space:]]*/); base = RLENGTH
+      lines[n++] = $0
+      if ($0 !~ /^[[:space:]]*$/) {
+        match($0, /^[[:space:]]*/)
+        if (base == 0 || RLENGTH < base) base = RLENGTH
       }
-      print substr($0, base + 1)
     }
+    END { for (i = 0; i < n; i++) print substr(lines[i], base + 1) }
   ' "$WF"
 }
 
@@ -62,6 +77,15 @@ extract_run_block "Check idempotency" > "$IDEMPOTENCY_BLOCK"
 
 if [[ ! -s "$IDEMPOTENCY_BLOCK" ]]; then
   fail "could not extract 'Check idempotency' run block from $WF"
+  echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
+  exit 1
+fi
+
+# The extracted block calls `jq` (the workflow's idempotency step parses
+# `--json isDraft`). Fail with a clear cause on a jq-less runner instead of a
+# confusing `<unset>` mismatch in the published/draft scenarios.
+if ! command -v jq >/dev/null 2>&1; then
+  fail "jq is required to run this test (the idempotency block parses gh --json output)"
   echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
   exit 1
 fi
@@ -129,17 +153,12 @@ echo ""
 # ---------------------------------------------------------------------------
 echo "T1: Check idempotency decision matrix"
 
-r=$(run_idempotency absent "web-v0.101.100")
-[[ "$r" == "false false" ]] && pass "absent  -> exists=false draft_exists=false" \
-  || fail "absent  -> got '$r', want 'false false'"
-
-r=$(run_idempotency published "web-v0.101.100")
-[[ "$r" == "true false" ]] && pass "published-> exists=true  draft_exists=false" \
-  || fail "published-> got '$r', want 'true false'"
-
-r=$(run_idempotency draft "web-v0.101.100")
-[[ "$r" == "false true" ]] && pass "draft   -> exists=false draft_exists=true (self-heal)" \
-  || fail "draft   -> got '$r', want 'false true' (orphaned draft must NOT lock the pipeline)"
+assert_eq "absent   -> exists=false draft_exists=false" \
+  "$(run_idempotency absent "web-v0.101.100")" "false false"
+assert_eq "published -> exists=true  draft_exists=false" \
+  "$(run_idempotency published "web-v0.101.100")" "true false"
+assert_eq "draft     -> exists=false draft_exists=true (self-heal; must NOT lock the pipeline)" \
+  "$(run_idempotency draft "web-v0.101.100")" "false true"
 
 # ---------------------------------------------------------------------------
 # T2: lane-agnostic (AC6) — identical decision for v / web-v / telegram-v in the
@@ -147,9 +166,7 @@ r=$(run_idempotency draft "web-v0.101.100")
 # ---------------------------------------------------------------------------
 echo "T2: lane-agnostic draft decision"
 for tag in "v0.5.0" "web-v0.101.100" "telegram-v0.3.0"; do
-  r=$(run_idempotency draft "$tag")
-  [[ "$r" == "false true" ]] && pass "draft($tag) -> false true" \
-    || fail "draft($tag) -> got '$r', want 'false true'"
+  assert_eq "draft($tag) -> false true" "$(run_idempotency draft "$tag")" "false true"
 done
 
 # ---------------------------------------------------------------------------
@@ -199,6 +216,28 @@ if grep -qE -- '--draft$' <<<"$create_block"; then
 else
   fail "create step must keep --draft (immutable-release 422 mitigation)"
 fi
+
+# ---------------------------------------------------------------------------
+# T6: notify-on-self-heal (#4902) — Email + Discord notify must ALSO fire on the
+# orphaned-draft re-publish path (the prior run died before notify, so this is
+# the first successful announcement). Pins the behavior so a future edit can't
+# silently revert it to create-only. The Sentry-audit step deliberately stays
+# create-only (asset upload, not announcement) and is NOT asserted here.
+# ---------------------------------------------------------------------------
+echo "T6: Email + Discord notify fire on the self-heal path"
+for step in "Email notification (release)" "Post to Discord (release)"; do
+  notify_if=$(awk -v s="- name: $step" '
+    index($0, s) { f=1; next }
+    f && /^[[:space:]]*if:/ { capture=1 }
+    f && capture { print }
+    f && capture && /(continue-on-error|env:|uses:|with:|run:)/ { exit }
+  ' "$WF")
+  if grep -qE "idempotency\.outputs\.draft_exists == 'true'" <<<"$notify_if"; then
+    pass "'$step' if: includes draft_exists == 'true' disjunct"
+  else
+    fail "'$step' must notify on self-heal (got: ${notify_if:-<none>})"
+  fi
+done
 
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
