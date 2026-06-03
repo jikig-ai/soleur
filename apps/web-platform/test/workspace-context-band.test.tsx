@@ -168,3 +168,34 @@ describe("WorkspaceContextBand — persistent workspace identity (AC1/AC4b)", ()
     ).not.toBeInTheDocument();
   });
 });
+
+// Phase 1 (#4915): the collapsed rail band renders the monogram identity tile
+// (not the nameless gold swatch). The collapsed band does NOT mount
+// OrgSwitcherContainer, so the active workspace name is threaded in as a prop
+// (P0-3): the FULL name becomes the tooltip — the authoritative disambiguator
+// for two workspaces that share an initial.
+describe("WorkspaceContextBand — collapsed monogram identity (Phase 1, #4915)", () => {
+  it("renders the monogram tile (non-gold) with the FULL workspace name as the tooltip when collapsed", () => {
+    render(
+      <WorkspaceContextBand
+        pathname="/dashboard/kb"
+        collapsed
+        activeWorkspaceName="Soleur Workspace"
+      />,
+    );
+    const icon = screen.getByTestId("workspace-identity-icon");
+    // full name replaces the static "Active workspace" tooltip (P0-3)
+    expect(icon).toHaveAttribute("title", "Soleur Workspace");
+    const tile = within(icon).getByTestId("workspace-identity-tile");
+    expect(tile).toHaveTextContent("S"); // monogram of "Soleur Workspace"
+    expect(tile.className).not.toMatch(/accent-gold/); // FR6: non-gold
+  });
+
+  it("falls back to the static 'Active workspace' tooltip before a name is threaded", () => {
+    render(<WorkspaceContextBand pathname="/dashboard/kb" collapsed />);
+    expect(screen.getByTestId("workspace-identity-icon")).toHaveAttribute(
+      "title",
+      "Active workspace",
+    );
+  });
+});

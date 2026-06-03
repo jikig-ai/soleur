@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { OrgSwitcherContainer } from "@/components/dashboard/org-switcher-container";
 import { LiveRepoBadge } from "@/components/dashboard/live-repo-badge";
+import { WorkspaceIdentityTile } from "@/components/dashboard/workspace-identity-tile";
 import {
   segmentToDrillLevel,
   type DrillLevel,
@@ -53,6 +54,7 @@ export function WorkspaceContextBand({
   pathname,
   variant = "rail",
   collapsed = false,
+  activeWorkspaceName,
 }: {
   pathname: string;
   /** "rail" mounts in the sidebar; "mobile" mounts in the mobile top bar. */
@@ -60,6 +62,11 @@ export function WorkspaceContextBand({
   /** Rail-only: when the sidebar is collapsed (md:w-14) render the icon-only
    *  form. Ignored for variant="mobile" (the mobile top bar never collapses). */
   collapsed?: boolean;
+  /** Collapsed-rail only: the active workspace name. The collapsed band does
+   *  NOT mount OrgSwitcherContainer, so it has no name in scope — the layout
+   *  threads it in (P0-3) so the monogram tile + full-name tooltip can render
+   *  as the authoritative disambiguator for shared-initial workspaces. */
+  activeWorkspaceName?: string;
 }) {
   const drill = segmentToDrillLevel(pathname);
 
@@ -90,10 +97,12 @@ export function WorkspaceContextBand({
         ) : null}
         <span
           data-testid="workspace-identity-icon"
-          aria-label="Active workspace"
-          title="Active workspace"
-          className="h-6 w-6 shrink-0 rounded-sm bg-soleur-accent-gold-fg/60"
-        />
+          aria-label={activeWorkspaceName ?? "Active workspace"}
+          title={activeWorkspaceName ?? "Active workspace"}
+          className="flex shrink-0"
+        >
+          <WorkspaceIdentityTile name={activeWorkspaceName ?? ""} size="sm" />
+        </span>
         <span
           data-testid="live-repo-dot"
           aria-label="Active repository"

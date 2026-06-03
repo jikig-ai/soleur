@@ -10,6 +10,7 @@ import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { SignOutConfirmModal } from "@/components/auth/sign-out-confirm-modal";
 import { useSignOut } from "@/components/auth/use-sign-out";
 import { WorkspaceContextBand } from "@/components/dashboard/workspace-context-band";
+import { useActiveWorkspaceName } from "@/hooks/use-active-workspace-name";
 import { RailSlotProvider, RailCollapsedProvider } from "@/components/dashboard/rail-slot";
 import { RailResizeHandle } from "@/components/dashboard/rail-resize-handle";
 import { useRailWidth, railMaxPx, RAIL_MIN_PX } from "@/hooks/use-rail-width";
@@ -123,6 +124,10 @@ export default function DashboardLayout({
   // Secondary-nav slot node — drilled sections portal their nav here (ADR-047).
   // A useState ref-callback so the provider value updates once the slot mounts.
   const [railSlotEl, setRailSlotEl] = useState<HTMLElement | null>(null);
+  // Active workspace name for the COLLAPSED rail band's monogram tooltip — the
+  // collapsed band does not mount OrgSwitcherContainer, so the name is threaded
+  // in here (P0-3, #4915). Coalesced with the band's membership fetch.
+  const activeWorkspaceName = useActiveWorkspaceName();
 
   // Check admin status on mount
   useEffect(() => {
@@ -332,7 +337,11 @@ export default function DashboardLayout({
             CSS-exclusive placements never show identity twice (AC4b: the band
             is still the single importer of OrgSwitcherContainer/LiveRepoBadge). */}
         <div className="hidden md:block">
-          <WorkspaceContextBand pathname={pathname} collapsed={collapsed} />
+          <WorkspaceContextBand
+            pathname={pathname}
+            collapsed={collapsed}
+            activeWorkspaceName={activeWorkspaceName ?? undefined}
+          />
         </div>
 
         {/* Rail swap region (ADR-047): the section's secondary nav REPLACES
