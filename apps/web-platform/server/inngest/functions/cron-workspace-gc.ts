@@ -38,11 +38,16 @@ import {
   warnSilentFallback,
 } from "@/server/observability";
 import {
+  freeMb,
   resolveCronWorkspaceRoot,
   postSentryHeartbeat,
   DEFAULT_CRON_WORKSPACE_MIN_FREE_MB,
   type HandlerArgs,
 } from "./_cron-shared";
+
+// Re-export the shared disk-free helper so its unit test (and any future
+// consumer) can import it from this module's public surface unchanged.
+export { freeMb };
 
 // =============================================================================
 // Constants
@@ -62,11 +67,8 @@ const CRON_NAME = "cron-workspace-gc";
 // Pure helpers (unit-tested without fs)
 // =============================================================================
 
-// Free MB available to an UNPRIVILEGED caller — `bavail`, not `bfree`, matches
-// what the 1001 container user actually gets (mirrors warnIfCronWorkspaceLowOnDisk).
-export function freeMb(stats: { bavail: number; bsize: number }): number {
-  return Math.floor((stats.bavail * stats.bsize) / (1024 * 1024));
-}
+// `freeMb` (bavail-based disk-free arithmetic) is imported + re-exported from
+// _cron-shared above — single source of truth shared with warnIfCronWorkspaceLowOnDisk.
 
 // A dir is sweepable iff it is a leaked cron clone (soleur- prefix) AND older
 // than the max-age. The prefix guard is load-bearing: a 36-char UUID

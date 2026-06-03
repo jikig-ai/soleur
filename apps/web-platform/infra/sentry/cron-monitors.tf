@@ -512,7 +512,7 @@ resource "sentry_cron_monitor" "scheduled_supabase_disk_io" {
 # (scheduler dead / function dropped) — the failure mode that let leaked clones
 # accumulate into the 2026-06-02 KB-sync ENOSPC freeze (#4882). The handler always
 # heartbeats ok:true (the sweep RAN; a clean 0-reclaim run is healthy) — the
-# actionable "volume still low after GC" condition pages via a reportSilentFallback
+# actionable "volume still low after GC" condition pages via a warnSilentFallback
 # Sentry warn, not a ?status=error heartbeat. 6-hourly (0 */6 * * *), 30-min margin
 # + 10-min runtime mirror the disk-io small-cron cohort (pure-TS local fs, no
 # claude-eval spawn). Slug MUST match SENTRY_MONITOR_SLUG in the handler.

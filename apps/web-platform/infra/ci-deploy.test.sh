@@ -74,19 +74,32 @@ MOCK
 # .cron`s the isolated cron-clone subdir (#4882); the mock sudo strips `sudo` and
 # runs the real command, so a real `mkdir -p` against the nonexistent host
 # `/mnt/data` would abort the whole script under `set -e`. No-op ONLY for `/mnt/*`
-# host paths; pass every other target (PLUGIN_MOUNT_DIR / INNGEST_EXTRACT_DIR temp
-# dirs the script writes into) through to the real coreutils mkdir so those calls
-# keep working. A blanket no-op would break those legitimate dir creations.
+# host paths (in production those are real persistent-volume paths, e.g.
+# PLUGIN_MOUNT_DIR=/mnt/data/plugins/soleur and the new .cron subdir). Every
+# OTHER target — the writable temp dirs the tests redirect PLUGIN_MOUNT_DIR /
+# INNGEST_EXTRACT_DIR to ($MOCK_DIR/..., /tmp/...) and write into afterwards —
+# passes through to the real coreutils mkdir so those calls keep working. A
+# blanket no-op would break those legitimate dir creations.
 create_mock_mkdir() {
   cat > "$1/mkdir" << 'MOCK'
 #!/bin/bash
 for arg in "$@"; do
   case "$arg" in /mnt/*) exit 0 ;; esac
 done
+# Resolve the real coreutils mkdir, skipping THIS mock dir on PATH. Fail LOUD if
+# none is found rather than `exit 0` — a silent success here would mask a missing
+# dir on a non-standard host (Nix/busybox layout) and turn a real failure green.
+self_dir=$(cd "$(dirname "$0")" && pwd)
 for real in /usr/bin/mkdir /bin/mkdir; do
   [[ -x "$real" ]] && exec "$real" "$@"
 done
-exit 0
+IFS=':' read -ra _paths <<< "$PATH"
+for dir in "${_paths[@]}"; do
+  [[ -z "$dir" || "$dir" == "$self_dir" ]] && continue
+  [[ -x "$dir/mkdir" ]] && exec "$dir/mkdir" "$@"
+done
+echo "mock mkdir: no real coreutils mkdir found on host (PATH=$PATH)" >&2
+exit 1
 MOCK
   chmod +x "$1/mkdir"
 }

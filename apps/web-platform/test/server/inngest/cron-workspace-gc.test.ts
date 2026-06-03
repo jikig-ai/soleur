@@ -27,6 +27,11 @@ vi.mock("@/server/inngest/functions/_cron-shared", () => ({
   resolveCronWorkspaceRoot: vi.fn(() => "/workspaces/.cron"),
   postSentryHeartbeat: vi.fn(async () => {}),
   DEFAULT_CRON_WORKSPACE_MIN_FREE_MB: 256,
+  // freeMb now lives in _cron-shared (single source of truth) and is re-exported
+  // by cron-workspace-gc; provide the real arithmetic so the handler + the
+  // re-exported pure-helper test both compute correctly under the mock.
+  freeMb: (s: { bavail: number; bsize: number }) =>
+    Math.floor((s.bavail * s.bsize) / (1024 * 1024)),
 }));
 
 vi.mock("@/server/observability", () => ({
@@ -146,6 +151,49 @@ describe("cronWorkspaceGcHandler — sweep semantics", () => {
       sweptCount: 1,
       root: "/workspaces/.cron",
     });
+  });
+
+  it("skips a non-directory soleur-* entry (a stray clone leftover file) — never rm'd", async () => {
+    // A crashed clone can leave a stray `soleur-*.log`/lockfile under the root.
+    // It matches the prefix but is NOT a directory, so the isDirectory() guard
+    // must skip it — rm({recursive}) on a misclassified entry is exactly the
+    // destructive-safety surface this cron exists to protect.
+    const now = Date.now();
+    (statfs as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(statfsFor(500))
+      .mockResolvedValueOnce(statfsFor(500));
+    (readdir as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
+      "soleur-stale.log",
+    ]);
+    (stat as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      isDirectory: () => false,
+      mtimeMs: now - 99 * 60 * 60 * 1000, // very old — age alone would sweep a dir
+    } as unknown as Awaited<ReturnType<typeof stat>>);
+
+    const result = await cronWorkspaceGcHandler({ step: fakeStep, logger: fakeLogger });
+
+    expect(rm).not.toHaveBeenCalled();
+    expect(result.sweptCount).toBe(0);
+  });
+
+  it("freedMb falls back to 0 (no NaN/negative) when the after-sweep statfs fails", async () => {
+    const now = Date.now();
+    const eio = Object.assign(new Error("EIO"), { code: "EIO" });
+    (statfs as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(statfsFor(500)) // before — ok
+      .mockRejectedValueOnce(eio); // after — fails (non-ENOENT)
+    (readdir as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(["soleur-old"]);
+    (stat as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(dirStat(now - 2 * 60 * 60 * 1000));
+    (rm as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+    const result = await cronWorkspaceGcHandler({ step: fakeStep, logger: fakeLogger });
+
+    expect(result.sweptCount).toBe(1); // sweep still happened
+    expect(result.freedMb).toBe(0); // graceful degrade — no NaN, no negative
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1); // the statfs-after failure
+    expect(postSentryHeartbeat).toHaveBeenCalledWith(
+      expect.objectContaining({ ok: true }),
+    );
   });
 
   it("tolerates an ENOENT root (no mounted volume) — no throw, no rm, heartbeat ok, no page", async () => {
