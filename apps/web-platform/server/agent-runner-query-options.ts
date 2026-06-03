@@ -67,6 +67,14 @@ export interface AgentQueryOptionsArgs {
    */
   credential: AgentCredential;
   serviceTokens: Record<string, string>;
+  /**
+   * Optional freshly-minted GitHub App installation token, injected as
+   * `GH_TOKEN` into the agent env (Issue A — Concierge gh-auth). Per-call
+   * divergent (the cc path mints it per-dispatch; the legacy runner leaves
+   * it undefined), so it is NOT part of the shared-field drift snapshot.
+   * Never logged. See `buildAgentEnv` `BuildAgentEnvOptions.ghToken`.
+   */
+  ghToken?: string;
   systemPrompt: string;
   /** SDK chain step 5 — the canUseTool callback. Required. */
   // biome-ignore lint/suspicious/noExplicitAny: SDK CanUseTool is a typed callable; helper accepts the SDK's type
@@ -83,11 +91,13 @@ export interface AgentQueryOptionsArgs {
   allowedTools?: string[];
   /**
    * Per-call disallowedTools extension (#3338). Merged with the canonical
-   * `[WebSearch, WebFetch]` list. The cc path passes `["Bash", "Edit", "Write"]`
-   * here so the model literally cannot emit those tools — `allowedTools` is
-   * auto-approve only per SDK semantics (sdk.d.ts:858-862), so the only way
-   * to actually restrict the model's tool surface is `disallowedTools` (or
-   * the `tools` option). Legacy path leaves this undefined.
+   * `[WebSearch, WebFetch]` list. The cc path passes `["Edit", "Write"]`
+   * (`CC_PATH_DISALLOWED_TOOLS`, cc-dispatcher.ts) so the model cannot emit
+   * those tools — Bash is intentionally NOT disallowed (it flows through the
+   * permission-callback Bash gate / safe-bash / autonomous bypass instead).
+   * `allowedTools` is auto-approve only per SDK semantics (sdk.d.ts:858-862),
+   * so the only way to actually restrict the model's tool surface is
+   * `disallowedTools` (or the `tools` option). Legacy path leaves this undefined.
    */
   extraDisallowedTools?: readonly string[];
   /** Legacy: 50; cc: omitted (cost-cap is enforced at the runner level). */
@@ -139,7 +149,9 @@ export function buildAgentQueryOptions(
       ...(args.extraDisallowedTools ?? []),
     ],
     systemPrompt: args.systemPrompt,
-    env: buildAgentEnv(args.credential, args.serviceTokens),
+    env: buildAgentEnv(args.credential, args.serviceTokens, {
+      ghToken: args.ghToken,
+    }),
     // Sandbox literal lives in `buildAgentSandboxConfig` so legacy + cc
     // share the same shape verbatim (drift-guarded by
     // `agent-runner-helpers.test.ts`).

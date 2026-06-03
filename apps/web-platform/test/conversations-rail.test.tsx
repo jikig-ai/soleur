@@ -213,6 +213,59 @@ describe("ConversationsRail", () => {
     expect(screen.getByText("Needs attention")).toBeInTheDocument();
   });
 
+  // AC2 — when the unified rail is collapsed, the rich conversation rows are
+  // DOM-removed (they have no coherent icon-only form at 56px) so they cannot
+  // clip. The stable `conversations-rail` wrapper lives in the portal component
+  // (unchanged); here we assert the rows themselves leave the DOM.
+  it("DOM-removes the conversation rows when collapsed (AC2)", async () => {
+    setRailHook([
+      makeConversation({ id: "c1", title: "Row alpha" }),
+      makeConversation({ id: "c2", title: "Row beta" }),
+      makeConversation({ id: "c3", title: "Row gamma" }),
+    ]);
+
+    const { ConversationsRail } = await import(
+      "@/components/chat/conversations-rail"
+    );
+    const { RailCollapsedProvider } = await import(
+      "@/components/dashboard/rail-slot"
+    );
+    render(
+      <RailCollapsedProvider value={true}>
+        <ConversationsRail />
+      </RailCollapsedProvider>,
+    );
+
+    expect(screen.queryByText("Recent conversations")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: /Row alpha/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: /view all in dashboard/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  // AC4 — expanded (the implicit default of the provider): rows present, so AC2
+  // is not satisfied vacuously by an always-empty rail.
+  it("keeps the conversation rows present when expanded (AC4)", async () => {
+    setRailHook([makeConversation({ id: "c1", title: "Row alpha" })]);
+
+    const { ConversationsRail } = await import(
+      "@/components/chat/conversations-rail"
+    );
+    const { RailCollapsedProvider } = await import(
+      "@/components/dashboard/rail-slot"
+    );
+    render(
+      <RailCollapsedProvider value={false}>
+        <ConversationsRail />
+      </RailCollapsedProvider>,
+    );
+
+    expect(screen.getByText("Recent conversations")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Row alpha/ })).toBeInTheDocument();
+  });
+
   // ADR-047: the conversations rail no longer owns a collapse button or ⌘B —
   // the unified nav rail owns collapse (covered in
   // dashboard-sidebar-collapse.test.tsx). The rail just renders the list.

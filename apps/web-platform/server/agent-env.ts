@@ -67,9 +67,29 @@ const ALLOWED_SERVICE_ENV_VARS = new Set(
 const API_KEY_ENV_VAR = "ANTHROPIC_API_KEY";
 const OAUTH_ENV_VAR = "CLAUDE_CODE_OAUTH_TOKEN";
 
+/**
+ * Optional env extras that are NOT service tokens and NOT auth vars.
+ *
+ * `ghToken` is the freshly-minted GitHub App **installation** token for the
+ * agent's connected repo. It is injected as `GH_TOKEN` — the var `gh` prefers
+ * over `GITHUB_TOKEN` — so the Concierge agent's `gh` calls authenticate
+ * without an interactive `gh auth login` (Issue A). It rides this dedicated
+ * param rather than the `serviceTokens` map for three reasons: (1) the map is
+ * keyed to `PROVIDER_CONFIG.envVar` which is `GITHUB_TOKEN` (the lower-
+ * precedence var), (2) a user's BYOK GitHub PAT row would clobber it, and
+ * (3) `GH_TOKEN` is intentionally NOT in `ALLOWED_SERVICE_ENV_VARS`, so the
+ * service-token loop cannot carry it. Per `hr-github-app-auth-not-pat` the
+ * value is a short-lived App installation token, never a PAT — and it is
+ * NEVER logged.
+ */
+export interface BuildAgentEnvOptions {
+  ghToken?: string;
+}
+
 export function buildAgentEnv(
   credential: AgentCredential,
   serviceTokens?: Record<string, string>,
+  opts?: BuildAgentEnvOptions,
 ): Record<string, string> {
   const env: Record<string, string> = {
     // Telemetry-suppression overrides ride OUTSIDE the auth branch: a
@@ -97,6 +117,14 @@ export function buildAgentEnv(
         env[envVar] = value;
       }
     }
+  }
+
+  // GitHub App installation token (Issue A). Injected as GH_TOKEN OUTSIDE
+  // the service-token loop and OUTSIDE the auth switch — it is neither a
+  // PROVIDER_CONFIG service var nor an Anthropic auth var. Empty/undefined
+  // is a no-op (graceful degradation when no repo is connected). Never log.
+  if (opts?.ghToken) {
+    env.GH_TOKEN = opts.ghToken;
   }
 
   // Auth var LAST and mutually exclusive: the credential branch is

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useConversations } from "@/hooks/use-conversations";
 import { RailEmptyState } from "@/components/dashboard/rail-empty-state";
+import { useRailCollapsed } from "@/components/dashboard/rail-slot";
 import { relativeTime } from "@/lib/relative-time";
 import { LEADER_COLORS } from "@/components/chat/leader-colors";
 import type { ConversationStatus } from "@/lib/types";
@@ -91,6 +92,14 @@ export function ConversationsRail() {
   // ADR-047: the conversations rail lives in the single nav rail's slot now.
   // Collapse is owned by the unified rail (⌘B / the band) — no per-rail
   // collapse state or button here.
+  //
+  // Collapse fix: the rich rows (status badge + leader color + relative time)
+  // have no coherent icon-only form at the 56px collapsed rail, so when
+  // collapsed the rail content is DOM-removed (render-conditional). The stable
+  // `data-testid="conversations-rail"` wrapper lives in conversations-rail-portal.tsx,
+  // so present/absent assertions stay anchored across both toggle states.
+  const collapsed = useRailCollapsed();
+  if (collapsed) return null;
 
   return (
     <div className="flex h-full flex-col">

@@ -152,6 +152,7 @@ If no sub-command is provided, present options using the AskUserQuestion tool:
   - LinkedIn: `LINKEDIN_ALLOW_POST=true`
   - X/Twitter: `X_ALLOW_POST=true`
   - Bluesky: `BSKY_ALLOW_POST=true`
+- **Scheduled-cron context:** when the monitor runs via the Inngest cron (`apps/web-platform/server/inngest/functions/cron-community-monitor.ts`), a platform is enabled only if its required vars are in BOTH Doppler (`prd_scheduled`) AND the `buildSpawnEnv()` spawn-env allowlist that forwards env to the spawned `claude --print`. A platform shown `disabled` in the digest despite its creds being in Doppler means the allowlist omits them — widen `buildSpawnEnv()`, not the secret store. See `knowledge-base/project/learnings/integration-issues/2026-06-03-platform-disabled-despite-creds-check-spawn-env-allowlist.md`.
 
 ## Platform Surface Check
 

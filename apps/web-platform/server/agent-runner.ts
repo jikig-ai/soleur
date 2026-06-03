@@ -52,6 +52,7 @@ import { buildKbShareTools } from "./kb-share-tools";
 import { buildConversationsTools } from "./conversations-tools";
 import { buildAuthStatusTools } from "./auth-status-tools";
 import { buildAccountTools } from "./account-tools";
+import { buildWorkspaceSettingsTools } from "./workspace-settings-tools";
 import { getCurrentRepoUrl } from "./current-repo-url";
 import { resolveInstallationId } from "./resolve-installation-id";
 import { buildGithubTools } from "./github-tools";
@@ -1508,6 +1509,15 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
     });
     platformTools.push(...accountTools.tools);
     platformToolNames.push(...accountTools.toolNames);
+
+    // Workspace settings tools (Issue B part 2): agent-native parity for the
+    // Concierge autonomous-mode toggle. get = auto-approve, set = gated
+    // (flipping an approval-bypass requires a review-gate even for the agent).
+    // Registered here on the leader surface only — the cc-router exposes no
+    // platform tools (platformToolNames: []); see workspace-settings-tools.ts.
+    const workspaceSettingsTools = buildWorkspaceSettingsTools({ userId });
+    platformTools.push(...workspaceSettingsTools.tools);
+    platformToolNames.push(...workspaceSettingsTools.toolNames);
 
     // Build MCP server if any platform tools are registered
     if (platformTools.length > 0) {
