@@ -17,7 +17,7 @@ Brand-survival threshold: single-user incident (deepen-plan / ultrathink review 
   (`gh issue list --label code-review --state open --json number,title,body --limit 200` + jq).
 
 ## Phase 1 — RED (failing regression test first)
-- [x] 1.1 Add `apps/web-platform/test/ws-handler-concierge-open-doc-context.test.ts` (or extend
+- [x] 1.1 Add `apps/web-platform/test/concierge-active-workspace-doc-parity.test.ts` (or extend
   `cc-dispatcher-concierge-context.test.ts`). Path must match `test/**/*.test.ts` (vitest node).
 - [x] 1.2 Seed a synthetic workspace fixture (temp dir + `users.workspace_path` swap; drain
   `_resetWorkspacePathCacheForTests`).

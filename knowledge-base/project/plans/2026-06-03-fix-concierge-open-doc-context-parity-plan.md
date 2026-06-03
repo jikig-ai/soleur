@@ -158,7 +158,7 @@ mis-resolution could cross-read another user's KB. (See `kb-document-resolver.ts
 ### Phase 1 — RED: failing regression test (TDD, `cq-write-failing-tests-before`)
 - Add a test asserting that an **open KB document is present in the assembled chat context** for
   the Concierge path. Co-locate with `apps/web-platform/test/cc-dispatcher-concierge-context.test.ts`
-  (existing) or add `apps/web-platform/test/ws-handler-concierge-open-doc-context.test.ts`.
+  (existing) or add `apps/web-platform/test/concierge-active-workspace-doc-parity.test.ts`.
   Path MUST match the vitest node glob `test/**/*.test.ts` (`vitest.config.ts:44`). Run with
   `./node_modules/.bin/vitest run <path>` (NOT `bun test` — `bunfig.toml` blocks bun discovery, #1469).
 - The assertion drives through the resolver/dispatch boundary (deterministic, no LLM): given a
@@ -196,7 +196,7 @@ mis-resolution could cross-read another user's KB. (See `kb-document-resolver.ts
   (PIR follow-ups + action items).
 
 ## Files to Create
-- `apps/web-platform/test/ws-handler-concierge-open-doc-context.test.ts` (or extend
+- `apps/web-platform/test/concierge-active-workspace-doc-parity.test.ts` (or extend
   `cc-dispatcher-concierge-context.test.ts`) — open-doc-in-assembled-context regression.
 
 ## Open Code-Review Overlap
@@ -273,7 +273,7 @@ logs:
   where: "Sentry breadcrumbs (cc-pdf-resolver, cc-pdf-extractor) + pino server logs"
   retention: "Sentry default project retention"
 discoverability_test:
-  command: "./node_modules/.bin/vitest run apps/web-platform/test/ws-handler-concierge-open-doc-context.test.ts"
+  command: "./node_modules/.bin/vitest run apps/web-platform/test/concierge-active-workspace-doc-parity.test.ts"
   expected_output: "assertion: assembled context contains the open KB doc body; test passes"
 ```
 
