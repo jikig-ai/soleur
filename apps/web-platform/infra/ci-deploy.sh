@@ -432,13 +432,15 @@ case "$COMPONENT" in
 
     # Prepare environment (shared between canary and production)
     sudo chown 1001:1001 /mnt/data/workspaces
-    # Isolate ephemeral cron-clone workspaces onto a dedicated `.cron` subdir so a
-    # leaked clone can never ENOSPC the usable space at the persistent UUID
-    # KB-workspace dirs that share this volume (#4882 — the 2026-06-02 KB freeze).
-    # mkdtemp fails if the parent is absent, so create + chown it to the 1001
-    # container user here. Idempotent (mkdir -p) — safe to re-run every deploy.
-    sudo mkdir -p /mnt/data/workspaces/.cron
-    sudo chown 1001:1001 /mnt/data/workspaces/.cron
+    # NOTE (#4886 follow-up): the `.cron` subdir isolation was reverted. A
+    # `mkdir -p /mnt/data/workspaces/.cron` in the deploy critical path ENOSPC-
+    # fails under `set -e` when the shared volume is already full (the exact
+    # state this work targets) — deadlocking the very deploy that delivers the
+    # GC. CRON_WORKSPACE_ROOT stays `/workspaces`, so cron-workspace-gc sweeps
+    # the SAME path the leaked `soleur-*` clones already live in; the GC's
+    # `soleur-` prefix guard (UUID workspace dirs are 36-char hex, never
+    # `soleur-*`) is the load-bearing protection, not the subdir. Dedicated-
+    # volume isolation is deferred to #4891 (re-eval once the volume is healthy).
     ENV_FILE=$(resolve_env_file)
     # Chain the env-file cleanup with the existing state-writing EXIT trap.
     # Replacing the trap entirely would lose the "unhandled" reason capture.
@@ -462,7 +464,7 @@ case "$COMPONENT" in
       --env-file "$ENV_FILE" \
       --add-host host.docker.internal:host-gateway \
       -e INNGEST_BASE_URL=http://host.docker.internal:8288 \
-      -e CRON_WORKSPACE_ROOT=/workspaces/.cron \
+      -e CRON_WORKSPACE_ROOT=/workspaces \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
       -p 0.0.0.0:3001:3000 \
@@ -628,7 +630,7 @@ case "$COMPONENT" in
         --env-file "$ENV_FILE" \
         --add-host host.docker.internal:host-gateway \
         -e INNGEST_BASE_URL=http://host.docker.internal:8288 \
-        -e CRON_WORKSPACE_ROOT=/workspaces/.cron \
+        -e CRON_WORKSPACE_ROOT=/workspaces \
         -v /mnt/data/workspaces:/workspaces \
         -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
         -p 0.0.0.0:80:3000 \
