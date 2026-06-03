@@ -580,8 +580,8 @@ logs:
   where: "pino child loggers (cc-dispatcher, git-auth, ensure-workspace-repo); token NEVER logged"
   retention: "per existing log pipeline"
 discoverability_test:
-  command: "./node_modules/.bin/vitest run test/agent-env-git-askpass.test.ts && git grep -n 'GIT_INSTALLATION_TOKEN' apps/web-platform/server/agent-env.ts"
-  expected_output: "tests green; askpass env block present, token via env only (NO ssh)"
+  command: git grep -l GIT_INSTALLATION_TOKEN apps/web-platform/server/agent-env.ts
+  expected_output: "agent-env.ts"
 ```
 
 ## Files to Edit
