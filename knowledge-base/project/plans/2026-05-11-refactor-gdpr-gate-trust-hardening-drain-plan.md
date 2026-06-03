@@ -88,7 +88,7 @@ All three defend the same gdpr-gate / vendor-drift pipeline. The two compliance/
 | #3535 — CODEOWNERS exists | Confirmed: `.github/CODEOWNERS` present, owner `@jeanderuelle`, pattern-based. No NOTICE row yet. | Append `/plugins/soleur/skills/gdpr-gate/NOTICE @jeanderuelle` row in the secret-scanning-floor block. |
 | #3536 — `gdpr-gate-advisory` glob does not cover scripts/ | Confirmed: `lefthook.yml` lines 101-119 — glob is regulated-data paths only (migrations, auth, api). Scripts are unprotected. | NEW workflow `gdpr-gate-self-test.yml` is the load-bearing self-test (runs in CI on `pull_request` paths). Update lefthook comment to cross-link, not to add a fixture-based pre-commit stanza (slow + flaky). |
 | #3536 — fixture path `plugins/soleur/test/fixtures/gdpr-gate-stale/NOTICE` | Confirmed `plugins/soleur/test/fixtures/` exists with sibling fixture dirs (`vendor-drift/`, `cleanup-scope-outs/`, `auto-close-scanner/`, etc.). Adding `gdpr-gate-stale/` follows precedent. | Create the fixture dir + NOTICE. Reuse existing 5-file `lifted-files:` shape from live NOTICE (so parser exercises both code paths) but with `last-verified: 2025-11-01` (200d+ stale) and a placeholder `pinned-commit`. |
-| #3540 — runbook §1 mutates `pinned-commit` only | Confirmed: `knowledge-base/engineering/ops/runbooks/vendor-pin-drift-resolution.md` §1 lines 16-37. | Rewrite §1 to mutate one `upstream-blob-sha` to `0000...0000`, dispatch, assert `vendor/cron-failure` issue (Option 3 from #3540 body). |
+| #3540 — runbook §1 mutates `pinned-commit` only | Confirmed: `knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md` §1 lines 16-37. | Rewrite §1 to mutate one `upstream-blob-sha` to `0000...0000`, dispatch, assert `vendor/cron-failure` issue (Option 3 from #3540 body). |
 | #3540 — workflow uses `upstream-blob-sha` not `pinned-commit` for drift | Confirmed: `.github/workflows/scheduled-content-vendor-drift.yml` line 308+ — Python regex operates on `upstream-blob-sha`. `pinned-commit` is updated only AFTER drift is detected (informational rollback anchor). | Runbook test must mutate `upstream-blob-sha`. Use a non-existent SHA so the `gh api .../git/blobs/<sha>` lookup 404s → cron-failure issue. |
 | All three — `Closes #N` policy | `wg-use-closes-n-in-pr-body-not-title-to`: `Closes #N` must be on its own body line. | PR body will contain three lines: `Closes #3535\nCloses #3536\nCloses #3540`, plus `Ref #3521` + `Ref #3517` + `Ref #2486`. PR title MUST NOT include any `Closes` token. |
 
@@ -109,7 +109,7 @@ The plan's `## Files to Edit` and `## Files to Create` sections (below) were che
 - #3535 — **fold in** (this PR closes it).
 - #3536 — **fold in** (this PR closes it).
 - #3540 — **fold in** (this PR closes it).
-- No other open `code-review` issues touch `plugins/soleur/skills/gdpr-gate/scripts/**`, `.github/workflows/gdpr-gate-self-test.yml`, `.github/CODEOWNERS`, `lefthook.yml` lines 94-119, or `knowledge-base/engineering/ops/runbooks/vendor-pin-drift-resolution.md` §1.
+- No other open `code-review` issues touch `plugins/soleur/skills/gdpr-gate/scripts/**`, `.github/workflows/gdpr-gate-self-test.yml`, `.github/CODEOWNERS`, `lefthook.yml` lines 94-119, or `knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md` §1.
 
 ## Files to Edit
 
@@ -120,7 +120,7 @@ The plan's `## Files to Edit` and `## Files to Create` sections (below) were che
 | `plugins/soleur/skills/gdpr-gate/SKILL.md` | #3535 | Document `GH_TOKEN` auth contract (where it comes from in CI vs local; absent in subagent contexts). Document the operator-attested-mode banner and the three-way precedence: (cron-timestamp present + min beats last-verified) > (cron-timestamp absent → operator-attested banner) > (parse failure → 999). |
 | `.github/CODEOWNERS` | #3535 | Append `/plugins/soleur/skills/gdpr-gate/NOTICE @jeanderuelle` under the secret-scanning-floor section with a comment: "Trust-binding gate — protects last-verified from drive-by edits (issue #3535)." |
 | `lefthook.yml` | #3536 | Update the `gdpr-gate-advisory` comment block (lines 94-100) to cross-link the new CI workflow as the load-bearing self-test. **Do not** add a new pre-commit stanza — fixture runs are slow + flaky for `pre-commit:`. |
-| `knowledge-base/engineering/ops/runbooks/vendor-pin-drift-resolution.md` | #3540 | Rewrite §1 (lines 12-37) as the cron-failure-path test (Option 3 from #3540 issue body). Mutate one `upstream-blob-sha` to `0000000000000000000000000000000000000000`, dispatch, poll, assert `vendor/cron-failure` issue auto-filed. Old §1 prose moved into a `<details>` block for historical reference OR deleted (decide at work time based on which keeps the runbook scannable). |
+| `knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md` | #3540 | Rewrite §1 (lines 12-37) as the cron-failure-path test (Option 3 from #3540 issue body). Mutate one `upstream-blob-sha` to `0000000000000000000000000000000000000000`, dispatch, poll, assert `vendor/cron-failure` issue auto-filed. Old §1 prose moved into a `<details>` block for historical reference OR deleted (decide at work time based on which keeps the runbook scannable). |
 
 ## Files to Create
 
@@ -319,7 +319,7 @@ GH_TOKEN="$(gh auth token)" bash plugins/soleur/skills/gdpr-gate/scripts/gdpr-ga
 
 ### Phase 7 — Runbook §1 rewrite (#3540)
 
-7.1. Replace `knowledge-base/engineering/ops/runbooks/vendor-pin-drift-resolution.md` §1 with the cron-failure-path test:
+7.1. Replace `knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md` §1 with the cron-failure-path test:
 
 ```bash
 # 1. Create a feature branch with one upstream-blob-sha mutated to a non-existent SHA.
@@ -364,7 +364,7 @@ gh issue list --label vendor/cron-failure --search 'created:>=YYYY-MM-DD' --limi
 - [ ] AC9 — **#3536 self-test workflow exists**: `.github/workflows/gdpr-gate-self-test.yml` exists, has `actions/checkout` pinned to a 40-char SHA, has `timeout-minutes:` set.
 - [ ] AC10 — **#3536 self-test asserts banners**: a temporary commit that breaks `gdpr-gate.sh` (e.g., always-echo-zero on days-stale) causes the new workflow to **fail** when run via `act` or scratch-branch CI. Verified once, reverted before merge.
 - [ ] AC11 — **#3536 lefthook cross-link**: `grep -E 'gdpr-gate-self-test' lefthook.yml` returns the cross-link comment.
-- [ ] AC12 — **#3540 runbook fix**: `knowledge-base/engineering/ops/runbooks/vendor-pin-drift-resolution.md` §1 no longer references `pinned-commit` mutation; references `upstream-blob-sha` mutation and `vendor/cron-failure` issue assertion.
+- [ ] AC12 — **#3540 runbook fix**: `knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md` §1 no longer references `pinned-commit` mutation; references `upstream-blob-sha` mutation and `vendor/cron-failure` issue assertion.
 - [ ] AC13 — **PR body** contains `Closes #3535`, `Closes #3536`, `Closes #3540` each on its own line, AND `Ref #3521`, `Ref #3517`, `Ref #2486`. PR title contains no `close|fix|resolve` token (per `wg-use-closes-n-in-pr-body-not-title-to`).
 - [ ] AC14 — **`bun test plugins/soleur/test/components.test.ts` and `bash plugins/soleur/test/notice-frontmatter.test.sh` are green.**
 - [ ] AC15 — **lint-rule-ids** is green (`python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt AGENTS.md`) — this PR does not touch AGENTS.md, but the lefthook glob covers the file.

@@ -8,7 +8,7 @@ deferred_issues: [3773, 4507]
 brainstorm: knowledge-base/project/brainstorms/2026-05-26-tenant-provisioning-skills-brainstorm.md
 spec: knowledge-base/project/specs/feat-tenant-provisioning-skills/spec.md
 adr: knowledge-base/engineering/architecture/decisions/ADR-030-multi-tenant-deploy-substrate.md
-runbook: knowledge-base/engineering/ops/runbooks/tenant-provisioning.md
+runbook: knowledge-base/engineering/operations/runbooks/tenant-provisioning.md
 lane: cross-domain
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
@@ -280,7 +280,7 @@ None.
 
 | File | Change |
 |---|---|
-| `knowledge-base/engineering/ops/runbooks/tenant-provisioning.md` | Add skill references to Steps 1-4+7 |
+| `knowledge-base/engineering/operations/runbooks/tenant-provisioning.md` | Add skill references to Steps 1-4+7 |
 
 ### Phase 6: REMOVED — Legal Amendments (tracked as #4502)
 

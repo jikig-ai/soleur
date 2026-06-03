@@ -192,7 +192,7 @@ GHCR is free for public images; `ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.0.
 
 3. `AGENTS.md` — add pointer line `- [id: hr-fresh-host-provisioning-reachable-from-terraform-apply] → core` in the `## Hard Rules` index (Phase 4).
 
-4. `knowledge-base/engineering/ops/runbooks/inngest-server.md` — append a section documenting the new cloud-init install path AND the verification step (`curl /api/inngest`). One paragraph, no code change to ops runbook structure.
+4. `knowledge-base/engineering/operations/runbooks/inngest-server.md` — append a section documenting the new cloud-init install path AND the verification step (`curl /api/inngest`). One paragraph, no code change to ops runbook structure.
 
 ## Files to Create
 
@@ -227,7 +227,7 @@ GHCR is free for public images; `ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.0.
 - [ ] **AC5 (Tier 3 — new rule body).** `AGENTS.core.md` contains the new rule with `[id: hr-fresh-host-provisioning-reachable-from-terraform-apply]` AND a `**Why:**` pointer to the learning file in Files to Create #7. Rule body ≤ 600 B (per `cq-agents-md-why-single-line`). Rule body cites `cloud-init.yml` as the canonical install surface and references the sibling rules `hr-tagged-build-workflow-needs-initial-tag-push` AND `hr-all-infrastructure-provisioning-servers`.
 - [ ] **AC6 (Tier 3 — index pointer).** `AGENTS.md` contains the line `- [id: hr-fresh-host-provisioning-reachable-from-terraform-apply] → core` in the `## Hard Rules` section in alphabetical-ish order (positioned near `hr-all-infrastructure-provisioning-servers` for cluster discoverability).
 - [ ] **AC7 (Tier 3 — lint passes).** `python3 scripts/lint-rule-ids.py` AND `python3 scripts/lint-agents-rule-budget.py` AND `python3 scripts/lint-agents-enforcement-tags.py` (if present) all exit 0.
-- [ ] **AC8 (runbook update).** `knowledge-base/engineering/ops/runbooks/inngest-server.md` appended with a new section documenting the cloud-init install path AND the verification step from `## Observability discoverability_test.command`.
+- [ ] **AC8 (runbook update).** `knowledge-base/engineering/operations/runbooks/inngest-server.md` appended with a new section documenting the cloud-init install path AND the verification step from `## Observability discoverability_test.command`.
 - [ ] **AC9 (PR body).** PR body uses `Ref #4118`, NOT `Closes #4118`. References #4126 explicitly under a `## Tier 2 (deferred)` section. PR body links the ONE prior closed PR (#4127) under `## Prior attempts` and notes the branch has been deleted. The originally-cited #4143 was MISATTRIBUTED per Deepen-Pass Finding §1 — do NOT cite #4143 in PR body.
 
 ## Post-merge operator acceptance criteria
@@ -367,7 +367,7 @@ Add the index pointer in `AGENTS.md` `## Hard Rules` section near `- [id: hr-all
 
 ### Phase 4 — Runbook update
 
-Append to `knowledge-base/engineering/ops/runbooks/inngest-server.md`:
+Append to `knowledge-base/engineering/operations/runbooks/inngest-server.md`:
 
 ```markdown
 ## Fresh-host provisioning (#4118)

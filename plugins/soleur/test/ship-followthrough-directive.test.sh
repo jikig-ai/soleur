@@ -83,7 +83,7 @@ fi
 echo "  PASS: SKILL.md contains no OLD-convention type: YAML keys"
 
 # --- Assertion 4: SKILL.md references the canonical runbook ---
-grep -qF 'knowledge-base/engineering/ops/runbooks/followthrough-convention.md' "$SKILL_MD" \
+grep -qF 'knowledge-base/engineering/operations/runbooks/followthrough-convention.md' "$SKILL_MD" \
   || fail "SKILL.md Step 3.5 does not reference the canonical runbook"
 echo "  PASS: SKILL.md references canonical runbook"
 

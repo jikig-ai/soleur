@@ -11,7 +11,7 @@
 -- reference plan_tier, concurrency_override, subscription_downgraded_at,
 -- and the two RPCs — dropping any of them will 500 the Stripe webhook.
 -- Rollback procedure: revert the code PR first, then drop SQL. See
--- knowledge-base/engineering/ops/runbooks/supabase-migrations.md.
+-- knowledge-base/engineering/operations/runbooks/supabase-migrations.md.
 --
 -- CONCURRENTLY is NOT used — Supabase wraps each migration in a txn and
 -- CREATE INDEX CONCURRENTLY fails with SQLSTATE 25001. See 025/027/028.

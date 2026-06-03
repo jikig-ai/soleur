@@ -711,7 +711,7 @@ All specialists named in brainstorm `## Domain Assessments` are covered by the p
 
 ### Post-merge (operator)
 
-- [ ] Migration `029` applied to prd Supabase. Verify columns + index + table + policy via REST read-back. Runbook: `knowledge-base/engineering/ops/runbooks/supabase-migrations.md`.
+- [ ] Migration `029` applied to prd Supabase. Verify columns + index + table + policy via REST read-back. Runbook: `knowledge-base/engineering/operations/runbooks/supabase-migrations.md`.
 - [ ] All four `STRIPE_PRICE_ID_*` in Doppler `prd`; each resolves via `stripe.prices.retrieve`.
 - [ ] Real Stripe test-mode webhook end-to-end: subscribe test account to Startup; DB `plan_tier` flips within 30s.
 - [ ] Real cap-hit on prd via test account: event in analytics with all 5 fields.

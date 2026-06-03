@@ -1,0 +1,721 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "text",
+      "id": "LayPr",
+      "x": 40,
+      "y": 24,
+      "name": "title",
+      "fill": "#111111",
+      "textGrowth": "fixed-width",
+      "width": 1100,
+      "content": "Sidebar Workspace Context Band — Reorder + Fold Repo Into Pill (#feat-one-shot-sidebar-band-redesign)",
+      "fontFamily": "Inter",
+      "fontSize": 22,
+      "fontWeight": "700"
+    },
+    {
+      "type": "frame",
+      "id": "fh8vR",
+      "x": 40,
+      "y": 80,
+      "name": "01 Expanded — multi-org, drilled (REDESIGNED)",
+      "width": 300,
+      "fill": "#1A1A1A",
+      "cornerRadius": 8,
+      "stroke": {
+        "thickness": 1,
+        "fill": "#333333"
+      },
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "VSess",
+          "name": "Pill row (LEADS — pt-3)",
+          "width": "fill_container",
+          "gap": 8,
+          "padding": [
+            12,
+            12,
+            8,
+            12
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "i3nWf",
+              "name": "OrgSwitcher closed pill (interactive)",
+              "width": "fill_container",
+              "fill": "#242424",
+              "cornerRadius": 6,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#333333"
+              },
+              "gap": 8,
+              "padding": [
+                6,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 4,
+                  "id": "tF7l0",
+                  "name": "avatar",
+                  "fill": "#C9A227",
+                  "width": 24,
+                  "height": 24
+                },
+                {
+                  "type": "frame",
+                  "id": "yk9Zh",
+                  "name": "pillText",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 1,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "u0483",
+                      "name": "wsName",
+                      "fill": "#EDEDED",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Soleur Workspace",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "galB2",
+                      "name": "repoSub",
+                      "fill": "#8A8A8A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "● jikig-ai/soleur",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "Zufh6",
+                  "name": "caret",
+                  "fill": "#8A8A8A",
+                  "content": "▾",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "6Gshl",
+          "name": "Back to menu (FOLLOWS — pt-2)",
+          "width": "fill_container",
+          "gap": 8,
+          "padding": [
+            8,
+            12
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "5w989",
+              "name": "backArrow",
+              "fill": "#C9A227",
+              "content": "←",
+              "fontFamily": "Inter",
+              "fontSize": 16,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "xv91J",
+              "name": "backLabel",
+              "fill": "#C9A227",
+              "content": "Back to menu",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "OE7RJ",
+          "name": "Section title",
+          "width": "fill_container",
+          "stroke": {
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#333333"
+          },
+          "padding": [
+            8,
+            12,
+            12,
+            12
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "1xK2U",
+              "name": "secLabel",
+              "fill": "#EDEDED",
+              "content": "Settings",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "500"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "TIyC5",
+      "x": 380,
+      "y": 80,
+      "name": "02 Expanded — solo user, drilled (REDESIGNED)",
+      "width": 300,
+      "fill": "#1A1A1A",
+      "cornerRadius": 8,
+      "stroke": {
+        "thickness": 1,
+        "fill": "#333333"
+      },
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "bHqad",
+          "name": "Pill row (LEADS — pt-3)",
+          "width": "fill_container",
+          "gap": 8,
+          "padding": [
+            12,
+            12,
+            8,
+            12
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "raASs",
+              "name": "workspace-identity-static (non-interactive)",
+              "width": "fill_container",
+              "gap": 8,
+              "padding": [
+                6,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 4,
+                  "id": "kHcCN",
+                  "name": "avatar",
+                  "fill": "#C9A227",
+                  "width": 24,
+                  "height": 24
+                },
+                {
+                  "type": "frame",
+                  "id": "PjdGh",
+                  "name": "chipText",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 1,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "bK9mR",
+                      "name": "wsName2",
+                      "fill": "#EDEDED",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "jikigai",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "hPRio",
+                      "name": "repoSub2",
+                      "fill": "#8A8A8A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "● jikig-ai/soleur",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "SS4Mf",
+              "name": "note2",
+              "fill": "#5A5A5A",
+              "content": "(no ▾ — nothing to switch to)",
+              "fontFamily": "Inter",
+              "fontSize": 10,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "4MHsi",
+          "name": "Back to menu (FOLLOWS — pt-2)",
+          "width": "fill_container",
+          "gap": 8,
+          "padding": [
+            8,
+            12
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "CVa1c",
+              "name": "backArrow2",
+              "fill": "#C9A227",
+              "content": "←",
+              "fontFamily": "Inter",
+              "fontSize": 16,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "hPjdA",
+              "name": "backLabel2",
+              "fill": "#C9A227",
+              "content": "Back to menu",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "7LGYZ",
+          "name": "Section title",
+          "width": "fill_container",
+          "stroke": {
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#333333"
+          },
+          "padding": [
+            8,
+            12,
+            12,
+            12
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "56Tjq",
+              "name": "secLabel2",
+              "fill": "#EDEDED",
+              "content": "Knowledge Base",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "500"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "jtELR",
+      "x": 720,
+      "y": 80,
+      "name": "03 Dropdown open — role lives per-row",
+      "width": 340,
+      "fill": "#1A1A1A",
+      "cornerRadius": 8,
+      "stroke": {
+        "thickness": 1,
+        "fill": "#333333"
+      },
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "VGTVg",
+          "name": "Pill row",
+          "width": "fill_container",
+          "gap": 8,
+          "padding": [
+            12,
+            12,
+            8,
+            12
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "wYtCf",
+              "name": "pb3",
+              "width": "fill_container",
+              "fill": "#242424",
+              "cornerRadius": 6,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#C9A227"
+              },
+              "gap": 8,
+              "padding": [
+                6,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 4,
+                  "id": "ovM6U",
+                  "name": "av3",
+                  "fill": "#C9A227",
+                  "width": 24,
+                  "height": 24
+                },
+                {
+                  "type": "frame",
+                  "id": "ni54s",
+                  "name": "pt3",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 1,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "8V2Xz",
+                      "name": "n3",
+                      "fill": "#EDEDED",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Soleur Workspace",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "elPIW",
+                      "name": "r3",
+                      "fill": "#8A8A8A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "● jikig-ai/soleur",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "wNvRK",
+                  "name": "c3",
+                  "fill": "#8A8A8A",
+                  "content": "▾",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "2tirS",
+          "name": "Dropdown menu (role per-row)",
+          "width": "fill_container",
+          "fill": "#242424",
+          "stroke": {
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#333333"
+          },
+          "layout": "vertical",
+          "padding": [
+            8,
+            4
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "sdSHI",
+              "name": "mh",
+              "fill": "#8A8A8A",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "YOUR WORKSPACES",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 1
+            },
+            {
+              "type": "frame",
+              "id": "Ie0y8",
+              "name": "row1",
+              "width": "fill_container",
+              "fill": "#2E2E2E",
+              "stroke": {
+                "thickness": {
+                  "left": 2
+                },
+                "fill": "#C9A227"
+              },
+              "gap": 12,
+              "padding": [
+                10,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 4,
+                  "id": "7MNu2",
+                  "name": "ra1",
+                  "fill": "#C9A227",
+                  "width": 32,
+                  "height": 32
+                },
+                {
+                  "type": "frame",
+                  "id": "K5bcO",
+                  "name": "rt1",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 1,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "2oZsR",
+                      "name": "rn1",
+                      "fill": "#EDEDED",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Soleur Workspace",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "Oiy3J",
+                      "name": "rr1",
+                      "fill": "#8A8A8A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Owner · 2 members",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "vCPeP",
+                  "name": "ck1",
+                  "fill": "#C9A227",
+                  "content": "✓",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "4BKPg",
+              "name": "row2 (non-current)",
+              "width": "fill_container",
+              "gap": 12,
+              "padding": [
+                10,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 4,
+                  "id": "CZOAx",
+                  "name": "ra2",
+                  "fill": "#2E2E2E",
+                  "width": 32,
+                  "height": 32
+                },
+                {
+                  "type": "frame",
+                  "id": "WJ4ci",
+                  "name": "rt2",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 1,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "En6iX",
+                      "name": "rn2",
+                      "fill": "#EDEDED",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Acme Studio",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "utu5N",
+                      "name": "rr2",
+                      "fill": "#8A8A8A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Member · 5 members",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "ZeSMA",
+              "name": "foot",
+              "fill": "#8A8A8A",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Switch is read-only — billing and data stay with each workspace.",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "q8WPP",
+      "x": 1100,
+      "y": 80,
+      "name": "04 Collapsed (md:w-14) — icon-only, UNCHANGED",
+      "width": 64,
+      "fill": "#1A1A1A",
+      "cornerRadius": 8,
+      "stroke": {
+        "thickness": 1,
+        "fill": "#333333"
+      },
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "6INb1",
+          "name": "cb",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 12,
+          "padding": [
+            12,
+            8
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "45sYe",
+              "name": "cbBack",
+              "fill": "#C9A227",
+              "content": "←",
+              "fontFamily": "Inter",
+              "fontSize": 16,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "rectangle",
+              "cornerRadius": 4,
+              "id": "CaD5J",
+              "name": "cbAv",
+              "fill": "#C9A227",
+              "width": 24,
+              "height": 24
+            },
+            {
+              "type": "text",
+              "id": "UogRb",
+              "name": "cbDot",
+              "fill": "#C9A227",
+              "content": "●",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "aU8Lb",
+              "name": "cbSec",
+              "fill": "#8A8A8A",
+              "content": "S",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "T6RW5",
+      "x": 40,
+      "y": 640,
+      "name": "annot",
+      "fill": "#333333",
+      "textGrowth": "fixed-width",
+      "width": 1100,
+      "content": "KEY CHANGES — (1) Pill now LEADS the band (above Back-to-menu), with pt-3 on the leading element. (2) Closed pill face shows workspace NAME + repo NAME subtitle (e.g. jikig-ai/soleur); the Owner/Member ROLE is no longer on the face. (3) Role moves INTO the dropdown, shown per-membership row (Owner · 2 members). (4) Solo users get the same name+repo chip, non-interactive (no ▾). (5) Standalone 'Working on:' row is REMOVED — its repo string now lives in the pill. (6) Collapsed md:w-14 column is UNCHANGED (no room for a subtitle): back arrow, avatar mark, repo dot, section glyph. The J5 revocation interstitial (not shown) still renders above the band when fellBackToSolo.",
+      "lineHeight": 1.5,
+      "fontFamily": "Inter",
+      "fontSize": 13,
+      "fontWeight": "normal"
+    }
+  ]
+}

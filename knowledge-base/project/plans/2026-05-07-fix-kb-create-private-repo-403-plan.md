@@ -613,7 +613,7 @@ Total: **~110 min** (~2h). No external blockers if CPO sign-off is on Approach B
 - Existing learning: `knowledge-base/project/learnings/2026-04-13-github-api-fetch-retry-undici-error-codes.md` — the new helper must use the same `AbortSignal.timeout(15_000)` + `fetchWithRetry` pattern. The existing `githubFetch` wrapper in `github-app.ts:191-205` covers this; reuse it directly.
 - Existing learning: `knowledge-base/project/learnings/2026-03-29-repo-connection-implementation.md` — repo connection feature architecture context.
 - Existing plan (referenced for context, not modified): `knowledge-base/project/plans/2026-04-06-fix-create-project-setup-failure-plan.md`.
-- Runbook: `knowledge-base/engineering/ops/runbooks/github-app-drift.md` — drift-guard ensures the App identity itself is stable; orthogonal to this fix.
+- Runbook: `knowledge-base/engineering/operations/runbooks/github-app-drift.md` — drift-guard ensures the App identity itself is stable; orthogonal to this fix.
 - AGENTS.md: `hr-weigh-every-decision-against-target-user-impact` — drives the `requires_cpo_signoff: true` frontmatter.
 - AGENTS.md: `cq-test-fixtures-synthesized-only` — applies to template repo content (template is public, so any test fixtures or example data committed there is publicly indexable).
 - AGENTS.md: `hr-when-a-plan-specifies-relative-paths-e-g` — verified live: paths used in this plan (`apps/web-platform/server/github-app.ts`, `apps/web-platform/app/api/repo/create/route.ts`, `apps/web-platform/test/github-app-create-repo.test.ts`, `apps/web-platform/test/create-route-error.test.ts`) all match real files.

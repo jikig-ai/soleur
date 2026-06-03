@@ -56,6 +56,7 @@ import { cronSupabaseDiskIo } from "@/server/inngest/functions/cron-supabase-dis
 import { cronTerraformDrift } from "@/server/inngest/functions/cron-terraform-drift";
 import { cronUxAudit } from "@/server/inngest/functions/cron-ux-audit";
 import { cronWeeklyAnalytics } from "@/server/inngest/functions/cron-weekly-analytics";
+import { cronWorkspaceGc } from "@/server/inngest/functions/cron-workspace-gc";
 import { cronWorkspaceSyncHealth } from "@/server/inngest/functions/cron-workspace-sync-health";
 import { eventCfTokenExpiryCheck } from "@/server/inngest/functions/event-cf-token-expiry-check";
 import { eventScheduledReminder } from "@/server/inngest/functions/event-scheduled-reminder";
@@ -120,6 +121,7 @@ export const { GET, POST, PUT } = serve({
     cronTerraformDrift,
     cronUxAudit,
     cronWeeklyAnalytics,
+    cronWorkspaceGc,
     cronWorkspaceSyncHealth,
     eventCfTokenExpiryCheck,
     eventScheduledReminder,

@@ -101,7 +101,7 @@ Three load-bearing reasons the dialogue converged here:
 
 Each gap below cites evidence (specific grep / find / API probe). Bare assertions are research misses, not gaps.
 
-1. **No prior PIR Phase 8 precedent.** Evidence: `grep -r "art_33_triggered: true" knowledge-base/engineering/ops/runbooks/` returns only today's PIR; `grep -r "status: resolved" knowledge-base/engineering/ops/runbooks/` returns no incident with the recovery-completeness flow. The PIR Phase 8 recovery-completeness gate is being defined for the first time by Branch C (per learnings-researcher finding 6). **Implication:** Branch C's flip-criteria block becomes the institutional precedent — over-document, not under-document.
+1. **No prior PIR Phase 8 precedent.** Evidence: `grep -r "art_33_triggered: true" knowledge-base/engineering/operations/runbooks/` returns only today's PIR; `grep -r "status: resolved" knowledge-base/engineering/operations/runbooks/` returns no incident with the recovery-completeness flow. The PIR Phase 8 recovery-completeness gate is being defined for the first time by Branch C (per learnings-researcher finding 6). **Implication:** Branch C's flip-criteria block becomes the institutional precedent — over-document, not under-document.
 
 2. **No prior wording precedent for after-the-fact residency-drift §5(2) disclosure.** Evidence: `grep -rn "after-the-fact\|drift\|phantom" knowledge-base/legal/article-30-register.md` returns no matches; closest adjacent is `2026-03-18-dpd-sub-processor-contradiction-fix.md` (audit-all-sections-for-contradictions pattern, not drift wording). CLO's drafted text in Decision #8 is first-of-its-kind. **Implication:** CLO sign-off in PR-α is load-bearing for both this PR and the wording precedent inherited by every future drift disclosure.
 
@@ -123,7 +123,7 @@ To be filed as 4 atomic GH issues in PR-γ:
 
 ## References
 
-- **PIR:** `knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`
+- **PIR:** `knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`
 - **Today's cascade learning (load-bearing):** `knowledge-base/project/learnings/2026-05-16-brainstorm-premise-cascade-and-playwright-handoff-discipline.md`
 - **A1 plan:** `knowledge-base/project/plans/2026-05-15-feat-sentry-residency-cleanup-plan.md`
 - **A1 PR:** #3863 (merged v3.94.8 / web-v0.87.9 on 2026-05-15)

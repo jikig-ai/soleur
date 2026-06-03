@@ -10,7 +10,7 @@
 # `journalctl -f`, `systemctl restart`, etc.
 #
 # Detection: scan `git diff --unified=0` for ADDED lines under runbook
-# headings (`.md` files in `knowledge-base/engineering/ops/runbooks/`) and
+# headings (`.md` files in `knowledge-base/engineering/operations/runbooks/`) and
 # flag the FIRST non-blank, non-heading content line under a triage-class
 # heading if it matches the SSH-class regex.
 #
@@ -43,7 +43,7 @@ BASE=$(git merge-base "origin/main" HEAD 2>/dev/null || true)
 [[ -z "$BASE" ]] && exit 0
 
 # Files in scope: runbook .md added or modified.
-RUNBOOK_FILES=$(git diff --name-only "$BASE"...HEAD -- 'knowledge-base/engineering/ops/runbooks/*.md' 2>/dev/null || true)
+RUNBOOK_FILES=$(git diff --name-only "$BASE"...HEAD -- 'knowledge-base/engineering/operations/runbooks/*.md' 2>/dev/null || true)
 [[ -z "$RUNBOOK_FILES" ]] && exit 0
 
 # SSH-class regex — match the verb at the start of a content line.

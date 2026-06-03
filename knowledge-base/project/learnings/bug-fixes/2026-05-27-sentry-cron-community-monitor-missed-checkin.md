@@ -77,7 +77,7 @@ When a self-hosted Inngest server receives rapid function-sync requests during a
 
 ## Cross-References
 
-- Runbook: `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` (H9)
+- Runbook: `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` (H9)
 - Related: `knowledge-base/project/learnings/2026-05-19-inngest-substrate-five-bug-cascade.md`
 - Operator issue: #4533
 - PR: #4531

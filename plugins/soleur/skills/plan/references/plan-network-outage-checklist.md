@@ -39,7 +39,7 @@ the current client/operator egress IP (`curl -s https://ifconfig.me/ip`)?
   Reconciliation or Hypotheses section.
 - Failure mode when skipped: admin-IP drift mistaken for sshd/fail2ban
   issue. See issue #2681, runbook
-  `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`.
+  `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md`.
 
 ### L3 -- DNS / routing
 
@@ -123,7 +123,7 @@ ruled out" without an artifact is not a valid opt-out.
 
 ## References
 
-- Runbook: `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`
+- Runbook: `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md`
 - Issue: #2681 (the incident that surfaced this gap)
 - Prior-art incident: issue #2654, PR #2655
 - Institutional learning:

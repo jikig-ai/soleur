@@ -845,7 +845,7 @@ On **FAIL**, present the failure reason + sanitized command + diagnostic and off
 
 **Path-gated:** only runs when the cached path-set from Phase 0 Step 0.1 (`"$PREFLIGHT_TMP/preflight-diff-files.txt"`) contains `apps/web-platform/infra/ci-deploy.sh`. Otherwise return **SKIP** with note: "ci-deploy.sh untouched." The path predicate is identical to the original `git diff --name-only origin/main...HEAD` form — only the diff source is changed.
 
-**Rationale:** The legacy canary probed only `/health`, which is middleware-bypassed and never imports `lib/supabase/client.ts`. A broken inlined `NEXT_PUBLIC_SUPABASE_*` value would pass canary and ship to prod (PR #3014 incident class). The canary contract — documented in `knowledge-base/engineering/ops/runbooks/canary-probe-set.md` — requires probes for every public route (`/login`) AND auth-gated entry (`/dashboard`) PLUS a body-content sentinel rejection.
+**Rationale:** The legacy canary probed only `/health`, which is middleware-bypassed and never imports `lib/supabase/client.ts`. A broken inlined `NEXT_PUBLIC_SUPABASE_*` value would pass canary and ship to prod (PR #3014 incident class). The canary contract — documented in `knowledge-base/engineering/operations/runbooks/canary-probe-set.md` — requires probes for every public route (`/login`) AND auth-gated entry (`/dashboard`) PLUS a body-content sentinel rejection.
 
 **Step 7.1: Assert /dashboard probe presence.**
 

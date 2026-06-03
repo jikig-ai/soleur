@@ -109,7 +109,7 @@ The self-hosted Inngest server uses an internal cron scheduler that plans upcomi
 
 - `knowledge-base/project/learnings/2026-05-18-vendor-cron-heartbeat-silent-fail-pattern.md` -- silent heartbeat failures are the most common cause of "missed check-in" when the cron actually ran
 - `knowledge-base/project/learnings/2026-04-21-cloud-task-silence-watchdog-pattern.md` -- silence = neither success nor failure issue = task did not run at all
-- `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` -- H1-H8 diagnosis checklist
+- `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` -- H1-H8 diagnosis checklist
 
 ## User-Brand Impact
 
@@ -160,7 +160,7 @@ discoverability_test:
 - [ ] **AC4:** If Hypothesis C confirmed (OOM): raise `MemoryMax`. **Deferred: Tracks #4533.**
 - [x] **AC5:** If Hypothesis D confirmed (env vars): verify `SENTRY_INGEST_DOMAIN`, `SENTRY_PROJECT_ID`, `SENTRY_PUBLIC_KEY` present in Doppler `prd` and accessible to the running web-platform process. **DONE: All 3 present in Doppler prd — Hypothesis D eliminated.**
 - [x] **AC6:** Add a preventive guard: after the massive TR9 Phase 2 migration, add a smoke test that verifies Inngest function count matches expected count after deploy. File path: `apps/web-platform/test/server/inngest/function-registry-count.test.ts`. **DONE: 5 assertions (count, import parity, array parity, slug→tf parity, tf→slug parity).**
-- [x] **AC7:** Update `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` with a new hypothesis H9 covering "Inngest server desync after deploy churn" if that is the confirmed root cause. **DONE: H9 added with H9a/H9b sub-modes.**
+- [x] **AC7:** Update `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` with a new hypothesis H9 covering "Inngest server desync after deploy churn" if that is the confirmed root cause. **DONE: H9 added with H9a/H9b sub-modes.**
 
 ### Post-merge (operator)
 
@@ -204,14 +204,14 @@ Verify and re-inject via Doppler: `doppler secrets get SENTRY_INGEST_DOMAIN SENT
    - Assert the `functions` array length in `route.ts` matches expected count (currently 40). Use a dynamic grep-based approach (count lines matching `^\s+[a-z]` in the functions array) rather than importing the module (which requires Inngest runtime env vars).
    - Assert every `cron-*.ts` file (excluding `_cron-*.ts` helpers) has a corresponding entry in route.ts. Precedent: `cron-no-byok-lease-sweep.test.ts` already walks cron files with `readdirSync`.
    - Assert every cron function's `SENTRY_MONITOR_SLUG` constant has a matching resource in `cron-monitors.tf`. This catches "cron registered but no Sentry dead-man's-switch" drift.
-2. Update `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` with the confirmed root cause as a new hypothesis entry.
+2. Update `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` with the confirmed root cause as a new hypothesis entry.
 3. Commit a compound learning documenting the timeline, diagnosis, and fix at `knowledge-base/project/learnings/bug-fixes/`.
 
 ## Files to Edit
 
 | File | Change |
 |------|--------|
-| `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` | Add H9 hypothesis for Inngest desync after deploy churn |
+| `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` | Add H9 hypothesis for Inngest desync after deploy churn |
 | `apps/web-platform/test/server/inngest/function-registry-count.test.ts` | NEW: Assertion that function count matches route.ts registration array |
 
 ## Files to Create

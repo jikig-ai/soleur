@@ -23,7 +23,7 @@
 - [ ] 1.14 Generate Doppler service token scoped to `prd_cla` (per learning #9 — config-pinned)
 - [ ] 1.15 **Operator action:** `gh secret set DOPPLER_TOKEN_CLA --body "$token"`
 - [x] 1.16 Add expense ledger entry to `knowledge-base/operations/expenses.md`
-- [x] 1.17 Add cross-link section to `knowledge-base/engineering/ops/runbooks/cloudflare-service-token-rotation.md`
+- [x] 1.17 Add cross-link section to `knowledge-base/engineering/operations/runbooks/cloudflare-service-token-rotation.md`
 - [x] 1.18 Extend `infra-validation.yml` to run `terraform plan` against `apps/cla-evidence/infra/` (zero-drift gate)
 
 ## Phase 2: Sidecar workflow + receipt comment (TDD, RED first)
@@ -147,7 +147,7 @@
   - [ ] 7.1.3 **Schema-version assertion (consumer #3):** `jq -e --arg v "1.0" '.schema_version == $v'` on every fetched record; exit 3 on mismatch
   - [ ] 7.1.4 Output JSON to stdout for legal-counsel piping
 - [x] 7.2 Write `__tests__/inspect.test.sh` (TS25 schema mismatch → exit 3)
-- [x] 7.3 Create `knowledge-base/engineering/ops/runbooks/cla-signature-evidence-retrieval.md`:
+- [x] 7.3 Create `knowledge-base/engineering/operations/runbooks/cla-signature-evidence-retrieval.md`:
   - [ ] 7.3.1 Trigger section (DMCA, IP dispute, Art. 17, revocation)
   - [ ] 7.3.2 Pre-step: CLO scope confirmation
   - [ ] 7.3.3 Read-token generation (Cloudflare dashboard, 24h TTL)

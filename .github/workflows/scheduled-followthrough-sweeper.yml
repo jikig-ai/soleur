@@ -4,7 +4,7 @@
 # only the secrets it declared. Closes with PASS comment on exit 0,
 # comments FAIL on exit 1, comments TRANSIENT on any other exit.
 #
-# Convention: knowledge-base/engineering/ops/runbooks/followthrough-convention.md
+# Convention: knowledge-base/engineering/operations/runbooks/followthrough-convention.md
 #
 # Cron `0 18 * * *` (daily 18:00 UTC) — aligns with the issue-body
 # convention to express `earliest` in UTC and gives one sweep per

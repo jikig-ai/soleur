@@ -516,7 +516,7 @@ Issue #3930 explicitly calls out: "Does NOT expose the jti (jti enumeration side
 
 **Mitigations:**
 - The script prints `[revoke-jti] target Supabase: <url>` BEFORE any write (Phase 2.2 code listing).
-- Operator runbook (added inline in `knowledge-base/engineering/ops/runbooks/revoke-jti.md` if needed at /work time) instructs `doppler run -p soleur -c prd_runtime -- bun run apps/web-platform/scripts/revoke-jti.ts --jti <uuid> --founder-id <uuid> --reason "<text>" --yes` (resolve the exact prd config name at /work time by reading `apps/web-platform/scripts/byok-revoke.ts` header comment for the canonical sibling form).
+- Operator runbook (added inline in `knowledge-base/engineering/operations/runbooks/revoke-jti.md` if needed at /work time) instructs `doppler run -p soleur -c prd_runtime -- bun run apps/web-platform/scripts/revoke-jti.ts --jti <uuid> --founder-id <uuid> --reason "<text>" --yes` (resolve the exact prd config name at /work time by reading `apps/web-platform/scripts/byok-revoke.ts` header comment for the canonical sibling form).
 - AC6 + AC11 verify the service-role-only invariant at unit and integration level.
 
 ### R7 — Tests mock the auth boundary, hiding RLS-deny shape

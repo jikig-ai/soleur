@@ -65,7 +65,7 @@ The same pattern applies to regex widenings: enumerate the configs (or verbs, or
 ```bash
 # For a doppler config widening:
 git grep -nhE '(--config|-c)[[:space:]]+[a-z_]+' \
-  knowledge-base/engineering/ops/runbooks/ \
+  knowledge-base/engineering/operations/runbooks/ \
   | awk '{for(i=1;i<=NF;i++) if ($i ~ /^(--config|-c)$/) print $(i+1)}' \
   | sort -u
 ```

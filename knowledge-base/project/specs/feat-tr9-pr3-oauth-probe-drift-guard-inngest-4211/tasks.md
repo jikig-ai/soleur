@@ -70,9 +70,9 @@ Brand-survival threshold: `single-user incident` · `requires_cpo_signoff: true`
 
 ## Phase 7: Runbook + cross-reference updates (AC13, AC14, AC15)
 
-- [x] 7.1 Update `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` per the 10 line-pair edit list (lines 5, 16, 33, 34, 41, 228, 237, 489-501).
+- [x] 7.1 Update `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md` per the 10 line-pair edit list (lines 5, 16, 33, 34, 41, 228, 237, 489-501).
 - [x] 7.2 Prepend a one-line substrate-disambiguation note to the troubleshooting section: "Before debugging the probe code path, check Better Stack `inngest-heartbeat` last_alive_at via the dashboard..."
-- [x] 7.3 Update `knowledge-base/engineering/ops/runbooks/github-app-drift.md` line 339 (oauth-probe cross-reference only). Drift-guard self-references untouched (TR9 PR-4).
+- [x] 7.3 Update `knowledge-base/engineering/operations/runbooks/github-app-drift.md` line 339 (oauth-probe cross-reference only). Drift-guard self-references untouched (TR9 PR-4).
 - [x] 7.4 Run AC15 sentinel grep: `grep -rEn 'scheduled-oauth-probe\.yml|gh workflow run scheduled-oauth-probe|gh run list.*scheduled-oauth-probe' knowledge-base/engineering/ apps/web-platform/ README.md CONTRIBUTING.md 2>/dev/null | grep -v archive/ | grep -v 'knowledge-base/project/\(plans\|specs\|learnings\)/' | wc -l` returns 0.
 
 ## Phase 8: Tests (AC17, AC18)

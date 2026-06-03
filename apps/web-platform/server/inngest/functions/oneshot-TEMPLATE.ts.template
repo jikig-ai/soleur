@@ -3,7 +3,7 @@
 // count regex do NOT pick it up. Copy to `oneshot-<name>.ts`, then fill the
 // `// FILL:` markers and complete the 3 integration points in the trailer.
 // Canonical precedent: oneshot-4650-monitor-close.ts. See the runbook
-// knowledge-base/engineering/ops/runbooks/inngest-oneshot-and-reminder-patterns.md
+// knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md
 //
 // ADR-046 = self-arm at boot / registered-functions-only.
 // ADR-033 invariants:

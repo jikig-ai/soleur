@@ -21,7 +21,7 @@ Two-layer monitoring with a rotation runbook:
 
 2. **GitHub Actions backup workflow** (`scheduled-cf-token-expiry-check.yml`) -- Queries Cloudflare API, creates GitHub issues at 30-day threshold. Defense-in-depth against missed email notifications.
 
-3. **Rotation runbook** (`knowledge-base/engineering/ops/runbooks/cloudflare-service-token-rotation.md`) -- Documents refresh (extend expiry), zero-downtime rotation (`client_secret_version`), and hard-cut replacement procedures.
+3. **Rotation runbook** (`knowledge-base/engineering/operations/runbooks/cloudflare-service-token-rotation.md`) -- Documents refresh (extend expiry), zero-downtime rotation (`client_secret_version`), and hard-cut replacement procedures.
 
 ## Key Insight
 
@@ -51,7 +51,7 @@ In GitHub Actions `run:` blocks, inline multi-line strings inherit YAML indentat
 - Issue: #974
 - Originating PR: #971 / #967
 - Related learnings: `2026-03-21-cloudflare-tunnel-server-provisioning.md`, `2026-03-20-cloudflare-terraform-v4-v5-resource-names.md`, `2026-03-21-doppler-tf-var-naming-alignment.md`
-- Rotation runbook: `knowledge-base/engineering/ops/runbooks/cloudflare-service-token-rotation.md`
+- Rotation runbook: `knowledge-base/engineering/operations/runbooks/cloudflare-service-token-rotation.md`
 
 ## Tags
 category: infrastructure

@@ -101,7 +101,7 @@ with URL Inspection sample-checks confirming the new HTTP behavior.
   public link exposure.
 - Check Cloudflare DNS settings for "Subdomain transparency-log scrubbing" or
   equivalent.
-- Document findings in `knowledge-base/engineering/ops/runbooks/` or as a
+- Document findings in `knowledge-base/engineering/operations/runbooks/` or as a
   follow-up issue.
 
 ### TR5: Verification suite

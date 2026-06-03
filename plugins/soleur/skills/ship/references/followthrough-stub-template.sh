@@ -12,7 +12,7 @@
 # Required secrets: declare via the directive `secrets=` clause AND add to
 # .github/workflows/scheduled-followthrough-sweeper.yml env: block.
 #
-# Convention: knowledge-base/engineering/ops/runbooks/followthrough-convention.md
+# Convention: knowledge-base/engineering/operations/runbooks/followthrough-convention.md
 
 set -uo pipefail
 

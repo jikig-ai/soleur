@@ -432,6 +432,13 @@ case "$COMPONENT" in
 
     # Prepare environment (shared between canary and production)
     sudo chown 1001:1001 /mnt/data/workspaces
+    # Isolate ephemeral cron-clone workspaces onto a dedicated `.cron` subdir so a
+    # leaked clone can never ENOSPC the usable space at the persistent UUID
+    # KB-workspace dirs that share this volume (#4882 — the 2026-06-02 KB freeze).
+    # mkdtemp fails if the parent is absent, so create + chown it to the 1001
+    # container user here. Idempotent (mkdir -p) — safe to re-run every deploy.
+    sudo mkdir -p /mnt/data/workspaces/.cron
+    sudo chown 1001:1001 /mnt/data/workspaces/.cron
     ENV_FILE=$(resolve_env_file)
     # Chain the env-file cleanup with the existing state-writing EXIT trap.
     # Replacing the trap entirely would lose the "unhandled" reason capture.
@@ -455,14 +462,14 @@ case "$COMPONENT" in
       --env-file "$ENV_FILE" \
       --add-host host.docker.internal:host-gateway \
       -e INNGEST_BASE_URL=http://host.docker.internal:8288 \
-      -e CRON_WORKSPACE_ROOT=/workspaces \
+      -e CRON_WORKSPACE_ROOT=/workspaces/.cron \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
       -p 0.0.0.0:3001:3000 \
       "$IMAGE:$TAG"
 
     # Layered canary probe set. Contract:
-    #   knowledge-base/engineering/ops/runbooks/canary-probe-set.md
+    #   knowledge-base/engineering/operations/runbooks/canary-probe-set.md
     readonly CANARY_HEALTH_HTTP="/tmp/canary-health-http"
     readonly CANARY_LOGIN_HTTP="/tmp/canary-login-http"
     readonly CANARY_LOGIN_BODY="/tmp/canary-login-body.html"
@@ -621,7 +628,7 @@ case "$COMPONENT" in
         --env-file "$ENV_FILE" \
         --add-host host.docker.internal:host-gateway \
         -e INNGEST_BASE_URL=http://host.docker.internal:8288 \
-        -e CRON_WORKSPACE_ROOT=/workspaces \
+        -e CRON_WORKSPACE_ROOT=/workspaces/.cron \
         -v /mnt/data/workspaces:/workspaces \
         -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
         -p 0.0.0.0:80:3000 \

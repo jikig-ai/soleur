@@ -34,8 +34,8 @@ related_iac:
   - apps/web-platform/infra/sentry/cron-monitors.tf
   - .github/workflows/apply-sentry-infra.yml
 related_runbooks:
-  - knowledge-base/engineering/ops/runbooks/github-app-drift.md
-  - knowledge-base/engineering/ops/runbooks/github-app-provisioning.md
+  - knowledge-base/engineering/operations/runbooks/github-app-drift.md
+  - knowledge-base/engineering/operations/runbooks/github-app-provisioning.md
 related_test_files:
   - apps/web-platform/test/github-app-drift-guard-contract.test.ts
   - apps/web-platform/test/github-app-manifest-drift-guard.test.ts
@@ -211,16 +211,16 @@ Carry forward H3 (CONFIRMED) + H4 (substrate exists) from PR-3 plan. PR-3's H5 (
 
 **Operator-surface doc sweep:**
 
-- [ ] AC19 — `knowledge-base/engineering/ops/runbooks/github-app-drift.md` updated at every operator-facing `gh workflow run` / `gh run list` / `scheduled-github-app-drift-guard.yml` reference (verified at plan-time: lines 6, 16, 122, 124, 270, 271). Replacement contract:
+- [ ] AC19 — `knowledge-base/engineering/operations/runbooks/github-app-drift.md` updated at every operator-facing `gh workflow run` / `gh run list` / `scheduled-github-app-drift-guard.yml` reference (verified at plan-time: lines 6, 16, 122, 124, 270, 271). Replacement contract:
     - `gh workflow run scheduled-github-app-drift-guard.yml` → `inngest send cron/github-app-drift-guard.manual-trigger --data '{}'` (the manual-trigger event name from AC1).
     - `gh run list --workflow=scheduled-github-app-drift-guard.yml --limit 1 --json conclusion` → the Sentry checkins API query (see Observability section's discoverability_test).
     - Path references to `.github/workflows/scheduled-github-app-drift-guard.yml` → `apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts`.
 
     Additionally, prepend the same Better Stack substrate-disambiguation note PR-3 added to oauth-probe-failure.md: "Before debugging the drift-guard code path, check Better Stack `inngest-heartbeat` last_alive_at — if >2 min ago, this issue is likely a substrate-down false-positive (cross-check sibling `scheduled-daily-triage` / `scheduled-follow-through` / `scheduled-oauth-probe` monitors)."
 
-    Sentinel: `grep -cE 'gh workflow run scheduled-github-app-drift-guard|gh run list.*scheduled-github-app-drift-guard|scheduled-github-app-drift-guard\.yml' knowledge-base/engineering/ops/runbooks/github-app-drift.md` returns 0.
+    Sentinel: `grep -cE 'gh workflow run scheduled-github-app-drift-guard|gh run list.*scheduled-github-app-drift-guard|scheduled-github-app-drift-guard\.yml' knowledge-base/engineering/operations/runbooks/github-app-drift.md` returns 0.
 
-- [ ] AC20 — `knowledge-base/engineering/ops/runbooks/github-app-provisioning.md` line 27, 94, 100, 188, 240 (verified at plan-time) cross-references to `scheduled-github-app-drift-guard.yml` updated to the new TS path. Sentinel: `grep -nE 'scheduled-github-app-drift-guard\.yml|gh workflow run scheduled-github-app-drift-guard' knowledge-base/engineering/ops/runbooks/github-app-provisioning.md` returns 0.
+- [ ] AC20 — `knowledge-base/engineering/operations/runbooks/github-app-provisioning.md` line 27, 94, 100, 188, 240 (verified at plan-time) cross-references to `scheduled-github-app-drift-guard.yml` updated to the new TS path. Sentinel: `grep -nE 'scheduled-github-app-drift-guard\.yml|gh workflow run scheduled-github-app-drift-guard' knowledge-base/engineering/operations/runbooks/github-app-provisioning.md` returns 0.
 - [ ] AC21 — `apps/web-platform/infra/github-app.tf:28` cross-reference (`scheduled-github-app-drift-guard.yml: App-declared-vs-manifest`) updated to the new TS path. Sentinel: `grep -nE 'scheduled-github-app-drift-guard\.yml' apps/web-platform/infra/github-app.tf` returns 0.
 - [ ] AC22 — Full operator-surface sweep: `grep -rEn 'scheduled-github-app-drift-guard\.yml|gh workflow run scheduled-github-app-drift-guard|gh run list.*scheduled-github-app-drift-guard' knowledge-base/engineering/ apps/web-platform/ .github/ bin/ README.md CONTRIBUTING.md 2>/dev/null | grep -v archive/ | grep -v 'knowledge-base/project/\(plans\|specs\|learnings\)/' | wc -l` returns 0. Scope exclusion preserves historical project artifacts per PR-3 AC15 precedent. Note `bin/snapshot-github-app.sh:5,52` cross-refs the workflow file in COMMENTS — those are updated to point at the new TS file. The contract test file `apps/web-platform/test/github-app-drift-guard-contract.test.ts` IS expected to remain referencing the deleted YAML file because the test is being **DELETED** in AC25.
 
@@ -282,8 +282,8 @@ Run the six self-check questions from `2026-05-19-inngest-substrate-five-bug-cas
 - `.github/workflows/scheduled-ruleset-bypass-audit.yml` — lines 30-31 + 105-106: cross-reference prose updated to the new TS path (AC15).
 - `apps/web-platform/infra/github-app.tf` — line 28 cross-reference (AC21).
 - `bin/snapshot-github-app.sh` — lines 5, 52 comment references updated to the new TS file (AC22 noted exclusion path).
-- `knowledge-base/engineering/ops/runbooks/github-app-drift.md` — AC19: lines 6, 16, 122, 124, 270, 271 + Better Stack disambiguation note prepended to troubleshooting section.
-- `knowledge-base/engineering/ops/runbooks/github-app-provisioning.md` — AC20: lines 27, 94, 100, 188, 240.
+- `knowledge-base/engineering/operations/runbooks/github-app-drift.md` — AC19: lines 6, 16, 122, 124, 270, 271 + Better Stack disambiguation note prepended to troubleshooting section.
+- `knowledge-base/engineering/operations/runbooks/github-app-provisioning.md` — AC20: lines 27, 94, 100, 188, 240.
 - `apps/web-platform/test/github-app-manifest-drift-guard.test.ts` — header-comment only (AC25).
 
 ## Files to Create

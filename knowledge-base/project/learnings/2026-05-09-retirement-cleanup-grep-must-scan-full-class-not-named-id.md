@@ -17,7 +17,7 @@ PR #3491 swept the retired AGENTS.md rule ID `cq-gh-issue-label-verify-name` fro
 ```bash
 grep -rEn "cq-gh-issue-label-verify-name" --include="*.md" plugins/ knowledge-base/engineering/   # zero hits
 grep -E "(cq-ci-...|cq-workflow-...|hr-in-github-...|hr-github-...|cq-gh-issue-create-milestone-takes-title)" \
-  knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md   # zero hits
+  knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md   # zero hits
 ```
 
 Both greps passed locally. PR was about to ship. Multi-agent review (`pattern-recognition-specialist` and `code-quality-analyst` independently) then surfaced **5 additional retired/fabricated active citations** that the AC's named-ID greps missed:

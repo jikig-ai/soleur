@@ -557,7 +557,7 @@ async function notifyOpsEmail(result: ProbeResult, runUrl: string): Promise<void
     return;
   }
   const runbookUrl =
-    "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md";
+    "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md";
   const html = [
     `<p><strong>Failure mode:</strong> ${result.failureMode}</p>`,
     `<p><strong>Detail:</strong> ${result.failureDetail}</p>`,
@@ -615,7 +615,7 @@ export async function cronOauthProbeHandler({
   // Inngest dashboard as the substrate lookup. Issue body stays linkable
   // to the operator's known GHA history surface.
   const runbookUrl =
-    "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md";
+    "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md";
 
   // Step 2: issue handling — file/comment on failure, auto-close on
   // recovery. Wrapped in step.run for replay safety AND to isolate the

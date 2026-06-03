@@ -96,6 +96,41 @@ describe("WorkspaceContextBand — persistent workspace identity (AC1/AC4b)", ()
     );
   });
 
+  it("AC3/AC7: the repo badge is FOLDED INTO the pill (inside the switcher button), not a standalone row", async () => {
+    render(<WorkspaceContextBand pathname="/dashboard/settings/members" />);
+    const badge = await screen.findByTestId("live-repo-badge");
+    // exactly one element carries the repo string — no duplicate standalone row
+    expect(screen.getAllByTestId("live-repo-badge")).toHaveLength(1);
+    // and it lives inside the workspace pill (the switcher button)
+    const pill = screen.getByRole("button", { name: /switch workspace/i });
+    expect(pill).toContainElement(badge);
+  });
+
+  it("AC1: the workspace pill renders BEFORE the 'Back to menu' chevron in the DOM", async () => {
+    render(<WorkspaceContextBand pathname="/dashboard/settings/members" />);
+    const pill = await screen.findByRole("button", {
+      name: /switch workspace/i,
+    });
+    const back = screen.getByTestId("nav-back-chevron");
+    // pill precedes back-chevron → DOCUMENT_POSITION_FOLLOWING is set on `back`
+    expect(
+      pill.compareDocumentPosition(back) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("AC2: the leading pill carries pt-3; 'Back to menu' follows tighter with pt-2", async () => {
+    render(<WorkspaceContextBand pathname="/dashboard/settings/members" />);
+    // wait for the band to hydrate the pill
+    await screen.findByRole("button", { name: /switch workspace/i });
+    const band = screen.getByTestId("workspace-context-band");
+    // first child is the pill wrapper with the band's top breathing room
+    const pillWrapper = band.firstElementChild as HTMLElement;
+    expect(pillWrapper.className).toContain("pt-3");
+    const back = screen.getByTestId("nav-back-chevron");
+    expect(back.className).toContain("pt-2");
+  });
+
   it("renders the back chevron SYNCHRONOUSLY on a drilled route (not async-gated)", () => {
     render(<WorkspaceContextBand pathname="/dashboard/kb/engineering/x.md" />);
     // present in the FIRST render — no findBy/await

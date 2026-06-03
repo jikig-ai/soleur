@@ -282,7 +282,7 @@ Prints top-3 cost table; emits `te-*` `warn` to `.claude/.rule-incidents.jsonl` 
 
 ### Cross-Session Promotion Loop (Layer 2)
 
-A weekly cron (`.github/workflows/scheduled-compound-promote.yml`) consumes accumulated learnings and proposes skill or `AGENTS.core.md` edits via draft PR when N=5 learnings cluster around the same root cause. Default OFF; opt in via `knowledge-base/project/promotion-config.yml`. See `knowledge-base/engineering/ops/runbooks/compound-promote-runbook.md`. Issue: #2720.
+A weekly cron (`.github/workflows/scheduled-compound-promote.yml`) consumes accumulated learnings and proposes skill or `AGENTS.core.md` edits via draft PR when N=5 learnings cluster around the same root cause. Default OFF; opt in via `knowledge-base/project/promotion-config.yml`. See `knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md`. Issue: #2720.
 
 ### Save Learning to Knowledge Base
 

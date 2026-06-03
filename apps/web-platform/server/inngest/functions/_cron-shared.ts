@@ -22,6 +22,15 @@ export function resolveCronWorkspaceRoot(): string {
   return process.env.CRON_WORKSPACE_ROOT?.trim() || tmpdir();
 }
 
+// Free MB available to an UNPRIVILEGED caller — `bavail`, not `bfree`, matches
+// what the 1001 container user actually gets. Single source of truth for the
+// disk-free arithmetic shared by the pre-clone guard below and cron-workspace-gc;
+// a divergence here (e.g. someone "fixing" one copy to `bfree`) would silently
+// skew disk accounting in one cron but not the other.
+export function freeMb(stats: { bavail: number; bsize: number }): number {
+  return Math.floor((stats.bavail * stats.bsize) / (1024 * 1024));
+}
+
 // Soft floor for the pre-clone free-space guard: the soleur tree is ~100 MB and
 // grows every content PR; warn under 256 MB free so the operator sees the
 // squeeze BEFORE ENOSPC kills the clone. Tunable via CRON_WORKSPACE_MIN_FREE_MB
@@ -45,20 +54,20 @@ export async function warnIfCronWorkspaceLowOnDisk(
 ): Promise<void> {
   try {
     const stats = await statfs(ephemeralRoot);
-    const freeMb = Math.floor((stats.bavail * stats.bsize) / (1024 * 1024));
+    const freeMbValue = freeMb(stats);
     const floorMb =
       Number(process.env.CRON_WORKSPACE_MIN_FREE_MB) ||
       DEFAULT_CRON_WORKSPACE_MIN_FREE_MB;
-    if (freeMb < floorMb) {
+    if (freeMbValue < floorMb) {
       warnSilentFallback(
         new Error(
-          `cron workspace root low on disk: ${freeMb} MB free < ${floorMb} MB floor at ${ephemeralRoot} — git clone may ENOSPC`,
+          `cron workspace root low on disk: ${freeMbValue} MB free < ${floorMb} MB floor at ${ephemeralRoot} — git clone may ENOSPC`,
         ),
         {
           feature: cronName,
           op: "cron-workspace-low-disk",
           message: "Cron ephemeral workspace low on free disk before clone",
-          extra: { fn: cronName, ephemeralRoot, freeMb, floorMb },
+          extra: { fn: cronName, ephemeralRoot, freeMb: freeMbValue, floorMb },
         },
       );
     }

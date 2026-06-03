@@ -64,7 +64,7 @@ The skill exits non-zero on failure so cron/one-shot invocations do not silently
 
 ## Related
 
-- Runbook: `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`
+- Runbook: `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md`
 - Plan: `knowledge-base/project/plans/2026-04-19-ops-admin-ip-drift-prevention-plan.md`
 - Institutional learning: `knowledge-base/project/learnings/2026-03-19-ci-ssh-deploy-firewall-hidden-dependency.md`
 - AGENTS.md rules: `hr-ssh-diagnosis-verify-firewall`, `hr-all-infrastructure-provisioning-servers`, `hr-menu-option-ack-not-prod-write-auth`.

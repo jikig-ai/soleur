@@ -86,7 +86,7 @@
 - [ ] 3.10 Edit `knowledge-base/operations/expenses.md`
   - Remove CX22 line
   - Update `last_updated` frontmatter to 2026-04-06
-- [ ] 3.11 Edit `knowledge-base/engineering/ops/runbooks/disk-monitoring.md`
+- [ ] 3.11 Edit `knowledge-base/engineering/operations/runbooks/disk-monitoring.md`
   - Remove "(telegram-bridge CX22 deferred)" from servers line
 - [ ] 3.12 Edit `knowledge-base/product/roadmap.md`
   - Update line 113 to note removal/archival, not just deferral

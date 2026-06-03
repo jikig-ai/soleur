@@ -164,7 +164,7 @@ that touch `.github/workflows/scheduled-campaign-calendar.yml`.
   `match() + substr()` form. The replacement covers BOTH the `title` and
   `publish_date` fields for forward-correctness (see Sharp Edges below for
   the "audit every parser, not just the broken one" reasoning).
-- `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` —
+- `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` —
   append a §H8 entry documenting the awk-`-F': '` failure mode for
   multi-colon YAML values, with the verified local repro and the
   `match() + substr()` template that replaces it. Forward-looking pointer
@@ -427,7 +427,7 @@ This is a single-edit fix; no phasing.
 
 1. Edit `.github/workflows/scheduled-campaign-calendar.yml` STEP 2 step (a)
    to use the new parser for both `title` and `publish_date`.
-2. Append `§H8` to `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md`.
+2. Append `§H8` to `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md`.
 3. Write the learning file.
 4. Open PR with `Closes #2987` in the body and a "Post-merge actions"
    subsection enumerating the three duplicate-issue close commands.

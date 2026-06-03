@@ -20,7 +20,7 @@ then deferral issues).
 
 ## 2. Runbook and learning entry
 
-2.1. Create `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`
+2.1. Create `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md`
      matching the `ssh-fail2ban-unban.md` template (YAML frontmatter, Symptom,
      Diagnostic Decision Tree, Recovery Automated/Manual, Prevention).
 2.2. Cross-reference `ssh-fail2ban-unban.md` from the new runbook AND add a

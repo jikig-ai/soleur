@@ -122,9 +122,9 @@ wrong fix.
 
 ## Operator-facing artifacts
 
-- `knowledge-base/engineering/ops/runbooks/github-app-callback-audit.md`
+- `knowledge-base/engineering/operations/runbooks/github-app-callback-audit.md`
   — step-by-step audit procedure and rollback.
-- `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md`
+- `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md`
   — failure-mode-keyed triage for the new probe outputs.
 - `apps/web-platform/test/oauth-probe-contract.test.ts` — load-bearing
   sentinel constants and required-paths assertions; refresh in lockstep

@@ -143,4 +143,4 @@ LLM-supplied hash, and the cluster is refused on mismatch.
 - Issue: #2720 (parent #2718; supersedes #421)
 - Driver: `scripts/compound-promote.sh`
 - Workflow: `.github/workflows/scheduled-compound-promote.yml`
-- Operator runbook: `knowledge-base/engineering/ops/runbooks/compound-promote-runbook.md`
+- Operator runbook: `knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md`

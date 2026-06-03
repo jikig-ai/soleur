@@ -42,7 +42,7 @@ Key design choices:
 - **Per-task thresholds with slack.** Threshold = observed-max-cadence-gap + one-cycle-slack. content-generator's threshold is deliberately tight (4 days) because the prior silence was 21 days; a conservative threshold defeats the point.
 - **Warnings, not errors, on ambiguous states.** `::warning::no audit issues ever seen for <label> — skipping` for newly-added tasks. `::warning::non-JSON response` for transient API blips. Neither crashes the step.
 
-Full implementation: `.github/workflows/scheduled-cloud-task-heartbeat.yml`. Operator runbook: `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md`.
+Full implementation: `.github/workflows/scheduled-cloud-task-heartbeat.yml`. Operator runbook: `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md`.
 
 ## Key Insight
 
@@ -92,5 +92,5 @@ fi
 - Foundational learning: `knowledge-base/project/learnings/2026-04-03-content-cadence-gap-cloud-task-migration.md`
 - Sibling strict-mode learnings: `knowledge-base/project/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md`, `knowledge-base/project/learnings/2026-03-13-bash-arithmetic-and-test-sourcing-patterns.md`
 - Peer watchdog pattern: `.github/workflows/scheduled-cf-token-expiry-check.yml`
-- Runbook: `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md`
+- Runbook: `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md`
 - AGENTS.md: `cq-ci-steps-polling-json-endpoints-under`, `cq-workflow-pattern-duplication-bug-propagation`

@@ -656,7 +656,7 @@ async function notifyOpsEmail(args: {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) return; // silent skip mirrors GHA composite action gate
   const runbookUrl =
-    "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/ops/runbooks/github-app-drift.md";
+    "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/github-app-drift.md";
   const subjectMode = args.leakDetected ? "leak-suspected" : args.result.failureMode;
   const subject = `[Soleur Ops] GitHub App drift-guard: ${subjectMode}`;
   const failureMode = args.leakDetected
@@ -755,7 +755,7 @@ export async function cronGithubAppDriftGuardHandler({
   const runUrl =
     "https://de.sentry.io/organizations/jikigai-eu/crons/scheduled-github-app-drift-guard/";
   const runbookUrl =
-    "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/ops/runbooks/github-app-drift.md";
+    "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/github-app-drift.md";
 
   // Step 2: issue-handling — failure / leak / recovery paths.
   //

@@ -123,7 +123,7 @@ Closes: `#2358`, `#2359`, `#2360`, `#2361`. Ref: `#2362`.
 - [ ] **4.5** After merge, apply migration `028_*.sql` to prod Supabase and
   verify the index: `select indexname from pg_indexes where tablename='conversations'
   and indexname='uniq_conversations_user_id_session_id'`. Runbook:
-  `knowledge-base/engineering/ops/runbooks/supabase-migrations.md`.
+  `knowledge-base/engineering/operations/runbooks/supabase-migrations.md`.
 - [ ] **4.6** Trigger a manual `gh workflow run scheduled-ux-audit.yml` dry-run to
   verify the upsert path + concurrency guard in situ.
 
