@@ -11,6 +11,62 @@ status: planned
 
 # 🎨 Redesign sidebar workspace context band — reorder + fold repo into pill
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-03
+**Sections enhanced:** 3 (Acceptance Criteria, Implementation Phases, Sharp Edges) + Research Insights added
+**Gates run:** deepen-plan Phase 4.6 (User-Brand Impact — PASS), 4.7 (Observability — PASS),
+4.8 (PAT-shaped — PASS, no matches), 4.9 (UI-wireframe — initially HALT, resolved by producing
++ committing the `.pen`).
+**Realism passes:** Verify-the-negative + post-edit self-audit (run directly — subagent Task
+spawning unavailable in the one-shot pipeline context).
+
+### Key Improvements
+
+1. **Wireframe produced + committed** at
+   `knowledge-base/product/design/navigation/sidebar-band-reorder-fold.pen` (4 states: multi-org
+   expanded, solo expanded, dropdown-open with role-per-row, collapsed icon-only). Verified by
+   screenshot — closed pill shows name + repo subtitle with no role; role lives per dropdown row.
+2. **Pinned the exact inverting test assertion** (`org-switcher.test.tsx:50`
+   `trigger.textContent).toContain("Owner")`) — AC5 flips this to `.not.toContain`. This was a
+   general "update tests" item before; now it is a precise line edit.
+3. **`live-repo-badge-empty` testid retirement** is now explicit (no test references it; the
+   no-repo state becomes "pill renders no subtitle").
+
+### New Considerations Discovered
+
+- An existing test (`org-switcher.test.tsx:50`) ASSERTS the role is on the closed face — the
+  change is a deliberate behavior inversion, so the test edit is load-bearing, not cosmetic.
+- The single-mount guard (`nav-single-mount.test.ts`) scans component-import `CASES` only
+  (confirmed lines 27/39) — the new `useActiveRepo` hook is structurally outside its scope.
+- No mobile-specific test pins the old repo-row position (grep returned zero) — the
+  reorder/fold inheriting into the mobile variant is safe.
+
+## Research Insights
+
+**Verify-the-negative pass (Phase 4.45) — results:**
+
+| Plan claim (negative) | Grep | Result |
+| --- | --- | --- |
+| "exactly ONE element carries `data-testid='live-repo-badge'`" | `git grep -n 'data-testid="live-repo-badge"' components/` | CONFIRMS — single emit site (`live-repo-badge.tsx:77`) today; after the fold it relocates to the pill (still one site). |
+| "the `useActiveRepo` hook is NOT covered by the single-mount guard" | `nav-single-mount.test.ts` `CASES` (lines 27/39) | CONFIRMS — guard regexes match `from "@/components/dashboard/..."` component imports only; a `hooks/` import is not in scope. |
+| "no mobile test pins the old repo-row position" | `git grep -ln 'data-variant="mobile"' test/` | CONFIRMS — zero matches; mobile inherits the redesign safely. |
+| "role is removed from the closed face" | `git grep -n 'toContain("Owner")' test/org-switcher.test.tsx` | CONTRADICTS the post-state — `:50` currently asserts role IS on the face. Resolution: AC5 inverts this assertion (see AC5 note). |
+
+**Post-edit self-audit (Phase 4.45) — dropped/relocated symbols:**
+
+- `live-repo-badge-empty` (testid) — DROPPED from `LiveRepoBadge` when its repo-name branch is
+  deleted. Grep: referenced only by the component itself, never by a test — safe to retire. The
+  no-repo UX becomes "pill shows no subtitle" (Open Question 1).
+- `roleLabel(current.role)` on the face — RELOCATED conceptually: removed from both faces; the
+  `roleLabel` function stays (still used by the dropdown rows).
+
+**Precedent-diff (Phase 4.4):** The `useActiveRepo` extraction follows the existing
+hook-extraction convention in `apps/web-platform/hooks/` (e.g., `segment-to-drill-level.ts` is
+already a band-consumed hook imported by `workspace-context-band.tsx`). No novel pattern; the
+poll-on-mount + window-focus shape is lifted verbatim from `live-repo-badge.tsx:30-48`. No
+SQL/lock/atomic-write precedent applies (pure client React).
+
 Reclaim a wasted row in the dashboard sidebar's persistent workspace context band and
 fix the vertical ordering of its two top elements. Two coupled visual/layout changes
 to the expanded ("rail", non-collapsed) variant of the band.
@@ -99,7 +155,10 @@ an existing tenant-scoped string; no new data movement, write, or persistence.)
       the workspace name AND the repo subtitle (same `live-repo-badge` testid), NOT the role.
 - [ ] **AC5 (role off the face):** Neither closed-pill branch renders `Owner` / `Member`
       text on the face. Assert the closed multi-org button and the solo chip do NOT contain
-      `Owner`/`Member` (before opening the dropdown).
+      `Owner`/`Member` (before opening the dropdown). **Pinned edit:** invert the existing
+      `org-switcher.test.tsx:50` assertion `expect(trigger.textContent).toContain("Owner")`
+      → `.not.toContain("Owner")` (this test currently asserts the OLD behavior — role on the
+      face — so this is a deliberate inversion, not an addition).
 - [ ] **AC6 (role in dropdown):** Opening the multi-org dropdown still shows
       `{role} · {N} members` per membership row (existing behavior preserved — assert it did
       not regress).
@@ -284,12 +343,16 @@ open scope-out references these dashboard component paths.
 This modifies existing user-facing components (no NEW page/route file), but the mechanical
 UI-surface term match forces BLOCKING.
 **Decision:** auto-accepted (pipeline) for the CPO/spec-flow advisory; `ux-design-lead`
-wireframe is a non-skippable producer.
-**Pencil available:** to be resolved by `deepen-plan` (it runs the Product/UX pipeline with
-agent access). The `.pen` MUST be produced at `knowledge-base/product/design/navigation/sidebar-band-reorder-fold.pen`
-and referenced in the FRs before `/work` — `wg-ui-feature-requires-pen-wireframe`. The
-wireframe shows: closed pill (name + repo subtitle, no role) sitting above "Back to menu";
-open dropdown (role still per-row); collapsed icon-only column unchanged.
+wireframe is a non-skippable producer — PRODUCED.
+**Pencil available:** yes. The `.pen` is committed at
+`knowledge-base/product/design/navigation/sidebar-band-reorder-fold.pen` (non-empty, on disk,
+git-tracked) and referenced here in the FRs — satisfies `wg-ui-feature-requires-pen-wireframe`
+and the deepen-plan Phase 4.9 verifier. It shows 4 states, screenshot-verified: (1) multi-org
+expanded — closed pill (name + `jikig-ai/soleur` repo subtitle, no role) sitting ABOVE "Back to
+menu" then "Settings"; (2) solo expanded — non-interactive chip (name + repo subtitle, no `▾`);
+(3) dropdown open — role per membership row (`Owner · 2 members`); (4) collapsed `md:w-14`
+icon-only column unchanged (back arrow + avatar + repo dot + section glyph).
+Screenshots: `knowledge-base/product/design/navigation/screenshots/`.
 **Skipped specialists:** none.
 
 #### Findings

@@ -26,12 +26,15 @@ Lane: cross-domain (spec lacks `lane:` — defaulted, TR2 fail-closed)
 - [ ] 2.7 `workspace-context-band.tsx`: remove the standalone `LiveRepoBadge` repo row;
       keep `LiveRepoBadge` mounted for the interstitial only.
 - [ ] 2.8 `live-repo-badge.tsx`: consume `useActiveRepo()`; delete the repo-name render
-      branch; keep the `fellBackToSolo` interstitial + empty guard.
+      branch (this retires the `live-repo-badge-empty` testid — no test references it); keep
+      the `fellBackToSolo` interstitial + empty guard.
 
 ## 3. Tests
 
 - [ ] 3.1 `org-switcher.test.tsx`: add `repoName` to fixtures; assert repo subtitle on
       solo + multi-org faces; assert role NOT on face but IS in dropdown (AC3/4/5/6).
+      **Pinned:** invert `:50` `expect(trigger.textContent).toContain("Owner")` →
+      `.not.toContain("Owner")` (deliberate behavior inversion — old test asserted role-on-face).
 - [ ] 3.2 `workspace-context-band.test.tsx`: DOM-order pill-before-back-chevron (AC1);
       spacing (AC2); relocate `live-repo-badge` assertion into pill; standalone-row-gone (AC7).
 - [ ] 3.3 `org-switcher-container.test.tsx`: stub `/api/workspace/active-repo`; assert
