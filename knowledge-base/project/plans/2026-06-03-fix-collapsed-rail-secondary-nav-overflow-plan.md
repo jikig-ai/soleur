@@ -15,6 +15,23 @@ related_design: knowledge-base/product/design/navigation/single-nav-rail.pen
 
 # fix: collapsed single-rail secondary-nav overflow (KB / Settings / Chat) 🐛
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-03
+**Sections enhanced:** Design, Files to Edit, Sharp Edges, Acceptance Criteria (testid plumbing)
+**Mandatory gates:** 4.6 User-Brand Impact ✅ · 4.7 Observability ✅ (client-only skip documented) · 4.8 PAT-shaped ✅ none · 4.9 UI-wireframe ✅ committed `.pen` referenced
+
+### Key Improvements (grounded against installed code)
+
+1. **Collapse-threading mechanism made concrete.** `RailSlotProvider value` is typed `HTMLElement | null` (single slot node, `rail-slot.tsx`); the harness sets `value={slot}` and `layout.tsx:205` sets `value={railSlotEl}`. Threading `collapsed` therefore uses a **sibling `RailCollapsedContext`**, NOT widening the existing value (which would break both call sites). This is the load-bearing refinement to Approach A.
+2. **Stable wrapper testids required.** `ConversationsRailPortal` already wraps the rail in `data-testid="conversations-rail"` that "resolves to exactly one node regardless of collapsed/expanded branch (AC4d)" — the codebase already anticipated the collapsed branch living *inside* `ConversationsRail`. Settings + KB shells need an equivalent **stable wrapper testid** so the content-present/absent assertion targets one node.
+3. **Render-conditional precedent confirmed.** `theme-toggle.tsx:67` (`if (collapsed) return <button…/>`) and `WorkspaceContextBand` (`if (variant === "rail" && collapsed) return …`, `workspace-context-band.tsx:68`) are the in-repo precedents for the `if (collapsed)` render-conditional shape. Reuse it.
+
+### New Considerations Discovered
+
+- The `RailSlotHarness` (`test/helpers/rail-slot-harness.tsx`) provides ONLY the slot node — it MUST be extended to also provide a `collapsed` value for the jsdom collapsed-state tests (folded into Files to Edit / Phase 0).
+- `ConversationsRail` is self-contained (own `useConversations` fetch, no context crosses its portal) — its collapsed branch is the simplest (render-conditional inside the component, wrapper testid already stable). KB/Settings need the wrapper testid added.
+
 ## Overview
 
 When the single nav rail (shipped by PR #4810, the drill-in replacement of the
@@ -122,14 +139,15 @@ bug report's screenshots are stale):
 ### Pre-merge (PR)
 
 - [ ] **AC1 — collapse reaches the portal.** `collapsed` flows from
-  `(dashboard)/layout.tsx` to the portaled secondary-nav content. Verification:
-  `grep -nE "collapsed" apps/web-platform/components/dashboard/rail-slot.tsx`
-  returns ≥1 hit (the context now carries collapse), and each of
-  `settings-shell.tsx`, `kb-sidebar-shell.tsx`, `conversations-rail.tsx` reads it
-  (`grep -nE "useRailCollapsed|collapsed" <file>` ≥1 each) **or** the slot itself
-  is render-gated (AC2) — whichever the chosen approach (§Design) uses. The
-  invariant is "the portaled content's visibility is a function of `collapsed`",
-  not the specific plumbing.
+  `(dashboard)/layout.tsx` to the portaled secondary-nav content via
+  `RailCollapsedContext` (Approach A). Verification:
+  `grep -nE "RailCollapsedContext|useRailCollapsed" apps/web-platform/components/dashboard/rail-slot.tsx`
+  returns ≥1 hit, and each of `settings-shell.tsx`, `kb-sidebar-shell.tsx`,
+  `conversations-rail.tsx` calls `useRailCollapsed()`
+  (`grep -nE "useRailCollapsed" <file>` ≥1 each). If Approach B is chosen instead,
+  the invariant is "the portaled content's visibility is a function of `collapsed`"
+  — verify the layout's render-gate instead. The plumbing is approach-specific;
+  the invariant is not.
 - [ ] **AC2 — secondary nav is hidden (DOM-removed) when collapsed.** In the
   collapsed+drilled state the populated secondary nav is **not in the DOM** (a
   render-conditional, not `display:none` — so the jsdom half of the gate can
@@ -173,25 +191,29 @@ bug report's screenshots are stale):
 
 ## Files to Edit
 
-- `apps/web-platform/components/dashboard/rail-slot.tsx` — thread `collapsed`
-  into the rail-slot context (add a `collapsed` field to `RailSlotContext` value,
-  or a sibling `RailCollapsedContext`), exposed via a `useRailCollapsed()` hook so
-  portaled content reads it through the React tree. **Decision gate (§Design):**
-  if the chosen approach is "render-gate the slot in the layout" instead, this
-  file may be untouched and `(dashboard)/layout.tsx` owns the gate. Pick the
-  approach in §Design and edit accordingly.
+- `apps/web-platform/components/dashboard/rail-slot.tsx` — add a **sibling**
+  `RailCollapsedContext = createContext<boolean>(false)` + `RailCollapsedProvider`
+  + `useRailCollapsed()` hook (do NOT widen the existing `RailSlotContext` value,
+  which is `HTMLElement | null` and set positionally at two call sites). Portaled
+  content reads collapse through the React tree via `useRailCollapsed()`.
+  **Decision gate (§Design):** if Approach B (render-gate the slot in the layout)
+  is chosen instead, this file is untouched. Default A.
 - `apps/web-platform/app/(dashboard)/layout.tsx` — provide `collapsed` to the
   rail-slot context (it already holds the value at line 111), OR render-gate the
   `rail-secondary-slot` swap so the portaled nav is hidden when collapsed
   (without unmounting the slot node mid-portal — see §Sharp Edges on portal
   target lifetime).
-- `apps/web-platform/components/settings/settings-shell.tsx` — when collapsed,
-  do not render the `<nav>` content (render-conditional). Keep the content-area
-  `children` untouched (that's the page body, not the rail).
-- `apps/web-platform/components/kb/kb-sidebar-shell.tsx` — when collapsed, hide
-  the `SearchOverlay` + `FileTree`/`RailEmptyState` block (render-conditional).
+- `apps/web-platform/components/settings/settings-shell.tsx` — wrap the portaled
+  `<nav>` in a stable `data-testid="settings-rail-nav"` div; when collapsed
+  (`useRailCollapsed()`), do not render the `<ul>` of tabs (render-conditional).
+  Keep the content-area `children` untouched (page body, not the rail).
+- `apps/web-platform/components/kb/kb-sidebar-shell.tsx` — wrap in a stable
+  `data-testid="kb-rail-tree"` div; when collapsed, do not render the
+  `SearchOverlay` + `FileTree`/`RailEmptyState` block (render-conditional).
 - `apps/web-platform/components/chat/conversations-rail.tsx` — when collapsed,
-  hide the conversation rows (render-conditional).
+  do not render the conversation rows (render-conditional). The stable
+  `data-testid="conversations-rail"` wrapper already exists in
+  `conversations-rail-portal.tsx` (no change needed there).
 - `apps/web-platform/e2e/nav-states-shell.e2e.ts` — (a) change the KB mock to
   return a **populated** tree (≥1 nested dir + ≥1 file) for the collapsed-drilled
   case; (b) add a **Settings** collapsed+drilled case (`/dashboard/settings`) and
@@ -206,27 +228,48 @@ bug report's screenshots are stale):
   (`FileTree` mocked) — assert tree/search absent when collapsed.
 - `apps/web-platform/test/conversations-rail.test.tsx` — same for Chat — assert
   rows absent when collapsed.
+- `apps/web-platform/test/helpers/rail-slot-harness.tsx` — extend to accept an
+  optional `collapsed?: boolean` prop and wrap children in `RailCollapsedProvider`
+  so the jsdom collapsed-state tests can drive `useRailCollapsed()`. (The harness
+  today provides only the slot node via `RailSlotProvider value={slot}`.)
 
 ## Files to Create
 
-- *(none expected)* — the fix reuses existing components, contexts, and the
-  existing `RailSlotHarness` test helper. If `RailSlotHarness`
-  (`apps/web-platform/test/helpers/rail-slot-harness.tsx`) cannot inject a
-  collapsed value, extend it (edit, not create) rather than adding a new harness.
+- *(none)* — the fix reuses existing components and contexts; the only new symbol
+  is `RailCollapsedContext`, added inside the existing `rail-slot.tsx` (an edit,
+  not a new file). The `RailSlotHarness` is extended in place (see Files to Edit).
 
 ## Design
 
 **Two viable approaches — pick A unless §Sharp Edges portal-lifetime concern bites, then B:**
 
-- **Approach A — collapse context + per-shell render-conditional (preferred).**
-  Add `collapsed` to the rail-slot context (or a sibling context provided in the
-  same `RailSlotProvider` wrapper). Each shell calls `useRailCollapsed()` and
-  render-conditionals its nav body: `if (collapsed) return null;` (or returns a
-  minimal empty fragment). Pros: the slot node stays mounted (no portal-target
-  churn); the content's presence is a pure function of `collapsed`; jsdom can
-  assert absence. This mirrors `ThemeToggle({ collapsed })` and the band's
-  `collapsed` prop. **The portal stays valid because the slot `<div>` is always
-  rendered when drilled; only the portaled *children* change.**
+- **Approach A — sibling collapse context + per-shell render-conditional (preferred).**
+  `RailSlotContext`'s value is typed `HTMLElement | null` (the slot node only;
+  `rail-slot.tsx`), and both `(dashboard)/layout.tsx:205` (`value={railSlotEl}`)
+  and `RailSlotHarness` set it positionally — do NOT widen this value. Instead add
+  a **sibling `RailCollapsedContext`** (`createContext<boolean>(false)`) exported
+  from `rail-slot.tsx` with a `useRailCollapsed()` hook, provided alongside
+  `RailSlotProvider` in `layout.tsx` (the layout already holds `collapsed` at
+  line 111). Each shell calls `useRailCollapsed()` and render-conditionals its nav
+  body: `if (collapsed) return null;` inside a STABLE wrapper that always renders
+  (so the content-present/absent assertion targets exactly one node — mirroring
+  `ConversationsRailPortal`'s `data-testid="conversations-rail"` wrapper). Pros:
+  the slot node stays mounted (no portal-target churn); content presence is a pure
+  function of `collapsed`; jsdom can assert absence. Mirrors `ThemeToggle({ collapsed })`
+  (`theme-toggle.tsx:67`) and the band's `collapsed` prop (`workspace-context-band.tsx:68`).
+  **The portal stays valid because the slot `<div>` is always rendered when
+  drilled; only the portaled *children* change.**
+
+  **Stable wrapper testids (required for AC2/AC3/AC4):**
+  - Chat: `ConversationsRailPortal` ALREADY has `data-testid="conversations-rail"`
+    around `<ConversationsRail/>` — render-conditional the rows INSIDE
+    `ConversationsRail` so the wrapper survives both branches.
+  - Settings: wrap `SettingsShell`'s portaled `<nav>` in a stable
+    `data-testid="settings-rail-nav"` div that always renders; conditional the
+    `<ul>` of tabs off when collapsed.
+  - KB: wrap `KbSidebarShell`'s search+tree block in a stable
+    `data-testid="kb-rail-tree"` div that always renders; conditional the
+    `SearchOverlay`+`FileTree`/`RailEmptyState` off when collapsed.
 
 - **Approach B — render-gate the slot in the layout.** In `(dashboard)/layout.tsx`,
   when `drill !== null && collapsed`, render the rail body with *no* slot (so the
@@ -275,6 +318,15 @@ pattern, not a new global store.
   routed to the `authenticated` project (`playwright.config.ts:52`) and ignored
   from `chromium` (`:39`). New cases added to the same file inherit this — no
   config change needed. Do NOT rename the file (would drop it from `testMatch`).
+- **Precedent-diff (deepen Phase 4.4): the `collapsed`-render-conditional pattern
+  is established in-repo, NOT novel.** Two precedents to copy verbatim:
+  `theme-toggle.tsx:67` (`if (collapsed) { … return <button data-testid=…/> }`)
+  and `workspace-context-band.tsx:68` (`if (variant === "rail" && collapsed) return
+  <icon-column/>`). The secondary-nav shells go one step further (return nothing,
+  not a minimal icon) because there is no icon vocabulary — but the prop-driven
+  render-conditional shape is identical. The context-threading precedent is
+  `RailSlotContext` itself (`createContext` + provider in `layout.tsx` + hook read
+  through the React tree); `RailCollapsedContext` is its sibling. No novel pattern.
 - A plan whose `## User-Brand Impact` section is empty, contains only
   `TBD`/`TODO`/placeholder text, or omits the threshold will fail `deepen-plan`
   Phase 4.6. (Filled above.)

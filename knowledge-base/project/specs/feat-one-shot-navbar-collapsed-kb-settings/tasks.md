@@ -9,9 +9,10 @@ brand_survival_threshold: single-user incident
 
 ## Phase 0 — Preconditions (verify before coding)
 
-- [ ] 0.1 Read `apps/web-platform/test/helpers/rail-slot-harness.tsx`; confirm
-  whether it can inject a `collapsed` context value. If not, plan the extension
-  (Approach A needs the harness to drive the collapsed jsdom tests).
+- [ ] 0.1 Read `apps/web-platform/test/helpers/rail-slot-harness.tsx` — confirmed
+  it provides ONLY the slot node (`RailSlotProvider value={slot}`); it MUST be
+  extended to accept an optional `collapsed?` prop and wrap children in
+  `RailCollapsedProvider` for the collapsed jsdom tests.
 - [ ] 0.2 Decide Approach A (collapse context + per-shell render-conditional —
   preferred) vs B (render-gate the slot in the layout). Record the choice and
   rationale (§Sharp Edges portal-lifetime). Default A.
@@ -36,14 +37,19 @@ brand_survival_threshold: single-user incident
 
 ## Phase 2 — GREEN (implement the fix)
 
-- [ ] 2.1 Thread `collapsed` into the rail-slot context (Approach A) in
-  `components/dashboard/rail-slot.tsx` + provide it from `(dashboard)/layout.tsx`;
-  add `useRailCollapsed()` hook. (Or render-gate the slot per Approach B.)
-- [ ] 2.2 `settings-shell.tsx`: render-conditional the `<nav>` body off when
-  collapsed (DOM-removed, not CSS-hidden).
-- [ ] 2.3 `kb-sidebar-shell.tsx`: render-conditional the `SearchOverlay` +
-  `FileTree`/`RailEmptyState` block off when collapsed.
-- [ ] 2.4 `conversations-rail.tsx`: render-conditional the rows off when collapsed.
+- [ ] 2.1 Add **sibling** `RailCollapsedContext` + `RailCollapsedProvider` +
+  `useRailCollapsed()` to `components/dashboard/rail-slot.tsx` (do NOT widen the
+  `HTMLElement | null` slot value); provide `collapsed` from `(dashboard)/layout.tsx`
+  (already held at line 111). Extend `RailSlotHarness` (0.1). (Or render-gate the
+  slot per Approach B.)
+- [ ] 2.2 `settings-shell.tsx`: stable `data-testid="settings-rail-nav"` wrapper;
+  render-conditional the tab `<ul>` off when collapsed (DOM-removed, not CSS-hidden).
+- [ ] 2.3 `kb-sidebar-shell.tsx`: stable `data-testid="kb-rail-tree"` wrapper;
+  render-conditional the `SearchOverlay` + `FileTree`/`RailEmptyState` off when
+  collapsed.
+- [ ] 2.4 `conversations-rail.tsx`: render-conditional the rows off when collapsed
+  (stable `data-testid="conversations-rail"` wrapper already in
+  `conversations-rail-portal.tsx`).
 - [ ] 2.5 Keep `WorkspaceContextBand` untouched (already collapse-aware,
   single-mount). Do not add a second collapse path through it.
 
