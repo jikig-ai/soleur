@@ -88,7 +88,12 @@ export async function ensureWorkspaceRepoCloned(
 
   try {
     await graftFn(workspacePath, repoUrl, installationId);
-    log.info({ userId, action: "cloned" }, "ensure-workspace-repo: cloned connected repo");
+    // No raw `userId` on this direct-logger breadcrumb — the advisory
+    // userid-bypass-lint guard (#3698) scans source for `logger({ userId })`
+    // sites. Runtime is already safe (pino formatters.log hashes top-level
+    // userId), so this is source-hygiene. The two reportSilentFallback sites
+    // are guard-allowlisted (they hash via hashExtraUserId) and keep userId.
+    log.info({ action: "cloned" }, "ensure-workspace-repo: cloned connected repo");
   } catch (err) {
     // Fail-soft: surface to Sentry, never crash the conversation. The token is
     // env-only inside gitWithInstallationAuth (never in argv/URL/stderr), so it
