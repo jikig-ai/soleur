@@ -67,6 +67,14 @@ export interface AgentQueryOptionsArgs {
    */
   credential: AgentCredential;
   serviceTokens: Record<string, string>;
+  /**
+   * Optional freshly-minted GitHub App installation token, injected as
+   * `GH_TOKEN` into the agent env (Issue A — Concierge gh-auth). Per-call
+   * divergent (the cc path mints it per-dispatch; the legacy runner leaves
+   * it undefined), so it is NOT part of the shared-field drift snapshot.
+   * Never logged. See `buildAgentEnv` `BuildAgentEnvOptions.ghToken`.
+   */
+  ghToken?: string;
   systemPrompt: string;
   /** SDK chain step 5 — the canUseTool callback. Required. */
   // biome-ignore lint/suspicious/noExplicitAny: SDK CanUseTool is a typed callable; helper accepts the SDK's type
@@ -139,7 +147,9 @@ export function buildAgentQueryOptions(
       ...(args.extraDisallowedTools ?? []),
     ],
     systemPrompt: args.systemPrompt,
-    env: buildAgentEnv(args.credential, args.serviceTokens),
+    env: buildAgentEnv(args.credential, args.serviceTokens, {
+      ghToken: args.ghToken,
+    }),
     // Sandbox literal lives in `buildAgentSandboxConfig` so legacy + cc
     // share the same shape verbatim (drift-guarded by
     // `agent-runner-helpers.test.ts`).

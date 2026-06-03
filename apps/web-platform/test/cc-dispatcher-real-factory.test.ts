@@ -27,6 +27,8 @@ const {
   mockBuildAgentEnv,
   mockBuildAgentSandboxConfig,
   mockSupabaseFrom,
+  mockResolveInstallationId,
+  mockGenerateInstallationToken,
 } = vi.hoisted(() => ({
   mockQuery: vi.fn(),
   mockGetUserApiKey: vi.fn(),
@@ -37,6 +39,8 @@ const {
   mockBuildAgentEnv: vi.fn(),
   mockBuildAgentSandboxConfig: vi.fn(),
   mockSupabaseFrom: vi.fn(),
+  mockResolveInstallationId: vi.fn(),
+  mockGenerateInstallationToken: vi.fn(),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -67,6 +71,17 @@ vi.mock("@/server/agent-env", () => ({
 
 vi.mock("@/server/sandbox-hook", () => ({
   createSandboxHook: vi.fn(() => async () => ({})),
+}));
+
+// Issue A — Concierge gh-auth. Default to "no connected repo" (null) so the
+// pre-existing factory-shape tests dispatch with no GH_TOKEN; the dedicated
+// describe block below drives the connected + mint-failure paths.
+vi.mock("@/server/resolve-installation-id", () => ({
+  resolveInstallationId: mockResolveInstallationId,
+}));
+
+vi.mock("@/server/github-app", () => ({
+  generateInstallationToken: mockGenerateInstallationToken,
 }));
 
 vi.mock("@/server/permission-callback", () => ({
@@ -247,6 +262,9 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       },
     });
     mockQuery.mockReturnValue(makeFakeQuery());
+    // Issue A defaults: no connected repo (null) → no mint, no GH_TOKEN.
+    mockResolveInstallationId.mockResolvedValue(null);
+    mockGenerateInstallationToken.mockResolvedValue("ghs_default_test_token");
     setupSupabaseMockReturning(WORKSPACE_PATH);
   });
 
@@ -429,12 +447,70 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     expect(mockBuildAgentEnv).toHaveBeenCalledWith(
       { value: "sk-test", scheme: "api_key" },
       { PLAUSIBLE_API_KEY: "plk-1" },
+      // Issue A: third opts arg always present; ghToken undefined here
+      // because the default mock resolves no installation (null).
+      { ghToken: undefined },
     );
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.env.ANTHROPIC_API_KEY).toBe("sk-test");
     // CWE-526: no service-role key in env.
     expect(opts.env.SUPABASE_SERVICE_ROLE_KEY).toBeUndefined();
     expect(opts.env.BYOK_ENCRYPTION_KEY).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // Issue A — Concierge gh-auth: mint + inject GH_TOKEN (AC1/AC4)
+  // -------------------------------------------------------------------------
+  it("AC1: connected repo → mints installation token and threads it as ghToken", async () => {
+    mockResolveInstallationId.mockResolvedValueOnce(987654);
+    mockGenerateInstallationToken.mockResolvedValueOnce("ghs_minted_xyz");
+
+    await realSdkQueryFactory(makeArgs());
+
+    expect(mockResolveInstallationId).toHaveBeenCalledWith("user-1");
+    expect(mockGenerateInstallationToken).toHaveBeenCalledWith(
+      987654,
+      expect.objectContaining({ minRemainingMs: expect.any(Number) }),
+    );
+    // buildAgentEnv receives the minted token via the opts param.
+    expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+      { value: "sk-test", scheme: "api_key" },
+      {},
+      { ghToken: "ghs_minted_xyz" },
+    );
+  });
+
+  it("AC1: no connected repo (null installation) → no mint, ghToken undefined, dispatch proceeds", async () => {
+    mockResolveInstallationId.mockResolvedValueOnce(null);
+
+    await realSdkQueryFactory(makeArgs());
+
+    expect(mockGenerateInstallationToken).not.toHaveBeenCalled();
+    expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+      { value: "sk-test", scheme: "api_key" },
+      {},
+      { ghToken: undefined },
+    );
+    expect(mockQuery).toHaveBeenCalledOnce();
+  });
+
+  it("AC4: mint failure mirrors to Sentry (op:mint-gh-token) and dispatch continues without GH_TOKEN", async () => {
+    mockResolveInstallationId.mockResolvedValueOnce(987654);
+    mockGenerateInstallationToken.mockRejectedValueOnce(new Error("mint boom"));
+
+    await realSdkQueryFactory(makeArgs());
+
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ feature: "cc-dispatcher", op: "mint-gh-token" }),
+    );
+    // Non-fatal: dispatch still happens, ghToken undefined.
+    expect(mockQuery).toHaveBeenCalledOnce();
+    expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+      { value: "sk-test", scheme: "api_key" },
+      {},
+      { ghToken: undefined },
+    );
   });
 
   // -------------------------------------------------------------------------
