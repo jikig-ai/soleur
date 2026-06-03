@@ -15,8 +15,8 @@ deferred: [4916, 4917]
 - [ ] 0.3 Read `components/leader-avatar.tsx` (size-map + img-error fallback) as tile model
 
 ## Phase 1 — Workspace identity monogram tile
-- [ ] 1.1 Create `components/dashboard/workspace-identity-tile.tsx` (pure presentational, props `{name, size}`, monogram on fixed non-gold token, no `variant`, no img branch)
-- [ ] 1.2 Create `test/workspace-identity-tile.test.tsx` (1/2-char derivation, never gold)
+- [x] 1.1 Create `components/dashboard/workspace-identity-tile.tsx` (pure presentational, props `{name, size}`, monogram on fixed non-gold token, no `variant`, no img branch)
+- [x] 1.2 Create `test/workspace-identity-tile.test.tsx` (single-initial derivation, never gold, not-imported guard) — 6/6 green
 - [ ] 1.3 Replace swatch at `org-switcher.tsx:87` (solo), `:118` (multi trigger)
 - [ ] 1.4 Replace swatch at `org-switcher.tsx:160` (dropdown row) — preserve current vs non-current fill
 - [ ] 1.5 Thread active workspace `name` into the collapsed band; replace swatch at `workspace-context-band.tsx:95`; replace static `title="Active workspace"` (:94) with full name
