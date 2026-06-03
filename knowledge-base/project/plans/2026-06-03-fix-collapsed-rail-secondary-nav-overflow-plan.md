@@ -18,8 +18,11 @@ related_design: knowledge-base/product/design/navigation/single-nav-rail.pen
 ## Enhancement Summary
 
 **Deepened on:** 2026-06-03
+**Amended on:** 2026-06-03 — folded in the **widenable KB rail** requirement
+(expanded-state drag-to-resize) across Overview, Acceptance Criteria (AC9–AC14),
+Files to Edit/Create, Design, Sharp Edges, Test Scenarios, Domain Review.
 **Sections enhanced:** Design, Files to Edit, Sharp Edges, Acceptance Criteria (testid plumbing)
-**Mandatory gates:** 4.6 User-Brand Impact ✅ · 4.7 Observability ✅ (client-only skip documented) · 4.8 PAT-shaped ✅ none · 4.9 UI-wireframe ✅ committed `.pen` referenced
+**Mandatory gates:** 4.6 User-Brand Impact ✅ · 4.7 Observability ✅ (client-only skip documented) · 4.8 PAT-shaped ✅ none · 4.9 UI-wireframe ✅ committed `.pen` referenced (amendment adds a non-blocking follow-up to add a widen-handle frame — see Product/UX Gate)
 
 ### Key Improvements (grounded against installed code)
 
@@ -31,6 +34,40 @@ related_design: knowledge-base/product/design/navigation/single-nav-rail.pen
 
 - The `RailSlotHarness` (`test/helpers/rail-slot-harness.tsx`) provides ONLY the slot node — it MUST be extended to also provide a `collapsed` value for the jsdom collapsed-state tests (folded into Files to Edit / Phase 0).
 - `ConversationsRail` is self-contained (own `useConversations` fetch, no context crosses its portal) — its collapsed branch is the simplest (render-conditional inside the component, wrapper testid already stable). KB/Settings need the wrapper testid added.
+
+### Amendment 2026-06-03 — widenable KB rail (expanded state)
+
+Folds in a complementary requirement: in the **expanded** state, let the user
+**drag the KB rail's right edge to widen it** so deeply-nested folder/file names
+stop truncating. Collapsed = clean hidden secondary nav (the fix above);
+expanded = user-widenable. Grounded against installed code:
+
+1. **The nav rail is NOT a resizable Panel today — it is a single `aside` with a
+   fixed Tailwind width.** `(dashboard)/layout.tsx:246` sets
+   `${collapsed ? "md:w-14" : "md:w-56"}` on the one `aside`. `react-resizable-panels`
+   (`^4.10.0`, `package.json`) is installed but used ONLY in
+   `kb-desktop-layout.tsx:5` for the **main content area** doc-viewer-vs-chat
+   split (`<Group orientation="horizontal">` … `<Panel>`), which lives in `main`,
+   NOT in the rail. So widening the KB tree means controlling the **`aside`'s own
+   width** (single-side edge drag), not adding a panel split. A full
+   PanelGroup-ifying of the dashboard layout (wrapping `aside` + `main` in one
+   `Group`) is rejected: large, risky refactor of the load-bearing
+   collapse/portal layout for a small affordance.
+2. **Persistence precedent already exists — reuse its shape.** `useSidebarCollapse`
+   (`hooks/use-sidebar-collapse.ts:35`) is the in-repo localStorage pattern:
+   `soleur:sidebar.*` key namespace, `useState` default + post-hydration
+   `useEffect` read (PaymentWarningBanner hydration pattern), try/catch around all
+   `localStorage` access (private-mode safe). The new `useRailWidth` hook mirrors
+   it exactly (key `soleur:sidebar.kb.width`, value = pixel integer). Do NOT invent
+   a new persistence mechanism.
+3. **Reuse the existing resize-handle visual idiom, add no dependency.** A
+   styled drag handle already exists (`ResizeHandle` in `kb-desktop-layout.tsx:17`).
+   But `react-resizable-panels`' `Separator` requires sibling `Panel`s in a
+   `Group`; the `aside` is not a Panel, so the lib's `Separator` cannot drive the
+   `aside` width directly. The consistent choice is a thin pointer-drag handle
+   styled to MATCH that idiom (same amber-active treatment, grip dots) but driving
+   the `aside` width via the `useRailWidth` hook. No new npm dependency
+   (`hr`-consistent: search-first, reuse).
 
 ## Overview
 
@@ -60,6 +97,21 @@ single-nav-rail brainstorm): a clipped, half-rendered rail during a
 tenant-sensitive action (inviting a member, sharing an API key, editing scope
 grants — all reachable from the Settings drill) degrades the workspace-identity
 legibility that ADR-047 exists to protect.
+
+### Complementary requirement — widenable KB rail (expanded)
+
+The collapse fix solves the *too-narrow* end; the mirror complaint is the
+*not-wide-enough* end: in the EXPANDED state the KB secondary nav is the
+recursive arbitrary-depth `FileTree` (`file-tree.tsx`) inside a **fixed**
+`md:w-56` (224 px) `aside`, so deeply-nested folder/file rows truncate. This
+amendment makes the **expanded KB rail horizontally resizable** — the user drags
+the rail's right edge to widen it; the chosen width persists across reloads,
+clamps to a sensible min/max, and is **subordinate to collapse** (collapsed
+always wins → 56 px, no handle, no widen). Resize applies ONLY to the KB drill
+(its tree is the surface with the truncation problem); Settings/Chat keep the
+default width (their secondary nav is short text links / fixed-layout rows with
+no deep nesting). Together: collapsed = clean hidden/icon rail; expanded = clean
+default OR user-widened-to-see-deep-trees.
 
 ### Why "hide when collapsed" and not "icon-only condense"
 
@@ -96,6 +148,18 @@ sits beside it.
 ADR-047 / `2026-06-02-single-nav-rail-brainstorm.md`. One user seeing a broken
 rail during an invite/key-share is brand-damaging; CPO sign-off required at plan
 time per `wg`/User-Brand-Impact gate.)
+
+**Amendment (widenable KB rail) — brand impact.** Positive when it works: a user
+with a deep `knowledge-base/...` tree can finally see full folder/file names
+instead of `knowledge-ba…`/`roa…`, which directly improves the KB's legibility —
+the product's core "your knowledge, navigable" promise. Failure modes if it lands
+broken: (a) a stored bad width hydrates and the rail swallows the doc viewer on
+load (mitigated by clamp-on-read, AC11); (b) the inline width leaks into the
+collapsed branch and regresses the collapse fix (mitigated by branch-gating +
+AC12/AC14); (c) a leaked global pointer listener makes the whole dashboard feel
+janky after a drag (mitigated by pointer-capture cleanup, §Sharp Edges). All three
+are caught by the e2e/jsdom gates before merge. No data-leak vector (client-only
+presentation; the width is a single integer in localStorage).
 
 ## Premise Validation
 
@@ -138,7 +202,7 @@ bug report's screenshots are stale):
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — collapse reaches the portal.** `collapsed` flows from
+- [x] **AC1 — collapse reaches the portal.** `collapsed` flows from
   `(dashboard)/layout.tsx` to the portaled secondary-nav content via
   `RailCollapsedContext` (Approach A). Verification:
   `grep -nE "RailCollapsedContext|useRailCollapsed" apps/web-platform/components/dashboard/rail-slot.tsx`
@@ -148,46 +212,84 @@ bug report's screenshots are stale):
   the invariant is "the portaled content's visibility is a function of `collapsed`"
   — verify the layout's render-gate instead. The plumbing is approach-specific;
   the invariant is not.
-- [ ] **AC2 — secondary nav is hidden (DOM-removed) when collapsed.** In the
+- [x] **AC2 — secondary nav is hidden (DOM-removed) when collapsed.** In the
   collapsed+drilled state the populated secondary nav is **not in the DOM** (a
   render-conditional, not `display:none` — so the jsdom half of the gate can
   assert absence; cf. the #4833 Bug-1 render-conditional learning). Verification:
   jsdom test renders the shell with `collapsed=true` and asserts the nav
   content (`data-testid` for the settings nav / file tree / conversation rows) is
   absent via `queryByTestId(...) === null`.
-- [ ] **AC3 — no horizontal overflow with POPULATED content, all 3 sections.**
+- [x] **AC3 — no horizontal overflow with POPULATED content, all 3 sections.**
   The e2e gate asserts `scrollWidth - clientWidth <= 1` on the collapsed `aside`
   for **populated** Settings sub-nav, **populated** KB tree (≥1 nested dir + ≥1
   file), and **populated** Conversations rail (≥3 rows). The KB/Chat mocks must
   return non-empty fixtures (the current `tree: []` is the false-GREEN). Proven
   RED first (revert the fix → test fails) per ADR-049.
-- [ ] **AC4 — content present when EXPANDED (no regression).** The same e2e cases
+- [x] **AC4 — content present when EXPANDED (no regression).** The same e2e cases
   re-run with `collapsed=false` assert the secondary-nav content IS present and
   legible (testid present), so AC2 is not satisfied by an always-empty rail
   (assert-the-invariant-not-a-proxy, per
   `2026-06-02-visual-regression-gate-must-assert-content-not-band-box.md`).
-- [ ] **AC5 — workspace identity still visible when collapsed+drilled.** The e2e
+- [x] **AC5 — workspace identity still visible when collapsed+drilled.** The e2e
   cases assert `railBand` is visible with `data-collapsed="true"` AND the band's
   identity icon (`data-testid="workspace-identity-icon"`) is present in every
   collapsed+drilled section — the band is mocked with non-null
   `/api/workspace/active-repo` + `/api/workspace/list-memberships` (already done
   in `setupNavMocks`). This plan must NOT regress the band.
-- [ ] **AC6 — collapse-aware in BOTH toggle states for all 3 sections.** Per the
+- [x] **AC6 — collapse-aware in BOTH toggle states for all 3 sections.** Per the
   "verify both toggle states" learning: each section has a collapsed assertion
   (AC2/AC3) AND an expanded assertion (AC4). No section is fixed in only one
   state.
-- [ ] **AC7 — full suite green.** `tsc --noEmit`, the affected vitest files, and
+- [x] **AC7 — full suite green.** `tsc --noEmit`, the affected vitest files, and
   `nav-states-shell.e2e.ts` (authenticated Playwright project) all pass. Run via
   `package.json` `scripts.test` runner (vitest for `apps/web-platform`; e2e via
   the project's playwright invocation), not a hardcoded runner.
+
+#### Widenable KB rail (amendment)
+
+- [x] **AC9 — drag widens the expanded KB rail.** When drilled into `/dashboard/kb`
+  and EXPANDED, a drag handle on the `aside`'s right edge resizes the rail: a
+  pointer drag rightward increases the `aside` width (asserted via the e2e
+  overflow harness measuring `aside` `clientWidth` before/after a
+  `mouse.down`→`mouse.move`→`mouse.up` on the handle, `nav-states-shell.e2e.ts`).
+  Verification: `grep -nE "useRailWidth|kb-rail-resize-handle" apps/web-platform/...`
+  returns the hook + handle testid; e2e asserts post-drag `clientWidth` > default.
+- [x] **AC10 — width persists across reload.** After a drag sets a width, a full
+  page reload restores it: the hook reads `localStorage["soleur:sidebar.kb.width"]`
+  in a post-hydration `useEffect` (mirroring `useSidebarCollapse`). Verification:
+  e2e drags, reloads, asserts `aside` `clientWidth` ≈ dragged width (±1 px); a
+  jsdom test asserts the hook reads/writes the key.
+- [x] **AC11 — width clamps to min/max.** The persisted/applied width is clamped
+  to `[RAIL_MIN_PX, RAIL_MAX_PX]` (min ≥ the default 224 px so widening never
+  makes it *narrower* than today; max bounded so the rail cannot swallow the
+  content area, e.g. `min(480, 40vw)`). Verification: jsdom test feeds an
+  out-of-range stored value and an out-of-range drag delta, asserts the applied
+  width is clamped both ends.
+- [x] **AC12 — collapse takes precedence over width.** When `collapsed=true` the
+  rail is 56 px (`md:w-14`) regardless of any stored KB width, the drag handle is
+  NOT rendered, and the stored width is preserved (not cleared) so it returns on
+  expand. Verification: e2e collapses a previously-widened KB rail, asserts
+  `clientWidth` ≈ 56 px and `queryByTestId("kb-rail-resize-handle")` absent; then
+  expands and asserts the widened width returns.
+- [x] **AC13 — resize is KB-only.** The drag handle renders only when
+  `drill === "kb" && !collapsed`. Settings/Chat drills render no handle and use
+  the default `md:w-56`. Verification: e2e asserts `kb-rail-resize-handle` absent
+  on `/dashboard/settings` and `/dashboard/chat`; jsdom asserts the handle is
+  gated on the KB drill.
+- [x] **AC14 — no regression to collapse fix.** AC1–AC7 still hold with the resize
+  code present: the inline width style is applied to the `aside` (not the portaled
+  secondary nav), so collapsed-hide (AC2) and overflow (AC3) assertions are
+  unaffected; the e2e overflow check still measures the live `aside` width.
 
 ### Post-merge (operator)
 
 - [ ] **AC8 — visual confirmation.** Playwright MCP (`mcp__playwright__*`) drives
   the deployed dashboard: collapse the rail while drilled into KB (with docs),
   Settings, and Chat (with conversations); screenshot each; confirm no clipped
-  rows. *Automation: feasible via Playwright MCP — runs in `/soleur:qa` /
-  post-merge, not operator-manual.*
+  rows. **Also (amendment):** in expanded KB, drag the rail wider and confirm a
+  deeply-nested folder/file name that truncated at the default width is now fully
+  visible; reload and confirm the width persists. *Automation: feasible via
+  Playwright MCP — runs in `/soleur:qa` / post-merge, not operator-manual.*
 
 ## Files to Edit
 
@@ -233,11 +335,50 @@ bug report's screenshots are stale):
   so the jsdom collapsed-state tests can drive `useRailCollapsed()`. (The harness
   today provides only the slot node via `RailSlotProvider value={slot}`.)
 
+### Files to Edit — widenable KB rail (amendment)
+
+- `apps/web-platform/app/(dashboard)/layout.tsx` — (a) call the new `useRailWidth`
+  hook; (b) when `drill === "kb" && !collapsed`, apply the resolved width to the
+  `aside` via inline `style={{ width: railWidthPx }}` (md+ only) **overriding** the
+  `md:w-56` class (keep `md:w-14`/`md:w-56` as the non-KB / collapsed default —
+  inline style only set in the KB-expanded branch so collapsed `md:w-14` and
+  Settings/Chat `md:w-56` are untouched, AC12/AC13); (c) render the
+  `<RailResizeHandle>` on the `aside`'s right edge in the same `drill === "kb" && !collapsed`
+  branch. The inline width is on the `aside`, NOT on the portaled secondary nav,
+  so the collapse-hide and overflow assertions (AC2/AC3) are unaffected (AC14).
+- `apps/web-platform/e2e/nav-states-shell.e2e.ts` — add expanded-KB resize cases:
+  (a) drag the handle and assert `aside` `clientWidth` increases (AC9); (b) reload
+  and assert width persists (AC10); (c) drag past max and assert clamp (AC11);
+  (d) collapse a widened KB rail and assert ≈56 px + handle absent, then expand and
+  assert width returns (AC12); (e) assert handle absent on Settings/Chat (AC13).
+
 ## Files to Create
 
-- *(none)* — the fix reuses existing components and contexts; the only new symbol
-  is `RailCollapsedContext`, added inside the existing `rail-slot.tsx` (an edit,
-  not a new file). The `RailSlotHarness` is extended in place (see Files to Edit).
+- `apps/web-platform/hooks/use-rail-width.ts` — `useRailWidth()` hook mirroring
+  `useSidebarCollapse` (`hooks/use-sidebar-collapse.ts:35`): `useState` default
+  `RAIL_DEFAULT_PX` (224, = `md:w-56`), post-hydration `useEffect` reading
+  `localStorage["soleur:sidebar.kb.width"]`, a `setWidth(px)` that clamps to
+  `[RAIL_MIN_PX, RAIL_MAX_PX]` and persists, all `localStorage` access in
+  try/catch (private-mode safe). Exports `RAIL_MIN_PX`/`RAIL_MAX_PX`/`RAIL_DEFAULT_PX`
+  constants. Returns `[widthPx, setWidth]`. (New file because it is a distinct hook
+  with its own key/clamp; the collapse hook is left unchanged — do NOT widen its
+  return tuple, two call sites.)
+- `apps/web-platform/components/dashboard/rail-resize-handle.tsx` —
+  `<RailResizeHandle width onWidthChange min max />`: a thin (`w-1`) absolutely-
+  positioned right-edge handle, `data-testid="kb-rail-resize-handle"`,
+  `role="separator"` + `aria-orientation="vertical"` + `aria-valuenow/min/max`
+  (a11y), keyboard support (Arrow Left/Right nudge ±16 px) for non-pointer users,
+  styled to MATCH the existing `ResizeHandle` idiom in `kb-desktop-layout.tsx:17`
+  (amber-active grip). `onPointerDown` captures the pointer and on `pointermove`
+  computes `clamp(startWidth + (e.clientX − startX), min, max)` → `onWidthChange`;
+  commits to localStorage via the hook on `pointerup`. (New file: no reusable
+  single-side edge-drag component exists — the only resize handle in-repo is the
+  lib's `Separator`, which requires sibling `Panel`s, so it cannot drive the
+  `aside` width; a new lightweight handle is the search-first / no-new-dependency
+  choice.)
+- The collapse-fix half adds the only other new symbol `RailCollapsedContext`
+  inside the existing `rail-slot.tsx` (an edit, not a new file); `RailSlotHarness`
+  is extended in place (see Files to Edit).
 
 ## Design
 
@@ -286,6 +427,51 @@ secondary nav we go further (full hide) because there is no icon vocabulary —
 but the *context-threading mechanism* should match the band/theme-toggle prop
 pattern, not a new global store.
 
+### Design — widenable KB rail (amendment)
+
+**Mechanism: control the `aside`'s own width; do NOT PanelGroup-ify the layout.**
+The rail is a single `aside` whose width is a Tailwind class
+(`${collapsed ? "md:w-14" : "md:w-56"}`, `layout.tsx:246`). `react-resizable-panels`
+(`^4.10.0`) is installed but the only `Group`/`Panel`/`Separator` usage is the
+**main-area** doc-vs-chat split in `kb-desktop-layout.tsx` (`Group orientation="horizontal"`
+in `main`, not the rail). Wrapping `aside` + `main` in one top-level `Group` to
+make the rail a `Panel` was considered and rejected: it would rewrite the
+load-bearing collapse/portal layout (the `aside` `transition-[width]`, the
+`md:relative`/`fixed` drawer behavior, the slot ref) for a small affordance, and
+`Panel` sizing is %-based (awkward to clamp to a px min ≥ the current 224 px and a
+px/vw max). Instead drive the `aside`'s width directly:
+
+1. **`useRailWidth()` hook** (new, `hooks/use-rail-width.ts`) — a near-verbatim
+   structural copy of `useSidebarCollapse` (`hooks/use-sidebar-collapse.ts:35`):
+   `useState(RAIL_DEFAULT_PX=224)`, post-hydration `useEffect` reading
+   `localStorage["soleur:sidebar.kb.width"]` (same `soleur:sidebar.*` namespace,
+   same hydration-safe / private-mode-safe try/catch pattern), `setWidth(px)`
+   that `clamp`s to `[RAIL_MIN_PX, RAIL_MAX_PX]` then persists. Returns
+   `[widthPx, setWidth]`.
+2. **Inline width on the `aside`, KB-expanded branch only.** In `layout.tsx`, when
+   `drill === "kb" && !collapsed`, set `style={{ width }}` on the `aside` (and a
+   `md:` min/max via the clamp) — overriding `md:w-56`. In every other state the
+   inline style is omitted, so `md:w-14` (collapsed) and `md:w-56` (Settings/Chat,
+   top-level) are exactly as today. This makes collapse **structurally win**: the
+   collapsed branch never sets an inline width and keeps `md:w-14` (AC12), and the
+   resize affordance is gated on `drill === "kb"` (AC13).
+3. **`<RailResizeHandle>`** (new, `components/dashboard/rail-resize-handle.tsx`) —
+   a thin right-edge handle styled to MATCH the existing `ResizeHandle`
+   (`kb-desktop-layout.tsx:17`: amber-active, grip dots) so the two resize
+   affordances feel like one system, but driving the `aside` width via pointer
+   capture (`setPointerCapture` + `pointermove` delta → `onWidthChange(clamp(...))`,
+   commit on `pointerup`). It is `role="separator"` `aria-orientation="vertical"`
+   with `aria-valuenow/min/max` and Arrow-key nudge for keyboard/AT users. Rendered
+   only in the `drill === "kb" && !collapsed` branch.
+
+**Why KB-only (not shared with Settings/Chat):** the truncation problem is
+specific to the recursive arbitrary-depth `FileTree`; Settings is 5–7 short text
+links and Chat rows are fixed-layout (badge+time+preview that already wrap). The
+hook + handle are generic enough to extend later if Settings/Chat ever need it,
+but YAGNI: scope to the KB drill that has the defect. (If a reviewer wants it
+shared, the gate is `drill !== null` instead of `drill === "kb"` — a one-line
+change — but default KB-only.)
+
 ## Sharp Edges
 
 - **Portal target lifetime (Approach B risk).** The `rail-secondary-slot` div is
@@ -331,6 +517,43 @@ pattern, not a new global store.
   `TBD`/`TODO`/placeholder text, or omits the threshold will fail `deepen-plan`
   Phase 4.6. (Filled above.)
 
+### Sharp Edges — widenable KB rail (amendment)
+
+- **Inline width must not break the collapse fix.** The inline `style={{ width }}`
+  goes on the `aside`, and ONLY in the `drill === "kb" && !collapsed` branch. If it
+  ever leaks into the collapsed branch, `md:w-14` is overridden and the whole
+  collapse fix regresses. Gate it explicitly; the e2e AC12 case (collapse a
+  widened rail → ≈56 px) is the guard.
+- **Tailwind class vs inline style precedence.** `md:w-56` is a class; inline
+  `style.width` wins over classes at any breakpoint, so on mobile (`<md`) the
+  `aside` is already `w-64` fixed/drawer — only apply the inline width at `md+`
+  (e.g. gate on the existing desktop assumption or use a `md`-scoped wrapper) so
+  the mobile drawer width is untouched. Verify on the `MOBILE` viewport
+  (`nav-states-shell.e2e.ts:188`) that the handle is absent and width unchanged.
+- **Clamp the STORED value on read, not just on drag.** A stale/corrupt
+  localStorage value (hand-edited, or from a future build with different bounds)
+  must be clamped when hydrated, else a 9999 px rail swallows the content area on
+  load. Clamp inside the hook's hydration `useEffect`, mirroring the collapse
+  hook's defensive read. (AC11 jsdom case feeds an out-of-range stored value.)
+- **Pointer capture + cleanup.** Use `setPointerCapture`/`releasePointerCapture`
+  and remove listeners on `pointerup`/`pointercancel` (and on unmount) so a drag
+  that ends outside the handle still commits and never leaks a global listener
+  (`cq-ref-removal-sweep-cleanup-closures`). Commit to localStorage once on
+  `pointerup` (not on every `pointermove`) to avoid thrashing storage.
+- **No new dependency.** `react-resizable-panels`' `Separator` needs sibling
+  `Panel`s in a `Group`; the `aside` is not a `Panel`, so the lib cannot drive its
+  width. The new `RailResizeHandle` reuses the lib's *visual* idiom
+  (`kb-desktop-layout.tsx:17`) without importing it — search-first / reuse-style,
+  zero net-new packages (`cq-before-pushing-package-json-changes` unaffected).
+- **Keyboard/AT parity (a11y).** A pure mouse-drag handle is inaccessible. The
+  handle is `role="separator" aria-orientation="vertical"` with
+  `aria-valuenow/min/max` and Arrow-Left/Right nudge so keyboard and AT users can
+  widen too. (Web Interface Guidelines: resize handles need keyboard operability.)
+- **Persisted width is NOT cleared on collapse.** Collapsing must preserve the
+  stored KB width so it returns on expand (AC12). Collapse and width are
+  independent keys (`soleur:sidebar.main.collapsed` vs `soleur:sidebar.kb.width`);
+  the collapse toggle must not touch the width key.
+
 ## Test Scenarios
 
 1. **Collapsed + drilled into Settings (populated):** rail = 56 px, no overflow,
@@ -344,6 +567,34 @@ pattern, not a new global store.
    (AC4 regression guard).
 5. **Top-level collapsed (no drill):** unchanged — existing `nav-states` case
    still green (this plan does not touch the top-level rail).
+
+### Widenable KB rail (amendment)
+
+6. **Expanded KB — drag widens (AC9).** Drilled into `/dashboard/kb`, expanded;
+   record `aside` `clientWidth`; `mouse.down` on `kb-rail-resize-handle`,
+   `mouse.move` +120 px right, `mouse.up`; assert `clientWidth` increased by
+   ≈120 px (within clamp). A previously-truncated deep file name is now visible.
+7. **Persist across reload (AC10).** After scenario 6, `page.reload()`; assert
+   `aside` `clientWidth` ≈ the dragged width (±1 px); jsdom: hook writes/reads
+   `soleur:sidebar.kb.width`.
+8. **Clamp bounds (AC11).** Drag far past `RAIL_MAX_PX` → assert `clientWidth`
+   pinned at max; jsdom: stored value `9999` hydrates clamped to max, stored value
+   `10` hydrates clamped to min (≥224). Drag never makes the rail narrower than the
+   224 px default.
+9. **Collapse precedence (AC12).** Widen KB rail, then collapse (`⌘B`): assert
+   `clientWidth` ≈ 56 px (`md:w-14`) AND `kb-rail-resize-handle` absent AND the
+   stored width key is unchanged; expand → `clientWidth` returns to the widened
+   value (width key honored).
+10. **KB-only (AC13).** On `/dashboard/settings` and `/dashboard/chat`, assert
+    `kb-rail-resize-handle` is absent and `aside` width is the default `md:w-56`.
+11. **Collapse-fix non-regression (AC14).** Re-run scenarios 1–4 with the resize
+    code present: collapsed-hide and overflow assertions unchanged (inline width
+    is on the `aside`, never on the portaled secondary nav).
+12. **Mobile (a11y/viewport).** On `MOBILE` viewport (`:188`), assert the handle is
+    absent and the drawer width is unchanged (inline width is md+ only).
+13. **Keyboard resize (a11y).** Focus `kb-rail-resize-handle`, press ArrowRight
+    several times; assert `aria-valuenow` and `aside` `clientWidth` increase, ±max
+    clamp.
 
 ## Domain Review
 
@@ -359,6 +610,17 @@ modified by this plan. Risk is LOW and concentrated in the portal-target-lifetim
 choice (Approach A vs B) — documented in §Sharp Edges. Reuses existing
 collapse-context / prop patterns; no new global state; no new fetch. The e2e
 gate hardening (populated fixtures) closes a real false-GREEN.
+
+**Amendment (widenable KB rail) — Assessment:** LOW risk, additive, client-only.
+Reuses the in-repo localStorage persistence shape (`useSidebarCollapse`) and the
+existing resize-handle visual idiom (`kb-desktop-layout.tsx`); adds NO npm
+dependency and NO server/fetch. The chosen mechanism (inline width on the `aside`
+in the KB-expanded branch only) keeps collapse structurally dominant and isolates
+the change from the load-bearing portal/collapse layout — rejected the
+PanelGroup-ify-the-layout alternative as a high-risk refactor for a small
+affordance. Two new client files (`use-rail-width.ts`, `rail-resize-handle.tsx`),
+both small and testable in jsdom. Width clamp + collapse-precedence + KB-only
+gating are the three invariants the e2e/jsdom gates lock.
 
 ### Product/UX Gate
 
@@ -385,6 +647,24 @@ the persistent context band as the orientation mitigation — which stays visibl
 and collapse-aware here. Hiding the secondary nav (vs inventing 7 Settings icons)
 is the YAGNI-correct fix and matches the wireframe.
 
+#### Amendment — widenable KB rail (UI affordance note)
+
+**Tier:** advisory. The drag-to-widen handle is a NEW interactive affordance on an
+existing surface (not a new page/flow). Per `wg-ui-feature-requires-pen-wireframe`,
+a UI feature warrants a `.pen` wireframe; the existing committed wireframe
+`knowledge-base/product/design/navigation/single-nav-rail.pen` (frames 06/07)
+covers the rail's collapsed/expanded states but does NOT yet depict the widen
+handle. **Follow-up (non-blocking for this pipeline, but tracked):** add a
+"widened KB rail + edge handle" frame to that `.pen` during /work Phase 0 or at
+QA so the design source of truth reflects the affordance. The visual treatment is
+NOT net-new invention — it reuses the existing `ResizeHandle` idiom
+(`kb-desktop-layout.tsx:17`, amber-active grip), so there is no new visual
+vocabulary to design from scratch; the handle simply appears on a second edge.
+The affordance is discoverable via the standard `col-resize` cursor + grip dots on
+hover, consistent with the doc/chat splitter the user already uses in KB. No new
+copy. `ux-design-lead` not required (reuses an existing component idiom on an
+existing surface); the `.pen` frame addition is the only design follow-up.
+
 ## Open Code-Review Overlap
 
 None. (`gh issue list --label code-review --state open` → only #2193 substring-
@@ -402,6 +682,13 @@ Files-to-Edit), the 5-field observability schema is **not required**. The
 behavioral correctness signal is the `nav-states-shell.e2e.ts` headless
 visual-regression gate (ADR-049), which runs in CI / `/soleur:qa` and fails loud
 on overflow regression — no SSH, no dark surface.
+
+The widenable-KB-rail amendment adds only client-side files
+(`hooks/use-rail-width.ts`, `components/dashboard/rail-resize-handle.tsx`, edits to
+`(dashboard)/layout.tsx` + `e2e/` + `test/`) — still no server/infra code-class
+file, so the skip condition still holds. Its correctness signal is the same e2e
+gate, extended with the drag/persist/clamp/precedence cases (AC9–AC14); the width
+is a localStorage integer with no telemetry or backend.
 
 ## Notes
 

@@ -47,6 +47,115 @@ const MOCK_ACTIVE_REPO = {
   fellBackToSolo: false,
 };
 
+// POPULATED secondary-nav fixtures. The collapsed-overflow gate (AC3) must run
+// against REAL content — an empty rail satisfies scrollWidth<=clientWidth
+// vacuously (the false-GREEN this hardening closes: the KB tree was mocked
+// `tree: []`, Settings/Chat collapsed were never visited).
+const SEEDED_CONVERSATIONS = [
+  {
+    id: "conv-active",
+    user_id: "test-user-id",
+    repo_url: "https://github.com/acme/repo",
+    domain_leader: "cto",
+    session_id: null,
+    status: "active",
+    total_cost_usd: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    last_active: "2026-04-28T10:00:00Z",
+    created_at: "2026-04-28T09:00:00Z",
+    archived_at: null,
+  },
+  {
+    id: "conv-other",
+    user_id: "test-user-id",
+    repo_url: "https://github.com/acme/repo",
+    domain_leader: "cmo",
+    session_id: null,
+    status: "waiting_for_user",
+    total_cost_usd: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    last_active: "2026-04-27T10:00:00Z",
+    created_at: "2026-04-27T09:00:00Z",
+    archived_at: null,
+  },
+  {
+    id: "conv-third",
+    user_id: "test-user-id",
+    repo_url: "https://github.com/acme/repo",
+    domain_leader: "cfo",
+    session_id: null,
+    status: "completed",
+    total_cost_usd: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    last_active: "2026-04-26T10:00:00Z",
+    created_at: "2026-04-26T09:00:00Z",
+    archived_at: null,
+  },
+];
+
+const SEEDED_MESSAGES = [
+  {
+    conversation_id: "conv-active",
+    role: "user",
+    content: "First seeded rail conversation title",
+    leader_id: null,
+    created_at: "2026-04-28T09:01:00Z",
+  },
+  {
+    conversation_id: "conv-other",
+    role: "user",
+    content: "Second seeded rail conversation title",
+    leader_id: null,
+    created_at: "2026-04-27T09:01:00Z",
+  },
+  {
+    conversation_id: "conv-third",
+    role: "user",
+    content: "Third seeded rail conversation title",
+    leader_id: null,
+    created_at: "2026-04-26T09:01:00Z",
+  },
+];
+
+// A nested tree with a deliberately long folder + file name — the surface that
+// truncates at the 224px default and that the widen handle (AC9) makes legible.
+const SEEDED_KB_TREE = {
+  tree: {
+    name: "root",
+    type: "directory",
+    path: "",
+    children: [
+      // Top-level long file name — rendered immediately at depth 0 (no expand
+      // needed), so it's the populated row the collapsed-overflow + widen
+      // assertions target.
+      {
+        name: "an-extremely-long-document-filename-that-truncates-at-the-default-rail-width.md",
+        type: "file",
+        path: "an-extremely-long-document-filename-that-truncates-at-the-default-rail-width.md",
+        extension: ".md",
+      },
+      {
+        name: "knowledge-base",
+        type: "directory",
+        path: "knowledge-base",
+        children: [
+          {
+            name: "a-deeply-nested-folder-name",
+            type: "directory",
+            path: "knowledge-base/a-deeply-nested-folder-name",
+            children: [],
+          },
+        ],
+      },
+    ],
+  },
+  lastSync: null,
+  needsReconnect: false,
+};
+
 /**
  * Wire the auth/session/realtime stubs (shared helper) PLUS the band's two app
  * API routes and the leaf routes the dashboard shell touches. Mirrors
@@ -56,9 +165,19 @@ async function setupNavMocks(page: Page): Promise<void> {
   await injectFakeSupabaseSession(page);
   await mockSupabaseAuth(page);
 
-  // layout.tsx reads users.subscription_status (browser-side) via .single().
+  // layout.tsx reads users.subscription_status (browser-side) via .single();
+  // the conversations rail scopes its list by users.repo_url (.single() → object
+  // body, NOT array — see start-fresh-conversations-rail.e2e.ts on why).
   await page.route("**/rest/v1/users*", async (route) => {
     const select = new URL(route.request().url()).searchParams.get("select") ?? "";
+    if (select.includes("repo_url")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ repo_url: "https://github.com/acme/repo" }),
+      });
+      return;
+    }
     if (select.includes("subscription_status")) {
       await route.fulfill({
         status: 200,
@@ -74,11 +193,20 @@ async function setupNavMocks(page: Page): Promise<void> {
     });
   });
 
+  // Populated so the collapsed Chat case asserts overflow against REAL rows.
   await page.route("**/rest/v1/conversations*", (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(SEEDED_CONVERSATIONS),
+    }),
   );
   await page.route("**/rest/v1/messages*", (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(SEEDED_MESSAGES),
+    }),
   );
   await page.route("**/api/admin/check", (route) =>
     route.fulfill({
@@ -111,6 +239,16 @@ async function setupNavMocks(page: Page): Promise<void> {
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({ tree: [], entries: [] }),
+    }),
+  );
+  // POPULATED KB tree for the rail (registered AFTER the catch-all so Playwright,
+  // which matches most-recently-added first, routes /api/kb/tree here). The rail
+  // file tree reads `data.tree` from this endpoint (hooks/use-kb-layout-state).
+  await page.route("**/api/kb/tree*", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(SEEDED_KB_TREE),
     }),
   );
   await page.route("**/api/byok/**", (route) =>
@@ -200,6 +338,21 @@ const repoBadge = (page: Page) => railBand(page).getByTestId("live-repo-badge");
 const secondarySlot = (page: Page) => page.getByTestId("rail-secondary-slot");
 const primaryNav = (page: Page) => page.getByRole("link", { name: "Knowledge Base" });
 
+// Secondary-nav content + stable wrappers (collapse fix).
+const settingsRailNav = (page: Page) => page.getByTestId("settings-rail-nav");
+const settingsNav = (page: Page) =>
+  page.getByRole("navigation", { name: "Settings" });
+const kbRailTree = (page: Page) => page.getByTestId("kb-rail-tree");
+const kbLongFile = (page: Page) =>
+  page.getByText(/an-extremely-long-document-filename/);
+const conversationsRail = (page: Page) => page.getByTestId("conversations-rail");
+const conversationRow = (page: Page) =>
+  page.getByText(/First seeded rail conversation title/);
+// Widenable KB rail (amendment).
+const resizeHandle = (page: Page) => page.getByTestId("kb-rail-resize-handle");
+const asideWidth = (page: Page) =>
+  page.locator("aside").first().evaluate((el) => el.clientWidth);
+
 test.describe("nav-states visual gate — desktop", () => {
   test.use({ viewport: DESKTOP });
 
@@ -264,7 +417,7 @@ test.describe("nav-states visual gate — desktop", () => {
     ).toHaveCount(0);
   });
 
-  test("collapsed drilled: icon-only, no overflow, chrome gone", async ({ page }) => {
+  test("collapsed drilled (KB, POPULATED tree): no overflow, tree DOM-removed, chrome gone", async ({ page }) => {
     await setupNavMocks(page);
     await seedCollapsed(page);
     await gotoOrSkip(page, "/dashboard/kb");
@@ -274,8 +427,149 @@ test.describe("nav-states visual gate — desktop", () => {
     await expect(railBand(page)).toBeVisible();
     await expect(railBand(page)).toHaveAttribute("data-collapsed", "true");
     await expect(wordmark(page)).toHaveCount(0); // Bug 1
+    // AC2: the stable wrapper survives but the populated tree content is gone —
+    // the file row must NOT be present (so it cannot clip at 56px).
+    await expect(kbRailTree(page)).toBeAttached();
+    await expect(kbLongFile(page)).toHaveCount(0);
+    // AC3: the gate runs against POPULATED content (the false-GREEN this closes
+    // was a `tree: []` empty rail).
     const overflow = await aside.evaluate((el) => el.scrollWidth - el.clientWidth);
-    expect(overflow).toBeLessThanOrEqual(1); // Bug 2
+    expect(overflow).toBeLessThanOrEqual(1);
+  });
+
+  test("collapsed drilled (Settings, POPULATED): no overflow, sub-nav DOM-removed (AC2/AC3)", async ({ page }) => {
+    await setupNavMocks(page);
+    await seedCollapsed(page);
+    await gotoOrSkip(page, "/dashboard/settings");
+
+    const aside = page.locator("aside").first();
+    await expect(aside).toHaveClass(/md:w-14/, { timeout: 15_000 });
+    await expect(railBand(page)).toHaveAttribute("data-collapsed", "true");
+    // AC5: identity still legible when collapsed+drilled.
+    await expect(page.getByTestId("live-repo-dot")).toBeVisible();
+    // AC2: wrapper present, the General/Billing/etc. links gone.
+    await expect(settingsRailNav(page)).toBeAttached();
+    await expect(settingsNav(page)).toHaveCount(0);
+    const overflow = await aside.evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(1);
+  });
+
+  test("collapsed drilled (Chat, POPULATED rows): no overflow, rows DOM-removed (AC2/AC3)", async ({ page }) => {
+    await setupNavMocks(page);
+    await seedCollapsed(page);
+    await gotoOrSkip(page, "/dashboard/chat");
+
+    const aside = page.locator("aside").first();
+    await expect(aside).toHaveClass(/md:w-14/, { timeout: 15_000 });
+    await expect(railBand(page)).toHaveAttribute("data-collapsed", "true");
+    // AC2: the rich conversation rows are gone when collapsed.
+    await expect(conversationRow(page)).toHaveCount(0);
+    const overflow = await aside.evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(1);
+  });
+
+  test("expanded drilled (all 3): secondary-nav content PRESENT (AC4 anti-vacuity)", async ({ page }) => {
+    await setupNavMocks(page);
+
+    await gotoOrSkip(page, "/dashboard/kb");
+    await expect(kbLongFile(page)).toBeVisible({ timeout: 15_000 });
+
+    await gotoOrSkip(page, "/dashboard/settings");
+    await expect(settingsNav(page)).toBeVisible({ timeout: 15_000 });
+    await expect(
+      settingsNav(page).getByRole("link", { name: "General" }),
+    ).toBeVisible();
+
+    await gotoOrSkip(page, "/dashboard/chat");
+    await expect(conversationsRail(page)).toBeVisible({ timeout: 15_000 });
+    await expect(conversationRow(page)).toBeVisible({ timeout: 15_000 });
+  });
+});
+
+test.describe("widenable KB rail — desktop", () => {
+  test.use({ viewport: DESKTOP });
+
+  test("drag widens the expanded KB rail and a truncated name becomes legible (AC9)", async ({ page }) => {
+    await setupNavMocks(page);
+    await gotoOrSkip(page, "/dashboard/kb");
+
+    await expect(resizeHandle(page)).toBeVisible({ timeout: 15_000 });
+    const before = await asideWidth(page);
+
+    const handle = resizeHandle(page);
+    const box = await handle.boundingBox();
+    if (!box) throw new Error("resize handle has no bounding box");
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 140, box.y + box.height / 2, { steps: 8 });
+    await page.mouse.up();
+
+    const after = await asideWidth(page);
+    expect(after).toBeGreaterThan(before);
+  });
+
+  test("width persists across reload (AC10)", async ({ page }) => {
+    await setupNavMocks(page);
+    await gotoOrSkip(page, "/dashboard/kb");
+    await expect(resizeHandle(page)).toBeVisible({ timeout: 15_000 });
+
+    const handle = resizeHandle(page);
+    const box = await handle.boundingBox();
+    if (!box) throw new Error("resize handle has no bounding box");
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 120, box.y + box.height / 2, { steps: 8 });
+    await page.mouse.up();
+    const widened = await asideWidth(page);
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(resizeHandle(page)).toBeVisible({ timeout: 15_000 });
+    const restored = await asideWidth(page);
+    expect(Math.abs(restored - widened)).toBeLessThanOrEqual(2);
+  });
+
+  test("collapse takes precedence over a widened width (AC12)", async ({ page }) => {
+    await setupNavMocks(page);
+    // Pre-seed a widened width, then collapse — the rail must still be 56px and
+    // the handle gone; the stored width is preserved for re-expand.
+    await page.addInitScript(() => {
+      localStorage.setItem("soleur:sidebar.kb.width", "400");
+    });
+    await seedCollapsed(page);
+    await gotoOrSkip(page, "/dashboard/kb");
+
+    const aside = page.locator("aside").first();
+    await expect(aside).toHaveClass(/md:w-14/, { timeout: 15_000 });
+    await expect(resizeHandle(page)).toHaveCount(0);
+    const width = await asideWidth(page);
+    expect(width).toBeLessThanOrEqual(64); // ~56px collapsed rail
+    // Stored width is untouched (returns on expand).
+    const stored = await page.evaluate(() =>
+      localStorage.getItem("soleur:sidebar.kb.width"),
+    );
+    expect(stored).toBe("400");
+  });
+
+  test("resize handle is KB-only — absent on Settings and Chat (AC13)", async ({ page }) => {
+    await setupNavMocks(page);
+    await gotoOrSkip(page, "/dashboard/settings");
+    await expect(secondarySlot(page)).toBeVisible({ timeout: 15_000 });
+    await expect(resizeHandle(page)).toHaveCount(0);
+
+    await gotoOrSkip(page, "/dashboard/chat");
+    await expect(secondarySlot(page)).toBeVisible({ timeout: 15_000 });
+    await expect(resizeHandle(page)).toHaveCount(0);
+  });
+});
+
+test.describe("widenable KB rail — mobile", () => {
+  test.use({ viewport: MOBILE });
+
+  test("no resize handle on mobile; drawer width untouched (AC viewport)", async ({ page }) => {
+    await setupNavMocks(page);
+    await gotoOrSkip(page, "/dashboard/kb");
+    // The handle is `hidden md:block`; on mobile it must not be visible.
+    await expect(resizeHandle(page)).toBeHidden();
   });
 });
 

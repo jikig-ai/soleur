@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { RailSlotPortal } from "@/components/dashboard/rail-slot";
+import { RailSlotPortal, useRailCollapsed } from "@/components/dashboard/rail-slot";
 
 interface SettingsTab {
   href: string;
@@ -42,36 +42,47 @@ export function SettingsShell({
     ...(activityTab ? [activityTab] : []),
   ];
   const pathname = usePathname();
+  // ADR-047 collapse fix: when the unified rail is collapsed the portaled
+  // sub-nav is DOM-removed (render-conditional, NOT display:none) so its
+  // full-text labels cannot clip at the 56px collapsed rail. The stable
+  // `settings-rail-nav` wrapper always renders so present/absent assertions
+  // target exactly one node; the collapse-aware WorkspaceContextBand keeps
+  // workspace identity legible.
+  const collapsed = useRailCollapsed();
 
   return (
     <div className="flex min-h-full">
       <RailSlotPortal>
-        <nav aria-label="Settings" className="px-2 py-2">
-          <ul className="space-y-1">
-            {SETTINGS_TABS.map((tab) => {
-              const active =
-                tab.href === "/dashboard/settings"
-                  ? pathname === "/dashboard/settings"
-                  : pathname.startsWith(tab.href);
+        <div data-testid="settings-rail-nav">
+          {!collapsed && (
+            <nav aria-label="Settings" className="px-2 py-2">
+              <ul className="space-y-1">
+                {SETTINGS_TABS.map((tab) => {
+                  const active =
+                    tab.href === "/dashboard/settings"
+                      ? pathname === "/dashboard/settings"
+                      : pathname.startsWith(tab.href);
 
-              return (
-                <li key={tab.href}>
-                  <Link
-                    href={tab.href}
-                    aria-current={active ? "page" : undefined}
-                    className={`block rounded-lg px-3 py-2 text-sm transition-colors ${
-                      active
-                        ? "bg-soleur-bg-surface-2 text-soleur-text-primary font-medium"
-                        : "text-soleur-text-secondary hover:bg-soleur-bg-surface-2/50 hover:text-soleur-text-primary"
-                    }`}
-                  >
-                    {tab.label}
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        </nav>
+                  return (
+                    <li key={tab.href}>
+                      <Link
+                        href={tab.href}
+                        aria-current={active ? "page" : undefined}
+                        className={`block rounded-lg px-3 py-2 text-sm transition-colors ${
+                          active
+                            ? "bg-soleur-bg-surface-2 text-soleur-text-primary font-medium"
+                            : "text-soleur-text-secondary hover:bg-soleur-bg-surface-2/50 hover:text-soleur-text-primary"
+                        }`}
+                      >
+                        {tab.label}
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </nav>
+          )}
+        </div>
       </RailSlotPortal>
 
       {/* Content area */}
