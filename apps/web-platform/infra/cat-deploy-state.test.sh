@@ -38,6 +38,8 @@ assert "no_prior_deploy sentinel exit_code = -2" \
   "[[ \$(printf '%s' '$NO_DEPLOY_OUT' | jq -r .exit_code) == '-2' ]]"
 assert "no_prior_deploy carries services.inngest_heartbeat" \
   "printf '%s' '$NO_DEPLOY_OUT' | jq -e '.services.inngest_heartbeat' >/dev/null"
+assert "no_prior_deploy carries services.inngest_heartbeat_timer" \
+  "printf '%s' '$NO_DEPLOY_OUT' | jq -e '.services.inngest_heartbeat_timer' >/dev/null"
 
 # --- successful state file merge ---
 echo '{"exit_code":0,"target":"inngest","tag":"vinngest-v1.2.3"}' > "$TMP/ok.state"
@@ -48,6 +50,8 @@ assert "OK state preserves target field" \
   "[[ \$(printf '%s' '$OK_OUT' | jq -r .target) == 'inngest' ]]"
 assert "OK state injects services.inngest_heartbeat" \
   "printf '%s' '$OK_OUT' | jq -e '.services.inngest_heartbeat' >/dev/null"
+assert "OK state injects services.inngest_heartbeat_timer" \
+  "printf '%s' '$OK_OUT' | jq -e '.services.inngest_heartbeat_timer' >/dev/null"
 
 # --- pre-existing services.* keys preserved ---
 echo '{"exit_code":0,"services":{"web":"healthy"}}' > "$TMP/svc.state"
@@ -56,6 +60,8 @@ assert "pre-existing services.web preserved" \
   "[[ \$(printf '%s' '$SVC_OUT' | jq -r .services.web) == 'healthy' ]]"
 assert "services.inngest_heartbeat still added alongside services.web" \
   "printf '%s' '$SVC_OUT' | jq -e '.services.inngest_heartbeat' >/dev/null"
+assert "services.inngest_heartbeat_timer still added alongside services.web" \
+  "printf '%s' '$SVC_OUT' | jq -e '.services.inngest_heartbeat_timer' >/dev/null"
 
 # --- corrupt state sentinel ---
 echo 'not valid json {' > "$TMP/corrupt.state"
@@ -64,6 +70,8 @@ assert "corrupt_state sentinel exit_code = -3" \
   "[[ \$(printf '%s' '$CORRUPT_OUT' | jq -r .exit_code) == '-3' ]]"
 assert "corrupt_state carries services.inngest_heartbeat" \
   "printf '%s' '$CORRUPT_OUT' | jq -e '.services.inngest_heartbeat' >/dev/null"
+assert "corrupt_state carries services.inngest_heartbeat_timer" \
+  "printf '%s' '$CORRUPT_OUT' | jq -e '.services.inngest_heartbeat_timer' >/dev/null"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="

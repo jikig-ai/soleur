@@ -282,6 +282,61 @@ export function warnSilentFallback(
 }
 
 /**
+ * Info-level variant. Same contract as `warn`/`reportSilentFallback`, but emits
+ * at `level: "info"` — use for an EVERY-RUN structured record that must be
+ * queryable in Sentry without SSH (e.g. a cron's reclaim/throughput payload on
+ * the HEALTHY path), NOT just on the error/degraded branch. The pino
+ * `logger.info` mirror is preserved inside the helper, so callers replacing a
+ * bare `logger.info` lose no stdout signal.
+ *
+ * Because every call emits, prefer this only for low-cardinality periodic
+ * signals (e.g. a 6h cron); never a per-request hot path — pair with
+ * `mirrorWithDebounce` if a burst is possible. The `info` path normally passes
+ * `err = null`, so the `err instanceof Error` branch is effectively unused here,
+ * but the signature is kept symmetric with the warn/report pair so a future
+ * caller can attach a non-fatal Error. Note: `art33Breach` is intentionally NOT
+ * honored — an info-level signal is never a breach (the option is accepted for
+ * signature parity but produces no `art_33_breach` tag).
+ */
+export function infoSilentFallback(
+  err: unknown,
+  options: SilentFallbackOptions,
+): void {
+  const { feature, op, extra, message } = options;
+  const tags: Record<string, string> = { feature };
+  if (op) tags.op = op;
+
+  // pg_code surfacing kept for parity (no-op when err is null / non-Postgres).
+  const pgCode = sqlStateFromError(err);
+  if (pgCode) tags.pg_code = pgCode;
+
+  // Pseudonymize `userId` → `userIdHash` at the emit boundary (see
+  // reportSilentFallback for rationale). No-op when no `userId` key is present.
+  const transformedExtra = hashExtraUserId(extra);
+
+  const safeMessage = sanitizeLogMessage(message ?? `${feature} info`);
+
+  logger.info({ err, feature, op, ...transformedExtra }, safeMessage);
+
+  try {
+    if (err instanceof Error) {
+      if (typeof Sentry.captureException === "function") {
+        Sentry.captureException(err, { level: "info", tags, extra: transformedExtra });
+      }
+    } else if (typeof Sentry.captureMessage === "function") {
+      Sentry.captureMessage(safeMessage, {
+        level: "info",
+        tags,
+        extra: { err, ...transformedExtra },
+      });
+    }
+  } catch {
+    // See reportSilentFallback — Sentry namespace may be partially shimmed
+    // in non-prod bundles; pino is the durable signal.
+  }
+}
+
+/**
  * Per-`(userId, errorClass)` 5-minute TTL on the Sentry mirror.
  *
  * Use at sites where a misconfigured prod or a runaway loop could fire
