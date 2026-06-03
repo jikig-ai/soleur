@@ -317,10 +317,12 @@ blocks already carry). The file's existing Sentry mock + `import { ... } from
 
 - [ ] **AC8 — no-SSH reclaim verification path documented:** confirm an operator
   can pull the every-run reclaim event after firing the manual trigger via the
-  Sentry events REST API (org-subdomain host per ADR-031), e.g.
-  `GET https://<org-slug>.sentry.io/api/0/organizations/<slug>/events/?query=feature:cron-workspace-gc+level:info&field=message&field=freedMb`
-  (exact field projection confirmed at work-time against the live Sentry events
-  schema). **Automation:** this is a read-only `gh`/`curl` Sentry-API probe, NOT
+  Sentry events REST API (org-subdomain host per ADR-031). `freedMb` rides in the
+  event `extra` payload (NOT a promoted column/tag), so a Discover `&field=freedMb`
+  projection returns null — instead list events with
+  `GET https://<org-slug>.sentry.io/api/0/organizations/<slug>/events/?query=feature:cron-workspace-gc+level:info`
+  then read `extra.freedMb` from the latest event-detail (`GET .../events/<event-id>/`).
+  **Automation:** this is a read-only `gh`/`curl` Sentry-API probe, NOT
   operator dashboard-watching — if a Sentry MCP/CLI is available at work-time,
   prescribe the exact query + a deterministic "freedMb present in last event"
   verdict rather than punting to a human. Folded into the post-merge step, not

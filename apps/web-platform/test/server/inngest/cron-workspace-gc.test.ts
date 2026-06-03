@@ -250,6 +250,26 @@ describe("cronWorkspaceGcHandler — sweep semantics", () => {
     );
   });
 
+  it("readdir ENOENT (statfs ok, root vanished before listing) also stays info-silent — no emit", async () => {
+    // The SECOND ENOENT short-circuit: statfs-before succeeds but the root is
+    // gone by the time we readdir it (a racing unmount). It returns before the
+    // every-run emit too (cron-workspace-gc.ts:138-144), so the info channel
+    // must stay quiet on this degraded sub-path just like the statfs-before one.
+    const enoent = Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    (statfs as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(statfsFor(500));
+    (readdir as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(enoent);
+
+    const result = await cronWorkspaceGcHandler({ step: fakeStep, logger: fakeLogger });
+
+    expect(result.sweptCount).toBe(0);
+    expect(rm).not.toHaveBeenCalled();
+    expect(reportSilentFallback).not.toHaveBeenCalled();
+    expect(infoSilentFallback).not.toHaveBeenCalled();
+    expect(postSentryHeartbeat).toHaveBeenCalledWith(
+      expect.objectContaining({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG }),
+    );
+  });
+
   it("a single rm EACCES does not abort the loop — other dirs still swept, failure reported once", async () => {
     const now = Date.now();
     (statfs as unknown as ReturnType<typeof vi.fn>)
