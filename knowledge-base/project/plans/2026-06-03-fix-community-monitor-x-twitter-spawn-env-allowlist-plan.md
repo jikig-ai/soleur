@@ -133,7 +133,7 @@ Not applicable — no new scheduled job. The Inngest cron `cron-community-monito
 
 ### Pre-merge (PR)
 - [x] `buildSpawnEnv()` return object in `cron-community-monitor.ts` contains all four of `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET` as `process.env.<KEY>` entries.
-- [x] `buildSpawnEnv()` does **NOT** contain `X_ALLOW_POST` (verify: `grep -c 'X_ALLOW_POST' apps/web-platform/server/inngest/functions/cron-community-monitor.ts` returns `0`).
+- [x] `buildSpawnEnv()` does **NOT** forward `X_ALLOW_POST` (body-scoped invariant; enforced by the test's function-body slice). Note: a file-level `grep -c 'X_ALLOW_POST' …cron-community-monitor.ts` returns `1` — the single match is the intentional comment documenting the exclusion, not a forwarded key.
 - [x] The `...process.env` spread is still absent from `buildSpawnEnv()` (negative-class invariant unchanged).
 - [x] The comment block above `buildSpawnEnv()` lists the four `X_*` additions and notes `X_ALLOW_POST` is deliberately excluded.
 - [x] Positive-class `it.each` in the spawn-env test asserts all four X_* vars are forwarded; negative assertion confirms `X_ALLOW_POST` is absent.
