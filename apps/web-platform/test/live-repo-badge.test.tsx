@@ -2,6 +2,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { LiveRepoBadge } from "@/components/dashboard/live-repo-badge";
 
+// LiveRepoBadge is now INTERSTITIAL-ONLY: the "Working on: owner/repo" string
+// moved into the workspace pill subtitle (org-switcher.tsx, fed by the shared
+// useActiveRepo hook). This component renders the J5 revocation alert when the
+// API reports fellBackToSolo, else nothing.
+
 function mockActiveRepo(payload: Record<string, unknown>) {
   return vi.fn().mockResolvedValue({
     ok: true,
@@ -9,12 +14,12 @@ function mockActiveRepo(payload: Record<string, unknown>) {
   });
 }
 
-describe("LiveRepoBadge", () => {
+describe("LiveRepoBadge — J5 revocation interstitial", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('renders "Working on: owner/repo" for the active workspace (J6/J4)', async () => {
+  it("renders NOTHING on the happy path (repo name now lives in the pill, not here)", async () => {
     vi.stubGlobal(
       "fetch",
       mockActiveRepo({
@@ -25,12 +30,13 @@ describe("LiveRepoBadge", () => {
         fellBackToSolo: false,
       }),
     );
-    render(<LiveRepoBadge />);
-    const badge = await screen.findByTestId("live-repo-badge");
-    expect(badge).toHaveTextContent("Working on:");
-    expect(badge).toHaveTextContent("bob/team");
-    // No revocation interstitial on the happy path.
-    expect(screen.queryByTestId("revocation-interstitial")).toBeNull();
+    const { container } = render(<LiveRepoBadge />);
+    // let the poll resolve, then assert no repo badge + no interstitial
+    await vi.waitFor(() => {
+      expect(screen.queryByTestId("revocation-interstitial")).toBeNull();
+    });
+    expect(screen.queryByTestId("live-repo-badge")).toBeNull();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("J5: renders the revocation interstitial when the API reports fellBackToSolo", async () => {
@@ -48,53 +54,27 @@ describe("LiveRepoBadge", () => {
     const interstitial = await screen.findByTestId("revocation-interstitial");
     expect(interstitial).toHaveTextContent(/no longer have access/i);
     expect(interstitial).toHaveTextContent(/personal workspace/i);
-    // Still shows the solo repo it fell back to.
-    expect(await screen.findByTestId("live-repo-badge")).toHaveTextContent(
-      "alice/solo",
-    );
+    // the component no longer surfaces the repo name — that's the pill's job now
+    expect(screen.queryByTestId("live-repo-badge")).toBeNull();
   });
 
-  it("re-polls active-repo state on window focus (truthful-at-run-time, not realtime)", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            workspaceId: "ws-1",
-            repoUrl: "https://github.com/bob/team",
-            repoName: "bob/team",
-            repoStatus: "ready",
-            fellBackToSolo: false,
-          }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            workspaceId: "solo-1",
-            repoUrl: "https://github.com/alice/solo",
-            repoName: "alice/solo",
-            repoStatus: "ready",
-            fellBackToSolo: false,
-          }),
-      });
-    vi.stubGlobal("fetch", fetchMock);
-
-    render(<LiveRepoBadge />);
-    expect(await screen.findByTestId("live-repo-badge")).toHaveTextContent(
-      "bob/team",
+  it("dismissing the interstitial hides it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockActiveRepo({
+        workspaceId: "solo-1",
+        repoUrl: "https://github.com/alice/solo",
+        repoName: "alice/solo",
+        repoStatus: "ready",
+        fellBackToSolo: true,
+      }),
     );
-
-    fireEvent.focus(window);
-
-    await vi.waitFor(() => {
-      expect(screen.getByTestId("live-repo-badge")).toHaveTextContent(
-        "alice/solo",
-      );
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock).toHaveBeenCalledWith("/api/workspace/active-repo");
+    render(<LiveRepoBadge />);
+    const interstitial = await screen.findByTestId("revocation-interstitial");
+    fireEvent.click(
+      screen.getByRole("button", { name: /dismiss notice/i }),
+    );
+    expect(interstitial).not.toBeInTheDocument();
   });
 
   it("renders nothing until the first poll resolves (no flash for solo users)", () => {

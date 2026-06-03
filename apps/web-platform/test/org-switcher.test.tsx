@@ -37,17 +37,40 @@ describe("OrgSwitcher", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("AC4/AC5 (solo): the static chip folds in the repo subtitle and drops the role from the face", () => {
+    render(<OrgSwitcher memberships={[JIKIGAI]} repoName="jikig-ai/soleur" />);
+    const chip = screen.getByTestId("workspace-identity-static");
+    // repo subtitle is the muted second line, inside the chip
+    const subtitle = within(chip).getByTestId("live-repo-badge");
+    expect(subtitle).toHaveTextContent("jikig-ai/soleur");
+    // role no longer clutters the face (it's a solo Owner — no info loss)
+    expect(chip.textContent).not.toContain("Owner");
+  });
+
+  it("solo chip renders no subtitle when no repo is connected (compact, Open Q1)", () => {
+    render(<OrgSwitcher memberships={[JIKIGAI]} repoName={null} />);
+    const chip = screen.getByTestId("workspace-identity-static");
+    expect(within(chip).queryByTestId("live-repo-badge")).toBeNull();
+    expect(chip).toHaveTextContent("jikigai");
+  });
+
   it("AC-C: renders nothing when memberships list is empty", () => {
     const { container } = render(<OrgSwitcher memberships={[]} />);
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("renders chip with current-org name + role badge when count > 1", () => {
-    render(<OrgSwitcher memberships={[JIKIGAI, ACME]} />);
+  it("AC3/AC5 (multi-org): the closed chip shows name + repo subtitle, NOT the role on the face", () => {
+    render(
+      <OrgSwitcher memberships={[JIKIGAI, ACME]} repoName="jikig-ai/soleur" />,
+    );
     const trigger = screen.getByRole("button", { name: /switch workspace/i });
     expect(trigger).toBeInTheDocument();
     expect(trigger.textContent).toContain("jikigai");
-    expect(trigger.textContent).toContain("Owner");
+    // repo subtitle folded into the closed pill face
+    const subtitle = within(trigger).getByTestId("live-repo-badge");
+    expect(subtitle).toHaveTextContent("jikig-ai/soleur");
+    // role moved OFF the face (it now lives only in the dropdown rows)
+    expect(trigger.textContent).not.toContain("Owner");
   });
 
   it("dropdown lists all memberships with role + member count when chip is clicked", () => {

@@ -125,35 +125,43 @@ export function WorkspaceContextBand({
           : "flex flex-col"
       }
     >
-      {/* Back-to-menu affordance — its OWN labelled row (not inline beside the
-          pill), shown only when drilled. Synchronous (first render, never
-          async-gated). Left gutter (px-3) matches the brand-row collapse
-          toggle so the two controls share the same px-3 border-box gutter
-          (their border-boxes align; the collapse glyph is centered inside an
-          h-6 w-6 button so the arrowheads sit ~4px apart). The label + distinct
-          BackArrowIcon stop it reading as a duplicate of the collapse chevron
-          (#4810 follow-up Bug 2). Splitting it out of the pill row also frees the
-          full rail width for the pill, preventing the overflow (Bug 1). */}
-      {drill ? (
-        <Link
-          href="/dashboard"
-          aria-label="Back to menu"
-          data-testid="nav-back-chevron"
-          className="flex min-w-0 items-center gap-2 px-3 pt-3 text-sm text-soleur-accent-gold-fg hover:text-soleur-text-primary"
-        >
-          <BackArrowIcon className="h-4 w-4 shrink-0" />
-          <span className="truncate">Back to menu</span>
-        </Link>
-      ) : null}
-      <div className={`flex items-center gap-2 px-3 ${drill ? "pt-2" : "pt-3"}`}>
+      {/* Workspace pill LEADS the band — the persistent workspace identity is
+          the orientation anchor, so it sits above the "Back to menu" nav
+          affordance (the leading element carries the band's top breathing room,
+          pt-3). The pill face now also surfaces the active repo as a muted
+          subtitle (folded in from the old standalone "Working on:" row), so the
+          band no longer burns a separate row on it. */}
+      <div className="flex items-center gap-2 px-3 pt-3">
         <div className="min-w-0 flex-1">
           <OrgSwitcherContainer />
         </div>
       </div>
 
-      <div className="px-3 pb-2 pt-1">
-        <LiveRepoBadge />
-      </div>
+      {/* J5 revocation interstitial only — LiveRepoBadge no longer renders the
+          repo name (that moved into the pill subtitle above). It stays mounted
+          here so the band remains its sole importer (nav-single-mount invariant)
+          and the access-revocation alert keeps a home. Renders null on the happy
+          path, so the pill is visually adjacent to "Back to menu" below. */}
+      <LiveRepoBadge />
+
+      {/* Back-to-menu affordance — its OWN labelled row (not inline beside the
+          pill), shown only when drilled. Now FOLLOWS the pill (tighter pt-2,
+          since the pill above already supplied the band's top breathing room).
+          Synchronous (first render, never async-gated). Left gutter (px-3)
+          matches the brand-row collapse toggle so the two controls share the
+          same px-3 border-box gutter. The label + distinct BackArrowIcon stop it
+          reading as a duplicate of the collapse chevron (#4810 follow-up Bug 2). */}
+      {drill ? (
+        <Link
+          href="/dashboard"
+          aria-label="Back to menu"
+          data-testid="nav-back-chevron"
+          className="flex min-w-0 items-center gap-2 px-3 pt-2 text-sm text-soleur-accent-gold-fg hover:text-soleur-text-primary"
+        >
+          <BackArrowIcon className="h-4 w-4 shrink-0" />
+          <span className="truncate">Back to menu</span>
+        </Link>
+      ) : null}
 
       {drill && (
         <div

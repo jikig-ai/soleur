@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { OrgSwitcher } from "@/components/dashboard/org-switcher";
+import { useActiveRepo } from "@/hooks/use-active-repo";
 import { getCurrentWorkspaceId } from "@/lib/session-claims";
 import type { OrgMembershipSummary } from "@/server/org-memberships-resolver";
 
@@ -30,6 +31,9 @@ export function OrgSwitcherContainer() {
   const [memberships, setMemberships] = useState<OrgMembershipSummary[] | null>(null);
   const [pending, setPending] = useState<OrgMembershipSummary | null>(null);
   const [status, setStatus] = useState<SwitchStatus>("idle");
+  // The active-repo name folds into the pill face as a muted subtitle. Same
+  // self-healing source LiveRepoBadge uses (shared hook, single fetch surface).
+  const { data: repo } = useActiveRepo();
 
   useEffect(() => {
     let cancelled = false;
@@ -124,7 +128,11 @@ export function OrgSwitcherContainer() {
     // supplies px-3. A nested px-3 here double-padded the pill (#4810 follow-up
     // Bug 1: the bordered switch box painted past the rail's right edge).
     <div className="border-b border-soleur-border-default py-3">
-      <OrgSwitcher memberships={memberships} onSwitch={handleSelect} />
+      <OrgSwitcher
+        memberships={memberships}
+        onSwitch={handleSelect}
+        repoName={repo?.repoName ?? null}
+      />
 
       {pending && (
         <div
