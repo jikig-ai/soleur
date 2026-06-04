@@ -1,0 +1,563 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "Qsyl7",
+      "x": 0,
+      "y": 0,
+      "name": "Concierge — Streamed Commands (No Approval Cards)",
+      "width": 520,
+      "fill": "$bg-chat",
+      "layout": "vertical",
+      "gap": 16,
+      "padding": [
+        32,
+        24
+      ],
+      "children": [
+        {
+          "type": "frame",
+          "id": "QrB3g",
+          "name": "header",
+          "width": "fill_container",
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "qf6Qg",
+              "name": "titleTxt",
+              "fill": "$text-secondary",
+              "content": "Soleur Concierge",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "600",
+              "letterSpacing": 1.5
+            },
+            {
+              "type": "frame",
+              "id": "8Z9Y2",
+              "name": "statusPill",
+              "fill": "#16A34A22",
+              "cornerRadius": 100,
+              "gap": 6,
+              "padding": [
+                4,
+                10
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "ellipse",
+                  "id": "K5WnO",
+                  "name": "dotIcon",
+                  "fill": "#16A34A",
+                  "width": 6,
+                  "height": 6
+                },
+                {
+                  "type": "text",
+                  "id": "6IUUX",
+                  "name": "statusTxt",
+                  "fill": "#16A34A",
+                  "content": "Online",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 10,
+                  "fontWeight": "500"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "rectangle",
+          "id": "CgBJb",
+          "name": "divider",
+          "fill": "$border-subtle",
+          "width": "fill_container",
+          "height": 1
+        },
+        {
+          "type": "frame",
+          "id": "9OdXl",
+          "name": "userRow",
+          "width": "fill_container",
+          "justifyContent": "end",
+          "children": [
+            {
+              "type": "frame",
+              "id": "XQ6dl",
+              "name": "userBubble",
+              "fill": "#27272F",
+              "cornerRadius": [
+                12,
+                12,
+                4,
+                12
+              ],
+              "layout": "vertical",
+              "padding": [
+                10,
+                14
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "QzAvt",
+                  "name": "userTxt",
+                  "fill": "$text-primary",
+                  "content": "Show me my open pull requests",
+                  "fontFamily": "Inter",
+                  "fontSize": 13
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "iVCzt",
+          "name": "assistRow",
+          "width": "fill_container",
+          "gap": 10,
+          "children": [
+            {
+              "type": "frame",
+              "id": "HYTFV",
+              "name": "avatar",
+              "width": 28,
+              "height": 28,
+              "fill": {
+                "type": "gradient",
+                "gradientType": "linear",
+                "enabled": true,
+                "rotation": 180,
+                "size": {
+                  "height": 1
+                },
+                "colors": [
+                  {
+                    "color": "#D97706",
+                    "position": 0
+                  },
+                  {
+                    "color": "#92400E",
+                    "position": 1
+                  }
+                ]
+              },
+              "cornerRadius": 8,
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "HMjdl",
+                  "x": 9,
+                  "y": 5,
+                  "name": "avatarIcon",
+                  "fill": "#FEF3C7",
+                  "content": "S",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 14,
+                  "fontWeight": "700"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "OIlZX",
+              "name": "bubble",
+              "width": "fill_container",
+              "fill": "$surface-1",
+              "cornerRadius": [
+                4,
+                12,
+                12,
+                12
+              ],
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": {
+                  "type": "gradient",
+                  "gradientType": "linear",
+                  "enabled": true,
+                  "rotation": 90,
+                  "size": {
+                    "height": 1
+                  },
+                  "colors": [
+                    {
+                      "color": "#D97706",
+                      "position": 0
+                    },
+                    {
+                      "color": "#D9770644",
+                      "position": 0.5
+                    },
+                    {
+                      "color": "#D9770618",
+                      "position": 1
+                    }
+                  ]
+                }
+              },
+              "layout": "vertical",
+              "gap": 12,
+              "padding": [
+                14,
+                16
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "ilYpy",
+                  "name": "topRow",
+                  "width": "fill_container",
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "xWjgn",
+                      "name": "nameTxt",
+                      "fill": "$text-secondary",
+                      "content": "Soleur Concierge",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "JRjJS",
+                      "name": "streamPill",
+                      "fill": "$streaming-bg",
+                      "cornerRadius": 100,
+                      "gap": 5,
+                      "padding": [
+                        3,
+                        8
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "s30KC",
+                          "name": "streamDot",
+                          "fill": "$amber-600",
+                          "width": 5,
+                          "height": 5
+                        },
+                        {
+                          "type": "text",
+                          "id": "gVq3X",
+                          "name": "streamTxt",
+                          "fill": "$amber-600",
+                          "content": "Streaming",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 9,
+                          "fontWeight": "600",
+                          "letterSpacing": 0.5
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "zpNuk",
+                  "name": "bodyTxt",
+                  "fill": "$text-primary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Here are your open pull requests:",
+                  "fontFamily": "Inter",
+                  "fontSize": 13
+                },
+                {
+                  "type": "frame",
+                  "id": "Lnouf",
+                  "name": "terminal",
+                  "width": "fill_container",
+                  "fill": "$surface-terminal",
+                  "cornerRadius": 6,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$border-subtle"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": [
+                    12,
+                    14
+                  ],
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "H6Fcx",
+                      "name": "cmdRow",
+                      "width": "fill_container",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "S2G2H",
+                          "name": "prompt",
+                          "fill": "$amber-600",
+                          "content": "$ ",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 12,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "bTOOQ",
+                          "name": "cmdTxt",
+                          "fill": "$text-command",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "gh pr list --state open --author @me --token [redacted-token]",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 12
+                        }
+                      ]
+                    },
+                    {
+                      "type": "rectangle",
+                      "id": "B94aJ",
+                      "name": "sep",
+                      "fill": "$border-subtle",
+                      "width": "fill_container",
+                      "height": 1
+                    },
+                    {
+                      "type": "frame",
+                      "id": "2Bc7Y",
+                      "name": "outputBlock",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 3,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "4u2WS",
+                          "name": "line1",
+                          "fill": "$text-output",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "#4931  fix(workspace): two-phase-commit switch failure   OPEN",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 11
+                        },
+                        {
+                          "type": "text",
+                          "id": "qlLsx",
+                          "name": "line2",
+                          "fill": "$text-output",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "#4926  feat(concierge): autonomous edit_c4_diagram tool   OPEN",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 11
+                        },
+                        {
+                          "type": "text",
+                          "id": "Q5gj9",
+                          "name": "line3",
+                          "fill": "$text-output",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "#4925  feat(kb): full-screen C4 workspace — diagram      OPEN",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 11
+                        },
+                        {
+                          "type": "text",
+                          "id": "vdR7C",
+                          "name": "line4",
+                          "fill": "$text-output",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "#4917  fix(dashboard): move theme toggle to rail footer  OPEN",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 11
+                        },
+                        {
+                          "type": "text",
+                          "id": "OKP08",
+                          "name": "line5",
+                          "fill": "$text-output",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "#4912  feat(api): streaming response envelope v2         OPEN",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 11
+                        },
+                        {
+                          "type": "text",
+                          "id": "aUby2",
+                          "name": "line6",
+                          "fill": "$text-output",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "#4908  chore(deps): bump turbo to 2.5.1                  OPEN",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 11
+                        },
+                        {
+                          "type": "text",
+                          "id": "yV4te",
+                          "name": "line7",
+                          "fill": "$text-output",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "#4901  feat(concierge): tool-use streaming protocol       OPEN",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 11
+                        },
+                        {
+                          "type": "text",
+                          "id": "vFMZ6",
+                          "name": "truncated",
+                          "fill": "$text-muted",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "[… truncated — 14 more results]",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 11,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "KZhhM",
+                      "name": "cursor",
+                      "width": "fill_container",
+                      "gap": 4,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "cornerRadius": 1,
+                          "id": "mJ9Tc",
+                          "name": "cursorBlock",
+                          "fill": "$amber-600",
+                          "width": 7,
+                          "height": 14
+                        },
+                        {
+                          "type": "text",
+                          "id": "5uBNY",
+                          "name": "cursorLabel",
+                          "fill": "$text-muted",
+                          "content": "streaming…",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 10
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "t4f6f",
+          "name": "annotation",
+          "width": "fill_container",
+          "fill": "#D9770612",
+          "cornerRadius": 6,
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "#D9770633"
+          },
+          "gap": 8,
+          "padding": [
+            10,
+            14
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "wtkK9",
+              "name": "annotIcon",
+              "fill": "$amber-600",
+              "content": "↑",
+              "fontFamily": "JetBrains Mono",
+              "fontSize": 13,
+              "fontWeight": "700"
+            },
+            {
+              "type": "text",
+              "id": "FFWlW",
+              "name": "annotTxt",
+              "fill": "$amber-400",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "No Approve / Deny buttons — command executes inline and output streams directly into the message bubble, Claude-Code-terminal style.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 11
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variables": {
+    "amber-400": {
+      "type": "color",
+      "value": "#FBBF24"
+    },
+    "amber-600": {
+      "type": "color",
+      "value": "#D97706"
+    },
+    "bg-chat": {
+      "type": "color",
+      "value": "#0F1017"
+    },
+    "border-subtle": {
+      "type": "color",
+      "value": "#27272F"
+    },
+    "streaming-bg": {
+      "type": "color",
+      "value": "#D9770633"
+    },
+    "surface-1": {
+      "type": "color",
+      "value": "#1A1B26"
+    },
+    "surface-terminal": {
+      "type": "color",
+      "value": "#0A0B10"
+    },
+    "text-command": {
+      "type": "color",
+      "value": "#A1A1AA"
+    },
+    "text-muted": {
+      "type": "color",
+      "value": "#52525B"
+    },
+    "text-output": {
+      "type": "color",
+      "value": "#8B8B99"
+    },
+    "text-primary": {
+      "type": "color",
+      "value": "#E4E4EC"
+    },
+    "text-secondary": {
+      "type": "color",
+      "value": "#71717A"
+    }
+  }
+}
