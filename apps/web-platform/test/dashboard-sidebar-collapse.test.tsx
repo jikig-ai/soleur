@@ -97,6 +97,18 @@ describe("Dashboard sidebar collapse", () => {
     expect(screen.getByLabelText("Collapse sidebar")).toBeInTheDocument();
   });
 
+  // Sidebar-UX follow-up Issue 1: now that the wordmark is gone and only the
+  // collapse toggle lives in the brand row, py-5 left a large empty gap above the
+  // workspace switcher pill. The row is tightened to pt-3 pb-2. jsdom has no
+  // layout engine, so this pins the className token against silent revert; the
+  // pixel proof lives in the e2e VRT gate (e2e/nav-states-shell.e2e.ts).
+  it("tightens the brand row (no py-5) so the collapse toggle sits close to the workspace pill (Issue 1)", () => {
+    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    const brandRow = screen.getByLabelText("Collapse sidebar").closest("div");
+    expect(brandRow?.className).not.toContain("py-5");
+    expect(brandRow?.className).toContain("pb-2");
+  });
+
   it("toggles aria-label when collapse toggle is clicked", async () => {
     render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
     const toggle = screen.getByLabelText("Collapse sidebar");

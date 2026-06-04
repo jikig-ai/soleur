@@ -11,7 +11,7 @@ interface SettingsTab {
 
 const STATIC_SETTINGS_TABS: readonly SettingsTab[] = [
   { href: "/dashboard/settings", label: "General" },
-  { href: "/dashboard/settings/conversation-names", label: "Conversation names" },
+  { href: "/dashboard/settings/conversation-names", label: "Domain Leaders" },
   { href: "/dashboard/settings/services", label: "Integrations" },
   { href: "/dashboard/settings/scope-grants", label: "Scope Grants" },
   { href: "/dashboard/settings/billing", label: "Billing" },
@@ -62,9 +62,12 @@ export function SettingsShell({
     ...(activityTab ? [activityTab] : []),
   ];
   const pathname = usePathname();
-  // ADR-047 collapse fix: when the unified rail is collapsed the portaled
-  // sub-nav is DOM-removed (render-conditional, NOT display:none) so its
-  // full-text labels cannot clip at the 56px collapsed rail. The stable
+  // ADR-047 collapse fix (revised by Sidebar-UX follow-up Issue 4): the Settings
+  // sub-nav is a FLAT list of single-glyph tabs, so when the unified rail is
+  // collapsed it renders an icon-only column (one icon button per tab) instead of
+  // DOM-removing the whole nav — the old behaviour left the collapsed rail empty.
+  // The icon-only buttons fit the 56px rail by construction (proven by the
+  // primary nav already doing this), so there is no horizontal clip. The stable
   // `settings-rail-nav` wrapper always renders so present/absent assertions
   // target exactly one node; the collapse-aware WorkspaceContextBand keeps
   // workspace identity legible.
@@ -74,44 +77,60 @@ export function SettingsShell({
     <div className="flex min-h-full">
       <RailSlotPortal>
         <div data-testid="settings-rail-nav">
-          {!collapsed && (
-            <nav aria-label="Settings" className="px-2 py-2">
-              <ul className="space-y-1">
-                {SETTINGS_TABS.map((tab) => {
-                  const active =
-                    tab.href === "/dashboard/settings"
-                      ? pathname === "/dashboard/settings"
-                      : pathname.startsWith(tab.href);
-                  const Icon = iconForHref(tab.href);
+          <nav
+            aria-label="Settings"
+            data-testid={collapsed ? "settings-rail-icons" : undefined}
+            className={collapsed ? "px-1 py-2" : "px-2 py-2"}
+          >
+            <ul className="space-y-1">
+              {SETTINGS_TABS.map((tab) => {
+                const active =
+                  tab.href === "/dashboard/settings"
+                    ? pathname === "/dashboard/settings"
+                    : pathname.startsWith(tab.href);
+                const Icon = iconForHref(tab.href);
 
-                  return (
-                    <li key={tab.href}>
-                      <Link
-                        href={tab.href}
-                        aria-current={active ? "page" : undefined}
-                        className={`relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
-                          active
-                            ? "bg-soleur-accent-gold-fill/10 text-soleur-accent-gold-text font-medium"
-                            : "text-soleur-text-secondary hover:bg-soleur-bg-surface-2/50 hover:text-soleur-text-primary"
-                        }`}
-                      >
-                        {/* D4-bolder active treatment — gold left-edge bar
-                            overlay, consistent with the primary nav + KB tree. */}
-                        {active && (
-                          <span
-                            aria-hidden="true"
-                            className="absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-soleur-accent-gold-fill"
-                          />
-                        )}
-                        <Icon className="h-4 w-4 shrink-0" />
-                        <span className="truncate">{tab.label}</span>
-                      </Link>
-                    </li>
-                  );
-                })}
-              </ul>
-            </nav>
-          )}
+                return (
+                  <li key={tab.href}>
+                    <Link
+                      href={tab.href}
+                      // Collapsed: the Link has no text label, so the tab name is
+                      // the accessible name (aria-label) + hover tooltip (title),
+                      // mirroring the primary nav's collapsed pattern
+                      // (layout.tsx). Expanded: the visible text supplies the name.
+                      aria-label={collapsed ? tab.label : undefined}
+                      title={collapsed ? tab.label : undefined}
+                      aria-current={active ? "page" : undefined}
+                      className={`relative flex min-h-[44px] items-center rounded-lg text-sm transition-colors ${
+                        collapsed
+                          ? "justify-center px-0 py-2"
+                          : "gap-3 px-3 py-2"
+                      } ${
+                        active
+                          ? "bg-soleur-accent-gold-fill/10 text-soleur-accent-gold-text font-medium"
+                          : "text-soleur-text-secondary hover:bg-soleur-bg-surface-2/50 hover:text-soleur-text-primary"
+                      }`}
+                    >
+                      {/* D4-bolder active treatment — gold left-edge bar overlay,
+                          consistent with the primary nav + KB tree. Hidden when
+                          collapsed (no left gutter to anchor it), matching the
+                          primary nav's collapsed treatment. */}
+                      {active && (
+                        <span
+                          aria-hidden="true"
+                          className={`absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-soleur-accent-gold-fill ${
+                            collapsed ? "hidden" : ""
+                          }`}
+                        />
+                      )}
+                      <Icon className="h-4 w-4 shrink-0" />
+                      {!collapsed && <span className="truncate">{tab.label}</span>}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </nav>
         </div>
       </RailSlotPortal>
 
@@ -132,6 +151,12 @@ function svgProps(className?: string) {
     viewBox: "0 0 24 24",
     stroke: "currentColor",
     strokeWidth: 1.5,
+    // The glyphs are decorative in BOTH states — the nav Link owns the accessible
+    // name (visible text when expanded, aria-label when collapsed, Issue 4). Hide
+    // the SVG from the a11y tree so it is never announced as a stray graphic (WIG;
+    // fixes the prior inconsistency where the active-bar span was aria-hidden but
+    // the leading glyph was not).
+    "aria-hidden": true,
   };
 }
 

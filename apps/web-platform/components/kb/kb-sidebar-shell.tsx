@@ -28,14 +28,42 @@ export function KbSidebarShell() {
   // ADR-047 collapse fix: when the unified rail is collapsed the search overlay
   // + arbitrarily-nested file tree are DOM-removed (render-conditional, NOT
   // display:none) so deep rows cannot clip at the 56px collapsed rail. A nested
-  // file tree has no coherent icon-only form, so it hides rather than condenses;
-  // the file is still reachable via the URL + the expand chevron (⌘B). The
-  // stable `kb-rail-tree` wrapper always renders to anchor present/absent assertions.
+  // file tree has no coherent icon-only form, so it hides rather than condenses.
+  // Sidebar-UX follow-up Issue 6: the collapsed rail used to render NOTHING here,
+  // so it looked empty/broken. It now shows a compact icon-only affordance —
+  // "Browse files" (expands the rail via the layout's soleur:rail-expand channel)
+  // + "Sync now" — so the collapsed KB rail is meaningful, not blank. The stable
+  // `kb-rail-tree` wrapper always renders to anchor present/absent assertions.
   const collapsed = useRailCollapsed();
 
   return (
     <div data-testid="kb-rail-tree" className="flex h-full flex-col">
-      {!collapsed && (
+      {collapsed ? (
+        <div className="flex flex-col items-center gap-1 px-1 py-3">
+          <button
+            type="button"
+            data-testid="kb-rail-collapsed-expand"
+            aria-label="Browse files"
+            title="Browse files"
+            onClick={() =>
+              window.dispatchEvent(new CustomEvent("soleur:rail-expand"))
+            }
+            className="flex min-h-[44px] w-full items-center justify-center rounded-lg text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary"
+          >
+            <FilesIcon className="h-4 w-4 shrink-0" />
+          </button>
+          <button
+            type="button"
+            data-testid="kb-rail-collapsed-sync"
+            aria-label="Sync now"
+            title="Sync now"
+            onClick={() => refreshTree()}
+            className="flex min-h-[44px] w-full items-center justify-center rounded-lg text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary"
+          >
+            <SyncIcon className="h-4 w-4 shrink-0" />
+          </button>
+        </div>
+      ) : (
         <>
           <div className="shrink-0 px-3 pb-3 pt-3">
             <SearchOverlay />
@@ -64,5 +92,46 @@ export function KbSidebarShell() {
         </>
       )}
     </div>
+  );
+}
+
+/* Collapsed-rail glyphs (Sidebar-UX follow-up Issue 6). Decorative — the button
+   owns the accessible name via aria-label/title — so they are aria-hidden.
+   Stroke style matches the dashboard primary-nav icons. */
+function FilesIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      aria-hidden="true"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.5}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z"
+      />
+    </svg>
+  );
+}
+
+function SyncIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      aria-hidden="true"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.5}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M16.023 9.348h4.992V4.356M3.985 14.652H8.98v4.992M19.768 9.348a8.25 8.25 0 0 0-15.36-1.5m-.392 6.804a8.25 8.25 0 0 0 15.36 1.5"
+      />
+    </svg>
   );
 }

@@ -209,6 +209,20 @@ export default function DashboardLayout({
     return () => document.removeEventListener("keydown", handleToggleShortcut);
   }, [toggleCollapsed]);
 
+  // Sidebar-UX follow-up Issue 6: a collapsed-rail child (the KB shell's
+  // "Browse files" affordance) cannot reach the collapse state directly (it only
+  // reads RailCollapsedProvider). It requests an EXPAND via a window event so the
+  // layout — the sole collapse owner (ADR-047) — can flip it. Expand-only (never
+  // collapses), so a stray dispatch while expanded is a no-op.
+  useEffect(() => {
+    function handleExpandRequest() {
+      if (collapsed) toggleCollapsed();
+    }
+    window.addEventListener("soleur:rail-expand", handleExpandRequest);
+    return () =>
+      window.removeEventListener("soleur:rail-expand", handleExpandRequest);
+  }, [collapsed, toggleCollapsed]);
+
   // Body scroll lock when drawer is open
   useEffect(() => {
     if (drawerOpen) {
@@ -304,8 +318,12 @@ export default function DashboardLayout({
             the rest of the rail (nav items, footer, workspace band) so the
             collapse toggle shares the same px-3 border-box gutter as the band's
             "Back to menu" affordance below it (#4810 follow-up Bug 2: the two
-            were at px-5 vs px-3 and read as misaligned). */}
-        <div className={`flex items-center justify-between safe-top ${collapsed ? "px-2 py-5" : "px-3 py-5"}`}>
+            were at px-5 vs px-3 and read as misaligned).
+            Sidebar-UX follow-up Issue 1: this row used to be py-5 which, now that
+            the wordmark is gone and only the collapse toggle remains, left a large
+            empty gap above the workspace pill. Tightened to pt-3 pb-2 so the
+            toggle sits close to the workspace switcher card. */}
+        <div className={`flex items-center justify-between safe-top ${collapsed ? "px-2 pt-3 pb-2" : "px-3 pt-3 pb-2"}`}>
           {/* Phase 2 (#4915): the global "Soleur" wordmark is removed entirely —
               the workspace identity band is the sole orientation anchor now. Only
               the close (mobile) + collapse (desktop) controls remain in this row;
@@ -317,18 +335,19 @@ export default function DashboardLayout({
           >
             <XIcon className="h-5 w-5" />
           </button>
-          {/* Collapse toggle — hidden on mobile, visible on md+ */}
+          {/* Collapse toggle — hidden on mobile, visible on md+. Sidebar-UX
+              follow-up Issue 2: the old left/right CHEVRON read like a "back"
+              arrow on drilled secondary menus (it sat one row above the band's
+              "Back to menu" BackArrowIcon, both pointing left). Swapped for a
+              non-directional sidebar-panel glyph so it no longer reads as "back".
+              The aria-label/title still carry the Expand/Collapse + ⌘B semantics. */}
           <button
             onClick={toggleCollapsed}
             aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             title={collapsed ? "Expand sidebar (⌘B)" : "Collapse sidebar (⌘B)"}
             className="hidden md:flex h-6 w-6 items-center justify-center rounded text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
           >
-            {collapsed ? (
-              <ChevronRightIcon className="h-4 w-4" />
-            ) : (
-              <ChevronLeftIcon className="h-4 w-4" />
-            )}
+            <PanelToggleIcon className="h-4 w-4" />
           </button>
         </div>
 
@@ -658,7 +677,14 @@ function LogOutIcon({ className }: { className?: string }) {
   );
 }
 
-function ChevronLeftIcon({ className }: { className?: string }) {
+// Sidebar-UX follow-up Issue 2: non-directional sidebar/panel-toggle glyph for
+// the rail collapse control. Replaces the old left/right ChevronLeftIcon/
+// ChevronRightIcon, which read like a "back" arrow on drilled secondary menus
+// (Settings / Knowledge Base) where the workspace band already shows a
+// BackArrowIcon "Back to menu". A rounded panel rectangle with a left divider
+// reads as "toggle the sidebar", not "go back". Used in BOTH toggle states —
+// the aria-label/title carry the Expand vs Collapse semantics.
+function PanelToggleIcon({ className }: { className?: string }) {
   return (
     <svg
       className={className}
@@ -670,26 +696,9 @@ function ChevronLeftIcon({ className }: { className?: string }) {
       <path
         strokeLinecap="round"
         strokeLinejoin="round"
-        d="M15.75 19.5 8.25 12l7.5-7.5"
+        d="M3.75 6.75A2.25 2.25 0 0 1 6 4.5h12a2.25 2.25 0 0 1 2.25 2.25v10.5A2.25 2.25 0 0 1 18 19.5H6a2.25 2.25 0 0 1-2.25-2.25V6.75Z"
       />
-    </svg>
-  );
-}
-
-function ChevronRightIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      strokeWidth={1.5}
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="m8.25 4.5 7.5 7.5-7.5 7.5"
-      />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 4.5v15" />
     </svg>
   );
 }

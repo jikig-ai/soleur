@@ -491,16 +491,20 @@ test.describe("nav-states visual gate — desktop", () => {
     await expect(railBand(page)).toHaveAttribute("data-collapsed", "true");
     await expect(wordmark(page)).toHaveCount(0); // Bug 1
     // AC2: the stable wrapper survives but the populated tree content is gone —
-    // the file row must NOT be present (so it cannot clip at 56px).
+    // the nested file row must NOT be present (so it cannot clip at 56px).
     await expect(kbRailTree(page)).toBeAttached();
     await expect(kbLongFile(page)).toHaveCount(0);
+    // Sidebar-UX Issue 6: the collapsed KB rail is no longer empty — it shows an
+    // icon-only "Browse files" affordance (expands the rail) in place of the
+    // (56px-unclippable) nested tree.
+    await expect(page.getByTestId("kb-rail-collapsed-expand")).toBeVisible();
     // AC3: the gate runs against POPULATED content (the false-GREEN this closes
     // was a `tree: []` empty rail).
     const overflow = await aside.evaluate((el) => el.scrollWidth - el.clientWidth);
     expect(overflow).toBeLessThanOrEqual(1);
   });
 
-  test("collapsed drilled (Settings, POPULATED): no overflow, sub-nav DOM-removed (AC2/AC3)", async ({ page }) => {
+  test("collapsed drilled (Settings, POPULATED): no overflow, icon-only sub-nav (Issue 4)", async ({ page }) => {
     await setupNavMocks(page);
     await seedCollapsed(page);
     await gotoOrSkip(page, "/dashboard/settings");
@@ -510,9 +514,14 @@ test.describe("nav-states visual gate — desktop", () => {
     await expect(railBand(page)).toHaveAttribute("data-collapsed", "true");
     // AC5: identity still legible when collapsed+drilled.
     await expect(page.getByTestId("live-repo-dot")).toBeVisible();
-    // AC2: wrapper present, the General/Billing/etc. links gone.
+    // Sidebar-UX Issue 4: the collapsed Settings nav is now an ICON-ONLY column
+    // (tagged settings-rail-icons) instead of being DOM-removed — so the rail is
+    // navigable when collapsed. The single 56px-safe glyphs must not overflow.
     await expect(settingsRailNav(page)).toBeAttached();
-    await expect(settingsNav(page)).toHaveCount(0);
+    const iconNav = page.getByTestId("settings-rail-icons");
+    await expect(iconNav).toBeVisible();
+    // The General tab is reachable via its aria-label (no visible text label).
+    await expect(iconNav.getByRole("link", { name: "General" })).toBeVisible();
     const overflow = await aside.evaluate((el) => el.scrollWidth - el.clientWidth);
     expect(overflow).toBeLessThanOrEqual(1);
   });

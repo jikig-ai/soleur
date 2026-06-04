@@ -105,11 +105,13 @@ describe("Settings sub-nav lifts into the single nav rail slot (ADR-047)", () =>
     expect(screen.getByTestId("settings-content")).toBeInTheDocument();
   });
 
-  // AC2 — when the unified rail is collapsed, the portaled Settings sub-nav is
-  // DOM-REMOVED (a render-conditional, not display:none) so it cannot clip at
-  // the 56px collapsed rail. The stable wrapper survives both branches so the
-  // present/absent assertion targets exactly one node.
-  it("DOM-removes the settings nav when collapsed (AC2), keeping the stable wrapper", () => {
+  // AC4.4 (Sidebar-UX Issue 4) — when the unified rail is collapsed, the Settings
+  // sub-nav renders an ICON-ONLY column (one icon button per tab) instead of being
+  // DOM-removed (which left the collapsed rail empty). The single-glyph buttons fit
+  // the 56px rail by construction. The accessible name moves to aria-label (no
+  // visible text), so each tab is still reachable + tooltip-recoverable. This
+  // intentionally REVERSES the prior "DOM-removed when collapsed" invariant.
+  it("renders an icon-only Settings nav when collapsed (AC4.4), keeping the stable wrapper", () => {
     render(
       <RailSlotHarness collapsed>
         <SettingsShell>
@@ -118,15 +120,16 @@ describe("Settings sub-nav lifts into the single nav rail slot (ADR-047)", () =>
       </RailSlotHarness>,
     );
     const slot = screen.getByTestId("rail-slot-harness");
-    // Stable wrapper always renders (so the content area can be queried in both
-    // toggle states), but the nav + its tabs are gone.
+    // Stable wrapper always renders.
     expect(within(slot).getByTestId("settings-rail-nav")).toBeInTheDocument();
-    expect(
-      within(slot).queryByRole("navigation", { name: "Settings" }),
-    ).not.toBeInTheDocument();
-    expect(
-      within(slot).queryByRole("link", { name: "General" }),
-    ).not.toBeInTheDocument();
+    // The nav is PRESENT (not DOM-removed) and tagged as the icon-only variant.
+    const nav = within(slot).getByRole("navigation", { name: "Settings" });
+    expect(nav).toHaveAttribute("data-testid", "settings-rail-icons");
+    // Each tab is still a reachable link (accessible name via aria-label) ...
+    const general = within(nav).getByRole("link", { name: "General" });
+    expect(general).toBeInTheDocument();
+    // ... but renders NO visible text label (icon-only — 56px safe).
+    expect(general).toHaveTextContent("");
   });
 
   // AC4 — the SAME wrapper has the nav PRESENT when expanded (so AC2 is not
