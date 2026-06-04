@@ -494,6 +494,21 @@ ADR-038 (`knowledge-base/engineering/architecture/decisions/ADR-038-workspace-me
 
 ---
 
+## Processing Activity 26 — Workspace logo image (#4916)
+
+| Art. 30(1) limb | Entry |
+|---|---|
+| **(a) Purpose** | Workspace branding: a Workspace Owner uploads a custom square logo image (PNG or WebP, re-encoded server-side to WebP, ≤1 MB) that renders in the workspace chrome (the `WorkspaceIdentityTile`). The logo is a shared workspace asset under the collaboration contract |
+| **(b) Categories of data subjects** | None directly — the logo is a workspace branding asset, NOT personal data about the uploader (no uploader-attribution is stored in v1). To the extent any incidental natural person is depicted, the Workspace Owner is the controller of that content under the collaboration contract |
+| **(c) Categories of personal data** | An image file (workspace branding asset) stored in the `workspace-logos` bucket keyed by `workspace_id`. No uploader-attribution column, no EXIF (stripped at re-encode), no personal data about the uploader in v1 |
+| **(d) Recipients** | Members of the same workspace (member-only read via owner-only RLS write + member-only read, served through a short-TTL signed-URL proxy); Supabase Inc (infrastructure processor — existing sub-processor; same region + sub-processor as the existing `chat-attachments` / `dsar-exports` buckets — **no new sub-processor**) |
+| **(e) Transfers** | No new third-country transfer introduced. Private Supabase Storage bucket `workspace-logos`, region eu-west-1 (Ireland) — same region as existing buckets |
+| **(f) Retention** | Workspace lifetime (Art. 5(1)(e)). Purged when the sole-owned workspace is torn down on account deletion — the account-delete cascade calls `purgeWorkspaceLogoObjects`. NOT purged on shared-workspace member removal (it is a shared asset, not the departing member's personal data) |
+| **(g) TOMs** | (1) raster-only ingest — SVG rejected; (2) server-side `sharp` decode-and-re-encode to WebP (strips EXIF, neutralises polyglot / decode-bomb payloads); (3) private bucket + owner-only RLS write + member-only RLS read; (4) served via a short-TTL signed-URL proxy with `X-Content-Type-Options: nosniff`; (5) ≤1 MB size cap |
+| **(h) DSAR (Art. 15 / 20)** | **Excluded from the automated per-user DSAR export in v1**, defensible under Art. 15(4) (rights and freedoms of others): the logo is a workspace-keyed SHARED asset with no uploader-attribution in v1, not personal data of a single user. The manual Art. 15 path covers any edge case |
+
+---
+
 ## Register Maintenance
 
 - **Review cadence:** Quarterly + event-driven (new processing activity, new sub-processor, new third-country transfer, new technology, new lawful basis, supervisory-authority engagement).
