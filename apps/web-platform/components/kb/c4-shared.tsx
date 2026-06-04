@@ -16,6 +16,9 @@ import {
 import { LikeC4Model } from "@likec4/core/model";
 import type { LayoutedLikeC4ModelData } from "@likec4/core/types";
 import "@likec4/diagram/styles.css";
+// Soleur re-theme — MUST come after the library styles so it wins on source
+// order (defense-in-depth alongside the scoped-selector specificity in the file).
+import "./c4-theme.css";
 
 export type Diagnostic = { message: string; line: number; sourceFsPath: string };
 export type ProjectResponse = {
@@ -80,18 +83,23 @@ function ViewCanvas({
     );
   }
   return (
-    <LikeC4Diagram
-      view={vm.$view}
-      pannable
-      zoomable
-      fitView
-      controls
-      showNavigationButtons
-      enableElementDetails
-      enableRelationshipDetails
-      enableFocusMode
-      onNavigateTo={onNavigate}
-    />
+    // .soleur-c4 anchors the scoped Soleur re-theme (logo-hide + palette) from
+    // c4-theme.css. It wraps the shared canvas, so both the inline embed and the
+    // full workspace inherit the theme for free.
+    <div className="soleur-c4 h-full w-full">
+      <LikeC4Diagram
+        view={vm.$view}
+        pannable
+        zoomable
+        fitView
+        controls
+        showNavigationButtons
+        enableElementDetails
+        enableRelationshipDetails
+        enableFocusMode
+        onNavigateTo={onNavigate}
+      />
+    </div>
   );
 }
 
