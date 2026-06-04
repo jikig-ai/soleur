@@ -34,6 +34,16 @@ afterAll(() => {
   globalThis.fetch = originalFetch;
 });
 
+// Capture the Sentry mirror so the 403-honest-messaging contract
+// (cq-silent-fallback-must-mirror-to-sentry) is assertable.
+const { mockReportSilentFallback } = vi.hoisted(() => ({
+  mockReportSilentFallback: vi.fn(),
+}));
+vi.mock("../server/observability", () => ({
+  reportSilentFallback: (...args: unknown[]) =>
+    mockReportSilentFallback(...args),
+}));
+
 // Import AFTER env and fetch mocking
 import {
   githubApiGet,
@@ -103,7 +113,7 @@ describe("github-api fetch wrapper", () => {
       ).rejects.toThrow(/404/);
     });
 
-    test("returns permission upgrade message on 403", async () => {
+    test("surfaces the real GitHub message on 403 (no false re-consent advice)", async () => {
       const installationId = uniqueInstallationId();
       mockTokenResponse();
       mockFetch.mockResolvedValueOnce({
@@ -116,7 +126,7 @@ describe("github-api fetch wrapper", () => {
 
       await expect(
         githubApiGet(installationId, "/repos/alice/my-repo/actions/runs"),
-      ).rejects.toThrow(/permission/i);
+      ).rejects.toThrow(/Resource not accessible by integration/);
     });
   });
 
@@ -202,9 +212,10 @@ describe("github-api fetch wrapper", () => {
       expect((caught as GitHubApiError).message).toMatch(/404/);
     });
 
-    test("403 response throws GitHubApiError with statusCode 403 and permission-denied message", async () => {
+    test("403 response throws GitHubApiError with statusCode 403, real GitHub message, no false re-consent advice, and mirrors to Sentry", async () => {
       const installationId = uniqueInstallationId();
       mockTokenResponse();
+      mockReportSilentFallback.mockClear();
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 403,
@@ -221,8 +232,16 @@ describe("github-api fetch wrapper", () => {
       }
 
       expect(caught).toBeInstanceOf(GitHubApiError);
+      const msg = (caught as GitHubApiError).message;
       expect((caught as GitHubApiError).statusCode).toBe(403);
-      expect((caught as GitHubApiError).message).toMatch(/permission denied/i);
+      // Surfaces the ACTUAL GitHub message — the disambiguating evidence.
+      expect(msg).toMatch(/Resource not accessible by integration/);
+      // Kills the false-confidence diagnosis: no re-consent / scope-gap advice.
+      expect(msg).not.toMatch(/approve new permissions/i);
+      expect(msg).not.toMatch(/issues:write/i);
+      expect(msg).not.toMatch(/installation settings/i);
+      // cq-silent-fallback-must-mirror-to-sentry: 403s are queryable.
+      expect(mockReportSilentFallback).toHaveBeenCalled();
     });
 
     test("500 response throws GitHubApiError with statusCode 500 and default message format", async () => {

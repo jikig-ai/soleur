@@ -86,7 +86,12 @@ import {
 // per-workspace resolver (ADR-044) — NOT the soleur-monorepo-hardcoded
 // `mintInstallationToken` from the crons. Per hr-github-app-auth-not-pat.
 import { resolveInstallationId } from "./resolve-installation-id";
-import { generateInstallationToken } from "./github-app";
+import {
+  generateInstallationToken,
+  findInstallationByAccountLogin,
+} from "./github-app";
+import { mirrorRepoColsToSoloWorkspace } from "@/server/workspace-repo-mirror";
+import { createServiceClient } from "@/lib/supabase/service";
 // Session-start self-heal: if the active workspace has a connected repo but no
 // matching clone on disk, clone/repair it so the Concierge has a real git repo
 // to work in (fixes the "No git repository found" blocker). Generic per-user.
@@ -239,6 +244,23 @@ const CC_REGISTERED_PLATFORM_TOOL_NAMES: readonly string[] = [];
 // edit_c4_diagram tool + system prompt — defense against a malformed/injected
 // repoUrl (mirrors agent-runner.ts's GITHUB_NAME_RE).
 const CC_GITHUB_NAME_RE = /^[a-zA-Z0-9._-]+$/;
+
+// feat-one-shot-concierge-gh-403 — kills the model's FALSE-CONFIDENCE 403
+// diagnosis. The Concierge runs `gh` inside the sandbox and, seeing a bare 403,
+// used to invent "the installation lacks issues:write — file via the UI" and
+// tell the user to re-consent. That is wrong: the org grant already exists; a
+// 403 is almost always a wrong-installation token, which the platform heals
+// server-side. This directive forbids the model from guessing a cause or
+// dispensing GitHub-App-settings advice. Appended unconditionally to the
+// Concierge system prompt (AC5 greps for the sentinel below).
+const GH_403_PROMPT_DIRECTIVE =
+  "## GitHub `gh` errors\n" +
+  "If a `gh` command returns a 403 (Forbidden) or similar auth error, report " +
+  "the LITERAL command output and HTTP status to the user verbatim. Do NOT " +
+  "speculate about which permission or scope is missing, and do NOT tell the " +
+  "user to change GitHub App permissions, approve new permissions, or " +
+  "re-consent — the Soleur platform diagnoses and repairs installation/" +
+  "permission issues server-side. State only what the error literally says.";
 
 // Max length cap for `block.name` before passing to Sentry/pino. Defense-in-
 // depth against future model regressions that might emit pathologically long
@@ -1110,10 +1132,85 @@ export const realSdkQueryFactory: QueryFactory = async (
     // token, NEVER a PAT, and the value is NEVER logged. (Sentry
     // 512e253141294ac1a808b2ef03a21289 — cron-follow-through-monitor — is the
     // cron-side root cause this mirrors for the interactive path.)
-    let ghToken: string | undefined;
-    if (installationId !== null) {
+    // Parse the connected repo's owner/repo ONCE from the server-resolved
+    // repoUrl (never tool input). Reused by the installation self-heal below
+    // and the C4 write-tool gate further down. CC_GITHUB_NAME_RE rejects any
+    // path-shaping characters.
+    let connectedOwner = "";
+    let connectedRepo = "";
+    if (repoUrl) {
       try {
-        ghToken = await generateInstallationToken(installationId, {
+        const parts = new URL(repoUrl).pathname.split("/").filter(Boolean);
+        const o = parts[0];
+        const r = parts[1]?.replace(/\.git$/, "");
+        if (o && r && CC_GITHUB_NAME_RE.test(o) && CC_GITHUB_NAME_RE.test(r)) {
+          connectedOwner = o;
+          connectedRepo = r;
+        }
+      } catch {
+        /* malformed repoUrl → no owner/repo (degrade silently, not security) */
+      }
+    }
+
+    // feat-one-shot-concierge-gh-403 — installation self-heal. The stored
+    // installation id (workspaces.github_installation_id, resolved above) can
+    // be a CROSS-ACCOUNT personal install that READS the connected repo (so the
+    // connect-time read probe passed) yet only holds `issues: read`. The
+    // Concierge's `gh issue create` then 403s "Resource not accessible by
+    // integration" — which the model misreads as a missing scope and (falsely)
+    // tells the user to re-consent. The deterministic fix is SELECTION, not a
+    // permission change: mint for the installation whose ACCOUNT OWNS the repo
+    // (the org install, full grant incl. `issues: write`). The in-memory
+    // override fixes THIS dispatch immediately; the workspace-column write
+    // persists the correction so the next resolveInstallationId returns the
+    // owner install. Best-effort throughout — any probe/write failure keeps the
+    // stored install and never blocks the conversation.
+    let effectiveInstallationId = installationId;
+    if (installationId !== null && connectedOwner) {
+      try {
+        const ownerInstall = await findInstallationByAccountLogin(connectedOwner);
+        if (ownerInstall !== null && ownerInstall !== installationId) {
+          log.info(
+            {
+              userId: args.userId,
+              storedInstallationId: installationId,
+              ownerInstallationId: ownerInstall,
+              owner: connectedOwner,
+            },
+            "Concierge installation self-heal: stored install does not own the connected repo; switching to the repo-owner installation",
+          );
+          effectiveInstallationId = ownerInstall;
+          try {
+            await mirrorRepoColsToSoloWorkspace(
+              createServiceClient(),
+              args.userId,
+              { github_installation_id: ownerInstall },
+            );
+          } catch (healErr) {
+            reportSilentFallback(healErr, {
+              feature: "cc-dispatcher",
+              op: "installation-self-heal-write",
+              extra: { userId: args.userId, ownerInstallationId: ownerInstall },
+              message:
+                "Failed to persist repo-owner installation; in-memory override still applied for this dispatch",
+            });
+          }
+        }
+      } catch (probeErr) {
+        reportSilentFallback(probeErr, {
+          feature: "cc-dispatcher",
+          op: "installation-self-heal-probe",
+          extra: { userId: args.userId },
+          message:
+            "Repo-owner installation probe failed; keeping stored installation",
+        });
+      }
+    }
+
+    let ghToken: string | undefined;
+    if (effectiveInstallationId !== null) {
+      try {
+        ghToken = await generateInstallationToken(effectiveInstallationId, {
           minRemainingMs: GH_TOKEN_MIN_LIFETIME_MS,
         });
       } catch (err) {
@@ -1137,22 +1234,12 @@ export const realSdkQueryFactory: QueryFactory = async (
   let c4ToolName: string | undefined;
   let c4PromptAddendum: string | undefined;
   {
-    let owner = "";
-    let repo = "";
-    if (repoUrl) {
-      try {
-        const parts = new URL(repoUrl).pathname.split("/").filter(Boolean);
-        const o = parts[0];
-        const r = parts[1]?.replace(/\.git$/, "");
-        if (o && r && CC_GITHUB_NAME_RE.test(o) && CC_GITHUB_NAME_RE.test(r)) {
-          owner = o;
-          repo = r;
-        }
-      } catch {
-        /* malformed repoUrl → no c4 write (degrade silently, not security) */
-      }
-    }
-    if (installationId !== null && owner && repo) {
+    // Reuse the owner/repo parsed once above + the self-healed installation id
+    // so the C4 write tool commits via the SAME repo-owner installation the
+    // GH_TOKEN was minted for (feat-one-shot-concierge-gh-403).
+    const owner = connectedOwner;
+    const repo = connectedRepo;
+    if (effectiveInstallationId !== null && owner && repo) {
       let c4Enabled = false;
       try {
         const tenant = await getFreshTenantClient(args.userId);
@@ -1182,7 +1269,7 @@ export const realSdkQueryFactory: QueryFactory = async (
           version: "1.0.0",
           tools: buildC4ConciergeTools({
             userId: args.userId,
-            installationId,
+            installationId: effectiveInstallationId,
             owner,
             repo,
             workspacePath,
@@ -1244,6 +1331,9 @@ export const realSdkQueryFactory: QueryFactory = async (
   if (c4PromptAddendum) {
     effectiveSystemPrompt += `\n\n${c4PromptAddendum}`;
   }
+  // Always append the gh-403 honesty directive (feat-one-shot-concierge-gh-403)
+  // — independent of repo/flag state, since any conversation can run `gh`.
+  effectiveSystemPrompt += `\n\n${GH_403_PROMPT_DIRECTIVE}`;
 
   const pluginPath = path.join(workspacePath, "plugins", "soleur");
 
