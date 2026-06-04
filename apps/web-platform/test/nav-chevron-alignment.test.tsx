@@ -14,10 +14,15 @@ import { render, screen, within } from "@testing-library/react";
 //   - the org-switcher button + solo identity chip carry the width-clamp classes
 //     that stop the bordered box painting past the rail edge.
 
-// The layout collapse-toggle chevron glyph (app/(dashboard)/layout.tsx
-// ChevronLeftIcon/ChevronRightIcon). The band's back affordance MUST NOT reuse
-// this exact path or the two controls read as a broken duplicate.
-const COLLAPSE_CHEVRON_PATH = "M15.75 19.5 8.25 12l7.5-7.5";
+// The layout collapse-toggle glyph (app/(dashboard)/layout.tsx PanelToggleIcon).
+// Sidebar-UX follow-up Issue 2: the old left/right chevron read like a "back"
+// arrow on drilled secondary menus, so it was swapped for a non-directional
+// sidebar-panel glyph (this is its outer-rectangle path). The band's back
+// affordance MUST NOT reuse this exact path or the two controls read as a
+// broken duplicate — and a non-directional panel glyph is even more distinct
+// from the back arrow than the old chevron was.
+const COLLAPSE_CHEVRON_PATH =
+  "M3.75 6.75A2.25 2.25 0 0 1 6 4.5h12a2.25 2.25 0 0 1 2.25 2.25v10.5A2.25 2.25 0 0 1 18 19.5H6a2.25 2.25 0 0 1-2.25-2.25V6.75Z";
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/dashboard/kb",

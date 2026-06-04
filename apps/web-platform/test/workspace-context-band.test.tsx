@@ -121,16 +121,29 @@ describe("WorkspaceContextBand — persistent workspace identity (AC1/AC4b)", ()
     ).toBeTruthy();
   });
 
-  it("AC2: the leading pill carries pt-3; 'Back to menu' follows tighter with pt-2", async () => {
+  it("AC2 (Sidebar-UX Issue 1): the leading pill top room is tightened to pt-2", async () => {
     render(<WorkspaceContextBand pathname="/dashboard/settings/members" />);
     // wait for the band to hydrate the pill
     await screen.findByRole("button", { name: /switch workspace/i });
     const band = screen.getByTestId("workspace-context-band");
-    // first child is the pill wrapper with the band's top breathing room
+    // first child is the pill wrapper; pt-2 (was pt-3) shrinks the gap between
+    // the collapse toggle and the workspace switcher card (Issue 1).
     const pillWrapper = band.firstElementChild as HTMLElement;
-    expect(pillWrapper.className).toContain("pt-3");
+    expect(pillWrapper.className).toContain("pt-2");
+    expect(pillWrapper.className).not.toContain("pt-3");
     const back = screen.getByTestId("nav-back-chevron");
     expect(back.className).toContain("pt-2");
+  });
+
+  it("Sidebar-UX Issue 3: the section title is spaced off the 'Back to menu' link (pt-3)", () => {
+    render(<WorkspaceContextBand pathname="/dashboard/settings" />);
+    // The back link (pt-2) and the section heading used to sit in one cramped
+    // block; pt-3 on the title row adds a clear inter-row gap (shared band, so
+    // this applies to both Settings and Knowledge Base).
+    const title = screen.getByTestId("nav-section-title");
+    expect(title.className).toContain("pt-3");
+    // ...without dropping the existing bottom padding (regression-guard pair).
+    expect(title.className).toContain("pb-3");
   });
 
   it("renders the back chevron SYNCHRONOUSLY on a drilled route (not async-gated)", () => {
