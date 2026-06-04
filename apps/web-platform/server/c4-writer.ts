@@ -10,7 +10,11 @@ import {
   githubApiPost,
   GitHubApiError,
 } from "@/server/github-api";
-import { syncWorkspace } from "@/server/kb-route-helpers";
+// Import from the leaf workspace-sync module (NOT kb-route-helpers) so this
+// file — bundled into the WS/custom server via the Concierge edit_c4_diagram
+// tool — does not pull kb-route-helpers' `@/lib/supabase/server` (next/headers)
+// into the server bundle, which crashes the custom server at startup.
+import { syncWorkspace } from "@/server/workspace-sync";
 import { isC4DiagramPath } from "@/lib/c4-constants";
 import { renameUserIdToHash } from "@/server/userid-pseudonymize";
 import logger from "@/server/logger";
