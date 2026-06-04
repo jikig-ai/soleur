@@ -97,9 +97,16 @@ revert creates (below), which a naive `git revert` would silently break.
 - (Revert) If the revert removes the `reportSilentFallback` emit *without* preserving it, the
   #4920 tenant-mint alert and the new db-error alert lose their signal — a future
   insert-breaking migration sits latent again (the exact #4913 failure mode).
-- (Revert, worst case) If the scope decision wrongly removes a fallback path that is load-bearing,
-  a tenant-mint failure could 503 the "Generate link" / file-mutation surface — but the PIR
-  proves the mint does not fail in prod, so this is a latent-not-active regression.
+- (Revert) The tenant-JWT mint CAN still fail via a reachable path even though the PIR proved it
+  did NOT cause the original incident: the 60-mints/hr per-founder `rotation` ceiling
+  (`lib/supabase/tenant.ts:83`) or a GoTrue outage. After the revert, such a failure → 503 on the
+  "Generate link" / file-mutation surface, which `share-popover.tsx` resets to idle (the same
+  shape as the original dead-end). This is an ACCEPTED degradation, not "cannot happen": the
+  preserved `reportSilentFallback` emit + the #4920 tenant-mint alert + the new kb-db-error alert
+  make a chronic mint failure operator-visible on the FIRST occurrence — a degraded-but-observable
+  trade. The service-role fallback only ever masked this signal; it did not fix the ceiling. (A
+  separate UX gap — share-popover swallowing the 503 to idle with no message — is pre-existing and
+  out of scope here.)
 - (Alert) If the alert filter mis-keys (wrong `feature`/`op` slug, wrong `action_match`), the
   next "breaks every insert" constraint failure pages no one — the latent-19-days outcome recurs.
 

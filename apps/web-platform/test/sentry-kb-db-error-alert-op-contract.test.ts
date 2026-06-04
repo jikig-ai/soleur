@@ -96,4 +96,39 @@ describe("kb-db-error alert op/feature contract", () => {
       tf.match(new RegExp(`^\\s*frequency\\s*=\\s*${myFreq}\\b`, "gm")) ?? [];
     expect(all.length).toBe(1);
   });
+
+  // Structural predicate pinning: the alert's semantics depend on these two
+  // values, not just the slug presence. A flip of filter_match to "any" (page
+  // on feature-only, ignoring the op filter) or op match to "EQUAL" (only the
+  // first slug matches) would leave the slug-presence assertions green while
+  // silently breaking the alert. Pin both.
+  it("the alert ANDs its filters (filter_match all) and matches the op set via IS_IN", () => {
+    expect(tfBlock).toContain('filter_match = "all"');
+    expect(tfBlock).toMatch(/key\s*=\s*"op"[\s\S]*?match\s*=\s*"IS_IN"/);
+    expect(tfBlock).toMatch(/key\s*=\s*"feature"[\s\S]*?match\s*=\s*"EQUAL"/);
+  });
+
+  // Reverse-guard (fail-closed on a NEW kb-share op): every distinct `op: "X"`
+  // emitted in kb-share.ts must be either in this alert's IS_IN value OR in the
+  // explicit exclusion list below. kb-share.ts emits ONLY feature:"kb-share"
+  // events, so every op in it is a candidate. Without this, adding a 6th
+  // db-error op to kb-share.ts and forgetting the IS_IN update would leave the
+  // forward assertions green while the alert silently never pages on it — the
+  // exact "latent for weeks" class this alert exists to prevent (PIR #4913).
+  // A new NON-db op (e.g. an audit-log emit) must be consciously added to
+  // KB_SHARE_OPS_EXCLUDED_FROM_ALERT with a rationale, forcing an in/out call.
+  const KB_SHARE_OPS_EXCLUDED_FROM_ALERT: ReadonlyArray<string> = [];
+
+  it("every kb-share.ts op is covered by the alert IS_IN or explicitly excluded", () => {
+    const emittedOps = [
+      ...new Set([...kbShare.matchAll(/op:\s*"([^"]+)"/g)].map((m) => m[1])),
+    ].sort();
+    const isInOps = OP_SLUGS.map((o) => o.slug);
+    const uncovered = emittedOps.filter(
+      (op) =>
+        !isInOps.includes(op) &&
+        !KB_SHARE_OPS_EXCLUDED_FROM_ALERT.includes(op),
+    );
+    expect(uncovered).toEqual([]);
+  });
 });

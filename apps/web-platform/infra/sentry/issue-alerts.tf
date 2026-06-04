@@ -410,10 +410,15 @@ resource "sentry_issue_alert" "chat_message_save_failure" {
 #
 # op-SCOPED filter (op IS_IN, NOT feature-only): mirrors
 # kb_tenant_mint_silent_fallback / chat_message_save_failure. The `kb-share`
-# feature tag spans exactly the 5 db-error-class ops below
-# (create/list/revoke/preview/preview-invariant — all operator-actionable db
-# failures); op-scoping pins the contract test against rename drift while every
-# kb-share op is in-scope (so this is NOT a coverage narrowing vs feature-only).
+# feature tag spans MORE than these 5 ops — sibling files emit feature="kb-share"
+# for non-db ops too (cf-cache-purge.ts `revoke-purge`; kb-preview-metadata.ts
+# `preview-pdf-*`/`preview-image-*`; agent-runner.ts `baseUrl`). This rule is
+# DELIBERATELY scoped to the db-error subset that originates in kb-share.ts
+# (create/list/revoke/preview/preview-invariant — query/insert/update failures;
+# `create` is the 23502 path) so a CDN-purge or PDF-parse failure does not page
+# the founder. A new db-error op added to kb-share.ts MUST be added to BOTH this
+# IS_IN value AND the op-contract test (the test's reverse-guard fails closed on
+# any unlisted kb-share.ts op).
 #
 # `action_match="any"`: first_seen/reappeared/regression are mutually-exclusive
 # event-lifecycle states (a captured event is exactly one) — "all" is never
@@ -453,7 +458,7 @@ resource "sentry_issue_alert" "kb_db_error" {
       }
     },
   ]
-  # N=1 accepted risk (mirrors kb_tenant_mint_silent_fallback:523-528):
+  # N=1 accepted risk (mirrors the kb_tenant_mint_silent_fallback block):
   # IssueOwners has no ownership rule on this project → falls through to
   # ActiveMembers, correctly paging the solo founder. These events carry only
   # hashed userId + op + documentPath + pg_code tags — no cross-tenant content —
