@@ -40,6 +40,7 @@ When auditing multiple documents together, check for consistency across them:
 - Data practices described in privacy policy align with cookie policy claims
 - Terms & Conditions references to other policies point to documents that exist
 - Jurisdiction claims are consistent (do not claim GDPR compliance in one document and omit it in another)
+- Art. 30 disposition citations are grep-validated, not name-matched: when a disclosure PR claims "no new PA — covered by existing PA N", grep `article-30-register.md` for the implementing *code surface* (the cited file/runtime), not the PA's title — `<feature>`-named PAs are a false-match trap (e.g. "Autonomous-acknowledgment runtime" PA-21/22 are the Inngest spawn loop, NOT the interactive `cc-dispatcher`/`permission-callback` chat runtime registered under PA-2). Before accepting "no limb amendment", read the cited PA's `(g) TOMs` and confirm the change removes/alters none of them (a safety control on the user's own systems is not automatically a registered Art. 32 TOM). See `knowledge-base/project/learnings/2026-06-04-art-30-pa-citation-must-be-grep-validated-against-register.md`.
 
 Flag inconsistencies as CRITICAL findings.
 
