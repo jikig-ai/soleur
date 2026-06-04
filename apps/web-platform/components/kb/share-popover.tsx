@@ -47,40 +47,55 @@ export function SharePopover({ documentPath }: SharePopoverProps) {
   // Read existing share status. Returns true if an active share was found
   // (state set to "active"), false otherwise (state set to "idle"). Reusable
   // by both the open effect and the 409 concurrent-retry recovery path.
-  const checkShare = useCallback(async (): Promise<boolean> => {
-    setState((s) => ({ ...s, status: "loading" }));
-    try {
-      const res = await fetch(`/api/kb/share?documentPath=${encodeURIComponent(documentPath)}`);
-      if (!res.ok) {
-        setState((s) => ({ ...s, status: "idle" }));
+  // `isCurrent` guards against a stale in-flight response clobbering newer
+  // state when the popover is closed/reopened or `documentPath` changes mid-
+  // flight (the open effect passes its own liveness flag; the 409 recovery
+  // caller owns its synchronous flow and uses the default always-current).
+  const checkShare = useCallback(
+    async (isCurrent: () => boolean = () => true): Promise<boolean> => {
+      setState((s) => ({ ...s, status: "loading" }));
+      try {
+        const res = await fetch(`/api/kb/share?documentPath=${encodeURIComponent(documentPath)}`);
+        if (!isCurrent()) return false;
+        if (!res.ok) {
+          setState((s) => ({ ...s, status: "idle" }));
+          return false;
+        }
+        const data = await res.json();
+        if (!isCurrent()) return false;
+        const existing = data.shares?.find(
+          (s: { revoked: boolean }) => !s.revoked,
+        );
+        if (existing) {
+          setState({
+            status: "active",
+            token: existing.token,
+            url: `${window.location.origin}/shared/${existing.token}`,
+            copied: false,
+            confirmRevoke: false,
+          });
+          return true;
+        }
+        setState({ status: "idle", token: null, url: null, copied: false, confirmRevoke: false });
+        return false;
+      } catch {
+        if (isCurrent()) setState((s) => ({ ...s, status: "idle" }));
         return false;
       }
-      const data = await res.json();
-      const existing = data.shares?.find(
-        (s: { revoked: boolean }) => !s.revoked,
-      );
-      if (existing) {
-        setState({
-          status: "active",
-          token: existing.token,
-          url: `${window.location.origin}/shared/${existing.token}`,
-          copied: false,
-          confirmRevoke: false,
-        });
-        return true;
-      }
-      setState({ status: "idle", token: null, url: null, copied: false, confirmRevoke: false });
-      return false;
-    } catch {
-      setState((s) => ({ ...s, status: "idle" }));
-      return false;
-    }
-  }, [documentPath]);
+    },
+    [documentPath],
+  );
 
-  // Check existing share status when the popover opens.
+  // Check existing share status when the popover opens. The liveness flag is
+  // flipped on cleanup so a response that resolves after close/reopen or a
+  // documentPath switch cannot overwrite the newer state.
   useEffect(() => {
     if (!open) return;
-    void checkShare();
+    let active = true;
+    void checkShare(() => active);
+    return () => {
+      active = false;
+    };
   }, [open, checkShare]);
 
   const generateLink = useCallback(async () => {
