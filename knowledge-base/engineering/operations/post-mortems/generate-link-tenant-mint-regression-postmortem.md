@@ -98,7 +98,7 @@ Per-fix prod proof via `DATABASE_URL_POOLER`: each insert fails 23502 without `w
 
 ## Follow-ups
 
-- [ ] Workflow/skill safeguard: when a migration adds a NOT-NULL column with no default to an EXISTING table, mechanically sweep every insert/upsert writer. See the new learning + `apps/web-platform/scripts/audit-not-null-column-insert-coverage.mjs`.
+- [ ] Workflow/skill safeguard: when a migration adds a NOT-NULL column with no default to an EXISTING table, mechanically sweep every insert/upsert writer. See the new learning + `apps/web-platform/scripts/audit-not-null-column-insert-coverage.sh`.
 - [ ] Wire an alert on the kb-share / kb-route db-error `reportSilentFallback` rate so a constraint that breaks every insert pages instead of sitting latent.
 - [ ] Revert the unnecessary service-role fallback PR #4913 added to `resolveUserKbRoot` (dead code now — the mint was never the cause; restoring the tenant-only boundary removes the unjustified `.service-role-allowlist` re-introduction). CODEOWNERS-gated allowlist edit; tracked separately.
 
