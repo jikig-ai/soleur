@@ -395,6 +395,89 @@ resource "sentry_issue_alert" "chat_message_save_failure" {
   }
 }
 
+# ── KB db-error alert (#4929) — APPLY-CREATED, NOT import ──────────────────
+# Pages on the first occurrence of any KB share db-error event — the "breaks
+# every insert" class: the 23502 NOT-NULL constraint that caused PIR #4913 (the
+# missing `workspace_id` on NOT-NULL inserts dead-ended every "Generate link"
+# create), and the 42501 RLS class that caused the 3-week chat-save outage
+# (#4831). The signal already exists: `createShare`'s db-error path
+# (kb-share.ts:340) calls `reportSilentFallback(feature:"kb-share", op:"create")`
+# — `create` is the 23502 insert path — and the sibling list/revoke/preview ops
+# emit the same `feature:"kb-share"` family. This rule is the missing
+# NOTIFICATION layer (hr-no-dashboard-eyeball-pull-data-yourself): without it a
+# constraint that breaks every insert sits latent for weeks (PIR #4913 sat ~19
+# days) instead of paging on first occurrence. No app change needed.
+#
+# op-SCOPED filter (op IS_IN, NOT feature-only): mirrors
+# kb_tenant_mint_silent_fallback / chat_message_save_failure. The `kb-share`
+# feature tag spans MORE than these 5 ops — sibling files emit feature="kb-share"
+# for non-db ops too (cf-cache-purge.ts `revoke-purge`; kb-preview-metadata.ts
+# `preview-pdf-*`/`preview-image-*`; agent-runner.ts `baseUrl`). This rule is
+# DELIBERATELY scoped to the db-error subset that originates in kb-share.ts
+# (create/list/revoke/preview/preview-invariant — query/insert/update failures;
+# `create` is the 23502 path) so a CDN-purge or PDF-parse failure does not page
+# the founder. A new db-error op added to kb-share.ts MUST be added to BOTH this
+# IS_IN value AND the op-contract test (the test's reverse-guard fails closed on
+# any unlisted kb-share.ts op).
+#
+# `action_match="any"`: first_seen/reappeared/regression are mutually-exclusive
+# event-lifecycle states (a captured event is exactly one) — "all" is never
+# satisfiable. reappeared+regression re-page a recurrence after the founder
+# resolves the Sentry issue. Distinct `frequency=13` avoids Sentry POST-time
+# exact-duplicate dedup (taken: 5,10,11,12,15,30,60,61,62; keyed on action-shape
+# + frequency + match, NOT conditions — not evaluated by lifecycle-condition
+# rules but must be unique). `IS_IN` proven in beta2 at byok_cap_exceeded above.
+# Cross-artifact op/feature contract pinned by
+# test/sentry-kb-db-error-alert-op-contract.test.ts.
+resource "sentry_issue_alert" "kb_db_error" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "kb-db-error"
+  action_match = "any"
+  filter_match = "all"
+  frequency    = 13
+
+  conditions_v2 = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "EQUAL"
+        value = "kb-share"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "op"
+        match = "IS_IN"
+        value = "create,list,revoke,preview,preview-invariant"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors the kb_tenant_mint_silent_fallback block):
+  # IssueOwners has no ownership rule on this project → falls through to
+  # ActiveMembers, correctly paging the solo founder. These events carry only
+  # hashed userId + op + documentPath + pg_code tags — no cross-tenant content —
+  # so the fallthrough does not over-disclose. Revisit recipient pinning
+  # (target_type="Member") before the first non-founder Sentry seat.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # server/inngest/functions/cron-workspace-sync-health.ts: a daily probe that
 # emits `feature=workspace-sync-health` events via reportSilentFallback for both
 # user-actionable findings (op ∈ {ready-null-installation, stale-sync-failed,
