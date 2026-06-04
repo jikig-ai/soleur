@@ -109,8 +109,15 @@ describe("autonomous Bash bypass (AC16)", () => {
     mockIsSafeTool.mockReturnValue(false);
   });
 
-  test("autonomous + NON-blocked (`git push`) → allow with NO review-gate", async () => {
-    const { ctx, deps } = buildContext({ bashAutonomous: true });
+  // feat-bash-autonomous-default-on: the friction-free bypass now requires the
+  // first-run consent ack (autonomousAckAt set). An un-acked workspace is
+  // soft-gated (covered by permission-callback-autonomous-softgate.test.ts).
+  test("autonomous + ACKED + NON-blocked (`git push`) → allow with NO review-gate", async () => {
+    const { ctx, deps } = buildContext({
+      bashAutonomous: true,
+      autonomousAckAt: 1_700_000_000_000,
+      isOwner: true,
+    });
     const canUseTool = createCanUseTool(ctx);
     const result: PermissionResult = await canUseTool(
       "Bash",

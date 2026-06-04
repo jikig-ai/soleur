@@ -255,6 +255,11 @@ export type WSMessage =
   | { type: "resume_session"; conversationId: string }
   | { type: "close_conversation" }
   | { type: "review_gate_response"; gateId: string; selection: string }
+  // feat-bash-autonomous-default-on — first-run consent soft-gate response
+  // (client→server). `selection` is "Got it" / "Keep autonomous on" /
+  // "Ask me each time". `userId` is resolved from the authenticated socket —
+  // NOT a wire field (TR4 cross-user invariant; strictObject rejects forgery).
+  | { type: "autonomous_disclosure_response"; gateId: string; selection: string }
   // Client → server: user-initiated Stop. The server resolves `userId`
   // from the authenticated socket session — `userId` is intentionally
   // NOT part of the wire shape (TR4 cross-user invariant; see
@@ -318,6 +323,19 @@ export type WSMessage =
       elapsedSeconds: number;
     }
   | { type: "review_gate"; gateId: string; question: string; header?: string; options: string[]; descriptions?: Record<string, string | undefined>; stepProgress?: { current: number; total: number } }
+  // feat-bash-autonomous-default-on — first-run consent soft-gate disclosure
+  // (server→client). A held Bash command awaiting the owner's one-time ack.
+  // `existingWorkspace` true => offer the opt-out ("Keep autonomous on" /
+  // "Ask me each time"); false => default-ON workspace ("Got it" ack).
+  | { type: "autonomous_disclosure"; gateId: string; existingWorkspace: boolean }
+  // feat-bash-autonomous-default-on — SERVER-resolved autonomous posture for the
+  // persistent chip (server→client). `autonomous` is the SERVER truth
+  // `bashAutonomous && ackAt != null` — i.e. "Auto-run on" only when the toggle
+  // is on AND the first-run disclosure has been acked. Emitted once per dispatch
+  // after the server resolves the toggle + ack (and re-emitted on a successful
+  // in-session ack-release). The chip reads THIS, never message presence — a
+  // held (un-acked) disclosure is "Approve each", not "Auto-run on".
+  | { type: "autonomous_posture"; autonomous: boolean }
   | { type: "session_started"; conversationId: string; capabilities?: { promptKinds: readonly string[]; incomingTypes?: readonly string[] } }
   | { type: "session_resumed"; conversationId: string; resumedFromTimestamp: string; messageCount: number }
   | {

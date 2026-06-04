@@ -14,6 +14,9 @@ import {
 import { ACTION_CLASSES_BY_CATEGORY } from "@/lib/messages/action-class-copy";
 import { ScopeGrantRow } from "@/components/scope-grants/scope-grant-row";
 import { TemplateAuthorizationRow } from "@/components/scope-grants/template-authorization-row";
+import { BashAutonomousToggle } from "@/components/settings/bash-autonomous-toggle";
+import { resolveBashAutonomous } from "@/server/resolve-bash-autonomous";
+import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +44,23 @@ export default async function ScopeGrantsPage() {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
+
+  // feat-bash-autonomous-default-on — Concierge command-execution toggle
+  // (relocated here from Settings → Privacy). Owner-only: read the current
+  // value (member-checked, fail-closed false) and resolve owner status of the
+  // active workspace so non-owners don't see a control they can't use. The
+  // scope-grants page does NOT otherwise resolve workspace ownership, so add
+  // the same membership query the Privacy page used (cookie/RLS-scoped client,
+  // workspace_members members_select_peers policy — caller reads its own row).
+  const autonomous = await resolveBashAutonomous(user.id);
+  const activeWorkspaceId = await resolveCurrentWorkspaceId(user.id, supabase);
+  const { data: membership } = await supabase
+    .from("workspace_members")
+    .select("role")
+    .eq("workspace_id", activeWorkspaceId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  const isWorkspaceOwner = membership?.role === "owner";
 
   // Belt-and-suspenders .eq("founder_id", user.id) defends against any
   // future RLS loosening on scope_grants. Comment per today/route.ts
@@ -123,6 +143,31 @@ export default async function ScopeGrantsPage() {
           stop runs already in progress.
         </p>
       </header>
+
+      {isWorkspaceOwner && (
+        <section
+          id="concierge-command-execution"
+          aria-labelledby="concierge-command-execution-heading"
+          className="mb-8 rounded-none border border-soleur-border-default bg-soleur-bg-surface-1 p-4"
+        >
+          <h2
+            id="concierge-command-execution-heading"
+            className="mb-2 text-sm font-medium uppercase tracking-wide text-soleur-text-muted"
+          >
+            Concierge command execution
+          </h2>
+          <p className="mb-4 text-sm text-soleur-text-secondary">
+            The Concierge runs commands to get work done. With autonomous mode
+            on it runs non-blocked commands without asking you to approve each
+            one; with it off, it asks before every command. The blocklist
+            (curl, wget, sudo, …) and secret redaction always apply.
+          </p>
+          <BashAutonomousToggle
+            initialAutonomous={autonomous}
+            isOwner={isWorkspaceOwner}
+          />
+        </section>
+      )}
 
       {Array.from(ACTION_CLASSES_BY_CATEGORY.entries()).map(
         ([category, classes]) => {

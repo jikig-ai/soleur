@@ -121,8 +121,16 @@ describe("permission-callback streaming posture (AC2/AC3/AC9)", () => {
     mockIsSafeTool.mockReturnValue(false);
   });
 
+  // feat-bash-autonomous-default-on: friction-free streaming is the
+  // POST-CONSENT state — the workspace owner has acked the first-run disclosure
+  // (autonomousAckAt set). An un-acked autonomous workspace is soft-gated
+  // (covered by permission-callback-autonomous-softgate.test.ts).
   test("AC2 — streaming + NON-blocked Bash → allow with ZERO review_gate sends", async () => {
-    const { ctx, deps } = buildContext({ bashAutonomous: true });
+    const { ctx, deps } = buildContext({
+      bashAutonomous: true,
+      autonomousAckAt: 1_700_000_000_000,
+      isOwner: true,
+    });
     const canUseTool = createCanUseTool(ctx);
     const result: PermissionResult = await canUseTool(
       "Bash",
@@ -135,7 +143,11 @@ describe("permission-callback streaming posture (AC2/AC3/AC9)", () => {
   });
 
   test("AC2 — streaming + non-blocked Bash carrying a token → still allow, no review_gate (no raw-command leak)", async () => {
-    const { ctx, deps } = buildContext({ bashAutonomous: true });
+    const { ctx, deps } = buildContext({
+      bashAutonomous: true,
+      autonomousAckAt: 1_700_000_000_000,
+      isOwner: true,
+    });
     const canUseTool = createCanUseTool(ctx);
     const result = await canUseTool(
       "Bash",

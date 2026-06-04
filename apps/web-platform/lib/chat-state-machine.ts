@@ -122,6 +122,19 @@ interface ChatGateMessage extends ChatMessageBase {
   gateError?: string;
 }
 
+/** feat-bash-autonomous-default-on — first-run consent soft-gate card. A held
+ *  Bash command awaiting the owner's one-time autonomous-mode acknowledgement.
+ *  Rendered as the AutonomousDisclosureBanner; resolved via
+ *  `autonomous_disclosure_response`. `existingWorkspace` selects the opt-out
+ *  (Keep on / Ask each) vs. the default-ON "Got it" surface. */
+interface ChatAutonomousDisclosureMessage extends ChatMessageBase {
+  type: "autonomous_disclosure";
+  gateId: string;
+  existingWorkspace: boolean;
+  resolved?: boolean;
+  selectedOption?: string;
+}
+
 /** Stage 4 (#2886): subagent group bubble — parent leader's assessment +
  *  nested child sub-bubbles, one per spawned subagent. */
 export interface ChatSubagentGroupMessage extends ChatMessageBase {
@@ -186,6 +199,7 @@ export interface ChatContextResetMessage extends ChatMessageBase {
 export type ChatMessage =
   | ChatTextMessage
   | ChatGateMessage
+  | ChatAutonomousDisclosureMessage
   | ChatSubagentGroupMessage
   | ChatInteractivePromptMessage
   | ChatWorkflowEndedMessage
@@ -287,6 +301,7 @@ export type StreamEvent = Extract<
   | { type: "command_stream" }
   | { type: "tool_progress" }
   | { type: "review_gate" }
+  | { type: "autonomous_disclosure" }
   | { type: "subagent_spawn" }
   | { type: "subagent_complete" }
   | { type: "workflow_started" }
@@ -619,6 +634,41 @@ export function applyStreamEvent(
       };
       return {
         messages: [...updated, gateMsg],
+        activeStreams: new Map(),
+        workflow: priorWorkflow,
+        spawnIndex: priorSpawnIndex,
+        timerAction: { type: "clear_all" },
+      };
+    }
+
+    case "autonomous_disclosure": {
+      // feat-bash-autonomous-default-on — first-run consent soft-gate. Mirrors
+      // the `review_gate` arm: transition any mid-turn bubble to "done" before
+      // clearing activeStreams (avoid the stuck "Working" badge, #2843), then
+      // append the disclosure card. The held Bash command does not proceed
+      // until the owner acks via `autonomous_disclosure_response`.
+      const updated = prev.slice();
+      for (const idx of activeStreams.values()) {
+        if (idx >= updated.length) continue;
+        const m = updated[idx];
+        if (
+          m.state === "thinking" ||
+          m.state === "tool_use" ||
+          m.state === "streaming"
+        ) {
+          updated[idx] = { ...m, state: "done" };
+        }
+      }
+      const disclosureMsg: ChatMessage = {
+        id: `autonomous-disclosure-${event.gateId}`,
+        role: "assistant",
+        content: "",
+        type: "autonomous_disclosure",
+        gateId: event.gateId,
+        existingWorkspace: event.existingWorkspace,
+      };
+      return {
+        messages: [...updated, disclosureMsg],
         activeStreams: new Map(),
         workflow: priorWorkflow,
         spawnIndex: priorSpawnIndex,
