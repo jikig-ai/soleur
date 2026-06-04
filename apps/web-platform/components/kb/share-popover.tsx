@@ -7,12 +7,18 @@ interface SharePopoverProps {
 }
 
 interface ShareState {
-  status: "idle" | "loading" | "active";
+  status: "idle" | "loading" | "active" | "error";
   token: string | null;
   url: string | null;
   copied: boolean;
   confirmRevoke: boolean;
 }
+
+// Generic, hoisted error copy. Never echo raw server error strings, DB SQLSTATE
+// codes, or filesystem paths to the user — keep this constant the only thing the
+// error branch renders (AC2).
+export const SHARE_ERROR_MESSAGE =
+  "Couldn't generate a link. Please try again.";
 
 export function SharePopover({ documentPath }: SharePopoverProps) {
   const [open, setOpen] = useState(false);
@@ -38,40 +44,44 @@ export function SharePopover({ documentPath }: SharePopoverProps) {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [open]);
 
-  // Check existing share status when popover opens.
+  // Read existing share status. Returns true if an active share was found
+  // (state set to "active"), false otherwise (state set to "idle"). Reusable
+  // by both the open effect and the 409 concurrent-retry recovery path.
+  const checkShare = useCallback(async (): Promise<boolean> => {
+    setState((s) => ({ ...s, status: "loading" }));
+    try {
+      const res = await fetch(`/api/kb/share?documentPath=${encodeURIComponent(documentPath)}`);
+      if (!res.ok) {
+        setState((s) => ({ ...s, status: "idle" }));
+        return false;
+      }
+      const data = await res.json();
+      const existing = data.shares?.find(
+        (s: { revoked: boolean }) => !s.revoked,
+      );
+      if (existing) {
+        setState({
+          status: "active",
+          token: existing.token,
+          url: `${window.location.origin}/shared/${existing.token}`,
+          copied: false,
+          confirmRevoke: false,
+        });
+        return true;
+      }
+      setState({ status: "idle", token: null, url: null, copied: false, confirmRevoke: false });
+      return false;
+    } catch {
+      setState((s) => ({ ...s, status: "idle" }));
+      return false;
+    }
+  }, [documentPath]);
+
+  // Check existing share status when the popover opens.
   useEffect(() => {
     if (!open) return;
-    let cancelled = false;
-    async function checkShare() {
-      setState((s) => ({ ...s, status: "loading" }));
-      try {
-        const res = await fetch(`/api/kb/share?documentPath=${encodeURIComponent(documentPath)}`);
-        if (!res.ok) {
-          setState((s) => ({ ...s, status: "idle" }));
-          return;
-        }
-        const data = await res.json();
-        const existing = data.shares?.find(
-          (s: { revoked: boolean }) => !s.revoked,
-        );
-        if (!cancelled && existing) {
-          setState({
-            status: "active",
-            token: existing.token,
-            url: `${window.location.origin}/shared/${existing.token}`,
-            copied: false,
-            confirmRevoke: false,
-          });
-        } else if (!cancelled) {
-          setState({ status: "idle", token: null, url: null, copied: false, confirmRevoke: false });
-        }
-      } catch {
-        if (!cancelled) setState((s) => ({ ...s, status: "idle" }));
-      }
-    }
-    checkShare();
-    return () => { cancelled = true; };
-  }, [open, documentPath]);
+    void checkShare();
+  }, [open, checkShare]);
 
   const generateLink = useCallback(async () => {
     setState((s) => ({ ...s, status: "loading" }));
@@ -82,7 +92,14 @@ export function SharePopover({ documentPath }: SharePopoverProps) {
         body: JSON.stringify({ documentPath }),
       });
       if (!res.ok) {
-        setState((s) => ({ ...s, status: "idle" }));
+        // A 409 means a concurrent request already created the share — re-read
+        // so the user lands on the active link instead of an error. Any other
+        // failure (or a 409 with no recoverable row) surfaces the error state.
+        if (res.status === 409) {
+          const recovered = await checkShare();
+          if (recovered) return;
+        }
+        setState((s) => ({ ...s, status: "error" }));
         return;
       }
       const data = await res.json();
@@ -94,9 +111,9 @@ export function SharePopover({ documentPath }: SharePopoverProps) {
         confirmRevoke: false,
       });
     } catch {
-      setState((s) => ({ ...s, status: "idle" }));
+      setState((s) => ({ ...s, status: "error" }));
     }
-  }, [documentPath]);
+  }, [documentPath, checkShare]);
 
   const copyLink = useCallback(async () => {
     if (!state.url) return;
@@ -155,6 +172,19 @@ export function SharePopover({ documentPath }: SharePopoverProps) {
                 className="w-full rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:bg-amber-400"
               >
                 Generate link
+              </button>
+            </div>
+          )}
+
+          {state.status === "error" && (
+            <div>
+              <p className="mb-3 text-sm text-red-300">{SHARE_ERROR_MESSAGE}</p>
+              <button
+                type="button"
+                onClick={generateLink}
+                className="w-full rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:bg-amber-400"
+              >
+                Try again
               </button>
             </div>
           )}

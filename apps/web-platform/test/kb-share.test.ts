@@ -336,6 +336,30 @@ describe("createShare — concurrent retry (23505 unique violation)", () => {
   });
 });
 
+describe("createShare — FK violation (23503 workspace row missing)", () => {
+  it("returns a distinct non-db-error code (not the generic db-error) for SQLSTATE 23503", async () => {
+    const bytes = Buffer.from("hello");
+    fs.writeFileSync(path.join(kbRoot, "note.md"), bytes);
+
+    const client = makeServiceClient({
+      kb_share_links: {
+        shareRow: null,
+        shareError: null,
+        insertSpy: vi.fn().mockResolvedValue({ error: { code: "23503" } }),
+      },
+    });
+
+    const result = await createShare(client as never, "user-1", "ws-missing", kbRoot, "note.md");
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    // Distinct from the generic catch-all so telemetry can discriminate a
+    // missing-workspace-row FK violation from an arbitrary DB error.
+    expect(result.code).not.toBe("db-error");
+    expect(result.code).toBe("workspace-missing");
+  });
+});
+
 describe("listShares", () => {
   it("returns empty array when user has no shares", async () => {
     const client = makeServiceClient({

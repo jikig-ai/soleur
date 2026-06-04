@@ -64,6 +64,11 @@ export type CreateShareErrorCode =
   | "symlink-rejected"
   | "too-large"
   | "concurrent-retry"
+  // FK violation (SQLSTATE 23503): the row's workspace_id points at a
+  // workspaces row that does not exist. Distinct from db-error so telemetry
+  // can discriminate "owner's workspace row missing" (should be rare post-
+  // #4922's resolveCurrentWorkspaceId solo fallback) from an arbitrary DB error.
+  | "workspace-missing"
   | "db-error";
 
 export type RevokeShareErrorCode =
@@ -335,6 +340,22 @@ export async function createShare(
         status: 409,
         code: "concurrent-retry",
         error: "Concurrent share creation — retry",
+      };
+    }
+    if ((insertError as { code?: string }).code === "23503") {
+      // FK violation: workspace_id has no matching workspaces row. Mirror to
+      // Sentry (cq-silent-fallback-must-mirror-to-sentry) but return a distinct
+      // code so the alarm + client can tell this apart from a generic DB error.
+      reportSilentFallback(insertError, {
+        feature: "kb-share",
+        op: "create",
+        extra: { userId, documentPath, reason: "workspace-missing" },
+      });
+      return {
+        ok: false,
+        status: 500,
+        code: "workspace-missing",
+        error: "Failed to create share link",
       };
     }
     reportSilentFallback(insertError, {
