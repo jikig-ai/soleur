@@ -34,9 +34,9 @@ Derived from the finalized (post-review) plan. RED→GREEN→REFACTOR per task. 
 - [x] 3.1 `GET api/workspace/[id]/logo`: auth 401 → `is_workspace_member` 403 → read logo_path 404 → `createSignedUrl(…,300)` → 302 + `Cache-Control: private, max-age=300` + `nosniff`; `reportSilentFallback`→502 on mint fail. (AC6)
 - [x] 3.2 `org-memberships-resolver.ts`: `logo_path` added to select, exposes `hasLogo: boolean` on `OrgMembershipSummary` (no mint, no storage import). list-memberships route passes it through unchanged. (AC6)
 
-## Phase 4 — Render
-- [ ] 4.1 `WorkspaceIdentityTile`: `workspaceId`+`hasLogo` props; `<img src=/api/workspace/<id>/logo>` + `onError`→monogram (Sentry on error). (AC7)
-- [ ] 4.2 Thread through `org-switcher-container`→`org-switcher`; extend `useActiveWorkspaceName`→`useActiveWorkspace` ({name,workspaceId,hasLogo}); thread into context band. (AC7c stable-src)
+## Phase 4 — Render ✅ 70/70 (tile + switcher + band + hook)
+- [x] 4.1 `WorkspaceIdentityTile`: `workspaceId`+`hasLogo` props; `<img src=/api/workspace/<id>/logo>` (stable, no signature) + `onError`→monogram + `Sentry.captureMessage`; imgError reset on workspaceId change (rerender-tested). (AC7 RTL 3-branch + AC7c stable-src; full Playwright integration via qa gate)
+- [x] 4.2 Threaded into `org-switcher` 3 tile mounts; `useActiveWorkspaceName`→`useActiveWorkspace` ({name,workspaceId,hasLogo}) (file renamed); layout + collapsed context-band tile thread `workspaceId`+`hasLogo` (same single fetch). (AC7c)
 
 ## Phase 5 — Settings UI
 - [ ] 5.1 `workspace-logo-settings.tsx` (file input PNG/WebP, MAX 1MB, square check, FormData POST, optimistic preview, Remove→DELETE). 4-state union. (cq-union-widening)

@@ -10,7 +10,7 @@ import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { SignOutConfirmModal } from "@/components/auth/sign-out-confirm-modal";
 import { useSignOut } from "@/components/auth/use-sign-out";
 import { WorkspaceContextBand } from "@/components/dashboard/workspace-context-band";
-import { useActiveWorkspaceName } from "@/hooks/use-active-workspace-name";
+import { useActiveWorkspace } from "@/hooks/use-active-workspace";
 import { RailSlotProvider, RailCollapsedProvider } from "@/components/dashboard/rail-slot";
 import { RailResizeHandle } from "@/components/dashboard/rail-resize-handle";
 import { useRailWidth, railMaxPx, RAIL_MIN_PX } from "@/hooks/use-rail-width";
@@ -130,7 +130,8 @@ export default function DashboardLayout({
   // already surface the name via OrgSwitcherContainer, so the fetch only fires
   // for the one state that lacks it (avoids a redundant cold-mount GET + a
   // net-new focus poll in the common expanded case).
-  const activeWorkspaceName = useActiveWorkspaceName(collapsed);
+  const activeWorkspace = useActiveWorkspace(collapsed);
+  const activeWorkspaceName = activeWorkspace.name;
 
   // Check admin status on mount
   useEffect(() => {
@@ -355,6 +356,8 @@ export default function DashboardLayout({
             pathname={pathname}
             collapsed={collapsed}
             activeWorkspaceName={activeWorkspaceName ?? undefined}
+            activeWorkspaceId={activeWorkspace.workspaceId ?? undefined}
+            activeWorkspaceHasLogo={activeWorkspace.hasLogo}
           />
         </div>
 
