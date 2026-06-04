@@ -905,12 +905,12 @@ export function cleanupCcBashGatesForConversation(
 // the factory once per cold conversation; reused dispatches skip.
 // ---------------------------------------------------------------------------
 
-// `fetchUserWorkspacePath`, `resolveConciergeDocumentContext`, and the
-// per-process workspace memo were extracted to `./kb-document-resolver`
-// so this orchestration module no longer owns filesystem responsibilities
-// alongside SDK Query construction, MCP wiring, BYOK token resolution,
-// bash-approval, and rate-limiting. Both modules share the workspace
-// memo via the resolver's exported helper.
+// `fetchUserWorkspacePath` and `resolveConciergeDocumentContext` were
+// extracted to `./kb-document-resolver` so this orchestration module no
+// longer owns filesystem responsibilities alongside SDK Query construction,
+// MCP wiring, BYOK token resolution, bash-approval, and rate-limiting. Both
+// modules resolve the active-workspace path via the same exported helper
+// (one source of truth; no value cache — the active workspace is mutable).
 
 /**
  * Build a real SDK `Query` for one cold cc-soleur-go conversation. Async
@@ -1661,10 +1661,11 @@ export async function dispatchSoleurGo(
   // Resolve workspace path in parallel with `runner.dispatch` so cold-start
   // LTFT (latency-to-first-token) does not pay an extra serial Supabase RTT.
   // The closure-shared `workspacePath` is filled by the `.then` below; in
-  // production, `realSdkQueryFactory` (line 419) awaits the SAME memo before
-  // the SDK Query can emit any block, so by the time `onToolUse` fires the
-  // value is set. On warm dispatches the memo returns synchronously inside
-  // `fetchUserWorkspacePath` and the `.then` resolves on the next microtask.
+  // production, `realSdkQueryFactory` independently resolves the same active
+  // workspace before the SDK Query can emit any block, so by the time
+  // `onToolUse` fires the value is set. `fetchUserWorkspacePath` resolves the
+  // ACTIVE workspace (ADR-044) on each call — a single indexed
+  // `user_session_state` read — so this `.then` is a cheap parallel resolve.
   // On failure, fall back to `undefined` — `buildToolLabel` still produces
   // the verbose label (just without the workspace-prefix scrub) and the
   // error is mirrored to Sentry per `cq-silent-fallback-must-mirror-to-sentry`.
@@ -2186,9 +2187,10 @@ export function __resetDispatcherForTests(): void {
   // prefix in test A can survive into test B (cross-file leak via the
   // module-level Map). Mirrors the centralization Fix 6 of PR #2954.
   _resetBashApprovalCacheForTests();
-  // Drain the workspace-path memo so a `users.workspace_path` swap in
-  // tests is observable. Lives in `kb-document-resolver.ts` for the same
-  // reason as the bash cache: shared across files, drained centrally.
+  // Retained no-op: the workspace-path value cache was removed in the ADR-044
+  // cutover (the active workspace is mutable per session). Kept in the central
+  // reset so test files that call it keep compiling. See
+  // `kb-document-resolver.ts` `_resetWorkspacePathCacheForTests`.
   _resetWorkspacePathCacheForTests();
 }
 

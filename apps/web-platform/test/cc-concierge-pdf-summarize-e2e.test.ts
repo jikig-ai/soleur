@@ -28,12 +28,17 @@ import {
 import { tmpdir } from "os";
 import path from "path";
 
-const { fetchUserWorkspacePathSpy, extractPdfTextSpy, reportSilentFallbackSpy } =
-  vi.hoisted(() => ({
-    fetchUserWorkspacePathSpy: vi.fn(),
-    extractPdfTextSpy: vi.fn(),
-    reportSilentFallbackSpy: vi.fn(),
-  }));
+const {
+  fetchUserWorkspacePathSpy,
+  resolveActiveWorkspacePathSpy,
+  extractPdfTextSpy,
+  reportSilentFallbackSpy,
+} = vi.hoisted(() => ({
+  fetchUserWorkspacePathSpy: vi.fn(),
+  resolveActiveWorkspacePathSpy: vi.fn(),
+  extractPdfTextSpy: vi.fn(),
+  reportSilentFallbackSpy: vi.fn(),
+}));
 
 vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => ({
@@ -61,6 +66,13 @@ vi.mock("@/lib/supabase/tenant", () => ({
   }),
   RuntimeAuthError: class RuntimeAuthError extends Error {},
 }));
+
+vi.mock("@/server/workspace-resolver", async () => {
+  const actual = await vi.importActual<typeof import("@/server/workspace-resolver")>(
+    "@/server/workspace-resolver",
+  );
+  return { ...actual, resolveActiveWorkspacePath: resolveActiveWorkspacePathSpy };
+});
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
@@ -94,6 +106,7 @@ beforeEach(() => {
     data: { workspace_path: tmpRoot },
     error: null,
   });
+  resolveActiveWorkspacePathSpy.mockResolvedValue(tmpRoot);
   extractPdfTextSpy.mockReset();
   reportSilentFallbackSpy.mockReset();
   _resetWorkspacePathCacheForTests();

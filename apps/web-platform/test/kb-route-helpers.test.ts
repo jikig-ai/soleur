@@ -7,6 +7,8 @@ import { describe, test, expect, vi, beforeEach } from "vitest";
 const {
   mockGetUser,
   mockFrom,
+  mockServiceFrom,
+  mockGetFreshTenantClient,
   mockGitWithAuth,
   mockIsPathInWorkspace,
   mockLstat,
@@ -15,6 +17,12 @@ const {
 } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockFrom: vi.fn(),
+  // Distinct service-role `.from` so the mint-failure fallback tests can
+  // prove the SERVICE-ROLE client (not the tenant client) produced the
+  // resolved workspace — wiring both clients to the same `mockFrom` would
+  // let a fallback assertion pass vacuously (deepen-plan P1).
+  mockServiceFrom: vi.fn(),
+  mockGetFreshTenantClient: vi.fn(),
   mockGitWithAuth: vi.fn(),
   mockIsPathInWorkspace: vi.fn(),
   mockLstat: vi.fn(),
@@ -26,18 +34,32 @@ vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
     auth: { getUser: mockGetUser },
   })),
+  // Service-role client → distinct `mockServiceFrom` (see hoisted note).
   createServiceClient: vi.fn(() => ({
-    from: mockFrom,
+    from: mockServiceFrom,
   })),
 }));
 
-// PR-C §2.8 (#3244): kb-route-helpers now imports `getFreshTenantClient`
-// from `@/lib/supabase/tenant`. Mock to the same `mockFrom` so the
-// existing per-table setup (`setupUserData`) drives both legacy
-// service-role and the new tenant path without per-test duplication.
+// PR-C §2.8 (#3244): kb-route-helpers imports `getFreshTenantClient` from
+// `@/lib/supabase/tenant`. Default impl resolves to the tenant `mockFrom`
+// (the same per-table setup `setupUserData` drives); individual tests
+// override with `mockGetFreshTenantClient.mockRejectedValueOnce(...)` to
+// simulate a tenant-mint failure. The mock RuntimeAuthError mirrors the
+// real two-arg `(cause, message)` signature + public `cause` field so the
+// fallback's `instanceof` check and any cause-discrimination work in tests.
 vi.mock("@/lib/supabase/tenant", () => ({
-  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom })),
-  RuntimeAuthError: class RuntimeAuthError extends Error {},
+  getFreshTenantClient: mockGetFreshTenantClient,
+  RuntimeAuthError: class RuntimeAuthError extends Error {
+    public readonly cause: "jwt_mint" | "rotation" | "denied_jti";
+    constructor(
+      cause: "jwt_mint" | "rotation" | "denied_jti",
+      message: string,
+    ) {
+      super(message);
+      this.name = "RuntimeAuthError";
+      this.cause = cause;
+    }
+  },
 }));
 
 const { mockReportSilentFallback, mockWarnSilentFallback } = vi.hoisted(() => ({
@@ -72,8 +94,10 @@ vi.mock("node:fs", () => ({
 
 import {
   authenticateAndResolveKbPath,
+  resolveUserKbRoot,
   syncWorkspace,
 } from "@/server/kb-route-helpers";
+import { RuntimeAuthError } from "@/lib/supabase/tenant";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -113,6 +137,31 @@ function setupUserData(overrides: Record<string, unknown> = {}) {
   const mockEq = vi.fn(() => ({ single: mockSingle }));
   const mockSelect = vi.fn(() => ({ eq: mockEq }));
   mockFrom.mockImplementation((table: string) => {
+    if (table === "users") return { select: mockSelect };
+    return {};
+  });
+  // Default: the tenant mint succeeds and the tenant client reads via mockFrom.
+  mockGetFreshTenantClient.mockResolvedValue({ from: mockFrom });
+}
+
+// Wire the SERVICE-ROLE client's `.from` (distinct from the tenant `mockFrom`)
+// to a `users` row. Used by the tenant-mint-failure fallback tests so the
+// assertion proves the service-role read — not the tenant read — produced the
+// result. Returns nothing when called for a table other than "users".
+function setupServiceUserData(overrides: Record<string, unknown> = {}) {
+  const mockSingle = vi.fn().mockResolvedValue({
+    data: {
+      workspace_path: TEST_WORKSPACE_PATH,
+      workspace_status: "ready",
+      repo_url: TEST_REPO_URL,
+      github_installation_id: TEST_INSTALLATION_ID,
+      ...overrides,
+    },
+    error: null,
+  });
+  const mockEq = vi.fn(() => ({ single: mockSingle }));
+  const mockSelect = vi.fn(() => ({ eq: mockEq }));
+  mockServiceFrom.mockImplementation((table: string) => {
     if (table === "users") return { select: mockSelect };
     return {};
   });
@@ -683,5 +732,312 @@ describe("syncWorkspace", () => {
       (c: unknown[]) => (c[0] as string[])[0],
     );
     expect(verbs).toEqual(["pull"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — resolveUserKbRoot tenant-mint fallback (#regression from PR #3854)
+//
+// PR #3854 routed the user's-own-`workspace_path` read through a tenant-scoped
+// JWT mint; on mint failure the helper returned 503, which the "Generate link"
+// popover treats as "reset to idle" — the silent dead-end. The fix falls back
+// to a SERVICE-ROLE read of the user's own row (the share *write* was already
+// service-role) instead of 503-ing the button.
+// ---------------------------------------------------------------------------
+
+describe("resolveUserKbRoot — tenant-mint fallback", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Default: a ready service-role row is available for the fallback to read.
+    setupServiceUserData();
+  });
+
+  test("happy path (mint succeeds) reads via the TENANT client, no fallback, no reportSilentFallback", async () => {
+    setupUserData(); // tenant mint resolves → tenant mockFrom serves the row
+
+    const result = await resolveUserKbRoot(TEST_USER_ID);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.workspacePath).toBe(TEST_WORKSPACE_PATH);
+      expect(result.kbRoot).toContain("knowledge-base");
+    }
+    expect(mockFrom).toHaveBeenCalledWith("users"); // tenant read happened
+    expect(mockServiceFrom).not.toHaveBeenCalled(); // fallback NOT taken
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  test("RuntimeAuthError → service-role fallback returns {ok:true, kbRoot} (NOT 503)", async () => {
+    mockGetFreshTenantClient.mockRejectedValueOnce(
+      new RuntimeAuthError("jwt_mint", "mint failed"),
+    );
+
+    const result = await resolveUserKbRoot(TEST_USER_ID);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.workspacePath).toBe(TEST_WORKSPACE_PATH);
+      expect(result.kbRoot).toContain("knowledge-base");
+    }
+    // The SERVICE-ROLE client produced the row — not the (thrown) tenant client.
+    expect(mockServiceFrom).toHaveBeenCalledWith("users");
+    expect(mockFrom).not.toHaveBeenCalled();
+  });
+
+  test("mint-failure fallback emits exactly one reportSilentFallback carrying the RuntimeAuthError", async () => {
+    const mintErr = new RuntimeAuthError("rotation", "mint ceiling tripped");
+    mockGetFreshTenantClient.mockRejectedValueOnce(mintErr);
+
+    await resolveUserKbRoot(TEST_USER_ID);
+
+    expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      mintErr,
+      expect.objectContaining({
+        feature: "kb-route-helpers",
+        op: "resolveUserKbRoot.tenant-mint",
+        extra: expect.objectContaining({ userId: TEST_USER_ID }),
+      }),
+    );
+  });
+
+  test("extras (repo_url, github_installation_id) resolve through the fallback (covers /api/kb/upload)", async () => {
+    mockGetFreshTenantClient.mockRejectedValueOnce(
+      new RuntimeAuthError("jwt_mint", "mint failed"),
+    );
+
+    const result = await resolveUserKbRoot(TEST_USER_ID, {
+      extras: ["repo_url", "github_installation_id"] as const,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.extras.repo_url).toBe(TEST_REPO_URL);
+      expect(result.extras.github_installation_id).toBe(TEST_INSTALLATION_ID);
+    }
+    expect(mockServiceFrom).toHaveBeenCalledWith("users");
+    // Non-vacuity: extras must come from the SERVICE read, not a split read
+    // that fetches base cols via service and extras via the (thrown) tenant.
+    expect(mockFrom).not.toHaveBeenCalled();
+  });
+
+  test("fallback still 503s when the SERVICE-ROLE read yields a non-ready workspace (no false-positive resolution)", async () => {
+    mockGetFreshTenantClient.mockRejectedValueOnce(
+      new RuntimeAuthError("jwt_mint", "mint failed"),
+    );
+    // Distinct service-role mock returns a not-ready row, INDEPENDENT of the
+    // (thrown) tenant read — proves the 503 derives from the service read.
+    setupServiceUserData({ workspace_status: "provisioning" });
+
+    const result = await resolveUserKbRoot(TEST_USER_ID);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.response.status).toBe(503);
+    expect(mockServiceFrom).toHaveBeenCalledWith("users");
+  });
+
+  test("fallback fires for the denied_jti cause too (ceiling: self-row-scoped read; write was never tenant-scoped)", async () => {
+    mockGetFreshTenantClient.mockRejectedValueOnce(
+      new RuntimeAuthError("denied_jti", "jti on deny-list"),
+    );
+
+    const result = await resolveUserKbRoot(TEST_USER_ID);
+
+    expect(result.ok).toBe(true);
+    expect(mockServiceFrom).toHaveBeenCalledWith("users");
+    // Non-vacuity: a denied_jti must NOT fall through to a tenant read.
+    expect(mockFrom).not.toHaveBeenCalled();
+  });
+
+  test("a non-RuntimeAuthError from the mint is re-thrown (not swallowed by the fallback)", async () => {
+    mockGetFreshTenantClient.mockRejectedValueOnce(new Error("unexpected boom"));
+
+    await expect(resolveUserKbRoot(TEST_USER_ID)).rejects.toThrow(
+      "unexpected boom",
+    );
+    expect(mockServiceFrom).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — authenticateAndResolveKbPath — per-cause tenant-mint fallback (#4914)
+//
+// Mirrors the resolveUserKbRoot fallback block, but diverges on POLICY: this
+// helper serves the file PATCH/DELETE *mutation* routes, so a `denied_jti`
+// (deliberate revocation) must FAIL CLOSED (403) rather than fall back to a
+// service-role read. Only the availability causes (`jwt_mint`, `rotation`)
+// fall back. The distinct mockServiceFrom keeps every fallback assertion
+// non-vacuous (proves the SERVICE-ROLE client — not the thrown tenant client —
+// produced the row).
+// ---------------------------------------------------------------------------
+
+describe("authenticateAndResolveKbPath — tenant-mint fallback (#4914)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Happy-path wiring for CSRF / auth / path / lstat; the per-test mint
+    // override below forces the RuntimeAuthError branch. A ready service-role
+    // row is available so the availability fallback can resolve.
+    setupHappyPath();
+    setupServiceUserData();
+  });
+
+  // FR1 / AC1 — jwt_mint availability failure → service-role fallback resolves.
+  test("jwt_mint → service-role fallback resolves OK (NOT 503)", async () => {
+    // Give the service-role row a DISTINCT workspace_path so the value
+    // assertion itself proves provenance (the row came from the service-role
+    // client, not the thrown tenant client) — not just the `mockFrom not
+    // called` negative assertion.
+    const SERVICE_ONLY_WORKSPACE = "/workspaces/service-role-only";
+    setupServiceUserData({ workspace_path: SERVICE_ONLY_WORKSPACE });
+    mockGetFreshTenantClient.mockRejectedValueOnce(
+      new RuntimeAuthError("jwt_mint", "mint failed"),
+    );
+
+    const result = await authenticateAndResolveKbPath(
+      createRequest(),
+      createParams(["overview", "test.pdf"]),
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      // The resolved path is the SERVICE row's value — independent proof of
+      // provenance, not just the negative `mockFrom not called` assertion.
+      expect(result.ctx.userData.workspace_path).toBe(SERVICE_ONLY_WORKSPACE);
+      expect(result.ctx.kbRoot).toContain(SERVICE_ONLY_WORKSPACE);
+      expect(result.ctx.owner).toBe("test-owner");
+      expect(result.ctx.repo).toBe("test-repo");
+    }
+    // The SERVICE-ROLE client produced the row — not the (thrown) tenant client.
+    expect(mockServiceFrom).toHaveBeenCalledWith("users");
+    expect(mockFrom).not.toHaveBeenCalled();
+  });
+
+  // FR1 / AC1 — rotation (60/hr ceiling trip) → fallback resolves.
+  test("rotation (ceiling trip) → service-role fallback resolves OK (NOT 503)", async () => {
+    mockGetFreshTenantClient.mockRejectedValueOnce(
+      new RuntimeAuthError("rotation", "mint ceiling tripped"),
+    );
+
+    const result = await authenticateAndResolveKbPath(
+      createRequest(),
+      createParams(["overview", "test.pdf"]),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(mockServiceFrom).toHaveBeenCalledWith("users");
+    expect(mockFrom).not.toHaveBeenCalled();
+  });
+
+  // FR2 / AC2 — denied_jti revocation → fail CLOSED with 403, NO fallback read.
+  test("denied_jti → fail closed with 403, NO service-role fallback read", async () => {
+    mockGetFreshTenantClient.mockRejectedValueOnce(
+      new RuntimeAuthError("denied_jti", "jti on deny-list"),
+    );
+
+    const result = await authenticateAndResolveKbPath(
+      createRequest(),
+      createParams(["overview", "test.pdf"]),
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.response.status).toBe(403);
+      const body = await result.response.json();
+      expect(body.error).toMatch(/access denied/i);
+    }
+    // Revocation must NOT fall back to a service-role read…
+    expect(mockServiceFrom).not.toHaveBeenCalled();
+    // …and must NOT proceed to a tenant read either.
+    expect(mockFrom).not.toHaveBeenCalled();
+  });
+
+  // FR2 / AC3 — the denied_jti path RESOLVES to a Response, never rejects.
+  // Load-bearing: both route handlers call this helper OUTSIDE their try block,
+  // so a thrown RuntimeAuthError would escape to Next.js → uncontrolled 500.
+  test("denied_jti does NOT re-throw (resolves to a Response)", async () => {
+    mockGetFreshTenantClient.mockRejectedValueOnce(
+      new RuntimeAuthError("denied_jti", "jti on deny-list"),
+    );
+
+    await expect(
+      authenticateAndResolveKbPath(
+        createRequest(),
+        createParams(["overview", "test.pdf"]),
+      ),
+    ).resolves.toMatchObject({ ok: false });
+  });
+
+  // FR3 / AC4 — reportSilentFallback fires exactly once for EVERY cause,
+  // including denied_jti (the revocation hit must stay Sentry-visible BEFORE
+  // the 403 early-return).
+  test.each(["jwt_mint", "rotation", "denied_jti"] as const)(
+    "%s emits exactly one reportSilentFallback with op:authenticateAndResolveKbPath.tenant-mint",
+    async (cause) => {
+      const mintErr = new RuntimeAuthError(cause, `mint failure: ${cause}`);
+      mockGetFreshTenantClient.mockRejectedValueOnce(mintErr);
+
+      await authenticateAndResolveKbPath(
+        createRequest(),
+        createParams(["overview", "test.pdf"]),
+      );
+
+      expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
+      expect(mockReportSilentFallback).toHaveBeenCalledWith(
+        mintErr,
+        expect.objectContaining({
+          feature: "kb-route-helpers",
+          op: "authenticateAndResolveKbPath.tenant-mint",
+          extra: expect.objectContaining({ userId: TEST_USER_ID }),
+        }),
+      );
+    },
+  );
+
+  // FR1 / AC5 — no false-positive: a not-ready service row still 503s under
+  // the availability fallback.
+  test("fallback still 503s when the SERVICE-ROLE read yields a not-ready workspace", async () => {
+    mockGetFreshTenantClient.mockRejectedValueOnce(
+      new RuntimeAuthError("jwt_mint", "mint failed"),
+    );
+    // Distinct service-role mock returns a not-ready row, INDEPENDENT of the
+    // (thrown) tenant read — proves the 503 derives from the service read.
+    setupServiceUserData({ workspace_status: "provisioning" });
+
+    const result = await authenticateAndResolveKbPath(
+      createRequest(),
+      createParams(["overview", "test.pdf"]),
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.response.status).toBe(503);
+    expect(mockServiceFrom).toHaveBeenCalledWith("users");
+  });
+
+  // FR4 / AC6 — a non-RuntimeAuthError mint failure is re-thrown unchanged.
+  test("a non-RuntimeAuthError from the mint is re-thrown (not swallowed)", async () => {
+    mockGetFreshTenantClient.mockRejectedValueOnce(new Error("unexpected boom"));
+
+    await expect(
+      authenticateAndResolveKbPath(
+        createRequest(),
+        createParams(["overview", "test.pdf"]),
+      ),
+    ).rejects.toThrow("unexpected boom");
+    expect(mockServiceFrom).not.toHaveBeenCalled();
+  });
+
+  // Regression guard — happy path (mint succeeds): tenant read, no fallback,
+  // no reportSilentFallback.
+  test("happy path (mint succeeds) reads via the TENANT client, no fallback", async () => {
+    // setupHappyPath() already wired the tenant mint to resolve.
+    const result = await authenticateAndResolveKbPath(
+      createRequest(),
+      createParams(["overview", "test.pdf"]),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(mockFrom).toHaveBeenCalledWith("users");
+    expect(mockServiceFrom).not.toHaveBeenCalled();
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
   });
 });

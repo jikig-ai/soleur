@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import path from "path";
 import { promises as fs } from "node:fs";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import {
   getFreshTenantClient,
   RuntimeAuthError,
@@ -90,6 +90,30 @@ export async function authenticateAndResolveKbPath(
   // enforces `auth.uid() = id`. The `.single()` SELECT IS the auth
   // probe (the route flow reads only the caller's own row before any
   // cross-row work).
+  //
+  // PER-CAUSE tenant-mint fallback (#4914), diverging from `resolveUserKbRoot`'s
+  // all-causes fallback because this helper serves the file PATCH/DELETE
+  // *mutation* routes (not the read/share path):
+  //   - `jwt_mint` | `rotation` (availability failures — signing/RPC failure, or
+  //     the 60/hr per-founder mint ceiling tripped): fall back to a SERVICE-ROLE
+  //     read of the caller's OWN row, exactly as `resolveUserKbRoot` does. The
+  //     read stays hard-scoped `.eq("id", user.id)` (server-derived session
+  //     user, never request-controlled), so the fallback restores availability
+  //     without weakening cross-tenant isolation — the mutation then proceeds.
+  //   - `denied_jti` (the cached JWT's jti landed in `public.denied_jti` — a
+  //     DELIBERATE revocation) and any future un-named cause: FAIL CLOSED with a
+  //     403. Unlike the share path (whose privileged `createShare` write was
+  //     already service-role, so the deny-list never gated it), here the
+  //     downstream GitHub mutation IS gated on this helper resolving — a
+  //     service-role fallback would defeat the revocation's intent. We branch on
+  //     the POSITIVE allow-list of availability causes so an unknown 4th cause
+  //     fails closed (the safe default on a mutation route), not open.
+  // `reportSilentFallback` fires for EVERY cause (incl. `denied_jti`) BEFORE the
+  // branch, so a chronic mint failure AND a revocation-hit both stay Sentry-
+  // visible (cq-silent-fallback-must-mirror-to-sentry). The fail-closed path
+  // MUST RETURN a Response (never throw): both route handlers call this helper
+  // OUTSIDE their try block, so a thrown RuntimeAuthError would escape to
+  // Next.js → an uncontrolled 500.
   let tenant;
   try {
     tenant = await getFreshTenantClient(user.id);
@@ -100,9 +124,16 @@ export async function authenticateAndResolveKbPath(
         op: "authenticateAndResolveKbPath.tenant-mint",
         extra: { userId: user.id },
       });
-      return err(503, "Workspace not ready");
+      if (mintErr.cause === "jwt_mint" || mintErr.cause === "rotation") {
+        // Availability failure — restore availability via a self-row read.
+        tenant = createServiceClient();
+      } else {
+        // `denied_jti` (revocation) or any future cause — honor the deny-list.
+        return err(403, "Access denied");
+      }
+    } else {
+      throw mintErr;
     }
-    throw mintErr;
   }
   const { data: userData } = await tenant
     .from("users")
@@ -233,9 +264,27 @@ export async function resolveUserKbRoot<
       ? `workspace_path, workspace_status, ${opts.extras.join(", ")}`
       : "workspace_path, workspace_status";
 
-  // PR-C §2.8 (#3244): tenant-scoped. Single-row SELECT IS the auth
-  // probe. RuntimeAuthError → same "Workspace not ready" response so
-  // callers don't have to discriminate.
+  // PR-C §2.8 (#3244): tenant-scoped read is the PRIMARY path. Single-row
+  // SELECT IS the auth probe.
+  //
+  // Regression fix (PR #3854 dead-ended the "Generate link" button): when the
+  // tenant JWT mint fails, fall back to a SERVICE-ROLE read of the user's OWN
+  // row instead of returning 503. A 503 here resets the share popover to idle
+  // — the silent dead-end the user reported.
+  //
+  // Ceiling that keeps the fallback safe for ALL three `RuntimeAuthError`
+  // causes (`jwt_mint` | `rotation` | `denied_jti`): the fallback read is
+  // scoped to `.eq("id", userId)` where `userId` is the already-authenticated
+  // session user, so even a deny-listed / revoked tenant token can only ever
+  // read its OWN workspace row — never another tenant's. The privileged share
+  // *write* (`createShare`) on this path was never tenant-scoped (it uses the
+  // service-role client at `route.ts`), so the deny-list never gated a
+  // privileged action here in the first place; `denied_jti` only blocked this
+  // self-read. We still emit `reportSilentFallback` so a chronically-failing
+  // mint (ceiling trip / GoTrue outage) stays visible to the operator in
+  // Sentry even though users now recover. The fallback applies the same
+  // `workspace_status === "ready"` + `extras` validation below, so a
+  // genuinely-not-ready workspace still gets the 503.
   let tenant;
   try {
     tenant = await getFreshTenantClient(userId);
@@ -246,15 +295,10 @@ export async function resolveUserKbRoot<
         op: "resolveUserKbRoot.tenant-mint",
         extra: { userId },
       });
-      return {
-        ok: false,
-        response: NextResponse.json(
-          { error: "Workspace not ready" },
-          { status: 503 },
-        ),
-      };
+      tenant = createServiceClient();
+    } else {
+      throw mintErr;
     }
-    throw mintErr;
   }
   const { data: userData } = await tenant
     .from("users")

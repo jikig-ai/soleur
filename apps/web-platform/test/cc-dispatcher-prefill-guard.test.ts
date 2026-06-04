@@ -22,6 +22,7 @@ const {
   mockBuildAgentEnv,
   mockBuildAgentSandboxConfig,
   mockSupabaseFrom,
+  mockResolveActiveWorkspacePath,
 } = vi.hoisted(() => ({
   mockQuery: vi.fn(),
   mockApplyPrefillGuard: vi.fn(),
@@ -33,6 +34,7 @@ const {
   mockBuildAgentEnv: vi.fn(),
   mockBuildAgentSandboxConfig: vi.fn(),
   mockSupabaseFrom: vi.fn(),
+  mockResolveActiveWorkspacePath: vi.fn(),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -125,6 +127,16 @@ vi.mock("@/lib/supabase/tenant", () => ({
   RuntimeAuthError: class RuntimeAuthError extends Error {},
 }));
 
+// ADR-044: fetchUserWorkspacePath resolves the ACTIVE workspace via
+// resolveActiveWorkspacePath. Override only that export; importActual keeps the
+// rest of workspace-resolver real.
+vi.mock("@/server/workspace-resolver", async () => {
+  const actual = await vi.importActual<typeof import("@/server/workspace-resolver")>(
+    "@/server/workspace-resolver",
+  );
+  return { ...actual, resolveActiveWorkspacePath: mockResolveActiveWorkspacePath };
+});
+
 // PR-C §2.11 (#3244): cc-dispatcher.ts now wraps `realSdkQueryFactory`
 // body in `runWithByokLease(args.userId, body)`. Short-circuit the lease
 // so the test does not pull the real `fetchAndDecryptIntoSlot` chain
@@ -196,6 +208,8 @@ function makeFakeQuery() {
 const WORKSPACE_PATH = "/tmp/cc-test-workspace";
 
 function setupSupabaseMockReturning(workspacePath: string = WORKSPACE_PATH) {
+  // ADR-044: workspace path comes from resolveActiveWorkspacePath now.
+  mockResolveActiveWorkspacePath.mockResolvedValue(workspacePath);
   mockSupabaseFrom.mockImplementation((table: string) => {
     if (table === "users") {
       return {

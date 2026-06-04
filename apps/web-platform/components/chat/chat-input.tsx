@@ -603,7 +603,7 @@ export function ChatInput({
           textarea itself is transparent and borderless. */}
       <div
         className={
-          "flex items-end gap-1.5 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-2 py-1.5 transition-shadow focus-within:border-soleur-border-emphasized" +
+          "flex items-end gap-1.5 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-2 py-1.5 transition-shadow focus-within:border-soleur-text-secondary" +
           (flashQuote ? " ring-2 ring-amber-400" : "")
         }
       >
@@ -643,7 +643,7 @@ export function ChatInput({
             disabled={disabled || isUploading}
             rows={1}
             data-quote-flashing={flashQuote ? "true" : undefined}
-            className="w-full resize-none border-none bg-transparent px-1 py-2 pr-8 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted focus:outline-none disabled:opacity-50 min-h-[36px] max-h-[140px] overflow-y-auto"
+            className="w-full resize-none border-none bg-transparent px-1 py-2 pr-8 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted focus:outline-none focus-visible:shadow-none disabled:opacity-50 min-h-[36px] max-h-[140px] overflow-y-auto"
           />
           {/* Mobile @ button */}
           <button
