@@ -5,7 +5,7 @@ import { SearchOverlay } from "@/components/kb/search-overlay";
 import { useKb } from "@/components/kb/kb-context";
 import { KbSyncStatus } from "@/components/kb/kb-sync-status";
 import { RailEmptyState } from "@/components/dashboard/rail-empty-state";
-import { useRailCollapsed } from "@/components/dashboard/rail-slot";
+import { useRailCollapsed, RAIL_EXPAND_EVENT } from "@/components/dashboard/rail-slot";
 
 /**
  * KB file-tree sidebar shell — search overlay + the file tree. Pure
@@ -31,8 +31,11 @@ export function KbSidebarShell() {
   // file tree has no coherent icon-only form, so it hides rather than condenses.
   // Sidebar-UX follow-up Issue 6: the collapsed rail used to render NOTHING here,
   // so it looked empty/broken. It now shows a compact icon-only affordance —
-  // "Browse files" (expands the rail via the layout's soleur:rail-expand channel)
-  // + "Sync now" — so the collapsed KB rail is meaningful, not blank. The stable
+  // "Browse files" (expands the rail via the layout's RAIL_EXPAND_EVENT channel)
+  // + "Refresh" (refetch the tree) — so the collapsed KB rail is meaningful, not
+  // blank. NOTE: this is a tree REFRESH, not the repo "Sync now" (POST
+  // /api/kb/sync) — that richer action with its in-flight + error states lives in
+  // the expanded rail's KbSyncStatus, reachable once expanded. The stable
   // `kb-rail-tree` wrapper always renders to anchor present/absent assertions.
   const collapsed = useRailCollapsed();
 
@@ -45,18 +48,16 @@ export function KbSidebarShell() {
             data-testid="kb-rail-collapsed-expand"
             aria-label="Browse files"
             title="Browse files"
-            onClick={() =>
-              window.dispatchEvent(new CustomEvent("soleur:rail-expand"))
-            }
+            onClick={() => window.dispatchEvent(new CustomEvent(RAIL_EXPAND_EVENT))}
             className="flex min-h-[44px] w-full items-center justify-center rounded-lg text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary"
           >
             <FilesIcon className="h-4 w-4 shrink-0" />
           </button>
           <button
             type="button"
-            data-testid="kb-rail-collapsed-sync"
-            aria-label="Sync now"
-            title="Sync now"
+            data-testid="kb-rail-collapsed-refresh"
+            aria-label="Refresh file tree"
+            title="Refresh file tree"
             onClick={() => refreshTree()}
             className="flex min-h-[44px] w-full items-center justify-center rounded-lg text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary"
           >

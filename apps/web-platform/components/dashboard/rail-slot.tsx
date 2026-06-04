@@ -17,6 +17,14 @@ import { createPortal } from "react-dom";
 // REACT tree, not the DOM tree) while placing its DOM in the unified rail —
 // no duplicated fetch, no lifted-context-fetches-on-every-route regression.
 
+// Expand-request channel (Sidebar-UX follow-up Issue 6). A collapsed-rail child
+// (the KB shell's "Browse files" affordance) reads collapse state read-only via
+// `useRailCollapsed()` and has no setter, so it requests an EXPAND by dispatching
+// this window event; the layout — the sole collapse owner (ADR-047) — listens and
+// flips. Defined here (the rail-contract module) so the dispatcher, the listener,
+// and the test reference one literal instead of three drift-prone copies.
+export const RAIL_EXPAND_EVENT = "soleur:rail-expand";
+
 const RailSlotContext = createContext<HTMLElement | null>(null);
 
 export const RailSlotProvider = RailSlotContext.Provider;

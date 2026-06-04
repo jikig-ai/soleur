@@ -168,9 +168,11 @@ describe("KB file tree lifts into the single nav rail slot (ADR-047)", () => {
     expect(
       within(slot).getByTestId("kb-rail-collapsed-expand"),
     ).toHaveAccessibleName(/browse files/i);
+    // The second affordance is a tree REFRESH (not the repo "Sync now") — its
+    // label must say so, so it is not confused with KbSyncStatus's POST sync.
     expect(
-      within(slot).getByTestId("kb-rail-collapsed-sync"),
-    ).toHaveAccessibleName(/sync now/i);
+      within(slot).getByTestId("kb-rail-collapsed-refresh"),
+    ).toHaveAccessibleName(/refresh/i);
   });
 
   it("the collapsed 'Browse files' affordance requests a rail expand (Issue 6)", async () => {

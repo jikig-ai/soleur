@@ -142,6 +142,8 @@ describe("WorkspaceContextBand — persistent workspace identity (AC1/AC4b)", ()
     // this applies to both Settings and Knowledge Base).
     const title = screen.getByTestId("nav-section-title");
     expect(title.className).toContain("pt-3");
+    // ...without dropping the existing bottom padding (regression-guard pair).
+    expect(title.className).toContain("pb-3");
   });
 
   it("renders the back chevron SYNCHRONOUSLY on a drilled route (not async-gated)", () => {

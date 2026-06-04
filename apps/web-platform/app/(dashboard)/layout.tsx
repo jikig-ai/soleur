@@ -11,7 +11,7 @@ import { SignOutConfirmModal } from "@/components/auth/sign-out-confirm-modal";
 import { useSignOut } from "@/components/auth/use-sign-out";
 import { WorkspaceContextBand } from "@/components/dashboard/workspace-context-band";
 import { useActiveWorkspace } from "@/hooks/use-active-workspace";
-import { RailSlotProvider, RailCollapsedProvider } from "@/components/dashboard/rail-slot";
+import { RailSlotProvider, RailCollapsedProvider, RAIL_EXPAND_EVENT } from "@/components/dashboard/rail-slot";
 import { RailResizeHandle } from "@/components/dashboard/rail-resize-handle";
 import { useRailWidth, railMaxPx, RAIL_MIN_PX } from "@/hooks/use-rail-width";
 import { segmentToDrillLevel, isKbDocView } from "@/hooks/segment-to-drill-level";
@@ -218,9 +218,9 @@ export default function DashboardLayout({
     function handleExpandRequest() {
       if (collapsed) toggleCollapsed();
     }
-    window.addEventListener("soleur:rail-expand", handleExpandRequest);
+    window.addEventListener(RAIL_EXPAND_EVENT, handleExpandRequest);
     return () =>
-      window.removeEventListener("soleur:rail-expand", handleExpandRequest);
+      window.removeEventListener(RAIL_EXPAND_EVENT, handleExpandRequest);
   }, [collapsed, toggleCollapsed]);
 
   // Body scroll lock when drawer is open
