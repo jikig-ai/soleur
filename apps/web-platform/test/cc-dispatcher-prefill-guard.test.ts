@@ -387,7 +387,12 @@ describe("realSdkQueryFactory — context_reset signal (#3269)", () => {
     );
 
     const opts = mockQuery.mock.calls[0][0].options;
-    expect(opts.systemPrompt).toBe("BASE");
+    // The context-reset NOTICE must not be added when the guard does not fire.
+    // (The static gh-403 honesty directive is appended unconditionally — see
+    // feat-one-shot-concierge-gh-403 — so assert BASE is preserved and the
+    // reset notice is absent, rather than exact equality.)
+    expect(opts.systemPrompt).toContain("BASE");
+    expect(opts.systemPrompt).not.toContain("RESET-NOTICE-MARKER");
   });
 
   it("emits one context_reset WS event per guard fire with reason 'prefill-guard'", async () => {
@@ -464,7 +469,10 @@ describe("realSdkQueryFactory — context_reset signal (#3269)", () => {
     );
 
     const secondOpts = mockQuery.mock.calls[1][0].options;
-    expect(secondOpts.systemPrompt).toBe("BASE");
+    // The first call's reset notice must not carry forward (multi-turn
+    // non-accumulation). BASE is preserved; the static gh-403 directive is
+    // appended every call but never accumulates across calls.
+    expect(secondOpts.systemPrompt).toContain("BASE");
     expect(secondOpts.systemPrompt).not.toContain("FIRST-CALL-NOTICE");
   });
 });

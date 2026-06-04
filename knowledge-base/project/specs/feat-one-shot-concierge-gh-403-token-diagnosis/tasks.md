@@ -1,5 +1,20 @@
 # Tasks — Fix Concierge GitHub 403 (wrong-installation token + false diagnosis)
 
+> **/work reconciliation (2026-06-04).** Live reproduce (Phase 1.4, prod) REFINED
+> the root cause: the connected repo is reachable by TWO installs — the org install
+> 122213433 (`issues: write`) and a cross-account PERSONAL install 130018654
+> (`issues: read`). BOTH return 200 on a plain repo GET, so the "403 on all GETs"
+> hypothesis was false; the real cause is the personal install holding only
+> `issues: read`, so `POST /issues` 403s. Fix is owner-matched installation
+> SELECTION (account login == repo owner → org install, full grant). Two plan
+> assumptions were superseded: (a) the proposed `findInstallationForRepo` is
+> redundant — added the lighter, deterministic `findInstallationByAccountLogin`
+> instead (the existing read-probe `resolveOwningInstallationForRepo` is
+> INSUFFICIENT here because both installs pass the read probe); (b) connect-route
+> edits (2.3) are unnecessary — the cc-dispatcher self-heal corrects + persists
+> the installation on the next dispatch, fixing already-broken workspaces without
+> a reconnect. Tests live at `test/*.test.ts` (not `test/server/`).
+
 Plan: `knowledge-base/project/plans/2026-06-04-fix-concierge-github-403-wrong-installation-plan.md`
 Lane: cross-domain
 Brand-survival threshold: single-user incident (CPO sign-off required before /work)
