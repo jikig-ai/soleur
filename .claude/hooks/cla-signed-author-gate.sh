@@ -61,9 +61,11 @@ if [[ ! "$CURRENT_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]] || [[ "$CURRENT_BRANCH" == -*
   exit 0
 fi
 
-# No upstream → branch never pushed → out of scope (the merge fails earlier with
-# a clearer error). Use the merge-base against origin/main as the commit range so
-# the scan covers exactly the branch's own commits.
+# No origin/main → out of scope (the merge fails earlier with a clearer error).
+# Scan the two-dot range origin/main..HEAD — equivalent to
+# merge-base(origin/main,HEAD)..HEAD — so the set is exactly the branch's own
+# commits (commits reachable only from main are excluded; this matches what the
+# upstream cla-check evaluates against base=main).
 BASE_REF="origin/main"
 git -C "$WORK_DIR" rev-parse --verify "$BASE_REF" >/dev/null 2>&1 || exit 0
 
