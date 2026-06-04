@@ -107,6 +107,38 @@ fresh DB (which would mark 001 applied without creating the table).
 - [ ] Rollback SQL is drafted (see Rollback Template) and lives in the
       PR body OR is obvious from the `DROP … IF EXISTS` inverse of the
       applied DDL.
+- [ ] **If the migration adds a NOT-NULL column (no default) to an EXISTING
+      table, OR `ALTER COLUMN … SET NOT NULL` on a no-default column → run the
+      NOT-NULL column insert-site sweep below.** Skipping this is what silently
+      broke the share button, push subscriptions, and repo-setup for weeks
+      (migration 059 / PR #4920).
+
+## NOT-NULL column insert-site sweep (writer coverage)
+
+**When:** any migration that makes a column NOT-NULL-with-no-default on an
+already-populated table. A new NOT-NULL column the app writers don't set →
+**every** INSERT to that table fails with Postgres `23502` in production,
+surfacing as a silent 500 (the route returns `db-error`, the UI looks dead).
+This enforces `hr-write-boundary-sentinel-sweep-all-write-sites` for the
+column-addition class.
+
+Run all four (no SSH, no dashboard):
+
+1. **Audit script** — flags inline insert/upsert omissions hard (exit 1):
+   ```bash
+   doppler run -p soleur -c prd -- bash apps/web-platform/scripts/audit-not-null-column-insert-coverage.sh
+   ```
+2. **Resolve every `REVIEW (helper-indirected)` line by hand** — the script
+   cannot follow `const t = client.from("x"); … t.insert({…})` (the createShare
+   blind spot). Open each named file and confirm the column is set.
+3. **Reproduce one insert per impacted table** against `DATABASE_URL_POOLER`
+   inside `BEGIN; … ROLLBACK;` — `23502` without the column == a broken writer.
+4. **Resolve the value** via `resolveCurrentWorkspaceId(userId, client)` for
+   workspace-keyed columns (NOT `workspace_members…maybeSingle()`, which throws
+   for multi-workspace owners).
+
+Full method + the 2026-06-04 incident:
+`knowledge-base/project/learnings/bug-fixes/2026-06-04-migration-not-null-column-insert-sweep.md`.
 
 ## Baseline Capture (pre-apply SQL)
 
