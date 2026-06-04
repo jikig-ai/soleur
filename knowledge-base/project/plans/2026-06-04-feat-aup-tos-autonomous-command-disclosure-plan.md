@@ -428,14 +428,17 @@ two hand-edited TS literal files (no runtime logic). Phase 2.8 trigger set: no m
 
 ## Observability
 
-Skipped — pure-docs + version-literal change. `## Files to Edit` includes
-`apps/web-platform/lib/legal/{legal-doc-shas,tc-version}.ts`, but these are **const-only
-literal files** with no runtime code path, no new failure mode, and no new emit site. The
-*enforcement* observability already exists: `check-tc-document-sha.sh` (CI gate) +
-`legal-doc-consistency.test.ts` + `legal-doc-shas-guard.test.ts` fail loudly on drift.
-No new liveness signal, error-reporting destination, or failure mode is introduced by a
-disclosure-text edit. (Per Phase 2.9 skip rule: no new code/infra surface — the literal
-files carry no logic.)
+No NEW runtime emit site is introduced — the touched `apps/web-platform/lib/legal/{legal-doc-shas,tc-version}.ts` files are **const-only literal files** with no code path. The *enforcement* observability already exists: `check-tc-document-sha.sh` (CI gate) + `legal-doc-consistency.test.ts` + `legal-doc-shas-guard.test.ts` + `accept-terms-copy-regression.test.ts` fail loudly on drift.
+
+The one user-facing runtime effect IS load-bearing, though: the `TC_VERSION 2.2.1 → 2.3.0` bump forces **every existing user** through the `/accept-terms` middleware gate on their next request. A malformed `TC_BUMP_METADATA` or a stale `TC_DOCUMENT_SHA` would crash that page and lock all users out (single-user-incident threshold). The post-deploy liveness signal is therefore that the public `/login` surface (which shares the same Next.js render/middleware chain that `/accept-terms` depends on) still serves 200 after the version-bump deploy.
+
+```yaml
+discoverability_test:
+  command: curl -fsS -o /dev/null -w "%{http_code}" --max-time 10 https://app.soleur.ai/login
+  expected_output: "200"
+```
+
+Expected output: `200`. Anything else (DNS failure, timeout, 5xx) means the version-bump deploy broke the auth/render chain `/accept-terms` rides on — investigate before trusting the re-acceptance gate. (No SSH; runs locally per `hr-observability-as-plan-quality-gate`.)
 
 ## Open Code-Review Overlap
 
