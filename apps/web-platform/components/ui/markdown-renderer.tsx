@@ -1,10 +1,29 @@
 "use client";
 
 import { useMemo } from "react";
+import dynamic from "next/dynamic";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import type { Components } from "react-markdown";
+import { C4_DIAGRAMS_DIR, LIKEC4_VIEW_LANG } from "@/lib/c4-constants";
+
+// Interactive C4 visualizer is browser-only (canvas/xyflow) and heavy — load it
+// lazily, only when an embed is present AND the caller passed `enableC4`.
+const C4Diagram = dynamic(() => import("@/components/kb/c4-diagram"), {
+  ssr: false,
+  loading: () => (
+    <div className="flex items-center justify-center p-8">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-soleur-border-default border-t-amber-400" />
+    </div>
+  ),
+});
+
+const LIKEC4_VIEW_CLASS = `language-${LIKEC4_VIEW_LANG}`;
+
+function isLikeC4ViewClass(className?: string): boolean {
+  return !!className && className.split(/\s+/).includes(LIKEC4_VIEW_CLASS);
+}
 
 // Per-render component builder. We used to share a module-level
 // `DEFAULT_COMPONENTS` with two mutable `let` flags (`linkRel`, `preWrap`);
@@ -14,9 +33,13 @@ import type { Components } from "react-markdown";
 interface BuildOptions {
   linkRel: string;
   preWrap: boolean;
+  /** When true, ```likec4-view fenced blocks render the interactive diagram. */
+  enableC4: boolean;
+  /** KB-relative dir holding the LikeC4 project the embed resolves against. */
+  c4DirPath: string;
 }
 
-function buildComponents({ linkRel, preWrap }: BuildOptions): Components {
+function buildComponents({ linkRel, preWrap, enableC4, c4DirPath }: BuildOptions): Components {
   return {
     h1: ({ children }) => (
       <h1 className="mb-3 mt-4 text-lg font-semibold text-soleur-text-primary">{children}</h1>
@@ -55,18 +78,34 @@ function buildComponents({ linkRel, preWrap }: BuildOptions): Components {
     td: ({ children }) => (
       <td className="min-w-[8ch] max-w-[45ch] border border-soleur-border-default px-3 py-1.5 align-top text-soleur-text-secondary">{children}</td>
     ),
-    pre: ({ children }) => (
-      <pre
-        className={
-          preWrap
-            ? "mb-3 min-w-0 whitespace-pre-wrap break-words rounded-lg bg-soleur-bg-base p-3 text-xs text-soleur-text-secondary [overflow-wrap:anywhere]"
-            : "mb-3 overflow-x-auto rounded-lg bg-soleur-bg-base p-3 text-xs text-soleur-text-secondary"
-        }
-      >
-        {children}
-      </pre>
-    ),
+    pre: ({ children }) => {
+      // A ```likec4-view block renders as a block-level diagram, not a <pre>.
+      // The `code` override below has already swapped it for <C4Diagram/>, so
+      // unwrap to avoid invalid <div> inside <pre>.
+      const child = Array.isArray(children) ? children[0] : children;
+      const childClass = (
+        child as { props?: { className?: string } } | undefined
+      )?.props?.className;
+      if (enableC4 && isLikeC4ViewClass(childClass)) {
+        return <>{children}</>;
+      }
+      return (
+        <pre
+          className={
+            preWrap
+              ? "mb-3 min-w-0 whitespace-pre-wrap break-words rounded-lg bg-soleur-bg-base p-3 text-xs text-soleur-text-secondary [overflow-wrap:anywhere]"
+              : "mb-3 overflow-x-auto rounded-lg bg-soleur-bg-base p-3 text-xs text-soleur-text-secondary"
+          }
+        >
+          {children}
+        </pre>
+      );
+    },
     code: ({ className, children }) => {
+      if (enableC4 && isLikeC4ViewClass(className)) {
+        const viewId = String(children).trim();
+        return <C4Diagram viewId={viewId} dirPath={c4DirPath} />;
+      }
       const isBlock = /language-|hljs/.test(className || "");
       return isBlock ? (
         <code className={className}>{children}</code>
@@ -101,16 +140,31 @@ interface MarkdownRendererProps {
    *  Set by sidebar-variant callers where the 380px column makes horizontal
    *  scroll unreadable. Plan Phase 3.1 / AC10. */
   wrapCode?: boolean;
+  /** Render ```likec4-view embeds as interactive diagrams. The KB viewer
+   *  passes the resolved `c4-visualizer` flag; callers without the flag
+   *  provider (e.g. public shared docs) omit it and embeds stay code blocks. */
+  enableC4?: boolean;
+  /** KB-relative dir of the LikeC4 project an embed resolves against.
+   *  Defaults to the canonical architecture diagrams project. */
+  c4DirPath?: string;
 }
 
-export function MarkdownRenderer({ content, nofollow, wrapCode }: MarkdownRendererProps) {
+export function MarkdownRenderer({
+  content,
+  nofollow,
+  wrapCode,
+  enableC4,
+  c4DirPath,
+}: MarkdownRendererProps) {
   const components = useMemo(
     () =>
       buildComponents({
         linkRel: nofollow ? "nofollow noopener noreferrer" : "noopener noreferrer",
         preWrap: !!wrapCode,
+        enableC4: !!enableC4,
+        c4DirPath: c4DirPath || C4_DIAGRAMS_DIR,
       }),
-    [nofollow, wrapCode],
+    [nofollow, wrapCode, enableC4, c4DirPath],
   );
 
   return (

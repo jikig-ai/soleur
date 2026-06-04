@@ -1,0 +1,50 @@
+// Soleur architecture — LikeC4 specification (element kinds, tags, relationship kinds).
+// Canonical source of truth for the C4 model. Rendered interactively in the
+// Knowledge Base viewer (see ../README of the diagrams dir / the .md view pages).
+// Authored by the `soleur:architecture diagram` skill — see
+// plugins/soleur/skills/architecture/references/likec4-reference.md
+specification {
+
+  element actor {
+    notation "Person"
+    style {
+      shape person
+      color secondary
+    }
+  }
+
+  // C4 L1 — a system / system-group inside the platform boundary.
+  element system {
+    notation "System"
+    style {
+      shape rectangle
+    }
+  }
+
+  // C4 L2 — an application, service, or data store inside a system.
+  element container {
+    notation "Container"
+    style {
+      shape rectangle
+    }
+  }
+
+  // C4 L2 — a database / persistent store.
+  element database {
+    notation "Data store"
+    style {
+      shape storage
+    }
+  }
+
+  // C4 L3 — an internal component of a container.
+  element component {
+    notation "Component"
+    style {
+      shape component
+    }
+  }
+
+  // Applied to third-party systems outside the Soleur platform boundary.
+  tag external
+}

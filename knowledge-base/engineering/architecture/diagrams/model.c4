@@ -1,0 +1,239 @@
+// Soleur architecture — consolidated C4 model (single source of truth).
+// Every element is defined ONCE here; the views in views.c4 scope it to each
+// C4 level (context / container / component) with clickable drill-down.
+// Migrated 1:1 from the former Mermaid C4 diagrams (system-context, container,
+// component-plugin) — union of all elements and relationships, nothing dropped.
+model {
+
+  founder = actor "Founder" {
+    description "Solo founder using Soleur as their AI organization"
+  }
+
+  // ---- Soleur Platform (enterprise boundary) -----------------------------
+  platform = system "Soleur Platform" {
+
+    webapp = system "Web Application" {
+      description "Next.js PWA providing dashboard and conversation UI"
+
+      dashboard = container "Dashboard" {
+        technology "React, Next.js"
+        description "Conversation UI, knowledge base viewer, session management"
+        style { shape browser }
+      }
+      api = container "API Routes" {
+        technology "Next.js API"
+        description "REST endpoints for auth, sessions, and agent control"
+      }
+      auth = container "Auth Module" {
+        technology "Supabase Auth"
+        description "JWT authentication, OAuth providers, session tokens"
+      }
+    }
+
+    engine = system "Cloud CLI Engine" {
+      description "Claude Code instances executing agent workflows"
+
+      claude = container "Agent Runtime" {
+        technology "Claude Code"
+        description "Executes agent workflows with full orchestration tools"
+      }
+      skillloader = container "Skill Loader" {
+        technology "Plugin Discovery"
+        description "Discovers and loads skills, agents, commands from plugin directory"
+      }
+      hooks = container "Hook Engine" {
+        technology "PreToolUse Guards"
+        description "Enforces syntactic rules — blocks commits to main, rm -rf, etc."
+      }
+    }
+
+    plugin = system "Soleur Plugin" {
+      description "plugins/soleur/ — skills, agents, and knowledge base"
+
+      skills = container "Skills" {
+        technology "Markdown SKILL.md"
+        description "61 workflow skills — brainstorm, plan, work, review, compound, etc."
+      }
+      agents = container "Agents" {
+        technology "Markdown Agent Defs"
+        description "65 domain agents across 8 departments"
+      }
+      kb = database "Knowledge Base" {
+        technology "Markdown + YAML"
+        description "Conventions, learnings, ADRs, specs, plans, brainstorms"
+      }
+
+      // C4 L3 — components inside the Soleur Plugin
+      go = component "go command" {
+        technology "Entry Point"
+        description "Classifies intent and routes to workflow skills"
+      }
+      sync = component "sync command" {
+        technology "Entry Point"
+        description "Populates knowledge-base from existing codebase"
+      }
+      help = component "help command" {
+        technology "Entry Point"
+        description "Lists all available commands, skills, and agents"
+      }
+      brainstorm = component "brainstorm skill" {
+        technology "Workflow"
+        description "Explores requirements with domain leader assessment"
+      }
+      plan = component "plan skill" {
+        technology "Workflow"
+        description "Creates implementation plans with research and domain review"
+      }
+      work = component "work skill" {
+        technology "Workflow"
+        description "Executes plans with incremental commits and test-first"
+      }
+      review = component "review skill" {
+        technology "Workflow"
+        description "Multi-agent code review with 8 parallel reviewers"
+      }
+      compound = component "compound skill" {
+        technology "Workflow"
+        description "Captures learnings and promotes to constitution"
+      }
+      ship = component "ship skill" {
+        technology "Workflow"
+        description "Validates artifacts, creates PR, manages merge lifecycle"
+      }
+      oneshot = component "one-shot skill" {
+        technology "Orchestrator"
+        description "Full autonomous pipeline: plan, work, review, compound, ship"
+      }
+      architecture = component "architecture skill" {
+        technology "Documentation"
+        description "ADR lifecycle and C4 diagram generation"
+      }
+      cto = component "CTO agent" {
+        technology "Domain Leader"
+        description "Engineering assessment, architecture decision detection"
+      }
+      cmo = component "CMO agent" {
+        technology "Domain Leader"
+        description "Marketing assessment, content opportunities"
+      }
+      cpo = component "CPO agent" {
+        technology "Domain Leader"
+        description "Product strategy, UX flow analysis"
+      }
+      archstrat = component "architecture-strategist" {
+        technology "Review Agent"
+        description "Architectural compliance and ADR coverage check"
+      }
+    }
+
+    infra = system "Infrastructure" {
+      description "Hosting, data, and zero-trust access"
+
+      supabase = database "Supabase PostgreSQL" {
+        technology "PostgreSQL"
+        description "Users, BYOK-encrypted API keys, conversation sessions"
+      }
+      tunnel = container "Cloudflare Tunnel" {
+        technology "cloudflared"
+        description "Zero-trust inbound access — no exposed ports"
+      }
+      hetzner = container "Compute" {
+        technology "Hetzner Cloud"
+        description "Docker containers running web app and CLI engine"
+      }
+    }
+  }
+
+  // ---- External systems (third-party, outside the platform boundary) ------
+  anthropic = system "Anthropic API" {
+    #external
+    description "Claude LLM for agent reasoning and tool use"
+  }
+  github = system "GitHub" {
+    #external
+    description "Source control, CI/CD, issue tracking, and releases"
+  }
+  cloudflare = system "Cloudflare" {
+    #external
+    description "DNS, CDN, R2 storage, and zero-trust tunnel"
+  }
+  doppler = system "Doppler" {
+    #external
+    description "Centralized secrets management with runtime injection"
+  }
+  discord = system "Discord" {
+    #external
+    description "Community notifications and release announcements"
+  }
+  stripe = system "Stripe" {
+    #external
+    description "Payment processing and subscription billing"
+  }
+  plausible = system "Plausible Analytics" {
+    #external
+    description "Privacy-focused website analytics"
+  }
+
+  // ======================================================================
+  // Relationships — preserved 1:1 from the three Mermaid sources.
+  // ======================================================================
+
+  // ---- C4 L1 (System Context) — 12 relationships -------------------------
+  founder -> webapp "Interacts via browser" { technology "HTTPS" }
+  webapp -> engine "Thin view/control layer" { technology "WebSocket" }
+  webapp -> supabase "Auth and data" { technology "HTTPS" }
+  webapp -> stripe "Checkout and billing" { technology "HTTPS" }
+  webapp -> plausible "Page view events" { technology "JS snippet" }
+  engine -> anthropic "LLM calls with BYOK keys" { technology "HTTPS" }
+  engine -> github "Git operations and CI" { technology "HTTPS/SSH" }
+  engine -> supabase "Sessions and encrypted keys" { technology "HTTPS" }
+  engine -> discord "Notifications" { technology "Webhook" }
+  cloudflare -> webapp "Tunnel, DNS, CDN" { technology "HTTPS" }
+  doppler -> engine "Runtime secrets" { technology "CLI" }
+  stripe -> webapp "Payment webhooks" { technology "HTTPS" }
+
+  // ---- C4 L2 (Container) — 19 relationships ------------------------------
+  founder -> dashboard "Browses and converses" { technology "HTTPS" }
+  dashboard -> api "Calls" { technology "HTTPS" }
+  api -> claude "Spawns agent sessions" { technology "WebSocket" }
+  claude -> skillloader "Loads plugin" { technology "File I/O" }
+  skillloader -> skills "Discovers" { technology "Directory scan" }
+  skillloader -> agents "Discovers" { technology "Recursive scan" }
+  hooks -> claude "Guards tool calls" { technology "Event hook" }
+  skills -> kb "Reads/writes" { technology "File I/O" }
+  agents -> kb "Reads" { technology "File I/O" }
+  api -> supabase "Auth and data" { technology "HTTPS" }
+  claude -> supabase "Sessions and keys" { technology "HTTPS" }
+  claude -> anthropic "LLM calls" { technology "HTTPS" }
+  claude -> github "Git operations" { technology "HTTPS/SSH" }
+  tunnel -> api "Routes traffic" { technology "HTTPS" }
+  hetzner -> claude "Hosts" { technology "Docker" }
+  doppler -> claude "Injects secrets" { technology "CLI" }
+  auth -> supabase "Validates tokens" { technology "HTTPS" }
+  api -> stripe "Checkout and webhooks" { technology "HTTPS" }
+  dashboard -> plausible "Page view events" { technology "JS snippet" }
+
+  // ---- C4 L3 (Component — Soleur Plugin) — 20 relationships --------------
+  // (the L3 `hooks -> claude` edge is identical to the L2 one above and is not
+  //  re-declared; it still renders in the component view, which includes both.)
+  go -> brainstorm "Routes explore/generate"
+  go -> oneshot "Routes build"
+  oneshot -> plan "Step 1"
+  oneshot -> work "Step 2"
+  oneshot -> review "Step 3"
+  oneshot -> compound "Step 4"
+  oneshot -> ship "Step 5"
+  brainstorm -> cto "Phase 0.5 assessment"
+  brainstorm -> cmo "Phase 0.5 assessment"
+  brainstorm -> cpo "Phase 0.5 assessment"
+  plan -> cto "Phase 2.5 domain review"
+  review -> archstrat "Parallel review agent"
+  cto -> architecture "Recommends ADR creation"
+  archstrat -> architecture "Checks ADR coverage"
+  claude -> go "User invokes /soleur:go"
+  brainstorm -> kb "Writes brainstorms"
+  plan -> kb "Writes plans and specs"
+  work -> kb "Reads plans, writes code"
+  compound -> kb "Writes learnings, promotes to constitution"
+  architecture -> kb "Writes ADRs and diagrams"
+}

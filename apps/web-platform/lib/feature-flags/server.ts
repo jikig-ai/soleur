@@ -40,6 +40,9 @@ const RUNTIME_FLAGS = {
   "kb-chat-sidebar": "FLAG_KB_CHAT_SIDEBAR",
   "team-workspace-invite": "FLAG_TEAM_WORKSPACE_INVITE",
   "byok-delegations": "FLAG_BYOK_DELEGATIONS",
+  // Gates the interactive LikeC4 C4-model visualizer in the KB viewer
+  // (replaces static Mermaid C4 rendering). Per-user rollout via role/segment.
+  "c4-visualizer": "FLAG_C4_VISUALIZER",
 } as const;
 
 export type EnvFlagName = keyof typeof ENV_FLAGS;

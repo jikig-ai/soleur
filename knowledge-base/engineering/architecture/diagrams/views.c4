@@ -1,0 +1,57 @@
+// Soleur architecture — views over the consolidated model (model.c4).
+// One view per C4 level. `view <id> of <element>` gives LikeC4 automatic
+// clickable drill-down: in the context view the `platform` box drills into
+// `containers`; in `containers` the `plugin` box drills into `components`.
+views {
+
+  // ---- C4 L1: System Context --------------------------------------------
+  view context {
+    title "Soleur Platform — System Context (C4 L1)"
+
+    include
+      founder,
+      platform, platform.webapp, platform.engine, platform.infra.supabase,
+      anthropic, github, cloudflare, doppler, discord, stripe, plausible
+
+    style element.tag == #external {
+      color muted
+    }
+    autoLayout TopBottom
+  }
+
+  // ---- C4 L2: Containers (drill-down target of `platform`) --------------
+  view containers of platform {
+    title "Soleur Platform — Containers (C4 L2)"
+
+    include
+      founder,
+      platform.webapp, platform.engine, platform.plugin, platform.infra,
+      platform.webapp.dashboard, platform.webapp.api, platform.webapp.auth,
+      platform.engine.claude, platform.engine.skillloader, platform.engine.hooks,
+      platform.plugin.skills, platform.plugin.agents, platform.plugin.kb,
+      platform.infra.supabase, platform.infra.tunnel, platform.infra.hetzner,
+      anthropic, github, cloudflare, doppler, stripe, plausible
+
+    style element.tag == #external {
+      color muted
+    }
+    autoLayout TopBottom
+  }
+
+  // ---- C4 L3: Soleur Plugin components (drill-down target of `plugin`) ---
+  view components of platform.plugin {
+    title "Soleur Plugin — Components (C4 L3)"
+
+    include
+      platform.plugin,
+      platform.plugin.go, platform.plugin.sync, platform.plugin.help,
+      platform.plugin.brainstorm, platform.plugin.plan, platform.plugin.work,
+      platform.plugin.review, platform.plugin.compound, platform.plugin.ship,
+      platform.plugin.oneshot, platform.plugin.architecture,
+      platform.plugin.cto, platform.plugin.cmo, platform.plugin.cpo,
+      platform.plugin.archstrat,
+      platform.engine.claude, platform.engine.hooks, platform.plugin.kb
+
+    autoLayout LeftRight
+  }
+}

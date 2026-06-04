@@ -5,7 +5,7 @@ description: "This skill should be used when managing Architecture Decision Reco
 
 # Architecture as Code
 
-Create, manage, and query Architecture Decision Records (ADRs) and generate Mermaid C4 architecture diagrams. All artifacts are stored as version-controlled markdown in `knowledge-base/engineering/architecture/`.
+Create, manage, and query Architecture Decision Records (ADRs) and maintain an interactive [LikeC4](https://likec4.dev/) architecture model. ADRs are version-controlled markdown; the C4 model is version-controlled LikeC4 DSL (`.c4`). All artifacts live in `knowledge-base/engineering/architecture/`.
 
 ## Sub-commands
 
@@ -14,7 +14,11 @@ Create, manage, and query Architecture Decision Records (ADRs) and generate Merm
 | `architecture create [title]` | Create a new ADR with the next sequential number |
 | `architecture list` | Display all ADRs with status, title, and date |
 | `architecture supersede <N> [title]` | Mark ADR-N as superseded and create its replacement |
-| `architecture diagram [type]` | Generate a Mermaid C4 diagram (context, container, or component) |
+| `architecture diagram [type]` | Create or update the LikeC4 model and its views (context, container, component) |
+| `architecture add-container <id>` | Add a container/database element to the model |
+| `architecture add-component <id>` | Add a component element to the model |
+| `architecture add-relationship <from> <to>` | Add a relationship between two model elements |
+| `architecture render` | Validate the LikeC4 project (`likec4 validate`) and report element/view counts |
 | `architecture assess [feature]` | Assess a feature against the NFR register and principles register |
 | `architecture principle list` | Display the architecture principles register |
 
@@ -105,9 +109,9 @@ Create a new ADR with the next sequential number.
    - **Cost Impacts:** How much does this change increase or reduce costs? (reference `knowledge-base/operations/expenses.md` for baseline; use "None" if no impact)
    - **NFR Impacts:** Which non-functional requirements are affected? Read [nfr-reference.md](./references/nfr-reference.md) for the assessment checklist and common patterns by decision type. Reference NFR IDs from `knowledge-base/engineering/architecture/nfr-register.md`. Use "None" if no impact.
    - **Principle Alignment:** Which architectural principles does this decision align with or deviate from? Read `knowledge-base/engineering/architecture/principles-register.md` for the register. Reference AP-NNN IDs. Use "None" if no impact.
-   - **Diagram:** (optional) Should a Mermaid C4 diagram be included?
+   - **Diagram:** (optional) Should a LikeC4 diagram be included or updated?
 
-8. **Write the ADR body** with the gathered context. If a diagram was requested (rich branch only), generate using proper C4 syntax from [c4-reference.md](./references/c4-reference.md).
+8. **Write the ADR body** with the gathered context. If a diagram was requested (rich branch only), update the consolidated LikeC4 model using [likec4-reference.md](./references/likec4-reference.md) (see the `diagram` sub-command) and embed the relevant view with a ` ```likec4-view ` block.
 
 9. **Announce:** "Created ADR-<NNN>: <title> at `knowledge-base/engineering/architecture/decisions/ADR-<NNN>-<kebab-title>.md`"
 
@@ -134,7 +138,7 @@ Display all ADRs with their status, number, title, and date.
    ```text
    | # | Title | Status | Date |
    |---|-------|--------|------|
-   | ADR-001 | Use Mermaid for diagrams | active | 2026-03-27 |
+   | ADR-001 | Use LikeC4 for diagrams | active | 2026-03-27 |
    | ADR-002 | PWA-first architecture | superseded | 2026-03-20 |
    ```
 
@@ -168,52 +172,52 @@ Mark an existing ADR as superseded and create its replacement.
 
 ## Sub-command: diagram
 
-Generate a Mermaid C4 model architecture diagram using the proper C4 diagram syntax.
+Create or update the canonical **LikeC4** model. Soleur uses ONE consolidated
+model — every element is declared once and the views scope it to each C4 level
+with clickable drill-down (Context → Container → Component). The model is
+rendered interactively in the web Knowledge Base viewer; static Mermaid C4 is no
+longer emitted.
 
-**Read [c4-reference.md](./references/c4-reference.md) now** for the complete C4 Mermaid syntax reference before generating any diagram.
+**Read [likec4-reference.md](./references/likec4-reference.md) now** for the
+complete LikeC4 DSL syntax before editing any model.
+
+### Project layout
+
+The model lives as a LikeC4 project under
+`knowledge-base/engineering/architecture/diagrams/`:
+
+- `spec.c4` — `specification` block: element kinds (actor, system, container, database, component) and tags.
+- `model.c4` — `model` block: every element (nested systems → containers → components) and every relationship, declared once.
+- `views.c4` — `views` block: one `view <id> [of <element>]` per C4 level. `view <id> of <element>` gives the parent element an automatic drill-down button.
+- `<view>.md` — thin pages embedding a view for the KB viewer via a fenced ` ```likec4-view ` block whose body is the view id, plus a `## Notes` section.
 
 ### Steps
 
-1. **Determine diagram type.** If provided in `$ARGUMENTS`, use it. Otherwise, use AskUserQuestion:
+1. **Gather context.** Read to understand the system:
+   - `knowledge-base/project/README.md` and `knowledge-base/project/components/`
+   - Existing ADRs in `knowledge-base/engineering/architecture/decisions/`
+   - The current `.c4` project in the diagrams dir (do not duplicate elements that already exist)
 
-   | Type | C4 Level | Mermaid Keyword | Description |
-   |------|----------|-----------------|-------------|
-   | `context` | Level 1 | `C4Context` | System boundaries, external actors, and system-to-system relationships |
-   | `container` | Level 2 | `C4Container` | Applications, databases, and services within the system boundary |
-   | `component` | Level 3 | `C4Component` | Internal components of a single container |
+2. **Edit the consolidated model** (`spec.c4` / `model.c4`), following
+   [likec4-reference.md](./references/likec4-reference.md). Key rules:
+   - Declare each element exactly once; nest children inside their parent (`system { container { component } }`). Nesting creates the C4 boundary automatically — there is no separate boundary keyword.
+   - Relationships: `from -> to "label" { technology "HTTPS" }`. Reference nested elements by qualified path in views (`platform.webapp.dashboard`).
+   - Tag third-party systems `#external`.
 
-2. **Gather context.** Read relevant project files to understand the system:
+3. **Edit the views** (`views.c4`): ensure a view exists per level you want to
+   show. Wire drill-down with `view <id> of <parent>` so the parent element in
+   the higher-level view links into it.
 
-   - `knowledge-base/project/README.md` for system overview
-   - `knowledge-base/project/components/` for component documentation
-   - Existing ADRs in `knowledge-base/engineering/architecture/decisions/` for architectural decisions
-   - Existing diagrams in `knowledge-base/engineering/architecture/diagrams/` for consistency
-
-3. **Generate the Mermaid diagram** using proper C4 syntax from [c4-reference.md](./references/c4-reference.md). Key rules:
-
-   - Use the correct diagram keyword (`C4Context`, `C4Container`, or `C4Component`)
-   - Use C4 shapes: `Person`, `System`, `System_Ext`, `Container`, `ContainerDb`, `Component`, etc.
-   - Use `Rel(from, to, label, ?protocol)` for relationships — NOT `-->`
-   - Use `Enterprise_Boundary`, `System_Boundary`, or `Container_Boundary` for grouping
-   - Use `_Ext` suffix for external systems/actors
-
-4. **Write the diagram file.** Save to `knowledge-base/engineering/architecture/diagrams/<type>.md`:
+4. **Write/refresh the view page(s).** For each view that needs a KB page, write
+   `knowledge-base/engineering/architecture/diagrams/<view>.md`:
 
    ````markdown
    # <Title> (C4 Level N)
 
    Generated: YYYY-MM-DD
 
-   ```mermaid
-   C4Context
-   title System Context diagram for [System Name]
-
-   Person(user, "User Role", "Description")
-   System(sys, "System Name", "Description")
-   System_Ext(ext, "External System", "Description")
-
-   Rel(user, sys, "Uses", "HTTPS")
-   Rel(sys, ext, "Sends data to", "API")
+   ```likec4-view
+   <view-id>
    ```
 
    ## Notes
@@ -221,7 +225,46 @@ Generate a Mermaid C4 model architecture diagram using the proper C4 diagram syn
    [Context about the diagram, references to relevant ADRs]
    ````
 
-5. **Announce:** "Diagram saved to `knowledge-base/engineering/architecture/diagrams/<type>.md`"
+5. **Validate** (see `render` below) and **announce**:
+   "LikeC4 model updated — N elements, M relationships, K views."
+
+---
+
+## Sub-commands: add-container, add-component, add-relationship
+
+Incremental edits to the consolidated model. Each is a focused patch to the
+`.c4` files (no Mermaid). After any patch, run `render` to validate.
+
+- **add-container `<id>`** / **add-component `<id>`** — add an element inside the
+  correct parent in `model.c4` (`container` / `database` / `component` kind),
+  with `technology` and `description`. Add it to the relevant `view`'s `include`
+  list in `views.c4` if it should appear.
+- **add-relationship `<from> <to>`** — append `from -> to "label" { technology "…" }`
+  to `model.c4`, using existing element ids (qualified if nested).
+
+Gather the label/technology/description from `$ARGUMENTS` or via AskUserQuestion.
+
+---
+
+## Sub-command: render
+
+Validate the LikeC4 project and rebuild the precomputed model the web viewer
+renders. The Knowledge Base viewer does NOT run the `likec4` toolchain at
+runtime (it would pull vite/esbuild into production deps); it reads the
+committed, layouted `model.likec4.json`. Regenerate it after ANY `.c4` change.
+
+```bash
+cd knowledge-base/engineering/architecture/diagrams
+npx -y likec4@latest validate .
+# Rebuild the committed layouted model the web viewer reads:
+npx -y likec4@latest export json -o model.likec4.json .
+```
+
+On success, report element / relationship / view counts (read the
+`elements` / `relations` / `views` key counts from `model.likec4.json`) and
+remind the operator to commit the regenerated `model.likec4.json` alongside the
+`.c4` edits. On failure, surface the line-numbered diagnostics and fix the
+`.c4` source before continuing.
 
 ---
 

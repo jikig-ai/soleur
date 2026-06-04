@@ -14,6 +14,8 @@ import { KbChatQuoteBridgeContext } from "@/components/kb/kb-chat-quote-bridge";
 import { SelectionToolbar } from "@/components/kb/selection-toolbar";
 import { getKbExtension, isMarkdownKbPath } from "@/lib/kb-extensions";
 import { classifyByExtension } from "@/lib/kb-file-kind";
+import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
+import { C4_VISUALIZER_FLAG } from "@/lib/c4-constants";
 import type { ContentResult } from "@/server/kb-reader";
 
 export default function KbContentPage({
@@ -26,6 +28,9 @@ export default function KbContentPage({
   const joinedPath = pathSegments.join("/");
   const extension = getKbExtension(joinedPath);
   const isMarkdown = isMarkdownKbPath(joinedPath);
+  const c4Enabled = useOptionalFeatureFlag(C4_VISUALIZER_FLAG);
+  // The LikeC4 project lives in the same dir as the .md view-embed page.
+  const c4DirPath = pathSegments.slice(0, -1).join("/");
   const [content, setContent] = useState<ContentResult | null>(null);
   const [loading, setLoading] = useState(isMarkdown);
   const [error, setError] = useState<"not-found" | "unknown" | null>(null);
@@ -166,7 +171,11 @@ export default function KbContentPage({
       >
         <div className="mx-auto max-w-3xl">
           <div className="prose-kb">
-            <MarkdownRenderer content={content!.content} />
+            <MarkdownRenderer
+              content={content!.content}
+              enableC4={c4Enabled}
+              c4DirPath={c4DirPath}
+            />
           </div>
         </div>
       </article>

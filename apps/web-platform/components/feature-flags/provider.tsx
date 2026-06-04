@@ -30,3 +30,14 @@ export function useFeatureFlag(name: FlagName): boolean {
   }
   return ctx[name];
 }
+
+/**
+ * Non-throwing variant: returns `false` when no provider is mounted instead of
+ * throwing. For components that legitimately render outside the provider (e.g.
+ * the KB content page in provider-less test surfaces) and treat "no flag info"
+ * as off.
+ */
+export function useOptionalFeatureFlag(name: FlagName): boolean {
+  const ctx = useContext(FeatureFlagContext);
+  return ctx ? ctx[name] : false;
+}
