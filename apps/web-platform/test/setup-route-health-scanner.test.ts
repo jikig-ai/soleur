@@ -82,6 +82,19 @@ vi.mock("@/lib/supabase/server", () => ({
       if (table === "conversations") {
         return { insert: mockSupabaseInsert };
       }
+      if (table === "user_session_state") {
+        // resolveCurrentWorkspaceId (conversations.workspace_id resolution):
+        // no session row → falls back to userId.
+        return {
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              maybeSingle: vi
+                .fn()
+                .mockResolvedValue({ data: null, error: null }),
+            }),
+          }),
+        };
+      }
       // "users" table
       return {
         select: vi.fn().mockReturnValue({

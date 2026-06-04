@@ -41,9 +41,19 @@ describe("push-subscription API route", () => {
         error: null,
       });
       const mockUpsert = vi.fn(() => ({ error: null }));
-      mockFrom.mockReturnValue({
-        select: () => ({ eq: () => ({ count: 0, error: null }) }),
-        upsert: mockUpsert,
+      mockFrom.mockImplementation((table: string) => {
+        if (table === "user_session_state") {
+          // resolveCurrentWorkspaceId: no session row → falls back to userId.
+          return {
+            select: () => ({
+              eq: () => ({ maybeSingle: () => ({ data: null, error: null }) }),
+            }),
+          };
+        }
+        return {
+          select: () => ({ eq: () => ({ count: 0, error: null }) }),
+          upsert: mockUpsert,
+        };
       });
 
       const req = new Request("https://app.soleur.ai/api/push-subscription", {
@@ -63,6 +73,8 @@ describe("push-subscription API route", () => {
       expect(mockUpsert).toHaveBeenCalledWith(
         expect.objectContaining({
           user_id: "user-1",
+          // workspace_id is NOT NULL (migration 059) — must be on the upsert.
+          workspace_id: "user-1",
           endpoint: "https://push.example.com/sub/123",
           p256dh: "test-p256dh",
           auth: "test-auth",

@@ -162,6 +162,19 @@ function setupUserData(overrides: Record<string, unknown> = {}) {
       });
       return wChain;
     }
+    if (table === "user_session_state") {
+      // resolveCurrentWorkspaceId (kb_files workspace_id resolution) reads the
+      // active workspace here; return ws-1 to match the workspace_members row.
+      const sChain: Record<string, unknown> = {};
+      Object.assign(sChain, {
+        select: vi.fn(() => sChain),
+        eq: vi.fn(() => sChain),
+        maybeSingle: vi.fn(() =>
+          Promise.resolve({ data: { current_workspace_id: "ws-1" }, error: null }),
+        ),
+      });
+      return sChain;
+    }
     if (table === "kb_files") {
       return { upsert: vi.fn(() => Promise.resolve({ error: null })) };
     }

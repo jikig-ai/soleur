@@ -23,6 +23,12 @@ vi.mock("@/server/kb-share", () => ({
   revokeShare: mocks.revokeShare,
 }));
 
+// kb_share_create now resolves the active workspace id (NOT NULL on
+// kb_share_links since migration 059) before delegating to createShare.
+vi.mock("@/server/workspace-resolver", () => ({
+  resolveCurrentWorkspaceId: vi.fn(async () => "ws-1"),
+}));
+
 // Verbatim copy of REVOKE_PURGE_FAILED_MESSAGE from server/kb-share.ts.
 // Cannot import the real constant — this test fully mocks @/server/kb-share
 // so an import would resolve to undefined. Drift between this literal and
@@ -99,6 +105,7 @@ describe("kb_share_create handler", () => {
     expect(mocks.createShare).toHaveBeenCalledWith(
       baseDeps.serviceClient,
       "user-1",
+      "ws-1",
       baseDeps.kbRoot,
       "readme.md",
     );
