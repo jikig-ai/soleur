@@ -67,3 +67,13 @@ path can set `logo_path` to another workspace's key — the read proxy can safel
 trust `logo_path`. The route writes via service-role only. ✅
 
 **Result: 34/34 live checks PASS** (32 migration + 2 AC5b).
+
+## prd apply — pending
+
+prd apply is **deferred to merge** by design: `web-platform-release.yml#migrate`
+runs the migration runner against prd automatically on merge touching
+`apps/web-platform/**` (no operator action — the merge IS the apply, per plan
+AC10 post-merge note). At pre-merge preflight time the `logo_path` column does
+not yet exist in prd; this is expected. Post-merge, `/ship` Phase 7 Step 3.6 +
+the release `verify-migrations` job confirm the column is live. Preflight Check 1
+treats this documented deferral as SKIP (auditable paper trail per Step 1.1b).
