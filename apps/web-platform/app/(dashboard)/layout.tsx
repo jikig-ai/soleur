@@ -10,10 +10,11 @@ import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { SignOutConfirmModal } from "@/components/auth/sign-out-confirm-modal";
 import { useSignOut } from "@/components/auth/use-sign-out";
 import { WorkspaceContextBand } from "@/components/dashboard/workspace-context-band";
+import { useActiveWorkspaceName } from "@/hooks/use-active-workspace-name";
 import { RailSlotProvider, RailCollapsedProvider } from "@/components/dashboard/rail-slot";
 import { RailResizeHandle } from "@/components/dashboard/rail-resize-handle";
 import { useRailWidth, railMaxPx, RAIL_MIN_PX } from "@/hooks/use-rail-width";
-import { segmentToDrillLevel } from "@/hooks/segment-to-drill-level";
+import { segmentToDrillLevel, isKbDocView } from "@/hooks/segment-to-drill-level";
 import { MembershipRevokedScreen } from "@/components/dashboard/membership-revoked-screen";
 import { NoApiKeyBanner } from "@/components/dashboard/no-api-key-banner";
 import { PendingInviteBannerRecovery } from "@/components/dashboard/pending-invite-banner-recovery";
@@ -123,6 +124,13 @@ export default function DashboardLayout({
   // Secondary-nav slot node — drilled sections portal their nav here (ADR-047).
   // A useState ref-callback so the provider value updates once the slot mounts.
   const [railSlotEl, setRailSlotEl] = useState<HTMLElement | null>(null);
+  // Active workspace name for the COLLAPSED rail band's monogram tooltip — the
+  // collapsed band does not mount OrgSwitcherContainer, so the name is threaded
+  // in here (P0-3, #4915). Gated on `collapsed`: the expanded rail + mobile band
+  // already surface the name via OrgSwitcherContainer, so the fetch only fires
+  // for the one state that lacks it (avoids a redundant cold-mount GET + a
+  // net-new focus poll in the common expanded case).
+  const activeWorkspaceName = useActiveWorkspaceName(collapsed);
 
   // Check admin status on mount
   useEffect(() => {
@@ -158,6 +166,15 @@ export default function DashboardLayout({
   // width + handle apply solely in this branch, so collapsed (md:w-14) and
   // Settings/Chat (md:w-56) widths are structurally untouched (AC12/AC13).
   const kbExpanded = drill === "kb" && !collapsed;
+  // Phase 3 (#4915): one back per state. In the mobile KB DOC VIEW the
+  // kb-content-header owns the only back ("Back to file tree", md:hidden), so the
+  // mobile band's "Back to menu" is suppressed to stop the two co-rendering. This
+  // is path EXTRACTION ("a KB doc is open" — trailing-slash form), explicitly
+  // distinct from drill detection (which stays sole to segmentToDrillLevel,
+  // AC4c): the band itself never reads pathname for this — the layout owns it.
+  // The KB page-body header (kb/layout.tsx) keys its own back on the SAME
+  // predicate, so exactly one "Back to menu" renders per state.
+  const inKbDocView = isKbDocView(pathname);
 
   // Auto-close drawer on route change
   useEffect(() => {
@@ -233,7 +250,15 @@ export default function DashboardLayout({
         {/* Mobile band — placed via CSS (this bar is `md:hidden`), NOT a JS
             viewport gate, so workspace identity + the back chevron paint on the
             FIRST frame (no SSR/hydration tick where identity is absent). */}
-        <WorkspaceContextBand pathname={pathname} variant="mobile" />
+        <WorkspaceContextBand
+          pathname={pathname}
+          variant="mobile"
+          suppressBack={inKbDocView}
+          // KB owns its "Knowledge Base" title in the page body on mobile
+          // (kb/layout fullWidth header), so the mobile band drops the duplicate
+          // section title. Settings/Chat keep theirs (KB-scoped).
+          suppressSectionTitle={drill === "kb"}
+        />
       </div>
 
       {/* Overlay backdrop — always rendered for fade transition */}
@@ -280,16 +305,10 @@ export default function DashboardLayout({
             "Back to menu" affordance below it (#4810 follow-up Bug 2: the two
             were at px-5 vs px-3 and read as misaligned). */}
         <div className={`flex items-center justify-between safe-top ${collapsed ? "px-2 py-5" : "px-3 py-5"}`}>
-          {/* #4810 Bug 1: the wordmark is top-level chrome — render it ONLY when
-              not drilled (render-conditional, NOT a CSS hide; jsdom asserts DOM
-              presence). Gated individually so the sibling close button + collapse
-              chevron in this row survive in drilled states. Composes with the
-              existing collapsed `md:hidden` (hide-on-collapse within the top level). */}
-          {drill === null && (
-            <span className={`text-lg font-semibold tracking-tight text-soleur-text-primary overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>
-              Soleur
-            </span>
-          )}
+          {/* Phase 2 (#4915): the global "Soleur" wordmark is removed entirely —
+              the workspace identity band is the sole orientation anchor now. Only
+              the close (mobile) + collapse (desktop) controls remain in this row;
+              `justify-between` keeps the collapse toggle pinned to the rail edge. */}
           <button
             onClick={() => setDrawerOpen(false)}
             aria-label="Close navigation"
@@ -332,7 +351,11 @@ export default function DashboardLayout({
             CSS-exclusive placements never show identity twice (AC4b: the band
             is still the single importer of OrgSwitcherContainer/LiveRepoBadge). */}
         <div className="hidden md:block">
-          <WorkspaceContextBand pathname={pathname} collapsed={collapsed} />
+          <WorkspaceContextBand
+            pathname={pathname}
+            collapsed={collapsed}
+            activeWorkspaceName={activeWorkspaceName ?? undefined}
+          />
         </div>
 
         {/* Rail swap region (ADR-047): the section's secondary nav REPLACES
