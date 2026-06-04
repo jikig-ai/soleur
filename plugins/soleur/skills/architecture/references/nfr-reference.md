@@ -112,7 +112,7 @@ Update `knowledge-base/engineering/architecture/nfr-register.md` when:
 
 ## Maintenance Procedure: Adding New Containers
 
-When a new container is added to the C4 container diagram (`knowledge-base/engineering/architecture/diagrams/container.md`):
+When a new container is added to the C4 container diagram (`knowledge-base/engineering/architecture/diagrams/c4-model.md`):
 
 1. **Classify the container** as runtime, passive, or infrastructure (see Container Classification in the register)
 2. **Add the container** to the Container & Link Inventory table in the NFR register
