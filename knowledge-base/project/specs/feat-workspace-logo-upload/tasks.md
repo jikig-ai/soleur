@@ -11,17 +11,17 @@ plan: knowledge-base/project/plans/2026-06-04-feat-workspace-logo-upload-plan.md
 Derived from the finalized (post-review) plan. RED→GREEN→REFACTOR per task. Vitest (`test/**`, not co-located).
 
 ## Phase 0 — Preconditions
-- [ ] 0.1 Locate the Workspace settings pane (grep `rename-workspace-action.tsx` mount) for logo-control + role-load placement.
-- [ ] 0.2 Verify `createSignedUrl` TTL API + read migrations 095–097 for DDL-runner constraints.
-- [ ] 0.3 Confirm `account-delete.ts` sole-owned-vs-shared workspace teardown semantics (where `purgeWorkspaceLogoObjects` wires).
+- [x] 0.1 Locate the Workspace settings pane (grep `rename-workspace-action.tsx` mount) — `app/(dashboard)/dashboard/settings/team/page.tsx`; mounts `RenameWorkspaceAction` with `isOwner`; resolver `resolveTeamMembershipPageData` returns role/workspaceId.
+- [x] 0.2 `@supabase/supabase-js` 2.99.2 (createSignedUrl/createSignedUrls present); sharp 0.34.5 (failOn/limitInputPixels); migrations 095–097 have NO top-level BEGIN/COMMIT (runner wraps `--single-transaction`); 098 collision-free on origin/main; next Art-30 PA = 26.
+- [x] 0.3 `account-delete.ts` sole-owned teardown = `deleteWorkspace(userId)` (L169-179; `userId === workspaces.id` per mig 053 N2); shared-member removal is in `remove_workspace_member` RPC, NOT account-delete. Wire `purgeWorkspaceLogoObjects` beside `deleteWorkspace`.
 
-## Phase 1 — Migration 098 (data + storage + RLS)
-- [ ] 1.1 `ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS logo_path text;` + `-- LAWFUL_BASIS:` annotation (GDPR-Art-6).
-- [ ] 1.2 `INSERT INTO storage.buckets` `workspace-logos` (private, 1048576, `['image/webp']`).
-- [ ] 1.3 `CREATE FUNCTION is_workspace_owner` — DEFINER, `search_path=public,pg_temp`, NULL-args guard, parameterized EXISTS, REVOKE all 4 + GRANT authenticated.
-- [ ] 1.4 `storage.objects` RLS: SELECT(member, USING) + INSERT(owner, WITH CHECK) + UPDATE(owner, USING **and** WITH CHECK) + DELETE(owner, USING); regex `^[0-9a-f-]{36}$` guard before `::uuid`; no `FOR ALL`, no `COMMENT ON POLICY`.
-- [ ] 1.5 `.down.sql` reverse order: policies → function → `DELETE FROM storage.objects WHERE bucket_id` → bucket → column.
-- [ ] 1.6 Migration test (RED first): owner-write, member-read, non-member-deny-read, non-owner-deny-overwrite, **cross-tenant-move-deny (UPDATE)**, **malformed-path-clean-deny**. (AC1/AC2/AC3)
+## Phase 1 — Migration 098 (data + storage + RLS) ✅ applied+verified DEV (32/32 live)
+- [x] 1.1 `ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS logo_path text;` + `-- LAWFUL_BASIS:` annotation (GDPR-Art-6, PA-26).
+- [x] 1.2 `INSERT INTO storage.buckets` `workspace-logos` (private, 1048576, `['image/webp']`).
+- [x] 1.3 `CREATE FUNCTION is_workspace_owner` — DEFINER, `search_path=public,pg_temp`, NULL-args guard, parameterized EXISTS, REVOKE all 4 + GRANT authenticated.
+- [x] 1.4 `storage.objects` RLS: SELECT(member, USING) + INSERT(owner, WITH CHECK) + UPDATE(owner, USING **and** WITH CHECK) + DELETE(owner, USING); regex `^[0-9a-f-]{36}$` guard before `::uuid`; no `FOR ALL`, no `COMMENT ON POLICY`.
+- [x] 1.5 `.down.sql` reverse order: policies → function → column. **Storage bucket/objects teardown is Storage-API-only — Supabase `protect_delete` trigger blocks direct `DELETE FROM storage.{objects,buckets}` (verified live; 019/042 precedent ship no SQL bucket teardown).** Plan's "DELETE objects→bucket" falsified at verify-time; corrected.
+- [x] 1.6 Migration shape test (offline lint, mirrors 068) GREEN (24); **live DEV behavioral verification (migration-checklist.md): owner-write, member-read, non-member-deny-read, non-owner-deny-overwrite, cross-tenant-move-deny (UPDATE WITH CHECK), malformed-path-clean-deny — all PASS.** (AC1/AC2/AC3)
 
 ## Phase 2 — Upload/remove route (`api/workspace/logo/route.ts`)
 - [ ] 2.1 POST: CSRF/origin → rate-limit → content-length 413 → auth → server-resolve active workspace → `is_workspace_owner` 403 → formData.
