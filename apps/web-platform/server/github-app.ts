@@ -74,6 +74,15 @@ export class GitHubApiError extends Error {
 interface GitHubInstallationTokenResponse {
   token: string;
   expires_at: string;
+  // The access-tokens POST returns these in the SAME body (no extra round-trip).
+  // They make a wrong-installation token self-diagnosing at mint time:
+  // `repository_selection: "selected"` with the connected repo absent from the
+  // token's repo set is the wrong-installation signature. Both optional —
+  // older/edge responses may omit them. Type widening is additive AND
+  // single-consumer (only github-app.ts), so blast-radius is zero
+  // (hr-type-widening-cross-consumer-grep).
+  repository_selection?: "all" | "selected";
+  permissions?: Record<string, string>;
 }
 
 interface GitHubRepoResponse {
@@ -441,6 +450,54 @@ async function findOrgInstallationForUser(
   return null;
 }
 
+/**
+ * Find the GitHub App installation whose ACCOUNT LOGIN equals `login`
+ * (case-insensitive) — i.e. the installation that OWNS that account's repos.
+ *
+ * This disambiguates the wrong-installation 403 root cause
+ * (feat-one-shot-concierge-gh-403): a repo owned by an org can be reachable by
+ * BOTH the org's installation (full grant, `issues: write`) and a cross-account
+ * personal/collaborator installation (reduced grant, `issues: read`). A read
+ * probe (`checkRepoAccess`) passes for BOTH, so it cannot tell them apart —
+ * only the account-login match deterministically selects the owning install
+ * that carries the full grant. Passing the repo OWNER here yields the
+ * installation that can actually create issues, push, etc.
+ *
+ * Single `GET /app/installations` call (App JWT). Returns null when no account
+ * matches or the listing degrades — the caller keeps its existing installation
+ * (graceful: never block a dispatch on this probe). This is installation
+ * SELECTION, never a permission change — the owning grant already exists.
+ */
+export async function findInstallationByAccountLogin(
+  login: string,
+): Promise<number | null> {
+  const jwt = createAppJwt();
+  const response = await githubFetch(
+    `${GITHUB_API}/app/installations?per_page=100`,
+    { headers: { Authorization: `Bearer ${jwt}` } },
+  );
+
+  if (!response.ok) {
+    log.warn(
+      { status: response.status, login },
+      "Failed to list app installations for account-login match",
+    );
+    return null;
+  }
+
+  interface AppInstallation {
+    id: number;
+    account: { login?: string } | null;
+  }
+
+  const installations = (await response.json()) as AppInstallation[];
+  const target = login.toLowerCase();
+  const match = installations.find(
+    (i) => i.account?.login?.toLowerCase() === target,
+  );
+  return match?.id ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // Token cache (installation tokens are valid for 1 hour)
 // ---------------------------------------------------------------------------
@@ -548,6 +605,23 @@ export async function generateInstallationToken(
   }
 
   const data = (await response.json()) as GitHubInstallationTokenResponse;
+
+  // Mint-time observability (feat-one-shot-concierge-gh-403). Log the
+  // installation id, the token's repository_selection, and the SORTED granted
+  // permission KEYS so a future 403 is self-diagnosing without guessing which
+  // installation/scope was used — a "selected" token missing the connected
+  // repo, or a permission-key gap, is visible in the log line. NEVER log
+  // `data.token` (hr-github-app-auth-not-pat) — keys/selection are non-secret
+  // metadata; the token value is the secret.
+  log.info(
+    {
+      installationId,
+      repositorySelection: data.repository_selection,
+      permissionKeys: Object.keys(data.permissions ?? {}).sort(),
+      appId: getAppId(),
+    },
+    "Minted installation token",
+  );
 
   tokenCache.set(installationId, {
     token: data.token,
