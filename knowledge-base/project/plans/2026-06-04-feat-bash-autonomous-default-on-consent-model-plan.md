@@ -193,23 +193,23 @@ This plan touches a regulated-data surface (Supabase migration + an authz-releva
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] Migration 099 sets `workspaces.bash_autonomous` column DEFAULT to `true`; migration test asserts the new default AND asserts **zero** `UPDATE ... bash_autonomous` statements in the 099 SQL (no backfill).
-- [ ] A row inserted by the existing `handle_new_user` shape (no `bash_autonomous` named) lands `bash_autonomous = true` post-099.
-- [ ] An existing row stored `false` remains `false` after 099 applies.
-- [ ] `autonomous_disclosure_ack_at` column + `get_workspace_autonomous_ack` (member read, NULL non-member) + `set_workspace_autonomous_ack` (owner-only) exist with 097-equivalent GRANT/REVOKE; verify SQL passes.
-- [ ] `resolveAutonomousAck` returns `null` on RPC error / non-member / `RuntimeAuthError` (fail-closed to HOLD direction), mirrored to Sentry.
-- [ ] `resolve-bash-autonomous.ts` fail-closed contract unchanged (still `?? false`).
-- [ ] permission-callback: `bashAutonomous && ackAt == null && owner` ⇒ command HELD (not `allow`), disclosure frame emitted; `bashAutonomous && ackAt != null` ⇒ `allow` (friction-free); non-owner on un-acked autonomous ⇒ review-gate fallback.
-- [ ] Blocklist still authoritative under autonomy (sudo/curl/etc. denied before the autonomous branch) — existing test still green.
-- [ ] Toggle section removed from `privacy/page.tsx`; Privacy renders DSAR/GDPR only; no unused-import `tsc` errors.
-- [ ] Toggle section present on `scope-grants/page.tsx` as a top section `id="concierge-command-execution"`, ABOVE the grant list, owner-only.
-- [ ] `STATIC_SETTINGS_TABS` unchanged; `app/api/workspace/bash-autonomous/route.ts` unchanged.
-- [ ] Toggle helper copy reads "On by default"; OFF→ON re-enable still shows the risk interstitial; turning OFF is free.
-- [ ] `AutoRunChip` renders "Auto-run on" / "Approve each" reflecting server-resolved posture; click navigates to `/dashboard/settings/scope-grants#concierge-command-execution`.
-- [ ] `AutonomousDisclosureBanner` renders the LOCKED copy verbatim; "Got it" writes the ack and releases the held command; existing-workspace opt-out offers "Keep autonomous on" / "Ask me each time".
-- [ ] New surfaces use sharp 0px corners (`rounded-none`); switch track may stay pill.
-- [ ] `.pen` wireframe committed at `knowledge-base/product/design/settings/concierge-command-execution.pen` with frames A–D (see UX gate).
-- [ ] `tsc --noEmit` clean; vitest suites green via the package's actual runner.
+- [x] Migration 099 sets `workspaces.bash_autonomous` column DEFAULT to `true`; migration test asserts the new default AND asserts **zero** `UPDATE ... bash_autonomous` statements in the 099 SQL (no backfill).
+- [x] A row inserted by the existing `handle_new_user` shape (no `bash_autonomous` named) lands `bash_autonomous = true` post-099. *(default-flip + no function rewrite; verified by migration-shape test; runtime row-insert asserted at CI migrate apply)*
+- [x] An existing row stored `false` remains `false` after 099 applies. *(forward-only `SET DEFAULT`; no `UPDATE` — asserted by the GDPR sentinel test)*
+- [x] `autonomous_disclosure_ack_at` column + `get_workspace_autonomous_ack` (member read, NULL non-member) + `set_workspace_autonomous_ack` (owner-only) exist with 097-equivalent GRANT/REVOKE; verify SQL passes. *(verify/099 mirrors verify/097)*
+- [x] `resolveAutonomousAck` returns `null` on RPC error / non-member / `RuntimeAuthError` (fail-closed to HOLD direction), mirrored to Sentry.
+- [x] `resolve-bash-autonomous.ts` fail-closed contract unchanged (still `?? false`).
+- [x] permission-callback: `bashAutonomous && ackAt == null && owner` ⇒ command HELD (not `allow`), disclosure frame emitted; `bashAutonomous && ackAt != null` ⇒ `allow` (friction-free); non-owner on un-acked autonomous ⇒ review-gate fallback.
+- [x] Blocklist still authoritative under autonomy (sudo/curl/etc. denied before the autonomous branch) — existing test still green.
+- [x] Toggle section removed from `privacy/page.tsx`; Privacy renders DSAR/GDPR only; no unused-import `tsc` errors.
+- [x] Toggle section present on `scope-grants/page.tsx` as a top section `id="concierge-command-execution"`, ABOVE the grant list, owner-only.
+- [x] `STATIC_SETTINGS_TABS` unchanged; `app/api/workspace/bash-autonomous/route.ts` unchanged.
+- [x] Toggle helper copy reads "On by default"; OFF→ON re-enable still shows the risk interstitial; turning OFF is free.
+- [x] `AutoRunChip` renders "Auto-run on" / "Approve each" reflecting server-resolved posture; click navigates to `/dashboard/settings/scope-grants#concierge-command-execution`.
+- [x] `AutonomousDisclosureBanner` renders the LOCKED copy verbatim; "Got it" writes the ack and releases the held command; existing-workspace opt-out offers "Keep autonomous on" / "Ask me each time".
+- [x] New surfaces use sharp 0px corners (`rounded-none`); switch track may stay pill.
+- [x] `.pen` wireframe committed at `knowledge-base/product/design/settings/concierge-command-execution.pen` with frames A–D (see UX gate).
+- [x] `tsc --noEmit` clean; vitest suites green via the package's actual runner.
 
 ### Post-merge (operator)
 - [ ] Migration 099 applied to prod via the existing `web-platform-release.yml#migrate` job (PR merge IS the apply trigger; no separate operator step). Verify post-deploy via Supabase MCP read-only: column default = `true`, two ack RPCs present.
