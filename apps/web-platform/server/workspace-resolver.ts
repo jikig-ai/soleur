@@ -473,12 +473,17 @@ export type ActiveWorkspaceRepoMeta =
 export async function resolveActiveWorkspaceRepoMeta(
   userId: string,
   supabase: SupabaseLike,
+  // Optional pre-resolved active id. When a caller already resolved the active
+  // workspace (e.g. via resolveActiveWorkspaceKbRoot in the same request), pass
+  // it here so kbRoot, repo metadata, and any attribution write all key to ONE
+  // membership-resolved id — and skip a redundant user_session_state +
+  // workspace_members round-trip.
+  preResolvedActiveWorkspaceId?: string,
 ): Promise<ActiveWorkspaceRepoMeta> {
   // 1. Active workspace id — claim → solo fallback (never a sibling).
-  const activeWorkspaceId = await resolveActiveWorkspaceIdWithMembership(
-    userId,
-    supabase,
-  );
+  const activeWorkspaceId =
+    preResolvedActiveWorkspaceId ??
+    (await resolveActiveWorkspaceIdWithMembership(userId, supabase));
 
   // 2. repo_url from the SOURCE OF TRUTH (`workspaces`), service-role, by
   //    active id — mirrors app/api/workspace/active-repo/route.ts:67-71.

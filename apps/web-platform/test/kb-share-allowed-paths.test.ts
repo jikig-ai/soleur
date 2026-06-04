@@ -164,6 +164,30 @@ describe("KB share allowed paths — existence + filetype validation", () => {
     const res = await POST(createShareRequest("huge.pdf"));
     expect(res.status).toBe(413);
   });
+
+  it("forwards the resolver's active id into the createShare insert workspace_id", async () => {
+    // Regression guard for the ADR-044 swap: the route must write the
+    // workspace_id resolved by resolveActiveWorkspaceKbRoot (access.activeWorkspaceId),
+    // NOT a hardcoded user.id or an undefined/wrong field — kb_share_links.workspace_id
+    // is NOT NULL (migration 059) and feeds the workspace-member RLS policy. The
+    // membership self-heal that makes active-id ≠ user.id on a stale claim is
+    // covered at the resolver level by workspace-resolver-repo-meta.test.ts; here
+    // we pin that whatever the resolver returns reaches the insert payload.
+    const insertSpy = vi.fn().mockResolvedValue({ error: null });
+    mocks.mockServiceFrom.mockImplementation(
+      shareSupabaseFromMock({
+        users: { workspacePath: tmpWorkspace, workspaceStatus: "ready" },
+        kb_share_links: { shareRow: null, shareError: null, insertSpy },
+      }),
+    );
+    fs.writeFileSync(path.join(kbRoot, "readme.md"), "# hi");
+    const res = await POST(createShareRequest("readme.md"));
+    expect(res.status).toBe(201);
+    expect(insertSpy).toHaveBeenCalledTimes(1);
+    // Solo caller: resolver's active id === user.id; the assertion proves the
+    // route sources workspace_id from the resolver path (not a literal/undefined).
+    expect(insertSpy.mock.calls[0][0].workspace_id).toBe(TEST_USER_ID);
+  });
 });
 
 describe("KB share — resolver failure surfaces correct HTTP status (Workstream B)", () => {

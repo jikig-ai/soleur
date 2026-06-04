@@ -6,7 +6,7 @@ import { describe, it, expect } from "vitest";
 // Cross-artifact contract test (#4918, PIR #4913 follow-up).
 //
 // The `kb-tenant-mint-silent-fallback` Sentry issue-alert filters on
-// `feature == "kb-route-helpers"` AND `op IS_IN` the three tenant-mint
+// `feature == "kb-route-helpers"` AND `op IS_IN` the two tenant-mint
 // failure slugs. Because the alert uses `filter_match = "all"`, a rename of
 // the `feature` tag OR any op slug on EITHER side (the emit sites in
 // kb-route-helpers.ts / kb/sync/route.ts, or the filter value in
@@ -90,8 +90,8 @@ describe("kb-tenant-mint-silent-fallback alert op/feature contract", () => {
     });
   }
 
-  it("the alert block binds the three slugs into one IS_IN filter value", () => {
-    // The IS_IN value is a single comma-joined string containing all three, in
+  it("the alert block binds the slugs into one IS_IN filter value", () => {
+    // The IS_IN value is a single comma-joined string containing all slugs, in
     // declaration order. Asserting against tfBlock (not the whole file) means
     // removing or reordering any slug in THIS rule fails CI even if the slug
     // survives elsewhere in the file.

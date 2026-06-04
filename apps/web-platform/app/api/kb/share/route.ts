@@ -55,16 +55,22 @@ export async function POST(request: Request) {
       },
     });
     return NextResponse.json(
-      { error: "Workspace not ready" },
+      { error: access.status === 404 ? "Workspace not found" : "Workspace not ready" },
       { status: access.status },
     );
   }
 
   // kb_share_links.workspace_id is NOT NULL (migration 059). Reuse the active
-  // workspace id the resolver already resolved (claim → solo fallback = user.id)
-  // so the row satisfies the constraint AND the workspace-member RLS policy —
-  // dropping the second resolveCurrentWorkspaceId round-trip (they resolve
-  // identically; see kb-share route test).
+  // workspace id the resolver already resolved via
+  // resolveActiveWorkspaceIdWithMembership (claim → membership-checked → solo
+  // fallback = user.id) so the row satisfies the constraint AND the
+  // workspace-member RLS policy. This drops the second resolveCurrentWorkspaceId
+  // round-trip: the two agree for solo/legitimate-member callers, and the
+  // resolver value fails CLOSED to solo on a non-member stale claim (stronger
+  // than the bare claim the old call returned — the self-heal is covered by
+  // test/server/workspace-resolver-repo-meta.test.ts). The route forwards this
+  // resolved id into createShare's workspace_id (asserted in
+  // test/kb-share-allowed-paths.test.ts "forwards the resolver's active id").
   const result = await createShare(
     serviceClient,
     user.id,

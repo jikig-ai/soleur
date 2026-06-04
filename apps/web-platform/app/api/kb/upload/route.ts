@@ -8,7 +8,6 @@ import { syncWorkspace } from "@/server/kb-route-helpers";
 import {
   resolveActiveWorkspaceKbRoot,
   resolveActiveWorkspaceRepoMeta,
-  resolveCurrentWorkspaceId,
 } from "@/server/workspace-resolver";
 import { prepareUploadPayload } from "@/server/kb-upload-payload";
 import path from "path";
@@ -78,11 +77,18 @@ export async function POST(request: Request) {
   const access = await resolveActiveWorkspaceKbRoot(user.id, serviceClient);
   if (!access.ok) {
     return NextResponse.json(
-      { error: "Workspace not ready" },
+      { error: access.status === 404 ? "Workspace not found" : "Workspace not ready" },
       { status: access.status },
     );
   }
-  const repoMeta = await resolveActiveWorkspaceRepoMeta(user.id, serviceClient);
+  // Pass the already-resolved active id so kbRoot, repo metadata, and the
+  // kb_files attribution write below all key to ONE membership-resolved id
+  // (no divergence under a stale-claim self-heal; no redundant resolution).
+  const repoMeta = await resolveActiveWorkspaceRepoMeta(
+    user.id,
+    serviceClient,
+    access.activeWorkspaceId,
+  );
   if (!repoMeta.ok) {
     return NextResponse.json(
       {
@@ -276,12 +282,13 @@ export async function POST(request: Request) {
     // Best-effort — the file is already committed to GitHub; a failed
     // INSERT doesn't warrant failing the upload response.
     try {
-      // resolveCurrentWorkspaceId (claim → solo fallback = user.id) instead of
-      // `workspace_members…maybeSingle()`: the latter THROWS for a user who
-      // owns >1 workspace (maybeSingle requires 0/1 rows), silently skipping
-      // the kb_files row. The canonical resolver returns the active workspace
-      // and is correct for multi-membership users.
-      const wsId = await resolveCurrentWorkspaceId(user.id, serviceClient);
+      // Reuse the SAME membership-resolved active id used for kbRoot + the
+      // git push (access.activeWorkspaceId), so the kb_files attribution row
+      // keys to the workspace the file was actually pushed to. (Previously a
+      // separate resolveCurrentWorkspaceId call could record a stale claimed
+      // sibling id on the revoked-membership self-heal edge while the file
+      // landed in the solo workspace.)
+      const wsId = access.activeWorkspaceId;
       if (wsId) {
         await serviceClient.from("kb_files").upsert(
           {
