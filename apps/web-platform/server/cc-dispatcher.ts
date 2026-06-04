@@ -1256,6 +1256,16 @@ export const realSdkQueryFactory: QueryFactory = async (
     // STREAMS (we never stream when the review-gate is the active surface).
     args.setBashAutonomous?.(bashAutonomous);
 
+    // P1 chip — push the SERVER-resolved autonomous posture to the client so the
+    // persistent chip reflects server truth (`bashAutonomous && acked`), NOT a
+    // message-presence heuristic. A held (un-acked) disclosure is "Approve each";
+    // only an acked autonomous workspace is "Auto-run on". Re-pushed by the
+    // ws-handler on a successful in-session ack-release.
+    defaultSendToClient(args.userId, {
+      type: "autonomous_posture",
+      autonomous: bashAutonomous && autonomousAckAtMs != null,
+    });
+
     // Session-start self-heal (generic, per-user, idempotent, fail-soft): if the
     // workspace has a connected repo but no matching clone on disk, clone/repair
     // it so the agent has a real git repo to branch/commit/work in. Runs once per

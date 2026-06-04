@@ -299,12 +299,18 @@ const reviewGateSchema = z.strictObject({
 // owner's one-time acknowledgement. `existingWorkspace` true => the workspace
 // is stored `false`/un-acked (offer the opt-out "Keep autonomous on" /
 // "Ask me each time"); false => default-ON workspace (single "Got it" ack).
-// `posture` carries the server-resolved autonomous posture for the persistent
-// chip so the client never guesses.
 const autonomousDisclosureSchema = z.strictObject({
   type: z.literal("autonomous_disclosure"),
   gateId: z.string(),
   existingWorkspace: z.boolean(),
+});
+// feat-bash-autonomous-default-on — SERVER-resolved autonomous posture for the
+// persistent chip (server→client). `autonomous` is the server truth
+// `bashAutonomous && ackAt != null`. The chip reads THIS, never message
+// presence — a held (un-acked) disclosure is "Approve each", not "Auto-run on".
+const autonomousPostureSchema = z.strictObject({
+  type: z.literal("autonomous_posture"),
+  autonomous: z.boolean(),
 });
 const sessionStartedSchema = z.strictObject({
   type: z.literal("session_started"),
@@ -537,6 +543,7 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   toolProgressSchema,
   reviewGateSchema,
   autonomousDisclosureSchema,
+  autonomousPostureSchema,
   sessionStartedSchema,
   sessionResumedSchema,
   sessionEndedSchema,

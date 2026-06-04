@@ -2152,6 +2152,14 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         conversationId: session.conversationId,
         selection: msg.selection,
       });
+      // P1 chip — re-push the SERVER posture after the ack. "Got it" /
+      // "Keep autonomous on" make the workspace autonomous-and-acked ("Auto-run
+      // on"); "Ask me each time" writes the ack but leaves the toggle off
+      // ("Approve each").
+      sendToClient(userId, {
+        type: "autonomous_posture",
+        autonomous: msg.selection !== "Ask me each time",
+      });
       break;
     }
 
@@ -2178,6 +2186,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "command_stream":
     case "review_gate":
     case "autonomous_disclosure":
+    case "autonomous_posture":
     case "session_started":
     case "session_resumed":
     case "session_ended":

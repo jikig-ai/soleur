@@ -328,6 +328,14 @@ export type WSMessage =
   // `existingWorkspace` true => offer the opt-out ("Keep autonomous on" /
   // "Ask me each time"); false => default-ON workspace ("Got it" ack).
   | { type: "autonomous_disclosure"; gateId: string; existingWorkspace: boolean }
+  // feat-bash-autonomous-default-on — SERVER-resolved autonomous posture for the
+  // persistent chip (server→client). `autonomous` is the SERVER truth
+  // `bashAutonomous && ackAt != null` — i.e. "Auto-run on" only when the toggle
+  // is on AND the first-run disclosure has been acked. Emitted once per dispatch
+  // after the server resolves the toggle + ack (and re-emitted on a successful
+  // in-session ack-release). The chip reads THIS, never message presence — a
+  // held (un-acked) disclosure is "Approve each", not "Auto-run on".
+  | { type: "autonomous_posture"; autonomous: boolean }
   | { type: "session_started"; conversationId: string; capabilities?: { promptKinds: readonly string[]; incomingTypes?: readonly string[] } }
   | { type: "session_resumed"; conversationId: string; resumedFromTimestamp: string; messageCount: number }
   | {

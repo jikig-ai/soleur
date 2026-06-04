@@ -205,6 +205,7 @@ export function ChatSurface({
     routeSource,
     activeLeaderIds,
     usageData,
+    autonomousPosture: serverAutonomousPosture,
     realConversationId,
     resumedFrom,
     workflow,
@@ -267,21 +268,13 @@ export function ChatSurface({
   );
 
   // feat-bash-autonomous-default-on — persistent posture chip. The autonomous
-  // posture is the server-resolved truth surfaced over WS: a held
-  // `autonomous_disclosure` (pending or acked) and `command_stream` frames both
-  // only appear under autonomy. Derive a stable posture from their presence so
-  // the chip never claims "Auto-run on" while the server held the run.
-  const autonomousPosture = useMemo(
-    () =>
-      messages.some(
-        (m) =>
-          m.type === "autonomous_disclosure" ||
-          (m.type === "text" &&
-            Array.isArray((m as { commandBlocks?: unknown[] }).commandBlocks) &&
-            ((m as { commandBlocks?: unknown[] }).commandBlocks?.length ?? 0) > 0),
-      ),
-    [messages],
-  );
+  // posture is the SERVER-resolved truth pushed over the `autonomous_posture`
+  // frame (`bashAutonomous && acked`), NOT a message-presence heuristic. A held
+  // (un-acked) `autonomous_disclosure` is "Approve each", not "Auto-run on", and
+  // `command_stream` / commandBlocks can appear in non-autonomous safe-bash
+  // flows — so message presence cannot decide posture. `null` (pre-push) is
+  // treated as "Approve each" (the safe, non-autonomous default).
+  const autonomousPosture = serverAutonomousPosture ?? false;
 
   const handleInteractivePromptResponse = useCallback(
     (

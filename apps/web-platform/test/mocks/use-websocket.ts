@@ -41,6 +41,7 @@ export function createWebSocketMock(
     routeSource: null,
     activeLeaderIds: [],
     usageData: null,
+    autonomousPosture: null,
     realConversationId: null,
     resumedFrom: null,
     workflow: { state: "idle" } as const,

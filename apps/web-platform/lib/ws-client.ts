@@ -111,6 +111,11 @@ interface UseWebSocketReturn {
   routeSource: "auto" | "mention" | null;
   activeLeaderIds: DomainLeaderId[];
   usageData: UsageData | null;
+  /** feat-bash-autonomous-default-on — SERVER-resolved autonomous posture for the
+   *  persistent chip. `null` before the server pushes; `true` = "Auto-run on"
+   *  (autonomous AND first-run-acked); `false` = "Approve each". Driven ONLY by
+   *  the server `autonomous_posture` frame — never message presence. */
+  autonomousPosture: boolean | null;
   /** The real conversation UUID from session_started (pending ID that becomes the row ID). */
   realConversationId: string | null;
   /** Populated when the server resolved an existing thread via resumeByContextPath. */
@@ -426,6 +431,12 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   // already distinguishes the two via distinct message types.
   const [sessionKind, setSessionKind] = useState<"fresh" | "resumed" | null>(null);
   const [usageData, setUsageData] = useState<UsageData | null>(null);
+  // feat-bash-autonomous-default-on — SERVER-resolved autonomous posture for the
+  // persistent chip. `null` before the server pushes (chip hidden/neutral);
+  // `true` = "Auto-run on" (autonomous AND acked); `false` = "Approve each".
+  // Set ONLY from the server `autonomous_posture` frame — never inferred from
+  // message presence (a held un-acked disclosure must read "Approve each").
+  const [autonomousPosture, setAutonomousPosture] = useState<boolean | null>(null);
   // Stage 4 review F3: persisted `workflow_ended_at` from history fetch.
   const [workflowEndedAt, setWorkflowEndedAt] = useState<string | null>(null);
   // PR-B (#3603) — conversation start time hydrated from history fetch.
@@ -701,6 +712,12 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // Stage 3 (#2885) — `subagent_*`, `workflow_*`, `interactive_prompt`
           // are inert pass-throughs in the reducer; Stage 4 wires rendering.
           dispatch({ type: "stream_event", msg });
+          break;
+        }
+
+        case "autonomous_posture": {
+          // Server truth for the persistent chip — never a message-presence guess.
+          setAutonomousPosture(msg.autonomous);
           break;
         }
 
@@ -1459,6 +1476,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     routeSource,
     activeLeaderIds,
     usageData,
+    autonomousPosture,
     realConversationId,
     resumedFrom,
     workflow: chatState.workflow,
