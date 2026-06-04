@@ -331,14 +331,6 @@ export default function DashboardLayout({
           </button>
         </div>
 
-        {/* Theme toggle — sidebar header (spec TR7). #4810 Bug 1: top-level
-            chrome, render-conditional on top level only (drill-hide). */}
-        {drill === null && (
-          <div className={`border-b border-soleur-border-default ${collapsed ? "px-2 py-3" : "px-3 py-3"}`}>
-            <ThemeToggle collapsed={collapsed} />
-          </div>
-        )}
-
         {/* Persistent workspace context band (ADR-047). Mounted OUTSIDE the
             rail swap region and NEVER gated on `collapsed` — this fixes the
             live bug where OrgSwitcherContainer + LiveRepoBadge unmounted on
@@ -395,6 +387,14 @@ export default function DashboardLayout({
 
             {/* Footer links */}
             <div className={`border-t border-soleur-border-default safe-bottom ${collapsed ? "p-1" : "p-3"}`}>
+              {/* Theme toggle — relocated to the footer to match the committed
+                  D4 wireframe (frames 16/23: a quiet theme affordance at the
+                  bottom of the rail, NOT a prominent control at the top). Stays
+                  top-level chrome, render-conditional via the `drill === null`
+                  branch this footer lives in. */}
+              <div className={collapsed ? "pb-2" : "px-1 pb-2"}>
+                <ThemeToggle collapsed={collapsed} />
+              </div>
               {userEmail && !collapsed && (
                 <p
                   className="truncate px-3 py-1 text-xs text-soleur-text-muted"
