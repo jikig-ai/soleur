@@ -50,11 +50,11 @@ const FEATURE_TAG = "kb-route-helpers";
 // Each op slug paired with the emit file that must contain it.
 const OP_SLUGS: ReadonlyArray<{ slug: string; emit: string; emitName: string }> =
   [
-    {
-      slug: "resolveUserKbRoot.tenant-mint",
-      emit: kbRouteHelpers,
-      emitName: "kb-route-helpers.ts",
-    },
+    // The legacy per-user KB-root helper's tenant-mint op slug was removed in
+    // the ADR-044 resolver consolidation (share + upload migrated to the
+    // service-role resolveActiveWorkspaceKbRoot, which has no tenant-mint
+    // surface). The alert keeps a live tenant-mint op via
+    // authenticateAndResolveKbPath below.
     {
       slug: "authenticateAndResolveKbPath.tenant-mint",
       emit: kbRouteHelpers,

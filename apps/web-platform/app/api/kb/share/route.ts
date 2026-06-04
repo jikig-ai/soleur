@@ -6,8 +6,8 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
-import { resolveUserKbRoot } from "@/server/kb-route-helpers";
-import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
+import { resolveActiveWorkspaceKbRoot } from "@/server/workspace-resolver";
+import { reportSilentFallback } from "@/server/observability";
 import { createShare, listShares } from "@/server/kb-share";
 
 /** POST — generate a share link for a KB document. */
@@ -31,23 +31,45 @@ export async function POST(request: Request) {
     );
   }
 
-  // PR-C §2.8 (#3244): resolveUserKbRoot now mints its own tenant
-  // client internally. createShare still takes a service-role client
-  // (kb_shares writer is allowlisted PERMANENT for now — see PR-D scope).
+  // ADR-044 resolver consolidation: read the KB root via the membership-scoped
+  // service-role resolver (parity with content/tree/search/c4-project) instead
+  // of the legacy tenant/RLS per-user KB-root helper. That legacy helper gated
+  // on the CALLER's `users.workspace_status`, which is stale/empty for users
+  // provisioned after the ADR-044 `users → workspaces` relocation — the
+  // divergent failure surface that dead-ended "Generate link". createShare
+  // still takes the service-role client (kb_share_links writer is allowlisted).
   const serviceClient = createServiceClient();
-  const workspace = await resolveUserKbRoot(user.id);
-  if (!workspace.ok) return workspace.response;
+  const access = await resolveActiveWorkspaceKbRoot(user.id, serviceClient);
+  if (!access.ok) {
+    // Workstream A: mirror the resolver-error response so the failing branch is
+    // observable (status now in scope — the legacy resolver returned an opaque
+    // pre-built Response). reason = the HTTP status the route surfaces.
+    reportSilentFallback(null, {
+      feature: "kb-share",
+      op: "resolve",
+      message: "share resolver failed (active workspace KB root)",
+      extra: {
+        userId: user.id,
+        documentPath: body.documentPath,
+        reason: access.status,
+      },
+    });
+    return NextResponse.json(
+      { error: "Workspace not ready" },
+      { status: access.status },
+    );
+  }
 
-  // kb_share_links.workspace_id is NOT NULL (migration 059). Resolve the
-  // user's active workspace (claim → solo fallback = user.id) so the row
-  // satisfies the constraint AND the workspace-member RLS policy.
-  const workspaceId = await resolveCurrentWorkspaceId(user.id, serviceClient);
-
+  // kb_share_links.workspace_id is NOT NULL (migration 059). Reuse the active
+  // workspace id the resolver already resolved (claim → solo fallback = user.id)
+  // so the row satisfies the constraint AND the workspace-member RLS policy —
+  // dropping the second resolveCurrentWorkspaceId round-trip (they resolve
+  // identically; see kb-share route test).
   const result = await createShare(
     serviceClient,
     user.id,
-    workspaceId,
-    workspace.kbRoot,
+    access.activeWorkspaceId,
+    access.kbRoot,
     body.documentPath,
   );
   if (!result.ok) {

@@ -438,6 +438,91 @@ export async function resolveActiveWorkspaceKbRoot(
   };
 }
 
+/**
+ * Resolve the git-push metadata (repo_url + GitHub installation id) for the
+ * caller's ACTIVE workspace (ADR-044, #4543). The SIBLING to
+ * `resolveActiveWorkspaceKbRoot` — kept separate so the read-path resolvers
+ * (content/tree/search/c4-project) stay lean (they never need repo metadata).
+ * The upload route composes both: `resolveActiveWorkspaceKbRoot` (kbRoot +
+ * readiness/connectivity gate) + this (git-push credentials).
+ *
+ * Sources, ALL service-role + membership-scoped (NEVER the caller's `users`
+ * row — the #4543 dual-ownership trap, where an invited member's own users row
+ * is the empty solo row → "No repository connected"):
+ *   1. active workspace id via `resolveActiveWorkspaceIdWithMembership`
+ *      (claim → solo fallback, NEVER a sibling — the IDOR self-scope);
+ *   2. `workspaces.repo_url` by active id (mirrors the active-repo route);
+ *   3. installation via the EXISTING `resolveInstallationId(userId, activeId)`
+ *      — the membership-checked `resolve_workspace_installation_id` SECURITY
+ *      DEFINER RPC, because `workspaces.github_installation_id` is REVOKED from
+ *      the `authenticated` grant (migration 079). A direct tenant SELECT
+ *      returns null.
+ *
+ * Returns the legacy KB-route status contract: 404 = no repo connected,
+ * 400 = repo connected but no installation resolvable, 503 = workspace read
+ * error. Mirrors any query error via reportSilentFallback.
+ *
+ * `resolveInstallationId` is imported dynamically to avoid a static import
+ * cycle (`resolve-installation-id.ts` imports `resolveCurrentWorkspaceId` from
+ * this module).
+ */
+export type ActiveWorkspaceRepoMeta =
+  | { ok: false; status: 400 | 404 | 503 }
+  | { ok: true; repoUrl: string; githubInstallationId: number };
+
+export async function resolveActiveWorkspaceRepoMeta(
+  userId: string,
+  supabase: SupabaseLike,
+): Promise<ActiveWorkspaceRepoMeta> {
+  // 1. Active workspace id — claim → solo fallback (never a sibling).
+  const activeWorkspaceId = await resolveActiveWorkspaceIdWithMembership(
+    userId,
+    supabase,
+  );
+
+  // 2. repo_url from the SOURCE OF TRUTH (`workspaces`), service-role, by
+  //    active id — mirrors app/api/workspace/active-repo/route.ts:67-71.
+  const wsChain = supabase.from("workspaces") as MaybeSingleChain<{
+    repo_url: string | null;
+  }>;
+  const wsResult = await awaitChain<{
+    data: { repo_url: string | null } | null;
+    error: unknown;
+  }>(wsChain.select("repo_url").eq("id", activeWorkspaceId).maybeSingle());
+  if (wsResult.error) {
+    reportSilentFallback(wsResult.error, {
+      feature: "workspace-resolver",
+      op: "resolveActiveWorkspaceRepoMeta.workspaces-read",
+      extra: { userId, activeWorkspaceId },
+    });
+    return { ok: false, status: 503 };
+  }
+  const repoUrl = wsResult.data?.repo_url ?? null;
+  if (!repoUrl) {
+    // No repository connected for the active workspace.
+    return { ok: false, status: 404 };
+  }
+
+  // 3. Installation via the membership-checked SECURITY DEFINER RPC. Pass the
+  //    resolved active id so the credential is read for the SAME workspace the
+  //    kbRoot/repo resolve to (not re-derived inside resolveInstallationId).
+  const { resolveInstallationId } = await import(
+    "@/server/resolve-installation-id"
+  );
+  const githubInstallationId = await resolveInstallationId(
+    userId,
+    activeWorkspaceId,
+  );
+  if (!githubInstallationId) {
+    // Repo connected but no installation resolvable (revoked grant / non-member
+    // RPC deny / disconnected app) — mirror the legacy "No repository
+    // connected" 400 the upload route returned.
+    return { ok: false, status: 400 };
+  }
+
+  return { ok: true, repoUrl, githubInstallationId };
+}
+
 async function awaitChain<T>(chain: unknown): Promise<T> {
   // The chain is a thenable; await coerces it without explicit .then chaining.
   return (await (chain as PromiseLike<T>)) as T;

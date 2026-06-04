@@ -554,14 +554,19 @@ resource "sentry_issue_alert" "workspace_sync_health" {
 #
 # op-SCOPED filter (op IS_IN, NOT feature-only): unlike workspace_sync_health
 # (whose feature tag is dedicated to one cron), `feature=kb-route-helpers` spans
-# several ops beyond tenant-mint — the 3 tenant-mint slugs PLUS workspace-sync-*,
+# several ops beyond tenant-mint — the tenant-mint slugs PLUS workspace-sync-*,
 # 3x self-heal-*, and kb-sync.unexpected. A feature-only filter would over-page
 # on those unrelated self-heal/workspace-sync events. So this mirrors
 # chat_message_save_failure's
-# op-scoped shape. The THIRD slug `kb-sync.tenant-mint` (sync/route.ts:62) is
+# op-scoped shape. The slug `kb-sync.tenant-mint` (sync/route.ts:62) is
 # the identical RuntimeAuthError→503 mint-failure class the issue body omitted;
 # at brand-survival threshold `single-user incident`, scoping out the next-most-
 # likely sibling is anti-pattern, so it is folded into the IS_IN value.
+# (The `resolveUserKbRoot.tenant-mint` slug was dropped when that function was
+# removed in the ADR-044 resolver consolidation; share + upload now resolve via
+# the service-role `resolveActiveWorkspaceKbRoot` — no tenant-mint surface — so
+# its absence does NOT dark the alert: authenticateAndResolveKbPath retains the
+# tenant path + its op slug.)
 #
 # `action_match="any"`: first_seen/reappeared/regression are mutually-exclusive
 # event-lifecycle states (a captured event is exactly one) — "all" is never
@@ -599,7 +604,7 @@ resource "sentry_issue_alert" "kb_tenant_mint_silent_fallback" {
       tagged_event = {
         key   = "op"
         match = "IS_IN"
-        value = "resolveUserKbRoot.tenant-mint,authenticateAndResolveKbPath.tenant-mint,kb-sync.tenant-mint"
+        value = "authenticateAndResolveKbPath.tenant-mint,kb-sync.tenant-mint"
       }
     },
   ]

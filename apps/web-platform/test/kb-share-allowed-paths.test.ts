@@ -54,8 +54,10 @@ vi.mock("@/server/observability", () => ({
 import { POST } from "@/app/api/kb/share/route";
 import { shareSupabaseFromMock } from "./helpers/share-mocks";
 
+let workspacesRoot: string;
 let tmpWorkspace: string;
 let kbRoot: string;
+const TEST_USER_ID = "user-1";
 
 function createShareRequest(
   documentPath: string,
@@ -73,7 +75,13 @@ function createShareRequest(
 
 beforeEach(() => {
   vi.clearAllMocks();
-  tmpWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "kb-share-paths-"));
+  // ADR-044: the route now resolves the kbRoot via resolveActiveWorkspaceKbRoot,
+  // which derives the workspace path as `<WORKSPACES_ROOT>/<active_workspace_id>`
+  // (NOT users.workspace_path). For a solo caller the active id === userId, so
+  // create the workspace dir AT that path and point WORKSPACES_ROOT at its parent.
+  workspacesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "kb-share-paths-"));
+  process.env.WORKSPACES_ROOT = workspacesRoot;
+  tmpWorkspace = path.join(workspacesRoot, TEST_USER_ID);
   kbRoot = path.join(tmpWorkspace, "knowledge-base");
   fs.mkdirSync(kbRoot, { recursive: true });
 
@@ -82,9 +90,11 @@ beforeEach(() => {
     origin: "http://localhost:3000",
   });
   mocks.mockGetUser.mockResolvedValue({
-    data: { user: { id: "user-1" } },
+    data: { user: { id: TEST_USER_ID } },
   });
 
+  // Solo, connected, ready active workspace (current_workspace_id null → solo
+  // == userId; repo_status ready; users.workspace_status ready).
   mocks.mockServiceFrom.mockImplementation(
     shareSupabaseFromMock({
       users: { workspacePath: tmpWorkspace, workspaceStatus: "ready" },
@@ -94,7 +104,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  fs.rmSync(tmpWorkspace, { recursive: true, force: true });
+  fs.rmSync(workspacesRoot, { recursive: true, force: true });
+  delete process.env.WORKSPACES_ROOT;
 });
 
 describe("KB share allowed paths — existence + filetype validation", () => {
@@ -152,5 +163,36 @@ describe("KB share allowed paths — existence + filetype validation", () => {
     fs.writeFileSync(path.join(kbRoot, "huge.pdf"), big);
     const res = await POST(createShareRequest("huge.pdf"));
     expect(res.status).toBe(413);
+  });
+});
+
+describe("KB share — resolver failure surfaces correct HTTP status (Workstream B)", () => {
+  it("returns 404 when the active workspace has no connected repo", async () => {
+    // resolveActiveWorkspaceKbRoot returns {ok:false,404} when repo_status is
+    // not_connected — the share route must map it straight through.
+    fs.writeFileSync(path.join(kbRoot, "readme.md"), "# hi");
+    mocks.mockServiceFrom.mockImplementation(
+      shareSupabaseFromMock({
+        users: { workspacePath: tmpWorkspace, workspaceStatus: "ready" },
+        kb_share_links: { shareRow: null, shareError: null },
+        activeWorkspace: { repoStatus: "not_connected" },
+      }),
+    );
+    const res = await POST(createShareRequest("readme.md"));
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 503 when the active workspace owner is not ready", async () => {
+    // resolveActiveWorkspaceKbRoot returns {ok:false,503} when the owner's
+    // users.workspace_status !== "ready".
+    fs.writeFileSync(path.join(kbRoot, "readme.md"), "# hi");
+    mocks.mockServiceFrom.mockImplementation(
+      shareSupabaseFromMock({
+        users: { workspacePath: tmpWorkspace, workspaceStatus: "provisioning" },
+        kb_share_links: { shareRow: null, shareError: null },
+      }),
+    );
+    const res = await POST(createShareRequest("readme.md"));
+    expect(res.status).toBe(503);
   });
 });

@@ -4,8 +4,12 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isPathInWorkspace } from "@/server/sandbox";
 import { githubApiGet, githubApiPost, GitHubApiError } from "@/server/github-api";
 import { sanitizeFilename } from "@/server/kb-validation";
-import { resolveUserKbRoot, syncWorkspace } from "@/server/kb-route-helpers";
-import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
+import { syncWorkspace } from "@/server/kb-route-helpers";
+import {
+  resolveActiveWorkspaceKbRoot,
+  resolveActiveWorkspaceRepoMeta,
+  resolveCurrentWorkspaceId,
+} from "@/server/workspace-resolver";
 import { prepareUploadPayload } from "@/server/kb-upload-payload";
 import path from "path";
 import logger from "@/server/logger";
@@ -61,21 +65,39 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Fetch workspace data. resolveUserKbRoot centralizes the "user row
-  // → kbRoot + extras" pattern shared with /api/kb/share and
-  // /api/kb/file/*.
-  // PR-C §2.8 (#3244): tenant client minted internally by
-  // resolveUserKbRoot. createServiceClient still constructed below for
-  // downstream consumers (storage / GH installation).
+  // ADR-044 resolver consolidation (#4543). Compose the two membership-scoped
+  // service-role resolvers instead of the legacy tenant per-user KB-root helper:
+  //   - resolveActiveWorkspaceKbRoot → kbRoot/workspacePath + readiness gate
+  //     (the SAME active workspace the UI file tree renders from);
+  //   - resolveActiveWorkspaceRepoMeta → repo_url + GitHub installation read
+  //     from `workspaces` (the source of truth) via the membership-checked RPC.
+  // This FIXES a latent #4543 dual-ownership bug: the legacy resolver read the
+  // CALLER's `users.repo_url`/installation, which is the empty solo row for an
+  // invited member uploading to a shared workspace → "No repository connected".
   const serviceClient = createServiceClient();
-  const workspace = await resolveUserKbRoot(user.id, {
-    extras: ["repo_url", "github_installation_id"] as const,
-  });
-  if (!workspace.ok) return workspace.response;
+  const access = await resolveActiveWorkspaceKbRoot(user.id, serviceClient);
+  if (!access.ok) {
+    return NextResponse.json(
+      { error: "Workspace not ready" },
+      { status: access.status },
+    );
+  }
+  const repoMeta = await resolveActiveWorkspaceRepoMeta(user.id, serviceClient);
+  if (!repoMeta.ok) {
+    return NextResponse.json(
+      {
+        error:
+          repoMeta.status === 503
+            ? "Workspace not ready"
+            : "No repository connected",
+      },
+      { status: repoMeta.status },
+    );
+  }
   const userData = {
-    workspace_path: workspace.workspacePath,
-    repo_url: workspace.extras.repo_url,
-    github_installation_id: workspace.extras.github_installation_id,
+    workspace_path: access.workspacePath,
+    repo_url: repoMeta.repoUrl,
+    github_installation_id: repoMeta.githubInstallationId,
   };
 
   // Parse FormData
