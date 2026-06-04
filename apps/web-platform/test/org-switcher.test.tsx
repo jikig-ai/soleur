@@ -10,6 +10,7 @@ const JIKIGAI: OrgMembershipSummary = {
   role: "owner",
   memberCount: 2,
   isCurrent: true,
+    hasLogo: false,
 };
 const ACME: OrgMembershipSummary = {
   organizationId: "00000000-0000-0000-0000-00000000cccc",
@@ -18,6 +19,7 @@ const ACME: OrgMembershipSummary = {
   role: "member",
   memberCount: 5,
   isCurrent: false,
+    hasLogo: false,
 };
 
 describe("OrgSwitcher", () => {

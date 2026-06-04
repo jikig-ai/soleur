@@ -87,6 +87,8 @@ export function OrgSwitcher({
           name={current.organizationName}
           size="lg"
           variant="identity"
+          workspaceId={current.workspaceId}
+          hasLogo={current.hasLogo}
         />
         <span className="min-w-0">
           <span className="block truncate text-sm font-bold text-soleur-text-primary">
@@ -119,6 +121,8 @@ export function OrgSwitcher({
           name={current.organizationName}
           size="lg"
           variant="identity"
+          workspaceId={current.workspaceId}
+          hasLogo={current.hasLogo}
         />
         <span className="min-w-0">
           <span className="block truncate text-sm font-bold text-soleur-text-primary">
@@ -161,6 +165,8 @@ export function OrgSwitcher({
                   <WorkspaceIdentityTile
                     name={m.organizationName}
                     size="md"
+                    workspaceId={m.workspaceId}
+                    hasLogo={m.hasLogo}
                     // Current row keeps a gold ACCENT (ring, not a fill) — the
                     // sanctioned active-workspace-identity gold use (FR6), so the
                     // current vs non-current distinction survives the swatch→tile

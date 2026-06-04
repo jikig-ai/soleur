@@ -663,6 +663,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         case "tool_progress":
         case "stream":
         case "stream_end":
+        case "command_stream":
         case "review_gate":
         case "subagent_spawn":
         case "subagent_complete":

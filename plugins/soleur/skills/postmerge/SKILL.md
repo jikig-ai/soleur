@@ -204,6 +204,42 @@ The PUT reuses the SAME `API_HOST`/`SENTRY_ORG` resolution as the GET above, so 
 
 **Why WARN-only, not a blocker:** a true pre/post delta needs the original error to actually re-fire in the brief post-merge window. Low-frequency bugs (daily-cron failures, rare-path exceptions) legitimately show zero events for hours after a correct fix, so a hard gate here would produce noisy false negatives that erode trust in the pipeline. The signal is a prompt to *look*, not a verdict. For high-frequency errors a continued-firing signal is strong evidence the fix missed; consider a `/loop` re-check 15–30 min out before marking the linked issue resolved.
 
+## Phase 3.7: First-Deploy-After-Pipeline-Change Watch
+
+Enforces `wg-dark-launch-deploy-gates`. A change to deploy-*gating* logic cannot be validated by the same deploy it gates: if the changed gate is itself broken, the *first* post-merge deploy rolls back, and the rollback looks like a bad app deploy rather than a bad gate. This phase makes that case explicit so the gating change — not the app — is suspected first.
+
+**Trigger (skip the phase if none match).** Check whether the merged PR touched deploy-gating logic:
+
+```bash
+# Did this PR change a gate that can roll back / block a deploy?
+gh pr diff <number> --name-only | grep -qE 'apps/web-platform/infra/ci-deploy\.sh|apps/web-platform/infra/ci-deploy-wrapper\.sh' && PIPELINE_GATE_CHANGE=1
+# Also treat changes to the gating phases of the ship/postmerge skills as pipeline-gate changes.
+gh pr diff <number> --name-only | grep -qE 'plugins/soleur/skills/(ship|postmerge)/SKILL\.md' && PIPELINE_GATE_CHANGE=1
+```
+
+If `PIPELINE_GATE_CHANGE` is unset, skip to Phase 4.
+
+**Watch the first post-merge release run** (the one Phase 2/3 already identified) for a canary rollback:
+
+```bash
+# The release run triggered by this merge (apps/web-platform/** path filter).
+RELEASE_RUN_ID=$(gh run list --branch main --workflow web-platform-release.yml \
+  --limit 1 --json databaseId --jq '.[0].databaseId')
+# REASON is written by ci-deploy.sh's final_write_state. A canary gate that
+# rejected a HEALTHY host surfaces as one of these.
+RUN_CONCLUSION=$(gh run view "$RELEASE_RUN_ID" --json conclusion --jq '.conclusion')
+ROLLBACK_REASON=$(gh run view "$RELEASE_RUN_ID" --log 2>/dev/null \
+  | grep -oE 'reason=(canary_sandbox_failed|production_start_failed|canary_[a-z_]+)' | head -1)
+```
+
+**Interpretation:**
+
+- Release **succeeded**: the changed gate passed on a real deploy — the dark-launch observation is satisfied. Report `GATE-VALIDATED`.
+- Release **failed with a canary/sandbox rollback reason** AND this PR changed gating logic: **suspect the gate, not the app.** A gating check that diverged from production reality (e.g. a synthetic probe that does not match what runs in prod) blocks every deploy. Recommended action: **revert the gating change immediately** (it is unvalidated by definition — its first real deploy rolled back), restore the prior known-good gate, and re-deploy; investigate the probe separately and re-introduce it NON-BLOCKING per `wg-dark-launch-deploy-gates`. Report `GATE-SUSPECT — revert recommended` and surface it at the top of the Phase 7 report.
+- Release failed with a non-gate reason (build, migration, unrelated infra): ordinary deploy failure — investigate normally; do not assume the gate.
+
+**Why a watch and not a pre-merge block:** the only faithful validation of a deploy gate is a real deploy, which by definition happens post-merge. The pre-merge half of the rule — ship the gate non-blocking first — lives in `wg-dark-launch-deploy-gates`; this phase is the safety net that catches a gate shipped blocking-first anyway, turning "every deploy silently rolls back" into a named, one-revert recovery. **Why:** #4932 — a canary bwrap probe validated only against an always-succeeding test mock failed on a healthy host and rolled back every web-platform deploy until reverted (#4941).
+
 ## Phase 4: Verify File Freshness
 
 Read key files from the merged commit to verify they match expectations -- NOT from the bare repo filesystem which may contain stale content.

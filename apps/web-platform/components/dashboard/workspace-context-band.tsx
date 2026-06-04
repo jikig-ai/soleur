@@ -33,6 +33,8 @@ export function WorkspaceContextBand({
   variant = "rail",
   collapsed = false,
   activeWorkspaceName,
+  activeWorkspaceId,
+  activeWorkspaceHasLogo,
   suppressBack = false,
   suppressSectionTitle = false,
 }: {
@@ -54,6 +56,12 @@ export function WorkspaceContextBand({
    *  threads it in (P0-3) so the monogram tile + full-name tooltip can render
    *  as the authoritative disambiguator for shared-initial workspaces. */
   activeWorkspaceName?: string;
+  /** Collapsed-rail only: the active workspace id + hasLogo, threaded from the
+   *  layout's useActiveWorkspace hook so the collapsed band's tile can render
+   *  the custom logo (via the stable proxy `src`) instead of the monogram
+   *  (#4916). Same single fetch as the name. */
+  activeWorkspaceId?: string;
+  activeWorkspaceHasLogo?: boolean;
   /** Suppress the band's section-title row (Phase 4, #4915). The layout sets
    *  this on the MOBILE band for KB, where the page body owns the "Knowledge
    *  Base" title — so the two don't double-render on mobile. The desktop rail
@@ -97,6 +105,8 @@ export function WorkspaceContextBand({
             name={activeWorkspaceName ?? ""}
             size="sm"
             variant="identity"
+            workspaceId={activeWorkspaceId}
+            hasLogo={activeWorkspaceHasLogo}
           />
         </span>
         <span

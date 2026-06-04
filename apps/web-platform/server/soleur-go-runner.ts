@@ -100,7 +100,6 @@ import { selectChapter } from "./pdf-chapter-router";
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages/messages";
 
 const log = createChildLogger("soleur-go-runner");
-import { isBashCommandSafe } from "./permission-callback";
 import {
   PendingPromptRegistry,
   PendingPromptCapExceededError,
@@ -612,19 +611,19 @@ function classifyInteractiveTool(
       return { kind: "diff", payload: { path, additions, deletions } };
     }
     case "Bash": {
-      const command = typeof toolInput.command === "string" ? toolInput.command : "";
-      // Bash commands matching the safe-bash allowlist are auto-approved
-      // by the permission-callback before any review-gate fires; emitting
-      // a `bash_approval` interactive prompt here would land an orphan
-      // card in `pendingPrompts` that the user never sees and never
-      // resolves. Skip classification for those — the SDK still streams
-      // the tool_use chip via the standard non-interactive path.
-      if (isBashCommandSafe(command)) return null;
-      const cwd =
-        typeof toolInput.cwd === "string" && toolInput.cwd.length > 0
-          ? toolInput.cwd
-          : fallbackCwd;
-      return { kind: "bash_approval", payload: { command, cwd, gated: true } };
+      // feat-concierge-stream-commands (AC1) — Bash NO LONGER produces a
+      // `bash_approval` interactive-prompt card. The two Concierge postures
+      // are now: (1) autonomous → the command + its output STREAM inline
+      // into the cc_router bubble as a `command_stream` terminal block (no
+      // card); (2) non-autonomous → the authoritative `review_gate`
+      // (permission-callback.ts) is the single gating surface. Either way an
+      // informational `bash_approval` card is redundant spam, so we suppress
+      // it for ALL Bash tool-uses by returning null here. The
+      // `bash_approval` variant is KEPT in the `InteractivePromptPayload`
+      // union (D3) for replay back-compat of already-persisted prompts; the
+      // declared return type still admits it, so the kind-exhaustiveness
+      // assertion above stays satisfied without emitting it.
+      return null;
     }
     case "AskUserQuestion": {
       const questions = Array.isArray(toolInput.questions) ? toolInput.questions : [];
@@ -656,6 +655,64 @@ function classifyInteractiveTool(
     default:
       return null;
   }
+}
+
+/**
+ * feat-concierge-stream-commands — extract `(toolUseId, command, output)`
+ * triples from a synthetic `user`-role `tool_use_result` message, for every
+ * `tool_result` block whose `tool_use_id` is a tracked Bash tool-use.
+ *
+ * The SDK delivers tool results as `tool_result` content blocks on
+ * `msg.message.content` (the `tool_use_result` field is an opaque mirror;
+ * the structured blocks are the stable contract). Each block's `content` is
+ * either a plain string or an array of `{type:"text", text}` parts — flatten
+ * both. Output is returned RAW; the caller redacts + caps at the emit
+ * boundary. Defensive against missing/typed-wrong fields (SDK payload is
+ * `unknown`-typed) — anything unparseable yields no triple rather than a
+ * throw.
+ */
+function extractBashToolResults(
+  msg: SDKUserMessage,
+  bashToolUses: Map<string, string>,
+): Array<{ toolUseId: string; command: string; output: string }> {
+  const out: Array<{ toolUseId: string; command: string; output: string }> = [];
+  const content = (msg.message as { content?: unknown } | undefined)?.content;
+  if (!Array.isArray(content)) return out;
+  for (const blockRaw of content) {
+    if (!blockRaw || typeof blockRaw !== "object") continue;
+    const block = blockRaw as {
+      type?: unknown;
+      tool_use_id?: unknown;
+      content?: unknown;
+    };
+    if (block.type !== "tool_result") continue;
+    const toolUseId =
+      typeof block.tool_use_id === "string" ? block.tool_use_id : "";
+    if (toolUseId.length === 0 || !bashToolUses.has(toolUseId)) continue;
+    out.push({
+      toolUseId,
+      command: bashToolUses.get(toolUseId) ?? "",
+      output: flattenToolResultText(block.content),
+    });
+  }
+  return out;
+}
+
+/** Flatten an SDK `tool_result.content` (string | array of text parts) into
+ *  a single string. Non-text parts (images, etc.) are skipped per D2
+ *  (text-only output). */
+function flattenToolResultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  let acc = "";
+  for (const partRaw of content) {
+    if (!partRaw || typeof partRaw !== "object") continue;
+    const part = partRaw as { type?: unknown; text?: unknown };
+    if (part.type === "text" && typeof part.text === "string") {
+      acc += part.text;
+    }
+  }
+  return acc;
 }
 
 export type CostCaps = {
@@ -722,6 +779,22 @@ export interface DispatchEvents {
     name: string;
     input: Record<string, unknown>;
     toolUseId: string;
+  }) => void;
+  /**
+   * feat-concierge-stream-commands — Bash `tool_use_result` forwarder. The
+   * runner correlates the synthetic `user`-role `tool_use_result` back to
+   * the originating Bash `tool_use` (via `bashToolUses`) and invokes this
+   * with the raw command + extracted stdout/stderr text. The cc-dispatcher
+   * redacts + byte-caps at the EMIT boundary and emits `command_stream`
+   * (start/output/end). Fires ONLY for Bash tool-uses; the content is
+   * otherwise discarded server-side. Optional so non-cc callers + existing
+   * tests ignore it. `output` is the raw (un-redacted) SDK text — redaction
+   * is the dispatcher's responsibility (single emit-boundary gate, TR4).
+   */
+  onToolResult?: (block: {
+    toolUseId: string;
+    command: string;
+    output: string;
   }) => void;
   onWorkflowDetected: (workflow: WorkflowName) => void;
   onWorkflowEnded: (end: WorkflowEnd) => void;
@@ -826,6 +899,15 @@ export interface DispatchArgs {
    * dispatcher's `onResult` callback.
    */
   setDelegationContext?: DelegationContextSink;
+  /**
+   * feat-concierge-stream-commands — closure-capture sink for the streaming
+   * posture (D1). The real factory resolves `bashAutonomous` (owner-gated,
+   * fail-closed false) inside its lease body and publishes it here so the
+   * dispatcher's `onToolResult`/`command_stream` emit can gate on it WITHOUT
+   * a second Supabase RTT. Same bridge shape as `setDelegationContext`.
+   * Forwarded straight through to `QueryFactoryArgs.setBashAutonomous`.
+   */
+  setBashAutonomous?: (autonomous: boolean) => void;
 }
 
 export interface DispatchResult {
@@ -870,6 +952,15 @@ export interface QueryFactoryArgs {
    * may safely ignore the field.
    */
   setDelegationContext?: DelegationContextSink;
+  /**
+   * feat-concierge-stream-commands — sink the factory calls (inside its
+   * lease body, after `resolveBashAutonomous`) to publish the streaming
+   * posture to the dispatcher's `onToolResult`/`command_stream` emit gate
+   * (D1). Same closure-capture protocol as `setDelegationContext`: the
+   * value is read from a dispatcher closure variable that this writes.
+   * Factories that do not handle Bash streaming may ignore it.
+   */
+  setBashAutonomous?: (autonomous: boolean) => void;
   /**
    * #2923 routing-relevant context (also surfaced to the system prompt
    * via `buildSoleurGoSystemPrompt`). Threaded from `DispatchArgs`.
@@ -1444,6 +1535,17 @@ interface ActiveQuery {
    * to its first emission.
    */
   _pendingPdfRotationNotice: boolean;
+  /**
+   * feat-concierge-stream-commands — Bash tool-use correlation table.
+   * Maps the SDK `tool_use_id` → the raw command string for every Bash
+   * `tool_use` block in flight, so that when the matching synthetic
+   * `user`-role `tool_use_result` arrives (`handleUserMessage`) its output
+   * can be forwarded to `onToolResult` tagged with the command. Bounded by
+   * the number of concurrent in-flight Bash calls (Claude executes tools
+   * roughly serially); entries are deleted on result delivery. Non-Bash
+   * tool_uses are never recorded here.
+   */
+  bashToolUses: Map<string, string>;
 }
 
 /**
@@ -1833,6 +1935,21 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
 
         recordAssistantBlock(state, "tool_use", toolName);
 
+        // feat-concierge-stream-commands — record Bash tool-uses so the
+        // matching `tool_use_result` (synthetic user message) can be
+        // correlated back to the command and forwarded via onToolResult.
+        // Only when a consumer wired onToolResult (cc path) AND the SDK
+        // gave us a stable toolUseId to key on.
+        if (
+          toolName === "Bash" &&
+          state.events.onToolResult &&
+          toolUseId.length > 0
+        ) {
+          const command =
+            typeof toolInput.command === "string" ? toolInput.command : "";
+          state.bashToolUses.set(toolUseId, command);
+        }
+
         try {
           state.events.onToolUse({ name: toolName, input: toolInput, toolUseId });
         } catch (err) {
@@ -1892,6 +2009,28 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     if (msg.tool_use_result === undefined) return;
     if (state.closed || state.awaitingUser) return;
     armRunaway(state);
+
+    // feat-concierge-stream-commands — forward Bash command output. The
+    // synthetic user message carries `tool_result` content blocks in
+    // `message.content`, each tagged with the originating `tool_use_id`.
+    // Correlate against `bashToolUses`; forward (raw) command + extracted
+    // text to onToolResult, which redacts + caps at the emit boundary.
+    // Wrapped in try/catch with a Sentry mirror so a malformed SDK payload
+    // or a throwing consumer cannot break the runaway-timer path above.
+    if (state.events.onToolResult && state.bashToolUses.size > 0) {
+      try {
+        for (const result of extractBashToolResults(msg, state.bashToolUses)) {
+          state.bashToolUses.delete(result.toolUseId);
+          state.events.onToolResult(result);
+        }
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "soleur-go-runner",
+          op: "onToolResult",
+          extra: { conversationId: state.conversationId },
+        });
+      }
+    }
   }
 
   function handleResultMessage(state: ActiveQuery, msg: SDKResultMessage): void {
@@ -2118,6 +2257,10 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           // sink so the real-SDK factory can publish lease.delegationId
           // to the dispatcher before the lease scope closes.
           setDelegationContext: args.setDelegationContext,
+          // feat-concierge-stream-commands: forward the streaming-posture
+          // sink so the factory publishes `bashAutonomous` to the
+          // dispatcher's command_stream emit gate (D1).
+          setBashAutonomous: args.setBashAutonomous,
         });
       } catch (err) {
         reportSilentFallback(err, {
@@ -2202,6 +2345,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         multiPdfChapterChunked: false,
         chapterExtractionFailures: 0,
         _pendingPdfRotationNotice: false,
+        bashToolUses: new Map(),
       };
       activeQueries.set(conversationId, state);
 
