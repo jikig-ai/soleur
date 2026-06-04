@@ -156,6 +156,9 @@ jobs:
       - name: Run journald persistent-storage tests
         run: bash apps/web-platform/infra/journald-config.test.sh
 
+      - name: Run bwrap userns sysctl drift-guard
+        run: bash apps/web-platform/infra/bwrap-userns-sysctl.test.sh
+
   check-secrets:
     runs-on: ubuntu-24.04
     outputs:
