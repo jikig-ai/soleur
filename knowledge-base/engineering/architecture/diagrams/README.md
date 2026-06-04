@@ -1,11 +1,12 @@
 # Architecture Diagrams — LikeC4 C4 Model
 
 This directory holds **one** consolidated [LikeC4](https://likec4.dev/) C4 model
-and the pages that render it. After the Mermaid → LikeC4 migration (PR #4883)
-the directory grew from three Mermaid `.md` files to eight files across three
-artifact classes — **but nothing here is redundant.** Each file has a distinct
-role, described below. Resist the urge to "tidy up" by merging the view pages or
-deleting the JSON; they are load-bearing (see Sharp Edges).
+and the pages that render it. The Mermaid → LikeC4 migration (PR #4883) replaced
+three inline-Mermaid `.md` files with the file set below — a model source split
+across `.c4` files, a compiled JSON, and the view pages. **Nothing here is
+redundant**; each file has a distinct role, described below. Resist the urge to
+"tidy up" by merging the view pages or deleting the JSON; they are load-bearing
+(see Sharp Edges).
 
 The three C4 layers you remember from the Mermaid era did not multiply — they now
 live as three **views** over a single model, plus three human-readable view
@@ -19,7 +20,7 @@ into each `.md`.
 | `spec.c4` | LikeC4 DSL (source) | Declares element KINDS once (actor / system / container / database / component) and tags. Authored by the `soleur:architecture diagram` skill. |
 | `model.c4` | LikeC4 DSL (source) | The consolidated C4 model — **single source of truth**. Every element declared exactly once (≈40 elements, ≈51 relations as of the 2026-06-03 migration; authoritative counts live in `model.likec4.json`). Migrated 1:1 from the former 3 Mermaid diagrams. Nesting creates C4 boundaries. |
 | `views.c4` | LikeC4 DSL (source) | One view per C4 level: `context` (L1), `containers` (L2), `components` (L3). Define-once-render-many — the three C4 layers live here as VIEWS, giving clickable drill-down Context → Containers → Components. The C4 "code" level is intentionally excluded per convention. |
-| `model.likec4.json` | Compiled artifact (generated) | COMPILED, pre-layouted model **REQUIRED by the web viewer at runtime**. `apps/web-platform/components/kb/c4-diagram.tsx` renders `@likec4/diagram` from `data.dump` (fetched via the KB C4 API); the client libs are pinned WITHOUT the likec4 compiler, so the DSL is compiled at author-time and the JSON is shipped to the browser. **Do NOT hand-edit or delete — regenerate it from the `.c4` sources.** |
+| `model.likec4.json` | Compiled artifact (generated) | COMPILED, pre-layouted model **REQUIRED by the web viewer at runtime**. `apps/web-platform/components/kb/c4-diagram.tsx` renders the `@likec4/diagram`-backed diagram from `data.dump` (the `@likec4/diagram` import lives in the sibling `c4-shared.tsx`; the dump is fetched via the KB C4 API); the client libs are pinned WITHOUT the likec4 compiler, so the DSL is compiled at author-time and the JSON is shipped to the browser. **Do NOT hand-edit or delete — regenerate it from the `.c4` sources.** |
 | `system-context.md` | View page (L1) | Human-readable C4 L1 page; embeds the `context` view via a ` ```likec4-view ` fenced block + prose `## Notes`. |
 | `container.md` | View page (L2) | Human-readable C4 L2 page; embeds the `containers` view + `## Notes`. |
 | `component-plugin.md` | View page (L3) | Human-readable C4 L3 page; embeds the `components` view + `## Notes`. |
