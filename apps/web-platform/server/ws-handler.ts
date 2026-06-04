@@ -2069,6 +2069,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "stream_end":
     case "tool_use":
     case "tool_progress":
+    case "command_stream":
     case "review_gate":
     case "session_started":
     case "session_resumed":

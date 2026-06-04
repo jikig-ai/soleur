@@ -89,6 +89,44 @@ const IPV6_RE =
 // shape with realistic minimum lengths.
 const JWT_RE = /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g;
 
+// Generic credential ENV-ASSIGNMENT shape — `GH_TOKEN=<value>`,
+// `MY_API_SECRET='<value>'`, `SOME_PASSWORD=<value>`, `..._PAT=<value>`.
+// Anchored on an UPPER_SNAKE key whose final segment is a credential noun
+// so it does NOT eat benign flags (`--verbose=true`) or arbitrary shell
+// vars. Mirrors AWS_SECRET_ASSIGN_RE: the replacement PRESERVES the key
+// name so the line stays parseable, and runs BEFORE the generic key
+// redactor so the value can't be double-processed. The value run is a
+// single non-space/non-quote token, optionally single/double quoted. `i`
+// is intentionally OMITTED so the UPPER_SNAKE anchor is exact (a lowercase
+// `password=x` is deliberately left to other gates — see AC4 test).
+const ENV_CRED_ASSIGN_RE =
+  /\b([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT))\s*=\s*['"]?[^\s'"]+['"]?/g;
+
+// HTTP Authorization HEADER literal — `Authorization: Bearer <value>`,
+// `Authorization: Basic <b64>`, `Authorization: token <value>`. These show
+// up verbatim in pasted `curl -H "Authorization: …"` commands. The scheme
+// set is the three common HTTP auth schemes; `\S+` captures the opaque
+// credential run. Case-insensitive on header name + scheme so
+// `authorization: bearer …` is also caught. The replacement keeps the
+// header name (the only stable part) and drops the scheme+value.
+const AUTHORIZATION_HEADER_RE =
+  /\b(Authorization)\s*:\s*(?:Bearer|Basic|token)\s+\S+/gi;
+
+// Connection-string userinfo (Finding 3) — `scheme://user:password@host`.
+// ENV_CRED_ASSIGN only matches credential-noun-suffixed UPPER_SNAKE keys, so
+// `DATABASE_URL=`, `MONGODB_URI=`, or a bare `redis://u:secret@h` slip through
+// (`URL`/`URI` are not credential nouns). This redacts the PASSWORD run in any
+// `scheme://user:password@host` regardless of key name, preserving the scheme,
+// user, and host so the line stays diagnosable. The userinfo runs reject
+// `@`/`:`/`/`/whitespace so a bare `user@host` (no password) is NOT matched and
+// the match cannot cross a path segment. The password run ALSO rejects `]` so
+// it cannot re-wrap an already-substituted `[redacted-…]` marker when a
+// sentinel API key sat in the password position (API_KEY_RE runs first and
+// turns `:ghs_…@` into `:[redacted-key]@`, which this then leaves alone). `i`
+// admits upper-case schemes.
+const CONNECTION_STRING_USERINFO_RE =
+  /\b([a-z][a-z0-9+.\-]*):\/\/([^:@\s/]+):([^@\s/\]]+)@/gi;
+
 /**
  * Redact third-party-ingested text (GitHub PR titles, issue bodies,
  * CVE advisory descriptions) before persisting to `messages` and
@@ -125,8 +163,23 @@ export function redactGithubSourcedText(
     // AWS secret assignment first — its replacement keeps the key= prefix
     // so the subsequent generic redactors don't double-process the value.
     .replace(AWS_SECRET_ASSIGN_RE, "$1=[redacted-key]")
+    // Authorization headers before API_KEY_RE: a `Authorization: token ghs_…`
+    // would otherwise leave `Authorization: token [redacted-key]`; collapsing
+    // the whole header to `[redacted-token]` is cleaner and scheme-agnostic.
+    .replace(AUTHORIZATION_HEADER_RE, "$1: [redacted-token]")
+    // Generic credential env-assignment (GH_TOKEN=, *_SECRET=, *_PAT=, …)
+    // before API_KEY_RE so the value run is consumed with its key preserved.
+    .replace(ENV_CRED_ASSIGN_RE, "$1=[redacted-key]")
     .replace(API_KEY_RE, "[redacted-key]")
     .replace(JWT_RE, "[redacted-jwt]")
+    // Connection-string userinfo AFTER API_KEY_RE so a sentinel token in the
+    // password position (`x-access-token:ghs_…@`) is already `[redacted-key]`
+    // (preserving that contract); this then catches NON-sentinel passwords
+    // in a connection-string `userinfo` the key redactor cannot see. The
+    // `]`-rejecting password run leaves the prior `[redacted-key]` marker
+    // intact. BEFORE EMAIL_RE so a `u:p@host.tld` userinfo can't be partially
+    // eaten as an address. Still in the structured-before-numeric band.
+    .replace(CONNECTION_STRING_USERINFO_RE, "$1://$2:[redacted-password]@")
     .replace(EMAIL_RE, "[redacted-email]")
     .replace(UUID_RE, "[redacted-uuid]")
     .replace(PHONE_RE, "[redacted-phone]")
@@ -136,4 +189,27 @@ export function redactGithubSourcedText(
     .replace(IPV4_RE, "[redacted-ip]");
 
   return truncated ? `${out}${TRUNCATION_MARKER}` : out;
+}
+
+/**
+ * Command-shaped redaction wrapper used at the `command_stream` emit
+ * boundary (`server/cc-dispatcher.ts`) AND as the render-time gate in
+ * `components/chat/message-bubble.tsx`. Thin over `redactGithubSourcedText`
+ * — the same allowlist that now covers GitHub PATs/OAuth tokens, Stripe/
+ * Anthropic/OpenAI/AWS/Slack keys, JWTs, the `GH_TOKEN=`/`*_SECRET=`
+ * env-assignment shape, and the `Authorization: <scheme> <value>` header
+ * literal (feat-concierge-stream-commands TR4).
+ *
+ * Separate named export (rather than calling `redactGithubSourcedText`
+ * directly at the emit site) so the command/output redaction surface has a
+ * single, greppable name for the dual-gate invariant — and so a future
+ * command-specific shape (e.g. process-substitution `@<(printf …)`) has one
+ * place to land without touching the third-party-ingest signature.
+ *
+ * Returns "" for non-string / empty input (defensive — emit sites may pass
+ * an `unknown` SDK field).
+ */
+export function redactCommandForDisplay(command: string): string {
+  if (typeof command !== "string" || command.length === 0) return "";
+  return redactGithubSourcedText(command);
 }

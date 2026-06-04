@@ -49,6 +49,7 @@ import {
   deriveBashCommandPrefix,
 } from "./permission-callback-bash-batch";
 import { warnSilentFallback } from "./observability";
+import { redactCommandForDisplay } from "@/lib/safety/redaction-allowlist";
 
 const log = createChildLogger("permission");
 
@@ -456,7 +457,17 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           : ["Approve", "Reject"];
 
       const gateId = randomUUID();
-      const preview = command.length > 200 ? `${command.slice(0, 200)}…` : command;
+      // FIX 1 (P1) — redact BEFORE building the preview. The raw command can
+      // carry `ghs_…` / `GH_TOKEN=<value>` / `Authorization: …` verbatim; the
+      // shared `question` flows to BOTH sendToClient(review_gate) AND
+      // notifyOfflineUser, so an un-redacted preview leaks the credential on
+      // both sinks (the screenshot leak). redactCommandForDisplay is the same
+      // emit-boundary gate used by the command_stream path (TR4).
+      const redactedCommand = redactCommandForDisplay(command);
+      const preview =
+        redactedCommand.length > 200
+          ? `${redactedCommand.slice(0, 200)}…`
+          : redactedCommand;
       const question = `Run Bash command?\n\n\`${preview}\``;
 
       const gateDelivered = deps.sendToClient(ctx.userId, {
