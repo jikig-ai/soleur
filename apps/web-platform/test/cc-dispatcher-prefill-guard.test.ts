@@ -393,6 +393,11 @@ describe("realSdkQueryFactory — context_reset signal (#3269)", () => {
     // reset notice is absent, rather than exact equality.)
     expect(opts.systemPrompt).toContain("BASE");
     expect(opts.systemPrompt).not.toContain("RESET-NOTICE-MARKER");
+    // AC5 (behavioral): the gh-403 honesty directive IS present in the
+    // assembled prompt — not just the source text. Forbids scope speculation
+    // and re-consent advice on a `gh` 403.
+    expect(opts.systemPrompt).toMatch(/Do NOT\s+speculate/i);
+    expect(opts.systemPrompt).toMatch(/re-consent/i);
   });
 
   it("emits one context_reset WS event per guard fire with reason 'prefill-guard'", async () => {

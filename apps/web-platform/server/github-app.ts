@@ -472,6 +472,10 @@ export async function findInstallationByAccountLogin(
   login: string,
 ): Promise<number | null> {
   const jwt = createAppJwt();
+  // Single page of 100 — same cap as findOrgInstallationForUser. If the App
+  // ever exceeds 100 installations, an owner install on a later page is missed
+  // (returns null → caller keeps its installation, fail-safe). Revisit with
+  // Link-header pagination if the App scales past that.
   const response = await githubFetch(
     `${GITHUB_API}/app/installations?per_page=100`,
     { headers: { Authorization: `Bearer ${jwt}` } },
@@ -496,6 +500,58 @@ export async function findInstallationByAccountLogin(
     (i) => i.account?.login?.toLowerCase() === target,
   );
   return match?.id ?? null;
+}
+
+/**
+ * Resolve the repo-OWNER's installation for `owner/...`, but ONLY when the
+ * dispatching user (`githubLogin`) is ENTITLED to act through it. Returns the
+ * installation id on entitlement, else null.
+ *
+ * Why the entitlement gate (security — feat-one-shot-concierge-gh-403, P1):
+ * `findInstallationByAccountLogin` alone would let an OUTSIDE read-only
+ * collaborator on an org repo (who can connect it — the read probe passes) be
+ * promoted to the org's WRITE-capable installation, a cross-tenant privilege
+ * escalation (the installation token acts as the APP with the org's full grant,
+ * independent of the user's personal repo permission). Entitlement holds when:
+ *   - the owner account IS the user's own account (personal repo — no escalation), OR
+ *   - the user is a verified MEMBER of the owner org
+ *     (`GET /orgs/{owner}/members/{login}` → 204, the same check
+ *     `findOrgInstallationForUser` uses; the owner install carries members:read).
+ * A non-member gets null → the caller keeps its current installation and the
+ * honest 403 surfaces, rather than silently gaining write it was never granted.
+ */
+export async function findRepoOwnerInstallationForUser(
+  owner: string,
+  githubLogin: string | null,
+): Promise<number | null> {
+  if (!githubLogin) return null;
+
+  const ownerInstall = await findInstallationByAccountLogin(owner);
+  if (ownerInstall === null) return null;
+
+  // Personal repo (owner is the user's own account) — no escalation possible.
+  if (owner.toLowerCase() === githubLogin.toLowerCase()) return ownerInstall;
+
+  // Org repo — require verified org membership before promoting. Mint the
+  // owner install's token (members:read) and probe membership, mirroring
+  // findOrgInstallationForUser's 204 check.
+  let installationToken: string;
+  try {
+    installationToken = await generateInstallationToken(ownerInstall);
+  } catch (err) {
+    log.warn(
+      { err, ownerInstall, owner },
+      "findRepoOwnerInstallationForUser: token mint failed — denying promotion",
+    );
+    return null;
+  }
+
+  const memberCheck = await githubFetch(
+    `${GITHUB_API}/orgs/${encodeURIComponent(owner)}/members/${encodeURIComponent(githubLogin)}`,
+    { headers: { Authorization: `token ${installationToken}` } },
+  );
+  // 204 = is a member; anything else (302 non-member, 404, 403) = not entitled.
+  return memberCheck.status === 204 ? ownerInstall : null;
 }
 
 // ---------------------------------------------------------------------------

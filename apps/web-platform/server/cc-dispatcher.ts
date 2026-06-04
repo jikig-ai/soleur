@@ -88,10 +88,13 @@ import {
 import { resolveInstallationId } from "./resolve-installation-id";
 import {
   generateInstallationToken,
-  findInstallationByAccountLogin,
+  findRepoOwnerInstallationForUser,
+  getInstallationAccount,
 } from "./github-app";
 import { mirrorRepoColsToSoloWorkspace } from "@/server/workspace-repo-mirror";
 import { createServiceClient } from "@/lib/supabase/service";
+import { resolveGithubLogin } from "@/server/github-login";
+import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 // Session-start self-heal: if the active workspace has a connected repo but no
 // matching clone on disk, clone/repair it so the Concierge has a real git repo
 // to work in (fixes the "No git repository found" blocker). Generic per-user.
@@ -260,7 +263,11 @@ const GH_403_PROMPT_DIRECTIVE =
   "speculate about which permission or scope is missing, and do NOT tell the " +
   "user to change GitHub App permissions, approve new permissions, or " +
   "re-consent — the Soleur platform diagnoses and repairs installation/" +
-  "permission issues server-side. State only what the error literally says.";
+  "permission issues server-side and will retry with the correct installation " +
+  "automatically. The one sanctioned next step you may offer: if the 403 " +
+  "persists across retries, ask the user to confirm the Soleur GitHub App is " +
+  "installed on the repository's owner account. Beyond that, state only what " +
+  "the error literally says.";
 
 // Max length cap for `block.name` before passing to Sentry/pino. Defense-in-
 // depth against future model regressions that might emit pathologically long
@@ -1160,40 +1167,84 @@ export const realSdkQueryFactory: QueryFactory = async (
     // integration" — which the model misreads as a missing scope and (falsely)
     // tells the user to re-consent. The deterministic fix is SELECTION, not a
     // permission change: mint for the installation whose ACCOUNT OWNS the repo
-    // (the org install, full grant incl. `issues: write`). The in-memory
-    // override fixes THIS dispatch immediately; the workspace-column write
-    // persists the correction so the next resolveInstallationId returns the
-    // owner install. Best-effort throughout — any probe/write failure keeps the
-    // stored install and never blocks the conversation.
+    // (the org install, full grant incl. `issues: write`) — but ONLY when the
+    // user is ENTITLED to it (findRepoOwnerInstallationForUser gates org-owned
+    // installs on verified membership, so an outside read-only collaborator
+    // cannot escalate to the org's write grant). The in-memory override fixes
+    // THIS dispatch immediately. Best-effort throughout — any probe/write
+    // failure keeps the stored install and never blocks the conversation.
     let effectiveInstallationId = installationId;
     if (installationId !== null && connectedOwner) {
       try {
-        const ownerInstall = await findInstallationByAccountLogin(connectedOwner);
-        if (ownerInstall !== null && ownerInstall !== installationId) {
-          log.info(
-            {
-              userId: args.userId,
-              storedInstallationId: installationId,
-              ownerInstallationId: ownerInstall,
-              owner: connectedOwner,
-            },
-            "Concierge installation self-heal: stored install does not own the connected repo; switching to the repo-owner installation",
+        // Cheap healthy-path guard: if the STORED install's account already
+        // owns the repo, it's correct — skip the listing + membership probes.
+        // Only the mismatch path (rare) pays the heavier entitlement check.
+        let storedAccountLogin: string | null = null;
+        try {
+          storedAccountLogin = (await getInstallationAccount(installationId)).login;
+        } catch {
+          /* stored-account probe failed → fall through to full resolution */
+        }
+        const alreadyCorrect =
+          storedAccountLogin !== null &&
+          storedAccountLogin.toLowerCase() === connectedOwner.toLowerCase();
+
+        if (!alreadyCorrect) {
+          const githubLogin = await resolveGithubLogin(
+            createServiceClient(),
+            args.userId,
           );
-          effectiveInstallationId = ownerInstall;
-          try {
-            await mirrorRepoColsToSoloWorkspace(
-              createServiceClient(),
-              args.userId,
-              { github_installation_id: ownerInstall },
+          const ownerInstall = await findRepoOwnerInstallationForUser(
+            connectedOwner,
+            githubLogin,
+          );
+          if (ownerInstall !== null && ownerInstall !== installationId) {
+            log.info(
+              {
+                userId: args.userId,
+                storedInstallationId: installationId,
+                ownerInstallationId: ownerInstall,
+                owner: connectedOwner,
+              },
+              "Concierge installation self-heal: stored install does not own the connected repo; switching to the entitled repo-owner installation",
             );
-          } catch (healErr) {
-            reportSilentFallback(healErr, {
-              feature: "cc-dispatcher",
-              op: "installation-self-heal-write",
-              extra: { userId: args.userId, ownerInstallationId: ownerInstall },
-              message:
-                "Failed to persist repo-owner installation; in-memory override still applied for this dispatch",
-            });
+            effectiveInstallationId = ownerInstall;
+            // Persist the correction ONLY for the SOLO workspace.
+            // mirrorRepoColsToSoloWorkspace writes workspaces.id==userId; the
+            // read path (resolveInstallationId) resolves the ACTIVE workspace.
+            // For a team active workspace, persisting to the solo row would be
+            // a no-op for the read AND could clobber the solo row's own install
+            // — so write only when active==solo. Team repo flows are deferred
+            // (#4560); until then the in-memory override fixes team dispatches
+            // per-conversation without persisting. (mirror is best-effort and
+            // self-reports to Sentry — no extra catch needed here.)
+            try {
+              const tenant = await getFreshTenantClient(args.userId);
+              const activeWorkspaceId = await resolveCurrentWorkspaceId(
+                args.userId,
+                tenant,
+              );
+              if (activeWorkspaceId === args.userId) {
+                await mirrorRepoColsToSoloWorkspace(
+                  createServiceClient(),
+                  args.userId,
+                  { github_installation_id: ownerInstall },
+                );
+              } else {
+                log.info(
+                  { userId: args.userId, activeWorkspaceId },
+                  "Skipping installation self-heal persist for non-solo active workspace; in-memory override applied for this dispatch",
+                );
+              }
+            } catch (healErr) {
+              reportSilentFallback(healErr, {
+                feature: "cc-dispatcher",
+                op: "installation-self-heal-write",
+                extra: { userId: args.userId, ownerInstallationId: ownerInstall },
+                message:
+                  "Failed to persist repo-owner installation; in-memory override still applied for this dispatch",
+              });
+            }
           }
         }
       } catch (probeErr) {

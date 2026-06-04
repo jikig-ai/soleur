@@ -33,6 +33,12 @@ const {
   mockWriteAskpassScriptTo,
   mockCleanupAskpassScript,
   mockResolveActiveWorkspacePath,
+  mockGetCurrentRepoUrl,
+  mockGetInstallationAccount,
+  mockFindRepoOwnerInstallationForUser,
+  mockMirrorRepoCols,
+  mockResolveGithubLogin,
+  mockResolveCurrentWorkspaceId,
 } = vi.hoisted(() => ({
   mockQuery: vi.fn(),
   mockGetUserApiKey: vi.fn(),
@@ -49,6 +55,12 @@ const {
   mockWriteAskpassScriptTo: vi.fn(),
   mockCleanupAskpassScript: vi.fn(),
   mockResolveActiveWorkspacePath: vi.fn(),
+  mockGetCurrentRepoUrl: vi.fn(),
+  mockGetInstallationAccount: vi.fn(),
+  mockFindRepoOwnerInstallationForUser: vi.fn(),
+  mockMirrorRepoCols: vi.fn(),
+  mockResolveGithubLogin: vi.fn(),
+  mockResolveCurrentWorkspaceId: vi.fn(),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -90,6 +102,22 @@ vi.mock("@/server/resolve-installation-id", () => ({
 
 vi.mock("@/server/github-app", () => ({
   generateInstallationToken: mockGenerateInstallationToken,
+  getInstallationAccount: mockGetInstallationAccount,
+  findRepoOwnerInstallationForUser: mockFindRepoOwnerInstallationForUser,
+}));
+
+// feat-one-shot-concierge-gh-403 self-heal deps (default to no-op shapes so the
+// pre-existing factory-shape tests, which run with getCurrentRepoUrl=null, never
+// enter the self-heal branch; the dedicated describe block drives it).
+vi.mock("@/server/workspace-repo-mirror", () => ({
+  mirrorRepoColsToSoloWorkspace: mockMirrorRepoCols,
+}));
+// NOTE: do NOT mock @/lib/supabase/service here — byok-resolver also consumes
+// createServiceClient and needs the real chain shape. The self-heal only passes
+// createServiceClient() to the already-mocked resolveGithubLogin / mirror, which
+// ignore the client value, so the real createServiceClient is harmless.
+vi.mock("@/server/github-login", () => ({
+  resolveGithubLogin: mockResolveGithubLogin,
 }));
 
 // Plan item 1 — cc-dispatcher now imports the in-sandbox askpass writer from
@@ -115,11 +143,15 @@ vi.mock("@/server/workspace-resolver", async () => {
   const actual = await vi.importActual<typeof import("@/server/workspace-resolver")>(
     "@/server/workspace-resolver",
   );
-  return { ...actual, resolveActiveWorkspacePath: mockResolveActiveWorkspacePath };
+  return {
+    ...actual,
+    resolveActiveWorkspacePath: mockResolveActiveWorkspacePath,
+    resolveCurrentWorkspaceId: mockResolveCurrentWorkspaceId,
+  };
 });
 
 vi.mock("@/server/current-repo-url", () => ({
-  getCurrentRepoUrl: vi.fn(async () => null),
+  getCurrentRepoUrl: mockGetCurrentRepoUrl,
 }));
 vi.mock("@/server/ensure-workspace-repo", () => ({
   ensureWorkspaceRepoCloned: vi.fn(async () => undefined),
@@ -317,6 +349,22 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     mockResolveInstallationId.mockResolvedValue(null);
     mockGenerateInstallationToken.mockResolvedValue("ghs_default_test_token");
     mockResolveBashAutonomous.mockResolvedValue(false);
+    // feat-one-shot-concierge-gh-403 self-heal defaults: no connected repo so
+    // the self-heal branch is skipped for every pre-existing test. The
+    // dedicated describe block overrides these per-test.
+    mockGetCurrentRepoUrl.mockResolvedValue(null);
+    mockGetInstallationAccount.mockResolvedValue({ login: "owner", type: "Organization" });
+    mockFindRepoOwnerInstallationForUser.mockResolvedValue(null);
+    mockMirrorRepoCols.mockResolvedValue(undefined);
+    mockResolveGithubLogin.mockResolvedValue("dispatch-user");
+    // Default REJECT: byok-resolver's resolveKeyOwnerThenLease calls
+    // resolveCurrentWorkspaceId first and relies on it throwing in this harness
+    // to fall back to the mocked runWithByokLease (the lease path these tests
+    // exercise). Self-heal tests that need a value queue reject-once (byok) then
+    // resolve-once (the self-heal's own call) explicitly.
+    mockResolveCurrentWorkspaceId.mockRejectedValue(
+      new Error("byok harness fallback"),
+    );
     // Item 1 — in-sandbox askpass writer returns a deterministic path under
     // the workspace (the real writer uses a randomUUID suffix).
     mockWriteAskpassScriptTo.mockReturnValue(
@@ -655,6 +703,122 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       {},
       { ghToken: undefined },
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // feat-one-shot-concierge-gh-403 — installation self-heal (the load-bearing
+  // fix). Stored install is a cross-account personal install; the dispatch
+  // must mint for the ENTITLED repo-owner install and persist it (solo only).
+  // -------------------------------------------------------------------------
+  describe("installation self-heal", () => {
+    const REPO = "https://github.com/jikig-ai/soleur";
+    const STORED = 130018654; // personal install (issues:read)
+    const OWNER = 122213433; // org install (issues:write)
+
+    it("mismatch → mints the entitled owner install (in-memory override) and persists to the solo workspace", async () => {
+      mockResolveInstallationId.mockResolvedValueOnce(STORED);
+      mockGetCurrentRepoUrl.mockResolvedValueOnce(REPO);
+      // Stored install's account != repo owner → not already-correct.
+      mockGetInstallationAccount.mockResolvedValueOnce({ login: "Elvalio", type: "User" });
+      mockFindRepoOwnerInstallationForUser.mockResolvedValueOnce(OWNER);
+      // 1st call = byok-resolver (rejects → fallback); 2nd = self-heal solo-gate.
+      mockResolveCurrentWorkspaceId
+        .mockRejectedValueOnce(new Error("byok harness fallback"))
+        .mockResolvedValueOnce("user-1"); // active == solo
+
+      await realSdkQueryFactory(makeArgs());
+
+      // Load-bearing: GH_TOKEN minted for the OWNER install, not the stored one.
+      expect(mockGenerateInstallationToken).toHaveBeenCalledWith(
+        OWNER,
+        expect.anything(),
+      );
+      expect(mockGenerateInstallationToken).not.toHaveBeenCalledWith(
+        STORED,
+        expect.anything(),
+      );
+      // Persisted to the solo workspace.
+      expect(mockMirrorRepoCols).toHaveBeenCalledWith(
+        expect.anything(),
+        "user-1",
+        { github_installation_id: OWNER },
+      );
+    });
+
+    it("negative control: stored install already owns the repo → NO owner probe, NO persist, mints stored", async () => {
+      mockResolveInstallationId.mockResolvedValueOnce(OWNER);
+      mockGetCurrentRepoUrl.mockResolvedValueOnce(REPO);
+      // Stored account already matches the owner → cheap guard short-circuits.
+      mockGetInstallationAccount.mockResolvedValueOnce({ login: "jikig-ai", type: "Organization" });
+
+      await realSdkQueryFactory(makeArgs());
+
+      expect(mockFindRepoOwnerInstallationForUser).not.toHaveBeenCalled();
+      expect(mockMirrorRepoCols).not.toHaveBeenCalled();
+      expect(mockGenerateInstallationToken).toHaveBeenCalledWith(
+        OWNER,
+        expect.anything(),
+      );
+    });
+
+    it("entitlement denied (findRepoOwnerInstallationForUser → null) → keeps stored install, no persist", async () => {
+      mockResolveInstallationId.mockResolvedValueOnce(STORED);
+      mockGetCurrentRepoUrl.mockResolvedValueOnce(REPO);
+      mockGetInstallationAccount.mockResolvedValueOnce({ login: "Elvalio", type: "User" });
+      mockFindRepoOwnerInstallationForUser.mockResolvedValueOnce(null); // not entitled
+
+      await realSdkQueryFactory(makeArgs());
+
+      expect(mockGenerateInstallationToken).toHaveBeenCalledWith(
+        STORED,
+        expect.anything(),
+      );
+      expect(mockMirrorRepoCols).not.toHaveBeenCalled();
+    });
+
+    it("non-solo active workspace → applies in-memory override but does NOT persist (team flows deferred)", async () => {
+      mockResolveInstallationId.mockResolvedValueOnce(STORED);
+      mockGetCurrentRepoUrl.mockResolvedValueOnce(REPO);
+      mockGetInstallationAccount.mockResolvedValueOnce({ login: "Elvalio", type: "User" });
+      mockFindRepoOwnerInstallationForUser.mockResolvedValueOnce(OWNER);
+      // 1st call = byok-resolver (rejects → fallback); 2nd = self-heal solo-gate
+      // resolves a TEAM workspace id (!= userId) → persist must be skipped.
+      mockResolveCurrentWorkspaceId
+        .mockRejectedValueOnce(new Error("byok harness fallback"))
+        .mockResolvedValueOnce("team-workspace-xyz");
+
+      await realSdkQueryFactory(makeArgs());
+
+      // In-memory override still fixes THIS dispatch...
+      expect(mockGenerateInstallationToken).toHaveBeenCalledWith(
+        OWNER,
+        expect.anything(),
+      );
+      // ...but the solo-only persist is skipped for a team active workspace.
+      expect(mockMirrorRepoCols).not.toHaveBeenCalled();
+    });
+
+    it("probe failure (findRepoOwnerInstallationForUser throws) → keeps stored install, mirrors to Sentry, dispatch proceeds", async () => {
+      mockResolveInstallationId.mockResolvedValueOnce(STORED);
+      mockGetCurrentRepoUrl.mockResolvedValueOnce(REPO);
+      mockGetInstallationAccount.mockResolvedValueOnce({ login: "Elvalio", type: "User" });
+      mockFindRepoOwnerInstallationForUser.mockRejectedValueOnce(new Error("probe boom"));
+
+      await realSdkQueryFactory(makeArgs());
+
+      expect(mockReportSilentFallback).toHaveBeenCalledWith(
+        expect.any(Error),
+        expect.objectContaining({
+          feature: "cc-dispatcher",
+          op: "installation-self-heal-probe",
+        }),
+      );
+      expect(mockGenerateInstallationToken).toHaveBeenCalledWith(
+        STORED,
+        expect.anything(),
+      );
+      expect(mockQuery).toHaveBeenCalledOnce();
+    });
   });
 
   // -------------------------------------------------------------------------
