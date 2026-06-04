@@ -91,10 +91,6 @@ import {
   findRepoOwnerInstallationForUser,
   getInstallationAccount,
 } from "./github-app";
-import { mirrorRepoColsToSoloWorkspace } from "@/server/workspace-repo-mirror";
-import { createServiceClient } from "@/lib/supabase/service";
-import { resolveGithubLogin } from "@/server/github-login";
-import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 // Session-start self-heal: if the active workspace has a connected repo but no
 // matching clone on disk, clone/repair it so the Concierge has a real git repo
 // to work in (fixes the "No git repository found" blocker). Generic per-user.
@@ -1169,34 +1165,34 @@ export const realSdkQueryFactory: QueryFactory = async (
     // permission change: mint for the installation whose ACCOUNT OWNS the repo
     // (the org install, full grant incl. `issues: write`) — but ONLY when the
     // user is ENTITLED to it (findRepoOwnerInstallationForUser gates org-owned
-    // installs on verified membership, so an outside read-only collaborator
-    // cannot escalate to the org's write grant). The in-memory override fixes
-    // THIS dispatch immediately. Best-effort throughout — any probe/write
-    // failure keeps the stored install and never blocks the conversation.
+    // installs on verified org membership, so an outside read-only collaborator
+    // cannot escalate to the org's write grant).
+    //
+    // Entirely GitHub-App-JWT driven — NO Supabase service-role. The
+    // dispatching user's GitHub login is derived from the STORED install's
+    // account when that install is a personal (User-type) install: a personal
+    // install's account login IS the user's GitHub username. That keeps
+    // cc-dispatcher off the service-role allowlist (it was migrated to tenant
+    // in PR-D and must stay off — re-introducing a service-role client here
+    // would trip the service-role-allowlist gate). The in-memory override fixes THIS
+    // dispatch; we deliberately do NOT persist (no revoked-column write, and no
+    // solo-vs-active-workspace clobber risk) — the override re-applies on each
+    // cold dispatch, which is bounded (cold-conversation factory). Best-effort:
+    // any probe failure keeps the stored install and never blocks the chat.
     let effectiveInstallationId = installationId;
     if (installationId !== null && connectedOwner) {
       try {
-        // Cheap healthy-path guard: if the STORED install's account already
-        // owns the repo, it's correct — skip the listing + membership probes.
-        // Only the mismatch path (rare) pays the heavier entitlement check.
-        let storedAccountLogin: string | null = null;
-        try {
-          storedAccountLogin = (await getInstallationAccount(installationId)).login;
-        } catch {
-          /* stored-account probe failed → fall through to full resolution */
-        }
+        const storedAccount = await getInstallationAccount(installationId);
         const alreadyCorrect =
-          storedAccountLogin !== null &&
-          storedAccountLogin.toLowerCase() === connectedOwner.toLowerCase();
-
-        if (!alreadyCorrect) {
-          const githubLogin = await resolveGithubLogin(
-            createServiceClient(),
-            args.userId,
-          );
+          storedAccount.login.toLowerCase() === connectedOwner.toLowerCase();
+        // Only derive the user's login from a personal (User) install. For an
+        // org-type stored install whose account != the connected-repo owner we
+        // cannot derive the user's login without a service-role admin lookup —
+        // keep the stored install (fail-safe: no escalation, honest 403).
+        if (!alreadyCorrect && storedAccount.type === "User") {
           const ownerInstall = await findRepoOwnerInstallationForUser(
             connectedOwner,
-            githubLogin,
+            storedAccount.login,
           );
           if (ownerInstall !== null && ownerInstall !== installationId) {
             log.info(
@@ -1206,45 +1202,9 @@ export const realSdkQueryFactory: QueryFactory = async (
                 ownerInstallationId: ownerInstall,
                 owner: connectedOwner,
               },
-              "Concierge installation self-heal: stored install does not own the connected repo; switching to the entitled repo-owner installation",
+              "Concierge installation self-heal: stored personal install does not own the connected repo; switching to the entitled repo-owner installation for this dispatch",
             );
             effectiveInstallationId = ownerInstall;
-            // Persist the correction ONLY for the SOLO workspace.
-            // mirrorRepoColsToSoloWorkspace writes workspaces.id==userId; the
-            // read path (resolveInstallationId) resolves the ACTIVE workspace.
-            // For a team active workspace, persisting to the solo row would be
-            // a no-op for the read AND could clobber the solo row's own install
-            // — so write only when active==solo. Team repo flows are deferred
-            // (#4560); until then the in-memory override fixes team dispatches
-            // per-conversation without persisting. (mirror is best-effort and
-            // self-reports to Sentry — no extra catch needed here.)
-            try {
-              const tenant = await getFreshTenantClient(args.userId);
-              const activeWorkspaceId = await resolveCurrentWorkspaceId(
-                args.userId,
-                tenant,
-              );
-              if (activeWorkspaceId === args.userId) {
-                await mirrorRepoColsToSoloWorkspace(
-                  createServiceClient(),
-                  args.userId,
-                  { github_installation_id: ownerInstall },
-                );
-              } else {
-                log.info(
-                  { userId: args.userId, activeWorkspaceId },
-                  "Skipping installation self-heal persist for non-solo active workspace; in-memory override applied for this dispatch",
-                );
-              }
-            } catch (healErr) {
-              reportSilentFallback(healErr, {
-                feature: "cc-dispatcher",
-                op: "installation-self-heal-write",
-                extra: { userId: args.userId, ownerInstallationId: ownerInstall },
-                message:
-                  "Failed to persist repo-owner installation; in-memory override still applied for this dispatch",
-              });
-            }
           }
         }
       } catch (probeErr) {
