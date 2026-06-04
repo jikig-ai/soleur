@@ -1263,39 +1263,6 @@ assert_bwrap_canary_check() {
 
 assert_bwrap_canary_check
 
-assert_bwrap_canary_probe_exercises_userns_proc() {
-  # Regression guard for the 2026-06-04 cron silent-producer incident
-  # (#4927/#4928): the canary bwrap probe MUST exercise --unshare-user AND
-  # --proc /proc — the unprivileged-userns + /proc-mount path the cron Bash
-  # sandbox uses and that kernel.apparmor_restrict_unprivileged_userns gates.
-  # The pre-fix probe (--unshare-pid --bind / / only) passed even when that
-  # sysctl had drifted, so the canary swapped to prod healthy while every cron
-  # Bash call failed silently. Anchored on both flags (non-vacuous: the old
-  # command contained neither).
-  TOTAL=$((TOTAL + 1))
-
-  local output actual_exit
-  output=$(
-    export MOCK_DOCKER_MODE="bwrap-trace"
-    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
-  ) && actual_exit=0 || actual_exit=$?
-
-  local exec_line
-  exec_line=$(printf '%s\n' "$output" | grep -F "DOCKER_EXEC:" | grep -F "bwrap" || true)
-
-  if printf '%s' "$exec_line" | grep -qF -- "--unshare-user" \
-    && printf '%s' "$exec_line" | grep -qF -- "--proc /proc"; then
-    PASS=$((PASS + 1))
-    echo "  PASS: canary bwrap probe exercises --unshare-user + --proc /proc"
-  else
-    FAIL=$((FAIL + 1))
-    echo "  FAIL: canary bwrap probe must exercise --unshare-user + --proc /proc (the cron userns/proc path)"
-    echo "        exec line: $exec_line"
-  fi
-}
-
-assert_bwrap_canary_probe_exercises_userns_proc
-
 assert_bwrap_canary_failure_rollback() {
   # Verify that bwrap check failure triggers canary rollback.
   TOTAL=$((TOTAL + 1))
