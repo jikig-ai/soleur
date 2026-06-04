@@ -49,4 +49,21 @@ Storage-API/operator concern (rare rollback path; an empty orphan bucket is
 harmless). data-integrity P2's "delete objects in down" intent is preserved at
 runtime by the route's orphan-cleanup arms + the account-delete purge helper.
 
-**Result: 32/32 live checks PASS.**
+## AC5b — column-takeover DB-enforced (live, DEV)
+The plan claimed `public.workspaces` has "ONLY `workspaces_select_for_members`".
+Live verification falsified the literal claim — there is ALSO a
+`workspaces_jti_not_denied` policy — but the **security property holds**:
+- `workspaces_jti_not_denied` is **RESTRICTIVE** (`permissive=false`), `FOR ALL`,
+  `USING/WITH CHECK = NOT is_jti_denied_from_jwt()` — a session-revocation guard
+  that can only *further deny*, never *grant*.
+- The only **PERMISSIVE** policy is `workspaces_select_for_members` (SELECT only,
+  `is_workspace_member(id, auth.uid())`).
+- PostgreSQL RLS requires a passing PERMISSIVE policy for a command; there is NO
+  permissive INSERT/UPDATE/DELETE policy → authenticated client writes are denied.
+
+**Verified:** static (no permissive write policy) + behavioral (an authenticated
+owner's `UPDATE workspaces SET logo_path` affects **0 rows**). So no client SDK
+path can set `logo_path` to another workspace's key — the read proxy can safely
+trust `logo_path`. The route writes via service-role only. ✅
+
+**Result: 34/34 live checks PASS** (32 migration + 2 AC5b).

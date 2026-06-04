@@ -47,7 +47,7 @@ Derived from the finalized (post-review) plan. RED→GREEN→REFACTOR per task. 
 - [x] 6.1 Privacy Policy + DPD §2.3(z) + GDPR-policy §3.7/§8.4 + Art-30 PA-26 (retention=workspace lifetime, next free PA#=26) + 1-line AUP §4.2. Lockstep verified: "workspace lifetime" + "no new sub-processor" (eu-west-1) + Art-15(4) DSAR-exclusion consistent across all 4 substantive docs. (AC9)
 - [x] 6.2 `purgeWorkspaceLogoObjects(workspaceId, service)` in `server/workspace.ts` (Storage-API `.remove`, best-effort/reports-never-throws); wired into `account-delete.ts` step 3.6 (sole-owned, userId===workspaceId N2; NOT shared-member-removal). DSAR excluded (Art. 15(4), documented). 2/2 unit.
 
-## Phase 7 — Verify
-- [ ] 7.1 AC5b: assert no client INSERT/UPDATE/DELETE policy on `public.workspaces` (column-takeover DB-enforced).
-- [ ] 7.2 AC8: `csp.test.ts` signed-URL host ∈ img-src; no CSP edit shipped.
-- [ ] 7.3 `tsc --noEmit` clean; full vitest suite; CPO sign-off (requires_cpo_signoff) before merge.
+## Phase 7 — Verify ✅
+- [x] 7.1 AC5b: live DEV proof — no PERMISSIVE write policy on `public.workspaces` (the `workspaces_jti_not_denied` policy is RESTRICTIVE); authenticated `UPDATE logo_path` affects 0 rows. Column-takeover DB-enforced. (migration-checklist.md §AC5b)
+- [x] 7.2 AC8: `csp.test.ts` asserts the Supabase https origin ∈ `img-src` (the proxy 302→signed-URL host); NO CSP edit shipped (csp.ts unchanged — TR4 no-op confirmed).
+- [x] 7.3 `tsc --noEmit` clean (hasLogo widening swept across all OrgMembershipSummary fixtures); full webplat vitest 8619→8620 pass (legal-doc-shas drift fixed: 4 edited docs' SHAs refreshed in legal-doc-shas.ts; guard 6/6). **CPO sign-off (requires_cpo_signoff): pending — user-impact-reviewer runs at PR review.**

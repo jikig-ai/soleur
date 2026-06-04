@@ -103,7 +103,7 @@ function owner(is = true) {
 // case below sets an explicitly-disallowed Origin to exercise rejectCsrf.
 function postReq(buf: Buffer, filename: string, type: string): Request {
   const fd = new FormData();
-  fd.append("file", new File([buf], filename, { type }));
+  fd.append("file", new File([new Uint8Array(buf)], filename, { type }));
   return new Request("http://localhost/api/workspace/logo", {
     method: "POST",
     body: fd,
@@ -136,7 +136,7 @@ describe("POST /api/workspace/logo — auth + owner gate (AC5)", () => {
     authAs();
     owner(true);
     const fd = new FormData();
-    fd.append("file", new File([pngSquare], "logo.png", { type: "image/png" }));
+    fd.append("file", new File([new Uint8Array(pngSquare)], "logo.png", { type: "image/png" }));
     const res = await POST(
       new Request("http://localhost/api/workspace/logo", {
         method: "POST",

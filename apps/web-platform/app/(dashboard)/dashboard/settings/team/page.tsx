@@ -74,7 +74,7 @@ export default async function TeamMembershipPage() {
 
       <WorkspaceLogoSettings
         workspaceId={data.workspaceId}
-        workspaceName={data.organizationName}
+        workspaceName={data.organizationName ?? ""}
         isOwner={isOwner}
         initialHasLogo={hasLogo}
       />
