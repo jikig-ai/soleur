@@ -396,6 +396,24 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    unreachable from operator networks, so the canonical "NOTIFY via
    direct connection" workaround documented upstream isn't available.
 
+   **Storage-bucket migrations: `down.sql` cannot DELETE storage tables;
+   column-takeover proof is permissive-vs-restrictive, not name-count.**
+   Supabase installs a platform `BEFORE DELETE` trigger (`protect_objects_delete`
+   → `storage.protect_delete()`) that blocks direct `DELETE FROM storage.objects`
+   AND `storage.buckets` ("Direct deletion from storage tables is not allowed").
+   So a bucket migration's `down.sql` reverts only SQL-droppable objects
+   (policies → function → column) — NOT the bucket/objects (Storage-API/operator
+   teardown; 019/042 precedent ship none; 071's `DELETE FROM storage.buckets` is
+   a dormant bug). Runtime cleanup uses `service.storage.from(b).remove([...])`
+   (allowed). And when verifying "no client can write column X" (read-proxy
+   trust), assert no **PERMISSIVE** INSERT/UPDATE/DELETE/ALL policy (a
+   RESTRICTIVE `FOR ALL` like `workspaces_jti_not_denied` only denies, never
+   grants) + a behavioral authenticated `UPDATE` affecting **0 rows**. The
+   pooler also presents a self-signed CA chain → transient node-pg verify
+   scripts use `ssl:{rejectUnauthorized:false}` (dev-only, mirrors
+   run-migrations.sh `sslmode=require`; no committed code disables TLS verify).
+   See `knowledge-base/project/learnings/2026-06-04-supabase-bucket-migration-down-and-rls-takeover-proof.md` (#4916).
+
    **TDD Gate (HARD GATE):** Before writing ANY implementation code for a task, determine if the task has testable behavior:
 
    Emit rule-application telemetry (records that the TDD gate was reached — see AGENTS.md `cq-write-failing-tests-before`):

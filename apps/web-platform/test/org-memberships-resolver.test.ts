@@ -60,8 +60,8 @@ function makeService() {
           select: (_cols: string) => ({
             in: async () => ({
               data: [
-                { id: "ws-1", organization_id: "org-1" },
-                { id: "ws-2", organization_id: "org-2" },
+                { id: "ws-1", organization_id: "org-1", logo_path: "ws-1/logo.webp" },
+                { id: "ws-2", organization_id: "org-2", logo_path: null },
               ],
               error: null,
             }),
@@ -109,5 +109,16 @@ describe("resolveOrgMemberships — AC7 name fallback", () => {
     );
     const org2 = summaries.find((s) => s.organizationId === "org-2");
     expect(org2?.organizationName).toBe(UNTITLED_FALLBACK);
+  });
+
+  // AC6: resolver exposes hasLogo (boolean) derived from logo_path — NO mint,
+  // NO storage import (the stable proxy route mints lazily on cache-miss).
+  it("exposes hasLogo=true when logo_path is set, false when NULL", async () => {
+    const summaries = await resolveOrgMemberships(
+      makeSupabase() as never,
+      makeService() as never,
+    );
+    expect(summaries.find((s) => s.workspaceId === "ws-1")?.hasLogo).toBe(true);
+    expect(summaries.find((s) => s.workspaceId === "ws-2")?.hasLogo).toBe(false);
   });
 });

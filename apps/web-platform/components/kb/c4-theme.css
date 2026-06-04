@@ -1,0 +1,84 @@
+/*
+ * Soleur theme for the LikeC4 C4 visualizer.
+ *
+ * Scoped to the `.soleur-c4` wrapper that c4-shared.tsx renders around every
+ * <LikeC4Diagram> (the single choke point for both the inline embed and the
+ * full workspace), so nothing here leaks onto unrelated LikeC4 surfaces.
+ *
+ * Two jobs:
+ *   1. Hide the upstream "LikeC4" wordmark in the top-left nav panel.
+ *   2. Re-point LikeC4's blue palette at Soleur brand tokens (gold-on-dark).
+ *
+ * IMPORTANT — specificity: LikeC4 injects per-node palette vars at runtime as
+ * `#<diagram-id> :is([data-likec4-color=...]) { --likec4-palette-*: ... }`
+ * (see node_modules/@likec4/diagram/dist/LikeC4Styles.js). That carries ID
+ * specificity (1,1,0), which a class selector cannot beat — so the per-node
+ * overrides below use `!important` to win over the non-important library rule.
+ * The library renders in the LIGHT DOM (RootContainer, not a ShadowRoot), so
+ * these external rules reach the diagram. If <LikeC4Diagram> is ever swapped
+ * for ReactLikeC4/LikeC4View (ShadowRoot variants), this file stops working —
+ * see the plan's Sharp Edges.
+ */
+
+/*
+ * 1. Drop the upstream LikeC4 wordmark; keep the rest of the nav panel.
+ *
+ * The diagram's nav-panel logo (LogoButton.js) renders a Mantine <button> with
+ * NO stable class — it wraps the brand <svg viewBox="0 0 222 56"> (full
+ * wordmark) + <svg viewBox="0 0 56 56"> (icon) from components/Logo.js. That
+ * 222x56 viewBox is unique across @likec4/diagram, so it is the stable hook:
+ * `:has()` selects the whole logo button and collapses it, leaving the
+ * breadcrumbs / navigation buttons untouched (AC1). c4-theme.test.ts guards
+ * the viewBox against a library bump that changes the logo art.
+ */
+.soleur-c4 button:has(svg[viewBox="0 0 222 56"]) {
+  display: none !important;
+}
+/* Defense-in-depth: if :has() is unavailable, still blank the unique wordmark
+ * art (the button collapses to a small empty box rather than showing a logo). */
+.soleur-c4 svg[viewBox="0 0 222 56"] {
+  display: none !important;
+}
+
+/*
+ * 2a. Container-level palette defaults. Beats LikeC4's zero-specificity
+ *     `:where(:root,:host)` defaults and inherits to any node/edge that does
+ *     not carry its own `[data-likec4-color]` rule. Referencing Soleur tokens
+ *     (not literal hex) keeps the diagram theme-aware — the tokens flip with
+ *     `data-theme` in globals.css, so light/dark Just Work.
+ */
+.soleur-c4 {
+  --likec4-palette-fill: var(--soleur-bg-surface-2);
+  --likec4-palette-stroke: var(--soleur-border-emphasized);
+  --likec4-palette-hiContrast: var(--soleur-text-primary);
+  --likec4-palette-loContrast: var(--soleur-text-secondary);
+  --likec4-palette-outline: var(--soleur-accent-gold-fg);
+  --likec4-palette-relation-stroke: var(--soleur-accent-gold-fg);
+  --likec4-palette-relation-stroke-selected: var(--soleur-accent-gold-text);
+  --likec4-palette-relation-label: var(--soleur-text-secondary);
+  --likec4-palette-relation-label-bg: var(--soleur-bg-surface-1);
+}
+
+/*
+ * 2b. Per-node override. LikeC4 re-declares each palette var on the node via an
+ *     ID-specificity rule, so the container defaults above are shadowed on
+ *     real nodes — `!important` is required here to repaint them. Gold is
+ *     reserved for strokes/relationships (accents); element fills stay on dark
+ *     Soleur surfaces so label text keeps contrast (gold-on-gold fails WCAG).
+ */
+.soleur-c4 :is([data-likec4-color]) {
+  --likec4-palette-fill: var(--soleur-bg-surface-2) !important;
+  --likec4-palette-stroke: var(--soleur-border-emphasized) !important;
+  --likec4-palette-hiContrast: var(--soleur-text-primary) !important;
+  --likec4-palette-loContrast: var(--soleur-text-secondary) !important;
+  --likec4-palette-outline: var(--soleur-accent-gold-fg) !important;
+  --likec4-palette-relation-stroke: var(--soleur-accent-gold-fg) !important;
+  --likec4-palette-relation-stroke-selected: var(--soleur-accent-gold-text) !important;
+  --likec4-palette-relation-label: var(--soleur-text-secondary) !important;
+  --likec4-palette-relation-label-bg: var(--soleur-bg-surface-1) !important;
+}
+
+/* 3. Let the Soleur surface show through the canvas instead of LikeC4's. */
+.soleur-c4 {
+  background: var(--soleur-bg-base);
+}

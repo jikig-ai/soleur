@@ -50,7 +50,7 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 
 ## Workflow Gates
 
-- [id: wg-every-feature-listed-in-a-roadmap-phase] → core
+- [id: wg-every-feature-listed-in-a-roadmap-phase] → rest
 - [id: wg-when-closing-a-phase-milestone-update] → rest
 - [id: wg-when-fixing-a-workflow-gates-detection] → rest
 - [id: wg-zero-agents-until-user-confirms] → core
@@ -59,6 +59,7 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: wg-after-marking-a-pr-ready-run-gh-pr-merge] → rest
 - [id: wg-ship-push-before-merge] → rest
 - [id: wg-after-a-pr-merges-to-main-verify-all] → rest
+- [id: wg-dark-launch-deploy-gates] → rest
 - [id: wg-at-session-start-run-bash-plugins-soleur] → core
 - [id: wg-at-session-start-after-cleanup-merged] → core
 - [id: wg-when-a-test-runner-crashes-segfault-oom] → rest

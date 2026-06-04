@@ -48,7 +48,6 @@
 
 ## Workflow Gates
 
-- Every feature in a roadmap phase table MUST have a linked GitHub issue [id: wg-every-feature-listed-in-a-roadmap-phase]. Create the issue in the same action as the roadmap edit — even for trigger-gated phases — and verify every feature row has an Issue entry before committing. **Why:** 2026-04-03 audit.
 - Zero agents until user confirms direction [id: wg-zero-agents-until-user-confirms]. Present a concise summary first, ask if they want to go deeper, only then launch research. Exception: passive domain routing (below).
 - At session start, run `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged && git worktree list` (works from bare root or any worktree) [id: wg-at-session-start-run-bash-plugins-soleur]. If no worktree exists for the task, create one with `... --yes create <name>` first. Repo root is bare — never `git pull`/`git checkout` from it.
 - At session start (after `cleanup-merged` fetches main), refresh `.mcp.json` at the bare root: `git show main:.mcp.json > .mcp.json` [id: wg-at-session-start-after-cleanup-merged]. Claude Code reads it from CWD on startup to discover MCP servers; bare repos have no working tree, so manual sync is required.
