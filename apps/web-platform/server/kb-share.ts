@@ -200,6 +200,19 @@ export async function createShare(
   documentPath: string,
 ): Promise<CreateShareResult> {
   if (documentPath.includes("\0")) {
+    // Workstream A (cq-silent-fallback-must-mirror-to-sentry): mirror every
+    // pre-insert validation return so the failing branch is observable. null
+    // err + explicit message (kb-share.ts preview-invariant shape);
+    // reason === the CreateShareErrorCode literal so Sentry pivots on reason.
+    // invalid-path/too-large are partly attacker-reachable (crafted path) —
+    // tag reason so on-call distinguishes a probe from a regression; do NOT
+    // escalate to art33Breach.
+    reportSilentFallback(null, {
+      feature: "kb-share",
+      op: "create",
+      message: "share rejected: null byte in document path",
+      extra: { userId, documentPath, reason: "invalid-path" },
+    });
     return invalidPath();
   }
   const fullPath = path.join(kbRoot, documentPath);
@@ -209,6 +222,12 @@ export async function createShare(
   // reintroduce the CodeQL js/file-system-race TOCTOU window the
   // pre-PR route deliberately avoided.
   if (!isPathInWorkspace(fullPath, kbRoot)) {
+    reportSilentFallback(null, {
+      feature: "kb-share",
+      op: "create",
+      message: "share rejected: document path escapes workspace root",
+      extra: { userId, documentPath, reason: "invalid-path" },
+    });
     return invalidPath();
   }
 
@@ -222,6 +241,12 @@ export async function createShare(
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ELOOP" || code === "EMLINK") {
       // 403 to match KbAccessDeniedError; telemetry keys on `code`.
+      reportSilentFallback(null, {
+        feature: "kb-share",
+        op: "create",
+        message: "share rejected: terminal symlink (O_NOFOLLOW)",
+        extra: { userId, documentPath, reason: "symlink-rejected" },
+      });
       return {
         ok: false,
         status: 403,
@@ -229,6 +254,12 @@ export async function createShare(
         error: "Access denied",
       };
     }
+    reportSilentFallback(null, {
+      feature: "kb-share",
+      op: "create",
+      message: "share rejected: document not found",
+      extra: { userId, documentPath, reason: "not-found" },
+    });
     return {
       ok: false,
       status: 404,
@@ -242,6 +273,12 @@ export async function createShare(
   try {
     const stat = await handle.stat();
     if (!stat.isFile()) {
+      reportSilentFallback(null, {
+        feature: "kb-share",
+        op: "create",
+        message: "share rejected: target is not a regular file",
+        extra: { userId, documentPath, reason: "not-a-file" },
+      });
       return {
         ok: false,
         status: 400,
@@ -250,6 +287,12 @@ export async function createShare(
       };
     }
     if (stat.size > MAX_BINARY_SIZE) {
+      reportSilentFallback(null, {
+        feature: "kb-share",
+        op: "create",
+        message: "share rejected: file exceeds maximum size limit",
+        extra: { userId, documentPath, reason: "too-large" },
+      });
       return {
         ok: false,
         status: 413,
