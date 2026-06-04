@@ -1,0 +1,754 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "OQqbB",
+      "x": 0,
+      "y": 0,
+      "name": "A — Scope-Grants: Concierge command execution (+ OFF reconfirm)",
+      "width": 560,
+      "fill": "#0a0a0a",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 32,
+      "children": [
+        {
+          "type": "text",
+          "id": "GNOGo",
+          "name": "aTitle",
+          "fill": "#ffffff",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Scope Grants",
+          "fontFamily": "Inter",
+          "fontSize": 22,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "64g4W",
+          "name": "aSub",
+          "fill": "#a3a3a3",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Authorize Soleur to act on your behalf. You decide. Agents execute. Revoke at any time.",
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "PRN8K",
+          "name": "Concierge command execution (anchor: concierge-command-execution)",
+          "width": "fill_container",
+          "fill": "#171717",
+          "stroke": {
+            "thickness": 1,
+            "fill": "#262626"
+          },
+          "layout": "vertical",
+          "gap": 14,
+          "padding": 20,
+          "children": [
+            {
+              "type": "text",
+              "id": "DsGvn",
+              "name": "aCardH",
+              "fill": "#ffffff",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Concierge command execution",
+              "fontFamily": "Inter",
+              "fontSize": 16,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "gwCbj",
+              "name": "aRow",
+              "width": "fill_container",
+              "gap": 16,
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "EUVbh",
+                  "name": "aRowL",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "xY2VI",
+                      "name": "aRowLT",
+                      "fill": "#ffffff",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Autonomous mode",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "lZv6b",
+                      "name": "aRowLD",
+                      "fill": "#a3a3a3",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Let the Concierge run commands without asking you to approve each one. On by default. The command blocklist (curl, wget, sudo, …) always applies — even when this is on.",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "YcrGM",
+                  "name": "switch ON (pill track)",
+                  "width": 40,
+                  "height": 22,
+                  "fill": "#C9A962",
+                  "cornerRadius": 11,
+                  "padding": 2,
+                  "justifyContent": "end",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "H1KuH",
+                      "name": "aKnob",
+                      "fill": "#ffffff",
+                      "width": 18,
+                      "height": 18
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "IXkj1",
+          "name": "aDlgLabel",
+          "fill": "#737373",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "↓ Shown ONLY when re-enabling after a manual turn-off (OFF→ON):",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "normal",
+          "fontStyle": "italic"
+        },
+        {
+          "type": "frame",
+          "id": "IJMOD",
+          "name": "OFF→ON risk reconfirm dialog",
+          "width": "fill_container",
+          "fill": "#171717",
+          "stroke": {
+            "thickness": 1,
+            "fill": "#C9A962"
+          },
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 18,
+          "children": [
+            {
+              "type": "text",
+              "id": "9OdyF",
+              "name": "aDlgT",
+              "fill": "#ffffff",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Turn on autonomous mode?",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "qKEwe",
+              "name": "aDlgB",
+              "fill": "#a3a3a3",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "The Concierge will run any non-blocked command without asking. If a malicious issue or repo file tricks the agent (prompt injection), it could delete files or leak data with no approval step. Only turn this on for repos and workspaces you fully trust.",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "Zb6V5",
+              "name": "aDlgBtns",
+              "width": "fill_container",
+              "gap": 10,
+              "justifyContent": "end",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "GSB6K",
+                  "name": "aBtnCancel",
+                  "fill": "#0a0a0a",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#404040"
+                  },
+                  "padding": [
+                    8,
+                    14
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "MCQxc",
+                      "name": "aBtnCancelT",
+                      "fill": "#ffffff",
+                      "content": "Cancel",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "MLdkL",
+                  "name": "aBtnOn",
+                  "fill": "#C9A962",
+                  "padding": [
+                    8,
+                    14
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "jMU5t",
+                      "name": "aBtnOnT",
+                      "fill": "#0a0a0a",
+                      "content": "I understand — turn it on",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "s1aXN",
+      "x": 640,
+      "y": 0,
+      "name": "B — First-run soft-gate disclosure banner",
+      "width": 560,
+      "fill": "#0a0a0a",
+      "layout": "vertical",
+      "gap": 16,
+      "padding": 32,
+      "children": [
+        {
+          "type": "text",
+          "id": "KqIOQ",
+          "name": "bLabel",
+          "fill": "#737373",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "First non-blocked auto-run on a new workspace → command HELD until owner acks",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "normal",
+          "fontStyle": "italic"
+        },
+        {
+          "type": "frame",
+          "id": "DhZFh",
+          "name": "Soft-gate disclosure banner",
+          "width": "fill_container",
+          "fill": "#171717",
+          "stroke": {
+            "thickness": 1,
+            "fill": "#C9A962"
+          },
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 18,
+          "children": [
+            {
+              "type": "frame",
+              "id": "LSv6F",
+              "name": "bHdr",
+              "width": "fill_container",
+              "gap": 8,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "Uh3bV",
+                  "name": "bIcon",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "shield-alert",
+                  "iconFontFamily": "lucide",
+                  "fill": "#C9A962"
+                },
+                {
+                  "type": "text",
+                  "id": "reB8R",
+                  "name": "bHdrT",
+                  "fill": "#ffffff",
+                  "content": "Before the Concierge runs commands automatically",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "jts8t",
+              "name": "bBody",
+              "fill": "#a3a3a3",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Soleur runs commands automatically to get work done. It always blocks clearly dangerous commands (curl, wget, sudo, …) and hides your secrets — but no blocklist is perfect. A command that looks safe could still change or delete files in this workspace. Your work is backed up in git, and you can watch every command run in the chat. Only connect repos and accounts you trust.",
+              "lineHeight": 1.45,
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "83Rwk",
+              "name": "bBtns",
+              "width": "fill_container",
+              "gap": 10,
+              "justifyContent": "end",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "PIMlx",
+                  "name": "Got it (writes ack, releases held command)",
+                  "fill": "#C9A962",
+                  "padding": [
+                    9,
+                    16
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "1LXBU",
+                      "name": "bGotItT",
+                      "fill": "#0a0a0a",
+                      "content": "Got it",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "AfeQt",
+          "name": "bOptLabel",
+          "fill": "#737373",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Existing workspace (stored OFF, no ack) → opt-out-shaped, never silent:",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "normal",
+          "fontStyle": "italic"
+        },
+        {
+          "type": "frame",
+          "id": "x3N60",
+          "name": "bOptBtns",
+          "width": "fill_container",
+          "gap": 10,
+          "children": [
+            {
+              "type": "frame",
+              "id": "NPENw",
+              "name": "Keep autonomous on (sets bash_autonomous=true + ack)",
+              "fill": "#C9A962",
+              "padding": [
+                9,
+                16
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "sUbsz",
+                  "name": "bKeepT",
+                  "fill": "#0a0a0a",
+                  "content": "Keep autonomous on",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "1mKo8",
+              "name": "Ask me each time (leaves false + ack)",
+              "fill": "#0a0a0a",
+              "stroke": {
+                "thickness": 1,
+                "fill": "#404040"
+              },
+              "padding": [
+                9,
+                16
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "SMbfy",
+                  "name": "bAskT",
+                  "fill": "#ffffff",
+                  "content": "Ask me each time",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "500"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "fGvF0",
+      "x": 0,
+      "y": 880,
+      "name": "C — Persistent auto-run state chip",
+      "width": 560,
+      "fill": "#0a0a0a",
+      "layout": "vertical",
+      "gap": 24,
+      "padding": 32,
+      "children": [
+        {
+          "type": "text",
+          "id": "tdKGk",
+          "name": "cLabel",
+          "fill": "#737373",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Persistent chip in Concierge header — click → Scope Grants #concierge-command-execution",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "normal",
+          "fontStyle": "italic"
+        },
+        {
+          "type": "frame",
+          "id": "MKujf",
+          "name": "Concierge header (context)",
+          "width": "fill_container",
+          "fill": "#0a0a0a",
+          "stroke": {
+            "thickness": 1,
+            "fill": "#262626"
+          },
+          "gap": 12,
+          "padding": [
+            10,
+            14
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "6bHA1",
+              "name": "cHL",
+              "fill": "#ffffff",
+              "content": "Dashboard",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "7h5ck",
+              "name": "cHR",
+              "gap": 10,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "aGoYt",
+                  "name": "chip ON — Auto-run on",
+                  "fill": "#1f1a0e",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#9C7A2E"
+                  },
+                  "gap": 6,
+                  "padding": [
+                    5,
+                    10
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "lhRpb",
+                      "name": "cChipOnDot",
+                      "fill": "#C9A962",
+                      "width": 7,
+                      "height": 7
+                    },
+                    {
+                      "type": "text",
+                      "id": "Z1vTP",
+                      "name": "cChipOnT",
+                      "fill": "#D4B36A",
+                      "content": "Auto-run on",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "pKANP",
+                  "name": "cStatus",
+                  "gap": 6,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "vEw8x",
+                      "name": "cStatusDot",
+                      "fill": "#4ade80",
+                      "width": 7,
+                      "height": 7
+                    },
+                    {
+                      "type": "text",
+                      "id": "j5SZv",
+                      "name": "cStatusT",
+                      "fill": "#737373",
+                      "content": "Connected",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "JPmCT",
+          "name": "cOffLabel",
+          "fill": "#737373",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "OFF state — autonomous off, review-gated:",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "normal",
+          "fontStyle": "italic"
+        },
+        {
+          "type": "frame",
+          "id": "P6El7",
+          "name": "chip OFF — Approve each",
+          "fill": "#171717",
+          "stroke": {
+            "thickness": 1,
+            "fill": "#404040"
+          },
+          "gap": 6,
+          "padding": [
+            5,
+            10
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "ellipse",
+              "id": "NWw7Q",
+              "name": "cChipOffDot",
+              "fill": "#737373",
+              "width": 7,
+              "height": 7
+            },
+            {
+              "type": "text",
+              "id": "j0Uz0",
+              "name": "cChipOffT",
+              "fill": "#a3a3a3",
+              "content": "Approve each",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "500"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "kTdxI",
+      "x": 640,
+      "y": 880,
+      "name": "D — Terminal-style auto-run command bubble",
+      "width": 560,
+      "fill": "#0a0a0a",
+      "layout": "vertical",
+      "gap": 16,
+      "padding": 32,
+      "children": [
+        {
+          "type": "text",
+          "id": "OS57l",
+          "name": "dLabel",
+          "fill": "#737373",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Auto-run command bubble (no Approve/Deny card; streamed under autonomy)",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "normal",
+          "fontStyle": "italic"
+        },
+        {
+          "type": "frame",
+          "id": "vlacP",
+          "name": "terminal command bubble",
+          "width": "fill_container",
+          "fill": "#0d0d0d",
+          "stroke": {
+            "thickness": 1,
+            "fill": "#262626"
+          },
+          "layout": "vertical",
+          "children": [
+            {
+              "type": "frame",
+              "id": "lafFk",
+              "name": "dBar",
+              "width": "fill_container",
+              "fill": "#171717",
+              "gap": 8,
+              "padding": [
+                8,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "aPp6q",
+                  "name": "dBarIcon",
+                  "width": 14,
+                  "height": 14,
+                  "iconFontName": "terminal",
+                  "iconFontFamily": "lucide",
+                  "fill": "#C9A962"
+                },
+                {
+                  "type": "text",
+                  "id": "0siFt",
+                  "name": "dBarT",
+                  "fill": "#a3a3a3",
+                  "content": "Ran automatically",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "9i6HX",
+              "name": "dBody",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 4,
+              "padding": 12,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "YHlQH",
+                  "name": "dCmd",
+                  "fill": "#D4B36A",
+                  "content": "$ npm run build",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "x0UH5",
+                  "name": "dEnv",
+                  "fill": "#D4B36A",
+                  "content": "$ DEPLOY_TOKEN=•••••••• npm run deploy",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "4JnC3",
+                  "name": "dOut1",
+                  "fill": "#737373",
+                  "content": "> next build",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "YAzZf",
+                  "name": "dOut2",
+                  "fill": "#4ade80",
+                  "content": "✓ Compiled successfully",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "LH5af",
+          "name": "dNote",
+          "fill": "#737373",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Secret redacted as •••••••• at the emit boundary — no realistic token rendered. Blocklist still authoritative; only non-blocked commands auto-run.",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "normal"
+        }
+      ]
+    }
+  ]
+}

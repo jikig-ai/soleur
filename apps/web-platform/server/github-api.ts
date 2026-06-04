@@ -11,6 +11,7 @@
 
 import { generateInstallationToken, GitHubApiError } from "./github-app";
 import { createChildLogger } from "./logger";
+import { reportSilentFallback } from "./observability";
 
 export { GitHubApiError };
 
@@ -225,14 +226,36 @@ async function handleErrorResponse(
   const bodyText = await response.text();
 
   if (response.status === 403) {
+    // Surface the ACTUAL GitHub `message` instead of inventing a cause
+    // (feat-one-shot-concierge-gh-403). A 403 on an org repo is usually a
+    // WRONG-INSTALLATION token (a cross-account install that can read the repo
+    // but lacks write), NOT a missing permission scope the user can re-consent
+    // away — the org grant already exists. The old text ("approve new
+    // permissions in installation settings") sent users on a fruitless
+    // re-consent loop. Parse the real message; degrade honestly.
+    let githubMessage = "";
+    try {
+      githubMessage = (JSON.parse(bodyText) as { message?: string }).message ?? "";
+    } catch {
+      githubMessage = bodyText.slice(0, 200);
+    }
     log.warn(
-      { status: 403, path, body: bodyText.slice(0, 500) },
-      "GitHub API 403 — possible permission gap",
+      { status: 403, path, githubMessage, body: bodyText.slice(0, 500) },
+      "GitHub API 403",
     );
+    // cq-silent-fallback-must-mirror-to-sentry: make 403s queryable rather
+    // than swallowing the real cause behind a hard-coded message.
+    reportSilentFallback(new Error(`GitHub API 403: ${path}`), {
+      feature: "github-api",
+      op: "handle-403",
+      extra: { path, githubMessage, status: 403 },
+      message: "GitHub API returned 403",
+    });
     throw new GitHubApiError(
-      `GitHub API permission denied (403) for ${path}. ` +
-      "Your Soleur GitHub App installation may need updated permissions. " +
-      "Visit your GitHub App installation settings to approve new permissions.",
+      `GitHub API 403 for ${path}` +
+        (githubMessage ? `: "${githubMessage}"` : "") +
+        ". This usually means the installation cannot access this resource " +
+        "(e.g. a wrong-installation token) — not a missing permission scope.",
       403,
     );
   }

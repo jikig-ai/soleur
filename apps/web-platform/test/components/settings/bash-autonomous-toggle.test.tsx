@@ -31,7 +31,9 @@ describe("BashAutonomousToggle", () => {
 
     // Interstitial appears; NO write has happened yet.
     expect(screen.getByRole("alertdialog")).toBeTruthy();
-    expect(screen.getByText(/prompt injection/i)).toBeTruthy();
+    expect(
+      screen.getByText(/no blocklist is perfect/i),
+    ).toBeTruthy();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
