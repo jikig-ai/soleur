@@ -5,6 +5,7 @@ import { TeamMembershipList } from "@/components/settings/team-membership-list";
 import { InviteMemberAction } from "@/components/settings/invite-member-action";
 import { PendingInvitesList } from "@/components/settings/pending-invites-list";
 import { RenameWorkspaceAction } from "@/components/settings/rename-workspace-action";
+import { WorkspaceLogoSettings } from "@/components/settings/workspace-logo-settings";
 
 // AC-A: flag OFF → HTTP 404 via notFound(). Flagsmith single-control gate
 // lives inside resolveTeamMembershipPageData. The "/dashboard/settings/team"
@@ -50,6 +51,13 @@ export default async function TeamMembershipPage() {
     return rows;
   })();
 
+  const { data: logoRow } = await service
+    .from("workspaces")
+    .select("logo_path")
+    .eq("id", data.workspaceId)
+    .maybeSingle();
+  const hasLogo = !!(logoRow as { logo_path: string | null } | null)?.logo_path;
+
   return (
     <div>
       <h1 className="mb-2 text-2xl font-semibold text-soleur-text-primary">Team</h1>
@@ -62,6 +70,13 @@ export default async function TeamMembershipPage() {
         organizationId={data.organizationId}
         organizationName={data.organizationName}
         isOwner={isOwner}
+      />
+
+      <WorkspaceLogoSettings
+        workspaceId={data.workspaceId}
+        workspaceName={data.organizationName}
+        isOwner={isOwner}
+        initialHasLogo={hasLogo}
       />
 
       <div className="rounded-lg border border-soleur-border-default">

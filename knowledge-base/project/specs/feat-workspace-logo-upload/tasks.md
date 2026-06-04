@@ -38,10 +38,10 @@ Derived from the finalized (post-review) plan. RED→GREEN→REFACTOR per task. 
 - [x] 4.1 `WorkspaceIdentityTile`: `workspaceId`+`hasLogo` props; `<img src=/api/workspace/<id>/logo>` (stable, no signature) + `onError`→monogram + `Sentry.captureMessage`; imgError reset on workspaceId change (rerender-tested). (AC7 RTL 3-branch + AC7c stable-src; full Playwright integration via qa gate)
 - [x] 4.2 Threaded into `org-switcher` 3 tile mounts; `useActiveWorkspaceName`→`useActiveWorkspace` ({name,workspaceId,hasLogo}) (file renamed); layout + collapsed context-band tile thread `workspaceId`+`hasLogo` (same single fetch). (AC7c)
 
-## Phase 5 — Settings UI
-- [ ] 5.1 `workspace-logo-settings.tsx` (file input PNG/WebP, MAX 1MB, square check, FormData POST, optimistic preview, Remove→DELETE). 4-state union. (cq-union-widening)
-- [ ] 5.2 Non-owner gating: load viewer `role`; disabled-with-tooltip for non-owners. (AC8b)
-- [ ] 5.3 Reject copy names "SVG and JPG aren't accepted." Wire wireframes 25–27.
+## Phase 5 — Settings UI ✅ 7/7; mounted on Team page
+- [x] 5.1 `workspace-logo-settings.tsx` (file input PNG/WebP, MAX 1MB, square check via Image, FormData POST `/api/workspace/logo`, optimistic object-URL preview beats 300s proxy cache, Remove→DELETE). 4-state union `idle｜uploading｜success｜error`. (cq-union-widening)
+- [x] 5.2 Non-owner gating: page passes `isOwner`; non-owner renders disabled control + owners-only tooltip (no functional file input). Server route still 403s (defense in depth, Phase 2). (AC8b)
+- [x] 5.3 Reject copy "SVG and JPG aren't accepted — upload a square PNG or WebP". Mounted beside RenameWorkspaceAction; page reads `logo_path` → `initialHasLogo`.
 
 ## Phase 6 — Legal lockstep (CLO attests at PR)
 - [ ] 6.1 Privacy Policy + DPD + GDPR-policy/Art-30 (retention=workspace lifetime, next free PA#) + 1-line AUP. (AC9)
