@@ -25,11 +25,22 @@ describe("WorkspaceIdentityTile", () => {
     expect(getByTestId("workspace-identity-tile").textContent).toBe("?");
   });
 
-  it("renders on a non-gold surface (FR6: not a gold square)", () => {
+  it("list variant (the default) renders on a non-gold surface so dropdown rows keep the current-row gold-ring distinction", () => {
     const { getByTestId } = render(<WorkspaceIdentityTile name="Acme" size="md" />);
     const cls = getByTestId("workspace-identity-tile").className;
-    expect(cls).not.toMatch(/accent-gold/);
+    expect(cls).not.toMatch(/accent-gold|accent-gradient/);
     expect(cls).toMatch(/bg-soleur-bg-surface/);
+  });
+
+  it("identity variant renders a BOLD gold-gradient anchor (D4-bolder direction, #4915 follow-up: the active-workspace identity tile IS the sanctioned gold use — supersedes the original FR6 'non-gold tile' for this variant only)", () => {
+    const { getByTestId } = render(
+      <WorkspaceIdentityTile name="Acme" size="lg" variant="identity" />,
+    );
+    const cls = getByTestId("workspace-identity-tile").className;
+    expect(cls).toMatch(/from-soleur-accent-gradient-start/);
+    expect(cls).toMatch(/to-soleur-accent-gradient-end/);
+    // dark monogram on gold (high contrast — never white-on-gold)
+    expect(cls).toMatch(/text-soleur-text-on-accent/);
   });
 
   it("is pure presentational — imports neither OrgSwitcherContainer nor LiveRepoBadge (ADR-047 single-mount)", () => {

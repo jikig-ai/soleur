@@ -81,11 +81,15 @@ export function OrgSwitcher({
     return (
       <div
         data-testid="workspace-identity-static"
-        className="flex w-full min-w-0 items-center gap-2 rounded-md px-3 py-1.5 text-left"
+        className="flex w-full min-w-0 items-center gap-3 rounded-xl bg-soleur-bg-surface-2 px-3 py-2.5 text-left shadow-sm"
       >
-        <WorkspaceIdentityTile name={current.organizationName} size="sm" />
+        <WorkspaceIdentityTile
+          name={current.organizationName}
+          size="lg"
+          variant="identity"
+        />
         <span className="min-w-0">
-          <span className="block truncate text-sm font-medium text-soleur-text-primary">
+          <span className="block truncate text-sm font-bold text-soleur-text-primary">
             {current.organizationName}
           </span>
           {repoName ? (
@@ -109,11 +113,15 @@ export function OrgSwitcher({
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full min-w-0 items-center gap-2 rounded-md px-3 py-1.5 text-left hover:bg-soleur-bg-surface-2"
+        className="flex w-full min-w-0 items-center gap-3 rounded-xl bg-soleur-bg-surface-2 px-3 py-2.5 text-left shadow-sm transition-shadow hover:shadow-md"
       >
-        <WorkspaceIdentityTile name={current.organizationName} size="sm" />
+        <WorkspaceIdentityTile
+          name={current.organizationName}
+          size="lg"
+          variant="identity"
+        />
         <span className="min-w-0">
-          <span className="block truncate text-sm font-medium text-soleur-text-primary">
+          <span className="block truncate text-sm font-bold text-soleur-text-primary">
             {current.organizationName}
           </span>
           {repoName ? (

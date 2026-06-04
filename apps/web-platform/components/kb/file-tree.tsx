@@ -419,13 +419,22 @@ function FileNode({
         ) : (
           <Link
             href={filePath}
-            className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors ${
+            aria-current={isActive ? "page" : undefined}
+            className={`relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors ${
               isActive
-                ? "bg-soleur-bg-surface-2 text-soleur-accent-gold-fg"
+                ? "bg-soleur-accent-gold-fill/10 text-soleur-accent-gold-text"
                 : "text-soleur-text-secondary hover:bg-soleur-bg-surface-2/50 hover:text-soleur-text-primary"
             } ${isDeleting || isRenaming ? "opacity-50" : ""}`}
             style={{ paddingLeft }}
           >
+            {/* D4-bolder active treatment — gold left-edge bar overlay at the
+                row's left edge (flush, does not shift the indented content). */}
+            {isActive && (
+              <span
+                aria-hidden="true"
+                className="absolute inset-y-1 left-0 w-[3px] rounded-full bg-soleur-accent-gold-fill"
+              />
+            )}
             <FileTypeIcon extension={node.extension} />
             <span className="truncate">{node.name}</span>
             {node.modifiedAt && !isDeleting && !isRenaming && (

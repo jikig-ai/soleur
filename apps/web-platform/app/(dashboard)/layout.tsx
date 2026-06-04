@@ -370,12 +370,22 @@ export default function DashboardLayout({
                     href={item.href}
                     title={collapsed ? item.label : undefined}
                     aria-current={active ? "page" : undefined}
-                    className={`flex min-h-[44px] items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
+                    className={`relative flex min-h-[44px] items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
                       active
-                        ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
+                        ? "bg-soleur-accent-gold-fill/10 text-soleur-accent-gold-text"
                         : "text-soleur-text-muted hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary"
                     } ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
                   >
+                    {/* D4-bolder active treatment: a flush left-edge gold bar
+                        OVERLAY (left-0, in the px-3 gutter) so the icon/label
+                        column is NOT indented vs inactive items. Hidden on the
+                        collapsed rail where there is no left gutter. */}
+                    {active && (
+                      <span
+                        aria-hidden="true"
+                        className={`absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-soleur-accent-gold-fill ${collapsed ? "md:hidden" : ""}`}
+                      />
+                    )}
                     <item.icon className="h-4 w-4 shrink-0" />
                     <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>
                       {item.label}

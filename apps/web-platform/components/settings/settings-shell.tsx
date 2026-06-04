@@ -68,12 +68,20 @@ export function SettingsShell({
                       <Link
                         href={tab.href}
                         aria-current={active ? "page" : undefined}
-                        className={`block rounded-lg px-3 py-2 text-sm transition-colors ${
+                        className={`relative block rounded-lg px-3 py-2 text-sm transition-colors ${
                           active
-                            ? "bg-soleur-bg-surface-2 text-soleur-text-primary font-medium"
+                            ? "bg-soleur-accent-gold-fill/10 text-soleur-accent-gold-text font-medium"
                             : "text-soleur-text-secondary hover:bg-soleur-bg-surface-2/50 hover:text-soleur-text-primary"
                         }`}
                       >
+                        {/* D4-bolder active treatment — gold left-edge bar
+                            overlay, consistent with the primary nav + KB tree. */}
+                        {active && (
+                          <span
+                            aria-hidden="true"
+                            className="absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-soleur-accent-gold-fill"
+                          />
+                        )}
                         {tab.label}
                       </Link>
                     </li>

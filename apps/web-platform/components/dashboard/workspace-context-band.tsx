@@ -93,7 +93,11 @@ export function WorkspaceContextBand({
           title={activeWorkspaceName ?? "Active workspace"}
           className="flex shrink-0"
         >
-          <WorkspaceIdentityTile name={activeWorkspaceName ?? ""} size="sm" />
+          <WorkspaceIdentityTile
+            name={activeWorkspaceName ?? ""}
+            size="sm"
+            variant="identity"
+          />
         </span>
         <span
           data-testid="live-repo-dot"
