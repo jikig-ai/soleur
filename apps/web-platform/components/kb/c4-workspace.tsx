@@ -37,7 +37,7 @@ export default function C4Workspace({
 }: {
   viewId: string;
   dirPath: string;
-  /** KB-relative path (e.g. "knowledge-base/.../container.md") the Concierge is scoped to. */
+  /** KB-relative path (e.g. "knowledge-base/.../c4-model.md") the Concierge is scoped to. */
   contextPath: string;
   /** Remaining prose (diagram block stripped) for the collapsible Notes strip. */
   notes?: string;
