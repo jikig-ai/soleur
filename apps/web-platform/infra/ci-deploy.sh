@@ -580,9 +580,26 @@ case "$COMPONENT" in
 
     # Verify bwrap sandbox works inside canary (#1557).
     # If bwrap fails, the OS-level sandbox (Layer 1) is non-functional.
+    #
+    # The probe MUST exercise --unshare-user + --proc /proc, not just
+    # --unshare-pid --bind. The cron Bash sandbox creates an unprivileged USER
+    # namespace and mounts /proc inside it; that path is gated by the host
+    # sysctl kernel.apparmor_restrict_unprivileged_userns (asserted on every
+    # boot by bwrap-userns-sysctl.service, see server.tf). A probe that omits
+    # --unshare-user/--proc passes even when that sysctl has drifted to 1, so
+    # the canary swaps to prod healthy while EVERY cron Bash call then fails
+    # silently (spawn exits 0 with a degraded report, no scheduled-* issue) —
+    # the exact 2026-06-04 silent-producer incident (#4927/#4928). Exercising
+    # the userns+/proc path here turns that silent 2-week outage into a
+    # deploy-time rollback.
     if [[ "$CANARY_HEALTHY" == "true" ]]; then
-      echo "Verifying bwrap sandbox..."
-      if ! docker exec soleur-web-platform-canary bwrap --new-session --die-with-parent --dev /dev --unshare-pid --bind / / -- true 2>&1; then
+      echo "Verifying bwrap sandbox (userns + /proc mount)..."
+      # Arg order is significant: bwrap applies filesystem ops in sequence, so
+      # bind the rootfs FIRST, then overlay /dev and /proc on top (the canonical
+      # order the Claude Code sandbox itself uses). --unshare-user is the
+      # load-bearing addition — creating the user namespace + writing uid_map is
+      # what fails when kernel.apparmor_restrict_unprivileged_userns has drifted.
+      if ! docker exec soleur-web-platform-canary bwrap --new-session --die-with-parent --unshare-user --unshare-pid --bind / / --dev /dev --proc /proc -- true 2>&1; then
         echo "Canary sandbox check failed, rolling back..."
         logger -t "$LOG_TAG" "DEPLOY_ROLLBACK: bwrap sandbox non-functional in $IMAGE:$TAG"
         { docker stop soleur-web-platform-canary 2>/dev/null || true; }
