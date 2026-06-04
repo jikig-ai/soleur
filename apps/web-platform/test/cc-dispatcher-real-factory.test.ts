@@ -33,6 +33,9 @@ const {
   mockWriteAskpassScriptTo,
   mockCleanupAskpassScript,
   mockResolveActiveWorkspacePath,
+  mockGetCurrentRepoUrl,
+  mockGetInstallationAccount,
+  mockFindRepoOwnerInstallationForUser,
 } = vi.hoisted(() => ({
   mockQuery: vi.fn(),
   mockGetUserApiKey: vi.fn(),
@@ -49,6 +52,9 @@ const {
   mockWriteAskpassScriptTo: vi.fn(),
   mockCleanupAskpassScript: vi.fn(),
   mockResolveActiveWorkspacePath: vi.fn(),
+  mockGetCurrentRepoUrl: vi.fn(),
+  mockGetInstallationAccount: vi.fn(),
+  mockFindRepoOwnerInstallationForUser: vi.fn(),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -88,8 +94,15 @@ vi.mock("@/server/resolve-installation-id", () => ({
   resolveInstallationId: mockResolveInstallationId,
 }));
 
+// feat-one-shot-concierge-gh-403 self-heal: the heal is driven entirely by the
+// GitHub App JWT path (getInstallationAccount + findRepoOwnerInstallationForUser)
+// — NO Supabase service-role. Pre-existing factory-shape tests run with
+// getCurrentRepoUrl=null so the self-heal branch never fires; the dedicated
+// describe block drives it.
 vi.mock("@/server/github-app", () => ({
   generateInstallationToken: mockGenerateInstallationToken,
+  getInstallationAccount: mockGetInstallationAccount,
+  findRepoOwnerInstallationForUser: mockFindRepoOwnerInstallationForUser,
 }));
 
 // Plan item 1 — cc-dispatcher now imports the in-sandbox askpass writer from
@@ -119,7 +132,7 @@ vi.mock("@/server/workspace-resolver", async () => {
 });
 
 vi.mock("@/server/current-repo-url", () => ({
-  getCurrentRepoUrl: vi.fn(async () => null),
+  getCurrentRepoUrl: mockGetCurrentRepoUrl,
 }));
 vi.mock("@/server/ensure-workspace-repo", () => ({
   ensureWorkspaceRepoCloned: vi.fn(async () => undefined),
@@ -317,6 +330,12 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     mockResolveInstallationId.mockResolvedValue(null);
     mockGenerateInstallationToken.mockResolvedValue("ghs_default_test_token");
     mockResolveBashAutonomous.mockResolvedValue(false);
+    // feat-one-shot-concierge-gh-403 self-heal defaults: no connected repo so
+    // the self-heal branch is skipped for every pre-existing test. The
+    // dedicated describe block overrides these per-test.
+    mockGetCurrentRepoUrl.mockResolvedValue(null);
+    mockGetInstallationAccount.mockResolvedValue({ login: "owner", id: 1, type: "Organization" });
+    mockFindRepoOwnerInstallationForUser.mockResolvedValue(null);
     // Item 1 — in-sandbox askpass writer returns a deterministic path under
     // the workspace (the real writer uses a randomUUID suffix).
     mockWriteAskpassScriptTo.mockReturnValue(
@@ -655,6 +674,111 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       {},
       { ghToken: undefined },
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // feat-one-shot-concierge-gh-403 — installation self-heal (the load-bearing
+  // fix). Stored install is a cross-account personal install; the dispatch
+  // mints for the ENTITLED repo-owner install via the GitHub-App-JWT path only
+  // (NO service-role). The user's login is derived from the stored personal
+  // install's account; no persist (in-memory override per dispatch).
+  // -------------------------------------------------------------------------
+  describe("installation self-heal", () => {
+    const REPO = "https://github.com/jikig-ai/soleur";
+    const STORED = 130018654; // personal install (issues:read)
+    const OWNER = 122213433; // org install (issues:write)
+
+    it("mismatch (personal stored install) → mints the entitled owner install for this dispatch", async () => {
+      mockResolveInstallationId.mockResolvedValueOnce(STORED);
+      mockGetCurrentRepoUrl.mockResolvedValueOnce(REPO);
+      // Stored is the user's PERSONAL install — its login IS the user's GH login.
+      mockGetInstallationAccount.mockResolvedValueOnce({ login: "Elvalio", id: STORED, type: "User" });
+      mockFindRepoOwnerInstallationForUser.mockResolvedValueOnce(OWNER);
+
+      await realSdkQueryFactory(makeArgs());
+
+      // The user's login passed to the entitlement gate is derived from the
+      // stored install's account (no service-role admin lookup).
+      expect(mockFindRepoOwnerInstallationForUser).toHaveBeenCalledWith(
+        "jikig-ai",
+        "Elvalio",
+      );
+      // Load-bearing: GH_TOKEN minted for the OWNER install, not the stored one.
+      expect(mockGenerateInstallationToken).toHaveBeenCalledWith(
+        OWNER,
+        expect.anything(),
+      );
+      expect(mockGenerateInstallationToken).not.toHaveBeenCalledWith(
+        STORED,
+        expect.anything(),
+      );
+    });
+
+    it("negative control: stored install already owns the repo → NO owner probe, mints stored", async () => {
+      mockResolveInstallationId.mockResolvedValueOnce(OWNER);
+      mockGetCurrentRepoUrl.mockResolvedValueOnce(REPO);
+      // Stored account already matches the owner → cheap guard short-circuits.
+      mockGetInstallationAccount.mockResolvedValueOnce({ login: "jikig-ai", id: OWNER, type: "Organization" });
+
+      await realSdkQueryFactory(makeArgs());
+
+      expect(mockFindRepoOwnerInstallationForUser).not.toHaveBeenCalled();
+      expect(mockGenerateInstallationToken).toHaveBeenCalledWith(
+        OWNER,
+        expect.anything(),
+      );
+    });
+
+    it("entitlement denied (findRepoOwnerInstallationForUser → null) → keeps stored install", async () => {
+      mockResolveInstallationId.mockResolvedValueOnce(STORED);
+      mockGetCurrentRepoUrl.mockResolvedValueOnce(REPO);
+      mockGetInstallationAccount.mockResolvedValueOnce({ login: "outside-user", id: STORED, type: "User" });
+      mockFindRepoOwnerInstallationForUser.mockResolvedValueOnce(null); // not an org member
+
+      await realSdkQueryFactory(makeArgs());
+
+      expect(mockGenerateInstallationToken).toHaveBeenCalledWith(
+        STORED,
+        expect.anything(),
+      );
+    });
+
+    it("org-type stored install (login != owner) → cannot derive user login, keeps stored (fail-safe, no probe)", async () => {
+      mockResolveInstallationId.mockResolvedValueOnce(STORED);
+      mockGetCurrentRepoUrl.mockResolvedValueOnce(REPO);
+      // Stored is an ORG install for a DIFFERENT org → user login not derivable
+      // without a service-role admin lookup → keep stored, never probe.
+      mockGetInstallationAccount.mockResolvedValueOnce({ login: "some-other-org", id: STORED, type: "Organization" });
+
+      await realSdkQueryFactory(makeArgs());
+
+      expect(mockFindRepoOwnerInstallationForUser).not.toHaveBeenCalled();
+      expect(mockGenerateInstallationToken).toHaveBeenCalledWith(
+        STORED,
+        expect.anything(),
+      );
+    });
+
+    it("probe failure (getInstallationAccount throws) → keeps stored install, mirrors to Sentry, dispatch proceeds", async () => {
+      mockResolveInstallationId.mockResolvedValueOnce(STORED);
+      mockGetCurrentRepoUrl.mockResolvedValueOnce(REPO);
+      mockGetInstallationAccount.mockRejectedValueOnce(new Error("probe boom"));
+
+      await realSdkQueryFactory(makeArgs());
+
+      expect(mockReportSilentFallback).toHaveBeenCalledWith(
+        expect.any(Error),
+        expect.objectContaining({
+          feature: "cc-dispatcher",
+          op: "installation-self-heal-probe",
+        }),
+      );
+      expect(mockGenerateInstallationToken).toHaveBeenCalledWith(
+        STORED,
+        expect.anything(),
+      );
+      expect(mockQuery).toHaveBeenCalledOnce();
+    });
   });
 
   // -------------------------------------------------------------------------
