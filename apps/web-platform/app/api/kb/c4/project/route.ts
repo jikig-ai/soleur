@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import path from "path";
 import { promises as fs, constants as fsConstants } from "node:fs";
-import { createClient } from "@/lib/supabase/server";
-import { resolveUserKbRoot } from "@/server/kb-route-helpers";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { resolveActiveWorkspaceKbRoot } from "@/server/workspace-resolver";
 import { isPathInWorkspace } from "@/server/sandbox";
 import { renameUserIdToHash } from "@/server/userid-pseudonymize";
 import { C4_DIAGRAMS_DIR, C4_SOURCE_EXT, C4_MODEL_JSON } from "@/lib/c4-constants";
@@ -33,9 +33,19 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const resolved = await resolveUserKbRoot(user.id);
-  if (!resolved.ok) return resolved.response;
-  const { kbRoot } = resolved;
+  // ADR-044 (#4543): the KB (and its C4 diagrams) live on the ACTIVE
+  // workspace, not the caller's own `users` row — an invited member viewing a
+  // shared workspace has an empty solo row. Mirror the tree/content READ paths
+  // so the visualizer reads the same clone the sidebar renders from; reading
+  // the caller's own root here surfaced as a spurious "Diagram model not built".
+  const serviceClient = createServiceClient();
+  const access = await resolveActiveWorkspaceKbRoot(user.id, serviceClient);
+  if (!access.ok) {
+    return access.status === 404
+      ? NextResponse.json({ error: "Workspace not found" }, { status: 404 })
+      : NextResponse.json({ error: "Workspace not ready" }, { status: 503 });
+  }
+  const { kbRoot } = access;
 
   const requestedDir =
     new URL(request.url).searchParams.get("dir") || C4_DIAGRAMS_DIR;
