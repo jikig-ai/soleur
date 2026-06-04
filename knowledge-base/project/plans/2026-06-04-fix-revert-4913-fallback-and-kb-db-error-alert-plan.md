@@ -426,10 +426,12 @@ with the Phase-1.7.5 `gh issue list --label code-review` query at deepen-plan).
 
 - A plan whose `## User-Brand Impact` section is empty or omits the threshold fails
   `deepen-plan` Phase 4.6 — this plan's section is populated (threshold: single-user incident).
-- **Allowlist + import atomicity:** `service-role-allowlist-gate.sh` FAILS if a `createServiceClient`
-  import and its `.service-role-allowlist` line do not move together in one commit. The import
-  REMOVAL and the allowlist line REMOVAL must be in the same commit (inverse of the gate's
-  add-direction, same enforcement).
+- **Allowlist gate is DIRECTIONAL, not atomic (deepened correction).**
+  `service-role-allowlist-gate.sh` FAILS only when a file *imports* `createServiceClient`/
+  `getServiceClient` and is NOT allowlisted (`:48-64`). A stale allowlist line (path listed but
+  no longer importing) is tolerated — CI stays green. So the import removal and the allowlist-line
+  removal do NOT have to be in the same commit; the line removal is boundary-hygiene (and
+  CODEOWNERS-gated), not gate-forced. Do not assert a same-commit requirement.
 - **Do NOT remove the `reportSilentFallback` emit when reverting the fallback.** The fallback
   (the `createServiceClient` line) is dead code; the EMIT (`reportSilentFallback`) is the
   #4920 alert's signal and must survive. A naive `git revert -m` of #4913 would delete the emit
