@@ -1,1 +1,351 @@
-{}
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "bEY1X",
+      "x": 0,
+      "y": 0,
+      "name": "1 — Share popup: error state",
+      "width": 360,
+      "fill": "#0f0f10",
+      "cornerRadius": 12,
+      "layout": "vertical",
+      "gap": 12,
+      "padding": 16,
+      "children": [
+        {
+          "type": "text",
+          "id": "9qKOq",
+          "name": "t1",
+          "fill": "#8a8a8f",
+          "content": "Share popup — error state (share-popover.tsx)",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "600"
+        },
+        {
+          "type": "frame",
+          "id": "uN9HQ",
+          "name": "popover",
+          "width": 320,
+          "fill": "#1a1a1c",
+          "cornerRadius": 10,
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "#2a2a2e"
+          },
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "m4uTA",
+              "name": "e1",
+              "fill": "#f0a0a0",
+              "content": "Couldn't generate a link. Please try again.",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "EoQgF",
+              "name": "e2",
+              "fill": "#6a6a6f",
+              "content": "(generic copy — never echoes server error / DB code / path)",
+              "fontFamily": "Inter",
+              "fontSize": 10,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "605oy",
+              "name": "Try again",
+              "width": "fill_container",
+              "height": 36,
+              "fill": "#d4b36a",
+              "cornerRadius": 8,
+              "gap": 6,
+              "padding": [
+                8,
+                12
+              ],
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Ft3vz",
+                  "name": "btnT",
+                  "fill": "#1a1208",
+                  "content": "Try again",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "2kxk5",
+              "name": "e3",
+              "fill": "#6a6a6f",
+              "content": "status: \"error\" replaces the silent reset-to-idle",
+              "fontFamily": "Inter",
+              "fontSize": 10,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "i68C3",
+      "x": 420,
+      "y": 0,
+      "name": "2 — C4 workspace: Concierge expanded",
+      "width": 620,
+      "fill": "#0f0f10",
+      "cornerRadius": 12,
+      "layout": "vertical",
+      "gap": 10,
+      "padding": 16,
+      "children": [
+        {
+          "type": "text",
+          "id": "V8dLf",
+          "name": "t2",
+          "fill": "#8a8a8f",
+          "content": "C4 diagram workspace — Concierge expanded (default)",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "600"
+        },
+        {
+          "type": "frame",
+          "id": "IqXJB",
+          "name": "split",
+          "width": "fill_container",
+          "height": 320,
+          "fill": "#141416",
+          "cornerRadius": 8,
+          "children": [
+            {
+              "type": "frame",
+              "id": "vo3HX",
+              "name": "diagram pane",
+              "width": "fill_container",
+              "height": "fill_container",
+              "fill": "#1a1a1c",
+              "layout": "vertical",
+              "gap": 8,
+              "padding": 16,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "elwhj",
+                  "name": "diagT",
+                  "fill": "#7a7a80",
+                  "content": "interactive C4 diagram",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "8PdCm",
+              "name": "Concierge panel",
+              "width": 230,
+              "height": "fill_container",
+              "fill": "#161618",
+              "stroke": {
+                "align": "inside",
+                "thickness": {
+                  "left": 1
+                },
+                "fill": "#2a2a2e"
+              },
+              "layout": "vertical",
+              "gap": 8,
+              "padding": 8,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "lyXpD",
+                  "name": "panel header",
+                  "width": "fill_container",
+                  "height": 36,
+                  "fill": "#1c1c1f",
+                  "gap": 6,
+                  "padding": 4,
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "Ajhnc",
+                      "name": "chdrT",
+                      "fill": "#b0b0b5",
+                      "content": "Concierge | Code",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "mhW4s",
+                      "name": "collapse btn",
+                      "width": 22,
+                      "height": 22,
+                      "fill": "#262629",
+                      "cornerRadius": 4,
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "7dj9x",
+                          "name": "clpI",
+                          "width": 14,
+                          "height": 14,
+                          "iconFontName": "x",
+                          "iconFontFamily": "lucide",
+                          "fill": "#c0c0c5"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "iwBEt",
+                  "name": "chatBody",
+                  "fill": "#7a7a80",
+                  "content": "Ask about this document…",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "aL8lf",
+                  "name": "chatNote",
+                  "fill": "#6a6a6f",
+                  "content": "× collapses panel (onClose → setConciergeCollapsed(true))",
+                  "fontFamily": "Inter",
+                  "fontSize": 9,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "SnpBu",
+      "x": 420,
+      "y": 420,
+      "name": "3 — C4 workspace: Concierge collapsed",
+      "width": 620,
+      "fill": "#0f0f10",
+      "cornerRadius": 12,
+      "layout": "vertical",
+      "gap": 10,
+      "padding": 16,
+      "children": [
+        {
+          "type": "text",
+          "id": "g1oxt",
+          "name": "t3",
+          "fill": "#8a8a8f",
+          "content": "C4 diagram workspace — Concierge collapsed (full-width diagram + reveal)",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "600"
+        },
+        {
+          "type": "frame",
+          "id": "LyQpl",
+          "name": "full diagram",
+          "width": "fill_container",
+          "height": 320,
+          "fill": "#1a1a1c",
+          "cornerRadius": 8,
+          "layout": "vertical",
+          "gap": 8,
+          "padding": 16,
+          "alignItems": "end",
+          "children": [
+            {
+              "type": "frame",
+              "id": "EyfBh",
+              "name": "Open Concierge pill",
+              "height": 34,
+              "fill": "#d4b36a",
+              "cornerRadius": 8,
+              "gap": 6,
+              "padding": [
+                8,
+                12
+              ],
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "GyBB0",
+                  "name": "pillI",
+                  "width": 14,
+                  "height": 14,
+                  "iconFontName": "message-square",
+                  "iconFontFamily": "lucide",
+                  "fill": "#1a1208"
+                },
+                {
+                  "type": "text",
+                  "id": "a0LdP",
+                  "name": "pillT",
+                  "fill": "#1a1208",
+                  "content": "Open Concierge",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "oLHo6",
+              "name": "fullT",
+              "fill": "#7a7a80",
+              "content": "diagram now uses full width",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "3gEpc",
+          "name": "note3",
+          "fill": "#6a6a6f",
+          "content": "reveal control (gold-gradient CTA, brand-consistent w/ KbChatTrigger); Concierge stays mounted so the thread survives collapse↔reveal",
+          "fontFamily": "Inter",
+          "fontSize": 9,
+          "fontWeight": "normal"
+        }
+      ]
+    }
+  ]
+}
