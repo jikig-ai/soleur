@@ -89,6 +89,14 @@ vi.mock("@/server/git-auth", () => ({
 vi.mock("@/server/resolve-bash-autonomous", () => ({
   resolveBashAutonomous: vi.fn(async () => false),
 }));
+// feat-bash-autonomous-default-on — soft-gate inputs default to un-acked /
+// non-owner so the prefill-guard factory-shape tests dispatch unaffected.
+vi.mock("@/server/resolve-autonomous-ack", () => ({
+  resolveAutonomousAck: vi.fn(async () => null),
+}));
+vi.mock("@/server/resolve-workspace-owner", () => ({
+  resolveIsWorkspaceOwner: vi.fn(async () => false),
+}));
 
 // Session-start ensure-repo self-heal (cold-path deps) — default no-op.
 vi.mock("@/server/current-repo-url", () => ({

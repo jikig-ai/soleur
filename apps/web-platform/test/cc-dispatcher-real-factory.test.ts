@@ -30,6 +30,8 @@ const {
   mockResolveInstallationId,
   mockGenerateInstallationToken,
   mockResolveBashAutonomous,
+  mockResolveAutonomousAck,
+  mockResolveIsWorkspaceOwner,
   mockWriteAskpassScriptTo,
   mockCleanupAskpassScript,
   mockResolveActiveWorkspacePath,
@@ -46,6 +48,8 @@ const {
   mockResolveInstallationId: vi.fn(),
   mockGenerateInstallationToken: vi.fn(),
   mockResolveBashAutonomous: vi.fn(),
+  mockResolveAutonomousAck: vi.fn(),
+  mockResolveIsWorkspaceOwner: vi.fn(),
   mockWriteAskpassScriptTo: vi.fn(),
   mockCleanupAskpassScript: vi.fn(),
   mockResolveActiveWorkspacePath: vi.fn(),
@@ -104,6 +108,16 @@ vi.mock("@/server/git-auth", () => ({
 // tests dispatch with the review-gate intact.
 vi.mock("@/server/resolve-bash-autonomous", () => ({
   resolveBashAutonomous: mockResolveBashAutonomous,
+}));
+
+// feat-bash-autonomous-default-on — first-run consent soft-gate inputs. Default
+// ack=null + owner=false so factory-shape tests dispatch with the review-gate
+// intact (un-acked non-owner ⇒ not the soft-gate path).
+vi.mock("@/server/resolve-autonomous-ack", () => ({
+  resolveAutonomousAck: mockResolveAutonomousAck,
+}));
+vi.mock("@/server/resolve-workspace-owner", () => ({
+  resolveIsWorkspaceOwner: mockResolveIsWorkspaceOwner,
 }));
 
 // Session-start ensure-repo self-heal (cold-path deps). Default no-op so the
@@ -317,6 +331,8 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     mockResolveInstallationId.mockResolvedValue(null);
     mockGenerateInstallationToken.mockResolvedValue("ghs_default_test_token");
     mockResolveBashAutonomous.mockResolvedValue(false);
+    mockResolveAutonomousAck.mockResolvedValue(null);
+    mockResolveIsWorkspaceOwner.mockResolvedValue(false);
     // Item 1 — in-sandbox askpass writer returns a deterministic path under
     // the workspace (the real writer uses a randomUUID suffix).
     mockWriteAskpassScriptTo.mockReturnValue(
