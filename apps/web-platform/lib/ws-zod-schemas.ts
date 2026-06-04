@@ -246,6 +246,25 @@ const toolUseSchema = z.strictObject({
   leaderId: domainLeaderIdSchema,
   label: z.string(),
 });
+// feat-concierge-stream-commands — inline Bash command/output stream.
+// `command`/`output` are optional (set per `phase`); both are already
+// redacted at the emit boundary. `truncated` flags an output chunk that
+// hit the per-command cap (D4).
+const commandStreamSchema = z.strictObject({
+  type: z.literal("command_stream"),
+  leaderId: domainLeaderIdSchema,
+  // FIX 4 — wire-length caps. `command` is pre-capped to 16384 bytes at the
+  // emit boundary (mirrors the output path); `output` is byte-capped to
+  // COMMAND_STREAM_TOTAL_CAP_BYTES (16384) — the char `.max()` sits slightly
+  // above to admit the truncation marker + any redaction-marker expansion.
+  command: z.string().max(16384).optional(),
+  output: z.string().max(20000).optional(),
+  phase: z.enum(["start", "output", "end"]),
+  truncated: z.boolean().optional(),
+  // FIX 2 — SDK tool_use id for concurrent-Bash output correlation. Optional
+  // for back-compat with emitters/replayed frames that predate it.
+  toolUseId: z.string().optional(),
+});
 const toolProgressSchema = z.strictObject({
   type: z.literal("tool_progress"),
   leaderId: domainLeaderIdSchema,
@@ -490,6 +509,7 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   streamStartSchema,
   streamEndSchema,
   toolUseSchema,
+  commandStreamSchema,
   toolProgressSchema,
   reviewGateSchema,
   sessionStartedSchema,

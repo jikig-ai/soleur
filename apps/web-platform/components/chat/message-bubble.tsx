@@ -8,7 +8,9 @@ import { LEADER_COLORS } from "@/components/chat/leader-colors";
 import { LeaderAvatar } from "@/components/leader-avatar";
 import { AttachmentDisplay } from "@/components/chat/attachment-display";
 import type { AttachmentRef, MessageState } from "@/lib/types";
+import type { CommandBlock } from "@/lib/chat-state-machine";
 import { formatAssistantText } from "@/lib/format-assistant-text";
+import { redactCommandForDisplay } from "@/lib/safety/redaction-allowlist";
 import { reportSilentFallback } from "@/lib/client-observability";
 
 export function ThinkingDots() {
@@ -99,6 +101,7 @@ export const MessageBubble = memo(function MessageBubble({
   variant = "full",
   status,
   usage,
+  commandBlocks,
 }: {
   role: "user" | "assistant";
   content: string;
@@ -121,6 +124,13 @@ export const MessageBubble = memo(function MessageBubble({
   /** #3448 PR2: aborted-turn snapshot. Required when `status === "aborted"`;
    *  ignored otherwise. */
   usage?: AbortMarkerUsage | null;
+  /** feat-concierge-stream-commands — inline streamed-terminal blocks for
+   *  Concierge Bash tool-uses (cc_router). Append-only; rendered below the
+   *  bubble content as monospace `<pre>` blocks, Claude-Code-terminal style,
+   *  with NO Approve/Deny buttons. Each block's command/output is redacted
+   *  again at render (belt-and-suspenders Art. 14 gate). Empty/undefined on
+   *  bubbles that ran no commands. */
+  commandBlocks?: CommandBlock[];
   // Review F5 (#2886): the `parentId` prop, the `ml-6` indentClass, and the
   // `data-parent-id` attribute were removed — they had no production caller.
   // SubagentGroup renders its child rows directly with their own indentation
@@ -204,11 +214,87 @@ export const MessageBubble = memo(function MessageBubble({
             ? renderAbortedAssistant({ content, usage, variant })
             : renderBubbleContent({ isUser, messageState, content, toolLabel, toolsUsed, retrying, isDone, variant })}
 
+          {commandBlocks && commandBlocks.length > 0 && (
+            <CommandStreamBlocks blocks={commandBlocks} />
+          )}
+
           {attachments && attachments.length > 0 && (
             <AttachmentDisplay attachments={attachments} />
           )}
         </div>
       </div>
+    </div>
+  );
+});
+
+/**
+ * feat-concierge-stream-commands — inline streamed-terminal block for
+ * Concierge Bash tool-uses (cc_router), rendered below the bubble content,
+ * Claude-Code-terminal style: a `$ <command>` prompt line + monospace
+ * stdout/stderr, NO Approve/Deny buttons (command already executed under the
+ * autonomous posture; the blocklist guardrail + redaction are the safety
+ * floor). Styled like BashApprovalCard's `<pre>` but inline.
+ *
+ * Render-time redaction (`redactCommandForDisplay`) is the belt-and-
+ * suspenders Art. 14 gate per `redaction-allowlist.ts:9-14` — the server
+ * already redacted at the emit boundary, but a render-time pass is the final
+ * defense if a persisted/replayed block predates a redaction-rule fix. A
+ * surviving secret shape mirrors to Sentry via `reportSilentFallback`.
+ */
+/**
+ * FIX 3 — single block, memoized. `redactCommandForDisplay` is the
+ * belt-and-suspenders render-time gate but it is non-trivial regex work; the
+ * active cc_router bubble re-renders at streaming-token rate, so running it on
+ * every block of every render is wasteful. `React.memo` skips re-render when
+ * the block's `command`/`output`/`truncated` are referentially stable, and the
+ * inner `useMemo` recomputes redaction only when the RAW strings change.
+ */
+const CommandStreamBlock = memo(function CommandStreamBlock({
+  block,
+}: {
+  block: CommandBlock;
+}): React.ReactElement {
+  const command = React.useMemo(
+    () => redactCommandForDisplay(block.command),
+    [block.command],
+  );
+  const output = React.useMemo(
+    () => redactCommandForDisplay(block.output),
+    [block.output],
+  );
+  return (
+    <pre
+      data-testid="command-stream-block"
+      className="min-w-0 overflow-x-auto rounded-md border border-soleur-border-default/60 bg-soleur-bg-surface-2 px-3 py-2 font-mono text-xs text-soleur-text-secondary whitespace-pre-wrap [overflow-wrap:anywhere]"
+    >
+      <span className="text-amber-500">$ </span>
+      <span className="text-soleur-text-primary">{command}</span>
+      {output.length > 0 && (
+        <>
+          {"\n"}
+          {output}
+        </>
+      )}
+    </pre>
+  );
+});
+
+const CommandStreamBlocks = memo(function CommandStreamBlocks({
+  blocks,
+}: {
+  blocks: CommandBlock[];
+}): React.ReactElement {
+  return (
+    <div
+      className="mt-2 flex flex-col gap-2"
+      data-testid="command-stream-blocks"
+    >
+      {blocks.map((block, i) => (
+        // `i` is a stable index for an append-only list (blocks are never
+        // reordered; the FIX 3 cap prepends a marker + drops a contiguous head,
+        // but the bubble is transient and re-keying on truncation is acceptable).
+        <CommandStreamBlock key={i} block={block} />
+      ))}
     </div>
   );
 });

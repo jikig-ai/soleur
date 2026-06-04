@@ -68,10 +68,12 @@ import {
 } from "./conversation-routing";
 import {
   reportSilentFallback,
+  warnSilentFallback,
   mirrorWithDebounce,
   mirrorP0Deduped,
   __resetMirrorDebounceForTests,
 } from "./observability";
+import { redactCommandForDisplay } from "../lib/safety/redaction-allowlist";
 import { CC_ROUTER_TIER3_DENYLIST } from "./tool-tiers";
 import { updateConversationFor } from "./conversation-writer";
 import {
@@ -243,6 +245,83 @@ const CC_GITHUB_NAME_RE = /^[a-zA-Z0-9._-]+$/;
 // tool names; the SDK validation gate constrains names to the registered
 // catalog today, so this is bounded but not impossible.
 const MAX_TOOL_NAME_LEN_FOR_LOG = 128;
+
+// feat-concierge-stream-commands — `command_stream` output caps (D4). The
+// per-chunk cap bounds a single oversized `tool_use_result` (e.g. a `cat`
+// of a multi-MB file) before it ever hits the WS frame; the per-command
+// total cap bounds the cumulative output across however many result blocks
+// one command produces. When the total cap is hit, `TRUNCATION_MARKER` is
+// appended and `truncated:true` rides the emit so the bubble shows the
+// `[… truncated]` affordance. Byte-measured (not char-measured) to bound
+// the actual wire payload regardless of multi-byte content.
+export const COMMAND_STREAM_CHUNK_CAP_BYTES = 4096;
+export const COMMAND_STREAM_TOTAL_CAP_BYTES = 16384;
+// FIX 4 — pre-cap the raw command at the start emit (mirrors the output path)
+// so the wire payload + redaction back-tracking are bounded regardless of an
+// adversarially long command string. Matches `commandStreamSchema.command.max`.
+export const COMMAND_STREAM_COMMAND_CAP_BYTES = 16384;
+export const COMMAND_STREAM_TRUNCATION_MARKER = "\n[… truncated]";
+
+/**
+ * feat-concierge-stream-commands — byte-cap a UTF-8 string at `capBytes`,
+ * never splitting a multi-byte code point. Returns the (possibly shorter)
+ * string + whether it was truncated. Used to bound a single output chunk
+ * before redaction (redaction can only shrink the string, so capping the
+ * raw input keeps the regex back-tracking bounded too).
+ */
+export function capUtf8Bytes(s: string, capBytes: number): { text: string; truncated: boolean } {
+  const buf = Buffer.from(s, "utf8");
+  if (buf.length <= capBytes) return { text: s, truncated: false };
+  // Walk back to a code-point boundary: UTF-8 continuation bytes are
+  // 0b10xxxxxx (0x80–0xBF). Trim them off the cut edge.
+  let end = capBytes;
+  while (end > 0 && (buf[end] & 0xc0) === 0x80) end--;
+  return { text: buf.subarray(0, end).toString("utf8"), truncated: true };
+}
+
+// Redaction-fallthrough probe markers (the four secret shapes the extended
+// allowlist covers). If a redacted command/output STILL contains one of
+// these substrings, redaction silently failed — a P0 credential-leak class
+// surfaced to Sentry via `warnSilentFallback`
+// (cq-silent-fallback-must-mirror-to-sentry). Synthesized prefixes only.
+const REDACTION_FALLTHROUGH_PROBES = [
+  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_-]{20,}/,
+  /\bgithub_pat_[A-Za-z0-9]{22}_/,
+  /Authorization\s*:\s*(?:Bearer|Basic|token)\s+\S/i,
+  // Finding 3 — connection-string userinfo (`scheme://user:password@host`).
+  // A surviving `user:pass@` after redaction means the new userinfo pattern
+  // missed; page Sentry instead of silently leaking the password.
+  /\b[a-z][a-z0-9+.\-]*:\/\/[^:@\s/]+:[^@\s/]+@/i,
+];
+
+/**
+ * Belt-and-suspenders probe: after redaction, scan for any surviving secret
+ * shape and mirror to Sentry (warn-tier, P0 credential class). Returns the
+ * input unchanged — the probe is observational, the redaction is the gate.
+ */
+function probeRedactionFallthrough(
+  redacted: string,
+  ctx: { userId: string; conversationId: string; field: "command" | "output" },
+): string {
+  for (const probe of REDACTION_FALLTHROUGH_PROBES) {
+    if (probe.test(redacted)) {
+      warnSilentFallback(
+        new Error("command-stream-redact-fallthrough"),
+        {
+          feature: "cc-dispatcher",
+          op: "command-stream-redact-fallthrough",
+          extra: {
+            userId: ctx.userId,
+            conversationId: ctx.conversationId,
+            field: ctx.field,
+          },
+        },
+      );
+      break;
+    }
+  }
+  return redacted;
+}
 
 /**
  * Sanitize a tool name for log emission (#2909 FR2): strip control chars +
@@ -996,6 +1075,15 @@ export const realSdkQueryFactory: QueryFactory = async (
         // session-start ensure-repo self-heal below. null = not connected.
         getCurrentRepoUrl(args.userId),
       ]);
+
+    // feat-concierge-stream-commands — publish the streaming posture (D1)
+    // to the dispatcher's command_stream emit gate. Same closure-capture
+    // bridge as setDelegationContext: the factory resolved `bashAutonomous`
+    // above; the dispatcher's `onToolResult` reads it from the closure cell
+    // this writes. Card-suppression itself is enforced in permission-callback
+    // via the same `bashAutonomous` dep; this only gates whether output
+    // STREAMS (we never stream when the review-gate is the active surface).
+    args.setBashAutonomous?.(bashAutonomous);
 
     // Session-start self-heal (generic, per-user, idempotent, fail-soft): if the
     // workspace has a connected repo but no matching clone on disk, clone/repair
@@ -1801,6 +1889,48 @@ export async function dispatchSoleurGo(
     leaseDelegationCtx = ctx;
   };
 
+  // feat-concierge-stream-commands — streaming-posture closure cell (D1),
+  // published by `realSdkQueryFactory.setBashAutonomous` once it resolves
+  // the owner-gated toggle. Read by `onToolResult` to gate command_stream
+  // emission: we stream command/output ONLY in the autonomous posture
+  // (where the review-gate is bypassed and no card surface exists). In the
+  // non-autonomous posture the review-gate is the active surface and we
+  // emit nothing (AC9). Fail-closed `false` until the factory publishes.
+  let bashAutonomousPosture = false;
+  const setBashAutonomous = (autonomous: boolean): void => {
+    bashAutonomousPosture = autonomous;
+  };
+
+  // FIX 6 (Security P3-2) — warm-query posture. `setBashAutonomous` is also
+  // published inside `realSdkQueryFactory`'s lease body, but that factory runs
+  // ONLY on a COLD conversation; on warm-query reuse it is not re-invoked, so
+  // `bashAutonomousPosture` would stay fail-closed `false` and streaming would
+  // silently never fire for warm conversations. Re-resolve the owner-gated
+  // toggle per-dispatch here (same fire-and-forget pattern as the
+  // `fetchUserWorkspacePath` resolve below) so BOTH cold and warm turns publish
+  // the posture. `resolveBashAutonomous` reads the ACTIVE workspace toggle (one
+  // indexed read); on the cold path the factory re-publishes the same value
+  // (idempotent overwrite). Resolves before any Bash `tool_use` can surface
+  // (the SDK Query must first build + emit text/tool blocks). Failure →
+  // fail-closed (leave `false`) and mirror to Sentry.
+  void resolveBashAutonomous(userId)
+    .then((autonomous) => {
+      setBashAutonomous(autonomous);
+    })
+    .catch((err) => {
+      reportSilentFallback(err, {
+        feature: "cc-dispatcher",
+        op: "bash-autonomous-resolve",
+        extra: { userId, conversationId },
+      });
+    });
+
+  // Per-command total-output budget tracker (D4), keyed by `toolUseId`.
+  // Bounds cumulative bytes across however many result blocks one command
+  // produces. Entry created on first output chunk; the per-dispatch lifetime
+  // matches the conversation turn (in-memory, GC'd with the closure).
+  const commandOutputBytes = new Map<string, number>();
+
   // #3603 W4 — cc-path narrows the type-wide `Message.usage` shape to
   // cost-only on `'complete'` turns (Art. 5(1)(c) data-minimization). The
   // legacy agent-runner path emits the full `UsageSnapshot` (input_tokens,
@@ -1899,6 +2029,109 @@ export async function dispatchSoleurGo(
           leaderId: CC_ROUTER_LEADER_ID,
         }),
       );
+
+      // feat-concierge-stream-commands — emit the `command_stream`
+      // `phase:"start"` carrying the REDACTED command, ONLY in the
+      // autonomous posture (D1: the review-gate is bypassed, so the inline
+      // terminal block is the user's only visible record). The redaction
+      // runs at THIS emit boundary (TR4); render-time is belt-and-suspenders.
+      // Emit failures mirror to Sentry (cq-silent-fallback-must-mirror).
+      if (bashAutonomousPosture && block.name === "Bash") {
+        const rawCommand =
+          typeof block.input.command === "string" ? block.input.command : "";
+        try {
+          // FIX 4 — byte-cap the RAW command BEFORE redaction (mirrors the
+          // output path); caps the wire payload + redaction back-tracking.
+          const cappedCommand = capUtf8Bytes(
+            rawCommand,
+            COMMAND_STREAM_COMMAND_CAP_BYTES,
+          );
+          const redactedCommand = probeRedactionFallthrough(
+            redactCommandForDisplay(
+              cappedCommand.truncated
+                ? `${cappedCommand.text}${COMMAND_STREAM_TRUNCATION_MARKER}`
+                : cappedCommand.text,
+            ),
+            { userId, conversationId, field: "command" },
+          );
+          sendToClient(userId, {
+            type: "command_stream",
+            leaderId: CC_ROUTER_LEADER_ID,
+            phase: "start",
+            command: redactedCommand,
+            // FIX 2 — correlate this block to its output/end frames.
+            toolUseId: block.toolUseId,
+          });
+        } catch (err) {
+          reportSilentFallback(err, {
+            feature: "cc-dispatcher",
+            op: "emitCommandStream",
+            extra: { userId, conversationId, phase: "start" },
+          });
+        }
+      }
+    },
+    onToolResult: (block) => {
+      // feat-concierge-stream-commands — stream the Bash command's
+      // (truncated, REDACTED) stdout/stderr into the cc_router bubble, then
+      // close the block. Autonomous-only (D1). Both the per-chunk and the
+      // per-command total caps (D4) apply; redaction is the emit-boundary
+      // gate (TR4) with a fallthrough probe → Sentry. Emit failures mirror.
+      if (!bashAutonomousPosture) return;
+      try {
+        // 1) Per-chunk cap on the RAW output (caps regex back-tracking too).
+        const chunkCapped = capUtf8Bytes(
+          block.output,
+          COMMAND_STREAM_CHUNK_CAP_BYTES,
+        );
+
+        // 2) Per-command total budget. Subtract what's already been emitted
+        //    for this toolUseId; if the budget is exhausted, mark truncated
+        //    and emit nothing further beyond the marker (carried by `end`).
+        const priorBytes = commandOutputBytes.get(block.toolUseId) ?? 0;
+        const remaining = Math.max(0, COMMAND_STREAM_TOTAL_CAP_BYTES - priorBytes);
+        const totalCapped = capUtf8Bytes(chunkCapped.text, remaining);
+        const truncated = chunkCapped.truncated || totalCapped.truncated;
+
+        const emittedBytes = Buffer.from(totalCapped.text, "utf8").length;
+        commandOutputBytes.set(block.toolUseId, priorBytes + emittedBytes);
+
+        // 3) Redact the (capped) output at the emit boundary + probe.
+        const redactedOutput = probeRedactionFallthrough(
+          redactCommandForDisplay(totalCapped.text),
+          { userId, conversationId, field: "output" },
+        );
+
+        if (redactedOutput.length > 0 || truncated) {
+          sendToClient(userId, {
+            type: "command_stream",
+            leaderId: CC_ROUTER_LEADER_ID,
+            phase: "output",
+            // FIX 2 — route this output to its originating block.
+            toolUseId: block.toolUseId,
+            output: truncated
+              ? `${redactedOutput}${COMMAND_STREAM_TRUNCATION_MARKER}`
+              : redactedOutput,
+            truncated: truncated || undefined,
+          });
+        }
+
+        // 4) Close the block.
+        sendToClient(userId, {
+          type: "command_stream",
+          leaderId: CC_ROUTER_LEADER_ID,
+          phase: "end",
+          // FIX 2 — terminal marker carries the id for symmetry.
+          toolUseId: block.toolUseId,
+        });
+        commandOutputBytes.delete(block.toolUseId);
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "cc-dispatcher",
+          op: "emitCommandStream",
+          extra: { userId, conversationId, phase: "output" },
+        });
+      }
     },
     onTextTurnEnd: () => {
       // #3603 W2 + W4 — `consumeForComplete` returns `null` if the turn was
@@ -2086,6 +2319,11 @@ export async function dispatchSoleurGo(
       // scope so onResult can read leaseDelegationCtx and route
       // persistTurnCost through the merged atomic RPC.
       setDelegationContext,
+      // feat-concierge-stream-commands — bridge the streaming posture (D1)
+      // from realSdkQueryFactory's lease body to this scope so the
+      // command_stream emit gate (onToolUse/onToolResult) knows whether the
+      // workspace is autonomous.
+      setBashAutonomous,
       // 2026-05-06 Bug A1 fix — thread workspacePath through so the
       // runner builds the system prompt with workspace-absolute Read
       // instructions. Falls back to the locally-resolved value (set by

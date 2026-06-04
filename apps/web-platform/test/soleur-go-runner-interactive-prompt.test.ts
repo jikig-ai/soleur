@@ -298,27 +298,21 @@ describe("soleur-go-runner interactive-prompt bridge (Stage 2.10)", () => {
     }
   });
 
-  it("Bash tool_use (non-allowlisted) → emit interactive_prompt with kind bash_approval", async () => {
+  it("Bash tool_use (non-allowlisted) → emits NO interactive_prompt (AC1: bash_approval card suppressed; command streams inline instead)", async () => {
+    // feat-concierge-stream-commands (AC1): Bash no longer produces a
+    // `bash_approval` interactive-prompt card. Autonomous workspaces stream
+    // the command + output inline (`command_stream`); non-autonomous ones
+    // gate via the authoritative `review_gate` in permission-callback. The
+    // informational card is redundant either way, so classifier returns null.
     await runOneToolUse({
       id: "toolu_bash",
       name: "Bash",
       input: { command: "npm test", cwd: "/w" },
     });
-
-    expect(emittedEvents).toHaveLength(1);
-    const { event } = emittedEvents[0]!;
-    expect(event.kind).toBe("bash_approval");
-    if (event.kind === "bash_approval") {
-      expect(event.payload.command).toBe("npm test");
-      expect(event.payload.cwd).toBe("/w");
-      expect(event.payload.gated).toBe(true);
-    }
+    expect(emittedEvents).toHaveLength(0);
   });
 
-  it("Bash tool_use (safe-bash allowlist) → emits NO interactive_prompt (auto-approved upstream)", async () => {
-    // Auto-approved commands surface a tool_use chip via the standard
-    // streaming path; classifying them here would land an orphan
-    // bash_approval card in pendingPrompts that the user never sees.
+  it("Bash tool_use (safe-bash allowlist) → still emits NO interactive_prompt", async () => {
     await runOneToolUse({
       id: "toolu_pwd",
       name: "Bash",

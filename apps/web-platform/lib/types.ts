@@ -277,6 +277,34 @@ export type WSMessage =
   | { type: "stream_start"; leaderId: DomainLeaderId; source?: "auto" | "mention" }
   | { type: "stream_end"; leaderId: DomainLeaderId }
   | { type: "tool_use"; leaderId: DomainLeaderId; label: string }
+  // feat-concierge-stream-commands — Concierge Bash commands + their
+  // (truncated, redacted) stdout/stderr stream INLINE into the cc_router
+  // bubble, Claude-Code-terminal style, instead of spawning per-command
+  // Approve/Deny cards. Gated to the autonomous posture at the emit site
+  // (D1). `command` carries the REDACTED command on `phase:"start"`;
+  // `output` carries a REDACTED, byte-capped chunk on `phase:"output"`;
+  // `phase:"end"` closes the block. Both text fields are redacted at the
+  // EMIT boundary (server) per TR4 — render-time redaction is the
+  // belt-and-suspenders Art. 14 gate. `truncated:true` marks an output
+  // chunk that hit the per-command cap (D4). Distinct from `tool_use`
+  // (which deliberately withholds the raw tool name per #2138); the
+  // redaction gate is the scoped exception that lets command text ride.
+  | {
+      type: "command_stream";
+      leaderId: DomainLeaderId;
+      command?: string;
+      output?: string;
+      phase: "start" | "output" | "end";
+      truncated?: boolean;
+      /**
+       * FIX 2 — SDK `tool_use` block id correlating a `start`/`output`/`end`
+       * sequence to its block. When one assistant turn emits two concurrent
+       * Bash tool-uses, the reducer routes output by `toolUseId` instead of
+       * appending to the last block (which mis-attributes A's output to B).
+       * Optional for back-compat: absent → last-block append.
+       */
+      toolUseId?: string;
+    }
   | {
       /**
        * FR4 (#2861): server forwards the SDK `SDKToolProgressMessage`

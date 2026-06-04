@@ -1286,6 +1286,42 @@ assert_bwrap_canary_failure_rollback() {
 assert_bwrap_canary_failure_rollback
 
 echo ""
+echo "--- Bwrap userns sysctl drift detector (non-blocking) ---"
+
+assert_bwrap_userns_drift_detector_nonblocking() {
+  # Follow-up to #4932/#4941: ci-deploy.sh must read the host sysctl
+  # kernel.apparmor_restrict_unprivileged_userns after the prod container starts
+  # and surface a drift WARN — but it must be NON-BLOCKING (detection only), so a
+  # drift reading never rolls back a deploy the way the reverted #4932 gating
+  # probe did. Source-level guard: the drift branch must use `logger`, and the
+  # whole userns check must NOT call `final_write_state 1` or `exit` (anchored on
+  # the unique message tokens; non-vacuous — neither token existed pre-#4941).
+  TOTAL=$((TOTAL + 1))
+
+  local block
+  # Extract the userns check block: the logger lines from the first
+  # BWRAP_USERNS_SYSCTL token through the trailing "Deploy succeeded".
+  block=$(awk '/BWRAP_USERNS_SYSCTL/{f=1} f{print} /Deploy succeeded/{f=0}' "$DEPLOY_SCRIPT" 2>/dev/null)
+
+  # `|| true`: grep -c exits 1 on zero matches, which would abort under set -e.
+  local has_ok has_drift gates
+  has_ok=$(printf '%s\n' "$block" | grep -cF "BWRAP_USERNS_SYSCTL_CHECK: ok" || true)
+  has_drift=$(printf '%s\n' "$block" | grep -cF "BWRAP_USERNS_SYSCTL_DRIFT" || true)
+  # Non-blocking: the block must not contain a failure-write or exit.
+  gates=$(printf '%s\n' "$block" | grep -cE 'final_write_state 1|exit 1|exit 0' || true)
+
+  if [[ "$has_ok" -ge 1 && "$has_drift" -ge 1 && "$gates" -eq 0 ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: userns sysctl drift detector present and non-blocking"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: userns drift detector must be present and non-blocking (ok=$has_ok drift=$has_drift gating_calls=$gates)"
+  fi
+}
+
+assert_bwrap_userns_drift_detector_nonblocking
+
+echo ""
 echo "--- Env file cleanup on all exit paths ---"
 
 assert_env_file_cleanup() {

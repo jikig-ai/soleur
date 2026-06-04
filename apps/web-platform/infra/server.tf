@@ -571,7 +571,19 @@ resource "terraform_data" "deploy_pipeline_fix" {
 # this resource only provisions the profile file and kernel sysctl.
 # Shows as "will be created" in CI drift reports -- expected behavior.
 resource "terraform_data" "docker_seccomp_config" {
-  triggers_replace = sha256(file("${path.module}/seccomp-bwrap.json"))
+  # Keyed on BOTH the seccomp-profile hash AND the host id. The hash alone is
+  # identical on a replaced VM, so a bare `sha256(file(...))` trigger is the
+  # classic terraform_data fresh-host trap (hr-fresh-host-provisioning-
+  # reachable-from-terraform-apply): a new host keeps the old hash, the
+  # provisioner is skipped, and the userns sysctl is never asserted on it —
+  # the root cause of the 2026-06-04 cron silent-producer incident
+  # (#4927/#4928), where bwrap could not mount /proc and EVERY Bash tool call
+  # in a cron spawn failed. Folding the server id in re-runs the provisioner
+  # whenever the host is replaced.
+  triggers_replace = {
+    seccomp_profile = sha256(file("${path.module}/seccomp-bwrap.json"))
+    server_id       = hcloud_server.web.id
+  }
 
   connection {
     type        = "ssh"
@@ -594,11 +606,23 @@ resource "terraform_data" "docker_seccomp_config" {
 
   provisioner "remote-exec" {
     inline = [
-      # Ubuntu 24.04 kernel restricts uid_map writes inside unprivileged user namespaces
-      # even with apparmor=unconfined. Disable this kernel-level restriction for bwrap (#1557).
-      "sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
+      # Ubuntu 24.04 kernel restricts uid_map writes inside unprivileged user
+      # namespaces even with apparmor=unconfined. Without this sysctl, bwrap
+      # (the Claude Code Bash sandbox) cannot mount /proc and EVERY Bash tool
+      # call in a cron spawn fails (#1557).
+      #
+      # A one-time `sysctl -w` is NOT drift-proof — it is lost on reboot, and a
+      # bare /etc/sysctl.d drop-in can be re-restricted by an apparmor package
+      # update or fail to apply on a degraded (full-disk) boot. Install a
+      # boot-persistent oneshot unit that re-asserts the sysctl on EVERY boot,
+      # and keep the sysctl.d drop-in as belt-and-braces. This closes the
+      # reboot-drift half of the 2026-06-04 incident (#4927/#4928); the
+      # fresh-host half is closed by the server_id trigger above.
       "echo 'kernel.apparmor_restrict_unprivileged_userns=0' > /etc/sysctl.d/99-bwrap-userns.conf",
-      "echo 'Seccomp profile provisioned and userns sysctl applied'",
+      "cat > /etc/systemd/system/bwrap-userns-sysctl.service << 'UNITEOF'\n[Unit]\nDescription=Assert bwrap unprivileged-userns sysctl for the Claude Code Bash sandbox\nAfter=multi-user.target\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/sbin/sysctl -w kernel.apparmor_restrict_unprivileged_userns=0\n\n[Install]\nWantedBy=multi-user.target\nUNITEOF",
+      "systemctl daemon-reload",
+      "systemctl enable --now bwrap-userns-sysctl.service",
+      "echo 'Seccomp profile provisioned; bwrap userns sysctl asserted via boot-persistent unit'",
     ]
   }
 }
