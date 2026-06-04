@@ -12,7 +12,7 @@
  */
 export const LEGAL_DOC_SHAS: Readonly<Record<string, string>> = {
   "acceptable-use-policy":
-    "d979595e2f4e24276af833521bcbe2317ea303e01d8390ce16453a67a561abac",
+    "d6824e4073e650bbf36b9b83e2808b37fef38884edb50b554977977b0e6a21ba",
   "cookie-policy":
     "3c3d57a9227069bccf2c7f671b389d2f2ac79980481647fb029793a957020cc8",
   "corporate-cla":
