@@ -616,8 +616,13 @@ test.describe("widenable KB rail — desktop", () => {
     const aside = page.locator("aside").first();
     await expect(aside).toHaveClass(/md:w-14/, { timeout: 15_000 });
     await expect(resizeHandle(page)).toHaveCount(0);
-    const width = await asideWidth(page);
-    expect(width).toBeLessThanOrEqual(64); // ~56px collapsed rail
+    // The rail hydrates expanded (224px) → collapsed (56px) over a 200ms
+    // `md:transition-[width]`. Poll until the width settles, matching the
+    // sibling widenable-rail tests — a single synchronous read races the
+    // transition and catches a mid-animation frame (~126px).
+    await expect
+      .poll(async () => asideWidth(page), { timeout: 7_000 })
+      .toBeLessThanOrEqual(64); // ~56px collapsed rail
     // Stored width is untouched (returns on expand).
     const stored = await page.evaluate(
       (key) => localStorage.getItem(key),
