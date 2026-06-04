@@ -5,9 +5,10 @@
 // (open by default, scoped to this document so it can edit the diagram) and the
 // raw .c4 code editor. Loaded via next/dynamic({ ssr: false }) from the KB page
 // — @likec4/diagram is canvas/browser-only.
-import { useState } from "react";
+import { useContext, useState } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import { KbChatContent } from "@/components/chat/kb-chat-content";
+import { KbChatContext } from "@/components/kb/kb-chat-context";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import {
   Spinner,
@@ -45,37 +46,45 @@ export default function C4Workspace({
   const { data, error, loading, reload } = useC4Project(dirPath);
   const [rightTab, setRightTab] = useState<"concierge" | "code">("concierge");
   const [currentView, setCurrentView] = useState(viewId);
+  // Reveal/collapse is LIFTED to KbChatContext so the SHARED top-bar trigger
+  // ("Ask about this document", in KbContentHeader) drives it — consistent with
+  // the markdown viewer. The C4 page keeps setSuppressSidebar(true) so the
+  // desktop side panel stays unmounted (no double-mount); a DISTINCT context
+  // signal (embeddedConciergeOpen) controls THIS embedded panel.
+  //
   // When collapsed, the right panel (Concierge/Code) + its resize handle are
-  // unmounted so the diagram takes full width. This is a deliberate unmount-on-
-  // collapse choice (not CSS-hide): ChatSurface re-resumes the thread from the
-  // server via `resumeByContextPath` and restores the draft from sessionStorage
-  // (`draftKey`) on reveal, so no in-progress content is lost — the panel just
-  // re-hydrates with a "Continuing from…" banner. Reveal is driven by the gold
-  // pill on the full-width diagram (the shared KbChatTrigger stays suppressed on
-  // C4 docs to avoid double-mounting a second Concierge — see page.tsx).
-  const [conciergeCollapsed, setConciergeCollapsed] = useState(false);
+  // unmounted so the diagram takes full width — a deliberate unmount-on-collapse
+  // choice (not CSS-hide): ChatSurface re-resumes the thread from the server via
+  // `resumeByContextPath` and restores the draft from sessionStorage (`draftKey`)
+  // on reveal, so no in-progress content is lost (re-hydrates with a
+  // "Continuing from…" banner).
+  //
+  // Falls back to local state when rendered outside a KbChatContext provider
+  // (defensive — the production page always provides one).
+  const chatCtx = useContext(KbChatContext);
+  const [localCollapsed, setLocalCollapsed] = useState(false);
+  const conciergeCollapsed =
+    chatCtx?.embeddedConciergeOpen !== undefined
+      ? !chatCtx.embeddedConciergeOpen
+      : localCollapsed;
+  // Reveal is driven by the shared top-bar trigger (KbContentHeader →
+  // KbChatTrigger → revealEmbeddedConcierge); C4Workspace only owns COLLAPSE
+  // (the chevron + the KbChatContent X). The local-state fallback exists only
+  // for the no-provider render path (defensive).
+  const collapseConcierge = () => {
+    if (chatCtx?.collapseEmbeddedConcierge) chatCtx.collapseEmbeddedConcierge();
+    else setLocalCollapsed(true);
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <Group orientation="horizontal" className="h-full min-h-0 flex-1">
-        {/* LEFT — interactive diagram (+ collapsible Notes) */}
+        {/* LEFT — interactive diagram (+ collapsible Notes). Reveal is driven by
+            the shared top-bar "Ask about this document" trigger (KbContentHeader),
+            consistent with the markdown viewer — the bespoke floating
+            "Open Concierge" pill was removed in the UX-consistency pass. */}
         <Panel minSize="35%">
           <div className="relative flex h-full min-h-0 flex-col">
-            {/* Reveal control — shown only when the Concierge is collapsed so the
-                user can reopen it on the full-width diagram. */}
-            {conciergeCollapsed && (
-              <button
-                type="button"
-                aria-label="Open Concierge"
-                onClick={() => setConciergeCollapsed(false)}
-                className="absolute right-3 top-3 z-10 inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-3.5 py-1.5 text-xs font-medium text-soleur-text-on-accent shadow-lg transition-opacity hover:opacity-90"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
-                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                </svg>
-                Open Concierge
-              </button>
-            )}
             {loading && <Spinner />}
             {!loading && error && (
               <div className="p-4 text-sm text-red-400">⚠ {error}</div>
@@ -145,7 +154,7 @@ export default function C4Workspace({
                 <button
                   type="button"
                   aria-label="Collapse Concierge"
-                  onClick={() => setConciergeCollapsed(true)}
+                  onClick={collapseConcierge}
                   className="rounded p-1 text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-secondary"
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -162,7 +171,7 @@ export default function C4Workspace({
               <div className={rightTab === "concierge" ? "h-full" : "hidden"}>
                 <KbChatContent
                   contextPath={contextPath}
-                  onClose={() => setConciergeCollapsed(true)}
+                  onClose={collapseConcierge}
                   visible={rightTab === "concierge"}
                 />
               </div>

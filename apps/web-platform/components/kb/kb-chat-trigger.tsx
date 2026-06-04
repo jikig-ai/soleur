@@ -22,16 +22,19 @@ export function KbChatTrigger({ fallbackHref }: KbChatTriggerProps) {
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const wasOpenRef = useRef(false);
 
-  // Focus management (TR9 / AC9): when the sidebar transitions from
-  // open → closed, return focus to this trigger so keyboard users land
-  // back on the control that opened it.
+  // Focus management (TR9 / AC9): when the panel transitions from open →
+  // closed, return focus to this trigger so keyboard users land back on the
+  // control that opened it. Tracks the SIDE panel (`open`) for the markdown
+  // viewer and the EMBEDDED Concierge (`embeddedConciergeOpen`) for C4, since
+  // the same trigger drives whichever surface is active.
+  const embeddedOpen = !!ctx?.suppressSidebar && ctx?.embeddedConciergeOpen;
   useEffect(() => {
-    const isOpen = !!ctx?.open;
+    const isOpen = !!ctx?.open || !!embeddedOpen;
     if (wasOpenRef.current && !isOpen) {
       buttonRef.current?.focus();
     }
     wasOpenRef.current = isOpen;
-  }, [ctx?.open]);
+  }, [ctx?.open, embeddedOpen]);
 
   // Gold-gradient primary CTA — first activation of the
   // `--soleur-accent-gradient-{start,end}` theme tokens registered in
@@ -48,10 +51,6 @@ export function KbChatTrigger({ fallbackHref }: KbChatTriggerProps) {
     </svg>
   );
 
-  // A view that embeds its own Concierge (the C4 workspace) suppresses the side
-  // panel; hide the trigger too so it can't open a redundant duplicate chat.
-  if (ctx?.suppressSidebar) return null;
-
   if (!ctx || !ctx.enabled) {
     return (
       <Link href={fallbackHref} className={baseClass}>
@@ -60,6 +59,16 @@ export function KbChatTrigger({ fallbackHref }: KbChatTriggerProps) {
       </Link>
     );
   }
+
+  // A view that embeds its own Concierge (the C4 workspace) suppresses the
+  // SIDE PANEL but NOT the trigger: the same top-bar "Ask about this document"
+  // control drives the embedded Concierge's reveal (parity with the markdown
+  // viewer), instead of opening a redundant second side-panel chat. The
+  // suppressSidebar mount stays unmounted (no double-mount).
+  const embedded = !!ctx.suppressSidebar;
+  const onClick = embedded
+    ? ctx.revealEmbeddedConcierge ?? (() => {})
+    : ctx.openSidebar;
 
   // `ctx.messageCount` is the canonical thread-state signal. When the panel
   // is closed, it is seeded by `useKbLayoutState`'s thread-info prefetch
@@ -74,7 +83,7 @@ export function KbChatTrigger({ fallbackHref }: KbChatTriggerProps) {
     <button
       ref={buttonRef}
       type="button"
-      onClick={ctx.openSidebar}
+      onClick={onClick}
       className={baseClass}
     >
       {icon}
