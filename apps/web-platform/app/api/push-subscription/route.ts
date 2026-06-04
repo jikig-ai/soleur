@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
+import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 
 export async function POST(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
@@ -69,9 +70,13 @@ export async function POST(request: Request) {
     }
   }
 
+  // push_subscriptions.workspace_id is NOT NULL (migration 059); resolve the
+  // active workspace (solo fallback = user.id) or the INSERT fails with 23502.
+  const workspaceId = await resolveCurrentWorkspaceId(user.id, service);
   const { error } = await service.from("push_subscriptions").upsert(
     {
       user_id: user.id,
+      workspace_id: workspaceId,
       endpoint: body.endpoint,
       p256dh: body.keys.p256dh,
       auth: body.keys.auth,

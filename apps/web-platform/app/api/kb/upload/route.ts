@@ -5,6 +5,7 @@ import { isPathInWorkspace } from "@/server/sandbox";
 import { githubApiGet, githubApiPost, GitHubApiError } from "@/server/github-api";
 import { sanitizeFilename } from "@/server/kb-validation";
 import { resolveUserKbRoot, syncWorkspace } from "@/server/kb-route-helpers";
+import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 import { prepareUploadPayload } from "@/server/kb-upload-payload";
 import path from "path";
 import logger from "@/server/logger";
@@ -253,12 +254,12 @@ export async function POST(request: Request) {
     // Best-effort — the file is already committed to GitHub; a failed
     // INSERT doesn't warrant failing the upload response.
     try {
-      const { data: memberRow } = await serviceClient
-        .from("workspace_members")
-        .select("workspace_id")
-        .eq("user_id", user.id)
-        .maybeSingle();
-      const wsId = memberRow?.workspace_id as string | undefined;
+      // resolveCurrentWorkspaceId (claim → solo fallback = user.id) instead of
+      // `workspace_members…maybeSingle()`: the latter THROWS for a user who
+      // owns >1 workspace (maybeSingle requires 0/1 rows), silently skipping
+      // the kb_files row. The canonical resolver returns the active workspace
+      // and is correct for multi-membership users.
+      const wsId = await resolveCurrentWorkspaceId(user.id, serviceClient);
       if (wsId) {
         await serviceClient.from("kb_files").upsert(
           {

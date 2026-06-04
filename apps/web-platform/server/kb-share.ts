@@ -190,6 +190,7 @@ async function findActiveShare(
 export async function createShare(
   serviceClient: ShareServiceClient,
   userId: string,
+  workspaceId: string,
   kbRoot: string,
   documentPath: string,
 ): Promise<CreateShareResult> {
@@ -299,6 +300,13 @@ export async function createShare(
   const token = randomBytes(SHARE_TOKEN_BYTES).toString("base64url");
   const { error: insertError } = await table.insert({
     user_id: userId,
+    // workspace_id is NOT NULL on kb_share_links (migration 059 workspace-
+    // keyed RLS sweep) and has no DB default — every insert MUST set it or
+    // it fails with Postgres 23502, which surfaces as a silent 500 db-error
+    // that resets the "Generate link" popover to idle. The migration keyed
+    // the column to the row owner's workspace; the caller resolves it via
+    // resolveCurrentWorkspaceId (solo fallback = userId).
+    workspace_id: workspaceId,
     token,
     document_path: documentPath,
     content_sha256: contentHash,

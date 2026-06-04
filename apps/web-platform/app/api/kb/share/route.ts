@@ -7,6 +7,7 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { resolveUserKbRoot } from "@/server/kb-route-helpers";
+import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 import { createShare, listShares } from "@/server/kb-share";
 
 /** POST — generate a share link for a KB document. */
@@ -37,9 +38,15 @@ export async function POST(request: Request) {
   const workspace = await resolveUserKbRoot(user.id);
   if (!workspace.ok) return workspace.response;
 
+  // kb_share_links.workspace_id is NOT NULL (migration 059). Resolve the
+  // user's active workspace (claim → solo fallback = user.id) so the row
+  // satisfies the constraint AND the workspace-member RLS policy.
+  const workspaceId = await resolveCurrentWorkspaceId(user.id, serviceClient);
+
   const result = await createShare(
     serviceClient,
     user.id,
+    workspaceId,
     workspace.kbRoot,
     body.documentPath,
   );

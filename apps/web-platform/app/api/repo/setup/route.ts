@@ -6,6 +6,7 @@ import { provisionWorkspaceWithRepo } from "@/server/workspace";
 import { scanProjectHealth } from "@/server/project-scanner";
 import { normalizeRepoUrl } from "@/lib/repo-url";
 import { mirrorRepoColsToSoloWorkspace } from "@/server/workspace-repo-mirror";
+import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 import {
   resolveReachableInstallationIds,
   resolveOwningInstallationForRepo,
@@ -232,11 +233,19 @@ export async function POST(request: Request) {
         // `repoUrl` is the freshly-set value from the request body — stamp it
         // on the sync conversation so the Command Center scopes correctly.
         const conversationId = crypto.randomUUID();
+        // conversations.workspace_id is NOT NULL (migration 059); resolve the
+        // active workspace (solo fallback = user.id) or the INSERT 23502s and
+        // the sync conversation is never created.
+        const conversationWorkspaceId = await resolveCurrentWorkspaceId(
+          user.id,
+          serviceClient,
+        );
         const { error: convError } = await serviceClient
           .from("conversations")
           .insert({
             id: conversationId,
             user_id: user.id,
+            workspace_id: conversationWorkspaceId,
             repo_url: repoUrl,
             domain_leader: "system",
             status: "active",

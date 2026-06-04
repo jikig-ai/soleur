@@ -22,6 +22,7 @@ import {
   type RevokeShareResult,
   type ShareServiceClient,
 } from "@/server/kb-share";
+import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 
 interface BuildKbShareToolsOpts {
   serviceClient: ShareServiceClient;
@@ -119,7 +120,15 @@ export function buildKbShareTools(opts: BuildKbShareToolsOpts) {
       { documentPath: z.string() },
       async (args) =>
         wrapCreate(
-          await createShare(serviceClient, userId, kbRoot, args.documentPath),
+          await createShare(
+            serviceClient,
+            userId,
+            // kb_share_links.workspace_id is NOT NULL (migration 059);
+            // resolve the active workspace (solo fallback = userId).
+            await resolveCurrentWorkspaceId(userId, serviceClient),
+            kbRoot,
+            args.documentPath,
+          ),
           baseUrl,
         ),
     ),
