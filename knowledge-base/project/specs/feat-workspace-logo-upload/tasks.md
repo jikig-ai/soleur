@@ -23,12 +23,12 @@ Derived from the finalized (post-review) plan. RED→GREEN→REFACTOR per task. 
 - [x] 1.5 `.down.sql` reverse order: policies → function → column. **Storage bucket/objects teardown is Storage-API-only — Supabase `protect_delete` trigger blocks direct `DELETE FROM storage.{objects,buckets}` (verified live; 019/042 precedent ship no SQL bucket teardown).** Plan's "DELETE objects→bucket" falsified at verify-time; corrected.
 - [x] 1.6 Migration shape test (offline lint, mirrors 068) GREEN (24); **live DEV behavioral verification (migration-checklist.md): owner-write, member-read, non-member-deny-read, non-owner-deny-overwrite, cross-tenant-move-deny (UPDATE WITH CHECK), malformed-path-clean-deny — all PASS.** (AC1/AC2/AC3)
 
-## Phase 2 — Upload/remove route (`api/workspace/logo/route.ts`)
-- [ ] 2.1 POST: CSRF/origin → rate-limit → content-length 413 → auth → server-resolve active workspace → `is_workspace_owner` 403 → formData.
-- [ ] 2.2 `sharp(buf,{limitInputPixels:16_000_000,failOn:'error'})`; assert `meta.format∈{png,webp}` from decoded metadata; reject non-square 422; flatten APNG; re-encode → WebP. (AC4)
-- [ ] 2.3 Assert path `workspace_id` == resolved; upload `<wid>/logo.webp` (upsert) → `UPDATE logo_path`; orphan-cleanup + `logo-orphan-cleanup-failed` breadcrumb on DB-fail. (AC5/AC7b)
-- [ ] 2.4 DELETE: owner-gate → `logo_path=NULL` first → remove object (+ cleanup breadcrumb on fail).
-- [ ] 2.5 Sentry on all arms; HTTP-only exports. (AC6b rate-limit test)
+## Phase 2 — Upload/remove route (`api/workspace/logo/route.ts`) ✅ 16/16
+- [x] 2.1 POST: CSRF/origin → content-length 413 → `withUserRateLimit`(auth+429) → server-resolve active workspace → `is_workspace_owner` 403 → formData. (CSRF+content-length outside the rate-limit wrapper; wrapper resolves the user.)
+- [x] 2.2 `sharp(buf,{limitInputPixels:16_000_000,failOn:'error'})`; assert `meta.format∈{png,webp}` from decoded metadata; reject non-square 422; explicit w*h>16M → 413; flatten APNG (no `animated`); re-encode → WebP (EXIF stripped, no `.withMetadata()`). Real-sharp + synthesized fixtures. (AC4)
+- [x] 2.3 Path built from server-resolved `workspaceId` (`<wid>/logo.webp`); upload (upsert) FIRST → `UPDATE logo_path`; on DB-fail → orphan remove; if remove ALSO fails → distinct `logo-orphan-cleanup-failed` breadcrumb. (AC5/AC7b)
+- [x] 2.4 DELETE: owner-gate → `logo_path=NULL` first → remove object (+ `logo-orphan-cleanup-failed` breadcrumb on fail, still 200).
+- [x] 2.5 `Sentry.captureMessage` on reject/failure arms; HTTP-only exports (`POST`/`DELETE` consts via `withUserRateLimit`). (AC6b 429 test passes against real limiter)
 
 ## Phase 3 — Read path (stable proxy route)
 - [ ] 3.1 `GET api/workspace/[id]/logo`: auth → `is_workspace_member` 403 → read logo_path 404 → `createSignedUrl(…,300)` → 302 + `Cache-Control: private, max-age=300` + `nosniff`; `reportSilentFallback`→502 on mint fail. (AC6)
