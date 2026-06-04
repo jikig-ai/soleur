@@ -2,9 +2,9 @@
 title: "Generate-link button broken by migration 059 workspace_id NOT-NULL sweep miss (+ initial misdiagnosis)"
 date: 2026-06-04
 incident_pr: 4913
-fix_pr: 4920
+fix_pr: 4922
 incident_window: "migration 059 deploy → 2026-06-04"
-recovery_at: "on merge of the workspace_id insert fix (PR #4920)"
+recovery_at: "on merge of the workspace_id insert fix (PR #4922)"
 suspected_change: "migration 059_workspace_keyed_rls_sweep (workspace_id NOT NULL on kb_share_links, no DB default; createShare insert never updated)"
 brand_survival_threshold: single-user incident
 status: resolved
@@ -29,7 +29,7 @@ The "Generate link" button in the KB document Share popover silently stopped pro
 
 ## Status
 
-resolved — fixed in PR #4920 (set `workspace_id` on `kb_share_links` / `push_subscriptions` / `conversations` inserts).
+resolved — fixed in PR #4922 (set `workspace_id` on `kb_share_links` / `push_subscriptions` / `conversations` inserts).
 
 ## Symptom
 
@@ -43,7 +43,7 @@ Clicking "Generate link" → brief "Loading…" → bounce back to the "Generate
 | human | 2026-06-04 | Founder reports the dead "Generate link" button (screenshot). |
 | agent | 2026-06-04 | **Misdiagnosed** as tenant-mint 503; shipped PR #4913 (service-role fallback). Did not fix the button. |
 | human | 2026-06-04 | Founder reports "still failing in production." |
-| agent | 2026-06-04 | Pulled prod ground truth (Sentry via `SENTRY_IAC_AUTH_TOKEN`; prod DB via `DATABASE_URL_POOLER`); reproduced the real `23502` on `kb_share_links.workspace_id`; verified fix; swept all NOT-NULL workspace_id tables → 2 more broken inserts. PR #4920. |
+| agent | 2026-06-04 | Pulled prod ground truth (Sentry via `SENTRY_IAC_AUTH_TOKEN`; prod DB via `DATABASE_URL_POOLER`); reproduced the real `23502` on `kb_share_links.workspace_id`; verified fix; swept all NOT-NULL workspace_id tables → 2 more broken inserts. PR #4922. |
 
 ## Participants and Systems Involved
 
@@ -104,6 +104,6 @@ Per-fix prod proof via `DATABASE_URL_POOLER`: each insert fails 23502 without `w
 
 ## Action Items
 
-- PR #4920 — the real fix (this incident).
+- PR #4922 — the real fix (this incident).
 - Alert on kb db-error `reportSilentFallback` rate — to file (supersedes the narrower #4918 tenant-mint-only framing).
 - #4914 (file-route tenant-mint fallback) — **close as based-on-misdiagnosis** (the mint was never the cause).

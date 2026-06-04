@@ -3,7 +3,7 @@ title: "Large RLS/tenancy migrations: a NOT-NULL column added to existing tables
 date: 2026-06-04
 category: bug-fixes
 tags: [supabase, migrations, workspace-id, write-boundary, no-ssh, 23502, misdiagnosis]
-related_prs: [4913, 4920]
+related_prs: [4913, 4922]
 related_migrations: [059_workspace_keyed_rls_sweep]
 related_rules: [hr-write-boundary-sentinel-sweep-all-write-sites, hr-no-dashboard-eyeball-pull-data-yourself, hr-no-ssh-fallback-in-runbooks]
 related_learnings:
@@ -13,7 +13,7 @@ related_learnings:
 
 ## TL;DR
 
-Migration `059_workspace_keyed_rls_sweep` added `workspace_id uuid NOT NULL` (no DB default) to ~13 existing tables and rewrote their RLS to be workspace-member-keyed — but it did **not** sweep every `.insert()/.upsert()` writer to set the new column. Result: **every** write to those tables failed in production with Postgres **23502 (not-null violation)**, surfacing as a silent 500. The "Generate link" button (`kb_share_links`), new push subscriptions (`push_subscriptions`), and the repo-setup sync conversation (`conversations`) were all silently broken. The broad sweep (PR #4920) found and fixed all three.
+Migration `059_workspace_keyed_rls_sweep` added `workspace_id uuid NOT NULL` (no DB default) to ~13 existing tables and rewrote their RLS to be workspace-member-keyed — but it did **not** sweep every `.insert()/.upsert()` writer to set the new column. Result: **every** write to those tables failed in production with Postgres **23502 (not-null violation)**, surfacing as a silent 500. The "Generate link" button (`kb_share_links`), new push subscriptions (`push_subscriptions`), and the repo-setup sync conversation (`conversations`) were all silently broken. The broad sweep (PR #4922) found and fixed all three.
 
 **This is the canonical example of why `hr-write-boundary-sentinel-sweep-all-write-sites` must explicitly cover the "migration adds a NOT-NULL column to an existing table" class — not just new sentinel/guard additions.**
 

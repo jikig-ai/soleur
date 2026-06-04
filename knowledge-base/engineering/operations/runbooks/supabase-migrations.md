@@ -111,7 +111,7 @@ fresh DB (which would mark 001 applied without creating the table).
       table, OR `ALTER COLUMN … SET NOT NULL` on a no-default column → run the
       NOT-NULL column insert-site sweep below.** Skipping this is what silently
       broke the share button, push subscriptions, and repo-setup for weeks
-      (migration 059 / PR #4920).
+      (migration 059 / PR #4922).
 
 ## NOT-NULL column insert-site sweep (writer coverage)
 
