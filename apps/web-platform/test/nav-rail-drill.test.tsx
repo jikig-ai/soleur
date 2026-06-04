@@ -95,6 +95,30 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
     expect(screen.queryByText("Soleur")).not.toBeInTheDocument();
   });
 
+  it("places the theme toggle in the FOOTER (after the primary nav), not the rail header — matches the D4 wireframe", () => {
+    render(
+      <Wrap>
+        <DashboardLayout>
+          <div>content</div>
+        </DashboardLayout>
+      </Wrap>,
+    );
+    const theme = screen.getByRole("group", { name: /theme/i });
+    const navLink = screen.getByRole("link", { name: "Knowledge Base" });
+    // The theme control must FOLLOW the primary nav in the DOM (footer region),
+    // not precede it (the old top-of-rail placement the wireframe rejects).
+    expect(
+      navLink.compareDocumentPosition(theme) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // Co-located with the footer Sign-out control (same footer container).
+    const signOut = screen.getByRole("button", { name: /sign out/i });
+    expect(
+      theme.compareDocumentPosition(signOut) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it("KEEPS the primary nav on /dashboard/admin/analytics (allowlist, RQ6)", () => {
     mockPathname = "/dashboard/admin/analytics";
     render(
