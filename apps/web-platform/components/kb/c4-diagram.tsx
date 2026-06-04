@@ -42,7 +42,7 @@ export default function C4Diagram({
           </button>
         ))}
         <span className="ml-auto pr-1 text-[11px] text-soleur-text-muted">
-          LikeC4 · {currentView}
+          Architecture · {currentView}
         </span>
       </div>
 
