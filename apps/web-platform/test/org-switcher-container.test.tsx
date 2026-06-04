@@ -217,8 +217,16 @@ describe("OrgSwitcherContainer — two-phase-commit failure handling (#4917)", (
   });
 
   afterEach(() => {
+    // In jsdom `navigator.onLine` is a PROTOTYPE getter, so the describe-time
+    // getOwnPropertyDescriptor returns undefined. setOnLine installs an OWN
+    // getter on the instance — if we only restored on a truthy descriptor, the
+    // own getter would leak `onLine === false` into any later-ordered suite
+    // sharing this jsdom global. Delete the injected own property when there was
+    // no original to restore. (Flagged by test-design + code-quality review.)
     if (originalOnLine) {
       Object.defineProperty(window.navigator, "onLine", originalOnLine);
+    } else {
+      delete (window.navigator as { onLine?: boolean }).onLine;
     }
   });
 
@@ -237,8 +245,16 @@ describe("OrgSwitcherContainer — two-phase-commit failure handling (#4917)", (
     });
     // no affordance returns the user to the old-workspace idle screen.
     expect(screen.queryByRole("button", { name: /cancel/i })).toBeNull();
-    // the divergence is mirrored to Sentry (brand-critical path).
-    expect(mockReportSilentFallback).toHaveBeenCalled();
+    // the divergence is mirrored to Sentry on the post-RPC path specifically
+    // (brand-critical) — pin the payload so a stray report elsewhere can't
+    // satisfy this assertion.
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({
+        feature: "workspace-switch",
+        op: "refresh-session-post-rpc",
+      }),
+    );
   });
 
   // Test Scenario 2 / AC3: pre-RPC failure still offers Retry AND Cancel, and
@@ -311,5 +327,9 @@ describe("OrgSwitcherContainer — two-phase-commit failure handling (#4917)", (
     expect(assignMock).toHaveBeenCalledWith("/dashboard");
     // never resolves to a stale-labeled Cancel.
     expect(screen.queryByRole("button", { name: /cancel/i })).toBeNull();
+    // load-bearing two-phase-commit invariant: the durable RPC commits ONCE.
+    // Every offline Try-again re-runs ONLY the refresh phase (attemptRefresh),
+    // never re-issuing set_current_workspace_id.
+    expect(mockRpc).toHaveBeenCalledTimes(1);
   });
 });
