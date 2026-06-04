@@ -51,6 +51,7 @@ declare -A FLAG_ENV_VARS=(
   ["kb-chat-sidebar"]="FLAG_KB_CHAT_SIDEBAR"
   ["team-workspace-invite"]="FLAG_TEAM_WORKSPACE_INVITE"
   ["byok-delegations"]="FLAG_BYOK_DELEGATIONS"
+  ["c4-visualizer"]="FLAG_C4_VISUALIZER"
 )
 
 # --- arg parsing ------------------------------------------------------------
