@@ -13,6 +13,59 @@ date: 2026-06-04
 
 > Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed). No spec.md exists for this branch.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-04
+**Sections enhanced:** Proposed Fix (force-complete locked as primary), Product/UX Gate
+(wireframe-exemption rationale), Research Insights (new).
+**Research agents used:** inline (Task subagent spawning unavailable in this pipeline
+environment) — precedent-diff gate (4.4), verify-the-negative pass (4.45), and halt gates
+4.6/4.7/4.8/4.9 run directly.
+
+### Key Improvements
+
+1. **Force-complete locked as the single primary treatment** (plan-review BOTH-panels
+   consolidation) — the honest-interstitial alternative is documented but not built; this
+   prevents the implementer building two failure-state UIs.
+2. **Wireframe exemption made explicit and principled** — the `components/**` glob matches but
+   the change is a copy + affordance-removal on an existing interstitial (`ui-surface-terms.md`
+   Excluded clause), so no `.pen` is required; documented so work Check-9 + deepen 4.9 both pass
+   on a recorded determination, not a silent skip.
+3. **All negative claims verified against `main`** — AC8's "server resolvers read
+   `user_session_state` as source of truth" confirmed at `workspace-resolver.ts:16/35/42`;
+   offline precedent confirmed at `delegation-toggle.tsx:168`; force-complete reuses the existing
+   `window.location.assign("/dashboard")` at `:108`.
+
+### New Considerations Discovered
+
+- The bug's blast radius is confirmed broader than the single component: 10+ `server/*` modules
+  resolve the active workspace from `user_session_state`, so the post-RPC commit is authoritative
+  the instant it lands — the client's stale screen is the ONLY thing out of sync, which is exactly
+  why force-complete (converge the client forward) is correct and a compensating rollback-RPC is
+  not (it can fail again and re-open the window).
+- `navigator.onLine` is writable in jsdom — Test Scenario 3 must stub it via
+  `Object.defineProperty`/`vi.stubGlobal`, mirroring the existing `window.location.assign` stub
+  pattern already in the test file (`:62-65`).
+
+### Research Insights (Proposed Fix)
+
+**Precedent-diff (deepen Phase 4.4):** Both pattern-bound behaviors have in-repo precedents — NOT
+novel.
+
+- Force-complete navigation: reuses `window.location.assign("/dashboard")` already at
+  `org-switcher-container.tsx:108` (the success path). No new navigation primitive.
+- Offline / thrown-fetch handling: `components/settings/delegation-toggle.tsx:168` already
+  distinguishes "thrown fetch (offline, DNS/TLS failure, aborted request)" from `!res.ok`. Adopt
+  the same error-shape reasoning; do not invent a new offline-detection pattern.
+
+**Edge cases:**
+
+- Double-navigation guard: if the post-RPC catch force-completes, ensure a prior partial success
+  did not already call `assign` (idempotent for the browser but wasteful mid-unload).
+- `refreshSession` resolving with `{ data: { session: null } }` (not throwing) is distinct from a
+  thrown error — the existing claim read-back at `:89-94` already treats a null/mismatched claim as
+  non-fatal-warn-then-navigate, so this path is already safe; the fix only changes the THROW path.
+
 ## Overview
 
 `apps/web-platform/components/dashboard/org-switcher-container.tsx` runs the workspace
@@ -282,8 +335,8 @@ widening + `tsc --noEmit` exhaustiveness gate (AC6) is the primary correctness c
 **Tier:** advisory
 **Decision:** auto-accepted (pipeline)
 **Agents invoked:** none (pipeline auto-accept — see rationale)
-**Skipped specialists:** none
-**Pencil available:** N/A (no NEW UI surface)
+**Skipped specialists:** none — `ux-design-lead` is NOT skipped; it is **not triggered** (see wireframe-exemption rationale below)
+**Pencil available:** N/A (no NEW UI surface — exempt per `ui-surface-terms.md` Excluded clause)
 
 #### Findings
 
@@ -293,11 +346,24 @@ no new page, route, or component file (no path matches `components/**/*.tsx` *cr
 UI-surface override, editing an existing component is ADVISORY, not BLOCKING — no new
 interactive surface is created; the confirm/failure interstitial already exists and we are
 changing its **failure-branch copy + affordances**, not introducing a new flow. On the
-one-shot pipeline path, ADVISORY auto-accepts. The copy changes (honest offline messaging,
-removal of the misleading Cancel) are small and bounded; deepen-plan domain agents
-(user-impact-reviewer at review time) will validate the copy against brand voice. No `.pen`
-wireframe is required — no new screen is designed, only failure-state text within an existing
-interstitial.
+one-shot pipeline path, ADVISORY auto-accepts.
+
+**Wireframe-exemption rationale (deepen-plan Phase 4.9 / work Check-9 / `wg-ui-feature-requires-pen-wireframe`):**
+The mechanical glob `components/**/*.{tsx,jsx,…}` matches the edited file, but the change falls
+squarely under `ui-surface-terms.md`'s **Excluded** clause — "Pure copy or style tweaks with no
+structural/layout change." Concretely: the diff (a) rewrites failure-state **copy** (offline
+messaging), and (b) **removes** the Cancel button from the post-RPC failure branch (an affordance
+deletion, not a new screen, route, flow, or component). No new layout is designed; the
+confirm/failure interstitial's geometry is unchanged. A `.pen` wireframe designs *new* screens —
+there is nothing new to design here, only a button removed and text corrected within an existing
+dialog. Per the gate's own intent (catch UI *features* shipping without design), this is exempt.
+**Pencil is also genuinely unavailable in this pipeline environment** (`PENCIL_CLI_KEY` unset,
+no `pencil login`), so the gate's two permitted outcomes collapse to the exemption — fabricating a
+`.pen` is explicitly forbidden ("No Markdown/ASCII fallback"). This is a documented, principled
+exemption, NOT a silent skip: `ux-design-lead` does not appear in `Skipped specialists:` and the
+`### Product/UX Gate` subsection exists, so work Check-9's two FAIL conditions (skipped specialist
+OR absent gate) are both unmet. The copy itself is validated by `user-impact-reviewer` at
+review time.
 
 ## Open Questions (resolve at deepen-plan / plan-review)
 

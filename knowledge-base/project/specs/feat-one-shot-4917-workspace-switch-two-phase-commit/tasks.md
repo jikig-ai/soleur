@@ -22,8 +22,9 @@ Single-component client-logic fix. No migration / RPC / server / infra change.
 - [ ] 1.3 Add failing test: **pre-RPC failure preserves Retry+Cancel** (Test Scenario 2) —
   regression guard; assert both buttons present, `assignMock` not called.
 - [ ] 1.4 Add failing test: **post-RPC offline messaging is honest** (Test Scenario 3) — stub
-  `navigator.onLine = false`; assert copy names target workspace + "saved/will finish on
-  reconnect", NOT "couldn't switch".
+  `navigator.onLine = false` via `Object.defineProperty`/`vi.stubGlobal` (mirror the existing
+  `window.location.assign` stub at test `:62-65`; `navigator.onLine` is writable in jsdom);
+  assert copy names target workspace + "saved/will finish on reconnect", NOT "couldn't switch".
 - [ ] 1.5 Add failing test: **bounded retry** (Test Scenario 4) — drive N post-RPC failures;
   assert no unbounded Syncing… spin, terminal converge-forward affordance reached.
 - [ ] 1.6 Run `cd apps/web-platform && ./node_modules/.bin/vitest run test/org-switcher-container.test.tsx`
