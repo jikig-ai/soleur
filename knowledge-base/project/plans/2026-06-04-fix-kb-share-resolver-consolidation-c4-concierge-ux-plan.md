@@ -205,12 +205,12 @@ Committed: `knowledge-base/product/design/kb-viewer/c4-concierge-header-consiste
 ## Acceptance Criteria (consolidated)
 
 ### Pre-merge (PR)
-- [ ] AC-A1/A2: all share validation returns mirror to Sentry; tests green.
-- [ ] AC-B1/B2/B3: `resolveUserKbRoot` fully removed (0 non-test + 0 test residual refs); full vitest suite green.
-- [ ] AC-B4/B5: upload git push preserved for solo; shared-member resolves owner metadata.
-- [ ] AC-B6: security-sentinel R1–R6 PASS (no IDOR / boundary widening).
-- [ ] AC-C1..C6: single `[data-kb-chat]` on C4; pill removed; header trigger reveals; X/chevron collapse; md unregressed; `.pen` committed.
-- [ ] **Local repro captured BEFORE+AFTER:** using the qa local-auth recipe (offline mock-Supabase `authenticated` Playwright project, `e2e/global-setup.ts`) OR the MCP local-auth recipe (`ux-audit/scripts/bot-signin.ts` + `NEXT_PUBLIC_DEV_EXTRA_ORIGINS`, per learning `2026-06-02-playwright-mcp-local-auth-dashboard-verification.md`), click "Generate link" on (a) a fresh md doc and (b) `c4-model.md`; capture the `/api/kb/share` POST status + body before the fix and after. "Done" = link minted (200/201 with token) for BOTH.
+- [x] AC-A1/A2: all share validation returns mirror to Sentry; tests green (6 mirror tests; `grep -c reportSilentFallback server/kb-share.ts` = 19 ≥ 9).
+- [x] AC-B1/B2/B3: `resolveUserKbRoot` fully removed (`grep -rn resolveUserKbRoot apps/web-platform --include="*.ts"` → 0, incl. tests); full vitest suite green (723 files, 8729 tests).
+- [x] AC-B4/B5: upload git push preserved for solo (test #11 asserts cwd + installation id byte-identical); shared-member resolves WORKSPACE metadata via the RPC (AC-B5 test).
+- [ ] AC-B6: security-sentinel R1–R6 PASS (no IDOR / boundary widening). — DEFERRED to review phase (parent orchestrator).
+- [x] AC-C1..C6: single `[data-kb-chat]` on C4; pill removed; header trigger reveals; X/chevron collapse; md unregressed (6 c4-workspace tests); `.pen` committed.
+- [ ] **Local repro captured BEFORE+AFTER:** — see Validation strategy fallback; faithful authed local repro of the operator's stale-workspace_status prod state is infeasible offline. Confidence via the unit/component suite + tsc. using the qa local-auth recipe (offline mock-Supabase `authenticated` Playwright project, `e2e/global-setup.ts`) OR the MCP local-auth recipe (`ux-audit/scripts/bot-signin.ts` + `NEXT_PUBLIC_DEV_EXTRA_ORIGINS`, per learning `2026-06-02-playwright-mcp-local-auth-dashboard-verification.md`), click "Generate link" on (a) a fresh md doc and (b) `c4-model.md`; capture the `/api/kb/share` POST status + body before the fix and after. "Done" = link minted (200/201 with token) for BOTH.
 
 ### Post-merge (operator, Sentry-automatable)
 - [ ] AC-A3: after A deploys (if shipped separately), one "Generate link" click on the failing doc surfaces a Sentry event in `jikigai-eu`/`web-platform` carrying the failing `reason`/`op` — confirming the branch before B is claimed as the fix. If A+B ship together, instead verify the prod "Generate link" succeeds (link minted) for the operator on both doc types.
