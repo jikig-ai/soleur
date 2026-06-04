@@ -387,14 +387,6 @@ export default function DashboardLayout({
 
             {/* Footer links */}
             <div className={`border-t border-soleur-border-default safe-bottom ${collapsed ? "p-1" : "p-3"}`}>
-              {/* Theme toggle — relocated to the footer to match the committed
-                  D4 wireframe (frames 16/23: a quiet theme affordance at the
-                  bottom of the rail, NOT a prominent control at the top). Stays
-                  top-level chrome, render-conditional via the `drill === null`
-                  branch this footer lives in. */}
-              <div className={collapsed ? "pb-2" : "px-1 pb-2"}>
-                <ThemeToggle collapsed={collapsed} />
-              </div>
               {userEmail && !collapsed && (
                 <p
                   className="truncate px-3 py-1 text-xs text-soleur-text-muted"
@@ -434,6 +426,13 @@ export default function DashboardLayout({
                 <LogOutIcon className="h-4 w-4 shrink-0" />
                 <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Sign out</span>
               </button>
+              {/* Theme toggle — the quiet, lowest-priority affordance sits at the
+                  very bottom of the rail, BELOW Sign out (matches the D4 wireframe
+                  frames 16/23). Stays top-level chrome, render-conditional via the
+                  `drill === null` branch this footer lives in. */}
+              <div className={collapsed ? "pt-2" : "px-1 pt-2"}>
+                <ThemeToggle collapsed={collapsed} />
+              </div>
             </div>
           </>
         ) : (

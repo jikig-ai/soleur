@@ -95,7 +95,7 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
     expect(screen.queryByText("Soleur")).not.toBeInTheDocument();
   });
 
-  it("places the theme toggle in the FOOTER (after the primary nav), not the rail header — matches the D4 wireframe", () => {
+  it("places the theme toggle at the very BOTTOM of the rail — after the primary nav AND below Sign out (matches the D4 wireframe)", () => {
     render(
       <Wrap>
         <DashboardLayout>
@@ -111,10 +111,11 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
       navLink.compareDocumentPosition(theme) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    // Co-located with the footer Sign-out control (same footer container).
+    // …and it is the LAST footer affordance — below Sign out (the quietest,
+    // lowest-priority control sits at the very bottom of the rail).
     const signOut = screen.getByRole("button", { name: /sign out/i });
     expect(
-      theme.compareDocumentPosition(signOut) &
+      signOut.compareDocumentPosition(theme) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
