@@ -74,6 +74,15 @@ export class GitHubApiError extends Error {
 interface GitHubInstallationTokenResponse {
   token: string;
   expires_at: string;
+  // The access-tokens POST returns these in the SAME body (no extra round-trip).
+  // They make a wrong-installation token self-diagnosing at mint time:
+  // `repository_selection: "selected"` with the connected repo absent from the
+  // token's repo set is the wrong-installation signature. Both optional —
+  // older/edge responses may omit them. Type widening is additive AND
+  // single-consumer (only github-app.ts), so blast-radius is zero
+  // (hr-type-widening-cross-consumer-grep).
+  repository_selection?: "all" | "selected";
+  permissions?: Record<string, string>;
 }
 
 interface GitHubRepoResponse {
@@ -441,6 +450,110 @@ async function findOrgInstallationForUser(
   return null;
 }
 
+/**
+ * Find the GitHub App installation whose ACCOUNT LOGIN equals `login`
+ * (case-insensitive) — i.e. the installation that OWNS that account's repos.
+ *
+ * This disambiguates the wrong-installation 403 root cause
+ * (feat-one-shot-concierge-gh-403): a repo owned by an org can be reachable by
+ * BOTH the org's installation (full grant, `issues: write`) and a cross-account
+ * personal/collaborator installation (reduced grant, `issues: read`). A read
+ * probe (`checkRepoAccess`) passes for BOTH, so it cannot tell them apart —
+ * only the account-login match deterministically selects the owning install
+ * that carries the full grant. Passing the repo OWNER here yields the
+ * installation that can actually create issues, push, etc.
+ *
+ * Single `GET /app/installations` call (App JWT). Returns null when no account
+ * matches or the listing degrades — the caller keeps its existing installation
+ * (graceful: never block a dispatch on this probe). This is installation
+ * SELECTION, never a permission change — the owning grant already exists.
+ */
+export async function findInstallationByAccountLogin(
+  login: string,
+): Promise<number | null> {
+  const jwt = createAppJwt();
+  // Single page of 100 — same cap as findOrgInstallationForUser. If the App
+  // ever exceeds 100 installations, an owner install on a later page is missed
+  // (returns null → caller keeps its installation, fail-safe). Revisit with
+  // Link-header pagination if the App scales past that.
+  const response = await githubFetch(
+    `${GITHUB_API}/app/installations?per_page=100`,
+    { headers: { Authorization: `Bearer ${jwt}` } },
+  );
+
+  if (!response.ok) {
+    log.warn(
+      { status: response.status, login },
+      "Failed to list app installations for account-login match",
+    );
+    return null;
+  }
+
+  interface AppInstallation {
+    id: number;
+    account: { login?: string } | null;
+  }
+
+  const installations = (await response.json()) as AppInstallation[];
+  const target = login.toLowerCase();
+  const match = installations.find(
+    (i) => i.account?.login?.toLowerCase() === target,
+  );
+  return match?.id ?? null;
+}
+
+/**
+ * Resolve the repo-OWNER's installation for `owner/...`, but ONLY when the
+ * dispatching user (`githubLogin`) is ENTITLED to act through it. Returns the
+ * installation id on entitlement, else null.
+ *
+ * Why the entitlement gate (security — feat-one-shot-concierge-gh-403, P1):
+ * `findInstallationByAccountLogin` alone would let an OUTSIDE read-only
+ * collaborator on an org repo (who can connect it — the read probe passes) be
+ * promoted to the org's WRITE-capable installation, a cross-tenant privilege
+ * escalation (the installation token acts as the APP with the org's full grant,
+ * independent of the user's personal repo permission). Entitlement holds when:
+ *   - the owner account IS the user's own account (personal repo — no escalation), OR
+ *   - the user is a verified MEMBER of the owner org
+ *     (`GET /orgs/{owner}/members/{login}` → 204, the same check
+ *     `findOrgInstallationForUser` uses; the owner install carries members:read).
+ * A non-member gets null → the caller keeps its current installation and the
+ * honest 403 surfaces, rather than silently gaining write it was never granted.
+ */
+export async function findRepoOwnerInstallationForUser(
+  owner: string,
+  githubLogin: string | null,
+): Promise<number | null> {
+  if (!githubLogin) return null;
+
+  const ownerInstall = await findInstallationByAccountLogin(owner);
+  if (ownerInstall === null) return null;
+
+  // Personal repo (owner is the user's own account) — no escalation possible.
+  if (owner.toLowerCase() === githubLogin.toLowerCase()) return ownerInstall;
+
+  // Org repo — require verified org membership before promoting. Mint the
+  // owner install's token (members:read) and probe membership, mirroring
+  // findOrgInstallationForUser's 204 check.
+  let installationToken: string;
+  try {
+    installationToken = await generateInstallationToken(ownerInstall);
+  } catch (err) {
+    log.warn(
+      { err, ownerInstall, owner },
+      "findRepoOwnerInstallationForUser: token mint failed — denying promotion",
+    );
+    return null;
+  }
+
+  const memberCheck = await githubFetch(
+    `${GITHUB_API}/orgs/${encodeURIComponent(owner)}/members/${encodeURIComponent(githubLogin)}`,
+    { headers: { Authorization: `token ${installationToken}` } },
+  );
+  // 204 = is a member; anything else (302 non-member, 404, 403) = not entitled.
+  return memberCheck.status === 204 ? ownerInstall : null;
+}
+
 // ---------------------------------------------------------------------------
 // Token cache (installation tokens are valid for 1 hour)
 // ---------------------------------------------------------------------------
@@ -548,6 +661,23 @@ export async function generateInstallationToken(
   }
 
   const data = (await response.json()) as GitHubInstallationTokenResponse;
+
+  // Mint-time observability (feat-one-shot-concierge-gh-403). Log the
+  // installation id, the token's repository_selection, and the SORTED granted
+  // permission KEYS so a future 403 is self-diagnosing without guessing which
+  // installation/scope was used — a "selected" token missing the connected
+  // repo, or a permission-key gap, is visible in the log line. NEVER log
+  // `data.token` (hr-github-app-auth-not-pat) — keys/selection are non-secret
+  // metadata; the token value is the secret.
+  log.info(
+    {
+      installationId,
+      repositorySelection: data.repository_selection,
+      permissionKeys: Object.keys(data.permissions ?? {}).sort(),
+      appId: getAppId(),
+    },
+    "Minted installation token",
+  );
 
   tokenCache.set(installationId, {
     token: data.token,

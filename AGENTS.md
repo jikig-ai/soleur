@@ -58,6 +58,7 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: wg-never-bump-version-files-in-feature] → rest
 - [id: wg-after-marking-a-pr-ready-run-gh-pr-merge] → rest
 - [id: wg-ship-push-before-merge] → rest
+- [id: wg-cla-signed-author-before-merge] → rest
 - [id: wg-after-a-pr-merges-to-main-verify-all] → rest
 - [id: wg-dark-launch-deploy-gates] → rest
 - [id: wg-at-session-start-run-bash-plugins-soleur] → core

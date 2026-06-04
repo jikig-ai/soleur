@@ -51,7 +51,12 @@ export async function POST(request: Request) {
     body.documentPath,
   );
   if (!result.ok) {
-    return NextResponse.json({ error: result.error }, { status: result.status });
+    // Pass `code` through so the client can branch (e.g. re-read on the 409
+    // concurrent-retry winner) instead of treating every failure identically.
+    return NextResponse.json(
+      { error: result.error, code: result.code },
+      { status: result.status },
+    );
   }
   return NextResponse.json(
     { token: result.token, url: result.url },

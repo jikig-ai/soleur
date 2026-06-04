@@ -45,13 +45,37 @@ export default function C4Workspace({
   const { data, error, loading, reload } = useC4Project(dirPath);
   const [rightTab, setRightTab] = useState<"concierge" | "code">("concierge");
   const [currentView, setCurrentView] = useState(viewId);
+  // When collapsed, the right panel (Concierge/Code) + its resize handle are
+  // unmounted so the diagram takes full width. This is a deliberate unmount-on-
+  // collapse choice (not CSS-hide): ChatSurface re-resumes the thread from the
+  // server via `resumeByContextPath` and restores the draft from sessionStorage
+  // (`draftKey`) on reveal, so no in-progress content is lost — the panel just
+  // re-hydrates with a "Continuing from…" banner. Reveal is driven by the gold
+  // pill on the full-width diagram (the shared KbChatTrigger stays suppressed on
+  // C4 docs to avoid double-mounting a second Concierge — see page.tsx).
+  const [conciergeCollapsed, setConciergeCollapsed] = useState(false);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <Group orientation="horizontal" className="h-full min-h-0 flex-1">
         {/* LEFT — interactive diagram (+ collapsible Notes) */}
         <Panel minSize="35%">
-          <div className="flex h-full min-h-0 flex-col">
+          <div className="relative flex h-full min-h-0 flex-col">
+            {/* Reveal control — shown only when the Concierge is collapsed so the
+                user can reopen it on the full-width diagram. */}
+            {conciergeCollapsed && (
+              <button
+                type="button"
+                aria-label="Open Concierge"
+                onClick={() => setConciergeCollapsed(false)}
+                className="absolute right-3 top-3 z-10 inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-3.5 py-1.5 text-xs font-medium text-soleur-text-on-accent shadow-lg transition-opacity hover:opacity-90"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                </svg>
+                Open Concierge
+              </button>
+            )}
             {loading && <Spinner />}
             {!loading && error && (
               <div className="p-4 text-sm text-red-400">⚠ {error}</div>
@@ -88,9 +112,11 @@ export default function C4Workspace({
           </div>
         </Panel>
 
-        <ResizeHandle />
+        {!conciergeCollapsed && <ResizeHandle />}
 
-        {/* RIGHT — Concierge (default) / Code toggle */}
+        {/* RIGHT — Concierge (default) / Code toggle. Unmounted when collapsed
+            so the diagram pane takes full width. */}
+        {!conciergeCollapsed && (
         <Panel defaultSize="38%" minSize="28%" maxSize="60%">
           <div className="flex h-full min-h-0 flex-col border-l border-soleur-border-default">
             <div className="flex shrink-0 items-center gap-1 border-b border-soleur-border-default bg-soleur-bg-surface-2/40 px-2 py-1.5">
@@ -112,18 +138,31 @@ export default function C4Workspace({
                   {label}
                 </button>
               ))}
-              <span className="ml-auto pr-1 text-[11px] text-soleur-text-muted">
-                Architecture · {currentView}
-              </span>
+              <div className="ml-auto flex items-center gap-1.5 pr-1">
+                <span className="text-[11px] text-soleur-text-muted">
+                  Architecture · {currentView}
+                </span>
+                <button
+                  type="button"
+                  aria-label="Collapse Concierge"
+                  onClick={() => setConciergeCollapsed(true)}
+                  className="rounded p-1 text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-secondary"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="13 17 18 12 13 7" />
+                    <polyline points="6 17 11 12 6 7" />
+                  </svg>
+                </button>
+              </div>
             </div>
 
             <div className="relative min-h-0 flex-1">
-              {/* Concierge stays mounted across toggles so the thread persists;
-                  visibility is CSS-driven. */}
+              {/* Concierge stays mounted across the Concierge/Code tab toggle so
+                  the thread persists; visibility is CSS-driven. */}
               <div className={rightTab === "concierge" ? "h-full" : "hidden"}>
                 <KbChatContent
                   contextPath={contextPath}
-                  onClose={() => setRightTab("code")}
+                  onClose={() => setConciergeCollapsed(true)}
                   visible={rightTab === "concierge"}
                 />
               </div>
@@ -143,6 +182,7 @@ export default function C4Workspace({
             </div>
           </div>
         </Panel>
+        )}
       </Group>
     </div>
   );
