@@ -218,6 +218,17 @@ const reviewGateResponseSchema = z.strictObject({
   gateId: z.string(),
   selection: z.string(),
 });
+// feat-bash-autonomous-default-on — first-run consent soft-gate response
+// (client→server). Mirrors `review_gate_response`. `selection` is one of the
+// disclosure actions: "Got it" (default-ON ack), "Keep autonomous on" /
+// "Ask me each time" (existing-workspace opt-out). The server resolves the held
+// command + writes the ack from this frame. `userId` is NOT a wire field
+// (strictObject rejects forgery — TR4).
+const autonomousDisclosureResponseSchema = z.strictObject({
+  type: z.literal("autonomous_disclosure_response"),
+  gateId: z.string(),
+  selection: z.string(),
+});
 // `abort_turn` (feat-abort-conversation-web PR1, plan §1.2): user-initiated
 // Stop. `userId` is intentionally NOT a wire field — strictObject + the
 // minimum-length conversationId reject forged userIds and empty IDs at the
@@ -282,6 +293,18 @@ const reviewGateSchema = z.strictObject({
   stepProgress: z
     .strictObject({ current: z.number(), total: z.number() })
     .optional(),
+});
+// feat-bash-autonomous-default-on — first-run consent soft-gate disclosure
+// (server→client). Mirrors `review_gate`: a held Bash command awaiting the
+// owner's one-time acknowledgement. `existingWorkspace` true => the workspace
+// is stored `false`/un-acked (offer the opt-out "Keep autonomous on" /
+// "Ask me each time"); false => default-ON workspace (single "Got it" ack).
+// `posture` carries the server-resolved autonomous posture for the persistent
+// chip so the client never guesses.
+const autonomousDisclosureSchema = z.strictObject({
+  type: z.literal("autonomous_disclosure"),
+  gateId: z.string(),
+  existingWorkspace: z.boolean(),
 });
 const sessionStartedSchema = z.strictObject({
   type: z.literal("session_started"),
@@ -504,6 +527,7 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   resumeSessionSchema,
   closeConversationSchema,
   reviewGateResponseSchema,
+  autonomousDisclosureResponseSchema,
   abortTurnSchema,
   streamSchema,
   streamStartSchema,
@@ -512,6 +536,7 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   commandStreamSchema,
   toolProgressSchema,
   reviewGateSchema,
+  autonomousDisclosureSchema,
   sessionStartedSchema,
   sessionResumedSchema,
   sessionEndedSchema,

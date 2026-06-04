@@ -255,6 +255,11 @@ export type WSMessage =
   | { type: "resume_session"; conversationId: string }
   | { type: "close_conversation" }
   | { type: "review_gate_response"; gateId: string; selection: string }
+  // feat-bash-autonomous-default-on — first-run consent soft-gate response
+  // (client→server). `selection` is "Got it" / "Keep autonomous on" /
+  // "Ask me each time". `userId` is resolved from the authenticated socket —
+  // NOT a wire field (TR4 cross-user invariant; strictObject rejects forgery).
+  | { type: "autonomous_disclosure_response"; gateId: string; selection: string }
   // Client → server: user-initiated Stop. The server resolves `userId`
   // from the authenticated socket session — `userId` is intentionally
   // NOT part of the wire shape (TR4 cross-user invariant; see
@@ -318,6 +323,11 @@ export type WSMessage =
       elapsedSeconds: number;
     }
   | { type: "review_gate"; gateId: string; question: string; header?: string; options: string[]; descriptions?: Record<string, string | undefined>; stepProgress?: { current: number; total: number } }
+  // feat-bash-autonomous-default-on — first-run consent soft-gate disclosure
+  // (server→client). A held Bash command awaiting the owner's one-time ack.
+  // `existingWorkspace` true => offer the opt-out ("Keep autonomous on" /
+  // "Ask me each time"); false => default-ON workspace ("Got it" ack).
+  | { type: "autonomous_disclosure"; gateId: string; existingWorkspace: boolean }
   | { type: "session_started"; conversationId: string; capabilities?: { promptKinds: readonly string[]; incomingTypes?: readonly string[] } }
   | { type: "session_resumed"; conversationId: string; resumedFromTimestamp: string; messageCount: number }
   | {

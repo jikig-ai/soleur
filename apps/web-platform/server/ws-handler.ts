@@ -75,6 +75,10 @@ import {
 } from "./cc-dispatcher";
 import { fetchUserWorkspacePath } from "./kb-document-resolver";
 import { stripAndReportImagePlaceholders } from "./image-paste-strip";
+import {
+  setAutonomousAck,
+  AutonomousAckOwnerDeniedError,
+} from "@/server/set-autonomous-ack";
 type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_response" }>;
 
 const log = createChildLogger("ws");
@@ -2050,6 +2054,59 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     }
 
     // ------------------------------------------------------------------
+    // autonomous_disclosure_response: the owner acknowledged the first-run
+    // autonomous-mode disclosure (feat-bash-autonomous-default-on). Write the
+    // per-workspace consent ack, THEN release the held Bash command by
+    // resolving its gate (the soft-gate hold reuses the `_ccBashGates`
+    // registry via `abortableReviewGate`, so `resolveCcBashGate` releases it).
+    // Order matters: write the ack first so a re-run can never re-hold; only
+    // then unblock the command. Owner-deny → surfaced, the command stays held.
+    // ------------------------------------------------------------------
+    case "autonomous_disclosure_response": {
+      if (!session.conversationId) {
+        sendToClient(userId, { type: "error", message: "No active session." });
+        return;
+      }
+      try {
+        if (
+          typeof msg.selection !== "string" ||
+          msg.selection.length > MAX_SELECTION_LENGTH
+        ) {
+          throw new Error("Invalid autonomous disclosure selection");
+        }
+        // "Keep autonomous on" also flips the toggle ON (existing-workspace
+        // opt-out). "Got it" / "Ask me each time" write the ack only.
+        const keepAutonomous = msg.selection === "Keep autonomous on";
+        await setAutonomousAck(userId, { keepAutonomous });
+        // Release the held command. `resolveCcBashGate` is single-use and
+        // composite-key scoped (R8). The held gate awaits ANY selection; we
+        // pass through the user's choice so the permission-callback hold can
+        // distinguish "Ask me each time" (review-gate fallback) from "Got it".
+        resolveCcBashGate({
+          userId,
+          conversationId: session.conversationId,
+          gateId: msg.gateId,
+          selection: msg.selection,
+        });
+      } catch (err) {
+        Sentry.captureException(err);
+        const ownerDenied = err instanceof AutonomousAckOwnerDeniedError;
+        log.error(
+          { userId, err, ownerDenied },
+          "autonomous_disclosure_response error",
+        );
+        sendToClient(userId, {
+          type: "error",
+          message: ownerDenied
+            ? "Only a workspace owner can enable autonomous mode."
+            : sanitizeErrorForClient(err),
+          gateId: msg.gateId,
+        });
+      }
+      break;
+    }
+
+    // ------------------------------------------------------------------
     // auth is handled at connection level, not here
     // ------------------------------------------------------------------
     case "auth": {
@@ -2071,6 +2128,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "tool_progress":
     case "command_stream":
     case "review_gate":
+    case "autonomous_disclosure":
     case "session_started":
     case "session_resumed":
     case "session_ended":
