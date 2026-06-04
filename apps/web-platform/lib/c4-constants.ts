@@ -31,13 +31,21 @@ export const C4_VISUALIZER_FLAG = "c4-visualizer" as const;
  */
 export function isC4DiagramPath(relativePath: string): boolean {
   if (!relativePath || relativePath.includes("\0")) return false;
-  // Normalize and reject traversal.
-  const normalized = relativePath.replace(/\\/g, "/");
-  if (normalized.includes("..")) return false;
+  // Reject backslashes outright. Previously we normalized `\`→`/` for the
+  // checks, but writeC4Diagram commits the RAW path: GitHub treats `\` as a
+  // literal filename char, so `diagrams\evil.c4` would pass a normalized check
+  // yet land OUTSIDE the diagrams dir. Backslashes have no legitimate use in a
+  // KB-relative diagram path, so the strict rule is: forbid them. (Security
+  // review: this is the invariant the Concierge edit_c4_diagram auto-approve
+  // tier depends on — the validated path MUST equal the written path.)
+  if (relativePath.includes("\\")) return false;
+  if (relativePath.includes("..")) return false;
   const prefix = `${C4_DIAGRAMS_DIR}/`;
-  if (!normalized.startsWith(prefix)) return false;
-  const rest = normalized.slice(prefix.length);
-  // Must be a direct child (no nested subdirectories).
-  if (rest.includes("/")) return false;
+  if (!relativePath.startsWith(prefix)) return false;
+  const rest = relativePath.slice(prefix.length);
+  // Must be a direct child (no nested subdirectories) with a non-empty stem
+  // and a sane filename charset (rejects `.md` dotfiles, RTL-override tricks).
+  if (!/^[A-Za-z0-9._-]+$/.test(rest)) return false;
+  if (rest.startsWith(".")) return false;
   return rest.endsWith(C4_SOURCE_EXT) || rest.endsWith(".md");
 }

@@ -18,6 +18,17 @@ export type ToolTier = "auto-approve" | "gated" | "blocked";
  * (fail-closed: new tools require explicit tier assignment).
  */
 export const TOOL_TIER_MAP: Record<string, ToolTier> = {
+  // C4 diagram editing (#3722 follow-up): a WRITE tool but deliberately
+  // auto-approve, unlike the gated github/kb-share writes. Justification: the
+  // write is hard-scoped to `engineering/architecture/diagrams/` by
+  // `isC4DiagramPath` inside `writeC4Diagram`; owner/repo/installation are
+  // closed over from the caller's own active workspace (never tool input); it
+  // is reversible (git history); and the whole capability is flag-gated to the
+  // c4-visualizer dev cohort. The product intent (deferred-c4-concierge-write)
+  // is autonomous in-conversation diagram editing, which a per-edit review gate
+  // would defeat. Revisit (→ "gated") if the scope guard ever widens.
+  "mcp__soleur_platform__edit_c4_diagram": "auto-approve",
+
   // Phase 2: Read CI status (auto-approve — read-only)
   // cc-router (#2909): Tier 1 candidate (Phase 2 promotion via #3722)
   "mcp__soleur_platform__github_read_ci_status": "auto-approve",

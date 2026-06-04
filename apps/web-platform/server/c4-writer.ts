@@ -4,13 +4,24 @@
 // (`isC4DiagramPath`) is enforced in exactly one place. The Concierge's generic
 // Edit/Write tools stay hard-blocked (cc-dispatcher CC_PATH_DISALLOWED_TOOLS);
 // this is its ONLY sanctioned write capability.
-import "server-only";
+//
+// NOTE: no `import "server-only"` here (unlike most server/ modules). The
+// Concierge edit_c4_diagram tool bundles this file into the WS/custom server
+// via esbuild, which — unlike Next's bundler — cannot resolve the `server-only`
+// guard package and crashes the server at startup. This module is server-only
+// by construction (GitHub API + git), and its only importers are server code
+// (the PUT route + the MCP tool), so dropping the build-time guard is safe.
+// Mirrors the earlier c4-compute.ts removal for the same vitest/esbuild reason.
 import {
   githubApiGet,
   githubApiPost,
   GitHubApiError,
 } from "@/server/github-api";
-import { syncWorkspace } from "@/server/kb-route-helpers";
+// Import from the leaf workspace-sync module (NOT kb-route-helpers) so this
+// file — bundled into the WS/custom server via the Concierge edit_c4_diagram
+// tool — does not pull kb-route-helpers' `@/lib/supabase/server` (next/headers)
+// into the server bundle, which crashes the custom server at startup.
+import { syncWorkspace } from "@/server/workspace-sync";
 import { isC4DiagramPath } from "@/lib/c4-constants";
 import { renameUserIdToHash } from "@/server/userid-pseudonymize";
 import logger from "@/server/logger";

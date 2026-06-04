@@ -43,4 +43,23 @@ describe("isC4DiagramPath", () => {
     expect(isC4DiagramPath(C4_DIAGRAMS_DIR)).toBe(false);
     expect(isC4DiagramPath(`${C4_DIAGRAMS_DIR}/`)).toBe(false);
   });
+
+  it("accepts hyphenated view-embed page names", () => {
+    expect(isC4DiagramPath(`${C4_DIAGRAMS_DIR}/component-plugin.md`)).toBe(true);
+    expect(isC4DiagramPath(`${C4_DIAGRAMS_DIR}/container.md`)).toBe(true);
+  });
+
+  it("rejects backslashes (writeC4Diagram commits the raw path; \\ is a literal GitHub filename char)", () => {
+    // Would normalize to a valid path but COMMIT one level above the dir.
+    expect(isC4DiagramPath(`${C4_DIAGRAMS_DIR}\\evil.c4`)).toBe(false);
+    expect(isC4DiagramPath(`${C4_DIAGRAMS_DIR}/sub\\model.c4`)).toBe(false);
+  });
+
+  it("rejects empty-stem dotfiles and confusable filenames", () => {
+    expect(isC4DiagramPath(`${C4_DIAGRAMS_DIR}/.md`)).toBe(false);
+    expect(isC4DiagramPath(`${C4_DIAGRAMS_DIR}/.c4`)).toBe(false);
+    // RTL-override / non-ASCII outside the sane charset.
+    expect(isC4DiagramPath(`${C4_DIAGRAMS_DIR}/‮md.c4`)).toBe(false);
+    expect(isC4DiagramPath(`${C4_DIAGRAMS_DIR}/model file.c4`)).toBe(false);
+  });
 });

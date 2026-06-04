@@ -29,6 +29,12 @@ describe("getToolTier", () => {
     );
   });
 
+  test("returns auto-approve for edit_c4_diagram (scope-guarded write)", () => {
+    expect(getToolTier("mcp__soleur_platform__edit_c4_diagram")).toBe(
+      "auto-approve",
+    );
+  });
+
   test("returns gated for github_trigger_workflow", () => {
     expect(getToolTier("mcp__soleur_platform__github_trigger_workflow")).toBe(
       "gated",
