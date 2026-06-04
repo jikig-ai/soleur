@@ -1426,6 +1426,7 @@ export const realSdkQueryFactory: QueryFactory = async (
     effectiveSystemPrompt += `\n\n${c4PromptAddendum}`;
   }
 
+  // nosemgrep: path-join-resolve-traversal -- workspacePath is server-resolved (fetchUserWorkspacePath, ADR-044), never user-tainted input.
   const pluginPath = path.join(workspacePath, "plugins", "soleur");
 
   // Synthetic AgentSession — the only place in the cc path where an
@@ -1467,6 +1468,7 @@ export const realSdkQueryFactory: QueryFactory = async (
   // (hr-github-app-auth-not-pat).
   let gitAskpassScriptPath: string | undefined;
   if (ghToken) {
+    // nosemgrep: path-join-resolve-traversal -- workspacePath is server-resolved (fetchUserWorkspacePath, ADR-044), never user-tainted input.
     const gitDir = path.join(workspacePath, ".git");
     const askpassDir = existsSync(gitDir) ? gitDir : workspacePath;
     gitAskpassScriptPath = writeAskpassScriptTo(askpassDir, ".soleur-askpass.sh");

@@ -34,10 +34,17 @@ describe("migration 099: bash_autonomous default ON + ack RPCs", () => {
     );
   });
 
-  it("contains ZERO `UPDATE ... bash_autonomous` statements (no backfill — GDPR)", () => {
-    // Any UPDATE that names bash_autonomous would silently enable existing
-    // un-consented workspaces. Forbidden in the forward migration.
-    expect(sql).not.toMatch(/UPDATE[\s\S]*?bash_autonomous/i);
+  it("contains ZERO `UPDATE ... SET bash_autonomous =` statements (no backfill — GDPR)", () => {
+    // The actual hazard is a backfill that ASSIGNS bash_autonomous on the
+    // workspaces table (silently enabling existing un-consented workspaces).
+    // Target that precisely: an `UPDATE public.workspaces ... SET ... bash_autonomous =`.
+    // The prior `/UPDATE[\s\S]*?bash_autonomous/i` passed by token-ordering
+    // accident (e.g. it would also flag an UPDATE of the ack column whose body
+    // merely mentions bash_autonomous in a comment, while a real backfill that
+    // wrote `bash_autonomous = true` via an aliased table would need this shape).
+    expect(sql).not.toMatch(
+      /UPDATE\s+public\.workspaces[\s\S]*?SET[\s\S]*?bash_autonomous\s*=/i,
+    );
   });
 
   it("does NOT re-CREATE OR REPLACE handle_new_user (insert relies on column default)", () => {

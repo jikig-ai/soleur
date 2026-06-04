@@ -612,6 +612,123 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         }
       }
 
+      // feat-bash-autonomous-default-on — EXISTING-workspace opt-out (P3 wire).
+      // A pre-consent-model workspace stored `bash_autonomous=false` with NO ack:
+      // the owner has never seen the autonomous disclosure. On their FIRST
+      // non-blocked command, HOLD it once and surface the opt-out
+      // (`existingWorkspace:true`):
+      //   - "Keep autonomous on" ⇒ the ws-handler flips the toggle ON + writes
+      //     the ack; this run proceeds (allow, after the ack re-check).
+      //   - "Ask me each time"   ⇒ the ws-handler writes the ack (leaves the
+      //     toggle off); this run FALLS THROUGH to the normal review-gate below
+      //     (manual approve), and future commands stay on the review-gate.
+      // Owner-only: a non-owner falls straight to the review-gate (no ack button
+      // they can't grant). Reuses the kind-tagged gate registry + the ack
+      // re-check. The blocklist already ran above, so this only holds a command
+      // that survived the denylist.
+      {
+        const livePosture = deps.resolveAckPosture
+          ? deps.resolveAckPosture()
+          : deps.autonomousAckAt;
+        if (
+          !deps.bashAutonomous &&
+          livePosture == null &&
+          deps.isOwner
+        ) {
+          const gateId = randomUUID();
+          log.info(
+            {
+              sec: true,
+              tool: toolName,
+              decision: "autonomous-disclosure-hold",
+              repo: `${ctx.repoOwner}/${ctx.repoName}`,
+            },
+            "Bash command HELD for existing-workspace autonomous opt-out",
+          );
+          logPermissionDecision(
+            "canUseTool-bash",
+            toolName,
+            "deny",
+            "autonomous-disclosure-hold",
+          );
+          deps.sendToClient(ctx.userId, {
+            type: "autonomous_disclosure",
+            gateId,
+            existingWorkspace: true,
+          });
+          await deps.updateConversationStatus(
+            ctx.conversationId,
+            "waiting_for_user",
+          );
+          const selection = await deps.abortableReviewGate(
+            ctx.session,
+            gateId,
+            options.signal,
+            undefined,
+            ["Keep autonomous on", "Ask me each time"],
+            "autonomous_disclosure",
+          );
+          await deps.updateConversationStatus(ctx.conversationId, "active");
+
+          if (selection === "Keep autonomous on") {
+            // The ws-handler flipped the toggle + wrote the ack. Verify the ack
+            // actually persisted (defense-in-depth) before allowing this run.
+            if (deps.verifyAutonomousAck) {
+              let persistedAck: string | null = null;
+              try {
+                persistedAck = await deps.verifyAutonomousAck();
+              } catch (err) {
+                warnSilentFallback(err, {
+                  feature: "cc-permissions",
+                  op: "autonomous-ack-verify-existing",
+                });
+                persistedAck = null;
+              }
+              if (persistedAck == null) {
+                logPermissionDecision(
+                  "canUseTool-bash",
+                  toolName,
+                  "deny",
+                  "autonomous-disclosure-ack-unverified",
+                );
+                return {
+                  behavior: "deny" as const,
+                  message:
+                    "Consent acknowledgement was not recorded; the command was held. Please try again.",
+                };
+              }
+            }
+            log.info(
+              {
+                sec: true,
+                tool: toolName,
+                decision: "autonomous-disclosure-released",
+                repo: `${ctx.repoOwner}/${ctx.repoName}`,
+              },
+              "Existing-workspace opt-out: kept autonomous on; releasing command",
+            );
+            logPermissionDecision(
+              "canUseTool-bash",
+              toolName,
+              "allow",
+              "autonomous-disclosure-released",
+            );
+            return allow(toolInput);
+          }
+          // "Ask me each time" (or any non-keep selection): the ack is written
+          // server-side; fall through to the review-gate below for THIS run.
+          log.info(
+            {
+              sec: true,
+              tool: toolName,
+              decision: "autonomous-disclosure-opt-out",
+              repo: `${ctx.repoOwner}/${ctx.repoName}`,
+            },
+            "Existing-workspace opt-out: ask-each-time; falling through to review-gate",
+          );
+        }
+      }
+
       // #2921 batched-approval cache: pre-gate check (synchronous Map
       // lookup; no AbortSignal needed for cache hit). Blocklist already
       // ran above — curl/wget/nc/sh -c/eval/base64 -d/sudo cannot be

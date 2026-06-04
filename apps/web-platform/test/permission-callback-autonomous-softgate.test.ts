@@ -248,6 +248,84 @@ describe("autonomous first-run soft-gate", () => {
     expect(result.behavior).toBe("deny");
   });
 
+  test("P3 existing-workspace: un-acked owner with bashAutonomous=false ⇒ HOLD w/ existingWorkspace:true; 'Keep autonomous on' ⇒ allow", async () => {
+    const { ctx, deps } = buildContext({
+      bashAutonomous: false, // existing (stored false) workspace
+      autonomousAckAt: null,
+      isOwner: true,
+      verifyAutonomousAck: vi.fn().mockResolvedValue("2026-06-04T00:00:00Z"),
+      abortableReviewGate: vi.fn().mockResolvedValue("Keep autonomous on"),
+    });
+    const canUseTool = createCanUseTool(ctx);
+    const result = await canUseTool(
+      "Bash",
+      { command: "rm -rf build" },
+      sdkOptions(),
+    );
+    const disclosureSends = (deps.sendToClient as ReturnType<typeof vi.fn>).mock
+      .calls.map((c) => c[1])
+      .filter((p: { type?: string }) => p.type === "autonomous_disclosure");
+    expect(disclosureSends.length).toBe(1);
+    expect(disclosureSends[0].existingWorkspace).toBe(true);
+    expect(result.behavior).toBe("allow");
+  });
+
+  test("P3 existing-workspace: 'Ask me each time' ⇒ falls through to the review-gate (manual approve)", async () => {
+    const { ctx, deps } = buildContext({
+      bashAutonomous: false,
+      autonomousAckAt: null,
+      isOwner: true,
+      // First call (disclosure hold) returns "Ask me each time"; second call
+      // (the review-gate fallback) returns "Approve".
+      abortableReviewGate: vi
+        .fn()
+        .mockResolvedValueOnce("Ask me each time")
+        .mockResolvedValueOnce("Approve"),
+    });
+    const canUseTool = createCanUseTool(ctx);
+    const result = await canUseTool(
+      "Bash",
+      { command: "rm -rf build" },
+      sdkOptions(),
+    );
+    const sends = (deps.sendToClient as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c) => c[1],
+    );
+    // Both a disclosure (existingWorkspace:true) AND a review_gate were emitted.
+    expect(
+      sends.some(
+        (p: { type?: string; existingWorkspace?: boolean }) =>
+          p.type === "autonomous_disclosure" && p.existingWorkspace === true,
+      ),
+    ).toBe(true);
+    expect(sends.some((p: { type?: string }) => p.type === "review_gate")).toBe(
+      true,
+    );
+    // The review-gate "Approve" allows the command.
+    expect(result.behavior).toBe("allow");
+    expect(deps.abortableReviewGate).toHaveBeenCalledTimes(2);
+  });
+
+  test("P3 existing-workspace: NON-owner with bashAutonomous=false ⇒ straight to review-gate (no disclosure)", async () => {
+    const { ctx, deps } = buildContext({
+      bashAutonomous: false,
+      autonomousAckAt: null,
+      isOwner: false,
+      abortableReviewGate: vi.fn().mockResolvedValue("Approve"),
+    });
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "rm -rf build" }, sdkOptions());
+    const sends = (deps.sendToClient as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c) => c[1],
+    );
+    expect(
+      sends.some((p: { type?: string }) => p.type === "autonomous_disclosure"),
+    ).toBe(false);
+    expect(sends.some((p: { type?: string }) => p.type === "review_gate")).toBe(
+      true,
+    );
+  });
+
   test("user rejects via 'Ask me each time' ⇒ command denied (review-gate fallback semantics)", async () => {
     const { ctx, deps } = buildContext({
       bashAutonomous: true,
