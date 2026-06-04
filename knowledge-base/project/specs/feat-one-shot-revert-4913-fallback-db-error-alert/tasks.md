@@ -24,8 +24,11 @@ brand_survival_threshold: single-user incident
         keep denied_jti→403, preserve the emit.
 - [ ] 1.3 Remove `createServiceClient` import iff both call-sites gone (`grep -c` == 0).
 - [ ] 1.4 Update in-file comments to tenant-only + misdiagnosis rationale.
-- [ ] 1.5 `.service-role-allowlist`: remove the #4913 block + line (same commit as import removal;
-        CODEOWNERS @deruelle) — iff `createServiceClient` fully removed.
+- [ ] 1.5 `.service-role-allowlist`: remove the #4913 block + line (CODEOWNERS @deruelle) iff
+        `createServiceClient` fully removed. NOTE (deepened): the gate is DIRECTIONAL — it
+        passes once the file stops importing, regardless of the stale line. Line removal is
+        cleanliness/boundary-hygiene, NOT a same-commit atomicity requirement. Run
+        `bash apps/web-platform/scripts/service-role-allowlist-gate.sh` → exit 0.
 - [ ] 1.6 Revert #4913 fallback tests in `kb-route-helpers.test.ts` (RED first); assert 503 + emit.
 
 ## Phase 2 — Reconcile #4920 alert + op-contract test

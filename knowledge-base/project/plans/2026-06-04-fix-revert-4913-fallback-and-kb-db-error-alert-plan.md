@@ -16,6 +16,39 @@ related:
 
 # Revert #4913 service-role fallback + wire KB db-error alert 🐛
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-04
+**Sections enhanced:** Phase 1, Acceptance Criteria, Infrastructure (IaC)
+**Verification passes run:** premise-validation (all 3 PRs MERGED), verify-the-negative
+(4 load-bearing claims grepped against code), precedent-diff (4.4), hard gates 4.6/4.7/4.8/4.9
+(all pass).
+
+### Key Improvements
+1. **Corrected the allowlist-gate claim.** Read `service-role-allowlist-gate.sh` in full:
+   the gate is DIRECTIONAL (fails only on un-allowlisted importers), NOT atomic. The earlier
+   draft overstated "import removal + allowlist line removal must be in the same commit."
+   Removing the stale allowlist line is cleanliness/hygiene, not CI-forced.
+2. **Pinned the precedent diff.** The new `kb_db_error` rule is a field-verified 1:1 clone
+   of `chat_message_save_failure`; frequency 13 confirmed free.
+3. **Verified the op vocabulary.** `kb-share.ts` emits `feature=kb-share` ops
+   `create/list/preview/preview-invariant/revoke` — the alert filter set is grounded, not paraphrased.
+
+### New Considerations Discovered
+- The user's stated rationale ("fallback worked around the workspace_id bug; #4922 fixed it")
+  is **inaccurate** — the fallback guards a tenant-mint `RuntimeAuthError`, a different path.
+  It is dead code because the PIR proved the mint failure was a *misdiagnosis* (mint works in
+  prod), not because #4922 fixed the insert. The PR body must carry the accurate rationale.
+- **Scope is genuinely open:** #4914 is CLOSED but #4919 MERGED a fallback for
+  `authenticateAndResolveKbPath` anyway. The whole-mint-fallback-family revert (plan default)
+  is the only scope that lets the `createServiceClient` import + allowlist line be dropped
+  cleanly. CPO sign-off should confirm scope before /work.
+- Do NOT `git revert -m` #4913 mechanically — it would delete the `reportSilentFallback`
+  emit that the #4920 alert keys on. Hand-revert, preserving the emit.
+
+---
+
+
 > Spec lacks valid `lane:` — defaulted in frontmatter to `cross-domain` only if the
 > spec is later found to omit it (TR2 fail-closed). This plan sets `lane: cross-domain`
 > explicitly (touches app server code + Terraform/Sentry infra + tests).
@@ -131,10 +164,17 @@ credential than the tenant-scoped read it replaces).
 - [ ] **If `createServiceClient` is fully removed from `kb-route-helpers.ts`:** delete the
       `#4913` comment block + the `apps/web-platform/server/kb-route-helpers.ts` line
       (the file's last entry, added by #4913). This is CODEOWNERS-gated (`@deruelle`,
-      `.github/CODEOWNERS:45`) — the revert PR will require owner review. The
-      `service-role-allowlist-gate.sh` enforces that a service-role import + its allowlist
-      line move together in one commit, so the import removal + allowlist line removal MUST
-      be in the same commit (`hr-write-boundary-sentinel-sweep-all-write-sites` sibling).
+      `.github/CODEOWNERS:45`) — the revert PR will require owner review.
+      **[Deepened correction] The gate is DIRECTIONAL, not atomic.**
+      `service-role-allowlist-gate.sh` (read in full) FAILs only when a file *imports*
+      `createServiceClient`/`getServiceClient` and is NOT in the allowlist (`:48-64`). It
+      does NOT fail on a stale allowlist entry (a path listed but no longer importing) — that
+      is tolerated. So there is **no hard requirement** that the import removal and the
+      allowlist-line removal land in the same commit; CI stays green either way. The
+      allowlist-line removal is a **cleanliness + boundary-hygiene** step (and CODEOWNERS-gated
+      so the security owner sees the boundary shrink), NOT a gate-forced one. Do it in the same
+      PR for a clean revert, but it is not load-bearing for CI. (Earlier plan draft overstated
+      this as a same-commit atomicity requirement — corrected here.)
 - [ ] **If scope = `resolveUserKbRoot` only** (import stays for `authenticateAndResolveKbPath`):
       leave the allowlist line, but update its comment to note only the file-route fallback
       remains. (This is the narrower, weaker outcome — flagged for CPO.)
@@ -220,8 +260,10 @@ credential than the tenant-scoped read it replaces).
 - [ ] `grep -c "createServiceClient" apps/web-platform/server/kb-route-helpers.ts` returns
       the expected count (0 if whole-family revert; 1 import + 1 call if `resolveUserKbRoot`-only).
 - [ ] If whole-family: `grep -c "kb-route-helpers.ts" apps/web-platform/.service-role-allowlist`
-      returns 0, AND the import removal + allowlist removal are in the SAME commit
-      (`git show <sha> --stat` shows both files).
+      returns 0 (cleanliness — NOT gate-forced; see Phase 1 deepened correction).
+- [ ] `bash apps/web-platform/scripts/service-role-allowlist-gate.sh` exits 0 (the directional
+      gate: passes once `kb-route-helpers.ts` no longer imports `createServiceClient`,
+      regardless of whether the stale allowlist line was also removed).
 - [ ] `resolveUserKbRoot` returns 503 `{ error: "Workspace not ready" }` on `RuntimeAuthError`
       (asserted by reverted test in `kb-route-helpers.test.ts`), with `reportSilentFallback`
       still fired (assert the mock was called with `op:"resolveUserKbRoot.tenant-mint"`).
@@ -296,6 +338,28 @@ for a UX review.
 ### Vendor-tier reality check
 - Sentry issue-alerts are available on the current paid tier (the 9 existing `sentry_issue_alert`
   rules prove it). No free-tier gate needed (unlike `betteruptime_policy`).
+
+### Precedent diff (deepen-plan Phase 4.4)
+
+The new `kb_db_error` rule is NOT novel — it is a 1:1 clone of the apply-created,
+op-scoped sibling `chat_message_save_failure` (`issue-alerts.tf:349-396`), verified
+field-by-field at deepen time:
+
+| Attribute | `chat_message_save_failure` (precedent) | `kb_db_error` (new) |
+|---|---|---|
+| `action_match` | `"any"` | `"any"` (same — lifecycle conditions are mutually exclusive) |
+| `filter_match` | `"all"` | `"all"` |
+| `conditions_v2` | first_seen + reappeared + regression | same |
+| `frequency` | `10` | `13` (next free; taken set = 5,10,11,12,15,30,60,61,62) |
+| feature filter | `cc-dispatcher` | `kb-share` |
+| op filter | `IS_IN "tenant-mint.persistUserMessage,…"` | `IS_IN "create,list,revoke,preview,preview-invariant"` |
+| `actions_v2` | notify_email IssueOwners→ActiveMembers | same (N=1 accepted risk comment) |
+| `lifecycle.ignore_changes` | `[environment]` | `[environment]` |
+
+No pattern is invented; the only deltas are the feature/op filter values and the
+distinct frequency. The op set was verified by `grep -oE 'op: "[^"]*"' kb-share.ts`
+→ exactly `create, list, preview, preview-invariant, revoke` (all `feature: "kb-share"`,
+9 emit sites). Scheduled-work check: N/A — this plan adds no cron/Inngest job.
 
 ## Observability
 
