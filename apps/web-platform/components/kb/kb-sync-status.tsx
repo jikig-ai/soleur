@@ -128,7 +128,10 @@ export function KbSyncStatus({ lastSync, onSynced, onError }: KbSyncStatusProps)
         onClick={handleSyncNow}
         disabled={pending}
         aria-label="Sync now"
-        className="inline-flex items-center gap-1.5 rounded-lg border border-soleur-accent-gold-fg/40 px-2 py-1 text-xs font-medium text-soleur-accent-gold-fg transition-colors hover:border-soleur-accent-gold-fg hover:text-soleur-accent-gold-text disabled:opacity-60"
+        // text-xs (no font-medium) matches the adjacent "Workspace ready" chip;
+        // gold-fill (#c9a962) is the theme-consistent brand gold — gold-fg/gold-text
+        // degrade to a muted brown (#9c7a2e/#7a5e1f) in dark mode.
+        className="inline-flex items-center gap-1.5 rounded-lg border border-soleur-accent-gold-fill/40 px-2 py-1 text-xs text-soleur-accent-gold-fill transition-colors hover:border-soleur-accent-gold-fill hover:opacity-90 disabled:opacity-60"
       >
         {pending ? "Syncing…" : "Sync now"}
       </button>
