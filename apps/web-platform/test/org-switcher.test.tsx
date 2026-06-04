@@ -137,3 +137,61 @@ describe("OrgSwitcher", () => {
   // owned by the resolver, NOT this component — that arm is tested directly in
   // test/org-memberships-resolver.test.ts (feat-one-shot-workspace-untitled-name).
 });
+
+// Phase 1 (#4915): the gold square swatch is replaced by the pure
+// presentational WorkspaceIdentityTile (monogram, non-gold) at all three
+// switcher identity sites. FR6: gold is reserved for active-workspace accent +
+// the single primary action, not the identity swatch fill.
+describe("OrgSwitcher — workspace identity tile wiring (Phase 1, #4915)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("solo chip renders the monogram tile (first initial of the workspace name)", () => {
+    render(<OrgSwitcher memberships={[JIKIGAI]} />);
+    const chip = screen.getByTestId("workspace-identity-static");
+    expect(within(chip).getByTestId("workspace-identity-tile")).toHaveTextContent(
+      "J",
+    );
+  });
+
+  it("multi-org trigger renders the monogram tile", () => {
+    render(<OrgSwitcher memberships={[JIKIGAI, ACME]} />);
+    const trigger = screen.getByRole("button", { name: /switch workspace/i });
+    expect(
+      within(trigger).getByTestId("workspace-identity-tile"),
+    ).toHaveTextContent("J");
+  });
+
+  it("dropdown rows render tiles; the CURRENT row's tile is ring-distinguished, non-current is flat (preserves current vs non-current distinction without a gold fill)", () => {
+    render(<OrgSwitcher memberships={[JIKIGAI, ACME]} />);
+    fireEvent.click(screen.getByRole("button", { name: /switch workspace/i }));
+    const menu = screen.getByRole("menu");
+    const currentRow = within(menu)
+      .getByText("jikigai")
+      .closest("[data-testid='org-row']") as HTMLElement;
+    const otherRow = within(menu)
+      .getByText("Acme Studio")
+      .closest("[data-testid='org-row']") as HTMLElement;
+    const currentTile = within(currentRow).getByTestId("workspace-identity-tile");
+    const otherTile = within(otherRow).getByTestId("workspace-identity-tile");
+    expect(currentTile).toHaveTextContent("J");
+    expect(otherTile).toHaveTextContent("A");
+    // current row is visually marked (ring) — non-current is not
+    expect(currentTile.className).toContain("ring");
+    expect(otherTile.className).not.toContain("ring");
+  });
+
+  it("FR6: no gold square swatch fill (bg-soleur-accent-gold-fg/60) survives in the switcher markup", () => {
+    const { container } = render(
+      <OrgSwitcher memberships={[JIKIGAI, ACME]} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /switch workspace/i }));
+    const goldSwatch = Array.from(container.querySelectorAll("*")).find((el) =>
+      el.className
+        ?.toString()
+        .includes("bg-soleur-accent-gold-fg/60"),
+    );
+    expect(goldSwatch).toBeUndefined();
+  });
+});

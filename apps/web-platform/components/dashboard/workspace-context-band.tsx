@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { OrgSwitcherContainer } from "@/components/dashboard/org-switcher-container";
 import { LiveRepoBadge } from "@/components/dashboard/live-repo-badge";
+import { WorkspaceIdentityTile } from "@/components/dashboard/workspace-identity-tile";
+import { BackArrowIcon } from "@/components/dashboard/nav-icons";
 import {
   segmentToDrillLevel,
   type DrillLevel,
@@ -26,33 +28,13 @@ const SECTION_LABELS: Record<DrillLevel, string> = {
   chat: "Chat",
 };
 
-// Distinct from the layout collapse-toggle chevron (ChevronLeftIcon, path
-// "M15.75 19.5 8.25 12l7.5-7.5"). The two controls sat at different vertical
-// positions with byte-identical glyphs, reading as a broken duplicate (#4810
-// follow-up). A long left arrow ("back to menu") is visually unmistakable from
-// the rail-collapse chevron.
-function BackArrowIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      strokeWidth={1.5}
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18"
-      />
-    </svg>
-  );
-}
-
 export function WorkspaceContextBand({
   pathname,
   variant = "rail",
   collapsed = false,
+  activeWorkspaceName,
+  suppressBack = false,
+  suppressSectionTitle = false,
 }: {
   pathname: string;
   /** "rail" mounts in the sidebar; "mobile" mounts in the mobile top bar. */
@@ -60,6 +42,23 @@ export function WorkspaceContextBand({
   /** Rail-only: when the sidebar is collapsed (md:w-14) render the icon-only
    *  form. Ignored for variant="mobile" (the mobile top bar never collapses). */
   collapsed?: boolean;
+  /** Suppress the band's "Back to menu" affordance (Phase 3, #4915). The layout
+   *  sets this on the MOBILE band in the KB doc view, where kb-content-header
+   *  already owns the only back ("Back to file tree") — so the two backs no
+   *  longer co-render. The band derives nothing from pathname here: the decision
+   *  is computed by the layout (the sole pathname owner) and passed in, keeping
+   *  segmentToDrillLevel the sole drill authority (ADR-047 AC4c). */
+  suppressBack?: boolean;
+  /** Collapsed-rail only: the active workspace name. The collapsed band does
+   *  NOT mount OrgSwitcherContainer, so it has no name in scope — the layout
+   *  threads it in (P0-3) so the monogram tile + full-name tooltip can render
+   *  as the authoritative disambiguator for shared-initial workspaces. */
+  activeWorkspaceName?: string;
+  /** Suppress the band's section-title row (Phase 4, #4915). The layout sets
+   *  this on the MOBILE band for KB, where the page body owns the "Knowledge
+   *  Base" title — so the two don't double-render on mobile. The desktop rail
+   *  band keeps its section title. KB-scoped, so Settings/Chat are unaffected. */
+  suppressSectionTitle?: boolean;
 }) {
   const drill = segmentToDrillLevel(pathname);
 
@@ -76,9 +75,9 @@ export function WorkspaceContextBand({
         data-testid="workspace-context-band"
         data-variant="rail"
         data-collapsed="true"
-        className="flex flex-col items-center gap-3 border-b border-soleur-border-default px-2 py-3"
+        className="flex flex-col items-center gap-3 px-2 py-3"
       >
-        {drill ? (
+        {drill && !suppressBack ? (
           <Link
             href="/dashboard"
             aria-label="Back to menu"
@@ -90,10 +89,12 @@ export function WorkspaceContextBand({
         ) : null}
         <span
           data-testid="workspace-identity-icon"
-          aria-label="Active workspace"
-          title="Active workspace"
-          className="h-6 w-6 shrink-0 rounded-sm bg-soleur-accent-gold-fg/60"
-        />
+          aria-label={activeWorkspaceName ?? "Active workspace"}
+          title={activeWorkspaceName ?? "Active workspace"}
+          className="flex shrink-0"
+        >
+          <WorkspaceIdentityTile name={activeWorkspaceName ?? ""} size="sm" />
+        </span>
         <span
           data-testid="live-repo-dot"
           aria-label="Active repository"
@@ -102,7 +103,7 @@ export function WorkspaceContextBand({
         >
           ●
         </span>
-        {drill ? (
+        {drill && !suppressSectionTitle ? (
           <span
             data-testid="nav-section-title"
             title={SECTION_LABELS[drill]}
@@ -151,7 +152,7 @@ export function WorkspaceContextBand({
           matches the brand-row collapse toggle so the two controls share the
           same px-3 border-box gutter. The label + distinct BackArrowIcon stop it
           reading as a duplicate of the collapse chevron (#4810 follow-up Bug 2). */}
-      {drill ? (
+      {drill && !suppressBack ? (
         <Link
           href="/dashboard"
           aria-label="Back to menu"
@@ -163,10 +164,10 @@ export function WorkspaceContextBand({
         </Link>
       ) : null}
 
-      {drill && (
+      {drill && !suppressSectionTitle && (
         <div
           data-testid="nav-section-title"
-          className="flex items-center gap-2 border-b border-soleur-border-default px-3 pb-3 text-sm font-medium text-soleur-text-primary"
+          className="flex items-center gap-2 px-3 pb-3 text-sm font-medium text-soleur-text-primary"
         >
           {SECTION_LABELS[drill]}
         </div>

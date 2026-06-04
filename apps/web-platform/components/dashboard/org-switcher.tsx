@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { OrgMembershipSummary } from "@/server/org-memberships-resolver";
+import { WorkspaceIdentityTile } from "@/components/dashboard/workspace-identity-tile";
 
 // AC-C: when the user belongs to 0 or 1 organizations, this component renders
 // nothing — no chip, no dropdown trigger. The dashboard header chrome stays
@@ -82,10 +83,7 @@ export function OrgSwitcher({
         data-testid="workspace-identity-static"
         className="flex w-full min-w-0 items-center gap-2 rounded-md px-3 py-1.5 text-left"
       >
-        <span
-          aria-hidden="true"
-          className="h-6 w-6 shrink-0 rounded-sm bg-soleur-accent-gold-fg/60"
-        />
+        <WorkspaceIdentityTile name={current.organizationName} size="sm" />
         <span className="min-w-0">
           <span className="block truncate text-sm font-medium text-soleur-text-primary">
             {current.organizationName}
@@ -111,12 +109,9 @@ export function OrgSwitcher({
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full min-w-0 items-center gap-2 rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-1.5 text-left hover:bg-soleur-bg-surface-2"
+        className="flex w-full min-w-0 items-center gap-2 rounded-md px-3 py-1.5 text-left hover:bg-soleur-bg-surface-2"
       >
-        <span
-          aria-hidden="true"
-          className="h-6 w-6 shrink-0 rounded-sm bg-soleur-accent-gold-fg/60"
-        />
+        <WorkspaceIdentityTile name={current.organizationName} size="sm" />
         <span className="min-w-0">
           <span className="block truncate text-sm font-medium text-soleur-text-primary">
             {current.organizationName}
@@ -136,7 +131,7 @@ export function OrgSwitcher({
       {open && (
         <div
           role="menu"
-          className="absolute left-0 top-full z-50 mt-2 w-80 max-w-[calc(100vw-1.5rem)] rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 py-2 shadow-xl"
+          className="absolute left-0 top-full z-50 mt-2 w-80 max-w-[calc(100vw-1.5rem)] rounded-md bg-soleur-bg-surface-1 py-2 shadow-xl ring-1 ring-soleur-border-default/40"
         >
           <div className="px-4 pb-2 text-xs font-medium uppercase tracking-wider text-soleur-text-muted">
             Your workspaces
@@ -155,13 +150,18 @@ export function OrgSwitcher({
                       : ""
                   }`}
                 >
-                  <span
-                    aria-hidden="true"
-                    className={`h-8 w-8 shrink-0 rounded-sm ${
+                  <WorkspaceIdentityTile
+                    name={m.organizationName}
+                    size="md"
+                    // Current row keeps a gold ACCENT (ring, not a fill) — the
+                    // sanctioned active-workspace-identity gold use (FR6), so the
+                    // current vs non-current distinction survives the swatch→tile
+                    // swap without reintroducing the gold square fill.
+                    className={
                       m.isCurrent
-                        ? "bg-soleur-accent-gold-fg/60"
-                        : "bg-soleur-bg-surface-2"
-                    }`}
+                        ? "ring-2 ring-inset ring-soleur-accent-gold-fg"
+                        : undefined
+                    }
                   />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium text-soleur-text-primary">

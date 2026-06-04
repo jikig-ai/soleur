@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 
 // Stable module-level pathname mock — a fresh object each render would refire
 // effects (learning 2026-04-07-userouter-mock-instability). One mutable string.
@@ -89,9 +89,10 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
       screen.getByRole("link", { name: "Knowledge Base" }),
     ).toBeInTheDocument();
     expect(screen.queryByTestId("rail-secondary-slot")).not.toBeInTheDocument();
-    // Top-level chrome IS present at the top level (complements the drilled
-    // absence assertion below — the Bug 1 fix must not hide it everywhere).
-    expect(screen.getByText("Soleur")).toBeInTheDocument();
+    // Phase 2 (#4915): the global "Soleur" wordmark is REMOVED entirely — the
+    // workspace identity band is the sole orientation anchor now, so the
+    // wordmark must be absent even at the top level (D4 borderless direction).
+    expect(screen.queryByText("Soleur")).not.toBeInTheDocument();
   });
 
   it("KEEPS the primary nav on /dashboard/admin/analytics (allowlist, RQ6)", () => {
@@ -127,9 +128,9 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
       ).not.toBeInTheDocument();
 
       // Bug 1 (DOM-presence half, jsdom-catchable): top-level chrome — the
-      // `Soleur` wordmark, the ThemeToggle, and the footer (Sign out) — must
-      // NOT be in the drilled DOM. They render OUTSIDE the drill swap on the
-      // buggy code (RED); the render-conditional fix removes them (GREEN).
+      // ThemeToggle and the footer (Sign out) — must NOT be in the drilled DOM
+      // (they render inside the `drill === null` swap). The "Soleur" wordmark is
+      // removed entirely in Phase 2 (#4915), so it is absent in every state.
       expect(screen.queryByText("Soleur")).not.toBeInTheDocument();
       expect(
         screen.queryByRole("group", { name: "Theme" }),
@@ -192,6 +193,83 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
       </Wrap>,
     );
     expect(screen.queryByTestId("portaled-nav")).not.toBeInTheDocument();
+  });
+
+  // Phase 3 (#4915): one back control per state. In the mobile KB DOC VIEW the
+  // kb-content-header owns the only back ("Back to file tree"), so the layout
+  // passes suppressBack to the MOBILE band only — the desktop rail band keeps its
+  // "Back to menu" (kb-content-header's back is md:hidden there, so no double).
+  function bandsByVariant() {
+    const map: Record<string, HTMLElement> = {};
+    for (const el of screen.getAllByTestId("workspace-context-band")) {
+      map[el.getAttribute("data-variant") ?? "?"] = el;
+    }
+    return map;
+  }
+
+  it("KB doc view: mobile band suppresses 'Back to menu'; rail band keeps it (one back per state)", () => {
+    mockPathname = "/dashboard/kb/engineering/x.md";
+    render(
+      <Wrap>
+        <DashboardLayout>
+          <div>content</div>
+        </DashboardLayout>
+      </Wrap>,
+    );
+    const { mobile, rail } = bandsByVariant();
+    expect(
+      within(mobile).queryByTestId("nav-back-chevron"),
+    ).not.toBeInTheDocument();
+    expect(within(rail).getByTestId("nav-back-chevron")).toBeInTheDocument();
+  });
+
+  it("KB landing (not doc view): the mobile band STILL shows 'Back to menu' (it is the only back there)", () => {
+    mockPathname = "/dashboard/kb";
+    render(
+      <Wrap>
+        <DashboardLayout>
+          <div>content</div>
+        </DashboardLayout>
+      </Wrap>,
+    );
+    const { mobile } = bandsByVariant();
+    expect(
+      within(mobile).getByTestId("nav-back-chevron"),
+    ).toBeInTheDocument();
+  });
+
+  // Phase 4 (#4915): on mobile KB the page body owns the "Knowledge Base" title,
+  // so the layout suppresses the MOBILE band's section title; the desktop rail
+  // band keeps it. Settings/Chat are unaffected (suppression is KB-scoped).
+  it("KB: mobile band section title is suppressed (page body owns it); rail band keeps it", () => {
+    mockPathname = "/dashboard/kb";
+    render(
+      <Wrap>
+        <DashboardLayout>
+          <div>content</div>
+        </DashboardLayout>
+      </Wrap>,
+    );
+    const { mobile, rail } = bandsByVariant();
+    expect(
+      within(mobile).queryByTestId("nav-section-title"),
+    ).not.toBeInTheDocument();
+    expect(within(rail).getByTestId("nav-section-title")).toBeInTheDocument();
+  });
+
+  it("Settings: the mobile band section title is NOT suppressed (KB-scoped)", () => {
+    mockPathname = "/dashboard/settings";
+    render(
+      <Wrap>
+        <DashboardLayout>
+          <div>content</div>
+        </DashboardLayout>
+      </Wrap>,
+    );
+    const { mobile } = bandsByVariant();
+    expect(
+      within(mobile).getByTestId("nav-section-title"),
+    ).toBeInTheDocument();
   });
 });
 

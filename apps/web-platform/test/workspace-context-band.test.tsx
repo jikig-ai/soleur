@@ -168,3 +168,81 @@ describe("WorkspaceContextBand — persistent workspace identity (AC1/AC4b)", ()
     ).not.toBeInTheDocument();
   });
 });
+
+// Phase 1 (#4915): the collapsed rail band renders the monogram identity tile
+// (not the nameless gold swatch). The collapsed band does NOT mount
+// OrgSwitcherContainer, so the active workspace name is threaded in as a prop
+// (P0-3): the FULL name becomes the tooltip — the authoritative disambiguator
+// for two workspaces that share an initial.
+describe("WorkspaceContextBand — collapsed monogram identity (Phase 1, #4915)", () => {
+  it("renders the monogram tile (non-gold) with the FULL workspace name as the tooltip when collapsed", () => {
+    render(
+      <WorkspaceContextBand
+        pathname="/dashboard/kb"
+        collapsed
+        activeWorkspaceName="Soleur Workspace"
+      />,
+    );
+    const icon = screen.getByTestId("workspace-identity-icon");
+    // full name replaces the static "Active workspace" tooltip (P0-3)
+    expect(icon).toHaveAttribute("title", "Soleur Workspace");
+    const tile = within(icon).getByTestId("workspace-identity-tile");
+    expect(tile).toHaveTextContent("S"); // monogram of "Soleur Workspace"
+    expect(tile.className).not.toMatch(/accent-gold/); // FR6: non-gold
+  });
+
+  it("falls back to the static 'Active workspace' tooltip before a name is threaded", () => {
+    render(<WorkspaceContextBand pathname="/dashboard/kb" collapsed />);
+    expect(screen.getByTestId("workspace-identity-icon")).toHaveAttribute(
+      "title",
+      "Active workspace",
+    );
+  });
+});
+
+// Phase 3 (#4915): one back control per state. In the mobile KB doc view the
+// kb-content-header already owns a "Back to file tree" affordance, so the band's
+// "Back to menu" is suppressed via an explicit `suppressBack` prop (driven by the
+// layout, which owns pathname — the band itself never adds a parallel pathname
+// check; ADR-047 AC4c).
+describe("WorkspaceContextBand — back suppression (Phase 3, #4915)", () => {
+  it("suppresses the back affordance when suppressBack is set, keeping identity + section title", () => {
+    render(
+      <WorkspaceContextBand
+        pathname="/dashboard/kb/engineering/x.md"
+        variant="mobile"
+        suppressBack
+      />,
+    );
+    expect(screen.queryByTestId("nav-back-chevron")).not.toBeInTheDocument();
+    // only the back link is suppressed — the section title still renders
+    expect(screen.getByTestId("nav-section-title")).toBeInTheDocument();
+  });
+
+  it("still renders the back affordance when suppressBack is absent (KB landing / other drills)", () => {
+    render(<WorkspaceContextBand pathname="/dashboard/kb" variant="mobile" />);
+    expect(screen.getByTestId("nav-back-chevron")).toBeInTheDocument();
+  });
+});
+
+// Phase 4 (#4915): title ownership per breakpoint. On mobile KB the page body
+// owns the "Knowledge Base" title (kb/layout fullWidth header), so the layout
+// suppresses the MOBILE band's section-title via suppressSectionTitle to keep
+// exactly one title on mobile. Desktop (rail band) keeps the section title.
+describe("WorkspaceContextBand — section-title ownership (Phase 4, #4915)", () => {
+  it("suppresses the band section title when suppressSectionTitle is set", () => {
+    render(
+      <WorkspaceContextBand
+        pathname="/dashboard/kb"
+        variant="mobile"
+        suppressSectionTitle
+      />,
+    );
+    expect(screen.queryByTestId("nav-section-title")).not.toBeInTheDocument();
+  });
+
+  it("renders the band section title when suppressSectionTitle is absent (default)", () => {
+    render(<WorkspaceContextBand pathname="/dashboard/kb" variant="mobile" />);
+    expect(screen.getByTestId("nav-section-title")).toBeInTheDocument();
+  });
+});
