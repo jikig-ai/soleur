@@ -83,7 +83,12 @@ export function OrgSwitcher({
         data-testid="workspace-identity-static"
         className="flex w-full min-w-0 items-center gap-2 rounded-md px-3 py-1.5 text-left"
       >
-        <WorkspaceIdentityTile name={current.organizationName} size="sm" />
+        <WorkspaceIdentityTile
+          name={current.organizationName}
+          size="sm"
+          workspaceId={current.workspaceId}
+          hasLogo={current.hasLogo}
+        />
         <span className="min-w-0">
           <span className="block truncate text-sm font-medium text-soleur-text-primary">
             {current.organizationName}
@@ -111,7 +116,12 @@ export function OrgSwitcher({
         onClick={() => setOpen((v) => !v)}
         className="flex w-full min-w-0 items-center gap-2 rounded-md px-3 py-1.5 text-left hover:bg-soleur-bg-surface-2"
       >
-        <WorkspaceIdentityTile name={current.organizationName} size="sm" />
+        <WorkspaceIdentityTile
+          name={current.organizationName}
+          size="sm"
+          workspaceId={current.workspaceId}
+          hasLogo={current.hasLogo}
+        />
         <span className="min-w-0">
           <span className="block truncate text-sm font-medium text-soleur-text-primary">
             {current.organizationName}
@@ -153,6 +163,8 @@ export function OrgSwitcher({
                   <WorkspaceIdentityTile
                     name={m.organizationName}
                     size="md"
+                    workspaceId={m.workspaceId}
+                    hasLogo={m.hasLogo}
                     // Current row keeps a gold ACCENT (ring, not a fill) — the
                     // sanctioned active-workspace-identity gold use (FR6), so the
                     // current vs non-current distinction survives the swatch→tile

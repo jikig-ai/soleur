@@ -64,6 +64,15 @@ describe("buildCspHeader", () => {
     expect(connectSrc).toContain("wss://abc.supabase.co");
   });
 
+  // AC8 (#4916): the workspace-logo proxy GET 302-redirects the <img> to a
+  // signed URL on the Supabase Storage host. CSP img-src must already allow
+  // that host so the image loads — and NO csp.ts edit is needed (TR4 no-op).
+  test("img-src includes the Supabase https origin (signed-URL host for workspace logos)", () => {
+    const imgSrc = parseCspDirective(prodCsp, "img-src");
+    expect(imgSrc).toContain("https://abc.supabase.co");
+    expect(imgSrc).toContain("'self'");
+  });
+
   test("connect-src uses http+ws when Supabase URL is http (e2e mock servers)", () => {
     // Regression guard: e2e tests use `http://localhost:<port>` for the
     // mock-supabase server. The CSP's connect-src must include the actual

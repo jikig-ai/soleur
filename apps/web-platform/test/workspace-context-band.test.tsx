@@ -31,6 +31,7 @@ const SOLO: OrgMembershipSummary = {
   role: "owner",
   memberCount: 1,
   isCurrent: true,
+    hasLogo: false,
 };
 const TEAMMATE: OrgMembershipSummary = {
   organizationId: "00000000-0000-0000-0000-00000000cccc",
@@ -39,6 +40,7 @@ const TEAMMATE: OrgMembershipSummary = {
   role: "member",
   memberCount: 5,
   isCurrent: false,
+    hasLogo: false,
 };
 
 function stubFetch(memberships: OrgMembershipSummary[], repoName: string | null) {
