@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/service";
 import { abortAllUserSessions } from "@/server/agent-runner";
-import { deleteWorkspace } from "@/server/workspace";
+import { deleteWorkspace, purgeWorkspaceLogoObjects } from "@/server/workspace";
 import { createChildLogger } from "./logger";
 import { hashUserId, reportSilentFallback, warnSilentFallback } from "@/server/observability";
 
@@ -176,6 +176,16 @@ export async function deleteAccount(
     await deleteWorkspace(userId);
   } catch (err) {
     log.warn({ userId, err }, "Failed to delete workspace during deletion (non-fatal)");
+  }
+
+  // 3.6 Purge the workspace logo Storage object (#4916). Sole-owned teardown
+  // only — `userId === workspaces.id` per the N2 invariant (mig 053), so the
+  // deterministic key is `<userId>/logo.webp`. Shared-workspace member removal
+  // does NOT purge (it's a shared asset). Best-effort; reports, never throws.
+  try {
+    await purgeWorkspaceLogoObjects(userId, service);
+  } catch (err) {
+    log.warn({ userId, err }, "Failed to purge workspace logo during deletion (non-fatal)");
   }
 
   // 3.5 Purge Storage blobs for all user attachments AND DSAR export

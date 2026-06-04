@@ -43,9 +43,9 @@ Derived from the finalized (post-review) plan. RED→GREEN→REFACTOR per task. 
 - [x] 5.2 Non-owner gating: page passes `isOwner`; non-owner renders disabled control + owners-only tooltip (no functional file input). Server route still 403s (defense in depth, Phase 2). (AC8b)
 - [x] 5.3 Reject copy "SVG and JPG aren't accepted — upload a square PNG or WebP". Mounted beside RenameWorkspaceAction; page reads `logo_path` → `initialHasLogo`.
 
-## Phase 6 — Legal lockstep (CLO attests at PR)
-- [ ] 6.1 Privacy Policy + DPD + GDPR-policy/Art-30 (retention=workspace lifetime, next free PA#) + 1-line AUP. (AC9)
-- [ ] 6.2 `purgeWorkspaceLogoObjects(workspaceId)` helper in `server/workspace.ts`; call from sole-owned-workspace teardown in `account-delete.ts` (NOT shared-member-removal). DSAR export excluded (Art. 15(4), documented).
+## Phase 6 — Legal lockstep (CLO attests at PR) ✅
+- [x] 6.1 Privacy Policy + DPD §2.3(z) + GDPR-policy §3.7/§8.4 + Art-30 PA-26 (retention=workspace lifetime, next free PA#=26) + 1-line AUP §4.2. Lockstep verified: "workspace lifetime" + "no new sub-processor" (eu-west-1) + Art-15(4) DSAR-exclusion consistent across all 4 substantive docs. (AC9)
+- [x] 6.2 `purgeWorkspaceLogoObjects(workspaceId, service)` in `server/workspace.ts` (Storage-API `.remove`, best-effort/reports-never-throws); wired into `account-delete.ts` step 3.6 (sole-owned, userId===workspaceId N2; NOT shared-member-removal). DSAR excluded (Art. 15(4), documented). 2/2 unit.
 
 ## Phase 7 — Verify
 - [ ] 7.1 AC5b: assert no client INSERT/UPDATE/DELETE policy on `public.workspaces` (column-takeover DB-enforced).

@@ -16,6 +16,42 @@ import {
 } from "./git-auth";
 import { generateInstallationToken, checkRepoAccess } from "./github-app";
 import { getPluginPath } from "./plugin-path";
+import { reportSilentFallback } from "./observability";
+
+// Minimal structural type for the Storage remove path — avoids dragging the
+// full SupabaseClient generic into this FS/git-focused module.
+interface StorageRemoveClient {
+  storage: {
+    from: (bucket: string) => {
+      remove: (paths: string[]) => Promise<{ error: unknown }>;
+    };
+  };
+}
+
+/**
+ * Purge a workspace's logo Storage object (#4916). Called from the SOLE-OWNED
+ * workspace teardown in account-delete (where `workspaceId === userId` per the
+ * N2 invariant) — NOT on shared-workspace member removal, which would delete a
+ * shared asset. Uses the Storage API `.remove()` (the sanctioned path —
+ * Supabase's `protect_delete` trigger blocks direct SQL DELETE on
+ * storage.objects). Best-effort: a remove failure is reported, never thrown,
+ * so it cannot abort the Art. 17 cascade. Retention = workspace lifetime.
+ */
+export async function purgeWorkspaceLogoObjects(
+  workspaceId: string,
+  service: StorageRemoveClient,
+): Promise<void> {
+  const { error } = await service.storage
+    .from("workspace-logos")
+    .remove([`${workspaceId}/logo.webp`]);
+  if (error) {
+    reportSilentFallback(error, {
+      feature: "workspace-logo",
+      op: "purge-on-account-delete",
+      extra: { workspaceId },
+    });
+  }
+}
 
 const GITHUB_URL_RE =
   /^https:\/\/github\.com\/([a-zA-Z0-9._-]+)\/([a-zA-Z0-9._-]+?)(?:\.git)?\/?$/;

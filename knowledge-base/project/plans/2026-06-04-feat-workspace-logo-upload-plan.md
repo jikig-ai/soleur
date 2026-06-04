@@ -131,7 +131,7 @@ Private Supabase bucket + server-minted signed URL; `sharp` decode-and-re-encode
 - [x] AC7b — **(spec-flow P0-2)** the cleanup-delete-failure arm emits a distinct `logo-orphan-cleanup-failed` Sentry breadcrumb (unit test on the failure path); `DELETE` sets `logo_path=NULL` before object removal (assertion test).
 - [ ] AC8 — **(unconditional, spec-flow P2-3)** Signed-URL host equals a CSP `img-src`-allowed origin (`csp.test.ts`); **no CSP edit shipped** (TR4 confirmed no-op — `csp.ts:97` already allows the Supabase origin).
 - [x] AC8b — **(spec-flow P1-1)** non-owner member sees the logo control disabled-with-tooltip (RTL test with member-role fixture); the server route still 403s a non-owner (defense in depth).
-- [ ] AC9 — Legal lockstep: Privacy Policy + DPD + Art-30 + AUP updated; migration 098 carries `-- LAWFUL_BASIS:` annotation (GDPR-Art-6); Art-30 row states retention=workspace lifetime and uses the next free PA number (verify via `grep "^## Processing Activity" knowledge-base/legal/article-30-register.md | tail`).
+- [x] AC9 — Legal lockstep: Privacy Policy + DPD + Art-30 + AUP updated; migration 098 carries `-- LAWFUL_BASIS:` annotation (GDPR-Art-6); Art-30 row states retention=workspace lifetime and uses the next free PA number (verify via `grep "^## Processing Activity" knowledge-base/legal/article-30-register.md | tail`).
 - [ ] AC10 — `tsc --noEmit` clean (union-widening rails — settings 4-state union); test runner = package's actual runner (vitest; verify path matches `vitest.config.ts` include globs — `test/**`, not co-located).
 
 ### Post-merge (operator)

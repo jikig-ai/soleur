@@ -88,6 +88,8 @@ You must not use Soleur to generate, process, store, or distribute:
 - (f) Defamatory, fraudulent, or deliberately misleading content intended to deceive; or
 - (g) Content that violates export control laws, sanctions regulations, or trade restrictions.
 
+This Section applies equally to images you upload to the Web Platform, including a workspace logo image: you must not upload any logo or other image that is objectionable, infringes a third party's intellectual property or trademark rights, or otherwise falls within (a)–(g) above.
+
 ### 4.3 Circumvention of Security Controls
 
 You must not:
