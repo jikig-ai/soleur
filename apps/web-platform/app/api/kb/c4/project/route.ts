@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import path from "path";
-import { promises as fs } from "node:fs";
+import { promises as fs, constants as fsConstants } from "node:fs";
 import { createClient } from "@/lib/supabase/server";
 import { resolveUserKbRoot } from "@/server/kb-route-helpers";
 import { isPathInWorkspace } from "@/server/sandbox";
@@ -55,14 +55,25 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Invalid dir" }, { status: 400 });
     }
     let dump: unknown;
+    // Open once and read from the same descriptor — checking via lstat then
+    // re-reading by path is a TOCTOU race (the file could be swapped between
+    // check and use). O_NOFOLLOW rejects a symlinked final component
+    // atomically; fstat on the open fd reads the size of the same inode we
+    // then read from. (CodeQL js/file-system-race.)
+    let handle: fs.FileHandle | undefined;
     try {
-      const stat = await fs.lstat(jsonAbs);
-      if (stat.isSymbolicLink() || stat.size > MAX_C4_BYTES) {
+      handle = await fs.open(
+        jsonAbs,
+        fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+      );
+      const stat = await handle.stat();
+      if (stat.size > MAX_C4_BYTES) {
         return NextResponse.json({ error: "Diagram model too large" }, { status: 413 });
       }
-      dump = JSON.parse(await fs.readFile(jsonAbs, "utf8"));
+      dump = JSON.parse(await handle.readFile("utf8"));
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
         return NextResponse.json(
           {
             error:
@@ -72,7 +83,13 @@ export async function GET(request: Request) {
           { status: 404 },
         );
       }
+      // O_NOFOLLOW on a symlink → ELOOP; treat as a rejected oversized/unsafe model.
+      if (code === "ELOOP") {
+        return NextResponse.json({ error: "Diagram model too large" }, { status: 413 });
+      }
       throw e;
+    } finally {
+      await handle?.close();
     }
 
     const viewIds = Object.keys(
@@ -87,8 +104,15 @@ export async function GET(request: Request) {
       ).sort()) {
         const abs = path.join(dirAbs, file);
         if (!isPathInWorkspace(abs, kbRoot)) continue;
-        if ((await fs.lstat(abs)).isSymbolicLink()) continue;
-        sources[file] = await fs.readFile(abs, "utf8");
+        // O_NOFOLLOW + read from the same fd: rejects symlinks atomically and
+        // avoids the lstat-then-readFile TOCTOU race (CodeQL js/file-system-race).
+        let h: fs.FileHandle | undefined;
+        try {
+          h = await fs.open(abs, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+          sources[file] = await h.readFile("utf8");
+        } finally {
+          await h?.close();
+        }
       }
     } catch {
       // sources are optional for rendering
