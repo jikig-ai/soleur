@@ -189,6 +189,65 @@ describe("autonomous first-run soft-gate", () => {
     expect(deps.sendToClient).not.toHaveBeenCalled();
   });
 
+  test("P1 stale-snapshot: command #2 after an in-session ack is allowed with NO second hold", async () => {
+    // The cold-start ack snapshot is null (un-acked). After the owner acks, the
+    // in-session posture flips (resolveAckPosture returns a non-null ts). Command
+    // #2 in the SAME dispatch must auto-allow WITHOUT re-emitting a disclosure
+    // frame or re-awaiting a gate.
+    let ackPosture: number | null = null;
+    const { ctx, deps } = buildContext({
+      bashAutonomous: true,
+      autonomousAckAt: null, // frozen cold-start snapshot stays null
+      isOwner: true,
+      // Mutable in-session posture getter (mirrors setBashAutonomous cell).
+      resolveAckPosture: () => ackPosture,
+      verifyAutonomousAck: vi.fn().mockResolvedValue("2026-06-04T00:00:00Z"),
+      abortableReviewGate: vi.fn().mockImplementation(async () => {
+        // Simulate the ws-handler writing the ack on "Got it".
+        ackPosture = 1_700_000_000_000;
+        return "Got it";
+      }),
+    });
+    const canUseTool = createCanUseTool(ctx);
+
+    // Command #1 — held, acked, released.
+    const r1 = await canUseTool("Bash", { command: "rm -rf build" }, sdkOptions());
+    expect(r1.behavior).toBe("allow");
+    expect(deps.abortableReviewGate).toHaveBeenCalledTimes(1);
+
+    // Command #2 — must NOT hold again (posture now acked).
+    const r2 = await canUseTool("Bash", { command: "npm run build" }, sdkOptions());
+    expect(r2.behavior).toBe("allow");
+    // No SECOND gate awaited.
+    expect(deps.abortableReviewGate).toHaveBeenCalledTimes(1);
+    const disclosureSends = (deps.sendToClient as ReturnType<typeof vi.fn>).mock
+      .calls.map((c) => c[1])
+      .filter((p: { type?: string }) => p.type === "autonomous_disclosure");
+    expect(disclosureSends.length).toBe(1); // only the first command emitted one
+  });
+
+  test("P1 defense-in-depth: gate released but ack NOT persisted ⇒ command re-held (deny)", async () => {
+    const { ctx, deps } = buildContext({
+      bashAutonomous: true,
+      autonomousAckAt: null,
+      isOwner: true,
+      // The gate resolved "Got it" but the ack write never landed.
+      verifyAutonomousAck: vi.fn().mockResolvedValue(null),
+      abortableReviewGate: vi.fn().mockResolvedValue("Got it"),
+    });
+    const canUseTool = createCanUseTool(ctx);
+    const result = await canUseTool(
+      "Bash",
+      { command: "rm -rf build" },
+      sdkOptions(),
+    );
+    expect(
+      (deps as unknown as { verifyAutonomousAck: ReturnType<typeof vi.fn> })
+        .verifyAutonomousAck,
+    ).toHaveBeenCalled();
+    expect(result.behavior).toBe("deny");
+  });
+
   test("user rejects via 'Ask me each time' ⇒ command denied (review-gate fallback semantics)", async () => {
     const { ctx, deps } = buildContext({
       bashAutonomous: true,

@@ -71,6 +71,8 @@ import {
   handleInteractivePromptResponseCase,
   hasActiveCcQuery,
   resolveCcBashGate,
+  drainAutonomousDisclosureGates,
+  markConversationAcked,
   resolveConciergeDocumentContext,
 } from "./cc-dispatcher";
 import { fetchUserWorkspacePath } from "./kb-document-resolver";
@@ -2031,6 +2033,11 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             conversationId: session.conversationId,
             gateId: msg.gateId,
             selection: msg.selection,
+            // P1 — a review_gate_response may ONLY resolve a "review" gate. A
+            // held first-run disclosure gate (kind "autonomous_disclosure") is
+            // refused here, so this frame cannot bypass the owner-checked
+            // consent path by carrying the held gate's gateId.
+            expectedKind: "review",
           });
         }
         if (!resolved) {
@@ -2067,42 +2074,84 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         sendToClient(userId, { type: "error", message: "No active session." });
         return;
       }
-      try {
-        if (
-          typeof msg.selection !== "string" ||
-          msg.selection.length > MAX_SELECTION_LENGTH
-        ) {
-          throw new Error("Invalid autonomous disclosure selection");
-        }
-        // "Keep autonomous on" also flips the toggle ON (existing-workspace
-        // opt-out). "Got it" / "Ask me each time" write the ack only.
-        const keepAutonomous = msg.selection === "Keep autonomous on";
-        await setAutonomousAck(userId, { keepAutonomous });
-        // Release the held command. `resolveCcBashGate` is single-use and
-        // composite-key scoped (R8). The held gate awaits ANY selection; we
-        // pass through the user's choice so the permission-callback hold can
-        // distinguish "Ask me each time" (review-gate fallback) from "Got it".
-        resolveCcBashGate({
-          userId,
-          conversationId: session.conversationId,
+      if (
+        typeof msg.selection !== "string" ||
+        msg.selection.length > MAX_SELECTION_LENGTH
+      ) {
+        sendToClient(userId, {
+          type: "error",
+          message: "Invalid autonomous disclosure selection.",
           gateId: msg.gateId,
-          selection: msg.selection,
         });
+        break;
+      }
+      // "Keep autonomous on" also flips the toggle ON (existing-workspace
+      // opt-out). "Got it" / "Ask me each time" write the ack only.
+      const keepAutonomous = msg.selection === "Keep autonomous on";
+
+      // P2 — split the ack-write from the gate-release so a TRANSIENT ack-write
+      // fault (RPC blip, not owner-deny) is distinguishable from an owner-deny.
+      //   - owner-deny  ⇒ keep the command HELD + surface a 403-style error
+      //                   (intended: a non-owner cannot consent).
+      //   - transient   ⇒ release-as-DECLINE so the agent unblocks (the held
+      //                   run is denied; the banner re-arms via the error frame)
+      //                   instead of hanging until the 5-min gate timeout while
+      //                   the client already dismissed the banner.
+      //   - success     ⇒ flip the in-session posture (P1), then DRAIN ALL held
+      //                   disclosure gates for the conversation (P2 multi-hold)
+      //                   so a single ack releases every held command.
+      let persistedAck: string | null = null;
+      try {
+        persistedAck = await setAutonomousAck(userId, { keepAutonomous });
       } catch (err) {
         Sentry.captureException(err);
         const ownerDenied = err instanceof AutonomousAckOwnerDeniedError;
         log.error(
           { userId, err, ownerDenied },
-          "autonomous_disclosure_response error",
+          "autonomous_disclosure_response ack-write error",
         );
-        sendToClient(userId, {
-          type: "error",
-          message: ownerDenied
-            ? "Only a workspace owner can enable autonomous mode."
-            : sanitizeErrorForClient(err),
-          gateId: msg.gateId,
-        });
+        if (ownerDenied) {
+          // Keep the command held; only an owner may consent. Surface 403-shape.
+          sendToClient(userId, {
+            type: "error",
+            message: "Only a workspace owner can enable autonomous mode.",
+            gateId: msg.gateId,
+          });
+        } else {
+          // Transient fault — unblock the agent by DECLINING the held run so it
+          // doesn't hang to timeout. The error frame lets the client re-arm.
+          drainAutonomousDisclosureGates({
+            userId,
+            conversationId: session.conversationId,
+            selection: "Ask me each time",
+          });
+          sendToClient(userId, {
+            type: "error",
+            message: sanitizeErrorForClient(err),
+            gateId: msg.gateId,
+          });
+        }
+        break;
       }
+
+      // Ack persisted. P1 — flip the in-session posture so the released command
+      // (and any subsequent command in this conversation) sees the workspace as
+      // acked and does NOT re-hold. Fail-closed: parse the returned timestamp;
+      // a non-finite value with a successful write still flips to Date.now().
+      const ackMs = persistedAck != null ? Date.parse(persistedAck) : NaN;
+      markConversationAcked(
+        userId,
+        session.conversationId,
+        Number.isFinite(ackMs) ? ackMs : Date.now(),
+      );
+      // P2 multi-hold — DRAIN every held disclosure gate for the conversation
+      // with the owner's selection (not just the clicked one). Combined with the
+      // posture flip above, none of them re-hold. Single-use + R8-scoped per gate.
+      drainAutonomousDisclosureGates({
+        userId,
+        conversationId: session.conversationId,
+        selection: msg.selection,
+      });
       break;
     }
 

@@ -859,14 +859,83 @@ export function getCcStartSessionRateLimiter(): StartSessionRateLimiter {
 // Cross-user lookup MUST silently deny.
 // ---------------------------------------------------------------------------
 
+/**
+ * Gate kind discriminator (P1 — consent-gate bypass via frame substitution).
+ * The held first-run disclosure hold and the normal Bash review-gate share this
+ * ONE registry keyed only by `gateId`. Without a kind discriminator, a
+ * `review_gate_response` frame carrying a HELD disclosure `gateId` would release
+ * the consent-gated command WITHOUT routing through the owner-checked
+ * `setAutonomousAck` path (no ack written, no disclosure honored). `resolveCcBashGate`
+ * refuses to resolve a gate whose `kind` ≠ the responder's `expectedKind`, so a
+ * cross-kind frame cannot release the gate.
+ */
+export type CcBashGateKind = "review" | "autonomous_disclosure";
+
 interface CcBashGateRecord {
   userId: string;
   conversationId: string;
   gateId: string;
   session: AgentSession;
+  kind: CcBashGateKind;
 }
 
 const _ccBashGates = new Map<string, CcBashGateRecord>();
+
+// ---------------------------------------------------------------------------
+// P1 — per-conversation in-session autonomous-ack posture registry.
+//
+// `autonomousAckAt` is resolved ONCE at cold-start and frozen into `ccDeps`.
+// After the owner acks the first-run disclosure mid-dispatch, nothing mutates
+// that frozen value, so the NEXT command in the same conversation would re-hold.
+// This registry exposes a mutable posture cell per (userId, conversationId):
+//   - `ccDeps.resolveAckPosture` reads it (the live posture, not the snapshot).
+//   - the ws-handler flips it non-null via `markConversationAcked` on a
+//     successful ack-release, so command #2 is friction-free.
+// Drained by `cleanupCcBashGatesForConversation` (conversation close/reap).
+// ---------------------------------------------------------------------------
+interface AutonomousAckPostureCell {
+  get: () => number | null;
+  set: (v: number | null) => void;
+}
+const _ccAutonomousAckPosture = new Map<string, AutonomousAckPostureCell>();
+
+function makeAckPostureKey(userId: string, conversationId: string): string {
+  return `${userId}:${conversationId}`;
+}
+
+/**
+ * Register the per-conversation mutable ack-posture cell. Called from the
+ * dispatch scope (per cold conversation). Idempotent overwrite — a warm-query
+ * re-dispatch re-seeds the cell from its own snapshot.
+ */
+export function registerAutonomousAckPosture(
+  userId: string,
+  conversationId: string,
+  cell: AutonomousAckPostureCell,
+): void {
+  _ccAutonomousAckPosture.set(makeAckPostureKey(userId, conversationId), cell);
+}
+
+/**
+ * P1 — flip the in-session ack posture to non-null after a successful ack write.
+ * Called by the ws-handler `autonomous_disclosure_response` case AFTER
+ * `setAutonomousAck` resolves (and BEFORE/around the gate drain) so any held
+ * (and any subsequent) command in the same conversation sees the workspace as
+ * acked and does not re-hold. `ackAtMs` is the persisted ack epoch ms (parsed
+ * from the RPC's returned timestamp; fail-closed to `Date.now()` when the
+ * server returned a non-finite value but the write succeeded). No-op when no
+ * cell is registered (e.g. the conversation already closed).
+ */
+export function markConversationAcked(
+  userId: string,
+  conversationId: string,
+  ackAtMs: number,
+): void {
+  const cell = _ccAutonomousAckPosture.get(
+    makeAckPostureKey(userId, conversationId),
+  );
+  cell?.set(ackAtMs);
+}
 
 function makeCcBashGateKey(
   userId: string,
@@ -887,6 +956,14 @@ export function registerCcBashGate(args: {
   conversationId: string;
   gateId: string;
   session: AgentSession;
+  /**
+   * P1 — gate kind. The first-run disclosure HOLD registers
+   * `"autonomous_disclosure"`; every other Bash review-gate registers
+   * `"review"` (the default). A response frame can only resolve a gate of the
+   * matching kind (`resolveCcBashGate`'s `expectedKind`), so a
+   * `review_gate_response` cannot release a held consent gate.
+   */
+  kind?: CcBashGateKind;
 }): void {
   const key = makeCcBashGateKey(args.userId, args.conversationId, args.gateId);
   _ccBashGates.set(key, {
@@ -894,6 +971,7 @@ export function registerCcBashGate(args: {
     conversationId: args.conversationId,
     gateId: args.gateId,
     session: args.session,
+    kind: args.kind ?? "review",
   });
 }
 
@@ -909,12 +987,26 @@ export function resolveCcBashGate(args: {
   conversationId: string;
   gateId: string;
   selection: string;
+  /**
+   * P1 — the gate kind the RESPONDER is authorized to resolve. A
+   * `review_gate_response` passes `"review"` (the default); an
+   * `autonomous_disclosure_response` passes `"autonomous_disclosure"`. The
+   * resolve is a NO-OP (returns false, gate stays held) when the stored
+   * record's kind ≠ this — so a cross-frame response cannot release the gate.
+   */
+  expectedKind?: CcBashGateKind;
 }): boolean {
   const key = makeCcBashGateKey(args.userId, args.conversationId, args.gateId);
   const record = _ccBashGates.get(key);
   if (!record) return false;
   // R8: composite-key cross-user prompt collision — defense-in-depth.
   if (record.userId !== args.userId) return false;
+  // P1: kind discriminator — refuse to release a gate whose kind differs from
+  // the responder's expected kind. Defaults to "review" so legacy callers that
+  // predate the discriminator stay correct for the (dominant) review-gate path.
+  // A cross-kind response leaves the gate held (no resolver fired, no delete).
+  const expectedKind = args.expectedKind ?? "review";
+  if (record.kind !== expectedKind) return false;
   const entry = record.session.reviewGateResolvers.get(args.gateId);
   if (!entry) {
     _ccBashGates.delete(key);
@@ -937,6 +1029,39 @@ export function resolveCcBashGate(args: {
   record.session.reviewGateResolvers.delete(args.gateId);
   _ccBashGates.delete(key);
   return true;
+}
+
+/**
+ * P2 — multi-hold, single ack. Two (or more) Bash commands can be HELD behind
+ * the disclosure before the owner acks even once. Because the ack is
+ * WORKSPACE-level (not per-command), a single successful ack releases ALL held
+ * disclosure gates for that conversation, not just the clicked one. This resolves
+ * every `kind:"autonomous_disclosure"` gate for (userId, conversationId) with the
+ * owner's selection so each held command proceeds (combined with the in-session
+ * posture flip, none of them re-hold). Returns the count released. Review gates
+ * are untouched. Each resolve is single-use + composite-key scoped (R8).
+ */
+export function drainAutonomousDisclosureGates(args: {
+  userId: string;
+  conversationId: string;
+  selection: string;
+}): number {
+  const prefix = `${args.userId}:${args.conversationId}:`;
+  let released = 0;
+  for (const key of Array.from(_ccBashGates.keys())) {
+    if (!key.startsWith(prefix)) continue;
+    const record = _ccBashGates.get(key);
+    if (!record || record.kind !== "autonomous_disclosure") continue;
+    const ok = resolveCcBashGate({
+      userId: args.userId,
+      conversationId: args.conversationId,
+      gateId: record.gateId,
+      selection: args.selection,
+      expectedKind: "autonomous_disclosure",
+    });
+    if (ok) released += 1;
+  }
+  return released;
 }
 
 /**
@@ -974,6 +1099,9 @@ export function cleanupCcBashGatesForConversation(
   // defense-in-depth: the cache lifetime should never exceed the
   // conversation lifetime).
   getBashApprovalCache(userId, conversationId).revoke();
+  // P1 — drain the in-session ack-posture cell so it does not leak past the
+  // conversation (and a reused conversationId can't inherit a prior ack).
+  _ccAutonomousAckPosture.delete(makeAckPostureKey(userId, conversationId));
 }
 
 // ---------------------------------------------------------------------------
@@ -1097,9 +1225,27 @@ export const realSdkQueryFactory: QueryFactory = async (
         getCurrentRepoUrl(args.userId),
       ]);
     // Normalize the ack to epoch-ms | null for the permission-callback deps
-    // (the wire/db value is an ISO timestamptz string).
-    const autonomousAckAtMs =
+    // (the wire/db value is an ISO timestamptz string). P2 — fail-CLOSED on an
+    // unparseable timestamp: `Date.parse` of garbage returns NaN, and the
+    // permission-callback's `livePosture == null` check is FALSE for NaN, so a
+    // malformed ack would be treated as ACKED and auto-run the first command
+    // with NO disclosure. Coerce a non-finite parse back to null (= HOLD).
+    const parsedAck =
       autonomousAckAt != null ? Date.parse(autonomousAckAt) : null;
+    const autonomousAckAtMs =
+      parsedAck != null && Number.isFinite(parsedAck) ? parsedAck : null;
+    // P1 — mutable in-session ack posture cell. Seeded from the cold-start
+    // snapshot; flipped non-null by the ws-handler (via `markConversationAcked`)
+    // on a successful ack-release so command #2 in the same conversation does
+    // not re-hold. `resolveAckPosture` (ccDeps) reads THIS cell, not the frozen
+    // snapshot.
+    let autonomousAckPosture: number | null = autonomousAckAtMs;
+    registerAutonomousAckPosture(args.userId, args.conversationId, {
+      get: () => autonomousAckPosture,
+      set: (v) => {
+        autonomousAckPosture = v;
+      },
+    });
 
     // feat-concierge-stream-commands — publish the streaming posture (D1)
     // to the dispatcher's command_stream emit gate. Same closure-capture
@@ -1317,14 +1463,26 @@ export const realSdkQueryFactory: QueryFactory = async (
   }
 
   const ccDeps: CanUseToolDeps = {
-    abortableReviewGate: (ccSession, gateId, signal, timeoutMs, options) => {
+    abortableReviewGate: (
+      ccSession,
+      gateId,
+      signal,
+      timeoutMs,
+      options,
+      gateKind,
+    ) => {
       // Register BEFORE awaiting the resolver so a synchronous
-      // `resolveCcBashGate` from a concurrent ws frame cannot race.
+      // `resolveCcBashGate` from a concurrent ws frame cannot race. P1: thread
+      // the gate kind so the held disclosure registers under
+      // `"autonomous_disclosure"` and only the owner-checked
+      // `autonomous_disclosure_response` (which writes the ack first) can
+      // release it — a `review_gate_response` carrying the same gateId no-ops.
       registerCcBashGate({
         userId: args.userId,
         conversationId: args.conversationId,
         gateId,
         session: ccSession,
+        kind: gateKind ?? "review",
       });
       return abortableReviewGate(ccSession, gateId, signal, timeoutMs, options);
     },
@@ -1346,6 +1504,16 @@ export const realSdkQueryFactory: QueryFactory = async (
     // auto-running.
     autonomousAckAt: autonomousAckAtMs,
     isOwner: isWorkspaceOwner,
+    // P1 stale-snapshot — read the LIVE in-session ack posture (flipped by the
+    // ws-handler on a successful ack) so command #2 after an ack is friction-free
+    // instead of re-holding on the frozen cold-start snapshot.
+    resolveAckPosture: () => autonomousAckPosture,
+    // P1 defense-in-depth — re-read the persisted ack after a disclosure-hold
+    // releases, BEFORE allowing the held command. A release that did not
+    // actually write the ack (cross-frame attempt, transient ack-write fault)
+    // re-holds/denies. Fail-closed null = deny. Reads the same membership-checked
+    // RPC as the cold-start resolve (active workspace, server-derived).
+    verifyAutonomousAck: () => resolveAutonomousAck(args.userId),
     // Real conversation-status write — replaces the prior no-op (#2920).
     // Delegates to the typed wrapper which enforces the R8 composite-key
     // invariant (`.eq("id", convId).eq("user_id", args.userId)`) and
@@ -2545,6 +2713,7 @@ export function __resetDispatcherForTests(): void {
   _runner = null;
   _runnerSendToClient = null;
   _ccBashGates.clear();
+  _ccAutonomousAckPosture.clear();
   __resetMirrorDebounceForTests();
   // The bash batched-approval cache lives in a sibling module
   // (`permission-callback-bash-batch.ts`) and is keyed by

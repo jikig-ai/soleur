@@ -133,7 +133,36 @@ export interface CanUseToolDeps {
     signal: AbortSignal,
     timeoutMs: number | undefined,
     options: string[],
+    /**
+     * P1 — gate kind. The first-run disclosure HOLD passes
+     * `"autonomous_disclosure"` so the cc-dispatcher registers the gate under
+     * that kind; the matching `autonomous_disclosure_response` is then the ONLY
+     * frame that can release it. Omitted/`"review"` for every normal gate. A
+     * cross-kind response frame is a no-op (see `resolveCcBashGate`).
+     */
+    gateKind?: "review" | "autonomous_disclosure",
   ) => Promise<string>;
+  /**
+   * feat-bash-autonomous-default-on — defense-in-depth consent re-check. The
+   * disclosure-hold path calls this AFTER the gate resolves "proceed" to verify
+   * the per-workspace ack was actually persisted before `allow()`. If the ack
+   * is still null (e.g. a `review_gate_response` somehow released the gate
+   * without writing the ack, or a transient ack-write fault), the command is
+   * re-held/denied rather than allowed. Resolves the ISO ack timestamp or null.
+   * Optional: when unwired (legacy runner / tests that don't exercise the hold)
+   * the disclosure path is unreachable anyway (`bashAutonomous` false).
+   */
+  verifyAutonomousAck?: () => Promise<string | null>;
+  /**
+   * P1 — stale in-session ack snapshot fix. `autonomousAckAt` is frozen at
+   * cold-start. After the owner acks the disclosure mid-dispatch, nothing
+   * mutates that frozen value, so command #2 in the SAME conversation would
+   * re-hold. When wired, this getter returns the LIVE in-session ack posture
+   * (epoch ms | null) — flipped to non-null by the ws-handler on a successful
+   * ack-release. The Bash branch consults this BEFORE the snapshot so a
+   * post-ack command is friction-free. Unwired ⇒ falls back to the snapshot.
+   */
+  resolveAckPosture?: () => number | null;
   sendToClient: (userId: string, payload: WSMessage) => boolean;
   notifyOfflineUser: (
     userId: string,
@@ -429,7 +458,14 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         // through to the review-gate below (treat as not-autonomous — no ack
         // button they can't use). The blocklist already ran above, so this
         // hold only ever fires for a command that survived the denylist.
-        const unAcked = deps.autonomousAckAt == null;
+        // P1 — consult the LIVE in-session ack posture first (flipped non-null
+        // by the ws-handler on a successful ack-release) so command #2 after an
+        // ack does not re-hold on the frozen cold-start snapshot. Fall back to
+        // the snapshot when the getter is unwired.
+        const livePosture = deps.resolveAckPosture
+          ? deps.resolveAckPosture()
+          : deps.autonomousAckAt;
+        const unAcked = livePosture == null;
         if (unAcked && deps.isOwner) {
           const gateId = randomUUID();
           log.info(
@@ -475,6 +511,11 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
             options.signal,
             undefined,
             ["Got it"],
+            // P1 — register the HOLD under the autonomous_disclosure kind so a
+            // forged/cross `review_gate_response` cannot release it; only the
+            // owner-checked `autonomous_disclosure_response` (which writes the
+            // ack first) can.
+            "autonomous_disclosure",
           );
           await deps.updateConversationStatus(ctx.conversationId, "active");
 
@@ -489,6 +530,46 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
               behavior: "deny" as const,
               message: "User chose to approve each command; this run was held.",
             };
+          }
+          // P1 defense-in-depth — the gate resolved "proceed", but consent is
+          // only honored when the ack was ACTUALLY persisted. Re-read it before
+          // allowing: a release that did not write the ack (cross-frame attempt
+          // that slipped the kind check, or a transient ack-write fault) must
+          // re-HOLD/deny rather than auto-run the command without recorded
+          // consent. Fail-closed: a null/throwing re-check denies.
+          if (deps.verifyAutonomousAck) {
+            let persistedAck: string | null = null;
+            try {
+              persistedAck = await deps.verifyAutonomousAck();
+            } catch (err) {
+              warnSilentFallback(err, {
+                feature: "cc-permissions",
+                op: "autonomous-ack-verify",
+              });
+              persistedAck = null;
+            }
+            if (persistedAck == null) {
+              log.warn(
+                {
+                  sec: true,
+                  tool: toolName,
+                  decision: "autonomous-disclosure-ack-unverified",
+                  repo: `${ctx.repoOwner}/${ctx.repoName}`,
+                },
+                "Disclosure gate released but ack not persisted; re-holding (deny)",
+              );
+              logPermissionDecision(
+                "canUseTool-bash",
+                toolName,
+                "deny",
+                "autonomous-disclosure-ack-unverified",
+              );
+              return {
+                behavior: "deny" as const,
+                message:
+                  "Consent acknowledgement was not recorded; the command was held. Please try again.",
+              };
+            }
           }
           log.info(
             {

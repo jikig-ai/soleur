@@ -44,6 +44,9 @@ import {
   registerCcBashGate,
   resolveCcBashGate,
   cleanupCcBashGatesForConversation,
+  drainAutonomousDisclosureGates,
+  registerAutonomousAckPosture,
+  markConversationAcked,
   __resetDispatcherForTests,
 } from "@/server/cc-dispatcher";
 import { createSoleurGoRunner } from "@/server/soleur-go-runner";
@@ -352,6 +355,281 @@ describe("cc-dispatcher Bash review-gate (Option A — synthetic AgentSession)",
       expect(getBashApprovalCache("u-clean", "conv-clean").allow("git status")).toBe(
         false,
       );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // P1 — CONSENT-GATE BYPASS via frame substitution. The held disclosure
+  // gate and the normal Bash review-gate share one registry keyed by gateId.
+  // Without a `kind` discriminator, a `review_gate_response` frame carrying a
+  // HELD disclosure gateId would release the consent-gated command WITHOUT
+  // routing through the owner-checked `setAutonomousAck` path. The registry
+  // MUST refuse to resolve a gate whose kind ≠ the responder's expected kind.
+  // -------------------------------------------------------------------------
+  describe("P1: kind-discriminated gate resolution (cross-frame bypass)", () => {
+    function buildResolvableSession(gateId: string) {
+      let resolved: string | undefined;
+      const session = {
+        abort: new AbortController(),
+        reviewGateResolvers: new Map<
+          string,
+          { resolve: (s: string) => void; options: string[] }
+        >([
+          [
+            gateId,
+            {
+              resolve: (s: string) => {
+                resolved = s;
+              },
+              options: ["Got it"],
+            },
+          ],
+        ]),
+        sessionId: null,
+      };
+      return { session, getResolved: () => resolved };
+    }
+
+    it("a review_gate_response (expected kind 'review') CANNOT release a held autonomous_disclosure gate", () => {
+      const { session, getResolved } = buildResolvableSession("g-hold");
+      registerCcBashGate({
+        userId: "u1",
+        conversationId: "conv-1",
+        gateId: "g-hold",
+        session,
+        kind: "autonomous_disclosure",
+      });
+
+      // Attacker substitutes a review_gate_response carrying the held
+      // disclosure gateId + a "Got it"-shaped selection.
+      const released = resolveCcBashGate({
+        userId: "u1",
+        conversationId: "conv-1",
+        gateId: "g-hold",
+        selection: "Got it",
+        expectedKind: "review",
+      });
+
+      expect(released).toBe(false);
+      // The held command's resolver MUST NOT have fired.
+      expect(getResolved()).toBeUndefined();
+
+      // The gate is still live for the CORRECT responder kind.
+      const correct = resolveCcBashGate({
+        userId: "u1",
+        conversationId: "conv-1",
+        gateId: "g-hold",
+        selection: "Got it",
+        expectedKind: "autonomous_disclosure",
+      });
+      expect(correct).toBe(true);
+      expect(getResolved()).toBe("Got it");
+    });
+
+    it("an autonomous_disclosure_response (expected kind 'autonomous_disclosure') CANNOT release a review gate", () => {
+      const { session, getResolved } = buildResolvableSession("g-review");
+      registerCcBashGate({
+        userId: "u1",
+        conversationId: "conv-1",
+        gateId: "g-review",
+        session,
+        kind: "review",
+      });
+
+      const released = resolveCcBashGate({
+        userId: "u1",
+        conversationId: "conv-1",
+        gateId: "g-review",
+        selection: "Approve",
+        expectedKind: "autonomous_disclosure",
+      });
+      expect(released).toBe(false);
+      expect(getResolved()).toBeUndefined();
+    });
+
+    it("default expectedKind is 'review' (back-compat for unspecified callers)", () => {
+      const { session, getResolved } = buildResolvableSession("g-default");
+      registerCcBashGate({
+        userId: "u1",
+        conversationId: "conv-1",
+        gateId: "g-default",
+        session,
+        // kind omitted → defaults to "review"
+      });
+      const released = resolveCcBashGate({
+        userId: "u1",
+        conversationId: "conv-1",
+        gateId: "g-default",
+        selection: "Approve",
+        // expectedKind omitted → defaults to "review"
+      });
+      expect(released).toBe(true);
+      expect(getResolved()).toBe("Approve");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // P2 — multi-hold, single ack. Two commands HELD behind the disclosure before
+  // the owner acks once: a single ack must DRAIN all held disclosure gates for
+  // the conversation (not just the clicked one). Review gates are NOT drained.
+  // -------------------------------------------------------------------------
+  describe("P2: drainAutonomousDisclosureGates (multi-hold single ack)", () => {
+    function seedDisclosureGate(gateId: string) {
+      const resolved: string[] = [];
+      const session = {
+        abort: new AbortController(),
+        reviewGateResolvers: new Map<
+          string,
+          { resolve: (s: string) => void; options: string[] }
+        >([
+          [
+            gateId,
+            { resolve: (s: string) => resolved.push(s), options: ["Got it"] },
+          ],
+        ]),
+        sessionId: null,
+      };
+      registerCcBashGate({
+        userId: "u1",
+        conversationId: "conv-1",
+        gateId,
+        session,
+        kind: "autonomous_disclosure",
+      });
+      return resolved;
+    }
+
+    it("one ack releases ALL held disclosure gates for the conversation", () => {
+      const r1 = seedDisclosureGate("hold-1");
+      const r2 = seedDisclosureGate("hold-2");
+
+      const count = drainAutonomousDisclosureGates({
+        userId: "u1",
+        conversationId: "conv-1",
+        selection: "Got it",
+      });
+
+      expect(count).toBe(2);
+      expect(r1).toEqual(["Got it"]);
+      expect(r2).toEqual(["Got it"]);
+    });
+
+    it("does NOT drain review gates (only autonomous_disclosure)", () => {
+      const held = seedDisclosureGate("hold-x");
+      const reviewResolved: string[] = [];
+      const reviewSession = {
+        abort: new AbortController(),
+        reviewGateResolvers: new Map<
+          string,
+          { resolve: (s: string) => void; options: string[] }
+        >([
+          [
+            "rev-1",
+            {
+              resolve: (s: string) => reviewResolved.push(s),
+              options: ["Approve"],
+            },
+          ],
+        ]),
+        sessionId: null,
+      };
+      registerCcBashGate({
+        userId: "u1",
+        conversationId: "conv-1",
+        gateId: "rev-1",
+        session: reviewSession,
+        kind: "review",
+      });
+
+      const count = drainAutonomousDisclosureGates({
+        userId: "u1",
+        conversationId: "conv-1",
+        selection: "Got it",
+      });
+
+      expect(count).toBe(1);
+      expect(held).toEqual(["Got it"]);
+      expect(reviewResolved).toEqual([]); // untouched
+    });
+
+    it("scopes to the (userId, conversationId) — sibling conversation untouched", () => {
+      const here = seedDisclosureGate("hold-here");
+      // Sibling conversation gate.
+      const thereResolved: string[] = [];
+      const thereSession = {
+        abort: new AbortController(),
+        reviewGateResolvers: new Map<
+          string,
+          { resolve: (s: string) => void; options: string[] }
+        >([
+          [
+            "hold-there",
+            {
+              resolve: (s: string) => thereResolved.push(s),
+              options: ["Got it"],
+            },
+          ],
+        ]),
+        sessionId: null,
+      };
+      registerCcBashGate({
+        userId: "u1",
+        conversationId: "conv-OTHER",
+        gateId: "hold-there",
+        session: thereSession,
+        kind: "autonomous_disclosure",
+      });
+
+      drainAutonomousDisclosureGates({
+        userId: "u1",
+        conversationId: "conv-1",
+        selection: "Got it",
+      });
+
+      expect(here).toEqual(["Got it"]);
+      expect(thereResolved).toEqual([]);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // P1 — in-session ack posture: markConversationAcked flips the registered
+  // cell so a post-ack command reads the live (acked) posture, not the frozen
+  // cold-start snapshot. Drained on conversation cleanup.
+  // -------------------------------------------------------------------------
+  describe("P1: in-session ack posture cell", () => {
+    it("markConversationAcked flips the registered posture cell to non-null", () => {
+      let posture: number | null = null;
+      registerAutonomousAckPosture("u1", "conv-1", {
+        get: () => posture,
+        set: (v) => {
+          posture = v;
+        },
+      });
+      expect(posture).toBeNull();
+
+      markConversationAcked("u1", "conv-1", 1_700_000_000_000);
+      expect(posture).toBe(1_700_000_000_000);
+    });
+
+    it("markConversationAcked is a no-op when no cell is registered", () => {
+      // Must not throw.
+      expect(() =>
+        markConversationAcked("nobody", "no-conv", 1),
+      ).not.toThrow();
+    });
+
+    it("cleanup drains the posture cell (no leak across conversations)", () => {
+      let posture: number | null = 1_700_000_000_000;
+      registerAutonomousAckPosture("u1", "conv-1", {
+        get: () => posture,
+        set: (v) => {
+          posture = v;
+        },
+      });
+      cleanupCcBashGatesForConversation("u1", "conv-1");
+      // After cleanup the cell is gone — a later mark is a no-op (cell removed).
+      markConversationAcked("u1", "conv-1", 42);
+      expect(posture).toBe(1_700_000_000_000); // unchanged (cell was deleted)
     });
   });
 });
