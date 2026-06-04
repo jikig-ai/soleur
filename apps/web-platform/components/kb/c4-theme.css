@@ -20,8 +20,23 @@
  * see the plan's Sharp Edges.
  */
 
-/* 1. Drop the upstream LikeC4 wordmark; keep the rest of the nav panel. */
-.soleur-c4 .likec4-navigation-panel__logo {
+/*
+ * 1. Drop the upstream LikeC4 wordmark; keep the rest of the nav panel.
+ *
+ * The diagram's nav-panel logo (LogoButton.js) renders a Mantine <button> with
+ * NO stable class — it wraps the brand <svg viewBox="0 0 222 56"> (full
+ * wordmark) + <svg viewBox="0 0 56 56"> (icon) from components/Logo.js. That
+ * 222x56 viewBox is unique across @likec4/diagram, so it is the stable hook:
+ * `:has()` selects the whole logo button and collapses it, leaving the
+ * breadcrumbs / navigation buttons untouched (AC1). c4-theme.test.ts guards
+ * the viewBox against a library bump that changes the logo art.
+ */
+.soleur-c4 button:has(svg[viewBox="0 0 222 56"]) {
+  display: none !important;
+}
+/* Defense-in-depth: if :has() is unavailable, still blank the unique wordmark
+ * art (the button collapses to a small empty box rather than showing a logo). */
+.soleur-c4 svg[viewBox="0 0 222 56"] {
   display: none !important;
 }
 
