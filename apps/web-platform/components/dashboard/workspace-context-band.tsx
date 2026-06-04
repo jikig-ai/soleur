@@ -104,6 +104,7 @@ export function WorkspaceContextBand({
           <WorkspaceIdentityTile
             name={activeWorkspaceName ?? ""}
             size="sm"
+            variant="identity"
             workspaceId={activeWorkspaceId}
             hasLogo={activeWorkspaceHasLogo}
           />
