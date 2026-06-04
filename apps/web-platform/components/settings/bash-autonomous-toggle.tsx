@@ -81,7 +81,7 @@ export function BashAutonomousToggle({
           </span>
           <span className="text-xs text-soleur-text-muted">
             Let the Concierge run commands without asking you to approve each
-            one. Off by default. The command blocklist (curl, wget, sudo, …)
+            one. On by default. The command blocklist (curl, wget, sudo, …)
             always applies — even when this is on.
           </span>
         </div>
@@ -109,23 +109,25 @@ export function BashAutonomousToggle({
           role="alertdialog"
           aria-modal="true"
           aria-label="Turn on autonomous mode?"
-          className="flex flex-col gap-3 rounded-md border border-soleur-accent-gold-fg bg-soleur-bg-surface-1 p-4"
+          className="flex flex-col gap-3 rounded-none border border-soleur-accent-gold-fg bg-soleur-bg-surface-1 p-4"
         >
           <span className="text-sm font-semibold text-soleur-text-primary">
-            Turn on autonomous mode?
+            Turn autonomous mode back on?
           </span>
           <p className="text-xs text-soleur-text-secondary">
-            The Concierge will run any non-blocked command without asking. If a
-            malicious issue or repo file tricks the agent (prompt injection), it
-            could delete files or leak data with no approval step. Only turn this
-            on for repos and workspaces you fully trust.
+            The Concierge will run any non-blocked command without asking. The
+            blocklist (curl, wget, sudo, …) and secret redaction still apply, but
+            no blocklist is perfect — a command that looks safe could still
+            change or delete files in this workspace. Your work is backed up in
+            git, and you can watch every command run in the chat. Only turn this
+            on for repos and accounts you trust.
           </p>
           <div className="flex justify-end gap-2">
             <button
               type="button"
               disabled={loading}
               onClick={() => setConfirmOpen(false)}
-              className="rounded border border-soleur-border-default px-3 py-1.5 text-xs font-medium text-soleur-text-primary hover:bg-soleur-bg-surface-2"
+              className="rounded-none border border-soleur-border-default px-3 py-1.5 text-xs font-medium text-soleur-text-primary hover:bg-soleur-bg-surface-2"
             >
               Cancel
             </button>
@@ -133,7 +135,7 @@ export function BashAutonomousToggle({
               type="button"
               disabled={loading}
               onClick={handleConfirmEnable}
-              className="rounded bg-soleur-accent-gold-fg px-3 py-1.5 text-xs font-semibold text-black hover:opacity-90 disabled:opacity-50"
+              className="rounded-none bg-soleur-accent-gold-fg px-3 py-1.5 text-xs font-semibold text-black hover:opacity-90 disabled:opacity-50"
             >
               I understand — turn it on
             </button>
