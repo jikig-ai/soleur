@@ -56,6 +56,9 @@ Derived from the plan. Phase order is load-bearing: canonical → mirrors → SH
 - [ ] 4.3 Bump `TC_VERSION` `2.2.1 → 2.3.0`; update `TC_BUMP_METADATA`
       (`lastUpdated: "June 4, 2026"`, `substantiveChange: "§Autonomous command execution
       residual-risk disclosure"`).
+- [ ] 4.4 Update seed-script TC_VERSION parity (REQUIRED — `check-tc-document-sha.sh`
+      Step 2.5): `seed-dev-users.sh:94` `"2.2.1"` → `"2.3.0"` AND `seed-qa-user.sh:18`
+      `"2.2.1"` → `"2.3.0"`.
 
 ## Phase 5 — Compliance register
 
@@ -67,7 +70,8 @@ Derived from the plan. Phase order is load-bearing: canonical → mirrors → SH
 
 - [ ] 6.1 Run `scripts/test-all.sh` (NOT touched-file-only); exit 0.
 - [ ] 6.2 Confirm green: `legal-doc-consistency.test.ts`, `legal-doc-shas-guard.test.ts`,
-      `tc-version.test.ts`, `accept-terms-copy-regression.test.tsx`.
+      `tc-version.test.ts`, `accept-terms-copy-regression.test.tsx`. Confirm
+      `check-tc-document-sha.sh` Step 2.5 seed parity passes (both seed scripts at 2.3.0).
 - [ ] 6.3 Negative control (sanity): editing canonical T&C without the bump fails
       `check-tc-document-sha.sh`; a mirror-only sentinel fails body-equivalence.
 

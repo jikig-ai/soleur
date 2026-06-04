@@ -8,9 +8,44 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 domain: legal (CLO)
 created: 2026-06-04
+deepened: 2026-06-04
 ---
 
 # 📚 feat: AUP + ToS disclosure of autonomous command execution + residual-risk admission
+
+## Enhancement Summary
+
+**Deepened on:** 2026-06-04
+**Sections enhanced:** Files to Edit, Acceptance Criteria, Risks, Sharp Edges, Research Insights (new)
+
+### Key Improvements
+
+1. **Seed-script TC_VERSION parity is a load-bearing gap (NEW Files-to-Edit).**
+   `check-tc-document-sha.sh` Step 2.5 (lines 276-318) asserts
+   `apps/web-platform/scripts/seed-dev-users.sh:94` AND
+   `apps/web-platform/scripts/seed-qa-user.sh:18` hardcode the **same** `TC_VERSION`
+   as `lib/legal/tc-version.ts`. Both currently pin `"2.2.1"`. Bumping canonical to
+   `2.3.0` WITHOUT updating both seed scripts **fails the guard** (`TC_VERSION drift`).
+   Added both seed scripts to Files to Edit + a new AC + a Sharp Edge.
+2. **Corrected the local-vs-CI guard-pass mechanism.** The plan v1 said the guard
+   "accepts the SHA change because TC_VERSION was bumped" — that is the **CI-only**
+   bypass (`check-tc-document-sha.sh:240-248`, requires `GITHUB_BASE_REF` set + an
+   `origin/$BASE...HEAD` diff showing a `TC_VERSION` line change). **Locally**
+   (`test-all.sh` strips `GITHUB_BASE_REF`), the guard passes via the **matched-SHA
+   short-circuit** (`:236-238`, `if canonical_sha == literal_sha then continue`) —
+   because Phase 4 repins the SHA to the final bytes, the bypass is never consulted
+   locally. Both paths are now stated precisely.
+3. **Precedent diff added (Phase 4.4).** The 3-way-lockstep legal-doc edit has strong
+   sibling precedent (#4508, #4625/#4637, #4916) — recorded in Research Insights.
+
+### New Considerations Discovered
+
+- The `discoverability_test`/observability skip is correct, but the **enforcement
+  observability** is the CI guard itself (`check-tc-document-sha.sh` is the load-bearing
+  drift detector — it fails loudly on SHA, body-equivalence, AND seed-script drift).
+- The sensitive-path regex (preflight Check 6 / deepen 4.6) DOES match
+  `apps/web-platform/lib/legal/` — but the `single-user incident` threshold (not `none`)
+  means no scope-out bullet is required; the gate passes.
 
 Closes #4952. Ref #4949.
 
@@ -169,6 +204,17 @@ contractual half of the mitigation the product UI already ships.
     (matches the new top-level/subsection introduced by the bump; consumed by the
     `/accept-terms` re-acceptance banner + `accept-terms-copy-regression.test.tsx`).
 
+**Seed-script TC_VERSION parity (REQUIRED with the bump — Step 2.5 guard):**
+
+- `apps/web-platform/scripts/seed-dev-users.sh`
+  - Update the hardcoded `TC_VERSION="2.2.1"` literal (line 94) → `"2.3.0"`.
+- `apps/web-platform/scripts/seed-qa-user.sh`
+  - Update the hardcoded `TC_VERSION="2.2.1"` literal (line 18) → `"2.3.0"`.
+  - **Why required:** `check-tc-document-sha.sh` Step 2.5 (`:276-318`) asserts both seed
+    scripts hardcode the **same** `TC_VERSION` as `tc-version.ts`. Drift fails the guard
+    (`<seed>: TC_VERSION drift`). Without this, QA/dev re-seeded users hit the
+    `/accept-terms` redirect loop on next sign-in (silent failure surfacing days later).
+
 **Compliance / register artifacts (same PR):**
 
 - `knowledge-base/legal/article-30-register.md`
@@ -303,9 +349,19 @@ The disclosure prose MUST, in plain-language but contract-grade form:
       `stale SHA literal on a non-T&C doc is detected` baseline passes (the unmodified-tree
       `exits 0` case).
 - [ ] **T&C SHA pinned + TC_VERSION bumped together:** `TC_DOCUMENT_SHA` equals
-      `sha256sum docs/legal/terms-and-conditions.md` AND `TC_VERSION === "2.3.0"`. The
-      `check-tc-document-sha.sh` T&C branch accepts the SHA change because `TC_VERSION` was
-      also bumped (the guard only fails a stale T&C SHA when the version is unchanged).
+      `sha256sum docs/legal/terms-and-conditions.md` AND `TC_VERSION === "2.3.0"`.
+      **Local pass mechanism:** `check-tc-document-sha.sh` Step 3 (`:236-238`)
+      short-circuits when `canonical_sha == literal_sha` — because the SHA is repinned to
+      the final bytes, the guard passes locally via the matched-SHA path (the
+      `GITHUB_BASE_REF` bypass at `:240-248` is NOT consulted locally, since `test-all.sh`
+      runs with `GITHUB_BASE_REF` empty). **CI bypass (informational):** if a future PR
+      edits the T&C and leaves the SHA stale, CI accepts it only when the same PR diff
+      (`origin/$BASE...HEAD`) shows a `TC_VERSION` line change — which this PR does.
+- [ ] **Seed-script TC_VERSION parity:** `seed-dev-users.sh:94` AND `seed-qa-user.sh:18`
+      both read `TC_VERSION="2.3.0"`, matching `tc-version.ts` (`check-tc-document-sha.sh`
+      Step 2.5 asserts this; drift fails the guard). Verify:
+      `grep -hoE '^TC_VERSION="[^"]+"' apps/web-platform/scripts/seed-{dev-users,qa-user}.sh`
+      returns `TC_VERSION="2.3.0"` twice.
 - [ ] **T&C body-equivalence:** the guard's `mirror prose drift on T&C` path is green —
       the §3a.7/§10.4/§9 prose is present in BOTH canonical and mirror so the body-SHA
       comparison matches.
@@ -401,6 +457,35 @@ zero matches. No fold-in, acknowledge, or defer needed.
 | **Disclosure prose drifts from the shipped LOCKED COPY** (`AUTONOMOUS_DISCLOSURE_COPY`). | Drafting Bar item 5 cross-references the banner; the legal prose is drafted to be substantively consistent (same three claims) without re-stating the LOCKED COPY as a second source of truth. |
 | **Over/under-classifying the TC bump** (PATCH vs MINOR vs MAJOR). | Phase 0 reads §semver-for-legal-docs; new disclaimer text = material = bump required; MINOR (`2.3.0`) for a new section/disclosure (not a breaking restructure). Over-bumping is recoverable (consent fatigue) — when unsure, bump. |
 | **Spurious Art. 30 PA added** (disclosure ≠ new processing). | Default to "no new PA — disclosure of existing PA 21/22 runtime"; only add PA 27 if gdpr-gate finds an unregistered limb. |
+| **`TC_VERSION` bumped but seed scripts not updated** → `check-tc-document-sha.sh` Step 2.5 fails (`TC_VERSION drift`). | Update `seed-dev-users.sh:94` + `seed-qa-user.sh:18` to `2.3.0` in the same PR (now an explicit Files-to-Edit item + AC). |
+
+### Research Insights
+
+**Precedent diff (Phase 4.4 — pattern-bound, strong sibling precedent):** The 3-way-lockstep
+legal-doc disclosure edit is NOT novel. Recent sibling PRs followed the identical mechanic
+(canonical `docs/legal/*.md` + Eleventy mirror `plugins/soleur/docs/pages/legal/*.md` + SHA/
+version literal, all in one PR):
+
+- `84146d17` **#4508** — BYOK delegations PR-B: UI surfaces + legal docs (added AUP §5.6, T&C §3a cross-refs, mirrors, SHAs).
+- `6dfb014c` **#4625/#4637** — DPD §2.3(w) lawful-basis correction (canonical + mirror + SHA repin).
+- `8e8f50ca` **#4916** — workspace logo (added Art. 30 PA 26, legal-doc touches).
+
+The canonical mechanic matches the lockstep documented in
+`knowledge-base/project/learnings/2026-05-29-legal-doc-triple-lockstep-and-rpc-grants-invoker-before-definer.md`.
+**No novel pattern** — the deepen risk is orphan-guard misses (caught: seed-script Step 2.5),
+not a new design.
+
+**Verify-the-negative pass (cited claims confirmed against source):**
+
+- `BLOCKED_BASH_PATTERNS` verbs (`permission-callback.ts:84-85`): `curl|wget|ncat|nc|eval|sudo`
+  + interpreter `-e`/`-c` (`sh|bash|node|python|python3|ruby|perl|deno|bun`) + `deno eval` +
+  `base64 -d` + `/dev/tcp`. The plan's enumerated verb list matches the source regex verbatim. ✔ confirms
+- `AUTONOMOUS_DISCLOSURE_COPY` (`autonomous-disclosure-banner.tsx:21-27`) carries the three
+  load-bearing claims the legal prose mirrors: "no blocklist is perfect", "could still change
+  or delete files", "backed up in git … watch every command run in the chat", "only connect
+  repos and accounts you trust". ✔ confirms (prose drafted to be substantively consistent)
+- `check-tc-document-sha.sh` matched-SHA short-circuit (`:236-238`) + CI bypass (`:240-248`,
+  `GITHUB_BASE_REF`-gated) + Step 2.5 seed parity (`:276-318`). ✔ confirms (corrected AC + added seed Files-to-Edit)
 
 ## Sharp Edges
 
@@ -420,6 +505,11 @@ zero matches. No fold-in, acknowledge, or defer needed.
   the SHA was pinned re-breaks the guard.
 - **Mirror has TWO date sites** (hero `<p>` + body `**Last Updated:**`); the consistency
   test asserts both equal the canonical date. Updating only one fails the test.
+- **Bumping `TC_VERSION` requires THREE literal sites, not one.** `tc-version.ts` is the
+  canonical source, but `seed-dev-users.sh:94` and `seed-qa-user.sh:18` hardcode the same
+  version and `check-tc-document-sha.sh` Step 2.5 fails on drift. All three move to `2.3.0`
+  in the same PR. (This guard is an orphan suite — only `scripts/test-all.sh` exercises it;
+  editing `tc-version.ts` alone leaves the seed scripts as a "non-touched file" miss.)
 
 ## Test Scenarios
 
