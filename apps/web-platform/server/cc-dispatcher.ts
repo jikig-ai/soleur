@@ -18,7 +18,13 @@ import { existsSync } from "node:fs";
 import path from "path";
 
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
-import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
+import { query as sdkQuery, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
+import {
+  buildC4ConciergeTools,
+  EDIT_C4_DIAGRAM_TOOL,
+} from "@/server/c4-concierge-tools";
+import { getRuntimeFlag, type Role } from "@/lib/feature-flags/server";
+import { C4_VISUALIZER_FLAG } from "@/lib/c4-constants";
 
 import { applyPrefillGuard } from "./agent-prefill-guard";
 
@@ -226,6 +232,11 @@ export function shouldMirrorUnregisteredPlatformToolUse(
  * allowlist source and the mirror predicate at Phase 2 promotion time.
  */
 const CC_REGISTERED_PLATFORM_TOOL_NAMES: readonly string[] = [];
+
+// Validates a GitHub owner/repo segment before it is closed over into the
+// edit_c4_diagram tool + system prompt — defense against a malformed/injected
+// repoUrl (mirrors agent-runner.ts's GITHUB_NAME_RE).
+const CC_GITHUB_NAME_RE = /^[a-zA-Z0-9._-]+$/;
 
 // Max length cap for `block.name` before passing to Sentry/pino. Defense-in-
 // depth against future model regressions that might emit pathologically long
@@ -1027,6 +1038,81 @@ export const realSdkQueryFactory: QueryFactory = async (
       }
     }
 
+  // --- C4 diagram write capability (flag-gated, per-user) -----------------
+  // The Concierge's ONLY sanctioned repo write: edit_c4_diagram, scoped to the
+  // diagrams dir by `writeC4Diagram`/`isC4DiagramPath`. owner/repo/installation
+  // are CLOSED OVER here from the per-user active workspace (ADR-044) — never
+  // tool input — so the agent cannot redirect the commit. Gated by the
+  // c4-visualizer flag resolved against the dispatch user's real role (the
+  // dev-cohort segment), fail-closed: any resolution error → no write tool.
+  const c4McpServers = readCcMcpAllowlist();
+  let c4ToolName: string | undefined;
+  let c4PromptAddendum: string | undefined;
+  {
+    let owner = "";
+    let repo = "";
+    if (repoUrl) {
+      try {
+        const parts = new URL(repoUrl).pathname.split("/").filter(Boolean);
+        const o = parts[0];
+        const r = parts[1]?.replace(/\.git$/, "");
+        if (o && r && CC_GITHUB_NAME_RE.test(o) && CC_GITHUB_NAME_RE.test(r)) {
+          owner = o;
+          repo = r;
+        }
+      } catch {
+        /* malformed repoUrl → no c4 write (degrade silently, not security) */
+      }
+    }
+    if (installationId !== null && owner && repo) {
+      let c4Enabled = false;
+      try {
+        const tenant = await getFreshTenantClient(args.userId);
+        const { data: roleRow } = await tenant
+          .from("users")
+          .select("role")
+          .eq("id", args.userId)
+          .single<{ role: unknown }>();
+        const role: Role = roleRow?.role === "dev" ? "dev" : "prd";
+        c4Enabled = await getRuntimeFlag(C4_VISUALIZER_FLAG, {
+          userId: args.userId,
+          role,
+          orgId: null,
+        });
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "cc-dispatcher",
+          op: "c4-flag-resolve",
+          extra: { userId: args.userId },
+          message:
+            "c4-visualizer flag resolve failed; Concierge diagram write disabled",
+        });
+      }
+      if (c4Enabled) {
+        const c4Server = createSdkMcpServer({
+          name: "soleur_platform",
+          version: "1.0.0",
+          tools: buildC4ConciergeTools({
+            userId: args.userId,
+            installationId,
+            owner,
+            repo,
+            workspacePath,
+          }),
+        });
+        (c4McpServers as Record<string, unknown>).soleur_platform = c4Server;
+        c4ToolName = `mcp__soleur_platform__${EDIT_C4_DIAGRAM_TOOL}`;
+        c4PromptAddendum =
+          "## C4 diagram editing\n" +
+          "To edit a C4 architecture diagram, call the `edit_c4_diagram` tool " +
+          "with `relativePath` (a `.c4` source or the `.md` view-embed page " +
+          "directly under `engineering/architecture/diagrams/`) and `content` " +
+          "(the FULL new file contents). It commits the change directly and the " +
+          "diagram re-renders — do NOT paste DSL into chat for the user to apply.";
+      }
+    }
+  }
+
   // Workspace-permissions patch and the #3250 prefill-guard probe both
   // depend on `workspacePath` but not on each other — parallelize so the
   // probe doesn't add latency to cold-start dispatch. See plan
@@ -1061,9 +1147,15 @@ export const realSdkQueryFactory: QueryFactory = async (
       conversationId: args.conversationId,
     });
   }
-  const effectiveSystemPrompt = contextResetNotice
+  let effectiveSystemPrompt = contextResetNotice
     ? `${args.systemPrompt}\n\n${contextResetNotice}`
     : args.systemPrompt;
+  // Only advertise edit_c4_diagram when it was actually registered above
+  // (flag on + connected repo), mirroring agent-runner's capability-gated
+  // prompt sections so the model isn't told about a tool it cannot call.
+  if (c4PromptAddendum) {
+    effectiveSystemPrompt += `\n\n${c4PromptAddendum}`;
+  }
 
   const pluginPath = path.join(workspacePath, "plugins", "soleur");
 
@@ -1219,7 +1311,9 @@ export const realSdkQueryFactory: QueryFactory = async (
         gitAskpassScriptPath,
         systemPrompt: effectiveSystemPrompt,
         resumeSessionId: safeResumeSessionId,
-        mcpServers: readCcMcpAllowlist(),
+        // readCcMcpAllowlist() (Phase 1: {}) plus the flag-gated, single-tool
+        // soleur_platform server (edit_c4_diagram) merged in above.
+        mcpServers: c4McpServers,
         // #3338 — auto-approve the cc-router's read-only tool surface so they
         // don't pay a canUseTool round-trip per call. This is auto-approve,
         // not restriction — see CC_PATH_ALLOWED_TOOLS doc comment.
@@ -1248,7 +1342,9 @@ export const realSdkQueryFactory: QueryFactory = async (
           // non-routable leader id reserved for this purpose.
           leaderId: CC_ROUTER_LEADER_ID,
           workspacePath,
-          platformToolNames: [],
+          // Allow the flag-gated edit_c4_diagram through canUseTool (its tier
+          // is auto-approve; writeC4Diagram enforces the diagrams-dir scope).
+          platformToolNames: c4ToolName ? [c4ToolName] : [],
           pluginMcpServerNames: [],
           repoOwner: "",
           repoName: "",
