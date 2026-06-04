@@ -12,6 +12,10 @@ export interface OrgMembershipSummary {
   role: "owner" | "member";
   memberCount: number;
   isCurrent: boolean;
+  // True when the workspace has a custom logo (logo_path non-null). The tile
+  // builds the stable proxy `src` (/api/workspace/<id>/logo) from this — the
+  // resolver does NO mint and imports NO storage client (architecture P2-A).
+  hasLogo: boolean;
 }
 
 interface AuthClient {
@@ -40,6 +44,7 @@ interface MembershipRow {
 interface WorkspaceRow {
   id: string;
   organization_id: string;
+  logo_path: string | null;
 }
 
 interface OrganizationRow {
@@ -94,7 +99,7 @@ export async function resolveOrgMemberships(
   const workspacesResp = await (
     service.from("workspaces") as WorkspacesChain
   )
-    .select("id, organization_id")
+    .select("id, organization_id, logo_path")
     .in("id", workspaceIds);
   if (workspacesResp.error || !workspacesResp.data) return [];
   const workspaces = workspacesResp.data;
@@ -156,6 +161,7 @@ export async function resolveOrgMemberships(
         role: m.role,
         memberCount: countByWorkspace.get(ws.id) ?? 1,
         isCurrent: ws.organization_id === currentOrgId,
+        hasLogo: ws.logo_path != null,
       };
     })
     .filter((s): s is OrgMembershipSummary => s !== null);

@@ -30,9 +30,9 @@ Derived from the finalized (post-review) plan. RED→GREEN→REFACTOR per task. 
 - [x] 2.4 DELETE: owner-gate → `logo_path=NULL` first → remove object (+ `logo-orphan-cleanup-failed` breadcrumb on fail, still 200).
 - [x] 2.5 `Sentry.captureMessage` on reject/failure arms; HTTP-only exports (`POST`/`DELETE` consts via `withUserRateLimit`). (AC6b 429 test passes against real limiter)
 
-## Phase 3 — Read path (stable proxy route)
-- [ ] 3.1 `GET api/workspace/[id]/logo`: auth → `is_workspace_member` 403 → read logo_path 404 → `createSignedUrl(…,300)` → 302 + `Cache-Control: private, max-age=300` + `nosniff`; `reportSilentFallback`→502 on mint fail. (AC6)
-- [ ] 3.2 `org-memberships-resolver.ts`: add `logo_path` to select, expose `hasLogo` (no mint, no storage import). (AC6)
+## Phase 3 — Read path (stable proxy route) ✅ resolver 3/3, proxy 5/5
+- [x] 3.1 `GET api/workspace/[id]/logo`: auth 401 → `is_workspace_member` 403 → read logo_path 404 → `createSignedUrl(…,300)` → 302 + `Cache-Control: private, max-age=300` + `nosniff`; `reportSilentFallback`→502 on mint fail. (AC6)
+- [x] 3.2 `org-memberships-resolver.ts`: `logo_path` added to select, exposes `hasLogo: boolean` on `OrgMembershipSummary` (no mint, no storage import). list-memberships route passes it through unchanged. (AC6)
 
 ## Phase 4 — Render
 - [ ] 4.1 `WorkspaceIdentityTile`: `workspaceId`+`hasLogo` props; `<img src=/api/workspace/<id>/logo>` + `onError`→monogram (Sentry on error). (AC7)
