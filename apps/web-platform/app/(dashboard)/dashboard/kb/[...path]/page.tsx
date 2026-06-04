@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useEffect, useRef, use, useContext } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
+import { parseLikeC4Embed } from "@/lib/c4-embed";
 import { safeDecode } from "@/components/kb/kb-breadcrumb";
 import { FilePreview } from "@/components/kb/file-preview";
 import { KbContentHeader } from "@/components/kb/kb-content-header";
@@ -17,6 +19,17 @@ import { classifyByExtension } from "@/lib/kb-file-kind";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 import { C4_VISUALIZER_FLAG } from "@/lib/c4-constants";
 import type { ContentResult } from "@/server/kb-reader";
+
+// Full-screen LikeC4 workspace (diagram ‖ Concierge/Code). Browser-only
+// (@likec4/diagram is canvas-based) so it loads client-side after mount.
+const C4Workspace = dynamic(() => import("@/components/kb/c4-workspace"), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full items-center justify-center">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-soleur-border-default border-t-amber-400" />
+    </div>
+  ),
+});
 
 export default function KbContentPage({
   params,
@@ -148,6 +161,33 @@ export default function KbContentPage({
             path={joinedPath}
             kind={classifyByExtension(extension)}
             showDownload={false}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // A KB diagram page (markdown that embeds a ```likec4-view block) becomes a
+  // full-screen workspace: diagram on the left, Soleur Concierge / Code on the
+  // right. Gated by the c4-visualizer flag; otherwise it renders as normal
+  // markdown (the inline embed handles the diagram). contextPath mirrors the
+  // KbChat sidebar format so the Concierge resumes the same document thread.
+  const c4Embed = c4Enabled ? parseLikeC4Embed(content!.content) : null;
+  if (c4Embed) {
+    return (
+      <div className="flex h-full flex-col">
+        <KbContentHeader
+          joinedPath={joinedPath}
+          chatUrl={chatUrl}
+          lastSync={lastSync}
+          onSynced={refreshTree}
+        />
+        <div className="min-h-0 flex-1">
+          <C4Workspace
+            viewId={c4Embed.viewId}
+            dirPath={c4DirPath}
+            contextPath={`knowledge-base/${joinedPath}`}
+            notes={c4Embed.notes}
           />
         </div>
       </div>
