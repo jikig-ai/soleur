@@ -191,6 +191,9 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
   );
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [messageCount, setMessageCount] = useState(0);
+  // Set by a document view that embeds its own Concierge (the C4 workspace) so
+  // the side chat panel isn't double-mounted with the same contextPath.
+  const [suppressSidebar, setSuppressSidebar] = useState(false);
 
   // Restore sidebarOpen from sessionStorage on mount (per-tab persistence)
   useEffect(() => {
@@ -262,6 +265,8 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
       enabled: kbChatFlag,
       messageCount,
       setMessageCount,
+      suppressSidebar,
+      setSuppressSidebar,
     }),
     [
       sidebarOpen,
@@ -270,13 +275,17 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
       contextPath,
       kbChatFlag,
       messageCount,
+      suppressSidebar,
     ],
   );
 
   // Whether to show the chat panel as a resizable column on desktop.
   // sidebarOpen is user-controlled: clicking X (`closeSidebar`) sets it false
   // and unmounts the chat Panel; "Continue thread" (`openSidebar`) re-opens it.
-  const showChat = kbChatFlag && !!contextPath && sidebarOpen;
+  // suppressSidebar wins: a view embedding its own Concierge (C4 workspace)
+  // hides the side panel to avoid a double-mounted chat on the same doc.
+  const showChat =
+    kbChatFlag && !!contextPath && sidebarOpen && !suppressSidebar;
 
   return {
     ctxValue,
