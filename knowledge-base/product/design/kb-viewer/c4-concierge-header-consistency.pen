@@ -1,0 +1,280 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "mdHeader",
+      "x": 0,
+      "y": 0,
+      "name": "1 - Markdown doc header (reference)",
+      "width": 760,
+      "height": "fit_content",
+      "fill": "#0f0f10",
+      "cornerRadius": 12,
+      "layout": "vertical",
+      "gap": 0,
+      "padding": 0,
+      "children": [
+        {
+          "type": "frame",
+          "id": "mdBar",
+          "name": "top bar",
+          "width": "fill_container",
+          "height": 56,
+          "fill": "#0f0f10",
+          "stroke": { "thickness": { "bottom": 1 }, "fill": "#26262a" },
+          "layout": "horizontal",
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "padding": [12, 20, 12, 20],
+          "children": [
+            {
+              "type": "text",
+              "id": "mdCrumb",
+              "content": "engineering / overview / constitution.md",
+              "fontSize": 13,
+              "fill": "#9b9ba3"
+            },
+            {
+              "type": "frame",
+              "id": "mdActions",
+              "name": "actions",
+              "width": "fit_content",
+              "height": "fit_content",
+              "layout": "horizontal",
+              "gap": 8,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "mdShare",
+                  "name": "Share button",
+                  "width": "fit_content",
+                  "height": "fit_content",
+                  "fill": "#1a1a1d",
+                  "stroke": { "thickness": 1, "fill": "#3a3a40" },
+                  "cornerRadius": 8,
+                  "layout": "horizontal",
+                  "gap": 6,
+                  "alignItems": "center",
+                  "padding": [7, 12, 7, 12],
+                  "children": [
+                    { "type": "text", "id": "mdShareT", "content": "Share", "fontSize": 12, "fontWeight": "500", "fill": "#c9c9d1" }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "mdAsk",
+                  "name": "Ask about this document (gold CTA)",
+                  "width": "fit_content",
+                  "height": "fit_content",
+                  "fill": { "type": "gradient", "gradientType": "linear", "rotation": 0, "colors": [ { "color": "#d4b36a", "position": 0 }, { "color": "#b8923e", "position": 1 } ] },
+                  "cornerRadius": 8,
+                  "layout": "horizontal",
+                  "gap": 6,
+                  "alignItems": "center",
+                  "padding": [7, 12, 7, 12],
+                  "children": [
+                    { "type": "text", "id": "mdAskT", "content": "Ask about this document", "fontSize": 12, "fontWeight": "600", "fill": "#1a1208" }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "mdBody",
+          "name": "body",
+          "width": "fill_container",
+          "height": 120,
+          "fill": "#0c0c0d",
+          "layout": "vertical",
+          "padding": 24,
+          "gap": 8,
+          "children": [
+            { "type": "text", "id": "mdL1", "content": "# Project Constitution", "fontSize": 16, "fontWeight": "600", "fill": "#e6e6ea" },
+            { "type": "text", "id": "mdL2", "content": "Rendered markdown content. The side chat panel opens on the right when 'Ask about this document' is clicked.", "textGrowth": "fixed-width", "width": "fill_container", "fontSize": 12, "fill": "#8a8a92" }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "c4Header",
+      "x": 820,
+      "y": 0,
+      "name": "2 - C4 diagram header (NEW - consistent)",
+      "width": 760,
+      "height": "fit_content",
+      "fill": "#0f0f10",
+      "cornerRadius": 12,
+      "layout": "vertical",
+      "gap": 0,
+      "padding": 0,
+      "children": [
+        {
+          "type": "frame",
+          "id": "c4Bar",
+          "name": "top bar (same component as md)",
+          "width": "fill_container",
+          "height": 56,
+          "fill": "#0f0f10",
+          "stroke": { "thickness": { "bottom": 1 }, "fill": "#26262a" },
+          "layout": "horizontal",
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "padding": [12, 20, 12, 20],
+          "children": [
+            {
+              "type": "text",
+              "id": "c4Crumb",
+              "content": "engineering / architecture / diagrams / c4-model.md",
+              "fontSize": 13,
+              "fill": "#9b9ba3"
+            },
+            {
+              "type": "frame",
+              "id": "c4Actions",
+              "name": "actions (identical placement to md)",
+              "width": "fit_content",
+              "height": "fit_content",
+              "layout": "horizontal",
+              "gap": 8,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "c4Share",
+                  "name": "Share button",
+                  "width": "fit_content",
+                  "height": "fit_content",
+                  "fill": "#1a1a1d",
+                  "stroke": { "thickness": 1, "fill": "#3a3a40" },
+                  "cornerRadius": 8,
+                  "layout": "horizontal",
+                  "gap": 6,
+                  "alignItems": "center",
+                  "padding": [7, 12, 7, 12],
+                  "children": [
+                    { "type": "text", "id": "c4ShareT", "content": "Share", "fontSize": 12, "fontWeight": "500", "fill": "#c9c9d1" }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "c4Ask",
+                  "name": "Ask about this document (gold CTA - reveals embedded Concierge)",
+                  "width": "fit_content",
+                  "height": "fit_content",
+                  "fill": { "type": "gradient", "gradientType": "linear", "rotation": 0, "colors": [ { "color": "#d4b36a", "position": 0 }, { "color": "#b8923e", "position": 1 } ] },
+                  "cornerRadius": 8,
+                  "layout": "horizontal",
+                  "gap": 6,
+                  "alignItems": "center",
+                  "padding": [7, 12, 7, 12],
+                  "children": [
+                    { "type": "text", "id": "c4AskT", "content": "Ask about this document", "fontSize": 12, "fontWeight": "600", "fill": "#1a1208" }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "c4Body",
+          "name": "workspace body",
+          "width": "fill_container",
+          "height": 220,
+          "fill": "#0c0c0d",
+          "layout": "horizontal",
+          "gap": 0,
+          "children": [
+            {
+              "type": "frame",
+              "id": "c4Diagram",
+              "name": "diagram pane (full width when Concierge collapsed)",
+              "width": "fill_container",
+              "height": "fill_container",
+              "fill": "#101014",
+              "layout": "vertical",
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                { "type": "text", "id": "c4DiagT", "content": "[ Interactive C4 diagram ]", "fontSize": 13, "fill": "#5a5a62" },
+                { "type": "text", "id": "c4DiagNote", "content": "No floating 'Open Concierge' pill - reveal lives in the top bar now", "fontSize": 11, "fill": "#46464d" }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "c4Panel",
+              "name": "Concierge / Code panel (revealed by top-bar trigger)",
+              "width": 280,
+              "height": "fill_container",
+              "fill": "#0f0f10",
+              "stroke": { "thickness": { "left": 1 }, "fill": "#26262a" },
+              "layout": "vertical",
+              "gap": 0,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "c4Tabs",
+                  "name": "Concierge/Code tabs + X close (same X as md panel)",
+                  "width": "fill_container",
+                  "height": 36,
+                  "fill": "#161619",
+                  "stroke": { "thickness": { "bottom": 1 }, "fill": "#26262a" },
+                  "layout": "horizontal",
+                  "alignItems": "center",
+                  "justifyContent": "space_between",
+                  "padding": [4, 8, 4, 8],
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "c4TabSet",
+                      "width": "fit_content",
+                      "height": "fit_content",
+                      "layout": "horizontal",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        { "type": "text", "id": "c4TabConc", "content": "Concierge", "fontSize": 11, "fontWeight": "600", "fill": "#e6e6ea" },
+                        { "type": "text", "id": "c4TabCode", "content": "Code", "fontSize": 11, "fill": "#7a7a82" }
+                      ]
+                    },
+                    { "type": "text", "id": "c4X", "content": "X", "fontSize": 13, "fontWeight": "600", "fill": "#9b9ba3" }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "c4Conc",
+                  "name": "embedded Concierge",
+                  "width": "fill_container",
+                  "height": "fill_container",
+                  "fill": "#0c0c0d",
+                  "layout": "vertical",
+                  "padding": 12,
+                  "gap": 6,
+                  "children": [
+                    { "type": "text", "id": "c4ConcFile", "content": "c4-model.md", "fontSize": 11, "fill": "#7a7a82" },
+                    { "type": "text", "id": "c4ConcMsg", "content": "Ask the Concierge about this diagram...", "textGrowth": "fixed-width", "width": "fill_container", "fontSize": 11, "fill": "#5a5a62" }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "note",
+      "id": "designNote",
+      "x": 0,
+      "y": 340,
+      "width": 1580,
+      "content": "C4 Concierge header consistency (feat-one-shot-kb-share-resolver-consolidation-ux, Workstream C). Frame 1 = markdown doc header (reference, unchanged): Share + gold 'Ask about this document' in the top bar; clicking opens the right side chat panel with its own filename + X close. Frame 2 = NEW C4 diagram header: SAME top bar component, SAME 'Ask about this document' gold trigger next to Share, SAME placement. The trigger reveals the C4 workspace's embedded Concierge (collapse/reveal state lifted to KbChatContext). The bespoke floating 'Open Concierge' pill is REMOVED. The Concierge/Code tab bar is KEPT (C4-specific); close affordance is the X in KbChatContent's own header (same as md). Double-mount avoided: the C4 page suppresses the side-panel MOUNT but not the trigger, so only the embedded Concierge mounts.",
+      "fontSize": 12,
+      "fill": "#8a8a92"
+    }
+  ]
+}
