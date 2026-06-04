@@ -13,7 +13,7 @@ describe("isC4DiagramPath", () => {
   });
 
   it("accepts the .md view-embed pages in the diagrams dir", () => {
-    expect(isC4DiagramPath(`${C4_DIAGRAMS_DIR}/system-context.md`)).toBe(true);
+    expect(isC4DiagramPath(`${C4_DIAGRAMS_DIR}/c4-model.md`)).toBe(true);
   });
 
   it("rejects paths outside the diagrams dir", () => {
@@ -45,8 +45,8 @@ describe("isC4DiagramPath", () => {
   });
 
   it("accepts hyphenated view-embed page names", () => {
-    expect(isC4DiagramPath(`${C4_DIAGRAMS_DIR}/component-plugin.md`)).toBe(true);
-    expect(isC4DiagramPath(`${C4_DIAGRAMS_DIR}/container.md`)).toBe(true);
+    expect(isC4DiagramPath(`${C4_DIAGRAMS_DIR}/c4-model.md`)).toBe(true);
+    expect(isC4DiagramPath(`${C4_DIAGRAMS_DIR}/multi-segment-name.md`)).toBe(true);
   });
 
   it("rejects backslashes (writeC4Diagram commits the raw path; \\ is a literal GitHub filename char)", () => {

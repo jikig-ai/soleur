@@ -23,8 +23,15 @@ hypothesis to verify against the new tool's idiomatic layout — not a defect to
 'fix' by deletion.** Here the 8-file structure was correct and load-bearing:
 
 - The 3 C4-layer pages the operator remembered (`system-context.md`,
-  `container.md`, `component-plugin.md`) **still exist**, one per layer — only
-  the embedded block changed from ` ```mermaid ` to ` ```likec4-view `.
+  `container.md`, `component-plugin.md`) were preserved at the time of this
+  finding, one per layer — only the embedded block changed from ` ```mermaid `
+  to ` ```likec4-view `. (Follow-up PR #4940 later consolidated those three
+  *view pages* into a single interactive `c4-model.md`, because LikeC4's
+  in-place drill-down makes one embedded `context` view sufficient to reach all
+  three levels. That is the legitimate, content-preserving kind of
+  consolidation — distinct from the destructive "delete the redundant files"
+  instinct this learning warns against. The `.c4` sources and `model.likec4.json`
+  below remained load-bearing and untouched.)
 - The "extra" files are the **canonical LikeC4 project shape** (`spec.c4` /
   `model.c4` / `views.c4`), prescribed verbatim in the skill's own
   `likec4-reference.md`. Mermaid inlined the diagram source into each `.md`;

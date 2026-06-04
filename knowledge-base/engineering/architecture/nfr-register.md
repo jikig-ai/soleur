@@ -17,7 +17,7 @@ Tracks NFRs across the Soleur platform with per-container and per-link applicabi
 
 ## Container & Link Inventory
 
-Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md` (12 containers, 6 external systems, 19 relationships).
+Source of truth: `knowledge-base/engineering/architecture/diagrams/c4-model.md` (12 containers, 6 external systems, 19 relationships).
 
 ### Container Classification
 
