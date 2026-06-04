@@ -1,9 +1,11 @@
 "use client";
 
-import { useState, useEffect, useRef, use, useContext } from "react";
+import { useState, useEffect, useMemo, useRef, use, useContext } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
+import { parseLikeC4Embed } from "@/lib/c4-embed";
 import { safeDecode } from "@/components/kb/kb-breadcrumb";
 import { FilePreview } from "@/components/kb/file-preview";
 import { KbContentHeader } from "@/components/kb/kb-content-header";
@@ -17,6 +19,17 @@ import { classifyByExtension } from "@/lib/kb-file-kind";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 import { C4_VISUALIZER_FLAG } from "@/lib/c4-constants";
 import type { ContentResult } from "@/server/kb-reader";
+
+// Full-screen LikeC4 workspace (diagram ‖ Concierge/Code). Browser-only
+// (@likec4/diagram is canvas-based) so it loads client-side after mount.
+const C4Workspace = dynamic(() => import("@/components/kb/c4-workspace"), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full items-center justify-center">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-soleur-border-default border-t-amber-400" />
+    </div>
+  ),
+});
 
 export default function KbContentPage({
   params,
@@ -43,6 +56,27 @@ export default function KbContentPage({
   const kbCtx = useContext(KbContext);
   const lastSync = kbCtx?.lastSync ?? undefined;
   const refreshTree = kbCtx?.refreshTree;
+
+  // A diagram page is markdown that embeds a ```likec4-view block, with the
+  // c4-visualizer flag on. Computed once here (top-level, before the early
+  // returns) so the suppression effect below has a stable dependency.
+  const c4Embed = useMemo(
+    () =>
+      isMarkdown && c4Enabled && content
+        ? parseLikeC4Embed(content.content)
+        : null,
+    [isMarkdown, c4Enabled, content],
+  );
+
+  // The C4 workspace renders its own Concierge beside the diagram, so suppress
+  // the desktop side chat panel for this doc (else two KbChatContent mount with
+  // the same contextPath). setSuppressSidebar is a stable useState setter.
+  const setSuppressSidebar = kbChat?.setSuppressSidebar;
+  const suppressChat = !!c4Embed;
+  useEffect(() => {
+    setSuppressSidebar?.(suppressChat);
+    return () => setSuppressSidebar?.(false);
+  }, [suppressChat, setSuppressSidebar]);
 
   useEffect(() => {
     // Non-markdown files are rendered by FilePreview — no fetch needed
@@ -148,6 +182,31 @@ export default function KbContentPage({
             path={joinedPath}
             kind={classifyByExtension(extension)}
             showDownload={false}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // A KB diagram page (markdown that embeds a ```likec4-view block) becomes a
+  // full-screen workspace: diagram on the left, Soleur Concierge / Code on the
+  // right (c4Embed computed at the top). contextPath mirrors the KbChat sidebar
+  // format so the embedded Concierge resumes the same document thread.
+  if (c4Embed) {
+    return (
+      <div className="flex h-full flex-col">
+        <KbContentHeader
+          joinedPath={joinedPath}
+          chatUrl={chatUrl}
+          lastSync={lastSync}
+          onSynced={refreshTree}
+        />
+        <div className="min-h-0 flex-1">
+          <C4Workspace
+            viewId={c4Embed.viewId}
+            dirPath={c4DirPath}
+            contextPath={`knowledge-base/${joinedPath}`}
+            notes={c4Embed.notes}
           />
         </div>
       </div>

@@ -48,6 +48,10 @@ export function KbChatTrigger({ fallbackHref }: KbChatTriggerProps) {
     </svg>
   );
 
+  // A view that embeds its own Concierge (the C4 workspace) suppresses the side
+  // panel; hide the trigger too so it can't open a redundant duplicate chat.
+  if (ctx?.suppressSidebar) return null;
+
   if (!ctx || !ctx.enabled) {
     return (
       <Link href={fallbackHref} className={baseClass}>

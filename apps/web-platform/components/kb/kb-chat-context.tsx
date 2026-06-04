@@ -19,6 +19,14 @@ export interface KbChatContextValue {
   /** Thread state for stateful trigger labels ("Ask" vs "Continue thread"). */
   messageCount: number;
   setMessageCount: (n: number) => void;
+  /**
+   * When true, the desktop side chat panel + its trigger are suppressed. Set by
+   * surfaces that embed their own Concierge (e.g. the C4 workspace renders the
+   * Concierge beside the diagram), so the document chat isn't double-mounted
+   * with the same contextPath. Optional for backward-compat with test mocks.
+   */
+  suppressSidebar?: boolean;
+  setSuppressSidebar?: (v: boolean) => void;
 }
 
 export const KbChatContext = createContext<KbChatContextValue | null>(null);
