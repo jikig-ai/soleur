@@ -164,6 +164,24 @@ export interface CanUseToolDeps {
    * `bashApprovalCache`. Default-deny: a missing dep is non-autonomous.
    */
   bashAutonomous?: boolean;
+  /**
+   * feat-bash-autonomous-default-on — per-workspace first-run consent ack
+   * timestamp (epoch ms) or `null`/`undefined` = NOT yet acked. Resolved by
+   * `resolveAutonomousAck` (fail-closed null = HOLD). When `bashAutonomous` is
+   * true but this is null AND the caller is the workspace owner, the FIRST
+   * non-blocked Bash command is HELD behind a one-time disclosure ack instead
+   * of auto-running. After the owner acks (the held gate resolves) the command
+   * proceeds and all subsequent auto-runs are friction-free.
+   */
+  autonomousAckAt?: number | null;
+  /**
+   * feat-bash-autonomous-default-on — whether the caller owns the active
+   * workspace. The soft-gate disclosure ack is an ownership-grade decision
+   * (mirrors 097's owner-only write). A non-owner hitting the first auto-run on
+   * an un-acked workspace falls through to the review-gate (treated as
+   * not-autonomous) rather than being shown an ack button they cannot use.
+   */
+  isOwner?: boolean;
 }
 
 export interface CanUseToolContext {
@@ -404,22 +422,113 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
       // blocklist remains authoritative: sudo/curl/wget/nc/sh -c/eval/
       // base64 -d//dev/tcp were already denied above and never reach here.
       if (deps.bashAutonomous) {
-        log.info(
-          {
-            sec: true,
-            tool: toolName,
-            decision: "autonomous-bypass",
-            repo: `${ctx.repoOwner}/${ctx.repoName}`,
-          },
-          "Bash command auto-approved via workspace autonomous toggle",
-        );
-        logPermissionDecision(
-          "canUseTool-bash",
-          toolName,
-          "allow",
-          "autonomous-bypass",
-        );
-        return allow(toolInput);
+        // feat-bash-autonomous-default-on — FIRST-RUN CONSENT SOFT-GATE.
+        // A default-ON workspace whose owner has NOT yet acked the disclosure
+        // must HOLD the first non-blocked command (not silently auto-run it).
+        // Owner only: a non-owner on an un-acked autonomous workspace falls
+        // through to the review-gate below (treat as not-autonomous — no ack
+        // button they can't use). The blocklist already ran above, so this
+        // hold only ever fires for a command that survived the denylist.
+        const unAcked = deps.autonomousAckAt == null;
+        if (unAcked && deps.isOwner) {
+          const gateId = randomUUID();
+          log.info(
+            {
+              sec: true,
+              tool: toolName,
+              decision: "autonomous-disclosure-hold",
+              repo: `${ctx.repoOwner}/${ctx.repoName}`,
+            },
+            "Bash command HELD for first-run autonomous disclosure ack",
+          );
+          // Decision-log enum is binary (allow|deny); a HOLD is logged as a
+          // (provisional) deny until the owner acks. The structured `log.info`
+          // line above carries the `autonomous-disclosure-hold` decision tag
+          // for the liveness grep.
+          logPermissionDecision(
+            "canUseTool-bash",
+            toolName,
+            "deny",
+            "autonomous-disclosure-hold",
+          );
+          // Emit the disclosure frame (mirrors the review_gate emit). For a
+          // default-ON workspace this is the single "Got it" ack surface;
+          // `existingWorkspace` is reserved for the stored-`false` opt-out path
+          // which fires through the review-gate branch (bashAutonomous false).
+          deps.sendToClient(ctx.userId, {
+            type: "autonomous_disclosure",
+            gateId,
+            existingWorkspace: false,
+          });
+          await deps.updateConversationStatus(
+            ctx.conversationId,
+            "waiting_for_user",
+          );
+          // Await the owner's ack via the same gate bridge the review-gate uses
+          // (registered in `_ccBashGates`; resolved by the
+          // `autonomous_disclosure_response` ws-handler case). The selection
+          // distinguishes "Got it" / "Keep autonomous on" (proceed) from
+          // "Ask me each time" (decline this run).
+          const selection = await deps.abortableReviewGate(
+            ctx.session,
+            gateId,
+            options.signal,
+            undefined,
+            ["Got it"],
+          );
+          await deps.updateConversationStatus(ctx.conversationId, "active");
+
+          if (selection === "Ask me each time") {
+            logPermissionDecision(
+              "canUseTool-bash",
+              toolName,
+              "deny",
+              "autonomous-disclosure-declined",
+            );
+            return {
+              behavior: "deny" as const,
+              message: "User chose to approve each command; this run was held.",
+            };
+          }
+          log.info(
+            {
+              sec: true,
+              tool: toolName,
+              decision: "autonomous-disclosure-released",
+              repo: `${ctx.repoOwner}/${ctx.repoName}`,
+            },
+            "First-run autonomous disclosure acked; releasing held command",
+          );
+          logPermissionDecision(
+            "canUseTool-bash",
+            toolName,
+            "allow",
+            "autonomous-disclosure-released",
+          );
+          return allow(toolInput);
+        }
+        if (unAcked && !deps.isOwner) {
+          // Non-owner on an un-acked autonomous workspace: fall through to the
+          // review-gate below (do NOT auto-bypass, do NOT surface an ack the
+          // member can't grant).
+        } else {
+          log.info(
+            {
+              sec: true,
+              tool: toolName,
+              decision: "autonomous-bypass",
+              repo: `${ctx.repoOwner}/${ctx.repoName}`,
+            },
+            "Bash command auto-approved via workspace autonomous toggle",
+          );
+          logPermissionDecision(
+            "canUseTool-bash",
+            toolName,
+            "allow",
+            "autonomous-bypass",
+          );
+          return allow(toolInput);
+        }
       }
 
       // #2921 batched-approval cache: pre-gate check (synchronous Map

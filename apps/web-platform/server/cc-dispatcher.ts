@@ -94,6 +94,11 @@ import { getCurrentRepoUrl } from "./current-repo-url";
 import { ensureWorkspaceRepoCloned } from "./ensure-workspace-repo";
 // Issue B part 2 — per-workspace autonomous Bash toggle (fail-closed read).
 import { resolveBashAutonomous } from "./resolve-bash-autonomous";
+// feat-bash-autonomous-default-on — first-run consent soft-gate inputs:
+// the ack timestamp (fail-closed null = HOLD) + workspace-ownership (fail-closed
+// not-owner = review-gate fallback).
+import { resolveAutonomousAck } from "./resolve-autonomous-ack";
+import { resolveIsWorkspaceOwner } from "./resolve-workspace-owner";
 // PR-C §2.11 (#3244): BYOK lease wrap on realSdkQueryFactory — the
 // plaintext API key fetch surface moves from `getUserApiKey(userId)`
 // (which returns a bare string) to `lease.getApiKey()` inside
@@ -1063,7 +1068,15 @@ export const realSdkQueryFactory: QueryFactory = async (
     // installationId joins the existing Promise.all (it keys only off
     // args.userId via resolveInstallationId → resolveCurrentWorkspaceId), so
     // the resolve does not add a sequential await to cold-start dispatch.
-    const [workspacePath, serviceTokens, installationId, bashAutonomous, repoUrl] =
+    const [
+      workspacePath,
+      serviceTokens,
+      installationId,
+      bashAutonomous,
+      autonomousAckAt,
+      isWorkspaceOwner,
+      repoUrl,
+    ] =
       await Promise.all([
         fetchUserWorkspacePath(args.userId),
         getUserServiceTokens(args.userId),
@@ -1071,10 +1084,22 @@ export const realSdkQueryFactory: QueryFactory = async (
         // Issue B part 2 — fail-closed false; bypasses the Bash review-gate
         // when the active workspace owner enabled the autonomous toggle.
         resolveBashAutonomous(args.userId),
+        // feat-bash-autonomous-default-on — first-run consent ack (fail-closed
+        // null = HOLD). When bashAutonomous && ack==null && owner, the first
+        // non-blocked command is soft-gated behind the disclosure.
+        resolveAutonomousAck(args.userId),
+        // feat-bash-autonomous-default-on — ownership (fail-closed not-owner).
+        // A non-owner on an un-acked autonomous workspace falls through to the
+        // review-gate rather than seeing an ack they can't grant.
+        resolveIsWorkspaceOwner(args.userId),
         // Per-user connected repo (normalized, membership-checked). Drives the
         // session-start ensure-repo self-heal below. null = not connected.
         getCurrentRepoUrl(args.userId),
       ]);
+    // Normalize the ack to epoch-ms | null for the permission-callback deps
+    // (the wire/db value is an ISO timestamptz string).
+    const autonomousAckAtMs =
+      autonomousAckAt != null ? Date.parse(autonomousAckAt) : null;
 
     // feat-concierge-stream-commands — publish the streaming posture (D1)
     // to the dispatcher's command_stream emit gate. Same closure-capture
@@ -1315,6 +1340,12 @@ export const realSdkQueryFactory: QueryFactory = async (
     // Bash branch auto-approves non-BLOCKED commands (blocklist stays
     // authoritative).
     bashAutonomous,
+    // feat-bash-autonomous-default-on — first-run consent soft-gate inputs.
+    // When bashAutonomous && autonomousAckAt==null && isOwner, the first
+    // non-blocked command is HELD behind the disclosure ack instead of
+    // auto-running.
+    autonomousAckAt: autonomousAckAtMs,
+    isOwner: isWorkspaceOwner,
     // Real conversation-status write — replaces the prior no-op (#2920).
     // Delegates to the typed wrapper which enforces the R8 composite-key
     // invariant (`.eq("id", convId).eq("user_id", args.userId)`) and
