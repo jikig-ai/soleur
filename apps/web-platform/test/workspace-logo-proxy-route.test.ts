@@ -83,4 +83,21 @@ describe("GET /api/workspace/[id]/logo (AC6)", () => {
     expect(res.status).toBe(502);
     expect(mockReport).toHaveBeenCalled();
   });
+
+  // Review finding (security-sentinel P3 + architecture-strategist): the proxy
+  // mints a signed URL + runs an RPC per cache-miss; without a per-user limit a
+  // member can loop it. 429 caps the amplification (browser cache covers steady).
+  it("throttles a cache-busting burst from the same user with 429", async () => {
+    mockGetUser.mockResolvedValue({ data: { user: { id: "burst-viewer" } } });
+    let got429 = false;
+    for (let i = 0; i < 90; i++) {
+      const res = await GET(req(), ctx());
+      if (res.status === 429) {
+        got429 = true;
+        expect(res.headers.get("Retry-After")).toBe("60");
+        break;
+      }
+    }
+    expect(got429).toBe(true);
+  });
 });

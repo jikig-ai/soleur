@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { reportSilentFallback } from "@/server/observability";
+import {
+  SlidingWindowCounter,
+  startPruneInterval,
+  logRateLimitRejection,
+} from "@/server/rate-limiter";
 
 // GET /api/workspace/[id]/logo — stable proxy (#4916). Membership-gates then
 // 302-redirects to a freshly-minted short-TTL (300s) signed URL. The browser
@@ -15,6 +20,14 @@ const BUCKET = "workspace-logos";
 const SIGNED_TTL_SECONDS = 300;
 const FEATURE = "workspace-logo";
 
+// Per-user limit on the proxy: each cache-miss mints a signed URL + runs an
+// RPC, so cap the amplification an authenticated member can drive (browser
+// max-age=300 covers the steady state). Module-scoped — one counter for the
+// route, mirroring withUserRateLimit's internals (we inline it here because the
+// handler needs the [id] params the wrapper signature doesn't thread).
+const proxyLimiter = new SlidingWindowCounter({ windowMs: 60_000, maxRequests: 60 });
+startPruneInterval(proxyLimiter);
+
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -27,6 +40,14 @@ export async function GET(
   } = await supabase.auth.getUser();
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  if (!proxyLimiter.isAllowed(user.id)) {
+    logRateLimitRejection("workspace-logo.proxy", user.id);
+    return NextResponse.json(
+      { error: "Too many requests" },
+      { status: 429, headers: { "Retry-After": "60" } },
+    );
   }
 
   // Membership gate (403). is_workspace_member is SECURITY DEFINER, GRANT
