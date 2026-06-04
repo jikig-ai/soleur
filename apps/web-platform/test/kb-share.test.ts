@@ -11,6 +11,7 @@ import {
   REVOKE_PURGE_FAILED_MESSAGE,
 } from "@/server/kb-share";
 import { MAX_BINARY_SIZE } from "@/server/kb-limits";
+import { reportSilentFallback } from "@/server/observability";
 import { shareSupabaseFromMock } from "./helpers/share-mocks";
 
 vi.mock("@/server/logger", () => ({
@@ -333,6 +334,41 @@ describe("createShare — concurrent retry (23505 unique violation)", () => {
     if (result.ok) throw new Error("unreachable");
     expect(result.status).toBe(409);
     expect(result.code).toBe("concurrent-retry");
+  });
+});
+
+describe("createShare — FK violation (23503 workspace row missing)", () => {
+  it("returns a distinct non-db-error code (not the generic db-error) for SQLSTATE 23503", async () => {
+    const bytes = Buffer.from("hello");
+    fs.writeFileSync(path.join(kbRoot, "note.md"), bytes);
+
+    const client = makeServiceClient({
+      kb_share_links: {
+        shareRow: null,
+        shareError: null,
+        insertSpy: vi.fn().mockResolvedValue({ error: { code: "23503" } }),
+      },
+    });
+
+    const result = await createShare(client as never, "user-1", "ws-missing", kbRoot, "note.md");
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    // Distinct from the generic catch-all so telemetry can discriminate a
+    // missing-workspace-row FK violation from an arbitrary DB error.
+    expect(result.code).not.toBe("db-error");
+    expect(result.code).toBe("workspace-missing");
+    // The branch MUST still mirror to Sentry with a discriminating reason
+    // (cq-silent-fallback-must-mirror-to-sentry) — assert the mirror, not just
+    // the returned code, so a future refactor cannot silently drop it.
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        feature: "kb-share",
+        op: "create",
+        extra: expect.objectContaining({ reason: "workspace-missing" }),
+      }),
+    );
   });
 });
 
