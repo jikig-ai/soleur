@@ -52,7 +52,9 @@ import { buildKbShareTools } from "./kb-share-tools";
 import { buildConversationsTools } from "./conversations-tools";
 import { buildAuthStatusTools } from "./auth-status-tools";
 import { buildAccountTools } from "./account-tools";
+import { buildWorkspaceSettingsTools } from "./workspace-settings-tools";
 import { getCurrentRepoUrl } from "./current-repo-url";
+import { resolveActiveWorkspacePath } from "./workspace-resolver";
 import { resolveInstallationId } from "./resolve-installation-id";
 import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
@@ -97,7 +99,7 @@ function supabase() { return _supabase ??= createServiceClient(); }
  */
 function resolveSessionErrorCode(
   err: unknown,
-): "key_invalid" | "byok_key_missing" | undefined {
+): "key_invalid" | "byok_key_missing" | "subscription_limit" | undefined {
   if (err instanceof KeyInvalidError) return "key_invalid";
   if (err instanceof ByokLeaseError) return mapByokLeaseCauseToErrorCode(err.cause);
   // Phase 3.2 AC-D: MissingByokKeyError carries its own client-facing
@@ -437,16 +439,38 @@ async function saveMessage(
    */
   meta?: { status?: "complete" | "aborted"; usage?: UsageSnapshot },
 ) {
-  // PR-B §1.5.1 (#3244): tenant-scoped insert. RLS on `messages` requires
-  // `EXISTS (SELECT 1 FROM conversations WHERE id = conversation_id AND
-  // user_id = auth.uid())` — a cross-founder write fails the policy and
-  // surfaces as a Postgres error (not a silent no-op). The userId param
-  // is the founder identity for `getFreshTenantClient`; the actual write
-  // is keyed on `conversation_id` and the FK-join policy enforces ownership.
+  // PR-B §1.5.1 (#3244): tenant-scoped insert. Post-migration 059, RLS on
+  // `messages` requires `workspace_id` to be a workspace the caller is a member
+  // of (`messages_workspace_member_insert` WITH CHECK
+  // `is_workspace_member(workspace_id, auth.uid())`); we derive `workspace_id`
+  // from the parent conversation, which the caller's conversation-RLS already
+  // gated on membership. The userId param is the founder identity for
+  // `getFreshTenantClient`; the write is keyed on `conversation_id` and the
+  // member-keyed policy enforces ownership.
   const tenant = await getFreshTenantClient(userId);
+
+  // Read the parent conversation's workspace_id once via the same tenant
+  // client (no second mint). On read failure throw the same
+  // `Failed to save message:` contract — never proceed to a NULL workspace_id
+  // INSERT (which would 500 under the mig-059 WITH CHECK).
+  const { data: convWsRow, error: convWsErr } = await tenant
+    .from("conversations")
+    .select("workspace_id")
+    .eq("id", conversationId)
+    .single();
+  if (convWsErr || !convWsRow) {
+    throw new Error(
+      `Failed to save message: ${convWsErr?.message ?? "conversation workspace_id not found"}`,
+    );
+  }
+
   const { error } = await tenant.from("messages").insert({
     id: randomUUID(),
     conversation_id: conversationId,
+    workspace_id: convWsRow.workspace_id,
+    // mig 053: messages.template_id NOT NULL (no default). Interactive
+    // (non-template) messages use the 'default_legacy' sentinel. #4839.
+    template_id: "default_legacy",
     role,
     content,
     tool_calls: toolCalls || null,
@@ -920,9 +944,11 @@ export async function startAgentSession(
       userId,
       userId,
       async (lease) => {
-    // Get user's decrypted API key and service tokens
-    const [apiKey, serviceTokens] = await Promise.all([
-      lease.getApiKey(),
+    // Agent-SDK consumer — resolve the credential ({ value, scheme }) so the
+    // subprocess env carries exactly one auth var. Prefers the operator
+    // subscription oauth_token when enabled+permitted; otherwise api_key.
+    const [credential, serviceTokens] = await Promise.all([
+      lease.getAgentCredential(),
       getUserServiceTokens(userId),
     ]);
 
@@ -946,15 +972,25 @@ export async function startAgentSession(
     const sessionTenant = await getFreshTenantClient(userId);
     const { data: user } = await sessionTenant
       .from("users")
-      .select("workspace_path, repo_status, email")
+      .select("email")
       .eq("id", userId)
       .single();
 
-    if (!user?.workspace_path) {
+    if (!user) {
       throw new Error(ERR_WORKSPACE_NOT_PROVISIONED);
     }
 
-    const workspacePath = user.workspace_path;
+    // Resolve the leader's workspace dir from the ACTIVE workspace (ADR-044) —
+    // NOT the legacy `users.workspace_path` column. That column is stale/empty
+    // for invited members and for users provisioned after the ADR-044
+    // `users → workspaces` relocation (#4559), so reading it pointed the leader
+    // (agent cwd, KB root, doc resolver, vision, sync) at a dir that diverged
+    // from the UI KB file tree (`resolveActiveWorkspaceKbRoot`) and from the
+    // Concierge (#4910 converged the Concierge half via `fetchUserWorkspacePath`;
+    // this converges the leader half). `resolveActiveWorkspacePath` fails closed
+    // to the SOLO workspace (never a sibling) and always returns a path, so the
+    // provisioning guard above keys only on the `users` row existing.
+    const workspacePath = await resolveActiveWorkspacePath(userId, sessionTenant);
     const pluginPath = path.join(workspacePath, "plugins", "soleur");
 
     // Extract MCP server names from plugin.json for canUseTool allowlisting.
@@ -988,10 +1024,15 @@ export async function startAgentSession(
     // through `atomicWriteJson`).
     await patchWorkspacePermissions(workspacePath);
 
-    // Sync: pull latest from remote before session (connected repos only)
-    if (user.repo_status === "ready") {
-      await syncPull(userId, workspacePath);
-    }
+    // Sync: pull latest from the ACTIVE workspace's remote before the session.
+    // No outer `repo_status` gate — `syncPull` self-guards on
+    // `hasRemote(workspacePath)` + the active-workspace installation
+    // (`resolveInstallationId`), so it no-ops for an unconnected/empty workspace
+    // and pulls for a connected one. Gating on the caller's legacy SOLO
+    // `users.repo_status` would skip the pull for an invited member whose ACTIVE
+    // (shared) workspace is connected — the exact #4543 divergence the converged
+    // `workspacePath` above fixes, re-created one branch away.
+    await syncPull(userId, workspacePath);
 
     // Create vision.md on first message if it doesn't exist (fire-and-forget).
     // Runs in startAgentSession (not sendUserMessage) to reuse the already-fetched
@@ -1485,6 +1526,15 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
     platformTools.push(...accountTools.tools);
     platformToolNames.push(...accountTools.toolNames);
 
+    // Workspace settings tools (Issue B part 2): agent-native parity for the
+    // Concierge autonomous-mode toggle. get = auto-approve, set = gated
+    // (flipping an approval-bypass requires a review-gate even for the agent).
+    // Registered here on the leader surface only — the cc-router exposes no
+    // platform tools (platformToolNames: []); see workspace-settings-tools.ts.
+    const workspaceSettingsTools = buildWorkspaceSettingsTools({ userId });
+    platformTools.push(...workspaceSettingsTools.tools);
+    platformToolNames.push(...workspaceSettingsTools.toolNames);
+
     // Build MCP server if any platform tools are registered
     if (platformTools.length > 0) {
       const toolServer = createSdkMcpServer({
@@ -1725,7 +1775,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       options: buildAgentQueryOptions({
         workspacePath,
         pluginPath,
-        apiKey,
+        credential,
         serviceTokens,
         systemPrompt: effectiveSystemPrompt,
         resumeSessionId: safeResumeSessionId,
@@ -2022,10 +2072,12 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
               : undefined,
           );
 
-          // Sync: push changes to remote after session (connected repos only)
-          if (user.repo_status === "ready") {
-            await syncPush(userId, workspacePath);
-          }
+          // Sync: push changes to the ACTIVE workspace's remote after the
+          // session. Same rationale as the session-start pull — `syncPush`
+          // self-guards (`hasRemote` + `hasLocalCommits` + active installation),
+          // so no legacy `repo_status` gate (which would silently drop an
+          // invited member's leader edits to a connected shared workspace).
+          await syncPush(userId, workspacePath);
 
           // Notify client that this leader finished streaming. The finally block
           // below emits the same event as a fallback for exception paths; guard
@@ -2423,21 +2475,32 @@ export async function sendUserMessage(
   // conversation owner should drive agent sessions. Workspace members
   // can READ shared conversations but not inject messages into them.
   const sendTenant = await getFreshTenantClient(userId);
+  // mig 059: also read `workspace_id` here (zero extra RTT — extend the
+  // existing select) so the user-row INSERT below can satisfy the member-keyed
+  // RLS WITH CHECK. Derived from the parent conversation, which this same
+  // (id, user_id)-scoped read already gated on ownership.
   const { data: conv, error: convErr } = await sendTenant
     .from("conversations")
-    .select("domain_leader, session_id")
+    .select("domain_leader, session_id, workspace_id")
     .eq("id", conversationId)
     .eq("user_id", userId)
     .single();
 
   if (convErr || !conv) throw new Error(ERR_CONVERSATION_NOT_FOUND);
 
-  // PR-B §1.5.1: tenant-scoped insert. RLS on `messages` enforces
-  // ownership via the FK-join policy on `conversations.user_id`.
+  // PR-B §1.5.1: tenant-scoped insert. Post-migration 059, RLS on `messages`
+  // requires `workspace_id` to be a workspace the caller is a member of
+  // (`messages_workspace_member_insert` WITH CHECK
+  // `is_workspace_member(workspace_id, auth.uid())`); we derive it from the
+  // parent conversation read above.
   const messageId = randomUUID();
   const { error: msgErr } = await sendTenant.from("messages").insert({
     id: messageId,
     conversation_id: conversationId,
+    workspace_id: conv.workspace_id,
+    // mig 053: messages.template_id NOT NULL (no default). Interactive
+    // messages use the 'default_legacy' sentinel. #4839.
+    template_id: "default_legacy",
     role: "user",
     content,
     tool_calls: null,
@@ -2537,7 +2600,10 @@ export async function sendUserMessage(
         userId,
         userId,
         async (lease) => {
-        const apiKey = await lease.getApiKey();
+        // Raw-REST consumer — `routeMessage` → `classifyMessage` hits the
+        // Anthropic REST API with `x-api-key`, which an oauth_token cannot
+        // authenticate. MUST use the api_key row (provider='anthropic').
+        const apiKey = await lease.getRestApiKey();
 
         // tenant-scoped read of team_names. RLS enforces auth.uid() = user_id.
         // sendTenant from earlier in this function is reusable here

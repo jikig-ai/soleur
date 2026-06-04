@@ -22,8 +22,8 @@ related_workflows:
 related_iac:
   - apps/web-platform/infra/sentry/cron-monitors.tf
 related_runbooks:
-  - knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md
-  - knowledge-base/engineering/ops/runbooks/github-app-drift.md
+  - knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md
+  - knowledge-base/engineering/operations/runbooks/github-app-drift.md
 related_issues: [3203]
 followup_issue_to_file: chore(infra) — TR9 PR-4 — migrate scheduled-github-app-drift-guard to Inngest cron substrate (paired follow-up; same root cause, deferred per plan-review scope discipline)
 sentry_issue_id: a94c4ec23f654101a7fc4491b16a560c
@@ -116,8 +116,8 @@ Carry forward H1–H5 from the prior plan (`fix-scheduled-oauth-probe-recurrence
 
 **Operator-surface doc sweep:**
 
-- [ ] AC13 — `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` updated per the prior plan's AC14 enumeration: 10 line-pair edits at lines 5, 16, 33, 34, 41, 228, 237, 489-501. Additionally, prepend a one-line substrate-disambiguation note to the troubleshooting section: "Before debugging the probe code path, check Better Stack `inngest-heartbeat` last_alive_at via the dashboard at `https://uptime.betterstack.com/team/.../heartbeats/inngest-heartbeat` — if >2 min ago, this issue is likely a substrate-down false-positive (cross-check sibling `scheduled-daily-triage` / `scheduled-follow-through` monitors)." (This replaces the brainstorm's AC28 inline-issue-body approach with a runbook line — zero code, zero new dependency.) Sentinel: `grep -cE 'gh run list.*oauth-probe|gh workflow run scheduled-oauth-probe|scheduled-oauth-probe\.yml' knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` returns 0.
-- [ ] AC14 — `knowledge-base/engineering/ops/runbooks/github-app-drift.md` line 339 (`scheduled-oauth-probe.yml` cross-reference) updated to `cron-oauth-probe` Inngest equivalent. All other references in this runbook (to `scheduled-github-app-drift-guard.yml`) are left UNCHANGED — they will be updated by TR9 PR-4 when drift-guard migrates. Sentinel: `grep -nE 'scheduled-oauth-probe\.yml' knowledge-base/engineering/ops/runbooks/github-app-drift.md` returns 0.
+- [ ] AC13 — `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md` updated per the prior plan's AC14 enumeration: 10 line-pair edits at lines 5, 16, 33, 34, 41, 228, 237, 489-501. Additionally, prepend a one-line substrate-disambiguation note to the troubleshooting section: "Before debugging the probe code path, check Better Stack `inngest-heartbeat` last_alive_at via the dashboard at `https://uptime.betterstack.com/team/.../heartbeats/inngest-heartbeat` — if >2 min ago, this issue is likely a substrate-down false-positive (cross-check sibling `scheduled-daily-triage` / `scheduled-follow-through` monitors)." (This replaces the brainstorm's AC28 inline-issue-body approach with a runbook line — zero code, zero new dependency.) Sentinel: `grep -cE 'gh run list.*oauth-probe|gh workflow run scheduled-oauth-probe|scheduled-oauth-probe\.yml' knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md` returns 0.
+- [ ] AC14 — `knowledge-base/engineering/operations/runbooks/github-app-drift.md` line 339 (`scheduled-oauth-probe.yml` cross-reference) updated to `cron-oauth-probe` Inngest equivalent. All other references in this runbook (to `scheduled-github-app-drift-guard.yml`) are left UNCHANGED — they will be updated by TR9 PR-4 when drift-guard migrates. Sentinel: `grep -nE 'scheduled-oauth-probe\.yml' knowledge-base/engineering/operations/runbooks/github-app-drift.md` returns 0.
 - [ ] AC15 — Full operator-surface sweep for oauth-probe references: `grep -rEn 'scheduled-oauth-probe\.yml|gh workflow run scheduled-oauth-probe|gh run list.*scheduled-oauth-probe' knowledge-base/engineering/ apps/web-platform/ README.md CONTRIBUTING.md 2>/dev/null | grep -v archive/ | grep -v 'knowledge-base/project/\(plans\|specs\|learnings\)/' | wc -l` returns 0. Scope exclusion preserves historical project artifacts per the May 18 plan AC10 precedent.
 
 **Verification gates:**
@@ -165,8 +165,8 @@ Run the six self-check questions from `2026-05-19-inngest-substrate-five-bug-cas
 - `apps/web-platform/infra/sentry/cron-monitors.tf` — AC11 + AC12 changes: revert PR #4207's oauth-probe bump; rewrite header comment; update joint-exception breadcrumb at lines 24-37; delete May 21 oauth-probe comment at lines 71-77; revise (not delete) the May 21 drift-guard comment at lines 91-99 to drop the joint-bump reasoning.
 - `apps/web-platform/app/api/inngest/route.ts` — line 37 array extended to include `cronOauthProbe` import (per AC8).
 - `apps/web-platform/test/oauth-probe-contract.test.ts` — refactor: import sentinel constants from the new `apps/web-platform/server/inngest/functions/oauth-probe-sentinels.ts` module instead of defining them inline; preserve existing export surface (AC3a).
-- `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` — AC13 (10 line-pair edits + Better Stack disambiguation note).
-- `knowledge-base/engineering/ops/runbooks/github-app-drift.md` — AC14 (line 339 only — oauth-probe cross-reference).
+- `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md` — AC13 (10 line-pair edits + Better Stack disambiguation note).
+- `knowledge-base/engineering/operations/runbooks/github-app-drift.md` — AC14 (line 339 only — oauth-probe cross-reference).
 
 ## Files to Create
 

@@ -21,12 +21,14 @@ import path from "path";
 
 const {
   fetchUserWorkspacePathSpy,
+  resolveActiveWorkspacePathSpy,
   extractPdfTextSpy,
   extractPdfMetadataSpy,
   extractPdfOutlineSpy,
   reportSilentFallbackSpy,
 } = vi.hoisted(() => ({
   fetchUserWorkspacePathSpy: vi.fn(),
+  resolveActiveWorkspacePathSpy: vi.fn(),
   extractPdfTextSpy: vi.fn(),
   extractPdfMetadataSpy: vi.fn(),
   extractPdfOutlineSpy: vi.fn(),
@@ -47,6 +49,13 @@ vi.mock("@/lib/supabase/tenant", () => ({
   }),
   RuntimeAuthError: class RuntimeAuthError extends Error {},
 }));
+
+vi.mock("@/server/workspace-resolver", async () => {
+  const actual = await vi.importActual<typeof import("@/server/workspace-resolver")>(
+    "@/server/workspace-resolver",
+  );
+  return { ...actual, resolveActiveWorkspacePath: resolveActiveWorkspacePathSpy };
+});
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
@@ -85,6 +94,7 @@ beforeEach(() => {
     data: { workspace_path: tmpRoot },
     error: null,
   });
+  resolveActiveWorkspacePathSpy.mockResolvedValue(tmpRoot);
   extractPdfTextSpy.mockReset();
   extractPdfMetadataSpy.mockReset();
   extractPdfOutlineSpy.mockReset();

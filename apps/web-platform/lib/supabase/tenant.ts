@@ -137,6 +137,25 @@ export function mapRuntimeAuthCauseToErrorCode(
 const DEFAULT_TTL_SEC = 600;
 
 /**
+ * `auth.uid()` is ALWAYS a UUID. A non-UUID `userId` reaching the tenant-mint
+ * path is a programming/test-fixture error (e.g. an e2e mock seeding a literal
+ * "test-user-id") — it can never resolve a real tenant. The mint guard below
+ * rejects it as a `RuntimeAuthError` so callers fail-open
+ * (`ws-handler.tenantFor` → `null`, server callers early-return) instead of
+ * letting the Supabase Admin SDK throw a RAW `Expected parameter to be UUID`
+ * rejection deep in `resolveFounderEmail` (`getUserById`). That raw error is
+ * NOT a `RuntimeAuthError`, so it escapes `tenantFor`'s typed catch and, in the
+ * WebSocket connect path, becomes a process-killing `unhandledRejection` that
+ * crashes the dev/prod server. The regex shape mirrors the
+ * `server/workspace.ts` `UUID_RE` precondition guards; the failure SEMANTICS
+ * differ deliberately — this throws a typed `RuntimeAuthError` (caught by
+ * `tenantFor` → fail-open `null`) rather than a plain validation error, which
+ * is the entire mechanism by which the WS path degrades instead of crashing.
+ */
+const TENANT_USER_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
  * Audience claim baked into runtime JWTs by `public.runtime_jwt_mint_hook`
  * (migration 047). Node holds this constant for parity with the hook —
  * future PostgREST-level aud filtering (dashboard-replay defense) reads
@@ -154,7 +173,7 @@ export const JWT_AUDIENCE = "soleur-runtime";
  * Bounded retries smooth transient bursts (concurrent CI runs, prior-hour
  * residue against the dev project's per-instance ceiling). They do NOT
  * fix steady-state ceiling exhaustion — see
- * `knowledge-base/engineering/ops/runbooks/supabase-magiclink-rate-limit.md`
+ * `knowledge-base/engineering/operations/runbooks/supabase-magiclink-rate-limit.md`
  * for the operational fix.
  */
 const DEFAULT_VERIFY_OTP_MAX_RETRIES = 3;
@@ -253,6 +272,17 @@ export async function mintFounderJwt(
   userId: UserId,
   opts: MintFounderJwtOpts = {},
 ): Promise<MintedJwt> {
+  // Fail closed on a malformed (non-UUID) userId BEFORE any Admin SDK call —
+  // see TENANT_USER_ID_RE docblock. A raw `getUserById` UUID-validation throw
+  // would otherwise escape the RuntimeAuthError-only catch in ws-handler and
+  // crash the process via unhandledRejection.
+  if (!TENANT_USER_ID_RE.test(userId)) {
+    throw new RuntimeAuthError(
+      "jwt_mint",
+      "Authentication unavailable; retry shortly",
+    );
+  }
+
   const ttlSec = opts.ttlSec ?? DEFAULT_TTL_SEC;
   const service = getServiceClient();
 
@@ -457,7 +487,7 @@ interface CacheEntry {
  * Process-local per-userId cache of `Promise<CacheEntry>`.
  *
  * Storing the in-flight Promise (not the resolved value) is the load-
- * bearing dedup: concurrent cold callers (e.g., `Promise.all([lease.getApiKey(),
+ * bearing dedup: concurrent cold callers (e.g., `Promise.all([lease.getAgentCredential(),
  * getUserServiceTokens(userId)])` at session start) await the same
  * pending mint instead of each consuming a slot from the 60/hr ceiling.
  * Entries are reminted when `now - mintedAt > ttlSec/4` (Resolution C

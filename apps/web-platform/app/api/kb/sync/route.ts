@@ -13,10 +13,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getFreshTenantClient, RuntimeAuthError } from "@/lib/supabase/tenant";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { syncWorkspace } from "@/server/kb-route-helpers";
-import {
-  appendKbSyncRow,
-  ERROR_CLASS_SYNC_FAILED,
-} from "@/server/session-sync";
+import { appendKbSyncRow } from "@/server/session-sync";
 import { reportSilentFallback } from "@/server/observability";
 import logger from "@/server/logger";
 
@@ -127,21 +124,21 @@ async function handleSync(userId: string): Promise<Response> {
   const sync_completed_at = Date.now();
   const at = new Date(sync_completed_at).toISOString();
   if (!syncResult.ok) {
+    // Real class from the git stderr/exit signature (`syncWorkspace` now
+    // classifies non_fast_forward vs sync_failed and attempts a gated
+    // self-heal first). No longer hard-coded — a diverged clone routes the
+    // operator to the right desync state instead of a generic failure.
     await appendKbSyncRow(userId, {
       at,
       trigger: "manual",
       ok: false,
-      // Generic class — `syncWorkspace` cannot today distinguish
-      // non-fast-forward from auth/IO/net errors. Hard-coding
-      // "non_fast_forward" mislabels every failure as a rebase issue,
-      // sending operators to the reconnect modal for unrelated errors.
-      error_class: ERROR_CLASS_SYNC_FAILED,
+      error_class: syncResult.errorClass,
       sync_completed_at,
     });
     return NextResponse.json({
       ok: false,
       at,
-      error_class: ERROR_CLASS_SYNC_FAILED,
+      error_class: syncResult.errorClass,
     });
   }
 
@@ -149,7 +146,12 @@ async function handleSync(userId: string): Promise<Response> {
     at,
     trigger: "manual",
     ok: true,
+    recovered: syncResult.recovered,
     sync_completed_at,
   });
-  return NextResponse.json({ ok: true, at });
+  return NextResponse.json({
+    ok: true,
+    at,
+    ...(syncResult.recovered ? { recovered: true } : {}),
+  });
 }

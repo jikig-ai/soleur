@@ -32,8 +32,11 @@
 //     DISCORD_GUILD_ID, BSKY_HANDLE, BSKY_APP_PASSWORD, LINKEDIN_ACCESS_TOKEN,
 //     LINKEDIN_PERSON_URN (the community-router.sh platform scripts need
 //     these to flip platforms from "disabled" → "enabled").
-//   - --max-turns 50 (was 40); --allowedTools is NARROWER (no WebSearch,
-//     WebFetch — mirrors the YAML's claude_args).
+//   - --max-turns 80 (was 50, orig 40 — see turn-budget rationale on
+//     MAX_TURN_DURATION_MS); --allowedTools is NARROWER than the cohort
+//     default (no WebSearch, WebFetch). (The original GHA workflow
+//     scheduled-community-monitor.yml was deleted in #4468; this comment no
+//     longer mirrors a live file.)
 //   - Cron 0 8 * * * (daily 08:00 UTC, not weekly Monday 09:00).
 //   - DEDUP RULE uses 24h window (daily cadence) not 6 days (weekly).
 //   - ISSUE CLOSURE SAFETY and ROADMAP.MD CONFLICT GUARD are N/A (prompt
@@ -76,21 +79,38 @@ const SENTRY_MONITOR_SLUG = "scheduled-community-monitor";
 const TOKEN_MIN_LIFETIME_MS = 50 * 60 * 1000 + 10 * 60 * 1000;
 
 
+// TURN BUDGET — `--max-turns 80` (CLAUDE_CODE_FLAGS below), MAX_TURN_DURATION_MS
+// 50 min wall-clock. Raised from 50→80 turns on 2026-06-03 after Sentry
+// WEB-PLATFORM-1Z: the spawn exited 1 with stdoutTail "Error: Reached max
+// turns (50)" ~6 min into the run (turn-count exhaustion, NOT the wall-clock
+// ceiling), so it never reached its final issue-create step and this
+// always-create producer filed no `scheduled-community-monitor` issue —
+// correctly turning the output-aware heartbeat RED. 80 matches the
+// proven-healthy `cron-daily-triage` turn budget running through the same
+// DEFAULT_CLAUDE_SETTINGS (daily-triage pairs 80 turns with a 60-min ceiling;
+// we keep 50 min — see the in-band ratio below). The heavier 7-platform
+// digest + git→PR→issue task no longer fit in 50 with error/retry headroom.
+// The timeout-to-turns ratio
+// is 50 min ÷ 80 = 0.625 min/turn — within the 0.55–1.2 peer band per the
+// 2026-03-20-claude-code-action-max-turns-budget learning, so the 50-min
+// wall-clock stays adequate (no MAX_TURN_DURATION_MS change needed).
 export const MAX_TURN_DURATION_MS = 50 * 60 * 1000;
 export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 
 
 // claude-code spawn argv. `--` is load-bearing per #4017 bug 8/8.
-// Mirrors .github/workflows/scheduled-community-monitor.yml `claude_args`:
+// Originally mirrored .github/workflows/scheduled-community-monitor.yml
+// `claude_args` (--max-turns 50). Raised to 80 on 2026-06-03 — see the
+// turn-budget rationale on MAX_TURN_DURATION_MS below.
 //   --model claude-sonnet-4-6
-//   --max-turns 50
+//   --max-turns 80
 //   --allowedTools Bash,Read,Write,Edit,Glob,Grep
 const CLAUDE_CODE_FLAGS = [
   "--print",
   "--model",
   "claude-sonnet-4-6",
   "--max-turns",
-  "50",
+  "80",
   "--allowedTools",
   "Bash,Read,Write,Edit,Glob,Grep",
   "--",
@@ -193,8 +213,12 @@ CLONE DEPTH RULE: This workspace was cloned with --depth=1. Do NOT use \`git log
 //
 // PR-11 additions (bucket-ii authorization): DISCORD_WEBHOOK_URL,
 // DISCORD_BOT_TOKEN, DISCORD_GUILD_ID, BSKY_HANDLE, BSKY_APP_PASSWORD,
-// LINKEDIN_ACCESS_TOKEN, LINKEDIN_PERSON_URN — the community-router.sh
-// platform scripts need these to flip platforms from "disabled" → "enabled".
+// LINKEDIN_ACCESS_TOKEN, LINKEDIN_PERSON_URN, X_API_KEY, X_API_SECRET,
+// X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET — the community-router.sh platform
+// scripts need these to flip platforms from "disabled" → "enabled".
+// X_ALLOW_POST is deliberately EXCLUDED: it is the posting defense-in-depth
+// guard (x-community.sh:611); the monitor is read-only and only the publisher
+// (cron-content-publisher.ts) arms posting.
 // Defensive: ONLY the platform secrets the community-router.sh needs, NOT a
 // wholesale process.env passthrough.
 function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
@@ -211,6 +235,10 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
     BSKY_APP_PASSWORD: process.env.BSKY_APP_PASSWORD,
     LINKEDIN_ACCESS_TOKEN: process.env.LINKEDIN_ACCESS_TOKEN,
     LINKEDIN_PERSON_URN: process.env.LINKEDIN_PERSON_URN,
+    X_API_KEY: process.env.X_API_KEY,
+    X_API_SECRET: process.env.X_API_SECRET,
+    X_ACCESS_TOKEN: process.env.X_ACCESS_TOKEN,
+    X_ACCESS_TOKEN_SECRET: process.env.X_ACCESS_TOKEN_SECRET,
   };
 }
 

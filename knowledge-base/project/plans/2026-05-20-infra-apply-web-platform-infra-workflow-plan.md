@@ -392,7 +392,7 @@ Phase 4.5 of deepen-plan fires because the plan drives `terraform apply` on a ro
 
 **L3 — Firewall allow-list (Hetzner `var.admin_ips`).**
 
-- **Verification:** `apps/web-platform/infra/firewall.tf:1-90` defines `hcloud_firewall.web` with SSH rule scoped to `for_each = var.admin_ips`. The GitHub-runner egress IP range is NOT in `var.admin_ips` (admin_ips is operator's home/office IPs, see `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`).
+- **Verification:** `apps/web-platform/infra/firewall.tf:1-90` defines `hcloud_firewall.web` with SSH rule scoped to `for_each = var.admin_ips`. The GitHub-runner egress IP range is NOT in `var.admin_ips` (admin_ips is operator's home/office IPs, see `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md`).
 - **Status:** verified-by-design. The workflow's apply path NEVER hits the firewall because `-target=` excludes every SSH-provisioned resource.
 - **Mitigation if a future tf addition violates this:** the apply would fail with `ssh: handshake failed: connection reset by peer`. The 12h drift detector surfaces this; the operator can either add the new resource to the allow-list (this workflow) or move it to a sibling workflow with deploy-key wiring (mirror `apply-deploy-pipeline-fix.yml`).
 

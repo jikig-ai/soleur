@@ -21,7 +21,7 @@
 # concludes `neutral` for bot PRs with no analyzable changes; per GitHub Docs,
 # `neutral` satisfies a required status check. See:
 #   - scripts/audit-bot-codeql-coverage.sh — empirical audit
-#   - knowledge-base/engineering/ops/runbooks/codeql-bot-coverage.md — runbook
+#   - knowledge-base/engineering/operations/runbooks/codeql-bot-coverage.md — runbook
 #   - #3545 — verification + as-built codification
 #
 # bypass_actors for the "CI Required" ruleset are canonicalized in

@@ -46,7 +46,7 @@ fi
 # artifacts to bypass HIGH-RISK denials).
 file_kind="none"
 case "$file_path" in
-  *knowledge-base/security/skill-overrides/*.md)
+  *knowledge-base/engineering/security/skill-overrides/*.md)
     file_kind="override" ;;
   *.claude/skills/*SKILL.md|*plugins/soleur/skills/*SKILL.md|*.claude/agents/*.md|*plugins/soleur/agents/*.md)
     file_kind="skill" ;;
@@ -117,7 +117,7 @@ case "$verdict" in
       jq -cn --arg s "$slug" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: ("skill-security-scan: HIGH-RISK with valid override artifact for skill=" + $s + " (proceeding).")}}'
     else
       emit skill-security-scan applied "high-risk-no-override"
-      reason="BLOCKED: skill-security-scan HIGH-RISK on $file_path (slug=$slug) without matching override artifact. Required: knowledge-base/security/skill-overrides/YYYY-MM-DD-${slug}.md with frontmatter skill: ${slug}. See plugins/soleur/skills/skill-security-scan/references/override-mechanism.md"
+      reason="BLOCKED: skill-security-scan HIGH-RISK on $file_path (slug=$slug) without matching override artifact. Required: knowledge-base/engineering/security/skill-overrides/YYYY-MM-DD-${slug}.md with frontmatter skill: ${slug}. See plugins/soleur/skills/skill-security-scan/references/override-mechanism.md"
       jq -cn --arg r "$reason" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
     fi
     ;;

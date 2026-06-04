@@ -155,14 +155,9 @@ describe("KbLayout — resizable panels", () => {
     });
   });
 
-  it("file-tree sidebar is an <aside> with md:w-72 (not a resizable Panel)", async () => {
-    await renderLayout();
-    await waitFor(() => {
-      const aside = document.querySelector("aside");
-      expect(aside).not.toBeNull();
-      expect(aside?.className).toMatch(/\bmd:w-72\b/);
-    });
-  });
+  // ADR-047: the file tree no longer lives in a sibling <aside> here — it is
+  // portaled into the single nav rail's slot (covered in
+  // kb-sidebar-collapse.test.tsx). This layout owns only the doc + chat panels.
 
   it("chat Panel uses percentage sizes when visible", async () => {
     await renderLayout();

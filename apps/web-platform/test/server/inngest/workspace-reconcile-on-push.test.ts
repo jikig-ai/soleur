@@ -440,11 +440,15 @@ describe("reconcile — workspace dir not provisioned", () => {
 });
 
 describe("reconcile — sync failure", () => {
-  it("appends {sync_failed} + Sentry mirror op=sync", async () => {
+  it("propagates the REAL error_class from syncResult (sync_failed) + Sentry mirror op=sync", async () => {
     WORKSPACE_ROWS = [{ id: "ws-A" }];
     OWNERS.set("ws-A", "owner-A");
     EXISTING_DIRS.add(wsPath("ws-A"));
-    syncWorkspaceSpy.mockResolvedValue({ ok: false, error: new Error("non-fast-forward") });
+    syncWorkspaceSpy.mockResolvedValue({
+      ok: false,
+      error: new Error("auth failed"),
+      errorClass: "sync_failed",
+    });
 
     const handler = await importHandler();
     const result = await handler({ event: makeEvent(), step: makeStep(), logger });
@@ -461,6 +465,48 @@ describe("reconcile — sync failure", () => {
     expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ feature: "workspace-reconcile-push", op: "sync" }),
+    );
+  });
+
+  it("propagates error_class:non_fast_forward when syncResult classifies a diverged clone (AC-B2)", async () => {
+    WORKSPACE_ROWS = [{ id: "ws-A" }];
+    OWNERS.set("ws-A", "owner-A");
+    EXISTING_DIRS.add(wsPath("ws-A"));
+    syncWorkspaceSpy.mockResolvedValue({
+      ok: false,
+      error: new Error("Not possible to fast-forward, aborting."),
+      errorClass: "non_fast_forward",
+    });
+
+    const handler = await importHandler();
+    const result = await handler({ event: makeEvent(), step: makeStep(), logger });
+
+    expect(result).toEqual({ ok: false, reason: "no-workspace-synced" });
+    expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
+      expect.objectContaining({
+        ok: false,
+        error_class: "non_fast_forward",
+        workspace_id: "ws-A",
+      }),
+    );
+  });
+
+  it("records recovered:true ok-row when syncWorkspace self-healed a diverged clone (AC-B4)", async () => {
+    WORKSPACE_ROWS = [{ id: "ws-A" }];
+    OWNERS.set("ws-A", "owner-A");
+    EXISTING_DIRS.add(wsPath("ws-A"));
+    syncWorkspaceSpy.mockResolvedValue({ ok: true, recovered: true });
+
+    const handler = await importHandler();
+    const result = await handler({ event: makeEvent(), step: makeStep(), logger });
+
+    expect(result).toEqual({ ok: true, synced: 1 });
+    expect(APPENDS.get("owner-A")!.at(-1)).toEqual(
+      expect.objectContaining({
+        ok: true,
+        recovered: true,
+        workspace_id: "ws-A",
+      }),
     );
   });
 });

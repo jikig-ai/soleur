@@ -591,7 +591,7 @@ export async function cronContentVendorDriftHandler({
             owner: REPO_OWNER,
             repo: REPO_NAME,
             title: `chore(vendor-drift): re-vendor gosprinto/compliance-skills ${dateSuffix}`,
-            body: "Automated re-vendor on upstream drift. Resolution path: knowledge-base/engineering/ops/runbooks/vendor-pin-drift-resolution.md. NOTICE last-verified bumped at PR-creation time. Classifier exit and labels set in commit metadata.",
+            body: "Automated re-vendor on upstream drift. Resolution path: knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md. NOTICE last-verified bumped at PR-creation time. Classifier exit and labels set in commit metadata.",
             base: "main",
             head: branchName,
           },
@@ -689,7 +689,7 @@ export async function cronContentVendorDriftHandler({
           "",
           "## Resolution path",
           "",
-          "Follow `knowledge-base/engineering/ops/runbooks/vendor-pin-drift-resolution.md` §2-§5 (classifier-rc-specific branches).",
+          "Follow `knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md` §2-§5 (classifier-rc-specific branches).",
           "",
           "Ref #3517",
         ].join("\n");

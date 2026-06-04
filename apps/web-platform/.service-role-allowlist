@@ -263,3 +263,39 @@ apps/web-platform/server/inngest/functions/cron-supabase-disk-io.ts
 # fallback were deleted; it now reads the credential ONLY via the membership-
 # checked resolve_workspace_installation_id SECURITY DEFINER RPC through a
 # tenant client (getFreshTenantClient), so it no longer imports service-role.
+
+# ── #4913 — Generate-link tenant-mint regression fix ─────────────────
+#
+# RE-INTRODUCED (PR #4913). kb-route-helpers.ts was removed from this
+# allowlist in PR-C §2 when resolveUserKbRoot migrated to a tenant-scoped
+# read. That migration silently broke the "Generate link" share button for
+# ~19 days (PR #3854 regression): on any tenant-JWT mint failure
+# (jwt_mint | rotation | denied_jti) the helper 503'd, which the client
+# resets to idle — a brand-survival single-user incident. See the PIR at
+# knowledge-base/engineering/operations/post-mortems/generate-link-tenant-mint-regression-postmortem.md.
+#
+# PERMANENT (fallback only) — resolveUserKbRoot keeps the tenant-scoped read
+# as the PRIMARY path; the service-role client is used ONLY in the
+# RuntimeAuthError catch branch as an availability fallback. Ceiling that
+# keeps this safe for ALL three causes (incl. the deny-list `denied_jti`
+# case), independently verified by security-sentinel + user-impact-reviewer
+# at PR #4913 review time:
+#   (a) the fallback read is hard-scoped `.eq("id", userId)` where userId is
+#       the already-authenticated session user (server-derived, never
+#       request-controlled) — so even a revoked tenant token can read only
+#       its OWN workspace row, never another tenant's; and
+#   (b) the privileged share *write* (createShare) on this path was NEVER
+#       tenant-scoped (it uses service-role at app/api/kb/share/route.ts),
+#       so the deny-list never gated a privileged action here — `denied_jti`
+#       only ever blocked a self-read.
+# The sibling helper authenticateAndResolveKbPath (file PATCH/DELETE
+# *mutation* routes) ALSO uses the service-role client as an availability
+# fallback (#4914), but with a PER-CAUSE policy that diverges from
+# resolveUserKbRoot's all-causes fallback: it falls back ONLY for the
+# availability causes `jwt_mint` | `rotation` (same self-row `.eq("id", user.id)`
+# scoping ceiling), and FAILS CLOSED with a 403 on `denied_jti` (and any future
+# un-named cause). The divergence is load-bearing: unlike the share path (whose
+# createShare write was already service-role), this helper's downstream GitHub
+# mutation is gated on it resolving, so a `denied_jti` deny-list trip MUST block
+# the action — a fallback there would defeat the revocation.
+apps/web-platform/server/kb-route-helpers.ts

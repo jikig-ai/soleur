@@ -169,7 +169,7 @@ Vercel ships 5-day customer objection. Linear ships 15-day prior notice + 10-day
 
 **§8.3 Detection layer.** Detection is mediated by Sentry (Functional Software GmbH, DE region — Standard Contractual Clauses) and the structured-log + Better Stack pipeline disclosed in DPD §2.3(m). The pseudonymisation boundary (`userIdHash` HMAC-SHA256) is recorded in DPD §2.3(m) and operates at the emission boundary so that re-identification is not possible from the telemetry alone.
 
-**§8.4 Post-incident report ("PIR").** Jikigai operates a redaction-gated PIR template at `knowledge-base/engineering/ops/post-mortems/` for material incidents. Customer may request access to the PIR (redacted) for a Personal Data Breach affecting Customer Data; redactions are limited to other customers' data and Jikigai-internal security details.
+**§8.4 Post-incident report ("PIR").** Jikigai operates a redaction-gated PIR template at `knowledge-base/engineering/operations/post-mortems/` for material incidents. Customer may request access to the PIR (redacted) for a Personal Data Breach affecting Customer Data; redactions are limited to other customers' data and Jikigai-internal security details.
 
 ---
 
@@ -383,7 +383,7 @@ The 17 TOM categories below describe Jikigai's measures at the date of this temp
 13. **Sub-processor due diligence.** Vendor DPA Status table at `knowledge-base/legal/compliance-posture.md`; Schedule 2 of this DPA cross-references each sub-processor's DPA URL; counsel-review audits at `knowledge-base/legal/audits/` document substrate-change-of-vendor decisions.
 14. **Data minimisation.** DSAR Article 15 export allowlist at `apps/web-platform/server/dsar-export-allowlist.ts`; Article 17 erasure cascade in `apps/web-platform/server/account-delete.ts`; column-level DPD disclosure scoping (Article 30 register §(c) inventory).
 15. **Article 32 TOMs — organisational measures.** AUP enforcement at `docs/legal/acceptable-use-policy.md`; counsel-review gates at `knowledge-base/legal/audits/`; brand-survival-threshold gating in plans and CLAUDE.md hard rules.
-16. **Article 33 breach response.** 72-hour Customer-notification SLA under §8.1 above; Sentry + Better Stack detection mediated by `userIdHash` pseudonymisation; redaction-gated PIR template at `knowledge-base/engineering/ops/post-mortems/`.
+16. **Article 33 breach response.** 72-hour Customer-notification SLA under §8.1 above; Sentry + Better Stack detection mediated by `userIdHash` pseudonymisation; redaction-gated PIR template at `knowledge-base/engineering/operations/post-mortems/`.
 17. **Article 17 + Article 5(1)(e) deletion.** Article 17 erasure cascade in `apps/web-platform/server/account-delete.ts` runs the `anonymise_*` RPC chain BEFORE `auth.admin.deleteUser`; 12-month retention floor on subscription/tax records under French Code de commerce Art. L123-22 (DPD §2.3(g)); 10-business-day operator SLA for DSAR responses (§7.2 above).
 
 ---

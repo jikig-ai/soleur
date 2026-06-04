@@ -111,6 +111,20 @@ variable "cf_access_client_id" {
   sensitive   = true
 }
 
+# #4829 — CI-context private key for the infra_config_handler_bootstrap SSH
+# bridge. NULL in the operator-local apply path (which uses agent = true against
+# the operator's own ssh-agent); set to Doppler prd_terraform/DEPLOY_SSH_PRIVATE_KEY
+# (produced by ci-ssh-key.tf) and passed as TF_VAR_ci_ssh_private_key when the
+# bridge is applied from the GitHub Actions runner over the Cloudflare Tunnel.
+# No operator mint: the value is the terraform-generated tls_private_key.ci_ssh
+# (hr-tf-variable-no-operator-mint-default).
+variable "ci_ssh_private_key" {
+  description = "CI-context SSH private key for the infra-config handler bootstrap bridge (Doppler DEPLOY_SSH_PRIVATE_KEY). Null in operator-local applies (agent-based); set only in CI."
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
 variable "cf_access_client_secret" {
   description = "CF Access service-token client secret for the deploy webhook endpoint"
   type        = string

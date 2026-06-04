@@ -46,6 +46,7 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: hr-observability-layer-citation] → core
 - [id: hr-github-app-auth-not-pat] → core
 - [id: hr-monitor-not-run-in-background-for-polling] → core
+- [id: hr-verify-repo-capability-claim-before-assert] → core
 
 ## Workflow Gates
 
@@ -53,6 +54,7 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: wg-when-closing-a-phase-milestone-update] → rest
 - [id: wg-when-fixing-a-workflow-gates-detection] → rest
 - [id: wg-zero-agents-until-user-confirms] → core
+- [id: wg-verified-work-ships-without-asking] → rest
 - [id: wg-never-bump-version-files-in-feature] → rest
 - [id: wg-after-marking-a-pr-ready-run-gh-pr-merge] → rest
 - [id: wg-ship-push-before-merge] → rest
@@ -61,7 +63,7 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: wg-at-session-start-after-cleanup-merged] → core
 - [id: wg-when-a-test-runner-crashes-segfault-oom] → rest
 - [id: wg-when-tests-fail-and-are-confirmed-pre] → rest
-- [id: wg-when-an-audit-identifies-pre-existing] → core
+- [id: wg-when-an-audit-identifies-pre-existing] → rest
 - [id: wg-when-deferring-a-capability-create-a] → rest
 - [id: wg-defer-only-after-inline-triage] → rest
 - [id: wg-when-a-workflow-gap-causes-a-mistake-fix] → core
@@ -72,6 +74,7 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: wg-end-of-work-emit-resume-prompt] → rest
 - [id: wg-block-pr-ready-on-undeferred-operator-steps] → core
 - [id: wg-pm-class-followthrough-for-operator-dogfood] → rest
+- [id: wg-ui-feature-requires-pen-wireframe] → docs-only
 
 ## Code Quality
 

@@ -9,7 +9,7 @@
 
 **Deepened on:** 2026-04-22
 **Sections enhanced:** Research Reconciliation, Phase 1, Phase 2, Sharp Edges
-**Sources consulted:** `plugins/soleur/skills/admin-ip-refresh/SKILL.md`, `plugins/soleur/skills/admin-ip-refresh/references/admin-ip-refresh-procedure.md`, `plugins/soleur/skills/plan/SKILL.md:470-495`, `plugins/soleur/skills/deepen-plan/SKILL.md:299-309`, AGENTS.md hard rules, `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`.
+**Sources consulted:** `plugins/soleur/skills/admin-ip-refresh/SKILL.md`, `plugins/soleur/skills/admin-ip-refresh/references/admin-ip-refresh-procedure.md`, `plugins/soleur/skills/plan/SKILL.md:470-495`, `plugins/soleur/skills/deepen-plan/SKILL.md:299-309`, AGENTS.md hard rules, `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md`.
 
 ### Key Improvements
 
@@ -201,4 +201,4 @@ No cross-domain implications — this is a post-merge operator verification of i
 - Deepen-plan Phase 4.5: `plugins/soleur/skills/deepen-plan/SKILL.md:299-309`
 - AGENTS.md rules: `hr-ssh-diagnosis-verify-firewall`, `hr-menu-option-ack-not-prod-write-auth`, `hr-all-infrastructure-provisioning-servers`, `hr-never-label-any-step-as-manual-without`
 - Learnings: `knowledge-base/project/learnings/bug-fixes/2026-04-19-admin-ip-drift-misdiagnosed-as-fail2ban.md`, `knowledge-base/project/learnings/2026-03-19-ci-ssh-deploy-firewall-hidden-dependency.md`
-- Runbook: `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`
+- Runbook: `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md`

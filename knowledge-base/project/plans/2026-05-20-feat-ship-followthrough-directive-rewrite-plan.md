@@ -60,7 +60,7 @@ This plan rewrites Phase 7 Step 3.5 in `plugins/soleur/skills/ship/SKILL.md` to:
 1. Replace the `type:`-keyed YAML schema with the canonical `<!-- soleur:followthrough -->` HTML directive.
 2. Generate a stub verification script at `scripts/followthroughs/<feature-name>-<issue-num>.sh` mirroring `scripts/followthroughs/sentry-checkins-3859.sh` (exit 0 PASS / 1 FAIL / other TRANSIENT).
 3. Drop the `type: http-200 / dns-txt / dns-a / sql-query / api-curl / manual` branches — the sweeper has no special-case handlers; every verification becomes "write a script that exits 0 on success."
-4. Cross-reference the canonical runbook `knowledge-base/engineering/ops/runbooks/followthrough-convention.md` so future skill-readers find the contract.
+4. Cross-reference the canonical runbook `knowledge-base/engineering/operations/runbooks/followthrough-convention.md` so future skill-readers find the contract.
 5. Add a precondition gate: every `follow-through`-labeled issue body emitted by `/ship` MUST contain a parseable directive — verify before `gh issue create` and self-test with the same awk parser the sweeper uses.
 
 ## User-Brand Impact
@@ -78,7 +78,7 @@ This plan rewrites Phase 7 Step 3.5 in `plugins/soleur/skills/ship/SKILL.md` to:
 | Issue body claim | Codebase reality | Plan response |
 |---|---|---|
 | "the actual daily sweeper (`Scheduled: Follow-Through Sweeper` workflow → `scripts/sweep-followthroughs.sh`) expects the NEW convention" | Verified: `.github/workflows/scheduled-followthrough-sweeper.yml:33-44`; parser function `parse_directive` at `scripts/sweep-followthroughs.sh:36-48` (the `awk '...'` block spans lines 37-47), uses `awk '/<!-- *soleur:followthrough/, /-->/'` and only handles `script=`/`earliest=`/`secrets=`. No `type:` fork. | Adopt verbatim. |
-| "Cross-reference the runbook `knowledge-base/engineering/ops/runbooks/followthrough-convention.md`" | File present, 80 lines, canonical fields + security model documented. | Adopt; link from SKILL.md template + emit as `See` reference in stub script header. |
+| "Cross-reference the runbook `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`" | File present, 80 lines, canonical fields + security model documented. | Adopt; link from SKILL.md template + emit as `See` reference in stub script header. |
 | PR #4186 is the retrofit example | `gh pr view 4186 --json mergeable` → `MERGEABLE`, `state: OPEN`. PR introduces `scripts/followthroughs/manifest-drift-suppress-deletion-4178.sh` (not present on `main` yet; verified via `cat scripts/followthroughs/manifest-drift-suppress-deletion-4178.sh` → "No such file or directory"). | Treat as model-not-dependency. Plan must NOT prescribe importing #4186's script. Acceptance Criteria reference is INFORMATIONAL ("model"), not blocking. |
 | PR #4188 is the wg-* rule codifying the target convention | `gh pr view 4188 --json state` → `MERGED` (commit `bbc08993` on main). The wg-rule `wg-pm-class-followthrough-for-operator-dogfood` is on main's AGENTS.md + AGENTS.rest.md but NOT yet in this worktree's base (branch was cut earlier). Diff adds the rule to AGENTS.md pointer index + body to AGENTS.rest.md. | Treat as informational. The rule body already names the canonical directive shape — this plan IS the surface that implements the rule for /ship. After rebase, the rule will be visible in this branch's AGENTS.md automatically. |
 | "Drop the `type: http-200 / dns-txt / dns-a` branches — the sweeper has no special handlers" | Verified: `scripts/sweep-followthroughs.sh` only branches on script exit code (0/1/other). The OLD-convention `scheduled-follow-through.yml` referenced in current SKILL.md:1270 is the LEGACY daily monitor — superseded by `scheduled-followthrough-sweeper.yml`. | Confirm and remove the legacy `type:`-branch enumeration from SKILL.md. |
@@ -88,7 +88,7 @@ This plan rewrites Phase 7 Step 3.5 in `plugins/soleur/skills/ship/SKILL.md` to:
 
 ## Open Code-Review Overlap
 
-Query: `gh issue list --label code-review --state open --json number,title,body --limit 200 > /tmp/open-review-issues.json` ran; greps against the planned file list (`plugins/soleur/skills/ship/SKILL.md`, `scripts/followthroughs/` paths, `knowledge-base/engineering/ops/runbooks/followthrough-convention.md`).
+Query: `gh issue list --label code-review --state open --json number,title,body --limit 200 > /tmp/open-review-issues.json` ran; greps against the planned file list (`plugins/soleur/skills/ship/SKILL.md`, `scripts/followthroughs/` paths, `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`).
 
 **Result:** None for the planned edit surface. (Verified zero hits via `jq -r --arg path "plugins/soleur/skills/ship/SKILL.md" '.[] | select(.body // "" | contains($path)) | "#\(.number): \(.title)"' /tmp/open-review-issues.json` and equivalent for the two other paths.)
 
@@ -120,7 +120,7 @@ Query: `gh issue list --label code-review --state open --json number,title,body 
 0.2. Re-grep sweeper parser to confirm directive grammar is unchanged from the runbook:
 
 ```bash
-awk '/<!-- *soleur:followthrough/, /-->/ { print }' knowledge-base/engineering/ops/runbooks/followthrough-convention.md
+awk '/<!-- *soleur:followthrough/, /-->/ { print }' knowledge-base/engineering/operations/runbooks/followthrough-convention.md
 ```
 
 Expected: emits the canonical 4-line example block. Note the awk-self-match risk (sharp edge: 2026-05-15 awk-self-match-and-marker-conjunction): the `/start/,/end/` range matches the start line through the next line matching `/-->/`. Verify the parser handles single-line directives (rare) AND multi-line directives (canonical).
@@ -154,7 +154,7 @@ Expected: empty output. (Confirms the directive without `script=` is ignored —
 # Required secrets: declare via the directive `secrets=` clause AND add to
 # .github/workflows/scheduled-followthrough-sweeper.yml env: block.
 #
-# Convention: knowledge-base/engineering/ops/runbooks/followthrough-convention.md
+# Convention: knowledge-base/engineering/operations/runbooks/followthrough-convention.md
 
 set -uo pipefail
 
@@ -246,7 +246,7 @@ if grep -nE '^\s*type:\s*(manual|http-200|dns-txt|dns-a|sql-query|api-curl)\s*$'
 fi
 
 # Assertion 4: SKILL.md references the canonical runbook.
-grep -qF 'knowledge-base/engineering/ops/runbooks/followthrough-convention.md' "$REPO_ROOT/plugins/soleur/skills/ship/SKILL.md" \
+grep -qF 'knowledge-base/engineering/operations/runbooks/followthrough-convention.md' "$REPO_ROOT/plugins/soleur/skills/ship/SKILL.md" \
   || { echo "FAIL: SKILL.md Step 3.5 does not reference the canonical runbook" >&2; exit 1; }
 
 echo "PASS: ship-followthrough-directive contract"
@@ -271,7 +271,7 @@ echo "PASS: ship-followthrough-directive contract"
   -->
   ```
 
-  Canonical convention: `knowledge-base/engineering/ops/runbooks/followthrough-convention.md`.
+  Canonical convention: `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`.
   The directive is parsed daily by `.github/workflows/scheduled-followthrough-sweeper.yml`
   via `scripts/sweep-followthroughs.sh` — exit 0 PASS / exit 1 FAIL / other TRANSIENT.
 
@@ -401,7 +401,7 @@ git add plugins/soleur/skills/ship/SKILL.md \
 
 - [ ] `plugins/soleur/skills/ship/SKILL.md` Phase 7 Step 3.5 emits `<!-- soleur:followthrough -->` directive (verified via grep: `grep -F 'soleur:followthrough' plugins/soleur/skills/ship/SKILL.md` returns ≥2 lines — opening + closing).
 - [ ] SKILL.md Phase 7 Step 3.5 contains NO `type: manual` / `type: http-200` / `type: dns-txt` / `type: dns-a` / `type: sql-query` / `type: api-curl` as a YAML key-value (verified via the test assertion 3 regex `^\s*type:\s*(manual|http-200|dns-txt|dns-a|sql-query|api-curl)\s*$`).
-- [ ] SKILL.md Step 3.5 references the canonical runbook path verbatim: `knowledge-base/engineering/ops/runbooks/followthrough-convention.md` (verified via `grep -F`).
+- [ ] SKILL.md Step 3.5 references the canonical runbook path verbatim: `knowledge-base/engineering/operations/runbooks/followthrough-convention.md` (verified via `grep -F`).
 - [ ] `plugins/soleur/skills/ship/references/followthrough-stub-template.sh` exists, is executable, contains the sentinel line `# soleur:followthrough-stub v1`, and exits 2 (TRANSIENT) when run uncustomized (verified via `bash plugins/soleur/skills/ship/references/followthrough-stub-template.sh; test $? -eq 2`).
 - [ ] `plugins/soleur/test/ship-followthrough-directive.test.sh` is present and passes (all 4 assertions: directive-parseability of golden body, script-path under `scripts/followthroughs/`, ISO-8601 earliest parses, sentinel line in template, SKILL.md has no OLD-convention `type:` keys, SKILL.md references runbook).
 - [ ] Precondition-gate prose in SKILL.md Step 3.5.E names the awk parser at `scripts/sweep-followthroughs.sh:36-48` and the three assertions (script-prefix, date-parseable, script exists+executable).
@@ -499,7 +499,7 @@ No `ssh ` in the discoverability command.
 
 - Sweeper script: `scripts/sweep-followthroughs.sh` (especially lines 25 SCRIPTS_ROOT, 36-48 parser, 99-110 env allowlist)
 - Sweeper workflow: `.github/workflows/scheduled-followthrough-sweeper.yml` (especially lines 39-41 concurrency, 55-65 env block)
-- Canonical runbook: `knowledge-base/engineering/ops/runbooks/followthrough-convention.md`
+- Canonical runbook: `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`
 - Reference verification script: `scripts/followthroughs/sentry-checkins-3859.sh` (canonical exit-semantics example)
 - Failure-mode learning: `knowledge-base/project/learnings/2026-05-20-test-stubs-env-and-csp-gates-miss-runtime-bugs.md`
 - AGENTS.md rules: `hr-no-dashboard-eyeball-pull-data-yourself`, `wg-use-closes-n-in-pr-body-not-title-to`, `wg-pm-class-followthrough-for-operator-dogfood` (new on main via #4188)
@@ -521,7 +521,7 @@ No `ssh ` in the discoverability command.
 
 - Issue: #4190
 - Related PRs (informational, not blocking): #4186 (retrofit example), #4188 (wg-* rule)
-- Canonical runbook: `knowledge-base/engineering/ops/runbooks/followthrough-convention.md`
+- Canonical runbook: `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`
 - Sweeper script: `scripts/sweep-followthroughs.sh`
 - Sweeper workflow: `.github/workflows/scheduled-followthrough-sweeper.yml`
 - Reference verification script: `scripts/followthroughs/sentry-checkins-3859.sh`

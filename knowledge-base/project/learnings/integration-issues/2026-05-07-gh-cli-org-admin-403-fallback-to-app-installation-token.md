@@ -87,7 +87,7 @@ This pattern generalizes to any org-level GitHub operation Soleur's App is permi
 For PRs that need to create or modify org-owned GitHub resources:
 
 1. **Plan-time**: in the plan's "Phase 1 — Operator pre-step" section, prefer `curl` against `/orgs/{org}/...` with an installation token over `gh repo create`. Reference this learning in the operator runbook.
-2. **Runbook entry**: add a `knowledge-base/engineering/ops/runbooks/github-app-org-operations.md` (follow-up issue) that documents the JWT-mint-and-exchange flow as a reusable runbook step.
+2. **Runbook entry**: add a `knowledge-base/engineering/operations/runbooks/github-app-org-operations.md` (follow-up issue) that documents the JWT-mint-and-exchange flow as a reusable runbook step.
 3. **Don't reach for manual handoff** when the symptom is `gh ... 403: admin access required` and the org has a Soleur App installation. The first Bash call after that error should be `doppler secrets get GITHUB_APP_PRIVATE_KEY -p soleur -c prd --plain` (or equivalent).
 
 ## Session errors

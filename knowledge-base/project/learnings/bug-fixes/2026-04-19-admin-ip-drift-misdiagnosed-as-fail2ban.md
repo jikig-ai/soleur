@@ -4,7 +4,7 @@ date: 2026-04-19
 category: bug-fixes
 tags: [ssh, firewall, hetzner, fail2ban, misdiagnosis, layer-ordering, admin-ip, workflow-gate]
 module: ops-ssh-firewall
-related: [knowledge-base/project/learnings/2026-03-19-ci-ssh-deploy-firewall-hidden-dependency.md, knowledge-base/engineering/ops/runbooks/admin-ip-drift.md, knowledge-base/engineering/ops/runbooks/ssh-fail2ban-unban.md, AGENTS.md#hr-ssh-diagnosis-verify-firewall, PR, issue, issue]
+related: [knowledge-base/project/learnings/2026-03-19-ci-ssh-deploy-firewall-hidden-dependency.md, knowledge-base/engineering/operations/runbooks/admin-ip-drift.md, knowledge-base/engineering/operations/runbooks/ssh-fail2ban-unban.md, AGENTS.md#hr-ssh-diagnosis-verify-firewall, PR, issue, issue]
 ---
 
 # Learning: admin-IP drift misdiagnosed as fail2ban lockout (layer-ordering failure in hypothesis generation)
@@ -57,7 +57,7 @@ incident produced a new plan that made the same inversion.
 
 Three-layer defense:
 
-1. **Operator runbook** (`knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`)
+1. **Operator runbook** (`knowledge-base/engineering/operations/runbooks/admin-ip-drift.md`)
    -- the diagnostic decision tree enforces L3 checks (firewall, egress
    IP diff, routing) before L7 checks (sshd, fail2ban).
 

@@ -133,6 +133,11 @@ export type WSErrorCode =
   // fail-closed path. Client renders the configure-banner linking to
   // /dashboard/settings/byok rather than the `key_invalid` key-prompt.
   | "byok_key_missing"
+  // feat-operator-cc-oauth FR5 — subscription credit/rate-limit exhaustion
+  // on an oauth_token run. Distinct from `key_invalid` (re-pasting the token
+  // is the wrong action) and `rate_limited` (per-account API throttle).
+  // Client renders non-retryable copy; the credit window must reset.
+  | "subscription_limit"
   | "session_expired"
   | "session_resumed"
   | "rate_limited"

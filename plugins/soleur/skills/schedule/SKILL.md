@@ -35,6 +35,8 @@ Examples for `harness schedule`:
 
 If the agent doesn't need access to your repo, prefer harness `schedule`.
 
+**Both `schedule` skills generate GitHub-Actions cron only.** For a **one-time, autonomous, server-side action** that needs fire-time prd secrets or an installation-token repo write (no operator, no GH-Actions runner), use the Inngest path instead: a self-armed **oneshot** (ADR-046, bespoke logic) or the generic **reminder primitive** (`POST /api/internal/schedule-reminder`, no deploy for a comment / registered check). See [`inngest-oneshot-and-reminder-patterns.md`](../../../../knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md).
+
 ## Commands
 
 ### `create`

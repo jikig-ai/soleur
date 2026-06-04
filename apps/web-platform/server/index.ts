@@ -156,6 +156,41 @@ app.prepare().then(() => {
         });
       }
     })();
+
+    // Self-arm the one-time watchdog-recovery verifier (PR #4881 follow-up).
+    // Fires at 2026-06-04 09:45 UTC (15 min after the daily 09:30 heartbeat) to
+    // confirm the legal-audit/strategy-review false positives do NOT re-fire and
+    // report community-monitor's genuine recovery to #2714. Same deploy-and-forget
+    // contract as the 4650 arm above: stable event `id` dedups across re-deploys,
+    // future-`ts` is the supported delivery primitive, and the oneshot has NO
+    // Sentry monitor so this catch is the only signal for a lost arm.
+    void (async () => {
+      try {
+        const { inngest } = await import("@/server/inngest/client");
+        await sendInngestWithRetry(
+          () =>
+            inngest.send({
+              name: "oneshot/heartbeat-recovery-verify.fire",
+              id: "oneshot-heartbeat-recovery-verify-2026-06-04-v1",
+              ts: new Date("2026-06-04T09:45:00Z").getTime(),
+              data: {
+                expected_date: "2026-06-04",
+                actor: "platform" as const,
+              },
+            }),
+          {
+            feature: "oneshot-heartbeat-recovery-verify-arm",
+            eventId: "oneshot-heartbeat-recovery-verify-2026-06-04-v1",
+          },
+        );
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "oneshot-heartbeat-recovery-verify-arm",
+          op: "self-arm-send",
+          message: "failed to arm oneshot-heartbeat-recovery-verify at boot",
+        });
+      }
+    })();
   }
 
   server.listen(port, () => {

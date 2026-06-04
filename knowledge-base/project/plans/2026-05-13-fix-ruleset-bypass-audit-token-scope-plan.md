@@ -38,7 +38,7 @@ Since 2026-05-11 the daily workflow
 `.github/workflows/scheduled-ruleset-bypass-audit.yml` has fired
 `failure_mode=live_missing_bypass_actors` on every run. Issue #3569
 has accumulated 3 daily comments (last 2026-05-13). The runbook
-`knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md`
+`knowledge-base/engineering/operations/runbooks/ruleset-bypass-drift.md`
 line 105 currently maps this mode to **"ruleset deleted entirely"**
 and prescribes a destructive restore via
 `scripts/create-ci-required-ruleset.sh`. Running that restore would
@@ -195,7 +195,7 @@ forward from #2719/#3542 R15).
   `t_token_scope_insufficient` asserts the new failure mode on a
   live-shape fixture missing `.bypass_actors`.
 - [ ] **AC7** (runbook updated): line 105 of
-  `knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md`
+  `knowledge-base/engineering/operations/runbooks/ruleset-bypass-drift.md`
   no longer claims "the ruleset is gone". The
   `live_missing_bypass_actors` row enumerates BOTH interpretations
   with the diagnostic probe between them:
@@ -505,7 +505,7 @@ edit required, but add a comment confirming `ghs_` coverage.
 ### Phase 4 — Runbook fix (30 min)
 
 **Phase 4.1** — Edit
-`knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md`:
+`knowledge-base/engineering/operations/runbooks/ruleset-bypass-drift.md`:
 
 Replace the `live_missing_bypass_actors` row at line 105 with:
 
@@ -574,7 +574,7 @@ passed.` (script line 292) — the green-path emit.
   HTTP 200 check; gated by ruleset.id + enforcement sentinel).
 - `tests/scripts/test-audit-ruleset-bypass.sh`
   (add `t_token_scope_insufficient` + helper `_run_with_scope_probe`).
-- `knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md`
+- `knowledge-base/engineering/operations/runbooks/ruleset-bypass-drift.md`
   (rewrite line 105 row; add `token_scope_insufficient` row in
   failure-modes table; add new triage subsection).
 
@@ -698,7 +698,7 @@ for path in \
   ".github/workflows/scheduled-ruleset-bypass-audit.yml" \
   "scripts/audit-ruleset-bypass.sh" \
   "tests/scripts/test-audit-ruleset-bypass.sh" \
-  "knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md"; do
+  "knowledge-base/engineering/operations/runbooks/ruleset-bypass-drift.md"; do
   jq -r --arg path "$path" '.[] | select(.body // "" | contains($path))
     | "#\(.number): \(.title)"' /tmp/open-review-issues.json
 done
@@ -767,7 +767,7 @@ auth-token swap.
   hardened).
 - `tests/scripts/test-audit-ruleset-bypass.sh` (test framework
   used).
-- `knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md`
+- `knowledge-base/engineering/operations/runbooks/ruleset-bypass-drift.md`
   (the runbook being corrected).
 - `knowledge-base/project/learnings/best-practices/2026-05-05-workflow-jwt-mint-silent-failure-traps.md`
   (trap dossier for the JWT mint pattern).

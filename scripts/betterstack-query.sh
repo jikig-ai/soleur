@@ -13,7 +13,7 @@
 #     {"client_type":"clickhouse","team_ids":[<TEAM_ID>]}
 #   → 201 returns {host, port, username, password, data_region}. Stored in
 #   Doppler soleur/prd_terraform as BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}.
-#   To re-mint: see knowledge-base/engineering/ops/runbooks/betterstack-log-query.md.
+#   To re-mint: see knowledge-base/engineering/operations/runbooks/betterstack-log-query.md.
 #
 # Table identifier for the remote() function is `t<TEAM_ID>_<table_name>_logs`
 # (team id, NOT source id — the docs' `t123456_...` placeholder is the team).

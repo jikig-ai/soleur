@@ -49,7 +49,7 @@ assuming `<org-slug>.sentry.io/api/0/organizations/<slug>/` returning 401 means
 "the slug names an unowned third-party org" rather than "the token's membership
 scope does not include this slug" — was the root inference failure that drove
 the 2026-03-28 → 2026-05-16 ingest routing confusion documented in PIR
-`knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`
+`knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`
 (see Phase 9 Gate-3b correction; both `jikigai` and `jikigai-eu` orgs were
 operator-owned EU-database orgs throughout, per Sentry support replies
 2026-05-19, and the duplicate `jikigai` org was canceled vendor-side on
@@ -232,6 +232,22 @@ asserts both BYOK rules exist in Sentry by name after every apply, fail-closed.
 It is deliberately existence-by-name (not filter-shape): the filters are
 TF-owned and re-asserted on each apply, so a post-apply existence check is the
 minimal sufficient signal for the apply-time mis-wire failure mode.
+
+**Amendment (2026-06-03, #4849):** a third apply-created issue-alert rule,
+`sentry_issue_alert.chat_message_save_failure`, joins the auto-apply `-target`
+set. It is the chat write-absence liveness alert — pages on any
+interactive-message INSERT failure in `dispatchSoleurGo` via `op IS_IN`
+{`tenant-mint.persistUserMessage`, `persistUserMessage.workspaceRead`,
+`persist-user-message`} + `feature == cc-dispatcher` (`filter_match = "all"`,
+`action_match = "any"` like `byok_art_33_breach`). Same apply-created posture
+(`lifecycle.ignore_changes = [environment]` only). Its name is added to
+`assert-byok-rules-exist.sh` `EXPECTED_RULES` (the script is now generically
+"issue-alert detector liveness"), and a cross-artifact contract test
+(`test/sentry-chat-alert-op-contract.test.ts`) pins the op/feature filter values
+against the emit site in `cc-dispatcher.ts`. No guard/jq/scope-guard edit: it is
+the already-covered `sentry_issue_alert` type. Apply-created issue-alert count is
+now 3 (`byok_art_33_breach`, `byok_cap_exceeded`, `chat_message_save_failure`);
+the 4 `auth-*` rules remain import-only.
 
 ## Consequences
 

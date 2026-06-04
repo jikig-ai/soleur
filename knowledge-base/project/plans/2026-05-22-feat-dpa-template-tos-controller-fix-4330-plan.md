@@ -631,7 +631,7 @@ required because the change is Tier 2 clarifying, not Tier 1 material
 2. **§8 Personal Data Breach Notification** — 72-hour Art. 33
    notification timing; Resend-based notification channel; PIR
    template precedent at
-   `knowledge-base/engineering/ops/post-mortems/`.
+   `knowledge-base/engineering/operations/post-mortems/`.
 3. **§9 Security TOMs** — bulleted list cribbed from DPD §2.3(u)
    load-bearing measures + cross-reference to `compliance-posture.md`
    for the always-current list.

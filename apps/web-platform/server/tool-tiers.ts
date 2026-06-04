@@ -57,6 +57,14 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
   // effects, no founder-confirmation surface needed.
   "mcp__soleur_platform__auth_revocation_status": "auto-approve",
 
+  // Workspace autonomous-mode toggle (Issue B part 2): read is auto-approve
+  // (read-only); SET is gated — flipping an approval-bypass on a code-executing
+  // surface MUST require a review-gate even for the agent (owner check is in
+  // the RPC; the gate is the second line). Explicit entries (set would also be
+  // gated by the default fallback, but the pairing documents intent).
+  "mcp__soleur_platform__workspace_get_autonomous": "auto-approve",
+  "mcp__soleur_platform__workspace_set_autonomous": "gated",
+
   // NOTE (#2909 review): `mcp__soleur_platform__conversations_lookup` is
   // registered at `agent-runner.ts:1372` but DELIBERATELY omitted from this
   // map — the legacy `startAgentSession` path relies on `getToolTier()`'s

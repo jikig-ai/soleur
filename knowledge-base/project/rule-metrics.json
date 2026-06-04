@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-05-24T01:52:25Z",
+  "generated_at": "2026-05-31T01:59:58Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -289,6 +289,19 @@
       "rule_text_prefix": " → core"
     },
     {
+      "id": "hr-bulk-delete-per-item-live-infra-role-check",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
+    },
+    {
       "id": "hr-dev-prd-distinct-supabase-projects",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -394,6 +407,19 @@
     },
     {
       "id": "hr-menu-option-ack-not-prod-write-auth",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
+    },
+    {
+      "id": "hr-monitor-not-run-in-background-for-polling",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
@@ -871,7 +897,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "wg-after-merging-a-pr-that-adds-or-modifies",
@@ -924,6 +950,19 @@
       "last_hit": null,
       "first_seen": null,
       "rule_text_prefix": " → core"
+    },
+    {
+      "id": "wg-defer-only-after-inline-triage",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "wg-end-of-work-emit-resume-prompt",
@@ -1092,7 +1131,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "wg-when-fixing-a-workflow-gates-detection",
@@ -1135,8 +1174,8 @@
     }
   ],
   "summary": {
-    "total_rules_tagged": 87,
-    "rules_unused_over_8w": 87,
+    "total_rules_tagged": 90,
+    "rules_unused_over_8w": 90,
     "rules_bypassed_over_baseline": 0,
     "orphan_rule_ids": [],
     "drops_jq_fail_count": 0,

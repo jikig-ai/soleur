@@ -1,0 +1,213 @@
+# CF Tunnel SSH bridge — setup steps for a GitHub runner to SSH into the prod
+# Hetzner host whose firewall :22 ingress is restricted to var.admin_ips (the
+# runner's egress IP is NOT in that allowlist and cannot be — 5000+ rotating
+# IPs). Bridges SSH through the existing Cloudflare Tunnel (#4177/#4181/#4830):
+# install cloudflared, open a `cloudflared access tcp` localhost forward, pull
+# the CF Access ci_ssh service-token + decode the CI SSH key, and add an
+# `iptables -t nat OUTPUT REDIRECT` rule rewriting SERVER_IP:22 → 127.0.0.1:2222.
+# The redirect is transparent to terraform's Go SSH client (which ignores
+# ~/.ssh/config / ProxyCommand — learning
+# 2026-05-20-terraform-go-ssh-client-ignores-ssh-config-multi-agent-catch.md).
+#
+# Extracted verbatim from apply-deploy-pipeline-fix.yml (#4830 inline bridge,
+# lines 182-309) so both that workflow and apply-web-platform-infra.yml share
+# one mechanism (#4844). SETUP ONLY — see the teardown contract below.
+#
+# ── SHA-RECOMPUTE DISCIPLINE ───────────────────────────────────────────────
+# `cloudflared-sha256` MUST be computed against the REAL released binary at the
+# pinned `cloudflared-version` (curl the release asset, `sha256sum` it). NEVER
+# paste a checksum from documentation or AI output (2026-03-21 server-
+# provisioning learning, Session Error #4). Re-verify at /work time when bumping
+# the version.
+#
+# ── CALLER-SIDE TEARDOWN CONTRACT (load-bearing) ───────────────────────────
+# This composite action CANNOT register a post-job hook (no JS `post:` step), so
+# it does NOT tear itself down. Every caller MUST add an `if: always()` teardown
+# step AFTER its terraform apply that deletes the NAT rule and kills cloudflared,
+# guarded so a pre-bridge failure does not error the teardown:
+#
+#   - name: Tear down cloudflared SSH bridge
+#     if: always()
+#     shell: bash
+#     run: |
+#       set +e
+#       if [[ -n "${SERVER_IP:-}" ]]; then
+#         sudo iptables -t nat -D OUTPUT -d "$SERVER_IP" -p tcp --dport 22 \
+#           -j REDIRECT --to-ports 2222 2>/dev/null || true
+#       fi
+#       if [[ -n "${CLOUDFLARED_PID:-}" ]]; then
+#         kill "$CLOUDFLARED_PID" 2>/dev/null || true
+#       fi
+#       [[ -f /tmp/cloudflared.log ]] && tail -n 200 /tmp/cloudflared.log || true
+#
+# The `-n` guards are mandatory: SERVER_IP / CLOUDFLARED_PID are unset if the
+# bridge failed before exporting them (SpecFlow 1a). A left-over OUTPUT NAT rule
+# or orphaned cloudflared would corrupt a later job on a persistent runner (moot
+# on GH-hosted ephemeral runners, but the discipline is required).
+#
+# ── PREREQUISITES ──────────────────────────────────────────────────────────
+#  - `terraform init` must have run in `infra-dir` BEFORE this action (the bridge
+#    reads `terraform output -raw server_ip` from the R2 state).
+#  - The CF Access ci_ssh service token + DEPLOY_SSH_PRIVATE_KEY must be present
+#    in Doppler prd_terraform (apply-web-platform-infra.yml auto-syncs both
+#    post-apply). The pull/decode steps fail loud if either is missing/empty.
+#
+# ── OUTPUTS (to $GITHUB_ENV, job-scoped, visible to the caller's later steps) ─
+#  SERVER_IP, CLOUDFLARED_PID, TF_VAR_ci_ssh_private_key,
+#  TUNNEL_SERVICE_TOKEN_ID, TUNNEL_SERVICE_TOKEN_SECRET.
+#
+# Composite actions cannot read the `secrets` context — every secret is an
+# explicit input referenced ONLY inside `env:` mappings (never a `run:` body or
+# step `name:`), because action inputs are NOT auto-masked the way repository
+# secrets are (AC8). The key/token values are add-masked per-line at decode time.
+
+name: 'CF Tunnel SSH bridge'
+description: 'Bring up a cloudflared SSH bridge + iptables NAT redirect so a GH runner can SSH to the prod host over the Cloudflare Tunnel. Setup only; caller must add an if:always() teardown.'
+
+inputs:
+  doppler-token:
+    description: 'Doppler service token (prd_terraform, read-only). Caller forwards the DOPPLER_TOKEN repo secret.'
+    required: true
+  infra-dir:
+    description: 'Path to the terraform root (reads `terraform output -raw server_ip`). e.g. apps/web-platform/infra.'
+    required: true
+  cloudflared-version:
+    description: 'cloudflared release version to install (e.g. 2026.5.0).'
+    required: true
+  cloudflared-sha256:
+    description: 'SHA-256 of the cloudflared-linux-amd64 binary at cloudflared-version (recompute against the real binary — see header).'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install cloudflared (SHA-pinned)
+      shell: bash
+      env:
+        CLOUDFLARED_VERSION: ${{ inputs.cloudflared-version }}
+        CLOUDFLARED_SHA256: ${{ inputs.cloudflared-sha256 }}
+      run: |
+        set -euo pipefail
+        curl -fsSL -o /tmp/cloudflared \
+          "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64"
+        echo "${CLOUDFLARED_SHA256}  /tmp/cloudflared" | sha256sum -c -
+        sudo install -m 0755 /tmp/cloudflared /usr/local/bin/cloudflared
+        rm /tmp/cloudflared
+        cloudflared --version
+
+    - name: Pull CF Access service-token credentials from Doppler
+      shell: bash
+      env:
+        DOPPLER_TOKEN: ${{ inputs.doppler-token }}
+        DOPPLER_PROJECT: soleur
+        DOPPLER_CONFIG: prd_terraform
+      # `doppler secrets get … --plain` returns rc=1 ONLY when the key is
+      # absent; for keys present with an empty value it returns rc=0 + empty
+      # stdout. The `-z` guard catches both. Prereq: apply-web-platform-infra.yml
+      # must have succeeded once to create the CF Access ci_ssh service token AND
+      # populate Doppler (it auto-syncs both post-apply).
+      run: |
+        set -euo pipefail
+        TOKEN_ID=$(doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain 2>/dev/null || true)
+        TOKEN_SECRET=$(doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain 2>/dev/null || true)
+        if [[ -z "$TOKEN_ID" || -z "$TOKEN_SECRET" ]]; then
+          echo "::error::CI_SSH_ACCESS_TOKEN_ID/_SECRET missing or empty in Doppler prd_terraform. Apply apply-web-platform-infra.yml first (it auto-syncs both secrets post-apply)."
+          exit 1
+        fi
+        printf '::add-mask::%s\n' "$TOKEN_ID"
+        printf '::add-mask::%s\n' "$TOKEN_SECRET"
+        printf 'TUNNEL_SERVICE_TOKEN_ID=%s\n' "$TOKEN_ID" >> "$GITHUB_ENV"
+        printf 'TUNNEL_SERVICE_TOKEN_SECRET=%s\n' "$TOKEN_SECRET" >> "$GITHUB_ENV"
+
+    - name: Decode CI SSH private key into TF_VAR_ci_ssh_private_key
+      shell: bash
+      env:
+        DOPPLER_TOKEN: ${{ inputs.doppler-token }}
+        DOPPLER_PROJECT: soleur
+        DOPPLER_CONFIG: prd_terraform
+      # The bridge connection authenticates with var.ci_ssh_private_key
+      # (agent = false in CI). The secret name (DEPLOY_SSH_PRIVATE_KEY) does NOT
+      # map to the var name (ci_ssh_private_key) via --name-transformer tf-var,
+      # so it is set here explicitly. The key is multiline (OpenSSH format) →
+      # GITHUB_ENV heredoc-delimiter form; each line add-masked. NEVER on the command line
+      # (AC6). terraform marks the var sensitive = true so it is never echoed in
+      # plan/apply output.
+      run: |
+        set -euo pipefail
+        KEY=$(doppler secrets get DEPLOY_SSH_PRIVATE_KEY --plain)
+        if [[ -z "$KEY" ]]; then
+          echo "::error::DEPLOY_SSH_PRIVATE_KEY missing or empty in Doppler prd_terraform (produced by ci-ssh-key.tf on the operator-local full apply)."
+          exit 1
+        fi
+        while IFS= read -r line; do
+          [[ -n "$line" ]] && printf '::add-mask::%s\n' "$line"
+        done <<< "$KEY"
+        {
+          echo "TF_VAR_ci_ssh_private_key<<__SOLEUR_CI_SSH_KEY_EOF__"
+          printf '%s\n' "$KEY"
+          echo "__SOLEUR_CI_SSH_KEY_EOF__"
+        } >> "$GITHUB_ENV"
+
+    - name: Start cloudflared SSH bridge + iptables NAT redirect
+      shell: bash
+      working-directory: ${{ inputs.infra-dir }}
+      env:
+        DOPPLER_TOKEN: ${{ inputs.doppler-token }}
+        DOPPLER_PROJECT: soleur
+        DOPPLER_CONFIG: prd_terraform
+      run: |
+        set -euo pipefail
+        # APP_DOMAIN_BASE is NOT in the prd_terraform config — fall back to the
+        # canonical default exactly like the verify steps in the caller (do NOT
+        # use the bare form: it exits non-zero under `set -e` and kills the step
+        # before cloudflared starts; #4829 post-merge hotfix #4840).
+        APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+        SERVER_IP=$(terraform output -raw server_ip)
+        if [[ -z "$SERVER_IP" ]]; then
+          echo "::error::terraform output server_ip is empty — state not populated; cannot scope the NAT redirect to the prod host."
+          exit 1
+        fi
+        printf '::add-mask::%s\n' "$SERVER_IP"
+        printf 'SERVER_IP=%s\n' "$SERVER_IP" >> "$GITHUB_ENV"
+
+        # Start cloudflared in the background; it forwards 127.0.0.1:2222 over
+        # the tunnel to the host's localhost:22 (sshd) via the ssh.${app_domain_base}
+        # ingress rule. Service-token auth at the CF Access edge uses
+        # TUNNEL_SERVICE_TOKEN_ID/_SECRET env. `--loglevel warn` bounds steady-state
+        # log volume; flap/handshake failures still surface (teardown step dumps the log).
+        cloudflared access tcp \
+          --loglevel warn \
+          --hostname "ssh.${APP_DOMAIN_BASE}" \
+          --url 127.0.0.1:2222 \
+          > /tmp/cloudflared.log 2>&1 &
+        CF_PID=$!
+        printf 'CLOUDFLARED_PID=%s\n' "$CF_PID" >> "$GITHUB_ENV"
+        disown "$CF_PID"
+
+        # Wait up to 15s for the local TCP listener to come up.
+        for _ in $(seq 1 15); do
+          if nc -z 127.0.0.1 2222 2>/dev/null; then
+            break
+          fi
+          sleep 1
+        done
+        if ! nc -z 127.0.0.1 2222 2>/dev/null; then
+          echo "::error::cloudflared TCP forward did not open on 127.0.0.1:2222 within 15s (CF Access ci_ssh token may be expired/missing)."
+          cat /tmp/cloudflared.log >&2 || true
+          exit 1
+        fi
+
+        # iptables NAT redirect: terraform's provisioner "file"/"remote-exec"
+        # blocks use the Go SSH client (golang.org/x/crypto/ssh) directly, which
+        # does NOT consult ~/.ssh/config or ProxyCommand (only the system ssh
+        # binary does — learning 2026-05-20-terraform-go-ssh-client-ignores-ssh-config-multi-agent-catch.md).
+        # Kernel-redirect outbound SERVER_IP:22 → 127.0.0.1:2222 on this runner
+        # (transparent to the Go client), with no server.tf connection.host change.
+        # Scoped to -d "$SERVER_IP" so ONLY traffic to the prod host is hijacked,
+        # never all outbound :22 on the runner. OUTPUT chain → only this runner's egress.
+        if ! sudo iptables -t nat -A OUTPUT \
+          -d "$SERVER_IP" -p tcp --dport 22 \
+          -j REDIRECT --to-ports 2222; then
+          echo "::error::iptables NAT redirect SERVER_IP:22 → 127.0.0.1:2222 failed — terraform's Go SSH client cannot reach the host via the tunnel."
+          exit 1
+        fi

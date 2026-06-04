@@ -15,7 +15,7 @@ PR #3939 enforced cross-artifact vocabulary alignment via AC13b:
 
 ```bash
 git grep -nlE 'Object Lock Governance|--bypass-governance-retention|Bypass Governance Retention' \
-  knowledge-base/engineering/ops/runbooks/ docs/ apps/ plugins/ \
+  knowledge-base/engineering/operations/runbooks/ docs/ apps/ plugins/ \
   | grep -v knowledge-base/project/{learnings,plans,specs}/
 ```
 

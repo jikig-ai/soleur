@@ -15,7 +15,7 @@
 // historical check-in continuity from the GHA workflow.
 
 import { inngest } from "@/server/inngest/client";
-import { reportSilentFallback } from "@/server/observability";
+import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
 import {
   REPO_OWNER,
   REPO_NAME,
@@ -39,24 +39,35 @@ export interface TaskEntry {
   maxGapDays: number;
 }
 
-// INVENTORY SCOPE — output-producing scheduled tasks ONLY.
+// INVENTORY SCOPE — UNCONDITIONALLY output-producing scheduled tasks ONLY.
 //
 // The heartbeat's only valid signal is "did this task produce its expected
 // `scheduled-<task>` issue artifact within its cadence window?" — so a task
-// belongs here ONLY if its cron function actually creates a `scheduled-<task>`
-// labeled issue. Three tasks were removed because they are NON-PRODUCERS and
-// would false-fire forever via the `daysSince === null → silent: true` branch:
+// belongs here ONLY if its cron function creates a `scheduled-<task>` labeled
+// issue on EVERY successful run. Tasks excluded because the label-presence
+// signal can never reliably observe their output (they'd false-fire):
 //   - daily-triage: labels existing issues only (prompt forbids `gh issue create`)
 //   - ux-audit: runs UX_AUDIT_DRY_RUN=true → writes Supabase/stdout, no issue
 //   - bug-fixer: opens bot-fix PRs, never a `scheduled-bug-fixer` issue
-// Cron LIVENESS for ALL tasks (including these three) is covered separately by
-// the per-function Sentry cron monitors — see #4708, which retired the sibling
+//   - strategy-review: CONDITIONAL/idempotent producer — opens an issue ONLY per
+//     knowledge-base file needing review (title-dedup, skips up_to_date), so a
+//     quiet week with everything up-to-date legitimately yields zero issues.
+//     Issue-presence is the wrong silence signal for it (#4874). Its liveness is
+//     covered by the Sentry cron monitor `scheduled-strategy-review`.
+// Cron LIVENESS for ALL excluded tasks is covered separately by the per-function
+// Sentry cron monitors — see #4708, which retired the sibling
 // cron-inngest-cron-watchdog for the same reason (Inngest `/v1/*` run-history is
 // loopback-gated and unreachable from the app container). maxGapDays is derived
 // from each task's real cron cadence; see the runbook's Threshold Derivation.
+//
+// NEVER-PRODUCED GRACE: a task that is in this inventory but has produced ZERO
+// issues ever (e.g. a newly-migrated quarterly producer before its first fire)
+// is reported as `pending-first-run` (silent:false + a Sentry warning), NOT as
+// silent — see the `issues.length === 0` arm in check-task-silence. This
+// restores the original GHA watchdog's "warn-and-skip on never-seen labels"
+// behavior (#4875: legal-audit migrated 2026-05-25, first real fire 2026-07-01).
 export const TASK_INVENTORY: TaskEntry[] = [
   { name: "content-generator", label: "scheduled-content-generator", maxGapDays: 9 },
-  { name: "strategy-review", label: "scheduled-strategy-review", maxGapDays: 9 },
   { name: "legal-audit", label: "scheduled-legal-audit", maxGapDays: 95 },
   { name: "competitive-analysis", label: "scheduled-competitive-analysis", maxGapDays: 40 },
   { name: "community-monitor", label: "scheduled-community-monitor", maxGapDays: 3 },
@@ -121,10 +132,27 @@ export async function cronCloudTaskHeartbeatHandler({
           );
           const issues = res.data as Array<{ created_at: string }>;
           if (issues.length === 0) {
+            // NEVER-PRODUCED GRACE (#4875): the query SUCCEEDED and returned zero
+            // rows — the task has never produced its `scheduled-<task>` issue.
+            // For a newly-migrated producer (e.g. legal-audit, quarterly, first
+            // real fire 2026-07-01) this is "pending first run", NOT silence.
+            // Report it as a Sentry warning (visible, non-paging) and do NOT flag
+            // silent — so issue-handling files no GitHub issue and auto-closes any
+            // stale one. Cron liveness for the pre-first-fire window is covered by
+            // the task's OWN per-function Sentry cron monitor, not this watchdog.
+            // (Distinct code path from the `catch` arm below — an API error — and
+            // from the in-band `daysSince === null` NaN-parse case, both of which
+            // remain `silent: true`.)
+            warnSilentFallback(null, {
+              feature: "cron-cloud-task-heartbeat",
+              op: "task-pending-first-run",
+              message: `Task ${task.name} has never produced a ${task.label} issue — pending first run`,
+              extra: { fn: "cron-cloud-task-heartbeat", task: task.name },
+            });
             checks.push({
               name: task.name,
               label: task.label,
-              silent: true,
+              silent: false,
               daysSince: null,
               maxGapDays: task.maxGapDays,
             });
@@ -212,7 +240,7 @@ export async function cronCloudTaskHeartbeatHandler({
                 "",
                 "### What to do",
                 "",
-                "See [cloud-scheduled-tasks.md runbook](https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md).",
+                "See [cloud-scheduled-tasks.md runbook](https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md).",
                 "",
                 "**Tracks:** #2714",
                 "",
@@ -225,7 +253,13 @@ export async function cronCloudTaskHeartbeatHandler({
             "Task is silent — issue filed/commented",
           );
         } else {
-          // Recovery: close any open silence issue for this task
+          // Recovery: close any open silence issue for this task. `daysSince`
+          // is null for a pending-first-run task (never produced an issue) —
+          // guard the comment so it reads sensibly instead of "null days ago".
+          const recoveryDetail =
+            result.daysSince === null
+              ? `pending first run (never produced an issue)`
+              : `last issue was ${result.daysSince} days ago (within ${result.maxGapDays}-day threshold)`;
           if (existing) {
             await octokit.request(
               "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
@@ -233,7 +267,7 @@ export async function cronCloudTaskHeartbeatHandler({
                 owner: REPO_OWNER,
                 repo: REPO_NAME,
                 issue_number: existing.number,
-                body: `Task "${result.name}" recovered at ${new Date().toISOString()} — last issue was ${result.daysSince} days ago (within ${result.maxGapDays}-day threshold). Auto-closing.`,
+                body: `Task "${result.name}" recovered at ${new Date().toISOString()} — ${recoveryDetail}. Auto-closing.`,
               },
             );
             await octokit.request(

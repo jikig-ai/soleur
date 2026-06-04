@@ -70,6 +70,17 @@ describe("getActiveWorkspaceCount", () => {
     expect(getActiveWorkspaceCount()).toBe(2);
   });
 
+  it("excludes the .cron ephemeral cron-clone subdir (#4882)", async () => {
+    // `.cron` is the isolated cron-clone root, a sibling of the UUID workspace
+    // dirs — it must not inflate the active-workspace count by one.
+    mockFs.readdirSync.mockReturnValue(["abc-uuid", "def-uuid", ".cron"]);
+
+    const { getActiveWorkspaceCount } = await import(
+      "../../server/session-metrics"
+    );
+    expect(getActiveWorkspaceCount()).toBe(2);
+  });
+
   it("excludes entries that are not directories", async () => {
     mockFs.readdirSync.mockReturnValue(["abc-uuid", "README.md"]);
     mockFs.statSync.mockImplementation((p: string) => ({

@@ -272,7 +272,7 @@ test scenario 6.
 
 ### Phase 3 — Document the flag in the runbook
 
-**File:** `knowledge-base/engineering/ops/runbooks/supabase-migrations.md`
+**File:** `knowledge-base/engineering/operations/runbooks/supabase-migrations.md`
 
 Add a sub-section to §0 (between the existing "Apply Order: dev FIRST, then prd"
 and the "Pre-deploy Checklist"):
@@ -307,7 +307,7 @@ cannot easily change argv (cron, container ENTRYPOINT).
 
 **Files to edit:**
 
-- `knowledge-base/engineering/ops/runbooks/supabase-migrations.md` — add sub-section.
+- `knowledge-base/engineering/operations/runbooks/supabase-migrations.md` — add sub-section.
 
 ### Phase 4 — Update ADR-023 cross-reference (deepen-verified: optional)
 
@@ -329,7 +329,7 @@ ship, defer to a small follow-up commit on main rather than blocking #2911 on it
 ## Files to Edit
 
 - `apps/web-platform/scripts/run-migrations.sh` (Phase 1)
-- `knowledge-base/engineering/ops/runbooks/supabase-migrations.md` (Phase 3)
+- `knowledge-base/engineering/operations/runbooks/supabase-migrations.md` (Phase 3)
 - `knowledge-base/engineering/architecture/decisions/ADR-023-supabase-environment-isolation.md` (Phase 4)
 
 ## Files to Create
@@ -473,6 +473,6 @@ files, and no `app/**/page.tsx` or `components/**/*.tsx` paths.
 - Parent: #2887 (dev/prd Supabase isolation P0)
 - Parent plan: `knowledge-base/project/plans/2026-04-27-fix-supabase-env-isolation-plan.md`
 - Bootstrap code: `apps/web-platform/scripts/run-migrations.sh` (block guarded by `if [[ "$row_count" -eq 0 ]]`)
-- Runbook: `knowledge-base/engineering/ops/runbooks/supabase-migrations.md`
+- Runbook: `knowledge-base/engineering/operations/runbooks/supabase-migrations.md`
 - ADR: `knowledge-base/engineering/architecture/decisions/ADR-023-supabase-environment-isolation.md`
 - Related learning: `knowledge-base/project/learnings/2026-03-28-unapplied-migration-command-center-chat-failure.md`

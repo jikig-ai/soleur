@@ -119,7 +119,7 @@ Derived from `knowledge-base/project/plans/2026-05-16-feat-sentry-residency-a2-b
 ### 14. Verification (PR-β)
 - 14.1. **AC6 (real ingest probe per DHH P1)**: `POST <DSN>/store/` with synthetic event → `GET /api/0/projects/$ORG/$PROJECT/events/<event_id>/` returns 200 ≤60s. PLUS string-shape check.
 - 14.2. AC7: CI run of `sentry-audit-gate.yml` green (4-gate); token-scope pre-check passes; required-check present in ruleset.
-- 14.3. **AC8 (per-surface + SENTRY_API_TOKEN sweep per Arch F3)**: standard surfaces PLUS `grep -rn 'SENTRY_API_TOKEN' apps/ plugins/soleur/skills/postmerge/ knowledge-base/engineering/ops/runbooks/` — every match resolves to new DE-cluster value.
+- 14.3. **AC8 (per-surface + SENTRY_API_TOKEN sweep per Arch F3)**: standard surfaces PLUS `grep -rn 'SENTRY_API_TOKEN' apps/ plugins/soleur/skills/postmerge/ knowledge-base/engineering/operations/runbooks/` — every match resolves to new DE-cluster value.
 - 14.4. AC9: `grep -rn "4511123328466944" apps/web-platform/ .github/workflows/scheduled-*.yml` returns 0.
 - 14.5. AC10: `terraform state list | wc -l` returns 13; `terraform plan` 0 changes; pre/post manifest diff in PR body.
 - 14.6. **AC11-pre (manual surrogate per Spec-Flow P0-2)**: manually dispatch each of 9 scheduled workflows via `gh workflow run`; capture check-in event IDs in PR-β body. Add `workflow_dispatch:` to any workflow lacking it.
@@ -146,9 +146,9 @@ Derived from `knowledge-base/project/plans/2026-05-16-feat-sentry-residency-a2-b
 ### 18. C6 backfill — (MOVED to PR-β task 13.) PR-γ no longer touches `article-30-register.md`.
 
 ### 19. PIR Phase 8 flip (slimmed per DHH P1 + Code-Simplicity P1)
-- 19.1. Edit `knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`: L8 `status: open` → `status: resolved`.
+- 19.1. Edit `knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`: L8 `status: open` → `status: resolved`.
 - 19.2. Append 3-bullet `## Phase 8 — Recovery Completeness` section per plan Phase 4 (incident-specific; not a template). Gate 3 enumerates 4 operator-selectable branches (3a authoritative third-party / 3b "this org is yours" STOP / 3c non-disclosure residual / 3d T+14d timeout) per Spec-Flow P1-4.
-- 19.3. Verify: `grep -c "## Phase 8 — Recovery Completeness" knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md` returns 1; Gate 3 resolution branch (3a/3b/3c/3d) is selected with evidence.
+- 19.3. Verify: `grep -c "## Phase 8 — Recovery Completeness" knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md` returns 1; Gate 3 resolution branch (3a/3b/3c/3d) is selected with evidence.
 
 ### 20. W1/W2/W5 follow-up issues (W4 dropped per Code-Simplicity P2)
 - 20.1. Verify labels exist: `gh label list | grep -E "^domain/process|^domain/engineering|^skill:brainstorm|^skill:compound|^priority/p2-medium|^priority/p3-low"`.
@@ -160,7 +160,7 @@ Derived from `knowledge-base/project/plans/2026-05-16-feat-sentry-residency-a2-b
 - 21.1. AC12: US shadow org status row in PR-γ body.
 - 21.2. AC13: Both ticket IDs captured.
 - 21.3. AC14: **(moved to PR-β task 13.3.)** No longer in PR-γ scope.
-- 21.4. AC15: `grep -nE "^status: resolved" knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md` returns L8; Phase 8 section present with one of 3a/3b/3c/3d selected as Gate 3 resolution.
+- 21.4. AC15: `grep -nE "^status: resolved" knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md` returns L8; Phase 8 section present with one of 3a/3b/3c/3d selected as Gate 3 resolution.
 - 21.5. AC16: **3 W-issues** (W1/W2/W5) open with matching titles.
 
 ### 22. Post-merge gate (PR-γ)

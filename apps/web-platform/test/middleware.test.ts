@@ -49,6 +49,15 @@ describe("middleware path routing", () => {
       expect(isPublicPath("/api/internal/trigger-cron")).toBe(true);
     });
 
+    test("/api/internal/schedule-reminder is public (Bearer-gated by route, not Supabase)", () => {
+      // Same class as trigger-cron: secret-gated, cookieless operator/agent
+      // caller. Without this, Supabase middleware 307→/login before the route's
+      // own timingSafeEqual gate runs. The bare /api/internal parent stays
+      // private (narrow exact path — no /api/internal session-bypass).
+      expect(isPublicPath("/api/internal/schedule-reminder")).toBe(true);
+      expect(isPublicPath("/api/internal")).toBe(false);
+    });
+
     test("public path sub-routes are allowed", () => {
       expect(isPublicPath("/api/webhooks/stripe")).toBe(true);
       expect(isPublicPath("/callback/")).toBe(true);

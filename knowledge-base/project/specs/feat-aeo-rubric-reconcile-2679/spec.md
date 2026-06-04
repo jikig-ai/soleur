@@ -25,7 +25,7 @@ The `scheduled-growth-audit.yml` cron produces non-deterministic AEO scorecards.
 - **NG2.** Retroactively re-scoring past audits. 04-19 stays as-is; 04-21 is the verification baseline.
 - **NG3.** Modifying `seo-aeo-analyst.md` — it owns technical SEO, not content-level AEO scorecards.
 - **NG4.** Adding dashboards, trend charts, or alerting. Two tables in one markdown file suffices.
-- **NG5.** Moving the runbook to `knowledge-base/engineering/ops/runbooks/`. Worth a separate cleanup.
+- **NG5.** Moving the runbook to `knowledge-base/engineering/operations/runbooks/`. Worth a separate cleanup.
 
 ## Functional Requirements
 
@@ -55,5 +55,5 @@ The `scheduled-growth-audit.yml` cron produces non-deterministic AEO scorecards.
 ## Out of Scope (Tracked Separately)
 
 - Off-site Presence work: #2599, #2600, #2601, #2602, #2603, #2604 remain open and will further lift the Presence score.
-- Moving runbook to engineering/ops/runbooks/ directory.
+- Moving runbook to engineering/operations/runbooks/ directory.
 - Adding rubric-comparison or trend-line tooling.

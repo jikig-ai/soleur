@@ -15,11 +15,11 @@ status: brainstormed
 A new standalone skill at `plugins/soleur/skills/incident/SKILL.md` that:
 
 1. **Classifies** an incident's `brand_threshold` value (`none` / `single-user incident` / `aggregate pattern`) in <60 seconds during live incident response. Advisory only — no auto-escalation, no auto-prod-writes.
-2. **Routes** to the matching existing runbook(s) under `knowledge-base/engineering/ops/runbooks/` via a `triggers:` keyword match.
+2. **Routes** to the matching existing runbook(s) under `knowledge-base/engineering/operations/runbooks/` via a `triggers:` keyword match.
 3. **Gates** PIR drafting behind a Phase-0 GDPR Art. 33/34 notification-trigger evaluation. If personal data is involved and risk to rights/freedoms is non-negligible, the skill surfaces the 72h CNIL deadline as a structured field BEFORE proceeding to narrative drafting.
 4. **Scaffolds** two PIR artifacts after recovery:
-   - **Internal PIR**: `knowledge-base/engineering/ops/runbooks/<slug>-postmortem.md`, full detail, follows the existing `dashboard-error-postmortem.md` frontmatter schema verbatim.
-   - **Public-safe summary**: `knowledge-base/engineering/ops/runbooks/<slug>-public.md`, redaction-gated, status-page / Discord postable.
+   - **Internal PIR**: `knowledge-base/engineering/operations/runbooks/<slug>-postmortem.md`, full detail, follows the existing `dashboard-error-postmortem.md` frontmatter schema verbatim.
+   - **Public-safe summary**: `knowledge-base/engineering/operations/runbooks/<slug>-public.md`, redaction-gated, status-page / Discord postable.
 5. **Enforces** a pre-write redaction sentinel (mechanical regex pass) BEFORE either markdown file is written. Sentinel scans for JWT three-segment, email, UUID, Stripe key prefixes, Stripe customer/PI IDs, IPv4, env-var-with-value forms. Pre-write blocking; operator must redact-and-retry.
 6. **Calls** `/soleur:compound-capture` at the end to extract the fix learning into `knowledge-base/project/learnings/` (clear seam: incident-commander = chronology + SEV + impact + scrubbed timeline; compound = solved-problem pattern).
 
@@ -59,8 +59,8 @@ Smaller blast radius per PR. PR1: `brand_threshold` key-rename across all caller
 | Frontmatter standardization | Rename `brand_survival`, `brand_survival_threshold`, `threshold` → `brand_threshold` (singular) repo-wide [Updated 2026-05-13: REVERSED at plan-time — the dominant form is `brand_survival_threshold:` (97 files); minority forms were renamed toward the dominant key. PR #3737 (merged) implements the reversed direction.] | Resolves the 4-key inconsistency; ships as D1 PR1 |
 | Value-form standardization | `single-user incident` (space form) is canonical; `single-user-incident` (hyphenated) gets renamed | One canonical form to grep for; included in D1 PR1 |
 | Skill location | `plugins/soleur/skills/incident/SKILL.md` | Avoids name collision with `.claude/hooks/lib/incidents.sh` (rule-telemetry, NOT incidents); skill is singular, hooks library is plural |
-| PIR write location | `knowledge-base/engineering/ops/runbooks/<slug>-postmortem.md` | Matches existing `dashboard-error-postmortem.md` convention; same dir as runbooks for discoverability |
-| Public summary write location | `knowledge-base/engineering/ops/runbooks/<slug>-public.md` | Sidecar pattern; separate redaction sentinel pass |
+| PIR write location | `knowledge-base/engineering/operations/runbooks/<slug>-postmortem.md` | Matches existing `dashboard-error-postmortem.md` convention; same dir as runbooks for discoverability |
+| Public summary write location | `knowledge-base/engineering/operations/runbooks/<slug>-public.md` | Sidecar pattern; separate redaction sentinel pass |
 | PIR frontmatter schema | Verbatim reuse of `dashboard-error-postmortem.md` keys: `title`, `date`, `incident_pr`, `incident_window`, `suspected_change`, `brand_threshold`, `status`, `closed_on`, `closed_via`, `triggers[]` | Sole prior PIR is the canonical template; no need to invent |
 | Actor-key convention | Every step tagged `agent` / `agent-with-ack` / `human` per `hr-menu-option-ack-not-prod-write-auth` | Constraint inherited from existing PIR; auto-classifier output stays advisory |
 | Art. 33/34 gate placement | Phase-0 (BEFORE drafting). Skill computes `art_33_triggered: bool`, `art_34_triggered: bool`, `notification_deadline` (incident_detected_at + 72h) | CLO load-bearing: 72h CNIL clock starts on detection; burning it on narrative work is the failure mode |
@@ -113,7 +113,7 @@ Smaller blast radius per PR. PR1: `brand_threshold` key-rename across all caller
 
 ## Open Questions
 
-1. **Public-summary write location**: `knowledge-base/engineering/ops/runbooks/<slug>-public.md` sidecar (current decision) vs. `app.soleur.ai/status` Eleventy collection (future-facing if a status page exists). Decision: sidecar for MVP; revisit when a status page lands.
+1. **Public-summary write location**: `knowledge-base/engineering/operations/runbooks/<slug>-public.md` sidecar (current decision) vs. `app.soleur.ai/status` Eleventy collection (future-facing if a status page exists). Decision: sidecar for MVP; revisit when a status page lands.
 2. **Redaction-sentinel false-positive rate**: CLO flagged proposed regexes as "unverified — need fixture testing against real Sentry/Supabase output before landing." Spec must include fixture-based test plan against the existing `dashboard-error-postmortem.md`.
 3. **`triggers[]` matching algorithm for runbook routing**: literal-substring vs token-set Jaccard vs LLM classifier. Decision deferred to plan phase; literal-substring is the conservative MVP.
 4. **ROPA emission**: CLO recommended a structured frontmatter block for `knowledge-base/legal/article-30-register.md` consumption (`affected_user_count`, `data_categories_breached`, `legal_basis_impacted`, `art_33_triggered`, `art_34_triggered`, `notification_sent_at`, `dpa_partner_notified[]`). Scope into MVP or defer to a follow-up PR that wires ROPA consumption?

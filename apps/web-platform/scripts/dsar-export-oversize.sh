@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Oversize DSAR export helper — manual fallback for accounts that
 # exceed DSAR_EXPORT_SIZE_CAP_MB. See
-# knowledge-base/engineering/ops/runbooks/dsar-export-oversize.md.
+# knowledge-base/engineering/operations/runbooks/dsar-export-oversize.md.
 #
 # Usage:
 #   doppler run -p soleur -c prd -- \

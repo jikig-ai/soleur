@@ -9,7 +9,7 @@ sidecar workflow and by Terraform itself.
 **Owner:** deruelle / ops@jikigai.com
 **Issue:** #3209
 **Plan:** `knowledge-base/project/plans/2026-05-04-feat-cla-legal-rigor-evidence-layer-plan.md`
-**Runbook:** `knowledge-base/engineering/ops/runbooks/cla-signature-evidence-retrieval.md`
+**Runbook:** `knowledge-base/engineering/operations/runbooks/cla-signature-evidence-retrieval.md`
 **Retention:** 10 years (`maxAgeSeconds = 315360000`) from object creation, enforced by an R2 native Lock Rule.
 **Region:** `weur` (Western Europe, best-effort per Cloudflare R2 placement).
 
@@ -81,7 +81,7 @@ for the failure-mode rationale.
 - **Object-write token (`R2_CLA_EVIDENCE_*`):** synced to Doppler `prd_cla`
   config, surfaced to workflows via `DOPPLER_TOKEN_CLA` repo secret. Rotation
   cadence: yearly, or on any leak signal. See sibling section in
-  `knowledge-base/engineering/ops/runbooks/cloudflare-service-token-rotation.md`.
+  `knowledge-base/engineering/operations/runbooks/cloudflare-service-token-rotation.md`.
 - **State-write token:** consumed by Terraform only. Rotation cadence: yearly.
 
 ## Token blast radius

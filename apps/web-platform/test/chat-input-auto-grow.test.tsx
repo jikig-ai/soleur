@@ -43,7 +43,7 @@ describe("ChatInput auto-grow", () => {
     // Should NOT have any fixed h-[*px] class (min-h-/max-h- are ok)
     expect(textarea.className).not.toMatch(/(?<![-\w])h-\[\d+px\]/);
     // Should have min-h and max-h constraints
-    expect(textarea.className).toMatch(/min-h-\[72px\]/);
+    expect(textarea.className).toMatch(/min-h-\[36px\]/);
     expect(textarea.className).toMatch(/max-h-\[140px\]/);
   });
 

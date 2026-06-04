@@ -38,11 +38,13 @@ vi.mock("@/lib/supabase/tenant", () => ({
   RuntimeAuthError: class RuntimeAuthError extends Error {},
 }));
 
-const { mockReportSilentFallback } = vi.hoisted(() => ({
+const { mockReportSilentFallback, mockWarnSilentFallback } = vi.hoisted(() => ({
   mockReportSilentFallback: vi.fn(),
+  mockWarnSilentFallback: vi.fn(),
 }));
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
+  warnSilentFallback: mockWarnSilentFallback,
 }));
 
 const { mockAddBreadcrumb } = vi.hoisted(() => ({
@@ -126,7 +128,7 @@ describe("handleConversationMessages — observability + auth + ownership", () =
     );
   });
 
-  it("returns 404 + reports silent fallback when conversation is not owned by user", async () => {
+  it("returns 404 + WARNS (not errors) for a not-owned-or-missing conversation (FR3/AC4)", async () => {
     mockGetUser.mockResolvedValue({ data: { user: { id: "user-1" } }, error: null });
     mockFrom.mockReturnValue(mockQueryChain(null));
 
@@ -136,14 +138,24 @@ describe("handleConversationMessages — observability + auth + ownership", () =
 
     await handleConversationMessages(req, res, "conv-other-owner");
 
+    // HTTP status + body shape unchanged — only the Sentry severity drops.
     expect(res._status).toBe(404);
-    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+    expect(JSON.parse(res._body)).toEqual({ error: "Conversation not found" });
+
+    // A row-absent 404 is the expected fresh/deferred-conversation noise
+    // class — mirror at WARNING level, same op string so alert rules match.
+    expect(mockWarnSilentFallback).toHaveBeenCalledWith(
       null,
       expect.objectContaining({
         feature: "kb-chat",
-        op: expect.stringContaining("not-owned-or-missing"),
+        op: "history-fetch-404-not-owned-or-missing",
         extra: expect.objectContaining({ conversationId: "conv-other-owner" }),
       }),
+    );
+    // It must NOT page at error level for this op.
+    expect(mockReportSilentFallback).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "history-fetch-404-not-owned-or-missing" }),
     );
   });
 

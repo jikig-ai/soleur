@@ -51,7 +51,7 @@ Consolidated cleanup pass for three review-origin issues opened against PR #2347
 | #2390 10B says "append SQL verification + rollback to PR #2347's body before marking ready"                      | PR #2347 is already merged. Editing the merged PR body retroactively is low-leverage — the runbook (10C) is the durable artifact.                                                                            | Skip 10B as a PR-body edit; fold the SQL snippets into the new runbook (10C) where they will actually be found by future operators. |
 | #2390 10D says "tighten 23505 disambiguation in `ws-handler.ts:262`"                                             | Already implemented in `server/ws-handler.ts:295-300` via the `isContextPathUniqueViolation` guard (message-includes check on `conversations_context_path_user_uniq`). Landed as part of #2382.             | **No code change.** Add a regression test in `test/ws-handler-context-path.test.ts` (or existing ws-handler test file) asserting that a non-matching 23505 does NOT fall through, to lock the behaviour. |
 | #2384 5C says `uploadPendingFiles(files, conversationId, onProgress?)` belongs in `lib/upload-attachments.ts`    | `lib/upload-with-progress.ts` already exists with the primitive XHR helper. Natural home for the higher-level helper is a sibling file or an extension of the existing one.                                 | Create `lib/upload-attachments.ts` (new) with `uploadPendingFiles()`; it calls into `upload-with-progress.ts`. Keeps layers clean. |
-| #2390 10C says "create `knowledge-base/project/runbooks/supabase-migrations.md`"                                 | Existing runbook convention is `knowledge-base/engineering/ops/runbooks/` (`cloudflare-service-token-rotation.md`, `disk-monitoring.md`).                                                                    | Use the established path: `knowledge-base/engineering/ops/runbooks/supabase-migrations.md`. Cross-link from AGENTS.md line-cite to that path. |
+| #2390 10C says "create `knowledge-base/project/runbooks/supabase-migrations.md`"                                 | Existing runbook convention is `knowledge-base/engineering/operations/runbooks/` (`cloudflare-service-token-rotation.md`, `disk-monitoring.md`).                                                                    | Use the established path: `knowledge-base/engineering/operations/runbooks/supabase-migrations.md`. Cross-link from AGENTS.md line-cite to that path. |
 
 ## Goals
 
@@ -78,7 +78,7 @@ Consolidated cleanup pass for three review-origin issues opened against PR #2347
 - [ ] **AC5 (#2385):** `kb-chat-content.tsx` removes `openedEmitted` state; replaces with a `useRef<Set<string>>` cleared on `contextPath` change. A single `useEffect` keyed on `(contextPath, resumedFrom, realConversationId)` emits `kb.chat.opened` at most once per (mount-session, contextPath).
 - [ ] **AC6 (#2385):** When both `onThreadResumed` and `onRealConversationId` fire in the same `act()` batch, `track("kb.chat.opened", ...)` is called **exactly once** (asserted by test).
 - [ ] **AC7 (#2390 10A):** `apps/web-platform/supabase/migrations/024_add_context_path_to_conversations.sql` has a leading comment block explicitly stating: (a) no backfill is performed, (b) pre-migration KB threads remain un-badged in the inbox, (c) decision recorded in parent plan section 2.1, (d) reference to AC18 of parent plan.
-- [ ] **AC8 (#2390 10C):** New file `knowledge-base/engineering/ops/runbooks/supabase-migrations.md` contains: pre-deploy SQL verification queries (baseline counts, dup detection, column/index existence), an apply procedure, a verification procedure (`gh` + REST API), and a rollback SQL template. Runbook cross-linked from `AGENTS.md` rule `wg-when-a-pr-includes-database-migrations`.
+- [ ] **AC8 (#2390 10C):** New file `knowledge-base/engineering/operations/runbooks/supabase-migrations.md` contains: pre-deploy SQL verification queries (baseline counts, dup detection, column/index existence), an apply procedure, a verification procedure (`gh` + REST API), and a rollback SQL template. Runbook cross-linked from `AGENTS.md` rule `wg-when-a-pr-includes-database-migrations`.
 - [ ] **AC9 (#2390 10D — verify-only):** A regression test in `test/ws-handler-context-path-23505.test.ts` (or added to existing ws-handler test file) asserts that a 23505 error whose message does NOT contain `conversations_context_path_user_uniq` is re-thrown rather than falling through to the lookup.
 - [ ] **AC10:** All new tests RED-before-GREEN: write failing tests first per `cq-write-failing-tests-before`. Each fix lands in its own commit with the failing test from the prior commit.
 - [ ] **AC11:** Existing `test/kb-chat-sidebar.test.tsx`, `test/chat-input-quote.test.tsx`, `test/chat-input-attachments.test.tsx`, `test/chat-surface-sidebar.test.tsx`, and `test/chat-surface-sidebar-wrap.test.tsx` continue to pass unchanged.
@@ -258,7 +258,7 @@ Refs don't appear in dep arrays (stable reference). After removing the state, ru
 
 ### Phase 6 — #2390 10C: Supabase-migrations runbook
 
-1. Create `knowledge-base/engineering/ops/runbooks/supabase-migrations.md` with these sections (match the tone of `cloudflare-service-token-rotation.md`):
+1. Create `knowledge-base/engineering/operations/runbooks/supabase-migrations.md` with these sections (match the tone of `cloudflare-service-token-rotation.md`):
    - **Purpose** — when to use this runbook (any PR touching `apps/web-platform/supabase/migrations/`).
    - **Pre-deploy checklist** — confirm migration file is numbered correctly, has a header comment, is idempotent (`IF NOT EXISTS`), has no implicit transactional assumptions that break in the Supabase runner.
    - **Baseline capture (pre-apply SQL)** — the three queries from issue #2390 10B:
@@ -289,8 +289,8 @@ Refs don't appear in dep arrays (stable reference). After removing the state, ru
      + note that rollbacks are destructive; capture a `pg_dump --data-only` of affected rows beforehand for any migration that drops a column with values.
    - **Post-merge verification** — per `wg-when-a-pr-includes-database-migrations`, poll the production DB until the column/index is confirmed applied; close the issue only after that.
    - **Cross-references** — link to `AGENTS.md` rule and to PR #2347 as the worked example.
-2. Update `AGENTS.md` rule `wg-when-a-pr-includes-database-migrations` to append `See runbook: knowledge-base/engineering/ops/runbooks/supabase-migrations.md.`
-3. Run `npx markdownlint-cli2 --fix knowledge-base/engineering/ops/runbooks/supabase-migrations.md AGENTS.md` (per `cq-markdownlint-fix-target-specific-paths` — target-specific, not a repo-wide glob).
+2. Update `AGENTS.md` rule `wg-when-a-pr-includes-database-migrations` to append `See runbook: knowledge-base/engineering/operations/runbooks/supabase-migrations.md.`
+3. Run `npx markdownlint-cli2 --fix knowledge-base/engineering/operations/runbooks/supabase-migrations.md AGENTS.md` (per `cq-markdownlint-fix-target-specific-paths` — target-specific, not a repo-wide glob).
 4. Commit: `docs(ops): add supabase-migrations runbook with verification + rollback SQL`
 
 ### Phase 7 — #2390 10D: regression test (no code change)
@@ -327,7 +327,7 @@ Refs don't appear in dep arrays (stable reference). After removing the state, ru
 - `apps/web-platform/lib/upload-attachments.ts` — shared helper.
 - `apps/web-platform/test/upload-attachments.test.ts` — unit test for helper.
 - `apps/web-platform/test/ws-handler-context-path-23505.test.ts` — regression test.
-- `knowledge-base/engineering/ops/runbooks/supabase-migrations.md` — new runbook.
+- `knowledge-base/engineering/operations/runbooks/supabase-migrations.md` — new runbook.
 
 **Do NOT touch:**
 
@@ -341,7 +341,7 @@ Refs don't appear in dep arrays (stable reference). After removing the state, ru
 
 - `apps/web-platform/lib/upload-with-progress.ts` already exists with the low-level XHR primitive. Clean insertion point for `uploadPendingFiles()` sibling at `lib/upload-attachments.ts`.
 - `kb-chat-sidebar.tsx` was split post-#2347 during the resizable-panels rollout (commits `#2433-#2455`). The race and focus logic from issues #2384 5B and #2385 now live in `components/chat/kb-chat-content.tsx` — same semantics, new path. **Update issue cross-references in PR body.**
-- Existing runbook convention is `knowledge-base/engineering/ops/runbooks/` (two files). Using this over a fresh `knowledge-base/project/runbooks/` avoids fragmenting the runbook index.
+- Existing runbook convention is `knowledge-base/engineering/operations/runbooks/` (two files). Using this over a fresh `knowledge-base/project/runbooks/` avoids fragmenting the runbook index.
 - 23505 disambiguation already landed in `server/ws-handler.ts:295-300` — confirmed by reading the file. The comment even references "See review #2390." Issue #2390 10D is effectively a verify-only item; a regression test is the right artifact.
 - Existing test patterns (`test/chat-input-attachments.test.tsx`, `test/kb-chat-sidebar.test.tsx`, `test/api-analytics-track.test.ts`) establish the idioms for mocking `fetch`, `XMLHttpRequest` / `uploadWithProgress`, and the `track()` helper.
 
@@ -403,7 +403,7 @@ This is a pure bug-fix bundle with no product/UX/marketing/legal/financial/secur
 - `AGENTS.md` rule `wg-when-a-pr-includes-database-migrations`.
 - `AGENTS.md` rule `rf-review-finding-default-fix-inline`.
 - `AGENTS.md` rule `cq-write-failing-tests-before`.
-- Existing runbooks: `knowledge-base/engineering/ops/runbooks/cloudflare-service-token-rotation.md`, `knowledge-base/engineering/ops/runbooks/disk-monitoring.md`.
+- Existing runbooks: `knowledge-base/engineering/operations/runbooks/cloudflare-service-token-rotation.md`, `knowledge-base/engineering/operations/runbooks/disk-monitoring.md`.
 
 ## Plan Review Hooks
 

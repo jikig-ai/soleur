@@ -297,7 +297,7 @@ Exactly ONE of the following ships, chosen by Phase 1. Do NOT ship more than one
 
 ### Phase 3 — Correct the runbook (always ships)
 
-- [ ] Update `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md`
+- [ ] Update `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md`
       `probe_app_jwt_decode` section: the current "**Fix shipped (this class)**"
       paragraph asserting `normalizeAppPrivateKey()` resolved it is now false. Replace
       with: "#4569's PKCS#8 normalization was necessary but **insufficient** — issue
@@ -465,5 +465,5 @@ Phase 2.8 reviewed. Conditional on the Phase 1 verdict:
 - PR #4568 — the `extractGitHubErrorDiag` breadcrumb this plan reads.
 - PR #4565 / #4513 / #4498 — retry-on-401 / exp-margin (wrong failure class for the decode error).
 - `knowledge-base/project/learnings/bug-fixes/2026-05-28-github-app-jwt-exp-at-600s-ceiling-causes-intermittent-401.md` — scopes the octokit path as "already safe" for the 401 class; the call-graph Session Error there generalizes.
-- `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` — `probe_app_jwt_decode` section (corrected by Phase 3).
+- `knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md` — `probe_app_jwt_decode` section (corrected by Phase 3).
 - `apps/web-platform/server/github-app.ts:119-152` — the immune hand-rolled `createAppJwt()` (diagnostic oracle + H4 fix target).

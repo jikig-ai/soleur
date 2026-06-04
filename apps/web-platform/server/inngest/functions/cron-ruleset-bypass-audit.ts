@@ -199,7 +199,7 @@ async function fileDriftIssue(
     `1. If the addition is intentional, update the canonical snapshot.\n` +
     `2. If the addition is unauthorized, revert via ` +
     `\`scripts/update-ci-required-ruleset.sh\`.\n\n` +
-    `See [ruleset-bypass-drift.md runbook](https://github.com/${REPO_OWNER}/${REPO_NAME}/blob/main/knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md).\n\n` +
+    `See [ruleset-bypass-drift.md runbook](https://github.com/${REPO_OWNER}/${REPO_NAME}/blob/main/knowledge-base/engineering/operations/runbooks/ruleset-bypass-drift.md).\n\n` +
     `_Auto-created by the [scheduled-ruleset-bypass-audit Inngest function](https://github.com/${REPO_OWNER}/${REPO_NAME}/blob/main/apps/web-platform/server/inngest/functions/cron-ruleset-bypass-audit.ts)._`;
 
   const resp = (await octokit.request("POST /repos/{owner}/{repo}/issues", {

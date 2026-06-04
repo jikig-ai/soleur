@@ -565,9 +565,9 @@ export function ChatSurface({
               <DelegationErrorCard errorCode={lastError.code} message={lastError.message} />
             ) : (
               <ErrorCard
-                title={lastError.code === "key_invalid" ? "Invalid API Key" : lastError.code === "rate_limited" ? "Rate Limited" : "Connection Error"}
+                title={lastError.code === "key_invalid" ? "Invalid API Key" : lastError.code === "rate_limited" ? "Rate Limited" : lastError.code === "subscription_limit" ? "Subscription Limit Reached" : "Connection Error"}
                 message={lastError.message}
-                onRetry={lastError.code !== "key_invalid" ? reconnect : undefined}
+                onRetry={lastError.code !== "key_invalid" && lastError.code !== "subscription_limit" ? reconnect : undefined}
                 retryLabel="Reconnect"
                 action={lastError.action}
                 onDismiss={() => setDismissedErrorKey(activeErrorKey)}

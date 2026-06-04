@@ -22,11 +22,36 @@
 #   - AWS_ACCESS_KEY_ID     (R2 backend)
 #   - AWS_SECRET_ACCESS_KEY (R2 backend)
 #
-# No SSH infrastructure required (#3756): the local-exec provisioner in
-# server.tf sends file payloads via HTTPS POST through the existing CF Tunnel
-# to /hooks/infra-config. The webhook handler (infra-config-apply.sh) writes
-# files atomically on the host. No DEPLOY_SSH_PRIVATE_KEY, no cloudflared
-# binary, no iptables NAT redirect, no ssh-agent.
+# Two apply targets (#4829):
+#   - terraform_data.deploy_pipeline_fix — HTTPS-only (#3756): its local-exec
+#     provisioner POSTs base64 file payloads through the CF Tunnel to
+#     /hooks/infra-config; the webhook handler (infra-config-apply.sh) writes them
+#     atomically. No SSH needed for THIS target.
+#   - terraform_data.infra_config_handler_bootstrap — root SSH (#4827). It
+#     delivers the handler + the infra-config-install escalation helper + the
+#     sudoers grant, which the webhook path cannot self-deliver (chicken-and-egg,
+#     #4811). The GitHub-hosted runner's egress IP is not in var.admin_ips, so this
+#     job bridges SSH through the existing CF Tunnel SSH route (tunnel.tf:
+#     ssh://localhost:22 ingress + CF Access ci_ssh service token): install
+#     cloudflared, open a `cloudflared access tcp` localhost forward, and add an
+#     `iptables -t nat OUTPUT REDIRECT` rule rewriting SERVER_IP:22 → 127.0.0.1:2222
+#     (transparent to terraform's Go SSH client, which ignores ~/.ssh/config —
+#     learning 2026-05-20-terraform-go-ssh-client-ignores-ssh-config-multi-agent-catch.md).
+#     The bridge authenticates with TF_VAR_ci_ssh_private_key (Doppler
+#     DEPLOY_SSH_PRIVATE_KEY); the host trusts the matching pubkey via
+#     terraform_data.root_authorized_keys (ci-ssh-key.tf, operator-local apply).
+#     The firewall admin_ips allowlist is byte-unchanged — the tunnel is the access
+#     path, not an IP grant.
+#
+# RESOLVED (#4844): deploy_pipeline_fix has `depends_on = [apparmor_bwrap_profile]`,
+# and `-target` pulls in dependencies, so a CI apply also recreates
+# apparmor_bwrap_profile over SSH. As of #4844 ALL 7 sibling SSH provisioners
+# (including apparmor_bwrap_profile and docker_seccomp_config) carry the
+# dual-context connection block (private_key = var.ci_ssh_private_key;
+# agent = var.ci_ssh_private_key == null), so the agent-less runner authenticates
+# with the explicit CI key — no `publickey` failure on a profile co-change. The
+# earlier #4829 CAVEAT (a profile co-change in the same merge as a trigger file
+# required an operator-local `terraform apply`) no longer applies.
 #
 # All untrusted inputs (commit messages, workflow_dispatch inputs) are routed
 # through env vars before reaching any `run:` block — CI workflow
@@ -46,6 +71,10 @@ on:
       - "apps/web-platform/infra/hooks.json.tmpl"
       - "apps/web-platform/infra/deploy-inngest-bootstrap.sudoers"
       - "apps/web-platform/infra/infra-config-apply.sh"
+      # #4829 — the escalation helper is delivered by the SSH bridge, not the
+      # webhook path. A helper-only change must still fire the auto-apply so the
+      # bridge re-runs over the tunnel.
+      - "apps/web-platform/infra/infra-config-install.sh"
       - "apps/web-platform/infra/push-infra-config.sh"
       - "apps/web-platform/infra/cat-infra-config-state.sh"
       - "apps/web-platform/infra/server.tf"
@@ -62,7 +91,19 @@ on:
         type: boolean
 
 concurrency:
-  group: terraform-apply-deploy-pipeline-fix
+  # LOAD-BEARING shared group (#4844): this MUST be the IDENTICAL literal string
+  # used in apply-web-platform-infra.yml. The R2 backend has NO state lock
+  # (apps/web-platform/infra/main.tf `use_lockfile = false` — R2 lacks S3
+  # conditional writes), so this shared GitHub Actions concurrency group is the
+  # SOLE serializer preventing two concurrent `terraform apply` runs from
+  # last-writer-wins-clobbering web-platform/terraform.tfstate. Both workflows
+  # now SSH-apply apparmor_bwrap_profile (this one pulls it transitively via
+  # deploy_pipeline_fix's depends_on; the other lists it in its SSH -target set),
+  # so they overlap on the same R2 object. GHA does NOT error on divergent group
+  # strings — they silently fail to serialize — so do not "rename for clarity".
+  group: terraform-apply-web-platform-host
+  # cancel-in-progress: false — cancelling a half-applied unlocked run is the
+  # worse split-state (no backend lock to recover from).
   cancel-in-progress: false
 
 permissions:
@@ -72,6 +113,13 @@ permissions:
 env:
   TERRAFORM_VERSION: "1.10.5"
   INFRA_DIR: apps/web-platform/infra
+  # cloudflared binary for the CF Tunnel SSH bridge to the
+  # infra_config_handler_bootstrap resource (#4829, see #4177/#4181 precedent).
+  # SHA-256 computed against the real released binary at the pinned version
+  # (NEVER paste a checksum from documentation or AI output per the 2026-03-21
+  # server-provisioning learning, Session Error #4; re-verified at /work time).
+  CLOUDFLARED_VERSION: "2026.5.0"
+  CLOUDFLARED_SHA256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
 
 jobs:
   preflight:
@@ -141,6 +189,20 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         run: terraform init -input=false
 
+      # --- #4844: CF Tunnel SSH bridge (extracted to a shared composite action) ---
+      # Brings up cloudflared + iptables NAT redirect so terraform's Go SSH client
+      # reaches infra_config_handler_bootstrap over the tunnel. Same mechanism as
+      # the prior inline bridge (#4830); now shared with apply-web-platform-infra.yml.
+      # SETUP ONLY — the caller-side `if: always()` teardown below is load-bearing
+      # (the composite action cannot register a post-job hook).
+      - name: CF Tunnel SSH bridge
+        uses: ./.github/actions/cf-tunnel-ssh-bridge
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
+          infra-dir: ${{ env.INFRA_DIR }}
+          cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}
+          cloudflared-sha256: ${{ env.CLOUDFLARED_SHA256 }}
+
       - name: Terraform plan
         working-directory: ${{ env.INFRA_DIR }}
         env:
@@ -151,6 +213,7 @@ jobs:
           set -euo pipefail
           doppler run --name-transformer tf-var -- \
             terraform plan -target=terraform_data.deploy_pipeline_fix \
+            -target=terraform_data.infra_config_handler_bootstrap \
             -var="ssh_key_path=${CI_SSH_PUB}" \
             -no-color -input=false
 
@@ -164,8 +227,35 @@ jobs:
           set -euo pipefail
           doppler run --name-transformer tf-var -- \
             terraform apply -target=terraform_data.deploy_pipeline_fix \
+            -target=terraform_data.infra_config_handler_bootstrap \
             -var="ssh_key_path=${CI_SSH_PUB}" \
             -auto-approve -input=false
+
+      - name: Tear down cloudflared SSH bridge
+        if: always()
+        # Remove the NAT redirect + kill cloudflared as soon as the apply is done
+        # (the post-apply verifies below are HTTPS, not SSH). `if: always()` so a
+        # failed apply still leaves no stray rule/process — a left-over OUTPUT NAT
+        # rule or orphaned cloudflared would corrupt a later job on a persistent
+        # runner (moot on GH-hosted ephemeral runners, but the discipline is required).
+        run: |
+          set +e
+          if [[ -n "${SERVER_IP:-}" ]]; then
+            sudo iptables -t nat -D OUTPUT \
+              -d "$SERVER_IP" -p tcp --dport 22 \
+              -j REDIRECT --to-ports 2222 2>/dev/null || true
+          fi
+          if [[ -n "${CLOUDFLARED_PID:-}" ]]; then
+            kill "$CLOUDFLARED_PID" 2>/dev/null || true
+          fi
+          if [[ -f /tmp/cloudflared.log ]]; then
+            echo "=== /tmp/cloudflared.log (last 200 lines) ==="
+            if [[ -s /tmp/cloudflared.log ]]; then
+              tail -n 200 /tmp/cloudflared.log
+            else
+              echo "(log empty — cloudflared may have failed before writing any output)"
+            fi
+          fi
 
       - name: Verify webhook is alive post-apply
         working-directory: ${{ env.INFRA_DIR }}

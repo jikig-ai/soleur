@@ -67,6 +67,22 @@ echo "${DEPLOY_URL:-not_set}"
 
 Store the config name for use in subsequent `doppler` commands.
 
+### Step 2.6: Structural-UI Visual-Regression Gate (#4834 / ADR-049)
+
+This is the gate's semantic home. Run it when the diff (`git diff --name-only origin/main...HEAD` — the branch-vs-main merge-base diff; do NOT use `origin/<branch>...HEAD`, which only sees unpushed commits and returns 0 files once the branch is pushed, silently skipping the gate) touches `apps/web-platform/app/(dashboard)/**`, `apps/web-platform/components/dashboard/**`, or any `layout.tsx`. Skip silently otherwise.
+
+**Why this exists:** jsdom (vitest) renders no CSS, so `md:w-14` / `hidden md:block` / `flex-wrap` / `display:none` regressions ship green through the unit suite (the #4810 class — top-level chrome leaking into drilled routes; a collapsed rail with no icon-only form). The gate renders real CSS in real headless Chromium.
+
+**Deterministic layer (BLOCKING).** Run the committed `nav-states-*.e2e.ts` spec in the existing `authenticated` Playwright project — real headless Chromium + real Next.js SSR seeded by the **offline mock-Supabase storageState** (`e2e/global-setup.ts` + `e2e/helpers/supabase-mocks.ts`). Zero credentials; NO `dev-signin`; never point at a live origin (CLO: synthetic fixtures only).
+
+```bash
+cd apps/web-platform && ./node_modules/.bin/playwright test nav-states --project=authenticated --reporter=list
+```
+
+A non-zero exit FAILS this QA run. The assertions read invariants jsdom cannot: drilled routes hide the wordmark + ThemeToggle; the collapsed rail is icon-only with no horizontal overflow; the workspace-identity band is visible (with org + repo content) in every drill state × viewport.
+
+**Advisory vision layer (NON-BLOCKING).** Optionally drive Playwright MCP over the same routes and screenshot each, then run a vision pass for anything the deterministic assertions miss (spacing, color, truncation). This is informational only — headed MCP cannot run in autonomous `/work`/CI, so it never blocks the merge. Surface findings as notes in the QA report.
+
 ### Step 3: Execute Test Scenarios
 
 For each test scenario in the plan, execute the steps it describes. Scenarios contain three possible step types, identified by their prefix:
@@ -149,8 +165,11 @@ The skill handles missing prerequisites without blocking the pipeline:
 ## Notes
 
 - For Playwright auth in production QA, use Supabase admin API `generate_link` to get the OTP code, then enter it in the OTP form. Do not use the magic link `action_link` URL — Playwright navigation does not trigger client-side hash fragment processing.
+- For Playwright MCP visual verification of an authenticated surface on a LOCAL dev server: start the server with `NEXT_PUBLIC_DEV_EXTRA_ORIGINS=<origin>` (else state-mutating POSTs 403 on CSRF), mint a cookie via `ux-audit/scripts/bot-signin.ts` with `NEXT_PUBLIC_APP_URL=http://localhost:<port>`, inject it with `page.context().addCookies()` (the `run_code_unsafe` sandbox has no `require`/`Buffer`/`atob` — pre-escape data into a literal), drive onboarding gates via `page.evaluate(fetch(...))` not UI clicks, and `curl`-pre-warm slow routes before `browser_navigate`. Full recipe: `knowledge-base/project/learnings/2026-06-02-playwright-mcp-local-auth-dashboard-verification.md`.
+- When asserting horizontal/vertical ALIGNMENT between two controls in Playwright, measure the innermost visible element (`.locator("svg")` / the text node), NOT the interactive element's `boundingBox()`. Two controls can share a layout gutter while their border-boxes differ by asymmetric padding or flex-stretch (e.g. a full-width `flex` link whose `px-3` is internal vs. an unpadded button whose `px-3` is the row gutter) — comparing border-boxes yields a false misalignment equal to the padding delta. See `knowledge-base/project/learnings/test-failures/2026-06-03-playwright-x-alignment-measure-glyph-not-border-box.md`.
 - This skill does NOT test error paths (network failure simulation, invalid input). That capability is deferred to a future iteration.
 - Screenshots from Playwright MCP resolve from the repo root, not the shell CWD. Always use absolute paths when in a worktree.
 - Test data cleanup is critical — always include cleanup steps in test scenarios to avoid accumulating garbage data in external services.
 - For new scheduled-probe workflows, dry-run every probe step against prod hostnames before merge. Verify the documented success path (HTTP code, redirect host, response shape) matches reality. Workflow YAML lint and unit tests do NOT catch API contract surprises like HEAD-rejecting endpoints or auth-required public endpoints. **Why:** PR #3030 — see `knowledge-base/project/learnings/integration-issues/2026-04-29-supabase-auth-probe-and-sentry-rule-api-quirks.md`.
 - For pure-CSS-utility-class fixes whose plan declares `User-Brand Impact: none` AND whose className contracts are fully unit-tested (vitest asserts on `toHaveClass`/`className.match`), a dev-server outage degrades QA to unit-test coverage rather than blocking the pipeline — file the dev-server bug separately with `pre-existing-unrelated` scope-out. For functional, data, auth, or payment fixes, the dev-server bug becomes load-bearing and must be fixed before merge. See `knowledge-base/project/learnings/2026-05-11-qa-degradation-when-dev-server-broken-on-css-only-fix.md`.
+- When the visual gate asserts on an element's measured size (`clientWidth`/`offsetHeight`) that is animated (`transition-[width]`) OR set in a post-mount effect (localStorage hydration, `useMediaQuery`), poll with `expect.poll(() => el.clientWidth, { timeout }).toBeGreaterThan(X)` — a single synchronous read races the transition/hydration and catches a transient value. And before a `page.mouse` drag on a hydrated client component, settle for hydration (the SSR markup is visible before React attaches `onPointerDown`, so an early drag fires events at a handler-less element). A JS-driven responsive width should ride a CSS custom property + an `@media` rule (NOT a Tailwind v4 `w-[var(--x)]` arbitrary class, which may not generate, nor a `useMediaQuery` JS gate, which can stay stale under SSR hydration). **Why:** PR #4871 — see `knowledge-base/project/learnings/ui-bugs/2026-06-03-dynamic-width-needs-css-var-not-tailwind-arbitrary-or-usemediaquery.md`.

@@ -117,4 +117,4 @@ The initial wiring blockers above are first-provisioning issues. The 2026-05-18 
 - [Cloudflare Proxy Hides Origin IPs from GH Pages Domain Check](./2026-05-18-cloudflare-proxy-hides-origin-ip-from-gh-pages-domain-check.md) -- proxied-vs-unproxied flip required at every cert provisioning, not just initial setup
 - [Cloudflare Dynamic-Redirect Skip Action Invalid](./2026-05-18-cloudflare-dynamic-redirect-skip-action-invalid.md) -- ACME exemption must be a negative-match clause, not a sibling skip rule
 - [Cloudflare One User-Defined Ruleset per Zone+Phase](./2026-05-18-cloudflare-one-user-defined-ruleset-per-zone-phase.md) -- inline rules into the existing phase-owning ruleset rather than creating a sibling
-- Source incident PIR: `knowledge-base/engineering/ops/post-mortems/soleur-ai-marketing-site-cloudflare-526-ssl-outage-2026-05-18-postmortem.md`
+- Source incident PIR: `knowledge-base/engineering/operations/post-mortems/soleur-ai-marketing-site-cloudflare-526-ssl-outage-2026-05-18-postmortem.md`

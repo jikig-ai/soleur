@@ -57,11 +57,14 @@ export async function resolveLeaderDocumentContext(args: {
   providedContent?: string | null;
   /**
    * Optional pre-resolved workspace path. The leader's `startAgentSession`
-   * already SELECTs `workspace_path` (alongside repo_status/installation_id)
-   * for the session — passing it through here avoids a second Supabase
-   * round-trip via `fetchUserWorkspacePath` on every leader turn. When
-   * omitted, the resolver falls back to the cached fetcher (Concierge
-   * shape).
+   * resolves the ACTIVE workspace path once (via `resolveActiveWorkspacePath`)
+   * and passes it through here — avoiding a second Supabase round-trip via
+   * `fetchUserWorkspacePath` on every leader turn. When omitted, the resolver
+   * falls back to `fetchUserWorkspacePath` (which also resolves the ACTIVE
+   * workspace, Concierge shape). Both paths now flow through the same
+   * active-workspace resolution (the leader convergence; the Concierge half
+   * landed in #4910), so the leader doc resolver reads the same workspace the
+   * UI KB file tree renders from.
    */
   workspacePath?: string;
 }): Promise<ResolvedLeaderDocumentContext> {

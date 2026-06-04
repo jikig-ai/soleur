@@ -21,7 +21,7 @@ date: 2026-05-13
 
 > [Updated 2026-05-13: D1 direction reversed per plan Research Reconciliation — the dominant frontmatter form is `brand_survival_threshold:` (97 files), not the singular `brand_threshold:` (1 file). D1 (PR #3737, merged) renamed the minority forms toward the dominant key; references below to `brand_threshold` reflect the spec's original framing but the canonical key is `brand_survival_threshold`. Likewise `single-user-incident` (hyphenated) was renamed to `single-user incident` (space-form).]
 
-Soleur has organic incident-response practice (24 runbooks, 1 worked post-incident review at `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md`) but no skill or agent that:
+Soleur has organic incident-response practice (24 runbooks, 1 worked post-incident review at `knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md`) but no skill or agent that:
 
 1. Classifies a live incident's `brand_threshold` (`none` / `single-user incident` / `aggregate pattern`) under time pressure — operators currently classify by feel.
 2. Evaluates GDPR Art. 33/34 notification triggers BEFORE drafting narrative — burning the 72h CNIL window on PIR authoring is the documented failure mode.
@@ -73,7 +73,7 @@ Standardize repo-wide BEFORE the skill PR:
   - `AGENTS.core.md`
   - `apps/web-platform/server/soleur-go-runner.ts`
   - `knowledge-base/engineering/architecture/decisions/ADR-026`, `ADR-027`, `ADR-028`
-  - `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md`, `ruleset-bypass-drift.md`, `github-app-drift.md`, `codeql-bot-coverage.md`, `lint-bot-statuses.md`
+  - `knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md`, `ruleset-bypass-drift.md`, `github-app-drift.md`, `codeql-bot-coverage.md`, `lint-bot-statuses.md`
   - `knowledge-base/legal/audits/2026-05-12-gdpr-gate-plan-phase-2-7-outcome.md`, `knowledge-base/legal/compliance-posture.md`
   - `knowledge-base/marketing/content-strategy.md`
   - Multiple brainstorms / learnings / plans (full list to be enumerated in PR1)
@@ -86,11 +86,11 @@ Skill at `plugins/soleur/skills/incident/SKILL.md`. Phases:
 - **Phase 0** — Capture operator-provided incident facts: title, detected_at (UTC), symptom prose, suspected_change pointer (PR# or commit SHA), affected user count estimate.
 - **Phase 1 — Classification (<60s target).** Skill prompts the operator with a structured decision tree mapping incident facts to `brand_threshold` ∈ {`none`, `single-user incident`, `aggregate pattern`}. Output: advisory recommendation + rationale. Operator confirms or overrides; selection is recorded verbatim into PIR frontmatter.
 - **Phase 2 — Art. 33/34 notification-trigger gate.** Skill emits structured fields: `art_33_triggered: bool`, `art_34_triggered: bool`, `notification_deadline: detected_at + 72h`. If `art_33_triggered = true`, skill BLOCKS Phase 3+ until operator acknowledges the notification path (link to `knowledge-base/legal/article-30-register.md`).
-- **Phase 3 — Runbook routing.** Skill scans `knowledge-base/engineering/ops/runbooks/*.md` for `triggers:` frontmatter matching the operator-supplied symptom tokens (literal-substring MVP); surfaces top-3 matches as suggestions. No automated action.
+- **Phase 3 — Runbook routing.** Skill scans `knowledge-base/engineering/operations/runbooks/*.md` for `triggers:` frontmatter matching the operator-supplied symptom tokens (literal-substring MVP); surfaces top-3 matches as suggestions. No automated action.
 - **Phase 4 — Internal PIR scaffold.** Skill generates a draft `<slug>-postmortem.md` from a template (template at `plugins/soleur/skills/incident/templates/pir.md`). Frontmatter schema verbatim from `dashboard-error-postmortem.md`: `title`, `date`, `incident_pr`, `incident_window`, `suspected_change`, `brand_threshold`, `status: open`, `triggers[]`. Body sections: Symptom, Root-cause hypothesis (table), Timeline (actor-key tagged), Recovery verification, Follow-ups, Who-was-affected (enumerated by USER ROLE: prospect / authenticated app user / legal-document signer / admin via Access / billing customer / OAuth installation owner).
 - **Phase 5 — Public-summary scaffold.** Skill generates a sidecar `<slug>-public.md` with stronger redaction (no usernames, no stack traces, no internal hostnames, no employee names). Template: status (investigating / identified / monitoring / resolved), blast-radius bucket, time-to-recovery, what-we-fixed.
 - **Phase 6 — Redaction sentinel (BLOCKING, runs separately on each draft).** See FR3.
-- **Phase 7 — Operator review + commit.** Skill emits both drafts inline for operator review. Markdown commit is a SEPARATE ack-gated step (per `2026-02-16-inline-only-output-for-security-agents.md`). On approval, commits `<slug>-postmortem.md` + `<slug>-public.md` under `knowledge-base/engineering/ops/runbooks/`.
+- **Phase 7 — Operator review + commit.** Skill emits both drafts inline for operator review. Markdown commit is a SEPARATE ack-gated step (per `2026-02-16-inline-only-output-for-security-agents.md`). On approval, commits `<slug>-postmortem.md` + `<slug>-public.md` under `knowledge-base/engineering/operations/runbooks/`.
 - **Phase 8 — Compound-capture handoff.** Skill calls `/soleur:compound-capture` with the fix learning. Boundary: `incident-commander = chronology + SEV + impact + scrubbed timeline; compound-capture = solved-problem pattern`.
 
 ### FR3: Pre-write redaction sentinel
@@ -152,7 +152,7 @@ PIR and public-summary are SEPARATE files with separate redaction passes. They M
 
 ### TR3: Redaction-sentinel testing
 
-- Fixture-test against `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md` (must NOT trigger false positives on existing PIR — current PIR was hand-redacted and is the negative baseline).
+- Fixture-test against `knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md` (must NOT trigger false positives on existing PIR — current PIR was hand-redacted and is the negative baseline).
 - Fixture-test against a synthetic positive corpus (real-looking JWTs, emails, UUIDs, etc.) at `plugins/soleur/skills/incident/test/fixtures/`.
 - Bash test harness: `plugins/soleur/skills/incident/test/redact-sentinel.test.sh`.
 - Per `cq-test-fixtures-synthesized-only`: synthesize fixtures from format specs; do not paste real production strings.
@@ -200,7 +200,7 @@ Spec leaves `art_33_triggered` / `art_34_triggered` / `notification_deadline` / 
 ## Dependencies
 
 - Existing canonical taxonomy: `AGENTS.core.md` `hr-weigh-every-decision-against-target-user-impact` (3-value `brand_threshold`).
-- Existing PIR shape: `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md`.
+- Existing PIR shape: `knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md`.
 - Existing skills: `compound-capture`, `compound`, `gdpr-gate`.
 - Existing agents: `user-impact-reviewer` (auto-fires on `single-user incident` PRs).
 - Worktree-manager (`plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`) for branch isolation per PR.

@@ -13,7 +13,7 @@ root_cause: wrong_api
 resolution_type: code_fix
 severity: high
 date: 2026-05-18
-incident_ref: knowledge-base/engineering/ops/post-mortems/soleur-ai-marketing-site-cloudflare-526-ssl-outage-2026-05-18-postmortem.md
+incident_ref: knowledge-base/engineering/operations/post-mortems/soleur-ai-marketing-site-cloudflare-526-ssl-outage-2026-05-18-postmortem.md
 synced_to: [terraform-architect]
 rtd_issue: https://github.com/jikig-ai/soleur/issues/4004
 ---
@@ -92,4 +92,4 @@ The negative-match clause carves out the ACME validator path so plaintext HTTP r
 - [Cloudflare One User-Defined Ruleset per Zone+Phase](./2026-05-18-cloudflare-one-user-defined-ruleset-per-zone-phase.md) — sibling learning from the same recovery; explains why this rule had to be inlined into `seo_page_redirects` rather than creating a new ruleset
 - [Cloudflare Proxy Hides Origin IPs from GH Pages Domain Check](./2026-05-18-cloudflare-proxy-hides-origin-ip-from-gh-pages-domain-check.md) — sibling learning from the same recovery
 - [GitHub Pages + Cloudflare Custom Domain Wiring](./2026-02-16-github-pages-cloudflare-wiring-workflow.md) — broader context
-- Source incident: [soleur.ai 2026-05-18 SSL outage PIR](../../../engineering/ops/post-mortems/soleur-ai-marketing-site-cloudflare-526-ssl-outage-2026-05-18-postmortem.md)
+- Source incident: [soleur.ai 2026-05-18 SSL outage PIR](../../../engineering/operations/post-mortems/soleur-ai-marketing-site-cloudflare-526-ssl-outage-2026-05-18-postmortem.md)

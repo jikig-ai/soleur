@@ -24,7 +24,7 @@ export function ThinkingDots() {
 export function ToolStatusChip({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-2 py-0.5" data-testid="tool-status-chip">
-      <span className="text-sm text-soleur-text-secondary">{label}</span>
+      <span className="min-w-0 text-sm text-soleur-text-secondary [overflow-wrap:anywhere]">{label}</span>
     </div>
   );
 }
@@ -162,6 +162,7 @@ export const MessageBubble = memo(function MessageBubble({
         )}
 
         <div
+          data-testid="message-bubble-card"
           className={`relative min-w-0 rounded-xl px-4 py-3 text-sm leading-relaxed ${
             isUser
               ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
@@ -190,7 +191,7 @@ export const MessageBubble = memo(function MessageBubble({
               className="mb-1 flex items-center gap-2"
               data-testid="message-bubble-header"
             >
-              <span className="text-xs font-semibold text-soleur-text-secondary">
+              <span className="whitespace-nowrap text-xs font-semibold text-soleur-text-secondary">
                 {headerPrimary}
               </span>
               {showFullTitle && !titleContainsName && (

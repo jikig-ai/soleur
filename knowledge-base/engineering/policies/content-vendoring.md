@@ -131,7 +131,7 @@ When a new bundle is added: append a row here, write its NOTICE per §2, registe
 
 ## Cross-references
 
-- Operator runbook: `knowledge-base/engineering/ops/runbooks/vendor-pin-drift-resolution.md`
+- Operator runbook: `knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md`
 - Compliance posture: `knowledge-base/legal/compliance-posture.md` §Vendored Code Provenance
 - gdpr-gate skill: `plugins/soleur/skills/gdpr-gate/SKILL.md`
 - Drift workflow: `.github/workflows/scheduled-content-vendor-drift.yml`

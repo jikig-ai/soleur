@@ -25,9 +25,33 @@ describe("OrgSwitcher", () => {
     vi.restoreAllMocks();
   });
 
-  it("AC-C: renders nothing when user belongs to only 1 organization", () => {
-    const { container } = render(<OrgSwitcher memberships={[JIKIGAI]} />);
-    expect(container).toBeEmptyDOMElement();
+  it("RQ7: a solo user (1 org) sees a NON-interactive identity chip with the workspace name, no switcher", () => {
+    render(<OrgSwitcher memberships={[JIKIGAI]} />);
+    // name visible for orientation
+    expect(screen.getByTestId("workspace-identity-static")).toHaveTextContent(
+      "jikigai",
+    );
+    // ...but no interactive switch affordance (nothing to switch to)
+    expect(
+      screen.queryByRole("button", { name: /switch workspace/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("AC4/AC5 (solo): the static chip folds in the repo subtitle and drops the role from the face", () => {
+    render(<OrgSwitcher memberships={[JIKIGAI]} repoName="jikig-ai/soleur" />);
+    const chip = screen.getByTestId("workspace-identity-static");
+    // repo subtitle is the muted second line, inside the chip
+    const subtitle = within(chip).getByTestId("live-repo-badge");
+    expect(subtitle).toHaveTextContent("jikig-ai/soleur");
+    // role no longer clutters the face (it's a solo Owner — no info loss)
+    expect(chip.textContent).not.toContain("Owner");
+  });
+
+  it("solo chip renders no subtitle when no repo is connected (compact, Open Q1)", () => {
+    render(<OrgSwitcher memberships={[JIKIGAI]} repoName={null} />);
+    const chip = screen.getByTestId("workspace-identity-static");
+    expect(within(chip).queryByTestId("live-repo-badge")).toBeNull();
+    expect(chip).toHaveTextContent("jikigai");
   });
 
   it("AC-C: renders nothing when memberships list is empty", () => {
@@ -35,12 +59,25 @@ describe("OrgSwitcher", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("renders chip with current-org name + role badge when count > 1", () => {
-    render(<OrgSwitcher memberships={[JIKIGAI, ACME]} />);
+  it("AC3/AC5 (multi-org): the closed chip shows name + repo subtitle, NOT the role on the face", () => {
+    render(
+      <OrgSwitcher memberships={[JIKIGAI, ACME]} repoName="jikig-ai/soleur" />,
+    );
     const trigger = screen.getByRole("button", { name: /switch workspace/i });
     expect(trigger).toBeInTheDocument();
     expect(trigger.textContent).toContain("jikigai");
-    expect(trigger.textContent).toContain("Owner");
+    // repo subtitle folded into the closed pill face
+    const subtitle = within(trigger).getByTestId("live-repo-badge");
+    expect(subtitle).toHaveTextContent("jikig-ai/soleur");
+    // role moved OFF the face (it now lives only in the dropdown rows)
+    expect(trigger.textContent).not.toContain("Owner");
+  });
+
+  it("multi-org chip renders no subtitle when no repo is connected (Open Q1)", () => {
+    render(<OrgSwitcher memberships={[JIKIGAI, ACME]} repoName={null} />);
+    const trigger = screen.getByRole("button", { name: /switch workspace/i });
+    expect(within(trigger).queryByTestId("live-repo-badge")).toBeNull();
+    expect(trigger.textContent).toContain("jikigai");
   });
 
   it("dropdown lists all memberships with role + member count when chip is clicked", () => {
@@ -99,4 +136,62 @@ describe("OrgSwitcher", () => {
   // supplies (covered by the render tests above). The "Untitled" fallback is
   // owned by the resolver, NOT this component — that arm is tested directly in
   // test/org-memberships-resolver.test.ts (feat-one-shot-workspace-untitled-name).
+});
+
+// Phase 1 (#4915): the gold square swatch is replaced by the pure
+// presentational WorkspaceIdentityTile (monogram, non-gold) at all three
+// switcher identity sites. FR6: gold is reserved for active-workspace accent +
+// the single primary action, not the identity swatch fill.
+describe("OrgSwitcher — workspace identity tile wiring (Phase 1, #4915)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("solo chip renders the monogram tile (first initial of the workspace name)", () => {
+    render(<OrgSwitcher memberships={[JIKIGAI]} />);
+    const chip = screen.getByTestId("workspace-identity-static");
+    expect(within(chip).getByTestId("workspace-identity-tile")).toHaveTextContent(
+      "J",
+    );
+  });
+
+  it("multi-org trigger renders the monogram tile", () => {
+    render(<OrgSwitcher memberships={[JIKIGAI, ACME]} />);
+    const trigger = screen.getByRole("button", { name: /switch workspace/i });
+    expect(
+      within(trigger).getByTestId("workspace-identity-tile"),
+    ).toHaveTextContent("J");
+  });
+
+  it("dropdown rows render tiles; the CURRENT row's tile is ring-distinguished, non-current is flat (preserves current vs non-current distinction without a gold fill)", () => {
+    render(<OrgSwitcher memberships={[JIKIGAI, ACME]} />);
+    fireEvent.click(screen.getByRole("button", { name: /switch workspace/i }));
+    const menu = screen.getByRole("menu");
+    const currentRow = within(menu)
+      .getByText("jikigai")
+      .closest("[data-testid='org-row']") as HTMLElement;
+    const otherRow = within(menu)
+      .getByText("Acme Studio")
+      .closest("[data-testid='org-row']") as HTMLElement;
+    const currentTile = within(currentRow).getByTestId("workspace-identity-tile");
+    const otherTile = within(otherRow).getByTestId("workspace-identity-tile");
+    expect(currentTile).toHaveTextContent("J");
+    expect(otherTile).toHaveTextContent("A");
+    // current row is visually marked (ring) — non-current is not
+    expect(currentTile.className).toContain("ring");
+    expect(otherTile.className).not.toContain("ring");
+  });
+
+  it("FR6: no gold square swatch fill (bg-soleur-accent-gold-fg/60) survives in the switcher markup", () => {
+    const { container } = render(
+      <OrgSwitcher memberships={[JIKIGAI, ACME]} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /switch workspace/i }));
+    const goldSwatch = Array.from(container.querySelectorAll("*")).find((el) =>
+      el.className
+        ?.toString()
+        .includes("bg-soleur-accent-gold-fg/60"),
+    );
+    expect(goldSwatch).toBeUndefined();
+  });
 });

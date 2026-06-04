@@ -1191,7 +1191,10 @@ assert_cron_workspace_root() {
   # must be the roomy /mnt/data/workspaces volume, NOT the 256 MB /tmp tmpfs,
   # or a git clone of the ~100 MB soleur tree ENOSPCs. The assertion spans ALL
   # docker run lines (canary AND prod) — scoping it to one line would let a
-  # canary/prod environment skew ship silently.
+  # canary/prod environment skew ship silently. (The `.cron` subdir isolation
+  # was reverted in the #4886 follow-up — a deploy-critical-path mkdir on a full
+  # volume deadlocked the deploy; cron-workspace-gc sweeps /workspaces directly,
+  # guarded by the `soleur-` prefix. Dedicated-volume isolation deferred to #4891.)
   local description="$1"
   local cmd="$2"
 

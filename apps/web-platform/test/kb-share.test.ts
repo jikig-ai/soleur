@@ -78,7 +78,7 @@ describe("createShare — happy path", () => {
       kb_share_links: { shareRow: null, shareError: null, insertSpy },
     });
 
-    const result = await createShare(client as never, "user-1", kbRoot, "readme.md");
+    const result = await createShare(client as never, "user-1", "ws-1", kbRoot, "readme.md");
 
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("unreachable");
@@ -89,6 +89,11 @@ describe("createShare — happy path", () => {
     expect(insertSpy).toHaveBeenCalledTimes(1);
     const payload = insertSpy.mock.calls[0][0];
     expect(payload.user_id).toBe("user-1");
+    // Regression guard: kb_share_links.workspace_id is NOT NULL (migration
+    // 059). Omitting it makes the insert fail with Postgres 23502, surfacing
+    // as a silent 500 that dead-ends the "Generate link" button. The insert
+    // MUST carry the resolved workspace id.
+    expect(payload.workspace_id).toBe("ws-1");
     expect(payload.document_path).toBe("readme.md");
     expect(payload.content_sha256).toBe(hex(bytes));
     expect(payload.token).toBe(result.token);
@@ -109,7 +114,7 @@ describe("createShare — happy path", () => {
       },
     });
 
-    const result = await createShare(client as never, "user-1", kbRoot, "doc.md");
+    const result = await createShare(client as never, "user-1", "ws-1", kbRoot, "doc.md");
 
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("unreachable");
@@ -136,7 +141,7 @@ describe("createShare — happy path", () => {
       },
     });
 
-    const result = await createShare(client as never, "user-1", kbRoot, "doc.md");
+    const result = await createShare(client as never, "user-1", "ws-1", kbRoot, "doc.md");
 
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("unreachable");
@@ -158,7 +163,7 @@ describe("createShare — validation failures", () => {
       kb_share_links: { shareRow: null },
     });
 
-    const result = await createShare(client as never, "user-1", kbRoot, "foo\0bar.md");
+    const result = await createShare(client as never, "user-1", "ws-1", kbRoot, "foo\0bar.md");
 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("unreachable");
@@ -172,7 +177,7 @@ describe("createShare — validation failures", () => {
       kb_share_links: { shareRow: null },
     });
 
-    const result = await createShare(client as never, "user-1", kbRoot, "../outside.md");
+    const result = await createShare(client as never, "user-1", "ws-1", kbRoot, "../outside.md");
 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("unreachable");
@@ -190,7 +195,7 @@ describe("createShare — validation failures", () => {
       kb_share_links: { shareRow: null },
     });
 
-    const result = await createShare(client as never, "user-1", kbRoot, "link-out.md");
+    const result = await createShare(client as never, "user-1", "ws-1", kbRoot, "link-out.md");
 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("unreachable");
@@ -209,7 +214,7 @@ describe("createShare — validation failures", () => {
       kb_share_links: { shareRow: null },
     });
 
-    const result = await createShare(client as never, "user-1", kbRoot, "link-in.md");
+    const result = await createShare(client as never, "user-1", "ws-1", kbRoot, "link-in.md");
 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("unreachable");
@@ -223,7 +228,7 @@ describe("createShare — validation failures", () => {
       kb_share_links: { shareRow: null },
     });
 
-    const result = await createShare(client as never, "user-1", kbRoot, "missing.md");
+    const result = await createShare(client as never, "user-1", "ws-1", kbRoot, "missing.md");
 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("unreachable");
@@ -237,7 +242,7 @@ describe("createShare — validation failures", () => {
       kb_share_links: { shareRow: null },
     });
 
-    const result = await createShare(client as never, "user-1", kbRoot, "subdir");
+    const result = await createShare(client as never, "user-1", "ws-1", kbRoot, "subdir");
 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("unreachable");
@@ -252,7 +257,7 @@ describe("createShare — validation failures", () => {
       kb_share_links: { shareRow: null },
     });
 
-    const result = await createShare(client as never, "user-1", kbRoot, "huge.pdf");
+    const result = await createShare(client as never, "user-1", "ws-1", kbRoot, "huge.pdf");
 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("unreachable");
@@ -290,7 +295,7 @@ describe("createShare — concurrent retry (23505 unique violation)", () => {
       }),
     };
 
-    const result = await createShare(client as never, "user-1", kbRoot, "note.md");
+    const result = await createShare(client as never, "user-1", "ws-1", kbRoot, "note.md");
 
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("unreachable");
@@ -322,7 +327,7 @@ describe("createShare — concurrent retry (23505 unique violation)", () => {
       }),
     };
 
-    const result = await createShare(client as never, "user-1", kbRoot, "note.md");
+    const result = await createShare(client as never, "user-1", "ws-1", kbRoot, "note.md");
 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("unreachable");

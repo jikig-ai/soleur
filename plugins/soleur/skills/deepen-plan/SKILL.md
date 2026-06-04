@@ -483,6 +483,39 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
 
 **Why:** #4144 — PR-H #4066 added `var.github_actions_token` as a required TF variable, then never populated it in Doppler. Every `Apply deploy-pipeline-fix.yml` run since 2026-05-19T21:41Z failed before `terraform plan` could evaluate, blocking the entire deploy pipeline for ~14h (sudoers entry never refreshed → deploy webhook errored at `sudo: deploy : command not allowed` → Inngest heartbeat went silently red). The first defense is at plan-write time: catch PAT-shaped variables before they reach a workflow YAML.
 
+### 4.9. UI-Wireframe Artifact Halt (Conditional)
+
+Per `wg-ui-feature-requires-pen-wireframe`, a plan touching a UI surface must reference a committed `.pen` wireframe — otherwise the design phase silently shipped without one. This is the deepen-plan verifier on the one-shot path (one-shot chains plan→deepen-plan and skips brainstorm), mirroring the Phase 4.6/4.7 halts.
+
+**Step 1 — Trigger.** Fires only when the plan touches a UI surface. Match the plan's `## Files to Edit` and `## Files to Create` against the shared UI-surface term list + glob superset (`plugins/soleur/skills/brainstorm/references/ui-surface-terms.md`). No UI-surface file → skip silently (pass-through).
+
+**Step 2 — Grep for a committed `.pen` reference.** On a UI-surface plan, grep the plan body for a wireframe-artifact reference and confirm it is committed:
+
+```bash
+PLAN="<plan-file>"
+PEN=$(grep -oE 'knowledge-base/product/design/[A-Za-z0-9/_-]+\.pen' "$PLAN" | sort -u || true)
+COMMITTED=""
+for p in $PEN; do git ls-files --error-unmatch "$p" >/dev/null 2>&1 && COMMITTED="$COMMITTED $p"; done
+```
+
+**Step 3 — HALT on absence.** If the plan touches a UI surface but `COMMITTED` is empty, emit:
+
+> Error: Plan touches a UI surface but references no committed `.pen` wireframe. Wireframes are a non-skippable deliverable (`wg-ui-feature-requires-pen-wireframe`) — run the producer (brainstorm Phase 3.55 or plan Phase 2.5; Pencil auto-installs via `pencil-setup --auto`), commit the `.pen` under `knowledge-base/product/design/{domain}/`, and reference it in the plan FRs. No Markdown/ASCII fallback.
+
+Halt deepen-plan; do NOT proceed to Phase 5.
+
+**Step 4 — Emit telemetry.** When the halt fires:
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+  emit_incident wg-ui-feature-requires-pen-wireframe applied \
+  "UI feature must ship a committed .pen wireframe, never skipped"
+```
+
+**Step 5 — Pass-through.** Non-UI plan, or a committed `.pen` present → proceed normally. No telemetry on pass.
+
+**Why:** #4819 — the one-shot path skips brainstorm, so plan Phase 2.5 is the sole producer; this halt is the independent verifier that a UI feature did not reach implementation with zero wireframes (the silent-skip class the feature kills).
+
 ### 5. Discover and Run ALL Review Agents
 
 <thinking>

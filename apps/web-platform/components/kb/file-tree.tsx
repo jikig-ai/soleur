@@ -57,16 +57,20 @@ export function FileTree() {
   return (
     <nav aria-label="Knowledge base file tree">
       <ul className="space-y-0.5">
-        {tree.children.map((node) => (
-          <TreeItem
-            key={node.name}
-            node={node}
-            depth={0}
-            parentPath=""
-            expanded={expanded}
-            onToggle={toggleExpanded}
-          />
-        ))}
+        {tree.children.map((node) =>
+          node.type === "directory" ? (
+            <TreeItem
+              key={node.name}
+              node={node}
+              depth={0}
+              parentPath=""
+              expanded={expanded}
+              onToggle={toggleExpanded}
+            />
+          ) : (
+            <FileNode key={node.name} node={node} depth={0} />
+          ),
+        )}
       </ul>
     </nav>
   );

@@ -9,7 +9,7 @@ branch: feat-one-shot-restore-content-generator-cloud-task
 
 ## Phase 0 — Precondition checks (no writes)
 
-- [ ] 0.1 Confirm runbook exists at `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md`
+- [ ] 0.1 Confirm runbook exists at `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md`
 - [ ] 0.2 Confirm Doppler `prd_scheduled` config + `cloud-scheduled-tasks` token:
   `doppler configs tokens --project soleur --config prd_scheduled`
 - [ ] 0.3 Snapshot `scheduled-content-generator` label corpus as pre-restore

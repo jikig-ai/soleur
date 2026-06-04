@@ -91,7 +91,7 @@ authoritative for implementation.
 |---|---|
 | `.github/workflows/scheduled-github-app-drift-guard.yml` | The workflow. Hourly cron + `workflow_dispatch`. |
 | `apps/web-platform/test/github-app-drift-guard-contract.test.ts` | Vitest contract test locking workflow invariants. |
-| `knowledge-base/engineering/ops/runbooks/github-app-drift.md` | Operator runbook: bootstrap, triage, rotation. |
+| `knowledge-base/engineering/operations/runbooks/github-app-drift.md` | Operator runbook: bootstrap, triage, rotation. |
 
 ## Files to Edit
 
@@ -167,7 +167,7 @@ CODEOWNERS line for the new workflow. No semantic conflict.
 **Review and verification.**
 
 - [ ] **AC18** `bash scripts/test-all.sh` and `npx tsc --noEmit` clean.
-- [ ] **AC19** Operator runbook `knowledge-base/engineering/ops/runbooks/github-app-drift.md` published with three sections: (1) **Bootstrap** — where to find App DB ID (`/settings/apps/<slug>` → "App ID"), canonical PEM base64 encoding (`base64 -w 0 < app.pem | doppler secrets set GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 --plain`), Doppler→GH sync command (`doppler secrets get GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 -p soleur -c prd --plain | gh secret set GH_APP_DRIFTGUARD_PRIVATE_KEY_B64`); (2) **Triage** — single decision tree on `ci/auth-broken` vs `ci/guard-broken`; "do not auto-escalate user-facing OAuth probe; human triage decides"; (3) **Rotation** — key-rotation procedure if leak is suspected. Bootstrap section addresses SpecFlow F10 + F11.
+- [ ] **AC19** Operator runbook `knowledge-base/engineering/operations/runbooks/github-app-drift.md` published with three sections: (1) **Bootstrap** — where to find App DB ID (`/settings/apps/<slug>` → "App ID"), canonical PEM base64 encoding (`base64 -w 0 < app.pem | doppler secrets set GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 --plain`), Doppler→GH sync command (`doppler secrets get GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 -p soleur -c prd --plain | gh secret set GH_APP_DRIFTGUARD_PRIVATE_KEY_B64`); (2) **Triage** — single decision tree on `ci/auth-broken` vs `ci/guard-broken`; "do not auto-escalate user-facing OAuth probe; human triage decides"; (3) **Rotation** — key-rotation procedure if leak is suspected. Bootstrap section addresses SpecFlow F10 + F11.
 - [ ] **AC20** `/soleur:review` invoked with `user-impact-reviewer` engaged per `single-user incident` threshold.
 
 ### Post-merge (operator)
@@ -184,7 +184,7 @@ CODEOWNERS line for the new workflow. No semantic conflict.
 ### Phase 2 — Contract test + docs + ownership
 
 1. Create `apps/web-platform/test/github-app-drift-guard-contract.test.ts` per AC17 spec. Use `extractFunctionBody` from oauth-probe pattern; ephemeral RSA via `node:crypto`; inline negative-control fixture string literal.
-2. Create `knowledge-base/engineering/ops/runbooks/github-app-drift.md` with three sections per AC19.
+2. Create `knowledge-base/engineering/operations/runbooks/github-app-drift.md` with three sections per AC19.
 3. Edit `CODEOWNERS` per "Files to Edit".
 4. Edit `knowledge-base/legal/compliance-posture.md` per "Files to Edit".
 5. Create the two new labels in repo (`gh label create …`).

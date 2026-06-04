@@ -8,7 +8,7 @@ lane: single-domain
 
 ## Phase 1: Add cron bug-fixer section to inngest-server.md
 
-- [ ] 1.1 Read `knowledge-base/engineering/ops/runbooks/inngest-server.md`
+- [ ] 1.1 Read `knowledge-base/engineering/operations/runbooks/inngest-server.md`
 - [ ] 1.2 Add Quick Reference table row: `| Cron bug-fixer manual trigger | [link] |`
 - [ ] 1.3 Insert `## Cron bug-fixer` section between `## Concurrency conventions` and `## Plan deviations`
   - [ ] 1.3.1 Document event name: `cron/bug-fixer.manual-trigger`
@@ -22,6 +22,6 @@ lane: single-domain
 
 ## Phase 2: Verification
 
-- [ ] 2.1 Verify section heading: `grep -c '## Cron bug-fixer' knowledge-base/engineering/ops/runbooks/inngest-server.md` returns 1
+- [ ] 2.1 Verify section heading: `grep -c '## Cron bug-fixer' knowledge-base/engineering/operations/runbooks/inngest-server.md` returns 1
 - [ ] 2.2 Verify no SSH: `grep -c 'ssh ' <new-section>` returns 0
-- [ ] 2.3 Verify event name present: `grep -c 'cron/bug-fixer.manual-trigger' knowledge-base/engineering/ops/runbooks/inngest-server.md` >= 1
+- [ ] 2.3 Verify event name present: `grep -c 'cron/bug-fixer.manual-trigger' knowledge-base/engineering/operations/runbooks/inngest-server.md` >= 1

@@ -8,12 +8,13 @@ process.env.NEXT_PUBLIC_APP_URL ??= "https://app.soleur.ai";
 // Mock all heavy dependencies (same pattern as agent-runner-tools.test.ts)
 // ---------------------------------------------------------------------------
 
-const { mockFrom, mockRpc, mockQuery, mockReadFileSync, resolveLeaderDocumentContextSpy } = vi.hoisted(() => ({
+const { mockFrom, mockRpc, mockQuery, mockReadFileSync, resolveLeaderDocumentContextSpy, mockMessagesInsert } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
   mockRpc: vi.fn(),
   mockQuery: vi.fn(),
   mockReadFileSync: vi.fn(),
   resolveLeaderDocumentContextSpy: vi.fn(),
+  mockMessagesInsert: vi.fn((_row: Record<string, unknown>) => ({ error: null })),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -127,7 +128,22 @@ vi.mock("../server/leader-document-resolver", () => ({
   resolveLeaderDocumentContext: resolveLeaderDocumentContextSpy,
 }));
 
-import { startAgentSession } from "../server/agent-runner";
+// agent-runner now resolves the leader cwd from the ACTIVE workspace via
+// `resolveActiveWorkspacePath` (ADR-044 convergence) instead of the legacy
+// `users.workspace_path` column. Pin the seam to the seeded workspace_path so
+// the absolute-path assertions below stay deterministic (mirrors #4910's
+// Concierge test repoint). `importActual` keeps the other real exports that
+// byok-resolver depends on.
+vi.mock("../server/workspace-resolver", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../server/workspace-resolver")>();
+  return {
+    ...actual,
+    resolveActiveWorkspacePath: vi.fn(async () => "/tmp/test-workspace"),
+  };
+});
+
+import { startAgentSession, sendUserMessage } from "../server/agent-runner";
 import type { ConversationContext } from "../lib/types";
 import {
   READ_TOOL_PDF_CAPABILITY_DIRECTIVE,
@@ -148,8 +164,15 @@ import {
 function setupSupabaseMock(
   userData: Record<string, unknown>,
   serviceTokenRows?: Record<string, unknown>[],
+  conversationWorkspaceId?: string,
 ) {
-  createSupabaseMockImpl(mockFrom, { userData, apiKeyRows: serviceTokenRows, mockRpc });
+  createSupabaseMockImpl(mockFrom, {
+    userData,
+    apiKeyRows: serviceTokenRows,
+    mockRpc,
+    mockMessagesInsert,
+    conversationWorkspaceId,
+  });
 }
 
 function setupQueryMockImmediate() {
@@ -183,6 +206,23 @@ describe("agent-runner system prompt context injection", () => {
       artifactPath: "knowledge-base/product/roadmap.md",
       documentKind: "text",
     });
+  });
+
+  test("T4-workspace-id: sendUserMessage INSERT carries workspace_id from the parent conversation (mig 059 RLS)", async () => {
+    // The user-row INSERT in `sendUserMessage` must carry `workspace_id`
+    // read from the parent conversation (extended into the existing
+    // `.select("domain_leader, session_id, workspace_id")`) so
+    // `messages_workspace_member_insert` WITH CHECK is satisfied.
+    setupSupabaseMock(BASE_USER_DATA, undefined, "ws-B");
+    setupQueryMockImmediate();
+
+    await sendUserMessage("user-1", "conv-1", "hello from user");
+
+    const userRows = mockMessagesInsert.mock.calls
+      .map((c) => c[0])
+      .filter((r) => r && r.role === "user");
+    expect(userRows.length).toBeGreaterThan(0);
+    expect(userRows[0].workspace_id).toBe("ws-B");
   });
 
   test("system prompt never contains absolute workspace paths", async () => {

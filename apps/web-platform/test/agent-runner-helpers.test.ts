@@ -78,7 +78,7 @@ describe("buildAgentQueryOptions drift guard (legacy ↔ cc — #2922)", () => {
   const baseArgs = {
     workspacePath: "/tmp/test-workspace",
     pluginPath: "/tmp/test-workspace/plugins/soleur",
-    apiKey: "sk-test",
+    credential: { value: "sk-test", scheme: "api_key" as const },
     serviceTokens: {} as Record<string, string>,
     systemPrompt: "you are a router",
     canUseTool: (async () => ({

@@ -27,6 +27,12 @@ const {
   mockBuildAgentEnv,
   mockBuildAgentSandboxConfig,
   mockSupabaseFrom,
+  mockResolveInstallationId,
+  mockGenerateInstallationToken,
+  mockResolveBashAutonomous,
+  mockWriteAskpassScriptTo,
+  mockCleanupAskpassScript,
+  mockResolveActiveWorkspacePath,
 } = vi.hoisted(() => ({
   mockQuery: vi.fn(),
   mockGetUserApiKey: vi.fn(),
@@ -37,6 +43,12 @@ const {
   mockBuildAgentEnv: vi.fn(),
   mockBuildAgentSandboxConfig: vi.fn(),
   mockSupabaseFrom: vi.fn(),
+  mockResolveInstallationId: vi.fn(),
+  mockGenerateInstallationToken: vi.fn(),
+  mockResolveBashAutonomous: vi.fn(),
+  mockWriteAskpassScriptTo: vi.fn(),
+  mockCleanupAskpassScript: vi.fn(),
+  mockResolveActiveWorkspacePath: vi.fn(),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -67,6 +79,50 @@ vi.mock("@/server/agent-env", () => ({
 
 vi.mock("@/server/sandbox-hook", () => ({
   createSandboxHook: vi.fn(() => async () => ({})),
+}));
+
+// Issue A — Concierge gh-auth. Default to "no connected repo" (null) so the
+// pre-existing factory-shape tests dispatch with no GH_TOKEN; the dedicated
+// describe block below drives the connected + mint-failure paths.
+vi.mock("@/server/resolve-installation-id", () => ({
+  resolveInstallationId: mockResolveInstallationId,
+}));
+
+vi.mock("@/server/github-app", () => ({
+  generateInstallationToken: mockGenerateInstallationToken,
+}));
+
+// Plan item 1 — cc-dispatcher now imports the in-sandbox askpass writer from
+// git-auth. MUST be mocked here AND in cc-dispatcher-prefill-guard.test.ts or
+// the cold-start suite throws on import (Phase 0.4 sweep).
+vi.mock("@/server/git-auth", () => ({
+  writeAskpassScriptTo: mockWriteAskpassScriptTo,
+  cleanupAskpassScript: mockCleanupAskpassScript,
+}));
+
+// Issue B part 2 — autonomous toggle. Default off (false) so factory-shape
+// tests dispatch with the review-gate intact.
+vi.mock("@/server/resolve-bash-autonomous", () => ({
+  resolveBashAutonomous: mockResolveBashAutonomous,
+}));
+
+// Session-start ensure-repo self-heal (cold-path deps). Default no-op so the
+// factory-shape tests are unaffected.
+// ADR-044: fetchUserWorkspacePath now resolves the ACTIVE workspace via
+// resolveActiveWorkspacePath. Override only that export (importActual keeps the
+// rest of workspace-resolver real for any other consumer cc-dispatcher pulls).
+vi.mock("@/server/workspace-resolver", async () => {
+  const actual = await vi.importActual<typeof import("@/server/workspace-resolver")>(
+    "@/server/workspace-resolver",
+  );
+  return { ...actual, resolveActiveWorkspacePath: mockResolveActiveWorkspacePath };
+});
+
+vi.mock("@/server/current-repo-url", () => ({
+  getCurrentRepoUrl: vi.fn(async () => null),
+}));
+vi.mock("@/server/ensure-workspace-repo", () => ({
+  ensureWorkspaceRepoCloned: vi.fn(async () => undefined),
 }));
 
 vi.mock("@/server/permission-callback", () => ({
@@ -117,13 +173,21 @@ vi.mock("@/server/byok-lease", async () => {
         body: (lease: {
           workspaceContextUserId: string;
           keyOwnerUserId: string;
-          getApiKey: () => string | Promise<string>;
+          getRestApiKey: () => string | Promise<string>;
+          getAgentCredential: () => Promise<{ value: string; scheme: "api_key" | "oauth_token" }>;
         }) => Promise<T>,
       ) =>
         body({
           workspaceContextUserId: args.workspaceContextUserId,
           keyOwnerUserId: args.keyOwnerUserId,
-          getApiKey: () => mockGetUserApiKey(),
+          // cc-dispatcher is an Agent-SDK consumer → getAgentCredential.
+          // Bridge the legacy mockGetUserApiKey value/rejection into the
+          // new { value, scheme } shape (scheme=api_key for these tests).
+          getRestApiKey: () => mockGetUserApiKey(),
+          getAgentCredential: async () => ({
+            value: await mockGetUserApiKey(),
+            scheme: "api_key" as const,
+          }),
         }),
     ),
   };
@@ -179,6 +243,16 @@ const WORKSPACE_PATH = "/tmp/cc-test-workspace";
 function setupSupabaseMockReturning(
   workspacePath: string | null = WORKSPACE_PATH,
 ) {
+  // ADR-044: the workspace path is resolved via resolveActiveWorkspacePath
+  // (active workspace), not the users.workspace_path read. A null workspacePath
+  // models the legacy "not provisioned" throw the factory's error path expects.
+  if (workspacePath) {
+    mockResolveActiveWorkspacePath.mockResolvedValue(workspacePath);
+  } else {
+    mockResolveActiveWorkspacePath.mockRejectedValue(
+      new Error("Workspace not provisioned"),
+    );
+  }
   mockSupabaseFrom.mockImplementation((table: string) => {
     if (table === "users") {
       return {
@@ -239,6 +313,15 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       },
     });
     mockQuery.mockReturnValue(makeFakeQuery());
+    // Issue A defaults: no connected repo (null) → no mint, no GH_TOKEN.
+    mockResolveInstallationId.mockResolvedValue(null);
+    mockGenerateInstallationToken.mockResolvedValue("ghs_default_test_token");
+    mockResolveBashAutonomous.mockResolvedValue(false);
+    // Item 1 — in-sandbox askpass writer returns a deterministic path under
+    // the workspace (the real writer uses a randomUUID suffix).
+    mockWriteAskpassScriptTo.mockReturnValue(
+      `${WORKSPACE_PATH}/.askpass-fixed-test.sh`,
+    );
     setupSupabaseMockReturning(WORKSPACE_PATH);
   });
 
@@ -418,14 +501,160 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
 
     await realSdkQueryFactory(makeArgs());
 
-    expect(mockBuildAgentEnv).toHaveBeenCalledWith("sk-test", {
-      PLAUSIBLE_API_KEY: "plk-1",
-    });
+    expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+      { value: "sk-test", scheme: "api_key" },
+      { PLAUSIBLE_API_KEY: "plk-1" },
+      // Issue A: third opts arg always present; ghToken undefined here
+      // because the default mock resolves no installation (null).
+      { ghToken: undefined },
+    );
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.env.ANTHROPIC_API_KEY).toBe("sk-test");
     // CWE-526: no service-role key in env.
     expect(opts.env.SUPABASE_SERVICE_ROLE_KEY).toBeUndefined();
     expect(opts.env.BYOK_ENCRYPTION_KEY).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // Issue A — Concierge gh-auth: mint + inject GH_TOKEN (AC1/AC4)
+  // -------------------------------------------------------------------------
+  it("AC1: connected repo → mints installation token and threads it as ghToken", async () => {
+    mockResolveInstallationId.mockResolvedValueOnce(987654);
+    mockGenerateInstallationToken.mockResolvedValueOnce("ghs_minted_xyz");
+
+    await realSdkQueryFactory(makeArgs());
+
+    expect(mockResolveInstallationId).toHaveBeenCalledWith("user-1");
+    expect(mockGenerateInstallationToken).toHaveBeenCalledWith(
+      987654,
+      expect.objectContaining({ minRemainingMs: expect.any(Number) }),
+    );
+    // buildAgentEnv receives the minted token via the opts param — plus the
+    // in-sandbox askpass wiring (item 1): the helper path + the same token as
+    // gitInstallationToken.
+    expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+      { value: "sk-test", scheme: "api_key" },
+      {},
+      {
+        ghToken: "ghs_minted_xyz",
+        gitAskpassScriptPath: `${WORKSPACE_PATH}/.askpass-fixed-test.sh`,
+        gitInstallationToken: "ghs_minted_xyz",
+      },
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // Item 1d/1e — in-sandbox git GIT_ASKPASS wiring (plan §Phase 1)
+  // -------------------------------------------------------------------------
+  it("item1d: connected repo → writes a fixed-name askpass helper under the workspace exactly once", async () => {
+    mockResolveInstallationId.mockResolvedValueOnce(987654);
+    mockGenerateInstallationToken.mockResolvedValueOnce("ghs_minted_xyz");
+
+    await realSdkQueryFactory(makeArgs());
+
+    // The helper is written under the user's OWN workspace (the only verified
+    // sandbox-readable allowWrite dir) — NOT $HOME/$TMPDIR — with a FIXED name
+    // so it is reused per workspace (no accumulation, no cleanup lifecycle).
+    // WORKSPACE_PATH/.git does not exist in the test, so the dir is the
+    // workspace root; in prod with a cloned repo it is `<workspace>/.git`.
+    expect(mockWriteAskpassScriptTo).toHaveBeenCalledTimes(1);
+    expect(mockWriteAskpassScriptTo).toHaveBeenCalledWith(
+      WORKSPACE_PATH,
+      ".soleur-askpass.sh",
+    );
+    // And the writer's resolved path is threaded into buildAgentEnv (not a
+    // vacuous "env exists" check — assert the askpass path actually flows).
+    expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        gitAskpassScriptPath: `${WORKSPACE_PATH}/.askpass-fixed-test.sh`,
+        gitInstallationToken: "ghs_minted_xyz",
+      }),
+    );
+  });
+
+  it("item1d: no connected repo (null installation) → NO askpass write, gitAskpassScriptPath undefined", async () => {
+    mockResolveInstallationId.mockResolvedValueOnce(null);
+
+    await realSdkQueryFactory(makeArgs());
+
+    expect(mockWriteAskpassScriptTo).not.toHaveBeenCalled();
+    // buildAgentEnv receives undefined askpass inputs (both-or-nothing → the
+    // GIT_* set is never injected for a no-repo dispatch).
+    expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+      { value: "sk-test", scheme: "api_key" },
+      {},
+      {
+        ghToken: undefined,
+        gitAskpassScriptPath: undefined,
+        gitInstallationToken: undefined,
+      },
+    );
+  });
+
+  it("item1d: mint failure → NO askpass write (no token to ride GIT_INSTALLATION_TOKEN)", async () => {
+    mockResolveInstallationId.mockResolvedValueOnce(987654);
+    mockGenerateInstallationToken.mockRejectedValueOnce(new Error("mint boom"));
+
+    await realSdkQueryFactory(makeArgs());
+
+    expect(mockWriteAskpassScriptTo).not.toHaveBeenCalled();
+  });
+
+  it("item1e: the askpass-helper path is the ONLY place the credential is wired — token never embedded in a remote URL or argv", async () => {
+    mockResolveInstallationId.mockResolvedValueOnce(987654);
+    mockGenerateInstallationToken.mockResolvedValueOnce("ghs_minted_xyz");
+
+    await realSdkQueryFactory(makeArgs());
+
+    // The minted token must NOT appear in the askpass-writer arguments (it
+    // takes only the dir); it rides GIT_INSTALLATION_TOKEN env, set by
+    // buildAgentEnv. Synthesized-fixture invariant per cq-test-fixtures-synthesized-only.
+    for (const call of mockWriteAskpassScriptTo.mock.calls) {
+      expect(JSON.stringify(call)).not.toContain("ghs_minted_xyz");
+    }
+    // The clone/remote URL path lives in ensure-workspace-repo (mocked here);
+    // git-auth's own suite pins "token NEVER appears in execFile args". This
+    // assertion pins that the cc wiring passes only the workspace dir + the
+    // fixed helper name — never the token.
+    expect(mockWriteAskpassScriptTo).toHaveBeenCalledWith(
+      WORKSPACE_PATH,
+      ".soleur-askpass.sh",
+    );
+  });
+
+  it("AC1: no connected repo (null installation) → no mint, ghToken undefined, dispatch proceeds", async () => {
+    mockResolveInstallationId.mockResolvedValueOnce(null);
+
+    await realSdkQueryFactory(makeArgs());
+
+    expect(mockGenerateInstallationToken).not.toHaveBeenCalled();
+    expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+      { value: "sk-test", scheme: "api_key" },
+      {},
+      { ghToken: undefined },
+    );
+    expect(mockQuery).toHaveBeenCalledOnce();
+  });
+
+  it("AC4: mint failure mirrors to Sentry (op:mint-gh-token) and dispatch continues without GH_TOKEN", async () => {
+    mockResolveInstallationId.mockResolvedValueOnce(987654);
+    mockGenerateInstallationToken.mockRejectedValueOnce(new Error("mint boom"));
+
+    await realSdkQueryFactory(makeArgs());
+
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ feature: "cc-dispatcher", op: "mint-gh-token" }),
+    );
+    // Non-fatal: dispatch still happens, ghToken undefined.
+    expect(mockQuery).toHaveBeenCalledOnce();
+    expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+      { value: "sk-test", scheme: "api_key" },
+      {},
+      { ghToken: undefined },
+    );
   });
 
   // -------------------------------------------------------------------------

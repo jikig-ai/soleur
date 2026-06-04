@@ -80,7 +80,7 @@ The plan invokes the SSH/firewall trigger pattern (terraform provisioner uses `c
 
 **Status: All four layers covered by Pre-flight Checks 4–5 and Phase 2 dry-plan. No gaps. The dry-plan in Phase 2.4 does NOT exercise the SSH provisioner (Terraform skips provisioner code in `plan` mode), so Phase 2.6 below is added to bridge this gap.**
 
-If the operator's IP has drifted off the allowlist, route to `/soleur:admin-ip-refresh` (per `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`) BEFORE attempting Phase 3. This was the root cause of #2654 and the trigger for AGENTS.md `hr-ssh-diagnosis-verify-firewall`.
+If the operator's IP has drifted off the allowlist, route to `/soleur:admin-ip-refresh` (per `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md`) BEFORE attempting Phase 3. This was the root cause of #2654 and the trigger for AGENTS.md `hr-ssh-diagnosis-verify-firewall`.
 
 ## Pre-flight Checks
 
@@ -319,7 +319,7 @@ No cross-domain implications detected — infrastructure state-reconciliation. N
 - HashiCorp `-target` flag docs: <https://developer.hashicorp.com/terraform/cli/commands/plan#resource-targeting>
 - Terraform `terraform_data` resource: <https://developer.hashicorp.com/terraform/language/resources/terraform-data>
 - R2 + Terraform backend constraints: `apps/web-platform/infra/main.tf:5-15` (inline comment cites lack of S3 conditional writes)
-- Runbook: `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`
+- Runbook: `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md`
 - Learning: `knowledge-base/project/learnings/bug-fixes/2026-04-24-recurring-deploy-pipeline-fix-drift-as-feature.md`
 - Prior apply pattern (load-bearing reference): #2874 resolution comment (`terraform apply -target=terraform_data.deploy_pipeline_fix`, full-graph plan exit 0, webhook 200).
 

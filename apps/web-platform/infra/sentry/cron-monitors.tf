@@ -505,3 +505,25 @@ resource "sentry_cron_monitor" "scheduled_supabase_disk_io" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# 2026-06-03: Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-workspace-gc.ts`.
+# Ephemeral cron-clone garbage collector. A MISSED check-in means the GC stopped
+# (scheduler dead / function dropped) — the failure mode that let leaked clones
+# accumulate into the 2026-06-02 KB-sync ENOSPC freeze (#4882). The handler always
+# heartbeats ok:true (the sweep RAN; a clean 0-reclaim run is healthy) — the
+# actionable "volume still low after GC" condition pages via a warnSilentFallback
+# Sentry warn, not a ?status=error heartbeat. 6-hourly (0 */6 * * *), 30-min margin
+# + 10-min runtime mirror the disk-io small-cron cohort (pure-TS local fs, no
+# claude-eval spawn). Slug MUST match SENTRY_MONITOR_SLUG in the handler.
+resource "sentry_cron_monitor" "scheduled_workspace_gc" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-workspace-gc"
+  schedule                = { crontab = "0 */6 * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}

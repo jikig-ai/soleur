@@ -65,6 +65,19 @@ This list feeds directly into the Session Errors section of the learning documen
 
 FAILURE MODE THIS PREVENTS: Compound runs in pipeline mode, the model judges the session as "clean," and silently drops errors that happened earlier in the conversation (e.g., a skill-not-found error from one-shot Step 1 gets omitted because compound focuses only on the main implementation task).
 
+### Recurring-vs-One-Off Tech-Debt Triage (MANDATORY)
+
+HARD RULE: Immediately after the Session Error Inventory, classify EVERY inventory item (plus any non-error friction the session hit — a flaky gate, a slow manual workaround, a surprising tool behavior) as **recurring** or **one-off**. Do not skip this even when the inventory is short. The operator should never have to ask "are there any of these we could fix now to avoid stumbling on them again?" — this step answers it by default, separating genuine recurring tech debt from one-offs.
+
+For each item, decide:
+
+- **recurring** — the same class will bite again on a future session/PR (a flaky blocking gate, a missing guard, a foot-gun in a shared script, an inaccurate comment that misleads the next reader). Then pick a disposition:
+  - **fix-now-inline** — ≤30 lines AND ≤2 files AND in a subsystem this PR already touches → fold the fix into THIS work. (The first two conjuncts mirror the cost-of-filing gate in `review/SKILL.md` §5; the subsystem clause is the scope-discipline overlay — a different-subsystem defect is file-tracked, never inlined here.)
+  - **file-tracked** — larger, a different subsystem, or security/infra-sensitive → file a `deferred-scope-out` GitHub issue via the `review/SKILL.md` §5 mechanics (cost-of-filing + net-issue-flow: consolidate sibling follow-ups into one tracker; do not net-grow the backlog for trivia). A discovered defect in a DIFFERENT subsystem MUST stay its own issue and PR — never bundle it into an unrelated feature branch (scope discipline).
+- **one-off** — a typo, a transient flake that already self-resolved, or a context-specific misstep with no recurrence vector. Note it in the learning's Session Errors and move on (no fix, no issue).
+
+Output a short triage table (`item | recurring? | disposition`) to the user before writing the learning. `fix-now-inline` items feed the Error-to-Workflow Feedback step below; `file-tracked` items file directly via the review §5 mechanics above; and any recurring item that is a missing *workflow rule* (not a subsystem bug) additionally feeds Constitution Promotion / Route-to-Definition. **Why:** a flaky blocking gate left untriaged re-flakes for every future PR in that path — surfacing the recurring-vs-one-off split by default (instead of on request) turns each session's friction into a fix rather than shelf-ware.
+
 ### Post-Documentation Verification Gate (MANDATORY)
 
 After the learning file is written (by compound-capture Step 6), read it back and verify:
@@ -282,7 +295,7 @@ Prints top-3 cost table; emits `te-*` `warn` to `.claude/.rule-incidents.jsonl` 
 
 ### Cross-Session Promotion Loop (Layer 2)
 
-A weekly cron (`.github/workflows/scheduled-compound-promote.yml`) consumes accumulated learnings and proposes skill or `AGENTS.core.md` edits via draft PR when N=5 learnings cluster around the same root cause. Default OFF; opt in via `knowledge-base/project/promotion-config.yml`. See `knowledge-base/engineering/ops/runbooks/compound-promote-runbook.md`. Issue: #2720.
+A weekly cron (`.github/workflows/scheduled-compound-promote.yml`) consumes accumulated learnings and proposes skill or `AGENTS.core.md` edits via draft PR when N=5 learnings cluster around the same root cause. Default OFF; opt in via `knowledge-base/project/promotion-config.yml`. See `knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md`. Issue: #2720.
 
 ### Save Learning to Knowledge Base
 

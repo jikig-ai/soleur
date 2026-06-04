@@ -393,6 +393,41 @@ describe("mintFounderJwt — claim shape (Resolution C — asymmetric substrate)
   });
 });
 
+describe("malformed (non-UUID) userId — fail closed before the Admin SDK", () => {
+  // Regression: a non-UUID userId (e.g. the e2e mock's literal "test-user-id")
+  // made auth.admin.getUserById throw a raw "Expected parameter to be UUID"
+  // error that escaped ws-handler.tenantFor's RuntimeAuthError-only catch and
+  // crashed the server via unhandledRejection. The mint guard now rejects it
+  // as a RuntimeAuthError BEFORE any Admin SDK call, so callers fail-open.
+  it("mintFounderJwt rejects RuntimeAuthError{cause:jwt_mint} without calling getUserById", async () => {
+    await expect(mintFounderJwt("test-user-id")).rejects.toMatchObject({
+      name: "RuntimeAuthError",
+      cause: "jwt_mint",
+    });
+    expect(mocks.getUserByIdCalls).toEqual([]);
+    expect(mocks.generateLinkCalls).toEqual([]);
+  });
+
+  it("getFreshTenantClient rejects RuntimeAuthError for a non-UUID userId (ws-handler fails open)", async () => {
+    await expect(getFreshTenantClient("not-a-uuid")).rejects.toBeInstanceOf(
+      RuntimeAuthError,
+    );
+    expect(mocks.getUserByIdCalls).toEqual([]);
+  });
+
+  it("a valid UUID userId passes the guard and reaches the Admin SDK", async () => {
+    // A fresh UUID not minted elsewhere — tenant.ts's module-level emailCache
+    // persists across tests, so a previously-minted founder would skip
+    // getUserById on a cache hit and make this assertion vacuous.
+    const FRESH = "00000000-0000-0000-0000-00000000cccc";
+    mocks.setEmail(FRESH, "fresh@soleur.test");
+    mocks.setMintResult({ sub: FRESH });
+    await getFreshTenantClient(FRESH);
+    // proves the guard is not vacuously rejecting every input
+    expect(mocks.getUserByIdCalls).toContain(FRESH);
+  });
+});
+
 describe("getFreshTenantClient — auto-remint at TTL/4", () => {
   beforeEach(() => {
     vi.useFakeTimers();

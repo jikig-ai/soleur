@@ -66,6 +66,22 @@ const SUT_SOURCE = readFileSync(
   "utf-8",
 );
 
+describe("cron-community-monitor — turn budget (max-turns exhaustion fix)", () => {
+  it("spawns claude with --max-turns 80 (daily-triage parity; was 50)", () => {
+    // Root cause of Sentry WEB-PLATFORM-1Z (2026-06-03 08:06 UTC): the spawn
+    // exhausted its 50-turn budget ("Error: Reached max turns (50)", exitCode 1,
+    // ~6 min elapsed — NOT a wall-clock timeout) before reaching the final
+    // issue-create step, so this always-create producer filed no
+    // scheduled-community-monitor issue and the output-aware heartbeat
+    // (resolveOutputAwareOk, #4714) correctly went RED. 80 matches the
+    // proven-healthy cron-daily-triage budget through the same
+    // DEFAULT_CLAUDE_SETTINGS. See plan
+    // 2026-06-03-fix-cron-community-monitor-max-turns-exhaustion-plan.md.
+    expect(SUT_SOURCE).toMatch(/"--max-turns",\s*"80"/);
+    expect(SUT_SOURCE).not.toMatch(/"--max-turns",\s*"50"/);
+  });
+});
+
 describe("registration source-shape anchors (cross-check the import-time smoke)", () => {
   it.each([
     ['id: "cron-community-monitor"', "canonical function id"],
@@ -177,6 +193,10 @@ describe("buildSpawnEnv allowlist (PR-11 bucket-ii security surface)", () => {
       "BSKY_APP_PASSWORD",
       "LINKEDIN_ACCESS_TOKEN",
       "LINKEDIN_PERSON_URN",
+      "X_API_KEY",
+      "X_API_SECRET",
+      "X_ACCESS_TOKEN",
+      "X_ACCESS_TOKEN_SECRET",
     ])("allowlist contains %s", (key) => {
       expect(buildEnvBody).toContain(`${key}: process.env.${key}`);
     });
@@ -236,6 +256,16 @@ describe("buildSpawnEnv allowlist (PR-11 bucket-ii security surface)", () => {
 
     it("allowlist does NOT use ...process.env spread (would defeat allowlist)", () => {
       expect(buildEnvBody).not.toMatch(/\.\.\.process\.env/);
+    });
+
+    // Read-only invariant: the community monitor forwards X read credentials
+    // (X_API_KEY etc., positive class above) but MUST NOT forward X_ALLOW_POST
+    // — the posting defense-in-depth guard (x-community.sh:611). Only the
+    // publisher (cron-content-publisher.ts) arms posting. A future careless
+    // edit that adds X_ALLOW_POST here would silently enable posting from a
+    // read-only digest path.
+    it("allowlist does NOT contain X_ALLOW_POST (monitor is read-only)", () => {
+      expect(buildEnvBody).not.toContain("X_ALLOW_POST");
     });
   });
 });

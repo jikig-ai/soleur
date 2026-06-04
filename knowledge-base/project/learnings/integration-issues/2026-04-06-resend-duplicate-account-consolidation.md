@@ -43,7 +43,7 @@ Doppler (prd + prd_terraform) and GitHub Actions had the suspended account's key
 4. Fixed sender domain from `noreply@example.com` to `noreply@example.com` in:
    - `apps/web-platform/infra/disk-monitor.sh`
    - `.github/actions/notify-ops-email/action.yml`
-   - `knowledge-base/engineering/ops/runbooks/disk-monitoring.md`
+   - `knowledge-base/engineering/operations/runbooks/disk-monitoring.md`
 5. Re-ran terraform apply to deploy corrected disk-monitor.sh
 6. Verified with test email: HTTP 200, email delivered to <ops@example.com>
 

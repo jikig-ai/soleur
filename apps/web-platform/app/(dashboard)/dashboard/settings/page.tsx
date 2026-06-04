@@ -22,6 +22,7 @@ export default async function SettingsPage() {
       .from("api_keys")
       .select("provider, is_valid, updated_at")
       .eq("user_id", user.id)
+      .eq("provider", "anthropic")
       .eq("is_valid", true)
       .limit(1)
       .single(),
@@ -40,6 +41,16 @@ export default async function SettingsPage() {
     user.id,
   );
 
+  // feat-operator-cc-oauth — show the subscription-token toggle ONLY for an
+  // operator/internal account (ADMIN_USER_IDS) with the kill-switch on.
+  // Mirrors the AUTHORITATIVE server-side gate in /api/keys; this just hides
+  // the control for everyone else (AC8 "no toggle" when inert).
+  const isOperator =
+    process.env.ADMIN_USER_IDS?.split(",").includes(user.id) ?? false;
+  const ccOauthEnabled =
+    process.env.CC_OAUTH_ENABLED === "1" ||
+    process.env.CC_OAUTH_ENABLED === "true";
+
   return (
     <SettingsContent
       userEmail={user.email ?? ""}
@@ -50,6 +61,7 @@ export default async function SettingsPage() {
       repoStatus={(userData?.repo_status as RepoStatus) ?? "not_connected"}
       repoLastSyncedAt={userData?.repo_last_synced_at ?? null}
       needsReconnect={needsReconnect}
+      canUseOauthCredential={isOperator && ccOauthEnabled}
     />
   );
 }

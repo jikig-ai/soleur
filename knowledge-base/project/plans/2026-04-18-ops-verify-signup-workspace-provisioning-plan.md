@@ -71,7 +71,7 @@ are three verification artifacts, not feature work:
 2. A bubblewrap UID audit script that can be re-run per release to confirm
    the OS-level sandbox still isolates users.
 3. An MU1 re-verification runbook under
-   `knowledge-base/engineering/ops/runbooks/` that ties the above together
+   `knowledge-base/engineering/operations/runbooks/` that ties the above together
    and is executable before recruitment outreach and before each Phase-4
    deploy.
 
@@ -122,7 +122,7 @@ itself per the milestone description).
       exists, is executable, runs `docker exec soleur-web-platform bwrap ...`
       with a fixed namespace-unshare invocation, and emits a clear
       PASS/FAIL line that the runbook and future CI can pipe.
-- [ ] **MU1 runbook:** `knowledge-base/engineering/ops/runbooks/mu1-signup-workspace-verification.md`
+- [ ] **MU1 runbook:** `knowledge-base/engineering/operations/runbooks/mu1-signup-workspace-verification.md`
       exists, follows the same YAML frontmatter + section shape as
       `supabase-migrations.md`, and lists: what to run, expected output,
       failure remediation, known deferrals, sign-off checklist.
@@ -181,7 +181,7 @@ itself per the milestone description).
   Defaults: `CONTAINER=${CONTAINER:-soleur-web-platform}`. Exits non-zero
   if any of the three FAIL. Callable standalone (e.g., ssh'd into
   production), piped from the runbook, or wired into CI later.
-- `knowledge-base/engineering/ops/runbooks/mu1-signup-workspace-verification.md` —
+- `knowledge-base/engineering/operations/runbooks/mu1-signup-workspace-verification.md` —
   the re-verification runbook. Mirrors the structure of
   `supabase-migrations.md`: YAML frontmatter, Pre-check, Apply
   (= run audit + integration test), Verify (= inspect a real signup

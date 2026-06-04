@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import { RailSlotHarness } from "./helpers/rail-slot-harness";
 
 // Stable mock references (avoid useEffect re-fires)
 const mockPush = vi.fn();
@@ -62,12 +63,14 @@ describe("KbLayout", () => {
     );
 
     render(
-      <KbLayout>
-        <div data-testid="content-page">File content here</div>
-      </KbLayout>,
+      <RailSlotHarness>
+        <KbLayout>
+          <div data-testid="content-page">File content here</div>
+        </KbLayout>
+      </RailSlotHarness>,
     );
 
-    // Wait for tree to load
+    // Tree is portaled into the rail slot (ADR-047)
     const nav = await screen.findByRole("navigation", {
       name: /knowledge base file tree/i,
     });
@@ -85,9 +88,11 @@ describe("KbLayout", () => {
     );
 
     render(
-      <KbLayout>
-        <div>content</div>
-      </KbLayout>,
+      <RailSlotHarness>
+        <KbLayout>
+          <div>content</div>
+        </KbLayout>
+      </RailSlotHarness>,
     );
 
     // Wait for tree to load, then check search input is present
@@ -152,6 +157,66 @@ describe("KbLayout", () => {
     expect(screen.queryByText(/can't sync/i)).not.toBeInTheDocument();
   });
 
+  const EMPTY_TREE_FETCH = () =>
+    vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          tree: { name: "root", type: "directory", path: "", children: [] },
+          needsReconnect: false,
+        }),
+    });
+
+  it("Phase 4 (#4915): the fullWidth page header shows the title; on the KB LANDING it OMITS the back (the persistent band owns it — one back per state)", async () => {
+    mockPathname = "/dashboard/kb";
+    global.fetch = EMPTY_TREE_FETCH();
+
+    const { default: KbLayout } = await import(
+      "@/app/(dashboard)/dashboard/kb/layout"
+    );
+
+    render(
+      <KbLayout>
+        <div>content</div>
+      </KbLayout>,
+    );
+
+    // EmptyState (a fullWidth sub-state) has rendered.
+    await screen.findByText(/nothing here yet/i);
+    const header = screen.getByTestId("kb-page-mobile-header");
+    // Title is always present (P0-1 / P2-4)…
+    expect(within(header).getByText("Knowledge Base")).toBeInTheDocument();
+    // …but on the landing the header must NOT duplicate the band's "Back to
+    // menu" (the band's back is NOT suppressed on the landing path).
+    expect(
+      within(header).queryByRole("link", { name: /back to menu/i }),
+    ).toBeNull();
+  });
+
+  it("Phase 4 (#4915): the fullWidth page header shows its OWN back in the KB DOC VIEW (where the band back is suppressed)", async () => {
+    mockPathname = "/dashboard/kb/engineering/specs/file.md";
+    global.fetch = EMPTY_TREE_FETCH();
+
+    const { default: KbLayout } = await import(
+      "@/app/(dashboard)/dashboard/kb/layout"
+    );
+
+    render(
+      <KbLayout>
+        <div>content</div>
+      </KbLayout>,
+    );
+
+    await screen.findByText(/nothing here yet/i);
+    const header = screen.getByTestId("kb-page-mobile-header");
+    expect(within(header).getByText("Knowledge Base")).toBeInTheDocument();
+    // In the doc view the band suppresses its back, so the page header owns it.
+    expect(
+      within(header).getByRole("link", { name: /back to menu/i }),
+    ).toHaveAttribute("href", "/dashboard");
+  });
+
   it("does not render FileTree twice at root path", async () => {
     mockPathname = "/dashboard/kb";
 
@@ -160,16 +225,18 @@ describe("KbLayout", () => {
     );
 
     render(
-      <KbLayout>
-        <div data-testid="page-content">page content</div>
-      </KbLayout>,
+      <RailSlotHarness>
+        <KbLayout>
+          <div data-testid="page-content">page content</div>
+        </KbLayout>
+      </RailSlotHarness>,
     );
 
     await screen.findByRole("navigation", {
       name: /knowledge base file tree/i,
     });
 
-    // Should only have one navigation element (tree rendered once in sidebar)
+    // Should only have one navigation element (tree portaled once into the slot)
     const navs = screen.getAllByRole("navigation", {
       name: /knowledge base file tree/i,
     });

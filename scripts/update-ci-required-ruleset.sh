@@ -154,7 +154,7 @@ say "conditions (verbatim from before-snapshot):"
 say "$(jq '.conditions' "$payload")"
 
 # Persist the pre-mutation snapshot to a durable audit path BEFORE any
-# mutation. Runbook (knowledge-base/engineering/ops/runbooks/skill-security
+# mutation. Runbook (knowledge-base/engineering/operations/runbooks/skill-security
 # -scan-required-check.md) requires retaining $before for 24h as the
 # canonical rollback artifact; an EXIT-trap rm contradicts that.
 audit_dir="${XDG_STATE_HOME:-$HOME/.local/state}/soleur"

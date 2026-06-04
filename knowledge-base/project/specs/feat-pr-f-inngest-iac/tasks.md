@@ -80,7 +80,7 @@ Derived from `2026-05-18-feat-pr-f-inngest-iac-plan.md`. Two phases (plan v2 col
 
 ### 2.B — Docs
 
-- [ ] **2.6** Write `knowledge-base/engineering/ops/runbooks/inngest-server.md` covering:
+- [ ] **2.6** Write `knowledge-base/engineering/operations/runbooks/inngest-server.md` covering:
   - Heartbeat-miss triage steps.
   - Key rotation: Inngest dashboard → Doppler `tf` config → `terraform apply` → next webhook deploy.
   - **FR5 flag flip procedure** (the manual step replacing the dropped `doppler_secret` resource): `doppler secrets get SOLEUR_FR5_ENABLED -p soleur -c prd --plain` to verify current; flip via Doppler CLI with explicit operator confirmation.

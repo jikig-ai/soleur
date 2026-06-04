@@ -5,6 +5,7 @@ import { isTeamWorkspaceInviteEnabled, type Identity } from "@/lib/feature-flags
 import { resolveTeamMembershipPageData } from "@/server/team-membership-resolver";
 import { createWorkspaceInvitation } from "@/server/workspace-invitations";
 import { sendInviteEmail } from "@/server/notifications";
+import { emitWorkspaceActionContext } from "@/server/workspace-action-audit";
 
 // POST /api/workspace/invite-member
 // Body: { workspaceId, email, role: "owner"|"member", attestationText }
@@ -84,6 +85,16 @@ export async function POST(request: Request) {
             : 500;
     return NextResponse.json({ error: result.reason }, { status });
   }
+
+  // AC11: record the active workspace at invite-commit time (wrong-workspace
+  // detector). workspaceId was already proven to equal the caller's active
+  // workspace (workspace_mismatch guard above).
+  emitWorkspaceActionContext({
+    action: "invite-member",
+    userId: user.id,
+    workspaceId,
+    organizationId: pageData.data.organizationId,
+  });
 
   const inviterName =
     user.user_metadata?.full_name ?? user.email ?? "A team member";

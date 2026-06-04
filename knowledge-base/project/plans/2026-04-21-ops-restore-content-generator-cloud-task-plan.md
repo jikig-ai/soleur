@@ -21,7 +21,7 @@ Contract" section, new "Operator Safety Gates" section.
 
 **Research sources used:**
 
-- Runbook: `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md`
+- Runbook: `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md`
   (authoritative H1-H5 source).
 - Learning: `knowledge-base/project/learnings/2026-04-21-cloud-task-silence-watchdog-pattern.md`
   (strict-mode arithmetic pitfall; audit-label contract).
@@ -100,7 +100,7 @@ Operator follow-through from PR #2716. The content-generator Cloud scheduled tas
 stopped firing between **2026-03-31** (last audit issue #1348) and **2026-04-21**
 (manual dispatch #2692 restored the pipeline end-to-end but NOT the schedule).
 This plan executes the H1-H5 diagnosis checklist from
-`knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md`, restores the
+`knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md`, restores the
 scheduled task in the Cloud UI, and records the confirmed hypothesis as a
 comment on the original tracking issue #2714.
 
@@ -139,7 +139,7 @@ cause — both of those would carve off into their own PRs after diagnosis.
 | Claim (from #2714 / #2742) | Reality | Plan response |
 |---|---|---|
 | "Silence between 2026-03-31 and 2026-04-21" | `gh issue list --label scheduled-content-generator` shows last auto-issue #1348 on 2026-03-31; #2692 on 2026-04-21 is a manual `workflow_dispatch`, so the scheduled-surface silence window is exactly `2026-04-02 → 2026-04-21` (two missed Tuesdays, three missed Thursdays = 5 missed fires). | Accurate. Use 2026-04-02 as the silence-window start in the #2714 comment. |
-| "Follow runbook §H1-H5" | Runbook exists at `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` (merged in #2716). Each H* has explicit verify + restore steps. | Execute in order; stop at first confirmed hypothesis. |
+| "Follow runbook §H1-H5" | Runbook exists at `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` (merged in #2716). Each H* has explicit verify + restore steps. | Execute in order; stop at first confirmed hypothesis. |
 | "Restore at claude.ai/code in soleur-scheduled" | The Claude Code Cloud UI is the only surface exposing task status/pause/run-logs. No REST API alternative known. | Playwright MCP is the automation path; runtime credential prompt at login per `hr-when-playwright-mcp-hits-an-auth-wall`. |
 | "Playwright MCP for claude.ai/code login" | `claude.ai/code` requires authenticated Anthropic session. No headless credential path in Doppler (`doppler secrets --project soleur --config prd` does not carry anthropic.com session cookies). | Plan hands off to the founder for the single login step, browser stays open, session resumes per rule. |
 | Doppler `prd_scheduled` token rotation date | `doppler configs tokens --project soleur --config prd_scheduled` shows `cloud-scheduled-tasks` token created 2026-03-24T23:00:34Z. No rotation since. | H3 confirmed **low-probability** pre-diagnosis but still require the `Verify` check per runbook. |
@@ -353,7 +353,7 @@ novel failure mode not covered by the existing runbook/learnings.}
 
 **Phase 0 — Precondition checks** (no external-write actions):
 
-1. Confirm runbook is loaded: `stat knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md`.
+1. Confirm runbook is loaded: `stat knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md`.
 2. Confirm `prd_scheduled` Doppler config exists: `doppler configs --project
    soleur | grep prd_scheduled`.
 3. Snapshot the current `scheduled-content-generator` label corpus:
@@ -561,7 +561,7 @@ reference the operator-execution path files.
 
 No cross-domain implications detected — this is pure operator runbook
 execution. Engineering is the only implicit domain (runbook lives under
-`knowledge-base/engineering/ops/runbooks/`) and the runbook itself is the
+`knowledge-base/engineering/operations/runbooks/`) and the runbook itself is the
 subject-matter authority.
 
 ## Risks
@@ -590,7 +590,7 @@ subject-matter authority.
 
 ## Dependencies
 
-- **Runbook:** `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md`
+- **Runbook:** `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md`
   (merged in #2716).
 - **Watchdog workflow:** `.github/workflows/scheduled-cloud-task-heartbeat.yml`
   (merged in #2716).
@@ -613,7 +613,7 @@ subject-matter authority.
 
 ## References
 
-- Runbook: `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md`
+- Runbook: `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md`
 - Source PR: #2716 (watchdog + runbook shipped)
 - Parent PR: #1095 (GHA → Cloud migration)
 - Prior incident learning: `knowledge-base/project/learnings/2026-04-03-content-cadence-gap-cloud-task-migration.md`

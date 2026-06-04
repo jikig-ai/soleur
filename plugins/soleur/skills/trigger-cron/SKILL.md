@@ -16,7 +16,7 @@ to the Hetzner box whenever a cron needs an on-demand run.
 - Targeting a specific issue with the bug-fixer (`cron/bug-fixer.manual-trigger`
   with `data: { issue_number: N }`).
 - Any operator/agent "fire this cron now" need — see the runbooks
-  `knowledge-base/engineering/ops/runbooks/inngest-server.md` and
+  `knowledge-base/engineering/operations/runbooks/inngest-server.md` and
   `oauth-probe-failure.md`.
 
 ## How it works

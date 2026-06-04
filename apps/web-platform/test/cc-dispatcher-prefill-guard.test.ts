@@ -22,6 +22,7 @@ const {
   mockBuildAgentEnv,
   mockBuildAgentSandboxConfig,
   mockSupabaseFrom,
+  mockResolveActiveWorkspacePath,
 } = vi.hoisted(() => ({
   mockQuery: vi.fn(),
   mockApplyPrefillGuard: vi.fn(),
@@ -33,6 +34,7 @@ const {
   mockBuildAgentEnv: vi.fn(),
   mockBuildAgentSandboxConfig: vi.fn(),
   mockSupabaseFrom: vi.fn(),
+  mockResolveActiveWorkspacePath: vi.fn(),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -67,6 +69,35 @@ vi.mock("@/server/sandbox-hook", () => ({
   createSandboxHook: vi.fn(() => async () => ({})),
 }));
 
+// Issue A / Issue B part 2 — these dispatcher deps key off args.userId and are
+// resolved in the cold-start Promise.all. Default to no-connected-repo / off so
+// the prefill-guard behavior under test is unaffected.
+vi.mock("@/server/resolve-installation-id", () => ({
+  resolveInstallationId: vi.fn(async () => null),
+}));
+vi.mock("@/server/github-app", () => ({
+  generateInstallationToken: vi.fn(async () => "ghs_test"),
+}));
+// Plan item 1 — cc-dispatcher imports the in-sandbox askpass writer from
+// git-auth. Mock here too (Phase 0.4 sweep: any new cold-path import must be
+// mocked in BOTH cc-dispatcher test files or the suite throws on import).
+// Default no-repo path never calls it, but the module must resolve.
+vi.mock("@/server/git-auth", () => ({
+  writeAskpassScriptTo: vi.fn(() => "/tmp/ws/.askpass-test.sh"),
+  cleanupAskpassScript: vi.fn(),
+}));
+vi.mock("@/server/resolve-bash-autonomous", () => ({
+  resolveBashAutonomous: vi.fn(async () => false),
+}));
+
+// Session-start ensure-repo self-heal (cold-path deps) — default no-op.
+vi.mock("@/server/current-repo-url", () => ({
+  getCurrentRepoUrl: vi.fn(async () => null),
+}));
+vi.mock("@/server/ensure-workspace-repo", () => ({
+  ensureWorkspaceRepoCloned: vi.fn(async () => undefined),
+}));
+
 vi.mock("@/server/permission-callback", () => ({
   createCanUseTool: vi.fn(() => async () => ({ behavior: "allow" })),
 }));
@@ -96,11 +127,21 @@ vi.mock("@/lib/supabase/tenant", () => ({
   RuntimeAuthError: class RuntimeAuthError extends Error {},
 }));
 
+// ADR-044: fetchUserWorkspacePath resolves the ACTIVE workspace via
+// resolveActiveWorkspacePath. Override only that export; importActual keeps the
+// rest of workspace-resolver real.
+vi.mock("@/server/workspace-resolver", async () => {
+  const actual = await vi.importActual<typeof import("@/server/workspace-resolver")>(
+    "@/server/workspace-resolver",
+  );
+  return { ...actual, resolveActiveWorkspacePath: mockResolveActiveWorkspacePath };
+});
+
 // PR-C §2.11 (#3244): cc-dispatcher.ts now wraps `realSdkQueryFactory`
 // body in `runWithByokLease(args.userId, body)`. Short-circuit the lease
 // so the test does not pull the real `fetchAndDecryptIntoSlot` chain
 // (which would need a fully-shaped `api_keys.select.eq.eq.eq.limit.single`
-// terminal); `body` is invoked with a fake `lease.getApiKey() = "fake-key"`.
+// terminal); `body` is invoked with a fake `lease.getAgentCredential()`.
 vi.mock("@/server/byok-lease", async () => {
   const actual = await vi.importActual<typeof import("@/server/byok-lease")>(
     "@/server/byok-lease",
@@ -113,13 +154,16 @@ vi.mock("@/server/byok-lease", async () => {
         body: (lease: {
           workspaceContextUserId: string;
           keyOwnerUserId: string;
-          getApiKey: () => string;
+          getRestApiKey: () => string;
+          getAgentCredential: () => Promise<{ value: string; scheme: "api_key" | "oauth_token" }>;
         }) => Promise<T>,
       ) =>
         body({
           workspaceContextUserId: args.workspaceContextUserId,
           keyOwnerUserId: args.keyOwnerUserId,
-          getApiKey: () => "fake-byok-key",
+          // cc-dispatcher is an Agent-SDK consumer → getAgentCredential.
+          getRestApiKey: () => "fake-byok-key",
+          getAgentCredential: async () => ({ value: "fake-byok-key", scheme: "api_key" as const }),
         }),
     ),
   };
@@ -164,6 +208,8 @@ function makeFakeQuery() {
 const WORKSPACE_PATH = "/tmp/cc-test-workspace";
 
 function setupSupabaseMockReturning(workspacePath: string = WORKSPACE_PATH) {
+  // ADR-044: workspace path comes from resolveActiveWorkspacePath now.
+  mockResolveActiveWorkspacePath.mockResolvedValue(workspacePath);
   mockSupabaseFrom.mockImplementation((table: string) => {
     if (table === "users") {
       return {

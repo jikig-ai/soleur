@@ -14,9 +14,10 @@ vi.mock("@/lib/supabase/client", () => ({
 }));
 
 const mockReportSilentFallback = vi.fn();
+const mockWarnSilentFallback = vi.fn();
 vi.mock("@/lib/client-observability", () => ({
   reportSilentFallback: (...args: unknown[]) => mockReportSilentFallback(...args),
-  warnSilentFallback: vi.fn(),
+  warnSilentFallback: (...args: unknown[]) => mockWarnSilentFallback(...args),
 }));
 
 const mockAddBreadcrumb = vi.fn();
@@ -162,6 +163,74 @@ describe("useWebSocket — historyLoading flag + Sentry mirror (AC4, AC5)", () =
         }),
       );
     });
+  });
+
+  it("downgrades a 404 history fetch to warnSilentFallback, not error (FR4/AC3)", async () => {
+    // A residual fresh-conversation / stale-deep-link 404 is an expected,
+    // recoverable state on the deferred-creation path. It must mirror at
+    // WARNING level (warnSilentFallback), not error — so it does not page.
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: "Conversation not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("conv-cc-404"));
+
+    await connectAndAuth(result);
+
+    await waitFor(() => {
+      expect(mockWarnSilentFallback).toHaveBeenCalledWith(
+        null,
+        expect.objectContaining({
+          feature: "kb-chat",
+          op: "history-fetch-failed",
+          extra: expect.objectContaining({
+            conversationId: "conv-cc-404",
+            status: 404,
+          }),
+        }),
+      );
+    });
+
+    // The 404 must NOT have been reported at error level.
+    expect(mockReportSilentFallback).not.toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({ op: "history-fetch-failed", extra: expect.objectContaining({ status: 404 }) }),
+    );
+  });
+
+  it("keeps a 500 history fetch at error level via reportSilentFallback (FR4/AC3)", async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: "boom" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("conv-cc-500"));
+
+    await connectAndAuth(result);
+
+    await waitFor(() => {
+      expect(mockReportSilentFallback).toHaveBeenCalledWith(
+        null,
+        expect.objectContaining({
+          feature: "kb-chat",
+          op: "history-fetch-failed",
+          extra: expect.objectContaining({ conversationId: "conv-cc-500", status: 500 }),
+        }),
+      );
+    });
+
+    // A 500 is a genuine failure — it must NOT be downgraded to warning.
+    expect(mockWarnSilentFallback).not.toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({ extra: expect.objectContaining({ status: 500 }) }),
+    );
   });
 
   it("mirrors thrown fetch error (non-Abort) to Sentry via reportSilentFallback (AC5)", async () => {
