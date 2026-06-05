@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 
 import {
   PRE_DISPATCH_NARRATION_DIRECTIVE,
+  FAILURE_RECOVERY_FILE_ISSUE_DIRECTIVE,
   buildSoleurGoSystemPrompt,
   createSoleurGoRunner,
   type QueryFactory,
@@ -47,6 +48,16 @@ describe("soleur-go-runner pre-dispatch narration (Stage 2.23)", () => {
   it("buildSoleurGoSystemPrompt() embeds the narration directive", () => {
     const prompt = buildSoleurGoSystemPrompt();
     expect(prompt).toContain(PRE_DISPATCH_NARRATION_DIRECTIVE);
+  });
+
+  it("exports a non-empty FAILURE_RECOVERY_FILE_ISSUE_DIRECTIVE string", () => {
+    expect(typeof FAILURE_RECOVERY_FILE_ISSUE_DIRECTIVE).toBe("string");
+    expect(FAILURE_RECOVERY_FILE_ISSUE_DIRECTIVE.length).toBeGreaterThan(50);
+  });
+
+  it("buildSoleurGoSystemPrompt() embeds the file-issue directive", () => {
+    const prompt = buildSoleurGoSystemPrompt();
+    expect(prompt).toContain(FAILURE_RECOVERY_FILE_ISSUE_DIRECTIVE);
   });
 
   it("dispatch passes a systemPrompt containing the narration directive to the QueryFactory", async () => {

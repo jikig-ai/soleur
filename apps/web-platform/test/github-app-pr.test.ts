@@ -26,7 +26,7 @@ afterAll(() => {
 });
 
 // Import AFTER env and fetch mocking
-import { createPullRequest } from "../server/github-app";
+import { createPullRequest, createIssue } from "../server/github-app";
 
 describe("createPullRequest", () => {
   beforeEach(() => {
@@ -178,6 +178,129 @@ describe("createPullRequest", () => {
 
     await expect(
       createPullRequest(installationId, "alice", "my-repo", "feat-branch", "main", "title"),
+    ).rejects.toThrow(/installation token/);
+  });
+});
+
+describe("createIssue", () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  // Use unique installationId per test to avoid token cache interference
+  let nextInstallationId = 9500;
+  function uniqueInstallationId() {
+    return nextInstallationId++;
+  }
+
+  function mockTokenResponse() {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        token: "ghs_test_token",
+        expires_at: new Date(Date.now() + 3600_000).toISOString(),
+      }),
+    });
+  }
+
+  test("happy path: creates issue and returns number, htmlUrl, url", async () => {
+    const installationId = uniqueInstallationId();
+    mockTokenResponse();
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 201,
+      json: async () => ({
+        number: 7,
+        html_url: "https://github.com/alice/my-repo/issues/7",
+        url: "https://api.github.com/repos/alice/my-repo/issues/7",
+        title: "Something broke",
+        state: "open",
+      }),
+    });
+
+    const result = await createIssue(
+      installationId, "alice", "my-repo", "Something broke",
+    );
+
+    expect(result).toEqual({
+      number: 7,
+      htmlUrl: "https://github.com/alice/my-repo/issues/7",
+      url: "https://api.github.com/repos/alice/my-repo/issues/7",
+    });
+
+    // Verify the GitHub API call POSTs to the issues endpoint
+    const issueCall = mockFetch.mock.calls[1];
+    expect(issueCall[0]).toBe("https://api.github.com/repos/alice/my-repo/issues");
+    expect(issueCall[1].method).toBe("POST");
+    const body = JSON.parse(issueCall[1].body);
+    expect(body.title).toBe("Something broke");
+  });
+
+  test("passes optional body and labels parameters", async () => {
+    const installationId = uniqueInstallationId();
+    mockTokenResponse();
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 201,
+      json: async () => ({
+        number: 8,
+        html_url: "https://github.com/alice/my-repo/issues/8",
+        url: "https://api.github.com/repos/alice/my-repo/issues/8",
+      }),
+    });
+
+    await createIssue(
+      installationId, "alice", "my-repo", "Bug report",
+      "## Details\nFull description", ["bug", "triage"],
+    );
+
+    const issueCall = mockFetch.mock.calls[1];
+    const body = JSON.parse(issueCall[1].body);
+    expect(body.title).toBe("Bug report");
+    expect(body.body).toBe("## Details\nFull description");
+    expect(body.labels).toEqual(["bug", "triage"]);
+  });
+
+  test("throws on 404 error: repo not found", async () => {
+    const installationId = uniqueInstallationId();
+    mockTokenResponse();
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      text: async () => JSON.stringify({ message: "Not Found" }),
+    });
+
+    await expect(
+      createIssue(installationId, "alice", "my-repo", "title"),
+    ).rejects.toThrow(/404/);
+  });
+
+  test("throws on 422 validation error", async () => {
+    const installationId = uniqueInstallationId();
+    mockTokenResponse();
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 422,
+      text: async () => JSON.stringify({
+        message: "Validation Failed",
+        errors: [{ message: "Issues are disabled for this repo" }],
+      }),
+    });
+
+    await expect(
+      createIssue(installationId, "alice", "my-repo", "title"),
+    ).rejects.toThrow(/Issues are disabled/);
+  });
+
+  test("propagates token generation failure", async () => {
+    const installationId = uniqueInstallationId();
+    mockFetch
+      .mockResolvedValueOnce({ ok: false, status: 401, text: async () => "Unauthorized" })
+      .mockResolvedValueOnce({ ok: false, status: 401, text: async () => "Unauthorized" })
+      .mockResolvedValueOnce({ ok: false, status: 401, text: async () => "Unauthorized" });
+
+    await expect(
+      createIssue(installationId, "alice", "my-repo", "title"),
     ).rejects.toThrow(/installation token/);
   });
 });
