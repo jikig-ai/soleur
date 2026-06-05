@@ -275,10 +275,17 @@ export function C4CodePanel({
       // C4Diagnostics banner says so. Default true if the field is absent
       // (older server) so we don't false-warn.
       const rerendered = j?.rerendered !== false;
+      // On a re-render failure the server may explain WHY (e.g. an unresolved
+      // reference because spec.c4 is missing) so the user can fix their source
+      // instead of staring at a silently-stale diagram (#4966).
+      const diagnostic =
+        typeof j?.rerenderDiagnostic === "string" ? j.rerenderDiagnostic : null;
       setSaveMsg(
         rerendered
           ? "Saved — diagram updated."
-          : "Saved — diagram will update after re-render.",
+          : diagnostic
+            ? `Saved — ${diagnostic}`
+            : "Saved — diagram will update after re-render.",
       );
       await onSaved(rerendered);
     } catch (e) {

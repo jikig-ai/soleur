@@ -31,6 +31,7 @@ import {
 import { renameUserIdToHash } from "@/server/userid-pseudonymize";
 import { reportSilentFallback } from "@/server/observability";
 import { renderC4Model } from "@/server/c4-render";
+import { sanitizeForLog } from "@/lib/log-sanitize";
 import { open } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { join } from "node:path";
@@ -55,7 +56,15 @@ export type WriteC4Input = {
 };
 
 export type WriteC4Result =
-  | { ok: true; commitSha: string | null; rerendered: boolean }
+  | {
+      ok: true;
+      commitSha: string | null;
+      rerendered: boolean;
+      // Present only on a re-render FAILURE (`rerendered:false`): a concise,
+      // sanitized, user-facing reason the diagram didn't update (e.g. an
+      // unresolved-reference hint). Absent on success and on `.md` saves.
+      rerenderDiagnostic?: string;
+    }
   | { ok: false; status: number; error: string; code?: string };
 
 /**
@@ -142,8 +151,9 @@ export async function writeC4Diagram(
     // is NEVER rolled back. On any re-render/commit/sync failure we report and
     // return rerendered:false, degrading to the Layer-1 honest-stale banner.
     let rerendered = true;
+    let rerenderDiagnostic: string | undefined;
     if (relativePath.endsWith(C4_SOURCE_EXT)) {
-      rerendered = await rerenderAndCommit({
+      const r = await rerenderAndCommit({
         installationId,
         owner,
         repo,
@@ -151,8 +161,15 @@ export async function writeC4Diagram(
         userId,
         relativePath,
       });
+      rerendered = r.rerendered;
+      rerenderDiagnostic = r.diagnostic;
     }
-    return { ok: true, commitSha: result?.commit?.sha ?? null, rerendered };
+    return {
+      ok: true,
+      commitSha: result?.commit?.sha ?? null,
+      rerendered,
+      ...(rerenderDiagnostic ? { rerenderDiagnostic } : {}),
+    };
   } catch (error) {
     Sentry.captureException(error);
     if (error instanceof GitHubApiError) {
@@ -184,15 +201,49 @@ type RerenderInput = {
   relativePath: string;
 };
 
+type RerenderOutcome = {
+  rerendered: boolean;
+  /** A concise, user-facing reason on failure (e.g. an unresolved-reference
+   *  hint). Only set when the failure is the user's source (empty/invalid
+   *  render); absent for internal failures (oversized model, resync, etc.). */
+  diagnostic?: string;
+};
+
+/**
+ * Turn a render-failure `detail` (the captured `likec4` stderr) into a concise,
+ * sanitized, user-facing diagnostic. Prefers the first `Could not resolve …`
+ * line — the actionable cause, usually a `spec.c4` that defines the element
+ * kinds/tags is missing — over the raw multi-line dump.
+ */
+function buildRerenderDiagnostic(detail: string | undefined): string {
+  const raw = detail ?? "";
+  const match = raw.match(/Could not resolve reference to \w+ named '[^']+'/);
+  if (match) {
+    return sanitizeForLog(
+      `Re-render failed: ${match[0]} (is spec.c4 present?)`,
+      200,
+    );
+  }
+  return sanitizeForLog(
+    "Re-render failed: the diagram model is empty or invalid.",
+    200,
+  );
+}
+
 /**
  * Regenerate `model.likec4.json` via the out-of-process `likec4` CLI, commit it
  * through the same GitHub Contents API path, and re-sync the clone so the
  * committed JSON survives the next reconcile/GC and the GET /project route reads
- * the fresh `dump`. Returns `true` only on full success; any failure is reported
- * (mirrored to Sentry) and returns `false` — the caller has already committed
- * the `.c4` source, so a re-render failure never fails the save.
+ * the fresh `dump`. Returns `{ rerendered:true }` only on full success; any
+ * failure is reported (mirrored to Sentry) and returns `{ rerendered:false }`
+ * (with a user-facing `diagnostic` when the cause is the user's source) — the
+ * caller has already committed the `.c4` source, so a re-render failure never
+ * fails the save, and an empty/invalid render NEVER commits over the good model
+ * (renderC4Model validated to a temp file and left the real JSON untouched).
  */
-async function rerenderAndCommit(input: RerenderInput): Promise<boolean> {
+async function rerenderAndCommit(
+  input: RerenderInput,
+): Promise<RerenderOutcome> {
   const { installationId, owner, repo, workspacePath, userId, relativePath } =
     input;
   const jsonRelPath = `${C4_DIAGRAMS_DIR}/${C4_MODEL_JSON}`;
@@ -209,15 +260,15 @@ async function rerenderAndCommit(input: RerenderInput): Promise<boolean> {
         extra: { userId, relativePath, reason: render.reason },
         message: "c4 re-render failed — source committed, diagram stale",
       });
-      return false;
+      return { rerendered: false, diagnostic: buildRerenderDiagnostic(render.detail) };
     }
 
-    // Read the regenerated JSON off the synced clone (written in place by the
-    // CLI into the diagrams dir) and commit it via the same Contents API path.
-    // The path is constant-derived (no user input), but open with O_NOFOLLOW +
-    // an fd-stat size cap to match the GET /project route's TOCTOU/symlink
-    // hardening (CodeQL js/file-system-race) — the CLI's `-o` write could clobber
-    // or follow a planted symlink at this path.
+    // Read the regenerated JSON off the diagrams dir (renderC4Model validated
+    // the temp export and copied it onto this real path) and commit it via the
+    // same Contents API path. The path is constant-derived (no user input), but
+    // open with O_NOFOLLOW + an fd-stat size cap to match the GET /project
+    // route's TOCTOU/symlink hardening (CodeQL js/file-system-race) — the
+    // copyFile target could be a planted symlink at this path.
     const jsonAbsPath = join(
       workspacePath,
       "knowledge-base",
@@ -238,7 +289,7 @@ async function rerenderAndCommit(input: RerenderInput): Promise<boolean> {
           extra: { userId, relativePath, size: stat.size },
           message: "c4 re-render: regenerated model too large to commit",
         });
-        return false;
+        return { rerendered: false };
       }
       json = await handle.readFile("utf8");
     } finally {
@@ -278,14 +329,14 @@ async function rerenderAndCommit(input: RerenderInput): Promise<boolean> {
         extra: { userId, relativePath },
         message: "c4 re-render: JSON committed but re-sync failed",
       });
-      return false;
+      return { rerendered: false };
     }
 
     logger.info(
       { event: "c4_rerender", path: jsonFilePath, durationMs: render.durationMs },
       "kb/c4: diagram re-rendered",
     );
-    return true;
+    return { rerendered: true };
   } catch (err) {
     reportSilentFallback(err, {
       feature: "c4-rerender",
@@ -293,6 +344,6 @@ async function rerenderAndCommit(input: RerenderInput): Promise<boolean> {
       extra: { userId, relativePath },
       message: "c4 re-render: regenerate/commit failed — source committed, diagram stale",
     });
-    return false;
+    return { rerendered: false };
   }
 }

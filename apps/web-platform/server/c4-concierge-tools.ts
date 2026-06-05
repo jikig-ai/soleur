@@ -54,8 +54,10 @@ export function buildC4ConciergeTools(opts: BuildC4ConciergeToolsOpts) {
         "and then re-renders the diagram. The response includes `rerendered`: " +
         "when true, the rendered diagram has been regenerated and updated — tell " +
         "the user it updated; when false, the source was saved but the re-render " +
-        "failed, so tell the user the diagram will refresh after the next " +
-        "re-render. Do not paste DSL into chat for the user to apply.",
+        "failed, so the diagram is unchanged. On failure the response may include " +
+        "`rerenderDiagnostic` explaining WHY (e.g. an unresolved reference because " +
+        "`spec.c4` is missing) — relay that reason to the user so they can fix the " +
+        "source. Do not paste DSL into chat for the user to apply.",
       {
         relativePath: z
           .string()
@@ -86,6 +88,9 @@ export function buildC4ConciergeTools(opts: BuildC4ConciergeToolsOpts) {
           relativePath: args.relativePath,
           commitSha: result.commitSha,
           rerendered: result.rerendered,
+          ...(result.rerenderDiagnostic
+            ? { rerenderDiagnostic: result.rerenderDiagnostic }
+            : {}),
         });
       },
     ),
