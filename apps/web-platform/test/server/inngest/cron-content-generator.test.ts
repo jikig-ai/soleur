@@ -22,9 +22,11 @@ vi.hoisted(() => {
 
 import {
   cronContentGenerator,
+  ensureContentGeneratorAuditIssue,
   KILL_ESCALATION_MS,
   MAX_TURN_DURATION_MS,
 } from "@/server/inngest/functions/cron-content-generator";
+import type { Octokit } from "@octokit/core";
 
 describe("cronContentGenerator — registration shape (import-time smoke)", () => {
   it("loads without throwing (handler + client startup pass)", () => {
@@ -115,6 +117,112 @@ describe("CONTENT_GENERATOR_PROMPT — anchor strings (regression-detection)", (
     ])("contains %s (%s)", (anchor) => {
       expect(SUT_SOURCE).toContain(anchor);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Silence-hole fallback guard (#4960). The handler can terminate without the
+// prompt's STEP 6 audit issue (mid-eval crash / API 500 / max-turns kill); the
+// `ensure-audit-issue` step creates a self-reported FAILED audit issue so the
+// run is never silent and the cron-cloud-task-heartbeat watchdog stays green.
+// ---------------------------------------------------------------------------
+
+describe("ensure-audit-issue fallback — source-shape anchors (#4960)", () => {
+  it.each([
+    ['"ensure-audit-issue"', "handler fallback step id"],
+    ["[Scheduled] Content Generator -", "audit-issue title prefix literal"],
+    ["scheduled-content-generator", "audit-issue label literal"],
+    ["ensure-audit-issue-failed", "reportSilentFallback op for a failed fallback create"],
+  ])("source contains %s (%s)", (anchor) => {
+    expect(SUT_SOURCE).toContain(anchor);
+  });
+
+  it("fallback step is gated on the output-aware result (heartbeatOk === false)", () => {
+    // The create must NOT fire when the prompt already produced an issue.
+    expect(SUT_SOURCE).toMatch(/if\s*\(\s*!heartbeatOk\s*\)/);
+  });
+
+  it("fallback create is wrapped in try/catch → reportSilentFallback (never throws)", () => {
+    const stepMatch = SUT_SOURCE.match(
+      /"ensure-audit-issue"[\s\S]+?reportSilentFallback\([\s\S]+?op:\s*"ensure-audit-issue-failed"/,
+    );
+    expect(stepMatch).not.toBeNull();
+  });
+
+  it("does NOT bump the turn budget — --max-turns 50 is unchanged (Deliverable 3)", () => {
+    expect(SUT_SOURCE).toContain('"--max-turns",\n  "50",');
+  });
+});
+
+describe("ensureContentGeneratorAuditIssue — behavioral (injected octokit)", () => {
+  const RUN_STARTED_AT = "2026-06-05T15:05:11.992Z";
+  const SPAWN = {
+    exitCode: 1,
+    signal: null,
+    abortedByTimeout: false,
+    durationMs: 368727,
+    stdoutTail: "API Error: 500 Internal server error.",
+    stderrTail: "",
+  };
+
+  function fakeOctokit(getData: Array<{ title: string }>) {
+    const calls: Array<{ route: string; params: Record<string, unknown> }> = [];
+    const octokit = {
+      request: vi.fn(async (route: string, params: Record<string, unknown>) => {
+        calls.push({ route, params });
+        if (route.startsWith("GET")) return { data: getData };
+        return { data: { number: 9999 } };
+      }),
+    } as unknown as Octokit;
+    return { octokit, calls };
+  }
+
+  it("creates exactly one labeled audit issue when none exists in the window", async () => {
+    const { octokit, calls } = fakeOctokit([]);
+    const res = await ensureContentGeneratorAuditIssue({
+      runStartedAt: RUN_STARTED_AT,
+      spawnResult: SPAWN,
+      octokit,
+    });
+    expect(res.created).toBe(true);
+    const posts = calls.filter((c) => c.route.startsWith("POST"));
+    expect(posts).toHaveLength(1);
+    expect(posts[0].params.title).toBe(
+      "[Scheduled] Content Generator - 2026-06-05",
+    );
+    expect(posts[0].params.labels).toEqual(["scheduled-content-generator"]);
+    // Self-diagnosing body carries the failure evidence.
+    expect(String(posts[0].params.body)).toContain("API Error: 500");
+    expect(String(posts[0].params.body)).toContain("exitCode");
+  });
+
+  it("does NOT double-file when today's audit issue already exists (retries:1 dedup)", async () => {
+    const { octokit, calls } = fakeOctokit([
+      { title: "[Scheduled] Content Generator - 2026-06-05" },
+    ]);
+    const res = await ensureContentGeneratorAuditIssue({
+      runStartedAt: RUN_STARTED_AT,
+      spawnResult: SPAWN,
+      octokit,
+    });
+    expect(res.created).toBe(false);
+    expect(calls.filter((c) => c.route.startsWith("POST"))).toHaveLength(0);
+  });
+
+  it("propagates a create failure to the caller (handler wraps it in reportSilentFallback)", async () => {
+    const octokit = {
+      request: vi.fn(async (route: string) => {
+        if (route.startsWith("GET")) return { data: [] };
+        throw new Error("GitHub 503");
+      }),
+    } as unknown as Octokit;
+    await expect(
+      ensureContentGeneratorAuditIssue({
+        runStartedAt: RUN_STARTED_AT,
+        spawnResult: SPAWN,
+        octokit,
+      }),
+    ).rejects.toThrow("GitHub 503");
   });
 });
 
