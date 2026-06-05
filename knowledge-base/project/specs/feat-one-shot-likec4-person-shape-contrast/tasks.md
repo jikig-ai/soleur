@@ -28,6 +28,10 @@ Derived from `2026-06-05-fix-likec4-person-shape-text-contrast-plan.md`.
 - [ ] 2.2 Tune opacity within `[0.25, 0.5]` (or use a low-% gold `color-mix`) per the
   Phase 4 visual check so the silhouette reads as a faint person without smearing the
   text. [Plan Phase 1 tuning note]
+  - NOTE (deepen): the descendant selector `[data-likec4-shape="person"] [data-likec4-fill="mix-stroke"]`
+    resolves correctly (verified DOM nesting). Do NOT over-narrow it to exclude the
+    `data-likec4-shape-multiple` copy — `ShapeSvg` can render twice and toning both is
+    correct. `opacity` is safe (lone `<path>`, no siblings).
 
 ## 3. Testing
 

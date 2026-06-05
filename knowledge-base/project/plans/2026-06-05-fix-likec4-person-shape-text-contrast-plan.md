@@ -11,6 +11,28 @@ brand_survival_threshold: none
 
 # 🐛 fix: LikeC4 person-shape text contrast — light text over the gold silhouette is unreadable
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-05
+**Sections enhanced:** Overview (root cause), Implementation Phase 1, Acceptance Criteria, Sharp Edges
+**Research used:** installed-package inspection (`@likec4/diagram@1.50.0` — `ElementShape.js`, `ElementNodeContainer.js`, `ElementData.js`, `likec4diagram/custom/nodes/nodes.js`, bundled `styles.css2.js`); codebase grep (`c4-theme.css`, `c4-shared.tsx`, `globals.css`, `vitest.config.ts`, `bunfig.toml`); institutional learning `2026-06-04-vendored-library-css-hook-must-be-verified-against-rendered-dom-not-stylesheet.md` (PR #4938)
+
+### Key Improvements (from deepen)
+
+1. **`mix-stroke` CSS resolution verified verbatim** against the installed bundle
+   (`styles.css2.js`): `[data-likec4-fill=mix-stroke]{fill:color-mix(in oklab,var(--likec4-palette-stroke) 80%,var(--likec4-palette-fill))}`. The silhouette is **80% of the gold stroke** — confirms the root cause and that overriding the resolved `fill` is the correct per-shape lever (no config knob exists for it).
+2. **DOM nesting verified** so the descendant selector resolves: the `<svg data-likec4-fill="mix-stroke">` is nested under the `ElementNodeContainer` `<div>` that carries `data-likec4-shape="person"` (`ElementNodeContainer.js:70`). Path: container → `ElementShape` outer `<svg>` → `ShapeSvg(person)` Fragment → the mix-stroke inner `<svg>`. So `.soleur-c4 [data-likec4-shape="person"] [data-likec4-fill="mix-stroke"]` is a valid, stable descendant match.
+3. **`opacity` safety confirmed** — the person mix-stroke inner `<svg>` contains a **lone `<path>`** (no siblings), so element `opacity` cannot bleed onto siblings; `fill-opacity` is not required here (kept as a Sharp Edge for future library versions that might nest siblings).
+4. **Light-DOM (not ShadowRoot) re-verified for v1.50.0** — only `ReactLikeC4.js`, `LikeC4View.js`, `custom/index.js` import `shadowroot/ShadowRoot.js`; `LikeC4Diagram` (used at `c4-shared.tsx:90`) does NOT. The whole CSS approach reaches the diagram.
+5. **Paint order re-confirmed** — `nodes.js:77-78` renders `ElementShape` then `ElementData`, so the label is already painted *over* the silhouette. This is why alternative (b) "push behind text" is a no-op and toning the fill is the right fix.
+6. **Test runner pinned** — `vitest` (`package.json:15`), node-env include `test/**/*.test.ts` (`vitest.config.ts:44`, file matches); `bunfig.toml:11` `pathIgnorePatterns=["**"]` blocks `bun test`. AC5 uses `./node_modules/.bin/vitest run`.
+
+### New Considerations Discovered
+
+- **`ShapeSvg` renders twice in the non-rectangle SVG branch** (`ElementShape.js:343-348`): once inside the `data-likec4-shape-multiple` `<svg>` (only when `data.style.multiple` is set — rare for an actor) and once in the main `<svg>`. Both descend from the same `data-likec4-shape="person"` container, so the selector tones **both** copies — which is the desired behavior (no special-casing needed). Note for /work: don't over-narrow the selector to exclude the multiple variant.
+- **The selector tones every `mix-stroke` fill under a person node**, which today is exactly the one silhouette `<svg>`. If a future library version adds another `mix-stroke` element to the person shape, it would be toned too — acceptable (still "the person shape's gold accents"), and the AC4 installed-library guard will surface any attribute rename.
+- **Tuning is empirical** — the exact `opacity` (within `[0.25, 0.5]`) or low-% gold `color-mix` is chosen by the Phase 4 visual check, not pinned in the plan. The AC requires only: off the 80% mix + theme-aware var + legible text + silhouette still visible.
+
 ## Overview
 
 The Soleur-themed LikeC4 C4 visualizer renders `actor` elements with `shape person`
@@ -201,6 +223,27 @@ the opacity within `[0.25, 0.5]` and/or keep a low-gold tint by using
 instead of a flat fill — the AC only requires "toned off the 80% mix" + theme-aware
 var + legible text, so either form satisfies it. Prefer the simplest that passes
 the visual check.
+
+#### Research Insights (deepen)
+
+**Precedent diff (Phase 4.4):** No prior per-shape / per-`data-likec4-fill`
+override exists in `c4-theme.css` — `grep -E 'mix-stroke|data-likec4-shape|data-likec4-fill|opacity'`
+returns nothing. The pattern is **novel** for this file but **consistent** with the
+established §2b convention: scoped `.soleur-c4` ancestor + intrinsic
+`[data-likec4-*]` hook + `!important` to beat the library's runtime/bundled rule.
+No `SECURITY DEFINER`/atomic-write/lock-class precedent applies (pure CSS).
+
+**Selector resolves (verified):** the mix-stroke `<svg>` is a descendant of the
+`data-likec4-shape="person"` container (`ElementNodeContainer.js:70` → outer
+`ElementShape` `<svg>` → `ShapeSvg(person)` → mix-stroke inner `<svg>`), so the
+descendant combinator is valid. `ShapeSvg` is rendered up to twice in the
+non-rectangle branch (`ElementShape.js:343-348` — the `data-likec4-shape-multiple`
+copy fires only when `data.style.multiple`); **do not over-narrow the selector to
+exclude the multiple copy** — toning both is correct.
+
+**`opacity` is safe** here: the person mix-stroke inner `<svg>` wraps a lone
+`<path>` (no siblings), so element `opacity` cannot bleed. Prefer `fill-opacity`
+only if a future library version nests siblings (Sharp Edge).
 
 ### Phase 2 — Add/adjust the test
 
