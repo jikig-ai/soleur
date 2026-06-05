@@ -57,6 +57,7 @@ plugins/soleur/skills/trigger-cron/scripts/trigger.sh \
 
 ## Sharp edges
 
+- **Run from a worktree, never the bare-repo root.** `trigger.sh` locates the allowlist via the repo's `cron-manifest.ts` and fails on a bare repo (`not inside a git repo (cannot locate cron-manifest.ts)`). From a bare-root session, `cd` into any `.worktrees/<feature>/` first (or run the script by absolute path while CWD is inside a worktree) — the firing curl is server-side-allowlist-validated, so the worktree's local manifest version does not affect correctness. See `knowledge-base/project/learnings/integration-issues/2026-06-05-cloud-task-silence-per-producer-triage-and-handler-fallback.md`.
 - **Read-only secret access.** The script reads `INNGEST_MANUAL_TRIGGER_SECRET`
   via `doppler secrets get … --plain` only — it never writes or mutates the
   secret, never echoes or logs it, and `unset`s the token immediately after the
