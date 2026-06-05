@@ -141,6 +141,17 @@ regression gap.
   (warnSilentFallback still used by self-heal-reset; reportSilentFallback still
   used by sync_failed + self-heal branches).
 
+## User-Brand Impact
+
+- **Artifact:** the user's own Knowledge Base (their connected repo's
+  `knowledge-base/`), reconciled into their workspace clone on every push.
+- **Vector:** under-display / alert-fatigue, NOT over-exposure. The reconcile
+  already self-heals (gated `reset --hard`); the defect is operator-facing Sentry
+  noise (an error-level page on every push for a recovered condition). No user
+  data is exposed, lost, or altered by this change — it only reroutes WHERE a
+  benign, recovered condition is reported (pino info vs Sentry error).
+- **Brand-survival threshold:** single-user incident
+
 ## Observability (no-SSH)
 
 - **Sentry:** genuine `sync_failed` (`feature:kb-route-helpers
@@ -150,6 +161,12 @@ regression gap.
 - **Better Stack (pino):** the self-healable-abort breadcrumb
   (`kb/<op>: ff-only pull blocked — attempting gated self-heal`, info) and the
   `op:self-heal-reset` warn remain queryable for audit.
+- discoverability_test:
+  - command: `curl -sS -o /dev/null -w "%{http_code}" --max-time 10 https://app.soleur.ai/api/inngest`
+  - expected_output: `401` (the Inngest serve endpoint where
+    `workspace-reconcile-on-push` runs is live and auth-gated without SSH; the
+    authoritative de-noise verification is the operator follow-up below —
+    Sentry issue `9ccf1d86…` stops accruing error events post-deploy).
 
 ## Operator follow-up
 
