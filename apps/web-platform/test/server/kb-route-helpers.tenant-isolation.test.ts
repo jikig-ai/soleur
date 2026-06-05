@@ -1,23 +1,22 @@
 /**
- * Tenant isolation — kb-route-helpers.ts (PR-C §2.8, #3244).
+ * `users`-table RLS regression guard (originally PR-C §2.8, #3244).
  *
- * Covers the surviving tenant `users` reader:
+ * History: both KB-root helpers have now migrated OFF the tenant `users` read.
+ * `resolveUserKbRoot` was removed in the ADR-044 share+upload consolidation
+ * (#4953); `authenticateAndResolveKbPath` migrated to the membership-scoped
+ * service-role resolvers `resolveActiveWorkspaceKbRoot` /
+ * `resolveActiveWorkspaceRepoMeta` in #4956. Neither helper reads
+ * `users.{workspace_path,workspace_status,repo_url,github_installation_id}`
+ * via a tenant client any more.
  *
- *   - `authenticateAndResolveKbPath` — SELECT users.* via tenant
+ * These cases survive as a standalone RLS regression guard on the `users`
+ * row + extras columns (`auth.uid() = id`): the columns remain RLS-protected
+ * and other code paths still read them, so a policy regression must stay
+ * caught even though the KB write routes no longer depend on this read.
  *
- * (The legacy per-user KB-root helper was removed in the ADR-044 resolver
- * consolidation; share + upload now read the ACTIVE workspace via the
- * membership-scoped service-role resolvers `resolveActiveWorkspaceKbRoot` /
- * `resolveActiveWorkspaceRepoMeta`. The second case below retains an RLS
- * regression guard on the `users` extras columns it used to read.)
- *
- * RLS on `users`: `auth.uid() = id`.
- *
- * Asserts: A's tenant JWT cannot read B's row through either helper's
- * underlying query. Tested at the data-layer (the helpers are exercised
- * via their typed exports' `getFreshTenantClient` path; the
- * `app/api/kb/share` and `app/api/kb/upload` route handlers' overall
- * 503/400 behavior is covered by route-level tests).
+ * Asserts: A's tenant JWT cannot read B's `users` row / extras columns.
+ * Tested at the data-layer. The KB route handlers' 404/503/400 behavior is
+ * covered by route-level tests (kb-rename / kb-delete / kb-route-helpers).
  *
  * Opt-in via TENANT_INTEGRATION_TEST=1.
  */
@@ -57,7 +56,7 @@ function requireEnv(name: string): string {
 }
 
 describe.skipIf(!INTEGRATION_ENABLED)(
-  "tenant isolation — kb-route-helpers.ts (2 sites)",
+  "users-table RLS regression guard (post-#4956 KB resolver migration)",
   () => {
     let service: SupabaseClient;
     let aClient: SupabaseClient;
@@ -118,7 +117,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       }
     }, 30_000);
 
-    test("baseline: A reads own users row (mirrors `:69` + `:188` shapes)", async () => {
+    test("baseline: A reads own users row", async () => {
       const { data, error } = await aClient
         .from("users")
         .select(
@@ -130,7 +129,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(data?.workspace_path).toContain("/tmp/synthetic/");
     });
 
-    test("`:69` authenticateAndResolveKbPath — A cannot read B's workspace tuple", async () => {
+    test("users-RLS — A cannot read B's workspace tuple (former KB-helper read shape)", async () => {
       const { data, error } = await aClient
         .from("users")
         .select(

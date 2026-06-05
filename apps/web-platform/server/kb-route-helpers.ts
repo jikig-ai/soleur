@@ -1,12 +1,11 @@
 import { NextResponse } from "next/server";
 import path from "path";
 import { promises as fs } from "node:fs";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import {
-  getFreshTenantClient,
-  RuntimeAuthError,
-} from "@/lib/supabase/tenant";
-import { reportSilentFallback } from "@/server/observability";
+  resolveActiveWorkspaceKbRoot,
+  resolveActiveWorkspaceRepoMeta,
+} from "@/server/workspace-resolver";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isPathInWorkspace } from "@/server/sandbox";
 // `syncWorkspace` (the git-pull reconcile + gated self-heal) was extracted to
@@ -71,73 +70,57 @@ export async function authenticateAndResolveKbPath(
   } = await supabase.auth.getUser();
   if (!user) return err(401, "Unauthorized");
 
-  // PR-C §2.8 (#3244): tenant-scoped workspace read. RLS on `users`
-  // enforces `auth.uid() = id`. The `.single()` SELECT IS the auth
-  // probe (the route flow reads only the caller's own row before any
-  // cross-row work).
+  // ADR-044 resolver consolidation (#4543, #4956). Resolve the active
+  // workspace's kbRoot + repo metadata via the two membership-scoped
+  // service-role resolvers instead of the legacy tenant `users` read:
+  //   - resolveActiveWorkspaceKbRoot → workspacePath + readiness/connectivity
+  //     gate, reading the SOURCE OF TRUTH (`workspaces.repo_status` +
+  //     the active workspace owner's readiness) — the SAME active workspace the
+  //     UI file tree renders from;
+  //   - resolveActiveWorkspaceRepoMeta → repo_url + GitHub installation id via
+  //     the membership-checked `resolve_workspace_installation_id` SECURITY
+  //     DEFINER RPC (the credential is REVOKED from a direct tenant SELECT).
+  // This FIXES the #4543 dual-ownership trap on the write routes: the legacy
+  // resolver read the CALLER's own `users.{workspace_path,repo_url,installation}`
+  // row, which is the empty solo row for an invited member operating on a shared
+  // workspace → spurious "Workspace not ready" / "No repository connected". The
+  // active-id resolution fails CLOSED to the SOLO workspace (never a sibling),
+  // so it is also the IDOR guard. The resolvers return typed Responses and mirror
+  // every query error to Sentry, so a credential-read failure stays observable
+  // (cq-silent-fallback-must-mirror-to-sentry) — no bare 404/503.
   //
-  // Tenant-ONLY mint handling (reverted #4919's per-cause service-role fallback).
-  // PR #4919 fell back to a SERVICE-ROLE read on the availability causes
-  // (`jwt_mint`/`rotation`); PIR #4913 proved that mint failure was a
-  // MISDIAGNOSIS — the tenant-JWT mint works in prod (the dead "Generate link"
-  // button was the missing-`workspace_id` NOT-NULL insert bug, fixed in #4922).
-  // So the service-role escape hatch was dead code that re-widened the read
-  // credential; this revert restores the tenant-only boundary:
-  //   - `jwt_mint` | `rotation` (availability failures) → 503 "Workspace not
-  //     ready" (the surface retries; the genuine prod path never trips this).
-  //   - `denied_jti` (deliberate revocation) and any future cause → FAIL CLOSED
-  //     with 403, honoring the deny-list on these mutation routes.
-  // `reportSilentFallback` still fires for EVERY cause BEFORE the branch, so a
-  // chronic mint failure (ceiling trip / GoTrue outage) AND a revocation-hit
-  // both stay Sentry-visible (cq-silent-fallback-must-mirror-to-sentry) and the
-  // #4920 `kb_tenant_mint_silent_fallback` alert keeps its signal. The path MUST
-  // RETURN a Response (never throw): both route handlers call this helper
-  // OUTSIDE their try block, so a thrown RuntimeAuthError would escape to
-  // Next.js → an uncontrolled 500.
-  let tenant;
-  try {
-    tenant = await getFreshTenantClient(user.id);
-  } catch (mintErr) {
-    if (mintErr instanceof RuntimeAuthError) {
-      reportSilentFallback(mintErr, {
-        feature: "kb-route-helpers",
-        op: "authenticateAndResolveKbPath.tenant-mint",
-        extra: { userId: user.id },
-      });
-      if (mintErr.cause === "jwt_mint" || mintErr.cause === "rotation") {
-        // Availability failure — no service-role fallback; surface 503.
-        return err(503, "Workspace not ready");
-      }
-      // `denied_jti` (revocation) or any future cause — honor the deny-list.
-      return err(403, "Access denied");
-    }
-    throw mintErr;
-  }
-  const { data: userData } = await tenant
-    .from("users")
-    .select(
-      "workspace_path, workspace_status, repo_url, github_installation_id",
-    )
-    .eq("id", user.id)
-    .single();
-
-  if (!userData?.workspace_path || userData.workspace_status !== "ready") {
-    return err(503, "Workspace not ready");
-  }
-  // Fallback to workspace-sibling installation only when the user has a
-  // repo but no installation ID (#4543). Skip the fallback when repo_url
-  // is also null ("no repository connected" — nothing to resolve for).
-  let installationId = userData.github_installation_id;
-  if (!installationId && userData.repo_url) {
-    const { resolveInstallationId } = await import(
-      "@/server/resolve-installation-id"
+  // Status→message parity (#4956 AC10): the legacy helper returned
+  // 503 "Workspace not ready" and 400 "No repository connected"; the resolvers
+  // use 404 for not-connected. Clients render `body.error` (not the numeric
+  // code), so map to the legacy MESSAGE strings — 503 → "Workspace not ready",
+  // 404/400 → "No repository connected".
+  const serviceClient = createServiceClient();
+  const access = await resolveActiveWorkspaceKbRoot(user.id, serviceClient);
+  if (!access.ok) {
+    return err(
+      access.status,
+      access.status === 503 ? "Workspace not ready" : "No repository connected",
     );
-    installationId = await resolveInstallationId(user.id);
   }
-  if (!userData.repo_url || !installationId) {
-    return err(400, "No repository connected");
+  // Pass the already-resolved active id so kbRoot, repo metadata, and the
+  // credential all key to ONE membership-resolved id (no divergence under a
+  // stale-claim self-heal; no redundant resolution) — mirrors kb/upload.
+  const repoMeta = await resolveActiveWorkspaceRepoMeta(
+    user.id,
+    serviceClient,
+    access.activeWorkspaceId,
+  );
+  if (!repoMeta.ok) {
+    return err(
+      repoMeta.status,
+      repoMeta.status === 503 ? "Workspace not ready" : "No repository connected",
+    );
   }
-  userData.github_installation_id = installationId;
+  const userData = {
+    workspace_path: access.workspacePath,
+    repo_url: repoMeta.repoUrl,
+    github_installation_id: repoMeta.githubInstallationId,
+  };
 
   // Path
   const { path: pathSegments } = await params;

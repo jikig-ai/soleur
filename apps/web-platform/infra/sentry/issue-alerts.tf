@@ -562,11 +562,13 @@ resource "sentry_issue_alert" "workspace_sync_health" {
 # the identical RuntimeAuthError→503 mint-failure class the issue body omitted;
 # at brand-survival threshold `single-user incident`, scoping out the next-most-
 # likely sibling is anti-pattern, so it is folded into the IS_IN value.
-# (The `resolveUserKbRoot.tenant-mint` slug was dropped when that function was
-# removed in the ADR-044 resolver consolidation; share + upload now resolve via
-# the service-role `resolveActiveWorkspaceKbRoot` — no tenant-mint surface — so
-# its absence does NOT dark the alert: authenticateAndResolveKbPath retains the
-# tenant path + its op slug.)
+# (Both the resolveUserKbRoot and authenticateAndResolveKbPath helpers' own
+# tenant-mint op slugs were dropped as their functions migrated to the ADR-044 service-role
+# resolvers — resolveUserKbRoot was removed in the share+upload consolidation
+# (#4953); authenticateAndResolveKbPath migrated to resolveActiveWorkspaceKbRoot +
+# resolveActiveWorkspaceRepoMeta in #4956, so the kb/file + kb/c4 write routes no
+# longer mint a tenant client. Neither absence darks the alert: `kb-sync.tenant-mint`
+# (sync/route.ts:62) is the surviving live tenant-mint surface that keeps it armed.)
 #
 # `action_match="any"`: first_seen/reappeared/regression are mutually-exclusive
 # event-lifecycle states (a captured event is exactly one) — "all" is never
@@ -604,7 +606,7 @@ resource "sentry_issue_alert" "kb_tenant_mint_silent_fallback" {
       tagged_event = {
         key   = "op"
         match = "IS_IN"
-        value = "authenticateAndResolveKbPath.tenant-mint,kb-sync.tenant-mint"
+        value = "kb-sync.tenant-mint"
       }
     },
   ]
