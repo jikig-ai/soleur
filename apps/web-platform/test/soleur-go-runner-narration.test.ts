@@ -50,9 +50,11 @@ describe("soleur-go-runner pre-dispatch narration (Stage 2.23)", () => {
     expect(prompt).toContain(PRE_DISPATCH_NARRATION_DIRECTIVE);
   });
 
-  it("exports a non-empty FAILURE_RECOVERY_FILE_ISSUE_DIRECTIVE string", () => {
+  it("exports a FAILURE_RECOVERY_FILE_ISSUE_DIRECTIVE string that names the create_issue affordance", () => {
     expect(typeof FAILURE_RECOVERY_FILE_ISSUE_DIRECTIVE).toBe("string");
-    expect(FAILURE_RECOVERY_FILE_ISSUE_DIRECTIVE.length).toBeGreaterThan(50);
+    expect(FAILURE_RECOVERY_FILE_ISSUE_DIRECTIVE).toMatch(
+      /create_issue|file (a|an)[^.]*issue/i,
+    );
   });
 
   it("buildSoleurGoSystemPrompt() embeds the file-issue directive", () => {

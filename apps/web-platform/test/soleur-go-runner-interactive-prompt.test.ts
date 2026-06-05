@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
 
 import {
   createSoleurGoRunner,
@@ -8,6 +7,7 @@ import {
 import {
   createMockQueryLean as createMockQuery,
   flushMicrotasks,
+  makeAssistant,
 } from "./helpers/soleur-go-fixtures";
 import {
   PendingPromptRegistry,
@@ -44,38 +44,6 @@ type InteractivePromptEvent = Extract<WSMessage, { type: "interactive_prompt" }>
 //   (i) Ownership key composition matches `makePendingPromptKey(userId,
 //       conversationId, promptId)`. The promptId in the emitted event
 //       matches the registered record's promptId.
-
-function makeAssistant(
-  content: Array<
-    | { type: "text"; text: string }
-    | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
-  >,
-): SDKAssistantMessage {
-  return {
-    type: "assistant",
-    message: {
-      id: "msg_1",
-      role: "assistant",
-      model: "claude-sonnet-4-6",
-      stop_reason: null,
-      stop_sequence: null,
-      type: "message",
-      usage: {
-        input_tokens: 0,
-        output_tokens: 0,
-        cache_creation_input_tokens: 0,
-        cache_read_input_tokens: 0,
-        server_tool_use: null,
-        service_tier: null,
-      },
-      content,
-      // biome-ignore lint/suspicious/noExplicitAny: minimal SDK fixture
-    } as any,
-    parent_tool_use_id: null,
-    uuid: "00000000-0000-0000-0000-000000000001" as never,
-    session_id: "sess-1",
-  } as SDKAssistantMessage;
-}
 
 function makeEvents() {
   return {
@@ -132,7 +100,7 @@ describe("soleur-go-runner interactive-prompt bridge (Stage 2.10)", () => {
       events: makeEvents(),
       persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
     });
-    mock.emit(makeAssistant([{ type: "tool_use", ...toolUse }]));
+    mock.emit(makeAssistant({ content: [{ type: "tool_use", ...toolUse }] }));
     await flushMicrotasks();
     mock.finish();
     await flushMicrotasks();
@@ -307,14 +275,16 @@ describe("soleur-go-runner interactive-prompt bridge (Stage 2.10)", () => {
       persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
     });
     mock.emit(
-      makeAssistant([
-        {
-          type: "tool_use",
-          id: "toolu_plan_2",
-          name: "ExitPlanMode",
-          input: { plan: "stuff" },
-        },
-      ]),
+      makeAssistant({
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_plan_2",
+            name: "ExitPlanMode",
+            input: { plan: "stuff" },
+          },
+        ],
+      }),
     );
     await flushMicrotasks();
     mock.finish();

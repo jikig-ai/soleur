@@ -87,28 +87,13 @@ import {
 import type { ConversationRouting } from "@/server/conversation-routing";
 import {
   createMockQueryLean as createMockQuery,
+  makeAssistant as sharedMakeAssistant,
+  flushMicrotasks,
   makeResult,
 } from "./helpers/soleur-go-fixtures";
 
-function makeAssistant(text: string): SDKAssistantMessage {
-  return {
-    type: "assistant",
-    message: {
-      id: "msg_1",
-      role: "assistant",
-      model: "claude-sonnet-4-6",
-      stop_reason: null,
-      stop_sequence: null,
-      type: "message",
-      // biome-ignore lint/suspicious/noExplicitAny: minimal SDK fixture
-      usage: { input_tokens: 0, output_tokens: 0 } as any,
-      content: [{ type: "text", text }],
-    },
-    parent_tool_use_id: null,
-    uuid: "00000000-0000-0000-0000-000000000001" as never,
-    session_id: "sess-1",
-  } as unknown as SDKAssistantMessage;
-}
+const makeAssistant = (text: string): SDKAssistantMessage =>
+  sharedMakeAssistant({ content: [{ type: "text", text }] });
 
 function makeEvents(): DispatchEvents & {
   _text: string[];
@@ -125,10 +110,6 @@ function makeEvents(): DispatchEvents & {
     _text: text,
     _ended: ended,
   };
-}
-
-async function flush(n = 12): Promise<void> {
-  for (let i = 0; i < n; i++) await Promise.resolve();
 }
 
 const PDF_DISPLAY = "knowledge-base/big-book.pdf";
@@ -191,7 +172,7 @@ describe("soleur-go-runner chapter-chunked dispatch (Phase 3.B)", () => {
     const events = makeEvents();
 
     await runner.dispatch(baseDispatchArgs("c-route", "Tell me about architecture", events));
-    await flush();
+    await flushMicrotasks(12);
 
     // Routing was invoked against the outline.
     expect(selectChapterSpy).toHaveBeenCalledTimes(1);
@@ -212,7 +193,7 @@ describe("soleur-go-runner chapter-chunked dispatch (Phase 3.B)", () => {
     // Emit an assistant text block. The runner should prepend the
     // chapter prefix to the first text emission.
     mock.emit(makeAssistant("The architecture is layered."));
-    await flush();
+    await flushMicrotasks(12);
     expect(events._text[0]).toMatch(
       /^\[Answering from chapter 2: "Architecture overview"\]\n\n/,
     );
@@ -228,7 +209,7 @@ describe("soleur-go-runner chapter-chunked dispatch (Phase 3.B)", () => {
     const runner = createSoleurGoRunner({ queryFactory: factory, now: () => 0 });
     const events = makeEvents();
     await runner.dispatch(baseDispatchArgs("c-ambig", "What chapter covers it?", events));
-    await flush();
+    await flushMicrotasks(12);
     expect(events._text.join("\n")).toMatch(/multiple chapters/);
     // No SDK iterator emit — the dispatch returned before the answer
     // turn fires. readFile must NOT have been called.
@@ -249,7 +230,7 @@ describe("soleur-go-runner chapter-chunked dispatch (Phase 3.B)", () => {
     const runner = createSoleurGoRunner({ queryFactory: factory, now: () => 0 });
     const events = makeEvents();
     await runner.dispatch(baseDispatchArgs("c-slice", "Summarize chapter 1", events));
-    await flush();
+    await flushMicrotasks(12);
     expect(events._text.join("\n")).toMatch(/chapter failed to extract/);
     expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
       expect.any(Error),
@@ -271,7 +252,7 @@ describe("soleur-go-runner chapter-chunked dispatch (Phase 3.B)", () => {
     const runner = createSoleurGoRunner({ queryFactory: factory, now: () => 0 });
     const events = makeEvents();
     await runner.dispatch(baseDispatchArgs("c-cap", "Anything", events));
-    await flush();
+    await flushMicrotasks(12);
     const ceiling = events._ended.find((e) => e.status === "cost_ceiling");
     expect(ceiling).toBeDefined();
     if (ceiling && ceiling.status === "cost_ceiling") {
@@ -292,7 +273,7 @@ describe("soleur-go-runner chapter-chunked dispatch (Phase 3.B)", () => {
     const runner = createSoleurGoRunner({ queryFactory: factory, now: () => 0 });
     const events = makeEvents();
     await runner.dispatch(baseDispatchArgs("c-err", "go", events));
-    await flush();
+    await flushMicrotasks(12);
     const err = events._ended.find((e) => e.status === "internal_error");
     expect(err).toBeDefined();
   });
@@ -315,11 +296,11 @@ describe("soleur-go-runner chapter-chunked dispatch (Phase 3.B)", () => {
     const runner = createSoleurGoRunner({ queryFactory: factory, now: () => 0 });
     const events = makeEvents();
     await runner.dispatch(baseDispatchArgs("c-rotate", "Tell me about ch1", events));
-    await flush();
+    await flushMicrotasks(12);
     // End turn 1 to let activeChapter clear.
     mock.emit(makeAssistant("answer 1"));
     mock.emit(makeResult(0));
-    await flush();
+    await flushMicrotasks(12);
 
     // Turn 2: new PDF with NEW chapters at a different path.
     const NEW_DISPLAY = "knowledge-base/new-book.pdf";
@@ -349,7 +330,7 @@ describe("soleur-go-runner chapter-chunked dispatch (Phase 3.B)", () => {
         },
       }),
     );
-    await flush();
+    await flushMicrotasks(12);
 
     // Routing fired against the NEW outline.
     expect(selectChapterSpy.mock.calls[1]![0].outline).toEqual(NEW_CHAPTERS);
@@ -359,7 +340,7 @@ describe("soleur-go-runner chapter-chunked dispatch (Phase 3.B)", () => {
     // First text emission on the new turn carries the rotation
     // notice prepended to the prefix.
     mock.emit(makeAssistant("Here is the new chapter."));
-    await flush();
+    await flushMicrotasks(12);
     const lastText = events._text[events._text.length - 1];
     expect(lastText).toMatch(/Source PDF changed/);
   });
@@ -382,10 +363,10 @@ describe("soleur-go-runner chapter-chunked dispatch (Phase 3.B)", () => {
     const runner = createSoleurGoRunner({ queryFactory: factory, now: () => 0 });
     const events = makeEvents();
     await runner.dispatch(baseDispatchArgs("c-rotate-empty", "q1", events));
-    await flush();
+    await flushMicrotasks(12);
     mock.emit(makeAssistant("a1"));
     mock.emit(makeResult(0));
-    await flush();
+    await flushMicrotasks(12);
 
     // Turn 2: new path, empty chapters → fall through.
     await runner.dispatch(
@@ -395,7 +376,7 @@ describe("soleur-go-runner chapter-chunked dispatch (Phase 3.B)", () => {
         documentExtractMeta: undefined,
       }),
     );
-    await flush();
+    await flushMicrotasks(12);
     // selectChapter NOT invoked on the second turn (no chapters).
     expect(selectChapterSpy).toHaveBeenCalledTimes(1);
   });
@@ -432,7 +413,7 @@ describe("soleur-go-runner chapter-chunked dispatch (Phase 3.B)", () => {
     const runner = createSoleurGoRunner({ queryFactory: factory, now: () => 0 });
     const events = makeEvents();
     await runner.dispatch(baseDispatchArgs("c-cache", "What's in chapter 1?", events));
-    await flush(20);
+    await flushMicrotasks(20);
 
     expect(captures.length).toBe(1);
     const pushed = captures[0]!;
@@ -470,7 +451,7 @@ describe("soleur-go-runner chapter-chunked dispatch (Phase 3.B)", () => {
       await runner.dispatch(
         baseDispatchArgs(`c-cap-3`, `try ${i}`, events),
       );
-      await flush(8);
+      await flushMicrotasks(8);
     }
 
     // Last text emission is the cap copy.
@@ -498,9 +479,9 @@ describe("soleur-go-runner chapter-chunked dispatch (Phase 3.B)", () => {
     const runner = createSoleurGoRunner({ queryFactory: factory, now: () => 0 });
     const events = makeEvents();
     await runner.dispatch(baseDispatchArgs("c-single", "How does auth work?", events));
-    await flush();
+    await flushMicrotasks(12);
     mock.emit(makeAssistant("Auth uses JWT."));
-    await flush();
+    await flushMicrotasks(12);
     // Single-PDF prefix template — no `from "<book>", chapter`
     // wrapper, just the chapter form.
     expect(events._text[0]).toMatch(

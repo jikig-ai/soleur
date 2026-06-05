@@ -161,16 +161,21 @@ export const GH_AUTH_STATUS_GUIDANCE_DIRECTIVE =
 // On a failure-recovery turn (a tool or skill the agent just ran reported an
 // error), the Concierge should mirror the static failure-card "File an issue"
 // affordance by offering to file a GitHub issue via the gated create_issue
-// tool — with the user's permission. Including the last tool label and the
-// conversation id gives the issue actionable provenance. Phrasing stays
-// negation-free per the file's prompt-engineering convention (2026 research:
-// negation underperforms at scale).
+// tool — with the user's permission. The create_issue tool files into the
+// user's OWN connected repository, so the directive grounds provenance in
+// context the agent actually has at the failing turn (the last failed tool's
+// label and what the user was trying to do) and asks it to apply the
+// `type/bug` label, matching the failure-card link's triage path. Phrasing
+// stays negation-free per the file's prompt-engineering convention (2026
+// research: negation underperforms at scale).
 export const FAILURE_RECOVERY_FILE_ISSUE_DIRECTIVE =
   "When a tool or skill you just ran reports an error, offer to file a GitHub " +
-  "issue capturing the failure so the team can follow up. Ask the user for " +
-  "permission first, and file the issue only after they agree — the create_issue " +
-  "tool is permission-gated and will prompt them to confirm. When you file, " +
-  "include the label of the last tool that failed and the conversation id so " +
+  "issue capturing the failure in the user's own connected repository via the " +
+  "create_issue tool. Ask the user for permission first, and file the issue " +
+  "only after they agree — the create_issue tool is permission-gated and will " +
+  "prompt them to confirm. When you file, apply the `type/bug` label via the " +
+  "tool's labels argument, and describe the failure with the label of the last " +
+  "tool that failed plus a short summary of what the user was trying to do, so " +
   "the issue has actionable provenance.";
 
 // Gated PDF directive (artifact-viewing path only). Names binaries the model

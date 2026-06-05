@@ -14,6 +14,7 @@ import {
 } from "@/server/soleur-go-runner";
 import {
   createMockQueryLean as createMockQuery,
+  flushMicrotasks,
   makeResult,
 } from "./helpers/soleur-go-fixtures";
 
@@ -45,10 +46,6 @@ function makeEvents() {
     onWorkflowEnded: vi.fn(),
     onResult: vi.fn(),
   };
-}
-
-async function flush(n = 8) {
-  for (let i = 0; i < n; i++) await Promise.resolve();
 }
 
 describe("soleur-go-runner lifecycle (Stage 2.21)", () => {
@@ -92,7 +89,7 @@ describe("soleur-go-runner lifecycle (Stage 2.21)", () => {
     expect(runner.activeQueriesSize()).toBe(1);
 
     mock.finish();
-    await flush();
+    await flushMicrotasks(8);
   });
 
   it("reapIdle() closes Queries idle longer than idleReapMs", async () => {
@@ -149,7 +146,7 @@ describe("soleur-go-runner lifecycle (Stage 2.21)", () => {
     expect(runner.activeQueriesSize()).toBe(1);
 
     mock.emit(makeResult(1.0));
-    await flush();
+    await flushMicrotasks(8);
 
     expect(mock.closeSpy).toHaveBeenCalled();
     expect(runner.hasActiveQuery("c-term")).toBe(false);
@@ -184,7 +181,7 @@ describe("soleur-go-runner lifecycle (Stage 2.21)", () => {
       sessionId: null,
     });
     first.emit(makeResult(0.01, "sess-A"));
-    await flush();
+    await flushMicrotasks(8);
 
     // Reap the first Query.
     now = 20 * 60 * 1000;
@@ -205,7 +202,7 @@ describe("soleur-go-runner lifecycle (Stage 2.21)", () => {
     expect(calls).toHaveLength(2);
     expect(calls[1]!.resumeSessionId).toBe("sess-A");
     second.finish();
-    await flush();
+    await flushMicrotasks(8);
   });
 
   it("different conversationIds get independent Queries", async () => {
@@ -243,7 +240,7 @@ describe("soleur-go-runner lifecycle (Stage 2.21)", () => {
 
     m1.finish();
     m2.finish();
-    await flush();
+    await flushMicrotasks(8);
   });
 
   it("exports DEFAULT_IDLE_REAP_MS = 10 minutes", () => {

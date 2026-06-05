@@ -18,6 +18,7 @@ import {
 } from "@/server/soleur-go-runner";
 import {
   createMockQueryLean as createMockQuery,
+  flushMicrotasks,
   makeResult,
 } from "./helpers/soleur-go-fixtures";
 
@@ -31,10 +32,6 @@ function makeEvents() {
     onTextTurnEnd: vi.fn(),
     onSessionIdCaptured: vi.fn(),
   };
-}
-
-async function flush(n = 16) {
-  for (let i = 0; i < n; i++) await Promise.resolve();
 }
 
 describe("soleur-go-runner — onSessionIdCaptured (#3266 Phase 3)", () => {
@@ -62,13 +59,13 @@ describe("soleur-go-runner — onSessionIdCaptured (#3266 Phase 3)", () => {
     });
 
     mock.emit(makeResult({ sessionId: "sess-Z" }));
-    await flush();
+    await flushMicrotasks(16);
 
     expect(events.onSessionIdCaptured).toHaveBeenCalledTimes(1);
     expect(events.onSessionIdCaptured).toHaveBeenCalledWith("sess-Z");
 
     mock.finish();
-    await flush();
+    await flushMicrotasks(16);
   });
 
   it("does NOT re-fire on a duplicate result message carrying the same session_id", async () => {
@@ -88,15 +85,15 @@ describe("soleur-go-runner — onSessionIdCaptured (#3266 Phase 3)", () => {
     });
 
     mock.emit(makeResult({ sessionId: "sess-A" }));
-    await flush();
+    await flushMicrotasks(16);
     mock.emit(makeResult({ sessionId: "sess-A" }));
-    await flush();
+    await flushMicrotasks(16);
 
     expect(events.onSessionIdCaptured).toHaveBeenCalledTimes(1);
     expect(events.onSessionIdCaptured).toHaveBeenCalledWith("sess-A");
 
     mock.finish();
-    await flush();
+    await flushMicrotasks(16);
   });
 
   it("does NOT fire on warm-resume cold-Query (state seeded with sessionId; SDK echoes same value)", async () => {
@@ -121,12 +118,12 @@ describe("soleur-go-runner — onSessionIdCaptured (#3266 Phase 3)", () => {
     });
 
     mock.emit(makeResult({ sessionId: "sess-W" }));
-    await flush();
+    await flushMicrotasks(16);
 
     expect(events.onSessionIdCaptured).not.toHaveBeenCalled();
 
     mock.finish();
-    await flush();
+    await flushMicrotasks(16);
   });
 
   it("fires on SDK rebind within the same state (state had sess-A, SDK returns sess-B)", async () => {
@@ -150,13 +147,13 @@ describe("soleur-go-runner — onSessionIdCaptured (#3266 Phase 3)", () => {
     });
 
     mock.emit(makeResult({ sessionId: "sess-B" }));
-    await flush();
+    await flushMicrotasks(16);
 
     expect(events.onSessionIdCaptured).toHaveBeenCalledTimes(1);
     expect(events.onSessionIdCaptured).toHaveBeenCalledWith("sess-B");
 
     mock.finish();
-    await flush();
+    await flushMicrotasks(16);
   });
 
   it("does NOT fire when the runner never observes a non-empty session_id", async () => {
@@ -176,11 +173,11 @@ describe("soleur-go-runner — onSessionIdCaptured (#3266 Phase 3)", () => {
     });
 
     mock.emit(makeResult({ sessionId: "" }));
-    await flush();
+    await flushMicrotasks(16);
 
     expect(events.onSessionIdCaptured).not.toHaveBeenCalled();
 
     mock.finish();
-    await flush();
+    await flushMicrotasks(16);
   });
 });

@@ -23,7 +23,7 @@ import type {
 import type { DispatchEvents, WorkflowEnd } from "@/server/soleur-go-runner";
 
 /** Strips `readonly` so test fixtures can assemble partial SDK Query stubs. */
-export type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 
 // ---------------------------------------------------------------------------
 // SDK message builders
@@ -81,9 +81,10 @@ export function makeAssistant(
  *   - options `makeResult({ totalCostUsd?, sessionId?, durationMs? })` —
  *     `session-id-rebound` (where `sessionId` may be `null`, coerced to "").
  *
- * `durationMs` defaults to `100` to match the `awaiting-user` /
- * `tool-result-idle-reset` fixtures; pass `1` (the options form's effective
- * default elsewhere is set per call site) for the lean files.
+ * `durationMs` defaults to `100`; lean positional callers receive that same
+ * `100` default. The value is observationally inert — the runner derives
+ * elapsed time from the clock and never reads `msg.duration_ms` — so the
+ * default is a placeholder, not a behavioral knob.
  */
 export function makeResult(totalCostUsd?: number, sessionId?: string): SDKResultMessage;
 export function makeResult(opts: {
