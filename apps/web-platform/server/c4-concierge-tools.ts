@@ -50,8 +50,13 @@ export function buildC4ConciergeTools(opts: BuildC4ConciergeToolsOpts) {
       "Edit a canonical LikeC4 architecture diagram source and commit it. " +
         "`relativePath` must be a `.c4` (or the `.md` view-embed page) directly " +
         "under `engineering/architecture/diagrams/`. `content` is the FULL new " +
-        "file contents (not a patch). Commits directly to the repo and the " +
-        "diagram re-renders — do not paste DSL into chat for the user to apply.",
+        "file contents (not a patch). Commits the source directly to the repo; " +
+        "the rendered diagram is precomputed and does NOT re-render at runtime — " +
+        "it refreshes only after the model is re-rendered out-of-band (via " +
+        "`/soleur:architecture render`), which you cannot trigger. Do not paste " +
+        "DSL into chat for the user to apply, and do not claim the diagram has " +
+        "already updated — tell the user the source was saved and the diagram " +
+        "refreshes after the next re-render.",
       {
         relativePath: z
           .string()

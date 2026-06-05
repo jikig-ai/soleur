@@ -24,6 +24,9 @@ export default function C4Diagram({
   const { data, error, loading, reload } = useC4Project(dirPath);
   const [tab, setTab] = useState<"diagram" | "code">("diagram");
   const [currentView, setCurrentView] = useState(viewId);
+  // See c4-workspace.tsx: a saved source edit leaves the precomputed diagram
+  // stale until an out-of-band re-render. Surfaced via the C4Diagnostics banner.
+  const [stale, setStale] = useState(false);
 
   return (
     <div className="mb-4 overflow-hidden rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1/40">
@@ -53,7 +56,11 @@ export default function C4Diagram({
 
       {!loading && !error && data && (
         <>
-          <C4Diagnostics diagnostics={data.diagnostics} hasModel={!!data.dump} />
+          <C4Diagnostics
+            diagnostics={data.diagnostics}
+            hasModel={!!data.dump}
+            stale={stale}
+          />
           {tab === "diagram" && (
             <div className="relative h-[600px] w-full">
               <C4Canvas
@@ -70,6 +77,7 @@ export default function C4Diagram({
                 dirPath={dirPath}
                 height="560px"
                 onSaved={async () => {
+                  setStale(true);
                   await reload();
                   setTab("diagram");
                 }}

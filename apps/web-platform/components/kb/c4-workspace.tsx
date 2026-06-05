@@ -46,6 +46,11 @@ export default function C4Workspace({
   const { data, error, loading, reload } = useC4Project(dirPath);
   const [rightTab, setRightTab] = useState<"concierge" | "code">("concierge");
   const [currentView, setCurrentView] = useState(viewId);
+  // True once the user has saved a source edit this session. The diagram renders
+  // from a precomputed model.likec4.json that is NOT regenerated at runtime, so a
+  // saved edit leaves the diagram stale until an out-of-band re-render. Surfaced
+  // honestly via the C4Diagnostics banner (no in-browser re-render is possible).
+  const [stale, setStale] = useState(false);
   // Reveal/collapse is LIFTED to KbChatContext so the SHARED top-bar trigger
   // ("Ask about this document", in KbContentHeader) drives it — consistent with
   // the markdown viewer. The C4 page keeps setSuppressSidebar(true) so the
@@ -94,6 +99,7 @@ export default function C4Workspace({
                 <C4Diagnostics
                   diagnostics={data.diagnostics}
                   hasModel={!!data.dump}
+                  stale={stale}
                 />
                 <div className="relative min-h-0 flex-1">
                   <C4Canvas
@@ -181,7 +187,10 @@ export default function C4Workspace({
                     <C4CodePanel
                       data={data}
                       dirPath={dirPath}
-                      onSaved={reload}
+                      onSaved={async () => {
+                        setStale(true);
+                        await reload();
+                      }}
                     />
                   ) : (
                     <Spinner />

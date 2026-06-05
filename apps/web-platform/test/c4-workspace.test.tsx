@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { useState } from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import {
   KbChatContext,
   type KbChatContextValue,
@@ -60,14 +60,24 @@ vi.mock("@/components/ui/markdown-renderer", () => ({
 vi.mock("@/components/kb/c4-shared", () => ({
   Spinner: () => <div>loading</div>,
   useC4Project: () => ({
-    data: { dump: { foo: 1 }, diagnostics: [] },
+    data: { dump: { foo: 1 }, diagnostics: [], sources: { "model.c4": "x" } },
     error: null,
     loading: false,
     reload: vi.fn(),
   }),
   C4Canvas: () => <div data-testid="c4-canvas" />,
-  C4Diagnostics: () => <div data-testid="c4-diagnostics" />,
-  C4CodePanel: () => <div data-testid="c4-code-panel" />,
+  // Expose the `stale` prop so the staleness-wiring test can assert C4Workspace
+  // flips it to true after a save (the lifted-state honesty signal).
+  C4Diagnostics: ({ stale }: { stale?: boolean }) => (
+    <div data-testid="c4-diagnostics" data-stale={stale ? "true" : "false"} />
+  ),
+  // Surface the onSaved callback as a clickable affordance so the test can drive
+  // a save without the real PUT/CodeMirror plumbing.
+  C4CodePanel: ({ onSaved }: { onSaved: () => void | Promise<void> }) => (
+    <button data-testid="c4-code-panel" onClick={() => void onSaved()}>
+      stub-save
+    </button>
+  ),
 }));
 
 const CONTEXT_PATH = "knowledge-base/diagrams/c4-model.md";
@@ -167,6 +177,24 @@ describe("C4Workspace — header-driven Concierge consistency (Workstream C)", (
     fireEvent.click(screen.getByRole("button", { name: "Code" }));
     fireEvent.click(screen.getByRole("button", { name: "Concierge" }));
     expect(screen.getByTestId("kb-chat-content")).toBeTruthy();
+  });
+
+  it("C4-C6: diagram is flagged stale only AFTER a source save (no false-positive on load)", async () => {
+    await renderC4WithHeader();
+    // Fresh load — no edit yet, so the staleness banner must be absent.
+    expect(
+      screen.getByTestId("c4-diagnostics").getAttribute("data-stale"),
+    ).toBe("false");
+
+    // Open the Code tab and trigger a save via the stub panel.
+    fireEvent.click(screen.getByRole("button", { name: "Code" }));
+    fireEvent.click(screen.getByTestId("c4-code-panel"));
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("c4-diagnostics").getAttribute("data-stale"),
+      ).toBe("true"),
+    );
   });
 
   it("C4-C5: markdown viewer (no suppressSidebar) — trigger opens the SIDE panel, not the embedded reveal", async () => {

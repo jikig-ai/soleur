@@ -1474,8 +1474,13 @@ export const realSdkQueryFactory: QueryFactory = async (
           "To edit a C4 architecture diagram, call the `edit_c4_diagram` tool " +
           "with `relativePath` (a `.c4` source or the `.md` view-embed page " +
           "directly under `engineering/architecture/diagrams/`) and `content` " +
-          "(the FULL new file contents). It commits the change directly and the " +
-          "diagram re-renders — do NOT paste DSL into chat for the user to apply.";
+          "(the FULL new file contents). It commits the source directly to the " +
+          "repo, but the rendered diagram is precomputed and does NOT re-render " +
+          "at runtime — it refreshes only after the model is re-rendered " +
+          "out-of-band (via `/soleur:architecture render`), which you cannot " +
+          "trigger. Do NOT paste DSL into chat for the user to apply, and do NOT " +
+          "claim the diagram has already updated — tell the user the source was " +
+          "saved and the diagram refreshes after the next re-render.";
       }
     }
   }
