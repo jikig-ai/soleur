@@ -12,6 +12,7 @@ const fsMock = vi.hoisted(() => ({
   mkdtemp: vi.fn(),
   readFile: vi.fn(),
   copyFile: vi.fn(),
+  rename: vi.fn(),
   rm: vi.fn(),
 }));
 vi.mock("node:fs/promises", () => fsMock);
@@ -62,6 +63,7 @@ beforeEach(() => {
   fsMock.mkdtemp.mockReset().mockResolvedValue(TMP_DIR);
   fsMock.readFile.mockReset().mockResolvedValue(VALID_MODEL);
   fsMock.copyFile.mockReset().mockResolvedValue(undefined);
+  fsMock.rename.mockReset().mockResolvedValue(undefined);
   fsMock.rm.mockReset().mockResolvedValue(undefined);
   vi.useRealTimers();
 });
@@ -73,6 +75,9 @@ afterEach(() => {
 const WS = "/workspaces/ws-1";
 const EXPECTED_CWD = "/workspaces/ws-1/knowledge-base/engineering/architecture/diagrams";
 const REAL_JSON = `${EXPECTED_CWD}/model.likec4.json`;
+// Atomic publish stages into a same-dir sibling (suffix = the mkdtemp basename)
+// then renames over the real path.
+const STAGE = `${REAL_JSON}.stage-c4-render-abc123`;
 
 describe("renderC4Model", () => {
   it("spawns the likec4 CLI into a temp -o path in the scope-guarded diagrams dir", async () => {
@@ -115,17 +120,30 @@ describe("renderC4Model", () => {
     const p = renderC4Model(WS);
     const res = await p;
     expect(res.ok).toBe(true);
-    // Validated → published onto the real model.likec4.json (where GET reads +
-    // the writer commits).
+    // Validated → published atomically: copy into the same-dir stage, then
+    // rename over the real model.likec4.json (where GET reads + writer commits).
     expect(fsMock.copyFile).toHaveBeenCalledWith(
       `${TMP_DIR}/model.likec4.json`,
-      REAL_JSON,
+      STAGE,
     );
+    expect(fsMock.rename).toHaveBeenCalledWith(STAGE, REAL_JSON);
     // Temp dir always cleaned.
     expect(fsMock.rm).toHaveBeenCalledWith(
       TMP_DIR,
       expect.objectContaining({ recursive: true, force: true }),
     );
+  });
+
+  it("treats a non-object `elements` (untrusted CLI output) as empty_model — no clobber", async () => {
+    const child = makeChild();
+    // A non-empty STRING would make a bare Object.keys(elements) non-zero.
+    fsMock.readFile.mockResolvedValue(JSON.stringify({ elements: "oops" }));
+    spawnThenEmit(child, () => child.emit("close", 0, null));
+    const res = await renderC4Model(WS);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("empty_model");
+    expect(fsMock.copyFile).not.toHaveBeenCalled();
+    expect(fsMock.rename).not.toHaveBeenCalled();
   });
 
   it("treats an empty-elements export (exit 0) as empty_model and does NOT copy", async () => {
@@ -166,18 +184,22 @@ describe("renderC4Model", () => {
     const p = renderC4Model(WS);
     const res = await p;
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.reason).toBe("empty_model");
+    if (!res.ok) {
+      // A parse failure is OUR io problem, not the user's source.
+      expect(res.reason).toBe("io_error");
+      expect(res.detail).toContain("parse failed");
+    }
     expect(fsMock.copyFile).not.toHaveBeenCalled();
   });
 
-  it("returns empty_model when mkdtemp fails", async () => {
+  it("returns io_error when mkdtemp fails", async () => {
     fsMock.mkdtemp.mockRejectedValue(new Error("ENOSPC"));
     const child = makeChild();
     spawnMock.mockImplementation(() => child);
     const res = await renderC4Model(WS);
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.reason).toBe("empty_model");
+      expect(res.reason).toBe("io_error");
       expect(res.detail).toBe("mkdtemp failed");
     }
     // Never even spawned.
@@ -230,5 +252,11 @@ describe("renderC4Model", () => {
     expect(child.kill).toHaveBeenCalledWith("SIGKILL");
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.reason).toBe("timeout");
+    // Even on timeout the temp dir is cleaned (finally), never copied/renamed.
+    expect(fsMock.rm).toHaveBeenCalledWith(
+      TMP_DIR,
+      expect.objectContaining({ recursive: true, force: true }),
+    );
+    expect(fsMock.copyFile).not.toHaveBeenCalled();
   });
 });

@@ -31,16 +31,21 @@
 // esbuild cannot resolve the `server-only` guard package. Server-only by
 // construction (spawns a CLI), only imported by server code.
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, copyFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, copyFile, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { C4_DIAGRAMS_DIR, C4_MODEL_JSON } from "@/lib/c4-constants";
 
 export type RenderReason =
   | "spawn_error"
   | "non_zero_exit"
   | "timeout"
-  | "empty_model";
+  // The export resolved but produced a model with zero elements — the user's
+  // source is broken (typically a missing spec.c4). Distinct from io_error so
+  // the writer surfaces a source-fault diagnostic ONLY for this reason.
+  | "empty_model"
+  // Our own IO failed (mkdtemp / parse / copy-publish) — NOT the user's source.
+  | "io_error";
 
 export type RenderResult =
   | { ok: true; durationMs: number }
@@ -133,23 +138,26 @@ async function renderToValidatedModel(
   // the previously-good model.
   const dir = await mkdtemp(join(tmpdir(), "c4-render-")).catch(() => null);
   if (!dir) {
-    return { ok: false, reason: "empty_model", detail: "mkdtemp failed" };
+    return { ok: false, reason: "io_error", detail: "mkdtemp failed" };
   }
   const tmpOut = join(dir, C4_MODEL_JSON);
+  const realPath = join(diagramsDir, C4_MODEL_JSON);
+  // Same-dir (same-filesystem) staging path so the final publish is an atomic
+  // `rename` — a crash mid-copy can never truncate the previously-good model.
+  // The mkdtemp suffix keeps it collision-proof under the concurrency gate.
+  const stagePath = `${realPath}.stage-${basename(dir)}`;
   try {
     const run = await runLikeC4(diagramsDir, tmpOut);
     if (!run.ok) return run;
 
     // exit 0 — but likec4 exits 0 on unresolved references too, so validate.
-    let model: { elements?: Record<string, unknown> };
+    let model: { elements?: unknown };
     try {
-      model = JSON.parse(await readFile(tmpOut, "utf8")) as {
-        elements?: Record<string, unknown>;
-      };
+      model = JSON.parse(await readFile(tmpOut, "utf8")) as { elements?: unknown };
     } catch (err) {
       return {
         ok: false,
-        reason: "empty_model",
+        reason: "io_error",
         detail: sanitizeForLog(
           `model parse failed: ${
             err instanceof Error ? err.message : String(err)
@@ -158,7 +166,15 @@ async function renderToValidatedModel(
       };
     }
 
-    if (Object.keys(model.elements ?? {}).length === 0) {
+    // Gate on a NON-EMPTY plain object of elements. `elements` is untrusted CLI
+    // output — a non-empty string/array would make a bare `Object.keys(…)` non-
+    // zero and let a malformed export through (the exact clobber this prevents).
+    const els = model.elements;
+    const elementCount =
+      els && typeof els === "object" && !Array.isArray(els)
+        ? Object.keys(els).length
+        : 0;
+    if (elementCount === 0) {
       // The diagnostic IS the captured stderr (the `Could not resolve …` lines);
       // gate on element count, never on stderr substring (wording can drift
       // across likec4 patch versions).
@@ -169,21 +185,23 @@ async function renderToValidatedModel(
       };
     }
 
-    // Validated — publish onto the real path the GET reads + the writer commits.
-    await copyFile(tmpOut, join(diagramsDir, C4_MODEL_JSON));
+    // Validated — publish atomically onto the real path the GET reads + the
+    // writer commits: copy into the same-dir stage, then rename over.
+    await copyFile(tmpOut, stagePath);
+    await rename(stagePath, realPath);
     return { ok: true, durationMs: run.durationMs };
   } catch (err) {
     return {
       ok: false,
-      reason: "empty_model",
-      detail: sanitizeForLog(
-        err instanceof Error ? err.message : String(err),
-      ),
+      reason: "io_error",
+      detail: sanitizeForLog(err instanceof Error ? err.message : String(err)),
     };
   } finally {
-    // Trailing .catch so cleanup can never reject the resolved result
-    // (mirrors pdf-linearize.ts).
+    // Trailing .catch so cleanup can never reject the resolved result (mirrors
+    // pdf-linearize.ts). Clean BOTH the temp dir and any leftover stage file
+    // (present only if rename never ran).
     await rm(dir, { recursive: true, force: true }).catch(() => {});
+    await rm(stagePath, { force: true }).catch(() => {});
   }
 }
 

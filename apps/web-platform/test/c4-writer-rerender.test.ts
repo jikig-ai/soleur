@@ -88,7 +88,7 @@ describe("writeC4Diagram — Layer 2 re-render", () => {
     const jsonCommit = mocks.githubApiPost.mock.calls.find((c) =>
       String(c[1]).endsWith("/diagrams/model.likec4.json"),
     );
-    expect(jsonCommit).toBeTruthy();
+    expect(jsonCommit).toBeDefined();
     // two syncs: one after the .c4 commit, one after the JSON commit
     expect(mocks.syncWorkspace.mock.calls.length).toBe(2);
 
@@ -123,6 +123,8 @@ describe("writeC4Diagram — Layer 2 re-render", () => {
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.rerendered).toBe(false);
+    // A non-source-fault failure carries NO source-blaming diagnostic.
+    expect(res.rerenderDiagnostic).toBeUndefined();
     // the .c4 source commit still happened (first post)
     const srcCommit = mocks.githubApiPost.mock.calls.find((c) =>
       String(c[1]).endsWith("/diagrams/model.c4"),
@@ -150,7 +152,6 @@ describe("writeC4Diagram — Layer 2 re-render", () => {
     expect(res.rerendered).toBe(false);
     // The actionable cause is surfaced to the client (the first unresolved
     // reference + the spec.c4 hint), not a silent stale banner.
-    expect(res.rerenderDiagnostic).toBeTruthy();
     expect(res.rerenderDiagnostic).toContain("Re-render failed");
     expect(res.rerenderDiagnostic).toContain("Could not resolve reference");
     expect(res.rerenderDiagnostic).toContain("spec.c4");

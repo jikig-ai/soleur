@@ -260,7 +260,15 @@ async function rerenderAndCommit(
         extra: { userId, relativePath, reason: render.reason },
         message: "c4 re-render failed — source committed, diagram stale",
       });
-      return { rerendered: false, diagnostic: buildRerenderDiagnostic(render.detail) };
+      // Surface a user-facing diagnostic ONLY when the user's source is the
+      // cause (empty_model). For our own io_error / timeout / non_zero_exit /
+      // spawn_error, stay silent (honest stale banner) — don't blame the source.
+      return {
+        rerendered: false,
+        ...(render.reason === "empty_model"
+          ? { diagnostic: buildRerenderDiagnostic(render.detail) }
+          : {}),
+      };
     }
 
     // Read the regenerated JSON off the diagrams dir (renderC4Model validated
