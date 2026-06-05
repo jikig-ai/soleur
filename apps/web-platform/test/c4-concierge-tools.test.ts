@@ -57,6 +57,22 @@ describe("buildC4ConciergeTools", () => {
     expect(tools.map((t) => t.name)).toContain(EDIT_C4_DIAGRAM_TOOL);
   });
 
+  it("tool description does not falsely claim the diagram re-renders", () => {
+    const tools = buildC4ConciergeTools(opts) as unknown as Array<{
+      name: string;
+      description: string;
+    }>;
+    const t = tools.find((x) => x.name === EDIT_C4_DIAGRAM_TOOL);
+    expect(t).toBeTruthy();
+    const desc = t!.description;
+    // The old lie ("the diagram re-renders") must be gone.
+    expect(desc).not.toMatch(/the diagram re-renders\b/i);
+    // The honest contract must be present: source committed, diagram updates
+    // only after an out-of-band re-render.
+    expect(desc.toLowerCase()).toContain("out-of-band");
+    expect(desc.toLowerCase()).toMatch(/re-render/);
+  });
+
   it("forwards relativePath + content and closes over the repo coords", async () => {
     mocks.writeC4Diagram.mockResolvedValue({ ok: true, commitSha: "abc123" });
     const res = await handler()({

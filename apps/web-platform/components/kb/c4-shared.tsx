@@ -147,29 +147,54 @@ export function C4Canvas({
   );
 }
 
-/** Non-fatal warnings / fatal parse errors surfaced inline above the editor. */
+/**
+ * Non-fatal warnings / fatal parse errors surfaced inline above the editor, plus
+ * an honest "source edited" staleness note. The rendered diagram comes from a
+ * precomputed `model.likec4.json` that is regenerated out-of-band (never at
+ * runtime), so after a Save the diagram is stale until it is re-rendered. The
+ * `stale` strip reuses this same banner slot — no new overlay/modal/toast.
+ */
 export function C4Diagnostics({
   diagnostics,
   hasModel,
+  stale = false,
 }: {
   diagnostics: Diagnostic[];
   hasModel: boolean;
+  /** True once the user has saved a source edit this session — the precomputed
+   *  diagram has not been re-rendered, so it may not reflect the edit. */
+  stale?: boolean;
 }) {
-  if (diagnostics.length === 0) return null;
+  if (diagnostics.length === 0 && !stale) return null;
   return (
-    <div className="border-b border-soleur-border-default bg-red-500/10 px-3 py-2 text-xs text-red-300">
-      <p className="mb-1 font-semibold">
-        {hasModel
-          ? "Diagram warnings"
-          : "Diagram has errors — fix the source in the Code view"}
-      </p>
-      <ul className="space-y-0.5">
-        {diagnostics.slice(0, 8).map((d, i) => (
-          <li key={i}>
-            line {d.line}: {d.message}
-          </li>
-        ))}
-      </ul>
+    <div className="border-b border-soleur-border-default text-xs">
+      {stale && (
+        <div className="bg-amber-500/10 px-3 py-2 text-amber-300">
+          <p className="font-semibold">
+            Source edited — rendered diagram may be out of date
+          </p>
+          <p className="mt-0.5 text-amber-300/80">
+            The diagram is precomputed; it refreshes after the model is
+            re-rendered out-of-band.
+          </p>
+        </div>
+      )}
+      {diagnostics.length > 0 && (
+        <div className="bg-red-500/10 px-3 py-2 text-red-300">
+          <p className="mb-1 font-semibold">
+            {hasModel
+              ? "Diagram warnings"
+              : "Diagram has errors — fix the source in the Code view"}
+          </p>
+          <ul className="space-y-0.5">
+            {diagnostics.slice(0, 8).map((d, i) => (
+              <li key={i}>
+                line {d.line}: {d.message}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
@@ -221,7 +246,10 @@ export function C4CodePanel({
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(j.error || `Save failed (${res.status})`);
-      setSaveMsg("Saved — re-rendering…");
+      // Honest: the source is committed, but the diagram is precomputed and does
+      // NOT re-render at runtime — it refreshes only after an out-of-band
+      // re-render. Do not claim "re-rendering…" (the old copy was a lie).
+      setSaveMsg("Source saved — diagram updates after re-render.");
       await onSaved();
     } catch (e) {
       setSaveMsg(e instanceof Error ? e.message : "Save failed");
