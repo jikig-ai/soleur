@@ -8,15 +8,18 @@ vi.mock("node:child_process", () => ({ spawn: spawnMock }));
 // Mock node:fs/promises so renderC4Model's temp-dir lifecycle (mkdtemp →
 // readFile(temp) → rm) is deterministic. The fake `readFile` returns whatever
 // model JSON the test stages — that string is what renderC4Model now RETURNS as
-// `json` (#4976: off-tree render, no copy/rename onto the tracked path).
-// `copyFile`/`rename` are kept as spies so a regression that re-introduces an
-// in-place publish is caught by the `.not.toHaveBeenCalled()` assertions below;
-// the source no longer imports them.
+// `json` (#4976: off-tree render, no write onto the tracked path).
+// `copyFile`/`rename`/`writeFile` are kept as spies even though the source no
+// longer imports them: `vi.mock` replaces the WHOLE module, so any regression
+// that re-introduces an in-place publish — via the old `copyFile`+`rename`
+// shape OR a direct `writeFile(realPath, …)` — would call one of these spies and
+// trip the `.not.toHaveBeenCalled()` assertions below.
 const fsMock = vi.hoisted(() => ({
   mkdtemp: vi.fn(),
   readFile: vi.fn(),
   copyFile: vi.fn(),
   rename: vi.fn(),
+  writeFile: vi.fn(),
   rm: vi.fn(),
 }));
 vi.mock("node:fs/promises", () => fsMock);
@@ -68,6 +71,7 @@ beforeEach(() => {
   fsMock.readFile.mockReset().mockResolvedValue(VALID_MODEL);
   fsMock.copyFile.mockReset().mockResolvedValue(undefined);
   fsMock.rename.mockReset().mockResolvedValue(undefined);
+  fsMock.writeFile.mockReset().mockResolvedValue(undefined);
   fsMock.rm.mockReset().mockResolvedValue(undefined);
   vi.useRealTimers();
 });
@@ -124,10 +128,11 @@ describe("renderC4Model", () => {
     // the writer commits exactly what likec4 produced — never re-stringified.
     if (res.ok) expect(res.json).toBe(VALID_MODEL);
     // #4976: the tracked model.likec4.json is never published onto — the render
-    // produces only a process-temp artifact. No copy/rename onto any path.
+    // produces only a process-temp artifact. No copy/rename/write onto any path.
     expect(fsMock.copyFile).not.toHaveBeenCalled();
     expect(fsMock.rename).not.toHaveBeenCalled();
-    // Temp dir always cleaned.
+    expect(fsMock.writeFile).not.toHaveBeenCalled();
+    // The ONLY fs mutation is the temp-dir cleanup (proves temp-only lifecycle).
     expect(fsMock.rm).toHaveBeenCalledWith(
       TMP_DIR,
       expect.objectContaining({ recursive: true, force: true }),
