@@ -6,17 +6,16 @@ import {
   beforeEach,
   afterEach,
 } from "vitest";
-import type {
-  Query,
-  SDKMessage,
-  SDKResultMessage,
-} from "@anthropic-ai/claude-agent-sdk";
 
 import {
   createSoleurGoRunner,
   type QueryFactory,
   DEFAULT_IDLE_REAP_MS,
 } from "@/server/soleur-go-runner";
+import {
+  createMockQueryLean as createMockQuery,
+  makeResult,
+} from "./helpers/soleur-go-fixtures";
 
 // RED test for Stage 2.21 of plan 2026-04-23-feat-cc-route-via-soleur-go-plan.md.
 //
@@ -37,102 +36,6 @@ import {
 //       passing `resume: sessionId` to the factory for SDK session
 //       continuity.
 //   (e) Different conversations get independent Queries.
-
-type Mutable<T> = { -readonly [K in keyof T]: T[K] };
-
-function makeResult(totalCostUsd: number, sessionId = "sess-1"): SDKResultMessage {
-  return {
-    type: "result",
-    subtype: "success",
-    duration_ms: 1,
-    duration_api_ms: 1,
-    is_error: false,
-    num_turns: 1,
-    result: "",
-    stop_reason: "end_turn",
-    total_cost_usd: totalCostUsd,
-    // biome-ignore lint/suspicious/noExplicitAny: test fixture
-    usage: { input_tokens: 0, output_tokens: 0 } as any,
-    modelUsage: {},
-    permission_denials: [],
-    uuid: "00000000-0000-0000-0000-0000000000ff" as never,
-    session_id: sessionId,
-  } as SDKResultMessage;
-}
-
-function createMockQuery(sessionId = "sess-1") {
-  let closed = false;
-  const queue: SDKMessage[] = [];
-  let resolveNext: ((r: IteratorResult<SDKMessage>) => void) | null = null;
-  const closeSpy = vi.fn();
-
-  const iter: AsyncGenerator<SDKMessage, void> = {
-    async next() {
-      if (queue.length > 0) {
-        const v = queue.shift()!;
-        return { value: v, done: false };
-      }
-      if (closed) return { value: undefined, done: true };
-      return new Promise<IteratorResult<SDKMessage>>((r) => {
-        resolveNext = r;
-      });
-    },
-    async return() {
-      closed = true;
-      return { value: undefined, done: true };
-    },
-    async throw(e) {
-      closed = true;
-      throw e;
-    },
-    async [Symbol.asyncDispose]() {
-      closed = true;
-    },
-    [Symbol.asyncIterator]() {
-      return iter;
-    },
-  };
-
-  function emit(msg: SDKMessage) {
-    if (resolveNext) {
-      const r = resolveNext;
-      resolveNext = null;
-      r({ value: msg, done: false });
-    } else {
-      queue.push(msg);
-    }
-  }
-
-  function finish() {
-    if (resolveNext) {
-      const r = resolveNext;
-      resolveNext = null;
-      r({ value: undefined, done: true });
-    }
-    closed = true;
-  }
-
-  const q: Mutable<Partial<Query>> = {
-    ...(iter as unknown as Query),
-    close: () => {
-      closeSpy();
-      finish();
-    },
-    interrupt: vi.fn(async () => {}),
-    setPermissionMode: vi.fn(async () => {}),
-    setModel: vi.fn(async () => {}),
-    setMaxThinkingTokens: vi.fn(async () => {}),
-    applyFlagSettings: vi.fn(async () => {}),
-    // biome-ignore lint/suspicious/noExplicitAny: test stub
-    initializationResult: vi.fn(async () => ({}) as any),
-    supportedCommands: vi.fn(async () => []),
-    supportedModels: vi.fn(async () => []),
-    streamInput: vi.fn(async () => {}),
-    stopTask: vi.fn(async () => {}),
-  };
-
-  return { query: q as Query, emit, finish, closeSpy, sessionId, isClosed: () => closed };
-}
 
 function makeEvents() {
   return {

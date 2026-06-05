@@ -6,11 +6,11 @@ import {
   beforeEach,
   afterEach,
 } from "vitest";
-import type {
-  Query,
-  SDKMessage,
-  SDKUserMessage,
-} from "@anthropic-ai/claude-agent-sdk";
+import {
+  createMockQueryScripted as createMockQuery,
+  makeRecordingEvents as makeEvents,
+  flushMicrotasks,
+} from "./helpers/soleur-go-fixtures";
 
 // #4440 follow-up to #4418 — `session_revoked` WorkflowEnd propagation.
 //
@@ -57,108 +57,7 @@ vi.mock("@/lib/supabase/tenant", async () => {
 });
 
 import { RuntimeAuthError } from "@/lib/supabase/tenant";
-import {
-  createSoleurGoRunner,
-  type WorkflowEnd,
-  type DispatchEvents,
-} from "@/server/soleur-go-runner";
-
-type Mutable<T> = { -readonly [K in keyof T]: T[K] };
-
-function createMockQuery() {
-  let closed = false;
-  const queue: SDKMessage[] = [];
-  let resolveNext: ((r: IteratorResult<SDKMessage>) => void) | null = null;
-  let throwOnNext: unknown = null;
-  const closeSpy = vi.fn();
-
-  const iter: AsyncGenerator<SDKMessage, void> = {
-    async next(): Promise<IteratorResult<SDKMessage>> {
-      if (throwOnNext !== null) {
-        const err = throwOnNext;
-        throwOnNext = null;
-        throw err;
-      }
-      if (queue.length > 0) {
-        return { value: queue.shift()!, done: false };
-      }
-      if (closed) return { value: undefined, done: true };
-      return new Promise<IteratorResult<SDKMessage>>((resolve) => {
-        resolveNext = resolve;
-      });
-    },
-    async return() {
-      closed = true;
-      return { value: undefined, done: true };
-    },
-    async throw(err) {
-      closed = true;
-      throw err;
-    },
-    async [Symbol.asyncDispose]() {
-      closed = true;
-    },
-    [Symbol.asyncIterator]() {
-      return iter;
-    },
-  };
-
-  function emitError(err: unknown): void {
-    if (resolveNext) {
-      const r = resolveNext;
-      resolveNext = null;
-      Promise.resolve().then(() => r(Promise.reject(err) as never));
-    } else {
-      throwOnNext = err;
-    }
-  }
-
-  const q: Mutable<Partial<Query>> = {
-    ...(iter as unknown as Query),
-    close: () => {
-      closeSpy();
-      closed = true;
-      if (resolveNext) {
-        const r = resolveNext;
-        resolveNext = null;
-        r({ value: undefined, done: true });
-      }
-    },
-    interrupt: vi.fn(async () => {}),
-    setPermissionMode: vi.fn(async () => {}),
-    setModel: vi.fn(async () => {}),
-    setMaxThinkingTokens: vi.fn(async () => {}),
-    applyFlagSettings: vi.fn(async () => {}),
-    // biome-ignore lint/suspicious/noExplicitAny: test stub
-    initializationResult: vi.fn(async () => ({}) as any),
-    supportedCommands: vi.fn(async () => []),
-    supportedModels: vi.fn(async () => []),
-    streamInput: vi.fn(async () => {}),
-    stopTask: vi.fn(async () => {}),
-  };
-
-  return {
-    query: q as Query,
-    emitError,
-    closeSpy,
-  };
-}
-
-function makeEvents(): DispatchEvents & { _ended: WorkflowEnd[] } {
-  const ended: WorkflowEnd[] = [];
-  return {
-    onText: () => {},
-    onToolUse: () => {},
-    onWorkflowDetected: () => {},
-    onWorkflowEnded: (e) => ended.push(e),
-    onResult: () => {},
-    _ended: ended,
-  };
-}
-
-async function flushMicrotasks(count = 8): Promise<void> {
-  for (let i = 0; i < count; i++) await Promise.resolve();
-}
+import { createSoleurGoRunner } from "@/server/soleur-go-runner";
 
 describe("consumeStream — RuntimeAuthError JWT-deny propagation (#4440)", () => {
   beforeEach(() => {

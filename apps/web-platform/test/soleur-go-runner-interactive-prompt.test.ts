@@ -1,14 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type {
-  Query,
-  SDKMessage,
-  SDKAssistantMessage,
-} from "@anthropic-ai/claude-agent-sdk";
+import type { SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
 
 import {
   createSoleurGoRunner,
   type QueryFactory,
 } from "@/server/soleur-go-runner";
+import {
+  createMockQueryLean as createMockQuery,
+  flushMicrotasks,
+} from "./helpers/soleur-go-fixtures";
 import {
   PendingPromptRegistry,
   makePendingPromptKey,
@@ -45,8 +45,6 @@ type InteractivePromptEvent = Extract<WSMessage, { type: "interactive_prompt" }>
 //       conversationId, promptId)`. The promptId in the emitted event
 //       matches the registered record's promptId.
 
-type Mutable<T> = { -readonly [K in keyof T]: T[K] };
-
 function makeAssistant(
   content: Array<
     | { type: "text"; text: string }
@@ -77,79 +75,6 @@ function makeAssistant(
     uuid: "00000000-0000-0000-0000-000000000001" as never,
     session_id: "sess-1",
   } as SDKAssistantMessage;
-}
-
-function createMockQuery() {
-  let closed = false;
-  const queue: SDKMessage[] = [];
-  let resolveNext: ((r: IteratorResult<SDKMessage>) => void) | null = null;
-
-  const iter: AsyncGenerator<SDKMessage, void> = {
-    async next(): Promise<IteratorResult<SDKMessage>> {
-      if (queue.length > 0) return { value: queue.shift()!, done: false };
-      if (closed) return { value: undefined, done: true };
-      return new Promise<IteratorResult<SDKMessage>>((resolve) => {
-        resolveNext = resolve;
-      });
-    },
-    async return() {
-      closed = true;
-      return { value: undefined, done: true };
-    },
-    async throw(err) {
-      closed = true;
-      throw err;
-    },
-    async [Symbol.asyncDispose]() {
-      closed = true;
-    },
-    [Symbol.asyncIterator]() {
-      return iter;
-    },
-  };
-
-  function emit(msg: SDKMessage): void {
-    if (resolveNext) {
-      const r = resolveNext;
-      resolveNext = null;
-      r({ value: msg, done: false });
-    } else {
-      queue.push(msg);
-    }
-  }
-
-  function finish(): void {
-    if (resolveNext) {
-      const r = resolveNext;
-      resolveNext = null;
-      r({ value: undefined, done: true });
-    }
-    closed = true;
-  }
-
-  const q: Mutable<Partial<Query>> = {
-    ...(iter as unknown as Query),
-    close: () => {
-      finish();
-    },
-    interrupt: vi.fn(async () => {}),
-    setPermissionMode: vi.fn(async () => {}),
-    setModel: vi.fn(async () => {}),
-    setMaxThinkingTokens: vi.fn(async () => {}),
-    applyFlagSettings: vi.fn(async () => {}),
-    // biome-ignore lint/suspicious/noExplicitAny: test stub
-    initializationResult: vi.fn(async () => ({}) as any),
-    supportedCommands: vi.fn(async () => []),
-    supportedModels: vi.fn(async () => []),
-    streamInput: vi.fn(async () => {}),
-    stopTask: vi.fn(async () => {}),
-  };
-
-  return { query: q as Query, emit, finish };
-}
-
-async function flushMicrotasks(count = 8): Promise<void> {
-  for (let i = 0; i < count; i++) await Promise.resolve();
 }
 
 function makeEvents() {

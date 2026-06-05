@@ -6,13 +6,14 @@ import {
   beforeEach,
   afterEach,
 } from "vitest";
-import type {
-  Query,
-  SDKMessage,
-  SDKUserMessage,
-  SDKResultMessage,
-  SDKAssistantMessage,
-} from "@anthropic-ai/claude-agent-sdk";
+import type { SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
+import {
+  createMockQueryScripted as createMockQuery,
+  makeAssistant,
+  makeResult,
+  makeRecordingEvents as makeEvents,
+  flushMicrotasks,
+} from "./helpers/soleur-go-fixtures";
 
 // Mock observability BEFORE importing the runner so the
 // `reportSilentFallback` + `mirrorWithDebounce` imports inside
@@ -37,9 +38,7 @@ import {
   DEFAULT_WALL_CLOCK_TRIGGER_MS,
   DEFAULT_MAX_TURN_DURATION_MS,
   NOTIFY_AWAITING_NO_ACTIVE_QUERY_ERROR_CLASS,
-  type QueryFactory,
   type WorkflowEnd,
-  type DispatchEvents,
 } from "@/server/soleur-go-runner";
 
 // Tests for plan 2026-04-29-fix-command-center-qa-permissions-runaway-rename-plan.md
@@ -61,188 +60,6 @@ import {
 // If the conversationId is unknown, `notifyAwaitingUser` MUST mirror to
 // Sentry via `mirrorWithDebounce` (per
 // `cq-silent-fallback-must-mirror-to-sentry`; #3040 Finding 2).
-
-type Mutable<T> = { -readonly [K in keyof T]: T[K] };
-
-function makeAssistant(
-  partial: Partial<SDKAssistantMessage> & {
-    content: Array<
-      | { type: "text"; text: string }
-      | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
-    >;
-  },
-): SDKAssistantMessage {
-  return {
-    type: "assistant",
-    message: {
-      id: partial.uuid ?? "msg_1",
-      role: "assistant",
-      model: "claude-sonnet-4-6",
-      stop_reason: null,
-      stop_sequence: null,
-      type: "message",
-      usage: {
-        input_tokens: 0,
-        output_tokens: 0,
-        cache_creation_input_tokens: 0,
-        cache_read_input_tokens: 0,
-        server_tool_use: null,
-        service_tier: null,
-      },
-      content: partial.content,
-      // biome-ignore lint/suspicious/noExplicitAny: minimal SDK fixture
-    } as any,
-    parent_tool_use_id: partial.parent_tool_use_id ?? null,
-    uuid: (partial.uuid ?? "00000000-0000-0000-0000-000000000001") as never,
-    session_id: partial.session_id ?? "sess-1",
-  } as SDKAssistantMessage;
-}
-
-function makeResult(totalCostUsd: number, sessionId = "sess-1"): SDKResultMessage {
-  return {
-    type: "result",
-    subtype: "success",
-    duration_ms: 100,
-    duration_api_ms: 50,
-    is_error: false,
-    num_turns: 1,
-    result: "",
-    stop_reason: "end_turn",
-    total_cost_usd: totalCostUsd,
-    // biome-ignore lint/suspicious/noExplicitAny: minimal SDK fixture
-    usage: { input_tokens: 0, output_tokens: 0 } as any,
-    modelUsage: {},
-    permission_denials: [],
-    uuid: "00000000-0000-0000-0000-0000000000ff" as never,
-    session_id: sessionId,
-  } as SDKResultMessage;
-}
-
-function createMockQuery(scripted: SDKMessage[] = []) {
-  let closed = false;
-  const queue: SDKMessage[] = [...scripted];
-  let resolveNext: ((r: IteratorResult<SDKMessage>) => void) | null = null;
-  const emitted: SDKMessage[] = [];
-  const closeSpy = vi.fn();
-  let throwOnNext: unknown = null;
-
-  const iter: AsyncGenerator<SDKMessage, void> = {
-    async next(): Promise<IteratorResult<SDKMessage>> {
-      if (throwOnNext !== null) {
-        const err = throwOnNext;
-        throwOnNext = null;
-        throw err;
-      }
-      if (queue.length > 0) {
-        const value = queue.shift()!;
-        emitted.push(value);
-        return { value, done: false };
-      }
-      if (closed) return { value: undefined, done: true };
-      return new Promise<IteratorResult<SDKMessage>>((resolve) => {
-        resolveNext = resolve;
-      });
-    },
-    async return() {
-      closed = true;
-      return { value: undefined, done: true };
-    },
-    async throw(err) {
-      closed = true;
-      throw err;
-    },
-    async [Symbol.asyncDispose]() {
-      closed = true;
-    },
-    [Symbol.asyncIterator]() {
-      return iter;
-    },
-  };
-
-  function emit(msg: SDKMessage): void {
-    if (resolveNext) {
-      const r = resolveNext;
-      resolveNext = null;
-      emitted.push(msg);
-      r({ value: msg, done: false });
-    } else {
-      queue.push(msg);
-    }
-  }
-
-  function emitError(err: unknown): void {
-    // Inject an error into the consumeStream loop. If a consumer is
-    // currently awaiting next(), we must reject that pending promise.
-    if (resolveNext) {
-      const r = resolveNext;
-      resolveNext = null;
-      // Trigger via the iterator's `throw` semantics: settle the awaiting
-      // promise with a rejected one.
-      Promise.resolve().then(() => r(Promise.reject(err) as never));
-    } else {
-      throwOnNext = err;
-    }
-  }
-
-  function finish(): void {
-    if (resolveNext) {
-      const r = resolveNext;
-      resolveNext = null;
-      r({ value: undefined, done: true });
-    }
-    closed = true;
-  }
-
-  const q: Mutable<Partial<Query>> = {
-    ...(iter as unknown as Query),
-    close: () => {
-      closeSpy();
-      finish();
-    },
-    interrupt: vi.fn(async () => {}),
-    setPermissionMode: vi.fn(async () => {}),
-    setModel: vi.fn(async () => {}),
-    setMaxThinkingTokens: vi.fn(async () => {}),
-    applyFlagSettings: vi.fn(async () => {}),
-    // biome-ignore lint/suspicious/noExplicitAny: test stub
-    initializationResult: vi.fn(async () => ({}) as any),
-    supportedCommands: vi.fn(async () => []),
-    supportedModels: vi.fn(async () => []),
-    streamInput: vi.fn(async () => {}),
-    stopTask: vi.fn(async () => {}),
-  };
-
-  return {
-    query: q as Query,
-    emit,
-    emitError,
-    finish,
-    closeSpy,
-    emitted,
-    isClosed: () => closed,
-  };
-}
-
-function makeEvents(): DispatchEvents & {
-  _ended: WorkflowEnd[];
-  _tools: Array<{ name: string; input: Record<string, unknown> }>;
-} {
-  const ended: WorkflowEnd[] = [];
-  const tools: Array<{ name: string; input: Record<string, unknown> }> = [];
-  return {
-    onText: () => {},
-    onToolUse: (b) => tools.push(b),
-    onWorkflowDetected: () => {},
-    onWorkflowEnded: (e) => ended.push(e),
-    onResult: () => {},
-    _ended: ended,
-    _tools: tools,
-  };
-}
-
-async function flushMicrotasks(count = 8): Promise<void> {
-  for (let i = 0; i < count; i++) await Promise.resolve();
-}
 
 describe("soleur-go-runner notifyAwaitingUser pause/resume", () => {
   beforeEach(() => {
