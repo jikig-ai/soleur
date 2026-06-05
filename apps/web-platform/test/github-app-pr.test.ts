@@ -27,6 +27,7 @@ afterAll(() => {
 
 // Import AFTER env and fetch mocking
 import { createPullRequest, createIssue } from "../server/github-app";
+import { loadGithubFixture } from "./fixtures/github/load";
 
 describe("createPullRequest", () => {
   beforeEach(() => {
@@ -40,10 +41,13 @@ describe("createPullRequest", () => {
   }
 
   function mockTokenResponse() {
+    const body = loadGithubFixture<{ token: string; expires_at: string }>(
+      "installation-access-token",
+    );
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        token: "ghs_test_token",
+        ...body,
         expires_at: new Date(Date.now() + 3600_000).toISOString(),
       }),
     });
@@ -56,11 +60,11 @@ describe("createPullRequest", () => {
       ok: true,
       status: 201,
       json: async () => ({
+        ...loadGithubFixture("pull-request-201"),
         number: 42,
         html_url: "https://github.com/alice/my-repo/pull/42",
         url: "https://api.github.com/repos/alice/my-repo/pulls/42",
         title: "feat: new feature",
-        state: "open",
       }),
     });
 
@@ -90,6 +94,7 @@ describe("createPullRequest", () => {
       ok: true,
       status: 201,
       json: async () => ({
+        ...loadGithubFixture("pull-request-201"),
         number: 43,
         html_url: "https://github.com/alice/my-repo/pull/43",
         url: "https://api.github.com/repos/alice/my-repo/pulls/43",
@@ -146,7 +151,7 @@ describe("createPullRequest", () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 404,
-      text: async () => JSON.stringify({ message: "Not Found" }),
+      text: async () => JSON.stringify(loadGithubFixture("error-404")),
     });
 
     await expect(
@@ -194,10 +199,13 @@ describe("createIssue", () => {
   }
 
   function mockTokenResponse() {
+    const body = loadGithubFixture<{ token: string; expires_at: string }>(
+      "installation-access-token",
+    );
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        token: "ghs_test_token",
+        ...body,
         expires_at: new Date(Date.now() + 3600_000).toISOString(),
       }),
     });
@@ -210,11 +218,11 @@ describe("createIssue", () => {
       ok: true,
       status: 201,
       json: async () => ({
+        ...loadGithubFixture("issue-201"),
         number: 7,
         html_url: "https://github.com/alice/my-repo/issues/7",
         url: "https://api.github.com/repos/alice/my-repo/issues/7",
         title: "Something broke",
-        state: "open",
       }),
     });
 
@@ -243,6 +251,7 @@ describe("createIssue", () => {
       ok: true,
       status: 201,
       json: async () => ({
+        ...loadGithubFixture("issue-201"),
         number: 8,
         html_url: "https://github.com/alice/my-repo/issues/8",
         url: "https://api.github.com/repos/alice/my-repo/issues/8",
@@ -267,7 +276,7 @@ describe("createIssue", () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 404,
-      text: async () => JSON.stringify({ message: "Not Found" }),
+      text: async () => JSON.stringify(loadGithubFixture("error-404")),
     });
 
     await expect(

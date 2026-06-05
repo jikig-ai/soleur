@@ -69,6 +69,7 @@ vi.mock("../server/logger", () => ({
 
 // Import AFTER env and mocking
 import { generateInstallationToken } from "../server/github-app";
+import { loadGithubFixture } from "./fixtures/github/load";
 
 // Unique installation IDs to avoid token cache interference
 let nextId = 50_000;
@@ -81,6 +82,8 @@ function mockTokenSuccess() {
     ok: true,
     status: 200,
     json: async () => ({
+      ...loadGithubFixture("installation-access-token"),
+      // Distinct value the retry/success tests assert is returned verbatim.
       token: "ghs_hardening_test_token",
       expires_at: new Date(Date.now() + 3_600_000).toISOString(),
     }),
@@ -98,14 +101,12 @@ function mock401() {
 }
 
 function mock403() {
+  const body = loadGithubFixture("error-403");
   return {
     ok: false,
     status: 403,
-    text: async () =>
-      JSON.stringify({ message: "Resource not accessible by integration" }),
-    json: async () => ({
-      message: "Resource not accessible by integration",
-    }),
+    text: async () => JSON.stringify(body),
+    json: async () => body,
   };
 }
 

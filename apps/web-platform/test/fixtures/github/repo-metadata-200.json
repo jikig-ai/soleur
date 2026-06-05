@@ -1,0 +1,17 @@
+{
+  "id": 2000,
+  "name": "kb-template",
+  "full_name": "synthetic-org/kb-template",
+  "private": false,
+  "owner": {
+    "login": "synthetic-org",
+    "id": 1001,
+    "type": "Organization"
+  },
+  "html_url": "https://github.com/synthetic-org/kb-template",
+  "description": "Synthetic canonical GET /repos/{owner}/{repo} 200 — template, public",
+  "default_branch": "main",
+  "is_template": true,
+  "visibility": "public",
+  "updated_at": "2099-01-01T00:00:00Z"
+}

@@ -1,0 +1,8 @@
+{
+  "id": 42,
+  "account": {
+    "login": "synthetic-user",
+    "id": 1002,
+    "type": "User"
+  }
+}
