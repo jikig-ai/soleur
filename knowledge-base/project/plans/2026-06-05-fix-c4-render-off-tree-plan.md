@@ -168,77 +168,77 @@ diagrams dir). No data-exposure vector is opened or widened.
 
 ### Phase 0 — Preconditions (verify-before-code)
 
-- [ ] Confirm `renderC4Model`'s only caller is `rerenderAndCommit`:
+- [x] Confirm `renderC4Model`'s only caller is `rerenderAndCommit`:
       `git grep -n 'renderC4Model' apps/web-platform` → expect `c4-render.ts` (def +
       export), `c4-writer.ts` (import + call), `c4-writer-rerender.test.ts` (mock),
       `c4-render.test.ts` (import). No other production caller → the return-type widening
       is contained.
-- [ ] Confirm GET `/project` is the sole on-disk reader of `model.likec4.json`:
+- [x] Confirm GET `/project` is the sole on-disk reader of `model.likec4.json`:
       `git grep -nE 'C4_MODEL_JSON|model\.likec4\.json' apps/web-platform --include='*.ts'`
       and verify only `project/route.ts` performs a `readFile`/`open` of it (writer's read
       is being removed; `[...path]` route only comments on it).
-- [ ] Confirm test runner + paths: `apps/web-platform/vitest.config.ts` `include`
+- [x] Confirm test runner + paths: `apps/web-platform/vitest.config.ts` `include`
       collects `test/**/*.test.ts` (node project) — all three target tests qualify. Runner
       is vitest (`package.json scripts.test: "vitest"`); invoke via
       `./node_modules/.bin/vitest run <paths>`.
 
 ### Phase 1 — `c4-render.ts`: return bytes, drop the tracked-path publish (producer)
 
-- [ ] Widen `RenderResult` success variant to
+- [x] Widen `RenderResult` success variant to
       `{ ok: true; durationMs: number; json: string }`.
-- [ ] In `renderToValidatedModel`: on validated success, return
+- [x] In `renderToValidatedModel`: on validated success, return
       `{ ok: true, durationMs: run.durationMs, json: <the raw temp-read string> }`. Bind the
       `utf8` read at `c4-render.ts:156` into a local `const raw = await readFile(tmpOut,"utf8")`,
       `JSON.parse(raw)` for validation, and return `raw` as `json` so the committed bytes
       are byte-identical to the validated artifact — do not re-`JSON.stringify` (avoids
       key-order/whitespace drift).
-- [ ] **Delete** the same-dir staging machinery used only for the tracked-file publish:
+- [x] **Delete** the same-dir staging machinery used only for the tracked-file publish:
       `realPath` (`:144`), `stagePath` (`:148`), the `copyFile`+`rename` publish (`:190-191`),
       and the trailing `rm(stagePath, …)` cleanup (`:204`). Keep the temp-dir `mkdtemp` +
       `rm(dir, …)` lifecycle (still needed for the spawn's `-o` target and cleanup).
-- [ ] Remove now-unused imports (`copyFile`, `rename`, `basename` if no longer referenced)
+- [x] Remove now-unused imports (`copyFile`, `rename`, `basename` if no longer referenced)
       from the `node:fs/promises` / `node:path` import lines — let `tsc`/lint confirm.
-- [ ] Update the module header comment block (lines 12-20, 112-118) so the
+- [x] Update the module header comment block (lines 12-20, 112-118) so the
       "copy it onto the real `model.likec4.json`" / "where the GET reads it … and the caller
       commits it" prose reflects the new "return the validated bytes; the writer commits
       them and the resync pull lands them on disk" contract.
 
 ### Phase 2 — `c4-render.test.ts`: assert the new contract (producer test)
 
-- [ ] Replace the copyFile/rename publish assertions (success test lines 116-135) with:
+- [x] Replace the copyFile/rename publish assertions (success test lines 116-135) with:
       success result is `ok:true` and `res.json` equals the staged `VALID_MODEL`; assert
       `fsMock.copyFile`/`fsMock.rename` are **not** called.
-- [ ] Drop the `STAGE`/`REAL_JSON` fixtures and the `copyFile`/`rename` entries from
+- [x] Drop the `STAGE`/`REAL_JSON` fixtures and the `copyFile`/`rename` entries from
       `fsMock` (no longer part of the success path). Keep `mkdtemp`/`readFile`/`rm`.
-- [ ] In every failure case (empty-elements, non-object elements, non-JSON, non-zero exit,
+- [x] In every failure case (empty-elements, non-object elements, non-JSON, non-zero exit,
       spawn_error, timeout): assert the result has no `json` field (so the writer can never
       commit on a failed render) and that no publish occurred (already asserted; tighten to
       the new shape).
-- [ ] The spawn/argv/env scope assertions (lines 83-114) are unchanged — the `-o` temp
+- [x] The spawn/argv/env scope assertions (lines 83-114) are unchanged — the `-o` temp
       target and scoped env are unaffected by Option A.
 
 ### Phase 3 — `c4-writer.ts`: commit the returned bytes (consumer)
 
-- [ ] In `rerenderAndCommit`, after `const render = await renderC4Model(workspacePath)`
+- [x] In `rerenderAndCommit`, after `const render = await renderC4Model(workspacePath)`
       and the `!render.ok` early-return, use `render.json` directly: cap-check
       `Buffer.byteLength(render.json, "utf8") > MAX_C4_MODEL_BYTES` → `reportSilentFallback`
       (`op:"commit-json"`, `extra:{ userId, relativePath, size }`,
       `message:"c4 re-render: regenerated model too large to commit"`) + return
       `{ rerendered:false }` (preserves AC2c semantics; `size` is now the byte length of the
       returned string).
-- [ ] **Delete** the `open(jsonAbsPath, O_NOFOLLOW)` + `handle.stat()` size-cap +
+- [x] **Delete** the `open(jsonAbsPath, O_NOFOLLOW)` + `handle.stat()` size-cap +
       `handle.readFile()` + `handle.close()` block (`c4-writer.ts:280-305`) and the
       `jsonAbsPath` construction. The TOCTOU/`O_NOFOLLOW` hardening existed because we were
       re-reading a tracked file that a planted symlink could swap; once we commit the
       in-process returned bytes there is no on-disk re-read to harden. Remove the now-unused
       `open` / `constants as fsConstants` / `join` imports if they become unreferenced
       (let `tsc`/lint confirm; `join` may still be used elsewhere — check).
-- [ ] Keep the rest of the commit flow byte-for-byte: blob-sha resolve
+- [x] Keep the rest of the commit flow byte-for-byte: blob-sha resolve
       (`githubApiGet`), `githubApiPost(... jsonFilePath ...)`, and the `op:"manual"`
       `syncWorkspace` resync + its `!resync.ok` `reportSilentFallback(op:"resync")`. The
       success `logger.info({ event:"c4_rerender", … durationMs: render.durationMs })` still
       reads `render.durationMs` (now alongside `render.json`).
-- [ ] Update the `rerenderAndCommit` doc comment (`c4-writer.ts:233-243`) so the
+- [x] Update the `rerenderAndCommit` doc comment (`c4-writer.ts:233-243`) so the
       "renderC4Model validated to a temp file and left the real JSON untouched" /
       "Read the regenerated JSON off the diagrams dir" prose reflects the new
       "renderC4Model returns the validated bytes; we commit them and the resync pull lands
@@ -246,30 +246,30 @@ diagrams dir). No data-exposure vector is opened or widened.
 
 ### Phase 4 — `c4-writer-rerender.test.ts`: adapt the consumer mock (consumer test)
 
-- [ ] Change the `renderC4Model` mock default to resolve
+- [x] Change the `renderC4Model` mock default to resolve
       `{ ok:true, durationMs:12, json:'{"_stage":"layouted"}' }` (carry the JSON the writer
       now commits) instead of `{ ok:true, durationMs:12 }`.
-- [ ] **Remove** the `node:fs/promises` `open` mock + the `stat`/`readFile`/`close`
+- [x] **Remove** the `node:fs/promises` `open` mock + the `stat`/`readFile`/`close`
       FileHandle fakes (lines 9-12, 27, 65-74) — the writer no longer opens a file. The
       AC2c oversized case (lines 152-163) now sizes the **mocked `render.json`** above 4 MB
       (e.g. `json: "x".repeat(8 * 1024 * 1024)`) rather than mocking `stat.size`.
-- [ ] AC1/AC2/AC2b/AC2d/AC2e/AC3/OUT_OF_SCOPE/first-sync-failure tests: keep their
+- [x] AC1/AC2/AC2b/AC2d/AC2e/AC3/OUT_OF_SCOPE/first-sync-failure tests: keep their
       assertions on commit ordering, `rerendered`, `rerenderDiagnostic`, and
       `reportSilentFallback`. Verify the JSON-commit assertion
       (`endsWith("/diagrams/model.likec4.json")`) still holds — the commit still happens; only
       the bytes' provenance changed (mock result vs. mocked file read).
-- [ ] Add an assertion to AC1 (or a new sibling test) that the writer commits the bytes
+- [x] Add an assertion to AC1 (or a new sibling test) that the writer commits the bytes
       returned by `renderC4Model` (the `githubApiPost` JSON-commit `content` base64-decodes
       to `render.json`), pinning the new producer→consumer contract.
 
 ### Phase 5 — Verify
 
-- [ ] `./node_modules/.bin/vitest run test/c4-render.test.ts test/c4-writer-rerender.test.ts
+- [x] `./node_modules/.bin/vitest run test/c4-render.test.ts test/c4-writer-rerender.test.ts
       test/kb-route-helpers.test.ts` (from `apps/web-platform/`) → all green; confirm
       `kb-route-helpers.test.ts` self-heal tests passed **without edit**.
-- [ ] `npx tsc --noEmit` (web-platform) → clean; the widened `RenderResult` is honored at
+- [x] `npx tsc --noEmit` (web-platform) → clean; the widened `RenderResult` is honored at
       the sole call site.
-- [ ] Run the broader server suite if cheap (`./node_modules/.bin/vitest run test/` scoped
+- [x] Run the broader server suite if cheap (`./node_modules/.bin/vitest run test/` scoped
       to changed-area files) to catch any incidental importer.
 
 ## Observability
