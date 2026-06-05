@@ -71,12 +71,22 @@ vi.mock("@/components/kb/c4-shared", () => ({
   C4Diagnostics: ({ stale }: { stale?: boolean }) => (
     <div data-testid="c4-diagnostics" data-stale={stale ? "true" : "false"} />
   ),
-  // Surface the onSaved callback as a clickable affordance so the test can drive
-  // a save without the real PUT/CodeMirror plumbing.
-  C4CodePanel: ({ onSaved }: { onSaved: () => void | Promise<void> }) => (
-    <button data-testid="c4-code-panel" onClick={() => void onSaved()}>
-      stub-save
-    </button>
+  // Surface onSaved as two affordances so the test can drive a save whose
+  // server re-render succeeded (rerendered:true) or failed (false), without the
+  // real PUT/CodeMirror plumbing.
+  C4CodePanel: ({
+    onSaved,
+  }: {
+    onSaved: (rerendered: boolean) => void | Promise<void>;
+  }) => (
+    <>
+      <button data-testid="c4-save-ok" onClick={() => void onSaved(true)}>
+        save-ok
+      </button>
+      <button data-testid="c4-save-fail" onClick={() => void onSaved(false)}>
+        save-fail
+      </button>
+    </>
   ),
 }));
 
@@ -179,17 +189,25 @@ describe("C4Workspace — header-driven Concierge consistency (Workstream C)", (
     expect(screen.getByTestId("kb-chat-content")).toBeTruthy();
   });
 
-  it("C4-C6: diagram is flagged stale only AFTER a source save (no false-positive on load)", async () => {
+  it("C4-C6: a successful re-render does NOT flag stale; a failed re-render does (Layer 2)", async () => {
     await renderC4WithHeader();
-    // Fresh load — no edit yet, so the staleness banner must be absent.
+    // Fresh load — no edit yet, banner absent.
     expect(
       screen.getByTestId("c4-diagnostics").getAttribute("data-stale"),
     ).toBe("false");
 
-    // Open the Code tab and trigger a save via the stub panel.
     fireEvent.click(screen.getByRole("button", { name: "Code" }));
-    fireEvent.click(screen.getByTestId("c4-code-panel"));
 
+    // Save where the server re-rendered (rerendered:true) → diagram is fresh, no banner.
+    fireEvent.click(screen.getByTestId("c4-save-ok"));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("c4-diagnostics").getAttribute("data-stale"),
+      ).toBe("false"),
+    );
+
+    // Save where the re-render failed (rerendered:false) → stale banner shows.
+    fireEvent.click(screen.getByTestId("c4-save-fail"));
     await waitFor(() =>
       expect(
         screen.getByTestId("c4-diagnostics").getAttribute("data-stale"),

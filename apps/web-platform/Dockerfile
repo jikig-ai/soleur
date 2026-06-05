@@ -44,6 +44,18 @@ FROM node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9
 # Install Claude Code CLI (needed by Agent SDK)
 RUN npm install -g @anthropic-ai/claude-code@2.1.79
 
+# LikeC4 CLI for runtime diagram re-render after a Code-tab Save (#4964).
+# Global install (NOT a package.json dep) — same pattern as the line above —
+# so it preserves the npm10/npm11 lockfile-sync parity that prod `npm ci`
+# requires (the constraint documented in lib/c4-constants.ts). The server
+# spawns it out-of-process from server/c4-render.ts; it is never imported, so
+# vite/esbuild/bundle-require never enter prod deps.
+# Pinned to 1.50.0 to MATCH the client renderer @likec4/core/@likec4/diagram@1.50.0
+# (package.json) so `export json` emits the exact schema LikeC4Model.create reads.
+# Lays out via bundled graphviz-wasm — no native `dot` binary needed (verified
+# 2026-06-05: `likec4@1.50.0 export json` exits 0 with no dot on PATH, ~0.8s).
+RUN npm install -g likec4@1.50.0
+
 # Install git (workspace provisioning) + bubblewrap/socat (Agent SDK sandbox)
 # ca-certificates: required for git HTTPS clone — node:22-slim omits it (#1645)
 #

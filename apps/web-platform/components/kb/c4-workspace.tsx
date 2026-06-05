@@ -46,10 +46,10 @@ export default function C4Workspace({
   const { data, error, loading, reload } = useC4Project(dirPath);
   const [rightTab, setRightTab] = useState<"concierge" | "code">("concierge");
   const [currentView, setCurrentView] = useState(viewId);
-  // True once the user has saved a source edit this session. The diagram renders
-  // from a precomputed model.likec4.json that is NOT regenerated at runtime, so a
-  // saved edit leaves the diagram stale until an out-of-band re-render. Surfaced
-  // honestly via the C4Diagnostics banner (no in-browser re-render is possible).
+  // True only when the server FAILED to re-render after a save (#4964). On a
+  // successful save the server regenerates model.likec4.json out-of-process and
+  // the reloaded dump is fresh, so stale stays false; if the re-render failed it
+  // flips true and the C4Diagnostics banner honestly says the diagram is stale.
   const [stale, setStale] = useState(false);
   // Reveal/collapse is LIFTED to KbChatContext so the SHARED top-bar trigger
   // ("Ask about this document", in KbContentHeader) drives it — consistent with
@@ -187,9 +187,11 @@ export default function C4Workspace({
                     <C4CodePanel
                       data={data}
                       dirPath={dirPath}
-                      onSaved={async () => {
-                        setStale(true);
+                      onSaved={async (rerendered) => {
                         await reload();
+                        // Stale only when the server could NOT re-render; on a
+                        // successful re-render the reloaded dump is fresh.
+                        setStale(!rerendered);
                       }}
                     />
                   ) : (
