@@ -219,32 +219,32 @@ single load-bearing IDOR guard.
 
 ### Pre-merge (PR)
 
-- [ ] AC1 — `git grep -n "getFreshTenantClient" apps/web-platform/server/kb-route-helpers.ts`
+- [x] AC1 — `git grep -n "getFreshTenantClient" apps/web-platform/server/kb-route-helpers.ts`
   returns ZERO. The helper no longer mints a tenant client.
-- [ ] AC2 — `git grep -n "authenticateAndResolveKbPath.tenant-mint" apps/web-platform`
+- [x] AC2 — `git grep -n "authenticateAndResolveKbPath.tenant-mint" apps/web-platform`
   (excluding `knowledge-base/`) returns ZERO. The op slug is gone from the helper, the
   Sentry IS_IN, AND the op-contract test.
-- [ ] AC3 — The `kb_tenant_mint_silent_fallback` alert's IS_IN value contains
+- [x] AC3 — The `kb_tenant_mint_silent_fallback` alert's IS_IN value contains
   `kb-sync.tenant-mint` and NOT `authenticateAndResolveKbPath.tenant-mint`. Verify the
   block: `awk '/resource "sentry_issue_alert" "kb_tenant_mint_silent_fallback"/{f=1} f{print} f&&/^}/{exit}' apps/web-platform/infra/sentry/issue-alerts.tf | grep "value ="`
   shows the narrowed value.
-- [ ] AC4 — `sentry-kb-tenant-mint-alert-op-contract.test.ts` passes with the single
+- [x] AC4 — `sentry-kb-tenant-mint-alert-op-contract.test.ts` passes with the single
   `kb-sync.tenant-mint` slug (and its `kb/sync/route.ts` emit-site assertion).
-- [ ] AC5 — `kb-route-helpers.test.ts` passes: happy path returns the populated
+- [x] AC5 — `kb-route-helpers.test.ts` passes: happy path returns the populated
   `KbRouteContext` with `userData.{workspace_path, repo_url, github_installation_id}`
   sourced from the resolvers; all validation branches (CSRF/401/path/markdown/symlink/
   owner-repo) preserved; resolver-not-ok branches mapped to the correct status.
-- [ ] AC6 — `csrf-coverage.test.ts` passes: `kb/file` and `kb/c4` routes still satisfy
+- [x] AC6 — `csrf-coverage.test.ts` passes: `kb/file` and `kb/c4` routes still satisfy
   the `delegatesToKbHelper` path (the regex `authenticateAndResolveKbPath(` + the
   `if(!x.ok)return x.response` early-return both still match).
-- [ ] AC7 — `.service-role-allowlist` enforcing test passes with `kb-route-helpers.ts`
+- [x] AC7 — `.service-role-allowlist` enforcing test passes with `kb-route-helpers.ts`
   re-added.
-- [ ] AC8 — `npx tsc --noEmit` clean in `apps/web-platform` (the `KbRouteContext` shape
+- [x] AC8 — `npx tsc --noEmit` clean in `apps/web-platform` (the `KbRouteContext` shape
   is unchanged, so route call-sites compile without edit).
-- [ ] AC9 — Full `apps/web-platform` vitest suite green
+- [x] AC9 — Full `apps/web-platform` vitest suite green
   (`./node_modules/.bin/vitest run` from `apps/web-platform`, per `package.json`
   `scripts.test`).
-- [ ] AC10 — **Message parity** for the client (VERIFIED de-risked at deepen — clients
+- [x] AC10 — **Message parity** for the client (VERIFIED de-risked at deepen — clients
   show `body.error`, not the status code). The migrated helper maps resolver-not-ok to
   the legacy MESSAGE strings: `resolveActiveWorkspaceKbRoot` 503 → "Workspace not ready";
   `resolveActiveWorkspaceKbRoot` 404 (not-connected) → "No repository connected";
