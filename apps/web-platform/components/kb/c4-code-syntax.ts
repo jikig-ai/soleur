@@ -27,8 +27,9 @@ export const KEYWORDS = new Set([
   "color",
   "technology",
   "style",
+  "shape",
+  "notation",
   "extend",
-  "extends",
   "link",
   "icon",
   "include",
@@ -130,13 +131,19 @@ export const DEFAULT_CODE_FONT_PX = 12;
 export const clampFontPx = (px: number): number =>
   Math.min(MAX_CODE_FONT_PX, Math.max(MIN_CODE_FONT_PX, px));
 
+/** Map an integer zoom step (0 = default) to a clamped px number. */
+export const fontPxForZoom = (zoom: number): number =>
+  clampFontPx(DEFAULT_CODE_FONT_PX + zoom);
+
 /** Map an integer zoom step (0 = default) to a clamped `"<n>px"` string. */
 export const fontSizeForZoom = (zoom: number): string =>
-  `${clampFontPx(DEFAULT_CODE_FONT_PX + zoom)}px`;
+  `${fontPxForZoom(zoom)}px`;
 
 /** EditorView theme scaling content + gutter font-size together for the zoom. */
-export const codeFontTheme = (zoom: number): Extension =>
-  EditorView.theme({
-    "&": { fontSize: fontSizeForZoom(zoom) },
-    ".cm-gutters": { fontSize: fontSizeForZoom(zoom) },
+export const codeFontTheme = (zoom: number): Extension => {
+  const size = fontSizeForZoom(zoom);
+  return EditorView.theme({
+    "&": { fontSize: size },
+    ".cm-gutters": { fontSize: size },
   });
+};

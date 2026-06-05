@@ -10,7 +10,7 @@ import { oneDark } from "@codemirror/theme-one-dark";
 import {
   c4SyntaxExtensions,
   codeFontTheme,
-  fontSizeForZoom,
+  fontPxForZoom,
   DEFAULT_CODE_FONT_PX,
   MIN_CODE_FONT_PX,
   MAX_CODE_FONT_PX,
@@ -203,10 +203,7 @@ export function C4CodePanel({
   // CodeMirror theme extension so content + gutter scale together — scoped to
   // this editor, independent of browser page zoom.
   const [zoom, setZoom] = useState(0);
-  const currentFontPx = useMemo(
-    () => parseInt(fontSizeForZoom(zoom), 10),
-    [zoom],
-  );
+  const currentFontPx = fontPxForZoom(zoom);
   const atMin = currentFontPx <= MIN_CODE_FONT_PX;
   const atMax = currentFontPx >= MAX_CODE_FONT_PX;
   // Language + Soleur-tokened syntax highlight (theme-independent) + font theme.

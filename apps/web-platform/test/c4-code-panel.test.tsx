@@ -35,6 +35,7 @@ vi.mock("@likec4/core/model", () => ({
 }));
 
 import { C4CodePanel, type ProjectResponse } from "@/components/kb/c4-shared";
+import { c4SyntaxExtensions } from "@/components/kb/c4-code-syntax";
 
 function fakeProject(): ProjectResponse {
   return {
@@ -131,11 +132,13 @@ describe("C4CodePanel — zoom controls (AC1/AC2/AC3)", () => {
 });
 
 describe("C4CodePanel — editor wiring (AC4/AC6)", () => {
-  it("AC4: passes syntax + font-size extensions to CodeMirror", () => {
+  it("AC4: passes the syntax extension + font-size theme to CodeMirror", () => {
     renderPanel();
-    expect(Array.isArray(lastProps?.extensions)).toBe(true);
-    // c4Language + syntaxHighlighting(c4HighlightStyle) + codeFontTheme(zoom)
-    expect((lastProps?.extensions ?? []).length).toBeGreaterThanOrEqual(2);
+    const exts = (lastProps?.extensions ?? []) as unknown[];
+    // Assert the real syntax extension is wired (by reference) — not just that
+    // *some* array of length 2 was passed, which would survive two stub entries.
+    expect(exts).toContain(c4SyntaxExtensions);
+    expect(exts.length).toBe(2); // syntax extension + font-size theme
   });
 
   it("AC4: zooming rebuilds the extensions (font theme tracks zoom)", () => {
@@ -145,12 +148,20 @@ describe("C4CodePanel — editor wiring (AC4/AC6)", () => {
     expect(lastProps?.extensions).not.toBe(before);
   });
 
-  it("AC6: mounts with extensions under both light and dark themes", () => {
+  it("AC6: chrome theme flips with data-theme; syntax extensions apply in both", () => {
     renderPanel("light");
-    expect(Array.isArray(lastProps?.extensions)).toBe(true);
+    // Light → default chrome (no oneDark), but syntax/font extensions still apply.
+    expect(lastProps?.theme).toBeUndefined();
+    expect((lastProps?.extensions ?? []) as unknown[]).toContain(
+      c4SyntaxExtensions,
+    );
     cleanup();
     renderPanel("dark");
-    expect(Array.isArray(lastProps?.extensions)).toBe(true);
+    // Dark → oneDark chrome theme is passed; extensions are theme-independent.
+    expect(lastProps?.theme).toBeTruthy();
+    expect((lastProps?.extensions ?? []) as unknown[]).toContain(
+      c4SyntaxExtensions,
+    );
   });
 });
 

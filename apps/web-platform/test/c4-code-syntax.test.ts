@@ -21,7 +21,14 @@ function tokenize(line: string) {
   while (!stream.eol() && guard++ < 5000) {
     stream.start = stream.pos;
     const style = c4StreamParser.token(stream, state);
-    if (stream.pos === stream.start) stream.next(); // never spin
+    // Enforce CodeMirror's own contract: token() MUST advance the stream.
+    // CodeMirror throws "Stream parser failed to advance stream." otherwise —
+    // assert it here rather than papering over a non-advancing regression.
+    if (stream.pos === stream.start) {
+      throw new Error(
+        `tokenizer did not advance at pos ${stream.pos} of "${line}"`,
+      );
+    }
     out.push({ text: stream.string.slice(stream.start, stream.pos), style });
   }
   return out;
@@ -101,9 +108,21 @@ describe("c4-code-syntax — .c4 tokenizer (AC4)", () => {
     expect(styleOf("  #external", "#external")).toBe("meta");
   });
 
+  it("does not treat # followed by a non-letter as a tag", () => {
+    // #tag regex requires a leading [A-Za-z]; "#1foo" must not become meta.
+    expect(styleOf("#1foo", "#")).toBeNull();
+  });
+
   it("classifies braces / arrows as punctuation", () => {
     expect(styleOf("model {", "{")).toBe("punctuation");
     expect(styleOf("a -> b", "->")).toBe("punctuation");
+  });
+
+  it("splits punctuation with no surrounding whitespace", () => {
+    // a->b and model{ — arrows/braces must tokenize without leading space.
+    expect(styleOf("a->b", "->")).toBe("punctuation");
+    expect(styleOf("model{", "{")).toBe("punctuation");
+    expect(styleOf("model{", "model")).toBe("keyword");
   });
 });
 
