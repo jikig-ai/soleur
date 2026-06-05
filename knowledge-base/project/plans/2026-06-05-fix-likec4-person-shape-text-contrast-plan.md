@@ -143,31 +143,31 @@ surface touched.`)
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — Silhouette toned down.** `c4-theme.css` contains a rule scoped to
+- [x] **AC1 — Silhouette toned down.** `c4-theme.css` contains a rule scoped to
   `.soleur-c4` that targets the person silhouette via the intrinsic attributes
   `[data-likec4-shape="person"]` **and** `[data-likec4-fill="mix-stroke"]`, and
   re-points its `fill` off the 80%-gold mix (to `--likec4-palette-fill` or an
   equivalently-toned token) **and/or** lowers its `opacity`. Verify:
   `grep -E '\[data-likec4-shape="person"\][^{]*\[data-likec4-fill="mix-stroke"\]' apps/web-platform/components/kb/c4-theme.css` returns ≥1.
-- [ ] **AC2 — Theme-aware, not hard-coded.** The new rule references a Soleur/LikeC4
+- [x] **AC2 — Theme-aware, not hard-coded.** The new rule references a Soleur/LikeC4
   palette **var** (`var(--likec4-palette-fill)` or `var(--soleur-*)`), not a literal
   hex, so it flips with `data-theme`. Verify the rule body contains `var(--` and the
   file still contains **no** `#3b82f6` (upstream blue) regression.
-- [ ] **AC3 — `!important` carried.** The new `fill`/`opacity` declarations carry
+- [x] **AC3 — `!important` carried.** The new `fill`/`opacity` declarations carry
   `!important` (required to beat the library's `[data-likec4-fill=mix-stroke]`
   zero-specificity rule from the bundled stylesheet — a plain class rule does not
   win source-order against an `id`-scoped/runtime rule reliably; mirror the existing
   §2b convention). Verify the rule block matches `!important`.
-- [ ] **AC4 — Intrinsic-hook guard against a library bump.** `c4-theme.test.ts`
+- [x] **AC4 — Intrinsic-hook guard against a library bump.** `c4-theme.test.ts`
   asserts the installed `ElementShape.js` still emits BOTH hooks the selector
   depends on: `data-likec4-fill: "mix-stroke"` (the silhouette tint attr) inside the
   `person` case, so a library bump that renames the attribute fails CI loudly
   instead of silently un-toning the silhouette. (Pairs the source-grep "our CSS
   contains selector X" assertion — which is vacuous alone — with a guard reading the
   installed component, per the vendored-CSS Sharp Edge from PR #4938.)
-- [ ] **AC5 — Existing theme test still green.** `./node_modules/.bin/vitest run test/c4-theme.test.ts`
+- [x] **AC5 — Existing theme test still green.** `./node_modules/.bin/vitest run test/c4-theme.test.ts`
   passes (all prior assertions + the new ones). Run from `apps/web-platform/`.
-- [ ] **AC6 — Visual verification, both themes.** Founder node title + description in
+- [x] **AC6 — Visual verification, both themes.** Founder node title + description in
   the System Context view are legible (no light-on-bright-gold overlap) in **both**
   light and dark themes in the running viewer; gold silhouette still visible as a
   faint accent. Capture a before/after screenshot pair per theme for the PR body
