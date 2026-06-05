@@ -6,9 +6,9 @@ import { describe, test, expect, vi, beforeEach } from "vitest";
 
 const {
   mockGetUser,
-  mockFrom,
   mockServiceFrom,
-  mockGetFreshTenantClient,
+  mockResolveKbRoot,
+  mockResolveRepoMeta,
   mockGitWithAuth,
   mockIsPathInWorkspace,
   mockLstat,
@@ -16,13 +16,14 @@ const {
   mockRejectCsrf,
 } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
-  mockFrom: vi.fn(),
-  // Distinct service-role `.from` so the mint-failure fallback tests can
-  // prove the SERVICE-ROLE client (not the tenant client) produced the
-  // resolved workspace — wiring both clients to the same `mockFrom` would
-  // let a fallback assertion pass vacuously (deepen-plan P1).
+  // The service-role client is created via createServiceClient() and handed
+  // to the (mocked) resolvers — its `.from` is never reached in these tests,
+  // but a stub keeps the createServiceClient() call non-throwing.
   mockServiceFrom: vi.fn(),
-  mockGetFreshTenantClient: vi.fn(),
+  // ADR-044 (#4956): the helper now composes the two membership-scoped
+  // service-role resolvers instead of a tenant `users` read. Mock both.
+  mockResolveKbRoot: vi.fn(),
+  mockResolveRepoMeta: vi.fn(),
   mockGitWithAuth: vi.fn(),
   mockIsPathInWorkspace: vi.fn(),
   mockLstat: vi.fn(),
@@ -34,32 +35,19 @@ vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
     auth: { getUser: mockGetUser },
   })),
-  // Service-role client → distinct `mockServiceFrom` (see hoisted note).
   createServiceClient: vi.fn(() => ({
     from: mockServiceFrom,
   })),
 }));
 
-// PR-C §2.8 (#3244): kb-route-helpers imports `getFreshTenantClient` from
-// `@/lib/supabase/tenant`. Default impl resolves to the tenant `mockFrom`
-// (the same per-table setup `setupUserData` drives); individual tests
-// override with `mockGetFreshTenantClient.mockRejectedValueOnce(...)` to
-// simulate a tenant-mint failure. The mock RuntimeAuthError mirrors the
-// real two-arg `(cause, message)` signature + public `cause` field so the
-// fallback's `instanceof` check and any cause-discrimination work in tests.
-vi.mock("@/lib/supabase/tenant", () => ({
-  getFreshTenantClient: mockGetFreshTenantClient,
-  RuntimeAuthError: class RuntimeAuthError extends Error {
-    public readonly cause: "jwt_mint" | "rotation" | "denied_jti";
-    constructor(
-      cause: "jwt_mint" | "rotation" | "denied_jti",
-      message: string,
-    ) {
-      super(message);
-      this.name = "RuntimeAuthError";
-      this.cause = cause;
-    }
-  },
+// #4956 ADR-044 — the helper resolves the active workspace's kbRoot + repo
+// metadata via these two membership-scoped resolvers (service-role, read from
+// the `workspaces` source of truth via the membership-checked installation
+// RPC), replacing the legacy tenant `users` read. The pre-resolved active id
+// is threaded from kbRoot → repoMeta so both key to ONE membership-resolved id.
+vi.mock("@/server/workspace-resolver", () => ({
+  resolveActiveWorkspaceKbRoot: mockResolveKbRoot,
+  resolveActiveWorkspaceRepoMeta: mockResolveRepoMeta,
 }));
 
 const { mockReportSilentFallback, mockWarnSilentFallback } = vi.hoisted(() => ({
@@ -96,7 +84,6 @@ import {
   authenticateAndResolveKbPath,
   syncWorkspace,
 } from "@/server/kb-route-helpers";
-import { RuntimeAuthError } from "@/lib/supabase/tenant";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -122,54 +109,28 @@ function setupAuthenticatedUser() {
   mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
 }
 
-function setupUserData(overrides: Record<string, unknown> = {}) {
-  const mockSingle = vi.fn().mockResolvedValue({
-    data: {
-      workspace_path: TEST_WORKSPACE_PATH,
-      workspace_status: "ready",
-      repo_url: TEST_REPO_URL,
-      github_installation_id: TEST_INSTALLATION_ID,
-      ...overrides,
-    },
-    error: null,
+// Wire both resolvers to the solo-owner happy path (activeWorkspaceId === userId,
+// kbRoot/repo identical to the legacy read). `activeWorkspaceId` overrides the
+// solo default so the member-vs-solo id-threading test can assert it propagates.
+function setupResolvers(activeWorkspaceId: string = TEST_USER_ID) {
+  mockResolveKbRoot.mockResolvedValue({
+    ok: true,
+    activeWorkspaceId,
+    workspacePath: TEST_WORKSPACE_PATH,
+    kbRoot: `${TEST_WORKSPACE_PATH}/knowledge-base`,
+    repoStatus: "ready",
   });
-  const mockEq = vi.fn(() => ({ single: mockSingle }));
-  const mockSelect = vi.fn(() => ({ eq: mockEq }));
-  mockFrom.mockImplementation((table: string) => {
-    if (table === "users") return { select: mockSelect };
-    return {};
-  });
-  // Default: the tenant mint succeeds and the tenant client reads via mockFrom.
-  mockGetFreshTenantClient.mockResolvedValue({ from: mockFrom });
-}
-
-// Wire the SERVICE-ROLE client's `.from` (distinct from the tenant `mockFrom`)
-// to a `users` row. Used by the tenant-mint-failure fallback tests so the
-// assertion proves the service-role read — not the tenant read — produced the
-// result. Returns nothing when called for a table other than "users".
-function setupServiceUserData(overrides: Record<string, unknown> = {}) {
-  const mockSingle = vi.fn().mockResolvedValue({
-    data: {
-      workspace_path: TEST_WORKSPACE_PATH,
-      workspace_status: "ready",
-      repo_url: TEST_REPO_URL,
-      github_installation_id: TEST_INSTALLATION_ID,
-      ...overrides,
-    },
-    error: null,
-  });
-  const mockEq = vi.fn(() => ({ single: mockSingle }));
-  const mockSelect = vi.fn(() => ({ eq: mockEq }));
-  mockServiceFrom.mockImplementation((table: string) => {
-    if (table === "users") return { select: mockSelect };
-    return {};
+  mockResolveRepoMeta.mockResolvedValue({
+    ok: true,
+    repoUrl: TEST_REPO_URL,
+    githubInstallationId: TEST_INSTALLATION_ID,
   });
 }
 
 function setupHappyPath() {
   mockValidateOrigin.mockReturnValue({ valid: true, origin: "https://app.soleur.ai" });
   setupAuthenticatedUser();
-  setupUserData();
+  setupResolvers();
   mockIsPathInWorkspace.mockReturnValue(true);
   mockLstat.mockResolvedValue({
     isSymbolicLink: () => false,
@@ -210,6 +171,8 @@ describe("authenticateAndResolveKbPath", () => {
       expect(result.response).toBe(csrfResponse);
       expect(mockRejectCsrf).toHaveBeenCalledWith("api/kb/file", "https://evil.com");
     }
+    // CSRF rejected before any credential resolution.
+    expect(mockResolveKbRoot).not.toHaveBeenCalled();
   });
 
   test("returns 401 when unauthenticated", async () => {
@@ -224,30 +187,90 @@ describe("authenticateAndResolveKbPath", () => {
     if (!result.ok) {
       expect(result.response.status).toBe(401);
     }
+    expect(mockResolveKbRoot).not.toHaveBeenCalled();
   });
 
-  test("returns 503 when workspace is not ready", async () => {
+  test("returns 503 'Workspace not ready' when kbRoot resolver reports 503", async () => {
     setupHappyPath();
-    setupUserData({ workspace_status: "provisioning" });
+    mockResolveKbRoot.mockResolvedValue({ ok: false, status: 503 });
 
     const result = await authenticateAndResolveKbPath(
       createRequest(),
       createParams(["overview", "test.pdf"]),
     );
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.response.status).toBe(503);
+    if (!result.ok) {
+      expect(result.response.status).toBe(503);
+      const body = await result.response.json();
+      expect(body.error).toMatch(/workspace not ready/i);
+    }
+    // No repo-meta resolution once the kbRoot gate fails.
+    expect(mockResolveRepoMeta).not.toHaveBeenCalled();
   });
 
-  test("returns 400 when no repo connected", async () => {
+  test("returns 'No repository connected' when kbRoot resolver reports 404 (not connected)", async () => {
     setupHappyPath();
-    setupUserData({ repo_url: null });
+    mockResolveKbRoot.mockResolvedValue({ ok: false, status: 404 });
 
     const result = await authenticateAndResolveKbPath(
       createRequest(),
       createParams(["overview", "test.pdf"]),
     );
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.response.status).toBe(400);
+    if (!result.ok) {
+      expect(result.response.status).toBe(404);
+      const body = await result.response.json();
+      expect(body.error).toMatch(/no repository connected/i);
+    }
+    expect(mockResolveRepoMeta).not.toHaveBeenCalled();
+  });
+
+  test("returns 'No repository connected' when repoMeta resolver reports 404 (no repo_url)", async () => {
+    setupHappyPath();
+    mockResolveRepoMeta.mockResolvedValue({ ok: false, status: 404 });
+
+    const result = await authenticateAndResolveKbPath(
+      createRequest(),
+      createParams(["overview", "test.pdf"]),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.response.status).toBe(404);
+      const body = await result.response.json();
+      expect(body.error).toMatch(/no repository connected/i);
+    }
+  });
+
+  test("returns 'No repository connected' when repoMeta resolver reports 400 (no installation)", async () => {
+    setupHappyPath();
+    mockResolveRepoMeta.mockResolvedValue({ ok: false, status: 400 });
+
+    const result = await authenticateAndResolveKbPath(
+      createRequest(),
+      createParams(["overview", "test.pdf"]),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.response.status).toBe(400);
+      const body = await result.response.json();
+      expect(body.error).toMatch(/no repository connected/i);
+    }
+  });
+
+  test("returns 503 'Workspace not ready' when repoMeta resolver reports 503", async () => {
+    setupHappyPath();
+    mockResolveRepoMeta.mockResolvedValue({ ok: false, status: 503 });
+
+    const result = await authenticateAndResolveKbPath(
+      createRequest(),
+      createParams(["overview", "test.pdf"]),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.response.status).toBe(503);
+      const body = await result.response.json();
+      expect(body.error).toMatch(/workspace not ready/i);
+    }
   });
 
   test("returns 400 for empty path", async () => {
@@ -351,7 +374,7 @@ describe("authenticateAndResolveKbPath", () => {
     if (!result.ok) expect(result.response.status).toBe(403);
   });
 
-  test("happy path returns populated context", async () => {
+  test("happy path returns populated context sourced from the resolvers", async () => {
     setupHappyPath();
 
     const result = await authenticateAndResolveKbPath(
@@ -376,6 +399,32 @@ describe("authenticateAndResolveKbPath", () => {
       expect(result.ctx.kbRoot).toContain("knowledge-base");
       expect(result.ctx.fullPath).toContain("overview/test.pdf");
     }
+    // The credential read goes through the service-role resolvers, not a
+    // tenant `users` read.
+    expect(mockResolveKbRoot).toHaveBeenCalledWith(TEST_USER_ID, expect.anything());
+  });
+
+  test("threads the resolved active workspace id from kbRoot into repoMeta (member-vs-solo)", async () => {
+    // An invited member operating on a shared workspace: the kbRoot resolver
+    // returns an activeWorkspaceId distinct from the caller's user id; the
+    // repoMeta resolver MUST be called with that same pre-resolved id so the
+    // kbRoot, repo, and credential all key to ONE membership-resolved workspace
+    // (no second independent resolution → no stale-claim divergence). This is
+    // the #4543 write-route fix.
+    setupHappyPath();
+    const SHARED_WORKSPACE_ID = "11111111-2222-3333-4444-555555555555";
+    setupResolvers(SHARED_WORKSPACE_ID);
+
+    const result = await authenticateAndResolveKbPath(
+      createRequest(),
+      createParams(["overview", "test.pdf"]),
+    );
+    expect(result.ok).toBe(true);
+    expect(mockResolveRepoMeta).toHaveBeenCalledWith(
+      TEST_USER_ID,
+      expect.anything(),
+      SHARED_WORKSPACE_ID,
+    );
   });
 
   test("blockMarkdown: false allows .md paths through", async () => {
@@ -731,144 +780,5 @@ describe("syncWorkspace", () => {
       (c: unknown[]) => (c[0] as string[])[0],
     );
     expect(verbs).toEqual(["pull"]);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Tests — authenticateAndResolveKbPath — tenant-mint failure (REVERTED)
-//
-// PR #4919 added a per-cause service-role fallback (availability causes
-// jwt_mint/rotation fell back to a service-role read; denied_jti failed closed).
-// PIR #4913 proved the mint failure was a misdiagnosis, so #4919's fallback is
-// the same dead-code class as #4913's. This revert restores the pre-#4919
-// behavior on the file mutation routes: availability causes → 503 (workspace
-// not resolvable right now), revocation/unknown → 403 (fail closed). The emit
-// is PRESERVED for EVERY cause so the #4920 alert keeps its signal, and the
-// service-role client is never reached. The distinct mockServiceFrom keeps each
-// `not called` assertion non-vacuous.
-// ---------------------------------------------------------------------------
-
-describe("authenticateAndResolveKbPath — tenant-mint failure (reverted)", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    // Happy-path wiring for CSRF / auth / path / lstat; the per-test mint
-    // override forces the RuntimeAuthError branch. A ready service-role row is
-    // wired but MUST NOT be read after the revert (keeps negatives non-vacuous).
-    setupHappyPath();
-    setupServiceUserData();
-  });
-
-  // Availability causes (jwt_mint / rotation) → 503, NO service-role fallback.
-  test.each(["jwt_mint", "rotation"] as const)(
-    "availability cause %s → 503 Workspace not ready, NO service-role fallback",
-    async (cause) => {
-      mockGetFreshTenantClient.mockRejectedValueOnce(
-        new RuntimeAuthError(cause, `mint failed: ${cause}`),
-      );
-
-      const result = await authenticateAndResolveKbPath(
-        createRequest(),
-        createParams(["overview", "test.pdf"]),
-      );
-
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.response.status).toBe(503);
-        const body = await result.response.json();
-        expect(body.error).toMatch(/workspace not ready/i);
-      }
-      // The service-role escape hatch is gone — neither client is reached.
-      expect(mockServiceFrom).not.toHaveBeenCalled();
-      expect(mockFrom).not.toHaveBeenCalled();
-    },
-  );
-
-  // Revocation (denied_jti) and any unknown cause → fail CLOSED with 403.
-  test("denied_jti → fail closed with 403, NO read of any kind", async () => {
-    mockGetFreshTenantClient.mockRejectedValueOnce(
-      new RuntimeAuthError("denied_jti", "jti on deny-list"),
-    );
-
-    const result = await authenticateAndResolveKbPath(
-      createRequest(),
-      createParams(["overview", "test.pdf"]),
-    );
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.response.status).toBe(403);
-      const body = await result.response.json();
-      expect(body.error).toMatch(/access denied/i);
-    }
-    expect(mockServiceFrom).not.toHaveBeenCalled();
-    expect(mockFrom).not.toHaveBeenCalled();
-  });
-
-  // Load-bearing: both route handlers call this helper OUTSIDE their try block,
-  // so the mint-failure path must RESOLVE to a Response, never reject (a thrown
-  // RuntimeAuthError would escape to Next.js → uncontrolled 500).
-  test("mint-failure path RESOLVES to a Response, never rejects", async () => {
-    mockGetFreshTenantClient.mockRejectedValueOnce(
-      new RuntimeAuthError("denied_jti", "jti on deny-list"),
-    );
-
-    await expect(
-      authenticateAndResolveKbPath(
-        createRequest(),
-        createParams(["overview", "test.pdf"]),
-      ),
-    ).resolves.toMatchObject({ ok: false });
-  });
-
-  // reportSilentFallback fires exactly once for EVERY cause, including
-  // denied_jti (the revocation hit must stay Sentry-visible BEFORE the 403
-  // early-return) — this is the #4920 alert's signal, preserved across the revert.
-  test.each(["jwt_mint", "rotation", "denied_jti"] as const)(
-    "%s emits exactly one reportSilentFallback with op:authenticateAndResolveKbPath.tenant-mint",
-    async (cause) => {
-      const mintErr = new RuntimeAuthError(cause, `mint failure: ${cause}`);
-      mockGetFreshTenantClient.mockRejectedValueOnce(mintErr);
-
-      await authenticateAndResolveKbPath(
-        createRequest(),
-        createParams(["overview", "test.pdf"]),
-      );
-
-      expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
-      expect(mockReportSilentFallback).toHaveBeenCalledWith(
-        mintErr,
-        expect.objectContaining({
-          feature: "kb-route-helpers",
-          op: "authenticateAndResolveKbPath.tenant-mint",
-          extra: expect.objectContaining({ userId: TEST_USER_ID }),
-        }),
-      );
-    },
-  );
-
-  // A non-RuntimeAuthError mint failure is re-thrown unchanged.
-  test("a non-RuntimeAuthError from the mint is re-thrown (not swallowed)", async () => {
-    mockGetFreshTenantClient.mockRejectedValueOnce(new Error("unexpected boom"));
-
-    await expect(
-      authenticateAndResolveKbPath(
-        createRequest(),
-        createParams(["overview", "test.pdf"]),
-      ),
-    ).rejects.toThrow("unexpected boom");
-    expect(mockServiceFrom).not.toHaveBeenCalled();
-  });
-
-  // Regression guard — happy path (mint succeeds): tenant read, no fallback.
-  test("happy path (mint succeeds) reads via the TENANT client, no fallback", async () => {
-    const result = await authenticateAndResolveKbPath(
-      createRequest(),
-      createParams(["overview", "test.pdf"]),
-    );
-
-    expect(result.ok).toBe(true);
-    expect(mockFrom).toHaveBeenCalledWith("users");
-    expect(mockServiceFrom).not.toHaveBeenCalled();
-    expect(mockReportSilentFallback).not.toHaveBeenCalled();
   });
 });
