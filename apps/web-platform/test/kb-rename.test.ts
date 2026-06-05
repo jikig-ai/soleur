@@ -7,6 +7,8 @@ import { describe, test, expect, vi, beforeEach } from "vitest";
 const {
   mockGetUser,
   mockFrom,
+  mockResolveKbRoot,
+  mockResolveRepoMeta,
   mockGithubApiGet,
   mockGithubApiPost,
   mockGitWithAuth,
@@ -25,6 +27,8 @@ const {
   return {
     mockGetUser: vi.fn(),
     mockFrom: vi.fn(),
+    mockResolveKbRoot: vi.fn(),
+    mockResolveRepoMeta: vi.fn(),
     mockGithubApiGet: vi.fn(),
     mockGithubApiPost: vi.fn(),
     mockGitWithAuth: vi.fn(),
@@ -43,10 +47,13 @@ vi.mock("@/lib/supabase/server", () => ({
   })),
 }));
 
-// PR-C §2.8 (#3244): kb-route-helpers tenant migration.
-vi.mock("@/lib/supabase/tenant", () => ({
-  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom })),
-  RuntimeAuthError: class RuntimeAuthError extends Error {},
+// #4956 ADR-044: authenticateAndResolveKbPath now resolves the active
+// workspace's kbRoot + repo metadata via the membership-scoped service-role
+// resolvers (replacing the legacy tenant `users` read). `setupUserData` drives
+// these mocks below.
+vi.mock("@/server/workspace-resolver", () => ({
+  resolveActiveWorkspaceKbRoot: mockResolveKbRoot,
+  resolveActiveWorkspaceRepoMeta: mockResolveRepoMeta,
 }));
 
 vi.mock("@/lib/auth/validate-origin", () => ({
@@ -121,26 +128,45 @@ function setupAuthenticatedUser() {
   });
 }
 
+// Translate the legacy `users`-row override shape into the #4956 resolver
+// returns so existing call sites keep working:
+//   - workspace_status !== "ready" → resolveActiveWorkspaceKbRoot 503;
+//   - repo_url/installation absent → resolveActiveWorkspaceRepoMeta 404
+//     ("No repository connected"; status moves 400→404, message preserved —
+//     clients render body.error, not the code, per AC10).
 function setupUserData(overrides: Record<string, unknown> = {}) {
-  const mockSingle = vi.fn().mockResolvedValue({
-    data: {
-      workspace_path: TEST_WORKSPACE_PATH,
-      workspace_status: "ready",
-      repo_url: TEST_REPO_URL,
-      github_installation_id: TEST_INSTALLATION_ID,
-      ...overrides,
-    },
-    error: null,
-  });
-  const mockEq = vi.fn(() => ({ single: mockSingle }));
-  const mockSelect = vi.fn(() => ({ eq: mockEq }));
+  const workspaceStatus =
+    "workspace_status" in overrides
+      ? (overrides.workspace_status as string | null)
+      : "ready";
+  const repoUrl =
+    "repo_url" in overrides ? (overrides.repo_url as string | null) : TEST_REPO_URL;
+  const installationId =
+    "github_installation_id" in overrides
+      ? (overrides.github_installation_id as number | null)
+      : TEST_INSTALLATION_ID;
 
-  mockFrom.mockImplementation((table: string) => {
-    if (table === "users") {
-      return { select: mockSelect };
-    }
-    return {};
-  });
+  if (workspaceStatus !== "ready") {
+    mockResolveKbRoot.mockResolvedValue({ ok: false, status: 503 });
+  } else {
+    mockResolveKbRoot.mockResolvedValue({
+      ok: true,
+      activeWorkspaceId: TEST_USER_ID,
+      workspacePath: TEST_WORKSPACE_PATH,
+      kbRoot: `${TEST_WORKSPACE_PATH}/knowledge-base`,
+      repoStatus: "ready",
+    });
+  }
+
+  if (!repoUrl || !installationId) {
+    mockResolveRepoMeta.mockResolvedValue({ ok: false, status: 404 });
+  } else {
+    mockResolveRepoMeta.mockResolvedValue({
+      ok: true,
+      repoUrl,
+      githubInstallationId: installationId,
+    });
+  }
 }
 
 function setupFullMocks() {
@@ -562,14 +588,19 @@ describe("PATCH /api/kb/file/[...path] (rename)", () => {
     expect(res.status).toBe(200);
   });
 
-  // 22. No repo connected
-  test("returns 400 when no repository is connected", async () => {
+  // 22. No repo connected — #4956: resolver returns 404 (message parity with
+  // the legacy "No repository connected"; clients render body.error, not the
+  // numeric code, so the 400→404 shift is not client-observable per AC10).
+  test("returns 'No repository connected' when no repository is connected", async () => {
     setupAuthenticatedUser();
     setupUserData({ repo_url: null, github_installation_id: null });
 
     const req = createRequest(["overview", "test.png"], { newName: "renamed.png" });
     const res = await PATCH(req, { params: createParams(["overview", "test.png"]) });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(404);
+
+    const body = await res.json();
+    expect(body.error).toMatch(/no repository connected/i);
   });
 
   // 23. Credential helper cleanup
