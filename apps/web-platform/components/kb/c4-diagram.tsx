@@ -24,8 +24,8 @@ export default function C4Diagram({
   const { data, error, loading, reload } = useC4Project(dirPath);
   const [tab, setTab] = useState<"diagram" | "code">("diagram");
   const [currentView, setCurrentView] = useState(viewId);
-  // See c4-workspace.tsx: a saved source edit leaves the precomputed diagram
-  // stale until an out-of-band re-render. Surfaced via the C4Diagnostics banner.
+  // See c4-workspace.tsx: stale flips true only when the server's post-save
+  // re-render (#4964) failed; on success the reloaded dump is fresh.
   const [stale, setStale] = useState(false);
 
   return (
@@ -76,9 +76,9 @@ export default function C4Diagram({
                 data={data}
                 dirPath={dirPath}
                 height="560px"
-                onSaved={async () => {
-                  setStale(true);
+                onSaved={async (rerendered) => {
                   await reload();
+                  setStale(!rerendered);
                   setTab("diagram");
                 }}
               />

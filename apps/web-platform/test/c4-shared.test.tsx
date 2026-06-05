@@ -79,34 +79,52 @@ describe("C4CodePanel — honest save copy (Layer 1)", () => {
     diagnostics: [],
   };
 
-  it("does NOT claim the diagram re-renders after a successful save", async () => {
+  it("on a successful re-render: copy says diagram updated, onSaved(true) (Layer 2)", async () => {
     global.fetch = vi
       .fn()
-      .mockResolvedValue({ ok: true, json: async () => ({}) }) as unknown as typeof fetch;
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ commitSha: "x", rerendered: true }),
+      }) as unknown as typeof fetch;
     const onSaved = vi.fn().mockResolvedValue(undefined);
 
     render(
-      <C4CodePanel
-        data={data}
-        dirPath="knowledge-base/diagrams"
-        onSaved={onSaved}
-      />,
+      <C4CodePanel data={data} dirPath="knowledge-base/diagrams" onSaved={onSaved} />,
     );
-
-    // Make the draft dirty so Save enables, then save.
     fireEvent.change(screen.getByTestId("cm"), {
-      target: { value: "specification { edited }" },
+      target: { value: "model { edited }" },
     });
     fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
 
-    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(true));
     // The source PUT still fires (no regression to the write path).
     expect(global.fetch).toHaveBeenCalledWith(
       "/api/kb/c4/knowledge-base/diagrams/model.c4",
       expect.objectContaining({ method: "PUT" }),
     );
-    // The old lie is gone; honest copy is shown.
+    expect(screen.getByText(/diagram updated/i)).toBeTruthy();
+    // No "re-rendering…" present-progressive lie.
     expect(screen.queryByText(/re-rendering/i)).toBeNull();
-    expect(screen.getByText(/saved/i)).toBeTruthy();
+  });
+
+  it("on a failed re-render: copy defers, onSaved(false) (Layer 2)", async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ commitSha: "x", rerendered: false }),
+      }) as unknown as typeof fetch;
+    const onSaved = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <C4CodePanel data={data} dirPath="knowledge-base/diagrams" onSaved={onSaved} />,
+    );
+    fireEvent.change(screen.getByTestId("cm"), {
+      target: { value: "model { edited }" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(false));
+    expect(screen.getByText(/after re-render/i)).toBeTruthy();
   });
 });

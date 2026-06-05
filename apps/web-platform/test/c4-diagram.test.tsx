@@ -15,10 +15,19 @@ vi.mock("@/components/kb/c4-shared", () => ({
   C4Diagnostics: ({ stale }: { stale?: boolean }) => (
     <div data-testid="c4-diagnostics" data-stale={stale ? "true" : "false"} />
   ),
-  C4CodePanel: ({ onSaved }: { onSaved: () => void | Promise<void> }) => (
-    <button data-testid="c4-code-panel" onClick={() => void onSaved()}>
-      stub-save
-    </button>
+  C4CodePanel: ({
+    onSaved,
+  }: {
+    onSaved: (rerendered: boolean) => void | Promise<void>;
+  }) => (
+    <>
+      <button data-testid="c4-save-ok" onClick={() => void onSaved(true)}>
+        save-ok
+      </button>
+      <button data-testid="c4-save-fail" onClick={() => void onSaved(false)}>
+        save-fail
+      </button>
+    </>
   ),
 }));
 
@@ -33,7 +42,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("C4Diagram (inline embed) — staleness wiring (Layer 1)", () => {
+describe("C4Diagram (inline embed) — staleness wiring (Layer 2)", () => {
   it("does not flag stale on a fresh load (no false-positive)", async () => {
     await renderEmbed();
     expect(
@@ -41,18 +50,27 @@ describe("C4Diagram (inline embed) — staleness wiring (Layer 1)", () => {
     ).toBe("false");
   });
 
-  it("flags stale and returns to the Diagram tab after a source save", async () => {
+  it("a successful re-render returns to the Diagram tab WITHOUT a stale banner", async () => {
     await renderEmbed();
-    // Switch to the Code tab and save via the stub panel.
     fireEvent.click(screen.getByRole("button", { name: "code" }));
-    fireEvent.click(screen.getByTestId("c4-code-panel"));
+    fireEvent.click(screen.getByTestId("c4-save-ok"));
 
-    // onSaved sets stale=true, reloads, and switches back to the Diagram tab.
+    // onSaved reloads, sets stale=false (re-render succeeded), switches to Diagram.
+    await waitFor(() => expect(screen.getByTestId("c4-canvas")).toBeTruthy());
+    expect(
+      screen.getByTestId("c4-diagnostics").getAttribute("data-stale"),
+    ).toBe("false");
+  });
+
+  it("a failed re-render flags stale", async () => {
+    await renderEmbed();
+    fireEvent.click(screen.getByRole("button", { name: "code" }));
+    fireEvent.click(screen.getByTestId("c4-save-fail"));
+
     await waitFor(() =>
       expect(
         screen.getByTestId("c4-diagnostics").getAttribute("data-stale"),
       ).toBe("true"),
     );
-    expect(screen.getByTestId("c4-canvas")).toBeTruthy();
   });
 });

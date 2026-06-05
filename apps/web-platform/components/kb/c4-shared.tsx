@@ -216,7 +216,10 @@ export function C4CodePanel({
 }: {
   data: ProjectResponse;
   dirPath: string;
-  onSaved: () => void | Promise<void>;
+  /** Called after a successful save. `rerendered` is true when the server
+   *  regenerated the diagram (the rendered model is fresh); false when the
+   *  out-of-band re-render failed or was skipped (diagram may be stale). */
+  onSaved: (rerendered: boolean) => void | Promise<void>;
   height?: string;
 }) {
   const files = useMemo(() => Object.keys(data.sources), [data.sources]);
@@ -266,11 +269,18 @@ export function C4CodePanel({
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(j.error || `Save failed (${res.status})`);
-      // Honest: the source is committed, but the diagram is precomputed and does
-      // NOT re-render at runtime — it refreshes only after an out-of-band
-      // re-render. Do not claim "re-rendering…" (the old copy was a lie).
-      setSaveMsg("Source saved — diagram updates after re-render.");
-      await onSaved();
+      // Layer 2 (#4964): the server re-renders the diagram after a .c4 save.
+      // `rerendered` reports whether that succeeded. On success the reloaded
+      // dump is the fresh geometry; on failure the diagram stays stale and the
+      // C4Diagnostics banner says so. Default true if the field is absent
+      // (older server) so we don't false-warn.
+      const rerendered = j?.rerendered !== false;
+      setSaveMsg(
+        rerendered
+          ? "Saved — diagram updated."
+          : "Saved — diagram will update after re-render.",
+      );
+      await onSaved(rerendered);
     } catch (e) {
       setSaveMsg(e instanceof Error ? e.message : "Save failed");
     } finally {

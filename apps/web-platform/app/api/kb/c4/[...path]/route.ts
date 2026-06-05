@@ -3,6 +3,10 @@ import { authenticateAndResolveKbPath } from "@/server/kb-route-helpers";
 import { writeC4Diagram } from "@/server/c4-writer";
 
 export const runtime = "nodejs";
+// A .c4 save commits the source, then re-renders model.likec4.json out-of-process
+// (likec4 CLI) and commits + re-syncs it. That chain — commit + sync + render +
+// commit + sync — needs headroom beyond Next's short default wall clock (#4964).
+export const maxDuration = 60;
 
 /**
  * PUT /api/kb/c4/<diagrams-relative path>
@@ -47,5 +51,8 @@ export async function PUT(
       { status: result.status },
     );
   }
-  return NextResponse.json({ commitSha: result.commitSha }, { status: 200 });
+  return NextResponse.json(
+    { commitSha: result.commitSha, rerendered: result.rerendered },
+    { status: 200 },
+  );
 }

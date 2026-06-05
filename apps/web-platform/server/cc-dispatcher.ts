@@ -1475,12 +1475,11 @@ export const realSdkQueryFactory: QueryFactory = async (
           "with `relativePath` (a `.c4` source or the `.md` view-embed page " +
           "directly under `engineering/architecture/diagrams/`) and `content` " +
           "(the FULL new file contents). It commits the source directly to the " +
-          "repo, but the rendered diagram is precomputed and does NOT re-render " +
-          "at runtime — it refreshes only after the model is re-rendered " +
-          "out-of-band (via `/soleur:architecture render`), which you cannot " +
-          "trigger. Do NOT paste DSL into chat for the user to apply, and do NOT " +
-          "claim the diagram has already updated — tell the user the source was " +
-          "saved and the diagram refreshes after the next re-render.";
+          "repo and then re-renders the diagram. The tool response includes " +
+          "`rerendered`: when true, the rendered diagram updated — tell the user " +
+          "it updated; when false, the source was saved but the re-render failed, " +
+          "so tell the user the diagram will refresh after the next re-render. Do " +
+          "NOT paste DSL into chat for the user to apply.";
       }
     }
   }
