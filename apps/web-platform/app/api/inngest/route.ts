@@ -37,6 +37,7 @@ import { cronGithubAppDriftGuard } from "@/server/inngest/functions/cron-github-
 import { cronGrowthAudit } from "@/server/inngest/functions/cron-growth-audit";
 import { cronGrowthExecution } from "@/server/inngest/functions/cron-growth-execution";
 import { cronInngestCronWatchdog } from "@/server/inngest/functions/cron-inngest-cron-watchdog";
+import { cronKbTemplateHealth } from "@/server/inngest/functions/cron-kb-template-health";
 import { cronLegalAudit } from "@/server/inngest/functions/cron-legal-audit";
 import { cronLinkedinTokenCheck } from "@/server/inngest/functions/cron-linkedin-token-check";
 import { cronMainHealthMonitor } from "@/server/inngest/functions/cron-main-health-monitor";
@@ -102,6 +103,7 @@ export const { GET, POST, PUT } = serve({
     cronGrowthAudit,
     cronGrowthExecution,
     cronInngestCronWatchdog,
+    cronKbTemplateHealth,
     cronLegalAudit,
     cronLinkedinTokenCheck,
     cronMainHealthMonitor,

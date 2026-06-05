@@ -27,6 +27,7 @@ afterAll(() => {
 
 // Import AFTER env and fetch mocking
 import { findInstallationForLogin } from "../server/github-app";
+import { loadGithubFixture } from "./fixtures/github/load";
 
 describe("findInstallationForLogin", () => {
   beforeEach(() => {
@@ -37,7 +38,9 @@ describe("findInstallationForLogin", () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        id: 42,
+        ...loadGithubFixture<{ id: number; account: object }>(
+          "installation-200",
+        ),
         account: { login: "testuser", id: 1, type: "User" },
       }),
     });
@@ -104,7 +107,12 @@ describe("findInstallationForLogin", () => {
     // Installation token exchange for membership check
     mockFetch.mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ token: "ghs_test_token", expires_at: new Date(Date.now() + 3600000).toISOString() }),
+      json: async () => ({
+        ...loadGithubFixture<{ token: string; expires_at: string }>(
+          "installation-access-token",
+        ),
+        expires_at: new Date(Date.now() + 3600000).toISOString(),
+      }),
     });
     // Membership check: 204 = is a member
     mockFetch.mockResolvedValueOnce({ status: 204 });
