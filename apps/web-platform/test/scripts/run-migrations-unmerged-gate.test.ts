@@ -143,6 +143,11 @@ describe("scripts/run-migrations.sh — unmerged-apply gate (#4241)", () => {
     // is needed — a leftover temp dir from a crashed run is harmless and lives
     // under os.tmpdir(), not the repo.
     tempMigrationsDir = mkdtempSync(join(tmpdir(), "run-migrations-gate-"));
+    // Guard against a future refactor leaving tempMigrationsDir empty: the
+    // script's `${RUN_MIGRATIONS_TEST_DIR:-<real dir>}` default would then
+    // silently fall back to the REAL dir, and the gate-blocks test could pass
+    // for the wrong reason (firing on a real worktree file, not the synthetic).
+    expect(tempMigrationsDir).toBeTruthy();
     cpSync(REAL_MIGRATIONS_DIR, tempMigrationsDir, { recursive: true });
     writeFileSync(
       join(tempMigrationsDir, SYNTHETIC_FILE),
@@ -163,13 +168,17 @@ describe("scripts/run-migrations.sh — unmerged-apply gate (#4241)", () => {
       ALLOW_UNMERGED_DEV_APPLY: undefined,
     });
     expect(status).toBe(1);
-    // The gate fires on the FIRST unmerged file the *.sql glob hits (this is
-    // the synthetic `zzz_*` if no other unmerged migration exists locally, or
-    // a lower-prefix unmerged migration introduced by this same PR if one
-    // sorts first). Assert the contract — the script exits with `::error::`
-    // referencing the unmerged-on-main predicate — not the specific filename.
-    // ::error:: lands on stdout (the script uses `echo`, not `echo >&2`).
+    // The temp staging dir holds a copy of the real (all on-origin/main)
+    // migrations plus exactly one unmerged file: SYNTHETIC_FILE. So the gate
+    // fires deterministically on the synthetic basename. Assert the contract
+    // (`::error::` + the unmerged-on-main predicate) AND pin the synthetic
+    // filename so a regression that trips the gate on a *different* file (or
+    // fires it for everything) cannot pass. ::error:: lands on stdout (the
+    // script uses `echo`, not `echo >&2`).
     expect(stdout).toMatch(/::error::Migration .*\.sql is NOT on origin\/main/i);
+    expect(stdout).toMatch(
+      new RegExp(`Migration ${SYNTHETIC_FILE} is NOT on origin/main`, "i"),
+    );
     expect(stdout).toMatch(/ALLOW_UNMERGED_DEV_APPLY=1/);
     expect(stderr).toBe("");
   });
