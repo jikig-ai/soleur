@@ -673,6 +673,13 @@ describe("syncWorkspace", () => {
       expect.objectContaining({ userId: TEST_USER_ID, op: "push" }),
       expect.stringMatching(/ff-only pull blocked/i),
     );
+    // The breadcrumb MUST carry no `err` key — that absence is the load-bearing
+    // reason it does not pino-mirror to Sentry (logger.ts captures only when an
+    // `err` is present at error/fatal). A future edit that re-adds `{ err }`
+    // here would quietly re-introduce the capture this fix removed.
+    const infoCtx = (fakeLogger.info as unknown as ReturnType<typeof vi.fn>).mock
+      .calls[0][0];
+    expect(infoCtx).not.toHaveProperty("err");
     // Recovery stays observable via the warning-level self-heal-reset mirror.
     expect(mockWarnSilentFallback).toHaveBeenCalledWith(
       expect.anything(),
@@ -680,7 +687,7 @@ describe("syncWorkspace", () => {
     );
   });
 
-  test("de-noise: diverged (non-FF) abort that self-heals also emits NO error mirror", async () => {
+  test("de-noise: diverged (non-FF) abort that self-heals also emits NO error mirror, only an info breadcrumb + self-heal-reset warn", async () => {
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
       symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
@@ -695,8 +702,20 @@ describe("syncWorkspace", () => {
     );
 
     expect(result.ok).toBe(true);
+    // Symmetric with the dirty-tree sibling: pin the FULL contract so this test
+    // distinguishes "correctly de-noised" from "went dark" (no observability at
+    // all). recovered:true proves the self-heal path was actually taken.
+    if (result.ok) expect(result.recovered).toBe(true);
     expect(fakeLogger.error).not.toHaveBeenCalled();
     expect(mockReportSilentFallback).not.toHaveBeenCalled();
+    expect(fakeLogger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: TEST_USER_ID, op: "push" }),
+      expect.stringMatching(/ff-only pull blocked/i),
+    );
+    expect(mockWarnSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "self-heal-reset" }),
+    );
   });
 
   test("#4886-followup: dirty-tree + un-pushed commits → NO reset (gate protects work), {ok:false}", async () => {
