@@ -146,10 +146,12 @@ describe("KB file tree lifts into the single nav rail slot (ADR-047)", () => {
     expect(screen.queryByTestId("file-tree")).not.toBeInTheDocument();
   });
 
-  // AC2 — collapsed: the search overlay + file tree are DOM-removed so the
-  // arbitrarily-nested rows cannot clip at the 56px collapsed rail. The stable
-  // `kb-rail-tree` wrapper survives so the present/absent assertion is anchored.
-  it("DOM-removes the search + file tree when collapsed (AC2)", async () => {
+  // AC6.3 (Sidebar-UX Issue 6) — collapsed: the search overlay + nested file tree
+  // are still DOM-removed (a nested tree has no coherent 56px-safe icon-only form),
+  // but the collapsed rail is NO LONGER empty — it renders a compact icon-only
+  // affordance ("Browse files" to expand + "Sync now"). The stable `kb-rail-tree`
+  // wrapper survives so the present/absent assertions are anchored.
+  it("renders a collapsed icon-only affordance, tree DOM-removed (AC6.3)", async () => {
     render(
       <RailSlotHarness collapsed>
         <KbLayout>
@@ -159,8 +161,37 @@ describe("KB file tree lifts into the single nav rail slot (ADR-047)", () => {
     );
     const slot = await screen.findByTestId("rail-slot-harness");
     expect(within(slot).getByTestId("kb-rail-tree")).toBeInTheDocument();
+    // Nested tree + search are still removed (would clip at 56px) ...
     expect(within(slot).queryByTestId("file-tree")).not.toBeInTheDocument();
     expect(within(slot).queryByTestId("search-overlay")).not.toBeInTheDocument();
+    // ... but the collapsed rail is meaningful, not blank.
+    expect(
+      within(slot).getByTestId("kb-rail-collapsed-expand"),
+    ).toHaveAccessibleName(/browse files/i);
+    // The second affordance is a tree REFRESH (not the repo "Sync now") — its
+    // label must say so, so it is not confused with KbSyncStatus's POST sync.
+    expect(
+      within(slot).getByTestId("kb-rail-collapsed-refresh"),
+    ).toHaveAccessibleName(/refresh/i);
+  });
+
+  it("the collapsed 'Browse files' affordance requests a rail expand (Issue 6)", async () => {
+    const onExpand = vi.fn();
+    window.addEventListener("soleur:rail-expand", onExpand);
+    try {
+      render(
+        <RailSlotHarness collapsed>
+          <KbLayout>
+            <div>content</div>
+          </KbLayout>
+        </RailSlotHarness>,
+      );
+      const slot = await screen.findByTestId("rail-slot-harness");
+      within(slot).getByTestId("kb-rail-collapsed-expand").click();
+      expect(onExpand).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener("soleur:rail-expand", onExpand);
+    }
   });
 
   // AC4 — expanded: the same wrapper holds the tree + search (no vacuous AC2).

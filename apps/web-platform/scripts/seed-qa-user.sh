@@ -15,7 +15,7 @@ set -euo pipefail
 QA_EMAIL="qa-test@example.com"
 QA_PASSWORD="qa-test-local-2026"
 # TC_VERSION must match lib/legal/tc-version.ts
-TC_VERSION="2.2.1"
+TC_VERSION="2.3.0"
 PORT="${1:-3000}"
 if [[ "$1" == "--port" ]]; then PORT="${2:-3000}"; fi
 

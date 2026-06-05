@@ -3,7 +3,7 @@ title: "Acceptable Use Policy"
 type: acceptable-use-policy
 jurisdiction: FR, EU
 generated-date: 2026-02-20
-last-updated: 2026-05-22
+last-updated: 2026-06-04
 ---
 
 # Acceptable Use Policy
@@ -12,7 +12,7 @@ last-updated: 2026-05-22
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** May 26, 2026 -- added Section 5.6 "BYOK delegation responsibilities" for the delegated-credential prompt routing feature (PR-B #4508 / #4232); Grantor must hold Delegation Consent Side Letter from each Grantee; cost-telemetry-only visibility; Art. 26 joint controllership; cross-references DPD Section 2.3(w) and Terms Section 3b; previously May 22, 2026 -- softened Section 5.5 (renamed "Workspace member attestation" → "Workspace member responsibility"): the per-pair Soleur Side Letter is no longer required; Owners may satisfy the responsibility by any sufficient means (click-through ToS reliance, existing employment/contractor/consultancy agreement, or optional Side Letter execution); the Side Letter template remains available as a belt-and-braces reference document; previously same-day added Section 5.5 "Workspace member attestation" governing the team-workspace feature gated by `FLAG_TEAM_WORKSPACE_INVITE` (PR #4289); May 21, 2026 added a "Template-authorization revocation for AUP breaches" paragraph to Section 5.4 disclosing that Soleur may revoke a per-template authorization (`template_authorizations` ledger, PR-I #4078) with revocation reason `policy_violation` where a template-bound send is determined to violate this AUP; May 18, 2026 added Section 5.4 "Automated agent actions taken on your behalf" governing per-tenant scope grants on the Web Platform (PR-G #3947); previously same-day added Section 4.7 "Special-Category and Sensitive Personal Data -- Hosted Chat Surface" + chat-attachments scope bullet (PR #3988) (previous: March 29, 2026)
+**Last Updated:** June 4, 2026 -- added Section 5.7 "Autonomous command execution (Web Platform)" + a Section 2 scope clause disclosing the Web Platform agent's auto-run shell-command surface and its residual-risk admission (the blocklist is illustrative, not exhaustive; a non-blocked command can auto-run and change or delete files), with the git-backed-recovery and visible-in-chat mitigations and the trust-only-what-you-connect responsibility; cross-references Terms Section 3a.7 / Section 10.4 and the in-product autonomous-execution disclosure banner (PR #4949 / #4952); previously May 26, 2026 -- added Section 5.6 "BYOK delegation responsibilities" for the delegated-credential prompt routing feature (PR-B #4508 / #4232); Grantor must hold Delegation Consent Side Letter from each Grantee; cost-telemetry-only visibility; Art. 26 joint controllership; cross-references DPD Section 2.3(w) and Terms Section 3b; previously May 22, 2026 -- softened Section 5.5 (renamed "Workspace member attestation" → "Workspace member responsibility"): the per-pair Soleur Side Letter is no longer required; Owners may satisfy the responsibility by any sufficient means (click-through ToS reliance, existing employment/contractor/consultancy agreement, or optional Side Letter execution); the Side Letter template remains available as a belt-and-braces reference document; previously same-day added Section 5.5 "Workspace member attestation" governing the team-workspace feature gated by `FLAG_TEAM_WORKSPACE_INVITE` (PR #4289); May 21, 2026 added a "Template-authorization revocation for AUP breaches" paragraph to Section 5.4 disclosing that Soleur may revoke a per-template authorization (`template_authorizations` ledger, PR-I #4078) with revocation reason `policy_violation` where a template-bound send is determined to violate this AUP; May 18, 2026 added Section 5.4 "Automated agent actions taken on your behalf" governing per-tenant scope grants on the Web Platform (PR-G #3947); previously same-day added Section 4.7 "Special-Category and Sensitive Personal Data -- Hosted Chat Surface" + chat-attachments scope bullet (PR #3988) (previous: March 29, 2026)
 
 ---
 
@@ -32,6 +32,7 @@ This Policy applies to all use of the Soleur platform, including but not limited
 
 - Interaction with Soleur's 45 AI agents and 45 skills;
 - Execution of shell commands, code generation, and file manipulation through agents;
+- Autonomous (auto-run) execution of shell commands by the Web Platform agent without a per-command approval step, as described in Section 5.7 and Terms & Conditions Section 3a.7;
 - Browser automation via the agent-browser subsystem;
 - API interactions initiated by or through Soleur agents;
 - Use of the compounding knowledge base;
@@ -292,6 +293,16 @@ Where the BYOK delegation feature is enabled for your organization (gated by `BY
 - **Grantee (Co-Member) responsibilities:** By accepting a BYOK delegation, you consent to the Grantor receiving itemized cost telemetry for each AI agent run funded by the delegation (as described in the Delegation Consent Side Letter and the Data Protection Disclosure Section 2.3(w)). You remain responsible for the content of prompts submitted through the delegation.
 - **Joint controllership:** For the Grantee's prompt content routed through the Grantor's API key, the Grantor and Grantee are joint controllers within the meaning of Article 26 GDPR. Anthropic PBC remains the processor under the Grantor's existing DPA. No new sub-processor relationship is created.
 - **Cross-references:** Data Protection Disclosure Section 2.3(w); Terms & Conditions Section 3b.
+
+### 5.7 Autonomous command execution (Web Platform)
+
+The Web Platform's hosted agent can run shell commands in your connected workspace **automatically** -- that is, without a separate per-command approval step -- once the Workspace Owner has acknowledged the first-run autonomous-execution disclosure (a one-time consent soft-gate shown the first time a non-blocked command would auto-run) or has set the workspace to autonomous (trusted) mode. This Section discloses that surface and your responsibilities as the operator who connects the workspace; the contractual residual-risk admission is at Terms & Conditions Section 3a.7 and Section 10.4.
+
+**The command-safety layer is real but is not a guarantee.** Soleur always blocks a fixed set of clearly-dangerous commands (for example `curl`, `wget`, `nc`/`ncat`, `eval`, `sudo`, inline interpreter `-e`/`-c` execution, `base64 -d`, and `/dev/tcp` redirections) and auto-approves only a narrow read-only allowlist; commands that are neither blocked nor on that allowlist run automatically under autonomous mode. **No blocklist is perfect.** A command that looks safe, and is not on the blocklist, can still change or delete files in the connected workspace without asking you first.
+
+**Mitigations, stated as mitigations and not as safety guarantees.** Your work is git-backed -- the connected repository is the recovery surface for an unwanted change -- and every command Soleur runs is visible in the chat, so you can watch each command as it executes. The Workspace Owner controls the autonomous toggle and can return the workspace to ask-each-time at any time. These reduce, but do not eliminate, the residual risk that a non-blocked command auto-runs and is harmful.
+
+**Your responsibilities.** You are responsible for connecting only repositories and accounts you trust to autonomous command execution, for reviewing command activity in the chat, and for the consequences of a non-blocked command that auto-runs in a workspace you have placed (or left) in autonomous mode. The in-product disclosure banner shown at first run states the same residual-risk admission in summary form; this Section and Terms & Conditions Section 3a.7 / Section 10.4 are its contractual counterpart.
 
 ---
 
