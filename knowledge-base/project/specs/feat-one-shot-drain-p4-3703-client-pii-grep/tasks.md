@@ -14,7 +14,7 @@ Frame: signal-quality CI gate, NOT a security control. L3 `beforeSend` backstop 
 - [ ] 1.1 Create `.github/scripts/check-client-pii-sentry.sh` (`chmod +x`).
   - [ ] 1.1.1 Accept explicit paths (`{staged_files}`) OR default-scan `apps/web-platform/{lib,components,app}` for `*.ts`/`*.tsx` when called with no args.
   - [ ] 1.1.2 Exclude `apps/web-platform/app/api/**` and `apps/web-platform/lib/client-observability.ts`.
-  - [ ] 1.1.3 **Multi-line-aware** detection: scan each `Sentry.captureException(`/`captureMessage(` call's argument span for an `extra:` object whose body matches `\b(userId|user_id|email)\b`. Prefer `awk` window state-machine (avoid `grep -P` dependency); verify the chosen form against a real multi-line fixture before committing.
+  - [ ] 1.1.3 **Multi-line-aware** detection (design proven by live prototype 2026-06-05): `awk` window state-machine — turn on a buffer at `Sentry\.(captureException|captureMessage)\(`, accumulate up to 8 following lines, flag if the buffer matches `extra[[:space:]]*:[[:space:]]*\{[^}]*[^A-Za-z_](userId|user_id|email)[^A-Za-z_]` (pad buffer with leading/trailing space first). THREE non-negotiable constraints: (a) host awk is **mawk** → use `[^A-Za-z_]` boundary, NOT `\b`/gawk `\<\>`; (b) bounded `[^}]*` NOT loose `.*` (loose form false-positives on sibling `tags:` blocks); (c) 8-line window cap. Avoid `grep -P` dependency.
   - [ ] 1.1.4 Output `path:line: <snippet>` per offender; `exit 1` if any, else `exit 0`.
   - [ ] 1.1.5 Header comment carries the signal-quality (not security) frame + L3-backstop note + boundary-vs-`userid-bypass-lint` note.
 
@@ -36,7 +36,7 @@ Frame: signal-quality CI gate, NOT a security control. L3 `beforeSend` backstop 
 ## 4. CI mirror job (consumer b)
 
 - [ ] 4.1 Add a `client-pii-grep` job to `.github/workflows/pr-quality-guards.yml` (sibling to `pii-grep`/`userid-bypass-lint`).
-- [ ] 4.2 `runs-on: ubuntu-latest`; checkout pinned to the file's existing action SHA; step runs `bash .github/scripts/check-client-pii-sentry.sh` (no args → tree-scan).
+- [ ] 4.2 `runs-on: ubuntu-latest`; MUST checkout (tree-scan job, unlike `pii-grep`) pinned to `actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1` (SHA already in file); step runs `bash .github/scripts/check-client-pii-sentry.sh` (no args → tree-scan).
 - [ ] 4.3 No opt-out label (match `pii-grep`). Job comment: cite #3703, signal-quality frame, boundary vs `userid-bypass-lint`/`pii-grep`.
 
 ## 5. Verification

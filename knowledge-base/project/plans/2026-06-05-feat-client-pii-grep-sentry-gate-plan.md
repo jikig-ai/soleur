@@ -6,9 +6,27 @@ milestone: "Phase 4: Validate + Scale"
 brand_survival_threshold: none
 lane: cross-domain
 date: 2026-06-05
+deepened: 2026-06-05
 ---
 
 # feat: client-pii-grep CI + lefthook gate (#3703) ✨
+
+## Enhancement Summary
+
+**Deepened on:** 2026-06-05
+**Sections enhanced:** detection design, AC2/AC7, Phases 1/4, Sharp Edges
+**Passes run:** halt gates 4.6 (User-Brand Impact ✓) / 4.7 (Observability ✓) / 4.8 (PAT-shaped ✓) / 4.9 (UI-wireframe — N/A, no UI surface ✓); precedent-diff gate 4.4; verify-the-negative pass; **live detector prototype** (awk multi-line, run against synthetic fixtures).
+
+### Key Improvements
+
+1. **Detector design proven by prototype, not asserted.** The awk multi-line window detector was run live (2026-06-05) against same-line, multi-line, clean, false-positive-risk, and word-boundary fixtures. Three concrete findings now pin the implementation: (a) `mawk` is the host awk — **`\b` and gawk `\<`/`\>` are unavailable**, so word-boundary must use `[^A-Za-z_]` padding; (b) a **loose `.*` after `extra:` false-positives** (matches `userId` in a sibling `tags:` block) — the bounded `[^}]*` form (matching the issue's own regex) is correct and FP-free; (c) the bounded form correctly rejects `currentUserIdentity` (substring-FP guard).
+2. **CI checkout SHA pinned.** The new CI job MUST `checkout` (it tree-scans, unlike `pii-grep` which reads `gh pr diff`); pin `actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1` (the SHA already in the file, resolved live).
+3. **Nested-brace limitation documented** as an accepted Sharp Edge (matches the issue's `[^}]*` candidate; L3 backstop covers the runtime regardless).
+
+### New Considerations Discovered
+
+- POSIX/`mawk` word-boundary portability is load-bearing — a naive `\b` script would silently no-op the gate on CI.
+- The bounded-vs-loose `extra:` window distinction is the difference between FP-free and noisy; do not "simplify" `[^}]*` to `.*`.
 
 > **Frame:** This is a **signal-quality CI gate, NOT a security control.** Production posture is already guaranteed by the L3 `beforeSend` backstop (`apps/web-platform/sentry.client.config.ts:108` → `stripUserContextFromEvent`), which strips user context from every event regardless of which call site emitted it. This gate exists so a PR author who bypasses the `client-observability.ts` helper and passes `userId`/`user_id`/`email` in `extra` to a **direct** `Sentry.captureException`/`captureMessage` call sees the problem **in the PR diff** — instead of the L3 strip firing silently in a Sentry dashboard nobody reads at review time. No production data has ever been at risk from this gap. `Closes #3703`.
 
@@ -67,8 +85,33 @@ Create `.github/scripts/check-client-pii-sentry.sh`:
 
 - **Inputs:** Accept either explicit paths (`{staged_files}` from lefthook) OR, when invoked with no args (CI mirror), default to scanning the client-importable roots `apps/web-platform/lib apps/web-platform/components apps/web-platform/app` for `*.ts`/`*.tsx`.
 - **Exclusions:** skip any path under `apps/web-platform/app/api/`; skip `apps/web-platform/lib/client-observability.ts` (the sanctioned helper). *(Match the issue's `grep -v '/api/'` and `grep -v 'client-observability.ts'`.)*
-- **Detection (multi-line-aware — load-bearing):** For each candidate file, find every `Sentry.captureException(` / `Sentry.captureMessage(` occurrence and examine the call's **argument span** (the call site line plus a bounded look-ahead window to the matching `)` or a small fixed window, e.g. next ~8 lines), testing whether that span contains an `extra:` object whose body matches `\b(userId|user_id|email)\b`. A line-by-line `grep` pipeline (the issue's candidate) is **insufficient** — it misses the multi-line shape that all 4 real sites use. Implementation options (pick the simplest that passes AC2/AC3): (i) `awk` state machine that turns on a window when it sees the `Sentry.capture*(` token and scans until the call closes; (ii) `grep -Pzo` null-data multi-line match; (iii) `perl -0777` slurp + regex. Prefer `awk` (no PCRE/`perl` dependency assumptions — verify `grep -P` availability before choosing (ii)).
+- **Detection (multi-line-aware — load-bearing; design PROVEN by live prototype 2026-06-05):** For each candidate file, find every `Sentry.captureException(` / `Sentry.captureMessage(` occurrence and examine the call's **argument span** (a bounded look-ahead window — the prototype used the call-site line + up to 8 following lines, accumulated into a buffer). Flag if the buffer matches the bounded pattern below. A line-by-line `grep` pipeline (the issue's candidate) is **insufficient** — it misses the multi-line shape that all 4 real sites use.
+  - **Canonical awk window detector (verified working under `mawk`):**
+    ```awk
+    /Sentry\.(captureException|captureMessage)\(/ { win=1; buf=""; n=0 }
+    win {
+      buf = buf " " $0; n++
+      padded = " " buf " "                       # pad so boundary class works at buffer ends
+      if (padded ~ /extra[[:space:]]*:[[:space:]]*\{[^}]*[^A-Za-z_](userId|user_id|email)[^A-Za-z_]/) {
+        print FILENAME ":" FNR; win=0
+      }
+      if (n >= 8) win=0                           # window cap; reset if no match
+    }
+    ```
+  - **Three load-bearing constraints (each from a live test, not assertion):**
+    1. **`[^}]*` NOT `.*`** after `extra:` — the bounded form stops at the first `}`, so a clean `extra: { filename }` followed by a sibling `tags: { route: "userId-route" }` does NOT false-positive. The loose `.*` form DID false-positive in testing. This matches the issue's own candidate regex shape.
+    2. **`[^A-Za-z_](key)[^A-Za-z_]` with buffer padding, NOT `\b`** — the host awk is **`mawk` 1.3.4** (verified); `\b` and gawk `\<`/`\>` are NOT portable. The padded character-class boundary correctly rejects `currentUserIdentity` while matching bare `userId`.
+    3. **Window cap (8 lines)** bounds the scan so an unrelated later `extra:` block can't be wrongly attributed to a prior Sentry call.
+  - **Alternative (if awk proves awkward):** `grep -Pzo` is available on `ubuntu-latest` AND this host (verified), but prefer awk to avoid the PCRE dependency and to keep the offline fixture test runner-agnostic.
 - **Output contract:** print each offender as `path:line: <snippet>`; `exit 1` if any; `exit 0` (silent or one-line notice) otherwise. Header comment carries the AC8 frame string + the boundary-vs-`userid-bypass-lint` note.
+
+#### Research Insights (Phase 1)
+
+**Edge cases (from live prototype):**
+- Sibling `tags:` block containing a `userId`-like token after a clean `extra:` → must NOT flag (the `[^}]*` bound handles this).
+- Variable-form `extra: transformedExtra` (real shape at `lib/observability-edge.ts:87`) → must NOT flag (no inline `{ ... userId ... }`).
+- Substring shadows (`currentUserIdentity`, `userIdHash`) → must NOT flag (the `[^A-Za-z_]` boundary handles `userId` vs `userIdentity`; note `userIdHash` ends in `Hash` so the trailing `[^A-Za-z_]` after `userId` fails on the `H` — correct).
+- **Accepted limitation (Sharp Edge):** nested-brace `extra: { meta: { userId } }` — the `[^}]*` stops at the inner `}` before reaching `userId`, so this shape is NOT caught. This is identical to the issue's own candidate-grep behavior and is acceptable for a signal-quality gate (L3 strips it at runtime regardless). Flat `extra: { userId }` is the realistic shape.
 
 ### Phase 2 — Fixture test (offline, auto-discovered)
 
@@ -98,7 +141,7 @@ Edit `lefthook.yml`:
 
 Edit `.github/workflows/pr-quality-guards.yml`: add a `client-pii-grep` job (sibling to `pii-grep` / `userid-bypass-lint`):
 
-- `runs-on: ubuntu-latest`; `uses: actions/checkout@…` (pin to the same SHA the file already uses); step runs `bash .github/scripts/check-client-pii-sentry.sh` (no args → CI tree-scan mode).
+- `runs-on: ubuntu-latest`. **This job MUST `checkout`** — it tree-scans source files (unlike `pii-grep`, which scans `gh pr diff` and needs no checkout). Model the checkout on the `userid-bypass-lint` job, pinning the SHA already in the file (resolved live 2026-06-05): `uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1`. Step runs `bash .github/scripts/check-client-pii-sentry.sh` (no args → CI tree-scan mode).
 - No opt-out label (match `pii-grep`'s comment rationale, adapted to signal-quality framing).
 - Job comment: cite #3703, state the signal-quality (not security) frame, and the boundary vs `userid-bypass-lint` (logger surface) and vs `pii-grep` (Linear CDN URLs).
 
@@ -183,7 +226,10 @@ discoverability_test:
 - **lefthook glob must be path-array, not `**/*`.** gobwas `**` silently no-ops without explicit intermediate subdirs (`2026-03-21-lefthook-gobwas-glob-double-star.md`). Use the per-subdir `apps/web-platform/{lib,components,app}/**/*.{ts,tsx}` array form.
 - **No `pre-push:` section exists in lefthook.yml today.** Phase 3 adds the first one — verify YAML structure (`pre-push:` is a sibling top-level key to `pre-commit:`, each with its own `commands:` map).
 - **Don't collapse with `userid-bypass-lint`.** That gate (#3698) is `logger.*` in `(server|app)`; this is `Sentry.*` in client-importable `{lib,components,app}`. Different surface, different emit primitive. Document the boundary so a future maintainer doesn't merge them.
-- **`grep -P` availability.** If the script uses `grep -Pzo` for multi-line matching, verify GNU grep with PCRE is available on `ubuntu-latest` AND the local dev shell; prefer the `awk` window approach to avoid the dependency. Exercise the exact chosen form against a real fixture (not just `--version`).
+- **`grep -P` availability.** If the script uses `grep -Pzo` for multi-line matching, verify GNU grep with PCRE is available on `ubuntu-latest` AND the local dev shell; prefer the `awk` window approach to avoid the dependency. Exercise the exact chosen form against a real fixture (not just `--version`). *(Verified 2026-06-05: `grep -P` IS available on this host, but awk is preferred.)*
+- **`mawk`, not `gawk` — `\b` word-boundary is non-portable.** The host awk is `mawk 1.3.4` (verified 2026-06-05); `gawk`'s `\<`/`\>` and Perl-style `\b` are unavailable. The detector MUST use `[^A-Za-z_](key)[^A-Za-z_]` with buffer padding (`padded = " " buf " "`). A script written with `\b` will silently no-op the gate on CI — the most dangerous failure mode (green check over a vacuous gate). AC2's red fixtures are the guard.
+- **Bounded `[^}]*`, never loose `.*`, after `extra:`.** Live-tested 2026-06-05: `.*` false-positives when a clean `extra:` is followed by a sibling `tags:` block containing a `userId`-like token. The `[^}]*` form (matching the issue's own candidate regex) stops at the first `}` and is FP-free. Do not "simplify" this during implementation.
+- **Nested-brace `extra: { meta: { userId } }` is NOT caught (accepted).** The `[^}]*` bound stops at the inner `}`. Identical to the issue's candidate-grep behavior; acceptable for a signal-quality gate (L3 strips at runtime). Document inline; do not over-engineer brace-balancing for a non-realistic shape.
 - **A plan whose `## User-Brand Impact` section is empty, contains only TBD/placeholder, or omits the threshold will fail `deepen-plan` Phase 4.6.** This plan's section is filled (threshold `none` with a sensitive-path scope-out reason).
 - **Frame discipline.** Every operator-facing string (script header, CI job comment, PR body) must call this a *signal-quality* gate, not a security control, and must name the L3 backstop as the actual prod guarantee. Over-claiming "this prevents PII leaks" is false (L3 already does) and invites the centralization-overclaim defect class (#3685).
 
