@@ -8,6 +8,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { oneDark } from "@codemirror/theme-one-dark";
 import {
+  c4SyntaxExtensions,
+  codeFontTheme,
+  fontSizeForZoom,
+  DEFAULT_CODE_FONT_PX,
+  MIN_CODE_FONT_PX,
+  MAX_CODE_FONT_PX,
+} from "./c4-code-syntax";
+import {
   LikeC4ModelProvider,
   LikeC4Diagram,
   useLikeC4ViewModel,
@@ -191,6 +199,21 @@ export function C4CodePanel({
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  // Per-editor font zoom (0 = default 12px), clamped to [10px, 24px]. Drives a
+  // CodeMirror theme extension so content + gutter scale together — scoped to
+  // this editor, independent of browser page zoom.
+  const [zoom, setZoom] = useState(0);
+  const currentFontPx = useMemo(
+    () => parseInt(fontSizeForZoom(zoom), 10),
+    [zoom],
+  );
+  const atMin = currentFontPx <= MIN_CODE_FONT_PX;
+  const atMax = currentFontPx >= MAX_CODE_FONT_PX;
+  // Language + Soleur-tokened syntax highlight (theme-independent) + font theme.
+  const extensions = useMemo(
+    () => [c4SyntaxExtensions, codeFontTheme(zoom)],
+    [zoom],
+  );
 
   useEffect(() => {
     if (files.length === 0) return;
@@ -247,6 +270,43 @@ export function C4CodePanel({
           </button>
         ))}
         <div className="ml-auto flex items-center gap-2">
+          <div className="flex items-center gap-0.5 rounded border border-soleur-border-default px-0.5">
+            <button
+              type="button"
+              aria-label="Decrease code font size"
+              onClick={() =>
+                setZoom((z) =>
+                  Math.max(MIN_CODE_FONT_PX - DEFAULT_CODE_FONT_PX, z - 1),
+                )
+              }
+              disabled={atMin}
+              className="rounded px-1.5 py-0.5 text-[11px] text-soleur-text-muted transition-colors hover:text-soleur-text-secondary disabled:opacity-30"
+            >
+              A−
+            </button>
+            <button
+              type="button"
+              aria-label="Reset code font size"
+              onClick={() => setZoom(0)}
+              title="Reset code font size"
+              className="min-w-[2.75rem] rounded px-1 py-0.5 text-center font-mono text-[11px] tabular-nums text-soleur-text-muted transition-colors hover:text-soleur-text-secondary"
+            >
+              {`${currentFontPx}px`}
+            </button>
+            <button
+              type="button"
+              aria-label="Increase code font size"
+              onClick={() =>
+                setZoom((z) =>
+                  Math.min(MAX_CODE_FONT_PX - DEFAULT_CODE_FONT_PX, z + 1),
+                )
+              }
+              disabled={atMax}
+              className="rounded px-1.5 py-0.5 text-[11px] text-soleur-text-muted transition-colors hover:text-soleur-text-secondary disabled:opacity-30"
+            >
+              A+
+            </button>
+          </div>
           {saveMsg && (
             <span className="text-[11px] text-soleur-text-muted">{saveMsg}</span>
           )}
@@ -264,6 +324,7 @@ export function C4CodePanel({
           value={draft}
           height={height}
           theme={isDark ? oneDark : undefined}
+          extensions={extensions}
           onChange={setDraft}
           basicSetup={{ lineNumbers: true, foldGutter: true }}
         />
