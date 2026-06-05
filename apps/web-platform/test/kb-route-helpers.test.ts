@@ -94,7 +94,6 @@ vi.mock("node:fs", () => ({
 
 import {
   authenticateAndResolveKbPath,
-  resolveUserKbRoot,
   syncWorkspace,
 } from "@/server/kb-route-helpers";
 import { RuntimeAuthError } from "@/lib/supabase/tenant";
@@ -732,91 +731,6 @@ describe("syncWorkspace", () => {
       (c: unknown[]) => (c[0] as string[])[0],
     );
     expect(verbs).toEqual(["pull"]);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Tests — resolveUserKbRoot tenant-mint failure (REVERTED to tenant-only)
-//
-// PR #4913 added a SERVICE-ROLE fallback on tenant-mint failure (to keep the
-// "Generate link" popover alive). PIR #4913 proved the mint failure was a
-// MISDIAGNOSIS — the mint works in prod; the real dead-end was the missing
-// `workspace_id` on NOT-NULL inserts, fixed in #4922. So the fallback was dead
-// code that re-widened the read credential. This revert restores the pre-#4913
-// tenant-only boundary: a `RuntimeAuthError` → 503, with the
-// `reportSilentFallback` emit PRESERVED so the #4920 (`kb_tenant_mint_silent_
-// fallback`) alert keeps its signal. The service-role client must never be
-// reached on this path anymore.
-// ---------------------------------------------------------------------------
-
-describe("resolveUserKbRoot — tenant-mint failure (reverted, tenant-only)", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    // A ready service-role row is wired but MUST NOT be read after the revert —
-    // its presence makes every `mockServiceFrom not called` assertion non-vacuous.
-    setupServiceUserData();
-  });
-
-  test("happy path (mint succeeds) reads via the TENANT client, no fallback, no reportSilentFallback", async () => {
-    setupUserData(); // tenant mint resolves → tenant mockFrom serves the row
-
-    const result = await resolveUserKbRoot(TEST_USER_ID);
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.workspacePath).toBe(TEST_WORKSPACE_PATH);
-      expect(result.kbRoot).toContain("knowledge-base");
-    }
-    expect(mockFrom).toHaveBeenCalledWith("users"); // tenant read happened
-    expect(mockServiceFrom).not.toHaveBeenCalled(); // no service-role path
-    expect(mockReportSilentFallback).not.toHaveBeenCalled();
-  });
-
-  test.each(["jwt_mint", "rotation", "denied_jti"] as const)(
-    "RuntimeAuthError(%s) → 503 Workspace not ready, NO service-role fallback (tenant-only boundary restored)",
-    async (cause) => {
-      mockGetFreshTenantClient.mockRejectedValueOnce(
-        new RuntimeAuthError(cause, `mint failed: ${cause}`),
-      );
-
-      const result = await resolveUserKbRoot(TEST_USER_ID);
-
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.response.status).toBe(503);
-        const body = await result.response.json();
-        expect(body.error).toMatch(/workspace not ready/i);
-      }
-      // The service-role escape hatch is gone — neither client is reached.
-      expect(mockServiceFrom).not.toHaveBeenCalled();
-      expect(mockFrom).not.toHaveBeenCalled();
-    },
-  );
-
-  test("mint failure still emits exactly one reportSilentFallback (the #4920 alert signal survives the revert)", async () => {
-    const mintErr = new RuntimeAuthError("rotation", "mint ceiling tripped");
-    mockGetFreshTenantClient.mockRejectedValueOnce(mintErr);
-
-    await resolveUserKbRoot(TEST_USER_ID);
-
-    expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
-    expect(mockReportSilentFallback).toHaveBeenCalledWith(
-      mintErr,
-      expect.objectContaining({
-        feature: "kb-route-helpers",
-        op: "resolveUserKbRoot.tenant-mint",
-        extra: expect.objectContaining({ userId: TEST_USER_ID }),
-      }),
-    );
-  });
-
-  test("a non-RuntimeAuthError from the mint is re-thrown (not swallowed)", async () => {
-    mockGetFreshTenantClient.mockRejectedValueOnce(new Error("unexpected boom"));
-
-    await expect(resolveUserKbRoot(TEST_USER_ID)).rejects.toThrow(
-      "unexpected boom",
-    );
-    expect(mockServiceFrom).not.toHaveBeenCalled();
   });
 });
 

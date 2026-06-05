@@ -150,3 +150,35 @@ Server already mirrored the 500 to Sentry via `reportSilentFallback`; root cause
 ## Action Items
 
 - Already addressed in PR #4947 (client error state, retry, 409 recovery, 23503 mapping). No new GitHub issue warranted — the recurrence vectors (silent client swallow; un-swept NOT-NULL writer) are both closed by #4922 + #4947, and the writer-sweep discipline is already encoded as `hr-write-boundary-sentinel-sweep-all-write-sites`.
+
+## Update — deeper residual root cause (PR #4953, 2026-06-05)
+
+PR #4947's client error UX revealed the create was STILL failing for the operator
+(the new error state showed instead of a silent reset). Diagnosis this cycle found a
+THIRD, deeper cause beyond #4922's `workspace_id` insert fix and #4947's UX layer:
+
+- **ADR-044 resolver-consolidation gap.** The KB *read* routes (content/tree/search/
+  c4-project) had migrated to the service-role, membership-scoped
+  `resolveActiveWorkspaceKbRoot`, but the `kb/share` + `kb/upload` *write* routes were
+  left on the legacy `resolveUserKbRoot` — a per-request TENANT client reading the
+  caller's `users.workspace_status` under RLS, which is stale/empty for users
+  provisioned after the ADR-044 `users → workspaces` relocation → silent 503
+  "Workspace not ready" before `createShare` even ran. The branch was invisible
+  because `createShare`'s 5 pre-insert validation returns + the resolver-error
+  response did NOT mirror to Sentry (only the INSERT branches did).
+- **Fix (PR #4953):** (A) instrument all 5 pre-insert validation returns + the
+  resolver-error response to Sentry with `reason=<code>`; (B) migrate share + upload
+  to `resolveActiveWorkspaceKbRoot` (+ a `resolveActiveWorkspaceRepoMeta` sibling for
+  upload's git-push metadata reading `workspaces.repo_url` + the membership-checked
+  `resolveInstallationId` RPC) and REMOVE `resolveUserKbRoot`. Also fixed a latent
+  #4543 dual-ownership bug for shared members.
+- **Recurrence prevention:** captured as
+  `knowledge-base/project/learnings/best-practices/2026-06-05-adr-resolver-migration-must-sweep-write-routes-not-just-read-routes.md`
+  and routed to the `work` skill — an ADR resolver migration is not done until
+  `git grep <oldResolver>` returns 0 (write routes are consumers too).
+
+### Follow-up status update
+- [x] ⏳ Post-deploy smoke (line 148) — superseded: Workstream A's instrumentation makes
+  the exact failing branch observable in Sentry on the next prod "Generate link" click,
+  and the A+B fix is verified by the unit/component suite + multi-agent security review
+  (R1–R6 PASS). Confirm green via a single prod click post-deploy.

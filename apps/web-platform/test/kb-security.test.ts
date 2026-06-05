@@ -116,15 +116,15 @@ describe("KB API security", () => {
       // Same proven-delegation pattern as the auth check above (#2245).
       // Accept any of the readiness-gating helpers:
       //   - authenticateAndResolveKbPath (file routes)
-      //   - resolveUserKbRoot (share/upload, #2467 cleanup)
-      //   - resolveActiveWorkspaceKbRoot (active-workspace read path, ADR-044
-      //     #4543 — moves the workspace_status (503) gate into the shared
-      //     resolver so the read routes are member-aware).
+      //   - resolveActiveWorkspaceKbRoot (active-workspace read path + share +
+      //     upload, ADR-044 #4543 — the workspace_status (503) gate lives in
+      //     the shared membership-scoped resolver so the routes are member-aware;
+      //     replaced the legacy per-user KB-root helper in the consolidation).
       const hasInline = content.includes("workspace_status");
       const helperName =
-        /const\s+\w+\s*=\s*await\s+(authenticateAndResolveKbPath|resolveUserKbRoot|resolveActiveWorkspaceKbRoot)\s*\(/;
+        /const\s+\w+\s*=\s*await\s+(authenticateAndResolveKbPath|resolveActiveWorkspaceKbRoot)\s*\(/;
       const invokesHelper = helperName.test(content);
-      // authenticateAndResolveKbPath/resolveUserKbRoot return { ok, response };
+      // authenticateAndResolveKbPath returns { ok, response };
       // resolveActiveWorkspaceKbRoot returns { ok, status } and the route maps
       // status → its own Response. Accept either `return x.response` or any
       // early return inside an `if (!x.ok)` guard.
@@ -134,7 +134,7 @@ describe("KB API security", () => {
 
       expect(
         hasInline || delegatesToHelper,
-        `${relativePath} missing workspace_status check (inline or proven authenticateAndResolveKbPath / resolveUserKbRoot / resolveActiveWorkspaceKbRoot delegation)`,
+        `${relativePath} missing workspace_status check (inline or proven authenticateAndResolveKbPath / resolveActiveWorkspaceKbRoot delegation)`,
       ).toBe(true);
     }
   });
@@ -171,7 +171,7 @@ describe("KB API security", () => {
       //       invariant without duplicating the logging site.
       const hasInline = content.includes("logger.error");
       const delegatesToTaggedUnion =
-        /const\s+\w+\s*=\s*await\s+(createShare|listShares|revokeShare|readContent|authenticateAndResolveKbPath|resolveUserKbRoot)\s*\(/.test(
+        /const\s+\w+\s*=\s*await\s+(createShare|listShares|revokeShare|readContent|authenticateAndResolveKbPath|resolveActiveWorkspaceKbRoot)\s*\(/.test(
           content,
         ) && /if\s*\(\s*!\s*\w+\.ok\s*\)/.test(content);
 

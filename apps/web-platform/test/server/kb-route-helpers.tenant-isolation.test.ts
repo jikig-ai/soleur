@@ -1,10 +1,15 @@
 /**
  * Tenant isolation — kb-route-helpers.ts (PR-C §2.8, #3244).
  *
- * Covers both migrated sites:
+ * Covers the surviving tenant `users` reader:
  *
- *   - `:69` `authenticateAndResolveKbPath` — SELECT users.* via tenant
- *   - `:188` `resolveUserKbRoot` — SELECT users.* via tenant
+ *   - `authenticateAndResolveKbPath` — SELECT users.* via tenant
+ *
+ * (The legacy per-user KB-root helper was removed in the ADR-044 resolver
+ * consolidation; share + upload now read the ACTIVE workspace via the
+ * membership-scoped service-role resolvers `resolveActiveWorkspaceKbRoot` /
+ * `resolveActiveWorkspaceRepoMeta`. The second case below retains an RLS
+ * regression guard on the `users` extras columns it used to read.)
  *
  * RLS on `users`: `auth.uid() = id`.
  *
@@ -137,7 +142,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(error?.code).toBe("PGRST116");
     });
 
-    test("`:188` resolveUserKbRoot — A cannot read B's extras (repo_url, installation_id)", async () => {
+    test("users-extras RLS guard — A cannot read B's extras (repo_url, installation_id)", async () => {
       const { data, error } = await aClient
         .from("users")
         .select(

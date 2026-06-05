@@ -5,6 +5,9 @@ import { createHmac } from "node:crypto";
 // `process.env.SENTRY_USERID_PEPPER`. vi.hoisted runs above top-level imports.
 vi.hoisted(() => {
   process.env.SENTRY_USERID_PEPPER = "test-pepper";
+  // ADR-044: workspacePath = `<WORKSPACES_ROOT>/<active_id>`. Pin the root so
+  // the solo active path equals TEST_WORKSPACE_PATH (`/workspaces/<userId>`).
+  process.env.WORKSPACES_ROOT = "/workspaces";
 });
 
 const TEST_PEPPER = "test-pepper";
@@ -54,10 +57,22 @@ vi.mock("@/lib/supabase/server", () => ({
   })),
 }));
 
-// PR-C §2.8 (#3244): kb-route-helpers tenant migration.
+// PR-C §2.8 (#3244): kb-route-helpers tenant migration. (Still imported by
+// resolve-installation-id transitively in some paths; harmless to mock.)
 vi.mock("@/lib/supabase/tenant", () => ({
   getFreshTenantClient: vi.fn(async () => ({ from: mockFrom })),
   RuntimeAuthError: class RuntimeAuthError extends Error {},
+}));
+
+// ADR-044 resolver consolidation (Workstream B): the upload route resolves the
+// GitHub installation via resolveActiveWorkspaceRepoMeta → resolveInstallationId
+// (the membership-checked SECURITY DEFINER RPC). Mock the credential reader so
+// tests drive a deterministic installation id without the RPC.
+const { mockResolveInstallationId } = vi.hoisted(() => ({
+  mockResolveInstallationId: vi.fn(),
+}));
+vi.mock("@/server/resolve-installation-id", () => ({
+  resolveInstallationId: mockResolveInstallationId,
 }));
 
 vi.mock("@/lib/auth/validate-origin", () => ({
@@ -108,7 +123,11 @@ import { validateOrigin } from "@/lib/auth/validate-origin";
 
 const TEST_USER_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 const TEST_INSTALLATION_ID = 12345;
-const TEST_WORKSPACE_PATH = "/workspaces/test-user";
+// ADR-044: workspacePath is now derived as `<WORKSPACES_ROOT>/<active_id>`.
+// For a solo caller the active id === userId, so set WORKSPACES_ROOT and derive
+// the expected path from the user id (not a hardcoded "/workspaces/test-user").
+const TEST_WORKSPACES_ROOT = "/workspaces";
+const TEST_WORKSPACE_PATH = `${TEST_WORKSPACES_ROOT}/${TEST_USER_ID}`;
 const TEST_REPO_URL = "https://github.com/test-owner/test-repo";
 
 function createFormData(file: File, targetDir: string, sha?: string): FormData {
@@ -135,45 +154,70 @@ function setupAuthenticatedUser() {
   });
 }
 
-function setupUserData(overrides: Record<string, unknown> = {}) {
-  const mockSingle = vi.fn().mockResolvedValue({
-    data: {
-      workspace_path: TEST_WORKSPACE_PATH,
-      workspace_status: "ready",
-      repo_url: TEST_REPO_URL,
-      github_installation_id: TEST_INSTALLATION_ID,
-      ...overrides,
-    },
-    error: null,
+// ADR-044 resolver consolidation: the upload route resolves the active
+// workspace via the SERVICE-ROLE resolvers (resolveActiveWorkspaceKbRoot +
+// resolveActiveWorkspaceRepoMeta). For a solo caller the active id === userId
+// (current_workspace_id null → solo), so the membership probe + organizations
+// hop are skipped and only user_session_state / workspaces / users are read.
+// `installationOverride`/`repoUrlOverride` exercise the repo-meta gates.
+function setupUserData(
+  opts: {
+    workspaceStatus?: string;
+    repoStatus?: string;
+    repoUrl?: string | null;
+    currentWorkspaceId?: string | null;
+    membershipConfirmed?: boolean;
+  } = {},
+) {
+  const workspaceStatus = opts.workspaceStatus ?? "ready";
+  const repoStatus = opts.repoStatus ?? "ready";
+  const repoUrl = opts.repoUrl === undefined ? TEST_REPO_URL : opts.repoUrl;
+  const currentWorkspaceId = opts.currentWorkspaceId ?? null;
+
+  const term = (data: unknown) => ({
+    then: (onfulfilled?: (v: unknown) => unknown) =>
+      Promise.resolve({ data, error: null }).then(onfulfilled),
   });
-  const mockEq = vi.fn(() => ({ single: mockSingle }));
-  const mockSelect = vi.fn(() => ({ eq: mockEq }));
+
+  mockResolveInstallationId.mockResolvedValue(TEST_INSTALLATION_ID);
 
   mockFrom.mockImplementation((table: string) => {
-    if (table === "users") {
-      return { select: mockSelect };
+    const chain: Record<string, unknown> = {};
+    chain.select = vi.fn(() => chain);
+    chain.eq = vi.fn(() => chain);
+    if (table === "user_session_state") {
+      chain.maybeSingle = vi.fn(() =>
+        term({ current_workspace_id: currentWorkspaceId }),
+      );
+      return chain;
     }
     if (table === "workspace_members") {
-      const wChain: Record<string, unknown> = {};
-      Object.assign(wChain, {
-        select: vi.fn(() => wChain),
-        eq: vi.fn(() => wChain),
-        maybeSingle: vi.fn(() => Promise.resolve({ data: { workspace_id: "ws-1" }, error: null })),
-      });
-      return wChain;
+      chain.maybeSingle = vi.fn(() =>
+        term(opts.membershipConfirmed ? { user_id: TEST_USER_ID } : null),
+      );
+      return chain;
     }
-    if (table === "user_session_state") {
-      // resolveCurrentWorkspaceId (kb_files workspace_id resolution) reads the
-      // active workspace here; return ws-1 to match the workspace_members row.
-      const sChain: Record<string, unknown> = {};
-      Object.assign(sChain, {
-        select: vi.fn(() => sChain),
-        eq: vi.fn(() => sChain),
-        maybeSingle: vi.fn(() =>
-          Promise.resolve({ data: { current_workspace_id: "ws-1" }, error: null }),
-        ),
-      });
-      return sChain;
+    if (table === "workspaces") {
+      // Serves BOTH resolveActiveWorkspaceKbRoot (repo_status, organization_id)
+      // and resolveActiveWorkspaceRepoMeta (repo_url). For a non-solo active
+      // workspace the readiness gate does the organizations hop, so supply an
+      // organization_id; for solo it's skipped (owner === caller).
+      chain.maybeSingle = vi.fn(() =>
+        term({
+          repo_status: repoStatus,
+          organization_id: opts.membershipConfirmed ? "org-shared" : null,
+          repo_url: repoUrl,
+        }),
+      );
+      return chain;
+    }
+    if (table === "organizations") {
+      chain.maybeSingle = vi.fn(() => term({ owner_user_id: TEST_USER_ID }));
+      return chain;
+    }
+    if (table === "users") {
+      chain.maybeSingle = vi.fn(() => term({ workspace_status: workspaceStatus }));
+      return chain;
     }
     if (table === "kb_files") {
       return { upsert: vi.fn(() => Promise.resolve({ error: null })) };
@@ -372,6 +416,50 @@ describe("POST /api/kb/upload", () => {
       ["pull", "--ff-only"],
       TEST_INSTALLATION_ID,
       expect.objectContaining({ cwd: TEST_WORKSPACE_PATH, timeout: 30_000 }),
+    );
+  });
+
+  // 11b. AC-B5 — shared member uploads to a SHARED workspace they were invited
+  // into. ADR-044 resolver consolidation FIXES the latent #4543 dual-ownership
+  // bug: the legacy per-user KB-root helper read the CALLER's empty users row →
+  // "No repository connected". Now resolveActiveWorkspaceRepoMeta resolves the
+  // WORKSPACE's repo + installation via the membership-checked RPC, and the git
+  // push targets the SHARED workspace path (`<WORKSPACES_ROOT>/<shared_id>`).
+  test("AC-B5: shared member resolves the WORKSPACE's repo + installation (fixes #4543)", async () => {
+    const SHARED_WS = "ffffffff-0000-1111-2222-333333333333";
+    setupAuthenticatedUser();
+    setupUserData({
+      currentWorkspaceId: SHARED_WS,
+      membershipConfirmed: true,
+    });
+    mockIsPathInWorkspace.mockReturnValue(true);
+    mockGithubApiGet.mockRejectedValue(
+      new MockGitHubApiError("404", 404),
+    );
+    mockGithubApiPost.mockResolvedValue({
+      content: { sha: "newsha123", path: "knowledge-base/uploads/test.png" },
+      commit: { sha: "commitsha456" },
+    });
+    mockGitWithAuth.mockResolvedValue(Buffer.from(""));
+    mockLinearize.mockImplementation(async (buf: Buffer) => ({ ok: true, buffer: buf }));
+
+    const formData = createFormData(makeTestFile(), "uploads");
+    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+    expect(res.status).toBe(201);
+
+    // Installation resolved for the SHARED workspace id, via the RPC reader —
+    // NOT the caller's own (empty) users row.
+    expect(mockResolveInstallationId).toHaveBeenCalledWith(
+      TEST_USER_ID,
+      SHARED_WS,
+    );
+    // git push targets the SHARED workspace path.
+    expect(mockGitWithAuth).toHaveBeenCalledWith(
+      ["pull", "--ff-only"],
+      TEST_INSTALLATION_ID,
+      expect.objectContaining({
+        cwd: `${TEST_WORKSPACES_ROOT}/${SHARED_WS}`,
+      }),
     );
   });
 
