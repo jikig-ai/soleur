@@ -94,10 +94,9 @@
  *     label stays legible over while preserving the C4 "person/actor" semantic
  *     — a flat surface fill toned it out entirely (Sharp Edge: "don't over-tone").
  *     Theme-aware: both palette vars flip with `data-theme`, so light/dark Just
- *     Work. `!important` beats the library's `[data-likec4-fill=mix-stroke]` fill
- *     recipe. The inner mix-stroke <svg> wraps a lone <path>, so if a corner case
- *     ever needs extra knock-down, element `opacity`/`fill-opacity` is safe here
- *     (no siblings to bleed onto).
+ *     Work. The 25% ratio is chosen empirically (legible label over a still-
+ *     visible person), not computed from a contrast target. `!important` beats
+ *     the library's `[data-likec4-fill=mix-stroke]` fill recipe.
  */
 .soleur-c4 [data-likec4-shape="person"] [data-likec4-fill="mix-stroke"] {
   fill: color-mix(

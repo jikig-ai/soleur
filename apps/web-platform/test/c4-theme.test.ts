@@ -21,11 +21,14 @@ const LIKEC4_LOGO = join(
   "components",
   "Logo.js",
 );
-// The person-silhouette tint is keyed on the `data-likec4-fill="mix-stroke"`
-// attribute the library emits inside the `person` shape case. Guard the
-// installed component so a bump that renames the attribute fails CI loudly
-// instead of silently un-toning the silhouette (vendored-CSS Sharp Edge, #4938).
-const LIKEC4_ELEMENT_SHAPE = join(
+// The person-silhouette tint is keyed on TWO library DOM hooks the descendant
+// selector depends on: `data-likec4-fill="mix-stroke"` (the silhouette tint,
+// emitted inside the `person` shape case of ElementShape.js) AND
+// `data-likec4-shape` (emitted on the node container by ElementNodeContainer.js).
+// Guard both installed components so a bump that renames or moves either hook
+// fails CI loudly instead of silently un-toning the silhouette (vendored-CSS
+// Sharp Edge, #4938).
+const LIKEC4_ELEMENT_DIR = join(
   __dirname,
   "..",
   "node_modules",
@@ -34,7 +37,11 @@ const LIKEC4_ELEMENT_SHAPE = join(
   "dist",
   "base-primitives",
   "element",
-  "ElementShape.js",
+);
+const LIKEC4_ELEMENT_SHAPE = join(LIKEC4_ELEMENT_DIR, "ElementShape.js");
+const LIKEC4_ELEMENT_CONTAINER = join(
+  LIKEC4_ELEMENT_DIR,
+  "ElementNodeContainer.js",
 );
 
 describe("C4 visualizer Soleur re-theme", () => {
@@ -89,16 +96,35 @@ describe("C4 visualizer Soleur re-theme", () => {
     const rule = body![1];
     expect(rule).toMatch(/var\(--/);
     expect(rule).toMatch(/!important/);
-    // It must re-point fill OFF the 80%-gold mix and/or lower opacity.
-    expect(rule).toMatch(/fill:|opacity:/);
+    // It must re-point the silhouette `fill` off the 80%-gold mix (the shipped
+    // lever — not a commented-out form, so anchor on the property declaration).
+    expect(rule).toMatch(/^\s*fill:/m);
   });
 
-  it("targets a mix-stroke hook that still exists in the installed @likec4/diagram (AC4)", () => {
-    // The silhouette tint depends on the library emitting data-likec4-fill=
-    // "mix-stroke" inside the person shape. A bump that renames it would
-    // silently un-tone the silhouette; fail loudly here instead.
-    expect(readFileSync(LIKEC4_ELEMENT_SHAPE, "utf8")).toContain(
-      '"data-likec4-fill": "mix-stroke"',
+  it("targets both library DOM hooks the selector depends on, in the installed @likec4/diagram (AC4)", () => {
+    // The selector is a descendant combinator over TWO hooks. Guard each in the
+    // installed library so a bump that renames/moves either fails CI loudly
+    // instead of silently un-toning the silhouette.
+    //
+    // 1. `data-likec4-fill="mix-stroke"` must still live INSIDE the `person`
+    //    case — the literal appears in ~6 shape cases, so a whole-file
+    //    `toContain` would pass even if the person case lost it. Slice the
+    //    person case (from `case "person"` to the next `case "`) and assert
+    //    within that slice only.
+    const shapeSrc = readFileSync(LIKEC4_ELEMENT_SHAPE, "utf8");
+    const personStart = shapeSrc.indexOf('case "person"');
+    expect(personStart).toBeGreaterThan(-1);
+    const nextCase = shapeSrc.indexOf('case "', personStart + 1);
+    const personCase = shapeSrc.slice(
+      personStart,
+      nextCase === -1 ? undefined : nextCase,
+    );
+    expect(personCase).toContain('"data-likec4-fill": "mix-stroke"');
+
+    // 2. `data-likec4-shape` (the selector's ancestor hook) must still be
+    //    emitted on the node container.
+    expect(readFileSync(LIKEC4_ELEMENT_CONTAINER, "utf8")).toContain(
+      '"data-likec4-shape": data.shape',
     );
   });
 
