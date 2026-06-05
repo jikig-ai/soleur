@@ -32,6 +32,7 @@ import {
 } from "./_cron-claude-eval-substrate";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
+import { redactGithubSourcedText } from "@/lib/safety/redaction-allowlist";
 import type { Octokit } from "@octokit/core";
 
 // =============================================================================
@@ -146,6 +147,28 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
 // without the App-JWT mint path; production callers pass the already-minted
 // installation token (issues:write — the same token the spawn's `gh issue
 // create` uses; `hr-github-app-auth-not-pat`).
+
+// GitHub-issue-body readability bound for the spawn tails. Tighter than the
+// 4000-char Sentry extra (resolveOutputAwareOk) — the issue body is for
+// at-a-glance triage, the full tail already lives in the Sentry event.
+const AUDIT_TAIL_CHARS = 500;
+
+// The spawn tails are token-redacted by the eval substrate (redactToken), but
+// that strips ONLY the installation token — a crash stack can still spill other
+// allowlisted-env secrets (e.g. ANTHROPIC_API_KEY / sk-ant-…). Route through the
+// canonical multi-secret scrubber before it lands in a GitHub issue body, and
+// neutralize backtick/pipe/newline so untrusted eval output cannot break out of
+// the inline-code table cell into rendered markdown (image-autofetch / banner
+// injection). Mirrors the github-sourced-text redaction discipline.
+function formatTailForIssue(tail: string | undefined): string {
+  const scrubbed = redactGithubSourcedText(tail ?? "").slice(-AUDIT_TAIL_CHARS);
+  if (!scrubbed) return "(empty)";
+  return scrubbed
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\|/g, "\\|")
+    .replace(/`/g, "ʼ");
+}
+
 export async function ensureContentGeneratorAuditIssue(args: {
   runStartedAt: string;
   spawnResult: Pick<
@@ -176,11 +199,17 @@ export async function ensureContentGeneratorAuditIssue(args: {
   // Dedup: a transient failure that re-runs this path could file a second
   // FAILED issue. Mirror cron-skill-freshness.ts searchExistingFreshnessIssue —
   // skip the create if today's audit issue already exists (success or fallback).
+  // Explicit `sort: created, direction: desc` so today's issue is guaranteed on
+  // page 1 — do NOT rely on GitHub's unspecified default sort for dedup
+  // correctness (a busy label could otherwise page today's issue out and
+  // double-file). per_page:10 ≈ 5 weeks at Tue/Thu cadence, ample headroom.
   const existing = (await client.request("GET /repos/{owner}/{repo}/issues", {
     owner: REPO_OWNER,
     repo: REPO_NAME,
     state: "all",
     labels: SENTRY_MONITOR_SLUG,
+    sort: "created",
+    direction: "desc",
     per_page: 10,
     headers: { "X-GitHub-Api-Version": "2022-11-28" },
   })) as { data: Array<{ title: string }> };
@@ -205,8 +234,8 @@ export async function ensureContentGeneratorAuditIssue(args: {
     `| signal | \`${spawnResult.signal}\` |\n` +
     `| abortedByTimeout | \`${spawnResult.abortedByTimeout}\` |\n` +
     `| durationMs | \`${spawnResult.durationMs}\` |\n` +
-    `| stdoutTail | \`${(spawnResult.stdoutTail ?? "").slice(-500) || "(empty)"}\` |\n` +
-    `| stderrTail | \`${(spawnResult.stderrTail ?? "").slice(-500) || "(empty)"}\` |\n\n` +
+    `| stdoutTail | \`${formatTailForIssue(spawnResult.stdoutTail)}\` |\n` +
+    `| stderrTail | \`${formatTailForIssue(spawnResult.stderrTail)}\` |\n\n` +
     `Triage: \`knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md\` (H2).`;
 
   await client.request("POST /repos/{owner}/{repo}/issues", {
@@ -328,7 +357,17 @@ export async function cronContentGeneratorHandler({
     //     Self-report a FAILED audit issue so the run is never silent. Wrapped
     //     so a fallback-create failure (e.g. GitHub 5xx) cannot crash the
     //     finally/teardown — reported to Sentry instead; the watchdog still
-    //     catches the absence after threshold (defense-in-depth). ---
+    //     catches the absence after threshold (defense-in-depth).
+    //
+    //     Two coupling residuals, both intentionally absorbed:
+    //     (a) resolveOutputAwareOk returns `spawnOk` when its verify-list THREW
+    //         (transient GitHub 5xx). So a verify-throw + spawn-ok run skips this
+    //         fallback even if the issue is genuinely absent — covered by the
+    //         watchdog's maxGapDays threshold, not this step.
+    //     (b) On a verify-throw + spawn-nonzero run the gate fires even though
+    //         the prompt's issue may exist; ensureContentGeneratorAuditIssue's
+    //         own same-title dedup is what prevents a spurious second issue — so
+    //         keep that dedup robust (it is load-bearing, not belt-and-suspenders). ---
     if (!heartbeatOk) {
       await step.run("ensure-audit-issue", async () => {
         try {

@@ -209,6 +209,56 @@ describe("ensureContentGeneratorAuditIssue — behavioral (injected octokit)", (
     expect(calls.filter((c) => c.route.startsWith("POST"))).toHaveLength(0);
   });
 
+  it("dedup is title-PREFIX (a suffixed prompt issue still suppresses the fallback)", async () => {
+    const { octokit, calls } = fakeOctokit([
+      { title: "[Scheduled] Content Generator - 2026-06-05 (manual)" },
+    ]);
+    const res = await ensureContentGeneratorAuditIssue({
+      runStartedAt: RUN_STARTED_AT,
+      spawnResult: SPAWN,
+      octokit,
+    });
+    expect(res.created).toBe(false);
+    expect(calls.filter((c) => c.route.startsWith("POST"))).toHaveLength(0);
+  });
+
+  it("dedup GET is label-scoped, state:all, explicitly sorted newest-first", async () => {
+    const { octokit, calls } = fakeOctokit([]);
+    await ensureContentGeneratorAuditIssue({
+      runStartedAt: RUN_STARTED_AT,
+      spawnResult: SPAWN,
+      octokit,
+    });
+    const get = calls.find((c) => c.route.startsWith("GET"));
+    expect(get?.params.labels).toBe("scheduled-content-generator");
+    expect(get?.params.state).toBe("all");
+    expect(get?.params.sort).toBe("created");
+    expect(get?.params.direction).toBe("desc");
+  });
+
+  it("scrubs secrets and neutralizes markdown-breakout chars in the issue body", async () => {
+    const { octokit, calls } = fakeOctokit([]);
+    await ensureContentGeneratorAuditIssue({
+      runStartedAt: RUN_STARTED_AT,
+      spawnResult: {
+        ...SPAWN,
+        // crash-path stderr spilling an Anthropic key + table-breaking chars
+        stderrTail: "boom sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAA | pipe `tick`",
+      },
+      octokit,
+    });
+    const body = String(
+      calls.find((c) => c.route.startsWith("POST"))!.params.body,
+    );
+    expect(body).not.toContain("sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAA");
+    expect(body).toContain("[redacted-key]");
+    // table-breaking chars are escaped/neutralized inside the inline-code cell:
+    // pipe → "\|" (markdown literal, no row break), backtick → "ʼ" (no span break)
+    expect(body).toContain("\\| pipe");
+    expect(body).toContain("ʼtickʼ");
+    expect(body).not.toContain("`tick`");
+  });
+
   it("propagates a create failure to the caller (handler wraps it in reportSilentFallback)", async () => {
     const octokit = {
       request: vi.fn(async (route: string) => {
