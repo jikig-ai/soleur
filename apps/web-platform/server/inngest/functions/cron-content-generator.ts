@@ -20,6 +20,8 @@ import {
   mintInstallationToken,
   postSentryHeartbeat,
   resolveOutputAwareOk,
+  REPO_OWNER,
+  REPO_NAME,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -30,6 +32,8 @@ import {
 } from "./_cron-claude-eval-substrate";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
+import { redactGithubSourcedText } from "@/lib/safety/redaction-allowlist";
+import type { Octokit } from "@octokit/core";
 
 // =============================================================================
 // Constants
@@ -117,6 +121,135 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     GH_TOKEN: installationToken,
   };
+}
+
+// =============================================================================
+// Silence-hole fallback guard (#4960)
+// =============================================================================
+//
+// The prompt's STEP 1b/2/4/6 "create issue and stop" guards are the ONLY
+// producers of the `scheduled-content-generator` audit issue. Any termination
+// that bypasses the prompt — a mid-eval crash, an upstream Anthropic API 500
+// that kills `claude --print` (the #4960 case, confirmed via Sentry event
+// 141195ed…: exitCode 1, ~6.1 min, "API Error: 500"), or a max-turns kill —
+// produces NO issue, so the run is silent and the cron-cloud-task-heartbeat
+// watchdog only notices ~9 days later (maxGapDays threshold).
+//
+// This handler-level guard fires AFTER the output-aware check determines no
+// `scheduled-content-generator` issue exists in the run window, and self-reports
+// a FAILED audit issue so the run is never silent. It lives above the prompt so
+// it survives an eval kill that bypasses every prompt step. ~8 sibling crons
+// already create issues from the handler (cron-skill-freshness, cron-oauth-probe,
+// cron-strategy-review, …); this is the first always-create producer to use the
+// primitive as a *fallback* gated on the output-aware result.
+//
+// `octokit` is injectable purely so unit tests can drive the read/create shape
+// without the App-JWT mint path; production callers pass the already-minted
+// installation token (issues:write — the same token the spawn's `gh issue
+// create` uses; `hr-github-app-auth-not-pat`).
+
+// GitHub-issue-body readability bound for the spawn tails. Tighter than the
+// 4000-char Sentry extra (resolveOutputAwareOk) — the issue body is for
+// at-a-glance triage, the full tail already lives in the Sentry event.
+const AUDIT_TAIL_CHARS = 500;
+
+// The spawn tails are token-redacted by the eval substrate (redactToken), but
+// that strips ONLY the installation token — a crash stack can still spill other
+// allowlisted-env secrets (e.g. ANTHROPIC_API_KEY / sk-ant-…). Route through the
+// canonical multi-secret scrubber before it lands in a GitHub issue body, and
+// neutralize backtick/pipe/newline so untrusted eval output cannot break out of
+// the inline-code table cell into rendered markdown (image-autofetch / banner
+// injection). Mirrors the github-sourced-text redaction discipline.
+function formatTailForIssue(tail: string | undefined): string {
+  const scrubbed = redactGithubSourcedText(tail ?? "").slice(-AUDIT_TAIL_CHARS);
+  if (!scrubbed) return "(empty)";
+  return scrubbed
+    .replace(/[\r\n]+/g, " ")
+    // Escape pre-existing backslashes BEFORE introducing our own `\|` escape,
+    // so an input like `\|` cannot produce an ambiguous escape sequence
+    // (js/incomplete-sanitization). Order is load-bearing.
+    .replace(/\\/g, "\\\\")
+    .replace(/\|/g, "\\|")
+    .replace(/`/g, "ʼ");
+}
+
+export async function ensureContentGeneratorAuditIssue(args: {
+  runStartedAt: string;
+  spawnResult: Pick<
+    SpawnResult,
+    "exitCode" | "signal" | "abortedByTimeout" | "durationMs" | "stdoutTail" | "stderrTail"
+  >;
+  installationToken?: string;
+  octokit?: Octokit;
+}): Promise<{ created: boolean }> {
+  const { runStartedAt, spawnResult, installationToken, octokit } = args;
+
+  // Replay-stable UTC date anchor (NOT `new Date()`, which would drift across
+  // the retries:1 replay and defeat the title-dedup below).
+  const date = runStartedAt.slice(0, 10);
+  const title = `[Scheduled] Content Generator - ${date}`;
+
+  let client = octokit;
+  if (!client) {
+    if (!installationToken) {
+      throw new Error(
+        "ensureContentGeneratorAuditIssue: need octokit or installationToken",
+      );
+    }
+    const { Octokit: OctokitCtor } = await import("@octokit/core");
+    client = new OctokitCtor({ auth: installationToken }) as unknown as Octokit;
+  }
+
+  // Dedup: a transient failure that re-runs this path could file a second
+  // FAILED issue. Mirror cron-skill-freshness.ts searchExistingFreshnessIssue —
+  // skip the create if today's audit issue already exists (success or fallback).
+  // Explicit `sort: created, direction: desc` so today's issue is guaranteed on
+  // page 1 — do NOT rely on GitHub's unspecified default sort for dedup
+  // correctness (a busy label could otherwise page today's issue out and
+  // double-file). per_page:10 ≈ 5 weeks at Tue/Thu cadence, ample headroom.
+  const existing = (await client.request("GET /repos/{owner}/{repo}/issues", {
+    owner: REPO_OWNER,
+    repo: REPO_NAME,
+    state: "all",
+    labels: SENTRY_MONITOR_SLUG,
+    sort: "created",
+    direction: "desc",
+    per_page: 10,
+    headers: { "X-GitHub-Api-Version": "2022-11-28" },
+  })) as { data: Array<{ title: string }> };
+  if (existing.data.some((i) => i.title.startsWith(title))) {
+    return { created: false };
+  }
+
+  // Self-diagnosing body — the cron's own redacted spawn tail + timing, so the
+  // failure is triageable without SSH (app stdout is not shipped to Better
+  // Stack). The tails are already token-redacted by the eval substrate.
+  const body =
+    `Automated FAILED self-report from \`cron-content-generator\`.\n\n` +
+    `This run terminated WITHOUT producing a \`scheduled-content-generator\` ` +
+    `audit issue via the prompt (mid-eval crash / upstream API error / ` +
+    `max-turns kill). The handler-level fallback (#4960) filed this issue so ` +
+    `the run is not silent and the \`cron-cloud-task-heartbeat\` watchdog ` +
+    `stays green.\n\n` +
+    `| Signal | Value |\n| --- | --- |\n` +
+    `| fn | \`cron-content-generator\` |\n` +
+    `| runStartedAt | \`${runStartedAt}\` |\n` +
+    `| exitCode | \`${spawnResult.exitCode}\` |\n` +
+    `| signal | \`${spawnResult.signal}\` |\n` +
+    `| abortedByTimeout | \`${spawnResult.abortedByTimeout}\` |\n` +
+    `| durationMs | \`${spawnResult.durationMs}\` |\n` +
+    `| stdoutTail | \`${formatTailForIssue(spawnResult.stdoutTail)}\` |\n` +
+    `| stderrTail | \`${formatTailForIssue(spawnResult.stderrTail)}\` |\n\n` +
+    `Triage: \`knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md\` (H2).`;
+
+  await client.request("POST /repos/{owner}/{repo}/issues", {
+    owner: REPO_OWNER,
+    repo: REPO_NAME,
+    title,
+    body,
+    labels: [SENTRY_MONITOR_SLUG],
+  });
+  return { created: true };
 }
 
 // =============================================================================
@@ -221,6 +354,43 @@ export async function cronContentGeneratorHandler({
     await step.run("sentry-heartbeat", async () => {
       await postSentryHeartbeat({ ok: heartbeatOk, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-content-generator", logger });
     });
+
+    // --- Step 5: silence-hole fallback (#4960). When the output-aware check
+    //     found NO scheduled-content-generator issue in the run window, the
+    //     prompt's STEP 6 never ran (mid-eval crash / API 500 / max-turns kill).
+    //     Self-report a FAILED audit issue so the run is never silent. Wrapped
+    //     so a fallback-create failure (e.g. GitHub 5xx) cannot crash the
+    //     finally/teardown — reported to Sentry instead; the watchdog still
+    //     catches the absence after threshold (defense-in-depth).
+    //
+    //     Two coupling residuals, both intentionally absorbed:
+    //     (a) resolveOutputAwareOk returns `spawnOk` when its verify-list THREW
+    //         (transient GitHub 5xx). So a verify-throw + spawn-ok run skips this
+    //         fallback even if the issue is genuinely absent — covered by the
+    //         watchdog's maxGapDays threshold, not this step.
+    //     (b) On a verify-throw + spawn-nonzero run the gate fires even though
+    //         the prompt's issue may exist; ensureContentGeneratorAuditIssue's
+    //         own same-title dedup is what prevents a spurious second issue — so
+    //         keep that dedup robust (it is load-bearing, not belt-and-suspenders). ---
+    if (!heartbeatOk) {
+      await step.run("ensure-audit-issue", async () => {
+        try {
+          await ensureContentGeneratorAuditIssue({
+            runStartedAt,
+            spawnResult,
+            installationToken,
+          });
+        } catch (err) {
+          reportSilentFallback(err, {
+            feature: "cron-content-generator",
+            op: "ensure-audit-issue-failed",
+            message:
+              "Handler-level fallback audit-issue create failed; run remains silent until watchdog threshold",
+            extra: { fn: "cron-content-generator", runStartedAt },
+          });
+        }
+      });
+    }
 
     return { ok: heartbeatOk };
   } finally {
