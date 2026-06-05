@@ -42,7 +42,7 @@ import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import { createProbeOctokit, PROBE_ISSUE_OWNER, PROBE_ISSUE_REPO } from "@/server/github/probe-octokit";
 import { KB_TEMPLATE_NAME, KB_TEMPLATE_OWNER } from "@/server/github-app";
-import { assertNoLeak } from "./cron-github-app-drift-guard";
+import { assertNoLeak, redactedError } from "./cron-github-app-drift-guard";
 import { postSentryHeartbeat, type HandlerArgs } from "./_cron-shared";
 
 const SENTRY_MONITOR_SLUG = "cron-kb-template-health";
@@ -178,6 +178,18 @@ async function probeKbTemplate(args: {
   return assertKbTemplateHealthy(data);
 }
 
+// A TRANSIENT probe failure is a non-404 HTTP error (5xx, 429 rate-limit) or a
+// network blip — NOT a real deletion (404 → repo_not_found) and NOT a drift
+// verdict (is_template/private). The sibling retries-once on a transient
+// github_app_401 so a single GitHub blip auto-resolves before paging P1.
+function isTransientProbeFailure(verdict: KbTemplateVerdict): boolean {
+  return (
+    !verdict.ok &&
+    (verdict.failureMode === "github_api_http" ||
+      verdict.failureMode === "github_api_network")
+  );
+}
+
 // =============================================================================
 // Issue body builder + filing (co-located mirror of the sibling's shape)
 // =============================================================================
@@ -193,6 +205,7 @@ function buildFailureIssueBody(args: {
     `- **Detail:** ${args.verdict.failureDetail}`,
     `- **Routed to:** \`${args.verdict.failureLabel}\``,
     `- **Detected at:** ${args.detectedAtIso}`,
+    `- **Run log:** ${RUN_URL}`,
     `- **Probed:** \`GET /repos/${KB_TEMPLATE_OWNER}/${KB_TEMPLATE_NAME}\``,
     "",
     "### What to do",
@@ -263,13 +276,18 @@ async function handleKbTemplateIssue(args: {
     });
     const stale = (search.data.items ?? [])[0];
     if (!stale) continue;
+    const successBody = `kb-template probe green at ${args.detectedAtIso}. is_template===true && private===false. Auto-closing.`;
+    // Defense-in-depth: this body is provably leak-free today (static template
+    // + ISO timestamp), but route it through the tripwire for symmetry so a
+    // future edit that interpolates captured data cannot silently bypass it.
+    assertNoLeak("issue-comment-success", successBody);
     await octokit.request(
       "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
       {
         owner,
         repo,
         issue_number: stale.number,
-        body: `kb-template probe green at ${args.detectedAtIso}. is_template===true && private===false. Auto-closing.`,
+        body: successBody,
       },
     );
     await octokit.request("PATCH /repos/{owner}/{repo}/issues/{issue_number}", {
@@ -298,11 +316,28 @@ export async function cronKbTemplateHealthHandler({
   try {
     verdict = await step.run("kb-template-probe", async () => {
       const octokit = await createProbeOctokit();
-      return probeKbTemplate({ octokit: octokit as unknown as Octokit });
+      const firstVerdict = await probeKbTemplate({
+        octokit: octokit as unknown as Octokit,
+      });
+      // Transient HTTP/network blip (5xx, 429, network — NOT a 404 and NOT a
+      // drift verdict): retry ONCE after 1s so a single GitHub blip self-heals
+      // before filing a P1-high page. A real 404 deletion and an is_template/
+      // private drift verdict still file immediately (no retry — those are real).
+      if (!isTransientProbeFailure(firstVerdict)) return firstVerdict;
+      logger.warn(
+        { fn: CRON_NAME },
+        `${firstVerdict.failureMode} on kb-template-probe — retrying once after 1s`,
+      );
+      await new Promise((r) => setTimeout(r, 1_000));
+      const retryOctokit = await createProbeOctokit();
+      return probeKbTemplate({ octokit: retryOctokit as unknown as Octokit });
     });
   } catch (err) {
-    const e = err as Error;
-    reportSilentFallback(e, {
+    // Redact upstream error BEFORE it reaches Sentry OR the failureDetail field
+    // (which is re-emitted to Sentry below). Mirror of the sibling's defensive
+    // ban on raw .message forwarding to the observability pipe.
+    const safe = redactedError(err);
+    reportSilentFallback(safe, {
       feature: CRON_NAME,
       op: "probeKbTemplate",
       message: "kb-template probe threw — converting to github_api_network",
@@ -311,15 +346,18 @@ export async function cronKbTemplateHealthHandler({
     verdict = {
       ok: false,
       failureMode: "github_api_network",
-      failureDetail: `probeKbTemplate threw: ${e.name}: ${e.message}`,
+      failureDetail: `probeKbTemplate threw: ${safe.name}: ${safe.message}`,
       failureLabel: "ci/guard-broken",
     };
   }
 
   // Probe failures mirror to Sentry (cq-silent-fallback-must-mirror-to-sentry).
   if (!verdict.ok) {
+    // failureDetail can carry a raw upstream error message (probe network-error
+    // branch interpolates e.message). Redact before it reaches Sentry — the
+    // issue-body path is assertNoLeak-gated, but this Sentry path is not.
     reportSilentFallback(
-      new Error(`${verdict.failureMode}: ${verdict.failureDetail}`),
+      redactedError(new Error(`${verdict.failureMode}: ${verdict.failureDetail}`)),
       {
         feature: CRON_NAME,
         op: "kb-template-drift",
@@ -345,11 +383,14 @@ export async function cronKbTemplateHealthHandler({
         detectedAtIso,
       });
     } catch (err) {
+      // Read `.status` off the ORIGINAL error BEFORE redactedError(err) —
+      // redactedError returns a fresh Error WITHOUT `.status` when the message
+      // matches the leak regex, which would silently defeat this discriminator.
       const op =
         (err as { status?: number }).status === 403
           ? "issue_write_403"
           : "handleKbTemplateIssue";
-      reportSilentFallback(err, {
+      reportSilentFallback(redactedError(err), {
         feature: CRON_NAME,
         op,
         message: "kb-template tracking-issue file/comment/close failed",
@@ -371,7 +412,6 @@ export async function cronKbTemplateHealthHandler({
     });
   });
 
-  void RUN_URL;
   return { failureMode: verdict.failureMode, failureLabel: verdict.failureLabel };
 }
 

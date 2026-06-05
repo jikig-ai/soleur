@@ -131,7 +131,7 @@ function issueCreates() {
 // ---------------------------------------------------------------------------
 
 describe("cronKbTemplateHealthHandler — happy path", () => {
-  it("is_template:true/private:false → no issue filed, auto-close searched", async () => {
+  it("is_template:true/private:false → no issue filed on green", async () => {
     const { cronKbTemplateHealthHandler } = await importHandler();
     const step = makeStep();
     const out = await cronKbTemplateHealthHandler({ step, logger });
@@ -175,6 +175,11 @@ describe("cronKbTemplateHealthHandler — failure modes", () => {
     expect((creates[0]![1] as { labels: string[] }).labels).toContain(
       "priority/p1-high",
     );
+    // Drift routes through the ops/kb-template-broken label family (proven
+    // through the actual issue-write path, not just the pure predicate).
+    expect((creates[0]![1] as { labels: string[] }).labels).toContain(
+      "ops/kb-template-broken",
+    );
   });
 
   it("private:true → issue filed (template made private)", async () => {
@@ -193,7 +198,14 @@ describe("cronKbTemplateHealthHandler — failure modes", () => {
     const step = makeStep();
     const out = await cronKbTemplateHealthHandler({ step, logger });
     expect(out.failureMode).not.toBe("");
-    expect(issueCreates().length).toBe(1);
+    const creates = issueCreates();
+    expect(creates.length).toBe(1);
+    expect((creates[0]![1] as { labels: string[] }).labels).toContain(
+      "priority/p1-high",
+    );
+    expect((creates[0]![1] as { labels: string[] }).labels).toContain(
+      "ops/kb-template-broken",
+    );
   });
 
   it("404 → issue filed (repo missing/renamed)", async () => {
@@ -288,6 +300,122 @@ describe("cronKbTemplateHealthHandler — auto-close", () => {
     );
     expect(comment).toBeDefined();
     expect((comment![1] as { issue_number: number }).issue_number).toBe(555);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Leak tripwire — a PEM/JWT-shaped error message must fail the issue-body gate
+// CLOSED (LeakDetectedError thrown) before any POST /issues mock is reached.
+// ---------------------------------------------------------------------------
+
+describe("cronKbTemplateHealthHandler — leak tripwire", () => {
+  it("PEM-shaped probe error → assertNoLeak fires before any issue is created", async () => {
+    // A network-error probe whose message carries a PEM block. The handler's
+    // failureDetail interpolates the (redacted) message, but the issue-body
+    // assertNoLeak gate must independently fail closed for any future path
+    // that smuggles a raw PEM/JWT into the body.
+    const pem =
+      "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----";
+    // Force the leak into the issue body directly by stubbing the search to
+    // return no existing issue (open path → buildFailureIssueBody → assertNoLeak)
+    // and making the probe yield a verdict whose failureDetail carries the PEM.
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route === "GET /repos/{owner}/{repo}") {
+        const err = new Error(pem) as Error & { status?: number; name: string };
+        err.name = "PemLeakError";
+        // No numeric status → network-error branch; failureDetail = name+message.
+        throw err;
+      }
+      if (route === "GET /search/issues") return { data: { items: [] } };
+      return { data: {} };
+    });
+    const { cronKbTemplateHealthHandler } = await importHandler();
+    const step = makeStep();
+    // Handler swallows the issue-handling error into reportSilentFallback; it
+    // must NOT create an issue, and the Sentry report must NOT carry raw PEM.
+    await cronKbTemplateHealthHandler({ step, logger });
+    expect(issueCreates().length).toBe(0);
+    // Sentry never sees raw PEM bytes (redactedError stripped them).
+    for (const call of reportSilentFallbackSpy.mock.calls) {
+      const err = call[0] as Error;
+      expect(err.message).not.toContain("BEGIN RSA PRIVATE KEY");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Transient retry — a single HTTP 500 blip is retried once before filing.
+// ---------------------------------------------------------------------------
+
+describe("cronKbTemplateHealthHandler — transient retry", () => {
+  it("HTTP 500 self-heals on retry → no issue filed", async () => {
+    let probeCallCount = 0;
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route === "GET /repos/{owner}/{repo}") {
+        probeCallCount++;
+        if (probeCallCount === 1) {
+          const err = new Error("Server error") as Error & { status?: number };
+          err.status = 500;
+          throw err;
+        }
+        return { status: 200, data: healthyRepoResponse, headers: {} };
+      }
+      if (route === "GET /search/issues") return { data: { items: [] } };
+      return { data: {} };
+    });
+    const { cronKbTemplateHealthHandler } = await importHandler();
+    const step = makeStep();
+    const out = await cronKbTemplateHealthHandler({ step, logger });
+    expect(probeCallCount).toBe(2);
+    expect(out.failureMode).toBe("");
+    expect(issueCreates().length).toBe(0);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ fn: "cron-kb-template-health" }),
+      expect.stringContaining("github_api_http"),
+    );
+  });
+
+  it("persistent HTTP 500 retried once → routes to ci/guard-broken", async () => {
+    let probeCallCount = 0;
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route === "GET /repos/{owner}/{repo}") {
+        probeCallCount++;
+        const err = new Error("Server error") as Error & { status?: number };
+        err.status = 500;
+        throw err;
+      }
+      if (route === "GET /search/issues") return { data: { items: [] } };
+      return { data: {} };
+    });
+    const { cronKbTemplateHealthHandler } = await importHandler();
+    const step = makeStep();
+    const out = await cronKbTemplateHealthHandler({ step, logger });
+    expect(probeCallCount).toBe(2);
+    expect(out.failureLabel).toBe("ci/guard-broken");
+    const creates = issueCreates();
+    expect(creates.length).toBe(1);
+    expect((creates[0]![1] as { labels: string[] }).labels).toContain(
+      "ci/guard-broken",
+    );
+  });
+
+  it("404 deletion files immediately (no retry — a real deletion)", async () => {
+    let probeCallCount = 0;
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route === "GET /repos/{owner}/{repo}") {
+        probeCallCount++;
+        const err = new Error("Not Found") as Error & { status?: number };
+        err.status = 404;
+        throw err;
+      }
+      if (route === "GET /search/issues") return { data: { items: [] } };
+      return { data: {} };
+    });
+    const { cronKbTemplateHealthHandler } = await importHandler();
+    const step = makeStep();
+    await cronKbTemplateHealthHandler({ step, logger });
+    expect(probeCallCount).toBe(1);
+    expect(issueCreates().length).toBe(1);
   });
 });
 
