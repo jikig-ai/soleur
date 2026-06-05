@@ -127,4 +127,32 @@ describe("C4CodePanel — honest save copy (Layer 1)", () => {
     await waitFor(() => expect(onSaved).toHaveBeenCalledWith(false));
     expect(screen.getByText(/after re-render/i)).toBeTruthy();
   });
+
+  it("on a failed re-render WITH a diagnostic: copy shows the reason (#4966)", async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          commitSha: "x",
+          rerendered: false,
+          rerenderDiagnostic:
+            "Re-render failed: Could not resolve reference to ElementKind named 'container' (is spec.c4 present?)",
+        }),
+      }) as unknown as typeof fetch;
+    const onSaved = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <C4CodePanel data={data} dirPath="knowledge-base/diagrams" onSaved={onSaved} />,
+    );
+    fireEvent.change(screen.getByTestId("cm"), {
+      target: { value: "model { edited }" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(false));
+    // The actionable diagnostic replaces the generic "after re-render" copy.
+    expect(screen.getByText(/Could not resolve reference/i)).toBeTruthy();
+    expect(screen.getByText(/is spec\.c4 present/i)).toBeTruthy();
+  });
 });

@@ -54,7 +54,13 @@ export async function PUT(
     );
   }
   return NextResponse.json(
-    { commitSha: result.commitSha, rerendered: result.rerendered },
+    {
+      commitSha: result.commitSha,
+      rerendered: result.rerendered,
+      ...(result.rerenderDiagnostic
+        ? { rerenderDiagnostic: result.rerenderDiagnostic }
+        : {}),
+    },
     { status: 200 },
   );
 }
