@@ -165,6 +165,10 @@ function formatTailForIssue(tail: string | undefined): string {
   if (!scrubbed) return "(empty)";
   return scrubbed
     .replace(/[\r\n]+/g, " ")
+    // Escape pre-existing backslashes BEFORE introducing our own `\|` escape,
+    // so an input like `\|` cannot produce an ambiguous escape sequence
+    // (js/incomplete-sanitization). Order is load-bearing.
+    .replace(/\\/g, "\\\\")
     .replace(/\|/g, "\\|")
     .replace(/`/g, "ʼ");
 }

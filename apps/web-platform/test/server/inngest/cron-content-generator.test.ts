@@ -243,7 +243,8 @@ describe("ensureContentGeneratorAuditIssue — behavioral (injected octokit)", (
       spawnResult: {
         ...SPAWN,
         // crash-path stderr spilling an Anthropic key + table-breaking chars
-        stderrTail: "boom sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAA | pipe `tick`",
+        // (incl. a literal backslash-pipe to exercise escape-order, js/incomplete-sanitization)
+        stderrTail: "boom sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAA \\| pipe `tick`",
       },
       octokit,
     });
@@ -253,8 +254,10 @@ describe("ensureContentGeneratorAuditIssue — behavioral (injected octokit)", (
     expect(body).not.toContain("sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAA");
     expect(body).toContain("[redacted-key]");
     // table-breaking chars are escaped/neutralized inside the inline-code cell:
-    // pipe → "\|" (markdown literal, no row break), backtick → "ʼ" (no span break)
-    expect(body).toContain("\\| pipe");
+    // backslash is escaped FIRST (js/incomplete-sanitization) so an input `\|`
+    // becomes `\\\|` (escaped backslash + escaped pipe), pipe → "\|" (markdown
+    // literal, no row break), backtick → "ʼ" (no span break).
+    expect(body).toContain("\\\\\\| pipe"); // input `\| ` → `\\\| `
     expect(body).toContain("ʼtickʼ");
     expect(body).not.toContain("`tick`");
   });
