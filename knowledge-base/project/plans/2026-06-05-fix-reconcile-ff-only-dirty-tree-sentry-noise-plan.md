@@ -2,7 +2,7 @@
 title: "Workspace reconcile — error-level Sentry noise on a self-healed dirty-tree ff-only abort"
 status: in-progress
 closes:
-brand_survival_threshold: single-user incident
+brand_survival_threshold: none
 related_prs: [4878, 4901, 4963, 4965, 4967]
 related_learnings:
   - 2026-06-03-self-heal-reset-must-gate-on-actual-repo-state-not-assumed-mirror.md
@@ -150,7 +150,13 @@ regression gap.
   noise (an error-level page on every push for a recovered condition). No user
   data is exposed, lost, or altered by this change — it only reroutes WHERE a
   benign, recovered condition is reported (pino info vs Sentry error).
-- **Brand-survival threshold:** single-user incident
+- **Brand-survival threshold:** none
+- Scope-out: threshold: none, reason: this change only reroutes operator-facing
+  telemetry (Sentry error → pino info) for a benign, self-healed reconcile
+  condition; reconcile behavior, user data, and user-visible surfaces are
+  unchanged, and every genuine failure (sync_failed, self-heal-aborted-dirty,
+  self-heal-failed) still pages — verified by silent-failure-hunter +
+  observability-coverage-reviewer.
 
 ## Observability (no-SSH)
 
