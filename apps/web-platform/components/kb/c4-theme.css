@@ -78,6 +78,34 @@
   --likec4-palette-relation-label-bg: var(--soleur-bg-surface-1) !important;
 }
 
+/*
+ * 2c. Person-shape silhouette legibility. The `person` shape (ElementShape.js
+ *     case "person") paints a PersonIcon SVG at the node's bottom-right corner
+ *     with data-likec4-fill="mix-stroke", which the library's bundled CSS
+ *     resolves to color-mix(in oklab, var(--likec4-palette-stroke) 80%,
+ *     var(--likec4-palette-fill)) — i.e. 80% of the element stroke. With
+ *     Soleur's gold stroke (§2b) that is a bright-gold slab. The node's centered
+ *     title + description (ElementData.js) are painted OVER the silhouette
+ *     (paint order: shape then data), and a long description overruns into that
+ *     corner — light text on bright gold fails WCAG and the text is unreadable.
+ *
+ *     Drop the silhouette from 80% stroke to a 25% stroke mix (mostly the node
+ *     surface, a faint gold tint), so it reads as a soft gold person motif the
+ *     label stays legible over while preserving the C4 "person/actor" semantic
+ *     — a flat surface fill toned it out entirely (Sharp Edge: "don't over-tone").
+ *     Theme-aware: both palette vars flip with `data-theme`, so light/dark Just
+ *     Work. The 25% ratio is chosen empirically (legible label over a still-
+ *     visible person), not computed from a contrast target. `!important` beats
+ *     the library's `[data-likec4-fill=mix-stroke]` fill recipe.
+ */
+.soleur-c4 [data-likec4-shape="person"] [data-likec4-fill="mix-stroke"] {
+  fill: color-mix(
+    in oklab,
+    var(--likec4-palette-stroke) 25%,
+    var(--likec4-palette-fill)
+  ) !important;
+}
+
 /* 3. Let the Soleur surface show through the canvas instead of LikeC4's. */
 .soleur-c4 {
   background: var(--soleur-bg-base);
