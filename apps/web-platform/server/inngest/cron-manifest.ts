@@ -38,6 +38,7 @@ export const EXPECTED_CRON_FUNCTIONS: string[] = [
   "cron-growth-audit",
   "cron-growth-execution",
   "cron-inngest-cron-watchdog",
+  "cron-kb-template-health",
   "cron-legal-audit",
   "cron-linkedin-token-check",
   "cron-main-health-monitor",

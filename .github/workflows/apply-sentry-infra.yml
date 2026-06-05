@@ -187,6 +187,7 @@ jobs:
             -target=sentry_cron_monitor.scheduled_terraform_drift \
             -target=sentry_cron_monitor.scheduled_oauth_probe \
             -target=sentry_cron_monitor.scheduled_github_app_drift_guard \
+            -target=sentry_cron_monitor.cron_kb_template_health \
             -target=sentry_cron_monitor.scheduled_daily_triage \
             -target=sentry_cron_monitor.scheduled_realtime_probe \
             -target=sentry_cron_monitor.scheduled_skill_freshness \
