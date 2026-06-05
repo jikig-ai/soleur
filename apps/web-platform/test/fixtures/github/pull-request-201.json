@@ -1,0 +1,7 @@
+{
+  "number": 42,
+  "html_url": "https://github.com/synthetic-user/synthetic-repo/pull/42",
+  "url": "https://api.github.com/repos/synthetic-user/synthetic-repo/pulls/42",
+  "title": "feat: synthetic pull request",
+  "state": "open"
+}

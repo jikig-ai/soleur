@@ -1,0 +1,17 @@
+{
+  "id": 2002,
+  "name": "synthetic-repo",
+  "full_name": "synthetic-user/synthetic-repo",
+  "private": true,
+  "owner": {
+    "login": "synthetic-user",
+    "id": 1002,
+    "type": "User"
+  },
+  "html_url": "https://github.com/synthetic-user/synthetic-repo",
+  "description": "Knowledge base managed by Soleur",
+  "language": null,
+  "default_branch": "main",
+  "is_template": false,
+  "updated_at": "2099-01-01T00:00:00Z"
+}

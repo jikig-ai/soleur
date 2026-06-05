@@ -36,28 +36,42 @@ afterAll(() => {
 vi.mock("../server/observability", () => ({ reportSilentFallback: vi.fn() }));
 
 import { findRepoOwnerInstallationForUser } from "../server/github-app";
+import { loadGithubFixture } from "./fixtures/github/load";
 
 let nextOwnerId = 700_000;
 function uniqueOwnerId() {
   return nextOwnerId++;
 }
 
+// Synthetic personal (User) install that co-exists with the repo-owning org
+// install in the list (cq-test-fixtures-synthesized-only). The login is read
+// from the synthesized fixture; the org entry is parametric per test.
+const PERSONAL_INSTALL = loadGithubFixture<
+  { id: number; account: { login: string; type: string } }[]
+>("installations-list").find((i) => i.account.type === "User")!;
+
 function mockInstallList(ownerId: number, ownerLogin: string) {
   mockFetch.mockResolvedValueOnce({
     ok: true,
     status: 200,
     json: async () => [
-      { id: 130018654, account: { login: "Elvalio", type: "User" } },
+      {
+        id: PERSONAL_INSTALL.id,
+        account: { login: PERSONAL_INSTALL.account.login, type: "User" },
+      },
       { id: ownerId, account: { login: ownerLogin, type: "Organization" } },
     ],
   });
 }
 function mockTokenMint() {
+  const body = loadGithubFixture<{ token: string; expires_at: string }>(
+    "installation-access-token",
+  );
   mockFetch.mockResolvedValueOnce({
     ok: true,
     status: 200,
     json: async () => ({
-      token: "ghs_owner",
+      ...body,
       expires_at: new Date(Date.now() + 3_600_000).toISOString(),
     }),
     text: async () => "",
@@ -76,10 +90,13 @@ describe("findRepoOwnerInstallationForUser — entitlement-gated owner selection
 
   test("promotes to org install when the user is a verified org member (204)", async () => {
     const ownerId = uniqueOwnerId();
-    mockInstallList(ownerId, "jikig-ai");
+    mockInstallList(ownerId, "synthetic-org");
     mockTokenMint();
     mockMembership(204);
-    const result = await findRepoOwnerInstallationForUser("jikig-ai", "Elvalio");
+    const result = await findRepoOwnerInstallationForUser(
+      "synthetic-org",
+      PERSONAL_INSTALL.account.login,
+    );
     expect(result).toBe(ownerId);
   });
 
@@ -110,7 +127,7 @@ describe("findRepoOwnerInstallationForUser — entitlement-gated owner selection
   });
 
   test("returns null (degrades) when githubLogin is null", async () => {
-    const result = await findRepoOwnerInstallationForUser("jikig-ai", null);
+    const result = await findRepoOwnerInstallationForUser("synthetic-org", null);
     expect(result).toBeNull();
     // Must not even list installations without a login to gate on.
     expect(mockFetch).not.toHaveBeenCalled();
