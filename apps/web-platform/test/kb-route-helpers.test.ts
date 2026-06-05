@@ -454,8 +454,15 @@ describe("syncWorkspace", () => {
   });
 
   // #4224 Phase 3 — Sentry-mirror sweep (cq-silent-fallback-must-mirror-to-sentry).
-  test("on git pull failure, mirrors to Sentry via reportSilentFallback with feature:kb-route-helpers and op:workspace-sync-${op}", async () => {
-    const pullErr = new Error("non-fast-forward");
+  // This is the NON-self-healable (`sync_failed`) path: a clean auth/host error
+  // matches none of the ff-only/dirty-tree signatures, so it does NOT self-heal
+  // and DOES page (log.error → pino-mirror + reportSilentFallback). The
+  // self-healable `non_fast_forward` class is de-noised separately (see the
+  // de-noise tests below).
+  test("on a NON-self-healable (sync_failed) git pull failure, mirrors to Sentry via reportSilentFallback with feature:kb-route-helpers and op:workspace-sync-${op}", async () => {
+    const pullErr = new Error(
+      "fatal: unable to access 'https://github.com/o/r': Could not resolve host",
+    );
     mockGitWithAuth.mockRejectedValue(pullErr);
     mockReportSilentFallback.mockClear();
 
@@ -464,6 +471,8 @@ describe("syncWorkspace", () => {
       op: "delete",
     });
 
+    // The error-level pino line still fires for a genuine sync failure.
+    expect(fakeLogger.error).toHaveBeenCalled();
     expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
     expect(mockReportSilentFallback).toHaveBeenCalledWith(
       pullErr,
@@ -580,6 +589,65 @@ describe("syncWorkspace", () => {
     if (result.ok) expect(result.recovered).toBe(true);
     const calls = mockGitWithAuth.mock.calls.map((c: unknown[]) => c[0] as string[]);
     expect(calls).toContainEqual(["reset", "--hard", "origin/main"]);
+  });
+
+  // De-noise (Sentry 9ccf1d86…): a self-HEALED ff-only abort must NOT emit an
+  // error-level mirror. Before this fix, syncWorkspace called
+  // `log.error({ err })` (pino-mirrored to Sentry as feature:"pino-mirror",
+  // level error) + `reportSilentFallback` UNCONDITIONALLY before the self-heal,
+  // so a benign, recovered dirty-tree abort paged the operator on every push.
+  test("de-noise: dirty-tree abort that self-heals emits NO error mirror (no log.error, no reportSilentFallback), only an info breadcrumb + self-heal-reset warn", async () => {
+    scriptGit({
+      pull: () => Promise.reject(new Error(DIRTY_TREE_STDERR)),
+      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      revList: () => Promise.resolve(Buffer.from("0\n")),
+    });
+
+    const result = await syncWorkspace(
+      TEST_INSTALLATION_ID,
+      TEST_WORKSPACE_PATH,
+      fakeLogger,
+      { userId: TEST_USER_ID, op: "push" },
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.recovered).toBe(true);
+    // No error-level pino line (the pino-mirror Sentry capture path) on a
+    // recovered self-heal.
+    expect(fakeLogger.error).not.toHaveBeenCalled();
+    // No reportSilentFallback at all on the recovered path: neither the removed
+    // pre-self-heal mirror nor any self-heal abort/failure mirror.
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
+    // The breadcrumb is recorded at info (Better Stack drain, below the WARN+
+    // Sentry-mirror threshold).
+    expect(fakeLogger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: TEST_USER_ID, op: "push" }),
+      expect.stringMatching(/ff-only pull blocked/i),
+    );
+    // Recovery stays observable via the warning-level self-heal-reset mirror.
+    expect(mockWarnSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "self-heal-reset" }),
+    );
+  });
+
+  test("de-noise: diverged (non-FF) abort that self-heals also emits NO error mirror", async () => {
+    scriptGit({
+      pull: () => Promise.reject(new Error(NON_FF_STDERR)),
+      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      revList: () => Promise.resolve(Buffer.from("0\n")),
+    });
+
+    const result = await syncWorkspace(
+      TEST_INSTALLATION_ID,
+      TEST_WORKSPACE_PATH,
+      fakeLogger,
+      { userId: TEST_USER_ID, op: "push" },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(fakeLogger.error).not.toHaveBeenCalled();
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
   });
 
   test("#4886-followup: dirty-tree + un-pushed commits → NO reset (gate protects work), {ok:false}", async () => {
