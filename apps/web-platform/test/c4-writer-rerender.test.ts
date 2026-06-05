@@ -5,7 +5,10 @@ const mocks = vi.hoisted(() => ({
   githubApiPost: vi.fn(),
   syncWorkspace: vi.fn(),
   renderC4Model: vi.fn(),
+  open: vi.fn(),
+  stat: vi.fn(),
   readFile: vi.fn(),
+  close: vi.fn(),
   reportSilentFallback: vi.fn(),
 }));
 
@@ -22,7 +25,10 @@ vi.mock("@/server/github-api", () => ({
 }));
 vi.mock("@/server/workspace-sync", () => ({ syncWorkspace: mocks.syncWorkspace }));
 vi.mock("@/server/c4-render", () => ({ renderC4Model: mocks.renderC4Model }));
-vi.mock("node:fs/promises", () => ({ readFile: mocks.readFile }));
+vi.mock("node:fs/promises", () => ({ open: mocks.open }));
+vi.mock("node:fs", () => ({
+  constants: { O_RDONLY: 0, O_NOFOLLOW: 0 },
+}));
 vi.mock("@/server/observability", async () => {
   const actual = await vi.importActual<typeof import("@/server/observability")>(
     "@/server/observability",
@@ -55,7 +61,15 @@ beforeEach(() => {
   mocks.githubApiPost.mockResolvedValue({ commit: { sha: "commit123" } });
   mocks.syncWorkspace.mockResolvedValue({ ok: true });
   mocks.renderC4Model.mockResolvedValue({ ok: true, durationMs: 12 });
+  // Fake FileHandle: stat (size under cap) + readFile + close.
+  mocks.stat.mockResolvedValue({ size: 1024 });
   mocks.readFile.mockResolvedValue('{"_stage":"layouted"}');
+  mocks.close.mockResolvedValue(undefined);
+  mocks.open.mockResolvedValue({
+    stat: mocks.stat,
+    readFile: mocks.readFile,
+    close: mocks.close,
+  });
 });
 
 const C4 = "engineering/architecture/diagrams/model.c4";
@@ -77,6 +91,30 @@ describe("writeC4Diagram — Layer 2 re-render", () => {
     expect(jsonCommit).toBeTruthy();
     // two syncs: one after the .c4 commit, one after the JSON commit
     expect(mocks.syncWorkspace.mock.calls.length).toBe(2);
+
+    // Ordering is load-bearing for failure isolation: the .c4 source commit AND
+    // its first sync MUST complete before the render/JSON commit runs.
+    const srcPost = mocks.githubApiPost.mock.invocationCallOrder[0];
+    const jsonPostIdx = mocks.githubApiPost.mock.calls.findIndex((c) =>
+      String(c[1]).endsWith("/diagrams/model.likec4.json"),
+    );
+    const jsonPost = mocks.githubApiPost.mock.invocationCallOrder[jsonPostIdx];
+    const renderCall = mocks.renderC4Model.mock.invocationCallOrder[0];
+    expect(srcPost).toBeLessThan(renderCall);
+    expect(renderCall).toBeLessThan(jsonPost);
+  });
+
+  it("AC2c: an oversized regenerated model is NOT committed (size cap)", async () => {
+    mocks.stat.mockResolvedValue({ size: 8 * 1024 * 1024 }); // > 4 MB cap
+    const res = await writeC4Diagram(source(C4));
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.rerendered).toBe(false);
+    const jsonCommit = mocks.githubApiPost.mock.calls.find((c) =>
+      String(c[1]).endsWith("/diagrams/model.likec4.json"),
+    );
+    expect(jsonCommit).toBeFalsy();
+    expect(mocks.reportSilentFallback).toHaveBeenCalled();
   });
 
   it("AC2: render failure does NOT roll back the .c4 commit — returns rerendered:false + reports", async () => {

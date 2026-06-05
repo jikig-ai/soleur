@@ -4,8 +4,10 @@ import { writeC4Diagram } from "@/server/c4-writer";
 
 export const runtime = "nodejs";
 // A .c4 save commits the source, then re-renders model.likec4.json out-of-process
-// (likec4 CLI) and commits + re-syncs it. That chain — commit + sync + render +
-// commit + sync — needs headroom beyond Next's short default wall clock (#4964).
+// (likec4 CLI) and commits + re-syncs it. The real wall-clock bound is in-code
+// (c4-render.ts RENDER_TIMEOUT_MS=25s + the GitHub/sync fetch timeouts); under
+// this app's custom Node server `maxDuration` is a forward-compat platform hint,
+// not the enforcing killer (kept for parity with the upload route). (#4964)
 export const maxDuration = 60;
 
 /**

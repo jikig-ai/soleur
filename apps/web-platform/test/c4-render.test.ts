@@ -54,11 +54,15 @@ describe("renderC4Model", () => {
     expect(args).toEqual(["export", "json", "-o", "model.likec4.json", "."]);
     // cwd is the constant-derived diagrams dir, never a user filename.
     expect(opts.cwd).toBe(EXPECTED_CWD);
-    // scoped env (PATH present, no secret passthrough beyond the allow-list)
+    // scoped env: the allow-list keys are present (HOME is load-bearing for
+    // npm-global bin resolution) and no secret leaks through.
     const env = opts.env as Record<string, string>;
-    expect(Object.keys(env).sort()).toEqual(
-      expect.arrayContaining([]),
+    expect(Object.keys(env)).toEqual(
+      expect.arrayContaining(["PATH", "HOME"]),
     );
+    // Only allow-list keys — nothing outside PATH/LANG/LC_ALL/HOME/TMPDIR.
+    const ALLOWED = new Set(["PATH", "LANG", "LC_ALL", "HOME", "TMPDIR"]);
+    expect(Object.keys(env).every((k) => ALLOWED.has(k))).toBe(true);
     expect(env).not.toHaveProperty("SUPABASE_SERVICE_ROLE_KEY");
   });
 
@@ -92,13 +96,17 @@ describe("renderC4Model", () => {
     if (!res.ok) expect(res.reason).toBe("spawn_error");
   });
 
-  it("SIGKILLs and returns timeout when the CLI exceeds the budget", async () => {
+  it("does NOT kill a healthy render before the 25s budget, then SIGKILLs past it", async () => {
     vi.useFakeTimers();
     const child = makeChild();
     spawnMock.mockImplementation(() => child);
     const p = renderC4Model(WS);
-    // advance past the render timeout without the child closing
-    await vi.advanceTimersByTimeAsync(30_000);
+    // Just under the budget: the timer must NOT have fired — a healthy cold
+    // render that finishes at 24.9s must not be killed.
+    await vi.advanceTimersByTimeAsync(24_999);
+    expect(child.kill).not.toHaveBeenCalled();
+    // Cross the boundary: SIGKILL fires and the result is a timeout.
+    await vi.advanceTimersByTimeAsync(2);
     const res = await p;
     expect(child.kill).toHaveBeenCalledWith("SIGKILL");
     expect(res.ok).toBe(false);

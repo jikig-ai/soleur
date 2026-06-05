@@ -31,12 +31,17 @@ import {
 import { renameUserIdToHash } from "@/server/userid-pseudonymize";
 import { reportSilentFallback } from "@/server/observability";
 import { renderC4Model } from "@/server/c4-render";
-import { readFile } from "node:fs/promises";
+import { open } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import { join } from "node:path";
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
 
 const MAX_C4_WRITE_BYTES = 256 * 1024;
+// The layouted model JSON can be far larger than the 256 KB source cap — mirror
+// the GET /project route's bound so a pathological re-render can't commit an
+// unbounded blob.
+const MAX_C4_MODEL_BYTES = 4 * 1024 * 1024;
 
 export type WriteC4Input = {
   userId: string;
@@ -198,7 +203,10 @@ async function rerenderAndCommit(input: RerenderInput): Promise<boolean> {
       reportSilentFallback(new Error(render.detail ?? render.reason), {
         feature: "c4-rerender",
         op: "render",
-        extra: { userId, workspacePath, relativePath, reason: render.reason },
+        // Only `relativePath` (charset-constrained KB path) goes in `extra` —
+        // the userIdHash + feature/op tags already locate the tenant, and the
+        // absolute workspacePath is internal-topology noise in telemetry.
+        extra: { userId, relativePath, reason: render.reason },
         message: "c4 re-render failed — source committed, diagram stale",
       });
       return false;
@@ -206,13 +214,36 @@ async function rerenderAndCommit(input: RerenderInput): Promise<boolean> {
 
     // Read the regenerated JSON off the synced clone (written in place by the
     // CLI into the diagrams dir) and commit it via the same Contents API path.
+    // The path is constant-derived (no user input), but open with O_NOFOLLOW +
+    // an fd-stat size cap to match the GET /project route's TOCTOU/symlink
+    // hardening (CodeQL js/file-system-race) — the CLI's `-o` write could clobber
+    // or follow a planted symlink at this path.
     const jsonAbsPath = join(
       workspacePath,
       "knowledge-base",
       C4_DIAGRAMS_DIR,
       C4_MODEL_JSON,
     );
-    const json = await readFile(jsonAbsPath, "utf8");
+    let json: string;
+    const handle = await open(
+      jsonAbsPath,
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+    );
+    try {
+      const stat = await handle.stat();
+      if (stat.size > MAX_C4_MODEL_BYTES) {
+        reportSilentFallback(new Error(`model.likec4.json ${stat.size}B exceeds cap`), {
+          feature: "c4-rerender",
+          op: "commit-json",
+          extra: { userId, relativePath, size: stat.size },
+          message: "c4 re-render: regenerated model too large to commit",
+        });
+        return false;
+      }
+      json = await handle.readFile("utf8");
+    } finally {
+      await handle.close();
+    }
 
     let jsonSha: string | undefined;
     try {
@@ -244,7 +275,7 @@ async function rerenderAndCommit(input: RerenderInput): Promise<boolean> {
       reportSilentFallback(resync.error, {
         feature: "c4-rerender",
         op: "resync",
-        extra: { userId, workspacePath, relativePath },
+        extra: { userId, relativePath },
         message: "c4 re-render: JSON committed but re-sync failed",
       });
       return false;
@@ -259,7 +290,7 @@ async function rerenderAndCommit(input: RerenderInput): Promise<boolean> {
     reportSilentFallback(err, {
       feature: "c4-rerender",
       op: "commit-json",
-      extra: { userId, workspacePath, relativePath },
+      extra: { userId, relativePath },
       message: "c4 re-render: regenerate/commit failed — source committed, diagram stale",
     });
     return false;

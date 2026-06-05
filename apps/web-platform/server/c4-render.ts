@@ -24,11 +24,7 @@ import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { C4_DIAGRAMS_DIR, C4_MODEL_JSON } from "@/lib/c4-constants";
 
-export type RenderReason =
-  | "spawn_error"
-  | "non_zero_exit"
-  | "timeout"
-  | "io_error";
+export type RenderReason = "spawn_error" | "non_zero_exit" | "timeout";
 
 export type RenderResult =
   | { ok: true; durationMs: number }
@@ -82,8 +78,9 @@ function sanitizeForLog(s: string): string {
 
 /**
  * Regenerate `model.likec4.json` in place under the workspace's diagrams dir by
- * spawning the preinstalled `likec4` CLI. The JSON is written into the cwd
- * (diagrams dir) via `-o model.likec4.json .`, exactly where the GET
+ * spawning the preinstalled `likec4` CLI (`likec4 export json -o
+ * model.likec4.json .`). The JSON is written into the cwd (diagrams dir),
+ * exactly where the GET
  * `/api/kb/c4/project` route reads it as `dump` and where the caller commits it.
  */
 export async function renderC4Model(
