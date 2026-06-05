@@ -121,6 +121,18 @@ pre-commit:
         - "apps/web-platform/server/**/*.ts"
         - "scripts/lint-conversations-update-callsites.sh"
       run: bash scripts/lint-conversations-update-callsites.sh
+    # client-pii-grep (#3703): signal-quality gate — flags userId/user_id/email
+    # passed in `extra:` to a direct Sentry.capture* call in client-importable
+    # code. NOT a security control (the L3 beforeSend backstop strips it at
+    # runtime); this surfaces the bypass in the PR diff. Path-array glob, not
+    # `**/*`, per 2026-03-21-lefthook-gobwas-glob-double-star.md.
+    client-pii-grep:
+      priority: 5
+      glob:
+        - "apps/web-platform/lib/**/*.{ts,tsx}"
+        - "apps/web-platform/components/**/*.{ts,tsx}"
+        - "apps/web-platform/app/**/*.{ts,tsx}"
+      run: bash .github/scripts/check-client-pii-sentry.sh {staged_files}
     # gdpr-gate advisory hook (per AGENTS.md hr-gdpr-gate-on-regulated-data-surfaces).
     # ALWAYS exits 0 — prints a one-line stderr breadcrumb when staged paths
     # match the canonical regulated-data regex. Glob list is in path-array
@@ -220,3 +232,16 @@ pre-commit:
       priority: 11
       glob: "knowledge-base/marketing/distribution-content/*.md"
       run: bash scripts/lint-distribution-content.sh {staged_files}
+
+# pre-push mirror of the client-pii-grep signal-quality gate (#3703) so a bypass
+# is surfaced at push time even if the pre-commit hook was skipped (e.g. amended
+# commit, --no-verify on an earlier commit). Same shared script, same scope.
+pre-push:
+  commands:
+    client-pii-grep:
+      priority: 5
+      glob:
+        - "apps/web-platform/lib/**/*.{ts,tsx}"
+        - "apps/web-platform/components/**/*.{ts,tsx}"
+        - "apps/web-platform/app/**/*.{ts,tsx}"
+      run: bash .github/scripts/check-client-pii-sentry.sh {staged_files}
