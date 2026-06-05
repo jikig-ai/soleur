@@ -1,0 +1,141 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "0ikEc",
+      "x": 0,
+      "y": 0,
+      "name": "OtpCodeStep — verification code (extracted surface)",
+      "width": 400,
+      "fill": "#0B0B0D",
+      "cornerRadius": 12,
+      "layout": "vertical",
+      "gap": 24,
+      "padding": [
+        48,
+        32
+      ],
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "text",
+          "id": "I1V4w",
+          "name": "heading",
+          "fill": "#F5F5F5",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Enter verification code",
+          "textAlign": "center",
+          "fontFamily": "Inter",
+          "fontSize": 24,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "7QC3j",
+          "name": "sub",
+          "fill": "#9CA3AF",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "We sent a 6-digit code to you@example.com",
+          "textAlign": "center",
+          "fontFamily": "Inter",
+          "fontSize": 14,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "uW9Oz",
+          "name": "OTP input",
+          "width": "fill_container",
+          "height": 52,
+          "fill": "#16161A",
+          "cornerRadius": 8,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#2A2A30"
+          },
+          "padding": [
+            12,
+            16
+          ],
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "Kw9NO",
+              "name": "otpText",
+              "fill": "#6B7280",
+              "content": "0 0 0 0 0 0",
+              "fontFamily": "Inter",
+              "fontSize": 18,
+              "fontWeight": "normal",
+              "letterSpacing": 8
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "xMtfy",
+          "name": "Submit button (label varies)",
+          "width": "fill_container",
+          "height": 48,
+          "fill": "#C9A24B",
+          "cornerRadius": 8,
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "qfbCW",
+              "name": "submitText",
+              "fill": "#1A1304",
+              "content": "Sign in  /  Create account",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "500"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "PHadm",
+          "name": "resend",
+          "fill": "#9CA3AF",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Resend code",
+          "textAlign": "center",
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "WwpzW",
+          "name": "tryDiff",
+          "fill": "#6B7280",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Try a different email",
+          "textAlign": "center",
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "note",
+      "id": "rwn1g",
+      "x": 430,
+      "y": 0,
+      "name": "note",
+      "width": 300,
+      "height": 170,
+      "content": "OtpCodeStep extracted from login-form.tsx:212-272 and signup/page.tsx:185-246 (byte-identical JSX). Only the submit label differs: login=Sign in, signup=Create account (submitLabel prop). Behavior-neutral extraction — the 5 existing auth tests are the visual-regression guard."
+    }
+  ]
+}

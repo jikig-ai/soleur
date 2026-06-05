@@ -35,6 +35,12 @@ export interface PullRequestResult {
   url: string;
 }
 
+export interface IssueResult {
+  number: number;
+  htmlUrl: string;
+  url: string;
+}
+
 interface InstallationAccount {
   login: string;
   id: number;
@@ -1079,6 +1085,60 @@ export async function createPullRequest(
     log.error(
       { status: response.status, body: errorBody.slice(0, 500), installationId, owner, repo },
       "Failed to create pull request",
+    );
+    throw new Error(errorMessage);
+  }
+
+  const data = (await response.json()) as {
+    number: number;
+    html_url: string;
+    url: string;
+  };
+
+  return {
+    number: data.number,
+    htmlUrl: data.html_url,
+    url: data.url,
+  };
+}
+
+/**
+ * Create an issue on a repository using the GitHub App installation token.
+ *
+ * Mirrors `createPullRequest`: same auth surface (`issues: write` already
+ * granted), same `parseGitHubError` error path. Throws on error with a
+ * descriptive message extracted from GitHub's response.
+ */
+export async function createIssue(
+  installationId: number,
+  owner: string,
+  repo: string,
+  title: string,
+  body?: string,
+  labels?: string[],
+): Promise<IssueResult> {
+  const token = await generateInstallationToken(installationId);
+
+  const response = await githubFetch(
+    `${GITHUB_API}/repos/${owner}/${repo}/issues`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `token ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ title, body, labels }),
+    },
+  );
+
+  if (!response.ok) {
+    const { message: errorMessage, body: errorBody } = await parseGitHubError(
+      response,
+      "GitHub create issue failed",
+    );
+    log.error(
+      { status: response.status, body: errorBody.slice(0, 500), installationId, owner, repo },
+      "Failed to create issue",
     );
     throw new Error(errorMessage);
   }

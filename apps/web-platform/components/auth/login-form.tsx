@@ -1,18 +1,16 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
-import { reportSilentFallback } from "@/lib/client-observability";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
+import { OtpCodeStep } from "@/components/auth/OtpCodeStep";
 import { safeReturnTo } from "@/lib/safe-return-to";
-import { EMAIL_OTP_LENGTH, OTP_RESEND_COOLDOWN_MS } from "@/lib/auth/constants";
+import { useOtpFlow } from "@/lib/auth/useOtpFlow";
 import {
   type AuthErrorLike,
   CALLBACK_ERRORS,
   DEFAULT_ERROR_MESSAGE,
   isNoAccountError,
-  mapSupabaseAuthError,
   SIGNUP_REASON_NO_ACCOUNT,
 } from "@/lib/auth/error-messages";
 import Link from "next/link";
@@ -24,56 +22,46 @@ export function LoginForm() {
   // /invite/<token> from the workspace invite flow); null when absent or
   // rejected, in which case we fall back to /dashboard.
   const redirectTo = safeReturnTo(searchParams.get("redirectTo"));
-  const [email, setEmail] = useState("");
-  const [otpSent, setOtpSent] = useState(false);
-  const [otp, setOtp] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [cooldownSeconds, setCooldownSeconds] = useState(0);
-  // The email the active cooldown was started for. The cooldown is per-email
-  // (GoTrue's rate window is per-user), so switching to a DIFFERENT email is
-  // immediately sendable, while reverting to the same email inside the window
-  // stays blocked — closing the "Try a different email" reset bypass.
-  const [cooldownEmail, setCooldownEmail] = useState("");
-  const otpRef = useRef<HTMLInputElement>(null);
-  const cooldownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // True only while a cooldown is running AND the current email matches the
-  // one it was started for.
-  const cooldownActive = cooldownSeconds > 0 && email === cooldownEmail;
-
-  function clearCooldown() {
-    if (cooldownTimerRef.current) {
-      clearInterval(cooldownTimerRef.current);
-      cooldownTimerRef.current = null;
-    }
-  }
-
-  // Disable resend for >= GoTrue's 60s per-user OTP window so the UI cannot
-  // fire a same-email re-send before GoTrue will accept it (the double-send
-  // that returns "Too many sign-in attempts").
-  function startCooldown() {
-    clearCooldown();
-    setCooldownEmail(email);
-    setCooldownSeconds(Math.ceil(OTP_RESEND_COOLDOWN_MS / 1000));
-    cooldownTimerRef.current = setInterval(() => {
-      setCooldownSeconds((s) => {
-        if (s <= 1) {
-          clearCooldown();
-          return 0;
-        }
-        return s - 1;
+  // login's send-error branch: a no-account error bounces login → signup,
+  // preserving the validated invite target through the hop. Returning true
+  // short-circuits the hook's default `setError(...)`.
+  function redirectIfNoAccount(error: AuthErrorLike): boolean {
+    if (isNoAccountError({ code: error.code, message: error.message ?? "" })) {
+      const params = new URLSearchParams({
+        email,
+        reason: SIGNUP_REASON_NO_ACCOUNT,
       });
-    }, 1000);
+      // Preserve the invite target through the login→signup bounce so a
+      // no-account invitee still lands on /invite/<token> after creating.
+      if (redirectTo) params.set("redirectTo", redirectTo);
+      router.replace(`/signup?${params.toString()}`);
+      return true;
+    }
+    return false;
   }
 
-  // Clear the interval on unmount so the countdown can't tick into an
-  // unmounted component.
-  useEffect(() => {
-    return () => {
-      if (cooldownTimerRef.current) clearInterval(cooldownTimerRef.current);
-    };
-  }, []);
+  const {
+    email,
+    setEmail,
+    otpSent,
+    setOtpSent,
+    otp,
+    setOtp,
+    error,
+    setError,
+    loading,
+    cooldownSeconds,
+    cooldownActive,
+    otpRef,
+    handleSendOtp,
+    handleResendOtp,
+    handleVerifyOtp,
+  } = useOtpFlow({
+    shouldCreateUser: false,
+    onVerifySuccess: () => router.push(redirectTo ?? "/dashboard"),
+    onSendError: redirectIfNoAccount,
+  });
 
   useEffect(() => {
     const callbackError = searchParams.get("error");
@@ -82,7 +70,7 @@ export function LoginForm() {
         CALLBACK_ERRORS[callbackError] ?? DEFAULT_ERROR_MESSAGE,
       );
     }
-  }, [searchParams]);
+  }, [searchParams, setError]);
 
   // #4307 revocation banner. Middleware redirects revoked sessions to
   // /login?revoked=removed|role-changed and clears the auth cookies.
@@ -100,175 +88,26 @@ export function LoginForm() {
             ? "Your session ended unexpectedly. Please sign in again."
             : null;
 
-  /** Send (or resend) an OTP for the current email. Returns true on success. */
-  async function sendOtp(): Promise<boolean> {
-    // Source-level guard: refuse a same-email re-send inside the cooldown
-    // window regardless of which control invoked us (send button, resend, or
-    // a re-submit after "Try a different email" with the email unchanged).
-    if (cooldownActive) return false;
-    setLoading(true);
-    setError("");
-
-    const supabase = createClient();
-    let error: AuthErrorLike | null = null;
-    try {
-      ({ error } = await supabase.auth.signInWithOtp({
-        email,
-        options: { shouldCreateUser: false },
-      }));
-    } catch (thrown) {
-      // Transport failure (fetch reject) rejects rather than resolving `error`.
-      error = thrown as AuthErrorLike;
-    }
-
-    setLoading(false);
-
-    if (error) {
-      console.error("[auth] Supabase error:", error.message);
-      // Forward only typed enum/int fields in `extra` — error.message embeds
-      // the email on OTP failures and Sentry is a shared cross-tenant project.
-      // The raw error is still captured via Sentry.captureException, so the
-      // message-borne email is scrubbed by sentry.client.config beforeSend
-      // (EMAIL_PATTERN), not omitted here.
-      reportSilentFallback(error, {
-        feature: "auth",
-        op: "signInWithOtp",
-        extra: {
-          errorCode: error.code,
-          errorName: error.name,
-          status: error.status,
-        },
-      });
-      if (isNoAccountError({ code: error.code, message: error.message ?? "" })) {
-        const params = new URLSearchParams({
-          email,
-          reason: SIGNUP_REASON_NO_ACCOUNT,
-        });
-        // Preserve the invite target through the login→signup bounce so a
-        // no-account invitee still lands on /invite/<token> after creating.
-        if (redirectTo) params.set("redirectTo", redirectTo);
-        router.replace(`/signup?${params.toString()}`);
-        return false;
-      }
-      setError(mapSupabaseAuthError(error));
-      return false;
-    }
-
-    startCooldown();
-    return true;
-  }
-
-  async function handleSendOtp(e: React.FormEvent) {
-    e.preventDefault();
-    const ok = await sendOtp();
-    if (ok) {
-      setOtpSent(true);
-      setTimeout(() => otpRef.current?.focus(), 100);
-    }
-  }
-
-  async function handleResendOtp() {
-    await sendOtp();
-  }
-
-  async function handleVerifyOtp(e: React.FormEvent) {
-    e.preventDefault();
-    setLoading(true);
-    setError("");
-
-    const supabase = createClient();
-    let error: AuthErrorLike | null = null;
-    try {
-      ({ error } = await supabase.auth.verifyOtp({
-        email,
-        token: otp,
-        type: "email",
-      }));
-    } catch (thrown) {
-      // verifyOtp can reject (not resolve with `error`) on a transport failure;
-      // route the thrown error through the same mapping layer.
-      error = thrown as AuthErrorLike;
-    }
-
-    setLoading(false);
-
-    if (error) {
-      console.error("[auth] Supabase error:", error.message);
-      reportSilentFallback(error, {
-        feature: "auth",
-        op: "verifyOtp",
-        extra: {
-          errorCode: error.code,
-          errorName: error.name,
-          status: error.status,
-        },
-      });
-      setError(mapSupabaseAuthError(error));
-    } else {
-      router.push(redirectTo ?? "/dashboard");
-    }
-  }
-
   if (otpSent) {
     return (
-      <main className="flex min-h-screen items-center justify-center p-4">
-        <div className="w-full max-w-sm space-y-6">
-          <div className="space-y-2 text-center">
-            <h1 className="text-2xl font-semibold">Enter verification code</h1>
-            <p className="text-sm text-soleur-text-secondary">
-              We sent a {EMAIL_OTP_LENGTH}-digit code to{" "}
-              <strong className="text-soleur-text-primary">{email}</strong>
-            </p>
-          </div>
-
-          <form onSubmit={handleVerifyOtp} className="space-y-4">
-            <input
-              ref={otpRef}
-              type="text"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              required
-              maxLength={EMAIL_OTP_LENGTH}
-              value={otp}
-              onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
-              placeholder="000000"
-              className="w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3 text-center text-lg tracking-[0.3em] placeholder:text-soleur-text-muted focus:border-soleur-border-emphasized focus:outline-none"
-            />
-
-            {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
-
-            <button
-              type="submit"
-              disabled={loading || otp.length !== EMAIL_OTP_LENGTH}
-              className="w-full rounded-lg bg-soleur-accent-gold-fill px-4 py-3 text-sm font-medium text-soleur-text-on-accent hover:opacity-90 disabled:opacity-50"
-            >
-              {loading ? "Verifying..." : "Sign in"}
-            </button>
-          </form>
-
-          <button
-            type="button"
-            onClick={handleResendOtp}
-            disabled={loading || cooldownActive}
-            className="block w-full text-center text-sm text-soleur-text-muted hover:text-soleur-text-secondary disabled:opacity-50 disabled:hover:text-soleur-text-muted"
-          >
-            {cooldownActive
-              ? `You can request a new code in ${cooldownSeconds}s`
-              : "Resend code"}
-          </button>
-
-          <button
-            onClick={() => {
-              setOtpSent(false);
-              setOtp("");
-              setError("");
-            }}
-            className="block w-full text-center text-sm text-soleur-text-muted hover:text-soleur-text-secondary"
-          >
-            Try a different email
-          </button>
-        </div>
-      </main>
+      <OtpCodeStep
+        email={email}
+        otp={otp}
+        setOtp={setOtp}
+        error={error}
+        loading={loading}
+        cooldownActive={cooldownActive}
+        cooldownSeconds={cooldownSeconds}
+        otpRef={otpRef}
+        onVerify={handleVerifyOtp}
+        onResend={handleResendOtp}
+        onTryDifferentEmail={() => {
+          setOtpSent(false);
+          setOtp("");
+          setError("");
+        }}
+        submitLabel="Sign in"
+      />
     );
   }
 
