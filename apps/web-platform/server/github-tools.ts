@@ -10,7 +10,7 @@
 
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
-import { createPullRequest } from "./github-app";
+import { createPullRequest, createIssue } from "./github-app";
 import { readCiStatus, readWorkflowLogs } from "./ci-tools";
 import {
   readIssue,
@@ -95,6 +95,20 @@ export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsRe
         args.head, args.base, args.title, args.body,
       );
     }, /* pretty */ false),
+  );
+
+  const createIssueTool = tool(
+    "create_issue",
+    "File an issue on the user's connected GitHub repository. " +
+      "The repository is determined server-side from the user's connected repo.",
+    {
+      title: z.string().describe("Issue title"),
+      body: z.string().optional().describe("Issue description body (markdown)"),
+      labels: z.array(z.string()).default([]).describe("Labels to apply to the issue"),
+    },
+    async (args): Promise<ToolTextResponse> => wrapToolHandler("Error creating issue", () =>
+      createIssue(installationId, owner, repo, args.title, args.body, args.labels),
+    /* pretty */ false),
   );
 
   const readCi = tool(
@@ -236,11 +250,12 @@ export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsRe
 
   return {
     tools: [
-      createPr, readCi, readLogs, triggerWf, pushBr,
+      createPr, createIssueTool, readCi, readLogs, triggerWf, pushBr,
       readIssueTool, readIssueCommentsTool, readPrTool, listPrCommentsTool,
     ],
     toolNames: [
       "mcp__soleur_platform__create_pull_request",
+      "mcp__soleur_platform__create_issue",
       "mcp__soleur_platform__github_read_ci_status",
       "mcp__soleur_platform__github_read_workflow_logs",
       "mcp__soleur_platform__github_trigger_workflow",

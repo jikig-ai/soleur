@@ -349,6 +349,25 @@ describe("canUseTool tiered gating (#1926)", () => {
       expect(mockAbortableReviewGate).toHaveBeenCalled();
     });
 
+    test("create_issue triggers review gate (not auto-allowed)", async () => {
+      mockAbortableReviewGate.mockResolvedValue("Approve");
+      const canUseTool = await getCanUseTool();
+
+      const result = await canUseTool(
+        "mcp__soleur_platform__create_issue",
+        { title: "Something broke" },
+        { signal: new AbortController().signal },
+      );
+
+      expect(result.behavior).toBe("allow");
+      // The gate must fire — create_issue is gated, not auto-approved
+      expect(mockSendToClient).toHaveBeenCalledWith(
+        "user-1",
+        expect.objectContaining({ type: "review_gate" }),
+      );
+      expect(mockAbortableReviewGate).toHaveBeenCalled();
+    });
+
     test("create_pull_request denied when user rejects gate", async () => {
       mockAbortableReviewGate.mockResolvedValue("Reject");
       const canUseTool = await getCanUseTool();

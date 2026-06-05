@@ -53,6 +53,12 @@ describe("getToolTier", () => {
     );
   });
 
+  test("returns gated for create_issue", () => {
+    expect(getToolTier("mcp__soleur_platform__create_issue")).toBe(
+      "gated",
+    );
+  });
+
   test("returns gated for unregistered platform tools (fail-closed default)", () => {
     // Platform tools not in the tier map default to gated
     // so new tools require explicit tier assignment before auto-approve
@@ -92,6 +98,15 @@ describe("buildGateMessage", () => {
     expect(msg).toContain("main");
     expect(msg).toContain("feat-x");
     expect(msg).toMatch(/open PR/i);
+  });
+
+  test("create issue message includes title", () => {
+    const msg = buildGateMessage(
+      "mcp__soleur_platform__create_issue",
+      { title: "Login is broken" },
+    );
+    expect(msg).toContain("Login is broken");
+    expect(msg).toMatch(/file an issue/i);
   });
 
   test("unknown tool uses short tool name", () => {

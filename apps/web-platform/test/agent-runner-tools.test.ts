@@ -188,6 +188,7 @@ describe("agent-runner MCP tool wiring", () => {
 
     // allowedTools should include the MCP tool
     expect(options.allowedTools).toContain("mcp__soleur_platform__create_pull_request");
+    expect(options.allowedTools).toContain("mcp__soleur_platform__create_issue");
   });
 
   test("omits GitHub platform tools when user has no installationId", async () => {

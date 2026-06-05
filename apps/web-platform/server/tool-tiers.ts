@@ -49,6 +49,7 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
   // cc-router (#2909): Tier 2 candidates (Phase 2 via #3722)
   "mcp__soleur_platform__github_push_branch": "gated",
   "mcp__soleur_platform__create_pull_request": "gated",
+  "mcp__soleur_platform__create_issue": "gated",
 
   // KB share tools (#2309): list is read-only, create/revoke are
   // user-visible side effects (public URL / permanent revocation) → gated.
@@ -141,6 +142,8 @@ export function buildGateMessage(
       return `Agent wants to push to branch **${toolInput.branch ?? "unknown"}**. Allow?`;
     case "create_pull_request":
       return `Agent wants to open PR: **${toolInput.title ?? "untitled"}** (${toolInput.base ?? "main"} ← ${toolInput.head ?? "unknown"}). Allow?`;
+    case "create_issue":
+      return `Agent wants to file an issue: **${toolInput.title ?? "untitled"}**. Allow?`;
     case "kb_share_create":
       return `Agent wants to create a public share link for **${toolInput.documentPath ?? "unknown"}**. Allow?`;
     case "kb_share_revoke": {
