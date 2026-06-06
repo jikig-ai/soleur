@@ -32,9 +32,6 @@ import { renameUserIdToHash } from "@/server/userid-pseudonymize";
 import { reportSilentFallback } from "@/server/observability";
 import { renderC4Model } from "@/server/c4-render";
 import { sanitizeForLog } from "@/lib/log-sanitize";
-import { open } from "node:fs/promises";
-import { constants as fsConstants } from "node:fs";
-import { join } from "node:path";
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
 
@@ -239,7 +236,9 @@ function buildRerenderDiagnostic(detail: string | undefined): string {
  * (with a user-facing `diagnostic` when the cause is the user's source) — the
  * caller has already committed the `.c4` source, so a re-render failure never
  * fails the save, and an empty/invalid render NEVER commits over the good model
- * (renderC4Model validated to a temp file and left the real JSON untouched).
+ * (renderC4Model returns the validated bytes; we commit them and the resync pull
+ * lands the committed bytes on the clone — the tracked working-tree file is never
+ * written by the render path, #4976).
  */
 async function rerenderAndCommit(
   input: RerenderInput,
@@ -271,37 +270,22 @@ async function rerenderAndCommit(
       };
     }
 
-    // Read the regenerated JSON off the diagrams dir (renderC4Model validated
-    // the temp export and copied it onto this real path) and commit it via the
-    // same Contents API path. The path is constant-derived (no user input), but
-    // open with O_NOFOLLOW + an fd-stat size cap to match the GET /project
-    // route's TOCTOU/symlink hardening (CodeQL js/file-system-race) — the
-    // copyFile target could be a planted symlink at this path.
-    const jsonAbsPath = join(
-      workspacePath,
-      "knowledge-base",
-      C4_DIAGRAMS_DIR,
-      C4_MODEL_JSON,
-    );
-    let json: string;
-    const handle = await open(
-      jsonAbsPath,
-      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
-    );
-    try {
-      const stat = await handle.stat();
-      if (stat.size > MAX_C4_MODEL_BYTES) {
-        reportSilentFallback(new Error(`model.likec4.json ${stat.size}B exceeds cap`), {
-          feature: "c4-rerender",
-          op: "commit-json",
-          extra: { userId, relativePath, size: stat.size },
-          message: "c4 re-render: regenerated model too large to commit",
-        });
-        return { rerendered: false };
-      }
-      json = await handle.readFile("utf8");
-    } finally {
-      await handle.close();
+    // renderC4Model returned the validated bytes in-process (#4976) — commit
+    // them directly via the same Contents API path. No on-disk re-read: the
+    // model is never written to the tracked working tree, so there is no file to
+    // open (and no TOCTOU/symlink surface to harden — the old O_NOFOLLOW+fd-stat
+    // guard existed only because we used to re-read a tracked file a planted
+    // symlink could swap). Cap on the exact bytes we are about to commit.
+    const json = render.json;
+    const size = Buffer.byteLength(json, "utf8");
+    if (size > MAX_C4_MODEL_BYTES) {
+      reportSilentFallback(new Error(`model.likec4.json ${size}B exceeds cap`), {
+        feature: "c4-rerender",
+        op: "commit-json",
+        extra: { userId, relativePath, size },
+        message: "c4 re-render: regenerated model too large to commit",
+      });
+      return { rerendered: false };
     }
 
     let jsonSha: string | undefined;

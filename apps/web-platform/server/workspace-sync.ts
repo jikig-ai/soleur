@@ -89,7 +89,9 @@ async function resolveDefaultBranch(
  * class emits the error-level `log.error`+`reportSilentFallback` mirror. See
  * Sentry 9ccf1d86… — the unconditional pre-self-heal `log.error({ err })`
  * pino-mirrored to Sentry on every push for a benign, recovered dirty-tree
- * abort (the c4 re-render writes model.likec4.json into the tracked tree).
+ * abort (historically the c4 re-render published model.likec4.json into the
+ * tracked tree; that source was removed in #4976, but the self-heal stays as
+ * general defense against any other dirty-tree cause).
  */
 export async function syncWorkspace(
   installationId: number,
@@ -111,9 +113,10 @@ export async function syncWorkspace(
     const errorClass = classifyGitSyncError(syncError);
 
     if (errorClass === ERROR_CLASS_NON_FAST_FORWARD) {
-      // Self-healable: a diverged clone OR a dirty working tree (e.g. the c4
-      // re-render's tracked-path write to model.likec4.json, or a spurious
-      // mirror edit). A blocked ff-only pull that the gated `reset --hard`
+      // Self-healable: a diverged clone OR a dirty working tree (e.g. a
+      // spurious mirror edit; historically also the c4 re-render's tracked-path
+      // write to model.likec4.json, removed in #4976). A blocked ff-only pull
+      // that the gated `reset --hard`
       // recovers is BENIGN churn — do NOT emit an error-level mirror here. The
       // pino `log.error({ err })` path mirrors to Sentry (logger.ts →
       // captureException, tag feature:"pino-mirror", level error), which paged
