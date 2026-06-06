@@ -5,10 +5,6 @@ const mocks = vi.hoisted(() => ({
   githubApiPost: vi.fn(),
   syncWorkspace: vi.fn(),
   renderC4Model: vi.fn(),
-  open: vi.fn(),
-  stat: vi.fn(),
-  readFile: vi.fn(),
-  close: vi.fn(),
   reportSilentFallback: vi.fn(),
 }));
 
@@ -25,10 +21,6 @@ vi.mock("@/server/github-api", () => ({
 }));
 vi.mock("@/server/workspace-sync", () => ({ syncWorkspace: mocks.syncWorkspace }));
 vi.mock("@/server/c4-render", () => ({ renderC4Model: mocks.renderC4Model }));
-vi.mock("node:fs/promises", () => ({ open: mocks.open }));
-vi.mock("node:fs", () => ({
-  constants: { O_RDONLY: 0, O_NOFOLLOW: 0 },
-}));
 vi.mock("@/server/observability", async () => {
   const actual = await vi.importActual<typeof import("@/server/observability")>(
     "@/server/observability",
@@ -54,21 +46,21 @@ function source(relativePath: string, content = "model { }") {
   return { ...BASE, relativePath, content };
 }
 
+// The validated bytes renderC4Model now returns (#4976) — the writer commits
+// these directly, no on-disk re-read.
+const RENDERED_JSON = '{"_stage":"layouted"}';
+
 beforeEach(() => {
   Object.values(mocks).forEach((m) => m.mockReset());
-  // Defaults: blob sha resolves, commits succeed, sync ok, render ok, JSON read ok.
+  // Defaults: blob sha resolves, commits succeed, sync ok, render ok (carrying
+  // the validated bytes the writer commits).
   mocks.githubApiGet.mockResolvedValue({ sha: "blobsha", type: "file" });
   mocks.githubApiPost.mockResolvedValue({ commit: { sha: "commit123" } });
   mocks.syncWorkspace.mockResolvedValue({ ok: true });
-  mocks.renderC4Model.mockResolvedValue({ ok: true, durationMs: 12 });
-  // Fake FileHandle: stat (size under cap) + readFile + close.
-  mocks.stat.mockResolvedValue({ size: 1024 });
-  mocks.readFile.mockResolvedValue('{"_stage":"layouted"}');
-  mocks.close.mockResolvedValue(undefined);
-  mocks.open.mockResolvedValue({
-    stat: mocks.stat,
-    readFile: mocks.readFile,
-    close: mocks.close,
+  mocks.renderC4Model.mockResolvedValue({
+    ok: true,
+    durationMs: 12,
+    json: RENDERED_JSON,
   });
 });
 
@@ -89,6 +81,12 @@ describe("writeC4Diagram — Layer 2 re-render", () => {
       String(c[1]).endsWith("/diagrams/model.likec4.json"),
     );
     expect(jsonCommit).toBeDefined();
+    // #4976: the writer commits EXACTLY the bytes renderC4Model returned — the
+    // base64 `content` decodes back to render.json (pins producer→consumer).
+    const committedContent = (jsonCommit![2] as { content: string }).content;
+    expect(Buffer.from(committedContent, "base64").toString("utf8")).toBe(
+      RENDERED_JSON,
+    );
     // two syncs: one after the .c4 commit, one after the JSON commit
     expect(mocks.syncWorkspace.mock.calls.length).toBe(2);
 
@@ -105,7 +103,12 @@ describe("writeC4Diagram — Layer 2 re-render", () => {
   });
 
   it("AC2c: an oversized regenerated model is NOT committed (size cap)", async () => {
-    mocks.stat.mockResolvedValue({ size: 8 * 1024 * 1024 }); // > 4 MB cap
+    // Cap is enforced on the RETURNED bytes now (#4976), not a mocked fd-stat.
+    mocks.renderC4Model.mockResolvedValue({
+      ok: true,
+      durationMs: 12,
+      json: "x".repeat(8 * 1024 * 1024), // > 4 MB cap
+    });
     const res = await writeC4Diagram(source(C4));
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -164,7 +167,11 @@ describe("writeC4Diagram — Layer 2 re-render", () => {
   });
 
   it("AC2e: a non-source-fault failure (oversized model) carries NO rerenderDiagnostic", async () => {
-    mocks.stat.mockResolvedValue({ size: 8 * 1024 * 1024 });
+    mocks.renderC4Model.mockResolvedValue({
+      ok: true,
+      durationMs: 12,
+      json: "x".repeat(8 * 1024 * 1024),
+    });
     const res = await writeC4Diagram(source(C4));
     expect(res.ok).toBe(true);
     if (!res.ok) return;
