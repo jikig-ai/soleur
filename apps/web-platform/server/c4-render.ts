@@ -14,10 +14,19 @@
 // ElementKind named '…'` to stderr but returns 0 and writes an EMPTY-elements
 // model). So exit-0 is NOT sufficient evidence of a usable render. We render to
 // a temp path, parse it, and only treat it as success when the model has ≥1
-// element — then copy it onto the real `model.likec4.json`. An empty/invalid
-// export therefore NEVER clobbers the previously-good committed model; it
-// returns `{ ok:false, reason:"empty_model" }` so the writer keeps the old JSON
-// and the client shows the honest staleness banner.
+// element — then RETURN the validated bytes (the caller commits them and the
+// resync pull lands them on disk). An empty/invalid export therefore NEVER
+// reaches a commit; it returns `{ ok:false, reason:"empty_model" }` so the
+// writer keeps the old JSON and the client shows the honest staleness banner.
+//
+// OFF-TREE RENDER (#4976): the validated model is NEVER written onto the tracked
+// `model.likec4.json` working-tree path. The render produces only a process-temp
+// artifact and returns the bytes; the writer commits them via the GitHub
+// Contents API and the `op:"manual"` resync pull brings the committed bytes down
+// onto the clone (where the GET `/api/kb/c4/project` route reads them). This
+// removes the dirty-tree reconcile churn that the in-place publish used to cause
+// on every `.c4` save. Mirrors `pdf-linearize.ts`, which likewise returns bytes
+// and leaves persistence to its caller.
 //
 // SECURITY: the only path that reaches the spawn is `diagramsDir`, derived from
 // `workspacePath` + the `C4_DIAGRAMS_DIR` constant — never a user-controlled
@@ -31,9 +40,9 @@
 // esbuild cannot resolve the `server-only` guard package. Server-only by
 // construction (spawns a CLI), only imported by server code.
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, copyFile, rename, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { C4_DIAGRAMS_DIR, C4_MODEL_JSON } from "@/lib/c4-constants";
 
 export type RenderReason =
@@ -44,11 +53,14 @@ export type RenderReason =
   // source is broken (typically a missing spec.c4). Distinct from io_error so
   // the writer surfaces a source-fault diagnostic ONLY for this reason.
   | "empty_model"
-  // Our own IO failed (mkdtemp / parse / copy-publish) — NOT the user's source.
+  // Our own IO failed (mkdtemp / temp read / parse) — NOT the user's source.
   | "io_error";
 
 export type RenderResult =
-  | { ok: true; durationMs: number }
+  // `json` is the raw, validated UTF-8 model string read from the temp export —
+  // returned verbatim (never re-`JSON.stringify`d) so the committed bytes are
+  // byte-identical to what `likec4` produced and we validated.
+  | { ok: true; durationMs: number; json: string }
   | { ok: false; reason: RenderReason; detail?: string };
 
 // Real prod model exports in <1s (verified 2026-06-05); 25s is a ceiling that
@@ -112,10 +124,13 @@ type SpawnResult =
 /**
  * Regenerate `model.likec4.json` by spawning the preinstalled `likec4` CLI
  * (`likec4 export json -o <temp> .`) with cwd = the workspace's diagrams dir,
- * VALIDATE the produced model is non-empty, and only then copy it onto the real
- * `model.likec4.json` (where the GET `/api/kb/c4/project` route reads it as
- * `dump` and the caller commits it). An empty/invalid export returns
- * `{ ok:false, reason:"empty_model" }` and leaves the real file untouched.
+ * VALIDATE the produced model is non-empty, and on success RETURN the validated
+ * bytes as `json`. The caller commits those bytes via the GitHub Contents API
+ * and the resync pull lands them on the clone (where the GET
+ * `/api/kb/c4/project` route reads them as `dump`). The tracked working-tree
+ * `model.likec4.json` is never written by this path (#4976). An empty/invalid
+ * export returns `{ ok:false, reason:"empty_model" }` with no `json`, so the
+ * caller never commits over the previously-good model.
  */
 export async function renderC4Model(
   workspacePath: string,
@@ -133,27 +148,27 @@ async function renderToValidatedModel(
   diagramsDir: string,
 ): Promise<RenderResult> {
   // Render to a per-call temp dir (collision-proof under POOL_SIZE concurrency
-  // + multi-replica tmpfs; mirrors pdf-linearize.ts). The real model.likec4.json
-  // is only touched on validated success, so an invalid render never clobbers
-  // the previously-good model.
+  // + multi-replica tmpfs; mirrors pdf-linearize.ts). The validated bytes are
+  // RETURNED, never published onto the tracked path (#4976), so an invalid
+  // render never clobbers the previously-good committed model and a successful
+  // render never dirties the working tree.
   const dir = await mkdtemp(join(tmpdir(), "c4-render-")).catch(() => null);
   if (!dir) {
     return { ok: false, reason: "io_error", detail: "mkdtemp failed" };
   }
   const tmpOut = join(dir, C4_MODEL_JSON);
-  const realPath = join(diagramsDir, C4_MODEL_JSON);
-  // Same-dir (same-filesystem) staging path so the final publish is an atomic
-  // `rename` — a crash mid-copy can never truncate the previously-good model.
-  // The mkdtemp suffix keeps it collision-proof under the concurrency gate.
-  const stagePath = `${realPath}.stage-${basename(dir)}`;
   try {
     const run = await runLikeC4(diagramsDir, tmpOut);
     if (!run.ok) return run;
 
     // exit 0 — but likec4 exits 0 on unresolved references too, so validate.
+    // Keep the raw read so the returned bytes are byte-identical to the
+    // validated artifact (no re-`JSON.stringify` key-order/whitespace drift).
+    let raw: string;
     let model: { elements?: unknown };
     try {
-      model = JSON.parse(await readFile(tmpOut, "utf8")) as { elements?: unknown };
+      raw = await readFile(tmpOut, "utf8");
+      model = JSON.parse(raw) as { elements?: unknown };
     } catch (err) {
       return {
         ok: false,
@@ -185,11 +200,9 @@ async function renderToValidatedModel(
       };
     }
 
-    // Validated — publish atomically onto the real path the GET reads + the
-    // writer commits: copy into the same-dir stage, then rename over.
-    await copyFile(tmpOut, stagePath);
-    await rename(stagePath, realPath);
-    return { ok: true, durationMs: run.durationMs };
+    // Validated — return the raw bytes; the caller commits them and the resync
+    // pull lands them on disk. The tracked working-tree file is never written.
+    return { ok: true, durationMs: run.durationMs, json: raw };
   } catch (err) {
     return {
       ok: false,
@@ -198,10 +211,8 @@ async function renderToValidatedModel(
     };
   } finally {
     // Trailing .catch so cleanup can never reject the resolved result (mirrors
-    // pdf-linearize.ts). Clean BOTH the temp dir and any leftover stage file
-    // (present only if rename never ran).
+    // pdf-linearize.ts). Clean the per-call temp dir (the only artifact).
     await rm(dir, { recursive: true, force: true }).catch(() => {});
-    await rm(stagePath, { force: true }).catch(() => {});
   }
 }
 
