@@ -6,13 +6,16 @@ import {
   beforeEach,
   afterEach,
 } from "vitest";
-import type {
-  Query,
-  SDKMessage,
-  SDKUserMessage,
-  SDKResultMessage,
-  SDKAssistantMessage,
-} from "@anthropic-ai/claude-agent-sdk";
+import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import {
+  createMockQueryScripted as createMockQuery,
+  makeAssistant,
+  makeResult,
+  makeUserToolResult,
+  makeUserToolResultReplay,
+  makeRecordingEvents as makeEvents,
+  flushMicrotasks,
+} from "./helpers/soleur-go-fixtures";
 
 // Mock observability BEFORE importing the runner so the
 // `reportSilentFallback` import inside soleur-go-runner.ts resolves to the
@@ -29,7 +32,6 @@ import {
   createSoleurGoRunner,
   DEFAULT_MAX_TURN_DURATION_MS,
   type WorkflowEnd,
-  type DispatchEvents,
 } from "@/server/soleur-go-runner";
 
 // RED tests for plan
@@ -50,110 +52,6 @@ import {
 // `firstToolUseAt` (defense-pair invariant from PR #3225 and learning
 // `2026-05-05-defense-relaxation-must-name-new-ceiling.md`).
 
-type Mutable<T> = { -readonly [K in keyof T]: T[K] };
-
-function makeAssistant(
-  partial: Partial<SDKAssistantMessage> & {
-    content: Array<
-      | { type: "text"; text: string }
-      | {
-          type: "tool_use";
-          id: string;
-          name: string;
-          input: Record<string, unknown>;
-        }
-    >;
-  },
-): SDKAssistantMessage {
-  return {
-    type: "assistant",
-    message: {
-      id: partial.uuid ?? "msg_1",
-      role: "assistant",
-      model: "claude-sonnet-4-6",
-      stop_reason: null,
-      stop_sequence: null,
-      type: "message",
-      usage: {
-        input_tokens: 0,
-        output_tokens: 0,
-        cache_creation_input_tokens: 0,
-        cache_read_input_tokens: 0,
-        server_tool_use: null,
-        service_tier: null,
-      },
-      content: partial.content,
-      // biome-ignore lint/suspicious/noExplicitAny: minimal SDK fixture
-    } as any,
-    parent_tool_use_id: partial.parent_tool_use_id ?? null,
-    uuid: (partial.uuid ?? "00000000-0000-0000-0000-000000000001") as never,
-    session_id: partial.session_id ?? "sess-1",
-  } as SDKAssistantMessage;
-}
-
-function makeResult(totalCostUsd: number, sessionId = "sess-1"): SDKResultMessage {
-  return {
-    type: "result",
-    subtype: "success",
-    duration_ms: 100,
-    duration_api_ms: 50,
-    is_error: false,
-    num_turns: 1,
-    result: "",
-    stop_reason: "end_turn",
-    total_cost_usd: totalCostUsd,
-    // biome-ignore lint/suspicious/noExplicitAny: minimal SDK fixture
-    usage: { input_tokens: 0, output_tokens: 0 } as any,
-    modelUsage: {},
-    permission_denials: [],
-    uuid: "00000000-0000-0000-0000-0000000000ff" as never,
-    session_id: sessionId,
-  } as SDKResultMessage;
-}
-
-// AC1.1 / AC1.4: a `user`-role SDK message carrying `tool_use_result` is
-// the SDK's own forward-progress signal. The new branch detects it via the
-// documented `SDKUserMessage.tool_use_result?: unknown` field and re-arms
-// `armRunaway`.
-function makeUserToolResult(
-  toolUseId: string,
-  sessionId = "sess-1",
-): SDKUserMessage {
-  return {
-    type: "user",
-    message: {
-      role: "user",
-      content: [
-        {
-          type: "tool_result",
-          tool_use_id: toolUseId,
-          content: "ok",
-        },
-      ],
-      // biome-ignore lint/suspicious/noExplicitAny: minimal SDK fixture
-    } as any,
-    parent_tool_use_id: null,
-    isSynthetic: true,
-    tool_use_result: { ok: true },
-    session_id: sessionId,
-  } as SDKUserMessage;
-}
-
-// AC1.8: `SDKUserMessageReplay` shares the `tool_use_result?: unknown`
-// field with `SDKUserMessage`. The shared field-check covers both shapes
-// without an extra branch.
-function makeUserToolResultReplay(
-  toolUseId: string,
-  sessionId = "sess-1",
-): SDKUserMessage {
-  return {
-    ...makeUserToolResult(toolUseId, sessionId),
-    isReplay: true,
-    uuid: "00000000-0000-0000-0000-0000000000aa" as never,
-    // biome-ignore lint/suspicious/noExplicitAny: replay variant is a structural superset
-  } as any;
-}
-
 // AC1.6: a `user`-role SDK message WITHOUT `tool_use_result` MUST NOT
 // reset the timer — the discriminator field is the single load-bearing
 // check.
@@ -168,111 +66,6 @@ function makeUserNoToolResult(): SDKUserMessage {
     parent_tool_use_id: null,
     session_id: "sess-1",
   } as SDKUserMessage;
-}
-
-function createMockQuery(scripted: SDKMessage[] = []) {
-  let closed = false;
-  const queue: SDKMessage[] = [...scripted];
-  let resolveNext: ((r: IteratorResult<SDKMessage>) => void) | null = null;
-  const emitted: SDKMessage[] = [];
-  const closeSpy = vi.fn();
-
-  const iter: AsyncGenerator<SDKMessage, void> = {
-    async next(): Promise<IteratorResult<SDKMessage>> {
-      if (queue.length > 0) {
-        const value = queue.shift()!;
-        emitted.push(value);
-        return { value, done: false };
-      }
-      if (closed) return { value: undefined, done: true };
-      return new Promise<IteratorResult<SDKMessage>>((resolve) => {
-        resolveNext = resolve;
-      });
-    },
-    async return() {
-      closed = true;
-      return { value: undefined, done: true };
-    },
-    async throw(err) {
-      closed = true;
-      throw err;
-    },
-    async [Symbol.asyncDispose]() {
-      closed = true;
-    },
-    [Symbol.asyncIterator]() {
-      return iter;
-    },
-  };
-
-  function emit(msg: SDKMessage): void {
-    if (resolveNext) {
-      const r = resolveNext;
-      resolveNext = null;
-      emitted.push(msg);
-      r({ value: msg, done: false });
-    } else {
-      queue.push(msg);
-    }
-  }
-
-  function finish(): void {
-    if (resolveNext) {
-      const r = resolveNext;
-      resolveNext = null;
-      r({ value: undefined, done: true });
-    }
-    closed = true;
-  }
-
-  const q: Mutable<Partial<Query>> = {
-    ...(iter as unknown as Query),
-    close: () => {
-      closeSpy();
-      finish();
-    },
-    interrupt: vi.fn(async () => {}),
-    setPermissionMode: vi.fn(async () => {}),
-    setModel: vi.fn(async () => {}),
-    setMaxThinkingTokens: vi.fn(async () => {}),
-    applyFlagSettings: vi.fn(async () => {}),
-    // biome-ignore lint/suspicious/noExplicitAny: test stub
-    initializationResult: vi.fn(async () => ({}) as any),
-    supportedCommands: vi.fn(async () => []),
-    supportedModels: vi.fn(async () => []),
-    streamInput: vi.fn(async () => {}),
-    stopTask: vi.fn(async () => {}),
-  };
-
-  return {
-    query: q as Query,
-    emit,
-    finish,
-    closeSpy,
-    emitted,
-    isClosed: () => closed,
-  };
-}
-
-function makeEvents(): DispatchEvents & {
-  _ended: WorkflowEnd[];
-  _tools: Array<{ name: string; input: Record<string, unknown> }>;
-} {
-  const ended: WorkflowEnd[] = [];
-  const tools: Array<{ name: string; input: Record<string, unknown> }> = [];
-  return {
-    onText: () => {},
-    onToolUse: (b) => tools.push(b),
-    onWorkflowDetected: () => {},
-    onWorkflowEnded: (e) => ended.push(e),
-    onResult: () => {},
-    _ended: ended,
-    _tools: tools,
-  };
-}
-
-async function flushMicrotasks(count = 8): Promise<void> {
-  for (let i = 0; i < count; i++) await Promise.resolve();
 }
 
 describe("consumeStream — tool_use_result resets runaway timer (Bug 1: PDF mid-Read idle)", () => {

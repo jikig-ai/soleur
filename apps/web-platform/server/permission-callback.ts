@@ -49,6 +49,7 @@ import {
   deriveBashCommandPrefix,
 } from "./permission-callback-bash-batch";
 import { warnSilentFallback } from "./observability";
+import { redactCommandForDisplay } from "@/lib/safety/redaction-allowlist";
 
 const log = createChildLogger("permission");
 
@@ -132,7 +133,36 @@ export interface CanUseToolDeps {
     signal: AbortSignal,
     timeoutMs: number | undefined,
     options: string[],
+    /**
+     * P1 — gate kind. The first-run disclosure HOLD passes
+     * `"autonomous_disclosure"` so the cc-dispatcher registers the gate under
+     * that kind; the matching `autonomous_disclosure_response` is then the ONLY
+     * frame that can release it. Omitted/`"review"` for every normal gate. A
+     * cross-kind response frame is a no-op (see `resolveCcBashGate`).
+     */
+    gateKind?: "review" | "autonomous_disclosure",
   ) => Promise<string>;
+  /**
+   * feat-bash-autonomous-default-on — defense-in-depth consent re-check. The
+   * disclosure-hold path calls this AFTER the gate resolves "proceed" to verify
+   * the per-workspace ack was actually persisted before `allow()`. If the ack
+   * is still null (e.g. a `review_gate_response` somehow released the gate
+   * without writing the ack, or a transient ack-write fault), the command is
+   * re-held/denied rather than allowed. Resolves the ISO ack timestamp or null.
+   * Optional: when unwired (legacy runner / tests that don't exercise the hold)
+   * the disclosure path is unreachable anyway (`bashAutonomous` false).
+   */
+  verifyAutonomousAck?: () => Promise<string | null>;
+  /**
+   * P1 — stale in-session ack snapshot fix. `autonomousAckAt` is frozen at
+   * cold-start. After the owner acks the disclosure mid-dispatch, nothing
+   * mutates that frozen value, so command #2 in the SAME conversation would
+   * re-hold. When wired, this getter returns the LIVE in-session ack posture
+   * (epoch ms | null) — flipped to non-null by the ws-handler on a successful
+   * ack-release. The Bash branch consults this BEFORE the snapshot so a
+   * post-ack command is friction-free. Unwired ⇒ falls back to the snapshot.
+   */
+  resolveAckPosture?: () => number | null;
   sendToClient: (userId: string, payload: WSMessage) => boolean;
   notifyOfflineUser: (
     userId: string,
@@ -163,6 +193,24 @@ export interface CanUseToolDeps {
    * `bashApprovalCache`. Default-deny: a missing dep is non-autonomous.
    */
   bashAutonomous?: boolean;
+  /**
+   * feat-bash-autonomous-default-on — per-workspace first-run consent ack
+   * timestamp (epoch ms) or `null`/`undefined` = NOT yet acked. Resolved by
+   * `resolveAutonomousAck` (fail-closed null = HOLD). When `bashAutonomous` is
+   * true but this is null AND the caller is the workspace owner, the FIRST
+   * non-blocked Bash command is HELD behind a one-time disclosure ack instead
+   * of auto-running. After the owner acks (the held gate resolves) the command
+   * proceeds and all subsequent auto-runs are friction-free.
+   */
+  autonomousAckAt?: number | null;
+  /**
+   * feat-bash-autonomous-default-on — whether the caller owns the active
+   * workspace. The soft-gate disclosure ack is an ownership-grade decision
+   * (mirrors 097's owner-only write). A non-owner hitting the first auto-run on
+   * an un-acked workspace falls through to the review-gate (treated as
+   * not-autonomous) rather than being shown an ack button they cannot use.
+   */
+  isOwner?: boolean;
 }
 
 export interface CanUseToolContext {
@@ -403,22 +451,282 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
       // blocklist remains authoritative: sudo/curl/wget/nc/sh -c/eval/
       // base64 -d//dev/tcp were already denied above and never reach here.
       if (deps.bashAutonomous) {
-        log.info(
-          {
-            sec: true,
-            tool: toolName,
-            decision: "autonomous-bypass",
-            repo: `${ctx.repoOwner}/${ctx.repoName}`,
-          },
-          "Bash command auto-approved via workspace autonomous toggle",
-        );
-        logPermissionDecision(
-          "canUseTool-bash",
-          toolName,
-          "allow",
-          "autonomous-bypass",
-        );
-        return allow(toolInput);
+        // feat-bash-autonomous-default-on — FIRST-RUN CONSENT SOFT-GATE.
+        // A default-ON workspace whose owner has NOT yet acked the disclosure
+        // must HOLD the first non-blocked command (not silently auto-run it).
+        // Owner only: a non-owner on an un-acked autonomous workspace falls
+        // through to the review-gate below (treat as not-autonomous — no ack
+        // button they can't use). The blocklist already ran above, so this
+        // hold only ever fires for a command that survived the denylist.
+        // P1 — consult the LIVE in-session ack posture first (flipped non-null
+        // by the ws-handler on a successful ack-release) so command #2 after an
+        // ack does not re-hold on the frozen cold-start snapshot. Fall back to
+        // the snapshot when the getter is unwired.
+        const livePosture = deps.resolveAckPosture
+          ? deps.resolveAckPosture()
+          : deps.autonomousAckAt;
+        const unAcked = livePosture == null;
+        if (unAcked && deps.isOwner) {
+          const gateId = randomUUID();
+          log.info(
+            {
+              sec: true,
+              tool: toolName,
+              decision: "autonomous-disclosure-hold",
+              repo: `${ctx.repoOwner}/${ctx.repoName}`,
+            },
+            "Bash command HELD for first-run autonomous disclosure ack",
+          );
+          // Decision-log enum is binary (allow|deny); a HOLD is logged as a
+          // (provisional) deny until the owner acks. The structured `log.info`
+          // line above carries the `autonomous-disclosure-hold` decision tag
+          // for the liveness grep.
+          logPermissionDecision(
+            "canUseTool-bash",
+            toolName,
+            "deny",
+            "autonomous-disclosure-hold",
+          );
+          // Emit the disclosure frame (mirrors the review_gate emit). For a
+          // default-ON workspace this is the single "Got it" ack surface;
+          // `existingWorkspace` is reserved for the stored-`false` opt-out path
+          // which fires through the review-gate branch (bashAutonomous false).
+          deps.sendToClient(ctx.userId, {
+            type: "autonomous_disclosure",
+            gateId,
+            existingWorkspace: false,
+          });
+          await deps.updateConversationStatus(
+            ctx.conversationId,
+            "waiting_for_user",
+          );
+          // Await the owner's ack via the same gate bridge the review-gate uses
+          // (registered in `_ccBashGates`; resolved by the
+          // `autonomous_disclosure_response` ws-handler case). The selection
+          // distinguishes "Got it" / "Keep autonomous on" (proceed) from
+          // "Ask me each time" (decline this run).
+          const selection = await deps.abortableReviewGate(
+            ctx.session,
+            gateId,
+            options.signal,
+            undefined,
+            ["Got it"],
+            // P1 — register the HOLD under the autonomous_disclosure kind so a
+            // forged/cross `review_gate_response` cannot release it; only the
+            // owner-checked `autonomous_disclosure_response` (which writes the
+            // ack first) can.
+            "autonomous_disclosure",
+          );
+          await deps.updateConversationStatus(ctx.conversationId, "active");
+
+          if (selection === "Ask me each time") {
+            logPermissionDecision(
+              "canUseTool-bash",
+              toolName,
+              "deny",
+              "autonomous-disclosure-declined",
+            );
+            return {
+              behavior: "deny" as const,
+              message: "User chose to approve each command; this run was held.",
+            };
+          }
+          // P1 defense-in-depth — the gate resolved "proceed", but consent is
+          // only honored when the ack was ACTUALLY persisted. Re-read it before
+          // allowing: a release that did not write the ack (cross-frame attempt
+          // that slipped the kind check, or a transient ack-write fault) must
+          // re-HOLD/deny rather than auto-run the command without recorded
+          // consent. Fail-closed: a null/throwing re-check denies.
+          if (deps.verifyAutonomousAck) {
+            let persistedAck: string | null = null;
+            try {
+              persistedAck = await deps.verifyAutonomousAck();
+            } catch (err) {
+              warnSilentFallback(err, {
+                feature: "cc-permissions",
+                op: "autonomous-ack-verify",
+              });
+              persistedAck = null;
+            }
+            if (persistedAck == null) {
+              log.warn(
+                {
+                  sec: true,
+                  tool: toolName,
+                  decision: "autonomous-disclosure-ack-unverified",
+                  repo: `${ctx.repoOwner}/${ctx.repoName}`,
+                },
+                "Disclosure gate released but ack not persisted; re-holding (deny)",
+              );
+              logPermissionDecision(
+                "canUseTool-bash",
+                toolName,
+                "deny",
+                "autonomous-disclosure-ack-unverified",
+              );
+              return {
+                behavior: "deny" as const,
+                message:
+                  "Consent acknowledgement was not recorded; the command was held. Please try again.",
+              };
+            }
+          }
+          log.info(
+            {
+              sec: true,
+              tool: toolName,
+              decision: "autonomous-disclosure-released",
+              repo: `${ctx.repoOwner}/${ctx.repoName}`,
+            },
+            "First-run autonomous disclosure acked; releasing held command",
+          );
+          logPermissionDecision(
+            "canUseTool-bash",
+            toolName,
+            "allow",
+            "autonomous-disclosure-released",
+          );
+          return allow(toolInput);
+        }
+        if (unAcked && !deps.isOwner) {
+          // Non-owner on an un-acked autonomous workspace: fall through to the
+          // review-gate below (do NOT auto-bypass, do NOT surface an ack the
+          // member can't grant).
+        } else {
+          log.info(
+            {
+              sec: true,
+              tool: toolName,
+              decision: "autonomous-bypass",
+              repo: `${ctx.repoOwner}/${ctx.repoName}`,
+            },
+            "Bash command auto-approved via workspace autonomous toggle",
+          );
+          logPermissionDecision(
+            "canUseTool-bash",
+            toolName,
+            "allow",
+            "autonomous-bypass",
+          );
+          return allow(toolInput);
+        }
+      }
+
+      // feat-bash-autonomous-default-on — EXISTING-workspace opt-out (P3 wire).
+      // A pre-consent-model workspace stored `bash_autonomous=false` with NO ack:
+      // the owner has never seen the autonomous disclosure. On their FIRST
+      // non-blocked command, HOLD it once and surface the opt-out
+      // (`existingWorkspace:true`):
+      //   - "Keep autonomous on" ⇒ the ws-handler flips the toggle ON + writes
+      //     the ack; this run proceeds (allow, after the ack re-check).
+      //   - "Ask me each time"   ⇒ the ws-handler writes the ack (leaves the
+      //     toggle off); this run FALLS THROUGH to the normal review-gate below
+      //     (manual approve), and future commands stay on the review-gate.
+      // Owner-only: a non-owner falls straight to the review-gate (no ack button
+      // they can't grant). Reuses the kind-tagged gate registry + the ack
+      // re-check. The blocklist already ran above, so this only holds a command
+      // that survived the denylist.
+      {
+        const livePosture = deps.resolveAckPosture
+          ? deps.resolveAckPosture()
+          : deps.autonomousAckAt;
+        if (
+          !deps.bashAutonomous &&
+          livePosture == null &&
+          deps.isOwner
+        ) {
+          const gateId = randomUUID();
+          log.info(
+            {
+              sec: true,
+              tool: toolName,
+              decision: "autonomous-disclosure-hold",
+              repo: `${ctx.repoOwner}/${ctx.repoName}`,
+            },
+            "Bash command HELD for existing-workspace autonomous opt-out",
+          );
+          logPermissionDecision(
+            "canUseTool-bash",
+            toolName,
+            "deny",
+            "autonomous-disclosure-hold",
+          );
+          deps.sendToClient(ctx.userId, {
+            type: "autonomous_disclosure",
+            gateId,
+            existingWorkspace: true,
+          });
+          await deps.updateConversationStatus(
+            ctx.conversationId,
+            "waiting_for_user",
+          );
+          const selection = await deps.abortableReviewGate(
+            ctx.session,
+            gateId,
+            options.signal,
+            undefined,
+            ["Keep autonomous on", "Ask me each time"],
+            "autonomous_disclosure",
+          );
+          await deps.updateConversationStatus(ctx.conversationId, "active");
+
+          if (selection === "Keep autonomous on") {
+            // The ws-handler flipped the toggle + wrote the ack. Verify the ack
+            // actually persisted (defense-in-depth) before allowing this run.
+            if (deps.verifyAutonomousAck) {
+              let persistedAck: string | null = null;
+              try {
+                persistedAck = await deps.verifyAutonomousAck();
+              } catch (err) {
+                warnSilentFallback(err, {
+                  feature: "cc-permissions",
+                  op: "autonomous-ack-verify-existing",
+                });
+                persistedAck = null;
+              }
+              if (persistedAck == null) {
+                logPermissionDecision(
+                  "canUseTool-bash",
+                  toolName,
+                  "deny",
+                  "autonomous-disclosure-ack-unverified",
+                );
+                return {
+                  behavior: "deny" as const,
+                  message:
+                    "Consent acknowledgement was not recorded; the command was held. Please try again.",
+                };
+              }
+            }
+            log.info(
+              {
+                sec: true,
+                tool: toolName,
+                decision: "autonomous-disclosure-released",
+                repo: `${ctx.repoOwner}/${ctx.repoName}`,
+              },
+              "Existing-workspace opt-out: kept autonomous on; releasing command",
+            );
+            logPermissionDecision(
+              "canUseTool-bash",
+              toolName,
+              "allow",
+              "autonomous-disclosure-released",
+            );
+            return allow(toolInput);
+          }
+          // "Ask me each time" (or any non-keep selection): the ack is written
+          // server-side; fall through to the review-gate below for THIS run.
+          log.info(
+            {
+              sec: true,
+              tool: toolName,
+              decision: "autonomous-disclosure-opt-out",
+              repo: `${ctx.repoOwner}/${ctx.repoName}`,
+            },
+            "Existing-workspace opt-out: ask-each-time; falling through to review-gate",
+          );
+        }
       }
 
       // #2921 batched-approval cache: pre-gate check (synchronous Map
@@ -456,7 +764,17 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           : ["Approve", "Reject"];
 
       const gateId = randomUUID();
-      const preview = command.length > 200 ? `${command.slice(0, 200)}…` : command;
+      // FIX 1 (P1) — redact BEFORE building the preview. The raw command can
+      // carry `ghs_…` / `GH_TOKEN=<value>` / `Authorization: …` verbatim; the
+      // shared `question` flows to BOTH sendToClient(review_gate) AND
+      // notifyOfflineUser, so an un-redacted preview leaks the credential on
+      // both sinks (the screenshot leak). redactCommandForDisplay is the same
+      // emit-boundary gate used by the command_stream path (TR4).
+      const redactedCommand = redactCommandForDisplay(command);
+      const preview =
+        redactedCommand.length > 200
+          ? `${redactedCommand.slice(0, 200)}…`
+          : redactedCommand;
       const question = `Run Bash command?\n\n\`${preview}\``;
 
       const gateDelivered = deps.sendToClient(ctx.userId, {

@@ -47,8 +47,39 @@ interface ChatMessageBase {
   retrying?: boolean;
 }
 
+/**
+ * feat-concierge-stream-commands — one inline terminal block per Concierge
+ * Bash command. The reducer's `command_stream` case APPENDS these onto the
+ * active cc_router text bubble (output APPENDS to the matching block, the
+ * command does NOT replace bubble text). `command`/`output` arrive
+ * already-redacted at the server emit boundary; `message-bubble.tsx`
+ * re-redacts at render as the belt-and-suspenders gate. `truncated` marks
+ * a block whose output hit the per-command cap (D4).
+ */
+export interface CommandBlock {
+  /** Redacted command text (set on `phase:"start"`). */
+  command: string;
+  /** Redacted, byte-capped accumulated stdout/stderr. */
+  output: string;
+  /** True once any output chunk reported the per-command cap was hit. */
+  truncated?: boolean;
+  /**
+   * FIX 2 — SDK tool_use id stored on the block at `phase:"start"`. Lets the
+   * reducer route `output` to the originating block when one turn runs two
+   * concurrent Bash tool-uses. Absent on legacy blocks (last-block append).
+   */
+  toolUseId?: string;
+}
+
 interface ChatTextMessage extends ChatMessageBase {
   type: "text";
+  /**
+   * feat-concierge-stream-commands — inline streamed-terminal blocks for
+   * Concierge Bash tool-uses. Append-only; `undefined`/empty on bubbles
+   * that ran no commands so existing fixtures + non-cc bubbles are
+   * unaffected.
+   */
+  commandBlocks?: CommandBlock[];
   /** #3448 PR2: persistence-tier discriminator surfaced by the history
    *  fetch (`status` column added in migration 040). `"aborted"` rows
    *  trigger the abort-marker render path in `message-bubble.tsx`.
@@ -89,6 +120,19 @@ interface ChatGateMessage extends ChatMessageBase {
   resolved?: boolean;
   selectedOption?: string;
   gateError?: string;
+}
+
+/** feat-bash-autonomous-default-on — first-run consent soft-gate card. A held
+ *  Bash command awaiting the owner's one-time autonomous-mode acknowledgement.
+ *  Rendered as the AutonomousDisclosureBanner; resolved via
+ *  `autonomous_disclosure_response`. `existingWorkspace` selects the opt-out
+ *  (Keep on / Ask each) vs. the default-ON "Got it" surface. */
+interface ChatAutonomousDisclosureMessage extends ChatMessageBase {
+  type: "autonomous_disclosure";
+  gateId: string;
+  existingWorkspace: boolean;
+  resolved?: boolean;
+  selectedOption?: string;
 }
 
 /** Stage 4 (#2886): subagent group bubble — parent leader's assessment +
@@ -155,6 +199,7 @@ export interface ChatContextResetMessage extends ChatMessageBase {
 export type ChatMessage =
   | ChatTextMessage
   | ChatGateMessage
+  | ChatAutonomousDisclosureMessage
   | ChatSubagentGroupMessage
   | ChatInteractivePromptMessage
   | ChatWorkflowEndedMessage
@@ -199,6 +244,12 @@ export type SpawnIndex = Map<
 /** Maximum number of `tool_use_chip` messages to retain per leader before
  *  the oldest is evicted. Plan §3 risk: "chip cap of 5 latest". */
 export const TOOL_USE_CHIP_CAP_PER_LEADER = 5;
+
+/** FIX 3 — cap on `commandBlocks` retained per bubble. A long autonomous turn
+ *  can emit hundreds of Bash tool-uses; unbounded accumulation balloons the
+ *  bubble's render cost and memory. When exceeded, the oldest blocks are
+ *  dropped and a single leading marker block records the truncation. */
+export const MAX_COMMAND_BLOCKS = 100;
 
 /** Snapshot of all reducer-tracked state. The hook layer holds
  *  `messages`, `activeStreams`, `workflow`, and `spawnIndex` together so
@@ -247,8 +298,10 @@ export type StreamEvent = Extract<
   | { type: "stream" }
   | { type: "stream_end" }
   | { type: "tool_use" }
+  | { type: "command_stream" }
   | { type: "tool_progress" }
   | { type: "review_gate" }
+  | { type: "autonomous_disclosure" }
   | { type: "subagent_spawn" }
   | { type: "subagent_complete" }
   | { type: "workflow_started" }
@@ -588,6 +641,41 @@ export function applyStreamEvent(
       };
     }
 
+    case "autonomous_disclosure": {
+      // feat-bash-autonomous-default-on — first-run consent soft-gate. Mirrors
+      // the `review_gate` arm: transition any mid-turn bubble to "done" before
+      // clearing activeStreams (avoid the stuck "Working" badge, #2843), then
+      // append the disclosure card. The held Bash command does not proceed
+      // until the owner acks via `autonomous_disclosure_response`.
+      const updated = prev.slice();
+      for (const idx of activeStreams.values()) {
+        if (idx >= updated.length) continue;
+        const m = updated[idx];
+        if (
+          m.state === "thinking" ||
+          m.state === "tool_use" ||
+          m.state === "streaming"
+        ) {
+          updated[idx] = { ...m, state: "done" };
+        }
+      }
+      const disclosureMsg: ChatMessage = {
+        id: `autonomous-disclosure-${event.gateId}`,
+        role: "assistant",
+        content: "",
+        type: "autonomous_disclosure",
+        gateId: event.gateId,
+        existingWorkspace: event.existingWorkspace,
+      };
+      return {
+        messages: [...updated, disclosureMsg],
+        activeStreams: new Map(),
+        workflow: priorWorkflow,
+        spawnIndex: priorSpawnIndex,
+        timerAction: { type: "clear_all" },
+      };
+    }
+
     // -----------------------------------------------------------------
     // Stage 4 (#2886) — `/soleur:go` event variants now produce real
     // ChatMessage variants instead of the Stage 3 inert pass-throughs.
@@ -791,6 +879,110 @@ export function applyStreamEvent(
         activeStreams,
         workflow: priorWorkflow,
         spawnIndex: priorSpawnIndex,
+      };
+    }
+
+    case "command_stream": {
+      // feat-concierge-stream-commands — APPEND a Concierge Bash command +
+      // its (already-redacted, byte-capped) output into the active cc_router
+      // bubble as an inline terminal block. Mirrors the `stream` cc_router
+      // special-casing: locate the bubble via `activeStreams`, else create
+      // one (the SDK can emit a Bash tool-use before any text streams). The
+      // command text does NOT replace the bubble's prose `content` — the two
+      // surfaces coexist (output APPENDS to its block; text uses REPLACE in
+      // the `stream` case). `start` pushes a new block; `output` appends to
+      // the latest block; `end` is a no-op terminal marker.
+      //
+      // Chip-removal parity with `stream`/`stream_end`: a command stream is
+      // also "first activity reached the user", so drop any lingering chip.
+      let working = prev;
+      if (event.leaderId === "cc_router" || event.leaderId === "system") {
+        const filtered = prev.filter(
+          (m) => !(m.type === "tool_use_chip" && m.leaderId === event.leaderId),
+        );
+        if (filtered.length !== prev.length) working = filtered;
+      }
+
+      const applyToBlocks = (existing: CommandBlock[] | undefined): CommandBlock[] => {
+        let blocks = existing ? [...existing] : [];
+        if (event.phase === "start") {
+          blocks.push({
+            command: event.command ?? "",
+            output: "",
+            toolUseId: event.toolUseId,
+          });
+          // FIX 3 — cap accumulation. Drop the oldest blocks and keep a single
+          // leading marker so the user sees that earlier commands were elided.
+          if (blocks.length > MAX_COMMAND_BLOCKS) {
+            const kept = blocks.slice(blocks.length - (MAX_COMMAND_BLOCKS - 1));
+            blocks = [
+              { command: "[… earlier commands truncated]", output: "" },
+              ...kept,
+            ];
+          }
+        } else if (event.phase === "output") {
+          // FIX 2 — route to the originating block by toolUseId when present
+          // (concurrent Bash). Mirrors the subagent_complete id-lookup
+          // precedent. Fall back to the last block when absent (back-compat)
+          // or when the id is unknown (out-of-order/missed start).
+          let targetIdx = blocks.length - 1;
+          if (event.toolUseId !== undefined) {
+            const byId = blocks.findIndex(
+              (b) => b.toolUseId === event.toolUseId,
+            );
+            if (byId >= 0) targetIdx = byId;
+          }
+          if (targetIdx < 0) {
+            // Output before any start (missed `start`): synthesize a block so
+            // the chunk is not dropped. command unknown → empty string.
+            blocks.push({ command: "", output: "", toolUseId: event.toolUseId });
+            targetIdx = blocks.length - 1;
+          }
+          const target = blocks[targetIdx];
+          blocks[targetIdx] = {
+            ...target,
+            output: target.output + (event.output ?? ""),
+            truncated:
+              target.truncated || event.truncated ? true : target.truncated,
+          };
+        }
+        // phase === "end": terminal marker, no block mutation.
+        return blocks;
+      };
+
+      const idx = activeStreams.get(event.leaderId);
+      if (idx !== undefined && idx < working.length && working[idx].type === "text") {
+        const updated = [...working];
+        const target = updated[idx] as ChatTextMessage;
+        updated[idx] = { ...target, commandBlocks: applyToBlocks(target.commandBlocks) };
+        return {
+          messages: updated,
+          activeStreams,
+          workflow: priorWorkflow,
+          spawnIndex: priorSpawnIndex,
+          timerAction: { type: "reset", leaderId: event.leaderId },
+        };
+      }
+
+      // No active text bubble for this leader — create one carrying the block.
+      const newMsg: ChatTextMessage = {
+        id: `stream-${event.leaderId}-${crypto.randomUUID()}`,
+        role: "assistant",
+        content: "",
+        type: "text",
+        leaderId: event.leaderId,
+        state: "streaming",
+        toolsUsed: [],
+        commandBlocks: applyToBlocks(undefined),
+      };
+      const nextStreams = new Map(activeStreams);
+      nextStreams.set(event.leaderId, working.length);
+      return {
+        messages: [...working, newMsg],
+        activeStreams: nextStreams,
+        workflow: priorWorkflow,
+        spawnIndex: priorSpawnIndex,
+        timerAction: { type: "reset", leaderId: event.leaderId },
       };
     }
 

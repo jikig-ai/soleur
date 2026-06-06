@@ -26,6 +26,8 @@ function assertExhaustive(msg: ChatMessage): string {
       return msg.content;
     case "review_gate":
       return msg.gateId;
+    case "autonomous_disclosure":
+      return msg.gateId;
     case "subagent_group":
       return msg.parentSpawnId;
     case "interactive_prompt":

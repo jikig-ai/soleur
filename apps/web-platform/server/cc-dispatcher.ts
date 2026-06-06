@@ -68,10 +68,12 @@ import {
 } from "./conversation-routing";
 import {
   reportSilentFallback,
+  warnSilentFallback,
   mirrorWithDebounce,
   mirrorP0Deduped,
   __resetMirrorDebounceForTests,
 } from "./observability";
+import { redactCommandForDisplay } from "../lib/safety/redaction-allowlist";
 import { CC_ROUTER_TIER3_DENYLIST } from "./tool-tiers";
 import { updateConversationFor } from "./conversation-writer";
 import {
@@ -84,7 +86,11 @@ import {
 // per-workspace resolver (ADR-044) — NOT the soleur-monorepo-hardcoded
 // `mintInstallationToken` from the crons. Per hr-github-app-auth-not-pat.
 import { resolveInstallationId } from "./resolve-installation-id";
-import { generateInstallationToken } from "./github-app";
+import {
+  generateInstallationToken,
+  findRepoOwnerInstallationForUser,
+  getInstallationAccount,
+} from "./github-app";
 // Session-start self-heal: if the active workspace has a connected repo but no
 // matching clone on disk, clone/repair it so the Concierge has a real git repo
 // to work in (fixes the "No git repository found" blocker). Generic per-user.
@@ -92,6 +98,11 @@ import { getCurrentRepoUrl } from "./current-repo-url";
 import { ensureWorkspaceRepoCloned } from "./ensure-workspace-repo";
 // Issue B part 2 — per-workspace autonomous Bash toggle (fail-closed read).
 import { resolveBashAutonomous } from "./resolve-bash-autonomous";
+// feat-bash-autonomous-default-on — first-run consent soft-gate inputs:
+// the ack timestamp (fail-closed null = HOLD) + workspace-ownership (fail-closed
+// not-owner = review-gate fallback).
+import { resolveAutonomousAck } from "./resolve-autonomous-ack";
+import { resolveIsWorkspaceOwner } from "./resolve-workspace-owner";
 // PR-C §2.11 (#3244): BYOK lease wrap on realSdkQueryFactory — the
 // plaintext API key fetch surface moves from `getUserApiKey(userId)`
 // (which returns a bare string) to `lease.getApiKey()` inside
@@ -238,11 +249,109 @@ const CC_REGISTERED_PLATFORM_TOOL_NAMES: readonly string[] = [];
 // repoUrl (mirrors agent-runner.ts's GITHUB_NAME_RE).
 const CC_GITHUB_NAME_RE = /^[a-zA-Z0-9._-]+$/;
 
+// feat-one-shot-concierge-gh-403 — kills the model's FALSE-CONFIDENCE 403
+// diagnosis. The Concierge runs `gh` inside the sandbox and, seeing a bare 403,
+// used to invent "the installation lacks issues:write — file via the UI" and
+// tell the user to re-consent. That is wrong: the org grant already exists; a
+// 403 is almost always a wrong-installation token, which the platform heals
+// server-side. This directive forbids the model from guessing a cause or
+// dispensing GitHub-App-settings advice. Appended unconditionally to the
+// Concierge system prompt (AC5 greps for the sentinel below).
+const GH_403_PROMPT_DIRECTIVE =
+  "## GitHub `gh` errors\n" +
+  "If a `gh` command returns a 403 (Forbidden) or similar auth error, report " +
+  "the LITERAL command output and HTTP status to the user verbatim. Do NOT " +
+  "speculate about which permission or scope is missing, and do NOT tell the " +
+  "user to change GitHub App permissions, approve new permissions, or " +
+  "re-consent — the Soleur platform diagnoses and repairs installation/" +
+  "permission issues server-side and will retry with the correct installation " +
+  "automatically. The one sanctioned next step you may offer: if the 403 " +
+  "persists across retries, ask the user to confirm the Soleur GitHub App is " +
+  "installed on the repository's owner account. Beyond that, state only what " +
+  "the error literally says.";
+
 // Max length cap for `block.name` before passing to Sentry/pino. Defense-in-
 // depth against future model regressions that might emit pathologically long
 // tool names; the SDK validation gate constrains names to the registered
 // catalog today, so this is bounded but not impossible.
 const MAX_TOOL_NAME_LEN_FOR_LOG = 128;
+
+// feat-concierge-stream-commands — `command_stream` output caps (D4). The
+// per-chunk cap bounds a single oversized `tool_use_result` (e.g. a `cat`
+// of a multi-MB file) before it ever hits the WS frame; the per-command
+// total cap bounds the cumulative output across however many result blocks
+// one command produces. When the total cap is hit, `TRUNCATION_MARKER` is
+// appended and `truncated:true` rides the emit so the bubble shows the
+// `[… truncated]` affordance. Byte-measured (not char-measured) to bound
+// the actual wire payload regardless of multi-byte content.
+export const COMMAND_STREAM_CHUNK_CAP_BYTES = 4096;
+export const COMMAND_STREAM_TOTAL_CAP_BYTES = 16384;
+// FIX 4 — pre-cap the raw command at the start emit (mirrors the output path)
+// so the wire payload + redaction back-tracking are bounded regardless of an
+// adversarially long command string. Matches `commandStreamSchema.command.max`.
+export const COMMAND_STREAM_COMMAND_CAP_BYTES = 16384;
+export const COMMAND_STREAM_TRUNCATION_MARKER = "\n[… truncated]";
+
+/**
+ * feat-concierge-stream-commands — byte-cap a UTF-8 string at `capBytes`,
+ * never splitting a multi-byte code point. Returns the (possibly shorter)
+ * string + whether it was truncated. Used to bound a single output chunk
+ * before redaction (redaction can only shrink the string, so capping the
+ * raw input keeps the regex back-tracking bounded too).
+ */
+export function capUtf8Bytes(s: string, capBytes: number): { text: string; truncated: boolean } {
+  const buf = Buffer.from(s, "utf8");
+  if (buf.length <= capBytes) return { text: s, truncated: false };
+  // Walk back to a code-point boundary: UTF-8 continuation bytes are
+  // 0b10xxxxxx (0x80–0xBF). Trim them off the cut edge.
+  let end = capBytes;
+  while (end > 0 && (buf[end] & 0xc0) === 0x80) end--;
+  return { text: buf.subarray(0, end).toString("utf8"), truncated: true };
+}
+
+// Redaction-fallthrough probe markers (the four secret shapes the extended
+// allowlist covers). If a redacted command/output STILL contains one of
+// these substrings, redaction silently failed — a P0 credential-leak class
+// surfaced to Sentry via `warnSilentFallback`
+// (cq-silent-fallback-must-mirror-to-sentry). Synthesized prefixes only.
+const REDACTION_FALLTHROUGH_PROBES = [
+  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_-]{20,}/,
+  /\bgithub_pat_[A-Za-z0-9]{22}_/,
+  /Authorization\s*:\s*(?:Bearer|Basic|token)\s+\S/i,
+  // Finding 3 — connection-string userinfo (`scheme://user:password@host`).
+  // A surviving `user:pass@` after redaction means the new userinfo pattern
+  // missed; page Sentry instead of silently leaking the password.
+  /\b[a-z][a-z0-9+.\-]*:\/\/[^:@\s/]+:[^@\s/]+@/i,
+];
+
+/**
+ * Belt-and-suspenders probe: after redaction, scan for any surviving secret
+ * shape and mirror to Sentry (warn-tier, P0 credential class). Returns the
+ * input unchanged — the probe is observational, the redaction is the gate.
+ */
+function probeRedactionFallthrough(
+  redacted: string,
+  ctx: { userId: string; conversationId: string; field: "command" | "output" },
+): string {
+  for (const probe of REDACTION_FALLTHROUGH_PROBES) {
+    if (probe.test(redacted)) {
+      warnSilentFallback(
+        new Error("command-stream-redact-fallthrough"),
+        {
+          feature: "cc-dispatcher",
+          op: "command-stream-redact-fallthrough",
+          extra: {
+            userId: ctx.userId,
+            conversationId: ctx.conversationId,
+            field: ctx.field,
+          },
+        },
+      );
+      break;
+    }
+  }
+  return redacted;
+}
 
 /**
  * Sanitize a tool name for log emission (#2909 FR2): strip control chars +
@@ -775,14 +884,83 @@ export function getCcStartSessionRateLimiter(): StartSessionRateLimiter {
 // Cross-user lookup MUST silently deny.
 // ---------------------------------------------------------------------------
 
+/**
+ * Gate kind discriminator (P1 — consent-gate bypass via frame substitution).
+ * The held first-run disclosure hold and the normal Bash review-gate share this
+ * ONE registry keyed only by `gateId`. Without a kind discriminator, a
+ * `review_gate_response` frame carrying a HELD disclosure `gateId` would release
+ * the consent-gated command WITHOUT routing through the owner-checked
+ * `setAutonomousAck` path (no ack written, no disclosure honored). `resolveCcBashGate`
+ * refuses to resolve a gate whose `kind` ≠ the responder's `expectedKind`, so a
+ * cross-kind frame cannot release the gate.
+ */
+export type CcBashGateKind = "review" | "autonomous_disclosure";
+
 interface CcBashGateRecord {
   userId: string;
   conversationId: string;
   gateId: string;
   session: AgentSession;
+  kind: CcBashGateKind;
 }
 
 const _ccBashGates = new Map<string, CcBashGateRecord>();
+
+// ---------------------------------------------------------------------------
+// P1 — per-conversation in-session autonomous-ack posture registry.
+//
+// `autonomousAckAt` is resolved ONCE at cold-start and frozen into `ccDeps`.
+// After the owner acks the first-run disclosure mid-dispatch, nothing mutates
+// that frozen value, so the NEXT command in the same conversation would re-hold.
+// This registry exposes a mutable posture cell per (userId, conversationId):
+//   - `ccDeps.resolveAckPosture` reads it (the live posture, not the snapshot).
+//   - the ws-handler flips it non-null via `markConversationAcked` on a
+//     successful ack-release, so command #2 is friction-free.
+// Drained by `cleanupCcBashGatesForConversation` (conversation close/reap).
+// ---------------------------------------------------------------------------
+interface AutonomousAckPostureCell {
+  get: () => number | null;
+  set: (v: number | null) => void;
+}
+const _ccAutonomousAckPosture = new Map<string, AutonomousAckPostureCell>();
+
+function makeAckPostureKey(userId: string, conversationId: string): string {
+  return `${userId}:${conversationId}`;
+}
+
+/**
+ * Register the per-conversation mutable ack-posture cell. Called from the
+ * dispatch scope (per cold conversation). Idempotent overwrite — a warm-query
+ * re-dispatch re-seeds the cell from its own snapshot.
+ */
+export function registerAutonomousAckPosture(
+  userId: string,
+  conversationId: string,
+  cell: AutonomousAckPostureCell,
+): void {
+  _ccAutonomousAckPosture.set(makeAckPostureKey(userId, conversationId), cell);
+}
+
+/**
+ * P1 — flip the in-session ack posture to non-null after a successful ack write.
+ * Called by the ws-handler `autonomous_disclosure_response` case AFTER
+ * `setAutonomousAck` resolves (and BEFORE/around the gate drain) so any held
+ * (and any subsequent) command in the same conversation sees the workspace as
+ * acked and does not re-hold. `ackAtMs` is the persisted ack epoch ms (parsed
+ * from the RPC's returned timestamp; fail-closed to `Date.now()` when the
+ * server returned a non-finite value but the write succeeded). No-op when no
+ * cell is registered (e.g. the conversation already closed).
+ */
+export function markConversationAcked(
+  userId: string,
+  conversationId: string,
+  ackAtMs: number,
+): void {
+  const cell = _ccAutonomousAckPosture.get(
+    makeAckPostureKey(userId, conversationId),
+  );
+  cell?.set(ackAtMs);
+}
 
 function makeCcBashGateKey(
   userId: string,
@@ -803,6 +981,14 @@ export function registerCcBashGate(args: {
   conversationId: string;
   gateId: string;
   session: AgentSession;
+  /**
+   * P1 — gate kind. The first-run disclosure HOLD registers
+   * `"autonomous_disclosure"`; every other Bash review-gate registers
+   * `"review"` (the default). A response frame can only resolve a gate of the
+   * matching kind (`resolveCcBashGate`'s `expectedKind`), so a
+   * `review_gate_response` cannot release a held consent gate.
+   */
+  kind?: CcBashGateKind;
 }): void {
   const key = makeCcBashGateKey(args.userId, args.conversationId, args.gateId);
   _ccBashGates.set(key, {
@@ -810,6 +996,7 @@ export function registerCcBashGate(args: {
     conversationId: args.conversationId,
     gateId: args.gateId,
     session: args.session,
+    kind: args.kind ?? "review",
   });
 }
 
@@ -825,12 +1012,26 @@ export function resolveCcBashGate(args: {
   conversationId: string;
   gateId: string;
   selection: string;
+  /**
+   * P1 — the gate kind the RESPONDER is authorized to resolve. A
+   * `review_gate_response` passes `"review"` (the default); an
+   * `autonomous_disclosure_response` passes `"autonomous_disclosure"`. The
+   * resolve is a NO-OP (returns false, gate stays held) when the stored
+   * record's kind ≠ this — so a cross-frame response cannot release the gate.
+   */
+  expectedKind?: CcBashGateKind;
 }): boolean {
   const key = makeCcBashGateKey(args.userId, args.conversationId, args.gateId);
   const record = _ccBashGates.get(key);
   if (!record) return false;
   // R8: composite-key cross-user prompt collision — defense-in-depth.
   if (record.userId !== args.userId) return false;
+  // P1: kind discriminator — refuse to release a gate whose kind differs from
+  // the responder's expected kind. Defaults to "review" so legacy callers that
+  // predate the discriminator stay correct for the (dominant) review-gate path.
+  // A cross-kind response leaves the gate held (no resolver fired, no delete).
+  const expectedKind = args.expectedKind ?? "review";
+  if (record.kind !== expectedKind) return false;
   const entry = record.session.reviewGateResolvers.get(args.gateId);
   if (!entry) {
     _ccBashGates.delete(key);
@@ -853,6 +1054,39 @@ export function resolveCcBashGate(args: {
   record.session.reviewGateResolvers.delete(args.gateId);
   _ccBashGates.delete(key);
   return true;
+}
+
+/**
+ * P2 — multi-hold, single ack. Two (or more) Bash commands can be HELD behind
+ * the disclosure before the owner acks even once. Because the ack is
+ * WORKSPACE-level (not per-command), a single successful ack releases ALL held
+ * disclosure gates for that conversation, not just the clicked one. This resolves
+ * every `kind:"autonomous_disclosure"` gate for (userId, conversationId) with the
+ * owner's selection so each held command proceeds (combined with the in-session
+ * posture flip, none of them re-hold). Returns the count released. Review gates
+ * are untouched. Each resolve is single-use + composite-key scoped (R8).
+ */
+export function drainAutonomousDisclosureGates(args: {
+  userId: string;
+  conversationId: string;
+  selection: string;
+}): number {
+  const prefix = `${args.userId}:${args.conversationId}:`;
+  let released = 0;
+  for (const key of Array.from(_ccBashGates.keys())) {
+    if (!key.startsWith(prefix)) continue;
+    const record = _ccBashGates.get(key);
+    if (!record || record.kind !== "autonomous_disclosure") continue;
+    const ok = resolveCcBashGate({
+      userId: args.userId,
+      conversationId: args.conversationId,
+      gateId: record.gateId,
+      selection: args.selection,
+      expectedKind: "autonomous_disclosure",
+    });
+    if (ok) released += 1;
+  }
+  return released;
 }
 
 /**
@@ -890,6 +1124,9 @@ export function cleanupCcBashGatesForConversation(
   // defense-in-depth: the cache lifetime should never exceed the
   // conversation lifetime).
   getBashApprovalCache(userId, conversationId).revoke();
+  // P1 — drain the in-session ack-posture cell so it does not leak past the
+  // conversation (and a reused conversationId can't inherit a prior ack).
+  _ccAutonomousAckPosture.delete(makeAckPostureKey(userId, conversationId));
 }
 
 // ---------------------------------------------------------------------------
@@ -984,7 +1221,15 @@ export const realSdkQueryFactory: QueryFactory = async (
     // installationId joins the existing Promise.all (it keys only off
     // args.userId via resolveInstallationId → resolveCurrentWorkspaceId), so
     // the resolve does not add a sequential await to cold-start dispatch.
-    const [workspacePath, serviceTokens, installationId, bashAutonomous, repoUrl] =
+    const [
+      workspacePath,
+      serviceTokens,
+      installationId,
+      bashAutonomous,
+      autonomousAckAt,
+      isWorkspaceOwner,
+      repoUrl,
+    ] =
       await Promise.all([
         fetchUserWorkspacePath(args.userId),
         getUserServiceTokens(args.userId),
@@ -992,10 +1237,59 @@ export const realSdkQueryFactory: QueryFactory = async (
         // Issue B part 2 — fail-closed false; bypasses the Bash review-gate
         // when the active workspace owner enabled the autonomous toggle.
         resolveBashAutonomous(args.userId),
+        // feat-bash-autonomous-default-on — first-run consent ack (fail-closed
+        // null = HOLD). When bashAutonomous && ack==null && owner, the first
+        // non-blocked command is soft-gated behind the disclosure.
+        resolveAutonomousAck(args.userId),
+        // feat-bash-autonomous-default-on — ownership (fail-closed not-owner).
+        // A non-owner on an un-acked autonomous workspace falls through to the
+        // review-gate rather than seeing an ack they can't grant.
+        resolveIsWorkspaceOwner(args.userId),
         // Per-user connected repo (normalized, membership-checked). Drives the
         // session-start ensure-repo self-heal below. null = not connected.
         getCurrentRepoUrl(args.userId),
       ]);
+    // Normalize the ack to epoch-ms | null for the permission-callback deps
+    // (the wire/db value is an ISO timestamptz string). P2 — fail-CLOSED on an
+    // unparseable timestamp: `Date.parse` of garbage returns NaN, and the
+    // permission-callback's `livePosture == null` check is FALSE for NaN, so a
+    // malformed ack would be treated as ACKED and auto-run the first command
+    // with NO disclosure. Coerce a non-finite parse back to null (= HOLD).
+    const parsedAck =
+      autonomousAckAt != null ? Date.parse(autonomousAckAt) : null;
+    const autonomousAckAtMs =
+      parsedAck != null && Number.isFinite(parsedAck) ? parsedAck : null;
+    // P1 — mutable in-session ack posture cell. Seeded from the cold-start
+    // snapshot; flipped non-null by the ws-handler (via `markConversationAcked`)
+    // on a successful ack-release so command #2 in the same conversation does
+    // not re-hold. `resolveAckPosture` (ccDeps) reads THIS cell, not the frozen
+    // snapshot.
+    let autonomousAckPosture: number | null = autonomousAckAtMs;
+    registerAutonomousAckPosture(args.userId, args.conversationId, {
+      get: () => autonomousAckPosture,
+      set: (v) => {
+        autonomousAckPosture = v;
+      },
+    });
+
+    // feat-concierge-stream-commands — publish the streaming posture (D1)
+    // to the dispatcher's command_stream emit gate. Same closure-capture
+    // bridge as setDelegationContext: the factory resolved `bashAutonomous`
+    // above; the dispatcher's `onToolResult` reads it from the closure cell
+    // this writes. Card-suppression itself is enforced in permission-callback
+    // via the same `bashAutonomous` dep; this only gates whether output
+    // STREAMS (we never stream when the review-gate is the active surface).
+    args.setBashAutonomous?.(bashAutonomous);
+
+    // P1 chip — push the SERVER-resolved autonomous posture to the client so the
+    // persistent chip reflects server truth (`bashAutonomous && acked`), NOT a
+    // message-presence heuristic. A held (un-acked) disclosure is "Approve each";
+    // only an acked autonomous workspace is "Auto-run on". Re-pushed by the
+    // ws-handler on a successful in-session ack-release.
+    defaultSendToClient(args.userId, {
+      type: "autonomous_posture",
+      autonomous: bashAutonomous && autonomousAckAtMs != null,
+    });
 
     // Session-start self-heal (generic, per-user, idempotent, fail-soft): if the
     // workspace has a connected repo but no matching clone on disk, clone/repair
@@ -1022,10 +1316,93 @@ export const realSdkQueryFactory: QueryFactory = async (
     // token, NEVER a PAT, and the value is NEVER logged. (Sentry
     // 512e253141294ac1a808b2ef03a21289 — cron-follow-through-monitor — is the
     // cron-side root cause this mirrors for the interactive path.)
-    let ghToken: string | undefined;
-    if (installationId !== null) {
+    // Parse the connected repo's owner/repo ONCE from the server-resolved
+    // repoUrl (never tool input). Reused by the installation self-heal below
+    // and the C4 write-tool gate further down. CC_GITHUB_NAME_RE rejects any
+    // path-shaping characters.
+    let connectedOwner = "";
+    let connectedRepo = "";
+    if (repoUrl) {
       try {
-        ghToken = await generateInstallationToken(installationId, {
+        const parts = new URL(repoUrl).pathname.split("/").filter(Boolean);
+        const o = parts[0];
+        const r = parts[1]?.replace(/\.git$/, "");
+        if (o && r && CC_GITHUB_NAME_RE.test(o) && CC_GITHUB_NAME_RE.test(r)) {
+          connectedOwner = o;
+          connectedRepo = r;
+        }
+      } catch {
+        /* malformed repoUrl → no owner/repo (degrade silently, not security) */
+      }
+    }
+
+    // feat-one-shot-concierge-gh-403 — installation self-heal. The stored
+    // installation id (workspaces.github_installation_id, resolved above) can
+    // be a CROSS-ACCOUNT personal install that READS the connected repo (so the
+    // connect-time read probe passed) yet only holds `issues: read`. The
+    // Concierge's `gh issue create` then 403s "Resource not accessible by
+    // integration" — which the model misreads as a missing scope and (falsely)
+    // tells the user to re-consent. The deterministic fix is SELECTION, not a
+    // permission change: mint for the installation whose ACCOUNT OWNS the repo
+    // (the org install, full grant incl. `issues: write`) — but ONLY when the
+    // user is ENTITLED to it (findRepoOwnerInstallationForUser gates org-owned
+    // installs on verified org membership, so an outside read-only collaborator
+    // cannot escalate to the org's write grant).
+    //
+    // Entirely GitHub-App-JWT driven — NO Supabase service-role. The
+    // dispatching user's GitHub login is derived from the STORED install's
+    // account when that install is a personal (User-type) install: a personal
+    // install's account login IS the user's GitHub username. That keeps
+    // cc-dispatcher off the service-role allowlist (it was migrated to tenant
+    // in PR-D and must stay off — re-introducing a service-role client here
+    // would trip the service-role-allowlist gate). The in-memory override fixes THIS
+    // dispatch; we deliberately do NOT persist (no revoked-column write, and no
+    // solo-vs-active-workspace clobber risk) — the override re-applies on each
+    // cold dispatch, which is bounded (cold-conversation factory). Best-effort:
+    // any probe failure keeps the stored install and never blocks the chat.
+    let effectiveInstallationId = installationId;
+    if (installationId !== null && connectedOwner) {
+      try {
+        const storedAccount = await getInstallationAccount(installationId);
+        const alreadyCorrect =
+          storedAccount.login.toLowerCase() === connectedOwner.toLowerCase();
+        // Only derive the user's login from a personal (User) install. For an
+        // org-type stored install whose account != the connected-repo owner we
+        // cannot derive the user's login without a service-role admin lookup —
+        // keep the stored install (fail-safe: no escalation, honest 403).
+        if (!alreadyCorrect && storedAccount.type === "User") {
+          const ownerInstall = await findRepoOwnerInstallationForUser(
+            connectedOwner,
+            storedAccount.login,
+          );
+          if (ownerInstall !== null && ownerInstall !== installationId) {
+            log.info(
+              {
+                userId: args.userId,
+                storedInstallationId: installationId,
+                ownerInstallationId: ownerInstall,
+                owner: connectedOwner,
+              },
+              "Concierge installation self-heal: stored personal install does not own the connected repo; switching to the entitled repo-owner installation for this dispatch",
+            );
+            effectiveInstallationId = ownerInstall;
+          }
+        }
+      } catch (probeErr) {
+        reportSilentFallback(probeErr, {
+          feature: "cc-dispatcher",
+          op: "installation-self-heal-probe",
+          extra: { userId: args.userId },
+          message:
+            "Repo-owner installation probe failed; keeping stored installation",
+        });
+      }
+    }
+
+    let ghToken: string | undefined;
+    if (effectiveInstallationId !== null) {
+      try {
+        ghToken = await generateInstallationToken(effectiveInstallationId, {
           minRemainingMs: GH_TOKEN_MIN_LIFETIME_MS,
         });
       } catch (err) {
@@ -1049,22 +1426,12 @@ export const realSdkQueryFactory: QueryFactory = async (
   let c4ToolName: string | undefined;
   let c4PromptAddendum: string | undefined;
   {
-    let owner = "";
-    let repo = "";
-    if (repoUrl) {
-      try {
-        const parts = new URL(repoUrl).pathname.split("/").filter(Boolean);
-        const o = parts[0];
-        const r = parts[1]?.replace(/\.git$/, "");
-        if (o && r && CC_GITHUB_NAME_RE.test(o) && CC_GITHUB_NAME_RE.test(r)) {
-          owner = o;
-          repo = r;
-        }
-      } catch {
-        /* malformed repoUrl → no c4 write (degrade silently, not security) */
-      }
-    }
-    if (installationId !== null && owner && repo) {
+    // Reuse the owner/repo parsed once above + the self-healed installation id
+    // so the C4 write tool commits via the SAME repo-owner installation the
+    // GH_TOKEN was minted for (feat-one-shot-concierge-gh-403).
+    const owner = connectedOwner;
+    const repo = connectedRepo;
+    if (effectiveInstallationId !== null && owner && repo) {
       let c4Enabled = false;
       try {
         const tenant = await getFreshTenantClient(args.userId);
@@ -1094,7 +1461,7 @@ export const realSdkQueryFactory: QueryFactory = async (
           version: "1.0.0",
           tools: buildC4ConciergeTools({
             userId: args.userId,
-            installationId,
+            installationId: effectiveInstallationId,
             owner,
             repo,
             workspacePath,
@@ -1107,8 +1474,12 @@ export const realSdkQueryFactory: QueryFactory = async (
           "To edit a C4 architecture diagram, call the `edit_c4_diagram` tool " +
           "with `relativePath` (a `.c4` source or the `.md` view-embed page " +
           "directly under `engineering/architecture/diagrams/`) and `content` " +
-          "(the FULL new file contents). It commits the change directly and the " +
-          "diagram re-renders — do NOT paste DSL into chat for the user to apply.";
+          "(the FULL new file contents). It commits the source directly to the " +
+          "repo and then re-renders the diagram. The tool response includes " +
+          "`rerendered`: when true, the rendered diagram updated — tell the user " +
+          "it updated; when false, the source was saved but the re-render failed, " +
+          "so tell the user the diagram will refresh after the next re-render. Do " +
+          "NOT paste DSL into chat for the user to apply.";
       }
     }
   }
@@ -1156,7 +1527,11 @@ export const realSdkQueryFactory: QueryFactory = async (
   if (c4PromptAddendum) {
     effectiveSystemPrompt += `\n\n${c4PromptAddendum}`;
   }
+  // Always append the gh-403 honesty directive (feat-one-shot-concierge-gh-403)
+  // — independent of repo/flag state, since any conversation can run `gh`.
+  effectiveSystemPrompt += `\n\n${GH_403_PROMPT_DIRECTIVE}`;
 
+  // nosemgrep: path-join-resolve-traversal -- workspacePath is server-resolved (fetchUserWorkspacePath, ADR-044), never user-tainted input.
   const pluginPath = path.join(workspacePath, "plugins", "soleur");
 
   // Synthetic AgentSession — the only place in the cc path where an
@@ -1198,20 +1573,33 @@ export const realSdkQueryFactory: QueryFactory = async (
   // (hr-github-app-auth-not-pat).
   let gitAskpassScriptPath: string | undefined;
   if (ghToken) {
+    // nosemgrep: path-join-resolve-traversal -- workspacePath is server-resolved (fetchUserWorkspacePath, ADR-044), never user-tainted input.
     const gitDir = path.join(workspacePath, ".git");
     const askpassDir = existsSync(gitDir) ? gitDir : workspacePath;
     gitAskpassScriptPath = writeAskpassScriptTo(askpassDir, ".soleur-askpass.sh");
   }
 
   const ccDeps: CanUseToolDeps = {
-    abortableReviewGate: (ccSession, gateId, signal, timeoutMs, options) => {
+    abortableReviewGate: (
+      ccSession,
+      gateId,
+      signal,
+      timeoutMs,
+      options,
+      gateKind,
+    ) => {
       // Register BEFORE awaiting the resolver so a synchronous
-      // `resolveCcBashGate` from a concurrent ws frame cannot race.
+      // `resolveCcBashGate` from a concurrent ws frame cannot race. P1: thread
+      // the gate kind so the held disclosure registers under
+      // `"autonomous_disclosure"` and only the owner-checked
+      // `autonomous_disclosure_response` (which writes the ack first) can
+      // release it — a `review_gate_response` carrying the same gateId no-ops.
       registerCcBashGate({
         userId: args.userId,
         conversationId: args.conversationId,
         gateId,
         session: ccSession,
+        kind: gateKind ?? "review",
       });
       return abortableReviewGate(ccSession, gateId, signal, timeoutMs, options);
     },
@@ -1227,6 +1615,22 @@ export const realSdkQueryFactory: QueryFactory = async (
     // Bash branch auto-approves non-BLOCKED commands (blocklist stays
     // authoritative).
     bashAutonomous,
+    // feat-bash-autonomous-default-on — first-run consent soft-gate inputs.
+    // When bashAutonomous && autonomousAckAt==null && isOwner, the first
+    // non-blocked command is HELD behind the disclosure ack instead of
+    // auto-running.
+    autonomousAckAt: autonomousAckAtMs,
+    isOwner: isWorkspaceOwner,
+    // P1 stale-snapshot — read the LIVE in-session ack posture (flipped by the
+    // ws-handler on a successful ack) so command #2 after an ack is friction-free
+    // instead of re-holding on the frozen cold-start snapshot.
+    resolveAckPosture: () => autonomousAckPosture,
+    // P1 defense-in-depth — re-read the persisted ack after a disclosure-hold
+    // releases, BEFORE allowing the held command. A release that did not
+    // actually write the ack (cross-frame attempt, transient ack-write fault)
+    // re-holds/denies. Fail-closed null = deny. Reads the same membership-checked
+    // RPC as the cold-start resolve (active workspace, server-derived).
+    verifyAutonomousAck: () => resolveAutonomousAck(args.userId),
     // Real conversation-status write — replaces the prior no-op (#2920).
     // Delegates to the typed wrapper which enforces the R8 composite-key
     // invariant (`.eq("id", convId).eq("user_id", args.userId)`) and
@@ -1801,6 +2205,48 @@ export async function dispatchSoleurGo(
     leaseDelegationCtx = ctx;
   };
 
+  // feat-concierge-stream-commands — streaming-posture closure cell (D1),
+  // published by `realSdkQueryFactory.setBashAutonomous` once it resolves
+  // the owner-gated toggle. Read by `onToolResult` to gate command_stream
+  // emission: we stream command/output ONLY in the autonomous posture
+  // (where the review-gate is bypassed and no card surface exists). In the
+  // non-autonomous posture the review-gate is the active surface and we
+  // emit nothing (AC9). Fail-closed `false` until the factory publishes.
+  let bashAutonomousPosture = false;
+  const setBashAutonomous = (autonomous: boolean): void => {
+    bashAutonomousPosture = autonomous;
+  };
+
+  // FIX 6 (Security P3-2) — warm-query posture. `setBashAutonomous` is also
+  // published inside `realSdkQueryFactory`'s lease body, but that factory runs
+  // ONLY on a COLD conversation; on warm-query reuse it is not re-invoked, so
+  // `bashAutonomousPosture` would stay fail-closed `false` and streaming would
+  // silently never fire for warm conversations. Re-resolve the owner-gated
+  // toggle per-dispatch here (same fire-and-forget pattern as the
+  // `fetchUserWorkspacePath` resolve below) so BOTH cold and warm turns publish
+  // the posture. `resolveBashAutonomous` reads the ACTIVE workspace toggle (one
+  // indexed read); on the cold path the factory re-publishes the same value
+  // (idempotent overwrite). Resolves before any Bash `tool_use` can surface
+  // (the SDK Query must first build + emit text/tool blocks). Failure →
+  // fail-closed (leave `false`) and mirror to Sentry.
+  void resolveBashAutonomous(userId)
+    .then((autonomous) => {
+      setBashAutonomous(autonomous);
+    })
+    .catch((err) => {
+      reportSilentFallback(err, {
+        feature: "cc-dispatcher",
+        op: "bash-autonomous-resolve",
+        extra: { userId, conversationId },
+      });
+    });
+
+  // Per-command total-output budget tracker (D4), keyed by `toolUseId`.
+  // Bounds cumulative bytes across however many result blocks one command
+  // produces. Entry created on first output chunk; the per-dispatch lifetime
+  // matches the conversation turn (in-memory, GC'd with the closure).
+  const commandOutputBytes = new Map<string, number>();
+
   // #3603 W4 — cc-path narrows the type-wide `Message.usage` shape to
   // cost-only on `'complete'` turns (Art. 5(1)(c) data-minimization). The
   // legacy agent-runner path emits the full `UsageSnapshot` (input_tokens,
@@ -1899,6 +2345,109 @@ export async function dispatchSoleurGo(
           leaderId: CC_ROUTER_LEADER_ID,
         }),
       );
+
+      // feat-concierge-stream-commands — emit the `command_stream`
+      // `phase:"start"` carrying the REDACTED command, ONLY in the
+      // autonomous posture (D1: the review-gate is bypassed, so the inline
+      // terminal block is the user's only visible record). The redaction
+      // runs at THIS emit boundary (TR4); render-time is belt-and-suspenders.
+      // Emit failures mirror to Sentry (cq-silent-fallback-must-mirror).
+      if (bashAutonomousPosture && block.name === "Bash") {
+        const rawCommand =
+          typeof block.input.command === "string" ? block.input.command : "";
+        try {
+          // FIX 4 — byte-cap the RAW command BEFORE redaction (mirrors the
+          // output path); caps the wire payload + redaction back-tracking.
+          const cappedCommand = capUtf8Bytes(
+            rawCommand,
+            COMMAND_STREAM_COMMAND_CAP_BYTES,
+          );
+          const redactedCommand = probeRedactionFallthrough(
+            redactCommandForDisplay(
+              cappedCommand.truncated
+                ? `${cappedCommand.text}${COMMAND_STREAM_TRUNCATION_MARKER}`
+                : cappedCommand.text,
+            ),
+            { userId, conversationId, field: "command" },
+          );
+          sendToClient(userId, {
+            type: "command_stream",
+            leaderId: CC_ROUTER_LEADER_ID,
+            phase: "start",
+            command: redactedCommand,
+            // FIX 2 — correlate this block to its output/end frames.
+            toolUseId: block.toolUseId,
+          });
+        } catch (err) {
+          reportSilentFallback(err, {
+            feature: "cc-dispatcher",
+            op: "emitCommandStream",
+            extra: { userId, conversationId, phase: "start" },
+          });
+        }
+      }
+    },
+    onToolResult: (block) => {
+      // feat-concierge-stream-commands — stream the Bash command's
+      // (truncated, REDACTED) stdout/stderr into the cc_router bubble, then
+      // close the block. Autonomous-only (D1). Both the per-chunk and the
+      // per-command total caps (D4) apply; redaction is the emit-boundary
+      // gate (TR4) with a fallthrough probe → Sentry. Emit failures mirror.
+      if (!bashAutonomousPosture) return;
+      try {
+        // 1) Per-chunk cap on the RAW output (caps regex back-tracking too).
+        const chunkCapped = capUtf8Bytes(
+          block.output,
+          COMMAND_STREAM_CHUNK_CAP_BYTES,
+        );
+
+        // 2) Per-command total budget. Subtract what's already been emitted
+        //    for this toolUseId; if the budget is exhausted, mark truncated
+        //    and emit nothing further beyond the marker (carried by `end`).
+        const priorBytes = commandOutputBytes.get(block.toolUseId) ?? 0;
+        const remaining = Math.max(0, COMMAND_STREAM_TOTAL_CAP_BYTES - priorBytes);
+        const totalCapped = capUtf8Bytes(chunkCapped.text, remaining);
+        const truncated = chunkCapped.truncated || totalCapped.truncated;
+
+        const emittedBytes = Buffer.from(totalCapped.text, "utf8").length;
+        commandOutputBytes.set(block.toolUseId, priorBytes + emittedBytes);
+
+        // 3) Redact the (capped) output at the emit boundary + probe.
+        const redactedOutput = probeRedactionFallthrough(
+          redactCommandForDisplay(totalCapped.text),
+          { userId, conversationId, field: "output" },
+        );
+
+        if (redactedOutput.length > 0 || truncated) {
+          sendToClient(userId, {
+            type: "command_stream",
+            leaderId: CC_ROUTER_LEADER_ID,
+            phase: "output",
+            // FIX 2 — route this output to its originating block.
+            toolUseId: block.toolUseId,
+            output: truncated
+              ? `${redactedOutput}${COMMAND_STREAM_TRUNCATION_MARKER}`
+              : redactedOutput,
+            truncated: truncated || undefined,
+          });
+        }
+
+        // 4) Close the block.
+        sendToClient(userId, {
+          type: "command_stream",
+          leaderId: CC_ROUTER_LEADER_ID,
+          phase: "end",
+          // FIX 2 — terminal marker carries the id for symmetry.
+          toolUseId: block.toolUseId,
+        });
+        commandOutputBytes.delete(block.toolUseId);
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "cc-dispatcher",
+          op: "emitCommandStream",
+          extra: { userId, conversationId, phase: "output" },
+        });
+      }
     },
     onTextTurnEnd: () => {
       // #3603 W2 + W4 — `consumeForComplete` returns `null` if the turn was
@@ -2086,6 +2635,11 @@ export async function dispatchSoleurGo(
       // scope so onResult can read leaseDelegationCtx and route
       // persistTurnCost through the merged atomic RPC.
       setDelegationContext,
+      // feat-concierge-stream-commands — bridge the streaming posture (D1)
+      // from realSdkQueryFactory's lease body to this scope so the
+      // command_stream emit gate (onToolUse/onToolResult) knows whether the
+      // workspace is autonomous.
+      setBashAutonomous,
       // 2026-05-06 Bug A1 fix — thread workspacePath through so the
       // runner builds the system prompt with workspace-absolute Read
       // instructions. Falls back to the locally-resolved value (set by
@@ -2276,6 +2830,7 @@ export function __resetDispatcherForTests(): void {
   _runner = null;
   _runnerSendToClient = null;
   _ccBashGates.clear();
+  _ccAutonomousAckPosture.clear();
   __resetMirrorDebounceForTests();
   // The bash batched-approval cache lives in a sibling module
   // (`permission-callback-bash-batch.ts`) and is keyed by

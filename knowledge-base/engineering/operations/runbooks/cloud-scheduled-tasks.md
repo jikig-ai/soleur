@@ -161,6 +161,21 @@ error line.
 a labeled audit issue BEFORE exiting. Mirror the `STEP 1b / STEP 2 / STEP 3 /
 STEP 4` early-exit guards in `scheduled-content-generator.yml` for parity.
 
+> **content-generator has a handler-level fallback (#4960, PR adding
+> `ensure-audit-issue`).** Prompt-level guards only cover terminations that
+> reach a prompt step — a mid-eval crash, an upstream Anthropic API 500 that
+> kills `claude --print`, or a max-turns kill bypasses every prompt step and
+> still produces nothing. `cron-content-generator.ts` now runs a handler-level
+> `ensure-audit-issue` step AFTER the output-aware `verify-output` check: when
+> no `scheduled-content-generator` issue exists in the run window, the handler
+> itself files a self-reporting FAILED `[Scheduled] Content Generator - <date>`
+> issue (carrying `exitCode` / `durationMs` / redacted `stdoutTail`) so the run
+> is never silent. So for content-generator specifically, a silent window now
+> means the **handler fallback ALSO failed** — check Sentry for
+> `op: ensure-audit-issue-failed` (the GitHub-create itself erred), not just the
+> prompt. The 8 other always-create producers still rely on the prompt-only
+> guard; generalizing this fallback cohort-wide is a tracked follow-up.
+
 ### H3 — Doppler `prd_scheduled` service token rotated or revoked
 
 Doppler service tokens are per-config. If the `prd_scheduled` service token was

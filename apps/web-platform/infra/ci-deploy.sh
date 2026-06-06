@@ -661,6 +661,32 @@ case "$COMPONENT" in
           logger -t "$LOG_TAG" "INNGEST_WARN: inngest-server not reachable after deploy — consider running restart-inngest-server.yml workflow"
         fi
 
+        # bwrap userns drift detector (#4927/#4928; follow-up to #4932/#4941).
+        #
+        # The cron Bash sandbox (bwrap) creates an unprivileged user namespace
+        # and mounts /proc; that path is gated by the host sysctl
+        # kernel.apparmor_restrict_unprivileged_userns, which MUST be 0 (asserted
+        # on every boot by bwrap-userns-sysctl.service, see server.tf). When it
+        # drifted to 1 on 2026-06-04, every cron Bash call failed silently and
+        # three producers went dark for ~2 weeks before the watchdog noticed.
+        #
+        # This reads the EXACT value that drifted — not a synthetic `bwrap` probe
+        # with guessed flags (an earlier attempt at the latter, #4932, failed on a
+        # healthy host because its invocation did not match the real sandbox, and
+        # because it GATED it rolled back every deploy; reverted in #4941). Reading
+        # the sysctl is unambiguous and false-positive-free.
+        #
+        # NON-BLOCKING by design (mirrors INNGEST_HEALTH_CHECK above): the actual
+        # fix is the boot-persistent sysctl unit; this is detection only and must
+        # never gate a deploy. Surfaces a loud WARN to journald → Better Stack so a
+        # future drift pages within one deploy cycle instead of going dark.
+        userns_restrict=$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo "unreadable")
+        if [[ "$userns_restrict" == "0" ]]; then
+          logger -t "$LOG_TAG" "BWRAP_USERNS_SYSCTL_CHECK: ok (apparmor_restrict_unprivileged_userns=0)"
+        else
+          logger -t "$LOG_TAG" "BWRAP_USERNS_SYSCTL_DRIFT: apparmor_restrict_unprivileged_userns=${userns_restrict} (expected 0) — cron Bash sandbox will fail silently; restart bwrap-userns-sysctl.service"
+        fi
+
         echo "Deploy succeeded"
         final_write_state 0 "ok"
         exit 0

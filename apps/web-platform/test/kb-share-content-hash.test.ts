@@ -55,8 +55,10 @@ function hex(buf: Buffer): string {
   return createHash("sha256").update(buf).digest("hex");
 }
 
+let workspacesRoot: string;
 let tmpWorkspace: string;
 let kbRoot: string;
+const TEST_USER_ID = "user-1";
 let insertSpy: ReturnType<
   typeof vi.fn<(payload: { content_sha256: string }) => Promise<{ error: null }>>
 >;
@@ -76,7 +78,12 @@ function createShareRequest(documentPath: string): Request {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  tmpWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "kb-share-hash-"));
+  // ADR-044: the route resolves kbRoot via resolveActiveWorkspaceKbRoot, which
+  // derives the path as `<WORKSPACES_ROOT>/<active_id>` (solo: active id ===
+  // userId). Create the workspace dir at that path; point WORKSPACES_ROOT at it.
+  workspacesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "kb-share-hash-"));
+  process.env.WORKSPACES_ROOT = workspacesRoot;
+  tmpWorkspace = path.join(workspacesRoot, TEST_USER_ID);
   kbRoot = path.join(tmpWorkspace, "knowledge-base");
   fs.mkdirSync(kbRoot, { recursive: true });
 
@@ -89,7 +96,7 @@ beforeEach(() => {
     origin: "http://localhost:3000",
   });
   mocks.mockGetUser.mockResolvedValue({
-    data: { user: { id: "user-1" } },
+    data: { user: { id: TEST_USER_ID } },
   });
 
   mocks.mockServiceFrom.mockImplementation(
@@ -107,7 +114,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  fs.rmSync(tmpWorkspace, { recursive: true, force: true });
+  fs.rmSync(workspacesRoot, { recursive: true, force: true });
+  delete process.env.WORKSPACES_ROOT;
 });
 
 describe("KB share — content hash", () => {

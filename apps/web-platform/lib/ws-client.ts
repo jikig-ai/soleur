@@ -89,6 +89,10 @@ interface UseWebSocketReturn {
   resumeSession: (conversationId: string) => void;
   sendMessage: (content: string, attachments?: AttachmentRef[]) => void;
   sendReviewGateResponse: (gateId: string, selection: string) => void;
+  /** feat-bash-autonomous-default-on: client→server ack for the first-run
+   *  autonomous-mode disclosure soft-gate. Selection is "Got it" /
+   *  "Keep autonomous on" / "Ask me each time". Releases the held command. */
+  sendAutonomousDisclosureResponse: (gateId: string, selection: string) => void;
   /** Stage 4 (#2886): client→server send for `interactive_prompt_response`.
    *  Used by `<InteractivePromptCard>` to post the user's choice. */
   sendInteractivePromptResponse: (msg: Extract<WSMessage, { type: "interactive_prompt_response" }>) => void;
@@ -107,6 +111,11 @@ interface UseWebSocketReturn {
   routeSource: "auto" | "mention" | null;
   activeLeaderIds: DomainLeaderId[];
   usageData: UsageData | null;
+  /** feat-bash-autonomous-default-on — SERVER-resolved autonomous posture for the
+   *  persistent chip. `null` before the server pushes; `true` = "Auto-run on"
+   *  (autonomous AND first-run-acked); `false` = "Approve each". Driven ONLY by
+   *  the server `autonomous_posture` frame — never message presence. */
+  autonomousPosture: boolean | null;
   /** The real conversation UUID from session_started (pending ID that becomes the row ID). */
   realConversationId: string | null;
   /** Populated when the server resolved an existing thread via resumeByContextPath. */
@@ -228,6 +237,7 @@ export type ChatAction =
   | { type: "filter_prepend"; messages: ChatMessage[] }
   | { type: "gate_error"; gateId: string; message: string }
   | { type: "resolve_gate"; gateId: string; selection: string }
+  | { type: "resolve_autonomous_disclosure"; gateId: string; selection: string }
   /** #3448 PR2 — user clicked Stop / pressed Esc. Transitions
    *  `streamState` "streaming" → "stopping". No-op if already
    *  "stopping" or "idle" (idempotent under double-click). The
@@ -338,6 +348,15 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             : m,
         ),
       };
+    case "resolve_autonomous_disclosure":
+      return {
+        ...state,
+        messages: state.messages.map((m) =>
+          m.type === "autonomous_disclosure" && m.gateId === action.gateId
+            ? { ...m, resolved: true, selectedOption: action.selection }
+            : m,
+        ),
+      };
     case "resolve_interactive_prompt":
       return {
         ...state,
@@ -412,6 +431,12 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   // already distinguishes the two via distinct message types.
   const [sessionKind, setSessionKind] = useState<"fresh" | "resumed" | null>(null);
   const [usageData, setUsageData] = useState<UsageData | null>(null);
+  // feat-bash-autonomous-default-on — SERVER-resolved autonomous posture for the
+  // persistent chip. `null` before the server pushes (chip hidden/neutral);
+  // `true` = "Auto-run on" (autonomous AND acked); `false` = "Approve each".
+  // Set ONLY from the server `autonomous_posture` frame — never inferred from
+  // message presence (a held un-acked disclosure must read "Approve each").
+  const [autonomousPosture, setAutonomousPosture] = useState<boolean | null>(null);
   // Stage 4 review F3: persisted `workflow_ended_at` from history fetch.
   const [workflowEndedAt, setWorkflowEndedAt] = useState<string | null>(null);
   // PR-B (#3603) — conversation start time hydrated from history fetch.
@@ -663,7 +688,9 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         case "tool_progress":
         case "stream":
         case "stream_end":
+        case "command_stream":
         case "review_gate":
+        case "autonomous_disclosure":
         case "subagent_spawn":
         case "subagent_complete":
         case "workflow_started":
@@ -685,6 +712,12 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // Stage 3 (#2885) — `subagent_*`, `workflow_*`, `interactive_prompt`
           // are inert pass-throughs in the reducer; Stage 4 wires rendering.
           dispatch({ type: "stream_event", msg });
+          break;
+        }
+
+        case "autonomous_posture": {
+          // Server truth for the persistent chip — never a message-presence guess.
+          setAutonomousPosture(msg.autonomous);
           break;
         }
 
@@ -889,6 +922,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         case "resume_session":
         case "close_conversation":
         case "review_gate_response":
+        case "autonomous_disclosure_response":
         case "abort_turn":
         case "interactive_prompt_response":
         case "fanout_truncated":
@@ -1342,6 +1376,16 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     [send],
   );
 
+  const sendAutonomousDisclosureResponse = useCallback(
+    (gateId: string, selection: string) => {
+      send({ type: "autonomous_disclosure_response", gateId, selection });
+      // Optimistically mark resolved so the banner dismisses immediately; the
+      // server releases the held command + writes the ack on receipt.
+      dispatch({ type: "resolve_autonomous_disclosure", gateId, selection });
+    },
+    [send],
+  );
+
   const sendInteractivePromptResponse = useCallback(
     (msg: Extract<WSMessage, { type: "interactive_prompt_response" }>) => {
       send(msg);
@@ -1421,6 +1465,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     resumeSession,
     sendMessage,
     sendReviewGateResponse,
+    sendAutonomousDisclosureResponse,
     sendInteractivePromptResponse,
     resolveInteractivePrompt,
     status,
@@ -1431,6 +1476,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     routeSource,
     activeLeaderIds,
     usageData,
+    autonomousPosture,
     realConversationId,
     resumedFrom,
     workflow: chatState.workflow,

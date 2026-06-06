@@ -255,6 +255,11 @@ export type WSMessage =
   | { type: "resume_session"; conversationId: string }
   | { type: "close_conversation" }
   | { type: "review_gate_response"; gateId: string; selection: string }
+  // feat-bash-autonomous-default-on — first-run consent soft-gate response
+  // (client→server). `selection` is "Got it" / "Keep autonomous on" /
+  // "Ask me each time". `userId` is resolved from the authenticated socket —
+  // NOT a wire field (TR4 cross-user invariant; strictObject rejects forgery).
+  | { type: "autonomous_disclosure_response"; gateId: string; selection: string }
   // Client → server: user-initiated Stop. The server resolves `userId`
   // from the authenticated socket session — `userId` is intentionally
   // NOT part of the wire shape (TR4 cross-user invariant; see
@@ -277,6 +282,34 @@ export type WSMessage =
   | { type: "stream_start"; leaderId: DomainLeaderId; source?: "auto" | "mention" }
   | { type: "stream_end"; leaderId: DomainLeaderId }
   | { type: "tool_use"; leaderId: DomainLeaderId; label: string }
+  // feat-concierge-stream-commands — Concierge Bash commands + their
+  // (truncated, redacted) stdout/stderr stream INLINE into the cc_router
+  // bubble, Claude-Code-terminal style, instead of spawning per-command
+  // Approve/Deny cards. Gated to the autonomous posture at the emit site
+  // (D1). `command` carries the REDACTED command on `phase:"start"`;
+  // `output` carries a REDACTED, byte-capped chunk on `phase:"output"`;
+  // `phase:"end"` closes the block. Both text fields are redacted at the
+  // EMIT boundary (server) per TR4 — render-time redaction is the
+  // belt-and-suspenders Art. 14 gate. `truncated:true` marks an output
+  // chunk that hit the per-command cap (D4). Distinct from `tool_use`
+  // (which deliberately withholds the raw tool name per #2138); the
+  // redaction gate is the scoped exception that lets command text ride.
+  | {
+      type: "command_stream";
+      leaderId: DomainLeaderId;
+      command?: string;
+      output?: string;
+      phase: "start" | "output" | "end";
+      truncated?: boolean;
+      /**
+       * FIX 2 — SDK `tool_use` block id correlating a `start`/`output`/`end`
+       * sequence to its block. When one assistant turn emits two concurrent
+       * Bash tool-uses, the reducer routes output by `toolUseId` instead of
+       * appending to the last block (which mis-attributes A's output to B).
+       * Optional for back-compat: absent → last-block append.
+       */
+      toolUseId?: string;
+    }
   | {
       /**
        * FR4 (#2861): server forwards the SDK `SDKToolProgressMessage`
@@ -290,6 +323,19 @@ export type WSMessage =
       elapsedSeconds: number;
     }
   | { type: "review_gate"; gateId: string; question: string; header?: string; options: string[]; descriptions?: Record<string, string | undefined>; stepProgress?: { current: number; total: number } }
+  // feat-bash-autonomous-default-on — first-run consent soft-gate disclosure
+  // (server→client). A held Bash command awaiting the owner's one-time ack.
+  // `existingWorkspace` true => offer the opt-out ("Keep autonomous on" /
+  // "Ask me each time"); false => default-ON workspace ("Got it" ack).
+  | { type: "autonomous_disclosure"; gateId: string; existingWorkspace: boolean }
+  // feat-bash-autonomous-default-on — SERVER-resolved autonomous posture for the
+  // persistent chip (server→client). `autonomous` is the SERVER truth
+  // `bashAutonomous && ackAt != null` — i.e. "Auto-run on" only when the toggle
+  // is on AND the first-run disclosure has been acked. Emitted once per dispatch
+  // after the server resolves the toggle + ack (and re-emitted on a successful
+  // in-session ack-release). The chip reads THIS, never message presence — a
+  // held (un-acked) disclosure is "Approve each", not "Auto-run on".
+  | { type: "autonomous_posture"; autonomous: boolean }
   | { type: "session_started"; conversationId: string; capabilities?: { promptKinds: readonly string[]; incomingTypes?: readonly string[] } }
   | { type: "session_resumed"; conversationId: string; resumedFromTimestamp: string; messageCount: number }
   | {

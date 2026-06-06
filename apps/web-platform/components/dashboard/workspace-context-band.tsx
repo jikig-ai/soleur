@@ -33,6 +33,8 @@ export function WorkspaceContextBand({
   variant = "rail",
   collapsed = false,
   activeWorkspaceName,
+  activeWorkspaceId,
+  activeWorkspaceHasLogo,
   suppressBack = false,
   suppressSectionTitle = false,
 }: {
@@ -54,6 +56,12 @@ export function WorkspaceContextBand({
    *  threads it in (P0-3) so the monogram tile + full-name tooltip can render
    *  as the authoritative disambiguator for shared-initial workspaces. */
   activeWorkspaceName?: string;
+  /** Collapsed-rail only: the active workspace id + hasLogo, threaded from the
+   *  layout's useActiveWorkspace hook so the collapsed band's tile can render
+   *  the custom logo (via the stable proxy `src`) instead of the monogram
+   *  (#4916). Same single fetch as the name. */
+  activeWorkspaceId?: string;
+  activeWorkspaceHasLogo?: boolean;
   /** Suppress the band's section-title row (Phase 4, #4915). The layout sets
    *  this on the MOBILE band for KB, where the page body owns the "Knowledge
    *  Base" title — so the two don't double-render on mobile. The desktop rail
@@ -93,7 +101,13 @@ export function WorkspaceContextBand({
           title={activeWorkspaceName ?? "Active workspace"}
           className="flex shrink-0"
         >
-          <WorkspaceIdentityTile name={activeWorkspaceName ?? ""} size="sm" />
+          <WorkspaceIdentityTile
+            name={activeWorkspaceName ?? ""}
+            size="sm"
+            variant="identity"
+            workspaceId={activeWorkspaceId}
+            hasLogo={activeWorkspaceHasLogo}
+          />
         </span>
         <span
           data-testid="live-repo-dot"
@@ -128,11 +142,13 @@ export function WorkspaceContextBand({
     >
       {/* Workspace pill LEADS the band — the persistent workspace identity is
           the orientation anchor, so it sits above the "Back to menu" nav
-          affordance (the leading element carries the band's top breathing room,
-          pt-3). The pill face now also surfaces the active repo as a muted
+          affordance. The pill face now also surfaces the active repo as a muted
           subtitle (folded in from the old standalone "Working on:" row), so the
-          band no longer burns a separate row on it. */}
-      <div className="flex items-center gap-2 px-3 pt-3">
+          band no longer burns a separate row on it. Sidebar-UX follow-up Issue 1:
+          the leading top room is pt-2 (was pt-3) so — together with the tightened
+          brand-row padding above — the gap between the collapse toggle and this
+          pill no longer reads as a large empty band. */}
+      <div className="flex items-center gap-2 px-3 pt-2">
         <div className="min-w-0 flex-1">
           <OrgSwitcherContainer />
         </div>
@@ -164,10 +180,15 @@ export function WorkspaceContextBand({
         </Link>
       ) : null}
 
+      {/* Section title. Sidebar-UX follow-up Issue 3: the title used to sit
+          directly under "Back to menu" (back pt-2 → title pb-3, no inter-row
+          gap), so "Back to menu" and "Settings" / "Knowledge Base" read as one
+          cramped block. pt-3 adds a clear gap between the back link and the
+          section heading (shared band → applies to both Settings and KB). */}
       {drill && !suppressSectionTitle && (
         <div
           data-testid="nav-section-title"
-          className="flex items-center gap-2 px-3 pb-3 text-sm font-medium text-soleur-text-primary"
+          className="flex items-center gap-2 px-3 pb-3 pt-3 text-sm font-medium text-soleur-text-primary"
         >
           {SECTION_LABELS[drill]}
         </div>

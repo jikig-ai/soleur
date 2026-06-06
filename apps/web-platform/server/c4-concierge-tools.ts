@@ -50,8 +50,14 @@ export function buildC4ConciergeTools(opts: BuildC4ConciergeToolsOpts) {
       "Edit a canonical LikeC4 architecture diagram source and commit it. " +
         "`relativePath` must be a `.c4` (or the `.md` view-embed page) directly " +
         "under `engineering/architecture/diagrams/`. `content` is the FULL new " +
-        "file contents (not a patch). Commits directly to the repo and the " +
-        "diagram re-renders — do not paste DSL into chat for the user to apply.",
+        "file contents (not a patch). Commits the source directly to the repo " +
+        "and then re-renders the diagram. The response includes `rerendered`: " +
+        "when true, the rendered diagram has been regenerated and updated — tell " +
+        "the user it updated; when false, the source was saved but the re-render " +
+        "failed, so the diagram is unchanged. On failure the response may include " +
+        "`rerenderDiagnostic` explaining WHY (e.g. an unresolved reference because " +
+        "`spec.c4` is missing) — relay that reason to the user so they can fix the " +
+        "source. Do not paste DSL into chat for the user to apply.",
       {
         relativePath: z
           .string()
@@ -81,6 +87,10 @@ export function buildC4ConciergeTools(opts: BuildC4ConciergeToolsOpts) {
           ok: true,
           relativePath: args.relativePath,
           commitSha: result.commitSha,
+          rerendered: result.rerendered,
+          ...(result.rerenderDiagnostic
+            ? { rerenderDiagnostic: result.rerenderDiagnostic }
+            : {}),
         });
       },
     ),

@@ -220,7 +220,9 @@ describe("github-api fetchWithRetry", () => {
       mockTokenResponse();
       mockFetch.mockResolvedValueOnce(clientErrorResponse(403, '{"message":"Forbidden"}'));
 
-      await expect(githubApiGet(id, "/repos/o/r")).rejects.toThrow(/permission denied.*403/);
+      // 403 surfaces the real GitHub message (feat-one-shot-concierge-gh-403);
+      // the load-bearing assertion here is no-retry (2 = token mint + 1 GET).
+      await expect(githubApiGet(id, "/repos/o/r")).rejects.toThrow(/403 for \/repos\/o\/r/);
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
   });

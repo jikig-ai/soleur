@@ -114,6 +114,26 @@ resource "sentry_cron_monitor" "scheduled_github_app_drift_guard" {
   timezone                = "UTC"
 }
 
+# #3413: Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-kb-template-health.ts`.
+# NEW hourly probe — no GHA-era predecessor (the issue body named a
+# GitHub Actions workflow but the work landed as an Inngest cron per the
+# 45-cron-vs-4-workflow precedent + ADR-030; the structural sibling is
+# scheduled_github_app_drift_guard above). The slug `cron-kb-template-health`
+# matches SENTRY_MONITOR_SLUG in the handler; hourly cadence + 30-min margin
+# + 10-min runtime mirror the drift-guard sibling (same API-probe shape).
+resource "sentry_cron_monitor" "cron_kb_template_health" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "cron-kb-template-health"
+  schedule                = { crontab = "0 * * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 # TR9 PR-5 (closes #4376): Inngest-fired via
 # `apps/web-platform/server/inngest/functions/cron-bug-fixer.ts`. NEW
 # monitor — no GHA-era predecessor (the workflow ran on GHA's runner pool

@@ -24,6 +24,9 @@ export default function C4Diagram({
   const { data, error, loading, reload } = useC4Project(dirPath);
   const [tab, setTab] = useState<"diagram" | "code">("diagram");
   const [currentView, setCurrentView] = useState(viewId);
+  // See c4-workspace.tsx: stale flips true only when the server's post-save
+  // re-render (#4964) failed; on success the reloaded dump is fresh.
+  const [stale, setStale] = useState(false);
 
   return (
     <div className="mb-4 overflow-hidden rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1/40">
@@ -42,7 +45,7 @@ export default function C4Diagram({
           </button>
         ))}
         <span className="ml-auto pr-1 text-[11px] text-soleur-text-muted">
-          LikeC4 · {currentView}
+          Architecture · {currentView}
         </span>
       </div>
 
@@ -53,7 +56,11 @@ export default function C4Diagram({
 
       {!loading && !error && data && (
         <>
-          <C4Diagnostics diagnostics={data.diagnostics} hasModel={!!data.dump} />
+          <C4Diagnostics
+            diagnostics={data.diagnostics}
+            hasModel={!!data.dump}
+            stale={stale}
+          />
           {tab === "diagram" && (
             <div className="relative h-[600px] w-full">
               <C4Canvas
@@ -69,8 +76,9 @@ export default function C4Diagram({
                 data={data}
                 dirPath={dirPath}
                 height="560px"
-                onSaved={async () => {
+                onSaved={async (rerendered) => {
                   await reload();
+                  setStale(!rerendered);
                   setTab("diagram");
                 }}
               />

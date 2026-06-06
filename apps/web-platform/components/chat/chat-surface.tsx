@@ -17,6 +17,8 @@ import * as Sentry from "@sentry/nextjs";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { ReviewGateCard } from "@/components/chat/review-gate-card";
 import { StatusIndicator } from "@/components/chat/status-indicator";
+import { AutoRunChip } from "@/components/chat/auto-run-chip";
+import { AutonomousDisclosureBanner } from "@/components/chat/autonomous-disclosure-banner";
 import { SubagentGroup } from "@/components/chat/subagent-group";
 import { InteractivePromptCard } from "@/components/chat/interactive-prompt-card";
 import { WorkflowLifecycleBar } from "@/components/chat/workflow-lifecycle-bar";
@@ -192,6 +194,7 @@ export function ChatSurface({
     resumeSession,
     sendMessage,
     sendReviewGateResponse,
+    sendAutonomousDisclosureResponse,
     sendInteractivePromptResponse,
     resolveInteractivePrompt,
     status,
@@ -202,6 +205,7 @@ export function ChatSurface({
     routeSource,
     activeLeaderIds,
     usageData,
+    autonomousPosture: serverAutonomousPosture,
     realConversationId,
     resumedFrom,
     workflow,
@@ -255,6 +259,22 @@ export function ChatSurface({
     },
     [sendReviewGateResponse],
   );
+
+  const handleAutonomousDisclosureResponse = useCallback(
+    (gateId: string, selection: string) => {
+      sendAutonomousDisclosureResponse(gateId, selection);
+    },
+    [sendAutonomousDisclosureResponse],
+  );
+
+  // feat-bash-autonomous-default-on — persistent posture chip. The autonomous
+  // posture is the SERVER-resolved truth pushed over the `autonomous_posture`
+  // frame (`bashAutonomous && acked`), NOT a message-presence heuristic. A held
+  // (un-acked) `autonomous_disclosure` is "Approve each", not "Auto-run on", and
+  // `command_stream` / commandBlocks can appear in non-autonomous safe-bash
+  // flows — so message presence cannot decide posture. `null` (pre-push) is
+  // treated as "Approve each" (the safe, non-autonomous default).
+  const autonomousPosture = serverAutonomousPosture ?? false;
 
   const handleInteractivePromptResponse = useCallback(
     (
@@ -505,7 +525,10 @@ export function ChatSurface({
               Dashboard
             </span>
           </div>
-          <StatusIndicator status={status} disconnectReason={disconnectReason} />
+          <div className="flex items-center gap-3">
+            <AutoRunChip autonomous={autonomousPosture} />
+            <StatusIndicator status={status} disconnectReason={disconnectReason} />
+          </div>
         </header>
       )}
 
@@ -625,6 +648,7 @@ export function ChatSurface({
                       variant={variant}
                       status={msg.status}
                       usage={msg.usage}
+                      commandBlocks={msg.commandBlocks}
                     />
                   );
                   break;
@@ -641,6 +665,16 @@ export function ChatSurface({
                       selectedOption={msg.selectedOption}
                       gateError={msg.gateError}
                       onSelect={handleReviewGateResponse}
+                    />
+                  );
+                  break;
+                case "autonomous_disclosure":
+                  body = (
+                    <AutonomousDisclosureBanner
+                      gateId={msg.gateId}
+                      existingWorkspace={msg.existingWorkspace}
+                      resolved={msg.resolved}
+                      onRespond={handleAutonomousDisclosureResponse}
                     />
                   );
                   break;

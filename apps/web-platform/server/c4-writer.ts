@@ -22,12 +22,24 @@ import {
 // tool — does not pull kb-route-helpers' `@/lib/supabase/server` (next/headers)
 // into the server bundle, which crashes the custom server at startup.
 import { syncWorkspace } from "@/server/workspace-sync";
-import { isC4DiagramPath } from "@/lib/c4-constants";
+import {
+  isC4DiagramPath,
+  C4_DIAGRAMS_DIR,
+  C4_MODEL_JSON,
+  C4_SOURCE_EXT,
+} from "@/lib/c4-constants";
 import { renameUserIdToHash } from "@/server/userid-pseudonymize";
+import { reportSilentFallback } from "@/server/observability";
+import { renderC4Model } from "@/server/c4-render";
+import { sanitizeForLog } from "@/lib/log-sanitize";
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
 
 const MAX_C4_WRITE_BYTES = 256 * 1024;
+// The layouted model JSON can be far larger than the 256 KB source cap — mirror
+// the GET /project route's bound so a pathological re-render can't commit an
+// unbounded blob.
+const MAX_C4_MODEL_BYTES = 4 * 1024 * 1024;
 
 export type WriteC4Input = {
   userId: string;
@@ -41,7 +53,15 @@ export type WriteC4Input = {
 };
 
 export type WriteC4Result =
-  | { ok: true; commitSha: string | null }
+  | {
+      ok: true;
+      commitSha: string | null;
+      rerendered: boolean;
+      // Present only on a re-render FAILURE (`rerendered:false`): a concise,
+      // sanitized, user-facing reason the diagram didn't update (e.g. an
+      // unresolved-reference hint). Absent on success and on `.md` saves.
+      rerenderDiagnostic?: string;
+    }
   | { ok: false; status: number; error: string; code?: string };
 
 /**
@@ -119,7 +139,34 @@ export async function writeC4Diagram(
       { event: "c4_write", ...userLog, path: filePath },
       "kb/c4: diagram source written",
     );
-    return { ok: true, commitSha: result?.commit?.sha ?? null };
+
+    // Layer 2 (#4964): after a `.c4` source change, regenerate the precomputed
+    // model.likec4.json out-of-process so the rendered diagram actually updates.
+    // `.md` view-embed saves don't change layout, so the diagram is already
+    // current → rerendered:true with no work. The re-render is best-effort and
+    // failure-isolated: the `.c4` commit above is the load-bearing success and
+    // is NEVER rolled back. On any re-render/commit/sync failure we report and
+    // return rerendered:false, degrading to the Layer-1 honest-stale banner.
+    let rerendered = true;
+    let rerenderDiagnostic: string | undefined;
+    if (relativePath.endsWith(C4_SOURCE_EXT)) {
+      const r = await rerenderAndCommit({
+        installationId,
+        owner,
+        repo,
+        workspacePath,
+        userId,
+        relativePath,
+      });
+      rerendered = r.rerendered;
+      rerenderDiagnostic = r.diagnostic;
+    }
+    return {
+      ok: true,
+      commitSha: result?.commit?.sha ?? null,
+      rerendered,
+      ...(rerenderDiagnostic ? { rerenderDiagnostic } : {}),
+    };
   } catch (error) {
     Sentry.captureException(error);
     if (error instanceof GitHubApiError) {
@@ -139,5 +186,156 @@ export async function writeC4Diagram(
     }
     logger.error({ err: error, ...userLog }, "kb/c4: unexpected write error");
     return { ok: false, status: 500, error: "Internal server error" };
+  }
+}
+
+type RerenderInput = {
+  installationId: number;
+  owner: string;
+  repo: string;
+  workspacePath: string;
+  userId: string;
+  relativePath: string;
+};
+
+type RerenderOutcome = {
+  rerendered: boolean;
+  /** A concise, user-facing reason on failure (e.g. an unresolved-reference
+   *  hint). Only set when the failure is the user's source (empty/invalid
+   *  render); absent for internal failures (oversized model, resync, etc.). */
+  diagnostic?: string;
+};
+
+/**
+ * Turn a render-failure `detail` (the captured `likec4` stderr) into a concise,
+ * sanitized, user-facing diagnostic. Prefers the first `Could not resolve …`
+ * line — the actionable cause, usually a `spec.c4` that defines the element
+ * kinds/tags is missing — over the raw multi-line dump.
+ */
+function buildRerenderDiagnostic(detail: string | undefined): string {
+  const raw = detail ?? "";
+  const match = raw.match(/Could not resolve reference to \w+ named '[^']+'/);
+  if (match) {
+    return sanitizeForLog(
+      `Re-render failed: ${match[0]} (is spec.c4 present?)`,
+      200,
+    );
+  }
+  return sanitizeForLog(
+    "Re-render failed: the diagram model is empty or invalid.",
+    200,
+  );
+}
+
+/**
+ * Regenerate `model.likec4.json` via the out-of-process `likec4` CLI, commit it
+ * through the same GitHub Contents API path, and re-sync the clone so the
+ * committed JSON survives the next reconcile/GC and the GET /project route reads
+ * the fresh `dump`. Returns `{ rerendered:true }` only on full success; any
+ * failure is reported (mirrored to Sentry) and returns `{ rerendered:false }`
+ * (with a user-facing `diagnostic` when the cause is the user's source) — the
+ * caller has already committed the `.c4` source, so a re-render failure never
+ * fails the save, and an empty/invalid render NEVER commits over the good model
+ * (renderC4Model returns the validated bytes; we commit them and the resync pull
+ * lands the committed bytes on the clone — the tracked working-tree file is never
+ * written by the render path, #4976).
+ */
+async function rerenderAndCommit(
+  input: RerenderInput,
+): Promise<RerenderOutcome> {
+  const { installationId, owner, repo, workspacePath, userId, relativePath } =
+    input;
+  const jsonRelPath = `${C4_DIAGRAMS_DIR}/${C4_MODEL_JSON}`;
+  const jsonFilePath = `knowledge-base/${jsonRelPath}`;
+  try {
+    const render = await renderC4Model(workspacePath);
+    if (!render.ok) {
+      reportSilentFallback(new Error(render.detail ?? render.reason), {
+        feature: "c4-rerender",
+        op: "render",
+        // Only `relativePath` (charset-constrained KB path) goes in `extra` —
+        // the userIdHash + feature/op tags already locate the tenant, and the
+        // absolute workspacePath is internal-topology noise in telemetry.
+        extra: { userId, relativePath, reason: render.reason },
+        message: "c4 re-render failed — source committed, diagram stale",
+      });
+      // Surface a user-facing diagnostic ONLY when the user's source is the
+      // cause (empty_model). For our own io_error / timeout / non_zero_exit /
+      // spawn_error, stay silent (honest stale banner) — don't blame the source.
+      return {
+        rerendered: false,
+        ...(render.reason === "empty_model"
+          ? { diagnostic: buildRerenderDiagnostic(render.detail) }
+          : {}),
+      };
+    }
+
+    // renderC4Model returned the validated bytes in-process (#4976) — commit
+    // them directly via the same Contents API path. No on-disk re-read: the
+    // model is never written to the tracked working tree, so there is no file to
+    // open (and no TOCTOU/symlink surface to harden — the old O_NOFOLLOW+fd-stat
+    // guard existed only because we used to re-read a tracked file a planted
+    // symlink could swap). Cap on the exact bytes we are about to commit.
+    const json = render.json;
+    const size = Buffer.byteLength(json, "utf8");
+    if (size > MAX_C4_MODEL_BYTES) {
+      reportSilentFallback(new Error(`model.likec4.json ${size}B exceeds cap`), {
+        feature: "c4-rerender",
+        op: "commit-json",
+        extra: { userId, relativePath, size },
+        message: "c4 re-render: regenerated model too large to commit",
+      });
+      return { rerendered: false };
+    }
+
+    let jsonSha: string | undefined;
+    try {
+      const existing = await githubApiGet<{ sha: string; type: string }>(
+        installationId,
+        `/repos/${owner}/${repo}/contents/${jsonFilePath}`,
+      );
+      jsonSha = Array.isArray(existing) ? undefined : existing.sha;
+    } catch (err) {
+      if (!(err instanceof GitHubApiError) || err.statusCode !== 404) throw err;
+    }
+
+    await githubApiPost(
+      installationId,
+      `/repos/${owner}/${repo}/contents/${jsonFilePath}`,
+      {
+        message: `Re-render ${C4_MODEL_JSON} via Soleur diagram editor`,
+        content: Buffer.from(json, "utf8").toString("base64"),
+        ...(jsonSha ? { sha: jsonSha } : {}),
+      },
+      "PUT",
+    );
+
+    const resync = await syncWorkspace(installationId, workspacePath, logger, {
+      userId,
+      op: "manual",
+    });
+    if (!resync.ok) {
+      reportSilentFallback(resync.error, {
+        feature: "c4-rerender",
+        op: "resync",
+        extra: { userId, relativePath },
+        message: "c4 re-render: JSON committed but re-sync failed",
+      });
+      return { rerendered: false };
+    }
+
+    logger.info(
+      { event: "c4_rerender", path: jsonFilePath, durationMs: render.durationMs },
+      "kb/c4: diagram re-rendered",
+    );
+    return { rerendered: true };
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "c4-rerender",
+      op: "commit-json",
+      extra: { userId, relativePath },
+      message: "c4 re-render: regenerate/commit failed — source committed, diagram stale",
+    });
+    return { rerendered: false };
   }
 }

@@ -218,6 +218,17 @@ const reviewGateResponseSchema = z.strictObject({
   gateId: z.string(),
   selection: z.string(),
 });
+// feat-bash-autonomous-default-on — first-run consent soft-gate response
+// (client→server). Mirrors `review_gate_response`. `selection` is one of the
+// disclosure actions: "Got it" (default-ON ack), "Keep autonomous on" /
+// "Ask me each time" (existing-workspace opt-out). The server resolves the held
+// command + writes the ack from this frame. `userId` is NOT a wire field
+// (strictObject rejects forgery — TR4).
+const autonomousDisclosureResponseSchema = z.strictObject({
+  type: z.literal("autonomous_disclosure_response"),
+  gateId: z.string(),
+  selection: z.string(),
+});
 // `abort_turn` (feat-abort-conversation-web PR1, plan §1.2): user-initiated
 // Stop. `userId` is intentionally NOT a wire field — strictObject + the
 // minimum-length conversationId reject forged userIds and empty IDs at the
@@ -246,6 +257,25 @@ const toolUseSchema = z.strictObject({
   leaderId: domainLeaderIdSchema,
   label: z.string(),
 });
+// feat-concierge-stream-commands — inline Bash command/output stream.
+// `command`/`output` are optional (set per `phase`); both are already
+// redacted at the emit boundary. `truncated` flags an output chunk that
+// hit the per-command cap (D4).
+const commandStreamSchema = z.strictObject({
+  type: z.literal("command_stream"),
+  leaderId: domainLeaderIdSchema,
+  // FIX 4 — wire-length caps. `command` is pre-capped to 16384 bytes at the
+  // emit boundary (mirrors the output path); `output` is byte-capped to
+  // COMMAND_STREAM_TOTAL_CAP_BYTES (16384) — the char `.max()` sits slightly
+  // above to admit the truncation marker + any redaction-marker expansion.
+  command: z.string().max(16384).optional(),
+  output: z.string().max(20000).optional(),
+  phase: z.enum(["start", "output", "end"]),
+  truncated: z.boolean().optional(),
+  // FIX 2 — SDK tool_use id for concurrent-Bash output correlation. Optional
+  // for back-compat with emitters/replayed frames that predate it.
+  toolUseId: z.string().optional(),
+});
 const toolProgressSchema = z.strictObject({
   type: z.literal("tool_progress"),
   leaderId: domainLeaderIdSchema,
@@ -263,6 +293,24 @@ const reviewGateSchema = z.strictObject({
   stepProgress: z
     .strictObject({ current: z.number(), total: z.number() })
     .optional(),
+});
+// feat-bash-autonomous-default-on — first-run consent soft-gate disclosure
+// (server→client). Mirrors `review_gate`: a held Bash command awaiting the
+// owner's one-time acknowledgement. `existingWorkspace` true => the workspace
+// is stored `false`/un-acked (offer the opt-out "Keep autonomous on" /
+// "Ask me each time"); false => default-ON workspace (single "Got it" ack).
+const autonomousDisclosureSchema = z.strictObject({
+  type: z.literal("autonomous_disclosure"),
+  gateId: z.string(),
+  existingWorkspace: z.boolean(),
+});
+// feat-bash-autonomous-default-on — SERVER-resolved autonomous posture for the
+// persistent chip (server→client). `autonomous` is the server truth
+// `bashAutonomous && ackAt != null`. The chip reads THIS, never message
+// presence — a held (un-acked) disclosure is "Approve each", not "Auto-run on".
+const autonomousPostureSchema = z.strictObject({
+  type: z.literal("autonomous_posture"),
+  autonomous: z.boolean(),
 });
 const sessionStartedSchema = z.strictObject({
   type: z.literal("session_started"),
@@ -485,13 +533,17 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   resumeSessionSchema,
   closeConversationSchema,
   reviewGateResponseSchema,
+  autonomousDisclosureResponseSchema,
   abortTurnSchema,
   streamSchema,
   streamStartSchema,
   streamEndSchema,
   toolUseSchema,
+  commandStreamSchema,
   toolProgressSchema,
   reviewGateSchema,
+  autonomousDisclosureSchema,
+  autonomousPostureSchema,
   sessionStartedSchema,
   sessionResumedSchema,
   sessionEndedSchema,

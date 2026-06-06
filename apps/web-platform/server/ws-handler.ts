@@ -71,10 +71,16 @@ import {
   handleInteractivePromptResponseCase,
   hasActiveCcQuery,
   resolveCcBashGate,
+  drainAutonomousDisclosureGates,
+  markConversationAcked,
   resolveConciergeDocumentContext,
 } from "./cc-dispatcher";
 import { fetchUserWorkspacePath } from "./kb-document-resolver";
 import { stripAndReportImagePlaceholders } from "./image-paste-strip";
+import {
+  setAutonomousAck,
+  AutonomousAckOwnerDeniedError,
+} from "@/server/set-autonomous-ack";
 type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_response" }>;
 
 const log = createChildLogger("ws");
@@ -2027,6 +2033,11 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             conversationId: session.conversationId,
             gateId: msg.gateId,
             selection: msg.selection,
+            // P1 — a review_gate_response may ONLY resolve a "review" gate. A
+            // held first-run disclosure gate (kind "autonomous_disclosure") is
+            // refused here, so this frame cannot bypass the owner-checked
+            // consent path by carrying the held gate's gateId.
+            expectedKind: "review",
           });
         }
         if (!resolved) {
@@ -2050,6 +2061,109 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     }
 
     // ------------------------------------------------------------------
+    // autonomous_disclosure_response: the owner acknowledged the first-run
+    // autonomous-mode disclosure (feat-bash-autonomous-default-on). Write the
+    // per-workspace consent ack, THEN release the held Bash command by
+    // resolving its gate (the soft-gate hold reuses the `_ccBashGates`
+    // registry via `abortableReviewGate`, so `resolveCcBashGate` releases it).
+    // Order matters: write the ack first so a re-run can never re-hold; only
+    // then unblock the command. Owner-deny → surfaced, the command stays held.
+    // ------------------------------------------------------------------
+    case "autonomous_disclosure_response": {
+      if (!session.conversationId) {
+        sendToClient(userId, { type: "error", message: "No active session." });
+        return;
+      }
+      if (
+        typeof msg.selection !== "string" ||
+        msg.selection.length > MAX_SELECTION_LENGTH
+      ) {
+        sendToClient(userId, {
+          type: "error",
+          message: "Invalid autonomous disclosure selection.",
+          gateId: msg.gateId,
+        });
+        break;
+      }
+      // "Keep autonomous on" also flips the toggle ON (existing-workspace
+      // opt-out). "Got it" / "Ask me each time" write the ack only.
+      const keepAutonomous = msg.selection === "Keep autonomous on";
+
+      // P2 — split the ack-write from the gate-release so a TRANSIENT ack-write
+      // fault (RPC blip, not owner-deny) is distinguishable from an owner-deny.
+      //   - owner-deny  ⇒ keep the command HELD + surface a 403-style error
+      //                   (intended: a non-owner cannot consent).
+      //   - transient   ⇒ release-as-DECLINE so the agent unblocks (the held
+      //                   run is denied; the banner re-arms via the error frame)
+      //                   instead of hanging until the 5-min gate timeout while
+      //                   the client already dismissed the banner.
+      //   - success     ⇒ flip the in-session posture (P1), then DRAIN ALL held
+      //                   disclosure gates for the conversation (P2 multi-hold)
+      //                   so a single ack releases every held command.
+      let persistedAck: string | null = null;
+      try {
+        persistedAck = await setAutonomousAck(userId, { keepAutonomous });
+      } catch (err) {
+        Sentry.captureException(err);
+        const ownerDenied = err instanceof AutonomousAckOwnerDeniedError;
+        log.error(
+          { userId, err, ownerDenied },
+          "autonomous_disclosure_response ack-write error",
+        );
+        if (ownerDenied) {
+          // Keep the command held; only an owner may consent. Surface 403-shape.
+          sendToClient(userId, {
+            type: "error",
+            message: "Only a workspace owner can enable autonomous mode.",
+            gateId: msg.gateId,
+          });
+        } else {
+          // Transient fault — unblock the agent by DECLINING the held run so it
+          // doesn't hang to timeout. The error frame lets the client re-arm.
+          drainAutonomousDisclosureGates({
+            userId,
+            conversationId: session.conversationId,
+            selection: "Ask me each time",
+          });
+          sendToClient(userId, {
+            type: "error",
+            message: sanitizeErrorForClient(err),
+            gateId: msg.gateId,
+          });
+        }
+        break;
+      }
+
+      // Ack persisted. P1 — flip the in-session posture so the released command
+      // (and any subsequent command in this conversation) sees the workspace as
+      // acked and does NOT re-hold. Fail-closed: parse the returned timestamp;
+      // a non-finite value with a successful write still flips to Date.now().
+      const ackMs = persistedAck != null ? Date.parse(persistedAck) : NaN;
+      markConversationAcked(
+        userId,
+        session.conversationId,
+        Number.isFinite(ackMs) ? ackMs : Date.now(),
+      );
+      // P2 multi-hold — DRAIN every held disclosure gate for the conversation
+      // with the owner's selection (not just the clicked one). Combined with the
+      // posture flip above, none of them re-hold. Single-use + R8-scoped per gate.
+      drainAutonomousDisclosureGates({
+        userId,
+        conversationId: session.conversationId,
+        selection: msg.selection,
+      });
+      // P1 chip — re-push the SERVER posture after the ack. "Got it" /
+      // "Keep autonomous on" make the workspace autonomous-and-acked ("Auto-run
+      // on"); "Ask me each time" writes the ack but leaves the toggle off
+      // ("Approve each").
+      sendToClient(userId, {
+        type: "autonomous_posture",
+        autonomous: msg.selection !== "Ask me each time",
+      });
+      break;
+    }
+
+    // ------------------------------------------------------------------
     // auth is handled at connection level, not here
     // ------------------------------------------------------------------
     case "auth": {
@@ -2069,7 +2183,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "stream_end":
     case "tool_use":
     case "tool_progress":
+    case "command_stream":
     case "review_gate":
+    case "autonomous_disclosure":
+    case "autonomous_posture":
     case "session_started":
     case "session_resumed":
     case "session_ended":

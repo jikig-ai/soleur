@@ -194,6 +194,19 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
   // Set by a document view that embeds its own Concierge (the C4 workspace) so
   // the side chat panel isn't double-mounted with the same contextPath.
   const [suppressSidebar, setSuppressSidebar] = useState(false);
+  // Reveal state for an embedded Concierge (C4 workspace). DISTINCT from
+  // sidebarOpen so the header trigger drives the C4 diagram-side panel without
+  // re-mounting a second side-panel Concierge. Defaults open (parity with the
+  // pre-lift local conciergeCollapsed=false initial state).
+  const [embeddedConciergeOpen, setEmbeddedConciergeOpen] = useState(true);
+  const revealEmbeddedConcierge = useCallback(
+    () => setEmbeddedConciergeOpen(true),
+    [],
+  );
+  const collapseEmbeddedConcierge = useCallback(
+    () => setEmbeddedConciergeOpen(false),
+    [],
+  );
 
   // Restore sidebarOpen from sessionStorage on mount (per-tab persistence)
   useEffect(() => {
@@ -221,6 +234,9 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
     if (prevContextPathRef.current === contextPath) return;
     prevContextPathRef.current = contextPath;
     closeSidebar();
+    // Re-open the embedded Concierge default for the new doc (mirrors the side
+    // panel close-on-navigate; a fresh doc shows its Concierge by default).
+    setEmbeddedConciergeOpen(true);
   }, [contextPath, closeSidebar]);
 
   // Prefetch message count for the current document so the toolbar trigger
@@ -267,6 +283,9 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
       setMessageCount,
       suppressSidebar,
       setSuppressSidebar,
+      embeddedConciergeOpen,
+      revealEmbeddedConcierge,
+      collapseEmbeddedConcierge,
     }),
     [
       sidebarOpen,
@@ -276,6 +295,9 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
       kbChatFlag,
       messageCount,
       suppressSidebar,
+      embeddedConciergeOpen,
+      revealEmbeddedConcierge,
+      collapseEmbeddedConcierge,
     ],
   );
 

@@ -38,6 +38,50 @@ describe("wsMessageSchema: existing variants round-trip", () => {
   });
 });
 
+describe("wsMessageSchema: autonomous consent + posture frames (P1)", () => {
+  test("autonomous_disclosure round-trips", () => {
+    const r = parseWSMessage({
+      type: "autonomous_disclosure",
+      gateId: "g-1",
+      existingWorkspace: false,
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  test("autonomous_disclosure_response round-trips", () => {
+    const r = parseWSMessage({
+      type: "autonomous_disclosure_response",
+      gateId: "g-1",
+      selection: "Got it",
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  test("autonomous_posture round-trips (server truth for the chip)", () => {
+    const on = parseWSMessage({ type: "autonomous_posture", autonomous: true });
+    expect(on.ok).toBe(true);
+    const off = parseWSMessage({
+      type: "autonomous_posture",
+      autonomous: false,
+    });
+    expect(off.ok).toBe(true);
+  });
+
+  test("autonomous_posture rejects a missing autonomous field (strictObject)", () => {
+    const r = parseWSMessage({ type: "autonomous_posture" });
+    expect(r.ok).toBe(false);
+  });
+
+  test("autonomous_posture rejects a forged userId (strictObject — TR4)", () => {
+    const r = parseWSMessage({
+      type: "autonomous_posture",
+      autonomous: true,
+      userId: "attacker",
+    });
+    expect(r.ok).toBe(false);
+  });
+});
+
 describe("wsMessageSchema: new Stage 3 variants round-trip", () => {
   test("subagent_spawn succeeds", () => {
     const r = parseWSMessage({

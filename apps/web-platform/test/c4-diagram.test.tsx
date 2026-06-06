@@ -1,0 +1,76 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+
+// Mock the shared building blocks so we test C4Diagram's WIRING (lifted `stale`
+// state + tab switch on save), not the real canvas/CodeMirror plumbing.
+vi.mock("@/components/kb/c4-shared", () => ({
+  Spinner: () => <div>loading</div>,
+  useC4Project: () => ({
+    data: { dump: { foo: 1 }, diagnostics: [], sources: { "model.c4": "x" } },
+    error: null,
+    loading: false,
+    reload: vi.fn(),
+  }),
+  C4Canvas: () => <div data-testid="c4-canvas" />,
+  C4Diagnostics: ({ stale }: { stale?: boolean }) => (
+    <div data-testid="c4-diagnostics" data-stale={stale ? "true" : "false"} />
+  ),
+  C4CodePanel: ({
+    onSaved,
+  }: {
+    onSaved: (rerendered: boolean) => void | Promise<void>;
+  }) => (
+    <>
+      <button data-testid="c4-save-ok" onClick={() => void onSaved(true)}>
+        save-ok
+      </button>
+      <button data-testid="c4-save-fail" onClick={() => void onSaved(false)}>
+        save-fail
+      </button>
+    </>
+  ),
+}));
+
+async function renderEmbed() {
+  const { default: C4Diagram } = await import("@/components/kb/c4-diagram");
+  return render(
+    <C4Diagram viewId="index" dirPath="knowledge-base/diagrams" />,
+  );
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+describe("C4Diagram (inline embed) — staleness wiring (Layer 2)", () => {
+  it("does not flag stale on a fresh load (no false-positive)", async () => {
+    await renderEmbed();
+    expect(
+      screen.getByTestId("c4-diagnostics").getAttribute("data-stale"),
+    ).toBe("false");
+  });
+
+  it("a successful re-render returns to the Diagram tab WITHOUT a stale banner", async () => {
+    await renderEmbed();
+    fireEvent.click(screen.getByRole("button", { name: "code" }));
+    fireEvent.click(screen.getByTestId("c4-save-ok"));
+
+    // onSaved reloads, sets stale=false (re-render succeeded), switches to Diagram.
+    await waitFor(() => expect(screen.getByTestId("c4-canvas")).toBeTruthy());
+    expect(
+      screen.getByTestId("c4-diagnostics").getAttribute("data-stale"),
+    ).toBe("false");
+  });
+
+  it("a failed re-render flags stale", async () => {
+    await renderEmbed();
+    fireEvent.click(screen.getByRole("button", { name: "code" }));
+    fireEvent.click(screen.getByTestId("c4-save-fail"));
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("c4-diagnostics").getAttribute("data-stale"),
+      ).toBe("true"),
+    );
+  });
+});

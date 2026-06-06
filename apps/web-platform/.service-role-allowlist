@@ -264,10 +264,20 @@ apps/web-platform/server/inngest/functions/cron-supabase-disk-io.ts
 # checked resolve_workspace_installation_id SECURITY DEFINER RPC through a
 # tenant client (getFreshTenantClient), so it no longer imports service-role.
 
-# kb-route-helpers.ts was REMOVED from this allowlist in PR #4929 (PIR #4913
-# follow-up): the #4913/#4919 service-role tenant-mint fallback was reverted as
-# dead code (PIR proved the mint failure was a misdiagnosis — it works in prod;
-# the real dead-end was the missing `workspace_id` on NOT-NULL inserts, fixed in
-# #4922). Both resolveUserKbRoot and authenticateAndResolveKbPath are now
-# tenant-only again (RuntimeAuthError → 503/403, no service-role read), so the
-# file no longer imports createServiceClient and must not be allowlisted.
+# resolveUserKbRoot was removed in PR #4929 (PIR #4913 follow-up): the
+# #4913/#4919 service-role tenant-mint fallback was reverted as dead code (PIR
+# proved the mint failure was a misdiagnosis — it works in prod; the real
+# dead-end was the missing `workspace_id` on NOT-NULL inserts, fixed in #4922),
+# and that function was later deleted in the #4953 resolver consolidation.
+#
+# PERMANENT — kb-route-helpers.ts is RE-ADDED in #4956 (ADR-044 migration). The
+# #4929 revert left authenticateAndResolveKbPath on a tenant `users` read; #4956
+# migrates it to the membership-scoped service-role resolvers
+# (resolveActiveWorkspaceKbRoot + resolveActiveWorkspaceRepoMeta — the same path
+# kb/share + kb/upload took in #4953), so the helper again calls
+# createServiceClient() to feed those resolvers. This is NOT the reverted
+# tenant-mint fallback: the service client is handed to resolvers that read the
+# `workspaces` source of truth + the membership-checked installation RPC and
+# fail CLOSED to the solo workspace (never a sibling). The credential read is
+# membership-scoped, not RLS-row-exposed (ADR-044 strengthens isolation).
+apps/web-platform/server/kb-route-helpers.ts
