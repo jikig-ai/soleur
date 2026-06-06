@@ -18,8 +18,27 @@
 # Multi-line-aware by design: all real call sites write the call across several
 # lines, so a single-line grep would be vacuous against the exact regression
 # class this gate exists for. We scan the call's argument span (call line + up
-# to 8 following lines) with a bounded `[^}]*` window under mawk-portable
-# character-class boundaries.
+# to 8 following lines) with a bounded `[^}]*` window.
+#
+# Three load-bearing detector constraints (each verified live under mawk 1.3.4,
+# the runner awk):
+#   1. `[^}]*` (NOT `.*`) after `extra:` — stops at the first `}`, so a clean
+#      `extra: { filename }` followed by a sibling `tags: { route: "userId-x" }`
+#      does NOT false-positive. The loose `.*` form did, in testing.
+#   2. `[^A-Za-z_](key)[^A-Za-z_]` with buffer padding (NOT `\b` — mawk has no
+#      `\b`) — rejects `currentUserIdentity` / `userIdHash` while matching bare
+#      `userId`.
+#   3. 8-line window cap — an unrelated later `extra:` block can't be attributed
+#      to a prior Sentry call.
+#
+# Accepted limitations (signal-quality gate, not a security control — the L3
+# beforeSend backstop strips PII at runtime regardless; these match the issue's
+# own candidate-grep semantics):
+#   - Nested-brace `extra: { meta: { userId } }` and nested-context-first
+#     `extra: { context: {...}, userId }` are NOT caught (`[^}]*` stops at the
+#     inner `}`).
+#   - Tight-brace `extra:{userId}` (no separator after `{`) is NOT caught.
+#   The realistic Prettier-formatted shape `extra: { userId }` IS caught.
 set -uo pipefail
 
 # Inputs: explicit paths (lefthook {staged_files}) OR, with no args (CI mirror),
