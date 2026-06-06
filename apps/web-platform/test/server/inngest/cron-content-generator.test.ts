@@ -112,11 +112,77 @@ describe("CONTENT_GENERATOR_PROMPT — anchor strings (regression-detection)", (
       ],
       [
         '@11ty/eleventy',
-        "Eleventy build validation",
+        "CI Eleventy build validation (referenced as the CI gate, not a local build)",
       ],
     ])("contains %s (%s)", (anchor) => {
       expect(SUT_SOURCE).toContain(anchor);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #4987 — skill + build-validation degradation fix.
+//   (A) CLAUDE_CODE_FLAGS must let the headless `claude --print` eval resolve
+//       AND invoke the plugin's /soleur:* skills: `--plugin-dir plugins/soleur`
+//       loads the symlinked plugin (a bare plugins/ dir does NOT auto-register
+//       in headless mode — see feature-request-plugin-dir-settings.md), and the
+//       `--allowedTools` allowlist must include `Skill` (invoke skills) + `Task`
+//       (content-writer's fact-checker subagent).
+//   (B) STEP 4 build validation cannot run in the no-node_modules shallow clone;
+//       it is deferred to the PR's CI gate (which the --auto merge blocks on).
+// ---------------------------------------------------------------------------
+
+describe("CLAUDE_CODE_FLAGS — skill + plugin-dir resolution (#4987)", () => {
+  const flagsMatch = SUT_SOURCE.match(
+    /const CLAUDE_CODE_FLAGS = \[([\s\S]*?)\];/,
+  );
+  const flagsBlock = flagsMatch ? flagsMatch[1] : "";
+
+  it("CLAUDE_CODE_FLAGS array is present in source", () => {
+    expect(flagsBlock.length).toBeGreaterThan(0);
+  });
+
+  it("--allowedTools allowlist includes Skill and Task (invoke /soleur:* + fact-checker subagent)", () => {
+    expect(SUT_SOURCE).toContain(
+      '"Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Skill,Task"',
+    );
+  });
+
+  it("loads the symlinked plugin via --plugin-dir plugins/soleur", () => {
+    expect(flagsBlock).toContain('"--plugin-dir"');
+    expect(flagsBlock).toContain('"plugins/soleur"');
+    expect(flagsBlock).toMatch(/"--plugin-dir",\s*\n\s*"plugins\/soleur",/);
+  });
+
+  it("--plugin-dir is positioned BEFORE the load-bearing `--` end-of-options marker", () => {
+    // `"--"` (quote-dash-dash-quote) is the standalone marker; `"--print"` etc.
+    // never contain it, so indexOf is unambiguous.
+    const endMarker = flagsBlock.indexOf('"--"');
+    expect(endMarker).toBeGreaterThan(-1);
+    expect(flagsBlock.indexOf('"--plugin-dir"')).toBeLessThan(endMarker);
+    expect(flagsBlock.indexOf('"plugins/soleur"')).toBeLessThan(endMarker);
+  });
+
+  it("does NOT bump the turn budget — --max-turns 50 unchanged", () => {
+    expect(SUT_SOURCE).toContain('"--max-turns",\n  "50",');
+  });
+});
+
+describe("CONTENT_GENERATOR_PROMPT — STEP 4 CI-deferred validation (#4987)", () => {
+  it("instructs that validation runs in CI, not via a local build", () => {
+    expect(SUT_SOURCE).toContain("no node_modules");
+    expect(SUT_SOURCE).toMatch(/Validation runs in CI/);
+  });
+
+  it("no longer issues a bare local `npx @11ty/eleventy` as the STEP 4 gate", () => {
+    // Old shape: `STEP 4 — Validate:\nnpx @11ty/eleventy`. The rewrite references
+    // the Eleventy build only as the CI command, never as a local imperative.
+    expect(SUT_SOURCE).not.toMatch(/STEP 4 — Validate:\s*\nnpx @11ty\/eleventy/);
+  });
+
+  it("still names the CI validation commands (@11ty/eleventy + validate-blog-links)", () => {
+    expect(SUT_SOURCE).toContain("@11ty/eleventy");
+    expect(SUT_SOURCE).toContain("validate-blog-links");
   });
 });
 
