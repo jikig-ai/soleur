@@ -150,15 +150,15 @@ pre-extraction content-generator title (an AC covers this).
 
 ### Phase 0 — Preconditions (verify before editing)
 
-- [ ] Confirm PR #4975 is merged and the fallback exists: `gh pr view 4975 --json state` → MERGED; `grep -n "ensureContentGeneratorAuditIssue" apps/web-platform/server/inngest/functions/cron-content-generator.ts` → present.
-- [ ] Confirm all 8 producers are structurally uniform (verify-output → sentry-heartbeat → `return { ok: heartbeatOk }`): already enumerated in `cron-producer-output-wiring.test.ts:22-40`.
-- [ ] Confirm each producer's `titlePrefix` against its prompt block (the table above): `grep -nE "\[Scheduled\]" <producer>.ts` for each.
-- [ ] Confirm `redactGithubSourcedText` import path is `@/lib/safety/redaction-allowlist`.
-- [ ] Run baseline: `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-content-generator.test.ts test/server/inngest/cron-shared.test.ts test/server/inngest/cron-producer-output-wiring.test.ts` → all green pre-change (capture counts).
+- [x] Confirm PR #4975 is merged and the fallback exists: `gh pr view 4975 --json state` → MERGED; `grep -n "ensureContentGeneratorAuditIssue" apps/web-platform/server/inngest/functions/cron-content-generator.ts` → present.
+- [x] Confirm all 8 producers are structurally uniform (verify-output → sentry-heartbeat → `return { ok: heartbeatOk }`): already enumerated in `cron-producer-output-wiring.test.ts:22-40`.
+- [x] Confirm each producer's `titlePrefix` against its prompt block (the table above): `grep -nE "\[Scheduled\]" <producer>.ts` for each.
+- [x] Confirm `redactGithubSourcedText` import path is `@/lib/safety/redaction-allowlist`.
+- [x] Run baseline: `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-content-generator.test.ts test/server/inngest/cron-shared.test.ts test/server/inngest/cron-producer-output-wiring.test.ts` → all green pre-change (capture counts).
 
 ### Phase 1 — RED: failing tests for the shared helper (`cq-write-failing-tests-before`)
 
-- [ ] In `apps/web-platform/test/server/inngest/cron-shared.test.ts`, add a
+- [x] In `apps/web-platform/test/server/inngest/cron-shared.test.ts`, add a
       `describe("ensureScheduledAuditIssue (shared fallback)")` block mirroring
       the existing `cron-content-generator.test.ts` behavioral suite (lines
       157-281): inject a fake octokit, assert:
@@ -169,11 +169,11 @@ pre-extraction content-generator title (an AC covers this).
   - the body scrubs secrets (feed a fixture tail containing a synthesized `sk-ant-…`-shape token per `cq-test-fixtures-synthesized-only`) and neutralizes markdown-breakout chars (backtick → `ʼ`, `|` → `\|`, CR/LF → space);
   - propagates a create failure to the caller (POST throws → helper rejects).
   - parameterization works: run the create/dedup assertions for ≥2 distinct `{ label, titlePrefix }` pairs (e.g. growth-audit + community-monitor) so a hardcoded-slug regression fails.
-- [ ] Confirm these FAIL (helper does not exist yet).
+- [x] Confirm these FAIL (helper does not exist yet).
 
 ### Phase 2 — GREEN: extract the shared helper into `_cron-shared.ts`
 
-- [ ] Add to `_cron-shared.ts`:
+- [x] Add to `_cron-shared.ts`:
   - `const DEFAULT_AUDIT_TAIL_CHARS = 500;` (rename of `AUDIT_TAIL_CHARS`; keep value).
   - `export function formatTailForIssue(tail: string | undefined): string` — moved VERBATIM from `cron-content-generator.ts:163-174` (the backslash→pipe→backtick escape chain, order preserved). Import `redactGithubSourcedText` at the top of `_cron-shared.ts`.
   - `export async function ensureScheduledAuditIssue(args: { label: string; titlePrefix: string; cronName: string; runStartedAt: string; spawnResult: Pick<SpawnResult, "exitCode" | "signal" | "abortedByTimeout" | "durationMs" | "stdoutTail" | "stderrTail">; installationToken?: string; octokit?: Octokit; }): Promise<{ created: boolean }>` — the body of `ensureContentGeneratorAuditIssue` (`cron-content-generator.ts:176-253`) with:
@@ -182,19 +182,19 @@ pre-extraction content-generator title (an AC covers this).
     - `cron-content-generator` literal in the body prose + the `fn` table row → `args.cronName`;
     - keep `date = runStartedAt.slice(0, 10)`, the `octokit ?? new OctokitCtor({ auth: installationToken })` resolution, the `startsWith` dedup, and the self-diagnosing markdown table body.
   - `SpawnResult` type: import from `./_cron-claude-eval-substrate`. `Octokit` type: import from `@octokit/core` (mirror content-generator's imports). NOTE: `_cron-shared.ts` already imports `createProbeOctokit`; adding the `SpawnResult` + `Octokit` type imports is the only new import surface besides `redactGithubSourcedText`.
-- [ ] Run the Phase 1 tests → GREEN.
+- [x] Run the Phase 1 tests → GREEN.
 
 ### Phase 3 — Re-wire content-generator (no behavior change)
 
-- [ ] In `cron-content-generator.ts`: DELETE `AUDIT_TAIL_CHARS`, `formatTailForIssue`, and `ensureContentGeneratorAuditIssue` (now in `_cron-shared.ts`).
-- [ ] Replace the `ensure-audit-issue` step body to call
+- [x] In `cron-content-generator.ts`: DELETE `AUDIT_TAIL_CHARS`, `formatTailForIssue`, and `ensureContentGeneratorAuditIssue` (now in `_cron-shared.ts`).
+- [x] Replace the `ensure-audit-issue` step body to call
       `ensureScheduledAuditIssue({ label: SENTRY_MONITOR_SLUG, titlePrefix: "[Scheduled] Content Generator -", cronName: "cron-content-generator", runStartedAt, spawnResult, installationToken })`.
-- [ ] **Compatibility shim decision:** `cron-content-generator.test.ts:25` imports
+- [x] **Compatibility shim decision:** `cron-content-generator.test.ts:25` imports
       `ensureContentGeneratorAuditIssue`. Choose ONE (record in spec):
   - (a) re-export a thin wrapper `export const ensureContentGeneratorAuditIssue = (args) => ensureScheduledAuditIssue({ ...args, label: SENTRY_MONITOR_SLUG, titlePrefix: "[Scheduled] Content Generator -", cronName: "cron-content-generator" })` so the existing test keeps passing unchanged; OR
   - (b) update `cron-content-generator.test.ts` to import + call `ensureScheduledAuditIssue` directly with the explicit params, and delete the content-generator-specific behavioral block (now covered by `cron-shared.test.ts`).
   - **Recommended: (b)** — avoids a vestigial wrapper; the behavioral coverage moves to `cron-shared.test.ts` (Phase 1) and the wiring coverage stays in `cron-producer-output-wiring.test.ts` (Phase 5). Keep content-generator's source-shape anchors that assert the `ensure-audit-issue` step + `!heartbeatOk` gate (those are wiring, not behavior).
-- [ ] Run `cron-content-generator.test.ts` → GREEN (adjust the import/assertions per the chosen option).
+- [x] Run `cron-content-generator.test.ts` → GREEN (adjust the import/assertions per the chosen option).
 
 ### Phase 4 — Wire the other 7 producers
 
@@ -202,8 +202,8 @@ For EACH of `cron-roadmap-review`, `cron-competitive-analysis`,
 `cron-growth-audit`, `cron-growth-execution`, `cron-seo-aeo-audit`,
 `cron-community-monitor`, `cron-campaign-calendar`:
 
-- [ ] Add `ensureScheduledAuditIssue` to the `_cron-shared` import.
-- [ ] Insert AFTER the `sentry-heartbeat` step and BEFORE the `finally` teardown
+- [x] Add `ensureScheduledAuditIssue` to the `_cron-shared` import.
+- [x] Insert AFTER the `sentry-heartbeat` step and BEFORE the `finally` teardown
       (mirror `cron-content-generator.ts:358-393`):
       ```ts
       if (!heartbeatOk) {
@@ -228,49 +228,49 @@ For EACH of `cron-roadmap-review`, `cron-competitive-analysis`,
         });
       }
       ```
-- [ ] Confirm `installationToken` is in scope at the insertion point (all 7
+- [x] Confirm `installationToken` is in scope at the insertion point (all 7
       mint it as `step.run("mint-installation-token", …)` — verified). Confirm
       `reportSilentFallback` is already imported (all 7 import it — verified).
-- [ ] `titlePrefix` per the table above. Double-check each against the
+- [x] `titlePrefix` per the table above. Double-check each against the
       producer's prompt block (the `grep -nE "\[Scheduled\]"` from Phase 0).
 
 ### Phase 5 — Extend the un-wiring guard
 
-- [ ] In `cron-producer-output-wiring.test.ts`, inside the
+- [x] In `cron-producer-output-wiring.test.ts`, inside the
       `it.each(WIRED_PRODUCERS)` block, add anchors asserting the fallback wiring
       is present in ALL 8:
   - `expect(src).toContain("ensureScheduledAuditIssue(")`;
   - `expect(src).toContain('"ensure-audit-issue"')`;
   - `expect(src).toContain("if (!heartbeatOk)")`;
   - `expect(src).toContain('op: "ensure-audit-issue-failed"')`.
-- [ ] Add a guard that the fallback is NOT present in the 3 `BEST_EFFORT_CRONS`
+- [x] Add a guard that the fallback is NOT present in the 3 `BEST_EFFORT_CRONS`
       (`expect(src).not.toContain("ensureScheduledAuditIssue")`) — they are not
       output-aware producers and must not adopt the fallback.
 
 ### Phase 6 — Full verification
 
-- [ ] `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/` (all inngest tests).
-- [ ] `cd apps/web-platform && npx tsc --noEmit` (extraction must not break types; `tsc` is the canonical enumerator for any missed consumer).
-- [ ] `grep -rn "ensureContentGeneratorAuditIssue" apps/web-platform/` → only the chosen shim/test references remain (zero if option (b)).
-- [ ] `grep -c 'op: "ensure-audit-issue-failed"' apps/web-platform/server/inngest/functions/cron-*.ts` summed across the 8 producers = 8.
+- [x] `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/` (all inngest tests).
+- [x] `cd apps/web-platform && npx tsc --noEmit` (extraction must not break types; `tsc` is the canonical enumerator for any missed consumer).
+- [x] `grep -rn "ensureContentGeneratorAuditIssue" apps/web-platform/` → only the chosen shim/test references remain (zero if option (b)).
+- [x] `grep -c 'op: "ensure-audit-issue-failed"' apps/web-platform/server/inngest/functions/cron-*.ts` summed across the 8 producers = 8.
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-- [ ] **AC1** — `_cron-shared.ts` exports `ensureScheduledAuditIssue` and `formatTailForIssue`; the helper accepts `{ label, titlePrefix, cronName }` and uses each (verified by the ≥2-pair parameterization test in `cron-shared.test.ts`).
-- [ ] **AC2** — the composed fallback title for content-generator is byte-identical to the pre-extraction string `[Scheduled] Content Generator - <date>` (a test asserts `title === \`[Scheduled] Content Generator - ${date}\`` given `titlePrefix = "[Scheduled] Content Generator -"`).
-- [ ] **AC3** — all 8 producers contain the `ensure-audit-issue` step gated on `if (!heartbeatOk)` with the `ensure-audit-issue-failed` Sentry fallback: `grep -c 'op: "ensure-audit-issue-failed"'` across the 8 `cron-*.ts` producers sums to 8 (verified by `cron-producer-output-wiring.test.ts`).
-- [ ] **AC4** — the 3 `BEST_EFFORT_CRONS` do NOT contain `ensureScheduledAuditIssue` (asserted in `cron-producer-output-wiring.test.ts`).
-- [ ] **AC5** — body-redaction is preserved: the helper routes tails through `redactGithubSourcedText` AND neutralizes backtick/pipe/CR-LF (test feeds a synthesized `sk-ant-`-shape token + a `|`/backtick payload and asserts neither survives in the issue body).
-- [ ] **AC6** — dedup is label-scoped + title-prefix, `state:all`, `sort:created/desc`, `per_page:10` (test asserts the exact GET params) and suppresses a same-day prompt-success issue (no double-file under `retries:1`).
-- [ ] **AC7** — `npx tsc --noEmit` clean; full `test/server/inngest/` suite green.
-- [ ] **AC8** — no turn-budget change in any producer (`--max-turns` unchanged); no prompt edit; no new runtime dependency (`cq-before-pushing-package-json-changes` — `package.json` untouched).
-- [ ] **AC9** — PR body uses `Closes #4978`.
+- [x] **AC1** — `_cron-shared.ts` exports `ensureScheduledAuditIssue` and `formatTailForIssue`; the helper accepts `{ label, titlePrefix, cronName }` and uses each (verified by the ≥2-pair parameterization test in `cron-shared.test.ts`).
+- [x] **AC2** — the composed fallback title for content-generator is byte-identical to the pre-extraction string `[Scheduled] Content Generator - <date>` (a test asserts `title === \`[Scheduled] Content Generator - ${date}\`` given `titlePrefix = "[Scheduled] Content Generator -"`).
+- [x] **AC3** — all 8 producers contain the `ensure-audit-issue` step gated on `if (!heartbeatOk)` with the `ensure-audit-issue-failed` Sentry fallback: `grep -c 'op: "ensure-audit-issue-failed"'` across the 8 `cron-*.ts` producers sums to 8 (verified by `cron-producer-output-wiring.test.ts`).
+- [x] **AC4** — the 3 `BEST_EFFORT_CRONS` do NOT contain `ensureScheduledAuditIssue` (asserted in `cron-producer-output-wiring.test.ts`).
+- [x] **AC5** — body-redaction is preserved: the helper routes tails through `redactGithubSourcedText` AND neutralizes backtick/pipe/CR-LF (test feeds a synthesized `sk-ant-`-shape token + a `|`/backtick payload and asserts neither survives in the issue body).
+- [x] **AC6** — dedup is label-scoped + title-prefix, `state:all`, `sort:created/desc`, `per_page:10` (test asserts the exact GET params) and suppresses a same-day prompt-success issue (no double-file under `retries:1`).
+- [x] **AC7** — `npx tsc --noEmit` clean; full `test/server/inngest/` suite green.
+- [x] **AC8** — no turn-budget change in any producer (`--max-turns` unchanged); no prompt edit; no new runtime dependency (`cq-before-pushing-package-json-changes` — `package.json` untouched).
+- [x] **AC9** — PR body uses `Closes #4978`.
 
 ### Post-merge (operator)
 
-- [ ] **AC10** — **Automation: deploy is automatic.** `web-platform-release.yml`
+- [x] **AC10** — **Automation: deploy is automatic.** `web-platform-release.yml`
       path-filtered `on.push` restarts the container on merge to main touching
       `apps/web-platform/**`; the PR merge IS the deploy + function-sync
       remediation. No operator step. (Per the automation-feasibility gate: a cron

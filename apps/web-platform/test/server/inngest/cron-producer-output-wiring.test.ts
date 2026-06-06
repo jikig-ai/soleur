@@ -85,6 +85,21 @@ describe("output-aware heartbeat wiring (always-create producers)", () => {
       expect(src).toContain("stderrTail: spawnResult.stderrTail");
       expect(src).toContain("exitCode: spawnResult.exitCode");
       expect(src).toContain("stdoutTail: spawnResult.stdoutTail");
+
+      // #4960/#4978 — the handler-level silence-hole fallback. When the
+      // output-aware check found no labeled issue in the run window (mid-eval
+      // crash / API 500 / max-turns kill bypassed the prompt's create step),
+      // the handler ITSELF files a FAILED audit issue via the shared
+      // ensureScheduledAuditIssue helper so the run is never silent. The step
+      // must be gated on `!heartbeatOk` and wrap the create so a fallback
+      // failure is reported to Sentry (op:"ensure-audit-issue-failed") rather
+      // than crashing the finally/teardown. A revert of just this wiring
+      // (leaving the shared helper + its unit tests green) would otherwise pass
+      // the whole suite — same un-wiring-guard rationale as above.
+      expect(src).toContain("ensureScheduledAuditIssue(");
+      expect(src).toContain('"ensure-audit-issue"');
+      expect(src).toContain("if (!heartbeatOk)");
+      expect(src).toContain('op: "ensure-audit-issue-failed"');
     },
   );
 
@@ -105,6 +120,12 @@ describe("output-aware heartbeat wiring (always-create producers)", () => {
       // Sentry event (off-host-visible), not a bare logger.warn.
       expect(src).toContain("warnSilentFallback");
       expect(src).toContain('op: "claude-eval-nonzero-noop"');
+
+      // #4978 — best-effort crons are NOT output-aware producers, so they must
+      // NOT adopt the silence-hole fallback. A clean run that legitimately
+      // files no issue is the NORMAL outcome here; firing the fallback would
+      // spam FAILED audit issues on every healthy zero-artifact run.
+      expect(src).not.toContain("ensureScheduledAuditIssue");
     },
   );
 

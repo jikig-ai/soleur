@@ -25,9 +25,11 @@ vi.mock("@/server/observability", () => ({
 }));
 
 import {
+  ensureScheduledAuditIssue,
   resolveOutputAwareOk,
   verifyScheduledIssueCreated,
 } from "@/server/inngest/functions/_cron-shared";
+import type { Octokit } from "@octokit/core";
 
 function octokitReturning(issues: Array<{ updated_at: string }>) {
   const request = vi.fn().mockResolvedValue({ data: issues });
@@ -249,5 +251,200 @@ describe("resolveOutputAwareOk", () => {
       octokit,
     });
     expect(okFalse).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ensureScheduledAuditIssue — the handler-level silence-hole fallback (#4960),
+// extracted from cron-content-generator and parameterized for all 8 always-
+// create producers (#4978). When the output-aware heartbeat finds NO labeled
+// issue in the run window, the handler files a self-reporting FAILED audit
+// issue so the run is never silent. The behavior under test (dedup, redaction,
+// markdown-breakout neutralization, create) is identical to the proven
+// content-generator helper — these tests pin it for the shared, parameterized
+// form so a hardcoded-slug regression fails.
+// ---------------------------------------------------------------------------
+
+describe("ensureScheduledAuditIssue (shared fallback)", () => {
+  const RUN_STARTED_AT = "2026-06-05T15:05:11.992Z";
+  const DATE = "2026-06-05"; // runStartedAt.slice(0, 10)
+  const SPAWN = {
+    exitCode: 1,
+    signal: null,
+    abortedByTimeout: false,
+    durationMs: 368727,
+    stdoutTail: "API Error: 500 Internal server error.",
+    stderrTail: "",
+  };
+
+  // ≥2 distinct {label, titlePrefix} pairs so a hardcoded-slug regression
+  // (e.g. forgetting to thread args.label / args.titlePrefix) fails loudly.
+  const PAIRS = [
+    {
+      label: "scheduled-growth-audit",
+      titlePrefix: "[Scheduled] Growth Audit -",
+      cronName: "cron-growth-audit",
+    },
+    {
+      label: "scheduled-community-monitor",
+      titlePrefix: "[Scheduled] Community Monitor -",
+      cronName: "cron-community-monitor",
+    },
+  ] as const;
+
+  function fakeOctokit(getData: Array<{ title: string }>) {
+    const calls: Array<{ route: string; params: Record<string, unknown> }> = [];
+    const octokit = {
+      request: vi.fn(async (route: string, params: Record<string, unknown>) => {
+        calls.push({ route, params });
+        if (route.startsWith("GET")) return { data: getData };
+        return { data: { number: 9999 } };
+      }),
+    } as unknown as Octokit;
+    return { octokit, calls };
+  }
+
+  it.each(PAIRS)(
+    "creates exactly one labeled audit issue for $label when none exists in the window",
+    async ({ label, titlePrefix, cronName }) => {
+      const { octokit, calls } = fakeOctokit([]);
+      const res = await ensureScheduledAuditIssue({
+        label,
+        titlePrefix,
+        cronName,
+        runStartedAt: RUN_STARTED_AT,
+        spawnResult: SPAWN,
+        octokit,
+      });
+      expect(res.created).toBe(true);
+      const posts = calls.filter((c) => c.route.startsWith("POST"));
+      expect(posts).toHaveLength(1);
+      // Title is `${titlePrefix} ${date}` with date = runStartedAt.slice(0,10).
+      expect(posts[0].params.title).toBe(`${titlePrefix} ${DATE}`);
+      expect(posts[0].params.labels).toEqual([label]);
+      // Self-diagnosing body carries the cronName + failure evidence.
+      expect(String(posts[0].params.body)).toContain(cronName);
+      expect(String(posts[0].params.body)).toContain("API Error: 500");
+      expect(String(posts[0].params.body)).toContain("exitCode");
+    },
+  );
+
+  it("composes the content-generator title byte-identically (AC2)", async () => {
+    const { octokit, calls } = fakeOctokit([]);
+    await ensureScheduledAuditIssue({
+      label: "scheduled-content-generator",
+      titlePrefix: "[Scheduled] Content Generator -",
+      cronName: "cron-content-generator",
+      runStartedAt: RUN_STARTED_AT,
+      spawnResult: SPAWN,
+      octokit,
+    });
+    const post = calls.find((c) => c.route.startsWith("POST"));
+    expect(post?.params.title).toBe(`[Scheduled] Content Generator - ${DATE}`);
+  });
+
+  it.each(PAIRS)(
+    "does NOT double-file for $label when an EXACT same-day audit title already exists",
+    async ({ label, titlePrefix, cronName }) => {
+      const { octokit, calls } = fakeOctokit([
+        { title: `${titlePrefix} ${DATE}` },
+      ]);
+      const res = await ensureScheduledAuditIssue({
+        label,
+        titlePrefix,
+        cronName,
+        runStartedAt: RUN_STARTED_AT,
+        spawnResult: SPAWN,
+        octokit,
+      });
+      expect(res.created).toBe(false);
+      expect(calls.filter((c) => c.route.startsWith("POST"))).toHaveLength(0);
+    },
+  );
+
+  it.each(PAIRS)(
+    "dedup is title-PREFIX for $label — a suffixed prompt-success issue suppresses the fallback",
+    async ({ label, titlePrefix, cronName }) => {
+      const { octokit, calls } = fakeOctokit([
+        { title: `${titlePrefix} ${DATE} (manual)` },
+      ]);
+      const res = await ensureScheduledAuditIssue({
+        label,
+        titlePrefix,
+        cronName,
+        runStartedAt: RUN_STARTED_AT,
+        spawnResult: SPAWN,
+        octokit,
+      });
+      expect(res.created).toBe(false);
+      expect(calls.filter((c) => c.route.startsWith("POST"))).toHaveLength(0);
+    },
+  );
+
+  it("dedup GET is label-scoped, state:all, sort:created/desc, per_page:10 (AC6)", async () => {
+    const { octokit, calls } = fakeOctokit([]);
+    await ensureScheduledAuditIssue({
+      label: "scheduled-growth-audit",
+      titlePrefix: "[Scheduled] Growth Audit -",
+      cronName: "cron-growth-audit",
+      runStartedAt: RUN_STARTED_AT,
+      spawnResult: SPAWN,
+      octokit,
+    });
+    const get = calls.find((c) => c.route.startsWith("GET"));
+    expect(get?.route).toBe("GET /repos/{owner}/{repo}/issues");
+    expect(get?.params.labels).toBe("scheduled-growth-audit");
+    expect(get?.params.state).toBe("all");
+    expect(get?.params.sort).toBe("created");
+    expect(get?.params.direction).toBe("desc");
+    expect(get?.params.per_page).toBe(10);
+  });
+
+  it("scrubs secrets and neutralizes markdown-breakout chars in the issue body (AC5)", async () => {
+    const { octokit, calls } = fakeOctokit([]);
+    await ensureScheduledAuditIssue({
+      label: "scheduled-seo-aeo-audit",
+      titlePrefix: "[Scheduled] SEO/AEO Audit -",
+      cronName: "cron-seo-aeo-audit",
+      runStartedAt: RUN_STARTED_AT,
+      spawnResult: {
+        ...SPAWN,
+        // crash-path stderr spilling an Anthropic key + table-breaking chars
+        // (incl. a literal backslash-pipe to exercise escape-order, js/incomplete-sanitization)
+        stderrTail: "boom sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAA \\| pipe `tick`",
+      },
+      octokit,
+    });
+    const body = String(
+      calls.find((c) => c.route.startsWith("POST"))!.params.body,
+    );
+    expect(body).not.toContain("sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAA");
+    expect(body).toContain("[redacted-key]");
+    // table-breaking chars neutralized inside the inline-code cell: backslash
+    // escaped FIRST (js/incomplete-sanitization) so `\|` → `\\\|`, pipe → "\|"
+    // (markdown literal, no row break), backtick → "ʼ" (no span break),
+    // CR/LF → space.
+    expect(body).toContain("\\\\\\| pipe");
+    expect(body).toContain("ʼtickʼ");
+    expect(body).not.toContain("`tick`");
+  });
+
+  it("propagates a create failure to the caller (POST throws → helper rejects)", async () => {
+    const octokit = {
+      request: vi.fn(async (route: string) => {
+        if (route.startsWith("GET")) return { data: [] };
+        throw new Error("GitHub 503");
+      }),
+    } as unknown as Octokit;
+    await expect(
+      ensureScheduledAuditIssue({
+        label: "scheduled-roadmap-review",
+        titlePrefix: "[Scheduled] Weekly Roadmap Review -",
+        cronName: "cron-roadmap-review",
+        runStartedAt: RUN_STARTED_AT,
+        spawnResult: SPAWN,
+        octokit,
+      }),
+    ).rejects.toThrow("GitHub 503");
   });
 });
