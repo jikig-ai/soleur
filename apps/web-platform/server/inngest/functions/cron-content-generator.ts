@@ -50,6 +50,26 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 // claude-code spawn argv. `--` is load-bearing per #4017 bug 8/8 (variadic
 // --allowedTools consumes the prompt as a tool name without the end-of-
 // options marker). The prompt is the SOLE positional argument after `--`.
+//
+// #4987 — content-generator's prompt invokes plugin skills
+// (/soleur:content-writer, social-distribute, growth). This is the FIRST
+// producer fixed for headless plugin-skill resolution; sibling producers that
+// invoke /soleur:* skills in their prompts (cron-competitive-analysis,
+// cron-legal-audit, cron-growth-audit, …) almost certainly share the same
+// latent gap and are tracked for a fleet audit in #4993. Two flags make skill
+// invocation work in a headless `claude --print` run:
+//   - `--allowedTools` is an explicit allowlist, so `Skill` (invoke a plugin
+//     skill) and `Task` (content-writer's fact-checker subagent; the `Task`
+//     precedent is cron-competitive-analysis / cron-legal-audit, which already
+//     allow it) must be listed or the skill cannot run at all. --max-turns
+//     stays 50.
+//   - `--plugin-dir plugins/soleur` REGISTERS the symlinked plugin. Per
+//     `claude --plugin-dir <path>` ("Load a plugin from a directory or .zip"),
+//     loading a directory-based plugin in a headless `--print` run requires the
+//     flag explicitly — a bare symlinked plugins/ dir is NOT auto-discovered
+//     (the interactive marketplace/enabledPlugins trust flow does not run under
+//     --print). The path is the symlink setupEphemeralWorkspace creates at
+//     <spawnCwd>/plugins/soleur and MUST precede the `--` marker.
 const CLAUDE_CODE_FLAGS = [
   "--print",
   "--model",
@@ -57,7 +77,9 @@ const CLAUDE_CODE_FLAGS = [
   "--max-turns",
   "50",
   "--allowedTools",
-  "Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch",
+  "Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Skill,Task",
+  "--plugin-dir",
+  "plugins/soleur",
   "--",
 ];
 
@@ -83,10 +105,8 @@ STEP 3 — Generate distribution content:
 Run /soleur:social-distribute <article-path> --headless
 Ensure frontmatter has: publish_date: <today>, status: scheduled, channels: discord, x, bluesky, linkedin-company
 
-STEP 4 — Validate:
-npx @11ty/eleventy
-bash scripts/validate-blog-links.sh _site
-If build or link validation fails, create issue and stop.
+STEP 4 — Validation runs in CI (do NOT build locally):
+This ephemeral workspace is a shallow clone with no node_modules, so a local "npx @11ty/eleventy" build cannot run here. Validation happens on the PR you open in the MANDATORY FINAL STEP: CI runs "npx @11ty/eleventy" and "scripts/validate-blog-links.sh", and the "gh pr merge --auto" below only merges once those required checks pass. Your job is to make CI green — ensure the article's Eleventy frontmatter is valid and every internal link resolves. Do NOT attempt a local build or run the validation scripts yourself.
 
 STEP 5 — Record topic in queue:
 Update seo-refresh-queue.md with generated_date annotation.
@@ -124,7 +144,7 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
 // Silence-hole fallback guard (#4960)
 // =============================================================================
 //
-// The prompt's STEP 1b/2/4/6 "create issue and stop" guards are the ONLY
+// The prompt's STEP 1b/2/6 "create issue and stop" guards are the ONLY
 // producers of the `scheduled-content-generator` audit issue. Any termination
 // that bypasses the prompt — a mid-eval crash, an upstream Anthropic API 500
 // that kills `claude --print` (the #4960 case, confirmed via Sentry event
