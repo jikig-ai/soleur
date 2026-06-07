@@ -464,8 +464,9 @@ export async function ensureScheduledAuditIssue(args: {
   // (success or fallback). Explicit `sort: created, direction: desc` so today's
   // issue is guaranteed on page 1 — do NOT rely on GitHub's unspecified default
   // sort for dedup correctness (a busy label could otherwise page today's issue
-  // out and double-file). per_page:10 ≈ 5 weeks at Tue/Thu cadence, ample
-  // headroom. This dedup is load-bearing (not belt-and-suspenders): on a
+  // out and double-file). per_page:10 covers ≥1 week of any wired producer's
+  // cadence (daily through monthly) — ample to keep today's issue on page 1.
+  // This dedup is load-bearing (not belt-and-suspenders): on a
   // verify-throw + spawn-nonzero run the gate fires even though the prompt's
   // issue may exist — the same-title dedup is what prevents a spurious second.
   const existing = (await client.request("GET /repos/{owner}/{repo}/issues", {

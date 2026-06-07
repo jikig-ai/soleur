@@ -429,6 +429,53 @@ describe("ensureScheduledAuditIssue (shared fallback)", () => {
     expect(body).not.toContain("`tick`");
   });
 
+  it("collapses CR/LF in the tail to a single space (no markdown row-break)", async () => {
+    const { octokit, calls } = fakeOctokit([]);
+    await ensureScheduledAuditIssue({
+      label: "scheduled-growth-audit",
+      titlePrefix: "[Scheduled] Growth Audit -",
+      cronName: "cron-growth-audit",
+      runStartedAt: RUN_STARTED_AT,
+      spawnResult: { ...SPAWN, stderrTail: "line1\r\nline2\nline3" },
+      octokit,
+    });
+    const body = String(
+      calls.find((c) => c.route.startsWith("POST"))!.params.body,
+    );
+    // CR/LF collapsed to a single space so the tail stays inside one table cell.
+    expect(body).toContain("line1 line2 line3");
+    expect(body).not.toContain("line1\nline2");
+  });
+
+  it("renders the (empty) sentinel for an empty tail", async () => {
+    const { octokit, calls } = fakeOctokit([]);
+    await ensureScheduledAuditIssue({
+      label: "scheduled-growth-audit",
+      titlePrefix: "[Scheduled] Growth Audit -",
+      cronName: "cron-growth-audit",
+      runStartedAt: RUN_STARTED_AT,
+      spawnResult: { ...SPAWN, stdoutTail: "", stderrTail: "" },
+      octokit,
+    });
+    const body = String(
+      calls.find((c) => c.route.startsWith("POST"))!.params.body,
+    );
+    expect(body).toContain("(empty)");
+  });
+
+  it("throws when neither octokit nor installationToken is provided", async () => {
+    await expect(
+      ensureScheduledAuditIssue({
+        label: "scheduled-growth-audit",
+        titlePrefix: "[Scheduled] Growth Audit -",
+        cronName: "cron-growth-audit",
+        runStartedAt: RUN_STARTED_AT,
+        spawnResult: SPAWN,
+        // no octokit, no installationToken
+      }),
+    ).rejects.toThrow(/need octokit or installationToken/);
+  });
+
   it("propagates a create failure to the caller (POST throws → helper rejects)", async () => {
     const octokit = {
       request: vi.fn(async (route: string) => {
