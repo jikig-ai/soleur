@@ -162,7 +162,7 @@ connected" is a trust-eroding, brand-survival-class failure for that one user.
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — Server injects connected-repo context (cc path).** When `connectedOwner` and
+- [x] **AC1 — Server injects connected-repo context (cc path).** When `connectedOwner` and
   `connectedRepo` are both non-empty, `cc-dispatcher.ts` appends a system-prompt addendum
   naming the connected repository as `${connectedOwner}/${connectedRepo}` and instructing
   the agent to use that value for `-R owner/repo`. Verify by source-presence test (the
@@ -170,26 +170,26 @@ connected" is a trust-eroding, brand-survival-class failure for that one user.
   `cc-dispatcher-gh-403-directive.test.ts`): the addendum constant exists, carries the
   `${connectedOwner}/${connectedRepo}` interpolation and an `-R` reference, and is appended
   to `effectiveSystemPrompt` inside the `if (connectedOwner && connectedRepo)` guard.
-- [ ] **AC2 — Baseline directive no longer tells the agent to infer owner/repo from the git
+- [x] **AC2 — Baseline directive no longer tells the agent to infer owner/repo from the git
   origin remote.** `GH_AUTH_STATUS_GUIDANCE_DIRECTIVE` in `soleur-go-runner.ts` MUST NOT
   contain the substring `remote.origin.url`. It MUST still contain the paren-safe anchors
   `gh auth status` and `-R owner/repo` (the existing
   `soleur-go-runner-gh-auth-status.test.ts` anchors stay green) and MUST reference the
   connected repository named in the agent's context.
-- [ ] **AC3 — Addendum injection is guarded on resolved owner/repo, not on a `.git`
+- [x] **AC3 — Addendum injection is guarded on resolved owner/repo, not on a `.git`
   presence check.** The new addendum append is inside the `connectedOwner && connectedRepo`
   truthiness guard (server-resolved values), NOT gated on `existsSync(.git)` — so it fires
   even on a `.git`-less workspace (the exact failing case).
-- [ ] **AC4 — Owner/repo interpolation is injection-safe.** The plan reuses
+- [x] **AC4 — Owner/repo interpolation is injection-safe.** The plan reuses
   `connectedOwner`/`connectedRepo`, which are validated against `CC_GITHUB_NAME_RE` at
   `cc-dispatcher.ts:1330` before assignment. A test asserts the addendum builder is fed
   only those validated bindings (no raw `repoUrl`, no tool input). Mirror the
   `agent-runner.ts:1425-1428` safety comment.
-- [ ] **AC5 — No behavioral change when no repo is connected.** When `connectedOwner`/
+- [x] **AC5 — No behavioral change when no repo is connected.** When `connectedOwner`/
   `connectedRepo` are empty (no connected repo / non-member), the addendum is NOT appended
   and the prompt is byte-identical to today's (graceful degradation parity with the
   existing GH_TOKEN no-op). Source/test assertion that the append sits inside the guard.
-- [ ] **AC6 — `tsc --noEmit` and the web-platform test suite pass.** Run via the package's
+- [x] **AC6 — `tsc --noEmit` and the web-platform test suite pass.** Run via the package's
   actual runner (`apps/web-platform` uses vitest — confirm via `package.json scripts.test`
   before running; place new tests under `apps/web-platform/test/` per the repo's vitest
   `include:` globs, not co-located).
