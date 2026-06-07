@@ -11,6 +11,31 @@ brand_survival_threshold: none
 
 # ✨ feat: Float the sidebar collapse toggle to reclaim top vertical space
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-07
+
+### Key improvements from the deepen pass
+1. **Precedent adopted (Phase 4.4 diff):** the floating-toggle classes were changed from the
+   speculative `absolute top-3 right-2 z-40` to the repo's existing corner-control convention
+   `absolute right-3 top-3 z-10` — verbatim from `components/ui/error-card.tsx:27`. Pattern is
+   not novel; do not invent new offsets.
+2. **z-index correction:** the original "toggle z-40 < dropdown z-50" framing was wrong — the
+   two live in separate stacking contexts and the dropdown opens DOWNWARD (`top-full`) into a
+   vertical band disjoint from the top-right toggle. `z-10` suffices; the VRT no-overlap
+   assertion is the real guard.
+3. **Wireframe produced:** Phase 4.9 (UI-Wireframe Halt) fired because `app/(dashboard)/layout.tsx`
+   matches the UI-surface glob superset. A `.pen` wireframe was generated via Pencil CLI (auth
+   from Doppler `soleur/dev` `PENCIL_CLI_KEY`) — see Domain Review.
+
+### Verify-the-negative pass (Phase 4.45)
+- "multi-workspace card has a chevron at the right edge" → confirmed `org-switcher.tsx:140` (`▾`).
+- "`<aside>` is a positioned ancestor" → confirmed `layout.tsx:308` (`md:relative`).
+- "mobile close button is `md:hidden` and unaffected" → confirmed `layout.tsx:331-337`.
+- "dropdown opens below the card" → confirmed `org-switcher.tsx:146` (`top-full`).
+- "vitest is the runner, not bun" → confirmed `package.json:15` (`"test": "vitest"`) +
+  `bunfig.toml` `pathIgnorePatterns = ["**"]`.
+
 ## Overview
 
 The web-platform desktop sidebar wastes ~45px of vertical space at its very top. A
@@ -121,14 +146,25 @@ sensitive path, no data/auth/API surface touched.`)
      `md:hidden` row, but harmless and clarifies intent — keep it for safety).
 2. **Float the desktop toggle.** Move the collapse `<button>` (currently `layout.tsx:344-351`)
    OUT of the row and render it as an absolutely-positioned element directly inside the
-   `<aside>`, gated `hidden md:flex`. Proposed classes:
-   `hidden md:flex absolute top-3 right-2 z-40 h-6 w-6 items-center justify-center rounded text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary`
-   - `top-3` aligns vertically with the band's `pt-2`/`py-3` header zone.
-   - `right-2` (8px) keeps the 24px button inside the 56px collapsed rail (8 + 24 = 32 < 56)
-     and inside the 224px expanded rail, sitting to the RIGHT of the workspace chevron's
-     vertical band (the chevron is centered in the card's `py-2.5`, ~12px lower than `top-3`).
-   - `z-40` keeps it above the band content but BELOW the multi-workspace dropdown menu
-     (`org-switcher.tsx:146` uses `z-50`) so an open switcher menu still overlays the toggle.
+   `<aside>`, gated `hidden md:flex`. Proposed classes (adopt the repo's existing
+   `absolute right-3 top-3` corner-control convention — see precedent below):
+   `hidden md:flex absolute right-3 top-3 z-10 h-6 w-6 items-center justify-center rounded text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary`
+   - **Precedent (Phase 4.4 diff):** `components/ui/error-card.tsx:27` floats a dismiss control
+     with exactly `absolute right-3 top-3` — same shape, same corner. Adopt it verbatim rather
+     than inventing `right-2`/`top-2`. The pattern is not novel.
+   - `top-3` (12px) aligns vertically with the band's `pt-2`/`py-3` header zone.
+   - `right-3` (12px): the 24px button's box spans 12→36px from the right edge. In the 56px
+     collapsed rail that is the right HALF of the rail; the band's monogram tile is centered
+     in the `px-2` column (~12→44px) — verify in VRT they don't overlap (the tile is `size="sm"`
+     ~28px, centered; the toggle is top-right). In the 224px expanded rail there is ample room.
+   - **z-index / dropdown overlap correction:** the multi-workspace dropdown (`org-switcher.tsx:146`)
+     opens `top-full` — i.e. it expands DOWNWARD, *below* the card, while the floating toggle
+     sits in the header strip ABOVE the card. They occupy disjoint vertical bands, so they
+     cannot overlap regardless of z-index (and they live in separate stacking contexts: the
+     dropdown's `z-50` is scoped to its own `relative` wrapper at `org-switcher.tsx:111`, not
+     comparable to the toggle's `z-10` on the `<aside>`). `z-10` is sufficient to lift the
+     toggle above the band's static content; do NOT chase a cross-context `z-40 vs z-50` race.
+     VRT Test Scenario 2 still asserts no rect intersection as a regression guard.
    - **Preserve verbatim:** `onClick={toggleCollapsed}`, `aria-label={collapsed ? "Expand
      sidebar" : "Collapse sidebar"}`, `title={collapsed ? "Expand sidebar (⌘B)" : "Collapse
      sidebar (⌘B)"}`, and the `PanelToggleIcon h-4 w-4` child. (Edge Case 4)
@@ -245,19 +281,27 @@ pipeline restarts the container on merge to `apps/web-platform/**`; no operator 
 
 **Tier:** advisory
 **Decision:** auto-accepted (pipeline)
-**Agents invoked:** none
-**Skipped specialists:** none — `ux-design-lead` not required: this MODIFIES an existing UI
-surface (no new page, no new component file, no new interactive flow). Per the mechanical
-UI-surface override the gate runs, but the change creates no new user-facing surface →
-ADVISORY, and on the pipeline path ADVISORY auto-accepts. No `.pen` wireframe is required for
-repositioning an existing control (`wg-ui-feature-requires-pen-wireframe` fires for NEW UI
-surfaces; this is a CSS reposition of an existing button).
-**Pencil available:** N/A (no new UI surface — repositioning an existing control)
+**Agents invoked:** ux-design-lead (wireframe producer, via Pencil CLI)
+**Skipped specialists:** none
+**Pencil available:** yes
+**Wireframe artifact:** `knowledge-base/product/design/dashboard-nav/sidebar-float-collapse-toggle.pen`
+(committed). Generated via Pencil CLI (auth: Doppler `soleur/dev` `PENCIL_CLI_KEY`; Node
+22.22.1 ≥ 22.9.0). Shows the sidebar header BEFORE (wasted ~44px toggle row), AFTER expanded
+(band at top + floating top-right toggle, ~45px reclaimed, no chevron collision), and AFTER
+collapsed (toggle inside the 56px rail, no monogram-tile overlap).
+
+> **Why a `.pen` despite "advisory":** deepen-plan Phase 4.9 (UI-Wireframe Artifact Halt)
+> fires mechanically because `app/(dashboard)/layout.tsx` matches the UI-surface glob superset
+> AND this is a structural/layout change (not a pure-copy/style tweak, which IS the only
+> exclusion). On the one-shot path plan Phase 2.5 is the SOLE wireframe producer, so the `.pen`
+> was generated here (the earlier "N/A, repositioning an existing control" reasoning was
+> superseded by the mechanical override per `wg-ui-feature-requires-pen-wireframe`).
 
 #### Findings
 
 The only product-facing risk is interaction friction (toggle reachability / overlap), fully
-covered by AC2–AC6 and the pre-push VRT gate. No copy, no flow, no brand-survival surface.
+covered by AC2–AC6, the wireframe, and the pre-push VRT gate. No copy, no flow, no
+brand-survival surface.
 
 ## Observability
 
@@ -270,8 +314,9 @@ code/infra logic surface.)
 ## Test Scenarios
 
 1. Desktop expanded, solo workspace: band at top, toggle floats top-right, no overlap.
-2. Desktop expanded, multi-workspace: toggle does not collide with the `▾` chevron; opening
-   the switcher dropdown (z-50) overlays the toggle (z-40).
+2. Desktop expanded, multi-workspace: toggle does not collide with the `▾` chevron; the
+   switcher dropdown opens downward (`top-full`), in a disjoint vertical band from the
+   top-right toggle — no overlap (assert rect intersection = 0 in VRT).
 3. Desktop collapsed (56px rail): toggle visible, inside rail, no overlap with tile; click
    expands; ⌘B expands.
 4. Mobile (390px): close-button row present, mobile band present, drawer dismiss works.
@@ -285,7 +330,9 @@ code/infra logic surface.)
 - **Risk:** the collapsed-rail toggle drifts outside the 56px rail.
   **Mitigation:** `right-2` math (8 + 24 = 32 < 56) + AC4 VRT inside-rail assertion.
 - **Risk:** `z-index` war — an open switcher dropdown sits under the toggle.
-  **Mitigation:** toggle `z-40` < dropdown `z-50` (`org-switcher.tsx:146`); Test Scenario 2.
+  **Mitigation:** non-issue — the dropdown opens `top-full` (downward, below the card) while
+  the toggle sits above the card; disjoint vertical bands, separate stacking contexts. `z-10`
+  on the toggle suffices. VRT Test Scenario 2 asserts no rect intersection as a guard.
 - **Risk:** removing the row drops the desktop `safe-top` (notch padding).
   **Mitigation:** desktop has no safe-area inset; the mobile row (the only notch surface)
   keeps `safe-top`. See Sharp Edges.

@@ -20,12 +20,16 @@ NEVER assert jsdom layout values — pixel proof lives in the Playwright VRT spe
 - [ ] 0.3 Re-read the geometry-pinning assertions to be rewritten:
       `dashboard-sidebar-collapse.test.tsx:105-110` and `nav-states-shell.e2e.ts:419-440`.
 
+Wireframe: `knowledge-base/product/design/dashboard-nav/sidebar-float-collapse-toggle.pen`
+(before/after expanded + collapsed).
+
 ## Phase 1 — Restructure (production change) — `app/(dashboard)/layout.tsx`
 
 - [ ] 1.1 Make the brand row (`:326`) mobile-only: hold only the close button; drop
       `justify-between`; keep `safe-top`; gate `md:hidden`.
 - [ ] 1.2 Move the collapse `<button>` (`:344-351`) out of the row; render it as an
-      `absolute top-3 right-2 z-40 h-6 w-6 ... hidden md:flex` direct child of `<aside>`.
+      `absolute right-3 top-3 z-10 h-6 w-6 ... hidden md:flex` direct child of `<aside>`
+      (adopt the `error-card.tsx:27` corner-control precedent — NOT a new offset).
 - [ ] 1.3 Preserve verbatim: `onClick={toggleCollapsed}`, `aria-label` Expand/Collapse,
       `title` "(⌘B)", `PanelToggleIcon h-4 w-4`.
 - [ ] 1.4 Verify (via VRT screenshots, not speculation) the band's top room is reclaimed and
