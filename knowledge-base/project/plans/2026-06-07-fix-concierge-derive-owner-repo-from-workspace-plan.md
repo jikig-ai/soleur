@@ -10,6 +10,69 @@ requires_cpo_signoff: true
 
 # 🐛 fix: Concierge derives owner/repo from the active workspace
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-07
+**Sections enhanced:** Research Insights added; all source attributions + premise verified live.
+
+### Key Improvements
+1. Verified every load-bearing file:line attribution against current source (no drift):
+   `soleur-go-runner.ts:148` (directive) + `:158` (`remote.origin.url`),
+   `agent-runner.ts:1433` (`The connected repository is ${owner}/${repo}` precedent),
+   `cc-dispatcher.ts:260` (`GH_403_PROMPT_DIRECTIVE`), `:1323-1337` (owner/repo parse),
+   `:1330` (`CC_GITHUB_NAME_RE` validation), `:1532` (unconditional append precedent).
+2. Confirmed the package test runner is **vitest** (not bun) and pinned the exact run
+   command + test placement (`test/**/*.test.ts` → node project) — closes the bun-vs-vitest
+   sharp edge before /work.
+3. Verified the two negative security claims (owner/repo never tool-tainted; token never
+   in the owner/repo string) against source.
+
+### New Considerations Discovered
+- `apps/web-platform/bunfig.toml:11` has `pathIgnorePatterns = ["**"]` — `bun test <file>`
+  reports "filter did not match" even for existing tests. The implementer MUST use vitest.
+- The cc-path system prompt is assembled in TWO places: the baseline directive lives in
+  `soleur-go-runner.ts` (`buildSoleurGoSystemPrompt`), but the per-dispatch owner/repo
+  addendum must live in `cc-dispatcher.ts` (the factory) — the ONLY scope where
+  `connectedOwner`/`connectedRepo` exist. Both files must change.
+
+### Research Insights
+
+**Precedent-diff (Phase 4.4) — pattern is NOT novel; two in-repo precedents:**
+
+- *System-prompt addendum injection*: `cc-dispatcher.ts:1532` appends `GH_403_PROMPT_DIRECTIVE`
+  unconditionally; `:1527-1529` appends `c4PromptAddendum` conditionally inside a guard. The
+  new connected-repo addendum mirrors the conditional form (guard:
+  `connectedOwner && connectedRepo`).
+- *Naming the connected repo to the agent*: `agent-runner.ts:1429-1441` (leader path) already
+  emits `## GitHub read access\n\nThe connected repository is ${owner}/${repo}.` — the cc path
+  simply lacks the equivalent. Lock-step the lead phrase `The connected repository is
+  ${owner}/${repo}` so both surfaces stay greppable together.
+- *Injection-safety precedent*: `agent-runner.ts:1425-1428` documents that owner/repo are
+  `GITHUB_NAME_RE`-validated and "If that regex ever relaxes, this becomes a prompt-injection
+  sink." `cc-dispatcher.ts` validates identically via `CC_GITHUB_NAME_RE` at `:1330`. Carry the
+  same warning comment to the new builder.
+
+**Verified test command (AC6):**
+
+```bash
+# Runner is vitest (apps/web-platform/package.json scripts.test = "vitest").
+# New test MUST live under test/ (node project include: "test/**/*.test.ts").
+# Do NOT use `bun test` — apps/web-platform/bunfig.toml:11 pathIgnorePatterns=["**"].
+cd apps/web-platform && ./node_modules/.bin/vitest run \
+  test/cc-dispatcher-connected-repo-context.test.ts \
+  test/soleur-go-runner-gh-auth-status.test.ts
+```
+
+**Premise + attribution verification (live, 2026-06-07):**
+
+```text
+gh issue view 4826 → OPEN "feat: nav-rail position resume …"  (example trigger, not blocker)
+gh issue view 3242/3243/3454 → all OPEN (code-review overlaps; acknowledged, not folded in)
+grep remote.origin.url soleur-go-runner.ts → :158 (the clause to rewrite)
+grep "The connected repository is" agent-runner.ts → :1433 (precedent confirmed)
+grep connectedOwner/CC_GITHUB_NAME_RE.test/effectiveSystemPrompt cc-dispatcher.ts → :1323/:1330/:1532
+```
+
 ## Overview
 
 In the Dashboard "Soleur Concierge" chat, asking to **"Fix Issue 4826"** makes the

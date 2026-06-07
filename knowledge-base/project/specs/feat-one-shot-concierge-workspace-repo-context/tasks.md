@@ -5,9 +5,11 @@ Lane: cross-domain
 
 ## Phase 1 — Setup / RED (failing tests first)
 
-- [ ] 1.1 Confirm the package test runner: read `apps/web-platform/package.json`
-  `scripts.test` and the vitest `include:` globs (`apps/web-platform/vitest.config.ts`)
-  so new tests land where vitest collects them (`test/**`, not co-located).
+- [ ] 1.1 Test runner is **vitest** (verified: `apps/web-platform/package.json`
+  `scripts.test = "vitest"`; node project `include: ["test/**/*.test.ts", "lib/**/*.test.ts"]`).
+  New tests go under `apps/web-platform/test/` as `*.test.ts`. Do NOT use `bun test` —
+  `apps/web-platform/bunfig.toml:11` has `pathIgnorePatterns = ["**"]`. Run:
+  `cd apps/web-platform && ./node_modules/.bin/vitest run test/cc-dispatcher-connected-repo-context.test.ts test/soleur-go-runner-gh-auth-status.test.ts`.
 - [ ] 1.2 Write failing source-presence test
   `apps/web-platform/test/cc-dispatcher-connected-repo-context.test.ts`
   (AC1/AC3/AC4/AC5): assert a connected-repo directive builder/constant exists with the
