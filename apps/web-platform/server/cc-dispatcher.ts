@@ -279,14 +279,20 @@ const GH_403_PROMPT_DIRECTIVE =
 // active-workspace repo_url (ADR-044), so we surface it directly. Mirrors the
 // leader path at agent-runner.ts:1429-1441 (lock-step the lead phrase "The
 // connected repository is ${owner}/${repo}" so the two surfaces stay
-// greppable together).
+// greppable together). PARITY: the static baseline counterpart is
+// GH_AUTH_STATUS_GUIDANCE_DIRECTIVE in soleur-go-runner.ts — both tell the
+// agent to pass `-R owner/repo` and never infer from a git remote; keep the
+// two in lock-step.
 //
 // The `${owner}/${repo}` interpolation is safe because both are validated
 // against CC_GITHUB_NAME_RE at the call site before assignment (see
 // connectedOwner/connectedRepo resolution below) — no whitespace, backticks,
 // `$`, `{`, newlines, or markdown fences can slip through. If that regex ever
 // relaxes, this becomes a prompt-injection sink.
-function buildConnectedRepoContext(owner: string, repo: string): string {
+//
+// Exported so the test suite can assert on the builder's OUTPUT directly
+// (behavioral), not only on source-presence of the call site.
+export function buildConnectedRepoContext(owner: string, repo: string): string {
   return (
     "## Connected repository\n" +
     `The connected repository is ${owner}/${repo}. For any repo gh operation, ` +

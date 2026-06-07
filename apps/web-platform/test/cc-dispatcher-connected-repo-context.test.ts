@@ -16,55 +16,63 @@ import { describe, test, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { buildConnectedRepoContext } from "@/server/cc-dispatcher";
+
 const SRC = readFileSync(
   join(__dirname, "..", "server", "cc-dispatcher.ts"),
   "utf8",
 );
 
+// AC1/AC4 are behavioral — assert on the exported builder's OUTPUT, so they
+// survive any benign refactor of the call site (rename, reformat, reflow).
+// AC3/AC5 prove the WIRING (the builder is appended inside the server-resolved
+// guard, not a `.git` probe) via reflow-tolerant source-presence checks — the
+// per-dispatch factory is impractical to invoke in a unit test (same framing
+// as cc-dispatcher-gh-403-directive.test.ts).
 describe("Concierge connected-repo context addendum", () => {
-  test("AC1: a connected-repo context builder names the repo and references -R", () => {
-    const idx = SRC.indexOf("buildConnectedRepoContext");
-    expect(
-      idx,
-      "buildConnectedRepoContext builder must exist",
-    ).toBeGreaterThan(-1);
-    // The builder body (window after the definition) names the connected repo
-    // and instructs passing `-R owner/repo` using that resolved value.
-    const body = SRC.slice(idx, idx + 1200);
+  test("AC1: the builder names the connected repo and instructs -R owner/repo", () => {
+    const out = buildConnectedRepoContext("jikig-ai", "soleur");
     // Lock-step lead phrase with agent-runner.ts:1433.
-    expect(body).toMatch(/connected repository is \$\{owner\}\/\$\{repo\}/);
-    expect(body).toMatch(/-R \$\{owner\}\/\$\{repo\}/);
+    expect(out).toContain("The connected repository is jikig-ai/soleur");
+    expect(out).toContain("-R jikig-ai/soleur");
+    // Names the actual values, not a placeholder.
+    expect(out).not.toContain("owner/repo");
   });
 
-  test("AC3/AC5: addendum is appended only inside the connectedOwner && connectedRepo guard", () => {
-    // Guard on server-resolved truthiness — NOT existsSync(.git). The append
-    // sits immediately inside the guard so it fires on a `.git`-less workspace
-    // (the failing case) and is omitted when no repo is connected (byte-parity).
+  test("AC1: the builder tells the agent NOT to infer from a git remote / .git", () => {
+    const out = buildConnectedRepoContext("acme", "widgets");
+    expect(out).toMatch(/do NOT try to infer/i);
+    expect(out).toMatch(/git remote or a \.git directory/);
+  });
+
+  test("AC3/AC5: the append is wired inside the connectedOwner && connectedRepo guard (not a .git probe)", () => {
+    // Reflow-tolerant: tolerate whitespace/newlines between the guard and the
+    // append, but bound the gap so it cannot match across unrelated code. The
+    // guard keys on server-resolved truthiness — NOT existsSync('.git').
     expect(SRC).toMatch(
-      /if \(connectedOwner && connectedRepo\) \{\s*effectiveSystemPrompt\s*\+=\s*`\\n\\n\$\{buildConnectedRepoContext\(connectedOwner, connectedRepo\)\}`;\s*\}/,
+      /if \(connectedOwner && connectedRepo\)\s*\{[\s\S]{0,200}?effectiveSystemPrompt\s*\+=[\s\S]{0,80}?buildConnectedRepoContext\(connectedOwner, connectedRepo\)/,
     );
-  });
-
-  test("AC5: addendum is NOT gated on a .git presence check", () => {
-    // The append must not be conditioned on a filesystem `.git` probe.
+    // The guard window must not be a filesystem `.git` presence check.
+    const guardIdx = SRC.search(/if \(connectedOwner && connectedRepo\)/);
     const appendIdx = SRC.indexOf(
       "buildConnectedRepoContext(connectedOwner, connectedRepo)",
     );
-    expect(appendIdx).toBeGreaterThan(-1);
-    const window = SRC.slice(appendIdx - 300, appendIdx);
-    expect(window).not.toMatch(/existsSync[\s\S]*\.git/);
+    expect(guardIdx).toBeGreaterThan(-1);
+    expect(appendIdx).toBeGreaterThan(guardIdx);
+    expect(SRC.slice(guardIdx, appendIdx)).not.toMatch(/existsSync/);
   });
 
-  test("AC4: builder is fed only the CC_GITHUB_NAME_RE-validated bindings", () => {
-    // Call site passes connectedOwner/connectedRepo (validated at :1330),
+  test("AC4: the call site is fed only the CC_GITHUB_NAME_RE-validated bindings", () => {
+    // Passes connectedOwner/connectedRepo (validated before assignment),
     // never raw repoUrl or tool input.
-    expect(SRC).toMatch(
-      /buildConnectedRepoContext\(connectedOwner, connectedRepo\)/,
+    expect(SRC).toContain(
+      "buildConnectedRepoContext(connectedOwner, connectedRepo)",
     );
     expect(SRC).not.toMatch(/buildConnectedRepoContext\(repoUrl/);
-    // Injection-safety comment carried forward from agent-runner.ts:1425-1428.
-    const idx = SRC.indexOf("buildConnectedRepoContext");
-    const comment = SRC.slice(Math.max(0, idx - 600), idx + 200);
+    // Injection-safety reasoning carried forward from agent-runner.ts:1425-1428
+    // stays adjacent to the builder so a regex relaxation is greppable here.
+    const idx = SRC.indexOf("export function buildConnectedRepoContext");
+    const comment = SRC.slice(Math.max(0, idx - 800), idx);
     expect(comment).toMatch(/CC_GITHUB_NAME_RE/);
     expect(comment).toMatch(/injection sink/i);
   });
