@@ -55,6 +55,7 @@ import {
   mintInstallationToken,
   postSentryHeartbeat,
   resolveOutputAwareOk,
+  ensureScheduledAuditIssue,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -272,6 +273,36 @@ export async function cronCompetitiveAnalysisHandler({
     await step.run("sentry-heartbeat", async () => {
       await postSentryHeartbeat({ ok: heartbeatOk, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-competitive-analysis", logger });
     });
+
+    // --- Step 5: silence-hole fallback (#4960, generalized #4978). When the
+    //     output-aware check found NO scheduled-competitive-analysis issue in
+    //     the run window, the prompt's create-issue step never ran (mid-eval
+    //     crash / API 500 / max-turns kill). Self-report a FAILED audit issue so
+    //     the run is never silent. Wrapped so a create failure cannot crash the
+    //     finally/teardown — reported to Sentry instead; the watchdog still
+    //     catches the absence after threshold (defense-in-depth). ---
+    if (!heartbeatOk) {
+      await step.run("ensure-audit-issue", async () => {
+        try {
+          await ensureScheduledAuditIssue({
+            label: SENTRY_MONITOR_SLUG,
+            titlePrefix: "[Scheduled] Competitive Analysis -",
+            cronName: "cron-competitive-analysis",
+            runStartedAt,
+            spawnResult,
+            installationToken,
+          });
+        } catch (err) {
+          reportSilentFallback(err, {
+            feature: "cron-competitive-analysis",
+            op: "ensure-audit-issue-failed",
+            message:
+              "Handler-level fallback audit-issue create failed; run remains silent until watchdog threshold",
+            extra: { fn: "cron-competitive-analysis", runStartedAt },
+          });
+        }
+      });
+    }
 
     return { ok: heartbeatOk };
   } finally {
