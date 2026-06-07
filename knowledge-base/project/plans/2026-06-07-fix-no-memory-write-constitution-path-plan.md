@@ -8,6 +8,36 @@ brand_survival_threshold: none
 
 # 🐛 Fix stale constitution path in no-memory-write hook
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-07
+**Sections enhanced:** 1 (Files to Edit — verbatim edit anchor added)
+**Gates run:** 4.6 User-Brand Impact (PASS), 4.7 Observability (PASS — all 5 fields, no ssh),
+4.8 PAT-shaped variable (PASS — none), 4.9 UI-wireframe (skip — no UI surface),
+4.45 verify-the-negative (PASS — "changes no runtime behavior" confirmed: the regex match
+and `emit_incident` sit on line 50, a different line than the string-literal edit on line 55).
+
+### Key Improvements
+
+1. Pinned the **exact verbatim** line-55 content as the edit anchor (below), so the implementer
+   does a surgical `overview` → `project` token swap with zero collateral on the `\n`-joined
+   `jq` payload.
+2. Confirmed via live grep that the existing test suite needs **no** change (T1 pins the
+   `learnings` bullet, not the constitution bullet) — recorded as AC3/Non-Goal.
+3. Verify-the-negative pass validated every "changes no runtime" claim against the source:
+   match-logic, deny decision, and `emit_incident` are all on lines other than 55.
+
+### New Considerations Discovered
+
+- The repo-wide grep for `overview/constitution` returns this hook PLUS many dated records under
+  `knowledge-base/project/{plans,specs,brainstorms,learnings}/` (incl. the rename plan/spec that
+  *describe* the `overview/`→`project/` move). All are explicitly out of scope — do not "tidy" them.
+- This plan file itself quotes `overview/constitution.md` as the before-value; a future repo-wide
+  residual-zero grep MUST carve out this plan + tasks (migration-record carve-out), exactly like
+  archive/historical files.
+
+---
+
 `.claude/hooks/no-memory-write.sh` line 55 builds the BLOCKED `permissionDecisionReason`
 message that fires when an agent attempts to write to `~/.claude/projects/*/memory/`.
 That message tells the agent to commit knowledge to one of three committed repo files.
@@ -123,9 +153,24 @@ discoverability_test:
 
 - `.claude/hooks/no-memory-write.sh` — line 55: change the middle remediation bullet from
   `knowledge-base/overview/constitution.md (architecture + style)` to
-  `knowledge-base/project/constitution.md (architecture + style)`. **Single-character-class
-  change** (`overview` → `project`); everything else on the line and in the surrounding
-  `jq -n` payload is preserved verbatim.
+  `knowledge-base/project/constitution.md (architecture + style)`. **Single token change**
+  (`overview` → `project`); everything else on the line and in the surrounding `jq -n` payload
+  is preserved verbatim.
+
+  ### Implementation Detail — exact edit anchor
+
+  The change is confined to the `\n  - knowledge-base/...constitution.md (architecture + style)`
+  substring inside the long `permissionDecisionReason` string. Old → new substring:
+
+  ```diff
+  -  - knowledge-base/overview/constitution.md (architecture + style)
+  +  - knowledge-base/project/constitution.md (architecture + style)
+  ```
+
+  The match logic (`[[ "$TARGET" =~ /\.claude/projects/[^/]+/memory... ]]`), the
+  `emit_incident hr-never-write-to-claude-code-memory-claude deny` call, the `hookEventName`,
+  and the `permissionDecision: "deny"` payload are all unchanged — they live on lines other than
+  the edited bullet. This is a help-string correction only.
 - `.claude/hooks/no-memory-write.test.sh` — **only if AC4 is taken** (optional). Add one
   `&& [[ "$reason" == *"knowledge-base/project/constitution.md"* ]]` clause to the T1
   conditional. Do not change any other test.
