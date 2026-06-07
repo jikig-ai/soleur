@@ -37,7 +37,8 @@ reason=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReaso
 if [[ "$decision" == "deny" ]] \
    && [[ "$reason" == *"hr-never-write-to-claude-code-memory-claude"* ]] \
    && [[ "$reason" == *"Source: AGENTS.core.md"* ]] \
-   && [[ "$reason" == *"knowledge-base/project/learnings"* ]]; then
+   && [[ "$reason" == *"knowledge-base/project/learnings"* ]] \
+   && [[ "$reason" == *"knowledge-base/project/constitution.md"* ]]; then
   pass "deny + rule + source-file + remediation"
 else
   fail "decision=$decision reason_head=${reason:0:120}"

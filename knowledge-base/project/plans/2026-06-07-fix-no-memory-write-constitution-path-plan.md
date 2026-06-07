@@ -120,19 +120,19 @@ discoverability_test:
 
 ## Acceptance Criteria
 
-- [ ] AC1 — `.claude/hooks/no-memory-write.sh` line 55 reads
+- [x] AC1 — `.claude/hooks/no-memory-write.sh` line 55 reads
       `knowledge-base/project/constitution.md (architecture + style)` (was `overview/`).
       Verify: `grep -c "knowledge-base/project/constitution.md (architecture + style)" .claude/hooks/no-memory-write.sh` returns `1`.
-- [ ] AC2 — No live reference to `overview/constitution.md` remains in `.claude/hooks/`.
+- [x] AC2 — No live reference to `overview/constitution.md` remains in `.claude/hooks/`.
       Verify: `grep -rl "overview/constitution" .claude/hooks/` returns nothing (empty).
-- [ ] AC3 — The existing suite is green with no test edits.
+- [x] AC3 — The existing suite is green with no test edits.
       Verify: `bash .claude/hooks/no-memory-write.test.sh` prints `0 failed` and exits 0.
-- [ ] AC4 (optional hardening — see Non-Goals) — IF the planner/implementer elects to add a
+- [x] AC4 (optional hardening — see Non-Goals) — IF the planner/implementer elects to add a
       regression assertion, T1 in `no-memory-write.test.sh` additionally asserts
       `[[ "$reason" == *"knowledge-base/project/constitution.md"* ]]`. This is the cheapest
       guard against the exact bug recurring. Default: **skip** (keeps the diff to one line);
       include only if explicitly desired.
-- [ ] AC5 — Out-of-scope surfaces untouched: `git diff --name-only` lists **only**
+- [x] AC5 — Out-of-scope surfaces untouched: `git diff --name-only` lists **only**
       `.claude/hooks/no-memory-write.sh` (and, if AC4 is taken, `.claude/hooks/no-memory-write.test.sh`)
       plus this plan + tasks. No change to `kb-domain-allowlist-guard.sh`, no change to any
       dated file under `knowledge-base/project/{plans,specs,brainstorms,learnings}/`, no change
