@@ -66,11 +66,12 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 //     precedent is cron-competitive-analysis / cron-legal-audit, which already
 //     allow it) must be listed or the skill cannot run at all. --max-turns
 //     stays 50.
-//   - `--plugin-dir plugins/soleur` REGISTERS the symlinked plugin. A bare
-//     plugins/ dir does NOT auto-register in headless mode — the marketplace
-//     trust dialog that extraKnownMarketplaces+enabledPlugins relies on is
-//     skipped in --print (see feature-request-plugin-dir-settings.md). The
-//     path is the symlink setupEphemeralWorkspace creates at
+//   - `--plugin-dir plugins/soleur` REGISTERS the symlinked plugin. Per
+//     `claude --plugin-dir <path>` ("Load a plugin from a directory or .zip"),
+//     loading a directory-based plugin in a headless `--print` run requires the
+//     flag explicitly — a bare symlinked plugins/ dir is NOT auto-discovered
+//     (the interactive marketplace/enabledPlugins trust flow does not run under
+//     --print). The path is the symlink setupEphemeralWorkspace creates at
 //     <spawnCwd>/plugins/soleur and MUST precede the `--` marker.
 const CLAUDE_CODE_FLAGS = [
   "--print",
