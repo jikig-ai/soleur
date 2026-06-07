@@ -52,6 +52,11 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 // options marker). The prompt is the SOLE positional argument after `--`.
 //
 // NOTE: claude-opus-4-7 model for deep multi-step growth audit.
+//
+// #4993 — headless /soleur:* skill resolution (fleet fix mirroring #4987 /
+// PR #4989): `--plugin-dir plugins/soleur` registers the symlinked plugin under
+// `--print` (a bare plugins/ dir is NOT auto-discovered in headless mode), and
+// `Skill` (+`Task` for subagent fan-out) in --allowedTools gates skill invocation.
 const CLAUDE_CODE_FLAGS = [
   "--print",
   "--model",
@@ -59,7 +64,9 @@ const CLAUDE_CODE_FLAGS = [
   "--max-turns",
   "70",
   "--allowedTools",
-  "Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch",
+  "Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Skill,Task",
+  "--plugin-dir",
+  "plugins/soleur",
   "--",
 ];
 

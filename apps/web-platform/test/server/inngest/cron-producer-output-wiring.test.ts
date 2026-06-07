@@ -14,7 +14,7 @@
 // cron-roadmap-review.test.ts.
 
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 const FN_DIR = resolve(__dirname, "../../../server/inngest/functions");
@@ -138,4 +138,102 @@ describe("output-aware heartbeat wiring (always-create producers)", () => {
     expect(src).not.toContain("resolveOutputAwareOk");
     expect(src).toContain("ok: result.ok");
   });
+});
+
+// #4993 — fleet-wide headless /soleur:* skill resolution parity guard.
+//
+// A headless `claude --print` cron eval can only resolve+invoke a /soleur:*
+// plugin skill when its CLAUDE_CODE_FLAGS carry BOTH `--plugin-dir
+// plugins/soleur` (registers the symlinked plugin — the interactive
+// marketplace/enabledPlugins trust flow is skipped under --print) AND `Skill`
+// (+`Task` for skills that fan out subagents) in --allowedTools. #4987/PR #4989
+// fixed cron-content-generator (the first instance); this guard makes the fix
+// fleet-wide and self-protecting so the gap cannot silently re-open when a NEW
+// producer adds a /soleur:* prompt.
+//
+// SELF-DISCOVERING: rather than 10 near-duplicate per-file test blocks (the
+// duplicate-coverage anti-pattern), this reads every cron-*.ts / event-*.ts in
+// the functions dir and classifies a file as skill-invoking when it BOTH spawns
+// a claude eval (defines CLAUDE_CODE_FLAGS) AND invokes /soleur: in a non-comment
+// (prompt) line. That excludes the two text-only false positives
+// (cron-nag-4216-readiness, cron-skill-freshness — they emit /soleur: as
+// issue/nag TEXT and define no CLAUDE_CODE_FLAGS) and the four eval producers
+// that carry CLAUDE_CODE_FLAGS but invoke no skill (roadmap-review,
+// community-monitor, follow-through-monitor, daily-triage). The discovered set
+// is asserted === the known expected set so a new producer must be classified
+// (and flagged) explicitly. content-generator is INCLUDED — it is itself a
+// self-discovered skill-invoking producer, so this guard also protects the
+// original #4987 fix from regressing.
+describe("headless skill resolution parity (#4993)", () => {
+  // The authoritative skill-invoking-producer set: every cron/event handler whose
+  // eval PROMPT runs a /soleur:* skill. Drift here is intentional friction — a new
+  // producer that invokes a skill MUST be added (and carry the flags) or the
+  // discovery assertion below fails loud.
+  const EXPECTED_SKILL_PRODUCERS = [
+    "cron-agent-native-audit.ts",
+    "cron-bug-fixer.ts",
+    "cron-campaign-calendar.ts",
+    "cron-competitive-analysis.ts",
+    "cron-content-generator.ts",
+    "cron-growth-audit.ts",
+    "cron-growth-execution.ts",
+    "cron-legal-audit.ts",
+    "cron-seo-aeo-audit.ts",
+    "cron-ux-audit.ts",
+    "event-ship-merge.ts",
+  ].sort();
+
+  // Strip `//` line comments and jsdoc `*` lines so a /soleur: mention in a
+  // comment (sibling-skill references abound) does not misclassify a file.
+  const promptBody = (src: string): string =>
+    src
+      .split("\n")
+      .filter((line) => {
+        const t = line.trim();
+        return !t.startsWith("//") && !t.startsWith("*") && !t.startsWith("/*");
+      })
+      .join("\n");
+
+  const discovered = readdirSync(FN_DIR)
+    .filter((f) => /^(cron|event)-.*\.ts$/.test(f))
+    .filter((f) => {
+      const src = readFileSync(resolve(FN_DIR, f), "utf-8");
+      return src.includes("CLAUDE_CODE_FLAGS") && promptBody(src).includes("/soleur:");
+    })
+    .sort();
+
+  it("discovers exactly the known skill-invoking producers (empty-corpus / drift guard)", () => {
+    // Non-vacuity: a glob that silently matches nothing must fail loud.
+    expect(discovered.length).toBeGreaterThan(0);
+    expect(discovered).toEqual(EXPECTED_SKILL_PRODUCERS);
+  });
+
+  it.each(EXPECTED_SKILL_PRODUCERS)(
+    "%s carries --plugin-dir + Skill + Task in CLAUDE_CODE_FLAGS, plugin-dir before --",
+    (file) => {
+      const src = readFileSync(resolve(FN_DIR, file), "utf-8");
+      const flagsMatch = src.match(/const CLAUDE_CODE_FLAGS = \[([\s\S]*?)\];/);
+      const flagsBlock = flagsMatch ? flagsMatch[1] : "";
+      expect(flagsBlock.length).toBeGreaterThan(0);
+
+      // Registers the symlinked plugin (headless --print does not auto-discover it).
+      expect(flagsBlock).toContain('"--plugin-dir"');
+      expect(flagsBlock).toContain('"plugins/soleur"');
+      expect(flagsBlock).toMatch(/"--plugin-dir",\s*\n\s*"plugins\/soleur",/);
+
+      // --allowedTools allowlist must let the eval invoke the skill (Skill) and
+      // any subagent the skill fans out (Task). Both must appear in the single
+      // allowlist string, not merely somewhere in the block.
+      const allowMatch = flagsBlock.match(/"--allowedTools",\s*\n\s*"([^"]*)"/);
+      const allowList = allowMatch ? allowMatch[1] : "";
+      expect(allowList.split(",")).toContain("Skill");
+      expect(allowList.split(",")).toContain("Task");
+
+      // --plugin-dir must precede the load-bearing `--` end-of-options marker.
+      const endMarker = flagsBlock.indexOf('"--"');
+      expect(endMarker).toBeGreaterThan(-1);
+      expect(flagsBlock.indexOf('"--plugin-dir"')).toBeLessThan(endMarker);
+      expect(flagsBlock.indexOf('"plugins/soleur"')).toBeLessThan(endMarker);
+    },
+  );
 });
