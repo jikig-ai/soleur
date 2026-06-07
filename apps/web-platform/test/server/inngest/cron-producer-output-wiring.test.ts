@@ -156,10 +156,12 @@ describe("output-aware heartbeat wiring (always-create producers)", () => {
 // the functions dir and classifies a file as skill-invoking when it BOTH spawns
 // a claude eval (defines CLAUDE_CODE_FLAGS) AND invokes /soleur: in a non-comment
 // (prompt) line. That excludes the two text-only false positives
-// (cron-nag-4216-readiness, cron-skill-freshness — they emit /soleur: as
-// issue/nag TEXT and define no CLAUDE_CODE_FLAGS) and the four eval producers
-// that carry CLAUDE_CODE_FLAGS but invoke no skill (roadmap-review,
-// community-monitor, follow-through-monitor, daily-triage). The discovered set
+// (cron-nag-4216-readiness, cron-skill-freshness — these define NO
+// CLAUDE_CODE_FLAGS, so the CLAUDE_CODE_FLAGS predicate ALONE excludes them;
+// their /soleur: text lives in generated issue/nag bodies, not an eval prompt)
+// and the four eval producers that carry CLAUDE_CODE_FLAGS but invoke no skill
+// (roadmap-review, community-monitor, follow-through-monitor, daily-triage —
+// excluded by the prompt-body predicate). The discovered set
 // is asserted === the known expected set so a new producer must be classified
 // (and flagged) explicitly. content-generator is INCLUDED — it is itself a
 // self-discovered skill-invoking producer, so this guard also protects the
@@ -168,7 +170,10 @@ describe("headless skill resolution parity (#4993)", () => {
   // The authoritative skill-invoking-producer set: every cron/event handler whose
   // eval PROMPT runs a /soleur:* skill. Drift here is intentional friction — a new
   // producer that invokes a skill MUST be added (and carry the flags) or the
-  // discovery assertion below fails loud.
+  // discovery assertion below fails loud. This list slices the producer corpus on
+  // a DIFFERENT axis than WIRED_PRODUCERS / BEST_EFFORT_CRONS above (skill
+  // invocation vs. heartbeat-wiring class); the lists overlap by design and are
+  // maintained independently.
   const EXPECTED_SKILL_PRODUCERS = [
     "cron-agent-native-audit.ts",
     "cron-bug-fixer.ts",
@@ -183,15 +188,19 @@ describe("headless skill resolution parity (#4993)", () => {
     "event-ship-merge.ts",
   ].sort();
 
-  // Strip `//` line comments and jsdoc `*` lines so a /soleur: mention in a
-  // comment (sibling-skill references abound) does not misclassify a file.
+  // Strip `//` line comments so a /soleur: mention in a comment (sibling-skill
+  // references abound — content-generator's header, and roadmap-review /
+  // community-monitor's reconciled "invokes no /soleur:* skill" notes) does not
+  // misclassify a file. We deliberately do NOT strip `*`/`/*`-prefixed lines:
+  // every real prompt invocation lives on a `Run /soleur:…` line inside a
+  // template literal, and stripping `*` would risk silently false-EXCLUDING a
+  // future prompt whose text starts with a markdown bullet (`* Run /soleur:…`) —
+  // the dangerous-quiet direction (producer ships unguarded, test stays green).
+  // Verified: no flag-carrying producer carries /soleur: in a block comment.
   const promptBody = (src: string): string =>
     src
       .split("\n")
-      .filter((line) => {
-        const t = line.trim();
-        return !t.startsWith("//") && !t.startsWith("*") && !t.startsWith("/*");
-      })
+      .filter((line) => !line.trim().startsWith("//"))
       .join("\n");
 
   const discovered = readdirSync(FN_DIR)
