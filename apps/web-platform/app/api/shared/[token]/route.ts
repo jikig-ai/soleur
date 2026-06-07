@@ -25,6 +25,7 @@ import {
   SHARED_CONTENT_KIND_HEADER,
 } from "@/server/kb-serve";
 import { shareHashVerdictCache } from "@/server/share-hash-verdict-cache";
+import { workspacePathForWorkspaceId } from "@/server/workspace-resolver";
 import {
   shareEndpointThrottle,
   extractClientIpFromHeaders,
@@ -98,10 +99,12 @@ type ShareRow = {
   document_path: string;
   revoked: boolean;
   content_sha256: string | null;
-  users:
-    | { workspace_path: string | null; workspace_status: string | null }
-    | { workspace_path: string | null; workspace_status: string | null }[]
-    | null;
+  // ADR-044: the KB root is keyed off the share's workspace_id (the same id
+  // the create path wrote via resolveActiveWorkspaceKbRoot), NOT the owner's
+  // legacy users.workspace_path/workspace_status columns — those are
+  // stale/empty for users provisioned after the users → workspaces relocation,
+  // which 404'd freshly-created shares on this read path.
+  workspace_id: string;
 };
 
 /**
@@ -138,9 +141,7 @@ async function prepareSharedRequest(
   const serviceClient = createServiceClient();
   const { data: shareLink, error: fetchError } = await serviceClient
     .from("kb_share_links")
-    .select(
-      "document_path, revoked, content_sha256, users!inner(workspace_path, workspace_status)",
-    )
+    .select("document_path, revoked, content_sha256, workspace_id")
     .eq("token", token)
     .single<ShareRow>();
 
@@ -183,17 +184,21 @@ async function prepareSharedRequest(
     };
   }
 
-  const owner = Array.isArray(shareLink.users)
-    ? shareLink.users[0]
-    : shareLink.users;
-  if (!owner?.workspace_path || owner.workspace_status !== "ready") {
-    logSharedFailed(token, shareLink.document_path, "workspace-unavailable");
-    return { kind: "response", response: notFoundResponse() };
-  }
+  // Resolve the KB root from the share's workspace_id — the same workspace-id-
+  // keyed on-disk path the create route wrote to (workspacePathForWorkspaceId).
+  // A workspace that was de-provisioned after share creation surfaces naturally
+  // as KbNotFoundError → 404 at the file-read step, with the content hash gate
+  // guaranteeing the served bytes still match what was shared. No owner-row
+  // readiness gate: reading users.workspace_status here 404'd valid shares whose
+  // create path had already migrated to the workspace resolver (ADR-044).
+  const kbRoot = path.join(
+    workspacePathForWorkspaceId(shareLink.workspace_id),
+    "knowledge-base",
+  );
 
   return {
     kind: "ready",
-    kbRoot: path.join(owner.workspace_path, "knowledge-base"),
+    kbRoot,
     documentPath: shareLink.document_path,
     contentSha256: shareLink.content_sha256,
     strongETag,

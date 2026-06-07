@@ -18,6 +18,7 @@
 // Tests declare intent by TABLE NAME, not by call index. Reordering
 // queries inside the route handler is no longer a test-breaking change.
 
+import path from "node:path";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
 
@@ -172,17 +173,35 @@ function kbShareLinksChain(
         workspace_status: usersFixture.workspaceStatus ?? "ready",
       }
     : null;
+  // ADR-044: the shared read path + previewShare resolve the KB root from the
+  // share row's `workspace_id` via `workspacePathForWorkspaceId`
+  // (`<WORKSPACES_ROOT>/<workspace_id>`), NOT the legacy `users` join. Derive
+  // the id from the fixture's workspacePath basename so a test whose temp
+  // workspace lives at `<WORKSPACES_ROOT>/<id>/knowledge-base` resolves to the
+  // same on-disk dir the create path wrote to — no per-test shareRow churn.
+  // The legacy `users` nesting is still attached below for any owner-route /
+  // backward-compat reader; the share read path now ignores it.
+  const derivedWorkspaceId = usersFixture?.workspacePath
+    ? path.basename(usersFixture.workspacePath)
+    : undefined;
   // When a route uses PostgREST embedded resources (e.g.,
   // `.select("…, users!inner(…)")`) the nested row appears under
   // `shareRow.users`. Auto-attach the users fixture so tests don't have
   // to know which query shape the route uses. If the shareRow already
-  // defines `users`, it wins — an explicit override beats the default.
+  // defines `users` / `workspace_id`, it wins — an explicit override beats
+  // the default.
   const attachUsers = <T extends Record<string, unknown> | null>(
     row: T,
   ): T => {
-    if (!row || !usersNested) return row;
-    if ("users" in row) return row;
-    return { ...row, users: usersNested } as T;
+    if (!row) return row;
+    let next: Record<string, unknown> = row;
+    if (derivedWorkspaceId !== undefined && !("workspace_id" in next)) {
+      next = { ...next, workspace_id: derivedWorkspaceId };
+    }
+    if (usersNested && !("users" in next)) {
+      next = { ...next, users: usersNested };
+    }
+    return next as T;
   };
   const single = vi.fn().mockImplementation(async () => {
     const row = attachUsers(resolve(fixture.shareRow ?? null));

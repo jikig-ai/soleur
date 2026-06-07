@@ -79,11 +79,16 @@ beforeEach(async () => {
   metadataMocks.readPdfMetadata.mockResolvedValue(null);
   metadataMocks.readImageMetadata.mockResolvedValue(null);
   tmpWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "kb-share-preview-"));
+  // ADR-044: previewShare resolves kbRoot via workspacePathForWorkspaceId
+  // (`<WORKSPACES_ROOT>/<workspace_id>`). The mock derives workspace_id from
+  // this dir's basename, so point WORKSPACES_ROOT at its parent.
+  process.env.WORKSPACES_ROOT = path.dirname(tmpWorkspace);
   kbRoot = path.join(tmpWorkspace, "knowledge-base");
   fs.mkdirSync(kbRoot, { recursive: true });
 });
 
 afterEach(() => {
+  delete process.env.WORKSPACES_ROOT;
   fs.rmSync(tmpWorkspace, { recursive: true, force: true });
 });
 
@@ -165,44 +170,34 @@ describe("previewShare — lookup and row-state branches", () => {
     expect(result.code).toBe("legacy-null-hash");
   });
 
-  it("returns 404 not-found when workspace_status !== 'ready' (test 4)", async () => {
+  it("resolves the KB root from the share's workspace_id, not the owner users row (tests 4-5, ADR-044)", async () => {
+    // Regression guard for the shared-read 404 bug. The create path resolves
+    // kbRoot via the workspace_id-keyed resolver, but this read path used to
+    // gate on the owner's legacy users.workspace_status/workspace_path columns.
+    // Those are stale/empty for users provisioned after the users → workspaces
+    // relocation, so a freshly-created share 404'd even though the file exists.
+    // Here the owner row is NOT "ready" (would have tripped the removed gate),
+    // yet the document resolves and previews successfully off workspace_id.
+    const bytes = Buffer.from("# resolves off workspace_id\n");
+    fs.writeFileSync(path.join(kbRoot, "readme.md"), bytes);
     const client = makeClient({
       users: { workspacePath: tmpWorkspace, workspaceStatus: "provisioning" },
       kb_share_links: {
         shareRow: {
           document_path: "readme.md",
           revoked: false,
-          content_sha256: hex(Buffer.from("x")),
+          content_sha256: hex(bytes),
         },
       },
     });
 
     const result = await previewShare(client as never, "tok");
 
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error("unreachable");
-    expect(result.status).toBe(404);
-    expect(result.code).toBe("not-found");
-  });
-
-  it("returns 404 not-found when workspace_path is null (test 5)", async () => {
-    const client = makeClient({
-      users: { workspacePath: undefined, workspaceStatus: "ready" },
-      kb_share_links: {
-        shareRow: {
-          document_path: "readme.md",
-          revoked: false,
-          content_sha256: hex(Buffer.from("x")),
-        },
-      },
-    });
-
-    const result = await previewShare(client as never, "tok");
-
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error("unreachable");
-    expect(result.status).toBe(404);
-    expect(result.code).toBe("not-found");
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.status).toBe(200);
+    expect(result.kind).toBe("markdown");
+    expect(result.documentPath).toBe("readme.md");
   });
 
   it("returns 500 db-error and reports to Sentry on DB error (test 6)", async () => {
