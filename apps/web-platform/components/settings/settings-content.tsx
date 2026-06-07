@@ -1,6 +1,9 @@
 import { KeyRotationForm } from "./key-rotation-form";
 import { DeleteAccountDialog } from "./delete-account-dialog";
 import { ProjectSetupCard, type RepoStatus } from "./project-setup-card";
+import { RenameWorkspaceAction } from "./rename-workspace-action";
+import { WorkspaceLogoSettings } from "./workspace-logo-settings";
+import type { WorkspaceIdentity } from "@/server/workspace-identity-resolver";
 
 interface SettingsContentProps {
   userEmail: string;
@@ -16,6 +19,12 @@ interface SettingsContentProps {
    * subscription-token toggle in the key form. Default false (non-operator).
    */
   canUseOauthCredential?: boolean;
+  /**
+   * #4916 follow-up: workspace-identity controls (logo + rename) relocated here
+   * from the flag-gated Team page so they are reachable for all users. Absent →
+   * the controls don't render (e.g. an unresolvable workspace).
+   */
+  workspaceIdentity?: WorkspaceIdentity | null;
 }
 
 export function SettingsContent({
@@ -28,10 +37,32 @@ export function SettingsContent({
   repoLastSyncedAt,
   needsReconnect,
   canUseOauthCredential = false,
+  workspaceIdentity = null,
 }: SettingsContentProps) {
   return (
     <div className="space-y-10">
       <h1 className="mb-8 text-2xl font-semibold text-soleur-text-primary">Settings</h1>
+
+      {/* Workspace Section — identity (name + logo). Relocated from Team so it is
+          reachable regardless of the team-invite flag (#4916). */}
+      {workspaceIdentity && (
+        <section>
+          <h2 className="mb-4 text-lg font-semibold text-soleur-text-primary">Workspace</h2>
+          {workspaceIdentity.organizationId && (
+            <RenameWorkspaceAction
+              organizationId={workspaceIdentity.organizationId}
+              organizationName={workspaceIdentity.organizationName}
+              isOwner={workspaceIdentity.isOwner}
+            />
+          )}
+          <WorkspaceLogoSettings
+            workspaceId={workspaceIdentity.workspaceId}
+            workspaceName={workspaceIdentity.organizationName ?? ""}
+            isOwner={workspaceIdentity.isOwner}
+            initialHasLogo={workspaceIdentity.hasLogo}
+          />
+        </section>
+      )}
 
       {/* Account Section */}
       <section>

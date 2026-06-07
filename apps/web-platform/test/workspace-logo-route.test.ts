@@ -12,15 +12,23 @@ vi.hoisted(() => {
   process.env.SENTRY_USERID_PEPPER = "test-pepper";
 });
 
-const { mockGetUser, mockRpc, mockUpload, mockRemove, mockUpdateEq, mockReport } =
-  vi.hoisted(() => ({
-    mockGetUser: vi.fn(),
-    mockRpc: vi.fn(),
-    mockUpload: vi.fn(),
-    mockRemove: vi.fn(),
-    mockUpdateEq: vi.fn(),
-    mockReport: vi.fn(),
-  }));
+const {
+  mockGetUser,
+  mockRpc,
+  mockUpload,
+  mockRemove,
+  mockUpdateEq,
+  mockUpdateSelect,
+  mockReport,
+} = vi.hoisted(() => ({
+  mockGetUser: vi.fn(),
+  mockRpc: vi.fn(),
+  mockUpload: vi.fn(),
+  mockRemove: vi.fn(),
+  mockUpdateEq: vi.fn(),
+  mockUpdateSelect: vi.fn(),
+  mockReport: vi.fn(),
+}));
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
@@ -34,6 +42,8 @@ vi.mock("@/lib/supabase/service", () => ({
     storage: {
       from: () => ({ upload: mockUpload, remove: mockRemove }),
     },
+    // .update().eq().select("id") — the persist guard reads the matched rows so
+    // a 0-rows no-op surfaces (AC5). .eq() returns the chain; .select() resolves.
     from: () => ({ update: () => ({ eq: mockUpdateEq }) }),
   })),
 }));
@@ -114,7 +124,10 @@ beforeEach(() => {
   vi.clearAllMocks(); // clear call history (keeps no stale impls); re-set defaults below
   mockUpload.mockResolvedValue({ data: { path: `${RESOLVED_WS}/logo.webp` }, error: null });
   mockRemove.mockResolvedValue({ data: [], error: null });
-  mockUpdateEq.mockResolvedValue({ error: null });
+  // .update().eq() returns the chain; .select("id") resolves the matched rows.
+  // Default: exactly one row matched (the happy path).
+  mockUpdateEq.mockReturnValue({ select: mockUpdateSelect });
+  mockUpdateSelect.mockResolvedValue({ data: [{ id: RESOLVED_WS }], error: null });
 });
 
 describe("POST /api/workspace/logo — auth + owner gate (AC5)", () => {
@@ -212,19 +225,32 @@ describe("POST /api/workspace/logo — persistence + orphan cleanup (AC7b)", () 
   });
 
   it("on DB-persist failure: deletes orphan object + 500", async () => {
-    mockUpdateEq.mockResolvedValue({ error: { message: "db down" } });
+    mockUpdateSelect.mockResolvedValue({ data: null, error: { message: "db down" } });
     const res = await POST(postReq(pngSquare, "logo.png", "image/png"));
     expect(res.status).toBe(500);
     expect(mockRemove).toHaveBeenCalledWith([`${RESOLVED_WS}/logo.webp`]);
   });
 
   it("on DB-persist failure AND cleanup-delete failure: distinct logo-orphan-cleanup-failed breadcrumb", async () => {
-    mockUpdateEq.mockResolvedValue({ error: { message: "db down" } });
+    mockUpdateSelect.mockResolvedValue({ data: null, error: { message: "db down" } });
     mockRemove.mockResolvedValue({ data: null, error: { message: "remove failed" } });
     const res = await POST(postReq(pngSquare, "logo.png", "image/png"));
     expect(res.status).toBe(500);
     const ops = mockReport.mock.calls.map((c) => c[1]?.op);
     expect(ops).toContain("logo-orphan-cleanup-failed");
+  });
+
+  // AC5: supabase-js .update().eq() returns NO error when 0 rows match (the
+  // active workspace id has no `workspaces` row — the silent persistence-failure
+  // class behind the reported "logo reverts to monogram"). The route MUST surface
+  // it (500 + distinct breadcrumb + orphan cleanup), never a false "Logo updated."
+  it("0-rows-matched persist update fails loud (500 + breadcrumb + orphan cleanup), not a bare 200", async () => {
+    mockUpdateSelect.mockResolvedValue({ data: [], error: null });
+    const res = await POST(postReq(pngSquare, "logo.png", "image/png"));
+    expect(res.status).toBe(500);
+    expect(mockRemove).toHaveBeenCalledWith([`${RESOLVED_WS}/logo.webp`]);
+    const ops = mockReport.mock.calls.map((c) => c[1]?.op);
+    expect(ops).toContain("persist-logo-path-zero-rows");
   });
 });
 
@@ -247,9 +273,9 @@ describe("DELETE /api/workspace/logo (AC7b)", () => {
     authAs();
     owner(true);
     const order: string[] = [];
-    mockUpdateEq.mockImplementation(async () => {
+    mockUpdateSelect.mockImplementation(async () => {
       order.push("update-null");
-      return { error: null };
+      return { data: [{ id: RESOLVED_WS }], error: null };
     });
     mockRemove.mockImplementation(async () => {
       order.push("remove-object");

@@ -1,0 +1,14 @@
+// Same-tab refresh signal for workspace-logo changes (#4916 follow-up).
+//
+// The logo upload/removal control (WorkspaceLogoSettings) lives on the Settings
+// page; the workspace identity is also rendered by the top-left switcher
+// (OrgSwitcherContainer, expanded rail) and the collapsed-rail band
+// (useActiveWorkspace). Those consumers fetch /api/workspace/list-memberships
+// once on mount and only re-poll on window.focus — so without an explicit
+// signal, a same-tab upload never updates the switcher until a full reload.
+//
+// On a successful upload/removal the control dispatches this CustomEvent;
+// the switcher + active-workspace hook listen and re-fetch their memberships.
+// Mirrors the in-app CustomEvent pattern already used by kb-sidebar-shell.tsx
+// (RAIL_EXPAND_EVENT) — no polling interval, no new data path.
+export const WORKSPACE_LOGO_CHANGED_EVENT = "soleur:workspace-logo-changed";
