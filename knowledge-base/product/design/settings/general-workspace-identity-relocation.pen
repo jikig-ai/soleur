@@ -1,1 +1,312 @@
-{"version":1,"nodes":[]}
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "7gIk6",
+      "x": 0,
+      "y": 0,
+      "name": "General Settings — workspace identity relocated",
+      "width": 760,
+      "fill": "#0E0E10",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 32,
+      "children": [
+        {
+          "type": "text",
+          "id": "6fvnJ",
+          "name": "title",
+          "fill": "#F5F5F5",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "General",
+          "fontFamily": "Inter",
+          "fontSize": 24,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "S2KGd",
+          "name": "sub",
+          "fill": "#A1A1AA",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Workspace identity, your Anthropic key, and project connection.",
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "HYogM",
+          "name": "Rename workspace (relocated from Team)",
+          "width": "fill_container",
+          "fill": "#161618",
+          "cornerRadius": 8,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#27272A"
+          },
+          "layout": "vertical",
+          "gap": 8,
+          "padding": 24,
+          "children": [
+            {
+              "type": "text",
+              "id": "h5bM9",
+              "name": "rLabel",
+              "fill": "#A1A1AA",
+              "content": "WORKSPACE",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "ZkSm9",
+              "name": "rRow",
+              "width": "fill_container",
+              "gap": 12,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "0o0vM",
+                  "name": "rName",
+                  "fill": "#F5F5F5",
+                  "content": "Soleur Workspace",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "gnEDL",
+                  "name": "rSpacer",
+                  "width": "fill_container",
+                  "height": 1,
+                  "fill": "#161618"
+                },
+                {
+                  "type": "frame",
+                  "id": "BisO4",
+                  "name": "rBtn",
+                  "fill": "#161618",
+                  "cornerRadius": 6,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#27272A"
+                  },
+                  "padding": [
+                    8,
+                    14
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "kJpId",
+                      "name": "rBtnTxt",
+                      "fill": "#F5F5F5",
+                      "content": "Rename",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Gmibp",
+          "name": "Workspace logo (relocated from Team)",
+          "width": "fill_container",
+          "fill": "#161618",
+          "cornerRadius": 8,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#27272A"
+          },
+          "gap": 16,
+          "padding": 24,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "ANmH7",
+              "name": "logoTile (uploaded OR S monogram)",
+              "width": 40,
+              "height": 40,
+              "fill": "#C8A24B",
+              "cornerRadius": 8,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "c4JzJ",
+                  "name": "mono",
+                  "fill": "#0E0E10",
+                  "content": "S",
+                  "fontFamily": "Inter",
+                  "fontSize": 18,
+                  "fontWeight": "700"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "jSe3v",
+              "name": "logoCopy",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 4,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "kU3Ke",
+                  "name": "logoTitle",
+                  "fill": "#F5F5F5",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Workspace logo",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "J24jL",
+                  "name": "logoHint",
+                  "fill": "#A1A1AA",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Square PNG or WebP, up to 1 MB. Persists across navigation and updates the top-left switcher.",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "K8Phg",
+              "name": "uploadBtn",
+              "fill": "#161618",
+              "cornerRadius": 6,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#27272A"
+              },
+              "padding": [
+                8,
+                14
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "LThzn",
+                  "name": "uploadTxt",
+                  "fill": "#F5F5F5",
+                  "content": "Upload logo",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "rNhrQ",
+          "name": "note",
+          "fill": "#52525B",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "— existing General controls below (unchanged) —",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "yUtBm",
+          "name": "Anthropic API key (existing)",
+          "width": "fill_container",
+          "fill": "#161618",
+          "cornerRadius": 8,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#27272A"
+          },
+          "layout": "vertical",
+          "gap": 4,
+          "padding": 24,
+          "children": [
+            {
+              "type": "text",
+              "id": "sI9L0",
+              "name": "apiTitle",
+              "fill": "#F5F5F5",
+              "content": "Anthropic API key",
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "AznMT",
+              "name": "apiHint",
+              "fill": "#A1A1AA",
+              "content": "Connected · validated",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "8ZjhL",
+          "name": "Project connection (existing)",
+          "width": "fill_container",
+          "fill": "#161618",
+          "cornerRadius": 8,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#27272A"
+          },
+          "layout": "vertical",
+          "gap": 4,
+          "padding": 24,
+          "children": [
+            {
+              "type": "text",
+              "id": "Q7yMF",
+              "name": "repoTitle",
+              "fill": "#F5F5F5",
+              "content": "Project connection",
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "Fcdg0",
+              "name": "repoHint",
+              "fill": "#A1A1AA",
+              "content": "github.com/acme/site · synced",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

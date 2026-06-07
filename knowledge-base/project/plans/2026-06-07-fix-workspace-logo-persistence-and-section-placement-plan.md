@@ -11,6 +11,20 @@ brand_survival_threshold: single-user incident
 
 # 🐛 Fix workspace logo persistence + switcher refresh, and relocate workspace-identity settings to General
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-07
+
+### Key Improvements
+1. Localized the bug to two confirmed/suspected causes — H1 switcher-staleness (confirmed by code reading: `OrgSwitcherContainer` fetches once on mount) and H2 persistence (200 toast = no `update` error ⇒ 0-rows-matched OR read-side proxy failure). Plan now mandates a live repro to disambiguate before coding.
+2. Added precedent-diff grounding: the same-tab refresh uses the `kb-sidebar-shell.tsx` CustomEvent pattern; the persist guard uses the `.update().select()` row-match pattern (precedent in `account-delete.ts`, `ws-handler.ts`).
+3. Surfaced a reachability defect: the Team page is flag-gated (`resolveMembersTab` → null when `isTeamWorkspaceInviteEnabled` is OFF), so the logo/rename controls are currently UNREACHABLE for flag-off users — making the General relocation a functional fix, not just aesthetic.
+4. Generated a committed wireframe of the relocated General layout (`general-workspace-identity-relocation.pen`).
+
+### New Considerations Discovered
+- Screenshot #1's logo is the optimistic blob preview, not the proxy/DB — it cannot evidence persistence.
+- The 0-rows-matched silent-success class is currently untested (`workspace-logo-route.test.ts:207` mock always succeeds).
+
 ## Overview
 
 Two related changes to the already-shipped workspace-logo feature (merged via PR #4930 / issue #4916, both CLOSED):
@@ -63,7 +77,7 @@ The 0-rows-matched class is presently **untested**: `test/workspace-logo-route.t
 | "Move logo + rename to General because Team = members/roles" | The Team/Members tab is **conditionally rendered**: `resolveMembersTab()` returns null unless `isTeamWorkspaceInviteEnabled(orgId, identity)` AND a non-null `current_organization_id` (`server/members-tab.ts:52,56`). When the flag is OFF, the Team page (and thus logo + rename) is **unreachable**. General (`/dashboard/settings`, root `page.tsx`) is always present. | Move is not merely aesthetic — it fixes a **reachability defect** for users without the Members tab. Implement the move into the General page (`SettingsContent`). |
 | "General section" | `/dashboard/settings` root `page.tsx` → renders `components/settings/settings-content.tsx` (API key + project/repo setup). Nav label "General" defined in `components/settings/settings-shell.tsx:13`. | Relocate `WorkspaceLogoSettings` + `RenameWorkspaceAction` into `SettingsContent`; remove from `team/page.tsx`. |
 
-## 👤 User-Brand Impact
+## User-Brand Impact
 
 **If this lands broken, the user experiences:** a workspace logo that appears to save ("Logo updated.") but silently reverts to the "S" monogram on every navigation — the exact reported defect, eroding trust in whether ANY setting persists. Or, if the section move regresses, the only control to set a workspace logo / rename becomes unreachable for solo/flag-off users.
 
@@ -114,6 +128,7 @@ The 0-rows-matched class is presently **untested**: `test/workspace-logo-route.t
 - Files: `apps/web-platform/components/settings/workspace-logo-settings.tsx`, `apps/web-platform/hooks/use-active-workspace.ts` and/or `apps/web-platform/components/dashboard/org-switcher-container.tsx`; plus test updates.
 
 ### Phase 4 — Relocate workspace-identity to General
+- **Wireframe (committed):** `knowledge-base/product/design/settings/general-workspace-identity-relocation.pen` shows the target General-page layout — WORKSPACE rename card + Workspace logo card at the top, above the existing Anthropic API key + Project connection controls. Implement to match.
 - Move `RenameWorkspaceAction` + `WorkspaceLogoSettings` rendering from `team/page.tsx` into `components/settings/settings-content.tsx` (General). Thread the required props (`workspaceId`, `organizationId`, `organizationName`, `isOwner`, `initialHasLogo`) — General's `page.tsx` must resolve these (it currently resolves user/repo data; add the workspace + ownership + `logo_path` resolution, mirroring the team page's derivation: `resolveTeamMembershipPageData` or the narrower `resolveCurrentWorkspaceId` + `is_workspace_owner` + `logo_path` read).
 - Remove both controls from `team/page.tsx` (keep members/roles/invites there).
 - Files: `apps/web-platform/app/(dashboard)/dashboard/settings/page.tsx`, `apps/web-platform/components/settings/settings-content.tsx`, `apps/web-platform/app/(dashboard)/dashboard/settings/team/page.tsx`. Test: a General-page test asserting both controls render + owner gate + flag-off reachability.
@@ -182,7 +197,7 @@ discoverability_test:
 **Decision:** auto-accepted (pipeline)
 **Agents invoked:** none (pipeline auto-accept; deepen-plan will run substance agents at single-user-incident threshold)
 **Skipped specialists:** none — this modifies EXISTING UI surfaces (no new page/component file is created under `components/**/*.tsx`, `app/**/page.tsx`, or `app/**/layout.tsx`; the relocation reuses existing `WorkspaceLogoSettings`/`RenameWorkspaceAction` components). ADVISORY, not BLOCKING.
-**Pencil available:** N/A (no new UI surface — relocation of existing controls)
+**Pencil available:** yes — wireframe committed at `knowledge-base/product/design/settings/general-workspace-identity-relocation.pen` (the relocation is a structural layout change to the General page, so a `.pen` is produced per `wg-ui-feature-requires-pen-wireframe`).
 
 #### Findings
 
@@ -204,6 +219,20 @@ The section move is a low-risk relocation of two existing controls between two e
 - A plan whose `## User-Brand Impact` section is empty, contains only TBD/TODO/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6. (Section is filled above.)
 - When placing the new General-page test, confirm the path matches `apps/web-platform/vitest.config.ts` `include:` globs (`test/**/*.test.tsx`) — a co-located `components/**/*.test.tsx` is silently never run.
 - Do not introduce a client-supplied workspace id on the write path to "fix" persistence — that would be a cross-tenant write vector. The server-side `resolveCurrentWorkspaceId` resolution is load-bearing security.
+
+## Research Insights (deepen-plan)
+
+### Precedent-Diff — same-tab refresh signal (Phase 3)
+**No precedent for a logo-specific signal, but two canonical refresh patterns exist — adopt one, do not invent:**
+- `components/kb/kb-sidebar-shell.tsx:51` — `window.dispatchEvent(new CustomEvent(RAIL_EXPAND_EVENT))` with a paired `addEventListener(RAIL_EXPAND_EVENT, …)` consumer. This is the exact shape for a `WORKSPACE_LOGO_CHANGED` custom event that `useActiveWorkspace` / `OrgSwitcherContainer` listen for and re-poll on.
+- `router.refresh()` is used pervasively in settings after a mutation (`key-rotation-form.tsx:70`, `dsar-export-job-list.tsx:97,139`, `project-setup-card.tsx:59`). `router.refresh()` re-runs server components (so a server-resolved `hasLogo` updates) but does NOT by itself re-fire the client `useActiveWorkspace` fetch — the collapsed rail still needs the custom-event nudge. **Recommendation:** emit a `WORKSPACE_LOGO_CHANGED` CustomEvent on success/removal; have `useActiveWorkspace` add a listener that calls its `poll()`, and `OrgSwitcherContainer` add a listener that re-runs its memberships fetch. This is the minimal, precedent-matching mechanism (no polling interval).
+
+### Precedent-Diff — update row-match guard (Phase 2, write-side)
+**Precedent:** supabase-js `.select(col, { count: "exact", head: true })` for existence/count is used at `server/account-delete.ts:520,720`, `server/ws-handler.ts:699,1430`, `app/api/push-subscription/route.ts:46`. For the persist guard, the simplest correct form is `service.from("workspaces").update({ logo_path: key }).eq("id", workspaceId).select("id")` and assert `data.length === 1` — a 0-length result is the silent no-op the bug class hinges on, now turned into a 500 + `op=persist-logo-path-zero-rows` breadcrumb. (supabase-js returns the updated rows from `.select()` after `.update()`; confirm the chained `.select()` shape against the installed `@supabase/postgrest-js` version at /work Phase 0, per the PostgREST Sharp Edge.)
+
+### Verify-the-negative pass
+- Claim "no client-supplied workspace id on the write path" → CONFIRMS: `app/api/workspace/logo/route.ts:44` resolves `workspaceId` via `resolveCurrentWorkspaceId(user.id, supabase)`; the request body carries only `file`. The fix must preserve this (AC9).
+- Claim "proxy membership-gates" → CONFIRMS: `app/api/workspace/[id]/logo/route.ts:55` calls `is_workspace_member` before signing. No widening needed.
 
 ## Alternative Approaches Considered
 
