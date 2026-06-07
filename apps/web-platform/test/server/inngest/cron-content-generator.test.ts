@@ -169,20 +169,35 @@ describe("CLAUDE_CODE_FLAGS — skill + plugin-dir resolution (#4987)", () => {
 });
 
 describe("CONTENT_GENERATOR_PROMPT — STEP 4 CI-deferred validation (#4987)", () => {
-  it("instructs that validation runs in CI, not via a local build", () => {
-    expect(SUT_SOURCE).toContain("no node_modules");
-    expect(SUT_SOURCE).toMatch(/Validation runs in CI/);
+  // Capture the STEP 4 block (STEP 4 heading → STEP 5 heading) so assertions bind
+  // to STEP 4 specifically, not the prompt as a whole. This guards the defect
+  // CLASS — a local-build imperative reappearing in STEP 4 under ANY wording —
+  // rather than one exact byte-string. Per test-design review of PR #4989.
+  const step4Match = SUT_SOURCE.match(/STEP 4 —[\s\S]*?\nSTEP 5 —/);
+  const step4 = step4Match ? step4Match[0] : "";
+
+  it("STEP 4 block is present in the prompt", () => {
+    expect(step4.length).toBeGreaterThan(0);
   });
 
-  it("no longer issues a bare local `npx @11ty/eleventy` as the STEP 4 gate", () => {
-    // Old shape: `STEP 4 — Validate:\nnpx @11ty/eleventy`. The rewrite references
-    // the Eleventy build only as the CI command, never as a local imperative.
-    expect(SUT_SOURCE).not.toMatch(/STEP 4 — Validate:\s*\nnpx @11ty\/eleventy/);
+  it("STEP 4 defers validation to CI and forbids a local build", () => {
+    expect(step4).toMatch(/Validation runs in CI/);
+    expect(step4).toContain("no node_modules");
+    expect(step4).toMatch(/do NOT build locally/i);
   });
 
-  it("still names the CI validation commands (@11ty/eleventy + validate-blog-links)", () => {
-    expect(SUT_SOURCE).toContain("@11ty/eleventy");
-    expect(SUT_SOURCE).toContain("validate-blog-links");
+  it("STEP 4 issues no bare local-build imperative (defect-class guard)", () => {
+    // No line inside STEP 4 may START with a build/validation command — the old
+    // shape was `STEP 4 — Validate:\nnpx @11ty/eleventy\nbash scripts/validate-…`.
+    // The Eleventy/link commands may appear ONLY as inline references to the CI
+    // gate (e.g. CI runs "npx @11ty/eleventy"), never as a leading imperative.
+    expect(step4).not.toMatch(/^\s*npx @11ty\/eleventy/m);
+    expect(step4).not.toMatch(/^\s*bash scripts\/validate-blog-links\.sh/m);
+  });
+
+  it("STEP 4 still names the CI validation commands (@11ty/eleventy + validate-blog-links)", () => {
+    expect(step4).toContain("@11ty/eleventy");
+    expect(step4).toContain("validate-blog-links");
   });
 });
 

@@ -48,6 +48,11 @@ The only sandboxed-Bash need was STEP 4's build, which moves to CI. Keeping the 
 ON for content-generator (and unchanged for the other 6 producers) is the minimal,
 lowest-review-cost fix.
 
+> **Review note (#4993).** content-generator is the FIRST producer fixed, not the
+> only one that needs it: ~13 sibling claude-eval producers invoke `/soleur:*` skills
+> in their prompts without `--plugin-dir`/`Skill` and are almost certainly degraded by
+> the same mechanism. That fleet-wide audit is tracked in #4993, out of scope here.
+
 ### Change A — `CLAUDE_CODE_FLAGS` (cron-content-generator.ts)
 - Add `Skill,Task` to the `--allowedTools` value (precedent: cron-competitive-analysis,
   cron-legal-audit already add `Task`). `--max-turns 50` unchanged.
