@@ -20,8 +20,7 @@ import {
   mintInstallationToken,
   postSentryHeartbeat,
   resolveOutputAwareOk,
-  REPO_OWNER,
-  REPO_NAME,
+  ensureScheduledAuditIssue,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -32,8 +31,6 @@ import {
 } from "./_cron-claude-eval-substrate";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
-import { redactGithubSourcedText } from "@/lib/safety/redaction-allowlist";
-import type { Octokit } from "@octokit/core";
 
 // =============================================================================
 // Constants
@@ -168,110 +165,6 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
 // installation token (issues:write — the same token the spawn's `gh issue
 // create` uses; `hr-github-app-auth-not-pat`).
 
-// GitHub-issue-body readability bound for the spawn tails. Tighter than the
-// 4000-char Sentry extra (resolveOutputAwareOk) — the issue body is for
-// at-a-glance triage, the full tail already lives in the Sentry event.
-const AUDIT_TAIL_CHARS = 500;
-
-// The spawn tails are token-redacted by the eval substrate (redactToken), but
-// that strips ONLY the installation token — a crash stack can still spill other
-// allowlisted-env secrets (e.g. ANTHROPIC_API_KEY / sk-ant-…). Route through the
-// canonical multi-secret scrubber before it lands in a GitHub issue body, and
-// neutralize backtick/pipe/newline so untrusted eval output cannot break out of
-// the inline-code table cell into rendered markdown (image-autofetch / banner
-// injection). Mirrors the github-sourced-text redaction discipline.
-function formatTailForIssue(tail: string | undefined): string {
-  const scrubbed = redactGithubSourcedText(tail ?? "").slice(-AUDIT_TAIL_CHARS);
-  if (!scrubbed) return "(empty)";
-  return scrubbed
-    .replace(/[\r\n]+/g, " ")
-    // Escape pre-existing backslashes BEFORE introducing our own `\|` escape,
-    // so an input like `\|` cannot produce an ambiguous escape sequence
-    // (js/incomplete-sanitization). Order is load-bearing.
-    .replace(/\\/g, "\\\\")
-    .replace(/\|/g, "\\|")
-    .replace(/`/g, "ʼ");
-}
-
-export async function ensureContentGeneratorAuditIssue(args: {
-  runStartedAt: string;
-  spawnResult: Pick<
-    SpawnResult,
-    "exitCode" | "signal" | "abortedByTimeout" | "durationMs" | "stdoutTail" | "stderrTail"
-  >;
-  installationToken?: string;
-  octokit?: Octokit;
-}): Promise<{ created: boolean }> {
-  const { runStartedAt, spawnResult, installationToken, octokit } = args;
-
-  // Replay-stable UTC date anchor (NOT `new Date()`, which would drift across
-  // the retries:1 replay and defeat the title-dedup below).
-  const date = runStartedAt.slice(0, 10);
-  const title = `[Scheduled] Content Generator - ${date}`;
-
-  let client = octokit;
-  if (!client) {
-    if (!installationToken) {
-      throw new Error(
-        "ensureContentGeneratorAuditIssue: need octokit or installationToken",
-      );
-    }
-    const { Octokit: OctokitCtor } = await import("@octokit/core");
-    client = new OctokitCtor({ auth: installationToken }) as unknown as Octokit;
-  }
-
-  // Dedup: a transient failure that re-runs this path could file a second
-  // FAILED issue. Mirror cron-skill-freshness.ts searchExistingFreshnessIssue —
-  // skip the create if today's audit issue already exists (success or fallback).
-  // Explicit `sort: created, direction: desc` so today's issue is guaranteed on
-  // page 1 — do NOT rely on GitHub's unspecified default sort for dedup
-  // correctness (a busy label could otherwise page today's issue out and
-  // double-file). per_page:10 ≈ 5 weeks at Tue/Thu cadence, ample headroom.
-  const existing = (await client.request("GET /repos/{owner}/{repo}/issues", {
-    owner: REPO_OWNER,
-    repo: REPO_NAME,
-    state: "all",
-    labels: SENTRY_MONITOR_SLUG,
-    sort: "created",
-    direction: "desc",
-    per_page: 10,
-    headers: { "X-GitHub-Api-Version": "2022-11-28" },
-  })) as { data: Array<{ title: string }> };
-  if (existing.data.some((i) => i.title.startsWith(title))) {
-    return { created: false };
-  }
-
-  // Self-diagnosing body — the cron's own redacted spawn tail + timing, so the
-  // failure is triageable without SSH (app stdout is not shipped to Better
-  // Stack). The tails are already token-redacted by the eval substrate.
-  const body =
-    `Automated FAILED self-report from \`cron-content-generator\`.\n\n` +
-    `This run terminated WITHOUT producing a \`scheduled-content-generator\` ` +
-    `audit issue via the prompt (mid-eval crash / upstream API error / ` +
-    `max-turns kill). The handler-level fallback (#4960) filed this issue so ` +
-    `the run is not silent and the \`cron-cloud-task-heartbeat\` watchdog ` +
-    `stays green.\n\n` +
-    `| Signal | Value |\n| --- | --- |\n` +
-    `| fn | \`cron-content-generator\` |\n` +
-    `| runStartedAt | \`${runStartedAt}\` |\n` +
-    `| exitCode | \`${spawnResult.exitCode}\` |\n` +
-    `| signal | \`${spawnResult.signal}\` |\n` +
-    `| abortedByTimeout | \`${spawnResult.abortedByTimeout}\` |\n` +
-    `| durationMs | \`${spawnResult.durationMs}\` |\n` +
-    `| stdoutTail | \`${formatTailForIssue(spawnResult.stdoutTail)}\` |\n` +
-    `| stderrTail | \`${formatTailForIssue(spawnResult.stderrTail)}\` |\n\n` +
-    `Triage: \`knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md\` (H2).`;
-
-  await client.request("POST /repos/{owner}/{repo}/issues", {
-    owner: REPO_OWNER,
-    repo: REPO_NAME,
-    title,
-    body,
-    labels: [SENTRY_MONITOR_SLUG],
-  });
-  return { created: true };
-}
-
 // =============================================================================
 // Handler
 // =============================================================================
@@ -389,13 +282,16 @@ export async function cronContentGeneratorHandler({
     //         fallback even if the issue is genuinely absent — covered by the
     //         watchdog's maxGapDays threshold, not this step.
     //     (b) On a verify-throw + spawn-nonzero run the gate fires even though
-    //         the prompt's issue may exist; ensureContentGeneratorAuditIssue's
-    //         own same-title dedup is what prevents a spurious second issue — so
+    //         the prompt's issue may exist; ensureScheduledAuditIssue's own
+    //         same-title dedup is what prevents a spurious second issue — so
     //         keep that dedup robust (it is load-bearing, not belt-and-suspenders). ---
     if (!heartbeatOk) {
       await step.run("ensure-audit-issue", async () => {
         try {
-          await ensureContentGeneratorAuditIssue({
+          await ensureScheduledAuditIssue({
+            label: SENTRY_MONITOR_SLUG,
+            titlePrefix: "[Scheduled] Content Generator -",
+            cronName: "cron-content-generator",
             runStartedAt,
             spawnResult,
             installationToken,

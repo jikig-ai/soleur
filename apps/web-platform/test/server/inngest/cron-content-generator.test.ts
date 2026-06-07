@@ -22,11 +22,9 @@ vi.hoisted(() => {
 
 import {
   cronContentGenerator,
-  ensureContentGeneratorAuditIssue,
   KILL_ESCALATION_MS,
   MAX_TURN_DURATION_MS,
 } from "@/server/inngest/functions/cron-content-generator";
-import type { Octokit } from "@octokit/core";
 
 describe("cronContentGenerator — registration shape (import-time smoke)", () => {
   it("loads without throwing (handler + client startup pass)", () => {
@@ -235,130 +233,12 @@ describe("ensure-audit-issue fallback — source-shape anchors (#4960)", () => {
   });
 });
 
-describe("ensureContentGeneratorAuditIssue — behavioral (injected octokit)", () => {
-  const RUN_STARTED_AT = "2026-06-05T15:05:11.992Z";
-  const SPAWN = {
-    exitCode: 1,
-    signal: null,
-    abortedByTimeout: false,
-    durationMs: 368727,
-    stdoutTail: "API Error: 500 Internal server error.",
-    stderrTail: "",
-  };
-
-  function fakeOctokit(getData: Array<{ title: string }>) {
-    const calls: Array<{ route: string; params: Record<string, unknown> }> = [];
-    const octokit = {
-      request: vi.fn(async (route: string, params: Record<string, unknown>) => {
-        calls.push({ route, params });
-        if (route.startsWith("GET")) return { data: getData };
-        return { data: { number: 9999 } };
-      }),
-    } as unknown as Octokit;
-    return { octokit, calls };
-  }
-
-  it("creates exactly one labeled audit issue when none exists in the window", async () => {
-    const { octokit, calls } = fakeOctokit([]);
-    const res = await ensureContentGeneratorAuditIssue({
-      runStartedAt: RUN_STARTED_AT,
-      spawnResult: SPAWN,
-      octokit,
-    });
-    expect(res.created).toBe(true);
-    const posts = calls.filter((c) => c.route.startsWith("POST"));
-    expect(posts).toHaveLength(1);
-    expect(posts[0].params.title).toBe(
-      "[Scheduled] Content Generator - 2026-06-05",
-    );
-    expect(posts[0].params.labels).toEqual(["scheduled-content-generator"]);
-    // Self-diagnosing body carries the failure evidence.
-    expect(String(posts[0].params.body)).toContain("API Error: 500");
-    expect(String(posts[0].params.body)).toContain("exitCode");
-  });
-
-  it("does NOT double-file when today's audit issue already exists (retries:1 dedup)", async () => {
-    const { octokit, calls } = fakeOctokit([
-      { title: "[Scheduled] Content Generator - 2026-06-05" },
-    ]);
-    const res = await ensureContentGeneratorAuditIssue({
-      runStartedAt: RUN_STARTED_AT,
-      spawnResult: SPAWN,
-      octokit,
-    });
-    expect(res.created).toBe(false);
-    expect(calls.filter((c) => c.route.startsWith("POST"))).toHaveLength(0);
-  });
-
-  it("dedup is title-PREFIX (a suffixed prompt issue still suppresses the fallback)", async () => {
-    const { octokit, calls } = fakeOctokit([
-      { title: "[Scheduled] Content Generator - 2026-06-05 (manual)" },
-    ]);
-    const res = await ensureContentGeneratorAuditIssue({
-      runStartedAt: RUN_STARTED_AT,
-      spawnResult: SPAWN,
-      octokit,
-    });
-    expect(res.created).toBe(false);
-    expect(calls.filter((c) => c.route.startsWith("POST"))).toHaveLength(0);
-  });
-
-  it("dedup GET is label-scoped, state:all, explicitly sorted newest-first", async () => {
-    const { octokit, calls } = fakeOctokit([]);
-    await ensureContentGeneratorAuditIssue({
-      runStartedAt: RUN_STARTED_AT,
-      spawnResult: SPAWN,
-      octokit,
-    });
-    const get = calls.find((c) => c.route.startsWith("GET"));
-    expect(get?.params.labels).toBe("scheduled-content-generator");
-    expect(get?.params.state).toBe("all");
-    expect(get?.params.sort).toBe("created");
-    expect(get?.params.direction).toBe("desc");
-  });
-
-  it("scrubs secrets and neutralizes markdown-breakout chars in the issue body", async () => {
-    const { octokit, calls } = fakeOctokit([]);
-    await ensureContentGeneratorAuditIssue({
-      runStartedAt: RUN_STARTED_AT,
-      spawnResult: {
-        ...SPAWN,
-        // crash-path stderr spilling an Anthropic key + table-breaking chars
-        // (incl. a literal backslash-pipe to exercise escape-order, js/incomplete-sanitization)
-        stderrTail: "boom sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAA \\| pipe `tick`",
-      },
-      octokit,
-    });
-    const body = String(
-      calls.find((c) => c.route.startsWith("POST"))!.params.body,
-    );
-    expect(body).not.toContain("sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAA");
-    expect(body).toContain("[redacted-key]");
-    // table-breaking chars are escaped/neutralized inside the inline-code cell:
-    // backslash is escaped FIRST (js/incomplete-sanitization) so an input `\|`
-    // becomes `\\\|` (escaped backslash + escaped pipe), pipe → "\|" (markdown
-    // literal, no row break), backtick → "ʼ" (no span break).
-    expect(body).toContain("\\\\\\| pipe"); // input `\| ` → `\\\| `
-    expect(body).toContain("ʼtickʼ");
-    expect(body).not.toContain("`tick`");
-  });
-
-  it("propagates a create failure to the caller (handler wraps it in reportSilentFallback)", async () => {
-    const octokit = {
-      request: vi.fn(async (route: string) => {
-        if (route.startsWith("GET")) return { data: [] };
-        throw new Error("GitHub 503");
-      }),
-    } as unknown as Octokit;
-    await expect(
-      ensureContentGeneratorAuditIssue({
-        runStartedAt: RUN_STARTED_AT,
-        spawnResult: SPAWN,
-        octokit,
-      }),
-    ).rejects.toThrow("GitHub 503");
-  });
-});
+// NOTE: the behavioral coverage for the audit-issue fallback now lives in
+// cron-shared.test.ts (`ensureScheduledAuditIssue (shared fallback)`) — the
+// helper was extracted into _cron-shared.ts and parameterized for all 8
+// always-create producers (#4978). The wiring (the call site + `!heartbeatOk`
+// gate) stays guarded by the source-shape anchors above and by
+// cron-producer-output-wiring.test.ts.
 
 describe("buildSpawnEnv allowlist (security surface)", () => {
   const buildEnvMatch = SUT_SOURCE.match(
