@@ -89,10 +89,33 @@ export async function GET(
     return NextResponse.json({ error: "Bad gateway" }, { status: 502 });
   }
 
+  // The service client signs storage URLs against SUPABASE_URL, which in prod is
+  // the raw <ref>.supabase.co host. The browser's CSP img-src is built from
+  // NEXT_PUBLIC_SUPABASE_URL (the public custom domain), so a 302 to the raw host
+  // is BLOCKED by CSP → <img> onError → monogram (#4996 follow-up: the logo
+  // persisted + served fine, but the redirect host was not in img-src). Rewrite
+  // the origin to the public host so the redirect target matches img-src. Both
+  // hosts route to the same project and the signed token is host-agnostic.
+  let location = signed.data.signedUrl;
+  const publicBase = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (publicBase) {
+    try {
+      const signedUrl = new URL(signed.data.signedUrl);
+      const publicUrl = new URL(publicBase);
+      if (signedUrl.host !== publicUrl.host) {
+        signedUrl.protocol = publicUrl.protocol;
+        signedUrl.host = publicUrl.host;
+        location = signedUrl.toString();
+      }
+    } catch {
+      // Malformed URL on either side — fall back to the original signed URL.
+    }
+  }
+
   return new NextResponse(null, {
     status: 302,
     headers: {
-      Location: signed.data.signedUrl,
+      Location: location,
       "Cache-Control": `private, max-age=${SIGNED_TTL_SECONDS}`,
       "X-Content-Type-Options": "nosniff",
     },
