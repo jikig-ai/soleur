@@ -134,8 +134,11 @@ describe("Dashboard sidebar collapse", () => {
     expect(toggle.className).toContain("left-1/2");
     expect(toggle.className).toContain("-translate-x-1/2");
     expect(toggle.className).not.toContain("right-3");
-    // Vertical offset is unchanged — still top-10.
-    expect(toggle.className).toContain("top-10");
+    // Collapsed has no workspace pill to center on, so the toggle pins HIGH
+    // (top-3) near the rail top instead of top-10 — top-10 left its bottom edge
+    // flush with the monogram tile and read as "too close to the logo".
+    expect(toggle.className).toContain("top-3");
+    expect(toggle.className).not.toContain("top-10");
   });
 
   it("toggles aria-label when collapse toggle is clicked", async () => {
