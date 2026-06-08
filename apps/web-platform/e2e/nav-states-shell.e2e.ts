@@ -358,6 +358,19 @@ const resizeHandle = (page: Page) => page.getByTestId("kb-rail-resize-handle");
 const asideWidth = (page: Page) =>
   page.locator("aside").first().evaluate((el) => el.clientWidth);
 
+// The collapse toggle is FLOATED (`absolute right-3 top-3`) on desktop after the
+// reclaimed-space restructure — it is no longer in the rail-header flow. Its
+// accessible name flips with state (`Collapse sidebar` expanded / `Expand
+// sidebar` collapsed), so match either label — it is the only `… sidebar` button.
+const collapseToggle = (page: Page) =>
+  page.getByRole("button", { name: /^(Collapse|Expand) sidebar$/ });
+type Rect = { x: number; y: number; width: number; height: number };
+const intersects = (a: Rect, b: Rect): boolean =>
+  a.x < b.x + b.width &&
+  a.x + a.width > b.x &&
+  a.y < b.y + b.height &&
+  a.y + a.height > b.y;
+
 test.describe("nav-states visual gate — desktop", () => {
   test.use({ viewport: DESKTOP });
 
@@ -395,7 +408,7 @@ test.describe("nav-states visual gate — desktop", () => {
     await expect(primaryNav(page)).toHaveCount(0);
   });
 
-  test("drilled (expanded): no horizontal overflow + back affordance aligned to collapse toggle (#4810 follow-up)", async ({ page }) => {
+  test("drilled (expanded): no horizontal overflow + collapse toggle floats top-right (reclaimed-space restructure)", async ({ page }) => {
     await setupNavMocks(page);
     await gotoOrSkip(page, "/dashboard/kb");
 
@@ -416,28 +429,84 @@ test.describe("nav-states visual gate — desktop", () => {
       "expanded drilled rail (md:w-56) overflows horizontally — Bug 1 regression",
     ).toBeLessThanOrEqual(1);
 
-    // Bug 2: the back-affordance arrowhead and the brand-row collapse-toggle
-    // arrowhead must share the rail's px-3 gutter. Measure the glyph <svg>s, not
-    // the elements: the back Link stretches full rail width (its px-3 is internal
-    // padding, so its border-box sits at the rail edge), whereas the collapse
-    // button has no padding (its px-3 is the row gutter). Comparing border-boxes
-    // would compare a padded box to an unpadded one. The glyphs are what the user
-    // sees aligned: back glyph at the px-3 gutter (12px), collapse glyph centered
-    // in its h-6 w-6 button (~16px) — a ~4px offset the 6px tolerance absorbs.
-    const backGlyph = await railBand(page)
-      .getByTestId("nav-back-chevron")
-      .locator("svg")
-      .boundingBox();
-    const collapseGlyph = await page
-      .getByRole("button", { name: "Collapse sidebar" })
-      .locator("svg")
-      .boundingBox();
-    expect(backGlyph).not.toBeNull();
-    expect(collapseGlyph).not.toBeNull();
+    // Reclaimed-space restructure: the collapse toggle no longer lives in a
+    // rail-header row aligned to the back-affordance gutter — it is FLOATED in the
+    // aside's top-RIGHT corner (`absolute right-3 top-3`). Assert it is visible,
+    // anchored to the top-right of the aside box, and fully inside the rail.
+    await expect(collapseToggle(page)).toBeVisible({ timeout: 15_000 });
+    const asideBox = await aside.boundingBox();
+    const toggleBox = await collapseToggle(page).boundingBox();
+    expect(asideBox).not.toBeNull();
+    expect(toggleBox).not.toBeNull();
+    // Top-anchored: toggle top edge within ~16px of the aside top.
     expect(
-      Math.abs(backGlyph!.x - collapseGlyph!.x),
-      "back affordance and collapse toggle arrowheads drifted — Bug 2 regression",
-    ).toBeLessThanOrEqual(6);
+      toggleBox!.y - asideBox!.y,
+      "floated collapse toggle drifted from the aside top",
+    ).toBeLessThanOrEqual(16);
+    // Right-anchored + inside the rail: toggle right edge within ~16px of the
+    // aside right edge and never spilling past it.
+    const asideRight = asideBox!.x + asideBox!.width;
+    const toggleRight = toggleBox!.x + toggleBox!.width;
+    expect(toggleRight).toBeLessThanOrEqual(asideRight + 1);
+    expect(
+      asideRight - toggleRight,
+      "floated collapse toggle is not anchored to the aside right edge",
+    ).toBeLessThanOrEqual(16);
+  });
+
+  test("expanded multi-workspace: band reclaims the top (~45px) + floated toggle clears the switcher card & chevron (AC1/AC3)", async ({ page }) => {
+    await setupNavMocks(page);
+    // ≥2 memberships → OrgSwitcher renders the INTERACTIVE switch button with the
+    // `▾` chevron at the card's right edge (the collision risk for a top-right
+    // floated toggle). Registered AFTER setupNavMocks so Playwright matches first.
+    await page.route("**/api/workspace/list-memberships", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          memberships: [
+            MOCK_MEMBERSHIP,
+            {
+              organizationId: "org-e2e-2",
+              organizationName: "Second Workspace",
+              workspaceId: "ws-e2e-2",
+              isCurrent: false,
+              role: "member",
+              memberCount: 3,
+            },
+          ],
+        }),
+      }),
+    );
+    await gotoOrSkip(page, "/dashboard");
+
+    const aside = page.locator("aside").first();
+    await expect(aside).toHaveClass(/md:w-56/, { timeout: 15_000 });
+    const switcher = page.getByRole("button", { name: "Switch workspace" });
+    await expect(switcher).toBeVisible({ timeout: 15_000 });
+    await expect(collapseToggle(page)).toBeVisible({ timeout: 15_000 });
+
+    // AC1 — reclaimed space: the band's top edge is at/near the aside top (the
+    // dedicated ~44px toggle row is gone). RED on the old markup (~44px gap).
+    const asideBox = await aside.boundingBox();
+    const bandBox = await railBand(page).boundingBox();
+    expect(asideBox).not.toBeNull();
+    expect(bandBox).not.toBeNull();
+    expect(
+      bandBox!.y - asideBox!.y,
+      "workspace band did not rise to the sidebar top — ~45px not reclaimed",
+    ).toBeLessThanOrEqual(12);
+
+    // AC3 — no overlap: the floated toggle's box does not intersect the workspace
+    // switcher card (which contains the right-edge `▾` chevron). Rect ∩ = 0.
+    const toggleBox = await collapseToggle(page).boundingBox();
+    const switcherBox = await switcher.boundingBox();
+    expect(toggleBox).not.toBeNull();
+    expect(switcherBox).not.toBeNull();
+    expect(
+      intersects(toggleBox!, switcherBox!),
+      "floated collapse toggle overlaps the workspace switcher card/chevron",
+    ).toBe(false);
   });
 
   test("collapsed top-level: rail is icon-only, no horizontal overflow (Bug 2)", async ({ page }) => {
@@ -466,6 +535,27 @@ test.describe("nav-states visual gate — desktop", () => {
     await expect(monogram).toBeVisible();
     await expect(monogram).toHaveText("S"); // "Soleur Workspace" → "S"
     expect(await monogram.getAttribute("class")).not.toMatch(/accent-gold/);
+
+    // AC4 (reclaimed-space restructure): the floated collapse toggle stays fully
+    // inside the 56px collapsed rail and does NOT overlap the centered monogram
+    // tile (the collapsed band reserves pt-10 top clearance for the toggle).
+    await expect(collapseToggle(page)).toBeVisible();
+    const asideBox = await aside.boundingBox();
+    const toggleBox = await collapseToggle(page).boundingBox();
+    const tileBox = await idIcon.boundingBox();
+    expect(asideBox).not.toBeNull();
+    expect(toggleBox).not.toBeNull();
+    expect(tileBox).not.toBeNull();
+    // Inside the rail: never spills past the 56px edges.
+    expect(toggleBox!.x + toggleBox!.width).toBeLessThanOrEqual(
+      asideBox!.x + asideBox!.width + 1,
+    );
+    expect(toggleBox!.x).toBeGreaterThanOrEqual(asideBox!.x - 1);
+    // No overlap with the monogram tile.
+    expect(
+      intersects(toggleBox!, tileBox!),
+      "floated collapse toggle overlaps the collapsed monogram tile",
+    ).toBe(false);
 
     // Bug 2 invariant: the rail must NOT overflow horizontally, and the verbose
     // "Working on:" repo label must be ABSENT from the rail (icon-only form). Use
@@ -718,6 +808,28 @@ test.describe("nav-states visual gate — mobile", () => {
     );
     await expect(mobileBand).toBeVisible({ timeout: 15_000 });
     await expect(mobileBand).toContainText("Soleur Workspace", { timeout: 15_000 });
+  });
+
+  test("mobile: the close button still dismisses the drawer (AC6 — mobile close row preserved)", async ({ page }) => {
+    await setupNavMocks(page);
+    await gotoOrSkip(page, "/dashboard");
+
+    // The reclaimed-space restructure made the desktop toggle row md:hidden and
+    // floated the collapse toggle, but the MOBILE close row (and its button) must
+    // be untouched. Open the drawer, then dismiss it via the close button.
+    const openBtn = page.getByRole("button", { name: "Open navigation" });
+    await expect(openBtn).toBeVisible({ timeout: 15_000 });
+    // Settle for React hydration: the SSR hamburger paints before its onClick
+    // attaches, so an early click fires at a handler-less button (no-op) and the
+    // drawer never opens. Mirrors the widenable-rail drag tests' hydration wait.
+    await page.waitForTimeout(1500);
+    await openBtn.click();
+    const aside = page.locator("aside").first();
+    await expect(aside).not.toHaveClass(/-translate-x-full/, { timeout: 15_000 });
+    const closeBtn = page.getByRole("button", { name: "Close navigation" });
+    await expect(closeBtn).toBeVisible({ timeout: 15_000 });
+    await closeBtn.click();
+    await expect(aside).toHaveClass(/-translate-x-full/, { timeout: 15_000 });
   });
 
   test("mobile fullWidth (empty KB landing): page header owns the title; the band owns the SINGLE 'Back to menu' (Phase 4, one back per state)", async ({ page }) => {

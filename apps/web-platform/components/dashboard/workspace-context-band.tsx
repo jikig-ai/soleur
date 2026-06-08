@@ -83,7 +83,12 @@ export function WorkspaceContextBand({
         data-testid="workspace-context-band"
         data-variant="rail"
         data-collapsed="true"
-        className="flex flex-col items-center gap-3 px-2 py-3"
+        // pt-10 (not py-3) reserves top clearance for the floated collapse toggle
+        // (layout.tsx, `absolute right-3 top-3`): in the 56px collapsed rail the
+        // top-right toggle would otherwise overlap this centered monogram tile /
+        // back chevron. The collapsed rail has ample vertical room, so dropping the
+        // first icon below the toggle costs nothing the user notices.
+        className="flex flex-col items-center gap-3 px-2 pb-3 pt-10"
       >
         {drill && !suppressBack ? (
           <Link
@@ -148,7 +153,13 @@ export function WorkspaceContextBand({
           the leading top room is pt-2 (was pt-3) so — together with the tightened
           brand-row padding above — the gap between the collapse toggle and this
           pill no longer reads as a large empty band. */}
-      <div className="flex items-center gap-2 px-3 pt-2">
+      {/* md:pr-10 reserves right clearance for the floated collapse toggle
+          (layout.tsx, `absolute right-3 top-3` → occupies the right ~36px of the
+          rail header). Without it the multi-workspace switcher's `▾` chevron
+          (org-switcher.tsx, `shrink-0` at the card's right edge) sits under the
+          toggle. Desktop-only (md:) — the mobile band is below the md breakpoint
+          and unaffected. */}
+      <div className="flex items-center gap-2 px-3 pt-2 md:pr-10">
         <div className="min-w-0 flex-1">
           <OrgSwitcherContainer />
         </div>
