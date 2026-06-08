@@ -378,13 +378,14 @@ TBD
 
 TBD
 
-## Follow-ups
+## Action Items & Follow-ups
 
-- [ ] TBD
+Each row MUST cite a filed GitHub issue (#NNNN). If none, replace the table with:
+_No action items — incident fully resolved in the source PR with no residual work._
 
-## Action Items
-
-TBD — file as GitHub issues
+| Issue | Action | Status |
+|---|---|---|
+| #TBD | TBD | open |
 EOF
 } > "${draft_file}"
 
