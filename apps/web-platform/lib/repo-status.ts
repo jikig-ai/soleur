@@ -28,8 +28,12 @@ export function repoNeedsReconnect(
  * RPC). The pure predicate therefore reports `needsReconnect=true` forever even
  * though syncing works, leaving the orange banner stuck on after a successful
  * reconnect. This resolver reads the SAME sync-capability signal the manual sync
- * path uses (`app/api/kb/sync/route.ts`: `users.github_installation_id ||
- * resolveInstallationId(userId)`) so the banner reflects true capability.
+ * path uses — the membership-checked `resolve_workspace_installation_id` RPC via
+ * `resolveInstallationId`. (#5005: `app/api/kb/sync/route.ts` now resolves it
+ * through `resolveActiveWorkspaceRepoMeta`, which calls the same RPC keyed to the
+ * caller's active workspace id; this predicate self-derives the active id via the
+ * single-arg `resolveInstallationId(userId)` below.) So the banner reflects true
+ * capability.
  *
  * Short-circuits before the RPC on the common paths (non-ready status, or a
  * personal install already on the user column) so only the `ready + NULL user
