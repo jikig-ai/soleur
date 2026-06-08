@@ -7,10 +7,26 @@ lane: cross-domain
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 related_prs: [5031, 4946]
-status: planned
+status: deepened
 ---
 
 # fix: Workspace clone must consume the self-healed installation (close the gh-403 → "No Git Repository in Workspace" cascade)
+
+## Enhancement Summary
+
+**Deepened on:** 2026-06-08
+**Sections enhanced:** Research Reconciliation (all 6 claims line-verified against `main`); verify-the-negative pass on the hoist-safety claim; precedent-diff gate; test-seam claim confirmed.
+**Gates run:** 4.6 (User-Brand Impact ✓ — threshold `single-user incident`), 4.7 (Observability ✓ — all 5 fields, no SSH), 4.8 (PAT-shaped halt — no hits ✓), 4.9 (UI-wireframe — no UI surface, skip ✓), 4.4 (Precedent-Diff), 4.45 (verify-the-negative). Domain-leader Task spawn unavailable in this environment — inline grounded passes substituted; the security-sentinel / user-impact-reviewer triad runs at `/soleur:plan-review` and `/soleur:review`, mandatory here per the `single-user incident` exit-gate rule.
+
+### Key Improvements
+1. **Every ARGUMENTS claim line-verified against `main`** (this worktree): clone passes bare `installationId` (`cc-dispatcher.ts:1333`); mint consumes `effectiveInstallationId` (`:1464`); C4 write tool consumes `effectiveInstallationId` (`:1523`); `.git`-LAST sentinel (`ensure-workspace-repo.ts:166-168`); clone fail-soft catch (`:98-108`). The bug is purely that the clone is the one consumer still on the stored id, positioned before the self-heal computes the entitled one.
+2. **Hoist-safety proven by verify-the-negative.** The region between the `Promise.all` resolve (`:1282`) and the current clone (`:1330`) reads NONE of `connectedOwner` / `connectedRepo` / `effectiveInstallationId` / `ensureWorkspaceRepoCloned` (grep returned zero) — it only normalizes the ack timestamp + registers the posture cell + sends `autonomous_posture`. The parse + self-heal can therefore be hoisted above the clone with zero behavioral change; `tsc --noEmit` is the mechanical proof that later read sites stay in scope.
+3. **Test-seam confirmed.** `ensureWorkspaceRepoCloned` is mocked as an inline anonymous `vi.fn` (`cc-dispatcher-real-factory.test.ts:152`), so its call args are NOT currently inspectable — the plan's instruction to hoist it to a named top-level `mockEnsureWorkspaceRepoCloned` spy is load-bearing for AC1, not optional.
+4. **`related_prs` citations verified live:** `gh pr view 5031` → MERGED (gh-403 self-heal hardening); `gh pr view 4946` → MERGED (repo-owner installation selection + honest 403). Both attribution claims hold.
+
+### New Considerations Discovered
+- The pattern class is an **in-function ordering correction**, NOT a pattern-bound DB/lock/atomic-write shape — no cross-file precedent applies (precedent-diff gate: "pattern is novel; the in-file precedent is the 3 sibling consumers of `effectiveInstallationId`"). Reviewers should scrutinize the fail-closed invariant (clone gets the stored install in every non-promotion branch), not a missing canonical form.
+- `cc-dispatcher-self-heal-observability.test.ts` has **no** clone-vs-self-heal ordering assertion (grep confirmed) — so AC7 passes unchanged after the hoist; the Sharp Edge re-check at /work is a belt-and-suspenders note, the actual risk is nil.
 
 🐛 The hosted Concierge clones the connected repo with the **stored** (cross-account / personal) installation id — the one that holds only `issues: read` on the org repo — so `git clone` 403s, fails fail-soft, leaves the workspace `.git`-less, and `worktree-manager.sh create` then fails with **"No Git Repository in Workspace."** Both errors in the user's screenshot are this single cascade. PR #5031 (commit `9556f1f4a`) hardened the *computation* of the correct installation (`effectiveInstallationId`) but that computation runs **after** the clone, so the clone never consumes it.
 
