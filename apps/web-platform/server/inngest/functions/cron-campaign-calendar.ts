@@ -50,6 +50,11 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 // claude-code spawn argv. `--` is load-bearing per #4017 bug 8/8 (variadic
 // --allowedTools consumes the prompt as a tool name without the end-of-
 // options marker). The prompt is the SOLE positional argument after `--`.
+//
+// #4993 — headless /soleur:* skill resolution (fleet fix mirroring #4987 /
+// PR #4989): `--plugin-dir plugins/soleur` registers the symlinked plugin under
+// `--print` (a bare plugins/ dir is NOT auto-discovered in headless mode), and
+// `Skill` (+`Task` for subagent fan-out) in --allowedTools gates skill invocation.
 const CLAUDE_CODE_FLAGS = [
   "--print",
   "--model",
@@ -57,7 +62,9 @@ const CLAUDE_CODE_FLAGS = [
   "--max-turns",
   "40",
   "--allowedTools",
-  "Bash,Read,Write,Edit,Glob,Grep",
+  "Bash,Read,Write,Edit,Glob,Grep,Skill,Task",
+  "--plugin-dir",
+  "plugins/soleur",
   "--",
 ];
 

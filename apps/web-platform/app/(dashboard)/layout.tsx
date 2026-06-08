@@ -314,42 +314,46 @@ export default function DashboardLayout({
           ${collapsed ? "md:w-14" : "md:w-56"}
         `}
       >
-        {/* Brand + close/collapse buttons. Gutter is px-3 (expanded) to match
-            the rest of the rail (nav items, footer, workspace band) so the
-            collapse toggle shares the same px-3 border-box gutter as the band's
-            "Back to menu" affordance below it (#4810 follow-up Bug 2: the two
-            were at px-5 vs px-3 and read as misaligned).
-            Sidebar-UX follow-up Issue 1: this row used to be py-5 which, now that
-            the wordmark is gone and only the collapse toggle remains, left a large
-            empty gap above the workspace pill. Tightened to pt-3 pb-2 so the
-            toggle sits close to the workspace switcher card. */}
-        <div className={`flex items-center justify-between safe-top ${collapsed ? "px-2 pt-3 pb-2" : "px-3 pt-3 pb-2"}`}>
-          {/* Phase 2 (#4915): the global "Soleur" wordmark is removed entirely —
-              the workspace identity band is the sole orientation anchor now. Only
-              the close (mobile) + collapse (desktop) controls remain in this row;
-              `justify-between` keeps the collapse toggle pinned to the rail edge. */}
+        {/* Mobile-only close row. The desktop collapse toggle was lifted OUT of
+            this row and FLOATED (see the button below) so the workspace context
+            band rises to the very top of the desktop rail. The "Soleur" wordmark
+            was removed in #4915 Phase 2, leaving this row near-empty on desktop and
+            wasting ~45px (the row + its pt-3/pb-2 + the band's pt-2 stacked above
+            the workspace pill). The row is now md:hidden and holds only the mobile
+            drawer-close button; it keeps `safe-top` for the notch inset (desktop
+            has no safe-area inset, so dropping it from the desktop path is correct). */}
+        <div className="flex items-center safe-top px-3 pt-3 pb-2 md:hidden">
           <button
             onClick={() => setDrawerOpen(false)}
             aria-label="Close navigation"
-            className="flex h-10 w-10 items-center justify-center rounded-lg text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary md:hidden"
+            className="flex h-10 w-10 items-center justify-center rounded-lg text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
           >
             <XIcon className="h-5 w-5" />
           </button>
-          {/* Collapse toggle — hidden on mobile, visible on md+. Sidebar-UX
-              follow-up Issue 2: the old left/right CHEVRON read like a "back"
-              arrow on drilled secondary menus (it sat one row above the band's
-              "Back to menu" BackArrowIcon, both pointing left). Swapped for a
-              non-directional sidebar-panel glyph so it no longer reads as "back".
-              The aria-label/title still carry the Expand/Collapse + ⌘B semantics. */}
-          <button
-            onClick={toggleCollapsed}
-            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            title={collapsed ? "Expand sidebar (⌘B)" : "Collapse sidebar (⌘B)"}
-            className="hidden md:flex h-6 w-6 items-center justify-center rounded text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
-          >
-            <PanelToggleIcon className="h-4 w-4" />
-          </button>
         </div>
+
+        {/* Desktop collapse toggle — FLOATED in the rail's top-right corner so it
+            costs ZERO vertical space (the workspace band now owns the sidebar top).
+            Absolutely positioned against the <aside> (its md:relative containing
+            block), NOT in the flex-col flow. `right-3 top-3` mirrors the existing
+            corner-control convention in components/ui/error-card.tsx (do not invent
+            a new offset). z-10 lifts it above the band's static content; the
+            multi-workspace switcher dropdown opens DOWNWARD (`top-full`) in a
+            disjoint vertical band and a separate stacking context, so there is no
+            cross-context z race. The expanded pill row (md:pr) and the collapsed
+            icon column (pt) reserve clearance so this never overlaps the workspace
+            card, its dropdown chevron, or the collapsed monogram tile. In the
+            collapsed rail (md:w-14 = 56px) it stays fully inside the rail and is the
+            only non-keyboard expand affordance — its aria-label/title/⌘B semantics
+            are preserved verbatim. */}
+        <button
+          onClick={toggleCollapsed}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          title={collapsed ? "Expand sidebar (⌘B)" : "Collapse sidebar (⌘B)"}
+          className="absolute right-3 top-3 z-10 hidden h-6 w-6 items-center justify-center rounded text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary md:flex"
+        >
+          <PanelToggleIcon className="h-4 w-4" />
+        </button>
 
         {/* Persistent workspace context band (ADR-047). Mounted OUTSIDE the
             rail swap region and NEVER gated on `collapsed` — this fixes the
