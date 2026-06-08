@@ -11,7 +11,7 @@ const mockMaybeSingle = vi.fn();
 
 const { mockResolveActiveWorkspacePath, mockExistsSync } = vi.hoisted(() => ({
   mockResolveActiveWorkspacePath: vi.fn(),
-  mockExistsSync: vi.fn(() => false),
+  mockExistsSync: vi.fn((_p?: unknown) => false),
 }));
 
 vi.mock("@/lib/supabase/server", () => {
