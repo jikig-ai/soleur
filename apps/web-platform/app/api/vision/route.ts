@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { tryCreateVision } from "@/server/vision-helpers";
+import { resolveActiveWorkspacePath } from "@/server/workspace-resolver";
 
 /**
  * POST /api/vision
@@ -32,22 +33,19 @@ export async function POST(request: Request) {
     );
   }
 
+  // #5005 — resolve the caller's ACTIVE workspace path via the membership-scoped
+  // resolver, NOT the caller's own `users.workspace_path` column. That column is
+  // stale/empty for any account provisioned after the ADR-044 `users →
+  // workspaces` relocation, which 503'd first-run vision creation for recent
+  // signups. The resolver always returns a path (fails closed to solo), and
+  // `tryCreateVision` mkdirs the target recursively, so the legacy
+  // "not provisioned" 503 guard is dropped — this endpoint is fire-and-forget
+  // (the client ignores errors), and a genuine FS failure still surfaces as 500.
   const serviceClient = createServiceClient();
-  const { data: userData } = await serviceClient
-    .from("users")
-    .select("workspace_path")
-    .eq("id", user.id)
-    .single();
-
-  if (!userData?.workspace_path) {
-    return NextResponse.json(
-      { error: "Workspace not provisioned" },
-      { status: 503 },
-    );
-  }
+  const workspacePath = await resolveActiveWorkspacePath(user.id, serviceClient);
 
   try {
-    await tryCreateVision(userData.workspace_path, body.content);
+    await tryCreateVision(workspacePath, body.content);
     return NextResponse.json({ ok: true });
   } catch {
     return NextResponse.json(
