@@ -814,22 +814,29 @@ git diff --name-only origin/main...HEAD | grep -E '^knowledge-base/engineering/o
 
 - **Match (a PIR was added/modified on this branch):** Pass *only after* confirming BOTH (1) frontmatter and (2) issue-backed action items:
   1. **Frontmatter** carries `brand_survival_threshold` and the Art. 33/34 fields (availability outages set both `false` with an `n/a` rationale; data-exposure incidents must evaluate the GDPR gate per `/soleur:incident` Phase 2).
-  2. **Every row of the merged `## Action Items & Follow-ups` table cites a `#NNNN` GitHub issue** — OR the section is exactly the permitted no-item sentence. A bare bullet, an unchecked `- [ ]` without `#NNNN`, or a `TBD`/`(none)` placeholder FAILS the gate (a follow-up with no issue rots the moment the session ends — the exact gap that left PR #5003's `workspace_path`/`workspace_status` sweep untracked until #5005 was filed retroactively). Detection:
+  2. The merged `## Action Items & Follow-ups` section is in exactly ONE of two valid shapes: (a) a table where **every item row cites a `#NNNN` GitHub issue in its first (Issue) cell**, or (b) the standalone permitted no-item sentence as a line of its own. Any other shape — a row with an empty Issue cell (even if it mentions `#NNNN` in prose elsewhere), a bare `- [ ]` bullet, free-form prose, an unfilled `#TBD`/placeholder, or an empty section — FAILS the gate (a follow-up with no issue rots the moment the session ends — the exact gap that left PR #5003's `workspace_path`/`workspace_status` sweep untracked until #5005 was filed retroactively). Detection (table-and-first-cell-anchored; `[[:space:]]` not `\s` for ugrep/BusyBox portability):
 
      ```bash
      PIR=$(git diff --name-only origin/main...HEAD | grep -E 'post-mortems/.+-postmortem\.md$' | head -n1)
      sec=$(awk '/^## Action Items & Follow-ups/{f=1;next} /^## /{f=0} f' "$PIR")
-     if printf '%s' "$sec" | grep -qF 'No action items — incident fully resolved'; then
-       : # permitted no-item form — pass
-     else
-       # item rows = table rows minus the header and the |---|---| divider
-       rows=$(printf '%s\n' "$sec" | grep -E '^\s*\|' \
-              | grep -vE '^\s*\|\s*Issue\s*\|' \
-              | grep -vE '^\s*\|[-:| ]+\|\s*$')
-       bad=$(printf '%s\n' "$rows" | grep -vE '#[0-9]+' | sed '/^[[:space:]]*$/d')
+     # Item rows = table rows minus the header (| Issue |) and the |---| divider.
+     rows=$(printf '%s\n' "$sec" | grep -E '^[[:space:]]*\|' \
+            | grep -vE '^[[:space:]]*\|[[:space:]]*Issue[[:space:]]*\|' \
+            | grep -vE '^[[:space:]]*\|[-:|[:space:]]+\|[[:space:]]*$')
+     rows=$(printf '%s\n' "$rows" | sed '/^[[:space:]]*$/d')
+     if [ -n "$rows" ]; then
+       # Shape (a): every item row MUST begin with a #NNNN Issue cell.
+       bad=$(printf '%s\n' "$rows" | grep -vE '^[[:space:]]*\|[[:space:]]*#[0-9]+[[:space:]]*\|')
        if [ -n "$bad" ]; then
-         echo "[FAIL] PIR Action Items & Follow-ups has rows with no #NNNN issue:" >&2
+         echo "[FAIL] PIR action-item rows without a #NNNN in the Issue cell:" >&2
          echo "$bad" >&2
+       fi
+     else
+       # No table rows → Shape (b): the standalone no-item sentence is the ONLY
+       # valid form. Anchored to start-of-line so the template's instructional
+       # prose ("…write exactly `_No action items …`") cannot satisfy it.
+       if ! printf '%s\n' "$sec" | grep -qE '^_No action items — incident fully resolved'; then
+         echo "[FAIL] PIR Action Items & Follow-ups has no issue-backed table and no permitted no-item sentence." >&2
        fi
      fi
      ```
