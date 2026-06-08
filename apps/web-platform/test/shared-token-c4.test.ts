@@ -168,6 +168,28 @@ describe("GET /api/shared/[token]/c4 — public token-scoped diagram data", () =
     expect(res.status).toBe(413);
   });
 
+  it("positive control: a REGULAR model at the same path serves 200 (proves the 413 is caused by the symlink, not an incidental read failure)", async () => {
+    // Identical setup to the symlink test minus the symlink — a plain file at
+    // model.likec4.json must serve 200. This pins that the symlink case's 413
+    // comes from O_NOFOLLOW rejecting the link, not from the path/dir being
+    // unreadable for some unrelated reason.
+    writeModel(DIAGRAMS_DIR, { views: { context: {} } });
+    shareRow = { document_path: DOC_PATH, revoked: false };
+    const res = await callGET();
+    expect(res.status).toBe(200);
+  });
+
+  it("resolves dir='.' for a root-level shared doc (dirname of a top-level file)", async () => {
+    // document_path with no directory → dirname is ".", which joins to kbRoot.
+    writeModel(".", { views: { root: {} } });
+    shareRow = { document_path: "root-diagram.md", revoked: false };
+    const res = await callGET();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.dir).toBe(".");
+    expect(body.viewIds).toEqual(["root"]);
+  });
+
   it("returns 413 when the model exceeds the size cap", async () => {
     const dirAbs = path.join(kbRoot, DIAGRAMS_DIR);
     fs.mkdirSync(dirAbs, { recursive: true });

@@ -9,16 +9,11 @@ import {
   extractClientIpFromHeaders,
   logRateLimitRejection,
 } from "@/server/rate-limiter";
-import { C4_MODEL_JSON } from "@/lib/c4-constants";
+import { C4_MODEL_JSON, MAX_C4_BYTES } from "@/lib/c4-constants";
 import logger from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
 
 export const runtime = "nodejs";
-
-// Mirror app/api/kb/c4/project/route.ts:14 — layouted model JSON can be large.
-// Kept route-local (the authenticated route keeps its own copy) so the public
-// boundary's size cap is auditable in one place without a cross-route import.
-const MAX_C4_BYTES = 4 * 1024 * 1024;
 
 // Every 4xx/5xx emits Cache-Control: no-store so a shared cache (Cloudflare,
 // corporate proxy) cannot pin an error state past its natural lifetime —

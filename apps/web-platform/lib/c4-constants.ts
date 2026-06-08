@@ -25,6 +25,15 @@ export const C4_MODEL_JSON = "model.likec4.json";
 /** Fenced-code language token that embeds a LikeC4 view in a markdown page. */
 export const LIKEC4_VIEW_LANG = "likec4-view";
 
+/**
+ * Max byte size for a layouted `model.likec4.json` served by the C4 data
+ * routes (`api/kb/c4/project` owner path + `api/shared/[token]/c4` public
+ * path). Single source of truth so the public boundary's size cap cannot
+ * silently diverge from the authenticated one. Layouted model JSON can be
+ * large; 4 MiB is the agreed ceiling.
+ */
+export const MAX_C4_BYTES = 4 * 1024 * 1024;
+
 /** Runtime feature flag gating the whole visualizer. */
 export const C4_VISUALIZER_FLAG = "c4-visualizer" as const;
 
