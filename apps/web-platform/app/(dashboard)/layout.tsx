@@ -335,8 +335,12 @@ export default function DashboardLayout({
         {/* Desktop collapse toggle — FLOATED in the rail's top-right so it costs
             ZERO vertical space (the workspace band now owns the sidebar top).
             Absolutely positioned against the <aside> (its md:relative containing
-            block), NOT in the flex-col flow. `right-3` keeps it pinned to the rail's
-            right edge. `top-10` (40px) vertically CENTERS the h-6 (24px) button on the
+            block), NOT in the flex-col flow. EXPANDED: `right-3` pins it to the rail's
+            top-right, the corner of the workspace pill. COLLAPSED: `left-1/2
+            -translate-x-1/2` centers it on the same vertical axis as the monogram tile
+            and the icon-only nav column below, so the collapsed rail reads as one clean
+            centered column (the right-3 corner control sat off-axis above the logo).
+            `top-10` (40px) vertically CENTERS the h-6 (24px) button on the
             workspace pill row's center. The toggle is positioned against the <aside>,
             but the band (and its pill) sits ~12px BELOW the aside top (the reclaimed-
             space offset — VRT-measured, asserted ≤12). The pill leads the band at pt-2
@@ -360,7 +364,7 @@ export default function DashboardLayout({
           onClick={toggleCollapsed}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           title={collapsed ? "Expand sidebar (⌘B)" : "Collapse sidebar (⌘B)"}
-          className="absolute right-3 top-10 z-10 hidden h-6 w-6 items-center justify-center rounded text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary md:flex"
+          className={`absolute ${collapsed ? "left-1/2 -translate-x-1/2" : "right-3"} top-10 z-10 hidden h-6 w-6 items-center justify-center rounded text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary md:flex`}
         >
           <PanelToggleIcon className="h-4 w-4" />
         </button>

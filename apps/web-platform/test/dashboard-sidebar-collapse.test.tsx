@@ -119,6 +119,25 @@ describe("Dashboard sidebar collapse", () => {
     expect(toggle.className).toContain("right-3");
   });
 
+  // When the rail is collapsed the floated toggle no longer pins to the right
+  // edge (`right-3`) — it centers on the same vertical axis as the monogram
+  // tile + the icon-only nav column below it, so the collapsed rail reads as
+  // one clean centered column instead of a top-right-corner control sitting
+  // off-axis above the logo. Expanded keeps `right-3` (the workspace pill
+  // corner). jsdom has no layout engine: this is a className drift tripwire;
+  // the pixel proof (inside-rail + no monogram overlap) lives in
+  // e2e/nav-states-shell.e2e.ts (AC4).
+  it("centers the collapse toggle on the icon column when the rail is collapsed (not pinned right-3)", async () => {
+    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    await userEvent.click(screen.getByLabelText("Collapse sidebar"));
+    const toggle = screen.getByLabelText("Expand sidebar");
+    expect(toggle.className).toContain("left-1/2");
+    expect(toggle.className).toContain("-translate-x-1/2");
+    expect(toggle.className).not.toContain("right-3");
+    // Vertical offset is unchanged — still top-10.
+    expect(toggle.className).toContain("top-10");
+  });
+
   it("toggles aria-label when collapse toggle is clicked", async () => {
     render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
     const toggle = screen.getByLabelText("Collapse sidebar");

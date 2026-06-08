@@ -596,7 +596,9 @@ test.describe("nav-states visual gate — desktop", () => {
 
     // AC4 (reclaimed-space restructure): the floated collapse toggle stays fully
     // inside the 56px collapsed rail and does NOT overlap the centered monogram
-    // tile (the collapsed band reserves pt-10 top clearance for the toggle).
+    // tile. When collapsed the toggle centers on the tile's vertical axis
+    // (left-1/2 -translate-x-1/2), so the collapsed band reserves pt-16 top
+    // clearance to keep the two disjoint.
     await expect(collapseToggle(page)).toBeVisible();
     const asideBox = await aside.boundingBox();
     const toggleBox = await collapseToggle(page).boundingBox();

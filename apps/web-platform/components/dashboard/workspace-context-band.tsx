@@ -86,15 +86,17 @@ export function WorkspaceContextBand({
         data-testid="workspace-context-band"
         data-variant="rail"
         data-collapsed="true"
-        // pt-14 (not py-3) reserves top clearance for the floated collapse toggle
-        // (layout.tsx, `absolute right-3 top-10`): in the 56px collapsed rail the
-        // top-right toggle (centered at top-10=40px, bottom edge 64px from the aside
-        // top) would otherwise overlap this centered monogram tile / back chevron.
-        // This band sits ~12px below the aside top, so the toggle's bottom edge is
-        // 64-12 = 52px in band-relative space; pt-14 (56px) drops the first icon just
-        // below it (4px gap). The collapsed rail has ample vertical room, so the
-        // larger top pad costs nothing the user notices. (Was pt-10 at top-3=12px.)
-        className="flex flex-col items-center gap-3 px-2 pb-3 pt-14"
+        // pt-16 (not py-3) reserves top clearance for the floated collapse toggle
+        // (layout.tsx, `absolute left-1/2 -translate-x-1/2 top-10` when collapsed):
+        // in the 56px collapsed rail the centered toggle (top-10=40px, bottom edge
+        // 64px from the aside top) shares this tile's vertical center axis, so the
+        // only thing keeping them disjoint is vertical separation. This band sits
+        // ~12px below the aside top, so the toggle's bottom edge is 64-12 = 52px in
+        // band-relative space; pt-16 (64px) drops the first icon ~12px below it — a
+        // clear gap so the toggle no longer reads as crowding the logo. The collapsed
+        // rail has ample vertical room, so the larger top pad costs nothing the user
+        // notices. (Was pt-14 = 56px → only ~4px gap, which read as "too close".)
+        className="flex flex-col items-center gap-3 px-2 pb-3 pt-16"
       >
         {drill && !suppressBack ? (
           <Link
