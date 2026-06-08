@@ -28,9 +28,9 @@
     ] }
   ],
   "primaryCta": {
-    "label": "Reserve access",
+    "label": "Join the waitlist",
     "url": "/pricing/#waitlist",
-    "ariaLabel": "Reserve access to the hosted Soleur platform"
+    "ariaLabel": "Join the waitlist for the hosted Soleur platform"
   },
   "author": {
     "name": "Jean Deruelle",
