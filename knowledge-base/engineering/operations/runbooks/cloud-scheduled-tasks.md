@@ -603,6 +603,49 @@ this contract will cause duplicate issues or missed auto-closes.
   broken but operators keep running manually, the watchdog will NOT fire.
   Weekly review of the actual schedule (cron vs. dispatch) is the backstop.
 
+## Cron Containment Model (#5018 / #5000 / #5004)
+
+Cron-spawned `claude --print` agents run with the **OS bash sandbox disabled**
+(`sandbox.enabled:false` in the substrate's `DEFAULT_CLAUDE_SETTINGS`). This is the
+durable fix for the recurring bwrap-userns drift (#4928/#4932) that broke #5000/#5004 —
+the cron no longer depends on unprivileged user namespaces. The host sysctl pin
+(#4932/#4944) stays only as defense-in-depth for **non-cron** sandbox consumers.
+
+**Containment = a deny-by-default `PreToolUse` hook**, not the sandbox and not
+`--allowedTools`. Phase-0 probes (re-verified on the prod-pinned CLI `2.1.79`) proved
+headless `claude --print` does NOT fail-close non-allowlisted commands via
+`--allowedTools`/`defaultMode` — only a `permissions.deny` rule or a hook blocks, and an
+unhooked tool class / crashed hook fails OPEN. So:
+
+- `cron-bash-allowlist-hook.mjs` is registered under a `*` catch-all matcher
+  (`buildCronEvalSettings`); it denies everything except a per-cron allowlist
+  (`CRON_BASH_ALLOWLISTS`) + inert internal tools, and denies all secret-reads / egress /
+  interpreters / argument-injection. Its decision logic is unit-tested
+  (`cron-bash-allowlist-hook.test.ts`, 43 adversarial cases).
+- A **spawn-time self-test** (`runHookSelfTest`) aborts the cron with a FAILED
+  self-report if the hook does not deny a canonical exfil payload — never an unprotected run.
+- The token `bypassPermissions` MUST NOT appear in the overlay (the v1 P1-blocked
+  exfil primitive). See ADR-033 **I7**.
+
+### Tier-1 vs Tier-2
+
+- **Tier-1** (hook-contained, scheduled): crons whose entire command surface is a finite
+  allowlist — currently `cron-roadmap-review` (#5004). Add a cron here by enumerating its
+  prompt's `gh`/`git` verbs into `CRON_BASH_ALLOWLISTS` (sub-command granularity, e.g.
+  `gh issue list` NOT `gh issue`; never `git config`/`git remote`) and validating end-to-end
+  via `/soleur:trigger-cron`.
+- **Tier-2** (`TIER2_DEFERRED_CRONS`, PAUSED): broad-bash crons (and Node-level
+  `spawn("bash")` crons, which the hook does NOT cover at all). They early-return via
+  `deferIfTier2Cron` — an honest on-schedule check-in, no claude spawn, no output issue.
+  **Visible degradation:** their weekly `[Scheduled]` output issues stop appearing (this is
+  expected, not a regression). They are restored by the **Tier-2 network-egress firewall +
+  least-privilege installation token** (deferred follow-up) — the durable boundary.
+
+**Promoting a paused cron to Tier-1:** enumerate its verbs → add to `CRON_BASH_ALLOWLISTS`
+→ remove from `TIER2_DEFERRED_CRONS` → `/soleur:trigger-cron <cron>` and confirm it produces
+its `[Scheduled]` issue end-to-end. If the hook denies a needed verb, the run produces no
+output → its monitor stays GREEN (heartbeat) but no issue lands — re-check the allowlist.
+
 ## References
 
 - Migration PR: #1095
