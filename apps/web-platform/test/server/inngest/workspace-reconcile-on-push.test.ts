@@ -72,14 +72,25 @@ vi.mock("@/lib/supabase/service", () => ({
 const syncWorkspaceSpy = vi.fn();
 vi.mock("@/server/kb-route-helpers", () => ({ syncWorkspace: syncWorkspaceSpy }));
 
-// kb_sync_history appends keyed by owner userId.
+// kb_sync_history appends keyed by owner userId (owner-attributed path).
 const APPENDS = new Map<string, Record<string, unknown>[]>();
 const appendKbSyncRowSpy = vi.fn(async (userId: string, row: Record<string, unknown>) => {
   APPENDS.set(userId, [...(APPENDS.get(userId) ?? []), row]);
 });
+// #4906 — workspace-keyed appends for owner-less workspaces, keyed by workspace id.
+const WS_APPENDS = new Map<string, Record<string, unknown>[]>();
+const appendKbSyncRowForWorkspaceSpy = vi.fn(
+  async (workspaceId: string, row: Record<string, unknown>) => {
+    WS_APPENDS.set(workspaceId, [...(WS_APPENDS.get(workspaceId) ?? []), row]);
+  },
+);
 vi.mock("@/server/session-sync", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/session-sync")>();
-  return { ...actual, appendKbSyncRow: appendKbSyncRowSpy };
+  return {
+    ...actual,
+    appendKbSyncRow: appendKbSyncRowSpy,
+    appendKbSyncRowForWorkspace: appendKbSyncRowForWorkspaceSpy,
+  };
 });
 
 const reportSilentFallbackSpy = vi.fn();
@@ -166,11 +177,13 @@ beforeEach(() => {
   WORKSPACE_QUERY_ERROR = null;
   OWNERS.clear();
   APPENDS.clear();
+  WS_APPENDS.clear();
   EXISTING_DIRS.clear();
   serviceFrom.mockClear();
   repoUrlFilterSpy.mockClear();
   syncWorkspaceSpy.mockReset();
   appendKbSyncRowSpy.mockClear();
+  appendKbSyncRowForWorkspaceSpy.mockClear();
   reportSilentFallbackSpy.mockReset();
   warnSilentFallbackSpy.mockReset();
   loggerInfoSpy.mockReset();
@@ -508,6 +521,134 @@ describe("reconcile — sync failure", () => {
         workspace_id: "ws-A",
       }),
     );
+  });
+});
+
+describe("reconcile — owner-less workspace (#4906, workspace-keyed audit)", () => {
+  // An owner-less workspace = a ws.id NOT in the OWNERS map, so the
+  // workspace_members owner lookup resolves null. #4901 makes it self-heal and
+  // the KB content syncs, but the owner gate previously skipped the audit row;
+  // now it writes via the workspace-keyed path and emits an owner-drift warn.
+
+  it("AC-T1 (AC5): owner-less + {ok:true, recovered:true} → workspace-keyed row, owner path NOT called", async () => {
+    WORKSPACE_ROWS = [{ id: "ws-orphan" }]; // no OWNERS entry → ownerId null
+    EXISTING_DIRS.add(wsPath("ws-orphan"));
+    syncWorkspaceSpy.mockResolvedValue({ ok: true, recovered: true });
+
+    const handler = await importHandler();
+    const result = await handler({ event: makeEvent(), step: makeStep(), logger });
+
+    expect(result).toEqual({ ok: true, synced: 1 });
+    // Owner-attributed path must NOT fire for an owner-less workspace.
+    expect(appendKbSyncRowSpy).not.toHaveBeenCalled();
+    // The recovery lands on the workspace-keyed path, keyed by ws.id.
+    expect(appendKbSyncRowForWorkspaceSpy).toHaveBeenCalledTimes(1);
+    expect(WS_APPENDS.get("ws-orphan")!.at(-1)).toEqual(
+      expect.objectContaining({
+        trigger: "webhook_push",
+        ok: true,
+        recovered: true,
+        workspace_id: "ws-orphan",
+      }),
+    );
+  });
+
+  it("AC-T2 (AC3): owner-less + {ok:false, sync_failed} → workspace-keyed failure row AND reportSilentFallback op=sync still fires", async () => {
+    WORKSPACE_ROWS = [{ id: "ws-orphan" }];
+    EXISTING_DIRS.add(wsPath("ws-orphan"));
+    syncWorkspaceSpy.mockResolvedValue({
+      ok: false,
+      error: new Error("auth failed"),
+      errorClass: "sync_failed",
+    });
+
+    const handler = await importHandler();
+    const result = await handler({ event: makeEvent(), step: makeStep(), logger });
+
+    expect(result).toEqual({ ok: false, reason: "no-workspace-synced" });
+    expect(appendKbSyncRowSpy).not.toHaveBeenCalled();
+    expect(WS_APPENDS.get("ws-orphan")!.at(-1)).toEqual(
+      expect.objectContaining({
+        ok: false,
+        error_class: "sync_failed",
+        workspace_id: "ws-orphan",
+      }),
+    );
+    // The genuine failure is still paged — unchanged from the owner path.
+    expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ feature: "workspace-reconcile-push", op: "sync" }),
+    );
+  });
+
+  it("AC-T3 (AC4): owner-less → exactly one warnSilentFallback op=ownerless-reconcile naming workspace_id; no error mirror for the benign recovery", async () => {
+    WORKSPACE_ROWS = [{ id: "ws-orphan" }];
+    EXISTING_DIRS.add(wsPath("ws-orphan"));
+    syncWorkspaceSpy.mockResolvedValue({ ok: true, recovered: true });
+
+    const handler = await importHandler();
+    await handler({ event: makeEvent(), step: makeStep(), logger });
+
+    const ownerlessWarns = warnSilentFallbackSpy.mock.calls.filter(
+      (c) => (c[1] as { op?: string }).op === "ownerless-reconcile",
+    );
+    expect(ownerlessWarns).toHaveLength(1);
+    expect(ownerlessWarns[0]![1]).toEqual(
+      expect.objectContaining({
+        op: "ownerless-reconcile",
+        extra: expect.objectContaining({ workspaceId: "ws-orphan" }),
+      }),
+    );
+    // The benign recovery must NOT page an error-level Sentry issue.
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("AC-T4 (AC4 / skip-not-ready): owner-less + dir not provisioned → workspace-keyed workspace_not_ready row", async () => {
+    WORKSPACE_ROWS = [{ id: "ws-orphan" }];
+    // EXISTING_DIRS intentionally empty → dir missing.
+    const handler = await importHandler();
+    const result = await handler({ event: makeEvent(), step: makeStep(), logger });
+
+    expect(syncWorkspaceSpy).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: false, reason: "no-workspace-synced" });
+    expect(appendKbSyncRowSpy).not.toHaveBeenCalled();
+    expect(WS_APPENDS.get("ws-orphan")!.at(-1)).toEqual(
+      expect.objectContaining({
+        ok: false,
+        error_class: "workspace_not_ready",
+        workspace_id: "ws-orphan",
+      }),
+    );
+    // skip-not-ready still mirrors its own (non-owner-drift) signal.
+    expect(reportSilentFallbackSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "skip-not-ready" }),
+    );
+    // …and the owner-drift warn fires exactly once for this workspace.
+    expect(
+      warnSilentFallbackSpy.mock.calls.filter(
+        (c) => (c[1] as { op?: string }).op === "ownerless-reconcile",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("AC-T5 (AC8): owner-PRESENT workspaces are unaffected — owner path fires, workspace-keyed path does NOT", async () => {
+    WORKSPACE_ROWS = [{ id: "ws-A" }];
+    OWNERS.set("ws-A", "owner-A");
+    EXISTING_DIRS.add(wsPath("ws-A"));
+    syncWorkspaceSpy.mockResolvedValue({ ok: true });
+
+    const handler = await importHandler();
+    await handler({ event: makeEvent(), step: makeStep(), logger });
+
+    expect(appendKbSyncRowSpy).toHaveBeenCalledTimes(1);
+    expect(appendKbSyncRowForWorkspaceSpy).not.toHaveBeenCalled();
+    // No owner-drift warn on the healthy owner-attributed path.
+    expect(
+      warnSilentFallbackSpy.mock.calls.filter(
+        (c) => (c[1] as { op?: string }).op === "ownerless-reconcile",
+      ),
+    ).toHaveLength(0);
   });
 });
 

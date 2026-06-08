@@ -397,6 +397,57 @@ export async function appendKbSyncRow(
   }
 }
 
+/**
+ * #4906 — append a `KbSyncRow` to a workspace's *backing user's*
+ * `kb_sync_history`, keyed by `workspaceId` rather than by an authenticated
+ * caller. Used by the owner-less reconcile path
+ * (`workspace-reconcile-on-push.ts`), which runs in the Inngest worker with no
+ * user JWT — so `auth.uid()` is null and `appendKbSyncRow` (the tenant RPC)
+ * cannot be used.
+ *
+ * Routes through the service-role client and the `append_kb_sync_row_for_user`
+ * SECURITY DEFINER RPC (migration 100), which is `service_role`-only. For solo
+ * workspaces `workspaces.id = users.id` (ADR-038 N2), so `workspaceId` resolves
+ * directly to the backing user row and the audit row lands exactly as an
+ * owner-attributed row would. If `workspaceId` is not a `users.id` (a non-solo
+ * / org owner-less workspace — itself an invariant drift), the RPC's UPDATE
+ * affects zero rows and no audit row lands; the caller's owner-drift warn still
+ * fires, so the anomaly is never silent.
+ *
+ * Best-effort, mirroring `appendKbSyncRow`: failures are reported to Sentry via
+ * `reportSilentFallback` but never throw (the reconcile must not fail on a
+ * missing audit row).
+ */
+export async function appendKbSyncRowForWorkspace(
+  workspaceId: string,
+  row: KbSyncRow,
+): Promise<void> {
+  try {
+    const { createServiceClient } = await import("@/lib/supabase/service");
+    const service = createServiceClient();
+    const { error } = await service.rpc("append_kb_sync_row_for_user", {
+      p_user_id: workspaceId,
+      p_row: row,
+      p_cap: KB_SYNC_HISTORY_CAP,
+    });
+    if (error) {
+      reportSilentFallback(error, {
+        feature: "session-sync",
+        op: "appendKbSyncRowForWorkspace",
+        extra: { workspaceId },
+        message: "append_kb_sync_row_for_user RPC failed",
+      });
+    }
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "session-sync",
+      op: "appendKbSyncRowForWorkspace",
+      extra: { workspaceId },
+      message: "kb_sync_history workspace-keyed append failed",
+    });
+  }
+}
+
 async function updateLastSynced(userId: string): Promise<void> {
   // PR-C §2.1 (#3244): tenant-scoped UPDATE on `users`.
   const tenant = await getFreshTenantClient(userId);
