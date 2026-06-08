@@ -212,7 +212,7 @@ export function SharePopover({ documentPath }: SharePopoverProps) {
                   type="text"
                   readOnly
                   value={state.url}
-                  className="flex-1 truncate rounded border border-soleur-border-default bg-soleur-bg-surface-2 px-2 py-1.5 text-xs text-soleur-text-primary"
+                  className="min-w-0 flex-1 truncate rounded border border-soleur-border-default bg-soleur-bg-surface-2 px-2 py-1.5 text-xs text-soleur-text-primary"
                 />
                 <button
                   type="button"

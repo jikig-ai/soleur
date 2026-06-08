@@ -43,6 +43,7 @@ import {
 import { createChildLogger } from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
 import { purgeSharedToken } from "@/server/cf-cache-purge";
+import { workspacePathForWorkspaceId } from "@/server/workspace-resolver";
 
 const log = createChildLogger("kb-share");
 
@@ -589,10 +590,9 @@ type PreviewShareRow = {
   document_path: string;
   revoked: boolean;
   content_sha256: string | null;
-  users:
-    | { workspace_path: string | null; workspace_status: string | null }
-    | { workspace_path: string | null; workspace_status: string | null }[]
-    | null;
+  // ADR-044: KB root is keyed off the share's workspace_id (matching the create
+  // path), NOT the owner's legacy users.workspace_path/workspace_status columns.
+  workspace_id: string;
 };
 
 // Map any error thrown by validateBinaryFile / readContentRaw /
@@ -755,9 +755,7 @@ export async function previewShare(
         };
       }
     )
-      .select(
-        "document_path, revoked, content_sha256, users!inner(workspace_path, workspace_status)",
-      )
+      .select("document_path, revoked, content_sha256, workspace_id")
       .eq("token", token)
       .single()) as {
       data: PreviewShareRow | null;
@@ -838,17 +836,11 @@ export async function previewShare(
     };
   }
 
-  const owner = Array.isArray(row.users) ? row.users[0] : row.users;
-  if (!owner?.workspace_path || owner.workspace_status !== "ready") {
-    return {
-      ok: false,
-      status: 404,
-      code: "not-found",
-      error: "Document no longer available",
-    };
-  }
-
-  const kbRoot = kbRootResolver(owner.workspace_path);
+  // ADR-044: resolve the KB root from the share's workspace_id (matching the
+  // create path), NOT the owner's legacy users row. A de-provisioned workspace
+  // surfaces as KbNotFoundError → 404 at the file-read step below; the content
+  // hash gate guarantees the bytes still match what was shared.
+  const kbRoot = kbRootResolver(workspacePathForWorkspaceId(row.workspace_id));
   const documentPath = row.document_path;
   const contentSha256 = row.content_sha256;
 
