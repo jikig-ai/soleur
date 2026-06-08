@@ -11,6 +11,24 @@ related_prs: ["#4932", "#4941", "#4944", "#4975", "#4988"]
 
 # Fix cron bash-sandbox bwrap userns failure so scheduled producers stop self-reporting FAILED (#5000, #5004)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-08
+**Sections enhanced:** Premise Validation, Technical Approach, Risks (verified against installed code + live API + Claude Code docs)
+
+### Key Improvements (verified findings)
+
+1. **Installed `@anthropic-ai/claude-code` is `2.1.142`** (`apps/web-platform/package.json:25`) — the EXACT version at which `code.claude.com/docs/en/settings` documents the `defaultMode` value set including `bypassPermissions` ("As of v2.1.142, the `auto` mode is ignored…"). The prescribed `permissions.defaultMode: "bypassPermissions"` is valid in the pinned version, not just latest docs. No `auto`-mode caveat applies (we use `bypassPermissions`, not `auto`).
+2. **`DEFAULT_CLAUDE_SETTINGS` is the SOLE sandbox-config write site** across all 41 inngest functions (`grep -rn "sandbox" …/functions/*.ts` → one hit, `_cron-claude-eval-substrate.ts:113`). The single-file fleet fix is confirmed — no per-producer sandbox config exists to drift.
+3. **Spawn-env allowlist verified verbatim** in both #5000/#5004 producers: `{ PATH, HOME, NODE_ENV, ANTHROPIC_API_KEY, GH_TOKEN }` only (`cron-growth-audit.ts:116-124`, `cron-roadmap-review.ts:184-192`). No `DOPPLER_*`/`SENTRY_*`/`GITHUB_APP_PRIVATE_KEY`/`RESEND_API_KEY` — the sandbox-removal blast-radius mitigation in User-Brand Impact is grounded.
+4. **The fallback was live when the FAILED reports fired.** #4988 (cohort generalization) merged 2026-06-07T13:19Z; #5000/#5004 fired 2026-06-08 — so the FAILED self-reports are the generalized fallback working-as-designed, not a regression. Strengthens the thesis: fix the bwrap cause, not the (correct) fallback.
+
+### New Considerations Discovered
+
+- **`bypassPermissions` is permission-surface-neutral vs. the working-sandbox case.** `DEFAULT_CLAUDE_SETTINGS` has no `deny` rules (`allow: []` only), so `bypassPermissions` = "auto-allow requested tools" — identical net tool-permission to the prior `autoAllowBashIfSandboxed` behavior. Only the OS isolation layer changes. This bounds the security delta precisely (Risks section updated).
+- **No new scheduled job introduced** — the plan modifies EXISTING Inngest crons; the deepen-plan scheduled-work precedent gate (ADR-033 Inngest-vs-GHA) does not apply.
+- **Phase 2.8 IaC gate confirmed N/A** — pure code+docs change against already-provisioned surfaces; the #4932 host sysctl/systemd unit is left untouched as defense-in-depth.
+
 ## Overview
 
 Two scheduled Inngest cron producers — `cron-growth-audit` (#5000) and
@@ -306,6 +324,20 @@ discoverability_test:
 - **Recovery trigger:** `/soleur:trigger-cron` → `cron/roadmap-review.manual-trigger` (read trigger secret read-only from Doppler; no SSH).
 
 ## Dependencies & Risks
+
+### Precedent-Diff (Phase 4.4)
+
+The settings-overlay write pattern is NOT novel: `setupEphemeralWorkspace`
+already writes `DEFAULT_CLAUDE_SETTINGS` as the canonical `.claude/settings.json`
+overlay for every cron (`_cron-claude-eval-substrate.ts:157-163`). This change
+edits the overlay's CONTENT only — same write mechanism, same path, same JSON
+shape. No new file, no new write site. Verified: `grep -rn "sandbox"
+…/functions/*.ts` returns exactly one hit (line 113) — no sibling overlay to
+keep in sync. The `permissions.defaultMode` key is added to an object that
+already carries `permissions.allow`; the shape is a documented settings.json
+form (`code.claude.com/docs/en/settings`), not a novel structure.
+
+### Risks
 
 - **Risk — sandbox removal widens the bash blast radius.** Mitigated by the spawn-env allowlist, scoped short-lived token, throwaway workspace, and first-party trusted prompt (see User-Brand Impact). The sandbox's threat model (untrusted prompt/repo content) does not apply to a constant in-repo prompt.
 - **Risk — `bypassPermissions` also bypasses explicit deny rules / critical-rm prompts.** There are no deny rules in `DEFAULT_CLAUDE_SETTINGS` (`allow: []`, no `deny`), so behavior is "auto-allow all requested tools" — identical to the prior sandbox-auto-approve behavior for the bash the crons already ran. Net tool-permission surface is unchanged from the working-sandbox case; only the OS isolation layer is removed.
