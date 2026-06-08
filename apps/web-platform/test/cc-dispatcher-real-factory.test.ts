@@ -38,6 +38,7 @@ const {
   mockGetCurrentRepoUrl,
   mockGetInstallationAccount,
   mockFindRepoOwnerInstallationForUser,
+  mockEnsureWorkspaceRepoCloned,
 } = vi.hoisted(() => ({
   mockQuery: vi.fn(),
   mockGetUserApiKey: vi.fn(),
@@ -59,6 +60,10 @@ const {
   mockGetCurrentRepoUrl: vi.fn(),
   mockGetInstallationAccount: vi.fn(),
   mockFindRepoOwnerInstallationForUser: vi.fn(),
+  // Hoisted to a named spy (was an inline anonymous vi.fn) so the
+  // installation-id the clone receives is inspectable — the load-bearing
+  // assertion for the clone-consumes-self-healed-install fix.
+  mockEnsureWorkspaceRepoCloned: vi.fn(async () => undefined),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -149,7 +154,7 @@ vi.mock("@/server/current-repo-url", () => ({
   getCurrentRepoUrl: mockGetCurrentRepoUrl,
 }));
 vi.mock("@/server/ensure-workspace-repo", () => ({
-  ensureWorkspaceRepoCloned: vi.fn(async () => undefined),
+  ensureWorkspaceRepoCloned: mockEnsureWorkspaceRepoCloned,
 }));
 
 vi.mock("@/server/permission-callback", () => ({
@@ -728,6 +733,16 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         STORED,
         expect.anything(),
       );
+      // AC1 (regression): the workspace CLONE must also receive the self-healed
+      // OWNER install — not the stored one. Before the fix the clone ran with
+      // STORED, 403'd on the org repo, and left the workspace `.git`-less
+      // ("No Git Repository in Workspace"). This is the load-bearing assertion.
+      expect(mockEnsureWorkspaceRepoCloned).toHaveBeenCalledWith(
+        expect.objectContaining({ installationId: OWNER }),
+      );
+      expect(mockEnsureWorkspaceRepoCloned).not.toHaveBeenCalledWith(
+        expect.objectContaining({ installationId: STORED }),
+      );
     });
 
     it("negative control: stored install already owns the repo → NO owner probe, mints stored", async () => {
@@ -742,6 +757,12 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(mockGenerateInstallationToken).toHaveBeenCalledWith(
         OWNER,
         expect.anything(),
+      );
+      // AC3 + AC5: the no-op (already-owning) path is unaffected — here the
+      // stored install IS the owner (resolveInstallationId → OWNER), so clone +
+      // mint both use OWNER and no promotion probe runs.
+      expect(mockEnsureWorkspaceRepoCloned).toHaveBeenCalledWith(
+        expect.objectContaining({ installationId: OWNER }),
       );
     });
 
@@ -772,6 +793,13 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
           }),
         }),
       );
+      // AC2 (fail-closed proof): promotion was DENIED, so the clone gets the
+      // STORED install — exactly what it used before the fix. The hoist can
+      // never widen the clone's access beyond the existing entitlement gate.
+      // The mint (asserted above) gets STORED too — clone + mint in lockstep.
+      expect(mockEnsureWorkspaceRepoCloned).toHaveBeenCalledWith(
+        expect.objectContaining({ installationId: STORED }),
+      );
     });
 
     it("org-type stored install (login != owner) → keeps stored (fail-safe, no probe) + mirrors the skip", async () => {
@@ -799,6 +827,10 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
           }),
         }),
       );
+      // Fail-safe org-type path keeps the clone on the stored install too.
+      expect(mockEnsureWorkspaceRepoCloned).toHaveBeenCalledWith(
+        expect.objectContaining({ installationId: STORED }),
+      );
     });
 
     it("probe failure (getInstallationAccount throws) → keeps stored install, mirrors to Sentry, dispatch proceeds", async () => {
@@ -820,6 +852,38 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         expect.anything(),
       );
       expect(mockQuery).toHaveBeenCalledOnce();
+      // AC4: a self-heal probe failure now PRECEDES the clone (the hoist moved
+      // the probe above ensureWorkspaceRepoCloned). The probe's try/catch keeps
+      // effectiveInstallationId === STORED, so the clone STILL runs — the probe
+      // is not a new clone-blocking dependency.
+      expect(mockEnsureWorkspaceRepoCloned).toHaveBeenCalledWith(
+        expect.objectContaining({ installationId: STORED }),
+      );
+    });
+
+    it("AC6: self-heal deny path never serializes a GitHub token into Sentry or clone args", async () => {
+      // The hoist relocates existing log.* / reportSilentFallback calls verbatim.
+      // Guard that the move did not inline a minted token into a payload
+      // (hr-github-app-auth-not-pat). Drive the deny path so the skip mirror fires.
+      mockResolveInstallationId.mockResolvedValueOnce(STORED);
+      mockGetCurrentRepoUrl.mockResolvedValueOnce(REPO);
+      mockGetInstallationAccount.mockResolvedValueOnce({ login: "outside-user", id: STORED, type: "User" });
+      mockFindRepoOwnerInstallationForUser.mockResolvedValueOnce({ installationId: null, outcome: "not-member" });
+      mockGenerateInstallationToken.mockResolvedValueOnce("ghs_secret_minted_token_value");
+
+      await realSdkQueryFactory(makeArgs());
+
+      // Positive control: the mint actually ran and produced a ghs_-shaped token
+      // in this dispatch, so the negative scan below is meaningful — the payloads
+      // are clean because the token was redacted/never-logged, NOT vacuously clean
+      // because no token ever materialized.
+      expect(mockGenerateInstallationToken).toHaveBeenCalled();
+
+      const serialized = JSON.stringify([
+        ...mockReportSilentFallback.mock.calls,
+        ...mockEnsureWorkspaceRepoCloned.mock.calls,
+      ]);
+      expect(serialized).not.toMatch(/ghs_|gho_|ghp_/);
     });
   });
 
