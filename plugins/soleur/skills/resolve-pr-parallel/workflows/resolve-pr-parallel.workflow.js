@@ -7,7 +7,6 @@ export const meta = {
     { title: 'Analyze', detail: 'fetch the PR and its unresolved review threads; confirm the fan-out count' },
     { title: 'Resolve', detail: 'one pr-comment-resolver agent per unresolved thread, in parallel' },
     { title: 'Commit', detail: 'commit the resolver changes, resolve threads, push to remote' },
-    { title: 'Verify', detail: 're-fetch unresolved threads; loop until dry or no progress' },
   ],
 }
 
@@ -125,6 +124,10 @@ const COMMIT_SCHEMA = {
 // ---------------------------------------------------------------------------
 // Helpers (self-contained — no imports, no Node/filesystem APIs).
 // ---------------------------------------------------------------------------
+
+// The resolver reuses the REAL Soleur pr-comment-resolver agent via agentType
+// (named constant, mirroring resolve-parallel.workflow.js — not a magic string).
+const RESOLVER_AGENT_TYPE = 'soleur:engineering:workflow:pr-comment-resolver'
 
 // Harden the operator-supplied PR selector before it reaches a `gh` argv. A PR
 // reference is a bare integer; accept a full URL too and extract the trailing
@@ -287,17 +290,21 @@ for (let round = 1; round <= maxRounds; round++) {
           label: `resolve:round-${round}:${i + 1}`,
           phase: 'Resolve',
           schema: RESOLVE_SCHEMA,
-          agentType: 'soleur:engineering:workflow:pr-comment-resolver',
+          agentType: RESOLVER_AGENT_TYPE,
         }),
       ),
     )
   ).filter(Boolean)
 
+  // Index resolutions by threadId once (O(N)) — avoids an O(N^2) .find() per
+  // thread and is reused for the blocked-thread derivation below.
+  const byThread = new Map(resolutions.map((r) => [safeThreadId(r.threadId), r]))
+
   // Resolve threads that the resolver did not flag as blocked. A cannot-resolve
   // thread stays open (so it re-surfaces next round / for a human); changed and
   // no-change-needed both mean the reviewer's point is addressed.
   const toResolve = threads.filter((t) => {
-    const r = resolutions.find((x) => safeThreadId(x.threadId) === t.threadId)
+    const r = byThread.get(t.threadId)
     return !r || r.status !== 'cannot-resolve'
   })
 
@@ -323,8 +330,9 @@ for (let round = 1; round <= maxRounds; round++) {
 
   lastUnresolvedCount = count
 
-  // --- Verify happens implicitly at the TOP of the next iteration (re-fetch).
-  phase('Verify')
+  // Verification is the re-fetch at the TOP of the next iteration (under the
+  // 'Analyze' phase) — loop-until-dry. No separate Verify phase: it would be an
+  // empty marker around only the round-cap check below.
   if (round === maxRounds) {
     stopReason = `round cap (${maxRounds}) reached; a final re-fetch was not run — re-invoke to confirm dry.`
     log(`⚠ ${stopReason}`)
