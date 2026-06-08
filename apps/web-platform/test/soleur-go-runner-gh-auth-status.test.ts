@@ -43,4 +43,23 @@ describe("buildSoleurGoSystemPrompt — gh auth status guidance (item 2)", () =>
     expect(prompt).toContain("gh auth status");
     expect(prompt).toContain("-R owner/repo");
   });
+
+  // AC2 (feat-one-shot-concierge-workspace-repo-context) — the baseline no
+  // longer tells the agent to infer owner/repo from the git origin remote.
+  // On a `.git`-less workspace `git config --get remote.origin.url` returns
+  // empty, producing the false "no connected git repository" reply. The
+  // server-resolved owner/repo (injected per-dispatch by cc-dispatcher) is the
+  // authoritative source; the baseline must point at the connected repository
+  // named in the agent's context, not a git remote.
+  it("directive no longer instructs deriving owner/repo from the git origin remote", () => {
+    expect(GH_AUTH_STATUS_GUIDANCE_DIRECTIVE).not.toContain(
+      "remote.origin.url",
+    );
+  });
+
+  it("directive references the connected repository named in the agent context", () => {
+    expect(GH_AUTH_STATUS_GUIDANCE_DIRECTIVE).toMatch(
+      /connected repository/i,
+    );
+  });
 });
