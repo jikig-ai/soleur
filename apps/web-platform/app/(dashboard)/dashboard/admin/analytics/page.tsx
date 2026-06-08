@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { computeMetrics } from "@/lib/analytics";
+import { computeMetrics, computeFunnel } from "@/lib/analytics";
 import type { UserRow, ConversationRow } from "@/lib/analytics";
 import { AnalyticsDashboard } from "@/components/analytics/analytics-dashboard";
 
@@ -27,7 +27,7 @@ export default async function AdminAnalyticsPage() {
   const [usersResult, convsResult] = await Promise.all([
     service
       .from("users")
-      .select("id, email, created_at, kb_sync_history")
+      .select("id, email, created_at, kb_sync_history, workspace_status")
       .order("created_at", { ascending: true }),
     service
       .from("conversations")
@@ -57,6 +57,7 @@ export default async function AdminAnalyticsPage() {
   const users = (usersResult.data ?? []) as UserRow[];
   const conversations = (convsResult.data ?? []) as ConversationRow[];
   const metrics = computeMetrics(users, conversations);
+  const funnel = computeFunnel(users, conversations);
 
-  return <AnalyticsDashboard metrics={metrics} />;
+  return <AnalyticsDashboard metrics={metrics} funnel={funnel} />;
 }
