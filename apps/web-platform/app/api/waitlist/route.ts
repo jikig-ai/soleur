@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
-import { extractClientIpFromHeaders } from "@/server/rate-limiter";
 import { warnSilentFallback } from "@/server/observability";
 import {
   waitlistThrottle,
@@ -32,8 +31,14 @@ export async function POST(req: Request): Promise<Response> {
     return rejectCsrf("/api/waitlist", origin);
   }
 
-  // cf-connecting-ip first; XFF is spoofable when traffic bypasses Cloudflare.
-  const ip = extractClientIpFromHeaders(req.headers);
+  // Fail-closed rate-limit key: trust ONLY Cloudflare's edge-set connecting IP,
+  // never the client-controllable x-forwarded-for. For this unauthenticated
+  // public email-relay the rate limit is the SOLE abuse control — an XFF
+  // fallback would let an attacker rotate the header to mint fresh buckets and
+  // use this route to spam Buttondown opt-in confirmations at arbitrary
+  // addresses. Absent the CF header (direct-to-origin / non-CF path) → one
+  // shared "unknown" bucket, so a flood is capped at the per-window limit total.
+  const ip = req.headers.get("cf-connecting-ip")?.trim() || "unknown";
   if (!waitlistThrottle.isAllowed(ip)) {
     return NextResponse.json(
       { error: "rate_limited" },

@@ -38,15 +38,18 @@ async function importRoute() {
 function makeRequest({
   origin,
   forwardedFor,
+  cfConnectingIp,
   body,
 }: {
   origin?: string | null;
   forwardedFor?: string;
+  cfConnectingIp?: string;
   body?: unknown;
 }): Request {
   const headers = new Headers({ "content-type": "application/json" });
   if (origin !== null && origin !== undefined) headers.set("origin", origin);
   if (forwardedFor) headers.set("x-forwarded-for", forwardedFor);
+  if (cfConnectingIp) headers.set("cf-connecting-ip", cfConnectingIp);
   return new Request("https://app.soleur.ai/api/waitlist", {
     method: "POST",
     headers,
@@ -153,21 +156,43 @@ describe("POST /api/waitlist", () => {
     expect(await res.json()).toEqual({ error: "invalid_json" });
   });
 
-  test("per-IP rate limit returns 429 after 5 allowed", async () => {
+  test("per-IP rate limit (keyed on cf-connecting-ip) returns 429 after 5 allowed", async () => {
     mockFetch.mockResolvedValue(new Response("", { status: 200 }));
     const { POST } = await importRoute();
     const ip = "9.9.9.9";
     for (let i = 0; i < 5; i++) {
       const res = await POST(
-        makeRequest({ origin: OK_ORIGIN, forwardedFor: ip, body: { email: `u${i}@c.co` } }),
+        makeRequest({ origin: OK_ORIGIN, cfConnectingIp: ip, body: { email: `u${i}@c.co` } }),
       );
       expect(res.status).toBe(200);
     }
     const limited = await POST(
-      makeRequest({ origin: OK_ORIGIN, forwardedFor: ip, body: { email: "u6@c.co" } }),
+      makeRequest({ origin: OK_ORIGIN, cfConnectingIp: ip, body: { email: "u6@c.co" } }),
     );
     expect(limited.status).toBe(429);
     expect(limited.headers.get("Retry-After")).toBe("60");
+  });
+
+  test("rotating x-forwarded-for CANNOT mint fresh buckets (anti-amplification)", async () => {
+    // Security: the rate-limit key must NOT trust client-controllable XFF, or an
+    // attacker rotates it to spam Buttondown opt-in emails. With no
+    // cf-connecting-ip, every request shares the single "unknown" bucket, so a
+    // rotated-XFF flood is still capped at 5/window total → 6th is 429.
+    mockFetch.mockResolvedValue(new Response("", { status: 200 }));
+    const { POST } = await importRoute();
+    const statuses: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      const res = await POST(
+        makeRequest({
+          origin: OK_ORIGIN,
+          forwardedFor: `1.2.3.${i}`, // distinct spoofed XFF each time
+          body: { email: `spam${i}@victim.co` },
+        }),
+      );
+      statuses.push(res.status);
+    }
+    expect(statuses.slice(0, 5)).toEqual([200, 200, 200, 200, 200]);
+    expect(statuses[5]).toBe(429);
   });
 
   test("unexpected Buttondown status → 502 + Sentry mirror", async () => {

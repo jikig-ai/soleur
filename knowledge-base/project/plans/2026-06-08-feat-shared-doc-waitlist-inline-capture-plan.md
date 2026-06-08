@@ -72,6 +72,34 @@ misleading-context capture, is a brand-survival event on this public surface.
 `requires_cpo_signoff: true` (CPO reviewed at brainstorm). `user-impact-reviewer`
 runs at PR review.
 
+### Review residuals (PR #5035 — user-impact + security-sentinel + CLO)
+
+- **FIXED (security MEDIUM / user-impact F1-F2):** rate-limit key trusted
+  spoofable `x-forwarded-for`, allowing XFF-rotation to mint fresh buckets and
+  spam Buttondown opt-in confirmations at arbitrary victims. Now keyed
+  fail-closed on `cf-connecting-ip` only (absent → single `"unknown"` bucket).
+  Test: "rotating x-forwarded-for CANNOT mint fresh buckets".
+- **Residual (accepted):** confirmation-email amplification at a single victim
+  is still possible at ≤5/window from a genuine CF IP — identical exposure to
+  the pre-existing pricing-page form; Buttondown's double opt-in is single +
+  unsubscribe-able. Next control if abuse appears: Cloudflare Turnstile on the
+  form (already in stack).
+- **Residual (accepted, user-impact F1):** real users behind one corporate-NAT
+  CF IP share the 5/window bucket; on a low-traffic banner, collision is
+  unlikely. Revisit limit if real-traffic friction appears.
+- **Residual (documented, user-impact F3):** honeypot `name="url"` autofill →
+  false-success. Primary defense is `display:none` (`hidden` class) +
+  `autocomplete="off"` + `tabindex="-1"`, which password managers skip; the
+  field name is a secondary risk only.
+- **CLO DISCHARGED** the Art. 30 PA6 edit (sound; implementation matches record).
+  Out-of-scope follow-up filed: broaden Privacy Policy §4.6 (Art. 13(1)(c)
+  completeness — it still names "Docs Site form only"). Audit:
+  `knowledge-base/legal/audits/2026-06-counsel-review-5037.md`.
+- **Sound as-is (no action):** no SSRF/open-proxy (hardcoded Buttondown URL), no
+  body/CRLF injection (`URLSearchParams` + whitespace-rejecting regex), no ReDoS
+  (linear regex + 254-char pre-bound), no raw-Buttondown-body or email leak to
+  client/logs/Sentry, CSRF null-origin rejected, uniform 200 (no enumeration oracle).
+
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
