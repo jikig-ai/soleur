@@ -270,9 +270,20 @@ log(
 // a failed thunk becomes null (filter(Boolean)).
 // -------------------------------------------------------------------------
 phase('Resolve')
+// Budget floor: stop launching new tiers once the token target is nearly spent,
+// so a large backlog can't blow the user's "+Nk" directive. Tiers already run
+// are kept; the unstarted remainder is logged (never silently dropped). Mirrors
+// review.workflow.js's VERIFY_FLOOR pattern. No-op when no budget target is set.
+const RESOLVE_FLOOR = 80_000
 const results = []
+const budgetSkipped = []
 for (let i = 0; i < tiers.length; i++) {
   const tier = tiers[i]
+  if (budget.total && budget.remaining() < RESOLVE_FLOOR) {
+    budgetSkipped.push(...tiers.slice(i).flat().map((t) => t.issueId))
+    log(`⚠ budget floor (${RESOLVE_FLOOR}) reached — deferring ${budgetSkipped.length} todo(s) in tiers ${i}..${tiers.length - 1} (kept pending).`)
+    break
+  }
   log(`Tier ${i}: resolving ${tier.length} todo(s) in parallel — ${tier.map((t) => t.issueId).join(', ')}.`)
   const tierResults = (
     await parallel(

