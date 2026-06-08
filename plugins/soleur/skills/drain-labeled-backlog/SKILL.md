@@ -3,6 +3,8 @@ name: drain-labeled-backlog
 description: "This skill should be used when draining a labeled issue backlog (deferred-scope-out, code-review, type/security) in one cleanup PR. Groups by code area and delegates to /soleur:one-shot."
 ---
 
+> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill lives at [`workflows/drain-labeled-backlog.workflow.js`](./workflows/drain-labeled-backlog.workflow.js) — deterministic fan-out, journaled resume, schema-validated output. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/drain-labeled-backlog/workflows/drain-labeled-backlog.workflow.js", args: ... })`. The prose skill below stays the default; the two coexist during calibration. See [`knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`](../../../../knowledge-base/project/specs/feat-review-workflow-prototype/spec.md).
+
 # Drain Labeled Backlog
 
 Drain a labeled-issue backlog by batching issues that touch the same code area into a single focused refactor PR. Defaults to `deferred-scope-out` (the original use case, inspired by PR #2486, which closed `#2467 + #2468 + #2469` in one cleanup). Any other label works via `--label` — e.g., `code-review` drains unresolved review findings, `type/security` drains the security backlog.
