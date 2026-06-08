@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
-// Mock the browser-only LikeC4 runtime. Unlike c4-shared.test.tsx (which returns
-// useLikeC4ViewModel: () => null to exercise the "View not found" branch), this
-// suite MUST return a non-null view model so ViewCanvas renders the diagram +
-// the new expand control. The LikeC4Diagram stub renders a Code/Concierge-free
-// marker so AC4's "no owner-only affordance in the overlay" assertion is real.
+// Mock the browser-only LikeC4 runtime. The expand button + overlay live in
+// C4Canvas (outside ViewCanvas), so they render regardless of the view model.
+// The non-null useLikeC4ViewModel here is required only so the INNER
+// LikeC4Diagram mounts inside ViewCanvas (the "renders the diagram canvas
+// inline" test) — c4-shared.test.tsx returns null to hit the "View not found"
+// branch instead. The LikeC4Diagram stub renders a Code/Concierge-free marker
+// so AC4's "no owner-only affordance in the overlay" assertion is real.
 vi.mock("@likec4/diagram", () => ({
   LikeC4ModelProvider: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="likec4-provider">{children}</div>

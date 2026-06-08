@@ -171,7 +171,7 @@ export function C4Canvas({
   const [expanded, setExpanded] = useState(false);
   const expandButtonRef = useRef<HTMLButtonElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
-  const wasExpandedRef = useRef(false);
+  const shouldReturnFocusRef = useRef(false);
 
   useEffect(() => setCurrentView(initialViewId), [initialViewId]);
   useEffect(() => onViewChange?.(currentView), [currentView, onViewChange]);
@@ -200,16 +200,16 @@ export function C4Canvas({
   }, [expanded]);
 
   // Focus management: move focus into the overlay (close button) on open;
-  // return focus to the expand button on close. The wasExpandedRef guard
+  // return focus to the expand button on close. The shouldReturnFocusRef guard
   // prevents stealing focus to the expand button on the initial mount.
   useEffect(() => {
     if (expanded) {
-      wasExpandedRef.current = true;
+      shouldReturnFocusRef.current = true;
       const id = requestAnimationFrame(() => closeButtonRef.current?.focus());
       return () => cancelAnimationFrame(id);
     }
-    if (wasExpandedRef.current) {
-      wasExpandedRef.current = false;
+    if (shouldReturnFocusRef.current) {
+      shouldReturnFocusRef.current = false;
       expandButtonRef.current?.focus();
     }
   }, [expanded]);
@@ -268,11 +268,16 @@ export function C4Canvas({
             Diagram open in fullscreen
           </div>
           {createPortal(
+            // Tab focus-trap + aria-hidden on the background are intentionally
+            // NOT implemented here — same deferral the shared modal precedent
+            // documents (components/ui/typed-confirm-modal.tsx). Focus moves IN
+            // on open and RETURNS on close (AC10); a full trap lands with the
+            // shared modal-a11y primitive. z-50 matches the app's modal layer.
             <div
               role="dialog"
               aria-modal="true"
               aria-label="Architecture diagram (fullscreen)"
-              className="soleur-c4 fixed inset-0 z-[100] bg-soleur-bg-base"
+              className="soleur-c4 fixed inset-0 z-50 bg-soleur-bg-base"
             >
               {canvas}
               <button
