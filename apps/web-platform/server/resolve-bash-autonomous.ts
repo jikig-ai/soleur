@@ -1,8 +1,12 @@
 import {
   getFreshTenantClient,
+  mapRuntimeAuthCauseToErrorCode,
   RuntimeAuthError,
 } from "@/lib/supabase/tenant";
-import { reportSilentFallback } from "@/server/observability";
+import {
+  reportSilentFallback,
+  warnSilentFallback,
+} from "@/server/observability";
 import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 
 /**
@@ -46,10 +50,25 @@ export async function resolveBashAutonomous(
     return (data as boolean | null) ?? false;
   } catch (err) {
     if (!(err instanceof RuntimeAuthError)) throw err;
-    reportSilentFallback(err, {
+    // Per-cause severity split: a transient founder-JWT mint blip
+    // (`jwt_mint` — GoTrue 429, RPC hiccup, missing secret) is fully
+    // recovered here (fail-closed to safe `false`, approval gate stays ON),
+    // so it lands at WARNING and does not pollute the error budget. Genuinely
+    // actionable causes — `denied_jti` (session revoked) and `rotation`
+    // (mint rate-ceiling exhausted) — stay at ERROR so on-call keeps the
+    // signal. The `code` tag is queryable in Sentry across both severities.
+    const code = mapRuntimeAuthCauseToErrorCode(err.cause);
+    const emit =
+      err.cause === "jwt_mint" ? warnSilentFallback : reportSilentFallback;
+    // Cause-accurate message: hardcoding "JWT mint transiently unavailable"
+    // would mislead on-call for the denied_jti (revoked) / rotation
+    // (rate-ceiling) error-level branches. The `code` discriminant keeps it
+    // truthful for every cause.
+    emit(err, {
       feature: "resolve-bash-autonomous",
       op: "tenant-read",
-      extra: { userId, workspaceId: workspaceId ?? null },
+      extra: { userId, workspaceId: workspaceId ?? null, code },
+      message: `founder tenant auth unavailable (${code}); fail-closed false (approval gate ON)`,
     });
     return false;
   }
