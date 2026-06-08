@@ -1,1 +1,514 @@
-{"version":1,"nodes":[]}
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "VACQn",
+      "x": 0,
+      "y": 0,
+      "name": "C4 Inline (collapsed)",
+      "width": 900,
+      "fill": "#000000",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "B6y06",
+          "name": "TabBar",
+          "width": "fill_container",
+          "height": 40,
+          "fill": "#000000",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#000000"
+          },
+          "gap": 4,
+          "padding": [
+            6,
+            8
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "9NjZL",
+              "name": "tabDiagram",
+              "fill": "#000000",
+              "padding": [
+                4,
+                10
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "S1iBw",
+                  "fill": "#000000",
+                  "content": "Diagram",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "gzdCh",
+              "name": "tabCode",
+              "padding": [
+                4,
+                10
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "fYwcE",
+                  "fill": "#000000",
+                  "content": "Code",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "rdD6X",
+              "name": "tabSpacer",
+              "width": "fill_container",
+              "height": 1
+            },
+            {
+              "type": "text",
+              "id": "bnaNQ",
+              "name": "tabLabel",
+              "fill": "#000000",
+              "content": "Architecture · index",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "rnG45",
+          "name": "DiagramCanvas (h-600, .soleur-c4)",
+          "width": "fill_container",
+          "height": 600,
+          "fill": "#0f1115",
+          "layout": "none",
+          "children": [
+            {
+              "type": "frame",
+              "id": "8DB2u",
+              "x": 12,
+              "y": 12,
+              "name": "LikeC4 controls (top-left)",
+              "width": 36,
+              "height": 108,
+              "fill": "#000000",
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#000000"
+              },
+              "layout": "vertical",
+              "gap": 1,
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "DuyR0",
+                  "name": "cZoomIn",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "plus",
+                  "iconFontFamily": "lucide",
+                  "fill": "#000000"
+                },
+                {
+                  "type": "icon_font",
+                  "id": "6nhk0",
+                  "name": "cZoomOut",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "minus",
+                  "iconFontFamily": "lucide",
+                  "fill": "#000000"
+                },
+                {
+                  "type": "icon_font",
+                  "id": "nAgUC",
+                  "name": "cFit",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "maximize-2",
+                  "iconFontFamily": "lucide",
+                  "fill": "#000000"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "KBvYK",
+              "x": 852,
+              "y": 12,
+              "name": "Expand button",
+              "width": 36,
+              "height": 36,
+              "fill": "#000000",
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#000000"
+              },
+              "padding": 9,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "3Dbx6",
+                  "name": "expandIcon",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "maximize",
+                  "iconFontFamily": "lucide",
+                  "fill": "#000000"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "RsyNn",
+              "x": 280,
+              "y": 180,
+              "name": "node A",
+              "width": 160,
+              "height": 70,
+              "fill": "#1d2230",
+              "cornerRadius": 6,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#3a4358"
+              },
+              "layout": "vertical",
+              "padding": 12,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "FYXim",
+                  "fill": "#e7e9ee",
+                  "content": "Web App",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "N14X0",
+                  "fill": "#9aa3b2",
+                  "content": "Next.js",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "RWOCo",
+              "x": 280,
+              "y": 360,
+              "name": "node B",
+              "width": 160,
+              "height": 70,
+              "fill": "#1d2230",
+              "cornerRadius": 6,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#3a4358"
+              },
+              "layout": "vertical",
+              "padding": 12,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "mxezD",
+                  "fill": "#e7e9ee",
+                  "content": "API",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "xo2bi",
+                  "fill": "#9aa3b2",
+                  "content": "Supabase",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "TrWev",
+              "x": 360,
+              "y": 250,
+              "name": "edge",
+              "width": 2,
+              "height": 110,
+              "fill": "#3a4358"
+            },
+            {
+              "type": "text",
+              "id": "PXV7Z",
+              "x": 200,
+              "y": 560,
+              "name": "hint",
+              "fill": "#6b7280",
+              "content": "Click Expand (top-right) to fill the viewport · pan / zoom / drill-down preserved",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "Zi82o",
+      "x": 1000,
+      "y": 0,
+      "name": "C4 Fullscreen (expanded overlay)",
+      "width": 1280,
+      "height": 800,
+      "fill": "#0b0d10",
+      "layout": "none",
+      "children": [
+        {
+          "type": "text",
+          "id": "8X734",
+          "x": 24,
+          "y": 770,
+          "name": "fsNote",
+          "fill": "#6b7280",
+          "content": "position: fixed; inset: 0 · createPortal → document.body · role=\"dialog\" aria-modal · .soleur-c4 wrapper · scroll-lock on body",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "wgdZS",
+          "x": 20,
+          "y": 20,
+          "name": "LikeC4 controls (top-left)",
+          "width": 36,
+          "height": 108,
+          "fill": "#161a22",
+          "cornerRadius": 8,
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "#2a3242"
+          },
+          "layout": "vertical",
+          "gap": 1,
+          "children": [
+            {
+              "type": "icon_font",
+              "id": "vgR99",
+              "name": "fcZoomIn",
+              "width": 18,
+              "height": 18,
+              "iconFontName": "plus",
+              "iconFontFamily": "lucide",
+              "fill": "#9aa3b2"
+            },
+            {
+              "type": "icon_font",
+              "id": "TcdOs",
+              "name": "fcZoomOut",
+              "width": 18,
+              "height": 18,
+              "iconFontName": "minus",
+              "iconFontFamily": "lucide",
+              "fill": "#9aa3b2"
+            },
+            {
+              "type": "icon_font",
+              "id": "CAxvv",
+              "name": "fcFit",
+              "width": 18,
+              "height": 18,
+              "iconFontName": "maximize-2",
+              "iconFontFamily": "lucide",
+              "fill": "#9aa3b2"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "M41qT",
+          "x": 1224,
+          "y": 20,
+          "name": "Exit fullscreen button",
+          "width": 36,
+          "height": 36,
+          "fill": "#161a22",
+          "cornerRadius": 8,
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "#2a3242"
+          },
+          "padding": 9,
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "icon_font",
+              "id": "TcvBw",
+              "name": "fsExitIcon",
+              "width": 18,
+              "height": 18,
+              "iconFontName": "minimize",
+              "iconFontFamily": "lucide",
+              "fill": "#e7e9ee"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "G29rY",
+          "x": 1120,
+          "y": 24,
+          "name": "Esc hint",
+          "fill": "#161a22",
+          "cornerRadius": 6,
+          "padding": [
+            4,
+            8
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "EQr4K",
+              "fill": "#9aa3b2",
+              "content": "Esc to close",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "u6Nbf",
+          "x": 470,
+          "y": 240,
+          "name": "node A",
+          "width": 220,
+          "height": 96,
+          "fill": "#1d2230",
+          "cornerRadius": 8,
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "#3a4358"
+          },
+          "layout": "vertical",
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "0COAH",
+              "fill": "#e7e9ee",
+              "content": "Web App",
+              "fontFamily": "Inter",
+              "fontSize": 16,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "pa7yS",
+              "fill": "#9aa3b2",
+              "content": "Next.js",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "yOlxj",
+          "x": 470,
+          "y": 470,
+          "name": "node B",
+          "width": 220,
+          "height": 96,
+          "fill": "#1d2230",
+          "cornerRadius": 8,
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "#3a4358"
+          },
+          "layout": "vertical",
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "0YoOo",
+              "fill": "#e7e9ee",
+              "content": "API",
+              "fontFamily": "Inter",
+              "fontSize": 16,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "LQiww",
+              "fill": "#9aa3b2",
+              "content": "Supabase",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "7rER6",
+          "x": 580,
+          "y": 336,
+          "name": "edge",
+          "width": 2,
+          "height": 134,
+          "fill": "#3a4358"
+        },
+        {
+          "type": "text",
+          "id": "PlXev",
+          "x": 470,
+          "y": 600,
+          "name": "fsRO",
+          "fill": "#b08900",
+          "content": "Read-only / public share: fullscreen exposes NO Code · Concierge · Save affordances (C4Canvas only)",
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        }
+      ]
+    }
+  ]
+}
