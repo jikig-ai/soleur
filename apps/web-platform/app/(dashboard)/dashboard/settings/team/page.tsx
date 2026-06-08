@@ -4,8 +4,6 @@ import { resolveTeamMembershipPageData } from "@/server/team-membership-resolver
 import { TeamMembershipList } from "@/components/settings/team-membership-list";
 import { InviteMemberAction } from "@/components/settings/invite-member-action";
 import { PendingInvitesList } from "@/components/settings/pending-invites-list";
-import { RenameWorkspaceAction } from "@/components/settings/rename-workspace-action";
-import { WorkspaceLogoSettings } from "@/components/settings/workspace-logo-settings";
 
 // AC-A: flag OFF → HTTP 404 via notFound(). Flagsmith single-control gate
 // lives inside resolveTeamMembershipPageData. The "/dashboard/settings/team"
@@ -51,12 +49,9 @@ export default async function TeamMembershipPage() {
     return rows;
   })();
 
-  const { data: logoRow } = await service
-    .from("workspaces")
-    .select("logo_path")
-    .eq("id", data.workspaceId)
-    .maybeSingle();
-  const hasLogo = !!(logoRow as { logo_path: string | null } | null)?.logo_path;
+  // Workspace identity (rename + logo) relocated to the General settings page
+  // (#4916) so it is reachable regardless of the team-invite flag. The Team page
+  // is now strictly people/roles/invites.
 
   return (
     <div>
@@ -65,19 +60,6 @@ export default async function TeamMembershipPage() {
         People who can act in this workspace. All members share the same
         workspace data, agents, and billing.
       </p>
-
-      <RenameWorkspaceAction
-        organizationId={data.organizationId}
-        organizationName={data.organizationName}
-        isOwner={isOwner}
-      />
-
-      <WorkspaceLogoSettings
-        workspaceId={data.workspaceId}
-        workspaceName={data.organizationName ?? ""}
-        isOwner={isOwner}
-        initialHasLogo={hasLogo}
-      />
 
       <div className="rounded-lg border border-soleur-border-default">
         <div className="flex items-center justify-between border-b border-soleur-border-default px-6 py-4">

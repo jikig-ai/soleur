@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import { WorkspaceIdentityTile } from "@/components/dashboard/workspace-identity-tile";
+import { WORKSPACE_LOGO_CHANGED_EVENT } from "@/lib/workspace-logo-events";
 
 // Workspace logo settings control (#4916), co-located with RenameWorkspaceAction
 // on the Team settings page. Owner-only: a non-owner sees a disabled control
@@ -88,6 +89,13 @@ export function WorkspaceLogoSettings({
         setPreview(URL.createObjectURL(file)); // optimistic — beats the 300s proxy cache
         setHasLogo(true);
         setStatus("success");
+        // Same-tab signal: the switcher + collapsed-rail band fetch memberships
+        // once on mount and only re-poll on focus — nudge them to refetch so the
+        // new logo appears without a full reload (H1, AC4). The workspaceId lets
+        // the identity tile cache-bust its proxy src on a REPLACE.
+        window.dispatchEvent(
+          new CustomEvent(WORKSPACE_LOGO_CHANGED_EVENT, { detail: { workspaceId } }),
+        );
       } catch {
         setStatus("error");
         setError("Upload failed. Please try again.");
@@ -109,6 +117,10 @@ export function WorkspaceLogoSettings({
       setPreview(null);
       setHasLogo(false);
       setStatus("idle");
+      // Same-tab signal — the switcher reverts to the monogram without a reload.
+      window.dispatchEvent(
+        new CustomEvent(WORKSPACE_LOGO_CHANGED_EVENT, { detail: { workspaceId } }),
+      );
     } catch {
       setStatus("error");
       setError("Couldn't remove the logo. Please try again.");
