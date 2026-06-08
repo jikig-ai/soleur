@@ -9,6 +9,7 @@
 import { execFileSync } from "child_process";
 import { readdirSync } from "fs";
 import { join } from "path";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   getFreshTenantClient,
   RuntimeAuthError,
@@ -393,6 +394,61 @@ export async function appendKbSyncRow(
       op: "appendKbSyncRow",
       extra: { userId },
       message: "kb_sync_history append failed",
+    });
+  }
+}
+
+/**
+ * #4906 — append a `KbSyncRow` to a workspace's *backing user's*
+ * `kb_sync_history`, keyed by `workspaceId` rather than by an authenticated
+ * caller. Used by the owner-less reconcile path
+ * (`workspace-reconcile-on-push.ts`), which runs in the Inngest worker with no
+ * user JWT — so `auth.uid()` is null and `appendKbSyncRow` (the tenant RPC)
+ * cannot be used.
+ *
+ * Routes through the `append_kb_sync_row_for_user` SECURITY DEFINER RPC
+ * (migration 100), which is `service_role`-only. The caller passes the
+ * service-role `client` in — session-sync.ts must NOT itself acquire a
+ * service-role client (it was migrated to tenant-only in PR-C #3244 and removed
+ * from `.service-role-allowlist`; the privilege-acquisition site stays in the
+ * allowlisted handler). For solo workspaces `workspaces.id = users.id`
+ * (ADR-038 N2), so `workspaceId` resolves directly to the backing user row and
+ * the audit row lands exactly as an owner-attributed row would. If `workspaceId`
+ * is not a `users.id` (a non-solo / org owner-less workspace — itself an
+ * invariant drift), the RPC's UPDATE affects zero rows and no audit row lands;
+ * the caller's owner-drift warn still fires, so the anomaly is never silent.
+ *
+ * Best-effort, mirroring `appendKbSyncRow`: failures are reported to Sentry via
+ * `reportSilentFallback` but never throw (the reconcile must not fail on a
+ * missing audit row).
+ */
+export async function appendKbSyncRowForWorkspace(
+  client: SupabaseClient,
+  workspaceId: string,
+  row: KbSyncRow,
+): Promise<void> {
+  try {
+    const { error } = await client.rpc("append_kb_sync_row_for_user", {
+      // p_user_id ← workspaceId: solo workspaces.id === users.id (ADR-038 N2).
+      // Non-solo ids that don't map to a users row UPDATE 0 rows (no error).
+      p_user_id: workspaceId,
+      p_row: row,
+      p_cap: KB_SYNC_HISTORY_CAP,
+    });
+    if (error) {
+      reportSilentFallback(error, {
+        feature: "session-sync",
+        op: "appendKbSyncRowForWorkspace",
+        extra: { workspaceId },
+        message: "append_kb_sync_row_for_user RPC failed",
+      });
+    }
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "session-sync",
+      op: "appendKbSyncRowForWorkspace",
+      extra: { workspaceId },
+      message: "kb_sync_history workspace-keyed append failed",
     });
   }
 }
