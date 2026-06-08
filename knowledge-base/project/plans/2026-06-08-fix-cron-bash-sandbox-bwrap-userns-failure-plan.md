@@ -284,14 +284,14 @@ discoverability_test:
 
 #### Functional Requirements
 
-- [ ] `DEFAULT_CLAUDE_SETTINGS` in `_cron-claude-eval-substrate.ts` has `sandbox.enabled === false`.
-- [ ] `DEFAULT_CLAUDE_SETTINGS` has `permissions.defaultMode === "bypassPermissions"`.
-- [ ] `permissions.allow` remains `[]` (no allowlist widening — verified by test).
-- [ ] The repo-root `.claude/settings.json` is UNCHANGED (no sandbox/defaultMode edits to the dev-session file) — `git diff --name-only origin/main..HEAD` does not list `.claude/settings.json`.
-- [ ] New test asserts the written `.claude/settings.json` JSON content (sandbox + defaultMode + allow), not model behavior; `vitest run apps/web-platform/test/server/inngest/` green.
-- [ ] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean (NOT `npm run -w` — repo root declares no `workspaces`).
-- [ ] `scripts/test-all.sh` green (orphan suites included).
-- [ ] Runbook H2 updated to reflect sandbox-disabled cron path; learning captured.
+- [x] `DEFAULT_CLAUDE_SETTINGS` in `_cron-claude-eval-substrate.ts` has `sandbox.enabled === false`.
+- [x] `DEFAULT_CLAUDE_SETTINGS` has `permissions.defaultMode === "bypassPermissions"`.
+- [x] `permissions.allow` remains `[]` (no allowlist widening — verified by test).
+- [x] The repo-root `.claude/settings.json` is UNCHANGED (no sandbox/defaultMode edits to the dev-session file) — `git diff --name-only origin/main..HEAD` does not list `.claude/settings.json`.
+- [x] New test asserts the written `.claude/settings.json` JSON content (sandbox + defaultMode + allow), not model behavior; `vitest run apps/web-platform/test/server/inngest/` green (1429 passed).
+- [x] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean (NOT `npm run -w` — repo root declares no `workspaces`).
+- [x] `scripts/test-all.sh` green (webplat shard — the only shard covering this TS diff: 8950 passed / 0 failed; orphan suites included).
+- [x] Runbook H2 updated to reflect sandbox-disabled cron path; learning captured.
 - [ ] PR body uses `Ref #5000` / `Ref #5004` (NOT `Closes`), with closure deferred to post-merge recovery.
 
 #### Non-Functional Requirements

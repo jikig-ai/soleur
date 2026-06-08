@@ -176,6 +176,33 @@ STEP 4` early-exit guards in `scheduled-content-generator.yml` for parity.
 > prompt. The 8 other always-create producers still rely on the prompt-only
 > guard; generalizing this fallback cohort-wide is a tracked follow-up.
 
+> **bwrap bash-sandbox userns failure was a recurring H2 cause — now removed
+> from the cron path (#5000/#5004).** The cron eval substrate spawns
+> `claude --print` whose `Bash` tool calls ran inside a bwrap OS sandbox. When
+> the cloud runner's kernel `apparmor_restrict_unprivileged_userns` drifted 0→1,
+> bwrap could not acquire a user namespace, every `Bash` call failed, and the
+> prompt never reached its `gh issue create` / `git push` step — so the
+> handler-level fallback self-reported FAILED (#5000 growth-audit, #5004
+> roadmap-review, 2026-06-08). The host-side sysctl fix (#4932 boot-persistent
+> `bwrap-userns-sysctl.service`) recurred 4 days later, proving the host path is
+> not durable for the cron. **Durable fix:** the cron's settings overlay
+> (`DEFAULT_CLAUDE_SETTINGS` in
+> `apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts`)
+> now sets `sandbox.enabled: false` (drops the bwrap dependency entirely —
+> host-independent, immune to sysctl drift) paired with
+> `permissions.defaultMode: "bypassPermissions"` (restores the headless bash
+> auto-approval the sandbox previously provided via `autoAllowBashIfSandboxed` —
+> the pairing is load-bearing; sandbox-off ALONE blocks every `gh`/`git`
+> command on an unanswerable prompt). This is the runtime overlay written into
+> each ephemeral cron workspace — NOT the repo-root `.claude/settings.json`,
+> which governs interactive dev sessions and intentionally stays
+> sandbox-enabled. Post-fix, a bwrap host drift can no longer silence a
+> producer; the host sysctl (#4932) + non-blocking drift detector (#4944) remain
+> as defense-in-depth for any NON-cron sandbox consumer (e.g. the user/agent
+> workspace via `server/workspace.ts`). So a post-fix FAILED self-report whose
+> `stdoutTail` still names `bwrap` / `Operation not permitted` / `/proc` would be
+> a genuinely new regression, not this class.
+
 ### H3 — Doppler `prd_scheduled` service token rotated or revoked
 
 Doppler service tokens are per-config. If the `prd_scheduled` service token was

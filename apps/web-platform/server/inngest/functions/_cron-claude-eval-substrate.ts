@@ -106,12 +106,45 @@ export function spawnSimple(
   });
 }
 
-const DEFAULT_CLAUDE_SETTINGS = {
+// Settings overlay written verbatim into every ephemeral cron workspace's
+// `.claude/settings.json` by setupEphemeralWorkspace below. This is the SOLE
+// sandbox-config write site across all inngest cron functions (verified:
+// `grep -rn "sandbox" functions/*.ts` → one hit) — editing it fixes the whole
+// 21-producer cron fleet at once. NOTE: this is NOT the repo-root
+// `.claude/settings.json` (which governs interactive dev sessions and must stay
+// sandbox-enabled); when #5000/#5004 say "set sandbox.enabled: false in
+// settings.json", THIS overlay is the file they mean.
+//
+// #5000/#5004 — `sandbox.enabled` was `true`. When the cloud runner's bwrap
+// cannot acquire unprivileged user namespaces (kernel
+// `apparmor_restrict_unprivileged_userns` drift, #4928/#4932), the bash sandbox
+// is unavailable and every `Bash` tool call inside `claude --print` fails, so
+// the headless cron prompt never reaches its `gh issue create` / `git push`
+// steps and the handler-level fallback (#4978/#4988) self-reports FAILED. The
+// host-side sysctl fix (#4932) recurred 4 days later, so the durable fix removes
+// the cron path's dependency on unprivileged userns entirely:
+//   - `sandbox.enabled: false` drops the bwrap dependency (host-independent,
+//     immune to sysctl drift).
+//   - `permissions.defaultMode: "bypassPermissions"` RESTORES the bash
+//     auto-approval the sandbox previously provided via `autoAllowBashIfSandboxed`
+//     (the docs-confirmed coupling: disabling the sandbox ALSO removes that
+//     auto-approval, so a naive sandbox-disable would block every `gh`/`git`
+//     command on a prompt no headless session can answer). Valid `defaultMode`
+//     value per code.claude.com/docs/en/settings (pinned claude-code 2.1.142).
+// `permissions.allow` stays `[]` (no allowlist widening). Net tool-permission
+// surface is identical to the prior working-sandbox case (no `deny` rules exist);
+// only the OS isolation layer is removed. The threat model the sandbox guards
+// against (untrusted prompt/repo content) does not apply here — the prompt is a
+// constant first-party in-repo string and the spawn env is a scoped allowlist.
+// The host sysctl path (#4932/#4944) stays as defense-in-depth for non-cron
+// sandbox consumers.
+export const DEFAULT_CLAUDE_SETTINGS = {
   permissions: {
     allow: [] as string[],
+    defaultMode: "bypassPermissions",
   },
   sandbox: {
-    enabled: true,
+    enabled: false,
   },
 };
 

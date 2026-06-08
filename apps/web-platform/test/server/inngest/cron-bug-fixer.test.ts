@@ -537,9 +537,12 @@ describe("cron-bug-fixer — (b) ephemeral workspace + sentinel", () => {
     );
     expect(settingsWrite).toBeDefined();
     const settingsContent = settingsWrite![1] as string;
+    // #5000/#5004 — sandbox disabled (drops the bwrap-userns dependency) paired
+    // with bypassPermissions (restores the bash auto-approval the sandbox used to
+    // provide). See DEFAULT_CLAUDE_SETTINGS in _cron-claude-eval-substrate.ts.
     expect(JSON.parse(settingsContent)).toMatchObject({
-      permissions: { allow: [] },
-      sandbox: { enabled: true },
+      permissions: { allow: [], defaultMode: "bypassPermissions" },
+      sandbox: { enabled: false },
     });
   });
 

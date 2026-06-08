@@ -21,6 +21,7 @@ vi.hoisted(() => {
 
 import { resolveCronWorkspaceRoot } from "@/server/inngest/functions/_cron-shared";
 import {
+  DEFAULT_CLAUDE_SETTINGS,
   spawnClaudeEval,
   spawnSimple,
   STDOUT_TAIL_CAP_BYTES,
@@ -57,6 +58,49 @@ describe("resolveCronWorkspaceRoot", () => {
   it("trims surrounding whitespace from a set value", () => {
     process.env.CRON_WORKSPACE_ROOT = "  /workspaces  ";
     expect(resolveCronWorkspaceRoot()).toBe("/workspaces");
+  });
+});
+
+// #5000/#5004 — the cron eval substrate writes DEFAULT_CLAUDE_SETTINGS verbatim
+// into each ephemeral workspace's `.claude/settings.json`. It previously carried
+// `sandbox.enabled: true` with no `permissions.defaultMode`, which relied on the
+// bwrap bash sandbox to auto-approve headless bash. When bwrap could not acquire
+// unprivileged user namespaces in the cloud runner, every Bash call failed and
+// the crons self-reported FAILED. The durable fix removes the bwrap dependency
+// (`sandbox.enabled: false`) and restores bash auto-approval via
+// `permissions.defaultMode: "bypassPermissions"`. These tests assert the WRITTEN
+// settings.json content (the config invariant), not model behavior — the LLM is
+// kept out of the assertion path. The settings are serialized exactly as
+// setupEphemeralWorkspace writes them: `JSON.stringify(..., null, 2) + "\n"`.
+describe("DEFAULT_CLAUDE_SETTINGS — cron sandbox/permission overlay (#5000/#5004)", () => {
+  // Mirror the exact write expression in setupEphemeralWorkspace so the assertion
+  // proves the on-disk `.claude/settings.json` content, not just the in-memory
+  // constant shape.
+  const writtenSettings = JSON.parse(
+    JSON.stringify(DEFAULT_CLAUDE_SETTINGS, null, 2) + "\n",
+  );
+
+  it("disables the OS sandbox so a bwrap-userns host drift cannot break the cron", () => {
+    expect(writtenSettings.sandbox.enabled).toBe(false);
+  });
+
+  it("sets permissions.defaultMode to bypassPermissions to restore bash auto-approval", () => {
+    expect(writtenSettings.permissions.defaultMode).toBe("bypassPermissions");
+  });
+
+  it("keeps permissions.allow as an empty array (no allowlist widening)", () => {
+    expect(writtenSettings.permissions.allow).toEqual([]);
+  });
+
+  // Drift-guard anchored on the literal: a future edit that flips the sandbox
+  // back on (or drops the bypassPermissions pairing) must update this test. The
+  // pairing is load-bearing — sandbox-off WITHOUT bypassPermissions blocks every
+  // headless `gh`/`git` command on an unanswerable prompt.
+  it("regression: never regress to sandbox.enabled true without re-pairing auto-approval", () => {
+    expect(DEFAULT_CLAUDE_SETTINGS.sandbox.enabled).toBe(false);
+    expect(DEFAULT_CLAUDE_SETTINGS.permissions.defaultMode).toBe(
+      "bypassPermissions",
+    );
   });
 });
 
