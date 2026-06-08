@@ -48,7 +48,7 @@ export function SettingsContent({
       {workspaceIdentity && (
         <section>
           <h2 className="mb-4 text-lg font-semibold text-soleur-text-primary">Workspace</h2>
-          {workspaceIdentity.organizationId && (
+          {workspaceIdentity.organizationId && workspaceIdentity.canRename && (
             <RenameWorkspaceAction
               organizationId={workspaceIdentity.organizationId}
               organizationName={workspaceIdentity.organizationName}

@@ -91,8 +91,11 @@ export function WorkspaceLogoSettings({
         setStatus("success");
         // Same-tab signal: the switcher + collapsed-rail band fetch memberships
         // once on mount and only re-poll on focus — nudge them to refetch so the
-        // new logo appears without a full reload (H1, AC4).
-        window.dispatchEvent(new CustomEvent(WORKSPACE_LOGO_CHANGED_EVENT));
+        // new logo appears without a full reload (H1, AC4). The workspaceId lets
+        // the identity tile cache-bust its proxy src on a REPLACE.
+        window.dispatchEvent(
+          new CustomEvent(WORKSPACE_LOGO_CHANGED_EVENT, { detail: { workspaceId } }),
+        );
       } catch {
         setStatus("error");
         setError("Upload failed. Please try again.");
@@ -115,7 +118,9 @@ export function WorkspaceLogoSettings({
       setHasLogo(false);
       setStatus("idle");
       // Same-tab signal — the switcher reverts to the monogram without a reload.
-      window.dispatchEvent(new CustomEvent(WORKSPACE_LOGO_CHANGED_EVENT));
+      window.dispatchEvent(
+        new CustomEvent(WORKSPACE_LOGO_CHANGED_EVENT, { detail: { workspaceId } }),
+      );
     } catch {
       setStatus("error");
       setError("Couldn't remove the logo. Please try again.");

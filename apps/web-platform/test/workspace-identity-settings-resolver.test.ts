@@ -58,7 +58,8 @@ function makeService(rows: Record<string, unknown>) {
 }
 
 describe("resolveWorkspaceIdentityForSettings (General page — AC6/AC7/AC8)", () => {
-  it("resolves identity for the active workspace WITHOUT consulting the team flag (reachability)", async () => {
+  it("resolves the LOGO identity even when the team flag is OFF (logo reachability, AC7)", async () => {
+    mockTeamFlag.mockResolvedValue(false); // flag OFF
     const supabase = makeSupabase(true);
     const service = makeService({
       workspaces: { organization_id: ORG_ID, logo_path: `${RESOLVED_WS}/logo.webp` },
@@ -68,15 +69,31 @@ describe("resolveWorkspaceIdentityForSettings (General page — AC6/AC7/AC8)", (
       supabase as never,
       service as never,
     );
+    // Logo fields resolve regardless of the flag (the reachability fix); rename
+    // mirrors the flag-gated rename route so the UI doesn't show a control that 404s.
     expect(result).toEqual({
       workspaceId: RESOLVED_WS,
       organizationId: ORG_ID,
       organizationName: "Acme",
       isOwner: true,
       hasLogo: true,
+      canRename: false,
     });
-    // AC7: the team-invite flag must never gate the General identity controls.
-    expect(mockTeamFlag).not.toHaveBeenCalled();
+  });
+
+  it("sets canRename=true when the team flag is ON", async () => {
+    mockTeamFlag.mockResolvedValue(true);
+    const supabase = makeSupabase(true);
+    const service = makeService({
+      workspaces: { organization_id: ORG_ID, logo_path: null },
+      organizations: { name: "Acme" },
+    });
+    const result = await resolveWorkspaceIdentityForSettings(
+      supabase as never,
+      service as never,
+    );
+    expect(result?.canRename).toBe(true);
+    expect(result?.hasLogo).toBe(false);
   });
 
   it("reports isOwner=false for a non-owner (drives the disabled owner-gated control, AC8)", async () => {

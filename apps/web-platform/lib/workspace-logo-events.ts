@@ -11,4 +11,13 @@
 // the switcher + active-workspace hook listen and re-fetch their memberships.
 // Mirrors the in-app CustomEvent pattern already used by kb-sidebar-shell.tsx
 // (RAIL_EXPAND_EVENT) — no polling interval, no new data path.
+//
+// The `detail.workspaceId` lets the identity tile cache-bust its stable proxy
+// `src` (which is otherwise browser-cached for max-age=300) so a REPLACE — where
+// hasLogo stays true and the src path is unchanged — still refreshes the visible
+// logo without a full reload.
 export const WORKSPACE_LOGO_CHANGED_EVENT = "soleur:workspace-logo-changed";
+
+export interface WorkspaceLogoChangedDetail {
+  workspaceId: string;
+}

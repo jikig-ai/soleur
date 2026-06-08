@@ -40,6 +40,7 @@ const IDENTITY = {
   organizationName: "Acme",
   isOwner: true,
   hasLogo: false,
+  canRename: true,
 };
 
 describe("SettingsContent — relocated workspace-identity controls (AC6/AC8)", () => {
@@ -66,5 +67,18 @@ describe("SettingsContent — relocated workspace-identity controls (AC6/AC8)", 
   it("renders no identity controls when workspaceIdentity is absent", () => {
     const { queryByTestId } = render(<SettingsContent {...baseProps} />);
     expect(queryByTestId("workspace-logo-settings")).toBeNull();
+  });
+
+  it("hides rename but keeps the logo when canRename is false (flag-off; rename route would 404)", () => {
+    const { getByTestId, queryByText } = render(
+      <SettingsContent
+        {...baseProps}
+        workspaceIdentity={{ ...IDENTITY, canRename: false }}
+      />,
+    );
+    // Logo stays reachable regardless of the team flag (the reachability fix)...
+    expect(getByTestId("workspace-logo-settings")).toBeTruthy();
+    // ...but the rename control (whose API is flag-gated) is not rendered.
+    expect(queryByText("Acme")).toBeNull();
   });
 });

@@ -1,4 +1,5 @@
 import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
+import { isTeamWorkspaceInviteEnabled, type Identity } from "@/lib/feature-flags/server";
 
 // Server-only resolver for the General settings page's workspace-identity
 // controls (logo + rename) — #4916 follow-up.
@@ -19,6 +20,15 @@ export interface WorkspaceIdentity {
   organizationName: string | null;
   isOwner: boolean;
   hasLogo: boolean;
+  /**
+   * Whether the rename control should render. The rename ROUTE
+   * (POST /api/workspace/rename) is gated behind isTeamWorkspaceInviteEnabled
+   * and 404s when off, so the UI must match — otherwise a flag-off owner sees an
+   * enabled Rename control that fails on submit. The LOGO is intentionally NOT
+   * flag-gated (its route has no flag gate; logo reachability is the reason the
+   * controls moved to the always-present General page). #4916.
+   */
+  canRename: boolean;
 }
 
 interface AuthClient {
@@ -72,6 +82,9 @@ export async function resolveWorkspaceIdentityForSettings(
   const hasLogo = wsResp.data.logo_path != null;
 
   let organizationName: string | null = null;
+  // The rename route is flag-gated; mirror that so the UI doesn't show an
+  // enabled control that 404s. Logo stays flag-free (resolved above).
+  let canRename = false;
   if (organizationId) {
     const orgChain = service.from("organizations") as MaybeSingleChain<{
       name: string | null;
@@ -81,6 +94,9 @@ export async function resolveWorkspaceIdentityForSettings(
       .eq("id", organizationId)
       .maybeSingle();
     organizationName = orgResp.data?.name ?? null;
+
+    const identity: Identity = { userId: user.id, role: "prd", orgId: organizationId };
+    canRename = await isTeamWorkspaceInviteEnabled(organizationId, identity);
   }
 
   // Owner gate via the SECURITY DEFINER RPC (GRANT authenticated) — same gate the
@@ -92,5 +108,5 @@ export async function resolveWorkspaceIdentityForSettings(
   });
   const isOwner = ownerRes.data === true;
 
-  return { workspaceId, organizationId, organizationName, isOwner, hasLogo };
+  return { workspaceId, organizationId, organizationName, isOwner, hasLogo, canRename };
 }

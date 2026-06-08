@@ -295,6 +295,18 @@ describe("DELETE /api/workspace/logo (AC7b)", () => {
     const ops = mockReport.mock.calls.map((c) => c[1]?.op);
     expect(ops).toContain("logo-orphan-cleanup-failed");
   });
+
+  it("0-rows-matched clear fails loud (500 + persist-logo-clear-zero-rows breadcrumb)", async () => {
+    authAs();
+    owner(true);
+    mockUpdateSelect.mockResolvedValue({ data: [], error: null });
+    const res = await DELETE(delReq());
+    expect(res.status).toBe(500);
+    // The object must NOT be removed when the row clear didn't match (row-first).
+    expect(mockRemove).not.toHaveBeenCalled();
+    const ops = mockReport.mock.calls.map((c) => c[1]?.op);
+    expect(ops).toContain("persist-logo-clear-zero-rows");
+  });
 });
 
 describe("rate limit (AC6b)", () => {
