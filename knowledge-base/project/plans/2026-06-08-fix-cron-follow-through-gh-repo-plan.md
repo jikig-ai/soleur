@@ -265,8 +265,14 @@ logs:
   where: Inngest run logs + Sentry breadcrumbs; stdout/stderr inherited by the spawned children.
   retention: Sentry default; Inngest run history.
 discoverability_test:
-  command: "curl -s 'https://sentry.io/api/0/organizations/<org>/monitors/scheduled-follow-through/' -H 'Authorization: Bearer <token>' | jq '.status'  # NO ssh"
-  expected_output: status flips to 'ok' after the next weekday run (was 'error').
+  command: grep -l GH_REPO apps/web-platform/server/inngest/functions/cron-follow-through-monitor.ts
+  expected_output: cron-follow-through-monitor.ts
+  note: |
+    Root-runnable local probe confirming the fix landed (GH_REPO present in the
+    cron's buildSpawnEnv). Runtime confirmation is post-merge (AC7/AC8): the
+    scheduled-follow-through / scheduled-daily-triage Sentry monitors flip from
+    error to OK on the next weekday/daily cron run after the container restart —
+    no pre-merge runtime endpoint exists (the cron only fires on schedule).
 ```
 
 ## Test Scenarios
