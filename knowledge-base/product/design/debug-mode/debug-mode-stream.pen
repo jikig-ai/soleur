@@ -393,6 +393,7 @@
       "y": 0,
       "name": "02 — Debug Panel EXPANDED (event stream)",
       "width": 1000,
+      "height": 820,
       "fill": "$bg-base",
       "layout": "vertical",
       "children": [
@@ -1311,6 +1312,7 @@
       "y": 0,
       "name": "03 — Debug Panel EMPTY STATE",
       "width": 1000,
+      "height": 820,
       "fill": "$bg-base",
       "layout": "vertical",
       "children": [
@@ -1843,6 +1845,172 @@
                       ]
                     }
                   ]
+                },
+                {
+                  "type": "rectangle",
+                  "id": "yFdJq",
+                  "name": "divider",
+                  "fill": "$border-default",
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "frame",
+                  "id": "2ayqS",
+                  "name": "notes",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 8,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "pifgy",
+                      "name": "n1",
+                      "width": "fill_container",
+                      "gap": 8,
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "hEwgQ",
+                          "name": "n1i",
+                          "width": 14,
+                          "height": 14,
+                          "iconFontName": "shield-check",
+                          "iconFontFamily": "lucide",
+                          "fill": "$text-tertiary"
+                        },
+                        {
+                          "type": "text",
+                          "id": "uUrd8",
+                          "name": "n1t",
+                          "fill": "$text-tertiary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Secrets are redacted server-side at the source before any event is sent.",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "y9yM1",
+                      "name": "n2",
+                      "width": "fill_container",
+                      "gap": 8,
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "gK0hd",
+                          "name": "n2i",
+                          "width": 14,
+                          "height": 14,
+                          "iconFontName": "eye-off",
+                          "iconFontFamily": "lucide",
+                          "fill": "$text-tertiary"
+                        },
+                        {
+                          "type": "text",
+                          "id": "1pOPB",
+                          "name": "n2t",
+                          "fill": "$text-tertiary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Ephemeral — debug events are never written to the database, logs, or error tracking.",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "4SUKx",
+                      "name": "n3",
+                      "width": "fill_container",
+                      "gap": 8,
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "PMDOi",
+                          "name": "n3i",
+                          "width": 14,
+                          "height": 14,
+                          "iconFontName": "users",
+                          "iconFontFamily": "lucide",
+                          "fill": "$text-tertiary"
+                        },
+                        {
+                          "type": "text",
+                          "id": "Az4HA",
+                          "name": "n3t",
+                          "fill": "$text-tertiary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Owner sets this; members of this workspace can read the stream. Eligibility is enforced on the server, not by this switch.",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "jnwAC",
+          "name": "hiddenNote",
+          "width": "fill_container",
+          "gap": 8,
+          "padding": [
+            0,
+            24,
+            24,
+            24
+          ],
+          "children": [
+            {
+              "type": "rectangle",
+              "id": "odQbl",
+              "name": "hnBar",
+              "fill": "$border-emphasized",
+              "width": 3,
+              "height": 48
+            },
+            {
+              "type": "frame",
+              "id": "Mb6LN",
+              "name": "hnWrap",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 3,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "W59Hu",
+                  "name": "hnTitle",
+                  "fill": "$text-secondary",
+                  "content": "Visibility note (not rendered)",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "5yAR5",
+                  "name": "hnBody",
+                  "fill": "$text-tertiary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "This entire \"Developer\" settings group is hidden for any workspace outside the Soleur org / dev cohort. Non-internal users never see the toggle or the debug panel — the eligibility flag gates rendering AND server emission.",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
                 }
               ]
             }
