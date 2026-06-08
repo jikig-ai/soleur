@@ -8,6 +8,20 @@ brand_survival_threshold: none
 
 # refactor: Declutter Collapsed Sidebar + Bias ux-design-lead Toward KISS
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-08
+**Sections enhanced:** Acceptance Criteria (AC5/AC6 corrected), Research Insights (added), gate dispositions (added).
+
+### Key Improvements
+1. **Corrected the test-edit premise (the load-bearing deepen catch).** AC5 originally said "invert the collapsed dot/K assertions." Verify-negative grep proved NO existing band unit test asserts `live-repo-dot` or the collapsed `nav-section-title` — the collapsed-block tests assert the *identity tile* instead. AC5 is now an ADD (new negative assertions), not an invert. This would have surfaced as a confused GREEN phase at /work.
+2. **Bounded the e2e change exactly.** The only `live-repo-dot` references anywhere are `nav-states-shell.e2e.ts:525` and `:606` (exhaustive grep). Both are in AC7; no other suite touches it.
+3. **Recorded the 4.9 UI-wireframe gate disposition** so /work and review know it was evaluated, not skipped (excluded as a style tweak per `ui-surface-terms.md`).
+
+### New Considerations Discovered
+- The `S` text assertion at `workspace-context-band.test.tsx:205` is the workspace-identity MONOGRAM ("Soleur Workspace" → "S"), NOT the section "K" — a near-miss that could lead an implementer to mistakenly touch it. The plan now flags the identity tile as retained-and-tested (AC3).
+- `nav-rail-drill.test.tsx` likely needs zero edits (its `nav-section-title` assertion targets the expanded band) — Files-to-Edit notes it may be dropped at /work.
+
 ## Overview
 
 Two coupled, low-risk UX-hygiene changes, both pure code/agent-prose edits against already-provisioned surfaces (no new infra, no schema, no regulated-data surface):
@@ -52,8 +66,8 @@ No spec file exists for this branch (`knowledge-base/project/specs/feat-one-shot
 - [ ] AC2 — The same collapsed branch no longer renders the single-letter section monogram (`SECTION_LABELS[drill].charAt(0)`). The collapsed branch contains no `data-testid="nav-section-title"`. The **non-collapsed** return still renders the full-text `nav-section-title` (`:199-206` unchanged).
 - [ ] AC3 — The collapsed `workspace-identity-icon` / `WorkspaceIdentityTile` is retained verbatim (orientation anchor, not decoration). `grep -c 'workspace-identity-icon' …band.tsx` returns `1`.
 - [ ] AC4 — Collapsed-rail vertical layout has no orphaned spacing: the remaining children (optional back chevron + identity tile) sit in the `flex flex-col items-center gap-3` column with no empty slot. (RTL render asserts exactly the expected child set; see Test Scenarios.)
-- [ ] AC5 — `workspace-context-band.test.tsx`: the collapsed-state assertions are updated to assert *absence* of `live-repo-dot` and *absence* of the collapsed single-letter `nav-section-title`, while the expanded/mobile full-text `nav-section-title` assertions (`:159`, `:234`, `:256`, `:261`) remain green and unchanged in intent.
-- [ ] AC6 — `nav-rail-drill.test.tsx` rail-band `nav-section-title` assertions (`:282`) are reconciled: these render in the **expanded** rail by default (the test does not set collapse), so they stay green; confirm no test depends on the *collapsed* `nav-section-title`.
+- [ ] AC5 — `workspace-context-band.test.tsx`: ADD negative assertions to the existing collapsed-block describe (`"WorkspaceContextBand — collapsed monogram identity (Phase 1, #4915)"`, `:192`) asserting `queryByTestId("live-repo-dot")` and `queryByTestId("nav-section-title")` are `null` in the `collapsed` render. (Reconciliation: NO existing band unit test asserts the removed glyphs — see Research Insights — so this is an ADD, not an invert. The collapsed-block tests at `:193`/`:210` assert the *identity tile* and stay green; the `nav-section-title` assertions at `:143`/`:159`/`:167`/`:234`/`:256`/`:261` are all NON-collapsed renders and stay green untouched.)
+- [ ] AC6 — `nav-rail-drill.test.tsx` rail-band `nav-section-title` assertion (`:282`) renders the **expanded** rail (the test does not set `collapsed`), so it stays green. Confirmed: no test depends on the *collapsed* `nav-section-title`. Likely zero edits to this file; if untouched, drop it from Files-to-Edit at /work.
 - [ ] AC7 — `e2e/nav-states-shell.e2e.ts`: the two `getByTestId("live-repo-dot")` `toBeVisible()` assertions (`:525`, `:606`) are replaced with a positive collapsed-identity invariant (`workspace-identity-icon` visible) so the e2e still proves identity-never-unmounts-on-collapse (ADR-047) without asserting the removed dot.
 - [ ] AC8 — Other-screens sweep verified empty: `grep -rn '●' apps/web-platform/components --include=*.tsx | grep -v node_modules` returns no standalone decorative status dot outside the (now-edited) band; any remaining `●`/`•` are text separators / list bullets / masks (enumerated in Research Reconciliation). Record the grep output in the PR body.
 - [ ] AC9 — `ux-design-lead.md` `## Step 2: Design` contains a KISS/simplicity design-time principle (bias toward fewer elements, remove non-informational decoration). The agent `description:` field is unchanged (no token-budget impact). Verify `grep -c 'description:' plugins/soleur/agents/product/design/ux-design-lead.md` still returns `1` and the description line is byte-identical to `origin/main`.
@@ -122,6 +136,24 @@ discoverability_test:
 - **Identity tile is NOT clutter:** the easy over-correction is to also remove the collapsed `workspace-identity-icon`. AC3 forbids this — it is the ADR-047 brand invariant 1 orientation anchor.
 - **Agent `description:` byte-identity:** the ux-design-lead edit must touch only the body, never the `description:` line (AC9), so no agent token-budget recompute is needed.
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6. (Filled above; threshold `none` with a sensitive-path scope-out reason.)
+
+## Research Insights
+
+### Deepen-plan gate dispositions (Phases 4.6–4.9)
+
+- **4.6 User-Brand Impact:** PASS. Section present; threshold `none` with a non-empty sensitive-path scope-out reason. None of the Files-to-Edit match the canonical `SENSITIVE_PATH_RE` (verified: all six paths return `ok`).
+- **4.7 Observability:** PASS (presentational-only; section present with the discoverability_test documenting the vitest command — no SSH).
+- **4.8 PAT-shaped variable:** PASS — sweep returns no PAT-shaped var/literal.
+- **4.9 UI-Wireframe Artifact Halt:** EVALUATED → EXCLUDED (not halted). The glob superset mechanically matches `components/**/*.tsx`, but `plugins/soleur/skills/brainstorm/references/ui-surface-terms.md` `## Excluded` explicitly carves out "Pure copy or style tweaks with no structural/layout change." This refactor *removes* two presentational glyphs from an existing component — no new page/flow/component, no layout redesign. The gate's intent (`wg-ui-feature-requires-pen-wireframe`, #4819) is to stop a *new UI feature* shipping with zero wireframes; a two-glyph removal is the excluded style-tweak class. The Domain Review Product/UX Gate is correspondingly ADVISORY (auto-accepted, pipeline). No `.pen` is produced — generating one for "remove two glyphs" would be the ceremony `wg-ui-feature-requires-pen-wireframe` is not asking for.
+
+### Verify-the-negative pass (Phase 4.45)
+
+- Claim "the `●` at `workspace-context-band.tsx:123` is the only standalone decorative status dot in `components/**`": CONFIRMED. `grep -rn '●' apps/web-platform/components --include=*.tsx` returns exactly one hit (that line). The `•` hits elsewhere are text separators (`today-card.tsx`, `template-authorization-row.tsx`), list bullets (`dsar-export-dialog.tsx`), and a password mask — all legitimate.
+- Claim "no existing band unit test asserts the removed glyphs": CONFIRMED via grep — drives the AC5 correction above.
+
+### Precedent-diff (Phase 4.4)
+
+No pattern-bound behavior (no SQL/lock/RPC/atomic-write). The component-edit precedent is the surrounding file's own convention: removing a presentational `<span>` from a conditional branch. The collapsed container (`flex flex-col items-center gap-3`) already renders a variable child set (the back chevron is conditional on `drill && !suppressBack`), so dropping two children leaves a well-formed `gap-3` column — no novel pattern, no new spacing primitive (AC4 audits this).
 
 ## Alternative Approaches Considered
 

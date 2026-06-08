@@ -5,8 +5,8 @@ Lane: cross-domain
 
 ## 1. Setup / RED
 
-- [ ] 1.1 Update `apps/web-platform/test/workspace-context-band.test.tsx` collapsed-state cases to assert *absence* of `live-repo-dot` and *absence* of the collapsed single-letter `nav-section-title`; keep expanded/mobile full-text `nav-section-title` assertions intact. (RED — fails against current component.)
-- [ ] 1.2 Confirm `apps/web-platform/test/nav-rail-drill.test.tsx` rail-band `nav-section-title` assertions target the expanded band (no collapse set) and stay green; adjust only if a collapsed dependency exists.
+- [ ] 1.1 ADD negative assertions to the existing collapsed-block describe in `apps/web-platform/test/workspace-context-band.test.tsx` (`"WorkspaceContextBand — collapsed monogram identity (Phase 1, #4915)"`): `queryByTestId("live-repo-dot")` and `queryByTestId("nav-section-title")` are `null` in the `collapsed` render. NOTE (deepen reconciliation): NO existing test asserts the removed glyphs, so this is an ADD, not an invert. Do NOT touch the `:205` `toHaveTextContent("S")` assertion — that is the identity MONOGRAM, not the section "K". Keep all non-collapsed `nav-section-title` assertions (`:143`/`:159`/`:167`/`:234`/`:256`/`:261`) intact. (RED — fails against current component.)
+- [ ] 1.2 Confirm `apps/web-platform/test/nav-rail-drill.test.tsx` `nav-section-title` assertion (`:282`) targets the expanded band (no `collapsed` set) and stays green. Expected: zero edits — drop from Files-to-Edit if untouched.
 - [ ] 1.3 Update `apps/web-platform/e2e/nav-states-shell.e2e.ts` (`:525`, `:606`) to replace `live-repo-dot` visibility with the `workspace-identity-icon` collapsed invariant. (RED.)
 
 ## 2. Core Implementation / GREEN
