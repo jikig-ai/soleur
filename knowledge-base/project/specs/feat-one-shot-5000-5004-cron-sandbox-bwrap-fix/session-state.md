@@ -20,7 +20,15 @@ None. CWD verified at start. All deepen-plan hard gates (4.6 User-Brand Impact, 
 - mcp__plugin_soleur_context7 (Claude Code sandbox/permissions/settings docs)
 - Bash, Read, Edit, Write, ToolSearch
 
-## Work + Review Phase
+## Re-plan Phase (2026-06-08)
+- Status: COMPLETE. Re-scoped plan `knowledge-base/project/plans/2026-06-08-fix-cron-sandbox-dontask-allowlist-tiered-plan.md` (v2) supersedes the BLOCKED bypassPermissions plan.
+- Approach: host-independent LAYERED containment (Tier-1, this PR, no infra) — L1 per-producer scoped `--allowedTools` (daily-triage model), L2 shared `Read(/proc/**)`+secret-file + egress/interpreter deny, L3 PreToolUse secret-scan hook, sandbox:false. Tier-2 follow-up issue = network-egress firewall (Terraform) + least-priv token, restores #5000 + broad/raw-bash crons. Operator chose two-PR scoping.
+- 5-agent plan-review panel (security-sentinel + architecture-strategist + spec-flow-analyzer + CTO + CPO) found the v1 "scoped bash allowlist severs the chain" thesis FALSE (cat /proc/self/environ reads secrets as a file; gh issue create --body is an allow-only exfil sink on the public repo); all P0/P1 folded into v2. CPO: APPROVE-WITH-CONDITIONS (C1 community-monitor read-auth, C2 no-silent-degradation, C3 defer-tracking).
+- Key corrections: blast radius is 12 (not 19/21); 3 crons spawn("bash") outside claude-code (Tier-2-only); roadmap-review WebSearch/WebFetch vestigial but its issue-body ingest is an injection surface; `dontAsk` settings.json acceptance is a Phase-0 gate.
+- #5004 (roadmap-review) resolved by Tier-1; #5000 (growth-audit, broad) deferred to Tier-2 (fail-closed/contained, never exposed). PR body uses `Ref` not `Closes`.
+- NEXT: `/clear` then `/soleur:work <plan-path>`. The BLOCKED implementation on this branch (commit 73890e6af bypassPermissions) must be REVERTED/REPLACED by the v2 approach during /work.
+
+## Work + Review Phase (BLOCKED — superseded)
 - Status: HALTED at review — P1 block, operator chose re-plan (2026-06-08)
 - Implementation landed (sandbox-off + bypassPermissions overlay, tests GREEN: substrate 12/12, inngest 1429, webplat shard 8950) and committed (73890e6af), pushed to draft PR #5018.
 - Review: 3 agents (security-sentinel, user-impact-reviewer, architecture-strategist) UNANIMOUS P1 block. The plan's "trusted prompt / 5-key env" premise is factually false for content-ingesting producers (community-monitor: HN/Discord ingest + 11 social write-tokens; bug-fixer: public issue bodies). Sandbox-off + bypassPermissions → injected bash exfiltrates creds.
