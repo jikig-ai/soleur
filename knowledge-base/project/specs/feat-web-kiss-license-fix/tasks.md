@@ -47,13 +47,13 @@ defer_issue: 5043
 ## Phase 2 — Commit 2: KISS homepage declutter (`index.njk`)
 
 - [x] 2.1 CUT `<section class="landing-cta-mid">` (`:108`).
-- [x] 2.2 Hero `.hero-cta` (`:31-35`): keep only reworded `:33` link; drop `:32` See-Pricing + `:34` compare anchor.
+- [x] 2.2 Hero `.hero-cta` (`:31-35`): drop `:32` See-Pricing CTA; keep reworded `:33` self-host link AND `:34` compare anchor. **Deviation:** the compare anchor was RESTORED — `seo-aeo-drift-guard.test.ts:986` enforces the #3996 AEO invariant that the hero links to `#soleur-vs-copilots`. Wireframe's "one link" intent yields to the tested AEO requirement.
 - [x] 2.3 Final CTA (`:277-278`): keep form + `.newsletter-status` node + JS; replace `:278` H2 with a distinct closing line.
 - [x] 2.4 Compress "This Is the Way" prose (`:59-60`) overlap with the Compare section.
 - [x] 2.5 Do NOT touch the site-wide `newsletter-form.njk` include (segment-distinct; spec-flow defect).
 - [x] 2.6 Build from repo root (`npm run docs:build`); run `check-critical-css-coverage.mjs` + `screenshot-gate.mjs`; re-inline into `base.njk:140-215` if any above-fold selector shifts.
 - [x] 2.7 Wireframe parity eyeball; FAQ/Compare/stats unchanged.
-- [ ] 2.8 Commit 2 (declutter).
+- [x] 2.8 Commit 2 (declutter).
 
 ## Phase 3 — Ship
 
