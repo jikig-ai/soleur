@@ -69,6 +69,6 @@ pr: 5051
 
 ## Deferred (tracking issues filed at plan-end)
 
-- [ ] OS1 — parallelize `migrate` with the build (separate PR; touches release.outputs contracts).
-- [ ] OS2 — reorder prod-deps `COPY`+`npm ci --omit=dev` above the `BUILD_*` ARG/ENV block to
+- [ ] OS1 (#5054) — parallelize `migrate` with the build (separate PR; touches release.outputs contracts).
+- [ ] OS2 (#5055) — reorder prod-deps `COPY`+`npm ci --omit=dev` above the `BUILD_*` ARG/ENV block to
   recover the line-114 layer (image-equivalent; separate PR due to AC6 comment-only constraint).

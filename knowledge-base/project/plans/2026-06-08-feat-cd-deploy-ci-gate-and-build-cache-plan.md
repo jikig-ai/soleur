@@ -387,7 +387,7 @@ None. No open `code-review` issues reference `web-platform-release.yml`,
 
 ## Deferred / Optional Scope
 
-- **OS1 — Parallelize `migrate` with the Docker build.** Today `migrate` (`needs: release`)
+- **OS1 (#5054) — Parallelize `migrate` with the Docker build.** Today `migrate` (`needs: release`)
   waits for the ENTIRE `release` job, including the slow Docker build, even though migrations
   only need a repo checkout + version. Splitting version-compute into its own lightweight job
   that both `release`(build) and `migrate` depend on would remove the build from the
@@ -396,7 +396,7 @@ None. No open `code-review` issues reference `web-platform-release.yml`,
   radius), and the core WS1+WS2 PR is clean without it. A tracking issue is filed at plan-end.
   Re-evaluation: pursue once WS2's cache lands and a fresh `gh run list` shows whether `migrate`
   is actually on the post-cache critical path (it may not be, if the build drops below migrate).
-- **OS2 — Recover the `npm ci --omit=dev` layer (arch-review Concern B).** `RUN npm ci --omit=dev`
+- **OS2 (#5055) — Recover the `npm ci --omit=dev` layer (arch-review Concern B).** `RUN npm ci --omit=dev`
   (Dockerfile line 114) is cache-busted every commit because it sits below `ENV BUILD_SHA` (line
   110). Moving the prod-deps `COPY package.json package-lock.json` + `RUN npm ci --omit=dev` block
   ABOVE the `ARG/ENV BUILD_*` block (lines 103–110) makes it lockfile-gated → cacheable. The move
