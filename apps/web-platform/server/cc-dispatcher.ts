@@ -91,6 +91,7 @@ import {
   findRepoOwnerInstallationForUser,
   getInstallationAccount,
 } from "./github-app";
+import { mirrorSelfHealSkip } from "./cc-self-heal-observability";
 // Session-start self-heal: if the active workspace has a connected repo but no
 // matching clone on disk, clone/repair it so the Concierge has a real git repo
 // to work in (fixes the "No git repository found" blocker). Generic per-user.
@@ -265,10 +266,7 @@ const GH_403_PROMPT_DIRECTIVE =
   "user to change GitHub App permissions, approve new permissions, or " +
   "re-consent — the Soleur platform diagnoses and repairs installation/" +
   "permission issues server-side and will retry with the correct installation " +
-  "automatically. The one sanctioned next step you may offer: if the 403 " +
-  "persists across retries, ask the user to confirm the Soleur GitHub App is " +
-  "installed on the repository's owner account. Beyond that, state only what " +
-  "the error literally says.";
+  "automatically. State only what the error literally says.";
 
 // feat-one-shot-concierge-workspace-repo-context — name the connected
 // repository to the Concierge so it stops trying to infer owner/repo from a
@@ -1399,26 +1397,54 @@ export const realSdkQueryFactory: QueryFactory = async (
         const storedAccount = await getInstallationAccount(installationId);
         const alreadyCorrect =
           storedAccount.login.toLowerCase() === connectedOwner.toLowerCase();
-        // Only derive the user's login from a personal (User) install. For an
-        // org-type stored install whose account != the connected-repo owner we
-        // cannot derive the user's login without a service-role admin lookup —
-        // keep the stored install (fail-safe: no escalation, honest 403).
-        if (!alreadyCorrect && storedAccount.type === "User") {
-          const ownerInstall = await findRepoOwnerInstallationForUser(
-            connectedOwner,
-            storedAccount.login,
-          );
-          if (ownerInstall !== null && ownerInstall !== installationId) {
-            log.info(
-              {
+        // `alreadyCorrect` is a no-op (the stored install already owns the
+        // connected repo), NOT a skip — do not mirror it. Every other
+        // not-already-correct branch either promotes (success log.info) or
+        // KEEPS the stored install, and a keep must be a queryable Sentry event
+        // (Bug B — cq-silent-fallback-must-mirror-to-sentry).
+        if (!alreadyCorrect) {
+          if (storedAccount.type === "User") {
+            // Only derive the user's login from a personal (User) install.
+            const { installationId: ownerInstall, outcome } =
+              await findRepoOwnerInstallationForUser(
+                connectedOwner,
+                storedAccount.login,
+              );
+            if (ownerInstall !== null && ownerInstall !== installationId) {
+              log.info(
+                {
+                  userId: args.userId,
+                  storedInstallationId: installationId,
+                  ownerInstallationId: ownerInstall,
+                  owner: connectedOwner,
+                },
+                "Concierge installation self-heal: stored personal install does not own the connected repo; switching to the entitled repo-owner installation for this dispatch",
+              );
+              effectiveInstallationId = ownerInstall;
+            } else if (ownerInstall === null) {
+              // Promotion denied (not-member / transient-indeterminate /
+              // token-mint-failed / no-owner-install) — keep the stored
+              // (possibly-wrong) install + surface the skip so a residual 403
+              // is explainable from Sentry without SSH.
+              mirrorSelfHealSkip({
                 userId: args.userId,
                 storedInstallationId: installationId,
-                ownerInstallationId: ownerInstall,
                 owner: connectedOwner,
-              },
-              "Concierge installation self-heal: stored personal install does not own the connected repo; switching to the entitled repo-owner installation for this dispatch",
-            );
-            effectiveInstallationId = ownerInstall;
+                membershipProbeOutcome: outcome,
+                effectiveInstallationId: installationId,
+              });
+            }
+          } else {
+            // Org-type stored install whose account != the connected-repo
+            // owner: the user's login is not derivable without a service-role
+            // admin lookup, so keep the stored install (fail-safe). Mirror it.
+            mirrorSelfHealSkip({
+              userId: args.userId,
+              storedInstallationId: installationId,
+              owner: connectedOwner,
+              membershipProbeOutcome: "org-type-stored-install",
+              effectiveInstallationId: installationId,
+            });
           }
         }
       } catch (probeErr) {

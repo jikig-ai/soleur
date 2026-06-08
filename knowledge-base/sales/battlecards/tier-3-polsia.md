@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-06-02
-last_reviewed: 2026-06-02
+last_updated: 2026-06-08
+last_reviewed: 2026-06-08
 review_cadence: monthly
 owner: CRO
 depends_on:
@@ -12,7 +12,9 @@ convergence_risk: High
 
 # Battlecard: Polsia
 
-> **[2026-06-02 Review note]** Revenue and traction figures corrected against `knowledge-base/product/competitive-intelligence.md` (2026-05-30 scan). Polsia's self-reported ARR **fell** from the $1.5M cited in the March scan to **$450K+**, and managed-company counts moved contradictorily (500+ now vs. a prior 2,000+ claim) — either earlier figures were inflated or material churn occurred (the platform itself notes "most customer businesses are only weeks old"). Pricing restated to the current **$49/mo base + 20% revenue share** model. Talk-track figures below updated to match; positioning logic unchanged.
+> **[2026-06-08 Cascade update]** **Trajectory reversed.** The 2026-05-30 read ("ARR fell to $450K, ambiguous trajectory") is superseded: per the 2026-06-08 full-tier scan, Polsia **raised $30M at a $250M valuation (Sound Ventures lead, True Ventures participating, May 2026)**, and newer third-party reports cite ~$10M ARR / 7,600 customers / 85% month-two retention. Figures across sources remain contradictory (a Feb 2026 Mixergy interview implied ~$689K run-rate), so **treat all revenue/customer counts as marketing/unverified — the funding round is the verifiable signal.** The "growing slower / churning out" framing from the prior note no longer holds; reps must NOT claim Polsia is shrinking. Pricing unchanged: $49/mo base + 20% revenue share.
+
+> **[2026-06-02 Review note — superseded above]** Prior note read ARR **fell** from $1.5M to $450K+ with ambiguous trajectory. Retained for institutional history; do not use the "ARR fell / rapid-growth framing no longer holds" talk track — it is reversed by the $30M round.
 
 ## Quick Facts
 
@@ -20,8 +22,9 @@ convergence_risk: High
 |-------|-------|
 | **Product** | Polsia -- autonomous AI company-operating platform. "AI that runs your company while you sleep." |
 | **Pricing** | $49/mo base (one nightly autonomous task + 5 on-demand credits; 10 bonus first month) **plus 20% revenue share**. |
-| **ARR** | $450K+ (per 2026-05-30 scan — corrected **down** from the $1.5M March claim; figures moved contradictorily, suggesting prior inflation or churn). |
-| **Managed Companies** | 500+ running autonomously (down from a prior 2,000+ claim; platform notes most customer businesses are "only weeks old"). |
+| **ARR** | Contradictory across sources: newer reports cite ~$10M ARR; a Feb 2026 Mixergy interview implied ~$689K run-rate; prior scans cited $1.5M then $450K. **All unverified — do not quote a single ARR figure as fact.** |
+| **Funding** | **$30M raised at $250M valuation (Sound Ventures lead, True Ventures participating, May 2026).** This is the verifiable traction signal. |
+| **Managed Companies** | ~7,600 business customers claimed (newer reports), with 85% month-two retention claimed; prior scans cited 500+ / 2,000+. Unverified. |
 | **Founder** | Ben Broca (solo founder). Philosophy: "80% AI, 20% taste." |
 | **Domain Coverage** | Engineering, marketing, cold outreach, social media, Meta ads. Missing: legal, finance, product strategy. |
 | **Key Features** | Role-based agents (CEO, Engineer, Growth Manager). Nightly autonomous cycles: evaluate company state, decide priorities, execute tasks, send founder morning summary. Polsia provisions all infrastructure (email, servers, databases, Stripe, GitHub). |
@@ -34,7 +37,7 @@ convergence_risk: High
 - Discussions about autonomous vs. human-in-the-loop AI company operation
 - Questions about whether CaaS means "no humans needed"
 - Price comparisons -- Polsia's $49 base matches Soleur's planned $49/month, but Polsia layers a 20% revenue share on top
-- Discussions about Polsia's traction; note the ARR figure was revised **down** ($1.5M → $450K+) between scans, so "rapid growth" framing no longer holds
+- Discussions about Polsia's traction; Polsia just raised **$30M at a $250M valuation** (May 2026) — a well-capitalized, venture-validated competitor. Lead with quality/control/coherence differentiation, not "they're shrinking" (they are not)
 
 ## Differentiator Table
 
@@ -49,7 +52,7 @@ convergence_risk: High
 | **Output quality** | Reportedly basic. Autonomous execution without human review. | Human-reviewed. Founder validates before publishing/shipping. | Soleur (quality) |
 | **Open source** | Proprietary, closed-source | Apache-2.0. Full source code. | Soleur |
 | **Platform dependency** | Claude Agent SDK (Anthropic). Cloud-locked. | Claude Code (Anthropic). Local-first. | Both share Anthropic dependency. Soleur is local-first. |
-| **Traction** | $450K+ ARR (revised down from $1.5M). 500+ companies. | Early stage. Dogfooded on soleur.ai. | Polsia (but trajectory now ambiguous) |
+| **Traction** | $30M raised at $250M valuation (May 2026); ARR claims contradictory (~$10M / ~$689K / unverified). | Early stage. Dogfooded on soleur.ai. | Polsia (well-capitalized; compete on quality/control, not size) |
 
 ## Talk Tracks
 
@@ -63,7 +66,7 @@ convergence_risk: High
 
 ### "Polsia has hundreds of companies running. That's real traction."
 
-**Response:** "Polsia validates the CaaS thesis -- solo founders will pay for automated company operation. That is good for the entire category, including Soleur. But note the figures have wobbled: ARR was revised down from $1.5M to $450K+ between scans, and the platform itself says most customer businesses are only weeks old. The question is what those companies produce. Polsia's autonomous output is reportedly basic -- nightly cycles with no human review. Soleur's bet is that the first billion-dollar solo company will not be built by an AI running on autopilot. It will be built by a founder whose judgment is amplified by AI across every domain. Companies running on autopilot are different from companies where the founder makes every strategic decision with full-context AI support."
+**Response:** "Polsia validates the CaaS thesis -- solo founders will pay for automated company operation, and investors agree: they just raised $30M at a $250M valuation. That is good for the entire category, including Soleur. The question is what those companies produce. Polsia's autonomous output is reportedly basic -- nightly cycles with no human review. Soleur's bet is that the first billion-dollar solo company will not be built by an AI running on autopilot. It will be built by a founder whose judgment is amplified by AI across every domain. Companies running on autopilot are different from companies where the founder makes every strategic decision with full-context AI support."
 
 ### "Polsia covers engineering, marketing, outreach, social media, and ads. That's close to Soleur."
 
@@ -75,7 +78,7 @@ convergence_risk: High
 |-----------|----------|
 | "Polsia provisions all infrastructure -- servers, email, Stripe, GitHub. Soleur doesn't." | "Polsia's infrastructure provisioning is part of the fully autonomous model -- you give up control in exchange for convenience. Soleur assumes you control your own infrastructure. For serious founders building real companies, infrastructure ownership matters. You choose your hosting, your payment processor, your email provider. The AI organization runs on top of infrastructure you own." |
 | "80% AI, 20% taste is the right balance." | "If that ratio works for you, Polsia is well-designed for it. Soleur's philosophy is different: AI handles 100% of execution, but the founder provides 100% of judgment. The compound skill doesn't just execute -- it captures what you decided and why, building institutional memory that makes every future decision better informed. The 20% taste model treats human input as a filter. The founder-as-decision-maker model treats human judgment as the compounding asset." |
-| "Polsia is growing faster. Why back the smaller player?" | "Polsia validates the market, but 'growing faster' needs an asterisk -- its reported ARR was revised down from $1.5M to $450K+ between scans. The question is sustainability and quality. Polsia's revenue share model creates friction at scale. Their fully autonomous output quality is a bet that 'good enough' automation beats 'excellent' human-guided execution. We believe the premium end of the CaaS market -- founders who care about quality, control, and compounding knowledge -- is where the long-term value lives." |
+| "Polsia is growing faster. Why back the smaller player?" | "Polsia is well-funded -- $30M at a $250M valuation -- and validates the market. We're not competing on size; we're competing on operating model. Polsia's revenue share model creates friction at scale (a founder earning $10k/month pays $2k to Polsia). Their fully autonomous output quality is a bet that 'good enough' automation beats 'excellent' human-guided execution. We believe the premium end of the CaaS market -- founders who care about quality, control, and compounding knowledge they own in git -- is where the long-term value lives." |
 
 ## Convergence Watch
 
@@ -86,9 +89,9 @@ Review monthly. Polsia is the most direct CaaS competitor.
 | Polsia adds legal, finance, or product strategy domains | 5 domains only. No signal of expansion into legal/finance/product. | Major escalation. The domain coverage gap narrows. Emphasize cross-domain knowledge compounding and workflow orchestration. |
 | Polsia implements cross-domain knowledge base | No structured knowledge base. No compounding memory. | Critical escalation. The strongest Soleur differentiator is neutralized. Shift to open source, local-first, and founder-in-the-loop as primary differentiators. |
 | Polsia drops revenue share model | Currently $49/month base + 20% revenue share. | Update pricing analysis. If Polsia goes flat-rate, Soleur's pricing must justify the delta with domain depth and knowledge compounding. |
-| Polsia crosses $5M ARR or 10,000 companies | $450K+ ARR (revised down from $1.5M), 500+ companies. Trajectory ambiguous. | Category is validated at scale. Accelerate CaaS category definition content. Conversely, if ARR keeps falling, the "fastest CaaS traction" framing should be retired entirely. |
+| Polsia crosses $5M ARR or 10,000 companies | Newer reports already claim ~$10M ARR / 7,600 customers (unverified). $30M raised at $250M valuation (May 2026). | Category is validated at scale and venture-backed. Accelerate CaaS category-definition content and lean into the differentiated axis (founder-in-the-loop, 8 domains, git-native owned memory, no revenue share). |
 | Polsia output quality improves materially | Reportedly basic autonomous output. | Reassess the "quality vs. automation" positioning. If autonomous output quality reaches "good enough" for most founders, the human-in-the-loop argument weakens. |
 
 ---
 
-_Updated: 2026-06-02. Source: competitive-intelligence.md (2026-05-30)._
+_Updated: 2026-06-08 (cascade from full six-tier scan). Source: competitive-intelligence.md (2026-06-08)._

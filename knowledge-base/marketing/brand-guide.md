@@ -309,6 +309,30 @@ Scope-aware typography: the **marketing surface** (Eleventy site at `plugins/sol
 - Example thread body: "2/ Company-as-a-Service runs every department with AI agents that share a compounding knowledge base. Marketing knows what engineering decided. Legal references the privacy policy. Context flows everywhere."
 - Example final tweet: "Full breakdown of what CaaS means and why it matters for solo founders:\n\nhttps://soleur.ai/company-as-a-service/\n\n#solofounder"
 
+#### Ship Tweets (feature-launch)
+
+Voice guidance for the `feature-tweet` skill — a feature **just shipped to
+production** announced as a draft short-form post. Sanitization (benefit-only,
+no implementation detail, no contributor/customer names) is **enforced** in the
+skill's generation prompt and the human approval gate, not by this section.
+
+- **Shape:** a single tweet (hook only) OR a numbered thread of **at most 3**
+  tweets (`2/`, `3/`). Ship news is small; do not pad to a full thread.
+- **Present-tense "just shipped X."** State what is live now — not "we're excited
+  to announce," not future tense. "Shipped." reads stronger than "launching."
+- **Lead the build-in-public peer voice** (see `### Audience Voice Profiles` →
+  General register): plain language, the founder building in the open. This is
+  the hook's primary audience.
+- **Land one concrete user-facing benefit for buyers** (see `### Value
+  Proposition Framings` → pain-point / memory-first): what the user can now do,
+  framed as the outcome, not the feature mechanism. One benefit, not a list.
+- **Benefit, not implementation.** Restate the diff as a capability the user
+  gains. No file names, no architecture, no "refactored the…".
+- **No naked numbers.** Any metric must be verifiable from the PR or omitted.
+- Inherits all `### X/Twitter` rules above (280-char/tweet, hook-first, links in
+  the final tweet only, no body hashtags). A ship tweet usually has no link —
+  omit the final-tweet CTA when there is no destination.
+
 #### Engagement Guardrails
 
 These guardrails apply in both automatic mode (fetch-mentions) and manual mode (Free tier 403 fallback). The human reviewer is the enforcement mechanism.
