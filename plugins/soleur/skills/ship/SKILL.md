@@ -812,10 +812,32 @@ Enforces the operator's standing rule — **every detected incident gets a post-
 git diff --name-only origin/main...HEAD | grep -E '^knowledge-base/engineering/operations/post-mortems/.+-postmortem\.md$'
 ```
 
-- **Match (a PIR was added/modified on this branch):** Pass. Confirm its frontmatter carries `brand_survival_threshold` and the Art. 33/34 fields (availability outages set both `false` with an `n/a` rationale; data-exposure incidents must evaluate the GDPR gate per `/soleur:incident` Phase 2).
+- **Match (a PIR was added/modified on this branch):** Pass *only after* confirming BOTH (1) frontmatter and (2) issue-backed action items:
+  1. **Frontmatter** carries `brand_survival_threshold` and the Art. 33/34 fields (availability outages set both `false` with an `n/a` rationale; data-exposure incidents must evaluate the GDPR gate per `/soleur:incident` Phase 2).
+  2. **Every row of the merged `## Action Items & Follow-ups` table cites a `#NNNN` GitHub issue** — OR the section is exactly the permitted no-item sentence. A bare bullet, an unchecked `- [ ]` without `#NNNN`, or a `TBD`/`(none)` placeholder FAILS the gate (a follow-up with no issue rots the moment the session ends — the exact gap that left PR #5003's `workspace_path`/`workspace_status` sweep untracked until #5005 was filed retroactively). Detection:
+
+     ```bash
+     PIR=$(git diff --name-only origin/main...HEAD | grep -E 'post-mortems/.+-postmortem\.md$' | head -n1)
+     sec=$(awk '/^## Action Items & Follow-ups/{f=1;next} /^## /{f=0} f' "$PIR")
+     if printf '%s' "$sec" | grep -qF 'No action items — incident fully resolved'; then
+       : # permitted no-item form — pass
+     else
+       # item rows = table rows minus the header and the |---|---| divider
+       rows=$(printf '%s\n' "$sec" | grep -E '^\s*\|' \
+              | grep -vE '^\s*\|\s*Issue\s*\|' \
+              | grep -vE '^\s*\|[-:| ]+\|\s*$')
+       bad=$(printf '%s\n' "$rows" | grep -vE '#[0-9]+' | sed '/^[[:space:]]*$/d')
+       if [ -n "$bad" ]; then
+         echo "[FAIL] PIR Action Items & Follow-ups has rows with no #NNNN issue:" >&2
+         echo "$bad" >&2
+       fi
+     fi
+     ```
+
+     If `bad` is non-empty: halt and require each unbacked item to be filed as a GitHub issue (cross-referencing the source PR) and its `#NNNN` recorded in the table, OR collapsed into the permitted no-item sentence when genuinely resolved. This applies in BOTH headless and interactive modes — file the issues, do not defer.
 - **No match:** the incident has no PIR. **Headless mode:** invoke `/soleur:incident` (or, if unavailable in the loaded plugin snapshot, author the PIR directly using `plugins/soleur/skills/incident/templates/pir.md` → `knowledge-base/engineering/operations/post-mortems/<slug>-postmortem.md`), commit it, then re-run the gate. **Interactive mode:** prompt — (a) run `/soleur:incident` now, (b) author the PIR inline, or (c) defer with a tracked `type/chore` issue carrying a `Re-eval by:` criterion AND the `deferred-automation` sentinel (only when the PIR genuinely needs data not yet available). Default-deny on "we'll write it later" with no tracked issue.
 
-**Also file the systemic follow-ups the PIR names** (alerting gaps, write-site sweeps) as their own issues — a PIR with `## Follow-ups` that never become issues is shelf-ware.
+**The merged `## Action Items & Follow-ups` table is the single home for residual work** (the former split `## Follow-ups` + `## Action Items` sections were consolidated so a concern cannot hide as a bare bullet in one while the issue-bearing list lives in the other). Each row's issue is filed BEFORE the row is written — a PIR whose follow-ups never become issues is shelf-ware.
 
 **If not triggered:** Skip silently (greenfield features, docs, refactors with no production-incident framing).
 
