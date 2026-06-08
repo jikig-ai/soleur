@@ -200,6 +200,54 @@ describe("previewShare — lookup and row-state branches", () => {
     expect(result.documentPath).toBe("readme.md");
   });
 
+  it("resolves off workspace_id even when it DIFFERS from the owner's workspace_path (ADR-044 divergence)", async () => {
+    // Stronger guard: the prior test couples workspace_id to the owner's
+    // workspace_path (both basename to the same temp dir), so it cannot prove
+    // the read keys off workspace_id rather than workspace_path. Here the two
+    // DIVERGE — the file lives ONLY under the workspace_id-resolved dir, while
+    // the owner's workspace_path points at a file-less dir. A regression that
+    // re-read workspace_path would 404; resolving off workspace_id returns 200.
+    const divergentId = "ws-divergent-from-userpath";
+    const divergentKbRoot = path.join(
+      // WORKSPACES_ROOT is set to dirname(tmpWorkspace) in beforeEach, so
+      // workspacePathForWorkspaceId(divergentId) lands here.
+      path.dirname(tmpWorkspace),
+      divergentId,
+      "knowledge-base",
+    );
+    fs.mkdirSync(divergentKbRoot, { recursive: true });
+    const bytes = Buffer.from("# lives only under workspace_id\n");
+    fs.writeFileSync(path.join(divergentKbRoot, "readme.md"), bytes);
+
+    const client = makeClient({
+      // Owner's legacy path points at tmpWorkspace, which does NOT contain the
+      // file — only the divergent workspace_id dir does.
+      users: { workspacePath: tmpWorkspace, workspaceStatus: "ready" },
+      kb_share_links: {
+        shareRow: {
+          document_path: "readme.md",
+          revoked: false,
+          content_sha256: hex(bytes),
+          // Explicit workspace_id wins over the mock's basename derivation.
+          workspace_id: divergentId,
+        },
+      },
+    });
+
+    const result = await previewShare(client as never, "tok");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.status).toBe(200);
+    expect(result.kind).toBe("markdown");
+    expect(result.documentPath).toBe("readme.md");
+
+    fs.rmSync(path.join(path.dirname(tmpWorkspace), divergentId), {
+      recursive: true,
+      force: true,
+    });
+  });
+
   it("returns 500 db-error and reports to Sentry on DB error (test 6)", async () => {
     const client = makeClient({
       users: readyWorkspace(),
