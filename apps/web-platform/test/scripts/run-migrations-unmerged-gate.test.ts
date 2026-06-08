@@ -51,6 +51,12 @@ const SYNTHETIC_FILE = `zzz_unmerged_gate_${randomBytes(4).toString("hex")}.sql`
 // `001_initial_schema.sql` (the earliest stable filename).
 const KNOWN_MERGED_FILE = "053_template_authorizations.sql";
 
+// Each runScript spawns bash + the psql stub + git + schema probes; give
+// headroom over the 16s global default so a slow/contended CI runner does not
+// flake. The minimal-fixture rewrite (2 git spawns vs ~130) is the real fix;
+// this is belt-and-braces.
+const SLOW_SUBPROCESS_TIMEOUT_MS = 45_000;
+
 // Track every tempdir mkdtempSync allocates so afterAll can sweep them.
 const stubDirs: string[] = [];
 
@@ -200,9 +206,7 @@ describe("scripts/run-migrations.sh — unmerged-apply gate (#4241)", () => {
     );
     expect(stdout).toMatch(/ALLOW_UNMERGED_DEV_APPLY=1/);
     expect(stderr).toBe("");
-    // Subprocess-heavy (bash + psql stub + git + schema probes per run); give
-    // headroom over the 16s global default for slow/contended CI runners.
-  }, 45_000);
+  }, SLOW_SUBPROCESS_TIMEOUT_MS);
 
   test("ALLOW_UNMERGED_DEV_APPLY=1: gate warns and proceeds (exit 0)", () => {
     const { stdout, status } = runScript({
@@ -218,7 +222,7 @@ describe("scripts/run-migrations.sh — unmerged-apply gate (#4241)", () => {
       new RegExp(`${SYNTHETIC_FILE} is not on origin/main`, "i"),
     );
     expect(stdout).toMatch(/ALLOW_UNMERGED_DEV_APPLY=1/);
-  }, 45_000);
+  }, SLOW_SUBPROCESS_TIMEOUT_MS);
 
   test("positive control: known-merged filename does NOT trigger the gate", () => {
     // Without this test, a regression that fires the gate for every file
@@ -238,5 +242,5 @@ describe("scripts/run-migrations.sh — unmerged-apply gate (#4241)", () => {
     expect(stdout).not.toMatch(
       new RegExp(`${KNOWN_MERGED_FILE}.*is not on origin/main`, "i"),
     );
-  }, 45_000);
+  }, SLOW_SUBPROCESS_TIMEOUT_MS);
 });

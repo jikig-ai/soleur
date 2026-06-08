@@ -426,6 +426,8 @@ export async function appendKbSyncRowForWorkspace(
     const { createServiceClient } = await import("@/lib/supabase/service");
     const service = createServiceClient();
     const { error } = await service.rpc("append_kb_sync_row_for_user", {
+      // p_user_id ← workspaceId: solo workspaces.id === users.id (ADR-038 N2).
+      // Non-solo ids that don't map to a users row UPDATE 0 rows (no error).
       p_user_id: workspaceId,
       p_row: row,
       p_cap: KB_SYNC_HISTORY_CAP,

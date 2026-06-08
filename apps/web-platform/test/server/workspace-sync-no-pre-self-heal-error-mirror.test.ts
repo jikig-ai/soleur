@@ -28,13 +28,19 @@ describe("workspace-sync — no pre-self-heal error mirror (#4906 AC6 / #4972 re
     const branchStart = SRC.indexOf(
       "if (errorClass === ERROR_CLASS_NON_FAST_FORWARD)",
     );
-    expect(branchStart).toBeGreaterThan(-1);
+    expect(
+      branchStart,
+      "non_fast_forward branch anchor not found — it was renamed; update this guard",
+    ).toBeGreaterThan(-1);
 
     const delegationIdx = SRC.indexOf(
       "return await selfHealNonFastForward",
       branchStart,
     );
-    expect(delegationIdx).toBeGreaterThan(branchStart);
+    expect(
+      delegationIdx,
+      "selfHealNonFastForward delegation anchor not found after the branch — it was renamed/moved; update this guard",
+    ).toBeGreaterThan(branchStart);
 
     // The self-healable branch, from entry to the delegation call. A
     // `reportSilentFallback` here is the exact error-level page #4972 removed.

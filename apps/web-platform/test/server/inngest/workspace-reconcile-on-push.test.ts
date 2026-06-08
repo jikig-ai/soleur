@@ -95,9 +95,14 @@ vi.mock("@/server/session-sync", async (importOriginal) => {
 
 const reportSilentFallbackSpy = vi.fn();
 const warnSilentFallbackSpy = vi.fn();
+// #4906 — owner-less drift warn routes through the per-workspace debounced
+// warn (mirrorWarnWithDebounce(err, ctx, key, errorClass)) to bound the
+// per-push Sentry volume under a systemic owner-canary regression.
+const mirrorWarnWithDebounceSpy = vi.fn();
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
   warnSilentFallback: warnSilentFallbackSpy,
+  mirrorWarnWithDebounce: mirrorWarnWithDebounceSpy,
   hashUserId: (s: string) => `hash-${s}`,
 }));
 
@@ -186,6 +191,7 @@ beforeEach(() => {
   appendKbSyncRowForWorkspaceSpy.mockClear();
   reportSilentFallbackSpy.mockReset();
   warnSilentFallbackSpy.mockReset();
+  mirrorWarnWithDebounceSpy.mockReset();
   loggerInfoSpy.mockReset();
   loggerWarnSpy.mockReset();
   loggerErrorSpy.mockReset();
@@ -581,7 +587,7 @@ describe("reconcile — owner-less workspace (#4906, workspace-keyed audit)", ()
     );
   });
 
-  it("AC-T3 (AC4): owner-less → exactly one warnSilentFallback op=ownerless-reconcile naming workspace_id; no error mirror for the benign recovery", async () => {
+  it("AC-T3 (AC4): owner-less → exactly one debounced warn op=ownerless-reconcile keyed on workspace_id; no error mirror for the benign recovery", async () => {
     WORKSPACE_ROWS = [{ id: "ws-orphan" }];
     EXISTING_DIRS.add(wsPath("ws-orphan"));
     syncWorkspaceSpy.mockResolvedValue({ ok: true, recovered: true });
@@ -589,16 +595,19 @@ describe("reconcile — owner-less workspace (#4906, workspace-keyed audit)", ()
     const handler = await importHandler();
     await handler({ event: makeEvent(), step: makeStep(), logger });
 
-    const ownerlessWarns = warnSilentFallbackSpy.mock.calls.filter(
-      (c) => (c[1] as { op?: string }).op === "ownerless-reconcile",
-    );
-    expect(ownerlessWarns).toHaveLength(1);
-    expect(ownerlessWarns[0]![1]).toEqual(
+    // The drift warn routes through mirrorWarnWithDebounce(err, ctx, key,
+    // errorClass) — keyed on ws.id so a systemic cohort drift does not flood
+    // Sentry once-per-push.
+    expect(mirrorWarnWithDebounceSpy).toHaveBeenCalledTimes(1);
+    const [, ctx, key, errorClass] = mirrorWarnWithDebounceSpy.mock.calls[0]!;
+    expect(ctx).toEqual(
       expect.objectContaining({
         op: "ownerless-reconcile",
         extra: expect.objectContaining({ workspaceId: "ws-orphan" }),
       }),
     );
+    expect(key).toBe("ws-orphan");
+    expect(errorClass).toBe("ownerless-reconcile");
     // The benign recovery must NOT page an error-level Sentry issue.
     expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
   });
@@ -625,11 +634,8 @@ describe("reconcile — owner-less workspace (#4906, workspace-keyed audit)", ()
       expect.objectContaining({ op: "skip-not-ready" }),
     );
     // …and the owner-drift warn fires exactly once for this workspace.
-    expect(
-      warnSilentFallbackSpy.mock.calls.filter(
-        (c) => (c[1] as { op?: string }).op === "ownerless-reconcile",
-      ),
-    ).toHaveLength(1);
+    expect(mirrorWarnWithDebounceSpy).toHaveBeenCalledTimes(1);
+    expect(mirrorWarnWithDebounceSpy.mock.calls[0]![2]).toBe("ws-orphan");
   });
 
   it("AC-T5 (AC8): owner-PRESENT workspaces are unaffected — owner path fires, workspace-keyed path does NOT", async () => {
@@ -644,11 +650,7 @@ describe("reconcile — owner-less workspace (#4906, workspace-keyed audit)", ()
     expect(appendKbSyncRowSpy).toHaveBeenCalledTimes(1);
     expect(appendKbSyncRowForWorkspaceSpy).not.toHaveBeenCalled();
     // No owner-drift warn on the healthy owner-attributed path.
-    expect(
-      warnSilentFallbackSpy.mock.calls.filter(
-        (c) => (c[1] as { op?: string }).op === "ownerless-reconcile",
-      ),
-    ).toHaveLength(0);
+    expect(mirrorWarnWithDebounceSpy).not.toHaveBeenCalled();
   });
 });
 

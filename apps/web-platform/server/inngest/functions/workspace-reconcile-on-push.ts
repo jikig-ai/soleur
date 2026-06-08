@@ -20,6 +20,7 @@ import { inngest } from "@/server/inngest/client";
 import {
   reportSilentFallback,
   warnSilentFallback,
+  mirrorWarnWithDebounce,
 } from "@/server/observability";
 import { syncWorkspace } from "@/server/kb-route-helpers";
 import { normalizeRepoUrl } from "@/lib/repo-url";
@@ -272,13 +273,25 @@ export async function workspaceReconcileOnPushHandler({
           : appendKbSyncRowForWorkspace(ws.id, row);
 
       if (!ownerId) {
-        warnSilentFallback(new Error("owner-less workspace reconciled"), {
-          feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
-          op: "ownerless-reconcile",
-          extra: { workspaceId: ws.id, installationId, deliveryId },
-          message:
-            "Owner-canary row missing — reconciled via workspace-keyed audit",
-        });
+        // Per-workspace 5-min TTL on the Sentry mirror (mirrorWarnWithDebounce,
+        // keyed on ws.id). A SYSTEMIC owner-canary regression (a provisioning
+        // bug dropping owner rows for a whole cohort) would otherwise emit one
+        // warn per owner-less workspace PER PUSH — the same per-push alert-flood
+        // class this handler already de-noised for the ignored-repo breadcrumb
+        // (#4706). Debouncing collapses it to one event per workspace per
+        // window while still surfacing each distinct drifted workspace.
+        mirrorWarnWithDebounce(
+          new Error("owner-less workspace reconciled"),
+          {
+            feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
+            op: "ownerless-reconcile",
+            extra: { workspaceId: ws.id, installationId, deliveryId },
+            message:
+              "Owner-canary row missing — reconciled via workspace-keyed audit",
+          },
+          ws.id,
+          "ownerless-reconcile",
+        );
       }
 
       const workspacePath = workspacePathForWorkspaceId(ws.id);
