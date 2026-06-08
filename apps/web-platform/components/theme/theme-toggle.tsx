@@ -79,11 +79,15 @@ export function ThemeToggle({ collapsed }: { collapsed: boolean }) {
         data-theme-next={next.value}
         onClick={() => setTheme(next.value)}
         aria-label={`Theme: ${current.label}`}
+        // Collapsed rail: the theme cycle is the lowest-priority chrome, so it
+        // matches the quiet Status / Settings / Sign out footer icons —
+        // full-width, 44px touch target, centered, muted with a hover wash —
+        // instead of an oversized bordered gold circle that visually outweighs
+        // every other nav icon and sits off the centered icon-column axis.
         className={[
-          "flex h-9 w-9 shrink-0 items-center justify-center rounded-full",
-          "border border-soleur-border-default bg-soleur-bg-surface-2",
-          "text-soleur-accent-gold-fg transition-colors",
-          "hover:ring-1 hover:ring-inset hover:ring-soleur-border-emphasized",
+          "flex min-h-[44px] w-full items-center justify-center rounded-lg",
+          "text-soleur-text-muted transition-colors",
+          "hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary",
           "focus-visible:outline focus-visible:outline-2",
           "focus-visible:outline-offset-2 focus-visible:outline-soleur-border-emphasized",
         ].join(" ")}

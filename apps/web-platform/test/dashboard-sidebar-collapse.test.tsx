@@ -99,7 +99,7 @@ describe("Dashboard sidebar collapse", () => {
 
   // Reclaimed-space restructure: the dedicated desktop toggle row was removed so
   // the workspace context band rises to the sidebar top (~45px reclaimed). The
-  // collapse toggle is now FLOATED (`absolute right-3 top-3`, `md:flex`) instead of
+  // collapse toggle is now FLOATED (`absolute right-3 top-10`, `md:flex`) instead of
   // living in an in-flow row. jsdom has no layout engine, so this pins the
   // className tokens against a silent revert to the old in-flow row; the pixel
   // proof (reclaimed space + no chevron/tile overlap) lives in the e2e VRT gate
@@ -109,8 +109,33 @@ describe("Dashboard sidebar collapse", () => {
     const toggle = screen.getByLabelText("Collapse sidebar");
     expect(toggle.className).toContain("absolute");
     expect(toggle.className).toContain("md:flex");
-    expect(toggle.className).toContain("top-3");
+    // top-10 (40px) vertically centers the h-6 toggle on the workspace pill, whose
+    // center sits ~52px below the aside top (the band is offset ~12px below the aside
+    // top + pt-2 + pill half-height); not the old top-3 corner offset that read ~28px
+    // high. jsdom has no layout engine, so this is a className drift tripwire; the
+    // pixel proof (≤2px rect-center alignment) lives in e2e/nav-states-shell.e2e.ts (AC1).
+    expect(toggle.className).toContain("top-10");
+    expect(toggle.className).not.toContain("top-3");
     expect(toggle.className).toContain("right-3");
+  });
+
+  // When the rail is collapsed the floated toggle no longer pins to the right
+  // edge (`right-3`) — it centers on the same vertical axis as the monogram
+  // tile + the icon-only nav column below it, so the collapsed rail reads as
+  // one clean centered column instead of a top-right-corner control sitting
+  // off-axis above the logo. Expanded keeps `right-3` (the workspace pill
+  // corner). jsdom has no layout engine: this is a className drift tripwire;
+  // the pixel proof (inside-rail + no monogram overlap) lives in
+  // e2e/nav-states-shell.e2e.ts (AC4).
+  it("centers the collapse toggle on the icon column when the rail is collapsed (not pinned right-3)", async () => {
+    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
+    await userEvent.click(screen.getByLabelText("Collapse sidebar"));
+    const toggle = screen.getByLabelText("Expand sidebar");
+    expect(toggle.className).toContain("left-1/2");
+    expect(toggle.className).toContain("-translate-x-1/2");
+    expect(toggle.className).not.toContain("right-3");
+    // Vertical offset is unchanged — still top-10.
+    expect(toggle.className).toContain("top-10");
   });
 
   it("toggles aria-label when collapse toggle is clicked", async () => {

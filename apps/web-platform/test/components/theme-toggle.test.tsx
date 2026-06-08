@@ -202,5 +202,37 @@ describe("ThemeToggle", () => {
       expect(button.getAttribute("data-theme-current")).toBe("dark");
       expect(button.getAttribute("data-theme-next")).toBe("light");
     });
+
+    // The collapsed cycle button is the lowest-priority chrome in the rail —
+    // it must read as a quiet icon matching the Status / Settings / Sign out
+    // footer icons (full-width, 44px touch target, centered, muted), NOT an
+    // oversized bordered gold circle (h-9 w-9 rounded-full border accent-gold)
+    // that visually outweighs every other nav icon and sits off the icon-column
+    // axis. The glyph stays at the shared 16px (h-4 w-4) nav-icon size.
+    it("renders the collapsed cycle button with the muted footer-icon treatment, not an oversized gold chip", () => {
+      localStorage.setItem(STORAGE_KEY, "system");
+      renderToggle({ collapsed: true });
+      const button = screen.getByTestId("theme-cycle-button");
+
+      // Sized + aligned like the sibling footer icons.
+      expect(button.className).toContain("min-h-[44px]");
+      expect(button.className).toContain("w-full");
+      expect(button.className).toContain("justify-center");
+      expect(button.className).toContain("text-soleur-text-muted");
+
+      // The oversized / loud chip treatment is gone.
+      expect(button.className).not.toContain("h-9");
+      expect(button.className).not.toContain("w-9");
+      expect(button.className).not.toContain("rounded-full");
+      // No solid bordered-circle chip (the muted hover wash
+      // `hover:bg-soleur-bg-surface-2/60` shared with the sibling footer icons
+      // is intentional, so assert the bordered-chip marker is gone, not the bg).
+      expect(button.className).not.toContain("border border-");
+      expect(button.className).not.toContain("accent-gold");
+
+      // The glyph stays at the shared 16px nav-icon size.
+      const svg = button.querySelector("svg");
+      expect(svg?.getAttribute("class") ?? "").toContain("h-4 w-4");
+    });
   });
 });

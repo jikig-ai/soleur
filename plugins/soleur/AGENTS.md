@@ -58,6 +58,19 @@ loader scans `plugins/soleur/{commands,skills,agents}/` only. Edits to the
 sidecars route through the `cq-agents-md-tier-gate` placement gate and the
 `session-rules-loader.sh` SessionStart hook.
 
+**Workflow scripts (`skills/<name>/workflows/<name>.workflow.js`).** A skill
+whose shape is deterministic multi-agent orchestration (parallel fan-out /
+loop-until-dry / fan-out-then-verify) MAY ship a dynamic-workflow ([`Workflow`
+tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code))
+port alongside its `SKILL.md`, in a `workflows/` subdirectory. These are **not**
+plugin components — the skill loader does not recurse into subdirectories, so
+they are not counted in README component tables. Each script is **self-contained**
+(the Workflow runtime has no filesystem/import access, so shared helpers like
+`safeTitle`/`safeId` are duplicated per script by design — keep the metacharacter
+sets identical across copies). The parent `SKILL.md` links its workflow via an
+opt-in pointer; the prose skill stays the default. Decision record + the full
+migrate-vs-keep inventory: `knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`.
+
 ### Adding a New Domain
 
 To add a new domain (e.g., product, growth):
