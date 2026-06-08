@@ -332,13 +332,30 @@ export default function DashboardLayout({
           </button>
         </div>
 
-        {/* Desktop collapse toggle — FLOATED in the rail's top-right corner so it
-            costs ZERO vertical space (the workspace band now owns the sidebar top).
+        {/* Desktop collapse toggle — FLOATED in the rail's top-right so it costs
+            ZERO vertical space (the workspace band now owns the sidebar top).
             Absolutely positioned against the <aside> (its md:relative containing
-            block), NOT in the flex-col flow. `right-3 top-3` mirrors the existing
-            corner-control convention in components/ui/error-card.tsx (do not invent
-            a new offset). z-10 lifts it above the band's static content; the
-            multi-workspace switcher dropdown opens DOWNWARD (`top-full`) in a
+            block), NOT in the flex-col flow. EXPANDED: `right-3` pins it to the rail's
+            top-right, the corner of the workspace pill. COLLAPSED: `left-1/2
+            -translate-x-1/2` centers it on the same vertical axis as the monogram tile
+            and the icon-only nav column below, so the collapsed rail reads as one clean
+            centered column (the right-3 corner control sat off-axis above the logo).
+            Vertical: EXPANDED `top-10` (40px) vertically CENTERS the h-6 (24px) button
+            on the workspace pill row's center. COLLAPSED `top-3` pins it HIGH near the
+            rail top — there is no pill to center on, and at top-10 the button's bottom
+            edge (64px) landed flush with the monogram tile (pt-16 → 64px) and read as
+            crowding the logo; top-3 lifts it clear. The toggle is positioned against the <aside>,
+            but the band (and its pill) sits ~12px BELOW the aside top (the reclaimed-
+            space offset — VRT-measured, asserted ≤12). The pill leads the band at pt-2
+            (8px) and is 64px tall (lg h-11 tile + py-2.5), so its center sits at
+            12+8+32 = 52px from the aside top; the toggle's center at 40+12 = 52px.
+            (VRT-derived: top-7 left a 12px residual = the band offset.) This follows the repo's
+            CENTER-against-an-adjacent-element convention (components/kb/file-tree.tsx,
+            components/kb/search-overlay.tsx) rather than the fixed top-right CORNER
+            convention (components/ui/error-card.tsx) — the toggle aligns to a card's
+            center, not a card's corner, so the corner `top-3` it originally mirrored
+            (PR #4997) read ~28px high. z-10 lifts it above the band's static content;
+            the multi-workspace switcher dropdown opens DOWNWARD (`top-full`) in a
             disjoint vertical band and a separate stacking context, so there is no
             cross-context z race. The expanded pill row (md:pr) and the collapsed
             icon column (pt) reserve clearance so this never overlaps the workspace
@@ -350,7 +367,7 @@ export default function DashboardLayout({
           onClick={toggleCollapsed}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           title={collapsed ? "Expand sidebar (⌘B)" : "Collapse sidebar (⌘B)"}
-          className="absolute right-3 top-3 z-10 hidden h-6 w-6 items-center justify-center rounded text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary md:flex"
+          className={`absolute ${collapsed ? "left-1/2 -translate-x-1/2 top-3" : "right-3 top-10"} z-10 hidden h-6 w-6 items-center justify-center rounded text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary md:flex`}
         >
           <PanelToggleIcon className="h-4 w-4" />
         </button>
