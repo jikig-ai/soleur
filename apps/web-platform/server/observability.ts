@@ -364,6 +364,10 @@ export function infoSilentFallback(
  *   `${installationId}:${targetRepoUrl}`, an in-process token, NOT a userId —
  *   the expected zero-workspace skip on every push to a workspace-less install,
  *   debounced so it stops flooding the same alert family as #4571 — see #4597).
+ *   Also `ownerless-reconcile` (warn-level via `mirrorWarnWithDebounce`; dedup
+ *   key is the `workspace_id`, an in-process token, NOT a userId — a systemic
+ *   owner-canary regression would otherwise emit one warn per owner-less
+ *   workspace per push; see #4906).
  *
  * Each feature picks a distinct `errorClass` so the per-key TTL bucket
  * cannot collide across features for the same user.

@@ -20,6 +20,7 @@ import { inngest } from "@/server/inngest/client";
 import {
   reportSilentFallback,
   warnSilentFallback,
+  mirrorWarnWithDebounce,
 } from "@/server/observability";
 import { syncWorkspace } from "@/server/kb-route-helpers";
 import { normalizeRepoUrl } from "@/lib/repo-url";
@@ -32,6 +33,7 @@ import {
   ERROR_CLASS_WORKSPACE_NOT_READY,
   ERROR_CLASS_SYNC_FAILED,
   appendKbSyncRow,
+  appendKbSyncRowForWorkspace,
 } from "@/server/session-sync";
 import logger from "@/server/logger";
 
@@ -258,6 +260,44 @@ export async function workspaceReconcileOnPushHandler({
         .maybeSingle();
       const ownerId = (ownerRow as { user_id?: string } | null)?.user_id ?? null;
 
+      // #4906 — an owner-less workspace is an invariant drift (every solo
+      // workspace should carry a workspace_members(role='owner') canary row,
+      // ADR-038 N2). It still self-heals + syncs (#4901), but the audit row
+      // was previously skipped behind `if (ownerId)`, leaving the recovery
+      // invisible in the admin analytics forensic trail. We now (a) write the
+      // audit row via the workspace-keyed service-role path, and (b) surface the
+      // drift at warn level (non-paging) so the operator can repair the canary.
+      // appendKbSyncRowForWorkspace takes the service-role `service` client as a
+      // param — session-sync.ts must not import createServiceClient itself (it
+      // is tenant-only per .service-role-allowlist; the privilege-acquisition
+      // site stays here, in the allowlisted handler).
+      const writeAuditRow = (row: Parameters<typeof appendKbSyncRow>[1]) =>
+        ownerId
+          ? appendKbSyncRow(ownerId, row)
+          : appendKbSyncRowForWorkspace(service, ws.id, row);
+
+      if (!ownerId) {
+        // Per-workspace 5-min TTL on the Sentry mirror (mirrorWarnWithDebounce,
+        // keyed on ws.id). A SYSTEMIC owner-canary regression (a provisioning
+        // bug dropping owner rows for a whole cohort) would otherwise emit one
+        // warn per owner-less workspace PER PUSH — the same per-push alert-flood
+        // class this handler already de-noised for the ignored-repo breadcrumb
+        // (#4706). Debouncing collapses it to one event per workspace per
+        // window while still surfacing each distinct drifted workspace.
+        mirrorWarnWithDebounce(
+          new Error("owner-less workspace reconciled"),
+          {
+            feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
+            op: "ownerless-reconcile",
+            extra: { workspaceId: ws.id, installationId, deliveryId },
+            message:
+              "Owner-canary row missing — reconciled via workspace-keyed audit",
+          },
+          ws.id,
+          "ownerless-reconcile",
+        );
+      }
+
       const workspacePath = workspacePathForWorkspaceId(ws.id);
 
       // Readiness = filesystem existence (ADR-044, operator decision). A
@@ -269,20 +309,18 @@ export async function workspaceReconcileOnPushHandler({
           extra: { workspaceId: ws.id, installationId, deliveryId },
           message: "Workspace dir not provisioned — skipping reconcile",
         });
-        if (ownerId) {
-          const skipAt = Date.now();
-          await appendKbSyncRow(ownerId, {
-            at: new Date(skipAt).toISOString(),
-            trigger: "webhook_push",
-            sha_before: beforeSha,
-            sha_after: headSha,
-            ok: false,
-            error_class: ERROR_CLASS_WORKSPACE_NOT_READY,
-            push_received_at: pushReceivedAt,
-            sync_completed_at: skipAt,
-            workspace_id: ws.id, // #4728 — discriminator (id in scope from fan-out loop)
-          });
-        }
+        const skipAt = Date.now();
+        await writeAuditRow({
+          at: new Date(skipAt).toISOString(),
+          trigger: "webhook_push",
+          sha_before: beforeSha,
+          sha_after: headSha,
+          ok: false,
+          error_class: ERROR_CLASS_WORKSPACE_NOT_READY,
+          push_received_at: pushReceivedAt,
+          sync_completed_at: skipAt,
+          workspace_id: ws.id, // #4728 — discriminator (id in scope from fan-out loop)
+        });
         return { synced: false };
       }
 
@@ -301,39 +339,35 @@ export async function workspaceReconcileOnPushHandler({
           extra: { workspaceId: ws.id, installationId, deliveryId },
           message: "Workspace sync failed",
         });
-        if (ownerId) {
-          await appendKbSyncRow(ownerId, {
-            at,
-            trigger: "webhook_push",
-            sha_before: beforeSha,
-            sha_after: headSha,
-            ok: false,
-            // Real class from the git stderr/exit signature — `syncWorkspace`
-            // classifies non_fast_forward vs sync_failed (and self-heals a
-            // diverged clone first). No longer hard-coded.
-            error_class: syncResult.errorClass,
-            push_received_at: pushReceivedAt,
-            sync_completed_at: completedAt,
-            workspace_id: ws.id, // #4728 — discriminator (id in scope from fan-out loop)
-          });
-        }
-        return { synced: false };
-      }
-
-      if (ownerId) {
-        await appendKbSyncRow(ownerId, {
+        await writeAuditRow({
           at,
           trigger: "webhook_push",
           sha_before: beforeSha,
           sha_after: headSha,
-          ok: true,
-          // true when a diverged clone was self-healed via reset (vs clean pull)
-          recovered: syncResult.recovered,
+          ok: false,
+          // Real class from the git stderr/exit signature — `syncWorkspace`
+          // classifies non_fast_forward vs sync_failed (and self-heals a
+          // diverged clone first). No longer hard-coded.
+          error_class: syncResult.errorClass,
           push_received_at: pushReceivedAt,
           sync_completed_at: completedAt,
           workspace_id: ws.id, // #4728 — discriminator (id in scope from fan-out loop)
         });
+        return { synced: false };
       }
+
+      await writeAuditRow({
+        at,
+        trigger: "webhook_push",
+        sha_before: beforeSha,
+        sha_after: headSha,
+        ok: true,
+        // true when a diverged clone was self-healed via reset (vs clean pull)
+        recovered: syncResult.recovered,
+        push_received_at: pushReceivedAt,
+        sync_completed_at: completedAt,
+        workspace_id: ws.id, // #4728 — discriminator (id in scope from fan-out loop)
+      });
       return { synced: true };
     });
     if (outcome.synced) synced += 1;
