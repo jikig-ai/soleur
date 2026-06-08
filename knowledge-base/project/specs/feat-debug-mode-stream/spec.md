@@ -37,6 +37,12 @@ understand and improve harness behaviour, which the Phase-4 dogfooding loop depe
 - Persisting / saving debug transcripts — separate plan + mandatory DPIA.
 - Any customer-facing debug surface.
 - Changing the #2138 invariant outside the debug toggle.
+- Agent-native get/set tool pair for `debug_mode` (mirroring `workspace_*_autonomous`) —
+  deferred. `debug_mode` is dev-only/render-only, and the Concierge surface exposes no
+  platform MCP tools until #3722 (`CC_MCP_ALLOWLIST` promotion), so even the existing
+  autonomous parity tools are unreachable from the user-facing router today. Fold a
+  `debug_mode` tool pair into that promotion if/when wanted; the RPCs + server helpers are
+  already tool-ready (owner-write enforced in the SECURITY DEFINER RPC).
 
 ## Functional Requirements
 

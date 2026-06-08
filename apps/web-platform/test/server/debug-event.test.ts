@@ -120,6 +120,42 @@ describe("(b) redaction + wire-bytes invariant (AC4)", () => {
     expect(wire).not.toContain(GENERIC_BEARER);
   });
 
+  it("opaque values under credential-noun keys are dropped to [redacted-key]", () => {
+    // No sentinel prefix, no self-anchor — the KEY is the only signal. Each of
+    // these would otherwise ride the wire verbatim (review P1).
+    const OPAQUE = "Zk9pQ2x3bXZ4eTdhYjEyMzQ1Njc4OTBhYmNk";
+    const keys = [
+      "passphrase", "sessionid", "session_id", "csrf", "xsrf", "mnemonic",
+      "recovery_code", "seed", "salt", "nonce", "otp", "x-api-key",
+      "userPassphrase", "apiSecret", "clientSecret", "sessionToken",
+    ];
+    for (const key of keys) {
+      const frame = buildDebugEvent({
+        kind: "tool_use",
+        toolName: "Bash",
+        rawValue: { [key]: OPAQUE, nested: { [key]: OPAQUE } },
+      });
+      const wire = serialize(frame);
+      expect(wire, `key=${key} leaked`).not.toContain(OPAQUE);
+    }
+  });
+
+  it("DOCUMENTED RESIDUAL: a generic no-sentinel secret under a NON-credential key is NOT redacted (accepted v1 gap)", () => {
+    // This pins the accepted limitation named in the plan's User-Brand Impact:
+    // an allowlist redactor cannot catch a generic high-entropy value when
+    // neither the value (no sentinel) nor the key (not credential) signals it.
+    // Same class as the reasoning-prose residual. If this ever starts passing
+    // (value redacted), the redactor gained generic-entropy detection — update
+    // the plan's residual-risk note.
+    const GENERIC = "9f3a7c1e8b2d4f6a0c5e7d9b1a3f5c7e9d1b3a5f";
+    const frame = buildDebugEvent({
+      kind: "tool_use",
+      toolName: "Bash",
+      rawValue: { note: `the password is ${GENERIC}` },
+    });
+    expect(serialize(frame)).toContain(GENERIC); // documents the accepted gap
+  });
+
   it("reasoning prose quoting sk-ant-/AKIA → sentinel never reaches the wire", () => {
     for (const secret of [ANTHROPIC, AKIA]) {
       const frame = buildDebugEvent({

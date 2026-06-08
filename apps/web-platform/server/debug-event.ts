@@ -38,17 +38,31 @@ const DROP_PLACEHOLDER = "[input withheld: failed redaction probe]";
 // form) cannot see the credential context, but the KEY can. This is the
 // structured-JSON complement to per-leaf redaction.
 const CREDENTIAL_KEY_SEGMENTS = new Set([
-  "token", "key", "secret", "password", "passwd", "pat", "credential",
-  "credentials", "auth", "authorization", "apikey", "bearer", "cookie",
-  "session", "jwt", "privatekey", "accesskey", "clientsecret",
+  "token", "key", "secret", "password", "passwd", "passphrase", "passcode",
+  "pwd", "pat", "credential", "credentials", "auth", "authorization", "apikey",
+  "bearer", "cookie", "session", "sessionid", "jwt", "privatekey", "accesskey",
+  "clientsecret", "csrf", "xsrf", "mnemonic", "seed", "salt", "nonce", "otp",
+  "totp", "mfa", "pin", "recovery", "signature", "sig", "gpg", "pgp",
 ]);
+
+// Substring fallback for camelCase / no-separator compounds the segment split
+// can't decompose (e.g. `xSessionId`, `userPassphrase`, `apiSecret`). High-
+// signal nouns only — over-redaction of a non-secret is an acceptable cost on a
+// dev-only debug surface; under-redaction is a single-user incident.
+const CREDENTIAL_KEY_SUBSTRINGS = [
+  "secret", "token", "passwd", "password", "passphrase", "apikey", "credential",
+  "mnemonic", "privatekey", "sessionid",
+];
 
 function isCredentialKey(key: string): boolean {
   const lower = key.toLowerCase();
   if (CREDENTIAL_KEY_SEGMENTS.has(lower)) return true;
-  return key
-    .split(/[_\-.\s]+/)
-    .some((seg) => CREDENTIAL_KEY_SEGMENTS.has(seg.toLowerCase()));
+  if (
+    key.split(/[_\-.\s]+/).some((seg) => CREDENTIAL_KEY_SEGMENTS.has(seg.toLowerCase()))
+  ) {
+    return true;
+  }
+  return CREDENTIAL_KEY_SUBSTRINGS.some((s) => lower.includes(s));
 }
 
 /**
@@ -121,25 +135,28 @@ export function buildDebugEvent(args: {
       // Circular / unserializable input → emit an empty body, not a throw.
       serialized = "";
     }
-    const body = capUtf8Bytes(serialized, COMMAND_STREAM_TOTAL_CAP_BYTES).text;
-
-    if (debugRedactionProbeTrips(body)) {
+    // Probe the FULL pre-cap string: a redactor-miss that straddles the byte
+    // cap could otherwise be truncated such that the surviving prefix no longer
+    // matches the probe — letting a partial secret ride the wire. Redaction
+    // already bounds regex back-tracking (MAX_INPUT_LEN), so probing pre-cap is
+    // safe. Cap only AFTER the DROP decision (fail-closed).
+    if (debugRedactionProbeTrips(serialized)) {
       return { type: "debug_event", kind: "tool_use", label, body: DROP_PLACEHOLDER };
     }
+    const body = capUtf8Bytes(serialized, COMMAND_STREAM_TOTAL_CAP_BYTES).text;
     return { type: "debug_event", kind: "tool_use", label, body };
   }
 
   // reasoning / result — rawValue is a string. No label.
   const raw = typeof rawValue === "string" ? rawValue : "";
-  const body = capUtf8Bytes(
-    redactCommandForDisplay(raw),
-    COMMAND_STREAM_TOTAL_CAP_BYTES,
-  ).text;
-  if (body.length === 0) return null;
-  // A prose secret that survived redaction (e.g. a sentinel key narrated in
-  // assistant text) → DROP the whole frame. Unlike tool_use there is no
-  // structured label worth preserving.
-  if (debugRedactionProbeTrips(body)) return null;
+  const redacted = redactCommandForDisplay(raw);
+  if (redacted.length === 0) return null;
+  // Probe the FULL pre-cap redacted string (boundary-straddle protection, as in
+  // the tool_use path). A prose secret that survived redaction (e.g. a sentinel
+  // key narrated in assistant text) → DROP the whole frame; unlike tool_use
+  // there is no structured label worth preserving.
+  if (debugRedactionProbeTrips(redacted)) return null;
+  const body = capUtf8Bytes(redacted, COMMAND_STREAM_TOTAL_CAP_BYTES).text;
   return { type: "debug_event", kind, body };
 }
 

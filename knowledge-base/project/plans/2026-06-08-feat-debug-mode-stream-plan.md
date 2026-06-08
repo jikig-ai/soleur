@@ -80,11 +80,25 @@ or, worst case, an un-redacted secret rendered into their conversation surface.
 tenant; (3) any persistence path writing a `debug_event` to `messages`, logs, or Sentry.
 
 **Residual risk (accepted, documented):** an allowlist redactor cannot catch a *generic,
-no-sentinel* secret narrated in free-form assistant prose (`reasoning`→`onText`) — e.g.
-"the password is hunter2-9f3a". Sentinel-prefixed shapes (`sk-ant-`, `ghp_`, JWT) and PII
-regexes fire; an arbitrary high-entropy string in prose does not. The probe superset (P0-5)
-covers structured shapes; prose-narrated generic secrets remain a known v1 gap on an
-operator-only surface. Documented here rather than over-engineered away.
+no-sentinel* secret when neither the value (no sentinel prefix) nor its context signals it.
+Three accepted shapes, same class, all dev-cohort-only:
+1. **Prose** — a secret narrated in free-form assistant text (`reasoning`→`onText`), e.g.
+   "the password is hunter2-9f3a".
+2. **A tool_use string VALUE under a NON-credential key** — key-aware redaction
+   (`isCredentialKey`, hardened post-review to cover `passphrase`/`sessionid`/`csrf`/
+   `mnemonic`/`recovery`/… as segments + a camelCase substring fallback) drops the value
+   only when the KEY is a credential noun; a generic value under a benign key
+   (`{"note":"the password is hunter2-9f3a"}`) rides. Pinned by an AC4 acceptance fixture.
+3. **A positional credential in a Bash `command` string** — `curl -u user:<opaque>` carries
+   no `scheme://` userinfo or `KEY=` anchor; shared with the pre-existing `command_stream`
+   redactor limit.
+
+Sentinel-prefixed shapes (`sk-ant-`, `ghp_`, `AKIA`, Stripe, JWT), credential-keyed values,
+connection-string userinfo, and PII regexes all fire; an arbitrary high-entropy string with
+no sentinel/key/anchor signal does not. The probe superset (P0-5) covers every structured
+shape the redactor recognizes; the three cases above remain a known v1 gap on an
+operator-only surface — documented rather than over-engineered away (generic-entropy
+detection would false-positive on the legitimate identifiers/hashes the operator needs).
 
 **Brand-survival threshold:** `single-user incident`. CPO sign-off carried forward from
 brainstorm Phase 0.1 triad. `user-impact-reviewer` runs at PR review.
