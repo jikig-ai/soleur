@@ -25,10 +25,12 @@ import {
   buildCronEvalSettings,
   CRON_BASH_ALLOWLISTS,
   DEFAULT_CLAUDE_SETTINGS,
+  runHookSelfTest,
   spawnClaudeEval,
   spawnSimple,
   STDOUT_TAIL_CAP_BYTES,
 } from "@/server/inngest/functions/_cron-claude-eval-substrate";
+import { join } from "node:path";
 
 // #4684/#4689 — crons mkdtemp'd under os.tmpdir() (the 256 MB /tmp tmpfs in
 // prod), so a git clone of the ~100 MB soleur tree ENOSPC'd. The fix routes the
@@ -163,6 +165,32 @@ describe("roadmap-review prompt commands vs the hook (AC4b/AC4c)", () => {
   ];
   it.each(DENIED)("DENIES: %s", (cmd) => {
     expect(v(cmd)).toBe("deny");
+  });
+});
+
+// AC2c — the spawn-time self-test converts the probe D-new-1 fail-open (a
+// crashed/missing hook) into fail-closed: it THROWS (→ cron aborts) rather than
+// letting the cron spawn unprotected. Runs the real hook binary via execFileSync.
+describe("runHookSelfTest (AC2c — fail-closed)", () => {
+  // vitest cwd is apps/web-platform; the repo root is two levels up, where the
+  // hook resolves at apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs.
+  const repoRoot = join(process.cwd(), "..", "..");
+
+  it("throws when the hook is unreachable (would otherwise fail-open)", () => {
+    expect(() =>
+      runHookSelfTest({
+        spawnCwd: "/tmp/soleur-no-such-spawn-cwd-xyz",
+        cronName: "cron-x",
+        allow: [],
+      }),
+    ).toThrow(/self-test FAILED/);
+  });
+
+  it("passes against the real hook (denies the canonical exfil payload)", () => {
+    // Empty allowlist → deny-all → `cat /proc/self/environ` is denied → no throw.
+    expect(() =>
+      runHookSelfTest({ spawnCwd: repoRoot, cronName: "cron-x", allow: [] }),
+    ).not.toThrow();
   });
 });
 
