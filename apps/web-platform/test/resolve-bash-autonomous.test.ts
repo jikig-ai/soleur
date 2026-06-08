@@ -7,13 +7,38 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const { mockRpc } = vi.hoisted(() => ({ mockRpc: vi.fn() }));
 
+type RuntimeAuthCause = "jwt_mint" | "rotation" | "denied_jti";
+
 vi.mock("@/lib/supabase/tenant", () => ({
   getFreshTenantClient: vi.fn(async () => ({ rpc: mockRpc })),
-  RuntimeAuthError: class RuntimeAuthError extends Error {},
+  // Faithful to the real class (`lib/supabase/tenant.ts:86`): `cause` is a
+  // surfaced discriminant the catch site branches on. A bare
+  // `class extends Error {}` would leave `err.cause` undefined and make the
+  // per-cause severity split pass vacuously.
+  RuntimeAuthError: class RuntimeAuthError extends Error {
+    public readonly cause: RuntimeAuthCause;
+    constructor(cause: RuntimeAuthCause, message: string) {
+      super(message);
+      this.name = "RuntimeAuthError";
+      this.cause = cause;
+    }
+  },
+  // Faithful to the real switch (`lib/supabase/tenant.ts:120`).
+  mapRuntimeAuthCauseToErrorCode: (cause: RuntimeAuthCause) => {
+    switch (cause) {
+      case "denied_jti":
+        return "session_revoked";
+      case "rotation":
+        return "auth_throttled";
+      case "jwt_mint":
+        return "auth_unavailable";
+    }
+  },
 }));
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
+  warnSilentFallback: vi.fn(),
 }));
 
 vi.mock("@/server/workspace-resolver", () => ({
@@ -77,11 +102,13 @@ describe("resolveBashAutonomous (workspace-scoped, RPC-only, fail-closed)", () =
     );
   });
 
-  it("FAIL-CLOSED: RuntimeAuthError → false AND mirrors", async () => {
+  it("FAIL-CLOSED: transient jwt_mint blip → false AND mirrors at WARNING (not error)", async () => {
     const { RuntimeAuthError, getFreshTenantClient } = await import(
       "@/lib/supabase/tenant"
     );
-    const { reportSilentFallback } = await import("@/server/observability");
+    const { reportSilentFallback, warnSilentFallback } = await import(
+      "@/server/observability"
+    );
     vi.mocked(getFreshTenantClient).mockImplementationOnce(async () => {
       throw new RuntimeAuthError("jwt_mint", "token expired");
     });
@@ -89,10 +116,65 @@ describe("resolveBashAutonomous (workspace-scoped, RPC-only, fail-closed)", () =
       "@/server/resolve-bash-autonomous"
     );
     expect(await resolveBashAutonomous("user-1", "ws-1")).toBe(false);
+    // A fully-recovered, fail-closed transient blip must NOT pollute the
+    // error budget — it lands at warning with a queryable cause code.
+    expect(warnSilentFallback).toHaveBeenCalledWith(
+      expect.any(RuntimeAuthError),
+      expect.objectContaining({
+        feature: "resolve-bash-autonomous",
+        extra: expect.objectContaining({ code: "auth_unavailable" }),
+      }),
+    );
+    expect(reportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("FAIL-CLOSED: denied_jti (session revoked) → false AND mirrors at ERROR", async () => {
+    const { RuntimeAuthError, getFreshTenantClient } = await import(
+      "@/lib/supabase/tenant"
+    );
+    const { reportSilentFallback, warnSilentFallback } = await import(
+      "@/server/observability"
+    );
+    vi.mocked(getFreshTenantClient).mockImplementationOnce(async () => {
+      throw new RuntimeAuthError("denied_jti", "session revoked");
+    });
+    const { resolveBashAutonomous } = await import(
+      "@/server/resolve-bash-autonomous"
+    );
+    expect(await resolveBashAutonomous("user-1", "ws-1")).toBe(false);
+    // Session revocation is on-call-actionable — keep it at error level.
     expect(reportSilentFallback).toHaveBeenCalledWith(
       expect.any(RuntimeAuthError),
-      expect.objectContaining({ feature: "resolve-bash-autonomous" }),
+      expect.objectContaining({
+        feature: "resolve-bash-autonomous",
+        extra: expect.objectContaining({ code: "session_revoked" }),
+      }),
     );
+    expect(warnSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("FAIL-CLOSED: rotation (rate-ceiling exhausted) → false AND mirrors at ERROR", async () => {
+    const { RuntimeAuthError, getFreshTenantClient } = await import(
+      "@/lib/supabase/tenant"
+    );
+    const { reportSilentFallback, warnSilentFallback } = await import(
+      "@/server/observability"
+    );
+    vi.mocked(getFreshTenantClient).mockImplementationOnce(async () => {
+      throw new RuntimeAuthError("rotation", "mint ceiling tripped");
+    });
+    const { resolveBashAutonomous } = await import(
+      "@/server/resolve-bash-autonomous"
+    );
+    expect(await resolveBashAutonomous("user-1", "ws-1")).toBe(false);
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      expect.any(RuntimeAuthError),
+      expect.objectContaining({
+        feature: "resolve-bash-autonomous",
+        extra: expect.objectContaining({ code: "auth_throttled" }),
+      }),
+    );
+    expect(warnSilentFallback).not.toHaveBeenCalled();
   });
 
   it("re-throws non-RuntimeAuthError errors (not swallowed as false)", async () => {
