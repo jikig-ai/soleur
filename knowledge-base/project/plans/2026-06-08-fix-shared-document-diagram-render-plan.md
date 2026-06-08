@@ -233,8 +233,9 @@ logs:
          existing share route
   retention: per existing log/Sentry retention; no new sink
 discoverability_test:
-  command: "curl -sI https://app.soleur.ai/api/shared/<token>/c4 (no auth cookie); expect 200 for a valid diagram share, 410 for revoked"
-  expected_output: HTTP/1.1 200 with application/json body containing a dump; revoked → 410
+  command: curl -fsS -o /dev/null -w "%{http_code}" --max-time 10 https://app.soleur.ai/api/shared/preflight-probe-nonexistent-token/c4
+  expected_output: "404"
+  rationale: An anonymous (no-cookie) probe with a nonexistent token must return 404 "Not found" — NOT a 302→/login or 401. This proves the public route is deployed and anonymously reachable (the middleware PUBLIC_PATHS prefix covers it). A valid-token 200 / revoked 410 cannot be probed without minting a real share, so the reachability + no-auth-redirect invariant is the executable signal.
 ```
 
 ## Domain Review
