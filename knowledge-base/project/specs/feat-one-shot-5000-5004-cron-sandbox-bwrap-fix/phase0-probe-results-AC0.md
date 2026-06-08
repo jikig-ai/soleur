@@ -40,3 +40,19 @@ The plan's load-bearing control was L1 (per-producer `--allowedTools` allowlist,
 **Viable redesign (needs re-plan + security review before implementation):** promote the L3 hook from "backstop" to **primary fail-closed control** — a deny-by-default PreToolUse hook enforcing the per-cron allowlist itself, plus the secret/egress/interpreter denials. `--allowedTools` stays for documentation but is NOT relied upon. `sandbox:false` retained (the host-independence bug fix). This inverts the plan's L1/L3 roles.
 
 **Status:** ESCALATED to operator. Not proceeding to Phase 1 (RED) until the hook-primary redesign is reviewed — shipping an on-the-spot security redesign without the 5-agent panel the v2 plan received would repeat the v1 unverified-premise failure.
+
+---
+
+## v3.1 re-probe against the PROD-PINNED CLI (P0-D — 2026-06-08)
+
+The probes above ran on `claude` 2.1.168; `Dockerfile:45` pins `@anthropic-ai/claude-code@2.1.79`. The architecture-strategist panel flagged the version skew (P0-D). Re-ran the load-bearing v3.1 mechanics against 2.1.79 (installed to `/tmp/claude279`):
+
+| Probe (2.1.79) | Result | Confirms |
+|---|---|---|
+| Bash deny-by-default (allowlist) | `echo`(allowlisted)=ok; `cat /proc/self/environ`(not)=DENIED | hook is fail-closed allowlist on 79 |
+| **Read tool** matcher on secret path | `Read(.git/config-shaped)`=DENIED | P0-A fix mechanism (Read matcher) works on 79 |
+| **Grep tool** matcher on secret path | `Grep(token, fake-git-config)`=DENIED | P0-A fix mechanism (Grep matcher) works on 79 |
+| D-new-1 (missing hook) | `uname`=ran (fail-OPEN) | spawn-time self-test still required on 79 |
+| Unhooked tool (only Bash matcher; Read available) | `Read(secretfile)`=read (NOT denied) | catch-all + explicit Read/Grep/Glob matchers required on 79 |
+
+**P0-D RESOLVED:** the v3.1 design (tool-class deny-by-default hook + catch-all + spawn-time self-test) is validated against the production-pinned 2.1.79. No Dockerfile bump required.
