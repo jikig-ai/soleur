@@ -13,7 +13,7 @@ import { createHash, createSign, randomUUID } from "crypto";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
 import { readAppId } from "./github/app-private-key";
-import { isRetryable } from "./github-api";
+import { isRetryable, delay } from "./github-retry";
 
 const log = createChildLogger("github-app");
 
@@ -423,10 +423,6 @@ const MEMBER_PROBE_BASE_DELAY_MS = 1_000; // 1s, 2s
 
 type MembershipProbeOutcome = "member" | "not-member" | "indeterminate";
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 /**
  * Probe whether `githubLogin` is a member of org `owner`, using the org
  * installation's token (carries members:read). Returns a 3-value outcome:
@@ -449,6 +445,11 @@ async function probeOrgMembership(
     try {
       response = await githubFetch(url, {
         headers: { Authorization: `token ${installationToken}` },
+        // Do NOT follow the 302 GitHub returns for "requester not visible as an
+        // org member" — following it lands on /public_members and turns one
+        // authoritative deny into a second probe. Surface 302 as not-member,
+        // matching verifyInstallationOwnership's redirect:"manual" precedent.
+        redirect: "manual",
       });
     } catch (err) {
       // AbortSignal.timeout fires a DOMException; undici network errors throw.

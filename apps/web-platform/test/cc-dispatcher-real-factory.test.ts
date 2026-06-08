@@ -351,7 +351,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     // dedicated describe block overrides these per-test.
     mockGetCurrentRepoUrl.mockResolvedValue(null);
     mockGetInstallationAccount.mockResolvedValue({ login: "owner", id: 1, type: "Organization" });
-    mockFindRepoOwnerInstallationForUser.mockResolvedValue(null);
+    mockFindRepoOwnerInstallationForUser.mockResolvedValue({ installationId: null, outcome: "not-member" });
     // Item 1 — in-sandbox askpass writer returns a deterministic path under
     // the workspace (the real writer uses a randomUUID suffix).
     mockWriteAskpassScriptTo.mockReturnValue(

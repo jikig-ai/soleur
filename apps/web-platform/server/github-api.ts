@@ -12,6 +12,7 @@
 import { generateInstallationToken, GitHubApiError } from "./github-app";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
+import { isRetryable, delay } from "./github-retry";
 
 export { GitHubApiError };
 
@@ -24,39 +25,11 @@ const BASE_DELAY_MS = 1_000;
 
 // ---------------------------------------------------------------------------
 // Retry wrapper for transient failures
+//
+// `isRetryable` + `delay` live in ./github-retry (dependency-free leaf) so the
+// GitHub-App membership probe in ./github-app reuses the same classification
+// without a circular import (feat-one-shot-concierge-gh-403-self-heal).
 // ---------------------------------------------------------------------------
-
-// Exported so the GitHub-App membership probe (server/github-app.ts) reuses the
-// SAME transient classification rather than inventing a third retry shape
-// (feat-one-shot-concierge-gh-403-self-heal, Bug A). Classifies the
-// AbortSignal.timeout DOMException + undici network codes as retryable.
-export function isRetryable(err: unknown): boolean {
-  // AbortSignal.timeout() fires a DOMException with name "TimeoutError"
-  if (err instanceof DOMException && err.name === "TimeoutError") return true;
-  // Network-level fetch failure (undici throws TypeError with "fetch failed")
-  if (err instanceof TypeError && err.message === "fetch failed") return true;
-  // Undici-specific error codes
-  if (
-    err instanceof Error &&
-    "code" in err &&
-    typeof (err as { code: unknown }).code === "string"
-  ) {
-    const code = (err as { code: string }).code;
-    return [
-      "UND_ERR_CONNECT_TIMEOUT",
-      "UND_ERR_SOCKET",
-      "ECONNRESET",
-      "ECONNREFUSED",
-      "ENOTFOUND",
-      "ENETDOWN",
-    ].includes(code);
-  }
-  return false;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 async function fetchWithRetry(
   url: string,
