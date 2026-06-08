@@ -557,6 +557,12 @@ jobs:
           done < <(find "$DEST" -type l)
           echo "Vendored $(find "$DEST" -type f | wc -l) plugin files into $DEST"
 
+      # type=gha cache requires the docker-container driver (the default driver
+      # cannot export gha cache) — setup-buildx provides it.
+      - name: Set up Docker Buildx
+        if: steps.version.outputs.next != '' && inputs.docker_image != ''
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
       - name: Build and push Docker image
         id: docker_build
         if: steps.version.outputs.next != '' && inputs.docker_image != ''
@@ -564,6 +570,15 @@ jobs:
         with:
           context: ${{ inputs.docker_context }}
           push: true
+          # mode=min is secret-safe ONLY while no non-public secret ARG is consumed
+          # in the runner/final-image stage of apps/web-platform/Dockerfile (the
+          # builder-only SENTRY_AUTH_TOKEN must stay out of the runner stage). Do NOT
+          # flip to mode=max, and do NOT add a non-public secret build-arg to the
+          # runner stage — either would export a secret-bearing layer to the
+          # repo-readable gha cache. mode=min caches only runner-stage layers, which
+          # is where the heavy-install wins live (claude-code/likec4/apt/playwright).
+          cache-from: type=gha,scope=web-platform-release
+          cache-to: type=gha,mode=min,scope=web-platform-release
           tags: |
             ${{ inputs.docker_image }}:v${{ steps.version.outputs.next }}
             ${{ inputs.docker_image }}:${{ github.sha }}

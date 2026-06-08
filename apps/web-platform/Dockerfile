@@ -41,6 +41,13 @@ RUN ./node_modules/.bin/esbuild next.config.ts --bundle --format=esm --platform=
 # Stage 3: Production image with only runtime artifacts
 FROM node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9ed5bfaf3d AS runner
 
+# CACHE-ORDERING INVARIANT (gha layer cache, reusable-release.yml cache-to=type=gha):
+# the heavy runner-stage installs below (claude-code, likec4, apt, gh, playwright)
+# MUST stay ABOVE the `ENV BUILD_VERSION`/`ENV BUILD_SHA` block — BUILD_SHA changes
+# every commit and busts every layer beneath it. Keeping these installs above it
+# is what makes them cache hits across releases. Do NOT move an `ENV BUILD_*` (or
+# any per-commit-volatile line) above this point. (Recovering `npm ci --omit=dev`,
+# which sits below BUILD_SHA, is tracked as #5055.)
 # Install Claude Code CLI (needed by Agent SDK)
 RUN npm install -g @anthropic-ai/claude-code@2.1.79
 
