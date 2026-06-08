@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { reportSilentFallback } from "@/server/observability";
+import { toPublicStorageUrl } from "@/lib/supabase/public-storage-url";
 
 const UUID_RE = /^[0-9a-f-]{36}$/i;
 
@@ -75,5 +76,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
 
-  return NextResponse.json({ url: data.signedUrl });
+  // The client renders this URL as <img src> (attachment-display.tsx). The
+  // service client signs against the raw SUPABASE_URL host, which CSP img-src
+  // (built from NEXT_PUBLIC_SUPABASE_URL) blocks → broken preview. Rewrite to
+  // the public host so it passes CSP. Same class as the workspace-logo proxy.
+  return NextResponse.json({ url: toPublicStorageUrl(data.signedUrl) });
 }

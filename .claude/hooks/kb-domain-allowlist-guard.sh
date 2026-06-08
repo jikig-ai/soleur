@@ -69,6 +69,22 @@ if [[ ! "$TARGET" =~ knowledge-base/([^/[:space:]\"\']+) ]]; then
 fi
 SEGMENT="${BASH_REMATCH[1]}"
 
+# Glob/regex-metachar guard: a SEGMENT containing `*`, `?`, `[`, or `]` is the
+# signature of a COMMENT or grep/regex PATTERN that merely mentions a
+# knowledge-base/<glob> path — NOT a real write target. The first-match scan
+# (line 67) can land on `# ... knowledge-base/*.md ...` or
+# `grep -oE 'knowledge-base/[A-Za-z0-9/_.-]+\.md'` before the genuine
+# `git add knowledge-base/project/...` write, yielding a bogus SEGMENT
+# (`*.md`, `[A-Za-z0-9`) that is neither sanctioned nor on disk → false-positive
+# `ask`. Real KB segments (dir names like `project`, files like INDEX.md) never
+# contain these chars, so genuine new-domain detection is unaffected. The
+# bracket expression `['*?[]']` lists the four metacharacters as literal members
+# (`]` via the `[]']` form so it is a member, not the closer); reuses the file's
+# existing `[[ == ]]` glob idiom (below) — no subprocess, `set -euo pipefail`-safe.
+if [[ "$SEGMENT" == *['*?[]']* ]]; then
+  exit 0
+fi
+
 # Sanctioned directory? pass.
 for d in "${SANCTIONED_DIRS[@]}"; do
   [[ "$SEGMENT" == "$d" ]] && exit 0

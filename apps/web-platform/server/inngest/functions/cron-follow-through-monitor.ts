@@ -49,7 +49,7 @@
 //   Layer 1 (load-bearing): in-prompt HTTPS-and-non-RFC1918 guard,
 //     verbatim from .github/workflows/scheduled-follow-through.yml:96-101.
 //   Layer 2 (mechanical): buildSpawnEnv() allowlist — only PATH, HOME,
-//     NODE_ENV, ANTHROPIC_API_KEY, GH_TOKEN reach the subprocess.
+//     NODE_ENV, ANTHROPIC_API_KEY, GH_TOKEN, GH_REPO reach the subprocess.
 //   Layer 3 (server-side, #4068): _predicate-validator.ts validates
 //     predicate URLs BEFORE the agent runs — ALLOWED_PREDICATE_HOSTS
 //     Set.has() exact match + ipaddr.js public-IP verification + fetch
@@ -77,6 +77,8 @@ import { reportSilentFallback } from "@/server/observability";
 import {
   mintInstallationToken,
   postSentryHeartbeat,
+  REPO_OWNER,
+  REPO_NAME,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -255,7 +257,7 @@ const TOKEN_MIN_LIFETIME_MS = 50 * 60 * 1000 + 10 * 60 * 1000;
 const SENTRY_MONITOR_SLUG = "scheduled-follow-through";
 
 // Spawn-env allowlist. Same shape as PR-1: only PATH, HOME, NODE_ENV,
-// ANTHROPIC_API_KEY, GH_TOKEN reach the subprocess. Caps SSRF + secret-
+// ANTHROPIC_API_KEY, GH_TOKEN, GH_REPO reach the subprocess. Caps SSRF + secret-
 // exfil blast radius (Layer 2 of dual defense; Layer 1 is the in-prompt
 // HTTPS-and-non-RFC1918 guard).
 //
@@ -272,6 +274,11 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
     NODE_ENV: process.env.NODE_ENV,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     GH_TOKEN: installationToken,
+    // #5010 — pin the repo so `gh` resolves it without a git checkout. This cron
+    // never clones, so it runs `gh` from the prod container CWD /app (no .git);
+    // without GH_REPO, gh falls back to git-remote detection and fails
+    // `fatal: not a git repository`. `gh` honors GH_REPO as the default repo.
+    GH_REPO: `${REPO_OWNER}/${REPO_NAME}`,
   };
 }
 
