@@ -42,6 +42,8 @@ Use the **AskUserQuestion tool** to clarify the design scope:
 
 ### Step 2: Design
 
+**KISS — design for the least loaded screen that still does the job (apply throughout this step).** The default bias is *fewer* elements, not more. Before adding any element to a frame, require it to earn its place by carrying either information the user needs or an action the user takes — decorative glyphs (status dots, accent flourishes), redundant labels (a single-letter monogram next to the icon it abbreviates), and duplicate affordances (two controls that do the same thing) are clutter and must be cut. Prefer one clear path over several; prefer an icon-with-tooltip over an icon-plus-label-plus-badge; collapse adjacent rows that say the same thing. When two layouts satisfy the brief, ship the simpler one. Persistent chrome (sidebars, top bars, rails) is where clutter compounds across every session, so hold it to the strictest version of this bar. This is the design-time complement to the `real-estate`/`comprehension` audit rubric below — catch the load before it ships, not only in audit.
+
 1. Call `get_style_guide_tags` then `get_style_guide(tags)` for design inspiration. If brand tokens were extracted in Step 1, use those as primary constraints.
 2. Call `get_guidelines(topic)` for the relevant design type (`landing-page`, `design-system`, or `table`).
 3. Use `open_document` to create a new .pen file or open an existing one.
