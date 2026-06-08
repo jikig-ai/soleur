@@ -77,6 +77,30 @@ describe("GET /api/workspace/[id]/logo (AC6)", () => {
     expect(mockCreateSignedUrl).toHaveBeenCalledWith(`${WS}/logo.webp`, 300);
   });
 
+  it("rewrites the signed-URL host to NEXT_PUBLIC_SUPABASE_URL so the 302 target matches CSP img-src (#4996 follow-up)", async () => {
+    // The service client signs against SUPABASE_URL (the raw <ref>.supabase.co
+    // host in prod). CSP img-src is built from NEXT_PUBLIC_SUPABASE_URL (the
+    // public custom domain), so a 302 to the raw host is blocked by the browser
+    // → <img> onError → monogram. The proxy must rewrite the origin to the
+    // public host (token is host-agnostic; both hosts route to the same project).
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://public.soleur.test");
+    mockCreateSignedUrl.mockResolvedValue({
+      data: {
+        signedUrl:
+          "https://ifsccnjhymdmidffkzhl.supabase.co/storage/v1/object/sign/workspace-logos/x?token=abc",
+      },
+      error: null,
+    });
+    const res = await GET(req(), ctx());
+    expect(res.status).toBe(302);
+    const loc = res.headers.get("Location")!;
+    expect(new URL(loc).host).toBe("public.soleur.test");
+    // path + token preserved (only the origin is rewritten)
+    expect(loc).toContain("/storage/v1/object/sign/workspace-logos/x");
+    expect(loc).toContain("token=abc");
+    vi.unstubAllEnvs();
+  });
+
   it("502 + reportSilentFallback when signed-URL mint fails", async () => {
     mockCreateSignedUrl.mockResolvedValue({ data: null, error: { message: "mint failed" } });
     const res = await GET(req(), ctx());
