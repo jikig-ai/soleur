@@ -50,20 +50,26 @@ grant (POSTs no `permissions`/`repositories` body, `github-app.ts:729-732`).
 - Touching repo-root `.claude/settings.json` or `server/workspace.ts` (dev/user-workspace
   sandbox stays enabled — runtime overlay `DEFAULT_CLAUDE_SETTINGS` is the cron write site).
 - Hetzner Cloud Firewall for egress (IP/port only — CDN-IP allowlisting is brittle).
+- **Moving `content-publisher` to an ephemeral GHA runner** (former hybrid scope) — **deferred**
+  per plan-review: PR-2's container egress boundary already closes the exfil path, so the GHA move
+  is a second mitigation for an already-closed threat. Tracked as a follow-up; revisit only if the
+  allowlist proves insufficient for `content-publisher` specifically.
+- **SNI forward proxy** up front — allowlist-first; proxy is an evidence-gated escalation only.
 
 ## Functional Requirements
 
 - **FR1** — Restore the 11 `TIER2_DEFERRED_CRONS` in waves of 2-3, gated on a per-cron
   output-quality check, removing each from the set + populating `CRON_BASH_ALLOWLISTS` (or
   classifying it as needs-firewall). First wave: bug-fixer, competitive-analysis, growth-audit.
-- **FR2** — Host egress firewall: SNI/hostname-allowlist forward proxy + nftables OUTPUT
-  default-drop (allow only DNS + proxy port). Allowlist: `api.anthropic.com`,
-  `api.github.com`/`github.com`, Sentry ingest domain, Discord webhook host, X/LinkedIn/Bluesky
-  API hosts. Deny everything else.
-- **FR3** — Move `content-publisher` to an ephemeral GHA runner via Inngest `workflow_dispatch`
-  (ADR-033 Option C); secrets wired into the GHA environment, not the long-lived host.
-- **FR4** — Narrow the cron token: additive `permissions?` opt on the mint path, defaulted to
-  `contents:write`+`issues:write` repo-scoped to soleur.
+- **FR2** — Container egress firewall: nftables rules in the **`DOCKER-USER` chain** (container-scoped,
+  NOT host OUTPUT — host control plane / cloudflared tunnel must stay reachable), default-drop +
+  hostname/IP allowlist with **periodic IP re-resolve** (allowlist-first; no SNI proxy up front —
+  evidence-gated escalation only). Allowlist: `api.anthropic.com`, `github.com` + `api.github.com`,
+  Sentry ingest, **Inngest**, Supabase, Doppler, Flagsmith, Better Stack (if container-shipped),
+  social-write hosts (X/LinkedIn/Bluesky), Discord webhook. Deny everything else.
+- **FR3** — Narrow the cron token: additive `permissions?` opt on `mintInstallationToken`
+  (`_cron-shared.ts:119`), defaulted to `contents:write`+`issues:write` repo-scoped to soleur.
+  **Folded into PR-1** (same file as the restore edit).
 - **FR5** — A blocked egress request emits a Sentry event tagged `egress_blocked` (with
   destination host), the Inngest function throws (heartbeat misses), and a per-cron post-run
   output canary pages on missing artifact.
@@ -97,13 +103,15 @@ grant (POSTs no `permissions`/`repositories` body, `github-app.ts:729-732`).
 - AC5 — Minted cron token's `permissions` are `contents:write`+`issues:write` only (asserted),
   repo-scoped.
 
-## Sequencing (operator: restore-first, value-led)
+## Sequencing (operator: restore-first, value-led; firewall-only post-plan-review)
 
-- **PR-1** — Restore the 11 (waves, output-quality-gated). Fast founder value; no firewall dep.
-- **PR-2** — Host egress firewall (proxy + nftables). Contains the live 4 + defense-in-depth.
-  *Expedite immediately after PR-1 to close the live exposure.*
-- **PR-3** — `content-publisher` → ephemeral GHA (hybrid off-box piece).
-- **PR-4** — Token narrowing at the cron mint path.
+- **PR-1** (this branch) — Restore the **allowlistable subset** of the 11 (per PR-1 bash-surface
+  re-triage; un-paused in operational waves) **+ narrow the cron token** (folded). Fast founder value;
+  firewall-independent for the proven-allowlistable subset only.
+- **PR-2** — Container egress firewall (DOCKER-USER allowlist-first). Contains the live 4 + restores the
+  needs-firewall crons. *Expedite immediately after PR-1; interim stopgap for the live 4 decided in PR-1.*
+- **Deferred** — `content-publisher` → ephemeral GHA (re-evaluate only if PR-2's allowlist is
+  insufficient for it).
 
 ## Open Questions
 
