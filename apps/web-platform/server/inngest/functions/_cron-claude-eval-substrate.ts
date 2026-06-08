@@ -155,7 +155,12 @@ export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
     "git commit",
     "git checkout",
     "git switch",
-    "git push origin",
+    // `git push` (not `git push origin`) so flagged forms match — `git push -u
+    // origin <branch>`, `git push origin HEAD`. The hook's gitVerbReason is the
+    // origin-only enforcer (denies any push to a non-origin remote), so the
+    // broader prefix is safe and the auto-fix-PR path (#5004 AC4c) is not
+    // silently denied on its `-u` flag.
+    "git push",
     "git rev-parse",
   ],
 };
