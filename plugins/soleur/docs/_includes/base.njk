@@ -129,7 +129,8 @@
        asynchronously via the onload-swap pattern below. Selectors covered:
        @layer tokens (--color-*, --font-*, --space-*, --header-h, --text-*);
        rules .site-header, .header-mark, .header-name, .nav-links*, .nav-toggle*,
-       .nav-cta-slot, .nav-cta, .skip-link, .landing-hero*, .section-label,
+       .nav-cta-slot, .nav-cta, .nav-has-children, .nav-dropdown*, .nav-submenu*,
+       .nav-caret, .skip-link, .landing-hero*, .section-label,
        .section-title, .section-desc, .landing-section, .landing-section-inner,
        .landing-stats, .landing-stat*, .btn, .btn-primary, .btn--sm,
        .newsletter-form*, .hero-waitlist-form*, .hero (blog), .blog-post-meta,
@@ -158,6 +159,16 @@
       .nav-links .nav-cta-slot .nav-cta{color:var(--color-text-inverse)}
       .nav-links .nav-cta-slot .nav-cta:hover{color:var(--color-text-inverse);border-bottom-color:transparent}
       .nav-links .nav-cta-slot .nav-cta:focus-visible{outline:2px solid var(--color-text-inverse);outline-offset:3px}
+      .nav-has-children{position:relative}
+      .nav-dropdown{position:relative}
+      .nav-dropdown-summary{display:inline-flex;align-items:center;gap:4px;font-size:var(--text-sm);color:var(--color-text-secondary);cursor:pointer;list-style:none;padding:var(--space-1) 0;border-bottom:2px solid transparent;transition:color 0.15s,border-color 0.15s}
+      .nav-dropdown-summary::-webkit-details-marker{display:none}
+      .nav-dropdown-summary:hover,.nav-dropdown[open]>.nav-dropdown-summary{color:var(--color-text)}
+      .nav-caret{font-size:0.7em;transition:transform 0.15s}
+      .nav-dropdown[open] .nav-caret{transform:rotate(180deg)}
+      .nav-submenu{list-style:none}
+      @media(min-width:769px){.nav-submenu{position:absolute;top:calc(100% + var(--space-3));left:0;min-width:170px;background:var(--color-bg-tertiary);border:1px solid var(--color-border);border-radius:8px;padding:var(--space-2);box-shadow:0 10px 30px rgba(0,0,0,0.5);z-index:3}.nav-submenu a{display:block;padding:var(--space-2) var(--space-3);white-space:nowrap;border-bottom:none}}
+      @media(max-width:768px){.nav-dropdown,.nav-dropdown-summary{display:block}.nav-dropdown-summary{padding:var(--space-3) var(--space-4)}.nav-submenu a{padding:var(--space-2) var(--space-4) var(--space-2) var(--space-6)}}
       .nav-toggle{display:none}
       .nav-toggle-label{display:none;cursor:pointer;padding:var(--space-2);font-size:var(--text-lg);color:var(--color-text-secondary)}
       @media(max-width:768px){.nav-toggle-label{display:block}.nav-links{position:fixed;top:var(--header-h);right:0;width:260px;height:calc(100vh - var(--header-h));flex-direction:column;align-items:stretch;gap:0;background:var(--color-bg);border-left:1px solid var(--color-border);padding:var(--space-4);transform:translateX(100%);transition:transform 0.2s ease;z-index:2}.nav-links a{padding:var(--space-3) var(--space-4);border-bottom:none}.nav-links .nav-cta-slot{margin-left:0;margin-top:var(--space-2)}.nav-links .nav-cta-slot .nav-cta{display:inline-block;text-align:center}.nav-toggle:checked ~ .nav-links{transform:translateX(0)}.nav-toggle:checked ~ .nav-toggle-label::before{content:'';position:fixed;top:var(--header-h);left:0;width:100vw;height:calc(100vh - var(--header-h));background:rgba(0,0,0,0.5);z-index:1}}
@@ -238,7 +249,20 @@
     <label for="nav-toggle" class="nav-toggle-label" aria-label="Toggle navigation">&#9776;</label>
     <ul class="nav-links">
       {%- for item in site.nav %}
+      {%- if item.children %}
+      <li class="nav-has-children">
+        <details class="nav-dropdown">
+          <summary class="nav-dropdown-summary">{{ item.label }}<span class="nav-caret" aria-hidden="true">&#9662;</span></summary>
+          <ul class="nav-submenu">
+            {%- for child in item.children %}
+            <li><a href="{{ child.url }}"{% if page.url == child.url %} aria-current="page"{% endif %}>{{ child.label }}</a></li>
+            {%- endfor %}
+          </ul>
+        </details>
+      </li>
+      {%- else %}
       <li><a href="{{ item.url }}"{% if page.url == item.url or (item.url == '/blog/' and page.url.startsWith('/blog')) %} aria-current="page"{% endif %}>{{ item.label }}</a></li>
+      {%- endif %}
       {%- endfor %}
       {%- if site.primaryCta %}
       <li class="nav-cta-slot"><a href="{{ site.primaryCta.url }}" aria-label="{{ site.primaryCta.ariaLabel }}" class="btn btn-primary btn--sm nav-cta">{{ site.primaryCta.label }}</a></li>

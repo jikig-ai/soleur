@@ -14,15 +14,18 @@
     "username": "soleur"
   },
   "nav": [
+    { "label": "Product", "children": [
+      { "label": "Agents", "url": "/agents/" },
+      { "label": "Skills", "url": "/skills/" }
+    ] },
     { "label": "Pricing", "url": "/pricing/" },
     { "label": "Get Started", "url": "/getting-started/" },
-    { "label": "Agents", "url": "/agents/" },
-    { "label": "Skills", "url": "/skills/" },
-    { "label": "Community", "url": "/community/" },
-    { "label": "About", "url": "/about/" },
     { "label": "Blog", "url": "/blog/" },
-    { "label": "Vision", "url": "/vision/" },
-    { "label": "Changelog", "url": "/changelog/" }
+    { "label": "Company", "children": [
+      { "label": "About", "url": "/about/" },
+      { "label": "Vision", "url": "/vision/" },
+      { "label": "Community", "url": "/community/" }
+    ] }
   ],
   "primaryCta": {
     "label": "Reserve access",
