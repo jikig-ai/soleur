@@ -76,27 +76,27 @@ runs at PR review.
 
 ### Pre-merge (PR)
 
-- [ ] **AC1** `cta-banner.tsx` no longer links to signup: `grep -nE 'signup|next/link'
+- [x] **AC1** `cta-banner.tsx` no longer links to signup: `grep -nE 'signup|next/link'
   apps/web-platform/components/shared/cta-banner.tsx` returns nothing (the word
   "signup" and the `next/link` import are both gone — catches `href={...}`
   template-literal forms a `href="/signup"`-only grep would miss).
-- [ ] **AC2** New `app/api/waitlist/route.ts` exports **only** HTTP handlers (`POST`).
+- [x] **AC2** New `app/api/waitlist/route.ts` exports **only** HTTP handlers (`POST`).
   The throttle singleton, Buttondown client, honeypot + username + tag constants
   live in one sibling module `waitlist.ts` (`cq-nextjs-route-files-http-only-exports`).
   `next build` passes.
-- [ ] **AC3** Route calls `validateOrigin` and rejects when `!valid || !origin`
+- [x] **AC3** Route calls `validateOrigin` and rejects when `!valid || !origin`
   (null-origin rejected — browser-only form); `csrf-coverage.test.ts` passes
   (route covered, not added to `EXEMPT_ROUTES`).
-- [ ] **AC4** Route POSTs `email`, `tag=pricing-waitlist`, `embed=1` as
+- [x] **AC4** Route POSTs `email`, `tag=pricing-waitlist`, `embed=1` as
   `application/x-www-form-urlencoded` to
   `https://buttondown.com/api/emails/embed-subscribe/${WAITLIST_USERNAME}` server-side.
-- [ ] **AC5** Honeypot input `name="url"` (`autocomplete="off" tabindex="-1" aria-hidden`);
+- [x] **AC5** Honeypot input `name="url"` (`autocomplete="off" tabindex="-1" aria-hidden`);
   enforced server-side — a filled honeypot returns `200 {ok:true}` WITHOUT forwarding
   (silent drop; a 400 would teach a bot which field is the trap).
-- [ ] **AC6** Per-IP rate limit via `SlidingWindowCounter` (`MAX_PER_WINDOW = 5`,
+- [x] **AC6** Per-IP rate limit via `SlidingWindowCounter` (`MAX_PER_WINDOW = 5`,
   `windowMs = 60_000`, hardcoded constants); over-limit returns `429
   {error:"rate_limited"}` + `Retry-After`; `logRateLimitRejection` called.
-- [ ] **AC7** Response contract (single `{error:"snake_case"}` shape for all errors):
+- [x] **AC7** Response contract (single `{error:"snake_case"}` shape for all errors):
   `200 {ok:true}` on success / already-subscribed / honeypot-drop **(explicitly 200+JSON,
   NOT the template's 204 — client needs a parseable body)**; `400 {error:"invalid_json"}`
   / `{error:"invalid_email"}`; `403 {error:"Forbidden"}` (CSRF / null-origin);
@@ -105,41 +105,41 @@ runs at PR review.
   Unexpected Buttondown failure (network throw / 5xx) is mirrored to Sentry via
   `warnSilentFallback` (`feature: "waitlist-subscribe"`); expected errors
   (CSRF / rate-limit / 400 / already-subscribed) are NOT mirrored.
-- [ ] **AC8** Banner client component implements `idle → submitting → success | error`:
+- [x] **AC8** Banner client component implements `idle → submitting → success | error`:
   submit disabled in-flight with a visible affordance (button "Joining…", not a bare
   disabled button) **(P1-5)**; native `type="email"` + `required` in the markup;
   success replaces the form with **"You're on the list ✓ — check your inbox to
   confirm."** (double opt-in is honest only if the user is told to confirm) **(P0-2)**;
   the aria-live `role="status"` region is **rendered (empty) in idle** and text
   swapped in on error **(P1-4)**.
-- [ ] **AC9** **Client failure handling (P0-3):** any `fetch` rejection (offline /
+- [x] **AC9** **Client failure handling (P0-3):** any `fetch` rejection (offline /
   DNS / abort) OR non-2xx routes to `error` with the **form re-enabled** (never a
   permanent disabled `submitting` freeze) and the email retained in the field;
   error copy is the generic "Something went wrong. Please try again." (429 uses
   this same generic path — no bespoke copy).
-- [ ] **AC10** Visible privacy line ("No spam. We email you once when early access
+- [x] **AC10** Visible privacy line ("No spam. We email you once when early access
   opens.") + Privacy Policy link (`https://soleur.ai/pages/legal/privacy-policy.html`,
   the web-platform convention) present in the idle banner — **one string for BOTH
   desktop and mobile** (drop the mobile short variant in the `.pen`) **(P2-9)**.
   Not behind hover/tooltip.
-- [ ] **AC11** Two-tier desktop + stacked mobile layouts match the wireframes
+- [x] **AC11** Two-tier desktop + stacked mobile layouts match the wireframes
   (`cta-banner-waitlist.pen` frames 01/03), input comfortably wide (per wireframe).
   On mobile, focusing the input keeps the Join button reachable above the soft
   keyboard (`fixed bottom-0`) — verify in QA scenario 9 **(P1-7)**.
-- [ ] **AC12** Dismiss preserved: `data-testid="cta-banner-dismiss"`,
+- [x] **AC12** Dismiss preserved: `data-testid="cta-banner-dismiss"`,
   `aria-label="Dismiss signup banner"`, `STORAGE_KEY="soleur:shared:cta-dismissed"`
   via `safeSession`. Existing `shared-cta-banner-close.test.tsx` still passes.
-- [ ] **AC13** Route test (`test/api-waitlist-subscribe.test.ts`, node project)
+- [x] **AC13** Route test (`test/api-waitlist-subscribe.test.ts`, node project)
   covers: success, invalid email, honeypot drop, rate-limit 429, CSRF 403
   (incl. null-origin), Buttondown-5xx → 502 + `warnSilentFallback` mirror (spy),
   already-subscribed → 200.
-- [ ] **AC14** Component test (`test/shared-cta-banner-waitlist.test.tsx`, component
+- [x] **AC14** Component test (`test/shared-cta-banner-waitlist.test.tsx`, component
   project) using the manual-trigger timing pattern
   (`2026-04-12-testing-transient-react-state-in-async-flows.md`); asserts the
   server-driven paths (not native validation): aria-live region exists in idle
   (empty); a `fetch` rejection → error + re-enabled form; success shows the
   confirm-inbox copy; privacy link present.
-- [ ] **AC15** **(GDPR gate)** `article-30-register.md` PA6 updated: purpose (b)
+- [x] **AC15** **(GDPR gate)** `article-30-register.md` PA6 updated: purpose (b)
   includes early-access/waitlist notification; collection surfaces list the
   shared-document banner alongside the pricing page. No new Vendor-DPA row
   (Buttondown already registered, `:429`).
