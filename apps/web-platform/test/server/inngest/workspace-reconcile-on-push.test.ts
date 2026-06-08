@@ -78,9 +78,16 @@ const appendKbSyncRowSpy = vi.fn(async (userId: string, row: Record<string, unkn
   APPENDS.set(userId, [...(APPENDS.get(userId) ?? []), row]);
 });
 // #4906 — workspace-keyed appends for owner-less workspaces, keyed by workspace id.
+// The handler passes the service-role client as the first arg (createServiceClient
+// stays in the handler, off session-sync's tenant-only allowlist), so the spy
+// signature is (client, workspaceId, row).
 const WS_APPENDS = new Map<string, Record<string, unknown>[]>();
 const appendKbSyncRowForWorkspaceSpy = vi.fn(
-  async (workspaceId: string, row: Record<string, unknown>) => {
+  async (
+    _client: unknown,
+    workspaceId: string,
+    row: Record<string, unknown>,
+  ) => {
     WS_APPENDS.set(workspaceId, [...(WS_APPENDS.get(workspaceId) ?? []), row]);
   },
 );

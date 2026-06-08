@@ -267,10 +267,14 @@ export async function workspaceReconcileOnPushHandler({
       // invisible in the admin analytics forensic trail. We now (a) write the
       // audit row via the workspace-keyed service-role path, and (b) surface the
       // drift at warn level (non-paging) so the operator can repair the canary.
+      // appendKbSyncRowForWorkspace takes the service-role `service` client as a
+      // param — session-sync.ts must not import createServiceClient itself (it
+      // is tenant-only per .service-role-allowlist; the privilege-acquisition
+      // site stays here, in the allowlisted handler).
       const writeAuditRow = (row: Parameters<typeof appendKbSyncRow>[1]) =>
         ownerId
           ? appendKbSyncRow(ownerId, row)
-          : appendKbSyncRowForWorkspace(ws.id, row);
+          : appendKbSyncRowForWorkspace(service, ws.id, row);
 
       if (!ownerId) {
         // Per-workspace 5-min TTL on the Sentry mirror (mirrorWarnWithDebounce,
