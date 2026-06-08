@@ -28,10 +28,14 @@ collapsed monogram column) and both toggle states must be asserted.
 ## Phase 2 — GREEN: the offset fix
 
 - [ ] 2.1 In `apps/web-platform/app/(dashboard)/layout.tsx` (toggle button,
-      ~L349-356), adjust the toggle's vertical offset (`top-3` → a value derived
-      against the live VRT) so its center aligns with the pill row's center.
-      Adjust `right-*` only if the VRT shows horizontal misalignment. Do NOT
-      change `h-6 w-6`, `z-10`, `md:flex`, `aria-label`, `title`, or `onClick`.
+      ~L349-356), adjust the toggle's vertical offset so its center aligns with
+      the pill row's center, following the repo CENTERING precedent
+      (`top-1/2 -translate-y-1/2`, per `file-tree.tsx`/`search-overlay.tsx`) over
+      the fixed-corner `top-3` from `error-card.tsx` — see plan Precedent-Diff.
+      Prefer the smaller-diff explicit-`top-*` form derived against the live VRT
+      (≤2px) unless AC3 forces the structural-wrap form. Adjust `right-*` only if
+      the VRT shows horizontal misalignment. Do NOT change `h-6 w-6`, `z-10`,
+      `md:flex`, `aria-label`, `title`, or `onClick`.
 - [ ] 2.2 Update the toggle's code comment (currently cites
       `error-card.tsx:27` as the `right-3 top-3` precedent) to note the
       vertical-offset divergence: the toggle now centers against an adjacent

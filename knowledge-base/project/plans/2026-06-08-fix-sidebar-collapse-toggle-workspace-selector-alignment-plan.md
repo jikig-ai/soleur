@@ -15,6 +15,49 @@ related_prs: [4997]
 
 > Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-08
+**Sections enhanced:** Acceptance Criteria (AC1), Implementation Phases (Phase 2),
+Risks & Mitigations (Precedent-Diff)
+
+### Key Improvements
+
+1. **AC1 sharpened to a positive rect-center assertion against real selectors.**
+   The existing VRT (`nav-states-shell.e2e.ts`) only asserts *non-overlap*
+   (`intersects(...) === false`) — a misaligned-but-non-overlapping toggle passes
+   it, which is exactly why PR #4997's regression shipped. AC1 now requires the
+   toggle center within ≤2px of the switcher card center, reusing the file's
+   existing helpers (`collapseToggle`, `orgIdentity`, `Switch workspace` role).
+2. **Precedent-Diff found a better fix shape than the original fixed-pixel guess.**
+   The repo has TWO competing conventions: fixed-corner (`absolute right-3 top-3`,
+   `error-card.tsx`) and centered (`top-1/2 -translate-y-1/2`,
+   `file-tree.tsx`/`search-overlay.tsx`). The toggle must center against an
+   adjacent card, so the centering convention is the correct precedent — the
+   original `top-3` corner offset is the root cause of the misalignment.
+3. **Both-branch / both-state coverage locked** via AC2 (chevron) + AC3
+   (collapsed tile) + AC4 (reclaimed-space regression guard), per PR #4997's own
+   learning file.
+
+### New Considerations Discovered
+
+- The VRT scaffolding from PR #4997 already exists (`collapseToggle()`,
+  `railBand()`, `asideBox`, `switcherBox`, `intersects()`) — Phase 1 ADDS a
+  positive-alignment assertion to existing helpers rather than building new
+  fixtures. Lower implementation cost than the plan first assumed.
+- The toggle is absolutely positioned against the WHOLE `<aside>` (a tall
+  containing block), so a naive `top-1/2` would center against the full rail
+  height — the fix must center against the header band specifically (explicit
+  `top-*` or a scoped containing context).
+
+### Mandatory gate results (deepen-plan Phases 4.4–4.9)
+
+- 4.4 Precedent-Diff: completed (centering vs corner convention; table in Risks).
+- 4.6 User-Brand Impact: PASS (threshold `none`; no sensitive-path Files-to-Edit; scope-out present).
+- 4.7 Observability: PASS (5 fields populated; discoverability_test is ssh-free).
+- 4.8 PAT-shaped vars: PASS (none).
+- 4.9 UI-wireframe: PASS (references committed `dashboard-nav/sidebar-float-collapse-toggle.pen` from PR #4997; offset nudge to an already-wireframed control).
+
 ## Overview
 
 The desktop sidebar's collapse / panel-toggle icon (top-right of the rail) is
@@ -181,14 +224,17 @@ incident or aggregate-pattern exposure is reachable from a misplaced icon.
 ### Phase 2 — GREEN: the offset fix
 
 1. In `apps/web-platform/app/(dashboard)/layout.tsx` (toggle button, L349-356),
-   adjust the toggle's vertical offset (and, if needed, horizontal) so its
-   center aligns with the workspace pill row's center. The candidate change is
-   the `top-3` token (e.g., to a value that centers the `h-6` button against the
-   `pt-2` + `py-2.5` pill — to be derived against the live VRT, not guessed).
-   Keep `right-3` unless the VRT shows a horizontal misalignment against the
-   `md:pr-10` clearance; if so, reconcile `right-*` with the chevron's resting
-   position. Do NOT change the button's size (`h-6 w-6`), z-index, `md:flex`
-   gating, `aria-label`, `title`, or `onClick` — only the offset tokens.
+   adjust the toggle's vertical offset so its center aligns with the workspace
+   pill row's center, following the repo's CENTERING precedent
+   (`top-1/2 -translate-y-1/2`, used in `file-tree.tsx`/`search-overlay.tsx`)
+   rather than the fixed-corner precedent (`top-3`, from `error-card.tsx`) — see
+   the Precedent-Diff in Risks & Mitigations. Prefer the smaller-diff option
+   (an explicit `top-*` derived against the live VRT to ≤2px) unless the
+   collapsed branch (AC3) forces the structural-wrap option. Keep `right-3`
+   unless the VRT shows horizontal misalignment against the `md:pr-10`
+   clearance; if so, reconcile `right-*` with the chevron's resting position.
+   Do NOT change the button's size (`h-6 w-6`), z-index, `md:flex` gating,
+   `aria-label`, `title`, or `onClick` — only the offset tokens.
 2. **Both-branch check:** re-run the collapsed-state assertions (AC3). The
    collapsed column reserves `pt-10` (`workspace-context-band.tsx:91`). If the
    toggle's new `top-*` reduces the bottom-edge clearance over the monogram
@@ -311,13 +357,40 @@ discoverability_test:
 - **Guessing the exact `top-*` value instead of deriving it from the VRT.**
   Mitigation: Phase 1 (RED) measures the live delta; the GREEN value is chosen
   against the VRT rect-center, not eyeballed.
-- **Precedent note (deepen-plan Phase 4.4):** the corner-control offset
-  precedent is `components/ui/error-card.tsx:27` (`absolute right-3 top-3`).
-  This fix intentionally DIVERGES from that generic convention for the toggle's
-  *vertical* offset because the toggle must center against an adjacent card, not
-  a card corner — document the divergence rationale in the toggle's code comment
-  (the existing comment cites error-card; update it to note the centering
-  override).
+### Precedent-Diff (deepen-plan Phase 4.4)
+
+**Two competing in-repo precedents — the fix should adopt the centering one, not the corner one.**
+
+| Pattern | Precedent sites | Semantic | Fit for this fix |
+| --- | --- | --- | --- |
+| `absolute right-3 top-3` (fixed corner offset) | `components/ui/error-card.tsx:27`; the current toggle `layout.tsx:353` | Pins a control to a card's top-right CORNER. The offset is a fixed pixel distance from the top, independent of any sibling's height. | **Poor** — the toggle must align to the *center* of an adjacent card, not sit at a corner. This is the source of the ~6px misalignment. |
+| `absolute … top-1/2 -translate-y-1/2` (centered offset) | `components/kb/file-tree.tsx:237,458`; `components/kb/search-overlay.tsx:60`; `components/connect-repo/select-project-state.tsx:74` | Vertically centers a floated icon/control against the height of its sibling row/input. Tracks the sibling's center automatically. | **Strong** — this is the established convention for "float a control centered against an adjacent element." |
+
+**Recommended approach (supersedes the Phase 2 fixed-`top-*` guess):** anchor the
+toggle's vertical center to the rail header band's center using the repo's
+existing `top-1/2 -translate-y-1/2` centering idiom, rather than hand-tuning a
+fixed `top-N` value. Concretely, the toggle should center against the workspace
+pill row's vertical band. Because the toggle is absolutely positioned against the
+WHOLE `<aside>` (a tall containing block), a naive `top-1/2` would center it
+against the entire rail height — WRONG. Two viable shapes, to be chosen against
+the live VRT:
+
+1. **Match the pill row's center with an explicit `top-*`** derived from the
+   band's leading offset + pill half-height (e.g., pill starts at `pt-2`=8px,
+   `py-2.5`+content ≈44px tall → center ≈30px → toggle `h-6`=24px needs
+   `top-[18px]` so its center lands at 18+12=30px). Simple, but a magic pixel.
+2. **Wrap the toggle's containing context** so `top-1/2 -translate-y-1/2`
+   centers against the header band only (e.g., scope the absolute positioning to
+   the band's bounding box rather than the full aside). More robust to future
+   band-padding changes, at the cost of a small structural tweak.
+
+The implementer picks the shape that the VRT (AC1, ≤2px) proves correct with the
+least structural change; option 1 is the smaller diff and is preferred unless
+the collapsed-branch (AC3) forces option 2. **Update the toggle's code comment**
+(currently cites `error-card.tsx:27` as the offset precedent) to record that the
+vertical offset now follows the *centering* convention
+(`file-tree.tsx`/`search-overlay.tsx`), diverging from the corner convention for
+the documented reason (align to an adjacent card's center, not a corner).
 
 ## Sharp Edges
 
