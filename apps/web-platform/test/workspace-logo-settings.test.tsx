@@ -4,6 +4,7 @@ import { render, fireEvent, waitFor } from "@testing-library/react";
 vi.mock("@sentry/nextjs", () => ({ captureMessage: vi.fn() }));
 
 import { WorkspaceLogoSettings } from "@/components/settings/workspace-logo-settings";
+import { WORKSPACE_LOGO_CHANGED_EVENT } from "@/lib/workspace-logo-events";
 
 const WS = "55555555-5555-5555-5555-555555555555";
 
@@ -135,5 +136,56 @@ describe("WorkspaceLogoSettings — owner (AC4-mirror client checks + state unio
         expect.objectContaining({ method: "DELETE" }),
       ),
     );
+  });
+});
+
+describe("WorkspaceLogoSettings — same-tab switcher refresh signal (AC4, H1)", () => {
+  it("dispatches WORKSPACE_LOGO_CHANGED_EVENT on a successful upload", async () => {
+    const onChange = vi.fn();
+    window.addEventListener(WORKSPACE_LOGO_CHANGED_EVENT, onChange);
+    try {
+      const { getByTestId, findByTestId } = render(
+        <WorkspaceLogoSettings workspaceId={WS} workspaceName="Acme" isOwner initialHasLogo={false} />,
+      );
+      selectFile(getByTestId("workspace-logo-file-input") as HTMLInputElement, pngFile());
+      await findByTestId("workspace-logo-status-success");
+      expect(onChange).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener(WORKSPACE_LOGO_CHANGED_EVENT, onChange);
+    }
+  });
+
+  it("dispatches WORKSPACE_LOGO_CHANGED_EVENT on a successful removal", async () => {
+    const onChange = vi.fn();
+    window.addEventListener(WORKSPACE_LOGO_CHANGED_EVENT, onChange);
+    try {
+      const { getByTestId } = render(
+        <WorkspaceLogoSettings workspaceId={WS} workspaceName="Acme" isOwner initialHasLogo />,
+      );
+      fireEvent.click(getByTestId("workspace-logo-remove-btn"));
+      await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    } finally {
+      window.removeEventListener(WORKSPACE_LOGO_CHANGED_EVENT, onChange);
+    }
+  });
+
+  it("does NOT dispatch when the upload fails (server reject)", async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 422,
+      json: async () => ({ error: "Logo must be a square image" }),
+    });
+    const onChange = vi.fn();
+    window.addEventListener(WORKSPACE_LOGO_CHANGED_EVENT, onChange);
+    try {
+      const { getByTestId, findByTestId } = render(
+        <WorkspaceLogoSettings workspaceId={WS} workspaceName="Acme" isOwner initialHasLogo={false} />,
+      );
+      selectFile(getByTestId("workspace-logo-file-input") as HTMLInputElement, pngFile());
+      await findByTestId("workspace-logo-status-error");
+      expect(onChange).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(WORKSPACE_LOGO_CHANGED_EVENT, onChange);
+    }
   });
 });
