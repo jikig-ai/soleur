@@ -19,9 +19,9 @@ plan: knowledge-base/project/plans/2026-06-08-feat-shortform-feature-tweets-plan
 - [x] 1.3 Green: all eligibility tests pass.
 
 ## Phase 2: feature-tweet skill
-- [ ] 2.1 Create `plugins/soleur/skills/feature-tweet/SKILL.md` (description ≤25 words, ≤1024 chars).
-- [ ] 2.2 Flow: idempotency check (existing `pr_reference`) → eligibility → fetch PR → generate ≤3 numbered tweets per brand-guide `### X/Twitter` + `#### Ship Tweets` with sanitization → read author from `site.json` → write draft file (`status: draft`, `channels: x`, `pr_reference`, publish comment) → structural assertion → lint.
-- [ ] 2.3 Structural assertion (skill-owned): require non-empty title + `status: draft` + `channels: x` + `## X/Twitter Thread` heading; abort + leave no file on miss.
+- [x] 2.1 Create `plugins/soleur/skills/feature-tweet/SKILL.md` (description ≤25 words, ≤1024 chars).
+- [x] 2.2 Flow: idempotency check (existing `pr_reference`) → eligibility → fetch PR → generate ≤3 numbered tweets per brand-guide `### X/Twitter` + `#### Ship Tweets` with sanitization → read author from `site.json` → write draft file (`status: draft`, `channels: x`, `pr_reference`, publish comment) → structural assertion → lint.
+- [x] 2.3 Structural assertion (skill-owned): require non-empty title + `status: draft` + `channels: x` + `## X/Twitter Thread` heading; abort + leave no file on miss.
 
 ## Phase 3: postmerge hook
 - [ ] 3.1 Set `HEALTH_VERIFIED=true|false` in both Phase-3 branches of postmerge SKILL.md.
@@ -36,7 +36,7 @@ plan: knowledge-base/project/plans/2026-06-08-feat-shortform-feature-tweets-plan
 
 ## Phase 6: stale-draft visibility + budget
 - [ ] 6.1 Edit `campaign-calendar/SKILL.md`: "Stale Draft" group for `draft` files > N days (default 7), oldest-first.
-- [ ] 6.2 Bump `SKILL_DESCRIPTION_WORD_BUDGET` by the new description word count with `// #5021` comment (primary; sibling-trim fallback).
+- [x] 6.2 Bump `SKILL_DESCRIPTION_WORD_BUDGET` by the new description word count with `// #5021` comment (primary; sibling-trim fallback).
 
 ## Phase 7: Verify
 - [ ] 7.1 Run `./node_modules/.bin/vitest run test/content-publisher.test.ts plugins/soleur/test/components.test.ts` (or package runner) — green.
