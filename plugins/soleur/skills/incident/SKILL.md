@@ -56,7 +56,7 @@ Collect from the operator (or from the dry-run fixture):
 18. `revenue_impact` — operator prose. Default `Unknown / N/A` (never fabricate a number).
 19. `team_impact` — operator prose. Default `Unknown / N/A`.
 
-The post-resolution review fields (`{{ROOT_CAUSE_5WHYS}}`, `{{LUCKY}}`, `{{WENT_WELL}}`, `{{WENT_WRONG}}`, `{{ACTION_ITEMS}}`) are NOT captured at Phase 0 — they do not exist yet at incident-open time. They scaffold with a static `TBD` default and the operator fills them during the Phase 7 review. This keeps Phase 0 inside the <60s classification budget (only operator-answerable-at-open fields are prompted).
+The post-resolution review fields (`{{ROOT_CAUSE_5WHYS}}`, `{{LUCKY}}`, `{{WENT_WELL}}`, `{{WENT_WRONG}}`, `{{ACTION_ITEM_ISSUE}}`/`{{ACTION_ITEM_DESC}}`) are NOT captured at Phase 0 — they do not exist yet at incident-open time. They scaffold with a static `TBD` default and the operator fills them during the Phase 7 review. This keeps Phase 0 inside the <60s classification budget (only operator-answerable-at-open fields are prompted).
 
 Compute locally (FR7 LLM-trust boundary — never accept these from an LLM-emitted blob):
 
@@ -180,7 +180,7 @@ Selected runbook slugs auto-populate Phase 4 `triggers[]` verbatim (SpecFlow Imp
 | `{{LUCKY}}` | Phase 7 review (default `TBD`) |
 | `{{WENT_WELL}}` | Phase 7 review (default `TBD`) |
 | `{{WENT_WRONG}}` | Phase 7 review (default `TBD`) |
-| `{{ACTION_ITEMS}}` | Phase 7 review (default `TBD — file as GitHub issues`) |
+| `{{ACTION_ITEM_ISSUE}}` / `{{ACTION_ITEM_DESC}}` | Phase 7 review — the merged **Action Items & Follow-ups** table. **Every row REQUIRES a filed GitHub issue number:** run `gh issue create` (cross-referencing the source PR in the body) FIRST, then fill `#<n>` + description. No bare bullets, no `TBD`. If there are genuinely zero follow-ups, replace the table with the single permitted sentence `_No action items — incident fully resolved in the source PR with no residual work._`. The `/ship` Incident-PIR gate blocks merge on any item lacking a `#NNNN`. |
 
 **Secret-leak preamble** (TR2): if `triggers[]` contains any of `api_key_leaked`, `credentials_exposed`, `token_exposed`, `secret_in_logs`, replace `{{SECRET_LEAK_PREAMBLE}}` with:
 
