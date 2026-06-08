@@ -178,6 +178,55 @@ export async function postSentryHeartbeat(args: {
 }
 
 // ---------------------------------------------------------------------------
+// Tier-2 deferral guard (#5018 — hook-primary cron containment, D6)
+// ---------------------------------------------------------------------------
+// These claude-spawning crons need Bash that cannot be expressed as a finite
+// allowlist for the containment hook (cron-bash-allowlist-hook.mjs), so under the
+// v3.1 overlay (sandbox off + deny-by-default hook) they would fail-closed.
+// Letting them spawn → fail-closed → emit a weekly FAILED `[Scheduled]` issue +
+// RED Sentry monitor is an alert STORM that masks real regressions (panel P1-A).
+// Instead each such handler calls deferIfTier2Cron as its FIRST step: it posts an
+// honest on-schedule check-in (ok — the function DID run on time) and
+// early-returns WITHOUT spawning claude and WITHOUT creating an output issue. The
+// work-output verify is SKIPPED, not faked → NOT a silent green. Visible
+// degradation = the cron's weekly output issue stops appearing (enumerated in the
+// Tier-2 follow-up issue, founder-readable). Tier-2 (egress firewall + least-priv
+// token) removes a cron from this set to restore it. roadmap-review (#5004) is
+// ABSENT — it is the validated Tier-1 cron (finite allowlist in CRON_BASH_ALLOWLISTS).
+export const TIER2_DEFERRED_CRONS: ReadonlySet<string> = new Set([
+  "cron-agent-native-audit",
+  "cron-bug-fixer",
+  "cron-campaign-calendar",
+  "cron-community-monitor",
+  "cron-competitive-analysis",
+  "cron-content-generator",
+  "cron-growth-audit",
+  "cron-growth-execution",
+  "cron-legal-audit",
+  "cron-seo-aeo-audit",
+  "cron-ux-audit",
+]);
+
+export async function deferIfTier2Cron(args: {
+  cronName: string;
+  sentryMonitorSlug: string;
+  step: HandlerArgs["step"];
+  logger: HandlerArgs["logger"];
+}): Promise<boolean> {
+  const { cronName, sentryMonitorSlug, step, logger } = args;
+  if (!TIER2_DEFERRED_CRONS.has(cronName)) return false;
+  logger.warn(
+    { fn: cronName, status: "tier-2-deferred" },
+    `${cronName} is Tier-2-deferred (#5018): the containment hook denies its bash; ` +
+      `paused until the egress firewall lands. Skipping claude spawn this run.`,
+  );
+  await step.run("tier2-deferred-heartbeat", async () => {
+    await postSentryHeartbeat({ ok: true, sentryMonitorSlug, cronName, logger });
+  });
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // Output-verification helper — closes the silent-no-op gap (#4689/#4686/#4684).
 //
 // A scheduled producer can exit 0 without producing its `scheduled-<task>`
