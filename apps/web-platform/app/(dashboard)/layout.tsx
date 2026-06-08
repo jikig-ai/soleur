@@ -336,15 +336,18 @@ export default function DashboardLayout({
             ZERO vertical space (the workspace band now owns the sidebar top).
             Absolutely positioned against the <aside> (its md:relative containing
             block), NOT in the flex-col flow. `right-3` keeps it pinned to the rail's
-            right edge. `top-7` (28px) vertically CENTERS the h-6 (24px) button on the
-            workspace pill row's center: the pill leads the band at pt-2 (8px) and is
-            64px tall (lg h-11 tile + py-2.5), so its center sits at 8+32 = 40px and
-            the toggle's center at 28+12 = 40px. This follows the repo's
+            right edge. `top-10` (40px) vertically CENTERS the h-6 (24px) button on the
+            workspace pill row's center. The toggle is positioned against the <aside>,
+            but the band (and its pill) sits ~12px BELOW the aside top (the reclaimed-
+            space offset — VRT-measured, asserted ≤12). The pill leads the band at pt-2
+            (8px) and is 64px tall (lg h-11 tile + py-2.5), so its center sits at
+            12+8+32 = 52px from the aside top; the toggle's center at 40+12 = 52px.
+            (VRT-derived: top-7 left a 12px residual = the band offset.) This follows the repo's
             CENTER-against-an-adjacent-element convention (components/kb/file-tree.tsx,
             components/kb/search-overlay.tsx) rather than the fixed top-right CORNER
             convention (components/ui/error-card.tsx) — the toggle aligns to a card's
             center, not a card's corner, so the corner `top-3` it originally mirrored
-            (PR #4997) read ~16px high. z-10 lifts it above the band's static content;
+            (PR #4997) read ~28px high. z-10 lifts it above the band's static content;
             the multi-workspace switcher dropdown opens DOWNWARD (`top-full`) in a
             disjoint vertical band and a separate stacking context, so there is no
             cross-context z race. The expanded pill row (md:pr) and the collapsed
@@ -357,7 +360,7 @@ export default function DashboardLayout({
           onClick={toggleCollapsed}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           title={collapsed ? "Expand sidebar (⌘B)" : "Collapse sidebar (⌘B)"}
-          className="absolute right-3 top-7 z-10 hidden h-6 w-6 items-center justify-center rounded text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary md:flex"
+          className="absolute right-3 top-10 z-10 hidden h-6 w-6 items-center justify-center rounded text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary md:flex"
         >
           <PanelToggleIcon className="h-4 w-4" />
         </button>

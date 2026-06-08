@@ -99,7 +99,7 @@ describe("Dashboard sidebar collapse", () => {
 
   // Reclaimed-space restructure: the dedicated desktop toggle row was removed so
   // the workspace context band rises to the sidebar top (~45px reclaimed). The
-  // collapse toggle is now FLOATED (`absolute right-3 top-7`, `md:flex`) instead of
+  // collapse toggle is now FLOATED (`absolute right-3 top-10`, `md:flex`) instead of
   // living in an in-flow row. jsdom has no layout engine, so this pins the
   // className tokens against a silent revert to the old in-flow row; the pixel
   // proof (reclaimed space + no chevron/tile overlap) lives in the e2e VRT gate
@@ -109,11 +109,12 @@ describe("Dashboard sidebar collapse", () => {
     const toggle = screen.getByLabelText("Collapse sidebar");
     expect(toggle.className).toContain("absolute");
     expect(toggle.className).toContain("md:flex");
-    // top-7 (28px) vertically centers the h-6 toggle on the 64px workspace pill
-    // (center 40px), not the old top-3 corner offset that read ~16px high. jsdom
-    // has no layout engine, so this is a className drift tripwire; the pixel proof
-    // (≤2px rect-center alignment) lives in e2e/nav-states-shell.e2e.ts (AC1).
-    expect(toggle.className).toContain("top-7");
+    // top-10 (40px) vertically centers the h-6 toggle on the workspace pill, whose
+    // center sits ~52px below the aside top (the band is offset ~12px below the aside
+    // top + pt-2 + pill half-height); not the old top-3 corner offset that read ~28px
+    // high. jsdom has no layout engine, so this is a className drift tripwire; the
+    // pixel proof (≤2px rect-center alignment) lives in e2e/nav-states-shell.e2e.ts (AC1).
+    expect(toggle.className).toContain("top-10");
     expect(toggle.className).not.toContain("top-3");
     expect(toggle.className).toContain("right-3");
   });

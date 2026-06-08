@@ -358,7 +358,7 @@ const resizeHandle = (page: Page) => page.getByTestId("kb-rail-resize-handle");
 const asideWidth = (page: Page) =>
   page.locator("aside").first().evaluate((el) => el.clientWidth);
 
-// The collapse toggle is FLOATED (`absolute right-3 top-7`) on desktop after the
+// The collapse toggle is FLOATED (`absolute right-3 top-10`) on desktop after the
 // reclaimed-space restructure — it is no longer in the rail-header flow. Its
 // accessible name flips with state (`Collapse sidebar` expanded / `Expand
 // sidebar` collapsed), so match either label — it is the only `… sidebar` button.
@@ -373,7 +373,7 @@ const intersects = (a: Rect, b: Rect): boolean =>
 // AC1 helper: assert two rects share a vertical center within `tol` px. The
 // positive alignment gate (vs the looser non-overlap `intersects` check) that
 // catches a misaligned-but-disjoint toggle — exactly how PR #4997's top-3
-// corner offset shipped ~16px above the card center.
+// corner offset shipped ~28px above the card center.
 const expectVerticallyCentered = (toggle: Rect, card: Rect, label: string, tol = 2): void => {
   const toggleCenterY = toggle.y + toggle.height / 2;
   const cardCenterY = card.y + card.height / 2;
@@ -440,7 +440,7 @@ test.describe("nav-states visual gate — desktop", () => {
 
     // Reclaimed-space restructure: the collapse toggle no longer lives in a
     // rail-header row aligned to the back-affordance gutter — it is FLOATED in the
-    // aside's top-RIGHT region (`absolute right-3 top-7`). Assert it is visible,
+    // aside's top-RIGHT region (`absolute right-3 top-10`). Assert it is visible,
     // anchored to the top-right of the aside box, and fully inside the rail.
     await expect(collapseToggle(page)).toBeVisible({ timeout: 15_000 });
     const asideBox = await aside.boundingBox();
@@ -448,13 +448,13 @@ test.describe("nav-states visual gate — desktop", () => {
     expect(asideBox).not.toBeNull();
     expect(toggleBox).not.toBeNull();
     // Top-region anchored: the toggle is centered on the workspace pill row
-    // (top-7 = 28px), so its top edge sits ~28px below the aside top — still in
+    // (top-10 = 40px), so its top edge sits ~40px below the aside top — still in
     // the rail's top region, never buried in the middle. (Was ≤16 when the toggle
-    // sat at the top-3 corner; loosened to ≤32 for the centered top-7 offset.)
+    // sat at the top-3 corner; loosened to ≤44 for the centered top-10 offset.)
     expect(
       toggleBox!.y - asideBox!.y,
       "floated collapse toggle drifted from the aside top region",
-    ).toBeLessThanOrEqual(32);
+    ).toBeLessThanOrEqual(44);
     // Right-anchored + inside the rail: toggle right edge within ~16px of the
     // aside right edge and never spilling past it.
     const asideRight = asideBox!.x + asideBox!.width;
@@ -523,7 +523,7 @@ test.describe("nav-states visual gate — desktop", () => {
     // AC1 — vertical alignment: the floated toggle's center must sit on the
     // switcher card's vertical center (≤2px). The pre-existing non-overlap
     // assertion above is satisfied by a misaligned-but-disjoint toggle — exactly
-    // how PR #4997's `top-3` corner offset shipped ~16px above the card center.
+    // how PR #4997's `top-3` corner offset shipped ~28px above the card center.
     expectVerticallyCentered(
       toggleBox!,
       switcherBox!,
