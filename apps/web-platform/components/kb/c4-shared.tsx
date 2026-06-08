@@ -43,30 +43,46 @@ export const Spinner = () => (
   </div>
 );
 
-/** Fetch the precomputed LikeC4 project (model dump + .c4 sources) for a dir. */
-export function useC4Project(dirPath: string) {
+/**
+ * Fetch the precomputed LikeC4 project (model dump + .c4 sources) for a dir.
+ *
+ * `options.url` overrides the default authenticated endpoint. The public
+ * shared-document viewer passes `/api/shared/<token>/c4` (token-scoped, no auth,
+ * no `.c4` sources); owner paths omit it and hit `/api/kb/c4/project?dir=…`.
+ * The response is normalized so `sources`/`diagnostics` are always present even
+ * when the public endpoint omits them (data-minimization).
+ */
+export function useC4Project(dirPath: string, options?: { url?: string }) {
   const [data, setData] = useState<ProjectResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const url = options?.url;
   const reload = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(
-        `/api/kb/c4/project?dir=${encodeURIComponent(dirPath)}`,
-      );
+      const endpoint =
+        url ?? `/api/kb/c4/project?dir=${encodeURIComponent(dirPath)}`;
+      const res = await fetch(endpoint);
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.error || `Request failed (${res.status})`);
       }
-      setData((await res.json()) as ProjectResponse);
+      const json = (await res.json()) as Partial<ProjectResponse>;
+      setData({
+        dir: json.dir ?? dirPath,
+        sources: json.sources ?? {},
+        dump: json.dump ?? null,
+        viewIds: json.viewIds ?? [],
+        diagnostics: json.diagnostics ?? [],
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load diagram");
     } finally {
       setLoading(false);
     }
-  }, [dirPath]);
+  }, [dirPath, url]);
 
   useEffect(() => {
     void reload();

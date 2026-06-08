@@ -303,6 +303,87 @@ describe("previewShare — markdown branch", () => {
     expect(result.firstPagePreview).toBeUndefined();
   });
 
+  it("flags hasDiagram + diagramModelBuilt=true when a likec4-view embed has a built model (test 7b)", async () => {
+    const diagramsDir = path.join(kbRoot, "engineering/architecture/diagrams");
+    fs.mkdirSync(diagramsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(diagramsDir, "model.likec4.json"),
+      JSON.stringify({ views: { context: {} } }),
+    );
+    const bytes = Buffer.from(
+      "# C4\n\n```likec4-view\ncontext\n```\n\nprose.\n",
+    );
+    fs.writeFileSync(
+      path.join(diagramsDir, "c4-model.md"),
+      bytes,
+    );
+    const client = makeClient({
+      users: readyWorkspace(),
+      kb_share_links: {
+        shareRow: {
+          document_path: "engineering/architecture/diagrams/c4-model.md",
+          revoked: false,
+          content_sha256: hex(bytes),
+        },
+      },
+    });
+
+    const result = await previewShare(client as never, "tok");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.kind).toBe("markdown");
+    expect(result.hasDiagram).toBe(true);
+    expect(result.diagramModelBuilt).toBe(true);
+  });
+
+  it("flags hasDiagram + diagramModelBuilt=false when the embed's model is NOT built (test 7c)", async () => {
+    const diagramsDir = path.join(kbRoot, "engineering/architecture/diagrams");
+    fs.mkdirSync(diagramsDir, { recursive: true });
+    // No model.likec4.json written → recipient would see "model not built".
+    const bytes = Buffer.from("# C4\n\n```likec4-view\ncontext\n```\n");
+    fs.writeFileSync(path.join(diagramsDir, "c4-model.md"), bytes);
+    const client = makeClient({
+      users: readyWorkspace(),
+      kb_share_links: {
+        shareRow: {
+          document_path: "engineering/architecture/diagrams/c4-model.md",
+          revoked: false,
+          content_sha256: hex(bytes),
+        },
+      },
+    });
+
+    const result = await previewShare(client as never, "tok");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.hasDiagram).toBe(true);
+    expect(result.diagramModelBuilt).toBe(false);
+  });
+
+  it("omits diagram fields for a plain markdown doc with no embed (test 7d)", async () => {
+    const bytes = Buffer.from("# readme\n\nNo diagram here.\n");
+    fs.writeFileSync(path.join(kbRoot, "plain.md"), bytes);
+    const client = makeClient({
+      users: readyWorkspace(),
+      kb_share_links: {
+        shareRow: {
+          document_path: "plain.md",
+          revoked: false,
+          content_sha256: hex(bytes),
+        },
+      },
+    });
+
+    const result = await previewShare(client as never, "tok");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.hasDiagram).toBeUndefined();
+    expect(result.diagramModelBuilt).toBeUndefined();
+  });
+
   it("returns 410 content-changed when disk buffer hash drifts (test 8)", async () => {
     fs.writeFileSync(path.join(kbRoot, "doc.md"), "v2 content");
     const client = makeClient({

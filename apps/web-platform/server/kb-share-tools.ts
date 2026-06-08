@@ -159,6 +159,10 @@ export function buildKbShareTools(opts: BuildKbShareToolsOpts) {
       "Preview what a recipient sees at /shared/<token>. Returns " +
         "{ status, contentType, size, filename, kind, firstPagePreview? }. " +
         "Use this to verify a share link renders correctly before sending it. " +
+        "For a markdown doc that embeds a likec4-view diagram, also returns " +
+        "{ hasDiagram: true, diagramModelBuilt }; if diagramModelBuilt is false " +
+        "the recipient sees a 'diagram model not built' state — rebuild it " +
+        "(/soleur:architecture render) before sending. " +
         "Works for all share terminal states — revoked links return " +
         "{ code: 'revoked' }, content-drift returns { code: 'content-changed' }. " +
         "Does NOT return the document bytes (use kb_read_content for that).",

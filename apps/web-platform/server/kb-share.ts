@@ -33,6 +33,8 @@ import {
   KbNotFoundError,
 } from "@/server/kb-reader";
 import { isMarkdownKbPath } from "@/lib/kb-extensions";
+import { parseLikeC4Embed } from "@/lib/c4-embed";
+import { C4_MODEL_JSON } from "@/lib/c4-constants";
 import { shareHashVerdictCache } from "@/server/share-hash-verdict-cache";
 import {
   readPdfMetadata,
@@ -578,6 +580,16 @@ export type PreviewShareResult =
       size: number;
       filename: string;
       firstPagePreview?: FirstPagePreview;
+      // View-parity with the public render path: a shared markdown doc that
+      // embeds a ```likec4-view block renders an interactive diagram on
+      // /shared/[token] (served by /api/shared/[token]/c4). hasDiagram flags
+      // that the recipient sees a diagram; diagramModelBuilt is false when the
+      // committed model.likec4.json is missing — in which case the recipient
+      // sees a "model not built" state even though the markdown itself is fine.
+      // Lets an agent previewing a share know to (re)build the diagram before
+      // sending. Absent on binary shares and on markdown with no embed.
+      hasDiagram?: boolean;
+      diagramModelBuilt?: boolean;
     }
   | {
       ok: false;
@@ -731,6 +743,29 @@ async function maybeFirstPagePreview(
  * TOCTOU-safe: every openBinaryStream call passes `expected: { ino, size }`
  * so a rename-swap between validate and read closes out as content-changed.
  */
+/**
+ * Best-effort probe: does the committed `model.likec4.json` exist for the
+ * diagram dir of `documentPath` (its own directory)? Mirrors the public C4
+ * endpoint's dir derivation + workspace-containment guard. Never throws —
+ * any error (missing dir, traversal, non-file) resolves to `false` so the
+ * preview degrades to "diagram not built" rather than failing the whole
+ * preview.
+ */
+async function c4ModelExists(
+  kbRoot: string,
+  documentPath: string,
+): Promise<boolean> {
+  try {
+    const dir = path.dirname(documentPath);
+    if (dir.includes("\0") || dir.includes("..")) return false;
+    const jsonAbs = path.join(kbRoot, dir, C4_MODEL_JSON);
+    if (!isPathInWorkspace(jsonAbs, kbRoot)) return false;
+    return (await fs.promises.stat(jsonAbs)).isFile();
+  } catch {
+    return false;
+  }
+}
+
 export async function previewShare(
   serviceClient: ShareServiceClient,
   token: string,
@@ -855,6 +890,17 @@ export async function previewShare(
           error: "Document has changed since share was created",
         };
       }
+      // View-parity: when the doc embeds a likec4-view, the recipient sees an
+      // interactive diagram (rendered from the committed model.likec4.json in
+      // the doc's own dir). Probe model availability so an agent previewing the
+      // share knows whether the diagram will render or show "model not built".
+      const embed = parseLikeC4Embed(buffer.toString("utf8"));
+      const diagramFields = embed
+        ? {
+            hasDiagram: true,
+            diagramModelBuilt: await c4ModelExists(kbRoot, documentPath),
+          }
+        : {};
       return {
         ok: true,
         status: 200,
@@ -864,6 +910,7 @@ export async function previewShare(
         contentType: "text/markdown",
         size: buffer.length,
         filename: path.basename(documentPath),
+        ...diagramFields,
       };
     } catch (err) {
       return mapPreviewError(err, tokenPrefix, documentPath);
