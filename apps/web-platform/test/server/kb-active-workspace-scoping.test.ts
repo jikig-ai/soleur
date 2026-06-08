@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "crypto";
-import { resolveActiveWorkspaceKbRoot } from "@/server/workspace-resolver";
+import {
+  resolveActiveWorkspaceKbRoot,
+  resolveActiveWorkspacePath,
+} from "@/server/workspace-resolver";
 import { mockQueryChain, type MockQueryChain } from "../helpers/mock-supabase";
 
 vi.mock("@/server/observability", () => ({
@@ -137,5 +140,56 @@ describe("resolveActiveWorkspaceKbRoot — active-workspace KB read scoping (ADR
     const result = await resolveActiveWorkspaceKbRoot(userId, supabase);
 
     expect(result).toEqual({ ok: false, status: 503 });
+  });
+});
+
+// #5005 — direct coverage for `resolveActiveWorkspacePath`, the path-only
+// resolver that the attachment-pipeline, vision, and repo/status readers
+// consume. Its fail-closed-to-solo IDOR property is the load-bearing security
+// invariant for those three converged readers; without this block it was only
+// asserted transitively via `resolveActiveWorkspaceKbRoot` (which shares the
+// `resolveActiveWorkspaceIdWithMembership` core but is a different exported fn).
+describe("resolveActiveWorkspacePath — active-workspace path scoping (#5005)", () => {
+  it("null claim resolves the SOLO path (= userId); no membership/org query", async () => {
+    const userId = randomUUID();
+
+    // No workspace_members stub — a solo (claim === userId) resolve must not
+    // query it; supabaseMulti throws on any unstubbed table.
+    const supabase = supabaseMulti({
+      user_session_state: mockQueryChain({ current_workspace_id: null }),
+    });
+
+    const path = await resolveActiveWorkspacePath(userId, supabase);
+
+    expect(path).toBe(`${ROOT}/${userId}`);
+  });
+
+  it("member with a shared-workspace claim resolves the SHARED path", async () => {
+    const userId = randomUUID();
+    const sharedWs = randomUUID();
+
+    const supabase = supabaseMulti({
+      user_session_state: mockQueryChain({ current_workspace_id: sharedWs }),
+      workspace_members: mockQueryChain({ user_id: userId }), // is a member
+    });
+
+    const path = await resolveActiveWorkspacePath(userId, supabase);
+
+    expect(path).toBe(`${ROOT}/${sharedWs}`);
+  });
+
+  it("a claim the caller is NOT a member of falls back to SOLO — never the sibling (IDOR / cross-tenant guard)", async () => {
+    const userId = randomUUID();
+    const siblingWs = randomUUID();
+
+    const supabase = supabaseMulti({
+      user_session_state: mockQueryChain({ current_workspace_id: siblingWs }),
+      workspace_members: mockQueryChain(null), // NOT a member of siblingWs
+    });
+
+    const path = await resolveActiveWorkspacePath(userId, supabase);
+
+    expect(path).toBe(`${ROOT}/${userId}`); // solo, NOT siblingWs
+    expect(path).not.toContain(siblingWs);
   });
 });
