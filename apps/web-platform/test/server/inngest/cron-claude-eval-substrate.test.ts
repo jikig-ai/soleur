@@ -30,7 +30,6 @@ import {
   spawnSimple,
   STDOUT_TAIL_CAP_BYTES,
 } from "@/server/inngest/functions/_cron-claude-eval-substrate";
-import { join } from "node:path";
 
 // #4684/#4689 — crons mkdtemp'd under os.tmpdir() (the 256 MB /tmp tmpfs in
 // prod), so a git clone of the ~100 MB soleur tree ENOSPC'd. The fix routes the
