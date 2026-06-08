@@ -12,10 +12,12 @@ Generate a rolling campaign calendar by scanning `knowledge-base/marketing/distr
 `$ARGUMENTS` is parsed for optional flags:
 
 ```text
-campaign-calendar [--headless]
+campaign-calendar [--headless] [--stale-days <N>]
 ```
 
 If `$ARGUMENTS` contains `--headless`, set `HEADLESS=true`. This skill has no interactive prompts, so `--headless` is a no-op for convention compliance.
+
+`--stale-days <N>` sets the draft-staleness threshold for the "Stale Draft" group (default 7).
 
 ## Execution
 
@@ -38,16 +40,29 @@ If `$ARGUMENTS` contains `--headless`, set `HEADLESS=true`. This skill has no in
 
 ### Phase 2: Classify Entries
 
-Classify each content file into one of four groups using `status` and `publish_date`:
+Classify each content file into one of five groups using `status`, `publish_date`, and draft age:
 
 | Group | Condition | Sort Order |
 |-------|-----------|------------|
 | **Overdue** | `status: scheduled` AND `publish_date < today` | Oldest first (most overdue at top) |
 | **Upcoming** | `status: scheduled` AND `publish_date >= today` | Soonest first |
-| **Draft** | `status: draft` | Alphabetical by title |
+| **Stale Draft — needs approval** | `status: draft` AND draft age > N days (default N=7) | Oldest first (most stale at top) |
+| **Draft** | `status: draft` AND draft age ≤ N days | Alphabetical by title |
 | **Published** | `status: published` | Most recent `publish_date` first |
 
 Today's date: use the current date at execution time.
+
+**Why a distinct stale group:** `content-publisher.sh` skips any file whose
+`status != scheduled` *before* its stale-sweep, so a `draft` never ages out and
+never alerts — an un-approved draft strands silently forever. This group is the
+only cadence signal for that class (e.g. a `feature-tweet` ship draft the
+operator never flipped to `scheduled`).
+
+**Draft age:** derive from the leading `YYYY-MM-DD` in the filename
+(`<YYYY-MM-DD>-<slug>.md`, the `feature-tweet` naming) when present; otherwise
+from the file's git first-commit date (`git log --diff-filter=A --format=%cs -1
+-- <file>`), falling back to filesystem mtime. `age_days = today − that_date`.
+N defaults to 7; override via the `--stale-days <N>` argument.
 
 ### Phase 3: Generate Calendar Markdown
 
@@ -75,6 +90,16 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|-------------|----------|--------|
 | ... | ... | ... | ... | scheduled |
+
+## Stale Draft — needs approval
+
+> Drafts older than N days (default 7) still awaiting operator approval. The
+> publisher never ages these out — flip `publish_date` + `status: scheduled` to
+> release, or delete if abandoned.
+
+| Title | Type | Age (days) | Channels | Status |
+|-------|------|-----------|----------|--------|
+| ... | ... | ... | ... | draft |
 
 ## Draft
 
