@@ -1322,31 +1322,6 @@ export const realSdkQueryFactory: QueryFactory = async (
       autonomous: bashAutonomous && autonomousAckAtMs != null,
     });
 
-    // Session-start self-heal (generic, per-user, idempotent, fail-soft): if the
-    // workspace has a connected repo but no matching clone on disk, clone/repair
-    // it so the agent has a real git repo to branch/commit/work in. Runs once per
-    // cold conversation (the factory is per-cold-conversation). NEVER throws into
-    // the conversation; clone failure mirrors to Sentry and degrades gracefully.
-    await ensureWorkspaceRepoCloned({
-      userId: args.userId,
-      workspacePath,
-      installationId,
-      repoUrl,
-    });
-
-    // Issue A: mint a short-lived GitHub App installation token for the
-    // connected repo and inject it as GH_TOKEN so the agent's `gh` calls
-    // authenticate without an interactive `gh auth login` (the reported
-    // symptom). resolveInstallationId returns null for no-connected-repo /
-    // non-member — graceful degradation: gh simply stays unauthenticated,
-    // exactly as before. Mint failure is NON-FATAL: mirror to Sentry and
-    // proceed without GH_TOKEN — never block a conversation on a gh-auth
-    // mint. generateInstallationToken is token-cache-memoized per
-    // installation id, so this is not a per-dispatch network round-trip on a
-    // warm cache. Per hr-github-app-auth-not-pat this is an App installation
-    // token, NEVER a PAT, and the value is NEVER logged. (Sentry
-    // 512e253141294ac1a808b2ef03a21289 — cron-follow-through-monitor — is the
-    // cron-side root cause this mirrors for the interactive path.)
     // Parse the connected repo's owner/repo ONCE from the server-resolved
     // repoUrl (never tool input). Reused by the installation self-heal below
     // and the C4 write-tool gate further down. CC_GITHUB_NAME_RE rejects any
@@ -1458,6 +1433,44 @@ export const realSdkQueryFactory: QueryFactory = async (
       }
     }
 
+    // Session-start self-heal (generic, per-user, idempotent, fail-soft): if the
+    // workspace has a connected repo but no matching clone on disk, clone/repair
+    // it so the agent has a real git repo to branch/commit/work in. Runs once per
+    // cold conversation (the factory is per-cold-conversation). NEVER throws into
+    // the conversation; clone failure mirrors to Sentry and degrades gracefully.
+    //
+    // Consumes `effectiveInstallationId` — the SELF-HEALED, entitled repo-owner
+    // install computed just above — NOT the raw stored `installationId`. Cloning
+    // with a stored cross-account/personal install (which may hold only
+    // `issues: read` on the org repo) 403s on `git clone`, fails fail-soft, and
+    // leaves the workspace `.git`-less, surfacing downstream as the opaque
+    // "No Git Repository in Workspace" worktree error. The GH_TOKEN mint and the
+    // C4 write tool already consume `effectiveInstallationId`; the clone now joins
+    // them as the third consumer (feat-one-shot-concierge-gh-403 — the self-heal
+    // selection now actually reaches the clone, which #5031 hardened but never
+    // wired through). In every non-promotion branch `effectiveInstallationId ===
+    // installationId`, so the clone uses exactly the stored install it did before
+    // whenever the entitlement gate did not promote — the fix never widens access.
+    await ensureWorkspaceRepoCloned({
+      userId: args.userId,
+      workspacePath,
+      installationId: effectiveInstallationId,
+      repoUrl,
+    });
+
+    // Issue A: mint a short-lived GitHub App installation token for the
+    // connected repo and inject it as GH_TOKEN so the agent's `gh` calls
+    // authenticate without an interactive `gh auth login` (the reported
+    // symptom). resolveInstallationId returns null for no-connected-repo /
+    // non-member — graceful degradation: gh simply stays unauthenticated,
+    // exactly as before. Mint failure is NON-FATAL: mirror to Sentry and
+    // proceed without GH_TOKEN — never block a conversation on a gh-auth
+    // mint. generateInstallationToken is token-cache-memoized per
+    // installation id, so this is not a per-dispatch network round-trip on a
+    // warm cache. Per hr-github-app-auth-not-pat this is an App installation
+    // token, NEVER a PAT, and the value is NEVER logged. (Sentry
+    // 512e253141294ac1a808b2ef03a21289 — cron-follow-through-monitor — is the
+    // cron-side root cause this mirrors for the interactive path.)
     let ghToken: string | undefined;
     if (effectiveInstallationId !== null) {
       try {
