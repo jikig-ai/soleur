@@ -235,11 +235,12 @@ ${msg}
 phase('Analyze')
 const analysis = await agent(analyzePrompt, { label: 'analyze', phase: 'Analyze', schema: ANALYZE_SCHEMA })
 // Normalize + sanitize ids up front (they reach git mv / ls argv downstream).
+const _seenTodoIds = new Set()
 const todos = (analysis?.todos || [])
   .map((t) => ({ ...t, issueId: safeId(t.issueId) }))
   .filter((t) => t.issueId)
-  // dedup by issueId (defensive against an agent listing a file twice)
-  .filter((t, i, a) => a.findIndex((x) => x.issueId === t.issueId) === i)
+  // dedup by issueId (defensive against an agent listing a file twice) — one-pass Set, O(N)
+  .filter((t) => !_seenTodoIds.has(t.issueId) && _seenTodoIds.add(t.issueId))
 
 if (!todos.length) {
   log('No pending legacy todos/*.md to resolve — nothing to do.')

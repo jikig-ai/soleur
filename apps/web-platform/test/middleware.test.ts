@@ -49,6 +49,16 @@ describe("middleware path routing", () => {
       expect(isPublicPath("/api/internal/trigger-cron")).toBe(true);
     });
 
+    test("/api/waitlist is public (anonymous marketing-waitlist capture, route-gated)", () => {
+      // The shared-document banner (an anonymous, cookieless surface) POSTs the
+      // visitor's email here. Without PUBLIC_PATHS membership, Supabase
+      // middleware 307→/login before the route's own validateOrigin + honeypot +
+      // rate-limit gates run, making the form unreachable. Same class as #4017.
+      // Narrow exact path — the bare /api parent stays private.
+      expect(isPublicPath("/api/waitlist")).toBe(true);
+      expect(isPublicPath("/api")).toBe(false);
+    });
+
     test("/api/internal/schedule-reminder is public (Bearer-gated by route, not Supabase)", () => {
       // Same class as trigger-cron: secret-gated, cookieless operator/agent
       // caller. Without this, Supabase middleware 307→/login before the route's

@@ -1,0 +1,717 @@
+{
+  "version": "2.11",
+  "children": [
+    {
+      "type": "frame",
+      "id": "pr3Eo",
+      "x": 0,
+      "y": 0,
+      "name": "Desktop — Idle (two-tier)",
+      "width": 1000,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "padding": [
+        80,
+        116,
+        40,
+        116
+      ],
+      "children": [
+        {
+          "type": "frame",
+          "id": "NpB1o",
+          "name": "Banner Bar",
+          "width": 768,
+          "fill": "#141414F2",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "layout": "vertical",
+          "gap": 10,
+          "padding": [
+            12,
+            16
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "yHc7A",
+              "name": "Message + Dismiss",
+              "width": "fill_container",
+              "gap": 16,
+              "justifyContent": "space_between",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "eRSnP",
+                  "name": "Message",
+                  "fill": "#848484",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Built with Soleur — AI agents for every department of your startup.",
+                  "lineHeight": 1.4,
+                  "fontFamily": "Inter",
+                  "fontSize": 14
+                },
+                {
+                  "type": "frame",
+                  "id": "ki6DI",
+                  "name": "Dismiss",
+                  "width": 24,
+                  "height": 24,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "Due8H",
+                      "name": "xicon",
+                      "width": 16,
+                      "height": 16,
+                      "iconFontName": "x",
+                      "iconFontFamily": "lucide",
+                      "fill": "#6A6A6A"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "QPVxx",
+              "name": "Value Prop",
+              "fill": "#FFFFFF",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Join the waitlist for early access.",
+              "lineHeight": 1.4,
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "500"
+            },
+            {
+              "type": "frame",
+              "id": "f9kql",
+              "name": "Input Row",
+              "width": "fill_container",
+              "gap": 8,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "2U9db",
+                  "name": "Email Input",
+                  "width": "fill_container",
+                  "fill": "#0A0A0A",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "padding": [
+                    9,
+                    12
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "TX7Km",
+                      "name": "Placeholder",
+                      "fill": "#6A6A6A",
+                      "content": "you@company.com",
+                      "fontFamily": "Inter",
+                      "fontSize": 14
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "OD0yi",
+                  "name": "Join Button",
+                  "fill": "#C9A962",
+                  "cornerRadius": 8,
+                  "padding": [
+                    9,
+                    16
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "D6nOD",
+                      "name": "joinlbl",
+                      "fill": "#1A1612",
+                      "content": "Join",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "Y1zXg",
+              "name": "Privacy Line",
+              "width": "fill_container",
+              "gap": 4,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "2RTQf",
+                  "name": "Privacy Notice",
+                  "fill": "#6A6A6A",
+                  "content": "No spam. We email you once when early access opens.",
+                  "fontFamily": "Inter",
+                  "fontSize": 12
+                },
+                {
+                  "type": "text",
+                  "id": "KP26I",
+                  "name": "privdot",
+                  "fill": "#6A6A6A",
+                  "content": "·",
+                  "fontFamily": "Inter",
+                  "fontSize": 12
+                },
+                {
+                  "type": "text",
+                  "id": "JuRP9",
+                  "name": "Privacy Policy Link",
+                  "fill": "#C9A962",
+                  "content": "Privacy Policy",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "8r7ru",
+      "x": 0,
+      "y": 340,
+      "name": "Desktop — Success",
+      "width": 1000,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "padding": [
+        80,
+        116,
+        40,
+        116
+      ],
+      "children": [
+        {
+          "type": "frame",
+          "id": "zj3fg",
+          "name": "Banner Bar",
+          "width": 768,
+          "fill": "#141414F2",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "gap": 16,
+          "padding": 16,
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "81dK0",
+              "name": "Confirmation",
+              "gap": 8,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "pxa6A",
+                  "name": "checkic",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "check",
+                  "iconFontFamily": "lucide",
+                  "fill": "#C9A962"
+                },
+                {
+                  "type": "text",
+                  "id": "tpCRf",
+                  "name": "Success Text",
+                  "fill": "#FFFFFF",
+                  "content": "You're on the list",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "QBV0j",
+              "name": "Dismiss",
+              "width": 24,
+              "height": 24,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "s2FR3",
+                  "name": "xicon2",
+                  "width": 16,
+                  "height": 16,
+                  "iconFontName": "x",
+                  "iconFontFamily": "lucide",
+                  "fill": "#6A6A6A"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "jIKQu",
+      "x": 1080,
+      "y": 0,
+      "name": "Mobile — Idle (stacked)",
+      "width": 420,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "padding": [
+        40,
+        16,
+        16,
+        16
+      ],
+      "children": [
+        {
+          "type": "frame",
+          "id": "Gx7Xv",
+          "name": "Banner Bar",
+          "width": 388,
+          "fill": "#141414F2",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "layout": "vertical",
+          "gap": 10,
+          "padding": [
+            12,
+            16,
+            14,
+            16
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "5nEZj",
+              "name": "Message + Dismiss",
+              "width": "fill_container",
+              "gap": 12,
+              "justifyContent": "space_between",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "2pwpY",
+                  "name": "Message",
+                  "fill": "#848484",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Built with Soleur — AI agents for every department of your startup.",
+                  "lineHeight": 1.4,
+                  "fontFamily": "Inter",
+                  "fontSize": 13
+                },
+                {
+                  "type": "frame",
+                  "id": "oG3kC",
+                  "name": "Dismiss",
+                  "width": 24,
+                  "height": 24,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "26pGO",
+                      "name": "mx",
+                      "width": 16,
+                      "height": 16,
+                      "iconFontName": "x",
+                      "iconFontFamily": "lucide",
+                      "fill": "#6A6A6A"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "lvaHH",
+              "name": "Email Input",
+              "width": "fill_container",
+              "fill": "#0A0A0A",
+              "cornerRadius": 8,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "padding": [
+                11,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "xb4cB",
+                  "name": "memailph",
+                  "fill": "#6A6A6A",
+                  "content": "you@company.com",
+                  "fontFamily": "Inter",
+                  "fontSize": 14
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "JIwyJ",
+              "name": "Join Button",
+              "width": "fill_container",
+              "fill": "#C9A962",
+              "cornerRadius": 8,
+              "padding": [
+                11,
+                16
+              ],
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "coyYu",
+                  "name": "mjoinlbl",
+                  "fill": "#1A1612",
+                  "content": "Join",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "UYIlA",
+              "name": "Privacy Line",
+              "width": "fill_container",
+              "gap": 4,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "1D079",
+                  "name": "Privacy Notice",
+                  "fill": "#6A6A6A",
+                  "content": "No spam. One email at early access.",
+                  "fontFamily": "Inter",
+                  "fontSize": 11
+                },
+                {
+                  "type": "text",
+                  "id": "fGSHI",
+                  "name": "mprivdot",
+                  "fill": "#6A6A6A",
+                  "content": "·",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "xXAQj",
+                  "name": "Privacy Policy Link",
+                  "fill": "#C9A962",
+                  "content": "Privacy Policy",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "500"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "crpyw",
+      "x": 1080,
+      "y": 440,
+      "name": "Mobile — Success",
+      "width": 420,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "padding": [
+        40,
+        16,
+        16,
+        16
+      ],
+      "children": [
+        {
+          "type": "frame",
+          "id": "NscWN",
+          "name": "Banner Bar",
+          "width": 388,
+          "fill": "#141414F2",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "gap": 12,
+          "padding": 16,
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "zx1NR",
+              "name": "Confirmation",
+              "gap": 8,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "H62tB",
+                  "name": "mscheck",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "check",
+                  "iconFontFamily": "lucide",
+                  "fill": "#C9A962"
+                },
+                {
+                  "type": "text",
+                  "id": "9Nn7d",
+                  "name": "mstext",
+                  "fill": "#FFFFFF",
+                  "content": "You're on the list",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "nuXwM",
+              "name": "Dismiss",
+              "width": 24,
+              "height": 24,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "khgn5",
+                  "name": "msx",
+                  "width": 16,
+                  "height": 16,
+                  "iconFontName": "x",
+                  "iconFontFamily": "lucide",
+                  "fill": "#6A6A6A"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "Tm1io",
+      "x": 0,
+      "y": 580,
+      "name": "Desktop — Error",
+      "width": 1000,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "padding": [
+        80,
+        116,
+        40,
+        116
+      ],
+      "children": [
+        {
+          "type": "frame",
+          "id": "IpiTP",
+          "name": "Banner Bar",
+          "width": 768,
+          "fill": "#141414F2",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "layout": "vertical",
+          "gap": 10,
+          "padding": [
+            12,
+            16
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "148Z2",
+              "name": "Message + Dismiss",
+              "width": "fill_container",
+              "gap": 16,
+              "justifyContent": "space_between",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "QcYWP",
+                  "name": "emsg",
+                  "fill": "#848484",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Built with Soleur — AI agents for every department of your startup.",
+                  "lineHeight": 1.4,
+                  "fontFamily": "Inter",
+                  "fontSize": 14
+                },
+                {
+                  "type": "frame",
+                  "id": "9oRWh",
+                  "name": "edismiss",
+                  "width": 24,
+                  "height": 24,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "e9C8k",
+                      "name": "ex",
+                      "width": 16,
+                      "height": 16,
+                      "iconFontName": "x",
+                      "iconFontFamily": "lucide",
+                      "fill": "#6A6A6A"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "6WN69",
+              "name": "Input Row",
+              "width": "fill_container",
+              "gap": 8,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "YPkQR",
+                  "name": "Email Input (error)",
+                  "width": "fill_container",
+                  "fill": "#0A0A0A",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1.5,
+                    "fill": "#B8923E"
+                  },
+                  "padding": [
+                    9,
+                    12
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "dqRur",
+                      "name": "eemailv",
+                      "fill": "#FFFFFF",
+                      "content": "not-an-email",
+                      "fontFamily": "Inter",
+                      "fontSize": 14
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "HdC0G",
+                  "name": "Join Button",
+                  "fill": "#C9A962",
+                  "cornerRadius": 8,
+                  "padding": [
+                    9,
+                    16
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "L5tlH",
+                      "name": "ejoinlbl",
+                      "fill": "#1A1612",
+                      "content": "Join",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "kNf90",
+              "name": "Error Status (aria-live)",
+              "fill": "#D99A6A",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Something went wrong. Please try again.",
+              "lineHeight": 1.4,
+              "fontFamily": "Inter",
+              "fontSize": 12
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
