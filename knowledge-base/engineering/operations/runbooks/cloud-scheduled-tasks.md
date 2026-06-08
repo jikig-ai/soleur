@@ -643,8 +643,20 @@ unhooked tool class / crashed hook fails OPEN. So:
 
 **Promoting a paused cron to Tier-1:** enumerate its verbs → add to `CRON_BASH_ALLOWLISTS`
 → remove from `TIER2_DEFERRED_CRONS` → `/soleur:trigger-cron <cron>` and confirm it produces
-its `[Scheduled]` issue end-to-end. If the hook denies a needed verb, the run produces no
-output → its monitor stays GREEN (heartbeat) but no issue lands — re-check the allowlist.
+its output end-to-end. If the hook denies a needed verb, the run produces no
+output → its monitor stays GREEN (heartbeat) but nothing lands — re-check the allowlist.
+
+**Verifying a trigger — the output signal is cron-specific (issue OR PR).** Do NOT assume the
+success signal is a `[Scheduled] <task>` *issue*. `roadmap-review` (and any cron with an
+auto-fix path) takes the **PR path** whenever it finds something to fix — it opens a roadmap
+PR (author `app/soleur-ai`) carrying the review summary in the PR body and files the standalone
+issue only when there is nothing to auto-fix (rare for a living roadmap). So when validating a
+Tier-1 cron post-trigger, accept **either** a fresh `[Scheduled]` issue **or** a fresh
+`app/soleur-ai` PR as proof the cron ran end-to-end through the hook — a PR proves *more* (its
+full `git checkout → add → commit → push -u origin → gh pr create` chain succeeded through the
+containment). A monitor that watches only for the issue will false-negative on the PR path.
+**Why:** AC11 of #5018 — roadmap-review consistently produced PRs (#5053, #5058), never the
+issue; the issue-only check timed out despite the containment working perfectly.
 
 ## References
 
