@@ -109,7 +109,12 @@ describe("Dashboard sidebar collapse", () => {
     const toggle = screen.getByLabelText("Collapse sidebar");
     expect(toggle.className).toContain("absolute");
     expect(toggle.className).toContain("md:flex");
-    expect(toggle.className).toContain("top-3");
+    // top-7 (28px) vertically centers the h-6 toggle on the 64px workspace pill
+    // (center 40px), not the old top-3 corner offset that read ~16px high. jsdom
+    // has no layout engine, so this is a className drift tripwire; the pixel proof
+    // (≤2px rect-center alignment) lives in e2e/nav-states-shell.e2e.ts (AC1).
+    expect(toggle.className).toContain("top-7");
+    expect(toggle.className).not.toContain("top-3");
     expect(toggle.className).toContain("right-3");
   });
 

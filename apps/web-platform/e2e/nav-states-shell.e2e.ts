@@ -358,7 +358,7 @@ const resizeHandle = (page: Page) => page.getByTestId("kb-rail-resize-handle");
 const asideWidth = (page: Page) =>
   page.locator("aside").first().evaluate((el) => el.clientWidth);
 
-// The collapse toggle is FLOATED (`absolute right-3 top-3`) on desktop after the
+// The collapse toggle is FLOATED (`absolute right-3 top-7`) on desktop after the
 // reclaimed-space restructure — it is no longer in the rail-header flow. Its
 // accessible name flips with state (`Collapse sidebar` expanded / `Expand
 // sidebar` collapsed), so match either label — it is the only `… sidebar` button.
@@ -431,18 +431,21 @@ test.describe("nav-states visual gate — desktop", () => {
 
     // Reclaimed-space restructure: the collapse toggle no longer lives in a
     // rail-header row aligned to the back-affordance gutter — it is FLOATED in the
-    // aside's top-RIGHT corner (`absolute right-3 top-3`). Assert it is visible,
+    // aside's top-RIGHT region (`absolute right-3 top-7`). Assert it is visible,
     // anchored to the top-right of the aside box, and fully inside the rail.
     await expect(collapseToggle(page)).toBeVisible({ timeout: 15_000 });
     const asideBox = await aside.boundingBox();
     const toggleBox = await collapseToggle(page).boundingBox();
     expect(asideBox).not.toBeNull();
     expect(toggleBox).not.toBeNull();
-    // Top-anchored: toggle top edge within ~16px of the aside top.
+    // Top-region anchored: the toggle is centered on the workspace pill row
+    // (top-7 = 28px), so its top edge sits ~28px below the aside top — still in
+    // the rail's top region, never buried in the middle. (Was ≤16 when the toggle
+    // sat at the top-3 corner; loosened to ≤32 for the centered top-7 offset.)
     expect(
       toggleBox!.y - asideBox!.y,
-      "floated collapse toggle drifted from the aside top",
-    ).toBeLessThanOrEqual(16);
+      "floated collapse toggle drifted from the aside top region",
+    ).toBeLessThanOrEqual(32);
     // Right-anchored + inside the rail: toggle right edge within ~16px of the
     // aside right edge and never spilling past it.
     const asideRight = asideBox!.x + asideBox!.width;
@@ -507,6 +510,50 @@ test.describe("nav-states visual gate — desktop", () => {
       intersects(toggleBox!, switcherBox!),
       "floated collapse toggle overlaps the workspace switcher card/chevron",
     ).toBe(false);
+
+    // AC1 — vertical alignment: the floated toggle's center must sit on the
+    // switcher card's vertical center (≤2px). The pre-existing non-overlap
+    // assertion above is satisfied by a misaligned-but-disjoint toggle — exactly
+    // how PR #4997's `top-3` corner offset shipped ~16px above the card center.
+    // This positive rect-center assertion is the gate that catches THAT class.
+    const toggleCenterY = toggleBox!.y + toggleBox!.height / 2;
+    const switcherCenterY = switcherBox!.y + switcherBox!.height / 2;
+    expect(
+      Math.abs(toggleCenterY - switcherCenterY),
+      "floated collapse toggle is not vertically centered on the workspace switcher card",
+    ).toBeLessThanOrEqual(2);
+  });
+
+  test("expanded single-workspace: floated toggle is vertically centered on the identity chip (AC1)", async ({ page }) => {
+    // Default 1-membership render (the static identity chip, no `▾` chevron) — the
+    // surface in the reported screenshot. Same `px-3 py-2.5` + lg-tile geometry as
+    // the multi-workspace switch button, so the toggle-center alignment must hold.
+    await setupNavMocks(page);
+    await gotoOrSkip(page, "/dashboard");
+
+    const aside = page.locator("aside").first();
+    await expect(aside).toHaveClass(/md:w-56/, { timeout: 15_000 });
+    await expect(orgIdentity(page)).toContainText("Soleur Workspace", {
+      timeout: 15_000,
+    });
+    await expect(collapseToggle(page)).toBeVisible({ timeout: 15_000 });
+
+    const toggleBox = await collapseToggle(page).boundingBox();
+    const chipBox = await orgIdentity(page).boundingBox();
+    expect(toggleBox).not.toBeNull();
+    expect(chipBox).not.toBeNull();
+    // No overlap with the identity chip (no chevron in this branch).
+    expect(
+      intersects(toggleBox!, chipBox!),
+      "floated collapse toggle overlaps the single-workspace identity chip",
+    ).toBe(false);
+    // AC1 — vertical center alignment (≤2px).
+    const toggleCenterY = toggleBox!.y + toggleBox!.height / 2;
+    const chipCenterY = chipBox!.y + chipBox!.height / 2;
+    expect(
+      Math.abs(toggleCenterY - chipCenterY),
+      "floated collapse toggle is not vertically centered on the identity chip",
+    ).toBeLessThanOrEqual(2);
   });
 
   test("collapsed top-level: rail is icon-only, no horizontal overflow (Bug 2)", async ({ page }) => {
