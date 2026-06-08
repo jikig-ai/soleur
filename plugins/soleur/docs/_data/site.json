@@ -14,20 +14,23 @@
     "username": "soleur"
   },
   "nav": [
+    { "label": "Product", "children": [
+      { "label": "Agents", "url": "/agents/" },
+      { "label": "Skills", "url": "/skills/" }
+    ] },
     { "label": "Pricing", "url": "/pricing/" },
     { "label": "Get Started", "url": "/getting-started/" },
-    { "label": "Agents", "url": "/agents/" },
-    { "label": "Skills", "url": "/skills/" },
-    { "label": "Community", "url": "/community/" },
-    { "label": "About", "url": "/about/" },
     { "label": "Blog", "url": "/blog/" },
-    { "label": "Vision", "url": "/vision/" },
-    { "label": "Changelog", "url": "/changelog/" }
+    { "label": "Company", "children": [
+      { "label": "About", "url": "/about/" },
+      { "label": "Vision", "url": "/vision/" },
+      { "label": "Community", "url": "/community/" }
+    ] }
   ],
   "primaryCta": {
-    "label": "Reserve access",
+    "label": "Join the waitlist",
     "url": "/pricing/#waitlist",
-    "ariaLabel": "Reserve access to the hosted Soleur platform"
+    "ariaLabel": "Join the waitlist for the hosted Soleur platform"
   },
   "author": {
     "name": "Jean Deruelle",
@@ -57,7 +60,7 @@
       "heading": "Product",
       "links": [
         { "label": "Get Started", "url": "/getting-started/" },
-        { "label": "Hosted version (coming soon)", "url": "/pricing/#waitlist", "title": "Reserve access — opening in waves to a founding cohort" },
+        { "label": "Hosted version (coming soon)", "url": "/pricing/#waitlist", "title": "Join the waitlist — opening in waves to a founding cohort" },
         { "label": "Pricing", "url": "/pricing/" },
         { "label": "Agents", "url": "/agents/" },
         { "label": "Skills", "url": "/skills/" },
