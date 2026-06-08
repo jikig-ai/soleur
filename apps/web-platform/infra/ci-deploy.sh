@@ -327,6 +327,11 @@ fi
 # lifetime of the script. Release is implicit -- the kernel closes FD 200
 # on process exit (any exit code, including SIGKILL). No manual `flock -u`
 # path exists; loser writes reason="lock_contention" and exits non-zero.
+# Long-running foreground docker children (prune/pull) close FD 200 via
+# `200>&-` (#5062) so an orphaned child — bash SIGKILLed mid-`docker pull`
+# before the TERM trap can `pkill` it — cannot hold the lock past this
+# script's death. Without that, the flock outlives ci-deploy.sh and blocks
+# all future deploys until a webhook restart.
 # A "lock_contention" reason on a webhook retry therefore means the prior
 # invocation is still in its critical section, NOT a release-path leak.
 # See #3398 for the cascading-rerun pattern this serialization produces
@@ -384,8 +389,20 @@ fi
 case "$COMPONENT" in
   web-platform)
     echo "Pruning unused Docker images..."
-    docker image prune -af
-    docker pull "$IMAGE:$TAG"
+    # `200>&-` closes the FD-200 advisory lock for these long-running docker
+    # children (#5062). Without it, a `docker pull` blocked on a network syscall
+    # when ci-deploy-wrapper.sh SIGKILLs the script — bash cannot dispatch the
+    # TERM trap mid-foreground-command, so `pkill -P $$` never runs (the caveat
+    # documented at the trap above) — is orphaned, still holding FD 200. The
+    # flock then outlives ci-deploy.sh for the FULL duration of the orphaned pull
+    # (~40 min on a full re-pull), blocking every future deploy with
+    # reason="lock_contention" until a webhook restart. Closing FD 200 for these
+    # children means the kernel releases the lock the instant ci-deploy.sh dies;
+    # the orphaned pull keeps running harmlessly (and warms the layer cache for
+    # the next attempt). prune is included for the same reason — a slow prune on
+    # a disk-full host is the same orphan class.
+    docker image prune -af 200>&-
+    docker pull "$IMAGE:$TAG" 200>&-
 
     # Clean stale canary from previous failed deploy
     { docker stop soleur-web-platform-canary 2>/dev/null || true; }

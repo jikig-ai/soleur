@@ -2022,6 +2022,22 @@ assert_state_contains "deploy inngest restart latest rejected as image_mismatch"
   "image_mismatch" "1" \
   "deploy inngest restart latest"
 
+# Regression guard for #5062: the long-running foreground docker children
+# (prune/pull) MUST close the FD-200 advisory lock (`200>&-`) so an orphaned
+# child (bash SIGKILLed mid-`docker pull`, TERM trap never dispatched) cannot
+# hold the flock past ci-deploy.sh's death and block all future deploys. A
+# source-grep gate — a future edit that drops `200>&-` re-introduces the
+# 40-min-stuck-lock class the v0.116.1 PIR documented.
+TOTAL=$((TOTAL + 1))
+if grep -qE '^[[:space:]]*docker pull "\$IMAGE:\$TAG" 200>&-' "$DEPLOY_SCRIPT" \
+   && grep -qE '^[[:space:]]*docker image prune -af 200>&-' "$DEPLOY_SCRIPT"; then
+  PASS=$((PASS + 1))
+  echo "  PASS: long-running docker children close FD-200 lock (200>&-) — #5062 guard"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: docker pull/prune must close FD-200 via '200>&-' (#5062) — an orphaned pull would hold the deploy lock"
+fi
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 

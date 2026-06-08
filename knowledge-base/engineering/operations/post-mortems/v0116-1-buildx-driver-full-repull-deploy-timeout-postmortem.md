@@ -2,11 +2,11 @@
 title: "v0.116.1 deploy timeout — buildx driver switch forced a one-time full-layer re-pull"
 date: 2026-06-08
 incident_pr: 5051
-incident_window: "2026-06-08 20:06Z – ongoing (deploy job failed 20:21Z; v0.116.1 still converging via warm re-pulls; prod healthy on 0.116.0 throughout)"
-recovery_at: "pending — converging; no user impact (v0.116.1 has zero app-code delta vs live 0.116.0)"
+incident_window: "2026-06-08 20:06Z – 22:24Z (deploy job failed 20:21Z; prod flipped to v0.116.1 at 22:24Z; prod healthy on 0.116.0 throughout — no user-facing outage)"
+recovery_at: "2026-06-08 22:24Z — prod on v0.116.1 (build_sha 6e7cac76), deploy exit_code=0; no user impact (v0.116.1 has zero app-code delta vs live 0.116.0)"
 suspected_change: "PR #5051 WS2 — added docker/setup-buildx-action (docker-container driver) for type=gha cache"
 brand_survival_threshold: single-user incident
-status: ongoing
+status: resolved
 triggers:
   - deploy-pipeline reliability (web-platform release)
 art_33_triggered: false
@@ -29,17 +29,21 @@ different layer digests/structure than the previous releases. On the first relea
 merge (v0.116.1), the prod server's `docker pull` therefore had to **re-pull every layer** (a
 multi-GB full re-pull: claude-code, likec4, playwright-chromium, apt, node). The re-pull exceeded
 the `deploy` job's 900s `Verify deploy script completion` poll ceiling, so the deploy job **failed**
-at 20:21Z. The server-side `ci-deploy.sh` keeps pulling; each attempt is killed at the wrapper's
-900s cap before the full multi-GB re-pull finishes, but `docker pull` resumes from cached layers,
-so repeated attempts converge. As of this writing prod is still on 0.116.0 (healthy) and v0.116.1
-is converging. **No user impact** — see User-Brand Impact.
+at 20:21Z. The server-side `ci-deploy.sh` kept pulling; each attempt was killed at the wrapper's
+900s cap before the full multi-GB re-pull finished, but `docker pull` resumes from cached layers,
+so repeated attempts converged. **Resolution (22:24Z):** merging the durable ceiling fix #5066
+(closes #5061) fired the deploy-pipeline-fix apply, which runs `systemctl restart webhook`
+(`server.tf:457`) — killing the handler and the FD-200-holding `docker pull` child, **freeing the
+flock unconditionally**. The next deploy then completed on the now-fully-cached layers
+(`exit_code=0`) and prod flipped to v0.116.1 (build_sha 6e7cac76). **No user impact** throughout.
 
 ## Status
 
-ongoing (benign) — v0.116.1 converging via warm re-pulls; prod healthy on 0.116.0 throughout; zero
-user impact (no app-code delta). Durable fix #5061 (raise the 900s ceiling so a single re-pull can
-finish) is the clean resolution and applies via the DPF auto-apply path without being blocked by
-the stuck image pull.
+resolved — prod on v0.116.1 (deploy `exit_code=0`) as of 22:24Z; healthy on 0.116.0 throughout the
+window (zero app-code delta, no user-facing outage). The durable fix #5066 (#5061) raised the
+deploy-completion ceiling 900s→1800s and is live on main; its v0.116.2 release is the first deploy
+to exercise the raised ceiling. The autonomous lock-clear was the `webhook` restart on the DPF
+apply — no SSH, no operator action.
 
 ## Symptom
 
@@ -66,8 +70,8 @@ for the one-time full re-pull WS2 induced.
 ## Incident Timeline
 
 - **Start (detected):** 2026-06-08 20:21Z (deploy job failed)
-- **End (recovered):** pending (v0.116.1 converging; no user-facing outage at any point)
-- **Duration (MTTR):** n/a — no user-facing outage; the "recovery" is a benign version catch-up
+- **End (recovered):** 2026-06-08 22:24Z (prod flipped to v0.116.1, deploy exit_code=0)
+- **Duration (MTTR):** ~2h3m to version catch-up — but **no user-facing outage at any point** (byte-identical bundle); the "recovery" is a benign version flip, not a restoration of service.
 
 | Actor | Time (UTC) | Action |
 |---|---|---|
@@ -77,7 +81,9 @@ for the one-time full re-pull WS2 induced.
 | agent | 20:25–20:39Z | Confirmed prod healthy on 0.116.0; deploy-status `exit_code=-1 reason=running`; re-trigger attempts returned `lock_contention` (original deploy still holding the flock past the 920s wrapper kill). |
 | agent | ~20:42Z | Established **zero user impact** (v0.116.1 has no app-code delta vs live 0.116.0). |
 | agent | ~20:50Z | Lock released; fresh deploy POST returned HTTP 202 (warm layers); deploy converging. |
-| agent | ~20:55Z+ | v0.116.1 still converging via warm re-pulls; prod healthy on 0.116.0; handed off with durable fix #5061 to land the ceiling raise. |
+| agent | ~20:55Z–22:18Z | Shipped durable ceiling fix #5066 (#5061): raise 900s→1800s across the coupled windows + wrapper; v0.116.1 converging via warm re-pulls meanwhile; prod healthy on 0.116.0. |
+| agent | 22:18Z | #5066 merged → deploy-pipeline-fix apply ran `systemctl restart webhook` → killed the FD-200-holding `docker pull` child → freed the flock. |
+| agent | 22:24Z | Next deploy completed on fully-cached layers (`exit_code=0`); **prod flipped to v0.116.1** (build_sha 6e7cac76). Resolved autonomously — no SSH. |
 
 ## Detection (+ MTTD)
 
