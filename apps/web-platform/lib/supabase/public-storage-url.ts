@@ -2,8 +2,10 @@
  * Rewrite a Supabase storage URL's origin to the public Supabase host
  * (`NEXT_PUBLIC_SUPABASE_URL`).
  *
- * `createServiceClient` signs storage URLs against `SUPABASE_URL`, which in prod
- * is the raw `<ref>.supabase.co` host. But the browser's CSP fetch directives
+ * The server-side service-role Supabase client signs storage URLs against
+ * `SUPABASE_URL`, which in prod is the raw `<ref>.supabase.co` host (this helper
+ * itself uses NO service-role client — it only rewrites the host so it stays off
+ * the service-role allowlist). But the browser's CSP fetch directives
  * (`img-src`, `connect-src`, …) are built from `NEXT_PUBLIC_SUPABASE_URL` (the
  * public custom domain, e.g. `api.soleur.ai`). A storage URL handed to the
  * browser on the raw host is therefore silently **CSP-blocked** — server-side
