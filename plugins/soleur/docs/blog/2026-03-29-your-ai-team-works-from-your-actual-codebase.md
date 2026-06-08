@@ -67,7 +67,7 @@ The founder's role does not change. You still make every decision. You still app
 
 New users see the repository connection flow during onboarding. Existing users can connect a repository from Settings.
 
-The feature is live now. No waitlist, no beta, no pricing change. Repository connection is part of the Soleur open-source platform.
+The feature is live now. No waitlist, no beta, no pricing change. Repository connection is part of the Soleur source-available (BSL 1.1) platform.
 
 ---
 

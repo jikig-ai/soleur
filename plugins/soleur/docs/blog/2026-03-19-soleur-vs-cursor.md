@@ -69,7 +69,7 @@ The difference between a task runner and an organizational workflow is the conte
 - **Ultra:** $200/month (20x usage, priority access)
 - **Teams:** $40/user/month
 
-Soleur is open-source. The platform is free.
+Soleur is source-available (BSL 1.1). The platform is free.
 
 If you already pay for Cursor Pro at $20/month and add Soleur, you have an AI coding environment and a full eight-department AI organization for $20/month total.
 
@@ -103,7 +103,7 @@ Cursor's Marketplace covers the engineering toolchain: infrastructure, data, obs
 
 **Q: Does Cursor's $2B+ ARR indicate it is better for enterprise use than Soleur?**
 
-Revenue scale reflects adoption within a specific domain — engineering teams at large organizations. Soleur is open-source and auditable: every agent prompt, every skill, every knowledge-base schema is readable. Founders who need full transparency into what their AI organization is doing can read the source. The two products serve different organizational scopes and are not direct enterprise-vs-startup substitutes.
+Revenue scale reflects adoption within a specific domain — engineering teams at large organizations. Soleur is source-available (BSL 1.1) and auditable: every agent prompt, every skill, every knowledge-base schema is readable. Founders who need full transparency into what their AI organization is doing can read the source. The two products serve different organizational scopes and are not direct enterprise-vs-startup substitutes.
 
 <script type="application/ld+json">
 {
@@ -139,7 +139,7 @@ Revenue scale reflects adoption within a specific domain — engineering teams a
       "name": "Does Cursor's $2B+ ARR indicate it is better for enterprise use than Soleur?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Revenue scale reflects adoption within a specific domain — engineering teams at large organizations. Soleur is open-source and auditable: every agent prompt, every skill, every knowledge-base schema is readable. Founders who need full transparency into what their AI organization is doing can read the source."
+        "text": "Revenue scale reflects adoption within a specific domain — engineering teams at large organizations. Soleur is source-available (BSL 1.1) and auditable: every agent prompt, every skill, every knowledge-base schema is readable. Founders who need full transparency into what their AI organization is doing can read the source."
       }
     }
   ]
