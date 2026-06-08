@@ -198,7 +198,12 @@
   /* Nav dropdowns (Product, Company) -- CSS hover/focus-within, no JS.
      The <button> is reset to the exact box of a flat .nav-links a so all
      header items sit on one horizontal line. */
-  .nav-has-children { position: relative; display: flex; align-items: center; }
+  .nav-has-children { position: relative; }
+  /* Regular top-level links share the dropdown button's inline-flex box so all
+     header items sit on one baseline (the 2px transparent underline + baseline
+     vs flex-center otherwise leaves dropdowns ~1-2px high). Scoped to direct
+     children so submenu links + the CTA are untouched. */
+  .nav-links > li:not(.nav-cta-slot) > a { display: inline-flex; align-items: center; }
   .nav-dropdown-summary {
     display: inline-flex;
     align-items: center;
@@ -1657,12 +1662,16 @@
   .hero-waitlist-form {
     max-width: 560px;
     margin: var(--space-6) auto 0;
+    /* Match the email input height (input uses --space-3 vertical padding;
+       .btn-primary's --space-4 made it ~8px taller). Stretch equalizes them. */
+    align-items: stretch;
   }
   .hero-waitlist-form input[type="email"] {
     background: #111;
   }
   .hero-waitlist-form .btn-primary {
     flex-shrink: 0;
+    padding: var(--space-3) var(--space-6);
   }
   .hero-waitlist-form .newsletter-status {
     text-align: center;
