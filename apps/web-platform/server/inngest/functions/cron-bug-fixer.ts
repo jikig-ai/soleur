@@ -54,6 +54,7 @@ import {
   REPO_NAME,
   redactToken,
   mintInstallationToken,
+  deferIfTier2Cron,
   postSentryHeartbeat,
   type HandlerArgs,
 } from "./_cron-shared";
@@ -593,6 +594,21 @@ export async function cronBugFixerHandler({
   autoMergeQueued: boolean;
   ok: boolean;
 }> {
+  // D6 (#5018): Tier-2-deferred — paused until the egress firewall lands.
+  // Posts an honest on-schedule check-in and skips the claude spawn (no
+  // fail-closed FAILED-issue/RED-monitor storm); the weekly output issue
+  // visibly stops. roadmap-review (#5004) is Tier-1 and is NOT deferred.
+  if (
+    await deferIfTier2Cron({
+      cronName: "cron-bug-fixer",
+      sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+      step,
+      logger,
+    })
+  ) {
+    return { selectedIssue: null, prNumber: null, autoMergeQueued: false, ok: true };
+  }
+
   // --- Parse manual-trigger override ---
   let override: number | undefined;
   const rawOverride = event?.data?.issue_number as unknown;

@@ -82,6 +82,19 @@ vi.mock("@/server/plugin-path", () => ({
   SOLEUR_PLUGIN_PATH_DEFAULT: "/app/shared/plugins/soleur",
 }));
 
+// D6 (#5018): cron-bug-fixer is Tier-2-deferred in prod (broad bash + reads
+// public issue bodies → can't be a finite allowlist). These flow tests exercise
+// the spawn/issue path that Tier-2 (egress firewall) will RESTORE, so force the
+// defer guard OFF here; the "Tier-2 deferral" describe block below asserts the
+// REAL guard defers. Everything else in _cron-shared (postSentryHeartbeat, the
+// output-aware verify) stays real — only deferIfTier2Cron is overridden.
+const deferSpy = vi.fn().mockResolvedValue(false);
+vi.mock("@/server/inngest/functions/_cron-shared", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/server/inngest/functions/_cron-shared")>();
+  return { ...actual, deferIfTier2Cron: deferSpy };
+});
+
 // --- Helpers ---------------------------------------------------------------
 
 interface MockStep {
