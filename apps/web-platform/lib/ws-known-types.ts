@@ -41,6 +41,8 @@ export const KNOWN_WS_MESSAGE_TYPES = new Set<AllowedWSMessageType>([
   "stream_end",
   "tool_use",
   "tool_progress",
+  // feat-debug-mode-stream — internal dev-cohort harness instruction stream.
+  "debug_event",
   "review_gate",
   // Usage + meta
   "usage_update",

@@ -25,12 +25,17 @@ import { WorkflowLifecycleBar } from "@/components/chat/workflow-lifecycle-bar";
 import { ToolUseChip } from "@/components/chat/tool-use-chip";
 import { RoutedLeadersStrip } from "@/components/chat/routed-leaders-strip";
 import { CohortMissingReplyMarker } from "@/components/chat/cohort-missing-reply-marker";
+import { DebugStreamPanel } from "@/components/chat/debug-stream-panel";
+import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 import type {
   InteractivePromptResponsePayload,
   InteractivePromptPayload,
 } from "@/lib/types";
-import type { ChatInteractivePromptMessage } from "@/lib/chat-state-machine";
+import type {
+  ChatInteractivePromptMessage,
+  ChatDebugEventMessage,
+} from "@/lib/chat-state-machine";
 import { CONTEXT_RESET_COPY } from "@/components/chat/chat-copy";
 
 export type ChatSurfaceVariant = "full" | "sidebar";
@@ -463,6 +468,24 @@ export function ChatSurface({
 
   const hasUserMessage = messages.some((m) => m.role === "user");
   const hasAssistantMessage = messages.some((m) => m.role === "assistant");
+
+  // feat-debug-mode-stream — the separate debug drawer. Visibility is the
+  // dev-cohort `debug-mode` flag; the panel filters debug_event frames out of
+  // the main message flow (they render null inline). `connected` drives the
+  // disconnected affordance; `hadCompletedTurn` sharpens the empty-vs-
+  // unavailable hint. Emission is server-gated independently — this only
+  // renders frames that already arrived over the ephemeral WS.
+  // Non-throwing: a provider-less render surface (older test harnesses, any
+  // future provider-less mount) reads "no flag info" as OFF — fail-closed, the
+  // panel hides. Mirrors how other provider-optional chat components degrade.
+  const debugAvailable = useOptionalFeatureFlag("debug-mode");
+  const debugEvents = useMemo(
+    () =>
+      messages.filter(
+        (m): m is ChatDebugEventMessage => m.type === "debug_event",
+      ),
+    [messages],
+  );
   // Review F10: gate the legacy `isClassifying` chip on the lifecycle bar
   // being idle — once the bar takes over routing/active/ended, the legacy
   // chip must not double-render with the bar.
@@ -753,6 +776,13 @@ export function ChatSurface({
                     </div>
                   );
                   break;
+                case "debug_event":
+                  // feat-debug-mode-stream — harness instruction-stream events
+                  // render in the SEPARATE collapsed <DebugStreamPanel> below,
+                  // NOT inline in the conversation. The case exists to satisfy
+                  // the `: never` exhaustiveness rail; inline body is null.
+                  body = null;
+                  break;
                 default: {
                   const _exhaustive: never = msg;
                   void _exhaustive;
@@ -799,6 +829,12 @@ export function ChatSurface({
             createdAt={conversationCreatedAt}
             messages={messages}
             isTurnInFlight={streamState !== "idle"}
+          />
+          <DebugStreamPanel
+            available={debugAvailable}
+            events={debugEvents}
+            connected={status === "connected"}
+            hadCompletedTurn={hasAssistantMessage && streamState === "idle"}
           />
           <div ref={messagesEndRef} />
         </div>
