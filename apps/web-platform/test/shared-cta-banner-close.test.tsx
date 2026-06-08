@@ -4,6 +4,10 @@ import { CtaBanner } from "@/components/shared/cta-banner";
 
 const STORAGE_KEY = "soleur:shared:cta-dismissed";
 
+// Banner presence is asserted via the dismiss button (stable across the
+// link→inline-form rewrite) rather than the removed signup link.
+const dismissPresent = () => screen.queryByTestId("cta-banner-dismiss");
+
 beforeEach(() => {
   sessionStorage.clear();
 });
@@ -15,30 +19,28 @@ afterEach(() => {
 });
 
 describe("CtaBanner close affordance", () => {
-  it("renders the signup CTA by default", () => {
+  it("renders the waitlist form and dismiss button by default", () => {
     render(<CtaBanner />);
-    expect(screen.getByRole("link", { name: /sign up for the waitlist/i })).toBeTruthy();
+    expect(screen.getByPlaceholderText(/you@company.com/i)).toBeTruthy();
     expect(screen.getByRole("button", { name: /dismiss signup banner/i })).toBeTruthy();
   });
 
   it("hides the banner when the close button is clicked", () => {
     render(<CtaBanner />);
-    const dismiss = screen.getByTestId("cta-banner-dismiss");
-    fireEvent.click(dismiss);
-    expect(screen.queryByRole("link", { name: /sign up for the waitlist/i })).toBeNull();
+    fireEvent.click(screen.getByTestId("cta-banner-dismiss"));
+    expect(dismissPresent()).toBeNull();
   });
 
   it("does not render when sessionStorage already marks the banner dismissed", () => {
     // Control: with cleared storage the banner MUST render — proves the
     // dismissed-key assertion below is gated on storage, not on always-null.
     const control = render(<CtaBanner />);
-    expect(screen.getByRole("link", { name: /sign up for the waitlist/i })).toBeTruthy();
+    expect(dismissPresent()).toBeTruthy();
     control.unmount();
 
     sessionStorage.setItem(STORAGE_KEY, "1");
     render(<CtaBanner />);
-    expect(screen.queryByRole("link", { name: /sign up for the waitlist/i })).toBeNull();
-    expect(screen.queryByTestId("cta-banner-dismiss")).toBeNull();
+    expect(dismissPresent()).toBeNull();
   });
 
   it("persists the dismissal across remount within the same session", () => {
@@ -47,7 +49,7 @@ describe("CtaBanner close affordance", () => {
     first.unmount();
 
     render(<CtaBanner />);
-    expect(screen.queryByRole("link", { name: /sign up for the waitlist/i })).toBeNull();
+    expect(dismissPresent()).toBeNull();
     expect(sessionStorage.getItem(STORAGE_KEY)).toBe("1");
   });
 
@@ -57,7 +59,7 @@ describe("CtaBanner close affordance", () => {
     });
 
     expect(() => render(<CtaBanner />)).not.toThrow();
-    expect(screen.getByRole("link", { name: /sign up for the waitlist/i })).toBeTruthy();
+    expect(dismissPresent()).toBeTruthy();
   });
 
   it("dismisses without throwing when sessionStorage.setItem throws", () => {
@@ -69,6 +71,6 @@ describe("CtaBanner close affordance", () => {
     expect(() =>
       fireEvent.click(screen.getByTestId("cta-banner-dismiss")),
     ).not.toThrow();
-    expect(screen.queryByRole("link", { name: /sign up for the waitlist/i })).toBeNull();
+    expect(dismissPresent()).toBeNull();
   });
 });
