@@ -114,23 +114,6 @@ export function WorkspaceContextBand({
             hasLogo={activeWorkspaceHasLogo}
           />
         </span>
-        <span
-          data-testid="live-repo-dot"
-          aria-label="Active repository"
-          title="Active repository"
-          className="text-base leading-none text-soleur-accent-gold-fg"
-        >
-          ●
-        </span>
-        {drill && !suppressSectionTitle ? (
-          <span
-            data-testid="nav-section-title"
-            title={SECTION_LABELS[drill]}
-            className="text-xs font-semibold uppercase text-soleur-text-muted"
-          >
-            {SECTION_LABELS[drill].charAt(0)}
-          </span>
-        ) : null}
       </div>
     );
   }

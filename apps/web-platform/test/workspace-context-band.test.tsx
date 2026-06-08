@@ -213,6 +213,25 @@ describe("WorkspaceContextBand — collapsed monogram identity (Phase 1, #4915)"
       "Active workspace",
     );
   });
+
+  // Declutter (sidebar-declutter-kiss): the collapsed rail drops the decorative
+  // gold repo dot and the single-letter section monogram — both carried no
+  // information the rail's icons + identity tile do not already carry. The
+  // identity tile (orientation anchor, ADR-047) is the only retained glyph.
+  it("does NOT render the decorative gold repo dot or the single-letter section monogram when collapsed", () => {
+    render(
+      <WorkspaceContextBand
+        pathname="/dashboard/kb"
+        collapsed
+        activeWorkspaceName="Soleur Workspace"
+      />,
+    );
+    // orientation anchor stays...
+    expect(screen.getByTestId("workspace-identity-icon")).toBeInTheDocument();
+    // ...the two decorative glyphs are gone.
+    expect(screen.queryByTestId("live-repo-dot")).toBeNull();
+    expect(screen.queryByTestId("nav-section-title")).toBeNull();
+  });
 });
 
 // Phase 3 (#4915): one back control per state. In the mobile KB doc view the
