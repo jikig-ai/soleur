@@ -193,6 +193,9 @@ describe("cron-daily-triage — T6 GitHub App token injection (#512e25)", () => 
     const spawnEnv = (spawnSpy.mock.calls[0][2] as { env: NodeJS.ProcessEnv })
       .env;
     expect(spawnEnv.GH_TOKEN).toBe("ghs_TESTTOKEN_REDACT_ME");
+    // #5010 — GH_REPO must pin the repo so the agent's `gh issue list/view/edit`
+    // calls resolve in the prod /app container (no .git, no clone).
+    expect(spawnEnv.GH_REPO).toBe("jikig-ai/soleur");
   });
 
   it("the minted token OVERRIDES any ambient process.env.GH_TOKEN (the incident vector)", async () => {

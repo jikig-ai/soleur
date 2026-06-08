@@ -129,13 +129,13 @@ operator-internal automation, not a tenant data path → not `single-user incide
 
 ### Pre-merge (PR)
 
-- [ ] AC1: `buildSpawnEnv` in `cron-follow-through-monitor.ts` returns an env object whose
+- [x] AC1: `buildSpawnEnv` in `cron-follow-through-monitor.ts` returns an env object whose
   `GH_REPO` equals `\`${REPO_OWNER}/${REPO_NAME}\`` (→ `jikig-ai/soleur`). Verify:
   `grep -nE 'GH_REPO:\s*\`\$\{REPO_OWNER\}/\$\{REPO_NAME\}\`' apps/web-platform/server/inngest/functions/cron-follow-through-monitor.ts` returns 1 line.
-- [ ] AC2: `cron-follow-through-monitor.ts` imports `REPO_OWNER, REPO_NAME` from `./_cron-shared`
+- [x] AC2: `cron-follow-through-monitor.ts` imports `REPO_OWNER, REPO_NAME` from `./_cron-shared`
   (relative form, per the substrate-import guard). Verify: the `from "./_cron-shared"` import
   block contains both symbols.
-- [ ] AC3: New behavioral test **T8** mirrors T7: drives the handler, captures the
+- [x] AC3: New behavioral test **T8** mirrors T7: drives the handler, captures the
   `execFileSync` env, the claude-eval spawn env, and the ensure-labels `gh` spawn env, and
   asserts each `.GH_REPO === "jikig-ai/soleur"`. Verify: `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-follow-through-monitor.test.ts` passes.
 - [ ] AC4 (fold-in): `cron-daily-triage.ts` `buildSpawnEnv` includes the same
@@ -148,7 +148,7 @@ operator-internal automation, not a tenant data path → not `single-user incide
   `spawnEnv.GH_TOKEN`. Add `expect(spawnEnv.GH_REPO).toBe("jikig-ai/soleur")` alongside it (daily-triage
   has a single claude `spawn`, no `gh` label spawn, no execFileSync — one assertion suffices). Verify
   the daily-triage suite passes.
-- [ ] AC6: full webplat suite green for both touched files (`cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/`). `tsc --noEmit` clean.
+- [x] AC6: full webplat suite green for both touched files (`cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/`). `tsc --noEmit` clean.
 
 ### Post-merge (operator/automated)
 
