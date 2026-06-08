@@ -370,6 +370,15 @@ const intersects = (a: Rect, b: Rect): boolean =>
   a.x + a.width > b.x &&
   a.y < b.y + b.height &&
   a.y + a.height > b.y;
+// AC1 helper: assert two rects share a vertical center within `tol` px. The
+// positive alignment gate (vs the looser non-overlap `intersects` check) that
+// catches a misaligned-but-disjoint toggle — exactly how PR #4997's top-3
+// corner offset shipped ~16px above the card center.
+const expectVerticallyCentered = (toggle: Rect, card: Rect, label: string, tol = 2): void => {
+  const toggleCenterY = toggle.y + toggle.height / 2;
+  const cardCenterY = card.y + card.height / 2;
+  expect(Math.abs(toggleCenterY - cardCenterY), label).toBeLessThanOrEqual(tol);
+};
 
 test.describe("nav-states visual gate — desktop", () => {
   test.use({ viewport: DESKTOP });
@@ -515,13 +524,11 @@ test.describe("nav-states visual gate — desktop", () => {
     // switcher card's vertical center (≤2px). The pre-existing non-overlap
     // assertion above is satisfied by a misaligned-but-disjoint toggle — exactly
     // how PR #4997's `top-3` corner offset shipped ~16px above the card center.
-    // This positive rect-center assertion is the gate that catches THAT class.
-    const toggleCenterY = toggleBox!.y + toggleBox!.height / 2;
-    const switcherCenterY = switcherBox!.y + switcherBox!.height / 2;
-    expect(
-      Math.abs(toggleCenterY - switcherCenterY),
+    expectVerticallyCentered(
+      toggleBox!,
+      switcherBox!,
       "floated collapse toggle is not vertically centered on the workspace switcher card",
-    ).toBeLessThanOrEqual(2);
+    );
   });
 
   test("expanded single-workspace: floated toggle is vertically centered on the identity chip (AC1)", async ({ page }) => {
@@ -548,12 +555,11 @@ test.describe("nav-states visual gate — desktop", () => {
       "floated collapse toggle overlaps the single-workspace identity chip",
     ).toBe(false);
     // AC1 — vertical center alignment (≤2px).
-    const toggleCenterY = toggleBox!.y + toggleBox!.height / 2;
-    const chipCenterY = chipBox!.y + chipBox!.height / 2;
-    expect(
-      Math.abs(toggleCenterY - chipCenterY),
+    expectVerticallyCentered(
+      toggleBox!,
+      chipBox!,
       "floated collapse toggle is not vertically centered on the identity chip",
-    ).toBeLessThanOrEqual(2);
+    );
   });
 
   test("collapsed top-level: rail is icon-only, no horizontal overflow (Bug 2)", async ({ page }) => {

@@ -99,7 +99,7 @@ describe("Dashboard sidebar collapse", () => {
 
   // Reclaimed-space restructure: the dedicated desktop toggle row was removed so
   // the workspace context band rises to the sidebar top (~45px reclaimed). The
-  // collapse toggle is now FLOATED (`absolute right-3 top-3`, `md:flex`) instead of
+  // collapse toggle is now FLOATED (`absolute right-3 top-7`, `md:flex`) instead of
   // living in an in-flow row. jsdom has no layout engine, so this pins the
   // className tokens against a silent revert to the old in-flow row; the pixel
   // proof (reclaimed space + no chevron/tile overlap) lives in the e2e VRT gate
