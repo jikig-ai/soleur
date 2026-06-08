@@ -9,11 +9,14 @@
 // Even if the request body carries a `workspace_path` field, it's ignored.
 
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-import { getFreshTenantClient, RuntimeAuthError } from "@/lib/supabase/tenant";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { syncWorkspace } from "@/server/kb-route-helpers";
 import { appendKbSyncRow } from "@/server/session-sync";
+import {
+  resolveActiveWorkspaceKbRoot,
+  resolveActiveWorkspaceRepoMeta,
+} from "@/server/workspace-resolver";
 import { reportSilentFallback } from "@/server/observability";
 import logger from "@/server/logger";
 
@@ -52,58 +55,42 @@ export async function POST(request: Request): Promise<Response> {
 async function handleSync(userId: string): Promise<Response> {
   // Server-side workspace resolution. The request body is intentionally
   // NOT parsed — operator-controlled fields cannot reach the FS write path.
-  let tenant;
-  try {
-    tenant = await getFreshTenantClient(userId);
-  } catch (mintErr) {
-    if (mintErr instanceof RuntimeAuthError) {
-      reportSilentFallback(mintErr, {
-        feature: "kb-route-helpers",
-        op: "kb-sync.tenant-mint",
-        extra: { userId },
-        message: "kb/sync: tenant mint failed",
-      });
+  //
+  // #5005 — readiness + path + installation are resolved from the caller's
+  // ACTIVE workspace via the membership-scoped service-role resolvers (the
+  // same pair kb/upload uses), NOT from the caller's own `users` row. The
+  // own-row read was the empty solo row for an invited member and stale/empty
+  // for any account provisioned after the ADR-044 `users → workspaces`
+  // relocation, which 409'd "Sync now" on a connected workspace.
+  const serviceClient = createServiceClient();
+
+  const access = await resolveActiveWorkspaceKbRoot(userId, serviceClient);
+  if (!access.ok) {
+    // Preserve the legacy 409 client contract (the `KbSyncStatus` "Sync now"
+    // handler reads `error`/`code`, not the HTTP status family). 503 = the
+    // active workspace owner isn't ready yet; 404 = no repo connected.
+    if (access.status === 503) {
       return NextResponse.json(
-        { error: "Workspace not ready" },
-        { status: 503 },
+        { error: "Workspace not ready", code: "WORKSPACE_NOT_READY" },
+        { status: 409 },
       );
     }
-    throw mintErr;
-  }
-
-  const { data: userData, error: userErr } = await tenant
-    .from("users")
-    .select("workspace_path, workspace_status, github_installation_id")
-    .eq("id", userId)
-    .single();
-
-  if (userErr || !userData) {
     return NextResponse.json(
-      { error: "Workspace not found" },
-      { status: 404 },
-    );
-  }
-
-  if (userData.workspace_status !== "ready") {
-    return NextResponse.json(
-      {
-        error: "Workspace not ready",
-        code: "WORKSPACE_NOT_READY",
-        workspace_status: userData.workspace_status,
-      },
+      { error: "Workspace not connected" },
       { status: 409 },
     );
   }
 
-  let installationId = userData.github_installation_id;
-  if (!installationId) {
-    const { resolveInstallationId } = await import(
-      "@/server/resolve-installation-id"
-    );
-    installationId = await resolveInstallationId(userId);
-  }
-
-  if (!userData.workspace_path || !installationId) {
+  // Pass the already-resolved active id so kbRoot + repo metadata key to ONE
+  // membership-resolved id (mirrors kb/upload/route.ts). This subsumes the
+  // legacy inline `resolveInstallationId` self-heal — `resolveActiveWorkspaceRepoMeta`
+  // resolves the installation via the SAME membership-checked RPC.
+  const repoMeta = await resolveActiveWorkspaceRepoMeta(
+    userId,
+    serviceClient,
+    access.activeWorkspaceId,
+  );
+  if (!repoMeta.ok) {
     return NextResponse.json(
       { error: "Workspace not connected" },
       { status: 409 },
@@ -111,8 +98,8 @@ async function handleSync(userId: string): Promise<Response> {
   }
 
   const syncResult = await syncWorkspace(
-    installationId,
-    userData.workspace_path,
+    repoMeta.githubInstallationId,
+    access.workspacePath,
     logger,
     { userId, op: "manual" },
   );
