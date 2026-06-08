@@ -143,7 +143,7 @@ into `cloud-init.yml` for fresh hosts. Restores the needs-firewall crons from Ph
   exfiltrate off-allowlist, so the GHA move is a second mitigation for an already-closed threat.
   **Re-evaluation criterion:** revisit only if PR-2's allowlist proves insufficient for
   `content-publisher` specifically (e.g., it needs an unbounded/dynamic egress set the allowlist can't
-  express). Tracked as a follow-up issue (filed at exit-gate). The Option-C pattern is ready when
+  express). Tracked as follow-up **#5073**. The Option-C pattern is ready when
   needed (`trigger-workflow.ts` precedent: `cron-terraform-drift`, `cron-dev-migration-drift`,
   `cron-main-health-monitor`, `cron-review-reminder`).
 
