@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { reportSilentFallback } from "@/server/observability";
+import { toPublicStorageUrl } from "@/lib/supabase/public-storage-url";
 import {
   SlidingWindowCounter,
   startPruneInterval,
@@ -89,28 +90,12 @@ export async function GET(
     return NextResponse.json({ error: "Bad gateway" }, { status: 502 });
   }
 
-  // The service client signs storage URLs against SUPABASE_URL, which in prod is
-  // the raw <ref>.supabase.co host. The browser's CSP img-src is built from
-  // NEXT_PUBLIC_SUPABASE_URL (the public custom domain), so a 302 to the raw host
-  // is BLOCKED by CSP → <img> onError → monogram (#4996 follow-up: the logo
-  // persisted + served fine, but the redirect host was not in img-src). Rewrite
-  // the origin to the public host so the redirect target matches img-src. Both
-  // hosts route to the same project and the signed token is host-agnostic.
-  let location = signed.data.signedUrl;
-  const publicBase = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  if (publicBase) {
-    try {
-      const signedUrl = new URL(signed.data.signedUrl);
-      const publicUrl = new URL(publicBase);
-      if (signedUrl.host !== publicUrl.host) {
-        signedUrl.protocol = publicUrl.protocol;
-        signedUrl.host = publicUrl.host;
-        location = signedUrl.toString();
-      }
-    } catch {
-      // Malformed URL on either side — fall back to the original signed URL.
-    }
-  }
+  // The service client signs storage URLs against SUPABASE_URL (the raw
+  // <ref>.supabase.co host in prod), but CSP img-src is built from
+  // NEXT_PUBLIC_SUPABASE_URL (the public custom domain) — so a 302 to the raw
+  // host is CSP-blocked → <img> onError → monogram (#4996→#5012). Rewrite the
+  // origin to the public host so the redirect target matches img-src.
+  const location = toPublicStorageUrl(signed.data.signedUrl);
 
   return new NextResponse(null, {
     status: 302,
