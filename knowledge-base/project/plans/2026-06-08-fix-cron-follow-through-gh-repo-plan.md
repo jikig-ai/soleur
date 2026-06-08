@@ -10,6 +10,53 @@ brand_survival_threshold: aggregate pattern
 
 # 🐛 fix(cron): `buildSpawnEnv` missing `GH_REPO` — `gh` fails in `/app` (no `.git`)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-08
+**Sections enhanced:** Acceptance Criteria (AC5 mirror target pinned), Sharp Edges (substrate-guard
+path + symbol-redefine guard corrected), Research Insights (added).
+
+### Key Improvements
+1. **AC5 mirror target pinned** — verified daily-triage's existing test `"mints an installation token
+   first … into the claude spawn"` (~L175) captures `spawnEnv = spawnSpy.mock.calls[0][2].env`; the
+   `GH_REPO` assertion attaches there (single spawn, no gh-label/execFileSync → one assertion).
+2. **Substrate-import guard path corrected** — actual guard is `test/server/cron-substrate-imports.test.ts:11`
+   (`SHARED_IMPORT_RE`), NOT `test/server/inngest/…`. Added the `:66` symbol-redefine guard note:
+   `REPO_OWNER`/`REPO_NAME` must be IMPORTED, never locally re-declared.
+3. **No hidden env-shape landmine** — grepped both test files: no `Object.keys`/`toHaveLength`/`toEqual({…})`
+   exact-key-count or allowlist-negative assertion on the spawn env → adding `GH_REPO` breaks nothing.
+
+### New Considerations Discovered
+- The `:66` substrate guard ("does not locally redefine extracted `_cron-shared` symbols") actively
+  *requires* the import-not-redefine approach — it would FAIL a `const REPO_OWNER = "jikig-ai"` local copy.
+  This reinforces the fix and removes the temptation to inline the constant.
+- `GH_REPO` is a novel literal in this codebase (0 prior occurrences in `apps/web-platform/server|test`).
+  The `gh` env-var contract is upstream-documented AND empirically verified live (`GH_REPO=cli/cli gh
+  repo view` → `cli/cli` from an unrelated CWD). No in-repo precedent needed — it's a standard `gh` env var.
+
+### Research Insights
+
+**Best Practices:**
+- `gh` resolves the target repo in this precedence: `--repo` flag > `GH_REPO` env > git-remote of CWD.
+  Setting `GH_REPO` is the canonical clone-free way to pin a repo for a `gh` process that runs outside a
+  checkout (the exact `/app`-container situation). Confirmed against `gh` 2.92.0.
+- Mirror the existing `buildSpawnEnv` allowlist *comment* update with the code change — the comment is the
+  human-readable Layer-2 contract; drift between comment and body is a documented reviewer trap.
+
+**Edge Cases:**
+- Token-scope edge: if the minted installation token lacks the target repo, `GH_REPO` is set but `gh`
+  still 4xxs. Detection is already wired: follow-through's `validate-predicates` catch → `reportSilentFallback`
+  → Sentry; daily-triage surfaces it as agent-level gh failure → monitor error check-in. No new handling needed.
+- Replay-safety: `buildSpawnEnv` is pure (no `step.run`), called fresh per spawn — adding a static field is
+  idempotent across Inngest replay by construction.
+
+**References:**
+- `gh help environment` (GH_REPO) — verified live, `gh` 2.92.0.
+- Learning `knowledge-base/project/learnings/2026-06-02-inngest-dispatches-gha-for-credential-heavy-crons.md`
+  (substrate-import gotcha #1: relative `./_cron-shared` only).
+- Sibling-pair precedent: PR #4733 (`fix(inngest): follow-through-monitor & daily-triage crons mint
+  GitHub App token …`) — established the two crons are fixed together for gh-auth-class defects.
+
 ## Overview
 
 The Inngest cron `cron-follow-through-monitor` posts a Sentry **error check-in every
@@ -95,8 +142,12 @@ operator-internal automation, not a tenant data path → not `single-user incide
   `GH_REPO: \`${REPO_OWNER}/${REPO_NAME}\`` and imports `REPO_OWNER, REPO_NAME` from
   `./_cron-shared`. Verify: `grep -c 'GH_REPO' apps/web-platform/server/inngest/functions/cron-daily-triage.ts` ≥ 1.
 - [ ] AC5 (fold-in): a behavioral `GH_REPO` assertion is added to
-  `test/server/inngest/cron-daily-triage.test.ts` (mirror its existing GH_TOKEN env-capture
-  test; if none exists, add the env-capture test). Verify the daily-triage suite passes.
+  `test/server/inngest/cron-daily-triage.test.ts`. **Mirror target verified at plan time:** the
+  existing test `"mints an installation token first and injects it as GH_TOKEN into the claude
+  spawn"` (~L175) already captures `spawnEnv = spawnSpy.mock.calls[0][2].env` and asserts
+  `spawnEnv.GH_TOKEN`. Add `expect(spawnEnv.GH_REPO).toBe("jikig-ai/soleur")` alongside it (daily-triage
+  has a single claude `spawn`, no `gh` label spawn, no execFileSync — one assertion suffices). Verify
+  the daily-triage suite passes.
 - [ ] AC6: full webplat suite green for both touched files (`cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/`). `tsc --noEmit` clean.
 
 ### Post-merge (operator/automated)
@@ -232,11 +283,14 @@ discoverability_test:
 
 - A plan whose `## User-Brand Impact` section is empty, contains only TBD/placeholder, or omits the
   threshold will fail `deepen-plan` Phase 4.6. (Filled above — `aggregate pattern` with reason.)
-- The `cron-substrate-imports.test.ts` guard `SHARED_IMPORT_RE = /from\s+["']\.\/_cron-shared["']/`
-  matches ONLY the relative form. Add `REPO_OWNER, REPO_NAME` to the **existing** relative
-  `./_cron-shared` import — do NOT introduce an `@/server/inngest/functions/_cron-shared` alias import
-  (it passes tsc + the fn's own tests but fails the substrate guard in the full webplat shard). See
-  learning `2026-06-02-inngest-dispatches-gha-for-credential-heavy-crons.md` gotcha #1.
+- The substrate-import guard at `apps/web-platform/test/server/cron-substrate-imports.test.ts:11`
+  (`SHARED_IMPORT_RE = /from\s+["']\.\/_cron-shared["']/`, verified at plan time) matches ONLY the
+  relative form. Add `REPO_OWNER, REPO_NAME` to the **existing** relative `./_cron-shared` import — do
+  NOT introduce an `@/server/inngest/functions/_cron-shared` alias import (it passes tsc + the fn's own
+  tests but fails the substrate guard in the full webplat shard). The same test (`:66`, `"does not
+  locally redefine extracted _cron-shared symbols"`) ALSO requires importing rather than re-declaring
+  `REPO_OWNER`/`REPO_NAME` — so a local `const REPO_OWNER = ...` would fail; import them. See learning
+  `2026-06-02-inngest-dispatches-gha-for-credential-heavy-crons.md` gotcha #1.
 - Test runner is **vitest**, not bun. Invoke `./node_modules/.bin/vitest run <path>`; the package
   `test` script is `vitest`. Test files live under `test/**/*.test.ts` (node project glob in
   `vitest.config.ts:44`) — both touched test files already satisfy it.
