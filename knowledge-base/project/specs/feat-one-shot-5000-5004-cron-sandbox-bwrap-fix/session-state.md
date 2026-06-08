@@ -19,3 +19,11 @@ None. CWD verified at start. All deepen-plan hard gates (4.6 User-Brand Impact, 
 - Skill: soleur:deepen-plan
 - mcp__plugin_soleur_context7 (Claude Code sandbox/permissions/settings docs)
 - Bash, Read, Edit, Write, ToolSearch
+
+## Work + Review Phase
+- Status: HALTED at review — P1 block, operator chose re-plan (2026-06-08)
+- Implementation landed (sandbox-off + bypassPermissions overlay, tests GREEN: substrate 12/12, inngest 1429, webplat shard 8950) and committed (73890e6af), pushed to draft PR #5018.
+- Review: 3 agents (security-sentinel, user-impact-reviewer, architecture-strategist) UNANIMOUS P1 block. The plan's "trusted prompt / 5-key env" premise is factually false for content-ingesting producers (community-monitor: HN/Discord ingest + 11 social write-tokens; bug-fixer: public issue bodies). Sandbox-off + bypassPermissions → injected bash exfiltrates creds.
+- Findings + fix-option analysis: `review-findings-P1-block.md` (this dir).
+- PR #5018 commented with the block. Issues #5000/#5004 remain OPEN.
+- DO NOT merge this branch as-is. Re-scope via `/soleur:plan` before further work.
