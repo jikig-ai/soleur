@@ -69,9 +69,9 @@ The first time Soleur's engineering agents tackle a problem, they work from what
 
 Devin: $20/month subscription.
 
-Soleur: open-source, free platform. Your costs are the Claude API credits the agents consume.
+Soleur: source-available (BSL 1.1), free platform. Your costs are the Claude API credits the agents consume.
 
-The pricing comparison is less straightforward than the headline numbers suggest. Devin at $20/month is a subscription for engineering output. Soleur's costs scale with usage -- a company running extensive agent sessions will spend more on Claude API than $20/month. The open-source model is lower cost for founders starting out; the total cost of Soleur depends on session volume at scale.
+The pricing comparison is less straightforward than the headline numbers suggest. Devin at $20/month is a subscription for engineering output. Soleur's costs scale with usage -- a company running extensive agent sessions will spend more on Claude API than $20/month. The source-available model is lower cost for founders starting out; the total cost of Soleur depends on session volume at scale.
 
 The more material pricing consideration: Devin covers one of nine departments a solo founder needs to run. Replacing all nine with separate specialized tools -- an AI coding agent, an AI legal tool, an AI finance tool, an AI marketing tool -- costs orders of magnitude more and produces no cross-domain coherence. Soleur covers all nine in a single platform.
 
@@ -114,7 +114,8 @@ If the company you are building requires more than engineering, Soleur covers th
 | Cross-domain compounding knowledge base | No | Yes |
 | Workflow lifecycle (brainstorm through ship) | No | Yes |
 | Human-in-the-loop decision gates | No | Yes |
-| Open-source and local-first | No | Yes |
+| License | Proprietary | Source-available (BSL 1.1) |
+| Local-first | No | Yes |
 | Pricing | $20/month | Free (API costs) |
 
 ## FAQ

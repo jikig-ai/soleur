@@ -25,8 +25,10 @@ vi.mock("@/server/observability", () => ({
 }));
 
 import {
+  deferIfTier2Cron,
   ensureScheduledAuditIssue,
   resolveOutputAwareOk,
+  TIER2_DEFERRED_CRONS,
   verifyScheduledIssueCreated,
 } from "@/server/inngest/functions/_cron-shared";
 import type { Octokit } from "@octokit/core";
@@ -45,6 +47,54 @@ const RUN_START = "2026-05-31T09:00:00.000Z";
 afterEach(() => {
   reportSilentFallbackSpy.mockClear();
   warnSilentFallbackSpy.mockClear();
+});
+
+// D6 (#5018) — Tier-2 deferral guard. Sentry env is unset in this suite, so
+// postSentryHeartbeat is a no-op; we assert the guard's control-flow contract.
+describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
+  const makeStep = () => ({
+    run: vi.fn(async (_id: string, fn: () => Promise<unknown>) => fn()),
+  });
+  const makeLogger = () =>
+    ({ warn: vi.fn(), info: vi.fn(), error: vi.fn() }) as unknown as Parameters<
+      typeof deferIfTier2Cron
+    >[0]["logger"];
+
+  it("defers a Tier-2 cron: returns true, warns, posts an on-schedule check-in", async () => {
+    const step = makeStep();
+    const logger = makeLogger();
+    const deferred = await deferIfTier2Cron({
+      cronName: "cron-growth-audit",
+      sentryMonitorSlug: "scheduled-growth-audit",
+      step: step as unknown as Parameters<typeof deferIfTier2Cron>[0]["step"],
+      logger,
+    });
+    expect(deferred).toBe(true);
+    expect(step.run).toHaveBeenCalledWith(
+      "tier2-deferred-heartbeat",
+      expect.any(Function),
+    );
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it("does NOT defer the Tier-1 roadmap-review cron: returns false, no heartbeat", async () => {
+    const step = makeStep();
+    const logger = makeLogger();
+    const deferred = await deferIfTier2Cron({
+      cronName: "cron-roadmap-review",
+      sentryMonitorSlug: "scheduled-roadmap-review",
+      step: step as unknown as Parameters<typeof deferIfTier2Cron>[0]["step"],
+      logger,
+    });
+    expect(deferred).toBe(false);
+    expect(step.run).not.toHaveBeenCalled();
+  });
+
+  it("roadmap-review (#5004, Tier-1) is NOT in the deferred set; bug-fixer/growth-audit ARE", () => {
+    expect(TIER2_DEFERRED_CRONS.has("cron-roadmap-review")).toBe(false);
+    expect(TIER2_DEFERRED_CRONS.has("cron-growth-audit")).toBe(true);
+    expect(TIER2_DEFERRED_CRONS.has("cron-bug-fixer")).toBe(true);
+  });
 });
 
 describe("verifyScheduledIssueCreated", () => {

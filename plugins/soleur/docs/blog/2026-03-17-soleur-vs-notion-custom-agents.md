@@ -21,7 +21,7 @@ The question is what Notion Custom Agents actually automate, and whether that ov
 
 Within the beta, early testers had built over [21,000 agents; Notion itself runs 2,800 agents internally](https://www.notion.com/releases/2026-02-24).
 
-**Soleur** is an open-source [Company-as-a-Service]({{ site.url }}/company-as-a-service/) platform. It deploys {{ stats.agents }} agents across {{ stats.departments }} business departments — engineering, marketing, legal, finance, operations, product, sales, and support — with a compounding knowledge base that accumulates institutional memory across every session and every domain. Soleur is designed for the terminal, running inside Claude Code, with a workflow lifecycle that runs from brainstorm through planning, implementation, review, and knowledge capture.
+**Soleur** is a source-available (BSL 1.1) [Company-as-a-Service]({{ site.url }}/company-as-a-service/) platform. It deploys {{ stats.agents }} agents across {{ stats.departments }} business departments — engineering, marketing, legal, finance, operations, product, sales, and support — with a compounding knowledge base that accumulates institutional memory across every session and every domain. Soleur is designed for the terminal, running inside Claude Code, with a workflow lifecycle that runs from brainstorm through planning, implementation, review, and knowledge capture.
 
 ## Where They Differ
 
@@ -88,7 +88,7 @@ For a solo founder who ships code and runs a company from the terminal, Soleur's
 | **Source availability** | Proprietary | Source-available (BSL 1.1). Full source code public. |
 | **Interface** | Web and desktop (Notion workspace) | Terminal (Claude Code) |
 | **Cross-domain coherence** | Workspace context shared; domain decisions not cross-referenced automatically | Every domain reads from and writes to the same compounding knowledge base |
-| **Current availability** | Free beta (Business and Enterprise plans) | Live (open source) |
+| **Current availability** | Free beta (Business and Enterprise plans) | Live (source-available) |
 
 ---
 
@@ -108,7 +108,7 @@ For a solo founder who ships code and runs a company from the terminal, Soleur's
 - You need cross-domain coherence — marketing that references legal decisions, engineering that reflects competitive intelligence, finance that tracks what product decided
 - You need institutional memory that compounds across sessions, not workspace context that refreshes
 - You are building a company, not managing a team's recurring operations
-- You care about open-source transparency: auditable agents, modifiable workflows, your knowledge on your machine
+- You care about source-available transparency: auditable agents, modifiable workflows, your knowledge on your machine
 
 ---
 
@@ -126,7 +126,7 @@ That is the difference between a workspace with smart automation and a company-a
 
 ## Start Building
 
-Soleur runs {{ stats.agents }} agents across {{ stats.departments }} departments with a compounding knowledge base that gets more powerful every day you use it. Open source, terminal-first, built by a solo founder using the platform itself.
+Soleur runs {{ stats.agents }} agents across {{ stats.departments }} departments with a compounding knowledge base that gets more powerful every day you use it. Source-available, terminal-first, built by a solo founder using the platform itself.
 
 ```
 claude plugin install soleur
