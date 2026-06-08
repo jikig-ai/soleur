@@ -185,8 +185,8 @@ logs:
   where: Sentry (issue d87684243c554592953ea9148f46f4e6 + new code-tagged events) + pino container stdout
   retention: Sentry project default
 discoverability_test:
-  command: "gh api -X GET '/projects/<org>/web-platform/issues/?query=feature:resolve-bash-autonomous' (Sentry API) OR Sentry UI search code:auth_unavailable level:warning"
-  expected_output: "post-deploy: jwt_mint occurrences land at level=warning; denied_jti/rotation at level=error"
+  command: 'curl -fsS -o /dev/null -w "%{http_code}\n" --max-time 10 https://app.soleur.ai/dashboard/settings/scope-grants'
+  expected_output: "307 (unauthenticated request to the scope-grants route — where resolveBashAutonomous runs — redirects to /login, confirming the route is reachable). Per-cause severity (warning for jwt_mint, error for denied_jti/rotation) is post-deploy-only: search Sentry code:auth_unavailable level:warning on the next natural jwt_mint occurrence (AC7)."
 ```
 
 ## Domain Review
