@@ -14,8 +14,8 @@ plan: knowledge-base/project/plans/2026-06-08-feat-shortform-feature-tweets-plan
 - [x] 0.3 Re-read `plugins/soleur/skills/postmerge/SKILL.md` Phase 3 (L91 success / L93 warn branches) to place `HEALTH_VERIFIED`.
 
 ## Phase 1: Eligibility filter (brand-critical floor)
-- [x] 1.1 Write failing tests `scripts/lib/tweet-eligibility.test.sh`: eligible feature PR; each deny-label; each deny-path; **collision feature+user-facing+security → excluded**; **collision feature+user-facing + `**/migrations/**` → excluded**; unlabeled → excluded; gh-error → excluded.
-- [x] 1.2 Implement `scripts/lib/tweet-eligibility.sh <pr>`: labels via `gh pr view --json labels`, paths via `gh pr diff --name-only`; require `user-facing`+`type/feature`; deny labels/paths short-circuit to excluded regardless of allow-set; fail-closed on error/empty.
+- [x] 1.1 Write failing tests `scripts/lib/tweet-eligibility.test.sh`: eligible feature PR; each deny-label; each deny-path; **collision feat(+app:web-platform+type/security → excluded**; **collision feat(+app:web-platform + `**/migrations/**` → excluded**; unlabeled → excluded; non-feat( title → excluded; gh-error → excluded. _(live-label reconciliation #5021.)_
+- [x] 1.2 Implement `scripts/lib/tweet-eligibility.sh <pr>`: labels+title via `gh pr view --json labels,title,url`, paths via `gh pr diff --name-only`; require `feat(` title + `app:web-platform`; deny labels (`type/security`/`security/leak-suspected`/`infra-drift`/`no-auto-ship`)/paths short-circuit to excluded regardless of allow-set; fail-closed on error/empty.
 - [x] 1.3 Green: all eligibility tests pass.
 
 ## Phase 2: feature-tweet skill
@@ -39,10 +39,10 @@ plan: knowledge-base/project/plans/2026-06-08-feat-shortform-feature-tweets-plan
 - [x] 6.2 Bump `SKILL_DESCRIPTION_WORD_BUDGET` by the new description word count with `// #5021` comment (primary; sibling-trim fallback).
 
 ## Phase 7: Verify
-- [ ] 7.1 Run `./node_modules/.bin/vitest run test/content-publisher.test.ts plugins/soleur/test/components.test.ts` (or package runner) — green.
-- [ ] 7.2 Run `bash scripts/lib/tweet-eligibility.test.sh` — green.
-- [ ] 7.3 Manual: generate one sample draft on an eligible PR; review sanitization (no PII/customer/diff detail); lint clean.
-- [ ] 7.4 All Pre-merge ACs checked.
+- [x] 7.1 Run `./node_modules/.bin/vitest run test/content-publisher.test.ts plugins/soleur/test/components.test.ts` (or package runner) — green.
+- [x] 7.2 Run `bash scripts/lib/tweet-eligibility.test.sh` — green.
+- [x] 7.3 Manual: generate one sample draft on an eligible PR; review sanitization (no PII/customer/diff detail); lint clean.
+- [x] 7.4 All Pre-merge ACs checked.
 
 ## Post-merge (operator)
 - [ ] Operator approval gate: review surfaced draft → set BOTH `publish_date` + `status: scheduled` → existing cron publishes.

@@ -52,10 +52,12 @@ blog-writing instead of to ship events that already happen.
   `publish_date: ""`, `channels`, `status: draft`, `pr_reference: "#<n>"`) and a single
   `## X/Twitter Thread` section in **canonical numbered format** (hook = tweet 1; subsequent tweets
   prefixed `2/`, `3/`). Single-tweet output = hook only.
-- **FR3 — Fail-closed exclusion (mandatory).** PRs labeled `security`, `type/security`, `infra`,
-  `internal`, or `dark-launch`/flagged, OR touching path globs (auth, migrations, secrets, CI/infra),
-  are excluded. **Unlabeled or ambiguous PRs default to excluded.** Only `type/feature` + `user-facing`
-  PRs are eligible.
+- **FR3 — Fail-closed exclusion (mandatory).** PRs labeled `type/security`, `security/leak-suspected`,
+  `infra-drift`, or `no-auto-ship`, OR touching path globs (auth, migrations, secrets, CI/infra), are
+  excluded. **Unlabeled or ambiguous PRs default to excluded.** Only PRs with a `feat(` conventional-commit
+  title AND the `app:web-platform` label are eligible. _(Implemented label set reconciled against the live
+  repo at /work, #5021: the spec's original `user-facing`/`type/feature`/`infra`/`internal`/`dark-launch`
+  names are never applied to PRs here.)_
 - **FR4 — Content sanitization (mandatory).** Generated copy states user-facing benefit only — no
   implementation/diff detail, no contributor PII/author attribution, no customer names; run an explicit
   customer-name/NDA scan that label-filtering cannot catch.

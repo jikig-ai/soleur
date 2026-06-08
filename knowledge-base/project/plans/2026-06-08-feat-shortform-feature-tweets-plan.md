@@ -64,10 +64,16 @@ _(Carried forward from brainstorm Phase 0.1 — `USER_BRAND_CRITICAL=true`.)_
   brainstorm Phase 0.5; carried forward). `user-impact-reviewer` runs at PR-review time.
 
 **Mandatory guardrails (CLO verdict — all required):**
-1. **Fail-closed eligibility filter** (deterministic script): require `user-facing` AND `type/feature`;
-   deny labels `security`/`type/security`/`infra`/`internal`/`dark-launch`; deny path globs (auth,
-   migrations, secrets, CI/infra). **Deny-checks short-circuit to excluded REGARDLESS of the allow-set.**
+1. **Fail-closed eligibility filter** (deterministic script): require a `feat(` (conventional-commit
+   feature) PR **title** AND the `app:web-platform` label; deny labels `type/security`/
+   `security/leak-suspected`/`infra-drift`/`no-auto-ship`; deny path globs (auth, migrations, secrets,
+   CI/infra). **Deny-checks short-circuit to excluded REGARDLESS of the allow-set.**
    Missing/empty/`gh`-error/truncation-risk ⇒ excluded.
+   _**Label reconciliation (#5021, verified live at /work):** the plan was authored against
+   `user-facing`+`type/feature` allow labels and `security`/`infra`/`internal`/`dark-launch` deny
+   labels — none of which this repo applies to PRs (they are issue-triage labels or do not exist). The
+   real merge-time signals are a `feat(` title + `app:web-platform`; the live deny mappings are the
+   labels listed above. Operator-approved during /work._
 2. **Human approval gate:** files written `status: draft`; operator flips to `scheduled`. No straight-through post. **This is an explicit, owned operator step** (see Post-merge AC).
 3. **Content sanitization** (enforced in the generation prompt): user-facing benefit only — no
    diff/implementation detail, no contributor PII/author attribution, no customer names (explicit customer-name/NDA scan).
@@ -76,14 +82,18 @@ _(Carried forward from brainstorm Phase 0.1 — `USER_BRAND_CRITICAL=true`.)_
 ## Implementation Phases
 
 ### Phase 1 — Eligibility filter (the brand-critical floor)
-Create `scripts/lib/tweet-eligibility.sh <pr-number>`. Read labels via `gh pr view <n> --json
+Create `scripts/lib/tweet-eligibility.sh <pr-number>`. Read labels+title via `gh pr view <n> --json
 labels,title,url` and changed paths via `gh pr diff <n> --name-only` (non-truncating; postmerge's
-approach). Return exit 0 + `eligible` **only when ALL hold**: carries `user-facing` AND `type/feature`;
-carries **none** of the deny labels; touches **no** deny-path glob. **Deny evaluation short-circuits to
-`excluded` regardless of the allow-set** (a `type/feature`+`user-facing`+`security` PR is excluded).
-Any other state (missing labels, empty fields, `gh` error) ⇒ exit 1 + `excluded: <reason>` (fail-closed),
-read-only, no network write. Write `scripts/lib/tweet-eligibility.test.sh` (`.test.sh` convention)
-covering: eligible feature PR; each deny-label alone; each deny-path alone; **collision: feature+user-facing+security → excluded**; **collision: feature+user-facing + touches `**/migrations/**` → excluded**; unlabeled → excluded; `gh`-error → excluded.
+approach). Return exit 0 + `eligible` **only when ALL hold**: title matches `^feat(` (also `feat:`/
+`feat!`) AND carries the `app:web-platform` label; carries **none** of the deny labels (`type/security`,
+`security/leak-suspected`, `infra-drift`, `no-auto-ship`); touches **no** deny-path glob. **Deny
+evaluation short-circuits to `excluded` regardless of the allow-set** (a `feat(`+`app:web-platform`+
+`type/security` PR is excluded). Any other state (missing labels, empty fields, `gh` error) ⇒ exit 1 +
+`excluded: <reason>` (fail-closed), read-only, no network write. Write
+`scripts/lib/tweet-eligibility.test.sh` (`.test.sh` convention) covering: eligible feature PR; each
+deny-label alone; each deny-path alone; **collision: feat(+app:web-platform+type/security → excluded**;
+**collision: feat(+app:web-platform + touches `**/migrations/**` → excluded**; unlabeled → excluded;
+non-`feat(` title → excluded; `gh`-error → excluded.
 
 ### Phase 2 — `feature-tweet` skill
 Create `plugins/soleur/skills/feature-tweet/SKILL.md`. Flow:
@@ -149,23 +159,24 @@ strand-forever gap (the publisher's stale-sweep never touches `draft`).
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] `tweet-eligibility.sh` returns `excluded` (exit 1) for: a `type/security` PR; an `infra` PR; an
-      unlabeled PR; a PR touching `**/migrations/**`; **a `type/feature`+`user-facing`+`security` PR**;
-      **a `type/feature`+`user-facing` PR that also touches `**/migrations/**`**; and on `gh` error.
-- [ ] It returns `eligible` (exit 0) for a `type/feature`+`user-facing` PR touching only app UI paths.
-- [ ] `feature-tweet` on an excluded PR writes **no** file and prints the reason.
-- [ ] `feature-tweet` on an eligible PR writes a draft with `status: draft`, `channels: x`, `pr_reference`,
+- [x] `tweet-eligibility.sh` returns `excluded` (exit 1) for: a `type/security` PR; an `infra-drift` PR;
+      a `no-auto-ship` PR; an unlabeled PR; a non-`feat(` (e.g. `fix(`) PR; a PR touching `**/migrations/**`;
+      **a `feat(`+`app:web-platform`+`type/security` PR**; **a `feat(`+`app:web-platform` PR that also
+      touches `**/migrations/**`**; and on `gh` error. _(live-label reconciliation #5021.)_
+- [x] It returns `eligible` (exit 0) for a `feat(`-titled, `app:web-platform`-labelled PR touching only app UI paths.
+- [x] `feature-tweet` on an excluded PR writes **no** file and prints the reason.
+- [x] `feature-tweet` on an eligible PR writes a draft with `status: draft`, `channels: x`, `pr_reference`,
       and a `## X/Twitter Thread` section; the **skill's structural assertion** passes and `lint-distribution-content.sh` exits 0.
-- [ ] `feature-tweet` on a PR that already has a draft (`pr_reference` match) no-ops without overwriting.
-- [ ] A structurally-incomplete draft (missing `## X/Twitter Thread` or `channels`) is **rejected by the
+- [x] `feature-tweet` on a PR that already has a draft (`pr_reference` match) no-ops without overwriting.
+- [x] A structurally-incomplete draft (missing `## X/Twitter Thread` or `channels`) is **rejected by the
       skill's structural assertion** (proves the gate is not the Liquid linter).
-- [ ] `test/content-publisher.test.ts` count-assertion passes (1→1, 3→3).
-- [ ] postmerge sets `HEALTH_VERIFIED` in both Phase-3 branches; Phase 3.8 invokes `feature-tweet` only
+- [x] `test/content-publisher.test.ts` count-assertion passes (1→1, 3→3).
+- [x] postmerge sets `HEALTH_VERIFIED` in both Phase-3 branches; Phase 3.8 invokes `feature-tweet` only
       when `HEALTH_VERIFIED=true`, and prints the catch-up instruction when eligible-but-`false`.
-- [ ] `brand-guide.md` contains `#### Ship Tweets` under `### X/Twitter` referencing the two voice profiles.
-- [ ] `components.test.ts` is green on BOTH the cumulative word budget AND the 1024-char per-skill limit.
-- [ ] campaign-calendar surfaces `draft` files older than N days as a "Stale Draft" group.
-- [ ] Sanitization (human review of the generation prompt + one sample draft): no contributor names,
+- [x] `brand-guide.md` contains `#### Ship Tweets` under `### X/Twitter` referencing the two voice profiles.
+- [x] `components.test.ts` is green on BOTH the cumulative word budget AND the 1024-char per-skill limit.
+- [x] campaign-calendar surfaces `draft` files older than N days as a "Stale Draft" group.
+- [x] Sanitization (human review of the generation prompt + one sample draft): no contributor names,
       customer names, or diff/implementation detail. _(Human gate — not automated coverage.)_
 
 ### Post-merge (operator) — explicit owned step
