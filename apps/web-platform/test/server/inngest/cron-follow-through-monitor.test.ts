@@ -334,7 +334,14 @@ describe("cron-follow-through-monitor — T7 GitHub App token injection (#512e25
     // minted token, NOT the ambient one — this is the hr-github-app-auth-not-pat
     // contract and would fail if buildSpawnEnv ever reverted to reading env.
     const prior = process.env.GH_TOKEN;
+    const priorRepo = process.env.GH_REPO;
     process.env.GH_TOKEN = "ghp_AMBIENT_PAT_SHOULD_NOT_LEAK";
+    // #5010 — same positive control for GH_REPO: seed a bogus ambient value and
+    // assert the subprocess still sees the canonical slug. buildSpawnEnv pins
+    // GH_REPO unconditionally, so a future `process.env.GH_REPO ?? …` regression
+    // (which would re-introduce the /app no-repo failure in prod, where GH_REPO
+    // is unset) fails this test instead of shipping.
+    process.env.GH_REPO = "attacker/wrong-repo";
     try {
       const child = makeChild();
       spawnSpy.mockImplementation(
@@ -358,9 +365,13 @@ describe("cron-follow-through-monitor — T7 GitHub App token injection (#512e25
       const claudeEnv = (claudeCalls[0][2] as { env: NodeJS.ProcessEnv }).env;
       expect(claudeEnv.GH_TOKEN).toBe("ghs_TESTTOKEN_REDACT_ME");
       expect(claudeEnv.GH_TOKEN).not.toBe("ghp_AMBIENT_PAT_SHOULD_NOT_LEAK");
+      expect(claudeEnv.GH_REPO).toBe("jikig-ai/soleur");
+      expect(claudeEnv.GH_REPO).not.toBe("attacker/wrong-repo");
     } finally {
       if (prior === undefined) delete process.env.GH_TOKEN;
       else process.env.GH_TOKEN = prior;
+      if (priorRepo === undefined) delete process.env.GH_REPO;
+      else process.env.GH_REPO = priorRepo;
     }
   });
 });
