@@ -3,6 +3,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { existsSync } from "fs";
 import { join } from "path";
 import { isGitErrorCode } from "@/server/git-auth";
+import { resolveActiveWorkspacePath } from "@/server/workspace-resolver";
 
 /**
  * GET /api/repo/status
@@ -20,9 +21,15 @@ export async function GET() {
   }
 
   const serviceClient = createServiceClient();
+  // #5005 — `workspace_path` is no longer read here; the `hasKnowledgeBase`
+  // existence check below resolves the ACTIVE workspace path via the
+  // membership-scoped resolver (the own-row column is stale/empty post-ADR-044).
+  // The `repo_url`/`repo_status`/`repo_last_synced_at` reads are the ADR-044
+  // relocated REPO columns — out of scope for #5005 (covered by ADR-044's own
+  // pre-decommission drift gate); left untouched here.
   const { data: userData, error: fetchError } = await serviceClient
     .from("users")
-    .select("repo_url, repo_status, repo_last_synced_at, workspace_path, repo_error, health_snapshot")
+    .select("repo_url, repo_status, repo_last_synced_at, repo_error, health_snapshot")
     .eq("id", user.id)
     .single();
 
@@ -43,12 +50,15 @@ export async function GET() {
     repoName = match?.[1] ?? null;
   }
 
-  // Additional details only available when workspace is ready
+  // Additional details only available when workspace is ready. Resolve the
+  // active workspace path (#5005) rather than the stale own-row column.
   let hasKnowledgeBase = false;
-  if (status === "ready" && userData.workspace_path) {
-    hasKnowledgeBase = existsSync(
-      join(userData.workspace_path, "knowledge-base"),
+  if (status === "ready") {
+    const workspacePath = await resolveActiveWorkspacePath(
+      user.id,
+      serviceClient,
     );
+    hasKnowledgeBase = existsSync(join(workspacePath, "knowledge-base"));
   }
 
   // Check for an active system sync conversation (#1816)
