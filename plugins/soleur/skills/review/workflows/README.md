@@ -41,6 +41,14 @@ Classify ──▶ Review ──▶ Verify ──▶ Synthesize ──▶ File
    but only when invoked with `{ file: true }`. Otherwise it's a **dry run**
    that emits the would-file issue body for inspection.
 
+   **Untrusted-input hardening:** finding titles derive from the diff under
+   review — potentially attacker-controlled PR content. The title is passed to
+   `gh` as a shell argv, so it runs through `safeTitle()` (strips control chars
+   + shell metacharacters, caps length) and a constant `review: ` prefix
+   (no leading `-` → no argv flag-smuggling); the body always goes via
+   `--body-file` so it is never shell-parsed. The agent writes both to temp
+   files with its Write tool rather than receiving an interpolated command.
+
 ## How to run it
 
 From a session where the diff under review is reachable (`origin/main...HEAD`):
