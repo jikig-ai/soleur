@@ -29,10 +29,11 @@ sequenced follow-on branch — deepen-plan when reached. content-publisher→GHA
 - [ ] 1.2.1 Decide: dry-run `content-publisher` (`X_ALLOW_POST`/`LINKEDIN_ALLOW_POST`/`BSKY_ALLOW_POST` → false) OR accept the bounded window with PR-2 expedited. Record choice + rationale in the PR body (AC4).
 - [ ] 1.2.2 If dry-run chosen: edit `cron-content-publisher.ts` flags.
 
-### 1.3 Narrow the cron token (folded from former PR-4)
-- [ ] 1.3.1 Add an additive `permissions?` option to `mintInstallationToken` (`_cron-shared.ts:119`), defaulted to `{ contents: "write", issues: "write" }` repo-scoped to soleur.
-- [ ] 1.3.2 Thread the `permissions`/`repositories` POST body into `generateInstallationToken` (`github-app.ts:708-733`), additive + defaulted; do NOT touch the ~10 non-cron call sites.
-- [ ] 1.3.3 Test the override: seed a bogus ambient `GH_TOKEN`, assert the subprocess sees the **minted narrowed** token (`cron-shared.test.ts`).
+### 1.3 Narrow the cron token (folded from former PR-4; deepen-plan corrected)
+- [ ] 1.3.1 Add an additive `permissions?` option to `mintInstallationToken` (`_cron-shared.ts:119`), defaulted to **`{ contents: "write", issues: "write", pull_requests: "write" }`** (pull_requests:write is REQUIRED — `gh pr create` 403s on contents+issues alone), with the **`repositories: ["soleur"]`** scope (or `repository_ids`).
+- [ ] 1.3.2 Thread the `permissions` + `repositories` POST body into `generateInstallationToken` (`github-app.ts:708-733`), additive + defaulted; do NOT touch the ~10 non-cron call sites.
+- [ ] 1.3.3 Confirm the GitHub App install-time manifest grants `pull_requests` write (the access_tokens POST can only narrow within the manifest, never widen — else the request itself fails).
+- [ ] 1.3.4 Test the override: seed a bogus ambient `GH_TOKEN`, assert the subprocess sees the **minted narrowed** token AND assert the `repositories` + `permissions` shape (not just presence) (`cron-shared.test.ts`).
 
 ### 1.4 Verify + ship
 - [ ] 1.4.1 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
