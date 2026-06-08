@@ -3,6 +3,8 @@ name: agent-native-audit
 description: "This skill should be used when conducting a scored agent-native architecture review. It launches 8 parallel sub-agents to audit action parity, context injection, CRUD completeness, capability discovery, and prompt-native features."
 ---
 
+> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill lives at [`workflows/agent-native-audit.workflow.js`](./workflows/agent-native-audit.workflow.js) — deterministic fan-out, journaled resume, schema-validated output. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/agent-native-audit/workflows/agent-native-audit.workflow.js", args: ... })`. The prose skill below stays the default; the two coexist during calibration. See [`knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`](../../../../knowledge-base/project/specs/feat-review-workflow-prototype/spec.md).
+
 # Agent-Native Architecture Audit
 
 Conduct a comprehensive review of the codebase against agent-native architecture principles, launching parallel sub-agents for each principle and producing a scored report.

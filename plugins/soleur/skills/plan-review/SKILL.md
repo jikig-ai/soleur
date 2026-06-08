@@ -3,6 +3,8 @@ name: plan-review
 description: "This skill should be used when having multiple specialized agents review a plan in parallel. It spawns DHH, Kieran, and code simplicity reviewers to provide diverse feedback on implementation plans."
 ---
 
+> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill lives at [`workflows/plan-review.workflow.js`](./workflows/plan-review.workflow.js) — deterministic fan-out, journaled resume, schema-validated output. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/plan-review/workflows/plan-review.workflow.js", args: ... })`. The prose skill below stays the default; the two coexist during calibration. See [`knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`](../../../../knowledge-base/project/specs/feat-review-workflow-prototype/spec.md).
+
 # Plan Review
 
 Have @agent-dhh-rails-reviewer @agent-kieran-rails-reviewer @agent-code-simplicity-reviewer review this plan in parallel.
