@@ -24,9 +24,9 @@ plan: knowledge-base/project/plans/2026-06-08-feat-shortform-feature-tweets-plan
 - [x] 2.3 Structural assertion (skill-owned): require non-empty title + `status: draft` + `channels: x` + `## X/Twitter Thread` heading; abort + leave no file on miss.
 
 ## Phase 3: postmerge hook
-- [ ] 3.1 Set `HEALTH_VERIFIED=true|false` in both Phase-3 branches of postmerge SKILL.md.
-- [ ] 3.2 Add Phase 3.8 (after 3.7): eligibility-first; if eligible + `HEALTH_VERIFIED=true` → invoke skill + surface draft path in Phase 7 report; if eligible + false → print catch-up instruction; ineligible → no-op.
-- [ ] 3.3 Document the explicit one-tweet-per-PR v1 contract + merge-pr-bypass recovery.
+- [x] 3.1 Set `HEALTH_VERIFIED=true|false` in both Phase-3 branches of postmerge SKILL.md.
+- [x] 3.2 Add Phase 3.8 (after 3.7): eligibility-first; if eligible + `HEALTH_VERIFIED=true` → invoke skill + surface draft path in Phase 7 report; if eligible + false → print catch-up instruction; ineligible → no-op.
+- [x] 3.3 Document the explicit one-tweet-per-PR v1 contract + merge-pr-bypass recovery.
 
 ## Phase 4: brand-guide voice
 - [ ] 4.1 Add `#### Ship Tweets (feature-launch)` under `### X/Twitter` cross-referencing Audience Voice Profiles + Value Proposition Framings.
