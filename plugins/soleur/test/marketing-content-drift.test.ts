@@ -158,7 +158,7 @@ describe("marketing-content-drift", () => {
     // MCP "open standard") is NOT matched — only Soleur-subject phrasings.
     // pages/legal/** legitimately describes the BSL→Apache conversion → excluded.
     // Dated blog-body Soleur-subject "open source" positioning is resolved (#5043)
-    // and enforced by Test 2c below; this .njk walk covers evergreen site copy only.
+    // and enforced by Test 2c2 below; this .njk walk covers evergreen site copy only.
     const OFFENDER =
       /Apache[- ]2|LICENSE-2\.0|Apache-2\.0 licensed|open[- ]source (version|Company-as-a-Service|Claude Code platform|AI agents)|is open source|open source under|Apache-2\.0 open source/i;
     const targets = [
@@ -215,12 +215,21 @@ describe("marketing-content-drift", () => {
   test("Test 2c2: blog posts make no Soleur-subject open-source claim (#5043)", () => {
     // Soleur is BSL 1.1 (source-available), NOT OSI-approved; a Soleur-subject
     // "open source" claim is a misrepresentation — resolved per CMO call (#5043).
-    // Competitor/ecosystem "open source" (CrewAI MIT, Paperclip MIT, Spec Kit
-    // "open-sourced by GitHub", the bare `open-source` frontmatter tag) stays
-    // verbatim and must NOT match. Empirically validated RED-before / GREEN-after
-    // against all 11 in-scope files + the competitor/ecosystem KEEP oracle.
+    // Subject-anchored so competitor/ecosystem "open source" (CrewAI MIT,
+    // Paperclip MIT, Spec Kit "open-sourced by GitHub", the bare `open-source`
+    // frontmatter tag) stays verbatim and must NOT match — including a future
+    // sentence-lead "Open source." about a competitor. Three frames:
+    //   (1) "Soleur" within 40 same-line chars of open-source — covers
+    //       "**Soleur** is an open-source", "Soleur is open-source",
+    //       "Soleur's open-source model", "the Soleur open-source platform";
+    //   (2) pronoun "it is (public, it is) open-source" (Soleur's own copy);
+    //   (3) "open-source CaaS"/"open-source transparency".
+    // Frames are phrasing-specific, not a general OSS detector; the sweep-time
+    // AC1 grep is the completeness gate (e.g. bare table cells with no subject
+    // token). Validated RED against reconstructed pre-sweep forms + GREEN on the
+    // swept files, with zero competitor/ecosystem false-positives.
     const SOLEUR_OPEN_SOURCE =
-      /Soleur(?:'s)?\s+(?:is\s+(?:an?\s+|the\s+)?)?(?:source-available\s+)?open[- ]source|Soleur:\s*open[- ]source|open[- ]source\s+(?:CaaS|transparency)|is\s+open[- ]source\s+and\s+(?:auditable|local-first)|\bit\s+is\s+(?:public,\s+it\s+is\s+)?open[- ]source\b|the\s+Soleur\s+open[- ]source|^Open source,\s|(?:^|\.\s+|browsers\.\s+)Open source\.\s/i;
+      /Soleur\b[^.\n]{0,40}\bopen[- ]source|\bit\s+is\s+(?:public,\s+it\s+is\s+)?open[- ]source\b|open[- ]source\s+(?:CaaS|transparency)/i;
     const targets = walkMarkdown(join(DOCS_ROOT, "blog")).filter((p) => existsSync(p));
     const offenders: { file: string; line: number; text: string }[] = [];
     for (const file of targets) {
