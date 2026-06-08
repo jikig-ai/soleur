@@ -453,6 +453,80 @@ EOF
 });
 
 // ---------------------------------------------------------------------------
+// feature-tweet draft count contract (#5021)
+// Guards the silent thread-collapse class (#2496) against the EXACT shape the
+// `feature-tweet` skill emits: frontmatter type: feature-launch + channels: x +
+// status: draft, canonical numbered `## X/Twitter Thread`. If the skill's
+// output format ever drifts, these pin "author N tweets => publisher extracts N".
+// ---------------------------------------------------------------------------
+
+describe("extract_tweets: feature-tweet draft shape (#5021)", () => {
+  const FT_SINGLE = `---
+title: "Sidebar collapse toggle now floats in place"
+type: feature-launch
+publish_date: ""
+channels: x
+status: draft
+pr_reference: "#4997"
+---
+
+<!-- To publish: set BOTH publish_date AND status: scheduled -->
+
+## X/Twitter Thread
+
+The sidebar collapse toggle now floats exactly where your cursor expects it -- no more hunting for it after the rail snaps shut.`;
+
+  const FT_THREE = `---
+title: "Shared links now render your diagrams"
+type: feature-launch
+publish_date: ""
+channels: x
+status: draft
+pr_reference: "#5007"
+---
+
+<!-- To publish: set BOTH publish_date AND status: scheduled -->
+
+## X/Twitter Thread
+
+Public shared-document links now render your architecture diagrams inline -- no login, no broken image, just the diagram.
+
+2/ Before, a shared link showed the doc text but dropped any embedded diagram. Now it renders for anyone you send the link to.
+
+3/ Share a design doc, an architecture sketch, or a flow -- the recipient sees exactly what you see.`;
+
+  function countTweets(fileBody: string): { exitCode: number; count: string } {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpfile=$(mktemp)
+      cat > "$tmpfile" <<'EOF'
+${fileBody}
+EOF
+      count=0
+      while IFS= read -r -d $'\\x1e' tweet; do
+        [[ -n "$tweet" ]] && count=$((count + 1))
+      done < <(extract_tweets "$tmpfile")
+      echo "$count"
+      rm -f "$tmpfile"
+    `], { env: BASE_ENV });
+    return { exitCode: result.exitCode ?? 1, count: decode(result.stdout).trim() };
+  }
+
+  test("single hook-only feature-tweet draft extracts exactly 1", () => {
+    const r = countTweets(FT_SINGLE);
+    expect(r.exitCode).toBe(0);
+    expect(r.count).toBe("1");
+  });
+
+  test("3-tweet numbered feature-tweet draft extracts exactly 3", () => {
+    const r = countTweets(FT_THREE);
+    expect(r.exitCode).toBe(0);
+    expect(r.count).toBe("3");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // parse_frontmatter / get_frontmatter_field
 // ---------------------------------------------------------------------------
 
