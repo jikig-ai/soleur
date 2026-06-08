@@ -1,33 +1,53 @@
 export const meta = {
   name: 'review-workflow',
   description:
-    'Workflow-backed soleur:review — deterministic change-class fan-out, per-finding adversarial verification (no-barrier pipeline), provenance-driven disposition, structured findings report.',
+    'Workflow-backed soleur:review — deterministic change-class fan-out (always-on + conditional dimensions), budget-capped per-finding adversarial verification (no-barrier pipeline), provenance-driven disposition, and CONCUR-gated deferred-scope-out filing.',
   // Same phase titles as the phase() calls below so progress groups line up.
   phases: [
-    { title: 'Classify', detail: 'one agent computes the change class + diff stats' },
-    { title: 'Review', detail: 'one dimension agent per lens, in parallel' },
-    { title: 'Verify', detail: 'adversarial skeptics refute each finding as soon as its dimension lands' },
-    { title: 'Synthesize', detail: 'dedup, provenance disposition, structured report' },
+    { title: 'Classify', detail: 'one agent computes change class + diff stats + conditional triggers' },
+    { title: 'Review', detail: 'always-on + conditional dimension agents, in parallel' },
+    { title: 'Verify', detail: 'adversarial skeptics refute each finding as its dimension lands (budget-floored)' },
+    { title: 'Synthesize', detail: 'dedup, provenance disposition' },
+    { title: 'File', detail: 'CONCUR-gated deferred-scope-out filing (dry-run unless args.file)' },
   ],
 }
 
 // ---------------------------------------------------------------------------
-// Input. args may be a bare string (the review target) or { target, deepReview }.
-//   target: PR number, branch name, or '' (current branch vs origin/main)
-//   deepReview: force the full 8-dimension pass regardless of class
+// Input. args may be a bare string (the review target) or an object:
+//   { target, deepReview, file }
+//   target:     PR number, branch name, or '' (current branch vs origin/main)
+//   deepReview: force the full always-on 8-dimension pass AND 3 skeptics/finding
+//   file:       actually create deferred-scope-out GitHub issues (default: dry-run)
 // ---------------------------------------------------------------------------
 const target = (typeof args === 'string' ? args : args?.target) || ''
 const deepReview =
   (typeof args === 'object' && !!args?.deepReview) ||
   (typeof target === 'string' && /deep review|full review/i.test(target))
+const fileScopeOuts = typeof args === 'object' && !!args?.file
 const range = 'origin/main...HEAD'
 
+// Parallel-safe diff access: for a PR number every agent reads the diff
+// read-only via `gh pr diff <N>` (concurrent `gh pr checkout` would race on a
+// shared working tree). For a branch/empty target, use the local range.
+const isPR = /^\d+$/.test(String(target).trim())
+const prNum = isPR ? String(target).trim() : null
+const diffCmd = isPR ? `gh pr diff ${prNum}` : `git diff ${range}`
+const fileDiffCmd = isPR
+  ? `gh pr diff ${prNum} (locate the file's section; gh pr diff has no pathspec filter)`
+  : `git diff ${range} -- <file>`
+const targetClause = isPR
+  ? `Review target: PR #${prNum}. Read the change READ-ONLY via \`${diffCmd}\` (do NOT \`gh pr checkout\` — other agents share this working tree). For context beyond the diff, read the file on the current branch or \`gh api\` the PR head.`
+  : target
+    ? `Review target: branch "${target}". Diff range: ${range} (\`${diffCmd}\`).`
+    : `Review target: the current branch. Diff range: ${range} (\`${diffCmd}\`).`
+
 // ---------------------------------------------------------------------------
-// Dimension registry — each lens reuses the REAL Soleur reviewer agent via
+// Dimension registry. Each lens reuses the REAL Soleur reviewer agent via
 // agentType, so the workflow inherits that agent's system prompt and only
 // appends the StructuredOutput instruction. One source of review expertise.
 // ---------------------------------------------------------------------------
 const DIMENSIONS = {
+  // --- always-on (class-gated) ---
   'git-history':    { agentType: 'soleur:engineering:research:git-history-analyzer',        lens: 'commit-history archaeology; verify deletion/bump/refactor rationale against cited PRs and issues' },
   pattern:          { agentType: 'soleur:engineering:review:pattern-recognition-specialist', lens: 'design patterns, anti-patterns, code duplication, naming conventions' },
   architecture:     { agentType: 'soleur:engineering:review:architecture-strategist',        lens: 'architectural compliance and system-design fit of the change' },
@@ -36,11 +56,19 @@ const DIMENSIONS = {
   'data-integrity': { agentType: 'soleur:engineering:review:data-integrity-guardian',        lens: 'migrations, data models, persistence safety, PII handling' },
   'agent-native':   { agentType: 'soleur:engineering:review:agent-native-reviewer',          lens: 'agent-user parity — any action/context a user has, an agent has too' },
   'code-quality':   { agentType: 'soleur:engineering:review:code-quality-analyst',           lens: 'code smells, severity-scored quality, refactoring roadmap' },
+  // --- conditional (trigger-gated) ---
+  'rails-kieran':   { agentType: 'soleur:engineering:review:kieran-rails-reviewer',          lens: 'strict Rails conventions, naming, controller complexity, Turbo patterns' },
+  'rails-dhh':      { agentType: 'soleur:engineering:review:dhh-rails-reviewer',             lens: 'Rails philosophy, JS-framework contamination, unnecessary abstraction' },
+  'data-migration': { agentType: 'soleur:engineering:review:data-migration-expert',          lens: 'ID-mapping correctness vs production, swapped values, rollback safety, dual-write' },
+  'deploy-verify':  { agentType: 'soleur:engineering:review:deployment-verification-agent',  lens: 'Go/No-Go deploy checklist with SQL verification queries and rollback procedure' },
+  'test-design':    { agentType: 'soleur:engineering:review:test-design-reviewer',           lens: "Farley's 8 properties; weighted Test Quality Score + top improvements" },
+  semgrep:          { agentType: 'soleur:engineering:review:semgrep-sast',                   lens: 'deterministic SAST — bootstrap via plugins/soleur/skills/review/scripts/ensure-semgrep.sh first, then scan changed source for CWE/secret/taint signatures' },
+  gdpr:             { agentType: 'soleur:engineering:review:data-integrity-guardian',        lens: 'GDPR/CCPA — Art. 9 special-category data, RoPA, lawful-basis gaps on regulated-data surfaces' },
+  'user-impact':    { agentType: 'soleur:engineering:review:user-impact-reviewer',           lens: 'enumerate concrete user-facing failure modes (cross-tenant read, credential leak, data loss, double-charge) vs the plan threshold' },
 }
 
-// Deterministic class → dimension mapping. This is the part that moves out of
-// the SKILL.md prose decision tree and into auditable code: the classify agent
-// reports a class, the SCRIPT owns which dimensions that class fans out to.
+// Deterministic class → always-on dimension mapping. The classify agent reports
+// a class; the SCRIPT (not the model) owns which dimensions that class runs.
 const CLASS_DIMENSIONS = {
   code: ['git-history', 'pattern', 'architecture', 'security', 'performance', 'data-integrity', 'agent-native', 'code-quality'],
   'non-code': ['git-history', 'pattern', 'security', 'code-quality'],
@@ -48,12 +76,25 @@ const CLASS_DIMENSIONS = {
   'deletion-dominated': ['git-history', 'security'],
 }
 
+// Conditional dimensions, gated on the classify agent's trigger flags. Mirrors
+// SKILL.md §"Conditional Agents". The fan-out decision stays in code.
+function conditionalDimensions(t = {}) {
+  const dims = []
+  if (t.isRailsApp && t.hasRubyChange) dims.push('rails-kieran', 'rails-dhh')
+  if (t.hasMigration) dims.push('data-migration', 'deploy-verify')
+  if (t.hasTests) dims.push('test-design')
+  if (t.hasSource && !t.bashOnly) dims.push('semgrep') // bash-only → shellcheck, not semgrep (SKILL.md note)
+  if (t.gdprMatch) dims.push('gdpr')
+  if (t.userImpactThreshold) dims.push('user-impact')
+  return dims
+}
+
 // ---------------------------------------------------------------------------
 // Schemas — validated at the tool-call layer, so agents retry on mismatch.
 // ---------------------------------------------------------------------------
 const CLASSIFY_SCHEMA = {
   type: 'object',
-  required: ['class', 'changedFiles', 'totalFiles', 'totalLines', 'hasSource', 'rationale'],
+  required: ['class', 'changedFiles', 'totalFiles', 'totalLines', 'hasSource', 'rationale', 'triggers'],
   additionalProperties: false,
   properties: {
     class: { type: 'string', enum: ['code', 'non-code', 'lockfile-only', 'deletion-dominated'] },
@@ -65,6 +106,21 @@ const CLASSIFY_SCHEMA = {
     hasSource: { type: 'boolean' },
     anyLockfile: { type: 'boolean' },
     rationale: { type: 'string' },
+    triggers: {
+      type: 'object',
+      required: ['isRailsApp', 'hasRubyChange', 'hasMigration', 'hasTests', 'hasSource', 'bashOnly', 'gdprMatch', 'userImpactThreshold'],
+      additionalProperties: false,
+      properties: {
+        isRailsApp: { type: 'boolean', description: 'repo root has BOTH Gemfile and config/routes.rb' },
+        hasRubyChange: { type: 'boolean', description: 'diff changes any *.rb file' },
+        hasMigration: { type: 'boolean', description: 'diff touches db/migrate/*.rb or supabase/migrations/*' },
+        hasTests: { type: 'boolean', description: 'diff touches a test/spec file (*.test.*, *_spec.rb, test_*.py, *_test.go, __tests__/…)' },
+        hasSource: { type: 'boolean' },
+        bashOnly: { type: 'boolean', description: 'every changed source file is .sh/.bash/.zsh (semgrep cannot analyze; use shellcheck)' },
+        gdprMatch: { type: 'boolean', description: 'a changed path matches the gdpr-gate canonical path globs (regulated-data surfaces)' },
+        userImpactThreshold: { type: 'boolean', description: 'the PR body or its linked plan declares "Brand-survival threshold: single-user incident"' },
+      },
+    },
   },
 }
 
@@ -86,7 +142,6 @@ const FINDINGS_SCHEMA = {
           file: { type: 'string' },
           line: { type: 'integer' },
           description: { type: 'string' },
-          // pr-introduced findings can never be scoped out (mirrors SKILL.md §Step 1).
           provenance: { type: 'string', enum: ['pr-introduced', 'pre-existing'] },
           fixSizeLines: { type: 'integer', description: 'estimated LOC to fix' },
           filesTouched: { type: 'integer', description: 'estimated files the fix touches' },
@@ -108,32 +163,25 @@ const VERDICT_SCHEMA = {
   },
 }
 
+const CONCUR_SCHEMA = {
+  type: 'object',
+  required: ['decision', 'reason'],
+  additionalProperties: false,
+  properties: {
+    decision: { type: 'string', enum: ['CONCUR', 'DISSENT'], description: 'CONCUR co-signs the scope-out filing; DISSENT flips to fix-inline' },
+    reason: { type: 'string', description: 'one sentence' },
+  },
+}
+
 // ---------------------------------------------------------------------------
 // Prompt builders.
 // ---------------------------------------------------------------------------
-// Parallel-safe diff access: for a PR number, every agent reads the diff
-// read-only via `gh pr diff <N>` (no checkout — concurrent checkouts would
-// race on a shared working tree). For a branch/empty target, use the local
-// `origin/main...HEAD` range.
-const isPR = /^\d+$/.test(String(target).trim())
-const prNum = isPR ? String(target).trim() : null
-const diffCmd = isPR ? `gh pr diff ${prNum}` : `git diff ${range}`
-const fileDiffCmd = isPR
-  ? `gh pr diff ${prNum} (locate the section for the file; gh pr diff has no pathspec filter)`
-  : `git diff ${range} -- <file>`
-const targetClause = isPR
-  ? `Review target: PR #${prNum}. Read the change READ-ONLY via \`${diffCmd}\` (do NOT \`gh pr checkout\` — other agents share this working tree). For file context beyond the diff, read the file on the current branch or \`gh api\` the PR head.`
-  : target
-    ? `Review target: branch "${target}". Diff range: ${range} (\`${diffCmd}\`).`
-    : `Review target: the current branch. Diff range: ${range} (\`${diffCmd}\`).`
-
 const classifyPrompt = `You are the change-classification gate for a Soleur code review.
 ${targetClause}
 
-Compute, over the change, exactly as the review SKILL does (source of truth: \`${diffCmd}\`${isPR ? `; file list via \`gh pr view ${prNum} --json files\`` : ''}):
-- changedFiles = ${isPR ? `the paths in \`gh pr view ${prNum} --json files\`` : `\`git diff --name-only ${range}\``}
-- totalFiles, deleted file/line counts, totalLines = added+deleted
-- hasSource = any changed path matches \`\\.(ts|tsx|js|jsx|rb|py|go|rs|swift|kt|java|c|cpp|cs|php|sh|bash|zsh|mjs|cjs)$\`
+Compute, over the change (source of truth: \`${diffCmd}\`${isPR ? `; file list via \`gh pr view ${prNum} --json files,body\`` : ''}):
+- changedFiles, totalFiles, deleted file/line counts, totalLines = added+deleted
+- hasSource = any changed path matches \\.(ts|tsx|js|jsx|rb|py|go|rs|swift|kt|java|c|cpp|cs|php|sh|bash|zsh|mjs|cjs)$
 - anyLockfile = any path matches package-lock.json|bun.lock|yarn.lock|Cargo.lock|go.sum|Gemfile.lock|poetry.lock|uv.lock
 
 Apply this decision tree, FIRST MATCH WINS:
@@ -142,7 +190,16 @@ Apply this decision tree, FIRST MATCH WINS:
 3. code: hasSource.
 4. non-code: otherwise.
 
-Return the classification object. Do not review the code — only classify.`
+Also compute the conditional triggers (booleans) — inspect the repo and the diff:
+- isRailsApp: repo root has BOTH Gemfile and config/routes.rb.
+- hasRubyChange: diff changes any *.rb file.
+- hasMigration: diff touches db/migrate/*.rb OR supabase/migrations/*.
+- hasTests: diff touches any test/spec file (*.test.ts/js, *.spec.ts/js, *_spec.rb, test_*.py, *_test.py, *_test.go, *Tests.swift, or files under __tests__/ test/ spec/).
+- bashOnly: hasSource is true AND every changed source file is .sh/.bash/.zsh.
+- gdprMatch: any changed path looks like a regulated-data surface (auth, billing, PII, consent, user/profile/account data models, supabase migrations on personal data). Be conservative — only true on a clear match.
+- userImpactThreshold: the PR body OR its linked plan file contains the literal "Brand-survival threshold: single-user incident".
+
+Return the classification object. Do NOT review the code — only classify.`
 
 function reviewPrompt(dim) {
   const d = DIMENSIONS[dim]
@@ -156,8 +213,15 @@ Read the diff (\`${diffCmd}\`) and any surrounding context you need. Report ONLY
 Be precise and conservative — a finding you cannot defend will be refuted in the next stage. Return an empty findings array if the diff is clean for your lens.`
 }
 
-function verifyPrompt(f) {
-  return `Adversarially verify this code-review finding. Your DEFAULT is that it is NOT real — set isReal=false unless the evidence is concrete and you can reproduce the reasoning against the actual diff.
+const VERIFY_LENSES = [
+  { key: 'correctness', ask: 'Is the finding technically correct against the real code, or a false positive / misread?' },
+  { key: 'scope', ask: 'Is the finding actually in-scope for THIS diff, or pre-existing/unrelated noise dressed up as a PR concern?' },
+  { key: 'already-handled', ask: 'Is the concern already handled elsewhere (a guard, a sibling, an existing test, a convention) so the finding is moot?' },
+]
+
+function verifyPrompt(f, lens) {
+  return `Adversarially verify this code-review finding through the "${lens.key}" lens: ${lens.ask}
+Your DEFAULT is that it is NOT real — set isReal=false unless the evidence is concrete and survives your lens.
 
 Finding:
 - title: ${f.title}
@@ -168,12 +232,30 @@ Finding:
 ${f.suggestedFix ? `- proposed fix: ${f.suggestedFix}` : ''}
 
 ${targetClause}
-Inspect the actual code at that location (read the change via \`${diffCmd}\`, locate ${f.file}, and read the file for context). Try to refute it: is it a false positive, already handled elsewhere, or out of scope for the change? Only return isReal=true if the finding genuinely holds against the real code.`
+Inspect the actual code (read the change via \`${diffCmd}\`, locate ${f.file}, read the file for context). Only return isReal=true if the finding genuinely holds.`
+}
+
+function concurPrompt(f) {
+  return `You are the simplicity-biased SECOND reviewer on a proposed deferred-scope-out filing. DEFAULT to DISSENT (i.e. fix inline). Only CONCUR when a scope-out criterion is concretely and obviously satisfied.
+
+Proposed scope-out:
+- finding: ${f.title} (${f.severity}) — ${f.file}
+- description: ${f.description}
+- proposed fix: ${f.suggestedFix || '(none stated)'}
+- size: ${f.fixSizeLines} lines / ${f.filesTouched ?? '?'} files
+- provenance: ${f.provenance}
+
+The FOUR scope-out criteria (a filing needs at least one, AND a concrete re-eval trigger):
+1. cross-cutting-refactor — fix touches ≥3 files materially unrelated to this PR's core change.
+2. contested-design — the REVIEW AGENT (not the author) independently named ≥2 valid approaches trading off differently, recommending a separate design cycle.
+3. architectural-pivot — fix changes a codebase-wide pattern deserving its own planning cycle.
+4. pre-existing-unrelated — finding existed on main and is not exacerbated by this PR. NEVER valid for pr-introduced findings.
+
+Hard rules: pr-introduced findings MUST fix inline (auto-DISSENT). A fix ≤30 lines AND ≤2 files MUST fix inline (auto-DISSENT). DISSENT on any vague re-eval trigger.
+Reply with decision CONCUR or DISSENT and a one-sentence reason.`
 }
 
 // Deterministic disposition — replaces the SKILL's prose cost-of-filing gate.
-// pr-introduced ⇒ always fix inline; small pre-existing ⇒ fix inline; else
-// it is a scope-out candidate that a human (or a CONCUR agent) signs off on.
 function disposition(f) {
   if (f.provenance === 'pr-introduced') return 'fix-inline'
   const lines = f.fixSizeLines ?? 999
@@ -183,48 +265,73 @@ function disposition(f) {
 }
 
 // ---------------------------------------------------------------------------
+// Budget. The verification fan-out is the expensive part; floor it so we keep
+// headroom for synthesis + filing. NEVER silently skip — log dropped coverage.
+// ---------------------------------------------------------------------------
+const VERIFY_FLOOR = 80_000 // output tokens to reserve past verification
+const SKEPTICS = deepReview ? 3 : 1 // perspective-diverse panel when deep
+const droppedVerification = []
+
+function budgetOk() {
+  return !budget.total || budget.remaining() > VERIFY_FLOOR
+}
+
+async function verifyFinding(f, dim) {
+  if (!budgetOk()) {
+    droppedVerification.push(`${dim}:${f.id}`)
+    // Conservative: surface UNVERIFIED rather than drop the finding entirely.
+    return {
+      ...f,
+      dimension: dim,
+      unverified: true,
+      verdict: { isReal: true, confidence: 'low', reason: `UNVERIFIED — token budget floor (${VERIFY_FLOOR}) reached; surfaced without adversarial check.` },
+    }
+  }
+  const lenses = VERIFY_LENSES.slice(0, SKEPTICS)
+  const votes = (
+    await parallel(
+      lenses.map((lens) => () =>
+        agent(verifyPrompt(f, lens), { label: `verify:${dim}:${f.id}:${lens.key}`, phase: 'Verify', schema: VERDICT_SCHEMA }),
+      ),
+    )
+  ).filter(Boolean)
+  // Majority-real survives. No votes (all errored) → conservative keep.
+  const realVotes = votes.filter((v) => v.isReal).length
+  const isReal = votes.length ? realVotes >= Math.ceil(votes.length / 2) : true
+  // Best reason = the deciding side's highest-confidence vote.
+  const conf = { low: 0, medium: 1, high: 2 }
+  const side = votes.filter((v) => v.isReal === isReal).sort((a, b) => conf[b.confidence] - conf[a.confidence])[0]
+  return {
+    ...f,
+    dimension: dim,
+    votes: votes.length,
+    verdict: side || { isReal, confidence: 'low', reason: 'no verifier returned' },
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Run.
 // ---------------------------------------------------------------------------
 phase('Classify')
-const classification = await agent(classifyPrompt, {
-  label: 'classify',
-  phase: 'Classify',
-  schema: CLASSIFY_SCHEMA,
-})
+const classification = await agent(classifyPrompt, { label: 'classify', phase: 'Classify', schema: CLASSIFY_SCHEMA })
 
 const cls = deepReview ? 'code' : classification.class
-const dims = CLASS_DIMENSIONS[cls] || CLASS_DIMENSIONS.code
+const alwaysOn = CLASS_DIMENSIONS[cls] || CLASS_DIMENSIONS.code
+const conditional = conditionalDimensions(classification.triggers)
+const dims = [...alwaysOn, ...conditional]
 log(
-  `Class: ${cls}${deepReview ? ' (forced via deep review)' : ''} — ` +
-    `${classification.totalFiles} files / ${classification.totalLines} lines → ` +
-    `${dims.length} dimension agents: ${dims.join(', ')}`,
+  `Class: ${cls}${deepReview ? ' (forced)' : ''} — ${classification.totalFiles} files / ${classification.totalLines} lines. ` +
+    `${alwaysOn.length} always-on + ${conditional.length} conditional` +
+    `${conditional.length ? ` (${conditional.join(', ')})` : ''} = ${dims.length} dimensions, ${SKEPTICS} skeptic(s)/finding.`,
 )
 
-// Pipeline: NO barrier between Review and Verify. The moment the `security`
-// dimension review lands, its findings start getting refuted while the
-// `performance` dimension is still reading the diff. Wall-clock = slowest
-// single (review → verify-its-findings) chain, not sum of stage maxima.
+// Pipeline: NO barrier between Review and Verify. The moment a dimension review
+// lands, its findings start getting refuted while other dimensions still read.
 const perDimension = await pipeline(
   dims,
-  // Stage 1 — review through one lens (reuses the real Soleur reviewer agent).
   (dim) =>
-    agent(reviewPrompt(dim), {
-      label: `review:${dim}`,
-      phase: 'Review',
-      schema: FINDINGS_SCHEMA,
-      agentType: DIMENSIONS[dim].agentType,
-    }),
-  // Stage 2 — adversarially verify every finding from this dimension.
-  (review, dim) =>
-    parallel(
-      (review?.findings || []).map((f) => () =>
-        agent(verifyPrompt(f), {
-          label: `verify:${dim}:${f.id}`,
-          phase: 'Verify',
-          schema: VERDICT_SCHEMA,
-        }).then((verdict) => ({ ...f, dimension: dim, verdict })),
-      ),
-    ),
+    agent(reviewPrompt(dim), { label: `review:${dim}`, phase: 'Review', schema: FINDINGS_SCHEMA, agentType: DIMENSIONS[dim].agentType }),
+  (review, dim) => parallel((review?.findings || []).map((f) => () => verifyFinding(f, dim))),
 )
 
 phase('Synthesize')
@@ -232,7 +339,7 @@ const all = perDimension.flat().filter(Boolean)
 const confirmed = all.filter((f) => f.verdict?.isReal)
 const refuted = all.filter((f) => !f.verdict?.isReal)
 
-// Dedup confirmed findings by file + normalized title (cross-dimension overlap).
+// Dedup confirmed by file + normalized title (cross-dimension overlap).
 const seen = new Set()
 const deduped = []
 for (const f of confirmed) {
@@ -241,20 +348,56 @@ for (const f of confirmed) {
   seen.add(key)
   deduped.push({ ...f, disposition: disposition(f) })
 }
-
 const order = { P1: 0, P2: 1, P3: 2 }
-deduped.sort((a, b) => (order[a.severity] - order[b.severity]) || a.file.localeCompare(b.file))
+deduped.sort((a, b) => order[a.severity] - order[b.severity] || a.file.localeCompare(b.file))
+
+// -------------------------------------------------------------------------
+// File: CONCUR-gated deferred-scope-out filing. Every scope-out candidate is
+// independently co-signed by a simplicity-biased reviewer (DEFAULT DISSENT).
+// DISSENT flips back to fix-inline. CONCUR → file (only if args.file), else
+// emit the would-file payload (dry-run).
+// -------------------------------------------------------------------------
+phase('File')
+const candidates = deduped.filter((f) => f.disposition === 'scope-out-candidate')
+const filings = []
+if (candidates.length) {
+  const judged = await parallel(
+    candidates.map((f) => () => agent(concurPrompt(f), { label: `concur:${f.dimension}:${f.id}`, phase: 'File', schema: CONCUR_SCHEMA }).then((c) => ({ f, concur: c }))),
+  )
+  for (const j of judged.filter(Boolean)) {
+    if (j.concur.decision !== 'CONCUR') {
+      // Gate flipped it: fix inline after all.
+      j.f.disposition = 'fix-inline'
+      filings.push({ finding: j.f.title, file: j.f.file, action: 'flipped-to-fix-inline', why: j.concur.reason })
+      continue
+    }
+    const issueBody = `## Scope-Out Justification\n\nFrom code review of ${isPR ? `PR #${prNum}` : target || 'current branch'}.\n\n**Finding:** ${j.f.title} (${j.f.severity}, ${j.f.dimension})\n**File:** ${j.f.file}${j.f.line ? `:${j.f.line}` : ''}\n**Provenance:** ${j.f.provenance}\n\n${j.f.description}\n\n**Proposed fix:** ${j.f.suggestedFix || '(see description)'}\n\n**CONCUR rationale:** ${j.concur.reason}`
+    if (fileScopeOuts) {
+      const filed = await agent(
+        `Create a GitHub issue for this co-signed deferred-scope-out. Use \`gh issue create --label deferred-scope-out --title "review: ${j.f.title.replace(/"/g, "'")}" --body-file <tmpfile>\` (write the body to a tmp file first — never pass untrusted finding text via --body "$VAR"). Body:\n\n${issueBody}\n\nReturn the created issue URL as plain text.`,
+        { label: `file:${j.f.id}`, phase: 'File' },
+      )
+      filings.push({ finding: j.f.title, file: j.f.file, action: 'filed', url: filed })
+    } else {
+      filings.push({ finding: j.f.title, file: j.f.file, action: 'dry-run', wouldFileBody: issueBody })
+    }
+  }
+}
 
 const report = {
-  target: target || '(current branch)',
+  target: isPR ? `PR #${prNum}` : target || '(current branch)',
   class: cls,
-  dimensionsRun: dims,
+  dimensionsRun: { alwaysOn, conditional },
+  skepticsPerFinding: SKEPTICS,
+  budget: { total: budget.total, spent: budget.spent(), droppedVerification },
   totals: {
     raised: all.length,
     confirmed: deduped.length,
     refuted: refuted.length,
     fixInline: deduped.filter((f) => f.disposition === 'fix-inline').length,
     scopeOutCandidates: deduped.filter((f) => f.disposition === 'scope-out-candidate').length,
+    filed: filings.filter((x) => x.action === 'filed').length,
+    flippedToFixInline: filings.filter((x) => x.action === 'flipped-to-fix-inline').length,
   },
   bySeverity: {
     P1: deduped.filter((f) => f.severity === 'P1'),
@@ -262,12 +405,16 @@ const report = {
     P3: deduped.filter((f) => f.severity === 'P3'),
   },
   findings: deduped,
-  refuted: refuted.map((f) => ({ title: f.title, file: f.file, reason: f.verdict?.reason })),
+  filings,
+  refuted: refuted.map((f) => ({ title: f.title, file: f.file, dimension: f.dimension, reason: f.verdict?.reason })),
 }
 
+if (droppedVerification.length) {
+  log(`⚠ budget floor hit — ${droppedVerification.length} finding(s) surfaced UNVERIFIED: ${droppedVerification.join(', ')}`)
+}
 log(
   `Done: ${deduped.length} confirmed (${report.totals.fixInline} fix-inline, ` +
-    `${report.totals.scopeOutCandidates} scope-out), ${refuted.length} refuted.`,
+    `${report.totals.scopeOutCandidates} scope-out → ${report.totals.filed} filed / ${report.totals.flippedToFixInline} flipped), ${refuted.length} refuted.`,
 )
 
 return report
