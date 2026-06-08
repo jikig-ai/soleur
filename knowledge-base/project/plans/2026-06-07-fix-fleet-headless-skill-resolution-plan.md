@@ -133,9 +133,9 @@ bug-fix automation.
 **If this leaks, the user's workflow is exposed via:** N/A — no data exposure
 vector; this is a quality/observability defect, not a confidentiality one.
 
-**Brand-survival threshold:** aggregate pattern. The blast radius is the *fleet* of
-producers degrading together over time (the #4982/#4987 class), not a single-user
-data incident. No per-PR CPO sign-off required; section present per Phase 2.6.
+- **Brand-survival threshold:** aggregate pattern — the blast radius is the *fleet*
+  of producers degrading together over time (the #4982/#4987 class), not a single-user
+  data incident. No per-PR CPO sign-off required; section present per Phase 2.6.
 
 ## Acceptance Criteria
 
@@ -296,9 +296,14 @@ logs:
   where: existing stdout-tail capture (#4786) routed to Better Stack; unchanged.
   retention: existing Better Stack retention.
 discoverability_test:
-  command: ./node_modules/.bin/vitest run test/server/inngest/cron-producer-output-wiring.test.ts
-  expected_output: parity block passes — all 10 skill-invoking producers carry
-                   --plugin-dir + Skill + Task; discovered set length === 10.
+  command: grep -l plugin-dir apps/web-platform/server/inngest/functions/event-ship-merge.ts
+  expected_output: event-ship-merge.ts
+  note: |
+    Root-runnable local probe confirming a representative fixed producer carries
+    the --plugin-dir flag. The authoritative correctness gate is the source-shape
+    parity test (./node_modules/.bin/vitest run test/server/inngest/, run in CI +
+    /work Phase 2); this PR changes spawn FLAGS only — there is no runtime endpoint
+    to curl-probe (the fix is gated at CI, not at a live HTTP surface).
 ```
 
 > Note: this PR changes spawn FLAGS, not the observability layer. The fix's own
