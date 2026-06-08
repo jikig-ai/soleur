@@ -68,7 +68,10 @@ async function handleSync(userId: string): Promise<Response> {
   if (!access.ok) {
     // Preserve the legacy 409 client contract (the `KbSyncStatus` "Sync now"
     // handler reads `error`/`code`, not the HTTP status family). 503 = the
-    // active workspace owner isn't ready yet; 404 = no repo connected.
+    // active workspace owner isn't ready yet; 404 = no repo connected. The
+    // legacy route's 404 "Workspace not found" (missing user row) and the
+    // `workspace_status` echo field are intentionally collapsed into this 409
+    // contract — the sole client discriminates on `code`, not the status family.
     if (access.status === 503) {
       return NextResponse.json(
         { error: "Workspace not ready", code: "WORKSPACE_NOT_READY" },

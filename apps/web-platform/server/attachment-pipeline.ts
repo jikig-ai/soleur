@@ -135,9 +135,13 @@ export async function persistAndDownloadAttachments(
   // the empty solo row for an invited member and stale/empty for any account
   // provisioned after the ADR-044 `users → workspaces` relocation, which made
   // chat attachments silently never persist to disk. The pipeline runs on a
-  // tenant client; the resolver's reads are self-scoped via `.eq("user_id",
-  // userId)`, so a tenant/RLS client is safe (same as the agent-runner:993
-  // precedent). The resolver always returns a path (fails closed to solo), so a
+  // tenant client; `resolveActiveWorkspacePath` reads only `user_session_state`
+  // + `workspace_members`, both self-scoped via `.eq("user_id", userId)`, so a
+  // tenant/RLS client is safe (same as the agent-runner:993 precedent). NOTE:
+  // the sibling `resolveActiveWorkspaceKbRoot` additionally reads
+  // `workspaces`/`organizations` by id — do NOT swap to it here without
+  // re-checking that tenant-client claim. The resolver always returns a path
+  // (fails closed to solo), so a
   // null-path early return is no longer reachable; the "no context" case is now
   // solely "every download failed" (filePaths.length === 0 below).
   const workspacePath = await resolveActiveWorkspacePath(userId, supabase);
