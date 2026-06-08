@@ -26,8 +26,16 @@ interface FakeChild extends EventEmitter {
 }
 
 const spawnSpy = vi.fn();
+// execFileSync is used by the substrate's spawn-time hook self-test
+// (runHookSelfTest). The real hook denies a canonical exfil payload; the mock
+// returns that deny decision so the self-test passes in this unit context
+// (cron-bug-fixer has no Bash allowlist → only the deny-payload branch runs).
+const execFileSyncSpy = vi.fn(
+  () => '{"hookSpecificOutput":{"permissionDecision":"deny"}}',
+);
 vi.mock("node:child_process", () => ({
   spawn: spawnSpy,
+  execFileSync: execFileSyncSpy,
 }));
 
 const mkdtempSpy = vi.fn();
@@ -73,6 +81,19 @@ vi.mock("@/server/plugin-path", () => ({
   getPluginPath: () => "/app/shared/plugins/soleur",
   SOLEUR_PLUGIN_PATH_DEFAULT: "/app/shared/plugins/soleur",
 }));
+
+// D6 (#5018): cron-bug-fixer is Tier-2-deferred in prod (broad bash + reads
+// public issue bodies → can't be a finite allowlist). These flow tests exercise
+// the spawn/issue path that Tier-2 (egress firewall) will RESTORE, so force the
+// defer guard OFF here; the "Tier-2 deferral" describe block below asserts the
+// REAL guard defers. Everything else in _cron-shared (postSentryHeartbeat, the
+// output-aware verify) stays real — only deferIfTier2Cron is overridden.
+const deferSpy = vi.fn().mockResolvedValue(false);
+vi.mock("@/server/inngest/functions/_cron-shared", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/server/inngest/functions/_cron-shared")>();
+  return { ...actual, deferIfTier2Cron: deferSpy };
+});
 
 // --- Helpers ---------------------------------------------------------------
 
@@ -537,10 +558,28 @@ describe("cron-bug-fixer — (b) ephemeral workspace + sentinel", () => {
     );
     expect(settingsWrite).toBeDefined();
     const settingsContent = settingsWrite![1] as string;
-    expect(JSON.parse(settingsContent)).toMatchObject({
-      permissions: { allow: [] },
-      sandbox: { enabled: true },
+    // #5018/#5000/#5004 (v3.1) — sandbox disabled (drops the bwrap-userns
+    // dependency); containment is the deny-by-default PreToolUse hook registered
+    // under a `*` matcher, NOT bypassPermissions (the v1 P1-blocked exfil
+    // primitive). See buildCronEvalSettings in _cron-claude-eval-substrate.ts.
+    const parsedSettings = JSON.parse(settingsContent);
+    expect(parsedSettings).toMatchObject({
+      permissions: { allow: [], defaultMode: "default" },
+      sandbox: { enabled: false },
     });
+    expect(settingsContent).not.toContain("bypassPermissions");
+    expect(parsedSettings.hooks.PreToolUse[0].matcher).toBe("*");
+    expect(parsedSettings.hooks.PreToolUse[0].hooks[0].command).toContain(
+      "cron-bash-allowlist-hook.mjs",
+    );
+
+    // The per-cron Bash allowlist file is written (cron-bug-fixer is NOT a
+    // Tier-1 cron → empty allowlist → its bash fail-closes, Tier-2 restores it).
+    const allowWrite = writeFileSpy.mock.calls.find(
+      ([p]) => typeof p === "string" && p.endsWith(".claude/cron-allow.txt"),
+    );
+    expect(allowWrite).toBeDefined();
+    expect(allowWrite![1]).toBe(""); // empty → deny-all
   });
 
   it("aborts run + emits Sentry status=error when plugin sentinel manifest missing", async () => {

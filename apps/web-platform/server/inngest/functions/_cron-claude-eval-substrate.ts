@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -106,14 +106,168 @@ export function spawnSimple(
   });
 }
 
-const DEFAULT_CLAUDE_SETTINGS = {
+// =============================================================================
+// Cron containment — hook-primary deny-by-default (v3.1 / #5018, #5000, #5004)
+// =============================================================================
+// #5000/#5004: when the cloud runner's bwrap cannot acquire unprivileged user
+// namespaces (kernel `apparmor_restrict_unprivileged_userns` drift, #4928/#4932),
+// the OS bash sandbox is unavailable and every `Bash` tool call inside
+// `claude --print` fails → the cron self-reports FAILED (#4978/#4988). The host
+// sysctl pin (#4932) recurred 4 days later, so the durable fix removes the cron's
+// dependency on unprivileged userns: `sandbox.enabled:false` (host-independent).
+//
+// But disabling the sandbox removes the only thing containing headless bash.
+// Phase-0 probes (committed AC0 evidence; re-verified on the prod-pinned CLI
+// 2.1.79) proved that with the sandbox off, headless `claude --print` does NOT
+// fail-close non-allowlisted commands via `--allowedTools`/`defaultMode` — only
+// an explicit `permissions.deny` rule OR a PreToolUse hook blocks, and an
+// unhooked tool class / a crashed hook FAILS OPEN. (The v1 `bypassPermissions`
+// approach was P1-blocked as a credential-exfil vector; that token MUST NOT
+// reappear.) So containment is the deny-by-default PreToolUse hook
+// (`cron-bash-allowlist-hook.mjs`), registered per-spawn under a `*` catch-all
+// matcher by buildCronEvalSettings(). This base overlay is inert — the hook is
+// the control. See knowledge-base/.../2026-06-08-fix-cron-sandbox-hook-primary-containment-plan.md.
+
+// Per-cron Bash command allowlists for the containment hook. Each entry is a
+// command PREFIX at sub-command granularity (`gh issue list`, NOT `gh issue`);
+// the hook matches a Bash command's DEQUOTED leading verb-phrase against these
+// and denies anything else (plus all secret-reads / egress / interpreters /
+// substitution / argument-injection, regardless of the allowlist). A cron ABSENT
+// from this map (or mapped to []) is fully fail-closed → its bash is denied → it
+// self-reports FAILED → Tier-2 (egress firewall) restores it. Only crons whose
+// entire command surface is a finite allowlist are Tier-1.
+export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
+  "cron-roadmap-review": [
+    "gh issue list",
+    "gh issue view",
+    "gh issue create",
+    "gh issue edit",
+    "gh issue close",
+    "gh issue comment",
+    "gh pr list",
+    "gh pr create",
+    "gh pr comment",
+    "gh api repos/jikig-ai/soleur/",
+    "gh label list",
+    "gh label create",
+    "git status",
+    "git add",
+    "git commit",
+    "git checkout",
+    "git switch",
+    // `git push` (not `git push origin`) so flagged forms match — `git push -u
+    // origin <branch>`, `git push origin HEAD`. The hook's gitVerbReason is the
+    // origin-only enforcer (denies any push to a non-origin remote), so the
+    // broader prefix is safe and the auto-fix-PR path (#5004 AC4c) is not
+    // silently denied on its `-u` flag.
+    "git push",
+    "git rev-parse",
+  ],
+};
+
+// Inert base overlay. `sandbox.enabled:false` = the host-independence fix;
+// `defaultMode:"default"` + `allow:[]` are inert (the hook is the boundary). The
+// token "bypassPermissions" MUST NOT appear here (v1 P1-blocked exfil primitive).
+export const DEFAULT_CLAUDE_SETTINGS = {
   permissions: {
     allow: [] as string[],
+    defaultMode: "default",
   },
   sandbox: {
-    enabled: true,
+    enabled: false,
   },
 };
+
+// Relative-to-spawnCwd paths inside the clone. The hook ships via the git clone
+// (a tracked file), NOT the symlinked plugins/ mount — so a Write to it is scoped
+// to the single ephemeral run (and denied by the hook's own Write/Edit guard).
+const HOOK_REL_PATH =
+  "apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs";
+const ALLOWLIST_REL_PATH = ".claude/cron-allow.txt";
+
+// Resolve `node` by ABSOLUTE path for the hook command. Relying on PATH lookup
+// risks a PATH-drift fail-open (a cron whose buildSpawnEnv trims PATH → node not
+// found → hook crashes → fail-open per probe D-new-1). Mirrors resolveClaudeBin.
+export function resolveNodeBin(): string {
+  const override = process.env.NODE_BIN;
+  if (override && existsSync(override)) return override;
+  if (process.execPath && existsSync(process.execPath)) return process.execPath;
+  for (const c of ["/usr/local/bin/node", "/usr/bin/node"]) {
+    if (existsSync(c)) return c;
+  }
+  return "node";
+}
+
+// Build the per-spawn settings overlay: the inert base + the deny-by-default
+// hook under a `*` catch-all matcher (so NO tool class is unhooked — an unhooked
+// class fails open per probe). The hook command is `<node> <hook> <allowlist>`,
+// all absolute, so it is independent of the hook's runtime CWD.
+export function buildCronEvalSettings(
+  spawnCwd: string,
+): Record<string, unknown> {
+  const command = `${resolveNodeBin()} ${join(spawnCwd, HOOK_REL_PATH)} ${join(
+    spawnCwd,
+    ALLOWLIST_REL_PATH,
+  )}`;
+  return {
+    ...DEFAULT_CLAUDE_SETTINGS,
+    hooks: {
+      PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command }] }],
+    },
+  };
+}
+
+// Spawn-time hook self-test (D2 — mitigates the probe D-new-1 fail-open: a
+// crashed/missing/misregistered hook silently reverts to fail-open). Runs the
+// hook BINARY against a canonical exfil payload (and, for a Tier-1 cron, its
+// first allowed verb) BEFORE the real agent spawns, using the byte-identical
+// node+hook+allowlist the real spawn uses. Throws (→ cron aborts → FAILED
+// self-report) rather than letting the cron run unprotected.
+export function runHookSelfTest(args: {
+  spawnCwd: string;
+  cronName: string;
+  allow: string[];
+}): void {
+  const { spawnCwd, cronName, allow } = args;
+  const nodeBin = resolveNodeBin();
+  const hookAbs = join(spawnCwd, HOOK_REL_PATH);
+  const allowlistAbs = join(spawnCwd, ALLOWLIST_REL_PATH);
+  const run = (payload: object): string => {
+    try {
+      return execFileSync(nodeBin, [hookAbs, allowlistAbs], {
+        input: JSON.stringify(payload),
+        encoding: "utf-8",
+        timeout: 10_000,
+      });
+    } catch (err) {
+      // execFileSync throws on non-zero exit / missing binary → treat as a
+      // self-test failure (fail-closed), not a pass.
+      return `self-test-exec-error: ${(err as Error).message}`;
+    }
+  };
+  const denied = run({
+    tool_name: "Bash",
+    tool_input: { command: "cat /proc/self/environ" },
+  });
+  if (!denied.includes('"permissionDecision":"deny"')) {
+    throw new Error(
+      `[${cronName}] containment hook self-test FAILED: the canonical exfil payload ` +
+        `was NOT denied (hook unreachable/misconfigured → would fail-open). Aborting cron.`,
+    );
+  }
+  if (allow.length > 0) {
+    const allowed = run({
+      tool_name: "Bash",
+      tool_input: { command: allow[0] },
+    });
+    if (!allowed.includes('"permissionDecision":"allow"')) {
+      throw new Error(
+        `[${cronName}] containment hook self-test FAILED: allowlisted verb "${allow[0]}" ` +
+          `was NOT allowed (allowlist not delivered). Aborting cron.`,
+      );
+    }
+  }
+}
 
 export async function setupEphemeralWorkspace(args: {
   installationToken: string;
@@ -156,9 +310,18 @@ export async function setupEphemeralWorkspace(args: {
 
   const claudeDir = join(spawnCwd, ".claude");
   await mkdir(claudeDir, { recursive: true });
+  // Per-cron Bash allowlist for the containment hook (deny-all if absent → the
+  // cron fail-closes and self-reports FAILED; Tier-2 restores it). Read by the
+  // hook from disk; the hook also denies any tool from READING `.claude/`.
+  const allow = CRON_BASH_ALLOWLISTS[cronName] ?? [];
+  await writeFile(
+    join(claudeDir, "cron-allow.txt"),
+    allow.length ? allow.join("\n") + "\n" : "",
+    "utf-8",
+  );
   await writeFile(
     join(claudeDir, "settings.json"),
-    JSON.stringify(DEFAULT_CLAUDE_SETTINGS, null, 2) + "\n",
+    JSON.stringify(buildCronEvalSettings(spawnCwd), null, 2) + "\n",
     "utf-8",
   );
 
@@ -168,6 +331,12 @@ export async function setupEphemeralWorkspace(args: {
       `Plugin sentinel check failed: ${manifestPath} does not exist (symlink target empty or wrong path)`,
     );
   }
+
+  // D2 (mitigates probe D-new-1 fail-open): confirm the hook actually denies a
+  // canonical exfil payload (and allows this cron's first verb) BEFORE any agent
+  // spawns. A throw here aborts the cron → FAILED self-report, never an
+  // unprotected run.
+  runHookSelfTest({ spawnCwd, cronName, allow });
 
   return { ephemeralRoot, spawnCwd };
 }
