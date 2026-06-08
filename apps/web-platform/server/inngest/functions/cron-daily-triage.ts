@@ -40,6 +40,8 @@ import { reportSilentFallback } from "@/server/observability";
 import {
   mintInstallationToken,
   postSentryHeartbeat,
+  REPO_OWNER,
+  REPO_NAME,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -165,7 +167,8 @@ const SENTRY_MONITOR_SLUG = "scheduled-daily-triage";
 // `env | curl`. The allowlist below caps the blast radius of a successful
 // prompt injection to "issue-label tampering" instead of "full-tenant
 // secret exfil". GH_TOKEN is the only credential the prompt's gh-CLI verbs
-// need.
+// need; GH_REPO (a public repo slug, not a credential) pins the target repo
+// so `gh` resolves it from the /app container without a git checkout (#5010).
 //
 // GH_TOKEN is the freshly minted GitHub App installation token (deliberately
 // NOT process.env.GH_TOKEN/GITHUB_TOKEN — both empty inside the prod Next.js
@@ -181,6 +184,11 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
     NODE_ENV: process.env.NODE_ENV,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     GH_TOKEN: installationToken,
+    // #5010 — pin the repo so the agent's `gh issue list/view/edit` calls
+    // resolve without a git checkout. This cron never clones, so `gh` runs from
+    // the prod container CWD /app (no .git); without GH_REPO it falls back to
+    // git-remote detection and fails `fatal: not a git repository`.
+    GH_REPO: `${REPO_OWNER}/${REPO_NAME}`,
   };
 }
 
