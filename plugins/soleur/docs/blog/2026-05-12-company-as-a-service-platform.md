@@ -63,7 +63,7 @@ This is the distinction from fully autonomous AI companies. The founder's judgme
 
 ## How Soleur Implements CaaS
 
-Soleur is the open-source CaaS platform. The architecture has three layers:
+Soleur is the source-available (BSL 1.1) CaaS platform. The architecture has three layers:
 
 **Agents** are AI specialists, each with deep expertise in a specific domain or function. Soleur ships 60+ agents across all eight business departments. Domain leaders (CMO, CTO, CFO, CLO, COO, CPO, CRO, CCO) orchestrate specialist teams within each domain. These are not chatbots — they are stateful, tool-using, multi-step executors that produce real artifacts: code, contracts, campaigns, financial models.
 

@@ -69,11 +69,11 @@ CrewAI: developers building custom multi-agent systems. The target is an enginee
 
 Soleur: solo founders replacing a full organizational structure. The target is a founder who needs marketing, legal, finance, engineering, operations, product, sales, support, and community work executed — and wants agents that already know how to do those jobs.
 
-### Open Source Model
+### Licensing Model
 
 CrewAI: open-source framework (MIT license), with CrewAI AMP as a managed cloud tier. The framework can be self-hosted and extended.
 
-Soleur: open-source platform (Claude Code plugin). Both the agent definitions and skill implementations are inspectable and extendable. Your costs are the Claude API credits your workflows consume.
+Soleur: source-available (BSL 1.1) platform (Claude Code plugin). Both the agent definitions and skill implementations are inspectable and extendable. Your costs are the Claude API credits your workflows consume.
 
 ### Ecosystem
 
@@ -105,7 +105,7 @@ And for founders who do not want to spend engineering time building agent infras
 | Cross-domain knowledge base | Custom implementation required | Built-in, compounding |
 | Target user | Developers building custom agent systems | Solo founders needing org capacity |
 | Language requirement | Python | None (Claude Code native) |
-| Open source | Yes (MIT) | Yes |
+| License | Open source (MIT) | Source-available (BSL 1.1) |
 | Pricing | Free (framework) / CrewAI AMP (cloud) | Free (API costs) |
 
 ## FAQ
@@ -124,7 +124,7 @@ Soleur is built on Claude Code's agent SDK rather than a general-purpose Python 
 
 **Q: What if I need capabilities Soleur doesn't have?**
 
-Soleur is open-source. Agent and skill definitions are Markdown files in the plugin directory — inspectable, editable, and extensible. Adding a new agent or skill follows the same pattern as the existing ones. The plugin loader discovers new agents automatically. For truly custom workflow requirements that need Python integration and arbitrary tool access, CrewAI's framework model is the appropriate choice.
+Soleur is source-available (BSL 1.1). Agent and skill definitions are Markdown files in the plugin directory — inspectable, editable, and extensible. Adding a new agent or skill follows the same pattern as the existing ones. The plugin loader discovers new agents automatically. For truly custom workflow requirements that need Python integration and arbitrary tool access, CrewAI's framework model is the appropriate choice.
 
 <script type="application/ld+json">
 {
@@ -160,7 +160,7 @@ Soleur is open-source. Agent and skill definitions are Markdown files in the plu
       "name": "What if I need capabilities Soleur doesn't have?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Soleur is open-source. Agent and skill definitions are Markdown files in the plugin directory — inspectable, editable, and extensible. Adding a new agent or skill follows the same pattern as the existing ones. For truly custom workflow requirements that need Python integration and arbitrary tool access, CrewAI's framework model is the appropriate choice."
+        "text": "Soleur is source-available (BSL 1.1). Agent and skill definitions are Markdown files in the plugin directory — inspectable, editable, and extensible. Adding a new agent or skill follows the same pattern as the existing ones. For truly custom workflow requirements that need Python integration and arbitrary tool access, CrewAI's framework model is the appropriate choice."
       }
     }
   ]

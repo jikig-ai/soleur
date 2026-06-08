@@ -316,13 +316,13 @@ No open code-review issue references `plugins/soleur/docs/blog`.
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] **AC1:** `git grep -niE "soleur is (an )?open[- ]source" plugins/soleur/docs/blog/` returns **zero** hits.
-- [ ] **AC1b (extended Soleur-subject sweep):** `git grep -niE "open[- ]source" plugins/soleur/docs/blog/` residual list contains ONLY competitor/ecosystem lines (CrewAI MIT, Paperclip MIT, Spec Kit "open-sourced by GitHub", and the kept frontmatter `open-source` tag) — no Soleur-subject survivor (manually verified against the KEEP set).
-- [ ] **AC2:** Competitor refs intact — `git grep -niE "open[- ]source"` still returns: CrewAI `open-source Python framework` + `open-source framework (MIT license)`, Paperclip `open-source orchestration platform` + `(MIT license…)`, Spec Kit `open-sourced by GitHub`. Counts unchanged from baseline (CrewAI 8, Paperclip 8, Spec Kit 1).
-- [ ] **AC3:** `bun test plugins/soleur/test/marketing-content-drift.test.ts` passes; Test 2c contains the new Soleur-subject assertion; the regex was verified RED-before / GREEN-after AND verified to NOT match the KEEP set (`why-most-agentic-tools-plateau.md`, CrewAI/Paperclip MIT lines).
-- [ ] **AC3b:** Deferral comments updated — `grep -n "deferred to #5043\|resolved (#5043)" plugins/soleur/test/marketing-content-drift.test.ts` shows the L160-161 and L190 comments now say "resolved (#5043)" and zero "deferred to #5043" remain.
-- [ ] **AC4:** `npm run docs:build` exits 0; swept JSON-LD blocks (`vs-cursor`, `vs-polsia`, `vs-crewai`, `vs-paperclip`) render in `_site/` with "source-available" matching their visible prose (FR3 sync).
-- [ ] **AC5 (FR2 separation):** In `2026-03-31-soleur-vs-paperclip.md`, Paperclip is described as open-source (MIT) and Soleur as source-available (BSL 1.1) — the two are not lumped as "both open-source"; `git grep -ni "both open-source" 2026-03-31-soleur-vs-paperclip.md` returns 0.
+- [x] **AC1:** `git grep -niE "soleur is (an )?open[- ]source" plugins/soleur/docs/blog/` returns **zero** hits.
+- [x] **AC1b (extended Soleur-subject sweep):** `git grep -niE "open[- ]source" plugins/soleur/docs/blog/` residual list contains ONLY competitor/ecosystem lines (CrewAI MIT, Paperclip MIT, Spec Kit "open-sourced by GitHub", and the kept frontmatter `open-source` tag) — no Soleur-subject survivor (manually verified against the KEEP set).
+- [x] **AC2:** Competitor refs intact — `git grep -niE "open[- ]source"` still returns: CrewAI `open-source Python framework` + `open-source framework (MIT license)`, Paperclip `open-source orchestration platform` + `(MIT license…)`, Spec Kit `open-sourced by GitHub`. Counts unchanged from baseline (CrewAI 8, Paperclip 8, Spec Kit 1).
+- [x] **AC3:** `bun test plugins/soleur/test/marketing-content-drift.test.ts` passes; Test 2c contains the new Soleur-subject assertion; the regex was verified RED-before / GREEN-after AND verified to NOT match the KEEP set (`why-most-agentic-tools-plateau.md`, CrewAI/Paperclip MIT lines).
+- [x] **AC3b:** Deferral comments updated — `grep -n "deferred to #5043\|resolved (#5043)" plugins/soleur/test/marketing-content-drift.test.ts` shows the L160-161 and L190 comments now say "resolved (#5043)" and zero "deferred to #5043" remain.
+- [x] **AC4:** `npm run docs:build` exits 0; swept JSON-LD blocks (`vs-cursor`, `vs-polsia`, `vs-crewai`, `vs-paperclip`) render in `_site/` with "source-available" matching their visible prose (FR3 sync).
+- [x] **AC5 (FR2 separation):** In `2026-03-31-soleur-vs-paperclip.md`, Paperclip is described as open-source (MIT) and Soleur as source-available (BSL 1.1) — the two are not lumped as "both open-source"; `git grep -ni "both open-source" 2026-03-31-soleur-vs-paperclip.md` returns 0.
 
 ### Post-merge (operator)
 - None. PR merge ships the docs; the `web-platform-release` container restart and Eleventy build

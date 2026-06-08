@@ -157,8 +157,8 @@ describe("marketing-content-drift", () => {
     // a misrepresentation. Generic ecosystem "open source" (plugin marketplaces,
     // MCP "open standard") is NOT matched — only Soleur-subject phrasings.
     // pages/legal/** legitimately describes the BSL→Apache conversion → excluded.
-    // Dated blog-body generic positioning is deferred to #5043 (CMO) and is not
-    // covered by this .njk walk (see Test 2c for the blog Apache-only floor).
+    // Dated blog-body Soleur-subject "open source" positioning is resolved (#5043)
+    // and enforced by Test 2c below; this .njk walk covers evergreen site copy only.
     const OFFENDER =
       /Apache[- ]2|LICENSE-2\.0|Apache-2\.0 licensed|open[- ]source (version|Company-as-a-Service|Claude Code platform|AI agents)|is open source|open source under|Apache-2\.0 open source/i;
     const targets = [
@@ -187,8 +187,10 @@ describe("marketing-content-drift", () => {
   });
 
   test("Test 2c: blog posts make no explicit Apache-2.0 license claim (#5038)", () => {
-    // Generic blog-body "open source" positioning is deferred to #5043 (CMO);
-    // explicit Apache claims are not — they name a license the project no longer uses.
+    // Soleur-subject blog-body "open source" positioning is resolved (#5043) and
+    // banned by Test 2c2 below; explicit Apache claims (#5038) name a license the
+    // project no longer uses. Competitor/ecosystem "open source" (CrewAI MIT,
+    // Paperclip MIT, Spec Kit "open-sourced by GitHub") is NOT matched.
     const OFFENDER = /Apache[- ]2|LICENSE-2\.0/i;
     const targets = walkMarkdown(join(DOCS_ROOT, "blog")).filter((p) => existsSync(p));
     const offenders: { file: string; line: number; text: string }[] = [];
@@ -206,6 +208,35 @@ describe("marketing-content-drift", () => {
         .join("\n");
       throw new Error(
         `Found ${offenders.length} explicit Apache-2.0 license claim(s) in blog posts (#5038):\n${detail}`,
+      );
+    }
+  });
+
+  test("Test 2c2: blog posts make no Soleur-subject open-source claim (#5043)", () => {
+    // Soleur is BSL 1.1 (source-available), NOT OSI-approved; a Soleur-subject
+    // "open source" claim is a misrepresentation — resolved per CMO call (#5043).
+    // Competitor/ecosystem "open source" (CrewAI MIT, Paperclip MIT, Spec Kit
+    // "open-sourced by GitHub", the bare `open-source` frontmatter tag) stays
+    // verbatim and must NOT match. Empirically validated RED-before / GREEN-after
+    // against all 11 in-scope files + the competitor/ecosystem KEEP oracle.
+    const SOLEUR_OPEN_SOURCE =
+      /Soleur(?:'s)?\s+(?:is\s+(?:an?\s+|the\s+)?)?(?:source-available\s+)?open[- ]source|Soleur:\s*open[- ]source|open[- ]source\s+(?:CaaS|transparency)|is\s+open[- ]source\s+and\s+(?:auditable|local-first)|\bit\s+is\s+(?:public,\s+it\s+is\s+)?open[- ]source\b|the\s+Soleur\s+open[- ]source|^Open source,\s|(?:^|\.\s+|browsers\.\s+)Open source\.\s/i;
+    const targets = walkMarkdown(join(DOCS_ROOT, "blog")).filter((p) => existsSync(p));
+    const offenders: { file: string; line: number; text: string }[] = [];
+    for (const file of targets) {
+      const lines = readFileSync(file, "utf8").split("\n");
+      lines.forEach((text, i) => {
+        if (SOLEUR_OPEN_SOURCE.test(text)) {
+          offenders.push({ file: file.replace(REPO_ROOT + "/", ""), line: i + 1, text: text.trim() });
+        }
+      });
+    }
+    if (offenders.length > 0) {
+      const detail = offenders
+        .map((o) => `  ${o.file}:${o.line}\n    ${o.text.slice(0, 160)}${o.text.length > 160 ? "…" : ""}`)
+        .join("\n");
+      throw new Error(
+        `Found ${offenders.length} Soleur-subject "open source" claim(s) in blog posts — Soleur is source-available (BSL 1.1), not OSI-approved (#5043):\n${detail}`,
       );
     }
   });

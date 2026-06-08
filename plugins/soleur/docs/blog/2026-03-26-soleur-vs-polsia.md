@@ -77,7 +77,7 @@ The difference between an autonomous cron job and an organizational workflow is 
 - **Higher tier:** $59/month
 - **Revenue share:** Historically 20% of business revenue and 20% of managed ad spend (current applicability should be confirmed with Polsia)
 
-Soleur is open-source. The platform is free.
+Soleur is source-available (BSL 1.1). The platform is free.
 
 The pricing analysis matters because of the revenue share dimension. A solo founder generating $10,000/month in revenue would pay $2,000/month under a 20% revenue share model -- on top of the subscription fee. A founder running $5,000/month in Meta ads would pay an additional $1,000/month in ad management fees. At any meaningful revenue, the true cost of Polsia's autonomous model could significantly exceed the headline $29-59/month.
 
@@ -119,9 +119,9 @@ Only if the autonomous decisions are reliably good. The efficiency argument for 
 
 Polsia's growth validates that solo founders will pay for AI-powered company operation. It validates the CaaS category thesis. What $1.5M ARR across 2,000+ managed companies does not validate is the output quality of autonomous execution, the long-term trajectory of companies running on that model, or whether the autonomous approach produces results competitive with human-guided execution at higher stakes. The market exists. The architecture question remains open.
 
-**Q: Is Soleur's open-source model sustainable against a venture-backed competitor?**
+**Q: Is Soleur's source-available model sustainable against a venture-backed competitor?**
 
-Soleur's compounding knowledge base, cross-domain institutional memory, and open-source transparency are structural advantages that a proprietary cloud platform cannot replicate by adding features. The open-source core means every agent, every skill, and every knowledge-base schema is auditable and extensible. The compound architecture means the platform gets better with use in a way that autonomous nightly cycles do not. Sustainability comes from the depth of the moat, not the size of the funding round.
+Soleur's compounding knowledge base, cross-domain institutional memory, and source-available transparency are structural advantages that a proprietary cloud platform cannot replicate by adding features. The source-available core means every agent, every skill, and every knowledge-base schema is auditable and extensible. The compound architecture means the platform gets better with use in a way that autonomous nightly cycles do not. Sustainability comes from the depth of the moat, not the size of the funding round.
 
 <script type="application/ld+json">
 {
@@ -154,10 +154,10 @@ Soleur's compounding knowledge base, cross-domain institutional memory, and open
     },
     {
       "@type": "Question",
-      "name": "Is Soleur's open-source model sustainable against a venture-backed competitor?",
+      "name": "Is Soleur's source-available model sustainable against a venture-backed competitor?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Soleur's compounding knowledge base, cross-domain institutional memory, and open-source transparency are structural advantages that a proprietary cloud platform cannot replicate by adding features. The open-source core means every agent, every skill, and every knowledge-base schema is auditable and extensible. The compound architecture means the platform gets better with use in a way that autonomous nightly cycles do not. Sustainability comes from the depth of the moat, not the size of the funding round."
+        "text": "Soleur's compounding knowledge base, cross-domain institutional memory, and source-available transparency are structural advantages that a proprietary cloud platform cannot replicate by adding features. The source-available core means every agent, every skill, and every knowledge-base schema is auditable and extensible. The compound architecture means the platform gets better with use in a way that autonomous nightly cycles do not. Sustainability comes from the depth of the moat, not the size of the funding round."
       }
     }
   ]
