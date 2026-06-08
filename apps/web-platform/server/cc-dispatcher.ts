@@ -23,7 +23,11 @@ import {
   buildC4ConciergeTools,
   EDIT_C4_DIAGRAM_TOOL,
 } from "@/server/c4-concierge-tools";
-import { getRuntimeFlag, type Role } from "@/lib/feature-flags/server";
+import {
+  getRuntimeFlag,
+  isDebugModeAvailable,
+  type Role,
+} from "@/lib/feature-flags/server";
 import { C4_VISUALIZER_FLAG } from "@/lib/c4-constants";
 
 import { applyPrefillGuard } from "./agent-prefill-guard";
@@ -99,6 +103,8 @@ import { getCurrentRepoUrl } from "./current-repo-url";
 import { ensureWorkspaceRepoCloned } from "./ensure-workspace-repo";
 // Issue B part 2 — per-workspace autonomous Bash toggle (fail-closed read).
 import { resolveBashAutonomous } from "./resolve-bash-autonomous";
+import { resolveDebugMode } from "./resolve-debug-mode";
+import { emitDebugEvent } from "./debug-event";
 // feat-bash-autonomous-default-on — first-run consent soft-gate inputs:
 // the ack timestamp (fail-closed null = HOLD) + workspace-ownership (fail-closed
 // not-owner = review-gate fallback).
@@ -307,38 +313,25 @@ export function buildConnectedRepoContext(owner: string, repo: string): string {
 // catalog today, so this is bounded but not impossible.
 const MAX_TOOL_NAME_LEN_FOR_LOG = 128;
 
-// feat-concierge-stream-commands — `command_stream` output caps (D4). The
-// per-chunk cap bounds a single oversized `tool_use_result` (e.g. a `cat`
-// of a multi-MB file) before it ever hits the WS frame; the per-command
-// total cap bounds the cumulative output across however many result blocks
-// one command produces. When the total cap is hit, `TRUNCATION_MARKER` is
-// appended and `truncated:true` rides the emit so the bubble shows the
-// `[… truncated]` affordance. Byte-measured (not char-measured) to bound
-// the actual wire payload regardless of multi-byte content.
-export const COMMAND_STREAM_CHUNK_CAP_BYTES = 4096;
-export const COMMAND_STREAM_TOTAL_CAP_BYTES = 16384;
-// FIX 4 — pre-cap the raw command at the start emit (mirrors the output path)
-// so the wire payload + redaction back-tracking are bounded regardless of an
-// adversarially long command string. Matches `commandStreamSchema.command.max`.
-export const COMMAND_STREAM_COMMAND_CAP_BYTES = 16384;
-export const COMMAND_STREAM_TRUNCATION_MARKER = "\n[… truncated]";
-
-/**
- * feat-concierge-stream-commands — byte-cap a UTF-8 string at `capBytes`,
- * never splitting a multi-byte code point. Returns the (possibly shorter)
- * string + whether it was truncated. Used to bound a single output chunk
- * before redaction (redaction can only shrink the string, so capping the
- * raw input keeps the regex back-tracking bounded too).
- */
-export function capUtf8Bytes(s: string, capBytes: number): { text: string; truncated: boolean } {
-  const buf = Buffer.from(s, "utf8");
-  if (buf.length <= capBytes) return { text: s, truncated: false };
-  // Walk back to a code-point boundary: UTF-8 continuation bytes are
-  // 0b10xxxxxx (0x80–0xBF). Trim them off the cut edge.
-  let end = capBytes;
-  while (end > 0 && (buf[end] & 0xc0) === 0x80) end--;
-  return { text: buf.subarray(0, end).toString("utf8"), truncated: true };
-}
+// feat-concierge-stream-commands — `command_stream` output caps (D4) + the
+// UTF-8 byte-cap util. Definitions moved to `./command-stream-caps` so the
+// debug-mode emit path can reuse them without a cc-dispatcher import cycle.
+// Imported for internal use AND re-exported so every existing importer
+// (tests, etc.) that pulls these from cc-dispatcher is unaffected.
+import {
+  COMMAND_STREAM_CHUNK_CAP_BYTES,
+  COMMAND_STREAM_TOTAL_CAP_BYTES,
+  COMMAND_STREAM_COMMAND_CAP_BYTES,
+  COMMAND_STREAM_TRUNCATION_MARKER,
+  capUtf8Bytes,
+} from "./command-stream-caps";
+export {
+  COMMAND_STREAM_CHUNK_CAP_BYTES,
+  COMMAND_STREAM_TOTAL_CAP_BYTES,
+  COMMAND_STREAM_COMMAND_CAP_BYTES,
+  COMMAND_STREAM_TRUNCATION_MARKER,
+  capUtf8Bytes,
+};
 
 // Redaction-fallthrough probe markers (the four secret shapes the extended
 // allowlist covers). If a redacted command/output STILL contains one of
@@ -2322,6 +2315,54 @@ export async function dispatchSoleurGo(
       });
     });
 
+  // feat-debug-mode-stream — per-dispatch debug-stream gate. Two INDEPENDENT
+  // conditions, BOTH required for any debug_event to emit (read as `let`
+  // bindings, mirroring `bashAutonomousPosture`'s fire-and-forget resolve so
+  // BOTH cold and warm turns publish the gate before any SDK block surfaces;
+  // failure leaves the fail-closed `false`):
+  //   (1) `debugPosture` — the ACTIVE workspace's `debug_mode` toggle is ON
+  //       (`resolveDebugMode`, member-checked RPC, fail-closed false).
+  //   (2) `debugEligible` — the dispatch user is in the `dev` cohort AND the
+  //       `debug-mode` Flagsmith flag is on (`isDebugModeAvailable` hard-gates
+  //       `role !== "dev"` BEFORE the flag — fail-CLOSED on a Flagsmith outage,
+  //       P0-8). Role is read from the SAME `users.role` shape as the
+  //       c4-visualizer gate above.
+  // Per-dispatch resolution (not ClientSession-carried) also solves toggle
+  // propagation for free: the NEXT turn re-resolves fresh (≤1-turn latency on
+  // a mid-turn flip — AC6). The debug stream is a scoped exception to the
+  // #2138 raw-tool-input invariant; the redaction + DROP-first gate lives
+  // entirely in `server/debug-event.ts`, so the shared `probeRedactionFallthrough`
+  // is untouched.
+  let debugPosture = false;
+  let debugEligible = false;
+  void resolveDebugMode(userId)
+    .then((enabled) => {
+      debugPosture = enabled;
+    })
+    .catch((err) => {
+      reportSilentFallback(err, {
+        feature: "cc-dispatcher",
+        op: "debug-mode-resolve",
+        extra: { userId, conversationId },
+      });
+    });
+  void (async () => {
+    const debugTenant = await getFreshTenantClient(userId);
+    const { data: roleRow } = await debugTenant
+      .from("users")
+      .select("role")
+      .eq("id", userId)
+      .single<{ role: unknown }>();
+    const role: Role = roleRow?.role === "dev" ? "dev" : "prd";
+    debugEligible = await isDebugModeAvailable({ userId, role, orgId: null });
+  })().catch((err) => {
+    reportSilentFallback(err, {
+      feature: "cc-dispatcher",
+      op: "debug-mode-eligibility",
+      extra: { userId, conversationId },
+    });
+  });
+
   // Per-command total-output budget tracker (D4), keyed by `toolUseId`.
   // Bounds cumulative bytes across however many result blocks one command
   // produces. Entry created on first output chunk; the per-dispatch lifetime
@@ -2379,6 +2420,18 @@ export async function dispatchSoleurGo(
         partial: true,
         leaderId: CC_ROUTER_LEADER_ID,
       });
+      // feat-debug-mode-stream — mirror assistant text into the debug stream as
+      // a `reasoning` event (the Concierge path has no thinking/progress seam;
+      // P0-2 maps "reasoning" → onText). Redacted-or-dropped + gated inside
+      // `emitDebugEvent`; a prose secret that survives redaction drops the frame.
+      emitDebugEvent({
+        enabled: debugPosture && debugEligible,
+        kind: "reasoning",
+        rawValue: text,
+        userId,
+        conversationId,
+        send: (frame) => sendToClient(userId, frame),
+      });
     },
     onToolUse: (block) => {
       // #2909 FR2 — silent-failure mirror for unregistered platform tools.
@@ -2426,6 +2479,24 @@ export async function dispatchSoleurGo(
           leaderId: CC_ROUTER_LEADER_ID,
         }),
       );
+
+      // feat-debug-mode-stream — mirror the tool-use into the debug stream as a
+      // `tool_use` event carrying the RAW parsed input object. `buildDebugEvent`
+      // redacts per-string-leaf + key-aware, then runs the DEBUG_REDACTION_PROBES
+      // superset; on a probe trip it DROPs the input to a placeholder but keeps a
+      // HUMAN label (`buildToolLabel(name, undefined, …)` — never the raw SDK
+      // tool name, #2138/PR#2115). `block.name`/`block.input` are passed raw;
+      // all redaction happens inside the gated emit helper.
+      emitDebugEvent({
+        enabled: debugPosture && debugEligible,
+        kind: "tool_use",
+        rawValue: block.input,
+        toolName: block.name,
+        workspacePath,
+        userId,
+        conversationId,
+        send: (frame) => sendToClient(userId, frame),
+      });
 
       // feat-concierge-stream-commands — emit the `command_stream`
       // `phase:"start"` carrying the REDACTED command, ONLY in the
@@ -2651,6 +2722,23 @@ export async function dispatchSoleurGo(
       // capture to the active turn so a stale callback arriving after the
       // bump cannot misattribute to a later row.
       state.captureUsage(state.currentTurnIndex(), result.totalCostUsd);
+
+      // feat-debug-mode-stream — mirror the turn result (cost + usage summary)
+      // into the debug stream as a `result` event. The payload is cost/usage
+      // telemetry (no credential shapes), but still rides the gated
+      // redact-or-drop helper for uniformity. `onResult` carries ONLY
+      // {totalCostUsd, usage} — no message body.
+      emitDebugEvent({
+        enabled: debugPosture && debugEligible,
+        kind: "result",
+        rawValue: JSON.stringify({
+          totalCostUsd: result.totalCostUsd,
+          usage: result.usage,
+        }),
+        userId,
+        conversationId,
+        send: (frame) => sendToClient(userId, frame),
+      });
 
       // Fire-and-forget per-turn cost write to the aggregation surface
       // (separate from messages.usage). Closes the cc-soleur-go path's
