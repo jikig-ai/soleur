@@ -44,6 +44,13 @@ export const PUBLIC_PATHS = [
   "/robots.txt",
   "/shared",
   "/api/shared",
+  // /api/waitlist: public marketing-waitlist email capture from the anonymous
+  // shared-document banner (proxies to Buttondown). Carries no session cookie —
+  // Supabase middleware would 307→/login before the route's own validateOrigin +
+  // honeypot + per-IP rate-limit gates run, making the form unreachable for the
+  // anonymous visitor it exists to serve. Same class as #4017 (/api/inngest).
+  // NARROW exact path — do NOT broaden to /api.
+  "/api/waitlist",
   "/invite",
 ];
 
