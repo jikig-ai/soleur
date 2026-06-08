@@ -26,8 +26,10 @@
 //   - repo/plugins/soleur            (symlink to getPluginPath())
 //   - repo/.claude/settings.json     (DEFAULT_SETTINGS overlay)
 // The spawn cwd is repo/ so that:
-//   (a) claude-code's plugin discovery (cwd-relative) finds the soleur
-//       plugin manifest at plugins/soleur/.claude-plugin/plugin.json;
+//   (a) the explicit `--plugin-dir plugins/soleur` flag (in CLAUDE_CODE_FLAGS
+//       below) registers the soleur plugin manifest at
+//       plugins/soleur/.claude-plugin/plugin.json — headless `--print` does NOT
+//       auto-discover it from spawn cwd (see #4993 / #4987);
 //   (b) the fix-issue skill's worktree-manager.sh has a real git repo
 //       to create worktrees against. Clone is done in-handler (vs.
 //       relying on a pre-seeded repo path) because Hetzner has no
@@ -145,7 +147,9 @@ const CLAUDE_CODE_FLAGS = [
   "--max-turns",
   "55",
   "--allowedTools",
-  "Bash,Read,Write,Edit,Glob,Grep",
+  "Bash,Read,Write,Edit,Glob,Grep,Skill,Task",
+  "--plugin-dir",
+  "plugins/soleur",
   "--",
 ];
 
