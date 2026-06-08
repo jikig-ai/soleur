@@ -13,6 +13,45 @@ requires_cpo_signoff: true
 
 > Closes #5005 (use `Ref #5005` in PR body if any step is post-merge; this is a pure code change so `Closes #5005` is correct).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-08
+**Sections enhanced:** Resolver-selection, per-phase implementation notes, Risks, Sharp Edges
+**Gates passed:** 4.6 User-Brand Impact (threshold `single-user incident`, valid), 4.7 Observability
+(5 fields, no-SSH discoverability), 4.8 PAT-shaped (none), 4.9 UI-wireframe (no UI surface — pass).
+4.4 Precedent-diff: no novel SQL/atomic-write/lock/scheduled pattern; read-path swap with
+already-migrated in-repo precedents cited.
+
+### Key improvements (verified against `origin/main` code, 2026-06-08)
+
+1. **`resolveActiveWorkspaceRepoMeta` confirmed** (`workspace-resolver.ts:473-528`) — returns
+   `{ ok, repoUrl, githubInstallationId }` and resolves the installation id via the
+   membership-checked `resolveInstallationId` RPC. This **subsumes** kb/sync's inline
+   `resolveInstallationId` fallback (`kb/sync/route.ts:98-104`) — the convergence removes that
+   block rather than keeping it (Phase 2 atomicity note upgraded from "verify" to "remove").
+2. **`SupabaseLike` is structural** (`workspace-resolver.ts:78`): `{ from: (table: string) => unknown }`.
+   `attachment-pipeline.ts` passes a `SupabaseClient` (`:50`) and `kb/sync`/`vision` pass service
+   clients — all trivially satisfy `SupabaseLike`. No type-widening or cast needed at call sites.
+   Precedent: `agent-runner.ts:993` already calls `resolveActiveWorkspacePath(userId, sessionTenant)`
+   with a tenant client; resolver reads are self-scoped via `.eq("user_id", userId)` so a
+   tenant/RLS client is safe.
+3. **Fail-closed security claim verified in code** (`workspace-resolver.ts:215,323`): a non-member
+   active-workspace claim resolves to `userId` (solo), `// never the sibling`. The User-Brand
+   Impact "fails CLOSED to solo, never a sibling" claim is load-bearing and confirmed — AC7's
+   divergent-id member fixture asserts it.
+4. **Cited test files confirmed:** `dsar-export.test.ts`, `cc-attachment-pipeline.test.ts`,
+   `vision-creation.test.ts`, `repo-status-health-snapshot.test.ts` all exist; `kb-sync-route.test.ts`
+   is correctly NEW (the existing `kb-sync-status.test.tsx` is the UI component, not the route).
+
+### New considerations discovered
+
+- **DSAR solo-subject correctness:** a DSAR is per-subject (`expectedUserId`); a member's *personal*
+  data lives in their solo workspace, NOT a shared workspace they belong to (shared-workspace files
+  are the owner's data, in the owner's DSAR). So `workspacePathForWorkspaceId(expectedUserId)`
+  (N2 solo) is the correct resolver choice — NOT `resolveActiveWorkspacePath` (which would resolve a
+  member's *active* shared workspace and over-export the owner's files into the member's DSAR — a
+  cross-tenant leak). This is the single most important resolver-selection call in the plan.
+
 ## Overview
 
 PR #5003 fixed the **read** side of the KB-share path after the ADR-044 `users → workspaces`
@@ -116,73 +155,86 @@ phase follows RED → GREEN: write the divergent-id failing test first (`cq-writ
 
 ### Phase 0 — Preconditions (verify, do not assume)
 
-- [ ] Re-run the classification grep on the working branch:
+- [x] Re-run the classification grep on the working branch:
       `git grep -nE "workspace_path|workspace_status" -- 'apps/web-platform/**/*.ts' ':!apps/web-platform/test/**' | grep -v '\.test\.ts'`
       and confirm the 5 latent-bug readers + their line numbers match this plan (line numbers may
       drift; the file set is the contract).
-- [ ] Confirm resolver signatures unchanged: `grep -nE "export (async )?function (resolveActiveWorkspacePath|resolveActiveWorkspaceKbRoot|resolveWorkspacePathForUser|workspacePathForWorkspaceId|resolveActiveWorkspaceRepoMeta)" apps/web-platform/server/workspace-resolver.ts`.
-- [ ] Read the existing test for each target before editing it (`vision-creation.test.ts`,
+- [x] Confirm resolver signatures unchanged: `grep -nE "export (async )?function (resolveActiveWorkspacePath|resolveActiveWorkspaceKbRoot|resolveWorkspacePathForUser|workspacePathForWorkspaceId|resolveActiveWorkspaceRepoMeta)" apps/web-platform/server/workspace-resolver.ts`.
+- [x] Read the existing test for each target before editing it (`vision-creation.test.ts`,
       `cc-attachment-pipeline.test.ts`, `dsar-export.test.ts`, `repo-status-health-snapshot.test.ts`)
       to reuse the established structural-mock convention (`SupabaseLike` / `mock-supabase` nested
       `<WORKSPACES_ROOT>/<id>` layout per the #5003 learning §Session Errors note 3).
-- [ ] Confirm test command: `cd apps/web-platform && ./node_modules/.bin/vitest run test/<file>.test.ts`.
+- [x] Confirm test command: `cd apps/web-platform && ./node_modules/.bin/vitest run test/<file>.test.ts`.
 
 ### Phase 1 — `server/dsar-export.ts` (GDPR-completeness; highest stakes)
 
-- [ ] **RED:** add a test in `apps/web-platform/test/dsar-export.test.ts` (or a focused new
+- [x] **RED:** add a test in `apps/web-platform/test/dsar-export.test.ts` (or a focused new
       `dsar-export-workspace-path-resolver.test.ts` if the existing file's fixture layout resists)
       where the subject's `users.workspace_path` column is stale/empty but the on-disk workspace
       exists at `<WORKSPACES_ROOT>/<user_id>/`; assert `enumerateWorkspaceFiles` includes the
       workspace files. With the current code (`runExport:1981-1987` pulling `workspace_path` from the
       `users` table row) this fails (empty enumeration).
-- [ ] **GREEN:** in `runExport` (`dsar-export.ts:1976-1996`), replace the `users`-row
+- [x] **GREEN:** in `runExport` (`dsar-export.ts:1976-1996`), replace the `users`-row
       `workspace_path` extraction with `workspacePathForWorkspaceId(expectedUserId)` (DSAR is a
       per-subject solo export; `workspace_id == user_id` by N2). Keep the `string | null` arg
       contract on `buildArchiveToDisk` (`:1630`) → `enumerateWorkspaceFiles` (`:1495`) unchanged —
       only the *source* of `workspacePath` moves. Note: this no longer needs the `users` row solely
       for the path, but `exportSqlTable` still emits the `users` table for the export itself, so do
       NOT remove that read.
-- [ ] Update the inline comment (`:1978-1980`) that claims the path is "Pulled from the `users`
+- [x] **Resolver-selection correctness (verified):** use `workspacePathForWorkspaceId(expectedUserId)`
+      (N2 solo), **NOT `resolveActiveWorkspacePath`.** A member's DSAR must export THEIR personal
+      data, which lives in their solo workspace; `resolveActiveWorkspacePath` would resolve the
+      member's *active* (possibly shared) workspace and over-export the owner's files into the
+      member's DSAR — a cross-tenant leak. This is the inverse of the kb/sync/attachment/vision
+      choice. Add an AC asserting a member-subject's export does NOT include a shared workspace's
+      files.
+- [x] Update the inline comment (`:1978-1980`) that claims the path is "Pulled from the `users`
       row … single source of truth" — it is now resolved id-keyed.
 
 ### Phase 2 — `app/api/kb/sync/route.ts` (readiness + path + installation)
 
-- [ ] **RED:** add `apps/web-platform/test/kb-sync-route.test.ts` (route-handler test; the existing
+- [x] **RED:** add `apps/web-platform/test/kb-sync-route.test.ts` (route-handler test; the existing
       `kb-sync-status.test.tsx` is the UI component). Divergent-id case: caller's own
       `users.workspace_path`/`workspace_status` empty/stale, but the active workspace resolves
       ready+connected via the resolver. Assert the sync proceeds (does NOT 409/404 on the
       stale own-row).
-- [ ] **GREEN:** replace the tenant `users` read (`:74-78`) and the `workspace_status !== "ready"`
+- [x] **GREEN:** replace the tenant `users` read (`:74-78`) and the `workspace_status !== "ready"`
       / `!workspace_path` gates (`:87-111`) with `resolveActiveWorkspaceKbRoot(userId, serviceClient)`
       + `resolveActiveWorkspaceRepoMeta(...)` — mirror the exact pattern in
       `kb-route-helpers.ts:97-123` / `kb/upload/route.ts:77-90` (already-migrated precedent). Preserve
       the existing 409/503 response contract the client (`KbSyncStatus`) discriminates — map the
       resolver's 404/503 to the existing message strings, NOT a behavioral change to status codes
       unless the client is updated in lockstep (verify against `KbSyncStatus` discrimination first).
-- [ ] Preserve the Sharp-Edge invariant in the file header (`:7-9`): workspace path resolved
+- [x] Preserve the Sharp-Edge invariant in the file header (`:7-9`): workspace path resolved
       server-side, never from request body — the resolver path keeps this property.
-- [ ] **Atomicity note:** `installationId` self-heal (`:98-104`) is subsumed by
-      `resolveActiveWorkspaceRepoMeta` (membership-checked `resolve_workspace_installation_id` RPC);
-      remove the inline `resolveInstallationId` fallback only if the repo-meta resolver covers it
-      (verify — else keep as belt-and-suspenders).
+- [x] **Atomicity note (verified):** the inline `installationId` self-heal (`:98-104`, calling
+      `resolveInstallationId`) is **subsumed** by `resolveActiveWorkspaceRepoMeta`
+      (`workspace-resolver.ts:473-528`), which resolves the installation id via the SAME
+      `resolveInstallationId` RPC, membership-checked. Remove the inline block — keeping it would be
+      a redundant second resolution against a possibly-different (non-membership-checked) id. Pass
+      `access.activeWorkspaceId` to `resolveActiveWorkspaceRepoMeta` so kbRoot + repo-meta key to ONE
+      resolved id (mirrors `kb-route-helpers.ts:108-112` / `kb/upload/route.ts:87-90`).
 
 ### Phase 3 — `server/attachment-pipeline.ts` (active-workspace path)
 
-- [ ] **RED:** in `apps/web-platform/test/cc-attachment-pipeline.test.ts`, divergent-id case:
+- [x] **RED:** in `apps/web-platform/test/cc-attachment-pipeline.test.ts`, divergent-id case:
       caller's own `users.workspace_path` empty; assert attachments are written under the **active**
       workspace dir resolved by `resolveActiveWorkspacePath`, not skipped (`:138-140` currently
       returns `attachmentContext: undefined` on empty path).
-- [ ] **GREEN:** replace the `users`-row read (`:131-137`) with
-      `resolveActiveWorkspacePath(userId, supabase)`. The `supabase` client here is the service/tenant
-      client already in scope — confirm it satisfies the resolver's `SupabaseLike` and is
-      membership-scoped (the resolver's reads are self-scoped via `.eq("user_id", userId)`).
+- [x] **GREEN:** replace the `users`-row read (`:131-137`) with
+      `resolveActiveWorkspacePath(userId, supabase)`. The `supabase` arg is typed `SupabaseClient`
+      (`attachment-pipeline.ts:50`); `SupabaseLike` is structural `{ from: (table) => unknown }`
+      (`workspace-resolver.ts:78`) so `SupabaseClient` satisfies it with no cast — verified. The
+      pipeline runs on a **tenant** client (PR-D #3244, `agent-runner.ts:2513`); the resolver's reads
+      are self-scoped via `.eq("user_id", userId)`, so a tenant/RLS client is safe (same as the
+      `agent-runner.ts:993` precedent).
 
 ### Phase 4 — `app/api/vision/route.ts` (active-workspace path)
 
-- [ ] **RED:** in `apps/web-platform/test/vision-creation.test.ts`, divergent-id case: caller's own
+- [x] **RED:** in `apps/web-platform/test/vision-creation.test.ts`, divergent-id case: caller's own
       `users.workspace_path` empty; assert `vision.md` is created under the active workspace path
       (not 503 "Workspace not provisioned").
-- [ ] **GREEN:** replace the `serviceClient.from("users").select("workspace_path")` read (`:36-47`)
+- [x] **GREEN:** replace the `serviceClient.from("users").select("workspace_path")` read (`:36-47`)
       with `resolveActiveWorkspacePath(user.id, serviceClient)`. Decide the not-provisioned semantics:
       the resolver always returns a path (fails closed to solo), so the existing 503-on-empty-path
       guard changes meaning — gate "not provisioned" on a downstream FS check or drop it (document
@@ -190,10 +242,10 @@ phase follows RED → GREEN: write the divergent-id failing test first (`cq-writ
 
 ### Phase 5 — `app/api/repo/status/route.ts` (cosmetic `hasKnowledgeBase`)
 
-- [ ] **RED:** in `apps/web-platform/test/repo-status-health-snapshot.test.ts` (or a focused new
+- [x] **RED:** in `apps/web-platform/test/repo-status-health-snapshot.test.ts` (or a focused new
       test), assert `hasKnowledgeBase` is computed from the **active** workspace path for a
       post-relocation account whose own `users.workspace_path` is empty.
-- [ ] **GREEN:** resolve the path for the `hasKnowledgeBase` existence check (`:48-52`) via
+- [x] **GREEN:** resolve the path for the `hasKnowledgeBase` existence check (`:48-52`) via
       `resolveActiveWorkspacePath(user.id, serviceClient)` instead of the own-row column.
       **Scope guard (see Sharp Edge):** this route ALSO reads `repo_url`/`repo_status` from `users`
       (`:25,:36-37`) — those are the ADR-044-relocated **repo** columns, covered by ADR-044's own
@@ -202,39 +254,48 @@ phase follows RED → GREEN: write the divergent-id failing test first (`cq-writ
 
 ### Phase 6 — Cross-cutting verification
 
-- [ ] `cd apps/web-platform && ./node_modules/.bin/vitest run` — full suite green (or the targeted
+- [x] `cd apps/web-platform && ./node_modules/.bin/vitest run` — full suite green (or the targeted
       subset + the share/dsar/attachment/sync/vision/repo-status files at minimum).
-- [ ] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` (lint is the CI gate; `next lint`
+- [x] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` (lint is the CI gate; `next lint`
       is not reliably runnable in the worktree per #5003 learning §Session Errors note 2).
-- [ ] Re-run the Phase 0 classification grep and confirm the 5 latent-bug readers no longer read the
+- [x] Re-run the Phase 0 classification grep and confirm the 5 latent-bug readers no longer read the
       legacy column for path/readiness resolution (only comment/write hits remain in scope files).
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — DSAR completeness:** `dsar-export.ts` resolves the export workspace path via
-      `workspacePathForWorkspaceId`/`resolveWorkspacePathForUser`, not the `users`-row column. Test:
-      divergent stale-`workspace_path` subject still gets workspace files in the export.
-- [ ] **AC2 — kb/sync:** `kb/sync/route.ts` resolves readiness+path+installation via the resolver;
+- [x] **AC1 — DSAR completeness + no over-export:** `dsar-export.ts` resolves the export workspace
+      path via `workspacePathForWorkspaceId(expectedUserId)` (N2 solo), not the `users`-row column
+      and NOT `resolveActiveWorkspacePath`. Tests: (a) divergent stale-`workspace_path` subject still
+      gets workspace files in the export; (b) a member-subject's export does NOT include a shared
+      workspace's files (no cross-tenant over-export).
+- [x] **AC2 — kb/sync:** `kb/sync/route.ts` resolves readiness+path+installation via the resolver;
       a post-relocation/invited caller with a stale own-row syncs successfully. Response contract
       (codes + message strings the `KbSyncStatus` client discriminates) preserved.
-- [ ] **AC3 — attachments:** `attachment-pipeline.ts` writes attachments under the resolver's active
+- [x] **AC3 — attachments:** `attachment-pipeline.ts` writes attachments under the resolver's active
       workspace path; divergent stale-own-row caller's attachments persist.
-- [ ] **AC4 — vision:** `vision/route.ts` writes `vision.md` under the resolver's active workspace
+- [x] **AC4 — vision:** `vision/route.ts` writes `vision.md` under the resolver's active workspace
       path; divergent stale-own-row caller's vision creation succeeds.
-- [ ] **AC5 — repo/status:** `hasKnowledgeBase` computed from the resolver's active path; the
+- [x] **AC5 — repo/status:** `hasKnowledgeBase` computed from the resolver's active path; the
       adjacent `repo_url`/`repo_status` `users` reads are explicitly left untouched (scope note).
-- [ ] **AC6 — divergent-id regression guard (per file):** each of the 5 converged readers has a test
+- [x] **AC6 — divergent-id regression guard (per file):** each of the 5 converged readers has a test
       whose fixture makes `workspace_id` (or the on-disk dir) **diverge** from the legacy
       `users.workspace_path` column, so any regression that re-reads the old column fails — the
       #5003 create/read-symmetry test pattern (`workspace_id ≠ basename(workspace_path)`).
-- [ ] **AC7 — fail-closed/IDOR preserved:** divergent-id tests assert the resolver fails CLOSED to
+- [x] **AC7 — fail-closed/IDOR preserved:** divergent-id tests assert the resolver fails CLOSED to
       the SOLO workspace (never a sibling) — no converged reader can resolve a non-member's path.
-- [ ] **AC8 — no scope creep:** `git diff --stat` touches only the 5 reader files + their tests +
-      this plan/spec; the 14 already-migrated/comment/write files are NOT modified. `tsc --noEmit`
-      clean; full vitest suite green.
-- [ ] **AC9 — column still live:** no migration drops `users.workspace_path`/`workspace_status`; the
+- [x] **AC8 — scope (with justified expansion):** `git diff --stat` touches the 5 reader files +
+      their tests + this plan/spec; the 14 already-migrated/comment/write files are NOT modified.
+      `tsc --noEmit` clean; full vitest suite green. **Justified expansion the plan's grep missed:**
+      (1) `test/server/kb-sync-route.test.ts` (in `test/server/`, not `test/`) — the canonical kb/sync
+      route test — was rewritten for the resolver path (the plan believed the route had no test).
+      (2) Removing the tenant client from kb/sync deleted the LAST `kb-sync.tenant-mint` Sentry emit
+      site, which kept `kb_tenant_mint_silent_fallback` armed. Per operator decision the alert was
+      RE-POINTED (not retired) to the route's surviving silent-failure surface (`op=kb-sync.unexpected`),
+      touching `infra/sentry/issue-alerts.tf` + its contract test (renamed). `terraform fmt -check` clean.
+      This preserves the notification layer the #4913 PIR proved necessary.
+- [x] **AC9 — column still live:** no migration drops `users.workspace_path`/`workspace_status`; the
       resolver's own `workspace_status` readiness read (`workspace-resolver.ts:419,:427`) and the
       provision-write sites are unchanged.
 
