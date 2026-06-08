@@ -29,13 +29,13 @@ plan: knowledge-base/project/plans/2026-06-08-feat-shortform-feature-tweets-plan
 - [x] 3.3 Document the explicit one-tweet-per-PR v1 contract + merge-pr-bypass recovery.
 
 ## Phase 4: brand-guide voice
-- [ ] 4.1 Add `#### Ship Tweets (feature-launch)` under `### X/Twitter` cross-referencing Audience Voice Profiles + Value Proposition Framings.
+- [x] 4.1 Add `#### Ship Tweets (feature-launch)` under `### X/Twitter` cross-referencing Audience Voice Profiles + Value Proposition Framings.
 
 ## Phase 5: extractor count-assertion
-- [ ] 5.1 Add test to `test/content-publisher.test.ts`: 1-tweet→1, 3-tweet→3.
+- [x] 5.1 Add test to `test/content-publisher.test.ts`: 1-tweet→1, 3-tweet→3.
 
 ## Phase 6: stale-draft visibility + budget
-- [ ] 6.1 Edit `campaign-calendar/SKILL.md`: "Stale Draft" group for `draft` files > N days (default 7), oldest-first.
+- [x] 6.1 Edit `campaign-calendar/SKILL.md`: "Stale Draft" group for `draft` files > N days (default 7), oldest-first.
 - [x] 6.2 Bump `SKILL_DESCRIPTION_WORD_BUDGET` by the new description word count with `// #5021` comment (primary; sibling-trim fallback).
 
 ## Phase 7: Verify
