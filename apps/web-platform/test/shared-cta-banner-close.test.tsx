@@ -17,7 +17,7 @@ afterEach(() => {
 describe("CtaBanner close affordance", () => {
   it("renders the signup CTA by default", () => {
     render(<CtaBanner />);
-    expect(screen.getByRole("link", { name: /create your account/i })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /sign up for the waitlist/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /dismiss signup banner/i })).toBeTruthy();
   });
 
@@ -25,19 +25,19 @@ describe("CtaBanner close affordance", () => {
     render(<CtaBanner />);
     const dismiss = screen.getByTestId("cta-banner-dismiss");
     fireEvent.click(dismiss);
-    expect(screen.queryByRole("link", { name: /create your account/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: /sign up for the waitlist/i })).toBeNull();
   });
 
   it("does not render when sessionStorage already marks the banner dismissed", () => {
     // Control: with cleared storage the banner MUST render — proves the
     // dismissed-key assertion below is gated on storage, not on always-null.
     const control = render(<CtaBanner />);
-    expect(screen.getByRole("link", { name: /create your account/i })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /sign up for the waitlist/i })).toBeTruthy();
     control.unmount();
 
     sessionStorage.setItem(STORAGE_KEY, "1");
     render(<CtaBanner />);
-    expect(screen.queryByRole("link", { name: /create your account/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: /sign up for the waitlist/i })).toBeNull();
     expect(screen.queryByTestId("cta-banner-dismiss")).toBeNull();
   });
 
@@ -47,7 +47,7 @@ describe("CtaBanner close affordance", () => {
     first.unmount();
 
     render(<CtaBanner />);
-    expect(screen.queryByRole("link", { name: /create your account/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: /sign up for the waitlist/i })).toBeNull();
     expect(sessionStorage.getItem(STORAGE_KEY)).toBe("1");
   });
 
@@ -57,7 +57,7 @@ describe("CtaBanner close affordance", () => {
     });
 
     expect(() => render(<CtaBanner />)).not.toThrow();
-    expect(screen.getByRole("link", { name: /create your account/i })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /sign up for the waitlist/i })).toBeTruthy();
   });
 
   it("dismisses without throwing when sessionStorage.setItem throws", () => {
@@ -69,6 +69,6 @@ describe("CtaBanner close affordance", () => {
     expect(() =>
       fireEvent.click(screen.getByTestId("cta-banner-dismiss")),
     ).not.toThrow();
-    expect(screen.queryByRole("link", { name: /create your account/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: /sign up for the waitlist/i })).toBeNull();
   });
 });
