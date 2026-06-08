@@ -29,6 +29,8 @@ Ask the user to clarify the design scope:
 
 ### Step 2: Design
 
+**KISS — design for the least loaded screen that still does the job (apply throughout this step).** The default bias is *fewer* elements, not more. Before adding any element, require it to earn its place by carrying either information the user needs or an action the user takes — decorative glyphs (status dots, accent flourishes), redundant labels (a single-letter monogram next to the icon it abbreviates), and duplicate affordances are clutter and must be cut. Prefer one clear path over several; collapse adjacent rows that say the same thing. When two layouts satisfy the brief, ship the simpler one. Hold persistent chrome (sidebars, top bars, rails) to the strictest version of this bar — clutter there compounds across every session.
+
 **If Pencil MCP is available:**
 
 1. Call `get_style_guide_tags` then `get_style_guide(tags)` for design inspiration

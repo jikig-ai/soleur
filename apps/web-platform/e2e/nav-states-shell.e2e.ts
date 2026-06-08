@@ -575,7 +575,12 @@ test.describe("nav-states visual gate — desktop", () => {
     // icon-only form (positive invariant: the icon marker IS rendered).
     await expect(railBand(page)).toBeVisible();
     await expect(railBand(page)).toHaveAttribute("data-collapsed", "true");
-    await expect(page.getByTestId("live-repo-dot")).toBeVisible();
+    // Identity never unmounts on collapse (ADR-047) — assert the orientation
+    // anchor directly (the decorative gold repo dot was removed in the
+    // sidebar-declutter pass, so the invariant moves to the identity tile).
+    await expect(
+      railBand(page).getByTestId("workspace-identity-icon"),
+    ).toBeVisible();
 
     // Phase 1 (#4915): the collapsed identity is the MONOGRAM tile (non-gold),
     // and the FULL workspace name is the tooltip — the authoritative
@@ -655,8 +660,11 @@ test.describe("nav-states visual gate — desktop", () => {
     const aside = page.locator("aside").first();
     await expect(aside).toHaveClass(/md:w-14/, { timeout: 15_000 });
     await expect(railBand(page)).toHaveAttribute("data-collapsed", "true");
-    // AC5: identity still legible when collapsed+drilled.
-    await expect(page.getByTestId("live-repo-dot")).toBeVisible();
+    // AC5: identity still legible when collapsed+drilled (the orientation
+    // anchor; the decorative gold repo dot was removed in the declutter pass).
+    await expect(
+      railBand(page).getByTestId("workspace-identity-icon"),
+    ).toBeVisible();
     // Sidebar-UX Issue 4: the collapsed Settings nav is now an ICON-ONLY column
     // (tagged settings-rail-icons) instead of being DOM-removed — so the rail is
     // navigable when collapsed. The single 56px-safe glyphs must not overflow.

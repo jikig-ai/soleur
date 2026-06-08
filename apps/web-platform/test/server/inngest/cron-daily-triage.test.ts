@@ -193,6 +193,9 @@ describe("cron-daily-triage — T6 GitHub App token injection (#512e25)", () => 
     const spawnEnv = (spawnSpy.mock.calls[0][2] as { env: NodeJS.ProcessEnv })
       .env;
     expect(spawnEnv.GH_TOKEN).toBe("ghs_TESTTOKEN_REDACT_ME");
+    // #5010 — GH_REPO must pin the repo so the agent's `gh issue list/view/edit`
+    // calls resolve in the prod /app container (no .git, no clone).
+    expect(spawnEnv.GH_REPO).toBe("jikig-ai/soleur");
   });
 
   it("the minted token OVERRIDES any ambient process.env.GH_TOKEN (the incident vector)", async () => {
@@ -200,7 +203,12 @@ describe("cron-daily-triage — T6 GitHub App token injection (#512e25)", () => 
     // (the pre-fix env the bug fell back to) and assert the SUBPROCESS sees the
     // minted token, NOT the ambient one — the hr-github-app-auth-not-pat contract.
     const prior = process.env.GH_TOKEN;
+    const priorRepo = process.env.GH_REPO;
     process.env.GH_TOKEN = "ghp_AMBIENT_PAT_SHOULD_NOT_LEAK";
+    // #5010 — same positive control for GH_REPO: a bogus ambient value must NOT
+    // leak; buildSpawnEnv pins the canonical slug unconditionally, so a future
+    // `process.env.GH_REPO ?? …` regression fails here instead of shipping.
+    process.env.GH_REPO = "attacker/wrong-repo";
     try {
       const child = makeChild();
       spawnSpy.mockImplementation(() => {
@@ -222,9 +230,13 @@ describe("cron-daily-triage — T6 GitHub App token injection (#512e25)", () => 
         .env;
       expect(spawnEnv2.GH_TOKEN).toBe("ghs_TESTTOKEN_REDACT_ME");
       expect(spawnEnv2.GH_TOKEN).not.toBe("ghp_AMBIENT_PAT_SHOULD_NOT_LEAK");
+      expect(spawnEnv2.GH_REPO).toBe("jikig-ai/soleur");
+      expect(spawnEnv2.GH_REPO).not.toBe("attacker/wrong-repo");
     } finally {
       if (prior === undefined) delete process.env.GH_TOKEN;
       else process.env.GH_TOKEN = prior;
+      if (priorRepo === undefined) delete process.env.GH_REPO;
+      else process.env.GH_REPO = priorRepo;
     }
   });
 });
