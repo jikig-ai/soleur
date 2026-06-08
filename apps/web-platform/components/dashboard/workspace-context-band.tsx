@@ -72,11 +72,14 @@ export function WorkspaceContextBand({
 
   // #4810 Bug 2: at md:w-14 (56px) the verbose org chip + "Working on:" repo +
   // section title overflow into an unreadable strip. Render an icon-only column
-  // when collapsed — back chevron (drilled), an org avatar mark, a repo dot, and
-  // a section glyph — so the rail never overflows horizontally. The identity is
-  // never FULLY unmounted (ADR-047): the data-bearing OrgSwitcherContainer +
-  // LiveRepoBadge stay mounted in the CSS-exclusive mobile band, and hover titles
-  // here recover orientation. Verbose labels return verbatim on expand.
+  // when collapsed — just the back chevron (drilled) + the workspace identity
+  // tile — so the rail never overflows horizontally. The earlier decorative gold
+  // repo dot and single-letter section monogram were removed (sidebar declutter):
+  // both carried no information the identity tile + the section's own collapsed
+  // nav icon don't already carry. The identity is never FULLY unmounted
+  // (ADR-047): the data-bearing OrgSwitcherContainer + LiveRepoBadge stay mounted
+  // in the CSS-exclusive mobile band, and the identity tile's hover title recovers
+  // orientation. Verbose labels return verbatim on expand.
   if (variant === "rail" && collapsed) {
     return (
       <div
