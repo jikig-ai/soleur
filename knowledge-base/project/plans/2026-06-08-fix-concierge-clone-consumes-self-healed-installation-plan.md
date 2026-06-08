@@ -132,8 +132,9 @@ logs:
   where: "Sentry events + pino (container stdout, Better Stack). NO ssh required."
   retention: "Sentry default project retention; Better Stack per plan"
 discoverability_test:
-  command: "open Sentry → search 'feature:ensure-workspace-repo op:clone' and 'feature:cc-dispatcher op:self-heal-skip' (web UI, no shell)"
-  expected_output: "after the fix, a clone-failure event should co-occur ONLY with a self-heal-skip (entitlement-deny) event; a clone failure WITHOUT a self-heal-skip would indicate the clone got the wrong install (the bug this fixes)"
+  command: git grep -n 'op: "clone"' -- apps/web-platform/server/ensure-workspace-repo.ts
+  expected_output: 'op: "clone"'
+  note: "Runnable, no-SSH, no-dashboard source-presence probe confirming the clone-failure Sentry emit site (feature:ensure-workspace-repo op:clone) exists in the shipped code, so a residual 403 after this fix stays queryable in Sentry — co-occurring with feature:cc-dispatcher op:self-heal-skip means entitlement-deny (expected), a clone failure WITHOUT it means a wrong-install regression (the bug this fixes). The runtime signal is server-side Sentry; the no-shell operator query is the Sentry UI search for those two tags."
 ```
 
 ## Test Scenarios
