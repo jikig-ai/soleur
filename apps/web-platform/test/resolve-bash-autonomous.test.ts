@@ -23,7 +23,9 @@ vi.mock("@/lib/supabase/tenant", () => ({
       this.cause = cause;
     }
   },
-  // Faithful to the real switch (`lib/supabase/tenant.ts:120`).
+  // Faithful to the real switch (`lib/supabase/tenant.ts:120`), including the
+  // exhaustive `: never` rail so a future cause-widening breaks this mock
+  // loudly instead of silently returning `undefined`.
   mapRuntimeAuthCauseToErrorCode: (cause: RuntimeAuthCause) => {
     switch (cause) {
       case "denied_jti":
@@ -32,6 +34,10 @@ vi.mock("@/lib/supabase/tenant", () => ({
         return "auth_throttled";
       case "jwt_mint":
         return "auth_unavailable";
+      default: {
+        const _exhaustive: never = cause;
+        throw new Error(`unhandled RuntimeAuthError cause: ${_exhaustive}`);
+      }
     }
   },
 }));
@@ -89,8 +95,10 @@ describe("resolveBashAutonomous (workspace-scoped, RPC-only, fail-closed)", () =
     expect(await resolveBashAutonomous("user-1", "ws-not-mine")).toBe(false);
   });
 
-  it("FAIL-CLOSED: RPC error → false AND mirrors to Sentry", async () => {
-    const { reportSilentFallback } = await import("@/server/observability");
+  it("FAIL-CLOSED: RPC error → false AND mirrors to Sentry at error (not warning)", async () => {
+    const { reportSilentFallback, warnSilentFallback } = await import(
+      "@/server/observability"
+    );
     mockRpc.mockResolvedValue({ data: null, error: { message: "boom" } });
     const { resolveBashAutonomous } = await import(
       "@/server/resolve-bash-autonomous"
@@ -100,6 +108,9 @@ describe("resolveBashAutonomous (workspace-scoped, RPC-only, fail-closed)", () =
       expect.anything(),
       expect.objectContaining({ feature: "resolve-bash-autonomous" }),
     );
+    // The in-`try` RPC-read fault is NOT a transient mint blip — it must stay
+    // error-level. Guards against a future mis-route to the warning channel.
+    expect(warnSilentFallback).not.toHaveBeenCalled();
   });
 
   it("FAIL-CLOSED: transient jwt_mint blip → false AND mirrors at WARNING (not error)", async () => {

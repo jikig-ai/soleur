@@ -60,12 +60,15 @@ export async function resolveBashAutonomous(
     const code = mapRuntimeAuthCauseToErrorCode(err.cause);
     const emit =
       err.cause === "jwt_mint" ? warnSilentFallback : reportSilentFallback;
+    // Cause-accurate message: hardcoding "JWT mint transiently unavailable"
+    // would mislead on-call for the denied_jti (revoked) / rotation
+    // (rate-ceiling) error-level branches. The `code` discriminant keeps it
+    // truthful for every cause.
     emit(err, {
       feature: "resolve-bash-autonomous",
       op: "tenant-read",
       extra: { userId, workspaceId: workspaceId ?? null, code },
-      message:
-        "founder JWT mint transiently unavailable; fail-closed false (approval gate ON)",
+      message: `founder tenant auth unavailable (${code}); fail-closed false (approval gate ON)`,
     });
     return false;
   }
