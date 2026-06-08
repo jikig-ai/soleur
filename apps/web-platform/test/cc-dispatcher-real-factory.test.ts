@@ -758,8 +758,9 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         OWNER,
         expect.anything(),
       );
-      // AC3 + AC5: the no-op path is unaffected — clone uses the same (stored,
-      // already-owning) install the mint does.
+      // AC3 + AC5: the no-op (already-owning) path is unaffected — here the
+      // stored install IS the owner (resolveInstallationId → OWNER), so clone +
+      // mint both use OWNER and no promotion probe runs.
       expect(mockEnsureWorkspaceRepoCloned).toHaveBeenCalledWith(
         expect.objectContaining({ installationId: OWNER }),
       );
@@ -860,7 +861,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       );
     });
 
-    it("AC6: no GitHub token substring appears in any moved self-heal observability payload", async () => {
+    it("AC6: self-heal deny path never serializes a GitHub token into Sentry or clone args", async () => {
       // The hoist relocates existing log.* / reportSilentFallback calls verbatim.
       // Guard that the move did not inline a minted token into a payload
       // (hr-github-app-auth-not-pat). Drive the deny path so the skip mirror fires.
@@ -871,6 +872,12 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       mockGenerateInstallationToken.mockResolvedValueOnce("ghs_secret_minted_token_value");
 
       await realSdkQueryFactory(makeArgs());
+
+      // Positive control: the mint actually ran and produced a ghs_-shaped token
+      // in this dispatch, so the negative scan below is meaningful — the payloads
+      // are clean because the token was redacted/never-logged, NOT vacuously clean
+      // because no token ever materialized.
+      expect(mockGenerateInstallationToken).toHaveBeenCalled();
 
       const serialized = JSON.stringify([
         ...mockReportSilentFallback.mock.calls,
