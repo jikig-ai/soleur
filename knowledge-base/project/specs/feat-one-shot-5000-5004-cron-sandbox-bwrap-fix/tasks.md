@@ -1,67 +1,42 @@
----
-title: "Tasks — Re-fix cron bwrap-userns via layered containment (re-scope of #5000/#5004)"
-plan: knowledge-base/project/plans/2026-06-08-fix-cron-sandbox-dontask-allowlist-tiered-plan.md
-supersedes_plan: knowledge-base/project/plans/2026-06-08-fix-cron-bash-sandbox-bwrap-userns-failure-plan.md
-lane: cross-domain
-date: 2026-06-08
-brand_survival_threshold: single-user incident
----
+# Tasks — cron sandbox hook-primary containment (v3.1)
 
-# Tasks — Re-fix cron bwrap-userns (#5000, #5004) — layered containment v2
+Plan: `knowledge-base/project/plans/2026-06-08-fix-cron-sandbox-hook-primary-containment-plan.md`
+Status: **v3 DRAFT — implement the v3.1 design (the "Security Panel Findings" section of the plan), NOT the two-matcher §D1.**
+Branch: `feat-one-shot-5000-5004-cron-sandbox-bwrap-fix` · Draft PR #5018 · Ref #5000/#5004 (→ durable issues, P0-E)
+Supersedes earlier v1/v2 task lists for this branch.
 
-> Supersedes the BLOCKED bypassPermissions task list. Tier-1 (this PR) = permission-layer +
-> hook containment, no infra. Tier-2 (follow-up issue) = egress firewall + least-priv token.
+## Phase 0 — gating re-verification (the panel reopened AC0)
 
-## Phase 0 — Gating pre-merge probes (NO code; if any fails, STOP/escalate)
+- [ ] 0.1 **(P0-D, gating)** Re-run the 6 probes against the **Dockerfile-pinned** `claude-code@2.1.79` (or bump the pin to 2.1.168 in this PR and re-run AC2b against it). Prior probes ran on 2.1.168; prod runs 2.1.79. Pin the working result in `phase0-probe-results-AC0.md`.
+- [ ] 0.2 **(P0-C)** Verify the `/app/shared/plugins/soleur` mount (`plugin-path.ts:17`) is **read-only** to the cron spawn. If yes → hook-integrity is infra-enforced. If no → file a Tier-2 infra issue (model can poison the shared mount).
+- [ ] 0.3 **(P1-A)** Enumerate ALL ~21 producers that call `setupEphemeralWorkspace` (not just the 12 `Bash`-token crons). Classify each Tier-1 (hook-allowlistable) / Tier-2 (fail-closed).
+- [ ] 0.4 **(D-new-1b)** Positive control: the spawn-time self-test ABORTS the cron when the hook is unreachable. Own AC.
 
-- [ ] 0.1 (AC0/D0a) Probe `permissions.defaultMode`: run `claude --print --settings <tmp>` with a candidate overlay + scoped `--allowedTools`; one allowlisted + one non-allowlisted command. Confirm non-allowlisted is **denied, not hung**, in `--print`. Try `dontAsk` first, then `default`. PIN the working mode. Paste evidence into PR desc.
-- [ ] 0.2 (AC0/D0b) Probe path-deny: confirm `permissions.deny:["Read(/proc/**)"]` blocks `cat /proc/self/environ`.
-- [ ] 0.3 (AC0/D0c) Probe L3 hook: confirm a `PreToolUse` jq-decision hook denies a `Bash` whose `tool_input.command` matches a secret pattern (`ghs_…`).
-- [ ] 0.4 Re-grep producers: `git grep -nE '(^|[",])Bash([,"])' apps/web-platform/server/inngest/functions/cron-*.ts` → expect **12** bare-`Bash` carriers. List them.
-- [ ] 0.5 Classify the 3 raw-`spawn("bash")` crons (content-publisher, content-vendor-drift, rule-prune) + confirm skill-freshness/workspace-gc spawn no claude + verify compound-promote/strategy-review.
-- [ ] 0.6 Inventory all `cron-*.test.ts` assertions on `--allowedTools`.
+## Phase 1 — RED (tests first; real-spawn behavioral)
 
-## Phase 1 — Failing tests (RED)
+- [ ] 1.1 `cron-bash-allowlist-hook.test.ts` — adversarial parser unit tests: compound `&&`/`;`/`||` per-segment matching; quote-aware tokenizer (the `gh api '…' --jq '.[]|{…}'` quoted-pipe must NOT false-deny — P1-F); `--body-file`/`-F`/`@`-file argument-injection denial (P0-B); `git remote`/non-origin-push denial.
+- [ ] 1.2 `cron-claude-eval-substrate.test.ts` rewrite — real `claude --print` spawn (AC2b/P1-D): `Read(.git/config)` DENIED, `Read(/proc/self/environ)` DENIED, `Grep` of secret paths DENIED, `uname` DENIED, `curl`/`WebFetch` DENIED, Write to `.claude/` DENIED, an unrecognized tool DENIED (catch-all), allowlisted `gh issue list` ALLOWED. Assert via the byte-identical settings-registered command.
+- [ ] 1.3 "no env-read verb is ever allowlisted" guard test (P2 — the most fragile coupling).
+- [ ] Confirm RED.
 
-- [ ] 1.1 Rewrite `apps/web-platform/test/server/inngest/cron-claude-eval-substrate.test.ts` `DEFAULT_CLAUDE_SETTINGS` block (currently asserts `bypassPermissions`): assert `defaultMode` = pinned value, `sandbox.enabled:false`, `deny` contains every `Read(/proc/**)`+secret-file rule AND egress/interpreter/subshell verbs, `hooks.PreToolUse` references the L3 hook, `allow:[]`, and `"bypassPermissions"` is not the JSON value (AC1).
-- [ ] 1.2 (AC2b) BEHAVIORAL deny tests via real `claude --print` + scoped `--allowedTools`: `cat /proc/self/environ` denied; `curl http://example.com` denied; secret-shaped `echo "ghs_…"` denied by L3 hook. Assert exit/refusal.
-- [ ] 1.3 (AC4b) Unit test: each verbatim roadmap-review prompt command (incl. single-quoted `gh api 'repos/jikig-ai/soleur/…'`) matches an allow pattern.
-- [ ] 1.4 (AC3) Strengthened bare-`Bash` grep test returns 0; expected count 12.
-- [ ] 1.5 (AC5) community-monitor `buildSpawnEnv` test: ANTHROPIC_API_KEY+GH_TOKEN PRESENT; read-auth tokens per D5 choice present; degradation surfaced not silent.
-- [ ] 1.6 Confirm RED against current substrate.
+## Phase 2 — GREEN
 
-## Phase 2 — Implement (GREEN)
+- [ ] 2.1 **(P0-A)** Hook = **deny-by-default at the tool-class level**: catch-all `*` matcher denies unrecognized tools; `Read|Glob|Grep` matcher denies `.git/**`,`/proc/**`,`**/.env*`,`.claude/`,`settings.json`,`$HOME` creds; `Bash` deny-by-default allowlist (quote-aware tokenizer, argument inspection); `Write|Edit` self-protection (realpath-aware, covers the symlinked plugin subtree — P0-C). Settings-baked allowlist, NOT env (P1-B). `node` by absolute path.
+- [ ] 2.2 **(P0-A root fix)** Post-clone `git remote set-url origin <tokenless>` + credential helper so `GH_TOKEN` never persists in `.git/config` (removes the on-disk secret class).
+- [ ] 2.3 `_cron-claude-eval-substrate.ts`: D3 overlay (`sandbox:false`, tool-class hook matchers, `allow:[]`, no `bypassPermissions`) + D2 spawn-time self-test (real-spawn-shaped, P1-D) + comment rewrite.
+- [ ] 2.4 `cron-roadmap-review.ts` (D4): settings-baked allowlist enumerating EVERY prompt verb incl. `gh issue list/comment/edit/close`, `gh pr list/comment`, `gh label create`, `git checkout/add/commit/push origin` (P1-F); resolve AC4c (hook-deny→RED path OR accept-and-document — P1-C).
+- [ ] 2.5 `cron-community-monitor.ts` (D5): keep read-auth tokens (C1); surface disabled platforms (C2).
+- [ ] 2.6 **(P1-A)** D6 atomic with 2.3: pause Inngest schedules (or mute monitors w/ Tier-2 link) for ALL Tier-2 producers IN THE SAME COMMIT; AC asserts no Tier-2 cron has a live schedule post-merge.
+- [ ] 2.7 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` + `vitest run …/inngest/` + `bash scripts/test-all.sh` green.
 
-- [ ] 2.1 Create L3 hook `plugins/soleur/<path>/cron-secret-scan-hook.sh` (jq → secret-pattern → deny JSON).
-- [ ] 2.2 D1 substrate: replace `DEFAULT_CLAUDE_SETTINGS` with the deny-floor + `hooks.PreToolUse` + pinned `defaultMode` + `sandbox:false`; rewrite the comment block (remove all bypassPermissions rationale). `git config` NOT in any allow.
-- [ ] 2.3 D3 roadmap-review `--allowedTools`: drop bare `Bash`+vestigial WebSearch/WebFetch; enumerate prompt-matched gh/git verbs (sub-command granularity); resolve the `gh api` single-quote; add branch/push verbs or fail-loud (AC4c).
-- [ ] 2.4 D2: drop bare `Bash` from the other 11 substrate-claude crons; scoped allow for the narrow ones (broad ones fail-closed/contained).
-- [ ] 2.5 D5 community-monitor: keep read-auth tokens (or split read/write); surface any platform degradation (CPO C1/C2).
-- [ ] 2.6 D6: pause Inngest schedules for the deferred set (or mute monitors + link); self-label fallback issues `tier-2-deferred` (AC9).
-- [ ] 2.7 Update per-cron `--allowedTools` tests (re-grep).
-- [ ] 2.8 (AC7) Verify repo-root `.claude/settings.json` UNCHANGED.
-- [ ] 2.9 (AC6) `vitest run apps/web-platform/test/server/inngest/` green; `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean; `scripts/test-all.sh` green.
+## Phase 3 — docs
 
-## Phase 3 — Observability + docs
+- [ ] 3.1 `runbooks/cloud-scheduled-tasks.md` — hook-primary model, `sandbox:false`, self-test, version-pin note.
+- [ ] 3.2 ADR-033 I7 binding invariant (incl. negative guarantee: containment ≠ Node-level `spawn`); consider a dedicated ADR for the sandbox→hook inversion.
+- [ ] 3.3 Learning: headless `claude --print` is deny-list/hook-driven; hook fails OPEN on crash AND for unhooked tool classes; Read-deny ≠ Bash `cat`; token-in-`.git/config` is the exfil root.
 
-- [ ] 3.1 Runbook `cloud-scheduled-tasks.md`: host-independent layered containment; #4932/#4944 = non-cron defense-in-depth; Tier-2 deferral + deferred-monitor handling.
-- [ ] 3.2 ADR-033 amendment I7 (claude-code crons: sandbox-off + per-cron scoped allow + secret-file/egress deny + L3 hook; raw-`spawn("bash")` crons NOT covered → Tier-2 firewall).
-- [ ] 3.3 Learning `knowledge-base/project/learnings/integration-issues/<topic>.md` (date at write-time): `/proc/self/environ` defeats a bash-only allowlist; built-in read-only bash always runs unless deny-overridden; daily-triage prod precedent; layered design.
+## Phase 4 — follow-up issues + post-merge
 
-## Phase 4 — Follow-up issues (Phase 4 of plan)
-
-- [ ] 4.1 File Tier-2 issue (`type/security`): egress firewall (Terraform) + least-priv `generateInstallationToken` (`github-app.ts:594`) + restore broad set incl. #5000 + the 3 raw-bash crons; final deferred set from D4. Note: firewall does NOT stop `gh issue create --body $secret` → L2/L3 stay load-bearing.
-- [ ] 4.2 File daily-triage/follow-through allowlist-audit issue (`type/security`, low-pri).
-- [ ] 4.3 (AC8/AC10) PR body: `Ref #5000`+`Ref #5004`; link both follow-up issue numbers.
-
-## Phase 5 — Verify recovery (post-merge, automated)
-
-- [ ] 5.1 (AC11) Deploy lands; `/soleur:trigger-cron` → `cron/roadmap-review.manual-trigger`; confirm `[Scheduled] Weekly Roadmap Review …` issue produced end-to-end → `gh issue close 5004` (comment links PR). If no issue → AC4b mismatch regressed; fix forward, do NOT close.
-- [ ] 5.2 (AC12) D4 trigger-cron validation across Tier-1 candidates; record pass/fail per cron in the Tier-2 issue.
-- [ ] 5.3 (AC13) Confirm #5000 self-reports FAILED-contained, labeled `tier-2-deferred`, left OPEN.
-
-## Review gates
-
-- [ ] CPO sign-off recorded — APPROVE-WITH-CONDITIONS (C1/C2/C3 encoded). Re-confirm conditions hold at ship.
-- [ ] deepen-plan triad / review-time: security-sentinel + user-impact-reviewer + architecture-strategist (re-run against the diff; the plan-time panel already ran).
-- [ ] No open Critical at review.
+- [ ] 4.1 **(P0-E)** Create DURABLE tracking issues (Tier-1 fix #5018; Tier-2 growth-audit etc.); `Ref` those, NOT the closed `[Scheduled]` artifacts. Founder-readable Tier-2 issue (which weekly outputs pause).
+- [ ] 4.2 **(P1-E)** Tier-2 issue lists the **4** raw-`spawn("bash")` crons incl. `cron-weekly-analytics.ts`.
+- [ ] 4.3 Post-merge: deploy → `/soleur:trigger-cron roadmap-review` → confirm `[Scheduled] Weekly Roadmap Review` produced end-to-end (AC11); record Tier-1 trigger results.
