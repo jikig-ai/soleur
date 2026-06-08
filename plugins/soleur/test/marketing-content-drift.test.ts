@@ -147,6 +147,69 @@ describe("marketing-content-drift", () => {
     }
   });
 
+  // Present-tense BSL→Apache conversion language is legitimate ("converts to
+  // Apache-2.0 four years after each release"); these tokens whitelist it.
+  const LICENSE_CONVERSION = /converts|change date|Prior versions|remain under/i;
+
+  test("Test 2b: site copy makes no Soleur-subject Apache / open-source license claim (#5038)", () => {
+    // The current license is BSL 1.1 (source-available), NOT Apache-2.0; and
+    // BSL is not OSI-approved, so a Soleur-subject "open source" claim is itself
+    // a misrepresentation. Generic ecosystem "open source" (plugin marketplaces,
+    // MCP "open standard") is NOT matched — only Soleur-subject phrasings.
+    // pages/legal/** legitimately describes the BSL→Apache conversion → excluded.
+    // Dated blog-body generic positioning is deferred to #5043 (CMO) and is not
+    // covered by this .njk walk (see Test 2c for the blog Apache-only floor).
+    const OFFENDER =
+      /Apache[- ]2|LICENSE-2\.0|Apache-2\.0 licensed|open[- ]source (version|Company-as-a-Service|Claude Code platform|AI agents)|is open source|open source under|Apache-2\.0 open source/i;
+    const targets = [
+      ...walkSiteCopy(join(DOCS_ROOT, "_includes")),
+      ...walkSiteCopy(join(DOCS_ROOT, "pages")),
+      join(DOCS_ROOT, "index.njk"),
+    ].filter((p) => existsSync(p) && !p.includes("/pages/legal/"));
+
+    const offenders: { file: string; line: number; text: string }[] = [];
+    for (const file of targets) {
+      const lines = readFileSync(file, "utf8").split("\n");
+      lines.forEach((text, i) => {
+        if (OFFENDER.test(text) && !LICENSE_CONVERSION.test(text)) {
+          offenders.push({ file: file.replace(REPO_ROOT + "/", ""), line: i + 1, text: text.trim() });
+        }
+      });
+    }
+    if (offenders.length > 0) {
+      const detail = offenders
+        .map((o) => `  ${o.file}:${o.line}\n    ${o.text.slice(0, 160)}${o.text.length > 160 ? "…" : ""}`)
+        .join("\n");
+      throw new Error(
+        `Found ${offenders.length} Soleur-subject Apache/open-source license claim(s) — the site is source-available (BSL 1.1), not Apache/open-source (#5038):\n${detail}`,
+      );
+    }
+  });
+
+  test("Test 2c: blog posts make no explicit Apache-2.0 license claim (#5038)", () => {
+    // Generic blog-body "open source" positioning is deferred to #5043 (CMO);
+    // explicit Apache claims are not — they name a license the project no longer uses.
+    const OFFENDER = /Apache[- ]2|LICENSE-2\.0/i;
+    const targets = walkMarkdown(join(DOCS_ROOT, "blog")).filter((p) => existsSync(p));
+    const offenders: { file: string; line: number; text: string }[] = [];
+    for (const file of targets) {
+      const lines = readFileSync(file, "utf8").split("\n");
+      lines.forEach((text, i) => {
+        if (OFFENDER.test(text) && !LICENSE_CONVERSION.test(text)) {
+          offenders.push({ file: file.replace(REPO_ROOT + "/", ""), line: i + 1, text: text.trim() });
+        }
+      });
+    }
+    if (offenders.length > 0) {
+      const detail = offenders
+        .map((o) => `  ${o.file}:${o.line}\n    ${o.text.slice(0, 160)}${o.text.length > 160 ? "…" : ""}`)
+        .join("\n");
+      throw new Error(
+        `Found ${offenders.length} explicit Apache-2.0 license claim(s) in blog posts (#5038):\n${detail}`,
+      );
+    }
+  });
+
   test("Test 3: homepage Organization JSON-LD has @id, founder, foundingDate", () => {
     if (!buildOk) throw new Error(`Eleventy build failed:\n${buildStderr}`);
     const html = readFileSync(join(SITE_ROOT, "index.html"), "utf8");

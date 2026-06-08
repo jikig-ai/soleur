@@ -27,7 +27,7 @@ Polsia covers five business domains: engineering, marketing, cold outreach, soci
 
 **Soleur** is a [Company-as-a-Service]({{ site.url }}/company-as-a-service/) platform. It deploys {{ stats.agents }} agents across {{ stats.departments }} business departments -- engineering, marketing, legal, finance, operations, product, sales, and support -- with a compounding knowledge base that accumulates institutional memory across every session and every domain. Soleur runs inside Claude Code.
 
-Soleur is open-source (Apache 2.0). The platform is free.
+Soleur is source-available (BSL 1.1). The platform is free.
 
 The founding philosophy: you decide. Agents execute. Knowledge compounds.
 

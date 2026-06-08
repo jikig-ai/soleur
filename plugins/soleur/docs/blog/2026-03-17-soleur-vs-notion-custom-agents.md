@@ -61,7 +61,7 @@ Soleur assumes one decision-maker. The solo founder owns every architectural dec
 
 Notion Custom Agents are currently in free beta through May 3, 2026. From May 4, they run on Notion credits: [$10 per 1,000 credits](https://matthiasfrank.de/en/notion-custom-agents-full-tutorial-use-cases-pricing-changes/), usage-based by task complexity. Custom Agents require a [Business plan at $20 per seat per month](https://www.notion.com/pricing) or an Enterprise subscription.
 
-Soleur is free and open-source under the Apache-2.0 license. A paid tier is planned but not yet released. The full codebase is public and auditable.
+Soleur is free and source-available under BSL 1.1. A paid tier is planned but not yet released. The full codebase is public and auditable.
 
 The cost comparison depends on what you are replacing. Notion charges for the seat plus credits at scale. Soleur's institutional knowledge lives in your repository, under your control, with no per-session cost accumulating against task volume.
 
@@ -84,8 +84,8 @@ For a solo founder who ships code and runs a company from the terminal, Soleur's
 | **Workflow model** | Trigger-based (schedule, Slack, database change) | Lifecycle-based (brainstorm → plan → implement → review → compound) |
 | **Integrations** | Slack, Mail, Calendar, Figma, Linear, HubSpot, MCP servers | MCP ecosystem via Claude Code; compounding knowledge base replaces integration-driven context |
 | **Target user** | Teams managing shared recurring operations | Solo founders running a full company |
-| **Pricing** | Free beta until May 3, 2026; $10/1,000 Notion credits + Business plan ($20/seat/month) | Free (open-source, Apache-2.0). Paid tier planned. |
-| **Open source** | Proprietary | Apache-2.0. Full source code public. |
+| **Pricing** | Free beta until May 3, 2026; $10/1,000 Notion credits + Business plan ($20/seat/month) | Free (source-available, BSL 1.1). Paid tier planned. |
+| **Source availability** | Proprietary | Source-available (BSL 1.1). Full source code public. |
 | **Interface** | Web and desktop (Notion workspace) | Terminal (Claude Code) |
 | **Cross-domain coherence** | Workspace context shared; domain decisions not cross-referenced automatically | Every domain reads from and writes to the same compounding knowledge base |
 | **Current availability** | Free beta (Business and Enterprise plans) | Live (open source) |
@@ -148,7 +148,7 @@ Notion Custom Agents automate recurring operational tasks within the Notion work
 <details>
 <summary>What is the pricing difference between Notion Custom Agents and Soleur?</summary>
 
-Notion Custom Agents are free through May 3, 2026. From May 4, they require a Business plan ($20/seat/month) plus Notion credits ($10 per 1,000 credits). Soleur is free and open-source under the Apache-2.0 license — no per-seat cost, no credit system. A paid hosted tier is planned but has not launched.
+Notion Custom Agents are free through May 3, 2026. From May 4, they require a Business plan ($20/seat/month) plus Notion credits ($10 per 1,000 credits). Soleur is free and source-available under BSL 1.1 — no per-seat cost, no credit system. A paid hosted tier is planned but has not launched.
 
 </details>
 
@@ -191,7 +191,7 @@ No. Soleur is a terminal-first platform that runs inside Claude Code. It does no
       "name": "What is the pricing difference between Notion Custom Agents and Soleur?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Notion Custom Agents are free through May 3, 2026. From May 4, they require a Business plan ($20/seat/month) plus Notion credits ($10 per 1,000 credits). Soleur is free and open-source under the Apache-2.0 license."
+        "text": "Notion Custom Agents are free through May 3, 2026. From May 4, they require a Business plan ($20/seat/month) plus Notion credits ($10 per 1,000 credits). Soleur is free and source-available under BSL 1.1."
       }
     },
     {
