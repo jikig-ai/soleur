@@ -21,6 +21,8 @@ vi.hoisted(() => {
 
 import { resolveCronWorkspaceRoot } from "@/server/inngest/functions/_cron-shared";
 import {
+  buildCronEvalSettings,
+  CRON_BASH_ALLOWLISTS,
   DEFAULT_CLAUDE_SETTINGS,
   spawnClaudeEval,
   spawnSimple,
@@ -61,46 +63,63 @@ describe("resolveCronWorkspaceRoot", () => {
   });
 });
 
-// #5000/#5004 — the cron eval substrate writes DEFAULT_CLAUDE_SETTINGS verbatim
-// into each ephemeral workspace's `.claude/settings.json`. It previously carried
-// `sandbox.enabled: true` with no `permissions.defaultMode`, which relied on the
-// bwrap bash sandbox to auto-approve headless bash. When bwrap could not acquire
-// unprivileged user namespaces in the cloud runner, every Bash call failed and
-// the crons self-reported FAILED. The durable fix removes the bwrap dependency
-// (`sandbox.enabled: false`) and restores bash auto-approval via
-// `permissions.defaultMode: "bypassPermissions"`. These tests assert the WRITTEN
-// settings.json content (the config invariant), not model behavior — the LLM is
-// kept out of the assertion path. The settings are serialized exactly as
-// setupEphemeralWorkspace writes them: `JSON.stringify(..., null, 2) + "\n"`.
-describe("DEFAULT_CLAUDE_SETTINGS — cron sandbox/permission overlay (#5000/#5004)", () => {
-  // Mirror the exact write expression in setupEphemeralWorkspace so the assertion
-  // proves the on-disk `.claude/settings.json` content, not just the in-memory
-  // constant shape.
-  const writtenSettings = JSON.parse(
-    JSON.stringify(DEFAULT_CLAUDE_SETTINGS, null, 2) + "\n",
-  );
+// #5000/#5004 (v3.1) — the cron eval substrate writes the settings overlay into
+// each ephemeral workspace's `.claude/settings.json`. `sandbox.enabled:false`
+// is the host-independence fix (immune to bwrap-userns drift); containment is
+// the deny-by-default PreToolUse hook (cron-bash-allowlist-hook.mjs), NOT the
+// permission mode (Phase-0 proved --allowedTools/defaultMode fail-OPEN headless).
+// The v1 `bypassPermissions` was P1-blocked as an exfil primitive and must never
+// reappear. These tests assert the WRITTEN settings shape (config invariant),
+// keeping the LLM out of the assertion path.
+describe("cron eval overlay — hook-primary containment (#5018/#5000/#5004)", () => {
+  const base = JSON.parse(JSON.stringify(DEFAULT_CLAUDE_SETTINGS, null, 2) + "\n");
+  const built = buildCronEvalSettings("/tmp/ephemeral/repo") as {
+    sandbox: { enabled: boolean };
+    permissions: { allow: string[]; defaultMode: string };
+    hooks: { PreToolUse: Array<{ matcher: string; hooks: Array<{ command: string }> }> };
+  };
 
   it("disables the OS sandbox so a bwrap-userns host drift cannot break the cron", () => {
-    expect(writtenSettings.sandbox.enabled).toBe(false);
+    expect(base.sandbox.enabled).toBe(false);
   });
 
-  it("sets permissions.defaultMode to bypassPermissions to restore bash auto-approval", () => {
-    expect(writtenSettings.permissions.defaultMode).toBe("bypassPermissions");
+  it("NEVER uses bypassPermissions (the v1 P1-blocked exfil primitive)", () => {
+    expect(JSON.stringify(DEFAULT_CLAUDE_SETTINGS)).not.toContain("bypassPermissions");
+    expect(JSON.stringify(built)).not.toContain("bypassPermissions");
   });
 
-  it("keeps permissions.allow as an empty array (no allowlist widening)", () => {
-    expect(writtenSettings.permissions.allow).toEqual([]);
+  it("keeps permissions.allow empty (the hook, not the allowlist, is the control)", () => {
+    expect(base.permissions.allow).toEqual([]);
   });
 
-  // Drift-guard anchored on the literal: a future edit that flips the sandbox
-  // back on (or drops the bypassPermissions pairing) must update this test. The
-  // pairing is load-bearing — sandbox-off WITHOUT bypassPermissions blocks every
-  // headless `gh`/`git` command on an unanswerable prompt.
-  it("regression: never regress to sandbox.enabled true without re-pairing auto-approval", () => {
+  it("registers the deny-by-default hook under a '*' catch-all matcher (no unhooked tool class)", () => {
+    const pre = built.hooks.PreToolUse;
+    expect(pre).toHaveLength(1);
+    expect(pre[0].matcher).toBe("*");
+    expect(pre[0].hooks[0].command).toContain("cron-bash-allowlist-hook.mjs");
+    expect(pre[0].hooks[0].command).toContain(".claude/cron-allow.txt");
+  });
+
+  it("the hook command is fully absolute (CWD-independent — no PATH-drift fail-open)", () => {
+    const cmd = built.hooks.PreToolUse[0].hooks[0].command;
+    // node binary + hook path + allowlist path, all rooted at the spawn cwd
+    expect(cmd).toContain("/tmp/ephemeral/repo/apps/web-platform/server/inngest/");
+    expect(cmd).toContain("/tmp/ephemeral/repo/.claude/cron-allow.txt");
+  });
+
+  it("regression: sandbox stays off AND the hook stays registered", () => {
     expect(DEFAULT_CLAUDE_SETTINGS.sandbox.enabled).toBe(false);
-    expect(DEFAULT_CLAUDE_SETTINGS.permissions.defaultMode).toBe(
-      "bypassPermissions",
-    );
+    expect(built.hooks.PreToolUse[0].matcher).toBe("*");
+  });
+
+  it("roadmap-review (#5004) is a Tier-1 cron with a finite Bash allowlist", () => {
+    const allow = CRON_BASH_ALLOWLISTS["cron-roadmap-review"];
+    expect(Array.isArray(allow)).toBe(true);
+    expect(allow).toContain("gh issue create");
+    expect(allow).toContain("gh api repos/jikig-ai/soleur/");
+    // git config / remote must NOT be allowlisted (token-leak surface)
+    expect(allow).not.toContain("git config");
+    expect(allow).not.toContain("git remote");
   });
 });
 

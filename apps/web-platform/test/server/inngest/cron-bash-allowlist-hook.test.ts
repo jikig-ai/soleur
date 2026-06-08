@@ -4,7 +4,6 @@
 // panel surfaced (P0-A secret-read, P0-B argument injection, P1-F quoted-pipe)
 // has a case here. `decide()` is pure (JSON in → decision out), so no spawn.
 import { describe, expect, it } from "vitest";
-// @ts-expect-error — .mjs hook module has no type declarations (runtime ESM).
 import { decide, tokenize, splitSegments } from "../../../server/inngest/cron-bash-allowlist-hook.mjs";
 
 // roadmap-review-shaped allowlist (the Tier-1 lead cron).
@@ -29,7 +28,8 @@ const ALLOW = [
 const verdict = (input: unknown) =>
   decide(input, ALLOW).hookSpecificOutput.permissionDecision;
 const reason = (input: unknown) =>
-  decide(input, ALLOW).hookSpecificOutput.permissionDecisionReason;
+  (decide(input, ALLOW).hookSpecificOutput as { permissionDecisionReason?: string })
+    .permissionDecisionReason;
 const bash = (command: string) => ({ tool_name: "Bash", tool_input: { command } });
 
 describe("Bash — allowlisted commands", () => {
