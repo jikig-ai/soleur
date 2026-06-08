@@ -9,14 +9,14 @@ plan: knowledge-base/project/plans/2026-06-08-feat-shortform-feature-tweets-plan
 # Tasks — Short-Form Feature Tweets
 
 ## Phase 0: Preconditions (/work)
-- [ ] 0.1 Verify `gh pr view <n> --json labels,title,url` and `gh pr diff <n> --name-only` field shapes against a real PR.
-- [ ] 0.2 Confirm cumulative description budget headroom and the 1024-char per-skill limit in `plugins/soleur/test/components.test.ts` (cap currently 1984, zero headroom).
-- [ ] 0.3 Re-read `plugins/soleur/skills/postmerge/SKILL.md` Phase 3 (L91 success / L93 warn branches) to place `HEALTH_VERIFIED`.
+- [x] 0.1 Verify `gh pr view <n> --json labels,title,url` and `gh pr diff <n> --name-only` field shapes against a real PR.
+- [x] 0.2 Confirm cumulative description budget headroom and the 1024-char per-skill limit in `plugins/soleur/test/components.test.ts` (cap currently 1984, zero headroom).
+- [x] 0.3 Re-read `plugins/soleur/skills/postmerge/SKILL.md` Phase 3 (L91 success / L93 warn branches) to place `HEALTH_VERIFIED`.
 
 ## Phase 1: Eligibility filter (brand-critical floor)
-- [ ] 1.1 Write failing tests `scripts/lib/tweet-eligibility.test.sh`: eligible feature PR; each deny-label; each deny-path; **collision feature+user-facing+security → excluded**; **collision feature+user-facing + `**/migrations/**` → excluded**; unlabeled → excluded; gh-error → excluded.
-- [ ] 1.2 Implement `scripts/lib/tweet-eligibility.sh <pr>`: labels via `gh pr view --json labels`, paths via `gh pr diff --name-only`; require `user-facing`+`type/feature`; deny labels/paths short-circuit to excluded regardless of allow-set; fail-closed on error/empty.
-- [ ] 1.3 Green: all eligibility tests pass.
+- [x] 1.1 Write failing tests `scripts/lib/tweet-eligibility.test.sh`: eligible feature PR; each deny-label; each deny-path; **collision feature+user-facing+security → excluded**; **collision feature+user-facing + `**/migrations/**` → excluded**; unlabeled → excluded; gh-error → excluded.
+- [x] 1.2 Implement `scripts/lib/tweet-eligibility.sh <pr>`: labels via `gh pr view --json labels`, paths via `gh pr diff --name-only`; require `user-facing`+`type/feature`; deny labels/paths short-circuit to excluded regardless of allow-set; fail-closed on error/empty.
+- [x] 1.3 Green: all eligibility tests pass.
 
 ## Phase 2: feature-tweet skill
 - [ ] 2.1 Create `plugins/soleur/skills/feature-tweet/SKILL.md` (description ≤25 words, ≤1024 chars).
