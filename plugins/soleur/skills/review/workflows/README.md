@@ -90,25 +90,39 @@ resume an interrupted run, add `resumeFromRunId: "<runId>"` — unchanged
 
 - always-on dimension agents (class-gated 2/4/8 fan-out)
 - conditional dimensions (Rails ×2, migration ×2, test-design, semgrep-SAST,
-  GDPR, user-impact) from deterministic `triggers`
+  shellcheck (bash), real `gdpr-gate` skill, anti-slop Tier-1, user-impact)
+  from deterministic `triggers`
+- deterministic-tool findings auto-confirmed (skip adversarial verify)
 - 1–3 skeptic adversarial verification, no-barrier pipeline
 - provenance-driven deterministic disposition
 - CONCUR-gated `deferred-scope-out` filing (dry-run by default; `{ file: true }`
   to create issues)
 - `budget` floor on the verify fan-out with logged UNVERIFIED coverage
 
+### Deterministic vs. judgment findings
+
+Dimensions split into two kinds:
+- **LLM-judgment** (the reviewer agents) → every finding is adversarially
+  verified (refute-by-default) before it surfaces.
+- **Deterministic tools/skills** (`semgrep`, `shellcheck`, `anti-slop`, the real
+  `gdpr-gate`) → findings are **auto-confirmed as ground truth**, skipping the
+  verify stage. Refuting an `SC2086` or a `BRAND-RAW-HEX` hit would be both wrong
+  and wasteful; the tool is authoritative. These carry `deterministic: true`.
+
+`bashOnly` routes the SAST slot to `shellcheck` instead of `semgrep` (semgrep's
+tree-sitter bash parser is vacuous — SKILL.md note). `anti-slop` high-severity
+`brand` findings are a **required-fix** gate (the scanner exits non-zero).
+
 ## Still NOT ported (next increments)
 
-- **semgrep bootstrap + bash→shellcheck substitution.** The `semgrep` dimension
-  tells the agent to run `ensure-semgrep.sh`, and `bashOnly` suppresses semgrep,
-  but the shellcheck substitute dimension is not wired.
-- **`gdpr-gate` is approximated** by routing to `data-integrity-guardian` with a
-  GDPR lens rather than invoking the real deterministic `gdpr-gate` skill (its
-  Art. 9 escalation + `compliance-posture.md` write are skill-side).
 - **Follow-through auto-wiring** — filed scope-outs don't yet scaffold the
-  `<!-- soleur:followthrough -->` directive + verification script.
-- **Anti-slop Tier-1 scanner hook** (deterministic, runs inline in the SKILL).
-- **Pipeline-mode compact-marker output** for `one-shot` / `work` callers.
+  `<!-- soleur:followthrough -->` directive + verification script + `chmod`.
+- **semgrep `ensure-semgrep.sh` exit-code handling** — the `semgrep` dimension
+  prompts the bootstrap but doesn't hard-abort the run on a non-zero installer
+  exit (the SKILL does).
+- **Pipeline-mode compact-marker output** for `one-shot` / `work` callers (the
+  workflow returns structured JSON instead, which an orchestrator consumes
+  directly — arguably moot in workflow form).
 
 ## Validation
 

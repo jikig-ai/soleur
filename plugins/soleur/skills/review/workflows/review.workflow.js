@@ -62,9 +62,30 @@ const DIMENSIONS = {
   'data-migration': { agentType: 'soleur:engineering:review:data-migration-expert',          lens: 'ID-mapping correctness vs production, swapped values, rollback safety, dual-write' },
   'deploy-verify':  { agentType: 'soleur:engineering:review:deployment-verification-agent',  lens: 'Go/No-Go deploy checklist with SQL verification queries and rollback procedure' },
   'test-design':    { agentType: 'soleur:engineering:review:test-design-reviewer',           lens: "Farley's 8 properties; weighted Test Quality Score + top improvements" },
-  semgrep:          { agentType: 'soleur:engineering:review:semgrep-sast',                   lens: 'deterministic SAST — bootstrap via plugins/soleur/skills/review/scripts/ensure-semgrep.sh first, then scan changed source for CWE/secret/taint signatures' },
-  gdpr:             { agentType: 'soleur:engineering:review:data-integrity-guardian',        lens: 'GDPR/CCPA — Art. 9 special-category data, RoPA, lawful-basis gaps on regulated-data surfaces' },
+  semgrep:          { agentType: 'soleur:engineering:review:semgrep-sast', deterministic: true, lens: 'deterministic SAST — bootstrap via plugins/soleur/skills/review/scripts/ensure-semgrep.sh first, then scan changed source for CWE/secret/taint signatures' },
   'user-impact':    { agentType: 'soleur:engineering:review:user-impact-reviewer',           lens: 'enumerate concrete user-facing failure modes (cross-tenant read, credential leak, data loss, double-charge) vs the plan threshold' },
+  // --- deterministic tools (no agentType; run a scanner/skill, taken as ground truth) ---
+  shellcheck: {
+    deterministic: true,
+    lens: 'shellcheck on changed shell scripts (the bash substitute for semgrep, which cannot analyze bash)',
+    prompt: () =>
+      `Run shellcheck on the shell scripts changed in this diff. ${targetClause}
+List changed *.sh/*.bash/*.zsh files (\`${diffCmd}\`). If shellcheck is not installed, install it (\`apt-get install -y shellcheck\` / \`brew install shellcheck\`) — do not skip silently. Run \`shellcheck -f gcc <files>\`. Map each result to a finding: error→P1, warning→P2, info/style→P3; id = the SC code (e.g. SC2086); provenance = pr-introduced if the flagged line is in the diff, else pre-existing; fixSizeLines ≈ 1–3. Empty findings array if shellcheck is clean.`,
+  },
+  'anti-slop': {
+    deterministic: true,
+    lens: 'frontend anti-slop Tier-1 scanner (brand high-severity findings are a REQUIRED-FIX gate)',
+    prompt: () =>
+      `Run the deterministic frontend anti-slop Tier-1 scanner on the changed frontend files. ${targetClause}
+Collect changed paths matching \`apps/web-platform/(app|components)/.*\\.(tsx|jsx|css)$\`, \`apps/web-platform/server/.*\\.(ts|tsx)$\`, or \`plugins/soleur/docs/.*\\.(njk|css)$\`. Run: \`bun run plugins/soleur/skills/frontend-anti-slop/scripts/tier1-scan.ts --paths <files> --json\`. Parse the JSON array. Map each to a finding: a finding whose rule is category=brand AND severity=high (BRAND-RAW-HEX, BRAND-WHITE-ON-GOLD) → P1 (required-fix, the scanner exits non-zero); all other findings → P3 (advisory, calibration mode). id = the rule id; provenance = pr-introduced. Empty array if the scanner is clean.`,
+  },
+  gdpr: {
+    deterministic: true,
+    lens: 'real soleur:gdpr-gate skill — Art. 9 / RoPA / lawful-basis deterministic checks',
+    prompt: () =>
+      `Audit this change for GDPR/CCPA exposure by invoking the real gate. ${targetClause}
+Use the Skill tool to run \`soleur:gdpr-gate\` against the diff (it runs deterministic Art. 9 special-category / RoPA / lawful-basis pattern checks). Translate its output into findings: Critical Art. 9 findings → P1; RoPA / lawful-basis gaps → P2; advisory → P3. id = the gate's rule/check name; provenance = pr-introduced when the regulated-data surface is added/modified by this diff. Empty array if the gate reports clean.`,
+  },
 }
 
 // Deterministic class → always-on dimension mapping. The classify agent reports
@@ -83,8 +104,10 @@ function conditionalDimensions(t = {}) {
   if (t.isRailsApp && t.hasRubyChange) dims.push('rails-kieran', 'rails-dhh')
   if (t.hasMigration) dims.push('data-migration', 'deploy-verify')
   if (t.hasTests) dims.push('test-design')
-  if (t.hasSource && !t.bashOnly) dims.push('semgrep') // bash-only → shellcheck, not semgrep (SKILL.md note)
+  if (t.hasSource && t.bashOnly) dims.push('shellcheck') // bash → shellcheck (semgrep can't parse bash; SKILL.md note)
+  else if (t.hasSource) dims.push('semgrep')
   if (t.gdprMatch) dims.push('gdpr')
+  if (t.antiSlop) dims.push('anti-slop')
   if (t.userImpactThreshold) dims.push('user-impact')
   return dims
 }
@@ -108,7 +131,7 @@ const CLASSIFY_SCHEMA = {
     rationale: { type: 'string' },
     triggers: {
       type: 'object',
-      required: ['isRailsApp', 'hasRubyChange', 'hasMigration', 'hasTests', 'hasSource', 'bashOnly', 'gdprMatch', 'userImpactThreshold'],
+      required: ['isRailsApp', 'hasRubyChange', 'hasMigration', 'hasTests', 'hasSource', 'bashOnly', 'gdprMatch', 'antiSlop', 'userImpactThreshold'],
       additionalProperties: false,
       properties: {
         isRailsApp: { type: 'boolean', description: 'repo root has BOTH Gemfile and config/routes.rb' },
@@ -118,6 +141,7 @@ const CLASSIFY_SCHEMA = {
         hasSource: { type: 'boolean' },
         bashOnly: { type: 'boolean', description: 'every changed source file is .sh/.bash/.zsh (semgrep cannot analyze; use shellcheck)' },
         gdprMatch: { type: 'boolean', description: 'a changed path matches the gdpr-gate canonical path globs (regulated-data surfaces)' },
+        antiSlop: { type: 'boolean', description: 'a changed path matches apps/web-platform/(app|components)/*.{tsx,jsx,css}, apps/web-platform/server/*.{ts,tsx}, or plugins/soleur/docs/*.{njk,css}' },
         userImpactThreshold: { type: 'boolean', description: 'the PR body or its linked plan declares "Brand-survival threshold: single-user incident"' },
       },
     },
@@ -197,6 +221,7 @@ Also compute the conditional triggers (booleans) — inspect the repo and the di
 - hasTests: diff touches any test/spec file (*.test.ts/js, *.spec.ts/js, *_spec.rb, test_*.py, *_test.py, *_test.go, *Tests.swift, or files under __tests__/ test/ spec/).
 - bashOnly: hasSource is true AND every changed source file is .sh/.bash/.zsh.
 - gdprMatch: any changed path looks like a regulated-data surface (auth, billing, PII, consent, user/profile/account data models, supabase migrations on personal data). Be conservative — only true on a clear match.
+- antiSlop: any changed path matches apps/web-platform/(app|components)/*.{tsx,jsx,css}, apps/web-platform/server/*.{ts,tsx}, or plugins/soleur/docs/*.{njk,css}.
 - userImpactThreshold: the PR body OR its linked plan file contains the literal "Brand-survival threshold: single-user incident".
 
 Return the classification object. Do NOT review the code — only classify.`
@@ -291,6 +316,18 @@ function budgetOk() {
   return !budget.total || budget.remaining() > VERIFY_FLOOR
 }
 
+// Deterministic-tool findings (shellcheck / semgrep / anti-slop / gdpr-gate)
+// are ground truth — adversarially refuting an SC2086 or a BRAND-RAW-HEX hit is
+// wrong AND wasteful. Auto-confirm them; only LLM-judgment findings get verified.
+function autoConfirm(f, dim) {
+  return {
+    ...f,
+    dimension: dim,
+    deterministic: true,
+    verdict: { isReal: true, confidence: 'high', reason: 'deterministic tool/skill finding — taken as ground truth, not adversarially verified.' },
+  }
+}
+
 async function verifyFinding(f, dim) {
   if (!budgetOk()) {
     droppedVerification.push(`${dim}:${f.id}`)
@@ -345,8 +382,14 @@ log(
 const perDimension = await pipeline(
   dims,
   (dim) =>
-    agent(reviewPrompt(dim), { label: `review:${dim}`, phase: 'Review', schema: FINDINGS_SCHEMA, agentType: DIMENSIONS[dim].agentType }),
-  (review, dim) => parallel((review?.findings || []).map((f) => () => verifyFinding(f, dim))),
+    agent(DIMENSIONS[dim].prompt ? DIMENSIONS[dim].prompt() : reviewPrompt(dim), {
+      label: `review:${dim}`,
+      phase: 'Review',
+      schema: FINDINGS_SCHEMA,
+      agentType: DIMENSIONS[dim].agentType, // undefined for tool/skill dims → default agent
+    }),
+  (review, dim) =>
+    parallel((review?.findings || []).map((f) => () => (DIMENSIONS[dim].deterministic ? Promise.resolve(autoConfirm(f, dim)) : verifyFinding(f, dim)))),
 )
 
 phase('Synthesize')
