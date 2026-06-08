@@ -52,6 +52,7 @@ declare -A FLAG_ENV_VARS=(
   ["team-workspace-invite"]="FLAG_TEAM_WORKSPACE_INVITE"
   ["byok-delegations"]="FLAG_BYOK_DELEGATIONS"
   ["c4-visualizer"]="FLAG_C4_VISUALIZER"
+  ["debug-mode"]="FLAG_DEBUG_MODE"
 )
 
 # --- arg parsing ------------------------------------------------------------
