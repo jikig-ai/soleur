@@ -92,14 +92,23 @@ pointed at).
   attacker-controllable).
 - **Art. 34 (data-subject notification):** not triggered (no exposure).
 
-## Follow-ups
+## Action Items & Follow-ups
 
-- [x] Read-path resolution migrated to `workspace_id` (this PR).
-- [x] Regression guard added that fails if resolution ever re-reads
-  `workspace_path` (divergent-`workspace_id` test).
-- [ ] Sweep remaining legacy `users.workspace_path`/`workspace_status` readers
-  (owner/sync/agent/export paths) before the ADR-044 pre-decommission column drop
-  — tracked by ADR-044's own drift gate, out of scope for this fix.
+Resolved in the source PR (#5003): read-path resolution migrated to `workspace_id`,
+plus a regression guard that fails if resolution ever re-reads `workspace_path`
+(the divergent-`workspace_id` test).
+
+Residual work — issue-backed:
+
+| Issue | Action | Status |
+|---|---|---|
+| #5005 | Audit + converge the remaining direct readers of `users.workspace_path` / `users.workspace_status` (owner/sync/agent/export paths) onto the workspace-id resolver — same latent-bug class as this incident. | open |
+
+**Correction (was inaccurate in the first draft):** ADR-044's own pre-decommission
+drift gate covers only the relocated *repo* columns (`repo_url`,
+`github_installation_id`, `repo_status`, `repo_last_synced_at`) — it does **not**
+cover `workspace_path`/`workspace_status`, so the sweep above was untracked until
+#5005 was filed.
 
 ## Lessons (see also the learning file)
 
