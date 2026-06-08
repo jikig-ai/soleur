@@ -36,8 +36,13 @@
 //   - repo/                          (in-handler `git clone --depth=1`)
 //   - repo/plugins/soleur            (symlink to getPluginPath())
 //   - repo/.claude/settings.json     (DEFAULT_SETTINGS overlay)
-// Plugin resolution is cwd-relative — the soleur plugin manifest at
-// plugins/soleur/.claude-plugin/plugin.json is discovered from spawn cwd.
+// Plugin resolution under headless `--print` requires the explicit
+// `--plugin-dir plugins/soleur` flag — the symlinked plugins/soleur dir is NOT
+// auto-discovered from spawn cwd in headless mode (the interactive
+// marketplace/enabledPlugins trust flow does not run under --print). This
+// producer's prompt invokes no /soleur:* skill, so it needs no flag change; the
+// comment is corrected so the disproven spawn-cwd auto-discovery theory cannot
+// mislead future edits. See #4993 / #4987.
 //
 // GH TOKEN — installation token minted via createProbeOctokit() →
 // installation discovery → generateInstallationToken(installation.id).
