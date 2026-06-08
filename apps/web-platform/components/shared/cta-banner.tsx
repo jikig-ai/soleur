@@ -31,7 +31,7 @@ export function CtaBanner() {
             href="/signup"
             className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:bg-amber-400"
           >
-            Create your account
+            Sign up for the waitlist
           </Link>
           <button
             type="button"
