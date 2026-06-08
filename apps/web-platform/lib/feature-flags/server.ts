@@ -43,6 +43,11 @@ const RUNTIME_FLAGS = {
   // Gates the interactive LikeC4 C4-model visualizer in the KB viewer
   // (replaces static Mermaid C4 rendering). Per-user rollout via role/segment.
   "c4-visualizer": "FLAG_C4_VISUALIZER",
+  // feat-debug-mode-stream — availability flag for the internal dev-cohort
+  // harness instruction stream. Read ONLY through `isDebugModeAvailable`,
+  // which hard-gates `role === "dev"` BEFORE this flag so the role-blind
+  // env-fallback cannot open the stream to `prd` on a Flagsmith outage.
+  "debug-mode": "FLAG_DEBUG_MODE",
 } as const;
 
 export type EnvFlagName = keyof typeof ENV_FLAGS;
@@ -170,6 +175,23 @@ export async function isTeamWorkspaceInviteEnabled(orgId: string, identity: Iden
 export async function isByokDelegationsEnabled(orgId: string | null | undefined, identity: Identity): Promise<boolean> {
   if (!orgId) return false;
   return getRuntimeFlag("byok-delegations", identity);
+}
+
+/**
+ * feat-debug-mode-stream (P0-8) — availability of the internal harness
+ * instruction stream for `identity`.
+ *
+ * INTENTIONALLY NOT cloned from `isTeamWorkspaceInviteEnabled`: that helper is
+ * fail-OPEN on a Flagsmith outage (the env-fallback `FLAG_*` is role-blind, so
+ * a `prd` identity would resolve `true` from `FLAG_DEBUG_MODE=1`). The debug
+ * stream is a scoped exception to the #2138 raw-tool-input invariant and must
+ * stay dev-cohort-only, so the `role !== "dev"` hard-gate runs BEFORE the flag
+ * is ever consulted — a Flagsmith outage can only ever make this MORE
+ * restrictive, never open the stream to `prd`.
+ */
+export async function isDebugModeAvailable(identity: Identity): Promise<boolean> {
+  if (identity.role !== "dev") return false;
+  return getRuntimeFlag("debug-mode", identity);
 }
 
 export function __resetFeatureFlagsForTests(): void {

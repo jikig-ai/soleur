@@ -22,7 +22,7 @@ This article examines both platforms on the dimensions that matter: knowledge ar
 
 In March 2026, Anthropic's Cowork technology expanded into Microsoft 365. [Microsoft launched Copilot Cowork on March 9, 2026](https://the-decoder.com/microsoft-brings-anthropics-claude-cowork-into-copilot-to-run-tasks-across-outlook-teams-and-excel/), in close collaboration with Anthropic, bringing Claude's Cowork capabilities into Outlook, Teams, and Excel. The Microsoft 365 E7 bundle — which packages Copilot, Entra Suite, and Agent 365 — became available in May 2026 at $99/user/month.
 
-**Soleur** is an open-source [Company-as-a-Service]({{ site.url }}/company-as-a-service/) platform. It deploys {{ stats.agents }} agents across {{ stats.departments }} business departments — engineering, marketing, legal, finance, operations, product, sales, and support — with a compounding knowledge base that accumulates institutional memory across every session and every domain.
+**Soleur** is a source-available (BSL 1.1) [Company-as-a-Service]({{ site.url }}/company-as-a-service/) platform. It deploys {{ stats.agents }} agents across {{ stats.departments }} business departments — engineering, marketing, legal, finance, operations, product, sales, and support — with a compounding knowledge base that accumulates institutional memory across every session and every domain.
 
 ## Where They Differ
 
@@ -81,11 +81,11 @@ Soleur is source-available (BSL 1.1). The full codebase is public. Every agent's
 | **Cross-domain knowledge base** | None. Plugins are siloed. | Work IQ: workspace context from emails, files, chats. | Compounding. Grows across every session and every domain. |
 | **Domains covered** | 10 categories: HR, Design, Engineering, Ops, Finance (IB, ER, PE, WM), Brand Voice | Microsoft 365 applications: Outlook, Teams, Excel | {{ stats.departments }} departments: Engineering, Marketing, Legal, Finance, Operations, Product, Sales, Support |
 | **Workflow orchestration** | Individual task invocation | Multi-step M365 task execution | Lifecycle workflows (brainstorm → plan → implement → review → compound) with artifacts at each stage |
-| **Pricing** | Included with Claude Pro ($20/mo), Team ($25/seat/mo annual) | $30/user/month add-on; M365 E7 bundle $99/user/month (available May 2026) | Free (open source). Paid tier planned. |
+| **Pricing** | Included with Claude Pro ($20/mo), Team ($25/seat/mo annual) | $30/user/month add-on; M365 E7 bundle $99/user/month (available May 2026) | Free (source-available). Paid tier planned. |
 | **Source availability** | Proprietary | Proprietary | Source-available (BSL 1.1). Full source code. |
 | **Terminal / Claude Code integration** | Not applicable — web/desktop interface | Not applicable — Microsoft 365 surface | Native — runs inside Claude Code terminal workflow |
 | **Enterprise connectors** | Google Workspace, DocuSign, Apollo, FactSet, LegalZoom, Harvey, Slack (15+) | Microsoft 365 native (Outlook, Teams, Excel, SharePoint) | MCP ecosystem via Claude Code |
-| **Current availability** | Live (Pro, Team, Enterprise plans) | Live (M365 E7 bundle, May 2026) | Live (open source) |
+| **Current availability** | Live (Pro, Team, Enterprise plans) | Live (M365 E7 bundle, May 2026) | Live (source-available) |
 
 ---
 
@@ -109,7 +109,7 @@ Soleur is source-available (BSL 1.1). The full codebase is public. Every agent's
 - You work in the terminal via Claude Code
 - You need institutional memory that compounds across sessions, not resets
 - You need cross-domain coherence — marketing that references legal, engineering that references compliance, finance that reflects competitive intelligence
-- You care about open-source transparency: auditable agents, modifiable workflows, your knowledge on your machine
+- You care about source-available transparency: auditable agents, modifiable workflows, your knowledge on your machine
 - You are building a company, not executing isolated tasks
 
 The choice is not which platform lists more features. It is which architecture fits how you build.
@@ -132,7 +132,7 @@ Cowork's session-scoped model is a valid design choice for executing expert task
 
 ## Start Building
 
-Soleur runs {{ stats.agents }} agents across {{ stats.departments }} departments with a compounding knowledge base that gets more powerful every day you use it. Open source, terminal-first, built by a solo founder using the platform itself.
+Soleur runs {{ stats.agents }} agents across {{ stats.departments }} departments with a compounding knowledge base that gets more powerful every day you use it. Source-available, terminal-first, built by a solo founder using the platform itself.
 
 ```
 claude plugin install soleur

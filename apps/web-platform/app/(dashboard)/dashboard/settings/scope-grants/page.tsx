@@ -15,7 +15,10 @@ import { ACTION_CLASSES_BY_CATEGORY } from "@/lib/messages/action-class-copy";
 import { ScopeGrantRow } from "@/components/scope-grants/scope-grant-row";
 import { TemplateAuthorizationRow } from "@/components/scope-grants/template-authorization-row";
 import { BashAutonomousToggle } from "@/components/settings/bash-autonomous-toggle";
+import { DebugModeToggle } from "@/components/settings/debug-mode-toggle";
 import { resolveBashAutonomous } from "@/server/resolve-bash-autonomous";
+import { resolveDebugMode } from "@/server/resolve-debug-mode";
+import { isDebugModeAvailable, type Role } from "@/lib/feature-flags/server";
 import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 
 export const dynamic = "force-dynamic";
@@ -61,6 +64,24 @@ export default async function ScopeGrantsPage() {
     .eq("user_id", user.id)
     .maybeSingle();
   const isWorkspaceOwner = membership?.role === "owner";
+
+  // feat-debug-mode-stream — internal harness-stream toggle. Visible ONLY to
+  // the `dev` cohort (server-resolved availability, fail-closed; a Flagsmith
+  // outage keeps it hidden for prd). Owner-WRITE: a non-owner dev sees the
+  // current state read-only. Read the dev role from the cookie/RLS-scoped
+  // client (caller reads its own users row), then the member-checked toggle.
+  const { data: debugRoleRow } = await supabase
+    .from("users")
+    .select("role")
+    .eq("id", user.id)
+    .single<{ role: unknown }>();
+  const debugRole: Role = debugRoleRow?.role === "dev" ? "dev" : "prd";
+  const debugAvailable = await isDebugModeAvailable({
+    userId: user.id,
+    role: debugRole,
+    orgId: null,
+  });
+  const debugMode = debugAvailable ? await resolveDebugMode(user.id) : false;
 
   // Belt-and-suspenders .eq("founder_id", user.id) defends against any
   // future RLS loosening on scope_grants. Comment per today/route.ts
@@ -166,6 +187,22 @@ export default async function ScopeGrantsPage() {
             initialAutonomous={autonomous}
             isOwner={isWorkspaceOwner}
           />
+        </section>
+      )}
+
+      {debugAvailable && (
+        <section
+          id="debug-mode"
+          aria-labelledby="debug-mode-heading"
+          className="mb-8 rounded-none border border-dashed border-soleur-border-default bg-soleur-bg-surface-1 p-4"
+        >
+          <h2
+            id="debug-mode-heading"
+            className="mb-2 text-sm font-medium uppercase tracking-wide text-soleur-text-muted"
+          >
+            Debug mode (internal)
+          </h2>
+          <DebugModeToggle initialDebugMode={debugMode} isOwner={isWorkspaceOwner} />
         </section>
       )}
 

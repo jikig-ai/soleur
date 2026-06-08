@@ -28,6 +28,7 @@ describe("KNOWN_WS_MESSAGE_TYPES (FR4 #2861)", () => {
       "stream_end",
       "tool_use",
       "tool_progress", // FR4 (#2861)
+      "debug_event", // feat-debug-mode-stream
       "review_gate",
       "session_started",
       "session_resumed",

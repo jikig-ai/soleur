@@ -1,8 +1,8 @@
 ---
 title: "Soleur vs. Paperclip: Domain Intelligence vs. AI Company Orchestration"
-seoTitle: "Soleur vs. Paperclip: Open-Source AI Company Platforms Compared"
+seoTitle: "Soleur vs. Paperclip: Source-Available vs. Open-Source AI Company Platforms"
 date: 2026-03-31
-description: "Soleur vs. Paperclip: both open-source AI company platforms, but from opposite directions. One provides infrastructure, the other provides intelligence."
+description: "Soleur (source-available, BSL 1.1) vs. Paperclip (open-source, MIT): two AI company platforms from opposite directions. One provides infrastructure, the other provides intelligence."
 ogImage: "blog/og-soleur-vs-paperclip.png"
 tags:
   - comparison
@@ -46,7 +46,7 @@ These agents do not operate in silos. They share a git-tracked knowledge base --
 
 The orchestration model is the [compound workflow lifecycle]({{ site.url }}blog/why-most-agentic-tools-plateau/): brainstorm → plan → implement → review → compound. The compound step is what separates Soleur's approach architecturally: learnings from each session are routed back to the specific agents and workflows that were active, and critical failure patterns are promoted to mechanical enforcement hooks -- code-level guardrails that make known failure modes structurally impossible.
 
-Soleur runs inside Claude Code. It is open-source and local-first: your knowledge base lives in your repository, your agents run in your environment, your credentials stay under your control.
+Soleur runs inside Claude Code. It is source-available (BSL 1.1) and local-first: your knowledge base lives in your repository, your agents run in your environment, your credentials stay under your control.
 
 ## The Core Distinction: Infrastructure vs. Intelligence
 
@@ -81,7 +81,8 @@ Paperclip's rollback capabilities address damage after it occurs. Soleur's compo
 | Compounding cross-domain knowledge base | No | Yes |
 | Self-improving rules and guardrails | No | Yes |
 | Workflow lifecycle (brainstorm through ship) | No | Yes |
-| Open-source and local-first | Yes | Yes |
+| License | Open-source (MIT) | Source-available (BSL 1.1) |
+| Local-first | Yes | Yes |
 | Multi-company support | Yes | No |
 
 ## When Paperclip Is the Right Choice
@@ -126,11 +127,11 @@ Zero-human company orchestration describes systems designed to run business oper
 
 **Q: Can Soleur and Paperclip be used together?**
 
-Yes. Soleur's domain agents could run as managed workers within Paperclip's orchestration framework, gaining heartbeat scheduling, per-agent budget controls, and rollback governance while contributing to the compounding knowledge base that Paperclip does not supply. An official adapter does not yet exist, but Paperclip's v0.3.0 adapter pattern (Cursor, OpenCode, Pi) makes this architecturally straightforward. The combination would represent the most complete open-source, self-hosted zero-human company stack available.
+Yes. Soleur's domain agents could run as managed workers within Paperclip's orchestration framework, gaining heartbeat scheduling, per-agent budget controls, and rollback governance while contributing to the compounding knowledge base that Paperclip does not supply. An official adapter does not yet exist, but Paperclip's v0.3.0 adapter pattern (Cursor, OpenCode, Pi) makes this architecturally straightforward. The combination would represent the most complete self-hosted zero-human company stack available.
 
 **Q: What are the main open-source AI company platforms in 2026?**
 
-The two most prominent open-source, self-hosted platforms for AI company operation are Paperclip (MIT license, 14,600+ GitHub stars, governance infrastructure layer) and Soleur (open-source, {{ stats.agents }} agents, domain intelligence layer). Polsia is the fastest-growing proprietary alternative -- [$1.5M ARR with 2,000+ managed companies](https://www.teamday.ai/ai/polsia-solo-founder-million-arr-self-running-companies) as of March 2026 -- but is cloud-hosted, closed-source, and fully autonomous by design.
+The two most prominent self-hosted platforms for AI company operation are Paperclip (open-source, MIT license, 14,600+ GitHub stars, governance infrastructure layer) and Soleur (source-available, BSL 1.1, {{ stats.agents }} agents, domain intelligence layer). Polsia is the fastest-growing proprietary alternative -- [$1.5M ARR with 2,000+ managed companies](https://www.teamday.ai/ai/polsia-solo-founder-million-arr-self-running-companies) as of March 2026 -- but is cloud-hosted, closed-source, and fully autonomous by design.
 
 <script type="application/ld+json">
 {
@@ -174,7 +175,7 @@ The two most prominent open-source, self-hosted platforms for AI company operati
       "name": "What are the main open-source AI company platforms in 2026?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "The two most prominent open-source, self-hosted platforms for AI company operation are Paperclip (MIT license, 14,600+ GitHub stars, governance infrastructure layer) and Soleur (open-source, purpose-built domain agents, domain intelligence layer). Polsia is the fastest-growing proprietary alternative at $1.5M ARR with 2,000+ managed companies as of March 2026, but is cloud-hosted, closed-source, and fully autonomous by design."
+        "text": "The two most prominent self-hosted platforms for AI company operation are Paperclip (open-source, MIT license, 14,600+ GitHub stars, governance infrastructure layer) and Soleur (source-available, BSL 1.1, purpose-built domain agents, domain intelligence layer). Polsia is the fastest-growing proprietary alternative at $1.5M ARR with 2,000+ managed companies as of March 2026, but is cloud-hosted, closed-source, and fully autonomous by design."
       }
     }
   ]
