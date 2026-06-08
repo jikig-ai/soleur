@@ -125,6 +125,40 @@ _expect_excluded "deny path: secrets/doppler" \
   "feat(web): x" "app:web-platform" "apps/web-platform/lib/doppler.ts"
 _expect_excluded "deny path: .env" \
   "feat(web): x" "app:web-platform" "apps/web-platform/.env.example"
+# Infra/credential/payment surfaces added after #5017 review (security-sentinel
+# + user-impact-reviewer): these forbidden shapes previously reached `eligible`.
+_expect_excluded "deny path: vercel.json deploy manifest" \
+  "feat(web): x" "app:web-platform" "vercel.json"
+_expect_excluded "deny path: k8s manifest" \
+  "feat(web): x" "app:web-platform" "k8s/deployment.yaml"
+_expect_excluded "deny path: helm chart" \
+  "feat(web): x" "app:web-platform" "charts/web/values.yaml"
+_expect_excluded "deny path: docker-compose" \
+  "feat(web): x" "app:web-platform" "docker-compose.yml"
+_expect_excluded "deny path: Next.js middleware (auth chokepoint)" \
+  "feat(web): x" "app:web-platform" "apps/web-platform/middleware.ts"
+_expect_excluded "deny path: Makefile" \
+  "feat(web): x" "app:web-platform" "Makefile"
+_expect_excluded "deny path: deploy script" \
+  "feat(web): x" "app:web-platform" "scripts/deploy-prod.sh"
+_expect_excluded "deny path: supabase config" \
+  "feat(web): x" "app:web-platform" "apps/web-platform/supabase/config.toml"
+_expect_excluded "deny path: supabase edge function" \
+  "feat(web): x" "app:web-platform" "apps/web-platform/supabase/functions/handler.ts"
+_expect_excluded "deny path: billing surface" \
+  "feat(web): x" "app:web-platform" "apps/web-platform/app/api/billing/route.ts"
+_expect_excluded "deny path: stripe lib" \
+  "feat(web): x" "app:web-platform" "apps/web-platform/lib/stripe.ts"
+_expect_excluded "deny path: payment surface" \
+  "feat(web): x" "app:web-platform" "apps/web-platform/components/payment-form.tsx"
+_expect_excluded "deny path: oauth flow" \
+  "feat(web): x" "app:web-platform" "apps/web-platform/lib/oauth-token-injection.ts"
+_expect_excluded "deny path: api-keys surface" \
+  "feat(web): x" "app:web-platform" "apps/web-platform/app/api/api-keys/route.ts"
+# A "stripe" / "payment" substring inside a benign path must NOT over-match
+# (anchored at a path-segment boundary).
+_expect_eligible "eligible: 'pinstripe' substring does not trip stripe deny" \
+  "feat(web): pinstripe theme" "app:web-platform" "apps/web-platform/components/pinstripe-theme.tsx"
 
 # --- Collisions: deny short-circuits regardless of allow-set ---
 _expect_excluded "collision: feat(+app:web-platform+type/security -> excluded" \
@@ -148,6 +182,10 @@ _expect_excluded "excluded: gh pr diff error" \
   "feat(web): x" "app:web-platform" "$UI_FILES" "" "1"
 _expect_excluded "excluded: empty PR title" \
   "" "app:web-platform" "$UI_FILES"
+# Empty changed-file list (gh anomaly) must fail closed — it would otherwise
+# disable the entire deny-path layer (#5017 review: security + user-impact).
+_expect_excluded "excluded: empty changed-file list (fail-closed)" \
+  "feat(web): x" "app:web-platform" ""
 
 echo "=== tweet-eligibility: $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

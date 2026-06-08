@@ -66,9 +66,11 @@ _(Carried forward from brainstorm Phase 0.1 — `USER_BRAND_CRITICAL=true`.)_
 **Mandatory guardrails (CLO verdict — all required):**
 1. **Fail-closed eligibility filter** (deterministic script): require a `feat(` (conventional-commit
    feature) PR **title** AND the `app:web-platform` label; deny labels `type/security`/
-   `security/leak-suspected`/`infra-drift`/`no-auto-ship`; deny path globs (auth, migrations, secrets,
-   CI/infra). **Deny-checks short-circuit to excluded REGARDLESS of the allow-set.**
-   Missing/empty/`gh`-error/truncation-risk ⇒ excluded.
+   `security/leak-suspected`/`infra-drift`/`no-auto-ship`; deny path globs (auth/oauth/api-keys,
+   migrations, secrets, money/billing/stripe/webhooks, CI/infra incl. k8s/helm/compose/vercel/supabase-
+   config/middleware/deploy-scripts). **Deny-checks short-circuit to excluded REGARDLESS of the allow-set.**
+   Missing/empty/`gh`-error/empty-diff/truncation-risk ⇒ excluded (empty-diff fail-open + money/credential
+   path gaps closed at #5017 multi-agent review).
    _**Label reconciliation (#5021, verified live at /work):** the plan was authored against
    `user-facing`+`type/feature` allow labels and `security`/`infra`/`internal`/`dark-launch` deny
    labels — none of which this repo applies to PRs (they are issue-triage labels or do not exist). The

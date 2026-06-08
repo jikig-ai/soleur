@@ -23,6 +23,20 @@ if [[ -z "$file" || ! -f "$file" ]]; then
   exit 1
 fi
 
+# Require a properly terminated frontmatter block: the first line must be `---`
+# and a closing `---` must exist. Without the closing-fence check, a draft with
+# an opening `---` and no closing fence makes the extractor below emit the whole
+# file as "frontmatter" — body `key: value` lines then satisfy the field checks
+# and a structurally-broken draft passes the very gate meant to reject it.
+if [[ "$(head -1 "$file")" != "---" ]]; then
+  echo "invalid: missing frontmatter (file does not start with '---')" >&2
+  exit 1
+fi
+if [[ "$(awk '/^---$/{c++} END{print c+0}' "$file")" -lt 2 ]]; then
+  echo "invalid: unterminated frontmatter (no closing '---')" >&2
+  exit 1
+fi
+
 # Frontmatter = lines between the first and second `---`.
 frontmatter=$(awk 'NR==1 && $0!="---"{exit} /^---$/{c++; if(c==2) exit; next} c==1' "$file")
 
@@ -45,9 +59,12 @@ if [[ "$status" != "draft" ]]; then
   echo "invalid: 'status' must be 'draft' (got '${status:-<missing>}')" >&2
   exit 1
 fi
-# channels is a comma/space-separated token list; require the `x` token.
+# channels is a comma/space-separated token list (optionally a YAML inline list
+# `[x, bluesky]` or quoted `"x"`); strip list/quote punctuation, then require the
+# `x` token.
 channels_has_x=0
-for _tok in ${channels//,/ }; do
+_channels_clean="${channels//[\[\]\",\']/ }"
+for _tok in ${_channels_clean//,/ }; do
   [[ "$_tok" == "x" ]] && channels_has_x=1
 done
 if [[ "$channels_has_x" -ne 1 ]]; then

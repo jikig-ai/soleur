@@ -37,18 +37,32 @@ fi
 DENY_LABELS=(type/security security/leak-suspected infra-drift no-auto-ship)
 
 # Deny path globs as extended-regex fragments matched against each changed path.
-# Cover auth, migrations, secrets/credentials, and CI/infra surfaces.
+# Cover auth, money/credential, migrations, secrets, and CI/infra surfaces. The
+# brand-survival threshold (single-user incident) means an unannounced
+# security/infra/credential/payment change must never reach the draft queue, so
+# the list errs toward over-exclusion (a missed legit feature is recoverable via
+# the standalone catch-up path; a leaked forbidden tweet is not).
 DENY_PATH_RES=(
-  '(^|/)migrations/'          # DB migrations (any app)
-  '(^|/)\(auth\)/'            # Next.js (auth) route group
-  '(^|/)auth([./_-]|$)'       # auth dir or auth.* file (not "oauth"/"author")
-  '(^|/)\.env'                # .env / .env.example
-  '(^|/)\.github/'            # CI workflows
-  '(^|/)infra/'               # infrastructure-as-code dirs
-  '\.tf$'                     # terraform files
-  '(^|/)cloud-init'           # cloud-init configs
-  '(^|/)Dockerfile'           # container build
-  '(secret|credential|doppler)' # secrets / credential helpers
+  '(^|/)migrations/'                                  # DB migrations (any app)
+  '(^|/)\(auth\)/'                                    # Next.js (auth) route group
+  '(^|/)auth(z|n|entication|oriz|guard)?([./_-]|$)'   # auth dir/file incl authz/authn/authGuard (not "oauth"/"author")
+  '(^|/)oauth([./_-]|/|$)'                            # oauth flows
+  '(^|/)api[-_]keys?([./_-]|/|$)'                     # API-key surfaces
+  '(^|/)(billing|payments?|stripe|checkout|webhooks?)([./_-]|/|$)'  # money + webhook surfaces
+  '(^|/)\.env'                                        # .env / .env.example
+  '(^|/)\.github/'                                    # CI workflows
+  '(^|/)infra/'                                       # infrastructure-as-code dirs
+  '\.tf$'                                             # terraform files
+  '(^|/)(k8s|kubernetes|helm|charts?)/'              # orchestration manifests
+  '(^|/)docker-compose'                              # compose stacks
+  '(^|/)cloud-init'                                   # cloud-init configs
+  '(^|/)Dockerfile'                                   # container build
+  '(^|/)(Makefile|Justfile)$'                        # build/deploy task runners
+  '(^|/)scripts/.*deploy'                            # deploy scripts
+  '(^|/)supabase/(functions|config|seed)'           # supabase edge fns / project config / seed (migrations already denied)
+  '(^|/)middleware\.(ts|js|tsx)$'                    # Next.js middleware (auth/authz chokepoint)
+  '(^|/)vercel\.json$'                               # deploy manifest
+  '(secret|credential|doppler)'                      # secrets / credential helpers (broad, fail-closed)
 )
 
 # --- Fetch metadata (fail-closed on any gh error / empty) -------------------
@@ -65,6 +79,10 @@ paths=$(gh pr diff "$PR" --name-only 2>/dev/null) || {
   echo "excluded: gh pr diff failed for #$PR" >&2
   exit 1
 }
+# An empty changed-file list is anomalous for a real merged PR (a gh/API hiccup
+# returning success with truncated/empty output) and would silently disable the
+# entire deny-path layer below. Fail closed — the path-deny layer is load-bearing.
+[[ -n "$paths" ]] || { echo "excluded: empty changed-file list for #$PR (fail-closed)" >&2; exit 1; }
 
 [[ -n "$title" ]] || { echo "excluded: empty PR title for #$PR" >&2; exit 1; }
 

@@ -94,6 +94,25 @@ pr_reference: "#1"
 Some body but no X thread heading.'
 _expect_reject "rejects missing ## X/Twitter Thread heading" "$NO_HEADING"
 
+# channels in YAML inline-list / quoted forms still satisfy the `x` requirement
+_expect_pass "accepts channels: [x] inline list" "${VALID/channels: x/channels: [x]}"
+_expect_pass "accepts channels: \"x\" quoted" "${VALID/channels: x/channels: \"x\"}"
+_expect_pass "accepts channels: [x, bluesky] with x present" "${VALID/channels: x/channels: [x, bluesky]}"
+_expect_reject "rejects channels: [bluesky] (no x)" "${VALID/channels: x/channels: [bluesky]}"
+
+# Unterminated frontmatter (opening --- but no closing fence) must fail closed —
+# otherwise the extractor treats the whole file as frontmatter and a malformed
+# draft passes the gate (#5017 review: pattern-recognition).
+UNTERMINATED='---
+title: leaked
+status: draft
+channels: x
+
+## X/Twitter Thread
+
+real body content with no closing frontmatter fence'
+_expect_reject "rejects unterminated frontmatter" "$UNTERMINATED"
+
 # Heading present but empty body
 EMPTY_THREAD='---
 title: "x"
