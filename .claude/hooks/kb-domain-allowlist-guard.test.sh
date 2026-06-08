@@ -83,6 +83,22 @@ mkdir -p "$TMP_KB/knowledge-base/observability"
 out=$(invoke_write "knowledge-base/observability/foo.md")
 [[ -z "$(decision_of "$out")" ]] && pass "no decision (segment exists on disk)" || fail "out=$out"
 
+# T11 — Bash command whose COMMENT mentions knowledge-base/*.md but whose real
+# writes are under sanctioned project/ → pass-through (glob-metachar skip). This is
+# the exact reported false-positive: the first-match scan lands on the comment
+# (yielding SEGMENT=*.md), not the git-add write (project/).
+echo "T11: comment with knowledge-base/*.md + real project/ write → pass-through"
+out=$(invoke_bash '# verify no broken knowledge-base/*.md citations in the plan
+grep -oE "knowledge-base/[A-Za-z0-9/_.-]+\.md" "$PLAN"
+git add knowledge-base/project/plans/ knowledge-base/project/specs/x/tasks.md')
+[[ -z "$(decision_of "$out")" ]] && pass "no decision (glob in comment, real write sanctioned)" || fail "out=$out"
+
+# T12 — Bash command containing a grep/regex pattern over knowledge-base paths →
+# pass-through (first match yields a bracket-class token [A-Za-z0-9, not a real segment).
+echo "T12: grep pattern knowledge-base/[A-Za-z0-9/_.-]+ → pass-through"
+out=$(invoke_bash "grep -oE 'knowledge-base/[A-Za-z0-9/_.-]+\\.md' \"\$PLAN\"")
+[[ -z "$(decision_of "$out")" ]] && pass "no decision (grep regex pattern, not a write)" || fail "out=$out"
+
 echo
 echo "Results: $PASS passed, $FAIL failed"
 [[ "$FAIL" == "0" ]] || exit 1
