@@ -36,6 +36,47 @@ This plan does two things:
 a false Soleur-subject "open source" claim there is graded and propagated. The blog↔evergreen
 inconsistency (blog says "open source", homepage says "source-available") actively erodes trust.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-08
+**Gates run:** 4.6 User-Brand Impact (PASS — threshold `aggregate pattern`), 4.7 Observability
+(skipped — pure docs-content + content-drift test, no `apps/*/server|src|infra` or
+`plugins/*/scripts/`), 4.8 PAT-shaped halt (PASS — no match), 4.9 UI-wireframe (skipped — no UI
+surface).
+
+### Key Improvements (from the deepen pass)
+1. **Empirically validated the Test 2c regex** against all 11 in-scope files + a 9-line
+   competitor/ecosystem KEEP oracle: **0 in-scope misses, 0 false positives.** The implementer can
+   adopt the regex directly instead of tuning it blind.
+2. **Caught a regex MISS via the verify-the-negative pass:** the first-draft Soleur-token-anchored
+   regex missed `2026-04-23-agents-that-use-apis-not-browsers.md` entirely (its hits are
+   pronoun-subject "it is open source" / sentence-lead "Open source."). Added the
+   `it is open-source` + `Open source.` clauses and re-verified — now all 11 files match.
+3. **Confirmed `it … open-source` is FP-safe blog-wide:** the phrase appears in exactly 3 lines,
+   all Soleur-subject — zero competitor uses, so the broadened clauses add no false-positive risk.
+
+### Research Insights
+
+**Validated regex oracle run (reproduce at /work Phase 1):**
+
+```text
+IN-SCOPE (each ≥1 match):
+  vs-anthropic-cowork:1  vs-notion:1  vs-cursor:3  vs-polsia:5  your-ai-team:1
+  vs-paperclip:1  vs-devin:1  agents-apis:3  vs-tanka:1  vs-crewai:3  caas-platform:1
+KEEP oracle (each 0 match): crewai L20/L74/L108, paperclip L11/L26/L84/L131/L133, speckit L39
+RESULT: IN-SCOPE MISSES=0  KEEP FALSE-POSITIVES=0
+```
+
+Oracle script shape (Node, run from repo root) — adapt the `RE` to the validated `SOLEUR_OPEN_SOURCE`:
+read each in-scope file, assert `lines.filter(t=>RE.test(t)).length >= 1`; read each KEEP `file:line`,
+assert `RE.test(line) === false`.
+
+**Edge case — shared-row tables are NOT regex-discriminable** (re-confirmed): the table rows
+`| Open source | Yes (MIT) | Yes |` (crewai L108) and `| Open-source and local-first | Yes | Yes |`
+(paperclip L84) correctly do NOT match the Soleur-subject regex (no per-line subject token). They
+are swept by hand and guarded by AC1b/AC2 + manual residual eyeball, not by the test. The test's
+job is the prose + JSON-LD Soleur-subject ban; the sweep's job is the table cells.
+
 ## Research Reconciliation — Spec/Brainstorm vs. Codebase
 
 The brainstorm's "Affected files" line numbers were captured "on main"; the worktree is at HEAD
@@ -115,7 +156,7 @@ verbatim.
    - L74 CHANGE (prose): `The open-source model is lower cost for founders…` → `The source-available model is lower cost…`
    - L117 table row `| Open-source and local-first | No | Yes |` — left = Devin (No), right = Soleur (Yes). Change the Soleur (right) cell from `Yes` to `Yes (source-available)` and/or adjust the row label so it does not assert OSI-approved "open source" for Soleur. Recommended: row label `Source-available and local-first` with Devin `No` / Soleur `Yes`. Implementer's call on label vs cell; the Soleur cell must not claim "open source".
 
-8. **`2026-04-23-agents-that-use-apis-not-browsers.md`**
+8. **`2026-04-23-agents-that-use-apis-not-browsers.md`** — NOTE: all three hits are **pronoun-subject** ("it" = Soleur's service automation), no literal "Soleur" token on the line; the validated regex catches them via the `it is open-source` + sentence-lead `Open source.` clauses.
    - L5 `description` CHANGE: `…server-side browsers. Open source. Encrypted tokens…` → `…server-side browsers. Source-available (BSL 1.1). Encrypted tokens…`
    - L14 CHANGE (prose): `Soleur's service automation shipped this week, and it is open source.` → `…and it is source-available (BSL 1.1).`
    - L67 CHANGE (prose): `It is public, it is open source, and you can read every line.` → `It is public, it is source-available, and you can read every line.` (keep "read every line" auditability claim — the true asset).
@@ -161,8 +202,10 @@ clause. The regex must fire on Soleur-subject phrasings and NOT on competitor/ec
 `Yes (MIT)` table cell, the bare `- open-source` frontmatter tag, the category questions
 `main open-source AI company platforms`.
 
-**Recommended OFFENDER extension** (RED against current files, GREEN after sweep — implementer
-tunes to satisfy both match/no-match sets above; this is a starting shape, not frozen):
+**OFFENDER extension — EMPIRICALLY VALIDATED at deepen-plan time** (RED against current files,
+GREEN after sweep). This exact regex was run against all 11 in-scope files (≥1 Soleur-subject match
+each) AND the 9-line KEEP oracle (CrewAI L20/L74/L108, Paperclip L11/L26/L84/L131/L133, Spec Kit
+L39) with **0 misses and 0 false positives** — see Research Insights below for the run output:
 
 ```ts
 // Soleur-subject "open source" — resolved per CMO call (#5043). Source is BSL 1.1
@@ -170,14 +213,22 @@ tunes to satisfy both match/no-match sets above; this is a starting shape, not f
 // misrepresentation. Competitor/ecosystem "open source" (CrewAI MIT, Paperclip MIT,
 // Spec Kit "open-sourced by GitHub") stays verbatim and must NOT match.
 const SOLEUR_OPEN_SOURCE =
-  /Soleur(?:'s)?\s+(?:is\s+(?:an?\s+)?)?open[- ]source|Soleur:\s*open[- ]source|open[- ]source\s+(?:CaaS|transparency)|is\s+open[- ]source\s+and\s+(?:auditable|local-first)|^Open source,\s/i;
+  /Soleur(?:'s)?\s+(?:is\s+(?:an?\s+|the\s+)?)?(?:source-available\s+)?open[- ]source|Soleur:\s*open[- ]source|open[- ]source\s+(?:CaaS|transparency)|is\s+open[- ]source\s+and\s+(?:auditable|local-first)|\bit\s+is\s+(?:public,\s+it\s+is\s+)?open[- ]source\b|the\s+Soleur\s+open[- ]source|^Open source,\s|(?:^|\.\s+|browsers\.\s+)Open source\.\s/i;
 ```
 
-**Verification of the regex BEFORE writing the sweep (Sharp-edge guard):** run the candidate regex
-in a one-off script against (a) all 11 in-scope files — must report ≥1 hit per file's
-Soleur-subject lines; (b) `why-most-agentic-tools-plateau.md` + the CrewAI/Paperclip KEEP lines —
-must report **zero**. Tune until both hold. Do NOT freeze the regex from memory of the phrasings;
-the inventory above is the falsifiable oracle.
+**WHY the `it is open-source` + `Open source.` clauses are load-bearing (deepen-plan catch):** the
+first-draft candidate (Soleur-token-anchored only) **missed `2026-04-23-agents-that-use-apis-not-
+browsers.md` entirely** — its three Soleur-subject hits are pronoun-subject (`it is open source`,
+`it is public, it is open source`) and a sentence-lead frontmatter form (`…browsers. Open source.
+Encrypted tokens…`), none of which carry a literal "Soleur" token on the line. Verified across the
+whole blog corpus that `it ('s/is/was) … open-source` appears in exactly 3 lines, ALL Soleur-
+subject (paperclip L49, file-8 L14/L67) — zero competitor uses — so these clauses add no FP risk.
+
+**Verification of the regex BEFORE writing the sweep (Sharp-edge guard):** the oracle script is
+already written (`/tmp/regex_test2.mjs` shape, reproduced in Research Insights). Re-run it at /work
+Phase 1 against (a) all 11 in-scope files — must report ≥1 hit each; (b) the KEEP oracle —
+must report **zero**. The inventory above is the falsifiable oracle; do NOT freeze the regex from
+memory. If the sweep later changes the prose forms, re-run before relying on GREEN.
 
 **Deferral-comment updates:**
 - Test 2b L160-161: `Dated blog-body generic positioning is deferred to #5043 (CMO) and is not
