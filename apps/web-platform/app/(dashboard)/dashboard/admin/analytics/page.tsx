@@ -56,6 +56,14 @@ export default async function AdminAnalyticsPage() {
 
   const users = (usersResult.data ?? []) as UserRow[];
   const conversations = (convsResult.data ?? []) as ConversationRow[];
+  // The conversations query is capped at 10k rows; past that the funnel's
+  // first-conversation/activated counts undercount silently. Warn so the gap is
+  // discoverable (harmless at current scale; revisit with pagination if hit).
+  if (conversations.length === 10_000) {
+    console.warn(
+      "[analytics] conversations query hit the 10k row cap — funnel counts may undercount.",
+    );
+  }
   const metrics = computeMetrics(users, conversations);
   const funnel = computeFunnel(users, conversations);
 

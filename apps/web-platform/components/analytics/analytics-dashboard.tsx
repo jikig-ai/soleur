@@ -153,7 +153,13 @@ function FunnelSection({ funnel }: { funnel: FunnelResult }) {
                 {stage.count}
               </div>
               <div className="w-16 shrink-0 text-right text-xs text-soleur-text-muted tabular-nums">
-                {stage.dropoffLabel === null ? "" : `−${stage.dropoffLabel}`}
+                {/* Only a percentage drop gets a leading minus; the zero-prior
+                    "—" sentinel and the first stage (null) stand alone. */}
+                {stage.dropoffLabel === null
+                  ? ""
+                  : stage.dropoffLabel.endsWith("%")
+                    ? `−${stage.dropoffLabel}`
+                    : stage.dropoffLabel}
               </div>
             </div>
           );
