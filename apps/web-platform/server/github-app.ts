@@ -13,6 +13,7 @@ import { createHash, createSign, randomUUID } from "crypto";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
 import { readAppId } from "./github/app-private-key";
+import { isRetryable } from "./github-api";
 
 const log = createChildLogger("github-app");
 
@@ -394,6 +395,90 @@ export async function findInstallationForLogin(
   return findOrgInstallationForUser(jwt, githubLogin);
 }
 
+// ---------------------------------------------------------------------------
+// Org-membership probe (transient-robust, fail-closed)
+//
+// feat-one-shot-concierge-gh-403-self-heal (Bug A). A bare `status === 204`
+// check collapses a genuine 404/302 ("not a member" → correctly deny) and a
+// TRANSIENT 5xx / AbortSignal.timeout throw into the SAME "deny" outcome — so
+// an ENTITLED org member is wrongly denied promotion (kept on the wrong
+// installation → 403) purely because GitHub's /orgs/{org}/members/{login}
+// endpoint 5xx'd or timed out for ~3s. Classify into three outcomes and retry
+// ONLY the transient class, reusing the canonical backoff idiom from
+// server/github-api.ts (isRetryable already classifies the AbortSignal.timeout
+// DOMException + undici network codes as retryable).
+//
+// SECURITY (fail-closed): the retry gates an AUTHORIZATION decision, so a
+// post-retry `indeterminate` DENIES promotion (only a confirmed 204 grants).
+// Narrowing the false-negative must NOT widen the entitlement gate. No token
+// value is ever logged (hr-github-app-auth-not-pat).
+// ---------------------------------------------------------------------------
+
+// Match the sibling install-token retry constants (INSTALL_TOKEN_MAX_RETRIES=2,
+// INSTALL_TOKEN_BASE_DELAY_MS=1_000, defined later in this file) so the three
+// retry sites stay consistent. Literals (not the named constants) to avoid a
+// temporal-dead-zone reference — those consts are declared further down.
+const MEMBER_PROBE_MAX_RETRIES = 2; // 3 total attempts
+const MEMBER_PROBE_BASE_DELAY_MS = 1_000; // 1s, 2s
+
+type MembershipProbeOutcome = "member" | "not-member" | "indeterminate";
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Probe whether `githubLogin` is a member of org `owner`, using the org
+ * installation's token (carries members:read). Returns a 3-value outcome:
+ *   - `member`        — 204 (the ONLY path that grants promotion)
+ *   - `not-member`    — 404 / 302 (authoritative; NOT retried — a definitive
+ *                       answer; retrying it is a pure latency tax)
+ *   - `indeterminate` — transient 5xx / thrown timeout/network (retried up to
+ *                       MEMBER_PROBE_MAX_RETRIES), or any other non-authoritative
+ *                       status (e.g. 403) after retries. Fail-closed: the caller
+ *                       must DENY promotion on `indeterminate`.
+ */
+async function probeOrgMembership(
+  owner: string,
+  githubLogin: string,
+  installationToken: string,
+): Promise<MembershipProbeOutcome> {
+  const url = `${GITHUB_API}/orgs/${encodeURIComponent(owner)}/members/${encodeURIComponent(githubLogin)}`;
+  for (let attempt = 0; attempt <= MEMBER_PROBE_MAX_RETRIES; attempt++) {
+    let response: Response;
+    try {
+      response = await githubFetch(url, {
+        headers: { Authorization: `token ${installationToken}` },
+      });
+    } catch (err) {
+      // AbortSignal.timeout fires a DOMException; undici network errors throw.
+      // Retry the transient class, else fail-closed → indeterminate.
+      if (attempt < MEMBER_PROBE_MAX_RETRIES && isRetryable(err)) {
+        await delay(MEMBER_PROBE_BASE_DELAY_MS * 2 ** attempt);
+        continue;
+      }
+      return "indeterminate";
+    }
+
+    if (response.status === 204) return "member";
+    // 404 = not a member; 302 = requester not visible as org member. Both are
+    // authoritative — drain and return WITHOUT retrying.
+    if (response.status === 404 || response.status === 302) {
+      await response.text().catch(() => {});
+      return "not-member";
+    }
+    // Drain before any sleep/return to avoid socket keep-alive leaks.
+    await response.text().catch(() => {});
+    // 5xx = transient → retry. Anything else (403, …) → indeterminate (no retry).
+    if (response.status >= 500 && attempt < MEMBER_PROBE_MAX_RETRIES) {
+      await delay(MEMBER_PROBE_BASE_DELAY_MS * 2 ** attempt);
+      continue;
+    }
+    return "indeterminate";
+  }
+  return "indeterminate";
+}
+
 /**
  * Iterate all app installations looking for org installations where the
  * given user is a member. Returns the first matching installation ID.
@@ -439,12 +524,15 @@ async function findOrgInstallationForUser(
       continue;
     }
 
-    const memberCheck = await githubFetch(
-      `${GITHUB_API}/orgs/${encodeURIComponent(inst.account.login)}/members/${encodeURIComponent(githubLogin)}`,
-      { headers: { Authorization: `token ${installationToken}` } },
+    // Transient-robust, fail-closed membership probe (Bug A). A transient 5xx /
+    // timeout on one org no longer silently skips an entitled org — it retries
+    // first; only a confirmed `member` returns the install.
+    const outcome = await probeOrgMembership(
+      inst.account.login,
+      githubLogin,
+      installationToken,
     );
-    // 204 = is a member, 302 = requester is not org member, 404 = not a member
-    if (memberCheck.status === 204) {
+    if (outcome === "member") {
       log.info(
         { githubLogin, orgLogin: inst.account.login, installationId: inst.id },
         "Found org installation for user",
@@ -526,21 +614,44 @@ export async function findInstallationByAccountLogin(
  * A non-member gets null → the caller keeps its current installation and the
  * honest 403 surfaces, rather than silently gaining write it was never granted.
  */
+/**
+ * Why the promotion was (or was not) granted. Surfaced to the orchestration
+ * (cc-dispatcher) so a DENY/SKIP becomes a queryable Sentry event rather than
+ * an observability-dark silent keep (feat-one-shot-concierge-gh-403-self-heal,
+ * Bug B). `installationId !== null` only on `personal-repo` / `member`.
+ */
+export type RepoOwnerPromotionOutcome =
+  | "no-github-login"
+  | "no-owner-install"
+  | "personal-repo"
+  | "member"
+  | "not-member"
+  | "indeterminate"
+  | "token-mint-failed";
+
+export interface RepoOwnerInstallationResolution {
+  /** The entitled owner installation id, or null when promotion is denied. */
+  installationId: number | null;
+  outcome: RepoOwnerPromotionOutcome;
+}
+
 export async function findRepoOwnerInstallationForUser(
   owner: string,
   githubLogin: string | null,
-): Promise<number | null> {
-  if (!githubLogin) return null;
+): Promise<RepoOwnerInstallationResolution> {
+  if (!githubLogin)
+    return { installationId: null, outcome: "no-github-login" };
 
   const ownerInstall = await findInstallationByAccountLogin(owner);
-  if (ownerInstall === null) return null;
+  if (ownerInstall === null)
+    return { installationId: null, outcome: "no-owner-install" };
 
   // Personal repo (owner is the user's own account) — no escalation possible.
-  if (owner.toLowerCase() === githubLogin.toLowerCase()) return ownerInstall;
+  if (owner.toLowerCase() === githubLogin.toLowerCase())
+    return { installationId: ownerInstall, outcome: "personal-repo" };
 
   // Org repo — require verified org membership before promoting. Mint the
-  // owner install's token (members:read) and probe membership, mirroring
-  // findOrgInstallationForUser's 204 check.
+  // owner install's token (members:read) and probe membership.
   let installationToken: string;
   try {
     installationToken = await generateInstallationToken(ownerInstall);
@@ -549,15 +660,17 @@ export async function findRepoOwnerInstallationForUser(
       { err, ownerInstall, owner },
       "findRepoOwnerInstallationForUser: token mint failed — denying promotion",
     );
-    return null;
+    return { installationId: null, outcome: "token-mint-failed" };
   }
 
-  const memberCheck = await githubFetch(
-    `${GITHUB_API}/orgs/${encodeURIComponent(owner)}/members/${encodeURIComponent(githubLogin)}`,
-    { headers: { Authorization: `token ${installationToken}` } },
-  );
-  // 204 = is a member; anything else (302 non-member, 404, 403) = not entitled.
-  return memberCheck.status === 204 ? ownerInstall : null;
+  // Transient-robust, fail-closed (Bug A): the owner install is returned ONLY
+  // on a confirmed `member` (204). A post-retry `indeterminate` (transient
+  // 5xx/timeout) or an authoritative `not-member` both DENY — keeping the
+  // stored install and the honest 403 rather than silently granting write.
+  const outcome = await probeOrgMembership(owner, githubLogin, installationToken);
+  return outcome === "member"
+    ? { installationId: ownerInstall, outcome: "member" }
+    : { installationId: null, outcome };
 }
 
 // ---------------------------------------------------------------------------

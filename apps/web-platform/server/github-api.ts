@@ -26,7 +26,11 @@ const BASE_DELAY_MS = 1_000;
 // Retry wrapper for transient failures
 // ---------------------------------------------------------------------------
 
-function isRetryable(err: unknown): boolean {
+// Exported so the GitHub-App membership probe (server/github-app.ts) reuses the
+// SAME transient classification rather than inventing a third retry shape
+// (feat-one-shot-concierge-gh-403-self-heal, Bug A). Classifies the
+// AbortSignal.timeout DOMException + undici network codes as retryable.
+export function isRetryable(err: unknown): boolean {
   // AbortSignal.timeout() fires a DOMException with name "TimeoutError"
   if (err instanceof DOMException && err.name === "TimeoutError") return true;
   // Network-level fetch failure (undici throws TypeError with "fetch failed")

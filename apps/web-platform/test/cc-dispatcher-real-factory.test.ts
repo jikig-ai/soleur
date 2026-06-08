@@ -709,7 +709,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       mockGetCurrentRepoUrl.mockResolvedValueOnce(REPO);
       // Stored is the user's PERSONAL install — its login IS the user's GH login.
       mockGetInstallationAccount.mockResolvedValueOnce({ login: "Elvalio", id: STORED, type: "User" });
-      mockFindRepoOwnerInstallationForUser.mockResolvedValueOnce(OWNER);
+      mockFindRepoOwnerInstallationForUser.mockResolvedValueOnce({ installationId: OWNER, outcome: "member" });
 
       await realSdkQueryFactory(makeArgs());
 
@@ -745,11 +745,11 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       );
     });
 
-    it("entitlement denied (findRepoOwnerInstallationForUser → null) → keeps stored install", async () => {
+    it("entitlement denied (findRepoOwnerInstallationForUser → null) → keeps stored install + mirrors the skip (Bug B)", async () => {
       mockResolveInstallationId.mockResolvedValueOnce(STORED);
       mockGetCurrentRepoUrl.mockResolvedValueOnce(REPO);
       mockGetInstallationAccount.mockResolvedValueOnce({ login: "outside-user", id: STORED, type: "User" });
-      mockFindRepoOwnerInstallationForUser.mockResolvedValueOnce(null); // not an org member
+      mockFindRepoOwnerInstallationForUser.mockResolvedValueOnce({ installationId: null, outcome: "not-member" }); // not an org member
 
       await realSdkQueryFactory(makeArgs());
 
@@ -757,9 +757,24 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         STORED,
         expect.anything(),
       );
+      // The deny is a QUERYABLE Sentry event (null err → captureMessage), with
+      // the 4-field payload (Bug B, AC4).
+      expect(mockReportSilentFallback).toHaveBeenCalledWith(
+        null,
+        expect.objectContaining({
+          feature: "cc-dispatcher",
+          op: "self-heal-skip",
+          extra: expect.objectContaining({
+            storedInstallationId: STORED,
+            owner: "jikig-ai",
+            membershipProbeOutcome: "not-member",
+            effectiveInstallationId: STORED,
+          }),
+        }),
+      );
     });
 
-    it("org-type stored install (login != owner) → cannot derive user login, keeps stored (fail-safe, no probe)", async () => {
+    it("org-type stored install (login != owner) → keeps stored (fail-safe, no probe) + mirrors the skip", async () => {
       mockResolveInstallationId.mockResolvedValueOnce(STORED);
       mockGetCurrentRepoUrl.mockResolvedValueOnce(REPO);
       // Stored is an ORG install for a DIFFERENT org → user login not derivable
@@ -772,6 +787,17 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(mockGenerateInstallationToken).toHaveBeenCalledWith(
         STORED,
         expect.anything(),
+      );
+      expect(mockReportSilentFallback).toHaveBeenCalledWith(
+        null,
+        expect.objectContaining({
+          feature: "cc-dispatcher",
+          op: "self-heal-skip",
+          extra: expect.objectContaining({
+            membershipProbeOutcome: "org-type-stored-install",
+            effectiveInstallationId: STORED,
+          }),
+        }),
       );
     });
 
