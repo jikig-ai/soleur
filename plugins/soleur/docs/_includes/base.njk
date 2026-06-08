@@ -159,7 +159,6 @@
       .nav-links .nav-cta-slot .nav-cta{color:var(--color-text-inverse)}
       .nav-links .nav-cta-slot .nav-cta:hover{color:var(--color-text-inverse);border-bottom-color:transparent}
       .nav-links .nav-cta-slot .nav-cta:focus-visible{outline:2px solid var(--color-text-inverse);outline-offset:3px}
-      .nav-has-children{position:relative}
       .nav-dropdown{position:relative}
       .nav-dropdown-summary{display:inline-flex;align-items:center;gap:4px;font-size:var(--text-sm);color:var(--color-text-secondary);cursor:pointer;list-style:none;padding:var(--space-1) 0;border-bottom:2px solid transparent;transition:color 0.15s,border-color 0.15s}
       .nav-dropdown-summary::-webkit-details-marker{display:none}
@@ -167,7 +166,7 @@
       .nav-caret{font-size:0.7em;transition:transform 0.15s}
       .nav-dropdown[open] .nav-caret{transform:rotate(180deg)}
       .nav-submenu{list-style:none}
-      @media(min-width:769px){.nav-submenu{position:absolute;top:calc(100% + var(--space-3));left:0;min-width:170px;background:var(--color-bg-tertiary);border:1px solid var(--color-border);border-radius:8px;padding:var(--space-2);box-shadow:0 10px 30px rgba(0,0,0,0.5);z-index:3}.nav-submenu a{display:block;padding:var(--space-2) var(--space-3);white-space:nowrap;border-bottom:none}}
+      @media(min-width:769px){.nav-submenu{position:absolute;top:calc(100% + var(--space-3));left:0;min-width:170px;background:var(--color-bg-tertiary);border:1px solid var(--color-border);border-radius:8px;padding:var(--space-2);box-shadow:0 10px 30px rgba(0,0,0,0.5);z-index:3}.nav-submenu a{display:block;padding:var(--space-2) var(--space-3);white-space:nowrap;border-bottom:none}.nav-has-children:last-of-type .nav-submenu{left:auto;right:0}}
       @media(max-width:768px){.nav-dropdown,.nav-dropdown-summary{display:block}.nav-dropdown-summary{padding:var(--space-3) var(--space-4)}.nav-submenu a{padding:var(--space-2) var(--space-4) var(--space-2) var(--space-6)}}
       .nav-toggle{display:none}
       .nav-toggle-label{display:none;cursor:pointer;padding:var(--space-2);font-size:var(--text-lg);color:var(--color-text-secondary)}

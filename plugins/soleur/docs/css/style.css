@@ -196,7 +196,6 @@
   }
 
   /* Nav dropdowns (Product, Company) -- native <details>/<summary>, no JS */
-  .nav-has-children { position: relative; }
   .nav-dropdown { position: relative; }
   .nav-dropdown-summary {
     display: inline-flex;
@@ -229,6 +228,8 @@
       z-index: 3;
     }
     .nav-submenu a { display: block; padding: var(--space-2) var(--space-3); white-space: nowrap; border-bottom: none; }
+    /* Right-most dropdown opens right-aligned so it never overflows the viewport edge. */
+    .nav-has-children:last-of-type .nav-submenu { left: auto; right: 0; }
   }
 
   .nav-toggle { display: none; }
