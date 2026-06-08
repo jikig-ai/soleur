@@ -359,9 +359,11 @@ const asideWidth = (page: Page) =>
   page.locator("aside").first().evaluate((el) => el.clientWidth);
 
 // The collapse toggle is FLOATED (`absolute right-3 top-3`) on desktop after the
-// reclaimed-space restructure — it is no longer in the rail-header flow.
+// reclaimed-space restructure — it is no longer in the rail-header flow. Its
+// accessible name flips with state (`Collapse sidebar` expanded / `Expand
+// sidebar` collapsed), so match either label — it is the only `… sidebar` button.
 const collapseToggle = (page: Page) =>
-  page.getByRole("button", { name: "Collapse sidebar" });
+  page.getByRole("button", { name: /^(Collapse|Expand) sidebar$/ });
 type Rect = { x: number; y: number; width: number; height: number };
 const intersects = (a: Rect, b: Rect): boolean =>
   a.x < b.x + b.width &&
@@ -815,7 +817,13 @@ test.describe("nav-states visual gate — mobile", () => {
     // The reclaimed-space restructure made the desktop toggle row md:hidden and
     // floated the collapse toggle, but the MOBILE close row (and its button) must
     // be untouched. Open the drawer, then dismiss it via the close button.
-    await page.getByRole("button", { name: "Open navigation" }).click();
+    const openBtn = page.getByRole("button", { name: "Open navigation" });
+    await expect(openBtn).toBeVisible({ timeout: 15_000 });
+    // Settle for React hydration: the SSR hamburger paints before its onClick
+    // attaches, so an early click fires at a handler-less button (no-op) and the
+    // drawer never opens. Mirrors the widenable-rail drag tests' hydration wait.
+    await page.waitForTimeout(1500);
+    await openBtn.click();
     const aside = page.locator("aside").first();
     await expect(aside).not.toHaveClass(/-translate-x-full/, { timeout: 15_000 });
     const closeBtn = page.getByRole("button", { name: "Close navigation" });

@@ -51,10 +51,10 @@ Wireframe: `knowledge-base/product/design/dashboard-nav/sidebar-float-collapse-t
 - [x] 3.3 Extend the collapsed-state test (`:443-481`): toggle visible, inside 56px rail, no
       overlap with `workspace-identity-icon` tile.
 - [x] 3.4 Guard mobile (390px): close button (`Close navigation`) + mobile band present.
-- [ ] 3.5 Prove the gate RED against old markup, GREEN against new; record in PR body.
+- [x] 3.5 Prove the gate RED against old markup, GREEN against new; record in PR body.
 
 ## Phase 4 — Gates
 
 - [x] 4.1 `tsc --noEmit` clean.
 - [x] 4.2 Full vitest suite green via `./node_modules/.bin/vitest run` (NOT bun test).
-- [ ] 4.3 Playwright VRT spec green headless on the `authenticated` project (zero creds).
+- [x] 4.3 Playwright VRT spec green headless on the `authenticated` project (zero creds).
