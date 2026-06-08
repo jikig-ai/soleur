@@ -51,9 +51,10 @@ decision rests on real numbers.
   `components/analytics/analytics-dashboard.tsx`, above the existing per-user
   table, matching existing tokens. Highlight the "Activated" stage as the success
   metric. → wireframe activation-funnel.pen.
-- **FR3.** Fetch the waitlist count from the Buttondown API (tag `pricing-waitlist`)
-  and render it next to the Supabase signup count with an aggregate conversion %
-  and a fetched-at timestamp. → wireframe activation-funnel.pen.
+- **FR3.** _[DEFERRED to #5071 during plan-review 2026-06-08]_ Aggregate
+  waitlist→signup conversion via a Buttondown count. Removed from this PR: it does
+  not gate the success metric, the `BUTTONDOWN_API_KEY` provider already exists
+  (premise correction), and the read carries PII-transit risk. See plan §Deferred.
 - **FR4.** Show `onboarding_completed_at` as a secondary drop-off diagnostic, not
   the activation gate.
 
