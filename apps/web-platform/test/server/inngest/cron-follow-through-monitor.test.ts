@@ -289,6 +289,43 @@ describe("cron-follow-through-monitor — T7 GitHub App token injection (#512e25
     }
   });
 
+  // T8 (#5010) — mirrors T7's three-env capture but for GH_REPO. The cron runs
+  // `gh` from the prod container CWD /app (no .git, no clone), so without GH_REPO
+  // every gh call fails `fatal: not a git repository`. buildSpawnEnv must pin the
+  // repo for the execFileSync prefetch AND every agent-spawned gh subprocess.
+  it("injects GH_REPO=jikig-ai/soleur into every gh subprocess env (#5010)", async () => {
+    const child = makeChild();
+    spawnSpy.mockImplementation(
+      withEnsureLabelsAutoExit(() => {
+        queueMicrotask(() => child.emit("exit", 0, null));
+        return child;
+      }),
+    );
+
+    const handler = await importHandler();
+    const step = makeStep();
+    await handler({ step, logger });
+
+    // (a) the server-side `gh issue list` (execFileSync) env pins the repo.
+    const execCall = execFileSyncSpy.mock.calls[0] as unknown as unknown[];
+    const execEnv = (execCall[2] as { env: NodeJS.ProcessEnv }).env;
+    expect(execEnv.GH_REPO).toBe("jikig-ai/soleur");
+
+    // (b) the claude-eval spawn env pins the repo.
+    const claudeCalls = spawnSpy.mock.calls.filter((c) => c[0] !== "gh");
+    expect(claudeCalls).toHaveLength(1);
+    const claudeEnv = (claudeCalls[0][2] as { env: NodeJS.ProcessEnv }).env;
+    expect(claudeEnv.GH_REPO).toBe("jikig-ai/soleur");
+
+    // (c) every ensure-labels `gh` spawn env pins the repo.
+    const ghCalls = spawnSpy.mock.calls.filter((c) => c[0] === "gh");
+    expect(ghCalls.length).toBeGreaterThan(0);
+    for (const call of ghCalls) {
+      const ghEnv = (call[2] as { env: NodeJS.ProcessEnv }).env;
+      expect(ghEnv.GH_REPO).toBe("jikig-ai/soleur");
+    }
+  });
+
   it("the minted token OVERRIDES any ambient process.env.GH_TOKEN (the incident vector)", async () => {
     // Positive control (test-design review MEDIUM): the GH_TOKEN value-equality
     // assertion in the prior test rides behind the mint-step-existence gate, so
@@ -297,7 +334,14 @@ describe("cron-follow-through-monitor — T7 GitHub App token injection (#512e25
     // minted token, NOT the ambient one — this is the hr-github-app-auth-not-pat
     // contract and would fail if buildSpawnEnv ever reverted to reading env.
     const prior = process.env.GH_TOKEN;
+    const priorRepo = process.env.GH_REPO;
     process.env.GH_TOKEN = "ghp_AMBIENT_PAT_SHOULD_NOT_LEAK";
+    // #5010 — same positive control for GH_REPO: seed a bogus ambient value and
+    // assert the subprocess still sees the canonical slug. buildSpawnEnv pins
+    // GH_REPO unconditionally, so a future `process.env.GH_REPO ?? …` regression
+    // (which would re-introduce the /app no-repo failure in prod, where GH_REPO
+    // is unset) fails this test instead of shipping.
+    process.env.GH_REPO = "attacker/wrong-repo";
     try {
       const child = makeChild();
       spawnSpy.mockImplementation(
@@ -312,18 +356,30 @@ describe("cron-follow-through-monitor — T7 GitHub App token injection (#512e25
       await handler({ step, logger });
 
       // the 60-min lifetime floor propagates to generateInstallationToken
-      // (installation id 12345 from the createProbeOctokit mock).
+      // (installation id 12345 from the createProbeOctokit mock), AND the
+      // least-privilege scope (#5046): contents/issues/PR write only, repo-
+      // scoped to soleur — never actions/admin/checks.
       expect(generateInstallationTokenSpy).toHaveBeenCalledWith(12345, {
         minRemainingMs: 50 * 60 * 1000 + 10 * 60 * 1000,
+        permissions: {
+          contents: "write",
+          issues: "write",
+          pull_requests: "write",
+        },
+        repositories: ["soleur"],
       });
 
       const claudeCalls = spawnSpy.mock.calls.filter((c) => c[0] !== "gh");
       const claudeEnv = (claudeCalls[0][2] as { env: NodeJS.ProcessEnv }).env;
       expect(claudeEnv.GH_TOKEN).toBe("ghs_TESTTOKEN_REDACT_ME");
       expect(claudeEnv.GH_TOKEN).not.toBe("ghp_AMBIENT_PAT_SHOULD_NOT_LEAK");
+      expect(claudeEnv.GH_REPO).toBe("jikig-ai/soleur");
+      expect(claudeEnv.GH_REPO).not.toBe("attacker/wrong-repo");
     } finally {
       if (prior === undefined) delete process.env.GH_TOKEN;
       else process.env.GH_TOKEN = prior;
+      if (priorRepo === undefined) delete process.env.GH_REPO;
+      else process.env.GH_REPO = priorRepo;
     }
   });
 });

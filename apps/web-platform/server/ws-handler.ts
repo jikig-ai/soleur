@@ -2184,6 +2184,8 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "tool_use":
     case "tool_progress":
     case "command_stream":
+    // feat-debug-mode-stream — harness instruction stream (server→client only).
+    case "debug_event":
     case "review_gate":
     case "autonomous_disclosure":
     case "autonomous_posture":

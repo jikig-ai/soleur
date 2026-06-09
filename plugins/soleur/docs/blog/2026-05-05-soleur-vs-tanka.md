@@ -79,7 +79,7 @@ Soleur: execution-native AI organization. The foundation is agent-driven workflo
 
 Tanka: free for teams under 50 users. $29/month (Plus), $199/month (Pro) for individuals with higher credit allocations. $299/month for teams of 50 or more.
 
-Soleur: open-source, free platform. Your costs are the Claude API credits the agents consume.
+Soleur: source-available (BSL 1.1), free platform. Your costs are the Claude API credits the agents consume.
 
 ### Who It Is Built For
 
@@ -112,7 +112,7 @@ And when execution produces institutional memory — when the legal agent docume
 | Cross-domain compounding knowledge base | No | Yes |
 | Full workflow lifecycle (brainstorm through ship) | No | Yes |
 | Solo-founder-first design | No | Yes |
-| Open-source | No | Yes |
+| License | Proprietary | Source-available (BSL 1.1) |
 | Pricing | Free (<50 users) / $29–199/mo | Free (API costs) |
 
 ## FAQ

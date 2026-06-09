@@ -195,6 +195,58 @@
     text-decoration: none;
   }
 
+  /* Nav dropdowns (Product, Company) -- CSS hover/focus-within, no JS.
+     The <button> is reset to the exact box of a flat .nav-links a so all
+     header items sit on one horizontal line. */
+  .nav-has-children { position: relative; }
+  /* Regular top-level links share the dropdown button's inline-flex box so all
+     header items sit on one baseline (the 2px transparent underline + baseline
+     vs flex-center otherwise leaves dropdowns ~1-2px high). Scoped to direct
+     children so submenu links + the CTA are untouched. */
+  .nav-links > li:not(.nav-cta-slot) > a { display: inline-flex; align-items: center; }
+  .nav-dropdown-summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: inherit;
+    font-size: var(--text-sm);
+    line-height: inherit;
+    color: var(--color-text-secondary);
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: var(--space-1) 0;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .nav-has-children:hover > .nav-dropdown-summary,
+  .nav-has-children:focus-within > .nav-dropdown-summary { color: var(--color-text); }
+  .nav-caret { font-size: 0.7em; transition: transform 0.15s; }
+  .nav-has-children:hover .nav-caret,
+  .nav-has-children:focus-within .nav-caret { transform: rotate(180deg); }
+  .nav-submenu { display: none; list-style: none; }
+  @media (min-width: 769px) {
+    /* Transparent bridge across the gap so hover stays continuous summary->panel. */
+    .nav-has-children::after { content: ''; position: absolute; top: 100%; left: 0; width: 100%; height: var(--space-3); }
+    .nav-submenu {
+      position: absolute;
+      top: calc(100% + var(--space-3));
+      left: 0;
+      min-width: 170px;
+      background: var(--color-bg-tertiary);
+      border: 1px solid var(--color-border);
+      border-radius: 8px;
+      padding: var(--space-2);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+      z-index: 3;
+    }
+    .nav-has-children:hover > .nav-submenu,
+    .nav-has-children:focus-within > .nav-submenu { display: block; }
+    .nav-submenu a { display: block; padding: var(--space-2) var(--space-3); white-space: nowrap; border-bottom: none; }
+    /* Right-most dropdown opens right-aligned so it never overflows the viewport edge. */
+    .nav-has-children:last-of-type .nav-submenu { left: auto; right: 0; }
+  }
+
   .nav-toggle { display: none; }
   .nav-toggle-label {
     display: none;
@@ -236,6 +288,11 @@
       background: rgba(0, 0, 0, 0.5);
       z-index: 1;
     }
+    /* No hover on touch: render the dropdown as an always-expanded accordion. */
+    .nav-has-children { display: block; }
+    .nav-dropdown-summary { display: flex; width: 100%; padding: var(--space-3) var(--space-4); }
+    .nav-submenu { display: block; }
+    .nav-submenu a { padding: var(--space-2) var(--space-4) var(--space-2) var(--space-6); }
   }
 
   /* Stat cards (docs pages) */
@@ -1605,12 +1662,16 @@
   .hero-waitlist-form {
     max-width: 560px;
     margin: var(--space-6) auto 0;
+    /* Match the email input height (input uses --space-3 vertical padding;
+       .btn-primary's --space-4 made it ~8px taller). Stretch equalizes them. */
+    align-items: stretch;
   }
   .hero-waitlist-form input[type="email"] {
     background: #111;
   }
   .hero-waitlist-form .btn-primary {
     flex-shrink: 0;
+    padding: var(--space-3) var(--space-6);
   }
   .hero-waitlist-form .newsletter-status {
     text-align: center;

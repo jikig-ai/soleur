@@ -409,7 +409,7 @@ resource "sentry_issue_alert" "chat_message_save_failure" {
 # days) instead of paging on first occurrence. No app change needed.
 #
 # op-SCOPED filter (op IS_IN, NOT feature-only): mirrors
-# kb_tenant_mint_silent_fallback / chat_message_save_failure. The `kb-share`
+# kb_sync_silent_failure / chat_message_save_failure. The `kb-share`
 # feature tag spans MORE than these 5 ops — sibling files emit feature="kb-share"
 # for non-db ops too (cf-cache-purge.ts `revoke-purge`; kb-preview-metadata.ts
 # `preview-pdf-*`/`preview-image-*`; agent-runner.ts `baseUrl`). This rule is
@@ -458,7 +458,7 @@ resource "sentry_issue_alert" "kb_db_error" {
       }
     },
   ]
-  # N=1 accepted risk (mirrors the kb_tenant_mint_silent_fallback block):
+  # N=1 accepted risk (mirrors the kb_sync_silent_failure block):
   # IssueOwners has no ownership rule on this project → falls through to
   # ActiveMembers, correctly paging the solo founder. These events carry only
   # hashed userId + op + documentPath + pg_code tags — no cross-tenant content —
@@ -541,27 +541,33 @@ resource "sentry_issue_alert" "workspace_sync_health" {
   }
 }
 
-# ── KB tenant-mint silent-fallback alert (#4918) — APPLY-CREATED, NOT import ──
-# Pages on the first occurrence of any KB tenant-JWT mint failure. PIR #4913
-# (generate-link-tenant-mint-regression-postmortem.md) found the durability gap
-# the #4913 service-role fallback did NOT close: the mint failure emitted a
-# `reportSilentFallback` Sentry signal on EVERY tenant-mint dead-end, yet no
-# alert routed it to attention, so it sat latent ~19 days until the founder hit
-# the dead Generate-link button while dogfooding. This rule is the missing
+# ── KB sync silent-failure alert (#4918, re-pointed #5005) — APPLY-CREATED ─────
+# Pages on the first occurrence of an unexpected (uncaught) failure on the
+# manual KB-sync path. PIR #4913 (generate-link-tenant-mint-regression-
+# postmortem.md) found the durability gap that motivated this rule: a silent
+# failure on a KB route emitted a `reportSilentFallback` Sentry signal on every
+# dead-end, yet no alert routed it to attention, so it sat latent ~19 days until
+# the founder hit the dead button while dogfooding. This rule is the missing
 # NOTIFICATION layer (hr-no-dashboard-eyeball-pull-data-yourself) — the signal
-# already exists (RuntimeAuthError → captureException with feature/op tags); no
-# app change needed.
+# already exists (captureException with feature/op tags); no app change needed.
 #
-# op-SCOPED filter (op IS_IN, NOT feature-only): unlike workspace_sync_health
-# (whose feature tag is dedicated to one cron), `feature=kb-route-helpers` spans
-# several ops beyond tenant-mint — the 3 tenant-mint slugs PLUS workspace-sync-*,
-# 3x self-heal-*, and kb-sync.unexpected. A feature-only filter would over-page
-# on those unrelated self-heal/workspace-sync events. So this mirrors
-# chat_message_save_failure's
-# op-scoped shape. The THIRD slug `kb-sync.tenant-mint` (sync/route.ts:62) is
-# the identical RuntimeAuthError→503 mint-failure class the issue body omitted;
-# at brand-survival threshold `single-user incident`, scoping out the next-most-
-# likely sibling is anti-pattern, so it is folded into the IS_IN value.
+# #5005 re-point: kb/sync converged off the per-user tenant client onto the
+# ADR-044 service-role resolvers (resolveActiveWorkspaceKbRoot +
+# resolveActiveWorkspaceRepoMeta), removing the LAST `kb-sync.tenant-mint` emit
+# site (the prior surviving slug after #4953/#4956 migrated the other KB
+# routes). The tenant-mint failure CLASS no longer exists on any KB route, so
+# pinning the alert to that slug would dark it. The route's surviving
+# silent-failure surface is its top-level catch, which mirrors under
+# `feature=kb-route-helpers`, `op=kb-sync.unexpected` (sync/route.ts) — the same
+# "a kb/sync request 500'd and the user saw a dead Sync button" class the alert
+# exists to catch. The IS_IN filter is re-pointed there. (The resolver's own
+# query errors mirror separately under `feature=workspace-resolver`.)
+#
+# op-SCOPED filter (op IS_IN, NOT feature-only): `feature=kb-route-helpers`
+# spans several ops beyond the unexpected-failure catch — workspace-sync-*,
+# 3x self-heal-*, etc. A feature-only filter would over-page on those routine
+# self-heal/workspace-sync events. So this mirrors chat_message_save_failure's
+# op-scoped shape.
 #
 # `action_match="any"`: first_seen/reappeared/regression are mutually-exclusive
 # event-lifecycle states (a captured event is exactly one) — "all" is never
@@ -573,11 +579,11 @@ resource "sentry_issue_alert" "workspace_sync_health" {
 # frequency + match, NOT conditions — not evaluated by lifecycle-condition rules
 # but must be unique). `IS_IN` proven in beta2 at byok_cap_exceeded above.
 # Cross-artifact op/feature contract pinned by
-# test/sentry-kb-tenant-mint-alert-op-contract.test.ts.
-resource "sentry_issue_alert" "kb_tenant_mint_silent_fallback" {
+# test/sentry-kb-sync-silent-failure-alert-op-contract.test.ts.
+resource "sentry_issue_alert" "kb_sync_silent_failure" {
   organization = var.sentry_org
   project      = data.sentry_project.web_platform.slug
-  name         = "kb-tenant-mint-silent-fallback"
+  name         = "kb-sync-silent-failure"
   action_match = "any"
   filter_match = "all"
   frequency    = 12
@@ -599,7 +605,7 @@ resource "sentry_issue_alert" "kb_tenant_mint_silent_fallback" {
       tagged_event = {
         key   = "op"
         match = "IS_IN"
-        value = "resolveUserKbRoot.tenant-mint,authenticateAndResolveKbPath.tenant-mint,kb-sync.tenant-mint"
+        value = "kb-sync.unexpected"
       }
     },
   ]

@@ -1,0 +1,81 @@
+/**
+ * feat-debug-mode-stream — Phase 5.2 client-render tests (AC8).
+ *   - the panel is HIDDEN for the non-dev cohort (available=false)
+ *   - render RE-REDACTION: a frame whose body still carries a secret is
+ *     redacted in the DOM (dual-gate, mirroring message-bubble)
+ *   - withheld + disconnected affordances
+ *   - the settings toggle is read-only (disabled) for a non-owner dev
+ */
+import { describe, it, expect, vi } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
+import { DebugStreamPanel } from "@/components/chat/debug-stream-panel";
+import { DebugModeToggle } from "@/components/settings/debug-mode-toggle";
+import type { ChatDebugEventMessage } from "@/lib/chat-state-machine";
+
+// Split across concatenation so GitHub secret-scanning push-protection does not
+// flag the (fake) token (cq-test-fixtures-synthesized-only).
+const ANTHROPIC = "sk-" + "ant-api03AAAABBBBCCCCDDDDEEEEFFFF1111";
+
+function ev(partial: Partial<ChatDebugEventMessage> & { id: string }): ChatDebugEventMessage {
+  return {
+    role: "assistant",
+    content: "",
+    type: "debug_event",
+    debugKind: "tool_use",
+    body: "",
+    ...partial,
+  };
+}
+
+describe("DebugStreamPanel (AC8)", () => {
+  it("renders nothing for the non-dev cohort (available=false)", () => {
+    const { container } = render(
+      <DebugStreamPanel available={false} events={[]} connected />,
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("re-redacts a leaked secret in the body at render (dual-gate)", () => {
+    const events = [ev({ id: "1", body: `{"x":"${ANTHROPIC}"}`, label: "Running command..." })];
+    render(<DebugStreamPanel available events={events} connected />);
+    // Expand the collapsed drawer.
+    fireEvent.click(screen.getByRole("button", { name: /debug stream/i }));
+    const panel = screen.getByTestId("debug-stream-panel");
+    expect(panel.textContent).not.toContain(ANTHROPIC);
+    expect(panel.textContent).toContain("[redacted-key]");
+  });
+
+  it("shows a withheld count for dropped tool inputs", () => {
+    const events = [
+      ev({ id: "1", body: "[input withheld: failed redaction probe]", label: "Working..." }),
+    ];
+    render(<DebugStreamPanel available events={events} connected />);
+    fireEvent.click(screen.getByRole("button", { name: /debug stream/i }));
+    expect(screen.getByTestId("debug-stream-withheld").textContent).toMatch(/1 event withheld/);
+  });
+
+  it("surfaces a disconnected affordance when the WS is down", () => {
+    render(<DebugStreamPanel available events={[]} connected={false} />);
+    expect(screen.getByTestId("debug-stream-disconnected")).toBeTruthy();
+  });
+
+  it("empty state distinguishes completed-turn from no-activity", () => {
+    render(<DebugStreamPanel available events={[]} connected hadCompletedTurn />);
+    fireEvent.click(screen.getByRole("button", { name: /debug stream/i }));
+    expect(screen.getByTestId("debug-stream-empty").textContent).toMatch(/gate is unavailable/i);
+  });
+});
+
+describe("DebugModeToggle (AC8 — owner-write, member read-only)", () => {
+  it("a non-owner dev sees the switch but cannot flip it (read-only)", () => {
+    render(<DebugModeToggle initialDebugMode={false} isOwner={false} />);
+    const sw = screen.getByRole("switch", { name: /debug mode/i }) as HTMLButtonElement;
+    expect(sw.disabled).toBe(true);
+  });
+
+  it("an owner can flip it (enabled control)", () => {
+    render(<DebugModeToggle initialDebugMode={false} isOwner />);
+    const sw = screen.getByRole("switch", { name: /debug mode/i }) as HTMLButtonElement;
+    expect(sw.disabled).toBe(false);
+  });
+});

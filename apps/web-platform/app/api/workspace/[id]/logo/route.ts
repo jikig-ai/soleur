@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { reportSilentFallback } from "@/server/observability";
+import { toPublicStorageUrl } from "@/lib/supabase/public-storage-url";
 import {
   SlidingWindowCounter,
   startPruneInterval,
@@ -89,10 +90,17 @@ export async function GET(
     return NextResponse.json({ error: "Bad gateway" }, { status: 502 });
   }
 
+  // The service client signs storage URLs against SUPABASE_URL (the raw
+  // <ref>.supabase.co host in prod), but CSP img-src is built from
+  // NEXT_PUBLIC_SUPABASE_URL (the public custom domain) — so a 302 to the raw
+  // host is CSP-blocked → <img> onError → monogram (#4996→#5012). Rewrite the
+  // origin to the public host so the redirect target matches img-src.
+  const location = toPublicStorageUrl(signed.data.signedUrl);
+
   return new NextResponse(null, {
     status: 302,
     headers: {
-      Location: signed.data.signedUrl,
+      Location: location,
       "Cache-Control": `private, max-age=${SIGNED_TTL_SECONDS}`,
       "X-Content-Type-Options": "nosniff",
     },

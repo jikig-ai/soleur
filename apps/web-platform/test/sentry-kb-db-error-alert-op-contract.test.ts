@@ -16,7 +16,7 @@ import { describe, it, expect } from "vitest";
 // filter dimensions against that drift.
 //
 // Substring match only (code-simplicity, mirrors
-// sentry-kb-tenant-mint-alert-op-contract): each slug is an inline string
+// sentry-kb-sync-silent-failure-alert-op-contract): each slug is an inline string
 // literal at its emit site; a whole-file match finds it. No TS const/AST
 // resolution required.
 

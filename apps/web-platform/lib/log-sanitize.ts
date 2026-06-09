@@ -5,9 +5,9 @@
  * JavaScript consumers treat them as line terminators — re-enabling log
  * injection through a "sanitized" log value.
  *
- * `server/pdf-linearize.ts` has a private copy that replaces stripped
- * characters with "?" (intentional — keeps qpdf stderr readable). Do not
- * fold it into this helper.
+ * `server/pdf-linearize.ts` and `server/c4-render.ts` each have a private copy
+ * that replaces stripped characters with "?" (intentional — keeps qpdf/likec4
+ * stderr readable). Do not fold them into this helper.
  *
  * @param value  String to sanitize.
  * @param maxLen Truncation cap, defaults to 500 to bound structured-log

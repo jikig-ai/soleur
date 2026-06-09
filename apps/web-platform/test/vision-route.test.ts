@@ -1,29 +1,40 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
-import { mockQueryChain } from "./helpers/mock-supabase";
 
 // ---------------------------------------------------------------------------
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
 // ---------------------------------------------------------------------------
 
-const { mockGetUser, mockFrom, mockTryCreateVision, mockValidateOrigin } =
-  vi.hoisted(() => ({
-    mockGetUser: vi.fn(),
-    mockFrom: vi.fn(),
-    mockTryCreateVision: vi.fn(),
-    mockValidateOrigin: vi.fn(),
-  }));
+const {
+  mockGetUser,
+  mockTryCreateVision,
+  mockValidateOrigin,
+  mockResolveActiveWorkspacePath,
+} = vi.hoisted(() => ({
+  mockGetUser: vi.fn(),
+  mockTryCreateVision: vi.fn(),
+  mockValidateOrigin: vi.fn(),
+  mockResolveActiveWorkspacePath: vi.fn(),
+}));
+
+const serviceClientSentinel = { from: vi.fn() };
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
     auth: { getUser: mockGetUser },
   })),
-  createServiceClient: vi.fn(() => ({
-    from: mockFrom,
-  })),
+  createServiceClient: vi.fn(() => serviceClientSentinel),
 }));
 
 vi.mock("@/server/vision-helpers", () => ({
   tryCreateVision: mockTryCreateVision,
+}));
+
+// #5005 — the route now resolves the ACTIVE workspace path via the
+// membership-scoped resolver instead of the caller's own `users.workspace_path`
+// column. Per-resolver unit coverage lives in
+// test/server/kb-active-workspace-scoping.test.ts.
+vi.mock("@/server/workspace-resolver", () => ({
+  resolveActiveWorkspacePath: mockResolveActiveWorkspacePath,
 }));
 
 vi.mock("@/lib/auth/validate-origin", () => ({
@@ -59,7 +70,6 @@ function buildRequest(body: unknown): Request {
   });
 }
 
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -67,6 +77,7 @@ function buildRequest(body: unknown): Request {
 beforeEach(() => {
   vi.clearAllMocks();
   mockValidateOrigin.mockReturnValue({ valid: true, origin: "https://app.soleur.ai" });
+  mockResolveActiveWorkspacePath.mockResolvedValue("/workspaces/user-1");
 });
 
 describe("POST /api/vision", () => {
@@ -75,9 +86,6 @@ describe("POST /api/vision", () => {
       data: { user: { id: "user-1" } },
       error: null,
     });
-    mockFrom.mockReturnValue(
-      mockQueryChain({ workspace_path: "/workspaces/user-1" }),
-    );
     mockTryCreateVision.mockResolvedValue(undefined);
 
     const res = await POST(buildRequest({ content: "A marketplace for freelance designers" }));
@@ -91,6 +99,35 @@ describe("POST /api/vision", () => {
     );
   });
 
+  test("writes vision.md under the resolver's ACTIVE path for a stale-own-row caller (#5005)", async () => {
+    // Post-ADR-044 / invited-member caller: the caller's own
+    // `users.workspace_path` is empty, but the resolver resolves a DIVERGENT
+    // active workspace path. First-run vision creation must succeed there — NOT
+    // 503 "Workspace not provisioned" (the pre-#5005 bug for recent signups).
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: "user-1" } },
+      error: null,
+    });
+    mockResolveActiveWorkspacePath.mockResolvedValue("/workspaces/active-ws-divergent");
+    mockTryCreateVision.mockResolvedValue(undefined);
+
+    const res = await POST(buildRequest({ content: "A valid startup idea here" }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    // Resolver invoked with the caller id + the service client — never the
+    // caller's own (empty) users row.
+    expect(mockResolveActiveWorkspacePath).toHaveBeenCalledWith(
+      "user-1",
+      serviceClientSentinel,
+    );
+    expect(mockTryCreateVision).toHaveBeenCalledWith(
+      "/workspaces/active-ws-divergent",
+      "A valid startup idea here",
+    );
+  });
+
   test("returns 401 when user is not authenticated", async () => {
     mockGetUser.mockResolvedValue({
       data: { user: null },
@@ -100,6 +137,7 @@ describe("POST /api/vision", () => {
     const res = await POST(buildRequest({ content: "test idea" }));
 
     expect(res.status).toBe(401);
+    expect(mockResolveActiveWorkspacePath).not.toHaveBeenCalled();
   });
 
   test("returns 400 when content field is missing", async () => {
@@ -111,18 +149,19 @@ describe("POST /api/vision", () => {
     const res = await POST(buildRequest({}));
 
     expect(res.status).toBe(400);
+    expect(mockTryCreateVision).not.toHaveBeenCalled();
   });
 
-  test("returns 503 when workspace is not provisioned", async () => {
+  test("returns 500 when vision creation throws", async () => {
     mockGetUser.mockResolvedValue({
       data: { user: { id: "user-1" } },
       error: null,
     });
-    mockFrom.mockReturnValue(mockQueryChain(null));
+    mockTryCreateVision.mockRejectedValueOnce(new Error("EPERM"));
 
-    const res = await POST(buildRequest({ content: "A valid startup idea" }));
+    const res = await POST(buildRequest({ content: "A valid startup idea here" }));
 
-    expect(res.status).toBe(503);
+    expect(res.status).toBe(500);
   });
 
   test("returns 403 when CSRF validation fails", async () => {

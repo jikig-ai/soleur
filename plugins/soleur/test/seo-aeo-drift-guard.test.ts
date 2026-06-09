@@ -807,8 +807,8 @@ describe("#3169/#3170/#3994 evergreen pages render stat-led summary + last-updat
 
 // -- Test 15: #4410 /getting-started/ definition + external citations -------
 // The single weakest page for AI-engine extractability gets a plain-language
-// Soleur definition at the top and ≥2 external citations (Apache-2.0, Claude
-// Code docs, MCP spec). Assert on the built page.
+// Soleur definition at the top and ≥2 external citations (BSL 1.1 LICENSE,
+// Claude Code docs, MCP spec). Assert on the built page.
 
 describe("#4410 /getting-started/ has a plain-language definition + external citations", () => {
   test("renders one .page-definition and ≥2 distinct external citation hrefs", () => {
@@ -842,8 +842,8 @@ describe("#4410 /getting-started/ has a plain-language definition + external cit
     // Pin the three audit-mandated sources (host-anchored, not bare substring).
     const hostMatched = (re: RegExp) => [...hrefs].some((h) => re.test(h));
     expect(
-      hostMatched(/^https:\/\/www\.apache\.org\//),
-      "cites Apache-2.0 license",
+      hostMatched(/^https:\/\/github\.com\//),
+      "cites the BSL 1.1 LICENSE on GitHub",
     ).toBe(true);
     expect(
       hostMatched(/^https:\/\/docs\.claude\.com\//),

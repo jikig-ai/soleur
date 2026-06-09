@@ -61,7 +61,15 @@ if [[ "${BOOTSTRAP_MIGRATIONS:-1}" == "0" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MIGRATIONS_DIR="$SCRIPT_DIR/../supabase/migrations"
+# Default to the real dir; tests may override via RUN_MIGRATIONS_TEST_DIR to
+# a temp staging dir so they never write transient *.sql into the real
+# migrations tree (#4957). The git ls-tree gate (below) intentionally stays
+# anchored to the canonical repo path — a temp-dir filename absent from
+# origin/main still trips the gate, which is exactly what the gate test
+# exercises. A test-scoped var name (not MIGRATIONS_DIR) avoids any collision
+# with a same-named secret a future Doppler config might inject via
+# `doppler run` in the prod migrate step.
+MIGRATIONS_DIR="${RUN_MIGRATIONS_TEST_DIR:-$SCRIPT_DIR/../supabase/migrations}"
 
 command -v psql >/dev/null 2>&1 || { echo "::error::psql not found on PATH"; exit 1; }
 

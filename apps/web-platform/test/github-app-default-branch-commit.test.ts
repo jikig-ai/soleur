@@ -40,6 +40,7 @@ vi.mock("../server/logger", () => ({
 }));
 
 import { getDefaultBranchHeadCommitAt } from "../server/github-app";
+import { loadGithubFixture } from "./fixtures/github/load";
 
 // Unique installation ids so the per-id token cache never short-circuits the
 // token-mint fetch between tests.
@@ -47,11 +48,14 @@ let nextId = 70_000;
 const uid = () => nextId++;
 
 function tokenSuccess() {
+  const body = loadGithubFixture<{ token: string; expires_at: string }>(
+    "installation-access-token",
+  );
   return {
     ok: true,
     status: 200,
     json: async () => ({
-      token: "ghs_dbc_test_token",
+      ...body,
       expires_at: new Date(Date.now() + 3_600_000).toISOString(),
     }),
     text: async () => "",

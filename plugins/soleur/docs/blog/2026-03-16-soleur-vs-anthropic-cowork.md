@@ -22,7 +22,7 @@ This article examines both platforms on the dimensions that matter: knowledge ar
 
 In March 2026, Anthropic's Cowork technology expanded into Microsoft 365. [Microsoft launched Copilot Cowork on March 9, 2026](https://the-decoder.com/microsoft-brings-anthropics-claude-cowork-into-copilot-to-run-tasks-across-outlook-teams-and-excel/), in close collaboration with Anthropic, bringing Claude's Cowork capabilities into Outlook, Teams, and Excel. The Microsoft 365 E7 bundle — which packages Copilot, Entra Suite, and Agent 365 — became available in May 2026 at $99/user/month.
 
-**Soleur** is an open-source [Company-as-a-Service]({{ site.url }}/company-as-a-service/) platform. It deploys {{ stats.agents }} agents across {{ stats.departments }} business departments — engineering, marketing, legal, finance, operations, product, sales, and support — with a compounding knowledge base that accumulates institutional memory across every session and every domain.
+**Soleur** is a source-available (BSL 1.1) [Company-as-a-Service]({{ site.url }}/company-as-a-service/) platform. It deploys {{ stats.agents }} agents across {{ stats.departments }} business departments — engineering, marketing, legal, finance, operations, product, sales, and support — with a compounding knowledge base that accumulates institutional memory across every session and every domain.
 
 ## Where They Differ
 
@@ -60,7 +60,7 @@ Microsoft Copilot Cowork adds multi-step plan execution within M365 — users de
 
 Cowork is bundled with every Claude subscription. [Claude Pro runs $20/month](https://claude.com/pricing), Team at $25/seat/month with an annual commitment. If you already pay for Claude Pro, you already have Cowork. That value proposition is real.
 
-Soleur's open-source core is free — Apache-2.0 licensed. Every agent, every skill, every line of code is public and inspectable. A paid tier for hosted features is planned but not yet released.
+Soleur's core is free and source-available under BSL 1.1. Every agent, every skill, every line of code is public and inspectable. A paid tier for hosted features is planned but not yet released.
 
 The cost comparison is not only monetary. If your operational context lives in Cowork's session-scoped memory, it exists only while that session is open. Soleur's institutional knowledge compounds in your repository, under your control, indefinitely. The knowledge you build using Soleur is yours — version-controlled, transferable, auditable.
 
@@ -70,7 +70,7 @@ Microsoft Copilot Cowork carries an additional license at $30/user/month on top 
 
 Cowork is proprietary. Anthropic offers plugin templates on GitHub, but the core platform is closed. You cannot inspect how agents make decisions, audit what data is retained, or modify the platform's behaviors.
 
-Soleur is Apache-2.0 open source. The full codebase is public. Every agent's instructions, every skill's workflow, every guardrail's logic is readable and modifiable. The platform was designed, built, and shipped using itself — every PR reviewed, every feature compounded back into the system that built it.
+Soleur is source-available (BSL 1.1). The full codebase is public. Every agent's instructions, every skill's workflow, every guardrail's logic is readable and modifiable. The platform was designed, built, and shipped using itself — every PR reviewed, every feature compounded back into the system that built it.
 
 ---
 
@@ -81,11 +81,11 @@ Soleur is Apache-2.0 open source. The full codebase is public. Every agent's ins
 | **Cross-domain knowledge base** | None. Plugins are siloed. | Work IQ: workspace context from emails, files, chats. | Compounding. Grows across every session and every domain. |
 | **Domains covered** | 10 categories: HR, Design, Engineering, Ops, Finance (IB, ER, PE, WM), Brand Voice | Microsoft 365 applications: Outlook, Teams, Excel | {{ stats.departments }} departments: Engineering, Marketing, Legal, Finance, Operations, Product, Sales, Support |
 | **Workflow orchestration** | Individual task invocation | Multi-step M365 task execution | Lifecycle workflows (brainstorm → plan → implement → review → compound) with artifacts at each stage |
-| **Pricing** | Included with Claude Pro ($20/mo), Team ($25/seat/mo annual) | $30/user/month add-on; M365 E7 bundle $99/user/month (available May 2026) | Free (open source). Paid tier planned. |
-| **Open source** | Proprietary | Proprietary | Apache-2.0. Full source code. |
+| **Pricing** | Included with Claude Pro ($20/mo), Team ($25/seat/mo annual) | $30/user/month add-on; M365 E7 bundle $99/user/month (available May 2026) | Free (source-available). Paid tier planned. |
+| **Source availability** | Proprietary | Proprietary | Source-available (BSL 1.1). Full source code. |
 | **Terminal / Claude Code integration** | Not applicable — web/desktop interface | Not applicable — Microsoft 365 surface | Native — runs inside Claude Code terminal workflow |
 | **Enterprise connectors** | Google Workspace, DocuSign, Apollo, FactSet, LegalZoom, Harvey, Slack (15+) | Microsoft 365 native (Outlook, Teams, Excel, SharePoint) | MCP ecosystem via Claude Code |
-| **Current availability** | Live (Pro, Team, Enterprise plans) | Live (M365 E7 bundle, May 2026) | Live (open source) |
+| **Current availability** | Live (Pro, Team, Enterprise plans) | Live (M365 E7 bundle, May 2026) | Live (source-available) |
 
 ---
 
@@ -109,7 +109,7 @@ Soleur is Apache-2.0 open source. The full codebase is public. Every agent's ins
 - You work in the terminal via Claude Code
 - You need institutional memory that compounds across sessions, not resets
 - You need cross-domain coherence — marketing that references legal, engineering that references compliance, finance that reflects competitive intelligence
-- You care about open-source transparency: auditable agents, modifiable workflows, your knowledge on your machine
+- You care about source-available transparency: auditable agents, modifiable workflows, your knowledge on your machine
 - You are building a company, not executing isolated tasks
 
 The choice is not which platform lists more features. It is which architecture fits how you build.
@@ -132,7 +132,7 @@ Cowork's session-scoped model is a valid design choice for executing expert task
 
 ## Start Building
 
-Soleur runs {{ stats.agents }} agents across {{ stats.departments }} departments with a compounding knowledge base that gets more powerful every day you use it. Open source, terminal-first, built by a solo founder using the platform itself.
+Soleur runs {{ stats.agents }} agents across {{ stats.departments }} departments with a compounding knowledge base that gets more powerful every day you use it. Source-available, terminal-first, built by a solo founder using the platform itself.
 
 ```
 claude plugin install soleur
@@ -154,7 +154,7 @@ No. Cowork plugins operate independently without a shared cross-domain knowledge
 <details>
 <summary>Is Soleur free compared to Cowork?</summary>
 
-Cowork is bundled with Claude subscriptions — Claude Pro is $20/month. Soleur's core is free and open-source under the Apache-2.0 license. Both have free access. The difference is architecture: Cowork's knowledge is session-scoped; Soleur's compounds indefinitely in your own repository.
+Cowork is bundled with Claude subscriptions — Claude Pro is $20/month. Soleur's core is free and source-available under BSL 1.1. Both have free access. The difference is architecture: Cowork's knowledge is session-scoped; Soleur's compounds indefinitely in your own repository.
 
 </details>
 
@@ -204,7 +204,7 @@ Cowork executes individual tasks per plugin invocation. You provide context, rec
       "name": "Is Soleur free compared to Cowork?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Cowork is bundled with Claude subscriptions — Claude Pro is $20/month. Soleur's core is free and open-source under the Apache-2.0 license. Both have free access. The difference is architecture: Cowork's knowledge is session-scoped; Soleur's compounds indefinitely in your own repository."
+        "text": "Cowork is bundled with Claude subscriptions — Claude Pro is $20/month. Soleur's core is free and source-available under BSL 1.1. Both have free access. The difference is architecture: Cowork's knowledge is session-scoped; Soleur's compounds indefinitely in your own repository."
       }
     },
     {

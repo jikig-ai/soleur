@@ -50,6 +50,7 @@ vi.mock("../server/logger", () => ({
 }));
 
 import { generateInstallationToken } from "../server/github-app";
+import { loadGithubFixture } from "./fixtures/github/load";
 
 let nextId = 90_000;
 function uniqueId() {
@@ -68,10 +69,10 @@ describe("generateInstallationToken — mint-time observability", () => {
       ok: true,
       status: 200,
       json: async () => ({
+        ...loadGithubFixture("installation-access-token"),
+        // Distinct sentinel value the test asserts is NEVER logged.
         token: "ghs_super_secret_value",
         expires_at: new Date(Date.now() + 3_600_000).toISOString(),
-        repository_selection: "selected",
-        permissions: { issues: "write", contents: "read", metadata: "read" },
       }),
       text: async () => "",
     });

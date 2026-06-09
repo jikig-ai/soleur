@@ -57,6 +57,36 @@ describe("buildC4ConciergeTools", () => {
     expect(tools.map((t) => t.name)).toContain(EDIT_C4_DIAGRAM_TOOL);
   });
 
+  it("tool description states the diagram re-renders, gated on `rerendered` (Layer 2)", () => {
+    const tools = buildC4ConciergeTools(opts) as unknown as Array<{
+      name: string;
+      description: string;
+    }>;
+    const t = tools.find((x) => x.name === EDIT_C4_DIAGRAM_TOOL);
+    expect(t).toBeTruthy();
+    const desc = t!.description;
+    // Layer 2: the diagram now re-renders; the model is told to key on `rerendered`.
+    expect(desc).toContain("rerendered");
+    expect(desc.toLowerCase()).toMatch(/re-render/);
+    // The stale Layer-1 copy must be gone.
+    expect(desc.toLowerCase()).not.toContain("out-of-band");
+    expect(desc.toLowerCase()).not.toContain("cannot trigger");
+  });
+
+  it("propagates the writeC4Diagram `rerendered` flag in the tool response", async () => {
+    mocks.writeC4Diagram.mockResolvedValue({
+      ok: true,
+      commitSha: "abc123",
+      rerendered: true,
+    });
+    const res = await handler()({
+      relativePath: "engineering/architecture/diagrams/model.c4",
+      content: "model {}",
+    });
+    const payload = JSON.parse(res.content[0].text);
+    expect(payload).toMatchObject({ ok: true, rerendered: true });
+  });
+
   it("forwards relativePath + content and closes over the repo coords", async () => {
     mocks.writeC4Diagram.mockResolvedValue({ ok: true, commitSha: "abc123" });
     const res = await handler()({

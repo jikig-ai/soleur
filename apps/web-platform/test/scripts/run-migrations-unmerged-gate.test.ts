@@ -1,15 +1,11 @@
 import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { spawnSync } from "node:child_process";
 import {
-  openSync,
-  writeSync,
   writeFileSync,
-  closeSync,
-  unlinkSync,
   mkdtempSync,
   chmodSync,
+  cpSync,
   rmSync,
-  constants as fsConstants,
 } from "node:fs";
 import { resolve, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -24,31 +20,50 @@ import { randomBytes } from "node:crypto";
 // grant_action_class shape).
 //
 // The gate is git-local: `git ls-tree origin/main -- <path>` returns empty
-// for files not on main; non-empty (a blob entry) for files on main. The
-// test writes a synthetic file with a randomized suffix into the real
-// migrations dir (the SUT's *.sql glob roots there); on-disk leak protection
-// runs via afterAll + a process.on("exit") sweep + a beforeAll precondition
-// that fails fast if a stale synthetic file from a prior crashed run
-// already exists.
+// for files not on main; non-empty (a blob entry) for files on main.
+//
+// Test isolation (#4957): the synthetic `zzz_*` fixture is staged in a
+// per-process temp dir (a copy of the real migrations dir) and the SUT is
+// pointed at it via RUN_MIGRATIONS_TEST_DIR — it is NEVER written into the
+// real apps/web-platform/supabase/migrations/ tree. Previously the fixture
+// was written into the real dir, where four sibling suites
+// (dsar-worm-guc-sites, dsar-message-redact-fields-sweep, migration-rpc-grants,
+// dsar-allowlist-completeness) readdirSync + readFileSync the same directory;
+// when this producer's afterAll unlinkSync'd the fixture between a reader's
+// readdir and its read, the reader hit ENOENT. Staging in a temp dir removes
+// the shared write surface entirely. The git ls-tree gate below stays anchored
+// to the canonical repo path (basename-only lookup), so a temp-dir filename
+// absent from origin/main still trips the gate — exactly what these tests
+// exercise.
 
 const REPO_ROOT = resolve(__dirname, "../../../..");
 const SCRIPT_PATH = resolve(__dirname, "../../scripts/run-migrations.sh");
-const MIGRATIONS_DIR = resolve(__dirname, "../../supabase/migrations");
+const REAL_MIGRATIONS_DIR = resolve(__dirname, "../../supabase/migrations");
 
 // Per-process randomized filename — survives parallel vitest workers + watch-
 // mode reruns. The `zzz_` prefix sorts after every real migration so the
 // glob's *.sql expansion processes it last (real migrations run first; the
 // gate fires on this synthetic file at the end of the loop).
 const SYNTHETIC_FILE = `zzz_unmerged_gate_${randomBytes(4).toString("hex")}.sql`;
-const SYNTHETIC_MIGRATION = join(MIGRATIONS_DIR, SYNTHETIC_FILE);
 
 // A known-merged migration (PR-I, on origin/main as of 2026-05-21). Used by
 // the positive control test below; if PR-I is ever reverted, switch to
 // `001_initial_schema.sql` (the earliest stable filename).
 const KNOWN_MERGED_FILE = "053_template_authorizations.sql";
 
+// Each runScript spawns bash + the psql stub + git + schema probes; give
+// headroom over the 16s global default so a slow/contended CI runner does not
+// flake. The minimal-fixture rewrite (2 git spawns vs ~130) is the real fix;
+// this is belt-and-braces.
+const SLOW_SUBPROCESS_TIMEOUT_MS = 45_000;
+
 // Track every tempdir mkdtempSync allocates so afterAll can sweep them.
 const stubDirs: string[] = [];
+
+// The per-process staging dir holding a copy of the real migrations + the
+// synthetic fixture. Set in beforeAll, swept in afterAll. The SUT globs this
+// dir via RUN_MIGRATIONS_TEST_DIR instead of the real migrations tree.
+let tempMigrationsDir = "";
 
 function makePsqlStub(): string {
   const dir = mkdtempSync(join(tmpdir(), "psql-stub-"));
@@ -87,6 +102,12 @@ function runScript(env: Record<string, string | undefined>): {
     env: {
       ...process.env,
       ...env,
+      // Point the SUT's *.sql glob at the temp staging dir (#4957) so the
+      // synthetic fixture never lands in the real migrations tree. The gate's
+      // `git ls-tree origin/main -- apps/web-platform/supabase/migrations/<name>`
+      // predicate stays anchored to the canonical path (basename-only), so it
+      // still fires for the temp-dir-only `zzz_*` file.
+      RUN_MIGRATIONS_TEST_DIR: tempMigrationsDir,
       PATH: `${stubDir}:${process.env.PATH ?? ""}`,
     },
     encoding: "utf8",
@@ -100,13 +121,16 @@ function runScript(env: Record<string, string | undefined>): {
 }
 
 function sweep(): void {
-  // Try-unlink + tolerate-ENOENT. Avoids the TOCTOU pattern of
-  // `if (existsSync(path)) unlinkSync(path)` flagged by CodeQL
-  // js/file-system-race.
-  try {
-    unlinkSync(SYNTHETIC_MIGRATION);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  // Best-effort recursive removal of the temp staging dir + psql stub dirs.
+  // No file is ever written into the real migrations tree, so there is
+  // nothing to unlink there. `force: true` tolerates already-removed dirs
+  // (e.g., a process.on("exit") sweep after afterAll already ran).
+  if (tempMigrationsDir) {
+    try {
+      rmSync(tempMigrationsDir, { recursive: true, force: true });
+    } catch {
+      /* best-effort sweep — already-removed dir is fine */
+    }
   }
   for (const dir of stubDirs) {
     try {
@@ -119,33 +143,41 @@ function sweep(): void {
 
 describe("scripts/run-migrations.sh — unmerged-apply gate (#4241)", () => {
   beforeAll(() => {
-    // Atomic exclusive create (O_CREAT|O_EXCL|O_WRONLY) — fails fast with
-    // EEXIST if the file is present, no TOCTOU window between exists-check
-    // and write. CodeQL js/file-system-race compliance.
-    let fd: number;
-    try {
-      fd = openSync(
-        SYNTHETIC_MIGRATION,
-        fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY,
-        0o644,
-      );
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-        throw new Error(
-          `precondition: ${SYNTHETIC_MIGRATION} already exists. ` +
-            `Likely orphaned from a prior crashed run — delete manually before re-running.`,
-        );
-      }
-      throw err;
-    }
-    try {
-      writeSync(
-        fd,
-        "-- synthetic test migration; never on origin/main.\nSELECT 1;\n",
-      );
-    } finally {
-      closeSync(fd);
-    }
+    // Stage a MINIMAL per-process migrations dir — one known-merged file plus
+    // the synthetic unmerged fixture — instead of copying the whole real tree.
+    // The dir is never the real tree (mkdtemp under os.tmpdir(); #4957
+    // isolation preserved), so sibling suites that readdir the real dir are
+    // unaffected.
+    //
+    // Why minimal, not a full copy (#4906): the SUT loops over every *.sql in
+    // the dir, spawning a `git ls-tree origin/main` subprocess PER FILE
+    // (run-migrations.sh:208). A full ~130-file copy means ~130 sequential git
+    // spawns per `runScript` × 3 runs, pushing each test to the 16s testTimeout
+    // boundary (flaky on slower machines). It also breaks the synthetic-only
+    // invariant the moment THIS branch adds its own in-PR migration (present on
+    // disk, absent from origin/main): the gate `exit 1`s on the FIRST unmerged
+    // file in glob order, so it would fire on the in-PR migration instead of
+    // SYNTHETIC_FILE. A two-file fixture {known-merged, synthetic} reproduces
+    // the gate behavior exactly (gate at :208 runs BEFORE the already-applied
+    // skip at :258, so the psql stub doesn't shadow it) with ~2 git spawns per
+    // run — fast and robust regardless of the working tree's unmerged set.
+    tempMigrationsDir = mkdtempSync(join(tmpdir(), "run-migrations-gate-"));
+    // Guard against a future refactor leaving tempMigrationsDir empty: the
+    // script's `${RUN_MIGRATIONS_TEST_DIR:-<real dir>}` default would then
+    // silently fall back to the REAL dir, and the gate-blocks test could pass
+    // for the wrong reason (firing on a real worktree file, not the synthetic).
+    expect(tempMigrationsDir).toBeTruthy();
+    // KNOWN_MERGED_FILE is on origin/main, so the gate stays silent on it
+    // (positive control). Copy the real file so its content is byte-faithful;
+    // the psql stub means it is never actually applied.
+    cpSync(
+      join(REAL_MIGRATIONS_DIR, KNOWN_MERGED_FILE),
+      join(tempMigrationsDir, KNOWN_MERGED_FILE),
+    );
+    writeFileSync(
+      join(tempMigrationsDir, SYNTHETIC_FILE),
+      "-- synthetic test migration; never on origin/main.\nSELECT 1;\n",
+    );
     // Belt-and-braces: process.on("exit") fires even on uncaught throws /
     // explicit process.exit() that vitest's afterAll cannot intercept.
     process.on("exit", sweep);
@@ -161,16 +193,20 @@ describe("scripts/run-migrations.sh — unmerged-apply gate (#4241)", () => {
       ALLOW_UNMERGED_DEV_APPLY: undefined,
     });
     expect(status).toBe(1);
-    // The gate fires on the FIRST unmerged file the *.sql glob hits (this is
-    // the synthetic `zzz_*` if no other unmerged migration exists locally, or
-    // a lower-prefix unmerged migration introduced by this same PR if one
-    // sorts first). Assert the contract — the script exits with `::error::`
-    // referencing the unmerged-on-main predicate — not the specific filename.
-    // ::error:: lands on stdout (the script uses `echo`, not `echo >&2`).
+    // The temp staging dir holds a copy of the real (all on-origin/main)
+    // migrations plus exactly one unmerged file: SYNTHETIC_FILE. So the gate
+    // fires deterministically on the synthetic basename. Assert the contract
+    // (`::error::` + the unmerged-on-main predicate) AND pin the synthetic
+    // filename so a regression that trips the gate on a *different* file (or
+    // fires it for everything) cannot pass. ::error:: lands on stdout (the
+    // script uses `echo`, not `echo >&2`).
     expect(stdout).toMatch(/::error::Migration .*\.sql is NOT on origin\/main/i);
+    expect(stdout).toMatch(
+      new RegExp(`Migration ${SYNTHETIC_FILE} is NOT on origin/main`, "i"),
+    );
     expect(stdout).toMatch(/ALLOW_UNMERGED_DEV_APPLY=1/);
     expect(stderr).toBe("");
-  });
+  }, SLOW_SUBPROCESS_TIMEOUT_MS);
 
   test("ALLOW_UNMERGED_DEV_APPLY=1: gate warns and proceeds (exit 0)", () => {
     const { stdout, status } = runScript({
@@ -186,7 +222,7 @@ describe("scripts/run-migrations.sh — unmerged-apply gate (#4241)", () => {
       new RegExp(`${SYNTHETIC_FILE} is not on origin/main`, "i"),
     );
     expect(stdout).toMatch(/ALLOW_UNMERGED_DEV_APPLY=1/);
-  });
+  }, SLOW_SUBPROCESS_TIMEOUT_MS);
 
   test("positive control: known-merged filename does NOT trigger the gate", () => {
     // Without this test, a regression that fires the gate for every file
@@ -206,5 +242,5 @@ describe("scripts/run-migrations.sh — unmerged-apply gate (#4241)", () => {
     expect(stdout).not.toMatch(
       new RegExp(`${KNOWN_MERGED_FILE}.*is not on origin/main`, "i"),
     );
-  });
+  }, SLOW_SUBPROCESS_TIMEOUT_MS);
 });

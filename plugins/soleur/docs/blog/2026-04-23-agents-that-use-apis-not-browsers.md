@@ -2,7 +2,7 @@
 title: "Agents That Use APIs, Not Browsers (2026)"
 seoTitle: "Agents That Use APIs, Not Browsers — Service Automation for Solo Founders | Soleur"
 date: 2026-04-23
-description: "Service automation for solo founders, built on direct APIs instead of server-side browsers. Open source. Encrypted tokens. 3 live integrations shipped."
+description: "Service automation for solo founders, built on direct APIs instead of server-side browsers. Source-available (BSL 1.1). Encrypted tokens. 3 live integrations shipped."
 ogImage: "blog/og-agents-that-use-apis-not-browsers.png"
 tags:
   - announcement
@@ -11,7 +11,7 @@ tags:
   - company-as-a-service
 ---
 
-Running a company alone means running a lot of vendor dashboards. Cloudflare, Stripe, Plausible, Resend, Hetzner — every one of them is a tab you keep open, a form you fill out, a setting you remember to flip. "Service automation" is the layer that lets an agent do that vendor work on your behalf, through the same APIs you would call by hand. Soleur's service automation shipped this week, and it is open source.
+Running a company alone means running a lot of vendor dashboards. Cloudflare, Stripe, Plausible, Resend, Hetzner — every one of them is a tab you keep open, a form you fill out, a setting you remember to flip. "Service automation" is the layer that lets an agent do that vendor work on your behalf, through the same APIs you would call by hand. Soleur's service automation shipped this week, and it is source-available (BSL 1.1).
 
 The bet underneath it: **agents should talk to APIs, not browsers.** We spent a month proving that out. Here is what we built, what we rejected, and what you can use today.
 
@@ -64,7 +64,7 @@ The launch cut is honest about where we are. Three live API automations, two gui
 - **14 BYOK providers** hooked into the credential store.
 - **AES-256-GCM** for data-at-rest, **per-user HKDF-SHA256** key derivation. Your tokens, encrypted at rest, used by your agents. Each user's ciphertext is keyed to their own derived secret — a database leak does not yield usable credentials without the per-user material.
 
-The PR was 1,685 lines across 15 files, added 20+ new tests, and shipped green against the existing suite. It is public, it is open source, and you can read every line.
+The PR was 1,685 lines across 15 files, added 20+ new tests, and shipped green against the existing suite. It is public, it is source-available, and you can read every line.
 
 <div class="cta-block">
 

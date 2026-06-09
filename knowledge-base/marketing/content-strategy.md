@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-03
-last_reviewed: 2026-05-25
+last_updated: 2026-06-08
+last_reviewed: 2026-06-08
 review_cadence: weekly
 owner: CMO
 depends_on:
@@ -26,6 +26,31 @@ This document defines what content Soleur needs, why, in what order, and how it 
 ## Content Gap Analysis
 
 Twelve content gaps block Soleur's organic discovery and category authority. Ranked by strategic impact. Gaps marked `[COMPLETED]` are addressed; their history is preserved for institutional context.
+
+> **[2026-06-08 Cascade from full six-tier CI scan]** Two net-new content gaps and one reframing surfaced (detail in Gaps 13–14 below; Gap 5 reframed from single-rival to autonomous-CaaS-pack). Summary of the competitive shifts driving them: (1) **Tier 0 repriced to metered/credit billing in one window** — Copilot "AI Credits" (June 1) drew 10–50x agentic-bill backlash; Codex promo expiry; Notion credits. Opens a "predictable pricing + you own your memory" content angle. (2) **The skills-library rival `alirezarezvani/claude-skills` grew to 337 skills / 5,200+ stars / 12+ tools** — Soleur's "more agents/skills" proof point is no longer defensible; content must pivot to **workflow depth** (per brand-guide.md: emphasize what happens *between* the agents). (3) **Notion paywalled Custom Agents to Business/Enterprise (May 4)** — evicts the free/Plus solo-founder long tail, Soleur's exact ICP: a targeted acquisition-content opportunity.
+
+### Gap 13: "Predictable Pricing in a Metered-Billing World" (High) [NEW 2026-06-08]
+
+**What is missing:** No content positions Soleur's flat, predictable, git-native cost model against the Tier 0 metered-billing shift. GitHub Copilot's move to usage-based "AI Credits" (June 1) removed model fallback and drove 10–50x agentic-bill increases with public backlash; Codex, Cursor, and Notion are all on credits/token billing.
+
+**Why it matters:** "Agentic billing is painful" is now a felt, searched grievance. A founder burned by a surprise Copilot bill is primed for a predictable-pricing story. Caveat for the writer: lead with **predictability + ownership ("your memory lives in your git repo")**, NOT "cheaper" — Soleur's own hosted COGS lives in the same metered-compute reality. Coordinate with pricing-strategy.md (2026-06-08).
+
+**Content needed:**
+
+- Blog post: "Why Your AI Coding Bill Just Jumped 10x — and What Predictable Agentic Pricing Looks Like"
+- Angle woven into the pricing page when it ships: flat $49, you keep 100%, no metered surprises.
+
+### Gap 14: "Workflow Depth, Not Agent Count" Proof Pivot (Critical) [NEW 2026-06-08]
+
+**What is missing:** Soleur's marketing proof leans on counts ("60+ agents, 60+ skills"). The plugin-layer rival `alirezarezvani/claude-skills` now claims 337 skills / 30+ agents / 12+ tools — explicitly more, in more environments. The count race is lost; no content yet makes the **lifecycle-depth** argument the headline.
+
+**Why it matters:** Per brand-guide.md (Priority recommendation echoed in the 2026-06-08 CI scan), Soleur's durable moat is the brainstorm → plan → work → review → compound lifecycle with named per-stage artifacts and enforced handoffs — what happens *between* the agents — plus the git-tracked KB. Content must shift the proof point from quantity to choreography.
+
+**Content needed:**
+
+- Pillar/position piece: "It's Not the Number of Agents. It's What Happens Between Them." (stage-gated lifecycle, artifact handoffs, compounding memory)
+- "Built with Soleur" case study framed around lifecycle stages, not agent headcount.
+- Refresh proof points across existing pages from "60+ agents" toward "the stage-gated company lifecycle" (coordinate with brand-guide.md numbers-as-soft-floors rule).
 
 ### Gap 1: Cross-Domain Compounding Narrative (Critical) [UPDATED 2026-03-20]
 
@@ -80,17 +105,19 @@ Twelve content gaps block Soleur's organic discovery and category authority. Ran
 - Connection to Every.to's compound engineering methodology
 - Comparison table: vibe coding vs. agentic engineering vs. compound engineering
 
-### Gap 5: Autopilot vs. Decision-Maker Positioning Against Polsia (Critical) [NEW 2026-03-09, UPDATED 2026-03-20]
+### Gap 5: Autopilot vs. Decision-Maker Positioning Against the Autonomous-CaaS Pack (Critical) [NEW 2026-03-09, UPDATED 2026-06-08]
 
-**What is missing:** Polsia has accelerated to $1.5M ARR with 2,000+ autonomously managed companies. Pricing at $29-59/month. The "Soleur vs Polsia" comparison (audit P2-3, score 16/20) is the next priority comparison article. A standalone position paper on autonomy vs. founder-in-the-loop is still needed.
+**What is missing:** The autonomy-vs-founder-in-the-loop position paper is still unwritten, and the field has grown from one rival to a pack. **[2026-06-08 cascade update]** Polsia **raised $30M at a $250M valuation** (May 2026) — venture-validated, not the "$450K / shrinking" read of the prior scan; all ARR claims remain unverified/contradictory (~$10M vs ~$689K). **NanoCorp** (`nanocorp.so`, Phospho/YC) is now a second autonomous-CaaS rival with the same "make money while you sleep" pitch (note: its ads product is "Coming Soon," not live; ARR claims contradictory). The "Soleur vs Polsia" page exists (published 2026-03-26) but needs a figures refresh; a "Soleur vs NanoCorp" page does not exist.
 
-**Why it matters:** Polsia's growth validates the CaaS market thesis aggressively. Solo founders evaluating both platforms need content that frames the trade-off clearly. Without it, Polsia's "AI runs your company while you sleep" narrative goes unchallenged.
+**Why it matters:** The CaaS market thesis is now aggressively validated AND funded. Solo founders evaluating these platforms need content that frames the trade-off clearly. The shared vulnerability across the pack — fully autonomous black-box operation plus a ~20% revenue cut — is exactly Soleur's wedge (founder-in-the-loop, you keep 100%, git-owned memory). Without this content, the "AI runs your company while you sleep" narrative goes unchallenged across multiple rivals.
 
 **Content needed:**
 
 - Pillar article: "Autopilot vs. Decision-Maker: Two Models for AI Company Operation"
-- Comparison page: "Soleur vs. Polsia" (audit P2-3, score 16/20) **[2026-03-22: PRIORITY ELEVATED -- Polsia delivers via web dashboard, which is now Soleur's target delivery surface. The comparison shifts from "terminal vs. cloud" to "founder-controlled vs. autonomous" since the delivery format is no longer a differentiator.]**
+- Comparison page: "Soleur vs. Polsia" — published 2026-03-26; **refresh figures** (remove any "shrinking/$450K" framing; Polsia raised $30M @ $250M, ARR unverified).
+- Comparison page: **"Soleur vs. NanoCorp"** (new) — founder-in-the-loop + 8 domains vs. narrow autonomous GTM engine; flag ads as "Coming Soon" and ARR as unverified.
 - Blog post: "Why Human Judgment Compounds Better Than Full Autonomy"
+- Blog/positioning angle: **"You Keep 100%"** — the ~20% revenue-cut shared by Polsia and NanoCorp vs. Soleur's flat pricing and git-owned memory.
 
 ### Gap 6: Cursor Agent Platform Positioning (Critical) [COMPLETED 2026-03-19]
 
@@ -426,4 +453,4 @@ All article URLs distributed via social-distribute use platform-specific UTM par
 
 ---
 
-_Updated: 2026-05-03 (added Issue #3108: schedule --once + multi-agent-review D5 narrative). Previously: 2026-03-22 (business validation delivery pivot annotation). Sources: content-plan.md (2026-03-17), content-audit.md (2026-03-17), aeo-audit.md (2026-03-17), seo-audit.md (2026-03-17), competitive-intelligence.md (2026-03-22), brand-guide.md (2026-03-22), business-validation.md (2026-03-22)._
+_Updated: 2026-06-08 (cascade from full six-tier CI scan: Gap 5 reframed to autonomous-CaaS pack incl. Polsia $30M/$250M + NanoCorp; added Gap 13 metered-pricing angle and Gap 14 workflow-depth proof pivot). Previously: 2026-05-03 (Issue #3108). Sources: competitive-intelligence.md (2026-06-08), brand-guide.md (2026-06-01), business-validation.md (2026-03-22)._

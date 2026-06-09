@@ -89,6 +89,40 @@ describe("WorkspaceIdentityTile", () => {
       expect(queryByTestId("workspace-logo-img")).toBeNull();
       expect(getByTestId("workspace-identity-tile").textContent).toBe("A");
     });
+
+    it("cache-busts the proxy src on a same-tab logo change for THIS workspace (AC4 replace)", async () => {
+      const { WORKSPACE_LOGO_CHANGED_EVENT } = await import("@/lib/workspace-logo-events");
+      const { getByTestId } = render(
+        <WorkspaceIdentityTile name="Acme" size="md" workspaceId={WS} hasLogo />,
+      );
+      expect(
+        (getByTestId("workspace-logo-img") as HTMLImageElement).getAttribute("src"),
+      ).toBe(`/api/workspace/${WS}/logo`);
+      // A change for THIS workspace busts the cache (new src → bypasses max-age=300).
+      fireEvent(
+        window,
+        new CustomEvent(WORKSPACE_LOGO_CHANGED_EVENT, { detail: { workspaceId: WS } }),
+      );
+      expect(
+        (getByTestId("workspace-logo-img") as HTMLImageElement).getAttribute("src"),
+      ).toBe(`/api/workspace/${WS}/logo?v=1`);
+    });
+
+    it("ignores a logo change for a DIFFERENT workspace (no needless refetch)", async () => {
+      const { WORKSPACE_LOGO_CHANGED_EVENT } = await import("@/lib/workspace-logo-events");
+      const { getByTestId } = render(
+        <WorkspaceIdentityTile name="Acme" size="md" workspaceId={WS} hasLogo />,
+      );
+      fireEvent(
+        window,
+        new CustomEvent(WORKSPACE_LOGO_CHANGED_EVENT, {
+          detail: { workspaceId: "99999999-9999-9999-9999-999999999999" },
+        }),
+      );
+      expect(
+        (getByTestId("workspace-logo-img") as HTMLImageElement).getAttribute("src"),
+      ).toBe(`/api/workspace/${WS}/logo`); // unchanged
+    });
   });
 
   it("is pure presentational — imports neither OrgSwitcherContainer nor LiveRepoBadge (ADR-047 single-mount)", () => {

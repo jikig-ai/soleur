@@ -33,6 +33,8 @@ import {
   KbNotFoundError,
 } from "@/server/kb-reader";
 import { isMarkdownKbPath } from "@/lib/kb-extensions";
+import { parseLikeC4Embed } from "@/lib/c4-embed";
+import { C4_MODEL_JSON } from "@/lib/c4-constants";
 import { shareHashVerdictCache } from "@/server/share-hash-verdict-cache";
 import {
   readPdfMetadata,
@@ -43,6 +45,7 @@ import {
 import { createChildLogger } from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
 import { purgeSharedToken } from "@/server/cf-cache-purge";
+import { workspacePathForWorkspaceId } from "@/server/workspace-resolver";
 
 const log = createChildLogger("kb-share");
 
@@ -200,6 +203,19 @@ export async function createShare(
   documentPath: string,
 ): Promise<CreateShareResult> {
   if (documentPath.includes("\0")) {
+    // Workstream A (cq-silent-fallback-must-mirror-to-sentry): mirror every
+    // pre-insert validation return so the failing branch is observable. null
+    // err + explicit message (kb-share.ts preview-invariant shape);
+    // reason === the CreateShareErrorCode literal so Sentry pivots on reason.
+    // invalid-path/too-large are partly attacker-reachable (crafted path) —
+    // tag reason so on-call distinguishes a probe from a regression; do NOT
+    // escalate to art33Breach.
+    reportSilentFallback(null, {
+      feature: "kb-share",
+      op: "create",
+      message: "share rejected: null byte in document path",
+      extra: { userId, documentPath, reason: "invalid-path" },
+    });
     return invalidPath();
   }
   const fullPath = path.join(kbRoot, documentPath);
@@ -209,6 +225,12 @@ export async function createShare(
   // reintroduce the CodeQL js/file-system-race TOCTOU window the
   // pre-PR route deliberately avoided.
   if (!isPathInWorkspace(fullPath, kbRoot)) {
+    reportSilentFallback(null, {
+      feature: "kb-share",
+      op: "create",
+      message: "share rejected: document path escapes workspace root",
+      extra: { userId, documentPath, reason: "invalid-path" },
+    });
     return invalidPath();
   }
 
@@ -222,6 +244,12 @@ export async function createShare(
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ELOOP" || code === "EMLINK") {
       // 403 to match KbAccessDeniedError; telemetry keys on `code`.
+      reportSilentFallback(null, {
+        feature: "kb-share",
+        op: "create",
+        message: "share rejected: terminal symlink (O_NOFOLLOW)",
+        extra: { userId, documentPath, reason: "symlink-rejected" },
+      });
       return {
         ok: false,
         status: 403,
@@ -229,6 +257,12 @@ export async function createShare(
         error: "Access denied",
       };
     }
+    reportSilentFallback(null, {
+      feature: "kb-share",
+      op: "create",
+      message: "share rejected: document not found",
+      extra: { userId, documentPath, reason: "not-found" },
+    });
     return {
       ok: false,
       status: 404,
@@ -242,6 +276,12 @@ export async function createShare(
   try {
     const stat = await handle.stat();
     if (!stat.isFile()) {
+      reportSilentFallback(null, {
+        feature: "kb-share",
+        op: "create",
+        message: "share rejected: target is not a regular file",
+        extra: { userId, documentPath, reason: "not-a-file" },
+      });
       return {
         ok: false,
         status: 400,
@@ -250,6 +290,12 @@ export async function createShare(
       };
     }
     if (stat.size > MAX_BINARY_SIZE) {
+      reportSilentFallback(null, {
+        feature: "kb-share",
+        op: "create",
+        message: "share rejected: file exceeds maximum size limit",
+        extra: { userId, documentPath, reason: "too-large" },
+      });
       return {
         ok: false,
         status: 413,
@@ -534,6 +580,16 @@ export type PreviewShareResult =
       size: number;
       filename: string;
       firstPagePreview?: FirstPagePreview;
+      // View-parity with the public render path: a shared markdown doc that
+      // embeds a ```likec4-view block renders an interactive diagram on
+      // /shared/[token] (served by /api/shared/[token]/c4). hasDiagram flags
+      // that the recipient sees a diagram; diagramModelBuilt is false when the
+      // committed model.likec4.json is missing — in which case the recipient
+      // sees a "model not built" state even though the markdown itself is fine.
+      // Lets an agent previewing a share know to (re)build the diagram before
+      // sending. Absent on binary shares and on markdown with no embed.
+      hasDiagram?: boolean;
+      diagramModelBuilt?: boolean;
     }
   | {
       ok: false;
@@ -546,10 +602,9 @@ type PreviewShareRow = {
   document_path: string;
   revoked: boolean;
   content_sha256: string | null;
-  users:
-    | { workspace_path: string | null; workspace_status: string | null }
-    | { workspace_path: string | null; workspace_status: string | null }[]
-    | null;
+  // ADR-044: KB root is keyed off the share's workspace_id (matching the create
+  // path), NOT the owner's legacy users.workspace_path/workspace_status columns.
+  workspace_id: string;
 };
 
 // Map any error thrown by validateBinaryFile / readContentRaw /
@@ -688,6 +743,29 @@ async function maybeFirstPagePreview(
  * TOCTOU-safe: every openBinaryStream call passes `expected: { ino, size }`
  * so a rename-swap between validate and read closes out as content-changed.
  */
+/**
+ * Best-effort probe: does the committed `model.likec4.json` exist for the
+ * diagram dir of `documentPath` (its own directory)? Mirrors the public C4
+ * endpoint's dir derivation + workspace-containment guard. Never throws —
+ * any error (missing dir, traversal, non-file) resolves to `false` so the
+ * preview degrades to "diagram not built" rather than failing the whole
+ * preview.
+ */
+async function c4ModelExists(
+  kbRoot: string,
+  documentPath: string,
+): Promise<boolean> {
+  try {
+    const dir = path.dirname(documentPath);
+    if (dir.includes("\0") || dir.includes("..")) return false;
+    const jsonAbs = path.join(kbRoot, dir, C4_MODEL_JSON);
+    if (!isPathInWorkspace(jsonAbs, kbRoot)) return false;
+    return (await fs.promises.stat(jsonAbs)).isFile();
+  } catch {
+    return false;
+  }
+}
+
 export async function previewShare(
   serviceClient: ShareServiceClient,
   token: string,
@@ -712,9 +790,7 @@ export async function previewShare(
         };
       }
     )
-      .select(
-        "document_path, revoked, content_sha256, users!inner(workspace_path, workspace_status)",
-      )
+      .select("document_path, revoked, content_sha256, workspace_id")
       .eq("token", token)
       .single()) as {
       data: PreviewShareRow | null;
@@ -795,17 +871,11 @@ export async function previewShare(
     };
   }
 
-  const owner = Array.isArray(row.users) ? row.users[0] : row.users;
-  if (!owner?.workspace_path || owner.workspace_status !== "ready") {
-    return {
-      ok: false,
-      status: 404,
-      code: "not-found",
-      error: "Document no longer available",
-    };
-  }
-
-  const kbRoot = kbRootResolver(owner.workspace_path);
+  // ADR-044: resolve the KB root from the share's workspace_id (matching the
+  // create path), NOT the owner's legacy users row. A de-provisioned workspace
+  // surfaces as KbNotFoundError → 404 at the file-read step below; the content
+  // hash gate guarantees the bytes still match what was shared.
+  const kbRoot = kbRootResolver(workspacePathForWorkspaceId(row.workspace_id));
   const documentPath = row.document_path;
   const contentSha256 = row.content_sha256;
 
@@ -820,6 +890,17 @@ export async function previewShare(
           error: "Document has changed since share was created",
         };
       }
+      // View-parity: when the doc embeds a likec4-view, the recipient sees an
+      // interactive diagram (rendered from the committed model.likec4.json in
+      // the doc's own dir). Probe model availability so an agent previewing the
+      // share knows whether the diagram will render or show "model not built".
+      const embed = parseLikeC4Embed(buffer.toString("utf8"));
+      const diagramFields = embed
+        ? {
+            hasDiagram: true,
+            diagramModelBuilt: await c4ModelExists(kbRoot, documentPath),
+          }
+        : {};
       return {
         ok: true,
         status: 200,
@@ -829,6 +910,7 @@ export async function previewShare(
         contentType: "text/markdown",
         size: buffer.length,
         filename: path.basename(documentPath),
+        ...diagramFields,
       };
     } catch (err) {
       return mapPreviewError(err, tokenPrefix, documentPath);

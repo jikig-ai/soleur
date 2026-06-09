@@ -161,6 +161,48 @@ error line.
 a labeled audit issue BEFORE exiting. Mirror the `STEP 1b / STEP 2 / STEP 3 /
 STEP 4` early-exit guards in `scheduled-content-generator.yml` for parity.
 
+> **content-generator has a handler-level fallback (#4960, PR adding
+> `ensure-audit-issue`).** Prompt-level guards only cover terminations that
+> reach a prompt step — a mid-eval crash, an upstream Anthropic API 500 that
+> kills `claude --print`, or a max-turns kill bypasses every prompt step and
+> still produces nothing. `cron-content-generator.ts` now runs a handler-level
+> `ensure-audit-issue` step AFTER the output-aware `verify-output` check: when
+> no `scheduled-content-generator` issue exists in the run window, the handler
+> itself files a self-reporting FAILED `[Scheduled] Content Generator - <date>`
+> issue (carrying `exitCode` / `durationMs` / redacted `stdoutTail`) so the run
+> is never silent. So for content-generator specifically, a silent window now
+> means the **handler fallback ALSO failed** — check Sentry for
+> `op: ensure-audit-issue-failed` (the GitHub-create itself erred), not just the
+> prompt. The 8 other always-create producers still rely on the prompt-only
+> guard; generalizing this fallback cohort-wide is a tracked follow-up.
+
+> **bwrap bash-sandbox userns failure was a recurring H2 cause — now removed
+> from the cron path (#5000/#5004).** The cron eval substrate spawns
+> `claude --print` whose `Bash` tool calls ran inside a bwrap OS sandbox. When
+> the cloud runner's kernel `apparmor_restrict_unprivileged_userns` drifted 0→1,
+> bwrap could not acquire a user namespace, every `Bash` call failed, and the
+> prompt never reached its `gh issue create` / `git push` step — so the
+> handler-level fallback self-reported FAILED (#5000 growth-audit, #5004
+> roadmap-review, 2026-06-08). The host-side sysctl fix (#4932 boot-persistent
+> `bwrap-userns-sysctl.service`) recurred 4 days later, proving the host path is
+> not durable for the cron. **Durable fix:** the cron's settings overlay
+> (`DEFAULT_CLAUDE_SETTINGS` in
+> `apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts`)
+> now sets `sandbox.enabled: false` (drops the bwrap dependency entirely —
+> host-independent, immune to sysctl drift) paired with
+> `permissions.defaultMode: "bypassPermissions"` (restores the headless bash
+> auto-approval the sandbox previously provided via `autoAllowBashIfSandboxed` —
+> the pairing is load-bearing; sandbox-off ALONE blocks every `gh`/`git`
+> command on an unanswerable prompt). This is the runtime overlay written into
+> each ephemeral cron workspace — NOT the repo-root `.claude/settings.json`,
+> which governs interactive dev sessions and intentionally stays
+> sandbox-enabled. Post-fix, a bwrap host drift can no longer silence a
+> producer; the host sysctl (#4932) + non-blocking drift detector (#4944) remain
+> as defense-in-depth for any NON-cron sandbox consumer (e.g. the user/agent
+> workspace via `server/workspace.ts`). So a post-fix FAILED self-report whose
+> `stdoutTail` still names `bwrap` / `Operation not permitted` / `/proc` would be
+> a genuinely new regression, not this class.
+
 ### H3 — Doppler `prd_scheduled` service token rotated or revoked
 
 Doppler service tokens are per-config. If the `prd_scheduled` service token was
@@ -560,6 +602,61 @@ this contract will cause duplicate issues or missed auto-closes.
   produces a labeled audit issue and counts as signal. If the schedule is
   broken but operators keep running manually, the watchdog will NOT fire.
   Weekly review of the actual schedule (cron vs. dispatch) is the backstop.
+
+## Cron Containment Model (#5018 / #5000 / #5004)
+
+Cron-spawned `claude --print` agents run with the **OS bash sandbox disabled**
+(`sandbox.enabled:false` in the substrate's `DEFAULT_CLAUDE_SETTINGS`). This is the
+durable fix for the recurring bwrap-userns drift (#4928/#4932) that broke #5000/#5004 —
+the cron no longer depends on unprivileged user namespaces. The host sysctl pin
+(#4932/#4944) stays only as defense-in-depth for **non-cron** sandbox consumers.
+
+**Containment = a deny-by-default `PreToolUse` hook**, not the sandbox and not
+`--allowedTools`. Phase-0 probes (re-verified on the prod-pinned CLI `2.1.79`) proved
+headless `claude --print` does NOT fail-close non-allowlisted commands via
+`--allowedTools`/`defaultMode` — only a `permissions.deny` rule or a hook blocks, and an
+unhooked tool class / crashed hook fails OPEN. So:
+
+- `cron-bash-allowlist-hook.mjs` is registered under a `*` catch-all matcher
+  (`buildCronEvalSettings`); it denies everything except a per-cron allowlist
+  (`CRON_BASH_ALLOWLISTS`) + inert internal tools, and denies all secret-reads / egress /
+  interpreters / argument-injection. Its decision logic is unit-tested
+  (`cron-bash-allowlist-hook.test.ts`, 43 adversarial cases).
+- A **spawn-time self-test** (`runHookSelfTest`) aborts the cron with a FAILED
+  self-report if the hook does not deny a canonical exfil payload — never an unprotected run.
+- The token `bypassPermissions` MUST NOT appear in the overlay (the v1 P1-blocked
+  exfil primitive). See ADR-033 **I7**.
+
+### Tier-1 vs Tier-2
+
+- **Tier-1** (hook-contained, scheduled): crons whose entire command surface is a finite
+  allowlist — currently `cron-roadmap-review` (#5004). Add a cron here by enumerating its
+  prompt's `gh`/`git` verbs into `CRON_BASH_ALLOWLISTS` (sub-command granularity, e.g.
+  `gh issue list` NOT `gh issue`; never `git config`/`git remote`) and validating end-to-end
+  via `/soleur:trigger-cron`.
+- **Tier-2** (`TIER2_DEFERRED_CRONS`, PAUSED): broad-bash crons (and Node-level
+  `spawn("bash")` crons, which the hook does NOT cover at all). They early-return via
+  `deferIfTier2Cron` — an honest on-schedule check-in, no claude spawn, no output issue.
+  **Visible degradation:** their weekly `[Scheduled]` output issues stop appearing (this is
+  expected, not a regression). They are restored by the **Tier-2 network-egress firewall +
+  least-privilege installation token** (deferred follow-up) — the durable boundary.
+
+**Promoting a paused cron to Tier-1:** enumerate its verbs → add to `CRON_BASH_ALLOWLISTS`
+→ remove from `TIER2_DEFERRED_CRONS` → `/soleur:trigger-cron <cron>` and confirm it produces
+its output end-to-end. If the hook denies a needed verb, the run produces no
+output → its monitor stays GREEN (heartbeat) but nothing lands — re-check the allowlist.
+
+**Verifying a trigger — the output signal is cron-specific (issue OR PR).** Do NOT assume the
+success signal is a `[Scheduled] <task>` *issue*. `roadmap-review` (and any cron with an
+auto-fix path) takes the **PR path** whenever it finds something to fix — it opens a roadmap
+PR (author `app/soleur-ai`) carrying the review summary in the PR body and files the standalone
+issue only when there is nothing to auto-fix (rare for a living roadmap). So when validating a
+Tier-1 cron post-trigger, accept **either** a fresh `[Scheduled]` issue **or** a fresh
+`app/soleur-ai` PR as proof the cron ran end-to-end through the hook — a PR proves *more* (its
+full `git checkout → add → commit → push -u origin → gh pr create` chain succeeded through the
+containment). A monitor that watches only for the issue will false-negative on the PR path.
+**Why:** AC11 of #5018 — roadmap-review consistently produced PRs (#5053, #5058), never the
+issue; the issue-only check timed out despite the containment working perfectly.
 
 ## References
 

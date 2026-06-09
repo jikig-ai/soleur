@@ -110,13 +110,135 @@ describe("CONTENT_GENERATOR_PROMPT — anchor strings (regression-detection)", (
       ],
       [
         '@11ty/eleventy',
-        "Eleventy build validation",
+        "CI Eleventy build validation (referenced as the CI gate, not a local build)",
       ],
     ])("contains %s (%s)", (anchor) => {
       expect(SUT_SOURCE).toContain(anchor);
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// #4987 — skill + build-validation degradation fix.
+//   (A) CLAUDE_CODE_FLAGS must let the headless `claude --print` eval resolve
+//       AND invoke the plugin's /soleur:* skills: `--plugin-dir plugins/soleur`
+//       loads the symlinked plugin (a bare plugins/ dir does NOT auto-register
+//       in headless mode — see feature-request-plugin-dir-settings.md), and the
+//       `--allowedTools` allowlist must include `Skill` (invoke skills) + `Task`
+//       (content-writer's fact-checker subagent).
+//   (B) STEP 4 build validation cannot run in the no-node_modules shallow clone;
+//       it is deferred to the PR's CI gate (which the --auto merge blocks on).
+// ---------------------------------------------------------------------------
+
+describe("CLAUDE_CODE_FLAGS — skill + plugin-dir resolution (#4987)", () => {
+  const flagsMatch = SUT_SOURCE.match(
+    /const CLAUDE_CODE_FLAGS = \[([\s\S]*?)\];/,
+  );
+  const flagsBlock = flagsMatch ? flagsMatch[1] : "";
+
+  it("CLAUDE_CODE_FLAGS array is present in source", () => {
+    expect(flagsBlock.length).toBeGreaterThan(0);
+  });
+
+  it("--allowedTools allowlist includes Skill and Task (invoke /soleur:* + fact-checker subagent)", () => {
+    expect(SUT_SOURCE).toContain(
+      '"Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Skill,Task"',
+    );
+  });
+
+  it("loads the symlinked plugin via --plugin-dir plugins/soleur", () => {
+    expect(flagsBlock).toContain('"--plugin-dir"');
+    expect(flagsBlock).toContain('"plugins/soleur"');
+    expect(flagsBlock).toMatch(/"--plugin-dir",\s*\n\s*"plugins\/soleur",/);
+  });
+
+  it("--plugin-dir is positioned BEFORE the load-bearing `--` end-of-options marker", () => {
+    // `"--"` (quote-dash-dash-quote) is the standalone marker; `"--print"` etc.
+    // never contain it, so indexOf is unambiguous.
+    const endMarker = flagsBlock.indexOf('"--"');
+    expect(endMarker).toBeGreaterThan(-1);
+    expect(flagsBlock.indexOf('"--plugin-dir"')).toBeLessThan(endMarker);
+    expect(flagsBlock.indexOf('"plugins/soleur"')).toBeLessThan(endMarker);
+  });
+
+  it("does NOT bump the turn budget — --max-turns 50 unchanged", () => {
+    expect(SUT_SOURCE).toContain('"--max-turns",\n  "50",');
+  });
+});
+
+describe("CONTENT_GENERATOR_PROMPT — STEP 4 CI-deferred validation (#4987)", () => {
+  // Capture the STEP 4 block (STEP 4 heading → STEP 5 heading) so assertions bind
+  // to STEP 4 specifically, not the prompt as a whole. This guards the defect
+  // CLASS — a local-build imperative reappearing in STEP 4 under ANY wording —
+  // rather than one exact byte-string. Per test-design review of PR #4989.
+  const step4Match = SUT_SOURCE.match(/STEP 4 —[\s\S]*?\nSTEP 5 —/);
+  const step4 = step4Match ? step4Match[0] : "";
+
+  it("STEP 4 block is present in the prompt", () => {
+    expect(step4.length).toBeGreaterThan(0);
+  });
+
+  it("STEP 4 defers validation to CI and forbids a local build", () => {
+    expect(step4).toMatch(/Validation runs in CI/);
+    expect(step4).toContain("no node_modules");
+    expect(step4).toMatch(/do NOT build locally/i);
+  });
+
+  it("STEP 4 issues no bare local-build imperative (defect-class guard)", () => {
+    // No line inside STEP 4 may START with a build/validation command — the old
+    // shape was `STEP 4 — Validate:\nnpx @11ty/eleventy\nbash scripts/validate-…`.
+    // The Eleventy/link commands may appear ONLY as inline references to the CI
+    // gate (e.g. CI runs "npx @11ty/eleventy"), never as a leading imperative.
+    expect(step4).not.toMatch(/^\s*npx @11ty\/eleventy/m);
+    expect(step4).not.toMatch(/^\s*bash scripts\/validate-blog-links\.sh/m);
+  });
+
+  it("STEP 4 still names the CI validation commands (@11ty/eleventy + validate-blog-links)", () => {
+    expect(step4).toContain("@11ty/eleventy");
+    expect(step4).toContain("validate-blog-links");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Silence-hole fallback guard (#4960). The handler can terminate without the
+// prompt's STEP 6 audit issue (mid-eval crash / API 500 / max-turns kill); the
+// `ensure-audit-issue` step creates a self-reported FAILED audit issue so the
+// run is never silent and the cron-cloud-task-heartbeat watchdog stays green.
+// ---------------------------------------------------------------------------
+
+describe("ensure-audit-issue fallback — source-shape anchors (#4960)", () => {
+  it.each([
+    ['"ensure-audit-issue"', "handler fallback step id"],
+    ["[Scheduled] Content Generator -", "audit-issue title prefix literal"],
+    ["scheduled-content-generator", "audit-issue label literal"],
+    ["ensure-audit-issue-failed", "reportSilentFallback op for a failed fallback create"],
+  ])("source contains %s (%s)", (anchor) => {
+    expect(SUT_SOURCE).toContain(anchor);
+  });
+
+  it("fallback step is gated on the output-aware result (heartbeatOk === false)", () => {
+    // The create must NOT fire when the prompt already produced an issue.
+    expect(SUT_SOURCE).toMatch(/if\s*\(\s*!heartbeatOk\s*\)/);
+  });
+
+  it("fallback create is wrapped in try/catch → reportSilentFallback (never throws)", () => {
+    const stepMatch = SUT_SOURCE.match(
+      /"ensure-audit-issue"[\s\S]+?reportSilentFallback\([\s\S]+?op:\s*"ensure-audit-issue-failed"/,
+    );
+    expect(stepMatch).not.toBeNull();
+  });
+
+  it("does NOT bump the turn budget — --max-turns 50 is unchanged (Deliverable 3)", () => {
+    expect(SUT_SOURCE).toContain('"--max-turns",\n  "50",');
+  });
+});
+
+// NOTE: the behavioral coverage for the audit-issue fallback now lives in
+// cron-shared.test.ts (`ensureScheduledAuditIssue (shared fallback)`) — the
+// helper was extracted into _cron-shared.ts and parameterized for all 8
+// always-create producers (#4978). The wiring (the call site + `!heartbeatOk`
+// gate) stays guarded by the source-shape anchors above and by
+// cron-producer-output-wiring.test.ts.
 
 describe("buildSpawnEnv allowlist (security surface)", () => {
   const buildEnvMatch = SUT_SOURCE.match(

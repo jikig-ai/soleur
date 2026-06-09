@@ -20,13 +20,26 @@ export interface KbChatContextValue {
   messageCount: number;
   setMessageCount: (n: number) => void;
   /**
-   * When true, the desktop side chat panel + its trigger are suppressed. Set by
-   * surfaces that embed their own Concierge (e.g. the C4 workspace renders the
-   * Concierge beside the diagram), so the document chat isn't double-mounted
-   * with the same contextPath. Optional for backward-compat with test mocks.
+   * When true, the desktop side chat panel is suppressed (NOT the header
+   * trigger). Set by surfaces that embed their own Concierge (e.g. the C4
+   * workspace renders the Concierge beside the diagram), so the document chat
+   * isn't double-mounted with the same contextPath. Optional for backward-compat
+   * with test mocks.
    */
   suppressSidebar?: boolean;
   setSuppressSidebar?: (v: boolean) => void;
+  /**
+   * Reveal/collapse state for an EMBEDDED Concierge (the C4 workspace's
+   * diagram-side panel). DISTINCT from `open` (the desktop side panel) so the
+   * header `KbChatTrigger` can drive the C4 embedded panel without re-mounting
+   * a second side-panel Concierge — the suppressSidebar mount stays unmounted.
+   * Defaults model "open" so the C4 Concierge shows by default (parity with the
+   * pre-lift local `conciergeCollapsed = false` initial state). Optional for
+   * backward-compat with test mocks.
+   */
+  embeddedConciergeOpen?: boolean;
+  revealEmbeddedConcierge?: () => void;
+  collapseEmbeddedConcierge?: () => void;
 }
 
 export const KbChatContext = createContext<KbChatContextValue | null>(null);

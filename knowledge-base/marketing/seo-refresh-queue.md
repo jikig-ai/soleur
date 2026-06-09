@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-06-02
-last_reviewed: 2026-06-02
+last_updated: 2026-06-08
+last_reviewed: 2026-06-08
 review_cadence: monthly
 owner: CMO
 depends_on:
@@ -215,6 +215,33 @@ Based on competitive intelligence scan of 2026-03-12, the following comparison p
 ---
 
 _Updated: 2026-06-02. Sources: content-audit.md (2026-03-17), aeo-audit.md (2026-03-17), seo-audit.md (2026-03-17), content-plan.md (2026-03-17), competitive-intelligence.md (2026-05-30). Priority 1 items completed in biweekly growth execution 2026-04-01; competitor rows reconciled 2026-06-02._
+
+## Stale Comparison Pages Flagged for Regeneration (2026-06-08)
+
+Flagged by the full six-tier competitive-intelligence scan (`competitive-intelligence.md`, 2026-06-08). These comparison/pillar pages carry figures now contradicted by the latest scan and should be regenerated or corrected.
+
+| Page | Status | Reason | Priority |
+|------|--------|--------|----------|
+| **Soleur vs. Polsia** | Stale — Update | **Trajectory reversed.** Page copy and any prior "$450K ARR / shrinking" framing are wrong: Polsia **raised $30M at a $250M valuation (May 2026)**; newer reports claim ~$10M ARR / 7,600 customers / 85% retention (all unverified). Do not imply Polsia is shrinking. Keep $49 base + 20% rev-share. | P1 |
+| **Soleur vs. NanoCorp** | **Create** | NanoCorp (`nanocorp.so`, Phospho/YC) is a Tier 3 autonomous-CaaS competitor with no comparison page. Differentiators: founder-in-the-loop, 8 domains vs. narrow GTM engine, **ads "Coming Soon" not live**, $30/mo + 20% withdrawal fee. Target: "soleur vs nanocorp", "autonomous AI company", "nanocorp alternative". Flag self-reported ARR as unverified/contradictory. | P2 |
+| **Soleur vs. Notion Custom Agents** | Stale — Update | **Paywall completed:** Custom Agents now **Business/Enterprise-only**, $10/1,000 credits (free beta ended May 3). Add the "founders priced out of free/Plus Notion agents" angle — Soleur's ICP eviction window. | P2 |
+| **Soleur vs. Paperclip** | Stale — Update | Stars **30k → 53k+ in first 6 weeks** (~15% fork ratio). **Confirm canonical repo before publishing**: `paperclipai/paperclip` vs `agencyenterprise/paperclip-ai`. Complementary-not-substitute framing holds. | P2 |
+| **Soleur vs. Cursor** | Stale — Update | **Composer 2.5 (May 18)**: frontier-quality at ~1/10 cost/token. Six-tier pricing (Hobby/Pro/Pro+/Ultra/Teams/Enterprise). Refresh benchmarks + pricing; keep "engineering-only vs. 8-domain organization." | P3 |
+| **Soleur vs. OpenAI Codex** | Create / Update | Codex is now a Tier 0 threat with **Sites** (deploy websites/apps), multi-agent, memory, 90+ plugins, scheduled tasks; $100/mo Pro 5x. If a page exists, it must move from "engineering-only." | P3 |
+| **Soleur vs. Tanka** | Stale — Update | Tanka **open-sourced EverMemOS**. Sharpen differentiation: open memory-engine ≠ Soleur's git-tracked, founder-readable, lifecycle-tied cross-domain KB. | P3 |
+| **Soleur vs. CrewAI** | Stale — Update | Add scale/funding context: 47.8k stars, 27M+ PyPI downloads, ~2B executions, $18M Series A. Honest "framework vs. ready-made organization" framing holds. | P3 |
+| **Best Claude Code Plugins 2026** | Stale — Update | Official marketplace grew 101 → **186 plugins** (June 7). `alirezarezvani/claude-skills` now **337 skills / 5,200+ stars / 12+ tools**. Ensure Soleur's positioning vs. the largest skill library is current. | P3 |
+
+### New monitoring rows (add to §3.1 at next full edit)
+
+- **OpenAI Codex** — now Tier 0 (Sites, multi-agent, memory, 90+ plugins). Trigger: deeper business-domain agents.
+- **GitHub Copilot** — metered "AI Credits" billing (June 1), 10–50x agentic-bill backlash. Trigger: pricing-pain content opportunity; monitor sentiment.
+- **alirezarezvani/claude-skills** — 337 skills, 12+ tools, Solo Founder persona. Trigger: featured in official Anthropic marketplace.
+- **NanoCorp** — Phospho/YC autonomous CaaS. Trigger: ships ads (currently "Coming Soon"), adds engineering/legal/finance domains, or publishes verified ARR.
+
+_Flagged: 2026-06-08. Source: competitive-intelligence.md (2026-06-08, full six-tier scan)._
+
+---
 
 ## Auto-Discovered Topics
 

@@ -88,13 +88,18 @@ If a production URL is available, verify the deployment:
 curl -sf --max-time 10 "<production-url>/api/health" | jq .
 ```
 
-**If health check succeeds:** Record the response and proceed.
+**If health check succeeds:** Record the response, set `HEALTH_VERIFIED=true`, and proceed.
 
-**If health check fails or no URL configured:** Warn and proceed (not all PRs trigger deployments):
+**If health check fails or no URL configured:** set `HEALTH_VERIFIED=false`, warn, and proceed (not all PRs trigger deployments):
 
 ```text
 WARNING: No production health check available. Skipping deployment verification.
 ```
+
+`HEALTH_VERIFIED` is the explicit signal Phase 3.8 gates the feature-tweet draft
+on — a ship tweet must only be drafted for a feature confirmed live. Track it as
+a literal `true`/`false`; do NOT infer "verified" from "reached this line" (the
+warn-and-proceed branch also falls through to the next phase).
 
 ## Phase 3.5: Sentry Cron Monitor Health
 
@@ -240,6 +245,40 @@ ROLLBACK_REASON=$(gh run view "$RELEASE_RUN_ID" --log 2>/dev/null \
 
 **Why a watch and not a pre-merge block:** the only faithful validation of a deploy gate is a real deploy, which by definition happens post-merge. The pre-merge half of the rule — ship the gate non-blocking first — lives in `wg-dark-launch-deploy-gates`; this phase is the safety net that catches a gate shipped blocking-first anyway, turning "every deploy silently rolls back" into a named, one-revert recovery. **Why:** #4932 — a canary bwrap probe validated only against an always-succeeding test mock failed on a healthy host and rolled back every web-platform deploy until reverted (#4941).
 
+## Phase 3.8: Feature-Tweet Draft (green-gated)
+
+Convert a feature **confirmed live** into a draft short-form X post. Runs
+eligibility FIRST, then gates the draft on `HEALTH_VERIFIED` (set in Phase 3).
+
+```bash
+bash scripts/lib/tweet-eligibility.sh <merged-pr-number>
+```
+
+Branch on the result:
+
+- **Ineligible** (exit non-zero, `excluded: <reason>`) → **silent no-op.** Most
+  PRs land here (fixes, infra, non-product); exclusion is the designed outcome,
+  not a fault. Do not surface it in the report.
+- **Eligible AND `HEALTH_VERIFIED=true`** → invoke the draft generator:
+
+  ```
+  /soleur:feature-tweet #<merged-pr-number>
+  ```
+
+  Surface the resulting draft path in the Phase 7 report with the operator
+  instruction: "set BOTH `publish_date` and `status: scheduled` to publish."
+- **Eligible AND `HEALTH_VERIFIED=false`** → do NOT draft (no verified-live
+  signal). Print a catch-up instruction instead of silently skipping:
+
+  > Eligible PR #N shipped but no production-health signal was verified — no
+  > draft written. After confirming the deploy, run `/soleur:feature-tweet #N`.
+
+**Multi-PR contract (explicit v1):** one tweet per eligible PR, using postmerge's
+single bound PR number. If a deploy bundled multiple PRs, only the bound PR is
+drafted — note in the Phase 7 report that other eligible PRs need the standalone
+catch-up path. `/soleur:merge-pr`-only flows bypass this hook by design; the
+recovery is standalone `/soleur:feature-tweet #N`.
+
 ## Phase 4: Verify File Freshness
 
 Read key files from the merged commit to verify they match expectations -- NOT from the bare repo filesystem which may contain stale content.
@@ -313,6 +352,7 @@ Sentry monitors: <HEALTHY/WARNING/SKIPPED>
 Sentry error-count delta: <AUTO-RESOLVED/STOPPED/STILL-FIRING/SKIPPED>
 File freshness: <N files verified>
 Browser verification: <PASSED/SKIPPED>
+Feature-tweet draft: <path + "flip publish_date + status: scheduled to publish" / CATCH-UP: run /soleur:feature-tweet #N / NONE — ineligible>
 ```
 
 ## Graceful Degradation

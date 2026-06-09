@@ -35,6 +35,7 @@ import { join } from "node:path";
 import {
   redactToken,
   mintInstallationToken,
+  deferIfTier2Cron,
   postSentryHeartbeat,
   type HandlerArgs,
 } from "./_cron-shared";
@@ -60,7 +61,10 @@ const TOKEN_MIN_LIFETIME_MS = 50 * 60 * 1000 + 10 * 60 * 1000;
 export const MAX_TURN_DURATION_MS = 50 * 60 * 1000;
 export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 
-
+// #4993 — headless /soleur:* skill resolution (fleet fix mirroring #4987 /
+// PR #4989): `--plugin-dir plugins/soleur` registers the symlinked plugin under
+// `--print` (a bare plugins/ dir is NOT auto-discovered in headless mode), and
+// `Skill` (+`Task` for subagent fan-out) in --allowedTools gates skill invocation.
 const CLAUDE_CODE_FLAGS = [
   "--print",
   "--model",
@@ -68,7 +72,9 @@ const CLAUDE_CODE_FLAGS = [
   "--max-turns",
   "60",
   "--allowedTools",
-  "Bash,Read,Write,Edit,Glob,Grep,Task,mcp__playwright__browser_navigate,mcp__playwright__browser_take_screenshot,mcp__playwright__browser_resize,mcp__playwright__browser_close,mcp__playwright__browser_wait_for",
+  "Bash,Read,Write,Edit,Glob,Grep,Task,Skill,mcp__playwright__browser_navigate,mcp__playwright__browser_take_screenshot,mcp__playwright__browser_resize,mcp__playwright__browser_close,mcp__playwright__browser_wait_for",
+  "--plugin-dir",
+  "plugins/soleur",
   "--",
 ];
 
@@ -198,6 +204,21 @@ export async function cronUxAuditHandler({
   step,
   logger,
 }: HandlerArgs): Promise<{ ok: boolean }> {
+  // D6 (#5018): Tier-2-deferred — paused until the egress firewall lands.
+  // Posts an honest on-schedule check-in and skips the claude spawn (no
+  // fail-closed FAILED-issue/RED-monitor storm); the weekly output issue
+  // visibly stops. roadmap-review (#5004) is Tier-1 and is NOT deferred.
+  if (
+    await deferIfTier2Cron({
+      cronName: "cron-ux-audit",
+      sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+      step,
+      logger,
+    })
+  ) {
+    return { ok: true };
+  }
+
   // --- Step 1: mint installation token ---
   const installationToken = await step.run(
     "mint-installation-token",

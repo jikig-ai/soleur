@@ -18,8 +18,10 @@
 import {
   redactToken,
   mintInstallationToken,
+  deferIfTier2Cron,
   postSentryHeartbeat,
   resolveOutputAwareOk,
+  ensureScheduledAuditIssue,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -49,6 +51,26 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 // claude-code spawn argv. `--` is load-bearing per #4017 bug 8/8 (variadic
 // --allowedTools consumes the prompt as a tool name without the end-of-
 // options marker). The prompt is the SOLE positional argument after `--`.
+//
+// #4987 — content-generator's prompt invokes plugin skills
+// (/soleur:content-writer, social-distribute, growth). This is the FIRST
+// producer fixed for headless plugin-skill resolution; sibling producers that
+// invoke /soleur:* skills in their prompts (cron-competitive-analysis,
+// cron-legal-audit, cron-growth-audit, …) almost certainly share the same
+// latent gap and are tracked for a fleet audit in #4993. Two flags make skill
+// invocation work in a headless `claude --print` run:
+//   - `--allowedTools` is an explicit allowlist, so `Skill` (invoke a plugin
+//     skill) and `Task` (content-writer's fact-checker subagent; the `Task`
+//     precedent is cron-competitive-analysis / cron-legal-audit, which already
+//     allow it) must be listed or the skill cannot run at all. --max-turns
+//     stays 50.
+//   - `--plugin-dir plugins/soleur` REGISTERS the symlinked plugin. Per
+//     `claude --plugin-dir <path>` ("Load a plugin from a directory or .zip"),
+//     loading a directory-based plugin in a headless `--print` run requires the
+//     flag explicitly — a bare symlinked plugins/ dir is NOT auto-discovered
+//     (the interactive marketplace/enabledPlugins trust flow does not run under
+//     --print). The path is the symlink setupEphemeralWorkspace creates at
+//     <spawnCwd>/plugins/soleur and MUST precede the `--` marker.
 const CLAUDE_CODE_FLAGS = [
   "--print",
   "--model",
@@ -56,7 +78,9 @@ const CLAUDE_CODE_FLAGS = [
   "--max-turns",
   "50",
   "--allowedTools",
-  "Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch",
+  "Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Skill,Task",
+  "--plugin-dir",
+  "plugins/soleur",
   "--",
 ];
 
@@ -82,10 +106,8 @@ STEP 3 — Generate distribution content:
 Run /soleur:social-distribute <article-path> --headless
 Ensure frontmatter has: publish_date: <today>, status: scheduled, channels: discord, x, bluesky, linkedin-company
 
-STEP 4 — Validate:
-npx @11ty/eleventy
-bash scripts/validate-blog-links.sh _site
-If build or link validation fails, create issue and stop.
+STEP 4 — Validation runs in CI (do NOT build locally):
+This ephemeral workspace is a shallow clone with no node_modules, so a local "npx @11ty/eleventy" build cannot run here. Validation happens on the PR you open in the MANDATORY FINAL STEP: CI runs "npx @11ty/eleventy" and "scripts/validate-blog-links.sh", and the "gh pr merge --auto" below only merges once those required checks pass. Your job is to make CI green — ensure the article's Eleventy frontmatter is valid and every internal link resolves. Do NOT attempt a local build or run the validation scripts yourself.
 
 STEP 5 — Record topic in queue:
 Update seo-refresh-queue.md with generated_date annotation.
@@ -120,6 +142,31 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
 }
 
 // =============================================================================
+// Silence-hole fallback guard (#4960)
+// =============================================================================
+//
+// The prompt's STEP 1b/2/6 "create issue and stop" guards are the ONLY
+// producers of the `scheduled-content-generator` audit issue. Any termination
+// that bypasses the prompt — a mid-eval crash, an upstream Anthropic API 500
+// that kills `claude --print` (the #4960 case, confirmed via Sentry event
+// 141195ed…: exitCode 1, ~6.1 min, "API Error: 500"), or a max-turns kill —
+// produces NO issue, so the run is silent and the cron-cloud-task-heartbeat
+// watchdog only notices ~9 days later (maxGapDays threshold).
+//
+// This handler-level guard fires AFTER the output-aware check determines no
+// `scheduled-content-generator` issue exists in the run window, and self-reports
+// a FAILED audit issue so the run is never silent. It lives above the prompt so
+// it survives an eval kill that bypasses every prompt step. ~8 sibling crons
+// already create issues from the handler (cron-skill-freshness, cron-oauth-probe,
+// cron-strategy-review, …); this is the first always-create producer to use the
+// primitive as a *fallback* gated on the output-aware result.
+//
+// `octokit` is injectable purely so unit tests can drive the read/create shape
+// without the App-JWT mint path; production callers pass the already-minted
+// installation token (issues:write — the same token the spawn's `gh issue
+// create` uses; `hr-github-app-auth-not-pat`).
+
+// =============================================================================
 // Handler
 // =============================================================================
 
@@ -127,6 +174,21 @@ export async function cronContentGeneratorHandler({
   step,
   logger,
 }: HandlerArgs): Promise<{ ok: boolean }> {
+  // D6 (#5018): Tier-2-deferred — paused until the egress firewall lands.
+  // Posts an honest on-schedule check-in and skips the claude spawn (no
+  // fail-closed FAILED-issue/RED-monitor storm); the weekly output issue
+  // visibly stops. roadmap-review (#5004) is Tier-1 and is NOT deferred.
+  if (
+    await deferIfTier2Cron({
+      cronName: "cron-content-generator",
+      sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+      step,
+      logger,
+    })
+  ) {
+    return { ok: true };
+  }
+
   // Run-window start for the post-run output check (replay-stable).
   const runStartedAt = await step.run(
     "run-started-at",
@@ -221,6 +283,46 @@ export async function cronContentGeneratorHandler({
     await step.run("sentry-heartbeat", async () => {
       await postSentryHeartbeat({ ok: heartbeatOk, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-content-generator", logger });
     });
+
+    // --- Step 5: silence-hole fallback (#4960). When the output-aware check
+    //     found NO scheduled-content-generator issue in the run window, the
+    //     prompt's STEP 6 never ran (mid-eval crash / API 500 / max-turns kill).
+    //     Self-report a FAILED audit issue so the run is never silent. Wrapped
+    //     so a fallback-create failure (e.g. GitHub 5xx) cannot crash the
+    //     finally/teardown — reported to Sentry instead; the watchdog still
+    //     catches the absence after threshold (defense-in-depth).
+    //
+    //     Two coupling residuals, both intentionally absorbed:
+    //     (a) resolveOutputAwareOk returns `spawnOk` when its verify-list THREW
+    //         (transient GitHub 5xx). So a verify-throw + spawn-ok run skips this
+    //         fallback even if the issue is genuinely absent — covered by the
+    //         watchdog's maxGapDays threshold, not this step.
+    //     (b) On a verify-throw + spawn-nonzero run the gate fires even though
+    //         the prompt's issue may exist; ensureScheduledAuditIssue's own
+    //         same-title dedup is what prevents a spurious second issue — so
+    //         keep that dedup robust (it is load-bearing, not belt-and-suspenders). ---
+    if (!heartbeatOk) {
+      await step.run("ensure-audit-issue", async () => {
+        try {
+          await ensureScheduledAuditIssue({
+            label: SENTRY_MONITOR_SLUG,
+            titlePrefix: "[Scheduled] Content Generator -",
+            cronName: "cron-content-generator",
+            runStartedAt,
+            spawnResult,
+            installationToken,
+          });
+        } catch (err) {
+          reportSilentFallback(err, {
+            feature: "cron-content-generator",
+            op: "ensure-audit-issue-failed",
+            message:
+              "Handler-level fallback audit-issue create failed; run remains silent until watchdog threshold",
+            extra: { fn: "cron-content-generator", runStartedAt },
+          });
+        }
+      });
+    }
 
     return { ok: heartbeatOk };
   } finally {

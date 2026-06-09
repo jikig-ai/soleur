@@ -285,3 +285,19 @@ jobs:
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: bash .github/scripts/check-auto-commit-density.sh
+
+  client-pii-grep:
+    name: Block userId/email in extra of direct client Sentry.capture* (#3703)
+    # SIGNAL-QUALITY gate (NOT a security control). The L3 stripUserContextFromEvent
+    # beforeSend backstop (sentry.client.config.ts, #3696/#3700) already strips PII
+    # at runtime, so production has never been at risk — this surfaces the bypass in
+    # the PR diff, which otherwise only shows as a piiStripped sentinel in Sentry.
+    # Boundary (do NOT collapse): userid-bypass-lint (#3698) covers logger.* on the
+    # server/app surface; pii-grep covers Linear CDN URLs in the diff; this covers
+    # direct Sentry.capture* `extra:` on the CLIENT surface. Intentionally no opt-out.
+    # Tree-scans source (multi-line-aware), so unlike pii-grep it MUST check out.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Scan client-importable code for PII in Sentry extra
+        run: bash .github/scripts/check-client-pii-sentry.sh

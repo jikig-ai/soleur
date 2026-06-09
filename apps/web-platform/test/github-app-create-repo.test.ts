@@ -33,6 +33,7 @@ import {
   KB_TEMPLATE_NAME,
   KB_TEMPLATE_OWNER,
 } from "../server/github-app";
+import { loadGithubFixture } from "./fixtures/github/load";
 
 // Resolve a fetch call by URL substring rather than positional index, so
 // inserting a preflight call (cache miss, retry, etc.) won't silently shift
@@ -65,17 +66,27 @@ describe("createRepo", () => {
     id: number;
     type: string;
   }) {
+    // Body shape sourced from the synthesized installation fixture; the test's
+    // account fields override the canonical synthetic ones (the per-test
+    // login/id/type are load-bearing for routing assertions).
+    const base =
+      account.type === "Organization"
+        ? loadGithubFixture<{ account: object }>("installation-account-org")
+        : loadGithubFixture<{ account: object }>("installation-account-user");
     mockFetch.mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ account }),
+      json: async () => ({ ...base, account }),
     });
   }
 
   function mockTokenResponse() {
+    const body = loadGithubFixture<{ token: string; expires_at: string }>(
+      "installation-access-token",
+    );
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        token: "ghs_test_token",
+        ...body,
         expires_at: new Date(Date.now() + 3600_000).toISOString(),
       }),
     });
@@ -99,12 +110,10 @@ describe("createRepo", () => {
       ok: true,
       status: 201,
       json: async () => ({
+        ...loadGithubFixture("repo-create-201"),
         name: "new-repo",
         full_name: "my-org/new-repo",
         private: true,
-        description: "Knowledge base managed by Soleur",
-        language: null,
-        updated_at: new Date().toISOString(),
         html_url: "https://github.com/my-org/new-repo",
       }),
     });
@@ -139,12 +148,10 @@ describe("createRepo", () => {
       ok: true,
       status: 201,
       json: async () => ({
+        ...loadGithubFixture("template-generate-201"),
         name: "my-repo",
         full_name: "alice/my-repo",
         private: true,
-        description: "Knowledge base managed by Soleur",
-        language: null,
-        updated_at: new Date().toISOString(),
         html_url: "https://github.com/alice/my-repo",
       }),
     });
@@ -188,12 +195,10 @@ describe("createRepo", () => {
       ok: true,
       status: 201,
       json: async () => ({
+        ...loadGithubFixture("template-generate-201"),
         name: "public-repo",
         full_name: "bob/public-repo",
         private: false,
-        description: "Knowledge base managed by Soleur",
-        language: null,
-        updated_at: new Date().toISOString(),
         html_url: "https://github.com/bob/public-repo",
       }),
     });
@@ -247,10 +252,7 @@ describe("createRepo", () => {
       ok: false,
       status: 422,
       text: async () =>
-        JSON.stringify({
-          message: "Validation Failed",
-          errors: [{ message: "is not a template repository" }],
-        }),
+        JSON.stringify(loadGithubFixture("error-422-not-template")),
     });
 
     await expect(
@@ -275,7 +277,7 @@ describe("createRepo", () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 404,
-      text: async () => JSON.stringify({ message: "Not Found" }),
+      text: async () => JSON.stringify(loadGithubFixture("error-404")),
     });
 
     await expect(
@@ -304,11 +306,7 @@ describe("createRepo", () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 422,
-      text: async () =>
-        JSON.stringify({
-          message: "Validation Failed",
-          errors: [{ message: "name already exists on this account" }],
-        }),
+      text: async () => JSON.stringify(loadGithubFixture("error-422-duplicate")),
     });
 
     await expect(
@@ -340,10 +338,7 @@ describe("createRepo", () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 403,
-      text: async () =>
-        JSON.stringify({
-          message: "Resource not accessible by integration",
-        }),
+      text: async () => JSON.stringify(loadGithubFixture("error-403")),
     });
 
     await expect(
@@ -362,7 +357,7 @@ describe("createRepo", () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 404,
-      json: async () => ({ message: "Not Found" }),
+      json: async () => loadGithubFixture("error-404"),
     });
 
     await expect(
@@ -388,6 +383,7 @@ describe("getInstallationAccount", () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
+        ...loadGithubFixture<{ account: object }>("installation-account-org"),
         account: { login: "my-org", id: 42, type: "Organization" },
       }),
     });
@@ -414,7 +410,7 @@ describe("getInstallationAccount", () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 404,
-      json: async () => ({ message: "Not Found" }),
+      json: async () => loadGithubFixture("error-404"),
     });
 
     await expect(

@@ -267,6 +267,110 @@ describe("createShare — validation failures", () => {
   });
 });
 
+// Workstream A (observability): every pre-insert validation return MUST mirror
+// to Sentry via reportSilentFallback (cq-silent-fallback-must-mirror-to-sentry).
+// PR #4947 surfaced the error to the user but the FAILING BRANCH stayed invisible
+// in Sentry — these assertions pin one mirror per branch with reason === the
+// CreateShareErrorCode literal so on-call can pivot on `reason:<code>`. The
+// null-err + explicit-message shape mirrors kb-share.ts:784 (preview-invariant).
+describe("createShare — validation returns mirror to Sentry (Workstream A)", () => {
+  it("null-byte documentPath mirrors reason:invalid-path", async () => {
+    const client = makeServiceClient({ kb_share_links: { shareRow: null } });
+    await createShare(client as never, "user-1", "ws-1", kbRoot, "foo\0bar.md");
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({
+        feature: "kb-share",
+        op: "create",
+        message: expect.any(String),
+        extra: expect.objectContaining({
+          userId: "user-1",
+          documentPath: "foo\0bar.md",
+          reason: "invalid-path",
+        }),
+      }),
+    );
+  });
+
+  it("path-escape documentPath mirrors reason:invalid-path", async () => {
+    fs.writeFileSync(path.join(tmpWorkspace, "outside.md"), "x");
+    const client = makeServiceClient({ kb_share_links: { shareRow: null } });
+    await createShare(client as never, "user-1", "ws-1", kbRoot, "../outside.md");
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({
+        feature: "kb-share",
+        op: "create",
+        extra: expect.objectContaining({ reason: "invalid-path" }),
+      }),
+    );
+  });
+
+  it("terminal in-kbRoot symlink mirrors reason:symlink-rejected", async () => {
+    const innerTarget = path.join(kbRoot, "target.md");
+    fs.writeFileSync(innerTarget, "target contents");
+    fs.symlinkSync(innerTarget, path.join(kbRoot, "link-in.md"));
+    const client = makeServiceClient({ kb_share_links: { shareRow: null } });
+    await createShare(client as never, "user-1", "ws-1", kbRoot, "link-in.md");
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({
+        feature: "kb-share",
+        op: "create",
+        extra: expect.objectContaining({ reason: "symlink-rejected" }),
+      }),
+    );
+  });
+
+  it("missing file mirrors reason:not-found", async () => {
+    const client = makeServiceClient({ kb_share_links: { shareRow: null } });
+    await createShare(client as never, "user-1", "ws-1", kbRoot, "missing.md");
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({
+        feature: "kb-share",
+        op: "create",
+        extra: expect.objectContaining({ reason: "not-found" }),
+      }),
+    );
+  });
+
+  it("directory target mirrors reason:not-a-file", async () => {
+    fs.mkdirSync(path.join(kbRoot, "subdir"));
+    const client = makeServiceClient({ kb_share_links: { shareRow: null } });
+    await createShare(client as never, "user-1", "ws-1", kbRoot, "subdir");
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({
+        feature: "kb-share",
+        op: "create",
+        extra: expect.objectContaining({ reason: "not-a-file" }),
+      }),
+    );
+  });
+
+  it("oversized file mirrors reason:too-large", async () => {
+    const big = Buffer.alloc(MAX_BINARY_SIZE + 1);
+    fs.writeFileSync(path.join(kbRoot, "huge.pdf"), big);
+    const client = makeServiceClient({ kb_share_links: { shareRow: null } });
+    await createShare(client as never, "user-1", "ws-1", kbRoot, "huge.pdf");
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({
+        feature: "kb-share",
+        op: "create",
+        extra: expect.objectContaining({ reason: "too-large" }),
+      }),
+    );
+  });
+});
+
 describe("createShare — concurrent retry (23505 unique violation)", () => {
   it("reads winner's row and returns its token when content hash matches", async () => {
     const bytes = Buffer.from("hello");

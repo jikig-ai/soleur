@@ -1,0 +1,18 @@
+[
+  {
+    "id": 4001,
+    "account": {
+      "login": "synthetic-user",
+      "id": 1002,
+      "type": "User"
+    }
+  },
+  {
+    "id": 4002,
+    "account": {
+      "login": "synthetic-org",
+      "id": 1001,
+      "type": "Organization"
+    }
+  }
+]

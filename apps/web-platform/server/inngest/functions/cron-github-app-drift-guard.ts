@@ -136,7 +136,7 @@ export function assertNoLeak(label: string, s: string): void {
  * included the key body. This is a defensive ban on raw .message
  * forwarding to the observability pipe.
  */
-function redactedError(e: unknown): Error {
+export function redactedError(e: unknown): Error {
   const orig = e instanceof Error ? e : new Error(String(e));
   const msg = orig.message ?? "";
   if (LEAK_TRIPWIRE_RE.test(msg)) {

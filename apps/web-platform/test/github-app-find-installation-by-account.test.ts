@@ -39,17 +39,25 @@ vi.mock("../server/observability", () => ({
 }));
 
 import { findInstallationByAccountLogin } from "../server/github-app";
+import { loadGithubFixture } from "./fixtures/github/load";
 
-// Mirrors the prod reproduce-harness output: a personal (User) install and the
-// repo-owning org install, both reachable.
+// Synthesized installations-list body (cq-test-fixtures-synthesized-only):
+// a personal (User) install and the repo-owning org install, both reachable —
+// the same dual-reachability shape the prod reproduce-harness exposed, with
+// synthetic logins/IDs. The list's two entries are the load-bearing data; the
+// `id` of each is what the selection logic returns.
+const INSTALLATIONS =
+  loadGithubFixture<{ id: number; account: { login: string; type: string } }[]>(
+    "installations-list",
+  );
+const PERSONAL = INSTALLATIONS.find((i) => i.account.type === "User")!;
+const ORG = INSTALLATIONS.find((i) => i.account.type === "Organization")!;
+
 function mockInstallationsList() {
   mockFetch.mockResolvedValueOnce({
     ok: true,
     status: 200,
-    json: async () => [
-      { id: 130018654, account: { login: "Elvalio", type: "User" } },
-      { id: 122213433, account: { login: "jikig-ai", type: "Organization" } },
-    ],
+    json: async () => loadGithubFixture("installations-list"),
   });
 }
 
@@ -58,22 +66,24 @@ describe("findInstallationByAccountLogin", () => {
     mockFetch.mockReset();
   });
 
-  test("returns the org install (122213433) for the repo owner 'jikig-ai'", async () => {
+  test(`returns the org install (${ORG.id}) for the repo owner '${ORG.account.login}'`, async () => {
     mockInstallationsList();
-    const result = await findInstallationByAccountLogin("jikig-ai");
-    expect(result).toBe(122213433);
+    const result = await findInstallationByAccountLogin(ORG.account.login);
+    expect(result).toBe(ORG.id);
   });
 
   test("matches account login case-insensitively", async () => {
     mockInstallationsList();
-    const result = await findInstallationByAccountLogin("JIKIG-AI");
-    expect(result).toBe(122213433);
+    const result = await findInstallationByAccountLogin(
+      ORG.account.login.toUpperCase(),
+    );
+    expect(result).toBe(ORG.id);
   });
 
   test("returns the personal install when the owner is the personal account", async () => {
     mockInstallationsList();
-    const result = await findInstallationByAccountLogin("Elvalio");
-    expect(result).toBe(130018654);
+    const result = await findInstallationByAccountLogin(PERSONAL.account.login);
+    expect(result).toBe(PERSONAL.id);
   });
 
   test("returns null when no installation account matches the owner", async () => {
@@ -88,7 +98,7 @@ describe("findInstallationByAccountLogin", () => {
       status: 401,
       text: async () => JSON.stringify({ message: "Bad credentials" }),
     });
-    const result = await findInstallationByAccountLogin("jikig-ai");
+    const result = await findInstallationByAccountLogin(ORG.account.login);
     expect(result).toBeNull();
   });
 });
