@@ -467,6 +467,46 @@ describe("GSC coverage regression guard (www→apex host flip)", () => {
   });
 });
 
+// -- GSC "Crawled - not indexed" defensive interim: meta-refresh stubs noindex --
+//
+// The 9 legacy /pages/legal/<slug>.html URLs have no edge 301 yet (deferred to a
+// Bulk-Redirects refactor, seo-rulesets.tf:59-66). Until that lands they are served
+// the meta-refresh fallback (page-redirects.njk, HTTP 200), which Google classifies
+// as "Crawled - currently not indexed". Adding `<meta name="robots" content="noindex">`
+// to every meta-refresh stub is the defensive interim: even when Googlebot fetches the
+// HTTP-200 stub (no 301 fired), it is told not to index the legacy URL. The stub still
+// carries http-equiv="refresh" + <link rel="canonical"> to the clean URL, so a user is
+// still forwarded and a crawler still sees the canonical target. SEO-only; no behavior
+// change for humans. See plan 2026-06-09-fix-gsc-legal-page-redirects-plan.md, #3297.
+describe("GSC interim — every meta-refresh redirect stub is noindex", () => {
+  // Detect meta-refresh stubs by the same size-gated heuristic the sitemap and
+  // canonical guards above use (body < 2000 bytes AND http-equiv="refresh").
+  // Walking the built tree (rather than hardcoding the file list) keeps this in
+  // lockstep with _data/pageRedirects.js as redirect entries are added/removed.
+  function metaRefreshStubs(): { rel: string; body: string }[] {
+    return walkHtmlFiles(SITE)
+      .map((full) => ({ rel: full.slice(SITE.length + 1), body: readFileSync(full, "utf8") }))
+      .filter(
+        ({ body }) =>
+          body.length < 2000 && /<meta\s+http-equiv="refresh"/i.test(body),
+      );
+  }
+
+  test("at least one meta-refresh stub is built (guard is non-vacuous)", () => {
+    expect(metaRefreshStubs().length).toBeGreaterThan(0);
+  });
+
+  test("every meta-refresh stub carries <meta name=\"robots\" content=\"noindex\">", () => {
+    const missing = metaRefreshStubs()
+      .filter(({ body }) => !/<meta\s+name="robots"\s+content="noindex"/i.test(body))
+      .map(({ rel }) => rel);
+    expect(
+      missing,
+      `meta-refresh stubs missing noindex: ${missing.join(", ")}`,
+    ).toEqual([]);
+  });
+});
+
 // -- Test 11: #3174 Person.knowsAbout holds topical areas, not role/bio ----
 
 describe("#3174 Person JSON-LD knowsAbout is a topical-area array on every emitter", () => {
