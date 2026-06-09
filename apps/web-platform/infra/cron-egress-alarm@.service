@@ -1,0 +1,7 @@
+[Unit]
+Description=Soleur cron-egress alarm for %i (Sentry error check-in + Resend email)
+
+[Service]
+Type=oneshot
+# doppler (prd) provides SENTRY_* + RESEND_API_KEY; degrades gracefully.
+ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/cron-egress-alarm.sh %i

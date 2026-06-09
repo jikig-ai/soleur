@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the Soleur egress allowlist re-resolve every 5 minutes (#5046 PR-2)
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

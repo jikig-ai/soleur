@@ -1,0 +1,17 @@
+[Unit]
+Description=Soleur container egress firewall (DOCKER-USER allowlist, #5046 PR-2)
+# Re-asserts the nftables ruleset on EVERY boot (a reboot clears nftables;
+# dockerd restarts do NOT clear DOCKER-USER, so no docker dependency loop).
+After=network-online.target docker.service
+Wants=network-online.target
+OnFailure=cron-egress-alarm@%n.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# doppler (prd) provides SENTRY_*/SUPABASE_* for the embedded resolve pass;
+# the scripts degrade gracefully when the env is absent.
+ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/cron-egress-nftables.sh
+
+[Install]
+WantedBy=multi-user.target

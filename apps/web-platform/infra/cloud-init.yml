@@ -4,6 +4,7 @@ packages:
   - curl
   - fail2ban
   - jq
+  - nftables
 
 groups:
   - docker
@@ -176,6 +177,58 @@ write_files:
 
       [Install]
       WantedBy=timers.target
+    owner: root:root
+    permissions: '0644'
+
+  # Container egress firewall (#5046 PR-2) — fresh-host mirror of
+  # terraform_data.cron_egress_firewall in server.tf. Contents injected via
+  # Terraform base64encode(file()). Keep both apply paths in sync; the SSH
+  # provisioner is the sole LIVE apply path (ignore_changes=[user_data]).
+  - path: /usr/local/bin/cron-egress-nftables.sh
+    encoding: b64
+    content: ${cron_egress_nftables_script_b64}
+    owner: root:root
+    permissions: '0755'
+
+  - path: /usr/local/bin/cron-egress-resolve.sh
+    encoding: b64
+    content: ${cron_egress_resolve_script_b64}
+    owner: root:root
+    permissions: '0755'
+
+  - path: /usr/local/bin/cron-egress-alarm.sh
+    encoding: b64
+    content: ${cron_egress_alarm_script_b64}
+    owner: root:root
+    permissions: '0755'
+
+  - path: /etc/soleur/cron-egress-allowlist.txt
+    encoding: b64
+    content: ${cron_egress_allowlist_b64}
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/systemd/system/cron-egress-firewall.service
+    encoding: b64
+    content: ${cron_egress_firewall_service_b64}
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/systemd/system/cron-egress-resolve.service
+    encoding: b64
+    content: ${cron_egress_resolve_service_b64}
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/systemd/system/cron-egress-resolve.timer
+    encoding: b64
+    content: ${cron_egress_resolve_timer_b64}
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/systemd/system/cron-egress-alarm@.service
+    encoding: b64
+    content: ${cron_egress_alarm_unit_b64}
     owner: root:root
     permissions: '0644'
 
@@ -458,6 +511,12 @@ runcmd:
 
   # Enable host resource (CPU/RAM/sessions) monitoring timer (#1052)
   - systemctl enable --now resource-monitor.timer
+
+  # Container egress firewall + allowlist re-resolve (#5046 PR-2). The
+  # firewall unit is After=docker.service and tolerates a not-yet-running
+  # container (probes live in the SSH provisioner, not here).
+  - systemctl enable --now cron-egress-firewall.service
+  - systemctl enable --now cron-egress-resolve.timer
 
   # Weekly Docker image cleanup -- keeps only images used by running containers.
   # Prevents disk exhaustion from accumulated deploy images (#967).

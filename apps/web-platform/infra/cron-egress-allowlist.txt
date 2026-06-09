@@ -1,0 +1,56 @@
+# Container egress allowlist (#5046 PR-2 / ADR cron-egress-firewall).
+# One hostname per line; `#` comments and blank lines ignored.
+#
+# Scope: this is the COMPLETE set of external hosts the soleur-web-platform
+# container (the Next.js app + every cron spawned inside it) may dial.
+# cron-egress-resolve.sh resolves these to IPv4 addresses on a systemd timer
+# and maintains the nftables set @soleur_egress_allow (additive-then-prune).
+#
+# Grep-enumerated from runtime code, NOT intuited (sweep-class discipline).
+# Evidence per host:
+#
+# claude eval + BYOK validation (token-validators.ts:13)
+api.anthropic.com
+# git clone/push over https (buildAuthenticatedCloneUrl, _cron-shared.ts:107)
+github.com
+# octokit + gh CLI (token-validators.ts:34; ~40 call sites)
+api.github.com
+# secret reads at runtime (_predicate-validator.ts:21; token-validators.ts:38)
+api.doppler.com
+# feature flags (lib/feature-flags/server.ts:10)
+edge.api.flagsmith.com
+# social writes + BYOK validation (token-validators.ts:46; content-publisher)
+api.x.com
+# social writes + BYOK validation (token-validators.ts:50)
+api.linkedin.com
+# social writes + BYOK validation (token-validators.ts:54)
+bsky.social
+# community webhooks (discord notify; weekly-analytics POST)
+discord.com
+# analytics fetch (scripts/weekly-analytics.sh:25; token-validators.ts:26)
+plausible.io
+# transactional email (server/notifications.ts:9; disk-monitor alarm path)
+api.resend.com
+# waitlist signups (app/api/waitlist/waitlist.ts:28) — user-facing
+api.buttondown.com
+# cache purge + BYOK validation (server/cf-cache-purge.ts:46; token-validators.ts:18)
+api.cloudflare.com
+# BYOK validation (token-validators.ts:22)
+api.stripe.com
+# BYOK validation (token-validators.ts:30)
+api.hetzner.cloud
+# web-push endpoints (server/notifications.ts webpush.sendNotification) —
+# browser-vendor push services; subscription endpoints land on these hosts.
+# Edge/WNS (*.notify.windows.com) is wildcard-only → NOT allowlisted; an Edge
+# push failure is fail-loud via the webpush error path (accepted residual).
+fcm.googleapis.com
+updates.push.services.mozilla.com
+web.push.apple.com
+#
+# Dynamic hosts (resolved from the doppler-provided environment at timer run,
+# NOT listed here): SENTRY_INGEST_DOMAIN, the NEXT_PUBLIC_SUPABASE_URL host,
+# and the SUPABASE_URL host. See cron-egress-resolve.sh.
+#
+# Deliberately NOT in the container allowlist (HOST egress, never forwarded
+# through DOCKER-USER): Better Stack/Vector (vector.toml reads host journald),
+# GHCR (host dockerd pulls), apt mirrors, the Cloudflare tunnel daemon.
