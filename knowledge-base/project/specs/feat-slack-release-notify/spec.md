@@ -1,7 +1,8 @@
 ---
 feature: slack-release-notify
 lane: cross-domain
-brand_survival_threshold: single-user incident
+brand_survival_threshold: none
+threshold_note: "Brainstorm used the conservative webhook/secret keyword default (single-user incident); refined to `none` at plan time — internal team channel, public release notes, no customer data/auth/cross-tenant surface. Webhook-leak is a security concern handled by the gitleaks rule + ::add-mask::, not a customer-brand vector."
 status: draft
 brainstorm: knowledge-base/project/brainstorms/2026-06-09-slack-release-notify-brainstorm.md
 created: 2026-06-09
