@@ -249,7 +249,7 @@ tags = ["webhook", "discord"]
 [[rules]]
 id = "slack-webhook-url"
 description = "Slack incoming webhook URL (carries embedded secret)"
-regex = '''https://hooks\.slack\.com/services/T[A-Z0-9]+/[A-Z0-9]+/[A-Za-z0-9]{24,}'''
+regex = '''https://hooks\.slack\.com/services/T[A-Z0-9]+/[A-Z0-9]+/[A-Za-z0-9_-]{24,}'''
 keywords = ["hooks.slack.com/services"]
 tags = ["webhook", "slack"]
   [[rules.allowlists]]
