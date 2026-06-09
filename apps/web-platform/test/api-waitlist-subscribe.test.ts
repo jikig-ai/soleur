@@ -139,6 +139,40 @@ describe("POST /api/waitlist", () => {
     expect(warnSilentFallback).not.toHaveBeenCalled();
   });
 
+  test("already-subscribed plaintext 400 (legacy body) is treated as success 200", async () => {
+    mockFetch.mockResolvedValue(
+      new Response("This email is already subscribed.", { status: 400 }),
+    );
+    const { POST } = await importRoute();
+    const res = await POST(
+      makeRequest({ origin: OK_ORIGIN, body: { email: "dup2@company.com" } }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(warnSilentFallback).not.toHaveBeenCalled();
+  });
+
+  test("non-duplicate validation 400 is NOT swallowed → 502 + Sentry mirror", async () => {
+    // A genuine validation error (not a collision) must surface as 502, never a
+    // false success — otherwise a real signup is silently dropped.
+    mockFetch.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: "invalid_email_address",
+          detail: "Enter a valid email address.",
+        }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const { POST } = await importRoute();
+    const res = await POST(
+      makeRequest({ origin: OK_ORIGIN, body: { email: "user@company.com" } }),
+    );
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "upstream_unavailable" });
+    expect(warnSilentFallback).toHaveBeenCalledTimes(1);
+  });
+
   test("filled honeypot returns silent 200 without forwarding", async () => {
     const { POST } = await importRoute();
     const res = await POST(

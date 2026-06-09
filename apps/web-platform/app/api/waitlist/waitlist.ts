@@ -45,29 +45,32 @@ export function __resetWaitlistThrottleForTest(): void {
   waitlistThrottle.reset();
 }
 
-// A v1 collision (duplicate email) returns 400. The body is JSON with a
-// `code` like `email_already_exists` and/or a `detail` message; older/plaintext
-// shapes simply contain "already". Match tolerantly across both so a genuine
-// duplicate is idempotent success, not a 502.
-const ALREADY_SUBSCRIBED_RE = /already|exists|subscrib|duplicate/i;
+// A v1 collision (duplicate email) returns 400 with the machine code
+// `email_already_exists` (and a "…already exists" detail); legacy/plaintext
+// shapes read "already subscribed". Match the code EXACTLY plus a narrow
+// "already subscribed/exists" phrase — deliberately NOT a bare `exists` /
+// `subscrib` / `duplicate` token, which would misclassify a genuine validation
+// 400 (e.g. "domain does not exist", "invalid subscriber") as success and
+// silently drop the signup with no Sentry mirror.
+const ALREADY_SUBSCRIBED_RE = /already\s+(subscribed|exists)/i;
 
 function isAlreadySubscribed(body: string): boolean {
   try {
     const parsed = JSON.parse(body) as { code?: unknown; detail?: unknown };
-    const signal = `${typeof parsed.code === "string" ? parsed.code : ""} ${
-      typeof parsed.detail === "string" ? parsed.detail : ""
-    }`;
-    if (ALREADY_SUBSCRIBED_RE.test(signal)) return true;
+    // JSON branch is authoritative — return from it rather than falling through
+    // to a whole-body scan (which would also match field NAMES, not just text).
+    if (parsed.code === "email_already_exists") return true;
+    return typeof parsed.detail === "string" && ALREADY_SUBSCRIBED_RE.test(parsed.detail);
   } catch {
-    // Non-JSON body — fall through to the raw-text match.
+    // Legacy / non-JSON plaintext body shape.
+    return ALREADY_SUBSCRIBED_RE.test(body);
   }
-  return ALREADY_SUBSCRIBED_RE.test(body);
 }
 
 /**
  * Subscribe an email to the marketing waitlist via Buttondown's authenticated
  * v1 REST API (`POST /v1/subscribers`, `Authorization: Token`) with the
- * pricing-waitlist tag. Resolves on success (201) OR already-subscribed
+ * pricing-waitlist tag. Resolves on success (any 2xx) OR already-subscribed
  * (idempotent from the visitor's perspective). Throws on a missing API key, any
  * unexpected upstream status, an upstream timeout, or a network error so the
  * route maps it to 502 + a Sentry mirror — the raw Buttondown body and the API
