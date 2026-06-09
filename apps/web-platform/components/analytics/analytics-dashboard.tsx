@@ -8,12 +8,12 @@ function Sparkline({
   data,
   width = 80,
   height = 24,
-  color = "#d97706",
+  colorClass = "text-soleur-accent-gold-fill",
 }: {
   data: number[];
   width?: number;
   height?: number;
-  color?: string;
+  colorClass?: string;
 }) {
   if (data.length === 0) {
     return <span className="text-soleur-text-muted">—</span>;
@@ -21,8 +21,13 @@ function Sparkline({
 
   if (data.length === 1) {
     return (
-      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
-        <circle cx={width / 2} cy={height / 2} r={2} fill={color} />
+      <svg
+        width={width}
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        className={colorClass}
+      >
+        <circle cx={width / 2} cy={height / 2} r={2} fill="currentColor" />
       </svg>
     );
   }
@@ -41,11 +46,16 @@ function Sparkline({
     .join(" ");
 
   return (
-    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
+    <svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      className={colorClass}
+    >
       <polyline
         points={points}
         fill="none"
-        stroke={color}
+        stroke="currentColor"
         strokeWidth={1.5}
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -268,7 +278,7 @@ export function AnalyticsDashboard({
                     </span>
                     <Sparkline
                       data={kbSparklineData(m.kbHistory)}
-                      color="#22c55e"
+                      colorClass="text-green-500"
                     />
                   </div>
                 </td>
