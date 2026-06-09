@@ -219,8 +219,17 @@ export async function postSentryHeartbeat(args: {
 // Tier-2 follow-up issue, founder-readable). Tier-2 (egress firewall + least-priv
 // token) removes a cron from this set to restore it. roadmap-review (#5004) is
 // ABSENT — it is the validated Tier-1 cron (finite allowlist in CRON_BASH_ALLOWLISTS).
+// #5046 PR-2 restored cron-agent-native-audit + cron-legal-audit: the
+// relax-minimal hook (Task/Skill allow, every Bash layer intact) unblocks
+// exactly the two crons whose ONLY denied construct was the Task catch-all.
+// Each restored cron carries a finite CRON_BASH_ALLOWLISTS entry and mints the
+// narrowed DEFAULT_CRON_TOKEN_PERMISSIONS token. The remaining nine stay
+// deferred: six PR-flow crons (campaign-calendar, competitive-analysis,
+// growth-audit, seo-aeo-audit, content-generator, growth-execution) need
+// per-construct Bash-allowlist refinement (evidence-gated future work — NOT a
+// blanket metachar drop); bug-fixer / community-monitor / ux-audit stay
+// firewall-dependent for non-GitHub egress.
 export const TIER2_DEFERRED_CRONS: ReadonlySet<string> = new Set([
-  "cron-agent-native-audit",
   "cron-bug-fixer",
   "cron-campaign-calendar",
   "cron-community-monitor",
@@ -228,7 +237,6 @@ export const TIER2_DEFERRED_CRONS: ReadonlySet<string> = new Set([
   "cron-content-generator",
   "cron-growth-audit",
   "cron-growth-execution",
-  "cron-legal-audit",
   "cron-seo-aeo-audit",
   "cron-ux-audit",
 ]);

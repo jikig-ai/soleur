@@ -117,3 +117,13 @@ describe("#4730 — heartbeat decoupled from claude exit code (best-effort)", ()
     expect(SUT_SOURCE).toContain('op: "claude-eval-nonzero-noop"');
   });
 });
+
+// #5046 PR-2 Phase 2.C (AC-P2.12) — this restored cron mints the narrowed
+// least-privilege token (contents/issues/PR write, repo-scoped to soleur),
+// never the full installation grant. Source anchors per this file's idiom.
+describe("least-privilege token mint (#5046 PR-2)", () => {
+  it("mints with DEFAULT_CRON_TOKEN_PERMISSIONS + repositories: [REPO_NAME]", () => {
+    expect(SUT_SOURCE).toContain("permissions: DEFAULT_CRON_TOKEN_PERMISSIONS");
+    expect(SUT_SOURCE).toContain("repositories: [REPO_NAME]");
+  });
+});

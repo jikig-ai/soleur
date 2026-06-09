@@ -55,6 +55,8 @@ import {
   mintInstallationToken,
   deferIfTier2Cron,
   postSentryHeartbeat,
+  DEFAULT_CRON_TOKEN_PERMISSIONS,
+  REPO_NAME,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -167,10 +169,10 @@ export async function cronAgentNativeAuditHandler({
   step,
   logger,
 }: HandlerArgs): Promise<{ ok: boolean }> {
-  // D6 (#5018): Tier-2-deferred — paused until the egress firewall lands.
-  // Posts an honest on-schedule check-in and skips the claude spawn (no
-  // fail-closed FAILED-issue/RED-monitor storm); the weekly output issue
-  // visibly stops. roadmap-review (#5004) is Tier-1 and is NOT deferred.
+  // D6 (#5018) / #5046 PR-2: RESTORED — out of TIER2_DEFERRED_CRONS since the
+  // relax-minimal hook allows Task (this cron's only denied construct). The
+  // guard stays as a no-op shape-keeper: it returns false while the cron is
+  // absent from the defer set, and re-pausing is a one-line set edit.
   if (
     await deferIfTier2Cron({
       cronName: "cron-agent-native-audit",
@@ -184,10 +186,18 @@ export async function cronAgentNativeAuditHandler({
 
   // --- Step 1: mint installation token (memoized across replays) ---
   // The raw token string is the return value (NEVER log this value).
+  // Least-privilege scope (#5046 PR-2): this cron is an issue-creator only
+  // (allowlisted Bash = gh issue list/create + gh label), so the token needs
+  // contents/issues/PR write, never actions/admin/checks. Repo-scoped to
+  // soleur → a leaked GH_TOKEN is bounded to a single-user incident.
   const installationToken = await step.run(
     "mint-installation-token",
     async () => {
-      return mintInstallationToken({ tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS });
+      return mintInstallationToken({
+        tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
+        permissions: DEFAULT_CRON_TOKEN_PERMISSIONS,
+        repositories: [REPO_NAME],
+      });
     },
   );
 

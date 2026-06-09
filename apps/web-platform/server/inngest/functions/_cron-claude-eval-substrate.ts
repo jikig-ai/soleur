@@ -163,6 +163,24 @@ export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
     "git push",
     "git rev-parse",
   ],
+  // #5046 PR-2 Phase 2.C — the two Task-class audit crons restored by the
+  // relax-minimal hook. Issue-creators only: NO git verbs (their prompts
+  // forbid commits/pushes), NO `gh api` (F4a: arbitrary-method API access
+  // defeats the exfil defense), NO raw egress binaries. `gh label` covers
+  // first-run label bootstrap. Their prompts' `| wc -l` cap-check pipe stays
+  // metachar-denied — the agent counts the listed lines itself.
+  "cron-agent-native-audit": [
+    "gh issue list",
+    "gh issue create",
+    "gh label list",
+    "gh label create",
+  ],
+  "cron-legal-audit": [
+    "gh issue list",
+    "gh issue create",
+    "gh label list",
+    "gh label create",
+  ],
 };
 
 // Inert base overlay. `sandbox.enabled:false` = the host-independence fix;
