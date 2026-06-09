@@ -1,11 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { CtaBanner } from "@/components/shared/cta-banner";
 
 const STORAGE_KEY = "soleur:shared:cta-dismissed";
 
 const formPresent = () => screen.queryByPlaceholderText(/you@company.com/i);
-const reopenPresent = () => screen.queryByTestId("cta-banner-reopen");
+const toggle = () => screen.getByTestId("cta-banner-toggle");
+const body = () => screen.getByTestId("cta-banner-body");
+
+// `inert` and `aria-hidden` are DISTINCT contracts — `inert` removes the body
+// from tab order + interaction, `aria-hidden` silences it for assistive tech.
+// Assert each separately so dropping one (a half-regression) cannot pass green.
+const expectBodyHidden = (hidden: boolean) => {
+  expect(body().hasAttribute("inert")).toBe(hidden);
+  expect(body().getAttribute("aria-hidden")).toBe(hidden ? "true" : null);
+};
 
 beforeEach(() => {
   sessionStorage.clear();
@@ -17,79 +26,60 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("CtaBanner collapse / reopen affordance", () => {
-  it("renders the waitlist form and the collapse button by default", () => {
+describe("CtaBanner single-toggle collapse / reopen", () => {
+  it("renders the waitlist form and a single toggle (expanded) by default", () => {
     render(<CtaBanner />);
     expect(formPresent()).toBeTruthy();
-    expect(screen.getByTestId("cta-banner-dismiss")).toBeTruthy();
-    // The reopen affordance only exists once collapsed.
-    expect(reopenPresent()).toBeNull();
+    expect(toggle().getAttribute("aria-expanded")).toBe("true");
+    expect(toggle().getAttribute("aria-label")).toBe("Collapse signup banner");
+    // The body is open (neither inert nor aria-hidden) when expanded.
+    expectBodyHidden(false);
   });
 
-  it("collapsing shows the thin bar — the banner is NOT unmounted", () => {
+  it("clicking the toggle collapses — banner persists, body hidden, header stays", () => {
     render(<CtaBanner />);
-    fireEvent.click(screen.getByTestId("cta-banner-dismiss"));
+    fireEvent.click(toggle());
 
-    // Collapsed strip is present (banner still mounted, just collapsed).
-    const reopen = screen.getByRole("button", {
-      name: /reopen soleur signup banner/i,
-    });
-    expect(reopen).toBeTruthy();
-    // The full form is gone in the collapsed state.
-    expect(formPresent()).toBeNull();
-    // The brand label survives INSIDE the collapsed strip specifically
-    // (scoped so it can't pass by matching the expanded banner copy).
-    expect(within(reopen).getByText(/built with/i)).toBeTruthy();
-    expect(within(reopen).getByText(/soleur/i)).toBeTruthy();
-  });
-
-  it("the collapsed bar exposes the reopen affordance with correct aria", () => {
-    render(<CtaBanner />);
-    fireEvent.click(screen.getByTestId("cta-banner-dismiss"));
-
-    const reopen = screen.getByRole("button", {
-      name: /reopen soleur signup banner/i,
-    });
-    expect(reopen.getAttribute("aria-label")).toBe("Reopen Soleur signup banner");
-    expect(reopen.getAttribute("aria-expanded")).toBe("false");
-  });
-
-  it("clicking the collapsed bar re-expands the full banner with the form", () => {
-    render(<CtaBanner />);
-    fireEvent.click(screen.getByTestId("cta-banner-dismiss"));
-    expect(formPresent()).toBeNull();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: /reopen soleur signup banner/i }),
+    // The toggle is still present (persistent) and now signals "reopen".
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    expect(toggle().getAttribute("aria-label")).toMatch(
+      /reopen soleur signup banner/i,
     );
+    // The brand header survives (persistent header row).
+    expect(screen.getByText(/built with/i)).toBeTruthy();
+    // The collapsible body is inert AND aria-hidden — but NOT removed from the DOM.
+    expectBodyHidden(true);
+    expect(formPresent()).toBeTruthy(); // still in the DOM, just height-collapsed
+  });
 
-    // Round-trip restored without any reload.
+  it("clicking again re-expands — aria + body restored", () => {
+    render(<CtaBanner />);
+    fireEvent.click(toggle()); // collapse
+    fireEvent.click(toggle()); // re-expand
+
+    expect(toggle().getAttribute("aria-expanded")).toBe("true");
+    expect(toggle().getAttribute("aria-label")).toBe("Collapse signup banner");
+    expectBodyHidden(false);
     expect(formPresent()).toBeTruthy();
-    expect(reopenPresent()).toBeNull();
   });
 
-  it("the expanded close control reflects aria-expanded=true", () => {
+  it("the toggle is the SAME persistent <button> node across both states", () => {
     render(<CtaBanner />);
-    expect(
-      screen.getByTestId("cta-banner-dismiss").getAttribute("aria-expanded"),
-    ).toBe("true");
+    const before = toggle();
+    expect(before.tagName).toBe("BUTTON");
+
+    fireEvent.click(before);
+    // Same DOM node after collapse — proves it did not unmount/remount (which is
+    // what makes the 180° rotation animate rather than snap).
+    expect(Object.is(toggle(), before)).toBe(true);
   });
 
-  it("both controls are real <button> elements (keyboard-operable)", () => {
-    render(<CtaBanner />);
-    expect(screen.getByTestId("cta-banner-dismiss").tagName).toBe("BUTTON");
-
-    fireEvent.click(screen.getByTestId("cta-banner-dismiss"));
-    expect(screen.getByTestId("cta-banner-reopen").tagName).toBe("BUTTON");
-  });
-
-  it("does NOT persist collapsed state — no sessionStorage write occurs on collapse", () => {
+  it("does NOT persist collapsed state — no sessionStorage write occurs on toggle", () => {
     // Spy directly so the assertion is non-vacuous: it proves the component
-    // issues zero writes, independent of the beforeEach clear (the residue
-    // checks below alone would pass even if a write landed under a new key).
+    // issues zero writes, independent of the beforeEach clear.
     const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
     render(<CtaBanner />);
-    fireEvent.click(screen.getByTestId("cta-banner-dismiss"));
+    fireEvent.click(toggle());
 
     expect(setItemSpy).not.toHaveBeenCalled();
     expect(sessionStorage.getItem(STORAGE_KEY)).toBeNull();
@@ -102,6 +92,6 @@ describe("CtaBanner collapse / reopen affordance", () => {
     sessionStorage.setItem(STORAGE_KEY, "1");
     render(<CtaBanner />);
     expect(formPresent()).toBeTruthy();
-    expect(reopenPresent()).toBeNull();
+    expect(toggle().getAttribute("aria-expanded")).toBe("true");
   });
 });
