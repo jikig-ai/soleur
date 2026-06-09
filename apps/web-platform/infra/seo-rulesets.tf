@@ -56,14 +56,14 @@
 #     the only entry with a confirmed GSC 404 bucket entry pre-fix)
 #   - 1 `/blog/what-is-company-as-a-service/index.html → /company-as-a-service/` reslug
 #
-# Deferred to follow-up: 9 individual `/pages/legal/<slug>.html → /legal/<slug>/`
+# 2026-06-09: the formerly-deferred 9 `/pages/legal/<slug>.html → /legal/<slug>/`
 # redirects (privacy, cookie, gdpr, AUP, data-protection, individual-cla,
-# corporate-cla, disclaimer, terms-and-conditions). These paths return 404
-# until a Bulk Redirects refactor lands (account-scoped `cloudflare_list` of
-# type "redirect" + `cloudflare_ruleset` with phase `http_request_redirect`).
-# Google will recrawl from the sitemap and drop them from the redirect-bucket
-# cluster — acceptable transitional state since the canonical `/legal/<slug>/`
-# paths ARE in the sitemap and indexed.
+# corporate-cla, disclaimer, terms-and-conditions) now land via the Bulk
+# Redirects list in seo-bulk-redirects.tf (account-scoped `cloudflare_list`
+# kind "redirect" + `cloudflare_ruleset` phase `http_request_redirect` —
+# separate Free-tier quota, no contention with this ruleset's 10 slots).
+# Until that apply, those paths serve the HTTP-200 meta-refresh fallback
+# (plugins/soleur/docs/page-redirects.njk, noindex'd as a defensive interim).
 resource "cloudflare_ruleset" "seo_page_redirects" {
   provider = cloudflare.rulesets
   zone_id  = var.cf_zone_id
