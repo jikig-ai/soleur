@@ -20,6 +20,7 @@ const {
   mockUpdateEq,
   mockUpdateSelect,
   mockReport,
+  mockWarn,
 } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockRpc: vi.fn(),
@@ -28,6 +29,7 @@ const {
   mockUpdateEq: vi.fn(),
   mockUpdateSelect: vi.fn(),
   mockReport: vi.fn(),
+  mockWarn: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -59,7 +61,24 @@ vi.mock("@/server/observability", async () => {
   const actual = await vi.importActual<typeof import("@/server/observability")>(
     "@/server/observability",
   );
-  return { ...actual, reportSilentFallback: mockReport };
+  return { ...actual, reportSilentFallback: mockReport, warnSilentFallback: mockWarn };
+});
+
+// Partial-mock the retry module: forward to the REAL withStorageRetry with a
+// zero-delay sleep so route tests exercise genuine retry semantics without the
+// 500/1000ms backoff (do NOT use fake timers — the handler awaits real async
+// work like the sharp re-encode before the retry sleep).
+vi.mock("@/server/storage-retry", async () => {
+  const actual = await vi.importActual<typeof import("@/server/storage-retry")>(
+    "@/server/storage-retry",
+  );
+  return {
+    ...actual,
+    withStorageRetry: (
+      op: () => Promise<{ error: import("@/server/storage-retry").StorageErrorLike | null }>,
+      opts = {},
+    ) => actual.withStorageRetry(op, { ...opts, sleep: async () => {} }),
+  };
 });
 
 vi.mock("@sentry/nextjs", () => ({
@@ -251,6 +270,72 @@ describe("POST /api/workspace/logo — persistence + orphan cleanup (AC7b)", () 
     expect(mockRemove).toHaveBeenCalledWith([`${RESOLVED_WS}/logo.webp`]);
     const ops = mockReport.mock.calls.map((c) => c[1]?.op);
     expect(ops).toContain("persist-logo-path-zero-rows");
+  });
+});
+
+describe("POST /api/workspace/logo — transient-retry (storage upload)", () => {
+  beforeEach(() => {
+    authAs();
+    owner(true);
+  });
+
+  // storage-js is RESULT-RETURNING: errors come back as { data: null, error },
+  // never thrown — so fixtures RESOLVE with an error, never mockRejectedValue.
+  // Attempt counts are EXACT across ALL attempts (2026-04-19 retry-masking
+  // learning): a toHaveBeenCalled() on the last attempt silently passes when
+  // the first attempt's behavior regresses.
+
+  it("R1: 503 once then success → 200, exactly 2 attempts, one storage-upload-retry warn, no storage-upload error", async () => {
+    mockUpload
+      .mockResolvedValueOnce({
+        data: null,
+        error: { status: 503, message: "Service Unavailable" },
+      })
+      .mockResolvedValueOnce({ data: { path: `${RESOLVED_WS}/logo.webp` }, error: null });
+    const res = await POST(postReq(pngSquare, "logo.png", "image/png"));
+    expect(res.status).toBe(200);
+    expect(mockUpload).toHaveBeenCalledTimes(2);
+    const warnOps = mockWarn.mock.calls.map((c) => c[1]?.op);
+    expect(warnOps).toEqual(["storage-upload-retry"]);
+    expect(mockWarn.mock.calls[0][1]?.extra?.attempt).toBe(1);
+    const reportOps = mockReport.mock.calls.map((c) => c[1]?.op);
+    expect(reportOps).not.toContain("storage-upload");
+  });
+
+  it("R2: persistent 503 → 500, exactly 3 attempts, reportSilentFallback once with op storage-upload", async () => {
+    mockUpload.mockResolvedValue({
+      data: null,
+      error: { status: 503, message: "Service Unavailable" },
+    });
+    const res = await POST(postReq(pngSquare, "logo.png", "image/png"));
+    expect(res.status).toBe(500);
+    expect(mockUpload).toHaveBeenCalledTimes(3);
+    const reportOps = mockReport.mock.calls.map((c) => c[1]?.op);
+    expect(reportOps.filter((op) => op === "storage-upload")).toHaveLength(1);
+  });
+
+  it("R3: non-retryable 400 → 500, exactly 1 attempt (no retry)", async () => {
+    mockUpload.mockResolvedValue({
+      data: null,
+      error: { status: 400, message: "Bad Request" },
+    });
+    const res = await POST(postReq(pngSquare, "logo.png", "image/png"));
+    expect(res.status).toBe(500);
+    expect(mockUpload).toHaveBeenCalledTimes(1);
+    const reportOps = mockReport.mock.calls.map((c) => c[1]?.op);
+    expect(reportOps.filter((op) => op === "storage-upload")).toHaveLength(1);
+  });
+
+  it("R4: network-class StorageUnknownError once then success → 200, 2 attempts", async () => {
+    mockUpload
+      .mockResolvedValueOnce({
+        data: null,
+        error: { name: "StorageUnknownError", message: "fetch failed" },
+      })
+      .mockResolvedValueOnce({ data: { path: `${RESOLVED_WS}/logo.webp` }, error: null });
+    const res = await POST(postReq(pngSquare, "logo.png", "image/png"));
+    expect(res.status).toBe(200);
+    expect(mockUpload).toHaveBeenCalledTimes(2);
   });
 });
 
