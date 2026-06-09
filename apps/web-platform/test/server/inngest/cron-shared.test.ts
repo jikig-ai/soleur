@@ -15,7 +15,7 @@
 // The octokit is injected (the `octokit?` param) so the test drives the
 // GitHub read shape directly without standing up the App-JWT mint path.
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const reportSilentFallbackSpy = vi.fn();
 const warnSilentFallbackSpy = vi.fn();
@@ -24,9 +24,27 @@ vi.mock("@/server/observability", () => ({
   warnSilentFallback: (...a: unknown[]) => warnSilentFallbackSpy(...a),
 }));
 
+// mintInstallationToken (#5046) mints via the App-JWT probe path, NOT any
+// ambient GH_TOKEN, and threads the least-privilege scope to
+// generateInstallationToken. Mock both dependencies so the scope-threading
+// contract can be asserted without the live GitHub mint.
+const { generateInstallationTokenSpy, probeRequestSpy } = vi.hoisted(() => ({
+  generateInstallationTokenSpy: vi.fn(),
+  probeRequestSpy: vi.fn(),
+}));
+vi.mock("@/server/github-app", () => ({
+  generateInstallationToken: (...a: unknown[]) => generateInstallationTokenSpy(...a),
+}));
+vi.mock("@/server/github/probe-octokit", () => ({
+  createProbeOctokit: () => Promise.resolve({ request: probeRequestSpy }),
+}));
+
 import {
   deferIfTier2Cron,
+  DEFAULT_CRON_TOKEN_PERMISSIONS,
   ensureScheduledAuditIssue,
+  mintInstallationToken,
+  REPO_NAME,
   resolveOutputAwareOk,
   TIER2_DEFERRED_CRONS,
   verifyScheduledIssueCreated,
@@ -543,5 +561,85 @@ describe("ensureScheduledAuditIssue (shared fallback)", () => {
         octokit,
       }),
     ).rejects.toThrow("GitHub 503");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mintInstallationToken — least-privilege cron token (#5046 PR-1 / AC3).
+//
+// The cron mint path threads an optional { permissions, repositories } scope to
+// generateInstallationToken so a leaked cron GH_TOKEN is bounded to a
+// single-user incident (repo-scoped, write-only on contents/issues/PRs — never
+// actions/admin/checks). The mint resolves the installation via the App-JWT
+// probe client, NOT any ambient GH_TOKEN, so a bogus ambient token cannot leak
+// into the minted value.
+// ---------------------------------------------------------------------------
+describe("mintInstallationToken (least-privilege cron token)", () => {
+  beforeEach(() => {
+    generateInstallationTokenSpy.mockReset().mockResolvedValue("ghs_minted");
+    probeRequestSpy.mockReset().mockResolvedValue({ data: { id: 424242 } });
+  });
+
+  it("DEFAULT_CRON_TOKEN_PERMISSIONS is exactly contents+issues+pull_requests:write (AC3)", () => {
+    expect(DEFAULT_CRON_TOKEN_PERMISSIONS).toEqual({
+      contents: "write",
+      issues: "write",
+      pull_requests: "write",
+    });
+    // NEVER actions/administration/checks — those would un-bound the blast radius.
+    expect(DEFAULT_CRON_TOKEN_PERMISSIONS).not.toHaveProperty("actions");
+    expect(DEFAULT_CRON_TOKEN_PERMISSIONS).not.toHaveProperty("administration");
+  });
+
+  it("threads the narrowed permissions + repositories scope to generateInstallationToken", async () => {
+    const token = await mintInstallationToken({
+      tokenMinLifetimeMs: 1000,
+      permissions: DEFAULT_CRON_TOKEN_PERMISSIONS,
+      repositories: [REPO_NAME],
+    });
+    expect(token).toBe("ghs_minted");
+    expect(generateInstallationTokenSpy).toHaveBeenCalledTimes(1);
+    const [installationId, opts] = generateInstallationTokenSpy.mock.calls[0];
+    expect(installationId).toBe(424242);
+    expect(opts).toMatchObject({
+      minRemainingMs: 1000,
+      permissions: {
+        contents: "write",
+        issues: "write",
+        pull_requests: "write",
+      },
+      repositories: ["soleur"],
+    });
+  });
+
+  it("an unscoped mint passes no permissions/repositories (full grant preserved for non-narrowed crons)", async () => {
+    await mintInstallationToken({ tokenMinLifetimeMs: 2000 });
+    const [, opts] = generateInstallationTokenSpy.mock.calls[0];
+    expect(opts.minRemainingMs).toBe(2000);
+    expect(opts.permissions).toBeUndefined();
+    expect(opts.repositories).toBeUndefined();
+  });
+
+  it("mints via the App-JWT probe path, not an ambient GH_TOKEN", async () => {
+    const prev = process.env.GH_TOKEN;
+    process.env.GH_TOKEN = "ghs_bogus_ambient_should_be_ignored";
+    try {
+      const token = await mintInstallationToken({
+        tokenMinLifetimeMs: 1000,
+        permissions: DEFAULT_CRON_TOKEN_PERMISSIONS,
+        repositories: [REPO_NAME],
+      });
+      // The returned token is the freshly minted one, never the ambient env var.
+      expect(token).toBe("ghs_minted");
+      expect(token).not.toContain("bogus_ambient");
+      // Installation resolved via the probe octokit (App JWT), not GH_TOKEN.
+      expect(probeRequestSpy).toHaveBeenCalledWith(
+        "GET /repos/{owner}/{repo}/installation",
+        { owner: "jikig-ai", repo: "soleur" },
+      );
+    } finally {
+      if (prev === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = prev;
+    }
   });
 });

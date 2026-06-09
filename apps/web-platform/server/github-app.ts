@@ -678,9 +678,41 @@ export async function findRepoOwnerInstallationForUser(
 // Token cache (installation tokens are valid for 1 hour)
 // ---------------------------------------------------------------------------
 
-const tokenCache = new Map<number, { token: string; expiresAt: number }>();
+// Keyed on installationId AND the requested scope (permissions + repositories),
+// NOT installationId alone. A narrowed cron token (#5046) and the broad token
+// the ~10 interactive/agent callers mint share the SAME installation id; keying
+// on the id alone would return whichever was minted first to BOTH — a silent
+// over-privilege (broad caller served a narrow token → 403) OR under-containment
+// (narrow caller served the broad token → the narrowing is defeated). The scope
+// is folded into the key so differently-scoped requests never collide.
+const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
 const TOKEN_SAFETY_MARGIN_MS = 5 * 60 * 1000; // Refresh 5 minutes early
+
+// Deterministic cache key. An UNSCOPED request (no permissions, no repositories)
+// keys under the bare installation id so every existing broad-scope caller keeps
+// its current keyspace (zero behavior change). A scoped request appends a stable,
+// sorted serialization of the requested permissions + repositories.
+function installationTokenCacheKey(
+  installationId: number,
+  permissions?: Record<string, string>,
+  repositories?: string[],
+): string {
+  if (!permissions && !repositories) return String(installationId);
+  // JSON-serialize a normalized, sorted structure (NOT a hand-joined
+  // `k=v,…`/`r:…` string) so a permission value or repo name that contains a
+  // delimiter can never alias another scope's key — future-proofing for PR-2,
+  // which adds more scoped callers (possibly repository_ids / non-soleur repos).
+  // The unscoped path stays the bare numeric id, disjoint from every scoped key
+  // (those always carry the `|` separator, which a `String(number)` never does).
+  const permEntries = permissions
+    ? Object.keys(permissions)
+        .sort()
+        .map((k) => [k, permissions[k]] as const)
+    : [];
+  const repoList = repositories ? [...repositories].sort() : [];
+  return `${installationId}|${JSON.stringify({ p: permEntries, r: repoList })}`;
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -697,6 +729,15 @@ const TOKEN_SAFETY_MARGIN_MS = 5 * 60 * 1000; // Refresh 5 minutes early
  *   wall-clock budget to avoid mid-spawn auth failures when the cache is
  *   warm with a token whose lifetime is less than the budget remaining
  *   (TR9 PR-5 security HIGH-1).
+ * @param opts.permissions Optional least-privilege permission subset for the
+ *   minted token (e.g. `{ contents: "write", issues: "write" }`). Posted as the
+ *   access_tokens body. The GitHub App install-time manifest is the hard ceiling
+ *   — this can only narrow WITHIN the granted permissions, never widen. Omit for
+ *   the full installation grant. Folded into the cache key (#5046).
+ * @param opts.repositories Optional repo-name allowlist (e.g. `["soleur"]`) that
+ *   bounds the token to those repositories — a leaked token cannot be replayed
+ *   cross-repo. Posted as the access_tokens body. Omit for all installed repos.
+ *   Folded into the cache key (#5046).
  */
 // Installation-token mint retry budget. Mirrors the canonical backoff idiom in
 // server/github-api.ts (MAX_RETRIES=2, BASE_DELAY_MS=1_000 → 1s, 2s) but retries
@@ -707,10 +748,20 @@ const INSTALL_TOKEN_BASE_DELAY_MS = 1_000;
 
 export async function generateInstallationToken(
   installationId: number,
-  opts: { minRemainingMs?: number } = {},
+  opts: {
+    minRemainingMs?: number;
+    permissions?: Record<string, string>;
+    repositories?: string[];
+  } = {},
 ): Promise<string> {
   const minRemainingMs = opts.minRemainingMs ?? TOKEN_SAFETY_MARGIN_MS;
-  const cached = tokenCache.get(installationId);
+  const { permissions, repositories } = opts;
+  const cacheKey = installationTokenCacheKey(
+    installationId,
+    permissions,
+    repositories,
+  );
+  const cached = tokenCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now() + minRemainingMs) {
     return cached.token;
   }
@@ -718,7 +769,7 @@ export async function generateInstallationToken(
   // floor is not met (otherwise the same stale entry would be reconsidered
   // by re-entrant callers).
   if (cached) {
-    tokenCache.delete(installationId);
+    tokenCache.delete(cacheKey);
   }
 
   const pem = getPrivateKey();
@@ -726,9 +777,23 @@ export async function generateInstallationToken(
 
   function mintAndExchange() {
     const jwt = createAppJwt();
+    // Post a scoped body ONLY when narrowing is requested; an unscoped mint
+    // stays bodyless (full installation grant) — byte-for-byte the prior
+    // behavior for the ~10 broad-scope callers.
+    const scopeBody: Record<string, unknown> = {};
+    if (permissions) scopeBody.permissions = permissions;
+    if (repositories) scopeBody.repositories = repositories;
+    const hasScope = Object.keys(scopeBody).length > 0;
     return githubFetch(
       `${GITHUB_API}/app/installations/${installationId}/access_tokens`,
-      { method: "POST", headers: { Authorization: `Bearer ${jwt}` } },
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${jwt}`,
+          ...(hasScope ? { "Content-Type": "application/json" } : {}),
+        },
+        ...(hasScope ? { body: JSON.stringify(scopeBody) } : {}),
+      },
     );
   }
 
@@ -799,7 +864,7 @@ export async function generateInstallationToken(
     "Minted installation token",
   );
 
-  tokenCache.set(installationId, {
+  tokenCache.set(cacheKey, {
     token: data.token,
     expiresAt: new Date(data.expires_at).getTime(),
   });
