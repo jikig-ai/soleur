@@ -1411,7 +1411,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
 
 **If merged (either now or user says "merge PR" later in the session):**
 
-1. **Version bump and release are automatic.** The `version-bump-and-release.yml` GitHub Actions workflow reads the PR's `semver:*` label, computes the next version from the latest release tag, creates a GitHub Release with a `vX.Y.Z` tag, and posts to Discord. No committed files are modified — version is derived from git tags.
+1. **Version bump and release are automatic.** The `version-bump-and-release.yml` GitHub Actions workflow reads the PR's `semver:*` label, computes the next version from the latest release tag, creates a GitHub Release with a `vX.Y.Z` tag, and posts to Slack. No committed files are modified — version is derived from git tags.
 
    If the workflow did not fire (e.g., no semver label was set), run `/release-announce` manually as a fallback.
 

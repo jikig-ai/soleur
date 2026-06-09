@@ -650,23 +650,22 @@ jobs:
 
       # Inline step required: GITHUB_TOKEN-created releases don't fire
       # 'release: published' events, so a separate workflow cannot trigger.
-      - name: Post to Discord (release)
+      - name: Post to Slack (release)
         if: >-
           steps.check_changed.outputs.changed == 'true' &&
           (steps.create_release.outputs.released == 'true' ||
            steps.idempotency.outputs.draft_exists == 'true')
         continue-on-error: true
         env:
-          DISCORD_RELEASES_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASES_WEBHOOK_URL }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          SLACK_RELEASES_WEBHOOK_URL: ${{ secrets.SLACK_RELEASES_WEBHOOK_URL }}
           TAG: ${{ steps.version.outputs.tag }}
           VERSION: ${{ steps.version.outputs.next }}
           COMPONENT_DISPLAY: ${{ inputs.component_display }}
           RELEASE_NOTES_FILE: ${{ steps.tmpfiles.outputs.release_notes }}
         run: |
-          WEBHOOK="${DISCORD_RELEASES_WEBHOOK_URL:-${DISCORD_WEBHOOK_URL:-}}"
+          WEBHOOK="${SLACK_RELEASES_WEBHOOK_URL:-}"
           if [ -z "$WEBHOOK" ]; then
-            echo "No Discord webhook URL configured, skipping"
+            echo "No Slack webhook URL configured, skipping"
             exit 0
           fi
           echo "::add-mask::$WEBHOOK"
@@ -676,21 +675,15 @@ jobs:
           else
             BODY=""
           fi
-          REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
-          RELEASE_URL="${REPO_URL}/releases/tag/${TAG}"
+          RELEASE_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 
-          MESSAGE=$(printf '**%s v%s released!**\n\n%s\n\nFull release notes: %s' \
+          # Slack mrkdwn bold is *single asterisk* (not **double**)
+          MESSAGE=$(printf '*%s v%s released!*\n\n%s\n\nFull release notes: %s' \
             "$COMPONENT_DISPLAY" "$VERSION" "$BODY" "$RELEASE_URL")
 
-          if [[ ${#MESSAGE} -gt 1950 ]]; then
-            MESSAGE="${MESSAGE:0:1947}..."
-          fi
-
           PAYLOAD=$(jq -n \
-            --arg content "$MESSAGE" \
-            --arg username "Sol" \
-            --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
-            '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
+            --arg text "$MESSAGE" \
+            '{text: $text, unfurl_links: false}')
 
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
             -X POST \
@@ -700,7 +693,7 @@ jobs:
             "$WEBHOOK")
 
           if [[ "$HTTP_CODE" =~ ^2 ]]; then
-            echo "Discord notification sent (HTTP $HTTP_CODE)"
+            echo "Slack notification sent (HTTP $HTTP_CODE)"
           else
-            echo "::warning::Discord notification failed (HTTP $HTTP_CODE)"
+            echo "::warning::Slack notification failed (HTTP $HTTP_CODE)"
           fi

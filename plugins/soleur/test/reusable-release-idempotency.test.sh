@@ -218,14 +218,15 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# T6: notify-on-self-heal (#4902) — Email + Discord notify must ALSO fire on the
+# T6: notify-on-self-heal (#4902) — Email + Slack notify must ALSO fire on the
 # orphaned-draft re-publish path (the prior run died before notify, so this is
 # the first successful announcement). Pins the behavior so a future edit can't
 # silently revert it to create-only. The Sentry-audit step deliberately stays
 # create-only (asset upload, not announcement) and is NOT asserted here.
+# (Release notifications moved Discord -> Slack in #5079.)
 # ---------------------------------------------------------------------------
-echo "T6: Email + Discord notify fire on the self-heal path"
-for step in "Email notification (release)" "Post to Discord (release)"; do
+echo "T6: Email + Slack notify fire on the self-heal path"
+for step in "Email notification (release)" "Post to Slack (release)"; do
   notify_if=$(awk -v s="- name: $step" '
     index($0, s) { f=1; next }
     f && /^[[:space:]]*if:/ { capture=1 }

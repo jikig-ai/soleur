@@ -241,6 +241,21 @@ tags = ["webhook", "discord"]
   paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/lib/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''', '''plugins/soleur/skills/.*/test/fixtures/.*\.md$''']
 
 # ---------------------------------------------------------------------------
+# 11b. Slack incoming webhook URL
+#      The URL carries an embedded secret token; not in the default pack.
+#      Second path segment is [A-Z0-9]+ (NOT hardcoded /B — Slack does not
+#      contractually guarantee a B prefix across webhook generations).
+# ---------------------------------------------------------------------------
+[[rules]]
+id = "slack-webhook-url"
+description = "Slack incoming webhook URL (carries embedded secret)"
+regex = '''https://hooks\.slack\.com/services/T[A-Z0-9]+/[A-Z0-9]+/[A-Za-z0-9]{24,}'''
+keywords = ["hooks.slack.com/services"]
+tags = ["webhook", "slack"]
+  [[rules.allowlists]]
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/lib/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''', '''plugins/soleur/skills/.*/test/fixtures/.*\.md$''']
+
+# ---------------------------------------------------------------------------
 # 12. Database URL with embedded password
 #     Catches `postgres://user:password@host/db` and `postgresql://...`.
 # ---------------------------------------------------------------------------
