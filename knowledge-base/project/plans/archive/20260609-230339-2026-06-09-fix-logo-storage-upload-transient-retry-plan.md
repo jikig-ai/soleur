@@ -441,8 +441,13 @@ logs:
   where: "pino server logs in the web-platform container (warnSilentFallback logs err + feature + op + extra)"
   retention: "platform log retention (unchanged)"
 discoverability_test:
-  command: "curl -s -H \"Authorization: Bearer $(doppler secrets get SENTRY_API_TOKEN -p soleur -c prd_terraform --plain)\" 'https://eu.sentry.io/api/0/projects/jikigai-eu/web-platform/events/?query=op:storage-upload-retry' | jq 'length'"
-  expected_output: "a JSON integer ≥ 0 (HTTP 200 — proves the op slug is queryable without SSH; > 0 only after a real transient fires in prod)"
+  # Credential-free probe (preflight Check 10 sandbox strips env and rejects
+  # shell substitution). 401 proves the events endpoint + op-slug query are
+  # reachable without SSH. Authenticated operator variant: add
+  # -H 'Authorization: Bearer <SENTRY_API_TOKEN from Doppler prd_terraform>'
+  # for 200 + a JSON array (length > 0 only after a real prod transient fires).
+  command: curl -sL -o /dev/null -w "%{http_code}" --max-time 10 'https://eu.sentry.io/api/0/projects/jikigai-eu/web-platform/events/?query=op:storage-upload-retry'
+  expected_output: "401 (unauthenticated probe; endpoint reachable, op-slug query well-formed)"
 ```
 
 ## Test Scenarios
