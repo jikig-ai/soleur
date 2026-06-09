@@ -18,7 +18,7 @@ created: 2026-06-09
 
 ## Phase 2 — Secret scanning
 
-- [x] 2.1 Add `[[rules]] id = "slack-webhook-url"` to `.gitleaks.toml` adjacent to the Discord rule: regex `https://hooks\.slack\.com/services/T[A-Z0-9]+/[A-Z0-9]+/[A-Za-z0-9]{24,}` (2nd segment `[A-Z0-9]+`, NOT `/B`), keyword `hooks.slack.com/services`, tags `["webhook","slack"]`.
+- [x] 2.1 Add `[[rules]] id = "slack-webhook-url"` to `.gitleaks.toml` adjacent to the Discord rule: regex `https://hooks\.slack\.com/services/T[A-Z0-9]+/[A-Z0-9]+/[A-Za-z0-9]{24,}` (2nd segment `[A-Z0-9]+`, NOT `/B`), keyword `hooks.slack.com/services`, tags `["webhook","slack"]`. *(As shipped: secret segment widened to `[A-Za-z0-9_-]{24,}` in 5ab594f35; rule renamed `soleur-slack-webhook-url` at review — the default pack ships a same-id rule that the original name silently shadowed, dropping `/workflows/` detection. Pinned by `plugins/soleur/test/gitleaks-rules.test.sh`.)*
 - [x] 2.2 Copy the Discord rule's `[[rules.allowlists]] paths` list verbatim into the Slack rule.
 
 ## Phase 3 — Forward-looking doc cleanup
@@ -47,3 +47,4 @@ created: 2026-06-09
 - [ ] 5.3 **MERGE GATE (AC7):** `gh secret list | grep SLACK_RELEASES_WEBHOOK_URL` returns the secret before `gh pr merge`.
 - [ ] 5.4 (post-merge, AC8) First release posts to Slack — verify via `gh run view <id> --log | grep 'Slack notification'`.
 - [ ] 5.5 (post-merge, AC10) `gh issue close 5079`.
+- [ ] 5.6 (post-merge, after 5.4 confirms) Delete the orphaned Discord release secrets — no workflow consumes them after this PR: `gh secret delete DISCORD_RELEASES_WEBHOOK_URL` and revoke the webhook in Discord. (`DISCORD_WEBHOOK_URL` stays — community crons still use it, NG2/#5080.)

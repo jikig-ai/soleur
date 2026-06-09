@@ -1,13 +1,13 @@
 ---
 name: release-announce
-description: "This skill should be used when announcing a new release. It parses CHANGELOG.md, generates a summary, and creates a GitHub Release. Slack notification is handled automatically by CI on release publish."
+description: "This skill should be used when announcing a new release. It parses CHANGELOG.md, generates a summary, and creates a GitHub Release. Manual releases do not trigger the CI Slack notification."
 ---
 
 # release-announce Skill
 
 > **Manual fallback only.** The `version-bump-and-release.yml` GitHub Action now handles version bumping and GitHub Release creation automatically at merge time. This skill is only needed if the Action fails or for manual re-announcements of existing versions.
 
-**Purpose:** Generate a release announcement from CHANGELOG.md and create a GitHub Release. Slack notification is handled by the `release-announce` GitHub Actions workflow, triggered automatically when the release is published.
+**Purpose:** Generate a release announcement from CHANGELOG.md and create a GitHub Release. The Slack notification is an inline step inside `reusable-release.yml` and fires only on CI-driven releases — GITHUB_TOKEN-created releases don't emit `release: published` events, so no separate workflow can (or does) trigger on publish. A release created manually via this skill therefore gets NO automatic Slack notification.
 
 ## Step 1: Read Version and Changelog
 
@@ -44,4 +44,4 @@ description: "This skill should be used when announcing a new release. It parses
 
 5. Report results:
    - Print the GitHub Release URL if created
-   - Note that Slack notification will be posted automatically by CI (requires `SLACK_RELEASES_WEBHOOK_URL` repository secret)
+   - Note that manually created releases do NOT trigger the CI Slack notification (it is an inline step in `reusable-release.yml`, secret `SLACK_RELEASES_WEBHOOK_URL`). If the announcement matters, post the release link to the Slack release channel manually.

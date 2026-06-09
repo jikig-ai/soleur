@@ -37,13 +37,19 @@ notification volume — addressed by a deferred weekly-digest fast-follow, not t
 
 ## Functional Requirements
 
-- FR1: A `notify-slack` composite action at `.github/actions/notify-slack/action.yml`,
-  mirroring `notify-ops-email`: inputs for message text, username/icon, and `slack-webhook-url`;
-  constructs a Slack-schema payload (`text`, `username`, `icon_url`; **no** `allowed_mentions`)
-  and POSTs via `curl`.
-- FR2: `reusable-release.yml` invokes `notify-slack` in place of the Discord step, passing the
-  same release context (component display, version, tag, release-notes file, release URL) under
-  the existing `if:` condition.
+> **As-built amendment (plan-review pivot).** FR1/FR2 originally specified a `notify-slack`
+> composite action. Plan-review reversed this to an **inline step** in `reusable-release.yml`
+> (single consumer / YAGNI; `username`/`icon_url` identity inputs are dead on app-based
+> webhooks — Kieran P1-1). See the plan's Decision Log. FR1/FR2 below are amended to the
+> as-built design.
+
+- FR1: An inline "Post to Slack (release)" step in `reusable-release.yml` constructs a
+  Slack-schema payload (`text`, `unfurl_links: false`; no `username`/`icon_url` — app identity
+  is authoritative) and POSTs via `curl`. Slack mrkdwn control chars (`&`, `<`, `>`) in the
+  release-notes body are entity-escaped (mass-ping / disguised-link suppression, the
+  `allowed_mentions` equivalent).
+- FR2: The step runs in place of the Discord step, with the same release context (component
+  display, version, tag, release-notes file, release URL) under the existing `if:` condition.
 - FR3: The "Post to Discord (release)" step (lines 653–707) is deleted.
 - FR4: New GH Actions secret `SLACK_RELEASES_WEBHOOK_URL`, consumed via `secrets.` and passed
   to the action input.
@@ -54,9 +60,12 @@ notification volume — addressed by a deferred weekly-digest fast-follow, not t
 
 - TR1: `continue-on-error: true` on the invocation so a failed post never fails the release.
 - TR2: `echo "::add-mask::$WEBHOOK"` (or equivalent) masks the URL in CI logs.
-- TR3: Add a gitleaks rule `slack-webhook-url` to `.gitleaks.toml`
-  (regex `https://hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9_\-]{24,}`,
-  keyword `hooks.slack.com/services`), with the same allowlist paths as the Discord rule.
+- TR3 (amended to as-built): Add a gitleaks rule `soleur-slack-webhook-url` to `.gitleaks.toml`
+  (regex `https://hooks\.slack\.com/services/T[A-Z0-9]+/[A-Z0-9]+/[A-Za-z0-9_-]{24,}` — second
+  segment NOT hardcoded to `B`, per review), with the same allowlist paths as the Discord rule.
+  The `soleur-` prefix avoids shadowing the default-pack rule of the same name (same-id child
+  rules replace default rules and would drop `/workflows/` detection). Pinned by
+  `plugins/soleur/test/gitleaks-rules.test.sh`.
 - TR4: Message length guard appropriate to Slack limits (Slack `text` ~40k chars; the existing
   1950-char Discord truncation can be relaxed/removed for Slack).
 - TR5: Operator provisioning — the Slack-side Incoming Webhook creation is an operator step
@@ -67,7 +76,8 @@ notification volume — addressed by a deferred weekly-digest fast-follow, not t
 ## Acceptance Criteria
 
 - AC1: A test/dry release run posts to the Slack channel with correct version, notes, and link.
-- AC2: `reusable-release.yml` contains no Discord release step; `notify-slack` is invoked instead.
+- AC2 (amended to as-built): `reusable-release.yml` contains no Discord release step; the inline
+  "Post to Slack (release)" step runs instead.
 - AC3: Email-to-ops still fires on release.
 - AC4: gitleaks flags a committed Slack webhook URL.
 - AC5: A simulated webhook failure (bad URL) does not fail the release job; a `::warning::` appears.
@@ -75,8 +85,8 @@ notification volume — addressed by a deferred weekly-digest fast-follow, not t
 ## Stale-Doc Cleanup
 
 Update references that claim Discord release notifications are functional:
-- `knowledge-base/project/learnings/2026-02-19-discord-bot-identity-and-webhook-behavior.md`
-  (webhook naming convention — note releases now go to Slack).
+- ~~`knowledge-base/project/learnings/2026-02-19-discord-bot-identity-and-webhook-behavior.md`~~
+  — superseded by tasks.md 3.4: historical learning, deliberately left unchanged.
 - `release-announce/SKILL.md`, `ship/SKILL.md`, `plugins/soleur/AGENTS.md` if they assert
   Discord release notifications (verify at implementation time; the Discord-removal learning
   notes these previously drifted).
