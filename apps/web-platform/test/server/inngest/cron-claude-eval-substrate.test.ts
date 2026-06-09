@@ -10,7 +10,7 @@
 // because it `vi.mock`s node:child_process, which hoists file-wide and would
 // clobber the real-spawn calls below).
 
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -170,10 +170,68 @@ describe("roadmap-review prompt commands vs the hook (AC4b/AC4c)", () => {
 // AC2c — the spawn-time self-test converts the probe D-new-1 fail-open (a
 // crashed/missing hook) into fail-closed: it THROWS (→ cron aborts) rather than
 // letting the cron spawn unprotected. Runs the real hook binary via execFileSync.
-describe("runHookSelfTest (AC2c — fail-closed)", () => {
-  // vitest cwd is apps/web-platform; the repo root is two levels up, where the
-  // hook resolves at apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs.
-  const repoRoot = join(process.cwd(), "..", "..");
+//
+// #5046 PR-2 (AC-P2.2): the self-test now ALSO gates the Tier-2 relax — Task
+// must allow, an unknown tool class must still deny, and the spawn's
+// settings.json must register the hook under a `*` matcher (the structural
+// precondition for sub-agent hook inheritance). The fixtures below build a
+// faithful spawn-shaped workspace (real hook at its clone-relative path +
+// buildCronEvalSettings output) because the SUT contract is "spawnCwd is a
+// real ephemeral spawn workspace".
+describe("runHookSelfTest (AC2c fail-closed + AC-P2.2 relax gate)", () => {
+  const HOOK_REL = "apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs";
+  // vitest cwd is apps/web-platform; the real hook lives at server/inngest/.
+  const REAL_HOOK = join(process.cwd(), "server/inngest/cron-bash-allowlist-hook.mjs");
+  const tmpDirs: string[] = [];
+
+  afterEach(() => {
+    for (const d of tmpDirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  /** Build a spawn-shaped workspace: hook source at its clone-relative path,
+   *  .claude/cron-allow.txt, and .claude/settings.json. `hookSource` defaults
+   *  to the real hook file; `settings` defaults to buildCronEvalSettings. */
+  function makeSpawnCwd(opts: {
+    hookSource?: string;
+    settings?: Record<string, unknown>;
+    allow?: string[];
+  } = {}): string {
+    const spawnCwd = mkdtempSync(join(tmpdir(), "soleur-selftest-"));
+    tmpDirs.push(spawnCwd);
+    mkdirSync(join(spawnCwd, "apps/web-platform/server/inngest"), { recursive: true });
+    writeFileSync(
+      join(spawnCwd, HOOK_REL),
+      opts.hookSource ?? readFileSync(REAL_HOOK, "utf-8"),
+      "utf-8",
+    );
+    mkdirSync(join(spawnCwd, ".claude"), { recursive: true });
+    const allow = opts.allow ?? [];
+    writeFileSync(
+      join(spawnCwd, ".claude/cron-allow.txt"),
+      allow.length ? allow.join("\n") + "\n" : "",
+      "utf-8",
+    );
+    writeFileSync(
+      join(spawnCwd, ".claude/settings.json"),
+      JSON.stringify(opts.settings ?? buildCronEvalSettings(spawnCwd), null, 2) + "\n",
+      "utf-8",
+    );
+    return spawnCwd;
+  }
+
+  /** A stub hook whose decide path is a fixed per-tool verdict map. */
+  function stubHook(verdicts: Record<string, "allow" | "deny">, fallback: "allow" | "deny"): string {
+    return [
+      "#!/usr/bin/env node",
+      'import { readFileSync } from "node:fs";',
+      `const verdicts = ${JSON.stringify(verdicts)};`,
+      `const fallback = ${JSON.stringify(fallback)};`,
+      'const input = JSON.parse(readFileSync(0, "utf-8"));',
+      "const v = verdicts[input.tool_name] ?? fallback;",
+      "process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: \"PreToolUse\", permissionDecision: v } }));",
+      "process.exit(0);",
+    ].join("\n");
+  }
 
   it("throws when the hook is unreachable (would otherwise fail-open)", () => {
     expect(() =>
@@ -185,11 +243,65 @@ describe("runHookSelfTest (AC2c — fail-closed)", () => {
     ).toThrow(/self-test FAILED/);
   });
 
-  it("passes against the real hook (denies the canonical exfil payload)", () => {
-    // Empty allowlist → deny-all → `cat /proc/self/environ` is denied → no throw.
+  it("passes against a faithful spawn workspace (real hook + `*`-matcher settings)", () => {
+    const spawnCwd = makeSpawnCwd();
     expect(() =>
-      runHookSelfTest({ spawnCwd: repoRoot, cronName: "cron-x", allow: [] }),
+      runHookSelfTest({ spawnCwd, cronName: "cron-x", allow: [] }),
     ).not.toThrow();
+  });
+
+  it("passes with a non-empty allowlist (first verb allows)", () => {
+    const spawnCwd = makeSpawnCwd({ allow: ["gh issue list"] });
+    expect(() =>
+      runHookSelfTest({ spawnCwd, cronName: "cron-x", allow: ["gh issue list"] }),
+    ).not.toThrow();
+  });
+
+  it("throws when the delivered hook does NOT allow Task (Tier-2 relax missing)", () => {
+    // Deny-all stub: the canonical exfil probe passes (deny), the Task relax
+    // probe fails → the self-test must catch a reverted/stale hook.
+    const spawnCwd = makeSpawnCwd({ hookSource: stubHook({}, "deny") });
+    expect(() =>
+      runHookSelfTest({ spawnCwd, cronName: "cron-x", allow: [] }),
+    ).toThrow(/Task/);
+  });
+
+  it("throws when an unknown tool class is ALLOWED (fail-closed catch-all gone)", () => {
+    // Stub: denies Bash (exfil probe passes), allows everything else — the
+    // unknown-class probe must catch the lost deny-by-default.
+    const spawnCwd = makeSpawnCwd({ hookSource: stubHook({ Bash: "deny" }, "allow") });
+    expect(() =>
+      runHookSelfTest({ spawnCwd, cronName: "cron-x", allow: [] }),
+    ).toThrow(/fail-closed|unknown/i);
+  });
+
+  it("throws when settings.json registers the hook under a NARROWED matcher (sub-agent inheritance precondition)", () => {
+    const spawnCwd = mkdtempSync(join(tmpdir(), "soleur-selftest-"));
+    tmpDirs.push(spawnCwd);
+    mkdirSync(join(spawnCwd, "apps/web-platform/server/inngest"), { recursive: true });
+    writeFileSync(join(spawnCwd, HOOK_REL), readFileSync(REAL_HOOK, "utf-8"), "utf-8");
+    mkdirSync(join(spawnCwd, ".claude"), { recursive: true });
+    writeFileSync(join(spawnCwd, ".claude/cron-allow.txt"), "", "utf-8");
+    const narrowed = buildCronEvalSettings(spawnCwd) as {
+      hooks: { PreToolUse: Array<{ matcher: string }> };
+    };
+    narrowed.hooks.PreToolUse[0].matcher = "Bash"; // sub-agent classes unhooked
+    writeFileSync(
+      join(spawnCwd, ".claude/settings.json"),
+      JSON.stringify(narrowed, null, 2) + "\n",
+      "utf-8",
+    );
+    expect(() =>
+      runHookSelfTest({ spawnCwd, cronName: "cron-x", allow: [] }),
+    ).toThrow(/matcher/);
+  });
+
+  it("throws when settings.json is missing (registration unverifiable → fail-closed)", () => {
+    const spawnCwd = makeSpawnCwd();
+    rmSync(join(spawnCwd, ".claude/settings.json"));
+    expect(() =>
+      runHookSelfTest({ spawnCwd, cronName: "cron-x", allow: [] }),
+    ).toThrow(/matcher|settings/);
   });
 });
 
