@@ -3,25 +3,36 @@ title: "PR-1 per-cron containment re-triage (evidence-first, AC1)"
 issue: "#5046"
 branch: feat-tier2-cron-egress-firewall
 created: 2026-06-09
-status: analysis-complete
+status: superseded-by-work-phase-reverification
 ---
 
 # PR-1 Cron Re-Triage — allowlistable vs needs-firewall (AC1)
 
+> **Outcome (work phase, 2026-06-09): ZERO crons restorable under the #5018 hook.**
+> The initial analysis below classified bug-fixer / agent-native-audit / legal-audit as
+> allowlistable on a **surface read of their top-level `gh`/`git` verbs**. Tracing the actual
+> skill bodies the crons invoke proved all three depend on **hook-denied tool classes or shell
+> constructs**. PR-1 therefore restores **no crons** and ships the least-privilege token narrowing
+> only. All 11 stay deferred to PR-2 (the egress firewall lets the hook relax `Task`/`Skill`/egress).
+> See `## Work-phase re-verification (corrects AC1)`.
+
 Evidence from reading each cron's prompt bash surface (worktree, 2026-06-09). The #5018 hook
 (`cron-bash-allowlist-hook.mjs`) denies, **regardless of the per-cron allowlist**: secret-reads,
 egress (`curl`/`wget`), interpreters (`npx`/`node`/`bash <script>`), shell **pipes**, command
-**substitution** `$(...)`, and arg-injection (`--body-file @`). So "allowlistable" = the cron's
-REQUIRED surface is a finite set of `gh`/`git` sub-command **prefixes** with NO dependency on a
-denied construct.
+**substitution** `$(...)`, arg-injection (`--body-file @`), AND every non-Bash tool class except
+Read/Glob/Grep/Write/Edit/ToolSearch/TodoWrite — notably **`Task` (sub-agents) and `Skill` are
+denied by the catch-all** (`decide()` default branch; the hook author's comment: *"sub-agent
+classes are denied until the Tier-2 firewall lands; no Tier-1 cron needs these"*). So
+"allowlistable" = the cron's REQUIRED surface is a finite set of `gh`/`git` sub-command **prefixes**
+with NO dependency on a denied construct AND no dependency on `Task`/`Skill`/egress.
 
-## Classification
+## Classification (corrected at work phase)
 
-| cron | invokes | bash surface | denied-construct dependency | verdict |
+| cron | invokes | actual surface (traced into the skill body) | denied dependency | verdict |
 |---|---|---|---|---|
-| **cron-bug-fixer** | /soleur:fix-issue | `gh api repos/…`, `gh issue create`, `gh pr create/edit/view/list`, `gh label …` | none | **ALLOWLISTABLE** ✅ (cleanest; CPO #1) |
-| cron-agent-native-audit | /soleur:agent-native-audit | `gh issue list/create` + `gh issue list … \| wc -l` (cap) | **pipe** (`\| wc -l`) | allowlistable **IFF** cap-count works in-context (verify prompt) ⚠️ |
-| cron-legal-audit | /soleur:legal-audit | `gh issue list/create` + `gh issue list … \| wc -l` (cap) | **pipe** (`\| wc -l`) | allowlistable **IFF** cap-count works in-context (verify prompt) ⚠️ |
+| cron-bug-fixer | /soleur:fix-issue | fix-issue Ph2 `node -e "$(…)"` + `eval "$TEST_CMD" \| tail`; Ph3 `bash …/worktree-manager.sh` / `git worktree add`; Ph5 `gh pr create --body "$(cat <<EOF)"`; Ph6 `git branch -D` | **`$()`, pipe, `eval`, `node -e`, `bash <script>`, `git worktree`/`git branch`** | **needs-firewall** (original Tier-1 classification was right) |
+| cron-agent-native-audit | /soleur:agent-native-audit | SKILL.md:37 *"Launch 8 parallel sub-agents using the **Task** tool"* | **`Task` tool** (+ pipe `\| wc -l`) | **needs-firewall** |
+| cron-legal-audit | /soleur:legal-audit | SKILL.md:44 *"Invoke the legal-compliance-auditor agent via the **Task** tool"* | **`Task` tool** (+ pipe `\| wc -l`) | **needs-firewall** |
 | cron-campaign-calendar | /soleur:campaign-calendar | gh pr create/merge, git config/add/checkout -b/commit/push | `date -u`, dynamic `checkout -b`, `gh pr merge --auto` | needs-firewall |
 | cron-community-monitor | (inline) | gh pr/issue/api, git | `bash community-router.sh`, pipes, `$()` | needs-firewall |
 | cron-competitive-analysis | /soleur:competitive-analysis | gh pr create/merge, git | `date -u`, dynamic `checkout -b` | needs-firewall |
@@ -31,35 +42,52 @@ denied construct.
 | cron-seo-aeo-audit | /soleur:seo-aeo | gh pr create/merge, git | `date -u`, dynamic `checkout -b` | needs-firewall |
 | cron-ux-audit | /soleur:ux-audit | (none) | Playwright MCP, Supabase `fetch` POST, file I/O | needs-firewall |
 
-## How this inverts the plan's hypotheses
+## Work-phase re-verification (corrects AC1)
 
-- The plan guessed **bug-fixer** might be needs-firewall (it creates PRs/runs tests). Evidence:
-  `fix-issue` does its PR work through `gh` verbs only — **cleanly allowlistable**, and it's CPO's
-  #1 restore priority. Good outcome: wave-1 can lead with it.
-- The plan guessed the read-heavy audit crons (growth/competitive/seo/ux/campaign) were
-  allowlistable. Evidence: they all build branches with `date -u` + dynamic `git checkout -b` and
-  several run `npx @11ty/eleventy` / `bash <script>` — **needs-firewall**, restored in PR-2.
-- Net allowlistable subset for PR-1: **bug-fixer** (confirmed) + agent-native-audit + legal-audit
-  (pending the pipe-independence check below).
+The initial analysis (above the corrected table) over-credited three crons. The reference baseline
+is **cron-roadmap-review** — the one validated Tier-1 cron — which deliberately *"invokes no
+/soleur:* skill"* (cron-roadmap-review.ts:43) and uses `--allowedTools
+Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch` (**no `Task`, no `Skill`**). That is the shape
+the hook permits.
 
-## Open verification before restore (the pipe nuance)
+- **agent-native-audit / legal-audit** structurally require the **`Task` tool** (8 sub-agents / the
+  legal-compliance-auditor). The hook's `decide()` routes `Task` to the catch-all `deny`. Even with
+  a perfect bash allowlist, their core mechanism is denied → degraded/empty output → a restored cron
+  that silently fails (the single-user incident this plan exists to prevent). The `| wc -l` pipe was
+  a red herring; `Task` is the load-bearing blocker.
+- **bug-fixer** runs `/soleur:fix-issue`, whose Phase 2–6 bash (traced from the SKILL.md) depends on
+  command substitution `$(…)`, pipes (`eval "$TEST_CMD" | tail`), `node -e`, `bash <script>`
+  (`worktree-manager.sh`), and `git worktree`/`git branch` — all hook-denied. You cannot allowlist
+  your way to a working fix-issue without re-admitting the exfil primitives (`$()`, pipes, `node`),
+  which defeats containment. The **original** defer-set rationale (`_cron-shared.ts:183`, "bash that
+  cannot be expressed as a finite allowlist") was correct for bug-fixer.
 
-`agent-native-audit` and `legal-audit` use `gh issue list … | wc -l` for issue-cap enforcement.
-The hook denies the pipe. Before restoring them, confirm ONE of:
-1. The prompt's cap-count can be satisfied by the agent counting `gh issue list --json number`
-   output **in-context** (no shell pipe) — then restore as-is and the agent adapts; OR
-2. Edit the prompt to instruct in-context counting (drop the `| wc -l`), so the cap step doesn't
-   dead-end on a denied pipe.
+**Net allowlistable subset for PR-1: none.** This realizes plan risk **R3** ("if few of the 11 are
+cleanly allowlistable incl. bug-fixer = CPO #1, PR-1's restore scope shrinks… AC1 surfaces this with
+evidence rather than discovering it mid-build") and the Phase 1.0 directive ("Do NOT pre-commit the
+split… the evidence decides… surface this in the PR body, don't silently reshuffle"). Operator
+decision (recorded in the work session): **token-narrowing only**.
 
-`bug-fixer` has no denied-construct dependency → restore without prompt changes.
+`TIER2_DEFERRED_CRONS` is therefore unchanged; no `CRON_BASH_ALLOWLISTS` entries are added.
 
-## Allowlist entries to add (model on `cron-roadmap-review`, `_cron-claude-eval-substrate.ts:139`)
+## What PR-1 ships instead — least-privilege cron token (Phase 1.3 / AC3)
 
-- `cron-bug-fixer`: `gh api repos/jikig-ai/soleur/`, `gh issue list/view/create/edit/close/comment`,
-  `gh pr list/view/create/comment/edit`, `gh label list/create/delete`, `git status/add/commit/checkout/switch/push/rev-parse`. (Verify exact verbs against the fix-issue skill body at implementation.)
-- `cron-agent-native-audit` / `cron-legal-audit`: `gh issue list/view/create/edit/comment` only
-  (no PR/git — their prompts forbid commits). Pending the pipe check.
+The token narrowing is the salvageable, independently-valuable half of PR-1. It hardens the LIVE
+claude-spawning crons that already run agent bash with `GH_TOKEN` in scope, without depending on any
+restore:
 
-Token note (Phase 1.3): all three restored crons need the minted token to carry
-`pull_requests:write` (bug-fixer creates PRs) + `issues:write` + `contents:write`, repo-scoped to
-soleur — see plan Phase 1.3 / AC3.
+- `generateInstallationToken` (`github-app.ts`) gains optional `permissions` / `repositories`,
+  posted as the access_tokens body, **and folded into the token cache key** — the critical fix: the
+  cache was keyed on `installationId` alone, so a narrowed cron token and the broad token the ~10
+  interactive/agent callers mint for the SAME installation id would have collided (silent
+  over-privilege OR defeated narrowing).
+- `mintInstallationToken` (`_cron-shared.ts`) threads the scope through; `DEFAULT_CRON_TOKEN_PERMISSIONS`
+  = `{ contents, issues, pull_requests }:write`. **Opt-in per cron, not a blanket default** — the
+  workflow-dispatch crons (`actions:write`), pages crons (`pages`), and ruleset-bypass-audit
+  (`administration:read`) legitimately need broader scope and pass none → full grant.
+- Applied to **cron-daily-triage** and **cron-follow-through-monitor** — the two live claude-spawn
+  crons verified to stay within the `{contents,issues,pull_requests}` envelope (allowlisted Bash is
+  `gh issue …` only) + repo-scoped to `["soleur"]`. daily-triage reads arbitrary issue bodies (the
+  highest prompt-injection surface of any cron), so bounding its token is the highest-value
+  narrowing. roadmap-review (unbounded `gh api repos/…` allowlist prefix) and content-publisher /
+  content-vendor-drift (`checks:write`) are left broad — a documented follow-up.

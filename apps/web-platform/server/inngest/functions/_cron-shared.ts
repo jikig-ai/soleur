@@ -108,8 +108,32 @@ export function buildAuthenticatedCloneUrl(token: string): string {
   return `https://x-access-token:${token}@github.com/${REPO_OWNER}/${REPO_NAME}.git`;
 }
 
+// Least-privilege permission subset for a restored/contained cron's GH_TOKEN
+// (#5046). A leaked token carrying THIS set can push commits, file/close issues,
+// and open/comment PRs on soleur — but cannot dispatch workflows (actions),
+// edit rulesets/branch protection (administration), or write check-runs (checks).
+// Paired with `repositories: ["soleur"]` it is bounded to a single-user incident.
+// `pull_requests:write` is REQUIRED for `gh pr create` (contents:write covers the
+// push, NOT opening the PR → 403 without it). The GitHub App install-time manifest
+// is the hard ceiling — this can only narrow within it. Opt-in per cron at the
+// mint call site (NOT a blanket default — the workflow-dispatch / pages / ruleset
+// crons legitimately need actions/pages/administration and pass no scope → full
+// grant). See knowledge-base/.../2026-06-09-feat-tier2-cron-egress-firewall-plan.md §1.3.
+export const DEFAULT_CRON_TOKEN_PERMISSIONS: Record<string, string> = {
+  contents: "write",
+  issues: "write",
+  pull_requests: "write",
+};
+
 export async function mintInstallationToken(opts: {
   tokenMinLifetimeMs: number;
+  // Optional least-privilege scope. Omitted → full installation grant (the
+  // unchanged behavior for every non-narrowed cron). generateInstallationToken
+  // folds the scope into its cache key so a narrowed cron token never collides
+  // with the broad token the interactive/agent callers mint for the same
+  // installation id (#5046).
+  permissions?: Record<string, string>;
+  repositories?: string[];
 }): Promise<string> {
   const octokit = await createProbeOctokit();
   const { data: installation } = await octokit.request(
@@ -118,6 +142,8 @@ export async function mintInstallationToken(opts: {
   );
   return generateInstallationToken(installation.id, {
     minRemainingMs: opts.tokenMinLifetimeMs,
+    permissions: opts.permissions,
+    repositories: opts.repositories,
   });
 }
 

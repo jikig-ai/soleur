@@ -352,6 +352,36 @@ host egress (removed from the container allowlist). Token default corrected `{co
 hardened (additive-then-prune + timer alarm + DNS pin). #5073 deferral residual named (firewall is
 content-blind for the 4 hook-bypassing crons). See `## Enhancement Summary`.
 
+## Work-Phase Resolution (2026-06-09)
+
+**AC1 re-verified at implementation → restore scope shrank to ZERO (plan risk R3 realized).** The
+committed re-triage classified bug-fixer / agent-native-audit / legal-audit as allowlistable on a
+surface read of their top-level `gh`/`git` verbs. Tracing the actual skill bodies proved all three
+depend on hook-denied constructs:
+- **agent-native-audit / legal-audit** require the **`Task` tool** (8 sub-agents / legal-compliance-auditor);
+  the hook's catch-all denies `Task` ("denied until the Tier-2 firewall lands").
+- **bug-fixer** → `/soleur:fix-issue`, whose Phase 2–6 bash uses `$()`, pipes, `eval`, `node -e`,
+  `bash <script>`, `git worktree`/`git branch` — all denied. The ORIGINAL Tier-1 defer rationale was
+  correct; the re-triage's inversion was wrong.
+
+The proven Tier-1 baseline (roadmap-review) deliberately invokes no skill and no `Task` — the only
+shape the hook permits. Operator decision: **token-narrowing only**. `TIER2_DEFERRED_CRONS` is
+unchanged; no `CRON_BASH_ALLOWLISTS` entries added. Full evidence:
+`knowledge-base/project/specs/feat-tier2-cron-egress-firewall/pr1-cron-retriage.md` §Work-phase
+re-verification. All 11 crons wait for PR-2, which can relax the hook's `Task`/`Skill`/egress denials
+once the container egress firewall contains exfil at the network layer.
+
+**Token narrowing (Phase 1.3) shipped as designed, with a correction.** Default at
+`mintInstallationToken` stays **full grant** (NOT a blanket narrowed default — the workflow-dispatch
+crons need `actions:write`, pages crons need `pages`, ruleset-bypass-audit needs `administration:read`;
+a blanket `{contents,issues,pull_requests}` default would silently 403 six-plus live crons). The
+narrowed scope is **opt-in**, applied to the two verified issue-bounded claude-spawn crons
+(**cron-daily-triage**, **cron-follow-through-monitor**). The critical enabler is the
+`generateInstallationToken` cache-key fix: the cache was keyed on `installationId` alone, so a
+narrowed cron token and the broad token the ~10 interactive callers mint for the same installation id
+would have collided. AC3's `repositories: ["soleur"]` + `{contents,issues,pull_requests}:write` is
+satisfied and asserted (`github-app-token-scope.test.ts`, `cron-shared.test.ts`).
+
 ## Sharp Edges
 
 - A `## User-Brand Impact` section that is empty/`TBD`/threshold-less fails `deepen-plan` Phase 4.6.

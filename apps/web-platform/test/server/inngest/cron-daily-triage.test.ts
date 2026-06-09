@@ -221,9 +221,17 @@ describe("cron-daily-triage — T6 GitHub App token injection (#512e25)", () => 
       await handler({ step, logger });
 
       // the 60-min lifetime floor propagates to generateInstallationToken
-      // (installation id 12345 from the createProbeOctokit mock).
+      // (installation id 12345 from the createProbeOctokit mock), AND the
+      // least-privilege scope (#5046): contents/issues/PR write only, repo-
+      // scoped to soleur — never actions/admin/checks.
       expect(generateInstallationTokenSpy).toHaveBeenCalledWith(12345, {
         minRemainingMs: 50 * 60 * 1000 + 10 * 60 * 1000,
+        permissions: {
+          contents: "write",
+          issues: "write",
+          pull_requests: "write",
+        },
+        repositories: ["soleur"],
       });
 
       const spawnEnv2 = (spawnSpy.mock.calls[0][2] as { env: NodeJS.ProcessEnv })
