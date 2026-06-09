@@ -1,6 +1,6 @@
 "use client";
 
-import type { UserMetrics } from "@/lib/analytics";
+import type { UserMetrics, FunnelResult } from "@/lib/analytics";
 
 // --- Inline SVG sparkline helper ---
 
@@ -103,20 +103,89 @@ function kbGrowthLabel(
   return `${latest.count} (${sign}${delta})`;
 }
 
+// --- Activation funnel section (#5049) ---
+
+function FunnelSection({ funnel }: { funnel: FunnelResult }) {
+  if (funnel.signupCount === 0) {
+    return (
+      <section className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 p-6">
+        <h2 className="text-sm font-medium text-soleur-text-muted uppercase tracking-wider mb-2">
+          Activation funnel
+        </h2>
+        <p className="text-soleur-text-secondary">No signups recorded yet.</p>
+      </section>
+    );
+  }
+
+  const maxCount = Math.max(...funnel.stages.map((s) => s.count), 1);
+
+  return (
+    <section className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 p-6 space-y-3">
+      <h2 className="text-sm font-medium text-soleur-text-muted uppercase tracking-wider">
+        Activation funnel
+      </h2>
+      <div className="space-y-2">
+        {funnel.stages.map((stage) => {
+          const isActivated = stage.key === "activated";
+          const widthPct = Math.round((stage.count / maxCount) * 100);
+          return (
+            <div key={stage.key} className="flex items-center gap-3">
+              <div className="w-36 shrink-0 text-sm text-soleur-text-secondary flex items-center gap-1.5">
+                {stage.label}
+                {isActivated && (
+                  <span
+                    title={funnel.activationDef}
+                    className="text-[10px] font-semibold text-soleur-accent-gold-fg border border-soleur-accent-gold-fg/50 rounded px-1 cursor-help"
+                  >
+                    SUCCESS METRIC
+                  </span>
+                )}
+              </div>
+              <div className="flex-1 h-6 rounded bg-soleur-bg-surface-2/40 overflow-hidden">
+                <div
+                  className={`h-full rounded ${
+                    isActivated ? "bg-soleur-accent-gold-fg" : "bg-soleur-accent-gold-fg/40"
+                  }`}
+                  style={{ width: `${widthPct}%` }}
+                />
+              </div>
+              <div className="w-12 shrink-0 text-right text-sm text-soleur-text-primary tabular-nums">
+                {stage.count}
+              </div>
+              <div className="w-16 shrink-0 text-right text-xs text-soleur-text-muted tabular-nums">
+                {/* Only a percentage drop gets a leading minus; the zero-prior
+                    "—" sentinel and the first stage (null) stand alone. */}
+                {stage.dropoffLabel === null
+                  ? ""
+                  : stage.dropoffLabel.endsWith("%")
+                    ? `−${stage.dropoffLabel}`
+                    : stage.dropoffLabel}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="text-xs text-soleur-text-muted">
+        {funnel.activationDef}. Drop-off is relative to the preceding stage.
+      </p>
+    </section>
+  );
+}
+
 // --- Main component ---
 
 export function AnalyticsDashboard({
   metrics,
+  funnel,
 }: {
   metrics: UserMetrics[];
+  funnel: FunnelResult;
 }) {
   if (metrics.length === 0) {
     return (
       <div className="space-y-6">
         <h1 className="text-2xl font-semibold text-soleur-text-primary">Analytics</h1>
-        <div className="flex flex-col items-center justify-center min-h-[300px] rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50">
-          <p className="text-soleur-text-secondary">No users registered yet.</p>
-        </div>
+        <FunnelSection funnel={funnel} />
       </div>
     );
   }
@@ -127,6 +196,8 @@ export function AnalyticsDashboard({
       <p className="text-sm text-soleur-text-muted">
         P4 validation metrics — {metrics.length} user{metrics.length !== 1 ? "s" : ""}
       </p>
+
+      <FunnelSection funnel={funnel} />
 
       <div className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 overflow-x-auto">
         <table className="w-full text-sm">
