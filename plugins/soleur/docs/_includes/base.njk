@@ -100,10 +100,10 @@
         "offers": [
           {
             "@type": "Offer",
-            "name": "Self-Hosted (Open Source)",
+            "name": "Self-Hosted (Source-Available)",
             "price": "0",
             "priceCurrency": "USD",
-            "description": "Full platform with all agents and skills. Free and open source."
+            "description": "Full platform with all agents and skills. Free to self-host under BSL 1.1 (source-available)."
           },
           {
             "@type": "Offer",
@@ -129,7 +129,8 @@
        asynchronously via the onload-swap pattern below. Selectors covered:
        @layer tokens (--color-*, --font-*, --space-*, --header-h, --text-*);
        rules .site-header, .header-mark, .header-name, .nav-links*, .nav-toggle*,
-       .nav-cta-slot, .nav-cta, .skip-link, .landing-hero*, .section-label,
+       .nav-cta-slot, .nav-cta, .nav-has-children, .nav-dropdown*, .nav-submenu*,
+       .nav-caret, .skip-link, .landing-hero*, .section-label,
        .section-title, .section-desc, .landing-section, .landing-section-inner,
        .landing-stats, .landing-stat*, .btn, .btn-primary, .btn--sm,
        .newsletter-form*, .hero-waitlist-form*, .hero (blog), .blog-post-meta,
@@ -158,6 +159,15 @@
       .nav-links .nav-cta-slot .nav-cta{color:var(--color-text-inverse)}
       .nav-links .nav-cta-slot .nav-cta:hover{color:var(--color-text-inverse);border-bottom-color:transparent}
       .nav-links .nav-cta-slot .nav-cta:focus-visible{outline:2px solid var(--color-text-inverse);outline-offset:3px}
+      .nav-has-children{position:relative}
+      .nav-links>li:not(.nav-cta-slot)>a{display:inline-flex;align-items:center}
+      .nav-dropdown-summary{display:inline-flex;align-items:center;gap:4px;font-family:inherit;font-size:var(--text-sm);line-height:inherit;color:var(--color-text-secondary);background:none;border:none;cursor:pointer;padding:var(--space-1) 0;border-bottom:2px solid transparent;transition:color 0.15s,border-color 0.15s}
+      .nav-has-children:hover>.nav-dropdown-summary,.nav-has-children:focus-within>.nav-dropdown-summary{color:var(--color-text)}
+      .nav-caret{font-size:0.7em;transition:transform 0.15s}
+      .nav-has-children:hover .nav-caret,.nav-has-children:focus-within .nav-caret{transform:rotate(180deg)}
+      .nav-submenu{display:none;list-style:none}
+      @media(min-width:769px){.nav-has-children::after{content:'';position:absolute;top:100%;left:0;width:100%;height:var(--space-3)}.nav-submenu{position:absolute;top:calc(100% + var(--space-3));left:0;min-width:170px;background:var(--color-bg-tertiary);border:1px solid var(--color-border);border-radius:8px;padding:var(--space-2);box-shadow:0 10px 30px rgba(0,0,0,0.5);z-index:3}.nav-has-children:hover>.nav-submenu,.nav-has-children:focus-within>.nav-submenu{display:block}.nav-submenu a{display:block;padding:var(--space-2) var(--space-3);white-space:nowrap;border-bottom:none}.nav-has-children:last-of-type .nav-submenu{left:auto;right:0}}
+      @media(max-width:768px){.nav-has-children{display:block}.nav-dropdown-summary{display:flex;width:100%;padding:var(--space-3) var(--space-4)}.nav-submenu{display:block}.nav-submenu a{padding:var(--space-2) var(--space-4) var(--space-2) var(--space-6)}}
       .nav-toggle{display:none}
       .nav-toggle-label{display:none;cursor:pointer;padding:var(--space-2);font-size:var(--text-lg);color:var(--color-text-secondary)}
       @media(max-width:768px){.nav-toggle-label{display:block}.nav-links{position:fixed;top:var(--header-h);right:0;width:260px;height:calc(100vh - var(--header-h));flex-direction:column;align-items:stretch;gap:0;background:var(--color-bg);border-left:1px solid var(--color-border);padding:var(--space-4);transform:translateX(100%);transition:transform 0.2s ease;z-index:2}.nav-links a{padding:var(--space-3) var(--space-4);border-bottom:none}.nav-links .nav-cta-slot{margin-left:0;margin-top:var(--space-2)}.nav-links .nav-cta-slot .nav-cta{display:inline-block;text-align:center}.nav-toggle:checked ~ .nav-links{transform:translateX(0)}.nav-toggle:checked ~ .nav-toggle-label::before{content:'';position:fixed;top:var(--header-h);left:0;width:100vw;height:calc(100vh - var(--header-h));background:rgba(0,0,0,0.5);z-index:1}}
@@ -186,9 +196,9 @@
       .newsletter-form input[type="email"]:focus{outline:2px solid var(--color-focus);outline-offset:2px;border-color:var(--color-accent)}
       .newsletter-form input[type="email"]::placeholder{color:var(--color-text-tertiary)}
       .newsletter-form button[type="submit"]{cursor:pointer;border:none}
-      .hero-waitlist-form{max-width:560px;margin:var(--space-6) auto 0}
+      .hero-waitlist-form{max-width:560px;margin:var(--space-6) auto 0;align-items:stretch}
       .hero-waitlist-form input[type="email"]{background:#111}
-      .hero-waitlist-form .btn-primary{flex-shrink:0}
+      .hero-waitlist-form .btn-primary{flex-shrink:0;padding:var(--space-3) var(--space-6)}
       @media(max-width:768px){.hero-waitlist-form{max-width:100%}.hero-waitlist-form input[type="email"],.hero-waitlist-form .btn-primary{flex:1 1 100%}}
       /* Blog above-fold */
       .hero{background:var(--color-bg);color:var(--color-text);padding:var(--space-10) 0 var(--space-8);margin-top:var(--header-h);position:relative;text-align:center;border-bottom:1px solid var(--color-border)}
@@ -238,7 +248,18 @@
     <label for="nav-toggle" class="nav-toggle-label" aria-label="Toggle navigation">&#9776;</label>
     <ul class="nav-links">
       {%- for item in site.nav %}
+      {%- if item.children %}
+      <li class="nav-has-children">
+        <button type="button" class="nav-dropdown-summary" aria-haspopup="true">{{ item.label }}<span class="nav-caret" aria-hidden="true">&#9662;</span></button>
+        <ul class="nav-submenu">
+          {%- for child in item.children %}
+          <li><a href="{{ child.url }}"{% if page.url == child.url %} aria-current="page"{% endif %}>{{ child.label }}</a></li>
+          {%- endfor %}
+        </ul>
+      </li>
+      {%- else %}
       <li><a href="{{ item.url }}"{% if page.url == item.url or (item.url == '/blog/' and page.url.startsWith('/blog')) %} aria-current="page"{% endif %}>{{ item.label }}</a></li>
+      {%- endif %}
       {%- endfor %}
       {%- if site.primaryCta %}
       <li class="nav-cta-slot"><a href="{{ site.primaryCta.url }}" aria-label="{{ site.primaryCta.ariaLabel }}" class="btn btn-primary btn--sm nav-cta">{{ site.primaryCta.label }}</a></li>

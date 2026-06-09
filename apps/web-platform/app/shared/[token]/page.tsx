@@ -8,6 +8,7 @@ import { CtaBanner } from "@/components/shared/cta-banner";
 import { KbContentSkeleton } from "@/components/kb/kb-content-skeleton";
 import { TextPreview } from "@/components/kb/text-preview";
 import { SHARED_CONTENT_KIND_HEADER } from "@/lib/shared-kind";
+import { parseLikeC4Embed } from "@/lib/c4-embed";
 import {
   classifyResponse,
   type PageError,
@@ -27,6 +28,21 @@ const PdfPreview = dynamic(
     ),
   },
 );
+
+// Inline read-only LikeC4 diagram for shared markdown docs that embed a
+// ```likec4-view block. ssr:false — @likec4/diagram is canvas/browser-only.
+// Public viewers get the read-only variant (Diagram tab only); the data comes
+// from the token-scoped /api/shared/<token>/c4 endpoint, never the auth-gated
+// /api/kb/c4/project. The full C4Workspace (Concierge + Code editor) is NEVER
+// mounted here — those are owner-only write surfaces.
+const C4Diagram = dynamic(() => import("@/components/kb/c4-diagram"), {
+  ssr: false,
+  loading: () => (
+    <div className="flex items-center justify-center p-8">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-soleur-text-muted border-t-amber-400" />
+    </div>
+  ),
+});
 
 export default function SharedDocumentPage({
   params,
@@ -126,7 +142,7 @@ export default function SharedDocumentPage({
               />
             )}
 
-            {data && renderSharedContent(data)}
+            {data && renderSharedContent(data, token)}
           </div>
         </main>
 
@@ -137,14 +153,41 @@ export default function SharedDocumentPage({
   );
 }
 
-function renderSharedContent(data: SharedData) {
+function renderSharedContent(data: SharedData, token: string) {
   switch (data.kind) {
-    case "markdown":
+    case "markdown": {
+      // When the doc embeds a ```likec4-view block, render the interactive
+      // diagram (read-only, token-scoped) in place of the code block — parity
+      // with the authenticated KB viewer, minus owner-only write affordances.
+      // Pre-extract here (shape (b)) so the shared owner-path MarkdownRenderer
+      // stays untouched and never needs a token-aware fetcher branch.
+      const embed = parseLikeC4Embed(data.content);
+      if (embed) {
+        // dirPath is cosmetic for the public path — the server derives the real
+        // dir from the share row's document_path; the client fetch ignores it.
+        const docDir = data.path.includes("/")
+          ? data.path.slice(0, data.path.lastIndexOf("/"))
+          : ".";
+        return (
+          <article className="prose-kb">
+            <C4Diagram
+              viewId={embed.viewId}
+              dirPath={docDir}
+              fetchUrl={`/api/shared/${token}/c4`}
+              readOnly
+            />
+            {embed.notes.trim().length > 0 && (
+              <MarkdownRenderer content={embed.notes} nofollow />
+            )}
+          </article>
+        );
+      }
       return (
         <article className="prose-kb">
           <MarkdownRenderer content={data.content} nofollow />
         </article>
       );
+    }
     case "pdf":
       return (
         <div className="h-[70vh]">

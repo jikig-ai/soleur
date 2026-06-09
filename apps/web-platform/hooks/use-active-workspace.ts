@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { OrgMembershipSummary } from "@/server/org-memberships-resolver";
+import { WORKSPACE_LOGO_CHANGED_EVENT } from "@/lib/workspace-logo-events";
 
 // The active workspace identity (name + id + hasLogo), for the collapsed rail
 // band (which does NOT mount OrgSwitcherContainer and therefore has no
@@ -73,8 +74,15 @@ export function useActiveWorkspace(enabled = true): ActiveWorkspaceInfo {
     if (!enabled) return;
     poll();
     const onFocus = () => poll();
+    // A same-tab logo upload/removal nudges an immediate refetch so the
+    // collapsed-rail band reflects the change without a reload (H1, AC4).
+    const onLogoChange = () => poll();
     window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
+    window.addEventListener(WORKSPACE_LOGO_CHANGED_EVENT, onLogoChange);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener(WORKSPACE_LOGO_CHANGED_EVENT, onLogoChange);
+    };
   }, [poll, enabled]);
 
   return info;

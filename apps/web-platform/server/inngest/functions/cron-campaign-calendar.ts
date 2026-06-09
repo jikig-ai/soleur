@@ -18,8 +18,10 @@
 import {
   redactToken,
   mintInstallationToken,
+  deferIfTier2Cron,
   postSentryHeartbeat,
   resolveOutputAwareOk,
+  ensureScheduledAuditIssue,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -49,6 +51,11 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 // claude-code spawn argv. `--` is load-bearing per #4017 bug 8/8 (variadic
 // --allowedTools consumes the prompt as a tool name without the end-of-
 // options marker). The prompt is the SOLE positional argument after `--`.
+//
+// #4993 — headless /soleur:* skill resolution (fleet fix mirroring #4987 /
+// PR #4989): `--plugin-dir plugins/soleur` registers the symlinked plugin under
+// `--print` (a bare plugins/ dir is NOT auto-discovered in headless mode), and
+// `Skill` (+`Task` for subagent fan-out) in --allowedTools gates skill invocation.
 const CLAUDE_CODE_FLAGS = [
   "--print",
   "--model",
@@ -56,7 +63,9 @@ const CLAUDE_CODE_FLAGS = [
   "--max-turns",
   "40",
   "--allowedTools",
-  "Bash,Read,Write,Edit,Glob,Grep",
+  "Bash,Read,Write,Edit,Glob,Grep,Skill,Task",
+  "--plugin-dir",
+  "plugins/soleur",
   "--",
 ];
 
@@ -122,6 +131,21 @@ export async function cronCampaignCalendarHandler({
   step,
   logger,
 }: HandlerArgs): Promise<{ ok: boolean }> {
+  // D6 (#5018): Tier-2-deferred — paused until the egress firewall lands.
+  // Posts an honest on-schedule check-in and skips the claude spawn (no
+  // fail-closed FAILED-issue/RED-monitor storm); the weekly output issue
+  // visibly stops. roadmap-review (#5004) is Tier-1 and is NOT deferred.
+  if (
+    await deferIfTier2Cron({
+      cronName: "cron-campaign-calendar",
+      sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+      step,
+      logger,
+    })
+  ) {
+    return { ok: true };
+  }
+
   // Run-window start — the lower bound for the post-run output check. Captured
   // before the mint step (memoized across Inngest replays) so a replay reuses
   // the original window rather than re-stamping a later "now".
@@ -225,6 +249,36 @@ export async function cronCampaignCalendarHandler({
     await step.run("sentry-heartbeat", async () => {
       await postSentryHeartbeat({ ok: heartbeatOk, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-campaign-calendar", logger });
     });
+
+    // --- Step 5: silence-hole fallback (#4960, generalized #4978). When the
+    //     output-aware check found NO scheduled-campaign-calendar issue in the
+    //     run window, the prompt's create-issue step never ran (mid-eval crash /
+    //     API 500 / max-turns kill). Self-report a FAILED audit issue so the run
+    //     is never silent. Wrapped so a create failure cannot crash the
+    //     finally/teardown — reported to Sentry instead; the watchdog still
+    //     catches the absence after threshold (defense-in-depth). ---
+    if (!heartbeatOk) {
+      await step.run("ensure-audit-issue", async () => {
+        try {
+          await ensureScheduledAuditIssue({
+            label: SENTRY_MONITOR_SLUG,
+            titlePrefix: "[Scheduled] Campaign Calendar -",
+            cronName: "cron-campaign-calendar",
+            runStartedAt,
+            spawnResult,
+            installationToken,
+          });
+        } catch (err) {
+          reportSilentFallback(err, {
+            feature: "cron-campaign-calendar",
+            op: "ensure-audit-issue-failed",
+            message:
+              "Handler-level fallback audit-issue create failed; run remains silent until watchdog threshold",
+            extra: { fn: "cron-campaign-calendar", runStartedAt },
+          });
+        }
+      });
+    }
 
     return { ok: heartbeatOk };
   } finally {

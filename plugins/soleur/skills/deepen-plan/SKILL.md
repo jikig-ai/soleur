@@ -3,6 +3,8 @@ name: deepen-plan
 description: "This skill should be used when enhancing an existing plan with parallel research agents for each section."
 ---
 
+> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill lives at [`workflows/deepen-plan.workflow.js`](./workflows/deepen-plan.workflow.js) — deterministic fan-out, journaled resume, schema-validated output. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/deepen-plan/workflows/deepen-plan.workflow.js", args: ... })`. The prose skill below stays the default; the two coexist during calibration. See [`knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`](../../../../knowledge-base/project/specs/feat-review-workflow-prototype/spec.md).
+
 # Deepen Plan - Power Enhancement Mode
 
 ## Introduction

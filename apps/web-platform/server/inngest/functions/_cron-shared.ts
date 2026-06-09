@@ -3,6 +3,9 @@ import { tmpdir } from "node:os";
 import { createProbeOctokit } from "@/server/github/probe-octokit";
 import { generateInstallationToken } from "@/server/github-app";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
+import { redactGithubSourcedText } from "@/lib/safety/redaction-allowlist";
+import type { SpawnResult } from "./_cron-claude-eval-substrate";
+import type { Octokit } from "@octokit/core";
 
 export const REPO_OWNER = "jikig-ai";
 export const REPO_NAME = "soleur";
@@ -105,8 +108,32 @@ export function buildAuthenticatedCloneUrl(token: string): string {
   return `https://x-access-token:${token}@github.com/${REPO_OWNER}/${REPO_NAME}.git`;
 }
 
+// Least-privilege permission subset for a restored/contained cron's GH_TOKEN
+// (#5046). A leaked token carrying THIS set can push commits, file/close issues,
+// and open/comment PRs on soleur — but cannot dispatch workflows (actions),
+// edit rulesets/branch protection (administration), or write check-runs (checks).
+// Paired with `repositories: ["soleur"]` it is bounded to a single-user incident.
+// `pull_requests:write` is REQUIRED for `gh pr create` (contents:write covers the
+// push, NOT opening the PR → 403 without it). The GitHub App install-time manifest
+// is the hard ceiling — this can only narrow within it. Opt-in per cron at the
+// mint call site (NOT a blanket default — the workflow-dispatch / pages / ruleset
+// crons legitimately need actions/pages/administration and pass no scope → full
+// grant). See knowledge-base/.../2026-06-09-feat-tier2-cron-egress-firewall-plan.md §1.3.
+export const DEFAULT_CRON_TOKEN_PERMISSIONS: Record<string, string> = {
+  contents: "write",
+  issues: "write",
+  pull_requests: "write",
+};
+
 export async function mintInstallationToken(opts: {
   tokenMinLifetimeMs: number;
+  // Optional least-privilege scope. Omitted → full installation grant (the
+  // unchanged behavior for every non-narrowed cron). generateInstallationToken
+  // folds the scope into its cache key so a narrowed cron token never collides
+  // with the broad token the interactive/agent callers mint for the same
+  // installation id (#5046).
+  permissions?: Record<string, string>;
+  repositories?: string[];
 }): Promise<string> {
   const octokit = await createProbeOctokit();
   const { data: installation } = await octokit.request(
@@ -115,6 +142,8 @@ export async function mintInstallationToken(opts: {
   );
   return generateInstallationToken(installation.id, {
     minRemainingMs: opts.tokenMinLifetimeMs,
+    permissions: opts.permissions,
+    repositories: opts.repositories,
   });
 }
 
@@ -172,6 +201,55 @@ export async function postSentryHeartbeat(args: {
       extra: { fn: cronName, status, aborted: e.name === "TimeoutError" },
     });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Tier-2 deferral guard (#5018 — hook-primary cron containment, D6)
+// ---------------------------------------------------------------------------
+// These claude-spawning crons need Bash that cannot be expressed as a finite
+// allowlist for the containment hook (cron-bash-allowlist-hook.mjs), so under the
+// v3.1 overlay (sandbox off + deny-by-default hook) they would fail-closed.
+// Letting them spawn → fail-closed → emit a weekly FAILED `[Scheduled]` issue +
+// RED Sentry monitor is an alert STORM that masks real regressions (panel P1-A).
+// Instead each such handler calls deferIfTier2Cron as its FIRST step: it posts an
+// honest on-schedule check-in (ok — the function DID run on time) and
+// early-returns WITHOUT spawning claude and WITHOUT creating an output issue. The
+// work-output verify is SKIPPED, not faked → NOT a silent green. Visible
+// degradation = the cron's weekly output issue stops appearing (enumerated in the
+// Tier-2 follow-up issue, founder-readable). Tier-2 (egress firewall + least-priv
+// token) removes a cron from this set to restore it. roadmap-review (#5004) is
+// ABSENT — it is the validated Tier-1 cron (finite allowlist in CRON_BASH_ALLOWLISTS).
+export const TIER2_DEFERRED_CRONS: ReadonlySet<string> = new Set([
+  "cron-agent-native-audit",
+  "cron-bug-fixer",
+  "cron-campaign-calendar",
+  "cron-community-monitor",
+  "cron-competitive-analysis",
+  "cron-content-generator",
+  "cron-growth-audit",
+  "cron-growth-execution",
+  "cron-legal-audit",
+  "cron-seo-aeo-audit",
+  "cron-ux-audit",
+]);
+
+export async function deferIfTier2Cron(args: {
+  cronName: string;
+  sentryMonitorSlug: string;
+  step: HandlerArgs["step"];
+  logger: HandlerArgs["logger"];
+}): Promise<boolean> {
+  const { cronName, sentryMonitorSlug, step, logger } = args;
+  if (!TIER2_DEFERRED_CRONS.has(cronName)) return false;
+  logger.warn(
+    { fn: cronName, status: "tier-2-deferred" },
+    `${cronName} is Tier-2-deferred (#5018): the containment hook denies its bash; ` +
+      `paused until the egress firewall lands. Skipping claude spawn this run.`,
+  );
+  await step.run("tier2-deferred-heartbeat", async () => {
+    await postSentryHeartbeat({ ok: true, sentryMonitorSlug, cronName, logger });
+  });
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -371,4 +449,142 @@ export async function resolveOutputAwareOk(args: {
     },
   );
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// Handler-level silence-hole fallback (#4960, generalized #4978).
+//
+// When the output-aware heartbeat (resolveOutputAwareOk) finds NO labeled issue
+// in the run window — the prompt's "create the audit issue" step never ran
+// (mid-eval crash / upstream API 500 / max-turns kill) — the handler ITSELF
+// files a self-reporting FAILED `${titlePrefix} <date>` issue so the run is
+// never silent and the cron-cloud-task-heartbeat watchdog stays green. It lives
+// ABOVE the prompt, surviving any termination that bypasses the in-prompt steps.
+//
+// Extracted VERBATIM from cron-content-generator (PR #4975, fired in prod via
+// #4982) and parameterized by { label, titlePrefix, cronName } so all 8
+// always-create producers share ONE security-vetted redaction path instead of
+// 8 drifting copies.
+// ---------------------------------------------------------------------------
+
+// GitHub-issue-body readability bound for the spawn tails. Tighter than the
+// 4000-char Sentry extra (resolveOutputAwareOk) — the issue body is for
+// at-a-glance triage, the full tail already lives in the Sentry event.
+const DEFAULT_AUDIT_TAIL_CHARS = 500;
+
+// The spawn tails are token-redacted by the eval substrate (redactToken), but
+// that strips ONLY the installation token — a crash stack can still spill other
+// allowlisted-env secrets (e.g. ANTHROPIC_API_KEY / sk-ant-…). Route through the
+// canonical multi-secret scrubber before it lands in a GitHub issue body, and
+// neutralize backtick/pipe/newline so untrusted eval output cannot break out of
+// the inline-code table cell into rendered markdown (image-autofetch / banner
+// injection). Mirrors the github-sourced-text redaction discipline.
+export function formatTailForIssue(tail: string | undefined): string {
+  const scrubbed = redactGithubSourcedText(tail ?? "").slice(
+    -DEFAULT_AUDIT_TAIL_CHARS,
+  );
+  if (!scrubbed) return "(empty)";
+  return scrubbed
+    .replace(/[\r\n]+/g, " ")
+    // Escape pre-existing backslashes BEFORE introducing our own `\|` escape,
+    // so an input like `\|` cannot produce an ambiguous escape sequence
+    // (js/incomplete-sanitization). Order is load-bearing.
+    .replace(/\\/g, "\\\\")
+    .replace(/\|/g, "\\|")
+    .replace(/`/g, "ʼ");
+}
+
+export async function ensureScheduledAuditIssue(args: {
+  label: string;
+  titlePrefix: string;
+  cronName: string;
+  runStartedAt: string;
+  spawnResult: Pick<
+    SpawnResult,
+    "exitCode" | "signal" | "abortedByTimeout" | "durationMs" | "stdoutTail" | "stderrTail"
+  >;
+  installationToken?: string;
+  octokit?: Octokit;
+}): Promise<{ created: boolean }> {
+  const {
+    label,
+    titlePrefix,
+    cronName,
+    runStartedAt,
+    spawnResult,
+    installationToken,
+    octokit,
+  } = args;
+
+  // Replay-stable UTC date anchor (NOT `new Date()`, which would drift across
+  // the retries:1 replay and defeat the title-dedup below).
+  const date = runStartedAt.slice(0, 10);
+  // titlePrefix ends in ` -` (no trailing space); the single-space join yields
+  // the byte-identical `${prefix} <date>` form the prompt emits on success.
+  const title = `${titlePrefix} ${date}`;
+
+  let client = octokit;
+  if (!client) {
+    if (!installationToken) {
+      throw new Error(
+        "ensureScheduledAuditIssue: need octokit or installationToken",
+      );
+    }
+    const { Octokit: OctokitCtor } = await import("@octokit/core");
+    client = new OctokitCtor({ auth: installationToken }) as unknown as Octokit;
+  }
+
+  // Dedup: a transient failure that re-runs this path could file a second
+  // FAILED issue. Skip the create if today's audit issue already exists
+  // (success or fallback). Explicit `sort: created, direction: desc` so today's
+  // issue is guaranteed on page 1 — do NOT rely on GitHub's unspecified default
+  // sort for dedup correctness (a busy label could otherwise page today's issue
+  // out and double-file). per_page:10 covers ≥1 week of any wired producer's
+  // cadence (daily through monthly) — ample to keep today's issue on page 1.
+  // This dedup is load-bearing (not belt-and-suspenders): on a
+  // verify-throw + spawn-nonzero run the gate fires even though the prompt's
+  // issue may exist — the same-title dedup is what prevents a spurious second.
+  const existing = (await client.request("GET /repos/{owner}/{repo}/issues", {
+    owner: REPO_OWNER,
+    repo: REPO_NAME,
+    state: "all",
+    labels: label,
+    sort: "created",
+    direction: "desc",
+    per_page: 10,
+    headers: { "X-GitHub-Api-Version": "2022-11-28" },
+  })) as { data: Array<{ title: string }> };
+  if (existing.data.some((i) => i.title.startsWith(title))) {
+    return { created: false };
+  }
+
+  // Self-diagnosing body — the cron's own redacted spawn tail + timing, so the
+  // failure is triageable without SSH (app stdout is not shipped to Better
+  // Stack). The tails are already token-redacted by the eval substrate.
+  const body =
+    `Automated FAILED self-report from \`${cronName}\`.\n\n` +
+    `This run terminated WITHOUT producing a \`${label}\` ` +
+    `audit issue via the prompt (mid-eval crash / upstream API error / ` +
+    `max-turns kill). The handler-level fallback (#4960) filed this issue so ` +
+    `the run is not silent and the \`cron-cloud-task-heartbeat\` watchdog ` +
+    `stays green.\n\n` +
+    `| Signal | Value |\n| --- | --- |\n` +
+    `| fn | \`${cronName}\` |\n` +
+    `| runStartedAt | \`${runStartedAt}\` |\n` +
+    `| exitCode | \`${spawnResult.exitCode}\` |\n` +
+    `| signal | \`${spawnResult.signal}\` |\n` +
+    `| abortedByTimeout | \`${spawnResult.abortedByTimeout}\` |\n` +
+    `| durationMs | \`${spawnResult.durationMs}\` |\n` +
+    `| stdoutTail | \`${formatTailForIssue(spawnResult.stdoutTail)}\` |\n` +
+    `| stderrTail | \`${formatTailForIssue(spawnResult.stderrTail)}\` |\n\n` +
+    `Triage: \`knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md\` (H2).`;
+
+  await client.request("POST /repos/{owner}/{repo}/issues", {
+    owner: REPO_OWNER,
+    repo: REPO_NAME,
+    title,
+    body,
+    labels: [label],
+  });
+  return { created: true };
 }

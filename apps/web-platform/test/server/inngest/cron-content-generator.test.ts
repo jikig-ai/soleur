@@ -22,11 +22,9 @@ vi.hoisted(() => {
 
 import {
   cronContentGenerator,
-  ensureContentGeneratorAuditIssue,
   KILL_ESCALATION_MS,
   MAX_TURN_DURATION_MS,
 } from "@/server/inngest/functions/cron-content-generator";
-import type { Octokit } from "@octokit/core";
 
 describe("cronContentGenerator — registration shape (import-time smoke)", () => {
   it("loads without throwing (handler + client startup pass)", () => {
@@ -112,11 +110,92 @@ describe("CONTENT_GENERATOR_PROMPT — anchor strings (regression-detection)", (
       ],
       [
         '@11ty/eleventy',
-        "Eleventy build validation",
+        "CI Eleventy build validation (referenced as the CI gate, not a local build)",
       ],
     ])("contains %s (%s)", (anchor) => {
       expect(SUT_SOURCE).toContain(anchor);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #4987 — skill + build-validation degradation fix.
+//   (A) CLAUDE_CODE_FLAGS must let the headless `claude --print` eval resolve
+//       AND invoke the plugin's /soleur:* skills: `--plugin-dir plugins/soleur`
+//       loads the symlinked plugin (a bare plugins/ dir does NOT auto-register
+//       in headless mode — see feature-request-plugin-dir-settings.md), and the
+//       `--allowedTools` allowlist must include `Skill` (invoke skills) + `Task`
+//       (content-writer's fact-checker subagent).
+//   (B) STEP 4 build validation cannot run in the no-node_modules shallow clone;
+//       it is deferred to the PR's CI gate (which the --auto merge blocks on).
+// ---------------------------------------------------------------------------
+
+describe("CLAUDE_CODE_FLAGS — skill + plugin-dir resolution (#4987)", () => {
+  const flagsMatch = SUT_SOURCE.match(
+    /const CLAUDE_CODE_FLAGS = \[([\s\S]*?)\];/,
+  );
+  const flagsBlock = flagsMatch ? flagsMatch[1] : "";
+
+  it("CLAUDE_CODE_FLAGS array is present in source", () => {
+    expect(flagsBlock.length).toBeGreaterThan(0);
+  });
+
+  it("--allowedTools allowlist includes Skill and Task (invoke /soleur:* + fact-checker subagent)", () => {
+    expect(SUT_SOURCE).toContain(
+      '"Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Skill,Task"',
+    );
+  });
+
+  it("loads the symlinked plugin via --plugin-dir plugins/soleur", () => {
+    expect(flagsBlock).toContain('"--plugin-dir"');
+    expect(flagsBlock).toContain('"plugins/soleur"');
+    expect(flagsBlock).toMatch(/"--plugin-dir",\s*\n\s*"plugins\/soleur",/);
+  });
+
+  it("--plugin-dir is positioned BEFORE the load-bearing `--` end-of-options marker", () => {
+    // `"--"` (quote-dash-dash-quote) is the standalone marker; `"--print"` etc.
+    // never contain it, so indexOf is unambiguous.
+    const endMarker = flagsBlock.indexOf('"--"');
+    expect(endMarker).toBeGreaterThan(-1);
+    expect(flagsBlock.indexOf('"--plugin-dir"')).toBeLessThan(endMarker);
+    expect(flagsBlock.indexOf('"plugins/soleur"')).toBeLessThan(endMarker);
+  });
+
+  it("does NOT bump the turn budget — --max-turns 50 unchanged", () => {
+    expect(SUT_SOURCE).toContain('"--max-turns",\n  "50",');
+  });
+});
+
+describe("CONTENT_GENERATOR_PROMPT — STEP 4 CI-deferred validation (#4987)", () => {
+  // Capture the STEP 4 block (STEP 4 heading → STEP 5 heading) so assertions bind
+  // to STEP 4 specifically, not the prompt as a whole. This guards the defect
+  // CLASS — a local-build imperative reappearing in STEP 4 under ANY wording —
+  // rather than one exact byte-string. Per test-design review of PR #4989.
+  const step4Match = SUT_SOURCE.match(/STEP 4 —[\s\S]*?\nSTEP 5 —/);
+  const step4 = step4Match ? step4Match[0] : "";
+
+  it("STEP 4 block is present in the prompt", () => {
+    expect(step4.length).toBeGreaterThan(0);
+  });
+
+  it("STEP 4 defers validation to CI and forbids a local build", () => {
+    expect(step4).toMatch(/Validation runs in CI/);
+    expect(step4).toContain("no node_modules");
+    expect(step4).toMatch(/do NOT build locally/i);
+  });
+
+  it("STEP 4 issues no bare local-build imperative (defect-class guard)", () => {
+    // No line inside STEP 4 may START with a build/validation command — the old
+    // shape was `STEP 4 — Validate:\nnpx @11ty/eleventy\nbash scripts/validate-…`.
+    // The Eleventy/link commands may appear ONLY as inline references to the CI
+    // gate (e.g. CI runs "npx @11ty/eleventy"), never as a leading imperative.
+    expect(step4).not.toMatch(/^\s*npx @11ty\/eleventy/m);
+    expect(step4).not.toMatch(/^\s*bash scripts\/validate-blog-links\.sh/m);
+  });
+
+  it("STEP 4 still names the CI validation commands (@11ty/eleventy + validate-blog-links)", () => {
+    expect(step4).toContain("@11ty/eleventy");
+    expect(step4).toContain("validate-blog-links");
   });
 });
 
@@ -154,130 +233,12 @@ describe("ensure-audit-issue fallback — source-shape anchors (#4960)", () => {
   });
 });
 
-describe("ensureContentGeneratorAuditIssue — behavioral (injected octokit)", () => {
-  const RUN_STARTED_AT = "2026-06-05T15:05:11.992Z";
-  const SPAWN = {
-    exitCode: 1,
-    signal: null,
-    abortedByTimeout: false,
-    durationMs: 368727,
-    stdoutTail: "API Error: 500 Internal server error.",
-    stderrTail: "",
-  };
-
-  function fakeOctokit(getData: Array<{ title: string }>) {
-    const calls: Array<{ route: string; params: Record<string, unknown> }> = [];
-    const octokit = {
-      request: vi.fn(async (route: string, params: Record<string, unknown>) => {
-        calls.push({ route, params });
-        if (route.startsWith("GET")) return { data: getData };
-        return { data: { number: 9999 } };
-      }),
-    } as unknown as Octokit;
-    return { octokit, calls };
-  }
-
-  it("creates exactly one labeled audit issue when none exists in the window", async () => {
-    const { octokit, calls } = fakeOctokit([]);
-    const res = await ensureContentGeneratorAuditIssue({
-      runStartedAt: RUN_STARTED_AT,
-      spawnResult: SPAWN,
-      octokit,
-    });
-    expect(res.created).toBe(true);
-    const posts = calls.filter((c) => c.route.startsWith("POST"));
-    expect(posts).toHaveLength(1);
-    expect(posts[0].params.title).toBe(
-      "[Scheduled] Content Generator - 2026-06-05",
-    );
-    expect(posts[0].params.labels).toEqual(["scheduled-content-generator"]);
-    // Self-diagnosing body carries the failure evidence.
-    expect(String(posts[0].params.body)).toContain("API Error: 500");
-    expect(String(posts[0].params.body)).toContain("exitCode");
-  });
-
-  it("does NOT double-file when today's audit issue already exists (retries:1 dedup)", async () => {
-    const { octokit, calls } = fakeOctokit([
-      { title: "[Scheduled] Content Generator - 2026-06-05" },
-    ]);
-    const res = await ensureContentGeneratorAuditIssue({
-      runStartedAt: RUN_STARTED_AT,
-      spawnResult: SPAWN,
-      octokit,
-    });
-    expect(res.created).toBe(false);
-    expect(calls.filter((c) => c.route.startsWith("POST"))).toHaveLength(0);
-  });
-
-  it("dedup is title-PREFIX (a suffixed prompt issue still suppresses the fallback)", async () => {
-    const { octokit, calls } = fakeOctokit([
-      { title: "[Scheduled] Content Generator - 2026-06-05 (manual)" },
-    ]);
-    const res = await ensureContentGeneratorAuditIssue({
-      runStartedAt: RUN_STARTED_AT,
-      spawnResult: SPAWN,
-      octokit,
-    });
-    expect(res.created).toBe(false);
-    expect(calls.filter((c) => c.route.startsWith("POST"))).toHaveLength(0);
-  });
-
-  it("dedup GET is label-scoped, state:all, explicitly sorted newest-first", async () => {
-    const { octokit, calls } = fakeOctokit([]);
-    await ensureContentGeneratorAuditIssue({
-      runStartedAt: RUN_STARTED_AT,
-      spawnResult: SPAWN,
-      octokit,
-    });
-    const get = calls.find((c) => c.route.startsWith("GET"));
-    expect(get?.params.labels).toBe("scheduled-content-generator");
-    expect(get?.params.state).toBe("all");
-    expect(get?.params.sort).toBe("created");
-    expect(get?.params.direction).toBe("desc");
-  });
-
-  it("scrubs secrets and neutralizes markdown-breakout chars in the issue body", async () => {
-    const { octokit, calls } = fakeOctokit([]);
-    await ensureContentGeneratorAuditIssue({
-      runStartedAt: RUN_STARTED_AT,
-      spawnResult: {
-        ...SPAWN,
-        // crash-path stderr spilling an Anthropic key + table-breaking chars
-        // (incl. a literal backslash-pipe to exercise escape-order, js/incomplete-sanitization)
-        stderrTail: "boom sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAA \\| pipe `tick`",
-      },
-      octokit,
-    });
-    const body = String(
-      calls.find((c) => c.route.startsWith("POST"))!.params.body,
-    );
-    expect(body).not.toContain("sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAA");
-    expect(body).toContain("[redacted-key]");
-    // table-breaking chars are escaped/neutralized inside the inline-code cell:
-    // backslash is escaped FIRST (js/incomplete-sanitization) so an input `\|`
-    // becomes `\\\|` (escaped backslash + escaped pipe), pipe → "\|" (markdown
-    // literal, no row break), backtick → "ʼ" (no span break).
-    expect(body).toContain("\\\\\\| pipe"); // input `\| ` → `\\\| `
-    expect(body).toContain("ʼtickʼ");
-    expect(body).not.toContain("`tick`");
-  });
-
-  it("propagates a create failure to the caller (handler wraps it in reportSilentFallback)", async () => {
-    const octokit = {
-      request: vi.fn(async (route: string) => {
-        if (route.startsWith("GET")) return { data: [] };
-        throw new Error("GitHub 503");
-      }),
-    } as unknown as Octokit;
-    await expect(
-      ensureContentGeneratorAuditIssue({
-        runStartedAt: RUN_STARTED_AT,
-        spawnResult: SPAWN,
-        octokit,
-      }),
-    ).rejects.toThrow("GitHub 503");
-  });
-});
+// NOTE: the behavioral coverage for the audit-issue fallback now lives in
+// cron-shared.test.ts (`ensureScheduledAuditIssue (shared fallback)`) — the
+// helper was extracted into _cron-shared.ts and parameterized for all 8
+// always-create producers (#4978). The wiring (the call site + `!heartbeatOk`
+// gate) stays guarded by the source-shape anchors above and by
+// cron-producer-output-wiring.test.ts.
 
 describe("buildSpawnEnv allowlist (security surface)", () => {
   const buildEnvMatch = SUT_SOURCE.match(

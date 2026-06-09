@@ -689,6 +689,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         case "stream":
         case "stream_end":
         case "command_stream":
+        // feat-debug-mode-stream — harness instruction stream (separate panel).
+        case "debug_event":
         case "review_gate":
         case "autonomous_disclosure":
         case "subagent_spawn":

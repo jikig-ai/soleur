@@ -140,15 +140,9 @@ async function handlePost(req: Request, user: User): Promise<Response> {
     return NextResponse.json({ error: "Logo upload failed" }, { status: 500 });
   }
 
-  const upd = await service.from("workspaces").update({ logo_path: key }).eq("id", workspaceId);
-  if (upd.error) {
-    reportSilentFallback(upd.error, {
-      feature: FEATURE,
-      op: "persist-logo-path",
-      extra: { userId: user.id, workspaceId },
-    });
-    // Best-effort orphan cleanup. The cleanup-delete can ITSELF fail — that's
-    // the TRUE orphan (object present, row not updated): distinct breadcrumb.
+  // Best-effort orphan cleanup. The cleanup-delete can ITSELF fail — that's the
+  // TRUE orphan (object present, row not updated): distinct breadcrumb.
+  const cleanupOrphan = async () => {
     const cleanup = await service.storage.from(BUCKET).remove([key]);
     if (cleanup.error) {
       reportSilentFallback(cleanup.error, {
@@ -157,6 +151,39 @@ async function handlePost(req: Request, user: User): Promise<Response> {
         extra: { userId: user.id, workspaceId, key },
       });
     }
+  };
+
+  // .select("id") returns the matched rows so a 0-rows-matched no-op is caught.
+  // supabase-js .update().eq() returns NO error when the WHERE matches nothing
+  // (the active workspace id has no `workspaces` row) — the silent persistence-
+  // failure class behind "the logo reverts to the monogram on navigation".
+  const upd = await service
+    .from("workspaces")
+    .update({ logo_path: key })
+    .eq("id", workspaceId)
+    .select("id");
+  if (upd.error) {
+    reportSilentFallback(upd.error, {
+      feature: FEATURE,
+      op: "persist-logo-path",
+      extra: { userId: user.id, workspaceId },
+    });
+    await cleanupOrphan();
+    return NextResponse.json({ error: "Logo upload failed" }, { status: 500 });
+  }
+  if (!upd.data || upd.data.length !== 1) {
+    // 0-rows-matched: the update succeeded with no error but touched no row.
+    // Fail loud + distinct breadcrumb (so the prod cause is diagnosable in
+    // Sentry) instead of a false "Logo updated." 200, and clean the orphan.
+    reportSilentFallback(
+      new Error(`workspace logo persist matched ${upd.data?.length ?? 0} rows`),
+      {
+        feature: FEATURE,
+        op: "persist-logo-path-zero-rows",
+        extra: { userId: user.id, workspaceId, matched: upd.data?.length ?? 0 },
+      },
+    );
+    await cleanupOrphan();
     return NextResponse.json({ error: "Logo upload failed" }, { status: 500 });
   }
 
@@ -188,14 +215,30 @@ async function handleDelete(_req: Request, user: User): Promise<Response> {
     return NextResponse.json({ error: "Only workspace owners can change the logo" }, { status: 403 });
   }
 
-  // Clear the row FIRST so a stale row never outlives the object.
-  const upd = await service.from("workspaces").update({ logo_path: null }).eq("id", workspaceId);
+  // Clear the row FIRST so a stale row never outlives the object. .select("id")
+  // surfaces a 0-rows-matched no-op (same silent-persistence class as POST).
+  const upd = await service
+    .from("workspaces")
+    .update({ logo_path: null })
+    .eq("id", workspaceId)
+    .select("id");
   if (upd.error) {
     reportSilentFallback(upd.error, {
       feature: FEATURE,
       op: "persist-logo-clear",
       extra: { userId: user.id, workspaceId },
     });
+    return NextResponse.json({ error: "Logo removal failed" }, { status: 500 });
+  }
+  if (!upd.data || upd.data.length !== 1) {
+    reportSilentFallback(
+      new Error(`workspace logo clear matched ${upd.data?.length ?? 0} rows`),
+      {
+        feature: FEATURE,
+        op: "persist-logo-clear-zero-rows",
+        extra: { userId: user.id, workspaceId, matched: upd.data?.length ?? 0 },
+      },
+    );
     return NextResponse.json({ error: "Logo removal failed" }, { status: 500 });
   }
 

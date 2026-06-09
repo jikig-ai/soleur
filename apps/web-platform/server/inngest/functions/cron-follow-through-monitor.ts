@@ -49,7 +49,7 @@
 //   Layer 1 (load-bearing): in-prompt HTTPS-and-non-RFC1918 guard,
 //     verbatim from .github/workflows/scheduled-follow-through.yml:96-101.
 //   Layer 2 (mechanical): buildSpawnEnv() allowlist — only PATH, HOME,
-//     NODE_ENV, ANTHROPIC_API_KEY, GH_TOKEN reach the subprocess.
+//     NODE_ENV, ANTHROPIC_API_KEY, GH_TOKEN, GH_REPO reach the subprocess.
 //   Layer 3 (server-side, #4068): _predicate-validator.ts validates
 //     predicate URLs BEFORE the agent runs — ALLOWED_PREDICATE_HOSTS
 //     Set.has() exact match + ipaddr.js public-IP verification + fetch
@@ -75,8 +75,11 @@ import { spawn, execFileSync } from "node:child_process";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import {
+  DEFAULT_CRON_TOKEN_PERMISSIONS,
   mintInstallationToken,
   postSentryHeartbeat,
+  REPO_OWNER,
+  REPO_NAME,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -255,7 +258,7 @@ const TOKEN_MIN_LIFETIME_MS = 50 * 60 * 1000 + 10 * 60 * 1000;
 const SENTRY_MONITOR_SLUG = "scheduled-follow-through";
 
 // Spawn-env allowlist. Same shape as PR-1: only PATH, HOME, NODE_ENV,
-// ANTHROPIC_API_KEY, GH_TOKEN reach the subprocess. Caps SSRF + secret-
+// ANTHROPIC_API_KEY, GH_TOKEN, GH_REPO reach the subprocess. Caps SSRF + secret-
 // exfil blast radius (Layer 2 of dual defense; Layer 1 is the in-prompt
 // HTTPS-and-non-RFC1918 guard).
 //
@@ -272,6 +275,11 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
     NODE_ENV: process.env.NODE_ENV,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     GH_TOKEN: installationToken,
+    // #5010 — pin the repo so `gh` resolves it without a git checkout. This cron
+    // never clones, so it runs `gh` from the prod container CWD /app (no .git);
+    // without GH_REPO, gh falls back to git-remote detection and fails
+    // `fatal: not a git repository`. `gh` honors GH_REPO as the default repo.
+    GH_REPO: `${REPO_OWNER}/${REPO_NAME}`,
   };
 }
 
@@ -289,8 +297,16 @@ export async function cronFollowThroughMonitorHandler({
   // Without this the `gh issue list`/`gh label create`/agent gh calls run
   // unauthenticated inside the prod container and throw `gh auth login`
   // (Sentry 512e253141294ac1a808b2ef03a21289). NEVER log this value.
+  // Least-privilege scope (#5046): the agent's allowlisted Bash is `gh issue
+  // list/view/edit/comment/close` + `gh label create` only, so the token needs
+  // contents/issues/PR write, never actions/admin/checks. Repo-scoped to soleur
+  // → a leaked GH_TOKEN is bounded to a single-user incident.
   const installationToken = await step.run("mint-installation-token", () =>
-    mintInstallationToken({ tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS }),
+    mintInstallationToken({
+      tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
+      permissions: DEFAULT_CRON_TOKEN_PERMISSIONS,
+      repositories: [REPO_NAME],
+    }),
   );
 
   // Step 1: ensure-labels — carries the GHA `Ensure labels exist` step's

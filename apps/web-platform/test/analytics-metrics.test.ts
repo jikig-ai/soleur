@@ -7,6 +7,7 @@ const USERS: UserRow[] = [
     id: "user-1",
     email: "alice@example.com",
     created_at: "2026-03-20T00:00:00Z",
+    workspace_status: "ready",
     kb_sync_history: [
       { date: "2026-04-01", count: 5 },
       { date: "2026-04-02", count: 8 },
@@ -17,12 +18,14 @@ const USERS: UserRow[] = [
     id: "user-2",
     email: "bob@example.com",
     created_at: "2026-04-05T00:00:00Z",
+    workspace_status: "ready",
     kb_sync_history: [],
   },
   {
     id: "user-3",
     email: "carol@example.com",
     created_at: "2026-04-01T00:00:00Z",
+    workspace_status: "provisioning",
     kb_sync_history: [{ date: "2026-04-08", count: 3 }],
   },
 ];

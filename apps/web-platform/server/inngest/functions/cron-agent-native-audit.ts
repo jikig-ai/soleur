@@ -39,8 +39,11 @@
 //   - repo/                          (in-handler `git clone --depth=1`)
 //   - repo/plugins/soleur            (symlink to getPluginPath())
 //   - repo/.claude/settings.json     (DEFAULT_SETTINGS overlay)
-// Plugin resolution is cwd-relative — the soleur plugin manifest at
-// plugins/soleur/.claude-plugin/plugin.json is discovered from spawn cwd.
+// Plugin resolution under headless `--print` requires the explicit
+// `--plugin-dir plugins/soleur` flag in CLAUDE_CODE_FLAGS below — the symlinked
+// plugins/soleur dir is NOT auto-discovered from spawn cwd in headless mode (the
+// interactive marketplace/enabledPlugins trust flow does not run under --print).
+// See #4993 / #4987.
 //
 // GH TOKEN — installation token minted via createProbeOctokit() →
 // installation discovery → generateInstallationToken(installation.id).
@@ -50,6 +53,7 @@
 import {
   redactToken,
   mintInstallationToken,
+  deferIfTier2Cron,
   postSentryHeartbeat,
   type HandlerArgs,
 } from "./_cron-shared";
@@ -94,7 +98,9 @@ const CLAUDE_CODE_FLAGS = [
   "--max-turns",
   "50",
   "--allowedTools",
-  "Bash,Read,Write,Edit,Glob,Grep,Task",
+  "Bash,Read,Write,Edit,Glob,Grep,Task,Skill",
+  "--plugin-dir",
+  "plugins/soleur",
   "--",
 ];
 
@@ -161,6 +167,21 @@ export async function cronAgentNativeAuditHandler({
   step,
   logger,
 }: HandlerArgs): Promise<{ ok: boolean }> {
+  // D6 (#5018): Tier-2-deferred — paused until the egress firewall lands.
+  // Posts an honest on-schedule check-in and skips the claude spawn (no
+  // fail-closed FAILED-issue/RED-monitor storm); the weekly output issue
+  // visibly stops. roadmap-review (#5004) is Tier-1 and is NOT deferred.
+  if (
+    await deferIfTier2Cron({
+      cronName: "cron-agent-native-audit",
+      sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+      step,
+      logger,
+    })
+  ) {
+    return { ok: true };
+  }
+
   // --- Step 1: mint installation token (memoized across replays) ---
   // The raw token string is the return value (NEVER log this value).
   const installationToken = await step.run(

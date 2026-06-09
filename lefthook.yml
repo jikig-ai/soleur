@@ -121,6 +121,27 @@ pre-commit:
         - "apps/web-platform/server/**/*.ts"
         - "scripts/lint-conversations-update-callsites.sh"
       run: bash scripts/lint-conversations-update-callsites.sh
+    # client-pii-grep (#3703): signal-quality gate — flags userId/user_id/email
+    # passed in `extra:` to a direct Sentry.capture* call in client-importable
+    # code. NOT a security control (the L3 beforeSend backstop strips it at
+    # runtime); this surfaces the bypass in the PR diff. Path-array glob, not
+    # `**/*`, per 2026-03-21-lefthook-gobwas-glob-double-star.md.
+    client-pii-grep:
+      priority: 5
+      # Dual-glob (single-star + double-star) per gobwas `**` semantics:
+      # gobwas `**` matches 1+ intermediate dirs, NOT 0+, so a bare
+      # `dir/**/*.{ts,tsx}` silently SKIPS depth-1 files such as
+      # app/global-error.tsx and lib/observability-edge.ts — both real client
+      # Sentry.captureException sites. Mirrors the gdpr-gate-advisory dual-glob
+      # below. See 2026-03-21-lefthook-gobwas-glob-double-star.md.
+      glob:
+        - "apps/web-platform/lib/*.{ts,tsx}"
+        - "apps/web-platform/lib/**/*.{ts,tsx}"
+        - "apps/web-platform/components/*.{ts,tsx}"
+        - "apps/web-platform/components/**/*.{ts,tsx}"
+        - "apps/web-platform/app/*.{ts,tsx}"
+        - "apps/web-platform/app/**/*.{ts,tsx}"
+      run: bash .github/scripts/check-client-pii-sentry.sh {staged_files}
     # gdpr-gate advisory hook (per AGENTS.md hr-gdpr-gate-on-regulated-data-surfaces).
     # ALWAYS exits 0 — prints a one-line stderr breadcrumb when staged paths
     # match the canonical regulated-data regex. Glob list is in path-array
@@ -220,3 +241,25 @@ pre-commit:
       priority: 11
       glob: "knowledge-base/marketing/distribution-content/*.md"
       run: bash scripts/lint-distribution-content.sh {staged_files}
+
+# pre-push mirror of the client-pii-grep signal-quality gate (#3703) so a bypass
+# is surfaced at push time even if the pre-commit hook was skipped (e.g. amended
+# commit, --no-verify on an earlier commit). Same shared script, same scope.
+pre-push:
+  commands:
+    client-pii-grep:
+      priority: 5
+      # Dual-glob, same gobwas rationale as the pre-commit entry above.
+      glob:
+        - "apps/web-platform/lib/*.{ts,tsx}"
+        - "apps/web-platform/lib/**/*.{ts,tsx}"
+        - "apps/web-platform/components/*.{ts,tsx}"
+        - "apps/web-platform/components/**/*.{ts,tsx}"
+        - "apps/web-platform/app/*.{ts,tsx}"
+        - "apps/web-platform/app/**/*.{ts,tsx}"
+      # {push_files}, NOT {staged_files}: in a pre-push hook lefthook resolves
+      # {staged_files} to empty (nothing is staged at push time), so the
+      # command silently skips with "no files for inspection" — a vacuous gate.
+      # {push_files} is the pre-push file set (the push range). Verified e2e
+      # against lefthook 2.1.6 with a real `git push`.
+      run: bash .github/scripts/check-client-pii-sentry.sh {push_files}

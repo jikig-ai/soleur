@@ -15,7 +15,7 @@
 // The octokit is injected (the `octokit?` param) so the test drives the
 // GitHub read shape directly without standing up the App-JWT mint path.
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const reportSilentFallbackSpy = vi.fn();
 const warnSilentFallbackSpy = vi.fn();
@@ -24,10 +24,32 @@ vi.mock("@/server/observability", () => ({
   warnSilentFallback: (...a: unknown[]) => warnSilentFallbackSpy(...a),
 }));
 
+// mintInstallationToken (#5046) mints via the App-JWT probe path, NOT any
+// ambient GH_TOKEN, and threads the least-privilege scope to
+// generateInstallationToken. Mock both dependencies so the scope-threading
+// contract can be asserted without the live GitHub mint.
+const { generateInstallationTokenSpy, probeRequestSpy } = vi.hoisted(() => ({
+  generateInstallationTokenSpy: vi.fn(),
+  probeRequestSpy: vi.fn(),
+}));
+vi.mock("@/server/github-app", () => ({
+  generateInstallationToken: (...a: unknown[]) => generateInstallationTokenSpy(...a),
+}));
+vi.mock("@/server/github/probe-octokit", () => ({
+  createProbeOctokit: () => Promise.resolve({ request: probeRequestSpy }),
+}));
+
 import {
+  deferIfTier2Cron,
+  DEFAULT_CRON_TOKEN_PERMISSIONS,
+  ensureScheduledAuditIssue,
+  mintInstallationToken,
+  REPO_NAME,
   resolveOutputAwareOk,
+  TIER2_DEFERRED_CRONS,
   verifyScheduledIssueCreated,
 } from "@/server/inngest/functions/_cron-shared";
+import type { Octokit } from "@octokit/core";
 
 function octokitReturning(issues: Array<{ updated_at: string }>) {
   const request = vi.fn().mockResolvedValue({ data: issues });
@@ -43,6 +65,54 @@ const RUN_START = "2026-05-31T09:00:00.000Z";
 afterEach(() => {
   reportSilentFallbackSpy.mockClear();
   warnSilentFallbackSpy.mockClear();
+});
+
+// D6 (#5018) — Tier-2 deferral guard. Sentry env is unset in this suite, so
+// postSentryHeartbeat is a no-op; we assert the guard's control-flow contract.
+describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
+  const makeStep = () => ({
+    run: vi.fn(async (_id: string, fn: () => Promise<unknown>) => fn()),
+  });
+  const makeLogger = () =>
+    ({ warn: vi.fn(), info: vi.fn(), error: vi.fn() }) as unknown as Parameters<
+      typeof deferIfTier2Cron
+    >[0]["logger"];
+
+  it("defers a Tier-2 cron: returns true, warns, posts an on-schedule check-in", async () => {
+    const step = makeStep();
+    const logger = makeLogger();
+    const deferred = await deferIfTier2Cron({
+      cronName: "cron-growth-audit",
+      sentryMonitorSlug: "scheduled-growth-audit",
+      step: step as unknown as Parameters<typeof deferIfTier2Cron>[0]["step"],
+      logger,
+    });
+    expect(deferred).toBe(true);
+    expect(step.run).toHaveBeenCalledWith(
+      "tier2-deferred-heartbeat",
+      expect.any(Function),
+    );
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it("does NOT defer the Tier-1 roadmap-review cron: returns false, no heartbeat", async () => {
+    const step = makeStep();
+    const logger = makeLogger();
+    const deferred = await deferIfTier2Cron({
+      cronName: "cron-roadmap-review",
+      sentryMonitorSlug: "scheduled-roadmap-review",
+      step: step as unknown as Parameters<typeof deferIfTier2Cron>[0]["step"],
+      logger,
+    });
+    expect(deferred).toBe(false);
+    expect(step.run).not.toHaveBeenCalled();
+  });
+
+  it("roadmap-review (#5004, Tier-1) is NOT in the deferred set; bug-fixer/growth-audit ARE", () => {
+    expect(TIER2_DEFERRED_CRONS.has("cron-roadmap-review")).toBe(false);
+    expect(TIER2_DEFERRED_CRONS.has("cron-growth-audit")).toBe(true);
+    expect(TIER2_DEFERRED_CRONS.has("cron-bug-fixer")).toBe(true);
+  });
 });
 
 describe("verifyScheduledIssueCreated", () => {
@@ -249,5 +319,327 @@ describe("resolveOutputAwareOk", () => {
       octokit,
     });
     expect(okFalse).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ensureScheduledAuditIssue — the handler-level silence-hole fallback (#4960),
+// extracted from cron-content-generator and parameterized for all 8 always-
+// create producers (#4978). When the output-aware heartbeat finds NO labeled
+// issue in the run window, the handler files a self-reporting FAILED audit
+// issue so the run is never silent. The behavior under test (dedup, redaction,
+// markdown-breakout neutralization, create) is identical to the proven
+// content-generator helper — these tests pin it for the shared, parameterized
+// form so a hardcoded-slug regression fails.
+// ---------------------------------------------------------------------------
+
+describe("ensureScheduledAuditIssue (shared fallback)", () => {
+  const RUN_STARTED_AT = "2026-06-05T15:05:11.992Z";
+  const DATE = "2026-06-05"; // runStartedAt.slice(0, 10)
+  const SPAWN = {
+    exitCode: 1,
+    signal: null,
+    abortedByTimeout: false,
+    durationMs: 368727,
+    stdoutTail: "API Error: 500 Internal server error.",
+    stderrTail: "",
+  };
+
+  // ≥2 distinct {label, titlePrefix} pairs so a hardcoded-slug regression
+  // (e.g. forgetting to thread args.label / args.titlePrefix) fails loudly.
+  const PAIRS = [
+    {
+      label: "scheduled-growth-audit",
+      titlePrefix: "[Scheduled] Growth Audit -",
+      cronName: "cron-growth-audit",
+    },
+    {
+      label: "scheduled-community-monitor",
+      titlePrefix: "[Scheduled] Community Monitor -",
+      cronName: "cron-community-monitor",
+    },
+  ] as const;
+
+  function fakeOctokit(getData: Array<{ title: string }>) {
+    const calls: Array<{ route: string; params: Record<string, unknown> }> = [];
+    const octokit = {
+      request: vi.fn(async (route: string, params: Record<string, unknown>) => {
+        calls.push({ route, params });
+        if (route.startsWith("GET")) return { data: getData };
+        return { data: { number: 9999 } };
+      }),
+    } as unknown as Octokit;
+    return { octokit, calls };
+  }
+
+  it.each(PAIRS)(
+    "creates exactly one labeled audit issue for $label when none exists in the window",
+    async ({ label, titlePrefix, cronName }) => {
+      const { octokit, calls } = fakeOctokit([]);
+      const res = await ensureScheduledAuditIssue({
+        label,
+        titlePrefix,
+        cronName,
+        runStartedAt: RUN_STARTED_AT,
+        spawnResult: SPAWN,
+        octokit,
+      });
+      expect(res.created).toBe(true);
+      const posts = calls.filter((c) => c.route.startsWith("POST"));
+      expect(posts).toHaveLength(1);
+      // Title is `${titlePrefix} ${date}` with date = runStartedAt.slice(0,10).
+      expect(posts[0].params.title).toBe(`${titlePrefix} ${DATE}`);
+      expect(posts[0].params.labels).toEqual([label]);
+      // Self-diagnosing body carries the cronName + failure evidence.
+      expect(String(posts[0].params.body)).toContain(cronName);
+      expect(String(posts[0].params.body)).toContain("API Error: 500");
+      expect(String(posts[0].params.body)).toContain("exitCode");
+    },
+  );
+
+  it("composes the content-generator title byte-identically (AC2)", async () => {
+    const { octokit, calls } = fakeOctokit([]);
+    await ensureScheduledAuditIssue({
+      label: "scheduled-content-generator",
+      titlePrefix: "[Scheduled] Content Generator -",
+      cronName: "cron-content-generator",
+      runStartedAt: RUN_STARTED_AT,
+      spawnResult: SPAWN,
+      octokit,
+    });
+    const post = calls.find((c) => c.route.startsWith("POST"));
+    expect(post?.params.title).toBe(`[Scheduled] Content Generator - ${DATE}`);
+  });
+
+  it.each(PAIRS)(
+    "does NOT double-file for $label when an EXACT same-day audit title already exists",
+    async ({ label, titlePrefix, cronName }) => {
+      const { octokit, calls } = fakeOctokit([
+        { title: `${titlePrefix} ${DATE}` },
+      ]);
+      const res = await ensureScheduledAuditIssue({
+        label,
+        titlePrefix,
+        cronName,
+        runStartedAt: RUN_STARTED_AT,
+        spawnResult: SPAWN,
+        octokit,
+      });
+      expect(res.created).toBe(false);
+      expect(calls.filter((c) => c.route.startsWith("POST"))).toHaveLength(0);
+    },
+  );
+
+  it.each(PAIRS)(
+    "dedup is title-PREFIX for $label — a suffixed prompt-success issue suppresses the fallback",
+    async ({ label, titlePrefix, cronName }) => {
+      const { octokit, calls } = fakeOctokit([
+        { title: `${titlePrefix} ${DATE} (manual)` },
+      ]);
+      const res = await ensureScheduledAuditIssue({
+        label,
+        titlePrefix,
+        cronName,
+        runStartedAt: RUN_STARTED_AT,
+        spawnResult: SPAWN,
+        octokit,
+      });
+      expect(res.created).toBe(false);
+      expect(calls.filter((c) => c.route.startsWith("POST"))).toHaveLength(0);
+    },
+  );
+
+  it("dedup GET is label-scoped, state:all, sort:created/desc, per_page:10 (AC6)", async () => {
+    const { octokit, calls } = fakeOctokit([]);
+    await ensureScheduledAuditIssue({
+      label: "scheduled-growth-audit",
+      titlePrefix: "[Scheduled] Growth Audit -",
+      cronName: "cron-growth-audit",
+      runStartedAt: RUN_STARTED_AT,
+      spawnResult: SPAWN,
+      octokit,
+    });
+    const get = calls.find((c) => c.route.startsWith("GET"));
+    expect(get?.route).toBe("GET /repos/{owner}/{repo}/issues");
+    expect(get?.params.labels).toBe("scheduled-growth-audit");
+    expect(get?.params.state).toBe("all");
+    expect(get?.params.sort).toBe("created");
+    expect(get?.params.direction).toBe("desc");
+    expect(get?.params.per_page).toBe(10);
+  });
+
+  it("scrubs secrets and neutralizes markdown-breakout chars in the issue body (AC5)", async () => {
+    const { octokit, calls } = fakeOctokit([]);
+    await ensureScheduledAuditIssue({
+      label: "scheduled-seo-aeo-audit",
+      titlePrefix: "[Scheduled] SEO/AEO Audit -",
+      cronName: "cron-seo-aeo-audit",
+      runStartedAt: RUN_STARTED_AT,
+      spawnResult: {
+        ...SPAWN,
+        // crash-path stderr spilling an Anthropic key + table-breaking chars
+        // (incl. a literal backslash-pipe to exercise escape-order, js/incomplete-sanitization)
+        stderrTail: "boom sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAA \\| pipe `tick`",
+      },
+      octokit,
+    });
+    const body = String(
+      calls.find((c) => c.route.startsWith("POST"))!.params.body,
+    );
+    expect(body).not.toContain("sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAA");
+    expect(body).toContain("[redacted-key]");
+    // table-breaking chars neutralized inside the inline-code cell: backslash
+    // escaped FIRST (js/incomplete-sanitization) so `\|` → `\\\|`, pipe → "\|"
+    // (markdown literal, no row break), backtick → "ʼ" (no span break),
+    // CR/LF → space.
+    expect(body).toContain("\\\\\\| pipe");
+    expect(body).toContain("ʼtickʼ");
+    expect(body).not.toContain("`tick`");
+  });
+
+  it("collapses CR/LF in the tail to a single space (no markdown row-break)", async () => {
+    const { octokit, calls } = fakeOctokit([]);
+    await ensureScheduledAuditIssue({
+      label: "scheduled-growth-audit",
+      titlePrefix: "[Scheduled] Growth Audit -",
+      cronName: "cron-growth-audit",
+      runStartedAt: RUN_STARTED_AT,
+      spawnResult: { ...SPAWN, stderrTail: "line1\r\nline2\nline3" },
+      octokit,
+    });
+    const body = String(
+      calls.find((c) => c.route.startsWith("POST"))!.params.body,
+    );
+    // CR/LF collapsed to a single space so the tail stays inside one table cell.
+    expect(body).toContain("line1 line2 line3");
+    expect(body).not.toContain("line1\nline2");
+  });
+
+  it("renders the (empty) sentinel for an empty tail", async () => {
+    const { octokit, calls } = fakeOctokit([]);
+    await ensureScheduledAuditIssue({
+      label: "scheduled-growth-audit",
+      titlePrefix: "[Scheduled] Growth Audit -",
+      cronName: "cron-growth-audit",
+      runStartedAt: RUN_STARTED_AT,
+      spawnResult: { ...SPAWN, stdoutTail: "", stderrTail: "" },
+      octokit,
+    });
+    const body = String(
+      calls.find((c) => c.route.startsWith("POST"))!.params.body,
+    );
+    expect(body).toContain("(empty)");
+  });
+
+  it("throws when neither octokit nor installationToken is provided", async () => {
+    await expect(
+      ensureScheduledAuditIssue({
+        label: "scheduled-growth-audit",
+        titlePrefix: "[Scheduled] Growth Audit -",
+        cronName: "cron-growth-audit",
+        runStartedAt: RUN_STARTED_AT,
+        spawnResult: SPAWN,
+        // no octokit, no installationToken
+      }),
+    ).rejects.toThrow(/need octokit or installationToken/);
+  });
+
+  it("propagates a create failure to the caller (POST throws → helper rejects)", async () => {
+    const octokit = {
+      request: vi.fn(async (route: string) => {
+        if (route.startsWith("GET")) return { data: [] };
+        throw new Error("GitHub 503");
+      }),
+    } as unknown as Octokit;
+    await expect(
+      ensureScheduledAuditIssue({
+        label: "scheduled-roadmap-review",
+        titlePrefix: "[Scheduled] Weekly Roadmap Review -",
+        cronName: "cron-roadmap-review",
+        runStartedAt: RUN_STARTED_AT,
+        spawnResult: SPAWN,
+        octokit,
+      }),
+    ).rejects.toThrow("GitHub 503");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mintInstallationToken — least-privilege cron token (#5046 PR-1 / AC3).
+//
+// The cron mint path threads an optional { permissions, repositories } scope to
+// generateInstallationToken so a leaked cron GH_TOKEN is bounded to a
+// single-user incident (repo-scoped, write-only on contents/issues/PRs — never
+// actions/admin/checks). The mint resolves the installation via the App-JWT
+// probe client, NOT any ambient GH_TOKEN, so a bogus ambient token cannot leak
+// into the minted value.
+// ---------------------------------------------------------------------------
+describe("mintInstallationToken (least-privilege cron token)", () => {
+  beforeEach(() => {
+    generateInstallationTokenSpy.mockReset().mockResolvedValue("ghs_minted");
+    probeRequestSpy.mockReset().mockResolvedValue({ data: { id: 424242 } });
+  });
+
+  it("DEFAULT_CRON_TOKEN_PERMISSIONS is exactly contents+issues+pull_requests:write (AC3)", () => {
+    expect(DEFAULT_CRON_TOKEN_PERMISSIONS).toEqual({
+      contents: "write",
+      issues: "write",
+      pull_requests: "write",
+    });
+    // NEVER actions/administration/checks — those would un-bound the blast radius.
+    expect(DEFAULT_CRON_TOKEN_PERMISSIONS).not.toHaveProperty("actions");
+    expect(DEFAULT_CRON_TOKEN_PERMISSIONS).not.toHaveProperty("administration");
+  });
+
+  it("threads the narrowed permissions + repositories scope to generateInstallationToken", async () => {
+    const token = await mintInstallationToken({
+      tokenMinLifetimeMs: 1000,
+      permissions: DEFAULT_CRON_TOKEN_PERMISSIONS,
+      repositories: [REPO_NAME],
+    });
+    expect(token).toBe("ghs_minted");
+    expect(generateInstallationTokenSpy).toHaveBeenCalledTimes(1);
+    const [installationId, opts] = generateInstallationTokenSpy.mock.calls[0];
+    expect(installationId).toBe(424242);
+    expect(opts).toMatchObject({
+      minRemainingMs: 1000,
+      permissions: {
+        contents: "write",
+        issues: "write",
+        pull_requests: "write",
+      },
+      repositories: ["soleur"],
+    });
+  });
+
+  it("an unscoped mint passes no permissions/repositories (full grant preserved for non-narrowed crons)", async () => {
+    await mintInstallationToken({ tokenMinLifetimeMs: 2000 });
+    const [, opts] = generateInstallationTokenSpy.mock.calls[0];
+    expect(opts.minRemainingMs).toBe(2000);
+    expect(opts.permissions).toBeUndefined();
+    expect(opts.repositories).toBeUndefined();
+  });
+
+  it("mints via the App-JWT probe path, not an ambient GH_TOKEN", async () => {
+    const prev = process.env.GH_TOKEN;
+    process.env.GH_TOKEN = "ghs_bogus_ambient_should_be_ignored";
+    try {
+      const token = await mintInstallationToken({
+        tokenMinLifetimeMs: 1000,
+        permissions: DEFAULT_CRON_TOKEN_PERMISSIONS,
+        repositories: [REPO_NAME],
+      });
+      // The returned token is the freshly minted one, never the ambient env var.
+      expect(token).toBe("ghs_minted");
+      expect(token).not.toContain("bogus_ambient");
+      // Installation resolved via the probe octokit (App JWT), not GH_TOKEN.
+      expect(probeRequestSpy).toHaveBeenCalledWith(
+        "GET /repos/{owner}/{repo}/installation",
+        { owner: "jikig-ai", repo: "soleur" },
+      );
+    } finally {
+      if (prev === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = prev;
+    }
   });
 });

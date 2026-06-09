@@ -3,6 +3,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { SettingsContent } from "@/components/settings/settings-content";
 import type { RepoStatus } from "@/components/settings/project-setup-card";
 import { resolveNeedsReconnect } from "@/lib/repo-status";
+import { resolveWorkspaceIdentityForSettings } from "@/server/workspace-identity-resolver";
 
 export default async function SettingsPage() {
   const supabase = await createClient();
@@ -41,6 +42,13 @@ export default async function SettingsPage() {
     user.id,
   );
 
+  // #4916: workspace-identity controls (logo + rename), relocated from the
+  // flag-gated Team page so they are reachable for every user.
+  const workspaceIdentity = await resolveWorkspaceIdentityForSettings(
+    supabase,
+    service,
+  );
+
   // feat-operator-cc-oauth — show the subscription-token toggle ONLY for an
   // operator/internal account (ADMIN_USER_IDS) with the kill-switch on.
   // Mirrors the AUTHORITATIVE server-side gate in /api/keys; this just hides
@@ -62,6 +70,7 @@ export default async function SettingsPage() {
       repoLastSyncedAt={userData?.repo_last_synced_at ?? null}
       needsReconnect={needsReconnect}
       canUseOauthCredential={isOperator && ccOauthEnabled}
+      workspaceIdentity={workspaceIdentity}
     />
   );
 }

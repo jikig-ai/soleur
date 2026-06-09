@@ -18,10 +18,10 @@
 import {
   redactToken,
   mintInstallationToken,
+  deferIfTier2Cron,
   postSentryHeartbeat,
   resolveOutputAwareOk,
-  REPO_OWNER,
-  REPO_NAME,
+  ensureScheduledAuditIssue,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -32,8 +32,6 @@ import {
 } from "./_cron-claude-eval-substrate";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
-import { redactGithubSourcedText } from "@/lib/safety/redaction-allowlist";
-import type { Octokit } from "@octokit/core";
 
 // =============================================================================
 // Constants
@@ -53,6 +51,26 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 // claude-code spawn argv. `--` is load-bearing per #4017 bug 8/8 (variadic
 // --allowedTools consumes the prompt as a tool name without the end-of-
 // options marker). The prompt is the SOLE positional argument after `--`.
+//
+// #4987 — content-generator's prompt invokes plugin skills
+// (/soleur:content-writer, social-distribute, growth). This is the FIRST
+// producer fixed for headless plugin-skill resolution; sibling producers that
+// invoke /soleur:* skills in their prompts (cron-competitive-analysis,
+// cron-legal-audit, cron-growth-audit, …) almost certainly share the same
+// latent gap and are tracked for a fleet audit in #4993. Two flags make skill
+// invocation work in a headless `claude --print` run:
+//   - `--allowedTools` is an explicit allowlist, so `Skill` (invoke a plugin
+//     skill) and `Task` (content-writer's fact-checker subagent; the `Task`
+//     precedent is cron-competitive-analysis / cron-legal-audit, which already
+//     allow it) must be listed or the skill cannot run at all. --max-turns
+//     stays 50.
+//   - `--plugin-dir plugins/soleur` REGISTERS the symlinked plugin. Per
+//     `claude --plugin-dir <path>` ("Load a plugin from a directory or .zip"),
+//     loading a directory-based plugin in a headless `--print` run requires the
+//     flag explicitly — a bare symlinked plugins/ dir is NOT auto-discovered
+//     (the interactive marketplace/enabledPlugins trust flow does not run under
+//     --print). The path is the symlink setupEphemeralWorkspace creates at
+//     <spawnCwd>/plugins/soleur and MUST precede the `--` marker.
 const CLAUDE_CODE_FLAGS = [
   "--print",
   "--model",
@@ -60,7 +78,9 @@ const CLAUDE_CODE_FLAGS = [
   "--max-turns",
   "50",
   "--allowedTools",
-  "Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch",
+  "Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Skill,Task",
+  "--plugin-dir",
+  "plugins/soleur",
   "--",
 ];
 
@@ -86,10 +106,8 @@ STEP 3 — Generate distribution content:
 Run /soleur:social-distribute <article-path> --headless
 Ensure frontmatter has: publish_date: <today>, status: scheduled, channels: discord, x, bluesky, linkedin-company
 
-STEP 4 — Validate:
-npx @11ty/eleventy
-bash scripts/validate-blog-links.sh _site
-If build or link validation fails, create issue and stop.
+STEP 4 — Validation runs in CI (do NOT build locally):
+This ephemeral workspace is a shallow clone with no node_modules, so a local "npx @11ty/eleventy" build cannot run here. Validation happens on the PR you open in the MANDATORY FINAL STEP: CI runs "npx @11ty/eleventy" and "scripts/validate-blog-links.sh", and the "gh pr merge --auto" below only merges once those required checks pass. Your job is to make CI green — ensure the article's Eleventy frontmatter is valid and every internal link resolves. Do NOT attempt a local build or run the validation scripts yourself.
 
 STEP 5 — Record topic in queue:
 Update seo-refresh-queue.md with generated_date annotation.
@@ -127,7 +145,7 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
 // Silence-hole fallback guard (#4960)
 // =============================================================================
 //
-// The prompt's STEP 1b/2/4/6 "create issue and stop" guards are the ONLY
+// The prompt's STEP 1b/2/6 "create issue and stop" guards are the ONLY
 // producers of the `scheduled-content-generator` audit issue. Any termination
 // that bypasses the prompt — a mid-eval crash, an upstream Anthropic API 500
 // that kills `claude --print` (the #4960 case, confirmed via Sentry event
@@ -148,110 +166,6 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
 // installation token (issues:write — the same token the spawn's `gh issue
 // create` uses; `hr-github-app-auth-not-pat`).
 
-// GitHub-issue-body readability bound for the spawn tails. Tighter than the
-// 4000-char Sentry extra (resolveOutputAwareOk) — the issue body is for
-// at-a-glance triage, the full tail already lives in the Sentry event.
-const AUDIT_TAIL_CHARS = 500;
-
-// The spawn tails are token-redacted by the eval substrate (redactToken), but
-// that strips ONLY the installation token — a crash stack can still spill other
-// allowlisted-env secrets (e.g. ANTHROPIC_API_KEY / sk-ant-…). Route through the
-// canonical multi-secret scrubber before it lands in a GitHub issue body, and
-// neutralize backtick/pipe/newline so untrusted eval output cannot break out of
-// the inline-code table cell into rendered markdown (image-autofetch / banner
-// injection). Mirrors the github-sourced-text redaction discipline.
-function formatTailForIssue(tail: string | undefined): string {
-  const scrubbed = redactGithubSourcedText(tail ?? "").slice(-AUDIT_TAIL_CHARS);
-  if (!scrubbed) return "(empty)";
-  return scrubbed
-    .replace(/[\r\n]+/g, " ")
-    // Escape pre-existing backslashes BEFORE introducing our own `\|` escape,
-    // so an input like `\|` cannot produce an ambiguous escape sequence
-    // (js/incomplete-sanitization). Order is load-bearing.
-    .replace(/\\/g, "\\\\")
-    .replace(/\|/g, "\\|")
-    .replace(/`/g, "ʼ");
-}
-
-export async function ensureContentGeneratorAuditIssue(args: {
-  runStartedAt: string;
-  spawnResult: Pick<
-    SpawnResult,
-    "exitCode" | "signal" | "abortedByTimeout" | "durationMs" | "stdoutTail" | "stderrTail"
-  >;
-  installationToken?: string;
-  octokit?: Octokit;
-}): Promise<{ created: boolean }> {
-  const { runStartedAt, spawnResult, installationToken, octokit } = args;
-
-  // Replay-stable UTC date anchor (NOT `new Date()`, which would drift across
-  // the retries:1 replay and defeat the title-dedup below).
-  const date = runStartedAt.slice(0, 10);
-  const title = `[Scheduled] Content Generator - ${date}`;
-
-  let client = octokit;
-  if (!client) {
-    if (!installationToken) {
-      throw new Error(
-        "ensureContentGeneratorAuditIssue: need octokit or installationToken",
-      );
-    }
-    const { Octokit: OctokitCtor } = await import("@octokit/core");
-    client = new OctokitCtor({ auth: installationToken }) as unknown as Octokit;
-  }
-
-  // Dedup: a transient failure that re-runs this path could file a second
-  // FAILED issue. Mirror cron-skill-freshness.ts searchExistingFreshnessIssue —
-  // skip the create if today's audit issue already exists (success or fallback).
-  // Explicit `sort: created, direction: desc` so today's issue is guaranteed on
-  // page 1 — do NOT rely on GitHub's unspecified default sort for dedup
-  // correctness (a busy label could otherwise page today's issue out and
-  // double-file). per_page:10 ≈ 5 weeks at Tue/Thu cadence, ample headroom.
-  const existing = (await client.request("GET /repos/{owner}/{repo}/issues", {
-    owner: REPO_OWNER,
-    repo: REPO_NAME,
-    state: "all",
-    labels: SENTRY_MONITOR_SLUG,
-    sort: "created",
-    direction: "desc",
-    per_page: 10,
-    headers: { "X-GitHub-Api-Version": "2022-11-28" },
-  })) as { data: Array<{ title: string }> };
-  if (existing.data.some((i) => i.title.startsWith(title))) {
-    return { created: false };
-  }
-
-  // Self-diagnosing body — the cron's own redacted spawn tail + timing, so the
-  // failure is triageable without SSH (app stdout is not shipped to Better
-  // Stack). The tails are already token-redacted by the eval substrate.
-  const body =
-    `Automated FAILED self-report from \`cron-content-generator\`.\n\n` +
-    `This run terminated WITHOUT producing a \`scheduled-content-generator\` ` +
-    `audit issue via the prompt (mid-eval crash / upstream API error / ` +
-    `max-turns kill). The handler-level fallback (#4960) filed this issue so ` +
-    `the run is not silent and the \`cron-cloud-task-heartbeat\` watchdog ` +
-    `stays green.\n\n` +
-    `| Signal | Value |\n| --- | --- |\n` +
-    `| fn | \`cron-content-generator\` |\n` +
-    `| runStartedAt | \`${runStartedAt}\` |\n` +
-    `| exitCode | \`${spawnResult.exitCode}\` |\n` +
-    `| signal | \`${spawnResult.signal}\` |\n` +
-    `| abortedByTimeout | \`${spawnResult.abortedByTimeout}\` |\n` +
-    `| durationMs | \`${spawnResult.durationMs}\` |\n` +
-    `| stdoutTail | \`${formatTailForIssue(spawnResult.stdoutTail)}\` |\n` +
-    `| stderrTail | \`${formatTailForIssue(spawnResult.stderrTail)}\` |\n\n` +
-    `Triage: \`knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md\` (H2).`;
-
-  await client.request("POST /repos/{owner}/{repo}/issues", {
-    owner: REPO_OWNER,
-    repo: REPO_NAME,
-    title,
-    body,
-    labels: [SENTRY_MONITOR_SLUG],
-  });
-  return { created: true };
-}
-
 // =============================================================================
 // Handler
 // =============================================================================
@@ -260,6 +174,21 @@ export async function cronContentGeneratorHandler({
   step,
   logger,
 }: HandlerArgs): Promise<{ ok: boolean }> {
+  // D6 (#5018): Tier-2-deferred — paused until the egress firewall lands.
+  // Posts an honest on-schedule check-in and skips the claude spawn (no
+  // fail-closed FAILED-issue/RED-monitor storm); the weekly output issue
+  // visibly stops. roadmap-review (#5004) is Tier-1 and is NOT deferred.
+  if (
+    await deferIfTier2Cron({
+      cronName: "cron-content-generator",
+      sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+      step,
+      logger,
+    })
+  ) {
+    return { ok: true };
+  }
+
   // Run-window start for the post-run output check (replay-stable).
   const runStartedAt = await step.run(
     "run-started-at",
@@ -369,13 +298,16 @@ export async function cronContentGeneratorHandler({
     //         fallback even if the issue is genuinely absent — covered by the
     //         watchdog's maxGapDays threshold, not this step.
     //     (b) On a verify-throw + spawn-nonzero run the gate fires even though
-    //         the prompt's issue may exist; ensureContentGeneratorAuditIssue's
-    //         own same-title dedup is what prevents a spurious second issue — so
+    //         the prompt's issue may exist; ensureScheduledAuditIssue's own
+    //         same-title dedup is what prevents a spurious second issue — so
     //         keep that dedup robust (it is load-bearing, not belt-and-suspenders). ---
     if (!heartbeatOk) {
       await step.run("ensure-audit-issue", async () => {
         try {
-          await ensureContentGeneratorAuditIssue({
+          await ensureScheduledAuditIssue({
+            label: SENTRY_MONITOR_SLUG,
+            titlePrefix: "[Scheduled] Content Generator -",
+            cronName: "cron-content-generator",
             runStartedAt,
             spawnResult,
             installationToken,

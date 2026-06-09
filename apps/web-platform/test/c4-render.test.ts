@@ -6,13 +6,20 @@ const spawnMock = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", () => ({ spawn: spawnMock }));
 
 // Mock node:fs/promises so renderC4Model's temp-dir lifecycle (mkdtemp →
-// readFile(temp) → copyFile(temp→real) → rm) is deterministic. The fake
-// `readFile` returns whatever model JSON the test stages.
+// readFile(temp) → rm) is deterministic. The fake `readFile` returns whatever
+// model JSON the test stages — that string is what renderC4Model now RETURNS as
+// `json` (#4976: off-tree render, no write onto the tracked path).
+// `copyFile`/`rename`/`writeFile` are kept as spies even though the source no
+// longer imports them: `vi.mock` replaces the WHOLE module, so any regression
+// that re-introduces an in-place publish — via the old `copyFile`+`rename`
+// shape OR a direct `writeFile(realPath, …)` — would call one of these spies and
+// trip the `.not.toHaveBeenCalled()` assertions below.
 const fsMock = vi.hoisted(() => ({
   mkdtemp: vi.fn(),
   readFile: vi.fn(),
   copyFile: vi.fn(),
   rename: vi.fn(),
+  writeFile: vi.fn(),
   rm: vi.fn(),
 }));
 vi.mock("node:fs/promises", () => fsMock);
@@ -64,6 +71,7 @@ beforeEach(() => {
   fsMock.readFile.mockReset().mockResolvedValue(VALID_MODEL);
   fsMock.copyFile.mockReset().mockResolvedValue(undefined);
   fsMock.rename.mockReset().mockResolvedValue(undefined);
+  fsMock.writeFile.mockReset().mockResolvedValue(undefined);
   fsMock.rm.mockReset().mockResolvedValue(undefined);
   vi.useRealTimers();
 });
@@ -74,10 +82,6 @@ afterEach(() => {
 
 const WS = "/workspaces/ws-1";
 const EXPECTED_CWD = "/workspaces/ws-1/knowledge-base/engineering/architecture/diagrams";
-const REAL_JSON = `${EXPECTED_CWD}/model.likec4.json`;
-// Atomic publish stages into a same-dir sibling (suffix = the mkdtemp basename)
-// then renames over the real path.
-const STAGE = `${REAL_JSON}.stage-c4-render-abc123`;
 
 describe("renderC4Model", () => {
   it("spawns the likec4 CLI into a temp -o path in the scope-guarded diagrams dir", async () => {
@@ -113,21 +117,22 @@ describe("renderC4Model", () => {
     expect(env).not.toHaveProperty("SUPABASE_SERVICE_ROLE_KEY");
   });
 
-  it("copies the validated temp model onto the real path on a non-empty export", async () => {
+  it("returns the validated temp model as `json` and NEVER writes the tracked path on a non-empty export", async () => {
     const child = makeChild();
     fsMock.readFile.mockResolvedValue(VALID_MODEL);
     spawnThenEmit(child, () => child.emit("close", 0, null));
     const p = renderC4Model(WS);
     const res = await p;
     expect(res.ok).toBe(true);
-    // Validated → published atomically: copy into the same-dir stage, then
-    // rename over the real model.likec4.json (where GET reads + writer commits).
-    expect(fsMock.copyFile).toHaveBeenCalledWith(
-      `${TMP_DIR}/model.likec4.json`,
-      STAGE,
-    );
-    expect(fsMock.rename).toHaveBeenCalledWith(STAGE, REAL_JSON);
-    // Temp dir always cleaned.
+    // The validated bytes are RETURNED verbatim (byte-identical to the read), so
+    // the writer commits exactly what likec4 produced — never re-stringified.
+    if (res.ok) expect(res.json).toBe(VALID_MODEL);
+    // #4976: the tracked model.likec4.json is never published onto — the render
+    // produces only a process-temp artifact. No copy/rename/write onto any path.
+    expect(fsMock.copyFile).not.toHaveBeenCalled();
+    expect(fsMock.rename).not.toHaveBeenCalled();
+    expect(fsMock.writeFile).not.toHaveBeenCalled();
+    // The ONLY fs mutation is the temp-dir cleanup (proves temp-only lifecycle).
     expect(fsMock.rm).toHaveBeenCalledWith(
       TMP_DIR,
       expect.objectContaining({ recursive: true, force: true }),
@@ -142,6 +147,8 @@ describe("renderC4Model", () => {
     const res = await renderC4Model(WS);
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.reason).toBe("empty_model");
+    // No `json` on a failed render → the writer can never commit a bad model.
+    expect(Object.prototype.hasOwnProperty.call(res, "json")).toBe(false);
     expect(fsMock.copyFile).not.toHaveBeenCalled();
     expect(fsMock.rename).not.toHaveBeenCalled();
   });
@@ -168,6 +175,8 @@ describe("renderC4Model", () => {
       // on stderr substring).
       expect(res.detail).toContain("Could not resolve reference");
     }
+    // No committable bytes leak out of a failed render.
+    expect(Object.prototype.hasOwnProperty.call(res, "json")).toBe(false);
     // The real model.likec4.json was NEVER overwritten with the empty export.
     expect(fsMock.copyFile).not.toHaveBeenCalled();
     // Temp dir still cleaned.
@@ -189,6 +198,7 @@ describe("renderC4Model", () => {
       expect(res.reason).toBe("io_error");
       expect(res.detail).toContain("parse failed");
     }
+    expect(Object.prototype.hasOwnProperty.call(res, "json")).toBe(false);
     expect(fsMock.copyFile).not.toHaveBeenCalled();
   });
 

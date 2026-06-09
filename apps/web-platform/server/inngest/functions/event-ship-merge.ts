@@ -40,6 +40,11 @@ const TOKEN_MIN_LIFETIME_MS = 30 * 60 * 1000 + 10 * 60 * 1000;
 
 export const MAX_TURN_DURATION_MS = 30 * 60 * 1000;
 
+// #4993 — headless /soleur:* skill resolution (fleet fix mirroring #4987 /
+// PR #4989): `--plugin-dir plugins/soleur` registers the symlinked plugin under
+// `--print` (a bare plugins/ dir is NOT auto-discovered in headless mode), and
+// `Skill`+`Task` (/soleur:ship fans out review/QA subagents) in --allowedTools
+// gate skill invocation + subagent fan-out.
 const CLAUDE_CODE_FLAGS = [
   "--print",
   "--model",
@@ -47,7 +52,9 @@ const CLAUDE_CODE_FLAGS = [
   "--max-turns",
   "40",
   "--allowedTools",
-  "Bash,Read,Write,Edit,Glob,Grep",
+  "Bash,Read,Write,Edit,Glob,Grep,Skill,Task",
+  "--plugin-dir",
+  "plugins/soleur",
   "--",
 ];
 

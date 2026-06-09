@@ -5,13 +5,16 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { resolveActiveWorkspaceKbRoot } from "@/server/workspace-resolver";
 import { isPathInWorkspace } from "@/server/sandbox";
 import { renameUserIdToHash } from "@/server/userid-pseudonymize";
-import { C4_DIAGRAMS_DIR, C4_SOURCE_EXT, C4_MODEL_JSON } from "@/lib/c4-constants";
+import {
+  C4_DIAGRAMS_DIR,
+  C4_SOURCE_EXT,
+  C4_MODEL_JSON,
+  MAX_C4_BYTES,
+} from "@/lib/c4-constants";
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
 
 export const runtime = "nodejs";
-
-const MAX_C4_BYTES = 4 * 1024 * 1024; // layouted model JSON can be large
 
 /**
  * GET /api/kb/c4/project?dir=<kb-relative dir>
