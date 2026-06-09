@@ -11,6 +11,24 @@ brand_survival_threshold: none
 
 # feat: Shared-document CTA banner — collapse to a thin bar and re-open without reload
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-09
+**Sections enhanced:** Implementation Phase 1 (animation + ARIA + chevron), Test Phase 2, Acceptance Criteria, Risks, Sharp Edges, Alternatives.
+**Review lenses applied (run inline — nested Task spawning is unavailable inside the one-shot subagent):** frontend-design (flash-risk), code-simplicity (YAGNI), test-design (happy-dom determinism), accessibility (WAI-ARIA disclosure), plus the deepen-plan realism passes (verify-the-negative, precedent-diff Phase 4.4).
+
+### Key Improvements
+1. **`motion-reduce:` is the correct reduced-motion mechanism — and is now load-bearing-justified.** Confirmed Tailwind **4.2.1** ships the `motion-reduce:` variant built-in (present in `node_modules/tailwindcss/dist/lib.js`) — no `@custom-variant` definition needed (unlike `dark`, which IS custom-defined at `globals.css:13` because it maps to `data-theme`). Crucially, **happy-dom does NOT provide `window.matchMedia` by default** (confirmed at `apps/web-platform/test/dashboard-sidebar-collapse.test.tsx:71` — that suite must `vi.stubGlobal("matchMedia", …)`). A JS `matchMedia`-based reduced-motion gate would force every test in the rewritten suite to stub matchMedia or crash; the CSS-only `motion-reduce:` variant needs zero test plumbing. This is the decisive reason the CSS approach wins.
+2. **ARIA disclosure pattern corrected to match repo precedent.** The three existing disclosure controls (`debug-stream-panel.tsx:105`, `org-switcher.tsx:116`, `kb/file-tree.tsx:204`) all carry `aria-expanded={state}` on the toggle and none use `aria-controls`. Plan retains `aria-expanded` on each rendered control (the control legitimately swaps here) and explicitly drops `aria-controls` as YAGNI for a marketing banner. See Research Insights → Accessibility.
+3. **Honest animation framing (no over-claim).** Conditional-render of two mutually-exclusive panels animates the *entry* of the incoming panel (transform+opacity transition on mount) but the outgoing panel unmounts instantly — there is no exit animation. The plan no longer implies a full crossfade; "smooth" = the incoming panel eases in. This is the YAGNI-correct choice for a banner (an exit animation needs always-mount-both + orchestration; not worth it here). See Research Insights → Animation.
+4. **Up-chevron aligned to the repo's existing form.** Use `<polyline points="5 12 12 5 19 12" />` (+ optional stem `<line x1="12" y1="19" x2="12" y2="5" />`), the exact up-chevron already in `chat-input.tsx:691-694`, instead of an arbitrary lucide variant — visual + maintenance consistency.
+
+### New Considerations Discovered
+- **Lint is a non-functional gate for web-platform** (`knowledge-base/project/learnings/2026-06-05-web-platform-lint-gate-is-non-functional-tsc-vitest-are-authoritative.md`): `next lint` drops into an interactive prompt and CI does not run it. The authoritative gates are `tsc --noEmit` + `vitest run` — already what AC7/AC8 prescribe. Do NOT add a lint AC or treat a lint non-zero exit as a regression.
+- **`safeSession` is a sensitive-path file** (`apps/web-platform/lib/safe-session.ts` matches the preflight Check-6 / deepen Phase-4.6 `SENSITIVE_PATH_RE`). Confirmed at gate-check time that it is NOT in Files-to-Edit, so the `none` threshold needs no scope-out bullet. Re-confirms the "remove usage, keep the file" sharp edge — touching the file would also trip the sensitive-path gate.
+
+---
+
 ## Overview
 
 The shared-document waitlist CTA banner (`apps/web-platform/components/shared/cta-banner.tsx`, shipped in #5035) currently has a terminal close: clicking the dismiss button writes `sessionStorage["soleur:shared:cta-dismissed"]="1"`, sets `dismissed=true`, and the component returns `null` — the banner unmounts with no way back without clearing storage or reloading.
@@ -89,7 +107,7 @@ When `panel === "collapsed"`, render a slim full-width strip that reuses the ban
   - `aria-expanded={false}`
   - `data-testid="cta-banner-reopen"`
   - Inner content: `<div class="mx-auto flex max-w-3xl items-center justify-between gap-4">` with the "Built with **Soleur**" line (gold `text-soleur-accent-gold-fg` accent on "Soleur") on the left and an up-chevron `<svg>` on the right.
-  - Up-chevron: inline `<svg>` polyline `points="18 15 12 9 6 15"` (`viewBox="0 0 24 24"`, `stroke="currentColor"`, `aria-hidden="true"`), matching the existing inline-X SVG style.
+  - Up-chevron: inline `<svg>` using the **repo's existing up-chevron form** from `chat-input.tsx:691-694` — `<line x1="12" y1="19" x2="12" y2="5" />` + `<polyline points="5 12 12 5 19 12" />` (or just the polyline if the stem reads too heavy at strip scale), `viewBox="0 0 24 24"`, `stroke="currentColor"`, `strokeLinecap="round"`, `strokeLinejoin="round"`, `aria-hidden="true"`. (Do NOT invent a new chevron path — match the existing one.)
 
 **1.4 — Expanded banner (existing render, with collapse semantics).**
 When `panel === "expanded"`, keep the existing two-tier banner markup, with these changes to the close button (`cta-banner.tsx:59-80`):
@@ -99,6 +117,8 @@ When `panel === "expanded"`, keep the existing two-tier banner markup, with thes
 - Keep `data-testid="cta-banner-dismiss"` (stable selector the close test keys on; the *behavior* it triggers changes, the test-id does not).
 - The X icon SVG stays (the close button still "closes"/collapses).
 
+> **ARIA disclosure pattern (deepen — accessibility).** The canonical WAI-ARIA disclosure pattern puts `aria-expanded` on a *single persistent toggle* that controls the disclosed region. Here the control physically swaps (X button when expanded ↔ full-width strip when collapsed), so each rendered control carries `aria-expanded` reflecting the *current* state: expanded close button → `aria-expanded={true}`, collapsed strip → `aria-expanded={false}`. This matches the repo's three existing disclosure controls — `chat/debug-stream-panel.tsx:105`, `dashboard/org-switcher.tsx:116`, `kb/file-tree.tsx:204` — all of which expose `aria-expanded={state}` on the toggle. **Do NOT add `aria-controls`** (none of the three precedents do; it is YAGNI for a marketing banner with no separately-identifiable controlled region). **Focus management:** do not script focus moves on collapse/expand. The collapse button and the reopen strip are adjacent in the DOM/tab order, so a keyboard user who activates collapse lands naturally on the reopen strip on next tab; an explicit `focus()` call is unnecessary complexity for this surface and risks a focus-trap-flavored surprise.
+
 > **Note — close-button label change is intentional and the waitlist test does NOT key on it.** `shared-cta-banner-waitlist.test.tsx` keys on the email input, the `/^join$/i` submit button, the privacy link, and the aria-live region — none reference the dismiss button's `aria-label`. Verified by grep (no `dismiss`/`Dismiss signup` reference in that file). The close test (`shared-cta-banner-close.test.tsx`) DOES reference `/dismiss signup banner/i` at line 25 and is being rewritten in Phase 2 — so the label change is absorbed there.
 
 **1.5 — Animation (Tailwind/CSS, reduced-motion aware).**
@@ -106,6 +126,8 @@ When `panel === "expanded"`, keep the existing two-tier banner markup, with thes
 - Drive the visual slide/fade off the `panel` value: expanded → `translate-y-0 opacity-100`; while collapsing, the collapsed strip mounts (the collapsed strip itself can carry a matching `transition-all duration-300 … motion-reduce:transition-none`).
 - **Reduced-motion contract:** every `transition-*`/`duration-*` utility added MUST be paired with a `motion-reduce:` reset (`motion-reduce:transition-none` and/or `motion-reduce:duration-0`) so that under `prefers-reduced-motion: reduce` the state change is instant. Tailwind v4's `motion-reduce:` variant compiles to `@media (prefers-reduced-motion: reduce)` — no JS needed.
 - Keep the animation simple: a CSS class swap on state, not a JS-timed mount/unmount sequence. The collapsed strip and expanded panel are **conditionally rendered on `panel`** (mutually exclusive); the transition utilities make the swap feel smooth without an animation library or exit-animation orchestration. (See Sharp Edges on why a class-swap, not a height-animated single element, is the YAGNI choice.)
+
+> **Animation scope — entry eases in, exit is instant (deepen — frontend honesty).** Because the two panels are conditionally rendered (mutually exclusive), the *outgoing* panel unmounts immediately — a Tailwind transform/opacity transition only animates the *incoming* panel as it mounts (CSS transitions need the element present to animate). So "smooth animation" here means: on collapse, the thin strip eases in; on re-open, the full banner eases in. There is **no exit animation** on the panel being replaced. This is deliberate and YAGNI-correct for a marketing banner — a true crossfade would require always-mounting both panels and toggling `opacity`/`translate`/`pointer-events` by state plus managing the collapsed height during the expanded→collapsed transition, which is disproportionate complexity for this surface. The locked-decision phrase "re-open (and collapse) use a smooth animation" is satisfied by the incoming-panel ease-in; do not over-build an exit-animation orchestration to chase a crossfade. **Entry-animation mechanic:** the cleanest CSS-only way to ease in a freshly-mounted element is a small initial-mount transition. If a pure `transition-*` class on a conditionally-rendered element does not visibly animate (the element mounts already at its final transform), use the `starting-style`-free approach: mount the incoming panel and toggle a one-frame state via a `useEffect(() => setEntered(true), [])`-style flag that flips `translate-y-1 opacity-0` → `translate-y-0 opacity-100`. Keep this minimal; if the unanimated conditional-render swap reads acceptably in QA, the entry flag can be dropped entirely (simplest path — verify visually at /work time).
 
 **1.6 — Unchanged:** `handleSubmit`, the `Status` type, the success branch, the form markup, the honeypot, the privacy line, and the aria-live error region all stay byte-identical. `/api/waitlist` is not touched.
 
@@ -125,6 +147,13 @@ New cases (names indicative):
 7. **a fresh mount always starts expanded even if the old key is set** — pre-seed `sessionStorage.setItem("soleur:shared:cta-dismissed", "1")`, then `render(<CtaBanner />)`; assert the form is present (expanded) — proves the component no longer reads the old key (reload-restores-full-banner behavior at the unit level).
 
 Remove the two `safeSession`-throwing cases (lines 56-75 of the current file): the component no longer touches sessionStorage on this path, so those error-tolerance cases are now vacuous. (If a reviewer wants belt-and-suspenders, a single "render does not throw" smoke case may remain, but the storage-throw mocks are dead.)
+
+### Research Insights — Test determinism under happy-dom
+
+- **No `matchMedia` stub needed (confirmed load-bearing).** happy-dom does not provide `window.matchMedia` (see `test/dashboard-sidebar-collapse.test.tsx:71`). Because reduced-motion is handled by the CSS-only `motion-reduce:` variant (not JS), the rewritten suite needs **zero** matchMedia plumbing. If a future revision switches to JS `matchMedia`, every case here would need a `vi.stubGlobal("matchMedia", …)` in `beforeEach` or crash — another reason to keep the CSS approach.
+- **Case 5 (`tagName === "BUTTON"`) is the correct keyboard-operability assertion under happy-dom.** Synthesizing `fireEvent.keyDown(el, { key: "Enter" })` on a `<button>` does NOT auto-dispatch a `click` in happy-dom/jsdom the way a real browser's native button activation does — so a keydown-based test would assert nothing meaningful unless the component hand-rolls a keydown handler (it should not; native `<button>` is keyboard-activatable by platform contract). Asserting the element IS a `<button>` is the deterministic proxy. Do not add a synthetic keydown.
+- **Case 6 (`sessionStorage.length === 0`) is robust.** `beforeEach` calls `sessionStorage.clear()` and `setup-dom.ts` also scrubs storage between files; after a collapse click the only way `length` is non-zero is an errant write — exactly what the case guards. The paired `getItem("soleur:shared:cta-dismissed") === null` makes the intent explicit.
+- **Waitlist suite independence confirmed by grep.** `grep -c "dismiss\|Dismiss\|cta-banner-dismiss" test/shared-cta-banner-waitlist.test.tsx` → **0**. The close button's `aria-label` change (`Dismiss signup banner` → `Collapse signup banner`) cannot break the waitlist suite; it keys only on the email input, `/^join$/i`, the privacy link, and the aria-live region. Phase 3 "no edits" holds.
 
 ### Phase 3 — Keep `shared-cta-banner-waitlist.test.tsx` green (no edits expected)
 
