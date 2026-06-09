@@ -8,12 +8,12 @@ function Sparkline({
   data,
   width = 80,
   height = 24,
-  color = "#d97706",
+  colorClass = "text-soleur-accent-gold-fg",
 }: {
   data: number[];
   width?: number;
   height?: number;
-  color?: string;
+  colorClass?: string;
 }) {
   if (data.length === 0) {
     return <span className="text-soleur-text-muted">—</span>;
@@ -21,8 +21,13 @@ function Sparkline({
 
   if (data.length === 1) {
     return (
-      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
-        <circle cx={width / 2} cy={height / 2} r={2} fill={color} />
+      <svg
+        width={width}
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        className={colorClass}
+      >
+        <circle cx={width / 2} cy={height / 2} r={2} fill="currentColor" />
       </svg>
     );
   }
@@ -41,11 +46,16 @@ function Sparkline({
     .join(" ");
 
   return (
-    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
+    <svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      className={colorClass}
+    >
       <polyline
         points={points}
         fill="none"
-        stroke={color}
+        stroke="currentColor"
         strokeWidth={1.5}
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -183,7 +193,7 @@ export function AnalyticsDashboard({
 }) {
   if (metrics.length === 0) {
     return (
-      <div className="space-y-6">
+      <div className="mx-auto max-w-6xl px-6 py-8 space-y-6">
         <h1 className="text-2xl font-semibold text-soleur-text-primary">Analytics</h1>
         <FunnelSection funnel={funnel} />
       </div>
@@ -191,7 +201,7 @@ export function AnalyticsDashboard({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="mx-auto max-w-6xl px-6 py-8 space-y-6">
       <h1 className="text-2xl font-semibold text-soleur-text-primary">Analytics</h1>
       <p className="text-sm text-soleur-text-muted">
         P4 validation metrics — {metrics.length} user{metrics.length !== 1 ? "s" : ""}
@@ -268,7 +278,7 @@ export function AnalyticsDashboard({
                     </span>
                     <Sparkline
                       data={kbSparklineData(m.kbHistory)}
-                      color="#22c55e"
+                      colorClass="text-green-500"
                     />
                   </div>
                 </td>
