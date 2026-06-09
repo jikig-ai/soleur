@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { CtaBanner } from "@/components/shared/cta-banner";
 
 const STORAGE_KEY = "soleur:shared:cta-dismissed";
@@ -31,14 +31,16 @@ describe("CtaBanner collapse / reopen affordance", () => {
     fireEvent.click(screen.getByTestId("cta-banner-dismiss"));
 
     // Collapsed strip is present (banner still mounted, just collapsed).
-    expect(
-      screen.getByRole("button", { name: /reopen soleur signup banner/i }),
-    ).toBeTruthy();
+    const reopen = screen.getByRole("button", {
+      name: /reopen soleur signup banner/i,
+    });
+    expect(reopen).toBeTruthy();
     // The full form is gone in the collapsed state.
     expect(formPresent()).toBeNull();
-    // The brand label survives in the collapsed strip.
-    expect(screen.getByText(/built with/i)).toBeTruthy();
-    expect(screen.getByText(/soleur/i)).toBeTruthy();
+    // The brand label survives INSIDE the collapsed strip specifically
+    // (scoped so it can't pass by matching the expanded banner copy).
+    expect(within(reopen).getByText(/built with/i)).toBeTruthy();
+    expect(within(reopen).getByText(/soleur/i)).toBeTruthy();
   });
 
   it("the collapsed bar exposes the reopen affordance with correct aria", () => {
@@ -82,9 +84,14 @@ describe("CtaBanner collapse / reopen affordance", () => {
   });
 
   it("does NOT persist collapsed state — no sessionStorage write occurs on collapse", () => {
+    // Spy directly so the assertion is non-vacuous: it proves the component
+    // issues zero writes, independent of the beforeEach clear (the residue
+    // checks below alone would pass even if a write landed under a new key).
+    const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
     render(<CtaBanner />);
     fireEvent.click(screen.getByTestId("cta-banner-dismiss"));
 
+    expect(setItemSpy).not.toHaveBeenCalled();
     expect(sessionStorage.getItem(STORAGE_KEY)).toBeNull();
     expect(sessionStorage.length).toBe(0);
   });
