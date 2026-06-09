@@ -10,6 +10,27 @@ module: apps/web-platform/server
 
 # fix: Concierge `gh` still Forbidden — sandbox network plane denies GitHub egress (token plane is already swept)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-09 (inline pass — pipeline context, no subagent fan-out available; all verifications executed directly against the worktree + installed SDK)
+**Sections enhanced:** gates 4.6/4.7/4.8/4.9 evaluated; verify-the-negative pass; consumer enumeration; line-citation audit
+
+### Key Improvements
+
+1. **Verify-the-negative pass (all claims confirmed against code):**
+   - "legacy `startAgentSession` never passes `ghToken`" — CONFIRMED: `grep -c "ghToken" apps/web-platform/server/agent-runner.ts` returns 0; `buildAgentQueryOptions` has exactly two production consumers (`cc-dispatcher.ts:1779`, `agent-runner.ts:1775`), so the `Boolean(args.ghToken)` derivation is provably fail-closed on the legacy path.
+   - "`GH_TOKEN` is not in `ALLOWED_SERVICE_ENV_VARS`" — CONFIRMED at `agent-env.ts:59,80` (a BYOK `GITHUB_TOKEN` row cannot clobber or substitute the minted token at higher gh precedence).
+   - "Edit/Write SDK tools remain hard-blocked on the cc path" — CONFIRMED: `CC_PATH_DISALLOWED_TOOLS = ["Edit", "Write"]` (`cc-dispatcher.ts:857`); note Bash is sandbox-gated, NOT in this list (hence the Phase 3 stale-comment fix).
+2. **Line-citation audit:** spot-verified `cc-dispatcher.ts:1470` (mint from `effectiveInstallationId`), `Dockerfile:95` (`gh=2.93.0`), `cc-dispatcher-real-factory.test.ts:341` (`allowedDomains: []` shape assertion), `agent-runner-query-options.ts:173` (`sandbox:` option) — all current on this branch.
+3. **Halt-gate results:** 4.6 User-Brand Impact (present, `single-user incident`) PASS; 4.7 Observability (5/5 fields, no-ssh discoverability) PASS; 4.8 PAT-shape sweep zero hits PASS; 4.9 UI-wireframe N/A (no UI surface). No rule-ID citations in plan body (zero fabrication exposure).
+
+### New Considerations Discovered
+
+- **Type-level no-op:** `AgentSandboxConfig.network.allowedDomains` is already `string[]` — the egress variant needs no type widening; `GITHUB_EGRESS_DOMAINS` as `Object.freeze([...] as const)` spread via `[...GITHUB_EGRESS_DOMAINS]` satisfies it (readonly-tuple → string[] copy).
+- **Test discovery:** all three new test groups land in EXISTING files under `apps/web-platform/test/` — within vitest's `test/**/*.test.ts` include glob; no discovery-glob risk (the #4634 co-located-test trap does not apply).
+- **Precedent diff (Phase 4.4):** the conditional-env precedent is `buildAgentEnv`'s askpass both-or-nothing guard (`agent-env.ts:168` — inject the set only when ALL inputs present, empty string counts as absent); the egress derivation adopts the same shape including the empty-string case (`Boolean("")` → false). The canonical-literal drift-guard test pattern (`agent-runner-helpers.test.ts` T17) is the cited precedent for the new egress-variant test. No novel patterns introduced.
+- **Runtime-shape rule honored:** SDK semantics were grepped from the INSTALLED bundle (`@anthropic-ai/claude-agent-sdk@0.2.85` `cli.js`/`sdk.mjs`), not docs/memory, per learning `2026-05-14-plan-prescribed-runtime-shapes-must-be-grepped-against-installed-version.md`; Phase 0.1 re-runs the same greps at /work time to catch an SDK bump between plan and work.
+
 ## Overview
 
 Despite PR #5041 (merged 2026-06-08) fixing the gh-403 → "No Git Repository in
