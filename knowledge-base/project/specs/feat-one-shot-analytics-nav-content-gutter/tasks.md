@@ -14,30 +14,30 @@ NOT a shared-layout change.
 
 ## Phase 1 — Core implementation
 
-- [ ] 1.1 Edit `apps/web-platform/components/analytics/analytics-dashboard.tsx`:
+- [x] 1.1 Edit `apps/web-platform/components/analytics/analytics-dashboard.tsx`:
   wrap the **populated** branch root (`<div className="space-y-6">` at line 194)
   with the padded container — prefer merging into one element:
   `<div className="mx-auto max-w-6xl px-6 py-8 space-y-6">`. (AC1)
-- [ ] 1.2 Apply the **same** wrapper string to the **empty-state** branch
+- [x] 1.2 Apply the **same** wrapper string to the **empty-state** branch
   (`metrics.length === 0`, `<div className="space-y-6">` at line 186). (AC2)
-- [ ] 1.3 Edit `apps/web-platform/app/(dashboard)/dashboard/admin/analytics/page.tsx`:
+- [x] 1.3 Edit `apps/web-platform/app/(dashboard)/dashboard/admin/analytics/page.tsx`:
   wrap the error-state return (lines 44-55) so the failure message + Retry link
   inherit a left gutter (`px-6`, same `mx-auto max-w-6xl px-6 py-8`, or add
   `px-6` to the existing centered block). (AC3)
-- [ ] 1.4 Edit `apps/web-platform/app/(dashboard)/dashboard/admin/analytics/loading.tsx`:
+- [x] 1.4 Edit `apps/web-platform/app/(dashboard)/dashboard/admin/analytics/loading.tsx`:
   wrap the skeleton root (`<div className="space-y-6">` at line 2) with the
   identical wrapper so the gutter does not flicker across loading→loaded→error. (AC4)
-- [ ] 1.5 Pick the `max-w-*` clamp (default `max-w-6xl`) such that the 8-column
+- [x] 1.5 Pick the `max-w-*` clamp (default `max-w-6xl`) such that the 8-column
   table is not narrowed vs today; if cramped, drop `max-w` and keep `px-6 py-8`.
   Use the same wrapper string across 1.1-1.4. (Implementation Notes)
 
 ## Phase 2 — Verification
 
-- [ ] 2.1 Confirm `app/(dashboard)/layout.tsx` `<main>` className is UNCHANGED:
+- [x] 2.1 Confirm `app/(dashboard)/layout.tsx` `<main>` className is UNCHANGED:
   `git diff "apps/web-platform/app/(dashboard)/layout.tsx"` is empty. (AC5)
-- [ ] 2.2 Typecheck: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`
+- [x] 2.2 Typecheck: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`
   exits 0. (AC6)
-- [ ] 2.3 Grep the wrapper landed on all four surfaces:
+- [x] 2.3 Grep the wrapper landed on all four surfaces:
   `grep -rnE 'mx-auto max-w-6xl|px-6' apps/web-platform/components/analytics/analytics-dashboard.tsx apps/web-platform/app/\(dashboard\)/dashboard/admin/analytics/`
   shows the gutter on the populated + empty branches, error state, and skeleton.
   (AC1-AC4)

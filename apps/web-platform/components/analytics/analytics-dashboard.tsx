@@ -183,7 +183,7 @@ export function AnalyticsDashboard({
 }) {
   if (metrics.length === 0) {
     return (
-      <div className="space-y-6">
+      <div className="mx-auto max-w-6xl px-6 py-8 space-y-6">
         <h1 className="text-2xl font-semibold text-soleur-text-primary">Analytics</h1>
         <FunnelSection funnel={funnel} />
       </div>
@@ -191,7 +191,7 @@ export function AnalyticsDashboard({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="mx-auto max-w-6xl px-6 py-8 space-y-6">
       <h1 className="text-2xl font-semibold text-soleur-text-primary">Analytics</h1>
       <p className="text-sm text-soleur-text-muted">
         P4 validation metrics — {metrics.length} user{metrics.length !== 1 ? "s" : ""}
