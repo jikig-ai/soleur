@@ -14,6 +14,62 @@ status: planned
 > Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed). No spec file
 > existed under `specs/feat-one-shot-logo-storage-retry/` at plan time.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-09
+**Sections verified:** Research Reconciliation, Acceptance Criteria, Observability, User-Brand Impact
+**Verification performed inline** (the deepen-plan parallel skill/learning/review subagents
+require the Task tool, which is unavailable in this one-shot pipeline environment; the
+equivalent checks were run directly — same precedent as the 2026-06-09 waitlist plan):
+
+### Gates run (all PASS)
+
+1. **Phase 4.6 User-Brand Impact halt:** heading present; threshold `none` with the
+   required sensitive-path scope-out reason bullet (diff touches `app/api/**`).
+2. **Phase 4.7 Observability gate:** all 5 fields present, non-placeholder;
+   `discoverability_test.command` is SSH-free (Doppler read-only token + eu.sentry.io API).
+3. **Phase 4.8 PAT-shaped variable halt:** zero matches.
+4. **Phase 4.9 UI-wireframe halt:** no UI-surface files — skipped (not applicable).
+5. **Phase 4.5 network-outage deep-dive:** trigger patterns absent from
+   Overview/Problem/Hypotheses (this plan *adds retry hardening*; it does not diagnose a
+   live connectivity outage) — skipped.
+
+### Key verifications (live, this pass)
+
+1. **No built-in SDK retry to duplicate:** `grep -rni "retry" @supabase/storage-js/dist/index.mjs`
+   → 0 hits. The retry layer is genuinely absent from the SDK; this plan is not
+   re-implementing vendor behavior.
+2. **Result-returning error contract pinned to installed source:** network failures
+   wrapped as `StorageUnknownError` at `dist/index.mjs:282`; file-API catch returns
+   `{ data: null, error }` for StorageErrors at `dist/index.mjs:438`
+   (`@supabase/storage-js@2.99.2`). Classification + loop design follow from these lines.
+3. **Precedent-diff (Phase 4.4):** retry shape diffed against all three codebase
+   precedents — `server/github-retry.ts` (leaf-module shape), `server/github-api.ts:20-75`
+   (MAX_RETRIES=2 / exponential / per-attempt warn), `lib/supabase/tenant.ts:371-400`
+   (result-returning loop shape). Deviations (no jitter, no env config) are deliberate and
+   recorded in Alternative Approaches.
+4. **Verify-the-negative pass:** "no existing test sets a `mockUpload` error" — confirmed
+   by reading the full route suite; "no Sentry alert filters on the `storage-upload` op
+   slug" — `grep -rn "storage-upload" apps/web-platform/infra/sentry/` → 0;
+   `warnSilentFallback` export confirmed at `server/observability.ts:241`.
+5. **Sentinel punctuation audit:** AC5's grep anchors on the trailing comma
+   (`'op: "storage-upload",'`) because a bare grep substring-matches the new
+   `storage-upload-retry` slug — fixed during the inline plan-review pass (Kieran-lens
+   catch, the #3819 paren-safety class).
+6. **Citations:** all knowledge-base learning paths glob-verified (one corrected to its
+   `test-failures/` subdirectory); cited rule ID `cq-write-failing-tests-before` is active
+   in AGENTS.md; #4916 (CLOSED) and #5084 (OPEN draft) verified via `gh`.
+7. **AC self-grep scope:** all verification greps target `apps/web-platform/**` paths
+   explicitly — the plan/tasks files are structurally out of scope; no exclude flags needed.
+
+### New Considerations Discovered
+
+- Sentry token for the discoverability test exists as `SENTRY_API_TOKEN` in Doppler
+  `prd_terraform` (key presence verified read-only at plan time).
+- Existing route-test failure fixtures use plain `{ message }` errors (no `status`, no
+  `name`) — deliberately classified non-retryable (U4) so every pre-existing test keeps
+  its current single-call semantics.
+
 ## Overview
 
 The workspace-logo upload route (`apps/web-platform/app/api/workspace/logo/route.ts`,
