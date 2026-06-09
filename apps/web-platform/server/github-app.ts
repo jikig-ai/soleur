@@ -699,14 +699,19 @@ function installationTokenCacheKey(
   repositories?: string[],
 ): string {
   if (!permissions && !repositories) return String(installationId);
-  const permPart = permissions
+  // JSON-serialize a normalized, sorted structure (NOT a hand-joined
+  // `k=v,…`/`r:…` string) so a permission value or repo name that contains a
+  // delimiter can never alias another scope's key — future-proofing for PR-2,
+  // which adds more scoped callers (possibly repository_ids / non-soleur repos).
+  // The unscoped path stays the bare numeric id, disjoint from every scoped key
+  // (those always carry the `|` separator, which a `String(number)` never does).
+  const permEntries = permissions
     ? Object.keys(permissions)
         .sort()
-        .map((k) => `${k}=${permissions[k]}`)
-        .join(",")
-    : "";
-  const repoPart = repositories ? [...repositories].sort().join(",") : "";
-  return `${installationId}|p:${permPart}|r:${repoPart}`;
+        .map((k) => [k, permissions[k]] as const)
+    : [];
+  const repoList = repositories ? [...repositories].sort() : [];
+  return `${installationId}|${JSON.stringify({ p: permEntries, r: repoList })}`;
 }
 
 // ---------------------------------------------------------------------------
