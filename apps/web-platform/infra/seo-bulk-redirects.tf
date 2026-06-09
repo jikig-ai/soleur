@@ -1,16 +1,25 @@
-# Cloudflare Bulk Redirects — legacy /pages/legal/<slug>.html → clean /legal/<slug>/ 301s.
+# Cloudflare Bulk Redirects — legacy /pages/legal/<slug>.html → clean /legal/<slug>/ 301s
+# (plus the orphaned blog reslug; 12 exact pairs total, see the list below).
 #
 # Why a separate file / separate product (not more rules in seo-rulesets.tf):
 #   The 9 legacy legal-page redirects were DEFERRED in seo-rulesets.tf (see the
-#   comment at seo-rulesets.tf:59-66). Cloudflare Free-tier zones cap the
+#   2026-06-09 note there). Cloudflare Free-tier zones cap the
 #   `http_request_dynamic_redirect` phase at 10 rules, and that ruleset's 10
 #   slots are fully consumed (8 page redirects + 1 terms rename + 1 load-bearing
 #   HTTPS catch-all that protects cross-subdomain credentials and ACME renewal —
 #   it cannot be evicted, PR #3974). `regex_replace()` consolidation would need
 #   Business/WAF Advanced (paid). Bulk Redirects is a SEPARATE Free-tier product
 #   on a DIFFERENT phase (`http_request_redirect`, account-level) with its own
-#   quota — so these 9 legal slugs land here with zero contention on the zone
+#   quota — so these redirects land here with zero contention on the zone
 #   ruleset and zero paid upgrade.
+#
+# Execution order (verified vs CF docs 2026-06-09, rules/url-forwarding/):
+#   Single Redirects (zone `http_request_dynamic_redirect`) evaluate BEFORE
+#   Bulk Redirects (`http_request_redirect`) — "the product executed first
+#   will apply". The two rule sets are disjoint except terms-of-service (see
+#   the item-level note). Plain-HTTP entries take 2 hops (zone Rule 10 HTTPS
+#   catch-all first, then this list on the https re-request); HTTPS entries —
+#   apex or any subdomain — are a single hop.
 #
 # Root cause being fixed: without an edge 301 these URLs are served the HTTP-200
 # meta-refresh fallback (plugins/soleur/docs/page-redirects.njk), which Google
@@ -33,8 +42,9 @@
 #
 # See:
 #   - knowledge-base/project/plans/2026-06-09-fix-gsc-legal-page-redirects-plan.md
+#   - issue #3367 (the canonical Bulk Redirects refactor tracker this implements)
 #   - issue #3297 (GSC indexing fixes feature), #3328 (meta-refresh source deletion follow-up)
-#   - apps/web-platform/infra/seo-rulesets.tf:59-66 (the deferral this resolves)
+#   - apps/web-platform/infra/seo-rulesets.tf (the 2026-06-09 note — the deferral this resolves)
 #   - apps/web-platform/infra/tunnel.tf (account_id-scoped resource precedent)
 
 resource "cloudflare_list" "legal_redirects" {
@@ -42,13 +52,21 @@ resource "cloudflare_list" "legal_redirects" {
   account_id  = var.cf_account_id
   name        = "legal_redirects" # referenced by name from the ruleset's from_list
   kind        = "redirect"
-  description = "Legacy /pages/legal/*.html -> clean /legal/<slug>/ 301s. See plan 2026-06-09, #3297, #3328."
+  description = "Legacy /pages/legal/*.html -> /legal/<slug>/ 301s + blog reslug. See plan 2026-06-09, #3367, #3297, #3328."
 
-  # Apex, host-less source_url (Bulk Redirects strips the scheme from the request
-  # URL before matching). include_subdomains = "enabled" (v4 string enum, NOT a
-  # bool — provider schema: type=string) so legacy www.soleur.ai deep
-  # links collapse to the apex target in a single hop. 10 pairs: 9 legal slugs
-  # (clean-slug == source-slug) + the terms-of-service -> terms-and-conditions rename alias.
+  # Apex, host-less source_url (scheme-less sources match both http and https).
+  # include_subdomains = "enabled" (v4 string enum, NOT a bool — provider
+  # schema: type=string) so legacy www.soleur.ai deep links collapse to the
+  # apex target. CAVEAT: this matches EVERY proxied subdomain (app, deploy,
+  # ssh, ...), not just www — verified safe today (no subdomain serves these
+  # exact paths; api.soleur.ai is unproxied), but a future subdomain that
+  # legitimately serves one of these paths would be hijacked by this
+  # account-level rule. preserve_query_string = "enabled" deliberately
+  # diverges from the zone redirects' `false`: these are SEO 301s where
+  # dropping campaign params (?utm_*) on the hop loses attribution; targets
+  # are static pages with no query-reflection surface.
+  # 12 pairs: 9 legal slugs (clean-slug == source-slug) + the terms-of-service
+  # -> terms-and-conditions rename alias + 2 shapes of the blog reslug.
 
   item {
     value {
@@ -150,6 +168,12 @@ resource "cloudflare_list" "legal_redirects" {
     }
   }
   # Rename alias: terms-of-service has no source page; legacy slug -> terms-and-conditions.
+  # NOTE: deliberately duplicates zone Rule 9 (seo-rulesets.tf "terms-of-service"
+  # rule). Single Redirects evaluate BEFORE Bulk Redirects, so on apex+www the
+  # zone rule wins (and drops the query string); this entry remains live only
+  # for other subdomains via include_subdomains. Identical target on both
+  # surfaces — if one ever changes, change the other. Retiring zone Rule 9 to
+  # free a slot is a candidate follow-up once the bulk apply is verified (#3367).
   item {
     value {
       redirect {
@@ -161,25 +185,65 @@ resource "cloudflare_list" "legal_redirects" {
       }
     }
   }
+  # Blog reslug: its zone rule was evicted 2026-05-18 to make room for the
+  # HTTPS catch-all (seo-rulesets.tf "2026-05-18" note) and it has had NO edge
+  # 301 since — the same GSC crawled-not-indexed class this file fixes. Two
+  # shapes because Bulk Redirects match full_uri EXACTLY: the directory URL
+  # and the explicit index.html are distinct keys.
+  item {
+    value {
+      redirect {
+        source_url            = "soleur.ai/blog/what-is-company-as-a-service/"
+        target_url            = "https://soleur.ai/company-as-a-service/"
+        status_code           = 301
+        include_subdomains    = "enabled"
+        preserve_query_string = "enabled"
+      }
+    }
+  }
+  item {
+    value {
+      redirect {
+        source_url            = "soleur.ai/blog/what-is-company-as-a-service/index.html"
+        target_url            = "https://soleur.ai/company-as-a-service/"
+        status_code           = 301
+        include_subdomains    = "enabled"
+        preserve_query_string = "enabled"
+      }
+    }
+  }
 }
 
+# Naming: no `seo_` prefix (vs sibling zone rulesets seo_page_redirects /
+# seo_response_headers) because this is THE single account-level
+# http_request_redirect phase owner — future non-SEO bulk lists would attach
+# additional rules here rather than new rulesets. The list keeps its original
+# `legal_redirects` name even though it now also carries the blog reslug:
+# renaming a list ripples through the rule expression, the workflow -target
+# allow-list, and the live CF object for zero behavioral gain.
 resource "cloudflare_ruleset" "bulk_redirects" {
   provider    = cloudflare.rulesets
   account_id  = var.cf_account_id # ACCOUNT-level (not zone_id) — the novel axis vs every other ruleset in the repo
-  name        = "Legal page bulk redirects"
-  description = "Account http_request_redirect ruleset bound to the legal_redirects list. See plan 2026-06-09, #3297."
+  name        = "Legacy URL bulk redirects"
+  description = "Account http_request_redirect ruleset bound to the legal_redirects list. See plan 2026-06-09, #3367, #3297."
   kind        = "root"
   phase       = "http_request_redirect"
 
   rules {
     action      = "redirect"
-    description = "301 legacy /pages/legal/*.html via the legal_redirects bulk list"
+    description = "301 legacy URLs (/pages/legal/*.html + blog reslug) via the legal_redirects bulk list"
     enabled     = true
     expression  = "http.request.full_uri in $legal_redirects"
 
     action_parameters {
       from_list {
-        name = "legal_redirects"
+        # Resource reference (not a string literal) so Terraform has a graph
+        # edge: the list MUST exist before the ruleset that binds it, or the
+        # CF API rejects the rule on first apply (nondeterministic ordering
+        # failure that would masquerade as the token-scope failure documented
+        # in the header). The `$legal_redirects` in `expression` above must
+        # stay literal — only this binding creates the dependency.
+        name = cloudflare_list.legal_redirects.name
         key  = "http.request.full_uri"
       }
     }

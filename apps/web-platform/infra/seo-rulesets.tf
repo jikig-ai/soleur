@@ -53,8 +53,12 @@
 # This ruleset declares 10 explicit rules (the Free-tier cap), prioritized:
 #   - 8 top-level `/pages/<slug>.html → /<slug>/` redirects (high-traffic pages)
 #   - 1 `terms-of-service → terms-and-conditions` slug rename (load-bearing —
-#     the only entry with a confirmed GSC 404 bucket entry pre-fix)
-#   - 1 `/blog/what-is-company-as-a-service/index.html → /company-as-a-service/` reslug
+#     the only entry with a confirmed GSC 404 bucket entry pre-fix; since
+#     2026-06-09 also duplicated in the bulk list, where this rule wins on
+#     apex+www because Single Redirects evaluate before Bulk Redirects)
+#   - 1 HTTPS catch-all with ACME exclusion (Rule 10; replaced the
+#     `/blog/what-is-company-as-a-service/` reslug on 2026-05-18 — that
+#     redirect now lives in the bulk list, seo-bulk-redirects.tf)
 #
 # 2026-06-09: the formerly-deferred 9 `/pages/legal/<slug>.html → /legal/<slug>/`
 # redirects (privacy, cookie, gdpr, AUP, data-protection, individual-cla,
@@ -227,8 +231,9 @@ resource "cloudflare_ruleset" "seo_page_redirects" {
 
   # 2026-05-18: /blog/what-is-company-as-a-service/index.html redirect dropped
   # to make room for the HTTPS catch-all rule (Rule 10 below). Canonical
-  # /company-as-a-service/ is already in the sitemap; Google will recrawl
-  # and drop the old URL from the redirect bucket.
+  # /company-as-a-service/ is already in the sitemap. 2026-06-09: the edge 301
+  # is restored via the account-level bulk list (seo-bulk-redirects.tf, both
+  # URL shapes) — no zone slot needed.
 
   # Rule 10 (NEW 2026-05-18): HTTPS catch-all with ACME exclusion baked into
   # the expression. Restores the zone-wide HTTPS-upgrade behavior that the

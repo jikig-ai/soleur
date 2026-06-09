@@ -157,13 +157,13 @@ literals because the live edge is apex-canonical post-#4577 (`seo-rulesets.tf:14
    +-----------------------------------------------+
    | Cloudflare edge (soleur.ai zone, apex proxied)|
    |                                               |
+   |  Phase http_request_dynamic_redirect (ZONE)   |  <- UNCHANGED (10/10 slots)
+   |    8 page redirects + terms rename + HTTPS rule|
+   |                                               |
    |  Phase http_request_redirect (ACCOUNT ruleset)|  <- NEW (Bulk Redirects)
    |    rule: redirect from_list "legal_redirects" |
    |      key = http.request.full_uri              |
    |      -> 301 to clean /legal/<slug>/           |
-   |                                               |
-   |  Phase http_request_dynamic_redirect (ZONE)   |  <- UNCHANGED (10/10 slots)
-   |    8 page redirects + terms rename + HTTPS rule|
    +-----------------------------------------------+
                        | (no match -> origin)
                        v
@@ -174,6 +174,13 @@ literals because the live edge is apex-canonical post-#4577 (`seo-rulesets.tf:14
 Both redirect phases run **before** origin fetch, so the 301 fires regardless of what GitHub Pages emits.
 The Bulk Redirect (account `http_request_redirect`) and the existing zone `http_request_dynamic_redirect` are
 **different phases** with independent quotas — no slot contention.
+
+> **Ordering correction (review finding, 2026-06-09):** Cloudflare evaluates **Single Redirects (zone
+> `http_request_dynamic_redirect`) BEFORE Bulk Redirects** ("the product executed first will apply" —
+> CF docs, rules/url-forwarding). The original diagram drew the account phase first; behavior is
+> unchanged (the two rule sets are disjoint except `terms-of-service.html`, where both 301 to the
+> identical target and the zone rule wins on apex+www). Plain-HTTP legal URLs take 2 hops (zone Rule 10
+> HTTPS catch-all, then the bulk 301); HTTPS URLs are a single hop.
 
 ### Implementation Phases
 
