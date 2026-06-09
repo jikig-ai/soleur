@@ -133,14 +133,14 @@ Run both suites → expect GREEN. Run `./node_modules/.bin/tsc --noEmit` → cle
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — two-way animation**: component contains a single body wrapper with `grid transition-[grid-template-rows] … ease-out` toggling `grid-rows-[1fr]` (expanded) ↔ `grid-rows-[0fr]` (collapsed); the `<Reveal>` helper and the two-mutually-exclusive-panel conditional returns are gone. Verify: `grep -c "Reveal" cta-banner.tsx` returns 0; `grep -E "grid-rows-\[1fr\]|grid-rows-\[0fr\]" cta-banner.tsx` matches both.
-- [ ] **AC2 — single rotating arrow, no cross**: exactly one `<polyline points="18 15 12 9 6 15" />` chevron, wrapped in `transition-transform … rotate-180` toggled by state; **no `<line ` element anywhere** (`grep -c "<line " cta-banner.tsx` returns 0). Single `data-testid="cta-banner-toggle"`; old `cta-banner-dismiss`/`cta-banner-reopen` testids absent.
-- [ ] **AC3 — reduced motion**: both the grid-rows transition and the transform rotation are paired with `motion-reduce:transition-none motion-reduce:duration-0` (every `transition-`/`duration-` utility on the component has the motion-reduce pairing).
-- [ ] **AC4 — accessibility**: collapsed body wrapper carries `inert` (and `aria-hidden`); expanded removes both. Toggle has correct `aria-expanded` (`true` expanded / `false` collapsed) and flipping `aria-label` (`/collapse signup banner/i` expanded, `/reopen soleur signup banner/i` collapsed). Toggle is a real keyboard-operable `<button>` (`tagName === "BUTTON"`).
-- [ ] **AC5 — persistence unchanged**: no `sessionStorage`/`safeSession` in the component; the close-test's "no setItem on toggle" + "legacy key pre-seeded still renders expanded" cases pass.
-- [ ] **AC6 — close test rewritten & green**: `shared-cta-banner-close.test.tsx` covers the six cases above and passes; transitions driven via `fireEvent.click` on a single render (no remount).
-- [ ] **AC7 — waitlist test green & UNEDITED**: `shared-cta-banner-waitlist.test.tsx` is byte-for-byte unchanged and passes (`git diff --quiet -- apps/web-platform/test/shared-cta-banner-waitlist.test.tsx` returns clean after the work). If it would break, fix the **component**, not the test.
-- [ ] **AC8 — typecheck clean**: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` exits 0.
+- [x] **AC1 — two-way animation**: component contains a single body wrapper with `grid transition-[grid-template-rows] … ease-out` toggling `grid-rows-[1fr]` (expanded) ↔ `grid-rows-[0fr]` (collapsed); the `<Reveal>` helper and the two-mutually-exclusive-panel conditional returns are gone. Verify: `grep -c "Reveal" cta-banner.tsx` returns 0; `grep -E "grid-rows-\[1fr\]|grid-rows-\[0fr\]" cta-banner.tsx` matches both.
+- [x] **AC2 — single rotating arrow, no cross**: exactly one `<polyline points="18 15 12 9 6 15" />` chevron, wrapped in `transition-transform … rotate-180` toggled by state; **no `<line ` element anywhere** (`grep -c "<line " cta-banner.tsx` returns 0). Single `data-testid="cta-banner-toggle"`; old `cta-banner-dismiss`/`cta-banner-reopen` testids absent.
+- [x] **AC3 — reduced motion**: both the grid-rows transition and the transform rotation are paired with `motion-reduce:transition-none motion-reduce:duration-0` (every `transition-`/`duration-` utility on the component has the motion-reduce pairing).
+- [x] **AC4 — accessibility**: collapsed body wrapper carries `inert` (and `aria-hidden`); expanded removes both. Toggle has correct `aria-expanded` (`true` expanded / `false` collapsed) and flipping `aria-label` (`/collapse signup banner/i` expanded, `/reopen soleur signup banner/i` collapsed). Toggle is a real keyboard-operable `<button>` (`tagName === "BUTTON"`).
+- [x] **AC5 — persistence unchanged**: no `sessionStorage`/`safeSession` in the component; the close-test's "no setItem on toggle" + "legacy key pre-seeded still renders expanded" cases pass.
+- [x] **AC6 — close test rewritten & green**: `shared-cta-banner-close.test.tsx` covers the six cases above and passes; transitions driven via `fireEvent.click` on a single render (no remount).
+- [x] **AC7 — waitlist test green & UNEDITED**: `shared-cta-banner-waitlist.test.tsx` is byte-for-byte unchanged and passes (`git diff --quiet -- apps/web-platform/test/shared-cta-banner-waitlist.test.tsx` returns clean after the work). If it would break, fix the **component**, not the test.
+- [x] **AC8 — typecheck clean**: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` exits 0.
 
 ### Post-merge (operator)
 
