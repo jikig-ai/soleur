@@ -441,7 +441,7 @@ logs:
   where: "pino server logs in the web-platform container (warnSilentFallback logs err + feature + op + extra)"
   retention: "platform log retention (unchanged)"
 discoverability_test:
-  command: "curl -s -H \"Authorization: Bearer $(doppler secrets get SENTRY_API_TOKEN -p soleur -c prd_terraform --plain)\" 'https://eu.sentry.io/api/0/projects/jikigai-eu/web-platform/events/?query=storage-upload-retry' | jq 'length'"
+  command: "curl -s -H \"Authorization: Bearer $(doppler secrets get SENTRY_API_TOKEN -p soleur -c prd_terraform --plain)\" 'https://eu.sentry.io/api/0/projects/jikigai-eu/web-platform/events/?query=op:storage-upload-retry' | jq 'length'"
   expected_output: "a JSON integer ≥ 0 (HTTP 200 — proves the op slug is queryable without SSH; > 0 only after a real transient fires in prod)"
 ```
 
@@ -476,6 +476,13 @@ discoverability_test:
   `export/[jobId]/download` remove): enumerated at plan time
   (`git grep "\.storage\.from("`); all are removals on non-interactive paths with their own
   error handling. The new leaf module is available to them later — not migrated now.
+- **Per-attempt timeout for HANGING (vs fast-failing) Storage connections:** storage-js
+  `upload()` exposes no AbortSignal seam, so a per-attempt cap would need a Promise.race
+  wrapper that cannot cancel the underlying request (the abandoned attempt keeps running
+  concurrently with the retry — convergent under upsert, but murky semantics). The
+  platform request timeout bounds the hang today; revisit with a deliberate design if
+  Sentry shows a hang-class signature (slow `storage-upload` errors with zero
+  `storage-upload-retry` warns). Flagged by 3 review agents as P3 pre-existing.
 
 No deferral issues filed: each scope-out is a deliberate "current behavior is correct"
 judgment, not deferred work product.

@@ -140,7 +140,10 @@ function postReq(buf: Buffer, filename: string, type: string): Request {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks(); // clear call history (keeps no stale impls); re-set defaults below
+  // resetAllMocks (not clearAllMocks): also drains mockResolvedValueOnce
+  // queues so a failing test can't leak a queued once-value into the next
+  // test; persistent defaults are re-set below.
+  vi.resetAllMocks();
   mockUpload.mockResolvedValue({ data: { path: `${RESOLVED_WS}/logo.webp` }, error: null });
   mockRemove.mockResolvedValue({ data: [], error: null });
   // .update().eq() returns the chain; .select("id") resolves the matched rows.
@@ -312,6 +315,12 @@ describe("POST /api/workspace/logo — transient-retry (storage upload)", () => 
     expect(mockUpload).toHaveBeenCalledTimes(3);
     const reportOps = mockReport.mock.calls.map((c) => c[1]?.op);
     expect(reportOps.filter((op) => op === "storage-upload")).toHaveLength(1);
+    // Warn channel pinned across ALL retries, not just the single-retry case.
+    expect(mockWarn.mock.calls.map((c) => c[1]?.op)).toEqual([
+      "storage-upload-retry",
+      "storage-upload-retry",
+    ]);
+    expect(mockWarn.mock.calls.map((c) => c[1]?.extra?.attempt)).toEqual([1, 2]);
   });
 
   it("R3: non-retryable 400 → 500, exactly 1 attempt (no retry)", async () => {
@@ -324,6 +333,8 @@ describe("POST /api/workspace/logo — transient-retry (storage upload)", () => 
     expect(mockUpload).toHaveBeenCalledTimes(1);
     const reportOps = mockReport.mock.calls.map((c) => c[1]?.op);
     expect(reportOps.filter((op) => op === "storage-upload")).toHaveLength(1);
+    // Fail-fast path must not emit retry warns.
+    expect(mockWarn).not.toHaveBeenCalled();
   });
 
   it("R4: network-class StorageUnknownError once then success → 200, 2 attempts", async () => {

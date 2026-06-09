@@ -39,7 +39,7 @@ describe("isRetryableStorageError — classification truth table", () => {
 describe("withStorageRetry — loop semantics", () => {
   const transient: StorageErrorLike = { message: "Service Unavailable", status: 503 };
 
-  it("success-first: returns after 1 op call, sleep never called (U5)", async () => {
+  it("success-first: returns after 1 op call, sleep never called", async () => {
     const op = vi.fn().mockResolvedValue({ data: { path: "x" }, error: null });
     const sleep = vi.fn().mockResolvedValue(undefined);
     const result = await withStorageRetry(op, { sleep });
@@ -94,6 +94,30 @@ describe("withStorageRetry — loop semantics", () => {
     const sleep = vi.fn().mockResolvedValue(undefined);
     await withStorageRetry(op, { sleep, baseDelayMs: 100 });
     expect(sleep.mock.calls.map((c) => c[0])).toEqual([100, 200]);
+  });
+
+  it("non-StorageError throws propagate unchanged: op called once, sleep never called", async () => {
+    const boom = new TypeError("programming error");
+    const op = vi.fn().mockRejectedValue(boom);
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    await expect(withStorageRetry(op, { sleep })).rejects.toBe(boom);
+    expect(op).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("a throwing onRetry observer does not abort the retry loop", async () => {
+    const op = vi
+      .fn()
+      .mockResolvedValueOnce({ data: null, error: transient })
+      .mockResolvedValueOnce({ data: { path: "x" }, error: null });
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const onRetry = vi.fn(() => {
+      throw new Error("observer bug");
+    });
+    const result = await withStorageRetry(op, { sleep, onRetry });
+    expect(result.error).toBeNull();
+    expect(op).toHaveBeenCalledTimes(2);
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
   it("network-class StorageUnknownError is retried", async () => {
