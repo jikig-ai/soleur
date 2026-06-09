@@ -13,6 +13,7 @@ import { createHash, createSign, randomUUID } from "crypto";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
 import { readAppId } from "./github/app-private-key";
+import { isRetryable, delay } from "./github-retry";
 
 const log = createChildLogger("github-app");
 
@@ -394,6 +395,91 @@ export async function findInstallationForLogin(
   return findOrgInstallationForUser(jwt, githubLogin);
 }
 
+// ---------------------------------------------------------------------------
+// Org-membership probe (transient-robust, fail-closed)
+//
+// feat-one-shot-concierge-gh-403-self-heal (Bug A). A bare `status === 204`
+// check collapses a genuine 404/302 ("not a member" → correctly deny) and a
+// TRANSIENT 5xx / AbortSignal.timeout throw into the SAME "deny" outcome — so
+// an ENTITLED org member is wrongly denied promotion (kept on the wrong
+// installation → 403) purely because GitHub's /orgs/{org}/members/{login}
+// endpoint 5xx'd or timed out for ~3s. Classify into three outcomes and retry
+// ONLY the transient class, reusing the canonical backoff idiom from
+// server/github-api.ts (isRetryable already classifies the AbortSignal.timeout
+// DOMException + undici network codes as retryable).
+//
+// SECURITY (fail-closed): the retry gates an AUTHORIZATION decision, so a
+// post-retry `indeterminate` DENIES promotion (only a confirmed 204 grants).
+// Narrowing the false-negative must NOT widen the entitlement gate. No token
+// value is ever logged (hr-github-app-auth-not-pat).
+// ---------------------------------------------------------------------------
+
+// Match the sibling install-token retry constants (INSTALL_TOKEN_MAX_RETRIES=2,
+// INSTALL_TOKEN_BASE_DELAY_MS=1_000, defined later in this file) so the three
+// retry sites stay consistent. Literals (not the named constants) to avoid a
+// temporal-dead-zone reference — those consts are declared further down.
+const MEMBER_PROBE_MAX_RETRIES = 2; // 3 total attempts
+const MEMBER_PROBE_BASE_DELAY_MS = 1_000; // 1s, 2s
+
+type MembershipProbeOutcome = "member" | "not-member" | "indeterminate";
+
+/**
+ * Probe whether `githubLogin` is a member of org `owner`, using the org
+ * installation's token (carries members:read). Returns a 3-value outcome:
+ *   - `member`        — 204 (the ONLY path that grants promotion)
+ *   - `not-member`    — 404 / 302 (authoritative; NOT retried — a definitive
+ *                       answer; retrying it is a pure latency tax)
+ *   - `indeterminate` — transient 5xx / thrown timeout/network (retried up to
+ *                       MEMBER_PROBE_MAX_RETRIES), or any other non-authoritative
+ *                       status (e.g. 403) after retries. Fail-closed: the caller
+ *                       must DENY promotion on `indeterminate`.
+ */
+async function probeOrgMembership(
+  owner: string,
+  githubLogin: string,
+  installationToken: string,
+): Promise<MembershipProbeOutcome> {
+  const url = `${GITHUB_API}/orgs/${encodeURIComponent(owner)}/members/${encodeURIComponent(githubLogin)}`;
+  for (let attempt = 0; attempt <= MEMBER_PROBE_MAX_RETRIES; attempt++) {
+    let response: Response;
+    try {
+      response = await githubFetch(url, {
+        headers: { Authorization: `token ${installationToken}` },
+        // Do NOT follow the 302 GitHub returns for "requester not visible as an
+        // org member" — following it lands on /public_members and turns one
+        // authoritative deny into a second probe. Surface 302 as not-member,
+        // matching verifyInstallationOwnership's redirect:"manual" precedent.
+        redirect: "manual",
+      });
+    } catch (err) {
+      // AbortSignal.timeout fires a DOMException; undici network errors throw.
+      // Retry the transient class, else fail-closed → indeterminate.
+      if (attempt < MEMBER_PROBE_MAX_RETRIES && isRetryable(err)) {
+        await delay(MEMBER_PROBE_BASE_DELAY_MS * 2 ** attempt);
+        continue;
+      }
+      return "indeterminate";
+    }
+
+    if (response.status === 204) return "member";
+    // 404 = not a member; 302 = requester not visible as org member. Both are
+    // authoritative — drain and return WITHOUT retrying.
+    if (response.status === 404 || response.status === 302) {
+      await response.text().catch(() => {});
+      return "not-member";
+    }
+    // Drain before any sleep/return to avoid socket keep-alive leaks.
+    await response.text().catch(() => {});
+    // 5xx = transient → retry. Anything else (403, …) → indeterminate (no retry).
+    if (response.status >= 500 && attempt < MEMBER_PROBE_MAX_RETRIES) {
+      await delay(MEMBER_PROBE_BASE_DELAY_MS * 2 ** attempt);
+      continue;
+    }
+    return "indeterminate";
+  }
+  return "indeterminate";
+}
+
 /**
  * Iterate all app installations looking for org installations where the
  * given user is a member. Returns the first matching installation ID.
@@ -439,12 +525,15 @@ async function findOrgInstallationForUser(
       continue;
     }
 
-    const memberCheck = await githubFetch(
-      `${GITHUB_API}/orgs/${encodeURIComponent(inst.account.login)}/members/${encodeURIComponent(githubLogin)}`,
-      { headers: { Authorization: `token ${installationToken}` } },
+    // Transient-robust, fail-closed membership probe (Bug A). A transient 5xx /
+    // timeout on one org no longer silently skips an entitled org — it retries
+    // first; only a confirmed `member` returns the install.
+    const outcome = await probeOrgMembership(
+      inst.account.login,
+      githubLogin,
+      installationToken,
     );
-    // 204 = is a member, 302 = requester is not org member, 404 = not a member
-    if (memberCheck.status === 204) {
+    if (outcome === "member") {
       log.info(
         { githubLogin, orgLogin: inst.account.login, installationId: inst.id },
         "Found org installation for user",
@@ -526,21 +615,44 @@ export async function findInstallationByAccountLogin(
  * A non-member gets null → the caller keeps its current installation and the
  * honest 403 surfaces, rather than silently gaining write it was never granted.
  */
+/**
+ * Why the promotion was (or was not) granted. Surfaced to the orchestration
+ * (cc-dispatcher) so a DENY/SKIP becomes a queryable Sentry event rather than
+ * an observability-dark silent keep (feat-one-shot-concierge-gh-403-self-heal,
+ * Bug B). `installationId !== null` only on `personal-repo` / `member`.
+ */
+export type RepoOwnerPromotionOutcome =
+  | "no-github-login"
+  | "no-owner-install"
+  | "personal-repo"
+  | "member"
+  | "not-member"
+  | "indeterminate"
+  | "token-mint-failed";
+
+export interface RepoOwnerInstallationResolution {
+  /** The entitled owner installation id, or null when promotion is denied. */
+  installationId: number | null;
+  outcome: RepoOwnerPromotionOutcome;
+}
+
 export async function findRepoOwnerInstallationForUser(
   owner: string,
   githubLogin: string | null,
-): Promise<number | null> {
-  if (!githubLogin) return null;
+): Promise<RepoOwnerInstallationResolution> {
+  if (!githubLogin)
+    return { installationId: null, outcome: "no-github-login" };
 
   const ownerInstall = await findInstallationByAccountLogin(owner);
-  if (ownerInstall === null) return null;
+  if (ownerInstall === null)
+    return { installationId: null, outcome: "no-owner-install" };
 
   // Personal repo (owner is the user's own account) — no escalation possible.
-  if (owner.toLowerCase() === githubLogin.toLowerCase()) return ownerInstall;
+  if (owner.toLowerCase() === githubLogin.toLowerCase())
+    return { installationId: ownerInstall, outcome: "personal-repo" };
 
   // Org repo — require verified org membership before promoting. Mint the
-  // owner install's token (members:read) and probe membership, mirroring
-  // findOrgInstallationForUser's 204 check.
+  // owner install's token (members:read) and probe membership.
   let installationToken: string;
   try {
     installationToken = await generateInstallationToken(ownerInstall);
@@ -549,24 +661,58 @@ export async function findRepoOwnerInstallationForUser(
       { err, ownerInstall, owner },
       "findRepoOwnerInstallationForUser: token mint failed — denying promotion",
     );
-    return null;
+    return { installationId: null, outcome: "token-mint-failed" };
   }
 
-  const memberCheck = await githubFetch(
-    `${GITHUB_API}/orgs/${encodeURIComponent(owner)}/members/${encodeURIComponent(githubLogin)}`,
-    { headers: { Authorization: `token ${installationToken}` } },
-  );
-  // 204 = is a member; anything else (302 non-member, 404, 403) = not entitled.
-  return memberCheck.status === 204 ? ownerInstall : null;
+  // Transient-robust, fail-closed (Bug A): the owner install is returned ONLY
+  // on a confirmed `member` (204). A post-retry `indeterminate` (transient
+  // 5xx/timeout) or an authoritative `not-member` both DENY — keeping the
+  // stored install and the honest 403 rather than silently granting write.
+  const outcome = await probeOrgMembership(owner, githubLogin, installationToken);
+  return outcome === "member"
+    ? { installationId: ownerInstall, outcome: "member" }
+    : { installationId: null, outcome };
 }
 
 // ---------------------------------------------------------------------------
 // Token cache (installation tokens are valid for 1 hour)
 // ---------------------------------------------------------------------------
 
-const tokenCache = new Map<number, { token: string; expiresAt: number }>();
+// Keyed on installationId AND the requested scope (permissions + repositories),
+// NOT installationId alone. A narrowed cron token (#5046) and the broad token
+// the ~10 interactive/agent callers mint share the SAME installation id; keying
+// on the id alone would return whichever was minted first to BOTH — a silent
+// over-privilege (broad caller served a narrow token → 403) OR under-containment
+// (narrow caller served the broad token → the narrowing is defeated). The scope
+// is folded into the key so differently-scoped requests never collide.
+const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
 const TOKEN_SAFETY_MARGIN_MS = 5 * 60 * 1000; // Refresh 5 minutes early
+
+// Deterministic cache key. An UNSCOPED request (no permissions, no repositories)
+// keys under the bare installation id so every existing broad-scope caller keeps
+// its current keyspace (zero behavior change). A scoped request appends a stable,
+// sorted serialization of the requested permissions + repositories.
+function installationTokenCacheKey(
+  installationId: number,
+  permissions?: Record<string, string>,
+  repositories?: string[],
+): string {
+  if (!permissions && !repositories) return String(installationId);
+  // JSON-serialize a normalized, sorted structure (NOT a hand-joined
+  // `k=v,…`/`r:…` string) so a permission value or repo name that contains a
+  // delimiter can never alias another scope's key — future-proofing for PR-2,
+  // which adds more scoped callers (possibly repository_ids / non-soleur repos).
+  // The unscoped path stays the bare numeric id, disjoint from every scoped key
+  // (those always carry the `|` separator, which a `String(number)` never does).
+  const permEntries = permissions
+    ? Object.keys(permissions)
+        .sort()
+        .map((k) => [k, permissions[k]] as const)
+    : [];
+  const repoList = repositories ? [...repositories].sort() : [];
+  return `${installationId}|${JSON.stringify({ p: permEntries, r: repoList })}`;
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -583,6 +729,15 @@ const TOKEN_SAFETY_MARGIN_MS = 5 * 60 * 1000; // Refresh 5 minutes early
  *   wall-clock budget to avoid mid-spawn auth failures when the cache is
  *   warm with a token whose lifetime is less than the budget remaining
  *   (TR9 PR-5 security HIGH-1).
+ * @param opts.permissions Optional least-privilege permission subset for the
+ *   minted token (e.g. `{ contents: "write", issues: "write" }`). Posted as the
+ *   access_tokens body. The GitHub App install-time manifest is the hard ceiling
+ *   — this can only narrow WITHIN the granted permissions, never widen. Omit for
+ *   the full installation grant. Folded into the cache key (#5046).
+ * @param opts.repositories Optional repo-name allowlist (e.g. `["soleur"]`) that
+ *   bounds the token to those repositories — a leaked token cannot be replayed
+ *   cross-repo. Posted as the access_tokens body. Omit for all installed repos.
+ *   Folded into the cache key (#5046).
  */
 // Installation-token mint retry budget. Mirrors the canonical backoff idiom in
 // server/github-api.ts (MAX_RETRIES=2, BASE_DELAY_MS=1_000 → 1s, 2s) but retries
@@ -593,10 +748,20 @@ const INSTALL_TOKEN_BASE_DELAY_MS = 1_000;
 
 export async function generateInstallationToken(
   installationId: number,
-  opts: { minRemainingMs?: number } = {},
+  opts: {
+    minRemainingMs?: number;
+    permissions?: Record<string, string>;
+    repositories?: string[];
+  } = {},
 ): Promise<string> {
   const minRemainingMs = opts.minRemainingMs ?? TOKEN_SAFETY_MARGIN_MS;
-  const cached = tokenCache.get(installationId);
+  const { permissions, repositories } = opts;
+  const cacheKey = installationTokenCacheKey(
+    installationId,
+    permissions,
+    repositories,
+  );
+  const cached = tokenCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now() + minRemainingMs) {
     return cached.token;
   }
@@ -604,7 +769,7 @@ export async function generateInstallationToken(
   // floor is not met (otherwise the same stale entry would be reconsidered
   // by re-entrant callers).
   if (cached) {
-    tokenCache.delete(installationId);
+    tokenCache.delete(cacheKey);
   }
 
   const pem = getPrivateKey();
@@ -612,9 +777,23 @@ export async function generateInstallationToken(
 
   function mintAndExchange() {
     const jwt = createAppJwt();
+    // Post a scoped body ONLY when narrowing is requested; an unscoped mint
+    // stays bodyless (full installation grant) — byte-for-byte the prior
+    // behavior for the ~10 broad-scope callers.
+    const scopeBody: Record<string, unknown> = {};
+    if (permissions) scopeBody.permissions = permissions;
+    if (repositories) scopeBody.repositories = repositories;
+    const hasScope = Object.keys(scopeBody).length > 0;
     return githubFetch(
       `${GITHUB_API}/app/installations/${installationId}/access_tokens`,
-      { method: "POST", headers: { Authorization: `Bearer ${jwt}` } },
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${jwt}`,
+          ...(hasScope ? { "Content-Type": "application/json" } : {}),
+        },
+        ...(hasScope ? { body: JSON.stringify(scopeBody) } : {}),
+      },
     );
   }
 
@@ -685,7 +864,7 @@ export async function generateInstallationToken(
     "Minted installation token",
   );
 
-  tokenCache.set(installationId, {
+  tokenCache.set(cacheKey, {
     token: data.token,
     expiresAt: new Date(data.expires_at).getTime(),
   });

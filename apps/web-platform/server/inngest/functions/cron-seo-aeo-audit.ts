@@ -35,8 +35,11 @@
 //   - repo/                          (in-handler `git clone --depth=1`)
 //   - repo/plugins/soleur            (symlink to getPluginPath())
 //   - repo/.claude/settings.json     (DEFAULT_SETTINGS overlay)
-// Plugin resolution is cwd-relative — the soleur plugin manifest at
-// plugins/soleur/.claude-plugin/plugin.json is discovered from spawn cwd.
+// Plugin resolution under headless `--print` requires the explicit
+// `--plugin-dir plugins/soleur` flag in CLAUDE_CODE_FLAGS below — the symlinked
+// plugins/soleur dir is NOT auto-discovered from spawn cwd in headless mode (the
+// interactive marketplace/enabledPlugins trust flow does not run under --print).
+// See #4993 / #4987.
 //
 // GH TOKEN — installation token minted via createProbeOctokit() →
 // installation discovery → generateInstallationToken(installation.id).
@@ -46,8 +49,10 @@
 import {
   redactToken,
   mintInstallationToken,
+  deferIfTier2Cron,
   postSentryHeartbeat,
   resolveOutputAwareOk,
+  ensureScheduledAuditIssue,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -90,7 +95,9 @@ const CLAUDE_CODE_FLAGS = [
   "--max-turns",
   "40",
   "--allowedTools",
-  "Bash,Read,Write,Edit,Glob,Grep",
+  "Bash,Read,Write,Edit,Glob,Grep,Skill,Task",
+  "--plugin-dir",
+  "plugins/soleur",
   "--",
 ];
 
@@ -142,6 +149,21 @@ export async function cronSeoAeoAuditHandler({
   step,
   logger,
 }: HandlerArgs): Promise<{ ok: boolean }> {
+  // D6 (#5018): Tier-2-deferred — paused until the egress firewall lands.
+  // Posts an honest on-schedule check-in and skips the claude spawn (no
+  // fail-closed FAILED-issue/RED-monitor storm); the weekly output issue
+  // visibly stops. roadmap-review (#5004) is Tier-1 and is NOT deferred.
+  if (
+    await deferIfTier2Cron({
+      cronName: "cron-seo-aeo-audit",
+      sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+      step,
+      logger,
+    })
+  ) {
+    return { ok: true };
+  }
+
   // Run-window start — the lower bound for the post-run output check. Captured
   // before the mint step (memoized across Inngest replays) so a replay reuses
   // the original window rather than re-stamping a later "now".
@@ -251,6 +273,36 @@ export async function cronSeoAeoAuditHandler({
     await step.run("sentry-heartbeat", async () => {
       await postSentryHeartbeat({ ok: heartbeatOk, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-seo-aeo-audit", logger });
     });
+
+    // --- Step 5: silence-hole fallback (#4960, generalized #4978). When the
+    //     output-aware check found NO scheduled-seo-aeo-audit issue in the run
+    //     window, the prompt's create-issue step never ran (mid-eval crash /
+    //     API 500 / max-turns kill). Self-report a FAILED audit issue so the run
+    //     is never silent. Wrapped so a create failure cannot crash the
+    //     finally/teardown — reported to Sentry instead; the watchdog still
+    //     catches the absence after threshold (defense-in-depth). ---
+    if (!heartbeatOk) {
+      await step.run("ensure-audit-issue", async () => {
+        try {
+          await ensureScheduledAuditIssue({
+            label: SENTRY_MONITOR_SLUG,
+            titlePrefix: "[Scheduled] SEO/AEO Audit -",
+            cronName: "cron-seo-aeo-audit",
+            runStartedAt,
+            spawnResult,
+            installationToken,
+          });
+        } catch (err) {
+          reportSilentFallback(err, {
+            feature: "cron-seo-aeo-audit",
+            op: "ensure-audit-issue-failed",
+            message:
+              "Handler-level fallback audit-issue create failed; run remains silent until watchdog threshold",
+            extra: { fn: "cron-seo-aeo-audit", runStartedAt },
+          });
+        }
+      });
+    }
 
     return { ok: heartbeatOk };
   } finally {

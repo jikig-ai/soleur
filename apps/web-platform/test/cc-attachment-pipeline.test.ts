@@ -24,6 +24,16 @@ vi.mock("fs/promises", () => ({
   readFile: vi.fn(),
 }));
 
+// #5005 — the pipeline now resolves the ACTIVE workspace path via the
+// membership-scoped resolver instead of the caller's own `users.workspace_path`
+// column. Mock the resolver; per-resolver unit coverage (fail-closed-to-solo,
+// divergent-id self-heal) lives in test/server/kb-active-workspace-scoping.test.ts.
+const resolveActiveWorkspacePathMock = vi.fn();
+vi.mock("@/server/workspace-resolver", () => ({
+  resolveActiveWorkspacePath: (...args: unknown[]) =>
+    resolveActiveWorkspacePathMock(...args),
+}));
+
 // Silence pino's async transport (pino-pretty spawns a worker thread in
 // non-production envs, which can leave unresolved I/O after a test completes
 // and cause non-deterministic call-count assertions in concurrent CI runs).
@@ -123,6 +133,9 @@ const buf = new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer as ArrayBuffer;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default: solo caller, resolver returns the same path the legacy own-row
+  // read used to. Divergent-id tests override.
+  resolveActiveWorkspacePathMock.mockResolvedValue("/workspace/u1");
 });
 
 describe("persistAndDownloadAttachments", () => {
@@ -254,9 +267,16 @@ describe("persistAndDownloadAttachments", () => {
     expect(attachmentContext).not.toContain("z.png");
   });
 
-  it("returns attachmentContext: undefined when workspace_path lookup is empty", async () => {
+  it("writes attachments under the resolver's ACTIVE workspace path for a stale-own-row caller (#5005 divergent-id)", async () => {
+    // Post-ADR-044 / invited-member caller: the caller's own
+    // `users.workspace_path` is empty, but the resolver resolves a DIVERGENT
+    // active workspace path. Attachments must land there — NOT be skipped (the
+    // pre-#5005 bug, where the empty own-row returned attachmentContext:
+    // undefined and the files silently never persisted).
+    const ACTIVE_PATH = "/workspaces/active-ws-divergent";
+    resolveActiveWorkspacePathMock.mockResolvedValue(ACTIVE_PATH);
     const supabase = makeSupabaseMock({
-      workspacePath: null,
+      workspacePath: null, // own users row is empty — irrelevant now
       download: () => ({
         data: { arrayBuffer: async () => buf },
         error: null,
@@ -271,8 +291,34 @@ describe("persistAndDownloadAttachments", () => {
       attachments: [makeAttachment()],
     });
 
-    // The metadata insert still ran (FK satisfied by messageId), but the
-    // local-disk download was skipped because we have nowhere to write.
+    // Resolver invoked with the caller id + the (tenant) client the pipeline
+    // received — never the caller's own users row.
+    expect(resolveActiveWorkspacePathMock).toHaveBeenCalledWith(
+      userId,
+      supabase.client,
+    );
+    expect(supabase.insertCalls).toHaveLength(1);
+    expect(writeFileMock).toHaveBeenCalledTimes(1);
+    expect(attachmentContext).toBeDefined();
+    expect(attachmentContext).toContain(`${ACTIVE_PATH}/attachments/`);
+  });
+
+  it("returns attachmentContext: undefined when every download fails", async () => {
+    // The only remaining "no context" case post-#5005: the resolver always
+    // returns a path, so this is solely the all-downloads-failed branch.
+    const supabase = makeSupabaseMock({
+      workspacePath: "/workspace/u1",
+      download: () => ({ data: null, error: new Error("storage 500") }),
+    });
+
+    const { attachmentContext } = await persistAndDownloadAttachments({
+      supabase: supabase.client as never,
+      userId,
+      conversationId,
+      messageId,
+      attachments: [makeAttachment()],
+    });
+
     expect(supabase.insertCalls).toHaveLength(1);
     expect(writeFileMock).not.toHaveBeenCalled();
     expect(attachmentContext).toBeUndefined();

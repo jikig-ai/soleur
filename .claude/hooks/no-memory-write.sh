@@ -52,7 +52,7 @@ if [[ "$TARGET" =~ /\.claude/projects/[^/]+/memory(/|$|[\"\'[:space:]]) ]]; then
   jq -n --arg target "$TARGET" '{
     hookSpecificOutput: {
       hookEventName: "PreToolUse",      permissionDecision: "deny",
-      permissionDecisionReason: ("BLOCKED: hr-never-write-to-claude-code-memory-claude (Source: AGENTS.core.md).\n\nTarget: " + $target + "\n\nWrites to ~/.claude/projects/*/memory/ do not transfer across machines or operators. Commit knowledge to one of these committed repo files instead:\n  - AGENTS.md / AGENTS.{core,docs,rest}.md (hard rules + workflow gates)\n  - knowledge-base/overview/constitution.md (architecture + style)\n  - knowledge-base/project/learnings/<category>/<slug>.md (session learnings)\n\nSee plugins/soleur/skills/compound for the canonical learning-write flow.")
+      permissionDecisionReason: ("BLOCKED: hr-never-write-to-claude-code-memory-claude (Source: AGENTS.core.md).\n\nTarget: " + $target + "\n\nWrites to ~/.claude/projects/*/memory/ do not transfer across machines or operators. Commit knowledge to one of these committed repo files instead:\n  - AGENTS.md / AGENTS.{core,docs,rest}.md (hard rules + workflow gates)\n  - knowledge-base/project/constitution.md (architecture + style)\n  - knowledge-base/project/learnings/<category>/<slug>.md (session learnings)\n\nSee plugins/soleur/skills/compound for the canonical learning-write flow.")
     }
   }'
   exit 0

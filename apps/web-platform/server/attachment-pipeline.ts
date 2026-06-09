@@ -13,12 +13,13 @@
  *  4. Inserts one `message_attachments` row per attachment, FK'd to the
  *     caller-provided `messageId`. Caller is responsible for inserting
  *     the parent `messages` row before calling this helper.
- *  5. Looks up the user's workspace path, mkdirs the per-conv attachment
- *     dir, and downloads each file from the `chat-attachments` storage
- *     bucket into `<workspace>/attachments/<conversationId>/<random>.<ext>`.
+ *  5. Resolves the caller's ACTIVE workspace path (membership-scoped, #5005),
+ *     mkdirs the per-conv attachment dir, and downloads each file from the
+ *     `chat-attachments` storage bucket into
+ *     `<workspace>/attachments/<conversationId>/<random>.<ext>`.
  *  6. Returns an `attachmentContext` text block — the same shape the
- *     legacy path appended to the LLM prompt — or `undefined` when no
- *     files landed (workspace lookup empty, or every download failed).
+ *     legacy path appended to the LLM prompt — or `undefined` when every
+ *     download failed (no files landed on disk).
  */
 import { randomUUID } from "crypto";
 import { mkdir, writeFile } from "fs/promises";
@@ -35,6 +36,7 @@ import {
 } from "./error-messages";
 import { createChildLogger } from "./logger";
 import { mirrorWithDebounce } from "./observability";
+import { resolveActiveWorkspacePath } from "./workspace-resolver";
 
 const log = createChildLogger("attachment-pipeline");
 
@@ -62,7 +64,7 @@ export interface PersistAttachmentsArgs {
 export interface PersistAttachmentsResult {
   /**
    * Text block to append to the LLM prompt, or `undefined` when no files
-   * landed on disk (empty workspace path, or every download failed).
+   * landed on disk (every download failed).
    * Format:
    *   "The user attached the following files:\n- <name> (<type>, <bytes>): <path>"
    */
@@ -128,16 +130,21 @@ export async function persistAndDownloadAttachments(
     throw new Error(ERR_UPLOAD_FAILED);
   }
 
-  const { data: user } = await supabase
-    .from("users")
-    .select("workspace_path")
-    .eq("id", userId)
-    .single();
-
-  const workspacePath = (user as { workspace_path?: string } | null)?.workspace_path;
-  if (!workspacePath) {
-    return { attachmentContext: undefined };
-  }
+  // #5005 — resolve the caller's ACTIVE workspace path via the membership-scoped
+  // resolver, NOT the caller's own `users.workspace_path` column. That column is
+  // the empty solo row for an invited member and stale/empty for any account
+  // provisioned after the ADR-044 `users → workspaces` relocation, which made
+  // chat attachments silently never persist to disk. The pipeline runs on a
+  // tenant client; `resolveActiveWorkspacePath` reads only `user_session_state`
+  // + `workspace_members`, both self-scoped via `.eq("user_id", userId)`, so a
+  // tenant/RLS client is safe (same as the agent-runner:993 precedent). NOTE:
+  // the sibling `resolveActiveWorkspaceKbRoot` additionally reads
+  // `workspaces`/`organizations` by id — do NOT swap to it here without
+  // re-checking that tenant-client claim. The resolver always returns a path
+  // (fails closed to solo), so a
+  // null-path early return is no longer reachable; the "no context" case is now
+  // solely "every download failed" (filePaths.length === 0 below).
+  const workspacePath = await resolveActiveWorkspacePath(userId, supabase);
 
   const attachDir = path.join(workspacePath, "attachments", conversationId);
   await mkdir(attachDir, { recursive: true });

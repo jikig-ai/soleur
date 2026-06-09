@@ -117,12 +117,13 @@ This is the canonical Register of Processing Activities maintained by **Jikigai*
 
 ---
 
-## Processing Activity 6 — Newsletter Subscription
+## Processing Activity 6 — Newsletter & Waitlist Subscription
 
 | Art. 30(1) limb | Entry |
 |---|---|
-| **(b) Purposes** | Send periodic newsletter emails about Soleur updates, features, and content to opted-in subscribers. |
-| **(c) Categories of data subjects** | Newsletter subscribers (may or may not be Web Platform users). |
+| **(b) Purposes** | (i) Send periodic newsletter emails about Soleur updates, features, and content to opted-in subscribers; (ii) notify early-access/waitlist subscribers once when the hosted platform opens (the `pricing-waitlist` Buttondown tag). Both are single-purpose, consent-scoped marketing lists. |
+| **(c) Categories of data subjects** | Newsletter subscribers and early-access waitlist subscribers (may or may not be Web Platform users). |
+| **Collection surfaces** | Marketing-site newsletter form; pricing-page waitlist form; **shared-document CTA banner** (`apps/web-platform/components/shared/cta-banner.tsx`, anonymous public viewers) — all post to the same Buttondown endpoint. |
 | **(c) Categories of personal data** | Email address (actively provided); IP address, referrer URL, subscription timestamp, browser/device metadata (auto-collected by Buttondown at subscription). |
 | **Special categories** | None. |
 | **Lawful basis** | Art. 6(1)(a) — consent (double opt-in via Buttondown confirmation email) for the email address; Art. 6(1)(f) — legitimate interest (service operation, abuse prevention) for the auto-collected technical metadata. |

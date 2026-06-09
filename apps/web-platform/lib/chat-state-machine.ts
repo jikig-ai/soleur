@@ -196,6 +196,21 @@ export interface ChatContextResetMessage extends ChatMessageBase {
   reason: ContextResetReason;
 }
 
+/** feat-debug-mode-stream — one harness instruction-stream event materialized
+ *  from a `debug_event` WS frame. Rendered ONLY in the SEPARATE collapsed
+ *  debug panel (`debug-stream-panel.tsx`), never inline in the conversation:
+ *  `chat-surface.tsx` filters these out of the main message map and feeds them
+ *  to `<DebugStreamPanel>`. `body` arrives already redacted-or-dropped at the
+ *  server emit boundary; the panel re-redacts at render (belt-and-suspenders,
+ *  mirroring `message-bubble.tsx`). Flat (no leaderId) — the panel is a single
+ *  ordered log, not a per-leader bubble. */
+export interface ChatDebugEventMessage extends ChatMessageBase {
+  type: "debug_event";
+  debugKind: "tool_use" | "reasoning" | "result";
+  label?: string;
+  body: string;
+}
+
 export type ChatMessage =
   | ChatTextMessage
   | ChatGateMessage
@@ -204,7 +219,8 @@ export type ChatMessage =
   | ChatInteractivePromptMessage
   | ChatWorkflowEndedMessage
   | ChatToolUseChipMessage
-  | ChatContextResetMessage;
+  | ChatContextResetMessage
+  | ChatDebugEventMessage;
 
 /** Stage 4 (#2886): ambient lifecycle-bar slice. The bar is sticky context;
  *  `workflow_ended` sets state to "ended" AND pushes an in-list summary card.
@@ -300,6 +316,8 @@ export type StreamEvent = Extract<
   | { type: "tool_use" }
   | { type: "command_stream" }
   | { type: "tool_progress" }
+  // feat-debug-mode-stream — harness instruction stream (separate panel).
+  | { type: "debug_event" }
   | { type: "review_gate" }
   | { type: "autonomous_disclosure" }
   | { type: "subagent_spawn" }
@@ -999,6 +1017,31 @@ export function applyStreamEvent(
       };
       return {
         messages: [...prev, notice],
+        activeStreams,
+        workflow: priorWorkflow,
+        spawnIndex: priorSpawnIndex,
+      };
+    }
+
+    case "debug_event": {
+      // feat-debug-mode-stream — APPEND the harness event to the message list
+      // as a flat ChatDebugEventMessage. `chat-surface.tsx` filters these into
+      // the separate collapsed debug panel; they NEVER render inline in the
+      // conversation. No leader routing, no `activeStreams` mutation, and no
+      // timer action: the debug stream is orthogonal to the conversation
+      // lifecycle (a tool_use/reasoning/result event must not reset the
+      // stuck-state watchdog or imply leader activity).
+      const debugMsg: ChatDebugEventMessage = {
+        id: `debug-${crypto.randomUUID()}`,
+        role: "assistant",
+        content: "",
+        type: "debug_event",
+        debugKind: event.kind,
+        label: event.label,
+        body: event.body,
+      };
+      return {
+        messages: [...prev, debugMsg],
         activeStreams,
         workflow: priorWorkflow,
         spawnIndex: priorSpawnIndex,

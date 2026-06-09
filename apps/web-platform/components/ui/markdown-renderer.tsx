@@ -142,7 +142,11 @@ interface MarkdownRendererProps {
   wrapCode?: boolean;
   /** Render ```likec4-view embeds as interactive diagrams. The KB viewer
    *  passes the resolved `c4-visualizer` flag; callers without the flag
-   *  provider (e.g. public shared docs) omit it and embeds stay code blocks. */
+   *  provider omit it and embeds stay code blocks here. The public shared-doc
+   *  viewer (`app/shared/[token]/page.tsx`) does NOT use this flag — it
+   *  pre-extracts the embed via `parseLikeC4Embed` and renders a token-scoped,
+   *  read-only `C4Diagram` directly, so this renderer only sees the leftover
+   *  prose (`notes`). */
   enableC4?: boolean;
   /** KB-relative dir of the LikeC4 project an embed resolves against.
    *  Defaults to the canonical architecture diagrams project. */

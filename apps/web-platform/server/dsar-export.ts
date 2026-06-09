@@ -69,8 +69,31 @@ import {
   type DsarTableSpec,
 } from "./dsar-export-allowlist";
 import { enumerateCoUploaderAttachments } from "./dsar-export-co-uploader";
+import { workspacePathForWorkspaceId } from "./workspace-resolver";
 
 const log = createChildLogger("dsar-export");
+
+/**
+ * Resolve the on-disk workspace root used by the DSAR workspace-files
+ * enumerator for `subjectUserId`.
+ *
+ * #5005: this is id-keyed (`<WORKSPACES_ROOT>/<subjectUserId>`) via
+ * `workspacePathForWorkspaceId`, NOT read from the subject's legacy
+ * `users.workspace_path` column — that column is stale/empty for accounts
+ * provisioned after the ADR-044 `users → workspaces` relocation, which silently
+ * truncated the workspace files from the export (an incomplete Art. 15/20
+ * response).
+ *
+ * Resolver-selection (load-bearing): a DSAR is per-subject, so the SOLO/N2 path
+ * (`workspace_id == user_id`) is correct — NOT the active-workspace resolver. A
+ * member's personal data lives in their solo workspace; resolving their *active*
+ * (possibly shared) workspace would over-export the owner's files into the
+ * member's DSAR — a cross-tenant leak. The single-arg signature (no supabase
+ * client, no active claim) makes that over-export structurally impossible.
+ */
+export function resolveDsarWorkspacePath(subjectUserId: string): string {
+  return workspacePathForWorkspaceId(subjectUserId);
+}
 
 // ---------------------------------------------------------------------------
 // Phase 2 primitives — re-exported as-is so Phase 2's tests + the
@@ -1975,16 +1998,15 @@ async function runExport(job: {
   try {
     const pseudonymSalt = randomBytes(32);
     const tables = await exportSqlTable(expectedUserId, pseudonymSalt, controller.signal);
-    // Locate the user's workspace path for the workspace-files
-    // enumerator. Pulled from the `users` row already fetched by
-    // exportSqlTable — single source of truth.
-    const userRow = tables.find((t) => t.table === "users")?.rows[0] as
-      | { workspace_path?: unknown }
-      | undefined;
-    const workspacePath =
-      typeof userRow?.workspace_path === "string" && userRow.workspace_path
-        ? userRow.workspace_path
-        : null;
+    // #5005 — workspace-files enumeration root, resolved id-keyed from the
+    // subject's workspace id (`<WORKSPACES_ROOT>/<expectedUserId>`), NOT from
+    // the subject's legacy `users.workspace_path` column (stale/empty after the
+    // ADR-044 relocation → silently truncated workspace files from the export).
+    // DSAR is per-subject, so this is the SOLO/N2 path — see
+    // `resolveDsarWorkspacePath` for the no-over-export rationale. The `users`
+    // table is still emitted by `exportSqlTable` above; only the path *source*
+    // moved.
+    const workspacePath = resolveDsarWorkspacePath(expectedUserId);
     const archive = await buildArchiveToDisk(
       job.id,
       expectedUserId,

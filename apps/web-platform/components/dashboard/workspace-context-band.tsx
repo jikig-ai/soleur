@@ -72,18 +72,31 @@ export function WorkspaceContextBand({
 
   // #4810 Bug 2: at md:w-14 (56px) the verbose org chip + "Working on:" repo +
   // section title overflow into an unreadable strip. Render an icon-only column
-  // when collapsed — back chevron (drilled), an org avatar mark, a repo dot, and
-  // a section glyph — so the rail never overflows horizontally. The identity is
-  // never FULLY unmounted (ADR-047): the data-bearing OrgSwitcherContainer +
-  // LiveRepoBadge stay mounted in the CSS-exclusive mobile band, and hover titles
-  // here recover orientation. Verbose labels return verbatim on expand.
+  // when collapsed — just the back chevron (drilled) + the workspace identity
+  // tile — so the rail never overflows horizontally. The earlier decorative gold
+  // repo dot and single-letter section monogram were removed (sidebar declutter):
+  // both carried no information the identity tile + the section's own collapsed
+  // nav icon don't already carry. The identity is never FULLY unmounted
+  // (ADR-047): the data-bearing OrgSwitcherContainer + LiveRepoBadge stay mounted
+  // in the CSS-exclusive mobile band, and the identity tile's hover title recovers
+  // orientation. Verbose labels return verbatim on expand.
   if (variant === "rail" && collapsed) {
     return (
       <div
         data-testid="workspace-context-band"
         data-variant="rail"
         data-collapsed="true"
-        className="flex flex-col items-center gap-3 px-2 py-3"
+        // pt-16 (not py-3) reserves top clearance for the floated collapse toggle
+        // (layout.tsx, `absolute left-1/2 -translate-x-1/2 top-10` when collapsed):
+        // in the 56px collapsed rail the centered toggle (top-10=40px, bottom edge
+        // 64px from the aside top) shares this tile's vertical center axis, so the
+        // only thing keeping them disjoint is vertical separation. This band sits
+        // ~12px below the aside top, so the toggle's bottom edge is 64-12 = 52px in
+        // band-relative space; pt-16 (64px) drops the first icon ~12px below it — a
+        // clear gap so the toggle no longer reads as crowding the logo. The collapsed
+        // rail has ample vertical room, so the larger top pad costs nothing the user
+        // notices. (Was pt-14 = 56px → only ~4px gap, which read as "too close".)
+        className="flex flex-col items-center gap-3 px-2 pb-3 pt-16"
       >
         {drill && !suppressBack ? (
           <Link
@@ -109,23 +122,6 @@ export function WorkspaceContextBand({
             hasLogo={activeWorkspaceHasLogo}
           />
         </span>
-        <span
-          data-testid="live-repo-dot"
-          aria-label="Active repository"
-          title="Active repository"
-          className="text-base leading-none text-soleur-accent-gold-fg"
-        >
-          ●
-        </span>
-        {drill && !suppressSectionTitle ? (
-          <span
-            data-testid="nav-section-title"
-            title={SECTION_LABELS[drill]}
-            className="text-xs font-semibold uppercase text-soleur-text-muted"
-          >
-            {SECTION_LABELS[drill].charAt(0)}
-          </span>
-        ) : null}
       </div>
     );
   }
@@ -148,7 +144,13 @@ export function WorkspaceContextBand({
           the leading top room is pt-2 (was pt-3) so — together with the tightened
           brand-row padding above — the gap between the collapse toggle and this
           pill no longer reads as a large empty band. */}
-      <div className="flex items-center gap-2 px-3 pt-2">
+      {/* md:pr-10 reserves right clearance for the floated collapse toggle
+          (layout.tsx, `absolute right-3 top-10` → occupies the right ~36px of the
+          rail header). Without it the multi-workspace switcher's `▾` chevron
+          (org-switcher.tsx, `shrink-0` at the card's right edge) sits under the
+          toggle. Desktop-only (md:) — the mobile band is below the md breakpoint
+          and unaffected. */}
+      <div className="flex items-center gap-2 px-3 pt-2 md:pr-10">
         <div className="min-w-0 flex-1">
           <OrgSwitcherContainer />
         </div>

@@ -1,5 +1,9 @@
 import { memo, useState, useEffect } from "react";
 import * as Sentry from "@sentry/nextjs";
+import {
+  WORKSPACE_LOGO_CHANGED_EVENT,
+  type WorkspaceLogoChangedDetail,
+} from "@/lib/workspace-logo-events";
 
 // Presentational workspace-identity tile (ADR-047 single-mount: imports no
 // data-bearing nav component, so it can render at any of the switcher's
@@ -61,13 +65,33 @@ export const WorkspaceIdentityTile = memo(function WorkspaceIdentityTile({
 }: WorkspaceIdentityTileProps) {
   const sizeConfig = SIZE_CLASSES[size];
   const [imgError, setImgError] = useState(false);
+  // Bumped on a same-tab logo change for THIS workspace so a REPLACE busts the
+  // browser's max-age=300 cache of the stable proxy `src` (whose path is
+  // unchanged when hasLogo stays true). 0 → no query param (clean initial src).
+  const [cacheBust, setCacheBust] = useState(0);
 
   // Reset the error latch when the workspace changes (new mount target / upload).
   useEffect(() => {
     setImgError(false);
   }, [workspaceId]);
 
+  // A same-tab upload/removal for THIS workspace re-renders the logo without a
+  // reload: clear the error latch and bust the cached proxy src (#4916, AC4).
+  useEffect(() => {
+    if (!workspaceId) return;
+    const onChange = (e: Event) => {
+      const detail = (e as CustomEvent<WorkspaceLogoChangedDetail>).detail;
+      if (!detail?.workspaceId || detail.workspaceId === workspaceId) {
+        setImgError(false);
+        setCacheBust((n) => n + 1);
+      }
+    };
+    window.addEventListener(WORKSPACE_LOGO_CHANGED_EVENT, onChange);
+    return () => window.removeEventListener(WORKSPACE_LOGO_CHANGED_EVENT, onChange);
+  }, [workspaceId]);
+
   const showLogo = !!hasLogo && !!workspaceId && !imgError;
+  const logoSrc = `/api/workspace/${workspaceId}/logo${cacheBust ? `?v=${cacheBust}` : ""}`;
 
   return (
     <span
@@ -78,7 +102,7 @@ export const WorkspaceIdentityTile = memo(function WorkspaceIdentityTile({
       {showLogo ? (
         <img
           data-testid="workspace-logo-img"
-          src={`/api/workspace/${workspaceId}/logo`}
+          src={logoSrc}
           alt=""
           className="h-full w-full object-cover"
           onError={() => {

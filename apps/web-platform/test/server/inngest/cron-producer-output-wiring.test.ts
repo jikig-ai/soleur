@@ -14,7 +14,7 @@
 // cron-roadmap-review.test.ts.
 
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 const FN_DIR = resolve(__dirname, "../../../server/inngest/functions");
@@ -85,6 +85,21 @@ describe("output-aware heartbeat wiring (always-create producers)", () => {
       expect(src).toContain("stderrTail: spawnResult.stderrTail");
       expect(src).toContain("exitCode: spawnResult.exitCode");
       expect(src).toContain("stdoutTail: spawnResult.stdoutTail");
+
+      // #4960/#4978 — the handler-level silence-hole fallback. When the
+      // output-aware check found no labeled issue in the run window (mid-eval
+      // crash / API 500 / max-turns kill bypassed the prompt's create step),
+      // the handler ITSELF files a FAILED audit issue via the shared
+      // ensureScheduledAuditIssue helper so the run is never silent. The step
+      // must be gated on `!heartbeatOk` and wrap the create so a fallback
+      // failure is reported to Sentry (op:"ensure-audit-issue-failed") rather
+      // than crashing the finally/teardown. A revert of just this wiring
+      // (leaving the shared helper + its unit tests green) would otherwise pass
+      // the whole suite — same un-wiring-guard rationale as above.
+      expect(src).toContain("ensureScheduledAuditIssue(");
+      expect(src).toContain('"ensure-audit-issue"');
+      expect(src).toContain("if (!heartbeatOk)");
+      expect(src).toContain('op: "ensure-audit-issue-failed"');
     },
   );
 
@@ -105,6 +120,12 @@ describe("output-aware heartbeat wiring (always-create producers)", () => {
       // Sentry event (off-host-visible), not a bare logger.warn.
       expect(src).toContain("warnSilentFallback");
       expect(src).toContain('op: "claude-eval-nonzero-noop"');
+
+      // #4978 — best-effort crons are NOT output-aware producers, so they must
+      // NOT adopt the silence-hole fallback. A clean run that legitimately
+      // files no issue is the NORMAL outcome here; firing the fallback would
+      // spam FAILED audit issues on every healthy zero-artifact run.
+      expect(src).not.toContain("ensureScheduledAuditIssue");
     },
   );
 
@@ -117,4 +138,111 @@ describe("output-aware heartbeat wiring (always-create producers)", () => {
     expect(src).not.toContain("resolveOutputAwareOk");
     expect(src).toContain("ok: result.ok");
   });
+});
+
+// #4993 — fleet-wide headless /soleur:* skill resolution parity guard.
+//
+// A headless `claude --print` cron eval can only resolve+invoke a /soleur:*
+// plugin skill when its CLAUDE_CODE_FLAGS carry BOTH `--plugin-dir
+// plugins/soleur` (registers the symlinked plugin — the interactive
+// marketplace/enabledPlugins trust flow is skipped under --print) AND `Skill`
+// (+`Task` for skills that fan out subagents) in --allowedTools. #4987/PR #4989
+// fixed cron-content-generator (the first instance); this guard makes the fix
+// fleet-wide and self-protecting so the gap cannot silently re-open when a NEW
+// producer adds a /soleur:* prompt.
+//
+// SELF-DISCOVERING: rather than 10 near-duplicate per-file test blocks (the
+// duplicate-coverage anti-pattern), this reads every cron-*.ts / event-*.ts in
+// the functions dir and classifies a file as skill-invoking when it BOTH spawns
+// a claude eval (defines CLAUDE_CODE_FLAGS) AND invokes /soleur: in a non-comment
+// (prompt) line. That excludes the two text-only false positives
+// (cron-nag-4216-readiness, cron-skill-freshness — these define NO
+// CLAUDE_CODE_FLAGS, so the CLAUDE_CODE_FLAGS predicate ALONE excludes them;
+// their /soleur: text lives in generated issue/nag bodies, not an eval prompt)
+// and the four eval producers that carry CLAUDE_CODE_FLAGS but invoke no skill
+// (roadmap-review, community-monitor, follow-through-monitor, daily-triage —
+// excluded by the prompt-body predicate). The discovered set
+// is asserted === the known expected set so a new producer must be classified
+// (and flagged) explicitly. content-generator is INCLUDED — it is itself a
+// self-discovered skill-invoking producer, so this guard also protects the
+// original #4987 fix from regressing.
+describe("headless skill resolution parity (#4993)", () => {
+  // The authoritative skill-invoking-producer set: every cron/event handler whose
+  // eval PROMPT runs a /soleur:* skill. Drift here is intentional friction — a new
+  // producer that invokes a skill MUST be added (and carry the flags) or the
+  // discovery assertion below fails loud. This list slices the producer corpus on
+  // a DIFFERENT axis than WIRED_PRODUCERS / BEST_EFFORT_CRONS above (skill
+  // invocation vs. heartbeat-wiring class); the lists overlap by design and are
+  // maintained independently.
+  const EXPECTED_SKILL_PRODUCERS = [
+    "cron-agent-native-audit.ts",
+    "cron-bug-fixer.ts",
+    "cron-campaign-calendar.ts",
+    "cron-competitive-analysis.ts",
+    "cron-content-generator.ts",
+    "cron-growth-audit.ts",
+    "cron-growth-execution.ts",
+    "cron-legal-audit.ts",
+    "cron-seo-aeo-audit.ts",
+    "cron-ux-audit.ts",
+    "event-ship-merge.ts",
+  ].sort();
+
+  // Strip `//` line comments so a /soleur: mention in a comment (sibling-skill
+  // references abound — content-generator's header, and roadmap-review /
+  // community-monitor's reconciled "invokes no /soleur:* skill" notes) does not
+  // misclassify a file. We deliberately do NOT strip `*`/`/*`-prefixed lines:
+  // every real prompt invocation lives on a `Run /soleur:…` line inside a
+  // template literal, and stripping `*` would risk silently false-EXCLUDING a
+  // future prompt whose text starts with a markdown bullet (`* Run /soleur:…`) —
+  // the dangerous-quiet direction (producer ships unguarded, test stays green).
+  // Verified: no flag-carrying producer carries /soleur: in a block comment.
+  const promptBody = (src: string): string =>
+    src
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+
+  const discovered = readdirSync(FN_DIR)
+    .filter((f) => /^(cron|event)-.*\.ts$/.test(f))
+    .filter((f) => {
+      const src = readFileSync(resolve(FN_DIR, f), "utf-8");
+      return src.includes("CLAUDE_CODE_FLAGS") && promptBody(src).includes("/soleur:");
+    })
+    .sort();
+
+  it("discovers exactly the known skill-invoking producers (empty-corpus / drift guard)", () => {
+    // Non-vacuity: a glob that silently matches nothing must fail loud.
+    expect(discovered.length).toBeGreaterThan(0);
+    expect(discovered).toEqual(EXPECTED_SKILL_PRODUCERS);
+  });
+
+  it.each(EXPECTED_SKILL_PRODUCERS)(
+    "%s carries --plugin-dir + Skill + Task in CLAUDE_CODE_FLAGS, plugin-dir before --",
+    (file) => {
+      const src = readFileSync(resolve(FN_DIR, file), "utf-8");
+      const flagsMatch = src.match(/const CLAUDE_CODE_FLAGS = \[([\s\S]*?)\];/);
+      const flagsBlock = flagsMatch ? flagsMatch[1] : "";
+      expect(flagsBlock.length).toBeGreaterThan(0);
+
+      // Registers the symlinked plugin (headless --print does not auto-discover it).
+      expect(flagsBlock).toContain('"--plugin-dir"');
+      expect(flagsBlock).toContain('"plugins/soleur"');
+      expect(flagsBlock).toMatch(/"--plugin-dir",\s*\n\s*"plugins\/soleur",/);
+
+      // --allowedTools allowlist must let the eval invoke the skill (Skill) and
+      // any subagent the skill fans out (Task). Both must appear in the single
+      // allowlist string, not merely somewhere in the block.
+      const allowMatch = flagsBlock.match(/"--allowedTools",\s*\n\s*"([^"]*)"/);
+      const allowList = allowMatch ? allowMatch[1] : "";
+      expect(allowList.split(",")).toContain("Skill");
+      expect(allowList.split(",")).toContain("Task");
+
+      // --plugin-dir must precede the load-bearing `--` end-of-options marker.
+      const endMarker = flagsBlock.indexOf('"--"');
+      expect(endMarker).toBeGreaterThan(-1);
+      expect(flagsBlock.indexOf('"--plugin-dir"')).toBeLessThan(endMarker);
+      expect(flagsBlock.indexOf('"plugins/soleur"')).toBeLessThan(endMarker);
+    },
+  );
 });

@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { OrgSwitcher } from "@/components/dashboard/org-switcher";
 import { useActiveRepo } from "@/hooks/use-active-repo";
 import { getCurrentWorkspaceId } from "@/lib/session-claims";
 import { reportSilentFallback } from "@/lib/client-observability";
+import { WORKSPACE_LOGO_CHANGED_EVENT } from "@/lib/workspace-logo-events";
 import type { OrgMembershipSummary } from "@/server/org-memberships-resolver";
 
 // Container pairs OrgSwitcher (pure UI) with the runtime data plumbing.
@@ -59,22 +60,38 @@ export function OrgSwitcherContainer() {
   // single active-repo fetch surface (no doubled poll despite two consumers).
   const { data: repo } = useActiveRepo();
 
+  // Liveness latch so a refetch resolving after unmount never sets state.
+  const mountedRef = useRef(true);
   useEffect(() => {
-    let cancelled = false;
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const loadMemberships = useCallback(() => {
     fetch("/api/workspace/list-memberships")
       .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
       .then((json: { memberships: OrgMembershipSummary[] }) => {
-        if (!cancelled) setMemberships(json.memberships);
+        if (mountedRef.current) setMemberships(json.memberships);
       })
       .catch(() => {
         // Silent failure — the chip stays hidden. No Sentry breadcrumb: a
         // transient 5xx would otherwise alarm on every page load for solo users.
-        if (!cancelled) setMemberships([]);
+        // Keep last-known on a refetch (never blank a populated switcher); fall
+        // to [] only on the very first load so the chip stays hidden.
+        if (mountedRef.current) setMemberships((prev) => prev ?? []);
       });
-    return () => {
-      cancelled = true;
-    };
   }, []);
+
+  useEffect(() => {
+    loadMemberships();
+    // A same-tab logo upload/removal nudges a memberships refetch so the
+    // switcher reflects the new logo without a full reload (H1, AC4).
+    const onLogoChange = () => loadMemberships();
+    window.addEventListener(WORKSPACE_LOGO_CHANGED_EVENT, onLogoChange);
+    return () => window.removeEventListener(WORKSPACE_LOGO_CHANGED_EVENT, onLogoChange);
+  }, [loadMemberships]);
 
   // Step 1: a row click arms the confirm step (confirm-then-switch). The target
   // is resolved to a full membership so we have the workspaceId for the RPC.

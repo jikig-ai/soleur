@@ -23,7 +23,11 @@ import {
   buildC4ConciergeTools,
   EDIT_C4_DIAGRAM_TOOL,
 } from "@/server/c4-concierge-tools";
-import { getRuntimeFlag, type Role } from "@/lib/feature-flags/server";
+import {
+  getRuntimeFlag,
+  isDebugModeAvailable,
+  type Role,
+} from "@/lib/feature-flags/server";
 import { C4_VISUALIZER_FLAG } from "@/lib/c4-constants";
 
 import { applyPrefillGuard } from "./agent-prefill-guard";
@@ -91,6 +95,7 @@ import {
   findRepoOwnerInstallationForUser,
   getInstallationAccount,
 } from "./github-app";
+import { mirrorSelfHealSkip } from "./cc-self-heal-observability";
 // Session-start self-heal: if the active workspace has a connected repo but no
 // matching clone on disk, clone/repair it so the Concierge has a real git repo
 // to work in (fixes the "No git repository found" blocker). Generic per-user.
@@ -98,6 +103,8 @@ import { getCurrentRepoUrl } from "./current-repo-url";
 import { ensureWorkspaceRepoCloned } from "./ensure-workspace-repo";
 // Issue B part 2 — per-workspace autonomous Bash toggle (fail-closed read).
 import { resolveBashAutonomous } from "./resolve-bash-autonomous";
+import { resolveDebugMode } from "./resolve-debug-mode";
+import { emitDebugEvent } from "./debug-event";
 // feat-bash-autonomous-default-on — first-run consent soft-gate inputs:
 // the ack timestamp (fail-closed null = HOLD) + workspace-ownership (fail-closed
 // not-owner = review-gate fallback).
@@ -265,10 +272,40 @@ const GH_403_PROMPT_DIRECTIVE =
   "user to change GitHub App permissions, approve new permissions, or " +
   "re-consent — the Soleur platform diagnoses and repairs installation/" +
   "permission issues server-side and will retry with the correct installation " +
-  "automatically. The one sanctioned next step you may offer: if the 403 " +
-  "persists across retries, ask the user to confirm the Soleur GitHub App is " +
-  "installed on the repository's owner account. Beyond that, state only what " +
-  "the error literally says.";
+  "automatically. State only what the error literally says.";
+
+// feat-one-shot-concierge-workspace-repo-context — name the connected
+// repository to the Concierge so it stops trying to infer owner/repo from a
+// git origin remote. On a `.git`-less workspace `git config --get
+// remote.origin.url` returns empty and the agent falsely concludes "no repo
+// connected" and prompts the user — even though the workspace header plainly
+// shows the connected repo. The server already resolves owner/repo from the
+// active-workspace repo_url (ADR-044), so we surface it directly. Mirrors the
+// leader path at agent-runner.ts:1429-1441 (lock-step the lead phrase "The
+// connected repository is ${owner}/${repo}" so the two surfaces stay
+// greppable together). PARITY: the static baseline counterpart is
+// GH_AUTH_STATUS_GUIDANCE_DIRECTIVE in soleur-go-runner.ts — both tell the
+// agent to pass `-R owner/repo` and never infer from a git remote; keep the
+// two in lock-step.
+//
+// The `${owner}/${repo}` interpolation is safe because both are validated
+// against CC_GITHUB_NAME_RE at the call site before assignment (see
+// connectedOwner/connectedRepo resolution below) — no whitespace, backticks,
+// `$`, `{`, newlines, or markdown fences can slip through. If that regex ever
+// relaxes, this becomes a prompt-injection sink.
+//
+// Exported so the test suite can assert on the builder's OUTPUT directly
+// (behavioral), not only on source-presence of the call site.
+export function buildConnectedRepoContext(owner: string, repo: string): string {
+  return (
+    "## Connected repository\n" +
+    `The connected repository is ${owner}/${repo}. For any repo gh operation, ` +
+    `pass -R ${owner}/${repo} explicitly (for example: gh issue view 123 -R ` +
+    `${owner}/${repo}). Use this value directly — do NOT try to infer the ` +
+    "repository from a git remote or a .git directory; the workspace may not " +
+    "contain one. The installation token resolves the repo server-side."
+  );
+}
 
 // Max length cap for `block.name` before passing to Sentry/pino. Defense-in-
 // depth against future model regressions that might emit pathologically long
@@ -276,38 +313,25 @@ const GH_403_PROMPT_DIRECTIVE =
 // catalog today, so this is bounded but not impossible.
 const MAX_TOOL_NAME_LEN_FOR_LOG = 128;
 
-// feat-concierge-stream-commands — `command_stream` output caps (D4). The
-// per-chunk cap bounds a single oversized `tool_use_result` (e.g. a `cat`
-// of a multi-MB file) before it ever hits the WS frame; the per-command
-// total cap bounds the cumulative output across however many result blocks
-// one command produces. When the total cap is hit, `TRUNCATION_MARKER` is
-// appended and `truncated:true` rides the emit so the bubble shows the
-// `[… truncated]` affordance. Byte-measured (not char-measured) to bound
-// the actual wire payload regardless of multi-byte content.
-export const COMMAND_STREAM_CHUNK_CAP_BYTES = 4096;
-export const COMMAND_STREAM_TOTAL_CAP_BYTES = 16384;
-// FIX 4 — pre-cap the raw command at the start emit (mirrors the output path)
-// so the wire payload + redaction back-tracking are bounded regardless of an
-// adversarially long command string. Matches `commandStreamSchema.command.max`.
-export const COMMAND_STREAM_COMMAND_CAP_BYTES = 16384;
-export const COMMAND_STREAM_TRUNCATION_MARKER = "\n[… truncated]";
-
-/**
- * feat-concierge-stream-commands — byte-cap a UTF-8 string at `capBytes`,
- * never splitting a multi-byte code point. Returns the (possibly shorter)
- * string + whether it was truncated. Used to bound a single output chunk
- * before redaction (redaction can only shrink the string, so capping the
- * raw input keeps the regex back-tracking bounded too).
- */
-export function capUtf8Bytes(s: string, capBytes: number): { text: string; truncated: boolean } {
-  const buf = Buffer.from(s, "utf8");
-  if (buf.length <= capBytes) return { text: s, truncated: false };
-  // Walk back to a code-point boundary: UTF-8 continuation bytes are
-  // 0b10xxxxxx (0x80–0xBF). Trim them off the cut edge.
-  let end = capBytes;
-  while (end > 0 && (buf[end] & 0xc0) === 0x80) end--;
-  return { text: buf.subarray(0, end).toString("utf8"), truncated: true };
-}
+// feat-concierge-stream-commands — `command_stream` output caps (D4) + the
+// UTF-8 byte-cap util. Definitions moved to `./command-stream-caps` so the
+// debug-mode emit path can reuse them without a cc-dispatcher import cycle.
+// Imported for internal use AND re-exported so every existing importer
+// (tests, etc.) that pulls these from cc-dispatcher is unaffected.
+import {
+  COMMAND_STREAM_CHUNK_CAP_BYTES,
+  COMMAND_STREAM_TOTAL_CAP_BYTES,
+  COMMAND_STREAM_COMMAND_CAP_BYTES,
+  COMMAND_STREAM_TRUNCATION_MARKER,
+  capUtf8Bytes,
+} from "./command-stream-caps";
+export {
+  COMMAND_STREAM_CHUNK_CAP_BYTES,
+  COMMAND_STREAM_TOTAL_CAP_BYTES,
+  COMMAND_STREAM_COMMAND_CAP_BYTES,
+  COMMAND_STREAM_TRUNCATION_MARKER,
+  capUtf8Bytes,
+};
 
 // Redaction-fallthrough probe markers (the four secret shapes the extended
 // allowlist covers). If a redacted command/output STILL contains one of
@@ -1291,31 +1315,6 @@ export const realSdkQueryFactory: QueryFactory = async (
       autonomous: bashAutonomous && autonomousAckAtMs != null,
     });
 
-    // Session-start self-heal (generic, per-user, idempotent, fail-soft): if the
-    // workspace has a connected repo but no matching clone on disk, clone/repair
-    // it so the agent has a real git repo to branch/commit/work in. Runs once per
-    // cold conversation (the factory is per-cold-conversation). NEVER throws into
-    // the conversation; clone failure mirrors to Sentry and degrades gracefully.
-    await ensureWorkspaceRepoCloned({
-      userId: args.userId,
-      workspacePath,
-      installationId,
-      repoUrl,
-    });
-
-    // Issue A: mint a short-lived GitHub App installation token for the
-    // connected repo and inject it as GH_TOKEN so the agent's `gh` calls
-    // authenticate without an interactive `gh auth login` (the reported
-    // symptom). resolveInstallationId returns null for no-connected-repo /
-    // non-member — graceful degradation: gh simply stays unauthenticated,
-    // exactly as before. Mint failure is NON-FATAL: mirror to Sentry and
-    // proceed without GH_TOKEN — never block a conversation on a gh-auth
-    // mint. generateInstallationToken is token-cache-memoized per
-    // installation id, so this is not a per-dispatch network round-trip on a
-    // warm cache. Per hr-github-app-auth-not-pat this is an App installation
-    // token, NEVER a PAT, and the value is NEVER logged. (Sentry
-    // 512e253141294ac1a808b2ef03a21289 — cron-follow-through-monitor — is the
-    // cron-side root cause this mirrors for the interactive path.)
     // Parse the connected repo's owner/repo ONCE from the server-resolved
     // repoUrl (never tool input). Reused by the installation self-heal below
     // and the C4 write-tool gate further down. CC_GITHUB_NAME_RE rejects any
@@ -1366,26 +1365,54 @@ export const realSdkQueryFactory: QueryFactory = async (
         const storedAccount = await getInstallationAccount(installationId);
         const alreadyCorrect =
           storedAccount.login.toLowerCase() === connectedOwner.toLowerCase();
-        // Only derive the user's login from a personal (User) install. For an
-        // org-type stored install whose account != the connected-repo owner we
-        // cannot derive the user's login without a service-role admin lookup —
-        // keep the stored install (fail-safe: no escalation, honest 403).
-        if (!alreadyCorrect && storedAccount.type === "User") {
-          const ownerInstall = await findRepoOwnerInstallationForUser(
-            connectedOwner,
-            storedAccount.login,
-          );
-          if (ownerInstall !== null && ownerInstall !== installationId) {
-            log.info(
-              {
+        // `alreadyCorrect` is a no-op (the stored install already owns the
+        // connected repo), NOT a skip — do not mirror it. Every other
+        // not-already-correct branch either promotes (success log.info) or
+        // KEEPS the stored install, and a keep must be a queryable Sentry event
+        // (Bug B — cq-silent-fallback-must-mirror-to-sentry).
+        if (!alreadyCorrect) {
+          if (storedAccount.type === "User") {
+            // Only derive the user's login from a personal (User) install.
+            const { installationId: ownerInstall, outcome } =
+              await findRepoOwnerInstallationForUser(
+                connectedOwner,
+                storedAccount.login,
+              );
+            if (ownerInstall !== null && ownerInstall !== installationId) {
+              log.info(
+                {
+                  userId: args.userId,
+                  storedInstallationId: installationId,
+                  ownerInstallationId: ownerInstall,
+                  owner: connectedOwner,
+                },
+                "Concierge installation self-heal: stored personal install does not own the connected repo; switching to the entitled repo-owner installation for this dispatch",
+              );
+              effectiveInstallationId = ownerInstall;
+            } else if (ownerInstall === null) {
+              // Promotion denied (not-member / transient-indeterminate /
+              // token-mint-failed / no-owner-install) — keep the stored
+              // (possibly-wrong) install + surface the skip so a residual 403
+              // is explainable from Sentry without SSH.
+              mirrorSelfHealSkip({
                 userId: args.userId,
                 storedInstallationId: installationId,
-                ownerInstallationId: ownerInstall,
                 owner: connectedOwner,
-              },
-              "Concierge installation self-heal: stored personal install does not own the connected repo; switching to the entitled repo-owner installation for this dispatch",
-            );
-            effectiveInstallationId = ownerInstall;
+                membershipProbeOutcome: outcome,
+                effectiveInstallationId: installationId,
+              });
+            }
+          } else {
+            // Org-type stored install whose account != the connected-repo
+            // owner: the user's login is not derivable without a service-role
+            // admin lookup, so keep the stored install (fail-safe). Mirror it.
+            mirrorSelfHealSkip({
+              userId: args.userId,
+              storedInstallationId: installationId,
+              owner: connectedOwner,
+              membershipProbeOutcome: "org-type-stored-install",
+              effectiveInstallationId: installationId,
+            });
           }
         }
       } catch (probeErr) {
@@ -1399,6 +1426,44 @@ export const realSdkQueryFactory: QueryFactory = async (
       }
     }
 
+    // Session-start self-heal (generic, per-user, idempotent, fail-soft): if the
+    // workspace has a connected repo but no matching clone on disk, clone/repair
+    // it so the agent has a real git repo to branch/commit/work in. Runs once per
+    // cold conversation (the factory is per-cold-conversation). NEVER throws into
+    // the conversation; clone failure mirrors to Sentry and degrades gracefully.
+    //
+    // Consumes `effectiveInstallationId` — the SELF-HEALED, entitled repo-owner
+    // install computed just above — NOT the raw stored `installationId`. Cloning
+    // with a stored cross-account/personal install (which may hold only
+    // `issues: read` on the org repo) 403s on `git clone`, fails fail-soft, and
+    // leaves the workspace `.git`-less, surfacing downstream as the opaque
+    // "No Git Repository in Workspace" worktree error. The GH_TOKEN mint and the
+    // C4 write tool already consume `effectiveInstallationId`; the clone now joins
+    // them as the third consumer (feat-one-shot-concierge-gh-403 — the self-heal
+    // selection now actually reaches the clone, which #5031 hardened but never
+    // wired through). In every non-promotion branch `effectiveInstallationId ===
+    // installationId`, so the clone uses exactly the stored install it did before
+    // whenever the entitlement gate did not promote — the fix never widens access.
+    await ensureWorkspaceRepoCloned({
+      userId: args.userId,
+      workspacePath,
+      installationId: effectiveInstallationId,
+      repoUrl,
+    });
+
+    // Issue A: mint a short-lived GitHub App installation token for the
+    // connected repo and inject it as GH_TOKEN so the agent's `gh` calls
+    // authenticate without an interactive `gh auth login` (the reported
+    // symptom). resolveInstallationId returns null for no-connected-repo /
+    // non-member — graceful degradation: gh simply stays unauthenticated,
+    // exactly as before. Mint failure is NON-FATAL: mirror to Sentry and
+    // proceed without GH_TOKEN — never block a conversation on a gh-auth
+    // mint. generateInstallationToken is token-cache-memoized per
+    // installation id, so this is not a per-dispatch network round-trip on a
+    // warm cache. Per hr-github-app-auth-not-pat this is an App installation
+    // token, NEVER a PAT, and the value is NEVER logged. (Sentry
+    // 512e253141294ac1a808b2ef03a21289 — cron-follow-through-monitor — is the
+    // cron-side root cause this mirrors for the interactive path.)
     let ghToken: string | undefined;
     if (effectiveInstallationId !== null) {
       try {
@@ -1530,6 +1595,15 @@ export const realSdkQueryFactory: QueryFactory = async (
   // Always append the gh-403 honesty directive (feat-one-shot-concierge-gh-403)
   // — independent of repo/flag state, since any conversation can run `gh`.
   effectiveSystemPrompt += `\n\n${GH_403_PROMPT_DIRECTIVE}`;
+  // feat-one-shot-concierge-workspace-repo-context — name the server-resolved
+  // connected repo so the agent uses it for `-R owner/repo` instead of probing
+  // a (possibly absent) git remote. Guarded ONLY on the CC_GITHUB_NAME_RE-
+  // validated owner/repo truthiness — NOT a `.git` presence check, which is
+  // the exact dependency the bug stems from. Fed only connectedOwner/
+  // connectedRepo (validated above), never raw repoUrl or tool input.
+  if (connectedOwner && connectedRepo) {
+    effectiveSystemPrompt += `\n\n${buildConnectedRepoContext(connectedOwner, connectedRepo)}`;
+  }
 
   // nosemgrep: path-join-resolve-traversal -- workspacePath is server-resolved (fetchUserWorkspacePath, ADR-044), never user-tainted input.
   const pluginPath = path.join(workspacePath, "plugins", "soleur");
@@ -2241,6 +2315,54 @@ export async function dispatchSoleurGo(
       });
     });
 
+  // feat-debug-mode-stream — per-dispatch debug-stream gate. Two INDEPENDENT
+  // conditions, BOTH required for any debug_event to emit (read as `let`
+  // bindings, mirroring `bashAutonomousPosture`'s fire-and-forget resolve so
+  // BOTH cold and warm turns publish the gate before any SDK block surfaces;
+  // failure leaves the fail-closed `false`):
+  //   (1) `debugPosture` — the ACTIVE workspace's `debug_mode` toggle is ON
+  //       (`resolveDebugMode`, member-checked RPC, fail-closed false).
+  //   (2) `debugEligible` — the dispatch user is in the `dev` cohort AND the
+  //       `debug-mode` Flagsmith flag is on (`isDebugModeAvailable` hard-gates
+  //       `role !== "dev"` BEFORE the flag — fail-CLOSED on a Flagsmith outage,
+  //       P0-8). Role is read from the SAME `users.role` shape as the
+  //       c4-visualizer gate above.
+  // Per-dispatch resolution (not ClientSession-carried) also solves toggle
+  // propagation for free: the NEXT turn re-resolves fresh (≤1-turn latency on
+  // a mid-turn flip — AC6). The debug stream is a scoped exception to the
+  // #2138 raw-tool-input invariant; the redaction + DROP-first gate lives
+  // entirely in `server/debug-event.ts`, so the shared `probeRedactionFallthrough`
+  // is untouched.
+  let debugPosture = false;
+  let debugEligible = false;
+  void resolveDebugMode(userId)
+    .then((enabled) => {
+      debugPosture = enabled;
+    })
+    .catch((err) => {
+      reportSilentFallback(err, {
+        feature: "cc-dispatcher",
+        op: "debug-mode-resolve",
+        extra: { userId, conversationId },
+      });
+    });
+  void (async () => {
+    const debugTenant = await getFreshTenantClient(userId);
+    const { data: roleRow } = await debugTenant
+      .from("users")
+      .select("role")
+      .eq("id", userId)
+      .single<{ role: unknown }>();
+    const role: Role = roleRow?.role === "dev" ? "dev" : "prd";
+    debugEligible = await isDebugModeAvailable({ userId, role, orgId: null });
+  })().catch((err) => {
+    reportSilentFallback(err, {
+      feature: "cc-dispatcher",
+      op: "debug-mode-eligibility",
+      extra: { userId, conversationId },
+    });
+  });
+
   // Per-command total-output budget tracker (D4), keyed by `toolUseId`.
   // Bounds cumulative bytes across however many result blocks one command
   // produces. Entry created on first output chunk; the per-dispatch lifetime
@@ -2298,6 +2420,18 @@ export async function dispatchSoleurGo(
         partial: true,
         leaderId: CC_ROUTER_LEADER_ID,
       });
+      // feat-debug-mode-stream — mirror assistant text into the debug stream as
+      // a `reasoning` event (the Concierge path has no thinking/progress seam;
+      // P0-2 maps "reasoning" → onText). Redacted-or-dropped + gated inside
+      // `emitDebugEvent`; a prose secret that survives redaction drops the frame.
+      emitDebugEvent({
+        enabled: debugPosture && debugEligible,
+        kind: "reasoning",
+        rawValue: text,
+        userId,
+        conversationId,
+        send: (frame) => sendToClient(userId, frame),
+      });
     },
     onToolUse: (block) => {
       // #2909 FR2 — silent-failure mirror for unregistered platform tools.
@@ -2345,6 +2479,24 @@ export async function dispatchSoleurGo(
           leaderId: CC_ROUTER_LEADER_ID,
         }),
       );
+
+      // feat-debug-mode-stream — mirror the tool-use into the debug stream as a
+      // `tool_use` event carrying the RAW parsed input object. `buildDebugEvent`
+      // redacts per-string-leaf + key-aware, then runs the DEBUG_REDACTION_PROBES
+      // superset; on a probe trip it DROPs the input to a placeholder but keeps a
+      // HUMAN label (`buildToolLabel(name, undefined, …)` — never the raw SDK
+      // tool name, #2138/PR#2115). `block.name`/`block.input` are passed raw;
+      // all redaction happens inside the gated emit helper.
+      emitDebugEvent({
+        enabled: debugPosture && debugEligible,
+        kind: "tool_use",
+        rawValue: block.input,
+        toolName: block.name,
+        workspacePath,
+        userId,
+        conversationId,
+        send: (frame) => sendToClient(userId, frame),
+      });
 
       // feat-concierge-stream-commands — emit the `command_stream`
       // `phase:"start"` carrying the REDACTED command, ONLY in the
@@ -2570,6 +2722,23 @@ export async function dispatchSoleurGo(
       // capture to the active turn so a stale callback arriving after the
       // bump cannot misattribute to a later row.
       state.captureUsage(state.currentTurnIndex(), result.totalCostUsd);
+
+      // feat-debug-mode-stream — mirror the turn result (cost + usage summary)
+      // into the debug stream as a `result` event. The payload is cost/usage
+      // telemetry (no credential shapes), but still rides the gated
+      // redact-or-drop helper for uniformity. `onResult` carries ONLY
+      // {totalCostUsd, usage} — no message body.
+      emitDebugEvent({
+        enabled: debugPosture && debugEligible,
+        kind: "result",
+        rawValue: JSON.stringify({
+          totalCostUsd: result.totalCostUsd,
+          usage: result.usage,
+        }),
+        userId,
+        conversationId,
+        send: (frame) => sendToClient(userId, frame),
+      });
 
       // Fire-and-forget per-turn cost write to the aggregation surface
       // (separate from messages.usage). Closes the cc-soleur-go path's

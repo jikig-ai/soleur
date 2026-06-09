@@ -26,8 +26,10 @@
 //   - repo/plugins/soleur            (symlink to getPluginPath())
 //   - repo/.claude/settings.json     (DEFAULT_SETTINGS overlay)
 // The spawn cwd is repo/ so that:
-//   (a) claude-code's plugin discovery (cwd-relative) finds the soleur
-//       plugin manifest at plugins/soleur/.claude-plugin/plugin.json;
+//   (a) the explicit `--plugin-dir plugins/soleur` flag (in CLAUDE_CODE_FLAGS
+//       below) registers the soleur plugin manifest at
+//       plugins/soleur/.claude-plugin/plugin.json — headless `--print` does NOT
+//       auto-discover it from spawn cwd (see #4993 / #4987);
 //   (b) the fix-issue skill's worktree-manager.sh has a real git repo
 //       to create worktrees against. Clone is done in-handler (vs.
 //       relying on a pre-seeded repo path) because Hetzner has no
@@ -52,6 +54,7 @@ import {
   REPO_NAME,
   redactToken,
   mintInstallationToken,
+  deferIfTier2Cron,
   postSentryHeartbeat,
   type HandlerArgs,
 } from "./_cron-shared";
@@ -145,7 +148,9 @@ const CLAUDE_CODE_FLAGS = [
   "--max-turns",
   "55",
   "--allowedTools",
-  "Bash,Read,Write,Edit,Glob,Grep",
+  "Bash,Read,Write,Edit,Glob,Grep,Skill,Task",
+  "--plugin-dir",
+  "plugins/soleur",
   "--",
 ];
 
@@ -589,6 +594,21 @@ export async function cronBugFixerHandler({
   autoMergeQueued: boolean;
   ok: boolean;
 }> {
+  // D6 (#5018): Tier-2-deferred — paused until the egress firewall lands.
+  // Posts an honest on-schedule check-in and skips the claude spawn (no
+  // fail-closed FAILED-issue/RED-monitor storm); the weekly output issue
+  // visibly stops. roadmap-review (#5004) is Tier-1 and is NOT deferred.
+  if (
+    await deferIfTier2Cron({
+      cronName: "cron-bug-fixer",
+      sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+      step,
+      logger,
+    })
+  ) {
+    return { selectedIssue: null, prNumber: null, autoMergeQueued: false, ok: true };
+  }
+
   // --- Parse manual-trigger override ---
   let override: number | undefined;
   const rawOverride = event?.data?.issue_number as unknown;

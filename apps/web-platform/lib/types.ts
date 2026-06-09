@@ -322,6 +322,24 @@ export type WSMessage =
       toolName: string;
       elapsedSeconds: number;
     }
+  // feat-debug-mode-stream — internal dev-cohort harness instruction stream
+  // (server→client). A SEPARATE collapsed debug panel renders these; they are
+  // NOT routed into the conversation bubble. Each frame is ONE delta event
+  // (turn end is signalled by `stream_end`/`session_ended`). `body` is the
+  // ALREADY-redacted-or-dropped display string built at the server emit
+  // boundary (`server/debug-event.ts`): for `tool_use` it is the per-string-
+  // leaf-redacted serialized tool_input, or the `[input withheld …]` drop
+  // placeholder on a redaction-probe trip. `label` (when present) is the
+  // human tool label from `buildToolLabel(name, undefined, …)` — NEVER the
+  // raw SDK tool name (#2138/PR#2115). Flat (no leaderId): the panel is a
+  // single ordered log, not a per-leader bubble. Render-only + ephemeral —
+  // NEVER persisted to `messages`/logs/Sentry (standing CI grep gate).
+  | {
+      type: "debug_event";
+      kind: "tool_use" | "reasoning" | "result";
+      label?: string;
+      body: string;
+    }
   | { type: "review_gate"; gateId: string; question: string; header?: string; options: string[]; descriptions?: Record<string, string | undefined>; stepProgress?: { current: number; total: number } }
   // feat-bash-autonomous-default-on — first-run consent soft-gate disclosure
   // (server→client). A held Bash command awaiting the owner's one-time ack.

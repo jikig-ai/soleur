@@ -167,6 +167,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "kb-chat-sidebar": true,
       "byok-delegations": false,
       "c4-visualizer": false,
+      "debug-mode": false,
     });
   });
 
@@ -184,6 +185,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "kb-chat-sidebar": true,
       "byok-delegations": true,
       "c4-visualizer": false,
+      "debug-mode": false,
     });
   });
 
@@ -201,6 +203,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "kb-chat-sidebar": false,
       "byok-delegations": false,
       "c4-visualizer": false,
+      "debug-mode": false,
     });
   });
 });
@@ -379,6 +382,7 @@ describe("getIdentityFlags timeout → warn-level debounced mirror (Sentry-bug r
       "team-workspace-invite": false,
       "byok-delegations": false,
       "c4-visualizer": false,
+      "debug-mode": false,
     });
   });
 

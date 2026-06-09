@@ -69,6 +69,10 @@ async function callGET() {
 beforeEach(() => {
   vi.clearAllMocks();
   tmpWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "shared-hash-"));
+  // ADR-044: the route resolves kbRoot via workspacePathForWorkspaceId
+  // (`<WORKSPACES_ROOT>/<workspace_id>`). The mock derives workspace_id from
+  // this dir's basename, so point WORKSPACES_ROOT at its parent.
+  process.env.WORKSPACES_ROOT = path.dirname(tmpWorkspace);
   kbRoot = path.join(tmpWorkspace, "knowledge-base");
   fs.mkdirSync(kbRoot, { recursive: true });
   mocks.mockIsAllowed.mockReturnValue(true);
@@ -77,6 +81,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  delete process.env.WORKSPACES_ROOT;
   fs.rmSync(tmpWorkspace, { recursive: true, force: true });
 });
 
