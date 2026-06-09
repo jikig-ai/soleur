@@ -8,10 +8,13 @@ const formPresent = () => screen.queryByPlaceholderText(/you@company.com/i);
 const toggle = () => screen.getByTestId("cta-banner-toggle");
 const body = () => screen.getByTestId("cta-banner-body");
 
-// happy-dom reflects the boolean `inert` attribute via hasAttribute, not the
-// IDL property — assert on the attribute.
-const isHidden = (el: HTMLElement) =>
-  el.hasAttribute("inert") || el.getAttribute("aria-hidden") === "true";
+// `inert` and `aria-hidden` are DISTINCT contracts — `inert` removes the body
+// from tab order + interaction, `aria-hidden` silences it for assistive tech.
+// Assert each separately so dropping one (a half-regression) cannot pass green.
+const expectBodyHidden = (hidden: boolean) => {
+  expect(body().hasAttribute("inert")).toBe(hidden);
+  expect(body().getAttribute("aria-hidden")).toBe(hidden ? "true" : null);
+};
 
 beforeEach(() => {
   sessionStorage.clear();
@@ -29,8 +32,8 @@ describe("CtaBanner single-toggle collapse / reopen", () => {
     expect(formPresent()).toBeTruthy();
     expect(toggle().getAttribute("aria-expanded")).toBe("true");
     expect(toggle().getAttribute("aria-label")).toBe("Collapse signup banner");
-    // The body is open (not inert/hidden) when expanded.
-    expect(isHidden(body())).toBe(false);
+    // The body is open (neither inert nor aria-hidden) when expanded.
+    expectBodyHidden(false);
   });
 
   it("clicking the toggle collapses — banner persists, body hidden, header stays", () => {
@@ -44,8 +47,8 @@ describe("CtaBanner single-toggle collapse / reopen", () => {
     );
     // The brand header survives (persistent header row).
     expect(screen.getByText(/built with/i)).toBeTruthy();
-    // The collapsible body is inert / aria-hidden — but NOT removed from the DOM.
-    expect(isHidden(body())).toBe(true);
+    // The collapsible body is inert AND aria-hidden — but NOT removed from the DOM.
+    expectBodyHidden(true);
     expect(formPresent()).toBeTruthy(); // still in the DOM, just height-collapsed
   });
 
@@ -56,17 +59,19 @@ describe("CtaBanner single-toggle collapse / reopen", () => {
 
     expect(toggle().getAttribute("aria-expanded")).toBe("true");
     expect(toggle().getAttribute("aria-label")).toBe("Collapse signup banner");
-    expect(isHidden(body())).toBe(false);
+    expectBodyHidden(false);
     expect(formPresent()).toBeTruthy();
   });
 
-  it("the toggle is a single persistent <button> present in BOTH states", () => {
+  it("the toggle is the SAME persistent <button> node across both states", () => {
     render(<CtaBanner />);
-    expect(toggle().tagName).toBe("BUTTON");
+    const before = toggle();
+    expect(before.tagName).toBe("BUTTON");
 
-    fireEvent.click(toggle());
-    // Still resolvable by the same test id after collapse (it did not unmount).
-    expect(toggle().tagName).toBe("BUTTON");
+    fireEvent.click(before);
+    // Same DOM node after collapse — proves it did not unmount/remount (which is
+    // what makes the 180° rotation animate rather than snap).
+    expect(Object.is(toggle(), before)).toBe(true);
   });
 
   it("does NOT persist collapsed state — no sessionStorage write occurs on toggle", () => {

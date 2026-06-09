@@ -103,7 +103,12 @@ export function CtaBanner() {
                 — check your inbox to confirm.
               </p>
             ) : (
-              <form onSubmit={handleSubmit} className="flex flex-col gap-1.5 pt-0.5">
+              /* pt-0.5 keeps the first row's focus ring off the overflow-hidden
+                 clip boundary during the grid-rows collapse transition. */
+              <form
+                onSubmit={handleSubmit}
+                className="flex flex-col gap-1.5 pt-0.5"
+              >
                 <label
                   htmlFor="waitlist-email"
                   className="text-sm font-medium text-soleur-text-primary"
