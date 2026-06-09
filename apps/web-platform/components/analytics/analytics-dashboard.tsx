@@ -8,7 +8,7 @@ function Sparkline({
   data,
   width = 80,
   height = 24,
-  colorClass = "text-soleur-accent-gold-fill",
+  colorClass = "text-soleur-accent-gold-fg",
 }: {
   data: number[];
   width?: number;
