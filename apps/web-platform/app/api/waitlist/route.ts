@@ -8,11 +8,11 @@ import {
 } from "./waitlist";
 
 // Same-origin-checked, per-IP rate-limited proxy that forwards an anonymous
-// visitor's email to Buttondown's public embed-subscribe endpoint (marketing
-// waitlist). Lives here rather than as a direct client POST because prod CSP
-// `connect-src` (lib/csp.ts) excludes buttondown.com and `form-action 'self'`
-// would block a native cross-origin form; a same-origin route needs no CSP
-// change and lets the honeypot + rate-limit be enforced server-side.
+// visitor's email to Buttondown's authenticated v1 subscribers API (marketing
+// waitlist). Lives here rather than as a direct client POST because the API key
+// must stay server-side, prod CSP `connect-src` (lib/csp.ts) excludes
+// buttondown.com, and a same-origin route lets the honeypot + rate-limit be
+// enforced server-side.
 //
 // Success contract is `200 {ok:true}` (NOT 204) so the client can parse a body
 // to drive its idle→success state machine. All errors share `{error:"<code>"}`.
