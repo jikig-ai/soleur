@@ -1,12 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { CtaBanner } from "@/components/shared/cta-banner";
 
 const STORAGE_KEY = "soleur:shared:cta-dismissed";
 
-// Banner presence is asserted via the dismiss button (stable across the
-// link→inline-form rewrite) rather than the removed signup link.
-const dismissPresent = () => screen.queryByTestId("cta-banner-dismiss");
+const formPresent = () => screen.queryByPlaceholderText(/you@company.com/i);
+const reopenPresent = () => screen.queryByTestId("cta-banner-reopen");
 
 beforeEach(() => {
   sessionStorage.clear();
@@ -18,59 +17,91 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("CtaBanner close affordance", () => {
-  it("renders the waitlist form and dismiss button by default", () => {
+describe("CtaBanner collapse / reopen affordance", () => {
+  it("renders the waitlist form and the collapse button by default", () => {
     render(<CtaBanner />);
-    expect(screen.getByPlaceholderText(/you@company.com/i)).toBeTruthy();
-    expect(screen.getByRole("button", { name: /dismiss signup banner/i })).toBeTruthy();
+    expect(formPresent()).toBeTruthy();
+    expect(screen.getByTestId("cta-banner-dismiss")).toBeTruthy();
+    // The reopen affordance only exists once collapsed.
+    expect(reopenPresent()).toBeNull();
   });
 
-  it("hides the banner when the close button is clicked", () => {
+  it("collapsing shows the thin bar — the banner is NOT unmounted", () => {
     render(<CtaBanner />);
     fireEvent.click(screen.getByTestId("cta-banner-dismiss"));
-    expect(dismissPresent()).toBeNull();
+
+    // Collapsed strip is present (banner still mounted, just collapsed).
+    const reopen = screen.getByRole("button", {
+      name: /reopen soleur signup banner/i,
+    });
+    expect(reopen).toBeTruthy();
+    // The full form is gone in the collapsed state.
+    expect(formPresent()).toBeNull();
+    // The brand label survives INSIDE the collapsed strip specifically
+    // (scoped so it can't pass by matching the expanded banner copy).
+    expect(within(reopen).getByText(/built with/i)).toBeTruthy();
+    expect(within(reopen).getByText(/soleur/i)).toBeTruthy();
   });
 
-  it("does not render when sessionStorage already marks the banner dismissed", () => {
-    // Control: with cleared storage the banner MUST render — proves the
-    // dismissed-key assertion below is gated on storage, not on always-null.
-    const control = render(<CtaBanner />);
-    expect(dismissPresent()).toBeTruthy();
-    control.unmount();
+  it("the collapsed bar exposes the reopen affordance with correct aria", () => {
+    render(<CtaBanner />);
+    fireEvent.click(screen.getByTestId("cta-banner-dismiss"));
 
+    const reopen = screen.getByRole("button", {
+      name: /reopen soleur signup banner/i,
+    });
+    expect(reopen.getAttribute("aria-label")).toBe("Reopen Soleur signup banner");
+    expect(reopen.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("clicking the collapsed bar re-expands the full banner with the form", () => {
+    render(<CtaBanner />);
+    fireEvent.click(screen.getByTestId("cta-banner-dismiss"));
+    expect(formPresent()).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /reopen soleur signup banner/i }),
+    );
+
+    // Round-trip restored without any reload.
+    expect(formPresent()).toBeTruthy();
+    expect(reopenPresent()).toBeNull();
+  });
+
+  it("the expanded close control reflects aria-expanded=true", () => {
+    render(<CtaBanner />);
+    expect(
+      screen.getByTestId("cta-banner-dismiss").getAttribute("aria-expanded"),
+    ).toBe("true");
+  });
+
+  it("both controls are real <button> elements (keyboard-operable)", () => {
+    render(<CtaBanner />);
+    expect(screen.getByTestId("cta-banner-dismiss").tagName).toBe("BUTTON");
+
+    fireEvent.click(screen.getByTestId("cta-banner-dismiss"));
+    expect(screen.getByTestId("cta-banner-reopen").tagName).toBe("BUTTON");
+  });
+
+  it("does NOT persist collapsed state — no sessionStorage write occurs on collapse", () => {
+    // Spy directly so the assertion is non-vacuous: it proves the component
+    // issues zero writes, independent of the beforeEach clear (the residue
+    // checks below alone would pass even if a write landed under a new key).
+    const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+    render(<CtaBanner />);
+    fireEvent.click(screen.getByTestId("cta-banner-dismiss"));
+
+    expect(setItemSpy).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem(STORAGE_KEY)).toBeNull();
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it("a fresh mount always starts expanded even if the old key is set", () => {
+    // Pre-seed the legacy key; the component must ignore it (reload restores
+    // the full banner).
     sessionStorage.setItem(STORAGE_KEY, "1");
     render(<CtaBanner />);
-    expect(dismissPresent()).toBeNull();
-  });
-
-  it("persists the dismissal across remount within the same session", () => {
-    const first = render(<CtaBanner />);
-    fireEvent.click(screen.getByTestId("cta-banner-dismiss"));
-    first.unmount();
-
-    render(<CtaBanner />);
-    expect(dismissPresent()).toBeNull();
-    expect(sessionStorage.getItem(STORAGE_KEY)).toBe("1");
-  });
-
-  it("renders without throwing when sessionStorage.getItem throws", () => {
-    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
-      throw new Error("storage unavailable");
-    });
-
-    expect(() => render(<CtaBanner />)).not.toThrow();
-    expect(dismissPresent()).toBeTruthy();
-  });
-
-  it("dismisses without throwing when sessionStorage.setItem throws", () => {
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new Error("storage unavailable");
-    });
-
-    render(<CtaBanner />);
-    expect(() =>
-      fireEvent.click(screen.getByTestId("cta-banner-dismiss")),
-    ).not.toThrow();
-    expect(dismissPresent()).toBeNull();
+    expect(formPresent()).toBeTruthy();
+    expect(reopenPresent()).toBeNull();
   });
 });
