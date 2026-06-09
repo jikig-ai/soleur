@@ -1479,6 +1479,14 @@ export const realSdkQueryFactory: QueryFactory = async (
         });
       }
     }
+    // Sandbox GitHub egress posture (#5041 follow-up): egress to
+    // github.com/api.github.com is DERIVED from ghToken presence inside
+    // buildAgentQueryOptions (both-or-nothing). Boolean only — NEVER the
+    // token (AC6-class guard from #5041).
+    log.info(
+      { userId: args.userId, githubEgress: Boolean(ghToken) },
+      "Concierge sandbox GitHub egress posture",
+    );
 
   // --- C4 diagram write capability (flag-gated, per-user) -----------------
   // The Concierge's ONLY sanctioned repo write: edit_c4_diagram, scoped to the
@@ -1796,9 +1804,12 @@ export const realSdkQueryFactory: QueryFactory = async (
         // don't pay a canUseTool round-trip per call. This is auto-approve,
         // not restriction — see CC_PATH_ALLOWED_TOOLS doc comment.
         allowedTools: [...CC_PATH_ALLOWED_TOOLS],
-        // #3338 — HARD-BLOCK Bash/Edit/Write at the SDK level so the model
-        // cannot emit them (no review_gate modal can appear). Merged with
-        // the canonical [WebSearch, WebFetch] disallowed list.
+        // #3338 — HARD-BLOCK Edit/Write at the SDK level so the model
+        // cannot emit them. Bash is intentionally NOT in this list — it is
+        // sandbox-gated (permission-callback Bash gate / safe-bash /
+        // autonomous bypass) and runs inside the SDK bwrap sandbox whose
+        // network egress is token-derived (see buildAgentSandboxConfig).
+        // Merged with the canonical [WebSearch, WebFetch] disallowed list.
         extraDisallowedTools: CC_PATH_DISALLOWED_TOOLS,
         // SubagentStart sanitizer override: cc strips control chars +
         // U+2028/U+2029 (per learning

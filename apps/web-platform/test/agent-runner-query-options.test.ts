@@ -181,6 +181,29 @@ describe("buildAgentQueryOptions — in-sandbox git askpass threading (item 1c)"
   });
 });
 
+describe("buildAgentQueryOptions — GitHub egress derived from ghToken (#5041 follow-up)", () => {
+  it("truthy ghToken → sandbox allowlist carries exactly the two GitHub hosts", () => {
+    const opts = buildAgentQueryOptions({
+      ...minArgs,
+      ghToken: "ghs_install_tok",
+    });
+    expect(opts.sandbox?.network?.allowedDomains).toEqual([
+      "github.com",
+      "api.github.com",
+    ]);
+  });
+
+  it("absent ghToken → sandbox stays fully closed (legacy runner parity)", () => {
+    const opts = buildAgentQueryOptions(minArgs);
+    expect(opts.sandbox?.network?.allowedDomains).toEqual([]);
+  });
+
+  it("empty-string ghToken → fully closed (graceful-degradation parity with GH_TOKEN injection)", () => {
+    const opts = buildAgentQueryOptions({ ...minArgs, ghToken: "" });
+    expect(opts.sandbox?.network?.allowedDomains).toEqual([]);
+  });
+});
+
 describe("buildAgentQueryOptions — drift-guard snapshot (T4)", () => {
   // Stable JSON serialization across Node versions per plan Enhancement #2:
   // sort keys explicitly and exclude function-valued fields (canUseTool,

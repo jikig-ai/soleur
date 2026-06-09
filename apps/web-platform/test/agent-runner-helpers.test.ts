@@ -74,6 +74,48 @@ describe("buildAgentSandboxConfig drift guard", () => {
   });
 });
 
+describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", () => {
+  it("allowGithubEgress: true → exact-host GitHub allowlist, all other fields canonical", () => {
+    const workspacePath = "/tmp/test-workspace";
+    const result = buildAgentSandboxConfig(workspacePath, {
+      allowGithubEgress: true,
+    });
+
+    // Canonical-literal style (same as T17): every non-network field must
+    // stay byte-identical to the locked-down profile — egress widens the
+    // domain allowlist and NOTHING else.
+    expect(result).toEqual({
+      enabled: true,
+      failIfUnavailable: true,
+      autoAllowBashIfSandboxed: true,
+      allowUnsandboxedCommands: false,
+      enableWeakerNestedSandbox: true,
+      network: {
+        allowedDomains: ["github.com", "api.github.com"],
+        allowManagedDomainsOnly: true,
+      },
+      filesystem: {
+        allowWrite: [workspacePath],
+        denyRead: ["/workspaces", "/proc"],
+      },
+    });
+  });
+
+  it("allowGithubEgress: false → locked down, identical to the default call", () => {
+    const explicit = buildAgentSandboxConfig("/tmp/x", {
+      allowGithubEgress: false,
+    });
+    expect(explicit.network.allowedDomains).toEqual([]);
+    expect(explicit).toEqual(buildAgentSandboxConfig("/tmp/x"));
+  });
+
+  it("returns a fresh allowedDomains array per call (frozen const must not leak)", () => {
+    const a = buildAgentSandboxConfig("/tmp/x", { allowGithubEgress: true });
+    const b = buildAgentSandboxConfig("/tmp/x", { allowGithubEgress: true });
+    expect(a.network.allowedDomains).not.toBe(b.network.allowedDomains);
+  });
+});
+
 describe("buildAgentQueryOptions drift guard (legacy ↔ cc — #2922)", () => {
   const baseArgs = {
     workspacePath: "/tmp/test-workspace",

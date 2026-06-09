@@ -170,7 +170,19 @@ export function buildAgentQueryOptions(
     // Sandbox literal lives in `buildAgentSandboxConfig` so legacy + cc
     // share the same shape verbatim (drift-guarded by
     // `agent-runner-helpers.test.ts`).
-    sandbox: buildAgentSandboxConfig(args.workspacePath),
+    //
+    // GitHub egress is DERIVED from ghToken presence — both-or-nothing,
+    // same family as the askpass both-or-nothing guard in buildAgentEnv.
+    // An entitled installation token without network egress is the
+    // #5041-followup bug (in-sandbox gh dead at the proxy with
+    // `Post "...": Forbidden`); egress without a token would be
+    // unauthenticated surface for nothing. Deriving (not a separate flag)
+    // makes the half-wired state unrepresentable. The legacy
+    // startAgentSession never passes ghToken → its sandbox stays fully
+    // closed (fail-closed, zero behavior change).
+    sandbox: buildAgentSandboxConfig(args.workspacePath, {
+      allowGithubEgress: Boolean(args.ghToken),
+    }),
     plugins: [{ type: "local" as const, path: args.pluginPath }],
     hooks: {
       PreToolUse: [

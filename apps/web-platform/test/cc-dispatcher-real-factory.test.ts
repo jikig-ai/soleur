@@ -406,8 +406,12 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.sandbox.failIfUnavailable).toBe(true);
     expect(opts.sandbox.allowUnsandboxedCommands).toBe(false);
-    // Helper was called with the workspace path.
-    expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH);
+    // Helper was called with the workspace path AND fail-closed egress —
+    // this dispatch has no connected repo, so no GitHub egress (#5041
+    // follow-up).
+    expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
+      allowGithubEgress: false,
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -888,6 +892,88 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Sandbox GitHub egress lockstep (#5041 follow-up) — egress and the
+  // entitled token move together. The sandbox-config mock delegates to the
+  // REAL implementation in this block so the assertions reach the actual
+  // allowedDomains the SDK receives (call-arg pinning alone cannot prove
+  // the flag maps to the GitHub hosts).
+  // -------------------------------------------------------------------------
+  describe("sandbox GitHub egress lockstep (#5041 follow-up)", () => {
+    const REPO = "https://github.com/jikig-ai/soleur";
+    const STORED = 130018654; // personal install
+    const OWNER = 122213433; // org install
+
+    beforeEach(async () => {
+      const actual = await vi.importActual<
+        typeof import("@/server/agent-runner-sandbox-config")
+      >("@/server/agent-runner-sandbox-config");
+      mockBuildAgentSandboxConfig.mockImplementation(
+        actual.buildAgentSandboxConfig,
+      );
+    });
+
+    it("mismatch promotion → OWNER-install mint AND GitHub egress, in one test (lockstep)", async () => {
+      mockResolveInstallationId.mockResolvedValueOnce(STORED);
+      mockGetCurrentRepoUrl.mockResolvedValueOnce(REPO);
+      mockGetInstallationAccount.mockResolvedValueOnce({
+        login: "Elvalio",
+        id: STORED,
+        type: "User",
+      });
+      mockFindRepoOwnerInstallationForUser.mockResolvedValueOnce({
+        installationId: OWNER,
+        outcome: "member",
+      });
+
+      await realSdkQueryFactory(makeArgs());
+
+      // (a) token minted for the entitled OWNER install (existing :727 style)
+      expect(mockGenerateInstallationToken).toHaveBeenCalledWith(
+        OWNER,
+        expect.anything(),
+      );
+      // (b) the SAME dispatch opens GitHub egress — the two move in lockstep.
+      expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
+        allowGithubEgress: true,
+      });
+      const opts = mockQuery.mock.calls[0][0].options;
+      expect(opts.sandbox.network.allowedDomains).toEqual([
+        "github.com",
+        "api.github.com",
+      ]);
+    });
+
+    it("fail-closed: no connected repo → no token AND sandbox fully closed", async () => {
+      mockResolveInstallationId.mockResolvedValueOnce(null);
+
+      await realSdkQueryFactory(makeArgs());
+
+      expect(mockGenerateInstallationToken).not.toHaveBeenCalled();
+      expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
+        allowGithubEgress: false,
+      });
+      const opts = mockQuery.mock.calls[0][0].options;
+      expect(opts.sandbox.network.allowedDomains).toEqual([]);
+    });
+
+    it("fail-closed: mint failure → dispatch continues, egress collapses with the token", async () => {
+      mockResolveInstallationId.mockResolvedValueOnce(987654);
+      mockGenerateInstallationToken.mockRejectedValueOnce(
+        new Error("mint boom"),
+      );
+
+      await realSdkQueryFactory(makeArgs());
+
+      expect(mockQuery).toHaveBeenCalledOnce();
+      expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
+        allowGithubEgress: false,
+      });
+      const opts = mockQuery.mock.calls[0][0].options;
+      expect(opts.sandbox.network.allowedDomains).toEqual([]);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // T10: patchWorkspacePermissions runs once per cold factory call
   // -------------------------------------------------------------------------
   it("T10: patchWorkspacePermissions fires once per factory invocation", async () => {
@@ -932,7 +1018,10 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   it("T17: factory delegates sandbox shape to buildAgentSandboxConfig (no inline drift)", async () => {
     await realSdkQueryFactory(makeArgs());
     expect(mockBuildAgentSandboxConfig).toHaveBeenCalledOnce();
-    expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH);
+    // No-token dispatch → fail-closed egress (#5041 follow-up).
+    expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
+      allowGithubEgress: false,
+    });
   });
 
   // -------------------------------------------------------------------------
