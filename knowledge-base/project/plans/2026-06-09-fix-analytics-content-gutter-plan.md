@@ -10,6 +10,35 @@ brand_survival_threshold: none
 
 # 🐛 fix: Analytics page content gutter between sidebar and main content
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-09
+**Sections enhanced:** Overview (root cause + fix direction verified live), Observability (5-field schema), Research Insights added.
+
+### Key Improvements
+
+1. **Root cause confirmed against live code** — layout `<main>`
+   (`layout.tsx:517-519`) className is exactly
+   `flex-1 overflow-y-auto bg-soleur-bg-base` (no horizontal padding);
+   `globals.css` has no `main` rule at all. The gutter is page-owned by
+   convention, and the Analytics content roots are bare `space-y-6` divs.
+2. **Fix scoped to the page, not the shared layout** — verified that editing
+   `<main>` would double-pad `audit` (`px-6 py-8`), `settings`
+   (`px-4 py-10 md:px-10`), and break the KB/chat full-bleed drilled layouts.
+3. **Both-toggle-states satisfied by one change** — collapse toggles only the
+   `<aside>` width (`md:w-14`/`md:w-56`, `layout.tsx:314`); `<main>` + children
+   are identical across states, so a single content-wrapper fix covers both
+   screenshots (no PR #2494/#2504-style follow-up needed).
+
+### New Considerations Discovered
+
+- The metrics table is 8 columns and wider than `audit`'s `max-w-4xl`. The plan
+  widens the clamp to `max-w-6xl` (or drops `max-w` entirely if cramped) so the
+  fix introduces a gutter without narrowing the table vs today.
+- All **four** render surfaces (loaded, empty-state, error-state, loading
+  skeleton) must share the identical wrapper string, or the gutter flickers
+  across render phases — captured as AC2/AC3/AC4.
+
 ## Overview
 
 On `/dashboard/admin/analytics`, the main content (the **Analytics** heading,
@@ -79,6 +108,43 @@ padding fix on the content wrapper corrects **both** the expanded and collapsed
 screenshots simultaneously. Per the AGENTS.md sharp edge on toggleable-control
 alignment (PR #2494/#2504), both states are explicitly accounted for here: they
 share one DOM subtree, so one fix covers both — no second follow-up needed.
+
+### Research Insights
+
+**Best Practices (Tailwind content-gutter / centered reading column):**
+
+- The repo's own convention is the authority here — match `audit/page.tsx:38`'s
+  `mx-auto max-w-* px-6 py-8` shape rather than inventing a new spacing scale.
+  Consistency across admin pages beats a bespoke value.
+- `px-6` (1.5rem / 24px) is the established horizontal gutter on the comparable
+  `audit` page; reuse it verbatim so the Analytics page reads as part of the
+  same admin surface.
+- `mx-auto max-w-6xl` centers wide content and yields a symmetric right-side
+  gutter as a bonus (the bug report only asks for the left gutter, but a
+  centered max-width container is the idiomatic way the codebase already does
+  it, and it avoids an asymmetric "left padding only" look on ultrawide
+  viewports). If the 8-column table feels clamped at `max-w-6xl`, drop the
+  `max-w` and keep `px-6 py-8` — `px-6` alone fully satisfies the report.
+
+**Edge Cases (verified):**
+
+- **Both sidebar states:** one fix covers both because the collapse state only
+  resizes the `<aside>` (`md:w-14`/`md:w-56`) and never branches the
+  `<main>`/children DOM. Verified at `layout.tsx:314`.
+- **Four render phases:** loaded (`analytics-dashboard.tsx:194`), empty
+  (`:186`), error (`page.tsx:44-55`), loading skeleton (`loading.tsx:2`) — all
+  four must carry the identical wrapper or the gutter flickers between phases.
+- **Mobile (`< md`):** the sidebar is a drawer (`-translate-x-full` off-canvas,
+  `layout.tsx:307`), so on mobile there is no persistent sidebar to gutter
+  against; the `px-6` simply provides comfortable edge padding, which is
+  desirable. No mobile-specific branch needed.
+
+**Anti-pattern to avoid:**
+
+- Do NOT add the padding to the shared layout `<main>` — it would double-pad
+  every sibling dashboard page that already self-pads, and break the KB/chat
+  full-bleed drilled layouts. (Verified: `audit`, `settings` self-pad;
+  `<main>` is deliberately a bare scroll container.)
 
 ## User-Brand Impact
 
@@ -192,14 +258,40 @@ flow implications. Auto-accepted per pipeline ADVISORY path.
 
 ## Observability
 
-Skip — pure UI className change. No new code-class file under
-`apps/*/server/`, no new route handler, no new infrastructure surface, no new
-runtime process. Existing analytics error handling (`page.tsx:39-43`
-`console.error` + `console.warn` at the 10k-row cap) is untouched. There is no
-failure mode introduced by adding Tailwind padding utilities that would warrant
-a liveness signal or alert route. (Per Phase 2.9 skip condition: no Files-to-Edit
-under `apps/*/server/`, `apps/*/src/`, `apps/*/infra/` — all three edits are
-under `apps/web-platform/app/**` and `apps/web-platform/components/**` JSX.)
+Per plan Phase 2.9, this change touches no `apps/*/server/`, `apps/*/src/`, or
+`apps/*/infra/` surface (all three edits are client-rendered JSX under
+`apps/web-platform/app/(dashboard)/**` and `components/analytics/**`), so no NEW
+observability surface is introduced — the data flow, the admin gate, and the
+existing error handling are unchanged. The schema is filled against the
+existing surface so the discoverability test is non-SSH and operator-runnable:
+
+```yaml
+liveness_signal:
+  what: "Next.js page render of /dashboard/admin/analytics (server component returns AnalyticsDashboard); production health via the existing Docker HEALTHCHECK on the web-platform container"
+  cadence: "per request (on each admin page load)"
+  alert_target: "Sentry web-platform issue (client + server runtime errors); container health surfaces via the existing deploy webhook at deploy.soleur.ai/hooks/deploy-status"
+  configured_in: "apps/web-platform/app/(dashboard)/dashboard/admin/analytics/page.tsx (route); container HEALTHCHECK in apps/web-platform/Dockerfile"
+
+error_reporting:
+  destination: "Sentry web-platform via SENTRY_DSN (existing project-wide instrumentation); plus console.error in page.tsx:40-43 on query failure"
+  fail_loud: "On data-load failure the page renders the visible 'Failed to load analytics data. Please try again.' card with a Retry link (page.tsx:44-55) — operator sees it directly. A padding regression is visually self-evident on the page; no silent failure mode is introduced by Tailwind utility classes."
+
+failure_modes:
+  - mode: "Wrapper className typo / invalid Tailwind utility (e.g. mistyped max-w token) silently drops the gutter"
+    detection: "tsc --noEmit (AC6) does not catch invalid Tailwind strings, so the Playwright visual screenshot in AC7 is the detection — gutter absent/wrong in either sidebar state fails the check"
+    alert_route: "PR CI (typecheck) + the AC7 visual screenshot at review/QA time; no production alert needed (admin-only cosmetic surface)"
+  - mode: "Gutter applied to only some of the four render surfaces (loaded/empty/error/loading) → gutter flickers between phases"
+    detection: "AC2/AC3/AC4 grep assertions confirm the identical wrapper string on all four surfaces"
+    alert_route: "PR review (AC check-off)"
+
+logs:
+  where: "Browser console (client errors) + Sentry web-platform project; server-side query errors via console.error in page.tsx → container stdout (docker logs)"
+  retention: "Sentry per project retention (existing); container stdout per existing Docker log driver — unchanged by this PR"
+
+discoverability_test:
+  command: "cd apps/web-platform && ./node_modules/.bin/tsc --noEmit && grep -rEc 'mx-auto max-w-6xl|px-6' apps/web-platform/components/analytics/analytics-dashboard.tsx"
+  expected_output: "tsc exits 0 with no output; grep returns a non-zero count confirming the gutter wrapper is present on the analytics dashboard. Visual confirmation via the AC7 Playwright screenshot (expanded + collapsed sidebar)."
+```
 
 ## Test Scenarios
 
