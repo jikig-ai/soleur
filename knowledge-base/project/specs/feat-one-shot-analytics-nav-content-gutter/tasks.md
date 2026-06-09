@@ -44,9 +44,14 @@ NOT a shared-layout change.
 
 ## Phase 3 — Visual confirmation
 
-- [ ] 3.1 Playwright: navigate `/dashboard/admin/analytics` (admin session),
+- [x] 3.1 Playwright: navigate `/dashboard/admin/analytics` (admin session),
   screenshot with sidebar **expanded** — visible left gutter between sidebar
-  edge and Analytics heading/table. (AC7)
-- [ ] 3.2 Toggle sidebar **collapsed** (⌘B), screenshot — same gutter persists. (AC7)
-- [ ] 3.3 (Optional) Force empty-state and error-state to confirm those branches
-  also carry the gutter.
+  edge and Analytics heading/table. (AC7) — verified 2026-06-09, 1440×900,
+  seeded QA admin via `ADMIN_USER_IDS` env override on a port-3099 dev server.
+- [x] 3.2 Toggle sidebar **collapsed** (⌘B), screenshot — same gutter persists. (AC7)
+  — verified 2026-06-09 (Ctrl+B); gutter identical against the icon rail.
+- [x] 3.3 (Optional) Force empty-state and error-state to confirm those branches
+  also carry the gutter. — SKIPPED (optional): wrapper string is grep-verified
+  byte-identical across populated/empty/error/loading branches (task 2.3), so
+  the visual result is structurally the same; forcing those states against dev
+  data is not worth the setup cost.
