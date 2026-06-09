@@ -82,21 +82,23 @@ a Free-tier Cloudflare **Bulk Redirects** list. Provider is pinned `cloudflare ~
 
 ## Phase 4 — Validate, PR, post-merge verify
 
-- [ ] 4.1 Run the 3 SEO suites green: `apps/web-platform/test/seo-rulesets-noindex.test.ts`,
-      `plugins/soleur/test/validate-seo.test.ts`, `plugins/soleur/test/seo-aeo-drift-guard.test.ts`.
-- [ ] 4.2 Open PR; split AC into Pre-merge / Post-merge; use `Ref #3297` / `Ref #3328` (NOT `Closes` —
-      ops-remediation: closure happens post-apply).
-- [ ] 4.3 **(Post-merge, BLOCKING if Phase 0.3 = scope-absent)** Widen the CF token to add
+- [x] 4.1 Run the 3 SEO suites green: `apps/web-platform/test/seo-rulesets-noindex.test.ts` (7/7),
+      `plugins/soleur/test/validate-seo.test.ts` (17/17), `plugins/soleur/test/seo-aeo-drift-guard.test.ts`
+      (48/48).
+- [x] 4.2 Open PR; split AC into Pre-merge / Post-merge; use `Ref #3297` / `Ref #3328` (NOT `Closes` —
+      ops-remediation: closure happens post-apply). (PR #5082 body updated with split AC + BLOCKING flag;
+      post-merge chain consolidated into tracking issue #5092.)
+- [ ] 4.3 **(Post-merge, BLOCKING — Phase 0.3 = scope-absent confirmed, Tracks #5092)** Widen the CF token to add
       `Account Rulesets:Edit` + `Account Filter Lists:Edit`; update Doppler `prd_terraform` if rotated.
       Flag explicitly in PR body — never a silent TODO. (Automation: not feasible — no Terraform path for
       CF token permission grants.)
-- [ ] 4.4 **(Post-merge, automated)** Confirm `apply-web-platform-infra.yml` ran green on merge; if the
+- [ ] 4.4 **(Post-merge, automated, Tracks #5092)** Confirm `apply-web-platform-infra.yml` ran green on merge; if the
       token-widen step was needed, re-fire via
       `gh workflow run apply-web-platform-infra.yml --ref main -F reason='bulk-redirects apply after token widen'`.
-- [ ] 4.5 **(Post-merge curl suite — load-bearing)** Each `/pages/legal/<slug>.html` (apex + www) → 301 with
+- [ ] 4.5 **(Post-merge curl suite — load-bearing, Tracks #5092)** Each `/pages/legal/<slug>.html` (apex + www) → 301 with
       exact Location; `terms-of-service.html` → `/legal/terms-and-conditions/`; negative control
       `changelog.html` → `/changelog/` unchanged.
-- [ ] 4.6 **(Post-merge)** Request GSC re-validation for the 9 legal URLs; add `gh issue` notes to #3297.
+- [ ] 4.6 **(Post-merge, Tracks #5092)** Request GSC re-validation for the 9 legal URLs; add `gh issue` notes to #3297.
 
 ## Notes / Sharp Edges (carry into /work)
 
