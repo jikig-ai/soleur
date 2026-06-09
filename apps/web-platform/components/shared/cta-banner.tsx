@@ -1,27 +1,27 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { safeSession } from "@/lib/safe-session";
 
-const STORAGE_KEY = "soleur:shared:cta-dismissed";
 // web-platform has no public privacy page; the established convention links the
 // marketing-site absolute URL (see app/(auth)/signup/page.tsx).
 const PRIVACY_POLICY_URL = "https://soleur.ai/pages/legal/privacy-policy.html";
 
 type Status = "idle" | "submitting" | "success" | "error";
+type Panel = "expanded" | "collapsed";
 
 export function CtaBanner() {
-  const [dismissed, setDismissed] = useState<boolean>(
-    () => safeSession(STORAGE_KEY) === "1",
-  );
+  // In-memory only — closing collapses to a thin re-openable bar; a page
+  // reload restores the full banner (the dismissal is never persisted).
+  const [panel, setPanel] = useState<Panel>("expanded");
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<Status>("idle");
 
-  if (dismissed) return null;
+  function handleCollapse() {
+    setPanel("collapsed");
+  }
 
-  function handleDismiss() {
-    safeSession(STORAGE_KEY, "1");
-    setDismissed(true);
+  function handleExpand() {
+    setPanel("expanded");
   }
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
@@ -46,10 +46,54 @@ export function CtaBanner() {
     }
   }
 
+  const shellClass =
+    "fixed bottom-0 left-0 right-0 z-40 border-t border-soleur-border-default bg-soleur-bg-surface-1/95 backdrop-blur-sm";
+
+  // Collapsed — a slim full-width strip; clicking anywhere re-expands. The
+  // incoming strip eases in (transform+opacity); motion-reduce disables it.
+  if (panel === "collapsed") {
+    return (
+      <div className={`${shellClass} px-4 py-2`}>
+        <button
+          type="button"
+          onClick={handleExpand}
+          aria-label="Reopen Soleur signup banner"
+          aria-expanded={false}
+          data-testid="cta-banner-reopen"
+          className="mx-auto flex w-full max-w-3xl items-center justify-between gap-4 rounded text-soleur-text-secondary transition-all duration-300 ease-out hover:text-soleur-text-primary motion-reduce:transition-none motion-reduce:duration-0"
+        >
+          <span className="text-sm">
+            Built with{" "}
+            <span className="font-medium text-soleur-accent-gold-fg">
+              Soleur
+            </span>
+          </span>
+          {/* Up-chevron (⌃) — reopen affordance. */}
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+            className="shrink-0"
+          >
+            <polyline points="18 15 12 9 6 15" />
+          </svg>
+        </button>
+      </div>
+    );
+  }
+
+  // Expanded — the full two-tier banner. The inner content eases in on mount;
+  // motion-reduce disables the transition.
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-soleur-border-default bg-soleur-bg-surface-1/95 px-4 py-3 backdrop-blur-sm">
-      <div className="mx-auto flex max-w-3xl flex-col gap-2">
-        {/* Tier 1 — message + dismiss */}
+    <div className={`${shellClass} px-4 py-3`}>
+      <div className="mx-auto flex max-w-3xl flex-col gap-2 transition-all duration-300 ease-out motion-reduce:transition-none motion-reduce:duration-0">
+        {/* Tier 1 — message + collapse */}
         <div className="flex items-start justify-between gap-4">
           <p className="text-sm text-soleur-text-secondary">
             Built with{" "}
@@ -58,9 +102,10 @@ export function CtaBanner() {
           </p>
           <button
             type="button"
-            onClick={handleDismiss}
+            onClick={handleCollapse}
+            aria-label="Collapse signup banner"
+            aria-expanded={true}
             className="shrink-0 rounded p-1 text-soleur-text-muted transition-colors hover:text-soleur-text-secondary"
-            aria-label="Dismiss signup banner"
             data-testid="cta-banner-dismiss"
           >
             <svg
