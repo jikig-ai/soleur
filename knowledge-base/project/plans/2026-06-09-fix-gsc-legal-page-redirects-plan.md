@@ -18,6 +18,31 @@ requires_cpo_signoff: false
 
 # Fix GSC "Crawled - currently not indexed" for soleur.ai stale legal-page URLs
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-09
+**Sections enhanced:** Implementation Phase 2 (v4 HCL grounding), Risk Analysis (precedent-diff).
+**Method:** local research (no nested Task agents available inside the plan/deepen subagent — direct
+tool use: repo greps, context7 Terraform provider docs, Cloudflare docs MCP, WebFetch). Halt-gates 4.6
+(User-Brand Impact), 4.7 (Observability), 4.8 (PAT-shaped), 4.9 (UI-wireframe) all PASS.
+
+### Key Improvements
+1. **Grounded the v4 HCL block shape against repo precedent** (`cache.tf` ruleset + `tunnel.tf` account-level
+   resources) — context7 returns `main`/v5 examples by default; the v5-upgrade guide explicitly lists
+   `from_list`/`action_parameters`/`rules` as moved-to-attributes IN v5, confirming v4 uses BLOCKS.
+2. **Precedent-diff added** (Phase 4.4 gate): no in-repo Bulk-Redirects precedent — pattern is NOVEL; the
+   closest shapes are the zone ruleset (`cache.tf`) and account-level resources (`tunnel.tf`). `terraform
+   validate` is the load-bearing catch.
+3. **Verify-the-negative pass** confirmed the plan's constraint claims ("Rule 10 cannot be evicted", "do NOT
+   touch seo_page_redirects") are respected by the diff shape — the plan adds a new file and a new phase, so
+   no contradiction with the protected HTTPS catch-all.
+
+### New Considerations Discovered
+- The `cloudflare_list` `items` vs `item {}` form is the single sharpest v4/v5 trap; the repo precedent
+  (`cache.tf` rules-as-blocks) is the authority, NOT context7's default page.
+- The account-level ruleset needs `account_id`, not `zone_id` (unlike every existing `cloudflare_ruleset` in
+  the repo, which is zone-scoped) — confirm the provider alias's token carries account scope (Phase 0.3).
+
 ## Overview
 
 Nine legacy `/pages/legal/<slug>.html` URLs on soleur.ai (the Eleventy docs site at
@@ -187,6 +212,82 @@ The Bulk Redirect (account `http_request_redirect`) and the existing zone `http_
       triplet below). `validate` is the load-bearing catch for v4-vs-v5 schema drift.
 - [ ] `terraform plan` (target-scoped to the two new resources) to confirm 2 resources to add, 0 to change,
       0 to destroy. Attach plan output to PR body.
+
+### Research Insights (v4 HCL — copy-ready shape, verify with `terraform validate`)
+
+**Precedent-diff (Phase 4.4):** No in-repo `cloudflare_list` / `http_request_redirect` precedent exists
+(`dns.tf:209-210`). Pattern is **NOVEL**. Closest sibling shapes, read directly from the repo (the authority
+over context7, which defaults to v5):
+- `cache.tf` `cloudflare_ruleset.cache_shared_binaries` — v4 nested-BLOCK form: `rules { action = "...";
+  action_parameters { ... } }` (repeated blocks, NOT `rules = [ {…} ]` lists-of-objects). Uses
+  `provider = cloudflare.rulesets`, `zone_id`, `kind = "zone"`.
+- `tunnel.tf` — the repo's only `account_id`-scoped Cloudflare resources (template for `account_id =
+  var.cf_account_id`).
+
+The new ruleset differs from every existing one in the repo on TWO axes: `account_id` (not `zone_id`) and
+`kind = "root"` at account level. That is exactly why the token-scope check (Phase 0.3) is load-bearing.
+
+**v4-vs-v5 confirmation:** the Cloudflare provider v5-upgrade guide explicitly lists `from_list`,
+`action_parameters`, and `rules` among attributes that moved from "multiple blocks" → "single nested
+attributes / lists of objects" IN v5. Our pin is `4.52.7` → **BLOCK form**. context7's default
+(`/cloudflare/terraform-provider-cloudflare` `main`) returns the v5 attribute/`items`-set shape — do NOT copy
+it. Cross-check any context7 snippet against `cache.tf` before adopting.
+
+**Sketch (v4 block syntax — confirm each attribute name via `terraform validate`):**
+
+```hcl
+# apps/web-platform/infra/seo-bulk-redirects.tf
+resource "cloudflare_list" "legal_redirects" {
+  provider    = cloudflare.rulesets   # confirm token carries Account Filter Lists:Edit (Phase 0.3)
+  account_id  = var.cf_account_id
+  name        = "legal_redirects"     # referenced by name from the ruleset's from_list
+  kind        = "redirect"
+  description = "Legacy /pages/legal/*.html -> clean /legal/<slug>/ 301s. See plan 2026-06-09, #3297, #3328."
+
+  # One item {} block per pair (10 total). v4 uses item { value { redirect {} } } blocks.
+  item {
+    value {
+      redirect {
+        source_url            = "soleur.ai/pages/legal/cookie-policy.html"
+        target_url            = "https://soleur.ai/legal/cookie-policy/"
+        status_code           = 301
+        preserve_query_string = true
+        # include_subdomains   = true   # EVALUATE in Phase 0/curl: covers www.* deep-links if the
+                                         # existing www->apex canonicalizer doesn't already collapse them
+      }
+    }
+  }
+  # ... 9 more item {} blocks (8 remaining legal slugs + terms-of-service alias) ...
+}
+
+resource "cloudflare_ruleset" "bulk_redirects" {
+  provider    = cloudflare.rulesets
+  account_id  = var.cf_account_id     # ACCOUNT-level (not zone_id) — the novel axis
+  name        = "Legal page bulk redirects"
+  description = "Account http_request_redirect ruleset bound to the legal_redirects list. See plan 2026-06-09."
+  kind        = "root"
+  phase       = "http_request_redirect"
+
+  rules {
+    action      = "redirect"
+    description = "301 legacy /pages/legal/*.html via the legal_redirects bulk list"
+    enabled     = true
+    expression  = "http.request.full_uri in $legal_redirects"   # confirm the $list-reference form for v4
+    action_parameters {
+      from_list {
+        name = "legal_redirects"
+        key  = "http.request.full_uri"
+      }
+    }
+  }
+}
+```
+
+> **Two details most likely wrong (Sharp Edges):** (1) the rule `expression` form for a Bulk Redirect — CF
+> may auto-generate it or require `http.request.full_uri in $<list>`; (2) the `source_url` host-format
+> (host-less `soleur.ai/path` vs full `https://soleur.ai/path`). `terraform validate` catches attribute-name
+> errors; only a live `terraform plan` + post-apply curl catches the expression/host-format semantics. Verify
+> both against the current Cloudflare Bulk Redirects docs at /work and curl apex AND www before declaring done.
 
 #### Phase 3 — Apply-workflow allow-list extension
 
