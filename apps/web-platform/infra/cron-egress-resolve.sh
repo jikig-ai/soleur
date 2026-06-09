@@ -148,5 +148,35 @@ else
   log "sets already converged (no changes)"
 fi
 
+# --- Fail-loud: surface kernel egress-blocked drops to Sentry -------------------
+# The nftables default-drop logs to the KERNEL journal (host pipeline → Better
+# Stack), which Sentry issue alerting cannot see. Each tick, count fresh drops
+# and post ONE Sentry error event tagged feature=cron-egress-firewall /
+# op=egress_blocked — the issue-alerts.tf `egress_blocked` alert pages on it
+# (AC-P2.10). Sample lines carry only kernel packet metadata (IPs/ports), no
+# payload and no secrets.
+BLOCK_HITS="$(journalctl -k --since "-5min" --no-pager 2>/dev/null | grep -c 'egress-blocked: ' || true)"
+if [[ "${BLOCK_HITS:-0}" -gt 0 ]]; then
+  log "WARN: $BLOCK_HITS egress-blocked drop(s) in the last 5m"
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    SAMPLE="$(journalctl -k --since "-5min" --no-pager 2>/dev/null | grep 'egress-blocked: ' | tail -3 | tr '"' "'" | tr '\n' ';' | cut -c1-500)"
+    PAYLOAD="$(jq -n \
+      --arg msg "egress-blocked: container egress denied (${BLOCK_HITS} hits in last 5m)" \
+      --arg sample "$SAMPLE" \
+      --argjson hits "$BLOCK_HITS" \
+      '{message: $msg, level: "error", platform: "other", logger: "cron-egress-resolve",
+        tags: {feature: "cron-egress-firewall", op: "egress_blocked"},
+        extra: {sample: $sample, hits: $hits}}')"
+    curl -s -o /dev/null --max-time 10 -X POST \
+      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+      -H "Content-Type: application/json" \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+      -d "$PAYLOAD" \
+      || log "WARN: egress_blocked Sentry event POST failed"
+  else
+    log "WARN: Sentry env unset — egress_blocked event not posted"
+  fi
+fi
+
 sentry_checkin ok
-log "OK: allow=$(echo "$DESIRED_ALLOW" | wc -l) addrs, dns=$(echo "$DNS_IPS" | wc -l) resolvers, failed_hosts=$FAILED_HOSTS"
+log "OK: allow=$(echo "$DESIRED_ALLOW" | wc -l) addrs, dns=$(echo "$DNS_IPS" | wc -l) resolvers, failed_hosts=$FAILED_HOSTS, blocked_5m=$BLOCK_HITS"
