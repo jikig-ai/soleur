@@ -41,7 +41,8 @@
 # `terraform validate` is the catch for v4-vs-v5 schema drift.
 #
 # See:
-#   - knowledge-base/project/plans/2026-06-09-fix-gsc-legal-page-redirects-plan.md
+#   - the 2026-06-09 fix-gsc-legal-page-redirects plan (archived under
+#     knowledge-base/project/plans/archive/)
 #   - issue #3367 (the canonical Bulk Redirects refactor tracker this implements)
 #   - issue #3297 (GSC indexing fixes feature), #3328 (meta-refresh source deletion follow-up)
 #   - apps/web-platform/infra/seo-rulesets.tf (the 2026-06-09 note — the deferral this resolves)
