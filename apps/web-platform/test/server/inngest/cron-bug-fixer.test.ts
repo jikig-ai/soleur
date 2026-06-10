@@ -552,7 +552,7 @@ describe("cron-bug-fixer — (a) issue-selection cascade", () => {
 // ===========================================================================
 
 describe("cron-bug-fixer — (b) ephemeral workspace + sentinel", () => {
-  it("mkdtemp + git clone + symlink + .claude/settings.json + sentinel", async () => {
+  it("mkdtemp + git clone + .claude/settings.json + sentinel (no plugin symlink — #5091)", async () => {
     const p3Issues = [
       {
         number: 500,
@@ -579,11 +579,10 @@ describe("cron-bug-fixer — (b) ephemeral workspace + sentinel", () => {
     expect(gitArgs[0]).toBe("clone");
     expect(gitArgs).toContain("--depth=1");
 
-    // Symlink created → plugins/soleur
-    expect(symlinkSpy).toHaveBeenCalled();
-    const symlinkArgs = symlinkSpy.mock.calls[0] as [string, string];
-    expect(symlinkArgs[0]).toBe("/app/shared/plugins/soleur");
-    expect(symlinkArgs[1]).toContain("plugins/soleur");
+    // #5091 — NO symlink: the clone's own tracked plugins/soleur is used
+    // directly (the old rm+symlink swap made clone-git see every tracked
+    // plugin file as deleted — the #5026 destructive-PR contamination).
+    expect(symlinkSpy).not.toHaveBeenCalled();
 
     // .claude/settings.json written
     const settingsWrite = writeFileSpy.mock.calls.find(

@@ -34,10 +34,10 @@
 //
 // PLUGIN-LOADING — Verbatim PR-5 ephemeral-workspace pattern:
 //   - repo/                          (in-handler `git clone --depth=1`)
-//   - repo/plugins/soleur            (symlink to getPluginPath())
+//   - repo/plugins/soleur            (the clone's own tracked tree — #5091)
 //   - repo/.claude/settings.json     (DEFAULT_SETTINGS overlay)
 // Plugin resolution under headless `--print` requires the explicit
-// `--plugin-dir plugins/soleur` flag — the symlinked plugins/soleur dir is NOT
+// `--plugin-dir plugins/soleur` flag — the plugins/soleur dir is NOT
 // auto-discovered from spawn cwd in headless mode (the interactive
 // marketplace/enabledPlugins trust flow does not run under --print). This
 // producer's prompt invokes no /soleur:* skill, so it needs no flag change; the
@@ -175,6 +175,8 @@ The issue body should contain:
 
 If inconsistencies are found that can be fixed automatically (milestone reassignment, stale issue closure, roadmap status updates),
 create a branch, apply the fixes, and open a PR. If only the review issue is needed, skip the PR.
+
+STAGING RULE (#5091): when committing fixes, stage only the specific files you edited (git add <path> [<path>...]). Blanket staging flags (-A, -u, --all) and bare \`.\` pathspecs are denied by the containment hook — the workspace carries expected-dirty scaffolding that must never enter a commit.
 `;
 
 // Spawn-env allowlist (NOT a denylist). PR-5 shape verbatim — the keys
@@ -216,7 +218,7 @@ export async function cronRoadmapReviewHandler({
     },
   );
 
-  // --- Step 2: setup ephemeral workspace (clone + symlink + sentinel) ---
+  // --- Step 2: setup ephemeral workspace (clone + settings + sentinel) ---
   // Track ephemeralRoot in handler-scope so teardown runs regardless of
   // downstream success/failure.
   let ephemeralRoot: string | null = null;
