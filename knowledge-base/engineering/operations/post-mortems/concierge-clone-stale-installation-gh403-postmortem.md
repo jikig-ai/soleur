@@ -2,8 +2,9 @@
 title: "Concierge workspace clone used the stored (wrong-scope) GitHub App installation → gh-403 → No Git Repository in Workspace"
 date: 2026-06-08
 incident_pr: 5041
-incident_window: "2026-06-08 (surfaced via founder dogfooding shortly after #5031 merged 15:26 CEST)"
-recovery_at: "2026-06-08 (on merge of #5041)"
+incident_pr_episode_2: 5090
+incident_window: "2026-06-08 — 2026-06-10 (episode 1 surfaced 2026-06-08 post-#5031; episode 2 surfaced 2026-06-09 post-#5041, both via founder dogfooding)"
+recovery_at: "episode 1: 2026-06-08 (#5041 merge); episode 2: 2026-06-10 (#5090 merge, live-verified post-deploy via AC9 Playwright e2e)"
 suspected_change: "PR #5031 (9556f1f4a) hardened the installation self-heal computation but did not move the clone consumer onto it"
 brand_survival_threshold: single-user incident
 status: resolved
@@ -127,6 +128,49 @@ The self-heal observability #5031 added (`op:self-heal-skip`) and the `.git`-LAS
 
 #5031's fix hardened the computation but left the clone consumer on the stale value, so the brand-survival path (workspace bootstrap) never benefited from the hardening it appeared to deliver.
 
+# Episode 2 (2026-06-09 → 2026-06-10): the network plane — PR #5090
+
+One day after #5041 merged, the same founder dogfooding session still failed
+every `gh` command, now with the clone working (session-start preamble green)
+but `gh issue view` dying on `Post "https://api.github.com/graphql": Forbidden`.
+The operator's framing — "PR 5041 wasn't enough" — implied a fourth unswept
+token consumer. Research refuted that: the token plane was fully swept. The
+binding constraint was the **sandbox network plane**: the SDK sandbox has
+shipped `network.allowedDomains: []` since #871 (an explicit "no outbound
+network" acceptance criterion, extracted verbatim by #2901), so the sandbox
+proxy denied CONNECT to `api.github.com` for every in-sandbox process. All
+gh/askpass credential infrastructure (#4946/#5031/#5041) was structurally dead
+— the error was transport-shaped (proxy CONNECT denial), not credential-shaped
+(`HTTP 401/403:`), and none of the three token-plane episodes triaged the
+error SHAPE before re-running the credential playbook.
+
+**Fix (#5090, ADR-051):** egress-iff-entitled-token — `buildAgentSandboxConfig`
+widens `allowedDomains` to exactly `["github.com", "api.github.com"]` iff
+`buildAgentQueryOptions` receives a truthy `ghToken` (derivation, not a flag —
+half-wired states unrepresentable). Legacy path stays fully closed. Fail-closed
+on no-repo / mint-failure / empty-string, all test-pinned; lockstep tests
+delegate the sandbox-config mock to the real implementation so assertions
+reach the actual allowlist the SDK receives.
+
+**Episode-2 root cause (extends the 5-Whys):** the episode-1 lesson ("sweep
+every consumer of the computed value") was applied within the credential
+plane only. The general form: **triage the error SHAPE across planes
+(network / credential / authorization) before re-running the previous
+episode's playbook** — a transport-wrapped `Post "...": Forbidden` can never
+be fixed by credential work. A 2026-06-03 planning-spike learning had even
+recorded the OPPOSITE conclusion ("api.github.com WAS reachable in-sandbox")
+from a misread `gh auth status` verdict; that learning now carries a
+SUPERSEDED block. Full triage table:
+`knowledge-base/project/learnings/bug-fixes/2026-06-10-sandbox-network-plane-not-token-plane-error-shape-triage.md`.
+
+**Episode-2 detection/recovery:** detected 2026-06-09 ~21:50 CEST (founder
+screenshot); root-caused, fixed, 12-agent-reviewed, and shipped 2026-06-10 via
+#5090. Post-merge AC9 live e2e (gh + raw-git `ls-remote` — the askpass plane's
+first-ever end-to-end execution) is the recovery-verification arbiter; AC10
+confirms zero new `op:mint-gh-token` Sentry failures.
+
 ## Action Items & Follow-ups
 
-_No action items — incident fully resolved in the source PR with no residual work._
+| Issue | Item | Status |
+|---|---|---|
+| #5094 | Legacy domain-leader path: `buildGithubTools` consumes raw stored `installationId` (no self-heal) — extract the self-heal block into a shared helper (pairs with #3243 decomposition) and consume it in `agent-runner.ts` | open (deferred-automation) |

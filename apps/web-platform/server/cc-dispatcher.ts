@@ -274,6 +274,23 @@ const GH_403_PROMPT_DIRECTIVE =
   "permission issues server-side and will retry with the correct installation " +
   "automatically. State only what the error literally says.";
 
+// #5041 follow-up — when no entitled GitHub token was minted for this
+// dispatch, the sandbox network allowlist is empty and every gh/git network
+// command dies at the proxy with a transport-shaped `Forbidden`. Without this
+// addendum the unconditional directives above tell the agent it is
+// authenticated and that the platform auto-heals 403s — both false in exactly
+// this state — so it retries gh fruitlessly and relays a promise that will
+// never be kept. Mirrors the capability-gated c4PromptAddendum pattern: tell
+// the model about the capability it does NOT have.
+const GH_NO_NETWORK_PROMPT_ADDENDUM =
+  "## GitHub access unavailable in this session\n" +
+  "No repository is connected to this workspace, so GitHub network access " +
+  "is disabled for this session. Do NOT run `gh` or git network commands " +
+  "(push/fetch/pull/ls-remote) — they will fail with a network error, and " +
+  "the platform will not retry them. If the user asks for GitHub " +
+  "operations, tell them to connect a repository first (Workspace settings " +
+  "→ Connect repository).";
+
 // feat-one-shot-concierge-workspace-repo-context — name the connected
 // repository to the Concierge so it stops trying to infer owner/repo from a
 // git origin remote. On a `.git`-less workspace `git config --get
@@ -1455,8 +1472,10 @@ export const realSdkQueryFactory: QueryFactory = async (
     // connected repo and inject it as GH_TOKEN so the agent's `gh` calls
     // authenticate without an interactive `gh auth login` (the reported
     // symptom). resolveInstallationId returns null for no-connected-repo /
-    // non-member — graceful degradation: gh simply stays unauthenticated,
-    // exactly as before. Mint failure is NON-FATAL: mirror to Sentry and
+    // non-member — graceful degradation: no token means sandbox GitHub
+    // egress stays closed (#5041 follow-up), so in-sandbox gh is
+    // network-dead at the proxy (`Post "...": Forbidden`), not merely
+    // unauthenticated. Mint failure is NON-FATAL: mirror to Sentry and
     // proceed without GH_TOKEN — never block a conversation on a gh-auth
     // mint. generateInstallationToken is token-cache-memoized per
     // installation id, so this is not a per-dispatch network round-trip on a
@@ -1475,10 +1494,19 @@ export const realSdkQueryFactory: QueryFactory = async (
           feature: "cc-dispatcher",
           op: "mint-gh-token",
           extra: { userId: args.userId, hasInstallation: true },
-          message: "GitHub App installation token mint failed; gh stays unauthenticated",
+          message:
+            "GitHub App installation token mint failed; sandbox GitHub egress stays closed (gh network-dead at proxy)",
         });
       }
     }
+    // Sandbox GitHub egress posture (#5041 follow-up): egress to
+    // github.com/api.github.com is DERIVED from ghToken presence inside
+    // buildAgentQueryOptions (both-or-nothing). Boolean only — NEVER the
+    // token (AC6-class guard from #5041).
+    log.info(
+      { userId: args.userId, githubEgress: Boolean(ghToken) },
+      "Concierge sandbox GitHub egress posture",
+    );
 
   // --- C4 diagram write capability (flag-gated, per-user) -----------------
   // The Concierge's ONLY sanctioned repo write: edit_c4_diagram, scoped to the
@@ -1595,6 +1623,12 @@ export const realSdkQueryFactory: QueryFactory = async (
   // Always append the gh-403 honesty directive (feat-one-shot-concierge-gh-403)
   // — independent of repo/flag state, since any conversation can run `gh`.
   effectiveSystemPrompt += `\n\n${GH_403_PROMPT_DIRECTIVE}`;
+  // No entitled token → sandbox egress closed → gh/git network-dead at the
+  // proxy. Override the directive's "platform will retry automatically"
+  // promise, which only holds when a token (and thus egress) exists.
+  if (!ghToken) {
+    effectiveSystemPrompt += `\n\n${GH_NO_NETWORK_PROMPT_ADDENDUM}`;
+  }
   // feat-one-shot-concierge-workspace-repo-context — name the server-resolved
   // connected repo so the agent uses it for `-R owner/repo` instead of probing
   // a (possibly absent) git remote. Guarded ONLY on the CC_GITHUB_NAME_RE-
@@ -1796,9 +1830,12 @@ export const realSdkQueryFactory: QueryFactory = async (
         // don't pay a canUseTool round-trip per call. This is auto-approve,
         // not restriction — see CC_PATH_ALLOWED_TOOLS doc comment.
         allowedTools: [...CC_PATH_ALLOWED_TOOLS],
-        // #3338 — HARD-BLOCK Bash/Edit/Write at the SDK level so the model
-        // cannot emit them (no review_gate modal can appear). Merged with
-        // the canonical [WebSearch, WebFetch] disallowed list.
+        // #3338 — HARD-BLOCK Edit/Write at the SDK level so the model
+        // cannot emit them. Bash is intentionally NOT in this list — it is
+        // sandbox-gated (permission-callback Bash gate / safe-bash /
+        // autonomous bypass) and runs inside the SDK bwrap sandbox whose
+        // network egress is token-derived (see buildAgentSandboxConfig).
+        // Merged with the canonical [WebSearch, WebFetch] disallowed list.
         extraDisallowedTools: CC_PATH_DISALLOWED_TOOLS,
         // SubagentStart sanitizer override: cc strips control chars +
         // U+2028/U+2029 (per learning
