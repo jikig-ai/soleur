@@ -71,18 +71,36 @@ function discoverWorkflowScripts(): string[] {
 // Extract (label, model) pairs from every agent(...) options object that
 // carries a `model:` key. Workflow scripts are single-spawn-per-options-object
 // by construction; label and model co-occur inside one balanced `{...}`.
+// All three JS quote forms are matched for BOTH keys — a double-quoted or
+// template-literal `model: "opus"` must not evade the gate (mutation-probe
+// finding, 2026-06-10).
+const ANY_QUOTE_MODEL = /\bmodel\s*:\s*(?:'([^']*)'|"([^"]*)"|`([^`]*)`)/g;
+
 function extractPins(src: string): Array<{ label: string; model: string }> {
   const pins: Array<{ label: string; model: string }> = [];
   // Options objects are single-level here; match label and model within the
   // same braces (either order, possibly multi-line for the spread form).
-  const optionsRe = /\{[^{}]*\blabel:\s*(?:'([^']*)'|`([^`]*)`)[^{}]*\}/g;
+  const optionsRe =
+    /\{[^{}]*\blabel:\s*(?:'([^']*)'|"([^"]*)"|`([^`]*)`)[^{}]*\}/g;
   let m: RegExpExecArray | null;
   while ((m = optionsRe.exec(src)) !== null) {
-    const label = m[1] ?? m[2] ?? "";
-    const modelMatch = m[0].match(/\bmodel:\s*'([^']*)'/);
-    if (modelMatch) pins.push({ label, model: modelMatch[1] });
+    const label = m[1] ?? m[2] ?? m[3] ?? "";
+    const modelMatch = m[0].match(/\bmodel\s*:\s*(?:'([^']*)'|"([^"]*)"|`([^`]*)`)/);
+    if (modelMatch) {
+      pins.push({ label, model: modelMatch[1] ?? modelMatch[2] ?? modelMatch[3] ?? "" });
+    }
   }
   return pins;
+}
+
+// Every model literal in the file, regardless of surrounding shape — catches
+// label-less pins that extractPins cannot attribute.
+function allModelLiterals(src: string): string[] {
+  const out: string[] = [];
+  let m: RegExpExecArray | null;
+  const re = new RegExp(ANY_QUOTE_MODEL.source, "g");
+  while ((m = re.exec(src)) !== null) out.push(m[1] ?? m[2] ?? m[3] ?? "");
+  return out;
 }
 
 describe("workflow model-pin allowlist (ADR-051)", () => {
@@ -106,9 +124,16 @@ describe("workflow model-pin allowlist (ADR-051)", () => {
       // Exact-set equality: no missing pins, no extra pins, no tier drift.
       expect(foundMap).toEqual(expected);
 
+      // Label-less evasion gate: every model literal in the file must be
+      // attributable to an allowlisted (label, model) pin. A `model:` key in
+      // an options object without a label (or outside one) is unattributable
+      // and fails here (mutation-probe finding, 2026-06-10).
+      const literals = allModelLiterals(src);
+      expect(literals.length).toBe(Object.keys(expected).length);
+
       if (ZERO_PIN_FILES.includes(rel)) {
         expect(found.length).toBe(0);
-        expect(src).not.toMatch(/\bmodel:\s*'/);
+        expect(literals.length).toBe(0);
       }
     });
   }
@@ -124,8 +149,10 @@ describe("workflow model-pin allowlist (ADR-051)", () => {
   test("only sonnet/haiku are pinnable tiers (never opus/fable/inherit literals)", () => {
     for (const rel of scripts) {
       const src = readFileSync(join(SKILLS_DIR, rel), "utf-8");
-      const bad = src.match(/\bmodel:\s*'(?!sonnet'|haiku')[^']*'/);
-      expect(bad).toBeNull();
+      const bad = allModelLiterals(src).filter(
+        (v) => v !== "sonnet" && v !== "haiku",
+      );
+      expect(bad).toEqual([]);
     }
   });
 });
