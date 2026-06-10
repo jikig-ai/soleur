@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { NextRequest } from "next/server";
 
 // PR-F Phase 2 (#3244, #3940). Signature-verify gate on /api/inngest POST.
@@ -21,7 +21,9 @@ import type { NextRequest } from "next/server";
 // cold re-loads (~5s each under contention; PR #3985 timeout bump was a
 // stop-gap, not a fix). The dev-mode positive-control test lives in
 // signature-verify-dev-mode.test.ts so each file captures its env exactly
-// once. See #3817 Fix 2.
+// once. See #3817 Fix 2. A `beforeAll` pre-warm pays the cold-import cost
+// against its own 60s hook budget so the first test never races
+// testTimeout (16s) under full-suite contention. See #5113.
 process.env.INNGEST_SIGNING_KEY =
   "signkey-test-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 process.env.INNGEST_EVENT_KEY =
@@ -48,6 +50,14 @@ function makePostRequest(headers: Record<string, string> = {}): NextRequest {
 }
 
 describe("app/api/inngest/route.ts — signature verification (cloud mode)", () => {
+  // Pre-warm the route module graph (Inngest SDK + 52 function modules) so the
+  // first test doesn't pay the cold-import cost against testTimeout (16s) under
+  // full-suite contention. Mirrors the pdfjs-dist pre-warm in
+  // pdf-text-extract.test.ts (#4097 Fix 3). See #5113.
+  beforeAll(async () => {
+    await importRoute();
+  }, 60_000);
+
   it("exports GET, POST, PUT handlers", async () => {
     const route = await importRoute();
     expect(typeof route.GET).toBe("function");
