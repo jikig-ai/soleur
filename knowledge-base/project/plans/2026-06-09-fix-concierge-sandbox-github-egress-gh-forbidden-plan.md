@@ -497,8 +497,8 @@ logs:
   where: pino stdout → container logs (deploy-status webhook host) — no SSH path required for the posture boolean (it also rides the existing dispatch log stream)
   retention: container lifetime (existing platform default)
 discoverability_test:
-  command: cd apps/web-platform && ./node_modules/.bin/vitest run test/agent-runner-helpers.test.ts test/agent-runner-query-options.test.ts
-  expected_output: egress-variant + derivation tests pass (exit 0)
+  command: apps/web-platform/node_modules/.bin/vitest run --root apps/web-platform test/agent-runner-helpers.test.ts test/agent-runner-query-options.test.ts
+  expected_output: 2 passed
 ```
 
 ## Test Scenarios
