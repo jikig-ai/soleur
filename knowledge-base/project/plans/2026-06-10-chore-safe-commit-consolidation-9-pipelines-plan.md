@@ -12,6 +12,21 @@ brand_survival_threshold: aggregate pattern
 > Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed; no spec.md exists for this branch).
 > Pipeline mode: planning subagent has no Task tool — research ran inline (file-level verification of all 10 pipeline sources, parity test, ruleset IaC, live PR history); plan review performed as an inline three-lens pass (see `## Plan Review Synthesis`).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-10 (same session, inline — pipeline mode, no research subagents available; gates + targeted empirical verification)
+**Gates:** 4.6 User-Brand Impact PASS (threshold `aggregate pattern`); 4.7 Observability PASS (5 fields, no-SSH discoverability); 4.8 PAT-shape PASS (zero matches); 4.9 UI-wireframe N/A (no UI surface); 4.5 network-outage N/A (the only "timeout" tokens are the `abortedByTimeout` code symbol, not a connectivity symptom)
+
+### Verification highlights
+
+- All cited issue/PR numbers resolved live (`gh issue/pr view`): #5026 CLOSED (the destructive bot PR), #5091 CLOSED (helper issue), #5098 MERGED (helper PR), #5018 MERGED (cron containment), #5046 CLOSED (Tier-2 restoration), #5111 OPEN (this work). ADR-053 confirmed as current max → ADR-054 free.
+- `SYNTHETIC_CHECK_NAMES` drift check executed: all 5 per-file copies are byte-identical (test, dependency-review, e2e, skill-security-scan PR gate, enforce, cla-check, cla-evidence) — consolidation to one const is clean, **no per-call override needed**.
+- Tri-state verify-gate comment confirmed present ONLY in `cron-seo-aeo-audit.ts` (`git grep -ln "tri-state" apps/web-platform/server/inngest/functions/` → 1 file) — Phase 6.2's conditional sweep of content-generator/growth-execution resolved to a single edit site.
+- Runner facts re-verified: root `package.json` has no `workspaces` field (AC7's in-package `tsc` form is the only valid one); `apps/web-platform/vitest.config.ts` node project includes `test/**/*.test.ts` — all edited test files are collected.
+- Both cited AGENTS.md rule IDs (`hr-type-widening-cross-consumer-grep`, `cq-write-failing-tests-before`) verified active via `grep "\[id: …\]" AGENTS.md`; no fabricated/retired IDs in the plan body.
+- Negative claims grep-verified against source: all 5 legacy pipelines post synthetic check-runs (line citations in Research Reconciliation); content-publisher's "auto-merge fallback" is a log-only `catch` (`cron-content-publisher.ts:416-424`); prescribed labels exist (observed live on #5111).
+- Live merge-mechanics evidence pinned: `ci/content-publisher-2026-05-19-164226` merged +54 s (synthetic+direct proven); `ci/community-digest-*` auto-merged daily through 2026-06-08 and `ci/campaign-calendar-2026-05-25-174825` auto-merged (prompt-era auto-merge proven for the dormant cohort's paths).
+
 ## Overview
 
 PR #5098 (issue #5091) introduced `safeCommitAndPr()` (`apps/web-platform/server/inngest/functions/_cron-safe-commit.ts`) — a deterministic, non-throwing, replay-idempotent handler-side commit/PR pipeline with scoped staging, a clean-index precondition, structural exclusion, a loud dropped-path warn, and a mass-deletion guard (the #5026 destructive class) — and migrated the 3 blanket-`git add -A` crons. Nine bot pipelines still carry their own persistence:
@@ -159,7 +174,7 @@ Behavior-preserving per cron; each deletes its private `spawnGitChecked` staging
 Notes:
 
 - Delete each file's now-unused `spawnGitChecked` (and `spawnGitCapture` where only used for `rev-parse`); keep `spawnGit` where still needed for `clone` / `checkout main` / `checkout -- .` rollback.
-- `SYNTHETIC_CHECK_NAMES` is exported per-file today (5 copies) — consolidate to ONE exported const. Placement: `_cron-safe-commit.ts` (alongside the consumer option). Update the 5 imports + any test imports (`git grep -n "SYNTHETIC_CHECK_NAMES" apps/web-platform/` at work time; keep the name list identical: test, dependency-review, e2e, skill-security-scan PR gate, enforce, cla-check, cla-evidence — note rule-prune/vendor-drift copies may have drifted; diff all 5 lists first and preserve any per-cron difference as a per-call override if found).
+- `SYNTHETIC_CHECK_NAMES` is exported per-file today (5 copies) — consolidate to ONE exported const. Placement: `_cron-safe-commit.ts` (alongside the consumer option). Update the 5 imports + any test imports (`git grep -n "SYNTHETIC_CHECK_NAMES" apps/web-platform/` at work time). Drift check executed at deepen time: all 5 lists are byte-identical (test, dependency-review, e2e, skill-security-scan PR gate, enforce, cla-check, cla-evidence) — no per-call override needed.
 - Net gain for all 5: deletion guard, dirty-index precondition, dropped-path warn + PR-body ⚠️ marker, replay-resume idempotency, token-scrubbed failure messages, operator-visibility comments.
 - **Deletion-guard interplay:** vendor-drift re-vendoring can legitimately delete >10 files under `references/` on a large upstream restructure → guard aborts loudly (Sentry + runbook's documented `DEFAULT_MAX_DELETIONS` raise-path). Accepted: that is the guard working as designed for a mass-deletion event; no per-cron override (YAGNI per #5091 plan review).
 - **Tests:** update the 5 (6) test files: replace spawn-argv git assertions with mocked-`safeCommitAndPr` call-shape assertions (config object equality: allowedPaths/branchName/mergeMode/syntheticChecks/draft/labels) plus keep all non-persistence test coverage untouched. Mirror the mocking approach used by `cron-seo-aeo-audit.test.ts` (vi.mock of `./_cron-safe-commit`).
@@ -185,7 +200,7 @@ Content contract: ADR-033 lineage (claude-spawn substrate invariants); context =
 ### Phase 6 — Decisions, tracking issues, doc hygiene
 
 1. **Stale-`ci/*`-PR watchdog — DECISION: defer with a tracking issue.** Reasoning recorded here and in the ADR: auto-merge silent-disarm-on-conflict is the only invisible-stale mode, and after this PR every `mergeMode:"auto"` pipeline is Tier-2 dormant (the 4 prompt crons + the 3 #5091 migrations); the 5 live pipelines use `mergeMode:"direct"`, whose failure is loud (Sentry `safe-commit-failed` stage `auto-merge` + PR-needs-manual-merge comment). The marketing-file conflict scenario (campaign-calendar × growth crons sharing `knowledge-base/marketing/`) can only materialize once Tier-2 restoration un-defers those crons. Create issue: "chore(inngest): stale `ci/*` bot-PR watchdog — required before Tier-2 restoration of PR-flow crons" — body: extend the `cron-cloud-task-heartbeat` family with an open-bot-PR age scan (open PRs with head `ci/*` or `self-healing/auto-*` older than 48h, excluding draft compound-promote proposals → Sentry warn + issue comment), re-evaluation criterion = Tier-2 restoration PR for any of the 7 auto-merge-mode crons MUST land this first (refs #5018, #5046, this PR). Labels (all verified existing on #5111): `type/chore`, `domain/engineering`, `priority/p3-low`; milestone "Post-MVP / Later".
-2. **Tri-state verify-gate tracking issue.** `resolveOutputAwareOk` falls back to the spawn exit code when its GitHub verify-read throws — persistence can then be gated on a fallback-green. File: "chore(inngest): tri-state output-verify gate for safe-commit persistence" (same labels/milestone); update the stale "#5111 consolidation" comment in `cron-seo-aeo-audit.ts:279-281` — and the equivalent comment in `cron-content-generator.ts` / `cron-growth-execution.ts` if present (`git grep -n "tri-state" apps/web-platform/server/` at work time) — to cite the new issue number.
+2. **Tri-state verify-gate tracking issue.** `resolveOutputAwareOk` falls back to the spawn exit code when its GitHub verify-read throws — persistence can then be gated on a fallback-green. File: "chore(inngest): tri-state output-verify gate for safe-commit persistence" (same labels/milestone); update the stale "#5111 consolidation" comment in `cron-seo-aeo-audit.ts:279-281` to cite the new issue number. (Deepen verification: this comment exists ONLY in cron-seo-aeo-audit.ts — content-generator/growth-execution carry no copy; single edit site.)
 3. **Runbook touch-up.** `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` §"PR Withheld by safe-commit (#5091)" (line ~666): note that ALL bot cron PR pipelines now route through the helper (12 callers), document the three merge modes and that stage `auto-merge` covers direct-merge failures too, and add the vendor-drift large-restructure deletion-guard expectation.
 
 ## Files to Edit
@@ -200,7 +215,7 @@ Content contract: ADR-033 lineage (claude-spawn substrate invariants); context =
 8. `apps/web-platform/server/inngest/functions/cron-content-publisher.ts` — Phase 3
 9. `apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts` — Phase 3
 10. `apps/web-platform/server/inngest/functions/cron-rule-prune.ts` — Phase 3
-11. `apps/web-platform/server/inngest/functions/cron-seo-aeo-audit.ts` — Phase 6 comment cite fix (+ `cron-content-generator.ts`, `cron-growth-execution.ts` if same comment present)
+11. `apps/web-platform/server/inngest/functions/cron-seo-aeo-audit.ts` — Phase 6 comment cite fix (verified sole site of the tri-state comment)
 12. `apps/web-platform/test/server/inngest/cron-safe-commit.test.ts` — Phase 1 tests
 13. `apps/web-platform/test/server/inngest/cron-safe-commit-parity.test.ts` — Phase 4
 14. `apps/web-platform/test/server/inngest/cron-campaign-calendar.test.ts` — Phase 2
@@ -317,7 +332,7 @@ vitest only (`apps/web-platform/vitest.config.ts` collects `test/**/*.test.ts` u
 | compound-promote per-cluster replay double-creates PRs | Helper's replay-resume (branch + ahead-count) and 422-already-exists tolerance both keyed on the overridden `branchName`; covered by a Phase 1 unit test |
 | competitive-analysis allowedPaths widening commits unreviewed cascade artifacts | Cascade artifacts were always intended outputs (agent delegation table); PRs still pass required checks; dropped-path alternative would fire Sentry noise every run; PR body documents the change |
 | vendor-drift large upstream restructure trips the deletion guard | Accepted by design (mass deletion = review-worthy); runbook raise-path documented; no per-cron override (YAGNI per #5091 review) |
-| `SYNTHETIC_CHECK_NAMES` 5 copies have drifted from each other | Work-time diff of all 5 lists before consolidation; preserve any divergence as per-call override |
+| `SYNTHETIC_CHECK_NAMES` 5 copies have drifted from each other | RESOLVED at deepen time: all 5 lists verified byte-identical; plain consolidation |
 | Parity gate regex doesn't match new code formatting | The regex is the spec — write the gate block to match it (same literal shape as cron-seo-aeo-audit.ts:285); invariant 2 fails CI otherwise |
 | Helper `stage` union reuse ("auto-merge" for direct-merge failures) confuses runbook triage | Runbook row updated in Phase 6.3 to cover both arming and execution failures |
 
