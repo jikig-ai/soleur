@@ -215,7 +215,7 @@ beforeAll(async () => {
 5. `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/signature-verify.test.ts test/server/inngest/signature-verify-dev-mode.test.ts` → 6/6 pass (5 cloud-mode tests: export-shape + 4 × 401 paths; 1 dev-mode positive control).
 6. `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` exits 0.
 7. Three consecutive `TEST_GROUP=webplat bash scripts/test-all.sh` runs exit 0 (logged in the PR body with run timestamps; per the issue's acceptance section).
-8. No production source files changed: `git diff --name-only origin/main` contains only paths under `apps/web-platform/test/` and `knowledge-base/`.
+8. No production source files changed: `git diff --name-only origin/main` contains only paths under `apps/web-platform/test/`, `knowledge-base/`, and `plugins/soleur/skills/work/SKILL.md` (compound route-to-definition bullet — workflow documentation, not production code; added post-review).
 9. PR body uses `Closes #5113`.
 
 ### Post-merge (operator)
