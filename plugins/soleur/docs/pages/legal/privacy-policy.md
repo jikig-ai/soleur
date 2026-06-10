@@ -8,7 +8,7 @@ permalink: legal/privacy-policy/
 <section class="page-hero">
   <div class="container">
     <h1>Privacy Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated June 8, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated June 10, 2026</p>
   </div>
 </section>
 
