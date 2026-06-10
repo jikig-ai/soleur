@@ -42,8 +42,10 @@ describe("Bash — allowlisted commands", () => {
       verdict(bash("gh api 'repos/jikig-ai/soleur/milestones' --jq '.[] | {number,title}'")),
     ).toBe("allow");
   });
-  it("allows a && chain of two allowlisted segments", () => {
-    expect(verdict(bash('git add -A && git commit -m "roadmap sync"'))).toBe("allow");
+  it("allows a && chain of two allowlisted segments (scoped add)", () => {
+    expect(
+      verdict(bash('git add knowledge-base/product/roadmap.md && git commit -m "roadmap sync"')),
+    ).toBe("allow");
   });
   it("allows git push to origin", () => {
     expect(verdict(bash("git push origin HEAD"))).toBe("allow");
@@ -51,6 +53,52 @@ describe("Bash — allowlisted commands", () => {
   it("allows --body-file to a non-secret temp path (the scope-out filing pattern)", () => {
     expect(verdict(bash("gh issue create --title t --body-file /tmp/scopeout-body.md"))).toBe(
       "allow",
+    );
+  });
+});
+
+// #5091 — blanket-staging deny matrix. A blanket add staged 654 structural
+// deletions into destructive PR #5026; `commit -a` is the same vector through
+// a side door. Allowlisted `git add`/`git commit` prefixes do NOT bypass these
+// (gitVerbReason runs regardless of the allowlist).
+describe("Bash — blanket git staging denied (#5091)", () => {
+  it.each([
+    ["git add -A"],
+    ["git add --all"],
+    ["git add -u"],
+    ["git add --update"],
+    ["git add -fA"],
+    ["git add -v -A"],
+    ["git add ."],
+    ["git add ./"],
+    ["git add -A -- ."],
+    ["git add :/"],
+    ["git add *"],
+    ["git add .claude/settings.json"],
+    ["git add .claude"],
+    ['git commit -am "x"'],
+    ['git commit -a -m "x"'],
+    ['git commit --all -m "x"'],
+  ])("denies %s", (cmd) => {
+    expect(verdict(bash(cmd))).toBe("deny");
+  });
+
+  it.each([
+    ["git add knowledge-base/marketing/article.md"],
+    ["git add plugins/soleur/docs/page.md"],
+    ["git add -p knowledge-base/product/roadmap.md"],
+    ["git add -- knowledge-base/product/roadmap.md"],
+    ['git commit -m "scoped commit"'],
+  ])("allows scoped %s", (cmd) => {
+    expect(verdict(bash(cmd))).toBe("allow");
+  });
+
+  it("deny reason carries actionable retry guidance (live model self-corrects)", () => {
+    expect(reason(bash("git add -A"))).toContain(
+      "stage only the specific files you edited",
+    );
+    expect(reason(bash('git commit -am "x"'))).toContain(
+      "commit only files you explicitly staged",
     );
   });
 });

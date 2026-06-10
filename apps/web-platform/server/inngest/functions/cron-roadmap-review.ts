@@ -175,6 +175,8 @@ The issue body should contain:
 
 If inconsistencies are found that can be fixed automatically (milestone reassignment, stale issue closure, roadmap status updates),
 create a branch, apply the fixes, and open a PR. If only the review issue is needed, skip the PR.
+
+STAGING RULE (#5091): when committing fixes, stage only the specific files you edited (git add <path> [<path>...]). Blanket staging flags (-A, -u, --all) and bare \`.\` pathspecs are denied by the containment hook — the workspace carries expected-dirty scaffolding that must never enter a commit.
 `;
 
 // Spawn-env allowlist (NOT a denylist). PR-5 shape verbatim — the keys
