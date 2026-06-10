@@ -245,6 +245,49 @@ function gitVerbReason(tokens) {
     if (rest.length && rest[0] !== "origin")
       return `git push to non-origin remote '${rest[0]}'`;
   }
+  // #5091 — blanket staging denied. The ephemeral workspace carries
+  // expected-dirty scaffolding (.claude/ overlay), and blanket flags staged
+  // 654 structural deletions into destructive PR #5026. Flag-position-
+  // independent: clustered short flags (-fA, -vA) explode to chars; bare
+  // `.`/`:/` pathspecs and a literal `*` token stage the whole tree.
+  if (sub === "add") {
+    const scoped = "stage only the specific files you edited: git add <path> [<path>...]";
+    for (let i = 2; i < tokens.length; i++) {
+      const t = tokens[i];
+      if (t === "--") continue;
+      if (t.startsWith("--")) {
+        if (t === "--all" || t === "--update")
+          return `blanket git-add flag ${t} denied — ${scoped}`;
+        continue;
+      }
+      if (t.startsWith("-") && t.length > 1) {
+        if (/[Au]/.test(t.slice(1)))
+          return `blanket git-add flag ${t} denied — ${scoped}`;
+        continue;
+      }
+      const path = t.replace(/^\.\//, "");
+      if (t === "." || t === "./" || path.startsWith(":") || t.includes("*"))
+        return `git-add pathspec '${t}' denied (stages the whole tree) — ${scoped}`;
+      // Absolute paths resolve back into the clone (`git add /abs/cwd` ===
+      // `git add .`) and dodge every relative-form check above — no
+      // legitimate scoped add in an ephemeral clone uses one.
+      if (t.startsWith("/"))
+        return `git-add pathspec '${t}' denied (absolute paths can stage the whole tree) — ${scoped}`;
+      if (path === ".claude" || path.startsWith(".claude/"))
+        return `git-add pathspec '${t}' denied (.claude/ is run-scoped workspace scaffolding, never commit it) — ${scoped}`;
+    }
+  }
+  // `commit -a`/`--all` stages every tracked modification/deletion without
+  // any `git add` at all — the same blanket vector through a side door.
+  if (sub === "commit") {
+    for (let i = 2; i < tokens.length; i++) {
+      const t = tokens[i];
+      if (t === "--all")
+        return "git commit --all denied (stages every tracked change, bypassing scoped add) — commit only files you explicitly staged";
+      if (t.startsWith("-") && !t.startsWith("--") && t.slice(1).includes("a"))
+        return `git commit ${t} denied (the -a flag stages every tracked change, bypassing scoped add) — commit only files you explicitly staged`;
+    }
+  }
   return null;
 }
 

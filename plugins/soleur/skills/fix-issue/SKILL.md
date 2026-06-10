@@ -154,10 +154,10 @@ If no test baseline was established in Phase 2, treat any test failures as poten
 
 ## Phase 5: Commit, Push, and Open PR
 
-Stage, commit, and push:
+Stage, commit, and push. Stage ONLY the files this fix touched (the fixed file plus any test file from Phase 4) — never a blanket add: in bot/ephemeral workspaces the working tree can carry scaffolding that must not enter the commit (#5091, destructive PR #5026). Enumerate the changed files from `git status --porcelain` and pass each path explicitly:
 
 ```bash
-git add -A
+git add -- "$FIXED_FILE" "$TEST_FILE"  # every file the fix phase touched, listed explicitly
 git commit -m "[bot-fix] Fix #$ISSUE_NUMBER: $SHORT_DESCRIPTION"
 git push -u origin bot-fix/$ISSUE_NUMBER-$SLUG
 ```
