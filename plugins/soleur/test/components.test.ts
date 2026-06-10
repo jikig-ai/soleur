@@ -10,7 +10,7 @@ import {
   PLUGIN_ROOT,
 } from "./helpers";
 
-const VALID_MODELS = ["inherit", "haiku", "sonnet", "opus"];
+const VALID_MODELS = ["inherit", "haiku", "sonnet", "opus", "fable"];
 const KEBAB_CASE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const SKILL_DESCRIPTION_WORD_BUDGET = 2009; // see #618; bumped +50 for #2725, bumped +100 for #4341, bumped +34 for #4742 (trigger-cron skill description, 34 words, against a 1950/1950 zero-headroom baseline), bumped +25 for #5021 (feature-tweet skill description, 25 words, against a 1984/1984 zero-headroom baseline)
 const SKILL_DESCRIPTION_CHAR_LIMIT = 1024;
