@@ -132,6 +132,22 @@ function walkHtmlFiles(dir: string): string[] {
   return out;
 }
 
+// Meta-refresh redirect-stub detection — THE single shared predicate for the
+// size-gated heuristic this file previously copy-pasted at 5 sites (#2711
+// author-card exclusions, #3174 knowsAbout exclusion, #4407 description
+// sampler, the noindex guard). Stubs are tiny (~500 B built); the byte gate
+// keeps a refresh-meta hit inside a large legitimate page from
+// misclassifying it. The regex is attribute-order- and quote-agnostic so a
+// template emitting `<meta content="0;url=…" http-equiv='refresh'>` cannot
+// silently escape detection.
+const REDIRECT_STUB_MAX_BYTES = 2000;
+function isMetaRefreshStub(body: string): boolean {
+  return (
+    body.length < REDIRECT_STUB_MAX_BYTES &&
+    /<meta[^>]*http-equiv=["']refresh["']/i.test(body)
+  );
+}
+
 // -- Test 1: pricing FAQ parity -------------------------------------------
 
 describe("#2707 pricing FAQ — visible <details> matches FAQPage JSON-LD", () => {
@@ -217,10 +233,7 @@ describe("#2711 blog posts render author card + extended Person JSON-LD", () => 
           const idx = join(p, "index.html");
           if (!statSync(p).isDirectory() || !existsSync(idx)) return false;
           const body = readFileSync(idx, "utf8");
-          if (body.length < 2000 && /<meta\s+http-equiv="refresh"/i.test(body)) {
-            return false;
-          }
-          return true;
+          return !isMetaRefreshStub(body);
         })
       : [];
     expect(entries.length).toBeGreaterThan(0);
@@ -234,10 +247,7 @@ describe("#2711 blog posts render author card + extended Person JSON-LD", () => 
           const idx = join(p, "index.html");
           if (!statSync(p).isDirectory() || !existsSync(idx)) return false;
           const body = readFileSync(idx, "utf8");
-          if (body.length < 2000 && /<meta\s+http-equiv="refresh"/i.test(body)) {
-            return false;
-          }
-          return true;
+          return !isMetaRefreshStub(body);
         })
       : [];
     const expectedSameAs = site().author.sameAs;
@@ -467,6 +477,75 @@ describe("GSC coverage regression guard (www→apex host flip)", () => {
   });
 });
 
+// -- GSC "Crawled - not indexed" defensive interim: meta-refresh stubs noindex --
+//
+// The legacy /pages/legal/<slug>.html URLs (and the blog reslug) get edge 301s
+// via the Bulk Redirects list in apps/web-platform/infra/seo-bulk-redirects.tf
+// (same change; live once the #5092 token-widen + apply completes). Until the
+// 301 fires, they are served the meta-refresh fallback (page-redirects.njk,
+// HTTP 200), which Google classifies as "Crawled - currently not indexed".
+// Adding `<meta name="robots" content="noindex">` to every meta-refresh stub is
+// the belt-and-braces interim: even when Googlebot fetches the HTTP-200 stub,
+// it is told not to index the legacy URL. The stub still carries
+// http-equiv="refresh" + <link rel="canonical"> to the clean URL, so a user is
+// still forwarded and a crawler still sees the canonical target. SEO-only; no
+// behavior change for humans. See plan 2026-06-09-fix-gsc-legal-page-redirects-plan.md,
+// #3367, #3297.
+describe("GSC interim — every meta-refresh redirect stub is noindex", () => {
+  // Detect stubs via the shared isMetaRefreshStub predicate (size-gated, used
+  // by the author-card/knowsAbout/description guards in this file). Walking
+  // the built tree (rather than hardcoding the file list) keeps this in
+  // lockstep with _data/pageRedirects.js as redirect entries are added/removed.
+  function metaRefreshStubs(): { rel: string; body: string }[] {
+    return walkHtmlFiles(SITE)
+      .map((full) => ({ rel: full.slice(SITE.length + 1), body: readFileSync(full, "utf8") }))
+      .filter(({ body }) => isMetaRefreshStub(body));
+  }
+
+  test("at least one meta-refresh stub is built (guard is non-vacuous)", () => {
+    expect(metaRefreshStubs().length).toBeGreaterThan(0);
+  });
+
+  test("the 9 legal stubs the bulk-redirect list maps are all present in the walk", () => {
+    // Mirrors the legal source_url set in seo-bulk-redirects.tf 1:1 — if
+    // _data/pageRedirects.js ever loses a legal entry, the suite goes RED here
+    // instead of the noindex guard silently shrinking its coverage.
+    const rels = new Set(metaRefreshStubs().map(({ rel }) => rel));
+    const missing = [
+      "privacy-policy",
+      "cookie-policy",
+      "gdpr-policy",
+      "acceptable-use-policy",
+      "data-protection-disclosure",
+      "individual-cla",
+      "corporate-cla",
+      "disclaimer",
+      "terms-and-conditions",
+    ].filter((slug) => !rels.has(`pages/legal/${slug}.html`));
+    expect(
+      missing,
+      `legal stubs missing from the built walk: ${missing.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  test("every meta-refresh stub carries a robots noindex meta", () => {
+    // Two-step semantic check: find the robots meta (attribute-order- and
+    // quote-agnostic), then require a noindex token in its content — so a
+    // valid future `noindex,follow` or attribute reorder cannot false-RED.
+    const isNoindexed = (body: string): boolean => {
+      const robots = body.match(/<meta[^>]*name=["']robots["'][^>]*>/i);
+      return robots !== null && /content=["'][^"']*noindex/i.test(robots[0]);
+    };
+    const missing = metaRefreshStubs()
+      .filter(({ body }) => !isNoindexed(body))
+      .map(({ rel }) => rel);
+    expect(
+      missing,
+      `meta-refresh stubs missing noindex: ${missing.join(", ")}`,
+    ).toEqual([]);
+  });
+});
+
 // -- Test 11: #3174 Person.knowsAbout holds topical areas, not role/bio ----
 
 describe("#3174 Person JSON-LD knowsAbout is a topical-area array on every emitter", () => {
@@ -528,7 +607,7 @@ describe("#3174 Person JSON-LD knowsAbout is a topical-area array on every emitt
           if (!existsSync(idx) || !statSync(join(blogDir, e)).isDirectory())
             return false;
           const body = readFileSync(idx, "utf8");
-          return !(body.length < 2000 && /<meta\s+http-equiv="refresh"/i.test(body));
+          return !isMetaRefreshStub(body);
         })
       : [];
     expect(entries.length).toBeGreaterThan(0);
@@ -1109,11 +1188,7 @@ describe("#4407 canonical sampled pages render a non-empty <meta name=\"descript
 
       // Skip any redirect stub defensively (a sampled permalink should never be
       // one, but exclude by mechanism rather than by trusting the path).
-      // Plain substring presence check (.includes, not a regex) — this is
-      // trusted built HTML and the marker can appear anywhere in <head>, so a
-      // regex anchor would be semantically wrong; .includes sidesteps the
-      // js/regex/missing-regexp-anchor pattern entirely.
-      if (html.length < 2000 && html.includes('http-equiv="refresh"')) {
+      if (isMetaRefreshStub(html)) {
         continue;
       }
       checked++;

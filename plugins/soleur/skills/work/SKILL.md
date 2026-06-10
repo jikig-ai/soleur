@@ -568,6 +568,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    3. **Terraform validate**: For each infra directory with modified `.tf` files:
       `terraform init -backend=false` then `terraform validate` -- catches HCL syntax errors and undefined references without requiring provider credentials.
 
+   4. **Field-type verification for version-pinned providers**: when writing HCL for a provider pinned below the registry's latest major (e.g., `cloudflare ~> 4.0`), verify field TYPES via `terraform providers schema -json` from a SCRATCH dir pinned to the exact version (minimal `required_providers` main.tf + `terraform init`) -- `validate` silently coerces wrong primitives (v4 `cloudflare_list` redirect items take `"enabled"`/`"disabled"` STRING enums, not booleans; registry/context7 docs show the latest major's syntax). The scratch dir matters: `providers schema` inside the real infra dir demands full backend init. **Why:** PR #5082 -- drafted booleans validated green and would have failed only at apply, behind a BLOCKING token-widen step that would have masked the diagnosis. See `knowledge-base/project/learnings/2026-06-09-cloudflare-bulk-redirects-v4-schema-and-phase-order.md`.
+
    These checks replace the "tests may be skipped" exemption for infra files. If any check fails, fix before proceeding to the next task.
 
    - When cloud-init has `lifecycle { ignore_changes = [user_data] }`, changes to cloud-init templates are never applied to existing servers. Use a `terraform_data` provisioner with `remote-exec` to bridge the gap. Verify systemd services use `EnvironmentFile=` directives (not `/etc/environment`) for token injection.
