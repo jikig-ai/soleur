@@ -2,7 +2,7 @@
 feature: feat-one-shot-betterstack-quota-vector-tuning
 plan: knowledge-base/project/plans/2026-06-10-fix-betterstack-quota-vector-host-metrics-tuning-plan.md
 lane: cross-domain
-status: pending
+status: in-progress
 created: 2026-06-10
 ---
 

@@ -98,7 +98,8 @@ if parse_err != null {
 
 # ---------------- Source 4: host metrics (CPU/mem/disk/net) ----------------
 # 300s scrape (2026-06-10 quota fix — was 30s). Host metrics were >99% of
-# Better Stack ingest (~196k rows/day vs ~50 journald WARN+ rows/day),
+# Better Stack ingest (~196k rows/day vs ~50 WARN+ log rows/day across the
+# journald + app container sources),
 # tripping the 80% free-tier (3 GB/mo logs) warning. 5-min granularity is
 # sufficient for the CPU/mem/disk diagnosis use case. Snap loop devices
 # (loop*) and device-mapper (dm-*) are excluded from the disk + filesystem

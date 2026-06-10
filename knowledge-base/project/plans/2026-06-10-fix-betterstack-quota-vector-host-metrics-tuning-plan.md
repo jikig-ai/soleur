@@ -310,7 +310,7 @@ discoverability_test:
 | Alternative | Why rejected |
 |---|---|
 | Pay for Better Stack tier | Operator-rejected; ledger upgrade trigger ("first paying customer") not fired. $0.00 stands |
-| Drop the host_metrics source entirely | Loses CPU/mem/disk diagnosis capability the source was added for (#4279); operator approved "keep but reduce" |
+| Drop the host_metrics source entirely | Loses CPU/mem/disk diagnosis capability the source was added for (#4250; Better Stack flow since #4279); operator approved "keep but reduce" |
 | Trim `collectors` list (drop network/load) | Less volume impact than the interval (rows scale with scrape count); keeps less signal than interval+excludes for the same cut |
 | Filter host_metrics in a transform (VRL) instead of at source | Violates "transforms byte-for-byte untouched"; source-side filters are the documented native mechanism and ship zero bytes instead of dropping post-scrape |
 | `mountpoints.excludes = ["/snap/*"]` on filesystem | Redundant with `devices.excludes = ["loop*"]`; device-level exclusion also covers the disk collector with one consistent pattern pair |
@@ -331,5 +331,5 @@ No deferred-scope items requiring tracking issues (all alternatives are rejectio
 - `knowledge-base/project/learnings/2026-05-22-vector-vrl-config-gates-and-pii-redaction-pipeline.md`
 - `knowledge-base/project/learnings/2026-05-19-doppler-env-hot-reload-limitation.md` (webhook HMAC form)
 - `knowledge-base/engineering/operations/runbooks/inngest-server.md` (upgrade path; note: its SSH-form webhook examples are superseded by the HTTPS form per `hr-no-ssh-fallback-in-runbooks`)
-- Prior art: PR #4279 (host metrics added), #4293 (PII pipeline + CI gates), #4786 (last vector.toml change), #4669 (cloud-init pin-bump precedent), #4675/#4676 (AC6 drift guard)
+- Prior art: PR #4250 (host metrics added; Better Stack flow since #4279), #4293 (PII pipeline + CI gates), #4786 (last vector.toml change), #4669 (cloud-init pin-bump precedent), #4675/#4676 (AC6 drift guard)
 - Issue #4296 — observability consolidation 60-day re-decision (related context; stays open)
