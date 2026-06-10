@@ -84,7 +84,7 @@ All cited artifacts verified against repo + live state on 2026-06-10:
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** nothing directly — operator-facing observability config. Worst cases: (a) invalid TOML ships → `vector.service` restart fails → host metrics + WARN+ log shipping stop (operator blind spot; guarded by CI `vector validate` pre-merge + `vector_journal_tail` via `/hooks/deploy-status` post-deploy); (b) over-filtering silently drops the `/mnt/data` capacity series → slower diagnosis of a disk-full incident (guarded by AC13's filesystem-presence check; `disk-monitor.sh` independently emails on `/`).
-- **If this leaks, the user's [data / workflow / money] is exposed via:** no new exposure vector — the change strictly *reduces* data shipped to Better Stack (fewer metric rows; zero new fields). The PII scrub pipeline is byte-for-byte unchanged and pinned by parity fixtures (AC5) + CI.
+- **If this leaks, the user's data is exposed via:** no new exposure vector — the change strictly *reduces* data shipped to Better Stack (fewer metric rows; zero new fields). The PII scrub pipeline is byte-for-byte unchanged and pinned by parity fixtures (AC5) + CI.
 - **Brand-survival threshold:** none — `threshold: none, reason: change reduces third-party data egress and touches no user-data processing path; the PII redaction transforms in the same file are diff-locked by AC5 and the CI parity suite.`
 
 ## Implementation Phases
