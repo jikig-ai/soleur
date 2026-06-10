@@ -90,8 +90,10 @@ All Terraform-manageable infrastructure routes through the existing root:
 - **FR4.** Non-statutory mail is summarized by a read-only LLM step (no write tools, no
   repo access) after `sanitizePromptString`-parity sanitization of subject/body/sender
   (incl. `\x7f`, U+2028/U+2029). Output: summary, mail-class badge, sender, received-at.
-- **FR5.** Triage output surfaces as items in the existing conversation inbox (see
-  wireframes) + a ping on the operator notification channel (transport decided at plan
+- **FR5.** Triage output surfaces as items in the existing conversation inbox per the
+  wireframes in `knowledge-base/product/design/inbox/operator-email-triage.pen`
+  (email-triage row + read-only detail; statutory-escalation row pinned with clock +
+  catalog link, per FR3) + a ping on the operator notification channel (transport decided at plan
   time: server-side Slack webhook vs existing web-push hierarchy — Open Question 1).
   GitHub issues are forbidden as a surface (third-party PII).
 - **FR6.** **Parse-and-discard:** raw bodies are discarded after triage; persisted data =
