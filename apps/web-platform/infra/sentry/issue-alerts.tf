@@ -628,3 +628,57 @@ resource "sentry_issue_alert" "kb_sync_silent_failure" {
     ignore_changes = [environment]
   }
 }
+
+# #5046 PR-2 (AC-P2.10) — container egress firewall fail-loud alert. The
+# nftables default-drop logs to the kernel journal; cron-egress-resolve.sh
+# counts fresh `egress-blocked:` hits each 5-min tick and posts ONE error
+# event tagged feature=cron-egress-firewall / op=egress_blocked. A block of
+# a NEEDED host (allowlist gap / frozen set) must page — silent egress loss
+# is the exact silent-green failure the umbrella issue exists to prevent.
+# Modeled on kb_sync_silent_failure; unique frequency (30) so this alert's
+# re-notification cadence is distinguishable in Sentry's alert list.
+resource "sentry_issue_alert" "egress_blocked" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "cron-egress-blocked"
+  action_match = "any"
+  filter_match = "all"
+  frequency    = 30
+
+  conditions_v2 = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "EQUAL"
+        value = "cron-egress-firewall"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "op"
+        match = "IS_IN"
+        value = "egress_blocked"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors kb_sync_silent_failure): IssueOwners falls
+  # through to ActiveMembers, paging the solo founder. Events carry only
+  # kernel packet metadata (IPs/ports) — no cross-tenant content.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}

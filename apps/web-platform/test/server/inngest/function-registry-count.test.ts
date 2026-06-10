@@ -106,9 +106,13 @@ const KNOWN_UNMONITORED_SLUGS = new Set([
   "cron-workspace-sync-health",
 ]);
 
-const GHA_ONLY_MONITORS = new Set([
+const NON_INNGEST_MONITORS = new Set([
   "scheduled-terraform-drift",
   "scheduled-realtime-probe",
+  // #5046 PR-2: HOST-systemd-fired (cron-egress-resolve.timer pings the
+  // check-in from cron-egress-resolve.sh) — not an Inngest function and not
+  // a GHA workflow; same "no cron-*.ts counterpart" class as the GHA pair.
+  "cron-egress-resolve",
 ]);
 
 describe("Inngest function registry — drift guards", () => {
@@ -159,7 +163,7 @@ describe("Inngest function registry — drift guards", () => {
     const slugValues = new Set(slugMap.values());
     const phantom: string[] = [];
     for (const name of tfMonitors) {
-      if (!slugValues.has(name) && !GHA_ONLY_MONITORS.has(name)) {
+      if (!slugValues.has(name) && !NON_INNGEST_MONITORS.has(name)) {
         phantom.push(name);
       }
     }

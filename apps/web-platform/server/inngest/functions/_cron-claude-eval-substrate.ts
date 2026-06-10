@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -136,6 +136,13 @@ export function spawnSimple(
 // from this map (or mapped to []) is fully fail-closed → its bash is denied → it
 // self-reports FAILED → Tier-2 (egress firewall) restores it. Only crons whose
 // entire command surface is a finite allowlist are Tier-1.
+export const ISSUE_CREATOR_BASH_ALLOWLIST = [
+  "gh issue list",
+  "gh issue create",
+  "gh label list",
+  "gh label create",
+];
+
 export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
   "cron-roadmap-review": [
     "gh issue list",
@@ -163,6 +170,15 @@ export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
     "git push",
     "git rev-parse",
   ],
+  // #5046 PR-2 Phase 2.C — the two Task-class audit crons restored by the
+  // relax-minimal hook share one issue-creator surface (single const so the
+  // two cannot drift apart). Issue-creators only: NO git verbs (their
+  // prompts forbid commits/pushes), NO `gh api` (F4a: arbitrary-method API
+  // access defeats the exfil defense), NO raw egress binaries. `gh label`
+  // covers first-run label bootstrap. Pipes stay metachar-denied; the
+  // prompts instruct pipe-free cap checks and --body-file (not env vars).
+  "cron-agent-native-audit": ISSUE_CREATOR_BASH_ALLOWLIST,
+  "cron-legal-audit": ISSUE_CREATOR_BASH_ALLOWLIST,
 };
 
 // Inert base overlay. `sandbox.enabled:false` = the host-independence fix;
@@ -266,6 +282,74 @@ export function runHookSelfTest(args: {
           `was NOT allowed (allowlist not delivered). Aborting cron.`,
       );
     }
+  }
+
+  // Tier-2 relax gate (#5046 PR-2, AC-P2.2). The hook's catch-all now allows
+  // Task/Skill ONLY because sub-agents inherit this same hook — their interior
+  // Bash hits the SAME containment the canonical-exfil probe above just proved.
+  // Three spawn-time assertions keep that inference honest, per spawn:
+  //   (1) Task allows — the relaxed hook actually shipped in this clone (a
+  //       stale/reverted hook would fail-close every Task-using cron);
+  //   (2) an unknown tool class still denies — the relax did not destroy the
+  //       fail-closed catch-all (a new tool class must never fail-open);
+  //   (3) the spawn's settings.json registers THIS hook under a `*` matcher —
+  //       the structural precondition for sub-agent inheritance (probe D-new-1:
+  //       a tool class with no matcher FAILS OPEN, so a narrowed matcher would
+  //       leave a sub-agent's tool calls unhooked).
+  // Any failure throws → the cron aborts (FAILED self-report), so a Task-using
+  // cron never runs with an unverified relax.
+  // Probe Task AND Skill separately: today they share one switch case, but a
+  // future hook edit could split them — and a clone carrying a Task-only
+  // intermediate would silently fail-close every Skill-invoking cron.
+  for (const relaxedTool of ["Task", "Skill"]) {
+    const allowed = run({ tool_name: relaxedTool, tool_input: {} });
+    if (!allowed.includes('"permissionDecision":"allow"')) {
+      throw new Error(
+        `[${cronName}] containment hook self-test FAILED: ${relaxedTool} was NOT ` +
+          `allowed (Tier-2 relax not delivered in this clone — a ${relaxedTool}-using ` +
+          `cron would fail-closed). Aborting cron.`,
+      );
+    }
+  }
+  const unknownDenied = run({
+    tool_name: "Tier2FailClosedProbeTool",
+    tool_input: {},
+  });
+  if (!unknownDenied.includes('"permissionDecision":"deny"')) {
+    throw new Error(
+      `[${cronName}] containment hook self-test FAILED: an unknown tool class ` +
+        `was NOT denied (fail-closed catch-all lost — a new tool class would ` +
+        `fail-open). Aborting cron.`,
+    );
+  }
+  let matcherOk = false;
+  try {
+    const settings = JSON.parse(
+      readFileSync(join(spawnCwd, ".claude", "settings.json"), "utf-8"),
+    ) as {
+      hooks?: {
+        PreToolUse?: Array<{
+          matcher?: string;
+          hooks?: Array<{ command?: string }>;
+        }>;
+      };
+    };
+    matcherOk = (settings.hooks?.PreToolUse ?? []).some(
+      (entry) =>
+        entry.matcher === "*" &&
+        (entry.hooks ?? []).some((h) =>
+          (h.command ?? "").includes("cron-bash-allowlist-hook.mjs"),
+        ),
+    );
+  } catch {
+    matcherOk = false; // unreadable/missing settings → registration unverifiable
+  }
+  if (!matcherOk) {
+    throw new Error(
+      `[${cronName}] containment hook self-test FAILED: settings.json does not ` +
+        `register the containment hook under a \`*\` matcher — sub-agent (Task) ` +
+        `tool calls would be unhooked (fail-open per probe D-new-1). Aborting cron.`,
+    );
   }
 }
 

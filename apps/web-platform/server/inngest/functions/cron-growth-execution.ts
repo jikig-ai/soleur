@@ -157,10 +157,11 @@ export async function cronGrowthExecutionHandler({
   step,
   logger,
 }: HandlerArgs): Promise<{ ok: boolean }> {
-  // D6 (#5018): Tier-2-deferred — paused until the egress firewall lands.
-  // Posts an honest on-schedule check-in and skips the claude spawn (no
-  // fail-closed FAILED-issue/RED-monitor storm); the weekly output issue
-  // visibly stops. roadmap-review (#5004) is Tier-1 and is NOT deferred.
+  // D6 (#5018) / #5046 PR-2: still Tier-2-deferred — the firewall landed but
+  // this cron needs per-construct Bash-allowlist refinement or non-GitHub
+  // egress coverage before restore (see TIER2_DEFERRED_CRONS). Posts an
+  // honest on-schedule check-in and skips the claude spawn (no fail-closed
+  // FAILED-issue/RED-monitor storm); the scheduled output issue visibly stops.
   if (
     await deferIfTier2Cron({
       cronName: "cron-growth-execution",
