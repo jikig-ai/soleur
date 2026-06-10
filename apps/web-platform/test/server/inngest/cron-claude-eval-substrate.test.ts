@@ -182,8 +182,14 @@ describe("restored Task-cron allowlists vs the hook (#5046 PR-2 Phase 2.C)", () 
     expect(allow.length).toBeGreaterThan(0);
     expect(allow).toContain("gh issue create");
     expect(allow).toContain("gh issue list");
-    // F4a: never allowlist arbitrary-method gh api or raw egress binaries.
-    expect(allow).not.toContain("gh api");
+    // First-run label bootstrap is load-bearing (gh issue create --label
+    // fails if the label does not exist yet).
+    expect(allow).toContain("gh label list");
+    expect(allow).toContain("gh label create");
+    // F4a: never allowlist arbitrary-method gh api (prefix check — an entry
+    // like "gh api repos/..." would slip an exact-membership assert) or raw
+    // egress binaries.
+    expect(allow.some((p) => p.startsWith("gh api"))).toBe(false);
     expect(allow.some((p) => p.startsWith("curl") || p.startsWith("wget"))).toBe(false);
   });
 
@@ -192,17 +198,24 @@ describe("restored Task-cron allowlists vs the hook (#5046 PR-2 Phase 2.C)", () 
     const v = (command: string) =>
       decide({ tool_name: "Bash", tool_input: { command } }, allow)
         .hookSpecificOutput.permissionDecision;
-    // Faithfully-shaped commands from the cron prompts (cap check runs
-    // WITHOUT the prompt's `| wc -l` pipe — the metachar layer denies pipes
-    // and the agent adapts by counting the listed lines itself).
+    // Faithfully-shaped commands from the cron prompts (the prompts instruct
+    // a pipe-free cap check — the metachar layer denies pipes outright).
     expect(
       v('gh issue create --milestone "Post-MVP / Later" --title "[Scheduled] Legal Audit — x" --body-file /tmp/finding.md --label scheduled-legal-audit'),
     ).toBe("allow");
     expect(
       v("gh issue list --label scheduled-agent-native-audit --state open --limit 30"),
     ).toBe("allow");
-    // The pipe form the prompt suggests is still metachar-denied (containment
-    // layer unchanged — the allowlist cannot re-admit it).
+    // The idempotency dedup form the prompts mandate (quoted --search value
+    // with spaces survives tokenization; metachar-bearing summaries deny).
+    expect(
+      v("gh issue list --label scheduled-legal-audit --search 'consent banner gap in:title' --state all --limit 5"),
+    ).toBe("allow");
+    expect(
+      v("gh issue list --label scheduled-legal-audit --search \"$(cat /tmp/x) in:title\" --state all --limit 5"),
+    ).toBe("deny");
+    // A raw pipe is still metachar-denied (containment layer unchanged —
+    // the allowlist cannot re-admit it).
     expect(
       v("gh issue list --label scheduled-agent-native-audit --state open --limit 30 | wc -l"),
     ).toBe("deny");
@@ -347,6 +360,25 @@ describe("runHookSelfTest (AC2c fail-closed + AC-P2.2 relax gate)", () => {
     expect(() =>
       runHookSelfTest({ spawnCwd, cronName: "cron-x", allow: [] }),
     ).toThrow(/matcher|settings/);
+  });
+
+  it("throws when settings.json is MALFORMED (parse failure → fail-closed)", () => {
+    const spawnCwd = makeSpawnCwd();
+    writeFileSync(join(spawnCwd, ".claude/settings.json"), "{not json", "utf-8");
+    expect(() =>
+      runHookSelfTest({ spawnCwd, cronName: "cron-x", allow: [] }),
+    ).toThrow(/matcher/);
+  });
+
+  it("throws when the delivered hook does NOT allow Skill (probed separately from Task)", () => {
+    // A clone carrying a Task-only intermediate hook would otherwise
+    // fail-close every Skill-invoking cron with the Task probe green.
+    const spawnCwd = makeSpawnCwd({
+      hookSource: stubHook({ Task: "allow" }, "deny"),
+    });
+    expect(() =>
+      runHookSelfTest({ spawnCwd, cronName: "cron-x", allow: [] }),
+    ).toThrow(/Skill/);
   });
 });
 

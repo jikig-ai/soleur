@@ -17,6 +17,8 @@ set -uo pipefail
 LOG_TAG="cron-egress-alarm"
 SENTRY_SLUG="cron-egress-resolve"
 FAILED_UNIT="${1:-unknown-unit}"
+EMAIL_COOLDOWN_FILE="/run/cron-egress-alarm.last-email"
+EMAIL_COOLDOWN_SECS=1800
 
 log() { echo "[$LOG_TAG] $*"; }
 
@@ -30,6 +32,19 @@ else
 fi
 
 # --- Channel 2: Resend email (disk-monitor.sh precedent) ---
+# Cooldown: a sustained failure fires OnFailure= every timer tick; Sentry
+# dedupes but the inbox does not — cap emails to one per 30 min.
+if [[ -f "$EMAIL_COOLDOWN_FILE" ]]; then
+  last="$(stat -c %Y "$EMAIL_COOLDOWN_FILE" 2>/dev/null || echo 0)"
+  if (( $(date +%s) - last < EMAIL_COOLDOWN_SECS )); then
+    log "email cooldown active — skipping Resend channel (Sentry check-in still posted)"
+    RESEND_API_KEY=""
+  fi
+fi
+if ! command -v jq >/dev/null; then
+  log "WARNING: jq not found — skipping email channel"
+  RESEND_API_KEY=""
+fi
 if [[ -n "${RESEND_API_KEY:-}" ]]; then
   HOSTNAME_STR="$(hostname)"
   JOURNAL_TAIL="$(journalctl -u "$FAILED_UNIT" -n 20 --no-pager 2>/dev/null | tail -c 2000 || echo '(journal unavailable)')"
@@ -46,9 +61,13 @@ ${JOURNAL_TAIL}" \
     -H "Authorization: Bearer ${RESEND_API_KEY}" \
     -H "Content-Type: application/json" \
     -d "$PAYLOAD" 2>/dev/null)" || HTTP_CODE="000"
-  [[ "$HTTP_CODE" =~ ^2 ]] || log "WARNING: Resend POST failed (HTTP ${HTTP_CODE})"
+  if [[ "$HTTP_CODE" =~ ^2 ]]; then
+    touch "$EMAIL_COOLDOWN_FILE"
+  else
+    log "WARNING: Resend POST failed (HTTP ${HTTP_CODE})"
+  fi
 else
-  log "WARNING: RESEND_API_KEY unset — skipping email alarm"
+  log "WARNING: RESEND_API_KEY unset/suppressed — skipping email alarm"
 fi
 
 log "alarm dispatched for ${FAILED_UNIT}"

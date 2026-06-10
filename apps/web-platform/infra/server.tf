@@ -313,7 +313,7 @@ resource "terraform_data" "journald_persistent" {
 #
 # WHY SSH IS NOT A #3756 REGRESSION: #3756 replaced ONLY deploy_pipeline_fix's SSH
 # provisioner with the webhook, to keep the *routine* deploy-config push HTTPS-only.
-# SSH was never removed from the stack — 7 sibling terraform_data resources here
+# SSH was never removed from the stack — 8 sibling terraform_data resources here
 # still use connection{type="ssh"} today (disk_monitor_install, resource_monitor_install,
 # fail2ban_tuning, journald_persistent, docker_seccomp_config, apparmor_bwrap_profile,
 # orphan_reaper_install). This is a HYBRID of the established siblings: the
@@ -344,7 +344,7 @@ resource "terraform_data" "journald_persistent" {
 # can restart + assert active immediately. Do NOT copy the deferred-restart dance.
 #
 # Shows as "will be created" in CI drift reports -- expected behavior, same as the
-# 7 sibling SSH provisioners. Apply-path firewall note: SSH:22 is allowlisted to
+# 8 sibling SSH provisioners. Apply-path firewall note: SSH:22 is allowlisted to
 # var.admin_ips only (firewall.tf) for DIRECT-IP dials. The OPERATOR-LOCAL apply
 # dials the direct IP, so its handshake succeeds iff the operator egress IP ∈
 # admin_ips. A `connection reset by peer` on the operator path is admin-IP drift
@@ -781,7 +781,14 @@ resource "terraform_data" "cron_egress_firewall" {
   }
 
   provisioner "remote-exec" {
+    # `set -e` FIRST: terraform joins `inline` into ONE script with NO implicit
+    # errexit, and the provisioner fails only on the LAST command's exit — so
+    # without it every assertion below is decorative (the silent-green failure
+    # AC-P2.8 exists to prevent; caught by 5 review agents on PR #5089). The
+    # enforcement probes use explicit if/exit-1 because `!`-prefixed pipelines
+    # are errexit-exempt under POSIX.
     inline = [
+      "set -e",
       "chmod +x /usr/local/bin/cron-egress-nftables.sh /usr/local/bin/cron-egress-resolve.sh /usr/local/bin/cron-egress-alarm.sh",
       "systemctl daemon-reload",
       "systemctl enable --now cron-egress-firewall.service",
@@ -797,13 +804,16 @@ resource "terraform_data" "cron_egress_firewall" {
       # ...and ENFORCEMENT: egress-probe-positive — an allowlisted host reaches
       # from inside the container; egress-probe-negative — a non-allowlisted
       # host is dropped (curl times out). An inert ruleset fails the negative
-      # probe, aborting the apply (AC-P2.8 merge precondition).
-      "docker exec soleur-web-platform curl -s -o /dev/null --max-time 20 https://api.github.com && echo egress-probe-positive-ok",
-      "! docker exec soleur-web-platform curl -s -o /dev/null --max-time 8 https://example.com && echo egress-probe-negative-ok",
+      # probe, aborting the apply (AC-P2.8 merge precondition). On a FRESH host
+      # the first infra apply precedes the first deploy (no container yet) —
+      # skip the container probes LOUDLY; the next apply after deploy proves
+      # enforcement (hr-fresh-host-provisioning: the server_id trigger re-runs
+      # this provisioner on host replacement anyway).
+      "if docker ps --format '{{.Names}}' | grep -qx soleur-web-platform; then if ! docker exec soleur-web-platform curl -s -o /dev/null --max-time 20 https://api.github.com; then echo 'egress-probe-positive FAILED: allowlisted host unreachable from container'; exit 1; fi; echo egress-probe-positive-ok; if docker exec soleur-web-platform curl -s -o /dev/null --max-time 8 https://example.com; then echo 'egress-probe-negative FAILED: ruleset is INERT (non-allowlisted host reachable)'; exit 1; fi; echo egress-probe-negative-ok; else echo 'WARNING: soleur-web-platform not running — enforcement probes SKIPPED (fresh-host bootstrap); re-apply after first deploy to prove enforcement'; fi",
       # Host egress untouched (AC-P2.7 spot-check; DOCKER-USER never filters
       # host OUTPUT — cloudflared/Vector/GHCR/apt are out of scope by design).
-      "curl -s -o /dev/null --max-time 10 https://api.github.com && echo host-egress-ok",
-      "echo 'cron-egress firewall provisioned; live positive+negative probes passed'",
+      "curl -s -o /dev/null --max-time 10 https://api.github.com",
+      "echo host-egress-ok",
     ]
   }
 }

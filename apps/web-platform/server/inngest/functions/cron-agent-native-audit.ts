@@ -47,15 +47,16 @@
 //
 // GH TOKEN — installation token minted via createProbeOctokit() →
 // installation discovery → generateInstallationToken(installation.id).
-// Injected as GH_TOKEN so the spawned claude can run `gh api ...`,
-// `gh issue create`, `gh pr create`, `gh label create`, `git push`.
+// Injected as GH_TOKEN so the spawned claude can run its allowlisted
+// issue-creator surface (`gh issue list/create`, `gh label list/create` —
+// the ONLY Bash verbs the containment hook permits this cron; #5046 PR-2).
 
 import {
   redactToken,
   mintInstallationToken,
   deferIfTier2Cron,
   postSentryHeartbeat,
-  DEFAULT_CRON_TOKEN_PERMISSIONS,
+  ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS,
   REPO_NAME,
   type HandlerArgs,
 } from "./_cron-shared";
@@ -124,9 +125,11 @@ principle sub-agents produces a scored finding; collect findings
 into a structured list before filing.
 
 Cap enforcement is mandatory:
-  CAP_OPEN_ISSUES = 20   (refuse to file when reached; check via
+  CAP_OPEN_ISSUES = 20   (refuse to file when reached; run
                           \`gh issue list --label scheduled-agent-native-audit
-                           --state open --limit 30 | wc -l\`)
+                           --state open --limit 30\` and count the listed
+                          issues yourself — shell pipes such as | wc -l are
+                          denied by the containment hook)
   CAP_PER_RUN     = 5    (severity-ranked top-N filed per run)
 
 For each filed issue:
@@ -142,9 +145,11 @@ Idempotency: before filing, check
 and skip if any existing issue (open or closed within 30 days)
 matches. Prevents reopen-loops on stable findings.
 
-Injection safety: write each finding's title and body to env vars
-or files BEFORE \`gh issue create\` — never interpolate agent output
-into bash \`run:\` commands directly.
+Injection safety: write each finding's body to a file (the Write
+tool) and pass it via \`--body-file <path>\` BEFORE \`gh issue
+create\` — never interpolate agent output into bash commands
+directly (env-var assignment prefixes are denied by the
+containment hook).
 `;
 
 // Spawn-env allowlist (NOT a denylist). PR-5 shape verbatim — the keys
@@ -186,16 +191,16 @@ export async function cronAgentNativeAuditHandler({
 
   // --- Step 1: mint installation token (memoized across replays) ---
   // The raw token string is the return value (NEVER log this value).
-  // Least-privilege scope (#5046 PR-2): this cron is an issue-creator only
-  // (allowlisted Bash = gh issue list/create + gh label), so the token needs
-  // contents/issues/PR write, never actions/admin/checks. Repo-scoped to
-  // soleur → a leaked GH_TOKEN is bounded to a single-user incident.
+  // Least-privilege scope (#5046 PR-2): issue-creator preset — contents:read
+  // (clone) + issues:write (issue/label filing). Push/PR stay denied at the
+  // TOKEN layer, not solely by the hook. Repo-scoped to soleur → a leaked
+  // GH_TOKEN is bounded to a single-user incident.
   const installationToken = await step.run(
     "mint-installation-token",
     async () => {
       return mintInstallationToken({
         tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
-        permissions: DEFAULT_CRON_TOKEN_PERMISSIONS,
+        permissions: ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS,
         repositories: [REPO_NAME],
       });
     },

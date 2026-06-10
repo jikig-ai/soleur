@@ -630,16 +630,21 @@ unhooked tool class / crashed hook fails OPEN. So:
 ### Tier-1 vs Tier-2
 
 - **Tier-1** (hook-contained, scheduled): crons whose entire command surface is a finite
-  allowlist — currently `cron-roadmap-review` (#5004). Add a cron here by enumerating its
+  allowlist — currently `cron-roadmap-review` (#5004) plus the two #5046 PR-2 restores
+  `cron-agent-native-audit` and `cron-legal-audit` (issue-creator allowlists; the hook's
+  catch-all now allows `Task`/`Skill`). Add a cron here by enumerating its
   prompt's `gh`/`git` verbs into `CRON_BASH_ALLOWLISTS` (sub-command granularity, e.g.
   `gh issue list` NOT `gh issue`; never `git config`/`git remote`) and validating end-to-end
   via `/soleur:trigger-cron`.
-- **Tier-2** (`TIER2_DEFERRED_CRONS`, PAUSED): broad-bash crons (and Node-level
-  `spawn("bash")` crons, which the hook does NOT cover at all). They early-return via
-  `deferIfTier2Cron` — an honest on-schedule check-in, no claude spawn, no output issue.
-  **Visible degradation:** their weekly `[Scheduled]` output issues stop appearing (this is
-  expected, not a regression). They are restored by the **Tier-2 network-egress firewall +
-  least-privilege installation token** (deferred follow-up) — the durable boundary.
+- **Tier-2** (`TIER2_DEFERRED_CRONS`, PAUSED): the remaining nine broad-bash crons. They
+  early-return via `deferIfTier2Cron` — an honest on-schedule check-in, no claude spawn, no
+  output issue. **Visible degradation:** their scheduled `[Scheduled]` output issues stop
+  appearing (this is expected, not a regression). The Tier-2 **network-egress firewall +
+  least-privilege installation token LANDED** (#5046 PR-1/PR-2, ADR-051) — the firewall now
+  contains the 4 Node-level `spawn("bash")` crons (which the hook does not cover); the nine
+  stay paused on a DIFFERENT criterion: six PR-flow crons need per-construct Bash-allowlist
+  refinement (`date -u`, dynamic `checkout -b`, `npx eleventy` — evidence-gated), and
+  bug-fixer/community-monitor/ux-audit need non-GitHub egress coverage.
 
 **Promoting a paused cron to Tier-1:** enumerate its verbs → add to `CRON_BASH_ALLOWLISTS`
 → remove from `TIER2_DEFERRED_CRONS` → `/soleur:trigger-cron <cron>` and confirm it produces

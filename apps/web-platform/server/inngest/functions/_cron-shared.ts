@@ -125,6 +125,18 @@ export const DEFAULT_CRON_TOKEN_PERMISSIONS: Record<string, string> = {
   pull_requests: "write",
 };
 
+// Issue-creator preset (#5046 PR-2, narrowed at review): the restored audit
+// crons clone (contents:read suffices for the x-access-token clone) and file
+// issues/labels (issues:write covers labels) — they never push or open PRs,
+// so write capability is denied at the TOKEN layer too, not solely by the
+// containment hook (defense-in-depth: if sub-agent hook inheritance ever
+// fails, contents:write would otherwise be a push primitive to the public
+// auto-deploying repo).
+export const ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS: Record<string, string> = {
+  contents: "read",
+  issues: "write",
+};
+
 export async function mintInstallationToken(opts: {
   tokenMinLifetimeMs: number;
   // Optional least-privilege scope. Omitted → full installation grant (the
@@ -251,8 +263,9 @@ export async function deferIfTier2Cron(args: {
   if (!TIER2_DEFERRED_CRONS.has(cronName)) return false;
   logger.warn(
     { fn: cronName, status: "tier-2-deferred" },
-    `${cronName} is Tier-2-deferred (#5018): the containment hook denies its bash; ` +
-      `paused until the egress firewall lands. Skipping claude spawn this run.`,
+    `${cronName} is Tier-2-deferred (#5018/#5046): the containment hook denies its bash ` +
+      `constructs; restoration needs per-construct allowlist refinement or non-GitHub ` +
+      `egress coverage (see TIER2_DEFERRED_CRONS). Skipping claude spawn this run.`,
   );
   await step.run("tier2-deferred-heartbeat", async () => {
     await postSentryHeartbeat({ ok: true, sentryMonitorSlug, cronName, logger });

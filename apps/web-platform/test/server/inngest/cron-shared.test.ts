@@ -46,6 +46,7 @@ import {
   mintInstallationToken,
   REPO_NAME,
   resolveOutputAwareOk,
+  ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS,
   TIER2_DEFERRED_CRONS,
   verifyScheduledIssueCreated,
 } from "@/server/inngest/functions/_cron-shared";
@@ -122,6 +123,17 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
   it("agent-native-audit + legal-audit are RESTORED (out of the deferred set) — #5046 PR-2", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-agent-native-audit")).toBe(false);
     expect(TIER2_DEFERRED_CRONS.has("cron-legal-audit")).toBe(false);
+  });
+
+  it("ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS is exactly contents:read + issues:write (#5046 PR-2)", () => {
+    expect(ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS).toEqual({
+      contents: "read",
+      issues: "write",
+    });
+    // Push/PR capability must stay denied at the token layer for the
+    // issue-creator crons — defense-in-depth beneath the containment hook.
+    expect(ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS).not.toHaveProperty("pull_requests");
+    expect(ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS.contents).not.toBe("write");
   });
 
   it("the other nine stay deferred (honest restore scope — no over-promise)", () => {

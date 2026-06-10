@@ -42,21 +42,36 @@ bridge**, applied in the `DOCKER-USER` chain (table `ip filter`):
    (`cron-egress-allowlist.txt`, one evidence comment per host). Because the
    firewall scopes the WHOLE container — the Next.js app included — the list
    carries app-egress hosts the cron-centric framing missed: Resend,
-   Buttondown, Cloudflare API, Stripe, Hetzner, and the three browser push
-   services. Dynamic hosts (Sentry ingest, Supabase) resolve from the doppler
-   env at timer run.
+   Buttondown, Cloudflare API, Stripe, Hetzner, the three browser push
+   services, and the first-party canary targets (soleur.ai, app.soleur.ai,
+   api.soleur.ai — live plain-fetch crons dial them THROUGH the firewall).
+   Dynamic hosts (Sentry ingest, Supabase) resolve from the doppler env at
+   timer run; an expected-but-absent env var forces the tick additive-only
+   (a Doppler rename must never prune the live Supabase IPs).
 4. **Re-resolve over SNI proxy.** A host-side systemd timer
-   (`cron-egress-resolve.timer`, 5 min) re-resolves hostnames → IPs:
-   additive-then-prune in one atomic `nft -f` transaction, fail-safe on empty
-   resolution, additive-only when any host fails to resolve. An SNI proxy was
-   rejected as a standing SPOF (proxy dies → all crons dark); the IP-rotation
-   race is fail-loud/self-correcting (block → Sentry `egress_blocked` +
-   missed heartbeat). Escalate to a proxy only on observed production churn.
-5. **Fail-loud, three channels:** kernel `egress-blocked:` drops are counted
-   each tick and posted as a Sentry error event (`feature=
-   cron-egress-firewall`, `op=egress_blocked` → paging issue alert); the
-   resolve timer posts a Sentry Crons check-in (dead timer = missed check-in);
-   `OnFailure=` fires a Sentry error check-in + Resend email.
+   (`cron-egress-resolve.timer`, 1 min — the window IS the user-facing blast
+   radius of an IP rotation) re-resolves hostnames → IPs: additive-then-prune
+   in one atomic `nft -f` transaction, fail-safe on empty resolution,
+   additive-only when any host fails to resolve. The resolved set UNIONS the
+   host's view with the container's own `getent` view (one `docker exec` per
+   tick) — CDN/geo answers diverge per resolver, and the container's answers
+   are the IPs it will actually dial. Each tick also re-asserts the
+   DOCKER-USER jump + default-drop and re-runs the loader when absent
+   (self-heal: a mid-life `nft flush` must not fail open silently). An SNI
+   proxy was rejected as a standing SPOF (proxy dies → all crons dark); the
+   IP-rotation race is fail-loud/self-correcting (block → Sentry
+   `egress_blocked` + missed heartbeat). Escalate to a proxy only on observed
+   production churn.
+5. **Fail-loud, three channels:** kernel drops — BOTH `egress-blocked:` and
+   `egress-dns-exfil:` prefixes — are counted each tick and posted as a
+   Sentry error event (`feature=cron-egress-firewall`, `op=egress_blocked` →
+   paging issue alert, with a remediation pointer in `extra`); the resolve
+   timer posts a Sentry Crons check-in (dead timer = missed check-in);
+   `OnFailure=` fires a Sentry error check-in + Resend email (30-min
+   cooldown). The kernel log lines themselves do NOT ship to Better Stack
+   (Vector's journald sources are priority/unit-scoped) — the Sentry event
+   is the no-SSH channel for drop forensics. Runbook:
+   `knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md`.
 6. **Availability over containment at bootstrap:** the loader populates the
    allowlist sets BEFORE installing the default-drop; if resolution fails it
    aborts (fail-open) and alarms rather than blackholing the app.
@@ -77,6 +92,22 @@ bridge**, applied in the `DOCKER-USER` chain (table `ip filter`):
   claude-eval crons; for the spawn-bash 4, GHA isolation (#5073) is the layer
   that would close this. Bounded to single-user incident by the repo-scoped
   narrowed token.
+- **DNS-tunnel residual (named honestly):** the pin blocks dialing an
+  arbitrary resolver, NOT tunneling *through* the pinned resolver — a
+  compromised spawn-cron can still encode bytes into
+  `<base32>.attacker.com` labels that the legitimate recursive resolver
+  delivers to the attacker's authoritative NS. Low-bandwidth, logged
+  (every off-pin attempt) but the on-pin channel is open; closing it needs
+  a filtering resolver (same #5073 evidence-gated escalation class).
+- **CDN shared-IP broadening (named honestly):** acceptance is by
+  destination IPv4 with no SNI/Host filtering, and several allowlisted
+  hosts are CDN-fronted on shared anycast ranges (Fastly for github.com,
+  Cloudflare for discord.com, etc.) — the truly reachable host set is
+  therefore larger than the named list (any host co-resident on an
+  allowlisted CDN IP). Similarly, an allowlisted IP serving DoH is
+  reachable on 443 regardless of the port-53 pin. Both concentrate on the
+  4 spawn-bash crons (claude-eval crons keep the hook's secret-read
+  severance); an SNI-aware proxy is the escalation if evidence demands it.
 - Adding a new external dependency to the app now requires an allowlist edit
   (`cron-egress-allowlist.txt`) — enforced fail-loud by the `egress_blocked`
   alert, guarded by `cron-egress-firewall.test.sh`.
@@ -87,7 +118,10 @@ bridge**, applied in the `DOCKER-USER` chain (table `ip filter`):
 
 ## AP compliance
 
-- **AP-001 (no new standing services):** upheld — systemd oneshot + timer on
-  the existing host; no proxy daemon.
-- **AP-002 (advisory tier):** consistent with the 8 sanctioned SSH-provisioner
-  siblings; the firewall is host config, not a new deployable.
+- **AP-001 (Terraform-only infrastructure provisioning):** upheld — the
+  firewall lands via `terraform_data.cron_egress_firewall` in the existing
+  `apps/web-platform/infra/` root; no out-of-band provisioning. No new
+  standing service either: systemd oneshot + timer, no proxy daemon.
+- **AP-002 (no SSH state mutation):** advisory-tier exception, consistent
+  with the 8 sanctioned SSH-provisioner siblings (the `docker_seccomp_config`
+  class) — SSH is the terraform-driven apply transport, not ad-hoc mutation.

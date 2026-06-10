@@ -549,23 +549,24 @@ resource "sentry_cron_monitor" "scheduled_workspace_gc" {
 }
 
 # #5046 PR-2 — host-side egress-allowlist re-resolve timer
-# (cron-egress-resolve.timer, every 5 min). A DEAD timer freezes the
+# (cron-egress-resolve.timer, every 1 min). A DEAD timer freezes the
 # nftables allowlist set → progressive then total container egress loss as
 # SaaS IPs rotate, so missed-check-in detection is the load-bearing alarm
-# (the unit's OnFailure= only fires when the service RUNS and fails).
-# failure_issue_threshold=3 (~15 min of silence) absorbs reboot windows
-# without paging the solo founder on a single jittered tick; the systemd
-# timer is monotonic (OnUnitActiveSec), not wall-aligned, so the margin is
-# sized generously. Slug MUST match SENTRY_SLUG in cron-egress-resolve.sh
-# and cron-egress-alarm.sh.
+# (the unit's OnFailure= only fires when the service RUNS and fails — a
+# hang or a never-firing timer pages ONLY here). The systemd timer is
+# monotonic (OnUnitActiveSec), not wall-aligned, so check-ins drift across
+# crontab windows: margin 5 + threshold 5 pages after ~10 min of true
+# silence while absorbing reboot windows and per-tick jitter. Slug MUST
+# match SENTRY_SLUG in cron-egress-resolve.sh and cron-egress-alarm.sh
+# (parity-asserted by cron-egress-firewall.test.sh).
 resource "sentry_cron_monitor" "cron_egress_resolve" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "cron-egress-resolve"
-  schedule                = { crontab = "*/5 * * * *" }
-  checkin_margin_minutes  = 15
+  schedule                = { crontab = "* * * * *" }
+  checkin_margin_minutes  = 5
   max_runtime_minutes     = 5
-  failure_issue_threshold = 3
+  failure_issue_threshold = 5
   recovery_threshold      = 1
   timezone                = "UTC"
 }

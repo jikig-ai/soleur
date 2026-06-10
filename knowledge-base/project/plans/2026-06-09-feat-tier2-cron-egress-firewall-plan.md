@@ -167,9 +167,16 @@ the coupled hook relaxation).
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** a restored cron silently fails (allowlist gap) and the
-founder loses weekly output with monitors green; OR (PR-2) the cloudflared tunnel is severed and the
-whole app + deploy path goes dark.
+**If this lands broken, the user experiences:** the firewall is CONTAINER-scoped, so a broken
+allowlist fronts every app-user flow, not just crons — anonymous prospect (waitlist POST to
+Buttondown), authenticated chat user (Anthropic + Supabase), push-subscribed user (FCM/Mozilla/
+Apple), BYOK key owner (Stripe/Hetzner/Cloudflare validation), invited member (Resend email), plus
+the first-party canaries (soleur.ai / app.soleur.ai). A blocked needed host = silent connect hang
+then an error; mitigations: grep-enumerated allowlist + exact-set test guard, 1-min re-resolve with
+container-view union, additive-only on any failure, `egress_blocked` paging alert. A restored cron
+can also silently fail (allowlist gap → monitors green, no output); OR the cloudflared tunnel is
+severed and the whole app + deploy path goes dark (prevented by DOCKER-USER scoping — host OUTPUT
+untouched).
 
 **If this leaks, the user's data/credentials are exposed via:** an over-broad installation token
 (cross-repo write) or an egress gap on a `spawn("bash")` cron exfiltrating agent-context
@@ -444,7 +451,12 @@ None (checked `gh issue list --label code-review --state open` against PR-1 file
 - AC-P2.4 — **every external allowlisted host succeeds** (2xx/4xx, not timeout): `api.anthropic.com`,
   `github.com`, `api.github.com`, `<SENTRY_INGEST_DOMAIN>` (Sentry-ingest — explicitly probed),
   `<ref>.supabase.co`, `api.doppler.com`, `edge.api.flagsmith.com`, `api.x.com`, `api.linkedin.com`,
-  `bsky.social`, `discord.com`, `plausible.io`.
+  `bsky.social`, `discord.com`, `plausible.io` — plus the review-discovered app-egress set:
+  `api.resend.com`, `api.buttondown.com`, `api.cloudflare.com`, `api.stripe.com`,
+  `api.hetzner.cloud`, `fcm.googleapis.com`, `updates.push.services.mozilla.com`,
+  `web.push.apple.com`, and the first-party canary targets `soleur.ai`/`app.soleur.ai`/
+  `api.soleur.ai` (+ dormant `api.supabase.com`). 22 static hosts, exact-set-guarded by
+  `cron-egress-firewall.test.sh`.
 - AC-P2.5 — **host-gateway :8288 (self-hosted Inngest) reachable** from the container
   (`curl http://host.docker.internal:8288/...`) — the fail-loud path is intact.
 - AC-P2.6 — **DNS-exfil fails:** a UDP/53 query to an arbitrary domain via a **non-pinned resolver** fails
@@ -546,11 +558,11 @@ failure_modes:
   - {mode: re-resolve timer-unit dies → nftables set freezes → eventual total container egress loss, detection: timer heartbeat miss, alert_route: Sentry/Better Stack heartbeat on the timer (PR-2)}
   - {mode: restored cron output not produced (allowlist too tight), detection: output-issue-absent canary per cron, alert_route: trigger-cron validation (PR-1) + missed heartbeat}
 logs:
-  where: journald → Vector → Better Stack; Sentry for errors
+  where: app/unit logs journald → Vector → Better Stack; Sentry for errors. KERNEL drop lines (egress-blocked/egress-dns-exfil) do NOT ship (Vector sources are priority/unit-scoped) — the resolve tick's Sentry egress_blocked event (with sample) is the no-SSH drop-forensics channel
   retention: per journald-soleur.conf cap + Better Stack retention
 discoverability_test:
-  command: gh issue list --search "Growth Audit in:title" --json number,createdAt  # output-issue presence, no ssh
-  expected_output: a recent issue for each restored cron after its first post-restore fire
+  command: gh issue list --label scheduled-agent-native-audit --json number,createdAt && gh issue list --label scheduled-legal-audit --json number,createdAt  # output-issue presence for the two RESTORED crons, no ssh
+  expected_output: a recent issue for each restored cron (agent-native-audit monthly, legal-audit quarterly) after its first post-restore fire
 ```
 
 ## Risks
@@ -652,6 +664,27 @@ the SSH provisioner at post-merge `terraform apply` — a single-PR flow cannot 
 live" strictly before "hook diff merges". Resolution: relax-minimal is independently safe (every
 Bash containment layer intact; Task gated by the AC-P2.2 inheritance probes), the apply fails loudly
 if the ruleset is inert (negative probe), and AC-P2.13 validation gates the un-pause.
+
+### Multi-agent review resolution (2026-06-10, PR #5089)
+
+11 agents (8 core + test-design + semgrep/shellcheck + user-impact). ALL findings fixed inline —
+zero scope-outs. The load-bearing ones: **(P1)** terraform remote-exec joins `inline` into one
+script with NO errexit and fails only on the LAST command — every provisioner assert was
+decorative behind the final `echo`; fixed with `set -e` first + explicit if/exit-1 probes +
+fresh-host container guard (5 agents concurred). **(P1)** the resolver could prune Docker's
+8.8.8.8/8.8.4.4 DNS pin during a deploy window and prune live Supabase IPs on a Doppler env
+rename; fixed by unconditionally seeding the substitution pair + treating absent env as a failed
+host (additive-only). **(P1)** first-party canary hosts (soleur.ai/app/api) were missing from the
+allowlist — live plain-fetch crons dial them through the firewall. **(P1)** the new doppler-wrapped
+units lacked the `EnvironmentFile` + `HOME` wiring the inngest precedent requires — the firewall
+would never have installed and BOTH alarm channels were dead. Plus: drift guard wired into
+infra-validation.yml; both drop prefixes now counted toward the paging event; jump-rule self-heal
+each tick; container-view DNS union; 1-min timer; nft log rate limits; flock; issue-creator token
+narrowed to `contents:read`+`issues:write`; prompts made hook-compatible (pipe-free cap check,
+--body-file); 9 stale defer comments + runbook + ADR-033 I7 refreshed; webpush timeout + Sentry
+mirror; `cron-egress-blocked.md` runbook added. Residuals documented in ADR-051 (DNS-tunnel
+through the pinned resolver, CDN shared-IP broadening, DoH-on-443, sub-agent inheritance pending
+AC-P2.13 live validation).
 
 ## Sharp Edges
 

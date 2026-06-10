@@ -1,11 +1,16 @@
 [Unit]
-Description=Soleur egress allowlist re-resolve (additive-then-prune, #5046 PR-2)
+Description=Soleur egress allowlist re-resolve
 After=network-online.target
 Wants=network-online.target
 OnFailure=cron-egress-alarm@%n.service
 
 [Service]
 Type=oneshot
-# doppler (prd) provides SENTRY_* (Crons check-in) + SUPABASE_*/SENTRY_INGEST
-# dynamic hosts; the script degrades gracefully when the env is absent.
-ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/cron-egress-resolve.sh
+# Bounded so a wedged dockerd cannot hold the unit in `activating` forever
+# (OnUnitActiveSec timers do not re-fire while activating, and OnFailure=
+# never fires for a hang) — a timeout converts the hang into a paged failure.
+TimeoutStartSec=120
+# Doppler env wiring — see cron-egress-firewall.service for the rationale.
+EnvironmentFile=-/etc/default/inngest-server
+Environment=HOME=/root
+ExecStart=/bin/sh -c 'D="$(command -v doppler || true)"; if [ -n "$D" ] && [ -n "$DOPPLER_TOKEN" ]; then exec "$D" run --project soleur --config prd -- /usr/local/bin/cron-egress-resolve.sh; else exec /usr/local/bin/cron-egress-resolve.sh; fi'

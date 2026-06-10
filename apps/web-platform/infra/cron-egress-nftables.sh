@@ -70,7 +70,10 @@ table ip filter {
 EOF
 
 # --- Phase 2: populate the sets BEFORE any drop rule exists --------------------
-"$RESOLVE_SCRIPT" || die "allowlist resolution failed — NOT installing default-drop (fail-open bootstrap; OnFailure alarms)"
+# CRON_EGRESS_FROM_LOADER=1 suppresses the resolver's enforcement self-heal
+# (the rules are legitimately absent at this point — that's the availability
+# ordering, not drift) so loader→resolver→loader cannot recurse.
+CRON_EGRESS_FROM_LOADER=1 "$RESOLVE_SCRIPT" || die "allowlist resolution failed — NOT installing default-drop (fail-open bootstrap; OnFailure alarms)"
 
 # --- Phase 3: (re)install our rules atomically ----------------------------------
 # One transaction: flush OUR chain + add the ordered rules. First-match-wins,
@@ -82,11 +85,14 @@ add rule ip filter SOLEUR-EGRESS ct state established,related accept comment "so
 add rule ip filter SOLEUR-EGRESS oifname "$BRIDGE_IF" accept comment "soleur-egress: intra-bridge (canary<->app)"
 add rule ip filter SOLEUR-EGRESS udp dport 53 ip daddr @soleur_egress_dns accept comment "soleur-egress: pinned DNS"
 add rule ip filter SOLEUR-EGRESS tcp dport 53 ip daddr @soleur_egress_dns accept comment "soleur-egress: pinned DNS tcp"
-add rule ip filter SOLEUR-EGRESS udp dport 53 log prefix "egress-dns-exfil: " counter drop comment "soleur-egress: dns exfil"
-add rule ip filter SOLEUR-EGRESS tcp dport 53 log prefix "egress-dns-exfil: " counter drop comment "soleur-egress: dns exfil tcp"
+add rule ip filter SOLEUR-EGRESS udp dport 53 limit rate 10/minute burst 50 packets log prefix "egress-dns-exfil: " comment "soleur-egress: dns exfil log"
+add rule ip filter SOLEUR-EGRESS udp dport 53 counter drop comment "soleur-egress: dns exfil drop"
+add rule ip filter SOLEUR-EGRESS tcp dport 53 limit rate 10/minute burst 50 packets log prefix "egress-dns-exfil: " comment "soleur-egress: dns exfil log tcp"
+add rule ip filter SOLEUR-EGRESS tcp dport 53 counter drop comment "soleur-egress: dns exfil drop tcp"
 add rule ip filter SOLEUR-EGRESS ip daddr $BRIDGE_GW tcp dport 8288 accept comment "soleur-egress: host-gateway inngest"
 add rule ip filter SOLEUR-EGRESS ip daddr @soleur_egress_allow accept comment "soleur-egress: allowlist"
-add rule ip filter SOLEUR-EGRESS log prefix "egress-blocked: " level notice counter drop comment "soleur-egress: default drop"
+add rule ip filter SOLEUR-EGRESS limit rate 10/minute burst 50 packets log prefix "egress-blocked: " level notice comment "soleur-egress: default drop log"
+add rule ip filter SOLEUR-EGRESS counter drop comment "soleur-egress: default drop"
 EOF
 
 # --- Phase 4: ensure the single DOCKER-USER jump exists -------------------------

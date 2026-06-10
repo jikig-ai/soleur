@@ -136,6 +136,13 @@ export function spawnSimple(
 // from this map (or mapped to []) is fully fail-closed → its bash is denied → it
 // self-reports FAILED → Tier-2 (egress firewall) restores it. Only crons whose
 // entire command surface is a finite allowlist are Tier-1.
+export const ISSUE_CREATOR_BASH_ALLOWLIST = [
+  "gh issue list",
+  "gh issue create",
+  "gh label list",
+  "gh label create",
+];
+
 export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
   "cron-roadmap-review": [
     "gh issue list",
@@ -164,23 +171,14 @@ export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
     "git rev-parse",
   ],
   // #5046 PR-2 Phase 2.C — the two Task-class audit crons restored by the
-  // relax-minimal hook. Issue-creators only: NO git verbs (their prompts
-  // forbid commits/pushes), NO `gh api` (F4a: arbitrary-method API access
-  // defeats the exfil defense), NO raw egress binaries. `gh label` covers
-  // first-run label bootstrap. Their prompts' `| wc -l` cap-check pipe stays
-  // metachar-denied — the agent counts the listed lines itself.
-  "cron-agent-native-audit": [
-    "gh issue list",
-    "gh issue create",
-    "gh label list",
-    "gh label create",
-  ],
-  "cron-legal-audit": [
-    "gh issue list",
-    "gh issue create",
-    "gh label list",
-    "gh label create",
-  ],
+  // relax-minimal hook share one issue-creator surface (single const so the
+  // two cannot drift apart). Issue-creators only: NO git verbs (their
+  // prompts forbid commits/pushes), NO `gh api` (F4a: arbitrary-method API
+  // access defeats the exfil defense), NO raw egress binaries. `gh label`
+  // covers first-run label bootstrap. Pipes stay metachar-denied; the
+  // prompts instruct pipe-free cap checks and --body-file (not env vars).
+  "cron-agent-native-audit": ISSUE_CREATOR_BASH_ALLOWLIST,
+  "cron-legal-audit": ISSUE_CREATOR_BASH_ALLOWLIST,
 };
 
 // Inert base overlay. `sandbox.enabled:false` = the host-independence fix;
@@ -300,13 +298,18 @@ export function runHookSelfTest(args: {
   //       leave a sub-agent's tool calls unhooked).
   // Any failure throws → the cron aborts (FAILED self-report), so a Task-using
   // cron never runs with an unverified relax.
-  const taskAllowed = run({ tool_name: "Task", tool_input: {} });
-  if (!taskAllowed.includes('"permissionDecision":"allow"')) {
-    throw new Error(
-      `[${cronName}] containment hook self-test FAILED: Task was NOT allowed ` +
-        `(Tier-2 relax not delivered in this clone — a Task-using cron would ` +
-        `fail-closed). Aborting cron.`,
-    );
+  // Probe Task AND Skill separately: today they share one switch case, but a
+  // future hook edit could split them — and a clone carrying a Task-only
+  // intermediate would silently fail-close every Skill-invoking cron.
+  for (const relaxedTool of ["Task", "Skill"]) {
+    const allowed = run({ tool_name: relaxedTool, tool_input: {} });
+    if (!allowed.includes('"permissionDecision":"allow"')) {
+      throw new Error(
+        `[${cronName}] containment hook self-test FAILED: ${relaxedTool} was NOT ` +
+          `allowed (Tier-2 relax not delivered in this clone — a ${relaxedTool}-using ` +
+          `cron would fail-closed). Aborting cron.`,
+      );
+    }
   }
   const unknownDenied = run({
     tool_name: "Tier2FailClosedProbeTool",

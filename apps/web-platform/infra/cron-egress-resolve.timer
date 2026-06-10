@@ -1,9 +1,14 @@
 [Unit]
-Description=Run the Soleur egress allowlist re-resolve every 5 minutes (#5046 PR-2)
+# 1-minute cadence: the re-resolve window IS the user-facing blast radius of
+# an IP rotation (a blocked new IP = silent connect hang for app fetches
+# until the next tick). A healthy tick is sub-second of real work, so the
+# tight cadence costs ~nothing and shrinks the window 5x vs the original
+# 5-min design (#5046 PR-2 review, performance finding).
+Description=Run Soleur egress allowlist re-resolve every minute
 
 [Timer]
-OnBootSec=3min
-OnUnitActiveSec=5min
+OnBootSec=2min
+OnUnitActiveSec=1min
 Persistent=true
 
 [Install]

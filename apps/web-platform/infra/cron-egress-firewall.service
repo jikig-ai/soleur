@@ -1,17 +1,27 @@
 [Unit]
-Description=Soleur container egress firewall (DOCKER-USER allowlist, #5046 PR-2)
 # Re-asserts the nftables ruleset on EVERY boot (a reboot clears nftables;
-# dockerd restarts do NOT clear DOCKER-USER, so no docker dependency loop).
+# dockerd restarts do NOT clear DOCKER-USER). Wants= pulls docker in if it
+# is not already queued; the loader hard-fails without the bridge (#5046 PR-2).
+Description=Soleur container egress firewall
 After=network-online.target docker.service
-Wants=network-online.target
+Wants=network-online.target docker.service
 OnFailure=cron-egress-alarm@%n.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# doppler (prd) provides SENTRY_*/SUPABASE_* for the embedded resolve pass;
-# the scripts degrade gracefully when the env is absent.
-ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/cron-egress-nftables.sh
+TimeoutStartSec=300
+# Doppler needs DOPPLER_TOKEN (reused from the inngest env file — the
+# established pattern) and a HOME (CLI calls os.UserHomeDir(); root services
+# get none by default — the 2026-05-20 heartbeat-unit failure). Runs as root
+# because nft requires it. The sh -c wrapper resolves the doppler path
+# (cloud-init installs /usr/local/bin/doppler; some hosts carry /usr/bin)
+# and degrades to a doppler-less run when token/CLI are absent — the
+# firewall must install regardless; the scripts skip Sentry/dynamic-host
+# work with WARNs when the env is missing.
+EnvironmentFile=-/etc/default/inngest-server
+Environment=HOME=/root
+ExecStart=/bin/sh -c 'D="$(command -v doppler || true)"; if [ -n "$D" ] && [ -n "$DOPPLER_TOKEN" ]; then exec "$D" run --project soleur --config prd -- /usr/local/bin/cron-egress-nftables.sh; else exec /usr/local/bin/cron-egress-nftables.sh; fi'
 
 [Install]
 WantedBy=multi-user.target

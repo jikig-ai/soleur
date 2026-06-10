@@ -46,6 +46,19 @@ api.hetzner.cloud
 fcm.googleapis.com
 updates.push.services.mozilla.com
 web.push.apple.com
+# first-party canary targets — LIVE plain-fetch crons inside the container
+# dial these THROUGH the firewall (review finding, PR #5089):
+# cron-membership-health probes https://soleur.ai/api/flags + /api/health/*
+# (cron-membership-health.ts:39-40); cron-oauth-probe drives the synthetic
+# sign-in against app.soleur.ai / api.soleur.ai (cron-oauth-probe.ts:51-52).
+soleur.ai
+app.soleur.ai
+api.soleur.ai
+# Supabase Management API — dormant in runtime today (service.ts early-returns
+# without SUPABASE_MGMT_TOKEN) but the mint-hook startup probe dials it the
+# day the token lands in the runtime env; allowlisted so that flip cannot
+# silently break the auth-boundary canary (lib/supabase/service.ts:66).
+api.supabase.com
 #
 # Dynamic hosts (resolved from the doppler-provided environment at timer run,
 # NOT listed here): SENTRY_INGEST_DOMAIN, the NEXT_PUBLIC_SUPABASE_URL host,
@@ -54,3 +67,9 @@ web.push.apple.com
 # Deliberately NOT in the container allowlist (HOST egress, never forwarded
 # through DOCKER-USER): Better Stack/Vector (vector.toml reads host journald),
 # GHCR (host dockerd pulls), apt mirrors, the Cloudflare tunnel daemon.
+#
+# Apply path: a merged edit to this file auto-applies — terraform_data.
+# cron_egress_firewall folds this file's hash into triggers_replace, and
+# apply-web-platform-infra.yml's SSH block re-runs the provisioner on push
+# to main. No manual/SSH step. Runbook:
+# knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md
