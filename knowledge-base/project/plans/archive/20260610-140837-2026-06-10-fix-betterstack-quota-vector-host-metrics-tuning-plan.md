@@ -279,9 +279,15 @@ logs:
   where: Better Stack Logs source 2457081 (eu-fsn-3), queryable via scripts/betterstack-query.sh (ClickHouse HTTP SQL)
   retention: 3 days (free tier)
 discoverability_test:
-  command: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh "SELECT toDate(dt) AS day, count(*) AS c FROM remote($BS_TABLE) WHERE dt >= now() - INTERVAL 3 DAY AND raw LIKE '%\"namespace\":\"host\"%' GROUP BY day ORDER BY day FORMAT JSONEachRow"
-  expected_output: post-deploy day row count ≤ 25,000 (baseline ~196,000)
+  command: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --limit 1
+  expected_output: dt
 ```
+
+The `discoverability_test.command` above is the pre-merge-runnable liveness probe
+(proves Better Stack ingestion is alive and queryable without SSH or a dashboard;
+any row in the last hour contains a `dt` field). The post-deploy QUOTA VERDICT
+remains AC12's query (first full post-deploy day host rows ≤ 25,000 vs ~196,000
+baseline) — it cannot pass pre-deploy by construction.
 
 ## Test Scenarios
 
