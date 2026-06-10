@@ -325,6 +325,8 @@ After Phase 4 spawns per-section research agents, fan out two additional agent p
 1. **Verify-the-negative pass.** For every negative security claim in the plan body (regex: `NEVER|MUST NOT|does not reach|cannot leak|is not exposed`), spawn a targeted agent task: "grep the named/implied implementation file for the constrained behavior; report `contradicts | confirms | not-applicable` with file:line citation." This catches "the field is not exposed to clients" claims that contradict a `process.env.NEXT_PUBLIC_*` site one grep away.
 2. **Post-edit self-audit pass.** After round-1 edits drop or rename infrastructure (tables, columns, modules), spawn a re-read pass that greps the plan body for references to dropped symbols. Every hit is a candidate for a downstream rewrite that round 1 missed (e.g., `tenant_cost_window` ON CONFLICT after the table was dropped).
 
+Tier advisory (ADR-053): spawn both passes with the Agent tool's `model: sonnet` — they are pure grep sweeps with ternary verdicts (the most mechanical Task spawns in the plugin), so the session's top tier adds cost without recall. Per-section research agents and the merge pass stay on the session model.
+
 **Why:** PR #3240 deepen-pass for `feat-agent-runtime-platform` showed two round-1 misses (BYOK process.env contradiction; `tenant_cost_window` ON CONFLICT after table-drop) that round 2 caught only because the user re-invoked the skill. Folding both passes into round 1 closes the loop without requiring a second user invocation. See `knowledge-base/project/learnings/best-practices/2026-05-05-deepen-pass-round-2-implementation-realism-vs-round-1-structural.md`.
 
 ### 4.5. Network-Outage Deep-Dive (Conditional)

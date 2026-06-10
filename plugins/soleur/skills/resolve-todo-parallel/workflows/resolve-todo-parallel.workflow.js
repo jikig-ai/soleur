@@ -233,7 +233,9 @@ ${msg}
 // Run.
 // ---------------------------------------------------------------------------
 phase('Analyze')
-const analysis = await agent(analyzePrompt, { label: 'analyze', phase: 'Analyze', schema: ANALYZE_SCHEMA })
+log('tier pins: analyze→sonnet, commit→sonnet (mechanical steps per ADR-053; resolvers inherit the session model)')
+// Pinned 'sonnet': todo inventory extraction is mechanical (ADR-053).
+const analysis = await agent(analyzePrompt, { label: 'analyze', phase: 'Analyze', schema: ANALYZE_SCHEMA, model: 'sonnet' })
 // Normalize + sanitize ids up front (they reach git mv / ls argv downstream).
 const _seenTodoIds = new Set()
 const todos = (analysis?.todos || [])
@@ -318,6 +320,8 @@ if (resolved.length) {
       label: 'commit',
       phase: 'Commit',
       schema: COMMIT_SCHEMA,
+      // Pinned 'sonnet': commit-message generation over a known diff is mechanical (ADR-053).
+      model: 'sonnet',
     })) || commit
 }
 

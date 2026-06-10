@@ -414,6 +414,72 @@ fi
 rm -rf "$ROOT"
 
 # ------------------------------------------------------------------------
+# Test 15: tool_input.model present → recorded as `model` (#3791 FR5).
+# Fixture mirrors the AC0 empirical probe (2026-06-10): a direct Agent-tool
+# spawn invoked with `model: "haiku"` carries it in tool_input alongside
+# description/prompt/subagent_type. Workflow-runtime agent() spawns do NOT
+# fire this hook at all (AC0 finding a) — their executed-model evidence
+# lives in the workflow transcript (see ADR-053).
+# ------------------------------------------------------------------------
+echo "Test 15: tool_input.model present → model field recorded"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+printf '{"session_id":"sess-15","hook_event_name":"PostToolUse","tool_name":"Agent","tool_input":{"description":"d","prompt":"p","subagent_type":"Explore","model":"haiku"},"tool_response":{"status":"completed","agentType":"Explore","totalTokens":10075,"totalToolUseCount":1,"totalDurationMs":4176},"duration_ms":4176}\n' \
+  | AGENT_TOKEN_TEE_REPO_ROOT="$ROOT" bash "$HOOK"
+LOG=$(logfile_for "$ROOT")
+if [[ ! -f "$LOG" ]]; then
+  fail "no log file"
+elif ! jq -e '.model == "haiku"' "$LOG" >/dev/null 2>&1; then
+  fail "expected model=haiku; got $(cat "$LOG")"
+else
+  pass "model field recorded from tool_input.model"
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
+# Test 16: tool_input.model absent → model defaults to "inherit".
+# Canonical fixture has no model key (pre-#3791 shape) — additive field
+# must not change any existing behavior, schema stays 1.
+# ------------------------------------------------------------------------
+echo "Test 16: tool_input.model absent → model=inherit"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+fixture_canonical "sess-16" "Explore" 25741 1 3536 \
+  | AGENT_TOKEN_TEE_REPO_ROOT="$ROOT" bash "$HOOK"
+LOG=$(logfile_for "$ROOT")
+if [[ ! -f "$LOG" ]]; then
+  fail "no log file"
+elif ! jq -e '.model == "inherit"' "$LOG" >/dev/null 2>&1; then
+  fail "expected model=inherit; got $(cat "$LOG")"
+elif ! jq -e '.schema == 1' "$LOG" >/dev/null 2>&1; then
+  fail "schema changed (must stay 1 — additive field only)"
+else
+  pass "model defaults to inherit, schema unchanged"
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
+# Test 17: MODEL sanitize path — >64-char model truncates; empty model
+# falls back to "inherit" (mirrors Test 10's SUBAGENT_TYPE cap).
+# ------------------------------------------------------------------------
+echo "Test 17: MODEL length cap + empty fallback"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+LONG_MODEL="overflow-model-$(printf 'm%.0s' {1..120})"
+printf '{"session_id":"sess-17a","hook_event_name":"PostToolUse","tool_name":"Agent","tool_input":{"subagent_type":"Explore","model":"%s"},"tool_response":{"status":"completed","agentType":"Explore","totalTokens":111},"duration_ms":1}\n' "$LONG_MODEL" \
+  | AGENT_TOKEN_TEE_REPO_ROOT="$ROOT" bash "$HOOK"
+printf '{"session_id":"sess-17b","hook_event_name":"PostToolUse","tool_name":"Agent","tool_input":{"subagent_type":"Explore","model":""},"tool_response":{"status":"completed","agentType":"Explore","totalTokens":222},"duration_ms":1}\n' \
+  | AGENT_TOKEN_TEE_REPO_ROOT="$ROOT" bash "$HOOK"
+LOG=$(logfile_for "$ROOT")
+LEN_A=$(jq -r 'select(.session_id == "sess-17a") | .model | length' "$LOG" 2>/dev/null)
+MODEL_B=$(jq -r 'select(.session_id == "sess-17b") | .model' "$LOG" 2>/dev/null)
+if [[ -z "$LEN_A" ]] || (( LEN_A > 64 )); then
+  fail "model not capped at 64 chars (got \"$LEN_A\")"
+elif [[ "$MODEL_B" != "inherit" ]]; then
+  fail "empty model did not fall back to inherit (got \"$MODEL_B\")"
+else
+  pass "model capped to $LEN_A chars; empty model -> inherit"
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

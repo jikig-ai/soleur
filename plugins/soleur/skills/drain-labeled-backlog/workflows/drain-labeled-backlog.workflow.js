@@ -259,7 +259,9 @@ Return only \`after\` = that count. Do not modify any issue.`
 // Run.
 // ---------------------------------------------------------------------------
 phase('Cluster')
-const clustered = await agent(clusterPrompt, { label: 'cluster', phase: 'Cluster', schema: CLUSTERS_SCHEMA })
+log('tier pins: cluster→sonnet, report→sonnet (mechanical steps per ADR-053; brief + one-shot inherit the session model)')
+// Pinned 'sonnet': issue clustering from a structured list is mechanical (ADR-053).
+const clustered = await agent(clusterPrompt, { label: 'cluster', phase: 'Cluster', schema: CLUSTERS_SCHEMA, model: 'sonnet' })
 
 // Fail-fast on invalid label/milestone — mirror the helper's exit 2 paths.
 if (!clustered || !clustered.labelValid || !clustered.milestoneValid) {
@@ -352,7 +354,8 @@ const results = drainResults.filter(Boolean)
 phase('Report')
 let after = null
 if (!dryRun && results.some((r) => r.status === 'merged')) {
-  const delta = await agent(reportPrompt, { label: 'report', phase: 'Report', schema: DELTA_SCHEMA })
+  // Pinned 'sonnet': markdown report assembly from structured data is mechanical (ADR-053).
+  const delta = await agent(reportPrompt, { label: 'report', phase: 'Report', schema: DELTA_SCHEMA, model: 'sonnet' })
   after = delta?.after ?? null
 }
 
