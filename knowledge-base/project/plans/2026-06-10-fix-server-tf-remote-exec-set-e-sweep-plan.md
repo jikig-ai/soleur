@@ -18,6 +18,24 @@ brand_survival_threshold: none
 
 > Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed; no spec.md exists for this one-shot branch at plan time).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-10 (inline passes — pipeline context without Task tool; every verification executed directly against the repo/live state rather than via spawned agents)
+**Sections enhanced:** Hypotheses (Network-Outage Deep-Dive table), Risks (precedent-diff entry), User-Brand Impact (sensitive-path scope-out bullet), Premise Validation (#5046 state), Post-merge AC (rule-ID correction)
+
+### Key Improvements
+
+1. **Live-verified the prescribed awk guard** against current server.tf — produced exactly `blocks=13 ok=2` with 11 FAIL lines, one per audited block. The RED state is confirmed, not assumed.
+2. **Verify-the-negative pass executed:** the claim "no `!`-prefixed pipelines exist in the 11 swept blocks" was grep-confirmed (`grep -n '"\!' server.tf` → zero matches outside cron's own probe), so plain `set -e` suffices and no `if/exit-1` rewrites are needed.
+3. **Phase 4.4 precedent-diff recorded** (Risks #5): cron_egress_firewall (server.tf:736-742, 784-819) is the canonical gated-block shape; drift-guard precedent is `bwrap-userns-sysctl.test.sh` + named infra-validation step.
+4. **Rule-ID audit:** corrected a truncated citation (`wg-after-a-pr-merges-to-main` → `wg-after-a-pr-merges-to-main-verify-all`); all other cited IDs (`hr-ssh-diagnosis-verify-firewall`, `cq-write-failing-tests-before`, `wg-use-closes-n-in-pr-body-not-title-to`) verified active in AGENTS.md.
+5. **Gates 4.6/4.7/4.8 passed:** User-Brand Impact present with valid threshold + explicit sensitive-path scope-out bullet (added — `apps/[^/]+/infra/` and `infra-validation` workflow match the canonical regex); Observability 5-field schema complete, no-SSH discoverability command; zero PAT-shaped variables.
+
+### New Considerations Discovered
+
+- Parent epic #5046 is CLOSED (Ref-only citation — no premise staleness; recorded in Premise Validation).
+- All knowledge-base file citations in the plan resolve on disk (broken-citation sweep returned zero).
+
 ## Overview
 
 Terraform joins each `remote-exec` provisioner's `inline` list into ONE shell script with **no implicit errexit**; the provisioner fails only on the **last** command's exit status. The 7 pre-existing SSH `terraform_data` provisioners in `apps/web-platform/infra/server.tf` (disk_monitor_install, resource_monitor_install, fail2ban_tuning, journald_persistent, docker_seccomp_config, apparmor_bwrap_profile, orphan_reaper_install) therefore run their intermediate assertions decoratively — `docker_seccomp_config` and `apparmor_bwrap_profile` end in always-true `echo`s, and `fail2ban_tuning` gates only because its `test` asserts happen to be last. PR #5089 fixed the same defect in the NEW `cron_egress_firewall` provisioner (`"set -e"` first + explicit `if/exit-1` probes) and deliberately deferred the siblings to their own cycle (issue #5101). This plan is that cycle.
@@ -32,7 +50,7 @@ Ref #5046. Ref PR #5089.
 
 ## Premise Validation
 
-Checked 2026-06-10: issue #5101 is **OPEN** (`gh issue view 5101` → state OPEN); PR #5089 is **MERGED** (2026-06-10T13:43Z); `apps/web-platform/infra/server.tf` exists with `grep -c '"set -e",'` = **2** (the two cron_egress_firewall blocks); `scripts/followthroughs/server-tf-provisioner-set-e-sweep-5089.sh` exists, is executable, and greps for `'"set -e",'` with a ≥ 9 PASS threshold and `earliest=2026-06-12T00:00:00Z`; `.github/workflows/apply-web-platform-infra.yml` exists (named-workflow gate: `ls` verified). No stale premises.
+Checked 2026-06-10: issue #5101 is **OPEN** (`gh issue view 5101` → state OPEN); PR #5089 is **MERGED** (2026-06-10T13:43Z); parent epic #5046 is **CLOSED** (Tier-2 complete — cited as `Ref` only, not a dependency, so no staleness); `apps/web-platform/infra/server.tf` exists with `grep -c '"set -e",'` = **2** (the two cron_egress_firewall blocks); `scripts/followthroughs/server-tf-provisioner-set-e-sweep-5089.sh` exists, is executable, and greps for `'"set -e",'` with a ≥ 9 PASS threshold and `earliest=2026-06-12T00:00:00Z`; `.github/workflows/apply-web-platform-infra.yml` exists (named-workflow gate: `ls` verified). No stale premises.
 
 ## Research Reconciliation — Issue vs. Codebase
 
@@ -52,6 +70,20 @@ This plan changes no connection, firewall, or sshd configuration — only inline
 3. **L3 DNS/routing.** Opt-out with artifact: `connection.host` is the literal `hcloud_server.web.ipv4_address` (server.tf:86 et al.) — no DNS resolution on the apply path.
 4. **L7 TLS/proxy.** N/A — SSH transport, not HTTPS; the CF tunnel leg is owned by the existing `cf-tunnel-ssh-bridge` composite action, unchanged here.
 5. **L7 service layer (the only layer this PR touches).** A provisioner abort AFTER a successful handshake with an error line naming an inline command is the new gating working as designed — read the failing command from the workflow log and triage per the audit table below (fix-forward with an explicit guard if the non-zero is benign, fix the host state if not).
+
+### Network-Outage Deep-Dive (deepen-plan Phase 4.5 verification)
+
+Layer-by-layer status of the checklist entries above (resource-shape trigger fired: the plan drives `terraform apply` on `terraform_data` resources carrying `provisioner "remote-exec"` + `connection { type = "ssh" }`):
+
+| Layer | Status | Artifact |
+|---|---|---|
+| L3 firewall allow-list (CI) | verified — bypassed by design | CF Tunnel route: `apply-web-platform-infra.yml:107` + `.github/actions/cf-tunnel-ssh-bridge`; server.tf:354-364 documents that CI SSH never traverses the `:22 admin_ips` rule |
+| L3 firewall allow-list (operator-local) | opt-out with artifact | No operator-local apply is planned (CI is the apply path); if one occurs, `hcloud firewall` diff vs `curl -s https://ifconfig.me/ip` per runbook `admin-ip-drift.md` BEFORE any sshd hypothesis |
+| L3 DNS/routing | opt-out with artifact | `connection.host = hcloud_server.web.ipv4_address` (literal IP, server.tf:86/125/163/239/404/598/647/675/727) — no DNS on the apply path |
+| L7 TLS/proxy | N/A | SSH transport; the HTTPS leg (CF Access service token for the tunnel) is owned by the unchanged `cf-tunnel-ssh-bridge` action |
+| L7 application | verified by construction | This PR's only behavioral delta is post-handshake script gating; any new failure signature is an inline-command non-zero named in the terraform log, not a connectivity fault |
+
+No gaps to close before implementation — the plan makes zero connectivity-surface changes.
 
 ## Inline Audit — every command in every un-gated block
 
@@ -150,7 +182,7 @@ Ordered contract-before-consumer; TDD per `cq-write-failing-tests-before`:
 ### Post-merge (automated — no operator steps)
 
 9. `apply-web-platform-infra.yml` fires automatically on merge (paths filter `apps/web-platform/infra/**`) and its SSH apply succeeds. Verification: `gh run list --workflow=apply-web-platform-infra.yml --limit 1 --json conclusion,headSha` shows `success` for the merge SHA. Automation: ship-phase post-merge verification via `gh` CLI (placement 2 per the automation-feasibility gate).
-10. If the apply FAILS at a newly-gated command: triage per the Hypotheses section (L3 handshake vs. L7 command failure), then fix-forward (explicit `if/exit-1` or host-state fix via a follow-up `.tf` change) — the failure is the silent-green defect surfacing loudly, which is this change working as designed. The issue is already closed via `Closes`; a failed apply opens its own loop via the workflow-failure signal (wg-after-a-pr-merges-to-main applies).
+10. If the apply FAILS at a newly-gated command: triage per the Hypotheses section (L3 handshake vs. L7 command failure), then fix-forward (explicit `if/exit-1` or host-state fix via a follow-up `.tf` change) — the failure is the silent-green defect surfacing loudly, which is this change working as designed. The issue is already closed via `Closes`; a failed apply opens its own loop via the workflow-failure signal (`wg-after-a-pr-merges-to-main-verify-all` applies).
 11. `infra_config_handler_bootstrap`'s gated block live-verifies on the next natural `apply-deploy-pipeline-fix.yml` run (fires on ci-deploy.sh / webhook.service / cat-deploy-state.sh edits). Automation: not separately triggerable without a content change to its trigger files; deferred to the next natural run by design — failure there surfaces as a workflow failure, same loop as AC10.
 
 ## Open Code-Review Overlap
@@ -164,6 +196,7 @@ One open `code-review` issue references `apps/web-platform/infra/server.tf`:
 - **If this lands broken, the user experiences:** nothing directly — the blast surface is the CI infra-apply pipeline. Worst case, a newly-gated intermediate command aborts the apply mid-provisioner; the host retains its current working configuration (all swept commands are idempotent re-asserts of already-applied state) and the workflow fails loudly. No user-facing flow, page, or data path changes.
 - **If this leaks, the user's [data / workflow / money] is exposed via:** no new exposure vector — the diff adds shell `set -e` statements to existing provisioner scripts; no secrets, no data surfaces, no auth changes.
 - **Brand-survival threshold:** none — reason: operator/CI-facing infra apply gating only; failure mode is a loud CI abort with zero user-visible effect, and the change strictly converts silent failures into loud ones.
+- threshold: none, reason: the diff touches sensitive paths (`apps/web-platform/infra/`, `infra-validation` workflow) but adds only shell errexit gating to existing Terraform-managed provisioner scripts plus a read-only CI drift guard — no secrets, no auth, no data surfaces, no deploy-behavior change beyond failing loudly instead of silently. (Explicit scope-out per preflight Check 6 / deepen-plan Phase 4.6 — sensitive-path regex matches `apps/[^/]+/infra/` and `.github/workflows/*infra-validation*.yml`.)
 
 ## Domain Review
 
@@ -231,6 +264,7 @@ discoverability_test:
 2. **Mid-block abort leaves partial host state** (e.g., journald restarted but a later assert fails). *Mitigation:* this failure class already exists today whenever a LAST command fails; `set -e` adds no new class, it only moves detection earlier. All blocks re-run idempotently on the next apply.
 3. **The 8 siblings are NOT actually re-created at merge** (if they were present in R2 state with unchanged triggers, provisioners would not re-run and live verification would defer). *Mitigation:* the issue, the workflow header (lines 16-31), and every resource's own comment assert the "will be created" CI-state behavior; even in the contrary case, the text-level done condition and follow-through probe still PASS, and the gating takes effect on the next natural re-provision — strictly better than status quo either way.
 4. **awk guard brittleness against future HCL formatting.** *Mitigation:* flag-based parser (not `/start/,/end/` ranges, per the awk self-match sharp edge) + the ≥ 13 block-count floor makes parser drift fail loud, never silently green.
+5. **Precedent-diff (deepen-plan Phase 4.4 — pattern-bound behavior).** Canonical in-repo precedent for `set -e`-gated inline blocks: `cron_egress_firewall`, server.tf:736-742 (pre-`file` block) and server.tf:784-819 (post-`file` block with rationale comment). Side-by-side: the precedent puts `"set -e",` as the literal first list element with a block comment above `inline = [` explaining the no-implicit-errexit join; this plan reproduces exactly that shape in all 11 blocks. The precedent's second distinctive element — explicit `if cmd; then echo FAILED; exit 1; fi` probes — is deliberately NOT reproduced because it exists solely for `!`-prefixed-pipeline errexit exemption, and a live grep confirmed zero `"!`-prefixed inline elements outside the cron block (verified 2026-06-10: `grep -n '"\!' server.tf` → no matches; the only `if !` is cron's own probe at line 813). Drift-guard precedent: `bwrap-userns-sysctl.test.sh` (token-anchored server.tf guard wired as a named `infra-validation.yml` step).
 
 ## Test Scenarios
 
