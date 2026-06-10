@@ -254,6 +254,7 @@ All content maps to one of four pillars. Each pillar targets a specific audience
 | Why We Wrote 20 Architecture Decision Records for an AI Platform | Thought leadership | 1,500-2,000 | P2 | Month 2. Gap 13. ADR template with Cost Impacts, C4 diagrams, architecture-as-code skill. |
 | 53 Issues in 3 Days: When Agentic Code Review Defaults Compound Silently | Post-mortem / case study | 1,500-2,000 | P1 | Month 2 (scheduled after PR #2375 bakes 3-5 days). Issue #2399. Hook: "Our code-review agents filed 53 GitHub issues in 3 days. The bug wasn't the agents — it was one default in our skill definitions." Lesson: audit the defaults, not the agents. Target channels: blog primary, X/Twitter thread, HN submission Tue-Thu. |
 | When Plan-Time Review Misses What Run-Time Review Catches: A One-Time-Schedule Story | Post-mortem / case study | 1,500-2,000 | P2 | Month 2 (after PR #3067 bakes 5-7 days, dogfood completes). Issue #3108. Hook: "A 3-reviewer plan-time pass approved a one-time scheduling feature with 4 defenses. The 11-agent run-time review found a 5th defense was load-bearing — comment-mutability between authoring and fire." Lesson: `Brand-survival = single-user incident` requires `user-impact-reviewer` in the panel; "no inline prompts" and "runtime content integrity" are independent invariants. Companion: `soleur:schedule --once` ships the D1-D5 defense stack. Target channels: blog primary, X/Twitter thread, Discord, LinkedIn. |
+| How We Let AI Agents Run Cron Jobs Without Letting Them Exfiltrate Secrets | Engineering deep-dive | 2,000-3,000 | P1 | Month 3 (after PR #5089 merges + postmerge green). Issue #5104. Hook: defense-in-depth for autonomous AI crons — PreToolUse containment hook + default-drop nftables egress allowlist + least-privilege tokens, each layer assuming the others fail. Honest-residuals angle (ADR-051 publishes the DNS-tunnel + CDN shared-IP residuals). Secondary thread: "5 AI Reviewers, 4 P1s, 1 Terraform Gotcha" (remote-exec set -e). Target channels: blog primary, HN direct submit Tue-Thu 14:00-16:00 UTC, X thread, LinkedIn Personal T+4-7d. |
 
 ### Pillar 3: Competitive Positioning
 
@@ -346,7 +347,7 @@ This calendar complements the perpetual cadence above. It defines what to write 
 | May 21-27 | Publish "One-Person Billion-Dollar Company". Begin off-site listicle outreach (Gap 10). | 4-6 | Article live + outreach started |
 | May 28-Jun 3 | Write "Best Claude Code Plugins for Solo Founders" (audit P3-2). Continue outreach. | 6-8 | Listicle article draft |
 | Jun 4-10 | Write "Company-as-a-Service vs SaaS" (audit P3-3). | 6-8 | Draft |
-| Jun 11-17 | Add page-specific OG images for pillar blog posts. Publish remaining drafts. | 4-6 | OG images + articles live |
+| Jun 11-17 | Add page-specific OG images for pillar blog posts. Publish remaining drafts. Draft "How We Let AI Agents Run Cron Jobs Without Letting Them Exfiltrate Secrets" (Issue #5104; gate: PR #5089 merged + postmerge green; HN submit Tue-Thu window). | 4-6 | OG images + articles live + AI-cron security deep-dive draft |
 | Jun 18-20 | Full SEO/AEO re-audit. Compare against 2026-03-17 baselines. Plan next quarter. | 3-4 | Q2 audit report |
 
 ---

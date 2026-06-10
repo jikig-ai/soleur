@@ -17,7 +17,7 @@
 #      (a) the main saved-`tfplan` apply covers the 80 non-SSH resources;
 #      (b) a SEPARATE token-gated SSH apply, run AFTER the post-apply token sync
 #          and behind the CF Tunnel SSH bridge (.github/actions/cf-tunnel-ssh-bridge),
-#          covers the 7 SSH-provisioned `terraform_data.*` siblings in server.tf
+#          covers the 8 SSH-provisioned `terraform_data.*` siblings in server.tf
 #          (disk_monitor_install, resource_monitor_install, fail2ban_tuning,
 #          journald_persistent, docker_seccomp_config, apparmor_bwrap_profile,
 #          orphan_reaper_install). The GitHub runner egress IP is not in
@@ -104,7 +104,7 @@ env:
   TERRAFORM_VERSION: "1.10.5"
   INFRA_DIR: apps/web-platform/infra
   # cloudflared binary for the CF Tunnel SSH bridge (#4844) — the token-gated
-  # SSH apply of the 7 server.tf terraform_data siblings reaches the host over
+  # SSH apply of the 8 server.tf terraform_data siblings reaches the host over
   # the tunnel via .github/actions/cf-tunnel-ssh-bridge. SHA-256 computed against
   # the real released binary at the pinned version (NEVER paste a checksum from
   # documentation or AI output per the 2026-03-21 server-provisioning learning,
@@ -276,6 +276,8 @@ jobs:
               -target=cloudflare_bot_management.soleur_ai \
               -target=cloudflare_ruleset.seo_page_redirects \
               -target=cloudflare_ruleset.seo_response_headers \
+              -target=cloudflare_list.legal_redirects \
+              -target=cloudflare_ruleset.bulk_redirects \
               -target=random_id.tunnel_secret \
               -target=cloudflare_zero_trust_tunnel_cloudflared.web \
               -target=cloudflare_zero_trust_tunnel_cloudflared_config.web \
@@ -459,11 +461,11 @@ jobs:
           unset CLIENT_ID CLIENT_SECRET
           echo "Synced CI_SSH_ACCESS_TOKEN_ID/_SECRET to Doppler prd_terraform."
 
-      # --- #4844: token-gated SSH apply of the 7 server.tf terraform_data siblings ---
+      # --- #4844: token-gated SSH apply of the 8 server.tf terraform_data siblings ---
       # Runs AFTER the post-apply token sync above (shape B) so a from-scratch
       # rebuild self-heals: the bridge needs the CF Access ci_ssh token that the
       # sync step produces, so on the very first apply (tokens absent) this step
-      # `::warning::`-skips and the next run lands the 7 once the token exists.
+      # `::warning::`-skips and the next run lands the 8 once the token exists.
       - name: Check CI-SSH token presence (gates the SSH apply)
         id: ssh_token_gate
         env:
@@ -478,7 +480,7 @@ jobs:
           TOKEN_ID=$(doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain 2>/dev/null || true)
           if [[ -z "$TOKEN_ID" ]]; then
             echo "ssh_apply_skip=true" >> "$GITHUB_OUTPUT"
-            echo "::warning::first-bootstrap: CI_SSH_ACCESS_TOKEN_ID absent in Doppler prd_terraform — the 7 SSH-provisioned resources are deferred to the next run after the token sync lands. The non-SSH apply + token sync above still succeeded."
+            echo "::warning::first-bootstrap: CI_SSH_ACCESS_TOKEN_ID absent in Doppler prd_terraform — the 8 SSH-provisioned resources are deferred to the next run after the token sync lands. The non-SSH apply + token sync above still succeeded."
           else
             echo "ssh_apply_skip=false" >> "$GITHUB_OUTPUT"
           fi
@@ -506,7 +508,7 @@ jobs:
         # add guard coverage.
         #
         # This is a SEPARATE `terraform apply` (not the saved tfplan), so it runs
-        # its own internal plan against the 7 targets. R2 backend creds (bare
+        # its own internal plan against the 8 targets. R2 backend creds (bare
         # AWS_ACCESS_KEY_ID/_SECRET) are already in $GITHUB_ENV from "Extract
         # backend credentials" and persist across steps; `--name-transformer
         # tf-var` injects TF_VAR_* doppler secrets but passes those bare AWS_*
@@ -525,7 +527,8 @@ jobs:
               -target=terraform_data.journald_persistent \
               -target=terraform_data.docker_seccomp_config \
               -target=terraform_data.apparmor_bwrap_profile \
-              -target=terraform_data.orphan_reaper_install
+              -target=terraform_data.orphan_reaper_install \
+              -target=terraform_data.cron_egress_firewall
 
       - name: Tear down cloudflared SSH bridge
         if: always()

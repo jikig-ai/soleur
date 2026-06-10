@@ -1,0 +1,12 @@
+[Unit]
+Description=Soleur cron-egress alarm for %i
+
+[Service]
+Type=oneshot
+TimeoutStartSec=120
+# Doppler env wiring — see cron-egress-firewall.service for the rationale.
+# The alarm script itself degrades per-channel when SENTRY_*/RESEND_API_KEY
+# are absent, so a doppler-less run still logs to the journal.
+EnvironmentFile=-/etc/default/inngest-server
+Environment=HOME=/root
+ExecStart=/bin/sh -c 'D="$(command -v doppler || true)"; if [ -n "$D" ] && [ -n "$DOPPLER_TOKEN" ]; then exec "$D" run --project soleur --config prd -- /usr/local/bin/cron-egress-alarm.sh %i; else exec /usr/local/bin/cron-egress-alarm.sh %i; fi'

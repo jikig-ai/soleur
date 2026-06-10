@@ -1,6 +1,6 @@
 export default function AnalyticsLoading() {
   return (
-    <div className="space-y-6">
+    <div className="mx-auto max-w-6xl px-6 py-8 space-y-6">
       <h1 className="text-2xl font-semibold text-soleur-text-primary">Analytics</h1>
       <div className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 overflow-hidden">
         <table className="w-full">

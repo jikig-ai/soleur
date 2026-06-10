@@ -42,7 +42,7 @@ export default async function AdminAnalyticsPage() {
       usersResult.error ?? convsResult.error,
     );
     return (
-      <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
+      <div className="mx-auto max-w-6xl px-6 py-8 flex flex-col items-center justify-center min-h-[400px] gap-4">
         <p className="text-red-400">Failed to load analytics data. Please try again.</p>
         <a
           href="/dashboard/admin/analytics"

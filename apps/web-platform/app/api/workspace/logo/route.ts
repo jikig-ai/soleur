@@ -6,7 +6,8 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
-import { reportSilentFallback } from "@/server/observability";
+import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
+import { withStorageRetry } from "@/server/storage-retry";
 import { withUserRateLimit } from "@/server/with-user-rate-limit";
 
 // app/api/workspace/logo/route.ts — owner-uploaded workspace logo (#4916).
@@ -127,10 +128,20 @@ async function handlePost(req: Request, user: User): Promise<Response> {
   const key = logoKey(workspaceId);
 
   // Upload object FIRST (deterministic key, upsert), THEN persist logo_path.
-  const up = await service.storage.from(BUCKET).upload(key, out, {
-    contentType: "image/webp",
-    upsert: true,
-  });
+  // The upload is idempotent (deterministic key + upsert), so transient Storage
+  // failures (5xx/429/network) are retried with bounded backoff; the closure
+  // re-invokes .upload() each attempt (a captured promise would retry nothing).
+  const up = await withStorageRetry(
+    () => service.storage.from(BUCKET).upload(key, out, { contentType: "image/webp", upsert: true }),
+    {
+      onRetry: (attempt, error) =>
+        warnSilentFallback(error, {
+          feature: FEATURE,
+          op: "storage-upload-retry",
+          extra: { userId: user.id, workspaceId, attempt },
+        }),
+    },
+  );
   if (up.error) {
     reportSilentFallback(up.error, {
       feature: FEATURE,

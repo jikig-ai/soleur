@@ -108,3 +108,14 @@ egress. The 11 "paused" crons are the *safe-because-paused* population. The oper
 ## Capability Gaps
 
 None blocking. The host + firewall ARE Terraform-managed (`apps/web-platform/infra/server.tf:21-64` `hcloud_server.web`; `firewall.tf:1-94` `hcloud_firewall.web`, inbound-only) — verified by repo-research grep, no manual-step blocker. The only "gap" is additive: no `direction="out"` rule / nftables / iptables-OUTPUT exists anywhere today (verified across all `.tf` + `cloud-init.yml`), so Tier-2 adds the egress layer net-new via the SSH-provisioner apply path.
+
+## Interaction note — SDK sandbox proxy env inheritance (added 2026-06-10, PR #5090 review)
+
+`buildAgentEnv` forwards `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` from the server
+`process.env` into the agent sandbox (agent-env.ts:43-48), and the SDK sandbox
+uses `--unshare-net` + an in-process HTTP bridge. If Tier-2 ever sets
+host-level proxy vars, in-sandbox clients inherit values unreachable inside
+the unshared netns (or a `NO_PROXY=*.github.com` makes gh skip the sandbox
+bridge and dead-end). Currently inert (no host proxy live). Design the
+interaction explicitly before introducing a host-level egress proxy — see
+ADR-051 for the token-derived sandbox allowlist this must compose with.
