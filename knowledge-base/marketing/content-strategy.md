@@ -52,6 +52,13 @@ Twelve content gaps block Soleur's organic discovery and category authority. Ran
 - "Built with Soleur" case study framed around lifecycle stages, not agent headcount.
 - Refresh proof points across existing pages from "60+ agents" toward "the stage-gated company lifecycle" (coordinate with brand-guide.md numbers-as-soft-floors rule).
 
+### Gap 15: Token-Economics / Cost-Architecture Lane (High) [NEW 2026-06-10]
+
+Zero existing content on model-tier economics despite BYOK cost being a live buyer objection. PR #5096 (model-tier optimization, closes #3791) supplies the story: judgment on the best model, busywork on the cheapest, never-downgrade enforced by CI; ~65-80% token savings per fan-out run for BYOK users.
+
+- **Pipeline:** ship tweet + Discord with-merge; blog "Pay 10x Only for Judgment" at merge+2-5 days (slot via campaign-calendar); social-distribute with blog.
+- **Tracking:** #5115 (content brief, ship Phase 5.5 CMO gate).
+
 ### Gap 1: Cross-Domain Compounding Narrative (Critical) [UPDATED 2026-03-20]
 
 **What is missing:** The "Why Most Agentic Engineering Tools Plateau" blog post (SAP 4.8/5.0) partially addresses this gap by explaining compound knowledge. However, no dedicated article exists that explains the compounding knowledge base as Soleur's core differentiator in depth. The homepage mentions "knowledge compounds" as a tagline but never elaborates.
