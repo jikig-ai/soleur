@@ -23,7 +23,7 @@
 // scaffolds an ephemeral workspace at /tmp/soleur-cron-bug-fixer-<X>/
 // containing:
 //   - repo/                          (in-handler `git clone --depth=1`)
-//   - repo/plugins/soleur            (symlink to getPluginPath())
+//   - repo/plugins/soleur            (the clone's own tracked tree — #5091)
 //   - repo/.claude/settings.json     (DEFAULT_SETTINGS overlay)
 // The spawn cwd is repo/ so that:
 //   (a) the explicit `--plugin-dir plugins/soleur` flag (in CLAUDE_CODE_FLAGS
@@ -65,6 +65,7 @@ import {
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
 import type { Octokit } from "@octokit/core";
+import { enableAutoMergeSquash } from "./_cron-safe-commit";
 import { inngest } from "@/server/inngest/client";
 import { createProbeOctokit } from "@/server/github/probe-octokit";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
@@ -438,58 +439,35 @@ async function runAutoMergeGate(args: {
     };
   }
 
-  // All checks passed — fire enablePullRequestAutoMerge mutation.
-  const mutation = `
-    mutation EnableAutoMerge($pullRequestId: ID!) {
-      enablePullRequestAutoMerge(input: {
-        pullRequestId: $pullRequestId,
-        mergeMethod: SQUASH
-      }) {
-        pullRequest { autoMergeRequest { enabledAt } }
-      }
-    }
-  `;
-  try {
-    await octokit.graphql(mutation, { pullRequestId: pr.node_id });
+  // All checks passed — fire enablePullRequestAutoMerge (shared with the
+  // safe-commit pipeline since #5091; carries the idempotent-replay
+  // "already enabled" tolerance — that path is expected under Inngest
+  // step.run re-execution and MUST NOT emit a Sentry breadcrumb).
+  const autoMerge = await enableAutoMergeSquash(octokit, pr.node_id);
+  if (autoMerge.enabled) {
     logger.info(
       { fn: "cron-bug-fixer", prNumber: pr.number },
       "Auto-merge queued",
     );
     return { queued: true };
-  } catch (err) {
-    // Idempotent path: under Inngest replay (step.run re-execution), the
-    // second call to enablePullRequestAutoMerge returns "Pull request Auto
-    // merge is already enabled". Treat as success — the prior call already
-    // enabled it. Match by message substring (case-insensitive) since the
-    // GraphQL response shape doesn't carry a stable error code.
-    const message = ((err as Error).message ?? "").toLowerCase();
-    if (
-      message.includes("auto merge is already enabled") ||
-      message.includes("auto-merge is already enabled") ||
-      message.includes("already enabled auto merge") ||
-      message.includes("already enabled auto-merge")
-    ) {
-      logger.info(
-        { fn: "cron-bug-fixer", prNumber: pr.number },
-        "Auto-merge already enabled (idempotent replay) — treating as queued",
-      );
-      return { queued: true };
-    }
-    reportSilentFallback(err, {
-      feature: "cron-bug-fixer",
-      op: "enable-auto-merge",
-      message: "enablePullRequestAutoMerge GraphQL mutation failed",
-      extra: {
-        fn: "cron-bug-fixer",
-        prNumber: pr.number,
-        prNodeId: pr.node_id,
-      },
-    });
-    return {
-      queued: false,
-      reason: `GraphQL mutation failed: ${(err as Error).message}`,
-    };
   }
+  const reason = autoMerge.cleanStatus
+    ? "Pull request is in clean status"
+    : (autoMerge.reason ?? "enablePullRequestAutoMerge failed");
+  reportSilentFallback(new Error(reason), {
+    feature: "cron-bug-fixer",
+    op: "enable-auto-merge",
+    message: "enablePullRequestAutoMerge GraphQL mutation failed",
+    extra: {
+      fn: "cron-bug-fixer",
+      prNumber: pr.number,
+      prNodeId: pr.node_id,
+    },
+  });
+  return {
+    queued: false,
+    reason: `GraphQL mutation failed: ${reason}`,
+  };
 }
 
 // =============================================================================

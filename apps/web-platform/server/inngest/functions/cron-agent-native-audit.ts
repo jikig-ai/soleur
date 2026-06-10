@@ -37,7 +37,7 @@
 //
 // PLUGIN-LOADING — Verbatim PR-5 ephemeral-workspace pattern:
 //   - repo/                          (in-handler `git clone --depth=1`)
-//   - repo/plugins/soleur            (symlink to getPluginPath())
+//   - repo/plugins/soleur            (the clone's own tracked tree — #5091)
 //   - repo/.claude/settings.json     (DEFAULT_SETTINGS overlay)
 // Plugin resolution under headless `--print` requires the explicit
 // `--plugin-dir plugins/soleur` flag in CLAUDE_CODE_FLAGS below — the symlinked

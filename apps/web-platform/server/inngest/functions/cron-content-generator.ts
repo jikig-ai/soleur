@@ -30,6 +30,7 @@ import {
   spawnClaudeEval,
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
+import { safeCommitAndPr } from "./_cron-safe-commit";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 
@@ -64,13 +65,13 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 //     precedent is cron-competitive-analysis / cron-legal-audit, which already
 //     allow it) must be listed or the skill cannot run at all. --max-turns
 //     stays 50.
-//   - `--plugin-dir plugins/soleur` REGISTERS the symlinked plugin. Per
+//   - `--plugin-dir plugins/soleur` REGISTERS the plugin. Per
 //     `claude --plugin-dir <path>` ("Load a plugin from a directory or .zip"),
 //     loading a directory-based plugin in a headless `--print` run requires the
-//     flag explicitly — a bare symlinked plugins/ dir is NOT auto-discovered
+//     flag explicitly — a bare plugins/ dir is NOT auto-discovered
 //     (the interactive marketplace/enabledPlugins trust flow does not run under
-//     --print). The path is the symlink setupEphemeralWorkspace creates at
-//     <spawnCwd>/plugins/soleur and MUST precede the `--` marker.
+//     --print). The path is the clone's own tracked tree at
+//     <spawnCwd>/plugins/soleur (#5091) and MUST precede the `--` marker.
 const CLAUDE_CODE_FLAGS = [
   "--print",
   "--model",
@@ -86,7 +87,7 @@ const CLAUDE_CODE_FLAGS = [
 
 // Verbatim prompt extracted from
 // .github/workflows/scheduled-content-generator.yml.
-const CONTENT_GENERATOR_PROMPT = `IMPORTANT: This is an automated CI workflow. Do NOT push directly to main. Use the PR-based commit pattern in the MANDATORY FINAL STEP.
+const CONTENT_GENERATOR_PROMPT = `IMPORTANT: This is an automated CI workflow. Do NOT push directly to main.
 
 MILESTONE RULE: Every gh issue create command must include --milestone "Post-MVP / Later".
 
@@ -107,7 +108,7 @@ Run /soleur:social-distribute <article-path> --headless
 Ensure frontmatter has: publish_date: <today>, status: scheduled, channels: discord, x, bluesky, linkedin-company
 
 STEP 4 — Validation runs in CI (do NOT build locally):
-This ephemeral workspace is a shallow clone with no node_modules, so a local "npx @11ty/eleventy" build cannot run here. Validation happens on the PR you open in the MANDATORY FINAL STEP: CI runs "npx @11ty/eleventy" and "scripts/validate-blog-links.sh", and the "gh pr merge --auto" below only merges once those required checks pass. Your job is to make CI green — ensure the article's Eleventy frontmatter is valid and every internal link resolves. Do NOT attempt a local build or run the validation scripts yourself.
+This ephemeral workspace is a shallow clone with no node_modules, so a local "npx @11ty/eleventy" build cannot run here. Validation happens on the PR the platform opens from your changes after the run: CI runs "npx @11ty/eleventy" and "scripts/validate-blog-links.sh", and the PR only auto-merges once those required checks pass. Your job is to make CI green — ensure the article's Eleventy frontmatter is valid and every internal link resolves. Do NOT attempt a local build or run the validation scripts yourself.
 
 STEP 5 — Record topic in queue:
 Update seo-refresh-queue.md with generated_date annotation.
@@ -115,18 +116,18 @@ Update seo-refresh-queue.md with generated_date annotation.
 STEP 6 — Create audit issue:
 "[Scheduled] Content Generator - <today>" with label "scheduled-content-generator"
 
-MANDATORY FINAL STEP — persist via PR:
-git config user.name "github-actions[bot]"
-git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-git add -A
-git diff --cached --quiet && echo "No changes to commit" && exit 0
-BRANCH="ci/content-gen-$(date -u +%Y-%m-%d-%H%M%S)"
-git checkout -b "$BRANCH"
-git commit -m "feat(content): auto-generate article"
-git push -u origin "$BRANCH"
-gh pr create --title "feat(content): auto-generate article $(date -u +%Y-%m-%d)" --body "Automated commit from content generator workflow." --base main --head "$BRANCH"
-gh pr merge "$BRANCH" --squash --auto
+PERSISTENCE: Do NOT run git add, git commit, git push, or gh pr create/merge.
+The platform commits and opens a PR for your changes automatically after the run.
 `;
+
+// Persistence allowlist (#5091): the article + distribution content + queue
+// annotation land under knowledge-base/marketing/; content-writer's default
+// article path is plugins/soleur/docs/blog/ (committable from the clone now
+// that the substrate no longer symlink-shadows plugins/soleur).
+const CONTENT_GENERATOR_ALLOWED_PATHS = [
+  "knowledge-base/marketing/",
+  "plugins/soleur/docs/blog/",
+] as const;
 
 // Spawn-env allowlist (NOT a denylist). The keys below are the COMPLETE set
 // the spawned claude is allowed to see; anything not listed (notably
@@ -265,7 +266,7 @@ export async function cronContentGeneratorHandler({
       );
     }
 
-    // --- Step 4: output-aware heartbeat. The prompt's MANDATORY STEP 6 always
+    // --- Step 4: output-aware heartbeat. The prompt's STEP 6 always
     //     creates a `scheduled-content-generator` audit issue (even on the
     //     no-topic / FAIL-citation early exits); a clean run that produced none
     //     turns the monitor RED instead of false-green. ---
@@ -280,6 +281,28 @@ export async function cronContentGeneratorHandler({
         stdoutTail: spawnResult.stdoutTail,
       }),
     );
+    // --- Step 4.5: deterministic persistence (#5091). Gated on the
+    //     issue-verified output (NOT the spawn exit code) and on
+    //     !abortedByTimeout — see cron-seo-aeo-audit.ts for the full
+    //     rationale. Guard aborts / persistence failures self-report inside
+    //     the helper (Sentry + issue comment).
+    if (heartbeatOk && !spawnResult.abortedByTimeout) {
+      await step.run("safe-commit-pr", async () =>
+        safeCommitAndPr({
+          spawnCwd: spawnCwd!,
+          installationToken,
+          cronName: "cron-content-generator",
+          commitMessage: "feat(content): auto-generate article",
+          prTitle: `feat(content): auto-generate article ${runStartedAt.slice(0, 10)}`,
+          prBody:
+            "Automated PR from the content generator cron — committed handler-side via safeCommitAndPr (#5091).",
+          allowedPaths: CONTENT_GENERATOR_ALLOWED_PATHS,
+          runStartedAt,
+          scheduledIssueLabel: SENTRY_MONITOR_SLUG,
+          logger,
+        }),
+      );
+    }
     await step.run("sentry-heartbeat", async () => {
       await postSentryHeartbeat({ ok: heartbeatOk, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-content-generator", logger });
     });

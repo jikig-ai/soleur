@@ -5,7 +5,7 @@
 //   1. Registration shape (cron + manual-trigger event triggers, concurrency,
 //      retries) — drift here breaks the Inngest scheduler contract.
 //   2. Prompt-canary anchors (seo-refresh-queue, Priority 1, growth fix,
-//      validate-seo, MANDATORY FINAL STEP) — original anchors from the GHA
+//      validate-seo, Do NOT run git add) — anchors from the GHA
 //      prompt that must survive silent paraphrasing across plan→work→ship
 //      cycles.
 //   3. Timing constants exported (MAX_TURN_DURATION_MS, KILL_ESCALATION_MS)
@@ -92,11 +92,10 @@ describe("GROWTH_EXECUTION_PROMPT — anchor strings (regression-detection)", ()
       ["Priority 1", "priority level for stale pages"],
       ["growth fix", "skill invocation verb"],
       ["validate-seo", "build validation script"],
-      ["MANDATORY FINAL STEP", "PR-creation block heading"],
+      ["PERSISTENCE: Do NOT run git add", "platform-persistence directive (#5091)"],
       ["[Scheduled] Growth Execution", "issue-title format"],
       ["scheduled-growth-execution", "label / Sentry monitor slug"],
-      ["gh pr create", "PR-creation gh invocation"],
-      ["gh pr merge", "auto-merge gh invocation"],
+      ["opens a PR for your changes", "handler-side persistence note (#5091)"],
       ["MILESTONE RULE:", "rule keyword"],
       [
         "Do NOT push directly to main",

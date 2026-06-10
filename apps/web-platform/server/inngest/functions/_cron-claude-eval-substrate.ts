@@ -1,9 +1,8 @@
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { getPluginPath } from "@/server/plugin-path";
 import { reportSilentFallback } from "@/server/observability";
 import {
   buildAuthenticatedCloneUrl,
@@ -179,8 +178,8 @@ export const DEFAULT_CLAUDE_SETTINGS = {
 };
 
 // Relative-to-spawnCwd paths inside the clone. The hook ships via the git clone
-// (a tracked file), NOT the symlinked plugins/ mount — so a Write to it is scoped
-// to the single ephemeral run (and denied by the hook's own Write/Edit guard).
+// (a tracked file) — so a Write to it is scoped to the single ephemeral run
+// (and denied by the hook's own Write/Edit guard).
 const HOOK_REL_PATH =
   "apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs";
 const ALLOWLIST_REL_PATH = ".claude/cron-allow.txt";
@@ -302,11 +301,15 @@ export async function setupEphemeralWorkspace(args: {
     );
   }
 
-  const pluginsDir = join(spawnCwd, "plugins");
-  const symlinkTarget = join(pluginsDir, "soleur");
-  await rm(symlinkTarget, { recursive: true, force: true });
-  await mkdir(pluginsDir, { recursive: true });
-  await symlink(getPluginPath(), symlinkTarget);
+  // #5091 — the depth-1 clone already contains the full tracked
+  // plugins/soleur tree, and headless `--plugin-dir plugins/soleur` resolves
+  // against it (spike-verified under a scrubbed HOME; the flag itself remains
+  // required per #4993/#4987). The previous rm+symlink(getPluginPath()) swap
+  // made clone-git see every tracked plugins/soleur file as DELETED on every
+  // run (the #5026 destructive-PR contamination, 654 files) and routed the
+  // spawned claude's plugin-docs edits to the HOST plugin dir — mutating the
+  // live install and making the edits uncommittable from the clone.
+  const pluginDir = join(spawnCwd, "plugins", "soleur");
 
   const claudeDir = join(spawnCwd, ".claude");
   await mkdir(claudeDir, { recursive: true });
@@ -325,10 +328,10 @@ export async function setupEphemeralWorkspace(args: {
     "utf-8",
   );
 
-  const manifestPath = join(symlinkTarget, ".claude-plugin", "plugin.json");
+  const manifestPath = join(pluginDir, ".claude-plugin", "plugin.json");
   if (!existsSync(manifestPath)) {
     throw new Error(
-      `Plugin sentinel check failed: ${manifestPath} does not exist (symlink target empty or wrong path)`,
+      `Plugin sentinel check failed: ${manifestPath} does not exist (clone incomplete or plugin tree moved)`,
     );
   }
 

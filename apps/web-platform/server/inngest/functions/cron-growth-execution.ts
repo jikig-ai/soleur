@@ -26,13 +26,13 @@
 //   - MAX_TURN_DURATION_MS 30 min (lower than 50 min cohort — biweekly
 //     growth execution is a lighter workload).
 //   - Cron: biweekly 1st and 15th @ 10:00 UTC.
-//   - Side-effect class: issue-creator + pr-creator (MANDATORY FINAL STEP
-//     block creates branch → commit → gh pr create → gh pr merge --squash
-//     --auto).
+//   - Side-effect class: issue-creator + pr-creator (persistence runs
+//     handler-side via safeCommitAndPr after the eval — #5091; the prompt
+//     forbids the spawned claude from running git/gh-pr verbs).
 //
 // PLUGIN-LOADING — Verbatim ephemeral-workspace pattern:
 //   - repo/                          (in-handler `git clone --depth=1`)
-//   - repo/plugins/soleur            (symlink to getPluginPath())
+//   - repo/plugins/soleur            (the clone's own tracked tree — #5091)
 //   - repo/.claude/settings.json     (DEFAULT_SETTINGS overlay)
 // Plugin resolution under headless `--print` requires the explicit
 // `--plugin-dir plugins/soleur` flag in CLAUDE_CODE_FLAGS below — the symlinked
@@ -60,6 +60,7 @@ import {
   spawnClaudeEval,
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
+import { safeCommitAndPr } from "./_cron-safe-commit";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 
@@ -104,10 +105,10 @@ const CLAUDE_CODE_FLAGS = [
 // .github/workflows/scheduled-growth-execution.yml (the `prompt: |` block
 // body, YAML indentation stripped).
 // Verbatim-extraction discipline: anchor strings ("seo-refresh-queue",
-// "Priority 1", "growth fix", "validate-seo", "MANDATORY FINAL STEP")
+// "Priority 1", "growth fix", "validate-seo", "Do NOT run git add")
 // asserted by the test suite to catch silent paraphrasing across
 // plan→work cycles.
-const GROWTH_EXECUTION_PROMPT = `IMPORTANT: This is an automated CI workflow. Do NOT push directly to main. Use the PR-based commit pattern in the MANDATORY FINAL STEP.
+const GROWTH_EXECUTION_PROMPT = `IMPORTANT: This is an automated CI workflow. Do NOT push directly to main.
 
 MILESTONE RULE: Every gh issue create command must include --milestone "Post-MVP / Later".
 
@@ -123,18 +124,17 @@ Then create a GitHub issue titled "[Scheduled] Growth Execution - <today>" with 
 
 If no stale pages are found, create the issue noting "No stale pages found — all Priority 1 items are up to date."
 
-MANDATORY FINAL STEP — persist via PR:
-git config user.name "github-actions[bot]"
-git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-git add -A
-git diff --cached --quiet && echo "No changes to commit" && exit 0
-BRANCH="ci/growth-execution-$(date -u +%Y-%m-%d-%H%M%S)"
-git checkout -b "$BRANCH"
-git commit -m "fix(growth): biweekly keyword optimization"
-git push -u origin "$BRANCH"
-gh pr create --title "fix(growth): biweekly keyword optimization $(date -u +%Y-%m-%d)" --body "Automated commit from growth execution workflow." --base main --head "$BRANCH"
-gh pr merge "$BRANCH" --squash --auto
+PERSISTENCE: Do NOT run git add, git commit, git push, or gh pr create/merge.
+The platform commits and opens a PR for your changes automatically after the run.
 `;
+
+// Persistence allowlist (#5091): keyword/page fixes land under the docs site
+// (committable from the clone now that the substrate no longer symlink-shadows
+// plugins/soleur) plus the seo-refresh-queue annotation under marketing/.
+const GROWTH_EXECUTION_ALLOWED_PATHS = [
+  "knowledge-base/marketing/",
+  "plugins/soleur/docs/",
+] as const;
 
 // Spawn-env allowlist (NOT a denylist). The keys below are the COMPLETE
 // set the spawned claude is allowed to see; anything not listed (notably
@@ -278,6 +278,28 @@ export async function cronGrowthExecutionHandler({
         stdoutTail: spawnResult.stdoutTail,
       }),
     );
+    // --- Step 4.5: deterministic persistence (#5091). Gated on the
+    //     issue-verified output (NOT the spawn exit code) and on
+    //     !abortedByTimeout — see cron-seo-aeo-audit.ts for the full
+    //     rationale. Guard aborts / persistence failures self-report inside
+    //     the helper (Sentry + issue comment).
+    if (heartbeatOk && !spawnResult.abortedByTimeout) {
+      await step.run("safe-commit-pr", async () =>
+        safeCommitAndPr({
+          spawnCwd: spawnCwd!,
+          installationToken,
+          cronName: "cron-growth-execution",
+          commitMessage: "fix(growth): biweekly keyword optimization",
+          prTitle: `fix(growth): biweekly keyword optimization ${runStartedAt.slice(0, 10)}`,
+          prBody:
+            "Automated PR from the growth execution cron — committed handler-side via safeCommitAndPr (#5091).",
+          allowedPaths: GROWTH_EXECUTION_ALLOWED_PATHS,
+          runStartedAt,
+          scheduledIssueLabel: SENTRY_MONITOR_SLUG,
+          logger,
+        }),
+      );
+    }
     await step.run("sentry-heartbeat", async () => {
       await postSentryHeartbeat({ ok: heartbeatOk, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-growth-execution", logger });
     });

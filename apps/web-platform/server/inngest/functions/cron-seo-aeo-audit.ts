@@ -27,16 +27,16 @@
 //     SEO/AEO audit is a lighter workload).
 //   - Cron: weekly Monday 11:00 UTC (staggered from 10:00 per plan to
 //     avoid collision with growth-execution on 1st/15th).
-//   - Side-effect class: issue-creator + pr-creator (MANDATORY FINAL STEP
-//     block creates branch → commit → gh pr create → gh pr merge --squash
-//     --auto).
+//   - Side-effect class: issue-creator + pr-creator (persistence runs
+//     handler-side via safeCommitAndPr after the eval — #5091; the prompt
+//     forbids the spawned claude from running git/gh-pr verbs).
 //
 // PLUGIN-LOADING — Verbatim ephemeral-workspace pattern:
 //   - repo/                          (in-handler `git clone --depth=1`)
-//   - repo/plugins/soleur            (symlink to getPluginPath())
+//   - repo/plugins/soleur            (the clone's own tracked tree — #5091)
 //   - repo/.claude/settings.json     (DEFAULT_SETTINGS overlay)
 // Plugin resolution under headless `--print` requires the explicit
-// `--plugin-dir plugins/soleur` flag in CLAUDE_CODE_FLAGS below — the symlinked
+// `--plugin-dir plugins/soleur` flag in CLAUDE_CODE_FLAGS below — the
 // plugins/soleur dir is NOT auto-discovered from spawn cwd in headless mode (the
 // interactive marketplace/enabledPlugins trust flow does not run under --print).
 // See #4993 / #4987.
@@ -61,6 +61,7 @@ import {
   spawnClaudeEval,
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
+import { safeCommitAndPr } from "./_cron-safe-commit";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 
@@ -101,13 +102,14 @@ const CLAUDE_CODE_FLAGS = [
   "--",
 ];
 
-// Verbatim prompt extracted from
-// .github/workflows/scheduled-seo-aeo-audit.yml (the `prompt: |` block
-// body, YAML indentation stripped).
+// Ported from .github/workflows/scheduled-seo-aeo-audit.yml; #5091 removed
+// the prompt-level commit block (the platform persists handler-side via
+// safeCommitAndPr — a blanket add here staged 654 structural deletions in
+// destructive PR #5026).
 // Verbatim-extraction discipline: anchor strings ("seo-aeo", "SEO/AEO
-// Audit", "scheduled-seo-aeo-audit", "MANDATORY FINAL STEP") asserted by
+// Audit", "scheduled-seo-aeo-audit", "Do NOT run git add") asserted by
 // the test suite to catch silent paraphrasing across plan→work cycles.
-const SEO_AEO_AUDIT_PROMPT = `IMPORTANT: This is an automated CI workflow. Do NOT push directly to main. Use the PR-based commit pattern in the MANDATORY FINAL STEP.
+const SEO_AEO_AUDIT_PROMPT = `IMPORTANT: This is an automated CI workflow. Do NOT push directly to main.
 
 MILESTONE RULE: Every gh issue create command must include --milestone "Post-MVP / Later".
 
@@ -115,18 +117,14 @@ Run /soleur:seo-aeo fix on this repository.
 
 After the audit and fix is complete, create a GitHub issue titled "[Scheduled] SEO/AEO Audit - <today>" with the label "scheduled-seo-aeo-audit" summarizing what issues were found, what fixes were applied, and build validation results.
 
-MANDATORY FINAL STEP — persist via PR:
-git config user.name "github-actions[bot]"
-git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-git add -A
-git diff --cached --quiet && echo "No changes to commit" && exit 0
-BRANCH="ci/seo-aeo-audit-$(date -u +%Y-%m-%d-%H%M%S)"
-git checkout -b "$BRANCH"
-git commit -m "fix(seo): weekly SEO/AEO audit fixes"
-git push -u origin "$BRANCH"
-gh pr create --title "fix(seo): weekly SEO/AEO audit fixes $(date -u +%Y-%m-%d)" --body "Automated commit from SEO/AEO audit workflow." --base main --head "$BRANCH"
-gh pr merge "$BRANCH" --squash --auto
+PERSISTENCE: Do NOT run git add, git commit, git push, or gh pr create/merge.
+The platform commits and opens a PR for your changes automatically after the run.
 `;
+
+// Persistence allowlist (#5091): the audit edits the Eleventy docs site under
+// the plugin tree — committable from the clone now that the substrate no
+// longer symlink-shadows plugins/soleur.
+const SEO_AEO_ALLOWED_PATHS = ["plugins/soleur/docs/"] as const;
 
 // Spawn-env allowlist (NOT a denylist). The keys below are the COMPLETE
 // set the spawned claude is allowed to see; anything not listed (notably
@@ -270,6 +268,31 @@ export async function cronSeoAeoAuditHandler({
         stdoutTail: spawnResult.stdoutTail,
       }),
     );
+    // --- Step 4.5: deterministic persistence (#5091). Gated on the
+    //     issue-verified output, NOT the spawn exit code: exit-0-with-no-issue
+    //     is unverified (possibly mid-edit) work that must not auto-merge,
+    //     while issue-created + non-zero exit is the documented healthy #4747
+    //     case whose diff must not be discarded. abortedByTimeout also skips —
+    //     a 30-min hard kill can land mid-edit, and the timeout is already
+    //     loud via the reportSilentFallback above. Guard aborts / persistence
+    //     failures self-report inside the helper (Sentry + issue comment).
+    if (heartbeatOk && !spawnResult.abortedByTimeout) {
+      await step.run("safe-commit-pr", async () =>
+        safeCommitAndPr({
+          spawnCwd: spawnCwd!,
+          installationToken,
+          cronName: "cron-seo-aeo-audit",
+          commitMessage: "fix(seo): weekly SEO/AEO audit fixes",
+          prTitle: `fix(seo): weekly SEO/AEO audit fixes ${runStartedAt.slice(0, 10)}`,
+          prBody:
+            "Automated PR from the SEO/AEO audit cron — committed handler-side via safeCommitAndPr (#5091).",
+          allowedPaths: SEO_AEO_ALLOWED_PATHS,
+          runStartedAt,
+          scheduledIssueLabel: SENTRY_MONITOR_SLUG,
+          logger,
+        }),
+      );
+    }
     await step.run("sentry-heartbeat", async () => {
       await postSentryHeartbeat({ ok: heartbeatOk, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-seo-aeo-audit", logger });
     });

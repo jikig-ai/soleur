@@ -25,15 +25,12 @@
 //     allowlist-matched paths aborts the whole persistence step (no branch,
 //     no PR) — the #5026 class, bounded structurally.
 
-import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { Octokit } from "@octokit/core";
 import { reportSilentFallback } from "@/server/observability";
 import { redactToken, REPO_OWNER, REPO_NAME, type HandlerArgs } from "./_cron-shared";
-
-const execFileP = promisify(execFile);
 
 // Module constant, not per-cron config: every wired pipeline shares the same
 // threshold until one demonstrably needs an override (then add an optional
@@ -148,6 +145,13 @@ async function runGit(
   args: string[],
   extraEnv?: Record<string, string>,
 ): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+  // Lazy import: many sibling cron TEST files vi.mock("node:child_process")
+  // with spawn-only factories; a top-level promisify(execFile) would crash
+  // at module load in every file that imports a migrated cron. Importing at
+  // call time keeps this module loadable under those mocks (runGit itself is
+  // only exercised by cron-safe-commit.test.ts, which does not mock it).
+  const { execFile } = await import("node:child_process");
+  const execFileP = promisify(execFile);
   try {
     const { stdout, stderr } = await execFileP("git", args, {
       cwd: spawnCwd,

@@ -4,7 +4,7 @@
 //   1. Registration shape (cron + manual-trigger event triggers, concurrency,
 //      retries) — drift here breaks the Inngest scheduler contract.
 //   2. Prompt-canary anchors (seo-refresh-queue, content-writer,
-//      social-distribute, validate-blog-links, MANDATORY FINAL STEP) —
+//      social-distribute, validate-blog-links, Do NOT run git add) —
 //      original anchors from the GHA prompt that must survive silent
 //      paraphrasing.
 //   3. Timing constants exported (MAX_TURN_DURATION_MS, KILL_ESCALATION_MS).
@@ -80,7 +80,7 @@ describe("CONTENT_GENERATOR_PROMPT — anchor strings (regression-detection)", (
       ["content-writer", "article generation skill"],
       ["social-distribute", "distribution content skill"],
       ["validate-blog-links", "link validation script"],
-      ["MANDATORY FINAL STEP", "persist-via-PR pattern"],
+      ["PERSISTENCE: Do NOT run git add", "platform-persistence directive (#5091)"],
     ])("contains %s (%s)", (anchor) => {
       expect(SUT_SOURCE).toContain(anchor);
     });
@@ -93,12 +93,8 @@ describe("CONTENT_GENERATOR_PROMPT — anchor strings (regression-detection)", (
         "PR-based commit pattern (no direct main writes)",
       ],
       [
-        "git checkout -b",
-        "PR branch creation in Persist-via-PR step",
-      ],
-      [
-        "gh pr merge",
-        "Persist-via-PR auto-merge",
+        "opens a PR for your changes",
+        "handler-side persistence note (#5091)",
       ],
       [
         "scheduled-content-generator",
@@ -122,7 +118,8 @@ describe("CONTENT_GENERATOR_PROMPT — anchor strings (regression-detection)", (
 // #4987 — skill + build-validation degradation fix.
 //   (A) CLAUDE_CODE_FLAGS must let the headless `claude --print` eval resolve
 //       AND invoke the plugin's /soleur:* skills: `--plugin-dir plugins/soleur`
-//       loads the symlinked plugin (a bare plugins/ dir does NOT auto-register
+//       loads the plugin from the clone's own tracked tree (#5091) — a bare
+//       plugins/ dir does NOT auto-register
 //       in headless mode — see feature-request-plugin-dir-settings.md), and the
 //       `--allowedTools` allowlist must include `Skill` (invoke skills) + `Task`
 //       (content-writer's fact-checker subagent).
@@ -146,7 +143,7 @@ describe("CLAUDE_CODE_FLAGS — skill + plugin-dir resolution (#4987)", () => {
     );
   });
 
-  it("loads the symlinked plugin via --plugin-dir plugins/soleur", () => {
+  it("loads the plugin via --plugin-dir plugins/soleur (clone's own tracked tree — #5091)", () => {
     expect(flagsBlock).toContain('"--plugin-dir"');
     expect(flagsBlock).toContain('"plugins/soleur"');
     expect(flagsBlock).toMatch(/"--plugin-dir",\s*\n\s*"plugins\/soleur",/);

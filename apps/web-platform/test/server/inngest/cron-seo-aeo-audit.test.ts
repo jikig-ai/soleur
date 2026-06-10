@@ -5,7 +5,7 @@
 //   1. Registration shape (cron + manual-trigger event triggers, concurrency,
 //      retries) — drift here breaks the Inngest scheduler contract.
 //   2. Prompt-canary anchors (seo-aeo, SEO/AEO Audit, scheduled-seo-aeo-audit,
-//      MANDATORY FINAL STEP) — original anchors from the GHA prompt that must
+//      Do NOT run git add) — anchors that must
 //      survive silent paraphrasing across plan→work→ship cycles.
 //   3. Timing constants exported (MAX_TURN_DURATION_MS, KILL_ESCALATION_MS)
 //      so the substrate-extraction follow-up can centralise them without
@@ -90,9 +90,8 @@ describe("SEO_AEO_AUDIT_PROMPT — anchor strings (regression-detection)", () =>
       ["seo-aeo", "skill reference"],
       ["SEO/AEO Audit", "issue title fragment"],
       ["scheduled-seo-aeo-audit", "label / Sentry monitor slug"],
-      ["MANDATORY FINAL STEP", "PR-creation block heading"],
-      ["gh pr create", "PR-creation gh invocation"],
-      ["gh pr merge", "auto-merge gh invocation"],
+      ["PERSISTENCE: Do NOT run git add", "platform-persistence directive (#5091)"],
+      ["opens a PR for your changes", "handler-side persistence note (#5091)"],
       ["MILESTONE RULE:", "rule keyword"],
       [
         "Do NOT push directly to main",
