@@ -2,13 +2,14 @@
 title: "Legitimate Interest Assessment — LinkedIn Company Page publication (Jikigai)"
 type: legitimate-interest-assessment
 date: 2026-05-19
+amended: 2026-06-10
 plan: knowledge-base/project/plans/2026-05-19-feat-legal-linkedin-page-4051-plan.md
 issue: 4051
 status: draft-requires-counsel-review
 controller: "Jikigai SARL (France; 25 rue de Ponthieu, 75008 Paris)"
-processing_activity: "LinkedIn Company Page publication — Page operation + Page Insights consumption against `https://www.linkedin.com/company/jikigai/`"
+processing_activity: "LinkedIn Company Page publication — Page operation + Page Insights consumption against `https://www.linkedin.com/company/soleur/`"
 lawful_basis: "Art. 6(1)(f) GDPR — legitimate interest"
-data_subjects: "LinkedIn Page followers + members who engage with Jikigai Page posts (commenters, reactors). The Jikigai SARL gérant is a separate data subject for the K-bis transfer (Art. 6(1)(c) legal obligation — cross-referenced below, NOT the subject of this LIA)."
+data_subjects: "LinkedIn Page followers + members who engage with Soleur Page posts (commenters, reactors). The Jikigai SARL gérant is a separate data subject for the K-bis transfer (Art. 6(1)(c) legal obligation — cross-referenced below, NOT the subject of this LIA)."
 related: [article-30-register, 4046, 4047]
 ---
 
@@ -16,7 +17,9 @@ related: [article-30-register, 4046, 4047]
 
 # Legitimate Interest Assessment — LinkedIn Company Page publication (Jikigai)
 
-This LIA documents the Art. 6(1)(f) three-part test for **operating the Jikigai-owned LinkedIn Company Page** (`https://www.linkedin.com/company/jikigai/`) as a marketing / community / case-study distribution channel for Soleur content. The processing activity is the cumulative set of (i) posts produced by `scripts/content-publisher.sh` (cron) against the LinkedIn Community Management API (developer app 229658411) using a 60-day-rotated `LINKEDIN_ORG_ACCESS_TOKEN`, and (ii) the consumption of LinkedIn Page Insights metrics surfaced to the Page admin by LinkedIn Ireland Unlimited Company.
+> **Amendment (2026-06-10) — Page identity change, processing activity unchanged.** Following the operator's brand-separation decision, the publication surface moved from the Jikigai Company Page (`linkedin.com/company/jikigai/`, org 112298380) to the new dedicated **Soleur** Company Page (`linkedin.com/company/soleur/`, org 129094054), administered by the same controller (Jikigai SARL) under the same developer app (229658411), token (`LINKEDIN_ORG_ACCESS_TOKEN`), publisher pipeline, and scopes. Zero posts had been published to the prior Page surface, so no data subjects migrated. The three-part test below is unaffected: purposes, necessity reasoning, and the balancing analysis apply identically to the new Page identity. The Jikigai Page remains the app's business-verification anchor and the company's professional-services presence; it is no longer the Soleur content publication surface.
+
+This LIA documents the Art. 6(1)(f) three-part test for **operating the Jikigai-owned Soleur LinkedIn Company Page** (`https://www.linkedin.com/company/soleur/`) as a marketing / community / case-study distribution channel for Soleur content. The processing activity is the cumulative set of (i) posts produced by `scripts/content-publisher.sh` (cron) against the LinkedIn Community Management API (developer app 229658411) using a 60-day-rotated `LINKEDIN_ORG_ACCESS_TOKEN`, and (ii) the consumption of LinkedIn Page Insights metrics surfaced to the Page admin by LinkedIn Ireland Unlimited Company.
 
 The K-bis disclosure to Microsoft Ireland Operations Ltd that happens once at the appeal-flow step is **not** the subject of this LIA — it is documented as Art. 6(1)(c) legal obligation in Article 30 PA15 row "Lawful basis" entry (i). This LIA references that transfer at `## Purpose` paragraph 3 for completeness but does not derive its lawful basis here.
 
@@ -38,7 +41,7 @@ Cited guidance:
 
 The processing serves **two cumulative legitimate purposes**:
 
-1. **Operate the Jikigai LinkedIn Company Page as a marketing / community / case-study distribution channel.** Jikigai SARL is the controller of `https://www.linkedin.com/company/jikigai/` (LinkedIn Company Page slug `jikigai`). The Page is the primary B2B presence for Soleur and the named-controller surface under which content (blog posts, release notes, case studies, founder narrative) is distributed to professional audiences. Posts are produced by `scripts/content-publisher.sh` (cron) and submitted via the Community Management API on the `w_organization_social` scope. The Page exists to (i) reach Soleur's target audience where they already exist (LinkedIn is the canonical B2B/SaaS distribution channel), (ii) build a follower base for community signal, (iii) carry case studies that demonstrate Soleur's effects on real engineering organisations.
+1. **Operate the Jikigai-administered Soleur LinkedIn Company Page as a marketing / community / case-study distribution channel.** Jikigai SARL is the controller of `https://www.linkedin.com/company/soleur/` (LinkedIn Company Page slug `soleur`). The Page is the primary B2B presence for Soleur and the named-controller surface under which content (blog posts, release notes, case studies, founder narrative) is distributed to professional audiences. Posts are produced by `scripts/content-publisher.sh` (cron) and submitted via the Community Management API on the `w_organization_social` scope. The Page exists to (i) reach Soleur's target audience where they already exist (LinkedIn is the canonical B2B/SaaS distribution channel), (ii) build a follower base for community signal, (iii) carry case studies that demonstrate Soleur's effects on real engineering organisations.
 
 2. **Consume Page Insights metrics to evaluate marketing effectiveness.** LinkedIn Page Insights API surfaces aggregate engagement metrics (impressions, reactions, comments, shares, follower growth) to the Page admin (Jikigai SARL). Soleur consumes these in aggregate to (i) measure marketing effectiveness per post, (ii) inform editorial decisions about which content classes resonate, (iii) provide quarterly traction-evidence inputs to investor / customer conversations. Aggregate consumption only — no individual-follower targeting, no follower-list extraction beyond LinkedIn's own admin UI surfaces, no DM scraping, no private-data API calls.
 
@@ -50,7 +53,7 @@ The purpose is **specific, explicit, and legitimate**:
 - **Explicit**: stated in advance via this LIA + Article 30 PA15 + the parent plan + the brainstorm CLO assessment carried forward from `2026-05-19-linkedin-community-api-reapply-jikigai-brainstorm.md`.
 - **Legitimate**: marketing a SaaS product to its target audience is a recognised legitimate interest under WP29 Opinion 06/2014 §III.3.1 and EDPB Guidelines 1/2024 §3.1.2 (direct marketing as a paradigmatic legitimate interest, subject to balancing).
 
-**Not pursued under this LIA**: any processing of LinkedIn members who have NOT followed or engaged with the Jikigai Page (e.g., scraping LinkedIn for prospect lists), any cross-referencing of Page-follower identifiers against Soleur's own user database, any retention of follower personal data on Soleur-controlled infrastructure beyond aggregate marketing analytics.
+**Not pursued under this LIA**: any processing of LinkedIn members who have NOT followed or engaged with the Soleur Page (e.g., scraping LinkedIn for prospect lists), any cross-referencing of Page-follower identifiers against Soleur's own user database, any retention of follower personal data on Soleur-controlled infrastructure beyond aggregate marketing analytics.
 
 ---
 
@@ -90,14 +93,14 @@ The balancing test weighs the controller's legitimate interest (above) against t
 
 ### (ii) Nature of the data subject's interests
 
-- The data subjects are **LinkedIn members who have voluntarily either followed the Jikigai Page or engaged with a Jikigai Page post** (reaction, comment, share). They are adult professionals operating under their own LinkedIn account with their own privacy settings under LinkedIn Ireland as their primary controller for the LinkedIn platform.
+- The data subjects are **LinkedIn members who have voluntarily either followed the Soleur Page or engaged with a Soleur Page post** (reaction, comment, share). They are adult professionals operating under their own LinkedIn account with their own privacy settings under LinkedIn Ireland as their primary controller for the LinkedIn platform.
 - They are not vulnerable data subjects.
 - Their interest is in not having their LinkedIn-surface engagement aggregated by the Page admin for marketing-analytics purposes that exceed reasonable Page-operation expectations.
 
 ### (iii) Nature of the data
 
 - **Follower identifiers**: display name + profile URL slug, voluntarily made public by the follower's choice to follow a public Company Page on a professional network.
-- **Engagement metadata**: timestamps + reaction type + (occasionally) comment body if the engager chose to comment publicly. All of this is **public by design** on LinkedIn — visible to any LinkedIn member who views the Jikigai Page or the specific post.
+- **Engagement metadata**: timestamps + reaction type + (occasionally) comment body if the engager chose to comment publicly. All of this is **public by design** on LinkedIn — visible to any LinkedIn member who views the Soleur Page or the specific post.
 - **Aggregate impressions / reach**: counts only, no per-member attribution at the Soleur consumption layer.
 - **No special-category data (Art. 9)**. **No criminal-offence data (Art. 10)**. **No financial data**. **No location data**. **No biometric or health data**.
 - Risk profile: low — the data is *by design* public-on-LinkedIn; the controller's processing does not change the public/private character of the data, only its aggregation into a Page-admin analytics view that LinkedIn itself provides as a product feature.
@@ -140,7 +143,7 @@ The controller's legitimate interest (marketing + operational) **substantially o
 - The impact is negligible and the data subjects retain full control via their own LinkedIn account.
 - The safeguards stack is extensive and load-bearing — most importantly the aggregate-only consumption boundary and the absence of any cross-system enrichment.
 
-**Balancing outcome: legitimate interest prevails.** Art. 6(1)(f) is the appropriate lawful basis for operating the Jikigai LinkedIn Company Page and consuming aggregate Page Insights.
+**Balancing outcome: legitimate interest prevails.** Art. 6(1)(f) is the appropriate lawful basis for operating the Jikigai-administered Soleur LinkedIn Company Page and consuming aggregate Page Insights.
 
 ---
 
