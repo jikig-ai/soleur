@@ -595,7 +595,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    [skill-enforced: gdpr-gate at work Phase 2 exit]
 
-   After the per-task RED/GREEN/REFACTOR loop completes and before Phase 2.5, run `/soleur:gdpr-gate` once against the cumulative diff `git diff main...HEAD`. Same advisory-only output and Critical-finding escalation as plan Phase 2.7. **Never per-task** — token budget is ≤4k per invocation, single pass per phase per ADR-026 TR3.
+   After the per-task RED/GREEN/REFACTOR loop completes and before Phase 2.5, run `/soleur:gdpr-gate` once against the cumulative diff `git diff origin/main...HEAD` (after `git fetch origin main` — the local `main` ref lags in bare-repo worktrees and pollutes the diff with unrelated merged branches). Same advisory-only output and Critical-finding escalation as plan Phase 2.7. **Never per-task** — token budget is ≤4k per invocation, single pass per phase per ADR-026 TR3.
 
    Skip silently if the cumulative diff does not match the `hr-gdpr-gate-on-regulated-data-surfaces` canonical regex.
 
