@@ -159,6 +159,9 @@ jobs:
       - name: Run bwrap userns sysctl drift-guard
         run: bash apps/web-platform/infra/bwrap-userns-sysctl.test.sh
 
+      - name: Run cron-egress firewall drift-guard
+        run: bash apps/web-platform/infra/cron-egress-firewall.test.sh
+
   check-secrets:
     runs-on: ubuntu-24.04
     outputs:

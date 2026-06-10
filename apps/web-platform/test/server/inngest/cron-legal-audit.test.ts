@@ -117,3 +117,22 @@ describe("#4730 — heartbeat decoupled from claude exit code (best-effort)", ()
     expect(SUT_SOURCE).toContain('op: "claude-eval-nonzero-noop"');
   });
 });
+
+// #5046 PR-2 Phase 2.C (AC-P2.12) — this restored cron mints the
+// issue-creator least-privilege token (contents:read + issues:write,
+// repo-scoped to soleur), never the full installation grant and never
+// push/PR write. Source anchors per this file's idiom.
+describe("least-privilege token mint (#5046 PR-2)", () => {
+  it("mints with ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS + repositories: [REPO_NAME]", () => {
+    expect(SUT_SOURCE).toContain("permissions: ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS");
+    expect(SUT_SOURCE).toContain("repositories: [REPO_NAME]");
+    expect(SUT_SOURCE).not.toContain("DEFAULT_CRON_TOKEN_PERMISSIONS");
+  });
+
+  // Gate #1 is --allowedTools (the hook is gate #2 and runHookSelfTest
+  // cannot see the flags): dropping Task/Skill here silently breaks the
+  // skill invocation with green heartbeats.
+  it("--allowedTools carries Task + Skill (the restored constructs)", () => {
+    expect(SUT_SOURCE).toContain('"Bash,Read,Write,Edit,Glob,Grep,Task,Skill"');
+  });
+});

@@ -208,6 +208,7 @@ jobs:
             -target=sentry_cron_monitor.scheduled_ux_audit \
             -target=sentry_cron_monitor.scheduled_supabase_disk_io \
             -target=sentry_cron_monitor.scheduled_workspace_gc \
+            -target=sentry_cron_monitor.cron_egress_resolve \
             -target=sentry_uptime_monitor.soleur_apex \
             -target=sentry_uptime_monitor.soleur_www \
             -target=sentry_uptime_monitor.soleur_changelog_deep \
@@ -218,6 +219,7 @@ jobs:
             -target=sentry_issue_alert.workspace_sync_health \
             -target=sentry_issue_alert.kb_tenant_mint_silent_fallback \
             -target=sentry_issue_alert.kb_db_error \
+            -target=sentry_issue_alert.egress_blocked \
             -no-color -input=false -out=tfplan
           rc=$?
           if [[ $rc -ne 0 ]]; then

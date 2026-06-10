@@ -46,6 +46,7 @@ import {
   mintInstallationToken,
   REPO_NAME,
   resolveOutputAwareOk,
+  ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS,
   TIER2_DEFERRED_CRONS,
   verifyScheduledIssueCreated,
 } from "@/server/inngest/functions/_cron-shared";
@@ -112,6 +113,44 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-roadmap-review")).toBe(false);
     expect(TIER2_DEFERRED_CRONS.has("cron-growth-audit")).toBe(true);
     expect(TIER2_DEFERRED_CRONS.has("cron-bug-fixer")).toBe(true);
+  });
+
+  // #5046 PR-2 Phase 2.C (AC-P2.12): the hook's relax-minimal (Task/Skill
+  // allow) unblocks EXACTLY the two crons whose only denied construct was the
+  // Task catch-all. The other nine stay deferred: six PR-flow crons need
+  // per-construct Bash-allowlist refinement (evidence-gated future work);
+  // bug-fixer/community-monitor/ux-audit stay firewall-dependent.
+  it("agent-native-audit + legal-audit are RESTORED (out of the deferred set) — #5046 PR-2", () => {
+    expect(TIER2_DEFERRED_CRONS.has("cron-agent-native-audit")).toBe(false);
+    expect(TIER2_DEFERRED_CRONS.has("cron-legal-audit")).toBe(false);
+  });
+
+  it("ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS is exactly contents:read + issues:write (#5046 PR-2)", () => {
+    expect(ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS).toEqual({
+      contents: "read",
+      issues: "write",
+    });
+    // Push/PR capability must stay denied at the token layer for the
+    // issue-creator crons — defense-in-depth beneath the containment hook.
+    expect(ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS).not.toHaveProperty("pull_requests");
+    expect(ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS.contents).not.toBe("write");
+  });
+
+  it("the other nine stay deferred (honest restore scope — no over-promise)", () => {
+    for (const cron of [
+      "cron-bug-fixer",
+      "cron-campaign-calendar",
+      "cron-community-monitor",
+      "cron-competitive-analysis",
+      "cron-content-generator",
+      "cron-growth-audit",
+      "cron-growth-execution",
+      "cron-seo-aeo-audit",
+      "cron-ux-audit",
+    ]) {
+      expect(TIER2_DEFERRED_CRONS.has(cron)).toBe(true);
+    }
+    expect(TIER2_DEFERRED_CRONS.size).toBe(9);
   });
 });
 

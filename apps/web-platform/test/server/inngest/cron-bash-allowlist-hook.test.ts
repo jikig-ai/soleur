@@ -188,9 +188,6 @@ describe("catch-all — unrecognized tool classes deny (P0-A / P0-4)", () => {
   it("denies WebSearch", () => {
     expect(verdict({ tool_name: "WebSearch", tool_input: { query: "x" } })).toBe("deny");
   });
-  it("denies Task (sub-agent spawn)", () => {
-    expect(verdict({ tool_name: "Task", tool_input: {} })).toBe("deny");
-  });
   it("denies any mcp__* tool", () => {
     expect(verdict({ tool_name: "mcp__playwright__browser_navigate", tool_input: {} })).toBe("deny");
   });
@@ -199,6 +196,38 @@ describe("catch-all — unrecognized tool classes deny (P0-A / P0-4)", () => {
   });
   it("allows inert internal TodoWrite", () => {
     expect(verdict({ tool_name: "TodoWrite", tool_input: { todos: [] } })).toBe("allow");
+  });
+});
+
+describe("surgical relax — Task/Skill allow, everything else fail-closed (AC-P2.1 / #5046 PR-2)", () => {
+  // Tier-2 relax-minimal: ONLY the sub-agent/skill tool classes leave the
+  // catch-all deny. Safe because (a) sub-agents inherit this same hook via the
+  // `*` matcher in the spawn's .claude/settings.json (their interior Bash hits
+  // the SAME Bash containment below), and (b) Skill bodies execute through
+  // hooked tools. The Task tool surfaces as tool_name "Task" on some CLI
+  // versions and "Agent" on others — both name the same sub-agent class, so
+  // both are allowed explicitly (never via a default).
+  it("allows Task (sub-agent spawn — interior tools stay hooked)", () => {
+    expect(verdict({ tool_name: "Task", tool_input: {} })).toBe("allow");
+  });
+  it("allows Agent (the Task tool's alternate surface name)", () => {
+    expect(verdict({ tool_name: "Agent", tool_input: {} })).toBe("allow");
+  });
+  it("allows Skill (skill bodies execute through hooked tools)", () => {
+    expect(verdict({ tool_name: "Skill", tool_input: { skill: "soleur:legal-audit" } })).toBe(
+      "allow",
+    );
+  });
+  it("still denies an UNKNOWN/new tool class (fail-closed preserved)", () => {
+    expect(verdict({ tool_name: "SomeFutureTool", tool_input: {} })).toBe("deny");
+  });
+  it("still denies a missing tool_name (fail-closed preserved)", () => {
+    expect(verdict({ tool_input: {} })).toBe("deny");
+  });
+  it("Task is STILL denied when the allowlist failed to load (fail-closed beats relax)", () => {
+    expect(
+      decide({ tool_name: "Task", tool_input: {} }, null).hookSpecificOutput.permissionDecision,
+    ).toBe("deny");
   });
 });
 
