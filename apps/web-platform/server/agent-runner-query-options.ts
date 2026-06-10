@@ -168,7 +168,8 @@ export function buildAgentQueryOptions(
       gitInstallationToken: args.ghToken,
     }),
     // Sandbox literal lives in `buildAgentSandboxConfig` so legacy + cc
-    // share the same shape verbatim (drift-guarded by
+    // share the same shape — identical except for the token-derived
+    // `network.allowedDomains` below (drift-guarded by
     // `agent-runner-helpers.test.ts`).
     //
     // GitHub egress is DERIVED from ghToken presence — both-or-nothing,

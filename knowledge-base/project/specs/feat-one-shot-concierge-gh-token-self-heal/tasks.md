@@ -75,6 +75,7 @@ Note: no spec.md exists for this branch — `lane:` defaulted to `cross-domain`
 ## Post-merge (automated)
 
 - [ ] 5.1 AC9: Playwright MCP against prod Concierge — `gh issue view 4826 -R
-      jikig-ai/soleur` returns issue title, no Forbidden.
+      jikig-ai/soleur` returns issue title, no Forbidden; then `git ls-remote
+      origin HEAD` returns a SHA (askpass/raw-git plane live-verified).
 - [ ] 5.2 AC10: Sentry API query — zero new op:mint-gh-token failures
       post-deploy.

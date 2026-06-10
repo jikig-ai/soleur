@@ -2,7 +2,9 @@
 // the prior inline `sandbox: {...}` block at the `agent-runner.ts`
 // `query({ options })` call site. Two consumers (legacy domain-leader
 // runner + cc-soleur-go `realSdkQueryFactory`) MUST receive an
-// identical shape. If a field is silently dropped here, both consumers
+// identical shape, except for the token-derived `network.allowedDomains`
+// (#5041 follow-up — the cc path widens egress iff an entitled GH token
+// was minted). If a field is silently dropped here, both consumers
 // regress to a wider sandbox profile in prod.
 //
 // Per plan T17 / AC3: assert verbatim deep-equality vs the canonical

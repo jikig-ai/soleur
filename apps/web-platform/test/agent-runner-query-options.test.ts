@@ -187,6 +187,8 @@ describe("buildAgentQueryOptions — GitHub egress derived from ghToken (#5041 f
       ...minArgs,
       ghToken: "ghs_install_tok",
     });
+    // Literal on purpose (canonical-literal style, do not import the
+    // const) — an import would make a typo in the const self-verify.
     expect(opts.sandbox?.network?.allowedDomains).toEqual([
       "github.com",
       "api.github.com",

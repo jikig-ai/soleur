@@ -1,7 +1,8 @@
 // Sandbox config helper extracted from agent-runner.ts so two consumers
 // — `startAgentSession` (legacy domain-leader path) and the cc-soleur-go
-// `realSdkQueryFactory` in `cc-dispatcher.ts` — share the SAME literal
-// shape verbatim. See drift-guard `agent-runner-helpers.test.ts`.
+// `realSdkQueryFactory` in `cc-dispatcher.ts` — share the same literal
+// shape, identical except for the token-derived `network.allowedDomains`
+// (#5041 follow-up). See drift-guard `agent-runner-helpers.test.ts`.
 //
 // Field semantics:
 //   - `failIfUnavailable: true` — refuse to start if bwrap/socat are
@@ -49,7 +50,7 @@ export type AgentSandboxConfig = {
  * Widening beyond these two hosts (gist/upload/CDN) requires its own
  * security review — each added host is exfiltration surface.
  */
-export const GITHUB_EGRESS_DOMAINS = Object.freeze([
+const GITHUB_EGRESS_DOMAINS = Object.freeze([
   "github.com",
   "api.github.com",
 ] as const);

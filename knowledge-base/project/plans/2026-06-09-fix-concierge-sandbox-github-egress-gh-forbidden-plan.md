@@ -71,8 +71,12 @@ This explains the whole incident arc:
   **local** git operations; the clone itself runs **server-side** (outside the
   sandbox) and was fixed by #5041. The `gh` call is the first **in-sandbox
   network** operation, and it has been structurally dead since the sandbox
-  shipped with `allowedDomains: []` (#2901, never widened — verified via
-  `git log -S "allowedDomains"`).
+  shipped with `allowedDomains: []` (born as an explicit security AC in #871's
+  plan — "no outbound network" — and carried verbatim through the #2901
+  helper extraction; never widened — verified via `git log -S "allowedDomains"`).
+  This PR explicitly supersedes that #871 acceptance criterion for the
+  entitled-token Concierge case only; the legacy path #871 was written for
+  stays fully closed.
 - Two token-selection PRs (#4946, #5031) and one ordering PR (#5041) fixed real
   server-side consumers, but none could cure the in-sandbox `gh` symptom
   because the credential was never the binding constraint **for gh** — the
@@ -118,7 +122,7 @@ we add ride in the same settings source and are respected.
 | # | Hypothesis | Verdict | Evidence |
 |---|---|---|---|
 | H-B | **Sandbox proxy denies `api.github.com`** (`allowedDomains: []`) | **Primary — fix this** | Error shape is transport-level (`Post "...": Forbidden` = CONNECT denial status text); `agent-runner-sandbox-config.ts:67` ships `[]` since #2901; SDK `Cv8` else-branch confirms flag-settings domains are the effective allowlist (empty); preamble's *local* git ops succeeding while the *first network* op fails matches exactly |
-| H-A | GH_TOKEN minted from raw `installationId` (unswept consumer) | Refuted | `cc-dispatcher.ts:1470` mints from `effectiveInstallationId` since #5031; test-pinned at `cc-dispatcher-real-factory.test.ts:727` ("GH_TOKEN minted for the OWNER install, not the stored one") |
+| H-A | GH_TOKEN minted from raw `installationId` (unswept consumer) | Refuted | `cc-dispatcher.ts:1470` mints from `effectiveInstallationId` since #4946 (git blame `da138f1dc`; #5031 hardened the probe); test-pinned at `cc-dispatcher-real-factory.test.ts:727` ("GH_TOKEN minted for the OWNER install, not the stored one") |
 | H-C | #5067 least-privilege narrowing / cache-key pollution starves the Concierge token | Refuted | The Concierge mint passes no `permissions` → full installation grant; #5067 narrowing applies only to the cron mint path (`_cron-shared.ts:143`); cache key isolates scoped vs unscoped (`installationTokenCacheKey`, github-app.ts:692-711) |
 | H-D | `GH_TOKEN` absent (mint failed fail-soft) and a stale BYOK `GITHUB_TOKEN` service credential shadows it | Residual check only | gh prefers `GH_TOKEN` over `GITHUB_TOKEN`; a GitHub-side rejection would render `HTTP 401/403: ...`, not the transport shape. Post-merge live verification step 2 covers this residually |
 
@@ -132,7 +136,7 @@ touching any code.
 
 | Task/spec claim | Reality (verified) | Plan response |
 |---|---|---|
-| "the GH_TOKEN mint is yet another consumer of the installation id that was not swept to effectiveInstallationId" | Mint at `cc-dispatcher.ts:1470` consumes `effectiveInstallationId` (since #5031); #5041's own comment names mint + C4 tool as already-swept consumers; covered by existing test | Reframe: the unswept plane is **network**, not credential. Keep a lockstep AC pinning all token consumers to `effectiveInstallationId` so the sweep is regression-guarded |
+| "the GH_TOKEN mint is yet another consumer of the installation id that was not swept to effectiveInstallationId" | Mint at `cc-dispatcher.ts:1470` consumes `effectiveInstallationId` (since #4946 — git blame `da138f1dc`; #5031 hardened the probe, not the mint); #5041's own comment names mint + C4 tool as already-swept consumers; covered by existing test | Reframe: the unswept plane is **network**, not credential. Keep a lockstep AC pinning all token consumers to `effectiveInstallationId` so the sweep is regression-guarded |
 | "the minted installation token simply lacks the scopes gh's GraphQL endpoint needs" | Concierge mint is unscoped → full installation grant; the entitled owner install carries the full app grant (incl. `issues`) | No token-scope change. H-C refuted |
 | gh-403 is GitHub rejecting the token | Error shape is a proxy CONNECT denial; sandbox ships `allowedDomains: []` | Fix = conditional GitHub egress in the sandbox allowlist |
 | (implicit) in-sandbox `git push` works via the askpass path | Equally dead under `allowedDomains: []` — askpass infra (agent-env.ts:168-175) is currently unreachable theater | Same fix revives it; add `github.com` (not just `api.github.com`) |
@@ -393,7 +397,10 @@ None (plan + tasks artifacts only).
    webhook confirms), drive the prod Concierge chat via Playwright MCP: send
    "Run `gh issue view 4826 -R jikig-ai/soleur` and paste the literal output."
    PASS = output contains the issue title ("nav-rail position resume…"); FAIL
-   = any `Forbidden`/403 string. Automation: `mcp__playwright__*` against the
+   = any `Forbidden`/403 string. THEN send "Run `git ls-remote origin HEAD`
+   and paste the literal output." — PASS = a SHA line (proves the
+   github.com/askpass raw-git plane, which this fix revives for the first
+   time, works end-to-end); FAIL = any `Forbidden`/denied string. Automation: `mcp__playwright__*` against the
    prod chat UI (bot-allowlisted route) — no operator eyeballing.
 10. **AC10 (Sentry posture):** query Sentry API for new
     `op:mint-gh-token` / `op:installation-self-heal-probe` events post-deploy

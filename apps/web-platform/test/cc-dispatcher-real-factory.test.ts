@@ -18,6 +18,7 @@ process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
 process.env.NEXT_PUBLIC_APP_URL ??= "https://app.soleur.ai";
 
 const {
+  mockLogInfo,
   mockQuery,
   mockGetUserApiKey,
   mockGetUserServiceTokens,
@@ -40,6 +41,7 @@ const {
   mockFindRepoOwnerInstallationForUser,
   mockEnsureWorkspaceRepoCloned,
 } = vi.hoisted(() => ({
+  mockLogInfo: vi.fn(),
   mockQuery: vi.fn(),
   mockGetUserApiKey: vi.fn(),
   mockGetUserServiceTokens: vi.fn(),
@@ -231,10 +233,13 @@ vi.mock("@/server/ws-handler", () => ({
   sendToClient: mockSendToClient,
 }));
 
+// `info` routes to the shared hoisted spy so the egress-posture log payload
+// is assertable (AC6-class: boolean only, never the token). Filter by
+// message string in assertions — every module's child logger shares it.
 vi.mock("@/server/logger", () => ({
-  default: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+  default: { info: mockLogInfo, error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   createChildLogger: () => ({
-    info: vi.fn(),
+    info: mockLogInfo,
     warn: vi.fn(),
     error: vi.fn(),
   }),
@@ -937,6 +942,8 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         allowGithubEgress: true,
       });
       const opts = mockQuery.mock.calls[0][0].options;
+      // Literal on purpose (canonical-literal style, do not import the
+      // const) — an import would make a typo in the const self-verify.
       expect(opts.sandbox.network.allowedDomains).toEqual([
         "github.com",
         "api.github.com",
@@ -970,6 +977,58 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       });
       const opts = mockQuery.mock.calls[0][0].options;
       expect(opts.sandbox.network.allowedDomains).toEqual([]);
+      // The token half of the lockstep: env got no ghToken either.
+      expect(mockBuildAgentEnv).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ ghToken: undefined }),
+      );
+    });
+
+    it("posture log emits boolean-only payload — never the token value", async () => {
+      mockResolveInstallationId.mockResolvedValueOnce(987654);
+      // beforeEach default mint resolves "ghs_default_test_token".
+
+      await realSdkQueryFactory(makeArgs());
+
+      const postureCalls = mockLogInfo.mock.calls.filter(
+        ([, msg]) => msg === "Concierge sandbox GitHub egress posture",
+      );
+      expect(postureCalls).toHaveLength(1);
+      const payload = postureCalls[0][0];
+      expect(payload).toEqual({ userId: "user-1", githubEgress: true });
+      expect(typeof payload.githubEgress).toBe("boolean");
+      expect(JSON.stringify(payload)).not.toContain("ghs_default_test_token");
+    });
+
+    it("no-token dispatch appends the GitHub-access-unavailable prompt addendum", async () => {
+      // beforeEach default: no connected repo → no mint, no token.
+      await realSdkQueryFactory(makeArgs());
+
+      const opts = mockQuery.mock.calls[0][0].options;
+      expect(opts.systemPrompt).toContain(
+        "GitHub access unavailable in this session",
+      );
+      // Posture log mirrors the closed state.
+      const postureCalls = mockLogInfo.mock.calls.filter(
+        ([, msg]) => msg === "Concierge sandbox GitHub egress posture",
+      );
+      expect(postureCalls).toHaveLength(1);
+      expect(postureCalls[0][0]).toEqual({
+        userId: "user-1",
+        githubEgress: false,
+      });
+    });
+
+    it("token dispatch does NOT carry the GitHub-access-unavailable addendum", async () => {
+      mockResolveInstallationId.mockResolvedValueOnce(987654);
+
+      await realSdkQueryFactory(makeArgs());
+
+      const opts = mockQuery.mock.calls[0][0].options;
+      expect(opts.systemPrompt).not.toContain(
+        "GitHub access unavailable in this session",
+      );
     });
   });
 
