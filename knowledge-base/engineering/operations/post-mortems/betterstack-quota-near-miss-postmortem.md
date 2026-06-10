@@ -88,7 +88,7 @@ Pre-merge: `vector validate` exit 0 on pinned 0.43.1; PII parity suite 26/26; AC
 ## Versions of Components
 
 - **Version(s) that triggered the near-miss:** vector.toml with `scrape_interval_secs = 30` (since PR #4277/#4279 pivot; source created 2026-05-21)
-- **Version(s) that restored headroom:** PR #5105 (300s + device excludes), deployed via `vinngest-v1.1.12`
+- **Version(s) that restored headroom:** PR #5105 (300s + device excludes), deployed via `vinngest-v1.1.12` + PR #5131 (collector trim: network dropped, filesystem mountpoint allowlist) deployed via vinngest-v1.1.13 after the AC12 verdict FAILED at 198 rows/scrape (~57k/day projected)
 
 ## Impact details
 
@@ -131,5 +131,5 @@ The 30s scrape interval was never re-derived when the metrics destination pivote
 
 | Issue | Action | Status |
 |---|---|---|
-| #5110 | AC12 runtime verdict: first full post-deploy day ≤ 25k host-metrics rows (operator-confirmed follow-through, sweeper-tracked) | open |
+| #5110 | AC12 runtime verdict: first full post-deploy day ≤ 25k host-metrics rows (operator-confirmed follow-through, sweeper-tracked). First verdict FAILED 2026-06-10 (198 rows/scrape, ~57k/day projected); second-pass collector trim (PR #5131, vinngest-v1.1.13) re-runs the verdict — closure gates on the post-trim `RESULT: PASS` | open |
 | #5103 | Operator inbox delegation — remove "human reads vendor email" as the detection path for vendor notifications (this near-miss is the motivating example) | open |
