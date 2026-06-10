@@ -11,6 +11,17 @@ related_issues: ["#5110 (verdict tracker — keep OPEN; Ref only)", "#4296 (refe
 
 > No spec.md exists for this branch (one-shot pipeline entered at plan). Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-10 (inline pipeline mode — gates 4.6/4.7/4.8 passed mechanically; 4.9 N/A, no UI surface; subagent spawning unavailable, all passes run inline)
+**Key improvements from live probes against the pinned Vector 0.43.1 binary (run THIS pass — not carried forward):**
+
+1. **Positive probe PASSED:** the exact proposed Source 4 TOML (trimmed `collectors` + `mountpoints.includes = ["/", "/mnt/data", "/var/lib/vector"]` under `[sources.host_metrics.filesystem]`) was applied to a /tmp copy of `vector.toml` and `vector validate --no-environment` exited 0 on `vector 0.43.1 (x86_64-unknown-linux-gnu e30bf1f)`. The new filter key is now **binary-verified**, not just docs-verified.
+2. **Negative probes re-confirmed the #5105 ground truth for the NEW key:** `mountpoints.include` (misspelled) validates clean (silent no-op) → **AC2's byte-exact grep is the load-bearing spelling guard**; `mountpoints.includes = "/"` (string, not array) is REJECTED by validate (type errors are caught).
+3. **Verify-the-negative pass (3/3 confirmed by grep):** (a) zero consumers of Better Stack network series across `infra/`, runbooks, and `scripts/` — dropping the network collector darks no alert (`hr-observability-layer-citation`-style sweep); (b) zero test files reference `collectors`/`host_metrics` literals — no test edits needed; (c) `disk-monitor.sh:26` watches only `/` (`df --output=pcent /`) — confirming `/mnt/data` capacity charting is otherwise uncovered, the reason filesystem is allowlisted rather than dropped.
+4. **Plan-time AC self-test:** AC5 + AC6 verification commands run green on the unmodified baseline; AC6 was REWRITTEN at plan time (inclusive sed range → exclusive awk boundary) because the Source 4 marker line itself changes in this PR — the prior plan's AC3 form would false-fail.
+5. **Citations verified live:** all 3 cited AGENTS.md rule IDs active; PR/issue attributions #4669 (pin-bump precedent, MERGED), #4675 (drift-guard issue, CLOSED) / #4676 (drift-guard PR, MERGED), #4250 (vector shipper, MERGED), #4293 (PII pipeline, MERGED), #5105/#5112 (MERGED), #5110/#4296 (OPEN) — all consistent with their cited roles; all KB file paths resolve.
+
 ## Overview
 
 PR #5105 (300s scrape interval + `loop*`/`dm-*` device excludes, deployed via `vinngest-v1.1.12` on 2026-06-10 ~17:59Z) was **insufficient**: the AC12 quota verdict on #5110 came back `RESULT: FAIL`. Measured steady state is **198 rows per 300s scrape** (flat across all 9 observed cycles) → **~57,024 rows/day projected — 2.3× over the 25,000/day threshold** (plan had predicted ~19.6k). The interval change DID take effect (exactly one scrape per 5-min bucket); the overshoot is per-scrape row count. Verdict comment: <https://github.com/jikig-ai/soleur/issues/5110#issuecomment-4673409548>.
@@ -49,7 +60,7 @@ All cited artifacts verified against repo + live state on 2026-06-10:
 - **`scripts/followthroughs/betterstack-quota-verdict-5105.sh`**: greps `^RESULT: PASS$` BEFORE `^RESULT: FAIL$` across ALL issue comments — a later PASS comment closes #5110 despite the existing FAIL comment. No script edit needed. `earliest=2026-06-12T16:00:00Z` in the issue body remains a valid lower bound for the re-verdict.
 - **#4296** (observability consolidation 60-day re-decision): `OPEN` — reference-only, must not auto-close.
 - **`/mnt/data`**: real Hetzner volume mount (`cloud-init.yml:471-473` fstab entry). `/var/lib/vector` appears as a distinct mountpoint in the measured 27 (and in `vector.service` ReadWritePaths). Premise holds for the allowlist choice.
-- **Vector filesystem filter contract**: `vector.dev` host_metrics docs (fetched 2026-06-10 for the #5105 plan, same day): filesystem collector has three filters (`devices`, `filesystems`, `mountpoints`), each `includes`/`excludes`, glob-matched, default `includes = ["*"]`. Binary-probe results from the #5105 deepen pass (pinned 0.43.1) carried forward: exact filter-table TOML validates clean; **misspelled filter sub-keys are silently IGNORED by `vector validate`** (wrong value types and unknown top-level keys are rejected) → AC2's byte-exact grep is the load-bearing spelling guard.
+- **Vector filesystem filter contract**: `vector.dev` host_metrics docs (fetched 2026-06-10 for the #5105 plan, same day): filesystem collector has three filters (`devices`, `filesystems`, `mountpoints`), each `includes`/`excludes`, glob-matched, default `includes = ["*"]`. Binary probes RE-RUN at deepen time on pinned 0.43.1 with the NEW key (see Enhancement Summary): exact proposed TOML validates clean; **misspelled `mountpoints.include` is silently IGNORED by `vector validate`** (wrong value types and unknown top-level keys are rejected) → AC2's byte-exact grep is the load-bearing spelling guard.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -305,7 +316,7 @@ The `discoverability_test.command` is the pre-merge-runnable liveness probe (pro
 
 1. Unmodified-baseline sanity (RUN at plan time, both green): AC5 + AC6 diff commands return empty against the current tree — proves the verification commands work before the edit exists. (Plan-time self-review caught and fixed an AC6 false-fail: the inclusive sed range would have captured the changing Source 4 marker line; replaced with the exclusive awk form.)
 2. Post-edit: AC1–AC9 all pass locally; CI `validate-vector-config.yml` passes on the PR.
-3. Schema-strictness ground truth (carried forward from the #5105 deepen probes against pinned 0.43.1 — do not re-run blindly; re-probe ONLY the new `mountpoints.includes` form): apply the proposed Source 4 TOML to a /tmp copy → `vector validate` must exit 0. Known: misspelled filter sub-keys are silently ACCEPTED (no-op); wrong value types and unknown top-level keys are REJECTED. Consequence: AC2's byte-exact grep is the spelling guard; AC13 is the runtime backstop.
+3. Schema-strictness ground truth (RE-PROBED at deepen time against pinned 0.43.1 — see Enhancement Summary; do not re-run blindly at /work): the exact proposed Source 4 TOML on a /tmp copy → `vector validate` exit 0 (**PASS**); `mountpoints.include` (misspelled) → **ACCEPTED** (silent no-op); `mountpoints.includes = "/"` (string, not array) → **REJECTED**. Consequence: AC2's byte-exact grep is the spelling guard; AC13 is the runtime backstop.
 4. Post-deploy: AC13 buckets ≤ 86 with filesystem present; AC14 first full day ≤ 25,000.
 
 ## Risks & Mitigations
@@ -314,7 +325,7 @@ The `discoverability_test.command` is the pre-merge-runnable liveness probe (pro
 |---|---|
 | Third prediction miss — actual rows/scrape > 86 despite trim | Projection sums MEASURED per-collector counts (not modeled); 20% margin; AC13 fast verdict at ~30 min (not 24h) with a pre-agreed next lever (drop filesystem → 57/scrape measured-derived, or drop the source) |
 | `mountpoints.includes` over-filters (filesystem series vanish) | AC13 companion presence query (`filesystem` rows > 0); `disk-monitor.sh` independently emails on `/` at 80%/95% (5-min timer); reversible one-line change |
-| `mountpoints.includes` under-filters (glob/runtime semantics differ from docs) | Filter contract verified against vector.dev docs (2026-06-10) + filter-table form binary-validated at #5105 deepen; even a fully no-op mountpoint filter still lands ~165/scrape → caught by AC13 within ~30 min |
+| `mountpoints.includes` under-filters (glob/runtime semantics differ from docs) | Filter contract verified against vector.dev docs (2026-06-10) AND the exact proposed TOML binary-validated THIS pass on pinned 0.43.1 (positive probe exit 0); even a fully no-op mountpoint filter still lands ~165/scrape → caught by AC13 within ~30 min |
 | Misspelled filter sub-key ships despite green CI | AC2 byte-exact grep (validate silently ignores sub-key typos — probe-verified); AC13 runtime backstop |
 | Losing network metrics hides a future network incident | No alert/runbook consumes Better Stack network series today; uptime monitors (external probe) + Sentry + deploy-status carry incident-grade signal; re-add path: `collectors += "network"` + `[sources.host_metrics.network] devices.includes = ["eth0"]` ≈ +8 rows (still ≤86) |
 | Losing /tmp, /var/tmp, /boot/efi filesystem series | Low-signal mounts; /tmp-full incidents surface via service errors in WARN+ journald (shipped) and Sentry; accepted by design, reversible by widening the allowlist (+4 rows per mount) |
