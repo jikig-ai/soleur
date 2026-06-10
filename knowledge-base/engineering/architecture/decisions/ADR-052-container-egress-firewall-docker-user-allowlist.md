@@ -1,4 +1,4 @@
-# ADR-051: Container egress firewall — DOCKER-USER default-drop allowlist
+# ADR-052: Container egress firewall — DOCKER-USER default-drop allowlist
 
 - **Status:** Accepted
 - **Date:** 2026-06-09

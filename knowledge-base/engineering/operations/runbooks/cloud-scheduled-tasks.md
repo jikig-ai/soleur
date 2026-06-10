@@ -640,7 +640,7 @@ unhooked tool class / crashed hook fails OPEN. So:
   early-return via `deferIfTier2Cron` — an honest on-schedule check-in, no claude spawn, no
   output issue. **Visible degradation:** their scheduled `[Scheduled]` output issues stop
   appearing (this is expected, not a regression). The Tier-2 **network-egress firewall +
-  least-privilege installation token LANDED** (#5046 PR-1/PR-2, ADR-051) — the firewall now
+  least-privilege installation token LANDED** (#5046 PR-1/PR-2, ADR-052) — the firewall now
   contains the 4 Node-level `spawn("bash")` crons (which the hook does not cover); the nine
   stay paused on a DIFFERENT criterion: six PR-flow crons need per-construct Bash-allowlist
   refinement (`date -u`, dynamic `checkout -b`, `npx eleventy` — evidence-gated), and

@@ -4,7 +4,7 @@
 tagged `feature=cron-egress-firewall` + `op=egress_blocked`, produced by the
 host's `cron-egress-resolve.timer` when the kernel journal shows
 `egress-blocked:` or `egress-dns-exfil:` drops in the last window.
-**Substrate:** ADR-051 (`knowledge-base/engineering/architecture/decisions/`).
+**Substrate:** ADR-052 (`knowledge-base/engineering/architecture/decisions/`).
 
 ## What it means
 

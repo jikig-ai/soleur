@@ -643,7 +643,7 @@ verified-at-implementation corrections to this plan:
    plausible.io already caught at deepen) AND the three browser web-push services
    (fcm.googleapis.com, updates.push.services.mozilla.com, web.push.apple.com — `notifications.ts`
    webpush). Without these, email/waitlist/push — user-facing flows — would have broken at
-   default-drop. Edge/WNS push is wildcard-only → accepted fail-loud residual (ADR-051).
+   default-drop. Edge/WNS push is wildcard-only → accepted fail-loud residual (ADR-052).
 3. **AC-P2.2 probe shape.** A real per-spawn `claude --print` Task-sub-agent probe would add an API
    call + model-output-as-oracle flake to every cron start. Implemented instead as three
    deterministic spawn-time gates in `runHookSelfTest` (hook-binary Task→allow, unknown-class→deny,
@@ -657,7 +657,7 @@ verified-at-implementation corrections to this plan:
 Also landed beyond the plan's letter: the `egress_blocked` Sentry event PRODUCER (the resolve timer
 scans the kernel journal for `egress-blocked:` hits and posts the tagged event — without it the
 AC-P2.10 alert had nothing to fire on), a `cron-egress-resolve` Sentry Crons monitor (dead-timer =
-missed check-in), `cron-egress-firewall.test.sh` (79 assertions), and ADR-051.
+missed check-in), `cron-egress-firewall.test.sh` (79 assertions), and ADR-052.
 
 **Merge-precondition reconciliation (AC-P2.8).** The live positive+negative container probe runs in
 the SSH provisioner at post-merge `terraform apply` — a single-PR flow cannot order "firewall proven
@@ -682,7 +682,7 @@ infra-validation.yml; both drop prefixes now counted toward the paging event; ju
 each tick; container-view DNS union; 1-min timer; nft log rate limits; flock; issue-creator token
 narrowed to `contents:read`+`issues:write`; prompts made hook-compatible (pipe-free cap check,
 --body-file); 9 stale defer comments + runbook + ADR-033 I7 refreshed; webpush timeout + Sentry
-mirror; `cron-egress-blocked.md` runbook added. Residuals documented in ADR-051 (DNS-tunnel
+mirror; `cron-egress-blocked.md` runbook added. Residuals documented in ADR-052 (DNS-tunnel
 through the pinned resolver, CDN shared-IP broadening, DoH-on-443, sub-agent inheritance pending
 AC-P2.13 live validation).
 
