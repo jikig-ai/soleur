@@ -22,21 +22,35 @@ describe("LiveRepoBadge — J5 revocation interstitial", () => {
   });
 
   it("renders NOTHING on the happy path (repo name now lives in the pill, not here)", async () => {
+    // Flag when the poll's body settles so the absence assertions below run
+    // AFTER the state commit — a bare wait-on-absence passes on the first
+    // tick (pre-poll) and proves nothing. Mirrors the regainCommitted
+    // pattern in the re-arm test.
+    let pollCommitted = false;
     vi.stubGlobal(
       "fetch",
-      mockActiveRepo({
-        workspaceId: "ws-1",
-        repoUrl: "https://github.com/bob/team",
-        repoName: "bob/team",
-        repoStatus: "ready",
-        fellBackToSolo: false,
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            workspaceId: "ws-1",
+            repoUrl: "https://github.com/bob/team",
+            repoName: "bob/team",
+            repoStatus: "ready",
+            fellBackToSolo: false,
+          }).finally(() => {
+            pollCommitted = true;
+          }),
       }),
     );
     const { container } = render(<LiveRepoBadge />);
     // let the poll resolve, then assert no repo badge + no interstitial
-    await vi.waitFor(() => {
-      expect(screen.queryByTestId("revocation-interstitial")).toBeNull();
+    await vi.waitFor(() => expect(pollCommitted).toBe(true), {
+      // #5113 — tolerate CPU starvation of the forked worker under
+      // full-suite load (vi.waitFor default is 1000ms; see #4128).
+      timeout: 10_000,
     });
+    expect(screen.queryByTestId("revocation-interstitial")).toBeNull();
     expect(screen.queryByTestId("live-repo-badge")).toBeNull();
     expect(container).toBeEmptyDOMElement();
   });
@@ -105,14 +119,20 @@ describe("LiveRepoBadge — J5 revocation interstitial", () => {
     // clear; here they fire back-to-back, so reset to force a fresh fetch.
     __resetActiveRepoCoalesceForTests();
     fireEvent.focus(window);
-    await vi.waitFor(() => expect(regainCommitted).toBe(true));
+    await vi.waitFor(() => expect(regainCommitted).toBe(true), {
+      timeout: 10_000, // #5113 — see first vi.waitFor in this file
+    });
     expect(screen.queryByTestId("revocation-interstitial")).toBeNull();
 
     // a FRESH revocation (false→true transition) must re-surface the alert
     __resetActiveRepoCoalesceForTests();
     fireEvent.focus(window);
-    await vi.waitFor(() =>
-      expect(screen.getByTestId("revocation-interstitial")).toBeInTheDocument(),
+    await vi.waitFor(
+      () =>
+        expect(
+          screen.getByTestId("revocation-interstitial"),
+        ).toBeInTheDocument(),
+      { timeout: 10_000 }, // #5113 — see first vi.waitFor in this file
     );
   });
 
