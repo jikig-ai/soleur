@@ -12,6 +12,13 @@ brand_survival_threshold: aggregate pattern
 > Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed; no spec.md exists for this branch).
 > Revised 2026-06-10 after 3-agent plan review (DHH / Kieran / code-simplicity) — see `## Plan Review Synthesis`.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-10 (gates + targeted verification; full research fan-out satisfied by the same-session 7-agent pass: learnings-researcher, CTO, spec-flow-analyzer, DHH, Kieran, code-simplicity + direct line-level codebase verification)
+**Gates:** 4.6 User-Brand Impact PASS (threshold `aggregate pattern`); 4.7 Observability PASS (5 fields, no-SSH discoverability); 4.8 PAT-shape PASS (zero matches); 4.9 UI-wireframe N/A (no UI surface)
+**Verification highlights:** every file:line citation empirically confirmed (Kieran pass, incl. a scratch-repo porcelain `-z` rename experiment); `delete_branch_on_merge=true` confirmed via `gh api`; all 4 cited AGENTS.md rule IDs active; AC greps scoped outside the plan's own artifacts; AC1 baseline = exactly 4 `git add -A` hits.
+**Key improvements over v1:** Phase 0 root-cause spike (attack the symlink, not just instrument it); prefix-based structural exclusion (literal-entry form would have re-created #5026 as a permanent abort); migration scope 7→3 crons with the live path (roadmap-review) protected by hook deny + prompt line; Tier-2 sequencing enforced by a parity-test assertion instead of PR-body prose.
+
 ## Overview
 
 The weekly SEO/AEO audit cron produced destructive PR #5026: −107,368 lines, deleting the entire `plugins/soleur/` tree (654 files) and modifying `.claude/settings.json`. CI's 8 required checks caught it; the PR was closed with no damage to main.
