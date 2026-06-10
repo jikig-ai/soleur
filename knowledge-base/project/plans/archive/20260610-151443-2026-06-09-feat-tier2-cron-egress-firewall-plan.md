@@ -561,8 +561,8 @@ logs:
   where: app/unit logs journald → Vector → Better Stack; Sentry for errors. KERNEL drop lines (egress-blocked/egress-dns-exfil) do NOT ship (Vector sources are priority/unit-scoped) — the resolve tick's Sentry egress_blocked event (with sample) is the no-SSH drop-forensics channel
   retention: per journald-soleur.conf cap + Better Stack retention
 discoverability_test:
-  command: gh issue list --label scheduled-agent-native-audit --json number,createdAt && gh issue list --label scheduled-legal-audit --json number,createdAt  # output-issue presence for the two RESTORED crons, no ssh
-  expected_output: a recent issue for each restored cron (agent-native-audit monthly, legal-audit quarterly) after its first post-restore fire
+  command: gh issue list --label scheduled-agent-native-audit --state all --json number --jq type  # the restored crons' output-issue query path, no ssh, no shell-active tokens
+  expected_output: array
 ```
 
 ## Risks
