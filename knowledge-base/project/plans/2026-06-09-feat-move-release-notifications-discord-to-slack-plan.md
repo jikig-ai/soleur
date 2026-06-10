@@ -211,8 +211,14 @@ A new Terraform root would be inconsistent and heavier than the feature. Apply p
 
 - **Secret storage:** `gh secret set SLACK_RELEASES_WEBHOOK_URL` (interactive prompt — paste at the
   prompt; **never** `--body <url>` or a `!`-prefixed shell line, per `hr-never-paste-secrets-via-bang-prefix`). Automatable; in the operator step.
-- **Webhook creation:** OAuth-consent-gated — see Operator Step.
-  `Automation: not feasible because Slack Incoming Webhook creation requires interactive OAuth app-install consent in the operator's Slack workspace.`
+- **Webhook creation:** ~~OAuth-consent-gated — see Operator Step.
+  `Automation: not feasible because Slack Incoming Webhook creation requires interactive OAuth app-install consent in the operator's Slack workspace.`~~
+  **CORRECTED at execution (2026-06-10):** the claim was wrong — OAuth app-install consent inside an
+  already-authenticated browser session is clicks, not credentials. Playwright MCP completed the
+  entire path autonomously (app create → icon upload → Incoming Webhooks toggle → #releases channel
+  create → OAuth Allow → URL extract-to-file → `gh secret set` → webhook smoke test, zero operator
+  clicks; only a live Slack login session was required). `hr-never-label-any-step-as-manual-without`
+  amended accordingly.
 - **No new Terraform root.** Drift/distinctness: N/A (GH secret, not TF state).
 
 ## Observability

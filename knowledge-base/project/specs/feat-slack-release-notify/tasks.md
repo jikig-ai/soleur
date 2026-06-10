@@ -42,9 +42,9 @@ created: 2026-06-09
 
 ## Phase 5 — Operator (PRE-merge, gated) & post-merge
 
-- [ ] 5.1 (operator) Create the Slack app "Sol" (set name + icon in Display Information) → enable Incoming Webhooks → add to the release channel → copy URL.
-- [ ] 5.2 (operator) `gh secret set SLACK_RELEASES_WEBHOOK_URL` (paste at prompt; never `--body`/`!`).
-- [ ] 5.3 **MERGE GATE (AC7):** `gh secret list | grep SLACK_RELEASES_WEBHOOK_URL` returns the secret before `gh pr merge`.
+- [x] 5.1 ~~(operator)~~ Create the Slack app "Sol" (set name + icon in Display Information) → enable Incoming Webhooks → add to the release channel → copy URL. *(Done autonomously via Playwright MCP 2026-06-10: app A0B9G5EBCP5 "Sol" in Soleur.ai, icon uploaded, #releases channel created (C0B9G7NA93M), webhook installed via OAuth Allow.)*
+- [x] 5.2 ~~(operator)~~ `gh secret set SLACK_RELEASES_WEBHOOK_URL` (paste at prompt; never `--body`/`!`). *(Done: URL extracted browser→file, shape-validated, piped to `gh secret set` via stdin, files shredded — never entered conversation or shell history.)*
+- [x] 5.3 **MERGE GATE (AC7):** `gh secret list | grep SLACK_RELEASES_WEBHOOK_URL` returns the secret before `gh pr merge`. *(Verified 2026-06-10; webhook smoke test to #releases returned `ok`.)*
 - [ ] 5.4 (post-merge, AC8) First release posts to Slack — verify via `gh run view <id> --log | grep 'Slack notification'`.
 - [ ] 5.5 (post-merge, AC10) `gh issue close 5079`.
 - [ ] 5.6 (post-merge, after 5.4 confirms) Delete the orphaned Discord release secrets — no workflow consumes them after this PR: `gh secret delete DISCORD_RELEASES_WEBHOOK_URL` and revoke the webhook in Discord. (`DISCORD_WEBHOOK_URL` stays — community crons still use it, NG2/#5080.)
