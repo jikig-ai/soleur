@@ -67,14 +67,15 @@ INPUT="$(cat)"
 # "soleur:engineering:review:security-sentinel" is space-free, but the model
 # can supply arbitrary strings); default IFS would split on spaces and shift
 # all subsequent fields.
-IFS=$'\t' read -r TOOL_NAME SESSION_ID SUBAGENT_TYPE TOTAL_TOKENS TOOL_USES DURATION_MS < <(
+IFS=$'\t' read -r TOOL_NAME SESSION_ID SUBAGENT_TYPE TOTAL_TOKENS TOOL_USES DURATION_MS MODEL < <(
   echo "$INPUT" | jq -r '[
     (.tool_name // ""),
     (.session_id // ""),
     (.tool_input.subagent_type // .tool_response.agentType // ""),
     (.tool_response.totalTokens // 0),
     (.tool_response.totalToolUseCount // 0),
-    (.tool_response.totalDurationMs // .duration_ms // 0)
+    (.tool_response.totalDurationMs // .duration_ms // 0),
+    (.tool_input.model // "inherit")
   ] | @tsv' 2>/dev/null
 ) || exit 0
 
@@ -91,6 +92,17 @@ SUBAGENT_TYPE="$(printf '%s' "$SUBAGENT_TYPE" \
   | tr -d '\000-\037\177' \
   | sed 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
 SUBAGENT_TYPE="${SUBAGENT_TYPE:0:64}"
+
+# Sanitize MODEL the same way (#3791 FR5). Harness-enum-constrained in
+# practice (inherit|haiku|sonnet|opus|fable), but treat as untrusted input.
+# NOTE: this hook only fires for DIRECT Agent-tool spawns — Workflow-runtime
+# agent() spawns do not emit PostToolUse (AC0 probe, 2026-06-10); their
+# executed-model evidence lives in the workflow transcript (ADR-051).
+MODEL="$(printf '%s' "$MODEL" \
+  | tr -d '\000-\037\177' \
+  | sed 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
+MODEL="${MODEL:0:64}"
+[[ -z "$MODEL" ]] && MODEL="inherit"
 
 # Skip when totalTokens is 0 or absent — per R1 mitigation, treat zero-token
 # envelopes as Claude Code shape drift, not a real zero-cost subagent. Better
@@ -137,11 +149,12 @@ line="$(jq -nc \
   --arg ts "$ts" \
   --arg sid "$SESSION_ID" \
   --arg sub "$SUBAGENT_TYPE" \
+  --arg model "$MODEL" \
   --argjson tt "$TOTAL_TOKENS" \
   --argjson tu "$TOOL_USES" \
   --argjson dm "$DURATION_MS" \
   --argjson schema 1 \
-  '{schema:$schema, ts:$ts, session_id:$sid, subagent_type:$sub, total_tokens:$tt, tool_uses:$tu, duration_ms:$dm, hook_event:"PostToolUse"}' \
+  '{schema:$schema, ts:$ts, session_id:$sid, subagent_type:$sub, model:$model, total_tokens:$tt, tool_uses:$tu, duration_ms:$dm, hook_event:"PostToolUse"}' \
   2>/dev/null)" || {
     # Line-build jq failed (malformed input that survived the parse pass,
     # transient jq failure, etc.). Emit a jq_fail sentinel and exit silently
