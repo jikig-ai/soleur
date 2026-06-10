@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-05-21
+last_updated: 2026-06-10
 ---
 
 # Expenses
@@ -19,7 +19,7 @@ last_updated: 2026-05-21
 | X API Basic (DEFERRED) | X Corp | api | 100.00 | deferred | - | DEFERRED: $100/mo Basic tier for fetch-mentions/timeline. Trigger: first paying customer or $500 MRR. See #497 |
 | Better Stack Responder (DEFERRED) | Better Stack | observability | 29.00 | deferred | - | DEFERRED: $29/user/mo Responder tier for on-call escalation policy (Slack/SMS/phone routing of the inngest-server heartbeat alert). Free tier is heartbeat + email-only. Trigger: first paying customer or first incident with user-visible latency from email-only routing. See #3960 |
 | Sentry Team | Sentry | observability | 29.00 | active | 2026-06-17 | Error tracking + CSP report-uri + cron monitors for web platform. Org: jikigai-eu (eu.sentry.io, am3 Team plan tier, monthly billing, card on file), project: soleur-web-platform. $50/mo PAYG cap on top (onDemandMaxSpend) for cron-monitor seat overages — see #3958. Replaces former free-tier `jikigai` org, which was canceled 2026-05-21 and its $29 unused balance transferred as credit (see One-Time row). Context: #3861 residency reframe, #3962 PIR Phase 8 Gate 3b |
-| Better Stack | Better Stack | observability | 0.00 | free-tier | - | Uptime monitoring for app.soleur.ai/health (3-min interval) + status page at soleur-ai.betteruptime.com. Free tier: 10 monitors, 1 status page, email alerts. Upgrade trigger: first paying customer (custom domain, white-label, custom CSS) |
+| Better Stack | Better Stack | observability | 0.00 | free-tier | - | Uptime monitoring for app.soleur.ai/health (3-min interval) + status page at soleur-ai.betteruptime.com. Free tier: 10 monitors, 1 status page, email alerts. Upgrade trigger: first paying customer (custom domain, white-label, custom CSS). 2026-06-10: 80% log-quota warning (free tier 3 GB/mo logs, 3-day retention + 30 GB metrics). Root cause: Vector host_metrics 30s scrape = >99% of ingest (~196k rows/day). Remediated: 300s scrape + loop*/dm-* device excludes (PR #5105) + deleted leftover "Onboarding • Real-time flights" demo source (id 2327782) via Telemetry API. Decision: stay free tier ($0.00 unchanged); upgrade trigger unchanged (first paying customer). Ref #4296 |
 | Buttondown | Buttondown | saas | 0.00 | free-tier | - | Newsletter platform. Free tier: 100 subscribers, custom sending domain, API access. Upgrade trigger: >100 subscribers ($9/mo Basic) |
 | Doppler | Doppler | secrets-mgmt | 0.00 | free-tier | - | Secrets management. Developer plan (free). Account: <ops@jikigai.com>. 6 configs: dev, dev_personal, ci, prd, prd_scheduled, prd_terraform. Upgrade triggers: team growth, audit logs |
 | LinkedIn | LinkedIn | social | 0.00 | active | - | Company page + personal profile for content distribution. Free tier API access via LinkedIn Marketing Developer Platform |

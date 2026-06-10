@@ -117,3 +117,13 @@ here while the host root showed ~56 GB free — host metrics are structurally bl
 to the per-container tmpfs the crons clone into. Disk-pressure on a cron
 workspace surfaces via Sentry (`op=cron-workspace-low-disk` WARN, and the
 `scheduled-output-missing` `extra.stderrTail`/`extra.exitCode`), not here.
+
+Region scope of the query connection (#5105 session): the minted ClickHouse
+connection only reaches the cluster of the data region it was provisioned
+around (ours: eu-fsn-3). `remote(t<TEAM>_<table>_logs)` for a source in a
+DIFFERENT region (e.g. the eu-nbg-2 onboarding demo source) fails with
+`CLUSTER_DOESNT_EXIST` — use the Telemetry API (`GET /api/v1/sources`) for
+metadata on out-of-region sources, or mint a second connection. Also note:
+metric events shipped through the generic HTTP sink count against the LOGS
+ingestion quota (3 GB/mo free tier), so quota math must include host metrics
+(see knowledge-base/project/learnings/2026-06-10-betterstack-quota-diagnosis-host-metrics-dominate-generic-http-sink.md).
