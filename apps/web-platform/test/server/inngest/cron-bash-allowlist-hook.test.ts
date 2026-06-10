@@ -76,6 +76,8 @@ describe("Bash — blanket git staging denied (#5091)", () => {
     ["git add *"],
     ["git add .claude/settings.json"],
     ["git add .claude"],
+    ["git add /tmp/soleur-cron-x/repo"],
+    ["git add /tmp/soleur-cron-x/repo/.claude/settings.json"],
     ['git commit -am "x"'],
     ['git commit -a -m "x"'],
     ['git commit --all -m "x"'],

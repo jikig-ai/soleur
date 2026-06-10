@@ -37,7 +37,7 @@
 //   - repo/plugins/soleur            (the clone's own tracked tree — #5091)
 //   - repo/.claude/settings.json     (DEFAULT_SETTINGS overlay)
 // Plugin resolution under headless `--print` requires the explicit
-// `--plugin-dir plugins/soleur` flag — the symlinked plugins/soleur dir is NOT
+// `--plugin-dir plugins/soleur` flag — the plugins/soleur dir is NOT
 // auto-discovered from spawn cwd in headless mode (the interactive
 // marketplace/enabledPlugins trust flow does not run under --print). This
 // producer's prompt invokes no /soleur:* skill, so it needs no flag change; the
@@ -218,7 +218,7 @@ export async function cronRoadmapReviewHandler({
     },
   );
 
-  // --- Step 2: setup ephemeral workspace (clone + symlink + sentinel) ---
+  // --- Step 2: setup ephemeral workspace (clone + settings + sentinel) ---
   // Track ephemeralRoot in handler-scope so teardown runs regardless of
   // downstream success/failure.
   let ephemeralRoot: string | null = null;

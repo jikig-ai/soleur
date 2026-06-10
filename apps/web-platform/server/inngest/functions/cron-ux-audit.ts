@@ -62,7 +62,7 @@ export const MAX_TURN_DURATION_MS = 50 * 60 * 1000;
 export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 
 // #4993 — headless /soleur:* skill resolution (fleet fix mirroring #4987 /
-// PR #4989): `--plugin-dir plugins/soleur` registers the symlinked plugin under
+// PR #4989): `--plugin-dir plugins/soleur` registers the plugin (clone's tracked tree — #5091) under
 // `--print` (a bare plugins/ dir is NOT auto-discovered in headless mode), and
 // `Skill` (+`Task` for subagent fan-out) in --allowedTools gates skill invocation.
 const CLAUDE_CODE_FLAGS = [

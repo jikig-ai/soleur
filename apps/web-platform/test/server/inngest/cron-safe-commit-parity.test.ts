@@ -71,6 +71,7 @@ describe("safe-commit parity — invariant 1: no blanket git-add literal anywher
     expect(src).not.toContain("git add -A");
     expect(src).not.toContain("git add --all");
     expect(src).not.toContain("git add -u");
+    expect(src).not.toContain("git add .");
   });
 
   it("the containment hook itself carries no blanket-add literal (comments included)", () => {
@@ -82,20 +83,37 @@ describe("safe-commit parity — invariant 1: no blanket git-add literal anywher
 });
 
 describe("safe-commit parity — invariant 2: migrated crons route through safeCommitAndPr", () => {
-  it("discovers at least the 3 originally-migrated crons", () => {
-    expect(MIGRATED.length).toBeGreaterThanOrEqual(3);
+  it("discovers the migrated crons and keeps MIGRATED/EXEMPT disjoint", () => {
     for (const f of MIGRATED) {
       expect(cronFiles).toContain(f);
+      expect(EXEMPT[f]).toBeUndefined();
+    }
+    // EXEMPT files must not CALL safeCommitAndPr (importing the shared
+    // enableAutoMergeSquash, as cron-bug-fixer does, is fine) — a migrated
+    // cron left in EXEMPT silently skips invariants 2-3 (review P2).
+    for (const f of Object.keys(EXEMPT)) {
+      const src = readFileSync(join(FUNCTIONS_DIR, f), "utf-8");
+      expect(src, `${f} calls safeCommitAndPr but sits in EXEMPT — move it to MIGRATED`).not.toMatch(
+        /safeCommitAndPr\(\{/,
+      );
     }
   });
 
   it.each(MIGRATED.map((f) => [f]))(
-    "%s imports + calls safeCommitAndPr and carries the persistence anchor",
+    "%s routes through safeCommitAndPr behind the issue-verified gate",
     (file) => {
       const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
-      expect(src).toMatch(/import \{ safeCommitAndPr \} from "\.\/_cron-safe-commit"/);
+      // Import may grow more named members (bug-fixer pattern) — assert
+      // module + call, not exact formatting.
+      expect(src).toContain('from "./_cron-safe-commit"');
       expect(src).toMatch(/safeCommitAndPr\(\{/);
       expect(src).toContain("PERSISTENCE: Do NOT run git add");
+      // Plan AC5: the persistence step MUST be gated on issue-verified
+      // output AND not-timed-out — a regression to `spawnResult.ok` (the
+      // #4747 hazard) or a dropped timeout clause turns this red.
+      expect(src).toMatch(
+        /if \(heartbeatOk && !spawnResult\.abortedByTimeout\) \{[\s\S]{0,800}?safeCommitAndPr\(\{/,
+      );
       // The prompt must not retain a prompt-side commit block.
       expect(src).not.toContain("MANDATORY FINAL STEP");
     },
@@ -110,6 +128,13 @@ describe("safe-commit parity — invariant 3: Tier-2 restoration must not re-arm
     "gh pr create",
     "gh pr merge",
   ];
+
+  it("canary: the allowlist key shape matches real CRON_BASH_ALLOWLISTS keys", () => {
+    // If the cronName derivation below ever drifts from the map's key
+    // format, invariant 3 would silently no-op forever (review P3) — this
+    // canary pins the shape against the one key that exists today.
+    expect(Object.keys(CRON_BASH_ALLOWLISTS)).toContain("cron-roadmap-review");
+  });
 
   it.each(MIGRATED.map((f) => [f]))(
     "%s allowlist (if present) excludes persistence verbs",

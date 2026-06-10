@@ -224,7 +224,7 @@ New `apps/web-platform/test/server/inngest/cron-safe-commit-parity.test.ts` (rea
 3. `_cron-safe-commit.ts` exports `safeCommitAndPr` returning the 3-variant `SafeCommitResult`; the non-throwing contract is asserted by unit test (every failure stage returns `failed`, never throws).
 4. Unit tests prove: (a) fixture with tracked-file deletions under the structural-exclusion prefix + 2 legit changes commits ONLY the 2, zero guarded deletions; (b) 11 deletions inside allowedPaths → `failed/deletion-guard`; (c) rename `-z` parsing does not misalign subsequent entries; (d) commit spawn env carries pinned `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE` = `runStartedAt` + bot identity, and a double run on the same fixture yields identical SHAs; (e) PR-create 422 resolves to `committed` with the recovered PR number; (f) branch name is refname-valid (no `:` or `.`); (g) replay-resume: HEAD already on `ci/*` with the bot commit → proceeds to push without re-scan.
 5. Each migrated handler calls `safeCommitAndPr` in a `step.run` gated on `heartbeatOk === true && !spawnResult.abortedByTimeout` (asserted via step-sequence mock in each cron's test).
-6. Hook test matrix: deny `git add -A`, `git add --all`, `git add -u`, `git add -fA`, `git add .`, `git add -A -- .`, `git add *`, `git add plugins/soleur/docs/x.md`, `git add .claude/settings.json`, `git commit -am "x"`, `git commit -a`; allow `git add knowledge-base/foo.md`, `git commit -m "x"`. Deny reasons contain actionable retry guidance.
+6. Hook test matrix: deny `git add -A`, `git add --all`, `git add -u`, `git add -fA`, `git add .`, `git add -A -- .`, `git add *`, `git add /abs/path` (absolute pathspecs resolve back into the tree — review P2), `git add .claude/settings.json`, `git commit -am "x"`, `git commit -a`; allow `git add knowledge-base/foo.md`, `git add plugins/soleur/docs/page.md` (Outcome A dissolved the plugins-pathspec deny — those paths are no longer contamination), `git commit -m "x"`. Deny reasons contain actionable retry guidance.
 7. Parity test green: literal scan, 3-entry migrated list (minimum-bound), allowlist-exclusion invariant, 10-entry exempt list with rationale.
 8. `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean; `./node_modules/.bin/vitest run test/server/inngest/ test/server/cron-substrate-imports.test.ts test/server/cron-no-byok-lease-sweep.test.ts` green; `function-registry-count.test.ts` untouched (no `cron-` file added/removed).
 9. PR body: `Closes #5091`; Phase 0 outcome + evidence; the issue-AC2 reinterpretation (structural exclusion vs abort-on-touch) and the N=10-vs-50 divergence; the Tier-2 sequencing note pointing at the parity test; live-verification deferral (the ~2026-06-15 run is a deferral no-op — issue AC3 renegotiated to the scratch-repo harness); link(s) to the follow-up issue(s); explicit non-goal: the guard counts deletions only — mass *modification* within allowedPaths is unguarded by design, required CI checks are the backstop.
@@ -270,8 +270,8 @@ liveness_signal:
   alert_target: Sentry Crons → existing operator alert rules
   configured_in: apps/web-platform/infra/sentry/ (existing; no new monitors)
 error_reporting:
-  destination: Sentry via reportSilentFallback ops — safe-commit-deletion-guard, safe-commit-paths-dropped, safe-commit-workspace-lost, plus per-stage failed events
-  fail_loud: helper is non-throwing but EVERY non-committed outcome mirrors to Sentry; failures additionally comment on the run's scheduled issue
+  destination: Sentry via reportSilentFallback ops — safe-commit-deletion-guard, safe-commit-paths-dropped, and safe-commit-failed (stage in extra — workspace-lost/status/dirty-index/checkout/add/commit/push/pr-create/auto-merge/unexpected), plus safe-commit-issue-comment-failed
+  fail_loud: helper is non-throwing but EVERY non-committed outcome mirrors to Sentry; EVERY failed stage additionally comments on the run's scheduled issue (review fix — was 3/8 stages)
 failure_modes:
   - mode: deletion guard trips (contamination class reaches allowedPaths)
     detection: Sentry op safe-commit-deletion-guard (count + sample) + "PR withheld" issue comment
@@ -306,6 +306,7 @@ No browser/UI flows (QA skill: skip gracefully). Command-line verification:
 - **Hook deny flips live roadmap-review behavior:** mitigated by prompt line + instructive deny reason + PreToolUse feedback loop (the model retries scoped). Not claimed zero-impact.
 - **False-positive guard aborts on legit >10-file changes:** conservative by design; the Sentry event carries the count and sample; raising the constant is a one-line reviewed change.
 - **Model writes malicious content within allowedPaths:** explicit non-goal — required CI checks are the backstop; the guard bounds *structural* damage.
+- **Version-skew direction change (Outcome A consequence, review P3):** pre-PR, substrate crons executed skills from the DEPLOYED plugin copy (release-pinned via `getPluginPath`); post-PR they execute main-HEAD's tracked tree (the clone). Main-HEAD is arguably more correct for crons that commit plugin edits; the residual skew window is bounded by deploy cadence (relevant only if a skill↔host-script contract churns — cron-ux-audit's bot scripts still run host-side).
 
 ## Alternative Approaches Considered
 

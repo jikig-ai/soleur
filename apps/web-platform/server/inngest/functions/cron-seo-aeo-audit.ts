@@ -119,6 +119,8 @@ After the audit and fix is complete, create a GitHub issue titled "[Scheduled] S
 
 PERSISTENCE: Do NOT run git add, git commit, git push, or gh pr create/merge.
 The platform commits and opens a PR for your changes automatically after the run.
+Only changes under plugins/soleur/docs/ are persisted — keep all edits inside that path.
+Creating the audit issue above is REQUIRED: the platform only persists your changes after it verifies the issue exists.
 `;
 
 // Persistence allowlist (#5091): the audit edits the Eleventy docs site under
@@ -179,7 +181,7 @@ export async function cronSeoAeoAuditHandler({
     },
   );
 
-  // --- Step 2: setup ephemeral workspace (clone + symlink + sentinel) ---
+  // --- Step 2: setup ephemeral workspace (clone + settings + sentinel) ---
   // Track ephemeralRoot in handler-scope so teardown runs regardless of
   // downstream success/failure.
   let ephemeralRoot: string | null = null;
@@ -269,10 +271,13 @@ export async function cronSeoAeoAuditHandler({
       }),
     );
     // --- Step 4.5: deterministic persistence (#5091). Gated on the
-    //     issue-verified output, NOT the spawn exit code: exit-0-with-no-issue
-    //     is unverified (possibly mid-edit) work that must not auto-merge,
-    //     while issue-created + non-zero exit is the documented healthy #4747
-    //     case whose diff must not be discarded. abortedByTimeout also skips —
+    //     issue-verified output rather than the spawn exit code:
+    //     exit-0-with-no-issue is unverified (possibly mid-edit) work that
+    //     must not auto-merge, while issue-created + non-zero exit is the
+    //     documented healthy #4747 case whose diff must not be discarded.
+    //     (Caveat: resolveOutputAwareOk falls back to the spawn exit code
+    //     when its GitHub verify-read THROWS — a tri-state gate is tracked
+    //     in the #5111 consolidation.) abortedByTimeout also skips —
     //     a 30-min hard kill can land mid-edit, and the timeout is already
     //     loud via the reportSilentFallback above. Guard aborts / persistence
     //     failures self-report inside the helper (Sentry + issue comment).
@@ -283,9 +288,6 @@ export async function cronSeoAeoAuditHandler({
           installationToken,
           cronName: "cron-seo-aeo-audit",
           commitMessage: "fix(seo): weekly SEO/AEO audit fixes",
-          prTitle: `fix(seo): weekly SEO/AEO audit fixes ${runStartedAt.slice(0, 10)}`,
-          prBody:
-            "Automated PR from the SEO/AEO audit cron — committed handler-side via safeCommitAndPr (#5091).",
           allowedPaths: SEO_AEO_ALLOWED_PATHS,
           runStartedAt,
           scheduledIssueLabel: SENTRY_MONITOR_SLUG,

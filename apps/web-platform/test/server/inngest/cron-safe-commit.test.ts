@@ -29,6 +29,8 @@ vi.mock("@/server/observability", () => ({
 
 import {
   DEFAULT_MAX_DELETIONS,
+  enableAutoMergeSquash,
+  parsePorcelainZ,
   safeCommitAndPr,
   type SafeCommitResult,
 } from "@/server/inngest/functions/_cron-safe-commit";
@@ -46,6 +48,11 @@ const SEED_ENV = {
   GIT_COMMITTER_EMAIL: "fixture@example.test",
   GIT_AUTHOR_DATE: "2026-06-01T00:00:00Z",
   GIT_COMMITTER_DATE: "2026-06-01T00:00:00Z",
+  // Isolate from host git config (signing, hooks, templates) so fixture
+  // commit SHAs are deterministic on any machine (review P2b).
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_SYSTEM: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
 };
 
 const RUN_STARTED_AT = "2026-06-10T11:00:03.123Z";
@@ -85,8 +92,12 @@ const SEED_FILES: Record<string, string> = {
 
 async function makeFixture(): Promise<Fixture> {
   const root = await mkdtemp(join(tmpdir(), "safe-commit-fixture-"));
-  const remote = join(root, "remote.git");
-  const repo = join(root, "repo");
+  // Register for cleanup IMMEDIATELY so a mid-creation throw cannot leak
+  // the tmpdir (review P3).
+  const fixture: Fixture = { repo: join(root, "repo"), remote: join(root, "remote.git"), root };
+  fixtures.push(fixture);
+  const remote = fixture.remote;
+  const repo = fixture.repo;
   await execFileP("git", ["init", "--bare", remote]);
   await execFileP("git", ["init", "-b", "main", repo]);
   for (const [rel, content] of Object.entries(SEED_FILES)) {
@@ -97,8 +108,6 @@ async function makeFixture(): Promise<Fixture> {
   await tgit(repo, "commit", "-m", "seed");
   await tgit(repo, "remote", "add", "origin", remote);
   await tgit(repo, "push", "-u", "origin", "main");
-  const fixture = { repo, remote, root };
-  fixtures.push(fixture);
   return fixture;
 }
 
@@ -123,6 +132,8 @@ function makeOctokitStub(overrides?: {
   prCreate?: (params: Record<string, unknown>) => Promise<unknown>;
   prList?: () => Promise<unknown>;
   graphql?: () => Promise<unknown>;
+  /** When set, GET issues returns one open scheduled issue with this number. */
+  scheduledIssueNumber?: number;
 }): OctokitStub {
   const request = vi.fn(async (route: string, params: Record<string, unknown>) => {
     if (route === "POST /repos/{owner}/{repo}/pulls") {
@@ -134,7 +145,11 @@ function makeOctokitStub(overrides?: {
       return { data: [] };
     }
     if (route === "GET /repos/{owner}/{repo}/issues") {
-      return { data: [] };
+      return {
+        data: overrides?.scheduledIssueNumber
+          ? [{ number: overrides.scheduledIssueNumber }]
+          : [],
+      };
     }
     return { data: {} };
   });
@@ -151,8 +166,6 @@ function baseConfig(fixture: Fixture, octokit: OctokitStub) {
     installationToken: "synthetic-token",
     cronName: "cron-test-fixture",
     commitMessage: "fix(test): fixture commit",
-    prTitle: "fix(test): fixture PR",
-    prBody: "Automated fixture PR body.",
     allowedPaths: ["knowledge-base/marketing/"] as const,
     runStartedAt: RUN_STARTED_AT,
     scheduledIssueLabel: "scheduled-test-fixture",
@@ -197,6 +210,13 @@ describe("safeCommitAndPr — structural exclusion + allowlist (AC4a)", () => {
       (c) => c[1]?.op === "safe-commit-deletion-guard",
     );
     expect(guardCalls).toHaveLength(0);
+    // Anti-vacuity (review P2a): structural exclusion is SILENT by design —
+    // if it were allowlist-driven instead, these .claude/ deletions would
+    // fire safe-commit-paths-dropped and this assertion turns red.
+    const dropCalls = reportSilentFallbackMock.mock.calls.filter(
+      (c) => c[1]?.op === "safe-commit-paths-dropped",
+    );
+    expect(dropCalls).toHaveLength(0);
   });
 
   it("warns to Sentry when non-structural paths are dropped by the allowlist filter", async () => {
@@ -227,6 +247,12 @@ describe("safeCommitAndPr — structural exclusion + allowlist (AC4a)", () => {
       "POST /repos/{owner}/{repo}/pulls",
       expect.anything(),
     );
+    // Anti-vacuity: the .claude/ change is structurally excluded, not
+    // allowlist-dropped — no paths-dropped warning may fire.
+    const dropCalls = reportSilentFallbackMock.mock.calls.filter(
+      (c) => c[1]?.op === "safe-commit-paths-dropped",
+    );
+    expect(dropCalls).toHaveLength(0);
   });
 });
 
@@ -241,7 +267,7 @@ describe("safeCommitAndPr — deletion guard (AC4b)", () => {
       await rm(join(f.repo, `knowledge-base/marketing/file-${i}.md`));
     }
 
-    const octokit = makeOctokitStub();
+    const octokit = makeOctokitStub({ scheduledIssueNumber: 9 });
     const result = await safeCommitAndPr(baseConfig(f, octokit));
 
     expect(result.status).toBe("failed");
@@ -258,25 +284,67 @@ describe("safeCommitAndPr — deletion guard (AC4b)", () => {
     expect(guardCalls).toHaveLength(1);
     expect(guardCalls[0][1].extra.deletionCount).toBe(11);
     expect(guardCalls[0][1].extra.max).toBe(DEFAULT_MAX_DELETIONS);
+    // Operator-visibility contract: the guard abort comments on the run's
+    // scheduled issue (review: this was previously untested).
+    expect(octokit.request).toHaveBeenCalledWith(
+      "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+      expect.objectContaining({
+        issue_number: 9,
+        body: expect.stringContaining("PR withheld: deletion guard"),
+      }),
+    );
   });
 });
 
-describe("safeCommitAndPr — porcelain -z rename parsing (AC4c)", () => {
-  it("staged rename entries (two NUL fields, dest first) do not misalign subsequent entries", async () => {
+describe("safeCommitAndPr — porcelain -z parsing (AC4c, unit)", () => {
+  it("rename entries (two NUL fields, dest first) do not misalign subsequent entries", () => {
+    const raw = [
+      "R  knowledge-base/marketing/file-2-renamed.md",
+      "knowledge-base/marketing/file-2.md",
+      " M knowledge-base/marketing/file-9.md",
+      "?? a.b", // 3-char path
+      "UU knowledge-base/marketing/conflict.md",
+      "",
+    ].join("\0");
+    const entries = parsePorcelainZ(raw);
+    expect(entries.map((e) => e.path)).toEqual([
+      "knowledge-base/marketing/file-2-renamed.md",
+      "knowledge-base/marketing/file-9.md",
+      "a.b",
+      "knowledge-base/marketing/conflict.md",
+    ]);
+    expect(entries[0]).toMatchObject({ x: "R", y: " " });
+    expect(entries[3]).toMatchObject({ x: "U", y: "U" });
+  });
+
+  it("empty status output parses to zero entries", () => {
+    expect(parsePorcelainZ("")).toEqual([]);
+  });
+
+  it("a pre-staged index (e.g. git mv) is rejected loudly — the commit would otherwise carry the whole index around the allowlist", async () => {
     const f = await makeFixture();
-    // Staged rename: R entry carries "dest\0src\0" under -z.
     await tgit(f.repo, "mv", "knowledge-base/marketing/file-2.md", "knowledge-base/marketing/file-2-renamed.md");
-    // A worktree modification that scans AFTER the rename entry — if the
-    // parser misaligns on the rename's second field, this path is garbled.
-    await writeFile(join(f.repo, "knowledge-base/marketing/file-9.md"), "post-rename change\n");
 
     const octokit = makeOctokitStub();
     const result = await safeCommitAndPr(baseConfig(f, octokit));
 
-    expect(result.status).toBe("committed");
-    const shown = await tgit(f.repo, "show", "--name-status", "--format=", "HEAD");
-    expect(shown).toContain("file-2-renamed.md");
-    expect(shown).toContain("file-9.md");
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.stage).toBe("dirty-index");
+    }
+    // Nothing was pushed.
+    const remoteBranches = await tgit(f.repo, "ls-remote", "--heads", "origin");
+    expect(remoteBranches).not.toContain("ci/");
+  });
+});
+
+describe("enableAutoMergeSquash — idempotent replay tolerance", () => {
+  it("treats 'already enabled' GraphQL errors as enabled (alreadyEnabled flagged)", async () => {
+    const graphql = vi.fn(async () => {
+      throw new Error("Pull request Auto merge is already enabled");
+    });
+    const result = await enableAutoMergeSquash({ graphql } as never, "PR_node");
+    expect(result).toMatchObject({ enabled: true, alreadyEnabled: true, cleanStatus: false });
   });
 });
 
@@ -422,6 +490,26 @@ describe("safeCommitAndPr — replay resume (AC4g)", () => {
     // Exactly one commit beyond origin/main — no duplicate commit was created.
     const count = await tgit(f.repo, "rev-list", "origin/main..HEAD", "--count");
     expect(count).toBe("1");
+  });
+});
+
+describe("safeCommitAndPr — crash-window resume (review P2: checkout-B before commit)", () => {
+  it("falls through to the scan when HEAD is on the ci/ branch with NO commit ahead of origin/main", async () => {
+    const f = await makeFixture();
+    // Simulate a prior attempt that crashed after `checkout -B` but before
+    // `commit`: HEAD on the target branch at main's tip, work still dirty.
+    await tgit(f.repo, "checkout", "-B", "ci/test-fixture-2026-06-10-110003");
+    await writeFile(join(f.repo, "knowledge-base/marketing/file-1.md"), "crash-window change\n");
+
+    const result = await safeCommitAndPr(baseConfig(f, makeOctokitStub()));
+
+    expect(result.status).toBe("committed");
+    // The work was actually committed (not skipped by a naive branch-name
+    // resume), with exactly one commit ahead of origin/main.
+    const count = await tgit(f.repo, "rev-list", "origin/main..HEAD", "--count");
+    expect(count).toBe("1");
+    const shown = await tgit(f.repo, "show", "--name-only", "--format=", "HEAD");
+    expect(shown).toContain("knowledge-base/marketing/file-1.md");
   });
 });
 

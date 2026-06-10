@@ -447,10 +447,15 @@ async function runAutoMergeGate(args: {
   if (autoMerge.enabled) {
     logger.info(
       { fn: "cron-bug-fixer", prNumber: pr.number },
-      "Auto-merge queued",
+      autoMerge.alreadyEnabled
+        ? "Auto-merge already enabled (idempotent replay) — treating as queued"
+        : "Auto-merge queued",
     );
     return { queued: true };
   }
+  // Deliberately NO direct-merge fallback on cleanStatus here (unlike
+  // safeCommitAndPr): bug-fixer's auto-merge is gated by 3 safety nets and
+  // must never force a merge the checks pipeline did not arbitrate.
   const reason = autoMerge.cleanStatus
     ? "Pull request is in clean status"
     : (autoMerge.reason ?? "enablePullRequestAutoMerge failed");
@@ -662,7 +667,7 @@ export async function cronBugFixerHandler({
     };
   }
 
-  // --- Step 4: setup ephemeral workspace (clone + symlink + sentinel) ---
+  // --- Step 4: setup ephemeral workspace (clone + settings + sentinel) ---
   // Track ephemeralRoot in handler-scope so teardown runs regardless of
   // downstream success/failure.
   let ephemeralRoot: string | null = null;

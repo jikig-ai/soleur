@@ -268,6 +268,11 @@ function gitVerbReason(tokens) {
       const path = t.replace(/^\.\//, "");
       if (t === "." || t === "./" || path.startsWith(":") || t.includes("*"))
         return `git-add pathspec '${t}' denied (stages the whole tree) — ${scoped}`;
+      // Absolute paths resolve back into the clone (`git add /abs/cwd` ===
+      // `git add .`) and dodge every relative-form check above — no
+      // legitimate scoped add in an ephemeral clone uses one.
+      if (t.startsWith("/"))
+        return `git-add pathspec '${t}' denied (absolute paths can stage the whole tree) — ${scoped}`;
       if (path === ".claude" || path.startsWith(".claude/"))
         return `git-add pathspec '${t}' denied (.claude/ is run-scoped workspace scaffolding, never commit it) — ${scoped}`;
     }

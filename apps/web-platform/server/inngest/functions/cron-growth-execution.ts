@@ -35,7 +35,7 @@
 //   - repo/plugins/soleur            (the clone's own tracked tree — #5091)
 //   - repo/.claude/settings.json     (DEFAULT_SETTINGS overlay)
 // Plugin resolution under headless `--print` requires the explicit
-// `--plugin-dir plugins/soleur` flag in CLAUDE_CODE_FLAGS below — the symlinked
+// `--plugin-dir plugins/soleur` flag in CLAUDE_CODE_FLAGS below — the
 // plugins/soleur dir is NOT auto-discovered from spawn cwd in headless mode (the
 // interactive marketplace/enabledPlugins trust flow does not run under --print).
 // See #4993 / #4987.
@@ -126,6 +126,8 @@ If no stale pages are found, create the issue noting "No stale pages found — a
 
 PERSISTENCE: Do NOT run git add, git commit, git push, or gh pr create/merge.
 The platform commits and opens a PR for your changes automatically after the run.
+Only changes under knowledge-base/marketing/ and plugins/soleur/docs/ are persisted — keep all edits inside those paths.
+Creating the audit issue above is REQUIRED: the platform only persists your changes after it verifies the issue exists.
 `;
 
 // Persistence allowlist (#5091): keyword/page fixes land under the docs site
@@ -189,7 +191,7 @@ export async function cronGrowthExecutionHandler({
     },
   );
 
-  // --- Step 2: setup ephemeral workspace (clone + symlink + sentinel) ---
+  // --- Step 2: setup ephemeral workspace (clone + settings + sentinel) ---
   // Track ephemeralRoot in handler-scope so teardown runs regardless of
   // downstream success/failure.
   let ephemeralRoot: string | null = null;
@@ -290,9 +292,6 @@ export async function cronGrowthExecutionHandler({
           installationToken,
           cronName: "cron-growth-execution",
           commitMessage: "fix(growth): biweekly keyword optimization",
-          prTitle: `fix(growth): biweekly keyword optimization ${runStartedAt.slice(0, 10)}`,
-          prBody:
-            "Automated PR from the growth execution cron — committed handler-side via safeCommitAndPr (#5091).",
           allowedPaths: GROWTH_EXECUTION_ALLOWED_PATHS,
           runStartedAt,
           scheduledIssueLabel: SENTRY_MONITOR_SLUG,

@@ -118,6 +118,8 @@ STEP 6 — Create audit issue:
 
 PERSISTENCE: Do NOT run git add, git commit, git push, or gh pr create/merge.
 The platform commits and opens a PR for your changes automatically after the run.
+Only changes under knowledge-base/marketing/ and plugins/soleur/docs/blog/ are persisted — keep all edits inside those paths.
+Creating the audit issue in STEP 6 is REQUIRED: the platform only persists your changes after it verifies the issue exists.
 `;
 
 // Persistence allowlist (#5091): the article + distribution content + queue
@@ -204,7 +206,7 @@ export async function cronContentGeneratorHandler({
     },
   );
 
-  // --- Step 2: setup ephemeral workspace (clone + symlink + sentinel) ---
+  // --- Step 2: setup ephemeral workspace (clone + settings + sentinel) ---
   let ephemeralRoot: string | null = null;
   let spawnCwd: string | null = null;
   try {
@@ -293,9 +295,6 @@ export async function cronContentGeneratorHandler({
           installationToken,
           cronName: "cron-content-generator",
           commitMessage: "feat(content): auto-generate article",
-          prTitle: `feat(content): auto-generate article ${runStartedAt.slice(0, 10)}`,
-          prBody:
-            "Automated PR from the content generator cron — committed handler-side via safeCommitAndPr (#5091).",
           allowedPaths: CONTENT_GENERATOR_ALLOWED_PATHS,
           runStartedAt,
           scheduledIssueLabel: SENTRY_MONITOR_SLUG,
