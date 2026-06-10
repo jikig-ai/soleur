@@ -183,6 +183,16 @@ jobs:
           # after the rc-capture window per
           # `2026-05-16-adr-amendment-required-when-reversing-and-destroy-guard-empty-string-bypass.md`.
           set -uo pipefail
+          # NOTE: kb_tenant_mint_silent_fallback is deliberately ABSENT from
+          # the -target list below. The resource left issue-alerts.tf in #4929
+          # (superseded by kb_db_error) but was never destroy-applied, so an
+          # orphan remains in STATE and the live Sentry rule is inert (its
+          # producer is dead code). Purge on the next sentry apply by re-adding
+          # the target + an `[ack-destroy]` line in that PR's merge commit
+          # (PR #5089 postmerge exposed the latent destroy; the guard halted).
+          # Comments must NEVER sit inside the backslash-continued command —
+          # a mid-continuation comment terminates the command and the next
+          # `-target=` line executes as a bare command (exit 127; PR #5108).
           terraform plan \
             -target=sentry_cron_monitor.scheduled_terraform_drift \
             -target=sentry_cron_monitor.scheduled_oauth_probe \
@@ -208,6 +218,7 @@ jobs:
             -target=sentry_cron_monitor.scheduled_ux_audit \
             -target=sentry_cron_monitor.scheduled_supabase_disk_io \
             -target=sentry_cron_monitor.scheduled_workspace_gc \
+            -target=sentry_cron_monitor.cron_egress_resolve \
             -target=sentry_uptime_monitor.soleur_apex \
             -target=sentry_uptime_monitor.soleur_www \
             -target=sentry_uptime_monitor.soleur_changelog_deep \
@@ -216,8 +227,8 @@ jobs:
             -target=sentry_issue_alert.byok_cap_exceeded \
             -target=sentry_issue_alert.chat_message_save_failure \
             -target=sentry_issue_alert.workspace_sync_health \
-            -target=sentry_issue_alert.kb_tenant_mint_silent_fallback \
             -target=sentry_issue_alert.kb_db_error \
+            -target=sentry_issue_alert.egress_blocked \
             -no-color -input=false -out=tfplan
           rc=$?
           if [[ $rc -ne 0 ]]; then

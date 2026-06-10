@@ -3,7 +3,7 @@ title: "Counsel review audit — #4051 (LIA + Privacy Policy + DPD)"
 type: counsel-review
 date: 2026-05-19
 issue: 4051
-pr: TBD
+pr: 4081
 status: SIGNED-OFF (operator-attested)
 signed_off_at: 2026-05-19
 signed_off_by: "Jean Deruelle (Jikigai SARL gérant)"
