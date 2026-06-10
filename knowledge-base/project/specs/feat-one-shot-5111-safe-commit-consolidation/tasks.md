@@ -5,10 +5,10 @@ Lane: cross-domain (fail-closed default — no spec.md `lane:` for this branch)
 
 ## Phase 1 — Helper option surface (tests first)
 
-- [ ] 1.1 RED: add new-option scenarios to `apps/web-platform/test/server/inngest/cron-safe-commit.test.ts` (branchName override + refname rejection; commitBody second paragraph; prTitle/prBody/prDraft/prLabels pass-through; syntheticChecks check-run POSTs on head SHA; mergeMode "direct" happy / direct-fail→arm-auto-merge / both-fail→failed("auto-merge"); mergeMode "none" never merges; defaults-unchanged regression block)
-- [ ] 1.2 GREEN: widen `SafeCommitConfig` in `_cron-safe-commit.ts` (branchName, commitBody, prTitle, prBody, prDraft, prLabels, syntheticChecks, mergeMode) — all optional, defaults preserve current behavior; do NOT widen the `stage` union
-- [ ] 1.3 Consolidate `SYNTHETIC_CHECK_NAMES` into `_cron-safe-commit.ts` (drift check done at deepen time: all 5 copies byte-identical — plain consolidation, update 5 imports + test imports)
-- [ ] 1.4 Cross-consumer grep per hr-type-widening: `git grep -n "safeCommitAndPr({" apps/web-platform/` — existing 3 callers compile unchanged
+- [x] 1.1 RED: add new-option scenarios to `apps/web-platform/test/server/inngest/cron-safe-commit.test.ts` (branchName override + refname rejection; commitBody second paragraph; prTitle/prBody/prDraft/prLabels pass-through; syntheticChecks check-run POSTs on head SHA; mergeMode "direct" happy / direct-fail→arm-auto-merge / both-fail→failed("auto-merge"); mergeMode "none" never merges; defaults-unchanged regression block)
+- [x] 1.2 GREEN: widen `SafeCommitConfig` in `_cron-safe-commit.ts` (branchName, commitBody, prTitle, prBody, prDraft, prLabels, syntheticChecks, mergeMode) — all optional, defaults preserve current behavior; do NOT widen the `stage` union
+- [x] 1.3 Consolidate `SYNTHETIC_CHECK_NAMES` into `_cron-safe-commit.ts` (drift check done at deepen time: all 5 copies byte-identical — plain consolidation, update 5 imports + test imports)
+- [x] 1.4 Cross-consumer grep per hr-type-widening: `git grep -n "safeCommitAndPr({" apps/web-platform/` — existing 3 callers compile unchanged
 
 ## Phase 2 — 4 prompt-level crons (Tier-2 dormant)
 

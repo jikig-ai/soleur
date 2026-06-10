@@ -28,6 +28,22 @@ export const DEFAULT_MAX_DELETIONS = 10;
 // directory flow into the deletion guard on every run (#5091 plan review).
 export const STRUCTURAL_EXCLUSION_PREFIXES: readonly string[] = [".claude/"];
 
+// #5111 — the bot-PR-with-synthetic-checks pattern: deterministic data-refresh
+// PRs post these check-runs as completed/success so the integration-pinned
+// required checks (infra/github/ruleset-ci-required.tf) are satisfied without
+// running CI on knowledge-base-only diffs. Consolidated from 5 byte-identical
+// per-cron copies (weekly-analytics, compound-promote, content-publisher,
+// content-vendor-drift, rule-prune) — verified identical at #5111 deepen time.
+export const SYNTHETIC_CHECK_NAMES = [
+  "test",
+  "dependency-review",
+  "e2e",
+  "skill-security-scan PR gate",
+  "enforce",
+  "cla-check",
+  "cla-evidence",
+] as const;
+
 const BOT_NAME = "github-actions[bot]";
 const BOT_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com";
 
@@ -56,6 +72,32 @@ export interface SafeCommitConfig {
   /** Injectable for tests; production callers omit and the token is used. */
   octokit?: Octokit;
   logger?: HandlerArgs["logger"];
+  // -- #5111 option surface (all optional; defaults preserve #5091 behavior) --
+  /** Override the derived `ci/<name>-<ts>` branch (compound-promote's
+   *  per-cluster `self-healing/auto-<hash>-<date>`). Must be refname-safe;
+   *  the helper rejects `:` `.` whitespace at stage "checkout". */
+  branchName?: string;
+  /** Second `-m` paragraph (compound-promote provenance trailers). */
+  commitBody?: string;
+  /** Full PR title override (no date appended). Default stays
+   *  `${commitMessage} ${YYYY-MM-DD}`. */
+  prTitle?: string;
+  /** PR body stem override. The dropped-path ⚠️ marker is appended
+   *  regardless of override (the loud-truncation invariant survives). */
+  prBody?: string;
+  prDraft?: boolean;
+  /** Labels applied after PR create (best-effort: label failure mirrors to
+   *  Sentry, never fails the run — labels are advisory metadata). */
+  prLabels?: readonly string[];
+  /** Post synthetic check-runs on the head SHA after PR create (the
+   *  bot-pr-with-synthetic-checks pattern carried by the 5 legacy crons). */
+  syntheticChecks?: { names: readonly string[]; summary: string };
+  /** "auto" (default): enablePullRequestAutoMerge + clean-status direct
+   *  fallback — #5091 behavior. "direct": PUT …/merge squash immediately
+   *  (legacy live pipelines); on failure falls back to arming auto-merge,
+   *  then to failure stage "auto-merge" (PR stays open + loud). "none":
+   *  create only (compound-promote human-review draft PRs). */
+  mergeMode?: "auto" | "direct" | "none";
 }
 
 export type SafeCommitResult =
@@ -326,8 +368,19 @@ export async function safeCommitAndPr(
   config: SafeCommitConfig,
 ): Promise<SafeCommitResult> {
   const { spawnCwd, cronName, allowedPaths, runStartedAt, logger } = config;
-  const branch = deriveBranchName(cronName, runStartedAt);
-  const prTitle = `${config.commitMessage} ${runStartedAt.slice(0, 10)}`;
+  // #5111: refname-unsafe override chars (`:` `.` whitespace) are rejected at
+  // stage "checkout" BEFORE any git mutation — callers compute branch names
+  // from dynamic data (cluster hashes) and a bad name must fail loudly, not
+  // surface as an opaque git error mid-pipeline.
+  if (config.branchName && /[:.\s]/.test(config.branchName)) {
+    return failure(
+      config,
+      "checkout",
+      `branchName override is not refname-safe (contains ':', '.', or whitespace): ${config.branchName}`,
+    );
+  }
+  const branch = config.branchName ?? deriveBranchName(cronName, runStartedAt);
+  const prTitle = config.prTitle ?? `${config.commitMessage} ${runStartedAt.slice(0, 10)}`;
   const gitIdentityEnv: Record<string, string> = {
     GIT_AUTHOR_NAME: BOT_NAME,
     GIT_AUTHOR_EMAIL: BOT_EMAIL,
@@ -477,7 +530,12 @@ export async function safeCommitAndPr(
       }
       const commit = await runGit(
         spawnCwd,
-        ["commit", "-m", config.commitMessage],
+        [
+          "commit",
+          "-m",
+          config.commitMessage,
+          ...(config.commitBody ? ["-m", config.commitBody] : []),
+        ],
         gitIdentityEnv,
       );
       if (!commit.ok) {
@@ -511,10 +569,14 @@ export async function safeCommitAndPr(
       );
     }
 
-    // -- 10. PR create; 422 "already exists" is replay success.
+    // -- 10. PR create; 422 "already exists" is replay success. The stem is
+    //        caller-overridable (#5111) but the dropped-path ⚠️ marker is
+    //        appended REGARDLESS — the loud-truncation invariant survives
+    //        every override.
     const octokit = await resolveOctokit(config);
     const prBody =
-      `Automated PR from \`${cronName}\` — committed handler-side via safeCommitAndPr (#5091).` +
+      (config.prBody ??
+        `Automated PR from \`${cronName}\` — committed handler-side via safeCommitAndPr (#5091).`) +
       (prBodyExtras.length ? `\n\n${prBodyExtras.join("\n")}` : "");
     let prNumber: number;
     let prNodeId: string;
@@ -526,6 +588,7 @@ export async function safeCommitAndPr(
         body: prBody,
         head: branch,
         base: "main",
+        ...(config.prDraft ? { draft: true } : {}),
         headers: { "X-GitHub-Api-Version": "2022-11-28" },
       })) as { data: { number: number; node_id: string } };
       prNumber = created.data.number;
@@ -559,38 +622,134 @@ export async function safeCommitAndPr(
       prNodeId = pr.node_id;
     }
 
-    // -- 11. Auto-merge (squash); "clean status" → direct merge fallback
-    //        (repo has delete_branch_on_merge=true, so branch cleanup is
-    //        handled by GitHub in both paths).
-    const autoMerge = await enableAutoMergeSquash(octokit, prNodeId);
-    if (!autoMerge.enabled) {
-      if (autoMerge.cleanStatus) {
-        try {
-          await octokit.request("PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge", {
+    // -- 10.5. Post-create extras (#5111): labels + synthetic check-runs.
+    //          Both best-effort — labels are advisory metadata and a failed
+    //          check-run POST leaves the merge tail as the loud terminal
+    //          signal (matches the legacy pipelines, where the merge `.catch`
+    //          was the only net).
+    if (config.prLabels?.length) {
+      try {
+        await octokit.request(
+          "POST /repos/{owner}/{repo}/issues/{issue_number}/labels",
+          {
             owner: REPO_OWNER,
             repo: REPO_NAME,
-            pull_number: prNumber,
-            merge_method: "squash",
+            issue_number: prNumber,
+            labels: [...config.prLabels],
             headers: { "X-GitHub-Api-Version": "2022-11-28" },
-          });
-        } catch (err) {
-          return failure(config, "auto-merge", (err as Error).message, {
-            extra: { prNumber },
-            comment: `PR #${prNumber} was created but auto-merge could not be armed — it needs a manual merge. See Sentry op safe-commit-failed (fn=${cronName}).`,
-          });
-        }
-      } else {
-        return failure(
-          config,
-          "auto-merge",
-          autoMerge.reason ?? "enablePullRequestAutoMerge failed",
-          {
-            extra: { prNumber },
-            comment: `PR #${prNumber} was created but auto-merge could not be armed — it needs a manual merge. See Sentry op safe-commit-failed (fn=${cronName}).`,
           },
         );
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: cronName,
+          op: "safe-commit-label-failed",
+          message: "Could not apply PR labels (advisory metadata — run continues)",
+          extra: { fn: cronName, prNumber, labels: config.prLabels },
+        });
       }
     }
+    if (config.syntheticChecks) {
+      const head = await runGit(spawnCwd, ["rev-parse", "HEAD"]);
+      if (head.ok) {
+        const headSha = head.stdout.trim();
+        for (const name of config.syntheticChecks.names) {
+          try {
+            await octokit.request("POST /repos/{owner}/{repo}/check-runs", {
+              owner: REPO_OWNER,
+              repo: REPO_NAME,
+              name,
+              head_sha: headSha,
+              status: "completed",
+              conclusion: "success",
+              output: { title: "Bot PR", summary: config.syntheticChecks.summary },
+              headers: { "X-GitHub-Api-Version": "2022-11-28" },
+            });
+          } catch (err) {
+            reportSilentFallback(err, {
+              feature: cronName,
+              op: "safe-commit-check-run-failed",
+              message:
+                "Could not post a synthetic check-run — merge tail will surface the consequence loudly",
+              extra: { fn: cronName, prNumber, checkName: name },
+            });
+          }
+        }
+      } else {
+        reportSilentFallback(new Error(head.stderr), {
+          feature: cronName,
+          op: "safe-commit-check-run-failed",
+          message: "Could not resolve head SHA for synthetic check-runs",
+          extra: { fn: cronName, prNumber },
+        });
+      }
+    }
+
+    // -- 11. Merge tail, by mode (#5111). "auto" (default) preserves #5091
+    //        behavior exactly: enablePullRequestAutoMerge with the
+    //        "clean status" → direct-merge fallback. "direct" inverts the
+    //        ladder for the legacy live pipelines: PUT …/merge first, arm
+    //        auto-merge on failure, fail stage "auto-merge" when both lose
+    //        (PR stays open + loud — the stage union is deliberately NOT
+    //        widened; the runbook row covers both arming and execution
+    //        failures). "none" stops after create (human-review drafts).
+    //        Repo has delete_branch_on_merge=true, so branch cleanup is
+    //        handled by GitHub in all merging paths.
+    const mergeMode = config.mergeMode ?? "auto";
+    if (mergeMode === "direct") {
+      try {
+        await octokit.request("PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge", {
+          owner: REPO_OWNER,
+          repo: REPO_NAME,
+          pull_number: prNumber,
+          merge_method: "squash",
+          headers: { "X-GitHub-Api-Version": "2022-11-28" },
+        });
+      } catch (mergeErr) {
+        const autoMerge = await enableAutoMergeSquash(octokit, prNodeId);
+        if (!autoMerge.enabled) {
+          return failure(
+            config,
+            "auto-merge",
+            `direct merge failed (${(mergeErr as Error).message}); auto-merge arm also failed (${autoMerge.reason ?? "enablePullRequestAutoMerge failed"})`,
+            {
+              extra: { prNumber },
+              comment: `PR #${prNumber} was created but could not be merged — it needs a manual merge. See Sentry op safe-commit-failed (fn=${cronName}).`,
+            },
+          );
+        }
+      }
+    } else if (mergeMode === "auto") {
+      const autoMerge = await enableAutoMergeSquash(octokit, prNodeId);
+      if (!autoMerge.enabled) {
+        if (autoMerge.cleanStatus) {
+          try {
+            await octokit.request("PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge", {
+              owner: REPO_OWNER,
+              repo: REPO_NAME,
+              pull_number: prNumber,
+              merge_method: "squash",
+              headers: { "X-GitHub-Api-Version": "2022-11-28" },
+            });
+          } catch (err) {
+            return failure(config, "auto-merge", (err as Error).message, {
+              extra: { prNumber },
+              comment: `PR #${prNumber} was created but auto-merge could not be armed — it needs a manual merge. See Sentry op safe-commit-failed (fn=${cronName}).`,
+            });
+          }
+        } else {
+          return failure(
+            config,
+            "auto-merge",
+            autoMerge.reason ?? "enablePullRequestAutoMerge failed",
+            {
+              extra: { prNumber },
+              comment: `PR #${prNumber} was created but auto-merge could not be armed — it needs a manual merge. See Sentry op safe-commit-failed (fn=${cronName}).`,
+            },
+          );
+        }
+      }
+    }
+    // mergeMode === "none": create-only — fall through to the success log.
 
     logger?.info(
       { fn: cronName, op: "safe-commit-pr", prNumber, branch, fileCount },
