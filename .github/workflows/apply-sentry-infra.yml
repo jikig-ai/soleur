@@ -217,7 +217,13 @@ jobs:
             -target=sentry_issue_alert.byok_cap_exceeded \
             -target=sentry_issue_alert.chat_message_save_failure \
             -target=sentry_issue_alert.workspace_sync_health \
-            -target=sentry_issue_alert.kb_tenant_mint_silent_fallback \
+            # kb_tenant_mint_silent_fallback: -target REMOVED 2026-06-10. The
+            # resource left the .tf in #4929 (superseded by kb_db_error) but was
+            # never destroy-applied, so the orphan remains in STATE and the live
+            # Sentry rule is inert (its producer is dead code). Purge on the next
+            # sentry apply by re-adding the target + an `[ack-destroy]` line in
+            # that PR's merge commit (PR #5089 postmerge exposed the latent
+            # destroy and the guard correctly halted).
             -target=sentry_issue_alert.kb_db_error \
             -target=sentry_issue_alert.egress_blocked \
             -no-color -input=false -out=tfplan
