@@ -1,8 +1,10 @@
 {
-  "_comment": "Playwright MCP config — pins headed mode explicitly so a future @playwright/mcp regression (cf. 0.0.75 silent-headless bug; learning 2026-05-16-brainstorm-premise-cascade-and-playwright-handoff-discipline.md §2 + W4) cannot break the credential-handoff workflow. Wire via --config in .mcp.json.",
+  "_comment": "Playwright MCP config — pins headed mode explicitly so a future @playwright/mcp regression (cf. 0.0.75 silent-headless bug; learning 2026-05-16-brainstorm-premise-cascade-and-playwright-handoff-discipline.md §2 + W4) cannot break the credential-handoff workflow. chromiumSandbox: true + channel chrome: Playwright defaults to --no-sandbox, which Chrome flags as a stability/security risk and which destabilized the long credential-handoff session that stalled issue #5092 (diagnosed 2026-06-10); real Chrome's root SUID helper sandboxes correctly even where AppArmor restricts unprivileged userns (Ubuntu 24.04+), unlike Playwright's bundled Chromium whose chrome_sandbox helper is not setuid. Wire via --config in .mcp.json.",
   "browser": {
     "launchOptions": {
-      "headless": false
+      "headless": false,
+      "channel": "chrome",
+      "chromiumSandbox": true
     },
     "isolated": false
   }
