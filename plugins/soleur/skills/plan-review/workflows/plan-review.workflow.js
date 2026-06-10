@@ -236,8 +236,10 @@ const detect = await agent(
   `Read the implementation plan at \`${safePlan}\` (use your Read tool). Determine ONLY whether it literally declares the brand-survival threshold sentinel:
 "${THRESHOLD_SENTINEL}"
 (it would appear in a "## User-Brand Impact" section). Return thresholdDeclared=true only on a literal match; do not infer it from tone. Do not review the plan.`,
-  { label: 'detect-threshold', phase: 'Load', schema: THRESHOLD_SCHEMA },
+  // Pinned 'sonnet': schema-constrained sentinel detection is mechanical (ADR-051).
+  { label: 'detect-threshold', phase: 'Load', schema: THRESHOLD_SCHEMA, model: 'sonnet' },
 )
+log('tier pins: detect-threshold→sonnet (mechanical step per ADR-051; reviewers + consolidate inherit the session model)')
 
 const thresholdFired = !!detect?.thresholdDeclared
 const panel = thresholdFired ? [...BASELINE_PANEL, ...THRESHOLD_PANEL] : [...BASELINE_PANEL]
