@@ -61,6 +61,21 @@ in-sandbox `gh auth status` returning "token invalid" (a 401-from-`/user`
 verdict, not a connection error) — proved api.github.com WAS reachable
 (Outcome A). The live behavior is the authoritative probe.
 
+> **SUPERSEDED (2026-06-09, PR #5090):** the Outcome A inference above is
+> contradicted by the later diagnosis. A 2026-06-09 operator screenshot showed
+> `gh issue view` failing with the transport-shaped
+> `Post "https://api.github.com/graphql": Forbidden` — a sandbox-proxy CONNECT
+> denial, exactly what `allowedDomains: []` produces per the installed SDK's
+> domain collector (verified against `@anthropic-ai/claude-agent-sdk@0.2.85`
+> `cli.js`, not docs). The earlier "token invalid" verdict was most likely a
+> misread of gh's error rendering, not proof of reachability. The corrected
+> meta-lesson: a prod signal settles a capability question only when the
+> signal's SHAPE is verified against the failure mode it is claimed to rule
+> out (a transport denial and an HTTP 401 render differently in gh output —
+> `Post "...": <status-text>` vs `HTTP 401: <message>`). See
+> `knowledge-base/project/plans/2026-06-09-fix-concierge-sandbox-github-egress-gh-forbidden-plan.md`
+> §SDK semantics; the post-merge AC9 live e2e is the definitive arbiter.
+
 ## Session Errors
 
 1. **Backtick in `git commit -m` body triggered shell command substitution** —

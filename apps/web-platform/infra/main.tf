@@ -108,8 +108,11 @@ provider "cloudflare" {
 # soleur.ai. Current consumers:
 #   - cache.tf                    (http_request_cache_settings)  — #2542
 #   - bot-allowlist.tf            (http_request_firewall_custom) — #2662
-#   - seo-rulesets.tf             (http_request_dynamic_redirect) — #3296
-#   - acme-challenge-ruleset.tf   (http_request_dynamic_redirect) — 2026-05-18 incident
+#   - seo-rulesets.tf             (http_request_dynamic_redirect; absorbed the
+#     2026-05-18 acme-challenge ruleset as Rule 10) — #3296
+#   - seo-bulk-redirects.tf       (ACCOUNT-level http_request_redirect +
+#     redirect list — needs Account Rulesets:Edit + Account Filter Lists:Edit,
+#     the widen tracked in #5092) — #3367
 provider "cloudflare" {
   alias     = "rulesets"
   api_token = var.cf_api_token_rulesets

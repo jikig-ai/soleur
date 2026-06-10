@@ -1,7 +1,8 @@
 // Sandbox config helper extracted from agent-runner.ts so two consumers
 // — `startAgentSession` (legacy domain-leader path) and the cc-soleur-go
-// `realSdkQueryFactory` in `cc-dispatcher.ts` — share the SAME literal
-// shape verbatim. See drift-guard `agent-runner-helpers.test.ts`.
+// `realSdkQueryFactory` in `cc-dispatcher.ts` — share the same literal
+// shape, identical except for the token-derived `network.allowedDomains`
+// (#5041 follow-up). See drift-guard `agent-runner-helpers.test.ts`.
 //
 // Field semantics:
 //   - `failIfUnavailable: true` — refuse to start if bwrap/socat are
@@ -14,8 +15,10 @@
 //     /proc inside user namespaces; this skips `--proc /proc` in bwrap.
 //     `/proc` is already in `denyRead`, so the weaker mode is acceptable
 //     (#1557).
-//   - `network.allowedDomains: []` + `allowManagedDomainsOnly: true` —
-//     no outbound network.
+//   - `network.allowedDomains` + `allowManagedDomainsOnly: true` —
+//     no outbound network by default; `opts.allowGithubEgress` widens
+//     the allowlist to exactly `GITHUB_EGRESS_DOMAINS` (entitled-token
+//     sessions only — derived from `ghToken` presence at the consumer).
 //   - `filesystem.allowWrite: [workspacePath]` + `denyRead` —
 //     workspace-confined writes; deny reads outside.
 
@@ -41,13 +44,32 @@ export type AgentSandboxConfig = {
 } & { [x: string]: unknown };
 
 /**
+ * Exact-host egress allowlist for the Concierge's in-sandbox GitHub
+ * surface. No wildcards — `gh` (REST + GraphQL) needs `api.github.com`;
+ * raw `git push/fetch` via the GIT_ASKPASS path needs `github.com`.
+ * Widening beyond these two hosts (gist/upload/CDN) requires its own
+ * security review — each added host is exfiltration surface.
+ */
+const GITHUB_EGRESS_DOMAINS = Object.freeze([
+  "github.com",
+  "api.github.com",
+] as const);
+
+/**
  * Build the canonical sandbox options block. Output is deep-equal to the
  * inline literal previously inlined at the `query({ options: { sandbox: ... } })`
  * call site in `agent-runner.ts`. Drift here propagates to BOTH the
  * legacy domain-leader runner AND the cc-soleur-go factory.
+ *
+ * `opts.allowGithubEgress` widens ONLY `network.allowedDomains` to the
+ * exact GitHub hosts. Callers must derive it from entitled-token
+ * presence (`Boolean(ghToken)`), never pass `true` unconditionally —
+ * the sandbox proxy denies all other hosts either way
+ * (`allowManagedDomainsOnly` stays on).
  */
 export function buildAgentSandboxConfig(
   workspacePath: string,
+  opts?: { allowGithubEgress?: boolean },
 ): AgentSandboxConfig {
   return {
     enabled: true,
@@ -64,7 +86,7 @@ export function buildAgentSandboxConfig(
     // which is acceptable because /proc is already in denyRead (#1557).
     enableWeakerNestedSandbox: true,
     network: {
-      allowedDomains: [],
+      allowedDomains: opts?.allowGithubEgress ? [...GITHUB_EGRESS_DOMAINS] : [],
       allowManagedDomainsOnly: true,
     },
     filesystem: {
