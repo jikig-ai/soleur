@@ -66,13 +66,17 @@ and the Slack feed is verified live in prod (v3.154.0/v3.154.1).
 - FR4: On LLM failure (timeout, non-2xx, shape-invalid), fall back to a deterministic template:
   rank by conventional-commit type (`feat` > `fix` > `chore`), verbatim release-note titles.
   The week is posted either way.
-- FR5: Zero-release week (or only excluded-stream releases): post a one-line quiet-week note;
-  heartbeat green.
-- FR6: POST to `DISCORD_RELEASES_WEBHOOK_URL` (new secret, Doppler prd) with fallback
-  `|| DISCORD_WEBHOOK_URL` emitting `reportSilentFallback` when the fallback fires.
-- FR7: One-time cadence-change announcement post ("#releases is now a weekly digest") at
-  launch, via the discord-content path; include a direct note to the affected member if
-  reachable.
+- FR5: Zero highlight-eligible releases in the window (including an infra-stream-only
+  week): post a one-line quiet-week note; heartbeat green.
+- FR6 (amended 2026-06-10, spec-flow P0-2): POST to `DISCORD_RELEASES_WEBHOOK_URL` ONLY —
+  no `DISCORD_WEBHOOK_URL` fallback. A missing/empty/dead primary is a failure: Sentry
+  captureException + `ok:false` heartbeat (red monitor). Rationale: a #general fallback
+  keeps the monitor green while #releases stays dead, contradicting G5, and posts brand
+  content to the wrong channel.
+- FR7 (amended 2026-06-10): One-time cadence-change announcement post ("#releases is now
+  a weekly digest") at launch — drafted per brand guide, operator-approved, POSTed
+  directly via webhooks (#general + #releases); include a direct note to the affected
+  member if reachable, outcome recorded in the ship summary.
 
 ### PR-2 (extras)
 
@@ -100,9 +104,11 @@ and the Slack feed is verified live in prod (v3.154.0/v3.154.1).
 - TR5: Every webhook payload includes `allowed_mentions: {parse: []}` (API-level; PR-2 majors
   post uses the explicit role allowlist instead). Entity-escape untrusted changelog text;
   2000-char-aware truncation.
-- TR6: Sentry monitor `scheduled-release-digest` via `postSentryHeartbeat`; `ok` gated on the
-  Discord POST returning 2xx (the post IS the output contract — failed POST is `ok:false`/red,
-  not warn). Do not route through `resolveOutputAwareOk` (GitHub-issue-shaped helper).
+- TR6 (amended 2026-06-10): Sentry monitor slug `cron-weekly-release-digest` (matches the
+  newer cron-* slug family) via `postSentryHeartbeat`; the handler CATCHES any step
+  failure and SENDS `ok:false` before returning (never throw-without-heartbeat —
+  spec-flow P0-1); `ok:true` iff the Discord POST returned 2xx. Do not route through
+  `resolveOutputAwareOk` (GitHub-issue-shaped helper).
 - TR7: Five-registry lockstep in PR-1 (2026-06-05 learning, machine-enforced):
   `app/api/inngest/route.ts`, `cron-manifest.ts` `EXPECTED_CRON_FUNCTIONS`, registry-count
   test, `infra/sentry/cron-monitors.tf` (byte-identical slug), `apply-sentry-infra.yml`
