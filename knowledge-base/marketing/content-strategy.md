@@ -347,6 +347,7 @@ This calendar complements the perpetual cadence above. It defines what to write 
 | May 28-Jun 3 | Write "Best Claude Code Plugins for Solo Founders" (audit P3-2). Continue outreach. | 6-8 | Listicle article draft |
 | Jun 4-10 | Write "Company-as-a-Service vs SaaS" (audit P3-3). | 6-8 | Draft |
 | Jun 11-17 | Add page-specific OG images for pillar blog posts. Publish remaining drafts. | 4-6 | OG images + articles live |
+| Jun 15+ (post-#5098 bake: merged + one clean weekly cron cycle) | Draft "Our own AI bot opened a PR deleting 654 files — and our pipeline caught it" agent-safety incident write-up (Issue #5114, Pillar 2). Sources: PIR + #5091 learning. HN-submittable + X thread. | 3-4 | Blog draft + X thread + HN submission plan |
 | Jun 18-20 | Full SEO/AEO re-audit. Compare against 2026-03-17 baselines. Plan next quarter. | 3-4 | Q2 audit report |
 
 ---
