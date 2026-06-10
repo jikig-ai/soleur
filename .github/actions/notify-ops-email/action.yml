@@ -33,11 +33,15 @@ runs:
           --arg html "$EMAIL_BODY" \
           '{from: $from, to: ["ops@jikigai.com"], subject: $subject, html: $html}')
 
+        # --max-time + `|| echo 000`: a hanging or unreachable Resend endpoint
+        # must neither stall the job until its timeout nor (under bash -e)
+        # kill the step before the ::warning below is emitted.
         HTTP_CODE=$(curl -s -o "${RUNNER_TEMP}/resend-response.txt" -w "%{http_code}" \
           -X POST "https://api.resend.com/emails" \
+          --max-time 15 \
           -H "Authorization: Bearer ${RESEND_API_KEY}" \
           -H "Content-Type: application/json" \
-          -d "$PAYLOAD")
+          -d "$PAYLOAD" || echo "000")
 
         if [[ "$HTTP_CODE" =~ ^2 ]]; then
           echo "Email notification sent to ops@jikigai.com (HTTP ${HTTP_CODE})"

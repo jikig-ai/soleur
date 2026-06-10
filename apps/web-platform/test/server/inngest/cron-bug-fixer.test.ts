@@ -27,11 +27,22 @@ interface FakeChild extends EventEmitter {
 
 const spawnSpy = vi.fn();
 // execFileSync is used by the substrate's spawn-time hook self-test
-// (runHookSelfTest). The real hook denies a canonical exfil payload; the mock
-// returns that deny decision so the self-test passes in this unit context
-// (cron-bug-fixer has no Bash allowlist → only the deny-payload branch runs).
+// (runHookSelfTest). The mock mirrors the REAL relaxed hook's verdict map
+// (#5046 PR-2 AC-P2.2): Task/Agent/Skill allow; everything else — incl. the
+// canonical Bash exfil payload and the unknown-class probe — denies. So every
+// self-test branch passes in this unit context (cron-bug-fixer has no Bash
+// allowlist → the first-verb allow branch is skipped).
 const execFileSyncSpy = vi.fn(
-  () => '{"hookSpecificOutput":{"permissionDecision":"deny"}}',
+  (_bin?: unknown, _args?: unknown, opts?: { input?: string }) => {
+    const payload = JSON.parse(opts?.input ?? "{}") as { tool_name?: string };
+    const allowed =
+      payload.tool_name === "Task" ||
+      payload.tool_name === "Agent" ||
+      payload.tool_name === "Skill";
+    return JSON.stringify({
+      hookSpecificOutput: { permissionDecision: allowed ? "allow" : "deny" },
+    });
+  },
 );
 vi.mock("node:child_process", () => ({
   spawn: spawnSpy,
@@ -52,8 +63,30 @@ vi.mock("node:fs/promises", () => ({
 }));
 
 const existsSyncSpy = vi.fn();
+// readFileSync serves runHookSelfTest's settings-registration probe (#5046
+// PR-2 AC-P2.2): return a faithful spawn settings.json — the hook registered
+// under a `*` matcher — so the structural-inheritance assertion passes.
+const readFileSyncSpy = vi.fn(() =>
+  JSON.stringify({
+    hooks: {
+      PreToolUse: [
+        {
+          matcher: "*",
+          hooks: [
+            {
+              type: "command",
+              command:
+                "/usr/bin/node /spawn/apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs /spawn/.claude/cron-allow.txt",
+            },
+          ],
+        },
+      ],
+    },
+  }),
+);
 vi.mock("node:fs", () => ({
   existsSync: existsSyncSpy,
+  readFileSync: readFileSyncSpy,
 }));
 
 const reportSilentFallbackSpy = vi.fn();

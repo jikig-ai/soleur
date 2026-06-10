@@ -8,7 +8,7 @@
 
 1. PR author adds a `## Changelog` section to the PR body (template provided)
 2. `/ship` skill analyzes the diff and sets a `semver:patch`, `semver:minor`, or `semver:major` label
-3. On merge to main, the Action reads the label, computes the next version from the latest release tag, creates a GitHub Release, and posts to Discord
+3. On merge to main, the Action reads the label, computes the next version from the latest release tag, creates a GitHub Release, and posts to Slack
 
 ### Semver Label Rules
 

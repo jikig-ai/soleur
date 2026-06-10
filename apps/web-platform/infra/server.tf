@@ -40,6 +40,14 @@ resource "hcloud_server" "web" {
     infra_config_apply_script_b64        = base64encode(file("${path.module}/infra-config-apply.sh"))
     infra_config_install_script_b64      = base64encode(file("${path.module}/infra-config-install.sh"))
     cat_infra_config_state_script_b64    = base64encode(file("${path.module}/cat-infra-config-state.sh"))
+    cron_egress_nftables_script_b64      = base64encode(file("${path.module}/cron-egress-nftables.sh"))
+    cron_egress_resolve_script_b64       = base64encode(file("${path.module}/cron-egress-resolve.sh"))
+    cron_egress_alarm_script_b64         = base64encode(file("${path.module}/cron-egress-alarm.sh"))
+    cron_egress_allowlist_b64            = base64encode(file("${path.module}/cron-egress-allowlist.txt"))
+    cron_egress_firewall_service_b64     = base64encode(file("${path.module}/cron-egress-firewall.service"))
+    cron_egress_resolve_service_b64      = base64encode(file("${path.module}/cron-egress-resolve.service"))
+    cron_egress_resolve_timer_b64        = base64encode(file("${path.module}/cron-egress-resolve.timer"))
+    cron_egress_alarm_unit_b64           = base64encode(file("${path.module}/cron-egress-alarm@.service"))
     tunnel_token                         = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
     webhook_deploy_secret                = var.webhook_deploy_secret
     doppler_token                        = var.doppler_token
@@ -305,7 +313,7 @@ resource "terraform_data" "journald_persistent" {
 #
 # WHY SSH IS NOT A #3756 REGRESSION: #3756 replaced ONLY deploy_pipeline_fix's SSH
 # provisioner with the webhook, to keep the *routine* deploy-config push HTTPS-only.
-# SSH was never removed from the stack — 7 sibling terraform_data resources here
+# SSH was never removed from the stack — 8 sibling terraform_data resources here
 # still use connection{type="ssh"} today (disk_monitor_install, resource_monitor_install,
 # fail2ban_tuning, journald_persistent, docker_seccomp_config, apparmor_bwrap_profile,
 # orphan_reaper_install). This is a HYBRID of the established siblings: the
@@ -336,7 +344,7 @@ resource "terraform_data" "journald_persistent" {
 # can restart + assert active immediately. Do NOT copy the deferred-restart dance.
 #
 # Shows as "will be created" in CI drift reports -- expected behavior, same as the
-# 7 sibling SSH provisioners. Apply-path firewall note: SSH:22 is allowlisted to
+# 8 sibling SSH provisioners. Apply-path firewall note: SSH:22 is allowlisted to
 # var.admin_ips only (firewall.tf) for DIRECT-IP dials. The OPERATOR-LOCAL apply
 # dials the direct IP, so its handshake succeeds iff the operator egress IP ∈
 # admin_ips. A `connection reset by peer` on the operator path is admin-IP drift
@@ -683,6 +691,130 @@ resource "terraform_data" "orphan_reaper_install" {
       "systemctl daemon-reload",
       "systemctl enable --now orphan-reaper.timer",
       "systemctl list-timers orphan-reaper.timer --no-pager",
+    ]
+  }
+}
+
+# Container egress firewall for the web-platform container (#5046 PR-2).
+# Default-drop DOCKER-USER allowlist: contains the 4 live spawn("bash") crons
+# that bypass the #5018 PreToolUse hook (ADR-033 I7) and makes the hook's
+# Task/Skill relax-minimal safe. Applied via SSH because cloud-init is dead on
+# the running host (ignore_changes=[user_data]); cloud-init.yml mirrors the
+# artifacts for fresh hosts. Post-apply asserts include a LIVE positive +
+# negative container probe — `nft -f` exits 0 on an inert ruleset, so only a
+# real probe proves enforcement (the silent-green guard, AC-P2.8).
+# Shows as "will be created" in CI drift reports -- expected behavior.
+resource "terraform_data" "cron_egress_firewall" {
+  # Keyed on every delivered artifact AND the host id (hr-fresh-host-
+  # provisioning: a replaced VM keeps identical hashes — folding the server id
+  # re-runs the provisioner so the firewall is never silently absent).
+  triggers_replace = {
+    config_hash = sha256(join(",", [
+      file("${path.module}/cron-egress-nftables.sh"),
+      file("${path.module}/cron-egress-resolve.sh"),
+      file("${path.module}/cron-egress-alarm.sh"),
+      file("${path.module}/cron-egress-allowlist.txt"),
+      file("${path.module}/cron-egress-firewall.service"),
+      file("${path.module}/cron-egress-resolve.service"),
+      file("${path.module}/cron-egress-resolve.timer"),
+      file("${path.module}/cron-egress-alarm@.service"),
+    ]))
+    server_id = hcloud_server.web.id
+  }
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web.ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+  }
+
+  # `file` (scp) does NOT create remote parents and /etc/soleur is not shipped
+  # by any base package (2026-06-02 cloned-provisioner learning). nftables is
+  # in the base Ubuntu 24.04 image but assert anyway (idempotent).
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "mkdir -p /etc/soleur",
+      "command -v nft >/dev/null || (apt-get update && apt-get install -y nftables)",
+    ]
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/cron-egress-nftables.sh"
+    destination = "/usr/local/bin/cron-egress-nftables.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/cron-egress-resolve.sh"
+    destination = "/usr/local/bin/cron-egress-resolve.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/cron-egress-alarm.sh"
+    destination = "/usr/local/bin/cron-egress-alarm.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/cron-egress-allowlist.txt"
+    destination = "/etc/soleur/cron-egress-allowlist.txt"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/cron-egress-firewall.service"
+    destination = "/etc/systemd/system/cron-egress-firewall.service"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/cron-egress-resolve.service"
+    destination = "/etc/systemd/system/cron-egress-resolve.service"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/cron-egress-resolve.timer"
+    destination = "/etc/systemd/system/cron-egress-resolve.timer"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/cron-egress-alarm@.service"
+    destination = "/etc/systemd/system/cron-egress-alarm@.service"
+  }
+
+  provisioner "remote-exec" {
+    # `set -e` FIRST: terraform joins `inline` into ONE script with NO implicit
+    # errexit, and the provisioner fails only on the LAST command's exit — so
+    # without it every assertion below is decorative (the silent-green failure
+    # AC-P2.8 exists to prevent; caught by 5 review agents on PR #5089). The
+    # enforcement probes use explicit if/exit-1 because `!`-prefixed pipelines
+    # are errexit-exempt under POSIX.
+    inline = [
+      "set -e",
+      "chmod +x /usr/local/bin/cron-egress-nftables.sh /usr/local/bin/cron-egress-resolve.sh /usr/local/bin/cron-egress-alarm.sh",
+      "systemctl daemon-reload",
+      "systemctl enable --now cron-egress-firewall.service",
+      "systemctl enable --now cron-egress-resolve.timer",
+      # Positive post-apply assertions (fail2ban_tuning pattern): structure...
+      "nft list chain ip filter DOCKER-USER | grep -q 'jump SOLEUR-EGRESS'",
+      "nft list chain ip filter SOLEUR-EGRESS | grep -q 'egress-blocked'",
+      "nft list chain ip filter SOLEUR-EGRESS | grep -q 'egress-dns-exfil'",
+      "nft list chain ip filter SOLEUR-EGRESS | grep -q 'dport 8288 accept'",
+      "nft list set ip filter soleur_egress_allow | grep -qE '[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+'",
+      "docker network inspect bridge -f '{{.EnableIPv6}}' | grep -qx false",
+      "systemctl is-active cron-egress-firewall.service cron-egress-resolve.timer",
+      # ...and ENFORCEMENT: egress-probe-positive — an allowlisted host reaches
+      # from inside the container; egress-probe-negative — a non-allowlisted
+      # host is dropped (curl times out). An inert ruleset fails the negative
+      # probe, aborting the apply (AC-P2.8 merge precondition). On a FRESH host
+      # the first infra apply precedes the first deploy (no container yet) —
+      # skip the container probes LOUDLY; the next apply after deploy proves
+      # enforcement (hr-fresh-host-provisioning: the server_id trigger re-runs
+      # this provisioner on host replacement anyway).
+      "if docker ps --format '{{.Names}}' | grep -qx soleur-web-platform; then if ! docker exec soleur-web-platform curl -s -o /dev/null --max-time 20 https://api.github.com; then echo 'egress-probe-positive FAILED: allowlisted host unreachable from container'; exit 1; fi; echo egress-probe-positive-ok; if docker exec soleur-web-platform curl -s -o /dev/null --max-time 8 https://example.com; then echo 'egress-probe-negative FAILED: ruleset is INERT (non-allowlisted host reachable)'; exit 1; fi; echo egress-probe-negative-ok; else echo 'WARNING: soleur-web-platform not running — enforcement probes SKIPPED (fresh-host bootstrap); re-apply after first deploy to prove enforcement'; fi",
+      # Host egress untouched (AC-P2.7 spot-check; DOCKER-USER never filters
+      # host OUTPUT — cloudflared/Vector/GHCR/apt are out of scope by design).
+      "curl -s -o /dev/null --max-time 10 https://api.github.com",
+      "echo host-egress-ok",
     ]
   }
 }

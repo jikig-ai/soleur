@@ -925,13 +925,13 @@ done
 
 **If triggered (`${#UNDEFERRED[@]}` > 0):** Halt and present the structured prompt (3-option choice). The operator chooses one:
 
-1. **File deferred-automation issues now.** For each undeferred match, the skill prompts for an issue title + 1-paragraph re-evaluation criterion, then `gh issue create --label type/chore --title <...> --body "<...>\n\nThis is a deferred-automation backlog item per wg-block-pr-ready-on-undeferred-operator-steps. Re-evaluate when: <...>"`. Update the PR body with `Tracks #NNNN` companions. Re-run detection.
+1. **File deferred-automation issues now.** For each undeferred match, the skill prompts for an issue title + 1-paragraph re-evaluation criterion, then `gh issue create --label type/chore --title <...> --body "<...>\n\nThis is a deferred-automation backlog item per wg-block-pr-ready-on-undeferred-operator-steps. Re-evaluate when: <...>"`. Update the PR body with `Tracks #NNNN` companions. Re-run detection. **Attempt-evidence precondition:** a browser/portal step may be filed `deferred-automation` ONLY if the issue body carries a `playwright-attempt:` line (per work Phase 4 Playwright-First Audit) proving a real attempt reached a true human gate (CAPTCHA / OTP / TOTP / passkey / push-MFA / payment-card / hardware-token). An a-priori "MFA-gated", "dashboard-only", or "no API path" assertion — or an `api-probe-403` from a narrowly-scoped token — does NOT satisfy this; if no attempt was made, STOP and run the Playwright attempt first. If the attempt reached an automatable gate that the tool could not complete (browser crash, MCP down), it is `attempted-blocked-on-tool`, NOT operator-only: file a `tooling`/`flaky` `type/chore` issue with the resume recipe instead, and remove the bullet from the operator section.
 2. **Cite an existing OPEN issue.** Operator pastes `#NNNN` per undeferred match. Skill verifies state/labels/sentinel and updates the PR body with `Tracks #NNNN`.
 3. **Override with operator-attestation.** Operator pastes a 1-paragraph justification (rare; e.g., first non-Soleur tenant onboarding triggers a one-off K-bis upload). Skill appends a `<!-- gate-override: wg-block-pr-ready-on-undeferred-operator-steps -->` HTML comment followed by the attestation text to the PR body, then proceeds.
 
 **Headless mode.** Abort with the same structured error. No auto-file / auto-override in headless — operator must run interactively to make the choice.
 
-**Why:** PR-H #4066 violated `hr-never-label-any-step-as-manual-without` (3 unfiled deferred-automation steps; #4114 + #4115 filed too late). This gate moves enforcement from honor-system to mechanical.
+**Why:** PR-H #4066 violated `hr-never-label-any-step-as-manual-without` (3 unfiled deferred-automation steps; #4114 + #4115 filed too late); this gate moved enforcement from honor-system to mechanical. The `playwright-attempt:` precondition (2026-06-10) closes a second bypass: PR #5082's CF-token-widen was classified "operator-only, MFA-gated" and filed as `deferred-automation` WITHOUT any browser attempt — a real attempt later reached the editable token form (the gate was the one-time login, not MFA), proving the assertion-without-attempt was the actual defect. See `knowledge-base/project/learnings/workflow-patterns/2026-06-10-playwright-attempt-evidence-before-operator-only.md`.
 
 ## Phase 6.4: Unpushed-Commits Gate
 
@@ -1411,7 +1411,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
 
 **If merged (either now or user says "merge PR" later in the session):**
 
-1. **Version bump and release are automatic.** The `version-bump-and-release.yml` GitHub Actions workflow reads the PR's `semver:*` label, computes the next version from the latest release tag, creates a GitHub Release with a `vX.Y.Z` tag, and posts to Discord. No committed files are modified — version is derived from git tags.
+1. **Version bump and release are automatic.** The `version-bump-and-release.yml` GitHub Actions workflow reads the PR's `semver:*` label, computes the next version from the latest release tag, creates a GitHub Release with a `vX.Y.Z` tag, and posts to Slack. No committed files are modified — version is derived from git tags.
 
    If the workflow did not fire (e.g., no semver label was set), run `/release-announce` manually as a fallback.
 

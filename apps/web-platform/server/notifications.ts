@@ -156,6 +156,11 @@ export async function sendPushNotifications(
           keys: { p256dh: sub.p256dh, auth: sub.auth },
         },
         body,
+        // Bounded: the egress firewall (#5046 PR-2) DROPs (not rejects)
+        // non-allowlisted push endpoints (Edge/WNS is a deliberate
+        // exclusion), so an unbounded send would hang on SYN retransmit
+        // (~2 min) inside this awaited allSettled.
+        { timeout: 10_000 },
       ),
     ),
   );
@@ -175,10 +180,19 @@ export async function sendPushNotifications(
           .delete()
           .eq("id", subscriptions[i].id);
       } else {
-        log.warn(
-          { subscriptionId: subscriptions[i].id, err: result.reason },
-          "Push notification delivery failed",
-        );
+        // Mirror to Sentry (cq-silent-fallback-must-mirror-to-sentry): a
+        // bare log.warn left non-410 push failures — incl. the firewall's
+        // deliberate WNS drop — invisible off-host while the user never
+        // learns their agent is blocked waiting on input.
+        reportSilentFallback(result.reason, {
+          feature: "notifications",
+          op: "webpush-send-failed",
+          message: "Push notification delivery failed (non-410)",
+          extra: {
+            subscriptionId: subscriptions[i].id,
+            statusCode: err.statusCode ?? null,
+          },
+        });
       }
     }
   }

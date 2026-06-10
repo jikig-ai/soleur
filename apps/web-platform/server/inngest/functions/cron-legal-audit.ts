@@ -51,14 +51,17 @@
 //
 // GH TOKEN — installation token minted via createProbeOctokit() →
 // installation discovery → generateInstallationToken(installation.id).
-// Injected as GH_TOKEN so the spawned claude can run `gh api ...`,
-// `gh issue create`, `gh issue list`, `gh label create`.
+// Injected as GH_TOKEN so the spawned claude can run its allowlisted
+// issue-creator surface (`gh issue list/create`, `gh label list/create` —
+// the ONLY Bash verbs the containment hook permits this cron; #5046 PR-2).
 
 import {
   redactToken,
   mintInstallationToken,
   deferIfTier2Cron,
   postSentryHeartbeat,
+  ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS,
+  REPO_NAME,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -139,9 +142,11 @@ If no legal documents are found, exit cleanly without filing
 issues — the skill itself reports the empty-discovery state.
 
 Cap enforcement is mandatory:
-  CAP_OPEN_ISSUES = 20   (refuse to file when reached; check via
+  CAP_OPEN_ISSUES = 20   (refuse to file when reached; run
                           \`gh issue list --label scheduled-legal-audit
-                           --state open --limit 30 | wc -l\`)
+                           --state open --limit 30\` and count the listed
+                          issues yourself — shell pipes such as | wc -l are
+                          denied by the containment hook)
   CAP_PER_RUN     = 5    (severity-ranked top-N filed per run)
 
 For each filed issue:
@@ -157,9 +162,11 @@ Idempotency: before filing, check
 and skip if any existing issue (open or closed within 90 days)
 matches. Quarterly cadence + 90-day window prevents reopen-loops.
 
-Injection safety: write each finding's title and body to env vars
-or files BEFORE \`gh issue create\` — never interpolate agent output
-into bash \`run:\` commands directly.
+Injection safety: write each finding's body to a file (the Write
+tool) and pass it via \`--body-file <path>\` BEFORE \`gh issue
+create\` — never interpolate agent output into bash commands
+directly (env-var assignment prefixes are denied by the
+containment hook).
 `;
 
 // Spawn-env allowlist (NOT a denylist). PR-5 shape verbatim — the keys
@@ -184,10 +191,10 @@ export async function cronLegalAuditHandler({
   step,
   logger,
 }: HandlerArgs): Promise<{ ok: boolean }> {
-  // D6 (#5018): Tier-2-deferred — paused until the egress firewall lands.
-  // Posts an honest on-schedule check-in and skips the claude spawn (no
-  // fail-closed FAILED-issue/RED-monitor storm); the weekly output issue
-  // visibly stops. roadmap-review (#5004) is Tier-1 and is NOT deferred.
+  // D6 (#5018) / #5046 PR-2: RESTORED — out of TIER2_DEFERRED_CRONS since the
+  // relax-minimal hook allows Task (this cron's only denied construct). The
+  // guard stays as a no-op shape-keeper: it returns false while the cron is
+  // absent from the defer set, and re-pausing is a one-line set edit.
   if (
     await deferIfTier2Cron({
       cronName: "cron-legal-audit",
@@ -201,10 +208,18 @@ export async function cronLegalAuditHandler({
 
   // --- Step 1: mint installation token (memoized across replays) ---
   // The raw token string is the return value (NEVER log this value).
+  // Least-privilege scope (#5046 PR-2): issue-creator preset — contents:read
+  // (clone) + issues:write (issue/label filing). Push/PR stay denied at the
+  // TOKEN layer, not solely by the hook. Repo-scoped to soleur → a leaked
+  // GH_TOKEN is bounded to a single-user incident.
   const installationToken = await step.run(
     "mint-installation-token",
     async () => {
-      return mintInstallationToken({ tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS });
+      return mintInstallationToken({
+        tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
+        permissions: ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS,
+        repositories: [REPO_NAME],
+      });
     },
   );
 

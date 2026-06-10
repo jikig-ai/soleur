@@ -102,6 +102,9 @@ describe("notifications", () => {
       expect(mockSendNotification).toHaveBeenCalledWith(
         { endpoint: "https://push.example.com/1", keys: { p256dh: "key1", auth: "auth1" } },
         expect.stringContaining('"conversationId":"conv-1"'),
+        // Bounded send (#5046 PR-2): a firewall DROP must not hang the
+        // dispatcher on SYN retransmit.
+        { timeout: 10_000 },
       );
       expect(mockResendSend).not.toHaveBeenCalled();
     });
@@ -155,10 +158,12 @@ describe("notifications", () => {
       expect(mockSendNotification).toHaveBeenCalledWith(
         { endpoint: "https://push.example.com/1", keys: { p256dh: "key1", auth: "auth1" } },
         expect.any(String),
+        { timeout: 10_000 },
       );
       expect(mockSendNotification).toHaveBeenCalledWith(
         { endpoint: "https://push.example.com/2", keys: { p256dh: "key2", auth: "auth2" } },
         expect.any(String),
+        { timeout: 10_000 },
       );
     });
 

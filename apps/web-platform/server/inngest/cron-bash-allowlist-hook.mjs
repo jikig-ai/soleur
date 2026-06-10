@@ -380,10 +380,25 @@ export function decide(input, allowPrefixes) {
       // task state. Denying them breaks the agent's tool plumbing for zero
       // security gain. (Confirmed needed by the 2.1.79 real-spawn probe.)
       return allowDecision();
+    case "Task":
+    case "Agent":
+    case "Skill":
+      // Tier-2 relax-minimal (#5046 PR-2, AC-P2.1): sub-agent spawn + skill
+      // invocation leave the catch-all deny. Safe because they execute through
+      // hooked tools: sub-agents inherit this hook via the `*` matcher in the
+      // spawn's .claude/settings.json (their interior Bash/Read/etc. hit the
+      // SAME containment above — probed by runHookSelfTest's Task gate), and a
+      // Skill body's commands run as ordinary hooked tool calls. The Task tool
+      // surfaces as "Task" on some CLI versions and "Agent" on others — both
+      // name the same sub-agent class, so both are listed explicitly (a NEW
+      // tool class still falls through to the deny below). WebFetch/WebSearch/
+      // mcp__* remain denied: no restored cron needs them; pure egress surface.
+      return allowDecision();
     default:
-      // Catch-all: WebFetch, WebSearch, Task, any mcp__* tool, anything new.
-      // No Tier-1 cron needs these; egress/sub-agent classes are denied until
-      // the Tier-2 firewall lands.
+      // Catch-all: WebFetch, WebSearch, any mcp__* tool, anything new.
+      // No restored cron needs these; egress classes stay denied (the L3
+      // firewall is content-blind — this hook remains the secret-in-context
+      // severance per the threat model above).
       return denyDecision(`tool class not permitted: ${tool || "<unknown>"}`);
   }
 }

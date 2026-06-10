@@ -4,6 +4,7 @@ packages:
   - curl
   - fail2ban
   - jq
+  - nftables
 
 groups:
   - docker
@@ -176,6 +177,58 @@ write_files:
 
       [Install]
       WantedBy=timers.target
+    owner: root:root
+    permissions: '0644'
+
+  # Container egress firewall (#5046 PR-2) — fresh-host mirror of
+  # terraform_data.cron_egress_firewall in server.tf. Contents injected via
+  # Terraform base64encode(file()). Keep both apply paths in sync; the SSH
+  # provisioner is the sole LIVE apply path (ignore_changes=[user_data]).
+  - path: /usr/local/bin/cron-egress-nftables.sh
+    encoding: b64
+    content: ${cron_egress_nftables_script_b64}
+    owner: root:root
+    permissions: '0755'
+
+  - path: /usr/local/bin/cron-egress-resolve.sh
+    encoding: b64
+    content: ${cron_egress_resolve_script_b64}
+    owner: root:root
+    permissions: '0755'
+
+  - path: /usr/local/bin/cron-egress-alarm.sh
+    encoding: b64
+    content: ${cron_egress_alarm_script_b64}
+    owner: root:root
+    permissions: '0755'
+
+  - path: /etc/soleur/cron-egress-allowlist.txt
+    encoding: b64
+    content: ${cron_egress_allowlist_b64}
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/systemd/system/cron-egress-firewall.service
+    encoding: b64
+    content: ${cron_egress_firewall_service_b64}
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/systemd/system/cron-egress-resolve.service
+    encoding: b64
+    content: ${cron_egress_resolve_service_b64}
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/systemd/system/cron-egress-resolve.timer
+    encoding: b64
+    content: ${cron_egress_resolve_timer_b64}
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/systemd/system/cron-egress-alarm@.service
+    encoding: b64
+    content: ${cron_egress_alarm_unit_b64}
     owner: root:root
     permissions: '0644'
 
@@ -459,6 +512,12 @@ runcmd:
   # Enable host resource (CPU/RAM/sessions) monitoring timer (#1052)
   - systemctl enable --now resource-monitor.timer
 
+  # Container egress firewall + allowlist re-resolve (#5046 PR-2). The
+  # firewall unit is After=docker.service and tolerates a not-yet-running
+  # container (probes live in the SSH provisioner, not here).
+  - systemctl enable --now cron-egress-firewall.service
+  - systemctl enable --now cron-egress-resolve.timer
+
   # Weekly Docker image cleanup -- keeps only images used by running containers.
   # Prevents disk exhaustion from accumulated deploy images (#967).
   - |
@@ -499,20 +558,20 @@ runcmd:
   # bootstrap-script SHAPE version), NOT the inngest-cli version (the latter is
   # sourced from the image's Config.Env at run time). This pin MUST be bumped to
   # the latest released bootstrap image on every bootstrap-script change, or
-  # fresh-host reprovision installs a stale script. Bumped to v1.1.11 for the
+  # fresh-host reprovision installs a stale script. Bumped to v1.1.12 for the
   # #4652 --poll-interval/--sdk-url ExecStart (running hosts get it via the
   # deploy webhook path: push vinngest-vX.Y.Z tag → deploy inngest …:vX.Y.Z;
   # cloud-init installs only on fresh hosts).
   - |
     set -e
-    docker pull ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.11
+    docker pull ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.12
     EXTRACT_DIR=$(mktemp -d)
     cleanup() { docker rm -f soleur-inngest-bootstrap-extract >/dev/null 2>&1 || true; rm -rf "$EXTRACT_DIR"; }
     trap cleanup EXIT
-    docker create --name soleur-inngest-bootstrap-extract ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.11
+    docker create --name soleur-inngest-bootstrap-extract ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.12
     docker cp soleur-inngest-bootstrap-extract:/inngest-bootstrap.sh "$EXTRACT_DIR/inngest-bootstrap.sh"
     docker cp soleur-inngest-bootstrap-extract:/vector.toml /tmp/vector.toml 2>/dev/null || true
-    image_env=$(docker inspect ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.11 -f '{{range .Config.Env}}{{println .}}{{end}}')
+    image_env=$(docker inspect ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.12 -f '{{range .Config.Env}}{{println .}}{{end}}')
     chmod +x "$EXTRACT_DIR/inngest-bootstrap.sh"
     INNGEST_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_VERSION=' | head -1 | cut -d= -f2-)
     INNGEST_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_SHA256=' | head -1 | cut -d= -f2-)

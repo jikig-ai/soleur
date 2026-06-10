@@ -2,7 +2,9 @@
 // the prior inline `sandbox: {...}` block at the `agent-runner.ts`
 // `query({ options })` call site. Two consumers (legacy domain-leader
 // runner + cc-soleur-go `realSdkQueryFactory`) MUST receive an
-// identical shape. If a field is silently dropped here, both consumers
+// identical shape, except for the token-derived `network.allowedDomains`
+// (#5041 follow-up — the cc path widens egress iff an entitled GH token
+// was minted). If a field is silently dropped here, both consumers
 // regress to a wider sandbox profile in prod.
 //
 // Per plan T17 / AC3: assert verbatim deep-equality vs the canonical
@@ -71,6 +73,48 @@ describe("buildAgentSandboxConfig drift guard", () => {
     const result = buildAgentSandboxConfig("/tmp/x");
     expect(result.network.allowedDomains).toEqual([]);
     expect(result.network.allowManagedDomainsOnly).toBe(true);
+  });
+});
+
+describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", () => {
+  it("allowGithubEgress: true → exact-host GitHub allowlist, all other fields canonical", () => {
+    const workspacePath = "/tmp/test-workspace";
+    const result = buildAgentSandboxConfig(workspacePath, {
+      allowGithubEgress: true,
+    });
+
+    // Canonical-literal style (same as T17): every non-network field must
+    // stay byte-identical to the locked-down profile — egress widens the
+    // domain allowlist and NOTHING else.
+    expect(result).toEqual({
+      enabled: true,
+      failIfUnavailable: true,
+      autoAllowBashIfSandboxed: true,
+      allowUnsandboxedCommands: false,
+      enableWeakerNestedSandbox: true,
+      network: {
+        allowedDomains: ["github.com", "api.github.com"],
+        allowManagedDomainsOnly: true,
+      },
+      filesystem: {
+        allowWrite: [workspacePath],
+        denyRead: ["/workspaces", "/proc"],
+      },
+    });
+  });
+
+  it("allowGithubEgress: false → locked down, identical to the default call", () => {
+    const explicit = buildAgentSandboxConfig("/tmp/x", {
+      allowGithubEgress: false,
+    });
+    expect(explicit.network.allowedDomains).toEqual([]);
+    expect(explicit).toEqual(buildAgentSandboxConfig("/tmp/x"));
+  });
+
+  it("returns a fresh allowedDomains array per call (frozen const must not leak)", () => {
+    const a = buildAgentSandboxConfig("/tmp/x", { allowGithubEgress: true });
+    const b = buildAgentSandboxConfig("/tmp/x", { allowGithubEgress: true });
+    expect(a.network.allowedDomains).not.toBe(b.network.allowedDomains);
   });
 });
 
