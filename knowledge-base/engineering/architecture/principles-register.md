@@ -10,7 +10,7 @@ Queryable index of architectural principles. Each principle links to its canonic
 | AP-002 | No SSH state mutation | AGENTS.md (Hard Rules) | advisory | NFR-014 |
 | AP-003 | R2 remote backend for Terraform state | AGENTS.md (Hard Rules) | advisory | NFR-027 |
 | AP-004 | Agent-native parity | AGENTS.md (Hard Rules) | skill | — |
-| AP-005 | Email for ops / Discord for community | AGENTS.md (Hard Rules) | hook | — |
+| AP-005 | Email for ops / Slack for internal release announcements / Discord for community | AGENTS.md (Hard Rules) + ship/references/ci-workflow-authoring.md (#5079 carve-out) | hook | — |
 | AP-006 | All knowledge in committed repo files | AGENTS.md (Hard Rules) | advisory | — |
 | AP-007 | Exhaust automation before manual steps | AGENTS.md (Hard Rules) | advisory | — |
 | AP-008 | Doppler for all secrets management | AGENTS.md (Hard Rules) | advisory | NFR-014, NFR-027 |

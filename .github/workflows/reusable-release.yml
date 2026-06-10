@@ -609,7 +609,7 @@ jobs:
       # Failure semantics preserved: if Docker push fails, this step
       # doesn't run and the release stays a draft (invisible to ops) —
       # operator manually publishes once Docker is recovered. Email/
-      # Discord notify steps below fire after this, so they always link
+      # Slack notify steps below fire after this, so they always link
       # to a visible release URL. Refs #3849 AC16 / run 26156985840
       # (web-v0.99.1 upload-to-immutable HTTP 422).
       # Self-heal gate (#4902): publish when EITHER a new draft was created this
@@ -650,57 +650,65 @@ jobs:
 
       # Inline step required: GITHUB_TOKEN-created releases don't fire
       # 'release: published' events, so a separate workflow cannot trigger.
-      - name: Post to Discord (release)
+      # Inline shell (not a composite action) per plan-review: single
+      # consumer (YAGNI), and identity inputs are dead on app-based webhooks.
+      - name: Post to Slack (release)
         if: >-
           steps.check_changed.outputs.changed == 'true' &&
           (steps.create_release.outputs.released == 'true' ||
            steps.idempotency.outputs.draft_exists == 'true')
         continue-on-error: true
         env:
-          DISCORD_RELEASES_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASES_WEBHOOK_URL }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          SLACK_RELEASES_WEBHOOK_URL: ${{ secrets.SLACK_RELEASES_WEBHOOK_URL }}
           TAG: ${{ steps.version.outputs.tag }}
           VERSION: ${{ steps.version.outputs.next }}
           COMPONENT_DISPLAY: ${{ inputs.component_display }}
           RELEASE_NOTES_FILE: ${{ steps.tmpfiles.outputs.release_notes }}
         run: |
-          WEBHOOK="${DISCORD_RELEASES_WEBHOOK_URL:-${DISCORD_WEBHOOK_URL:-}}"
+          WEBHOOK="${SLACK_RELEASES_WEBHOOK_URL:-}"
           if [ -z "$WEBHOOK" ]; then
-            echo "No Discord webhook URL configured, skipping"
+            echo "::warning::No Slack webhook URL configured, skipping release notification"
             exit 0
           fi
           echo "::add-mask::$WEBHOOK"
 
           if [ -f "$RELEASE_NOTES_FILE" ]; then
-            BODY=$(cat "$RELEASE_NOTES_FILE")
+            # Escape Slack mrkdwn control chars in untrusted changelog text:
+            # neutralizes <!channel>/<!here> mass-pings and <url|label>
+            # disguised links (the Discord payload's allowed_mentions
+            # equivalent). Order matters: & first.
+            BODY=$(sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' "$RELEASE_NOTES_FILE")
           else
             BODY=""
           fi
-          REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
-          RELEASE_URL="${REPO_URL}/releases/tag/${TAG}"
+          # Cap BODY (not MESSAGE) so the header and release-notes link always
+          # survive: Slack rejects text >~40k (PR bodies can reach 65k) and
+          # display-truncates the tail around 4k.
+          if [[ ${#BODY} -gt 3000 ]]; then
+            BODY="${BODY:0:2997}..."
+          fi
+          RELEASE_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 
-          MESSAGE=$(printf '**%s v%s released!**\n\n%s\n\nFull release notes: %s' \
+          # Slack mrkdwn bold is *single asterisk* (not **double**)
+          MESSAGE=$(printf '*%s v%s released!*\n\n%s\n\nFull release notes: %s' \
             "$COMPONENT_DISPLAY" "$VERSION" "$BODY" "$RELEASE_URL")
 
-          if [[ ${#MESSAGE} -gt 1950 ]]; then
-            MESSAGE="${MESSAGE:0:1947}..."
-          fi
-
           PAYLOAD=$(jq -n \
-            --arg content "$MESSAGE" \
-            --arg username "Sol" \
-            --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
-            '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
+            --arg text "$MESSAGE" \
+            '{text: $text, unfurl_links: false}')
 
+          # `|| echo 000` keeps a curl transport failure (timeout, DNS) on the
+          # ::warning path -- without it `bash -e` kills the step before the
+          # warning is emitted.
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
             -X POST \
             --max-time 15 \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
-            "$WEBHOOK")
+            "$WEBHOOK" || echo "000")
 
           if [[ "$HTTP_CODE" =~ ^2 ]]; then
-            echo "Discord notification sent (HTTP $HTTP_CODE)"
+            echo "Slack notification sent (HTTP $HTTP_CODE)"
           else
-            echo "::warning::Discord notification failed (HTTP $HTTP_CODE)"
+            echo "::warning::Slack notification failed (HTTP $HTTP_CODE)"
           fi

@@ -7,7 +7,7 @@ These rules were migrated out of AGENTS.md because they only fire when CI-adjace
 ## Hard
 
 - In GitHub Actions `run:` blocks, never use heredocs or multi-line shell strings that drop below the YAML literal block's base indentation. Column-0 heredoc terminators and multi-line `--body` / `--comment` args break YAML parsing (zero jobs run). Use `{ echo "..."; } > file` for multi-line content and `$'\n'` for CLI args. (ex-`hr-in-github-actions-run-blocks-never-use`; #974 indented heredoc → `<pre>`; #1358 broke YAML parser entirely)
-- GitHub Actions workflow notifications must use email via `.github/actions/notify-ops-email`, not Discord webhooks. Discord is for community content only. For custom bodies, construct HTML in a preceding step and pass as the `body` input. (ex-`hr-github-actions-workflow-notifications`)
+- GitHub Actions workflow notifications must use email via `.github/actions/notify-ops-email`, not chat webhooks. One carve-out: the release announcement posts to Slack via the inline "Post to Slack (release)" step in `reusable-release.yml` (#5079) — internal team channel, redundant with the email-to-ops signal. Discord is for community content only. For custom bodies, construct HTML in a preceding step and pass as the `body` input. (ex-`hr-github-actions-workflow-notifications`)
 
 ## Code Quality
 
