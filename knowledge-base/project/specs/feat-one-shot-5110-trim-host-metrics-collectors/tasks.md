@@ -5,19 +5,19 @@ Lane: cross-domain (no spec.md — TR2 fail-closed default)
 
 ## Phase 1 — vector.toml Source 4 collector trim
 
-- [ ] 1.1 Replace the Source 4 block (`apps/web-platform/infra/vector.toml:99-118`) with the trimmed form from plan Phase 1: `collectors = ["cpu", "memory", "disk", "filesystem", "load"]` (network dropped), `mountpoints.includes = ["/", "/mnt/data", "/var/lib/vector"]` added under `[sources.host_metrics.filesystem]`, `devices.excludes` retained on both sub-tables, 300s interval unchanged, updated comment (no `30s scrape` literal, no `"network"` literal anywhere in the file)
-- [ ] 1.2 Verify AC1–AC4 greps and AC5/AC6 diffs (awk exclusive-boundary form for AC6)
+- [x] 1.1 Replace the Source 4 block (`apps/web-platform/infra/vector.toml:99-118`) with the trimmed form from plan Phase 1: `collectors = ["cpu", "memory", "disk", "filesystem", "load"]` (network dropped), `mountpoints.includes = ["/", "/mnt/data", "/var/lib/vector"]` added under `[sources.host_metrics.filesystem]`, `devices.excludes` retained on both sub-tables, 300s interval unchanged, updated comment (no `30s scrape` literal, no `"network"` literal anywhere in the file)
+- [x] 1.2 Verify AC1–AC4 greps and AC5/AC6 diffs (awk exclusive-boundary form for AC6)
 
 ## Phase 2 — records
 
-- [ ] 2.1 `knowledge-base/operations/expenses.md` — append second-pass sentence to the Better Stack free-tier row Notes (no `|` chars; real PR number after `gh pr create`)
-- [ ] 2.2 `knowledge-base/engineering/operations/post-mortems/betterstack-quota-near-miss-postmortem.md` — append-only second-pass corrections (versions line + #5110 follow-up row description)
+- [x] 2.1 `knowledge-base/operations/expenses.md` — append second-pass sentence to the Better Stack free-tier row Notes (no `|` chars; real PR number after `gh pr create`)
+- [x] 2.2 `knowledge-base/engineering/operations/post-mortems/betterstack-quota-near-miss-postmortem.md` — append-only second-pass corrections (versions line + #5110 follow-up row description)
 
 ## Phase 3 — local verification (pre-push)
 
-- [ ] 3.1 Download pinned Vector 0.43.1 binary (form from `validate-vector-config.yml`)
-- [ ] 3.2 `vector validate --no-environment --config-toml apps/web-platform/infra/vector.toml` → exit 0 (AC7)
-- [ ] 3.3 `bash apps/web-platform/test/infra/vector-pii-scrub.test.sh` with `VECTOR_BIN` → green (AC8; `bun install --frozen-lockfile` in apps/web-platform first if node_modules absent)
+- [x] 3.1 Download pinned Vector 0.43.1 binary (form from `validate-vector-config.yml`)
+- [x] 3.2 `vector validate --no-environment --config-toml apps/web-platform/infra/vector.toml` → exit 0 (AC7)
+- [x] 3.3 `bash apps/web-platform/test/infra/vector-pii-scrub.test.sh` with `VECTOR_BIN` → green (AC8; `bun install --frozen-lockfile` in apps/web-platform first if node_modules absent)
 
 ## Phase 4 — PR
 
