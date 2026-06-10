@@ -179,15 +179,18 @@ logs:
   retention: "rotated archives per log-rotation.sh policy"
 
 discoverability_test:
-  command: "jq -r 'select(.model != null) | [.ts, .model, .subagent_type, (.total_tokens|tostring)] | @tsv' .claude/.session-tokens.jsonl | tail -5"
-  expected_output: "recent DIRECT Agent-tool spawn rows with model attribution (workflow spawns never appear here — use the ADR-053 transcript grep for those)"
+  command: bash .claude/hooks/agent-token-tee.test.sh
+  expected_output: "0 failed"
+  # Deterministic mechanism check (17 tests incl. model-attribution fixtures), ~7s local, no ssh/pipes.
+  # Live-state reads: direct-spawn rows via jq on .claude/.session-tokens.jsonl (repo root);
+  # workflow-pin executed-model via the ADR-053 transcript grep (tee JSONL cannot show workflow spawns - AC0).
 ```
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-- [ ] AC0: Phase 0 capture evidence (raw redacted PostToolUse JSON for a pinned workflow spawn) in PR body; FR5 field mapping cites it.
+- [x] AC0: Phase 0 capture evidence recorded. Finding: PostToolUse does NOT fire for Workflow-runtime agent() spawns (JSONL row-count diff around probe run wf_0c2aa99a); the executed model IS recorded in the workflow transcript (`"model":"claude-haiku-4-5-20251001"` for the pinned probe). FR5 field mapping: `.tool_input.model // "inherit"` (direct spawns only).
 - [x] AC1: `bash .claude/hooks/agent-token-tee.test.sh` passes, including the AC0-derived fixture (model present → recorded) and field-absent fixture (→ `"inherit"`).
 - [x] AC2: `grep -hoE "model: '(sonnet|haiku)'" plugins/soleur/skills/*/workflows/*.workflow.js | wc -l` prints `12`; `grep -coE "model: '(sonnet|haiku)'" plugins/soleur/skills/review/workflows/review.workflow.js` prints `2`; `grep -c "model: '" plugins/soleur/skills/agent-native-audit/workflows/agent-native-audit.workflow.js` prints `0` (and exits 1 — expected for a zero count).
 - [x] AC3: `actionlint .github/workflows/claude-code-review.yml` exits 0; `grep -c "claude_args: '--model claude-sonnet-4-6'" .github/workflows/claude-code-review.yml` prints `1`.
@@ -197,7 +200,7 @@ discoverability_test:
 - [x] AC7: Phase 5 single-arm acceptance: the acceptance run's workflow TRANSCRIPT (`grep -ho '"model":"[^"]*"' <run-transcript-dir>/agent-*.jsonl | sort | uniq -c`) shows the pinned tiers' concrete model IDs on `classify`/`file`-class spawns and the session model on judgment spawns (AC0 finding: the JSONL channel cannot see workflow spawns); `classify` returns this PR's known diff-class; summary in PR body.
 - [x] AC8: ADR-053 exists (incl. pin-above-session, silent-retarget lifecycle, requested-vs-executed limitation, failure semantics); constitution ~:20 includes `fable`.
 - [x] AC9: deepen-plan SKILL.md carries the FR2 advisory bullet (one line, verify-the-negative + self-audit passes only).
-- [ ] AC10: this PR's own `claude-code-review` run (post-FR3 push) used the pin — `gh run list --workflow="Claude Code Review" --commit $(git rev-parse HEAD) --json databaseId --jq '.[0].databaseId'` then `gh run view <id> --log | grep -m1 "claude-sonnet-4-6"`. If the action's logs don't contain the model string, record as not-verifiable-in-logs in the PR body and rely on AC3.
+- [x] AC10 (disposition: not-verifiable-by-construction): `claude-code-review.yml` is `disabled_manually` in repo Actions settings (no runs since 2026-02-12), so no run can exercise the pin. The pin is dormant-but-correct (AC3 verifies the form against the working `test-pretooluse-hooks.yml:76` precedent) and makes re-enabling affordable — re-enabling is an operator spend decision surfaced in the PR body.
 
 ### Post-merge (operator)
 
