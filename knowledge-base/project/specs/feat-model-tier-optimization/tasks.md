@@ -35,13 +35,13 @@ Derived from `knowledge-base/project/plans/2026-06-10-feat-model-tier-optimizati
 ## Phase 4: CI pin
 
 - [x] 4.1 `.github/workflows/claude-code-review.yml` — add `claude_args: '--model claude-sonnet-4-6'` to the claude-code-action step (do NOT bump action SHA)
-- [ ] 4.2 Verify: `actionlint` exits 0 + grep (AC3); push, then AC10 head-SHA run-log check (record not-verifiable-in-logs if the action omits the model string)
+- [x] 4.2 Verify: `actionlint` exits 0 + grep (AC3); push, then AC10 head-SHA run-log check (record not-verifiable-in-logs if the action omits the model string)
 
 ## Phase 5: Acceptance (TR5, narrowed)
 
 - [x] 5.1 Run the branch's pinned review workflow once on this PR's diff
 - [x] 5.2 Assert via the run's workflow TRANSCRIPT (ADR-053 grep — the tee JSONL cannot see workflow spawns per AC0): pinned spawns show pinned tiers' concrete model IDs, judgment spawns show the session model; classify matches known diff-class; file-step output well-formed
-- [ ] 5.3 Paste summary in PR body (token counts primary; $ assumes session model) (AC7)
+- [x] 5.3 Paste summary in PR body (token counts primary; $ assumes session model) (AC7)
 
 ## Out of scope (tracked)
 
