@@ -12,7 +12,7 @@ brainstorm: knowledge-base/project/brainstorms/2026-06-10-model-tier-optimizatio
 
 # feat: Model-tier optimization via workflow call-site tiering
 
-> Plan v3 — revised 2026-06-10 after 5-agent plan review (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow-analyzer ×2). v2→v3: TIER_PINS map deleted (4-reviewer convergence: contradicted AC2); FR4 Inngest registry cut to follow-up #5106 (both panels fired — delete over fix; dissolved Kieran P0 + spec-flow N2/N3/N4); Phase 6 collapsed to single tiered arm (TR5 narrowing recorded); standing pin-allowlist test added (architecture P1 — the mechanical never-downgrade gate); `VALID_MODELS` + `fable`; ADR-051 lifecycle content; FR5 single-field; AC mechanics fixed.
+> Plan v3 — revised 2026-06-10 after 5-agent plan review (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow-analyzer ×2). v2→v3: TIER_PINS map deleted (4-reviewer convergence: contradicted AC2); FR4 Inngest registry cut to follow-up #5106 (both panels fired — delete over fix; dissolved Kieran P0 + spec-flow N2/N3/N4); Phase 6 collapsed to single tiered arm (TR5 narrowing recorded); standing pin-allowlist test added (architecture P1 — the mechanical never-downgrade gate); `VALID_MODELS` + `fable`; ADR-053 lifecycle content; FR5 single-field; AC mechanics fixed.
 
 ## Overview
 
@@ -46,7 +46,7 @@ Capture one pinned-spawn PostToolUse payload: run a throwaway 1-agent workflow (
 
 `.claude/hooks/agent-token-tee.sh`:
 
-- **One field:** `model` = executed-model field if Phase 0 found one, else `tool_input.model`, else `"inherit"` (single key; requested-value provenance is recoverable from the pin literal in source — simplicity P2). Semantics per the Phase 0 outcome documented in ADR-051, including the requested-vs-executed limitation if only the request side exists.
+- **One field:** `model` = executed-model field if Phase 0 found one, else `tool_input.model`, else `"inherit"` (single key; requested-value provenance is recoverable from the pin literal in source — simplicity P2). Semantics per the Phase 0 outcome documented in ADR-053, including the requested-vs-executed limitation if only the request side exists.
 - Sanitize like `SUBAGENT_TYPE` (control-char strip + 64-char cap); add to the single jq read pass (~:70-79) and the `line=` builder (~:136-144). **Additive optional key; `schema` stays `1`** (consumer verified key-name-selective).
 - Extend `.claude/hooks/agent-token-tee.test.sh` FIRST (cq-write-failing-tests-before): AC0-derived fixture asserts the model key lands; field-absent fixture asserts `"inherit"`.
 
@@ -106,7 +106,7 @@ Inline single-quoted pins (`model: 'sonnet'`) with a one-line justification comm
 Also in Phase 1:
 - `knowledge-base/project/constitution.md` ~:20 — add `fable` to the enum.
 - `plugins/soleur/test/components.test.ts:13` — add `"fable"` to `VALID_MODELS` (architecture P2: constitution/CI divergence otherwise).
-- `knowledge-base/engineering/architecture/decisions/ADR-051-per-call-model-tiering-for-workflow-subagent-spawns.md` — records: absolute-pin semantics incl. pin-above-session; allowlist-not-blocklist; FR5 field semantics + requested-vs-executed limitation per Phase 0 outcome; pinned-spawn failure semantics (below); rejected alternatives (frontmatter tiering, session-relative tiers, TIER_PINS map); **pin-surface lifecycle** (architecture P2): plugin enum aliases (`'sonnet'`) are harness-resolved — zero repo maintenance at model deprecation but subject to **silent retargeting** (the harness re-aiming the alias changes every pin's cost/behavior contract with no repo diff; telemetry recording the enum cannot distinguish generations unless Phase 0 found an executed-model field) — vs. CI/Inngest concrete IDs which hard-fail loudly at retirement; #5100 is the re-pin trigger; #5106 owns the Inngest surface.
+- `knowledge-base/engineering/architecture/decisions/ADR-053-per-call-model-tiering-for-workflow-subagent-spawns.md` — records: absolute-pin semantics incl. pin-above-session; allowlist-not-blocklist; FR5 field semantics + requested-vs-executed limitation per Phase 0 outcome; pinned-spawn failure semantics (below); rejected alternatives (frontmatter tiering, session-relative tiers, TIER_PINS map); **pin-surface lifecycle** (architecture P2): plugin enum aliases (`'sonnet'`) are harness-resolved — zero repo maintenance at model deprecation but subject to **silent retargeting** (the harness re-aiming the alias changes every pin's cost/behavior contract with no repo diff; telemetry recording the enum cannot distinguish generations unless Phase 0 found an executed-model field) — vs. CI/Inngest concrete IDs which hard-fail loudly at retirement; #5100 is the re-pin trigger; #5106 owns the Inngest surface.
 
 **Pinned-spawn failure semantics (spec-flow P2.8):** pins have no fallback. A rejected/rate-limited pinned model → `agent()` returns null after retries; fan-outs `.filter(Boolean)`, single steps degrade per each workflow's existing null-handling (`classify` failing aborts the review run — existing behavior). The tee hook drops zero-token envelopes, so **the signature of a rejected pin is absence-of-row, never `model:"inherit"`**.
 
@@ -120,7 +120,7 @@ Cut from this PR at plan review (both panels): independent deploy surface, zero 
 - Capture procedure above; evidence in PR body (AC0); fixture encoded (feeds AC1).
 
 ### Phase 1: Policy + ADR + enum sync (docs + tests)
-- AGENTS.md policy + compliance-checklist line ~125; constitution `fable`; `VALID_MODELS` + `"fable"`; ADR-051.
+- AGENTS.md policy + compliance-checklist line ~125; constitution `fable`; `VALID_MODELS` + `"fable"`; ADR-053.
 - Success: AC5, AC8; `bun test plugins/soleur/test/components.test.ts` green.
 
 ### Phase 2: Telemetry (FR5)
@@ -135,7 +135,7 @@ Cut from this PR at plan review (both panels): independent deploy surface, zero 
 - One-line `claude_args`; `actionlint` clean; observe this PR's own review run (AC10).
 
 ### Phase 5: Acceptance — single tiered run (TR5, narrowed)
-- Run the branch's pinned review workflow once on this PR's diff. Assert: telemetry shows the Phase-0-determined model field with pinned values on `classify`/`file` spawns and `inherit` on judgment spawns; `classify`'s diff-class matches this PR's known class (mixed docs+code+CI); `file`-step output (if any findings file) well-formed.
+- Run the branch's pinned review workflow once on this PR's diff. Assert via the run's TRANSCRIPT (executed-model evidence, ADR-053): pinned spawns show the pinned tiers' concrete IDs, judgment spawns show the session model; `classify`'s diff-class matches this PR's known class (mixed docs+code+CI); `file`-step output (if any findings file) well-formed. The tee JSONL cannot see workflow spawns (AC0).
 - **TR5 narrowing recorded (spec-flow P2.9 disposition):** the untiered arm was cut at plan review — n=1 cross-arm agreement of nondeterministic agents is non-probative, rows can't be attributed to arms, and it costs a full Fable-rate review run. The unpinned adjudication layer is the quality safety net by construction. $ attribution assumes the session model (`inherit` rows don't capture it) — state the assumption in the PR-body summary; token counts are the primary metric.
 - Success: AC7.
 
@@ -162,11 +162,11 @@ error_reporting:
 
 failure_modes:
   - mode: "workflow pin dropped before spawn (opts.model not forwarded)"
-    detection: "Phase 5 telemetry shows model=inherit for a pinned spawn (pre-merge); post-merge detection is MANUAL via the discoverability_test jq — token-count thresholds cannot detect model drift (token counts are model-independent); a te-* rule keying on model=inherit-for-pinned-label is deferred to #5100 scope"
+    detection: "AC0 finding: workflow agent() spawns do NOT fire the tee hook, so the JSONL can never show workflow pins — pre-merge AND post-merge verification of workflow pins is the transcript grep (ADR-053 recipe): grep -ho '\"model\":\"[^\"]*\"' <run-transcript-dir>/agent-*.jsonl | sort | uniq -c; a pinned spawn showing the session model = dropped pin. The JSONL jq below covers DIRECT Agent-tool spawns only."
     alert_route: "Phase 5 acceptance gate pre-merge; post-merge: operator-run discoverability test"
   - mode: "pin forwarded but ignored/substituted by backend (requested != executed)"
     detection: "Phase 0 determines whether an executed-model field exists; if yes, the recorded field IS the executed model; if no, this mode is undetectable in telemetry — documented ADR limitation"
-    alert_route: "ADR-051 limitation note; #5100 re-evaluation"
+    alert_route: "ADR-053 limitation note; #5100 re-evaluation"
   - mode: "pinned model rejected (429/enum) — spawn dies, zero-token envelope dropped"
     detection: "absence-of-row for an expected spawn is the signature (NOT model=inherit); workflow null-handling logs the failed step"
     alert_route: "workflow run output (operator-visible) at run time"
@@ -180,7 +180,7 @@ logs:
 
 discoverability_test:
   command: "jq -r 'select(.model != null) | [.ts, .model, .subagent_type, (.total_tokens|tostring)] | @tsv' .claude/.session-tokens.jsonl | tail -5"
-  expected_output: "recent rows showing sonnet/haiku for pinned workflow spawns and inherit for judgment spawns"
+  expected_output: "recent DIRECT Agent-tool spawn rows with model attribution (workflow spawns never appear here — use the ADR-053 transcript grep for those)"
 ```
 
 ## Acceptance Criteria
@@ -188,15 +188,15 @@ discoverability_test:
 ### Pre-merge (PR)
 
 - [ ] AC0: Phase 0 capture evidence (raw redacted PostToolUse JSON for a pinned workflow spawn) in PR body; FR5 field mapping cites it.
-- [ ] AC1: `bash .claude/hooks/agent-token-tee.test.sh` passes, including the AC0-derived fixture (model present → recorded) and field-absent fixture (→ `"inherit"`).
-- [ ] AC2: `grep -hoE "model: '(sonnet|haiku)'" plugins/soleur/skills/*/workflows/*.workflow.js | wc -l` prints `12`; `grep -coE "model: '(sonnet|haiku)'" plugins/soleur/skills/review/workflows/review.workflow.js` prints `2`; `grep -c "model: '" plugins/soleur/skills/agent-native-audit/workflows/agent-native-audit.workflow.js` prints `0` (and exits 1 — expected for a zero count).
-- [ ] AC3: `actionlint .github/workflows/claude-code-review.yml` exits 0; `grep -c "claude_args: '--model claude-sonnet-4-6'" .github/workflows/claude-code-review.yml` prints `1`.
-- [ ] AC4: `bun test plugins/soleur/test/workflow-model-pins.test.ts` green (12-entry allowlist match + zero pins in agent-native-audit).
-- [ ] AC5: `plugins/soleur/AGENTS.md` policy section contains the three-tier vocabulary and no longer contains the literal `for all agents, no exceptions`; every pin line has an adjacent justification comment (spot-check cited in PR body).
-- [ ] AC6: `bun test plugins/soleur/test/components.test.ts` green with `"fable"` in `VALID_MODELS`.
-- [ ] AC7: Phase 5 single-arm acceptance: telemetry shows pinned models on `classify`/`file`-class spawns and `inherit` on judgment spawns; `classify` returns this PR's known diff-class; summary in PR body.
-- [ ] AC8: ADR-051 exists (incl. pin-above-session, silent-retarget lifecycle, requested-vs-executed limitation, failure semantics); constitution ~:20 includes `fable`.
-- [ ] AC9: deepen-plan SKILL.md carries the FR2 advisory bullet (one line, verify-the-negative + self-audit passes only).
+- [x] AC1: `bash .claude/hooks/agent-token-tee.test.sh` passes, including the AC0-derived fixture (model present → recorded) and field-absent fixture (→ `"inherit"`).
+- [x] AC2: `grep -hoE "model: '(sonnet|haiku)'" plugins/soleur/skills/*/workflows/*.workflow.js | wc -l` prints `12`; `grep -coE "model: '(sonnet|haiku)'" plugins/soleur/skills/review/workflows/review.workflow.js` prints `2`; `grep -c "model: '" plugins/soleur/skills/agent-native-audit/workflows/agent-native-audit.workflow.js` prints `0` (and exits 1 — expected for a zero count).
+- [x] AC3: `actionlint .github/workflows/claude-code-review.yml` exits 0; `grep -c "claude_args: '--model claude-sonnet-4-6'" .github/workflows/claude-code-review.yml` prints `1`.
+- [x] AC4: `bun test plugins/soleur/test/workflow-model-pins.test.ts` green (12-entry allowlist match + zero pins in agent-native-audit).
+- [x] AC5: `plugins/soleur/AGENTS.md` policy section contains the three-tier vocabulary and no longer contains the literal `for all agents, no exceptions`; every pin line has an adjacent justification comment (spot-check cited in PR body).
+- [x] AC6: `bun test plugins/soleur/test/components.test.ts` green with `"fable"` in `VALID_MODELS`.
+- [x] AC7: Phase 5 single-arm acceptance: the acceptance run's workflow TRANSCRIPT (`grep -ho '"model":"[^"]*"' <run-transcript-dir>/agent-*.jsonl | sort | uniq -c`) shows the pinned tiers' concrete model IDs on `classify`/`file`-class spawns and the session model on judgment spawns (AC0 finding: the JSONL channel cannot see workflow spawns); `classify` returns this PR's known diff-class; summary in PR body.
+- [x] AC8: ADR-053 exists (incl. pin-above-session, silent-retarget lifecycle, requested-vs-executed limitation, failure semantics); constitution ~:20 includes `fable`.
+- [x] AC9: deepen-plan SKILL.md carries the FR2 advisory bullet (one line, verify-the-negative + self-audit passes only).
 - [ ] AC10: this PR's own `claude-code-review` run (post-FR3 push) used the pin — `gh run list --workflow="Claude Code Review" --commit $(git rev-parse HEAD) --json databaseId --jq '.[0].databaseId'` then `gh run view <id> --log | grep -m1 "claude-sonnet-4-6"`. If the action's logs don't contain the model string, record as not-verifiable-in-logs in the PR body and rely on AC3.
 
 ### Post-merge (operator)
@@ -210,7 +210,7 @@ None — all steps automatable in-PR (CI pin exercised on this PR per AC10; no w
 - Given a future PR adds `model: 'haiku'` to review `verify`, when CI runs, then `workflow-model-pins.test.ts` fails (AC4 standing gate).
 - Given the pinned review workflow runs on this PR's diff, when `classify` executes, then telemetry attributes the pinned model and the diff-class matches this PR's known class (AC7).
 - Given a Sonnet session, when a pinned `haiku` step runs, then it runs Haiku (absolute pin).
-- Given a Haiku session, when a pinned `sonnet` step runs, then it runs Sonnet — cost upgrade above session tier, disclosed via the tier `log()` (ADR-051 named consequence).
+- Given a Haiku session, when a pinned `sonnet` step runs, then it runs Sonnet — cost upgrade above session tier, disclosed via the tier `log()` (ADR-053 named consequence).
 - Given a pinned model is rejected at spawn (429/enum), when the workflow continues, then absence-of-telemetry-row plus the workflow's null-handling log is the observable signature (no false `inherit` row).
 
 ## Domain Review
@@ -220,7 +220,7 @@ None — all steps automatable in-PR (CI pin exercised on this PR per AC10; no w
 ### Engineering (CTO)
 
 **Status:** reviewed (carry-forward)
-**Assessment:** Tier via workflow `opts.model` at allowlisted mechanical steps; frontmatter untouched; judgment paths exempt; telemetry-first phasing; policy + pins in one PR; ADR recommended (ADR-051).
+**Assessment:** Tier via workflow `opts.model` at allowlisted mechanical steps; frontmatter untouched; judgment paths exempt; telemetry-first phasing; policy + pins in one PR; ADR recommended (ADR-053).
 
 ### Legal (CLO)
 
@@ -271,7 +271,7 @@ DHH + code-simplicity (simplification axis) and Kieran + architecture-strategist
 ## Files to Create
 
 1. `plugins/soleur/test/workflow-model-pins.test.ts` — standing pin-allowlist gate
-2. `knowledge-base/engineering/architecture/decisions/ADR-051-per-call-model-tiering-for-workflow-subagent-spawns.md`
+2. `knowledge-base/engineering/architecture/decisions/ADR-053-per-call-model-tiering-for-workflow-subagent-spawns.md`
 
 ## Dependencies & Risks
 
@@ -284,7 +284,7 @@ DHH + code-simplicity (simplification axis) and Kieran + architecture-strategist
 | Haiku context overflow on `fetch`/`file` | Both consume bounded structured inputs; Sonnet everywhere else (TR2) |
 | Policy/practice drift | FR6 + pins land in one PR; allowlist test makes the policy mechanical |
 | Tee hook schema consumers break | Additive optional key, `schema:1` retained; consumer grep in Phase 2 |
-| Harness silently retargets the `sonnet`/`haiku` aliases at a future model release | ADR-051 lifecycle note; #5100 (model-launch-review) is the re-pin trigger |
+| Harness silently retargets the `sonnet`/`haiku` aliases at a future model release | ADR-053 lifecycle note; #5100 (model-launch-review) is the re-pin trigger |
 | `claude-code-action` rejects the pinned model string | Form verified against working `test-pretooluse-hooks.yml:76`; AC10 observes the actual run on this PR |
 | Pinned model unavailable at run time (429/enum drift) | No fallback by design; failure semantics in ADR; absence-of-row signature |
 

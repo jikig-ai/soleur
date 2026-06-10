@@ -330,8 +330,8 @@ function budgetOk() {
 // Run.
 // ---------------------------------------------------------------------------
 phase('Parse')
-log('tier pins: parse→sonnet (mechanical step per ADR-051; research + merge inherit the session model)')
-// Pinned 'sonnet': plan→section-manifest extraction is mechanical; splice anchors must be exact (ADR-051).
+log('tier pins: parse→sonnet (mechanical step per ADR-053; research + merge inherit the session model)')
+// Pinned 'sonnet': plan→section-manifest extraction is mechanical; splice anchors must be exact (ADR-053).
 const parsed = await agent(parsePrompt, { label: 'parse', phase: 'Parse', schema: PARSE_SCHEMA, model: 'sonnet' })
 
 if (!parsed || !parsed.exists) {

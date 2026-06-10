@@ -240,8 +240,8 @@ function budgetOk() {
 // Run.
 // ---------------------------------------------------------------------------
 phase('Analyze')
-log('tier pins: analyze→sonnet, commit→sonnet (mechanical steps per ADR-051; plan + resolvers inherit the session model)')
-// Pinned 'sonnet': TODO inventory extraction is mechanical (ADR-051).
+log('tier pins: analyze→sonnet, commit→sonnet (mechanical steps per ADR-053; plan + resolvers inherit the session model)')
+// Pinned 'sonnet': TODO inventory extraction is mechanical (ADR-053).
 const analysis = await agent(analyzePrompt, { label: 'analyze', phase: 'Analyze', schema: ANALYZE_SCHEMA, model: 'sonnet' })
 let items = (analysis?.items || []).filter((i) => i && i.id && i.file)
 
@@ -341,7 +341,7 @@ let commit = { committed: false, pushed: false, branch: '', sha: '', note: '' }
 const touched = resolutions.filter((r) => (r.filesTouched || []).length && r.status !== 'skipped')
 if (touched.length) {
   commit =
-    // Pinned 'sonnet': commit-message generation over a known diff is mechanical (ADR-051).
+    // Pinned 'sonnet': commit-message generation over a known diff is mechanical (ADR-053).
     (await agent(commitPrompt(touched, tiers.length), { label: 'commit', phase: 'Commit', schema: COMMIT_SCHEMA, model: 'sonnet' })) || commit
 } else {
   commit.note = 'no files were modified by any resolver — skipped commit'

@@ -398,8 +398,8 @@ async function verifyFinding(f, dim) {
 // Run.
 // ---------------------------------------------------------------------------
 phase('Classify')
-log('tier pins: classify→sonnet, file→haiku (mechanical steps per ADR-051; judgment steps inherit the session model)')
-// Pinned 'sonnet': schema-constrained diff-class classification is mechanical (ADR-051).
+log('tier pins: classify→sonnet, file→haiku (mechanical steps per ADR-053; judgment steps inherit the session model)')
+// Pinned 'sonnet': schema-constrained diff-class classification is mechanical (ADR-053).
 const classification = await agent(classifyPrompt, { label: 'classify', phase: 'Classify', schema: CLASSIFY_SCHEMA, model: 'sonnet' })
 if (!classification) {
   // Classify agent died (terminal API error). Without a class we cannot fan out
@@ -482,7 +482,7 @@ if (candidates.length) {
     // paths AND the `$(cat …)` substitution in the gh command (P1 fix).
     const fid = safeId(j.f.id, `${idx}`)
     if (fileScopeOuts) {
-      // Pinned 'haiku': template-fill GitHub issue filing from one structured finding (ADR-051).
+      // Pinned 'haiku': template-fill GitHub issue filing from one structured finding (ADR-053).
       const filed = await agent(fileIssuePrompt(fid, safeTitleStr, issueBody), { label: `file:${fid}`, phase: 'File', model: 'haiku' })
       filings.push({ finding: j.f.title, file: j.f.file, action: 'filed', url: filed })
     } else {

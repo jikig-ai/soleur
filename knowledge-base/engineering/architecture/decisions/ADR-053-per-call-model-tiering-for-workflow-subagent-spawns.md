@@ -36,6 +36,7 @@ Phase 0 of the adoption PR captured ground truth with a one-spawn probe workflow
 | Plugin workflow pins | harness enum alias (`'sonnet'`, `'haiku'`) | Zero repo maintenance — but subject to **silent retargeting**: the harness re-aiming an alias to a successor generation changes every pin's cost/behavior contract with no repo diff and no CI signal. The transcript grep (above) is the only way to observe which concrete model an alias resolved to. |
 | CI pins (`claude_args: '--model claude-sonnet-4-6'`) | concrete ID | Hard-fails loudly (404) at retirement; re-pin is a one-line edit + action-pin sync (learning 2026-04-18). |
 | Inngest cron constants (web platform) | concrete IDs, partly dated | Hard-fail loudly; registry consolidation deferred to #5106. |
+| SKILL.md prose advisories | harness enum alias in prose | Advisory-only, no mechanical gate; discoverable via `grep -rn 'model: sonnet\|model: haiku' plugins/soleur/skills/*/SKILL.md`; mechanical-step classes only, must cite this ADR. |
 
 #5100 (`model-launch-review` skill) is the re-pin trigger for all three surfaces at each model release.
 

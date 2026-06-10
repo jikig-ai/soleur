@@ -237,8 +237,8 @@ for (let round = 1; round <= maxRounds; round++) {
 
   // --- Analyze: fetch the current unresolved threads. -----------------------
   phase('Analyze')
-  if (round === 1) log('tier pins: fetch→haiku, commit→sonnet (mechanical steps per ADR-051; resolvers inherit the session model)')
-  // Pinned 'haiku': gh-api fetch + reformat with small bounded context (ADR-051).
+  if (round === 1) log('tier pins: fetch→haiku, commit→sonnet (mechanical steps per ADR-053; resolvers inherit the session model)')
+  // Pinned 'haiku': gh-api fetch + reformat with small bounded context (ADR-053).
   const fetched = await agent(fetchPrompt(), { label: `fetch:round-${round}`, phase: 'Analyze', schema: FETCH_SCHEMA, model: 'haiku' })
   if (!fetched) {
     stopReason = `fetch agent died on round ${round}; cannot enumerate unresolved threads.`
@@ -312,7 +312,7 @@ for (let round = 1; round <= maxRounds; round++) {
 
   // --- Commit / resolve threads / push (serialized; one agent owns the index).
   phase('Commit')
-  // Pinned 'sonnet': commit + thread-resolution bookkeeping is mechanical (ADR-051).
+  // Pinned 'sonnet': commit + thread-resolution bookkeeping is mechanical (ADR-053).
   const committed = await agent(commitPrompt(round, toResolve), { label: `commit:round-${round}`, phase: 'Commit', schema: COMMIT_SCHEMA, model: 'sonnet' })
 
   const resolvedIds = (committed?.threadsResolved || []).map(safeThreadId).filter(Boolean)

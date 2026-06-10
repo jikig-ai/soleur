@@ -83,25 +83,27 @@ IFS=$'\t' read -r TOOL_NAME SESSION_ID SUBAGENT_TYPE TOTAL_TOKENS TOOL_USES DURA
 # but we double-check (cheap) so a stray non-Agent input fails silently.
 [[ "$TOOL_NAME" != "Agent" ]] && exit 0
 
-# Sanitize SUBAGENT_TYPE before storing. The model controls this string; we
-# strip control chars (0x00-0x1f, 0x7f) and Unicode line/paragraph separators
-# (U+2028/U+2029 — see cq-regex-unicode-separators-escape-only) and cap length
-# at 64 chars to prevent log-viewer-rendered phantom JSONL entries if this
-# telemetry is ever piped to a UI/Sentry surface.
-SUBAGENT_TYPE="$(printf '%s' "$SUBAGENT_TYPE" \
-  | tr -d '\000-\037\177' \
-  | sed 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
-SUBAGENT_TYPE="${SUBAGENT_TYPE:0:64}"
+# Sanitize untrusted string fields before storing: strip control chars
+# (0x00-0x1f, 0x7f) and Unicode line/paragraph separators (U+2028/U+2029 —
+# see cq-regex-unicode-separators-escape-only) and cap at 64 chars to prevent
+# log-viewer-rendered phantom JSONL entries if this telemetry is ever piped
+# to a UI/Sentry surface.
+sanitize_field() {
+  local v
+  v="$(printf '%s' "$1" \
+    | tr -d '\000-\037\177' \
+    | sed 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
+  printf '%s' "${v:0:64}"
+}
 
-# Sanitize MODEL the same way (#3791 FR5). Harness-enum-constrained in
-# practice (inherit|haiku|sonnet|opus|fable), but treat as untrusted input.
+SUBAGENT_TYPE="$(sanitize_field "$SUBAGENT_TYPE")"
+
+# MODEL (#3791 FR5): harness-enum-constrained in practice
+# (inherit|haiku|sonnet|opus|fable), but treat as untrusted input.
 # NOTE: this hook only fires for DIRECT Agent-tool spawns — Workflow-runtime
 # agent() spawns do not emit PostToolUse (AC0 probe, 2026-06-10); their
-# executed-model evidence lives in the workflow transcript (ADR-051).
-MODEL="$(printf '%s' "$MODEL" \
-  | tr -d '\000-\037\177' \
-  | sed 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
-MODEL="${MODEL:0:64}"
+# executed-model evidence lives in the workflow transcript (ADR-053).
+MODEL="$(sanitize_field "$MODEL")"
 [[ -z "$MODEL" ]] && MODEL="inherit"
 
 # Skip when totalTokens is 0 or absent — per R1 mitigation, treat zero-token

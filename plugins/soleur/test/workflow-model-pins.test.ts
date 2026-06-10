@@ -3,7 +3,7 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { PLUGIN_ROOT } from "./helpers";
 
-// Standing pin-allowlist gate (#3791, ADR-051).
+// Standing pin-allowlist gate (#3791, ADR-053).
 //
 // The Model Selection Policy (plugins/soleur/AGENTS.md) allows workflow
 // scripts to pin `opts.model` ONLY at mechanical steps. This test converts
@@ -103,7 +103,7 @@ function allModelLiterals(src: string): string[] {
   return out;
 }
 
-describe("workflow model-pin allowlist (ADR-051)", () => {
+describe("workflow model-pin allowlist (ADR-053)", () => {
   const scripts = discoverWorkflowScripts();
 
   test("discovers the workflow scripts", () => {
@@ -131,16 +131,43 @@ describe("workflow model-pin allowlist (ADR-051)", () => {
       const literals = allModelLiterals(src);
       expect(literals.length).toBe(Object.keys(expected).length);
 
+      // Fail-closed sweep: count RAW `model :` keys regardless of value form.
+      // A `model: someVar`, a pin inside a nested-brace options object, or any
+      // shape the extractor cannot parse is a violation, not a skip — the raw
+      // count must equal the allowlist size exactly (review finding
+      // pin-allowlist-gate-fails-open, 2026-06-10).
+      const rawModelKeys = (src.match(/\bmodel\s*:/g) ?? []).length;
+      expect(rawModelKeys).toBe(Object.keys(expected).length);
+
+      // Disclosure-string parity: each pin's label stem must appear in a
+      // `tier pins:` log line as `<stem>→<model>` so the operator-facing
+      // disclosure cannot drift from the actual pins (review finding
+      // pin-disclosure-string-unverified, 2026-06-10).
+      for (const [label, model] of Object.entries(expected)) {
+        const stem = label.split(":")[0];
+        expect(src).toContain(`${stem}→${model}`);
+      }
+
       if (ZERO_PIN_FILES.includes(rel)) {
         expect(found.length).toBe(0);
-        expect(literals.length).toBe(0);
+        expect(rawModelKeys).toBe(0);
       }
     });
   }
 
+  test("zero-pin exemption files exist on disk (guard is not vacuous)", () => {
+    for (const rel of ZERO_PIN_FILES) {
+      expect(scripts).toContain(rel);
+    }
+  });
+
   test("total pin count matches the adoption set", () => {
-    const total = Object.values(PIN_ALLOWLIST).reduce(
-      (n, pins) => n + Object.keys(pins).length,
+    // Sum pins found in PRODUCTION SOURCE (not the allowlist — summing the
+    // allowlist against itself is tautological; review finding
+    // self-referential-pin-count-test, 2026-06-10).
+    const total = scripts.reduce(
+      (n, rel) =>
+        n + extractPins(readFileSync(join(SKILLS_DIR, rel), "utf-8")).length,
       0,
     );
     expect(total).toBe(12);
