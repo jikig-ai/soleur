@@ -11,6 +11,16 @@ related_issues: ["#4296 (reference only — do NOT close)"]
 
 > Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed). No spec.md exists for this branch (one-shot pipeline entered at plan).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-10 (inline pipeline mode — gates 4.6/4.7/4.8 passed mechanically; 4.9 N/A, no UI surface)
+**Key improvements from live probes against the pinned Vector 0.43.1 binary:**
+
+1. **Positive probe PASSED:** the exact proposed Source 4 TOML (300s + both `devices.excludes` sub-tables) was applied to a /tmp copy of `vector.toml` and `vector validate --no-environment` exited 0 on `vector 0.43.1 (x86_64-unknown-linux-gnu e30bf1f)`. The filter syntax is now **binary-verified**, not just docs-verified.
+2. **Negative probe FALSIFIED a v1 claim:** `vector validate` does NOT reject unknown sub-keys inside the filter tables — `devices.exclude` (misspelled) and `devices.bogus_xyz` both validate clean (silent no-op). It DOES reject unknown top-level source keys and wrong value types (`devices.excludes = "loop*"` string form rejected). Consequence: **AC4's byte-exact grep is the load-bearing pre-merge guard for filter-key spelling** (pins the docs-verified form), with AC12's post-deploy row-count verdict as the runtime backstop. AC6/Risk/Test-Scenario text corrected accordingly.
+3. Precedent check (Phase 4.4): source-level filtering precedent in this file is the journald `include_matches`/`exclude_units` pattern (sources 1–3); a host_metrics filter sub-table is **novel in this repo** — first one. Reviewers should scrutinize the probe outputs above rather than assume a sibling form.
+4. All cited AGENTS.md rule IDs verified active (none retired/fabricated); all cited KB file paths resolve; #4296 state re-verified OPEN; PR-number attributions (#4669 pin-bump precedent, #4786 last vector.toml change, #4279/#4293 prior art) verified against `git log` of the actual files, not memory.
+
 ## Overview
 
 Better Stack emailed an 80%-of-quota warning for org Jikigai on 2026-06-10 (free tier: 3 GB/month logs, 3-day retention + 30 GB metrics). Per-source measurement via `scripts/betterstack-query.sh` showed the `[sources.host_metrics]` block in `apps/web-platform/infra/vector.toml` is >99% of shipped volume: ~100 metric series scraped every 30s across 6 collectors → ~196k aggregated rows/day (~2–3.5 GB/month ingested), while real log signal is ~50 journald WARN+ rows/day (~0.01 GB/month).
@@ -42,7 +52,7 @@ All cited artifacts verified against the repo and live state on 2026-06-10:
 
 | Claim (feature description) | Reality (verified) | Plan response |
 |---|---|---|
-| "verify exact syntax against Vector docs for the pinned Vector version" | Vector docs (`vector.dev/docs/reference/configuration/sources/host_metrics/`, fetched 2026-06-10): disk filter is `[sources.<id>.disk.devices]` with `excludes = [...]`; filesystem has three filters (`devices`, `filesystems`, `mountpoints`), each `includes`/`excludes`, glob-matched, default `["*"]` | Use `devices.excludes = ["loop*", "dm-*"]` under `[sources.host_metrics.disk]` and `[sources.host_metrics.filesystem]`. CI's `vector validate` against the pinned 0.43.1 binary is the mechanical schema gate (host_metrics filters predate 0.43; stable API) |
+| "verify exact syntax against Vector docs for the pinned Vector version" | Vector docs (`vector.dev/docs/reference/configuration/sources/host_metrics/`, fetched 2026-06-10): disk filter is `[sources.<id>.disk.devices]` with `excludes = [...]`; filesystem has three filters (`devices`, `filesystems`, `mountpoints`), each `includes`/`excludes`, glob-matched, default `["*"]`. **Binary-verified at deepen time**: exact proposed TOML validates clean on pinned 0.43.1; misspelled filter sub-keys are silently IGNORED by validate (wrong value types and unknown top-level keys are rejected) | Use `devices.excludes = ["loop*", "dm-*"]` under `[sources.host_metrics.disk]` and `[sources.host_metrics.filesystem]`. Spelling guard = AC4 byte-exact grep (validate won't catch a sub-key typo); load/type guard = `vector validate` (AC6); runtime backstop = AC12 |
 | "run tests locally (test scripts under apps/web-platform/test/infra/)" | Only `vector-pii-scrub.test.sh` lives there; it requires a `vector` binary (none installed locally) + `SENTRY_USERID_PEPPER=fixture-*` + bun/node_modules for TS parity | Phase 3 downloads the pinned 0.43.1 gnu binary to /tmp (exact form copied from `validate-vector-config.yml:73-75`) and runs both `vector validate` and the test script with `VECTOR_BIN` |
 | "vector.toml is provisioned to the Hetzner host (inngest-bootstrap.sh / vector.tf / ci-deploy.sh)" | vector.toml is embedded in the **inngest-bootstrap OCI image** built on `vinngest-vX.Y.Z` tag push (`build-inngest-bootstrap-image.yml`); `ci-deploy.sh`'s `inngest` branch extracts `/vector.toml` → `/tmp/vector.toml` → `inngest-bootstrap.sh` installs to `/etc/vector/vector.toml` + restarts `vector.service`. Merging this PR alone does NOT deploy it | Post-merge sequence (§ Infrastructure): tag `vinngest-v1.1.12` on the merge commit → image build → cloud-init pin-bump follow-up (AC6 drift guard) → deploy webhook (operator-acked) → query-based verification |
 | "Better Stack dashboard Settings → Usage" as a verification option | Dashboard-eyeball violates `hr-no-dashboard-eyeball-pull-data-yourself` | Verification prescribed as `scripts/betterstack-query.sh` row-count query with a deterministic verdict rule (post-deploy daily host-metrics rows ≤ 25k vs ~196k baseline) |
@@ -128,7 +138,8 @@ V=$(awk -F'"' '/vector_version[[:space:]]*=/ { print $2; exit }' apps/web-platfo
 curl -sLo /tmp/vector.tar.gz "https://packages.timber.io/vector/${V}/vector-${V}-x86_64-unknown-linux-gnu.tar.gz"
 tar -xzf /tmp/vector.tar.gz -C /tmp ./vector-x86_64-unknown-linux-gnu/bin/vector
 
-# 2. Schema validate (rejects unknown host_metrics filter keys)
+# 2. Schema validate (rejects load errors, wrong value types, unknown TOP-LEVEL
+#    source keys — but NOT misspelled filter sub-keys; AC4 grep covers spelling)
 VECTOR_STRICT_ENV_VARS=false BETTERSTACK_LOGS_TOKEN=dummy SENTRY_USERID_PEPPER=dummy \
   /tmp/vector-x86_64-unknown-linux-gnu/bin/vector validate --no-environment \
   --config-toml apps/web-platform/infra/vector.toml
@@ -276,7 +287,12 @@ discoverability_test:
 
 1. Unmodified-baseline sanity (run at plan time, green): AC2 + AC3 diffs are empty against the current tree — proves the verification commands themselves work before the edit exists.
 2. Post-edit: AC1–AC8 all pass locally; CI `validate-vector-config.yml` passes on the PR.
-3. Negative probe (work-phase, optional but cheap): temporarily misspell `devices.exclude` (singular) and confirm `vector validate` fails — proves the schema gate actually guards the new keys; revert.
+3. Schema-strictness probes (ALREADY RUN at deepen time against pinned 0.43.1 — do not re-run; results recorded here as ground truth):
+   - Proposed Source 4 TOML on a /tmp copy → `vector validate` exit 0 (**PASS**).
+   - `devices.exclude` (misspelled) and `devices.bogus_xyz` → **ACCEPTED** (silent no-op — validate does NOT guard filter sub-key spelling).
+   - `bogus_top_key = true` under `[sources.host_metrics]` → **REJECTED**.
+   - `devices.excludes = "loop*"` (string, not array) → **REJECTED**.
+   Consequence: AC4's byte-exact grep is the spelling guard; AC12 is the runtime backstop.
 
 ## Risks & Mitigations
 
@@ -284,7 +300,8 @@ discoverability_test:
 |---|---|
 | 5-min granularity hides short CPU/mem spikes | Accepted by design (file's own comments scope host metrics to coarse diagnosis); Sentry + deploy-status + uptime monitors carry incident-grade signal. Reversible one-line change; #4296 re-decision can revisit |
 | `loop*`/`dm-*` glob accidentally excludes a real device | cx33 root disk is `sda`-class; device-mapper unused on this host. AC12 post-deploy query still shows cpu/memory/load/network + real-disk series present (count > 0) |
-| Filter syntax drift across Vector versions | Syntax verified against vector.dev docs 2026-06-10; CI validates against the EXACT pinned 0.43.1 binary (AC6) — fabricated keys cannot merge |
+| Filter syntax drift across Vector versions | Syntax verified against vector.dev docs AND live-validated against the EXACT pinned 0.43.1 binary 2026-06-10 (positive probe PASS). Note: `vector validate` silently ignores misspelled filter SUB-keys (deepen-time negative probe) — spelling is pinned pre-merge by AC4's byte-exact grep; an ineffective filter would also surface as AC12 verdict failure post-deploy |
+| Misspelled/ineffective filter sub-key ships despite green CI | AC4 exact-spelling grep (docs + binary-verified form) pre-merge; AC12 deterministic row-count verdict post-deploy (interval change alone already delivers ~90% — excludes are additive headroom, so even a no-op filter keeps the quota fix intact) |
 | Demo-source deletion already counted in quota | Free-tier quota is monthly-rolling; the deleted source stops contributing immediately. AC12 measures only the host-metrics source, isolating this PR's effect |
 | Pin-bump window: between tag push (AC11a) and pin-bump merge (AC11c), other infra PRs touching the drift-guard paths fail AC6 | Execute a–c back-to-back in the post-merge session (minutes-wide window; precedent #4669) |
 

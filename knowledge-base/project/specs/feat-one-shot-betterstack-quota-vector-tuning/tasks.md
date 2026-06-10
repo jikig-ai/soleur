@@ -27,7 +27,7 @@ created: 2026-06-10
 ## Phase 3: verification (pre-push)
 
 - [ ] 3.1 Download pinned Vector binary (version parsed from `vector.tf`; form per plan Phase 3)
-- [ ] 3.2 `vector validate --no-environment --config-toml apps/web-platform/infra/vector.toml` → exit 0 (AC6)
+- [ ] 3.2 `vector validate --no-environment --config-toml apps/web-platform/infra/vector.toml` → exit 0 (AC6). NOTE (deepen-time probe): validate does NOT catch misspelled filter sub-keys (`devices.exclude` validates clean as a silent no-op) — AC4's byte-exact `devices.excludes = ["loop*", "dm-*"]` grep is the spelling guard; do not weaken it
 - [ ] 3.3 `bash apps/web-platform/test/infra/vector-pii-scrub.test.sh` with `VECTOR_BIN` + `SENTRY_USERID_PEPPER=fixture-only-do-not-use-in-prod` → all pass (AC7; precondition: `apps/web-platform` node_modules)
 - [ ] 3.4 Run AC1–AC5 + AC8 grep/diff gates (plan § Acceptance Criteria, commands tested green on baseline at plan time)
 
