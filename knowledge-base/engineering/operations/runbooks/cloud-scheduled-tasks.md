@@ -663,14 +663,30 @@ containment). A monitor that watches only for the issue will false-negative on t
 **Why:** AC11 of #5018 — roadmap-review consistently produced PRs (#5053, #5058), never the
 issue; the issue-only check timed out despite the containment working perfectly.
 
-## PR Withheld by safe-commit (#5091)
+## PR Withheld by safe-commit (#5091, #5111)
 
-Since #5091, the claude-spawn PR producers (seo-aeo-audit, content-generator,
-growth-execution; more migrate via #5111) persist handler-side through
-`safeCommitAndPr` (`apps/web-platform/server/inngest/functions/_cron-safe-commit.ts`)
-instead of running git/gh verbs in the prompt. When persistence cannot complete,
-the helper comments **"PR withheld: …"** on the run's scheduled issue and mirrors
-the failure to Sentry — diagnosis never requires SSH.
+Since #5111 (completing #5091), **ALL bot cron PR pipelines — 12 callers — persist
+handler-side through `safeCommitAndPr`**
+(`apps/web-platform/server/inngest/functions/_cron-safe-commit.ts`); the only
+exemptions are roadmap-review (hook-guarded Tier-1 self-commit) and bug-fixer
+(the fix-issue skill owns its commit step). ADR-054 records the decision; the
+parity test (`cron-safe-commit-parity.test.ts`) enforces it. When persistence
+cannot complete, the helper comments **"PR withheld: …"** on the run's scheduled
+issue and mirrors the failure to Sentry — diagnosis never requires SSH.
+
+**Three merge modes** (per-cron; ADR-054): `auto` — claude-spawn output PRs, auto-merge
+armed and required checks gate the merge; `direct` + synthetic check-runs — deterministic
+data-refresh PRs (weekly-analytics, content-publisher, content-vendor-drift, rule-prune)
+merged immediately after posting the synthetic checks; `none` — compound-promote's
+`self-healing/auto-*` human-review drafts (a long-lived open draft is NORMAL for that
+cron, not a stall). For `direct` pipelines, Sentry stage `auto-merge` covers BOTH a
+failed direct merge AND a failed auto-merge arm — in both cases the PR exists and
+needs a manual merge.
+
+**Expected guard fire:** content-vendor-drift re-vendoring a large upstream
+restructure can legitimately delete >10 files under its `references/` allowlist —
+the deletion guard aborts loudly by design (mass deletion = review-worthy). Use the
+`DEFAULT_MAX_DELETIONS` raise path below for that run, then revert.
 
 **Sentry ops** (filter by `fn=<cron-name>`):
 

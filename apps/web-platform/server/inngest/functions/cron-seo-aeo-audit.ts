@@ -278,7 +278,7 @@ export async function cronSeoAeoAuditHandler({
     //     documented healthy #4747 case whose diff must not be discarded.
     //     (Caveat: resolveOutputAwareOk falls back to the spawn exit code
     //     when its GitHub verify-read THROWS — a tri-state gate is tracked
-    //     in the #5111 consolidation.) abortedByTimeout also skips —
+    //     in #5139.) abortedByTimeout also skips —
     //     a 30-min hard kill can land mid-edit, and the timeout is already
     //     loud via the reportSilentFallback above. Guard aborts / persistence
     //     failures self-report inside the helper (Sentry + issue comment).

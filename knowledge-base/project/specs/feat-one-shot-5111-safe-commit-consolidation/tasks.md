@@ -31,17 +31,17 @@ For each of campaign-calendar, growth-audit, community-monitor, competitive-anal
 
 ## Phase 4 — Parity test restructure
 
-- [ ] 4.1 `cron-safe-commit-parity.test.ts`: split `MIGRATED` → `MIGRATED_PROMPT` (7: seo-aeo-audit, content-generator, growth-execution, campaign-calendar, growth-audit, community-monitor, competitive-analysis) and `MIGRATED_HANDLER` (5: weekly-analytics, compound-promote, content-publisher, content-vendor-drift, rule-prune); EXEMPT = exactly {roadmap-review, bug-fixer}; invariant 2 full assertions on PROMPT cohort, import+call+no-spawnGitChecked on HANDLER cohort; invariants 1/3/4 over the union
+- [x] 4.1 `cron-safe-commit-parity.test.ts`: split `MIGRATED` → `MIGRATED_PROMPT` (7: seo-aeo-audit, content-generator, growth-execution, campaign-calendar, growth-audit, community-monitor, competitive-analysis) and `MIGRATED_HANDLER` (5: weekly-analytics, compound-promote, content-publisher, content-vendor-drift, rule-prune); EXEMPT = exactly {roadmap-review, bug-fixer}; invariant 2 full assertions on PROMPT cohort, import+call+no-spawnGitChecked on HANDLER cohort; invariants 1/3/4 over the union
 
 ## Phase 5 — ADR
 
-- [ ] 5.1 Create `knowledge-base/engineering/architecture/decisions/ADR-054-safe-commit-and-pr-sole-write-path-for-bot-cron-prs.md` per architecture-skill template (content contract in plan Phase 5: lineage ADR-033, three merge modes, two permanent exemptions, parity test enforcement, Tier-2 restoration constraint, watchdog tracking-issue link)
+- [x] 5.1 Create `knowledge-base/engineering/architecture/decisions/ADR-054-safe-commit-and-pr-sole-write-path-for-bot-cron-prs.md` per architecture-skill template (content contract in plan Phase 5: lineage ADR-033, three merge modes, two permanent exemptions, parity test enforcement, Tier-2 restoration constraint, watchdog tracking-issue link)
 
 ## Phase 6 — Decisions, tracking issues, hygiene
 
-- [ ] 6.1 File tracking issue: stale `ci/*` bot-PR watchdog (gates Tier-2 restoration; labels type/chore, domain/engineering, priority/p3-low; milestone "Post-MVP / Later")
-- [ ] 6.2 File tracking issue: tri-state output-verify gate; update stale "#5111 consolidation" comment in cron-seo-aeo-audit.ts (:279-281) — verified sole site at deepen time
-- [ ] 6.3 Runbook `cloud-scheduled-tasks.md` §"PR Withheld by safe-commit": 12 callers, three merge modes, stage auto-merge covers direct-merge failures, vendor-drift deletion-guard expectation
+- [x] 6.1 File tracking issue: stale `ci/*` bot-PR watchdog (gates Tier-2 restoration; labels type/chore, domain/engineering, priority/p3-low; milestone "Post-MVP / Later")
+- [x] 6.2 File tracking issue: tri-state output-verify gate; update stale "#5111 consolidation" comment in cron-seo-aeo-audit.ts (:279-281) — verified sole site at deepen time
+- [x] 6.3 Runbook `cloud-scheduled-tasks.md` §"PR Withheld by safe-commit": 12 callers, three merge modes, stage auto-merge covers direct-merge failures, vendor-drift deletion-guard expectation
 
 ## Phase 7 — Verification (ACs in plan)
 
