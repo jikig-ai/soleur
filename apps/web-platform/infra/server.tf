@@ -735,6 +735,7 @@ resource "terraform_data" "cron_egress_firewall" {
   # in the base Ubuntu 24.04 image but assert anyway (idempotent).
   provisioner "remote-exec" {
     inline = [
+      "set -e",
       "mkdir -p /etc/soleur",
       "command -v nft >/dev/null || (apt-get update && apt-get install -y nftables)",
     ]
