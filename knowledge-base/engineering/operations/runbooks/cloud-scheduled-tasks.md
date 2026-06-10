@@ -663,6 +663,28 @@ containment). A monitor that watches only for the issue will false-negative on t
 **Why:** AC11 of #5018 — roadmap-review consistently produced PRs (#5053, #5058), never the
 issue; the issue-only check timed out despite the containment working perfectly.
 
+## PR Withheld by safe-commit (#5091)
+
+Since #5091, the claude-spawn PR producers (seo-aeo-audit, content-generator,
+growth-execution; more migrate via #5111) persist handler-side through
+`safeCommitAndPr` (`apps/web-platform/server/inngest/functions/_cron-safe-commit.ts`)
+instead of running git/gh verbs in the prompt. When persistence cannot complete,
+the helper comments **"PR withheld: …"** on the run's scheduled issue and mirrors
+the failure to Sentry — diagnosis never requires SSH.
+
+**Sentry ops** (filter by `fn=<cron-name>`):
+
+| Op | Meaning | Action |
+| --- | --- | --- |
+| `safe-commit-deletion-guard` | >10 deletions inside the cron's allowedPaths — the #5026 destructive class. The run's diff was discarded. | Inspect the `sample` paths in the event. If the deletions are legitimate (rare; e.g. a big archive), raise `DEFAULT_MAX_DELETIONS` in `_cron-safe-commit.ts` via a reviewed PR. If not, the spawned model misbehaved — read the run's audit issue. |
+| `safe-commit-failed` | Any other stage failed (`stage` in the event extra: workspace-lost, status, dirty-index, checkout, add, commit, push, pr-create, auto-merge, unexpected). | `push`/`pr-create`: usually transient GitHub/network or token expiry — the next scheduled run retries from scratch. `dirty-index`: something pre-staged files in the workspace (should be impossible; investigate). `workspace-lost`: a deploy/restart landed mid-run; work is lost, next run redoes it. `auto-merge`: the PR EXISTS but needs a manual merge — the comment names it. |
+| `safe-commit-paths-dropped` | The run changed files outside its allowlist; the PR was opened WITHOUT them (the PR body carries a ⚠️ marker listing the dropped sample). | Check whether the dropped paths should be in the cron's `allowedPaths` (widen via PR) or the model wandered out of scope (prompt fix). |
+| `safe-commit-issue-comment-failed` | The visibility comment itself could not post. | Diagnosis falls back to Sentry only; no action unless recurring. |
+
+A **no-PR week with a green monitor and no comment** means the run legitimately
+produced no committable changes (`no-changes` — visible in app logs as
+`safe-commit-no-changes`).
+
 ## References
 
 - Migration PR: #1095

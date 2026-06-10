@@ -57,8 +57,11 @@ extract_run_block() {
   # Buffer the block, then dedent by the MINIMUM leading-whitespace across all
   # non-blank run lines (not the first line's indent) so a future edit that
   # reorders the block cannot silently over-dedent and corrupt the shell.
+  # index() (literal substring), not a dynamic regex: step names contain
+  # regex metachars like "(release)" which a `$0 ~` match would treat as a
+  # group and never find.
   awk -v target="$step_name" '
-    $0 ~ "- name: " target { instep=1; next }
+    index($0, "- name: " target) && /^[[:space:]]*- name: / { instep=1; next }
     instep && /^[[:space:]]*- name: / { exit }
     instep && /^[[:space:]]*run: \|/ { inrun=1; next }
     inrun {
@@ -218,26 +221,115 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# T6: notify-on-self-heal (#4902) — Email + Discord notify must ALSO fire on the
+# T6: notify-on-self-heal (#4902) — Email + Slack notify must ALSO fire on the
 # orphaned-draft re-publish path (the prior run died before notify, so this is
 # the first successful announcement). Pins the behavior so a future edit can't
 # silently revert it to create-only. The Sentry-audit step deliberately stays
 # create-only (asset upload, not announcement) and is NOT asserted here.
+# (Release notifications moved Discord -> Slack in #5079.)
 # ---------------------------------------------------------------------------
-echo "T6: Email + Discord notify fire on the self-heal path"
-for step in "Email notification (release)" "Post to Discord (release)"; do
+echo "T6: Email + Slack notify fire on the self-heal path"
+for step in "Email notification (release)" "Post to Slack (release)"; do
   notify_if=$(awk -v s="- name: $step" '
-    index($0, s) { f=1; next }
+    index($0, s) && /^[[:space:]]*- name: / { f=1; next }
     f && /^[[:space:]]*if:/ { capture=1 }
     f && capture { print }
-    f && capture && /(continue-on-error|env:|uses:|with:|run:)/ { exit }
+    f && capture && /^[[:space:]]*(continue-on-error|env|uses|with|run):/ { exit }
   ' "$WF")
   if grep -qE "idempotency\.outputs\.draft_exists == 'true'" <<<"$notify_if"; then
     pass "'$step' if: includes draft_exists == 'true' disjunct"
   else
     fail "'$step' must notify on self-heal (got: ${notify_if:-<none>})"
   fi
+  # Pin the FULL gate, not just the self-heal disjunct: dropping the
+  # released == 'true' branch would silently kill notifications on every
+  # NORMAL release while this suite stays green.
+  if grep -qE "create_release\.outputs\.released == 'true'" <<<"$notify_if"; then
+    pass "'$step' if: includes released == 'true' disjunct (normal path)"
+  else
+    fail "'$step' must notify on normal releases (got: ${notify_if:-<none>})"
+  fi
 done
+
+# ---------------------------------------------------------------------------
+# T7: Slack payload contract (#5079) — execute the REAL "Post to Slack
+# (release)" run-block under a curl stub and assert: (a) empty webhook skips
+# without calling curl; (b) the payload is valid JSON with mrkdwn
+# single-asterisk bold and unfurl_links=false; (c) Slack control chars in the
+# release notes are entity-escaped (mass-ping / disguised-link suppression,
+# the allowed_mentions equivalent of the old Discord payload).
+# ---------------------------------------------------------------------------
+echo "T7: Slack payload contract"
+
+SLACK_BLOCK="$TMP/slack.sh"
+extract_run_block "Post to Slack (release)" > "$SLACK_BLOCK"
+
+if [[ ! -s "$SLACK_BLOCK" ]]; then
+  fail "could not extract 'Post to Slack (release)' run block from $WF"
+else
+  cat > "$GH_STUB_DIR/curl" <<'STUB'
+#!/usr/bin/env bash
+# Records the -d payload to $CURL_TRACE and returns HTTP 200.
+prev=""
+for a in "$@"; do
+  if [[ "$prev" == "-d" ]]; then printf '%s' "$a" > "$CURL_TRACE"; fi
+  prev="$a"
+done
+echo -n "200"
+STUB
+  chmod +x "$GH_STUB_DIR/curl"
+
+  NOTES="$TMP/notes.md"
+  printf -- '- fix: handle <Suspense> boundary & retries <!channel>\n' > "$NOTES"
+
+  run_slack() {
+    local webhook="$1"
+    : > "$TMP/curl-trace"
+    SLACK_RELEASES_WEBHOOK_URL="$webhook" \
+    TAG="web-v1.2.3" \
+    VERSION="1.2.3" \
+    COMPONENT_DISPLAY="Web Platform" \
+    RELEASE_NOTES_FILE="$NOTES" \
+    GITHUB_SERVER_URL="https://github.com" \
+    GITHUB_REPOSITORY="jikig-ai/soleur" \
+    CURL_TRACE="$TMP/curl-trace" \
+    PATH="$GH_STUB_DIR:$PATH" \
+      bash "$SLACK_BLOCK" >/dev/null 2>&1
+  }
+
+  # (a) empty webhook -> skip, curl never invoked
+  run_slack ""
+  assert_eq "empty webhook -> exit 0, no curl call" \
+    "$? $(wc -c < "$TMP/curl-trace" | tr -d ' ')" "0 0"
+
+  # (b)+(c) configured webhook -> payload shape + escaping
+  run_slack "https://hooks.example.invalid/stub"
+  payload=$(cat "$TMP/curl-trace")
+  if jq -e . >/dev/null 2>&1 <<<"$payload"; then
+    pass "payload is valid JSON"
+  else
+    fail "payload is not valid JSON (got: ${payload:-<empty>})"
+  fi
+  assert_eq "unfurl_links disabled" "$(jq -r '.unfurl_links' <<<"$payload")" "false"
+  text=$(jq -r '.text' <<<"$payload")
+  case "$text" in
+    "*Web Platform v1.2.3 released!*"*) pass "mrkdwn single-asterisk bold header" ;;
+    *) fail "header must use *single asterisk* bold (got: ${text:0:60})" ;;
+  esac
+  if [[ "$text" == *"&lt;!channel&gt;"* && "$text" == *"&lt;Suspense&gt;"* && "$text" == *"&amp; retries"* ]]; then
+    pass "Slack control chars (&, <, >) entity-escaped in notes body"
+  else
+    fail "notes body must escape & < > (got: $text)"
+  fi
+  case "$text" in
+    *"<!channel>"*) fail "raw <!channel> must never reach the payload" ;;
+    *) pass "no raw mass-ping sequence in payload" ;;
+  esac
+  case "$text" in
+    *"Full release notes: https://github.com/jikig-ai/soleur/releases/tag/web-v1.2.3"*) pass "release URL present and last" ;;
+    *) fail "release URL missing from message tail" ;;
+  esac
+fi
 
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="

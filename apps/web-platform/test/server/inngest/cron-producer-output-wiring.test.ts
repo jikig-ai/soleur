@@ -225,7 +225,7 @@ describe("headless skill resolution parity (#4993)", () => {
       const flagsBlock = flagsMatch ? flagsMatch[1] : "";
       expect(flagsBlock.length).toBeGreaterThan(0);
 
-      // Registers the symlinked plugin (headless --print does not auto-discover it).
+      // Registers the plugin (clone's tracked tree — #5091) (headless --print does not auto-discover it).
       expect(flagsBlock).toContain('"--plugin-dir"');
       expect(flagsBlock).toContain('"plugins/soleur"');
       expect(flagsBlock).toMatch(/"--plugin-dir",\s*\n\s*"plugins\/soleur",/);
