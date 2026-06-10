@@ -30,8 +30,8 @@ and the Slack feed is verified live in prod (v3.154.0/v3.154.1).
   every Friday ~15:00 UTC, fully unattended.
 - G2: The digest never silently misses a week: LLM failure degrades to a deterministic
   template; a zero-release week posts a short quiet-week note.
-- G3: The community learns the cadence changed (one-time announcement), and major releases get
-  an opt-in ping path (`@release-notify`, majors only).
+- G3 (amended 2026-06-10): The community learns the cadence changed (one-time
+  announcement). The majors opt-in ping path moved to tracking issue #5136 (NG6).
 - G4: Brand and legal posture is preserved: no internal content, no contributor PII, no
   un-suppressed mentions, no premature security detail in public posts.
 - G5: Failure is observable without SSH: Sentry monitor red iff the weekly Discord post did
@@ -41,23 +41,31 @@ and the Slack feed is verified live in prod (v3.154.0/v3.154.1).
 
 - NG1: Contributor attribution / name-checks (legal fork deferred — would trigger LIA +
   Article 30 + three-doc lockstep; revisit as its own issue).
-- NG2: Cross-posting the digest to X/LinkedIn/blog (persistence artifact in PR-2 enables it
-  later; posting stays Discord-only).
+- NG2: Cross-posting the digest to X/LinkedIn/blog.
 - NG3: Re-enabling any per-release Discord posting.
-- NG4: Discord thread auto-creation / engagement mechanics beyond the opt-in role.
+- NG4: Discord thread auto-creation / engagement mechanics.
 - NG5: Any app UI surface (Discord post content only — no wireframes, same boundary as #5079).
+- NG6 (amended 2026-06-10, 5-agent plan review + operator decision): the brainstormed
+  PR-2 extras — `@release-notify` opt-in role (former FR8), immediate majors post (former
+  FR9), digest markdown persistence (former FR10) — are CUT and tracked in a
+  deferred-scope-out issue with re-evaluation criteria (member requests pings / a major
+  where digest latency mattered / a persistence consumer materializes). If revived:
+  native Discord onboarding role-picker (not a reaction-poll) and Inngest-substrate
+  majors detection (not a CI secret copy) are the reviewer-endorsed shapes.
 
 ## Functional Requirements
 
-### PR-1 (core)
+(Single PR — former PR-2 extras moved to NG6 / tracking issue #5136, 2026-06-10.)
 
 - FR1: New pure-TS Inngest cron `cron-weekly-release-digest` (model: `cron-weekly-analytics.ts`
   shape; ADR-033 I1/I2/I5), schedule Friday ~15:00 UTC, plus auto-derived manual-trigger event.
-- FR2: Enumerate GitHub Releases published in the deterministic 7-day window ending Friday via
-  Octokit with a minted App installation token (narrowed read scope;
-  `hr-github-app-auth-not-pat` — ambient `GH_TOKEN` is empty in the prod container). Filter to
-  tag prefixes `v*` (plugin) and `web-v*` (web-platform); other streams count only toward the
-  remainder aggregate.
+- FR2 (amended 2026-06-10): Enumerate GitHub Releases published in the deterministic
+  7-day window ending Friday via raw `fetch` against the REST API with a minted App
+  installation token scoped `permissions: { contents: "read" }, repositories: ["soleur"]`
+  (`hr-github-app-auth-not-pat` — ambient `GH_TOKEN` is empty in the prod container).
+  Highlight-eligible iff tag matches `/^v\d/` or `/^web-v\d/` (anchored — `vinngest-v*`
+  starts with `v` but not `v<digit>`); other streams count only toward the remainder
+  aggregate.
 - FR3: Curate via a direct Anthropic Messages API call (`cron-compound-promote.ts:423`
   precedent: operator key, timeout, input truncation, shape-invalid Sentry event): 3–5
   highlights with "why it matters" framing in brand voice (prompt loads brand guide `## Voice`
@@ -78,18 +86,6 @@ and the Slack feed is verified live in prod (v3.154.0/v3.154.1).
   directly via webhooks (#general + #releases); include a direct note to the affected
   member if reachable, outcome recorded in the ship summary.
 
-### PR-2 (extras)
-
-- FR8: `@release-notify` opt-in role: role created via the `DISCORD_BOT_TOKEN` bot API
-  (`POST /guilds/{id}/roles`); self-assign wired through Discord's API-configurable surface
-  (onboarding prompt or reaction-role message posted by the bot). Pinged ONLY in major-release
-  posts via explicit `allowed_mentions: {roles: [id]}`. All Discord-side writes executed
-  in-session via API per `wg-block-pr-ready-on-undeferred-operator-steps`.
-- FR9: Immediate out-of-band post when a major version ships, capped at one per week; if
-  within ~48h of the Friday slot it replaces that week's digest.
-- FR10: Persist each posted digest as a markdown artifact (post-record semantics — the file
-  documents what was posted; mechanism decided at plan time per Open Question 2).
-
 ## Technical Requirements
 
 - TR1: **Closed input set:** LLM prompt sources are published GitHub Release bodies ONLY — no
@@ -101,8 +97,7 @@ and the Slack feed is verified live in prod (v3.154.0/v3.154.1).
   never generated (2026-03-24 hallucinated-author learning).
 - TR4: **PII-strip:** contributor handles/author metadata removed from LLM input and digest
   output (keeps the non-regulated posture; no gdpr-gate required).
-- TR5: Every webhook payload includes `allowed_mentions: {parse: []}` (API-level; PR-2 majors
-  post uses the explicit role allowlist instead). Entity-escape untrusted changelog text;
+- TR5: Every webhook payload includes `allowed_mentions: {parse: []}` (API-level). Entity-escape untrusted changelog text;
   2000-char-aware truncation.
 - TR6 (amended 2026-06-10): Sentry monitor slug `cron-weekly-release-digest` (matches the
   newer cron-* slug family) via `postSentryHeartbeat`; the handler CATCHES any step
@@ -138,8 +133,6 @@ and the Slack feed is verified live in prod (v3.154.0/v3.154.1).
   posted content.
 - AC7: Registry-count and cron-sweep tests pass with the new function registered in all five
   places.
-- AC8 (PR-2): Majors post pings only the opt-in role; weekly cap honored; digest artifact file
-  written after a successful post.
 
 ## Brand-guide amendment
 
