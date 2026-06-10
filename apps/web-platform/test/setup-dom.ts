@@ -3,11 +3,11 @@ import { afterAll, afterEach, beforeEach, vi } from "vitest";
 import { configure } from "@testing-library/react";
 
 // #5113 — align RTL's async-util ceiling (findBy*/waitFor, default 1000ms)
-// with the #4128 contention philosophy (testTimeout 16s): forked workers
-// can be CPU-starved past 1s under full-suite load (473 files). Passing
-// waits are unaffected (they resolve when the condition is met); only
-// genuinely-failing waits get slower (10s vs 1s), same tradeoff as
-// isolate:true ("acceptable for a reliable suite").
+// with the #4128 contention philosophy (testTimeout 16s; see the suite-size
+// figures in vitest.config.ts): forked workers can be CPU-starved past 1s
+// under full-suite load. Passing waits are unaffected (they resolve when
+// the condition is met); only genuinely-failing waits get slower (10s vs
+// 1s), same tradeoff as isolate:true ("acceptable for a reliable suite").
 configure({ asyncUtilTimeout: 10_000 });
 
 // Pristine `fetch` captured at setup-file load. Several test files assign

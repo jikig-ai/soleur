@@ -22,6 +22,9 @@ describe("setup-dom.ts cleanup surfaces", () => {
     ["fetch restore line", "globalThis.fetch = originalFetch"],
     ["originalXHR capture", "originalXHR"],
     ["XMLHttpRequest restore line", "globalThis.XMLHttpRequest = originalXHR"],
+    // #5113 — contention-tolerant RTL wait ceiling; deleting it silently
+    // reintroduces the 1s-default starvation flake class.
+    ["asyncUtilTimeout config", "asyncUtilTimeout: 10_000"],
   ])("retains %s", (_label, token) => {
     expect(source).toContain(token);
   });
