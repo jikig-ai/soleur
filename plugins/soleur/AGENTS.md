@@ -143,12 +143,14 @@ grep -h 'description:' agents/**/*.md | wc -w
 
 ## Model Selection Policy
 
-All agents must use `model: inherit` in their YAML frontmatter. This ensures agents run on whatever model the user's session is using, respecting their cost/quality preference.
+Model selection is governed by three tiers (ADR-053; revised 2026-06-10 for the Fable 5 pricing era — Fable 5 is 2× Opus, 3.3× Sonnet, 10× Haiku per MTok):
 
-- **Default:** `model: inherit` for all agents, no exceptions.
-- **Override justification:** Explicit model overrides (`haiku`, `sonnet`, `opus`) require written justification in the agent body text explaining why the task is fundamentally mismatched with the session model.
+1. **Agent frontmatter:** All agents use `model: inherit` in their YAML frontmatter, so agents run on whatever model the user's session is using, respecting their cost/quality preference. Explicit overrides (`haiku`, `sonnet`, `opus`, `fable`) require written justification in the agent body text explaining why the task is fundamentally mismatched with the session model. Current exceptions: none.
+2. **Workflow call-site pins:** `skills/*/workflows/*.workflow.js` scripts MAY pin `opts.model` (`'sonnet'` or `'haiku'`) at **mechanical** steps — extract, classify, fetch, commit-message, issue-file, report. Each pin requires a one-line justification comment at the call site. Judgment steps (review, verify/concur adjudication, synthesis, resolution, implementation, principle scoring) MUST NOT be pinned. Pins are **absolute**, never "one tier below session" — only pin where a fixed cheap tier is always correct. Named consequence: an absolute pin can run ABOVE a cheaper session model (a Haiku session still runs a `sonnet`-pinned step on Sonnet); the per-run tier `log()` line is the disclosure. The pin set is enforced mechanically by `plugins/soleur/test/workflow-model-pins.test.ts` — changing the allowlist is a clo-attestation-class change.
+3. **Never-downgrade exemption list:** all `engineering/review/*` agents, `data-migration-expert`, security/SAST agents, legal/compliance surfaces (`clo`, `gdpr-gate`, `data-integrity-guardian`), C-suite strategy agents, enumeration-scoring audits (`agent-native-audit` — the platform's own sonnet→opus upgrade precedent for the identical scoring workload, `cron-agent-native-audit.ts`), and any step that gates a merge or touches user data.
+4. **SKILL.md prose advisories (ungated fourth surface):** SKILL.md prose MAY advise spawning a Task/Agent with a cheap tier for mechanical sweeps (e.g., deepen-plan's verify-the-negative passes). Each advisory must cite ADR-053 and is discoverable via `grep -rn 'model: sonnet\|model: haiku' plugins/soleur/skills/*/SKILL.md` — prose advisories are advisory-only and carry no mechanical gate, so keep them to mechanical-step classes only.
+
 - **Effort control:** Reasoning effort is a session-level setting (`effortLevel` in `.claude/settings.json` or the `/model` slider), not configurable per-agent. The Claude Code plugin spec does not support per-agent effort levels.
-- **Current exceptions:** None.
 
 ## Skill Compliance Checklist
 
