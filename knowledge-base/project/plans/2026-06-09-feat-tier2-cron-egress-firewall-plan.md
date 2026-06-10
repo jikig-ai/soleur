@@ -616,6 +616,43 @@ narrowed cron token and the broad token the ~10 interactive callers mint for the
 would have collided. AC3's `repositories: ["soleur"]` + `{contents,issues,pull_requests}:write` is
 satisfied and asserted (`github-app-token-scope.test.ts`, `cron-shared.test.ts`).
 
+## Work-Phase Resolution — PR-2 (2026-06-10)
+
+All three deliverables landed on `feat-tier2-cron-egress-firewall-pr2` (PR #5089), with four
+verified-at-implementation corrections to this plan:
+
+1. **Plan gap — restored crons need `CRON_BASH_ALLOWLISTS` entries.** Phase 2.C listed only the
+   defer-set removal + token; an absent allowlist entry is deny-all, so the "restored" crons would
+   have silently failed. Both got finite issue-creator entries (`gh issue list/create` + `gh label
+   list/create`; no git verbs, no `gh api`, no raw egress — F4a) with decide()-level tests.
+2. **Plan gap — the container allowlist was cron-scoped, but the firewall is container-scoped.**
+   Grep-enumeration of runtime egress (sweep-class discipline) added 6 hosts the plan missed
+   (api.resend.com, api.buttondown.com, api.cloudflare.com, api.stripe.com, api.hetzner.cloud +
+   plausible.io already caught at deepen) AND the three browser web-push services
+   (fcm.googleapis.com, updates.push.services.mozilla.com, web.push.apple.com — `notifications.ts`
+   webpush). Without these, email/waitlist/push — user-facing flows — would have broken at
+   default-drop. Edge/WNS push is wildcard-only → accepted fail-loud residual (ADR-051).
+3. **AC-P2.2 probe shape.** A real per-spawn `claude --print` Task-sub-agent probe would add an API
+   call + model-output-as-oracle flake to every cron start. Implemented instead as three
+   deterministic spawn-time gates in `runHookSelfTest` (hook-binary Task→allow, unknown-class→deny,
+   settings.json `*`-matcher registration — the structural inheritance precondition), with the LIVE
+   sub-agent interior-Bash verification folded into AC-P2.13's trigger-cron validation. If that
+   live check fails-open, revert the relax (one-line catch-all edit).
+4. **Inngest :8288 reclassified as belt-and-braces.** Inngest binds 0.0.0.0 and container→host-
+   gateway traffic traverses INPUT, not FORWARD/DOCKER-USER — the explicit :8288 accept stays
+   (defensive) but is not load-bearing; there was never a self-lockout vector on that path.
+
+Also landed beyond the plan's letter: the `egress_blocked` Sentry event PRODUCER (the resolve timer
+scans the kernel journal for `egress-blocked:` hits and posts the tagged event — without it the
+AC-P2.10 alert had nothing to fire on), a `cron-egress-resolve` Sentry Crons monitor (dead-timer =
+missed check-in), `cron-egress-firewall.test.sh` (79 assertions), and ADR-051.
+
+**Merge-precondition reconciliation (AC-P2.8).** The live positive+negative container probe runs in
+the SSH provisioner at post-merge `terraform apply` — a single-PR flow cannot order "firewall proven
+live" strictly before "hook diff merges". Resolution: relax-minimal is independently safe (every
+Bash containment layer intact; Task gated by the AC-P2.2 inheritance probes), the apply fails loudly
+if the ruleset is inert (negative probe), and AC-P2.13 validation gates the un-pause.
+
 ## Sharp Edges
 
 - A `## User-Brand Impact` section that is empty/`TBD`/threshold-less fails `deepen-plan` Phase 4.6.
