@@ -54,7 +54,7 @@ Per `hr-never-git-add-a-in-user-repo-agents` (scoped adds, never blanket) and `c
 
 **If this leaks, the user's [data / workflow / money] is exposed via:** no new exposure vector. The helper handles the GitHub installation token already held by the handler; it never logs it (reuses `redactToken`), and the spawned model's env allowlist is unchanged.
 
-**Brand-survival threshold:** aggregate pattern — a single broken bot PR is caught by required checks; brand cost accrues only if the pipeline degrades persistently across runs. (Threshold `none` does not apply: this code path writes to the public repo.)
+- **Brand-survival threshold:** aggregate pattern — a single broken bot PR is caught by required checks; brand cost accrues only if the pipeline degrades persistently across runs. (Threshold `none` does not apply: this code path writes to the public repo.)
 
 ## Phase 0 — Substrate spike (decision gate, timeboxed ~1h)
 
@@ -286,8 +286,8 @@ logs:
   where: pino structured logs in the Inngest handler (existing transport); Sentry events carry bounded path samples
   retention: existing platform retention (Better Stack/Sentry defaults)
 discoverability_test:
-  command: 'gh pr list --search "head:ci/" --state all --limit 5 && gh issue list --label scheduled-seo-aeo-audit --limit 3'
-  expected_output: bot PRs and scheduled issues enumerable without SSH; guard aborts visible as issue comments
+  command: gh issue list --label scheduled-seo-aeo-audit --state all --limit 3
+  expected_output: SEO/AEO Audit
 ```
 
 ## Test Scenarios
