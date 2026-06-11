@@ -971,6 +971,8 @@ When invoking the `cross-cutting-refactor` scope-out CONCUR gate, quote the crit
 
 **Pipeline-mode rationalization trap.** When all signals appear to align (criterion documented in plan, both reviewers recommend scope-out, finding clearly predates the PR), the temptation to skip the `code-simplicity-reviewer` CONCUR and file directly is exactly the rationalization the gate was designed to prevent. The gate is a hard precondition, not a confidence check — invoke `code-simplicity-reviewer` BEFORE `gh issue create --label deferred-scope-out` regardless of how obvious the criterion seems. See `knowledge-base/project/learnings/2026-05-06-scope-out-second-reviewer-gate-must-precede-filing.md`.
 
+Commit pre-review inline fixes (anti-slop scanner corrections, lint fixes, classification-phase touch-ups) BEFORE spawning the file-reading review agents. An uncommitted working-tree edit is reported as "drift from the committed review target" by every agent that runs `git diff HEAD`, costing one disposition cycle per agent. **Why:** PR #5125 — a BRAND-RAW-HEX tokenization fix sat uncommitted while 12 agents ran; 3 independently flagged it. See `knowledge-base/project/learnings/2026-06-11-worm-mutation-matrix-and-e2e-harness-mock-for-new-fetches.md`.
+
 ### Important: P1 Findings Block Merge
 
 Any **P1 (CRITICAL)** findings must be addressed before merging the PR. Present these prominently and ensure they're resolved before accepting the PR.

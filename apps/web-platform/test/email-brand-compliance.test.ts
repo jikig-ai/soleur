@@ -132,6 +132,16 @@ describe("email brand compliance — notifications.ts CTAs", () => {
     await sendInviteAcceptedEmail("inviter-1", "Grace", "Workspace");
     assertBrandedCta(sentHtml("user@example.com"), "invite-accepted", "View team");
   });
+
+  test("email-triage CTA is branded (email_triage payload variant)", async () => {
+    await sendEmailNotification("a@example.com", {
+      type: "email_triage",
+      emailId: "item-uuid-1",
+      title: "Vendor invoice",
+      isStatutory: false,
+    });
+    assertBrandedCta(sentHtml("a@example.com"), "email-triage", "Open inbox item");
+  });
 });
 
 describe("email brand compliance — Supabase auth .html templates", () => {

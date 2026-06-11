@@ -7,6 +7,14 @@ export const PUBLIC_PATHS = [
   "/signup",
   "/callback",
   "/api/webhooks",
+  // /api/webhooks/resend-inbound: svix-signature-gated POST from Resend
+  // Inbound (#5103). The route carries no session cookie — without
+  // PUBLIC_PATHS membership Supabase middleware would 307→/login before
+  // the route's own svix verification gate runs (learning 2026-05-29;
+  // same class as #4017 /api/inngest). Covered today by the /api/webhooks
+  // prefix above, but pinned as a NARROW exact path so the ingress
+  // survives any future narrowing of that broad prefix.
+  "/api/webhooks/resend-inbound",
   // /api/inngest: SDK route served by `inngest/next.serve` with HMAC signature
   // verification on every POST (signingKey from INNGEST_SIGNING_KEY). Supabase
   // middleware would redirect to /login, breaking server↔SDK sync. ADR-030 I4
