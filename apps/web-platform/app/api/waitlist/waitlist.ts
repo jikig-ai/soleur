@@ -2,6 +2,7 @@
 // (route files may only export HTTP method handlers in Next.js 15 App Router).
 // Holds the Buttondown client, the per-IP throttle singleton, and the honeypot
 // field name.
+import { isIP } from "node:net";
 import {
   SlidingWindowCounter,
   startPruneInterval,
@@ -54,6 +55,54 @@ export function __resetWaitlistThrottleForTest(): void {
 // silently drop the signup with no Sentry mirror.
 const ALREADY_SUBSCRIBED_RE = /already\s+(subscribed|exists)/i;
 
+// Reserved/private prefixes that can only reach us via direct-to-origin
+// spoofing (cf-connecting-ip from Cloudflare is always the public peer IP).
+// Buttondown's behavior on an invalid ip_address is undocumented — sending an
+// implausible value risks a validation 400 that would break the very signup
+// this hardens, so the validator is deliberately reject-biased: omit on doubt.
+// Deliberately NOT covered (accepted residual, spoof-only reach, worst case is
+// Buttondown scoring an odd value on the spoofer's own request): TEST-NET /
+// documentation ranges (the synthesized test fixtures per
+// cq-test-fixtures-synthesized-only depend on them passing), multicast 224/4,
+// reserved 240/4, 198.18/15, and non-canonical v4-mapped v6 spellings
+// (0:0:0:0:0:ffff:10.0.0.1, hex ::ffff:a00:1).
+const PRIVATE_V4 =
+  /^(0\.|10\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|127\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/;
+
+const V4_MAPPED_PREFIX = "::ffff:";
+
+// Normalizer, not a predicate: returns the IP iff it is a plausible public
+// peer address; undefined otherwise ("unknown" throttle sentinel, garbage,
+// private/reserved ranges). ("Public peer", not "Plausible" the analytics
+// vendor — no relation to the Plausible integration elsewhere in this app.)
+// Never logs: a rejected-IP log line could be timestamp-correlated with the
+// email in adjacent lines, reconstructing the IP+email pair we never persist.
+function toPublicPeerIp(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  let ip = raw.trim();
+  if (ip.toLowerCase().startsWith(V4_MAPPED_PREFIX)) {
+    ip = ip.slice(V4_MAPPED_PREFIX.length); // canonical v4-mapped v6
+  }
+  const version = isIP(ip);
+  if (version === 0) return undefined;
+  if (version === 4) return PRIVATE_V4.test(ip) ? undefined : ip;
+  const v6 = ip.toLowerCase();
+  // loopback/unspecified/link-local/unique-local
+  if (
+    v6 === "::1" ||
+    v6 === "::" ||
+    v6.startsWith("fe8") ||
+    v6.startsWith("fe9") ||
+    v6.startsWith("fea") ||
+    v6.startsWith("feb") ||
+    v6.startsWith("fc") ||
+    v6.startsWith("fd")
+  ) {
+    return undefined;
+  }
+  return ip;
+}
+
 function isAlreadySubscribed(body: string): boolean {
   try {
     const parsed = JSON.parse(body) as { code?: unknown; detail?: unknown };
@@ -80,8 +129,19 @@ function isAlreadySubscribed(body: string): boolean {
  * opt-in is preserved: the visitor receives a confirmation email (the success
  * copy promises "check your inbox to confirm") which is also the GDPR Art.
  * 6(1)(a) consent step. Sending `type: "regular"` would silently skip both.
+ *
+ * `clientIp` (the route's cf-connecting-ip throttle key) is forwarded as
+ * `ip_address` when it is a plausible public IP so Buttondown firewall-scores
+ * the VISITOR's residential IP instead of this server's datacenter IP — the
+ * server IP scores ~0.6, which blocks every signup the moment Buttondown's
+ * attack mode re-escalates the account to aggressive auditing (the
+ * WEB-PLATFORM-2F incident class). Implausible values are omitted (fail-safe
+ * = pre-hardening behavior) and the IP+email pair is never logged.
  */
-export async function subscribeToWaitlist(email: string): Promise<{ ok: true }> {
+export async function subscribeToWaitlist(
+  email: string,
+  clientIp?: string,
+): Promise<{ ok: true }> {
   // Fail-closed key read at call time (NOT module load) — a missing key throws
   // INSIDE the function so the route's try/catch maps it to a graceful JSON 502
   // and the worker never crashes at boot.
@@ -91,13 +151,18 @@ export async function subscribeToWaitlist(email: string): Promise<{ ok: true }> 
     throw new Error("waitlist subscribe unconfigured");
   }
 
+  const ipAddress = toPublicPeerIp(clientIp);
   const res = await fetch(BUTTONDOWN_SUBSCRIBE_URL, {
     method: "POST",
     headers: {
       Authorization: `Token ${apiKey}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify({ email_address: email, tags: [WAITLIST_TAG] }),
+    body: JSON.stringify({
+      email_address: email,
+      tags: [WAITLIST_TAG],
+      ...(ipAddress ? { ip_address: ipAddress } : {}),
+    }),
     signal: AbortSignal.timeout(WAITLIST_TIMEOUT_MS),
   });
 

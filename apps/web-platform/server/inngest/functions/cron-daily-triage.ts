@@ -52,6 +52,7 @@ import {
 } from "./_cron-claude-eval-substrate";
 // Re-export for test parity (cron-daily-triage.test.ts imports via this module).
 export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
+import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 
 // Inlined verbatim from .github/workflows/scheduled-daily-triage.yml lines
 // 86-140, with one diff at step 3d: prompt enforces IDEMPOTENT search-before-
@@ -138,7 +139,7 @@ DOMAIN (pick one — aligned with Soleur department leaders):
 // the spawn argv is `[...CLAUDE_CODE_FLAGS, DAILY_TRIAGE_PROMPT]`.
 const CLAUDE_CODE_FLAGS = [
   "--print",
-  "--model", "claude-sonnet-4-6",
+  "--model", EXECUTION_MODEL,
   "--max-turns", "80",
   "--allowedTools",
   "Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Read,Glob,Grep",

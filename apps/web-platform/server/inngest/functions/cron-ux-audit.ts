@@ -48,6 +48,7 @@ import {
 import { inngest } from "@/server/inngest/client";
 import { getPluginPath } from "@/server/plugin-path";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
+import { AUDIT_MODEL } from "@/server/inngest/model-tiers";
 
 // =============================================================================
 // Constants
@@ -68,7 +69,7 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 const CLAUDE_CODE_FLAGS = [
   "--print",
   "--model",
-  "claude-opus-4-7",
+  AUDIT_MODEL,
   "--max-turns",
   "60",
   "--allowedTools",

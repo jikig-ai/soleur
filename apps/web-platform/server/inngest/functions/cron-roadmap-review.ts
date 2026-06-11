@@ -65,6 +65,7 @@ import {
 } from "./_cron-claude-eval-substrate";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
+import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 
 // =============================================================================
 // Constants
@@ -94,7 +95,7 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 const CLAUDE_CODE_FLAGS = [
   "--print",
   "--model",
-  "claude-sonnet-4-6",
+  EXECUTION_MODEL,
   "--max-turns",
   "40",
   "--allowedTools",

@@ -72,7 +72,12 @@ plugins/soleur/skills/trigger-cron/scripts/trigger.sh \
 - **Allowlist is the blast-radius bound.** A non-allowlisted event returns 400.
   The allowlist auto-tracks `cron-*.ts` via `EXPECTED_CRON_FUNCTIONS` — there is
   no second hand-maintained list.
-- **Mutating crons spend budget / open PRs.** `cron/bug-fixer.manual-trigger`
-  opens a PR; content/competitive/growth crons spend API budget. Use `--dry-run`
-  first; never smoke-test a mutating cron post-merge — use a data-free,
-  side-effect-light event like `cron/workspace-sync-health.manual-trigger`.
+- **Mutating crons spend budget / open PRs / post publicly.** `cron/bug-fixer.manual-trigger`
+  opens a PR; content/competitive/growth crons spend API budget;
+  `cron/weekly-release-digest.manual-trigger` POSTS a digest to the public
+  community `#releases` channel (no dry-run mode — every fire publishes). Use
+  `--dry-run` first; never smoke-test a mutating cron post-merge — use a
+  data-free, side-effect-light event like
+  `cron/workspace-sync-health.manual-trigger`. (The digest's one-time
+  post-merge verification fire per #5080 plan Phase 6.2 was the sanctioned
+  launch post, not a precedent.)

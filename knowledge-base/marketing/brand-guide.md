@@ -282,6 +282,16 @@ Scope-aware typography: the **marketing surface** (Eleventy site at `plugins/sol
 - Example announcement: "New: SEO + AEO for your docs site. One skill, three sub-commands. Ship it."
 - Example reply: "Good question. The compound skill handles that -- docs here: [link]"
 
+#### Release Digest
+
+Automated weekly post to #releases (Fridays). These are operational rules for unattended generation — follow exactly:
+
+- **Format:** 3-5 highlight bullets, each one sentence in the shape "what shipped + why it matters to a founder." Close with exactly one remainder line: "…plus N more releases, vA → vB." Total post ≤2000 characters. No @-mentions, no contributor names, no commit hashes, no links unless they appear in the release notes.
+- **Selection rubric:** rank candidate releases by (1) founder impact — something a user can now do, stop doing, or stop worrying about; (2) breadth — affects most users, not one niche config; (3) novelty — new capability beats fix beats chore. Never rank by commit count, diff size, or release frequency.
+- **Tone:** declarative, concrete, builder-to-builder. Lead each bullet with the outcome, not the component name. State only what shipped — no roadmap promises, no hype adjectives ("game-changing," "massive"), no "just/simply," no "AI-powered." Use a number only if it appears verbatim in the source release notes. Structural emoji (arrows, checkmarks) sparingly; decorative emoji never.
+- **Example highlight:** "Release notifications now land in Slack instead of Discord DMs — your team sees ships where they already work."
+- **Quiet week (zero user-facing releases — internal-infra-only weeks count as quiet):** post one line only, e.g. "Quiet week at the forge — heads-down on the next release. See you next Friday." Never pad with filler highlights or restate old releases as new.
+
 ### GitHub
 
 - Maximum technical precision. No marketing language in issues or PRs.
@@ -409,6 +419,22 @@ These guardrails apply in both automatic mode (fetch-mentions) and manual mode (
 - Link to blog post or docs for details
 - Minimal hashtags (1-2 max, same as personal)
 - Cross-reference ### LinkedIn Personal for cadence, skip rules, and reply guidelines
+
+#### LinkedIn Page Cover
+
+| Property | Value |
+|----------|-------|
+| Dimensions | 2256x382px exported at 2x (renders 1128x191, LinkedIn's recommended cover size) |
+| File | `plugins/soleur/docs/images/linkedin-cover-1128x191.png` |
+| Background | `#0A0A0A` with gold edge accents (`#D4B36A` left, `#B8923E` right), 4px at 2x |
+| Thesis | "Build a Billion-Dollar Company. Alone." -- Cormorant Garamond 500, 72px at 2x, white `#FFFFFF`, centered, upper half |
+| Metrics | "60+ Agents · 8 Departments · 1 Founder" -- Inter 400, 30px at 2x, secondary `#848484`, below gold line |
+| Gold accent line | 1px (2px at 2x) horizontal, 500px wide at 2x, centered, 40% opacity, between thesis and metrics |
+| Wordmark | Omitted -- LinkedIn renders the company logo and name directly below the cover |
+| Safe zone | All text within horizontal center 60% (x 451-1805 at 2x); left 20% entirely clear; thesis bottom at midline -- verified |
+| Logo overlap | Bottom-left clear of critical content (logo overlays bottom-left on desktop and mobile) |
+| Source file | `knowledge-base/product/design/brand/brand-linkedin-cover.pen` |
+| Generated with | Pencil MCP (design + PNG export) |
 
 ### Bluesky
 
