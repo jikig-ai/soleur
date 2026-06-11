@@ -224,24 +224,24 @@ needed there). Run `bash -n .claude/hooks/kb-domain-allowlist-guard.sh` and
 
 ### Pre-merge (PR)
 
-- [ ] `bash .claude/hooks/kb-domain-allowlist-guard.test.sh` exits 0 with all cases passing
+- [x] `bash .claude/hooks/kb-domain-allowlist-guard.test.sh` exits 0 with all cases passing
       (existing T1-T12 plus new T13-T20).
-- [ ] The exact repro command (Research Insights) piped through the hook returns NO
+- [x] The exact repro command (Research Insights) piped through the hook returns NO
       `permissionDecision` (pass-through), not `ask`.
-- [ ] `git show main:knowledge-base/.gitkeep` (standalone) → pass-through.
-- [ ] `grep -r knowledge-base/foo .` → pass-through.
-- [ ] `mkdir knowledge-base/newdomain` (Bash) → still `ask`.
-- [ ] `echo x > knowledge-base/newdomain/file.md` (Bash) → still `ask`.
-- [ ] `git add knowledge-base/newdomain/file.md` (Bash) → still `ask`.
-- [ ] `mkdir knowledge-base/engineering/x` (Bash, sanctioned domain) → pass-through.
-- [ ] File-tool Write to `knowledge-base/newdomain/x.md` (`tool_name: "Write"` or file_path
+- [x] `git show main:knowledge-base/.gitkeep` (standalone) → pass-through.
+- [x] `grep -r knowledge-base/foo .` → pass-through.
+- [x] `mkdir knowledge-base/newdomain` (Bash) → still `ask`.
+- [x] `echo x > knowledge-base/newdomain/file.md` (Bash) → still `ask`.
+- [x] `git add knowledge-base/newdomain/file.md` (Bash) → still `ask`.
+- [x] `mkdir knowledge-base/engineering/x` (Bash, sanctioned domain) → pass-through.
+- [x] File-tool Write to `knowledge-base/newdomain/x.md` (`tool_name: "Write"` or file_path
       payload) → still `ask` (unaffected).
-- [ ] `echo x >/dev/null 2>&1` style redirects in a read command do NOT cause `ask`
+- [x] `echo x >/dev/null 2>&1` style redirects in a read command do NOT cause `ask`
       (the redirect regex requires a literal `knowledge-base/` after `>`).
-- [ ] `set -euo pipefail` preserved; the gate uses pure `[[ =~ ]]` (no new subprocess).
-- [ ] Header comment block (lines 22-27) updated to describe Bash write-target gating; inline
+- [x] `set -euo pipefail` preserved; the gate uses pure `[[ =~ ]]` (no new subprocess).
+- [x] Header comment block (lines 22-27) updated to describe Bash write-target gating; inline
       read-vs-write comment added in the glob-guard comment style.
-- [ ] PR body uses `Closes #<issue>` only if a tracking issue exists; otherwise `Ref`.
+- [x] PR body uses `Closes #<issue>` only if a tracking issue exists; otherwise `Ref`.
 
 ## Test Scenarios
 
