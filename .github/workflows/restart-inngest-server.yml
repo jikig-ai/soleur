@@ -4,7 +4,9 @@
 # (H9 in cloud-scheduled-tasks.md runbook).
 # The verify poll window (MAX_POLLS x POLL_INTERVAL) must exceed ci-deploy.sh's
 # verify_inngest_health worst case (incl. the unit's TimeoutStopSec hung-stop
-# that can precede the verify) — drift-guarded by ci-deploy.test.sh (#5145).
+# that can precede the verify, AND the #5159 in-loop re-register PUT that adds
+# an additive --max-time to each cron attempt) — drift-guarded by
+# ci-deploy.test.sh (#5145/#5159).
 name: Restart Inngest Server
 
 on:
@@ -24,6 +26,11 @@ permissions:
 jobs:
   restart:
     runs-on: ubuntu-latest
+    # Hygiene cap (#5159): the poll budget below is 1200s; 30min wall leaves
+    # ~600s headroom over the poll ceiling. No timeout-minutes key existed
+    # before (defaulted to GHA's 6h) — this is poll-ceiling-tracks-window
+    # hygiene, not a correctness requirement.
+    timeout-minutes: 30
     concurrency:
       group: deploy-inngest-restart
       cancel-in-progress: false
@@ -67,11 +74,14 @@ jobs:
           set -euo pipefail
           SIGNATURE=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
           # Client window must exceed ci-deploy.sh's server-side verify worst
-          # case (#5145): verify tail-case ~400s (50 attempts x (3s sleep + up
-          # to 5s curl --max-time)) + TimeoutStopSec=180 hung-stop that can
-          # precede the verify + 60s margin = 640s required; 140 x 5s = 700s.
-          # Drift-guarded by ci-deploy.test.sh — retune both sides together.
-          MAX_POLLS=140
+          # case (#5145/#5159). Split per loop: health 10 x (3s sleep + 5s curl)
+          # = 80s; cron 40 x (3s sleep + 5s /v1/functions curl + 10s in-loop
+          # re-register PUT --max-time) = 720s; + TimeoutStopSec=180 hung-stop
+          # that can precede the verify + 60s margin = 1040s required.
+          # 240 x 5s = 1200s > 1040s (~160s headroom). The #5159 PUT is the new
+          # additive term vs the pre-fix 640s. Drift-guarded by
+          # ci-deploy.test.sh — retune both sides together.
+          MAX_POLLS=240
           POLL_INTERVAL=5
           # 60s clock-skew tolerance: the host writes start_ts with its own
           # clock (ci-deploy.sh write_state; field is schema-stable).
