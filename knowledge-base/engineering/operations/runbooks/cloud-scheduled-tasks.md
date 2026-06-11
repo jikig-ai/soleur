@@ -414,7 +414,7 @@ A restart is only needed when polling itself is broken (see the backstop below).
 gh workflow run restart-inngest-server.yml
 ```
 
-This sends `restart inngest _ latest` to `ci-deploy.sh`, which restarts `inngest-server.service`, waits for health at `127.0.0.1:8288`, and verifies function count >= 1. The workflow polls deploy-status for completion and reports success/failure via GHA annotations. After the workflow completes, restart the web-platform container to force a fresh function manifest sync:
+This sends `restart inngest _ latest` to `ci-deploy.sh`, which restarts `inngest-server.service`, waits for health at `127.0.0.1:8288`, and verifies the registry has >=1 cron-triggered function (#4650; cron-plan loop budget 120s nominal per #5145). The workflow polls deploy-status for completion and reports success/failure via GHA annotations. After the workflow completes, restart the web-platform container to force a fresh function manifest sync:
 
 ```bash
 # Trigger a no-op web-platform deploy to force SDK sync, or use the

@@ -73,7 +73,13 @@ jobs:
           # Drift-guarded by ci-deploy.test.sh — retune both sides together.
           MAX_POLLS=140
           POLL_INTERVAL=5
+          # 60s clock-skew tolerance: the host writes start_ts with its own
+          # clock (ci-deploy.sh write_state; field is schema-stable).
+          FRESH_FLOOR=$((TRIGGER_TS - 60))
           for i in $(seq 1 "$MAX_POLLS"); do
+            # Truncate before each poll — on curl connection failure -o does
+            # not write, and a stale previous body would be re-read as current.
+            rm -f /tmp/status-body
             # shellcheck disable=SC2034 # capture exists to keep curl's -w
             # status code off stdout; the loop branches on BODY, not the code
             HTTP_CODE=$(curl -s --max-time 10 \
@@ -96,15 +102,13 @@ jobs:
             # Freshness guard (#5145): deploy-state is a single slot; the
             # first poll after the 202 can read the PREVIOUS green inngest
             # state before this run's webhook exec writes "running". Only
-            # honor terminal states written at/after TRIGGER_TS (60s
-            # clock-skew tolerance — the host writes start_ts with its own
-            # clock; field is schema-stable, ci-deploy.sh write_state).
+            # honor terminal states written at/after FRESH_FLOOR.
             START_TS=$(echo "$BODY" | jq -r '.start_ts // 0')
             case "$EXIT_CODE" in
               0)
                 if [ "$COMPONENT" = "inngest" ]; then
-                  if [ "$START_TS" -lt "$((TRIGGER_TS - 60))" ]; then
-                    echo "Attempt $i/$MAX_POLLS: state predates this trigger — waiting"
+                  if [ "$START_TS" -lt "$FRESH_FLOOR" ]; then
+                    echo "Attempt $i/$MAX_POLLS: state predates this trigger (start_ts=$START_TS < floor=$FRESH_FLOOR) — waiting"
                   else
                     echo "::notice::Inngest restart completed successfully (reason=$REASON)"
                     echo "$BODY" | jq .
@@ -125,8 +129,8 @@ jobs:
                 ;;
               *)
                 if [ "$COMPONENT" = "inngest" ]; then
-                  if [ "$START_TS" -lt "$((TRIGGER_TS - 60))" ]; then
-                    echo "Attempt $i/$MAX_POLLS: state predates this trigger — waiting"
+                  if [ "$START_TS" -lt "$FRESH_FLOOR" ]; then
+                    echo "Attempt $i/$MAX_POLLS: state predates this trigger (start_ts=$START_TS < floor=$FRESH_FLOOR) — waiting"
                   else
                     echo "::error::Restart failed (exit_code=$EXIT_CODE, reason=$REASON)"
                     echo "$BODY" | jq .
@@ -139,5 +143,5 @@ jobs:
             esac
             sleep "$POLL_INTERVAL"
           done
-          echo "::error::Restart did not complete within $((MAX_POLLS * POLL_INTERVAL))s"
+          echo "::error::Restart did not complete within the $((MAX_POLLS * POLL_INTERVAL))s poll budget (elapsed can exceed this when status curls run slow)"
           exit 1

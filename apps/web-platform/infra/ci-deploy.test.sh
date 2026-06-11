@@ -2062,10 +2062,11 @@ CRON_SEQ_COUNT=$(grep -cE 'seq 1 "\$cron_max_attempts"' "$DEPLOY_SCRIPT" || true
 HEALTH_SEQ_LINE=$(grep -nE 'seq 1 "\$max_attempts"' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
 CRON_SEQ_LINE=$(grep -nE 'seq 1 "\$cron_max_attempts"' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
 FUNCTIONS_CURL_LINE=$(grep -nE 'curl -sf --max-time 5 http://127\.0\.0\.1:8288/v1/functions' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
-# Probe pin scoped to the function region — line :674 has a third
-# `curl -sf --max-time 5` outside verify_inngest_health.
+# Probe pin scoped to the function region — a third `curl -sf --max-time 5`
+# exists outside verify_inngest_health (the deploy-arm web-platform health
+# probe), so a file-global count would be wrong.
 VERIFY_FN_MAXTIME=$(awk '/^verify_inngest_health\(\) \{/,/^\}/' "$DEPLOY_SCRIPT" | grep -c 'curl -sf --max-time 5' || true)
-if [[ "$CRON_PIN_COUNT" -ge 1 && "$CRON_SEQ_COUNT" -ge 1 \
+if [[ "$CRON_PIN_COUNT" -eq 1 && "$CRON_SEQ_COUNT" -eq 1 \
       && -n "$HEALTH_SEQ_LINE" && -n "$CRON_SEQ_LINE" && -n "$FUNCTIONS_CURL_LINE" \
       && "$HEALTH_SEQ_LINE" -lt "$CRON_SEQ_LINE" && "$CRON_SEQ_LINE" -lt "$FUNCTIONS_CURL_LINE" \
       && "$VERIFY_FN_MAXTIME" -eq 2 ]]; then
@@ -2086,42 +2087,56 @@ fi
 #   (health_attempts + cron_attempts) * (interval + 5)
 #     +5 = per-attempt `curl --max-time 5` tail (source: the --max-time pin
 #          above; sleep-only arithmetic undercounts the true worst case ~2.6x)
-#   +180 = TimeoutStopSec=180 hung-stop budget the systemd restart can consume
-#          BEFORE the verify starts (inngest-bootstrap.sh)
+#   +stop = TimeoutStopSec hung-stop budget the systemd restart can consume
+#          BEFORE the verify starts — extracted by shape from the
+#          inngest-server unit heredoc in inngest-bootstrap.sh (scoped: a
+#          second TimeoutStopSec=30 exists in the vector unit)
 #   +60  = webhook handoff/flock/client-curl margin
 # Same invariant class as web-platform-release.yml's STATUS_POLL ==
 # IN_FLIGHT_CEILING_S runtime assert.
 TOTAL=$((TOTAL + 1))
 RESTART_WORKFLOW="$SCRIPT_DIR/../../../.github/workflows/restart-inngest-server.yml"
+BOOTSTRAP_SCRIPT="$SCRIPT_DIR/inngest-bootstrap.sh"
 # tail -1 on the digit runs: "${1:-10}" tokenizes to "1" then "10" — the
 # DEFAULT is the last run, not the first.
 DG_HEALTH=$(grep -oE '\$\{1:-[0-9]+\}' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' | tail -1 || true)
 DG_INTERVAL=$(grep -oE '\$\{2:-[0-9]+\}' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' | tail -1 || true)
 DG_CRON=$(grep -oE '^[[:space:]]*local cron_max_attempts=[0-9]+' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' || true)
-DG_MAX_POLLS_COUNT=$(grep -cE 'MAX_POLLS=[0-9]+' "$RESTART_WORKFLOW" || true)
-DG_POLL_INTERVAL_COUNT=$(grep -cE 'POLL_INTERVAL=[0-9]+' "$RESTART_WORKFLOW" || true)
+DG_INNGEST_UNIT=$(awk '/Description=Inngest self-hosted server/,/^UNITEOF$/' "$BOOTSTRAP_SCRIPT")
+DG_STOP=$(printf '%s\n' "$DG_INNGEST_UNIT" | grep -oE '^TimeoutStopSec=[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
 DG_MAX_POLLS=$(grep -oE 'MAX_POLLS=[0-9]+' "$RESTART_WORKFLOW" | head -1 | grep -oE '[0-9]+' || true)
 DG_POLL_INTERVAL=$(grep -oE 'POLL_INTERVAL=[0-9]+' "$RESTART_WORKFLOW" | head -1 | grep -oE '[0-9]+' || true)
+# Exactly-one assignment per extraction shape — a duplicate (or zero) match
+# makes the head -1 extraction silently ambiguous (e.g. a future helper
+# earlier in ci-deploy.sh with its own ${1:-N} default would hijack
+# DG_HEALTH and shrink the inequality's right side without failing).
+DG_HEALTH_COUNT=$(grep -cE '\$\{1:-[0-9]+\}' "$DEPLOY_SCRIPT" || true)
+DG_INTERVAL_COUNT=$(grep -cE '\$\{2:-[0-9]+\}' "$DEPLOY_SCRIPT" || true)
+DG_CRON_COUNT=$(grep -cE '^[[:space:]]*local cron_max_attempts=[0-9]+' "$DEPLOY_SCRIPT" || true)
+DG_STOP_COUNT=$(printf '%s\n' "$DG_INNGEST_UNIT" | grep -cE '^TimeoutStopSec=[0-9]+' || true)
+DG_MAX_POLLS_COUNT=$(grep -cE 'MAX_POLLS=[0-9]+' "$RESTART_WORKFLOW" || true)
+DG_POLL_INTERVAL_COUNT=$(grep -cE 'POLL_INTERVAL=[0-9]+' "$RESTART_WORKFLOW" || true)
 DG_OK=1
 DG_WHY=""
 # Validate BEFORE arithmetic: bash $((v * 5)) on an empty string evaluates to
 # 0 silently and the inequality would pass for the wrong reason.
-for v in "$DG_HEALTH" "$DG_INTERVAL" "$DG_CRON" "$DG_MAX_POLLS" "$DG_POLL_INTERVAL"; do
-  if ! [[ "$v" =~ ^[0-9]+$ ]]; then
+for pair in "health:$DG_HEALTH" "interval:$DG_INTERVAL" "cron:$DG_CRON" "stop:$DG_STOP" "max_polls:$DG_MAX_POLLS" "poll_interval:$DG_POLL_INTERVAL"; do
+  if ! [[ "${pair#*:}" =~ ^[0-9]+$ ]]; then
     DG_OK=0
-    DG_WHY="non-integer extraction"
+    DG_WHY="non-integer extraction: ${pair%%:*}"
   fi
 done
-# A duplicate assignment would make the head -1 extraction silently ambiguous.
-if [[ "$DG_OK" -eq 1 && ( "$DG_MAX_POLLS_COUNT" -ne 1 || "$DG_POLL_INTERVAL_COUNT" -ne 1 ) ]]; then
-  DG_OK=0
-  DG_WHY="expected exactly one MAX_POLLS=/POLL_INTERVAL= assignment in the workflow (got $DG_MAX_POLLS_COUNT/$DG_POLL_INTERVAL_COUNT)"
-fi
+for pair in "health:$DG_HEALTH_COUNT" "interval:$DG_INTERVAL_COUNT" "cron:$DG_CRON_COUNT" "stop:$DG_STOP_COUNT" "max_polls:$DG_MAX_POLLS_COUNT" "poll_interval:$DG_POLL_INTERVAL_COUNT"; do
+  if [[ "$DG_OK" -eq 1 && "${pair#*:}" -ne 1 ]]; then
+    DG_OK=0
+    DG_WHY="expected exactly one assignment match for ${pair%%:*} (got ${pair#*:})"
+  fi
+done
 DG_LEFT=""
 DG_RIGHT=""
 if [[ "$DG_OK" -eq 1 ]]; then
   DG_LEFT=$((DG_MAX_POLLS * DG_POLL_INTERVAL))
-  DG_RIGHT=$(((DG_HEALTH + DG_CRON) * (DG_INTERVAL + 5) + 180 + 60))
+  DG_RIGHT=$(((DG_HEALTH + DG_CRON) * (DG_INTERVAL + 5) + DG_STOP + 60))
   if [[ "$DG_LEFT" -lt "$DG_RIGHT" ]]; then
     DG_OK=0
     DG_WHY="client window ${DG_LEFT}s < server worst case ${DG_RIGHT}s"
@@ -2132,7 +2147,7 @@ if [[ "$DG_OK" -eq 1 ]]; then
   echo "  PASS: restart workflow client window (${DG_LEFT}s) covers verify worst case (${DG_RIGHT}s) — #5145 drift guard"
 else
   FAIL=$((FAIL + 1))
-  echo "  FAIL: client/server budget drift guard (#5145): $DG_WHY (health=$DG_HEALTH interval=$DG_INTERVAL cron=$DG_CRON MAX_POLLS=$DG_MAX_POLLS POLL_INTERVAL=$DG_POLL_INTERVAL left=$DG_LEFT right=$DG_RIGHT; files: ci-deploy.sh, .github/workflows/restart-inngest-server.yml)"
+  echo "  FAIL: client/server budget drift guard (#5145): $DG_WHY (health=$DG_HEALTH interval=$DG_INTERVAL cron=$DG_CRON stop=$DG_STOP MAX_POLLS=$DG_MAX_POLLS POLL_INTERVAL=$DG_POLL_INTERVAL left=$DG_LEFT right=$DG_RIGHT; files: ci-deploy.sh, inngest-bootstrap.sh, .github/workflows/restart-inngest-server.yml)"
 fi
 
 echo ""
