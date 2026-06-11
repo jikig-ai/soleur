@@ -81,12 +81,16 @@ All Terraform-manageable infrastructure routes through the existing root:
   multi-source ingress (record via `/soleur:architecture` ADR alongside ADR-036).
   Inbound `Message-ID` deduplicates via the migration-052 `messages.source_ref`
   primitive.
-- **FR3.** **Statutory fast-path (pre-LLM, deterministic):** sender/keyword rules detect
-  DSAR / breach / service-of-process / regulator classes and escalate fail-loud to the
-  operator BEFORE any LLM processing, rendering the statutory clock and hard-linking
+- **FR3.** **Statutory fast-path (pre-LLM, deterministic, metadata-first):** sender/keyword
+  rules detect DSAR / breach / service-of-process / regulator classes and escalate
+  fail-loud to the operator BEFORE any LLM processing — and the subject/sender check
+  runs on webhook metadata BEFORE the body fetch, so a Resend fetch outage can degrade
+  a statutory row but never drop it. Renders the statutory clock (calendar-month
+  semantics per Art. 12(3)) and hard-links
   `knowledge-base/legal/recommended-tools.md#dsar-request` / `#breach-notice-triage`.
-  Every message gets a WORM received-at timestamp at ingestion. The LLM is never
-  system-of-record for any deadline.
+  Every message gets a WORM received-at timestamp sourced from the Resend event
+  payload's receive time (never insert time). The LLM is never system-of-record for
+  any deadline.
 - **FR4.** Non-statutory mail is summarized by a read-only LLM step (no write tools, no
   repo access) after `sanitizePromptString`-parity sanitization of subject/body/sender
   (incl. `\x7f`, U+2028/U+2029). Output: summary, mail-class badge, sender, received-at.
@@ -97,7 +101,13 @@ All Terraform-manageable infrastructure routes through the existing root:
   time: server-side Slack webhook vs existing web-push hierarchy — Open Question 1).
   GitHub issues are forbidden as a surface (third-party PII).
 - **FR6.** **Parse-and-discard:** raw bodies are discarded after triage; persisted data =
-  summary, headers, sender, WORM received-at, mail class.
+  summary, subject, sender, message-id, WORM received-at, mail class (NOT full
+  headers — do not add a headers column; the Proton mailbox local copy is the durable
+  original, so the Sieve rule MUST forward-and-keep).
+- **FR9.** **Item lifecycle:** items carry `new → acknowledged | archived` status
+  (statutory: acknowledge unpins but the item stays visible with its clock —
+  acknowledgment is workflow state, not legal resolution; standard: archive). Status
+  transitions are the only mutable fields under the WORM trigger.
 - **FR7.** Out-of-band liveness: dead-man heartbeat on the Inngest cron substrate +
   Sentry monitor with an independent freshness source; silent ingestion failure must page
   (a quiet mailbox is indistinguishable from a broken pipeline otherwise).
