@@ -95,10 +95,20 @@ if (!IS_BUILD_PHASE && !SIGNING_KEY) {
 // serveHost makes EVERY registration path — container boot, the server's
 // --poll-interval sync, AND the in-loop loopback PUT — report the canonical public
 // URL, so a standalone inngest restart self-recovers (the #5160 design intent that
-// the loopback PUT alone could not achieve). Guarded on NEXT_PUBLIC_APP_URL so dev
-// /build (inngest dev server; infers from the request) is unaffected. The trailing
-// -slash strip keeps `serveHost + servePath` from doubling the slash.
-const SERVE_HOST = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/+$/, "");
+// the loopback PUT alone could not achieve).
+//
+// HARDCODED, not env-derived: #5182 read this from `process.env.NEXT_PUBLIC_APP_URL`
+// and was a silent no-op — Next.js statically inlines `process.env.NEXT_PUBLIC_*` at
+// BUILD time, and NEXT_PUBLIC_APP_URL is not a Docker build ARG, so it inlined as
+// `undefined` (the post-deploy AC15 re-dispatch still showed inngest_register_http
+// =200 + inngest_crons:{}). The canonical server origin is therefore a hardcoded
+// constant, matching the security-motivated convention in server/cf-cache-purge.ts
+// (`const APP_ORIGIN = "https://app.soleur.ai"` — reading the origin from a header
+// /env is a spoofing risk). Gated on NODE_ENV (reliably "production" in the prod
+// container per Dockerfile `ENV NODE_ENV=production`, and NOT NEXT_PUBLIC_-inlined)
+// so dev/build (the inngest dev server) infers the host from the request instead.
+const SERVE_HOST =
+  process.env.NODE_ENV === "production" ? "https://app.soleur.ai" : undefined;
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
