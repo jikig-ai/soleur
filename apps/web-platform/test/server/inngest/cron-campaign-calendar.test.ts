@@ -4,8 +4,8 @@
 //   1. Registration shape (cron + manual-trigger event triggers, concurrency,
 //      retries) — drift here breaks the Inngest scheduler contract.
 //   2. Prompt-canary anchors (campaign-calendar, overdue, heartbeat,
-//      content-strategy.md, MANDATORY FINAL STEP) — original anchors from
-//      the GHA prompt that must survive silent paraphrasing.
+//      content-strategy.md, platform-persistence directive) — anchors that
+//      must survive silent paraphrasing.
 //   3. Timing constants exported (MAX_TURN_DURATION_MS, KILL_ESCALATION_MS).
 //   4. buildSpawnEnv allowlist — positive class (5 base vars) AND negative
 //      class (sensitive denylist + spread operator).
@@ -79,7 +79,8 @@ describe("CAMPAIGN_CALENDAR_PROMPT — anchor strings (regression-detection)", (
       ["overdue", "overdue content detection"],
       ["heartbeat", "heartbeat audit issue"],
       ["content-strategy.md", "content-strategy review date update"],
-      ["MANDATORY FINAL STEP", "persist-via-PR pattern"],
+      ["PERSISTENCE: Do NOT run git add", "platform-persistence directive (#5111)"],
+      ["opens a PR for your changes", "handler-side persistence note (#5111)"],
     ])("contains %s (%s)", (anchor) => {
       expect(SUT_SOURCE).toContain(anchor);
     });
@@ -89,15 +90,7 @@ describe("CAMPAIGN_CALENDAR_PROMPT — anchor strings (regression-detection)", (
     it.each([
       [
         "Do NOT push directly to main",
-        "PR-based commit pattern (no direct main writes)",
-      ],
-      [
-        "git checkout -b",
-        "PR branch creation in Persist-via-PR step",
-      ],
-      [
-        "gh pr merge",
-        "Persist-via-PR auto-merge",
+        "no direct main writes (handler-side PR persistence)",
       ],
       [
         "scheduled-campaign-calendar",
@@ -175,5 +168,27 @@ describe("#4730 — output-aware heartbeat (always-create producer)", () => {
     // wiring would start false-RED'ing healthy zero-overdue runs.
     expect(SUT_SOURCE).toContain("STEP 2.5");
     expect(SUT_SOURCE).toContain("scheduled-campaign-calendar");
+  });
+});
+
+describe("#5111 — handler-side persistence (safeCommitAndPr migration)", () => {
+  it("prompt carries the platform-persistence directive, not a commit block", () => {
+    expect(SUT_SOURCE).toContain("PERSISTENCE: Do NOT run git add");
+    expect(SUT_SOURCE).not.toContain("MANDATORY FINAL STEP");
+    // No prompt-side staging command survives. The PERSISTENCE directive's
+    // own "git add," mention is comma-delimited, so the trailing-space form
+    // below only matches a real `git add <paths>` shell command.
+    expect(SUT_SOURCE).not.toMatch(/git add /);
+  });
+
+  it("wires the gated safe-commit-pr step (issue-verified AND not timed out)", () => {
+    expect(SUT_SOURCE).toContain('from "./_cron-safe-commit"');
+    expect(SUT_SOURCE).toContain('step.run("safe-commit-pr"');
+    // Plan AC: persistence MUST be gated on issue-verified output AND
+    // not-timed-out — a regression to `spawnResult.ok` (the #4747 hazard)
+    // or a dropped timeout clause turns this red. Mirrors the parity test.
+    expect(SUT_SOURCE).toMatch(
+      /if \(heartbeatOk && !spawnResult\.abortedByTimeout\) \{[\s\S]{0,800}?safeCommitAndPr\(\{/,
+    );
   });
 });

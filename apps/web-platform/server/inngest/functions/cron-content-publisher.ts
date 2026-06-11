@@ -21,7 +21,6 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { Octokit } from "@octokit/core";
 import matter from "gray-matter";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
@@ -36,6 +35,7 @@ import {
   postSentryHeartbeat,
   type HandlerArgs,
 } from "./_cron-shared";
+import { SYNTHETIC_CHECK_NAMES, safeCommitAndPr } from "./_cron-safe-commit";
 
 // =============================================================================
 // Constants
@@ -47,16 +47,6 @@ export const MAX_RUN_DURATION_MS = 10 * 60 * 1000;
 const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
 
 const CONTENT_DIR_REL = "knowledge-base/marketing/distribution-content";
-
-export const SYNTHETIC_CHECK_NAMES = [
-  "test",
-  "dependency-review",
-  "e2e",
-  "skill-security-scan PR gate",
-  "enforce",
-  "cla-check",
-  "cla-evidence",
-] as const;
 
 /** Environment variable names forwarded to the content-publisher.sh spawn. */
 export const PUBLISHER_ENV_KEYS = [
@@ -97,31 +87,6 @@ function spawnGit(
     const child = spawn("git", args, { stdio: "ignore", ...opts });
     child.on("exit", (exitCode, signal) => resolve({ exitCode, signal }));
     child.on("error", () => resolve({ exitCode: -1, signal: null }));
-  });
-}
-
-async function spawnGitChecked(
-  args: string[],
-  opts?: { cwd?: string; env?: NodeJS.ProcessEnv },
-): Promise<void> {
-  const result = await spawnGit(args, opts);
-  if (result.exitCode !== 0) {
-    throw new Error(`git ${args[0]} failed (exit ${result.exitCode})`);
-  }
-}
-
-function spawnGitCapture(
-  args: string[],
-  opts?: { cwd?: string },
-): Promise<string> {
-  return new Promise((resolve) => {
-    const child = spawn("git", args, { ...opts });
-    let out = "";
-    child.stdout?.on("data", (d: Buffer) => {
-      out += d.toString();
-    });
-    child.on("exit", () => resolve(out.trim()));
-    child.on("error", () => resolve(""));
   });
 }
 
@@ -233,6 +198,13 @@ export async function cronContentPublisherHandler({
   let installationToken = "";
 
   try {
+    // Memoized run-start timestamp — safeCommitAndPr derives the ci/ branch
+    // name and pins commit dates from it (replay-stable, #5111).
+    const runStartedAt = await step.run(
+      "run-started-at",
+      async () => new Date().toISOString(),
+    );
+
     installationToken = await step.run(
       "mint-installation-token",
       async () => mintInstallationToken({ tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS }),
@@ -329,101 +301,38 @@ export async function cronContentPublisherHandler({
       return { exitCode: result.exitCode };
     });
 
-    // Check if the script modified files; if so, create bot-PR
-    const prResult = await step.run("commit-and-pr", async () => {
-      const diffResult = await spawnGit(
-        ["diff", "--quiet", "--", CONTENT_DIR_REL],
-        { cwd: repoRoot },
-      );
-      if (diffResult.exitCode === 0) {
-        logger.info({ fn: "cron-content-publisher" }, "No changes to commit");
-        return { prCreated: false };
-      }
-
-      const octokit = new Octokit({ auth: installationToken });
-      const dateSuffix = new Date()
-        .toISOString()
-        .replace(/[-:T]/g, "")
-        .slice(0, 15);
-      const branchName = `ci/content-publisher-${new Date().toISOString().slice(0, 10)}-${dateSuffix.slice(8)}`;
-
-      await spawnGitChecked(
-        ["config", "user.name", "github-actions[bot]"],
-        { cwd: repoRoot },
-      );
-      await spawnGitChecked(
-        [
-          "config",
-          "user.email",
-          "41898282+github-actions[bot]@users.noreply.github.com",
-        ],
-        { cwd: repoRoot },
-      );
-      await spawnGitChecked(["add", CONTENT_DIR_REL], { cwd: repoRoot });
-      await spawnGitChecked(["checkout", "-b", branchName], { cwd: repoRoot });
-      await spawnGitChecked(
-        ["commit", "-m", "ci: update content distribution status"],
-        { cwd: repoRoot },
-      );
-      await spawnGitChecked(["push", "-u", "origin", branchName], {
-        cwd: repoRoot,
-      });
-
-      const { data: pr } = await octokit.request(
-        "POST /repos/{owner}/{repo}/pulls",
-        {
-          owner: REPO_OWNER,
-          repo: REPO_NAME,
-          title: `ci: update content distribution status ${new Date().toISOString().slice(0, 10)}`,
-          body: "Automated status update from content publisher workflow.",
-          base: "main",
-          head: branchName,
+    // Persist status updates via safeCommitAndPr (#5111) — gains the
+    // deletion guard, dirty-index precondition, dropped-path warn, and
+    // replay idempotency. mergeMode "direct" + synthetic checks preserves
+    // this pipeline's production-proven merge mechanics; the helper's
+    // direct→arm-auto-merge→loud-failure ladder strictly improves on the
+    // old log-only catch.
+    const prResult = await step.run("safe-commit-pr", async () => {
+      const result = await safeCommitAndPr({
+        spawnCwd: repoRoot,
+        installationToken,
+        cronName: "cron-content-publisher",
+        commitMessage: "ci: update content distribution status",
+        // Trailing slash added vs CONTENT_DIR_REL: the helper's allowlist
+        // matching is bare startsWith and directory entries must end "/".
+        allowedPaths: [`${CONTENT_DIR_REL}/`],
+        runStartedAt,
+        scheduledIssueLabel: SENTRY_MONITOR_SLUG,
+        prBody: "Automated status update from content publisher workflow.",
+        syntheticChecks: {
+          names: SYNTHETIC_CHECK_NAMES,
+          summary: "Status metadata only, no code changes",
         },
-      );
-
-      // Synthetic checks
-      const commitSha = await spawnGitCapture(["rev-parse", "HEAD"], {
-        cwd: repoRoot,
+        mergeMode: "direct",
+        logger,
       });
-
-      for (const name of SYNTHETIC_CHECK_NAMES) {
-        await octokit.request("POST /repos/{owner}/{repo}/check-runs", {
-          owner: REPO_OWNER,
-          repo: REPO_NAME,
-          name,
-          head_sha: commitSha,
-          status: "completed",
-          conclusion: "success",
-          output: {
-            title: "Bot PR",
-            summary:
-              "Status metadata only, no code changes",
-          },
-        });
-      }
-
-      // Auto-merge
-      try {
-        await octokit.request(
-          "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge",
-          {
-            owner: REPO_OWNER,
-            repo: REPO_NAME,
-            pull_number: pr.number,
-            merge_method: "squash",
-          },
-        );
-      } catch (mergeErr) {
-        // Auto-merge may fail if branch protection requires review;
-        // fall back to enabling auto-merge via the GraphQL API shape
-        // that gh pr merge --auto uses. Best-effort.
-        logger.warn(
-          { fn: "cron-content-publisher", pr: pr.number },
-          "Direct merge failed — PR left open for manual merge",
-        );
-      }
-
-      return { prCreated: true, prNumber: pr.number };
+      // Distinguish failed from no-changes: a "failed" result at stage
+      // auto-merge means a PR EXISTS but needs a manual merge — folding it
+      // into prCreated:false would report "no-changes" for a run that
+      // actually produced an open PR.
+      return result.status === "committed"
+        ? { prCreated: true, prNumber: result.prNumber, persistFailed: false }
+        : { prCreated: false, persistFailed: result.status === "failed" };
     });
 
     await step.run("sentry-heartbeat", () =>
@@ -442,7 +351,9 @@ export async function cronContentPublisherHandler({
           ? "partial-failure"
           : prResult.prCreated
             ? "published"
-            : "no-changes",
+            : prResult.persistFailed
+              ? "persist-failed"
+              : "no-changes",
       published: preCheck.scheduledToday,
       staleDetected: preCheck.staleCount,
     };

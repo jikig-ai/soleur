@@ -5,10 +5,12 @@
 //
 // BUCKET II (kb-writer + pr-creator) — first bucket-ii migration in the
 // claude-code-spawn cohort. CLO bucket-ii means more careful authorization
-// context: the spawned agent can create branches, commit to them, open PRs,
-// and create issues. The buildSpawnEnv allowlist is wider than bucket-i
-// (adds 7 community-platform vars for Discord, Bluesky, LinkedIn) but
-// still uses the explicit-allowlist shape (NOT denylist / spread).
+// context: the spawned agent writes KB files and creates issues; since
+// #5111 the PLATFORM commits and opens the PR handler-side (the agent no
+// longer runs git/gh persistence verbs). The buildSpawnEnv allowlist is
+// wider than bucket-i (adds 7 community-platform vars for Discord,
+// Bluesky, LinkedIn) but still uses the explicit-allowlist shape (NOT
+// denylist / spread).
 //
 // ADR-033 invariants (binding all cron-*.ts files):
 //   I1 — claude binary spawned INSIDE step.run (Inngest replay memoization).
@@ -57,7 +59,8 @@
 // GH TOKEN — installation token minted via createProbeOctokit() →
 // installation discovery → generateInstallationToken(installation.id).
 // Injected as GH_TOKEN so the spawned claude can run `gh api ...`,
-// `gh issue create`, `gh pr create`, `gh label create`, `git push`.
+// `gh issue create`, `gh label create` (persistence runs handler-side via
+// safeCommitAndPr — #5111; the prompt forbids git/gh-pr verbs).
 
 import {
   redactToken,
@@ -74,6 +77,7 @@ import {
   spawnClaudeEval,
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
+import { safeCommitAndPr } from "./_cron-safe-commit";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 
@@ -96,7 +100,8 @@ const TOKEN_MIN_LIFETIME_MS = 50 * 60 * 1000 + 10 * 60 * 1000;
 // proven-healthy `cron-daily-triage` turn budget running through the same
 // DEFAULT_CLAUDE_SETTINGS (daily-triage pairs 80 turns with a 60-min ceiling;
 // we keep 50 min — see the in-band ratio below). The heavier 7-platform
-// digest + git→PR→issue task no longer fit in 50 with error/retry headroom.
+// digest + KB-write + issue task (PR creation moved handler-side in #5111)
+// no longer fit in 50 with error/retry headroom.
 // The timeout-to-turns ratio
 // is 50 min ÷ 80 = 0.625 min/turn — within the 0.55–1.2 peer band per the
 // 2026-03-20-claude-code-action-max-turns-budget learning, so the 50-min
@@ -134,7 +139,6 @@ community digest and create a GitHub Issue summarizing the findings.
 
 IMPORTANT: This is an automated CI workflow. The AGENTS.md rule
 Do NOT push directly to main.
-Use the PR-based commit pattern in the MANDATORY FINAL STEP.
 
 MILESTONE RULE: Every gh issue create command must include --milestone "Post-MVP / Later".
 
@@ -182,28 +186,14 @@ MILESTONE RULE: Every gh issue create command must include --milestone "Post-MVP
    contextual quotes (under 100 chars) with attribution are acceptable.
    If the file already exists for today, overwrite it.
 
-5. **Persist via PR** (do not push directly to main):
-   Run these bash commands:
-   \`\`\`
-   git config user.name "github-actions[bot]"
-   git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-   git add knowledge-base/support/community/
-   git diff --cached --quiet && echo "No changes to commit" && exit 0
-   BRANCH="ci/community-digest-$(date -u +%Y-%m-%d-%H%M%S)"
-   git checkout -b "$BRANCH"
-   git commit -m "docs: daily community digest"
-   git push -u origin "$BRANCH"
-   gh pr create \\
-     --title "docs: daily community digest $(date -u +%Y-%m-%d)" \\
-     --body "Automated daily community digest commit." \\
-     --base main \\
-     --head "$BRANCH"
-   gh pr merge "$BRANCH" --squash --auto
-   \`\`\`
-
-6. **Create GitHub Issue** titled "[Scheduled] Community Monitor - YYYY-MM-DD"
+5. **Create GitHub Issue** titled "[Scheduled] Community Monitor - YYYY-MM-DD"
    with label "scheduled-community-monitor". Include a condensed summary:
    platform status, key metrics, notable items, and a link to the digest file.
+
+PERSISTENCE: Do NOT run git add, git commit, git push, or gh pr create/merge.
+The platform commits and opens a PR for your changes automatically after the run.
+Only changes under knowledge-base/support/community/ are persisted — keep all edits inside that path.
+Creating the monitor issue above is REQUIRED: the platform only persists your changes after it verifies the issue exists.
 
 DEDUP RULE (BEFORE creating the monitor issue): run
   gh issue list --label scheduled-community-monitor --state open --search 'Community Monitor in:title' --json number,title,createdAt
@@ -211,6 +201,12 @@ If any results from within the last 24 hours exist, do NOT create a new issue. I
 
 CLONE DEPTH RULE: This workspace was cloned with --depth=1. Do NOT use \`git log\` for staleness analysis (every file appears "just touched"). Use GitHub Issue/PR \`updatedAt\` timestamps via \`gh api\` instead.
 `;
+
+// Persistence allowlist (#5111): verbatim from the prompt's former scoped
+// staging list (the dated digest directory).
+const COMMUNITY_MONITOR_ALLOWED_PATHS = [
+  "knowledge-base/support/community/",
+] as const;
 
 // Spawn-env allowlist (NOT a denylist). PR-5 base shape + PR-11 community-
 // monitor additions. The keys below are the COMPLETE set the spawned claude
@@ -367,6 +363,31 @@ export async function cronCommunityMonitorHandler({
         stdoutTail: spawnResult.stdoutTail,
       }),
     );
+    // --- Step 4.5: deterministic persistence (#5111, pattern from #5091 /
+    //     cron-seo-aeo-audit.ts). Gated on the issue-verified output rather
+    //     than the spawn exit code: exit-0-with-no-issue is unverified
+    //     (possibly mid-edit) work that must not auto-merge, while
+    //     issue-created + non-zero exit is the documented healthy #4747 case
+    //     whose diff must not be discarded. (Caveat: resolveOutputAwareOk
+    //     falls back to the spawn exit code when its GitHub verify-read
+    //     THROWS — a tri-state gate is tracked in #5139.) abortedByTimeout also skips —
+    //     a hard kill can land mid-edit, and the timeout is already loud via
+    //     the reportSilentFallback above. Guard aborts / persistence failures
+    //     self-report inside the helper (Sentry + issue comment).
+    if (heartbeatOk && !spawnResult.abortedByTimeout) {
+      await step.run("safe-commit-pr", async () =>
+        safeCommitAndPr({
+          spawnCwd: spawnCwd!,
+          installationToken,
+          cronName: "cron-community-monitor",
+          commitMessage: "docs: daily community digest",
+          allowedPaths: COMMUNITY_MONITOR_ALLOWED_PATHS,
+          runStartedAt,
+          scheduledIssueLabel: SENTRY_MONITOR_SLUG,
+          logger,
+        }),
+      );
+    }
     await step.run("sentry-heartbeat", async () => {
       await postSentryHeartbeat({ ok: heartbeatOk, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-community-monitor", logger });
     });

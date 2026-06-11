@@ -17,10 +17,10 @@
 //      the handler owns persistence now. A restoration that re-adds
 //      git add/commit/push or gh pr create/merge fails CI here instead of
 //      relying on a PR-body memo (the #5026 sequencing hazard).
-//   4. Exempt list (explicit, with rationale): the legacy handler-side
-//      spawnGitChecked pipelines + the 4 scoped-add prompt crons (migration
-//      tracked by the consolidation follow-up issue) + roadmap-review (live
-//      Tier-1; guarded by the hook's blanket-staging deny set).
+//   4. Exempt list (explicit, with rationale): permanently two entries since
+//      #5111 emptied the migration backlog — roadmap-review (live Tier-1;
+//      guarded by the hook's blanket-staging deny set) and bug-fixer (the
+//      fix-issue skill owns its commit step). See ADR-054.
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -30,29 +30,36 @@ import { CRON_BASH_ALLOWLISTS } from "@/server/inngest/functions/_cron-claude-ev
 const FUNCTIONS_DIR = resolve(__dirname, "../../../server/inngest/functions");
 const HOOK_PATH = resolve(__dirname, "../../../server/inngest/cron-bash-allowlist-hook.mjs");
 
-// Crons migrated to handler-side persistence (#5091). Grows as the
-// consolidation follow-up migrates the rest.
-const MIGRATED = [
+// Claude-spawn crons migrated to handler-side persistence (#5091 + #5111).
+// Full invariant-2 assertions apply: these have a prompt (PERSISTENCE anchor)
+// and a spawn result (the heartbeatOk gate).
+const MIGRATED_PROMPT = [
   "cron-seo-aeo-audit.ts",
   "cron-content-generator.ts",
   "cron-growth-execution.ts",
+  "cron-campaign-calendar.ts",
+  "cron-growth-audit.ts",
+  "cron-community-monitor.ts",
+  "cron-competitive-analysis.ts",
 ];
 
-// Crons that still carry their own persistence, each with a rationale.
-// Tracked for migration by the #5091 consolidation follow-up issue unless
-// noted otherwise.
+// Pure-TS data-refresh pipelines migrated by #5111. No claude spawn → no
+// prompt and no heartbeatOk gate, so invariant 2's prompt-anchor/gate
+// assertions are unsatisfiable by construction; this cohort asserts
+// import + call + no private spawnGitChecked staging instead.
+const MIGRATED_HANDLER = [
+  "cron-weekly-analytics.ts",
+  "cron-compound-promote.ts",
+  "cron-content-publisher.ts",
+  "cron-content-vendor-drift.ts",
+  "cron-rule-prune.ts",
+];
+
+const MIGRATED_ALL = [...MIGRATED_PROMPT, ...MIGRATED_HANDLER];
+
+// Permanent exemptions (ADR-054) — each with a rationale. This list must
+// NOT grow without an ADR-054 amendment.
 const EXEMPT: Record<string, string> = {
-  // Prompt-level SCOPED adds (not the blanket #5026 class), Tier-2 dormant:
-  "cron-campaign-calendar.ts": "scoped prompt add; consolidation follow-up",
-  "cron-growth-audit.ts": "scoped prompt add; consolidation follow-up",
-  "cron-community-monitor.ts": "scoped prompt add; consolidation follow-up",
-  "cron-competitive-analysis.ts": "scoped prompt add; consolidation follow-up",
-  // Handler-side spawnGitChecked pipelines with scoped adds (live, working):
-  "cron-weekly-analytics.ts": "legacy handler-side pipeline; consolidation follow-up",
-  "cron-compound-promote.ts": "legacy handler-side pipeline; consolidation follow-up",
-  "cron-content-publisher.ts": "legacy handler-side pipeline; consolidation follow-up",
-  "cron-content-vendor-drift.ts": "legacy handler-side pipeline; consolidation follow-up",
-  "cron-rule-prune.ts": "legacy handler-side pipeline; consolidation follow-up",
   // Live Tier-1: model improvises git within its bash allowlist; the hook's
   // blanket-staging deny set + the prompt STAGING RULE are its guard:
   "cron-roadmap-review.ts": "hook-guarded Tier-1 self-commit",
@@ -84,9 +91,13 @@ describe("safe-commit parity — invariant 1: no blanket git-add literal anywher
 
 describe("safe-commit parity — invariant 2: migrated crons route through safeCommitAndPr", () => {
   it("discovers the migrated crons and keeps MIGRATED/EXEMPT disjoint", () => {
-    for (const f of MIGRATED) {
+    for (const f of MIGRATED_ALL) {
       expect(cronFiles).toContain(f);
       expect(EXEMPT[f]).toBeUndefined();
+    }
+    // The two cohorts must not overlap (a cron is prompt-gated XOR pure-TS).
+    for (const f of MIGRATED_PROMPT) {
+      expect(MIGRATED_HANDLER).not.toContain(f);
     }
     // EXEMPT files must not CALL safeCommitAndPr (importing the shared
     // enableAutoMergeSquash, as cron-bug-fixer does, is fine) — a migrated
@@ -99,7 +110,7 @@ describe("safe-commit parity — invariant 2: migrated crons route through safeC
     }
   });
 
-  it.each(MIGRATED.map((f) => [f]))(
+  it.each(MIGRATED_PROMPT.map((f) => [f]))(
     "%s routes through safeCommitAndPr behind the issue-verified gate",
     (file) => {
       const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
@@ -116,6 +127,18 @@ describe("safe-commit parity — invariant 2: migrated crons route through safeC
       );
       // The prompt must not retain a prompt-side commit block.
       expect(src).not.toContain("MANDATORY FINAL STEP");
+    },
+  );
+
+  it.each(MIGRATED_HANDLER.map((f) => [f]))(
+    "%s (pure-TS pipeline) routes through safeCommitAndPr with no private staging copy",
+    (file) => {
+      const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
+      expect(src).toContain('from "./_cron-safe-commit"');
+      expect(src).toMatch(/safeCommitAndPr\(\{/);
+      // The #5111 migration deleted each file's private spawnGitChecked
+      // staging/commit/push/PR pipeline — its return is a regression.
+      expect(src).not.toContain("spawnGitChecked");
     },
   );
 });
@@ -136,7 +159,7 @@ describe("safe-commit parity — invariant 3: Tier-2 restoration must not re-arm
     expect(Object.keys(CRON_BASH_ALLOWLISTS)).toContain("cron-roadmap-review");
   });
 
-  it.each(MIGRATED.map((f) => [f]))(
+  it.each(MIGRATED_ALL.map((f) => [f]))(
     "%s allowlist (if present) excludes persistence verbs",
     (file) => {
       const cronName = file.replace(/\.ts$/, "");
@@ -158,14 +181,15 @@ describe("safe-commit parity — invariant 4: every PR-persisting cron is migrat
   // handler-side git add). Detection is the staging verb itself — scoped
   // forms included — so a NEW cron that adds any commit pathway must either
   // migrate to safeCommitAndPr or document an exemption here.
+  const stagesFiles = (src: string): boolean =>
+    /git add /.test(src) || /spawnGitChecked\(\s*\[\s*"add"/.test(src) || /\["add",/.test(src);
+
   it("classifies every cron with a staging pathway", () => {
     const unaccounted: string[] = [];
     for (const file of cronFiles) {
       const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
-      const stages =
-        /git add /.test(src) || /spawnGitChecked\(\s*\[\s*"add"/.test(src) || /\["add",/.test(src);
-      if (!stages) continue;
-      if (MIGRATED.includes(file)) continue;
+      if (!stagesFiles(src)) continue;
+      if (MIGRATED_ALL.includes(file)) continue;
       if (EXEMPT[file]) continue;
       unaccounted.push(file);
     }
@@ -174,4 +198,22 @@ describe("safe-commit parity — invariant 4: every PR-persisting cron is migrat
       "new cron with a staging pathway: migrate it to safeCommitAndPr or add a rationale to EXEMPT",
     ).toEqual([]);
   });
+
+  // Migration is a CONSTRAINT, not a terminal state: a migrated cron that
+  // re-grows its own staging pathway alongside the helper call would slip
+  // every other invariant (invariant 1 matches contiguous literals only;
+  // invariant 2 HANDLER checks the spawnGitChecked identifier only). The
+  // helper must be a migrated cron's ONLY staging pathway. The prompt
+  // cohort's PERSISTENCE directive is comma-delimited ("git add,") so it
+  // does not trip the /git add / trailing-space detector.
+  it.each(MIGRATED_ALL.map((f) => [f]))(
+    "%s has no staging pathway outside safeCommitAndPr",
+    (file) => {
+      const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
+      expect(
+        stagesFiles(src),
+        `${file} is migrated but carries its own staging pathway — route it through safeCommitAndPr`,
+      ).toBe(false);
+    },
+  );
 });

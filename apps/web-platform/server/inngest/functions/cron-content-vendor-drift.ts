@@ -37,6 +37,7 @@ import {
   postSentryHeartbeat,
   type HandlerArgs,
 } from "./_cron-shared";
+import { SYNTHETIC_CHECK_NAMES, safeCommitAndPr } from "./_cron-safe-commit";
 
 // =============================================================================
 // Constants
@@ -53,16 +54,6 @@ export const PARSER_REL =
 export const CLASSIFIER_REL =
   "plugins/soleur/skills/gdpr-gate/scripts/vendor-drift-classify.sh";
 export const SKILL_PREFIX = "plugins/soleur/skills/gdpr-gate";
-
-export const SYNTHETIC_CHECK_NAMES = [
-  "test",
-  "dependency-review",
-  "e2e",
-  "skill-security-scan PR gate",
-  "enforce",
-  "cla-check",
-  "cla-evidence",
-] as const;
 
 /** Drift labels mapped from classifier categories. */
 const CATEGORY_LABELS: Record<string, string[]> = {
@@ -100,31 +91,6 @@ function spawnGit(
     const child = spawn("git", args, { stdio: "ignore", ...opts });
     child.on("exit", (exitCode, signal) => resolve({ exitCode, signal }));
     child.on("error", () => resolve({ exitCode: -1, signal: null }));
-  });
-}
-
-async function spawnGitChecked(
-  args: string[],
-  opts?: { cwd?: string; env?: NodeJS.ProcessEnv },
-): Promise<void> {
-  const result = await spawnGit(args, opts);
-  if (result.exitCode !== 0) {
-    throw new Error(`git ${args[0]} failed (exit ${result.exitCode})`);
-  }
-}
-
-function spawnGitCapture(
-  args: string[],
-  opts?: { cwd?: string },
-): Promise<string> {
-  return new Promise((resolve) => {
-    const child = spawn("git", args, { ...opts });
-    let out = "";
-    child.stdout?.on("data", (d: Buffer) => {
-      out += d.toString();
-    });
-    child.on("exit", () => resolve(out.trim()));
-    child.on("error", () => resolve(""));
   });
 }
 
@@ -294,6 +260,13 @@ export async function cronContentVendorDriftHandler({
   let installationToken = "";
 
   try {
+    // Memoized run-start timestamp — safeCommitAndPr derives the ci/ branch
+    // name and pins commit dates from it (replay-stable, #5111).
+    const runStartedAt = await step.run(
+      "run-started-at",
+      async () => new Date().toISOString(),
+    );
+
     installationToken = await step.run(
       "mint-installation-token",
       async () =>
@@ -492,11 +465,16 @@ export async function cronContentVendorDriftHandler({
       }
 
       if (classifyRc === 13) {
-        // Check for open drift PRs (idempotency)
+        // Check for open drift PRs (idempotency). The prefix MUST track the
+        // safeCommitAndPr-derived branch (`ci/content-vendor-drift-<ts>`,
+        // #5111) — this guard is what suppresses duplicate drift PRs when a
+        // direct merge failed and last week's PR is still open. (No old
+        // `ci/vendor-drift-` transition match needed: the pre-#5111 PR route
+        // never produced content, so no old-prefix PR can be open.)
         const { data: openPRs } = await octokit.request(
           "GET /search/issues",
           {
-            q: `is:pr is:open repo:${REPO_OWNER}/${REPO_NAME} head:ci/vendor-drift-`,
+            q: `is:pr is:open repo:${REPO_OWNER}/${REPO_NAME} head:ci/content-vendor-drift-`,
             per_page: 5,
           },
         );
@@ -530,128 +508,38 @@ export async function cronContentVendorDriftHandler({
       };
     });
 
-    // Route: open PR for low-risk drift
+    // Route: open PR for low-risk drift. Persistence via safeCommitAndPr
+    // (#5111) — gains the deletion guard (a large upstream restructure
+    // deleting >10 files under references/ aborts loudly BY DESIGN; see the
+    // runbook's DEFAULT_MAX_DELETIONS raise path), dirty-index precondition,
+    // dropped-path warn, and replay idempotency. mergeMode "direct" +
+    // synthetic checks preserves the production-proven merge mechanics.
+    // Branch becomes ci/content-vendor-drift-<ts> (helper derivation,
+    // renamed from ci/vendor-drift-<date> — NOT cosmetic: the detect step's
+    // open-PR dedup query keys on this prefix and was updated in lockstep).
     if (detectResult.route === "pr") {
-      await step.run("open-drift-pr", async () => {
-        const dateSuffix = new Date().toISOString().slice(0, 10);
-        const branchName = `ci/vendor-drift-${dateSuffix}`;
-
-        await spawnGitChecked(
-          ["config", "user.name", "github-actions[bot]"],
-          { cwd: repoRoot },
-        );
-        await spawnGitChecked(
-          [
-            "config",
-            "user.email",
-            "41898282+github-actions[bot]@users.noreply.github.com",
-          ],
-          { cwd: repoRoot },
-        );
-        await spawnGitChecked(["checkout", "-b", branchName], {
-          cwd: repoRoot,
-        });
-        await spawnGitChecked(
-          [
-            "add",
-            `${SKILL_PREFIX}/NOTICE`,
-            `${SKILL_PREFIX}/references/`,
-          ],
-          { cwd: repoRoot },
-        );
-
-        // Only commit if there are staged changes
-        const diffCheck = await spawnGit(
-          ["diff", "--cached", "--quiet"],
-          { cwd: repoRoot },
-        );
-        if (diffCheck.exitCode === 0) {
-          logger.info(
-            { fn: "cron-content-vendor-drift" },
-            "No staged changes after merge — skipping PR",
-          );
-          return;
-        }
-
-        await spawnGitChecked(
-          [
-            "commit",
-            "-m",
+      await step.run("safe-commit-pr", async () =>
+        safeCommitAndPr({
+          spawnCwd: repoRoot,
+          installationToken,
+          cronName: "cron-content-vendor-drift",
+          commitMessage:
             "chore(vendor-drift): re-vendor gosprinto/compliance-skills",
-          ],
-          { cwd: repoRoot },
-        );
-        await spawnGitChecked(["push", "-u", "origin", branchName], {
-          cwd: repoRoot,
-        });
-
-        const { data: pr } = await octokit.request(
-          "POST /repos/{owner}/{repo}/pulls",
-          {
-            owner: REPO_OWNER,
-            repo: REPO_NAME,
-            title: `chore(vendor-drift): re-vendor gosprinto/compliance-skills ${dateSuffix}`,
-            body: "Automated re-vendor on upstream drift. Resolution path: knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md. NOTICE last-verified bumped at PR-creation time. Classifier exit and labels set in commit metadata.",
-            base: "main",
-            head: branchName,
+          allowedPaths: [`${SKILL_PREFIX}/NOTICE`, `${SKILL_PREFIX}/references/`],
+          runStartedAt,
+          scheduledIssueLabel: SENTRY_MONITOR_SLUG,
+          prBody:
+            "Automated re-vendor on upstream drift. Resolution path: knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md. NOTICE last-verified bumped at PR-creation time. Classifier exit and labels set in commit metadata.",
+          prLabels: detectResult.labels,
+          syntheticChecks: {
+            names: SYNTHETIC_CHECK_NAMES,
+            summary: "Re-vendor on upstream drift detection — see runbook",
           },
-        );
-
-        // Apply labels
-        if (detectResult.labels.length > 0) {
-          await octokit.request(
-            "POST /repos/{owner}/{repo}/issues/{issue_number}/labels",
-            {
-              owner: REPO_OWNER,
-              repo: REPO_NAME,
-              issue_number: pr.number,
-              labels: detectResult.labels,
-            },
-          );
-        }
-
-        // Synthetic checks
-        const commitSha = await spawnGitCapture(["rev-parse", "HEAD"], {
-          cwd: repoRoot,
-        });
-
-        for (const name of SYNTHETIC_CHECK_NAMES) {
-          await octokit.request(
-            "POST /repos/{owner}/{repo}/check-runs",
-            {
-              owner: REPO_OWNER,
-              repo: REPO_NAME,
-              name,
-              head_sha: commitSha,
-              status: "completed",
-              conclusion: "success",
-              output: {
-                title: "Bot PR",
-                summary:
-                  "Re-vendor on upstream drift detection — see runbook",
-              },
-            },
-          );
-        }
-
-        // Auto-merge
-        try {
-          await octokit.request(
-            "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge",
-            {
-              owner: REPO_OWNER,
-              repo: REPO_NAME,
-              pull_number: pr.number,
-              merge_method: "squash",
-            },
-          );
-        } catch {
-          logger.warn(
-            { fn: "cron-content-vendor-drift", pr: pr.number },
-            "Direct merge failed — PR left open for review",
-          );
-        }
-      });
+          mergeMode: "direct",
+          octokit,
+          logger,
+        }),
+      );
     }
 
     // Route: open issue for security-relevant drift
