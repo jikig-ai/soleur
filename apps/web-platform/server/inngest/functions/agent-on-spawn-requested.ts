@@ -45,6 +45,8 @@ import {
   LEADER_MAX_TURNS,
   LEADER_MAX_TOKENS,
   PER_SPAWN_COST_CEILING_CENTS,
+  SONNET_MODEL,
+  HAIKU_MODEL,
   type LeaderActionClass,
   type LeaderPromptModule,
 } from "@/server/inngest/leader-prompts";
@@ -86,14 +88,21 @@ interface ModelPricing {
   cacheReadPerToken: number;
   cacheCreatePerToken: number;
 }
-const MODEL_PRICING: Record<string, ModelPricing> = {
-  "claude-sonnet-4-6": {
+// Keys are computed properties referencing the SSOT model-ID constants
+// (leader-prompts/constants.ts) so a key can never drift out of byte-identity
+// with `leaderModule.model` — the `?? {all-zeros}` fallback at the lookup
+// below would otherwise silently bill at zero. Parity is CI-guarded by
+// model-tiers.test.ts (#5106). Opus is intentionally absent: `leaderModule
+// .model` is `AnthropicModelId` (sonnet|haiku), the only value flowing
+// through `MODEL_PRICING[…]`, so opus never reaches this lookup.
+export const MODEL_PRICING: Record<string, ModelPricing> = {
+  [SONNET_MODEL]: {
     inputPerToken: 3 / 1_000_000,
     outputPerToken: 15 / 1_000_000,
     cacheReadPerToken: 0.3 / 1_000_000,
     cacheCreatePerToken: 3.75 / 1_000_000,
   },
-  "claude-haiku-4-5-20251001": {
+  [HAIKU_MODEL]: {
     inputPerToken: 0.8 / 1_000_000,
     outputPerToken: 4 / 1_000_000,
     cacheReadPerToken: 0.08 / 1_000_000,
