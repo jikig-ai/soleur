@@ -119,7 +119,36 @@ fi
 
 # guardrails:require-milestone — Block gh issue create without --milestone
 if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create'; then
-  if ! echo "$COMMAND" | grep -qF -- '--milestone'; then
+  # Exempt issue creation targeting an EXTERNAL repo (--repo owner/name where
+  # owner is not our org). The constitution backlog-hygiene rule applies only to
+  # OUR issues; external/vendor repos (e.g. upstream bug reports) have their own
+  # milestone sets and forcing --milestone would fail against them.
+  # Quote-aware tokenization: `xargs -n1` honors shell quoting, so a `--repo`
+  # substring embedded in a quoted --title/--body value is NOT mistaken for a
+  # real flag (it stays inside one token), and a quoted `--repo "jikig-ai/soleur"`
+  # is recognized correctly. Only a standalone --repo/-R/--repo=/-R= token counts.
+  # Fail toward GATING: if xargs errors (unbalanced quotes → empty tokens) or no
+  # external target is found, the milestone gate stays on. If our own repo appears
+  # in ANY --repo/-R flag, the gate stays on regardless of other tokens.
+  _repo_toks=(); _our_repo=0; _ext_repo=0
+  mapfile -t _repo_toks < <(printf '%s\n' "$COMMAND" | xargs -n1 2>/dev/null) || true
+  _ri=0
+  while (( _ri < ${#_repo_toks[@]} )); do
+    _rt="${_repo_toks[$_ri]}"; _rv=""
+    case "$_rt" in
+      --repo|-R) _rv="${_repo_toks[$((_ri + 1))]:-}" ;;
+      --repo=*)  _rv="${_rt#--repo=}" ;;
+      -R=*)      _rv="${_rt#-R=}" ;;
+    esac
+    case "$_rv" in
+      jikig-ai/*) _our_repo=1 ;;
+      */*)        _ext_repo=1 ;;
+    esac
+    _ri=$((_ri + 1))
+  done
+  # Gate only when no external target was named AND our own repo wasn't named
+  # (our repo appearing anywhere wins, so an external token can't ungate it).
+  if [[ "$_our_repo" == 1 || "$_ext_repo" == 0 ]] && ! echo "$COMMAND" | grep -qF -- '--milestone'; then
     emit_incident "guardrails-require-milestone" "deny" "gh issue create must include --milestone" "$COMMAND"
     jq -n '{
       hookSpecificOutput: {
