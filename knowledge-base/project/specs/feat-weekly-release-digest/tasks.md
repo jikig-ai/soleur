@@ -60,11 +60,11 @@ Derived from `knowledge-base/project/plans/2026-06-10-feat-weekly-release-digest
 
 ## Phase 5 — Provisioning (pre-merge, in-session)
 
-- [ ] 5.1 Create `#releases` webhook via bot API (URL parsed in-shell, never echoed)
-- [ ] 5.2 If 403: grant path or operator click-path (secret → Doppler directly, never chat)
-- [ ] 5.3 Doppler prd write `DISCORD_RELEASES_WEBHOOK_URL` (explicit operator ack first)
-- [ ] 5.4 Verify AC11 live-webhook probe (`GET /webhooks/{id}/{token}` → 200 + channel_id)
-- [ ] 5.5 Rotation runbook line incl. `gh workflow run web-platform-release.yml` redeploy
+- [x] 5.1 Create `#releases` webhook via bot API (URL parsed in-shell, never echoed)
+- [x] 5.2 If 403 (N/A — MANAGE_WEBHOOKS present, no 403): grant path or operator click-path (secret → Doppler directly, never chat)
+- [x] 5.3 Doppler prd write `DISCORD_RELEASES_WEBHOOK_URL` (explicit operator ack first)
+- [x] 5.4 Verify AC11 live-webhook probe (`GET /webhooks/{id}/{token}` → 200 + channel_id)
+- [x] 5.5 Rotation runbook line incl. `gh workflow run web-platform-release.yml` redeploy
 
 ## Phase 6 — Post-merge (after `gh pr ready` + merge)
 
