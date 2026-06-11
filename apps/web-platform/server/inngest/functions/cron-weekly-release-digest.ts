@@ -33,6 +33,7 @@ import {
   redactToken,
   type HandlerArgs,
 } from "./_cron-shared";
+import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 
 const FUNCTION_NAME = "cron-weekly-release-digest";
 const SENTRY_MONITOR_SLUG = "cron-weekly-release-digest";
@@ -41,9 +42,9 @@ const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
 // Never-downgrade-shaped (ADR-053): unattended public brand-voice surface at
 // single-user-incident threshold — judgment-adjacent, NOT a mechanical step;
 // do not sweep to haiku. Concrete ID per the ADR-053 cron-constants
-// lifecycle (matches cron-compound-promote.ts); registry consolidation
-// deferred to #5106.
-const ANTHROPIC_MODEL = "claude-sonnet-4-6";
+// lifecycle (matches cron-compound-promote.ts); the sonnet pin is now
+// sourced from the EXECUTION_MODEL registry constant (consolidated in #5106).
+const ANTHROPIC_MODEL = EXECUTION_MODEL;
 const ANTHROPIC_MAX_TOKENS = 2048;
 const ANTHROPIC_TIMEOUT_MS = 60_000;
 // Raw bodies are bounded BEFORE the PII regexes run: EMAIL_RE is O(n²) and a
