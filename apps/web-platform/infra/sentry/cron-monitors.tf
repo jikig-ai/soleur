@@ -592,3 +592,212 @@ resource "sentry_cron_monitor" "cron_weekly_release_digest" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# ---------------------------------------------------------------------------
+# 2026-06-11 IaC-gap backfill (surfaced by PR #5133's AC12 verification):
+# 13 Inngest crons (+ a 14th, nag-4216-readiness, surfaced by the parity
+# test itself) posted heartbeats to monitor slugs that had NO
+# sentry_cron_monitor resource — Sentry's check-in API silently accepts or
+# drops check-ins for unknown slugs, so a dead cron in this set paged nowhere.
+# One resource per code slug below; the parity test
+# (apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts)
+# asserts every SENTRY_MONITOR_SLUG in server/inngest/functions/ has a
+# matching `name` here, so a new cron cannot ship without its monitor.
+#
+# Margins/runtimes follow the file's established cohorts: Inngest-fired
+# ≤2-min jitter → 30-min margin everywhere; claude-eval cohort gets the
+# 55-min runtime (50-min MAX_TURN_DURATION_MS + slack, mirroring
+# scheduled_bug_fixer); pure-TS/script crons get 10-15 min. The four
+# Tier-2-dormant claude-spawn crons (campaign-calendar, growth-audit,
+# growth-execution, seo-aeo-audit) post their deferral heartbeat on
+# schedule today, so missed-check-in detection is live for them now and
+# stays correctly sized for Tier-2 restoration.
+# ---------------------------------------------------------------------------
+
+# Daily 06:23 UTC — KB workspace sync-health probe (pure TS).
+resource "sentry_cron_monitor" "cron_workspace_sync_health" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "cron-workspace-sync-health"
+  schedule                = { crontab = "23 6 * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# Weekly Mon 16:00 UTC — claude-eval cohort (Tier-2 dormant; deferral
+# heartbeat fires on schedule).
+resource "sentry_cron_monitor" "scheduled_campaign_calendar" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-campaign-calendar"
+  schedule                = { crontab = "0 16 * * 1" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 55
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# Daily 09:30 UTC — cloud-task heartbeat aggregator (pure TS).
+resource "sentry_cron_monitor" "scheduled_cloud_task_heartbeat" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-cloud-task-heartbeat"
+  schedule                = { crontab = "30 9 * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# Daily 14:00 UTC — content publisher (spawns content-publisher.sh,
+# MAX_RUN_DURATION_MS 10 min → 15-min runtime budget).
+resource "sentry_cron_monitor" "scheduled_content_publisher" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-content-publisher"
+  schedule                = { crontab = "0 14 * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 15
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# Weekly Mon 07:00 UTC — claude-eval cohort (Tier-2 dormant).
+resource "sentry_cron_monitor" "scheduled_growth_audit" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-growth-audit"
+  schedule                = { crontab = "0 7 * * 1" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 55
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# 1st + 15th 10:00 UTC — claude-eval cohort (Tier-2 dormant).
+resource "sentry_cron_monitor" "scheduled_growth_execution" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-growth-execution"
+  schedule                = { crontab = "0 10 1,15 * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 55
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# Weekly Mon 11:00 UTC — LinkedIn token expiry check (pure TS).
+resource "sentry_cron_monitor" "scheduled_linkedin_token_check" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-linkedin-token-check"
+  schedule                = { crontab = "0 11 * * 1" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# Hourly :17 — membership-health invariant probe (pure TS, read-only RPC).
+resource "sentry_cron_monitor" "scheduled_membership_health" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-membership-health"
+  schedule                = { crontab = "17 * * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# Monthly 1st 07:00 UTC — Plausible goals reconciliation (pure TS).
+resource "sentry_cron_monitor" "scheduled_plausible_goals" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-plausible-goals"
+  schedule                = { crontab = "0 7 1 * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# Quarterly (1 Jan/Apr/Jul/Oct) 09:00 UTC — stale-rule retirement proposer
+# (spawns rule-prune.sh, MAX_RUN_DURATION_MS 5 min → 10-min runtime).
+resource "sentry_cron_monitor" "scheduled_rule_prune" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-rule-prune"
+  schedule                = { crontab = "0 9 1 1,4,7,10 *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# Daily 06:13 UTC — GitHub ruleset bypass-actor audit (pure TS).
+resource "sentry_cron_monitor" "scheduled_ruleset_bypass_audit" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-ruleset-bypass-audit"
+  schedule                = { crontab = "13 6 * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# Weekly Mon 11:00 UTC — claude-eval cohort (Tier-2 dormant).
+resource "sentry_cron_monitor" "scheduled_seo_aeo_audit" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-seo-aeo-audit"
+  schedule                = { crontab = "0 11 * * 1" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 55
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# Weekly Mon 06:00 UTC — Plausible analytics snapshot (spawns
+# weekly-analytics.sh; no explicit cap → 15-min runtime budget).
+resource "sentry_cron_monitor" "scheduled_weekly_analytics" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-weekly-analytics"
+  schedule                = { crontab = "0 6 * * 1" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 15
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# Weekly Mon 14:00 UTC — #4216 readiness nag (pure TS). Surfaced by the
+# parity test below the 13-slug backfill: the initial sweep grepped only
+# `SENTRY_MONITOR_SLUG = ` declarations and the readiness nag was the 14th.
+resource "sentry_cron_monitor" "scheduled_nag_4216_readiness" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-nag-4216-readiness"
+  schedule                = { crontab = "0 14 * * 1" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
