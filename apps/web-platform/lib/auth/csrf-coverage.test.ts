@@ -34,6 +34,11 @@ const EXEMPT_ROUTES = new Set([
   // no browser session, so origin-validation CSRF does not apply — the secret is
   // the trust boundary. Same class as trigger-cron / kb-drift-ingest above.
   "app/api/internal/schedule-reminder/route.ts",
+  // #5103 — Resend Inbound email webhook uses svix signature verification
+  // (resend.webhooks.verify → standardwebhooks constant-time HMAC + ±5-min
+  // timestamp tolerance), not cookies. Called by Resend's servers (no browser
+  // session). Same class as the stripe/github webhook routes above. See ADR-055.
+  "app/api/webhooks/resend-inbound/route.ts",
 ]);
 
 describe("CSRF coverage", () => {
