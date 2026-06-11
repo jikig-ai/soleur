@@ -105,3 +105,22 @@ surfaced across the pipeline phases:
 category: best-practices
 module: email-triage, supabase-migrations, e2e-harness, deepen-plan
 related: #5103, PR #5125, migration 102, ADR-055
+
+## Addendum — Resend receiving is domain-scoped (provisioning-time discovery)
+
+The plan assumed enabling Resend receiving on the verified `soleur.ai` domain would
+let the inbound MX live on a subdomain `inbound.soleur.ai`. **Live probe (2026-06-11)
+disproved this:** enabling receiving on a domain object produces a Receiving MX with
+`name: ""` — the **apex**. On a brand-critical root whose apex MX is owned by another
+provider (Proton), adding that record would split all `@domain` delivery and break the
+operator's real mail. The subdomain ingress the plan wanted requires `inbound.soleur.ai`
+registered as its **own** Resend domain.
+
+Also: the live Resend webhook-create API uses `endpoint`, not the documented
+`endpoint_url` (returns "Missing `endpoint` field"). **Prevention:** a Phase-0
+deepen-plan probe of a vendor capability must exercise the capability against a
+*scratch/dummy resource* and inspect the **resulting records/contract**, not just
+confirm the call shapes return 200 — domain-scoping, record placement, and field
+names are exactly the load-bearing details a 200-only probe misses. Reversibility
+saved this: receiving-enable was a PATCH, reverted with `receiving: "disabled"`,
+restoring the apex to clean `verified` with zero mail impact.

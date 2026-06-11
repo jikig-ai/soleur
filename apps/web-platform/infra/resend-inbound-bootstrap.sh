@@ -31,8 +31,18 @@
 
 set -euo pipefail
 
+# IMPORTANT (verified live 2026-06-11, #5103): Resend RECEIVING is DOMAIN-SCOPED.
+# Enabling receiving on the apex `soleur.ai` domain produces a Receiving MX on the
+# APEX (record name ""), which would collide with the operator's Proton apex MX and
+# split all @soleur.ai delivery — a brand-critical mail outage. To keep the apex
+# untouched (plan TR1), the inbound ingress MUST be its OWN Resend domain
+# `inbound.soleur.ai`: this script (a) ensures that domain exists + is verified,
+# (b) enables receiving on IT (MX lands on inbound.soleur.ai, additive to the apex),
+# (c) ensures the account-level email.received webhook exists. Proton Sieve then
+# forwards ops@soleur.ai → <anything>@inbound.soleur.ai.
 RESEND_API="https://api.resend.com"
-DOMAIN_NAME="soleur.ai"
+DOMAIN_NAME="inbound.soleur.ai"
+APEX_DOMAIN="soleur.ai"  # must stay Proton-owned; this script never touches it
 WEBHOOK_ENDPOINT="https://app.soleur.ai/api/webhooks/resend-inbound"
 WEBHOOK_EVENT="email.received"
 DOPPLER_PROJECT="soleur"
@@ -76,29 +86,39 @@ resend_api() {
 # ---------------------------------------------------------------------------
 # 1. Account-ownership preflight
 # ---------------------------------------------------------------------------
-echo "==> [1/5] Account-ownership preflight (${DOMAIN_NAME})"
+echo "==> [1/5] Ensuring the dedicated receiving domain (${DOMAIN_NAME})"
+echo "    (apex ${APEX_DOMAIN} is Proton-owned and is NEVER touched by this script)"
 domains_json="$(resend_api GET /domains)"
 
 domain_id="$(jq -r --arg name "$DOMAIN_NAME" \
   '.data[]? | select(.name == $name) | .id' <<<"$domains_json")"
 
 if [[ -z "$domain_id" || "$domain_id" == "null" ]]; then
-  echo "ERROR: domain '${DOMAIN_NAME}' is NOT present in this Resend account." >&2
-  echo "       Two Resend accounts have existed — this RESEND_API_KEY belongs" >&2
-  echo "       to the wrong one. Aborting before provisioning a dead ingress." >&2
-  echo "       Domains visible to this key:" >&2
-  jq -r '.data[]?.name // empty' <<<"$domains_json" | sed 's/^/         - /' >&2
-  exit 1
+  # Register inbound.soleur.ai as its OWN Resend domain (region pinned to match
+  # the apex domain's eu-west-1). Returns the DKIM/SPF records to add to dns.tf.
+  echo "    domain absent — creating Resend domain '${DOMAIN_NAME}' (eu-west-1)"
+  create_domain="$(resend_api POST /domains \
+    "$(jq -nc --arg name "$DOMAIN_NAME" '{name: $name, region: "eu-west-1"}')")"
+  domain_id="$(jq -r '.id // empty' <<<"$create_domain")"
+  if [[ -z "$domain_id" ]]; then
+    echo "ERROR: could not create domain '${DOMAIN_NAME}':" >&2
+    jq -r '.message // "unparseable response"' <<<"$create_domain" >&2
+    exit 1
+  fi
+  echo "    OK: created (id ${domain_id}). Add the DKIM/SPF records printed in [5/5]"
+  echo "    to DNS, then RE-RUN this script once they propagate to flip to verified."
 fi
 
-domain_status="$(jq -r --arg name "$DOMAIN_NAME" \
-  '.data[]? | select(.name == $name) | .status' <<<"$domains_json")"
-if [[ "$domain_status" != "verified" ]]; then
-  echo "ERROR: domain '${DOMAIN_NAME}' exists but status is '${domain_status}'" >&2
-  echo "       (expected 'verified'). Fix domain verification first." >&2
-  exit 1
+domain_json="$(resend_api GET "/domains/${domain_id}")"
+domain_status="$(jq -r '.status // "unknown"' <<<"$domain_json")"
+echo "    ${DOMAIN_NAME} status: ${domain_status} (id ${domain_id})"
+# 'verified' or 'partially_verified' (sending verified, receiving MX pending) both
+# permit enabling receiving; only a brand-new 'pending'/'not_started' domain whose
+# DKIM has not propagated yet should pause here for a DNS round-trip.
+if [[ "$domain_status" == "pending" || "$domain_status" == "not_started" ]]; then
+  echo "    NOTE: DKIM not yet verified — receiving-enable will still be attempted,"
+  echo "    but the domain only goes fully live once the [5/5] records propagate."
 fi
-echo "    OK: ${DOMAIN_NAME} present + verified (id ${domain_id})"
 
 # ---------------------------------------------------------------------------
 # 2. Enable inbound receiving on the domain
@@ -129,6 +149,9 @@ fi
 echo "==> [3/5] Ensuring ${WEBHOOK_EVENT} webhook for ${WEBHOOK_ENDPOINT}"
 webhooks_json="$(resend_api GET /webhooks)"
 
+# NOTE: the live Resend API uses `endpoint` (NOT the documented `endpoint_url`);
+# verified 2026-06-11 against the prod account — `endpoint_url` returns
+# "Missing `endpoint` field". Both names are matched here for forward-compat.
 existing_webhook_id="$(jq -r \
   --arg url "$WEBHOOK_ENDPOINT" --arg ev "$WEBHOOK_EVENT" \
   '.data[]? | select(.endpoint == $url or .endpoint_url == $url)
@@ -152,7 +175,7 @@ else
   # {endpoint_url, events} → response carries the one-time signing_secret.
   create_response="$(resend_api POST /webhooks \
     "$(jq -nc --arg url "$WEBHOOK_ENDPOINT" --arg ev "$WEBHOOK_EVENT" \
-       '{endpoint_url: $url, events: [$ev]}')")"
+       '{endpoint: $url, events: [$ev]}')")"
   webhook_id="$(jq -r '.id // empty' <<<"$create_response")"
   signing_secret="$(jq -r '.signing_secret // .secret // empty' <<<"$create_response")"
   if [[ -z "$webhook_id" || -z "$signing_secret" ]]; then
@@ -169,9 +192,11 @@ fi
 echo "==> [4/5] Writing ${SECRET_NAME} into Doppler ${DOPPLER_PROJECT}/${DOPPLER_CONFIG}"
 if [[ -n "$signing_secret" ]]; then
   # The secret travels stdin → doppler ONLY. No echo, no argv, no tmp file.
+  # `--silent` suppresses the success line, but `doppler secrets set` still prints
+  # the full config table to stdout — redirect to /dev/null so no secret leaks.
   printf '%s' "$signing_secret" | doppler secrets set "$SECRET_NAME" \
     --project "$DOPPLER_PROJECT" --config "$DOPPLER_CONFIG" \
-    --no-interactive --silent
+    --no-interactive --silent > /dev/null
   echo "    OK: ${SECRET_NAME} set (whsec_***…${signing_secret: -4})"
 else
   echo "    SKIPPED: no secret captured this run (pre-existing webhook whose"
