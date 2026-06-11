@@ -234,7 +234,9 @@ MOCK
 #                               error.tsx sentinel string
 #   MOCK_CURL_LOGIN_EMPTY=1     /login returns 200 with empty body
 #   MOCK_CURL_INNGEST_PUT_FAIL=1 :3000/api/inngest PUT returns curl-exit-7
-#                               (transient :3000-down; SUT must tolerate via || true)
+#                               (transient :3000-down; SUT captures it as HTTP 000)
+#   MOCK_CURL_INNGEST_PUT_HTTP=NNN  :3000/api/inngest PUT returns HTTP NNN (default 200;
+#                               exercises the reachable-but-rejected diagnostic path)
 create_curl_mock() {
   cat > "$1/curl" << 'MOCK'
 #!/bin/bash
@@ -288,16 +290,16 @@ case "$URL" in
     ;;
   *":3000/api/inngest"*)
     # #5159: loopback SDK re-registration PUT fired inside verify_inngest_health's
-    # cron-plan loop. Without this explicit arm the URL would fall through to the
-    # post-esac fallback (unconditional exit 0), so MOCK_CURL_INNGEST_PUT_FAIL
-    # could not simulate a transient :3000-down window. Default: success (mirrors
-    # a healthy `{"message":"Successfully registered","modified":true}` PUT).
+    # cron-plan loop. The SUT (#5159 follow-up) captures the HTTP code via
+    # `-o /dev/null -w '%{http_code}'`, so this arm echoes a 3-digit code on
+    # stdout (WANT_HTTP_CODE set by the -w parse above). MOCK_CURL_INNGEST_PUT_FAIL=1
+    # simulates connection-refused (curl exit 7 → the SUT's `|| =000` maps it to
+    # 000). MOCK_CURL_INNGEST_PUT_HTTP overrides the returned code (default 200) to
+    # exercise the reachable-but-rejected path (e.g. 404/502) the diagnostic surfaces.
     if [[ "${MOCK_CURL_INNGEST_PUT_FAIL:-}" == "1" ]]; then
-      # curl exit 7 (connection refused) shape — empty body, non-zero exit. The
-      # SUT's `|| true` must swallow this so the cron-plan loop stays authoritative.
       exit 7
     fi
-    write_body '{"message":"Successfully registered","modified":true}'
+    if [[ "$WANT_HTTP_CODE" == "1" ]]; then echo "${MOCK_CURL_INNGEST_PUT_HTTP:-200}"; fi
     exit 0
     ;;
   *"/health"*)
@@ -2018,6 +2020,18 @@ assert_state_contains "restart inngest succeeds when re-register PUT fails (#515
   "restart inngest _ latest" \
   "export MOCK_CURL_INNGEST_PUT_FAIL=1"
 
+# #5159 follow-up: a reachable-but-REJECTED PUT (HTTP 4xx/5xx — the 2026-06-11
+# AC15 signature where the loopback PUT did not re-plan crons) must ALSO not
+# abort the deploy. The SUT captures the code via `-w '%{http_code}'` (no `-f`,
+# so a 404 yields its code, not an empty failure) and continues to the cron gate.
+# Same coverage-honesty caveat as AC6: the /v1/functions mock returns a planned
+# registry regardless of the PUT, so this proves the captured non-2xx does not
+# abort — efficacy of the registration itself is only provable live (AC15).
+assert_state_contains "restart inngest succeeds when re-register PUT returns 404 (#5159 follow-up)" \
+  "success" "0" \
+  "restart inngest _ latest" \
+  "export MOCK_CURL_INNGEST_PUT_HTTP=404"
+
 # #5159 AC4 + AC7: the loopback re-registration PUT must be wired EXACTLY once,
 # INSIDE verify_inngest_health's cron-plan loop, BEFORE the /v1/functions poll.
 # Source-grep gate (the seq mock collapses loops so iteration-count is not
@@ -2034,8 +2048,8 @@ assert_state_contains "restart inngest succeeds when re-register PUT fails (#515
 echo ""
 echo "--- verify_inngest_health re-register PUT wiring (#5159) ---"
 TOTAL=$((TOTAL + 1))
-PUT_COUNT=$(grep -cE 'curl -sf --max-time 10 -X PUT http://127\.0\.0\.1:3000/api/inngest' "$DEPLOY_SCRIPT" || true)
-PUT_LINE=$(grep -nE 'curl -sf --max-time 10 -X PUT http://127\.0\.0\.1:3000/api/inngest' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
+PUT_COUNT=$(grep -cE -- '--max-time 10 -X PUT http://127\.0\.0\.1:3000/api/inngest' "$DEPLOY_SCRIPT" || true)
+PUT_LINE=$(grep -nE -- '--max-time 10 -X PUT http://127\.0\.0\.1:3000/api/inngest' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
 CRON_FOR_LINE=$(grep -nE 'seq 1 "\$cron_max_attempts"' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
 PUT_FUNCTIONS_LINE=$(grep -nE 'curl -sf --max-time 5 http://127\.0\.0\.1:8288/v1/functions' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
 # Function-body range: from the verify_inngest_health def to its closing brace.
@@ -2051,6 +2065,29 @@ if [[ "$PUT_COUNT" -eq 1 \
 else
   FAIL=$((FAIL + 1))
   echo "  FAIL: re-register PUT wiring (#5159) (count=$PUT_COUNT put_line=$PUT_LINE cron_for=$CRON_FOR_LINE functions_line=$PUT_FUNCTIONS_LINE fn_start=$VERIFY_FN_START fn_end=$VERIFY_FN_END)"
+fi
+
+# #5159 follow-up: the re-register PUT must CAPTURE its HTTP code (no silent
+# no-op) and persist it for no-SSH diagnosis. Assert, within verify_inngest_health:
+#   (a) the PUT uses the code-capturing form (`-w '%{http_code}'`), NOT a bare
+#       `curl -sf ... || true` that discards the code;
+#   (b) a logger line records INNGEST_REREGISTER with the code;
+#   (c) the code is written to $INNGEST_REGISTER_HTTP_FILE (cat-deploy-state.sh
+#       surfaces it in /hooks/deploy-status).
+echo ""
+echo "--- verify_inngest_health re-register PUT diagnostic capture (#5159 follow-up) ---"
+TOTAL=$((TOTAL + 1))
+FN_BODY=$(awk '/^verify_inngest_health\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")
+CAP_OK=$(printf '%s\n' "$FN_BODY" | grep -cE "inngest_register_http=\\\$\(curl -s -o /dev/null -w '%\\{http_code\\}' --max-time 10 -X PUT" || true)
+LOG_OK=$(printf '%s\n' "$FN_BODY" | grep -cE 'logger -t "\$LOG_TAG" "INNGEST_REREGISTER:' || true)
+MARK_OK=$(printf '%s\n' "$FN_BODY" | grep -cE 'printf .* > "\$INNGEST_REGISTER_HTTP_FILE"' || true)
+SURFACE_OK=$(grep -cE 'inngest_register_http:' "$SCRIPT_DIR/cat-deploy-state.sh" || true)
+if [[ "$CAP_OK" -ge 1 && "$LOG_OK" -ge 1 && "$MARK_OK" -ge 1 && "$SURFACE_OK" -ge 1 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: PUT captures HTTP code + logs + persists marker, surfaced by cat-deploy-state.sh — #5159 follow-up"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: re-register diagnostic capture (#5159 follow-up) (capture=$CAP_OK logger=$LOG_OK marker=$MARK_OK surface=$SURFACE_OK)"
 fi
 
 # #4652 AC3: the `deploy inngest` SUCCESS path must gate on verify_inngest_health
@@ -2184,7 +2221,7 @@ DG_POLL_INTERVAL=$(grep -oE 'POLL_INTERVAL=[0-9]+' "$RESTART_WORKFLOW" | head -1
 # NOT overlap the sleep). When :3000 is listening-but-hung every PUT consumes
 # its full --max-time, so the cron-loop per-attempt cost gains +DG_PUT_MAXTIME.
 # Extracted by shape (the only `--max-time N -X PUT` line in the script).
-DG_PUT_MAXTIME=$(grep -oE 'curl -sf --max-time [0-9]+ -X PUT' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' | tail -1 || true)
+DG_PUT_MAXTIME=$(grep -oE -- '--max-time [0-9]+ -X PUT' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' | tail -1 || true)
 # Exactly-one assignment per extraction shape — a duplicate (or zero) match
 # makes the head -1 extraction silently ambiguous (e.g. a future helper
 # earlier in ci-deploy.sh with its own ${1:-N} default would hijack
@@ -2195,7 +2232,7 @@ DG_CRON_COUNT=$(grep -cE '^[[:space:]]*local cron_max_attempts=[0-9]+' "$DEPLOY_
 DG_STOP_COUNT=$(printf '%s\n' "$DG_INNGEST_UNIT" | grep -cE '^TimeoutStopSec=[0-9]+' || true)
 DG_MAX_POLLS_COUNT=$(grep -cE 'MAX_POLLS=[0-9]+' "$RESTART_WORKFLOW" || true)
 DG_POLL_INTERVAL_COUNT=$(grep -cE 'POLL_INTERVAL=[0-9]+' "$RESTART_WORKFLOW" || true)
-DG_PUT_MAXTIME_COUNT=$(grep -cE 'curl -sf --max-time [0-9]+ -X PUT' "$DEPLOY_SCRIPT" || true)
+DG_PUT_MAXTIME_COUNT=$(grep -cE -- '--max-time [0-9]+ -X PUT' "$DEPLOY_SCRIPT" || true)
 DG_OK=1
 DG_WHY=""
 # Validate BEFORE arithmetic: bash $((v * 5)) on an empty string evaluates to

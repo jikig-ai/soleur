@@ -22,7 +22,7 @@
 // preserved via EXECUTION_MODEL and its rationale comment stays in place.
 //
 // Mixed alias/dated convention (do NOT normalize): `claude-sonnet-4-6` and
-// `claude-opus-4-7` are aliases (alias == dated, no separate dated ID),
+// `claude-opus-4-8` are aliases (alias == dated, no separate dated ID),
 // while `claude-haiku-4-5-20251001` (imported transitively via constants)
 // is the dated form. A future cleanup must preserve the dated haiku literal
 // byte-for-byte.
@@ -42,4 +42,4 @@ import { SONNET_MODEL } from "./leader-prompts/constants";
 export const EXECUTION_MODEL = SONNET_MODEL;
 
 /** Deep-audit crons run on opus-4-7. Pinned exactly; re-tiering is out of scope (ADR-053). */
-export const AUDIT_MODEL = "claude-opus-4-7" as const;
+export const AUDIT_MODEL = "claude-opus-4-8" as const;

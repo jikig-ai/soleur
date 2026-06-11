@@ -83,6 +83,51 @@ resource "cloudflare_record" "mx_send_send" {
   ttl      = 1
 }
 
+# DNS records for inbound.soleur.ai subdomain (Resend Inbound — operator email
+# triage, #5103, ADR-055). This is a DEDICATED Resend domain, distinct from the
+# apex soleur.ai (Proton) and send.soleur.ai (Resend outbound). Resend receiving
+# is domain-scoped, so the Receiving MX lands on inbound.soleur.ai — NEVER the
+# apex — keeping the operator's Proton apex mail untouched. Proton Sieve forwards
+# ops@soleur.ai → <addr>@inbound.soleur.ai; mail to inbound.soleur.ai is received
+# by Resend, which fires the email.received webhook. Values minted by the
+# pre-merge bootstrap run (resend-inbound-bootstrap.sh) 2026-06-11.
+resource "cloudflare_record" "dkim_resend_inbound" {
+  zone_id = var.cf_zone_id
+  name    = "resend._domainkey.inbound"
+  content = "p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCy1ZgdHIVsVsFSdqNBTBZkUIhvXSDFee/BRBpLyUcQZjstW/0M6y8ZEp81siNH1J+NT+gvSacyEHpc3DZLanXswnJ5h1ooBpjjvajxROqfoYc2GjMKtCbN+3CWuISj6GArG8fxoNE/OoSgsc58lrYyTK8UsTPskTE5c2fDF4FzPQIDAQAB"
+  type    = "TXT"
+  ttl     = 1
+}
+
+resource "cloudflare_record" "spf_send_inbound" {
+  zone_id = var.cf_zone_id
+  name    = "send.inbound"
+  content = "v=spf1 include:amazonses.com ~all"
+  type    = "TXT"
+  ttl     = 1
+}
+
+resource "cloudflare_record" "mx_send_inbound" {
+  zone_id  = var.cf_zone_id
+  name     = "send.inbound"
+  content  = "feedback-smtp.eu-west-1.amazonses.com"
+  type     = "MX"
+  priority = 10
+  ttl      = 1
+}
+
+# Receiving MX — the load-bearing inbound record. Mail to inbound.soleur.ai is
+# routed to Amazon SES (eu-west-1) which Resend receives. Apex Proton MX is
+# untouched (this is a subdomain record).
+resource "cloudflare_record" "mx_receiving_inbound" {
+  zone_id  = var.cf_zone_id
+  name     = "inbound"
+  content  = "inbound-smtp.eu-west-1.amazonaws.com"
+  type     = "MX"
+  priority = 10
+  ttl      = 1
+}
+
 # Multi-rua: aggregate reports fan out to (1) the apex Proton mailbox and
 # (2) the free Postmark DMARC aggregator, which turns reports into a
 # human-readable weekly failure digest (#3012, brainstorm 2026-06-02).

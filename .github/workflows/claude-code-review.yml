@@ -63,3 +63,30 @@ jobs:
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
 
+      # Capture metered API spend (#5086). Extracts ONLY an allowlisted record from
+      # the action's execution_file (the raw log is never persisted) and uploads it
+      # as a per-run artifact; a monthly agent-run reconciliation rolls it into the
+      # ops ledger. Non-fatal: cost-capture flakiness must never red the review job.
+      - name: Capture API spend
+        if: steps.claude-review.outputs.execution_file != ''
+        continue-on-error: true
+        env:
+          SOLEUR_RUN_ID: ${{ github.run_id }}
+          SOLEUR_SHA: ${{ github.sha }}
+          SOLEUR_WORKFLOW: claude-code-review.yml
+          EXEC_FILE: ${{ steps.claude-review.outputs.execution_file }}
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/api-spend
+          out="/tmp/api-spend/api-spend-${SOLEUR_RUN_ID}.json"
+          bash scripts/extract-api-spend.sh "$EXEC_FILE" > "$out" \
+            || { echo "::warning::api-spend capture failed (non-fatal)"; rm -f "$out"; exit 0; }
+      - name: Upload API spend artifact
+        if: steps.claude-review.outputs.execution_file != '' && hashFiles(format('/tmp/api-spend/api-spend-{0}.json', github.run_id)) != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: api-spend-${{ github.run_id }}
+          path: /tmp/api-spend/api-spend-${{ github.run_id }}.json
+          retention-days: 90
+          if-no-files-found: ignore
+

@@ -49,6 +49,13 @@ PLUGIN_MOUNT_DIR="${PLUGIN_MOUNT_DIR:-/mnt/data/plugins/soleur}"
 # signal. We persist structured state to /var/lock/ci-deploy.state so that the
 # /hooks/deploy-status webhook endpoint (cat-deploy-state.sh) can surface it.
 STATE_FILE="${CI_DEPLOY_STATE:-/var/lock/ci-deploy.state}"
+# #5159 follow-up: the latest inngest re-register PUT's HTTP code is persisted
+# here so cat-deploy-state.sh can surface it in /hooks/deploy-status WITHOUT any
+# host SSH. The 2026-06-11 AC15 failure (loopback PUT ran its full budget but
+# crons never re-planned) was undiagnosable because `curl -sf … || true` swallows
+# the code; this marker makes the no-op visible (000=unreachable, 4xx/5xx=rejected,
+# 2xx=registered-but-unplanned). Overridable for testing.
+INNGEST_REGISTER_HTTP_FILE="${CI_DEPLOY_INNGEST_REGISTER_HTTP:-/var/lock/inngest-register-http}"
 START_TS=$(date +%s)
 # These are populated as the script parses SSH_ORIGINAL_COMMAND; surfaced in state.
 COMPONENT=""
@@ -242,6 +249,7 @@ verify_inngest_health() {
   # bare `"cron"` — every function slug is `cron-*`, so bare `"cron"` would
   # false-pass on the slug alone even with zero planned cron triggers.
   local functions_body=""
+  local inngest_register_http=""
   for i in $(seq 1 "$cron_max_attempts"); do
     # #5159: active push-and-poll — re-register on EACH iteration. The
     # inngest-server cannot self-sync its function manifest post-restart; only an
@@ -257,7 +265,22 @@ verify_inngest_health() {
     # pin. NB: -sf (no -L) treats a 307 as success with an empty body, so a
     # /api/inngest PUBLIC_PATHS regression would silently no-op the PUT — the
     # /v1/functions cron gate below is the authoritative backstop.
-    curl -sf --max-time 10 -X PUT http://127.0.0.1:3000/api/inngest 2>/dev/null || true
+    #
+    # #5159 follow-up (2026-06-11 AC15 failure): the original `curl -sf … || true`
+    # discarded the HTTP code, so when the loopback PUT ran its full budget WITHOUT
+    # re-planning crons we could not tell unreachable (000) from rejected (4xx/5xx)
+    # from registered-but-unplanned (2xx). Capture the code instead: `-s` (no `-f`,
+    # so a 4xx/5xx still yields its code rather than an empty failure) + `-o /dev/null
+    # -w '%{http_code}'`. The assignment-level `|| =000` maps a connection failure
+    # (curl exit 7) to 000 without aborting verify (replaces the old `|| true`). The
+    # code is logged to journald (Vector → Better Stack) AND persisted for
+    # cat-deploy-state.sh to surface in /hooks/deploy-status (no-SSH diagnosis).
+    # --max-time 10 (not 5) keeps the #5145 VERIFY_FN_MAXTIME==2 pin intact and is
+    # counted in the cross-file drift guard.
+    inngest_register_http=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X PUT http://127.0.0.1:3000/api/inngest 2>/dev/null) || inngest_register_http="000"
+    [[ -z "$inngest_register_http" ]] && inngest_register_http="000"
+    logger -t "$LOG_TAG" "INNGEST_REREGISTER: loopback PUT -> HTTP $inngest_register_http (attempt $i/$cron_max_attempts)"
+    printf '%s' "$inngest_register_http" > "$INNGEST_REGISTER_HTTP_FILE" 2>/dev/null || true
     functions_body=$(curl -sf --max-time 5 http://127.0.0.1:8288/v1/functions 2>/dev/null) || true
 
     if [[ "$functions_body" == *'"cron":'* ]]; then

@@ -15,7 +15,7 @@ Read the user's message or feature description and assess relevance against each
 
 ## User-Brand-Critical Tag Processing
 
-When brainstorm Phase 0.1 sets `USER_BRAND_CRITICAL=true`, override the standard domain-sweep ordering: spawn **CPO + CLO + CTO** in parallel FIRST, before any other relevant domain leader determined by the Assessment Questions above. Other domain leaders still run in parallel where their assessment questions match, but CPO + CLO + CTO are mandatory for user-brand-critical sessions regardless of assessment-question matches.
+Brainstorm Phase 0.1 always sets `USER_BRAND_CRITICAL=true` (unconditionally, per #5175). Under that flag, override the standard domain-sweep ordering: spawn **CPO + CLO + CTO** in parallel FIRST, before any other relevant domain leader determined by the Assessment Questions above. Other domain leaders still run in parallel where their assessment questions match, but CPO + CLO + CTO are mandatory for user-brand-critical sessions regardless of assessment-question matches.
 
 Rationale:
 

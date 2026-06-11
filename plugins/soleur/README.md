@@ -42,7 +42,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 |-----------|-------|
 | Agents | 67 |
 | Commands | 3 |
-| Skills | 83 |
+| Skills | 84 |
 | MCP Servers | 3 |
 
 ## Agents
@@ -236,6 +236,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `dhh-rails-style` | Write Ruby/Rails code in DHH's 37signals style |
 | `dspy-ruby` | Build type-safe LLM applications with DSPy.rb |
 | `frontend-design` | Create production-grade frontend interfaces |
+| `model-launch-review` | Audit the per-Anthropic-model-release checklist and auto-fix stale model-ID swaps via a CI-gated PR |
 | `skill-creator` | Create, refine, audit, and package Claude Code skills |
 | `spec-templates` | Structured feature specifications and task tracking |
 | `user-story-writer` | Decompose features into INVEST-compliant stories using Elephant Carpaccio |
