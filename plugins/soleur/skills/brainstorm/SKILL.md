@@ -94,7 +94,7 @@ Select an orchestration lane that describes the Phase 0.5 domain-leader breadth.
 
 **Skip if** `USER_BRAND_CRITICAL=true` from Phase 0.1 — set `LANE=cross-domain` and proceed to Phase 0.25 without prompting. Phase 0.1 now sets this unconditionally (per #5175), so the lane is always fixed to `cross-domain` here; there is no framing prompt to double up on.
 
-**Otherwise:**
+**Otherwise** (vestigial fallback — under #5175 Phase 0.1 sets `USER_BRAND_CRITICAL=true` unconditionally in every mode, so the skip above always fires and this block is currently unreachable; retained as the escape hatch for any future per-feature `USER_BRAND_CRITICAL` override):
 
 1. **Keyword scan** the feature description against the `## Lane Inference` table.
 
