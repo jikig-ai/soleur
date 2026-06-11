@@ -570,3 +570,24 @@ resource "sentry_cron_monitor" "cron_egress_resolve" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# #5080: Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-weekly-release-digest.ts`.
+# Weekly community release digest -> Discord #releases, Friday 15:00 UTC.
+# Closest sibling: scheduled_strategy_review (pure-TS Inngest-fired cohort —
+# 30-min margin, NOT the 55-min claude-eval cohort). The handler's catch
+# shape always sends a check-in (ok or error); the margin is the backstop
+# for the Sentry-env-unset skip path only. Single-miss alert
+# (failure_issue_threshold=1): one missed Friday is noteworthy on a weekly
+# cadence — the digest IS the channel's only content source.
+resource "sentry_cron_monitor" "cron_weekly_release_digest" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "cron-weekly-release-digest"
+  schedule                = { crontab = "0 15 * * 5" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}

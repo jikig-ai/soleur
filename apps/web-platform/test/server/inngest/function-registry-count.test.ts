@@ -132,7 +132,7 @@ describe("Inngest function registry — drift guards", () => {
 
   // UPDATE this number when adding/removing Inngest functions.
   it("(a) route.ts functions array has expected count", () => {
-    expect(routeEntries.length).toBe(52);
+    expect(routeEntries.length).toBe(53);
   });
 
   it("(b) every cron-*.ts file is registered in route.ts functions array", () => {
