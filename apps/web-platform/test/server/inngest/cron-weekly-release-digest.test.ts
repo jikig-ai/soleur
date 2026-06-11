@@ -140,8 +140,11 @@ function installFetchMock() {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      // Dispatch on the PARSED hostname (not substring-includes) — exact-match
+      // host comparison, per CodeQL js/incomplete-url-substring-sanitization.
       const url = String(input);
-      if (url.includes("api.github.com") && url.includes("/releases")) {
+      const { hostname, pathname } = new URL(url);
+      if (hostname === "api.github.com" && pathname.includes("/releases")) {
         const page = Number(new URL(url).searchParams.get("page") ?? "1");
         const body = fetchBehavior.releasePages
           ? (fetchBehavior.releasePages[page - 1] ?? [])
@@ -150,18 +153,18 @@ function installFetchMock() {
             : [];
         return new Response(JSON.stringify(body), { status: 200 });
       }
-      if (url.includes("api.anthropic.com")) {
+      if (hostname === "api.anthropic.com") {
         if (fetchBehavior.anthropic) return fetchBehavior.anthropic();
         return validAnthropicResponse([
           { tag: "v3.154.0", title: "Model-tier optimization", why: "Workflow runs now pick the right model tier per call site." },
         ]);
       }
-      if (url.includes("discord.com/api/webhooks")) {
+      if (hostname === "discord.com" && pathname.startsWith("/api/webhooks/")) {
         discordPosts.push({ url, body: JSON.parse(String(init?.body)) });
         // 204 (Discord's success status) cannot carry a body in the Response ctor.
         return new Response(null, { status: fetchBehavior.discordStatus });
       }
-      if (url.includes(".sentry.io")) {
+      if (hostname.endsWith(".sentry.io")) {
         sentryCheckins.push(url);
         return new Response("", { status: 200 });
       }
