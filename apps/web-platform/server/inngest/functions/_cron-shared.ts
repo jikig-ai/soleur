@@ -216,20 +216,6 @@ export async function postSentryHeartbeat(args: {
 }
 
 // ---------------------------------------------------------------------------
-// Model-output JSON extraction
-// ---------------------------------------------------------------------------
-// Models routinely wrap JSON output in markdown fences (```json ... ```)
-// even when prompted "respond with ONLY JSON" — reproduced live against
-// claude-sonnet-4-6 on 2026-06-11 (#5080 first prod fire silently fell back
-// to the deterministic renderer because JSON.parse threw on the fence).
-// Strip ONE outer fence; pass unfenced text through untouched. Every cron
-// that JSON.parses a Messages-API response must route through this.
-export function extractModelJson(text: string): string {
-  const fenced = text.match(/^\s*```(?:json)?\s*([\s\S]*?)\s*```\s*$/);
-  return (fenced ? fenced[1] : text).trim();
-}
-
-// ---------------------------------------------------------------------------
 // Discord webhook write boundary (#5080 — hr-write-boundary-sentinel-sweep)
 // ---------------------------------------------------------------------------
 // Shared helper for Discord write sites: mentions are suppressed at the

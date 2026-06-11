@@ -22,13 +22,13 @@
 // a fallback would keep the monitor green while #releases stays dead.
 
 import { inngest } from "@/server/inngest/client";
+import { extractModelJson } from "@/server/model-json";
 import { reportSilentFallback } from "@/server/observability";
 import {
   REPO_OWNER,
   REPO_NAME,
   mintInstallationToken,
   postDiscordWebhook,
-  extractModelJson,
   postSentryHeartbeat,
   redactToken,
   type HandlerArgs,

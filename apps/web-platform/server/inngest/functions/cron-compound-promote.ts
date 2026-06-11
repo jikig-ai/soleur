@@ -31,11 +31,11 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
+import { extractModelJson } from "@/server/model-json";
 import { reportSilentFallback } from "@/server/observability";
 import {
   REPO_OWNER,
   REPO_NAME,
-  extractModelJson,
   redactToken,
   buildAuthenticatedCloneUrl,
   resolveCronWorkspaceRoot,
