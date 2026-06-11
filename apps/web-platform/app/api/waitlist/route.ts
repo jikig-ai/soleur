@@ -69,7 +69,7 @@ export async function POST(req: Request): Promise<Response> {
   try {
     // The throttle-key IP doubles as the forwarded visitor IP (single
     // extraction) so abuse-control and Buttondown risk-scoring agree on who
-    // the visitor is; waitlist.ts validates plausibility before forwarding.
+    // the visitor is; waitlist.ts (toPublicPeerIp) validates before forwarding.
     await subscribeToWaitlist(email, ip);
     return NextResponse.json({ ok: true }, { status: 200 });
   } catch (err) {

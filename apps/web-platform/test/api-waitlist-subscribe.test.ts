@@ -184,6 +184,73 @@ describe("POST /api/waitlist", () => {
     expect(Object.keys(sent).sort()).toEqual(["email_address", "tags"]);
   });
 
+  test("canonical v4-mapped v6 public IP is stripped and forwarded as dotted v4", async () => {
+    mockFetch.mockResolvedValue(new Response("", { status: 201 }));
+    const { POST } = await importRoute();
+    const res = await POST(
+      makeRequest({
+        origin: OK_ORIGIN,
+        cfConnectingIp: "::ffff:203.0.113.7",
+        body: { email: "user@company.com" },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const sent = JSON.parse(
+      String((mockFetch.mock.calls[0][1] as RequestInit).body),
+    ) as Record<string, unknown>;
+    expect(sent.ip_address).toBe("203.0.113.7");
+  });
+
+  test("v4-mapped v6 PRIVATE IP is stripped, recognized as private, and omitted", async () => {
+    mockFetch.mockResolvedValue(new Response("", { status: 201 }));
+    const { POST } = await importRoute();
+    const res = await POST(
+      makeRequest({
+        origin: OK_ORIGIN,
+        cfConnectingIp: "::ffff:10.0.0.1",
+        body: { email: "user@company.com" },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const sent = JSON.parse(
+      String((mockFetch.mock.calls[0][1] as RequestInit).body),
+    ) as Record<string, unknown>;
+    expect(sent).not.toHaveProperty("ip_address");
+  });
+
+  test("CGNAT range boundaries: 100.64.0.1 omitted, 100.128.0.1 forwarded", async () => {
+    // The 100.64.0.0/10 alternation is the most error-prone expression in the
+    // validator; pin both edges so an off-by-one regex change fails loudly.
+    mockFetch.mockResolvedValue(new Response("", { status: 201 }));
+    const { POST } = await importRoute();
+
+    const inCgnat = await POST(
+      makeRequest({
+        origin: OK_ORIGIN,
+        cfConnectingIp: "100.64.0.1",
+        body: { email: "user@company.com" },
+      }),
+    );
+    expect(inCgnat.status).toBe(200);
+    const sentCgnat = JSON.parse(
+      String((mockFetch.mock.calls[0][1] as RequestInit).body),
+    ) as Record<string, unknown>;
+    expect(sentCgnat).not.toHaveProperty("ip_address");
+
+    const aboveCgnat = await POST(
+      makeRequest({
+        origin: OK_ORIGIN,
+        cfConnectingIp: "100.128.0.1",
+        body: { email: "user2@company.com" },
+      }),
+    );
+    expect(aboveCgnat.status).toBe(200);
+    const sentAbove = JSON.parse(
+      String((mockFetch.mock.calls[1][1] as RequestInit).body),
+    ) as Record<string, unknown>;
+    expect(sentAbove.ip_address).toBe("100.128.0.1");
+  });
+
   test("garbage cf-connecting-ip is omitted; subscribe still succeeds (never breaks a signup)", async () => {
     mockFetch.mockResolvedValue(new Response("", { status: 201 }));
     const { POST } = await importRoute();

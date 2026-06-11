@@ -60,17 +60,29 @@ const ALREADY_SUBSCRIBED_RE = /already\s+(subscribed|exists)/i;
 // Buttondown's behavior on an invalid ip_address is undocumented — sending an
 // implausible value risks a validation 400 that would break the very signup
 // this hardens, so the validator is deliberately reject-biased: omit on doubt.
+// Deliberately NOT covered (accepted residual, spoof-only reach, worst case is
+// Buttondown scoring an odd value on the spoofer's own request): TEST-NET /
+// documentation ranges (the synthesized test fixtures per
+// cq-test-fixtures-synthesized-only depend on them passing), multicast 224/4,
+// reserved 240/4, 198.18/15, and non-canonical v4-mapped v6 spellings
+// (0:0:0:0:0:ffff:10.0.0.1, hex ::ffff:a00:1).
 const PRIVATE_V4 =
   /^(0\.|10\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|127\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/;
 
-// Returns the IP iff it is a plausible public peer address; undefined
-// otherwise ("unknown" throttle sentinel, garbage, private/reserved ranges).
+const V4_MAPPED_PREFIX = "::ffff:";
+
+// Normalizer, not a predicate: returns the IP iff it is a plausible public
+// peer address; undefined otherwise ("unknown" throttle sentinel, garbage,
+// private/reserved ranges). ("Public peer", not "Plausible" the analytics
+// vendor — no relation to the Plausible integration elsewhere in this app.)
 // Never logs: a rejected-IP log line could be timestamp-correlated with the
 // email in adjacent lines, reconstructing the IP+email pair we never persist.
-function plausiblePublicIp(raw: string | undefined): string | undefined {
+function toPublicPeerIp(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
   let ip = raw.trim();
-  if (ip.toLowerCase().startsWith("::ffff:")) ip = ip.slice(7); // v4-mapped v6
+  if (ip.toLowerCase().startsWith(V4_MAPPED_PREFIX)) {
+    ip = ip.slice(V4_MAPPED_PREFIX.length); // canonical v4-mapped v6
+  }
   const version = isIP(ip);
   if (version === 0) return undefined;
   if (version === 4) return PRIVATE_V4.test(ip) ? undefined : ip;
@@ -139,7 +151,7 @@ export async function subscribeToWaitlist(
     throw new Error("waitlist subscribe unconfigured");
   }
 
-  const ipAddress = plausiblePublicIp(clientIp);
+  const ipAddress = toPublicPeerIp(clientIp);
   const res = await fetch(BUTTONDOWN_SUBSCRIBE_URL, {
     method: "POST",
     headers: {
