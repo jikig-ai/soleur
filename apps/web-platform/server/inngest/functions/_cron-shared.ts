@@ -216,6 +216,35 @@ export async function postSentryHeartbeat(args: {
 }
 
 // ---------------------------------------------------------------------------
+// Discord webhook write boundary (#5080 — hr-write-boundary-sentinel-sweep)
+// ---------------------------------------------------------------------------
+// Shared helper for NEW Discord write sites: mentions are suppressed at the
+// API level by construction (allowed_mentions parse:[] — sed-stripping is
+// bypassable, see 2026-03-05 learning), and the webhook URL is never logged
+// or interpolated into errors. Existing bare-{content} sites
+// (cron-weekly-analytics notify-kpi-miss) are NOT migrated here — noted for
+// the #3739-class helper-consolidation follow-up.
+const DISCORD_WEBHOOK_TIMEOUT_MS = 10_000;
+
+export async function postDiscordWebhook(args: {
+  webhookUrl: string;
+  content: string;
+  username?: string;
+}): Promise<{ ok: boolean; status: number }> {
+  const resp = await fetch(args.webhookUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      content: args.content,
+      ...(args.username ? { username: args.username } : {}),
+      allowed_mentions: { parse: [] },
+    }),
+    signal: AbortSignal.timeout(DISCORD_WEBHOOK_TIMEOUT_MS),
+  });
+  return { ok: resp.ok, status: resp.status };
+}
+
+// ---------------------------------------------------------------------------
 // Tier-2 deferral guard (#5018 — hook-primary cron containment, D6)
 // ---------------------------------------------------------------------------
 // These claude-spawning crons need Bash that cannot be expressed as a finite
