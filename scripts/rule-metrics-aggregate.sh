@@ -252,7 +252,16 @@ report=$(jq -n \
         # (gdpr-gate-staleness, gdpr-gate-touch, gdpr-gate-cron-binding —
         # the last introduced by PR #3541). These are operational events
         # tied to the skill, not rule_ids in the AGENTS.md taxonomy.
-        | map(select(startswith("gdpr-gate-") | not))) as $orphan_ids
+        | map(select(startswith("gdpr-gate-") | not))
+        # Hook-canonical Pencil rule_ids: per cq-agents-md-tier-gate, the rule
+        # body lives in the hook header + pencil-setup SKILL (a Pencil-domain
+        # rule is tier-gated OUT of AGENTS.md), so they legitimately never appear
+        # in $known_ids. cq-before-calling-mcp-pencil-open-document (retired,
+        # pencil-open-guard.sh) and cq-pencil-collapse-auto-recover (#4859,
+        # pencil-collapse-guard.sh) are emitted by their hooks by design.
+        | map(select(
+            . != "cq-before-calling-mcp-pencil-open-document"
+            and . != "cq-pencil-collapse-auto-recover"))) as $orphan_ids
     | {
         schema: $schema,
         generated_at: $generated_at,

@@ -146,12 +146,15 @@ helper itself errors.
 | `pencil-open-guard.sh` | 1 | `cq-before-calling-mcp-pencil-open-document` |
 | `worktree-write-guard.sh` | 1 | `guardrails-worktree-write-guard` |
 
-### Telemetry-only hooks (PostToolUse, no deny semantics)
+### PostToolUse hooks (no deny semantics)
+
+PostToolUse runs after the tool's write, so these cannot block. Most are telemetry-only; `pencil-collapse-guard.sh` additionally performs a file restore and injects `additionalContext` into the model.
 
 | Hook | Sink | Purpose |
 |---|---|---|
 | `skill-invocation-logger.sh` | `.claude/.skill-invocations.jsonl` | Records every Skill tool call (session_id + skill name) for the monthly skill-freshness aggregator. |
 | `agent-token-tee.sh` | `.claude/.session-tokens.jsonl` | Records every Task/Agent invocation envelope (session_id + subagent_type + total_tokens + duration) for compound Phase 1.6 token-efficiency analysis. Kill-switch: `SOLEUR_DISABLE_AGENT_TOKEN_TEE=1`. Issue #3494. |
+| `pencil-collapse-guard.sh` | `.claude/.rule-incidents.jsonl` (`cq-pencil-collapse-auto-recover`, `warn`) | PostToolUse on `mcp__pencil__open_document`: auto-restores a tracked `.pen` collapsed to empty document state from `git HEAD` + emits an `additionalContext` warning. Fail-open, non-destructive. Issue #4859. |
 
 ## macOS note
 
