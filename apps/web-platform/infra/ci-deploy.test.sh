@@ -233,6 +233,8 @@ MOCK
 #   MOCK_CURL_DASH_ERROR_BODY=1 /dashboard returns 200 but body contains the
 #                               error.tsx sentinel string
 #   MOCK_CURL_LOGIN_EMPTY=1     /login returns 200 with empty body
+#   MOCK_CURL_INNGEST_PUT_FAIL=1 :3000/api/inngest PUT returns curl-exit-7
+#                               (transient :3000-down; SUT must tolerate via || true)
 create_curl_mock() {
   cat > "$1/curl" << 'MOCK'
 #!/bin/bash
@@ -282,6 +284,20 @@ case "$URL" in
       exit 1
     fi
     write_body '{"status":200,"message":"OK"}'
+    exit 0
+    ;;
+  *":3000/api/inngest"*)
+    # #5159: loopback SDK re-registration PUT fired inside verify_inngest_health's
+    # cron-plan loop. Without this explicit arm the URL would fall through to the
+    # post-esac fallback (unconditional exit 0), so MOCK_CURL_INNGEST_PUT_FAIL
+    # could not simulate a transient :3000-down window. Default: success (mirrors
+    # a healthy `{"message":"Successfully registered","modified":true}` PUT).
+    if [[ "${MOCK_CURL_INNGEST_PUT_FAIL:-}" == "1" ]]; then
+      # curl exit 7 (connection refused) shape — empty body, non-zero exit. The
+      # SUT's `|| true` must swallow this so the cron-plan loop stays authoritative.
+      exit 7
+    fi
+    write_body '{"message":"Successfully registered","modified":true}'
     exit 0
     ;;
   *"/health"*)
@@ -1988,6 +2004,55 @@ assert_state_contains "restart inngest fails when cron plan de-planned (#4650 AC
   "restart inngest _ latest" \
   "export MOCK_CURL_INNGEST_FUNCTIONS_NOCRON=1"
 
+# #5159 AC6: a FAILED loopback re-registration PUT must NOT abort the deploy.
+# The in-loop PUT is fire-and-forget (`curl ... || true`); when :3000 is
+# transiently down (curl exit 7) the cron-plan loop stays authoritative — the
+# deploy succeeds as long as the /v1/functions poll later shows a cron trigger
+# (the default mock returns one). reason must be `success`, NOT a PUT-specific
+# failure (there is no PUT-specific reason — graceful degradation to the poll
+# path). COVERAGE HONESTY: the /v1/functions mock returns a cron-planned
+# registry independent of whether the PUT fired, so this proves WIRING +
+# FAIL-TOLERANCE, not EFFICACY — efficacy is only provable live (plan AC15).
+assert_state_contains "restart inngest succeeds when re-register PUT fails (#5159 AC6)" \
+  "success" "0" \
+  "restart inngest _ latest" \
+  "export MOCK_CURL_INNGEST_PUT_FAIL=1"
+
+# #5159 AC4 + AC7: the loopback re-registration PUT must be wired EXACTLY once,
+# INSIDE verify_inngest_health's cron-plan loop, BEFORE the /v1/functions poll.
+# Source-grep gate (the seq mock collapses loops so iteration-count is not
+# runtime-observable; placement is the load-bearing property):
+#   AC4 — exactly one `--max-time 10 -X PUT .../api/inngest` line exists.
+#   AC7(a) — that line sits between the cron `for` (seq 1 "$cron_max_attempts")
+#            and the /v1/functions curl (i.e. first statement of the loop body).
+#   AC7(b) — the PUT line lies within the verify_inngest_health function body,
+#            which is reached ONLY after a successful systemctl restart. The
+#            MOCK_SYSTEMCTL_FAIL test above (inngest_restart_failed) exits BEFORE
+#            verify_inngest_health is called, so the PUT can never fire on a
+#            failed restart. Proving the PUT is inside the function body is the
+#            structural proof of "PUT never invoked on restart-fail".
+echo ""
+echo "--- verify_inngest_health re-register PUT wiring (#5159) ---"
+TOTAL=$((TOTAL + 1))
+PUT_COUNT=$(grep -cE 'curl -sf --max-time 10 -X PUT http://127\.0\.0\.1:3000/api/inngest' "$DEPLOY_SCRIPT" || true)
+PUT_LINE=$(grep -nE 'curl -sf --max-time 10 -X PUT http://127\.0\.0\.1:3000/api/inngest' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
+CRON_FOR_LINE=$(grep -nE 'seq 1 "\$cron_max_attempts"' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
+PUT_FUNCTIONS_LINE=$(grep -nE 'curl -sf --max-time 5 http://127\.0\.0\.1:8288/v1/functions' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
+# Function-body range: from the verify_inngest_health def to its closing brace.
+VERIFY_FN_START=$(grep -nE '^verify_inngest_health\(\) \{' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
+VERIFY_FN_END=$(awk 'NR>='"${VERIFY_FN_START:-0}"' && /^\}/ { print NR; exit }' "$DEPLOY_SCRIPT" || true)
+if [[ "$PUT_COUNT" -eq 1 \
+      && -n "$PUT_LINE" && -n "$CRON_FOR_LINE" && -n "$PUT_FUNCTIONS_LINE" \
+      && -n "$VERIFY_FN_START" && -n "$VERIFY_FN_END" \
+      && "$CRON_FOR_LINE" -lt "$PUT_LINE" && "$PUT_LINE" -lt "$PUT_FUNCTIONS_LINE" \
+      && "$VERIFY_FN_START" -lt "$PUT_LINE" && "$PUT_LINE" -lt "$VERIFY_FN_END" ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: re-register PUT wired once, inside the cron loop, before /v1/functions, within verify_inngest_health — #5159 AC4/AC7"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: re-register PUT wiring (#5159) (count=$PUT_COUNT put_line=$PUT_LINE cron_for=$CRON_FOR_LINE functions_line=$PUT_FUNCTIONS_LINE fn_start=$VERIFY_FN_START fn_end=$VERIFY_FN_END)"
+fi
+
 # #4652 AC3: the `deploy inngest` SUCCESS path must gate on verify_inngest_health
 # (the restart action already does — see the four restart tests above; the
 # deploy path did NOT before #4652). verify_inngest_health's runtime behavior
@@ -2084,9 +2149,17 @@ fi
 # legitimate retune re-runs the inequality with the new numbers instead of
 # dying as "unparseable" — exact-value pinning is the assertion above's job.
 # Server worst case (right side of the inequality):
-#   (health_attempts + cron_attempts) * (interval + 5)
+#   health_attempts * (interval + 5)
+#     + cron_attempts * (interval + 5 + put_maxtime)
 #     +5 = per-attempt `curl --max-time 5` tail (source: the --max-time pin
 #          above; sleep-only arithmetic undercounts the true worst case ~2.6x)
+#     +put_maxtime = #5159: the cron loop ALSO fires an additive, sequential
+#          `curl --max-time 10 -X PUT .../api/inngest` re-registration each
+#          iteration (PUT -> /v1/functions poll -> sleep, in series). A
+#          listening-but-hung :3000 makes every PUT consume its full --max-time,
+#          so the cron-loop per-attempt cost gains put_maxtime. The /health loop
+#          has no PUT, hence the split terms. Extracted by shape from the
+#          `--max-time N -X PUT` line in ci-deploy.sh.
 #   +stop = TimeoutStopSec hung-stop budget the systemd restart can consume
 #          BEFORE the verify starts — extracted by shape from the
 #          inngest-server unit heredoc in inngest-bootstrap.sh (scoped: a
@@ -2106,6 +2179,12 @@ DG_INNGEST_UNIT=$(awk '/Description=Inngest self-hosted server/,/^UNITEOF$/' "$B
 DG_STOP=$(printf '%s\n' "$DG_INNGEST_UNIT" | grep -oE '^TimeoutStopSec=[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
 DG_MAX_POLLS=$(grep -oE 'MAX_POLLS=[0-9]+' "$RESTART_WORKFLOW" | head -1 | grep -oE '[0-9]+' || true)
 DG_POLL_INTERVAL=$(grep -oE 'POLL_INTERVAL=[0-9]+' "$RESTART_WORKFLOW" | head -1 | grep -oE '[0-9]+' || true)
+# #5159: the in-loop re-registration PUT is an ADDITIVE, SEQUENTIAL curl per
+# cron iteration (PUT -> /v1/functions poll -> sleep, in series; the PUT does
+# NOT overlap the sleep). When :3000 is listening-but-hung every PUT consumes
+# its full --max-time, so the cron-loop per-attempt cost gains +DG_PUT_MAXTIME.
+# Extracted by shape (the only `--max-time N -X PUT` line in the script).
+DG_PUT_MAXTIME=$(grep -oE 'curl -sf --max-time [0-9]+ -X PUT' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' | tail -1 || true)
 # Exactly-one assignment per extraction shape — a duplicate (or zero) match
 # makes the head -1 extraction silently ambiguous (e.g. a future helper
 # earlier in ci-deploy.sh with its own ${1:-N} default would hijack
@@ -2116,17 +2195,18 @@ DG_CRON_COUNT=$(grep -cE '^[[:space:]]*local cron_max_attempts=[0-9]+' "$DEPLOY_
 DG_STOP_COUNT=$(printf '%s\n' "$DG_INNGEST_UNIT" | grep -cE '^TimeoutStopSec=[0-9]+' || true)
 DG_MAX_POLLS_COUNT=$(grep -cE 'MAX_POLLS=[0-9]+' "$RESTART_WORKFLOW" || true)
 DG_POLL_INTERVAL_COUNT=$(grep -cE 'POLL_INTERVAL=[0-9]+' "$RESTART_WORKFLOW" || true)
+DG_PUT_MAXTIME_COUNT=$(grep -cE 'curl -sf --max-time [0-9]+ -X PUT' "$DEPLOY_SCRIPT" || true)
 DG_OK=1
 DG_WHY=""
 # Validate BEFORE arithmetic: bash $((v * 5)) on an empty string evaluates to
 # 0 silently and the inequality would pass for the wrong reason.
-for pair in "health:$DG_HEALTH" "interval:$DG_INTERVAL" "cron:$DG_CRON" "stop:$DG_STOP" "max_polls:$DG_MAX_POLLS" "poll_interval:$DG_POLL_INTERVAL"; do
+for pair in "health:$DG_HEALTH" "interval:$DG_INTERVAL" "cron:$DG_CRON" "stop:$DG_STOP" "max_polls:$DG_MAX_POLLS" "poll_interval:$DG_POLL_INTERVAL" "put_maxtime:$DG_PUT_MAXTIME"; do
   if ! [[ "${pair#*:}" =~ ^[0-9]+$ ]]; then
     DG_OK=0
     DG_WHY="non-integer extraction: ${pair%%:*}"
   fi
 done
-for pair in "health:$DG_HEALTH_COUNT" "interval:$DG_INTERVAL_COUNT" "cron:$DG_CRON_COUNT" "stop:$DG_STOP_COUNT" "max_polls:$DG_MAX_POLLS_COUNT" "poll_interval:$DG_POLL_INTERVAL_COUNT"; do
+for pair in "health:$DG_HEALTH_COUNT" "interval:$DG_INTERVAL_COUNT" "cron:$DG_CRON_COUNT" "stop:$DG_STOP_COUNT" "max_polls:$DG_MAX_POLLS_COUNT" "poll_interval:$DG_POLL_INTERVAL_COUNT" "put_maxtime:$DG_PUT_MAXTIME_COUNT"; do
   if [[ "$DG_OK" -eq 1 && "${pair#*:}" -ne 1 ]]; then
     DG_OK=0
     DG_WHY="expected exactly one assignment match for ${pair%%:*} (got ${pair#*:})"
@@ -2136,7 +2216,11 @@ DG_LEFT=""
 DG_RIGHT=""
 if [[ "$DG_OK" -eq 1 ]]; then
   DG_LEFT=$((DG_MAX_POLLS * DG_POLL_INTERVAL))
-  DG_RIGHT=$(((DG_HEALTH + DG_CRON) * (DG_INTERVAL + 5) + DG_STOP + 60))
+  # #5159: split the per-loop terms. The /health loop has no PUT; the cron loop
+  # fires the additive sequential PUT each iteration, so its per-attempt tail is
+  # (interval + 5 + put_maxtime). Health: DG_HEALTH x (interval+5); cron:
+  # DG_CRON x (interval+5+put_maxtime); + DG_STOP hung-stop + 60 margin.
+  DG_RIGHT=$((DG_HEALTH * (DG_INTERVAL + 5) + DG_CRON * (DG_INTERVAL + 5 + DG_PUT_MAXTIME) + DG_STOP + 60))
   if [[ "$DG_LEFT" -lt "$DG_RIGHT" ]]; then
     DG_OK=0
     DG_WHY="client window ${DG_LEFT}s < server worst case ${DG_RIGHT}s"
@@ -2147,7 +2231,7 @@ if [[ "$DG_OK" -eq 1 ]]; then
   echo "  PASS: restart workflow client window (${DG_LEFT}s) covers verify worst case (${DG_RIGHT}s) — #5145 drift guard"
 else
   FAIL=$((FAIL + 1))
-  echo "  FAIL: client/server budget drift guard (#5145): $DG_WHY (health=$DG_HEALTH interval=$DG_INTERVAL cron=$DG_CRON stop=$DG_STOP MAX_POLLS=$DG_MAX_POLLS POLL_INTERVAL=$DG_POLL_INTERVAL left=$DG_LEFT right=$DG_RIGHT; files: ci-deploy.sh, inngest-bootstrap.sh, .github/workflows/restart-inngest-server.yml)"
+  echo "  FAIL: client/server budget drift guard (#5145/#5159): $DG_WHY (health=$DG_HEALTH interval=$DG_INTERVAL cron=$DG_CRON put_maxtime=$DG_PUT_MAXTIME stop=$DG_STOP MAX_POLLS=$DG_MAX_POLLS POLL_INTERVAL=$DG_POLL_INTERVAL left=$DG_LEFT right=$DG_RIGHT; files: ci-deploy.sh, inngest-bootstrap.sh, .github/workflows/restart-inngest-server.yml)"
 fi
 
 echo ""
