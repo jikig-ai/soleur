@@ -25,7 +25,7 @@
 // is added in the same PR (apps/web-platform/infra/sentry/cron-monitors.tf).
 //
 // SHAPE DIFF vs PR-7 cron-roadmap-review.ts:
-//   - --model claude-opus-4-7 (was claude-sonnet-4-6) — competitive-analysis
+//   - --model claude-opus-4-8 (was claude-sonnet-4-6) — competitive-analysis
 //     skill uses opus for cross-tier landscape reasoning.
 //   - --max-turns 45 (was 40) — multi-tier fan-out (tiers 0,3) plus the
 //     follow-up PR creation step needs slightly more headroom.
@@ -95,7 +95,7 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 // options marker). The prompt is the SOLE positional argument after `--`.
 //
 // Mirrors .github/workflows/scheduled-competitive-analysis.yml `claude_args`:
-//   --model claude-opus-4-7
+//   --model claude-opus-4-8
 //   --max-turns 45
 //   --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Task
 const CLAUDE_CODE_FLAGS = [
