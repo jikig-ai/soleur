@@ -26,13 +26,20 @@ import { withUserRateLimit } from "@/server/with-user-rate-limit";
  *   - Archived excluded unless `?status=archived` (strict equality; any
  *     other value = default view).
  *
- * Ordering contract (server-side; component correctness must not be the
- * only enforcement): unacknowledged statutory rows first
- * (statutory_class NOT NULL AND status = 'new'), then received_at DESC.
- * PostgREST cannot order on that computed flag, so the DB orders by
- * received_at DESC and the pin is applied here via a stable partition —
- * the simplest correct shape (rows are small by construction: no body
- * column exists).
+ * Bounded result (L1): every query carries `.limit(LIST_LIMIT)` EXCEPT the
+ * pinned statutory query — the default view is two queries merged
+ * pinned-first:
+ *   (1) pinned: unacknowledged statutory rows (statutory_class NOT NULL AND
+ *       status = 'new'), UNCAPPED — bounded in practice by acknowledgment,
+ *       and a cap must NEVER be able to hide a running statutory clock;
+ *   (2) rest: everything else in the default view, `.limit(LIST_LIMIT)`,
+ *       with the pinned shape excluded via the De-Morgan
+ *       `.or("statutory_class.is.null,status.neq.new")` so rows never
+ *       appear twice.
+ * Both queries order received_at DESC; the merge concatenates pinned-first,
+ * preserving the ordering contract (unacknowledged statutory first, then
+ * received_at DESC). The archived view is a single capped query (archived
+ * rows are never pinned: pinning requires status = 'new').
  *
  * Responses:
  *   200 + JSON { items: [...] } (full rows)
@@ -48,18 +55,9 @@ const LIST_COLUMNS =
   "statutory_class, rule_id, status, status_changed_at, acknowledged_at, " +
   "received_at, created_at";
 
-interface TriageListRow {
-  statutory_class: string | null;
-  status: string;
-}
-
-// Stable partition: pinned group keeps its received_at DESC order, as does
-// the rest. Duplicated (deliberately, ~6 lines) in email-triage-tools.ts —
-// a shared server module would pull the agent-SDK import into this route.
-function statutoryPinnedFirst<T extends TriageListRow>(rows: T[]): T[] {
-  const isPinned = (r: T) => r.statutory_class !== null && r.status === "new";
-  return [...rows.filter(isPinned), ...rows.filter((r) => !isPinned(r))];
-}
+// Cap on the non-pinned result set — without it the default view grows
+// monotonically with inbox history. Mirrored in email-triage-tools.ts.
+const LIST_LIMIT = 100;
 
 async function getHandler(req: Request, user: User) {
   const url = new URL(req.url);
@@ -67,25 +65,8 @@ async function getHandler(req: Request, user: User) {
   const archivedView = url.searchParams.get("status") === "archived";
 
   const supabase = await createClient();
-  let query = supabase
-    .from("email_triage_items")
-    .select(LIST_COLUMNS)
-    .eq("user_id", user.id)
-    .or("mail_class.not.is.null,statutory_class.not.is.null");
 
-  if (!includeProbes) {
-    query = query.or("mail_class.is.null,mail_class.neq.probe");
-  }
-
-  query = archivedView
-    ? query.eq("status", "archived")
-    : query.neq("status", "archived");
-
-  const { data, error } = await query.order("received_at", {
-    ascending: false,
-  });
-
-  if (error) {
+  const queryError = (error: unknown) => {
     // No PII: never log sender/subject/summary — only the pseudonymous ids.
     reportSilentFallback(error, {
       feature: "inbox-emails",
@@ -94,10 +75,60 @@ async function getHandler(req: Request, user: User) {
       extra: { userId: user.id },
     });
     return NextResponse.json({ error: "Internal error" }, { status: 500 });
+  };
+
+  if (archivedView) {
+    let query = supabase
+      .from("email_triage_items")
+      .select(LIST_COLUMNS)
+      .eq("user_id", user.id)
+      .or("mail_class.not.is.null,statutory_class.not.is.null");
+    if (!includeProbes) {
+      query = query.or("mail_class.is.null,mail_class.neq.probe");
+    }
+    const { data, error } = await query
+      .eq("status", "archived")
+      .order("received_at", { ascending: false })
+      .limit(LIST_LIMIT);
+    if (error) return queryError(error);
+    return NextResponse.json({ items: data ?? [] });
   }
 
+  // Default view — query (1): pinned unacknowledged statutory rows.
+  // statutory_class NOT NULL already implies finalized; status = 'new'
+  // already excludes archived; probe rows are never statutory. UNCAPPED on
+  // purpose — see header.
+  const pinnedQuery = supabase
+    .from("email_triage_items")
+    .select(LIST_COLUMNS)
+    .eq("user_id", user.id)
+    .not("statutory_class", "is", null)
+    .eq("status", "new")
+    .order("received_at", { ascending: false });
+
+  // Default view — query (2): the rest, capped.
+  let restQuery = supabase
+    .from("email_triage_items")
+    .select(LIST_COLUMNS)
+    .eq("user_id", user.id)
+    .or("mail_class.not.is.null,statutory_class.not.is.null")
+    // Exclude the pinned shape (NOT (statutory AND new), De Morgan) so the
+    // merge never duplicates a row.
+    .or("statutory_class.is.null,status.neq.new");
+  if (!includeProbes) {
+    restQuery = restQuery.or("mail_class.is.null,mail_class.neq.probe");
+  }
+  const boundedRestQuery = restQuery
+    .neq("status", "archived")
+    .order("received_at", { ascending: false })
+    .limit(LIST_LIMIT);
+
+  const [pinnedRes, restRes] = await Promise.all([pinnedQuery, boundedRestQuery]);
+  if (pinnedRes.error) return queryError(pinnedRes.error);
+  if (restRes.error) return queryError(restRes.error);
+
   return NextResponse.json({
-    items: statutoryPinnedFirst((data ?? []) as unknown as TriageListRow[]),
+    items: [...(pinnedRes.data ?? []), ...(restRes.data ?? [])],
   });
 }
 

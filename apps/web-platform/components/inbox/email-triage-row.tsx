@@ -19,10 +19,11 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { sanitizeDisplayString } from "@/lib/sanitize-display";
 import { relativeTime } from "@/lib/relative-time";
+import { triagePillClass, triagePillLabel } from "@/lib/email-triage-display";
 import {
   STATUTORY_RULES,
   formatDueDate,
-} from "@/server/email-triage/statutory-rules";
+} from "@/lib/email-triage/statutory-rules";
 
 export interface EmailTriageItem {
   id: string;
@@ -46,18 +47,10 @@ interface EmailTriageRowProps {
   onChanged?: () => void;
 }
 
-const MAIL_CLASS_LABELS: Record<string, string> = {
-  vendor: "Vendor",
-  billing: "Billing",
-  security: "Security",
-  newsletter: "Newsletter",
-  "legal-review": "Legal review",
-  other: "Other",
-};
-
 export function EmailTriageRow({ item, onChanged }: EmailTriageRowProps) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const isStatutory = item.statutory_class !== null;
   // Pinned treatment only while unacknowledged — acknowledgment unpins but
@@ -79,14 +72,8 @@ export function EmailTriageRow({ item, onChanged }: EmailTriageRowProps) {
     ? formatDueDate(item.received_at, rule.dueRule)
     : null;
 
-  const pillLabel = isStatutory
-    ? "Statutory"
-    : MAIL_CLASS_LABELS[item.mail_class ?? ""] ?? "Email";
-  const pillClass = isStatutory
-    ? "bg-red-500/10 text-red-500"
-    : isLegalReview
-      ? "bg-amber-500/15 text-amber-400"
-      : "bg-blue-500/10 text-blue-400";
+  const pillLabel = triagePillLabel(item);
+  const pillClass = triagePillClass(item);
 
   const containerClass = isPinned
     ? "border-red-500/30 bg-red-500/[0.06] hover:bg-red-500/[0.1]"
@@ -97,13 +84,27 @@ export function EmailTriageRow({ item, onChanged }: EmailTriageRowProps) {
   async function runAction(action: "acknowledge" | "archive") {
     if (pending) return;
     setPending(true);
+    setActionError(null);
     try {
       const res = await fetch(`/api/inbox/emails/${item.id}/${action}`, {
         method: "POST",
       });
-      if (res.ok) onChanged?.();
+      if (res.ok) {
+        onChanged?.();
+      } else if (res.status === 409) {
+        // Row already transitioned elsewhere (another tab/device) — the
+        // refetch reconciles the stale row, so report the change upward.
+        onChanged?.();
+      } else {
+        setActionError(
+          action === "acknowledge"
+            ? "Couldn't acknowledge — try again."
+            : "Couldn't archive — try again.",
+        );
+      }
     } catch {
-      // Network drop: leave the row as-is; the operator can retry.
+      // Network drop: surface it; the operator can retry.
+      setActionError("Network error — try again.");
     } finally {
       setPending(false);
     }
@@ -161,8 +162,8 @@ export function EmailTriageRow({ item, onChanged }: EmailTriageRowProps) {
 
         {isLegalReview && (
           <p className="text-xs font-medium text-amber-400">
-            Rules did not match — verify against the original in the Proton
-            ops@ mailbox
+            Rules did not match — verify against the original, normally
+            retained in the Proton ops@ mailbox
           </p>
         )}
 
@@ -173,6 +174,11 @@ export function EmailTriageRow({ item, onChanged }: EmailTriageRowProps) {
         )}
 
         <div className="flex items-center justify-end gap-2">
+          {actionError && (
+            <p role="alert" className="text-xs font-medium text-red-500">
+              {actionError}
+            </p>
+          )}
           {isStatutory && item.status === "new" && (
             <button
               type="button"

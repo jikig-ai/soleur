@@ -239,15 +239,18 @@ The mechanism:
    original is handled under the existing mailbox processing; the Resend copy
    expires on the vendor's fixed 30-day window (no deletion API — disclosed,
    not controllable); the Anthropic copy ages out per its 30-day default.
-2. **Mechanism:** the WORM trigger rejects ordinary UPDATE/DELETE, so erasure
-   runs exclusively through the GUC-gated SECURITY DEFINER RPC family from
-   migration 102 — row deletion via the purge path
-   (`app.email_triage_purge_in_progress` GUC) executed by the service role
-   for a verified request, and `anonymise_email_triage_items(p_user_id)`
-   (NULLs `user_id` + `sender` under `app.email_triage_anonymise_in_progress`)
-   for the owner-side account-delete cascade. No bypass exists outside these
-   RPCs — the gate that makes the ledger trustworthy is the same gate that
-   makes erasure auditable.
+2. **Mechanism:** the WORM trigger rejects ordinary UPDATE/DELETE, so Art. 17
+   erasure for involuntary subjects is satisfied by two paths from migration
+   102: `anonymise_email_triage_items(p_user_id)` (identity unlinking — NULLs
+   `user_id` + `sender` under `app.email_triage_anonymise_in_progress`), and
+   the scheduled retention sweep `purge_email_triage_items()` (age-based
+   deletion: probe 7d, non-statutory 365d). No per-request targeted-delete
+   RPC exists in v1 — the purge function is parameterless and sweeps by age
+   only. If a verified erasure request requires immediate row deletion beyond
+   anonymisation, it is an operator-run SQL action under the purge GUC
+   (`app.email_triage_purge_in_progress`), documented per-request. No bypass
+   exists outside these GUC-gated paths — the gate that makes the ledger
+   trustworthy is the same gate that makes erasure auditable.
 3. **Art. 17(3)(b) accountability-period override for statutory rows:** rows
    with `statutory_class` set (DSAR receipt, breach notice, service of
    process, regulator contact) are themselves the controller's evidence of

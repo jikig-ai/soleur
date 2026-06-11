@@ -79,10 +79,19 @@ interface ResendInboundBody {
 }
 
 export async function POST(request: Request) {
-  // Step 0: bounded read. Content-Length is advisory — guard the actual
-  // byte length AFTER .text() resolves. 413 before any other work.
+  // Step 0a: cheap pre-read reject on the (advisory) Content-Length header —
+  // a declared-oversize body is refused before we even read it.
+  const declaredLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_WEBHOOK_BODY_BYTES) {
+    return NextResponse.json({ error: "Payload too large" }, { status: 413 });
+  }
+
+  // Step 0b: bounded read. Content-Length is advisory — guard the actual
+  // byte length AFTER .text() resolves. Measured in UTF-8 BYTES
+  // (Buffer.byteLength), not UTF-16 code units — `.length` undercounts
+  // multibyte payloads by up to 4x. 413 before any other work.
   const rawBody = await request.text();
-  if (rawBody.length > MAX_WEBHOOK_BODY_BYTES) {
+  if (Buffer.byteLength(rawBody, "utf8") > MAX_WEBHOOK_BODY_BYTES) {
     return NextResponse.json({ error: "Payload too large" }, { status: 413 });
   }
 
@@ -243,12 +252,30 @@ export async function POST(request: Request) {
       }))
     : [];
 
+  // message_id / from: only NON-EMPTY trimmed strings are accepted, else
+  // null. An empty-string message_id would collapse claim_key for every
+  // ""-message_id email into one 23505 collision; an empty-string sender
+  // violates the NULL-not-'' discipline (the DB sender column is nullable).
+  const messageIdRaw = data?.message_id;
+  const messageId =
+    typeof messageIdRaw === "string" && messageIdRaw.trim().length > 0
+      ? messageIdRaw
+      : null;
+  const senderRaw = data?.from;
+  const sender =
+    typeof senderRaw === "string" && senderRaw.trim().length > 0
+      ? senderRaw
+      : null;
+
+  // sender is null-widened locally (mirror in email-on-received.ts's
+  // InboundEventData) — fold into EmailInboundReceivedData when the events
+  // module can be touched.
   const eventData: EmailInboundReceivedData = {
     v: "1",
     svixId,
     resendEmailId,
-    messageId: typeof data?.message_id === "string" ? data.message_id : null,
-    sender: typeof data?.from === "string" ? data.from : "",
+    messageId,
+    sender,
     subject: typeof data?.subject === "string" ? data.subject : "",
     receivedAt,
     receivedAtSource,

@@ -34,6 +34,38 @@ const BRAND_EMAIL_COLORS = {
 /** Inline style for a branded gold email CTA `<a>` (sharp 0px corners). */
 const EMAIL_CTA_STYLE = `display: inline-block; padding: 12px 24px; background-color: ${BRAND_EMAIL_COLORS.ctaBackground}; background-image: ${BRAND_EMAIL_COLORS.ctaGradient}; color: ${BRAND_EMAIL_COLORS.ctaText}; text-decoration: none; border-radius: 0; font-weight: 600;`;
 
+/**
+ * Single branded HTML scaffold for every transactional email this module
+ * sends (heading + body + gold CTA + optional footnote). Extracted from the
+ * previously-duplicated inline templates — byte-identical rendered output.
+ *
+ * SECURITY: `heading` and `bodyHtml` are injected RAW — callers must
+ * escapeHtml any dynamic content before passing it in (they may embed
+ * intentional markup like the invite's `<strong>`). `deepLink` must be built
+ * exclusively from server-generated values, never email-derived content.
+ */
+function renderBrandedNotificationEmail(opts: {
+  heading: string;
+  bodyHtml: string;
+  ctaLabel: string;
+  deepLink: string;
+  /** Raw HTML; omit to render no footnote (e.g. invite-accepted). */
+  footnoteHtml?: string;
+}): string {
+  const footnote = opts.footnoteHtml
+    ? `\n        <p style="margin: 24px 0 0; font-size: 12px; color: ${BRAND_EMAIL_COLORS.textFootnote};">${opts.footnoteHtml}</p>`
+    : "";
+  return `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
+        <h2 style="margin: 0 0 16px; font-size: 18px; color: ${BRAND_EMAIL_COLORS.textHeading};">${opts.heading}</h2>
+        <p style="margin: 0 0 16px; color: ${BRAND_EMAIL_COLORS.textBody}; line-height: 1.5;">${opts.bodyHtml}</p>
+        <div style="text-align: center; margin: 8px 0 0;">
+          <a href="${opts.deepLink}" style="${EMAIL_CTA_STYLE}">${opts.ctaLabel}</a>
+        </div>${footnote}
+      </div>
+    `;
+}
+
 // Discriminated union (feat-operator-inbox-delegation Phase 4). Consumers
 // swept per cq-union-widening-grep-three-patterns + tsc --noEmit; existing
 // review_gate behavior is byte-identical.
@@ -291,16 +323,14 @@ export async function sendEmailNotification(
     from: "Soleur <notifications@soleur.ai>",
     to: [email],
     subject: `${escapeHtml(payload.agentName)} needs your input — Soleur`,
-    html: `
-      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
-        <h2 style="margin: 0 0 16px; font-size: 18px; color: ${BRAND_EMAIL_COLORS.textHeading};">${escapeHtml(payload.agentName)} needs your input</h2>
-        <p style="margin: 0 0 16px; color: ${BRAND_EMAIL_COLORS.textBody}; line-height: 1.5;">${escapeHtml(payload.question)}</p>
-        <div style="text-align: center; margin: 8px 0 0;">
-          <a href="${deepLink}" style="${EMAIL_CTA_STYLE}">Open conversation</a>
-        </div>
-        <p style="margin: 24px 0 0; font-size: 12px; color: ${BRAND_EMAIL_COLORS.textFootnote};">You received this because an agent is waiting for your decision on Soleur.</p>
-      </div>
-    `,
+    html: renderBrandedNotificationEmail({
+      heading: `${escapeHtml(payload.agentName)} needs your input`,
+      bodyHtml: escapeHtml(payload.question),
+      ctaLabel: "Open conversation",
+      deepLink,
+      footnoteHtml:
+        "You received this because an agent is waiting for your decision on Soleur.",
+    }),
   });
 
   if (error) {
@@ -337,16 +367,14 @@ async function sendEmailTriageEmailNotification(
     subject: payload.isStatutory
       ? "Statutory item in your Soleur inbox — action required"
       : "New item in your Soleur inbox — Soleur",
-    html: `
-      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
-        <h2 style="margin: 0 0 16px; font-size: 18px; color: ${BRAND_EMAIL_COLORS.textHeading};">${heading}</h2>
-        <p style="margin: 0 0 16px; color: ${BRAND_EMAIL_COLORS.textBody}; line-height: 1.5;">${escapeHtml(safeTitle)}</p>
-        <div style="text-align: center; margin: 8px 0 0;">
-          <a href="${deepLink}" style="${EMAIL_CTA_STYLE}">Open inbox item</a>
-        </div>
-        <p style="margin: 24px 0 0; font-size: 12px; color: ${BRAND_EMAIL_COLORS.textFootnote};">You received this because email triage is enabled for your Soleur inbox.</p>
-      </div>
-    `,
+    html: renderBrandedNotificationEmail({
+      heading,
+      bodyHtml: escapeHtml(safeTitle),
+      ctaLabel: "Open inbox item",
+      deepLink,
+      footnoteHtml:
+        "You received this because email triage is enabled for your Soleur inbox.",
+    }),
   });
 
   if (error) {
@@ -436,16 +464,14 @@ export async function sendDsarExportReadyEmail(
     to: [email],
     // PII-free subject — no jobId, no userId, no email.
     subject: "Your Soleur data export is ready",
-    html: `
-      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
-        <h2 style="margin: 0 0 16px; font-size: 18px; color: ${BRAND_EMAIL_COLORS.textHeading};">Your Soleur data export is ready</h2>
-        <p style="margin: 0 0 16px; color: ${BRAND_EMAIL_COLORS.textBody}; line-height: 1.5;">Your data export is ready to download. The link expires in 7 days (${escapeHtml(expiresAtUtc)}). The download link is single-use and bound to the device that requested it.</p>
-        <div style="text-align: center; margin: 8px 0 0;">
-          <a href="${downloadUrl}" style="${EMAIL_CTA_STYLE}">Download my data</a>
-        </div>
-        <p style="margin: 24px 0 0; font-size: 12px; color: ${BRAND_EMAIL_COLORS.textFootnote};">You requested this export from /settings/privacy on Soleur. If you did not request it, contact legal@jikigai.com.</p>
-      </div>
-    `,
+    html: renderBrandedNotificationEmail({
+      heading: "Your Soleur data export is ready",
+      bodyHtml: `Your data export is ready to download. The link expires in 7 days (${escapeHtml(expiresAtUtc)}). The download link is single-use and bound to the device that requested it.`,
+      ctaLabel: "Download my data",
+      deepLink: downloadUrl,
+      footnoteHtml:
+        "You requested this export from /settings/privacy on Soleur. If you did not request it, contact legal@jikigai.com.",
+    }),
   });
 
   if (error) {
@@ -477,16 +503,14 @@ export async function sendDsarExportFailedEmail(
     from: "Soleur <notifications@soleur.ai>",
     to: [email],
     subject: "Your Soleur data export could not be completed",
-    html: `
-      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
-        <h2 style="margin: 0 0 16px; font-size: 18px; color: ${BRAND_EMAIL_COLORS.textHeading};">Your Soleur data export could not be completed</h2>
-        <p style="margin: 0 0 16px; color: ${BRAND_EMAIL_COLORS.textBody}; line-height: 1.5;">${escapeHtml(userCopy)}</p>
-        <div style="text-align: center; margin: 8px 0 0;">
-          <a href="${settingsUrl}" style="${EMAIL_CTA_STYLE}">Go to /settings/privacy</a>
-        </div>
-        <p style="margin: 24px 0 0; font-size: 12px; color: ${BRAND_EMAIL_COLORS.textFootnote};">You requested this export from /settings/privacy on Soleur. If the problem persists, contact legal@jikigai.com.</p>
-      </div>
-    `,
+    html: renderBrandedNotificationEmail({
+      heading: "Your Soleur data export could not be completed",
+      bodyHtml: escapeHtml(userCopy),
+      ctaLabel: "Go to /settings/privacy",
+      deepLink: settingsUrl,
+      footnoteHtml:
+        "You requested this export from /settings/privacy on Soleur. If the problem persists, contact legal@jikigai.com.",
+    }),
   });
 
   if (error) {
@@ -514,16 +538,14 @@ export async function sendInviteEmail(
     from: "Soleur <notifications@soleur.ai>",
     to: [inviteeEmail],
     subject: `You've been invited to join ${escapeHtml(workspaceName)} on Soleur`,
-    html: `
-      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
-        <h2 style="margin: 0 0 16px; font-size: 18px; color: ${BRAND_EMAIL_COLORS.textHeading};">You've been invited to join ${escapeHtml(workspaceName)}</h2>
-        <p style="margin: 0 0 16px; color: ${BRAND_EMAIL_COLORS.textBody}; line-height: 1.5;">${escapeHtml(inviterName)} has invited you to join the <strong>${escapeHtml(workspaceName)}</strong> workspace on Soleur.</p>
-        <div style="text-align: center; margin: 8px 0 0;">
-          <a href="${inviteUrl}" style="${EMAIL_CTA_STYLE}">Accept invitation</a>
-        </div>
-        <p style="margin: 24px 0 0; font-size: 12px; color: ${BRAND_EMAIL_COLORS.textFootnote};">This invitation expires in 7 days. If you weren't expecting this, you can ignore this email.</p>
-      </div>
-    `,
+    html: renderBrandedNotificationEmail({
+      heading: `You've been invited to join ${escapeHtml(workspaceName)}`,
+      bodyHtml: `${escapeHtml(inviterName)} has invited you to join the <strong>${escapeHtml(workspaceName)}</strong> workspace on Soleur.`,
+      ctaLabel: "Accept invitation",
+      deepLink: inviteUrl,
+      footnoteHtml:
+        "This invitation expires in 7 days. If you weren't expecting this, you can ignore this email.",
+    }),
   });
 
   if (error) {
@@ -554,15 +576,12 @@ export async function sendInviteAcceptedEmail(
     from: "Soleur <notifications@soleur.ai>",
     to: [email],
     subject: `${escapeHtml(accepterName)} has joined ${escapeHtml(workspaceName)}`,
-    html: `
-      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
-        <h2 style="margin: 0 0 16px; font-size: 18px; color: ${BRAND_EMAIL_COLORS.textHeading};">${escapeHtml(accepterName)} has joined ${escapeHtml(workspaceName)}</h2>
-        <p style="margin: 0 0 16px; color: ${BRAND_EMAIL_COLORS.textBody}; line-height: 1.5;">Your invitation was accepted. ${escapeHtml(accepterName)} is now a member of <strong>${escapeHtml(workspaceName)}</strong>.</p>
-        <div style="text-align: center; margin: 8px 0 0;">
-          <a href="${teamUrl}" style="${EMAIL_CTA_STYLE}">View team</a>
-        </div>
-      </div>
-    `,
+    html: renderBrandedNotificationEmail({
+      heading: `${escapeHtml(accepterName)} has joined ${escapeHtml(workspaceName)}`,
+      bodyHtml: `Your invitation was accepted. ${escapeHtml(accepterName)} is now a member of <strong>${escapeHtml(workspaceName)}</strong>.`,
+      ctaLabel: "View team",
+      deepLink: teamUrl,
+    }),
   });
 
   if (error) {

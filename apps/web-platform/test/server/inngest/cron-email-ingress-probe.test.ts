@@ -11,8 +11,9 @@
 //     sleep("await-ingress","15m") → assert-probe-row (purge FIRST — a broken
 //     ingress chain must not starve Art. 5(1)(e)).
 //   - purge RPC called; an RPC error FAILS THE RUN (no try/catch swallow).
-//   - deadline re-pin fires at exactly 7 and 2 floor-days-until-due — never
-//     8/6/3/1/0 (dsar-art15 calendar-month fixtures, fake clock).
+//   - deadline re-pin fires at floor-days-until-due === 7 (heads-up) and
+//     DAILY from 2 through overdue (2/1/0/-1) — never 8/6/3 (dsar-art15
+//     calendar-month fixtures, fake clock). Scan bounded to 60d (C2).
 //   - probe_tokens insert happens BEFORE the Resend send (an unrecorded
 //     token would make our own probe classify as forgeable-shape 'other').
 //   - subject carries SOLEUR-PROBE-<uuid>.
@@ -44,7 +45,7 @@ const {
     repinRows: Array<Record<string, unknown>>;
     repinError: { code?: string } | null;
     tokenInsertError: { code?: string } | null;
-    assertRows: Array<{ id: string }>;
+    assertRows: Array<{ id: string; subject?: string | null }>;
     assertError: { code?: string } | null;
   } = {
     purgeResult: { data: { probe_deleted: 0 }, error: null },
@@ -99,15 +100,50 @@ vi.mock("@/server/inngest/functions/_cron-shared", async () => {
 
 // Chainable thenable supabase query mock. Distinguishes the two
 // email_triage_items reads by their .eq() args (repin keys on status=
-// acknowledged; assert keys on mail_class=probe).
+// acknowledged; assert keys on mail_class=probe). Records gte/like calls
+// per-query into `recordedQueries` so the bounded-scan (C2) and
+// index-friendly-assert (C3) shapes are assertable. Assert rows without an
+// explicit subject get the actually-sent probe subject filled in, since
+// the token is minted inside the handler.
+interface RecordedQuery {
+  table: string;
+  eqArgs: Array<[string, unknown]>;
+  gteArgs: Array<[string, unknown]>;
+  likeCalls: number;
+}
+
+const recordedQueries: RecordedQuery[] = [];
+
+function sentProbeSubject(): string | undefined {
+  const sendArg = resendSendSpy.mock.calls[0]?.[0] as
+    | { subject?: string }
+    | undefined;
+  return sendArg?.subject;
+}
+
 function makeBuilder(table: string) {
-  const eqArgs: Array<[string, unknown]> = [];
+  const record: RecordedQuery = {
+    table,
+    eqArgs: [],
+    gteArgs: [],
+    likeCalls: 0,
+  };
+  recordedQueries.push(record);
+  const eqArgs = record.eqArgs;
   let inserting = false;
   const builder: Record<string, unknown> = {};
   const chain = () => builder;
-  for (const m of ["select", "not", "like", "ilike", "gte", "limit"]) {
+  for (const m of ["select", "not", "ilike", "limit"]) {
     builder[m] = vi.fn(chain);
   }
+  builder.like = vi.fn(() => {
+    record.likeCalls += 1;
+    return builder;
+  });
+  builder.gte = vi.fn((col: string, val: unknown) => {
+    record.gteArgs.push([col, val]);
+    return builder;
+  });
   builder.eq = vi.fn((col: string, val: unknown) => {
     eqArgs.push([col, val]);
     return builder;
@@ -127,7 +163,10 @@ function makeBuilder(table: string) {
     } else if (eqArgs.some(([c, v]) => c === "status" && v === "acknowledged")) {
       result = { data: dbState.repinRows, error: dbState.repinError };
     } else if (eqArgs.some(([c, v]) => c === "mail_class" && v === "probe")) {
-      result = { data: dbState.assertRows, error: dbState.assertError };
+      const rows = dbState.assertRows.map((r) =>
+        "subject" in r ? r : { ...r, subject: sentProbeSubject() ?? null },
+      );
+      result = { data: rows, error: dbState.assertError };
     } else {
       result = { data: [], error: null };
     }
@@ -222,6 +261,7 @@ beforeEach(() => {
   warnSilentFallbackSpy.mockClear();
   reportSilentFallbackSpy.mockClear();
   fromSpy.mockClear();
+  recordedQueries.length = 0;
 });
 
 afterEach(() => {
@@ -277,27 +317,50 @@ describe("cron-email-ingress-probe — retention purge (Art. 5(1)(e) first)", ()
 });
 
 describe("cron-email-ingress-probe — deadline re-pin (acknowledge ≠ legal resolution)", () => {
-  it("pings at exactly floor(days-until-due) === 7 and === 2, not 8/6/3/1/0", async () => {
+  it("pings at floor 7 (heads-up) and DAILY from floor 2 through overdue — never 8/6/3", async () => {
     // dsar-art15 is calendar-month: due = received_at + 1 month (clamped).
     // Now = 2026-06-11T12:00Z. received 2026-05-DD T00:00Z → due 2026-06-DD
     // T00:00Z → days-until-due = (DD - 11) - 0.5 → floor (DD - 12).
+    // The overdue/danger bucket (floor <= 2, incl. negative) fires DAILY —
+    // an exact-day match would go silent on an already-overdue item or any
+    // day skipped by a missed cron run.
     dbState.repinRows = [
       dsarRow("due-in-8", "2026-05-20T00:00:00.000Z"), // floor 8 — no ping
-      dsarRow("due-in-7", "2026-05-19T00:00:00.000Z"), // floor 7 — PING
+      dsarRow("due-in-7", "2026-05-19T00:00:00.000Z"), // floor 7 — PING (heads-up)
       dsarRow("due-in-6", "2026-05-18T00:00:00.000Z"), // floor 6 — no ping
       dsarRow("due-in-3", "2026-05-15T00:00:00.000Z"), // floor 3 — no ping
-      dsarRow("due-in-2", "2026-05-14T00:00:00.000Z"), // floor 2 — PING
-      dsarRow("due-in-1", "2026-05-13T00:00:00.000Z"), // floor 1 — no ping
-      dsarRow("due-in-0", "2026-05-12T00:00:00.000Z"), // floor 0 — no ping
+      dsarRow("due-in-2", "2026-05-14T00:00:00.000Z"), // floor 2 — PING (daily)
+      dsarRow("due-in-1", "2026-05-13T00:00:00.000Z"), // floor 1 — PING (daily)
+      dsarRow("due-in-0", "2026-05-12T00:00:00.000Z"), // floor 0 — PING (daily)
+      dsarRow("overdue-1", "2026-05-11T00:00:00.000Z"), // floor -1 — PING (daily)
     ];
     const { result } = runHandler();
     await result;
 
-    expect(notifySpy).toHaveBeenCalledTimes(2);
+    expect(notifySpy).toHaveBeenCalledTimes(5);
     const pingedIds = notifySpy.mock.calls.map(
       (c) => (c[1] as { emailId: string }).emailId,
     );
-    expect(pingedIds.sort()).toEqual(["due-in-2", "due-in-7"]);
+    expect(pingedIds.sort()).toEqual([
+      "due-in-0",
+      "due-in-1",
+      "due-in-2",
+      "due-in-7",
+      "overdue-1",
+    ]);
+  });
+
+  it("bounds the repin scan to received_at >= now - 60 days (C2)", async () => {
+    const { result } = runHandler();
+    await result;
+    const repinQuery = recordedQueries.find((q) =>
+      q.eqArgs.some(([c, v]) => c === "status" && v === "acknowledged"),
+    );
+    expect(repinQuery).toBeDefined();
+    expect(repinQuery!.gteArgs).toContainEqual([
+      "received_at",
+      new Date(Date.parse(NOW) - 60 * 24 * 60 * 60 * 1000).toISOString(),
+    ]);
   });
 
   it("ping payload is the email_triage statutory shape with a formatted due date", async () => {
@@ -360,6 +423,31 @@ describe("cron-email-ingress-probe — same-run assertion", () => {
       ok: false,
       sentryMonitorSlug: SENTRY_MONITOR_SLUG,
     });
+  });
+
+  it("assert query is index-friendly (C3): eq mail_class + gte created_at, NO leading-wildcard LIKE", async () => {
+    const { result } = runHandler();
+    await result;
+    const assertQuery = recordedQueries.find((q) =>
+      q.eqArgs.some(([c, v]) => c === "mail_class" && v === "probe"),
+    );
+    expect(assertQuery).toBeDefined();
+    expect(assertQuery!.likeCalls).toBe(0);
+    expect(
+      assertQuery!.gteArgs.some(([col]) => col === "created_at"),
+    ).toBe(true);
+  });
+
+  it("token match stays EXACT in JS: a probe row carrying a different token does not satisfy the assertion", async () => {
+    dbState.assertRows = [
+      {
+        id: "probe-row-other",
+        subject: "SOLEUR-PROBE-ffffffff-ffff-4fff-8fff-ffffffffffff",
+      },
+    ];
+    const { result } = runHandler();
+    await expect(result).rejects.toThrow(/probe/i);
+    expect(heartbeatSpy.mock.calls[0][0]).toMatchObject({ ok: false });
   });
 });
 

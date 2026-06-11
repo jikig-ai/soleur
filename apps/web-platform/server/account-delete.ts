@@ -899,7 +899,7 @@ export async function deleteAccount(
     return { success: false, error: "Account deletion failed at unknown. Please try again." };
   }
 
-  // 3.96 Anonymise email_triage_items (migration 102, #5103).
+  // 3.97 Anonymise email_triage_items (migration 102, #5103).
   //      email_triage_items.user_id references users(id) ON DELETE RESTRICT —
   //      without this step the auth-delete cascade would abort with FK 23503
   //      (and a no-delete WORM trigger would block a CASCADE anyway). The RPC
@@ -917,14 +917,14 @@ export async function deleteAccount(
         { userId, err: anonTriageErr },
         "anonymise_email_triage_items failed — aborting deletion to avoid FK-block",
       );
-      return { success: false, error: "Account deletion failed at unknown. Please try again." };
+      return { success: false, error: "Account deletion failed at anonymise-email-triage-items. Please try again." };
     }
   } catch (err) {
     log.error(
       { userId, err },
       "anonymise_email_triage_items threw — aborting deletion to avoid FK-block",
     );
-    return { success: false, error: "Account deletion failed at unknown. Please try again." };
+    return { success: false, error: "Account deletion failed at anonymise-email-triage-items. Please try again." };
   }
 
   // 4. Delete auth record — FK cascade handles public.users and all children

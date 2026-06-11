@@ -16,21 +16,13 @@
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { sanitizeDisplayString } from "@/lib/sanitize-display";
+import { triagePillClass, triagePillLabel } from "@/lib/email-triage-display";
 import {
   STATUTORY_RULES,
   formatDueDate,
-} from "@/server/email-triage/statutory-rules";
+} from "@/lib/email-triage/statutory-rules";
 
 export const dynamic = "force-dynamic";
-
-const MAIL_CLASS_LABELS: Record<string, string> = {
-  vendor: "Vendor",
-  billing: "Billing",
-  security: "Security",
-  newsletter: "Newsletter",
-  "legal-review": "Legal review",
-  other: "Other",
-};
 
 interface EmailTriageDetailRow {
   id: string;
@@ -85,14 +77,8 @@ export default async function EmailTriageDetailPage({
     ? STATUTORY_RULES.find((r) => r.ruleId === item.rule_id) ?? null
     : null;
 
-  const pillLabel = isStatutory
-    ? "Statutory"
-    : MAIL_CLASS_LABELS[item.mail_class ?? ""] ?? "Email";
-  const pillClass = isStatutory
-    ? "bg-red-500/10 text-red-500"
-    : item.mail_class === "legal-review"
-      ? "bg-amber-500/15 text-amber-400"
-      : "bg-blue-500/10 text-blue-400";
+  const pillLabel = triagePillLabel(item);
+  const pillClass = triagePillClass(item);
 
   const receivedDisplay = new Date(item.received_at).toUTCString();
 
@@ -143,7 +129,8 @@ export default async function EmailTriageDetailPage({
             ) : (
               <p className="text-sm text-soleur-text-secondary">
                 Statutory item — matched rule not found in the registry.
-                Verify against the original in the Proton ops@ mailbox.
+                Verify against the original, normally retained in the Proton
+                ops@ mailbox.
               </p>
             )}
           </section>
@@ -190,7 +177,8 @@ export default async function EmailTriageDetailPage({
 
         <p className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2/50 p-4 text-xs text-soleur-text-secondary">
           The email body was discarded at ingestion — only this summary is
-          stored. The original message is retained in the Proton ops@ mailbox.
+          stored. The original message is normally retained in the Proton
+          ops@ mailbox.
         </p>
       </div>
     </main>

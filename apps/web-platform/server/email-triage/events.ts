@@ -17,7 +17,7 @@ export interface EmailInboundReceivedData {
   messageId: string | null;
   /** `data.from`. Unauthenticated claim — Sieve forwarding strips SPF/DKIM
    * context; no consumer may derive trust from it. */
-  sender: string;
+  sender: string | null; // nullable: missing/empty From header → null (NULL-not-empty-string discipline, mig 102)
   subject: string;
   /** `data.created_at` — the RECEIVE timestamp, never route-processing
    * time. A 10-hour webhook retry must not eat an Art. 12 clock. */

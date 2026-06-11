@@ -55,20 +55,21 @@ if [[ -z "${RESEND_API_KEY:-}" ]]; then
   exit 1
 fi
 
-# Authenticated GET/POST/PATCH against the Resend API. The API key only ever
-# travels in the header — never in argv visible via ps (curl -H is argv, but
-# the value is the header string; acceptable for a single-operator laptop
-# run; the alternative --config stdin adds fragility for no realistic gain).
+# Authenticated GET/POST/PATCH against the Resend API. The API key NEVER
+# appears in argv (a `curl -H "Authorization: ..."` header is readable by any
+# local process via /proc/<pid>/cmdline): the Authorization header reaches
+# curl through --config on a process-substitution FD, so it exists only as an
+# unlinked pipe between bash and curl.
 resend_api() {
   local method="$1" path="$2" body="${3:-}"
   if [[ -n "$body" ]]; then
     curl -sS -X "$method" "${RESEND_API}${path}" \
-      -H "Authorization: Bearer ${RESEND_API_KEY}" \
+      --config <(printf 'header = "Authorization: Bearer %s"\n' "$RESEND_API_KEY") \
       -H "Content-Type: application/json" \
       -d "$body"
   else
     curl -sS -X "$method" "${RESEND_API}${path}" \
-      -H "Authorization: Bearer ${RESEND_API_KEY}"
+      --config <(printf 'header = "Authorization: Bearer %s"\n' "$RESEND_API_KEY")
   fi
 }
 

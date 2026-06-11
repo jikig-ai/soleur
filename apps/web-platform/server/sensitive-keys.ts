@@ -80,6 +80,11 @@ export const SENSITIVE_KEY_NAMES = [
   "sender",
   "from",
   "to",
+  // Attachment filenames are third-party-controlled PII (e.g.
+  // "DSAR_jane_doe.pdf") and ride along in event_data via the same
+  // middleware setExtra path — scrub the array key and the per-item key.
+  "attachments",
+  "filename",
   // HTTP transport
   "cookie",
   "x-nonce",

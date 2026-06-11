@@ -11,11 +11,12 @@
 //   (1) step.run("retention-purge")  — purge_email_triage_items() RPC
 //       (service-role only; GUC-bypass inside the RPC). Failure FAILS THE
 //       RUN — no try/catch swallow.
-//   (2) step.run("deadline-repin")   — T-7d/T-2d deadline-approach ping for
-//       acknowledged-but-unresolved statutory items. Acknowledge is workflow
-//       state, not legal resolution — without this mechanical backstop the
-//       UI copy's distinction is just a claim. Clock derives from
-//       received_at + the registry dueRule (no clock columns in the DB).
+//   (2) step.run("deadline-repin")   — deadline-approach ping for
+//       acknowledged-but-unresolved statutory items: once at T-7d, then
+//       DAILY from T-2d through overdue. Acknowledge is workflow state, not
+//       legal resolution — without this mechanical backstop the UI copy's
+//       distinction is just a claim. Clock derives from received_at + the
+//       registry dueRule (no clock columns in the DB).
 //   (3) step.run("send-probe")       — per-run unguessable token recorded in
 //       probe_tokens BEFORE the Resend outbound send (an unrecorded token
 //       would make our own probe classify 'other' as a forgeable shape);
@@ -51,7 +52,7 @@ import {
   STATUTORY_RULES,
   computeDueDate,
   formatDueDate,
-} from "@/server/email-triage/statutory-rules";
+} from "@/lib/email-triage/statutory-rules";
 import { postSentryHeartbeat, type HandlerArgs } from "./_cron-shared";
 
 // =============================================================================
@@ -63,8 +64,24 @@ export const SENTRY_MONITOR_SLUG = "cron-email-ingress-probe";
 /** Ingress SLA: the probe row must land within this window of the send. */
 export const PROBE_AWAIT_INGRESS_DURATION = "15m";
 
-/** Floor days-until-due values that trigger a deadline-approach re-ping. */
-export const DEADLINE_REPIN_DAYS: readonly number[] = [7, 2];
+/** One-shot heads-up ping at exactly T-7 days (floor). */
+export const DEADLINE_REPIN_HEADS_UP_DAY = 7;
+
+/**
+ * Daily ping from T-2 days through overdue (floor <= 2, including negative
+ * values): the most dangerous bucket — an item at/past its statutory
+ * deadline — must never be silent. An exact-day match would miss both
+ * already-overdue items and any day skipped by a missed cron run.
+ */
+export const DEADLINE_REPIN_DANGER_THRESHOLD_DAYS = 2;
+
+/**
+ * Repin scan bound: only rows received within the last 60 days. Covers
+ * every registry rule's due window (max: one calendar month ≈ 31 days)
+ * plus a full month of overdue-daily-ping margin — and keeps the scan from
+ * growing without bound as the table accretes acknowledged history.
+ */
+export const DEADLINE_REPIN_SCAN_WINDOW_DAYS = 60;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -125,11 +142,16 @@ export async function cronEmailIngressProbeHandler({
   // ---- (2) deadline-approach re-pin (T-7d / T-2d) ---------------------------
   const repin = await step.run("deadline-repin", async () => {
     const sb = createServiceClient();
+    const scanFloor = new Date(
+      Date.now() - DEADLINE_REPIN_SCAN_WINDOW_DAYS * DAY_MS,
+    ).toISOString();
     const { data, error } = await sb
       .from("email_triage_items")
       .select("id, user_id, received_at, rule_id, statutory_class")
       .eq("status", "acknowledged")
-      .not("statutory_class", "is", null);
+      .not("statutory_class", "is", null)
+      // Bounded scan — see DEADLINE_REPIN_SCAN_WINDOW_DAYS for why 60.
+      .gte("received_at", scanFloor);
     if (error) {
       throw new Error(
         `deadline-repin select failed: ${error.code ?? "unknown"}`,
@@ -154,7 +176,14 @@ export async function cronEmailIngressProbeHandler({
       }
       const due = computeDueDate(row.received_at, rule.dueRule);
       const daysUntilDue = Math.floor((due.getTime() - Date.now()) / DAY_MS);
-      if (!DEADLINE_REPIN_DAYS.includes(daysUntilDue)) continue;
+      // Fire at exactly T-7 (heads-up), then DAILY from T-2 through overdue
+      // — never silent in the most dangerous bucket (see constants above).
+      if (
+        daysUntilDue !== DEADLINE_REPIN_HEADS_UP_DAY &&
+        daysUntilDue > DEADLINE_REPIN_DANGER_THRESHOLD_DAYS
+      ) {
+        continue;
+      }
 
       // Title carries only the registry-derived due string — never the
       // third-party subject (TR3 hygiene is moot for this synthetic title,
@@ -208,7 +237,11 @@ export async function cronEmailIngressProbeHandler({
       { fn: "cron-email-ingress-probe" },
       "probe email dispatched",
     );
-    return { token };
+    // sentAt is checkpointed with the step return (deterministic on replay)
+    // so the assert query below can be time-bounded to THIS run's send —
+    // a top-of-handler timestamp would re-evaluate after the sleep on
+    // Inngest's re-invocation model and miss the row.
+    return { token, sentAt: new Date().toISOString() };
   });
 
   // ---- (4) ingress SLA window -----------------------------------------------
@@ -217,18 +250,27 @@ export async function cronEmailIngressProbeHandler({
   // ---- (5) same-run assertion -----------------------------------------------
   const found = await step.run("assert-probe-row", async () => {
     const sb = createServiceClient();
+    // Index-friendly shape: equality on mail_class + a created_at lower
+    // bound (this run's send time, minus 60s of app/DB clock-skew slack),
+    // then token-exact match in JS over the tiny result set. A
+    // leading-wildcard LIKE on subject can never use an index.
+    const createdFloor = new Date(
+      Date.parse(probe.sentAt) - 60_000,
+    ).toISOString();
     const { data, error } = await sb
       .from("email_triage_items")
-      .select("id")
+      .select("id, subject")
       .eq("mail_class", "probe")
-      .like("subject", `%${PROBE_MARKER_PREFIX}${probe.token}%`)
-      .limit(1);
+      .gte("created_at", createdFloor);
     if (error) {
       throw new Error(
         `assert-probe-row select failed: ${error.code ?? "unknown"}`,
       );
     }
-    const ok = (data ?? []).length > 0;
+    const marker = `${PROBE_MARKER_PREFIX}${probe.token}`;
+    const ok = ((data ?? []) as { id: string; subject: string | null }[]).some(
+      (row) => row.subject?.includes(marker) ?? false,
+    );
     await postSentryHeartbeat({
       ok,
       sentryMonitorSlug: SENTRY_MONITOR_SLUG,

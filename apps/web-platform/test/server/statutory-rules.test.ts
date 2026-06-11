@@ -22,7 +22,7 @@ import {
   computeDueDate,
   formatDueDate,
   type StatutoryRule,
-} from "@/server/email-triage/statutory-rules";
+} from "@/lib/email-triage/statutory-rules";
 
 const PLAIN_SENDER = "correspondent@example-person.test";
 const PROBE_UUID = "3f2a9c1e-7b4d-4e2a-9f10-6c8d2e5a7b3c";

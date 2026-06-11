@@ -27,16 +27,20 @@
 //
 // Observability: function-final errors are captured by Layer 1
 // (server/inngest/middleware/sentry-correlation.ts transformOutput) — no
-// per-function captureException needed for terminal errors. The ONLY
-// explicit Sentry mirror here is the statutory notify failure
-// (notifications.ts's catch passes errors to log.error, which the Layer 2
-// pino hook does not capture as an exception for string-shaped err values).
+// per-function captureException needed for terminal errors. Statutory
+// notify failures are mirrored to Sentry INSIDE notifications.ts
+// (mirrorStatutoryNotifyFailure, tags feature=email-triage /
+// op=statutory-notify-failed) — the single mirror lives there; this module
+// adds no second catch around notifyOfflineUser (which never throws: its
+// body is wrapped in notifications.ts).
 //
 // TR3: no log/Sentry call carries body, subject, or sender values —
 // including Error message strings. DB column writes (sender/subject/summary)
-// are the sanctioned store; the ban is logs/Sentry/Inngest checkpoints.
+// are the sanctioned store. The Inngest-checkpoint ban applies to the RAW
+// BODY only: it must never be a step return value or event field
+// (parse-and-discard); summary/subject/sender DO cross step boundaries by
+// design and are disclosed (DPIA — Inngest run-store line).
 
-import * as Sentry from "@sentry/nextjs";
 import { inngest } from "@/server/inngest/client";
 import { createServiceClient } from "@/lib/supabase/service";
 import { warnSilentFallback, reportSilentFallback } from "@/server/observability";
@@ -51,7 +55,7 @@ import {
   matchProbeToken,
   isThinBody,
   normalizeEmailHtml,
-} from "@/server/email-triage/statutory-rules";
+} from "@/lib/email-triage/statutory-rules";
 import { fetchReceivedEmail } from "@/server/email-triage/fetch-received-email";
 import { summarizeEmail, type MailClass } from "@/server/email-triage/summarize";
 
@@ -64,16 +68,26 @@ import { summarizeEmail, type MailClass } from "@/server/email-triage/summarize"
  */
 export const EMAIL_TRIAGE_DAILY_LLM_CEILING = 200;
 
-/** Statutory ping coalescing window — see step (6). */
+/** Statutory ping coalescing bucket — see sendTriageNotification. */
 const STATUTORY_COALESCE_MS = 10 * 60 * 1000;
 
 /** Probe tokens are only honored within 24h of minting (probe cron cadence). */
 const PROBE_TOKEN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
+/** Owner-validation memo TTL — the owner env is static; re-validating with
+ * 2 queries per email is pure overhead. 1h bounds staleness if the owner
+ * row is ever deleted/demoted. */
+const OWNER_VALIDATION_TTL_MS = 60 * 60 * 1000;
+
 type ServiceClient = ReturnType<typeof createServiceClient>;
 
+/** Route-emitted event data: sender is null (never "") when data.from was
+ * missing/empty — local widening mirrored in resend-inbound/route.ts; fold
+ * into EmailInboundReceivedData when the events module can be touched. */
+type InboundEventData = EmailInboundReceivedData;
+
 interface HandlerArgs {
-  event: { data: EmailInboundReceivedData };
+  event: { data: InboundEventData };
   step: { run<T>(name: string, cb: () => Promise<T>): Promise<T> };
   logger?: {
     info: (...args: unknown[]) => void;
@@ -99,17 +113,45 @@ async function applyFinalize(
     .update(patch)
     .eq("id", itemId);
   if (error) {
+    // Adopt-race loser: two concurrent runs can both adopt the same
+    // unfinalized stub; the WORM freeze trigger raises P0001 for the
+    // second finalize. Re-select — if the row is already finalized the
+    // race winner did the work and this run short-circuits gracefully
+    // instead of dying as an unhandled P0001.
+    if (error.code === "P0001") {
+      const { data: row, error: selErr } = await sb
+        .from("email_triage_items")
+        .select("mail_class, statutory_class")
+        .eq("id", itemId)
+        .maybeSingle();
+      const existing = row as {
+        mail_class: string | null;
+        statutory_class: string | null;
+      } | null;
+      if (
+        !selErr &&
+        existing &&
+        (existing.mail_class !== null || existing.statutory_class !== null)
+      ) {
+        return; // already finalized by the race winner — nothing to do
+      }
+    }
     // Code only — never row values (TR3).
     throw new Error(`email_triage finalize failed: ${error.code ?? "unknown"}`);
   }
 }
 
 /**
- * Step (6) body. Statutory pings coalesce: if another statutory item row was
- * created within the last 10 minutes (excluding this one), skip the ping —
- * the earlier item already pinged and rows stay pinned in the UI. When
- * pinging with N>1 unacknowledged statutory items, the title appends
- * " (+N-1 more)".
+ * Step (6) body. Statutory pings coalesce on WALL-CLOCK 10-minute buckets:
+ * the ping is suppressed only when another statutory row (excluding this
+ * one) was created within the CURRENT bucket (created_at >=
+ * floor(now / 10min)). Anchoring on the bucket — not on "any row in the
+ * last 10 minutes" — means a sustained <10-min drip still pings once per
+ * bucket (max 1 ping / 10 min, the actual contract) instead of pinging
+ * once and then being chain-suppressed forever. The lookup is fail-OPEN:
+ * on a query error we ping (a duplicate ping is noise; a silently missed
+ * statutory ping is an eaten Art. 12 clock). When pinging with N>1
+ * unacknowledged statutory items, the title appends " (+N-1 more)".
  */
 async function sendTriageNotification(args: {
   ownerId: string;
@@ -121,13 +163,16 @@ async function sendTriageNotification(args: {
   let title = args.subject;
 
   if (args.statutory) {
-    const windowStart = new Date(Date.now() - STATUTORY_COALESCE_MS).toISOString();
+    const bucketStart = new Date(
+      Math.floor(Date.now() / STATUTORY_COALESCE_MS) * STATUTORY_COALESCE_MS,
+    ).toISOString();
     const { data: recent, error: recentErr } = await sb
       .from("email_triage_items")
       .select("id")
+      .eq("user_id", args.ownerId)
       .not("statutory_class", "is", null)
       .neq("id", args.itemId)
-      .gte("created_at", windowStart)
+      .gte("created_at", bucketStart)
       .limit(1);
     if (!recentErr && recent && recent.length > 0) {
       return { pinged: false };
@@ -136,6 +181,7 @@ async function sendTriageNotification(args: {
     const { count } = await sb
       .from("email_triage_items")
       .select("id", { count: "exact", head: true })
+      .eq("user_id", args.ownerId)
       .not("statutory_class", "is", null)
       .eq("status", "new");
     const unacknowledged = count ?? 1;
@@ -144,26 +190,28 @@ async function sendTriageNotification(args: {
     }
   }
 
-  try {
-    await notifyOfflineUser(args.ownerId, {
-      type: "email_triage",
-      emailId: args.itemId, // DB uuid ONLY — lands in href unescaped.
-      title,
-      isStatutory: args.statutory,
-    });
-  } catch (err) {
-    if (args.statutory) {
-      // Explicit mirror (cq-silent-fallback-must-mirror-to-sentry): the
-      // notifications-layer catch logs without capturing, and a silently
-      // missed statutory ping is an eaten Art. 12 clock.
-      Sentry.captureException(
-        err instanceof Error ? err : new Error("statutory notify failed"),
-        { tags: { feature: "email-triage", op: "statutory-notify-failed" } },
-      );
-    }
-    // Non-statutory: keep existing fire-and-forget behavior.
-  }
+  // No try/catch here: notifyOfflineUser never throws (its body is wrapped
+  // in notifications.ts) and statutory failures are mirrored to Sentry
+  // there (mirrorStatutoryNotifyFailure) — a second catch would be dead
+  // code and a duplicate-mirror hazard.
+  await notifyOfflineUser(args.ownerId, {
+    type: "email_triage",
+    emailId: args.itemId, // DB uuid ONLY — lands in href unescaped.
+    title,
+    isStatutory: args.statutory,
+  });
   return { pinged: true };
+}
+
+// Module-level owner-validation memo (P9f): the owner env is static, so
+// re-running the users + workspace_members checks on every email is pure
+// overhead. Keyed on ownerId (an env rotation invalidates immediately) with
+// a 1h TTL bound on staleness.
+let ownerValidationMemo: { ownerId: string; validatedAt: number } | null = null;
+
+/** Test-only: clear the owner-validation memo between cases. */
+export function resetOwnerValidationMemo(): void {
+  ownerValidationMemo = null;
 }
 
 export async function emailOnReceivedHandler({
@@ -190,38 +238,55 @@ export async function emailOnReceivedHandler({
     // the ADR-038 N2 solo-workspace shape — a workspace_members row with
     // workspace_id = user_id = owner AND role = 'owner' (users.role is
     // 'prd'/'dev' flag-targeting, not ownership). Invalid → retriable throw.
-    const { data: userRow, error: userErr } = await sb
-      .from("users")
-      .select("id")
-      .eq("id", ownerId)
-      .maybeSingle();
-    if (userErr) {
-      throw new Error(`owner lookup failed: ${userErr.code ?? "unknown"}`);
-    }
-    if (!userRow) {
-      throw new Error(
-        "EMAIL_TRIAGE_OWNER_USER_ID does not match a users row",
-      );
-    }
-    const { data: memberRow, error: memberErr } = await sb
-      .from("workspace_members")
-      .select("user_id")
-      .eq("workspace_id", ownerId)
-      .eq("user_id", ownerId)
-      .eq("role", "owner")
-      .maybeSingle();
-    if (memberErr) {
-      throw new Error(`owner role lookup failed: ${memberErr.code ?? "unknown"}`);
-    }
-    if (!memberRow) {
-      throw new Error(
-        "EMAIL_TRIAGE_OWNER_USER_ID is not the workspace owner (workspace_members role='owner')",
-      );
+    // Memoized per ownerId with a 1h TTL (P9f) — the env is static and two
+    // queries per email is pure overhead.
+    const memoFresh =
+      ownerValidationMemo !== null &&
+      ownerValidationMemo.ownerId === ownerId &&
+      Date.now() - ownerValidationMemo.validatedAt < OWNER_VALIDATION_TTL_MS;
+    if (!memoFresh) {
+      const { data: userRow, error: userErr } = await sb
+        .from("users")
+        .select("id")
+        .eq("id", ownerId)
+        .maybeSingle();
+      if (userErr) {
+        throw new Error(`owner lookup failed: ${userErr.code ?? "unknown"}`);
+      }
+      if (!userRow) {
+        throw new Error(
+          "EMAIL_TRIAGE_OWNER_USER_ID does not match a users row",
+        );
+      }
+      const { data: memberRow, error: memberErr } = await sb
+        .from("workspace_members")
+        .select("user_id")
+        .eq("workspace_id", ownerId)
+        .eq("user_id", ownerId)
+        .eq("role", "owner")
+        .maybeSingle();
+      if (memberErr) {
+        throw new Error(`owner role lookup failed: ${memberErr.code ?? "unknown"}`);
+      }
+      if (!memberRow) {
+        throw new Error(
+          "EMAIL_TRIAGE_OWNER_USER_ID is not the workspace owner (workspace_members role='owner')",
+        );
+      }
+      ownerValidationMemo = { ownerId, validatedAt: Date.now() };
     }
 
-    // RFC 5322 Message-ID is optional + sender-controlled; Postgres UNIQUE
-    // treats NULLs as distinct — claim_key COALESCEs to the Resend id.
-    const claimKey = data.messageId ?? `resend:${data.resendEmailId}`;
+    // claim_key dedups redeliveries of the SAME inbound mail. RFC 5322
+    // Message-ID is optional AND sender-controlled — an attacker who knows
+    // (or guesses) a Message-ID could otherwise pre-claim it and suppress a
+    // victim's mail. Scoping the key by sender confines that suppression to
+    // the attacker's own sender identity; no sender or no Message-ID →
+    // fall back to the Resend delivery id (unique per delivery; Postgres
+    // UNIQUE treats NULLs as distinct, hence a non-NULL COALESCE).
+    const claimKey =
+      data.messageId && data.sender
+        ? `${data.sender}|${data.messageId}`
+        : `resend:${data.resendEmailId}`;
 
     const { data: inserted, error: insertErr } = await sb
       .from("email_triage_items")
@@ -283,7 +348,7 @@ export async function emailOnReceivedHandler({
   // ---- (2) statutory check on event METADATA — pure/inline, no IO ----------
   const metaRule = matchStatutoryMetadata({
     subject: data.subject,
-    sender: data.sender,
+    sender: data.sender ?? "",
     attachmentFilenames: (data.attachments ?? []).map((a) => a.filename),
   });
   if (metaRule) {
@@ -361,12 +426,22 @@ export async function emailOnReceivedHandler({
     const sb = createServiceClient();
 
     // Daily LLM ceiling FIRST — before the body fetch spends anything.
+    // Owner-scoped, and only rows that actually represent LLM spend count:
+    // probe rows and "deferred — volume cap" sentinel rows carry a non-NULL
+    // summary with zero Anthropic involvement. (`.neq("mail_class","probe")`
+    // is 3VL-safe here: a non-NULL summary implies a non-NULL mail_class on
+    // every non-statutory finalize path.) Thin-body legal-review rows DO
+    // still count — a conservative overcount, which is the safe direction
+    // for spend.
     const startOfDay = new Date();
     startOfDay.setUTCHours(0, 0, 0, 0);
     const { count, error: countErr } = await sb
       .from("email_triage_items")
       .select("id", { count: "exact", head: true })
+      .eq("user_id", ownerId)
       .not("summary", "is", null)
+      .neq("mail_class", "probe")
+      .not("summary", "like", "deferred — volume cap%")
       .gte("created_at", startOfDay.toISOString());
     if (countErr) {
       throw new Error(`llm ceiling count failed: ${countErr.code ?? "unknown"}`);
@@ -382,7 +457,11 @@ export async function emailOnReceivedHandler({
     }
 
     const { text, html } = await fetchReceivedEmail(data.resendEmailId);
-    const bodyText = text ?? normalizeEmailHtml(html ?? "");
+    // Use the text part only when it carries actual content — an
+    // empty/whitespace-only text part must not bypass HTML normalization
+    // (an HTML-only DSAR with text:"" would otherwise skip the body pass).
+    const bodyText =
+      text && text.trim().length > 0 ? text : normalizeEmailHtml(html ?? "");
 
     // Body-text statutory pass (deterministic, before any LLM involvement).
     const bodyRule = matchStatutoryBody(bodyText);
@@ -409,7 +488,7 @@ export async function emailOnReceivedHandler({
 
     const { summary, mailClass } = await summarizeEmail({
       subject: data.subject,
-      sender: data.sender,
+      sender: data.sender ?? "",
       bodyText,
     });
     // THE BODY MUST NEVER BE A STEP RETURN VALUE: Inngest checkpoints

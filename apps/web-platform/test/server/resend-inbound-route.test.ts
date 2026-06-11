@@ -172,6 +172,41 @@ describe("POST /api/webhooks/resend-inbound — secret + signature gates", () =>
     expect(res.status).toBe(413);
     expect(mockInsert).not.toHaveBeenCalled();
   });
+
+  it("measures the cap in UTF-8 BYTES — multibyte payload near the boundary trips 413", async () => {
+    // "é" is 1 UTF-16 code unit but 2 UTF-8 bytes: 140_000 of them inside
+    // the JSON wrapper stay far under the cap in .length terms (~140k code
+    // units) while exceeding 256 KiB on the wire. A .length-based check
+    // would wrongly accept this body.
+    const multibyte = JSON.stringify({ pad: "é".repeat(140_000) });
+    expect(multibyte.length).toBeLessThan(262_144);
+    expect(Buffer.byteLength(multibyte, "utf8")).toBeGreaterThan(262_144);
+    const res = await POST(makeRequest({ body: multibyte, tamper: true }));
+    expect(res.status).toBe(413);
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  it("rejects 413 from the Content-Length header alone, before reading the body", async () => {
+    const req = makeRequest({ tamper: true });
+    const headers = new Headers(req.headers);
+    headers.set("content-length", String(262_145));
+    // Body read would throw if attempted — proving the pre-read reject.
+    const trapped = new Proxy(req, {
+      get(target, prop, receiver) {
+        if (prop === "text") {
+          return () => {
+            throw new Error("body must not be read on a declared-oversize request");
+          };
+        }
+        if (prop === "headers") return headers;
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const res = await POST(trapped as Request);
+    expect(res.status).toBe(413);
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
 });
 
 describe("POST /api/webhooks/resend-inbound — pre-dedup classification", () => {
@@ -287,6 +322,35 @@ describe("POST /api/webhooks/resend-inbound — event emission", () => {
       expect.any(String),
       expect.objectContaining({ level: "warning" }),
     );
+  });
+
+  it("empty / whitespace-only message_id → null (claim_key must not collapse on '')", async () => {
+    for (const bad of ["", "   "]) {
+      mockInngestSend.mockClear();
+      const res = await POST(
+        makeRequest({ body: receivedPayload({ message_id: bad }) }),
+      );
+      expect(res.status).toBe(200);
+      const sent = mockInngestSend.mock.calls[0][0] as {
+        data: { messageId: string | null };
+      };
+      expect(sent.data.messageId).toBeNull();
+    }
+  });
+
+  it("missing or empty from → sender null, never '' (NULL-not-'' discipline)", async () => {
+    for (const bad of [undefined, "", "   ", 42]) {
+      mockInngestSend.mockClear();
+      const res = await POST(
+        makeRequest({ body: receivedPayload({ from: bad }) }),
+      );
+      expect(res.status).toBe(200);
+      const sent = mockInngestSend.mock.calls[0][0] as {
+        data: { sender: string | null };
+      };
+      expect(sent.data.sender).toBeNull();
+      expect(sent.data.sender).not.toBe("");
+    }
   });
 
   it("falls back to the envelope when data.created_at is unparseable", async () => {

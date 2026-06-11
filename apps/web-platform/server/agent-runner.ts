@@ -1312,7 +1312,10 @@ resuming an existing thread preserves context for the user.
 
 Mail sent to the operator's ops@ address is auto-triaged into an inbox of
 summarized items; use email_triage_list to see them (unacknowledged statutory
-items are pinned first) and email_triage_get for one item's detail. Statutory
+items are pinned first) and email_triage_get for one item's detail. Archived
+items are hidden by default — list them via
+email_triage_list({ status: "archived" }) — and synthetic ingress-probe rows
+only appear when you pass includeProbes: true. Statutory
 items (breach, service-of-process, DSAR, regulator contact) carry a legal
 clock — the due date (dueDate/dueLabel) is derived server-side from the
 statutory registry, so never compute or invent statutory periods yourself.

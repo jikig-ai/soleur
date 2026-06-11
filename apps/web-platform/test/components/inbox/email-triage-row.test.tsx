@@ -5,7 +5,7 @@ import {
   EmailTriageRow,
   type EmailTriageItem,
 } from "@/components/inbox/email-triage-row";
-import { formatDueDate, STATUTORY_RULES } from "@/server/email-triage/statutory-rules";
+import { formatDueDate, STATUTORY_RULES } from "@/lib/email-triage/statutory-rules";
 
 // feat-operator-inbox-delegation Phase 5b (AC5) — email-triage row variants.
 //
@@ -194,11 +194,77 @@ describe("EmailTriageRow — legal-review variant", () => {
   it("renders the distinct rules-did-not-match warning copy", () => {
     render(<EmailTriageRow item={makeItem({ mail_class: "legal-review" })} />);
 
+    // N4 honesty fix: "normally retained" — the UI must not promise
+    // unconditional Proton retention.
     expect(
       screen.getByText(
-        /Rules did not match — verify against the original in the Proton ops@ mailbox/,
+        /Rules did not match — verify against the original, normally retained in the Proton ops@ mailbox/,
       ),
     ).toBeInTheDocument();
+  });
+});
+
+describe("EmailTriageRow — action error surfacing (N5)", () => {
+  it("failed acknowledge (500) shows inline error text and does NOT call onChanged", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: "Internal error" }), { status: 500 }),
+    );
+    const onChanged = vi.fn();
+    render(<EmailTriageRow item={makeStatutoryItem()} onChanged={onChanged} />);
+
+    fireEvent.click(screen.getByLabelText("Acknowledge email"));
+
+    expect(
+      await screen.findByText("Couldn't acknowledge — try again."),
+    ).toBeInTheDocument();
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it("failed archive (500) shows the archive-specific error text", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: "Internal error" }), { status: 500 }),
+    );
+    render(<EmailTriageRow item={makeItem()} />);
+
+    fireEvent.click(screen.getByLabelText("Archive email"));
+
+    expect(
+      await screen.findByText("Couldn't archive — try again."),
+    ).toBeInTheDocument();
+  });
+
+  it("409 (row already transitioned elsewhere) calls onChanged so the refetch reconciles", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: "Invalid transition" }), {
+        status: 409,
+      }),
+    );
+    const onChanged = vi.fn();
+    render(<EmailTriageRow item={makeStatutoryItem()} onChanged={onChanged} />);
+
+    fireEvent.click(screen.getByLabelText("Acknowledge email"));
+
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    // No error shown — the refetch resolves the stale row.
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("a retry after a failure clears the previous error", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: "Internal error" }), { status: 500 }),
+    );
+    const onChanged = vi.fn();
+    render(<EmailTriageRow item={makeStatutoryItem()} onChanged={onChanged} />);
+
+    fireEvent.click(screen.getByLabelText("Acknowledge email"));
+    expect(
+      await screen.findByText("Couldn't acknowledge — try again."),
+    ).toBeInTheDocument();
+
+    // Default mock (200) takes over for the retry.
+    fireEvent.click(screen.getByLabelText("Acknowledge email"));
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
 

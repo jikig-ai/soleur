@@ -103,6 +103,7 @@ REVOKE DELETE ON TABLE public.email_triage_items FROM PUBLIC, anon, authenticate
 
 -- SELECT: owner only. NO INSERT/UPDATE/DELETE policies for authenticated
 -- (learning 2026-05-21: an owner-write policy beside RPCs is a bypass path).
+DROP POLICY IF EXISTS email_triage_items_owner_select ON public.email_triage_items;
 CREATE POLICY email_triage_items_owner_select ON public.email_triage_items
   FOR SELECT TO authenticated
   USING (user_id = auth.uid());
@@ -110,6 +111,18 @@ CREATE POLICY email_triage_items_owner_select ON public.email_triage_items
 CREATE INDEX IF NOT EXISTS email_triage_items_user_received_idx
   ON public.email_triage_items (user_id, received_at DESC)
   WHERE status <> 'archived';
+
+-- Serves the daily-LLM-ceiling count (summaries written today) and the
+-- statutory coalescing window — both predicate on summary IS NOT NULL
+-- bounded by created_at.
+CREATE INDEX IF NOT EXISTS email_triage_items_llm_ceiling_idx
+  ON public.email_triage_items (created_at)
+  WHERE summary IS NOT NULL;
+
+-- Archived view: the exact complement of the partial index above.
+CREATE INDEX IF NOT EXISTS email_triage_items_archived_idx
+  ON public.email_triage_items (user_id, received_at DESC)
+  WHERE status = 'archived';
 
 COMMENT ON TABLE public.email_triage_items IS
   'WORM operator email-triage ledger (feat-operator-inbox-delegation). '
@@ -328,9 +341,12 @@ DECLARE
 BEGIN
   SET LOCAL app.email_triage_purge_in_progress = 'on';
 
-  -- Probe rows: deterministic liveness traffic; 7-day retention.
+  -- Probe rows: deterministic liveness traffic; 7-day retention. The
+  -- statutory carve-out mirrors the 365d sweep below — a probe row that
+  -- somehow acquired a statutory_class is evidence, never sweepable.
   DELETE FROM public.email_triage_items
    WHERE mail_class = 'probe'
+     AND statutory_class IS NULL
      AND received_at < now() - interval '7 days';
   GET DIAGNOSTICS v_probe = ROW_COUNT;
 
@@ -443,5 +459,10 @@ BEGIN
     '0 4 * * *',
     $$DELETE FROM public.processed_resend_events WHERE received_at < now() - interval '90 days'$$
   );
-EXCEPTION WHEN duplicate_object THEN NULL;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+  -- Mirror the down-file's tolerance: on DBs without pg_cron (local/CI),
+  -- cron.job does not exist — warn instead of aborting the migration.
+  WHEN undefined_table THEN
+    RAISE WARNING 'pg_cron absent — processed_resend_events retention sweep not scheduled';
 END $cron_block$;

@@ -123,6 +123,11 @@ guarantee survives any future code change that forgets the rule.
 - New ingresses keep getting cheaper: this is the third consumer of the
   verify → dedup → send → release shape and the second consumer of the
   release-on-failure step, with `lib/webhook-dedup` now shared.
+- **Leader-prompts coupling:** `server/email-triage/summarize.ts` imports
+  `sanitizePromptString` and `HAIKU_MODEL` from
+  `server/inngest/leader-prompts/{prompt-assembly,constants}` — extracting
+  these shared LLM utilities to a neutral module is deliberate follow-up
+  scope, not an oversight.
 
 ## Cost Impacts
 

@@ -371,6 +371,14 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         received_at: isoDaysAgo(366),
         subject: "synthetic statutory",
       });
+      // Probe row >7d WITH a statutory_class — the probe sweep's statutory
+      // carve-out (mirrors the 365d sweep) must RETAIN it.
+      const statutoryProbe = await insertStub(service, userA.id, {
+        mail_class: "probe",
+        statutory_class: "dsar",
+        received_at: isoDaysAgo(8),
+        subject: "synthetic statutory probe",
+      });
       // Fresh row — must be retained and rejects direct DELETE.
       const fresh = await insertStub(service, userA.id);
 
@@ -397,7 +405,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(purgeErr, "purge_email_triage_items RPC").toBeNull();
       expect(purged).toBeTruthy();
 
-      const ids = [probe.id, stale.id, statutory.id, fresh.id];
+      const ids = [probe.id, stale.id, statutory.id, statutoryProbe.id, fresh.id];
       const { data: remaining } = await service
         .from("email_triage_items")
         .select("id")
@@ -408,6 +416,10 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         false,
       );
       expect(remainingIds.has(statutory.id), "statutory retained").toBe(true);
+      expect(
+        remainingIds.has(statutoryProbe.id),
+        "statutory probe >7d retained (probe-sweep carve-out)",
+      ).toBe(true);
       expect(remainingIds.has(fresh.id), "fresh row retained").toBe(true);
 
       const { data: tokenRows } = await service
