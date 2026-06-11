@@ -75,6 +75,11 @@ fi
 
 # Fail-closed secret-shape scan over the assembled record (covers a secret hidden
 # inside an allowlisted value such as a model name). Drop the row on any match.
+# Scope note: matches PREFIXED secret shapes (the Anthropic-key leak vector,
+# sk-ant-*, is always prefixed and IS caught). A hypothetical PREFIXLESS 40-char
+# token is not matched here — a generic long-run pattern would false-positive on
+# the 40-hex git SHA, and `model` (the only free-form value) is sourced from the
+# action's own --model config, not model output. Residual risk: negligible.
 if printf '%s' "$record" | grep -qiE 'sk-ant|sk_(live|test)|ghp_|ghs_|github_pat_|org_|AKIA[0-9A-Z]{16}|xoxb-|sbp_|-----BEGIN'; then
   echo "extract-api-spend: secret-shaped substring in record; refusing to emit" >&2
   exit 1
