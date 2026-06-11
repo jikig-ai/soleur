@@ -7,9 +7,11 @@
 
 import webpush from "web-push";
 import { Resend } from "resend";
+import * as Sentry from "@sentry/nextjs";
 import { createServiceClient } from "@/lib/supabase/service";
 import { createChildLogger } from "@/server/logger";
 import { APP_URL_FALLBACK, reportSilentFallback } from "@/server/observability";
+import { sanitizeDisplayString } from "@/lib/sanitize-display";
 
 const log = createChildLogger("notifications");
 
@@ -29,11 +31,51 @@ const BRAND_EMAIL_COLORS = {
 /** Inline style for a branded gold email CTA `<a>` (sharp 0px corners). */
 const EMAIL_CTA_STYLE = `display: inline-block; padding: 12px 24px; background-color: ${BRAND_EMAIL_COLORS.ctaBackground}; background-image: ${BRAND_EMAIL_COLORS.ctaGradient}; color: ${BRAND_EMAIL_COLORS.ctaText}; text-decoration: none; border-radius: 0; font-weight: 600;`;
 
-export interface NotificationPayload {
+// Discriminated union (feat-operator-inbox-delegation Phase 4). Consumers
+// swept per cq-union-widening-grep-three-patterns + tsc --noEmit; existing
+// review_gate behavior is byte-identical.
+export interface ReviewGateNotificationPayload {
   type: "review_gate";
   conversationId: string;
   agentName: string;
   question: string;
+}
+
+export interface EmailTriageNotificationPayload {
+  type: "email_triage";
+  /** email_triage_items DB uuid ONLY — lands inside href unescaped; never
+   * resend_email_id or any email-derived value. */
+  emailId: string;
+  /** Attacker-controlled (email subject). Sanitized + escaped at each sink. */
+  title: string;
+  isStatutory: boolean;
+}
+
+export type NotificationPayload =
+  | ReviewGateNotificationPayload
+  | EmailTriageNotificationPayload;
+
+/**
+ * Statutory email-triage pings must not fail silently: the catches in
+ * notifyOfflineUser log without capturing (Layer 2's pino hook only
+ * captures Error-instance `err` fields), so a missed statutory ping would
+ * reach no one while an Art. 12 clock runs. Explicit mirror — necessary,
+ * not redundant (cq-silent-fallback-must-mirror-to-sentry). No-op for
+ * review_gate and non-statutory payloads (existing behavior preserved).
+ */
+function mirrorStatutoryNotifyFailure(
+  payload: NotificationPayload,
+  err: unknown,
+): void {
+  if (payload.type !== "email_triage" || !payload.isStatutory) return;
+  try {
+    Sentry.captureException(
+      err instanceof Error ? err : new Error(String(err)),
+      { tags: { feature: "email-triage", op: "statutory-notify-failed" } },
+    );
+  } catch {
+    // Observability must never become a second failure.
+  }
 }
 
 interface PushSubscriptionRow {
@@ -109,6 +151,7 @@ export async function notifyOfflineUser(
 
     if (error) {
       log.error({ userId, err: error.message }, "Failed to query push subscriptions");
+      mirrorStatutoryNotifyFailure(payload, error.message);
       return;
     }
 
@@ -119,12 +162,14 @@ export async function notifyOfflineUser(
       const { data: userData, error: userError } = await supabase.auth.admin.getUserById(userId);
       if (userError || !userData?.user?.email) {
         log.error({ userId, err: userError?.message }, "Failed to look up user email for notification");
+        mirrorStatutoryNotifyFailure(payload, userError?.message ?? "user email missing");
         return;
       }
       await sendEmailNotification(userData.user.email, payload);
     }
   } catch (err) {
     log.error({ userId, err }, "notifyOfflineUser failed");
+    mirrorStatutoryNotifyFailure(payload, err);
   }
 }
 
@@ -138,15 +183,33 @@ export async function sendPushNotifications(
 ): Promise<void> {
   ensureVapid();
 
-  const body = JSON.stringify({
-    title: `${payload.agentName} needs your input`,
-    body: payload.question,
-    data: {
-      conversationId: payload.conversationId,
-      url: `${appUrl()}/dashboard/chat/${payload.conversationId}`,
-    },
-    icon: "/icons/icon-192x192.png",
-  });
+  let body: string;
+  if (payload.type === "email_triage") {
+    // Deep link built EXCLUSIVELY from the server-generated DB uuid.
+    // Title is attacker-controlled (email subject): bidi/control strip +
+    // length cap at this sink (sw.js renders it verbatim).
+    body = JSON.stringify({
+      title: sanitizeDisplayString(payload.title),
+      body: payload.isStatutory
+        ? "Statutory item — a response clock is running."
+        : "New email triaged in your Soleur inbox.",
+      data: {
+        emailId: payload.emailId,
+        url: `${appUrl()}/dashboard/inbox/email/${payload.emailId}`,
+      },
+      icon: "/icons/icon-192x192.png",
+    });
+  } else {
+    body = JSON.stringify({
+      title: `${payload.agentName} needs your input`,
+      body: payload.question,
+      data: {
+        conversationId: payload.conversationId,
+        url: `${appUrl()}/dashboard/chat/${payload.conversationId}`,
+      },
+      icon: "/icons/icon-192x192.png",
+    });
+  }
 
   const results = await Promise.allSettled(
     subscriptions.map((sub) =>
@@ -214,6 +277,10 @@ export async function sendEmailNotification(
   email: string,
   payload: NotificationPayload,
 ): Promise<void> {
+  if (payload.type === "email_triage") {
+    await sendEmailTriageEmailNotification(email, payload);
+    return;
+  }
   const resend = getResend();
   const deepLink = `${appUrl()}/dashboard/chat/${payload.conversationId}`;
 
@@ -237,6 +304,53 @@ export async function sendEmailNotification(
     log.error({ email, err: error }, "Failed to send email notification");
   } else {
     log.info({ email, conversationId: payload.conversationId }, "Email notification sent");
+  }
+}
+
+/**
+ * Email fallback for the email_triage variant. The title (= third-party
+ * email subject, attacker-controlled) passes sanitizeDisplayString (bidi +
+ * CR/LF + control strip — header-injection hygiene near the subject field)
+ * and escapeHtml at the HTML sink. Our own subject header is static —
+ * third-party content never reaches it. TR3: logs carry emailId only,
+ * never the title.
+ */
+async function sendEmailTriageEmailNotification(
+  email: string,
+  payload: EmailTriageNotificationPayload,
+): Promise<void> {
+  const resend = getResend();
+  // DB uuid only — never an email-derived value (lands inside href).
+  const deepLink = `${appUrl()}/dashboard/inbox/email/${payload.emailId}`;
+  const safeTitle = sanitizeDisplayString(payload.title);
+  const heading = payload.isStatutory
+    ? "Statutory item needs your attention"
+    : "New item in your Soleur inbox";
+
+  const { error } = await resend.emails.send({
+    from: "Soleur <notifications@soleur.ai>",
+    to: [email],
+    // Static subject — no third-party content in the header.
+    subject: payload.isStatutory
+      ? "Statutory item in your Soleur inbox — action required"
+      : "New item in your Soleur inbox — Soleur",
+    html: `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
+        <h2 style="margin: 0 0 16px; font-size: 18px; color: #1a1a1a;">${heading}</h2>
+        <p style="margin: 0 0 16px; color: #4a4a4a; line-height: 1.5;">${escapeHtml(safeTitle)}</p>
+        <div style="text-align: center; margin: 8px 0 0;">
+          <a href="${deepLink}" style="${EMAIL_CTA_STYLE}">Open inbox item</a>
+        </div>
+        <p style="margin: 24px 0 0; font-size: 12px; color: #9a9a9a;">You received this because email triage is enabled for your Soleur inbox.</p>
+      </div>
+    `,
+  });
+
+  if (error) {
+    log.error({ email, emailId: payload.emailId, err: error }, "Failed to send triage email notification");
+    mirrorStatutoryNotifyFailure(payload, error);
+  } else {
+    log.info({ email, emailId: payload.emailId }, "Triage email notification sent");
   }
 }
 

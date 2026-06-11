@@ -70,6 +70,16 @@ export const SENSITIVE_KEY_NAMES = [
   // the value is what the helper's confidentiality leans on (Recital 26).
   "SENTRY_USERID_PEPPER",
   "pepper",
+  // Inbound email triage (feat-operator-inbox-delegation #5103). The
+  // Inngest sentry-correlation middleware ships ctx.event.data to Sentry as
+  // `extra` on every captured pipeline error (sentry-correlation.ts:76,135)
+  // and the scrubber is key-name-based only — without these, Layer 1 itself
+  // ships third-party mail PII (TR3 violation) and falsifies the
+  // sub-processor disclosures. Also hardens pino's derived REDACT_PATHS.
+  "subject",
+  "sender",
+  "from",
+  "to",
   // HTTP transport
   "cookie",
   "x-nonce",
