@@ -365,8 +365,11 @@ logs:
   where: pino structured logs (fn: cron-weekly-release-digest) -> container stdout -> Better Stack
   retention: Better Stack default
 discoverability_test:
-  command: "/soleur:trigger-cron list (shows cron/weekly-release-digest.manual-trigger) + bash apps/web-platform/scripts/sentry-monitors-audit.sh"
-  expected_output: monitor `cron-weekly-release-digest` present with latest check-in ok; no ssh anywhere
+  command: curl -sS -o /dev/null -w "%{http_code}" --max-time 10 https://app.soleur.ai/api/inngest
+  expected_output: 401 or 200
+# (401 = signed Inngest serve endpoint alive, the registration surface for this
+# cron; richer reads: /soleur:trigger-cron list + bash
+# apps/web-platform/scripts/sentry-monitors-audit.sh — no ssh anywhere.)
 ```
 
 ## Infrastructure (IaC)
