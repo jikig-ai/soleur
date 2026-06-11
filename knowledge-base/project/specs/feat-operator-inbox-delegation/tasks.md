@@ -1,72 +1,80 @@
 # Tasks: Operator Inbox Delegation — Read-Only Email Triage
 
 Plan: `knowledge-base/project/plans/2026-06-10-feat-operator-inbox-delegation-plan.md`
-(post-review revision: DHH + code-simplicity + spec-flow applied; gdpr-gate folded).
+(post-review revision: DHH + code-simplicity + spec-flow applied; gdpr-gate folded;
+**deepen-plan pass folded 2026-06-11** — 2 P0 design contradictions resolved, see the
+plan's Enhancement Summary + `## WORM Mutation Matrix`).
 Lane: cross-domain. Threshold: single-user incident (`requires_cpo_signoff` satisfied
-at plan time). **Run `/soleur:deepen-plan` before starting Phase 1** (Sharp Edge).
+at plan time). Deepen-plan gate: SATISFIED.
 
 ## Phase 0 — Preconditions (pin every result here before coding)
 
-- [ ] 0.1 Read `server/inngest/functions/cron-compound-promote.ts` — pin client construction + model for the summarizer; read one `cron-*.ts` + locate the Inngest function registry array (pin the 6 cron test gotchas)
-- [ ] 0.2 Read migrations 075 (`workspace_invitations_no_mutate`), 052, and the 2 most recent — pin the trigger shape to adapt (column-scoped, NOT whole-row) and DDL constraints
-- [ ] 0.3 Legal locations: next free PA number (`grep "^## Processing Activity" knowledge-base/legal/article-30-register.md | tail -3`); Resend vendor DPA row location; LIA precedent file; `dsar-export-allowlist.ts` exact filename
-- [ ] 0.4 Live-probe Resend API: bootstrap call shapes (`POST/PATCH /domains`, `POST /webhooks`); fetch one received-email payload — pin the receive-timestamp field name (feeds `received_at`) and whether auth results (SPF/DKIM) exist for forwarded mail (decides detail-view badges)
-- [ ] 0.5 Confirm `resend.webhooks.verify` call shape against installed resend@6.12.3 (pinned: index.d.mts:2108; svix@1.92.2 present for test signatures)
+- [x] 0.1 ~~cron-compound-promote client shape~~ RESOLVED AT DEEPEN: it uses raw `fetch` (`cron-compound-promote.ts:423-427`), NOT the SDK. Summarizer client precedent: `agent-on-spawn-requested.ts`; mock precedent: `test/server/inngest/agent-on-spawn-requested-leader-loop.test.ts:198-203` (body fetch gets its OWN mock — never shared global fetch). Registry array: `app/api/inngest/route.ts:85`
+- [ ] 0.2 Read migrations 075 (`workspace_invitations_no_mutate` + `accepted_at` one-time-set shape at 075:117-120), 052 (23505 idiom :55-60), **087 (GUC bypass pattern), 094 (dedup retention sweep)**, and the 2 most recent — re-verify 102 still free vs `git ls-tree origin/main` (transactional runner — no `CREATE INDEX CONCURRENTLY`)
+- [ ] 0.3 Legal locations: next free PA number (`grep "^## Processing Activity" knowledge-base/legal/article-30-register.md | tail -3`); Resend vendor DPA row location; LIA precedent file. ~~dsar-export-allowlist filename~~ VERIFIED AT DEEPEN: `server/dsar-export-allowlist.ts`, `DSAR_TABLE_ALLOWLIST` at :59
+- [ ] 0.4 Live-probe Resend API: **account-ownership check first** (duplicate-accounts learning 2026-04-06); bootstrap call shapes (`POST/PATCH /domains`, `POST /webhooks`); fetch one received-email payload — pin receive-timestamp field name (feeds `received_at`), **text vs html body field shapes** (feeds HTML normalization), attachment metadata shape, and whether auth results exist for forwarded mail (**pre-decided contingency:** found → `auth_results` column joins migration + WORM hard-frozen set + FR6 + list payload; not found → badges CUT)
+- [ ] 0.5 ~~verify shape~~ VERIFIED AT DEEPEN: `resend.webhooks.verify` takes `{payload, headers:{id,timestamp,signature}, webhookSecret}` and **THROWS** on failure (timing-safe via standardwebhooks, ±5-min replay tolerance); empty secret throws from the constructor — explicit pre-check required (copy `github/route.ts:107-118`). svix `Webhook.sign` (webhook.d.ts:21) for test signatures
 
-## Phase 1 — Migration (RED → GREEN)
+## Phase 1 — Migration (RED → GREEN) — implements `## WORM Mutation Matrix`
 
-- [ ] 1.1 RED: tests — WORM trigger freezes content fields (`message_id, sender, subject, summary, mail_class, statutory_class, rule_id, received_at`) with `P0001`-class rejection; allows `status`/`status_changed_at`; UNIQUE(message_id); `user_id` FK ON DELETE CASCADE; `pg_policy` RLS shape
-- [ ] 1.2 GREEN: `102_email_triage_items.sql` + `.down.sql` — 14 columns per plan (NO body column), `LAWFUL_BASIS` annotations on PII columns, `processed_inbound_emails(svix_id)` table
-- [ ] 1.3 Add `email_triage_items` to the DSAR export allowlist
+- [ ] 1.1 RED (integration tier `TENANT_INTEGRATION_TEST=1`, precedent `test/server/action-sends-worm.test.ts` → new `test/server/email-triage-worm.test.ts`): hard-frozen columns reject UPDATE (P0001); one-time-set columns accept NULL→value ONCE, second finalize → P0001; stub inserts NULL (never `''`); status only via `set_email_triage_status` RPC, one-way `new → acknowledged|archived` (reverse → reject); `acknowledged_at` one-time-set; UNIQUE(claim_key); `user_id` FK **ON DELETE RESTRICT** + anonymise RPC path; purge RPC deletes under GUC bypass while direct DELETE rejects; **behavioral RLS deny: second-user SELECT → 0 rows + INSERT denied with TYPE-VALID payload + owner positive control** (learning 2026-05-16)
+- [ ] 1.2 GREEN: `102_email_triage_items.sql` + `.down.sql` — columns per plan (NO body column; `claim_key` NOT NULL UNIQUE = COALESCE(message_id, 'resend:'||resend_email_id); `received_at` NOT NULL NO DEFAULT + `received_at_source` + CHECK(received_at <= created_at + 5 min); `acknowledged_at`); WORM trigger per mutation matrix; GUC-gated RPCs (`set_email_triage_status` with auth.uid() pin + `SET search_path = public, pg_temp`, `purge_email_triage_items`, `anonymise_email_triage_items`) — mig 087 `SET LOCAL app.email_triage_<op>_in_progress` pattern, NOT session_replication_role, NOT current_user checks; NO owner-INSERT/UPDATE policy beside the RPCs; partial index `(user_id, received_at DESC) WHERE status <> 'archived'`; `LAWFUL_BASIS` annotations; **`processed_resend_events(svix_id)`** dedup table + pg_cron 90-day sweep + index (mirror mig 094:42-70); down drops trigger functions + RPCs + pg_cron job
+- [ ] 1.3 Add `email_triage_items` to `DSAR_TABLE_ALLOWLIST` (`{ownerField: "user_id", article: "15+20"}`)
 
 ## Phase 2 — Statutory rules (contract first)
 
-- [ ] 2.1 RED: synthesized fixtures — subject-only / body-only / multi-class priority (breach > SoP > DSAR > regulator > probe) positives, vendor negatives, probe marker
-- [ ] 2.2 GREEN: `server/email-triage/statutory-rules.ts` — `{ruleId, class, senderPatterns, keywordPatterns, dueRule, catalogAnchor, catalogExcerpt}`, pure, code-static, first-match priority
+- [ ] 2.1 RED: synthesized fixtures — subject-only / body-only positives; **FR-language positive (accès/RGPD — base case, not edge); HTML-only body positive (tag-strip + entity-decode); attachment-filename positive; thin-body+attachments → legal-review escalation**; **≥4 adjacent PAIRWISE priority fixtures (breach+SoP, SoP+DSAR, DSAR+regulator, regulator+probe)** — one all-keywords fixture proves only that breach wins overall; vendor negatives; probe marker **token-match + shape-without-token → other**; **due-date computation contract HERE (calendar-month vs +30d discriminators: received Jan 29/30/31 → due Feb 28/29; leap year; 72h breach)**
+- [ ] 2.2 GREEN: `server/email-triage/statutory-rules.ts` — `{ruleId, class, senderPatterns, keywordPatterns, dueRule, catalogAnchor, catalogExcerpt}`, pure, code-static, first-match priority; EN+FR keyword sets; HTML normalization helper; attachment-filename pass
 
 ## Phase 3 — Webhook route
 
-- [ ] 3.1 RED: 401 on bad/missing svix signature (svix-lib-computed signatures, direct route invocation, no LLM/network); 500 on dedup-insert failure; release-on-failure (inngest.send throws → dedup row deleted → 500); happy path emits exactly one `email/received` event
-- [ ] 3.2 GREEN: `app/api/webhooks/resend-inbound/route.ts` — raw `req.text()` BEFORE parse; `resend.webhooks.verify`; plain-insert dedup (NO ON CONFLICT, `data:null` quirk); release-on-failure
+- [ ] 3.1 RED (`vi.hoisted` mock-bundle shape from `test/server/webhooks/github-route.test.ts:7-78`): **unset secret → 500 + Sentry BEFORE svix**; bad/missing signature or missing `svix-*` headers → 401 (svix-lib-computed signatures, direct invocation, no LLM/network); **oversized body → 413 before verify**; dedup-insert failure → 500; **three-way release: transient → released + 5xx; valid-but-no-email-id → KEPT + 200 + Sentry warn; malformed JSON → released + 400**; happy path emits exactly one `email/inbound.received` (`v:"1"`)
+- [ ] 3.2 GREEN: `app/api/webhooks/resend-inbound/route.ts` — size cap; secret fail-closed; raw `req.text()` BEFORE parse; verify in try/catch; `lib/webhook-dedup.ts` (`claimDelivery`/`releaseDelivery` — NEW route only; existing-route migration = scope-out issue distinct from #3739); `sendInngestWithRetry`; exported event constant
+- [ ] 3.3 **Add route to `PUBLIC_PATHS` in `lib/routes.ts`** (signature-authed routes otherwise 307 to /login — learning 2026-05-29)
 
 ## Phase 4 — Pipeline + notification widening
 
-- [ ] 4.1 RED: claim-insert short-circuit on duplicate `message_id` (graceful, no terminal error); metadata statutory match → row + notify with body fetch NEVER called; body-fetch terminal failure after metadata match → degraded statutory row persists; statutory paths: Anthropic mock zero calls; sanitizer strips `\x7f`/U+2028/U+2029 before mocked client; LLM `mail_class` outside allowlist coerces to `other`; no insert/log payload contains body fixture; statutory notify failure mirrors to Sentry; owner-env unset → Sentry + skip
-- [ ] 4.2 GREEN: `server/inngest/functions/email-received-triage.ts` (order: claim-insert → metadata statutory → body fetch → body statutory → sanitize → summarize → finalize → notify; `received_at` from payload receive time; body discarded)
-- [ ] 4.3 GREEN: `server/email-triage/summarize.ts` (client/model per 0.1; Art. 9 omission instruction; closed allowlist `vendor|billing|security|newsletter|legal-review|other`)
-- [ ] 4.4 `notifications.ts`: widen `NotificationPayload` to discriminated union + `email_triage` variant (deep link `/dashboard/inbox/email/{emailId}`); sweep consumers via `tsc --noEmit` TS2322 rails + `cq-union-widening-grep-three-patterns`; email-fallback link parity; statutory-failure Sentry mirror
-- [ ] 4.5 Register `email-received-triage` in the Inngest function registry
+- [ ] 4.1 RED (`test/server/inngest/email-on-received.test.ts`, handler-direct + eager mock `step`, precedents `cfo-on-payment-failed.test.ts` / `event-scheduled-reminder.test.ts:46-66`): metadata statutory match → row + notify, body fetch NEVER called; body-fetch terminal failure after metadata match → degraded statutory row persists; statutory + PROBE paths: Anthropic SDK spy zero calls; **claim conflict vs FINALIZED row short-circuits; vs UNFINALIZED stub adopts + resumes**; stub NULL semantics; sanitizer strips before mocked client (**subject + sender fixtures too**); `mail_class` allowlist coercion → `reportSilentFallback` op:mail-class-coerced; no insert/log payload contains **body, sender, or subject** fixtures; statutory notify failure mirrors to Sentry; **owner-env unset → RETRIABLE THROW (not skip)**; probe-shape-without-token → other
+- [ ] 4.2 GREEN: `server/inngest/functions/email-on-received.ts` — **pinned step boundaries:** (a) `step.run("claim-insert")` (23505-catch idiom; adopt-unfinalized-resume), (b) metadata statutory pure/inline, (c) **ONE fused `step.run("fetch-sanitize-summarize")` returning ONLY `{summary, mailClass, bodyStatutoryRuleId}` — body never crosses a step boundary** (Inngest checkpoints step returns), (d) `step.run("finalize-row")`, (e) `step.run("notify")` LAST; `retries: 1`; **Inngest `throttle` + daily LLM ceiling** (breach → `other` + "deferred — volume cap" + Sentry); owner check = existence + founder-role predicate
+- [ ] 4.3 GREEN: `server/email-triage/summarize.ts` — **import `sanitizePromptString` from `server/inngest/leader-prompts/prompt-assembly.ts:32`** (NOT soleur-go-runner's 256-capped local); **64 KiB body truncation BEFORE sanitize/summarize**; SDK client per `agent-on-spawn-requested.ts`; Art. 9 omission instruction; closed allowlist `vendor|billing|security|newsletter|legal-review|other`
+- [ ] 4.4 `notifications.ts`: widen `NotificationPayload` to discriminated union + `email_triage` variant (deep link `/dashboard/inbox/email/{emailId}` — **built from the DB uuid ONLY**, lands in `href` unescaped at :218,229); `title` through `escapeHtml` + `sanitizeDisplayString` + CR/LF strip; sweep consumers (`tsc --noEmit` TS2322 + 3-grep; enumerated: permission-callback.ts, agent-runner.ts, cc-dispatcher.ts, test family); email-fallback link parity; statutory-failure Sentry mirror (explicit captureException — the existing catch passes err as STRING, Layer 2 hook never captures it)
+- [ ] 4.5 **`public/sw.js`: per-variant notification tag namespace (`email-triage-${emailId}`)** — sw.js is OUTSIDE the TS program and reads `payload.data`, invisible to every sweep tool; same-tag collapse currently lets a statutory ping overwrite a review-gate notification. Manual edit, grep-verified (AC7)
+- [ ] 4.6 **`server/sensitive-keys.ts`: + `subject`, `sender`, `from`, `to`** — the Layer 1 sentry-correlation middleware ships `ctx.event.data` as Sentry `extra` (sentry-correlation.ts:76,135); without this TR3 is violated structurally
+- [ ] 4.7 `lib/sanitize-display.ts`: bidi/Cf strip (U+202A–U+202E, U+2066–U+2069) + ~200-char cap for render sinks
+- [ ] 4.8 Register `email-on-received` in `app/api/inngest/route.ts` (+ count bump; AC6 asserts presence explicitly — event functions are outside the cron-glob guard)
 
-## Phase 5 — API + UI (wireframes: operator-email-triage.pen frames 05-08)
+## Phase 5 — API + UI + agent tools (wireframes: operator-email-triage.pen frames 05-08)
 
-- [ ] 5.1 RED: component tests — row variants; unacknowledged statutory pinned first; due date derives from `received_at` + registry `dueRule` (calendar-month for DSAR); Acknowledge/Archive fire PATCH; detail shows parse-and-discard notice + Proton-original pointer
-- [ ] 5.2 GREEN: `components/inbox/email-triage-row.tsx`; detail page `app/(dashboard)/dashboard/inbox/email/[id]/page.tsx` (server component, direct query — NO detail GET route); list route `app/api/inbox/emails/route.ts` (`?include_probes=1`, `?status=archived`); PATCH `app/api/inbox/emails/[id]/status/route.ts`
-- [ ] 5.3 Dashboard wiring in `app/(dashboard)/dashboard/page.tsx`; theme tokens, no literal hex; no sender-trust badge (review-cut); SPF/DKIM badges only if 0.4 confirmed availability
+- [ ] 5.1 RED: `test/server/inbox-emails-route.test.ts` (default excludes archived/probe/**unfinalized stubs**; strict-equality params; **server-side statutory-pinned-first ordering**; second-user empty; HTTP-only exports); `test/server/inbox-email-status-routes.test.ts` (valid transitions; reverse/unknown → 4xx; other user → 404/403; RPC invoked, not direct UPDATE); component tests (happy-dom — NOT jsdom; row variants; pinned-first; **legal-review warning treatment**; acknowledge/archive fire the POSTs, DOM contract primary; **text-nodes-only invariant — no anchors/dangerouslySetInnerHTML from item content; bidi-spoof fixture**; due-date STRING renders — computation tested in Phase 2)
+- [ ] 5.2 GREEN: `components/inbox/email-triage-row.tsx` (+ sanitizeDisplayString at render; markdown-renderer forbidden for triage content); detail page `app/(dashboard)/dashboard/inbox/email/[emailId]/page.tsx` (server component per `audit/page.tsx`: cookie-scoped client — never service client — + redirect + `.eq("user_id", user.id)` + `force-dynamic`; NO detail GET route); list route `app/api/inbox/emails/route.ts` (`withUserRateLimit` + user-context client); **POST `[id]/acknowledge` + `[id]/archive` routes** (RPC-backed; replaces PATCH `/status`)
+- [ ] 5.3 Dashboard wiring in `app/(dashboard)/dashboard/page.tsx`; theme tokens, no literal hex; no sender-trust badge (review-cut); auth-results badges per 0.4 pre-decided contingency
+- [ ] 5.4 **Agent-native parity: `server/email-triage-tools.ts`** — `email_triage_list` + `email_triage_get` (userId closure via `getFreshTenantClient` per `conversations-tools.ts:18-21`; `get` returns registry-derived dueDate/catalogExcerpt SERVER-SIDE); register in `agent-runner.ts` (platformTools/platformToolNames + `## Email triage inbox` prompt block with the honesty caveats) + `TOOL_TIER_MAP` auto-approve; **NO agent write tool (FR9 boundary; AC11 grep-asserts absence)**
 
 ## Phase 6 — Probe + IaC
 
-- [ ] 6.1 `server/inngest/functions/cron-email-ingress-probe.ts`: send marker → `step.sleep` 15 min → assert OWN row → Sentry check-in; retention purge (probe >7d, non-statutory >365d, statutory retained); register + `EXPECTED_CRON_FUNCTIONS` + manual-trigger event; registry-count test
-- [ ] 6.2 `infra/resend-inbound-bootstrap.sh` (idempotent; prints signing_secret + MX; `set -euo pipefail`)
-- [ ] 6.3 `infra/dns.tf` MX `inbound.soleur.ai` (FQDN, additive-only) + `infra/sentry/cron-monitors.tf` monitor (daily, 60-min margin)
-- [ ] 6.4 `.env.example`: `RESEND_INBOUND_WEBHOOK_SECRET`, `EMAIL_TRIAGE_OWNER_USER_ID`
+- [ ] 6.1 `server/inngest/functions/cron-email-ingress-probe.ts`, **steps in order:** (1) `step.run("retention-purge")` FIRST (purge RPC; predicates on `statutory_class IS NULL`; probe >7d, non-statutory >365d, statutory retained; **+ T-7d/T-2d deadline re-pin + ping for acknowledged-but-unresolved statutory**); (2) `step.run("send-probe")` with **per-run token `SOLEUR-PROBE-{uuid}` recorded in `probe_tokens`**; (3) `step.sleep` 15 min; (4) assert OWN row → Sentry check-in. **`retries: 0`** (default retries turn a late probe into a green run). Tests: `test/server/inngest/cron-email-ingress-probe.test.ts` — purge-first order; **boundary fixtures 364/365/366d, 6/7/8d, statutory-at-400d retained**; re-pin; check-in arms; probe zero-LLM; makeStep + no-op `sleep` recording duration
+- [ ] 6.2 `infra/resend-inbound-bootstrap.sh` (idempotent; account-ownership preflight; **secret → Doppler directly, masked stdout only**; prints full DNS record set; `set -euo pipefail`)
+- [ ] 6.3 `infra/dns.tf` full `inbound.soleur.ai` record set (FQDN, additive-only) + `infra/sentry/cron-monitors.tf` monitor (**full house shape: checkin_margin 60, `max_runtime_minutes ≥ 20`, failure/recovery thresholds, timezone, margin-deviation comment**) + **`.github/workflows/apply-sentry-infra.yml` `-target` line** (hardcoded allowlist — without it the monitor is silently never created)
+- [ ] 6.4 `.env.example`: `# --- Resend ---` section — **`RESEND_API_KEY` backfill** + `RESEND_INBOUND_WEBHOOK_SECRET`, `EMAIL_TRIAGE_OWNER_USER_ID`
+- [ ] 6.5 `cron-manifest.ts` += `cron-email-ingress-probe` (manual-trigger allowlist auto-derives); registry-count test updated
 
 ## Phase 7 — Legal bundle + ADR + doc amendments
 
-- [ ] 7.1 Invoke `legal-document-generator`: PA row (number per 0.3; Anthropic + Resend recipients; retention cells probe 7d / non-statutory 365d / statutory accountability period; TOMs), LIA, DPIA screening memo, Privacy Policy + DPD + GDPR Policy lockstep (BOTH doc locations), Anthropic scope cell + §(g), Resend scope amendment
+- [ ] 7.1 Invoke `legal-document-generator`: PA row (number per 0.3; Anthropic + Resend recipients, both 30-day windows, **+ Inngest event-store ~24h window** — subject/sender transit the event payload by design (metadata-first invariant); retention cells probe 7d / non-statutory 365d / statutory accountability period; TOMs incl. SENSITIVE_KEY_NAMES scrub; **prose grep-validated against the migration body** — learning 2026-05-23; Resend US → SCC/DPF), LIA (**+ Art. 17 involuntary-subject path: row deletion via GUC gate + accountability-period override**), DPIA screening memo (**+ named residual: Art. 9 content surviving into the persisted summary despite prompt instruction**), Privacy Policy + DPD + GDPR Policy lockstep (BOTH doc locations), Anthropic scope cell + §(g), Resend scope amendment
 - [ ] 7.2 Invoke `legal-compliance-auditor` cross-consistency pass; record result
-- [ ] 7.3 `/soleur:architecture` ADR (3rd ingress; unauthenticated-forwarded-sender sentence)
-- [ ] 7.4 Old spec `superseded-in-part` note; verify this spec's FR6/FR9 amendments committed
-- [ ] 7.5 Deferral sweep: tracking issue for attachment download + hardened parser (re-evaluation: first real ops-mail whose meaning lives in an attachment)
+- [ ] 7.3 `/soleur:architecture` ADR (3rd ingress; unauthenticated-forwarded-sender sentence; **AP-001 deviation: webhook by script, no Resend TF provider; AP-009 carve-out: Art. 5(1)(e) purge with statutory exception**)
+- [ ] 7.4 Old spec `superseded-in-part` note; this spec's FR6/FR9 amendments (**FR9 incl. agent-write boundary: status transitions UI-only v1; future write tool gated-tier, statutory acknowledge never auto-approve**)
+- [ ] 7.5 Deferral sweep: tracking issues for (a) attachment download + hardened parser (re-evaluation: first real ops-mail whose meaning lives in an attachment), (b) **webhook-dedup helper migration of stripe/github routes** (distinct from #3739)
 
 ## Exit (pre-merge)
 
-- [ ] E.1 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean; full suite green (package's own runner)
-- [ ] E.2 Pre-merge bootstrap run (mints MX + secret) → Doppler (defer-gate ack) → `terraform plan` additive-only check (AC9)
-- [ ] E.3 All AC1-AC10 verified; PR body `Ref #5103` + `## Changelog` + `semver:minor`
+- [ ] E.1 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean; full suite green (package's own runner); **sw.js tag-namespace grep check**
+- [ ] E.2 Pre-merge bootstrap run (account preflight → receiving + webhook → secret to Doppler masked → DNS record set printed) → `EMAIL_TRIAGE_OWNER_USER_ID` to Doppler (defer-gate ack) → `terraform plan` additive-only check (AC9 incl. apply-sentry-infra `-target`)
+- [ ] E.3 All AC1-AC11 verified; PR body `Ref #5103` + `## Changelog` + `semver:minor`
 
 ## Post-merge (sequence per plan)
 
 - [ ] P.1 Pipeline deploy + migration (automated); `terraform apply` (automated via ship)
 - [ ] P.2 Proton: ops@ address + Sieve **forward-and-keep** (Playwright to auth gate); recovery-address sweep vs expenses.md (AC-P2)
-- [ ] P.3 Probe positive arm (`/soleur:trigger-cron email-ingress-probe` → row + check-in) AND negative chaos arm (disable Sieve once → alert fires → re-enable); synthetic DSAR email end-to-end with deep-link ping
+- [ ] P.3 Probe positive arm (`/soleur:trigger-cron email-ingress-probe` → row + check-in) AND negative chaos arm (disable Sieve once → alert fires → re-enable); synthetic DSAR email end-to-end with deep-link ping (zero LLM)
 - [ ] P.4 `gh issue close 5103` with evidence
