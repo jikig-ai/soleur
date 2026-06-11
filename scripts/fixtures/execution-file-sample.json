@@ -1,0 +1,54 @@
+[
+  {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "fixture-session-0001"
+  },
+  {
+    "type": "assistant",
+    "message": {
+      "type": "message",
+      "model": "claude-sonnet-4-6",
+      "content": [
+        { "type": "text", "text": "Reviewing the diff." }
+      ],
+      "usage": {
+        "input_tokens": 100,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 50,
+        "output_tokens": 75
+      }
+    }
+  },
+  {
+    "type": "user",
+    "message": {
+      "content": [
+        { "type": "tool_result", "content": "ok" }
+      ]
+    }
+  },
+  {
+    "type": "assistant",
+    "message": {
+      "type": "message",
+      "model": "claude-sonnet-4-6",
+      "content": [
+        { "type": "text", "text": "Posting review comment." }
+      ],
+      "usage": {
+        "input_tokens": 200,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 100,
+        "output_tokens": 25
+      }
+    }
+  },
+  {
+    "type": "result",
+    "total_cost_usd": 0.0347,
+    "duration_ms": 18750,
+    "num_turns": 2,
+    "result": "Posted one review comment."
+  }
+]
