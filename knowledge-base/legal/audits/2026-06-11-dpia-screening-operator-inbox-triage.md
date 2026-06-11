@@ -96,10 +96,18 @@ ships a deletion API (adopt it) or extends the window (re-balance).
 
 ## 3. Why the remaining surface does not change the conclusion
 
-- **Inngest event store (~24h, self-hosted):** subject + sender transit the
-  `email/inbound.received` payload by design (metadata-first statutory
-  checking); the store is operator-managed and localhost-bound — a PII
-  surface (disclosed in PA-27 §(d)), not a recipient.
+- **Inngest event store (self-hosted, no automatic deletion):** subject +
+  sender transit the `email/inbound.received` payload by design
+  (metadata-first statutory checking); the store is operator-managed,
+  localhost-bound, on EU infrastructure — a PII surface (disclosed in PA-27
+  §(d)), not a recipient. Corrected 2026-06-11 from "~24h": the self-hosted
+  Inngest server performs no automatic deletion of stored events (the ~24h
+  figure is the event-id dedup/replay window, not store retention), so the
+  copy persists until operator-side store maintenance; the retention bound
+  is tracked as item (iv) of the PA-27 Active Items row in
+  `compliance-posture.md`. This does not change the screening conclusion
+  (same host, same trust boundary, no third-party access) but is named
+  rather than rounded down.
 - **Observability:** `SENSITIVE_KEY_NAMES` gains `subject`/`sender`/`from`/
   `to`; TR3 bans body/sender/subject values from logs, Sentry tags/extras,
   and Error strings — the sub-processor disclosures stay true.

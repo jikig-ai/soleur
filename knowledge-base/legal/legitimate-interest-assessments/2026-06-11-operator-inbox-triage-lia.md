@@ -141,8 +141,12 @@ the same legitimate purpose:
    (Art. 5(1)(e) with the Art. 17(3)(b)-grounded carve-out below). Vendor
    windows that Jikigai cannot shorten are disclosed rather than hidden:
    Resend 30 days (no deletion API), Anthropic 30 days default
-   (Zero-Retention amendment tracked in PA-22 (f)), Inngest event store ~24h
-   (self-hosted).
+   (Zero-Retention amendment tracked in PA-22 (f)), Inngest event store
+   self-hosted with no automatic deletion (localhost-bound, EU
+   infrastructure; persists until operator-side store maintenance — bound
+   tracked as compliance-posture PA-27 Active Items (iv); corrected
+   2026-06-11 from "~24h", which is the event-id dedup window, not store
+   retention).
 
 **Conclusion:** the forwarding + parse-and-discard + deterministic-fast-path
 design is the least intrusive architecture that achieves both purposes;
