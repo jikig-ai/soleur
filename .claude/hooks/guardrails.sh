@@ -119,7 +119,19 @@ fi
 
 # guardrails:require-milestone — Block gh issue create without --milestone
 if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create'; then
-  if ! echo "$COMMAND" | grep -qF -- '--milestone'; then
+  # Exempt issue creation targeting an EXTERNAL repo (--repo owner/name where
+  # owner is not our org). The constitution backlog-hygiene rule applies only to
+  # OUR issues; external/vendor repos (e.g. upstream bug reports) have their own
+  # milestone sets and forcing --milestone would fail against them.
+  ext_repo=0
+  # `|| repo_arg=""` keeps the no-match case from aborting under `set -e`
+  # (grep exits 1 when there is no --repo flag → empty, defaults to our repo).
+  repo_arg=$(echo "$COMMAND" | grep -oE -- '--repo[= ]+[^ ]+' | head -1 | sed -E 's/--repo[= ]+//') || repo_arg=""
+  case "$repo_arg" in
+    jikig-ai/*|"") ext_repo=0 ;;   # our repo, or no --repo (defaults to our repo)
+    */*)           ext_repo=1 ;;   # explicit external owner/name
+  esac
+  if [[ "$ext_repo" == "0" ]] && ! echo "$COMMAND" | grep -qF -- '--milestone'; then
     emit_incident "guardrails-require-milestone" "deny" "gh issue create must include --milestone" "$COMMAND"
     jq -n '{
       hookSpecificOutput: {
