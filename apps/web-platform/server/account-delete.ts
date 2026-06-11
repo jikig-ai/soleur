@@ -105,6 +105,13 @@ export interface DeleteAccountResult {
  *                             ip_hash + user_agent on the consent-withdrawal
  *                             ledger. Required: withdrawals.user_id
  *                             REFERENCES users(id) ON DELETE RESTRICT.
+ *   5.13 anonymise-email-triage-items —
+ *                             anonymise_email_triage_items RPC (migration
+ *                             102, #5103). Nulls user_id + sender under the
+ *                             GUC-gated WORM bypass; statutory rows retained
+ *                             anonymised per Art. 17(3)(b). Required:
+ *                             email_triage_items.user_id REFERENCES
+ *                             users(id) ON DELETE RESTRICT.
  *   6. auth             — auth.admin.deleteUser(); FK cascade handles
  *                         public.users and all children atomically.
  *
@@ -888,6 +895,34 @@ export async function deleteAccount(
     log.error(
       { userId, err },
       "anonymise_byok_delegation_withdrawals threw — aborting deletion to avoid FK-block",
+    );
+    return { success: false, error: "Account deletion failed at unknown. Please try again." };
+  }
+
+  // 3.96 Anonymise email_triage_items (migration 102, #5103).
+  //      email_triage_items.user_id references users(id) ON DELETE RESTRICT —
+  //      without this step the auth-delete cascade would abort with FK 23503
+  //      (and a no-delete WORM trigger would block a CASCADE anyway). The RPC
+  //      NULLs user_id + sender under the GUC-gated WORM bypass
+  //      (app.email_triage_anonymise_in_progress); statutory rows are retained
+  //      anonymised per Art. 17(3)(b) — see the PA-27 LIA. Idempotent: re-runs
+  //      no-op once every row referencing this user is anonymised.
+  try {
+    const { error: anonTriageErr } = await service.rpc(
+      "anonymise_email_triage_items",
+      { p_user_id: userId },
+    );
+    if (anonTriageErr) {
+      log.error(
+        { userId, err: anonTriageErr },
+        "anonymise_email_triage_items failed — aborting deletion to avoid FK-block",
+      );
+      return { success: false, error: "Account deletion failed at unknown. Please try again." };
+    }
+  } catch (err) {
+    log.error(
+      { userId, err },
+      "anonymise_email_triage_items threw — aborting deletion to avoid FK-block",
     );
     return { success: false, error: "Account deletion failed at unknown. Please try again." };
   }

@@ -64,7 +64,7 @@ at plan time). Deepen-plan gate: SATISFIED.
 - [x] 7.2 Invoke `legal-compliance-auditor` cross-consistency pass; record result
 - [x] 7.3 `/soleur:architecture` ADR (3rd ingress; unauthenticated-forwarded-sender sentence; **AP-001 deviation: webhook by script, no Resend TF provider; AP-009 carve-out: Art. 5(1)(e) purge with statutory exception**)
 - [x] 7.4 Old spec `superseded-in-part` note; this spec's FR6/FR9 amendments (**FR9 incl. agent-write boundary: status transitions UI-only v1; future write tool gated-tier, statutory acknowledge never auto-approve**)
-- [ ] 7.5 Deferral sweep: tracking issues for (a) attachment download + hardened parser (re-evaluation: first real ops-mail whose meaning lives in an attachment), (b) **webhook-dedup helper migration of stripe/github routes** (distinct from #3739)
+- [x] 7.5 Deferral sweep: tracking issues for (a) attachment download + hardened parser (re-evaluation: first real ops-mail whose meaning lives in an attachment), (b) **webhook-dedup helper migration of stripe/github routes** (distinct from #3739)
 
 ## Exit (pre-merge)
 
