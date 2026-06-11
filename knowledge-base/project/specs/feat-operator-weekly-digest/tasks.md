@@ -24,9 +24,9 @@ posts a private issue. Brand-critical (single-user incident).
 - [ ] 0.5 Measure new-description word count → set the components.test.ts bump value.
 
 ## Phase 1 — Skill + tuned scrub gate
-- [ ] 1.1 RED: `digest-scrub.sh` test — asserts ABORT on a planted secret-shaped token (positive sentinel) +
+- [x] 1.1 RED: `digest-scrub.sh` test — asserts ABORT on a planted secret-shaped token (positive sentinel) +
       on a non-first-party email; PASS on `@jikigai.com` email + UUID + IPv4; ABORT on grep-error input.
-- [ ] 1.2 GREEN: implement `plugins/soleur/skills/operator-digest/scripts/digest-scrub.sh` (secret classes
+- [x] 1.2 GREEN: implement `plugins/soleur/skills/operator-digest/scripts/digest-scrub.sh` (secret classes
       hard-abort; email aborts unless first-party allowlist; UUID/IPv4 warn-only; grep exit 2 → abort).
 - [ ] 1.3 RED: skill static-contract test — frontmatter present, third-person ≤1024-char description, body
       names the 4 sources + "incident = frontmatter/title/status only, never body" + "write digest.md, do
