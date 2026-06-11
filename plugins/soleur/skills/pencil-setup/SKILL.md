@@ -171,6 +171,14 @@ git -C <repo> ls-files --error-unmatch <path>   # exit 0 = tracked, exit 1 = unt
 
 For freshly-created `.pen` files, commit an empty or scaffold placeholder before the first `open_document` call.
 
+## Tracked .pen collapse recovery
+
+Rule `cq-pencil-collapse-auto-recover` is canonical in the `.claude/hooks/pencil-collapse-guard.sh` header `[hook-enforced: pencil-collapse-guard.sh]`. It is the deterministic backstop for the `open_document` truncation bug (#3274 / upstream #4859): the PreToolUse `pencil-open-guard.sh` only denies *untracked* `.pen`, and the ux-design-lead / brand-workshop prose HARD-GATEs (PR #4855) rely on agent discipline.
+
+The hook fires **PostToolUse** on `mcp__pencil__open_document`. When the on-disk `.pen` has collapsed to the unambiguous empty-document shape (`{"version":"...","children":[]}` or a 0-byte/whitespace truncation) while its committed `HEAD` blob is non-empty, it restores the file byte-identical from `git show HEAD:<path>` (written via a temp file + atomic `mv`) and emits a loud `additionalContext` system message. It is fail-open and non-destructive on every error path (`set -uo pipefail`, no `-e`; conservative collapse detection limited to the exact empty shape; symlinks are refused) — a guard that clobbers good work is strictly worse than the bug. It cannot *prevent* the truncation (PostToolUse runs after the write); the root-cause fix is upstream (#4859 Part B).
+
+**Caveat:** because PostToolUse cannot see the pre-call state, an *intentional* empty (you cleared all frames then reopened without committing) is indistinguishable from a truncation and will be reverted to `HEAD`. Commit the deliberate empty state first if you want it preserved.
+
 ## Sharp Edges
 
 - **IDE mode -- WebSocket requires visible editor**: In IDE mode (`PREFERRED_MODE=ide`), the MCP server connects via WebSocket to the IDE's editor webview. `batch_design`/`batch_get`/`open_document` calls fail with `WebSocket not connected to app` unless the .pen file tab is open and visible in the IDE. Opening via `cursor <path>` CLI is not sufficient -- the user must click the tab to activate the webview.
