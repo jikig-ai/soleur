@@ -595,7 +595,8 @@ resource "sentry_cron_monitor" "cron_weekly_release_digest" {
 
 # ---------------------------------------------------------------------------
 # 2026-06-11 IaC-gap backfill (surfaced by PR #5133's AC12 verification):
-# 13 Inngest crons posted heartbeats to monitor slugs that had NO
+# 13 Inngest crons (+ a 14th, nag-4216-readiness, surfaced by the parity
+# test itself) posted heartbeats to monitor slugs that had NO
 # sentry_cron_monitor resource — Sentry's check-in API silently accepts or
 # drops check-ins for unknown slugs, so a dead cron in this set paged nowhere.
 # One resource per code slug below; the parity test

@@ -24,26 +24,34 @@ const MONITORS_TF = resolve(
   "../../../infra/sentry/cron-monitors.tf",
 );
 
+// Per ADR-033's prefix table, oneshot-* functions must declare NO monitor
+// slug (a crontab monitor pages MISSED forever after the single fire).
+// The one historical deviation is grandfathered here; new entries require
+// the same deliberate decision this list makes visible.
+const ONESHOT_SLUG_EXEMPTIONS = new Set(["oneshot-gdpr-gate-50d-eval"]);
+
 // Slugs assigned via SENTRY_MONITOR_SLUG consts in cron/event handlers.
 // The literal-extraction regex is deliberately narrow (double-quoted
 // kebab-case value on the declaration line) — a dynamically-computed slug
 // would evade it, but no handler does that and the convention is enforced
 // by this file's existence.
+const SLUG_RE = /SENTRY_MONITOR_SLUG\s*=\s*"([a-z0-9-]+)"/g;
+
+function nonOneshotFiles(): string[] {
+  // Per ADR-033's prefix table, oneshot-* functions get NO Sentry cron
+  // monitor — a crontab-scheduled monitor would page MISSED on every
+  // period after the single fire. Their errors route via
+  // reportSilentFallback instead.
+  return readdirSync(FUNCTIONS_DIR).filter(
+    (f) => f.endsWith(".ts") && !f.startsWith("oneshot-"),
+  );
+}
+
 function codeSlugs(): string[] {
   const slugs = new Set<string>();
-  for (const file of readdirSync(FUNCTIONS_DIR)) {
-    if (!file.endsWith(".ts")) continue;
-    // Per ADR-033's prefix table, oneshot-* functions get NO Sentry cron
-    // monitor — a crontab-scheduled monitor would page MISSED on every
-    // period after the single fire. Their errors route via
-    // reportSilentFallback instead. (oneshot-gdpr-gate-50d-eval declares a
-    // slug anyway — a documented known deviation whose check-ins are void
-    // by design; see oneshot-4650-monitor-close.ts's header note.)
-    if (file.startsWith("oneshot-")) continue;
+  for (const file of nonOneshotFiles()) {
     const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
-    for (const m of src.matchAll(
-      /SENTRY_MONITOR_SLUG\s*=\s*"([a-z0-9-]+)"/g,
-    )) {
+    for (const m of src.matchAll(SLUG_RE)) {
       slugs.add(m[1]);
     }
   }
@@ -53,10 +61,19 @@ function codeSlugs(): string[] {
 function iacMonitorNames(): Set<string> {
   const tf = readFileSync(MONITORS_TF, "utf-8");
   const names = new Set<string>();
+  // cron-monitors.tf carries ONLY sentry_cron_monitor resources (uptime
+  // monitors and issue alerts live in sibling files), so a top-level name
+  // attr IS a monitor slug — the resource-count pin below enforces that
+  // assumption mechanically.
   for (const m of tf.matchAll(/^\s*name\s*=\s*"([a-z0-9-]+)"/gm)) {
     names.add(m[1]);
   }
   return names;
+}
+
+function iacResourceCount(): number {
+  const tf = readFileSync(MONITORS_TF, "utf-8");
+  return [...tf.matchAll(/^resource "sentry_cron_monitor" /gm)].length;
 }
 
 describe("Sentry cron-monitor IaC parity", () => {
@@ -68,6 +85,52 @@ describe("Sentry cron-monitor IaC parity", () => {
     expect(slugs.length).toBeGreaterThanOrEqual(30);
     expect(slugs).toContain("scheduled-rule-prune");
     expect(slugs).toContain("scheduled-weekly-analytics");
+  });
+
+  it("per-producer anti-vacuity: every heartbeating handler yields an extracted slug", () => {
+    // The global floor above has slack, so a SINGLE new cron whose slug
+    // declaration evades SLUG_RE (typed annotation, template literal,
+    // renamed const) would pass both it and the parity check while
+    // heartbeating into the void. Pin extraction per producer: any file
+    // that calls postSentryHeartbeat must yield >= 1 slug.
+    const silent = nonOneshotFiles().filter((file) => {
+      // _-prefixed files are shared helper modules (one of them DEFINES
+      // postSentryHeartbeat), not heartbeat producers.
+      if (file.startsWith("_")) return false;
+      const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
+      if (!src.includes("postSentryHeartbeat")) return false;
+      return [...src.matchAll(SLUG_RE)].length === 0;
+    });
+    expect(
+      silent,
+      `handler(s) call postSentryHeartbeat but SLUG_RE extracted no slug — ` +
+        `declare the canonical \`const SENTRY_MONITOR_SLUG = "<kebab>"\` shape ` +
+        `(or fix SLUG_RE if the convention changed): ${silent.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  it("oneshot-* files declare no monitor slug (ADR-033 prefix table) outside the exempt list", () => {
+    const offenders: string[] = [];
+    for (const file of readdirSync(FUNCTIONS_DIR)) {
+      if (!file.startsWith("oneshot-") || !file.endsWith(".ts")) continue;
+      const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
+      for (const m of src.matchAll(SLUG_RE)) {
+        if (!ONESHOT_SLUG_EXEMPTIONS.has(m[1])) {
+          offenders.push(`${file} -> ${m[1]}`);
+        }
+      }
+    }
+    expect(
+      offenders,
+      `oneshot functions must not declare SENTRY_MONITOR_SLUG (a crontab ` +
+        `monitor false-alerts on a non-recurring fn; check-ins to an ` +
+        `un-provisioned slug are void). Route errors via reportSilentFallback ` +
+        `instead, or add a deliberate exemption: ${offenders.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  it("tf name-attr extraction is pinned to the resource count (no prose/foreign-resource leak)", () => {
+    expect(iacMonitorNames().size).toBe(iacResourceCount());
   });
 
   it("every code slug has a sentry_cron_monitor resource in cron-monitors.tf", () => {
