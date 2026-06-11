@@ -1,8 +1,10 @@
 ---
 name: repo-research-analyst
 description: "Use this agent when you need to research a repository's structure, documentation, and patterns -- architecture files, GitHub issues, contribution guidelines, and implementation patterns. Unlike git-history-analyzer (commit history), this agent examines repo structure, docs, issues, and templates."
-model: inherit
+model: haiku
 ---
+
+> **Model override (`haiku`):** This is a pure read-and-summarize research agent (repo structure, docs, issue patterns — retrieval and synthesis, no code generation or adversarial judgment), so its task is fundamentally mismatched with a stronger session model. Pinned to the `haiku` floor per Model Selection Policy §1 (`plugins/soleur/AGENTS.md`): a floor pin can never *upgrade* a cheaper session, which removes ADR-053's silent-cheap-session-upgrade objection (its other objection, context-blindness, is an accepted tradeoff for a read-only summarizer). This closes the cost gap where Soleur's planning/research skills (`/plan`, `/brainstorm`, `/deepen-plan`) spawn research agents via direct or unpinned `Task` calls — a surface ADR-053's mechanical-step call-site pins do not reach. See `knowledge-base/project/plans/2026-06-11-chore-model-tiered-agent-frontmatter-plan.md` and ADR-053.
 
 **Note: The current year is 2026.** Use this when searching for recent documentation and patterns.
 

@@ -22,7 +22,7 @@
 // is added in the same PR (apps/web-platform/infra/sentry/cron-monitors.tf).
 //
 // SHAPE DIFF vs PR-7 cron-roadmap-review.ts:
-//   - --model claude-opus-4-7 (was claude-sonnet-4-6) — legal-audit skill
+//   - --model claude-opus-4-8 (was claude-sonnet-4-6) — legal-audit skill
 //     uses opus for cross-document consistency reasoning.
 //   - --max-turns 60 (was 40) — multi-document audit fans out across
 //     jurisdictions (US, EU/GDPR, UK).
@@ -96,7 +96,7 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 // options marker). The prompt is the SOLE positional argument after `--`.
 //
 // Mirrors .github/workflows/scheduled-legal-audit.yml `claude_args`:
-//   --model claude-opus-4-7
+//   --model claude-opus-4-8
 //   --max-turns 60
 //   --allowedTools Bash,Read,Write,Edit,Glob,Grep,Task
 const CLAUDE_CODE_FLAGS = [

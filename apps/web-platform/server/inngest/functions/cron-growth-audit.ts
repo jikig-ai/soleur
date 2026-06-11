@@ -54,7 +54,7 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 // --allowedTools consumes the prompt as a tool name without the end-of-
 // options marker). The prompt is the SOLE positional argument after `--`.
 //
-// NOTE: claude-opus-4-7 model for deep multi-step growth audit.
+// NOTE: claude-opus-4-8 model for deep multi-step growth audit.
 //
 // #4993 — headless /soleur:* skill resolution (fleet fix mirroring #4987 /
 // PR #4989): `--plugin-dir plugins/soleur` registers the plugin (clone's tracked tree — #5091) under
