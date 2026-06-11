@@ -281,3 +281,18 @@ apps/web-platform/server/inngest/functions/cron-supabase-disk-io.ts
 # fail CLOSED to the solo workspace (never a sibling). The credential read is
 # membership-scoped, not RLS-row-exposed (ADR-044 strengthens isolation).
 apps/web-platform/server/kb-route-helpers.ts
+
+# email-on-received.ts + cron-email-ingress-probe.ts (feat-operator-inbox-delegation
+# #5103, migration 102) legitimately require the service-role client and CANNOT use
+# getFreshTenantClient(userId):
+#   - email_triage_items has NO authenticated INSERT/UPDATE RLS policy (only an owner
+#     SELECT policy + the WORM trigger + SECURITY DEFINER RPCs); the ingestion pipeline's
+#     stub-insert + one-time-set finalize are service-role writes by design (the table is
+#     written FOR the operator, never BY a tenant session — inbound mail arrives with no
+#     user session at all). RLS row-exposure is not in play: every row is owner-scoped on
+#     read, and the writes carry the env-pinned EMAIL_TRIAGE_OWNER_USER_ID.
+#   - cron-email-ingress-probe.ts calls purge_email_triage_items() which is GRANT
+#     service_role ONLY (age-based Art. 5(1)(e) retention sweep), inserts probe_tokens,
+#     and reads the probe row — all account-level maintenance with no tenant session.
+apps/web-platform/server/inngest/functions/email-on-received.ts
+apps/web-platform/server/inngest/functions/cron-email-ingress-probe.ts

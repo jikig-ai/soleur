@@ -219,6 +219,7 @@ jobs:
             -target=sentry_cron_monitor.scheduled_supabase_disk_io \
             -target=sentry_cron_monitor.scheduled_workspace_gc \
             -target=sentry_cron_monitor.cron_egress_resolve \
+            -target=sentry_cron_monitor.cron_email_ingress_probe \
             -target=sentry_cron_monitor.cron_weekly_release_digest \
             -target=sentry_cron_monitor.cron_workspace_sync_health \
             -target=sentry_cron_monitor.scheduled_campaign_calendar \

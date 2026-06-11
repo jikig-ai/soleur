@@ -120,7 +120,9 @@ export async function workspaceReconcileOnPushHandler({
 
   // Schema-gate. Non-throwing — an in-flight v=1 envelope (no fullName)
   // should drain to {ok:false}, not burn a retry. The webhook now emits v=2
-  // with fullName; v=1 events persisted up to ~24h replay through here.
+  // with fullName; stale v=1 events persist in the self-hosted store (no
+  // automatic deletion; ~24h is only the event-id dedup window) and can
+  // replay through here.
   const v = event.v ?? "0";
   const gate = await step.run("schema-gate", async () => {
     if (v !== WORKSPACE_RECONCILE_SCHEMA_V) {

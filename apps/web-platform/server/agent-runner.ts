@@ -50,6 +50,7 @@ import { MAX_BINARY_SIZE } from "./kb-limits";
 import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
 import { buildKbShareTools } from "./kb-share-tools";
 import { buildConversationsTools } from "./conversations-tools";
+import { buildEmailTriageTools } from "./email-triage-tools";
 import { buildAuthStatusTools } from "./auth-status-tools";
 import { buildAccountTools } from "./account-tools";
 import { buildWorkspaceSettingsTools } from "./workspace-settings-tools";
@@ -1305,7 +1306,23 @@ You can look up whether a KB-chat thread already exists for a knowledge-base
 document using conversations_lookup. Input: contextPath (the KB file path).
 Returns thread metadata ({ conversationId, lastActive, messageCount }) if a
 thread exists, or null otherwise. Use this before creating a new thread —
-resuming an existing thread preserves context for the user.`;
+resuming an existing thread preserves context for the user.
+
+## Email triage inbox
+
+Mail sent to the operator's ops@ address is auto-triaged into an inbox of
+summarized items; use email_triage_list to see them (unacknowledged statutory
+items are pinned first) and email_triage_get for one item's detail. Archived
+items are hidden by default — list them via
+email_triage_list({ status: "archived" }) — and synthetic ingress-probe rows
+only appear when you pass includeProbes: true. Statutory
+items (breach, service-of-process, DSAR, regulator contact) carry a legal
+clock — the due date (dueDate/dueLabel) is derived server-side from the
+statutory registry, so never compute or invent statutory periods yourself.
+Email bodies are discarded at ingestion: only summaries and metadata persist,
+and the original mail is retained in the operator's Proton ops@ mailbox.
+Status changes (acknowledge/archive) are operator-UI-only in v1 — you have no
+write tool for triage items.`;
 
     // ---------------------------------------------------------------------------
     // In-process MCP server for platform tools (PR creation, etc.)
@@ -1503,6 +1520,18 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
     const conversationsTools = buildConversationsTools({ userId });
     platformTools.push(...conversationsTools);
     platformToolNames.push("mcp__soleur_platform__conversations_lookup");
+
+    // Email triage inbox tools (operator-inbox-delegation AC11): registered
+    // unconditionally — agent-user parity for the triage inbox reads on
+    // every authenticated session. READ-ONLY by design (FR9 boundary):
+    // status transitions are operator-UI-only in v1 — no write tool here,
+    // and any future one must be `gated`-tier, never auto-approve (#4671).
+    const emailTriageTools = buildEmailTriageTools({ userId });
+    platformTools.push(...emailTriageTools);
+    platformToolNames.push(
+      "mcp__soleur_platform__email_triage_list",
+      "mcp__soleur_platform__email_triage_get",
+    );
 
     // Auth revocation status tool (#4440 follow-up to #4418): registered
     // unconditionally — agents need self-diagnosis on every authenticated

@@ -439,6 +439,48 @@ describe("deleteAccount", () => {
     ]);
   });
 
+  test("Art. 17 — anonymise_email_triage_items precedes auth.admin.deleteUser (FK ON DELETE RESTRICT, migration 102)", async () => {
+    setupSupabaseMocks();
+    const callOrder: string[] = [];
+
+    mockRpc.mockImplementation(async (name: string) => {
+      callOrder.push(`rpc:${name}`);
+      return { data: 0, error: null };
+    });
+    mockAuth.admin.deleteUser.mockImplementation(async () => {
+      callOrder.push("auth.deleteUser");
+      return { data: {}, error: null };
+    });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(true);
+    const triageIdx = callOrder.indexOf("rpc:anonymise_email_triage_items");
+    const authIdx = callOrder.indexOf("auth.deleteUser");
+    expect(triageIdx).toBeGreaterThanOrEqual(0);
+    expect(authIdx).toBeGreaterThanOrEqual(0);
+    expect(triageIdx).toBeLessThan(authIdx);
+  });
+
+  test("Art. 17 — anonymise_email_triage_items failure aborts cascade BEFORE auth-delete", async () => {
+    setupSupabaseMocks();
+
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name === "anonymise_email_triage_items") {
+        return { data: null, error: { message: "RPC unavailable" } };
+      }
+      return { data: 0, error: null };
+    });
+    mockAuth.admin.deleteUser.mockImplementation(async () => {
+      return { data: {}, error: null };
+    });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(false);
+    expect(mockAuth.admin.deleteUser).not.toHaveBeenCalled();
+  });
+
   test("Art. 17 — anonymise_tc_acceptances precedes auth.admin.deleteUser (FK ON DELETE RESTRICT)", async () => {
     setupSupabaseMocks();
     const callOrder: string[] = [];

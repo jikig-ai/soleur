@@ -132,7 +132,16 @@ describe("Inngest function registry — drift guards", () => {
 
   // UPDATE this number when adding/removing Inngest functions.
   it("(a) route.ts functions array has expected count", () => {
-    expect(routeEntries.length).toBe(53);
+    expect(routeEntries.length).toBe(55);
+  });
+
+  // EVENT functions are invisible to the cron-glob guards (b)/(e) — they only
+  // sweep cron-*.ts files. emailOnReceived (email/inbound.received pipeline,
+  // feat-operator-inbox-delegation) landed UNREGISTERED in Phase 4; without
+  // this explicit presence assertion a future route.ts refactor could drop it
+  // again and every inbound email would silently queue unprocessed (plan AC6).
+  it("(a2) emailOnReceived event function is registered in route.ts", () => {
+    expect(routeEntries).toContain("emailOnReceived");
   });
 
   it("(b) every cron-*.ts file is registered in route.ts functions array", () => {

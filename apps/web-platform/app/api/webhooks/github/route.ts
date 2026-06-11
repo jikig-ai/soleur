@@ -348,8 +348,10 @@ export async function POST(request: Request) {
   // exactly-once dispatch up to GitHub's redelivery limit.
   try {
     const { inngest } = await import("@/server/inngest/client");
-    // Redact rawBody before forwarding — the Inngest event store retains
-    // payloads for 24h and is a third PII surface beyond the messages row
+    // Redact rawBody before forwarding — the self-hosted Inngest event store
+    // retains payloads with NO automatic deletion (until operator-side store
+    // maintenance; ~24h is only the event-id dedup window — see DPD §2.3(o))
+    // and is a third PII surface beyond the messages row
     // and the audit ledger. redactGithubSourcedText regexes are
     // JSON-syntax-safe (they match PII shapes inside string values; quote
     // and brace characters are not in any pattern). Belt-and-suspenders
