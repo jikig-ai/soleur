@@ -21,10 +21,11 @@ vi.hoisted(() => {
 import {
   cronContentPublisher,
   MAX_RUN_DURATION_MS,
-  SYNTHETIC_CHECK_NAMES,
   PUBLISHER_ENV_KEYS,
   buildPublisherEnv,
 } from "@/server/inngest/functions/cron-content-publisher";
+// #5111: consolidated into the safe-commit helper (was a per-cron copy).
+import { SYNTHETIC_CHECK_NAMES } from "@/server/inngest/functions/_cron-safe-commit";
 
 // =============================================================================
 // Registration smoke
@@ -72,7 +73,6 @@ describe("handler source-shape anchors", () => {
     ["content-publisher.sh", "spawns the existing bash script"],
     ["scripts/content-publisher.sh", "script path"],
     ["knowledge-base/marketing/distribution-content", "content directory"],
-    ["ci/content-publisher-", "branch prefix for bot-PR"],
     ["ci: update content distribution status", "commit message"],
     ["buildPublisherEnv", "env builder function"],
     ["stale-content-detection", "stale content reporting op"],
@@ -84,6 +84,20 @@ describe("handler source-shape anchors", () => {
     ["reportSilentFallback", "Sentry mirror on error"],
   ])("contains %s (%s)", (anchor) => {
     expect(SUT_SOURCE).toContain(anchor);
+  });
+});
+
+describe("handler-side persistence (#5111)", () => {
+  it("routes persistence through safeCommitAndPr with direct merge + synthetic checks", () => {
+    expect(SUT_SOURCE).toContain('from "./_cron-safe-commit"');
+    expect(SUT_SOURCE).toMatch(/safeCommitAndPr\(\{/);
+    expect(SUT_SOURCE).toContain('mergeMode: "direct"');
+    expect(SUT_SOURCE).toContain("syntheticChecks");
+    // Directory allowlist entry must carry the trailing slash the helper's
+    // startsWith matching requires.
+    expect(SUT_SOURCE).toContain("allowedPaths: [`${CONTENT_DIR_REL}/`]");
+    // The private staging pipeline must not return.
+    expect(SUT_SOURCE).not.toContain("spawnGitChecked");
   });
 });
 

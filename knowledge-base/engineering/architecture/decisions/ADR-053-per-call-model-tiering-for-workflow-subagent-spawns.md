@@ -1,4 +1,4 @@
-# ADR-051: Per-call model tiering for workflow subagent spawns
+# ADR-053: Per-call model tiering for workflow subagent spawns
 
 - **Status:** Accepted
 - **Date:** 2026-06-10

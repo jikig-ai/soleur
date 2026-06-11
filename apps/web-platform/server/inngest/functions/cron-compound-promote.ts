@@ -43,6 +43,7 @@ import {
   postSentryHeartbeat,
   type HandlerArgs,
 } from "./_cron-shared";
+import { SYNTHETIC_CHECK_NAMES, safeCommitAndPr } from "./_cron-safe-commit";
 
 // =============================================================================
 // Constants
@@ -80,16 +81,6 @@ export const PII_REGEX = new RegExp(
     "|(xox[baprs]-[A-Za-z0-9-]{10,})",
 );
 
-export const SYNTHETIC_CHECK_NAMES = [
-  "test",
-  "dependency-review",
-  "e2e",
-  "skill-security-scan PR gate",
-  "enforce",
-  "cla-check",
-  "cla-evidence",
-] as const;
-
 // =============================================================================
 // Types
 // =============================================================================
@@ -122,31 +113,6 @@ function spawnGit(
     const child = spawn("git", args, { stdio: "ignore", ...opts });
     child.on("exit", (exitCode, signal) => resolve({ exitCode, signal }));
     child.on("error", () => resolve({ exitCode: -1, signal: null }));
-  });
-}
-
-async function spawnGitChecked(
-  args: string[],
-  opts?: { cwd?: string },
-): Promise<void> {
-  const result = await spawnGit(args, opts);
-  if (result.exitCode !== 0) {
-    throw new Error(`git ${args[0]} failed (exit ${result.exitCode})`);
-  }
-}
-
-function spawnGitCapture(
-  args: string[],
-  opts?: { cwd?: string },
-): Promise<string> {
-  return new Promise((resolve) => {
-    const child = spawn("git", args, { ...opts });
-    let out = "";
-    child.stdout?.on("data", (d: Buffer) => {
-      out += d.toString();
-    });
-    child.on("exit", () => resolve(out.trim()));
-    child.on("error", () => resolve(""));
   });
 }
 
@@ -261,6 +227,13 @@ export async function cronCompoundPromoteHandler({
   let installationToken = "";
 
   try {
+    // Memoized run-start timestamp — safeCommitAndPr pins commit dates from
+    // it (replay-stable, #5111); branch names use the per-cluster override.
+    const runStartedAt = await step.run(
+      "run-started-at",
+      async () => new Date().toISOString(),
+    );
+
     installationToken = await step.run(
       "mint-installation-token",
       async () => mintInstallationToken({ tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS }),
@@ -488,7 +461,10 @@ export async function cronCompoundPromoteHandler({
 
     for (const cluster of clusterResult.clusters) {
       const clusterHash = computeClusterHash(cluster.source_learnings);
-      const dateSuffix = new Date().toISOString().slice(0, 10);
+      // Derived from the MEMOIZED run start, never a fresh Date — the branch
+      // name embeds this suffix and the helper's replay-resume is keyed on
+      // the branch, so a replay crossing UTC midnight must not re-key it.
+      const dateSuffix = runStartedAt.slice(0, 10);
 
       await step.run(`apply-and-pr-${clusterHash.slice(0, 8)}`, async () => {
         const octokit = new Octokit({ auth: installationToken });
@@ -586,11 +562,16 @@ export async function cronCompoundPromoteHandler({
         const row = `\n| ${dateSuffix} | ${clusterHash} | ${cluster.target_path} | ${cluster.source_learnings.length} | pending | ${cluster.tier} | (PR pending) |\n`;
         await appendFile(logPath, row);
 
-        await spawnGitChecked(["add", cluster.target_path, "knowledge-base/project/learnings/promotion-log.md"], { cwd: repoRoot });
-        await spawnGitChecked(["config", "user.name", "github-actions[bot]"], { cwd: repoRoot });
-        await spawnGitChecked(["config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], { cwd: repoRoot });
-        await spawnGitChecked(["checkout", "-b", branchName], { cwd: repoRoot });
-
+        // Persist via safeCommitAndPr (#5111) — per-cluster branch override,
+        // commit trailers via commitBody, draft PR with mergeMode "none"
+        // (human review required; the helper never touches merge endpoints).
+        // Gains the deletion guard, dirty-index precondition, and dropped-
+        // path warn. Replay caveat: a crash-replay of this step re-runs
+        // applyDiffToWorkspace BEFORE the helper, so a crash AFTER commit
+        // fails the re-apply `--check` and early-returns above — the
+        // helper's branch-keyed replay-resume covers only crashes inside
+        // its own push/PR tail. The whole cluster step is memoized, so a
+        // COMPLETED cluster never re-executes.
         const titleLine = `chore(self-healing): promote cluster ${clusterHash} to ${cluster.target_path}`;
         const trailer = [
           `Bot-Author: compound-promotion-loop@${process.env.GITHUB_SHA ?? "local"}`,
@@ -599,39 +580,53 @@ export async function cronCompoundPromoteHandler({
           `Cluster-Hash: ${clusterHash}`,
           `Tier: ${cluster.tier}`,
         ].join("\n");
-        await spawnGitChecked(["commit", "-m", titleLine, "-m", trailer], { cwd: repoRoot });
-        await spawnGitChecked(["push", "-u", "origin", branchName], { cwd: repoRoot });
-
         const prBody =
           `Promoted by compound-promotion-loop. Source learnings: ${cluster.source_learnings.join(" ")}. ` +
           `Tier: ${cluster.tier}. Cluster-Hash: ${clusterHash}. ` +
           `Reviewer: verify the diff respects cq-agents-md-tier-gate and cq-agents-md-why-single-line; ` +
           `merge to apply, close to reject.\n\nhuman review required`;
 
-        const { data: pr } = await octokit.request("POST /repos/{owner}/{repo}/pulls", {
-          owner: REPO_OWNER, repo: REPO_NAME,
-          title: `self-healing(auto): promote cluster ${clusterHash} ${dateSuffix}`,
-          body: prBody, base: "main", head: branchName, draft: true,
+        const result = await safeCommitAndPr({
+          spawnCwd: repoRoot,
+          installationToken,
+          cronName: "cron-compound-promote",
+          commitMessage: titleLine,
+          commitBody: trailer,
+          allowedPaths: [
+            cluster.target_path,
+            "knowledge-base/project/learnings/promotion-log.md",
+          ],
+          runStartedAt,
+          scheduledIssueLabel: SENTRY_MONITOR_SLUG,
+          branchName,
+          prTitle: `self-healing(auto): promote cluster ${clusterHash} ${dateSuffix}`,
+          prBody,
+          prDraft: true,
+          prLabels: ["self-healing/auto"],
+          syntheticChecks: {
+            names: SYNTHETIC_CHECK_NAMES,
+            summary: "self-healing/auto promotion — operator review required",
+          },
+          mergeMode: "none",
+          octokit,
+          logger,
         });
 
-        await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/labels", {
-          owner: REPO_OWNER, repo: REPO_NAME, issue_number: pr.number,
-          labels: ["self-healing/auto"],
-        });
-
-        // FR14: synthetic checks
-        const commitSha = await spawnGitCapture(["rev-parse", "HEAD"], { cwd: repoRoot });
-
-        for (const name of SYNTHETIC_CHECK_NAMES) {
-          await octokit.request("POST /repos/{owner}/{repo}/check-runs", {
-            owner: REPO_OWNER, repo: REPO_NAME, name, head_sha: commitSha,
-            status: "completed", conclusion: "success",
-            output: { title: "Bot PR", summary: "self-healing/auto promotion — operator review required" },
-          });
+        // Non-committed exits (deletion-guard, dirty-index, no-changes after
+        // an allowlist drop, …) leave this cluster's applied diff and its
+        // promotion-log row UNSTAGED in the worktree. The pre-#5111 throwing
+        // git pipeline halted the loop here; the non-throwing helper
+        // continues — so reset the worktree or cluster A's residue rides
+        // into cluster B's commit (promotion-log.md is in EVERY allowlist).
+        if (result.status !== "committed") {
+          // reset --hard covers staged AND unstaged residue (a dirty-index
+          // failure means something was staged); clean -fd removes new files
+          // the diff created. The clone is ephemeral — nothing else lives here.
+          await spawnGit(["reset", "--hard", "HEAD"], { cwd: repoRoot });
+          await spawnGit(["clean", "-fd"], { cwd: repoRoot });
         }
-
         await spawnGit(["checkout", "main"], { cwd: repoRoot });
-        clustersOpened++;
+        if (result.status === "committed") clustersOpened++;
       });
     }
 

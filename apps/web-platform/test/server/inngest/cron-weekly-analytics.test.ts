@@ -6,10 +6,9 @@ vi.hoisted(() => {
   process.env.NEXT_PHASE = "phase-production-build";
 });
 
-import {
-  cronWeeklyAnalytics,
-  SYNTHETIC_CHECK_NAMES,
-} from "@/server/inngest/functions/cron-weekly-analytics";
+import { cronWeeklyAnalytics } from "@/server/inngest/functions/cron-weekly-analytics";
+// #5111: consolidated into the safe-commit helper (was a per-cron copy).
+import { SYNTHETIC_CHECK_NAMES } from "@/server/inngest/functions/_cron-safe-commit";
 
 describe("cronWeeklyAnalytics — registration shape (import-time smoke)", () => {
   it("loads without throwing (handler + client startup pass)", () => {
@@ -58,9 +57,22 @@ describe("handler source anchors", () => {
     ["cron/content-generator.manual-trigger", "cascade target C2"],
     ["postSentryHeartbeat", "Sentry cron heartbeat"],
     ["scheduled-weekly-analytics", "Sentry monitor slug"],
-    ["bot-pr", "bot-PR pattern reference"],
   ])("contains %s (%s)", (anchor) => {
     expect(SUT_SOURCE).toContain(anchor);
+  });
+});
+
+describe("handler-side persistence (#5111)", () => {
+  it("routes persistence through safeCommitAndPr with direct merge + synthetic checks", () => {
+    expect(SUT_SOURCE).toContain('from "./_cron-safe-commit"');
+    expect(SUT_SOURCE).toMatch(/safeCommitAndPr\(\{/);
+    expect(SUT_SOURCE).toContain('mergeMode: "direct"');
+    expect(SUT_SOURCE).toContain("syntheticChecks");
+    expect(SUT_SOURCE).toContain(
+      'allowedPaths: ["knowledge-base/marketing/analytics/"]',
+    );
+    // The private staging pipeline must not return.
+    expect(SUT_SOURCE).not.toContain("spawnGitChecked");
   });
 });
 

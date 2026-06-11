@@ -29,6 +29,7 @@ vi.mock("@/server/observability", () => ({
 
 import {
   DEFAULT_MAX_DELETIONS,
+  SYNTHETIC_CHECK_NAMES,
   enableAutoMergeSquash,
   parsePorcelainZ,
   safeCommitAndPr,
@@ -132,6 +133,8 @@ function makeOctokitStub(overrides?: {
   prCreate?: (params: Record<string, unknown>) => Promise<unknown>;
   prList?: () => Promise<unknown>;
   graphql?: () => Promise<unknown>;
+  /** #5111 mergeMode "direct": override the PUT …/merge handler (e.g. throw). */
+  merge?: (params: Record<string, unknown>) => Promise<unknown>;
   /** When set, GET issues returns one open scheduled issue with this number. */
   scheduledIssueNumber?: number;
 }): OctokitStub {
@@ -143,6 +146,10 @@ function makeOctokitStub(overrides?: {
     if (route === "GET /repos/{owner}/{repo}/pulls") {
       if (overrides?.prList) return overrides.prList();
       return { data: [] };
+    }
+    if (route === "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge") {
+      if (overrides?.merge) return overrides.merge(params);
+      return { data: {} };
     }
     if (route === "GET /repos/{owner}/{repo}/issues") {
       return {
@@ -523,5 +530,288 @@ describe("safeCommitAndPr — workspace lost (non-throwing)", () => {
     if (result.status === "failed") {
       expect(result.stage).toBe("workspace-lost");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #5111 option surface — branchName/commitBody/prTitle/prBody/prDraft/prLabels/
+// syntheticChecks/mergeMode. Defaults-unchanged regression: every pre-#5111
+// describe above runs config WITHOUT these options and must stay green.
+// ---------------------------------------------------------------------------
+
+describe("safeCommitAndPr — #5111 option surface", () => {
+  it("exports the 7 canonical synthetic CI check names (consolidated from the 5 per-cron copies)", () => {
+    expect([...SYNTHETIC_CHECK_NAMES]).toEqual([
+      "test",
+      "dependency-review",
+      "e2e",
+      "skill-security-scan PR gate",
+      "enforce",
+      "cla-check",
+      "cla-evidence",
+    ]);
+  });
+
+  it("honors a branchName override (result, local HEAD, remote ref)", async () => {
+    const f = await makeFixture();
+    await writeFile(join(f.repo, "knowledge-base/marketing/file-0.md"), "cluster change\n");
+
+    const result = await safeCommitAndPr({
+      ...baseConfig(f, makeOctokitStub()),
+      branchName: "self-healing/auto-abc12345-2026-06-10",
+    });
+
+    expect(result.status).toBe("committed");
+    if (result.status === "committed") {
+      expect(result.branch).toBe("self-healing/auto-abc12345-2026-06-10");
+    }
+    const head = await tgit(f.repo, "rev-parse", "--abbrev-ref", "HEAD");
+    expect(head).toBe("self-healing/auto-abc12345-2026-06-10");
+    const remoteBranches = await tgit(f.repo, "ls-remote", "--heads", "origin");
+    expect(remoteBranches).toContain("self-healing/auto-abc12345-2026-06-10");
+  });
+
+  it("rejects a non-refname-safe branchName at stage checkout before any git mutation", async () => {
+    const f = await makeFixture();
+    await writeFile(join(f.repo, "knowledge-base/marketing/file-0.md"), "change\n");
+
+    const result = await safeCommitAndPr({
+      ...baseConfig(f, makeOctokitStub()),
+      branchName: "bad:branch.name",
+    });
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.stage).toBe("checkout");
+    }
+    // Nothing was committed or pushed.
+    const head = await tgit(f.repo, "rev-parse", "--abbrev-ref", "HEAD");
+    expect(head).toBe("main");
+    const remoteBranches = await tgit(f.repo, "ls-remote", "--heads", "origin");
+    expect(remoteBranches).not.toContain("bad");
+  });
+
+  it("commitBody lands as the commit message's second paragraph (compound-promote trailers)", async () => {
+    const f = await makeFixture();
+    await writeFile(join(f.repo, "knowledge-base/marketing/file-1.md"), "change\n");
+
+    const result = await safeCommitAndPr({
+      ...baseConfig(f, makeOctokitStub()),
+      commitBody: "Promotion-Source: cluster-abc\nPromotion-Cluster-Hash: abc12345",
+    });
+
+    expect(result.status).toBe("committed");
+    const body = await tgit(f.repo, "log", "-1", "--format=%B");
+    expect(body).toBe(
+      "fix(test): fixture commit\n\nPromotion-Source: cluster-abc\nPromotion-Cluster-Hash: abc12345",
+    );
+  });
+
+  it("prTitle/prBody/prDraft/prLabels pass through to PR create + labels endpoints", async () => {
+    const f = await makeFixture();
+    await writeFile(join(f.repo, "knowledge-base/marketing/file-2.md"), "change\n");
+
+    const octokit = makeOctokitStub();
+    const result = await safeCommitAndPr({
+      ...baseConfig(f, makeOctokitStub()),
+      octokit: octokit as never,
+      prTitle: "self-healing(auto): promote cluster abc12345 2026-06-10",
+      prBody: "Automated promotion proposal — human review required.",
+      prDraft: true,
+      prLabels: ["self-healing/auto"],
+      mergeMode: "none",
+    });
+
+    expect(result.status).toBe("committed");
+    expect(octokit.request).toHaveBeenCalledWith(
+      "POST /repos/{owner}/{repo}/pulls",
+      expect.objectContaining({
+        title: "self-healing(auto): promote cluster abc12345 2026-06-10",
+        body: "Automated promotion proposal — human review required.",
+        draft: true,
+      }),
+    );
+    expect(octokit.request).toHaveBeenCalledWith(
+      "POST /repos/{owner}/{repo}/issues/{issue_number}/labels",
+      expect.objectContaining({
+        issue_number: 42,
+        labels: ["self-healing/auto"],
+      }),
+    );
+  });
+
+  it("a prBody override still carries the dropped-path ⚠️ marker (loud-truncation invariant survives)", async () => {
+    const f = await makeFixture();
+    await writeFile(join(f.repo, "knowledge-base/marketing/file-3.md"), "change\n");
+    // Outside allowlist, not structural — dropped loudly.
+    await writeFile(join(f.repo, "plugins/soleur/docs/page.md"), "# changed\n");
+
+    const octokit = makeOctokitStub();
+    const result = await safeCommitAndPr({
+      ...baseConfig(f, makeOctokitStub()),
+      octokit: octokit as never,
+      prBody: "Custom body stem.",
+    });
+
+    expect(result.status).toBe("committed");
+    const prCall = octokit.request.mock.calls.find(
+      (c) => c[0] === "POST /repos/{owner}/{repo}/pulls",
+    );
+    expect(prCall).toBeDefined();
+    const body = (prCall![1] as { body: string }).body;
+    expect(body).toContain("Custom body stem.");
+    expect(body).toContain("⚠️");
+    expect(body).toContain("plugins/soleur/docs/page.md");
+  });
+
+  it("syntheticChecks posts one completed/success check-run per name on the head SHA", async () => {
+    const f = await makeFixture();
+    await writeFile(join(f.repo, "knowledge-base/marketing/file-4.md"), "change\n");
+
+    const octokit = makeOctokitStub();
+    const result = await safeCommitAndPr({
+      ...baseConfig(f, makeOctokitStub()),
+      octokit: octokit as never,
+      syntheticChecks: { names: SYNTHETIC_CHECK_NAMES, summary: "Snapshot only, no code changes" },
+      mergeMode: "direct",
+    });
+
+    expect(result.status).toBe("committed");
+    const headSha = await tgit(f.repo, "rev-parse", "HEAD");
+    const checkCalls = octokit.request.mock.calls.filter(
+      (c) => c[0] === "POST /repos/{owner}/{repo}/check-runs",
+    );
+    expect(checkCalls).toHaveLength(SYNTHETIC_CHECK_NAMES.length);
+    for (const name of SYNTHETIC_CHECK_NAMES) {
+      expect(octokit.request).toHaveBeenCalledWith(
+        "POST /repos/{owner}/{repo}/check-runs",
+        expect.objectContaining({
+          name,
+          head_sha: headSha,
+          status: "completed",
+          conclusion: "success",
+          output: expect.objectContaining({ summary: "Snapshot only, no code changes" }),
+        }),
+      );
+    }
+  });
+
+  it("mergeMode 'direct' merges via PUT without arming auto-merge", async () => {
+    const f = await makeFixture();
+    await writeFile(join(f.repo, "knowledge-base/marketing/file-5.md"), "change\n");
+
+    const octokit = makeOctokitStub();
+    const result = await safeCommitAndPr({
+      ...baseConfig(f, makeOctokitStub()),
+      octokit: octokit as never,
+      mergeMode: "direct",
+    });
+
+    expect(result.status).toBe("committed");
+    expect(octokit.request).toHaveBeenCalledWith(
+      "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge",
+      expect.objectContaining({ pull_number: 42, merge_method: "squash" }),
+    );
+    expect(octokit.graphql).not.toHaveBeenCalled();
+  });
+
+  it("mergeMode 'direct' falls back to arming auto-merge when the direct merge fails", async () => {
+    const f = await makeFixture();
+    await writeFile(join(f.repo, "knowledge-base/marketing/file-6.md"), "change\n");
+
+    const octokit = makeOctokitStub({
+      merge: async () => {
+        throw new Error("Required status check is expected");
+      },
+    });
+    const result = await safeCommitAndPr({
+      ...baseConfig(f, makeOctokitStub()),
+      octokit: octokit as never,
+      mergeMode: "direct",
+    });
+
+    expect(result.status).toBe("committed");
+    // Anti-vacuity: the direct PUT must have been ATTEMPTED first — an
+    // option-ignoring helper (pre-#5111 auto mode) would arm auto-merge
+    // without ever hitting the merge endpoint and still satisfy the
+    // graphql assertion below.
+    expect(octokit.request).toHaveBeenCalledWith(
+      "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge",
+      expect.objectContaining({ pull_number: 42 }),
+    );
+    expect(octokit.graphql).toHaveBeenCalledWith(
+      expect.stringContaining("enablePullRequestAutoMerge"),
+      expect.objectContaining({ pullRequestId: "PR_node_42" }),
+    );
+    // The fell-back state is Sentry-visible (armed auto-merge can silently
+    // disarm on conflict — the #5138 watchdog class).
+    const fellBack = reportSilentFallbackMock.mock.calls.filter(
+      (c) => c[1]?.op === "safe-commit-direct-merge-fell-back",
+    );
+    expect(fellBack).toHaveLength(1);
+  });
+
+  it("mergeMode 'direct' returns failed/auto-merge when both direct merge and arming fail (PR stays open + loud)", async () => {
+    const f = await makeFixture();
+    await writeFile(join(f.repo, "knowledge-base/marketing/file-7.md"), "change\n");
+
+    const octokit = makeOctokitStub({
+      merge: async () => {
+        throw new Error("Pull Request is not mergeable");
+      },
+      graphql: async () => {
+        throw new Error("auto-merge is not allowed on this repository");
+      },
+      scheduledIssueNumber: 11,
+    });
+    const result = await safeCommitAndPr({
+      ...baseConfig(f, makeOctokitStub()),
+      octokit: octokit as never,
+      mergeMode: "direct",
+    });
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.stage).toBe("auto-merge");
+      // Anti-vacuity: the failure message must carry BOTH rungs of the
+      // direct ladder — an option-ignoring auto-mode helper also fails at
+      // stage auto-merge with the same comment, but its message has no
+      // "direct merge failed" prefix.
+      expect(result.message).toContain("direct merge failed");
+    }
+    expect(octokit.request).toHaveBeenCalledWith(
+      "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge",
+      expect.objectContaining({ pull_number: 42 }),
+    );
+    // Operator visibility: the PR-needs-manual-merge comment landed.
+    expect(octokit.request).toHaveBeenCalledWith(
+      "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+      expect.objectContaining({
+        issue_number: 11,
+        body: expect.stringContaining("manual merge"),
+      }),
+    );
+  });
+
+  it("mergeMode 'none' creates the PR but never touches merge endpoints (compound-promote drafts)", async () => {
+    const f = await makeFixture();
+    await writeFile(join(f.repo, "knowledge-base/marketing/file-8.md"), "change\n");
+
+    const octokit = makeOctokitStub();
+    const result = await safeCommitAndPr({
+      ...baseConfig(f, makeOctokitStub()),
+      octokit: octokit as never,
+      mergeMode: "none",
+    });
+
+    expect(result.status).toBe("committed");
+    if (result.status === "committed") {
+      expect(result.prNumber).toBe(42);
+    }
+    expect(octokit.graphql).not.toHaveBeenCalled();
+    expect(octokit.request).not.toHaveBeenCalledWith(
+      "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge",
+      expect.anything(),
+    );
   });
 });

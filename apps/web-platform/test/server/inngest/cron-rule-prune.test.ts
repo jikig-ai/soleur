@@ -20,11 +20,12 @@ vi.hoisted(() => {
 import {
   cronRulePrune,
   MAX_RUN_DURATION_MS,
-  SYNTHETIC_CHECK_NAMES,
   SENTINEL_PR_TITLE,
   SENTINEL_PR_BODY,
   parseSentinels,
 } from "@/server/inngest/functions/cron-rule-prune";
+// #5111: consolidated into the safe-commit helper (was a per-cron copy).
+import { SYNTHETIC_CHECK_NAMES } from "@/server/inngest/functions/_cron-safe-commit";
 
 // =============================================================================
 // Registration smoke
@@ -74,7 +75,6 @@ describe("handler source-shape anchors", () => {
     ["--propose-retirement", "retirement proposal mode"],
     ["::rule-prune-pr-title::", "PR title sentinel"],
     ["::rule-prune-pr-body::", "PR body sentinel"],
-    ["ci/rule-prune-retire-", "branch prefix for bot-PR"],
     [
       "chore(rule-prune): propose retirement of stale rules",
       "commit message",
@@ -91,6 +91,20 @@ describe("handler source-shape anchors", () => {
     ],
   ])("contains %s (%s)", (anchor) => {
     expect(SUT_SOURCE).toContain(anchor);
+  });
+});
+
+describe("handler-side persistence (#5111)", () => {
+  it("routes persistence through safeCommitAndPr with direct merge, dynamic title, synthetic checks", () => {
+    expect(SUT_SOURCE).toContain('from "./_cron-safe-commit"');
+    expect(SUT_SOURCE).toMatch(/safeCommitAndPr\(\{/);
+    expect(SUT_SOURCE).toContain('mergeMode: "direct"');
+    expect(SUT_SOURCE).toContain("syntheticChecks");
+    expect(SUT_SOURCE).toContain('allowedPaths: ["scripts/retired-rule-ids.txt"]');
+    // The script's sentinel-derived dynamic title survives the migration.
+    expect(SUT_SOURCE).toContain("prTitle: `${pruneResult.prTitle} ${dateSuffix}`");
+    // The private staging pipeline must not return.
+    expect(SUT_SOURCE).not.toContain("spawnGitChecked");
   });
 });
 

@@ -663,14 +663,38 @@ containment). A monitor that watches only for the issue will false-negative on t
 **Why:** AC11 of #5018 — roadmap-review consistently produced PRs (#5053, #5058), never the
 issue; the issue-only check timed out despite the containment working perfectly.
 
-## PR Withheld by safe-commit (#5091)
+## PR Withheld by safe-commit (#5091, #5111)
 
-Since #5091, the claude-spawn PR producers (seo-aeo-audit, content-generator,
-growth-execution; more migrate via #5111) persist handler-side through
-`safeCommitAndPr` (`apps/web-platform/server/inngest/functions/_cron-safe-commit.ts`)
-instead of running git/gh verbs in the prompt. When persistence cannot complete,
-the helper comments **"PR withheld: …"** on the run's scheduled issue and mirrors
-the failure to Sentry — diagnosis never requires SSH.
+Since #5111 (completing #5091), **ALL bot cron PR pipelines — 12 callers — persist
+handler-side through `safeCommitAndPr`**
+(`apps/web-platform/server/inngest/functions/_cron-safe-commit.ts`); the only
+exemptions are roadmap-review (hook-guarded Tier-1 self-commit) and bug-fixer
+(the fix-issue skill owns its commit step). ADR-054 records the decision; the
+parity test (`cron-safe-commit-parity.test.ts`) enforces it. When persistence
+cannot complete, the helper mirrors the failure to Sentry and attempts a
+**"PR withheld: …"** comment on the run's scheduled issue — diagnosis never
+requires SSH. **Comment-channel scope:** only the claude-spawn crons create
+issues carrying their `scheduledIssueLabel`; the 5 pure-TS pipelines
+(weekly-analytics, compound-promote, content-publisher, content-vendor-drift,
+rule-prune) have no labeled issues, so for them the comment never lands
+(Sentry op `safe-commit-comment-no-target` records the drop) and **Sentry is
+the only failure signal**. Their cron monitors stay GREEN on a persistence
+failure (the cron ran; persistence health is signaled via Sentry ops, not
+the heartbeat).
+
+**Three merge modes** (per-cron; ADR-054): `auto` — claude-spawn output PRs, auto-merge
+armed and required checks gate the merge; `direct` + synthetic check-runs — deterministic
+data-refresh PRs (weekly-analytics, content-publisher, content-vendor-drift, rule-prune)
+merged immediately after posting the synthetic checks; `none` — compound-promote's
+`self-healing/auto-*` human-review drafts (a long-lived open draft is NORMAL for that
+cron, not a stall). For `direct` pipelines, Sentry stage `auto-merge` covers BOTH a
+failed direct merge AND a failed auto-merge arm — in both cases the PR exists and
+needs a manual merge.
+
+**Expected guard fire:** content-vendor-drift re-vendoring a large upstream
+restructure can legitimately delete >10 files under its `references/` allowlist —
+the deletion guard aborts loudly by design (mass deletion = review-worthy). Use the
+`DEFAULT_MAX_DELETIONS` raise path below for that run, then revert.
 
 **Sentry ops** (filter by `fn=<cron-name>`):
 
@@ -680,10 +704,18 @@ the failure to Sentry — diagnosis never requires SSH.
 | `safe-commit-failed` | Any other stage failed (`stage` in the event extra: workspace-lost, status, dirty-index, checkout, add, commit, push, pr-create, auto-merge, unexpected). | `push`/`pr-create`: usually transient GitHub/network or token expiry — the next scheduled run retries from scratch. `dirty-index`: something pre-staged files in the workspace (should be impossible; investigate). `workspace-lost`: a deploy/restart landed mid-run; work is lost, next run redoes it. `auto-merge`: the PR EXISTS but needs a manual merge — the comment names it. |
 | `safe-commit-paths-dropped` | The run changed files outside its allowlist; the PR was opened WITHOUT them (the PR body carries a ⚠️ marker listing the dropped sample). | Check whether the dropped paths should be in the cron's `allowedPaths` (widen via PR) or the model wandered out of scope (prompt fix). |
 | `safe-commit-issue-comment-failed` | The visibility comment itself could not post. | Diagnosis falls back to Sentry only; no action unless recurring. |
+| `safe-commit-comment-no-target` | No open issue carries the cron's `scheduledIssueLabel` — expected for the 5 pure-TS pipelines (see scope note above). | Confirms Sentry is the only signal for this run; no action unless it fires for a claude-spawn cron (whose issue-create step then failed upstream). |
+| `safe-commit-direct-merge-fell-back` | A `direct`-mode pipeline's immediate merge failed; auto-merge was ARMED instead. The PR merges when checks pass — or goes silently stale on a later conflict (armed auto-merge disarms without signal; the #5138 watchdog class, which therefore also covers live direct pipelines, not just the Tier-2-dormant auto cohort). | Check the PR: if still open after the checks window, merge manually and investigate why the direct merge was rejected (branch protection drift?). |
+| `safe-commit-label-failed` | PR labels could not be applied (advisory metadata — run continued). | For content-vendor-drift this can mean a merged drift PR lacks its `vendor/*` / `compliance/critical` routing labels — re-apply manually if triage depends on them. |
+| `safe-commit-check-run-failed` | A synthetic check-run POST failed on a `direct`/`none` pipeline. | The PR may sit open with auto-merge armed against checks that will never arrive — post the missing check-runs manually or merge manually. |
 
 A **no-PR week with a green monitor and no comment** means the run legitimately
 produced no committable changes (`no-changes` — visible in app logs as
-`safe-commit-no-changes`).
+`safe-commit-no-changes`) — **after confirming the Sentry window is clean**:
+for the 5 pure-TS pipelines a persistence failure ALSO presents as green
+monitor + no comment, so the inference is only sound when a Sentry query for
+`safe-commit-failed` / `safe-commit-deletion-guard` (fn=<cron>) over the run
+window returns empty.
 
 ## References
 
