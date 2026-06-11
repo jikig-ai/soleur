@@ -92,6 +92,8 @@ fi
 # Re-run `git show` here (do NOT reuse $HEAD_CONTENT): $(...) strips trailing
 # newlines, and the restore must be byte-exact to the committed blob.
 tmp_restore=$(mktemp "$(dirname "$FILE_PATH")/.pen-restore.XXXXXX" 2>/dev/null) || exit 0
+# Clean up the temp file if the hook is killed mid-restore (between mktemp and mv).
+trap 'rm -f "$tmp_restore" 2>/dev/null' EXIT INT TERM
 if git -C "$REPO_ROOT" show "HEAD:$REL_PATH" > "$tmp_restore" 2>/dev/null; then
   mv -f "$tmp_restore" "$FILE_PATH" 2>/dev/null || { rm -f "$tmp_restore" 2>/dev/null; exit 0; }
 else
