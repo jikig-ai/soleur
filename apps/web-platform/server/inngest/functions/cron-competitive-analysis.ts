@@ -3,7 +3,8 @@
 // ported via the claude-code-spawn pattern; structural template is PR-7's
 // cron-roadmap-review.ts (closest sibling — same WebSearch+WebFetch+Task
 // allowlist cohort and same dual-side-effect shape: filing an issue AND
-// opening a follow-up PR via the agent's MANDATORY FINAL STEP block).
+// opening a follow-up PR, persisted handler-side via safeCommitAndPr
+// since #5111).
 //
 // ADR-033 invariants (binding all cron-*.ts files):
 //   I1 — claude binary spawned INSIDE step.run (Inngest replay memoization).
@@ -32,10 +33,9 @@
 //     WebSearch,WebFetch + Task) — competitive-analysis skill delegates
 //     per-tier scans via sub-agent invocations.
 //   - Cron: monthly 1st @ 09:00 UTC (was weekly Monday).
-//   - Side-effect class: issue-creator + pr-creator (PR-7 was also dual,
-//     so the prompt's MANDATORY FINAL STEP block is preserved verbatim:
-//     create branch → commit knowledge-base/product/competitive-intelligence.md
-//     → gh pr create → gh pr merge --squash --auto).
+//   - Side-effect class: issue-creator + pr-creator (persistence runs
+//     handler-side via safeCommitAndPr after the eval — #5111; the prompt
+//     forbids the spawned claude from running git/gh-pr verbs).
 //
 // PLUGIN-LOADING — Verbatim PR-5/PR-7 ephemeral-workspace pattern:
 //   - repo/                          (in-handler `git clone --depth=1`)
@@ -50,8 +50,8 @@
 // GH TOKEN — installation token minted via createProbeOctokit() →
 // installation discovery → generateInstallationToken(installation.id).
 // Injected as GH_TOKEN so the spawned claude can run `gh api ...`,
-// `gh issue create`, `gh pr create`, `gh pr merge`, `gh label create`,
-// `git push`.
+// `gh issue create`, `gh label create` (persistence runs handler-side via
+// safeCommitAndPr — #5111; the prompt forbids git/gh-pr verbs).
 
 import {
   redactToken,
@@ -68,6 +68,7 @@ import {
   spawnClaudeEval,
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
+import { safeCommitAndPr } from "./_cron-safe-commit";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 
@@ -111,20 +112,17 @@ const CLAUDE_CODE_FLAGS = [
 
 // Verbatim prompt extracted from
 // .github/workflows/scheduled-competitive-analysis.yml lines 67-95 (the
-// `prompt: |` block body, 12-space YAML indentation stripped).
+// `prompt: |` block body, 12-space YAML indentation stripped). #5111
+// removed the prompt-level commit block (the platform persists
+// handler-side via safeCommitAndPr — the #5091 consolidation pattern).
 // Verbatim-extraction discipline: anchor strings ("MILESTONE RULE:",
-// "Run /soleur:competitive-analysis --tiers 0,3", "MANDATORY FINAL STEP",
+// "Run /soleur:competitive-analysis --tiers 0,3",
+// "PERSISTENCE: Do NOT run git add",
 // "[Scheduled] Competitive Analysis", "scheduled-competitive-analysis",
 // "competitive-intelligence.md") asserted by the test suite to catch
 // silent paraphrasing across plan→work cycles.
-//
-// Backticks inside the prompt body (in the MANDATORY FINAL STEP fenced
-// code block delimiters) are escaped as \` to survive the JS template-
-// literal wrapper. The escaped form is semantically identical inside the
-// spawned claude's prompt context — the agent reads literal backticks.
 const COMPETITIVE_ANALYSIS_PROMPT = `IMPORTANT: This is an automated CI workflow. The AGENTS.md rule
 Do NOT push directly to main.
-Use the PR-based commit pattern in the MANDATORY FINAL STEP.
 
 MILESTONE RULE: Every gh issue create command must include --milestone "Post-MVP / Later".
 
@@ -133,25 +131,29 @@ After your analysis is complete, create a GitHub issue titled
 "[Scheduled] Competitive Analysis - <today's date in YYYY-MM-DD format>"
 with the label "scheduled-competitive-analysis" summarizing your findings.
 
-MANDATORY FINAL STEP — persist via PR (do not push directly to main):
-Run these bash commands:
-\`\`\`
-git config user.name "github-actions[bot]"
-git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-git add knowledge-base/product/competitive-intelligence.md
-git diff --cached --quiet && echo "No changes to commit" && exit 0
-BRANCH="ci/competitive-analysis-$(date -u +%Y-%m-%d-%H%M%S)"
-git checkout -b "$BRANCH"
-git commit -m "docs: update competitive intelligence report"
-git push -u origin "$BRANCH"
-gh pr create \\
-  --title "docs: update competitive intelligence report $(date -u +%Y-%m-%d)" \\
-  --body "Automated commit from competitive analysis workflow." \\
-  --base main \\
-  --head "$BRANCH"
-gh pr merge "$BRANCH" --squash --auto
-\`\`\`
+PERSISTENCE: Do NOT run git add, git commit, git push, or gh pr create/merge.
+The platform commits and opens a PR for your changes automatically after the run.
+Only changes under knowledge-base/product/competitive-intelligence.md, knowledge-base/marketing/content-strategy.md, knowledge-base/product/pricing-strategy.md, knowledge-base/sales/battlecards/, and knowledge-base/marketing/seo-refresh-queue.md are persisted — keep all edits inside those paths.
+Creating the analysis issue above is REQUIRED: the platform only persists your changes after it verifies the issue exists.
 `;
+
+// Persistence allowlist (#5111): the full cascade write-set, NOT just the
+// report file — the Cascade Delegation Table in
+// plugins/soleur/agents/product/competitive-intelligence.md routes findings
+// to content-strategist (content-strategy.md), product-pricing-strategist
+// (pricing-strategy.md), sales-battlecards (battlecards/), and seo-refresher
+// (seo-refresh-queue.md). This is a deliberate widening: the old prompt
+// committed ONLY competitive-intelligence.md and silently discarded the
+// cascade outputs. The agent file's CASCADE LIMIT-4 comment caps the
+// specialist fan-out at 4 — widening the cascade there requires widening
+// this list in lockstep.
+const COMPETITIVE_ANALYSIS_ALLOWED_PATHS = [
+  "knowledge-base/product/competitive-intelligence.md",
+  "knowledge-base/marketing/content-strategy.md",
+  "knowledge-base/product/pricing-strategy.md",
+  "knowledge-base/sales/battlecards/",
+  "knowledge-base/marketing/seo-refresh-queue.md",
+] as const;
 
 // Spawn-env allowlist (NOT a denylist). PR-5 shape verbatim — the keys
 // below are the COMPLETE set the spawned claude is allowed to see;
@@ -292,6 +294,29 @@ export async function cronCompetitiveAnalysisHandler({
         stdoutTail: spawnResult.stdoutTail,
       }),
     );
+    // --- Step 4.5: deterministic persistence (#5111, pattern from #5091 /
+    //     cron-seo-aeo-audit.ts). Gated on the issue-verified output rather
+    //     than the spawn exit code: exit-0-with-no-issue is unverified
+    //     (possibly mid-edit) work that must not auto-merge, while
+    //     issue-created + non-zero exit is the documented healthy #4747 case
+    //     whose diff must not be discarded. abortedByTimeout also skips —
+    //     a hard kill can land mid-edit, and the timeout is already loud via
+    //     the reportSilentFallback above. Guard aborts / persistence failures
+    //     self-report inside the helper (Sentry + issue comment).
+    if (heartbeatOk && !spawnResult.abortedByTimeout) {
+      await step.run("safe-commit-pr", async () =>
+        safeCommitAndPr({
+          spawnCwd: spawnCwd!,
+          installationToken,
+          cronName: "cron-competitive-analysis",
+          commitMessage: "docs: update competitive intelligence report",
+          allowedPaths: COMPETITIVE_ANALYSIS_ALLOWED_PATHS,
+          runStartedAt,
+          scheduledIssueLabel: SENTRY_MONITOR_SLUG,
+          logger,
+        }),
+      );
+    }
     await step.run("sentry-heartbeat", async () => {
       await postSentryHeartbeat({ ok: heartbeatOk, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-competitive-analysis", logger });
     });

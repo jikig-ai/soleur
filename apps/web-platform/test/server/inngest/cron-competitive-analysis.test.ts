@@ -5,10 +5,10 @@
 //   1. Registration shape (cron + manual-trigger event triggers, concurrency,
 //      retries) — drift here breaks the Inngest scheduler contract.
 //   2. Prompt-canary anchors (MILESTONE RULE, /soleur:competitive-analysis
-//      --tiers 0,3 invocation, MANDATORY FINAL STEP, issue-title format,
-//      label, competitive-intelligence.md persistence target) — original
-//      anchors from the GHA prompt that must survive silent paraphrasing
-//      across plan→work→ship cycles.
+//      --tiers 0,3 invocation, platform-persistence directive, issue-title
+//      format, label, competitive-intelligence.md persistence target) —
+//      anchors that must survive silent paraphrasing across
+//      plan→work→ship cycles.
 //   3. Timing constants exported (MAX_TURN_DURATION_MS, KILL_ESCALATION_MS)
 //      so the substrate-extraction follow-up can centralise them without
 //      breaking parity with the handler's actual values.
@@ -92,17 +92,60 @@ describe("COMPETITIVE_ANALYSIS_PROMPT — anchor strings (regression-detection)"
         "Run /soleur:competitive-analysis --tiers 0,3",
         "skill invocation with tier args",
       ],
-      ["MANDATORY FINAL STEP", "PR-creation block heading"],
       ["[Scheduled] Competitive Analysis", "issue-title format"],
       ["scheduled-competitive-analysis", "label / Sentry monitor slug"],
       [
         "knowledge-base/product/competitive-intelligence.md",
         "persistence target file",
       ],
-      ["gh pr create", "PR-creation gh invocation"],
-      ["gh pr merge", "auto-merge gh invocation"],
+      [
+        "PERSISTENCE: Do NOT run git add",
+        "platform-persistence directive (#5111)",
+      ],
+      [
+        "opens a PR for your changes",
+        "handler-side persistence note (#5111)",
+      ],
     ])("contains %s (%s)", (anchor) => {
       expect(SUT_SOURCE).toContain(anchor);
     });
+  });
+});
+
+describe("#5111 — handler-side persistence (safeCommitAndPr migration)", () => {
+  it("prompt carries the platform-persistence directive, not a commit block", () => {
+    expect(SUT_SOURCE).toContain("PERSISTENCE: Do NOT run git add");
+    expect(SUT_SOURCE).not.toContain("MANDATORY FINAL STEP");
+    // No prompt-side staging command survives. The PERSISTENCE directive's
+    // own "git add," mention is comma-delimited, so the trailing-space form
+    // below only matches a real `git add <paths>` shell command.
+    expect(SUT_SOURCE).not.toMatch(/git add /);
+  });
+
+  it("wires the gated safe-commit-pr step (issue-verified AND not timed out)", () => {
+    expect(SUT_SOURCE).toContain('from "./_cron-safe-commit"');
+    expect(SUT_SOURCE).toContain('step.run("safe-commit-pr"');
+    // Plan AC: persistence MUST be gated on issue-verified output AND
+    // not-timed-out — a regression to `spawnResult.ok` (the #4747 hazard)
+    // or a dropped timeout clause turns this red. Mirrors the parity test.
+    expect(SUT_SOURCE).toMatch(
+      /if \(heartbeatOk && !spawnResult\.abortedByTimeout\) \{[\s\S]{0,800}?safeCommitAndPr\(\{/,
+    );
+  });
+
+  it("allowedPaths cover the cascade write-set (deliberate widening vs the old prompt)", () => {
+    // The old prompt committed ONLY competitive-intelligence.md and silently
+    // discarded cascade outputs (content-strategy, pricing, battlecards,
+    // seo-refresh-queue). The const must cover the Cascade Delegation Table
+    // write-set in plugins/soleur/agents/product/competitive-intelligence.md.
+    for (const path of [
+      "knowledge-base/product/competitive-intelligence.md",
+      "knowledge-base/marketing/content-strategy.md",
+      "knowledge-base/product/pricing-strategy.md",
+      "knowledge-base/sales/battlecards/",
+      "knowledge-base/marketing/seo-refresh-queue.md",
+    ]) {
+      expect(SUT_SOURCE).toContain(path);
+    }
   });
 });

@@ -1,6 +1,6 @@
 // #5091 — deterministic safe-commit + PR pipeline for claude-spawn bot crons.
 //
-// Replaces the prompt-level MANDATORY FINAL STEP shell blocks (destructive
+// Replaces the prompt-level mandatory-final-step shell blocks (destructive
 // PR #5026: a blanket add staged 654 structural deletions produced by the
 // ephemeral-workspace scaffolding). The prompt is a suggestion to a model;
 // persistence is a platform responsibility — it runs HERE, node-level,
