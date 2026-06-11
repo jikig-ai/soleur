@@ -857,6 +857,31 @@ export async function exportSqlTable(
     });
   }
 
+  // -- email_triage_items (operator email-triage WORM ledger; migration 102) --
+  // Art. 15+20: sender/subject/summary/message_id are the data-subject-
+  // linkable metadata of emails received in the operator's delegated ops@
+  // inbox (legitimate interest, Art. 6(1)(f)). The body is never persisted
+  // (structural parse-and-discard), so this export covers ALL stored
+  // personal data for the class. WORM trigger + anonymise_email_triage_items
+  // RPC handle Art. 17 erasure separately (user_id FK ON DELETE RESTRICT).
+  {
+    const { data, error } = await service
+      .from("email_triage_items")
+      .select("*")
+      .eq("user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`email_triage_items read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "email_triage_items", {
+      ownerField: "user_id",
+    });
+    results.push({
+      table: "email_triage_items",
+      spec: DSAR_TABLE_ALLOWLIST.email_triage_items,
+      rows,
+    });
+  }
+
   // -- template_authorizations (per-template authorization ledger; migration 053, PR-I #4078) --
   // Art. 15+20: the founder explicitly authorised each template via the
   // first-send-IS-authorization pattern (the Send click on a labeled

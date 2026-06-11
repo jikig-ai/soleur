@@ -32,6 +32,17 @@ describe("middleware path routing", () => {
       expect(isPublicPath("/api/inngest")).toBe(true);
     });
 
+    test("/api/webhooks/resend-inbound is public (svix-signature-gated by route, not Supabase)", () => {
+      // The Resend Inbound webhook (#5103) carries no session cookie —
+      // Supabase middleware would 307→/login before the route's own svix
+      // verification gate runs. Same regression class as #4017 (/api/inngest).
+      // Exact-path PUBLIC_PATHS membership is asserted (not just prefix
+      // coverage) so the ingress survives any future narrowing of the broad
+      // /api/webhooks prefix.
+      expect(isPublicPath("/api/webhooks/resend-inbound")).toBe(true);
+      expect(PUBLIC_PATHS).toContain("/api/webhooks/resend-inbound");
+    });
+
     test("/api/internal/kb-drift-ingest is public (HMAC-gated by route, not Supabase)", () => {
       // route.ts:97 verifies KB_DRIFT_INGEST_SIGNING_KEY HMAC before any DB write.
       // The nightly KB-drift walker cron carries no session cookie, so Supabase
