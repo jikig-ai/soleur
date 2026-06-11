@@ -695,12 +695,9 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
 
   function okResponse(body: unknown) {
-    return {
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      json: () => Promise.resolve(body),
-    };
+    // Use a real Response (not a duck-typed object) for fidelity + parity with
+    // the domain-router classify-path tests; survives a future resp.text() refactor.
+    return new Response(JSON.stringify(body), { status: 200 });
   }
 
   beforeEach(() => {
@@ -745,12 +742,7 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
   });
 
   it("throws `Anthropic API <status>` on a non-ok response (caller owns the fallback)", async () => {
-    fetchSpy.mockResolvedValue({
-      ok: false,
-      status: 503,
-      statusText: "Service Unavailable",
-      json: () => Promise.resolve({}),
-    });
+    fetchSpy.mockResolvedValue(new Response("upstream error", { status: 503 }));
 
     await expect(
       postAnthropicMessage({
@@ -760,6 +752,23 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
         messages: [{ role: "user", content: "x" }],
       }),
     ).rejects.toThrow("Anthropic API 503");
+  });
+
+  it("rethrows a redacted error on a fetch network failure (never leaks the api key)", async () => {
+    const apiKey = "sk-ant-" + "synthetic-network-key";
+    fetchSpy.mockRejectedValue(new TypeError("fetch failed"));
+
+    const err = await postAnthropicMessage({
+      apiKey,
+      model: ANY_MODEL,
+      maxTokens: 2048,
+      messages: [{ role: "user", content: "x" }],
+    }).catch((e: Error) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    // Redacted shape: carries the error class, never the credential.
+    expect((err as Error).message).toBe("Anthropic API request failed (TypeError)");
+    expect((err as Error).message).not.toContain(apiKey);
   });
 
   it("wires AbortSignal.timeout when timeoutMs is provided", async () => {

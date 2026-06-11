@@ -273,21 +273,32 @@ export async function postAnthropicMessage(args: {
   timeoutMs?: number;
   outputConfig?: { format: { type: "json_schema"; schema: unknown } };
 }): Promise<{ text: string; stopReason?: string }> {
-  const resp = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": args.apiKey,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: args.model,
-      max_tokens: args.maxTokens,
-      messages: args.messages,
-      ...(args.outputConfig ? { output_config: args.outputConfig } : {}),
-    }),
-    signal: args.timeoutMs != null ? AbortSignal.timeout(args.timeoutMs) : undefined,
-  });
+  let resp: Response;
+  try {
+    resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": args.apiKey,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: args.model,
+        max_tokens: args.maxTokens,
+        messages: args.messages,
+        ...(args.outputConfig ? { output_config: args.outputConfig } : {}),
+      }),
+      signal: args.timeoutMs != null ? AbortSignal.timeout(args.timeoutMs) : undefined,
+    });
+  } catch (err) {
+    // Rethrow redacted: a network/abort error from fetch could in principle
+    // carry request context — never let the x-api-key reach a logger/Sentry
+    // payload. Mirrors postDiscordWebhook's redact-then-throw (the URL-credential
+    // sibling above). The non-ok branch below keeps its exact
+    // `Anthropic API ${status}` shape — callers and tests depend on it.
+    const e = err as Error;
+    throw new Error(`Anthropic API request failed (${e.name})`);
+  }
   if (!resp.ok) throw new Error(`Anthropic API ${resp.status}`);
 
   const data = (await resp.json()) as {

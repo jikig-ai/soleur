@@ -133,6 +133,14 @@ async function classifyMessage(
     : "";
 
   try {
+    // NOTE: this inline Anthropic Messages request mirrors the shared
+    // `postAnthropicMessage` helper in `inngest/functions/_cron-shared.ts`.
+    // It is kept inline (not routed through the helper) on purpose:
+    // `_cron-shared.ts` statically imports octokit/github-app, and this module
+    // is on the interactive request path and must stay leaf-light. Mirror any
+    // request-contract change (header version, output_config shape, new
+    // required field) in BOTH places — the model-tiers/helper tests cover only
+    // the helper copy.
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {

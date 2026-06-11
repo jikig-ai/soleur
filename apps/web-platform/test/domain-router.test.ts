@@ -155,6 +155,22 @@ describe("routeMessage classify (auto) path", () => {
     expect(result.leaders).toEqual(["cmo", "cto", "clo"]);
   });
 
+  test("falls back to [cpo] when a well-formed response has zero valid leaders", async () => {
+    // Distinct rung from the catch: a schema-valid {leaders:[...]} that parses
+    // cleanly but whose IDs are all filtered out by validIds — hits the in-try
+    // `validated.length === 0` branch, NOT the catch. No error is logged.
+    fetchSpy.mockResolvedValue(
+      anthropicResponse({
+        content: [{ type: "text", text: '{"leaders":["not-a-leader","also-bogus"]}' }],
+        stop_reason: "end_turn",
+      }),
+    );
+
+    const result = await routeMessage("What is our strategy?", "fake-api-key");
+
+    expect(result).toEqual({ leaders: ["cpo"], source: "auto" });
+  });
+
   test("falls back to [cpo] on a non-ok response", async () => {
     fetchSpy.mockResolvedValue(anthropicResponse({}, 500));
 
