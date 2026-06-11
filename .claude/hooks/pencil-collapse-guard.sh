@@ -89,6 +89,8 @@ fi
 # in the same directory and atomically `mv` into place ONLY on git-show success —
 # a bare `> "$FILE_PATH"` truncates the target before git runs, so a failed show
 # would leave a 0-byte file (strictly worse than the collapsed state).
+# Re-run `git show` here (do NOT reuse $HEAD_CONTENT): $(...) strips trailing
+# newlines, and the restore must be byte-exact to the committed blob.
 tmp_restore=$(mktemp "$(dirname "$FILE_PATH")/.pen-restore.XXXXXX" 2>/dev/null) || exit 0
 if git -C "$REPO_ROOT" show "HEAD:$REL_PATH" > "$tmp_restore" 2>/dev/null; then
   mv -f "$tmp_restore" "$FILE_PATH" 2>/dev/null || { rm -f "$tmp_restore" 2>/dev/null; exit 0; }
