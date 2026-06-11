@@ -7,6 +7,10 @@ import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 //   - Per-IP rate limit → 429 after threshold (MAX_PER_WINDOW = 5)
 //   - Valid email → POSTs JSON {email_address, tags:["pricing-waitlist"]} (no `type`,
 //     so Buttondown's default double opt-in is preserved), returns 200 {ok:true}
+//   - Plausible public visitor IP (cf-connecting-ip) → forwarded as `ip_address`
+//     so Buttondown firewall-scores the visitor, not the server (survives a
+//     re-escalation to aggressive auditing mode); implausible/private/absent →
+//     field omitted (fail-safe: today's server-IP-scored behavior)
 //   - Already-subscribed (v1 collision 400) → 200 {ok:true}
 //   - Unexpected status / network throw / timeout → 502 + warnSilentFallback
 //   - Missing BUTTONDOWN_API_KEY → fail-closed 502 before any fetch
@@ -115,9 +119,87 @@ describe("POST /api/waitlist", () => {
     // Double-opt-in preservation guard: never send `type` (would skip the
     // confirmation email + the GDPR Art. 6(1)(a) consent step).
     expect(sent).not.toHaveProperty("type");
+    // No cf-connecting-ip header → no ip_address forwarded; exact key set
+    // guards against silent body-shape drift in either direction.
+    expect(sent).not.toHaveProperty("ip_address");
+    expect(Object.keys(sent).sort()).toEqual(["email_address", "tags"]);
 
     // The abort timeout must be wired so an upstream stall degrades to a JSON 502.
     expect((init as RequestInit).signal).toBeInstanceOf(AbortSignal);
+  });
+
+  test("plausible public IPv4 visitor IP is forwarded as ip_address", async () => {
+    mockFetch.mockResolvedValue(new Response("", { status: 201 }));
+    const { POST } = await importRoute();
+    const res = await POST(
+      makeRequest({
+        origin: OK_ORIGIN,
+        cfConnectingIp: "203.0.113.7",
+        body: { email: "user@company.com" },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const sent = JSON.parse(
+      String((mockFetch.mock.calls[0][1] as RequestInit).body),
+    ) as Record<string, unknown>;
+    expect(sent.ip_address).toBe("203.0.113.7");
+    expect(sent.email_address).toBe("user@company.com");
+    expect(sent.tags).toEqual(["pricing-waitlist"]);
+    expect(sent).not.toHaveProperty("type");
+    expect(Object.keys(sent).sort()).toEqual(["email_address", "ip_address", "tags"]);
+  });
+
+  test("plausible public IPv6 visitor IP is forwarded as ip_address", async () => {
+    mockFetch.mockResolvedValue(new Response("", { status: 201 }));
+    const { POST } = await importRoute();
+    const res = await POST(
+      makeRequest({
+        origin: OK_ORIGIN,
+        cfConnectingIp: "2001:db8::1",
+        body: { email: "user@company.com" },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const sent = JSON.parse(
+      String((mockFetch.mock.calls[0][1] as RequestInit).body),
+    ) as Record<string, unknown>;
+    expect(sent.ip_address).toBe("2001:db8::1");
+  });
+
+  test("private IPv4 (direct-to-origin spoof) is omitted; subscribe still succeeds", async () => {
+    mockFetch.mockResolvedValue(new Response("", { status: 201 }));
+    const { POST } = await importRoute();
+    const res = await POST(
+      makeRequest({
+        origin: OK_ORIGIN,
+        cfConnectingIp: "10.0.0.1",
+        body: { email: "user@company.com" },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const sent = JSON.parse(
+      String((mockFetch.mock.calls[0][1] as RequestInit).body),
+    ) as Record<string, unknown>;
+    expect(sent).not.toHaveProperty("ip_address");
+    expect(Object.keys(sent).sort()).toEqual(["email_address", "tags"]);
+  });
+
+  test("garbage cf-connecting-ip is omitted; subscribe still succeeds (never breaks a signup)", async () => {
+    mockFetch.mockResolvedValue(new Response("", { status: 201 }));
+    const { POST } = await importRoute();
+    const res = await POST(
+      makeRequest({
+        origin: OK_ORIGIN,
+        cfConnectingIp: "not-an-ip",
+        body: { email: "user@company.com" },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    const sent = JSON.parse(
+      String((mockFetch.mock.calls[0][1] as RequestInit).body),
+    ) as Record<string, unknown>;
+    expect(sent).not.toHaveProperty("ip_address");
   });
 
   test("already-subscribed (v1 collision 400) is treated as success 200", async () => {

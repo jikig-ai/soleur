@@ -199,13 +199,13 @@ discoverability_test:
 
 ### Pre-merge (PR)
 
-- [ ] AC1 — `subscribeToWaitlist(email, clientIp?)` accepts an optional second param; `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes. (NOT `npm run -w` — repo root declares no workspaces.)
-- [ ] AC2 — Buttondown POST body includes `ip_address: <client IP>` iff `clientIp` is a plausible public IP (passes `node:net` `isIP` and is not loopback/private/link-local/CGNAT/unspecified); otherwise the field is absent. Verified by the vitest scenarios below.
-- [ ] AC3 — Body shape otherwise unchanged: `email_address`, `tags: ["pricing-waitlist"]`, **no `type` field** (double opt-in preserved). Tests assert exact key sets: `["email_address","tags"]` (no IP) and `["email_address","ip_address","tags"]` (IP known).
-- [ ] AC4 — `route.ts` passes the existing line-41 `ip` variable through; no second extraction, no XFF fallback introduced. `grep -c 'cf-connecting-ip' apps/web-platform/app/api/waitlist/route.ts` returns `1`.
-- [ ] AC5 — No `X-Buttondown-Bypass-Firewall` header anywhere: `git grep -il 'bypass-firewall' -- 'apps/**'` returns no matches (exit 1).
-- [ ] AC6 — No new log/Sentry fields carrying IP or email: diff adds zero `log.*`/`warnSilentFallback` calls and zero new fields to existing ones (review-verified on the diff; `git diff main -- apps/web-platform/app/api/waitlist/ | grep -E '^\+.*(log\.|warnSilentFallback)'` returns no matches).
-- [ ] AC7 — Full suite green: `cd apps/web-platform && ./node_modules/.bin/vitest run test/api-waitlist-subscribe.test.ts` (all pre-existing tests pass unmodified except the documented happy-path extension).
+- [x] AC1 — `subscribeToWaitlist(email, clientIp?)` accepts an optional second param; `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes. (NOT `npm run -w` — repo root declares no workspaces.)
+- [x] AC2 — Buttondown POST body includes `ip_address: <client IP>` iff `clientIp` is a plausible public IP (passes `node:net` `isIP` and is not loopback/private/link-local/CGNAT/unspecified); otherwise the field is absent. Verified by the vitest scenarios below.
+- [x] AC3 — Body shape otherwise unchanged: `email_address`, `tags: ["pricing-waitlist"]`, **no `type` field** (double opt-in preserved). Tests assert exact key sets: `["email_address","tags"]` (no IP) and `["email_address","ip_address","tags"]` (IP known).
+- [x] AC4 — `route.ts` passes the existing line-41 `ip` variable through; no second extraction, no XFF fallback introduced. `grep -c 'cf-connecting-ip' apps/web-platform/app/api/waitlist/route.ts` returns `1`.
+- [x] AC5 — No `X-Buttondown-Bypass-Firewall` header anywhere: `git grep -il 'bypass-firewall' -- 'apps/**'` returns no matches (exit 1).
+- [x] AC6 — No new log/Sentry fields carrying IP or email: diff adds zero `log.*`/`warnSilentFallback` calls and zero new fields to existing ones (review-verified on the diff; `git diff main -- apps/web-platform/app/api/waitlist/ | grep -E '^\+.*(log\.|warnSilentFallback)'` returns no matches).
+- [x] AC7 — Full suite green: `cd apps/web-platform && ./node_modules/.bin/vitest run test/api-waitlist-subscribe.test.ts` (all pre-existing tests pass unmodified except the documented happy-path extension).
 - [ ] AC8 — PR body contains the GDPR parity note (visitor IP already disclosed as Buttondown-collected at subscription: Article 30 PA6, privacy policy §4.6/§5.3, DPD §2.3(e)/§6.3; SCCs Module 2 cover the US transfer; this restores embed-form parity, not a new disclosure surface) and uses `Ref`/context only — no legal-doc edits in this PR.
 
 ### Post-merge (operator)
