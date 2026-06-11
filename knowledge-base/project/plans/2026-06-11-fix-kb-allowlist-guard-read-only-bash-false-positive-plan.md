@@ -90,12 +90,24 @@ hook and matches the codebase exactly. No gap callouts.
 
 The hook's flow (current): extract `TARGET` (file_path // notebook_path // command) → match
 `knowledge-base/<segment>` → glob-guard → sanctioned-dir → sanctioned-file → on-disk → fire
-`ask`. The write-target gate must run **only on the Bash class** and must run **after the
-existing glob-guard, sanctioned-dir, sanctioned-file, and on-disk checks** would otherwise
-have passed-through — i.e., it adds a NEW pass-through condition for Bash reads, never a new
-`ask`. Placing it immediately **after the regex match (line 70) and before the glob-guard**
-is cleanest: if it is a Bash command and NOT a write target, `exit 0` early. File-tool
-payloads skip the gate entirely and reach the existing logic unchanged.
+`ask`. Every check between the regex match and the final `ask` (glob-guard, sanctioned-dir,
+sanctioned-file, on-disk) is a **pass-through branch** (`exit 0`); the ONLY branch that ever
+asks is the final one at line 119.
+
+The write-target gate runs **only on the Bash class**, placed immediately **after the regex
+match (line 70) and BEFORE the glob-guard (line 84)**. A Bash command that is NOT a write
+target `exit 0`s here, skipping the four downstream pass-through checks entirely — which is
+safe precisely because they are all pass-throughs (a Bash read never needed them). The gate
+therefore adds a NEW pass-through condition for Bash reads and can NEVER convert a pass into an
+`ask` nor remove the existing `ask` (a Bash *write* matches a write regex, does not early-exit,
+and falls through to the existing logic unchanged). File-tool payloads skip the gate entirely
+(IS_BASH is false) and reach the existing logic unchanged.
+
+> **Inline-comment precision (Finding 2, code-reviewer):** the Phase 2 inline comment MUST say
+> "Bash reads that pass this gate `exit 0` here; they do not need the downstream checks (all
+> pass-throughs). Only Bash *writes* fall through to those checks." Do NOT phrase it as "runs
+> after the glob-guard" — placement is BEFORE the glob-guard, and the glob-guard is simply not
+> exercised for Bash reads.
 
 ### Detecting the Bash class (fail-open on missing `tool_name`)
 
@@ -252,6 +264,9 @@ Helpers (extend the existing harness):
 | T19 | `mkdir knowledge-base/engineering/x` | `invoke_bash` | pass-through (sanctioned domain) |
 | T20 | `knowledge-base/newdomain/x.md` | `invoke_write` (file tool) | `ask` (unaffected) |
 | T20b | `knowledge-base/newdomain/x.md` via `invoke_write_named` (`tool_name:"Write"`) | `invoke_write_named` | `ask` (unaffected, explicit tool_name) |
+| T21 | `echo "cp x > knowledge-base/y is the move cmd" > /tmp/notes.txt` | `invoke_bash` | `ask` — **documented-acceptable** false positive (quoted-string `> knowledge-base/`); locks Sharp-Edge Finding 1 so a future regex edit cannot silently "fix" it and regress T17 |
+| T22 | `sed "s/a/b/" knowledge-base/engineering/x.md` (read-only `sed`, no `-i`) | `invoke_bash` | pass-through — verb regex requires `sed[[:space:]]+-i`, so a read-only `sed` over a sanctioned path is not a write; locks the `-i`-anchored verb boundary |
+| T23 | `mv knowledge-base/project/foo.md /tmp/` (kb is SOURCE, sanctioned segment) | `invoke_bash` | pass-through — verb matches but SEGMENT=`project` is sanctioned, so the sanctioned-dir check passes it; locks the kb-as-source behavior against a future verb-regex narrowing |
 
 (T8/T11/T12 already cover Bash-mkdir-ask, comment-glob-skip, and grep-regex-skip respectively;
 T13-T15 add the read-reference-via-`git show`/`grep` cases the old logic mishandled.)
@@ -335,6 +350,15 @@ hook: `Write|Edit|MultiEdit|NotebookEdit` and `Bash`. No settings change needed.
   gate and would `ask` only if the kb segment is NEW+unsanctioned. This is rare and acceptable
   for an accidental-drift guard; not fixed (exotic write/read-form completeness is out of scope
   per the hook header philosophy).
+- **String-literal false positive (Finding 1, code-reviewer):** the redirect regex is not
+  quote-aware. A command like `echo "cp x > knowledge-base/y is the move command" > /tmp/notes.txt`
+  contains the substring `> knowledge-base/` *inside a quoted argument* and matches the redirect
+  regex, yielding an advisory `ask` even though the real redirect target is `/tmp/notes.txt`.
+  This is the SAME class as the `mv`/`cp`-source edge: low-probability, produces only an
+  advisory `ask` (never a deny, never a block), and exotic-form completeness is explicitly out
+  of scope per the hook header philosophy. **Documented as acceptable, NOT fixed** — a future
+  edit MUST NOT "fix" this in a way that regresses the genuine `echo x > knowledge-base/...`
+  write detection (T17). T21 (below) locks this behavior as a known-acceptable `ask`.
 - The fail-open discriminator treats a Bash payload with a garbled/missing `tool_name` (but a
   present `command` field) as Bash. If a future harness change sends both `command` AND
   `file_path` in one payload, `file_path` takes precedence in `TARGET` extraction (line 52-57

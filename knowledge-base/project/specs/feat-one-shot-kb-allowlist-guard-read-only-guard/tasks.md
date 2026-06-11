@@ -17,7 +17,10 @@ Lane: procedural
 - [ ] 1.9 Add T18: `git add knowledge-base/newdomain/file.md` → `ask` (regression guard).
 - [ ] 1.10 Add T19: `mkdir knowledge-base/engineering/x` → pass-through (sanctioned domain).
 - [ ] 1.11 Add T20: file-tool Write to `knowledge-base/newdomain/x.md` → `ask` (unaffected); T20b via `invoke_write_named`.
-- [ ] 1.12 Run `bash .claude/hooks/kb-domain-allowlist-guard.test.sh`; confirm T13/T14/T15/T15b FAIL, others pass.
+- [ ] 1.12 Add T21: `echo "cp x > knowledge-base/y is the move cmd" > /tmp/notes.txt` → `ask` (documented-acceptable string-literal false positive; locks Sharp-Edge Finding 1).
+- [ ] 1.13 Add T22: `sed "s/a/b/" knowledge-base/engineering/x.md` (read-only sed, no `-i`) → pass-through (locks the `-i`-anchored verb boundary).
+- [ ] 1.14 Add T23: `mv knowledge-base/project/foo.md /tmp/` (kb-as-source, sanctioned segment) → pass-through (locks kb-as-source against a future verb-regex narrowing).
+- [ ] 1.15 Run `bash .claude/hooks/kb-domain-allowlist-guard.test.sh`; confirm T13/T14/T15/T15b FAIL, others pass.
 
 ## Phase 2 — GREEN (implement the gate)
 
@@ -26,7 +29,7 @@ Lane: procedural
 - [ ] 2.3 Define `KB_WRITE_VERB_RE` and `KB_WRITE_REDIR_RE` as shell variables (NOT inline — avoids `;`/`&` parse error).
 - [ ] 2.4 If `IS_BASH` and neither regex matches `$TARGET` → `exit 0` (read-only reference pass-through).
 - [ ] 2.5 Update header comment block (lines 22-27): Bash now gates on write-target detection.
-- [ ] 2.6 Add inline read-vs-write comment in the glob-guard comment style (explain why a read reference is not a write target + the `[^|;&]*` segment boundary).
+- [ ] 2.6 Add inline read-vs-write comment in the glob-guard comment style. Per code-reviewer Finding 2: phrase as "Bash reads that pass this gate `exit 0` here; they do not need the downstream checks (all pass-throughs). Only Bash *writes* fall through." Do NOT say "runs after the glob-guard" — placement is BEFORE it.
 - [ ] 2.7 Re-run the suite; all cases (T1-T20b) pass.
 
 ## Phase 3 — Verify
