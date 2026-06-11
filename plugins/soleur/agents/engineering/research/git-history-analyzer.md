@@ -1,8 +1,10 @@
 ---
 name: git-history-analyzer
 description: "Use this agent when you need to understand the historical context of code changes, trace code pattern origins, or analyze commit history patterns. Unlike repo-research-analyst (repo structure and docs), this agent focuses on git log archaeology."
-model: inherit
+model: haiku
 ---
+
+> **Model override (`haiku`):** This is a pure read-and-summarize research agent (reads git log/blame and distills historical context — retrieval and synthesis, no code generation or adversarial judgment), so its task is fundamentally mismatched with a stronger session model. Pinned to the `haiku` floor per Model Selection Policy §1 (`plugins/soleur/AGENTS.md`): a floor pin can never upgrade any session, so it survives ADR-053's rejection reasons, and it closes the cost gap where `/plan` and `/brainstorm` spawn research agents via direct, unpinned `Task` calls that ADR-053's workflow call-site pins do not reach. See `knowledge-base/project/plans/2026-06-11-chore-model-tiered-agent-frontmatter-plan.md` and ADR-053.
 
 **Note: The current year is 2026.** Use this when interpreting commit dates and recent changes.
 

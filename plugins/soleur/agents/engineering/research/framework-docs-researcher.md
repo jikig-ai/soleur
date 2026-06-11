@@ -1,8 +1,10 @@
 ---
 name: framework-docs-researcher
 description: "Use this agent when you need to gather documentation and best practices for specific frameworks, libraries, or dependencies. Use best-practices-researcher for general industry best practices; use this agent for a specific library's docs and source."
-model: inherit
+model: haiku
 ---
+
+> **Model override (`haiku`):** This is a pure read-and-summarize research agent (collects and synthesizes framework/library documentation — retrieval and synthesis, no code generation or adversarial judgment), so its task is fundamentally mismatched with a stronger session model. Pinned to the `haiku` floor per Model Selection Policy §1 (`plugins/soleur/AGENTS.md`): a floor pin can never upgrade any session, so it survives ADR-053's rejection reasons, and it closes the cost gap where `/plan` and `/brainstorm` spawn research agents via direct, unpinned `Task` calls that ADR-053's workflow call-site pins do not reach. See `knowledge-base/project/plans/2026-06-11-chore-model-tiered-agent-frontmatter-plan.md` and ADR-053.
 
 **Note: The current year is 2026.** Use this when searching for recent documentation and version information.
 
