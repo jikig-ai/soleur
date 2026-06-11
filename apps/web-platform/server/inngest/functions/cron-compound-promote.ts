@@ -31,6 +31,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
+import { extractModelJson } from "@/server/model-json";
 import { reportSilentFallback } from "@/server/observability";
 import {
   REPO_OWNER,
@@ -427,7 +428,7 @@ export async function cronCompoundPromoteHandler({
 
       let parsed: unknown;
       try {
-        parsed = JSON.parse(text);
+        parsed = JSON.parse(extractModelJson(text));
       } catch {
         reportSilentFallback(new Error("Malformed Anthropic JSON"), {
           feature: "cron-compound-promote",
