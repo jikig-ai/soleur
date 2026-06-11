@@ -175,7 +175,12 @@ describe("normalizeEmailHtml — HTML-only body positive", () => {
     );
     expect(text).not.toContain("alert");
     expect(text).not.toContain("color");
-    expect(text).toContain('Tom & Co <legal> said "hi" \'there\'');
+    // Entity-decoded angle-bracket content (`&lt;legal&gt;`) is stripped by the
+    // post-decode tag pass — text extraction for keyword matching never renders
+    // HTML, so no `<...>` survives (CodeQL js/incomplete-multi-char-sanitization).
+    expect(text).toContain("Tom & Co");
+    expect(text).toContain('said "hi" \'there\'');
+    expect(text).not.toContain("<legal>");
     expect(text).toContain("zerowidthjoiners");
     expect(text).toContain("soft hyphens");
   });

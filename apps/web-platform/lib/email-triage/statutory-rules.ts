@@ -257,12 +257,22 @@ function decodeNumericEntity(_match: string, decimal?: string, hex?: string): st
  * hyphens, and tag-interleaving cannot split statutory keywords.
  */
 export function normalizeEmailHtml(html: string): string {
-  // Strip <script>/<style> BLOCKS (tag + content) so JS/CSS source cannot
-  // pollute the keyword pass. The closing-tag pattern uses `[^>]*>` (not
-  // `\s*>`) so malformed closers like `</script foo>` are still matched
-  // (CodeQL js/bad-tag-filter), and the removal loops until stable so a
+  // Strip every `<...>` tag, looped until the string stops changing, so a
   // single pass cannot be defeated by nested/partial tags such as
   // `<scr<script>ipt>` (CodeQL js/incomplete-multi-character-sanitization).
+  const stripTags = (s: string): string => {
+    let prev: string;
+    do {
+      prev = s;
+      s = s.replace(/<[^>]*>/g, "");
+    } while (s !== prev);
+    return s;
+  };
+
+  // 1. Remove <script>/<style> BLOCKS (tag + content) so JS/CSS source cannot
+  //    pollute the keyword pass. The closing-tag pattern uses `[^>]*>` (not
+  //    `\s*>`) so malformed closers like `</script foo>` still match (CodeQL
+  //    js/bad-tag-filter); looped to defeat nested partials.
   let text = html;
   const BLOCK_ELEMENT = /<(script|style)\b[^>]*>[\s\S]*?<\/\1[^>]*>/gi;
   let prev: string;
@@ -271,11 +281,12 @@ export function normalizeEmailHtml(html: string): string {
     text = text.replace(BLOCK_ELEMENT, " ");
   } while (text !== prev);
 
-  text = text
-    .replace(/<!--[\s\S]*?-->/g, " ")
-    .replace(BLOCK_TAG_PATTERN, " ")
-    .replace(/<[^>]+>/g, "");
+  // 2. Comments + block tags \u2192 spaces, then strip every remaining tag.
+  text = stripTags(
+    text.replace(/<!--[\s\S]*?-->/g, " ").replace(BLOCK_TAG_PATTERN, " "),
+  );
 
+  // 3. Decode entities (this can re-introduce `<`/`>` from `&lt;`/`&gt;`).
   text = text
     .replace(/&#(\d+);|&#x([0-9a-fA-F]+);/g, decodeNumericEntity)
     .replace(/&nbsp;/gi, " ")
@@ -285,6 +296,13 @@ export function normalizeEmailHtml(html: string): string {
     .replace(/&quot;/gi, '"')
     .replace(/&apos;/gi, "'")
     .replace(/&amp;/gi, "&");
+
+  // 4. FINAL tag strip (looped) \u2014 neutralises any `<tag>` reintroduced by the
+  //    entity decode in step 3, so the keyword-pass output can NEVER contain a
+  //    `<script` sequence (CodeQL js/incomplete-multi-character-sanitization).
+  //    This is text extraction for keyword matching, never rendered HTML, so
+  //    discarding entity-encoded angle-bracket content is correct, not lossy.
+  text = stripTags(text);
 
   return text
     .replace(/[\u00AD\u200B-\u200D\uFEFF]/g, "")
