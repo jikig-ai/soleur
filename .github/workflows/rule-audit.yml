@@ -20,6 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  contents: read
   issues: write
 
 jobs:
@@ -36,6 +37,47 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: bash scripts/rule-audit.sh
+
+      # Model-launch drift detection (#5100). audit-models.sh --detect exits 10 on
+      # stale config model IDs. On drift, find-or-update ONE idempotent model-drift
+      # issue (never a PR — the fix PR is operator-initiated via the skill). The
+      # audit output is the only input and is fully hardcoded/derived (no untrusted
+      # GitHub event data), so it is safe to embed in the issue body file.
+      - name: Detect model drift
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          set +e
+          OUT="$(bash plugins/soleur/skills/model-launch-review/scripts/audit-models.sh --detect 2>&1)"
+          RC=$?
+          set -e
+          if [ "$RC" -ne 10 ]; then
+            echo "No model drift (rc=$RC)."
+            exit 0
+          fi
+          {
+            echo "Stale Anthropic model IDs were detected in config-class files."
+            echo
+            echo '```'
+            echo "$OUT"
+            echo '```'
+            echo
+            echo "Remediation: run \`/soleur:model-launch-review\` (interactive) to auto-fix"
+            echo "model-ID swaps into a CI-gated PR and flag pin/pricing/tier-map items."
+            echo
+            echo "_Filed automatically by rule-audit.yml model-drift detection (#5100)._"
+          } > /tmp/model-drift-body.md
+          EXISTING="$(gh issue list --label model-drift --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file /tmp/model-drift-body.md
+            echo "Updated existing model-drift issue #$EXISTING."
+          else
+            gh issue create --label model-drift \
+              --title "model-drift: stale Anthropic model IDs in config" \
+              --body-file /tmp/model-drift-body.md
+          fi
 
       - name: Email notification (failure)
         if: failure()
