@@ -326,9 +326,13 @@ export async function cronContentPublisherHandler({
         mergeMode: "direct",
         logger,
       });
+      // Distinguish failed from no-changes: a "failed" result at stage
+      // auto-merge means a PR EXISTS but needs a manual merge — folding it
+      // into prCreated:false would report "no-changes" for a run that
+      // actually produced an open PR.
       return result.status === "committed"
-        ? { prCreated: true, prNumber: result.prNumber }
-        : { prCreated: false };
+        ? { prCreated: true, prNumber: result.prNumber, persistFailed: false }
+        : { prCreated: false, persistFailed: result.status === "failed" };
     });
 
     await step.run("sentry-heartbeat", () =>
@@ -347,7 +351,9 @@ export async function cronContentPublisherHandler({
           ? "partial-failure"
           : prResult.prCreated
             ? "published"
-            : "no-changes",
+            : prResult.persistFailed
+              ? "persist-failed"
+              : "no-changes",
       published: preCheck.scheduledToday,
       staleDetected: preCheck.staleCount,
     };

@@ -461,7 +461,10 @@ export async function cronCompoundPromoteHandler({
 
     for (const cluster of clusterResult.clusters) {
       const clusterHash = computeClusterHash(cluster.source_learnings);
-      const dateSuffix = new Date().toISOString().slice(0, 10);
+      // Derived from the MEMOIZED run start, never a fresh Date — the branch
+      // name embeds this suffix and the helper's replay-resume is keyed on
+      // the branch, so a replay crossing UTC midnight must not re-key it.
+      const dateSuffix = runStartedAt.slice(0, 10);
 
       await step.run(`apply-and-pr-${clusterHash.slice(0, 8)}`, async () => {
         const octokit = new Octokit({ auth: installationToken });
@@ -562,9 +565,13 @@ export async function cronCompoundPromoteHandler({
         // Persist via safeCommitAndPr (#5111) — per-cluster branch override,
         // commit trailers via commitBody, draft PR with mergeMode "none"
         // (human review required; the helper never touches merge endpoints).
-        // Gains the deletion guard, dirty-index precondition, dropped-path
-        // warn, and replay idempotency (replay-resume is keyed on the
-        // overridden branchName; the whole cluster step is memoized).
+        // Gains the deletion guard, dirty-index precondition, and dropped-
+        // path warn. Replay caveat: a crash-replay of this step re-runs
+        // applyDiffToWorkspace BEFORE the helper, so a crash AFTER commit
+        // fails the re-apply `--check` and early-returns above — the
+        // helper's branch-keyed replay-resume covers only crashes inside
+        // its own push/PR tail. The whole cluster step is memoized, so a
+        // COMPLETED cluster never re-executes.
         const titleLine = `chore(self-healing): promote cluster ${clusterHash} to ${cluster.target_path}`;
         const trailer = [
           `Bot-Author: compound-promotion-loop@${process.env.GITHUB_SHA ?? "local"}`,
@@ -601,10 +608,23 @@ export async function cronCompoundPromoteHandler({
             summary: "self-healing/auto promotion — operator review required",
           },
           mergeMode: "none",
-          octokit: octokit as never,
+          octokit,
           logger,
         });
 
+        // Non-committed exits (deletion-guard, dirty-index, no-changes after
+        // an allowlist drop, …) leave this cluster's applied diff and its
+        // promotion-log row UNSTAGED in the worktree. The pre-#5111 throwing
+        // git pipeline halted the loop here; the non-throwing helper
+        // continues — so reset the worktree or cluster A's residue rides
+        // into cluster B's commit (promotion-log.md is in EVERY allowlist).
+        if (result.status !== "committed") {
+          // reset --hard covers staged AND unstaged residue (a dirty-index
+          // failure means something was staged); clean -fd removes new files
+          // the diff created. The clone is ephemeral — nothing else lives here.
+          await spawnGit(["reset", "--hard", "HEAD"], { cwd: repoRoot });
+          await spawnGit(["clean", "-fd"], { cwd: repoRoot });
+        }
         await spawnGit(["checkout", "main"], { cwd: repoRoot });
         if (result.status === "committed") clustersOpened++;
       });

@@ -116,8 +116,9 @@ const CLAUDE_CODE_FLAGS = [
 // removed the prompt-level commit block (the platform persists
 // handler-side via safeCommitAndPr — the #5091 consolidation pattern).
 // Verbatim-extraction discipline: anchor strings ("MILESTONE RULE:",
-// "Run /soleur:competitive-analysis --tiers 0,3",
-// "PERSISTENCE: Do NOT run git add",
+// "Run /soleur:competitive-analysis --tiers 0,3", the PERSISTENCE
+// directive's opening line (quoted only inside the prompt so the test's
+// whole-file anchor cannot be satisfied by this comment),
 // "[Scheduled] Competitive Analysis", "scheduled-competitive-analysis",
 // "competitive-intelligence.md") asserted by the test suite to catch
 // silent paraphrasing across plan→work cycles.
@@ -147,7 +148,7 @@ Creating the analysis issue above is REQUIRED: the platform only persists your c
 // cascade outputs. The agent file's CASCADE LIMIT-4 comment caps the
 // specialist fan-out at 4 — widening the cascade there requires widening
 // this list in lockstep.
-const COMPETITIVE_ANALYSIS_ALLOWED_PATHS = [
+export const COMPETITIVE_ANALYSIS_ALLOWED_PATHS = [
   "knowledge-base/product/competitive-intelligence.md",
   "knowledge-base/marketing/content-strategy.md",
   "knowledge-base/product/pricing-strategy.md",
@@ -299,7 +300,9 @@ export async function cronCompetitiveAnalysisHandler({
     //     than the spawn exit code: exit-0-with-no-issue is unverified
     //     (possibly mid-edit) work that must not auto-merge, while
     //     issue-created + non-zero exit is the documented healthy #4747 case
-    //     whose diff must not be discarded. abortedByTimeout also skips —
+    //     whose diff must not be discarded. (Caveat: resolveOutputAwareOk
+    //     falls back to the spawn exit code when its GitHub verify-read
+    //     THROWS — a tri-state gate is tracked in #5139.) abortedByTimeout also skips —
     //     a hard kill can land mid-edit, and the timeout is already loud via
     //     the reportSilentFallback above. Guard aborts / persistence failures
     //     self-report inside the helper (Sentry + issue comment).

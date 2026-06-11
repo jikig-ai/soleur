@@ -465,11 +465,16 @@ export async function cronContentVendorDriftHandler({
       }
 
       if (classifyRc === 13) {
-        // Check for open drift PRs (idempotency)
+        // Check for open drift PRs (idempotency). The prefix MUST track the
+        // safeCommitAndPr-derived branch (`ci/content-vendor-drift-<ts>`,
+        // #5111) — this guard is what suppresses duplicate drift PRs when a
+        // direct merge failed and last week's PR is still open. (No old
+        // `ci/vendor-drift-` transition match needed: the pre-#5111 PR route
+        // never produced content, so no old-prefix PR can be open.)
         const { data: openPRs } = await octokit.request(
           "GET /search/issues",
           {
-            q: `is:pr is:open repo:${REPO_OWNER}/${REPO_NAME} head:ci/vendor-drift-`,
+            q: `is:pr is:open repo:${REPO_OWNER}/${REPO_NAME} head:ci/content-vendor-drift-`,
             per_page: 5,
           },
         );
@@ -509,8 +514,9 @@ export async function cronContentVendorDriftHandler({
     // runbook's DEFAULT_MAX_DELETIONS raise path), dirty-index precondition,
     // dropped-path warn, and replay idempotency. mergeMode "direct" +
     // synthetic checks preserves the production-proven merge mechanics.
-    // Branch becomes ci/content-vendor-drift-<ts> (helper derivation;
-    // cosmetic change from ci/vendor-drift-<date>, recorded in the PR body).
+    // Branch becomes ci/content-vendor-drift-<ts> (helper derivation,
+    // renamed from ci/vendor-drift-<date> — NOT cosmetic: the detect step's
+    // open-PR dedup query keys on this prefix and was updated in lockstep).
     if (detectResult.route === "pr") {
       await step.run("safe-commit-pr", async () =>
         safeCommitAndPr({

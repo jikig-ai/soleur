@@ -69,8 +69,10 @@ export interface SafeCommitConfig {
   runStartedAt: string;
   /** Label of the cron's scheduled output issue — guard/fail visibility comment target. */
   scheduledIssueLabel: string;
-  /** Injectable for tests; production callers omit and the token is used. */
-  octokit?: Octokit;
+  /** Injectable for tests/callers with an existing client; production
+   *  callers may omit and the installation token is used. Structural type
+   *  (the two members the helper uses) so injection sites need no cast. */
+  octokit?: Pick<Octokit, "request" | "graphql">;
   logger?: HandlerArgs["logger"];
   // -- #5111 option surface (all optional; defaults preserve #5091 behavior) --
   /** Override the derived `ci/<name>-<ts>` branch (compound-promote's
@@ -83,7 +85,9 @@ export interface SafeCommitConfig {
    *  `${commitMessage} ${YYYY-MM-DD}`. */
   prTitle?: string;
   /** PR body stem override. The dropped-path ⚠️ marker is appended
-   *  regardless of override (the loud-truncation invariant survives). */
+   *  regardless of override when the scan runs (the loud-truncation
+   *  invariant survives overrides; a replay-resume skips the scan and
+   *  relies on the original attempt's Sentry warn). */
   prBody?: string;
   prDraft?: boolean;
   /** Labels applied after PR create (best-effort: label failure mirrors to
@@ -267,7 +271,9 @@ export async function enableAutoMergeSquash(
   }
 }
 
-async function resolveOctokit(config: SafeCommitConfig): Promise<Octokit> {
+async function resolveOctokit(
+  config: SafeCommitConfig,
+): Promise<Pick<Octokit, "request" | "graphql">> {
   if (config.octokit) return config.octokit;
   const { Octokit: OctokitCtor } = await import("@octokit/core");
   return new OctokitCtor({ auth: config.installationToken }) as unknown as Octokit;
@@ -283,7 +289,7 @@ async function resolveOctokit(config: SafeCommitConfig): Promise<Octokit> {
  * mirrors to Sentry and never escalates.
  */
 async function commentOnScheduledIssue(
-  octokit: Octokit,
+  octokit: Pick<Octokit, "request" | "graphql">,
   config: SafeCommitConfig,
   body: string,
 ): Promise<void> {
@@ -299,7 +305,23 @@ async function commentOnScheduledIssue(
       headers: { "X-GitHub-Api-Version": "2022-11-28" },
     })) as { data: Array<{ number: number }> };
     const issue = issues.data[0];
-    if (!issue) return;
+    if (!issue) {
+      // No open issue carries the label — the comment channel is dead for
+      // this cron (the 5 pure-TS pipelines pass their Sentry monitor slug,
+      // which only the claude-spawn crons create issues under). Mirror the
+      // drop so triage knows Sentry is the ONLY signal for this failure.
+      reportSilentFallback(
+        new Error(`no open issue labeled ${config.scheduledIssueLabel}`),
+        {
+          feature: config.cronName,
+          op: "safe-commit-comment-no-target",
+          message:
+            "Safe-commit visibility comment had no labeled open issue to land on — Sentry is the only signal for this run's failure",
+          extra: { fn: config.cronName, label: config.scheduledIssueLabel },
+        },
+      );
+      return;
+    }
     await octokit.request(
       "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
       {
@@ -368,15 +390,17 @@ export async function safeCommitAndPr(
   config: SafeCommitConfig,
 ): Promise<SafeCommitResult> {
   const { spawnCwd, cronName, allowedPaths, runStartedAt, logger } = config;
-  // #5111: refname-unsafe override chars (`:` `.` whitespace) are rejected at
-  // stage "checkout" BEFORE any git mutation — callers compute branch names
-  // from dynamic data (cluster hashes) and a bad name must fail loudly, not
-  // surface as an opaque git error mid-pipeline.
-  if (config.branchName && /[:.\s]/.test(config.branchName)) {
+  // #5111: a fast-fail SUBSET of git-check-ref-format (not exhaustive) —
+  // rejects `:` `.` whitespace and option-shaped leading `-` at stage
+  // "checkout" BEFORE any git mutation. Callers compute branch names from
+  // dynamic data (cluster hashes) and a bad name must fail loudly, not
+  // surface as an opaque git error (or an injected git flag) mid-pipeline.
+  // Anything this subset misses still fails loudly at the real checkout.
+  if (config.branchName && /^-|[:.\s]/.test(config.branchName)) {
     return failure(
       config,
       "checkout",
-      `branchName override is not refname-safe (contains ':', '.', or whitespace): ${config.branchName}`,
+      `branchName override is not refname-safe (leading '-', ':', '.', or whitespace): ${config.branchName}`,
     );
   }
   const branch = config.branchName ?? deriveBranchName(cronName, runStartedAt);
@@ -623,10 +647,12 @@ export async function safeCommitAndPr(
     }
 
     // -- 10.5. Post-create extras (#5111): labels + synthetic check-runs.
-    //          Both best-effort — labels are advisory metadata and a failed
-    //          check-run POST leaves the merge tail as the loud terminal
-    //          signal (matches the legacy pipelines, where the merge `.catch`
-    //          was the only net).
+    //          Both best-effort BY DESIGN (a deliberate downgrade from the
+    //          legacy pipelines, where a check-run POST throw failed the
+    //          step): labels are advisory metadata, and a failed check-run
+    //          POST is Sentry-mirrored while the merge tail surfaces the
+    //          consequence — except in direct-mode arm-fallback, where the
+    //          fell-back op below is the signal.
     if (config.prLabels?.length) {
       try {
         await octokit.request(
@@ -712,11 +738,23 @@ export async function safeCommitAndPr(
             "auto-merge",
             `direct merge failed (${(mergeErr as Error).message}); auto-merge arm also failed (${autoMerge.reason ?? "enablePullRequestAutoMerge failed"})`,
             {
-              extra: { prNumber },
+              extra: { prNumber, mergeMode },
               comment: `PR #${prNumber} was created but could not be merged — it needs a manual merge. See Sentry op safe-commit-failed (fn=${cronName}).`,
             },
           );
         }
+        // Fallback succeeded — the PR is parked on armed auto-merge instead
+        // of merged. MUST be Sentry-visible (cq-silent-fallback-must-mirror):
+        // armed auto-merge silently disarms on conflict, so this is the entry
+        // into the stale-PR window the #5138 watchdog tracks — for LIVE
+        // direct-mode pipelines, not just the Tier-2-dormant auto cohort.
+        reportSilentFallback(mergeErr, {
+          feature: cronName,
+          op: "safe-commit-direct-merge-fell-back",
+          message:
+            "Direct merge failed; auto-merge was armed instead — PR merges when checks pass, or goes stale on conflict",
+          extra: { fn: cronName, prNumber, mergeMode },
+        });
       }
     } else if (mergeMode === "auto") {
       const autoMerge = await enableAutoMergeSquash(octokit, prNodeId);

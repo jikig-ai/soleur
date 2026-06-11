@@ -16,7 +16,6 @@
 // migrates. Otherwise, inngest.send() events have no consumer.
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { inngest } from "@/server/inngest/client";
@@ -36,15 +35,6 @@ const FUNCTION_NAME = "cron-weekly-analytics";
 const SENTRY_MONITOR_SLUG = "scheduled-weekly-analytics";
 
 const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
-
-interface ScriptOutput {
-  exitCode: number;
-  kpiMiss: boolean;
-  kpiPhase: string;
-  kpiTarget: string;
-  kpiActual: string;
-  kpiVisitors: string;
-}
 
 function spawnGit(
   args: string[],
@@ -229,7 +219,9 @@ export async function cronWeeklyAnalyticsHandler({
     //     production-proven merge mechanics exactly.
     await step.run("safe-commit-pr", async () => {
       const repoRoot = scriptResult.repoRoot;
-      if (!repoRoot || !existsSync(repoRoot)) return;
+      // No existsSync pre-guard: a lost workspace must reach the helper's
+      // LOUD workspace-lost stage (Sentry + comment), not silently skip.
+      if (!repoRoot) return;
       return safeCommitAndPr({
         spawnCwd: repoRoot,
         installationToken,

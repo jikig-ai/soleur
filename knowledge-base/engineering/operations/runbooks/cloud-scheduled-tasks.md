@@ -671,8 +671,16 @@ handler-side through `safeCommitAndPr`**
 exemptions are roadmap-review (hook-guarded Tier-1 self-commit) and bug-fixer
 (the fix-issue skill owns its commit step). ADR-054 records the decision; the
 parity test (`cron-safe-commit-parity.test.ts`) enforces it. When persistence
-cannot complete, the helper comments **"PR withheld: …"** on the run's scheduled
-issue and mirrors the failure to Sentry — diagnosis never requires SSH.
+cannot complete, the helper mirrors the failure to Sentry and attempts a
+**"PR withheld: …"** comment on the run's scheduled issue — diagnosis never
+requires SSH. **Comment-channel scope:** only the claude-spawn crons create
+issues carrying their `scheduledIssueLabel`; the 5 pure-TS pipelines
+(weekly-analytics, compound-promote, content-publisher, content-vendor-drift,
+rule-prune) have no labeled issues, so for them the comment never lands
+(Sentry op `safe-commit-comment-no-target` records the drop) and **Sentry is
+the only failure signal**. Their cron monitors stay GREEN on a persistence
+failure (the cron ran; persistence health is signaled via Sentry ops, not
+the heartbeat).
 
 **Three merge modes** (per-cron; ADR-054): `auto` — claude-spawn output PRs, auto-merge
 armed and required checks gate the merge; `direct` + synthetic check-runs — deterministic
@@ -696,10 +704,18 @@ the deletion guard aborts loudly by design (mass deletion = review-worthy). Use 
 | `safe-commit-failed` | Any other stage failed (`stage` in the event extra: workspace-lost, status, dirty-index, checkout, add, commit, push, pr-create, auto-merge, unexpected). | `push`/`pr-create`: usually transient GitHub/network or token expiry — the next scheduled run retries from scratch. `dirty-index`: something pre-staged files in the workspace (should be impossible; investigate). `workspace-lost`: a deploy/restart landed mid-run; work is lost, next run redoes it. `auto-merge`: the PR EXISTS but needs a manual merge — the comment names it. |
 | `safe-commit-paths-dropped` | The run changed files outside its allowlist; the PR was opened WITHOUT them (the PR body carries a ⚠️ marker listing the dropped sample). | Check whether the dropped paths should be in the cron's `allowedPaths` (widen via PR) or the model wandered out of scope (prompt fix). |
 | `safe-commit-issue-comment-failed` | The visibility comment itself could not post. | Diagnosis falls back to Sentry only; no action unless recurring. |
+| `safe-commit-comment-no-target` | No open issue carries the cron's `scheduledIssueLabel` — expected for the 5 pure-TS pipelines (see scope note above). | Confirms Sentry is the only signal for this run; no action unless it fires for a claude-spawn cron (whose issue-create step then failed upstream). |
+| `safe-commit-direct-merge-fell-back` | A `direct`-mode pipeline's immediate merge failed; auto-merge was ARMED instead. The PR merges when checks pass — or goes silently stale on a later conflict (armed auto-merge disarms without signal; the #5138 watchdog class, which therefore also covers live direct pipelines, not just the Tier-2-dormant auto cohort). | Check the PR: if still open after the checks window, merge manually and investigate why the direct merge was rejected (branch protection drift?). |
+| `safe-commit-label-failed` | PR labels could not be applied (advisory metadata — run continued). | For content-vendor-drift this can mean a merged drift PR lacks its `vendor/*` / `compliance/critical` routing labels — re-apply manually if triage depends on them. |
+| `safe-commit-check-run-failed` | A synthetic check-run POST failed on a `direct`/`none` pipeline. | The PR may sit open with auto-merge armed against checks that will never arrive — post the missing check-runs manually or merge manually. |
 
 A **no-PR week with a green monitor and no comment** means the run legitimately
 produced no committable changes (`no-changes` — visible in app logs as
-`safe-commit-no-changes`).
+`safe-commit-no-changes`) — **after confirming the Sentry window is clean**:
+for the 5 pure-TS pipelines a persistence failure ALSO presents as green
+monitor + no comment, so the inference is only sound when a Sentry query for
+`safe-commit-failed` / `safe-commit-deletion-guard` (fn=<cron>) over the run
+window returns empty.
 
 ## References
 

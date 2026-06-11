@@ -24,6 +24,7 @@ vi.hoisted(() => {
 
 import {
   cronCompetitiveAnalysis,
+  COMPETITIVE_ANALYSIS_ALLOWED_PATHS,
   KILL_ESCALATION_MS,
   MAX_TURN_DURATION_MS,
 } from "@/server/inngest/functions/cron-competitive-analysis";
@@ -136,16 +137,15 @@ describe("#5111 — handler-side persistence (safeCommitAndPr migration)", () =>
   it("allowedPaths cover the cascade write-set (deliberate widening vs the old prompt)", () => {
     // The old prompt committed ONLY competitive-intelligence.md and silently
     // discarded cascade outputs (content-strategy, pricing, battlecards,
-    // seo-refresh-queue). The const must cover the Cascade Delegation Table
-    // write-set in plugins/soleur/agents/product/competitive-intelligence.md.
-    for (const path of [
+    // seo-refresh-queue). Asserted on the exported CONST (not whole-file
+    // text) so a path dropped from the const cannot stay green via its
+    // remaining mention in the prompt prose.
+    expect([...COMPETITIVE_ANALYSIS_ALLOWED_PATHS]).toEqual([
       "knowledge-base/product/competitive-intelligence.md",
       "knowledge-base/marketing/content-strategy.md",
       "knowledge-base/product/pricing-strategy.md",
       "knowledge-base/sales/battlecards/",
       "knowledge-base/marketing/seo-refresh-queue.md",
-    ]) {
-      expect(SUT_SOURCE).toContain(path);
-    }
+    ]);
   });
 });

@@ -181,13 +181,14 @@ describe("safe-commit parity — invariant 4: every PR-persisting cron is migrat
   // handler-side git add). Detection is the staging verb itself — scoped
   // forms included — so a NEW cron that adds any commit pathway must either
   // migrate to safeCommitAndPr or document an exemption here.
+  const stagesFiles = (src: string): boolean =>
+    /git add /.test(src) || /spawnGitChecked\(\s*\[\s*"add"/.test(src) || /\["add",/.test(src);
+
   it("classifies every cron with a staging pathway", () => {
     const unaccounted: string[] = [];
     for (const file of cronFiles) {
       const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
-      const stages =
-        /git add /.test(src) || /spawnGitChecked\(\s*\[\s*"add"/.test(src) || /\["add",/.test(src);
-      if (!stages) continue;
+      if (!stagesFiles(src)) continue;
       if (MIGRATED_ALL.includes(file)) continue;
       if (EXEMPT[file]) continue;
       unaccounted.push(file);
@@ -197,4 +198,22 @@ describe("safe-commit parity — invariant 4: every PR-persisting cron is migrat
       "new cron with a staging pathway: migrate it to safeCommitAndPr or add a rationale to EXEMPT",
     ).toEqual([]);
   });
+
+  // Migration is a CONSTRAINT, not a terminal state: a migrated cron that
+  // re-grows its own staging pathway alongside the helper call would slip
+  // every other invariant (invariant 1 matches contiguous literals only;
+  // invariant 2 HANDLER checks the spawnGitChecked identifier only). The
+  // helper must be a migrated cron's ONLY staging pathway. The prompt
+  // cohort's PERSISTENCE directive is comma-delimited ("git add,") so it
+  // does not trip the /git add / trailing-space detector.
+  it.each(MIGRATED_ALL.map((f) => [f]))(
+    "%s has no staging pathway outside safeCommitAndPr",
+    (file) => {
+      const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
+      expect(
+        stagesFiles(src),
+        `${file} is migrated but carries its own staging pathway — route it through safeCommitAndPr`,
+      ).toBe(false);
+    },
+  );
 });

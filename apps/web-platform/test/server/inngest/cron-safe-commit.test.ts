@@ -731,10 +731,24 @@ describe("safeCommitAndPr — #5111 option surface", () => {
     });
 
     expect(result.status).toBe("committed");
+    // Anti-vacuity: the direct PUT must have been ATTEMPTED first — an
+    // option-ignoring helper (pre-#5111 auto mode) would arm auto-merge
+    // without ever hitting the merge endpoint and still satisfy the
+    // graphql assertion below.
+    expect(octokit.request).toHaveBeenCalledWith(
+      "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge",
+      expect.objectContaining({ pull_number: 42 }),
+    );
     expect(octokit.graphql).toHaveBeenCalledWith(
       expect.stringContaining("enablePullRequestAutoMerge"),
       expect.objectContaining({ pullRequestId: "PR_node_42" }),
     );
+    // The fell-back state is Sentry-visible (armed auto-merge can silently
+    // disarm on conflict — the #5138 watchdog class).
+    const fellBack = reportSilentFallbackMock.mock.calls.filter(
+      (c) => c[1]?.op === "safe-commit-direct-merge-fell-back",
+    );
+    expect(fellBack).toHaveLength(1);
   });
 
   it("mergeMode 'direct' returns failed/auto-merge when both direct merge and arming fail (PR stays open + loud)", async () => {
@@ -759,7 +773,16 @@ describe("safeCommitAndPr — #5111 option surface", () => {
     expect(result.status).toBe("failed");
     if (result.status === "failed") {
       expect(result.stage).toBe("auto-merge");
+      // Anti-vacuity: the failure message must carry BOTH rungs of the
+      // direct ladder — an option-ignoring auto-mode helper also fails at
+      // stage auto-merge with the same comment, but its message has no
+      // "direct merge failed" prefix.
+      expect(result.message).toContain("direct merge failed");
     }
+    expect(octokit.request).toHaveBeenCalledWith(
+      "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge",
+      expect.objectContaining({ pull_number: 42 }),
+    );
     // Operator visibility: the PR-needs-manual-merge comment landed.
     expect(octokit.request).toHaveBeenCalledWith(
       "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",

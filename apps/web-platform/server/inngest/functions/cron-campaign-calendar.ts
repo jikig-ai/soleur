@@ -255,7 +255,9 @@ export async function cronCampaignCalendarHandler({
     //     than the spawn exit code: exit-0-with-no-issue is unverified
     //     (possibly mid-edit) work that must not auto-merge, while
     //     issue-created + non-zero exit is the documented healthy #4747 case
-    //     whose diff must not be discarded. abortedByTimeout also skips —
+    //     whose diff must not be discarded. (Caveat: resolveOutputAwareOk
+    //     falls back to the spawn exit code when its GitHub verify-read
+    //     THROWS — a tri-state gate is tracked in #5139.) abortedByTimeout also skips —
     //     a hard kill can land mid-edit, and the timeout is already loud via
     //     the reportSilentFallback above. Guard aborts / persistence failures
     //     self-report inside the helper (Sentry + issue comment).

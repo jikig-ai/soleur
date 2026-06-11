@@ -74,7 +74,6 @@ function spawnGit(
   });
 }
 
-
 /** Spawn a bash script and capture stdout + stderr + exit code. */
 async function spawnScriptCapture(
   script: string,
@@ -267,7 +266,9 @@ export async function cronRulePruneHandler({
     // merge mechanics. Branch becomes ci/rule-prune-<ts> (helper derivation;
     // cosmetic change from ci/rule-prune-retire-<date>).
     const prResult = await step.run("safe-commit-pr", async () => {
-      const dateSuffix = new Date().toISOString().slice(0, 10);
+      // Memoized run start, not a fresh Date — keeps the PR title stable
+      // across Inngest replays (matches the helper's own date derivation).
+      const dateSuffix = runStartedAt.slice(0, 10);
       const result = await safeCommitAndPr({
         spawnCwd: repoRoot,
         installationToken,

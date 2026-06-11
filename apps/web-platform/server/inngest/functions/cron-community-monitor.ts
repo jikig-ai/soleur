@@ -5,10 +5,12 @@
 //
 // BUCKET II (kb-writer + pr-creator) — first bucket-ii migration in the
 // claude-code-spawn cohort. CLO bucket-ii means more careful authorization
-// context: the spawned agent can create branches, commit to them, open PRs,
-// and create issues. The buildSpawnEnv allowlist is wider than bucket-i
-// (adds 7 community-platform vars for Discord, Bluesky, LinkedIn) but
-// still uses the explicit-allowlist shape (NOT denylist / spread).
+// context: the spawned agent writes KB files and creates issues; since
+// #5111 the PLATFORM commits and opens the PR handler-side (the agent no
+// longer runs git/gh persistence verbs). The buildSpawnEnv allowlist is
+// wider than bucket-i (adds 7 community-platform vars for Discord,
+// Bluesky, LinkedIn) but still uses the explicit-allowlist shape (NOT
+// denylist / spread).
 //
 // ADR-033 invariants (binding all cron-*.ts files):
 //   I1 — claude binary spawned INSIDE step.run (Inngest replay memoization).
@@ -98,7 +100,8 @@ const TOKEN_MIN_LIFETIME_MS = 50 * 60 * 1000 + 10 * 60 * 1000;
 // proven-healthy `cron-daily-triage` turn budget running through the same
 // DEFAULT_CLAUDE_SETTINGS (daily-triage pairs 80 turns with a 60-min ceiling;
 // we keep 50 min — see the in-band ratio below). The heavier 7-platform
-// digest + git→PR→issue task no longer fit in 50 with error/retry headroom.
+// digest + KB-write + issue task (PR creation moved handler-side in #5111)
+// no longer fit in 50 with error/retry headroom.
 // The timeout-to-turns ratio
 // is 50 min ÷ 80 = 0.625 min/turn — within the 0.55–1.2 peer band per the
 // 2026-03-20-claude-code-action-max-turns-budget learning, so the 50-min
@@ -365,7 +368,9 @@ export async function cronCommunityMonitorHandler({
     //     than the spawn exit code: exit-0-with-no-issue is unverified
     //     (possibly mid-edit) work that must not auto-merge, while
     //     issue-created + non-zero exit is the documented healthy #4747 case
-    //     whose diff must not be discarded. abortedByTimeout also skips —
+    //     whose diff must not be discarded. (Caveat: resolveOutputAwareOk
+    //     falls back to the spawn exit code when its GitHub verify-read
+    //     THROWS — a tri-state gate is tracked in #5139.) abortedByTimeout also skips —
     //     a hard kill can land mid-edit, and the timeout is already loud via
     //     the reportSilentFallback above. Guard aborts / persistence failures
     //     self-report inside the helper (Sentry + issue comment).
