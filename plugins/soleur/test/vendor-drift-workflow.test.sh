@@ -65,11 +65,12 @@ for label in compliance/critical vendor/pin-drift vendor/license-changed vendor/
 done
 echo ""
 
-# --- bot-pr pattern (inline Octokit, not GHA composite) ---
-echo "TS6: synthetic check-runs pattern present"
-assert_contains "$WF_CONTENT" "check-runs" "check-runs API call present"
-echo "  SKIP: composite action inputs N/A for Inngest (inline Octokit)"
-PASS=$((PASS + 7))
+# --- bot-pr pattern (#5111: synthetic checks via safeCommitAndPr option) ---
+echo "TS6: synthetic checks routed through safeCommitAndPr"
+assert_contains "$WF_CONTENT" "syntheticChecks" "syntheticChecks option present"
+assert_contains "$WF_CONTENT" "safeCommitAndPr" "safeCommitAndPr call present"
+echo "  SKIP: composite action inputs N/A for Inngest (helper posts check-runs)"
+PASS=$((PASS + 6))
 echo ""
 
 # --- Classifier and parser script references ---

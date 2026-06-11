@@ -30,6 +30,7 @@ import {
   spawnClaudeEval,
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
+import { safeCommitAndPr } from "./_cron-safe-commit";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 
@@ -70,8 +71,10 @@ const CLAUDE_CODE_FLAGS = [
 ];
 
 // Verbatim prompt extracted from
-// .github/workflows/scheduled-campaign-calendar.yml.
-const CAMPAIGN_CALENDAR_PROMPT = `IMPORTANT: This is an automated CI workflow. Do NOT push directly to main. Use the PR-based commit pattern in the MANDATORY FINAL STEP.
+// .github/workflows/scheduled-campaign-calendar.yml. #5111 removed the
+// prompt-level commit block (the platform persists handler-side via
+// safeCommitAndPr — the #5091 consolidation pattern).
+const CAMPAIGN_CALENDAR_PROMPT = `IMPORTANT: This is an automated CI workflow. Do NOT push directly to main.
 
 STEP 1 — Refresh campaign calendar:
 Run /soleur:campaign-calendar on this repository.
@@ -97,18 +100,18 @@ If no new issues were created, create and immediately close a heartbeat audit is
 STEP 3 — Update content-strategy review date:
 In knowledge-base/marketing/content-strategy.md, update the frontmatter last_reviewed field to today's date.
 
-MANDATORY FINAL STEP — persist via PR:
-git config user.name "github-actions[bot]"
-git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-git add knowledge-base/marketing/campaign-calendar.md knowledge-base/marketing/content-strategy.md
-git diff --cached --quiet && echo "No changes to commit" && exit 0
-BRANCH="ci/campaign-calendar-$(date -u +%Y-%m-%d-%H%M%S)"
-git checkout -b "$BRANCH"
-git commit -m "ci: update campaign calendar and content-strategy review"
-git push -u origin "$BRANCH"
-gh pr create --title "ci: update campaign calendar $(date -u +%Y-%m-%d)" --body "Automated commit from campaign calendar workflow." --base main --head "$BRANCH"
-gh pr merge "$BRANCH" --squash --auto
+PERSISTENCE: Do NOT run git add, git commit, git push, or gh pr create/merge.
+The platform commits and opens a PR for your changes automatically after the run.
+Only changes under knowledge-base/marketing/campaign-calendar.md and knowledge-base/marketing/content-strategy.md are persisted — keep all edits inside those paths.
+Creating the calendar issues above (STEP 2 or the STEP 2.5 heartbeat) is REQUIRED: the platform only persists your changes after it verifies the issue exists.
 `;
+
+// Persistence allowlist (#5111): verbatim from the prompt's former scoped
+// staging list (the two files the calendar refresh and review-date bump edit).
+const CAMPAIGN_CALENDAR_ALLOWED_PATHS = [
+  "knowledge-base/marketing/campaign-calendar.md",
+  "knowledge-base/marketing/content-strategy.md",
+] as const;
 
 // Spawn-env allowlist (NOT a denylist). The keys below are the COMPLETE set
 // the spawned claude is allowed to see; anything not listed (notably
@@ -247,6 +250,31 @@ export async function cronCampaignCalendarHandler({
         stdoutTail: spawnResult.stdoutTail,
       }),
     );
+    // --- Step 4.5: deterministic persistence (#5111, pattern from #5091 /
+    //     cron-seo-aeo-audit.ts). Gated on the issue-verified output rather
+    //     than the spawn exit code: exit-0-with-no-issue is unverified
+    //     (possibly mid-edit) work that must not auto-merge, while
+    //     issue-created + non-zero exit is the documented healthy #4747 case
+    //     whose diff must not be discarded. (Caveat: resolveOutputAwareOk
+    //     falls back to the spawn exit code when its GitHub verify-read
+    //     THROWS — a tri-state gate is tracked in #5139.) abortedByTimeout also skips —
+    //     a hard kill can land mid-edit, and the timeout is already loud via
+    //     the reportSilentFallback above. Guard aborts / persistence failures
+    //     self-report inside the helper (Sentry + issue comment).
+    if (heartbeatOk && !spawnResult.abortedByTimeout) {
+      await step.run("safe-commit-pr", async () =>
+        safeCommitAndPr({
+          spawnCwd: spawnCwd!,
+          installationToken,
+          cronName: "cron-campaign-calendar",
+          commitMessage: "ci: update campaign calendar and content-strategy review",
+          allowedPaths: CAMPAIGN_CALENDAR_ALLOWED_PATHS,
+          runStartedAt,
+          scheduledIssueLabel: SENTRY_MONITOR_SLUG,
+          logger,
+        }),
+      );
+    }
     await step.run("sentry-heartbeat", async () => {
       await postSentryHeartbeat({ ok: heartbeatOk, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-campaign-calendar", logger });
     });

@@ -20,13 +20,14 @@ vi.hoisted(() => {
 import {
   cronContentVendorDrift,
   MAX_RUN_DURATION_MS,
-  SYNTHETIC_CHECK_NAMES,
   ISSUE_EXIT_CODES,
   NOTICE_FILE_REL,
   PARSER_REL,
   CLASSIFIER_REL,
   SKILL_PREFIX,
 } from "@/server/inngest/functions/cron-content-vendor-drift";
+// #5111: consolidated into the safe-commit helper (was a per-cron copy).
+import { SYNTHETIC_CHECK_NAMES } from "@/server/inngest/functions/_cron-safe-commit";
 
 // =============================================================================
 // Registration smoke
@@ -80,7 +81,6 @@ describe("handler source-shape anchors", () => {
       "plugins/soleur/skills/gdpr-gate/scripts/vendor-drift-classify.sh",
       "classifier script path",
     ],
-    ["ci/vendor-drift-", "branch prefix for bot-PR"],
     [
       "chore(vendor-drift): re-vendor gosprinto/compliance-skills",
       "commit message",
@@ -106,6 +106,23 @@ describe("handler source-shape anchors", () => {
     ["Ref #3517", "issue reference"],
   ])("contains %s (%s)", (anchor) => {
     expect(SUT_SOURCE).toContain(anchor);
+  });
+});
+
+describe("handler-side persistence (#5111)", () => {
+  it("routes the PR path through safeCommitAndPr with direct merge, labels, and synthetic checks", () => {
+    expect(SUT_SOURCE).toContain('from "./_cron-safe-commit"');
+    expect(SUT_SOURCE).toMatch(/safeCommitAndPr\(\{/);
+    expect(SUT_SOURCE).toContain('mergeMode: "direct"');
+    expect(SUT_SOURCE).toContain("syntheticChecks");
+    expect(SUT_SOURCE).toContain("prLabels: detectResult.labels");
+    // Directory allowlist entry carries the trailing slash the helper's
+    // startsWith matching requires; NOTICE is an exact-file entry.
+    expect(SUT_SOURCE).toContain(
+      "allowedPaths: [`${SKILL_PREFIX}/NOTICE`, `${SKILL_PREFIX}/references/`]",
+    );
+    // The private staging pipeline must not return.
+    expect(SUT_SOURCE).not.toContain("spawnGitChecked");
   });
 });
 

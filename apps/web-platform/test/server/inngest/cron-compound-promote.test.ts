@@ -10,11 +10,12 @@ import {
   ANTHROPIC_MODEL,
   MAX_DIFF_BYTES,
   PII_REGEX,
-  SYNTHETIC_CHECK_NAMES,
   TARGET_ALLOW_RE,
   diffRemovesHardRule,
   extractEnabledFlag,
 } from "@/server/inngest/functions/cron-compound-promote";
+// #5111: consolidated into the safe-commit helper (was a per-cron copy).
+import { SYNTHETIC_CHECK_NAMES } from "@/server/inngest/functions/_cron-safe-commit";
 
 // =============================================================================
 // AC8: PII regex byte-equality with bash script
@@ -208,5 +209,33 @@ describe("synthetic checks (AC18)", () => {
 describe("MAX_DIFF_BYTES", () => {
   it("is 16384", () => {
     expect(MAX_DIFF_BYTES).toBe(16384);
+  });
+});
+
+// =============================================================================
+// Handler-side persistence (#5111)
+// =============================================================================
+
+describe("handler-side persistence (#5111)", () => {
+  const SUT_SOURCE = readFileSync(
+    join(
+      __dirname,
+      "../../../server/inngest/functions/cron-compound-promote.ts",
+    ),
+    "utf-8",
+  );
+
+  it("routes per-cluster persistence through safeCommitAndPr as a human-review draft", () => {
+    expect(SUT_SOURCE).toContain('from "./_cron-safe-commit"');
+    expect(SUT_SOURCE).toMatch(/safeCommitAndPr\(\{/);
+    // Human-review proposal: draft PR, labels, NO merge.
+    expect(SUT_SOURCE).toContain('mergeMode: "none"');
+    expect(SUT_SOURCE).toContain("prDraft: true");
+    expect(SUT_SOURCE).toContain('prLabels: ["self-healing/auto"]');
+    // Per-cluster branch override survives the migration.
+    expect(SUT_SOURCE).toContain("branchName,");
+    expect(SUT_SOURCE).toContain("commitBody: trailer");
+    // The private staging pipeline must not return.
+    expect(SUT_SOURCE).not.toContain("spawnGitChecked");
   });
 });

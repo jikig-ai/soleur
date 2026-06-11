@@ -16,14 +16,11 @@
 // migrates. Otherwise, inngest.send() events have no consumer.
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import {
-  REPO_OWNER,
-  REPO_NAME,
   redactToken,
   buildAuthenticatedCloneUrl,
   resolveCronWorkspaceRoot,
@@ -33,30 +30,12 @@ import {
   postSentryHeartbeat,
   type HandlerArgs,
 } from "./_cron-shared";
+import { SYNTHETIC_CHECK_NAMES, safeCommitAndPr } from "./_cron-safe-commit";
 
 const FUNCTION_NAME = "cron-weekly-analytics";
 const SENTRY_MONITOR_SLUG = "scheduled-weekly-analytics";
 
 const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
-
-export const SYNTHETIC_CHECK_NAMES = [
-  "test",
-  "dependency-review",
-  "e2e",
-  "skill-security-scan PR gate",
-  "enforce",
-  "cla-check",
-  "cla-evidence",
-] as const;
-
-interface ScriptOutput {
-  exitCode: number;
-  kpiMiss: boolean;
-  kpiPhase: string;
-  kpiTarget: string;
-  kpiActual: string;
-  kpiVisitors: string;
-}
 
 function spawnGit(
   args: string[],
@@ -66,31 +45,6 @@ function spawnGit(
     const child = spawn("git", args, { stdio: "ignore", ...opts });
     child.on("exit", (exitCode, signal) => resolve({ exitCode, signal }));
     child.on("error", () => resolve({ exitCode: -1, signal: null }));
-  });
-}
-
-async function spawnGitChecked(
-  args: string[],
-  opts?: { cwd?: string; env?: NodeJS.ProcessEnv },
-): Promise<void> {
-  const result = await spawnGit(args, opts);
-  if (result.exitCode !== 0) {
-    throw new Error(`git ${args[0]} failed (exit ${result.exitCode})`);
-  }
-}
-
-function spawnGitCapture(
-  args: string[],
-  opts?: { cwd?: string },
-): Promise<string> {
-  return new Promise((resolve) => {
-    const child = spawn("git", args, { ...opts });
-    let out = "";
-    child.stdout?.on("data", (d: Buffer) => {
-      out += d.toString();
-    });
-    child.on("exit", () => resolve(out.trim()));
-    child.on("error", () => resolve(""));
   });
 }
 
@@ -134,6 +88,14 @@ export async function cronWeeklyAnalyticsHandler({
   step,
   logger,
 }: HandlerArgs): Promise<{ ok: boolean }> {
+  // Memoized run-start timestamp — safeCommitAndPr derives the ci/ branch
+  // name and pins commit dates from it, so a replay reuses the original
+  // value instead of re-stamping a later "now" (#5111).
+  const runStartedAt = await step.run(
+    "run-started-at",
+    async () => new Date().toISOString(),
+  );
+
   const installationToken = await step.run(
     "mint-installation-token",
     async () => {
@@ -249,64 +211,31 @@ export async function cronWeeklyAnalyticsHandler({
       });
     }
 
-    // --- Step 4: create bot-PR with snapshot ----------------------------------
-    await step.run("create-bot-pr", async () => {
+    // --- Step 4: create bot-PR with snapshot (#5111: safeCommitAndPr owns
+    //     staging/commit/push/PR/checks/merge — gains the deletion guard,
+    //     dirty-index precondition, dropped-path warn, replay idempotency).
+    //     mergeMode "direct" + synthetic checks preserves this pipeline's
+    //     production-proven merge mechanics exactly.
+    await step.run("safe-commit-pr", async () => {
       const repoRoot = scriptResult.repoRoot;
-      if (!repoRoot || !existsSync(repoRoot)) return;
-
-      await spawnGitChecked(["add", "knowledge-base/marketing/analytics/"], { cwd: repoRoot });
-      const diffResult = await spawnGit(["diff", "--cached", "--quiet"], { cwd: repoRoot });
-      if (diffResult.exitCode === 0) {
-        logger.info({ fn: FUNCTION_NAME }, "No analytics changes to commit");
-        return;
-      }
-
-      const { Octokit: OctokitCtor } = await import("@octokit/core");
-      const octokit = new OctokitCtor({ auth: installationToken });
-
-      const dateSuffix = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      const branchName = `ci/weekly-analytics-${dateSuffix}`;
-
-      await spawnGitChecked(["config", "user.name", "github-actions[bot]"], { cwd: repoRoot });
-      await spawnGitChecked(["config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], { cwd: repoRoot });
-      await spawnGitChecked(["checkout", "-b", branchName], { cwd: repoRoot });
-      await spawnGitChecked(["commit", "-m", "ci: weekly analytics snapshot"], { cwd: repoRoot });
-      await spawnGitChecked(["push", "-u", "origin", branchName], {
-        cwd: repoRoot,
-        env: {
-          PATH: process.env.PATH,
-          HOME: process.env.HOME,
-          NODE_ENV: process.env.NODE_ENV,
-          GH_TOKEN: installationToken,
+      // No existsSync pre-guard: a lost workspace must reach the helper's
+      // LOUD workspace-lost stage (Sentry + comment), not silently skip.
+      if (!repoRoot) return;
+      return safeCommitAndPr({
+        spawnCwd: repoRoot,
+        installationToken,
+        cronName: FUNCTION_NAME,
+        commitMessage: "ci: weekly analytics snapshot",
+        allowedPaths: ["knowledge-base/marketing/analytics/"],
+        runStartedAt,
+        scheduledIssueLabel: SENTRY_MONITOR_SLUG,
+        prBody: "Automated weekly analytics snapshot from Plausible API.",
+        syntheticChecks: {
+          names: SYNTHETIC_CHECK_NAMES,
+          summary: "Analytics snapshot only, no code changes",
         },
-      });
-
-      const { data: pr } = await octokit.request("POST /repos/{owner}/{repo}/pulls", {
-        owner: REPO_OWNER, repo: REPO_NAME,
-        title: `ci: weekly analytics snapshot ${new Date().toISOString().slice(0, 10)}`,
-        body: "Automated weekly analytics snapshot from Plausible API.",
-        base: "main", head: branchName,
-      });
-
-      const commitSha = await spawnGitCapture(["rev-parse", "HEAD"], { cwd: repoRoot });
-      for (const name of SYNTHETIC_CHECK_NAMES) {
-        await octokit.request("POST /repos/{owner}/{repo}/check-runs", {
-          owner: REPO_OWNER, repo: REPO_NAME, name, head_sha: commitSha,
-          status: "completed", conclusion: "success",
-          output: { title: "Bot PR", summary: "Analytics snapshot only, no code changes" },
-        });
-      }
-
-      await octokit.request("PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge", {
-        owner: REPO_OWNER, repo: REPO_NAME, pull_number: pr.number,
-        merge_method: "squash",
-      }).catch((err) => {
-        reportSilentFallback(err, {
-          feature: FUNCTION_NAME,
-          op: "auto-merge",
-          message: "Auto-merge failed (may need manual merge)",
-          extra: { fn: FUNCTION_NAME, prNumber: pr.number },
-        });
+        mergeMode: "direct",
+        logger,
       });
     });
 
