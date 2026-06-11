@@ -18,13 +18,13 @@ export const LEGAL_DOC_SHAS: Readonly<Record<string, string>> = {
   "corporate-cla":
     "d41147d94cf53c9340cdf39d751b91b4140991ddbab092451308a1398eb00826",
   "data-protection-disclosure":
-    "4ca3846dae5e74b2fc395785d3873712bb9ae5372308811c02f6f2175f77edd6",
+    "07157894e9e412084a975275e938519c96c581b5ed63314995b43121d69f907a",
   "disclaimer":
     "9a31290a5d691c5ddaecaf073b5db00a6d5b77f560c8c6589e84ce887e3c5384",
   "gdpr-policy":
-    "b53469b17a52e815845cc6f7ee4400a3e1f621cc48f168f35e56f56687e099fa",
+    "8757c03daea7e9688f93cffd946a9c3d9d8ba6e9b0794b7e03bb037d2bb09075",
   "individual-cla":
     "8d773e4331fd82e4b27a506eac2f968ad319adcef624d8f6115c0b71deb5e538",
   "privacy-policy":
-    "a9373080fb5238acd6a4929976eddf188f36ff2a206267019de33d01ea82b420",
+    "f135a567453ac6029087ad1854a6c86d6c772f06a5873ca07c06a38833f889d6",
 };

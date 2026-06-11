@@ -83,9 +83,13 @@ All Terraform-manageable infrastructure routes through the existing root:
   primitive.
 - **FR3.** **Statutory fast-path (pre-LLM, deterministic, metadata-first):** sender/keyword
   rules detect DSAR / breach / service-of-process / regulator classes and escalate
-  fail-loud to the operator BEFORE any LLM processing — and the subject/sender check
-  runs on webhook metadata BEFORE the body fetch, so a Resend fetch outage can degrade
-  a statutory row but never drop it. Renders the statutory clock (calendar-month
+  fail-loud to the operator BEFORE any LLM processing — and the subject/sender(+
+  attachment-filename) check runs on webhook metadata BEFORE the body fetch, so a
+  Resend fetch outage can degrade a statutory row but never drop it. **Ordering note
+  (amended 2026-06-11):** metadata-first is load-bearing — the statutory check must
+  never depend on the body fetch, which is why subject/sender stay in the
+  `email/inbound.received` event payload (the Inngest event-store PII consequence is
+  disclosed in Article 30 PA-27). Renders the statutory clock (calendar-month
   semantics per Art. 12(3)) and hard-links
   `knowledge-base/legal/recommended-tools.md#dsar-request` / `#breach-notice-triage`.
   Every message gets a WORM received-at timestamp sourced from the Resend event
@@ -101,13 +105,24 @@ All Terraform-manageable infrastructure routes through the existing root:
   time: server-side Slack webhook vs existing web-push hierarchy — Open Question 1).
   GitHub issues are forbidden as a surface (third-party PII).
 - **FR6.** **Parse-and-discard:** raw bodies are discarded after triage; persisted data =
-  summary, subject, sender, message-id, WORM received-at, mail class (NOT full
-  headers — do not add a headers column; the Proton mailbox local copy is the durable
-  original, so the Sieve rule MUST forward-and-keep).
-- **FR9.** **Item lifecycle:** items carry `new → acknowledged | archived` status
-  (statutory: acknowledge unpins but the item stays visible with its clock —
-  acknowledgment is workflow state, not legal resolution; standard: archive). Status
-  transitions are the only mutable fields under the WORM trigger.
+  **summary, subject, sender, received-at, message-id** (plus the Resend email id,
+  class/rule provenance, and lifecycle status fields) — **NOT full headers**: do not
+  add a headers column (and do not "fix" this with a JSONB headers column at review
+  time); the Proton mailbox local copy is the durable original, so the Sieve rule MUST
+  forward-and-keep. The schema has no body column — parse-and-discard is structural,
+  not policy. *(Amended 2026-06-11 per plan AC10 — wording aligned with migration 102.)*
+- **FR9.** **Item lifecycle:** items carry **one-way** `new → acknowledged | archived`
+  status (statutory: acknowledge unpins but the item stays visible with its clock —
+  acknowledgment is workflow state, not legal resolution; standard: archive; no
+  transition back to `new`, enforced in the DB by the `set_email_triage_status` RPC —
+  a route-only matrix would leave `acknowledged → new` DB-legal). Status transitions
+  are the only mutable fields under the WORM trigger. **Agent-write boundary:** status
+  transitions are **UI-only in v1** — agents get read tools (`email_triage_list` /
+  `email_triage_get`, auto-approve tier) but NO write/acknowledge tool. If a status
+  write tool ever ships it MUST be `gated`-tier, and statutory acknowledge MUST never
+  be auto-approve (cite #4671): the gate approval IS the human seeing the item — the
+  entire signal the statutory pin protects; a prompt-injected agent auto-acknowledging
+  a DSAR would silently unpin a statutory clock. *(Amended 2026-06-11 per plan AC10.)*
 - **FR7.** Out-of-band liveness: dead-man heartbeat on the Inngest cron substrate +
   Sentry monitor with an independent freshness source; silent ingestion failure must page
   (a quiet mailbox is indistinguishable from a broken pipeline otherwise).
@@ -149,7 +164,12 @@ All Terraform-manageable infrastructure routes through the existing root:
   the Art. 12 clock stated, with zero LLM involvement on its routing path (verifiable
   from the handler code path + tests).
 - **AC3.** Halting the forwarding chain (e.g., disabling the Sieve rule in a test
-  mailbox) triggers the dead-man alert within the freshness window.
+  mailbox) triggers the dead-man alert within the freshness window. **Negative arm
+  (restored 2026-06-11 per plan AC-P3):** a green check-in alone proves only the happy
+  chain — the post-merge sequence includes a **one-time chaos check** (temporarily
+  disable the Sieve rule, or fire the probe with a corrupted marker) confirming the
+  missed/failed Sentry check-in actually raises the alert → founder email, then
+  re-enable. The alert path itself must be proven, not assumed.
 - **AC4.** No mailbox credential exists in Doppler, env files, or code; the only secret
   is the Resend Inbound webhook signing secret.
 - **AC5.** The legal bundle (FR8) is committed and cross-consistent

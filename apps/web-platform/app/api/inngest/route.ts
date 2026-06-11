@@ -31,6 +31,7 @@ import { cronContentPublisher } from "@/server/inngest/functions/cron-content-pu
 import { cronContentVendorDrift } from "@/server/inngest/functions/cron-content-vendor-drift";
 import { cronDailyTriage } from "@/server/inngest/functions/cron-daily-triage";
 import { cronDevMigrationDrift } from "@/server/inngest/functions/cron-dev-migration-drift";
+import { cronEmailIngressProbe } from "@/server/inngest/functions/cron-email-ingress-probe";
 import { cronFollowThroughMonitor } from "@/server/inngest/functions/cron-follow-through-monitor";
 import { cronGhPagesCertState } from "@/server/inngest/functions/cron-gh-pages-cert-state";
 import { cronGithubAppDriftGuard } from "@/server/inngest/functions/cron-github-app-drift-guard";
@@ -59,6 +60,7 @@ import { cronUxAudit } from "@/server/inngest/functions/cron-ux-audit";
 import { cronWeeklyAnalytics } from "@/server/inngest/functions/cron-weekly-analytics";
 import { cronWorkspaceGc } from "@/server/inngest/functions/cron-workspace-gc";
 import { cronWorkspaceSyncHealth } from "@/server/inngest/functions/cron-workspace-sync-health";
+import { emailOnReceived } from "@/server/inngest/functions/email-on-received";
 import { eventCfTokenExpiryCheck } from "@/server/inngest/functions/event-cf-token-expiry-check";
 import { eventScheduledReminder } from "@/server/inngest/functions/event-scheduled-reminder";
 import { eventShipMerge } from "@/server/inngest/functions/event-ship-merge";
@@ -97,6 +99,7 @@ export const { GET, POST, PUT } = serve({
     cronContentVendorDrift,
     cronDailyTriage,
     cronDevMigrationDrift,
+    cronEmailIngressProbe,
     cronFollowThroughMonitor,
     cronGhPagesCertState,
     cronGithubAppDriftGuard,
@@ -125,6 +128,7 @@ export const { GET, POST, PUT } = serve({
     cronWeeklyAnalytics,
     cronWorkspaceGc,
     cronWorkspaceSyncHealth,
+    emailOnReceived,
     eventCfTokenExpiryCheck,
     eventScheduledReminder,
     eventShipMerge,

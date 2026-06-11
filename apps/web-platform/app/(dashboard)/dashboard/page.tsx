@@ -7,6 +7,8 @@ import { useConversations } from "@/hooks/use-conversations";
 import type { ArchiveFilter } from "@/hooks/use-conversations";
 import { useOnboarding } from "@/hooks/use-onboarding";
 import { ConversationRow } from "@/components/inbox/conversation-row";
+import { EmailTriageRow } from "@/components/inbox/email-triage-row";
+import type { EmailTriageItem } from "@/components/inbox/email-triage-row";
 import { ErrorCard } from "@/components/ui/error-card";
 import { STATUS_LABELS } from "@/lib/types";
 import { FOUNDATION_MIN_CONTENT_BYTES } from "@/lib/kb-constants";
@@ -196,6 +198,26 @@ export default function DashboardPage() {
     urgency: string;
   }
   const [todayItems, setTodayItems] = useState<TodayItem[]>([]);
+
+  // feat-operator-inbox-delegation Phase 5b — email-triage inbox items.
+  // GET /api/inbox/emails already returns unacknowledged statutory rows
+  // pinned first (server-side ordering contract); render in given order.
+  const [emailItems, setEmailItems] = useState<EmailTriageItem[]>([]);
+
+  const fetchEmailItems = useCallback(async () => {
+    try {
+      const res = await fetch("/api/inbox/emails");
+      if (!res.ok) return; // 401/500 → silent; the rest of the page renders.
+      const body = (await res.json()) as { items: EmailTriageItem[] };
+      setEmailItems(body.items ?? []);
+    } catch {
+      // Network drop: leave empty.
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchEmailItems();
+  }, [fetchEmailItems]);
 
   useEffect(() => {
     let cancelled = false;
@@ -428,7 +450,9 @@ export default function DashboardPage() {
   // First-run state (no vision.md, no conversations)
   // ---------------------------------------------------------------------------
 
-  if (!kbError && !visionExists && conversations.length === 0 && !hasActiveFilter) {
+  // emailItems gate: a pending email-triage item (esp. a statutory clock)
+  // must not be hidden behind the conversation-less empty states.
+  if (!kbError && !visionExists && conversations.length === 0 && emailItems.length === 0 && !hasActiveFilter) {
     return (
       <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center justify-center px-4 py-10">
         <p className="mb-3 text-xs font-medium tracking-widest text-soleur-accent-gold-fg">
@@ -568,7 +592,7 @@ export default function DashboardPage() {
   // placeholder or suggested prompts depending on foundation status.
   // ---------------------------------------------------------------------------
 
-  if (conversations.length === 0 && !hasActiveFilter) {
+  if (conversations.length === 0 && emailItems.length === 0 && !hasActiveFilter) {
     return (
       <div className={`mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center px-4 py-10 ${visionExists && !allTasksComplete ? "pt-10" : "justify-center"}`}>
         {/* Foundation + operational cards (hidden when all complete) */}
@@ -764,6 +788,20 @@ export default function DashboardPage() {
           >
             Clear filters
           </button>
+        </div>
+      )}
+
+      {/* Email-triage rows — siblings of conversation rows. Server returns
+          unacknowledged statutory pinned first; render in given order. */}
+      {emailItems.length > 0 && (
+        <div className="mb-2 space-y-2">
+          {emailItems.map((item) => (
+            <EmailTriageRow
+              key={item.id}
+              item={item}
+              onChanged={fetchEmailItems}
+            />
+          ))}
         </div>
       )}
 

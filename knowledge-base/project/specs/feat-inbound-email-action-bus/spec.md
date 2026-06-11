@@ -3,13 +3,23 @@ feature: inbound-email-action-bus
 lane: cross-domain
 brand_survival_threshold: single-user incident
 tracking_issue: 3012
-status: draft
+status: superseded-in-part
 decision: buy-for-dmarc-defer-the-bus
 created: 2026-06-02
 brainstorm: knowledge-base/project/brainstorms/2026-06-02-inbound-email-action-bus-brainstorm.md
 ---
 
 # Spec: DMARC Failure Alerting (buy) + Inbound-Bus Validation
+
+> **Supersession note (2026-06-11, Ref #5103):** `status: superseded-in-part`.
+> The **buy path shipped** — the multi-`rua` `_dmarc` record is live on main
+> (`apps/web-platform/infra/dns.tf:94`). The deferred "agent runs my inbox"
+> slice is **no longer governed by this spec's Non-Goals**: the operator-dogfood
+> read-only triage slice was built as
+> `knowledge-base/project/specs/feat-operator-inbox-delegation/spec.md`
+> (#5103; #4788 deferral explicitly overridden there — override recorded on
+> #4788). The general customer-facing inbound-email platform capability remains
+> deferred per #4788. This spec stays as the record of the DMARC buy decision.
 
 ## Problem Statement
 

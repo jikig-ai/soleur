@@ -417,6 +417,86 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(tokenRows?.length ?? 0, "stale probe token purged").toBe(0);
     });
 
+    test("(g2) purge exact-boundary fixtures — the > vs >= one-character bug", async () => {
+      // INTENDED SEMANTICS (read from migration 102's purge predicates):
+      // `received_at < now() - interval '365 days'` / `< now() - interval
+      // '7 days'` — STRICTLY OLDER than the window is deleted; a row exactly
+      // AT the boundary survives. isoDaysAgo(364) is comfortably inside the
+      // window (retained); isoDaysAgo(366) is strictly older (deleted).
+      // Exactly-365d is deliberately NOT fixtured: by purge time the fixture
+      // is microseconds past the boundary, which makes the assertion a
+      // wall-clock race rather than a semantics probe. The one-character
+      // `>` vs `>=` regression class is fully covered by the 364/366 and
+      // 6/8 pairs on either side.
+      const nonStatutory364 = await insertStub(service, userA.id, {
+        mail_class: "vendor",
+        received_at: isoDaysAgo(364),
+        subject: "synthetic boundary vendor 364d",
+      });
+      const nonStatutory366 = await insertStub(service, userA.id, {
+        mail_class: "vendor",
+        received_at: isoDaysAgo(366),
+        subject: "synthetic boundary vendor 366d",
+      });
+      const probe6 = await insertStub(service, userA.id, {
+        mail_class: "probe",
+        received_at: isoDaysAgo(6),
+        subject: "synthetic boundary probe 6d",
+      });
+      const probe8 = await insertStub(service, userA.id, {
+        mail_class: "probe",
+        received_at: isoDaysAgo(8),
+        subject: "synthetic boundary probe 8d",
+      });
+      // Statutory deep past the general window — the statutory_class IS
+      // NULL carve-out IS the accountability-period retention guarantee.
+      const statutory400 = await insertStub(service, userA.id, {
+        mail_class: "legal-review",
+        statutory_class: "dsar",
+        received_at: isoDaysAgo(400),
+        subject: "synthetic boundary statutory 400d",
+      });
+
+      const { error: purgeErr } = await service.rpc(
+        "purge_email_triage_items",
+      );
+      expect(purgeErr, "purge_email_triage_items RPC").toBeNull();
+
+      const ids = [
+        nonStatutory364.id,
+        nonStatutory366.id,
+        probe6.id,
+        probe8.id,
+        statutory400.id,
+      ];
+      const { data: remaining } = await service
+        .from("email_triage_items")
+        .select("id")
+        .in("id", ids);
+      const remainingIds = new Set((remaining ?? []).map((r) => r.id));
+
+      expect(
+        remainingIds.has(nonStatutory364.id),
+        "non-statutory 364d RETAINED (not strictly older than 365d)",
+      ).toBe(true);
+      expect(
+        remainingIds.has(nonStatutory366.id),
+        "non-statutory 366d DELETED (strictly older than 365d)",
+      ).toBe(false);
+      expect(
+        remainingIds.has(probe6.id),
+        "probe 6d RETAINED (not strictly older than 7d)",
+      ).toBe(true);
+      expect(
+        remainingIds.has(probe8.id),
+        "probe 8d DELETED (strictly older than 7d)",
+      ).toBe(false);
+      expect(
+        remainingIds.has(statutory400.id),
+        "statutory 400d RETAINED (accountability-period carve-out)",
+      ).toBe(true);
+    });
+
     test("(h) anonymise RPC NULLs user_id + sender; WORM re-armed", async () => {
       // Throwaway user so we don't strip the shared userA mid-suite.
       const u = { id: "", email: syntheticEmail() };

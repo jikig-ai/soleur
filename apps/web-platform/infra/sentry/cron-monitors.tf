@@ -559,6 +559,33 @@ resource "sentry_cron_monitor" "scheduled_workspace_gc" {
 # silence while absorbing reboot windows and per-tick jitter. Slug MUST
 # match SENTRY_SLUG in cron-egress-resolve.sh and cron-egress-alarm.sh
 # (parity-asserted by cron-egress-firewall.test.sh).
+# feat-operator-inbox-delegation Phase 6: Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-email-ingress-probe.ts`.
+# Daily email-ingress liveness probe: sends a tokenized marker email via
+# Resend outbound (notifications@ → ops@), step.sleeps 15 min INSIDE the run,
+# then asserts its own mail_class='probe' row landed (same-run assertion).
+# Probe row found → ?status=ok; absent → ?status=error + throw (the function
+# pins retries: 0 so a late-landing probe can never retry-to-green).
+# checkin_margin 60 DEVIATES from the 30-min Inngest-fired precedent
+# (scheduled_daily_triage cohort): the check-in lands ~16-17 min AFTER the
+# scheduled fire (15-min in-run sleep + send/assert overhead), so a 30-min
+# margin would leave <14 min of real headroom for redeploy windows and
+# queue backpressure; 60 keeps an honest alarm within the hour while never
+# paging on the structural in-run delay.
+# max_runtime_minutes 25, NOT the small-cron 10: the 15-min sleep is INSIDE
+# the run, so a 10-min budget would mark every single run errored.
+resource "sentry_cron_monitor" "cron_email_ingress_probe" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "cron-email-ingress-probe"
+  schedule                = { crontab = "0 6 * * *" }
+  checkin_margin_minutes  = 60
+  max_runtime_minutes     = 25
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 resource "sentry_cron_monitor" "cron_egress_resolve" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
