@@ -44,6 +44,7 @@ import {
   type HandlerArgs,
 } from "./_cron-shared";
 import { SYNTHETIC_CHECK_NAMES, safeCommitAndPr } from "./_cron-safe-commit";
+import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 
 // =============================================================================
 // Constants
@@ -64,7 +65,7 @@ export const TARGET_ALLOW_RE =
 const BRANCH_SHAPE_RE =
   /^self-healing\/auto-[0-9a-f]{64}-[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
 
-export const ANTHROPIC_MODEL = "claude-sonnet-4-6";
+export const ANTHROPIC_MODEL = EXECUTION_MODEL;
 export const ANTHROPIC_MAX_TOKENS = 16384;
 
 // Byte-for-byte port of scripts/compound-promote.sh:75 PII_REGEX.

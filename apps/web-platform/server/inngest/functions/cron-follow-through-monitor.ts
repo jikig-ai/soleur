@@ -94,6 +94,7 @@ import {
 } from "./_predicate-validator";
 // Re-export for test parity (cron-follow-through-monitor.test.ts imports via this module).
 export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
+import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 
 // Inlined verbatim from .github/workflows/scheduled-follow-through.yml lines
 // 73-145, with three idempotency guards (A/B/C) added for Inngest replay
@@ -235,7 +236,7 @@ predicates and SLA status.
 // the prompt as a tool name without the end-of-options marker. #4017 bug 8/8.
 const CLAUDE_CODE_FLAGS = [
   "--print",
-  "--model", "claude-sonnet-4-6",
+  "--model", EXECUTION_MODEL,
   "--max-turns", "30",
   "--allowedTools",
   "Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh issue close:*),Bash(gh label create:*),Read,Glob,Grep",

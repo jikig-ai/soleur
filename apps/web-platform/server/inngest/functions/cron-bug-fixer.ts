@@ -69,6 +69,7 @@ import { enableAutoMergeSquash } from "./_cron-safe-commit";
 import { inngest } from "@/server/inngest/client";
 import { createProbeOctokit } from "@/server/github/probe-octokit";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
+import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 
 // =============================================================================
 // Constants
@@ -145,7 +146,7 @@ const SKIP_LABELS = [
 const CLAUDE_CODE_FLAGS = [
   "--print",
   "--model",
-  "claude-sonnet-4-6",
+  EXECUTION_MODEL,
   "--max-turns",
   "55",
   "--allowedTools",
