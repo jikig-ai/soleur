@@ -27,7 +27,7 @@
 //     outer turns is the per-skill envelope.
 //   - --allowedTools adds Task (for sub-agent dispatch); drops WebSearch
 //     and WebFetch (audit is purely codebase-introspection).
-//   - --model claude-opus-4-7 (was sonnet-4-6) — the principle scoring is
+//   - --model claude-opus-4-8 (was sonnet-4-6) — the principle scoring is
 //     opus-class reasoning, mirroring scheduled-bug-fixer's escalation.
 //   - Cadence: monthly 15th 09:00 UTC (was weekly Monday).
 //   - Skip-window: 30 days (was 6) — monthly cadence + stable findings
@@ -92,7 +92,7 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 // options marker). The prompt is the SOLE positional argument after `--`.
 //
 // Mirrors .github/workflows/scheduled-agent-native-audit.yml `claude_args`:
-//   --model claude-opus-4-7
+//   --model claude-opus-4-8
 //   --max-turns 50
 //   --allowedTools Bash,Read,Write,Edit,Glob,Grep,Task
 const CLAUDE_CODE_FLAGS = [

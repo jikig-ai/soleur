@@ -2,7 +2,7 @@
 //
 // Guards the SSOT extraction of the per-cron Anthropic model-ID literals
 // into `server/inngest/model-tiers.ts`:
-//   (a) no-raw-literal: zero quoted "claude-sonnet-4-6" / "claude-opus-4-7"
+//   (a) no-raw-literal: zero quoted "claude-sonnet-4-6" / "claude-opus-4-8"
 //       string literals on NON-comment code lines across functions/*.ts
 //       (the verbatim `--model …` mirrors of GHA `claude_args` live in
 //       comments on purpose and are excluded by comment-stripping).
@@ -16,7 +16,7 @@
 //       reachable through that lookup, widen this assertion + add the
 //       opus pricing entry then.
 //   (d) identity: EXECUTION_MODEL === SONNET_MODEL and
-//       AUDIT_MODEL === "claude-opus-4-7".
+//       AUDIT_MODEL === "claude-opus-4-8".
 
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -43,7 +43,7 @@ import { MODEL_PRICING } from "@/server/inngest/functions/agent-on-spawn-request
 
 const FUNCTIONS_DIR = join(__dirname, "../../../server/inngest/functions");
 
-const RAW_MODEL_LITERAL = /"claude-sonnet-4-6"|"claude-opus-4-7"/;
+const RAW_MODEL_LITERAL = /"claude-sonnet-4-6"|"claude-opus-4-8"/;
 
 /**
  * Blank out comment lines so the verbatim `--model claude-…` GHA-mirror
@@ -93,13 +93,13 @@ describe("model-tiers registry — #5106", () => {
     expect(pricingKeys).toEqual(unionMembers);
   });
 
-  it("EXECUTION_MODEL is the sonnet SSOT and AUDIT_MODEL is opus-4-7", () => {
+  it("EXECUTION_MODEL is the sonnet SSOT and AUDIT_MODEL is opus-4-8", () => {
     expect(EXECUTION_MODEL).toBe(SONNET_MODEL);
     expect(EXECUTION_MODEL).toBe("claude-sonnet-4-6");
     // Intentional model-bump tripwire: AUDIT_MODEL has no SSOT constant to
     // alias (opus is not an AnthropicModelId member), so it is pinned to the
     // literal here. A deliberate re-tier (e.g. opus-4-7 → opus-4-8, a separate
     // model-bump PR per ADR-053) must update this assertion in lockstep.
-    expect(AUDIT_MODEL).toBe("claude-opus-4-7");
+    expect(AUDIT_MODEL).toBe("claude-opus-4-8");
   });
 });
