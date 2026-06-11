@@ -82,6 +82,20 @@ jobs:
           SENTRY_USERID_PEPPER: dummy
         run: vector validate --no-environment --config-toml apps/web-platform/infra/vector.toml
 
+      # `vector validate` silently ignores misspelled filter SUB-keys (probe-
+      # verified on pinned 0.43.1: `mountpoints.include` singular is a silent
+      # no-op that would restore 27-mountpoint ingest and re-blow the Better
+      # Stack quota — #5110 second-pass remediation). Byte-exact greps are the
+      # load-bearing spelling guard for the host_metrics quota filters.
+      - name: host_metrics quota-filter spelling guard (#5110)
+        run: |
+          set -euo pipefail
+          f=apps/web-platform/infra/vector.toml
+          grep -qE '^collectors = \["cpu", "memory", "disk", "filesystem", "load"\]$' "$f" \
+            || { echo "FAIL: trimmed collectors list missing/drifted in $f (quota guard, #5110)"; exit 1; }
+          grep -qE '^mountpoints\.includes = \[' "$f" \
+            || { echo "FAIL: mountpoints.includes (plural, array) missing in $f — a misspelling is a silent no-op in vector validate (quota guard, #5110)"; exit 1; }
+
       - name: VRL fixture tests (BLOCKING -- Arch-F4)
         env:
           SENTRY_USERID_PEPPER: fixture-only-do-not-use-in-prod
