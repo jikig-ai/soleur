@@ -20,11 +20,16 @@
 # Writing INTO an existing sanctioned domain (engineering/, project/, ...) or to
 # a sanctioned top-level file (INDEX.md, ...) always passes.
 #
-# Coverage mirrors no-memory-write.sh: file tools check file_path/notebook_path;
-# Bash checks the command string for a knowledge-base/<segment> substring to
-# catch `mkdir`/`cat >`/`mv`/`tee` redirects. Adversarial evasion (eval, base64)
-# is out of scope — this gate exists for accidental taxonomy drift, not
-# bypass-defeat.
+# Coverage mirrors no-memory-write.sh: file tools check file_path/notebook_path
+# (an unambiguous write target). Bash checks the command string for a
+# knowledge-base/<segment> substring, but ONLY treats it as guard-worthy when the
+# command actually WRITES to that path — a positive write-VERB / kb-targeted-
+# REDIRECT allowlist (`mkdir`/`touch`/`tee`/`cat >`/`mv`/`cp`/`git add`/…). A
+# read-only reference that merely MENTIONS a kb path (`git show <ref>:path`,
+# `git ls-tree`, `grep`, `cat`) carries no write verb and no kb-targeted redirect,
+# so it passes cleanly instead of firing a spurious `ask`. Adversarial evasion
+# (eval, base64) AND exotic write forms are out of scope — this gate exists for
+# accidental taxonomy drift, not bypass-defeat.
 
 set -euo pipefail
 
@@ -60,6 +65,22 @@ fi
 
 [[ -z "$TARGET" ]] && exit 0
 
+# Bash-class discriminator (fail-open). `tool_name` is the authoritative signal,
+# but the existing test payloads omit it (`{tool_input:{command:...}}` /
+# `{tool_input:{file_path:...}}`), so fall back to the payload shape: a command
+# present with no file_path/notebook_path is the Bash class. Mirror
+# background-poll-prefer-monitor.sh:81 (`jq -r '.tool_name // empty'`). Any jq
+# failure yields empty — a missing/garbled tool_name on a real Bash command still
+# gets the read-vs-write gate (command present), and on a file write still reaches
+# the existing `ask` logic (file_path present, so IS_BASH stays unset).
+TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
+HAS_COMMAND=$(printf '%s' "$INPUT" | jq -r 'if (.tool_input.command // "") != "" then "1" else "" end' 2>/dev/null || true)
+HAS_FILE_PATH=$(printf '%s' "$INPUT" | jq -r 'if (.tool_input.file_path // .tool_input.notebook_path // "") != "" then "1" else "" end' 2>/dev/null || true)
+IS_BASH=""
+if [[ "$TOOL_NAME" == "Bash" ]] || { [[ -z "$TOOL_NAME" ]] && [[ -n "$HAS_COMMAND" ]] && [[ -z "$HAS_FILE_PATH" ]]; }; then
+  IS_BASH=1
+fi
+
 # Extract the first path component under knowledge-base/. Match the segment
 # anywhere (absolute worktree paths, relative paths, and Bash command
 # substrings — `mkdir knowledge-base/x` has no `/` before knowledge-base, so a
@@ -68,6 +89,47 @@ if [[ ! "$TARGET" =~ knowledge-base/([^/[:space:]\"\']+) ]]; then
   exit 0
 fi
 SEGMENT="${BASH_REMATCH[1]}"
+
+# Bash write-target gate (read-vs-write distinction). For the Bash class only,
+# the matched knowledge-base/<segment> is a guard-worthy NEW top-level entry ONLY
+# when the command actually WRITES to it. A read reference (`git show
+# <ref>:knowledge-base/...`, `git ls-tree`, `grep`, `cat`, `gh ... view`) merely
+# MENTIONS the path — the Bash coverage exists to catch accidental taxonomy-drift
+# WRITES (mkdir/cat >/mv/tee), not reads. A Bash read that passes this gate
+# `exit 0`s HERE; it does not need the downstream checks (glob-guard /
+# sanctioned-dir / sanctioned-file / on-disk) — those are ALL pass-through
+# branches a read never required. Only a Bash *write* fails this gate and falls
+# through to the existing logic unchanged, so the gate can NEVER convert a pass
+# into an `ask` nor remove the existing `ask`. File-tool payloads skip the gate
+# entirely (IS_BASH unset) and reach the existing logic with current behavior
+# preserved. Note: this runs BEFORE the glob-guard below — the glob-guard is
+# simply not exercised for Bash reads (they exit here first).
+#
+# Detection is a positive write-VERB / kb-targeted-REDIRECT allowlist. Per the
+# header philosophy (adversarial evasion + exotic write forms out of scope), this
+# need not be exhaustive — it covers every write a human/agent realistically uses
+# to create a new top-level kb entry, mirroring the verb family in
+# no-memory-write.sh.
+#   - KB_WRITE_VERB_RE: a write verb followed — WITHIN ONE pipeline/command
+#     segment (`[^|;&<newline>]*`) — by a knowledge-base/ path. The segment bound
+#     stops a verb in stage-1 from matching a kb READ in a later stage/line
+#     (`... | grep ... ; cat knowledge-base/x`, or a verb on line 1 + a kb read on
+#     line 3). The newline is part of the exclusion class (via `$'...'` so `\n` is
+#     a literal newline char) — a multi-line command does not let a stage-1 verb
+#     reach a later-line kb read.
+#   - KB_WRITE_REDIR_RE: a `>`/`>>` redirect whose target is a knowledge-base/
+#     path. It anchors the literal `knowledge-base/` immediately after the
+#     `>`/spaces/optional-quote, so `>/dev/null 2>&1` (present in the repro) does
+#     NOT match — a naive `>`-presence check would re-introduce the false positive.
+# Both regexes MUST be assigned to variables before `[[ =~ ]]`: an inline literal
+# containing `;`/`&`/`|` triggers a bash conditional-expression parse error.
+if [[ -n "$IS_BASH" ]]; then
+  KB_WRITE_VERB_RE=$'(mkdir|touch|tee|sed[[:space:]]+-i|cp|mv|install|ln|rsync|git[[:space:]]+add|git[[:space:]]+mv|git[[:space:]]+rm)[^|;&\n]*knowledge-base/'
+  KB_WRITE_REDIR_RE='>>?[[:space:]]*"?'"'"'?knowledge-base/'
+  if [[ ! "$TARGET" =~ $KB_WRITE_VERB_RE ]] && [[ ! "$TARGET" =~ $KB_WRITE_REDIR_RE ]]; then
+    exit 0
+  fi
+fi
 
 # Glob/regex-metachar guard: a SEGMENT containing `*`, `?`, `[`, or `]` is the
 # signature of a COMMENT or grep/regex PATTERN that merely mentions a
