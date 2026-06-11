@@ -26,6 +26,7 @@ import {
   resolveCronWorkspaceRoot,
   warnIfCronWorkspaceLowOnDisk,
   mintInstallationToken,
+  postDiscordWebhook,
   postSentryHeartbeat,
   type HandlerArgs,
 } from "./_cron-shared";
@@ -189,7 +190,10 @@ export async function cronWeeklyAnalyticsHandler({
           );
           return;
         }
-        const body = JSON.stringify({
+        // Migrated to the shared helper (#5122 review): gains the
+        // allowed_mentions suppression + fetch timeout the bare fetch lacked.
+        const resp = await postDiscordWebhook({
+          webhookUrl,
           content: [
             `**KPI miss detected** — weekly analytics (${new Date().toISOString().slice(0, 10)})`,
             `Phase: ${scriptResult.kpiPhase}`,
@@ -197,11 +201,6 @@ export async function cronWeeklyAnalyticsHandler({
             `Visitors: ${scriptResult.kpiVisitors}`,
             `Cascade dispatched: seo-aeo-audit, growth-execution, content-generator`,
           ].join("\n"),
-        });
-        const resp = await fetch(webhookUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body,
         });
         if (!resp.ok) {
           reportSilentFallback(
