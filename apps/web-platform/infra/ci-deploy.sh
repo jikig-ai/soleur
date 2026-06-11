@@ -243,6 +243,21 @@ verify_inngest_health() {
   # false-pass on the slug alone even with zero planned cron triggers.
   local functions_body=""
   for i in $(seq 1 "$cron_max_attempts"); do
+    # #5159: active push-and-poll — re-register on EACH iteration. The
+    # inngest-server cannot self-sync its function manifest post-restart; only an
+    # SDK PUT /api/inngest re-plans cron triggers at the substrate. Firing this
+    # INSIDE the loop (not once before it) self-heals a transient :3000-not-ready
+    # window — e.g. the deploy-inngest arm where the web-platform container may
+    # still be mid-restart — so the next iteration retries instead of collapsing
+    # to the pre-fix slow-resync behavior. `|| true` is MANDATORY under set -e
+    # (a connection-refused curl exit 7 would otherwise abort verify before the
+    # cron gate). --max-time 10 bounds a listening-but-hung :3000 and is counted
+    # in the #5145 cross-file drift guard (ci-deploy.test.sh DG_PUT_MAXTIME); it
+    # is intentionally NOT --max-time 5 so it never trips the VERIFY_FN_MAXTIME==2
+    # pin. NB: -sf (no -L) treats a 307 as success with an empty body, so a
+    # /api/inngest PUBLIC_PATHS regression would silently no-op the PUT — the
+    # /v1/functions cron gate below is the authoritative backstop.
+    curl -sf --max-time 10 -X PUT http://127.0.0.1:3000/api/inngest 2>/dev/null || true
     functions_body=$(curl -sf --max-time 5 http://127.0.0.1:8288/v1/functions 2>/dev/null) || true
 
     if [[ "$functions_body" == *'"cron":'* ]]; then
