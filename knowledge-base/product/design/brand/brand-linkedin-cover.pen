@@ -1,1 +1,79 @@
-{"version": "2.8", "children": []}
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "WwDI8",
+      "x": 0,
+      "y": 0,
+      "name": "LinkedIn Cover",
+      "clip": true,
+      "width": 2256,
+      "height": 382,
+      "fill": "#0A0A0A",
+      "layout": "none",
+      "children": [
+        {
+          "type": "rectangle",
+          "id": "pmmQ4",
+          "x": 0,
+          "y": 0,
+          "name": "Left Accent",
+          "fill": "#D4B36A",
+          "width": 4,
+          "height": 382
+        },
+        {
+          "type": "rectangle",
+          "id": "Heh3r",
+          "x": 2252,
+          "y": 0,
+          "name": "Right Accent",
+          "fill": "#B8923E",
+          "width": 4,
+          "height": 382
+        },
+        {
+          "type": "text",
+          "id": "bm8wg",
+          "x": 451,
+          "y": 105,
+          "name": "Thesis",
+          "fill": "#FFFFFF",
+          "textGrowth": "fixed-width",
+          "width": 1354,
+          "content": "Build a Billion-Dollar Company. Alone.",
+          "textAlign": "center",
+          "fontFamily": "Cormorant Garamond",
+          "fontSize": 72,
+          "fontWeight": "500"
+        },
+        {
+          "type": "rectangle",
+          "id": "W4huq",
+          "x": 878,
+          "y": 217,
+          "name": "Gold Line",
+          "opacity": 0.4,
+          "fill": "#C9A962",
+          "width": 500,
+          "height": 2
+        },
+        {
+          "type": "text",
+          "id": "0Ggg5",
+          "x": 451,
+          "y": 241,
+          "name": "Metrics",
+          "fill": "#848484",
+          "textGrowth": "fixed-width",
+          "width": 1354,
+          "content": "60+ Agents · 8 Departments · 1 Founder",
+          "textAlign": "center",
+          "fontFamily": "Inter",
+          "fontSize": 30
+        }
+      ]
+    }
+  ]
+}
