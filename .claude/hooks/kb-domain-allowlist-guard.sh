@@ -111,9 +111,12 @@ SEGMENT="${BASH_REMATCH[1]}"
 # to create a new top-level kb entry, mirroring the verb family in
 # no-memory-write.sh.
 #   - KB_WRITE_VERB_RE: a write verb followed — WITHIN ONE pipeline/command
-#     segment (`[^|;&]*`) — by a knowledge-base/ path. The segment bound stops a
-#     verb in stage-1 from matching a kb READ in stage-2
-#     (`... | grep ... ; cat knowledge-base/x`).
+#     segment (`[^|;&<newline>]*`) — by a knowledge-base/ path. The segment bound
+#     stops a verb in stage-1 from matching a kb READ in a later stage/line
+#     (`... | grep ... ; cat knowledge-base/x`, or a verb on line 1 + a kb read on
+#     line 3). The newline is part of the exclusion class (via `$'...'` so `\n` is
+#     a literal newline char) — a multi-line command does not let a stage-1 verb
+#     reach a later-line kb read.
 #   - KB_WRITE_REDIR_RE: a `>`/`>>` redirect whose target is a knowledge-base/
 #     path. It anchors the literal `knowledge-base/` immediately after the
 #     `>`/spaces/optional-quote, so `>/dev/null 2>&1` (present in the repro) does
@@ -121,7 +124,7 @@ SEGMENT="${BASH_REMATCH[1]}"
 # Both regexes MUST be assigned to variables before `[[ =~ ]]`: an inline literal
 # containing `;`/`&`/`|` triggers a bash conditional-expression parse error.
 if [[ -n "$IS_BASH" ]]; then
-  KB_WRITE_VERB_RE='(mkdir|touch|tee|sed[[:space:]]+-i|cp|mv|install|ln|rsync|git[[:space:]]+add|git[[:space:]]+mv|git[[:space:]]+rm)[^|;&]*knowledge-base/'
+  KB_WRITE_VERB_RE=$'(mkdir|touch|tee|sed[[:space:]]+-i|cp|mv|install|ln|rsync|git[[:space:]]+add|git[[:space:]]+mv|git[[:space:]]+rm)[^|;&\n]*knowledge-base/'
   KB_WRITE_REDIR_RE='>>?[[:space:]]*"?'"'"'?knowledge-base/'
   if [[ ! "$TARGET" =~ $KB_WRITE_VERB_RE ]] && [[ ! "$TARGET" =~ $KB_WRITE_REDIR_RE ]]; then
     exit 0

@@ -150,6 +150,14 @@ echo "T18: 'git add knowledge-base/newdomain/file.md' → ask (regression guard)
 out=$(invoke_bash 'git add knowledge-base/newdomain/file.md')
 [[ "$(decision_of "$out")" == "ask" ]] && pass "ask on Bash git add new domain" || fail "out=$out"
 
+# T18b — genuine new-domain write via `tee` → still ask. `tee` is the only verb
+# in KB_WRITE_VERB_RE not otherwise exercised (T16=mkdir, T17=redirect,
+# T18=git add); this locks it so a future verb-regex narrowing cannot drop `tee`
+# silently behind a green suite.
+echo "T18b: 'echo x | tee knowledge-base/newdomain/file.md' → ask (regression guard)"
+out=$(invoke_bash 'echo x | tee knowledge-base/newdomain/file.md')
+[[ "$(decision_of "$out")" == "ask" ]] && pass "ask on Bash tee into new domain" || fail "out=$out"
+
 # T19 — write into a SANCTIONED domain via mkdir → pass-through.
 echo "T19: 'mkdir knowledge-base/engineering/x' → pass-through (sanctioned)"
 out=$(invoke_bash 'mkdir knowledge-base/engineering/x')
