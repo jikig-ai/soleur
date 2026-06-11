@@ -1,6 +1,5 @@
 import { ROUTABLE_DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { createChildLogger } from "./logger";
-import { extractModelJson } from "./model-json";
 
 const log = createChildLogger("domain");
 
@@ -18,6 +17,19 @@ const DOMAIN_ASSESSMENT: Partial<Record<DomainLeaderId, string>> = {
 };
 
 const MAX_LEADERS_PER_MESSAGE = 3;
+
+// Structured-output schema (#5186): the model returns leader IDs wrapped in an
+// object (structured-output roots are objects, not top-level arrays).
+// `additionalProperties: false` is REQUIRED; the validIds filter + MAX cap stay
+// post-parse (the schema only guarantees a well-formed string array).
+const LEADERS_OUTPUT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["leaders"],
+  properties: {
+    leaders: { type: "array", items: { type: "string" } },
+  },
+} as const;
 
 export interface RouteResult {
   leaders: DomainLeaderId[];
@@ -121,6 +133,14 @@ async function classifyMessage(
     : "";
 
   try {
+    // NOTE: this inline Anthropic Messages request mirrors the shared
+    // `postAnthropicMessage` helper in `inngest/functions/_cron-shared.ts`.
+    // It is kept inline (not routed through the helper) on purpose:
+    // `_cron-shared.ts` statically imports octokit/github-app, and this module
+    // is on the interactive request path and must stay leaf-light. Mirror any
+    // request-contract change (header version, output_config shape, new
+    // required field) in BOTH places — the model-tiers/helper tests cover only
+    // the helper copy.
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -134,7 +154,7 @@ async function classifyMessage(
         messages: [
           {
             role: "user",
-            content: `Classify this user message into the most relevant domain leader(s). Return ONLY a JSON array of leader IDs, ranked by relevance. Return at most ${MAX_LEADERS_PER_MESSAGE} leaders. If no domain clearly matches, return ["cpo"].
+            content: `Classify this user message into the most relevant domain leader(s). Return the leader IDs ranked by relevance, at most ${MAX_LEADERS_PER_MESSAGE} leaders. If no domain clearly matches, return ["cpo"].
 
 Domain leaders:
 ${assessmentList}
@@ -142,9 +162,12 @@ ${contextSection}
 
 User message: "${message}"
 
-Respond with ONLY a JSON array like ["cmo","clo"]. No explanation.`,
+Respond with ONLY a JSON object like {"leaders":["cmo","clo"]}. No explanation.`,
           },
         ],
+        // Structured output (#5186): guarantees a schema-valid {leaders:[...]}
+        // object so the response needs no fence-stripping.
+        output_config: { format: { type: "json_schema", schema: LEADERS_OUTPUT_SCHEMA } },
       }),
     });
 
@@ -156,12 +179,14 @@ Respond with ONLY a JSON array like ["cmo","clo"]. No explanation.`,
       content: Array<{ type: string; text?: string }>;
     };
     const text = data.content[0]?.type === "text" ? (data.content[0].text ?? "") : "";
-    const parsed = JSON.parse(extractModelJson(text)) as string[];
+    // Structured output guarantees schema-valid JSON — parse directly, no fence strip.
+    const parsed = JSON.parse(text) as { leaders?: unknown };
+    const leaders = Array.isArray(parsed.leaders) ? parsed.leaders : [];
 
     // Validate that returned IDs are actual leaders
     const validIds = new Set<string>(ROUTABLE_DOMAIN_LEADERS.map((l) => l.id));
-    const validated = parsed.filter((id): id is DomainLeaderId =>
-      validIds.has(id),
+    const validated = leaders.filter((id): id is DomainLeaderId =>
+      typeof id === "string" && validIds.has(id),
     );
 
     if (validated.length === 0) {

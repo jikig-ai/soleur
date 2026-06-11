@@ -443,17 +443,19 @@ describe("curate step (via handler)", () => {
     expect(String(discordPosts[0].body.content)).not.toContain("Duplicate mention.");
   });
 
-  it("parses fence-wrapped JSON (models wrap output in markdown fences despite ONLY-JSON prompt)", async () => {
-    // Reproduced live against claude-sonnet-4-6 (2026-06-11): the first prod
-    // fire fell back to bare-tag bullets because JSON.parse threw on the
-    // ```json fence. The LLM path must survive a fenced response.
+  it("parses structured-output JSON directly (no fence-stripping after the #5186 migration)", async () => {
+    // #5186: the curate call now sends output_config.format json_schema, so the
+    // model returns un-fenced schema-valid JSON and the digest parses it
+    // directly (extractModelJson was retired). This replaces the prior
+    // #5080 fence-stripping regression test — structured outputs make fenced
+    // responses impossible, so a plain object is the canonical happy path.
     fetchBehavior.releases = [mkRelease({ published_at: IN_WINDOW })];
     fetchBehavior.anthropic = async () =>
       new Response(
         JSON.stringify({
           content: [
             {
-              text: '```json\n{"highlights":[{"tag":"v3.154.0","title":"t","why":"Fence-wrapped but valid."}]}\n```',
+              text: '{"highlights":[{"tag":"v3.154.0","title":"t","why":"Schema-valid JSON."}]}',
             },
           ],
           stop_reason: "end_turn",
@@ -463,7 +465,7 @@ describe("curate step (via handler)", () => {
     const { result } = await runHandler();
     expect(result.ok).toBe(true);
     expect(result.fallback).toBe(false);
-    expect(String(discordPosts[0].body.content)).toContain("Fence-wrapped but valid.");
+    expect(String(discordPosts[0].body.content)).toContain("Schema-valid JSON.");
   });
 
   it("LLM failure -> deterministic fallback still posts; heartbeat ok (AC7 first half)", async () => {
