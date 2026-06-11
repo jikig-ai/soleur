@@ -19,14 +19,14 @@ Derived from the finalized (post 5-agent-review) plan. Phase order is load-beari
 ## Phase 1 — In-loop PUT in `verify_inngest_health` (RED→GREEN)
 
 - [ ] 1.1 (RED) Add failing tests to `ci-deploy.test.sh`: in-loop wiring (PUT inside cron loop, before `/v1/functions` curl); PUT-fail tolerance (`MOCK_CURL_INNGEST_PUT_FAIL`); restart-fail-skip (`MOCK_SYSTEMCTL_FAIL` → PUT never invoked).
-- [ ] 1.2 (GREEN) Add the in-loop PUT as the first statement inside the cron-plan loop in `apps/web-platform/infra/ci-deploy.sh` (after `:245` `for`, before the `/v1/functions` curl at `:246`): `curl -sf --max-time <N> -X PUT http://127.0.0.1:3000/api/inngest || true` with the ~5-line rationale comment. `<N>` chosen in Phase 2.4 (AC8b).
+- [ ] 1.2 (GREEN) Add the in-loop PUT as the first statement inside the cron-plan loop in `apps/web-platform/infra/ci-deploy.sh` (after `:245` `for`, before the `/v1/functions` curl at `:246`): `curl -sf --max-time 10 -X PUT http://127.0.0.1:3000/api/inngest || true` with the ~5-line rationale comment. `--max-time 10` is fixed (NOT 5 — avoids the `VERIFY_FN_MAXTIME` pin collision, AC8b).
 
 ## Phase 2 — Test harness + budget correctness (RED→GREEN)
 
 - [ ] 2.1 Add explicit `*":3000/api/inngest"*` mock case to the `curl` mock in `ci-deploy.test.sh` (before `esac`), honoring `MOCK_CURL_INNGEST_PUT_FAIL`.
 - [ ] 2.2 Add PUT-count `==1` assertion, in-loop wiring assertion, restart-fail-skip assertion, coverage-honesty comment (mock proves wiring + tolerance, not efficacy).
-- [ ] 2.3 **(BLOCKER)** Update the #5145 drift-guard formula (`ci-deploy.test.sh:2139`) to count the PUT `--max-time` by shape on the cron-loop term: `DG_RIGHT = DG_HEALTH×(DG_INTERVAL+5) + DG_CRON×(DG_INTERVAL+5+DG_PUT_MAXTIME) + DG_STOP + 60`; update the comment block (`:2086–2094`).
-- [ ] 2.4 **(BLOCKER)** Widen the client window in `.github/workflows/restart-inngest-server.yml:74–75`: `MAX_POLLS=240` (×5 = 1200s > server worst case ~1040s) and raise `timeout-minutes` to ≥25; update the `:5` header contract comment. (AC8b: evaluate a shorter PUT `--max-time` to reduce the required widening; document the chosen value.)
+- [ ] 2.3 **(BLOCKER)** Update the #5145 drift-guard formula (`ci-deploy.test.sh:2139`) to count the PUT `--max-time` by shape on the cron-loop term: `DG_RIGHT = DG_HEALTH×(DG_INTERVAL+5) + DG_CRON×(DG_INTERVAL+5+DG_PUT_MAXTIME) + DG_STOP + 60`. Extract `DG_PUT_MAXTIME` by shape (mirror `:2102–2108`); ADD the `DG_PUT_MAXTIME_COUNT` exactly-one check, integer-validate entry, count-check entry, and widen the FAIL message (`:2150`) — full 5-rule operand-extraction discipline. Update the comment block (`:2086–2094`).
+- [ ] 2.4 **(BLOCKER)** Widen the client window in `.github/workflows/restart-inngest-server.yml:74–75`: `MAX_POLLS=240` (×5 = 1200s > server worst case ~1040s); update the inline arithmetic comment (`:69–74`) + file-level contract comment (`:5–7`) per the c2146e7a5/#5146 shape. ADD `timeout-minutes: 30` under `jobs.restart:` (none exists today; hygiene, not a correctness requirement). PUT stays `--max-time 10` (AC8b — do not lower without adding a `-X PUT` exclusion to the `:2068` pin grep).
 - [ ] 2.5 Run `bash apps/web-platform/infra/ci-deploy.test.sh` — all green; confirm `VERIFY_FN_MAXTIME==2`, the drift guard PASSes WITH the PUT counted (`1200 > ~1040`), and the 5 existing restart-arm cases still pass.
 
 ## Phase 3 — Runbook + reason-taxonomy doc revisions
