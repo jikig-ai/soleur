@@ -275,6 +275,18 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
     article: "15",
   },
 
+  // feat-operator-inbox-delegation (migration 102) — operator email-triage
+  // ledger. ownerField = user_id (direct, nullable for Art. 17 anonymise).
+  // Art. 15+20: the rows describe emails received in the operator's
+  // delegated ops@ inbox — sender/subject/summary/message_id are
+  // data-subject-linkable metadata held under legitimate interest
+  // (Art. 6(1)(f); LIA per Phase 7). The body is never persisted
+  // (structural parse-and-discard), so the export covers all stored
+  // personal data for the class. WORM trigger +
+  // anonymise_email_triage_items RPC handle Art. 17 erasure separately
+  // (user_id FK is ON DELETE RESTRICT; anonymise runs before auth-delete).
+  email_triage_items: { ownerField: "user_id", article: "15+20" },
+
 };
 
 /**

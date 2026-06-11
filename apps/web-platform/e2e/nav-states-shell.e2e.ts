@@ -221,6 +221,18 @@ async function setupNavMocks(page: Page): Promise<void> {
     }),
   );
 
+  // The dashboard inbox fetches email-triage items on mount (#5103). Unmocked,
+  // the request reaches the real dev server whose server-side Supabase client
+  // points at the fake e2e URL — a hanging request that can wedge a throttled
+  // dev server and stall every other fetch on the page.
+  await page.route("**/api/inbox/emails*", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ items: [] }),
+    }),
+  );
+
   // The band's identity children (Kieran P0-1) — without these both render null.
   await page.route("**/api/workspace/active-repo", (route) =>
     route.fulfill({

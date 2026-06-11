@@ -132,3 +132,28 @@ describe("scrubSentryEvent — userId / user_id rename to userIdHash", () => {
     expect(result.data).toEqual({ userIdHash: expectedHashFor("bc") });
   });
 });
+
+describe("scrubSentryEvent — inbound-email attachment metadata (S1)", () => {
+  test("`attachments` and `filename` keys are redacted (middleware ships event_data via setExtra)", () => {
+    // Attachment filenames are third-party-controlled PII (e.g.
+    // "DSAR_jane_doe.pdf") riding along in ctx.event.data — both the array
+    // key and the per-item key must scrub.
+    const event = {
+      extra: {
+        event_data: {
+          attachments: [
+            { filename: "DSAR_jane_doe.pdf", contentType: "application/pdf" },
+          ],
+        },
+        filename: "court_summons_acme.pdf",
+      },
+    };
+    const result = scrubSentryEvent(event) as {
+      extra: { event_data: Record<string, unknown>; filename: unknown };
+    };
+    expect(result.extra.event_data.attachments).toBe("[Redacted]");
+    expect(result.extra.filename).toBe("[Redacted]");
+    expect(JSON.stringify(result)).not.toContain("DSAR_jane_doe");
+    expect(JSON.stringify(result)).not.toContain("court_summons_acme");
+  });
+});

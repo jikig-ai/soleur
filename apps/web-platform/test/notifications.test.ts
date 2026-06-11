@@ -312,4 +312,129 @@ describe("notifications", () => {
       );
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // email_triage variant (feat-operator-inbox-delegation Phase 4).
+  // review_gate cases above are unchanged — behavior is byte-identical.
+  // ---------------------------------------------------------------------------
+  describe("email_triage variant", () => {
+    test("push: data carries emailId + /dashboard/inbox/email/<uuid> deep link", async () => {
+      const subscriptions = [
+        { id: "sub-1", endpoint: "https://push.example.com/1", p256dh: "key1", auth: "auth1" },
+      ];
+      mockSendNotification.mockResolvedValue({});
+      mockFrom.mockReturnValue({
+        update: () => ({ in: () => ({ error: null }) }),
+      });
+
+      await sendPushNotifications(subscriptions, {
+        type: "email_triage",
+        emailId: "item-uuid-9",
+        title: "Vendor invoice",
+        isStatutory: false,
+      });
+
+      expect(mockSendNotification).toHaveBeenCalledTimes(1);
+      const body = JSON.parse(mockSendNotification.mock.calls[0][1] as string);
+      expect(body.data.emailId).toBe("item-uuid-9");
+      expect(body.data.url).toBe(
+        "https://test.example/dashboard/inbox/email/item-uuid-9",
+      );
+      expect(body.title).toBe("Vendor invoice");
+    });
+
+    test("push: title is display-sanitized (bidi/control strip + cap)", async () => {
+      const subscriptions = [
+        { id: "sub-1", endpoint: "https://push.example.com/1", p256dh: "key1", auth: "auth1" },
+      ];
+      mockSendNotification.mockResolvedValue({});
+      mockFrom.mockReturnValue({
+        update: () => ({ in: () => ({ error: null }) }),
+      });
+
+      await sendPushNotifications(subscriptions, {
+        type: "email_triage",
+        emailId: "item-uuid-10",
+        title: "Invoice\u202Eevil\r\n" + "x".repeat(300),
+        isStatutory: true,
+      });
+
+      const body = JSON.parse(mockSendNotification.mock.calls[0][1] as string);
+      expect(body.title).not.toContain("\u202E");
+      expect(body.title).not.toContain("\r");
+      expect(body.title.length).toBeLessThanOrEqual(200);
+    });
+
+    test("email: deep link uses the DB uuid; static subject header", async () => {
+      mockResendSend.mockResolvedValue({ data: { id: "msg-1" }, error: null });
+
+      await sendEmailNotification("test@example.com", {
+        type: "email_triage",
+        emailId: "item-uuid-1",
+        title: "Vendor invoice",
+        isStatutory: false,
+      });
+
+      const call = mockResendSend.mock.calls[0][0];
+      expect(call.html).toContain(
+        "https://test.example/dashboard/inbox/email/item-uuid-1",
+      );
+      // Static subject — third-party content never reaches the header.
+      expect(call.subject).not.toContain("Vendor invoice");
+    });
+
+    test("email: title passes escapeHtml at the HTML sink", async () => {
+      mockResendSend.mockResolvedValue({ data: { id: "msg-1" }, error: null });
+
+      await sendEmailNotification("test@example.com", {
+        type: "email_triage",
+        emailId: "item-uuid-2",
+        title: '<script>alert("x")</script> & more',
+        isStatutory: true,
+      });
+
+      const call = mockResendSend.mock.calls[0][0];
+      expect(call.html).not.toContain("<script>");
+      expect(call.html).toContain("&lt;script&gt;");
+      expect(call.html).toContain("&amp; more");
+    });
+
+    test("statutory notify failure mirrors to Sentry.captureException", async () => {
+      mockFrom.mockImplementation(() => {
+        throw new Error("db down");
+      });
+
+      await notifyOfflineUser("user-1", {
+        type: "email_triage",
+        emailId: "item-uuid-3",
+        title: "Subject access request",
+        isStatutory: true,
+      });
+
+      expect(mockCaptureException).toHaveBeenCalledWith(
+        expect.any(Error),
+        expect.objectContaining({
+          tags: expect.objectContaining({
+            feature: "email-triage",
+            op: "statutory-notify-failed",
+          }),
+        }),
+      );
+    });
+
+    test("NON-statutory notify failure keeps existing behavior (no Sentry mirror)", async () => {
+      mockFrom.mockImplementation(() => {
+        throw new Error("db down");
+      });
+
+      await notifyOfflineUser("user-1", {
+        type: "email_triage",
+        emailId: "item-uuid-4",
+        title: "Newsletter",
+        isStatutory: false,
+      });
+
+      expect(mockCaptureException).not.toHaveBeenCalled();
+    });
+  });
 });
