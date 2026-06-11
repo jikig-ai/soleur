@@ -410,6 +410,29 @@ describe("curate step (via handler)", () => {
     expect(String(discordPosts[0].body.content)).not.toContain("Duplicate mention.");
   });
 
+  it("parses fence-wrapped JSON (models wrap output in markdown fences despite ONLY-JSON prompt)", async () => {
+    // Reproduced live against claude-sonnet-4-6 (2026-06-11): the first prod
+    // fire fell back to bare-tag bullets because JSON.parse threw on the
+    // ```json fence. The LLM path must survive a fenced response.
+    fetchBehavior.releases = [mkRelease({ published_at: IN_WINDOW })];
+    fetchBehavior.anthropic = async () =>
+      new Response(
+        JSON.stringify({
+          content: [
+            {
+              text: '```json\n{"highlights":[{"tag":"v3.154.0","title":"t","why":"Fence-wrapped but valid."}]}\n```',
+            },
+          ],
+          stop_reason: "end_turn",
+        }),
+        { status: 200 },
+      );
+    const { result } = await runHandler();
+    expect(result.ok).toBe(true);
+    expect(result.fallback).toBe(false);
+    expect(String(discordPosts[0].body.content)).toContain("Fence-wrapped but valid.");
+  });
+
   it("LLM failure -> deterministic fallback still posts; heartbeat ok (AC7 first half)", async () => {
     fetchBehavior.releases = [mkRelease({ published_at: IN_WINDOW })];
     fetchBehavior.anthropic = async () => new Response("upstream error", { status: 500 });

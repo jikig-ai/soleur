@@ -35,6 +35,7 @@ import { reportSilentFallback } from "@/server/observability";
 import {
   REPO_OWNER,
   REPO_NAME,
+  extractModelJson,
   redactToken,
   buildAuthenticatedCloneUrl,
   resolveCronWorkspaceRoot,
@@ -427,7 +428,7 @@ export async function cronCompoundPromoteHandler({
 
       let parsed: unknown;
       try {
-        parsed = JSON.parse(text);
+        parsed = JSON.parse(extractModelJson(text));
       } catch {
         reportSilentFallback(new Error("Malformed Anthropic JSON"), {
           feature: "cron-compound-promote",

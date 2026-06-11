@@ -28,6 +28,7 @@ import {
   REPO_NAME,
   mintInstallationToken,
   postDiscordWebhook,
+  extractModelJson,
   postSentryHeartbeat,
   redactToken,
   type HandlerArgs,
@@ -300,7 +301,7 @@ async function curateViaAnthropic(releases: SanitizedRelease[]): Promise<Highlig
   const text = data.content?.[0]?.text;
   if (!text) throw new Error("empty anthropic response");
 
-  const parsed = JSON.parse(text) as { highlights?: unknown };
+  const parsed = JSON.parse(extractModelJson(text)) as { highlights?: unknown };
   if (!parsed || !Array.isArray(parsed.highlights)) {
     throw new Error("anthropic response shape invalid");
   }
