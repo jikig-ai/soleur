@@ -36,6 +36,10 @@ FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.filePath // ""' 2>/dev/null) || e
 [[ -z "$FILE_PATH" ]] && exit 0
 # File must exist on disk to be inspected.
 [[ -f "$FILE_PATH" ]] || exit 0
+# Refuse symlinks: both the read (cat) and the restore write would follow the
+# link, letting a tracked-by-path .pen symlink redirect the write outside the
+# repo. The recovery target must be a regular file.
+[[ -L "$FILE_PATH" ]] && exit 0
 
 # Resolve to absolute path for git checks (mirror pencil-open-guard.sh).
 if [[ ! "$FILE_PATH" = /* ]]; then
@@ -54,15 +58,20 @@ REL_PATH=$(realpath --relative-to="$REPO_ROOT" "$FILE_PATH" 2>/dev/null || echo 
 # at open time; this is defense-in-depth). Fail-open if untracked.
 git -C "$REPO_ROOT" ls-files --error-unmatch "$REL_PATH" >/dev/null 2>&1 || exit 0
 
-# _is_collapsed <content> — returns 0 (true) ONLY for the unambiguous empty
-# -document shape: parses as a JSON object whose .children is [] or absent.
-# Any parse failure / non-object / non-empty children → 1 (treat as healthy).
+# _is_collapsed <content> — returns 0 (true) ONLY for an unambiguous empty
+# document. Conservative by design: restore must never clobber an unfamiliar
+# but valid shape.
+#   - empty / whitespace-only file → collapsed (a 0-byte .pen is never valid).
+#   - the documented shape: a JSON object with a `children` key that is a
+#     zero-length array ({"version":"...","children":[]}).
+# Anything else — parse failure, non-object, a different top-level container
+# (no `children` key), or a non-empty `children` — is treated as healthy.
 _is_collapsed() {
-  local content="$1" n
-  n=$(printf '%s' "$content" | jq -e '
-        if type == "object" then ((.children // []) | length) else 999 end
-      ' 2>/dev/null) || return 1
-  [[ "$n" == "0" ]]
+  local content="$1"
+  [[ -z "${content//[[:space:]]/}" ]] && return 0
+  printf '%s' "$content" | jq -e \
+    'type == "object" and has("children") and (.children | type == "array") and (.children | length == 0)' \
+    >/dev/null 2>&1
 }
 
 # On-disk content must be collapsed; otherwise healthy → no-op (AC3).
@@ -76,9 +85,15 @@ if _is_collapsed "$HEAD_CONTENT"; then
   exit 0
 fi
 
-# Restore from HEAD (byte-identical to the committed blob). Guard the write so a
-# failure falls through to no-op rather than leaving a truncated file.
-if ! git -C "$REPO_ROOT" show "HEAD:$REL_PATH" > "$FILE_PATH" 2>/dev/null; then
+# Restore from HEAD (byte-identical to the committed blob). Write to a temp file
+# in the same directory and atomically `mv` into place ONLY on git-show success —
+# a bare `> "$FILE_PATH"` truncates the target before git runs, so a failed show
+# would leave a 0-byte file (strictly worse than the collapsed state).
+tmp_restore=$(mktemp "$(dirname "$FILE_PATH")/.pen-restore.XXXXXX" 2>/dev/null) || exit 0
+if git -C "$REPO_ROOT" show "HEAD:$REL_PATH" > "$tmp_restore" 2>/dev/null; then
+  mv -f "$tmp_restore" "$FILE_PATH" 2>/dev/null || { rm -f "$tmp_restore" 2>/dev/null; exit 0; }
+else
+  rm -f "$tmp_restore" 2>/dev/null
   exit 0
 fi
 

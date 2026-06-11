@@ -65,6 +65,22 @@ assert "external repo, no milestone allows" "<none>" \
 assert "external repo (=form), no milestone allows" "<none>" \
   'gh issue create --repo=highagency/pencil-desktop-releases --title "x"'
 
+# QUOTED our repo without --milestone → deny (quote-aware: must not be read as external).
+assert "quoted jikig-ai repo, no milestone denies" "deny" \
+  'gh issue create --repo "jikig-ai/soleur" --title x'
+
+# Embedded --repo string inside a quoted --body, no real --repo → deny (no bypass).
+assert "embedded --repo in body, no milestone denies" "deny" \
+  'gh issue create --title real --body "see --repo evil/x for context"'
+
+# -R short form targeting OUR repo while an embedded external string sits in title → deny.
+assert "short -R our repo wins over embedded external denies" "deny" \
+  'gh issue create --title "--repo evil/x" -R jikig-ai/soleur'
+
+# Genuine external via short -R form, no milestone → allow.
+assert "external via -R short form allows" "<none>" \
+  'gh issue create -R highagency/pencil-desktop-releases --title x'
+
 echo
 echo "Total: $TOTAL  Pass: $PASS  Fail: $FAIL"
 [[ $FAIL -eq 0 ]] || exit 1

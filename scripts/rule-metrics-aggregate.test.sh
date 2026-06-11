@@ -399,6 +399,26 @@ t11_archived_sentinel_counted() {
   rm -rf "$root"
 }
 
+# --- T12: hook-canonical Pencil rule_ids are NOT flagged as orphans -------
+# Per cq-agents-md-tier-gate, the Pencil-domain rule bodies live in their hook
+# headers + pencil-setup SKILL, NOT in AGENTS.md, so they never appear in
+# $known_ids. The orphan filter must exempt both the retired open-guard id and
+# the active collapse-guard id (#4859), or the first real .pen-open / collapse
+# event would fail the weekly cron.
+t12_pencil_hook_ids_not_orphan() {
+  local root; root=$(make_fixture_repo)
+  write_event "$root" cq-before-calling-mcp-pencil-open-document deny "2026-06-11T10:00:00Z"
+  write_event "$root" cq-pencil-collapse-auto-recover warn "2026-06-11T11:00:00Z"
+
+  local exit_code=0
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  assert_eq "T12 pencil hook ids → exit 0"     "0" "$exit_code"
+  local metrics="$root/knowledge-base/project/rule-metrics.json"
+  assert_eq "T12 pencil hook ids not in orphans" "0" \
+    "$(jq -r '.summary.orphan_rule_ids | length' < "$metrics")"
+  rm -rf "$root"
+}
+
 t1_mixed_events
 t2_unused_predicate_uses_fire_count
 t3_orphan_rule_id_exits_nonzero
@@ -411,6 +431,7 @@ t8_te_prefix_arbitrary_id
 t9_archive_spanning_input
 t10_sentinels_excluded_from_data_and_counted_in_summary
 t11_archived_sentinel_counted
+t12_pencil_hook_ids_not_orphan
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"

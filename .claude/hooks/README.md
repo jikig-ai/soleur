@@ -146,7 +146,9 @@ helper itself errors.
 | `pencil-open-guard.sh` | 1 | `cq-before-calling-mcp-pencil-open-document` |
 | `worktree-write-guard.sh` | 1 | `guardrails-worktree-write-guard` |
 
-### Telemetry-only hooks (PostToolUse, no deny semantics)
+### PostToolUse hooks (no deny semantics)
+
+PostToolUse runs after the tool's write, so these cannot block. Most are telemetry-only; `pencil-collapse-guard.sh` additionally performs a file restore and injects `additionalContext` into the model.
 
 | Hook | Sink | Purpose |
 |---|---|---|

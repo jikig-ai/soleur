@@ -160,10 +160,70 @@ test_fail_open() {
   fi
 }
 
+# --- AC2b: 0-byte tracked .pen (raw truncation) + non-empty HEAD → restored ---
+test_restore_on_empty_file() {
+  TOTAL=$((TOTAL + 1))
+  local repo file rel
+  repo="$(mk_repo)"
+  file="$repo/empty.pen"; rel="empty.pen"
+  printf '%s' "$NONEMPTY" > "$file"
+  git -C "$repo" add "$rel"; git -C "$repo" commit -q -m add
+  : > "$file"   # truncate to 0 bytes
+  mk_payload "$file" | INCIDENTS_REPO_ROOT="$repo" bash "$HOOK" >/dev/null 2>&1
+  if [[ "$(cat "$file")" == "$(git -C "$repo" show "HEAD:$rel")" ]]; then
+    pass "AC2b restore on 0-byte truncation"
+  else
+    fail "AC2b restore on 0-byte truncation" "disk=$(cat "$file")"
+  fi
+  rm -rf "$repo"
+}
+
+# --- AC3b: unfamiliar valid shape (different top-level container) → NOT clobbered ---
+test_noop_on_unfamiliar_shape() {
+  TOTAL=$((TOTAL + 1))
+  local repo file rel before
+  repo="$(mk_repo)"
+  file="$repo/variant.pen"; rel="variant.pen"
+  printf '%s' "$NONEMPTY" > "$file"
+  git -C "$repo" add "$rel"; git -C "$repo" commit -q -m add
+  # A future/variant schema whose nodes live under a different key — valid, not collapsed.
+  before='{"version":"3.0","document":{"children":[{"id":"x"}]}}'
+  printf '%s' "$before" > "$file"
+  mk_payload "$file" | INCIDENTS_REPO_ROOT="$repo" bash "$HOOK" >/dev/null 2>&1
+  if [[ "$(cat "$file")" == "$before" ]]; then
+    pass "AC3b no-clobber on unfamiliar valid shape (no top-level children)"
+  else
+    fail "AC3b no-clobber on unfamiliar valid shape" "disk=$(cat "$file")"
+  fi
+  rm -rf "$repo"
+}
+
+# --- AC5b: symlink at filePath → no write (no symlink-follow) ---
+test_noop_on_symlink() {
+  TOTAL=$((TOTAL + 1))
+  local repo victim link rel
+  repo="$(mk_repo)"
+  victim="$(mktemp)"; printf '%s' "$COLLAPSED" > "$victim"   # collapsed-shaped victim
+  link="$repo/link.pen"; rel="link.pen"
+  ln -s "$victim" "$link"
+  git -C "$repo" add "$rel"; git -C "$repo" commit -q -m "add symlink pen"
+  mk_payload "$link" | INCIDENTS_REPO_ROOT="$repo" bash "$HOOK" >/dev/null 2>&1
+  # Victim (symlink target) must be untouched — still the collapsed content.
+  if [[ "$(cat "$victim")" == "$COLLAPSED" ]]; then
+    pass "AC5b no symlink-follow write"
+  else
+    fail "AC5b no symlink-follow write" "victim=$(cat "$victim")"
+  fi
+  rm -rf "$repo" "$victim"
+}
+
 test_restore_on_collapse
+test_restore_on_empty_file
 test_noop_when_healthy
+test_noop_on_unfamiliar_shape
 test_noop_when_head_also_empty
 test_noop_when_untracked
+test_noop_on_symlink
 test_fail_open
 
 echo

@@ -124,13 +124,30 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create'; then
   # OUR issues; external/vendor repos (e.g. upstream bug reports) have their own
   # milestone sets and forcing --milestone would fail against them.
   ext_repo=0
-  # `|| repo_arg=""` keeps the no-match case from aborting under `set -e`
-  # (grep exits 1 when there is no --repo flag → empty, defaults to our repo).
-  repo_arg=$(echo "$COMMAND" | grep -oE -- '--repo[= ]+[^ ]+' | head -1 | sed -E 's/--repo[= ]+//') || repo_arg=""
-  case "$repo_arg" in
-    jikig-ai/*|"") ext_repo=0 ;;   # our repo, or no --repo (defaults to our repo)
-    */*)           ext_repo=1 ;;   # explicit external owner/name
-  esac
+  # Quote-aware tokenization: `xargs -n1` honors shell quoting, so a `--repo`
+  # substring embedded in a quoted --title/--body value is NOT mistaken for a
+  # real flag (it stays inside one token), and a quoted `--repo "jikig-ai/soleur"`
+  # is recognized correctly. Only a standalone --repo/-R/--repo=/-R= token counts.
+  # Fail toward GATING: if xargs errors (unbalanced quotes → empty tokens) or no
+  # external target is found, the milestone gate stays on. If our own repo appears
+  # in ANY --repo/-R flag, the gate stays on regardless of other tokens.
+  _repo_toks=(); _our_repo=0; repo_arg=""
+  mapfile -t _repo_toks < <(printf '%s\n' "$COMMAND" | xargs -n1 2>/dev/null) || true
+  _ri=0
+  while (( _ri < ${#_repo_toks[@]} )); do
+    _rt="${_repo_toks[$_ri]}"; _rv=""
+    case "$_rt" in
+      --repo|-R) _rv="${_repo_toks[$((_ri + 1))]:-}" ;;
+      --repo=*)  _rv="${_rt#--repo=}" ;;
+      -R=*)      _rv="${_rt#-R=}" ;;
+    esac
+    case "$_rv" in
+      jikig-ai/*) _our_repo=1 ;;
+      */*)        [[ "$_our_repo" == 0 ]] && repo_arg="$_rv" ;;
+    esac
+    _ri=$((_ri + 1))
+  done
+  [[ "$_our_repo" == 0 && -n "$repo_arg" ]] && ext_repo=1
   if [[ "$ext_repo" == "0" ]] && ! echo "$COMMAND" | grep -qF -- '--milestone'; then
     emit_incident "guardrails-require-milestone" "deny" "gh issue create must include --milestone" "$COMMAND"
     jq -n '{
