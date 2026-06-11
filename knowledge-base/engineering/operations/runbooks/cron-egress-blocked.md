@@ -34,6 +34,14 @@ likelihood order:
    failing fetch's hostname tells you which allowlist line is missing.
 4. **Recurrence check:** one event = likely rotation-window; recurring with
    the same DST = allowlist gap or exfil.
+5. **Upstream 4xx with status-only logs ≠ egress:** if Sentry shows the
+   vendor RESPONDED (e.g. `Buttondown subscribe failed: 400`), packets are
+   flowing — the firewall is not the cause. Replay the byte-identical
+   request from a workstation with the real credential
+   (`doppler secrets get <KEY> -p soleur -c prd --plain`) to surface the
+   vendor's error body that status-only logging deliberately drops. See
+   `knowledge-base/project/learnings/integration-issues/2026-06-11-buttondown-subscriber-firewall-blocks-api-signups.md`
+   (vendor-side `subscriber_blocked` masquerading as an egress failure).
 
 ## Remediation (allowlist gap)
 
