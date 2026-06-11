@@ -156,5 +156,6 @@ Every action item and follow-up so this incident cannot recur (save logs, add te
 
 | Issue | Action | Status |
 |---|---|---|
-| #5159 | Fire the loopback `PUT /api/inngest` inside `verify_inngest_health`'s cron-plan loop so a restart self-registers; widen `restart-inngest-server.yml` client window and count the PUT in the #5145 drift guard. Fixed in PR #5160. | open (closes post-merge after `terraform apply` lands + AC15 live re-dispatch proves `reason=success`) |
+| #5159 | Fire the loopback `PUT /api/inngest` inside `verify_inngest_health`'s cron-plan loop so a restart self-registers; widen `restart-inngest-server.yml` client window and count the PUT in the #5145 drift guard. PR #5160 merged + applied, but **AC15 failed twice live** — the loopback PUT did not re-plan crons (a manual public PUT did), so the fix is incomplete and the issue stays open. | open (AC15 unproven; see #5160 AC15-failure comment) |
+| #5159 | **Diagnostic follow-up (PR #5178):** the silent `curl -sf … \|\| true` discarded the PUT's HTTP code, making the AC15 failure undiagnosable. Capture the code + surface it as `services.inngest_register_http` in `/hooks/deploy-status` (no-SSH) so the next AC15 run reveals 000/4xx/5xx/2xx and the real target/headers fix follows from data. | open (PR #5178) |
 | #5164 | Evaluate adding the same `PUT /api/inngest` to `inngest-bootstrap.sh` post-restart (and CI-wire `inngest.test.sh`) — deferred; re-evaluate only if a future incident shows the deploy-inngest-arm PUT racing the bootstrap restart. | open |
