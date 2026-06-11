@@ -9,6 +9,29 @@ requires_cpo_signoff: false
 
 # chore(brainstorm): Auto-approve Phase 0.1 user-impact gate — always brand-critical, no prompt 🛠️
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-11
+**Sections enhanced:** verification (Phase 3) tightened; deepen halt gates 4.6–4.9 cleared.
+
+### Deepen-plan gate results
+- **4.6 User-Brand Impact halt:** PASS — section present, threshold `none` with a non-empty scope-out reason (no sensitive path touched).
+- **4.7 Observability gate:** SKIP (pure skill-prose; only `.md` files under `plugins/soleur/skills/`, no `apps/*/server|src|infra` or `plugins/*/scripts/` code-class file).
+- **4.8 PAT-shaped variable halt:** PASS — no PAT-shaped variables/literals.
+- **4.9 UI-wireframe halt:** SKIP — no UI-surface file in Files lists.
+
+### Key validations (verify-the-negative pass, all CONFIRMED)
+1. `brainstorm-domain-config.md` triad + lane logic is **already correct under always-true** — the `## User-Brand-Critical Tag Processing` triad fires unconditionally and `## Lane Inference` forces `cross-domain` with the fail-closed-expand clause an explicit no-op (lines 18, 44). No structural edit needed.
+2. `feat-agents-md-change-class-loader/spec.md:7,195` and `feat-agents-md-shrink/spec.md` only annotate their **own** feature's threshold — they do NOT describe the Phase 0.1 mechanism. Confirmed must-NOT-edit.
+3. `plugins/soleur/test/components.test.ts` asserts only the `description:` frontmatter field — Phase 0.1 body-prose edit does not trigger it.
+4. The line-103 telemetry comment ("fired vs. asked … signal") becomes inaccurate once the flag is always-true — confirmed real touch point (update the comment, KEEP the emit).
+
+### In-file precedent (precedent-diff pass)
+The plan's "skip the prompt → set the value unconditionally → echo the decision" pattern matches the **existing** Phase 0.4 pipeline/headless lane auto-set (`brainstorm/SKILL.md:119,127`). The change applies an established in-file pattern to a sibling gate; it is not novel.
+
+### Deepen adjustment applied
+- Phase 3 step 1 and the matching AC now also grep for answer-parse remnants (`operator's answer` / `Parse the answer` / `Ask the framing question`) so a forgotten Step 4 reword is caught (code-simplicity-reviewer P2).
+
 ## Overview
 
 The brainstorm skill's **Phase 0.1: User-Impact Framing** currently presents an `AskUserQuestion` prompt on every brainstorm, parses the operator's free-text answer for trigger keywords, and conditionally sets `USER_BRAND_CRITICAL=true`/`false`. Operator feedback from the **#5085 brainstorm** (captured in issue #5175 on 2026-06-11): they **always answer "all of them"**, so the prompt is pure friction and never changes the posture.
@@ -95,7 +118,7 @@ Replace the current Step 1 (ask) + Step 2 (keyword-parse branch) + the `if no ke
 
 There is no automated test for Phase 0.1 prose. Verify by reading:
 
-1. **Grep for dangling `false` references:** `grep -n "USER_BRAND_CRITICAL=false\|no keyword matches\|If any keyword" plugins/soleur/skills/brainstorm/SKILL.md` → MUST return zero hits after the edit (the conditional branch is gone).
+1. **Grep for dangling conditional/answer-parse remnants:** `grep -n "USER_BRAND_CRITICAL=false\|no keyword matches\|If any keyword\|operator's answer\|Parse the answer\|Ask the framing question" plugins/soleur/skills/brainstorm/SKILL.md` → MUST return zero hits after the edit (the conditional branch AND the answer-parse prose are gone; the Step 4 "reflecting the operator's answer" phrase must have been reworded per Phase 1).
 2. **Grep the telemetry emit survived:** `grep -n "emit_incident hr-weigh-every-decision-against-target-user-impact applied" plugins/soleur/skills/brainstorm/SKILL.md` → MUST return exactly 1 hit (Step 3 kept).
 3. **Grep the persist contract survived:** `grep -n "## User-Brand Impact" plugins/soleur/skills/brainstorm/SKILL.md` → Step 2 synthesis + Step 4 persist must both reference it.
 4. **Read Phase 0.1 + Phase 0.4 (lines ~63–127) top to bottom** and confirm: no "ask the question" prose remains; the unconditional set is unambiguous; the lane skip rationale matches reality; the synthesized artifact is described as "the feature's named surface" (dynamic), not a static literal.
@@ -110,6 +133,7 @@ There is no automated test for Phase 0.1 prose. Verify by reading:
 - [ ] `grep -c "emit_incident hr-weigh-every-decision-against-target-user-impact applied" plugins/soleur/skills/brainstorm/SKILL.md` returns `1` (telemetry emit KEPT, issue req. 4).
 - [ ] Phase 0.1 synthesizes a `## User-Brand Impact` block with artifact = the feature's named surface (described as dynamic, derived from the feature description — NOT a static literal), vector = generic, threshold = `single-user incident`.
 - [ ] Phase 0.1 sets `USER_BRAND_CRITICAL=true` unconditionally (no keyword parse, no branch).
+- [ ] No answer-parse remnants survive: `grep -n "operator's answer\|Parse the answer\|Ask the framing question" plugins/soleur/skills/brainstorm/SKILL.md` returns zero (Step 4 reworded).
 - [ ] The line-103 telemetry comment is corrected so it no longer claims a "fired vs asked" distinction that no longer exists; the accepted constant-ratio tradeoff is stated.
 - [ ] Phase 0.4 line-113 skip rationale reworded so it no longer says "the framing question was already answered"; lane auto-set to `cross-domain` confirmed as existing behavior.
 - [ ] No edit was made to `knowledge-base/project/specs/feat-agents-md-change-class-loader/spec.md` or `feat-agents-md-shrink/spec.md` (verify via `git diff --name-only` — these paths absent).
