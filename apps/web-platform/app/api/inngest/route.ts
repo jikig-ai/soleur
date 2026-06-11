@@ -83,6 +83,23 @@ if (!IS_BUILD_PHASE && !SIGNING_KEY) {
   throw new Error("INNGEST_SIGNING_KEY missing at /api/inngest load");
 }
 
+// #5159: pin the serve URL the SDK reports to the self-hosted inngest-server at
+// registration. Without this, the SDK infers the host from the inbound request's
+// Host/proto — so the loopback re-register PUT (http://127.0.0.1:3000, fired by
+// ci-deploy.sh's verify_inngest_health after an inngest-server restart) registers
+// `http://127.0.0.1:3000/api/inngest`, which the server accepts (HTTP 200) but
+// NEVER plans crons for. Only the public-host registration re-plans crons —
+// confirmed live on 2026-06-11: a manual `PUT https://app.soleur.ai/api/inngest`
+// returns `modified:true` and crons fire, while the loopback PUT returns 200 with
+// `inngest_crons:{}` (surfaced by #5178's deploy-status diagnostic). Pinning
+// serveHost makes EVERY registration path — container boot, the server's
+// --poll-interval sync, AND the in-loop loopback PUT — report the canonical public
+// URL, so a standalone inngest restart self-recovers (the #5160 design intent that
+// the loopback PUT alone could not achieve). Guarded on NEXT_PUBLIC_APP_URL so dev
+// /build (inngest dev server; infers from the request) is unaffected. The trailing
+// -slash strip keeps `serveHost + servePath` from doubling the slash.
+const SERVE_HOST = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/+$/, "");
+
 export const { GET, POST, PUT } = serve({
   client: inngest,
   functions: [
@@ -143,4 +160,8 @@ export const { GET, POST, PUT } = serve({
     workspaceReconcileOnPush,
   ],
   signingKey: SIGNING_KEY ?? "build-phase-placeholder",
+  // #5159 (see SERVE_HOST note above): pin the registered serve URL to the
+  // canonical public origin so a loopback re-register PUT plans crons. Omitted
+  // when NEXT_PUBLIC_APP_URL is unset (dev/build) → SDK infers from the request.
+  ...(SERVE_HOST ? { serveHost: SERVE_HOST, servePath: "/api/inngest" } : {}),
 });
