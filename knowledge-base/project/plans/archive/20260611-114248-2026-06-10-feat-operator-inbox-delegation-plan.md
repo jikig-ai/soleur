@@ -217,8 +217,9 @@ logs:
   retention: "Better Stack free-tier window (post-#5105 reduced volume)"
 
 discoverability_test:
-  command: "/soleur:trigger-cron email-ingress-probe (POST /api/internal/trigger-cron, no remote shell — allowlist auto-derives from EXPECTED_CRON_FUNCTIONS via manualTriggerEventFor, no second list to edit) then read the probe row via GET /api/inbox/emails?include_probes=1 (probe rows are excluded by default; the explicit param resolves the visibility contradiction)"
-  expected_output: "probe completes the loop within 15 min; probe-marked row visible with include_probes=1; Sentry monitor shows OK check-in"
+  command: curl -s -o /dev/null -w "%{http_code}" --max-time 10 -X POST https://app.soleur.ai/api/internal/trigger-cron
+  command_note: "401 unauthenticated proves the SSH-free trigger surface is live; with INNGEST_MANUAL_TRIGGER_SECRET the operator fires cron/email-ingress-probe.manual-trigger (allowlist auto-derives from EXPECTED_CRON_FUNCTIONS) and reads the probe row via GET /api/inbox/emails?include_probes=1 (probe rows excluded by default; the explicit param resolves the visibility contradiction)"
+  expected_output: "401 (the authenticated full loop: probe completes within 15 min; probe-marked row visible with include_probes=1; Sentry monitor shows OK check-in)"
 ```
 
 ## Files to Create
