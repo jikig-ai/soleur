@@ -47,6 +47,22 @@ The first draft was ~35-40% over-scoped for a p3-low auditor. Applied cuts:
   `PIN_ALLOWLIST`; specify the cron's new-model signal; frozen fixtures for ACs;
   `contents: read` on the host; RED test alongside Phase 1; conditional budget bump.
 
+## Deepen-Plan Findings (2026-06-11)
+
+Proportionate deepen pass (plan already had 3 research + 3 review agents; avoided a
+disproportionate 40-agent fan-out on p3-low internal tooling). Results:
+- **Halt-gates all pass:** User-Brand Impact present (threshold `none`; no sensitive-path
+  diff — `rule-audit.yml` + `components.test.ts` are outside the sensitive regex);
+  Observability complete (5 fields, no SSH); no PAT-shaped vars; no UI surface.
+- **4.4 scheduled-work precedent:** 41 Inngest crons exist, but this plan appends a step to
+  an *existing* GH Actions cron, not a new scheduled job. Model-drift detection is purely
+  repo-scoped (`git grep` + `gh api releases`) and needs a repo checkout that Inngest's
+  server runtime lacks — so GH Actions (`rule-audit.yml`) is the correct host (ADR-033's
+  Inngest preference does not apply to repo-file-drift detection).
+- **Post-edit self-audit clean:** no dangling references to cut items (thinking-shape /
+  pre-PR probe / `references/checklist.md`); AC1–AC11 continuous; `MODEL_PRICING` (sonnet+
+  haiku, no opus) and `rule-audit.yml` `issues: write` reconfirmed against HEAD.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Spec/Brainstorm claim | Codebase reality | Plan response |
