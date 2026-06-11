@@ -63,7 +63,7 @@ The processing serves **two cumulative legitimate purposes**:
    month), personal-data-breach notifications (Art. 33 — 72 hours), service
    of process, and supervisory-authority correspondence. The deterministic,
    metadata-first statutory fast-path (code-static registry
-   `server/email-triage/statutory-rules.ts`; catalog
+   `lib/email-triage/statutory-rules.ts`; catalog
    `knowledge-base/legal/statutory-response-catalog.md`) detects these
    classes BEFORE any LLM involvement and pins them with the clock stated.
    Failing these clocks is itself a GDPR compliance failure; a triage system

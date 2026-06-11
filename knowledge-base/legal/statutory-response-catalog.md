@@ -7,7 +7,7 @@ status: draft-requires-counsel-review
 related:
   [
     article-30-register,
-    "apps/web-platform/server/email-triage/statutory-rules.ts",
+    "apps/web-platform/lib/email-triage/statutory-rules.ts",
     "knowledge-base/legal/legitimate-interest-assessments/2026-06-11-operator-inbox-triage-lia.md",
   ]
 ---
@@ -17,7 +17,7 @@ related:
 # Statutory Response Catalog — Operator Inbox Triage
 
 This catalog is the human-readable companion to the code-static statutory rule
-registry at `apps/web-platform/server/email-triage/statutory-rules.ts`
+registry at `apps/web-platform/lib/email-triage/statutory-rules.ts`
 (feat-operator-inbox-delegation, #5103). Each section anchor below is the
 target of a `catalogAnchor` value in that registry
 (`statutory-response-catalog.md#breach`, `#service-of-process`, `#dsar`,
@@ -208,7 +208,7 @@ period is confirmed; a mise en demeure may set a materially shorter one).
 
 - **Consistency contract:** any change to a `catalogExcerpt`, `dueRule`,
   `ruleId`, or `catalogAnchor` in
-  `apps/web-platform/server/email-triage/statutory-rules.ts` MUST be mirrored
+  `apps/web-platform/lib/email-triage/statutory-rules.ts` MUST be mirrored
   here in the same PR, and vice versa.
 - **Review cadence:** quarterly with the Article 30 register, plus
   event-driven on any statutory-rule registry change or the first real
