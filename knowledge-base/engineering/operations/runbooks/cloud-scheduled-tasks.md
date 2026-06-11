@@ -414,19 +414,13 @@ A restart is only needed when polling itself is broken (see the backstop below).
 gh workflow run restart-inngest-server.yml
 ```
 
-This sends `restart inngest _ latest` to `ci-deploy.sh`, which restarts `inngest-server.service`, waits for health at `127.0.0.1:8288`, and verifies the registry has >=1 cron-triggered function (#4650; cron-plan loop budget 120s nominal per #5145). The workflow polls deploy-status for completion and reports success/failure via GHA annotations. After the workflow completes, restart the web-platform container to force a fresh function manifest sync:
+This sends `restart inngest _ latest` to `ci-deploy.sh`, which restarts `inngest-server.service`, waits for health at `127.0.0.1:8288`, and verifies the registry has >=1 cron-triggered function (#4650; cron-plan loop budget 120s nominal per #5145). **Post-#5159 the restart arm self-registers:** `verify_inngest_health`'s cron-plan loop fires a loopback `PUT /api/inngest` against the web-platform SDK each iteration, forcing the SDK manifest re-registration that re-plans cron triggers — so a standalone restart no longer leaves the registry empty until an external app-side push. The workflow polls deploy-status for completion and reports success/failure via GHA annotations; a `reason=success` terminal state means the crons are already re-planned. **No follow-up web-platform container restart is required** (it was, pre-#5159, the only way to force the manifest sync).
 
-```bash
-# Trigger a no-op web-platform deploy to force SDK sync, or use the
-# existing release workflow if a new version is pending.
-docker restart soleur-web-platform
-```
-
-**Manual fallback (SSH required):**
+**Manual fallback (SSH required — only if the no-SSH workflow above is itself unavailable):**
 
 1. Restart `inngest-server.service`: `sudo systemctl restart inngest-server.service`
 2. Wait 30s for SQLite reinitialisation
-3. Restart web-platform container: `docker restart soleur-web-platform` (forces fresh function manifest sync)
+3. Force the SDK re-registration (post-#5159 the restart arm does this automatically; this is the manual equivalent): `curl -sf --max-time 10 -X PUT http://127.0.0.1:3000/api/inngest` (expect `{"message":"Successfully registered","modified":true}`)
 4. Verify function registry: `curl -s http://127.0.0.1:8288/v1/functions | jq '[.[] | .slug] | sort | length'` (expect 41)
 5. Manual trigger to confirm end-to-end: `curl -X POST http://127.0.0.1:8288/e/<event-name> -H "Content-Type: application/json" -d '{"name":"<event-name>","data":{}}' -H "Authorization: Bearer ${INNGEST_EVENT_KEY}"`
 6. Verify Sentry check-in: wait for the next natural fire or check manually via Sentry API
