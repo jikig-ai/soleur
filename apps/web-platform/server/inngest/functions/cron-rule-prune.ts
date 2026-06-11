@@ -22,7 +22,6 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import {
@@ -36,6 +35,7 @@ import {
   postSentryHeartbeat,
   type HandlerArgs,
 } from "./_cron-shared";
+import { SYNTHETIC_CHECK_NAMES, safeCommitAndPr } from "./_cron-safe-commit";
 
 // =============================================================================
 // Constants
@@ -48,16 +48,6 @@ const TOKEN_MIN_LIFETIME_MS = 10 * 60 * 1000;
 
 export const SENTINEL_PR_TITLE = "::rule-prune-pr-title::";
 export const SENTINEL_PR_BODY = "::rule-prune-pr-body::";
-
-export const SYNTHETIC_CHECK_NAMES = [
-  "test",
-  "dependency-review",
-  "e2e",
-  "skill-security-scan PR gate",
-  "enforce",
-  "cla-check",
-  "cla-evidence",
-] as const;
 
 // =============================================================================
 // Types
@@ -84,30 +74,6 @@ function spawnGit(
   });
 }
 
-async function spawnGitChecked(
-  args: string[],
-  opts?: { cwd?: string; env?: NodeJS.ProcessEnv },
-): Promise<void> {
-  const result = await spawnGit(args, opts);
-  if (result.exitCode !== 0) {
-    throw new Error(`git ${args[0]} failed (exit ${result.exitCode})`);
-  }
-}
-
-function spawnGitCapture(
-  args: string[],
-  opts?: { cwd?: string },
-): Promise<string> {
-  return new Promise((resolve) => {
-    const child = spawn("git", args, { ...opts });
-    let out = "";
-    child.stdout?.on("data", (d: Buffer) => {
-      out += d.toString();
-    });
-    child.on("exit", () => resolve(out.trim()));
-    child.on("error", () => resolve(""));
-  });
-}
 
 /** Spawn a bash script and capture stdout + stderr + exit code. */
 async function spawnScriptCapture(
@@ -204,6 +170,13 @@ export async function cronRulePruneHandler({
   let installationToken = "";
 
   try {
+    // Memoized run-start timestamp — safeCommitAndPr derives the ci/ branch
+    // name and pins commit dates from it (replay-stable, #5111).
+    const runStartedAt = await step.run(
+      "run-started-at",
+      async () => new Date().toISOString(),
+    );
+
     installationToken = await step.run(
       "mint-installation-token",
       async () =>
@@ -288,99 +261,37 @@ export async function cronRulePruneHandler({
       return { ok: true, status: "no-candidates" };
     }
 
-    // Open bot-PR with synthetic checks
-    const prResult = await step.run("open-retirement-pr", async () => {
-      const octokit = new Octokit({ auth: installationToken });
+    // Open bot-PR via safeCommitAndPr (#5111) — gains the deletion guard,
+    // dirty-index precondition, dropped-path warn, replay idempotency.
+    // mergeMode "direct" + synthetic checks preserves the production-proven
+    // merge mechanics. Branch becomes ci/rule-prune-<ts> (helper derivation;
+    // cosmetic change from ci/rule-prune-retire-<date>).
+    const prResult = await step.run("safe-commit-pr", async () => {
       const dateSuffix = new Date().toISOString().slice(0, 10);
-      const branchName = `ci/rule-prune-retire-${dateSuffix}`;
-
-      await spawnGitChecked(
-        ["config", "user.name", "github-actions[bot]"],
-        { cwd: repoRoot },
-      );
-      await spawnGitChecked(
-        [
-          "config",
-          "user.email",
-          "41898282+github-actions[bot]@users.noreply.github.com",
-        ],
-        { cwd: repoRoot },
-      );
-      await spawnGitChecked(["add", "scripts/retired-rule-ids.txt"], {
-        cwd: repoRoot,
-      });
-      await spawnGitChecked(["checkout", "-b", branchName], {
-        cwd: repoRoot,
-      });
-      await spawnGitChecked(
-        [
-          "commit",
-          "-m",
-          "chore(rule-prune): propose retirement of stale rules",
-        ],
-        { cwd: repoRoot },
-      );
-      await spawnGitChecked(["push", "-u", "origin", branchName], {
-        cwd: repoRoot,
-      });
-
-      const { data: pr } = await octokit.request(
-        "POST /repos/{owner}/{repo}/pulls",
-        {
-          owner: REPO_OWNER,
-          repo: REPO_NAME,
-          title: `${pruneResult.prTitle} ${dateSuffix}`,
-          body:
-            pruneResult.prBody ??
+      const result = await safeCommitAndPr({
+        spawnCwd: repoRoot,
+        installationToken,
+        cronName: "cron-rule-prune",
+        commitMessage: "chore(rule-prune): propose retirement of stale rules",
+        allowedPaths: ["scripts/retired-rule-ids.txt"],
+        runStartedAt,
+        scheduledIssueLabel: SENTRY_MONITOR_SLUG,
+        // The script's sentinel output carries the dynamic title (rule ids).
+        prTitle: `${pruneResult.prTitle} ${dateSuffix}`,
+        prBody:
+          pruneResult.prBody ??
+          "Stale-rule retirement proposal — appends to retired-rule-ids.txt only",
+        syntheticChecks: {
+          names: SYNTHETIC_CHECK_NAMES,
+          summary:
             "Stale-rule retirement proposal — appends to retired-rule-ids.txt only",
-          base: "main",
-          head: branchName,
         },
-      );
-
-      // Synthetic checks
-      const commitSha = await spawnGitCapture(["rev-parse", "HEAD"], {
-        cwd: repoRoot,
+        mergeMode: "direct",
+        logger,
       });
-
-      for (const name of SYNTHETIC_CHECK_NAMES) {
-        await octokit.request(
-          "POST /repos/{owner}/{repo}/check-runs",
-          {
-            owner: REPO_OWNER,
-            repo: REPO_NAME,
-            name,
-            head_sha: commitSha,
-            status: "completed",
-            conclusion: "success",
-            output: {
-              title: "Bot PR",
-              summary:
-                "Stale-rule retirement proposal — appends to retired-rule-ids.txt only",
-            },
-          },
-        );
-      }
-
-      // Auto-merge
-      try {
-        await octokit.request(
-          "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge",
-          {
-            owner: REPO_OWNER,
-            repo: REPO_NAME,
-            pull_number: pr.number,
-            merge_method: "squash",
-          },
-        );
-      } catch {
-        logger.warn(
-          { fn: "cron-rule-prune", pr: pr.number },
-          "Direct merge failed — PR left open for review",
-        );
-      }
-
-      return { prNumber: pr.number };
+      return {
+        prNumber: result.status === "committed" ? result.prNumber : undefined,
+      };
     });
 
     await step.run("sentry-heartbeat", () =>

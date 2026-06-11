@@ -22,12 +22,12 @@ For each of campaign-calendar, growth-audit, community-monitor, competitive-anal
 
 ## Phase 3 — 5 legacy handler-side pipelines (live; per-cron config table in plan Phase 3)
 
-- [ ] 3.1 Update each cron's test file RED: mocked-`safeCommitAndPr` config-shape assertions replace spawn-argv git assertions; non-persistence coverage untouched (check `cron-compound-promote-graymatter.test.ts` for pipeline coupling)
-- [ ] 3.2 `cron-weekly-analytics.ts`: replace create-bot-pr staging→merge internals with safeCommitAndPr (allowedPaths `["knowledge-base/marketing/analytics/"]`, syntheticChecks, mergeMode "direct", prBody preserved); keep PLAUSIBLE gate, cascade dispatch, Discord notify; delete unused spawnGitChecked/spawnGitCapture
-- [ ] 3.3 `cron-content-publisher.ts`: allowedPaths `["knowledge-base/marketing/distribution-content/"]` (trailing slash ADDED), prBody preserved, syntheticChecks, mergeMode "direct"
-- [ ] 3.4 `cron-content-vendor-drift.ts`: allowedPaths from SKILL_PREFIX (`NOTICE` + `references/`), prBody runbook-pointer preserved, prLabels detectResult.labels, syntheticChecks, mergeMode "direct"
-- [ ] 3.5 `cron-rule-prune.ts`: allowedPaths `["scripts/retired-rule-ids.txt"]`, prTitle dynamic (`${pruneResult.prTitle} ${date}`), syntheticChecks, mergeMode "direct"
-- [ ] 3.6 `cron-compound-promote.ts`: per-cluster safeCommitAndPr (branchName `self-healing/auto-<hash>-<date>`, allowedPaths [target_path, promotion-log.md], commitMessage titleLine, commitBody trailer, prTitle/prBody preserved, prDraft true, prLabels ["self-healing/auto"], syntheticChecks, mergeMode "none"); keep all cluster guards + checkout-main caller-side
+- [x] 3.1 Update each cron's test file RED: mocked-`safeCommitAndPr` config-shape assertions replace spawn-argv git assertions; non-persistence coverage untouched (check `cron-compound-promote-graymatter.test.ts` for pipeline coupling)
+- [x] 3.2 `cron-weekly-analytics.ts`: replace create-bot-pr staging→merge internals with safeCommitAndPr (allowedPaths `["knowledge-base/marketing/analytics/"]`, syntheticChecks, mergeMode "direct", prBody preserved); keep PLAUSIBLE gate, cascade dispatch, Discord notify; delete unused spawnGitChecked/spawnGitCapture
+- [x] 3.3 `cron-content-publisher.ts`: allowedPaths `["knowledge-base/marketing/distribution-content/"]` (trailing slash ADDED), prBody preserved, syntheticChecks, mergeMode "direct"
+- [x] 3.4 `cron-content-vendor-drift.ts`: allowedPaths from SKILL_PREFIX (`NOTICE` + `references/`), prBody runbook-pointer preserved, prLabels detectResult.labels, syntheticChecks, mergeMode "direct"
+- [x] 3.5 `cron-rule-prune.ts`: allowedPaths `["scripts/retired-rule-ids.txt"]`, prTitle dynamic (`${pruneResult.prTitle} ${date}`), syntheticChecks, mergeMode "direct"
+- [x] 3.6 `cron-compound-promote.ts`: per-cluster safeCommitAndPr (branchName `self-healing/auto-<hash>-<date>`, allowedPaths [target_path, promotion-log.md], commitMessage titleLine, commitBody trailer, prTitle/prBody preserved, prDraft true, prLabels ["self-healing/auto"], syntheticChecks, mergeMode "none"); keep all cluster guards + checkout-main caller-side
 
 ## Phase 4 — Parity test restructure
 
@@ -45,8 +45,8 @@ For each of campaign-calendar, growth-audit, community-monitor, competitive-anal
 
 ## Phase 7 — Verification (ACs in plan)
 
-- [ ] 7.1 AC1-AC2 greps (no spawnGitChecked, no MANDATORY FINAL STEP in functions/)
-- [ ] 7.2 `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/` green
-- [ ] 7.3 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` green
+- [x] 7.1 AC1-AC2 greps (no spawnGitChecked, no MANDATORY FINAL STEP in functions/)
+- [x] 7.2 `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/` green
+- [x] 7.3 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` green
 - [ ] 7.4 PR body: Closes #5111 + documented behavior changes (branch-name cosmetics, campaign-calendar title wording, competitive-analysis allowedPaths widening)
 - [ ] 7.5 Post-merge: `/soleur:trigger-cron` cron-rule-prune + `gh pr list --search "head:ci/"` / Sentry safe-commit-failed-empty verdict
