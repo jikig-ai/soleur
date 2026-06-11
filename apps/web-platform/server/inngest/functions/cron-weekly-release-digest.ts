@@ -149,13 +149,17 @@ function stripPii(s: string): string {
 const VERSION_ONLY_TITLE_RE = /^[a-z-]*v?\d[\w.-]*$/i;
 const MAX_DERIVED_TITLE_CHARS = 150;
 
-function deriveTitle(name: string, body: string, tag: string): string {
-  const base = (name || tag).trim();
+function deriveTitle(base: string, body: string): string {
   if (!VERSION_ONLY_TITLE_RE.test(base)) return base;
   for (const raw of body.split("\n")) {
     const line = raw.trim().replace(/^[-*]\s+/, "");
     if (!line || line.startsWith("#")) continue;
-    return line.slice(0, MAX_DERIVED_TITLE_CHARS);
+    // Strip BEFORE slicing — truncation could bisect an email and leave a
+    // local-part fragment the regexes no longer match (stripPii is
+    // idempotent, so the caller's wrapper strip is harmless). A line that
+    // strips to empty (pure Co-Authored-By) falls back to the version.
+    const derived = stripPii(line).trim().slice(0, MAX_DERIVED_TITLE_CHARS);
+    return derived || base;
   }
   return base;
 }
@@ -171,11 +175,8 @@ export function sanitizeReleases(releases: RawGithubRelease[]): SanitizedRelease
     // Pre-bound BEFORE regexing — see MAX_RAW_BODY_CHARS rationale.
     const rawBody = (r.body ?? "").slice(0, MAX_RAW_BODY_CHARS);
     const securitySensitive = SECURITY_DOWN_DETAIL_RE.test(`${r.name ?? ""}\n${rawBody}`);
-    const title = stripPii(
-      securitySensitive
-        ? (r.name || r.tag_name)
-        : deriveTitle(r.name ?? "", rawBody, r.tag_name),
-    ).trim();
+    const base = (r.name || r.tag_name).trim();
+    const title = stripPii(securitySensitive ? base : deriveTitle(base, rawBody)).trim();
     const body = securitySensitive
       ? ""
       : stripPii(rawBody).slice(0, MAX_RELEASE_BODY_CHARS);
