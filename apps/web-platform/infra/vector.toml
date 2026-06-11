@@ -96,26 +96,33 @@ if parse_err != null {
 }
 '''
 
-# ---------------- Source 4: host metrics (CPU/mem/disk/net) ----------------
-# 300s scrape (2026-06-10 quota fix — was 30s). Host metrics were >99% of
-# Better Stack ingest (~196k rows/day vs ~50 WARN+ log rows/day across the
-# journald + app container sources),
-# tripping the 80% free-tier (3 GB/mo logs) warning. 5-min granularity is
-# sufficient for the CPU/mem/disk diagnosis use case. Snap loop devices
-# (loop*) and device-mapper (dm-*) are excluded from the disk + filesystem
-# collectors below — pseudo-device series with no diagnostic signal.
+# ---------------- Source 4: host metrics (CPU/mem/disk) ----------------
+# 300s scrape (2026-06-10 quota fix) + trimmed collectors (2026-06-10 second
+# pass — AC12 verdict FAIL on #5110: 198 rows/scrape = ~57k rows/day, 2.3x
+# the 25k/day threshold; the 300s interval alone was insufficient). Measured
+# per-scrape breakdown: filesystem 108 (4 metrics x 27 mountpoints, 21
+# virtual-fs), network ~33, disk 24, cpu 20, memory/load ~13. Remedy: drop
+# the network collector (no alert/runbook consumes it; uptime monitors +
+# Sentry carry incident-grade signal) and allowlist filesystem to the three
+# diagnostic mountpoints below (root capacity, Hetzner data volume, Vector's
+# own buffer dir — /mnt/data is covered by NO other monitor; / is also
+# covered by disk-monitor.sh). Predicted ~69 rows/scrape = ~19.9k rows/day
+# (20% under threshold). Snap loop devices (loop*) and device-mapper (dm-*)
+# stay excluded from the disk + filesystem collectors — pseudo-device series
+# with no diagnostic signal.
 # Decision record: knowledge-base/operations/expenses.md (Better Stack row);
-# strategic re-decision tracked in #4296.
+# verdict tracker: #5110; strategic re-decision tracked in #4296.
 [sources.host_metrics]
 type = "host_metrics"
 scrape_interval_secs = 300
-collectors = ["cpu", "memory", "disk", "filesystem", "load", "network"]
+collectors = ["cpu", "memory", "disk", "filesystem", "load"]
 
 [sources.host_metrics.disk]
 devices.excludes = ["loop*", "dm-*"]
 
 [sources.host_metrics.filesystem]
 devices.excludes = ["loop*", "dm-*"]
+mountpoints.includes = ["/", "/mnt/data", "/var/lib/vector"]
 
 # ---------------- Transform 1/3: drop user-content keys (Art-9) ----------------
 # Pino consumers may carry user-supplied content via `{body, content, message,
