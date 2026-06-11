@@ -26,6 +26,9 @@ const BRAND_EMAIL_COLORS = {
   ctaBackground: "#C9A962", // solid gold base (brand-guide.md:186,226)
   ctaGradient: "linear-gradient(135deg, #D4B36A, #B8923E)", // capable-client layer (187/188)
   ctaText: "#1A1612", // forge ink (210/213/245)
+  textHeading: "#1a1a1a", // email-safe neutral heading (email clients need literal colors)
+  textBody: "#4a4a4a", // email-safe neutral body
+  textFootnote: "#9a9a9a", // email-safe neutral footnote
 } as const;
 
 /** Inline style for a branded gold email CTA `<a>` (sharp 0px corners). */
@@ -290,12 +293,12 @@ export async function sendEmailNotification(
     subject: `${escapeHtml(payload.agentName)} needs your input — Soleur`,
     html: `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
-        <h2 style="margin: 0 0 16px; font-size: 18px; color: #1a1a1a;">${escapeHtml(payload.agentName)} needs your input</h2>
-        <p style="margin: 0 0 16px; color: #4a4a4a; line-height: 1.5;">${escapeHtml(payload.question)}</p>
+        <h2 style="margin: 0 0 16px; font-size: 18px; color: ${BRAND_EMAIL_COLORS.textHeading};">${escapeHtml(payload.agentName)} needs your input</h2>
+        <p style="margin: 0 0 16px; color: ${BRAND_EMAIL_COLORS.textBody}; line-height: 1.5;">${escapeHtml(payload.question)}</p>
         <div style="text-align: center; margin: 8px 0 0;">
           <a href="${deepLink}" style="${EMAIL_CTA_STYLE}">Open conversation</a>
         </div>
-        <p style="margin: 24px 0 0; font-size: 12px; color: #9a9a9a;">You received this because an agent is waiting for your decision on Soleur.</p>
+        <p style="margin: 24px 0 0; font-size: 12px; color: ${BRAND_EMAIL_COLORS.textFootnote};">You received this because an agent is waiting for your decision on Soleur.</p>
       </div>
     `,
   });
@@ -336,12 +339,12 @@ async function sendEmailTriageEmailNotification(
       : "New item in your Soleur inbox — Soleur",
     html: `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
-        <h2 style="margin: 0 0 16px; font-size: 18px; color: #1a1a1a;">${heading}</h2>
-        <p style="margin: 0 0 16px; color: #4a4a4a; line-height: 1.5;">${escapeHtml(safeTitle)}</p>
+        <h2 style="margin: 0 0 16px; font-size: 18px; color: ${BRAND_EMAIL_COLORS.textHeading};">${heading}</h2>
+        <p style="margin: 0 0 16px; color: ${BRAND_EMAIL_COLORS.textBody}; line-height: 1.5;">${escapeHtml(safeTitle)}</p>
         <div style="text-align: center; margin: 8px 0 0;">
           <a href="${deepLink}" style="${EMAIL_CTA_STYLE}">Open inbox item</a>
         </div>
-        <p style="margin: 24px 0 0; font-size: 12px; color: #9a9a9a;">You received this because email triage is enabled for your Soleur inbox.</p>
+        <p style="margin: 24px 0 0; font-size: 12px; color: ${BRAND_EMAIL_COLORS.textFootnote};">You received this because email triage is enabled for your Soleur inbox.</p>
       </div>
     `,
   });
@@ -435,12 +438,12 @@ export async function sendDsarExportReadyEmail(
     subject: "Your Soleur data export is ready",
     html: `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
-        <h2 style="margin: 0 0 16px; font-size: 18px; color: #1a1a1a;">Your Soleur data export is ready</h2>
-        <p style="margin: 0 0 16px; color: #4a4a4a; line-height: 1.5;">Your data export is ready to download. The link expires in 7 days (${escapeHtml(expiresAtUtc)}). The download link is single-use and bound to the device that requested it.</p>
+        <h2 style="margin: 0 0 16px; font-size: 18px; color: ${BRAND_EMAIL_COLORS.textHeading};">Your Soleur data export is ready</h2>
+        <p style="margin: 0 0 16px; color: ${BRAND_EMAIL_COLORS.textBody}; line-height: 1.5;">Your data export is ready to download. The link expires in 7 days (${escapeHtml(expiresAtUtc)}). The download link is single-use and bound to the device that requested it.</p>
         <div style="text-align: center; margin: 8px 0 0;">
           <a href="${downloadUrl}" style="${EMAIL_CTA_STYLE}">Download my data</a>
         </div>
-        <p style="margin: 24px 0 0; font-size: 12px; color: #9a9a9a;">You requested this export from /settings/privacy on Soleur. If you did not request it, contact legal@jikigai.com.</p>
+        <p style="margin: 24px 0 0; font-size: 12px; color: ${BRAND_EMAIL_COLORS.textFootnote};">You requested this export from /settings/privacy on Soleur. If you did not request it, contact legal@jikigai.com.</p>
       </div>
     `,
   });
@@ -476,12 +479,12 @@ export async function sendDsarExportFailedEmail(
     subject: "Your Soleur data export could not be completed",
     html: `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
-        <h2 style="margin: 0 0 16px; font-size: 18px; color: #1a1a1a;">Your Soleur data export could not be completed</h2>
-        <p style="margin: 0 0 16px; color: #4a4a4a; line-height: 1.5;">${escapeHtml(userCopy)}</p>
+        <h2 style="margin: 0 0 16px; font-size: 18px; color: ${BRAND_EMAIL_COLORS.textHeading};">Your Soleur data export could not be completed</h2>
+        <p style="margin: 0 0 16px; color: ${BRAND_EMAIL_COLORS.textBody}; line-height: 1.5;">${escapeHtml(userCopy)}</p>
         <div style="text-align: center; margin: 8px 0 0;">
           <a href="${settingsUrl}" style="${EMAIL_CTA_STYLE}">Go to /settings/privacy</a>
         </div>
-        <p style="margin: 24px 0 0; font-size: 12px; color: #9a9a9a;">You requested this export from /settings/privacy on Soleur. If the problem persists, contact legal@jikigai.com.</p>
+        <p style="margin: 24px 0 0; font-size: 12px; color: ${BRAND_EMAIL_COLORS.textFootnote};">You requested this export from /settings/privacy on Soleur. If the problem persists, contact legal@jikigai.com.</p>
       </div>
     `,
   });
@@ -513,12 +516,12 @@ export async function sendInviteEmail(
     subject: `You've been invited to join ${escapeHtml(workspaceName)} on Soleur`,
     html: `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
-        <h2 style="margin: 0 0 16px; font-size: 18px; color: #1a1a1a;">You've been invited to join ${escapeHtml(workspaceName)}</h2>
-        <p style="margin: 0 0 16px; color: #4a4a4a; line-height: 1.5;">${escapeHtml(inviterName)} has invited you to join the <strong>${escapeHtml(workspaceName)}</strong> workspace on Soleur.</p>
+        <h2 style="margin: 0 0 16px; font-size: 18px; color: ${BRAND_EMAIL_COLORS.textHeading};">You've been invited to join ${escapeHtml(workspaceName)}</h2>
+        <p style="margin: 0 0 16px; color: ${BRAND_EMAIL_COLORS.textBody}; line-height: 1.5;">${escapeHtml(inviterName)} has invited you to join the <strong>${escapeHtml(workspaceName)}</strong> workspace on Soleur.</p>
         <div style="text-align: center; margin: 8px 0 0;">
           <a href="${inviteUrl}" style="${EMAIL_CTA_STYLE}">Accept invitation</a>
         </div>
-        <p style="margin: 24px 0 0; font-size: 12px; color: #9a9a9a;">This invitation expires in 7 days. If you weren't expecting this, you can ignore this email.</p>
+        <p style="margin: 24px 0 0; font-size: 12px; color: ${BRAND_EMAIL_COLORS.textFootnote};">This invitation expires in 7 days. If you weren't expecting this, you can ignore this email.</p>
       </div>
     `,
   });
@@ -553,8 +556,8 @@ export async function sendInviteAcceptedEmail(
     subject: `${escapeHtml(accepterName)} has joined ${escapeHtml(workspaceName)}`,
     html: `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
-        <h2 style="margin: 0 0 16px; font-size: 18px; color: #1a1a1a;">${escapeHtml(accepterName)} has joined ${escapeHtml(workspaceName)}</h2>
-        <p style="margin: 0 0 16px; color: #4a4a4a; line-height: 1.5;">Your invitation was accepted. ${escapeHtml(accepterName)} is now a member of <strong>${escapeHtml(workspaceName)}</strong>.</p>
+        <h2 style="margin: 0 0 16px; font-size: 18px; color: ${BRAND_EMAIL_COLORS.textHeading};">${escapeHtml(accepterName)} has joined ${escapeHtml(workspaceName)}</h2>
+        <p style="margin: 0 0 16px; color: ${BRAND_EMAIL_COLORS.textBody}; line-height: 1.5;">Your invitation was accepted. ${escapeHtml(accepterName)} is now a member of <strong>${escapeHtml(workspaceName)}</strong>.</p>
         <div style="text-align: center; margin: 8px 0 0;">
           <a href="${teamUrl}" style="${EMAIL_CTA_STYLE}">View team</a>
         </div>
