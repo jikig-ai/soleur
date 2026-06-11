@@ -309,7 +309,7 @@ logs:
   retention: host journald/Better Stack pipeline as configured platform-wide (unchanged)
 discoverability_test:
   command: gh pr list --repo jikig-ai/soleur --search "head:ci/" --state all --limit 5 --json number,title,state
-  expected_output: recent bot-pipeline PRs with state MERGED (or OPEN within minutes of a fire); zero SSH required
+  expected_output: MERGED or OPEN
 ```
 
 ## Test Scenarios
