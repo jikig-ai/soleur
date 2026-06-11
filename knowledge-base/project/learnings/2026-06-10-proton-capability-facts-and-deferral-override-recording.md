@@ -67,6 +67,21 @@ blast-radius column before choosing.
 3. **Wireframe subagent needed a placeholder commit before `open_document`** (pre-open
    git guard), producing two commits instead of one. One-off, by-design guard.
    **Prevention:** none needed; guard behaved as intended.
+4. **(plan phase)** `iac-plan-write-guard.sh` denied a plan Write that contained the
+   literal ack comment `<!-- iac-routing-ack: plan-phase-2-8-reviewed -->` plus one
+   trigger phrase ("out-of-band"); direct invocation of BOTH hook copies (worktree +
+   bare root) with ack+trigger content returns `allow`. The ack escape hatch may never
+   have been exercised with matches present in the live harness (prior "bypass" events
+   were zero-match writes). Recovery: reworded the trigger phrase; write passed.
+   **Prevention:** tracked issue filed (see below) — reproduce the harness invocation
+   path and add a regression test that exercises ack-WITH-matches through the real
+   PreToolUse payload shape.
+5. **(plan phase)** Kieran plan-review agent died with "session limit" after 22 tool
+   uses; its result was the bare limit message. Recovery: executed its two
+   load-bearing checks directly (installed resend SDK `webhooks.verify` shape, svix
+   presence). **Prevention:** when a review agent returns a limit/error string instead
+   of findings, run its named load-bearing checks inline rather than re-spawning into
+   the same limit.
 
 ## Tags
 
