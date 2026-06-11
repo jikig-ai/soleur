@@ -13,11 +13,22 @@ date: 2026-06-11
 
 > Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-11
+**Halt gates passed:** 4.6 User-Brand Impact (threshold `single-user incident`, valid), 4.7 Observability (5-field schema, non-SSH discoverability), 4.8 PAT-shaped (no hits), 4.9 UI-wireframe (no UI surface — tooling/hook change, pass-through).
+
+### Key Improvements (deepen verification)
+1. **All cited PRs/refs live-verified.** #4855 MERGED ("guard open_document .pen wipe via snapshot + commit-after-save") confirms the prose-gate claim; #2754 MERGED ("WIP: feat-agents-rule-threshold") — softened the plan's attribution to "rule migrated to the hook header per PR #2754" since #2754 is the rule-threshold migration, not the original hook-creation PR (the `pencil-open-guard.sh` header itself attributes the migration to #2754).
+2. **Retired-rule hazard confirmed.** `scripts/retired-rule-ids.txt:37` exact match — `cq-before-calling-mcp-pencil-open-document | 2026-04-23 | #2865`. New hook MUST use a fresh `[id]`; AC11 enforces no AGENTS sidecar diff (tier-gate: Pencil-domain rule lives in owning artifacts).
+3. **Precedent-diff (Phase 4.4).** The hook is a pattern-bound behavior with a direct in-repo precedent — `pencil-open-guard.sh` (path resolution + `git ls-files --error-unmatch` tracked-check) and `docs-cli-verification.sh` (fail-open PostToolUse `exit 0` + stderr). Pattern is NOT novel; mirror both. Divergence: this hook WRITES (restore) where siblings only deny/warn — hence the `set -uo pipefail` (no `-e`) + conservative collapse detector are load-bearing (Sharp Edges).
+4. **Part B channel resolved live.** `highagency/pencil-desktop-releases` `hasIssuesEnabled:true isArchived:false`, MCP-bug history #17–#21 — re-evaluation criterion (a) is met; filing is automatable via `gh issue create`.
+
 ## Overview
 
 Close issue **#4859** (the deferred upstream non-goal from #3274: "`open_document` destructively wipes `.pen` on disk, returns success") with a **two-part deliverable**:
 
-- **Part A (primary code deliverable):** a new **PostToolUse** hook `.claude/hooks/pencil-collapse-guard.sh` that fires AFTER `mcp__pencil__open_document` returns and **auto-recovers** a *tracked* `.pen` file that was silently collapsed to ~41-byte empty document state (`{"version":"...","children":[]}`). This is the deterministic backstop that the agent prose HARD-GATEs (PR #4855) and the PreToolUse `pencil-open-guard.sh` (PR #2754) are not.
+- **Part A (primary code deliverable):** a new **PostToolUse** hook `.claude/hooks/pencil-collapse-guard.sh` that fires AFTER `mcp__pencil__open_document` returns and **auto-recovers** a *tracked* `.pen` file that was silently collapsed to ~41-byte empty document state (`{"version":"...","children":[]}`). This is the deterministic backstop that the agent prose HARD-GATEs (PR #4855, merged: "guard open_document .pen wipe via snapshot + commit-after-save") and the PreToolUse `pencil-open-guard.sh` (rule migrated to the hook header per PR #2754) are not.
 - **Part B (satisfies #4859 re-evaluation criterion (a)):** file the root-cause bug upstream against the **public** Pencil bug channel `highagency/pencil-desktop-releases` (issues enabled, active MCP-bug track record), then record the filing outcome on #4859.
 
 The PR body uses **`Closes #4859`**.
@@ -26,7 +37,7 @@ The PR body uses **`Closes #4859`**.
 
 | Control | Stage | What it covers | The gap |
 |---|---|---|---|
-| `pencil-open-guard.sh` (PR #2754) | PreToolUse | DENIES `open_document` on **untracked** `.pen` (no recovery path) | Lets **tracked** `.pen` through — they still collapse on disk |
+| `pencil-open-guard.sh` (rule migrated to hook header per PR #2754) | PreToolUse | DENIES `open_document` on **untracked** `.pen` (no recovery path) | Lets **tracked** `.pen` through — they still collapse on disk |
 | ux-design-lead / brand-workshop prose HARD-GATEs (PR #4855) | agent prose | snapshot/collapse + commit-after-save discipline | Relies on agent discipline; not deterministic |
 | **`pencil-collapse-guard.sh` (this plan)** | **PostToolUse** | tracked `.pen` collapsed to empty → `git show HEAD:<rel> > file` restore | — |
 
