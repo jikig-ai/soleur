@@ -41,6 +41,7 @@ import {
   resolveCronWorkspaceRoot,
   warnIfCronWorkspaceLowOnDisk,
   mintInstallationToken,
+  postAnthropicMessage,
   postSentryHeartbeat,
   type HandlerArgs,
 } from "./_cron-shared";
@@ -389,35 +390,18 @@ export async function cronCompoundPromoteHandler({
         `Output ONLY the JSON array, nothing else.`,
       ].join("\n");
 
-      const body = {
+      const { text, stopReason } = await postAnthropicMessage({
+        apiKey,
         model: ANTHROPIC_MODEL,
-        max_tokens: ANTHROPIC_MAX_TOKENS,
-        messages: [{ role: "user" as const, content: prompt + "\n\nCorpus:\n" + JSON.stringify(corpus.entries) }],
-      };
-
-      const resp = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify(body),
+        maxTokens: ANTHROPIC_MAX_TOKENS,
+        messages: [{ role: "user", content: prompt + "\n\nCorpus:\n" + JSON.stringify(corpus.entries) }],
       });
 
-      if (!resp.ok) throw new Error(`Anthropic API ${resp.status}: ${resp.statusText}`);
-
-      const data = (await resp.json()) as {
-        content: Array<{ text?: string }>;
-        stop_reason?: string;
-      };
-
-      if (data.stop_reason === "max_tokens") {
+      if (stopReason === "max_tokens") {
         logger.warn({ fn: "cron-compound-promote" }, "anthropic-response-truncated");
         return { clusters: [] as Cluster[], truncated: true };
       }
 
-      const text = data.content?.[0]?.text;
       if (!text) {
         reportSilentFallback(new Error("Empty Anthropic response"), {
           feature: "cron-compound-promote",

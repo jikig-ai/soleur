@@ -44,6 +44,7 @@ import {
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   ensureScheduledAuditIssue,
   mintInstallationToken,
+  postAnthropicMessage,
   REPO_NAME,
   resolveOutputAwareOk,
   ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS,
@@ -680,5 +681,130 @@ describe("mintInstallationToken (least-privilege cron token)", () => {
       if (prev === undefined) delete process.env.GH_TOKEN;
       else process.env.GH_TOKEN = prev;
     }
+  });
+});
+
+// #5186 — postAnthropicMessage: transport-only Anthropic Messages helper.
+// Extracted from the duplicated fetch shape in cron-weekly-release-digest and
+// cron-compound-promote. The helper owns ONLY the request/response transport;
+// every observability/fallback/shape decision stays at the call site. These
+// tests pin the transport contract: request headers + body, return shape,
+// non-ok throw, optional timeout wiring, optional output_config passthrough.
+describe("postAnthropicMessage (shared Anthropic transport)", () => {
+  const ANY_MODEL = "claude-sonnet-4-6";
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  function okResponse(body: unknown) {
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: () => Promise.resolve(body),
+    };
+  }
+
+  beforeEach(() => {
+    fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("POSTs to the messages endpoint with auth + version headers and returns {text, stopReason}", async () => {
+    fetchSpy.mockResolvedValue(
+      okResponse({ content: [{ text: '{"highlights":[]}' }], stop_reason: "end_turn" }),
+    );
+
+    const result = await postAnthropicMessage({
+      apiKey: "sk-ant-" + "synthetic-key",
+      model: ANY_MODEL,
+      maxTokens: 2048,
+      messages: [{ role: "user", content: "hello" }],
+    });
+
+    expect(result).toEqual({ text: '{"highlights":[]}', stopReason: "end_turn" });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
+    expect(url).toBe("https://api.anthropic.com/v1/messages");
+    expect(init.method).toBe("POST");
+    expect(init.headers["x-api-key"]).toBe("sk-ant-" + "synthetic-key");
+    expect(init.headers["anthropic-version"]).toBe("2023-06-01");
+    expect(init.headers["content-type"]).toBe("application/json");
+    const sent = JSON.parse(init.body as string);
+    expect(sent).toMatchObject({
+      model: ANY_MODEL,
+      max_tokens: 2048,
+      messages: [{ role: "user", content: "hello" }],
+    });
+    // No timeout requested → no AbortSignal wired.
+    expect(init.signal).toBeUndefined();
+    // No outputConfig → request carries no output_config field.
+    expect(sent).not.toHaveProperty("output_config");
+  });
+
+  it("throws `Anthropic API <status>` on a non-ok response (caller owns the fallback)", async () => {
+    fetchSpy.mockResolvedValue({
+      ok: false,
+      status: 503,
+      statusText: "Service Unavailable",
+      json: () => Promise.resolve({}),
+    });
+
+    await expect(
+      postAnthropicMessage({
+        apiKey: "sk-ant-" + "synthetic-key",
+        model: ANY_MODEL,
+        maxTokens: 2048,
+        messages: [{ role: "user", content: "x" }],
+      }),
+    ).rejects.toThrow("Anthropic API 503");
+  });
+
+  it("wires AbortSignal.timeout when timeoutMs is provided", async () => {
+    fetchSpy.mockResolvedValue(okResponse({ content: [{ text: "{}" }], stop_reason: "end_turn" }));
+
+    await postAnthropicMessage({
+      apiKey: "sk-ant-" + "synthetic-key",
+      model: ANY_MODEL,
+      maxTokens: 2048,
+      messages: [{ role: "user", content: "x" }],
+      timeoutMs: 60_000,
+    });
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    // AbortSignal.timeout(ms) returns an AbortSignal instance.
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("passes output_config through to the request body when provided", async () => {
+    fetchSpy.mockResolvedValue(okResponse({ content: [{ text: "{}" }], stop_reason: "end_turn" }));
+    const schema = { type: "object", additionalProperties: false, properties: {} };
+
+    await postAnthropicMessage({
+      apiKey: "sk-ant-" + "synthetic-key",
+      model: ANY_MODEL,
+      maxTokens: 2048,
+      messages: [{ role: "user", content: "x" }],
+      outputConfig: { format: { type: "json_schema", schema } },
+    });
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    const sent = JSON.parse(init.body as string);
+    expect(sent.output_config).toEqual({ format: { type: "json_schema", schema } });
+  });
+
+  it("returns {text: ''} when content is empty — the caller decides that is an error", async () => {
+    fetchSpy.mockResolvedValue(okResponse({ content: [], stop_reason: "end_turn" }));
+
+    const result = await postAnthropicMessage({
+      apiKey: "sk-ant-" + "synthetic-key",
+      model: ANY_MODEL,
+      maxTokens: 2048,
+      messages: [{ role: "user", content: "x" }],
+    });
+
+    expect(result).toEqual({ text: "", stopReason: "end_turn" });
   });
 });

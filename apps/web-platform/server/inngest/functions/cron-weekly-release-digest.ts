@@ -28,6 +28,7 @@ import {
   REPO_OWNER,
   REPO_NAME,
   mintInstallationToken,
+  postAnthropicMessage,
   postDiscordWebhook,
   postSentryHeartbeat,
   redactToken,
@@ -300,31 +301,17 @@ async function curateViaAnthropic(releases: SanitizedRelease[]): Promise<Highlig
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
 
-  const resp = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: ANTHROPIC_MODEL,
-      max_tokens: ANTHROPIC_MAX_TOKENS,
-      messages: [{ role: "user" as const, content: buildCuratePrompt(releases) }],
-    }),
-    signal: AbortSignal.timeout(ANTHROPIC_TIMEOUT_MS),
+  const { text, stopReason } = await postAnthropicMessage({
+    apiKey,
+    model: ANTHROPIC_MODEL,
+    maxTokens: ANTHROPIC_MAX_TOKENS,
+    messages: [{ role: "user", content: buildCuratePrompt(releases) }],
+    timeoutMs: ANTHROPIC_TIMEOUT_MS,
   });
-  if (!resp.ok) throw new Error(`Anthropic API ${resp.status}`);
-
-  const data = (await resp.json()) as {
-    content?: Array<{ text?: string }>;
-    stop_reason?: string;
-  };
-  if (data.stop_reason === "max_tokens") {
+  if (stopReason === "max_tokens") {
     // The curate step's catch mirrors this to Sentry — no duplicate warn.
     throw new Error("anthropic response truncated");
   }
-  const text = data.content?.[0]?.text;
   if (!text) throw new Error("empty anthropic response");
 
   const parsed = JSON.parse(extractModelJson(text)) as { highlights?: unknown };

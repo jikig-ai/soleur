@@ -253,6 +253,51 @@ export async function postDiscordWebhook(args: {
 }
 
 // ---------------------------------------------------------------------------
+// Shared transport for the direct Anthropic Messages API call sites (#5186).
+// cron-weekly-release-digest (curateViaAnthropic) and cron-compound-promote
+// (anthropic-cluster step) duplicated this fetch + headers + non-ok-throw +
+// content-extraction shape. This helper owns ONLY the transport; it returns the
+// raw { text, stopReason } and makes NO decision about what an empty / truncated
+// / refused / shape-invalid response means — each caller keeps its own
+// stop_reason guard, empty-content guard, shape validation, logger.warn, and
+// reportSilentFallback at the call site (transport-only / postDiscordWebhook
+// model, NOT postSentryHeartbeat's swallow-and-report). The model is an arg, so
+// no "claude-…" literal lands in functions/ (model-tiers.ts RAW_MODEL_LITERAL
+// guard). timeoutMs is optional: the digest passes 60_000; compound passes none
+// (it has no request timeout today — behavior parity, do not add one).
+export async function postAnthropicMessage(args: {
+  apiKey: string;
+  model: string;
+  maxTokens: number;
+  messages: Array<{ role: "user"; content: string }>;
+  timeoutMs?: number;
+  outputConfig?: { format: { type: "json_schema"; schema: unknown } };
+}): Promise<{ text: string; stopReason?: string }> {
+  const resp = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": args.apiKey,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: args.model,
+      max_tokens: args.maxTokens,
+      messages: args.messages,
+      ...(args.outputConfig ? { output_config: args.outputConfig } : {}),
+    }),
+    signal: args.timeoutMs != null ? AbortSignal.timeout(args.timeoutMs) : undefined,
+  });
+  if (!resp.ok) throw new Error(`Anthropic API ${resp.status}`);
+
+  const data = (await resp.json()) as {
+    content?: Array<{ text?: string }>;
+    stop_reason?: string;
+  };
+  return { text: data.content?.[0]?.text ?? "", stopReason: data.stop_reason };
+}
+
+// ---------------------------------------------------------------------------
 // Tier-2 deferral guard (#5018 — hook-primary cron containment, D6)
 // ---------------------------------------------------------------------------
 // These claude-spawning crons need Bash that cannot be expressed as a finite
