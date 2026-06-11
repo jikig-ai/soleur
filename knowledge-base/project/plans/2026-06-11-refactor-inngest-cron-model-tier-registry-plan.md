@@ -10,6 +10,28 @@ date: 2026-06-11
 
 # refactor: Inngest cron model-tier registry + MODEL_PRICING parity (#5106) ♻️
 
+## Enhancement Summary
+
+**Deepened on:** 2026-06-11
+**Sections enhanced:** Research Reconciliation (live-greped), User-Brand Impact (sensitive-path scope-out added), FR4 (opus-not-in-pricing verified)
+
+### Key Improvements (verified during deepen pass)
+1. **FR4 confirmed correct by call-graph trace.** `agent-on-spawn-requested.ts:474` `MODEL_PRICING[leaderModule.model]` — `leaderModule.model` is typed `AnthropicModelId` (2-value union, `constants.ts:64`). Opus literally cannot reach the pricing lookup, so no opus `MODEL_PRICING` entry is needed. The parity test is correctly scoped to consumed values (sonnet + haiku).
+2. **AC8 byte-identity confirmed.** `cron-compound-promote.test.ts:70` asserts `expect(ANTHROPIC_MODEL).toBe("claude-sonnet-4-6")`. Because `EXECUTION_MODEL === SONNET_MODEL === "claude-sonnet-4-6"`, this and all other literal-asserting inngest tests stay green post-refactor — the change is provably behavior-preserving.
+3. **Registry shape matches repo precedent (ADR-034 + constants.ts).** `constants.ts:23-24` already exports model IDs as frozen `as const`. The new `model-tiers.ts` import-and-re-export pattern is consistent; not a novel pattern.
+4. **Sensitive-path scope-out added** to User-Brand Impact (Files-to-Edit under `apps/web-platform/server/inngest/**` matches the canonical sensitive-path regex; `threshold: none` now carries the required one-sentence reason).
+5. **Test path validated** against `vitest.config.ts:44` `include: ["test/**/*.test.ts", …]` — `test/server/inngest/model-tiers.test.ts` is collected.
+
+### Deepen-plan gates run
+- 4.4 Precedent-diff: ADR-034 registry shape cited; not novel — PASS.
+- 4.4 Scheduled-work: no NEW cron introduced (refactor only) — N/A.
+- 4.45 Verify-negative + post-edit self-audit: both negative claims (sonnet byte-identity, opus-not-in-pricing) confirmed by grep + call-graph — PASS.
+- 4.5 Network-outage: no trigger patterns — N/A.
+- 4.6 User-Brand Impact: present, threshold `none` with sensitive-path scope-out — PASS.
+- 4.7 Observability: present, 5 fields populated, discoverability_test ssh-free — PASS.
+- 4.8 PAT-shaped variable: no match — PASS.
+- 4.9 UI-wireframe: no UI surface — skip.
+
 ## Overview
 
 Centralize the ~18 inline Anthropic model-ID string literals scattered across
@@ -122,6 +144,8 @@ external surface. Model IDs are public.
 user-facing surface, no regulated data, no new infrastructure. (Cost-accounting
 correctness is guarded by FR4's parity test; a wrong model assignment is a
 quality regression on an unattended artifact, not a single-user incident.)
+
+- **threshold: none, reason:** the diff touches `apps/web-platform/server/inngest/**` (a sensitive-path match) but only re-references public model-ID constants and pricing-table keys — no credential, no auth flow, no user data, no schema, no external write surface; the sole correctness risk (MODEL_PRICING key drift) is made structurally impossible by computed-property keys and CI-gated by the FR4 parity test.
 
 ## Acceptance Criteria
 
