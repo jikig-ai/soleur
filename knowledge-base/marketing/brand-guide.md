@@ -410,6 +410,22 @@ These guardrails apply in both automatic mode (fetch-mentions) and manual mode (
 - Minimal hashtags (1-2 max, same as personal)
 - Cross-reference ### LinkedIn Personal for cadence, skip rules, and reply guidelines
 
+#### LinkedIn Page Cover
+
+| Property | Value |
+|----------|-------|
+| Dimensions | 2256x382px exported at 2x (renders 1128x191, LinkedIn's recommended cover size) |
+| File | `plugins/soleur/docs/images/linkedin-cover-1128x191.png` |
+| Background | `#0A0A0A` with gold edge accents (`#D4B36A` left, `#B8923E` right), 4px at 2x |
+| Thesis | "Build a Billion-Dollar Company. Alone." -- Cormorant Garamond 500, 72px at 2x, white `#FFFFFF`, centered, upper half |
+| Metrics | "60+ Agents · 8 Departments · 1 Founder" -- Inter 400, 30px at 2x, secondary `#848484`, below gold line |
+| Gold accent line | 1px (2px at 2x) horizontal, 500px wide at 2x, centered, 40% opacity, between thesis and metrics |
+| Wordmark | Omitted -- LinkedIn renders the company logo and name directly below the cover |
+| Safe zone | All text within horizontal center 60% (x 451-1805 at 2x); left 20% entirely clear; thesis bottom at midline -- verified |
+| Logo overlap | Bottom-left clear of critical content (logo overlays bottom-left on desktop and mobile) |
+| Source file | `knowledge-base/product/design/brand/brand-linkedin-cover.pen` |
+| Generated with | Pencil MCP (design + PNG export) |
+
 ### Bluesky
 
 **Handle:** @soleur.bsky.social
