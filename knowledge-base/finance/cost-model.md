@@ -29,7 +29,16 @@ Monthly burn is split into two scopes: **R&D / dev tooling** (investments that a
 | GitHub Copilot (Business) | 10.00 [expenses.md@2026-04-19] | `expenses.md` |
 | Claude Code Max 20x — seat 1 | 200.00 [expenses.md@2026-04-19] | `expenses.md` |
 | Claude Code Max 20x — seat 2 | 200.00 [expenses.md@2026-04-19] | `expenses.md` |
-| **Subtotal R&D / Dev Tooling** | **410.00 [expenses.md@2026-04-19]** | |
+| Anthropic API (CI claude-code-action) | 0.00 (accruing) [expenses.md@2026-06-11] | `expenses.md` |
+| **Subtotal R&D / Dev Tooling** | **410.00 [expenses.md@2026-06-11]** | |
+
+> **CI claude-code-action line (#5086, ADR-056):** metered `ANTHROPIC_API_KEY`
+> spend from the two CI review jobs — R&D, not COGS (engineering accelerator, same
+> basis as the Max seats). Seeded `0.00`/`accruing`; subtotal unchanged until the
+> first monthly reconciliation (`knowledge-base/finance/api-spend-ledger.jsonl` →
+> the `expenses.md` line). Local Max-subscription loops carry **$0 marginal** and
+> are deliberately not ledgered — per-loop dollars would manufacture a false
+> billing surprise.
 
 ### Product COGS
 
@@ -130,6 +139,7 @@ Each row is a trigger that forces a spend upgrade. "Upgrade delta" is the monthl
 | Plausible Analytics | $9.00 [expenses.md@2026-04-19] (Growth, EUR 9) | >10K pageviews/mo | Tier upgrade on Plausible Growth ladder — delta TBD at trigger | `expenses.md` |
 | Sentry Team | $40.00 [expenses.md@2026-06-11] (active; $29 base + ~$11 PAYG drawn for 40 cron monitors, PR #5161) | Further cron-monitor growth beyond the 40 active | +$0–39/mo residual PAYG headroom (`onDemandMaxSpend` $50 cap, see #3958) | `expenses.md` |
 | Better Stack | $0 [expenses.md@2026-05-21] (uptime free tier; Responder $29 deferred) | First paying customer or first email-only-routing incident (per #3960) | +$29/mo (Responder tier) | `expenses.md` |
+| Claude Code Max 20x token ceiling | $400.00 [expenses.md@2026-04-19] (2 seats, flat) | Cumulative loop usage hits the Max-20x rolling token/usage ceiling → forces a 3rd seat or API spillover | +$200/mo (seat 3) or metered API overage | #5086 exposure note — no automated quota signal exists today; re-evaluate on sustained rate-limit/slowdown symptoms |
 
 Pre-planned cumulative upgrade exposure at "first paying customer" trigger: **+$100/mo (X API Basic) + $29/mo (Better Stack Responder)** [expenses.md@2026-05-21] at minimum. Resend and Buttondown triggers fire on volume rather than on the first-paying-customer gate. Sentry Team is now an active baseline cost (counted in COGS above), not a trigger.
 
